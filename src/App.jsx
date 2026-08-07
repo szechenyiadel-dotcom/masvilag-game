@@ -2240,6 +2240,7 @@ HOW CHARACTERS ADDRESS EACH OTHER
 - Don't talk about yourself from the outside, in third person ("Brent thinks…"), unless it's a deliberate character quirk per their sheet.
 
 FINALLY: always use the natural length and style of the current communication format. Short replies are completely valid and often preferred in chats and comments. Longer, refined and literary writing belongs mainly in dedicated roleplay scenes when appropriate. Never artificially lengthen a response just to make it feel more substantial.
+;
 
 const engineFor = (w) => (worldLanguage(w) === "en" ? ENGINE_EN : ENGINE);
 
