@@ -11197,12 +11197,30 @@ const signOut = useCallback(async () => {
       normalizált valamit. Csak akkor frissítjük
       a React state-et, ha ténylegesen különbözik.
     */
-    if (
-      contentOf(savedWorld) !== json &&
-      EditLock.n === 0
-    ) {
-      setWorld(savedWorld);
+    if (EditLock.n === 0) {
+  setWorld((current) => {
+    if (!current) return current;
+
+    /*
+      Fontos: az autosave egy korábbi world snapshotot mentett.
+      Ha közben történt új változás — például megérkezett egy
+      chatválasz — a régi szerverválasz SOHA ne írja felül.
+    */
+    if (contentOf(current) !== json) {
+      return current;
     }
+
+    /*
+      Ha a szerver pontosan ugyanazt adta vissza,
+      nincs szükség state-cserére.
+    */
+    if (contentOf(savedWorld) === json) {
+      return current;
+    }
+
+    return savedWorld;
+  });
+}
   }, 800);
 
   return () => {
