@@ -2239,8 +2239,7 @@ HOW CHARACTERS ADDRESS EACH OTHER
 - In a group, address the others in second person plural: "where are you all?", "I told you all too".
 - Don't talk about yourself from the outside, in third person ("Brent thinks…"), unless it's a deliberate character quirk per their sheet.
 
-FINALLY: always use the natural length and style of the current communication format. Short replies are completely valid and often preferred in chats and comments. Longer, refined and literary writing belongs mainly in dedicated roleplay scenes when appropriate. Never artificially lengthen a response just to make it feel more substantial.
-;
+FINALLY: always use the natural length and style of the current communication format. Short replies are completely valid and often preferred in chats and comments. Longer, refined and literary writing belongs mainly in dedicated roleplay scenes when appropriate. Never artificially lengthen a response just to make it feel more substantial.';FINALLY: always use the natural length
 
 const engineFor = (w) => (worldLanguage(w) === "en" ? ENGINE_EN : ENGINE);
 
