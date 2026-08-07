@@ -7000,6 +7000,7 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   const { tt } = useLang();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const sendLockRef = useRef(false);
   const [gid, setGid] = useState(null);
   const [creating, setCreating] = useState(false);
   const endRef = useRef(null);
