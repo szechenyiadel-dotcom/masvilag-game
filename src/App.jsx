@@ -6544,7 +6544,7 @@ export default function App() {
     });
   }, [lang]);
 
-  const signOut = useCallback(() => {const deleteOwnAccount = useCallback(async () => {
+  const deleteOwnAccount = useCallback(async () => {
   const current = wRef.current;
   const id = meId;
 
@@ -6625,14 +6625,29 @@ export default function App() {
     );
   }
 }, [meId, tt]);
-    const w = wRef.current;
-    if (w) {
-      void saveWorldMerged(w);
-      if (w.code) void saveMedia(w.code, mediaRef.current || {});
+const signOut = useCallback(() => {
+  const w = wRef.current;
+
+  if (w) {
+    void saveWorldMerged(w);
+
+    if (w.code) {
+      void saveMedia(w.code, mediaRef.current || {});
     }
-    if (hasStore) { try { window.storage.delete(SESSION, false); } catch (e) {} }
-    setWorld(null); setMeId(null); setMedia({}); mediaReady.current = false;
-  }, []);
+  }
+
+  if (hasStore) {
+    try {
+      window.storage.delete(SESSION, false);
+    } catch (e) {}
+  }
+
+  setWorld(null);
+  setMeId(null);
+  setMedia({});
+  mediaReady.current = false;
+}, []);
+
 
   const code = world ? world.code : null;
 
