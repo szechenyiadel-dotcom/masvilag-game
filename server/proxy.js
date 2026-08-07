@@ -207,4 +207,14 @@ app.post("/ai/messages", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`AI proxy listening on http://localhost:${PORT}`));
+// Serve the built React/Vite app in production
+app.use(express.static("dist"));
+
+app.use((req, res, next) => {
+  if (req.method === "GET" && !req.path.startsWith("/ai/")) {
+    return res.sendFile("index.html", { root: "dist" });
+  }
+  next();
+});
+
+app.listen(PORT, () => console.log(`App + AI proxy listening on port ${PORT}`));

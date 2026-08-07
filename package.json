@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "node server/proxy.js"
   },
   "dependencies": {
     "body-parser": "^2.3.0",

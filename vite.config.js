@@ -6,7 +6,7 @@ export default defineConfig(({ mode }) => ({
   build: {
     outDir: 'dist'
   },
-  base: mode === 'production' ? '/masvilag-game/' : '/',
+  base: '/',
   server: {
     host: true,
     allowedHosts: true,
