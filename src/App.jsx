@@ -3549,19 +3549,20 @@ function Rooms({ w, onOpen, onCreate, onClose, setErr, onSignOut, onNeedLogin })
   const [confirm, setConfirm] = useState(null);
 
   const refresh = useCallback(async () => {
-    const [idx, mine] = await Promise.all([loadIndex(), loadRooms()]);
-    const byCode = {};
-    // a világjegyzék adja az alapot
-    idx.forEach((x) => { if (x && x.code) byCode[x.code] = { code: x.code, name: x.name || x.code }; });
-    // a saját listád adja hozzá a profilodat és azokat a szobákat, amik kimaradtak
-    mine.forEach((r) => {
-      if (!r || !r.code) return;
-      byCode[r.code] = { ...(byCode[r.code] || { code: r.code, name: r.name || r.code }), meId: r.meId, username: r.username, owner: r.owner };
-    });
-    // a jelenlegi szoba mindig legyen benne
-    if (w && w.code && !byCode[w.code]) byCode[w.code] = { code: w.code, name: (w.universe && w.universe.name) || w.code };
-    setList(Object.keys(byCode).map((c) => byCode[c]));
-  }, [w]);
+  const mine = await loadRooms();
+
+  setList(
+    (mine || [])
+      .filter((r) => r && r.code)
+      .map((r) => ({
+        code: r.code,
+        name: r.name || r.code,
+        meId: r.meId,
+        username: r.username,
+        owner: r.owner,
+      }))
+  );
+}, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -3681,23 +3682,28 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
   // A világlista nem csak az eszközödön él: a jegyzékből is feltöltjük, így
   // másik gépről is megjelenik minden világod, és elég a jelszót beírnod.
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      const [mine, idx] = await Promise.all([loadRooms(), loadIndex()]);
-      if (!alive) return;
-      const byCode = {};
-      (idx || []).forEach((x) => {
-        if (x && x.code) byCode[x.code] = { code: x.code, name: x.name || x.code, username: x.user || "" };
-      });
-      (mine || []).forEach((r) => {
-        if (!r || !r.code) return;
-        const base = byCode[r.code] || { code: r.code, name: r.name || r.code, username: "" };
-        byCode[r.code] = { ...base, username: r.username || base.username };
-      });
-      setRooms(Object.keys(byCode).map((c) => byCode[c]));
-    })();
-    return () => { alive = false; };
-  }, []);
+  let alive = true;
+
+  (async () => {
+    const mine = await loadRooms();
+
+    if (!alive) return;
+
+    setRooms(
+      (mine || [])
+        .filter((r) => r && r.code)
+        .map((r) => ({
+          code: r.code,
+          name: r.name || r.code,
+          username: r.username || "",
+        }))
+    );
+  })();
+
+  return () => {
+    alive = false;
+  };
+}, []);
 
   // a szobakód ellenőrzése gépelés közben
   useEffect(() => {
