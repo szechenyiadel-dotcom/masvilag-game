@@ -1705,12 +1705,45 @@ function selfMemoryForPrompt(w, id) {
 /* A hang közvetlenül a feladat elé — így nem sikkad el a sok szöveg végén. */
 function voiceCard(c) {
   const bits = [];
-  if (c.gender) bits.push(`Neme: ${spread(c.gender, 80)} — a hangjában, beszédmódjában és reakcióiban ezt a nemet kell tükröznie.`);
-  if (c.speech) bits.push(`Beszédstílus: ${spread(c.speech, 900)}`);
-  if (c.voice) bits.push(`Így beszélsz, szó szerinti minta:\n${spread(c.voice, 2200)}`);
-  if (c.personality) bits.push(`Röviden te: ${spread(c.brief || c.personality, 900)}`);
+
+  if (c.gender) {
+    bits.push(
+      `Neme: ${spread(c.gender, 80)} — a hangjában, beszédmódjában és reakcióiban ezt a nemet kell tükröznie.`
+    );
+  }
+
+  if (c.speech) {
+    bits.push(`Beszédstílus: ${spread(c.speech, 900)}`);
+  }
+
+  if (c.voice) {
+    bits.push(
+      `Példamondatok — CSAK STÍLUSIRÁNYMUTATÁS:
+${spread(c.voice, 2200)}
+
+FONTOS:
+- Ezek NEM kész válaszok és NEM szó szerinti sablonok.
+- Ne másold őket.
+- Ne parafrazáld őket újra és újra.
+- Ne használd folyamatosan ugyanazokat a mondatkezdéseket, poénokat, fenyegetéseket, flörtöléseket, beceneveket vagy szófordulatokat.
+- Csak a hangnemet, szóhasználatot, ritmust, szlenget, központozást és személyiséget tanuld meg belőlük.
+- Minden új megszólalás legyen eredeti és az aktuális helyzetből szülessen.`
+    );
+  }
+
+  if (c.personality) {
+    bits.push(
+      `Röviden te: ${spread(c.brief || c.personality, 900)}`
+    );
+  }
+
   if (!bits.length) return "";
-  return `\n\n--- ${String(c.name).toUpperCase()} HANGJA — EBBŐL DOLGOZZ ---\n${bits.join("\n")}\n--- eddig a hang ---`;
+
+  return `
+
+--- ${String(c.name).toUpperCase()} HANGJA — EBBŐL DOLGOZZ ---
+${bits.join("\n")}
+--- eddig a hang ---`;
 }
 
 function publicVoiceCard(w, c, observerId) {
@@ -1975,17 +2008,35 @@ ${(observerId ? knownTimeline : (w.log || []).slice(0, 4).map((l) => cut(l, 120)
 const ENGINE = `Te egy élő, AI-vezérelt közösségi média világ motorja vagy egy szerepjátékhoz.
 Minden szereplőt a saját adatlapja alapján játszol el. Az adatlap nem háttérinfó: az a szereplő hangja.
 
-FŐ SZABÁLY: a válasz legyen karakterhű, magyarul, természetesen, érzékien és könyvesen fogalmazott, mintha egy jól megírt regény szereplői szólnának. Ne legyen semleges, sem gépies, sem szimpla. A szöveg legyen emberi, finom, árnyalt, emlékezetes.
+FŐ SZABÁLY: minden válasz legyen karakterhű, természetes, emberi és az adott helyzethez illő. A karakter személyisége, története, aktuális érzései és kapcsolatai határozzák meg, MIT mond — de a felület határozza meg, HOGYAN és milyen hosszan mondja.
 
-FONTOS: ne rövidítsd le a választ a gépes sablonokhoz. Ha a helyzet engedi, írj legalább 2–4 mondatot egy megszólalásban, és ne legyenek sablonosan rövidek vagy laposak. A mondatok legyenek gördülékenyek, színesek, hosszabbak, magyarosak, irodalmibbak és nyelvtanilag hibátlanok. Kerüld a közhelyes, üres, robotikus megfogalmazásokat. Ne ismételd ugyanazt a szót, a szerkezetet vagy a ritmust.
+KOMMUNIKÁCIÓS FORMÁTUM
+- PRIVÁT CHAT / DM: valódi üzenetváltásnak hasson. Általában 1–4 rövid mondat, de lehet akár csak néhány szó is. Ne írj esszét, monológot vagy regényszerű bekezdéseket normál chatben.
+- GROUP CHAT: ugyanígy rövid, közvetlen, gyors csevegés. A szereplők reagáljanak egymásra, ne mindenki külön monológot mondjon.
+- KOMMENT: nagyon rövid közösségi médiás reakció. Általában 2–20 szó, egy mondat, ritkábban két nagyon rövid mondat. Kommentben ne írj bekezdést vagy narrációt.
+- ROLEPLAY / JELENET: itt MARADHAT a részletes, hosszabb, atmoszférikus, könyves stílus, testbeszéddel, cselekvéssel és több bekezdéssel.
+- POSZT és JEGYZET: a tartalomhoz és a karakterhez igazodjon; ne legyen automatikusan hosszú.
 
-A hangot ne csak egyetlen szókapcsolattal adj meg: a karakter beszédéből legyen felismerhető a személyisége, a fájdalma, a gőgje, a vágyakozása vagy a cinizmusa. A nyelv legyen konkrét, érzéki és emberi. Azonosítsd a karaktert a mondatokból, ne csak a névből. Ne szólj úgy, mintha egy közönséges asszisztens lenne.
-A nemi azonosítás nem opcionális: minden szereplőnél a nem mezőből indulj ki, és a beszédben, a hangban, a reakciókban és a viselkedésben legyen felismerhető. Ha a mező nő, ne írj férfias, durva vagy „srácos” hangot; ha a mező férfi, ne írj nőies, lágy vagy „lányos” hangot. A különbséget tartsd meg.
+EMOJI
+- Chatben, group chatben és kommentben használhatsz emojikat természetesen, ha illenek az adott karakterhez.
+- Ne minden üzenetben legyen emoji, és ne mindig ugyanazokat használd.
+- Egy karakter emoji-használata is tükrözze a személyiségét: van, aki gyakran használja, van, aki ritkán vagy soha.
+- Általában 0–2 emoji bőven elég egy rövid üzenetben.
 
-A magyar nyelvtan legyen pontos. Használj helyes névmásokat, ragozásokat és mondatszerkezeteket. Kerüld az üres filler szavakat, a túlzott ismétlést és a sablonos reakciókat.
+VÁLTOZATOSSÁG ÉS ISMÉTLÉS TILALMA
+- Ne ismételd ugyanazokat a mondatkezdéseket, szófordulatokat, poénokat, flörtölési mintákat, fenyegetéseket, sértéseket, beceneveket vagy reakciókat.
+- Ne parafrazáld újra és újra ugyanazt más szavakkal.
+- Ne legyen a karakternek egyetlen sablonreakciója minden hasonló helyzetre.
+- Változtasd természetesen a mondathosszt, szókincset, ritmust, humort, érzelmi reakciót és központozást.
+- A következetes személyiség NEM azt jelenti, hogy ugyanazokat a mondatokat ismétli.
+- Ha a karakter nemrég már nagyon hasonlót mondott, fogalmazzon vagy reagáljon másképp.
+- A példamondatok kizárólag hang- és stílusiránymutatások. Nem kész válaszok, nem catchphrase-ek és nem sablonok.
 
-KÜLÖNÖSEN FONTOS: a válasz ne legyen “szép” csak azért, hogy szép legyen. Legyen hiteles. Egy szereplő mondatainak legyen súlya, feszültsége, íze. Néhány esetben lehet egyetlen kemény, tömör mondat is, de ne legyenek mindig ugyanazok a rövid, gépi reakciók. A beszéd legyen változatos, és soha ne tűnjön úgy, hogy a modell csak sablonokat húz elő.
+A hangot ne csak egyetlen szókapcsolattal add meg: a karakter beszédéből legyen felismerhető a személyisége, indulata, humora, gőgje, bizonytalansága, vágyakozása vagy cinizmusa. Ne szólj úgy, mint egy általános AI-asszisztens.
 
+A magyar nyelvtan legyen pontos. Használj helyes névmásokat, ragozásokat és természetes mondatszerkezeteket. A rövid chatüzenet is legyen nyelvileg természetes, de nem kell minden mondatnak irodalmi prózának hangzania.
+
+KÜLÖNÖSEN FONTOS: ne próbáld minden helyzetben „szépre” vagy drámaira írni a választ. Egy hétköznapi chat legyen hétköznapi chat, egy komment legyen komment, egy roleplay jelenet pedig lehet részletes és atmoszférikus. A karakter hitelessége fontosabb, mint a választékos megfogalmazás.
 VONZALOM, FESZÜLTSÉG, ÉRZÉKISÉG
 - Ha a kapcsolat vagy a jelenet ezt indokolja, a vágyakozást, a féltékenységet, a testi közelséget és a romantikus feszültséget bátran írd meg intenzíven, érzékien, felnőtt hangvétellel: a tekintetek, az érintés, a légzés, a köztük lévő távolság vagy annak hiánya mind számít.
 - Az érzékiséget és a szexuális vonzalmat éreztetni, sejtetni, felépíteni kell — a hangsúly a feszültségen, a vágyon és az érzelmi tétjén van, nem az anatómiai vagy grafikusan explicit leíráson. Ne írj le pornográf részletességgel testi aktust.
@@ -2000,7 +2051,7 @@ NYERSESÉG, AGRESSZIÓ, KÁROMKODÁS
 SZEREPLÉSI SZABÁLYOK
 - MI SZÁMÍT A LEGJOBBAN: a SZEMÉLYISÉG és a TÖRTÉNET. Ezek döntik el, hogyan reagál egy helyzetre — a többi mező csak árnyalja. Mielőtt írsz, nézd meg, ki ez az ember és mi történt vele; a válasz ebből következzen, ne a helyzet általános logikájából.
 - Amit a szereplő átélt, az ma is hat rá. Ha valami a történetében nyitva maradt, az beleszól a mostani mondataiba is.
-- A HANGMINTA ADJA A FORMÁT. Ha egy szereplőnél ott van, hogy "ÍGY BESZÉL", azt szó szerinti mintaként kezeld: ugyanaz a mondathossz, szóhasználat, központozás, kis- és nagybetűk, emoji, káromkodás, modor. Előbb a mintát nézd meg, csak utána írj.
+- - A HANGMINTA CSAK IRÁNYMUTATÁS. A példamondatokból a karakter szóhasználatát, ritmusát, humorát, szlengjét, központozását és általános beszédmódját tanuld meg, de SOHA ne másold vagy parafrazáld rendszeresen a konkrét mondatokat. Új helyzetben új, eredeti megszólalást írj.
 - Két szereplő mondatai soha ne legyenek felcserélhetők. Ha letakarnád a nevet, a szövegből akkor is ki kellene derülnie, ki beszél.
 - Ha a szereplő tömören beszél, ne írj helyette kerek, elemző mondatokat. Ha csapong, csapongjon. A modorosságai, a szavajárása, a félbehagyott mondatai maradjanak meg.
 - Semleges, sima, "szép" fogalmazás = hiba. Az a jel, hogy kiestél a szerepből.
@@ -2087,24 +2138,50 @@ NYELVHELYESSÉG
 - Kerüld a suta, szó szerinti fordításnak ható mondatszerkezeteket; írj természetes, folyékony magyar prózát.
 - Ha egy mondat magyartalanul sülne el, inkább fogalmazd át. Rossz nyelvtan = kiestél a szerepből.
 
-VÉGÜL: minden válasz legyen hosszabb, mint a korábbi változatoknál, és törekedj a kultúrált, érzékeny, finom, könyves stílusra. A rövid, szikár, semleges válaszok mostantól hibásak.`;
+VÉGÜL: mindig az adott felület természetes hosszát használd. Chatben és kommentben a rövid válasz teljesen helyes és gyakran kívánatos; roleplay jelenetben maradhat a hosszabb, részletesebb próza. Soha ne növeld mesterségesen a választ csak azért, hogy hosszabb legyen.
 
 const ENGINE_EN = `Write only in English, regardless of what language any labels, field names or notes below are in.
 
 You are the engine of a living, AI-driven social-media world for a roleplay game.
 You play every character strictly from their own sheet. The sheet is not background info — it IS the character's voice.
 
-MAIN RULE: responses must be true to character, natural, sensory and written like a well-crafted novel. Never neutral, robotic or generic. The prose should be human, subtle, nuanced, memorable.
+MAIN RULE: every response must be true to character, natural, human and appropriate to the current situation. Personality, history, current emotions and relationships determine WHAT a character says — but the communication format determines HOW they say it and how long the response should be.
 
-IMPORTANT: don't shrink replies into a stock template. When the scene allows, write at least 2-4 sentences per turn, and avoid flat, formulaic brevity. Sentences should flow, be vivid, varied, literary and grammatically flawless. Avoid clichés, filler and robotic phrasing. Don't repeat the same word, structure or rhythm.
+COMMUNICATION FORMAT
 
-Don't reduce a character's voice to a single adjective: their speech should reveal their personality, their pain, their arrogance, their longing or their cynicism. Language should be concrete, sensory and human. The character should be identifiable from the sentences themselves, not just the name. Never sound like a generic assistant.
-Gender is not optional: always start from each character's gender field, and it must show in their speech, tone, reactions and behavior. If the field says female, don't write a masculine, coarse or "bro" voice; if male, don't write a feminine, soft or "girly" voice. Keep the distinction.
+- PRIVATE CHAT / DM: write like real people texting. Usually 1–4 short sentences, sometimes only a few words. Do not turn ordinary chat into an essay, monologue or novel scene.
+- GROUP CHAT: keep messages short, direct and conversational. Characters should react to each other instead of each delivering a separate speech.
+- SOCIAL MEDIA COMMENT: keep it very short. Usually 2–20 words, normally one sentence and occasionally two very short sentences. No paragraphs, internal narration or roleplay prose in ordinary comments.
+- ROLEPLAY / SCENE: the short-message restrictions DO NOT apply here. Roleplay may remain detailed, immersive, atmospheric and literary, with actions, body language, dialogue, sensory detail and multiple paragraphs.
+- POSTS and NOTES: use whatever length naturally fits the content and the character. Do not automatically make them long.
 
-Avoid empty filler, excessive repetition and formulaic reactions.
+EMOJI USE
 
-ESPECIALLY IMPORTANT: a response shouldn't be "nice" just for the sake of being nice. It must be authentic. A character's lines should carry weight, tension, flavor. Sometimes a single hard, terse line is right, but don't let every reaction fall into the same short, mechanical pattern. Speech should be varied, and it should never feel like the model is just pulling from templates.
+- In chats, group chats and comments, use emojis naturally when they fit the character.
+- Emojis are optional, not mandatory.
+- Do not put emojis in every message.
+- Do not constantly reuse the same emoji or emoji combination.
+- Different characters should have different emoji habits based on personality.
+- Usually 0–2 emojis is enough for a short message.
 
+VARIETY AND ANTI-REPETITION
+
+- Never repeatedly recycle the same sentence openings, jokes, insults, threats, flirting patterns, pet names, metaphors, reactions or punchlines.
+- Do not keep saying the same thing with slightly different wording.
+- Do not give a character one stock reaction for every similar situation.
+- Vary sentence length, vocabulary, rhythm, humor, emotional response and punctuation naturally.
+- A consistent personality does NOT mean repeating the same phrases.
+- Pay attention to what the character has said recently. If a planned response strongly resembles something they already said, respond differently.
+- Example sentences and voice samples are STYLE REFERENCES ONLY. They are not ready-made replies, catchphrases or dialogue templates.
+- Never repeatedly copy or closely paraphrase example sentences.
+
+Don't reduce a character's voice to a single adjective. Their personality should be recognizable through their vocabulary, attitude, humor, reactions and rhythm, not through repeated signature lines.
+
+Gender is not optional: always start from each character's gender field, and it must show naturally in their speech, tone, reactions and behavior where relevant.
+
+Avoid empty filler, excessive repetition, generic assistant phrasing and formulaic reactions.
+
+ESPECIALLY IMPORTANT: do not make every response dramatic, elegant or literary simply for the sake of sounding impressive. An ordinary chat should sound like an ordinary chat. A comment should sound like a social-media comment. A roleplay scene may remain rich, detailed and atmospheric. Character authenticity matters more than ornate prose.
 ATTRACTION, TENSION, SENSUALITY
 - When the relationship or the scene calls for it, feel free to write longing, jealousy, physical closeness and romantic tension intensely and sensually, with an adult tone: glances, touch, breath, the distance between them (or its absence) all matter.
 - Sensuality and sexual attraction should be felt, implied, built up — the focus is on tension, desire and emotional stakes, not anatomical or graphically explicit description. Do not write physical acts with pornographic detail.
@@ -2119,9 +2196,7 @@ RAWNESS, AGGRESSION, PROFANITY
 PERFORMANCE RULES
 - WHAT MATTERS MOST: PERSONALITY and STORY. These decide how a character reacts to a situation — everything else only adds nuance. Before you write, check who this person is and what happened to them; the response should follow from that, not from generic situational logic.
 - What a character has lived through still affects them today. If something in their story was left open, it bleeds into their current lines too.
-- THE VOICE SAMPLE DEFINES THE FORM. If a character has a "SPEAKS LIKE THIS" sample, treat it as a literal template: same sentence length, word choice, punctuation, capitalization, emoji, swearing, mannerisms. Look at the sample first, then write.
-- Two characters' lines should never be interchangeable. If you covered up the name, the text alone should still reveal who's speaking.
-- If a character speaks tersely, don't write rounded, analytical sentences for them instead. If they ramble, let them ramble. Keep their quirks, verbal tics, unfinished sentences.
+- THE VOICE SAMPLE IS GUIDANCE, NOT A TEMPLATE. If a character has a "SPEAKS LIKE THIS" sample, learn their vocabulary, rhythm, humor, slang, punctuation, level of profanity, emotional tone and general manner of speaking from it. NEVER repeatedly copy, closely paraphrase or recycle the actual example sentences. Every new situation requires new, original dialogue.
 - Neutral, smooth, "nice" phrasing = a mistake. It's the sign you fell out of character.
 - Don't describe the personality — show it in what they say and do.
 - There is no neutral, helpful "assistant" tone. Everyone has a mood, an opinion and a goal, and it's active right now.
@@ -2165,7 +2240,7 @@ HOW CHARACTERS ADDRESS EACH OTHER
 - In a group, address the others in second person plural: "where are you all?", "I told you all too".
 - Don't talk about yourself from the outside, in third person ("Brent thinks…"), unless it's a deliberate character quirk per their sheet.
 
-FINALLY: every response should be longer than previous versions, and aim for a cultured, sensitive, refined, literary style. Short, terse, neutral responses are now considered a mistake.`;
+FINALLY: always use the natural length and style of the current communication format. Short replies are completely valid and often preferred in chats and comments. Longer, refined and literary writing belongs mainly in dedicated roleplay scenes when appropriate. Never artificially lengthen a response just to make it feel more substantial.
 
 const engineFor = (w) => (worldLanguage(w) === "en" ? ENGINE_EN : ENGINE);
 
@@ -4126,27 +4201,61 @@ async function genComments(w, post) {
   const cast = pickCast(w, post.authorId);
   const author = charById(w, post.authorId);
   const th = threadOf(w, post);
-  const out = await askWorldJSON(w, engineFor(w), `${worldContext(w, cast.map((c) => c.id), true, null)}
+
+  const out = await askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(w, cast.map((c) => c.id), true, null)}
 
 POSZT — ${author ? author.name : "?"}:
 "${post.text}"
-${post.image ? `KÉP A POSZTBAN: ez a kép a poszthoz tartozik, és a szereplőknek a képet is látnia kell. A képről következtess, mi van rajta, ki van rajta, milyen helyszín, milyen hangulat, és hogy ez hogyan befolyásolja a reakciókat. A kép tartalma ugyanúgy fontos kontextus, mint a szöveg.` : ""}
+
+${post.image ? `KÉP A POSZTBAN: ez a kép a poszthoz tartozik, és a szereplőknek a képet is látniuk kell. A képről következtess, mi van rajta, ki van rajta, milyen a helyszín, milyen a hangulat, és hogy ez hogyan befolyásolja a reakciókat. A kép tartalma ugyanúgy fontos kontextus, mint a szöveg.` : ""}
 
 ${th.text ? "EDDIGI KOMMENTSZÁL (a szögletes zárójelben a komment jele):\n" + th.text + "\n" : ""}
+
 ${cast.slice(0, 3).map((c) => publicVoiceCard(w, c, null)).join("")}
 ${repetitionGuard(w, cast.map((c) => c.id), "kommentek")}
 
-Adj 2-4 új kommentet a felsorolt szereplőktől. Csak olyan szereplő szólaljon meg, akinek van oka rá.
-Mindenki a saját hangmintája szerint írjon — a kommentjeik ne legyenek felcserélhetők.
+Adj 2-4 új kommentet a felsorolt szereplőktől.
+Csak olyan szereplő szólaljon meg, akinek tényleg van oka reagálni.
+
+KOMMENTSTÍLUS:
+- Ezek közösségi médiás kommentek, NEM roleplay-jelenetek.
+- Egy komment általában 2-20 szó legyen.
+- Maximum 1-2 nagyon rövid mondat.
+- Egy rövid, pár szavas reakció teljesen megfelelő.
+- Ne írjanak bekezdéseket.
+- Ne írjanak monológot.
+- Ne írjanak narrációt vagy belső gondolatokat.
+- Ne használjanak *csillagok közé tett roleplay-cselekvéseket*.
+- Közvetlenül a posztra vagy a kommentfolyamra reagáljanak.
+- Lehet a reakció vicces, szarkasztikus, flörtölő, féltékeny, dühös, bunkó, kedves, kínos vagy száraz, ha ez illik a karakterhez.
+- Használhatnak emojikat természetesen.
+- Általában 0-2 emoji elég.
+- Nem kell minden kommentbe emoji.
+- Ne minden szereplő ugyanazokat az emojikat használja.
+- A kommentek ne legyenek felcserélhetők: mindenki a saját személyiségével és beszédstílusával reagáljon.
+- A példamondatok és hangminták CSAK stílusiránymutatások.
+- Soha ne másolják vagy rendszeresen parafrazálják a példamondatokat.
+- Ne ismételjék a saját korábbi poénjaikat, sértéseiket, flörtölési mintáikat, beceneveiket, mondatkezdéseiket vagy állandó reakcióikat.
+- Ha egy karakter korábban már nagyon hasonlóan reagált, most fogalmazzon vagy reagáljon másképp.
+- A karakter következetes személyisége nem jelent ismétlődő mondatokat.
+
 Aki a poszt szerzőjéhez beszél, tegezze (E/2); magáról mindenki E/1-ben beszél. Magázás tilos.
-A kommentek legyenek hosszabbak, árnyaltabbak és természetesebben megfogalmazottak, mint egy gyors reakció; ne legyenek szikárak.
+
 Ha valaki egy konkrét korábbi kommentre reagál, a "reply_to" mezőbe írd be annak a jelét (pl. "k2").
+
 Aki nem szól hozzá, de tetszik neki, az a "likes" listába kerül.
+
 Formátum:
 {"comments":[{"id":"szereplő azonosítója","text":"komment","reply_to":"k2 vagy üres"}],
- "likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
- "changes":[{"a":"aki érez","b":"aki iránt","delta":-15,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
- "events":["egy mondat arról, mi történt a világban emiatt"]}${TAIL}`);
+"likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
+"changes":[{"a":"aki érez","b":"aki iránt","delta":-15,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
+"events":["egy mondat arról, mi történt a világban emiatt"]}${TAIL}`,
+    { maxTokens: 1200 }
+  );
+
   return { out, label: th.label };
 }
 
@@ -4158,7 +4267,7 @@ function applyComments(n, postId, out, label) {
     (out.comments || []).forEach((c) => {
       const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!who || !c.text) return;
-      const body = cleanGeneratedUtterance(n, who, c.text, 520);
+      const body = cleanGeneratedUtterance(n, who, c.text, 240);
       if (!body) return;
       const tag = String((c.reply_to !== undefined ? c.reply_to : c.replyTo) || "").trim().toLowerCase();
       let parent = byLabel[tag] || null;
@@ -4205,7 +4314,49 @@ async function genReply(w, post, comment) {
   const target = charById(w, comment.authorId);
   const cast = pickCast(w, comment.authorId);
   const th = threadOf(w, post);
-  return askWorldJSON(w, engineFor(w), `${worldContext(w, cast.map((c) => c.id), true, null)}
+
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(w, cast.map((c) => c.id), true, null)}
+
+POSZT — ${nameOfIn(w, post.authorId)}:
+"${post.text}"
+${post.image ? `KÉP A POSZTBAN: a kommentelő szereplők látták a képet, ezért a reakcióikban vegyék figyelembe a kép tartalmát, a szereplőket, a helyszínt és a hangulatot. A képről szóló részletet ne hagyják figyelmen kívül.` : ""}
+
+KOMMENTSZÁL:
+${th.text}
+
+Most KIFEJEZETTEN erre a kommentre válaszoljanak:
+${target ? target.name : "?"}: "${comment.text}"
+
+${cast.slice(0, 3).map((c) => publicVoiceCard(w, c, null)).join("")}
+${repetitionGuard(w, cast.map((c) => c.id), "kommentválaszok")}
+
+Adj 1-3 választ olyan szereplőktől, akiket ez a komment tényleg megszólít vagy provokál.
+
+KOMMENTVÁLASZ-SZABÁLYOK:
+- Közösségi médiás kommentként írjanak, NE roleplay-jelenetként.
+- Egy válasz általában 2-20 szó legyen.
+- Maximum 1-2 nagyon rövid mondat.
+- Ne írjanak bekezdést, monológot vagy regényszerű szöveget.
+- Ne írjanak narrációt, belső gondolatot vagy *csillagok közé tett cselekvést*.
+- Közvetlenül arra reagáljanak, amit ${target ? target.name : "a kommentelő"} írt.
+- Ne nyissanak teljesen új témát.
+- Lehetnek viccesek, bunkók, flörtölősek, féltékenyek, szarkasztikusak, dühösek vagy kedvesek, ha ez karakterhű.
+- Használhatnak emojit természetesen. Általában 0-2 emoji elég.
+- Ne minden karakter ugyanúgy használjon emojit.
+- NE másolják vagy parafrazálják a saját példamondataikat.
+- NE ismételjék a korábbi kommentjeiket, poénjaikat, sértéseiket, flörtölési formuláikat vagy állandó szófordulataikat.
+- A karakter legyen felismerhető a stílusából, de minden válasz legyen új és az aktuális helyzetből szülessen.
+
+Formátum:
+{"comments":[{"id":"szereplő azonosítója","text":"válasz"}],
+ "changes":[{"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
+ "events":[]}${TAIL}`,
+    { maxTokens: 1200 }
+  );
+}
 
 POSZT — ${nameOfIn(w, post.authorId)}:
 "${post.text}"
@@ -4234,7 +4385,7 @@ function applyReplies(n, postId, rootId, out) {
   if (p) (out.comments || []).forEach((c) => {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
-    const body = cleanGeneratedUtterance(n, who, c.text, 520);
+    const body = cleanGeneratedUtterance(n, who, c.text, 240);
     if (!body) return;
     const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
     p.comments.push(made);
@@ -4270,7 +4421,7 @@ ${single
   : "Léptesd a világot néhány órával. Adj 1-2 új posztot különböző szereplőktől, mindegyikhez 1-3 kommentet másoktól."}
 A szereplők a játékos nélkül is élnek: posztolnak, veszekednek, kibékülnek, pletykálnak, terveznek.
 Ne ismételd a korábbi posztokat, és vidd tovább azt, ami mostanában történt.
-A posztok és a kommentek legyenek hosszabbak, színesebbek, árnyaltabbak és természetesebben megfogalmazottak, mint a korábbi változatok.
+A posztok legyenek természetes, karakterhű hosszúságúak. A KOMMENTEK viszont rövid, valódi közösségi médiás reakciók legyenek: általában 2-20 szó, maximum 1-2 rövid mondat. Kommentben ne legyen hosszú narráció vagy roleplay-próza. Használhatnak 0-2 természetes, karakterhez illő emojit. Ne ismételjék a saját korábbi kommentjeiket, példamondataikat vagy állandó reakcióformuláikat.
 Akinek van albuma, néha képet is posztolhat belőle: ilyenkor az "image" mezőbe a kép jele kerül (pl. "kep2"), és a poszt szövege illeszkedjen a képaláíráshoz. Ne találj ki nem létező képet.
 Ha kép is van a poszton, a szereplők a képet is értelmezzék: nézzék meg, ki van rajta, milyen a helyszín, mi a hangulat, és hogy ez hogyan változtatja meg a reakciót. A kép nem csak dekoráció; a szereplők valóban rá reagálnak.
 A kommentek egymásra is válaszolhatnak: ilyenkor a "reply_to" a válaszolt komment sorszáma (1 = első komment).
@@ -4290,7 +4441,7 @@ function applyWorldStep(n, out) {
     (p.comments || []).forEach((c, idx) => {
       const cid = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!cid || !c.text) return;
-      const body = cleanGeneratedUtterance(n, cid, c.text, 520);
+      const body = cleanGeneratedUtterance(n, cid, c.text, 240);
       if (!body) return;
       const rt = Number(String((c.reply_to !== undefined ? c.reply_to : c.replyTo) || "").replace(/\D/g, ""));
       let parent = null;
@@ -5693,59 +5844,250 @@ function GroupChat({ w, group, update, setErr, onBack }) {
     if (g) fn(g, n);
   });
 
-  const turn = async (mine) => {
-    setBusy(true);
-    if (mine) patch((g) => { g.msgs.push({ id: uid(), from: w.meId, text: mine, ts: now() }); g.updatedAt = now(); });
-    try {
-      const hist = msgs.concat(mine ? [{ from: w.meId, text: mine }] : []).slice(-18)
-        .map((m) => { const a = charById(w, m.from); return `${a ? a.name : "?"}: ${m.text}`; }).join("\n");
+const turn = async (mine) => {
+  setBusy(true);
 
-      const out = await askWorldJSON(w, engineFor(w), `${worldContext(w, group.members, true, null)}
+  if (mine) {
+    patch((g) => {
+      g.msgs.push({
+        id: uid(),
+        from: w.meId,
+        text: mine,
+        ts: now(),
+      });
+
+      g.updatedAt = now();
+    });
+  }
+
+  try {
+    const hist = msgs
+      .concat(
+        mine
+          ? [
+              {
+                from: w.meId,
+                text: mine,
+              },
+            ]
+          : []
+      )
+      .slice(-20)
+      .map((m) => {
+        const a =
+          m.from === w.meId
+            ? w.player
+            : charById(w, m.from);
+
+        return `${a ? a.name : "?"}: ${m.text}`;
+      })
+      .join("\n");
+
+    const out = await askWorldJSON(
+      w,
+      engineFor(w),
+      `${worldContext(
+        w,
+        group.members,
+        true,
+        null
+      )}
 
 CSOPORTOS BESZÉLGETÉS: ${group.name}
-A CSOPORT TAGJAI: ${members.map((m) => `${m.name} [${m.id}]`).join(", ")}
-A játékos karaktere (helyette SOHA ne írj): ${w.player.name} [${w.meId}]
+
+A CSOPORT TAGJAI:
+${members
+  .map((m) => `${m.name} [${m.id}]`)
+  .join(", ")}
+
+A játékos karaktere, aki helyett SOHA ne írj:
+${w.player.name} [${w.meId}]
 
 EDDIGI ÜZENETEK:
 ${hist || "a beszélgetés most kezdődik"}
 
-${mine ? `${w.player.name} most ezt írta:\n"${mine}"` : "Senki nem szólt hozzá kívülről; a tagok maguktól folytatják."}
-${repetitionGuard(w, group.members || [], "csoportchat")}
+${
+  mine
+    ? `${w.player.name} most ezt írta:
+"${mine}"`
+    : "Senki nem szólt hozzá kívülről; a tagok maguktól folytatják a beszélgetést."
+}
 
-Írj 1-3 új üzenetet a csoport tagjaitól. Mindenki magáról E/1-ben beszél, a megszólítottat tegezi (E/2),
-a többiekhez szólva pedig E/2 többes számot használ ("hol vagytok?"). Magázás tilos.
-Ez csoportos csevegés: rövid üzenetek, egymásra is reagálnak,
-félbeszakítják egymást, @néven szólítják egymást. Csak az szólaljon meg, akinek van oka rá.
+${repetitionGuard(
+  w,
+  group.members || [],
+  "csoportchat"
+)}
+
+CSOPORTCHAT SZABÁLYOK:
+
+- Ez valódi group chat, NEM roleplay-jelenet.
+- Írj 1-3 új üzenetet a csoport tagjaitól.
+- Egy üzenet általában 1-2 rövid mondat legyen.
+- Gyakran néhány szó is teljesen elég.
+- Ne írjanak hosszú bekezdéseket vagy monológokat.
+- Ne írjanak regényszerű narrációt.
+- Ne írjanak belső gondolatokat.
+- Ne használjanak *csillagok közé tett cselekvéseket*.
+- Egymásra reagáljanak, ne egymástól független mini beszédeket írjanak.
+- Nem kell minden tagnak minden körben megszólalnia.
+- Csak az írjon, akinek tényleg van oka reagálni.
+- Félbeszakíthatják egymást.
+- Visszakérdezhetnek.
+- Ugrathatják egymást.
+- Veszekedhetnek, flörtölhetnek, pletykálhatnak, poénkodhatnak vagy témát válthatnak természetesen.
+- @néven megszólíthatják egymást, amikor annak van értelme.
+- Egy egyszerű "mi 💀", "ne már", "hol vagytok?" jellegű hosszúság teljesen megfelelő, HA karakterhű.
+
+EMOJI:
+- Használhatnak emojikat természetesen.
+- Nem kell minden üzenetbe emoji.
+- Általában 0-2 emoji elég.
+- Ne használják folyton ugyanazokat az emojikat.
+- Minden karakter emoji-használata igazodjon a saját személyiségéhez.
+
+ISMÉTLÉS:
+- Ne ismételjék a saját korábbi mondataikat.
+- Ne parafrazálják folyton ugyanazt.
+- Ne használják újra ugyanazokat a poénokat, sértéseket, fenyegetéseket, flörtölési formulákat vagy beceneveket.
+- Ne legyen mindenkinek állandó válaszsablonja.
+- Ha valaki nemrég már hasonlóan reagált, most reagáljon más módon.
+- A példamondatok és hangminták CSAK stílusiránymutatások, nem másolandó szövegek.
+- A karakter maradjon felismerhető, de a konkrét mondatai legyenek frissek és az aktuális beszélgetésből szülessenek.
+
+NYELVTAN:
+- Mindenki magáról E/1-ben beszél.
+- Egy konkrét megszólított személyt tegezzen E/2-ben.
+- Több emberhez E/2 többes számban beszéljen, például: "hol vagytok?"
+- Magázás tilos.
+- A játékos karaktere helyett SOHA ne írj.
+
 Formátum:
 {"replies":[{"id":"tag azonosítója","text":"üzenet"}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
- "memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${TAIL}`);
+ "memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${TAIL}`,
+      { maxTokens: 900 }
+    );
 
-      const rows = (out.replies || out.comments || []).map((r) => {
-        const id = findChar(w, r && (r.id !== undefined ? r.id : r.name));
-        return id && r.text && !isHuman(w, id) ? { id: uid(), from: id, text: String(r.text), ts: now() } : null;
-      }).filter(Boolean);
-      if (!rows.length) throw new Error(tt("Nem érkezett használható válasz.", "No usable reply arrived."));
+    const rows = (
+      out.replies ||
+      out.comments ||
+      []
+    )
+      .map((r) => {
+        const id = findChar(
+          w,
+          r &&
+            (r.id !== undefined
+              ? r.id
+              : r.name)
+        );
 
-      patch((g, n) => {
-        rows.forEach((r) => {
-          g.msgs.push({ ...r, language: worldLanguage(n, n.meId) });
-          noteMentions(n, r.text, r.from, { type: "group", id: g.id });
-          rememberKnowledge(n, r.from, {
+        if (
+          !id ||
+          !r.text ||
+          isHuman(w, id)
+        ) {
+          return null;
+        }
+
+        const body =
+          cleanGeneratedUtterance(
+            w,
+            id,
+            String(r.text),
+            280
+          );
+
+        if (!body) return null;
+
+        return {
+          id: uid(),
+          from: id,
+          text: body,
+          ts: now(),
+        };
+      })
+      .filter(Boolean);
+
+    if (!rows.length) {
+      throw new Error(
+        tt(
+          "Nem érkezett használható válasz.",
+          "No usable reply arrived."
+        )
+      );
+    }
+
+    patch((g, n) => {
+      rows.forEach((r) => {
+        g.msgs.push({
+          ...r,
+          language: worldLanguage(
+            n,
+            n.meId
+          ),
+        });
+
+        noteMentions(
+          n,
+          r.text,
+          r.from,
+          {
+            type: "group",
+            id: g.id,
+          }
+        );
+
+        rememberKnowledge(
+          n,
+          r.from,
+          {
             kind: "conversation",
             source: "group_chat",
             confidence: 1,
-            text: sysLangText(n, r.from, `Csoportüzenet: ${cut(r.text, 110)}`, `Group message: ${cut(r.text, 110)}`),
-          });
-        });
-        g.updatedAt = now();
-        applyChanges(n, out.changes);
-        applyMemories(n, out.memories);
+            text: sysLangText(
+              n,
+              r.from,
+              `Csoportüzenet: ${cut(
+                r.text,
+                110
+              )}`,
+              `Group message: ${cut(
+                r.text,
+                110
+              )}`
+            ),
+          }
+        );
       });
-      setText("");
-    } catch (e) { setErr((e && e.message) || tt("Az AI most nem válaszolt. Próbáld újra.", "The AI didn't respond. Try again.")); }
-    setBusy(false);
-  };
+
+      g.updatedAt = now();
+
+      applyChanges(
+        n,
+        out.changes
+      );
+
+      applyMemories(
+        n,
+        out.memories
+      );
+    });
+
+    setText("");
+  } catch (e) {
+    setErr(
+      (e && e.message) ||
+        tt(
+          "Az AI most nem válaszolt. Próbáld újra.",
+          "The AI didn't respond. Try again."
+        )
+    );
+  }
+
+  setBusy(false);
+};
 
   return (
     <>
@@ -5814,58 +6156,237 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
     update((n) => { if (!n.seen) n.seen = {}; n.seen[ck] = last.ts; });
   }, [openId, msgs.length]);
 
-  const send = async (override) => {
-    const t = String(override !== undefined ? override : text).trim();
-    if (!t || !c) return;
-    setText("");
-    const ck = chatKey(w.meId, c.id);
-    update((n) => { n.chats[ck] = [...(n.chats[ck] || []), { from: "me", text: t, ts: now() }]; });
-    setBusy(true);
-    try {
-      const hist = [...msgs, { from: "me", text: t }].slice(-14)
-        .map((m) => `${m.from === "me" ? w.player.name : c.name}: ${m.text}`).join("\n");
-      const rel = getRel(w, c.id, w.meId);
-      const out = await askWorldJSON(w, engineFor(w), `${worldContext(w, [c.id], true, c.id)}
+const send = async (override) => {
+  const t = String(
+    override !== undefined ? override : text
+  ).trim();
+
+  if (!t || !c) return;
+
+  setText("");
+
+  const ck = chatKey(w.meId, c.id);
+
+  update((n) => {
+    n.chats[ck] = [
+      ...(n.chats[ck] || []),
+      {
+        from: "me",
+        text: t,
+        ts: now(),
+      },
+    ];
+  });
+
+  setBusy(true);
+
+  try {
+    const hist = [
+      ...msgs,
+      {
+        from: "me",
+        text: t,
+      },
+    ]
+      .slice(-16)
+      .map(
+        (m) =>
+          `${m.from === "me" ? w.player.name : c.name}: ${m.text}`
+      )
+      .join("\n");
+
+    const rel = getRel(
+      w,
+      c.id,
+      w.meId
+    );
+
+    const out = await askWorldJSON(
+      w,
+      engineFor(w),
+      `${worldContext(w, [c.id], true, c.id)}
 
 TE MOST ${c.name.toUpperCase()} VAGY egy privát beszélgetésben ${w.player.name} karakterrel.
-Kapcsolat: ${rel.score}${rel.mood ? ` — ${worldLanguage(w, w.meId) === "en" ? "RIGHT NOW YOU FEEL" : "MOST EZT ÉRZED IRÁNTA"}: ${rel.mood}` : ` — ${relLabel(rel)}`}${rel.fixed && (rel.bond || rel.type) ? ` (${worldLanguage(w, w.meId) === "en" ? "family bond fact" : "a rokoni kötelék tény"}: ${localizedBond(rel.bond || rel.type, worldLanguage(w, w.meId))})` : ""}${rel.hidden ? ` | ${worldLanguage(w, w.meId) === "en" ? "hidden" : "rejtett"}: ${rel.hidden}` : ""}
-Amire emlékszel: ${selfMemoryForPrompt(w, c.id)}
+
+Kapcsolat: ${rel.score}${
+        rel.mood
+          ? ` — ${
+              worldLanguage(w, w.meId) === "en"
+                ? "RIGHT NOW YOU FEEL"
+                : "MOST EZT ÉRZED IRÁNTA"
+            }: ${rel.mood}`
+          : ` — ${relLabel(rel)}`
+      }${
+        rel.fixed && (rel.bond || rel.type)
+          ? ` (${
+              worldLanguage(w, w.meId) === "en"
+                ? "family bond fact"
+                : "a rokoni kötelék tény"
+            }: ${localizedBond(
+              rel.bond || rel.type,
+              worldLanguage(w, w.meId)
+            )})`
+          : ""
+      }${
+        rel.hidden
+          ? ` | ${
+              worldLanguage(w, w.meId) === "en"
+                ? "hidden"
+                : "rejtett"
+            }: ${rel.hidden}`
+          : ""
+      }
+
+Amire emlékszel:
+${selfMemoryForPrompt(w, c.id)}
 
 BESZÉLGETÉS:
 ${hist}
 
 ${voiceCard(c)}
 
-Válaszolj a saját hangodon, 1-4 mondatban. Ne írj a játékos helyett.
-Magadról egyes szám első személyben beszélj, ${w.player.name} karaktert pedig tegezve, egyes szám
-második személyben szólítsd meg: "hol vagy", "megígérted", "téged kereslek". Magázás tilos.
-A hangminta kötelező: ha kisbetűvel ír, te is; ha szleng, akkor szleng; ha választékos, az marad.
-Ne legyél udvarias asszisztens — ez a szereplő beszél, a saját modorában.
-A "mood" mezőben mindig add meg, mit érzel MOST iránta — akkor is, ha a "delta" nulla.
-Formátum:
-{"reply":"a válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`);
+${repetitionGuard(w, [c.id], "privát chat")}
 
-      update((n) => {
-        n.chats[ck] = [...(n.chats[ck] || []), { from: "them", text: out.reply || "…", ts: now(), language: worldLanguage(n, n.meId) }];
-        applyChanges(n, [{ a: c.id, b: w.meId, delta: Number(out.delta) || 0, mood: out.mood, why: out.why }]);
-        rememberKnowledge(n, c.id, {
-          kind: "conversation",
-          source: "direct_chat",
-          confidence: 1,
-          text: sysLangText(n, c.id, `Privát üzenetet kaptam: ${cut(out.reply || "", 110)}`, `I got a private message: ${cut(out.reply || "", 110)}`),
-        });
-        rememberAboutTarget(n, c.id, w.meId, {
+PRIVÁT CHAT SZABÁLYOK:
+
+- Ez valódi privát üzenetváltás, NEM roleplay-jelenet.
+- Közvetlenül arra válaszolj, amit ${w.player.name} legutóbb írt.
+- Általában 1-4 RÖVID mondatot írj.
+- Gyakran 1-2 mondat is elég.
+- Ha természetes, akár 1-6 szó is lehet a teljes válasz.
+- Ne írj esszét, monológot vagy hosszú bekezdést.
+- Ne írj regényszerű narrációt.
+- Ne írj belső gondolatokat.
+- Ne használj *csillagok közé tett cselekvéseket* normál chatben.
+- Ne magyarázd túl az érzelmeidet.
+- Ne foglald össze újra a kapcsolatotokat minden válaszban.
+- Ne ismételd vissza feleslegesen, amit a másik éppen mondott.
+- Nem kell minden válasz végére kérdést tenni.
+- Egy egyszerű reakció, poén, visszakérdezés vagy pár szavas válasz teljesen megfelelő.
+
+EMOJI:
+- Használhatsz emojikat természetesen, ha illenek a karakterhez.
+- Nem kell minden üzenetbe emoji.
+- Általában 0-2 emoji elég.
+- Ne használd folyton ugyanazt az emojit vagy emoji-kombinációt.
+- Az emoji-használat is legyen karakterfüggő.
+
+ISMÉTLÉS:
+- Ne ismételd a saját korábbi mondataidat.
+- Ne parafrazáld újra és újra ugyanazokat a gondolatokat.
+- Ne használd folyamatosan ugyanazokat a mondatkezdéseket.
+- Ne ismételd folyton ugyanazokat a beceneveket.
+- Ne legyen minden flörtöd ugyanolyan.
+- Ne legyen minden sértésed ugyanolyan.
+- Ne legyen minden dühös reakciód ugyanolyan.
+- Ne legyen állandó válaszformulád.
+- Ha nemrég már nagyon hasonlót mondtál, most reagálj másképp.
+
+HANGMINTA:
+- A példamondatok CSAK stílusiránymutatások.
+- Ne másold őket.
+- Ne parafrazáld őket rendszeresen.
+- A szóhasználatot, humort, ritmust, szlenget, központozást és általános hangot tanuld meg belőlük.
+- Minden új válasz az aktuális beszélgetésből szülessen.
+- Ha a karakter általában kisbetűvel ír, ezt megtarthatod.
+- Ha szlenget vagy káromkodást használ, használhatod természetesen.
+- Ha választékosabban beszél, maradjon felismerhetően ilyen — de a chat akkor is chat marad.
+
+Magadról egyes szám első személyben beszélj.
+${w.player.name} karaktert tegezve, egyes szám második személyben szólítsd meg:
+"hol vagy", "megígérted", "téged kereslek".
+Magázás tilos.
+
+Ne legyél udvarias AI-asszisztens.
+Ez ${c.name}, aki egy valódi privát üzenetet ír.
+
+A "mood" mezőben mindig add meg, mit érzel MOST iránta — akkor is, ha a "delta" nulla.
+
+Formátum:
+{"reply":"a válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`,
+      { maxTokens: 900 }
+    );
+
+    update((n) => {
+      const reply =
+        cleanGeneratedUtterance(
+          n,
+          c.id,
+          out.reply || "…",
+          360
+        ) || "…";
+
+      n.chats[ck] = [
+        ...(n.chats[ck] || []),
+        {
+          from: "them",
+          text: reply,
+          ts: now(),
+          language: worldLanguage(n, n.meId),
+        },
+      ];
+
+      applyChanges(n, [
+        {
+          a: c.id,
+          b: w.meId,
+          delta: Number(out.delta) || 0,
+          mood: out.mood,
+          why: out.why,
+        },
+      ]);
+
+      rememberKnowledge(n, c.id, {
+        kind: "conversation",
+        source: "direct_chat",
+        confidence: 1,
+        text: sysLangText(
+          n,
+          c.id,
+          `Privát üzenetet írtam: ${cut(reply, 110)}`,
+          `I sent a private message: ${cut(reply, 110)}`
+        ),
+      });
+
+      rememberAboutTarget(
+        n,
+        c.id,
+        w.meId,
+        {
           kind: "event",
           source: "direct_chat",
           confidence: 1,
-          text: sysLangText(n, c.id, `${w.player.name} ezt írta: ${cut(t, 110)}`, `${w.player.name} wrote: ${cut(t, 110)}`),
-        });
-        if (out.memory && String(out.memory).trim())
-          n.mems[c.id] = [...(n.mems[c.id] || []), String(out.memory).trim()].slice(-16);
-      });
-    } catch (e) { setErr((e && e.message) || tt("Az AI most nem válaszolt. Próbáld újra.", "The AI didn't respond. Try again.")); }
-    setBusy(false);
-  };
+          text: sysLangText(
+            n,
+            c.id,
+            `${w.player.name} ezt írta: ${cut(t, 110)}`,
+            `${w.player.name} wrote: ${cut(t, 110)}`
+          ),
+        }
+      );
+
+      if (
+        out.memory &&
+        String(out.memory).trim()
+      ) {
+        n.mems[c.id] = [
+          ...(n.mems[c.id] || []),
+          String(out.memory).trim(),
+        ].slice(-16);
+      }
+    });
+  } catch (e) {
+    setErr(
+      (e && e.message) ||
+        tt(
+          "Az AI most nem válaszolt. Próbáld újra.",
+          "The AI didn't respond. Try again."
+        )
+    );
+  }
+
+  setBusy(false);
+};
 
   const group = gid ? (w.groups || []).find((g) => g.id === gid) : null;
   if (group) return <GroupChat w={w} group={group} update={update} setErr={setErr} onBack={() => setGid(null)} />;
@@ -6370,17 +6891,60 @@ Formátum: {"brief":"a kivonat"}`, { language: asLang(CURRENT_LANG) });
 /* Egy bot magától ír privátban. */
 async function genDM(w, bot) {
   const rel = getRel(w, bot.id, w.meId);
-  const hist = (w.chats[chatKey(w.meId, bot.id)] || []).slice(-10)
-    .map((m) => `${m.from === "me" ? w.player.name : bot.name}: ${m.text}`).join("\n");
-  const recent = (w.posts || []).slice(0, 4).map((po) => `${nameOfIn(w, po.authorId)}: ${po.text}`).join("\n");
 
-  return askWorldJSON(w, engineFor(w), `${worldContext(w, [bot.id], true, bot.id)}
+  const hist = (
+    w.chats[chatKey(w.meId, bot.id)] || []
+  )
+    .slice(-14)
+    .map(
+      (m) =>
+        `${m.from === "me" ? w.player.name : bot.name}: ${m.text}`
+    )
+    .join("\n");
 
-TE MOST ${String(bot.name).toUpperCase()} VAGY. Magadtól írsz privát üzenetet ${w.player.name} karakternek —
-nem ő kezdeményezett, hanem te. Legyen valódi okod rá.
+  const recent = (w.posts || [])
+    .slice(0, 4)
+    .map(
+      (po) =>
+        `${nameOfIn(w, po.authorId)}: ${po.text}`
+    )
+    .join("\n");
 
-A viszonyod vele: ${rel.score}${rel.mood ? ` — MOST EZT ÉRZED IRÁNTA: ${rel.mood}` : ""}${rel.bond ? ` | ${localizedBond(rel.bond, worldLanguage(w, w.meId))}` : ""}${rel.hidden ? ` | ${worldLanguage(w, w.meId) === "en" ? "hidden" : "rejtett"}: ${rel.hidden}` : ""}
-Amire emlékszel: ${selfMemoryForPrompt(w, bot.id)}
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(w, [bot.id], true, bot.id)}
+
+TE MOST ${String(bot.name).toUpperCase()} VAGY.
+
+Magadtól írsz privát üzenetet ${w.player.name} karakternek.
+Nem ő kezdeményezett — TE döntöttél úgy, hogy írsz neki.
+Csak akkor írj, ha tényleg van karakterhű okod rá.
+
+A viszonyod vele:
+${rel.score}${
+      rel.mood
+        ? ` — MOST EZT ÉRZED IRÁNTA: ${rel.mood}`
+        : ""
+    }${
+      rel.bond
+        ? ` | ${localizedBond(
+            rel.bond,
+            worldLanguage(w, w.meId)
+          )}`
+        : ""
+    }${
+      rel.hidden
+        ? ` | ${
+            worldLanguage(w, w.meId) === "en"
+              ? "hidden"
+              : "rejtett"
+          }: ${rel.hidden}`
+        : ""
+    }
+
+Amire emlékszel:
+${selfMemoryForPrompt(w, bot.id)}
 
 LEGUTÓBBI POSZTOK:
 ${recent || "még nincs poszt"}
@@ -6388,19 +6952,51 @@ ${recent || "még nincs poszt"}
 MOSTANI JEGYZETEK:
 ${notesForAI(w) || "nincs"}
 
-${hist ? "AZ EDDIGI BESZÉLGETÉSETEK:\n" + hist : "Még soha nem írtatok egymásnak privátban."}
+${
+  hist
+    ? "AZ EDDIGI BESZÉLGETÉSETEK:\n" + hist
+    : "Még soha nem írtatok egymásnak privátban."
+}
 
 ${voiceCard(bot)}
+
 ${repetitionGuard(w, [bot.id], "privát üzenetek")}
 
-Írj egy rövid, 1-3 mondatos üzenetet a saját hangodon, magadról E/1-ben, ${w.player.name} karaktert
-tegezve, E/2-ben megszólítva. Magázás tilos. Kapcsolódj valamihez, ami tényleg történt:
-egy poszthoz, egy jegyzethez, egy eseményhez, vagy ahhoz, amit most érzel iránta.
-Ne köszönj úgy, mint egy asszisztens, és ne kérdezd meg, miben segíthetsz. Legyen benne szándék:
-számonkérés, féltés, pletyka, meghívás, provokáció, bocsánatkérés — ami hozzád illik.
-Ha nincs valódi okod írni, a "skip" legyen igaz.
+PRIVÁT ÜZENET SZABÁLYOK:
+
+- Ez egy valódi chatüzenet, NEM roleplay-jelenet.
+- Legyen rövid és természetes.
+- Általában 1-3 rövid mondat.
+- Sokszor egyetlen rövid mondat vagy pár szó is elég.
+- Ne írj esszét vagy monológot.
+- Ne használj regényszerű narrációt.
+- Ne írj belső gondolatokat.
+- Ne használj *csillagok közé tett cselekvéseket*.
+- Ne magyarázd túl, miért írtál.
+- Ne foglald össze a kapcsolatotokat.
+- Ne ismételd ugyanazt, amit korábban már írtál neki.
+- Ne használd újra folyton ugyanazokat a poénokat, flörtöket, sértéseket, fenyegetéseket, beceneveket vagy mondatkezdéseket.
+- A példamondatok CSAK stílusiránymutatások. Ne másold és ne parafrazáld őket rendszeresen.
+- Kapcsolódj valamihez, ami tényleg történt, vagy ahhoz, amit most érzel iránta.
+- Legyen valódi szándékod: számonkérés, féltés, pletyka, meghívás, provokáció, flört, bocsánatkérés, kíváncsiság, féltékenység vagy bármi más, ami karakterhű.
+- Használhatsz emojit természetesen, ha illik hozzád.
+- Nem kell minden üzenetbe emoji.
+- Általában 0-2 emoji elég.
+- Ne használd folyton ugyanazt az emoji-kombinációt.
+
+Magadról E/1-ben beszélj.
+${w.player.name} karaktert tegezve, E/2-ben szólítsd meg.
+Magázás tilos.
+
+Ne köszönj úgy, mint egy asszisztens.
+Ne kérdezd meg, miben segíthetsz.
+
+Ha nincs valódi, karakterhű okod arra, hogy most írj neki, a "skip" legyen igaz.
+
 Formátum:
-{"skip":false,"text":"az üzenet","mood":"mit érzel most iránta","why":"egy rövid mondat","delta":0}${TAIL}`);
+{"skip":false,"text":"az üzenet","mood":"mit érzel most iránta","why":"egy rövid mondat","delta":0}${TAIL}`,
+    { maxTokens: 700 }
+  );
 }
 
 /* Egy bot kiír magának egy jegyzetet. */
@@ -6661,7 +7257,7 @@ async function runSimulationAction(view, update, action) {
     const bot = charById(view, action.payload && action.payload.botId);
     if (!bot || isHuman(view, bot.id)) return null;
     const out = await genDM(view, bot);
-    const txt = cleanGeneratedUtterance(view, bot.id, out && out.text ? String(out.text).trim() : "", 320);
+    const txt = cleanGeneratedUtterance(view, bot.id, out && out.text ? String(out.text).trim() : "", 280);
     update((n) => {
       n.autoAt = now();
       if (out.skip || !txt) return;
