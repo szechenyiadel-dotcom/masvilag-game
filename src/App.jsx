@@ -245,8 +245,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 .spin { animation:spin 1s linear infinite } @keyframes spin { to { transform:rotate(360deg) } }
 `;
 
-const RECOVERY_BEACONFALLS_META = { code: "beaconfalls", name: "Beacon Falls", user: "notyourangel" };
-const recoveryBeaconfallsUrl = new URL("./recoveryBeaconfalls.json", import.meta.url).href;
+
 
 /* Amíg bármilyen szerkesztő ablak nyitva van, a háttérben futó mentés nem
    cseréli le az állapotot — így nem ugrik el, amin épp dolgozol. */
@@ -2673,24 +2672,12 @@ async function loadWorld(code) {
   const primary = await loadPrimaryWorld(code);
   const cloudSnap = await loadLatestValidWorldSnapshot(code, true);
   const localSnap = await loadLatestValidWorldSnapshot(code, false);
-  const recovered = await loadBundledRecoveryWorld(code);
-  return newestWorldCandidate([primary, cloudSnap, localSnap, recovered]);
-}
 
-async function loadBundledRecoveryWorld(code) {
-  const wanted = String(code || "").toLowerCase().trim();
-  if (wanted !== RECOVERY_BEACONFALLS_META.code) return null;
-  try {
-    const res = await fetch(recoveryBeaconfallsUrl);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const bundled = data && data.world;
-    if (!bundled || String(bundled.code || "").toLowerCase().trim() !== wanted) return null;
-    const migrated = migrate(JSON.parse(JSON.stringify(bundled)));
-    return validWorldState(migrated) ? migrated : null;
-  } catch (e) {
-    return null;
-  }
+  return newestWorldCandidate([
+    primary,
+    cloudSnap,
+    localSnap
+  ]);
 }
 
 function validWorldState(w) {
@@ -3008,15 +2995,16 @@ const INDEX = "masvilag:index";
 async function loadIndex() {
   const r = await store.get(INDEX, true);
   let list = [];
+
   if (r) {
     try {
       const a = JSON.parse(r.value);
       list = Array.isArray(a) ? a : [];
-    } catch (e) { list = []; }
+    } catch (e) {
+      list = [];
+    }
   }
-  if (!list.some((x) => x && x.code === RECOVERY_BEACONFALLS_META.code)) {
-    list = [{ code: RECOVERY_BEACONFALLS_META.code, name: RECOVERY_BEACONFALLS_META.name, user: RECOVERY_BEACONFALLS_META.user, ts: now() }].concat(list);
-  }
+
   return list;
 }
 async function addToIndex(w, meId) {
