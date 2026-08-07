@@ -3005,7 +3005,23 @@ async function loadIndex() {
     }
   }
 
-  return list;
+  /*
+    Egyszeri régi Beacon Falls takarítás.
+    A korábbi recovery verzió ezt beégette a közös indexbe.
+  */
+  const cleaned = list.filter(
+    (x) => x && x.code !== "beaconfalls"
+  );
+
+  if (cleaned.length !== list.length) {
+    await store.set(
+      INDEX,
+      JSON.stringify(cleaned),
+      true
+    );
+  }
+
+  return cleaned;
 }
 async function addToIndex(w, meId) {
   if (!w || !w.code) return false;
