@@ -7312,19 +7312,36 @@ Formátum:
       }
     });
   } catch (e) {
-    setErr(
-      (e && e.message) ||
-        tt(
-          "Az AI most nem válaszolt. Próbáld újra.",
-          "The AI didn't respond. Try again."
-        )
-    );
-  } finally {
-    sendLockRef.current = false;
-    setBusy(false);
-  }
+  setErr(
+    (e && e.message) ||
+      tt(
+        "Az AI most nem válaszolt. Próbáld újra.",
+        "The AI didn't respond. Try again."
+      )
+  );
+} finally {
+  sendLockRef.current = false;
+  setBusy(false);
+}
 };
-  if (group) return <GroupChat w={w} group={group} update={update} setErr={setErr} onBack={() => setGid(null)} />;
+
+const group = gid
+  ? (w.groups || []).find(
+      (g) => g.id === gid
+    )
+  : null;
+
+if (group) {
+  return (
+    <GroupChat
+      w={w}
+      group={group}
+      update={update}
+      setErr={setErr}
+      onBack={() => setGid(null)}
+    />
+  );
+}
 
   if (!c) {
     return (
