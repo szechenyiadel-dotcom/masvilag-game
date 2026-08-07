@@ -1332,7 +1332,7 @@ async function callClaude(system, prompt) {
   if (!res.ok) {
     const code = res.status;
     const busy = code === 429 || code === 529 || code === 503 || code === 500;
-    if (code === 404 || code === 502 || code === 503) {
+    if (code === 404 || code === 502) {
       const msg = (data && data.error && data.error.message) || `HTTP ${code}`;
       const err = new Error(`Az AI-szerver nem érhető el: ${msg}`);
       err.busy = false;
@@ -6129,8 +6129,13 @@ function simEnqueue(w, action) {
   const doneAt = Number(sim.done[action.key] || 0);
   if (doneAt && now() - doneAt < SIM_DONE_TTL) return false;
   if (sim.queue.some((x) => x && x.key === action.key)) return false;
-  sim.queue.push(action);
-  sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
+  if (action.source === "manual") {
+    sim.queue.unshift(action);
+    sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
+  } else {
+    sim.queue.push(action);
+    sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
+  }
   sim.at = now();
   return true;
 }
@@ -6728,7 +6733,9 @@ export default function App() {
         await runSimulationAction(viewRef.current, update, action);
         ok = true;
       } catch (e) {
-        /* az automata csendben hibázik, nem zavar meg játék közben */
+        if (action && action.source === "manual" && alive) {
+          setErr((e && e.message) ? e.message : tt("Az AI-kérés nem sikerült.", "AI request failed."));
+        }
       }
       update((n) => {
         if (queued) simDropQueued(n, action.id);
