@@ -155,21 +155,68 @@ app.post("/ai/messages", async (req, res) => {
   if (provider === "gemini") {
     if (!GEMINI_API_KEY) return res.status(500).json({ error: "Missing GEMINI_API_KEY environment variable. Configure it before using Gemini." });
     try {
-      const model = req.body?.model || "gemini-2.0-flash-exp";
-      const url = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`);
-      url.searchParams.set("key", GEMINI_API_KEY);
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildGeminiPayload(req.body)),
-      });
-      const text = await r.text();
-      let payload;
-      try { payload = JSON.parse(text); } catch { payload = { error: { message: text } }; }
-      if (!r.ok) {
-        return res.status(r.status).json(payload);
-      }
+    const model = req.body?.model || "gemini-3.6-flash";
+
+const modelsToTry = [
+  ...new Set([
+    model,
+    process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash",
+  ]),
+];
+
+let r = null;
+let payload = null;
+
+for (const candidateModel of modelsToTry) {
+  const url = new URL(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidateModel)}:generateContent`
+  );
+  url.searchParams.set("key", GEMINI_API_KEY);
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildGeminiPayload(req.body)),
+    });
+
+    const text = await r.text();
+
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = { error: { message: text } };
+    }
+
+    if (r.ok) {
       return res.json(normalizeGeminiResponse(payload));
+    }
+
+    const retryable = [429, 500, 503].includes(r.status);
+
+    if (!retryable) {
+      return res.status(r.status).json(payload);
+    }
+
+    console.warn(
+      `Gemini ${candidateModel} returned ${r.status} (attempt ${attempt}/3)`
+    );
+
+    if (attempt < 3) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, 1200 * attempt)
+      );
+    }
+  }
+}
+
+return res.status(r?.status || 503).json(
+  payload || {
+    error: {
+      message: "Gemini is temporarily unavailable after retries.",
+    },
+  }
+);
     } catch (e) {
       console.error("Gemini proxy error:", e);
       return res.status(502).json({ error: "Gemini proxy error" });
