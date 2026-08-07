@@ -12,6 +12,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || process.env.AI_API_KE
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const DEFAULT_PROVIDER = process.env.AI_PROVIDER || "anthropic";
+app.use(bodyParser.json({ limit: "8mb" }));
 /* ---------- PostgreSQL ---------- */
 
 const pool = process.env.DATABASE_URL
@@ -917,7 +918,7 @@ if (!ANTHROPIC_API_KEY && !GEMINI_API_KEY && !OPENAI_API_KEY) {
   console.info("Anthropic API key not configured; using other providers if requested.");
 }
 
-app.use(bodyParser.json({ limit: "8mb" }));
+
 
 // CORS: engedélyezzük a fejlesztéshez (ha szükséges, szűkítsd a domaineket).
 app.use((req, res, next) => {
