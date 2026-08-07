@@ -6608,7 +6608,7 @@ export default function App() {
   }, [update]);
 
   const requestWorldStep = useCallback(() => {
-    const key = `manual-world:${Math.floor(now() / 60000)}`;
+    const key = `manual-world:${now()}:${uid()}`;
     return requestSimulationAction(mkAction("world-full", key, {}, "manual"));
   }, [requestSimulationAction]);
 
@@ -6700,7 +6700,7 @@ export default function App() {
   /* Központi szimulációs engine: queue-t és automata lépéseket is ugyanúgy futtat.
      Egy körben mindig pontosan egy AI-hívás megy. */
   useEffect(() => {
-    if (!langReady || !world || !meId || !auto.on) return;
+    if (!langReady || !world || !meId) return;
     let alive = true;
     const beat = async () => {
       if (!alive || autoRunning.current || EditLock.n > 0) return;
@@ -6712,7 +6712,7 @@ export default function App() {
       const queued = simPeek(view2);
       let action = queued;
       if (!action) {
-        if (!canTick(view2, auto.every)) return;
+        if (!auto.on || !canTick(view2, auto.every)) return;
         action = planAutoAction(view2);
       }
       if (!action) return;
