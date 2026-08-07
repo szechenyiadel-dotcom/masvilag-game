@@ -1,0 +1,15 @@
+{
+  "name": "masvilag-game",
+  "forwardPorts": [5173, 3000],
+  "portsAttributes": {
+    "5173": {
+      "label": "Vite Frontend",
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
+    },
+    "3000": {
+      "label": "API Proxy",
+      "visibility": "public"
+    }
+  }
+}
