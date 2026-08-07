@@ -6709,14 +6709,22 @@ export default function App() {
     if (!langReady || !world || !meId) return;
     let alive = true;
     const beat = async () => {
-      if (!alive || autoRunning.current || EditLock.n > 0) return;
-      if (cooldownLeft() > 0) return;
-      if (typeof document !== "undefined" && document.hidden) return;
-      const view2 = viewRef.current;
-      if (!view2 || !(view2.chars || []).length) return;
+  if (!alive || autoRunning.current) return;
 
-      const queued = simPeek(view2);
-      let action = queued;
+  const view2 = viewRef.current;
+  if (!view2 || !(view2.chars || []).length) return;
+
+  const queued = simPeek(view2);
+  const manualQueued = !!(queued && queued.source === "manual");
+
+  // A kézzel kért művelet mindig fusson le.
+  // A háttér-automatizmust továbbra is visszafoghatja cooldown,
+  // nyitott szerkesztő vagy háttérbe tett böngészőfül.
+  if (!manualQueued && EditLock.n > 0) return;
+  if (!manualQueued && cooldownLeft() > 0) return;
+  if (!manualQueued && typeof document !== "undefined" && document.hidden) return;
+
+  let action = queued;
       if (!action) {
         if (!auto.on || !canTick(view2, auto.every)) return;
         action = planAutoAction(view2);
@@ -6747,7 +6755,7 @@ export default function App() {
       if (alive) setAutoBusy(false);
     };
     const i = setInterval(beat, 30000);
-    const first = setTimeout(beat, 6000);
+    const first = setTimeout(beat, 100);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update, simPulse]);
 
