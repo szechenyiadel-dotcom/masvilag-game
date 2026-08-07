@@ -867,30 +867,30 @@ const liveNotes = (w) => (w.notes || []).filter((x) => x && now() - (x.ts || 0) 
 const noteOf = (w, id) => liveNotes(w).find((x) => x.authorId === id) || null;
 
 function setNote(n, authorId, text, forcedId) {
-  const t = String(text || "").replace(/\s+/g, " ").trim().slice(0, NOTE_MAX);
-  n.notes = (n.notes || []).filter((x) => x && x.authorId !== authorId);
-  if (t) n.notes.unshift({ id: forcedId || uid(), authorId, text: t, ts: now(), reacts: [] });
-  n.notes = n.notes.slice(0, 80);
-}
+  const t = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, NOTE_MAX);
 
-/* Egy reakció a jegyzetre: emoji + a szereplő azonosítója. */
-function reactNote(n, noteId, whoId, emoji) {
-  const note = (n.notes || []).find((x) => x.id === noteId);
-  if (!note) return;
-  if (!note.reacts) note.reacts = [];
-  if (note.reacts.some((r) => r.id === whoId)) return;
-  note.reacts.push({ id: whoId, e: String(emoji || "❤️").slice(0, 4) });
-  if (isHuman(n, note.authorId) && !isHuman(n, whoId)) {
-    const who = charById(n, whoId);
-    const nm = who ? who.name : sysTextFor(n, note.authorId, "someone");
-    pushNote(n, note.authorId, {
-      icon: String(emoji || "❤️").slice(0, 4),
-      translationKey: "noteReacted",
-      params: { name: nm },
-      text: sysTextFor(n, note.authorId, "noteReacted", { name: nm }),
-      link: { type: "notes", id: note.id },
+  // Egy karakternek egyszerre csak egy aktív note-ja lehet.
+  // Üres szöveg esetén ez egyben törlésként is működik.
+  n.notes = (n.notes || []).filter(
+    (x) => x && x.authorId !== authorId
+  );
+
+  if (t) {
+    const createdAt = now();
+
+    n.notes.unshift({
+      id: forcedId || uid(),
+      authorId,
+      text: t,
+      ts: createdAt,
+      reacts: [],
+      reactedBy: [],
     });
   }
+  n.notes = n.notes.slice(0, 80);
 }
 
 /* A jegyzetek szövege az AI-nak. */
@@ -2011,17 +2011,36 @@ Minden szereplőt a saját adatlapja alapján játszol el. Az adatlap nem hátt�
 FŐ SZABÁLY: minden válasz legyen karakterhű, természetes, emberi és az adott helyzethez illő. A karakter személyisége, története, aktuális érzései és kapcsolatai határozzák meg, MIT mond — de a felület határozza meg, HOGYAN és milyen hosszan mondja.
 
 KOMMUNIKÁCIÓS FORMÁTUM
-- PRIVÁT CHAT / DM: valódi üzenetváltásnak hasson. Általában 1–4 rövid mondat, de lehet akár csak néhány szó is. Ne írj esszét, monológot vagy regényszerű bekezdéseket normál chatben.
-- GROUP CHAT: ugyanígy rövid, közvetlen, gyors csevegés. A szereplők reagáljanak egymásra, ne mindenki külön monológot mondjon.
-- KOMMENT: nagyon rövid közösségi médiás reakció. Általában 2–20 szó, egy mondat, ritkábban két nagyon rövid mondat. Kommentben ne írj bekezdést vagy narrációt.
-- ROLEPLAY / JELENET: itt MARADHAT a részletes, hosszabb, atmoszférikus, könyves stílus, testbeszéddel, cselekvéssel és több bekezdéssel.
-- POSZT és JEGYZET: a tartalomhoz és a karakterhez igazodjon; ne legyen automatikusan hosszú.
+
+- PRIVÁT CHAT / DM: valódi telefonos üzenetváltásnak hasson. Általában rövid legyen; gyakran 1–4 rövid mondat vagy üzenetrész, de akár egyetlen szó, néhány szó vagy töredékes reakció is teljesen természetes. Ne írj esszét, monológot, narrációt vagy regényszerű bekezdéseket normál chatben.
+
+- GROUP CHAT: gyors, közvetlen, spontán csevegésnek hasson. A szereplők reagáljanak egymásra, félbeszakíthatják egymást, visszakérdezhetnek, beszólhatnak, viccelődhetnek vagy nagyon röviden reagálhatnak. Ne mindenki külön monológot mondjon. Egy üzenet gyakran csak néhány szó vagy egy rövid mondat.
+
+- KOMMENT: valódi közösségi médiás reakció legyen. A legtöbb komment legyen nagyon rövid, gyakran 1–12 szó. 13–20 szó csak ritkábban, ha tényleg indokolt. Egyetlen szó, 1–3 szavas reakció, rövid kérdés vagy töredék is teljesen természetes. Kommentben ne írj bekezdést, monológot, narrációt, belső gondolatot vagy regényszerű szöveget.
+
+- ROLEPLAY / JELENET: itt MARADHAT a részletes, hosszabb, atmoszférikus, könyves stílus, testbeszéddel, cselekvéssel, belső reakciókkal és több bekezdéssel. A roleplay-jelenetet ne rövidítsd le a chat- vagy kommentszabályok miatt.
+
+- POSZT: a hosszát a tartalom, a karakter és a helyzet határozza meg. Lehet egy rövid spontán gondolat, de indokolt esetben hosszabb, részletesebb poszt is. Ne legyen automatikusan rövid vagy automatikusan hosszú.
+
+- JEGYZET / NOTE: rövid, spontán közösségi médiás Note legyen. Gyakran csak néhány szó vagy egy rövid félmondat. Ne váljon mini-poszttá, naplóbejegyzéssé vagy monológgá.
 
 EMOJI
-- Chatben, group chatben és kommentben használhatsz emojikat természetesen, ha illenek az adott karakterhez.
-- Ne minden üzenetben legyen emoji, és ne mindig ugyanazokat használd.
-- Egy karakter emoji-használata is tükrözze a személyiségét: van, aki gyakran használja, van, aki ritkán vagy soha.
-- Általában 0–2 emoji bőven elég egy rövid üzenetben.
+
+- Chatben, group chatben, kommentben, posztban és Note-ban az emoji-használat mindig az adott karakter természetes online kommunikációjához igazodjon.
+
+- Ha egy karakter személyisége és kommunikációs stílusa alapján természetesen használ emojikat, akkor ténylegesen használjon is időnként; ne válaszd automatikusan mindig az emoji nélküli változatot.
+
+- Kifejezőbb, lazább vagy erősen online kommunikáló karakter egy rövid üzenetben akár több természetes emojit is használhat, míg visszafogott karakter ritkán vagy egyáltalán nem használ.
+
+- Ne tegyél emojit minden üzenetbe, és ne erőltesd olyan karakterre, akire nem jellemző.
+
+- Az emoji helye is változhat: lehet a mondat végén, közepén, önálló reakcióként vagy rövid szöveg mellett, ha természetes.
+
+- Ritkán egy emoji vagy emoji-kombináció önmagában is lehet teljes reakció, ha az adott helyzetben és az adott karaktertől hiteles.
+
+- Ne ismételd folyton ugyanazokat az emojikat vagy emoji-kombinációkat.
+
+- Az emoji jelentése mindig illeszkedjen ahhoz, amit a karakter ténylegesen érez vagy közölni akar.
 
 VÁLTOZATOSSÁG ÉS ISMÉTLÉS TILALMA
 - Ne ismételd ugyanazokat a mondatkezdéseket, szófordulatokat, poénokat, flörtölési mintákat, fenyegetéseket, sértéseket, beceneveket vagy reakciókat.
@@ -2148,20 +2167,35 @@ MAIN RULE: every response must be true to character, natural, human and appropri
 
 COMMUNICATION FORMAT
 
-- PRIVATE CHAT / DM: write like real people texting. Usually 1–4 short sentences, sometimes only a few words. Do not turn ordinary chat into an essay, monologue or novel scene.
-- GROUP CHAT: keep messages short, direct and conversational. Characters should react to each other instead of each delivering a separate speech.
-- SOCIAL MEDIA COMMENT: keep it very short. Usually 2–20 words, normally one sentence and occasionally two very short sentences. No paragraphs, internal narration or roleplay prose in ordinary comments.
-- ROLEPLAY / SCENE: the short-message restrictions DO NOT apply here. Roleplay may remain detailed, immersive, atmospheric and literary, with actions, body language, dialogue, sensory detail and multiple paragraphs.
-- POSTS and NOTES: use whatever length naturally fits the content and the character. Do not automatically make them long.
+- PRIVATE CHAT / DM: write like real people texting on their phones. Keep it generally short. Often 1–4 short sentences or message fragments are enough, but a single word, a few words or an incomplete reaction can also feel completely natural. Do not turn ordinary chat into an essay, monologue, narrated scene or novel-like paragraph.
+
+- GROUP CHAT: keep messages quick, direct, spontaneous and conversational. Characters should react to each other, interrupt, ask follow-up questions, joke, tease, argue or give very short reactions instead of each delivering a separate speech. A message may often be only a few words or one short sentence.
+
+- SOCIAL MEDIA COMMENT: write like a real social media reaction. Most comments should be very short, often around 1–12 words. 13–20 words should be less common and only used when naturally justified. A single word, a 1–3 word reaction, a short question or a fragment can be completely natural. Do not write paragraphs, monologues, internal thoughts, narration or roleplay prose in ordinary comments.
+
+- ROLEPLAY / SCENE: the short-message restrictions DO NOT apply here. Roleplay may remain detailed, immersive, atmospheric and literary, with actions, body language, internal reactions, dialogue, sensory detail and multiple paragraphs. Do not shorten a roleplay scene because of the chat or comment rules.
+
+- POST: let the content, character and situation determine the length. A post may be a short spontaneous thought, but it may also be longer and more detailed when there is a natural reason for it. Do not automatically make posts short or automatically make them long.
+
+- NOTE: keep it short and spontaneous, like a real social media Note. It may often be only a few words or a short fragment. Do not turn it into a mini-post, diary entry or monologue.
 
 EMOJI USE
 
-- In chats, group chats and comments, use emojis naturally when they fit the character.
-- Emojis are optional, not mandatory.
-- Do not put emojis in every message.
-- Do not constantly reuse the same emoji or emoji combination.
-- Different characters should have different emoji habits based on personality.
-- Usually 0–2 emojis is enough for a short message.
+- In private chats, group chats, comments, posts and Notes, emoji use must reflect the character’s natural online communication style.
+
+- If a character naturally uses emojis based on their personality and communication habits, actually use them sometimes instead of consistently choosing an emoji-free response.
+
+- More expressive, casual or highly online characters may naturally use multiple emojis in a short message, while restrained characters may use them rarely or not at all.
+
+- Do not force emojis into every message and do not give them to characters whose communication style would not naturally include them.
+
+- Emoji placement may vary naturally: at the end of a sentence, inside the message, beside a short phrase or as a standalone reaction.
+
+- Occasionally, a single emoji or a short emoji combination may be the entire response if that feels authentic for the character and situation.
+
+- Do not constantly reuse the same emojis or emoji combinations.
+
+- The meaning of the emoji must match what the character is actually feeling or trying to communicate.
 
 VARIETY AND ANTI-REPETITION
 
@@ -4198,7 +4232,7 @@ function threadOf(w, post) {
 }
 
 async function genComments(w, post) {
-  const cast = pickCast(
+  const cast = fairCommentCast(
     w,
     post.authorId
   );
@@ -4264,21 +4298,31 @@ KOMMENT SZABÁLYOK:
 
 - Adj 2-4 új kommentet.
 - Csak olyan szereplő kommenteljen, akinek természetes oka van rá.
-- Ezek valódi közösségi médiás kommentek, NEM roleplay-jelenetek.
-- Egy komment általában 2-20 szó.
-- Lehet akár csak 1-2 szó vagy egy nagyon rövid reakció is, ha az természetes.
+- Ezek VALÓDI közösségi médiás kommentek, nem roleplay-jelenetek és nem mini novellák.
+- Úgy írjanak, mintha telefonról, gyorsan reagálnának egy Instagram/TikTok/X jellegű posztra.
+- A kommentek TÖBBSÉGE 1-12 szó legyen.
+- 13-20 szó csak ritkábban, ha a reakció tényleg igényli.
+- Egy 1-3 szavas reakció teljesen jó komment.
+- Egyetlen szó is lehet természetes komment.
+- Emoji + néhány szó is lehet teljes komment.
+- Ritkán akár csak emoji is lehet teljes komment, ha az adott karakter stílusába illik.
+- Ne próbálj minden kommentből teljes, nyelvtanilag tökéletes mondatot csinálni.
+- A töredékes mondatok, félbehagyott reakciók, rövid kérdések és spontán beszólások természetesek.
 - Ne írjanak hosszú bekezdéseket.
 - Ne írjanak monológokat.
-- Ne írjanak regényszerű vagy irodalmi szöveget.
+- Ne írjanak regényszerű, költői vagy irodalmi szöveget.
 - Ne narráljanak jelenetet.
 - Ne írjanak belső gondolatokat.
 - Ne használjanak *csillagok közé tett cselekvéseket*.
-- Ne magyarázzák túl, mit éreznek.
+- Ne magyarázzák el részletesen, mit éreznek.
 - Ne foglalják össze a kapcsolatukat a poszt szerzőjével.
-- Ne legyen minden komment teljes, szépen lezárt mini beszéd.
+- Ne tegyenek minden reakció végére tanulságot vagy érzelmi lezárást.
+- Ne legyen minden komment udvariasan és szépen felépítve.
+- Ha egy rövid reakció természetesebb, MINDIG azt válaszd a hosszabb megfogalmazás helyett.
 
 TERMÉSZETES SOCIAL MEDIA STÍLUS:
 
+- A komment elsődlegesen REAKCIÓ legyen, ne elemzés.
 - Lehet beszólás.
 - Lehet poén.
 - Lehet flört.
@@ -4286,21 +4330,48 @@ TERMÉSZETES SOCIAL MEDIA STÍLUS:
 - Lehet vita.
 - Lehet támogatás.
 - Lehet kérdés.
-- Lehet egy spontán reakció.
+- Lehet hitetlenkedés.
+- Lehet féltékeny vagy birtokló reakció.
+- Lehet provokáció.
 - Lehet pletykálkodó vagy célzó megjegyzés.
-- Reagálhatnak egymás kommentjeire is.
+- Lehet kínos, száraz vagy direkt reakció.
+- Lehet csak egy becenév, egy rövid felszólítás vagy egy spontán felkiáltás.
+- Reagálhatnak egymás kommentjeire.
 - Ha egy konkrét korábbi kommentre válaszolnak, használd a "reply_to" mezőt.
 - Egymást @néven is megszólíthatják, ha természetes.
-- A kommentek ne legyenek egymással felcserélhetők: mindenki a saját személyiségének megfelelően írjon.
+- Használhatnak kisbetűt, NAGYBETŰT, elnyújtott szavakat, több kérdőjelet/felkiáltójelet vagy minimális írásjelet, HA ez illik a karakterhez.
+- A karaktereknek nem kell ugyanúgy helyesen, rendezett mondatokban és azonos ritmusban írniuk.
+- Egy száraz karakter legyen száraz.
+- Egy kaotikus karakter lehessen kaotikus.
+- Egy flörtölős karakter lehessen direkt.
+- Egy visszafogott karakter ne váljon emoji-spammelővé.
+- Egy online aktív, fiatalos karakter használhasson természetes internetes nyelvet.
+- A kommentek ne legyenek egymással felcserélhetők: már a megfogalmazásból is érződjön, KI írta őket.
+
+FONTOS VÁLTOZATOSSÁG:
+
+- Egy 2-4 kommentes csomagban ne legyen minden reakció ugyanolyan hosszú.
+- Ha természetes, legyen legalább egy nagyon rövid komment a csomagban.
+- Ne legyen mindenki vicces.
+- Ne legyen mindenki támogató.
+- Ne legyen mindenki ellenséges.
+- Ne reagáljanak mindannyian ugyanarra a részletre.
+- Különböző karakterek ugyanazt a posztot különböző szempontból értelmezhetik.
+- A kapcsolatuk, aktuális hangulatuk, féltékenységük, vonzalmuk, konfliktusuk és előzményeik befolyásolják, mire reagálnak.
 
 EMOJI:
 
-- Használhatnak emojit természetesen.
-- Nem kötelező.
-- Általában 0-2 emoji elég kommentenként.
+- Az emoji-használat legyen LÁTHATÓAN jelen a közösségi médiában, de maradjon karakterfüggő.
+- Ha a kiválasztott kommentelők között van olyan karakter, aki természetesen használ emojit, egy 2-4 kommentes csomagban legalább 1 komment tartalmazzon emojit.
+- Az emoji ne mindig a mondat legvégén legyen.
+- Lehet az emoji önálló reakció vagy a szöveg része.
+- Általában 1-2 emoji elég.
+- Ritkán több is lehet, ha az adott karakter kifejezetten így kommunikál.
 - Ne használjon mindenki emojit.
+- Ne kényszeríts emojit olyan karakterre, akinek a kommunikációjához nem illik.
 - Ne használják folyton ugyanazokat az emojikat.
-- Az emoji-használat igazodjon az adott karakterhez.
+- Ne legyen minden flört ugyanaz a szív vagy minden vicc ugyanaz a sírva-nevetős emoji.
+- Az emoji jelentése és típusa igazodjon a karakter személyiségéhez és az adott reakcióhoz.
 
 ISMÉTLÉSVÉDELEM:
 
@@ -4312,32 +4383,40 @@ ISMÉTLÉSVÉDELEM:
 - Ne ismételjék ugyanazokat a fenyegetéseket.
 - Ne használják mindig ugyanazt a flörtölési formulát.
 - Ne ragadjanak bele ugyanabba a becenévbe vagy reakcióba.
+- Ne használják minden posztnál ugyanazokat az emojikat.
 - Ha korábban már nagyon hasonlóan kommenteltek, most reagáljanak másképp.
 - A példamondatok és hangminták CSAK stílusiránymutatások.
 - SOHA ne másold őket.
 - SOHA ne készíts belőlük közeli parafrázist.
-- A karakter hangja maradjon felismerhető, de a konkrét mondata legyen friss.
+- A példákból a ritmust, szóhasználatot, humort, nyersességet, közvetlenséget és személyiséget tanuld meg, NE a konkrét mondatokat.
+- A karakter hangja maradjon felismerhető, de minden konkrét komment legyen friss.
 
-NYELVTAN:
+NYELVTAN ÉS NÉZŐPONT:
 
 - Mindenki magáról E/1-ben beszéljen.
 - A poszt szerzőjét és a többi karaktert tegezzék.
 - Magázás tilos.
 - A játékos helyett SOHA ne írj.
+- A természetes internetes nyelv fontosabb, mint a túlságosan formális nyelvtani tökéletesség.
+- Szándékosan informális írásmód csak akkor jelenjen meg, ha illik a karakterhez.
 
 LIKE:
 
 - Aki nem kommentelne, de természetesen lájkolná a posztot, bekerülhet a "likes" listába.
 - Ne lájkolja automatikusan mindenki.
+- Egy lájk önmagában is lehet reakció; ne generálj kommentet csak azért, mert minden szereplőnek csinálnia kell valamit.
+
+LEGFONTOSABB:
+A kommentnek első pillantásra úgy kell kinéznie, mint amit egy valódi ember odadobott egy social media poszt alá. Ha egy komment inkább hangzik dialógusnak egy regényből, pszichológiai elemzésnek vagy AI által megírt mini beszédnek, ÍRD ÚJRA rövidebb, spontánabb és internetesebb formában.
 
 Formátum:
 
 {"comments":[
-  {"id":"szereplő azonosítója","text":"rövid komment","reply_to":"k2 vagy üres"}
+{"id":"szereplő azonosítója","text":"természetes social media komment","reply_to":"k2 vagy üres"}
 ],
 "likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
 "changes":[
-  {"a":"aki érez","b":"aki iránt","delta":-15,"mood":"mit érez most iránta","why":"egy rövid mondat"}
+{"a":"aki érez","b":"aki iránt","delta":-15,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ],
 "events":["csak akkor egy rövid mondat, ha tényleg történt valami emlékezetes"]}${TAIL}`,
     { maxTokens: 900 }
@@ -4399,6 +4478,98 @@ function applyComments(n, postId, out, label) {
   applyChanges(n, out.changes);
   n.log = [...(out.events || []), ...n.log].slice(0, 30);
 }
+/*
+ * FAIR COMMENT ACTIVITY
+ *
+ * Hosszabb távon minden AI-karakter
+ * hasonló mennyiségű kommentelési
+ * lehetőséget kap.
+ */
+function fairCommentCast(w, targetId) {
+  const cutoff =
+    now() - 48 * 3600e3;
+
+  const chars = (w.chars || [])
+    .filter(
+      (c) =>
+        c &&
+        !isHuman(w, c.id) &&
+        c.id !== targetId
+    )
+    .map((c) => {
+      let recentComments = 0;
+      let lastCommentAt = 0;
+
+      (w.posts || []).forEach((p) => {
+        (p.comments || []).forEach(
+          (comment) => {
+            if (
+              !comment ||
+              comment.authorId !== c.id
+            ) {
+              return;
+            }
+
+            const ts =
+              Number(comment.ts) || 0;
+
+            if (ts >= cutoff) {
+              recentComments += 1;
+            }
+
+            lastCommentAt = Math.max(
+              lastCommentAt,
+              ts
+            );
+          }
+        );
+      });
+
+      return {
+        c,
+        recentComments,
+        lastCommentAt,
+        tie: Math.random(),
+      };
+    });
+
+  chars.sort((a, b) => {
+    /*
+     * Elsőként az legyen jelölt,
+     * aki az utóbbi 48 órában
+     * kevesebbet kommentelt.
+     */
+    if (
+      a.recentComments !==
+      b.recentComments
+    ) {
+      return (
+        a.recentComments -
+        b.recentComments
+      );
+    }
+
+    /*
+     * Döntetlennél az kerüljön előre,
+     * aki régebben kommentelt.
+     */
+    if (
+      a.lastCommentAt !==
+      b.lastCommentAt
+    ) {
+      return (
+        a.lastCommentAt -
+        b.lastCommentAt
+      );
+    }
+
+    return a.tie - b.tie;
+  });
+
+  return chars
+    .map((x) => x.c)
+    .slice(0, 5);
+}
 
 async function genReply(w, post, comment) {
   const target = charById(
@@ -4406,7 +4577,7 @@ async function genReply(w, post, comment) {
     comment.authorId
   );
 
-  const cast = pickCast(
+  const cast = fairCommentCast(
     w,
     comment.authorId
   );
@@ -4465,50 +4636,101 @@ KOMMENTVÁLASZ SZABÁLYOK:
 
 - Csak olyan karakter válaszoljon, akinek természetes oka van rá.
 - Adj 1-3 választ.
-- Ezek közösségi médiás kommentek, NEM roleplay-jelenetek.
-- Egy válasz általában 2-20 szó.
-- Lehet akár csak néhány szó.
-- Lehet visszakérdezés, beszólás, poén, flört, vita, gúny, támogatás vagy rövid reakció.
-- Közvetlenül arra reagáljanak, amit a kommentelő mondott.
-- Ne nyissanak indokolatlanul teljesen új témát.
+- Ezek VALÓDI social media reply-k, nem roleplay-jelenetek és nem mini dialógusok egy regényből.
+- Úgy írjanak, mintha telefonról gyorsan válaszolnának egy kommentre.
+- A válaszok TÖBBSÉGE 1-12 szó legyen.
+- 13-20 szó csak ritkán, ha tényleg szükséges.
+- Egyetlen szó is lehet teljes válasz.
+- 1-3 szavas beszólás vagy reakció teljesen természetes.
+- Emoji + néhány szó is lehet teljes válasz.
+- Ritkán akár csak emoji is lehet válasz, ha az adott karakter ezt tényleg megtenné.
+- Ha rövidebben természetesebb, MINDIG a rövidebb verziót válaszd.
+- Ne legyen minden válasz teljes, szépen lezárt mondat.
+- Lehet töredékes, félbehagyott, száraz, impulzív vagy minimális.
 - Ne írjanak hosszú bekezdést.
 - Ne írjanak monológot.
-- Ne legyen regényszerű vagy irodalmi.
+- Ne legyen regényszerű, költői vagy irodalmi.
 - Ne narráljanak jelenetet.
 - Ne írjanak belső gondolatokat.
 - Ne használjanak *csillagok közé tett cselekvéseket*.
 - Ne magyarázzák túl az érzéseiket vagy a kapcsolatukat.
+- Ne mondják ki fölöslegesen azt, amit a két karakter már tud egymásról.
+
+KÖZVETLEN REAKCIÓ:
+
+- Közvetlenül arra reagáljanak, amit a kommentelő mondott.
+- Ne indítsanak indokolatlanul teljesen új témát.
+- Lehet visszakérdezés.
+- Lehet beszólás.
+- Lehet poén.
+- Lehet flört.
+- Lehet gúny.
+- Lehet vita.
+- Lehet sértődés.
+- Lehet támogatás.
+- Lehet féltékeny vagy birtokló reakció.
+- Lehet provokáció.
+- Lehet száraz egyszavas válasz.
+- Lehet csak egy becenév.
+- Lehet @megszólítás.
+- Lehet NAGYBETŰ, kisbetű, elnyújtott szó, több kérdőjel vagy felkiáltójel, ha ez illik a karakterhez.
+- A válasz ritmusa, helyesírása, szlengje és írásjelei igazodjanak az adott karakter online kommunikációjához.
+- Ne legyenek a különböző karakterek válaszai egymással felcserélhetők.
 
 EMOJI:
 
-- Használhatnak emojit természetesen.
-- Nem kötelező.
-- Általában 0-2 emoji elég.
-- Ne használjon mindenki emojit.
-- Az emoji igazodjon az adott karakterhez.
+- Az emoji-használat legyen ténylegesen jelen, ha a válaszoló karakter természetesen használ emojit.
+- Ha a generált válaszolók között van emoji-használó karakter, legalább egy válasz tartalmazzon emojit.
+- Általában 1-2 emoji elég.
+- Az emoji lehet a mondat elején, közepén, végén vagy önálló reakcióként.
+- Ne használjon minden karakter emojit.
+- Ne erőltesd emojira azt a karaktert, aki alapvetően nem így kommunikál.
+- Ne használják folyton ugyanazokat az emojikat.
+- Ne legyen minden flört ❤️ vagy 😏.
+- Ne legyen minden vicc 😂 vagy 😭.
+- Az emoji pontos típusa illeszkedjen a karakterhez és a pillanatnyi reakcióhoz.
+
+TERMÉSZETESSÉG:
+
+- Egy valódi kommentválasz gyakran nem magyaráz semmit, csak reagál.
+- Ne próbáld minden szereplő gondolatát teljesen kifejteni.
+- A feszültség, humor, vonzalom vagy ellenszenv a szóválasztásból is érződhet.
+- Egy rövid "sure.", "pls", "????", "babe no", "te beteg vagy" jellegű SZERKEZET lehet természetes, de ezeket ne másold sablonként.
+- Minden konkrét megfogalmazást a karakter saját hangjából generálj.
 
 ISMÉTLÉSVÉDELEM:
 
-- Ne ismételjék korábbi kommentjeiket.
+- Ne ismételjék korábbi kommentjeiket vagy reply-jaikat.
 - Ne parafrazálják újra ugyanazt.
 - Ne használják folyton ugyanazokat a beszólásokat.
-- Ne ismételjék ugyanazokat a poénokat, sértéseket, fenyegetéseket vagy flörtölési formulákat.
-- A példamondatok és hangminták csak STÍLUSIRÁNYMUTATÁSOK.
-- Soha ne másolják őket.
-- Soha ne készítsenek belőlük közeli parafrázist.
-- A karakter hangja maradjon felismerhető, de a konkrét mondat legyen friss.
+- Ne ismételjék ugyanazokat a poénokat.
+- Ne ismételjék ugyanazokat a sértéseket.
+- Ne ismételjék ugyanazokat a fenyegetéseket.
+- Ne ismételjék ugyanazokat a flörtölési formulákat.
+- Ne ragadjanak bele ugyanabba a becenévbe.
+- Ne használják minden válaszban ugyanazt az emoji-kombinációt.
+- A példamondatok és hangminták CSAK stílusiránymutatások.
+- SOHA ne másold őket.
+- SOHA ne készíts belőlük közeli parafrázist.
+- A példákból a ritmust, szóhasználatot, humort, nyersességet, közvetlenséget és személyiséget tanuld meg.
+- A karakter hangja maradjon felismerhető, de minden konkrét mondat legyen friss.
 
-NYELVTAN:
+NYELVTAN ÉS NÉZŐPONT:
 
 - Minden karakter magáról E/1-ben beszéljen.
 - A másik karaktert tegezze.
 - Magázás tilos.
-- A játékos helyett soha ne írj.
+- A játékos helyett SOHA ne írj.
+- A természetes internetes nyelv fontosabb a túlságosan formális nyelvtani tökéletességnél.
+
+LEGFONTOSABB:
+
+A reply első pillantásra úgy hasson, mint egy valódi komment alatti gyors válasz. Ha inkább hangzik párbeszédnek egy regényből, pszichológiai magyarázatnak vagy AI által megírt mini beszédnek, ÍRD ÚJRA rövidebbre, közvetlenebbre és spontánabbra.
 
 Formátum:
 
 {"comments":[
-  {"id":"szereplő azonosítója","text":"rövid kommentválasz"}
+  {"id":"szereplő azonosítója","text":"természetes rövid kommentválasz"}
 ],
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}
@@ -4538,9 +4760,114 @@ function applyReplies(n, postId, rootId, out) {
   applyChanges(n, out.changes);
   n.log = [...(out.events || []), ...n.log].slice(0, 30);
 }
+/*
+ * FAIR POST ACTIVITY
+ *
+ * Az AI-karaktereket úgy rendezi sorba,
+ * hogy hosszabb távon mindegyikük
+ * hasonló mennyiségű lehetőséget kapjon
+ * önálló posztolásra.
+ *
+ * Nem katonás körforgás:
+ * azonos aktivitásnál véletlenszerű
+ * marad a sorrend.
+ */
+function fairPostCast(w) {
+  const chars = (w.chars || []).filter(
+    (c) =>
+      c &&
+      !isHuman(w, c.id)
+  );
 
+  if (!chars.length) {
+    return [];
+  }
+
+  /*
+   * Csak az utóbbi 48 órát nézzük,
+   * így egy régi aktív időszak
+   * nem bünteti örökké a karaktert.
+   */
+  const cutoff =
+    now() - 48 * 3600e3;
+
+  const ranked = chars.map((c) => {
+    let recentPosts = 0;
+    let lastPostAt = 0;
+
+    (w.posts || []).forEach((p) => {
+      if (
+        !p ||
+        p.authorId !== c.id
+      ) {
+        return;
+      }
+
+      const ts =
+        Number(p.ts) || 0;
+
+      if (ts >= cutoff) {
+        recentPosts += 1;
+      }
+
+      lastPostAt = Math.max(
+        lastPostAt,
+        ts
+      );
+    });
+
+    return {
+      c,
+      recentPosts,
+      lastPostAt,
+      tie: Math.random(),
+    };
+  });
+
+  ranked.sort((a, b) => {
+    /*
+     * Először az kapjon lehetőséget,
+     * aki az elmúlt 48 órában
+     * kevesebbet posztolt.
+     */
+    if (
+      a.recentPosts !==
+      b.recentPosts
+    ) {
+      return (
+        a.recentPosts -
+        b.recentPosts
+      );
+    }
+
+    /*
+     * Ha ugyanannyit posztoltak,
+     * az kerüljön előrébb,
+     * aki régebben posztolt.
+     */
+    if (
+      a.lastPostAt !==
+      b.lastPostAt
+    ) {
+      return (
+        a.lastPostAt -
+        b.lastPostAt
+      );
+    }
+
+    /*
+     * Teljes döntetlennél maradjon
+     * egy kis természetes véletlen.
+     */
+    return a.tie - b.tie;
+  });
+
+  return ranked
+    .map((x) => x.c)
+    .slice(0, 5);
+}
 async function genWorldStep(w, single) {
-  const cast = pickCast(w, null);
+  const cast = fairPostCast(w);
 
   const recent = (w.posts || [])
     .slice(0, 4)
@@ -4613,41 +4940,98 @@ ${
 
 POSZTOK:
 
-- A poszt hossza igazodjon a karakterhez és ahhoz, mi történik.
-- Lehet nagyon rövid.
+- A posztok VALÓDI közösségi médiás posztok legyenek, ne AI által írt esszék.
+- A poszt hossza igazodjon a karakterhez, a platformhoz és ahhoz, mi történik.
+- Lehet egyetlen mondat.
+- Lehet néhány szó.
 - Lehet közepes hosszúságú.
-- Ha tényleg nagyobb esemény, buli, konfliktus, pletyka vagy történés indokolja, lehet hosszabb poszt is.
+- Ha tényleg nagyobb esemény, buli, konfliktus, botrány, pletyka vagy fontos történés indokolja, lehet hosszabb poszt is.
 - Egy hosszabb poszt akár több emberről vagy ugyanazon esemény több részletéről is szólhat.
 - Ne legyen minden poszt hosszú.
 - Ne legyen minden poszt ugyanolyan szerkezetű.
-- Ne hangozzon AI által írt esszének.
-- A karakter saját közösségi média stílusában írjon.
-- Használhat szlenget, rövidítéseket, emojit, kisbetűt vagy választékosabb nyelvet attól függően, milyen ember.
+- Ne legyen minden poszt teljesen kifejtett és szépen lezárt.
+- Ne hangozzon publicisztikának, pszichológiai elemzésnek vagy AI által írt esszének.
+- A karakter úgy írjon, ahogy ő ténylegesen posztolna telefonról.
+- Lehet spontán.
+- Lehet kaotikus.
+- Lehet száraz.
+- Lehet provokatív.
+- Lehet flörtölős.
+- Lehet dühös.
+- Lehet pletykálkodó.
+- Lehet csak egy gyors helyzetjelentés.
+- Lehet képhez írt rövid caption.
+- Használhat szlenget, rövidítéseket, kisbetűt, NAGYBETŰT, elnyújtott szavakat, több írásjelet vagy minimális írásjelet, ha ez illik a karakterhez.
+- A posztból már megfogalmazás alapján is érződjön, melyik karakter írta.
+- Különböző karakterek ne ugyanabban a rendezett, semleges stílusban posztoljanak.
+- A példamondatok és hangminták CSAK stílusiránymutatások; ne másold vagy parafrazáld őket.
+
+POSZT EMOJI:
+
+- A karakter használhat emojit a posztban, ha ez természetes része az online kommunikációjának.
+- Az emoji-használat ténylegesen jelenjen meg azoknál a karaktereknél, akik rendszeresen így kommunikálnának.
+- Ne legyen minden poszt emoji nélküli.
+- Ugyanakkor ne használjon minden karakter emojit.
+- Egy visszafogott vagy rideg karakter posztolhat teljesen emoji nélkül.
+- Egy expresszívebb, fiatalosabb vagy online aktív karakter használhat 1-3 emojit természetesen.
+- Ritkán több emoji is belefér, ha kifejezetten illik az adott karakter stílusához.
+- Az emoji lehet a szöveg elején, közepén vagy végén.
+- Ne használják mindig ugyanazokat az emojikat.
+- Ne legyen minden flört ugyanaz a szív vagy 😏.
+- Ne legyen minden poén 😂 vagy 😭.
+- Az emoji jelentése illeszkedjen a karakter személyiségéhez, hangulatához és a konkrét poszthoz.
 
 KOMMENTEK:
 
-- A kommentek valódi social media kommentek legyenek, NEM roleplay-jelenetek.
-- Egy komment általában 2-20 szó.
-- Lehet akár egyetlen rövid reakció is.
-- Ne legyenek hosszú bekezdések.
-- Ne legyenek monológok.
-- Ne legyenek regényszerűek vagy irodalmiak.
+- A kommentek VALÓDI social media kommentek legyenek, NEM roleplay-jelenetek.
+- A kommentek TÖBBSÉGE 1-12 szó legyen.
+- 13-20 szó csak ritkán, ha tényleg szükséges.
+- Egyetlen szó is lehet teljes komment.
+- 1-3 szavas reakció teljesen természetes.
+- Emoji + néhány szó is lehet teljes komment.
+- Ritkán akár csak emoji is lehet komment, ha az adott karakter így reagálna.
+- Ha rövidebben természetesebb, mindig a rövidebb változatot válaszd.
+- Ne legyen minden komment teljes, szépen megfogalmazott mondat.
+- Lehet töredékes.
+- Lehet száraz.
+- Lehet impulzív.
+- Lehet beszólás.
+- Lehet poén.
+- Lehet flört.
+- Lehet gúny.
+- Lehet vita.
+- Lehet támogatás.
+- Lehet féltékeny vagy birtokló reakció.
+- Lehet provokáció.
+- Lehet kérdés.
+- Lehet spontán felkiáltás.
+- Lehet csak egy becenév vagy @megszólítás.
+- Reagáljanak konkrétan a posztra, a képre vagy egymás kommentjeire.
+- Ne írjanak hosszú bekezdéseket.
+- Ne írjanak monológokat.
+- Ne legyenek regényszerűek, költőiek vagy irodalmiak.
 - Ne narráljanak jelenetet.
 - Ne írjanak belső gondolatokat.
 - Ne használjanak *csillagok közé tett cselekvéseket*.
-- Reagáljanak konkrétan a posztra vagy egymás kommentjeire.
-- Lehet beszólás, poén, flört, gúny, vita, támogatás, kérdés vagy spontán reakció.
+- Ne magyarázzák túl az érzéseiket.
+- Ne foglalják össze fölöslegesen a kapcsolatukat.
 - Ne legyen minden komment szépen lezárt mini beszéd.
 - Egymást @néven megszólíthatják, ha természetes.
+- Használhatnak kisbetűt, NAGYBETŰT, elnyújtott szavakat, rövidítéseket és internetes nyelvet, ha ez illik a karakterhez.
+- A különböző karakterek kommentjei ne legyenek egymással felcserélhetők.
 
-EMOJI:
+KOMMENT EMOJI:
 
-- Posztban és kommentben is használható természetesen.
-- Nem kötelező.
-- Kommentenként általában 0-2 emoji elég.
-- Ne használjon mindenki mindig emojit.
-- Ne ismételjék folyton ugyanazokat.
-- Az emoji-használat igazodjon a karakterhez.
+- Az emoji-használat legyen ténylegesen jelen a kommentfolyamban, de maradjon karakterfüggő.
+- Ha a kommentelők között van olyan karakter, aki természetesen használ emojit, legalább egy generált komment tartalmazzon emojit.
+- Általában 1-2 emoji elég kommentenként.
+- Az emoji lehet önálló reakció vagy a szöveg része.
+- Ne használjon mindenki emojit.
+- Ne kényszeríts emojit olyan karakterre, akinek nem illik a kommunikációjához.
+- Ne használják folyton ugyanazokat az emojikat.
+- Ne legyen minden flört ugyanaz a szív vagy 😏.
+- Ne legyen minden vicc 😂 vagy 😭.
+- Az emoji típusa igazodjon a karakterhez és a konkrét reakcióhoz.
 
 KÉPEK:
 
@@ -4761,12 +5145,46 @@ function NotesStrip({ w, update, setErr, onOpenChat, jump, onRequestNoteReaction
   const others = liveNotes(w).filter((x) => x.authorId !== w.meId);
 
   const saveMine = () => {
-    const t = draft.trim();
-    const noteId = uid();
-    update((n) => setNote(n, w.meId, t, noteId));
-    if (t && onSignal) onSignal({ type: "player-note", noteId });
-    setEditing(false); setDraft("");
-  };
+  const t = String(draft || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, NOTE_MAX);
+
+  // Ha szerkesztés közben valójában semmi
+  // nem változott, maradjon ugyanaz a note ID,
+  // időbélyeg és reakcióelőzmény.
+  if (
+    mine &&
+    t === String(mine.text || "")
+  ) {
+    setEditing(false);
+    setDraft("");
+    return;
+  }
+
+  const noteId = uid();
+
+  update((n) =>
+    setNote(
+      n,
+      w.meId,
+      t,
+      noteId
+    )
+  );
+
+  // Csak valóban új vagy megváltoztatott
+  // note indítson új AI-reakciós folyamatot.
+  if (t && onSignal) {
+    onSignal({
+      type: "player-note",
+      noteId,
+    });
+  }
+
+  setEditing(false);
+  setDraft("");
+};
 
   // reakciók már a központi motoron keresztül mennek
   const askReactions = () => {
@@ -6198,51 +6616,155 @@ ${repetitionGuard(
 
 CSOPORTCHAT SZABÁLYOK:
 
-- Ez valódi group chat, NEM roleplay-jelenet.
-- Írj 1-3 új üzenetet a csoport tagjaitól.
-- Egy üzenet általában 1-2 rövid mondat legyen.
-- Gyakran néhány szó is teljesen elég.
-- Ne írjanak hosszú bekezdéseket vagy monológokat.
-- Ne írjanak regényszerű narrációt.
-- Ne írjanak belső gondolatokat.
-- Ne használjanak *csillagok közé tett cselekvéseket*.
-- Egymásra reagáljanak, ne egymástól független mini beszédeket írjanak.
+- Ez VALÓDI group chat, NEM roleplay-jelenet.
+- Írj 1-3 új üzenetet a csoport AI-tagjaitól.
+- Ha 1 válasz természetesebb, adj csak 1-et.
 - Nem kell minden tagnak minden körben megszólalnia.
 - Csak az írjon, akinek tényleg van oka reagálni.
+- Ugyanaz a karakter küldhet két egymást követő rövid üzenetet is, ha ez természetes.
+- A legtöbb üzenet legyen rövid.
+- Egyetlen szó is lehet teljes üzenet.
+- Egy 1-3 szavas reakció teljesen természetes.
+- Egy félmondat is lehet teljes üzenet.
+- Lehet rövid kérdés.
+- Lehet csak egy név vagy @megszólítás.
+- Lehet spontán felkiáltás.
+- Ha rövidebben természetesebb, MINDIG a rövidebb változatot válaszd.
+- Ne próbálj minden üzenetből teljes, szépen lezárt mondatot készíteni.
+- Ne írjanak hosszú bekezdéseket.
+- Ne írjanak monológokat.
+- Ne írjanak regényszerű, költői vagy irodalmi szöveget.
+- Ne narráljanak jelenetet.
+- Ne írjanak belső gondolatokat.
+- Ne használjanak *csillagok közé tett cselekvéseket*.
+- Ne írják le, hogyan néznek, mosolyognak, sóhajtanak vagy mit csinálnak fizikailag.
+- Csak azt írják, amit ténylegesen elküldenének a group chatbe.
+
+HA ${w.player.name} MOST ÍRT:
+
+- Elsősorban arra reagáljanak, amit ${w.player.name} TÉNYLEG mondott.
+- Ne reagáljanak egy általános kapcsolati sablonra.
+- Ne ismételjék vissza szükségtelenül ${w.player.name} üzenetét.
+- Nem kell minden AI-tagnak közvetlenül a játékosnak válaszolnia.
+- Az egyik AI reagálhat ${w.player.name} üzenetére, a következő pedig már az előző AI reakciójára.
+- Az AI-tagok egymással is beszéljenek, ne csak a játékos körül forogjon minden.
+- ${w.player.name} helyett SOHA ne írj választ, reakciót vagy cselekvést.
+
+VALÓDI GROUP CHAT DINAMIKA:
+
+- A karakterek reagáljanak egymás KONKRÉT üzeneteire.
+- Ne úgy nézzen ki, mintha mindenki külön mini beszédet mondana ugyanarra a témára.
+- Az egyik válasz természetesen befolyásolhatja a következőt.
 - Félbeszakíthatják egymást.
 - Visszakérdezhetnek.
 - Ugrathatják egymást.
-- Veszekedhetnek, flörtölhetnek, pletykálhatnak, poénkodhatnak vagy témát válthatnak természetesen.
-- @néven megszólíthatják egymást, amikor annak van értelme.
-- Egy egyszerű "mi 💀", "ne már", "hol vagytok?" jellegű hosszúság teljesen megfelelő, HA karakterhű.
+- Beszólhatnak egymásnak.
+- Kijavíthatják egymást.
+- Rálicitálhatnak egymás poénjára.
+- Megvédhetik vagy támadhatják egymást.
+- Valaki reagálhat csak egy apró részletre.
+- Valaki teljesen figyelmen kívül hagyhat egy megjegyzést.
+- Veszekedhetnek.
+- Flörtölhetnek.
+- Pletykálhatnak.
+- Poénkodhatnak.
+- Provokálhatják egymást.
+- Panaszkodhatnak.
+- Szervezkedhetnek.
+- Témát válthatnak természetesen.
+- @néven megszólíthatják egymást.
+- Nem kell minden üzenetnek új információt tartalmaznia.
+- Egy nagyon rövid reakció is lehet fontos része a beszélgetésnek.
+- A group chat lehet kissé kaotikus és töredezett.
+- Ne rendezd úgy, mintha mindenki szépen kivárná a sorát.
+
+KARAKTERHŰ CHATSTÍLUS:
+
+- Mindenki a SAJÁT online kommunikációs stílusában írjon.
+- Már a megfogalmazásból érződjön, KI írta.
+- Használhatnak kisbetűt.
+- Használhatnak NAGYBETŰT.
+- Használhatnak szlenget.
+- Használhatnak rövidítéseket.
+- Használhatnak természetes internetes nyelvet.
+- Használhatnak elnyújtott szavakat.
+- Használhatnak több kérdőjelet vagy felkiáltójelet.
+- Használhatnak minimális központozást.
+- Mindezt csak akkor, ha illik az adott karakterhez.
+- Ne legyen minden karakter nyelvtanilag tökéletes, azonos ritmusú és steril.
+- Egy rideg karakter maradhat száraz.
+- Egy szűkszavú karakter maradjon rövid.
+- Egy kaotikus karakter írhat impulzívabban.
+- Egy flörtölős karakter lehet direkt.
+- Egy domináns karakter könnyen átveheti a chat ritmusát.
+- Egy visszahúzódó karakter nem köteles mindenre reagálni.
+- Egy online aktív karakter lazábban használhat internetes kommunikációt.
 
 EMOJI:
-- Használhatnak emojikat természetesen.
-- Nem kell minden üzenetbe emoji.
-- Általában 0-2 emoji elég.
+
+- Az emoji-használat legyen TÉNYLEGESEN jelen, HA a megszólaló karakterek között van olyan, aki természetesen használ emojit.
+- Ha az aktuális válaszolók között van emoji-használó karakter, legalább egy generált üzenet tartalmazzon emojit.
+- Általában 1-2 emoji elég egy üzenetben.
+- Néha egyetlen emoji is lehet teljes válasz.
+- Az emoji lehet a szöveg elején, közepén vagy végén.
+- Nem kell minden karakternek emojit használnia.
+- Nem kell minden körben emojinak lennie, ha egyik természetesen megszólaló karakter sem használna.
+- Ne kényszeríts emojit olyan karakterre, akinek ez nem illik.
+- Ritkán több emoji is természetes lehet egy expresszív karakternél.
 - Ne használják folyton ugyanazokat az emojikat.
-- Minden karakter emoji-használata igazodjon a saját személyiségéhez.
+- Ne legyen minden flört ❤️ vagy 😏.
+- Ne legyen minden nevetés 😂 vagy 😭.
+- Ne legyen minden döbbenet 💀.
+- Az emoji típusa igazodjon ahhoz, KI ír, KINEK ír és milyen hangulatban van.
 
-ISMÉTLÉS:
+CHAT-RITMUS:
+
+- Ne legyen minden kör ugyanolyan hosszú.
+- Ne legyen minden válasz ugyanolyan hosszú.
+- Egy nagyon rövid reakciót követhet egy valamivel hosszabb üzenet.
+- Egy karakter írhat két gyors üzenetet egymás után.
+- Nem kell minden gondolatot teljesen kifejteni.
+- Nem kell minden témát egyetlen körben lezárni.
+- A valódi group chatben sok dolog kimondatlan marad.
+- A humor, feszültség, vonzalom, ellenszenv vagy féltékenység a szóválasztásból érződjön, ne magyarázatból.
+- Ha egy rövid reakció elég, ne írj belőle többmondatos választ.
+
+ISMÉTLÉSVÉDELEM:
+
 - Ne ismételjék a saját korábbi mondataikat.
-- Ne parafrazálják folyton ugyanazt.
-- Ne használják újra ugyanazokat a poénokat, sértéseket, fenyegetéseket, flörtölési formulákat vagy beceneveket.
-- Ne legyen mindenkinek állandó válaszsablonja.
-- Ha valaki nemrég már hasonlóan reagált, most reagáljon más módon.
-- A példamondatok és hangminták CSAK stílusiránymutatások, nem másolandó szövegek.
-- A karakter maradjon felismerhető, de a konkrét mondatai legyenek frissek és az aktuális beszélgetésből szülessenek.
+- Ne parafrazálják újra ugyanazt.
+- Ne használják folyton ugyanazokat a mondatkezdéseket.
+- Ne használják újra ugyanazokat a poénokat.
+- Ne ismételjék ugyanazokat a sértéseket.
+- Ne ismételjék ugyanazokat a fenyegetéseket.
+- Ne ismételjék ugyanazokat a flörtölési formulákat.
+- Ne ragadjanak bele ugyanabba a becenévbe.
+- Ne ragadjanak bele ugyanabba a reakciótípusba.
+- Ne használják mindig ugyanazokat az emoji-kombinációkat.
+- Ha valaki nemrég már nagyon hasonlóan reagált, most válasszon más megfogalmazást.
+- A példamondatok és hangminták CSAK stílusiránymutatások.
+- SOHA ne másold őket.
+- SOHA ne készíts belőlük közeli parafrázist.
+- A példákból a karakter ritmusát, szóhasználatát, humorát, közvetlenségét, nyersességét és kommunikációs szokásait tanuld meg.
+- Minden konkrét üzenet legyen friss és az aktuális beszélgetésből szülessen.
 
-NYELVTAN:
-- Mindenki magáról E/1-ben beszél.
+NYELVTAN ÉS NÉZŐPONT:
+
+- Minden karakter magáról E/1-ben beszéljen.
 - Egy konkrét megszólított személyt tegezzen E/2-ben.
-- Több emberhez E/2 többes számban beszéljen, például: "hol vagytok?"
+- Több emberhez E/2 többes számban beszéljen.
 - Magázás tilos.
-- A játékos karaktere helyett SOHA ne írj.
+- ${w.player.name} helyett SOHA ne írj.
+- A természetes internetes nyelv fontosabb, mint a túlságosan formális nyelvtani tökéletesség.
+
+LEGFONTOSABB:
+
+A válaszok első pillantásra úgy hassanak, mint egy valódi group chat következő néhány üzenete. Ha inkább úgy néznek ki, mint több AI-karakter egymás mellé rakott mini monológjai, egy előre megírt jelenet vagy túl rendezett dialógus, ÍRD ÚJRA rövidebbre, lazábbra és egymásra reagálóbbra.
 
 Formátum:
-{"replies":[{"id":"tag azonosítója","text":"üzenet"}],
- "changes":[{"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
- "memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${TAIL}`,
+{"replies":[{"id":"tag azonosítója","text":"természetes rövid group chat üzenet"}],
+"changes":[{"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
+"memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${TAIL}`,
       { maxTokens: 900 }
     );
 
@@ -6563,31 +7085,109 @@ ${repetitionGuard(
 PRIVÁT CHAT SZABÁLYOK:
 
 - Válaszolj úgy, mint ${c.name}, ne úgy, mint egy asszisztens.
-- Ez valódi privát chat, NEM roleplay-jelenet.
-- A válasz legyen rövid és természetes.
-- Általában 1-4 rövid mondat elég.
-- Néhány szavas válasz is teljesen rendben van, ha az természetesebb.
+- Ez VALÓDI privát chat, NEM roleplay-jelenet.
+- Úgy írj, mintha ${c.name} ténylegesen a telefonján válaszolna ${w.player.name} üzenetére.
+- A chat legyen spontán, közvetlen és karakterhű.
+- A válasz TÖBBSÉGE rövid legyen.
+- Általában 1-4 rövid chatmondat vagy üzenetrész elég.
+- Egyetlen szó is lehet teljes válasz.
+- Néhány szavas válasz teljesen rendben van.
+- Ha egy rövid reakció természetesebb, MINDIG azt válaszd a hosszabb megfogalmazás helyett.
+- Ne próbálj minden válaszból teljes, szépen felépített mini beszédet csinálni.
+- A félmondatok, töredékek, rövid visszakérdezések és spontán reakciók természetesek.
+- Nem kell mindig tökéletes nyelvtani mondatokat írni, ha ${c.name} chatstílusához ez nem illik.
 - Ne írj hosszú bekezdést.
 - Ne írj monológot.
-- Ne írj regényszerű leírást.
+- Ne írj regényszerű, költői vagy irodalmi leírást.
 - Ne narráld a jelenetet.
 - Ne írj belső gondolatokat.
 - Ne használj *csillagok közé tett cselekvéseket*.
+- Ne írd le, hogyan néz, mosolyog, sóhajt, mozdul vagy mit csinál fizikailag.
+- Csak azt írd, amit ténylegesen elküldene chatüzenetként.
 - Ne magyarázd el a kapcsolatotokat.
 - Ne foglald össze, mit érzel iránta, mintha karakterelemzést írnál.
+- Ne mondd ki fölöslegesen azt, amit mindketten már tudtok.
 - Ne ismételd vissza szükségtelenül azt, amit ${w.player.name} éppen mondott.
 - Nem kötelező minden válasz végére kérdést tenni.
-- Nem kell minden válasznak továbbgördítő beszélgetésindítónak lennie.
-- Lehet félmondat, beszólás, visszakérdezés, reakció, vicc, flört, sértődés, vita vagy egyszerű válasz.
-- Reagálj arra, amit ténylegesen mondott.
+- Nem kell minden válasznak új témát vagy beszélgetésindítót tartalmaznia.
+- Néha egy sima reakció a legtermészetesebb válasz.
+
+TERMÉSZETES CHATSTÍLUS:
+
+- Lehet félmondat.
+- Lehet egyszavas válasz.
+- Lehet beszólás.
+- Lehet visszakérdezés.
+- Lehet poén.
+- Lehet flört.
+- Lehet gúny.
+- Lehet sértődés.
+- Lehet vita.
+- Lehet féltékeny vagy birtokló reakció.
+- Lehet provokáció.
+- Lehet támogatás.
+- Lehet száraz vagy közönyös válasz.
+- Lehet zavart reakció.
+- Lehet csak egy becenév vagy megszólítás.
+- Lehet spontán felkiáltás.
+- Reagálj arra, amit ${w.player.name} TÉNYLEG mondott, ne egy általános kapcsolati sablonra.
+
+- Használhatsz kisbetűt, NAGYBETŰT, rövidítéseket, szlenget, internetes nyelvet, elnyújtott szavakat, több kérdőjelet vagy felkiáltójelet, ha ez ${c.name} stílusához illik.
+- Nem kell minden üzenetnek ugyanazzal a nagybetűs, szabályos mondatkezdéssel indulnia.
+- A központozás is tükrözze a karaktert.
+- Egy rideg karakter írhat röviden és ponttal.
+- Egy impulzív karakter írhat szétesettebben.
+- Egy játékos/flörtölős karakter lehet lazább és expresszívebb.
+- Egy online aktív karakter természetesen használhat internetes rövidítéseket és emojikat.
+- Egy visszafogott karakter maradhat minimalista.
+- Ne tedd az összes karakter chatstílusát ugyanolyan steril, rendezett szöveggé.
 
 EMOJI:
 
-- Használhatsz emojit, ha az illik ${c.name} karakteréhez.
-- Nem kötelező.
-- Általában 0-2 emoji elég.
-- Ne használj minden üzenetben emojit.
+- Az emoji-használat legyen TÉNYLEGESEN jelen ${c.name} chatjében, HA az illik a karakteréhez.
+- Ha ${c.name} olyan karakter, aki természetesen használna emojit privát üzenetben, időnként ténylegesen használj is emojit; ne válaszd automatikusan mindig a nulla emojit.
+- Általában 1-2 emoji elég egy válaszban.
+- Néha egyetlen emoji is lehet teljes válasz.
+- Az emoji lehet a szöveg elején, közepén vagy végén.
+- Nem kell minden válaszban emojit használni.
+- Ne erőltesd az emojit, ha ${c.name} személyiségéhez vagy aktuális hangulatához nem illik.
+- Ritkán több emoji is lehet, ha a karakter kifejezetten így ír.
 - Ne ismételd folyton ugyanazokat az emojikat.
+- Ne legyen minden flört ❤️ vagy 😏.
+- Ne legyen minden nevetés 😂 vagy 😭.
+- Ne legyen minden düh 😡.
+- Az emoji típusa tükrözze ${c.name} saját személyiségét, humorát, hangulatát és a konkrét beszélgetést.
+
+CHAT-RITMUS:
+
+- Ne legyen minden válasz azonos hosszúságú.
+- Egymás után lehet egy nagyon rövid és később egy valamivel hosszabb válasz.
+- Ha ${w.player.name} csak egy gyors reakciót küld, ne válaszolj rá automatikusan négy mondattal.
+- Ha a téma komolyabb, lehet valamivel hosszabb a válasz, de továbbra is chatként hasson.
+- A valódi privát beszélgetésben az emberek nem fejtik ki minden egyes alkalommal teljesen a gondolataikat.
+- Hagyd meg a kimondatlan dolgokat is, ha az természetes.
+- A kapcsolat, vonzalom, harag, humor vagy feszültség a szóválasztásból és a stílusból érződjön, ne magyarázatból.
+
+ISMÉTLÉSVÉDELEM:
+
+- Ne ismételd ${c.name} korábbi chatüzeneteit.
+- Ne parafrazáld újra ugyanazt a gondolatot csak más szavakkal.
+- Ne használd folyton ugyanazokat a mondatkezdéseket.
+- Ne használd minden válaszban ugyanazt a becenevet.
+- Ne ismételd ugyanazokat a poénokat.
+- Ne ismételd ugyanazokat a sértéseket.
+- Ne ismételd ugyanazokat a fenyegetéseket.
+- Ne ismételd ugyanazokat a flörtölési formulákat.
+- Ne használd mindig ugyanazokat az emoji-kombinációkat.
+- A példamondatok és hangminták CSAK stílusiránymutatások.
+- SOHA ne másold őket.
+- SOHA ne készíts belőlük közeli parafrázist.
+- A példákból ${c.name} ritmusát, szóhasználatát, humorát, közvetlenségét, nyersességét és kommunikációs szokásait tanuld meg.
+- Minden konkrét válasz legyen friss.
+
+LEGFONTOSABB:
+
+A válasz első pillantásra úgy nézzen ki, mint egy valódi privát chatüzenet ${c.name} telefonjáról. Ha inkább hangzik regénybeli párbeszédnek, karakterelemzésnek, terápiás válasznak vagy AI által megírt tökéletes mini beszédnek, ÍRD ÚJRA rövidebbre, lazábbra és természetesebbre.
 
 ISMÉTLÉSVÉDELEM:
 
@@ -7344,56 +7944,143 @@ ${repetitionGuard(
 PRIVÁT ÜZENET SZABÁLYOK:
 
 - Csak akkor írj rá, ha MOST tényleg van rá karakterhű okod.
-- Az ok kapcsolódhat egy friss eseményhez, poszthoz, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz vagy egyszerűen valamihez, amit most akarsz tőle.
+- Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz, tervhez vagy egyszerűen valamihez, amit most akarsz tőle.
+- Az ok lehet egészen hétköznapi is.
+- Nem kell minden spontán DM mögé nagy történés, konfliktus vagy dráma.
+- Lehet, hogy csak eszedbe jutott valami, láttál valamit, kérdeznél valamit, átküldenél egy reakciót, piszkálnád, flörtölnél vele vagy akarsz tőle valamit.
 - Ne találj ki mesterséges drámát csak azért, hogy legyen üzenet.
-- Ha nincs valódi okod írni, legyen "skip": true.
+- Ne generálj üzenetet pusztán azért, mert eltelt valamennyi idő.
+- Ha nincs valódi, karakterhű okod írni, legyen "skip": true.
 
-STÍLUS:
+VALÓDI PRIVÁT CHAT:
 
-- Ez valódi PRIVÁT CHAT, nem roleplay-jelenet.
+- Ez VALÓDI privát üzenet, NEM roleplay-jelenet.
+- Úgy írj, mintha ténylegesen elővennéd a telefonodat és ráírnál ${w.player.name} karakterre.
+- Ne úgy fogalmazz, mint egy narrátor, asszisztens vagy regényíró.
 - Írj 1-3 rövid üzenetnyi tartalmat.
-- Általában néhány szó vagy 1-2 rövid mondat elég.
-- Lehet nagyon rövid is: reakció, beszólás, kérdés, meghívás, panasz, célzás vagy félmondat.
+- A legtöbbször néhány szó vagy 1-2 rövid mondat bőven elég.
+- Egyetlen szó is lehet teljes üzenet.
+- Egy rövid kérdés is lehet teljes üzenet.
+- Egy félmondat is lehet teljes üzenet.
+- Egy becenév vagy megszólítás is lehet teljes üzenet.
+- Egy spontán reakció is lehet teljes üzenet.
+- Ha rövidebben természetesebb, MINDIG a rövidebb változatot válaszd.
+- Ne próbálj minden DM-ből teljes, szépen felépített mini beszédet készíteni.
 - Ne írj hosszú bekezdést.
 - Ne írj monológot.
+- Ne írj regényszerű, költői vagy irodalmi szöveget.
 - Ne narráld a jelenetet.
 - Ne írj belső gondolatokat.
 - Ne használj *csillagok közé tett cselekvéseket*.
+- Ne írd le, hogyan nézel, mosolyogsz, sóhajtasz, mozogsz vagy mit csinálsz fizikailag.
+- Csak azt írd, amit ténylegesen elküldenél neki üzenetként.
+
+TERMÉSZETES CHATSTÍLUS:
+
+- Lehet beszólás.
+- Lehet visszakérdezés.
+- Lehet poén.
+- Lehet flört.
+- Lehet gúny.
+- Lehet sértődés.
+- Lehet számonkérés.
+- Lehet féltés.
+- Lehet féltékeny vagy birtokló reakció.
+- Lehet provokáció.
+- Lehet pletyka.
+- Lehet meghívás.
+- Lehet kérés.
+- Lehet figyelmeztetés.
+- Lehet segítségkérés.
+- Lehet bocsánatkérés.
+- Lehet egy közös terv felvetése.
+- Lehet teljesen hétköznapi kérdés vagy megjegyzés.
+- Lehet száraz, flegma, kedves, kínos, kaotikus vagy minimális, ha ez illik a karakterhez.
+- Ne legyen minden spontán DM komoly.
+- Ne legyen minden spontán DM konfliktus.
+- Ne legyen minden spontán DM flört.
+- Ne legyen minden spontán DM mély érzelmi vallomás.
+- A konkrét szándék mindig abból következzen, aki vagy és ami a világban éppen történik.
+
+- Használhatsz kisbetűt, NAGYBETŰT, szlenget, rövidítéseket, internetes nyelvet, elnyújtott szavakat, több kérdőjelet vagy felkiáltójelet, ha ez a karaktered természetes chatstílusa.
+- Nem kell minden mondatnak szabályos nagybetűvel indulnia.
+- Nem kell minden üzenetnek tökéletesen központozottnak lennie.
+- A központozás, ritmus és szóhasználat is tükrözze a személyiségedet.
+- Ha rideg vagy szűkszavú karakter vagy, maradj az.
+- Ha expresszív vagy kaotikus karakter vagy, az a chatben is megjelenhet.
+- Ha online aktív és laza karakter vagy, használhatsz természetes internetes kommunikációt.
+- Ne válj steril, semleges AI-hanggá.
+
+KAPCSOLAT ÉS ÉRZELMEK:
+
 - Ne foglald össze a kapcsolatotokat az üzenetben.
 - Ne magyarázd el, mit érzel, ha egy valódi ember inkább csak kimutatná.
+- Ne mondd ki fölöslegesen azt, amit ${w.player.name} már tud rólad vagy kettőtökről.
+- Ne írj karakterelemzést saját magadról.
+- Ne magyarázd meg az üzeneted mögötti pszichológiát.
+- A vonzalom, harag, féltékenység, humor, ragaszkodás vagy ellenszenv inkább a szóválasztásból és hangnemből érződjön.
 - Nem kötelező kérdéssel zárni.
 - Nem kell minden üzenetnek beszélgetésindító formulának lennie.
-- Ne köszönj úgy, mint egy asszisztens.
+- Ne köszönj automatikusan minden alkalommal.
+- Ne kezdd rendszeresen azzal, hogy "hé", "szia", "figyelj" vagy hasonló sablonnal.
 - Ne kérdezd meg, miben segíthetsz.
-
-LEHETSÉGES SZÁNDÉKOK:
-
-Lehet számonkérés, féltés, pletyka, meghívás, provokáció, flört, bocsánatkérés, segítségkérés, vicc, információ, figyelmeztetés, közös terv vagy bármi más, ami tényleg illik hozzád.
 
 EMOJI:
 
-- Használhatsz emojit, ha természetes neked.
-- Nem kötelező.
-- Általában 0-2 emoji elég.
+- Az emoji-használat legyen TÉNYLEGESEN jelen, HA természetes része a karaktered online kommunikációjának.
+- Ha olyan karakter vagy, aki normálisan használna emojit privát chatben, időnként ténylegesen használj is; ne válaszd automatikusan mindig a nulla emojit.
+- Általában 1-2 emoji elég.
+- Néha egyetlen emoji is lehet teljes üzenet.
+- Az emoji lehet a szöveg elején, közepén vagy végén.
+- Nem kell minden spontán DM-be emoji.
+- Ne erőltesd, ha a karakteredhez vagy az aktuális hangulathoz nem illik.
+- Ritkán több emoji is természetes lehet egy kifejezetten expresszív karakternél.
 - Ne használd folyton ugyanazokat.
+- Ne legyen minden flört ugyanaz a szív vagy 😏.
+- Ne legyen minden nevetés 😂 vagy 😭.
+- Ne legyen minden harag ugyanaz a dühös emoji.
+- Az emoji típusa illeszkedjen a személyiségedhez, hangulatodhoz és a konkrét üzenethez.
+
+CHAT-RITMUS:
+
+- Ne legyen minden spontán DM ugyanolyan hosszú.
+- Néha egyetlen rövid üzenet elég.
+- Máskor természetes lehet 2-3 külön rövid gondolat.
+- Ne fejts ki automatikusan mindent.
+- A valódi chatben sok dolog kimondatlan marad.
+- Ne próbáld minden alkalommal egyetlen üzenetben lezárni a teljes témát.
+- Ne írj mesterségesen hosszabban csak azért, hogy tartalmasabbnak tűnjön.
 
 ISMÉTLÉSVÉDELEM:
 
-- Ne ismételd a korábbi mondataidat.
+- Ne ismételd a korábbi DM-jeidet.
 - Ne parafrazáld újra ugyanazt.
 - Ne használd folyton ugyanazt a mondatkezdést.
-- Ne ismételd ugyanazokat a poénokat, sértéseket, fenyegetéseket vagy flörtölési formulákat.
-- Ne ragadj bele ugyanabba a becenévbe vagy reakcióba.
+- Ne kezdeményezz mindig ugyanazzal az ürüggyel.
+- Ne ismételd ugyanazokat a poénokat.
+- Ne ismételd ugyanazokat a sértéseket.
+- Ne ismételd ugyanazokat a fenyegetéseket.
+- Ne ismételd ugyanazokat a flörtölési formulákat.
+- Ne ragadj bele ugyanabba a becenévbe.
+- Ne használj mindig ugyanazokat az emoji-kombinációkat.
+- Ha egy korábbi spontán DM nagyon hasonló volt, most válassz más megfogalmazást vagy más természetes megközelítést.
 - A példamondatok és hangminták CSAK a stílus megértésére szolgálnak.
 - SOHA ne másold őket.
 - SOHA ne írj belőlük közeli parafrázist.
-- A hangod legyen felismerhető, de a konkrét mondat legyen friss.
+- A példákból a ritmust, szóhasználatot, humort, közvetlenséget, nyersességet és kommunikációs szokásokat tanuld meg.
+- A hangod legyen felismerhető, de minden konkrét üzenet legyen friss.
 
-NYELVTAN:
+NYELVTAN ÉS NÉZŐPONT:
 
 - Magadról E/1-ben beszélj.
 - ${w.player.name} karaktert tegezd, E/2-ben.
 - Magázás tilos.
+- A természetes chatnyelv fontosabb, mint a túlságosan formális nyelvtani tökéletesség.
+- ${w.player.name} helyett SOHA ne írj választ vagy cselekvést.
+
+LEGFONTOSABB:
+
+A DM első pillantásra úgy hasson, mint egy valódi ember spontán privát üzenete. Ha inkább hangzik regénybeli dialógusnak, karakterelemzésnek, előre megírt drámai jelenetnek vagy AI által megfogalmazott tökéletes mini beszédnek, ÍRD ÚJRA rövidebb, lazább és természetesebb formában.
 
 Formátum:
 
@@ -7407,56 +8094,294 @@ Ha van:
 }
 /* Egy bot kiír magának egy jegyzetet. */
 async function genNote(w, bot) {
-  return askWorldJSON(w, engineFor(w), `${worldContext(w, [bot.id], true, bot.id)}
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(
+      w,
+      [bot.id],
+      true,
+      bot.id
+    )}
 
-TE MOST ${String(bot.name).toUpperCase()} VAGY.${voiceCard(bot)}
-${repetitionGuard(w, [bot.id], "jegyzetek")}
+TE MOST ${String(
+      bot.name
+    ).toUpperCase()} VAGY.
 
-Kiírsz magadnak egy jegyzetet a közösségi médiában —
-ez egy rövid, félmondatos gondolat, amit mindenki lát. Legfeljebb ${NOTE_MAX} karakter.
+${voiceCard(bot)}
 
-MOSTANI JEGYZETEK (ne ismételd őket):
+${repetitionGuard(
+  w,
+  [bot.id],
+  "jegyzetek"
+)}
+
+INSTAGRAM NOTES SZABÁLYOK:
+
+- Írj egy valódi közösségi médiás Note-ot ${bot.name} nevében.
+- Ez NEM poszt, NEM naplóbejegyzés és NEM roleplay jelenet.
+- Legfeljebb ${NOTE_MAX} karakter lehet.
+- Törekedj rövidségre: gyakran csak néhány szó vagy egy rövid félmondat természetes.
+- Egyetlen szó is lehet elég, ha illik a karakterhez.
+- Ne írj hosszú vagy teljesen kifejtett gondolatmenetet.
+- Ne magyarázd meg a Note jelentését.
+- Ne narrálj cselekvést.
+- Ne írj belső monológot.
+- Ne használj csillagok közé tett cselekvéseket.
+- Ne legyen irodalmi mini-poszt.
+- Ne legyen minden Note mély, drámai vagy titokzatos.
+
+TARTALOM:
+
+- Lehet pillanatnyi hangulat.
+- Lehet rövid panaszkodás.
+- Lehet célzás valakire vagy valamire.
+- Lehet provokáció.
+- Lehet flört.
+- Lehet száraz vagy szarkasztikus megjegyzés.
+- Lehet vicc vagy belsős poén.
+- Lehet féltékeny vagy birtokló megjegyzés.
+- Lehet kérdés.
+- Lehet rövid vélemény.
+- Lehet valamilyen aktuális tervre vagy eseményre utalás.
+- Lehet egyszerű, hétköznapi állapotjelzés is.
+- Nem kell minden Note-nak fontos történeti eseményhez kapcsolódnia.
+
+TERMÉSZETES INTERNETES STÍLUS:
+
+- Igazodjon ${bot.name} tényleges beszédstílusához.
+- Használhat kisbetűt, NAGYBETŰT, szlenget, rövidítést, elnyújtott szavakat vagy szokatlan írásjeleket, ha ez rá jellemző.
+- Ne legyen minden mondat nyelvtanilag tökéletes.
+- Töredékes megfogalmazás teljesen természetes lehet.
+- Úgy hangozzon, mintha a karakter pár másodperc alatt írta volna ki telefonról.
+
+EMOJI:
+
+- Ha ${bot.name} személyisége és kommunikációja alapján természetesen használ emojit, akkor időnként ténylegesen HASZNÁLJ is.
+- Ne válaszd automatikusan mindig az emoji nélküli verziót egy olyan karakter esetén, aki általában kifejezően ír.
+- Általában 1-2 emoji bőven elég.
+- Egy Note akár csak rövid szöveg + emoji is lehet.
+- Ritkán akár önmagában egy emoji vagy emoji-kombináció is lehet Note, ha az nagyon karakterhű.
+- Visszafogott karakterre ne erőltesd rá.
+- Az emoji jelentése illeszkedjen az adott Note-hoz és karakterhez.
+- Ne ismételd folyton ugyanazokat az emoji-kombinációkat.
+
+ISMÉTLÉSVÉDELEM:
+
+- Ne ismételd a karakter korábbi Note-jait.
+- Ne írj közeli parafrázist sem.
+- Ne használj újra folyton ugyanolyan mondatkezdést.
+- Ne ragadj bele ugyanabba a hangulatba vagy témába.
+- Ne ismételd ugyanazokat a flörtöket, fenyegetéseket, beszólásokat, beceneveket vagy poénokat.
+- A karakter példamondatai és hangmintái kizárólag STÍLUSIRÁNYMUTATÁSOK.
+- Soha ne másold őket.
+- Soha ne készíts belőlük közeli parafrázist.
+
+MOSTANI AKTÍV NOTE-OK:
 ${notesForAI(w) || "nincs"}
 
 MOSTANÁBAN TÖRTÉNT:
-${(w.log || []).slice(0, 5).join("\n") || "-"}
+${(w.log || [])
+  .slice(0, 5)
+  .join("\n") || "-"}
 
-Legyen olyan, mint egy valódi jegyzet: egy hangulat, egy célzás, egy panasz, egy dalszöveg-részlet,
-egy beszólás valakinek. Ne legyen belőle poszt, és ne magyarázd el. A saját hangodon szóljon.
-Formátum: {"text":"a jegyzet"}${TAIL}`);
+VÉGSŐ ELLENŐRZÉS:
+
+Ha a szöveg inkább posztnak, naplóbejegyzésnek, idézetnek vagy AI által megírt mini-monológnak tűnik, írd át rövidebbre, lazábbra és spontánabbra.
+
+Formátum:
+{"text":"a note"}${TAIL}`,
+    { maxTokens: 500 }
+  );
 }
 
 /* Reakciók a játékos jegyzetére. */
 async function genNoteReact(w, note) {
-  const cast = pickCast(w, note.authorId);
-  return askWorldJSON(w, engineFor(w), `${worldContext(w, cast.map((c) => c.id), true, null)}
+  const reactedBy = new Set(
+    note.reactedBy || []
+  );
 
-${w.player.name} ezt írta ki jegyzetként: "${note.text}"
+  const cast = pickCast(
+    w,
+    note.authorId
+  ).filter(
+    (c) =>
+      c &&
+      !isHuman(w, c.id) &&
+      c.id !== note.authorId &&
+      !reactedBy.has(c.id)
+  );
 
-Ki reagál rá? Aki csak egy emojit nyom rá, a "reacts" listába kerül; aki írna is neki privátban,
-a "dms" listába, egy rövid üzenettel, ami a jegyzetre utal. Csak az reagáljon, akinek van rá oka.
+  // Ha a kiválasztott körben már nincs
+  // olyan AI, aki reagálhatna, ne kérjünk
+  // feleslegesen új AI-választ.
+  if (!cast.length) {
+    return {
+      reacts: [],
+      dms: [],
+      changes: [],
+    };
+  }
+
+  const alreadyReactedNames = (
+    w.chars || []
+  )
+    .filter(
+      (c) =>
+        c &&
+        reactedBy.has(c.id)
+    )
+    .map((c) => c.name)
+    .filter(Boolean)
+    .join(", ");
+
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(
+      w,
+      cast.map((c) => c.id),
+      true,
+      null
+    )}
+
+${w.player.name} ezt írta ki jegyzetként:
+"${note.text}"
+
+NOTE-REAKCIÓ SZABÁLYOK:
+
+- Csak olyan karakter reagáljon, akinek erre ténylegesen természetes oka van.
+- Nem kell mindenkinek reagálnia.
+- Kizárólag az alább felsorolt, még nem reagált karakterek közül válassz.
+- Egy karakter erre a konkrét note-ra csak EGYSZER reagálhat.
+- Egy karakter vagy emoji-reakciót adjon, VAGY privát üzenetet írjon. Ugyanabban a körben ne szerepeljen mindkettőben.
+- Aki már korábban reagált erre a note-ra, sem a "reacts", sem a "dms" listába nem kerülhet újra.
+- A note szerzője saját magára nem reagálhat.
+
+MÉG REAGÁLHATNAK:
+${cast
+  .map((c) => `- ${c.name} [${c.id}]`)
+  .join("\n")}
+
+MÁR REAGÁLTAK ERRE A NOTE-RA:
+${alreadyReactedNames || "senki"}
+
+EMOJI-REAKCIÓ:
+
+- Az emoji illeszkedjen a karakter személyiségéhez és ahhoz, mit jelent számára a note.
+- Ne ugyanazokat az általános emojikat használd mindenkinél.
+- Lehet szeretetteljes, gúnyos, döbbent, támogató, féltékeny, flörtölő, ironikus vagy más természetes reakció.
+- Ne kényszeríts emojit olyan karakterre, aki inkább privátban válaszolna.
+
+PRIVÁT VÁLASZ:
+
+- Olyan legyen, mint egy valódi telefonos DM a note-ra reagálva.
+- Legyen rövid és spontán.
+- Általában 1-3 rövid mondat vagy üzenetrész elég.
+- Akár néhány szó, kérdés vagy rövid beszólás is lehet.
+- Ne legyen monológ, regényszerű párbeszéd vagy karakterelemzés.
+- Ne narráljon cselekvést vagy belső gondolatot.
+- Ne magyarázza túl, mit érez.
+- Közvetlenül a note-ra reagáljon.
+- Használhat emojit, ha az adott karakter természetesen használna.
+- A karakter saját beszédstílusa, kisbetű/nagybetű használata, szlengje és írásjelei maradjanak felismerhetők.
+- A példamondatok csak stílusiránymutatások; ne másold és ne parafrazáld őket.
+
+FONTOS:
+Ha senkinek nincs természetes oka reagálni, mindkét lista lehet üres.
+
 Formátum:
-{"reacts":[{"id":"szereplő azonosítója","emoji":"❤️"}],
- "dms":[{"id":"szereplő azonosítója","text":"rövid üzenet"}],
- "changes":[{"a":"id","b":"id","delta":3,"mood":"mit érez most iránta","why":"egy rövid mondat"}]}${TAIL}`);
+{"reacts":[
+  {"id":"szereplő azonosítója","emoji":"emoji"}
+],
+"dms":[
+  {"id":"szereplő azonosítója","text":"rövid privát reakció"}
+],
+"changes":[
+  {"a":"aki érez","b":"aki iránt","delta":3,"mood":"mit érez most iránta","why":"egy rövid mondat"}
+]}${TAIL}`,
+    { maxTokens: 900 }
+  );
 }
 
 /* Kit szólaltassunk meg magától: akinek erős a viszonya veled, és rég nem szólt. */
+/*
+ * Spontán privát kezdeményező kiválasztása.
+ *
+ * FAIR ACTIVITY:
+ * minden AI-karakter azonos eséllyel kapjon
+ * lehetőséget, és aki régebben írt utoljára,
+ * az kerüljön előrébb.
+ *
+ * A kapcsolat erőssége NEM döntheti el,
+ * hogy ugyanaz a néhány karakter legyen
+ * folyamatosan aktív.
+ */
 function pickInitiator(w) {
-  const pool = (w.chars || []).map((c) => {
-    const rel = getRel(w, c.id, w.meId);
-    const msgs = w.chats[chatKey(w.meId, c.id)] || [];
-    const last = msgs.length ? msgs[msgs.length - 1] : null;
-    const quiet = last ? (now() - (last.ts || 0)) / 60000 : 9999;
-    const heat = Math.abs(rel.score) + (rel.mood ? 30 : 0) + (rel.hidden ? 15 : 0);
-    const talkedLast = last && last.from === "them" ? -60 : 0;
-    return { c, weight: Math.max(1, heat + Math.min(quiet, 240) / 4 + talkedLast + Math.random() * 25) };
+  const chars = (w.chars || []).filter(
+    (c) =>
+      c &&
+      !isHuman(w, c.id)
+  );
+
+  if (!chars.length) return null;
+
+  const pool = chars.map((c) => {
+    const msgs =
+      w.chats[
+        chatKey(w.meId, c.id)
+      ] || [];
+
+    let lastOwnDm = 0;
+
+    for (
+      let i = msgs.length - 1;
+      i >= 0;
+      i -= 1
+    ) {
+      const m = msgs[i];
+
+      if (
+        m &&
+        m.from === "them"
+      ) {
+        lastOwnDm =
+          Number(m.ts) || 0;
+        break;
+      }
+    }
+
+    return {
+      c,
+      lastOwnDm,
+      tie: Math.random(),
+    };
   });
-  if (!pool.length) return null;
-  const total = pool.reduce((sum, x) => sum + x.weight, 0);
-  let r = Math.random() * total;
-  for (let i = 0; i < pool.length; i++) { r -= pool[i].weight; if (r <= 0) return pool[i].c; }
-  return pool[pool.length - 1].c;
+
+  /*
+   * Aki legrégebben kezdeményezett,
+   * az kerül előre.
+   *
+   * Aki még SOHA nem írt magától,
+   * annak lastOwnDm = 0, ezért elsőbbséget kap.
+   *
+   * Ha többen ugyanott állnak,
+   * köztük véletlenszerű a sorrend.
+   */
+  pool.sort((a, b) => {
+    if (
+      a.lastOwnDm !== b.lastOwnDm
+    ) {
+      return (
+        a.lastOwnDm -
+        b.lastOwnDm
+      );
+    }
+
+    return a.tie - b.tie;
+  });
+
+  return pool[0].c;
 }
 
 /* Van-e olyan, amit tőled láttak, de még nem reagáltak rá? */
@@ -7535,8 +8460,96 @@ function simMarkDone(w, action) {
   if (action && action.key) sim.done[action.key] = now();
   sim.at = now();
 }
+/*
+ * FAIR GROUP ACTIVITY
+ *
+ * Azokat az AI-karaktereket részesíti
+ * előnyben, akik az utóbbi időben
+ * kevesebbet beszéltek group chatekben.
+ */
+function fairGroupCast(w, allowedIds = null) {
+  const cutoff =
+    now() - 48 * 3600e3;
+
+  const allowed =
+    Array.isArray(allowedIds)
+      ? new Set(allowedIds)
+      : null;
+
+  const chars = (w.chars || [])
+    .filter(
+      (c) =>
+        c &&
+        !isHuman(w, c.id) &&
+        (
+          !allowed ||
+          allowed.has(c.id)
+        )
+    )
+    .map((c) => {
+      let recentGroupMessages = 0;
+      let lastGroupMessageAt = 0;
+
+      (w.groups || []).forEach((g) => {
+        (g.msgs || []).forEach((m) => {
+          if (
+            !m ||
+            m.from !== c.id
+          ) {
+            return;
+          }
+
+          const ts =
+            Number(m.ts) || 0;
+
+          if (ts >= cutoff) {
+            recentGroupMessages += 1;
+          }
+
+          lastGroupMessageAt =
+            Math.max(
+              lastGroupMessageAt,
+              ts
+            );
+        });
+      });
+
+      return {
+        c,
+        recentGroupMessages,
+        lastGroupMessageAt,
+        tie: Math.random(),
+      };
+    });
+
+  chars.sort((a, b) => {
+    if (
+      a.recentGroupMessages !==
+      b.recentGroupMessages
+    ) {
+      return (
+        a.recentGroupMessages -
+        b.recentGroupMessages
+      );
+    }
+
+    if (
+      a.lastGroupMessageAt !==
+      b.lastGroupMessageAt
+    ) {
+      return (
+        a.lastGroupMessageAt -
+        b.lastGroupMessageAt
+      );
+    }
+
+    return a.tie - b.tie;
+  });
+
+  return chars.map((x) => x.c);
+}
 async function genAutoGroup(w) {
-  const cast = pickCast(w, null).slice(0, 5);
+  const cast = fairGroupCast(w, null).slice(0, 5);
 
   if (cast.length < 2) {
     return {
@@ -7618,37 +8631,138 @@ ${repetitionGuard(
 
 ÚJ GROUP CHAT SZABÁLYOK:
 
-- NE hozz létre csoportot csak azért, mert lehet.
-- Csak akkor legyen új csoport, ha legalább két szereplőnek tényleges, jelenlegi oka van rá.
-- Az ok következzen a kapcsolatokból, eseményekből, posztokból, jegyzetekből, konfliktusokból vagy tervekből.
-- Lehet például buli szervezése, pletyka, közös terv, probléma, konfliktus, segítségkérés, meghívás, titkos egyeztetés, közös ügy vagy spontán társas beszélgetés.
-- Ne hozz létre új csoportot, ha egy már létező csoport ugyanazokra az emberekre és ugyanarra a témára szolgál.
+- NE hozz létre csoportot csak azért, mert technikailag lehet.
+- Csak akkor legyen új group chat, ha legalább két AI-karakternek tényleges, jelenlegi és karakterhű oka van rá.
+- Az ok következzen a kapcsolatokból, friss eseményekből, posztokból, kommentekből, jegyzetekből, pletykákból, konfliktusokból, tervekből vagy közös ügyekből.
+- Az ok lehet teljesen hétköznapi is; nem kell minden új csoport mögé nagy dráma.
+- Lehet például buli szervezése, program, pletyka, közös terv, probléma, konfliktus, segítségkérés, meghívás, titkos egyeztetés, közös ügy, közös érdeklődés vagy spontán társas beszélgetés.
+- Ne találj ki mesterséges eseményt csak azért, hogy legyen oka a csoportnak.
+- Ne hozz létre új csoportot, ha egy már létező group chat lényegében ugyanazokra az emberekre és ugyanarra a témára szolgál.
 - Ne készíts újra és újra ugyanolyan összetételű csoportokat.
+- Ne legyen minden társas interakcióból új group chat.
 - 2-4 AI-karakter legyen a csoportban.
 - A "creator" annak a karakternek az azonosítója legyen, aki természetesen létrehozná a csoportot.
 - A creator mindig szerepeljen a "members" listában.
+- Csak olyan karakter kerüljön be, akit a creator ténylegesen hozzáadna.
+- A tagok kapcsolatai is számítsanak: ne rakj össze egymással teljesen irreleváns embereket pusztán a változatosság kedvéért.
+- A játékos automatikusan résztvevője lehet a rendszer szerint, de a játékos ne kerüljön az AI "members" listájába, és helyette SOHA ne írj üzenetet.
 
 CSOPORTNÉV:
+
 - Legyen természetes, mintha valódi emberek nevezték volna el.
-- Nem kell hivatalosnak lennie.
-- Lehet rövid, vicces, belsős poén, eseménynév, helynév vagy egyszerű praktikus név.
-- Ne legyen minden név generikus, például "Barátok" vagy "Beszélgetés".
-- Igazodjon ahhoz, ki hozta létre és miért.
+- A név tükrözheti azt is, KI hozta létre a csoportot.
+- Nem kell hivatalosnak vagy szépen megfogalmazottnak lennie.
+- Lehet nagyon rövid.
+- Lehet vicces.
+- Lehet belsős poén.
+- Lehet eseménynév.
+- Lehet helynév.
+- Lehet konkrét tervre utaló név.
+- Lehet szándékosan hülye vagy kaotikus, ha a creator ilyen.
+- Lehet kisbetűs vagy furcsán központozott, ha ez illik hozzájuk.
+- Ritkán emoji is lehet a csoportnévben, ha a creator természetesen így nevezné el.
+- Ne legyen minden név generikus, például "Barátok", "Group", "Beszélgetés" vagy "Csapat".
+- Ne próbálj minden névből kreatív szóviccet csinálni.
+- Egy praktikus, egyszerű név is teljesen természetes lehet.
 
 KEZDŐ ÜZENETEK:
-- Adj 2-5 rövid kezdő üzenetet a tagoktól.
-- Ezek valódi group chat üzenetek, NEM roleplay-jelenetek.
-- Egy üzenet általában néhány szó vagy 1-2 rövid mondat.
+
+- Adj 2-5 rövid kezdő üzenetet.
+- Legalább két különböző AI-tag szólaljon meg a nyitó beszélgetésben.
+- Nem kell minden tagnak megszólalnia.
+- Ugyanaz a karakter küldhet két egymást követő rövid üzenetet is, ha ez természetes chatritmus.
+- Ezek VALÓDI group chat üzenetek, NEM roleplay-jelenetek.
+- Úgy hassanak, mintha a tagok ténylegesen telefonról írnának a most létrehozott csoportba.
+- A legtöbb üzenet legyen rövid.
+- Egyetlen szó is lehet teljes üzenet.
+- Egy 1-3 szavas reakció teljesen természetes.
+- Lehet félmondat.
+- Lehet kérdés.
+- Lehet beszólás.
+- Lehet poén.
+- Lehet pletyka.
+- Lehet flört.
+- Lehet vita.
+- Lehet provokáció.
+- Lehet szervezés.
+- Lehet száraz reakció.
+- Lehet csak egy név vagy @megszólítás.
+- Ne próbálj minden üzenetből teljes, szépen lezárt mondatot készíteni.
 - Ne írjanak hosszú bekezdéseket.
-- Ne írjanak narrációt vagy belső gondolatokat.
+- Ne írjanak monológokat.
+- Ne írjanak regényszerű, költői vagy irodalmi szöveget.
+- Ne narráljanak jelenetet.
+- Ne írjanak belső gondolatokat.
 - Ne használjanak *csillagok közé tett cselekvéseket*.
-- Egymásra reagálhatnak.
-- Lehetnek félbehagyott, spontán vagy nagyon rövid reakciók is.
-- Használhatnak 0-2 természetes, karakterhez illő emojit.
+- Ne magyarázzák el a kapcsolatukat egymással.
+- Ne írják le, hogyan néznek, mosolyognak, sóhajtanak vagy mit csinálnak fizikailag.
+- Csak azt írják, amit ténylegesen elküldenének a group chatbe.
+
+VALÓDI GROUP CHAT DINAMIKA:
+
+- A karakterek reagáljanak egymás KONKRÉT üzeneteire.
+- Ne úgy nézzen ki, mintha mindenki külön válaszolna ugyanarra a láthatatlan kérdésre.
+- Egy karakter kijavíthatja a másikat.
+- Rávághat valamire.
+- Rálicitálhat egy poénra.
+- Beszólhat.
+- Visszakérdezhet.
+- Félbeszakíthatja a témát egy rövid reakcióval.
+- @néven megszólíthat valakit.
+- Két karakter röviden egymásnak is eshet.
+- Valaki reagálhat csak arra, amit az előző tag mondott.
+- Nem kell minden üzenetnek új információt tartalmaznia.
+- Egy "mi van??", "ne.", "te hülye", "????" jellegű SZERKEZET lehet természetes, de ezeket ne másold sablonként.
+- A beszélgetés lehet kissé kaotikus; nem kell tökéletesen rendezettnek lennie.
+
+KARAKTERHŰ ONLINE STÍLUS:
+
+- Minden tag a SAJÁT kommunikációs stílusában írjon.
+- Használhatnak kisbetűt, NAGYBETŰT, szlenget, rövidítéseket, internetes nyelvet, elnyújtott szavakat, több kérdőjelet vagy felkiáltójelet, ha ez illik hozzájuk.
+- Nem kell mindenkinek ugyanolyan helyesen és rendezett mondatokban írnia.
+- Egy szűkszavú karakter maradjon szűkszavú.
+- Egy kaotikus karakter lehessen kaotikus.
+- Egy száraz karakter írhat minimálisan.
+- Egy flörtölős karakter lehet direkt.
+- Egy domináns karakter könnyen átveheti a beszélgetés ritmusát.
+- Egy visszahúzódó karakter nem köteles mindenre reagálni.
+- Már a megfogalmazásból érződjön, KI írta az adott üzenetet.
+
+EMOJI:
+
+- Az emoji-használat legyen ténylegesen jelen a group chatben, HA a résztvevő karakterek között van olyan, aki természetesen használ emojit.
+- Ha van ilyen karakter, a 2-5 kezdő üzenet között legalább egy tartalmazzon emojit.
+- Általában 1-2 emoji elég egy üzenetben.
+- Néha egyetlen emoji is lehet teljes reakció.
+- Az emoji lehet a szöveg elején, közepén vagy végén.
 - Nem kell mindenkinek emojit használnia.
-- A példamondatok csak stílusiránymutatások. Ne másold és ne parafrazáld őket.
-- Ne ismételjék a korábbi poénjaikat, sértéseiket, flörtölési formuláikat, fenyegetéseiket vagy állandó szófordulataikat.
-- A játékos helyett SOHA ne írj üzenetet.
+- Ne kényszeríts emojit olyan karakterre, akinek ez nem illik a stílusához.
+- Ritkán több emoji is természetes lehet egy kifejezetten expresszív karakternél.
+- Ne használják folyton ugyanazokat.
+- Ne legyen minden flört ❤️ vagy 😏.
+- Ne legyen minden nevetés 😂 vagy 😭.
+- Az emoji típusa igazodjon ahhoz, KI ír, kinek reagál és mi történik éppen.
+
+ISMÉTLÉSVÉDELEM:
+
+- Ne ismételjék korábbi group chat üzeneteiket.
+- Ne parafrazálják újra ugyanazt.
+- Ne ismételjék ugyanazokat a poénokat.
+- Ne ismételjék ugyanazokat a sértéseket.
+- Ne ismételjék ugyanazokat a fenyegetéseket.
+- Ne ismételjék ugyanazokat a flörtölési formulákat.
+- Ne ragadjanak bele ugyanazokba a becenevekbe.
+- Ne használják mindig ugyanazokat az emoji-kombinációkat.
+- Ne induljon minden új group chat ugyanolyan mondattal.
+- A példamondatok és hangminták CSAK stílusiránymutatások.
+- SOHA ne másold őket.
+- SOHA ne készíts belőlük közeli parafrázist.
+- A példákból a karakter ritmusát, szóhasználatát, humorát, közvetlenségét és kommunikációs szokásait tanuld meg.
+- Minden konkrét üzenet legyen friss.
+
+LEGFONTOSABB:
+
+A csoport és az első néhány üzenet első pillantásra úgy hasson, mint egy valódi baráti, ellenséges, pletykálkodó vagy praktikus group chat indulása. Ha inkább hangzik előre megírt jelenetnek, regénydialógusnak vagy több AI-karakter egymás mellé rakott mini monológjának, ÍRD ÚJRA rövidebbre, közvetlenebbre és egymásra reagálóbbra.
 
 Ha nincs most valódi oka új csoport létrehozásának:
 "skip": true
@@ -7720,15 +8834,28 @@ function planAutoAction(view) {
     );
   }
 
-  const myNote = noteOf(
-    view,
-    view.meId
+const myNote = noteOf(
+  view,
+  view.meId
+);
+
+if (myNote) {
+  const reactedBy = new Set(
+    myNote.reactedBy || []
+  );
+
+  const remainingReactors = (
+    view.chars || []
+  ).filter(
+    (c) =>
+      c &&
+      !isHuman(view, c.id) &&
+      !reactedBy.has(c.id)
   );
 
   if (
-    myNote &&
-    !(myNote.reacts || []).length &&
-    now() - myNote.ts < 6 * 3600e3
+    remainingReactors.length > 0 &&
+    now() - (myNote.ts || 0) < NOTE_LIFE
   ) {
     return mkAction(
       "note-react",
@@ -7736,35 +8863,87 @@ function planAutoAction(view) {
       { noteId: myNote.id }
     );
   }
+}
 
   const roll = Math.random();
 
   const noteless = (
-    view.chars || []
-  ).filter(
-    (c) => !noteOf(view, c.id)
-  );
-
-  if (
-    roll < 0.28 &&
-    noteless.length
-  ) {
-    const bot =
-      noteless[
-        Math.floor(
-          Math.random() *
-            noteless.length
-        )
-      ];
-
-    return mkAction(
-      "note",
-      `note:${bot.id}:${Math.floor(
-        now() / 1800000
-      )}`,
-      { botId: bot.id }
+  view.chars || []
+)
+  .filter(
+    (c) =>
+      c &&
+      !isHuman(view, c.id) &&
+      !noteOf(view, c.id)
+  )
+  .map((c) => {
+    /*
+     * Megnézzük, mikor volt ennek a
+     * karakternek legutóbb note-ja.
+     *
+     * Ha még soha nem volt, 0-t kap,
+     * tehát előnyt élvez.
+     */
+    const previousNotes = (
+      view.notes || []
+    ).filter(
+      (x) =>
+        x &&
+        x.authorId === c.id
     );
-  }
+
+    const lastNoteAt =
+      previousNotes.reduce(
+        (latest, x) =>
+          Math.max(
+            latest,
+            Number(x.ts) || 0
+          ),
+        0
+      );
+
+    return {
+      c,
+      lastNoteAt,
+      tie: Math.random(),
+    };
+  })
+  .sort((a, b) => {
+    /*
+     * Aki régebben írt note-ot,
+     * az jön előbb.
+     *
+     * Ha egyikük sem írt még,
+     * véletlenszerű a sorrend.
+     */
+    if (
+      a.lastNoteAt !==
+      b.lastNoteAt
+    ) {
+      return (
+        a.lastNoteAt -
+        b.lastNoteAt
+      );
+    }
+
+    return a.tie - b.tie;
+  });
+
+if (
+  roll < 0.28 &&
+  noteless.length
+) {
+  const bot =
+    noteless[0].c;
+
+  return mkAction(
+    "note",
+    `note:${bot.id}:${Math.floor(
+      now() / 1800000
+    )}`,
+    { botId: bot.id }
+  );
+}
 
   /*
    * LÉTEZŐ GROUP CHATEK
@@ -7947,17 +9126,21 @@ async function genAutoGroupTurn(w, group) {
     };
   }
 
-  const memberIds = (group.members || [])
-    .filter(
-      (id) =>
-        charById(w, id) &&
-        !isHuman(w, id)
-    )
-    .slice(0, 6);
+  /*
+ * FAIR EXISTING GROUP ACTIVITY
+ *
+ * Csak a csoport tényleges AI-tagjai
+ * kerülhetnek szóba, de a kevesebbet
+ * beszélők előrébb kerülnek.
+ */
+const members = fairGroupCast(
+  w,
+  group.members || []
+).slice(0, 6);
 
-  const members = memberIds
-    .map((id) => charById(w, id))
-    .filter(Boolean);
+const memberIds = members.map(
+  (c) => c.id
+);
 
   if (!members.length) {
     return {
@@ -8010,6 +9193,12 @@ AI-TAGOK:
 ${members
   .map((c) => `${c.name} [${c.id}]`)
   .join("\n")}
+  AKTIVITÁSI EGYENSÚLY:
+- A fenti AI-tagok aktivitási prioritás szerint vannak sorba rendezve.
+- Ha több karakternek egyformán természetes lenne megszólalnia, elsősorban a lista elején álló, mostanában kevésbé aktív karaktert válaszd.
+- Ne ugyanazok a karakterek uralják folyamatosan a group chatet.
+- Hosszabb távon minden AI-tag kapjon hasonló mennyiségű lehetőséget megszólalni.
+- Az aktivitási egyensúly ne írja felül a beszélgetés logikáját: ha egy konkrét kérdést vagy megszólítást egy adott karakternek címeztek, ő válaszolhat.
 
 A játékos:
 ${w.player.name} [${w.meId}]
@@ -8043,61 +9232,153 @@ ${repetitionGuard(
 DÖNTSD EL, HOGY A CSOPORTBAN MOST TERMÉSZETESEN FOLYTATÓDNA-E A BESZÉLGETÉS.
 
 - Nem kötelező minden alkalommal megszólalniuk.
-- Ha nincs semmi, ami miatt most természetesen írná valamelyik tag, legyen "skip": true.
+- Ha nincs semmi, ami miatt valamelyik tag MOST természetesen írna, legyen "skip": true.
 - Ne generálj üzenetet csak azért, mert a rendszer megkérdezte.
-- Ha van befejezetlen téma, friss esemény, pletyka, terv, konfliktus, poén, kérdés vagy más karakterhű indok, folytathatják.
+- Ne folytasd mesterségesen a beszélgetést, ha az természetesen már elhalt.
+- Ha van befejezetlen téma, friss esemény, poszt, komment, jegyzet, pletyka, terv, konfliktus, poén, kérdés vagy más karakterhű indok, folytathatják.
+- Egy egészen hétköznapi reakció is elég ok lehet.
 - Reagálhatnak egymás korábbi üzeneteire.
-- Reagálhatnak friss posztra, jegyzetre vagy eseményre is, ha annak tényleg van köze hozzájuk.
-- Természetesen új témába is átcsúszhatnak, ha az illik a beszélgetéshez.
-- Ne találj ki indokolatlanul nagy új eseményeket csak azért, hogy legyen miről beszélni.
+- Reagálhatnak a játékos korábbi üzenetére is, de ${w.player.name} HELYETT SOHA NE ÍRJ.
+- Reagálhatnak friss posztra, kommentre, jegyzetre vagy világeseményre, ha annak tényleg van köze hozzájuk.
+- Természetesen új témába is átcsúszhatnak.
+- Ne találj ki indokolatlanul nagy eseményt csak azért, hogy legyen miről beszélni.
+- Ne legyen minden spontán group chat folytatás dráma, vita vagy pletyka.
+- Lehet teljesen hétköznapi, hülyéskedő vagy jelentéktelen beszélgetés is.
 
 GROUP CHAT STÍLUS:
 
-- Ez valódi csoportos chat, NEM roleplay-jelenet.
+- Ez VALÓDI csoportos chat, NEM roleplay-jelenet.
 - Adj 1-3 új üzenetet.
-- Nem kell 3 üzenetet adnod, ha 1 is természetesebb.
-- Egy üzenet általában néhány szó vagy 1-2 rövid mondat.
-- Lehet nagyon rövid reakció is.
+- Ha 1 üzenet természetesebb, adj csak 1-et.
+- Nem kell minden AI-tagnak megszólalnia.
+- Ugyanaz a karakter küldhet két egymást követő rövid üzenetet is, ha ez természetes.
+- A legtöbb üzenet legyen rövid.
+- Egyetlen szó is lehet teljes üzenet.
+- Egy 1-3 szavas reakció teljesen természetes.
+- Lehet félmondat.
+- Lehet rövid kérdés.
+- Lehet csak egy név vagy @megszólítás.
+- Lehet spontán felkiáltás vagy reakció.
+- Ha rövidebben természetesebb, MINDIG a rövidebb változatot válaszd.
+- Ne próbálj minden üzenetből teljes, szépen lezárt mondatot készíteni.
 - Ne írjanak hosszú bekezdéseket.
 - Ne írjanak monológokat.
-- Ne írjanak regényszerű narrációt.
+- Ne írjanak regényszerű, költői vagy irodalmi szöveget.
+- Ne narráljanak jelenetet.
 - Ne írjanak belső gondolatokat.
 - Ne használjanak *csillagok közé tett cselekvéseket*.
-- Egymásra reagáljanak.
+- Ne írják le, hogyan néznek, mosolyognak, sóhajtanak vagy mit csinálnak fizikailag.
+- Csak azt írják, amit ténylegesen elküldenének a csoportba.
+
+VALÓDI GROUP CHAT DINAMIKA:
+
+- Elsősorban egymás KONKRÉT üzeneteire reagáljanak.
+- Ne úgy nézzen ki, mintha minden szereplő külön mini választ adna ugyanarra a témára.
+- Az egyik karakter válasza befolyásolhatja a következő karakter üzenetét.
 - Félbeszakíthatják egymást.
 - Visszakérdezhetnek.
 - Ugrathatják egymást.
+- Beszólhatnak egymásnak.
+- Kijavíthatják egymást.
+- Rálicitálhatnak egymás poénjára.
+- Egymás ellen fordíthatnak egy megjegyzést.
+- Valaki reagálhat mindössze egy rövid közbeszólással.
+- Valaki figyelmen kívül hagyhat egy témát és egy másik részletre reagálhat.
 - Pletykálhatnak egymásról vagy más szereplőkről.
-- Veszekedhetnek, flörtölhetnek, viccelődhetnek, panaszkodhatnak vagy szervezkedhetnek, ha ez karakterhű.
-- @néven megszólíthatják egymást, ha természetes.
+- Veszekedhetnek.
+- Flörtölhetnek.
+- Viccelődhetnek.
+- Panaszkodhatnak.
+- Szervezkedhetnek.
+- Provokálhatják egymást.
+- Lehet köztük kínos csendet tükröző nagyon rövid reakció is.
+- @néven megszólíthatják egymást.
+- Nem kell minden üzenetnek új információt tartalmaznia.
+- A beszélgetés lehet kissé kaotikus és töredezett.
+- Ne rendezd úgy a válaszokat, mintha mindenki szépen kivárná a sorát.
+
+KARAKTERHŰ ONLINE STÍLUS:
+
+- Minden karakter a SAJÁT kommunikációs stílusában írjon.
+- Már az üzenet szövegéből is érződjön, KI írta.
+- Használhatnak kisbetűt.
+- Használhatnak NAGYBETŰT.
+- Használhatnak szlenget.
+- Használhatnak rövidítéseket.
+- Használhatnak internetes nyelvet.
+- Lehetnek elnyújtott szavak.
+- Lehet több kérdőjel vagy felkiáltójel.
+- Lehet minimális központozás.
+- Mindez csak akkor, ha illik az adott karakterhez.
+- Ne írjon minden karakter ugyanolyan szabályos, steril mondatokban.
+- Egy szűkszavú karakter maradjon szűkszavú.
+- Egy rideg karakter maradhat száraz és minimális.
+- Egy kaotikus karakter írhat impulzívabban.
+- Egy flörtölős karakter lehet direkt.
+- Egy domináns karakter könnyen átveheti a beszélgetés ritmusát.
+- Egy visszahúzódó karakter nem köteles mindenre reagálni.
+- Egy online aktív karakter természetesebben használhat internetes kommunikációt.
 
 EMOJI:
 
-- Használhatnak emojit természetesen.
-- Nem kell minden üzenetbe emoji.
-- Általában 0-2 emoji elég.
-- Ne használják folyton ugyanazokat az emojikat.
-- Az emoji-használat igazodjon az adott karakterhez.
+- Az emoji-használat legyen TÉNYLEGESEN jelen a group chatben, HA a résztvevők között van olyan karakter, aki természetesen használ emojit.
+- Ha az aktuális válaszolók között van emoji-használó karakter, legalább egy generált üzenet tartalmazzon emojit.
+- Általában 1-2 emoji elég egy üzenetben.
+- Néha egyetlen emoji is lehet teljes reakció.
+- Az emoji lehet a szöveg elején, közepén vagy végén.
+- Nem kell minden karakternek emojit használnia.
+- Nem kell minden group chat körben emojinak lennie, ha egyik természetesen megszólaló karakter sem használna.
+- Ne kényszeríts emojit rideg vagy kifejezetten emoji-mentesen kommunikáló karakterre.
+- Ritkán több emoji is természetes lehet egy expresszív karakternél.
+- Ne használják folyton ugyanazokat.
+- Ne legyen minden flört ugyanazzal az emojival.
+- Ne legyen minden poén ugyanazzal a nevetős emojival.
+- Ne legyen minden konfliktus ugyanazzal a dühös emojival.
+- Az emoji típusa igazodjon ahhoz, KI ír, KINEK reagál és milyen hangulatban van.
+
+CHAT-RITMUS:
+
+- Ne legyen minden kör ugyanolyan hosszú.
+- Ne legyen minden válasz ugyanolyan hosszú.
+- Egy nagyon rövid üzenetet követhet valamivel hosszabb.
+- Egy karakter írhat két gyors üzenetet egymás után.
+- Nem kell minden új gondolatot teljesen kifejteni.
+- Ne próbálják egyetlen körben lezárni az egész beszélgetést.
+- Hagyd meg a kimondatlan dolgokat.
+- A kapcsolat, humor, feszültség, vonzalom vagy ellenszenv a szóválasztásból érződjön, ne magyarázatból.
+- Ha valaki csak egy apró megjegyzésre reagálna, ne csinálj belőle többmondatos választ.
 
 ISMÉTLÉSVÉDELEM:
 
 - Ne ismételjék a saját korábbi mondataikat.
-- Ne parafrazálják újra és újra ugyanazt.
+- Ne parafrazálják újra ugyanazt.
 - Ne használják folyton ugyanazokat a mondatkezdéseket.
-- Ne ismételjék ugyanazokat a poénokat, sértéseket vagy fenyegetéseket.
+- Ne ismételjék ugyanazokat a poénokat.
+- Ne ismételjék ugyanazokat a sértéseket.
+- Ne ismételjék ugyanazokat a fenyegetéseket.
 - Ne használják minden alkalommal ugyanazt a flörtölési formulát.
-- Ne ragadjanak bele ugyanabba a becenévbe vagy reakcióba.
+- Ne ragadjanak bele ugyanabba a becenévbe.
+- Ne ragadjanak bele ugyanabba a reakciótípusba.
+- Ne használják mindig ugyanazokat az emoji-kombinációkat.
+- Ne térjen vissza minden group chat kör ugyanahhoz a témához, ha az már természetesen lezárult.
 - A példamondatok és hangminták CSAK stílusiránymutatások.
-- Soha ne másold vagy rendszeresen parafrazáld őket.
-- A karakter legyen felismerhető, de a konkrét mondatai legyenek frissek.
+- SOHA ne másold őket.
+- SOHA ne készíts belőlük közeli parafrázist.
+- A példákból a ritmust, szóhasználatot, humort, nyersességet, közvetlenséget és kommunikációs szokásokat tanuld meg.
+- A karakter legyen felismerhető, de minden konkrét üzenete legyen friss.
 
-NYELVTAN:
+NYELVTAN ÉS NÉZŐPONT:
 
 - Minden karakter magáról E/1-ben beszéljen.
 - Egy emberhez E/2-ben beszéljen.
 - Több emberhez E/2 többes számban beszéljen.
 - Magázás tilos.
 - ${w.player.name} helyett SOHA ne írj.
+- A természetes internetes nyelv fontosabb, mint a túlságosan formális nyelvtani tökéletesség.
+
+LEGFONTOSABB:
+
+A generált üzenetek első pillantásra úgy hassanak, mintha egy valódi, már létező group chat hirtelen tovább folytatódott volna. Ha inkább úgy néz ki, mint több AI-karakter egymás mellé rakott mini monológja, egy megírt jelenet vagy túl rendezett dialógus, ÍRD ÚJRA rövidebbre, spontánabbra és egymásra reagálóbbra.
 
 Ha most nincs természetes folytatás:
 {"skip":true,"replies":[],"changes":[],"memories":[],"event":""}
@@ -8105,13 +9386,13 @@ Ha most nincs természetes folytatás:
 Ha van természetes folytatás:
 {"skip":false,
 "replies":[
-  {"id":"AI-tag azonosítója","text":"rövid üzenet"}
+{"id":"AI-tag azonosítója","text":"természetes rövid group chat üzenet"}
 ],
 "changes":[
-  {"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}
+{"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ],
 "memories":[
-  {"id":"AI-tag azonosítója","text":"amit ebből érdemes megjegyeznie"}
+{"id":"AI-tag azonosítója","text":"amit ebből érdemes megjegyeznie"}
 ],
 "event":"csak akkor egy rövid mondat, ha a beszélgetésben tényleg történt valami emlékezetes, különben üres"}${TAIL}`,
     { maxTokens: 900 }
@@ -8247,111 +9528,170 @@ async function runSimulationAction(view, update, action) {
   }
 
   if (action.type === "note-react") {
-    const note = (
-      view.notes || []
+  const note = (view.notes || []).find(
+    (x) =>
+      x.id ===
+      (action.payload &&
+        action.payload.noteId)
+  );
+
+  if (
+    !note ||
+    note.authorId !== view.meId
+  ) {
+    return null;
+  }
+
+  const alreadyReacted = new Set(
+    note.reactedBy || []
+  );
+
+  const hasSomeoneLeft = (
+    view.chars || []
+  ).some(
+    (c) =>
+      c &&
+      !isHuman(view, c.id) &&
+      !alreadyReacted.has(c.id)
+  );
+
+  // Ha már minden AI-karakter reagált erre
+  // a konkrét note-ra, nincs több teendő.
+  if (!hasSomeoneLeft) {
+    return null;
+  }
+
+  const out =
+    await genNoteReact(view, note);
+
+  update((n) => {
+    n.autoAt = now();
+
+    // Az AI-hívás közben a játékos akár
+    // törölhette vagy lecserélhette a note-ot.
+    // Ilyenkor a régi note-ra már semmit
+    // nem szabad elmenteni.
+    const liveNote = (
+      n.notes || []
     ).find(
-      (x) =>
-        x.id ===
-        (action.payload &&
-          action.payload.noteId)
+      (x) => x.id === note.id
     );
 
+    if (!liveNote) return;
+
     if (
-      !note ||
-      note.authorId !== view.meId ||
-      (note.reacts || []).length
+      !Array.isArray(
+        liveNote.reactedBy
+      )
     ) {
-      return null;
+      liveNote.reactedBy = [];
     }
 
-    const out =
-      await genNoteReact(view, note);
-
-    update((n) => {
-      n.autoAt = now();
-
-      (out.reacts || []).forEach(
-        (r) => {
-          const who = findChar(
-            n,
-            r &&
-              (r.id !== undefined
-                ? r.id
-                : r.name)
-          );
-
-          if (
-            who &&
-            !isHuman(n, who)
-          ) {
-            reactNote(
-              n,
-              note.id,
-              who,
-              r.emoji
-            );
-          }
-        }
+    const hasReacted = (who) =>
+      liveNote.reactedBy.includes(
+        who
       );
 
-      (out.dms || []).forEach(
-        (d) => {
-          const who = findChar(
+    const markReacted = (who) => {
+      if (
+        !liveNote.reactedBy.includes(
+          who
+        )
+      ) {
+        liveNote.reactedBy.push(
+          who
+        );
+      }
+    };
+
+    /*
+     * PRIVÁT VÁLASZOK
+     *
+     * Ezeket dolgozzuk fel először.
+     * Ha az AI ugyanazt a karaktert
+     * véletlenül emojihoz ÉS DM-hez is
+     * megadná, a privát válasz nyer,
+     * és utána már nem kap külön emojit.
+     */
+    (out.dms || []).forEach(
+      (d) => {
+        const who = findChar(
+          n,
+          d &&
+            (d.id !== undefined
+              ? d.id
+              : d.name)
+        );
+
+        if (
+          !who ||
+          isHuman(n, who) ||
+          hasReacted(who) ||
+          !d.text
+        ) {
+          return;
+        }
+
+        const msg =
+          cleanGeneratedUtterance(
             n,
-            d &&
-              (d.id !== undefined
-                ? d.id
-                : d.name)
+            who,
+            d.text,
+            280
           );
 
-          if (
-            !who ||
-            isHuman(n, who) ||
-            !d.text
-          ) {
-            return;
-          }
+        if (!msg) return;
 
-          const msg =
-            cleanGeneratedUtterance(
-              n,
-              who,
-              d.text,
-              280
-            );
+        const ck = chatKey(
+          view.meId,
+          who
+        );
 
-          if (!msg) return;
+        n.chats[ck] = [
+          ...(n.chats[ck] || []),
+          {
+            from: "them",
+            text: msg,
+            ts: now(),
+            language:
+              worldLanguage(
+                n,
+                n.meId
+              ),
+          },
+        ];
 
-          const ck = chatKey(
-            view.meId,
-            who
-          );
+        // Ettől kezdve ez a karakter
+        // már reagáltnak számít erre
+        // a konkrét note ID-ra.
+        markReacted(who);
 
-          n.chats[ck] = [
-            ...(n.chats[ck] || []),
-            {
-              from: "them",
-              text: msg,
-              ts: now(),
-              language:
-                worldLanguage(
-                  n,
-                  n.meId
-                ),
+        const a =
+          charById(n, who);
+
+        pushNote(
+          n,
+          view.meId,
+          {
+            icon: "✉️",
+            translationKey:
+              "wroteOnYourNote",
+            params: {
+              name: a
+                ? a.name
+                : sysTextFor(
+                    n,
+                    view.meId,
+                    "someone"
+                  ),
+              snippet:
+                msg.slice(0, 60),
             },
-          ];
-
-          const a =
-            charById(n, who);
-
-          pushNote(
-            n,
-            view.meId,
-            {
-              icon: "✉️",
-              translationKey:
-                "wroteOnYourNote",
-              params: {
+            text: sysTextFor(
+              n,
+              view.meId,
+              "wroteOnYourNote",
+              {
                 name: a
                   ? a.name
                   : sysTextFor(
@@ -8361,40 +9701,62 @@ async function runSimulationAction(view, update, action) {
                     ),
                 snippet:
                   msg.slice(0, 60),
-              },
-              text: sysTextFor(
-                n,
-                view.meId,
-                "wroteOnYourNote",
-                {
-                  name: a
-                    ? a.name
-                    : sysTextFor(
-                        n,
-                        view.meId,
-                        "someone"
-                      ),
-                  snippet:
-                    msg.slice(0, 60),
-                }
-              ),
-              link: {
-                type: "dm",
-                id: who,
-              },
-            }
-          );
+              }
+            ),
+            link: {
+              type: "dm",
+              id: who,
+            },
+          }
+        );
+      }
+    );
+
+    /*
+     * EMOJI-REAKCIÓK
+     *
+     * Csak az kerülhet ide,
+     * aki ezen a note-on még
+     * semmilyen módon nem reagált.
+     */
+    (out.reacts || []).forEach(
+      (r) => {
+        const who = findChar(
+          n,
+          r &&
+            (r.id !== undefined
+              ? r.id
+              : r.name)
+        );
+
+        if (
+          !who ||
+          isHuman(n, who) ||
+          hasReacted(who) ||
+          !r.emoji
+        ) {
+          return;
         }
-      );
 
-      applyChanges(
-        n,
-        out.changes
-      );
-    });
+        reactNote(
+          n,
+          note.id,
+          who,
+          r.emoji
+        );
 
-    return "note-react";
-  }
+        markReacted(who);
+      }
+    );
+
+    applyChanges(
+      n,
+      out.changes
+    );
+  });
+
+  return "note-react";
+}
 
   if (action.type === "note") {
     const bot = charById(
