@@ -2,14 +2,816 @@ import "dotenv/config";
 import express from "express";
 import fetch from "node-fetch";
 import bodyParser from "body-parser";
+import pg from "pg";
+import crypto from "crypto";
 
+const { Pool } = pg;
 const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || process.env.AI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const DEFAULT_PROVIDER = process.env.AI_PROVIDER || "anthropic";
+/* ---------- PostgreSQL ---------- */
 
+const pool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      max: 5,
+    })
+  : null;
+
+const dbReady = pool
+  ? pool.query(`
+      CREATE TABLE IF NOT EXISTS worlds (
+        code TEXT PRIMARY KEY,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        token_hash TEXT PRIMARY KEY,
+        world_code TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS sessions_expires_idx
+      ON sessions (expires_at);
+    `).then(() => {
+      console.log("PostgreSQL ready");
+    }).catch((err) => {
+      console.error("PostgreSQL init error:", err);
+    })
+  : Promise.resolve();
+
+async function requireDb(res) {
+  if (!pool) {
+    res.status(503).json({ error: "Database not configured" });
+    return false;
+  }
+
+  await dbReady;
+  return true;
+}
+/* ---------- biztonságos account + session segédek ---------- */
+
+const SESSION_COOKIE = "mv_session";
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function cleanCode(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function cleanUsername(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "");
+}
+
+function sha256(value) {
+  return crypto
+    .createHash("sha256")
+    .update(String(value))
+    .digest("hex");
+}
+
+function passwordHash(password, salt) {
+  return "s2:" + sha256(`${String(salt)}::${String(password)}`);
+}
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a || ""));
+  const y = Buffer.from(String(b || ""));
+
+  if (x.length !== y.length) return false;
+
+  return crypto.timingSafeEqual(x, y);
+}
+
+function findAccountByUsername(world, username) {
+  const wanted = cleanUsername(username);
+
+  for (const id of Object.keys(world?.accounts || {})) {
+    const account = world.accounts[id];
+
+    if (
+      account &&
+      cleanUsername(account.username) === wanted
+    ) {
+      return { id, account };
+    }
+  }
+
+  return null;
+}
+
+function readCookie(req, name) {
+  const raw = String(req.headers.cookie || "");
+
+  for (const part of raw.split(";")) {
+    const i = part.indexOf("=");
+
+    if (i < 0) continue;
+
+    const key = part.slice(0, i).trim();
+    const value = part.slice(i + 1).trim();
+
+    if (key === name) {
+      return decodeURIComponent(value);
+    }
+  }
+
+  return "";
+}
+
+function sessionTokenHash(token) {
+  return sha256(token);
+}
+
+async function createSession(worldCode, accountId) {
+  const token = crypto.randomBytes(32).toString("hex");
+  const tokenHash = sessionTokenHash(token);
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+
+  await pool.query(
+    `
+    DELETE FROM sessions
+    WHERE expires_at <= NOW()
+    `
+  );
+
+  await pool.query(
+    `
+    INSERT INTO sessions (
+      token_hash,
+      world_code,
+      account_id,
+      expires_at
+    )
+    VALUES ($1, $2, $3, $4)
+    `,
+    [tokenHash, worldCode, accountId, expiresAt]
+  );
+
+  return token;
+}
+
+function setSessionCookie(res, token) {
+  res.cookie(SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: SESSION_TTL_MS,
+  });
+}
+
+function clearSessionCookie(res) {
+  res.clearCookie(SESSION_COOKIE, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+  });
+}
+
+async function getSession(req) {
+  const token = readCookie(req, SESSION_COOKIE);
+
+  if (!token || !pool) return null;
+
+  const result = await pool.query(
+    `
+    SELECT
+      s.world_code,
+      s.account_id,
+      w.data
+    FROM sessions s
+    JOIN worlds w
+      ON w.code = s.world_code
+    WHERE
+      s.token_hash = $1
+      AND s.expires_at > NOW()
+    LIMIT 1
+    `,
+    [sessionTokenHash(token)]
+  );
+
+  if (!result.rows.length) return null;
+
+  return {
+    token,
+    worldCode: result.rows[0].world_code,
+    accountId: result.rows[0].account_id,
+    world: result.rows[0].data,
+  };
+}
+function legacyPasswordHash(password, salt) {
+  const txt = String(salt) + "::" + String(password);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x1000193;
+
+  for (let i = 0; i < txt.length; i++) {
+    h1 = ((h1 ^ txt.charCodeAt(i)) * 16777619) >>> 0;
+    h2 = ((h2 + txt.charCodeAt(i) * (i + 7)) * 2654435761) >>> 0;
+  }
+
+  return "f1:" + h1.toString(16) + h2.toString(16);
+}
+
+function verifyPassword(password, account) {
+  if (!account || !account.hash) return false;
+
+  let calculated = "";
+
+  if (String(account.hash).startsWith("s2:")) {
+    calculated = passwordHash(password, account.salt);
+  } else if (String(account.hash).startsWith("f1:")) {
+    calculated = legacyPasswordHash(password, account.salt);
+  } else {
+    return false;
+  }
+
+  return safeEqual(calculated, account.hash);
+}
+function safeWorldForClient(world) {
+  const clean = JSON.parse(JSON.stringify(world || {}));
+
+  for (const account of Object.values(clean.accounts || {})) {
+    if (!account) continue;
+
+    delete account.hash;
+    delete account.salt;
+    delete account.password;
+  }
+
+  return clean;
+}
+/* ---------- LOGIN ---------- */
+
+app.post("/auth/login", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const code = cleanCode(req.body?.code);
+    const username = cleanUsername(req.body?.username);
+    const password = String(req.body?.password || "");
+
+    if (!code || !username || password.length < 4) {
+      return res.status(400).json({
+        error: "World code, username and password are required.",
+      });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT data
+      FROM worlds
+      WHERE code = $1
+      LIMIT 1
+      `,
+      [code]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        error: "World not found.",
+      });
+    }
+
+    const world = result.rows[0].data;
+    const found = findAccountByUsername(world, username);
+
+    if (!found) {
+      return res.status(401).json({
+        error: "Wrong username or password.",
+      });
+    }
+
+    const accountId = found.id;
+    const account = found.account;
+
+    if (!account.hash) {
+      account.salt = crypto.randomBytes(18).toString("hex");
+      account.hash = passwordHash(password, account.salt);
+
+      world.rev = Number(world.rev || 0) + 1;
+
+      await pool.query(
+        `
+        UPDATE worlds
+        SET data = $2::jsonb,
+            updated_at = NOW()
+        WHERE code = $1
+        `,
+        [code, JSON.stringify(world)]
+      );
+    } else if (!verifyPassword(password, account)) {
+      return res.status(401).json({
+        error: "Wrong username or password.",
+      });
+    }
+
+    const token = await createSession(code, accountId);
+
+    setSessionCookie(res, token);
+
+    return res.json({
+  ok: true,
+  meId: accountId,
+  world: safeWorldForClient(world),
+});
+  } catch (err) {
+    console.error("Login error:", err);
+
+    return res.status(500).json({
+      error: "Login failed.",
+    });
+  }
+});
+/* ---------- SESSION RESTORE ---------- */
+
+app.get("/auth/session", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        authenticated: false,
+      });
+    }
+
+    const account =
+      session.world?.accounts?.[session.accountId];
+
+    if (!account) {
+      if (session.token) {
+        await pool.query(
+          `
+          DELETE FROM sessions
+          WHERE token_hash = $1
+          `,
+          [sessionTokenHash(session.token)]
+        );
+      }
+
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        authenticated: false,
+      });
+    }
+
+    return res.json({
+      authenticated: true,
+      meId: session.accountId,
+      world: safeWorldForClient(session.world),
+    });
+  } catch (err) {
+    console.error("Session restore error:", err);
+
+    return res.status(500).json({
+      error: "Session restore failed.",
+    });
+  }
+});
+/* ---------- LOGOUT ---------- */
+
+app.post("/auth/logout", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const token = readCookie(req, SESSION_COOKIE);
+
+    if (token) {
+      await pool.query(
+        `
+        DELETE FROM sessions
+        WHERE token_hash = $1
+        `,
+        [sessionTokenHash(token)]
+      );
+    }
+
+    clearSessionCookie(res);
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Logout error:", err);
+
+    clearSessionCookie(res);
+
+    return res.json({
+      ok: true,
+    });
+  }
+});
+/* ---------- ACCOUNT DELETE ---------- */
+
+app.post("/account/delete", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
+
+    const worldCode = session.worldCode;
+    const accountId = session.accountId;
+
+    const result = await pool.query(
+      `
+      SELECT data
+      FROM worlds
+      WHERE code = $1
+      LIMIT 1
+      `,
+      [worldCode]
+    );
+
+    if (!result.rows.length) {
+      clearSessionCookie(res);
+
+      return res.status(404).json({
+        error: "World not found.",
+      });
+    }
+
+    const world = result.rows[0].data;
+
+    if (
+      !world.accounts ||
+      !world.accounts[accountId]
+    ) {
+      /*
+        Ha az account már nem létezik, akkor is
+        eltakarítjuk az esetleges régi sessionöket.
+      */
+      await pool.query(
+        `
+        DELETE FROM sessions
+        WHERE world_code = $1
+          AND account_id = $2
+        `,
+        [worldCode, accountId]
+      );
+
+      clearSessionCookie(res);
+
+      return res.json({
+        ok: true,
+        alreadyDeleted: true,
+      });
+    }
+
+    /*
+      Tombstone: egy régebbi mentés ne tudja
+      később "feltámasztani" a törölt fiókot.
+    */
+    if (!world.deleted) {
+      world.deleted = {};
+    }
+
+    world.deleted[accountId] = Date.now();
+
+    /*
+      Maga a fiók + saját karakter törlése.
+    */
+    if (world.accounts) {
+      delete world.accounts[accountId];
+    }
+
+    if (world.players) {
+      delete world.players[accountId];
+    }
+
+    /*
+      Kifejezetten ehhez a userhez tartozó
+      személyes állapotok törlése.
+    */
+    if (world.userSettings) {
+      delete world.userSettings[accountId];
+    }
+
+    if (world.notify) {
+      delete world.notify[accountId];
+    }
+
+    if (world.mems) {
+      delete world.mems[accountId];
+    }
+
+    if (world.charMemory) {
+      delete world.charMemory[accountId];
+    }
+
+    /*
+      Ha ez volt a world owner account,
+      ne maradjon nem létező owner ID.
+    */
+    if (world.owner === accountId) {
+      world.owner =
+        Object.keys(world.accounts || {})[0] || "";
+    }
+
+    world.rev =
+      Number(world.rev || 0) + 1;
+
+    if (world.universe) {
+      world.universe.at = Date.now();
+    }
+
+    /*
+      A törölt állapotot először biztosan
+      elmentjük PostgreSQL-be.
+    */
+    await pool.query(
+      `
+      UPDATE worlds
+      SET data = $2::jsonb,
+          updated_at = NOW()
+      WHERE code = $1
+      `,
+      [
+        worldCode,
+        JSON.stringify(world),
+      ]
+    );
+
+    /*
+      Az account ÖSSZES sessionjét töröljük.
+      Tehát másik telefonon/laptopon is kijelentkezik.
+    */
+    await pool.query(
+      `
+      DELETE FROM sessions
+      WHERE world_code = $1
+        AND account_id = $2
+      `,
+      [worldCode, accountId]
+    );
+
+    clearSessionCookie(res);
+
+    console.log(
+      `Deleted account ${accountId} from world ${worldCode}`
+    );
+
+    return res.json({
+      ok: true,
+      deleted: true,
+    });
+  } catch (err) {
+    console.error("Account delete error:", err);
+
+    return res.status(500).json({
+      error: "Account deletion failed.",
+    });
+  }
+});
+/* ---------- EGYSZERI HELYI VILÁG MIGRÁCIÓ ---------- */
+
+app.post("/auth/migrate", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const incomingWorld = req.body?.world;
+    const username = cleanUsername(req.body?.username);
+    const password = String(req.body?.password || "");
+
+    if (
+      !incomingWorld ||
+      typeof incomingWorld !== "object" ||
+      !incomingWorld.code
+    ) {
+      return res.status(400).json({
+        error: "Missing world data.",
+      });
+    }
+
+    const code = cleanCode(incomingWorld.code);
+
+    if (!code || !username || password.length < 4) {
+      return res.status(400).json({
+        error: "World code, username and password are required.",
+      });
+    }
+
+    // Már szerveren lévő világot a migráció soha nem írhat felül.
+    const existing = await pool.query(
+      `
+      SELECT code
+      FROM worlds
+      WHERE code = $1
+      LIMIT 1
+      `,
+      [code]
+    );
+
+    if (existing.rows.length) {
+      return res.status(409).json({
+        error: "World already exists on the server.",
+      });
+    }
+
+    const world = JSON.parse(JSON.stringify(incomingWorld));
+    world.code = code;
+
+    const found = findAccountByUsername(world, username);
+
+    if (!found) {
+      return res.status(401).json({
+        error: "Wrong username or password.",
+      });
+    }
+
+    const accountId = found.id;
+    const account = found.account;
+
+    // A feltöltés előtt ténylegesen ellenőrizzük,
+    // hogy ez a user jogosult ehhez a világhoz.
+    if (!account.hash) {
+      account.salt = crypto.randomBytes(18).toString("hex");
+      account.hash = passwordHash(password, account.salt);
+    } else if (!verifyPassword(password, account)) {
+      return res.status(401).json({
+        error: "Wrong username or password.",
+      });
+    }
+
+    world.rev = Number(world.rev || 0) + 1;
+
+    await pool.query(
+      `
+      INSERT INTO worlds (
+        code,
+        data,
+        updated_at
+      )
+      VALUES ($1, $2::jsonb, NOW())
+      `,
+      [code, JSON.stringify(world)]
+    );
+
+    const token = await createSession(code, accountId);
+
+    setSessionCookie(res, token);
+
+    console.log(`Migrated world ${code}`);
+
+    return res.json({
+      ok: true,
+      migrated: true,
+      meId: accountId,
+      world: safeWorldForClient(world),
+    });
+  } catch (err) {
+    console.error("World migration error:", err);
+
+    return res.status(500).json({
+      error: "World migration failed.",
+    });
+  }
+});
+/* ---------- AUTHENTICATED WORLD AUTOSAVE ---------- */
+
+app.post("/world/save", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
+
+    const incomingWorld = req.body?.world;
+
+    if (
+      !incomingWorld ||
+      typeof incomingWorld !== "object" ||
+      !incomingWorld.code
+    ) {
+      return res.status(400).json({
+        error: "Missing world data.",
+      });
+    }
+
+    const incomingCode = cleanCode(incomingWorld.code);
+
+    if (incomingCode !== session.worldCode) {
+      return res.status(403).json({
+        error: "You cannot save another world.",
+      });
+    }
+
+    const existingResult = await pool.query(
+      `
+      SELECT data
+      FROM worlds
+      WHERE code = $1
+      LIMIT 1
+      `,
+      [session.worldCode]
+    );
+
+    if (!existingResult.rows.length) {
+      return res.status(404).json({
+        error: "World not found.",
+      });
+    }
+
+    const existingWorld = existingResult.rows[0].data;
+    const nextWorld = JSON.parse(JSON.stringify(incomingWorld));
+
+    /*
+      A kliens NEM kapja meg a jelszó hash/salt adatokat.
+      Ezért mentéskor ezeket mindig a jelenlegi szerveres
+      példányból tesszük vissza.
+    */
+    if (!nextWorld.accounts) nextWorld.accounts = {};
+
+    for (const [accountId, oldAccount] of Object.entries(
+      existingWorld.accounts || {}
+    )) {
+      /*
+        Ha az accountot a kliens ténylegesen törölte, és a deleted
+        tombstone is ott van, nem hozzuk vissza.
+      */
+      const wasDeleted = Boolean(
+        nextWorld.deleted &&
+        nextWorld.deleted[accountId]
+      );
+
+      if (wasDeleted && !nextWorld.accounts[accountId]) {
+        continue;
+      }
+
+      if (!nextWorld.accounts[accountId]) {
+        nextWorld.accounts[accountId] =
+          JSON.parse(JSON.stringify(oldAccount));
+      }
+
+      if (oldAccount?.hash) {
+        nextWorld.accounts[accountId].hash = oldAccount.hash;
+      }
+
+      if (oldAccount?.salt) {
+        nextWorld.accounts[accountId].salt = oldAccount.salt;
+      }
+    }
+
+    nextWorld.code = session.worldCode;
+    nextWorld.rev = Math.max(
+      Number(nextWorld.rev || 0),
+      Number(existingWorld.rev || 0)
+    ) + 1;
+
+    if (nextWorld.universe) {
+      nextWorld.universe.at = Date.now();
+    }
+
+    await pool.query(
+      `
+      UPDATE worlds
+      SET data = $2::jsonb,
+          updated_at = NOW()
+      WHERE code = $1
+      `,
+      [
+        session.worldCode,
+        JSON.stringify(nextWorld),
+      ]
+    );
+
+    return res.json({
+      ok: true,
+      world: safeWorldForClient(nextWorld),
+    });
+  } catch (err) {
+    console.error("World save error:", err);
+
+    return res.status(500).json({
+      error: "World save failed.",
+    });
+  }
+});
 function extractText(content) {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) return content.map((part) => (typeof part === "string" ? part : part.text || "")).join("");
@@ -115,7 +917,7 @@ if (!ANTHROPIC_API_KEY && !GEMINI_API_KEY && !OPENAI_API_KEY) {
   console.info("Anthropic API key not configured; using other providers if requested.");
 }
 
-app.use(bodyParser.json({ limit: "1mb" }));
+app.use(bodyParser.json({ limit: "8mb" }));
 
 // CORS: engedélyezzük a fejlesztéshez (ha szükséges, szűkítsd a domaineket).
 app.use((req, res, next) => {

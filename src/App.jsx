@@ -2311,7 +2311,91 @@ const store = {
     return true;
   },
 };
+/* ---------- szerveres account + world API ---------- */
 
+async function apiJson(path, options = {}) {
+  const headers = {
+    ...(options.body
+      ? { "Content-Type": "application/json" }
+      : {}),
+    ...(options.headers || {}),
+  };
+
+  const res = await fetch(path, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
+
+  let data = null;
+
+  try {
+    data = await res.json();
+  } catch (e) {
+    data = null;
+  }
+
+  if (!res.ok) {
+    const err = new Error(
+      (data && data.error) || `HTTP ${res.status}`
+    );
+
+    err.status = res.status;
+    err.data = data;
+
+    throw err;
+  }
+
+  return data;
+}
+
+async function serverLogin(code, username, password) {
+  return apiJson("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      code,
+      username,
+      password,
+    }),
+  });
+}
+
+async function serverMigrate(world, username, password) {
+  return apiJson("/auth/migrate", {
+    method: "POST",
+    body: JSON.stringify({
+      world,
+      username,
+      password,
+    }),
+  });
+}
+
+async function serverSession() {
+  return apiJson("/auth/session", {
+    method: "GET",
+  });
+}
+
+async function serverLogout() {
+  return apiJson("/auth/logout", {
+    method: "POST",
+  });
+}
+async function serverDeleteAccount() {
+  return apiJson("/account/delete", {
+    method: "POST",
+  });
+}
+
+async function serverSaveWorld(world) {
+  return apiJson("/world/save", {
+    method: "POST",
+    body: JSON.stringify({
+      world,
+    }),
+  });
+}
 function migrate(w) {
   if (!w || !w.universe) return w;
   if (!w.universe.year) w.universe.year = String(new Date().getFullYear());
@@ -3476,50 +3560,312 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
   const needPw = true;
 
   const go = async () => {
-    const c = code.trim().toLowerCase();
-    if (!c) return setErr(tt("Adj meg egy világkódot.", "Enter a world code."));
-    if (!u) return setErr(tt("Adj meg egy felhasználónevet (betűk, számok, pont, kötőjel).", "Enter a username (letters, numbers, dot, hyphen)."));
-    if (needPw && pw.length < 4) return setErr(tt("A jelszó legyen legalább 4 karakter.", "The password must be at least 4 characters."));
-    if (needPw && needName && pw !== pw2) return setErr(tt("A két jelszó nem egyezik.", "The two passwords don't match."));
-    if (needName && !name.trim()) return setErr(tt("Add meg a karaktered nevét.", "Enter your character's name."));
-    setBusy(true); setErr("");
-    try {
-      const existing = await loadWorld(c);
+  const c = code.trim().toLowerCase();
 
-      if (isNew) {
-        if (existing) throw new Error(tt("Ez a világkód már foglalt. Válassz másikat, vagy lépj be a Belépés fülön.", "This world code is already taken. Choose another, or log in on the Login tab."));
-        const w = seed ? seedWorld(c) : emptyWorld(c);
-        w.aiLang = lang === "en" ? "en" : "hu";
-        const meId = await addAccount(w, u, pw, name.trim());
-        w.owner = meId;
-        if (!(await saveWorld(w))) throw new Error(tt("A világ mentése nem sikerült. Próbáld újra.", "Failed to save the world. Try again."));
-        onReady(w, meId);
-        return;
+  if (!c) {
+    return setErr(
+      tt(
+        "Adj meg egy világkódot.",
+        "Enter a world code."
+      )
+    );
+  }
+
+  if (!u) {
+    return setErr(
+      tt(
+        "Adj meg egy felhasználónevet (betűk, számok, pont, kötőjel).",
+        "Enter a username (letters, numbers, dot, hyphen)."
+      )
+    );
+  }
+
+  if (needPw && pw.length < 4) {
+    return setErr(
+      tt(
+        "A jelszó legyen legalább 4 karakter.",
+        "The password must be at least 4 characters."
+      )
+    );
+  }
+
+  if (needPw && needName && pw !== pw2) {
+    return setErr(
+      tt(
+        "A két jelszó nem egyezik.",
+        "The two passwords don't match."
+      )
+    );
+  }
+
+  if (needName && !name.trim()) {
+    return setErr(
+      tt(
+        "Add meg a karaktered nevét.",
+        "Enter your character's name."
+      )
+    );
+  }
+
+  setBusy(true);
+  setErr("");
+
+  try {
+    /* ========================================================
+       ÚJ VILÁG
+       ======================================================== */
+
+    if (isNew) {
+      /*
+        Először csak azt nézzük meg, hogy ezen az eszközön
+        nincs-e már ilyen kódú régi világ.
+      */
+      const localExisting = await loadWorld(c);
+
+      if (localExisting) {
+        throw new Error(
+          tt(
+            "Ez a világkód már foglalt. Válassz másikat, vagy lépj be a Belépés fülön.",
+            "This world code is already taken. Choose another, or log in on the Login tab."
+          )
+        );
       }
 
-      if (!existing) throw new Error(tt("Nincs ilyen világkód. Ellenőrizd, vagy hozz létre új világot.", "No such world code. Check it, or create a new world."));
-      const acc = accByUser(existing, u);
+      const w = seed
+        ? seedWorld(c)
+        : emptyWorld(c);
 
-      // belépés meglévő profillal
-      if (!acc) throw new Error(tt("Ezzel a névvel nincs profil ebben a világban. Ellenőrizd a nevet, vagy hozz létre új világot.", "There's no profile with this name in this world. Check the name, or create a new world."));
-      if (!acc.hash) {
-        // örökölt, jelszó nélküli profil: az első belépő állítja be a jelszót
-        const salt = newSalt();
-        acc.salt = salt;
-        acc.hash = await hashPw(pw, salt);
-        existing.rev = (existing.rev || 0) + 1;
-        await saveWorld(existing);
-        onReady(existing, acc.id);
-        return;
+      w.aiLang = lang === "en" ? "en" : "hu";
+
+      const localMeId = await addAccount(
+        w,
+        u,
+        pw,
+        name.trim()
+      );
+
+      w.owner = localMeId;
+
+      /*
+        Helyi biztonsági másolat továbbra is készül.
+      */
+      if (!(await saveWorld(w))) {
+        throw new Error(
+          tt(
+            "A világ helyi mentése nem sikerült.",
+            "Failed to save the world locally."
+          )
+        );
       }
-      const h = await hashPw(pw, acc.salt);
-      if (h !== acc.hash) throw new Error(tt("Hibás jelszó ehhez a felhasználónévhez.", "Wrong password for this username."));
-      onReady(existing, acc.id);
-    } catch (e) {
-      setErr((e && e.message) || tt("Nem sikerült a belépés.", "Login failed."));
+
+      /*
+        Az új világot rögtön feltöltjük PostgreSQL-be.
+        A migrate endpoint azt is ellenőrzi, hogy a kód
+        nincs-e már foglalva a szerveren.
+      */
+      let created;
+
+      try {
+        created = await serverMigrate(
+          w,
+          u,
+          pw
+        );
+      } catch (e) {
+        if (e && e.status === 409) {
+          throw new Error(
+            tt(
+              "Ez a világkód már foglalt a szerveren. Válassz másikat.",
+              "This world code is already taken on the server. Choose another."
+            )
+          );
+        }
+
+        throw e;
+      }
+
+      const serverWorld = migrate(
+        created && created.world
+          ? created.world
+          : w
+      );
+
+      const serverMeId =
+        (created && created.meId) ||
+        localMeId;
+
+      onReady(
+        serverWorld,
+        serverMeId
+      );
+
+      return;
     }
+
+    /* ========================================================
+       BELÉPÉS MEGLÉVŐ VILÁGBA
+       ======================================================== */
+
+    /*
+      ELŐSZÖR mindig a PostgreSQL-t próbáljuk.
+
+      Ez az, amitől egy teljesen másik telefonon/laptopon
+      is működni fog a world code + username + password.
+    */
+    try {
+      const result = await serverLogin(
+        c,
+        u,
+        pw
+      );
+
+      if (
+        !result ||
+        !result.world ||
+        !result.meId
+      ) {
+        throw new Error(
+          tt(
+            "A szerver hibás belépési választ adott.",
+            "The server returned an invalid login response."
+          )
+        );
+      }
+
+      const serverWorld = migrate(
+        result.world
+      );
+
+      onReady(
+        serverWorld,
+        result.meId
+      );
+
+      return;
+    } catch (serverError) {
+      /*
+        401 = a világ létezik a szerveren,
+        csak a username/jelszó rossz.
+
+        Ilyenkor NEM próbáljuk egy helyi mentéssel
+        felülírni.
+      */
+      if (
+        serverError &&
+        serverError.status === 401
+      ) {
+        throw new Error(
+          tt(
+            "Hibás felhasználónév vagy jelszó.",
+            "Wrong username or password."
+          )
+        );
+      }
+
+      /*
+        404 = a világ még nincs PostgreSQL-ben.
+
+        Ez várható a jelenlegi Beacon Falls világod
+        legelső szerveres belépésénél.
+      */
+      if (
+        !serverError ||
+        serverError.status !== 404
+      ) {
+        throw serverError;
+      }
+    }
+
+    /* ========================================================
+       RÉGI HELYI VILÁG ELSŐ MIGRÁCIÓJA
+       ======================================================== */
+
+    const localWorld = await loadWorld(c);
+
+    if (!localWorld) {
+      throw new Error(
+        tt(
+          "Nincs ilyen világkód. Ellenőrizd, vagy hozz létre új világot.",
+          "No such world code. Check it, or create a new world."
+        )
+      );
+    }
+
+    /*
+      A szerver itt ellenőrzi a localWorld-ben található
+      accountot és a megadott jelszót.
+
+      Csak sikeres ellenőrzés után kerül PostgreSQL-be.
+    */
+    let migratedResult;
+
+    try {
+      migratedResult = await serverMigrate(
+        localWorld,
+        u,
+        pw
+      );
+    } catch (e) {
+      if (e && e.status === 401) {
+        throw new Error(
+          tt(
+            "Hibás felhasználónév vagy jelszó.",
+            "Wrong username or password."
+          )
+        );
+      }
+
+      /*
+        Ha közben valahogy már felkerült a világ,
+        próbáljuk meg rendes szerveres belépéssel.
+      */
+      if (e && e.status === 409) {
+        const loginResult = await serverLogin(
+          c,
+          u,
+          pw
+        );
+
+        onReady(
+          migrate(loginResult.world),
+          loginResult.meId
+        );
+
+        return;
+      }
+
+      throw e;
+    }
+
+    if (
+      !migratedResult ||
+      !migratedResult.world ||
+      !migratedResult.meId
+    ) {
+      throw new Error(
+        tt(
+          "A világ szerverre költöztetése nem sikerült.",
+          "Failed to migrate the world to the server."
+        )
+      );
+    }
+
+    onReady(
+      migrate(migratedResult.world),
+      migratedResult.meId
+    );
+  } catch (e) {
+    setErr(
+      (e && e.message) ||
+        tt(
+          "Nem sikerült a belépés.",
+          "Login failed."
+        )
+    );
+  } finally {
     setBusy(false);
-  };
+  }
+};
 
 
   /* Mentésfájlból is be lehet lépni — ez a biztos út másik eszközön. */
@@ -6491,29 +6837,131 @@ export default function App() {
   }, []);
 
   const SESSION = "masvilag:session";
-  useEffect(() => {
-    if (world || !hasStore) return;
-    let alive = true;
-    (async () => {
-      try {
-        const r = await window.storage.get(SESSION, false);
-        if (!r || !alive) return;
-        const sess = JSON.parse(r.value);
-        if (!sess || !sess.code || !sess.meId) return;
-        const wld = await loadWorld(sess.code);
-        if (!alive || !wld || !wld.accounts || !wld.accounts[sess.meId]) return;
-        const preferred = asLang((wld.userSettings && wld.userSettings[sess.meId] && wld.userSettings[sess.meId].language) || lang);
-        const settings = (wld.userSettings && wld.userSettings[sess.meId]) || {};
-        setLangState(preferred);
-        saveLang(preferred);
-        setTab(settings.lastTab || "feed");
-        setChatId(settings.lastChatId || null);
-        setWorld(wld); setMeId(sess.meId);
-      } catch (e) { /* nincs érvényes munkamenet */ }
-    })();
-    return () => { alive = false; };
-  }, [world, lang]);
 
+useEffect(() => {
+  if (world) return;
+
+  let alive = true;
+
+  (async () => {
+    /*
+      1. Először megpróbáljuk a szerveres sessiont.
+      Ez fog működni telefonon/laptopon és refresh után is,
+      miután a világ már PostgreSQL-ben van.
+    */
+    try {
+      const session = await serverSession();
+
+      if (
+        alive &&
+        session &&
+        session.authenticated &&
+        session.world &&
+        session.meId
+      ) {
+        const wld = migrate(session.world);
+        const id = session.meId;
+
+        if (
+          wld &&
+          wld.accounts &&
+          wld.accounts[id]
+        ) {
+          const preferred = asLang(
+            (wld.userSettings &&
+              wld.userSettings[id] &&
+              wld.userSettings[id].language) ||
+              wld.aiLang ||
+              lang
+          );
+
+          const settings =
+            (wld.userSettings &&
+              wld.userSettings[id]) ||
+            {};
+
+          setLangState(preferred);
+          saveLang(preferred);
+          setTab(settings.lastTab || "feed");
+          setChatId(settings.lastChatId || null);
+
+          setWorld(wld);
+          setMeId(id);
+
+          lastSavedContent.current = contentOf(wld);
+          setSaveState("saved");
+          setSaveAt(now());
+
+          return;
+        }
+      }
+    } catch (e) {
+      /*
+        Nincs még szerveres session / a világ még nincs migrálva.
+        Ez az átállás alatt teljesen normális.
+      */
+    }
+
+    /*
+      2. Fallback: a mostani böngészős mentésed.
+      Ezt egyelőre megtartjuk, nehogy a jelenlegi világod
+      eltűnjön az adatbázisra költözés előtt.
+    */
+    if (!hasStore || !alive) return;
+
+    try {
+      const r = await window.storage.get(
+        SESSION,
+        false
+      );
+
+      if (!r || !alive) return;
+
+      const sess = JSON.parse(r.value);
+
+      if (
+        !sess ||
+        !sess.code ||
+        !sess.meId
+      ) return;
+
+      const wld = await loadWorld(sess.code);
+
+      if (
+        !alive ||
+        !wld ||
+        !wld.accounts ||
+        !wld.accounts[sess.meId]
+      ) return;
+
+      const preferred = asLang(
+        (wld.userSettings &&
+          wld.userSettings[sess.meId] &&
+          wld.userSettings[sess.meId].language) ||
+          lang
+      );
+
+      const settings =
+        (wld.userSettings &&
+          wld.userSettings[sess.meId]) ||
+        {};
+
+      setLangState(preferred);
+      saveLang(preferred);
+      setTab(settings.lastTab || "feed");
+      setChatId(settings.lastChatId || null);
+
+      setWorld(wld);
+      setMeId(sess.meId);
+    } catch (e) {
+      /* nincs helyi munkamenet sem */
+    }
+  })();
+
+  return () => {
+    alive = false;
+  };
+}, [world, lang]);
   const [prefill, setPrefill] = useState("");
 
   const signIn = useCallback((wld, id) => {
@@ -6544,67 +6992,116 @@ export default function App() {
     });
   }, [lang]);
 
-  const deleteOwnAccount = useCallback(async () => {
+ const deleteOwnAccount = useCallback(async () => {
   const current = wRef.current;
   const id = meId;
 
   if (!current || !id) return;
 
-  // Ne tudjon egy korábban időzített autosave visszaírni régi adatot.
-  if (timer.current) clearTimeout(timer.current);
-  if (mediaTimer.current) clearTimeout(mediaTimer.current);
+  /*
+    Leállítjuk a függőben lévő autosave-et.
+    Account törlés közben semmi ne tudjon visszamenteni
+    egy régebbi állapotot.
+  */
+  if (timer.current) {
+    clearTimeout(timer.current);
+  }
+
+  if (mediaTimer.current) {
+    clearTimeout(mediaTimer.current);
+  }
 
   try {
     setSaveState("saving");
+    setErr("");
 
-    const next = JSON.parse(JSON.stringify(current));
+    /*
+      1. A VALÓDI törlés a szerveren történik.
+      Ez törli az accountot PostgreSQL-ből és az összes
+      hozzá tartozó szerveres sessiont.
+    */
+    await serverDeleteAccount();
 
-    if (!next.deleted) next.deleted = {};
+    /*
+      2. A helyi példányból is kivesszük az accountot,
+      hogy az IndexedDB backup se tartalmazzon egy
+      "feltámasztható" régi felhasználót.
+    */
+    const next = JSON.parse(
+      JSON.stringify(current)
+    );
+
+    if (!next.deleted) {
+      next.deleted = {};
+    }
+
     next.deleted[id] = now();
 
-    // A tényleges account + karakter törlése.
-    if (next.players) delete next.players[id];
-    if (next.accounts) delete next.accounts[id];
+    if (next.accounts) {
+      delete next.accounts[id];
+    }
 
-    // Személyes, csak ehhez a fiókhoz tartozó adatok.
-    if (next.userSettings) delete next.userSettings[id];
-    if (next.notify) delete next.notify[id];
-    if (next.mems) delete next.mems[id];
-    if (next.charMemory) delete next.charMemory[id];
+    if (next.players) {
+      delete next.players[id];
+    }
 
-    // Ha ő volt a világ tulajdonosa, ne maradjon nem létező owner ID.
+    if (next.userSettings) {
+      delete next.userSettings[id];
+    }
+
+    if (next.notify) {
+      delete next.notify[id];
+    }
+
+    if (next.mems) {
+      delete next.mems[id];
+    }
+
+    if (next.charMemory) {
+      delete next.charMemory[id];
+    }
+
     if (next.owner === id) {
-      next.owner = Object.keys(next.accounts || {})[0] || "";
+      next.owner =
+        Object.keys(next.accounts || {})[0] || "";
     }
 
-    next.rev = (next.rev || 0) + 1;
+    next.rev = Number(next.rev || 0) + 1;
 
-    if (next.universe) {
-      next.universe.at = now();
-    }
+    /*
+      Ezt CSAK helyi backupként mentjük.
+      A szerveres törlést már az /account/delete
+      biztonságosan elvégezte.
+    */
+    try {
+      await saveWorldMerged(next);
+    } catch (e) {}
 
-    // FONTOS: először ténylegesen elmentjük a törlést.
-    const saved = await saveWorldMerged(next);
-
-    if (!saved || !saved.world || (saved.world.accounts || {})[id]) {
-      throw new Error(
-        tt(
-          "A fiók törlését nem sikerült biztonságosan elmenteni.",
-          "The account deletion could not be saved safely."
-        )
-      );
-    }
-
-    // Automatikus visszalépés/session törlése.
+    /*
+      3. Régi helyi automatikus login törlése.
+    */
     if (hasStore) {
-      await window.storage.delete(SESSION, false);
+      try {
+        await window.storage.delete(
+          SESSION,
+          false
+        );
+      } catch (e) {}
     }
 
-    // Az eszköz ne emlékezzen erre a fiókra/világra belépési célként.
-    await forgetRoom(next.code);
+    /*
+      A login képernyő se emlékezzen erre
+      az account/world kombinációra.
+    */
+    try {
+      await forgetRoom(current.code);
+    } catch (e) {}
 
-    // Nagyon fontos: NEM hívjuk meg a signOut()-ot,
-    // mert az újra elmentené a korábbi állapotot.
+    /*
+      4. Kliens teljes kijelentkeztetése.
+      FONTOS: nem hívjuk a signOut()-ot,
+      mert az mentést próbálna végezni.
+    */
     wRef.current = null;
     mediaRef.current = {};
 
@@ -6614,38 +7111,99 @@ export default function App() {
     setPrefill("");
 
     mediaReady.current = false;
+
     setSaveState("saved");
   } catch (e) {
+    setSaveState("error");
+
     setErr(
       (e && e.message) ||
-      tt(
-        "A fiók törlése nem sikerült.",
-        "Account deletion failed."
-      )
+        tt(
+          "A fiók törlése nem sikerült.",
+          "Account deletion failed."
+        )
     );
   }
 }, [meId, tt]);
-const signOut = useCallback(() => {
+const signOut = useCallback(async () => {
   const w = wRef.current;
 
+  /*
+    Először leállítjuk az esetleg még várakozó autosave-et,
+    nehogy kijelentkezés után próbáljon menteni.
+  */
+  if (timer.current) {
+    clearTimeout(timer.current);
+  }
+
+  if (mediaTimer.current) {
+    clearTimeout(mediaTimer.current);
+  }
+
+  /*
+    Kijelentkezés előtt még egyszer biztosan elmentjük
+    a jelenlegi világot helyben ÉS PostgreSQL-be.
+  */
   if (w) {
-    void saveWorldMerged(w);
+    try {
+      await saveWorldMerged(w);
+    } catch (e) {
+      // A helyi mentési hiba ne akadályozza a kijelentkezést.
+    }
+
+    try {
+      await serverSaveWorld(w);
+    } catch (e) {
+      // Ha a szerveres mentés éppen nem sikerül,
+      // a helyi backup továbbra is megmarad.
+    }
 
     if (w.code) {
-      void saveMedia(w.code, mediaRef.current || {});
+      try {
+        await saveMedia(
+          w.code,
+          mediaRef.current || {}
+        );
+      } catch (e) {
+        // A média mentési hiba se akadályozza a logoutot.
+      }
     }
   }
 
+  /*
+    A PostgreSQL-ben tárolt sessiont is töröljük,
+    és a szerver eltávolítja a HttpOnly cookie-t.
+  */
+  try {
+    await serverLogout();
+  } catch (e) {
+    // Ettől még helyben kijelentkeztetjük.
+  }
+
+  /*
+    A régi helyi sessiont is töröljük.
+  */
   if (hasStore) {
     try {
-      window.storage.delete(SESSION, false);
+      await window.storage.delete(
+        SESSION,
+        false
+      );
     } catch (e) {}
   }
+
+  /*
+    Kijelentkeztetett kliensállapot.
+  */
+  wRef.current = null;
+  mediaRef.current = {};
 
   setWorld(null);
   setMeId(null);
   setMedia({});
+
   mediaReady.current = false;
+  setSaveState("saved");
 }, []);
 
 
@@ -6831,33 +7389,161 @@ const signOut = useCallback(() => {
   }, [world ? world.code : null, meId, tab, chatId]);
 
   useEffect(() => {
-    if (!world) return;
-    const json = contentOf(world);
-    if (json === lastSavedContent.current) return;
-    if (timer.current) clearTimeout(timer.current);
-    const snap = world;
-    setSaveState(typeof navigator !== "undefined" && navigator.onLine === false ? "local" : "saving");
-    timer.current = setTimeout(async () => {
-      let result = null;
-      for (let i = 0; i < 3 && !result; i++) {
-        const saved = await saveWorldMerged(snap);
-        if (saved && saved.world) { result = saved; break; }
+  if (!world) return;
+
+  const json = contentOf(world);
+
+  if (json === lastSavedContent.current) return;
+
+  if (timer.current) {
+    clearTimeout(timer.current);
+  }
+
+  const snap = world;
+
+  const offline =
+    typeof navigator !== "undefined" &&
+    navigator.onLine === false;
+
+  setSaveState(
+    offline ? "local" : "saving"
+  );
+
+  timer.current = setTimeout(async () => {
+    /*
+      1. Mindig készítünk helyi biztonsági mentést is.
+      Így egy pillanatnyi szerverhiba miatt nem veszhet el,
+      amit éppen csináltál.
+    */
+    let localResult = null;
+
+    try {
+      localResult = await saveWorldMerged(snap);
+    } catch (e) {
+      localResult = null;
+    }
+
+    /*
+      Ha nincs internet, itt megállunk.
+      A helyi példány megvan, később újrapróbáljuk a szervert.
+    */
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.onLine === false
+    ) {
+      if (localResult && localResult.world) {
+        lastSavedContent.current =
+          contentOf(localResult.world);
+
+        setSaveState("local");
+        setSaveAt(now());
+      }
+
+      return;
+    }
+
+    /*
+      2. PostgreSQL autosave.
+      Ezt legfeljebb háromszor próbáljuk meg.
+    */
+    let serverResult = null;
+    let lastError = null;
+
+    for (
+      let i = 0;
+      i < 3 && !serverResult;
+      i++
+    ) {
+      try {
+        const saved =
+          await serverSaveWorld(snap);
+
+        if (saved && saved.world) {
+          serverResult = saved;
+          break;
+        }
+      } catch (e) {
+        lastError = e;
+
+        /*
+          Lejárt / érvénytelen session esetén
+          nincs értelme háromszor ugyanazt próbálni.
+        */
+        if (e && e.status === 401) {
+          break;
+        }
+
         await wait(1000 * (i + 1));
       }
-      if (!result) {
-        setSaveState((typeof navigator !== "undefined" && navigator.onLine === false) ? "local" : "error");
-        setErr(tt("A mentés most nem sikerült. Ne zárd be — mindjárt újrapróbálom.",
-                  "Saving failed right now. Don't close the app — it will retry shortly."));
-        return;
-      }
-      lastSavedContent.current = contentOf(result.world);
-      setSaveState(result.mode === "cloud" ? "saved" : "local");
-      setSaveAt(now());
-      if (contentOf(result.world) !== json && EditLock.n === 0) setWorld(result.world);
-    }, 800);
-    return () => timer.current && clearTimeout(timer.current);
-  }, [world]);
+    }
 
+    /*
+      A helyi backup megvan, de a szerveres mentés nem.
+    */
+    if (!serverResult) {
+      if (localResult && localResult.world) {
+        lastSavedContent.current =
+          contentOf(localResult.world);
+
+        setSaveAt(now());
+      }
+
+      setSaveState("error");
+
+      if (
+        lastError &&
+        lastError.status === 401
+      ) {
+        setErr(
+          tt(
+            "A szerveres munkameneted lejárt. Jelentkezz be újra; a helyi mentésed megmaradt.",
+            "Your server session expired. Log in again; your local save is still safe."
+          )
+        );
+      } else {
+        setErr(
+          tt(
+            "A felhőmentés most nem sikerült. A helyi mentésed megmaradt, és újra fogjuk próbálni.",
+            "Cloud saving failed for now. Your local save is safe and we'll retry."
+          )
+        );
+      }
+
+      return;
+    }
+
+    /*
+      3. Sikeres PostgreSQL mentés.
+    */
+    const savedWorld = migrate(
+      serverResult.world
+    );
+
+    lastSavedContent.current =
+      contentOf(savedWorld);
+
+    setSaveState("saved");
+    setSaveAt(now());
+
+    /*
+      A szerver esetleg növelte a rev-et vagy
+      normalizált valamit. Csak akkor frissítjük
+      a React state-et, ha ténylegesen különbözik.
+    */
+    if (
+      contentOf(savedWorld) !== json &&
+      EditLock.n === 0
+    ) {
+      setWorld(savedWorld);
+    }
+  }, 800);
+
+  return () => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+    }
+  };
+}, [world]);
   const myNotes = (world && meId && world.notify && world.notify[meId]) || [];
   const unread = myNotes.filter((x) => !x.read).length;
   const topNoteId = myNotes.length ? myNotes[0].id : "";
