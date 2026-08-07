@@ -9127,7 +9127,7 @@ async function genAutoGroupTurn(w, group) {
   }
 
   /*
- * FAIR EXISTING GROUP ACTIVITY
+ * FAIR EXISTING GROUP ACTIVITY 
  *
  * Csak a csoport tényleges AI-tagjai
  * kerülhetnek szóba, de a kevesebbet
