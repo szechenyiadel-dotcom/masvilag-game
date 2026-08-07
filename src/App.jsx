@@ -107,7 +107,58 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 .bub { max-width:82%; padding:9px 12px; border-radius:14px; font-size:14px; white-space:pre-wrap; }
 .bub.me { margin-left:auto; background:var(--oxblood); border-bottom-right-radius:4px; }
 .bub.them { background:var(--raised); border:1px solid var(--line); border-bottom-left-radius:4px; }
+/* Messenger / Instagram-szerű typing indicator */
+.typing-row {
+  display:flex;
+  align-items:center;
+  gap:7px;
+  min-height:34px;
+}
 
+.typing-bub {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:4px;
+  min-width:48px;
+  height:34px;
+  padding:0 12px;
+}
+
+.typing-dot {
+  width:6px;
+  height:6px;
+  border-radius:50%;
+  background:var(--muted);
+  animation:typingBounce 1.15s ease-in-out infinite;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay:.15s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay:.30s;
+}
+
+@keyframes typingBounce {
+  0%, 60%, 100% {
+    transform:translateY(0);
+    opacity:.35;
+  }
+
+  30% {
+    transform:translateY(-4px);
+    opacity:1;
+  }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .typing-dot {
+    animation:none;
+    opacity:.7;
+  }
+}
 /* jelenet */
 .scene-hd { position:sticky; top:0; z-index:5; background:var(--ink); padding:10px 0; }
 .narr { font-family:Fraunces, Georgia, serif; font-style:italic; color:var(--muted); text-align:center;
@@ -6265,6 +6316,7 @@ function Scene({ w, scene, update, setErr, onBack }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState("");
   const endRef = useRef(null);
+  const sendLockRef = useRef(false);
   const cast = w.chars.filter((c) => scene.cast.indexOf(c.id) >= 0);
   const who = (id) => charById(w, id);
 
@@ -6912,7 +6964,22 @@ Formátum:
             </div>
           );
         })}
-        {busy && <div className="bub them"><Loader2 size={14} className="spin" /></div>}
+        {busy && (
+  <div className="typing-row">
+    <Av
+      src={c.avatar}
+      name={c.name}
+      size={26}
+      radius={99}
+    />
+
+    <div className="bub them typing-bub">
+      <span className="typing-dot" />
+      <span className="typing-dot" />
+      <span className="typing-dot" />
+    </div>
+  </div>
+)}
         <div ref={endRef} />
       </div>
 
@@ -6962,8 +7029,17 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
       : text
   ).trim();
 
-  if (!t || !c) return;
+  if (
+    !t ||
+    !c ||
+    busy ||
+    sendLockRef.current
+  ) {
+    return;
+  }
 
+  sendLockRef.current = true;
+  setBusy(true);
   setText("");
 
   const ck = chatKey(
@@ -6971,63 +7047,97 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
     c.id
   );
 
+  const sentAt = now();
+
+  /*
+   * FONTOS:
+   * Az AI már AZ ELSŐ elküldött üzenetet is
+   * a világ tényleges részeként kapja meg.
+   *
+   * Nem várunk arra, hogy a React újrarenderelje
+   * a w propot.
+   */
+  const requestWorld =
+    JSON.parse(
+      JSON.stringify(w)
+    );
+
+  if (!requestWorld.chats) {
+    requestWorld.chats = {};
+  }
+
+  requestWorld.chats[ck] = [
+    ...(requestWorld.chats[ck] || []),
+    {
+      from: "me",
+      text: t,
+      ts: sentAt,
+    },
+  ];
+
+  /*
+   * A képernyőn is azonnal megjelenik
+   * a játékos üzenete.
+   */
   update((n) => {
+    if (!n.chats) {
+      n.chats = {};
+    }
+
     n.chats[ck] = [
       ...(n.chats[ck] || []),
       {
         from: "me",
         text: t,
-        ts: now(),
+        ts: sentAt,
       },
     ];
   });
 
-  setBusy(true);
-
   try {
-    const hist = [
-      ...msgs,
-      {
-        from: "me",
-        text: t,
-      },
-    ]
-      .slice(-16)
+    /*
+     * A beszélgetési előzményt is abból
+     * az állapotból építjük, amelyben
+     * az új üzenet már biztosan benne van.
+     */
+    const hist = (
+      requestWorld.chats[ck] || []
+    )
+      .slice(-14)
       .map(
         (m) =>
           `${
             m.from === "me"
-              ? w.player.name
+              ? requestWorld.player.name
               : c.name
           }: ${m.text}`
       )
       .join("\n");
 
     const rel = getRel(
-      w,
+      requestWorld,
       c.id,
-      w.meId
+      requestWorld.meId
     );
 
     const out = await askWorldJSON(
-      w,
-      engineFor(w),
+      requestWorld,
+      engineFor(requestWorld),
       `${worldContext(
-        w,
+        requestWorld,
         [c.id],
         true,
         c.id
       )}
 
-TE MOST ${c.name.toUpperCase()} VAGY egy privát beszélgetésben ${w.player.name} karakterrel.
+TE MOST ${c.name.toUpperCase()} VAGY egy privát beszélgetésben ${requestWorld.player.name} karakterrel.
 
-Kapcsolat:
-${rel.score}${
+Kapcsolat: ${rel.score}${
         rel.mood
           ? ` — ${
               worldLanguage(
-                w,
-                w.meId
+                requestWorld,
+                requestWorld.meId
               ) === "en"
                 ? "RIGHT NOW YOU FEEL"
                 : "MOST EZT ÉRZED IRÁNTA"
@@ -7038,17 +7148,16 @@ ${rel.score}${
         (rel.bond || rel.type)
           ? ` (${
               worldLanguage(
-                w,
-                w.meId
+                requestWorld,
+                requestWorld.meId
               ) === "en"
                 ? "family bond fact"
                 : "a rokoni kötelék tény"
             }: ${localizedBond(
-              rel.bond ||
-                rel.type,
+              rel.bond || rel.type,
               worldLanguage(
-                w,
-                w.meId
+                requestWorld,
+                requestWorld.meId
               )
             )})`
           : ""
@@ -7056,8 +7165,8 @@ ${rel.score}${
         rel.hidden
           ? ` | ${
               worldLanguage(
-                w,
-                w.meId
+                requestWorld,
+                requestWorld.meId
               ) === "en"
                 ? "hidden"
                 : "rejtett"
@@ -7065,9 +7174,9 @@ ${rel.score}${
           : ""
       }
 
-AMIRE EMLÉKSZEL:
+Amire emlékszel:
 ${selfMemoryForPrompt(
-  w,
+  requestWorld,
   c.id
 )}
 
@@ -7076,189 +7185,76 @@ ${hist}
 
 ${voiceCard(c)}
 
-${repetitionGuard(
-  w,
-  [c.id],
-  "privát chat"
-)}
-
 PRIVÁT CHAT SZABÁLYOK:
 
-- Válaszolj úgy, mint ${c.name}, ne úgy, mint egy asszisztens.
-- Ez VALÓDI privát chat, NEM roleplay-jelenet.
-- Úgy írj, mintha ${c.name} ténylegesen a telefonján válaszolna ${w.player.name} üzenetére.
-- A chat legyen spontán, közvetlen és karakterhű.
-- A válasz TÖBBSÉGE rövid legyen.
-- Általában 1-4 rövid chatmondat vagy üzenetrész elég.
-- Egyetlen szó is lehet teljes válasz.
-- Néhány szavas válasz teljesen rendben van.
-- Ha egy rövid reakció természetesebb, MINDIG azt válaszd a hosszabb megfogalmazás helyett.
-- Ne próbálj minden válaszból teljes, szépen felépített mini beszédet csinálni.
-- A félmondatok, töredékek, rövid visszakérdezések és spontán reakciók természetesek.
-- Nem kell mindig tökéletes nyelvtani mondatokat írni, ha ${c.name} chatstílusához ez nem illik.
-- Ne írj hosszú bekezdést.
-- Ne írj monológot.
-- Ne írj regényszerű, költői vagy irodalmi leírást.
-- Ne narráld a jelenetet.
+- Most KÖZVETLENÜL a játékos legutóbbi üzenetére válaszolj.
+- Már egyetlen játékosi üzenet is elegendő ahhoz, hogy válaszolj.
+- Soha ne várj arra, hogy a játékos még egy üzenetet küldjön.
+- Ez telefonos privát chat, nem roleplay-jelenet.
+- A válasz lehet egyetlen szó, félmondat, rövid mondat vagy néhány rövid üzenetszerű mondat.
+- Ne írj fölöslegesen hosszú monológot.
+- Ne narrálj cselekvéseket.
 - Ne írj belső gondolatokat.
 - Ne használj *csillagok közé tett cselekvéseket*.
-- Ne írd le, hogyan néz, mosolyog, sóhajt, mozdul vagy mit csinál fizikailag.
-- Csak azt írd, amit ténylegesen elküldene chatüzenetként.
-- Ne magyarázd el a kapcsolatotokat.
-- Ne foglald össze, mit érzel iránta, mintha karakterelemzést írnál.
-- Ne mondd ki fölöslegesen azt, amit mindketten már tudtok.
-- Ne ismételd vissza szükségtelenül azt, amit ${w.player.name} éppen mondott.
-- Nem kötelező minden válasz végére kérdést tenni.
-- Nem kell minden válasznak új témát vagy beszélgetésindítót tartalmaznia.
-- Néha egy sima reakció a legtermészetesebb válasz.
-
-TERMÉSZETES CHATSTÍLUS:
-
-- Lehet félmondat.
-- Lehet egyszavas válasz.
-- Lehet beszólás.
-- Lehet visszakérdezés.
-- Lehet poén.
-- Lehet flört.
-- Lehet gúny.
-- Lehet sértődés.
-- Lehet vita.
-- Lehet féltékeny vagy birtokló reakció.
-- Lehet provokáció.
-- Lehet támogatás.
-- Lehet száraz vagy közönyös válasz.
-- Lehet zavart reakció.
-- Lehet csak egy becenév vagy megszólítás.
-- Lehet spontán felkiáltás.
-- Reagálj arra, amit ${w.player.name} TÉNYLEG mondott, ne egy általános kapcsolati sablonra.
-
-- Használhatsz kisbetűt, NAGYBETŰT, rövidítéseket, szlenget, internetes nyelvet, elnyújtott szavakat, több kérdőjelet vagy felkiáltójelet, ha ez ${c.name} stílusához illik.
-- Nem kell minden üzenetnek ugyanazzal a nagybetűs, szabályos mondatkezdéssel indulnia.
-- A központozás is tükrözze a karaktert.
-- Egy rideg karakter írhat röviden és ponttal.
-- Egy impulzív karakter írhat szétesettebben.
-- Egy játékos/flörtölős karakter lehet lazább és expresszívebb.
-- Egy online aktív karakter természetesen használhat internetes rövidítéseket és emojikat.
-- Egy visszafogott karakter maradhat minimalista.
-- Ne tedd az összes karakter chatstílusát ugyanolyan steril, rendezett szöveggé.
-
-EMOJI:
-
-- Az emoji-használat legyen TÉNYLEGESEN jelen ${c.name} chatjében, HA az illik a karakteréhez.
-- Ha ${c.name} olyan karakter, aki természetesen használna emojit privát üzenetben, időnként ténylegesen használj is emojit; ne válaszd automatikusan mindig a nulla emojit.
-- Általában 1-2 emoji elég egy válaszban.
-- Néha egyetlen emoji is lehet teljes válasz.
-- Az emoji lehet a szöveg elején, közepén vagy végén.
-- Nem kell minden válaszban emojit használni.
-- Ne erőltesd az emojit, ha ${c.name} személyiségéhez vagy aktuális hangulatához nem illik.
-- Ritkán több emoji is lehet, ha a karakter kifejezetten így ír.
-- Ne ismételd folyton ugyanazokat az emojikat.
-- Ne legyen minden flört ❤️ vagy 😏.
-- Ne legyen minden nevetés 😂 vagy 😭.
-- Ne legyen minden düh 😡.
-- Az emoji típusa tükrözze ${c.name} saját személyiségét, humorát, hangulatát és a konkrét beszélgetést.
-
-CHAT-RITMUS:
-
-- Ne legyen minden válasz azonos hosszúságú.
-- Egymás után lehet egy nagyon rövid és később egy valamivel hosszabb válasz.
-- Ha ${w.player.name} csak egy gyors reakciót küld, ne válaszolj rá automatikusan négy mondattal.
-- Ha a téma komolyabb, lehet valamivel hosszabb a válasz, de továbbra is chatként hasson.
-- A valódi privát beszélgetésben az emberek nem fejtik ki minden egyes alkalommal teljesen a gondolataikat.
-- Hagyd meg a kimondatlan dolgokat is, ha az természetes.
-- A kapcsolat, vonzalom, harag, humor vagy feszültség a szóválasztásból és a stílusból érződjön, ne magyarázatból.
-
-ISMÉTLÉSVÉDELEM:
-
-- Ne ismételd ${c.name} korábbi chatüzeneteit.
-- Ne parafrazáld újra ugyanazt a gondolatot csak más szavakkal.
-- Ne használd folyton ugyanazokat a mondatkezdéseket.
-- Ne használd minden válaszban ugyanazt a becenevet.
-- Ne ismételd ugyanazokat a poénokat.
-- Ne ismételd ugyanazokat a sértéseket.
-- Ne ismételd ugyanazokat a fenyegetéseket.
-- Ne ismételd ugyanazokat a flörtölési formulákat.
-- Ne használd mindig ugyanazokat az emoji-kombinációkat.
-- A példamondatok és hangminták CSAK stílusiránymutatások.
-- SOHA ne másold őket.
-- SOHA ne készíts belőlük közeli parafrázist.
-- A példákból ${c.name} ritmusát, szóhasználatát, humorát, közvetlenségét, nyersességét és kommunikációs szokásait tanuld meg.
-- Minden konkrét válasz legyen friss.
-
-LEGFONTOSABB:
-
-A válasz első pillantásra úgy nézzen ki, mint egy valódi privát chatüzenet ${c.name} telefonjáról. Ha inkább hangzik regénybeli párbeszédnek, karakterelemzésnek, terápiás válasznak vagy AI által megírt tökéletes mini beszédnek, ÍRD ÚJRA rövidebbre, lazábbra és természetesebbre.
-
-ISMÉTLÉSVÉDELEM:
-
-- Ne ismételd a saját korábbi mondataidat.
-- Ne parafrazáld újra ugyanazt, amit már korábban elmondtál.
-- Ne használd folyton ugyanazokat a mondatkezdéseket.
-- Ne ismételd ugyanazokat a poénokat.
-- Ne ismételd ugyanazokat a sértéseket.
-- Ne ismételd ugyanazokat a fenyegetéseket.
-- Ne használd minden alkalommal ugyanazt a flörtölési formulát.
-- Ne ragadj bele ugyanabba a becenévbe vagy szófordulatba.
-- Ha korábban már nagyon hasonlóan válaszoltál, most fogalmazz teljesen másképp.
-- A karakter hangmintái és példamondatai CSAK stílusiránymutatások.
-- SOHA ne másold őket.
-- SOHA ne írj belőlük közeli parafrázist.
-- A szóhasználatot, ritmust, szlenget, írásjeleket és személyiséget tanuld meg belőlük, ne a konkrét mondatokat.
-
-NYELVTAN:
-
-- Magadról egyes szám első személyben beszélj.
-- ${w.player.name} karaktert tegezve, egyes szám második személyben szólítsd meg.
-- Például: "hol vagy", "megígérted", "téged kereslek".
+- Reagálj arra, amit a játékos TÉNYLEG most írt.
+- Maradj teljesen karakterhű.
+- A példamondatok és hangminták kizárólag stílusirányok, soha ne másold vagy parafrazáld őket.
+- Ha a karakter természetesen használ emojit, használhatsz valódi emojit is.
+- Ha nem használ emojit, ne erőltesd.
+- Ne legyél udvarias asszisztens.
+- Ne írj a játékos helyett.
+- Magadról E/1-ben beszélj.
+- ${requestWorld.player.name} karaktert E/2-ben, tegezve szólítsd meg.
 - Magázás tilos.
-- SOHA ne írj ${w.player.name} helyett.
 
-A "mood" mezőben mindig add meg, mit érzel MOST iránta, akkor is, ha a "delta" nulla.
+A "mood" mezőben mindig add meg,
+mit érzel MOST iránta,
+akkor is, ha a "delta" nulla.
 
 Formátum:
-
-{"reply":"a rövid, természetes válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`,
-      { maxTokens: 900 }
+{"reply":"a válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
     );
 
-    update((n) => {
-      const reply =
-        cleanGeneratedUtterance(
-          n,
-          c.id,
-          out.reply || "…",
-          360
-        ) || "…";
+    const reply = String(
+      out &&
+      out.reply !== undefined
+        ? out.reply
+        : ""
+    ).trim();
 
+    if (!reply) {
+      throw new Error(
+        tt(
+          "Az AI nem adott chatválaszt.",
+          "The AI returned no chat reply."
+        )
+      );
+    }
+
+    update((n) => {
       n.chats[ck] = [
         ...(n.chats[ck] || []),
         {
           from: "them",
           text: reply,
           ts: now(),
-          language:
-            worldLanguage(
-              n,
-              n.meId
-            ),
+          language: worldLanguage(
+            n,
+            n.meId
+          ),
         },
       ];
 
-      applyChanges(
-        n,
-        [
-          {
-            a: c.id,
-            b: w.meId,
-            delta:
-              Number(
-                out.delta
-              ) || 0,
-            mood: out.mood,
-            why: out.why,
-          },
-        ]
-      );
+      applyChanges(n, [
+        {
+          a: c.id,
+          b: requestWorld.meId,
+          delta:
+            Number(out.delta) || 0,
+          mood: out.mood,
+          why: out.why,
+        },
+      ]);
 
       rememberKnowledge(
         n,
@@ -7270,11 +7266,11 @@ Formátum:
           text: sysLangText(
             n,
             c.id,
-            `Privát üzenetet írtam: ${cut(
+            `Privát üzenetet kaptam: ${cut(
               reply,
               110
             )}`,
-            `I sent a private message: ${cut(
+            `I got a private message: ${cut(
               reply,
               110
             )}`
@@ -7285,7 +7281,7 @@ Formátum:
       rememberAboutTarget(
         n,
         c.id,
-        w.meId,
+        requestWorld.meId,
         {
           kind: "event",
           source: "direct_chat",
@@ -7293,11 +7289,11 @@ Formátum:
           text: sysLangText(
             n,
             c.id,
-            `${w.player.name} ezt írta: ${cut(
+            `${requestWorld.player.name} ezt írta: ${cut(
               t,
               110
             )}`,
-            `${w.player.name} wrote: ${cut(
+            `${requestWorld.player.name} wrote: ${cut(
               t,
               110
             )}`
@@ -7307,15 +7303,11 @@ Formátum:
 
       if (
         out.memory &&
-        String(
-          out.memory
-        ).trim()
+        String(out.memory).trim()
       ) {
         n.mems[c.id] = [
           ...(n.mems[c.id] || []),
-          String(
-            out.memory
-          ).trim(),
+          String(out.memory).trim(),
         ].slice(-16);
       }
     });
@@ -7327,12 +7319,11 @@ Formátum:
           "The AI didn't respond. Try again."
         )
     );
+  } finally {
+    sendLockRef.current = false;
+    setBusy(false);
   }
-
-  setBusy(false);
 };
-
-  const group = gid ? (w.groups || []).find((g) => g.id === gid) : null;
   if (group) return <GroupChat w={w} group={group} update={update} setErr={setErr} onBack={() => setGid(null)} />;
 
   if (!c) {
@@ -7452,13 +7443,32 @@ Formátum:
       <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingBottom: 8 }}>
         {msgs.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 20 }}>{tt("Írj neki elsőként.", "Be the first to write.")}</p>}
         {msgs.map((m, i) => <div key={i} className={"bub " + (m.from === "me" ? "me" : "them")}>{m.text}</div>)}
-        {busy && <div className="bub them"><Loader2 size={14} className="spin" /></div>}
+        {busy && (
+  <div className="typing-row">
+    <div className="bub them typing-bub">
+      <span className="typing-dot" />
+      <span className="typing-dot" />
+      <span className="typing-dot" />
+    </div>
+  </div>
+)}
         <div ref={endRef} />
       </div>
 
       <div className="row" style={{ marginTop: 8, gap: 8 }}>
         <input className="i" value={text} placeholder={tt("Üzenet…", "Message\u2026")} onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") send(); }} />
+          onKeyDown={(e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+
+    if (
+      !busy &&
+      text.trim()
+    ) {
+      send();
+    }
+  }
+}} />
         <button className="btn primary" onClick={() => send()} disabled={busy || !text.trim()}><Send size={15} /></button>
       </div>
     </>
@@ -9127,7 +9137,7 @@ async function genAutoGroupTurn(w, group) {
   }
 
   /*
- * FAIR EXISTING GROUP ACTIVITY 
+ * FAIR EXISTING GROUP ACTIVITY
  *
  * Csak a csoport tényleges AI-tagjai
  * kerülhetnek szóba, de a kevesebbet
