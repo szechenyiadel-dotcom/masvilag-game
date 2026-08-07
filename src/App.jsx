@@ -5730,7 +5730,7 @@ function Alerts({ w, onClose, onOpen, onClear }) {
 /* ============================================================
    Szoba
    ============================================================ */
-function World({ w, update, onLeave, setErr, onRestore, onRooms, auto, onAuto, detail, onDetail, onLang }) {
+function World({ w, update, onLeave, onDeleteAccount, setErr, onRestore, onRooms, auto, onAuto, detail, onDetail, onLang }) {
   const { tt, lang } = useLang();
   const [editPlayer, setEditPlayer] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -5989,15 +5989,7 @@ function World({ w, update, onLeave, setErr, onRestore, onRooms, auto, onAuto, d
             </p>
             <div className="row" style={{ gap: 8, marginTop: 10 }}>
               <button className="btn full tiny" style={{ background: "var(--oxblood)", borderColor: "var(--oxblood)" }}
-                onClick={() => {
-                  update((n) => {
-                    if (!n.deleted) n.deleted = {};
-                    n.deleted[w.meId] = now();
-                    delete n.players[w.meId];
-                    delete n.accounts[w.meId];
-                  });
-                  onLeave();
-                }}>{tt("Igen, töröld a fiókom", "Yes, delete my account")}</button>
+                onClick={onDeleteAccount}>{tt("Igen, töröld a fiókom", "Yes, delete my account")}</button>
               <button className="btn full tiny ghost" onClick={() => setDelAcc(false)}>{tt("Mégse", "Cancel")}</button>
             </div>
           </>
@@ -6552,7 +6544,87 @@ export default function App() {
     });
   }, [lang]);
 
-  const signOut = useCallback(() => {
+  const signOut = useCallback(() => {const deleteOwnAccount = useCallback(async () => {
+  const current = wRef.current;
+  const id = meId;
+
+  if (!current || !id) return;
+
+  // Ne tudjon egy korábban időzített autosave visszaírni régi adatot.
+  if (timer.current) clearTimeout(timer.current);
+  if (mediaTimer.current) clearTimeout(mediaTimer.current);
+
+  try {
+    setSaveState("saving");
+
+    const next = JSON.parse(JSON.stringify(current));
+
+    if (!next.deleted) next.deleted = {};
+    next.deleted[id] = now();
+
+    // A tényleges account + karakter törlése.
+    if (next.players) delete next.players[id];
+    if (next.accounts) delete next.accounts[id];
+
+    // Személyes, csak ehhez a fiókhoz tartozó adatok.
+    if (next.userSettings) delete next.userSettings[id];
+    if (next.notify) delete next.notify[id];
+    if (next.mems) delete next.mems[id];
+    if (next.charMemory) delete next.charMemory[id];
+
+    // Ha ő volt a világ tulajdonosa, ne maradjon nem létező owner ID.
+    if (next.owner === id) {
+      next.owner = Object.keys(next.accounts || {})[0] || "";
+    }
+
+    next.rev = (next.rev || 0) + 1;
+
+    if (next.universe) {
+      next.universe.at = now();
+    }
+
+    // FONTOS: először ténylegesen elmentjük a törlést.
+    const saved = await saveWorldMerged(next);
+
+    if (!saved || !saved.world || (saved.world.accounts || {})[id]) {
+      throw new Error(
+        tt(
+          "A fiók törlését nem sikerült biztonságosan elmenteni.",
+          "The account deletion could not be saved safely."
+        )
+      );
+    }
+
+    // Automatikus visszalépés/session törlése.
+    if (hasStore) {
+      await window.storage.delete(SESSION, false);
+    }
+
+    // Az eszköz ne emlékezzen erre a fiókra/világra belépési célként.
+    await forgetRoom(next.code);
+
+    // Nagyon fontos: NEM hívjuk meg a signOut()-ot,
+    // mert az újra elmentené a korábbi állapotot.
+    wRef.current = null;
+    mediaRef.current = {};
+
+    setWorld(null);
+    setMeId(null);
+    setMedia({});
+    setPrefill("");
+
+    mediaReady.current = false;
+    setSaveState("saved");
+  } catch (e) {
+    setErr(
+      (e && e.message) ||
+      tt(
+        "A fiók törlése nem sikerült.",
+        "Account deletion failed."
+      )
+    );
+  }
+}, [meId, tt]);
     const w = wRef.current;
     if (w) {
       void saveWorldMerged(w);
@@ -6971,7 +7043,13 @@ export default function App() {
           {tab === "bonds" && <Bonds w={view} update={update} setErr={setErr} />}
           {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} />}
           {tab === "chat" && <Chat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} />}
-          {tab === "world" && <World w={view} update={update} setErr={setErr} onRestore={restore} onLeave={signOut}
+          {tab === "world" && <World
+  w={view}
+  update={update}
+  setErr={setErr}
+  onRestore={restore}
+  onLeave={signOut}
+  onDeleteAccount={deleteOwnAccount}
             onRooms={() => setShowRooms(true)} auto={auto} onAuto={changeAuto}
             detail={detail} onDetail={changeDetail} onLang={changeLang} />}
         </div>
