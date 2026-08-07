@@ -4123,31 +4123,155 @@ function threadOf(w, post) {
 }
 
 async function genComments(w, post) {
-  const cast = pickCast(w, post.authorId);
-  const author = charById(w, post.authorId);
-  const th = threadOf(w, post);
-  const out = await askWorldJSON(w, engineFor(w), `${worldContext(w, cast.map((c) => c.id), true, null)}
+  const cast = pickCast(
+    w,
+    post.authorId
+  );
+
+  const author = charById(
+    w,
+    post.authorId
+  );
+
+  const th = threadOf(
+    w,
+    post
+  );
+
+  const out = await askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(
+      w,
+      cast.map((c) => c.id),
+      true,
+      null
+    )}
 
 POSZT — ${author ? author.name : "?"}:
 "${post.text}"
-${post.image ? `KÉP A POSZTBAN: ez a kép a poszthoz tartozik, és a szereplőknek a képet is látnia kell. A képről következtess, mi van rajta, ki van rajta, milyen helyszín, milyen hangulat, és hogy ez hogyan befolyásolja a reakciókat. A kép tartalma ugyanúgy fontos kontextus, mint a szöveg.` : ""}
 
-${th.text ? "EDDIGI KOMMENTSZÁL (a szögletes zárójelben a komment jele):\n" + th.text + "\n" : ""}
-${cast.slice(0, 3).map((c) => publicVoiceCard(w, c, null)).join("")}
-${repetitionGuard(w, cast.map((c) => c.id), "kommentek")}
+${
+  post.image
+    ? `KÉP A POSZTBAN:
+A szereplők látják a poszthoz tartozó képet is.
+Ha természetes, reagáljanak arra, ami ténylegesen látható rajta: személyekre, helyszínre, hangulatra vagy más fontos részletre.
+A kép ugyanúgy része a kontextusnak, mint a poszt szövege.`
+    : ""
+}
 
-Adj 2-4 új kommentet a felsorolt szereplőktől. Csak olyan szereplő szólaljon meg, akinek van oka rá.
-Mindenki a saját hangmintája szerint írjon — a kommentjeik ne legyenek felcserélhetők.
-Aki a poszt szerzőjéhez beszél, tegezze (E/2); magáról mindenki E/1-ben beszél. Magázás tilos.
-A kommentek legyenek hosszabbak, árnyaltabbak és természetesebben megfogalmazottak, mint egy gyors reakció; ne legyenek szikárak.
-Ha valaki egy konkrét korábbi kommentre reagál, a "reply_to" mezőbe írd be annak a jelét (pl. "k2").
-Aki nem szól hozzá, de tetszik neki, az a "likes" listába kerül.
+${
+  th.text
+    ? `EDDIGI KOMMENTSZÁL:
+${th.text}`
+    : "Még nincs komment."
+}
+
+${cast
+  .slice(0, 3)
+  .map(
+    (c) =>
+      publicVoiceCard(
+        w,
+        c,
+        null
+      )
+  )
+  .join("")}
+
+${repetitionGuard(
+  w,
+  cast.map((c) => c.id),
+  "kommentek"
+)}
+
+KOMMENT SZABÁLYOK:
+
+- Adj 2-4 új kommentet.
+- Csak olyan szereplő kommenteljen, akinek természetes oka van rá.
+- Ezek valódi közösségi médiás kommentek, NEM roleplay-jelenetek.
+- Egy komment általában 2-20 szó.
+- Lehet akár csak 1-2 szó vagy egy nagyon rövid reakció is, ha az természetes.
+- Ne írjanak hosszú bekezdéseket.
+- Ne írjanak monológokat.
+- Ne írjanak regényszerű vagy irodalmi szöveget.
+- Ne narráljanak jelenetet.
+- Ne írjanak belső gondolatokat.
+- Ne használjanak *csillagok közé tett cselekvéseket*.
+- Ne magyarázzák túl, mit éreznek.
+- Ne foglalják össze a kapcsolatukat a poszt szerzőjével.
+- Ne legyen minden komment teljes, szépen lezárt mini beszéd.
+
+TERMÉSZETES SOCIAL MEDIA STÍLUS:
+
+- Lehet beszólás.
+- Lehet poén.
+- Lehet flört.
+- Lehet gúny.
+- Lehet vita.
+- Lehet támogatás.
+- Lehet kérdés.
+- Lehet egy spontán reakció.
+- Lehet pletykálkodó vagy célzó megjegyzés.
+- Reagálhatnak egymás kommentjeire is.
+- Ha egy konkrét korábbi kommentre válaszolnak, használd a "reply_to" mezőt.
+- Egymást @néven is megszólíthatják, ha természetes.
+- A kommentek ne legyenek egymással felcserélhetők: mindenki a saját személyiségének megfelelően írjon.
+
+EMOJI:
+
+- Használhatnak emojit természetesen.
+- Nem kötelező.
+- Általában 0-2 emoji elég kommentenként.
+- Ne használjon mindenki emojit.
+- Ne használják folyton ugyanazokat az emojikat.
+- Az emoji-használat igazodjon az adott karakterhez.
+
+ISMÉTLÉSVÉDELEM:
+
+- Ne ismételjék a saját korábbi kommentjeiket.
+- Ne parafrazálják újra ugyanazt.
+- Ne használják folyton ugyanazokat a mondatkezdéseket.
+- Ne ismételjék ugyanazokat a poénokat.
+- Ne ismételjék ugyanazokat a sértéseket.
+- Ne ismételjék ugyanazokat a fenyegetéseket.
+- Ne használják mindig ugyanazt a flörtölési formulát.
+- Ne ragadjanak bele ugyanabba a becenévbe vagy reakcióba.
+- Ha korábban már nagyon hasonlóan kommenteltek, most reagáljanak másképp.
+- A példamondatok és hangminták CSAK stílusiránymutatások.
+- SOHA ne másold őket.
+- SOHA ne készíts belőlük közeli parafrázist.
+- A karakter hangja maradjon felismerhető, de a konkrét mondata legyen friss.
+
+NYELVTAN:
+
+- Mindenki magáról E/1-ben beszéljen.
+- A poszt szerzőjét és a többi karaktert tegezzék.
+- Magázás tilos.
+- A játékos helyett SOHA ne írj.
+
+LIKE:
+
+- Aki nem kommentelne, de természetesen lájkolná a posztot, bekerülhet a "likes" listába.
+- Ne lájkolja automatikusan mindenki.
+
 Formátum:
-{"comments":[{"id":"szereplő azonosítója","text":"komment","reply_to":"k2 vagy üres"}],
- "likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
- "changes":[{"a":"aki érez","b":"aki iránt","delta":-15,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
- "events":["egy mondat arról, mi történt a világban emiatt"]}${TAIL}`);
-  return { out, label: th.label };
+
+{"comments":[
+  {"id":"szereplő azonosítója","text":"rövid komment","reply_to":"k2 vagy üres"}
+],
+"likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
+"changes":[
+  {"a":"aki érez","b":"aki iránt","delta":-15,"mood":"mit érez most iránta","why":"egy rövid mondat"}
+],
+"events":["csak akkor egy rövid mondat, ha tényleg történt valami emlékezetes"]}${TAIL}`,
+    { maxTokens: 900 }
+  );
+
+  return {
+    out,
+    label: th.label,
+  };
 }
 
 function applyComments(n, postId, out, label) {
@@ -4158,7 +4282,7 @@ function applyComments(n, postId, out, label) {
     (out.comments || []).forEach((c) => {
       const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!who || !c.text) return;
-      const body = cleanGeneratedUtterance(n, who, c.text, 520);
+      const body = cleanGeneratedUtterance(n, who, c.text, 240);
       if (!body) return;
       const tag = String((c.reply_to !== undefined ? c.reply_to : c.replyTo) || "").trim().toLowerCase();
       let parent = byLabel[tag] || null;
@@ -4202,31 +4326,121 @@ function applyComments(n, postId, out, label) {
 }
 
 async function genReply(w, post, comment) {
-  const target = charById(w, comment.authorId);
-  const cast = pickCast(w, comment.authorId);
-  const th = threadOf(w, post);
-  return askWorldJSON(w, engineFor(w), `${worldContext(w, cast.map((c) => c.id), true, null)}
+  const target = charById(
+    w,
+    comment.authorId
+  );
+
+  const cast = pickCast(
+    w,
+    comment.authorId
+  );
+
+  const th = threadOf(
+    w,
+    post
+  );
+
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(
+      w,
+      cast.map((c) => c.id),
+      true,
+      null
+    )}
 
 POSZT — ${nameOfIn(w, post.authorId)}:
 "${post.text}"
-${post.image ? `KÉP A POSZTBAN: a kommentelő szereplők látták a képet, ezért a reakcióikban vegyék figyelembe a kép tartalmát, a szereplőket, a helyszínt és a hangulatot. A képről szóló részletet ne hagyják figyelmen kívül.` : ""}
+
+${
+  post.image
+    ? `KÉP A POSZTBAN:
+A kommentelők látták a képet is. Ha természetes, reagálhatnak arra, ami ténylegesen látható rajta.`
+    : ""
+}
 
 KOMMENTSZÁL:
 ${th.text}
 
-Most KIFEJEZETTEN erre a kommentre válaszoljanak:
+MOST KIFEJEZETTEN ERRE A KOMMENTRE VÁLASZOLNAK:
+
 ${target ? target.name : "?"}: "${comment.text}"
 
-${cast.slice(0, 3).map((c) => publicVoiceCard(w, c, null)).join("")}
-${repetitionGuard(w, cast.map((c) => c.id), "kommentválaszok")}
+${cast
+  .slice(0, 3)
+  .map(
+    (c) =>
+      publicVoiceCard(
+        w,
+        c,
+        null
+      )
+  )
+  .join("")}
 
-Adj 1-3 választ olyan szereplőktől, akiket ez a komment tényleg megszólít vagy provokál.
-Címezzék meg ${target ? target.name : "őt"}, reagáljanak arra, amit mondott — ne új témát nyissanak.
-A reakciók legyenek hosszabbak, összetettebbek, karakteresebbek és könyvesebben fogalmazottak, mint a korábbi változatok.
+${repetitionGuard(
+  w,
+  cast.map((c) => c.id),
+  "kommentválaszok"
+)}
+
+KOMMENTVÁLASZ SZABÁLYOK:
+
+- Csak olyan karakter válaszoljon, akinek természetes oka van rá.
+- Adj 1-3 választ.
+- Ezek közösségi médiás kommentek, NEM roleplay-jelenetek.
+- Egy válasz általában 2-20 szó.
+- Lehet akár csak néhány szó.
+- Lehet visszakérdezés, beszólás, poén, flört, vita, gúny, támogatás vagy rövid reakció.
+- Közvetlenül arra reagáljanak, amit a kommentelő mondott.
+- Ne nyissanak indokolatlanul teljesen új témát.
+- Ne írjanak hosszú bekezdést.
+- Ne írjanak monológot.
+- Ne legyen regényszerű vagy irodalmi.
+- Ne narráljanak jelenetet.
+- Ne írjanak belső gondolatokat.
+- Ne használjanak *csillagok közé tett cselekvéseket*.
+- Ne magyarázzák túl az érzéseiket vagy a kapcsolatukat.
+
+EMOJI:
+
+- Használhatnak emojit természetesen.
+- Nem kötelező.
+- Általában 0-2 emoji elég.
+- Ne használjon mindenki emojit.
+- Az emoji igazodjon az adott karakterhez.
+
+ISMÉTLÉSVÉDELEM:
+
+- Ne ismételjék korábbi kommentjeiket.
+- Ne parafrazálják újra ugyanazt.
+- Ne használják folyton ugyanazokat a beszólásokat.
+- Ne ismételjék ugyanazokat a poénokat, sértéseket, fenyegetéseket vagy flörtölési formulákat.
+- A példamondatok és hangminták csak STÍLUSIRÁNYMUTATÁSOK.
+- Soha ne másolják őket.
+- Soha ne készítsenek belőlük közeli parafrázist.
+- A karakter hangja maradjon felismerhető, de a konkrét mondat legyen friss.
+
+NYELVTAN:
+
+- Minden karakter magáról E/1-ben beszéljen.
+- A másik karaktert tegezze.
+- Magázás tilos.
+- A játékos helyett soha ne írj.
+
 Formátum:
-{"comments":[{"id":"szereplő azonosítója","text":"válasz"}],
- "changes":[{"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
- "events":[]}${TAIL}`, { maxTokens: 2200 });
+
+{"comments":[
+  {"id":"szereplő azonosítója","text":"rövid kommentválasz"}
+],
+"changes":[
+  {"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}
+],
+"events":[]}${TAIL}`,
+    { maxTokens: 900 }
+  );
 }
 
 function applyReplies(n, postId, rootId, out) {
@@ -4234,7 +4448,7 @@ function applyReplies(n, postId, rootId, out) {
   if (p) (out.comments || []).forEach((c) => {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
-    const body = cleanGeneratedUtterance(n, who, c.text, 520);
+    const body = cleanGeneratedUtterance(n, who, c.text, 240);
     if (!body) return;
     const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
     p.comments.push(made);
@@ -4252,8 +4466,27 @@ function applyReplies(n, postId, rootId, out) {
 
 async function genWorldStep(w, single) {
   const cast = pickCast(w, null);
-  const recent = (w.posts || []).slice(0, 4).map((p) => `${nameOfIn(w, p.authorId)}: ${p.text}`).join("\n");
-  return askWorldJSON(w, engineFor(w), `${worldContext(w, cast.map((c) => c.id), true, null)}
+
+  const recent = (w.posts || [])
+    .slice(0, 4)
+    .map(
+      (p) =>
+        `${nameOfIn(
+          w,
+          p.authorId
+        )}: ${p.text}`
+    )
+    .join("\n");
+
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(
+      w,
+      cast.map((c) => c.id),
+      true,
+      null
+    )}
 
 LEGUTÓBBI POSZTOK:
 ${recent || "még nincs poszt"}
@@ -4262,22 +4495,142 @@ MOSTANI JEGYZETEK:
 ${notesForAI(w) || "nincs"}
 
 KORÁBBI ESEMÉNYEK:
-${(w.log || []).slice(0, 6).join("\n") || "-"}
-${repetitionGuard(w, cast.map((c) => c.id), "autonóm posztok és kommentek")}
+${(w.log || [])
+  .slice(0, 6)
+  .join("\n") || "-"}
 
-${single
-  ? "Telt el egy kis idő. Adj EGY új posztot valamelyik szereplőtől, 1-3 kommenttel másoktól."
-  : "Léptesd a világot néhány órával. Adj 1-2 új posztot különböző szereplőktől, mindegyikhez 1-3 kommentet másoktól."}
-A szereplők a játékos nélkül is élnek: posztolnak, veszekednek, kibékülnek, pletykálnak, terveznek.
-Ne ismételd a korábbi posztokat, és vidd tovább azt, ami mostanában történt.
-A posztok és a kommentek legyenek hosszabbak, színesebbek, árnyaltabbak és természetesebben megfogalmazottak, mint a korábbi változatok.
-Akinek van albuma, néha képet is posztolhat belőle: ilyenkor az "image" mezőbe a kép jele kerül (pl. "kep2"), és a poszt szövege illeszkedjen a képaláíráshoz. Ne találj ki nem létező képet.
-Ha kép is van a poszton, a szereplők a képet is értelmezzék: nézzék meg, ki van rajta, milyen a helyszín, mi a hangulat, és hogy ez hogyan változtatja meg a reakciót. A kép nem csak dekoráció; a szereplők valóban rá reagálnak.
-A kommentek egymásra is válaszolhatnak: ilyenkor a "reply_to" a válaszolt komment sorszáma (1 = első komment).
+${cast
+  .slice(0, 5)
+  .map(
+    (c) =>
+      publicVoiceCard(
+        w,
+        c,
+        null
+      )
+  )
+  .join("")}
+
+${repetitionGuard(
+  w,
+  cast.map((c) => c.id),
+  "autonóm posztok és kommentek"
+)}
+
+A VILÁG MAGÁTÓL ÉL TOVÁBB.
+
+${
+  single
+    ? "Telt el egy kis idő. Adj EGY természetes új posztot valamelyik szereplőtől, és ha indokolt, 1-3 kommentet másoktól."
+    : "Léptesd a világot néhány órával. Adj 1-2 természetes új posztot különböző szereplőktől, és ha indokolt, posztonként 1-3 kommentet másoktól."
+}
+
+ÁLTALÁNOS SZABÁLYOK:
+
+- A szereplők a játékos nélkül is élnek.
+- Posztolhatnak, veszekedhetnek, kibékülhetnek, pletykálhatnak, flörtölhetnek, tervezhetnek, panaszkodhatnak vagy reagálhatnak eseményekre.
+- Ne hozz létre eseményt csak azért, hogy történjen valami.
+- A történések következzenek a karakterekből, kapcsolatokból, korábbi eseményekből, posztokból és jegyzetekből.
+- Ne ismételd a korábbi posztokat.
+- Ne ismételd ugyanazokat a konfliktusokat, poénokat, flörtölési formulákat vagy szófordulatokat.
+- A példamondatok és hangminták csak stílusiránymutatások.
+- SOHA ne másold és ne parafrazáld őket közvetlenül.
+
+POSZTOK:
+
+- A poszt hossza igazodjon a karakterhez és ahhoz, mi történik.
+- Lehet nagyon rövid.
+- Lehet közepes hosszúságú.
+- Ha tényleg nagyobb esemény, buli, konfliktus, pletyka vagy történés indokolja, lehet hosszabb poszt is.
+- Egy hosszabb poszt akár több emberről vagy ugyanazon esemény több részletéről is szólhat.
+- Ne legyen minden poszt hosszú.
+- Ne legyen minden poszt ugyanolyan szerkezetű.
+- Ne hangozzon AI által írt esszének.
+- A karakter saját közösségi média stílusában írjon.
+- Használhat szlenget, rövidítéseket, emojit, kisbetűt vagy választékosabb nyelvet attól függően, milyen ember.
+
+KOMMENTEK:
+
+- A kommentek valódi social media kommentek legyenek, NEM roleplay-jelenetek.
+- Egy komment általában 2-20 szó.
+- Lehet akár egyetlen rövid reakció is.
+- Ne legyenek hosszú bekezdések.
+- Ne legyenek monológok.
+- Ne legyenek regényszerűek vagy irodalmiak.
+- Ne narráljanak jelenetet.
+- Ne írjanak belső gondolatokat.
+- Ne használjanak *csillagok közé tett cselekvéseket*.
+- Reagáljanak konkrétan a posztra vagy egymás kommentjeire.
+- Lehet beszólás, poén, flört, gúny, vita, támogatás, kérdés vagy spontán reakció.
+- Ne legyen minden komment szépen lezárt mini beszéd.
+- Egymást @néven megszólíthatják, ha természetes.
+
+EMOJI:
+
+- Posztban és kommentben is használható természetesen.
+- Nem kötelező.
+- Kommentenként általában 0-2 emoji elég.
+- Ne használjon mindenki mindig emojit.
+- Ne ismételjék folyton ugyanazokat.
+- Az emoji-használat igazodjon a karakterhez.
+
+KÉPEK:
+
+- Akinek van albuma, néha képet is posztolhat belőle.
+- Ilyenkor az "image" mezőbe a kép jele kerüljön, például "kep2".
+- SOHA ne találj ki olyan képet, ami nincs az adott karakter albumában.
+- Ha kép van a posztban, a kommentelők azt is látják.
+- Reagálhatnak a képen látható személyre, helyszínre, hangulatra vagy fontos részletre.
+- A kép ne csak dekoráció legyen, hanem valódi kontextus.
+
+VÁLASZOK KOMMENTEKRE:
+
+- A kommentek egymásra is válaszolhatnak.
+- Ilyenkor a "reply_to" a válaszolt komment sorszáma.
+- 1 = első komment, 2 = második komment stb.
+- Csak akkor legyen reply_to, ha valóban az adott kommentre reagál.
+
+NYELVTAN:
+
+- Minden karakter magáról E/1-ben beszéljen.
+- Más karaktereket tegezzen.
+- Magázás tilos.
+- A játékos helyett SOHA ne írj.
+
 Formátum:
-{"posts":[{"id":"szereplő azonosítója","text":"poszt","image":"kepN vagy üres","comments":[{"id":"szereplő azonosítója","text":"komment","reply_to":"1 vagy üres"}]}],
- "changes":[{"a":"aki érez","b":"aki iránt","delta":10,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
- "events":["mi történt, egy mondatban"]}${TAIL}`, { maxTokens: single ? 1800 : 4096 });
+
+{"posts":[
+  {
+    "id":"szereplő azonosítója",
+    "text":"poszt",
+    "image":"kepN vagy üres",
+    "comments":[
+      {
+        "id":"szereplő azonosítója",
+        "text":"rövid komment",
+        "reply_to":"1 vagy üres"
+      }
+    ]
+  }
+],
+"changes":[
+  {
+    "a":"aki érez",
+    "b":"aki iránt",
+    "delta":10,
+    "mood":"mit érez most iránta",
+    "why":"egy rövid mondat"
+  }
+],
+"events":[
+  "csak valódi, emlékezetes történés kerüljön ide"
+]}${TAIL}`,
+    {
+      maxTokens: single
+        ? 1800
+        : 4096,
+    }
+  );
 }
 
 function applyWorldStep(n, out) {
@@ -4290,7 +4643,7 @@ function applyWorldStep(n, out) {
     (p.comments || []).forEach((c, idx) => {
       const cid = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!cid || !c.text) return;
-      const body = cleanGeneratedUtterance(n, cid, c.text, 520);
+      const body = cleanGeneratedUtterance(n, cid, c.text, 240);
       if (!body) return;
       const rt = Number(String((c.reply_to !== undefined ? c.reply_to : c.replyTo) || "").replace(/\D/g, ""));
       let parent = null;
@@ -5815,57 +6168,303 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   }, [openId, msgs.length]);
 
   const send = async (override) => {
-    const t = String(override !== undefined ? override : text).trim();
-    if (!t || !c) return;
-    setText("");
-    const ck = chatKey(w.meId, c.id);
-    update((n) => { n.chats[ck] = [...(n.chats[ck] || []), { from: "me", text: t, ts: now() }]; });
-    setBusy(true);
-    try {
-      const hist = [...msgs, { from: "me", text: t }].slice(-14)
-        .map((m) => `${m.from === "me" ? w.player.name : c.name}: ${m.text}`).join("\n");
-      const rel = getRel(w, c.id, w.meId);
-      const out = await askWorldJSON(w, engineFor(w), `${worldContext(w, [c.id], true, c.id)}
+  const t = String(
+    override !== undefined
+      ? override
+      : text
+  ).trim();
+
+  if (!t || !c) return;
+
+  setText("");
+
+  const ck = chatKey(
+    w.meId,
+    c.id
+  );
+
+  update((n) => {
+    n.chats[ck] = [
+      ...(n.chats[ck] || []),
+      {
+        from: "me",
+        text: t,
+        ts: now(),
+      },
+    ];
+  });
+
+  setBusy(true);
+
+  try {
+    const hist = [
+      ...msgs,
+      {
+        from: "me",
+        text: t,
+      },
+    ]
+      .slice(-16)
+      .map(
+        (m) =>
+          `${
+            m.from === "me"
+              ? w.player.name
+              : c.name
+          }: ${m.text}`
+      )
+      .join("\n");
+
+    const rel = getRel(
+      w,
+      c.id,
+      w.meId
+    );
+
+    const out = await askWorldJSON(
+      w,
+      engineFor(w),
+      `${worldContext(
+        w,
+        [c.id],
+        true,
+        c.id
+      )}
 
 TE MOST ${c.name.toUpperCase()} VAGY egy privát beszélgetésben ${w.player.name} karakterrel.
-Kapcsolat: ${rel.score}${rel.mood ? ` — ${worldLanguage(w, w.meId) === "en" ? "RIGHT NOW YOU FEEL" : "MOST EZT ÉRZED IRÁNTA"}: ${rel.mood}` : ` — ${relLabel(rel)}`}${rel.fixed && (rel.bond || rel.type) ? ` (${worldLanguage(w, w.meId) === "en" ? "family bond fact" : "a rokoni kötelék tény"}: ${localizedBond(rel.bond || rel.type, worldLanguage(w, w.meId))})` : ""}${rel.hidden ? ` | ${worldLanguage(w, w.meId) === "en" ? "hidden" : "rejtett"}: ${rel.hidden}` : ""}
-Amire emlékszel: ${selfMemoryForPrompt(w, c.id)}
+
+Kapcsolat:
+${rel.score}${
+        rel.mood
+          ? ` — ${
+              worldLanguage(
+                w,
+                w.meId
+              ) === "en"
+                ? "RIGHT NOW YOU FEEL"
+                : "MOST EZT ÉRZED IRÁNTA"
+            }: ${rel.mood}`
+          : ` — ${relLabel(rel)}`
+      }${
+        rel.fixed &&
+        (rel.bond || rel.type)
+          ? ` (${
+              worldLanguage(
+                w,
+                w.meId
+              ) === "en"
+                ? "family bond fact"
+                : "a rokoni kötelék tény"
+            }: ${localizedBond(
+              rel.bond ||
+                rel.type,
+              worldLanguage(
+                w,
+                w.meId
+              )
+            )})`
+          : ""
+      }${
+        rel.hidden
+          ? ` | ${
+              worldLanguage(
+                w,
+                w.meId
+              ) === "en"
+                ? "hidden"
+                : "rejtett"
+            }: ${rel.hidden}`
+          : ""
+      }
+
+AMIRE EMLÉKSZEL:
+${selfMemoryForPrompt(
+  w,
+  c.id
+)}
 
 BESZÉLGETÉS:
 ${hist}
 
 ${voiceCard(c)}
 
-Válaszolj a saját hangodon, 1-4 mondatban. Ne írj a játékos helyett.
-Magadról egyes szám első személyben beszélj, ${w.player.name} karaktert pedig tegezve, egyes szám
-második személyben szólítsd meg: "hol vagy", "megígérted", "téged kereslek". Magázás tilos.
-A hangminta kötelező: ha kisbetűvel ír, te is; ha szleng, akkor szleng; ha választékos, az marad.
-Ne legyél udvarias asszisztens — ez a szereplő beszél, a saját modorában.
-A "mood" mezőben mindig add meg, mit érzel MOST iránta — akkor is, ha a "delta" nulla.
-Formátum:
-{"reply":"a válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`);
+${repetitionGuard(
+  w,
+  [c.id],
+  "privát chat"
+)}
 
-      update((n) => {
-        n.chats[ck] = [...(n.chats[ck] || []), { from: "them", text: out.reply || "…", ts: now(), language: worldLanguage(n, n.meId) }];
-        applyChanges(n, [{ a: c.id, b: w.meId, delta: Number(out.delta) || 0, mood: out.mood, why: out.why }]);
-        rememberKnowledge(n, c.id, {
+PRIVÁT CHAT SZABÁLYOK:
+
+- Válaszolj úgy, mint ${c.name}, ne úgy, mint egy asszisztens.
+- Ez valódi privát chat, NEM roleplay-jelenet.
+- A válasz legyen rövid és természetes.
+- Általában 1-4 rövid mondat elég.
+- Néhány szavas válasz is teljesen rendben van, ha az természetesebb.
+- Ne írj hosszú bekezdést.
+- Ne írj monológot.
+- Ne írj regényszerű leírást.
+- Ne narráld a jelenetet.
+- Ne írj belső gondolatokat.
+- Ne használj *csillagok közé tett cselekvéseket*.
+- Ne magyarázd el a kapcsolatotokat.
+- Ne foglald össze, mit érzel iránta, mintha karakterelemzést írnál.
+- Ne ismételd vissza szükségtelenül azt, amit ${w.player.name} éppen mondott.
+- Nem kötelező minden válasz végére kérdést tenni.
+- Nem kell minden válasznak továbbgördítő beszélgetésindítónak lennie.
+- Lehet félmondat, beszólás, visszakérdezés, reakció, vicc, flört, sértődés, vita vagy egyszerű válasz.
+- Reagálj arra, amit ténylegesen mondott.
+
+EMOJI:
+
+- Használhatsz emojit, ha az illik ${c.name} karakteréhez.
+- Nem kötelező.
+- Általában 0-2 emoji elég.
+- Ne használj minden üzenetben emojit.
+- Ne ismételd folyton ugyanazokat az emojikat.
+
+ISMÉTLÉSVÉDELEM:
+
+- Ne ismételd a saját korábbi mondataidat.
+- Ne parafrazáld újra ugyanazt, amit már korábban elmondtál.
+- Ne használd folyton ugyanazokat a mondatkezdéseket.
+- Ne ismételd ugyanazokat a poénokat.
+- Ne ismételd ugyanazokat a sértéseket.
+- Ne ismételd ugyanazokat a fenyegetéseket.
+- Ne használd minden alkalommal ugyanazt a flörtölési formulát.
+- Ne ragadj bele ugyanabba a becenévbe vagy szófordulatba.
+- Ha korábban már nagyon hasonlóan válaszoltál, most fogalmazz teljesen másképp.
+- A karakter hangmintái és példamondatai CSAK stílusiránymutatások.
+- SOHA ne másold őket.
+- SOHA ne írj belőlük közeli parafrázist.
+- A szóhasználatot, ritmust, szlenget, írásjeleket és személyiséget tanuld meg belőlük, ne a konkrét mondatokat.
+
+NYELVTAN:
+
+- Magadról egyes szám első személyben beszélj.
+- ${w.player.name} karaktert tegezve, egyes szám második személyben szólítsd meg.
+- Például: "hol vagy", "megígérted", "téged kereslek".
+- Magázás tilos.
+- SOHA ne írj ${w.player.name} helyett.
+
+A "mood" mezőben mindig add meg, mit érzel MOST iránta, akkor is, ha a "delta" nulla.
+
+Formátum:
+
+{"reply":"a rövid, természetes válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`,
+      { maxTokens: 900 }
+    );
+
+    update((n) => {
+      const reply =
+        cleanGeneratedUtterance(
+          n,
+          c.id,
+          out.reply || "…",
+          360
+        ) || "…";
+
+      n.chats[ck] = [
+        ...(n.chats[ck] || []),
+        {
+          from: "them",
+          text: reply,
+          ts: now(),
+          language:
+            worldLanguage(
+              n,
+              n.meId
+            ),
+        },
+      ];
+
+      applyChanges(
+        n,
+        [
+          {
+            a: c.id,
+            b: w.meId,
+            delta:
+              Number(
+                out.delta
+              ) || 0,
+            mood: out.mood,
+            why: out.why,
+          },
+        ]
+      );
+
+      rememberKnowledge(
+        n,
+        c.id,
+        {
           kind: "conversation",
           source: "direct_chat",
           confidence: 1,
-          text: sysLangText(n, c.id, `Privát üzenetet kaptam: ${cut(out.reply || "", 110)}`, `I got a private message: ${cut(out.reply || "", 110)}`),
-        });
-        rememberAboutTarget(n, c.id, w.meId, {
+          text: sysLangText(
+            n,
+            c.id,
+            `Privát üzenetet írtam: ${cut(
+              reply,
+              110
+            )}`,
+            `I sent a private message: ${cut(
+              reply,
+              110
+            )}`
+          ),
+        }
+      );
+
+      rememberAboutTarget(
+        n,
+        c.id,
+        w.meId,
+        {
           kind: "event",
           source: "direct_chat",
           confidence: 1,
-          text: sysLangText(n, c.id, `${w.player.name} ezt írta: ${cut(t, 110)}`, `${w.player.name} wrote: ${cut(t, 110)}`),
-        });
-        if (out.memory && String(out.memory).trim())
-          n.mems[c.id] = [...(n.mems[c.id] || []), String(out.memory).trim()].slice(-16);
-      });
-    } catch (e) { setErr((e && e.message) || tt("Az AI most nem válaszolt. Próbáld újra.", "The AI didn't respond. Try again.")); }
-    setBusy(false);
-  };
+          text: sysLangText(
+            n,
+            c.id,
+            `${w.player.name} ezt írta: ${cut(
+              t,
+              110
+            )}`,
+            `${w.player.name} wrote: ${cut(
+              t,
+              110
+            )}`
+          ),
+        }
+      );
+
+      if (
+        out.memory &&
+        String(
+          out.memory
+        ).trim()
+      ) {
+        n.mems[c.id] = [
+          ...(n.mems[c.id] || []),
+          String(
+            out.memory
+          ).trim(),
+        ].slice(-16);
+      }
+    });
+  } catch (e) {
+    setErr(
+      (e && e.message) ||
+        tt(
+          "Az AI most nem válaszolt. Próbáld újra.",
+          "The AI didn't respond. Try again."
+        )
+    );
+  }
+
+  setBusy(false);
+};
 
   const group = gid ? (w.groups || []).find((g) => g.id === gid) : null;
   if (group) return <GroupChat w={w} group={group} update={update} setErr={setErr} onBack={() => setGid(null)} />;
@@ -6369,18 +6968,91 @@ Formátum: {"brief":"a kivonat"}`, { language: asLang(CURRENT_LANG) });
 
 /* Egy bot magától ír privátban. */
 async function genDM(w, bot) {
-  const rel = getRel(w, bot.id, w.meId);
-  const hist = (w.chats[chatKey(w.meId, bot.id)] || []).slice(-10)
-    .map((m) => `${m.from === "me" ? w.player.name : bot.name}: ${m.text}`).join("\n");
-  const recent = (w.posts || []).slice(0, 4).map((po) => `${nameOfIn(w, po.authorId)}: ${po.text}`).join("\n");
+  const rel = getRel(
+    w,
+    bot.id,
+    w.meId
+  );
 
-  return askWorldJSON(w, engineFor(w), `${worldContext(w, [bot.id], true, bot.id)}
+  const hist = (
+    w.chats[
+      chatKey(w.meId, bot.id)
+    ] || []
+  )
+    .slice(-14)
+    .map(
+      (m) =>
+        `${
+          m.from === "me"
+            ? w.player.name
+            : bot.name
+        }: ${m.text}`
+    )
+    .join("\n");
 
-TE MOST ${String(bot.name).toUpperCase()} VAGY. Magadtól írsz privát üzenetet ${w.player.name} karakternek —
-nem ő kezdeményezett, hanem te. Legyen valódi okod rá.
+  const recent = (
+    w.posts || []
+  )
+    .slice(0, 4)
+    .map(
+      (po) =>
+        `${nameOfIn(
+          w,
+          po.authorId
+        )}: ${po.text}`
+    )
+    .join("\n");
 
-A viszonyod vele: ${rel.score}${rel.mood ? ` — MOST EZT ÉRZED IRÁNTA: ${rel.mood}` : ""}${rel.bond ? ` | ${localizedBond(rel.bond, worldLanguage(w, w.meId))}` : ""}${rel.hidden ? ` | ${worldLanguage(w, w.meId) === "en" ? "hidden" : "rejtett"}: ${rel.hidden}` : ""}
-Amire emlékszel: ${selfMemoryForPrompt(w, bot.id)}
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(
+      w,
+      [bot.id],
+      true,
+      bot.id
+    )}
+
+TE MOST ${String(
+      bot.name
+    ).toUpperCase()} VAGY.
+
+Magadtól írsz privát üzenetet ${w.player.name} karakternek.
+NEM ő kezdeményezett. Neked kell valódi, karakterhű okod legyen arra, hogy most ráírj.
+
+A viszonyod vele:
+${rel.score}${
+      rel.mood
+        ? ` — MOST EZT ÉRZED IRÁNTA: ${rel.mood}`
+        : ""
+    }${
+      rel.bond
+        ? ` | ${localizedBond(
+            rel.bond,
+            worldLanguage(
+              w,
+              w.meId
+            )
+          )}`
+        : ""
+    }${
+      rel.hidden
+        ? ` | ${
+            worldLanguage(
+              w,
+              w.meId
+            ) === "en"
+              ? "hidden"
+              : "rejtett"
+          }: ${rel.hidden}`
+        : ""
+    }
+
+AMIRE EMLÉKSZEL:
+${selfMemoryForPrompt(
+  w,
+  bot.id
+)}
 
 LEGUTÓBBI POSZTOK:
 ${recent || "még nincs poszt"}
@@ -6388,21 +7060,85 @@ ${recent || "még nincs poszt"}
 MOSTANI JEGYZETEK:
 ${notesForAI(w) || "nincs"}
 
-${hist ? "AZ EDDIGI BESZÉLGETÉSETEK:\n" + hist : "Még soha nem írtatok egymásnak privátban."}
-
-${voiceCard(bot)}
-${repetitionGuard(w, [bot.id], "privát üzenetek")}
-
-Írj egy rövid, 1-3 mondatos üzenetet a saját hangodon, magadról E/1-ben, ${w.player.name} karaktert
-tegezve, E/2-ben megszólítva. Magázás tilos. Kapcsolódj valamihez, ami tényleg történt:
-egy poszthoz, egy jegyzethez, egy eseményhez, vagy ahhoz, amit most érzel iránta.
-Ne köszönj úgy, mint egy asszisztens, és ne kérdezd meg, miben segíthetsz. Legyen benne szándék:
-számonkérés, féltés, pletyka, meghívás, provokáció, bocsánatkérés — ami hozzád illik.
-Ha nincs valódi okod írni, a "skip" legyen igaz.
-Formátum:
-{"skip":false,"text":"az üzenet","mood":"mit érzel most iránta","why":"egy rövid mondat","delta":0}${TAIL}`);
+${
+  hist
+    ? `AZ EDDIGI PRIVÁT BESZÉLGETÉSETEK:
+${hist}`
+    : "Még soha nem írtatok egymásnak privátban."
 }
 
+${voiceCard(bot)}
+
+${repetitionGuard(
+  w,
+  [bot.id],
+  "privát üzenetek"
+)}
+
+PRIVÁT ÜZENET SZABÁLYOK:
+
+- Csak akkor írj rá, ha MOST tényleg van rá karakterhű okod.
+- Az ok kapcsolódhat egy friss eseményhez, poszthoz, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz vagy egyszerűen valamihez, amit most akarsz tőle.
+- Ne találj ki mesterséges drámát csak azért, hogy legyen üzenet.
+- Ha nincs valódi okod írni, legyen "skip": true.
+
+STÍLUS:
+
+- Ez valódi PRIVÁT CHAT, nem roleplay-jelenet.
+- Írj 1-3 rövid üzenetnyi tartalmat.
+- Általában néhány szó vagy 1-2 rövid mondat elég.
+- Lehet nagyon rövid is: reakció, beszólás, kérdés, meghívás, panasz, célzás vagy félmondat.
+- Ne írj hosszú bekezdést.
+- Ne írj monológot.
+- Ne narráld a jelenetet.
+- Ne írj belső gondolatokat.
+- Ne használj *csillagok közé tett cselekvéseket*.
+- Ne foglald össze a kapcsolatotokat az üzenetben.
+- Ne magyarázd el, mit érzel, ha egy valódi ember inkább csak kimutatná.
+- Nem kötelező kérdéssel zárni.
+- Nem kell minden üzenetnek beszélgetésindító formulának lennie.
+- Ne köszönj úgy, mint egy asszisztens.
+- Ne kérdezd meg, miben segíthetsz.
+
+LEHETSÉGES SZÁNDÉKOK:
+
+Lehet számonkérés, féltés, pletyka, meghívás, provokáció, flört, bocsánatkérés, segítségkérés, vicc, információ, figyelmeztetés, közös terv vagy bármi más, ami tényleg illik hozzád.
+
+EMOJI:
+
+- Használhatsz emojit, ha természetes neked.
+- Nem kötelező.
+- Általában 0-2 emoji elég.
+- Ne használd folyton ugyanazokat.
+
+ISMÉTLÉSVÉDELEM:
+
+- Ne ismételd a korábbi mondataidat.
+- Ne parafrazáld újra ugyanazt.
+- Ne használd folyton ugyanazt a mondatkezdést.
+- Ne ismételd ugyanazokat a poénokat, sértéseket, fenyegetéseket vagy flörtölési formulákat.
+- Ne ragadj bele ugyanabba a becenévbe vagy reakcióba.
+- A példamondatok és hangminták CSAK a stílus megértésére szolgálnak.
+- SOHA ne másold őket.
+- SOHA ne írj belőlük közeli parafrázist.
+- A hangod legyen felismerhető, de a konkrét mondat legyen friss.
+
+NYELVTAN:
+
+- Magadról E/1-ben beszélj.
+- ${w.player.name} karaktert tegezd, E/2-ben.
+- Magázás tilos.
+
+Formátum:
+
+Ha nincs természetes okod írni:
+{"skip":true,"text":"","mood":"","why":"","delta":0}
+
+Ha van:
+{"skip":false,"text":"a rövid privát üzenet","mood":"mit érzel most iránta","why":"egy rövid mondat arról, miért írtál rá","delta":0}${TAIL}`,
+    { maxTokens: 700 }
+  );
+}
 /* Egy bot kiír magának egy jegyzetet. */
 async function genNote(w, bot) {
   return askWorldJSON(w, engineFor(w), `${worldContext(w, [bot.id], true, bot.id)}
@@ -6533,169 +7269,1506 @@ function simMarkDone(w, action) {
   if (action && action.key) sim.done[action.key] = now();
   sim.at = now();
 }
+async function genAutoGroup(w) {
+  const cast = pickCast(w, null).slice(0, 5);
+
+  if (cast.length < 2) {
+    return {
+      skip: true,
+      name: "",
+      creator: "",
+      members: [],
+      messages: [],
+      changes: [],
+      event: "",
+    };
+  }
+
+  const existingGroups = (w.groups || [])
+    .slice(-8)
+    .map((g) => {
+      const names = (g.members || [])
+        .map((id) => nameOfIn(w, id))
+        .filter(Boolean)
+        .join(", ");
+
+      return `- ${g.name || "Névtelen csoport"}: ${names || "nincs tag"}`;
+    })
+    .join("\n");
+
+  const recentPosts = (w.posts || [])
+    .slice(0, 5)
+    .map((p) => `${nameOfIn(w, p.authorId)}: ${p.text}`)
+    .join("\n");
+
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(
+      w,
+      cast.map((c) => c.id),
+      true,
+      null
+    )}
+
+A VILÁG MOST MAGÁTÓL ÉL TOVÁBB.
+
+Döntsd el, hogy a szereplők közül valakinek MOST természetes, karakterhű oka van-e új csoportos beszélgetést létrehozni.
+
+LEHETSÉGES SZEREPLŐK:
+${cast
+  .map((c) => `${c.name} [${c.id}]`)
+  .join("\n")}
+
+A játékos:
+${w.player.name} [${w.meId}]
+
+FONTOS:
+A játékos automatikusan résztvevője lesz a létrehozott group chatnek.
+A játékos azonosítóját NE tedd bele a "members" listába.
+A "members" listában kizárólag AI-karakterek legyenek.
+
+MÁR LÉTEZŐ CSOPORTOK:
+${existingGroups || "még nincs csoport"}
+
+LEGUTÓBBI POSZTOK:
+${recentPosts || "még nincs poszt"}
+
+MOSTANI JEGYZETEK:
+${notesForAI(w) || "nincs"}
+
+LEGUTÓBBI VILÁGESEMÉNYEK:
+${(w.log || []).slice(0, 8).join("\n") || "nincs"}
+
+${cast
+  .map((c) => publicVoiceCard(w, c, null))
+  .join("")}
+
+${repetitionGuard(
+  w,
+  cast.map((c) => c.id),
+  "autonóm csoportchat"
+)}
+
+ÚJ GROUP CHAT SZABÁLYOK:
+
+- NE hozz létre csoportot csak azért, mert lehet.
+- Csak akkor legyen új csoport, ha legalább két szereplőnek tényleges, jelenlegi oka van rá.
+- Az ok következzen a kapcsolatokból, eseményekből, posztokból, jegyzetekből, konfliktusokból vagy tervekből.
+- Lehet például buli szervezése, pletyka, közös terv, probléma, konfliktus, segítségkérés, meghívás, titkos egyeztetés, közös ügy vagy spontán társas beszélgetés.
+- Ne hozz létre új csoportot, ha egy már létező csoport ugyanazokra az emberekre és ugyanarra a témára szolgál.
+- Ne készíts újra és újra ugyanolyan összetételű csoportokat.
+- 2-4 AI-karakter legyen a csoportban.
+- A "creator" annak a karakternek az azonosítója legyen, aki természetesen létrehozná a csoportot.
+- A creator mindig szerepeljen a "members" listában.
+
+CSOPORTNÉV:
+- Legyen természetes, mintha valódi emberek nevezték volna el.
+- Nem kell hivatalosnak lennie.
+- Lehet rövid, vicces, belsős poén, eseménynév, helynév vagy egyszerű praktikus név.
+- Ne legyen minden név generikus, például "Barátok" vagy "Beszélgetés".
+- Igazodjon ahhoz, ki hozta létre és miért.
+
+KEZDŐ ÜZENETEK:
+- Adj 2-5 rövid kezdő üzenetet a tagoktól.
+- Ezek valódi group chat üzenetek, NEM roleplay-jelenetek.
+- Egy üzenet általában néhány szó vagy 1-2 rövid mondat.
+- Ne írjanak hosszú bekezdéseket.
+- Ne írjanak narrációt vagy belső gondolatokat.
+- Ne használjanak *csillagok közé tett cselekvéseket*.
+- Egymásra reagálhatnak.
+- Lehetnek félbehagyott, spontán vagy nagyon rövid reakciók is.
+- Használhatnak 0-2 természetes, karakterhez illő emojit.
+- Nem kell mindenkinek emojit használnia.
+- A példamondatok csak stílusiránymutatások. Ne másold és ne parafrazáld őket.
+- Ne ismételjék a korábbi poénjaikat, sértéseiket, flörtölési formuláikat, fenyegetéseiket vagy állandó szófordulataikat.
+- A játékos helyett SOHA ne írj üzenetet.
+
+Ha nincs most valódi oka új csoport létrehozásának:
+"skip": true
+
+Ha van:
+"skip": false
+
+Formátum:
+{"skip":false,
+"name":"a csoport neve",
+"creator":"a létrehozó karakter azonosítója",
+"members":["karakter id","karakter id"],
+"messages":[
+  {"id":"karakter azonosítója","text":"rövid group chat üzenet"},
+  {"id":"karakter azonosítója","text":"rövid válasz"}
+],
+"changes":[
+  {"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}
+],
+"event":"egy rövid mondat arról, miért jött létre a csoport"}${TAIL}`,
+    { maxTokens: 1200 }
+  );
+}
 
 function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
-  const needBrief = [view.player].concat(view.chars || [])
-    .filter((c) => c && ["hiányzik", "elavult"].indexOf(briefState(c)) >= 0)[0];
-  if (needBrief) return mkAction("brief", `brief:${needBrief.id}:${rawLen(needBrief)}`, { id: needBrief.id });
+  const needBrief = [view.player]
+    .concat(view.chars || [])
+    .filter(
+      (c) =>
+        c &&
+        ["hiányzik", "elavult"].indexOf(
+          briefState(c)
+        ) >= 0
+    )[0];
+
+  if (needBrief) {
+    return mkAction(
+      "brief",
+      `brief:${needBrief.id}:${rawLen(needBrief)}`,
+      { id: needBrief.id }
+    );
+  }
 
   const pending = findUnanswered(view);
-  if (pending && pending.comment) {
-    return mkAction("reply", `reply:${pending.post.id}:${pending.comment.id}`, {
-      postId: pending.post.id,
-      commentId: pending.comment.id,
-      rootId: pending.comment.parent || pending.comment.id,
-    });
-  }
-  if (pending) return mkAction("comments", `comments:${pending.post.id}:${(pending.post.comments || []).length}`, { postId: pending.post.id });
 
-  const myNote = noteOf(view, view.meId);
-  if (myNote && !(myNote.reacts || []).length && now() - myNote.ts < 6 * 3600e3) {
-    return mkAction("note-react", `note-react:${myNote.id}`, { noteId: myNote.id });
+  if (pending && pending.comment) {
+    return mkAction(
+      "reply",
+      `reply:${pending.post.id}:${pending.comment.id}`,
+      {
+        postId: pending.post.id,
+        commentId: pending.comment.id,
+        rootId:
+          pending.comment.parent ||
+          pending.comment.id,
+      }
+    );
+  }
+
+  if (pending) {
+    return mkAction(
+      "comments",
+      `comments:${pending.post.id}:${
+        (pending.post.comments || []).length
+      }`,
+      { postId: pending.post.id }
+    );
+  }
+
+  const myNote = noteOf(
+    view,
+    view.meId
+  );
+
+  if (
+    myNote &&
+    !(myNote.reacts || []).length &&
+    now() - myNote.ts < 6 * 3600e3
+  ) {
+    return mkAction(
+      "note-react",
+      `note-react:${myNote.id}`,
+      { noteId: myNote.id }
+    );
   }
 
   const roll = Math.random();
-  const noteless = (view.chars || []).filter((c) => !noteOf(view, c.id));
-  if (roll < 0.3 && noteless.length) {
-    const bot = noteless[Math.floor(Math.random() * noteless.length)];
-    return mkAction("note", `note:${bot.id}:${Math.floor(now() / 1800000)}`, { botId: bot.id });
-  }
-  if (roll < 0.62) {
-    const bot = pickInitiator(view);
-    if (bot) return mkAction("dm", `dm:${bot.id}:${Math.floor(now() / 300000)}`, { botId: bot.id });
-  }
-  return mkAction("world", `world:${Math.floor(now() / 600000)}`);
-}
 
+  const noteless = (
+    view.chars || []
+  ).filter(
+    (c) => !noteOf(view, c.id)
+  );
+
+  if (
+    roll < 0.28 &&
+    noteless.length
+  ) {
+    const bot =
+      noteless[
+        Math.floor(
+          Math.random() *
+            noteless.length
+        )
+      ];
+
+    return mkAction(
+      "note",
+      `note:${bot.id}:${Math.floor(
+        now() / 1800000
+      )}`,
+      { botId: bot.id }
+    );
+  }
+
+  /*
+   * LÉTEZŐ GROUP CHATEK
+   *
+   * Csak olyan csoport jöhet szóba,
+   * amelyben van legalább egy valódi AI-tag.
+   */
+  const existingGroups = (
+    view.groups || []
+  ).filter((g) => {
+    if (
+      !g ||
+      !g.id ||
+      !Array.isArray(g.members)
+    ) {
+      return false;
+    }
+
+    return g.members.some(
+      (id) =>
+        charById(view, id) &&
+        !isHuman(view, id)
+    );
+  });
+
+  /*
+   * Egy csoport ne kapjon új autonóm
+   * üzeneteket közvetlenül az előző aktivitás után.
+   *
+   * Minimum kb. 45 perc pihenő.
+   */
+  const groupTurnCandidates =
+    existingGroups.filter((g) => {
+      const t =
+        Number(g.updatedAt) || 0;
+
+      return (
+        !t ||
+        now() - t >
+          45 * 60 * 1000
+      );
+    });
+
+  /*
+   * Ha bármelyik group chat aktív volt
+   * az elmúlt 8 órában, inkább a már
+   * létező csoportokat használják,
+   * és ne gyártsanak rögtön újat.
+   */
+  const recentGroup =
+    existingGroups.some((g) => {
+      const t =
+        Number(g.updatedAt) || 0;
+
+      return (
+        t > 0 &&
+        now() - t <
+          8 * 3600e3
+      );
+    });
+
+  const canTryNewGroup =
+    (view.chars || []).length >= 2 &&
+    !recentGroup;
+
+  /*
+   * GROUP CHAT ZÓNA
+   *
+   * Az automatikus körök kb. 10%-ában
+   * történhet valami csoporttal.
+   *
+   * Elsősorban egy meglévő csoport
+   * folytatódik. Új csoport ritkább.
+   */
+  if (
+    roll >= 0.28 &&
+    roll < 0.38
+  ) {
+    const preferExisting =
+      groupTurnCandidates.length > 0 &&
+      (
+        recentGroup ||
+        Math.random() < 0.75
+      );
+
+    if (preferExisting) {
+      const group =
+        groupTurnCandidates[
+          Math.floor(
+            Math.random() *
+              groupTurnCandidates.length
+          )
+        ];
+
+      return mkAction(
+        "group-turn",
+        `group-turn:${group.id}:${Math.floor(
+          now() / 3600000
+        )}`,
+        {
+          groupId: group.id,
+        }
+      );
+    }
+
+    /*
+     * Új csoport csak akkor,
+     * ha mostanában nem volt friss
+     * group aktivitás.
+     */
+    if (canTryNewGroup) {
+      return mkAction(
+        "group",
+        `group:${Math.floor(
+          now() / 21600000
+        )}`,
+        {}
+      );
+    }
+
+    /*
+     * Ha új csoport nem készülhet,
+     * de van használható régi,
+     * akkor inkább abban próbáljanak
+     * természetesen tovább beszélgetni.
+     */
+    if (
+      groupTurnCandidates.length
+    ) {
+      const group =
+        groupTurnCandidates[
+          Math.floor(
+            Math.random() *
+              groupTurnCandidates.length
+          )
+        ];
+
+      return mkAction(
+        "group-turn",
+        `group-turn:${group.id}:${Math.floor(
+          now() / 3600000
+        )}`,
+        {
+          groupId: group.id,
+        }
+      );
+    }
+  }
+
+  if (roll < 0.66) {
+    const bot =
+      pickInitiator(view);
+
+    if (bot) {
+      return mkAction(
+        "dm",
+        `dm:${bot.id}:${Math.floor(
+          now() / 300000
+        )}`,
+        { botId: bot.id }
+      );
+    }
+  }
+
+  return mkAction(
+    "world",
+    `world:${Math.floor(
+      now() / 600000
+    )}`
+  );
+}
+async function genAutoGroupTurn(w, group) {
+  if (!group) {
+    return {
+      skip: true,
+      replies: [],
+      changes: [],
+      memories: [],
+      event: "",
+    };
+  }
+
+  const memberIds = (group.members || [])
+    .filter(
+      (id) =>
+        charById(w, id) &&
+        !isHuman(w, id)
+    )
+    .slice(0, 6);
+
+  const members = memberIds
+    .map((id) => charById(w, id))
+    .filter(Boolean);
+
+  if (!members.length) {
+    return {
+      skip: true,
+      replies: [],
+      changes: [],
+      memories: [],
+      event: "",
+    };
+  }
+
+  const hist = (group.msgs || [])
+    .slice(-20)
+    .map((m) => {
+      const a =
+        m.from === w.meId
+          ? w.player
+          : charById(w, m.from);
+
+      return `${a ? a.name : "?"}: ${m.text}`;
+    })
+    .join("\n");
+
+  const recentPosts = (w.posts || [])
+    .slice(0, 5)
+    .map(
+      (p) =>
+        `${nameOfIn(w, p.authorId)}: ${p.text}`
+    )
+    .join("\n");
+
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(
+      w,
+      memberIds,
+      true,
+      null
+    )}
+
+A VILÁG MAGÁTÓL ÉL TOVÁBB.
+
+Most egy MÁR LÉTEZŐ csoportos beszélgetést figyelsz.
+
+CSOPORT:
+${group.name || "Névtelen csoport"}
+
+AI-TAGOK:
+${members
+  .map((c) => `${c.name} [${c.id}]`)
+  .join("\n")}
+
+A játékos:
+${w.player.name} [${w.meId}]
+
+FONTOS:
+- ${w.player.name} résztvevője lehet a beszélgetésnek, de HELYETTE SOHA NE ÍRJ.
+- Csak a fenti AI-tagok küldhetnek most új üzenetet.
+
+EDDIGI CSOPORTCHAT:
+${hist || "még nincs üzenet"}
+
+LEGUTÓBBI POSZTOK:
+${recentPosts || "még nincs poszt"}
+
+MOSTANI JEGYZETEK:
+${notesForAI(w) || "nincs"}
+
+LEGUTÓBBI VILÁGESEMÉNYEK:
+${(w.log || []).slice(0, 8).join("\n") || "nincs"}
+
+${members
+  .map((c) => publicVoiceCard(w, c, null))
+  .join("")}
+
+${repetitionGuard(
+  w,
+  memberIds,
+  `csoportchat: ${group.name || "névtelen"}`
+)}
+
+DÖNTSD EL, HOGY A CSOPORTBAN MOST TERMÉSZETESEN FOLYTATÓDNA-E A BESZÉLGETÉS.
+
+- Nem kötelező minden alkalommal megszólalniuk.
+- Ha nincs semmi, ami miatt most természetesen írná valamelyik tag, legyen "skip": true.
+- Ne generálj üzenetet csak azért, mert a rendszer megkérdezte.
+- Ha van befejezetlen téma, friss esemény, pletyka, terv, konfliktus, poén, kérdés vagy más karakterhű indok, folytathatják.
+- Reagálhatnak egymás korábbi üzeneteire.
+- Reagálhatnak friss posztra, jegyzetre vagy eseményre is, ha annak tényleg van köze hozzájuk.
+- Természetesen új témába is átcsúszhatnak, ha az illik a beszélgetéshez.
+- Ne találj ki indokolatlanul nagy új eseményeket csak azért, hogy legyen miről beszélni.
+
+GROUP CHAT STÍLUS:
+
+- Ez valódi csoportos chat, NEM roleplay-jelenet.
+- Adj 1-3 új üzenetet.
+- Nem kell 3 üzenetet adnod, ha 1 is természetesebb.
+- Egy üzenet általában néhány szó vagy 1-2 rövid mondat.
+- Lehet nagyon rövid reakció is.
+- Ne írjanak hosszú bekezdéseket.
+- Ne írjanak monológokat.
+- Ne írjanak regényszerű narrációt.
+- Ne írjanak belső gondolatokat.
+- Ne használjanak *csillagok közé tett cselekvéseket*.
+- Egymásra reagáljanak.
+- Félbeszakíthatják egymást.
+- Visszakérdezhetnek.
+- Ugrathatják egymást.
+- Pletykálhatnak egymásról vagy más szereplőkről.
+- Veszekedhetnek, flörtölhetnek, viccelődhetnek, panaszkodhatnak vagy szervezkedhetnek, ha ez karakterhű.
+- @néven megszólíthatják egymást, ha természetes.
+
+EMOJI:
+
+- Használhatnak emojit természetesen.
+- Nem kell minden üzenetbe emoji.
+- Általában 0-2 emoji elég.
+- Ne használják folyton ugyanazokat az emojikat.
+- Az emoji-használat igazodjon az adott karakterhez.
+
+ISMÉTLÉSVÉDELEM:
+
+- Ne ismételjék a saját korábbi mondataikat.
+- Ne parafrazálják újra és újra ugyanazt.
+- Ne használják folyton ugyanazokat a mondatkezdéseket.
+- Ne ismételjék ugyanazokat a poénokat, sértéseket vagy fenyegetéseket.
+- Ne használják minden alkalommal ugyanazt a flörtölési formulát.
+- Ne ragadjanak bele ugyanabba a becenévbe vagy reakcióba.
+- A példamondatok és hangminták CSAK stílusiránymutatások.
+- Soha ne másold vagy rendszeresen parafrazáld őket.
+- A karakter legyen felismerhető, de a konkrét mondatai legyenek frissek.
+
+NYELVTAN:
+
+- Minden karakter magáról E/1-ben beszéljen.
+- Egy emberhez E/2-ben beszéljen.
+- Több emberhez E/2 többes számban beszéljen.
+- Magázás tilos.
+- ${w.player.name} helyett SOHA ne írj.
+
+Ha most nincs természetes folytatás:
+{"skip":true,"replies":[],"changes":[],"memories":[],"event":""}
+
+Ha van természetes folytatás:
+{"skip":false,
+"replies":[
+  {"id":"AI-tag azonosítója","text":"rövid üzenet"}
+],
+"changes":[
+  {"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}
+],
+"memories":[
+  {"id":"AI-tag azonosítója","text":"amit ebből érdemes megjegyeznie"}
+],
+"event":"csak akkor egy rövid mondat, ha a beszélgetésben tényleg történt valami emlékezetes, különben üres"}${TAIL}`,
+    { maxTokens: 900 }
+  );
+}
 /* Egy központi szimulációs akció futtatása. Mindig pontosan egy AI-hívás. */
 async function runSimulationAction(view, update, action) {
   if (!view || !action) return null;
 
   if (action.type === "brief") {
-    const targetId = action.payload && action.payload.id;
-    const target = targetId ? charById(view, targetId) : null;
+    const targetId =
+      action.payload && action.payload.id;
+
+    const target = targetId
+      ? charById(view, targetId)
+      : null;
+
     if (!target) return null;
+
     const brief = await genBrief(target);
+
     if (brief) {
       update((n) => {
         n.autoAt = now();
+
         const src = rawLen(target);
-        if (n.players && n.players[target.id]) {
-          n.players[target.id] = { ...n.players[target.id], brief, briefSrc: src, updatedAt: now() };
+
+        if (
+          n.players &&
+          n.players[target.id]
+        ) {
+          n.players[target.id] = {
+            ...n.players[target.id],
+            brief,
+            briefSrc: src,
+            updatedAt: now(),
+          };
         } else {
-          const i = (n.chars || []).findIndex((x) => x.id === target.id);
-          if (i >= 0) n.chars[i] = { ...n.chars[i], brief, briefSrc: src, updatedAt: now() };
+          const i = (
+            n.chars || []
+          ).findIndex(
+            (x) => x.id === target.id
+          );
+
+          if (i >= 0) {
+            n.chars[i] = {
+              ...n.chars[i],
+              brief,
+              briefSrc: src,
+              updatedAt: now(),
+            };
+          }
         }
       });
+
       return "brief";
     }
+
     return null;
   }
 
   if (action.type === "reply") {
-    const post = (view.posts || []).find((p) => p.id === (action.payload && action.payload.postId));
-    const comment = post && (post.comments || []).find((c) => c.id === (action.payload && action.payload.commentId));
-    if (!post || !comment) return null;
-    const out = await genReply(view, post, comment);
-    update((n) => { n.autoAt = now(); applyReplies(n, post.id, action.payload.rootId || comment.id, out); });
+    const post = (
+      view.posts || []
+    ).find(
+      (p) =>
+        p.id ===
+        (action.payload &&
+          action.payload.postId)
+    );
+
+    const comment =
+      post &&
+      (post.comments || []).find(
+        (c) =>
+          c.id ===
+          (action.payload &&
+            action.payload.commentId)
+      );
+
+    if (!post || !comment) {
+      return null;
+    }
+
+    const out = await genReply(
+      view,
+      post,
+      comment
+    );
+
+    update((n) => {
+      n.autoAt = now();
+
+      applyReplies(
+        n,
+        post.id,
+        action.payload.rootId ||
+          comment.id,
+        out
+      );
+    });
+
     return "reply";
   }
 
   if (action.type === "comments") {
-    const post = (view.posts || []).find((p) => p.id === (action.payload && action.payload.postId));
+    const post = (
+      view.posts || []
+    ).find(
+      (p) =>
+        p.id ===
+        (action.payload &&
+          action.payload.postId)
+    );
+
     if (!post) return null;
-    const { out, label } = await genComments(view, post);
-    update((n) => { n.autoAt = now(); applyComments(n, post.id, out, label); });
+
+    const { out, label } =
+      await genComments(view, post);
+
+    update((n) => {
+      n.autoAt = now();
+
+      applyComments(
+        n,
+        post.id,
+        out,
+        label
+      );
+    });
+
     return "comments";
   }
 
   if (action.type === "note-react") {
-    const note = (view.notes || []).find((x) => x.id === (action.payload && action.payload.noteId));
-    if (!note || note.authorId !== view.meId || (note.reacts || []).length) return null;
-    const out = await genNoteReact(view, note);
+    const note = (
+      view.notes || []
+    ).find(
+      (x) =>
+        x.id ===
+        (action.payload &&
+          action.payload.noteId)
+    );
+
+    if (
+      !note ||
+      note.authorId !== view.meId ||
+      (note.reacts || []).length
+    ) {
+      return null;
+    }
+
+    const out =
+      await genNoteReact(view, note);
+
     update((n) => {
       n.autoAt = now();
-      (out.reacts || []).forEach((r) => {
-        const who = findChar(n, r && (r.id !== undefined ? r.id : r.name));
-        if (who && !isHuman(n, who)) reactNote(n, note.id, who, r.emoji);
-      });
-      (out.dms || []).forEach((d) => {
-        const who = findChar(n, d && (d.id !== undefined ? d.id : d.name));
-        if (!who || isHuman(n, who) || !d.text) return;
-        const msg = cleanGeneratedUtterance(n, who, d.text, 280);
-        if (!msg) return;
-        const ck = chatKey(view.meId, who);
-        n.chats[ck] = [...(n.chats[ck] || []), { from: "them", text: msg, ts: now(), language: worldLanguage(n, n.meId) }];
-        const a = charById(n, who);
-        pushNote(n, view.meId, {
-          icon: "✉️",
-          translationKey: "wroteOnYourNote",
-          params: {
-            name: a ? a.name : sysTextFor(n, view.meId, "someone"),
-            snippet: msg.slice(0, 60),
-          },
-          text: sysTextFor(n, view.meId, "wroteOnYourNote", {
-            name: a ? a.name : sysTextFor(n, view.meId, "someone"),
-            snippet: msg.slice(0, 60),
-          }),
-          link: { type: "dm", id: who },
-        });
-      });
-      applyChanges(n, out.changes);
+
+      (out.reacts || []).forEach(
+        (r) => {
+          const who = findChar(
+            n,
+            r &&
+              (r.id !== undefined
+                ? r.id
+                : r.name)
+          );
+
+          if (
+            who &&
+            !isHuman(n, who)
+          ) {
+            reactNote(
+              n,
+              note.id,
+              who,
+              r.emoji
+            );
+          }
+        }
+      );
+
+      (out.dms || []).forEach(
+        (d) => {
+          const who = findChar(
+            n,
+            d &&
+              (d.id !== undefined
+                ? d.id
+                : d.name)
+          );
+
+          if (
+            !who ||
+            isHuman(n, who) ||
+            !d.text
+          ) {
+            return;
+          }
+
+          const msg =
+            cleanGeneratedUtterance(
+              n,
+              who,
+              d.text,
+              280
+            );
+
+          if (!msg) return;
+
+          const ck = chatKey(
+            view.meId,
+            who
+          );
+
+          n.chats[ck] = [
+            ...(n.chats[ck] || []),
+            {
+              from: "them",
+              text: msg,
+              ts: now(),
+              language:
+                worldLanguage(
+                  n,
+                  n.meId
+                ),
+            },
+          ];
+
+          const a =
+            charById(n, who);
+
+          pushNote(
+            n,
+            view.meId,
+            {
+              icon: "✉️",
+              translationKey:
+                "wroteOnYourNote",
+              params: {
+                name: a
+                  ? a.name
+                  : sysTextFor(
+                      n,
+                      view.meId,
+                      "someone"
+                    ),
+                snippet:
+                  msg.slice(0, 60),
+              },
+              text: sysTextFor(
+                n,
+                view.meId,
+                "wroteOnYourNote",
+                {
+                  name: a
+                    ? a.name
+                    : sysTextFor(
+                        n,
+                        view.meId,
+                        "someone"
+                      ),
+                  snippet:
+                    msg.slice(0, 60),
+                }
+              ),
+              link: {
+                type: "dm",
+                id: who,
+              },
+            }
+          );
+        }
+      );
+
+      applyChanges(
+        n,
+        out.changes
+      );
     });
+
     return "note-react";
   }
 
   if (action.type === "note") {
-    const bot = charById(view, action.payload && action.payload.botId);
-    if (!bot || isHuman(view, bot.id) || noteOf(view, bot.id)) return null;
-    const out = await genNote(view, bot);
-    const txt = cleanGeneratedUtterance(view, bot.id, out && out.text ? String(out.text).trim() : "", NOTE_MAX);
-    update((n) => { n.autoAt = now(); if (txt) setNote(n, bot.id, txt); });
+    const bot = charById(
+      view,
+      action.payload &&
+        action.payload.botId
+    );
+
+    if (
+      !bot ||
+      isHuman(view, bot.id) ||
+      noteOf(view, bot.id)
+    ) {
+      return null;
+    }
+
+    const out =
+      await genNote(view, bot);
+
+    const txt =
+      cleanGeneratedUtterance(
+        view,
+        bot.id,
+        out && out.text
+          ? String(out.text).trim()
+          : "",
+        NOTE_MAX
+      );
+
+    update((n) => {
+      n.autoAt = now();
+
+      if (txt) {
+        setNote(
+          n,
+          bot.id,
+          txt
+        );
+      }
+    });
+
     return "note";
   }
 
-  if (action.type === "dm") {
-    const bot = charById(view, action.payload && action.payload.botId);
-    if (!bot || isHuman(view, bot.id)) return null;
-    const out = await genDM(view, bot);
-    const txt = cleanGeneratedUtterance(view, bot.id, out && out.text ? String(out.text).trim() : "", 320);
+  /* Meglévő group chat spontán folytatása */
+  if (action.type === "group-turn") {
+    const groupId =
+      action.payload &&
+      action.payload.groupId;
+
+    const group = (
+      view.groups || []
+    ).find(
+      (g) =>
+        g &&
+        g.id === groupId
+    );
+
+    if (!group) {
+      return null;
+    }
+
+    const out =
+      await genAutoGroupTurn(
+        view,
+        group
+      );
+
+    if (
+      !out ||
+      out.skip
+    ) {
+      update((n) => {
+        n.autoAt = now();
+      });
+
+      return "group-turn";
+    }
+
+    const allowedMembers =
+      new Set(
+        (group.members || [])
+          .filter(
+            (id) =>
+              charById(view, id) &&
+              !isHuman(view, id)
+          )
+      );
+
+    const rows = (
+      Array.isArray(out.replies)
+        ? out.replies
+        : []
+    )
+      .map((r) => {
+        const who = findChar(
+          view,
+          r &&
+            (r.id !== undefined
+              ? r.id
+              : r.name)
+        );
+
+        if (
+          !who ||
+          isHuman(view, who) ||
+          !allowedMembers.has(who) ||
+          !r.text
+        ) {
+          return null;
+        }
+
+        const text =
+          cleanGeneratedUtterance(
+            view,
+            who,
+            String(r.text),
+            280
+          );
+
+        if (!text) return null;
+
+        return {
+          id: uid(),
+          from: who,
+          text,
+          ts: now(),
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 3);
+
+    if (!rows.length) {
+      update((n) => {
+        n.autoAt = now();
+      });
+
+      return "group-turn";
+    }
+
     update((n) => {
       n.autoAt = now();
-      if (out.skip || !txt) return;
-      const ck = chatKey(view.meId, bot.id);
-      n.chats[ck] = [...(n.chats[ck] || []), { from: "them", text: txt, ts: now(), language: worldLanguage(n, n.meId) }];
-      applyChanges(n, [{ a: bot.id, b: view.meId, delta: Number(out.delta) || 0, mood: out.mood, why: out.why }]);
-      rememberKnowledge(n, bot.id, {
-        kind: "conversation",
-        source: "direct_chat",
-        confidence: 1,
-        text: sysLangText(n, bot.id, `Privátban írtam: ${cut(txt, 110)}`, `I sent a private message: ${cut(txt, 110)}`),
+
+      const target = (
+        n.groups || []
+      ).find(
+        (g) =>
+          g &&
+          g.id === groupId
+      );
+
+      if (!target) return;
+
+      rows.forEach((row) => {
+        const msg = {
+          ...row,
+          language:
+            worldLanguage(
+              n,
+              n.meId
+            ),
+        };
+
+        target.msgs = [
+          ...(target.msgs || []),
+          msg,
+        ];
+
+        noteMentions(
+          n,
+          msg.text,
+          msg.from,
+          {
+            type: "group",
+            id: groupId,
+          }
+        );
+
+        rememberKnowledge(
+          n,
+          msg.from,
+          {
+            kind: "conversation",
+            source: "group_chat",
+            confidence: 1,
+            text: sysLangText(
+              n,
+              msg.from,
+              `Csoportüzenetet írtam a(z) ${
+                target.name ||
+                "Névtelen csoport"
+              } csoportban: ${cut(
+                msg.text,
+                110
+              )}`,
+              `I wrote in the ${
+                target.name ||
+                "Unnamed group"
+              } group chat: ${cut(
+                msg.text,
+                110
+              )}`
+            ),
+          }
+        );
       });
-      rememberAboutTarget(n, bot.id, view.meId, {
-        kind: "event",
-        source: "direct_chat",
-        confidence: 1,
-        text: sysLangText(n, bot.id, `${view.player.name} felé kezdeményeztem beszélgetést`, `I initiated a conversation with ${view.player.name}`),
-      });
-      pushNote(n, view.meId, {
-        icon: "✉️",
-        translationKey: "dmFrom",
-        params: { name: bot.name, snippet: txt.slice(0, 70) },
-        text: sysTextFor(n, view.meId, "dmFrom", { name: bot.name, snippet: txt.slice(0, 70) }),
-        mood: out.mood ? String(out.mood) : "", link: { type: "dm", id: bot.id },
-      });
+
+      target.updatedAt = now();
+
+      applyChanges(
+        n,
+        out.changes
+      );
+
+      applyMemories(
+        n,
+        out.memories
+      );
+
+      if (
+        out.event &&
+        String(out.event).trim()
+      ) {
+        n.log = [
+          String(
+            out.event
+          ).trim(),
+          ...(n.log || []),
+        ].slice(0, 30);
+      }
     });
+
+    return "group-turn";
+  }
+
+  /* Teljesen új autonóm group chat létrehozása */
+  if (action.type === "group") {
+    const out =
+      await genAutoGroup(view);
+
+    if (
+      !out ||
+      out.skip
+    ) {
+      update((n) => {
+        n.autoAt = now();
+      });
+
+      return "group";
+    }
+
+    const memberIds =
+      Array.from(
+        new Set(
+          (
+            Array.isArray(
+              out.members
+            )
+              ? out.members
+              : []
+          )
+            .map((raw) =>
+              findChar(
+                view,
+                raw
+              )
+            )
+            .filter(
+              (id) =>
+                id &&
+                !isHuman(
+                  view,
+                  id
+                ) &&
+                charById(
+                  view,
+                  id
+                )
+            )
+        )
+      ).slice(0, 4);
+
+    const creator =
+      findChar(
+        view,
+        out.creator
+      );
+
+    if (
+      memberIds.length < 2 ||
+      !creator ||
+      isHuman(view, creator) ||
+      memberIds.indexOf(
+        creator
+      ) < 0
+    ) {
+      update((n) => {
+        n.autoAt = now();
+      });
+
+      return "group";
+    }
+
+    const groupName =
+      String(
+        out.name || ""
+      )
+        .trim()
+        .slice(0, 70);
+
+    if (!groupName) {
+      update((n) => {
+        n.autoAt = now();
+      });
+
+      return "group";
+    }
+
+    const groupId =
+      "g" + uid();
+
+    const messages = (
+      Array.isArray(
+        out.messages
+      )
+        ? out.messages
+        : []
+    )
+      .map((m) => {
+        const who =
+          findChar(
+            view,
+            m &&
+              (m.id !== undefined
+                ? m.id
+                : m.name)
+          );
+
+        if (
+          !who ||
+          isHuman(view, who) ||
+          memberIds.indexOf(
+            who
+          ) < 0 ||
+          !m.text
+        ) {
+          return null;
+        }
+
+        const text =
+          cleanGeneratedUtterance(
+            view,
+            who,
+            String(m.text),
+            280
+          );
+
+        if (!text) {
+          return null;
+        }
+
+        return {
+          id: uid(),
+          from: who,
+          text,
+          ts: now(),
+          language:
+            worldLanguage(
+              view,
+              view.meId
+            ),
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 5);
+
+    if (!messages.length) {
+      update((n) => {
+        n.autoAt = now();
+      });
+
+      return "group";
+    }
+
+    update((n) => {
+      n.autoAt = now();
+
+      const freshGroup = {
+        id: groupId,
+        name: groupName,
+        members: memberIds,
+        msgs: messages,
+        updatedAt: now(),
+      };
+
+      n.groups = [
+        ...(n.groups || []),
+        freshGroup,
+      ];
+
+      messages.forEach(
+        (msg) => {
+          noteMentions(
+            n,
+            msg.text,
+            msg.from,
+            {
+              type: "group",
+              id: groupId,
+            }
+          );
+
+          rememberKnowledge(
+            n,
+            msg.from,
+            {
+              kind: "conversation",
+              source: "group_chat",
+              confidence: 1,
+              text: sysLangText(
+                n,
+                msg.from,
+                `Csoportüzenetet írtam a(z) ${groupName} csoportban: ${cut(
+                  msg.text,
+                  110
+                )}`,
+                `I wrote in the ${groupName} group chat: ${cut(
+                  msg.text,
+                  110
+                )}`
+              ),
+            }
+          );
+        }
+      );
+
+      rememberKnowledge(
+        n,
+        creator,
+        {
+          kind: "event",
+          source: "self_action",
+          confidence: 1,
+          text: sysLangText(
+            n,
+            creator,
+            `Létrehoztam a(z) ${groupName} csoportot.`,
+            `I created the ${groupName} group chat.`
+          ),
+        }
+      );
+
+      applyChanges(
+        n,
+        out.changes
+      );
+
+      if (
+        out.event &&
+        String(out.event).trim()
+      ) {
+        n.log = [
+          String(
+            out.event
+          ).trim(),
+          ...(n.log || []),
+        ].slice(0, 30);
+      }
+    });
+
+    return "group";
+  }
+
+  if (action.type === "dm") {
+    const bot = charById(
+      view,
+      action.payload &&
+        action.payload.botId
+    );
+
+    if (
+      !bot ||
+      isHuman(view, bot.id)
+    ) {
+      return null;
+    }
+
+    const out =
+      await genDM(view, bot);
+
+    const txt =
+      cleanGeneratedUtterance(
+        view,
+        bot.id,
+        out && out.text
+          ? String(out.text).trim()
+          : "",
+        280
+      );
+
+    update((n) => {
+      n.autoAt = now();
+
+      if (
+        out.skip ||
+        !txt
+      ) {
+        return;
+      }
+
+      const ck = chatKey(
+        view.meId,
+        bot.id
+      );
+
+      n.chats[ck] = [
+        ...(n.chats[ck] || []),
+        {
+          from: "them",
+          text: txt,
+          ts: now(),
+          language:
+            worldLanguage(
+              n,
+              n.meId
+            ),
+        },
+      ];
+
+      applyChanges(
+        n,
+        [
+          {
+            a: bot.id,
+            b: view.meId,
+            delta:
+              Number(
+                out.delta
+              ) || 0,
+            mood: out.mood,
+            why: out.why,
+          },
+        ]
+      );
+
+      rememberKnowledge(
+        n,
+        bot.id,
+        {
+          kind: "conversation",
+          source: "direct_chat",
+          confidence: 1,
+          text: sysLangText(
+            n,
+            bot.id,
+            `Privátban írtam: ${cut(
+              txt,
+              110
+            )}`,
+            `I sent a private message: ${cut(
+              txt,
+              110
+            )}`
+          ),
+        }
+      );
+
+      rememberAboutTarget(
+        n,
+        bot.id,
+        view.meId,
+        {
+          kind: "event",
+          source: "direct_chat",
+          confidence: 1,
+          text: sysLangText(
+            n,
+            bot.id,
+            `${view.player.name} felé kezdeményeztem beszélgetést`,
+            `I initiated a conversation with ${view.player.name}`
+          ),
+        }
+      );
+
+      pushNote(
+        n,
+        view.meId,
+        {
+          icon: "✉️",
+          translationKey:
+            "dmFrom",
+          params: {
+            name: bot.name,
+            snippet:
+              txt.slice(0, 70),
+          },
+          text: sysTextFor(
+            n,
+            view.meId,
+            "dmFrom",
+            {
+              name: bot.name,
+              snippet:
+                txt.slice(
+                  0,
+                  70
+                ),
+            }
+          ),
+          mood: out.mood
+            ? String(out.mood)
+            : "",
+          link: {
+            type: "dm",
+            id: bot.id,
+          },
+        }
+      );
+    });
+
     return "dm";
   }
 
-  const out = await genWorldStep(view, action.type !== "world-full");
-  update((n) => { n.autoAt = now(); applyWorldStep(n, out); });
+  const out =
+    await genWorldStep(
+      view,
+      action.type !== "world-full"
+    );
+
+  update((n) => {
+    n.autoAt = now();
+
+    applyWorldStep(
+      n,
+      out
+    );
+  });
+
   return "world";
 }
-
 /* ============================================================
    Váz
    ============================================================ */
