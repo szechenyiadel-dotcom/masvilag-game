@@ -1308,7 +1308,7 @@ async function callClaude(system, prompt, maxTokens = 1200) {
     res = await requestAiProxy({
   provider: DEFAULT_AI_PROVIDER,
   model: DEFAULT_AI_MODEL,
-  max_tokens: 1200,
+  max_tokens: maxTokens,
   temperature: 0.9,
   system,
   messages: [{ role: "user", content: prompt }],
@@ -1409,7 +1409,7 @@ async function askJSON(system, prompt, options = {}) {
             : (lang === "en"
               ? "\n\nPrevious output was invalid. Return only compact valid JSON in English."
               : "\n\nAz előző válasz hibás volt. Most csak rövid, érvényes JSON jöjjön, magyarul.");
-          const raw = await callClaude(sys, prompt + hint);
+          const raw = await callClaude(sys, prompt + hint, Number(options.maxTokens || 1200));
           const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
           if (a === -1 || b === -1) throw new Error("Az AI válasza nem tartalmazott feldolgozható JSON-t.");
           const parsed = JSON.parse(raw.slice(a, b + 1));
@@ -3820,7 +3820,7 @@ A reakciók legyenek hosszabbak, összetettebbek, karakteresebbek és könyveseb
 Formátum:
 {"comments":[{"id":"szereplő azonosítója","text":"válasz"}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
- "events":[]}${TAIL}`);
+ "events":[]}${TAIL}`, { maxTokens: 2200 });
 }
 
 function applyReplies(n, postId, rootId, out) {
