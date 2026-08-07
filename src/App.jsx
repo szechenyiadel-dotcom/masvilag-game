@@ -1269,7 +1269,7 @@ const DEFAULT_AI_MODEL = import.meta.env.VITE_AI_MODEL || "claude-sonnet-4-6";
 const DEFAULT_AI_PROVIDER = DEFAULT_AI_MODEL.startsWith("gemini") ? "gemini"
   : /^(gpt|o1|o3)/.test(DEFAULT_AI_MODEL) ? "openai" : "anthropic";
 
-async function requestAiProxy(payload) {
+async function requestAiProxy(payload, signal) {
   const urls = ["/ai/messages"];
   if (typeof window !== "undefined" && window.location) {
     const host = window.location.hostname || "localhost";
@@ -1280,11 +1280,12 @@ async function requestAiProxy(payload) {
   let lastErr = null;
   for (const url of urls) {
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+const res = await fetch(url, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(payload),
+  signal,
+});
       if (res.ok) return res;
       if (res.status !== 404 && res.status !== 502) return res;
       lastErr = new Error(`HTTP ${res.status}`);
@@ -1295,7 +1296,7 @@ async function requestAiProxy(payload) {
   throw lastErr || new Error("AI proxy unavailable");
 }
 
-async function callClaude(system, prompt) {
+async function callClaude(system, prompt, maxTokens = 1200) {
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), 60000);
   let res;
@@ -1305,13 +1306,13 @@ async function callClaude(system, prompt) {
     // `server/proxy.js` fájllal (lásd README). A production környezetben
     // használj szerver-oldali proxyt vagy közvetlen, biztonságos backendet.
     res = await requestAiProxy({
-      provider: DEFAULT_AI_PROVIDER,
-      model: DEFAULT_AI_MODEL,
-      max_tokens: 1200,
-      temperature: 0.9,
-      system,
-      messages: [{ role: "user", content: prompt }],
-    });
+  provider: DEFAULT_AI_PROVIDER,
+  model: DEFAULT_AI_MODEL,
+  max_tokens: 1200,
+  temperature: 0.9,
+  system,
+  messages: [{ role: "user", content: prompt }],
+}, ctrl.signal);
   } catch (e) {
     if (e && e.name === "AbortError") throw new Error("Az AI nem válaszolt időben.");
     if (e && e.message) {
@@ -3870,7 +3871,7 @@ A kommentek egymásra is válaszolhatnak: ilyenkor a "reply_to" a válaszolt kom
 Formátum:
 {"posts":[{"id":"szereplő azonosítója","text":"poszt","image":"kepN vagy üres","comments":[{"id":"szereplő azonosítója","text":"komment","reply_to":"1 vagy üres"}]}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":10,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
- "events":["mi történt, egy mondatban"]}${TAIL}`);
+ "events":["mi történt, egy mondatban"]}${TAIL}`, { maxTokens: single ? 1800 : 4096 });
 }
 
 function applyWorldStep(n, out) {
