@@ -6704,7 +6704,7 @@ export default function App() {
     let alive = true;
     const beat = async () => {
       if (!alive || autoRunning.current || EditLock.n > 0) return;
-      if (cooldownLeft() > 0 || AI.strikes > 0) return;
+      if (cooldownLeft() > 0) return;
       if (typeof document !== "undefined" && document.hidden) return;
       const view2 = viewRef.current;
       if (!view2 || !(view2.chars || []).length) return;
