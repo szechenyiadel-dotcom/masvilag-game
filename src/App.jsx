@@ -2175,7 +2175,125 @@ const engineFor = (w) => (worldLanguage(w) === "en" ? ENGINE_EN : ENGINE);
    Világ átadására a Szoba fülön lévő biztonsági mentés való. */
 const KEY = (code) => `masvilag:${String(code).toLowerCase().trim()}`;
 const MKEY = (code) => KEY(code) + ":media";
-const hasStore = typeof window !== "undefined" && window.storage;
+/* ---------- tartós böngészőtárolás ----------
+   Railwayen nincs window.storage, ezért IndexedDB-backed
+   tárolót adunk az appnak. Ez frissítés és böngésző-újranyitás
+   után is megtartja a világot és a bejelentkezett sessiont.
+*/
+if (
+  typeof window !== "undefined" &&
+  !window.storage &&
+  "indexedDB" in window
+) {
+  const STORAGE_DB = "masvilag-storage";
+  const STORAGE_STORE = "kv";
+
+  const openStorageDb = () =>
+    new Promise((resolve, reject) => {
+      const req = indexedDB.open(STORAGE_DB, 1);
+
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORAGE_STORE)) {
+          db.createObjectStore(STORAGE_STORE);
+        }
+      };
+
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+
+  const scopedStorageKey = (key, shared) =>
+    `${shared ? "shared" : "local"}:${key}`;
+
+  window.storage = {
+    async get(key, shared = false) {
+      const db = await openStorageDb();
+
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORAGE_STORE, "readonly");
+        const st = tx.objectStore(STORAGE_STORE);
+        const req = st.get(scopedStorageKey(key, shared));
+
+        req.onsuccess = () => {
+          if (req.result === undefined) {
+            resolve(null);
+          } else {
+            resolve({
+              key,
+              value: req.result,
+            });
+          }
+        };
+
+        req.onerror = () => reject(req.error);
+      });
+    },
+
+    async set(key, value, shared = false) {
+      const db = await openStorageDb();
+
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORAGE_STORE, "readwrite");
+        const st = tx.objectStore(STORAGE_STORE);
+
+        st.put(value, scopedStorageKey(key, shared));
+
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+    },
+
+    async delete(key, shared = false) {
+      const db = await openStorageDb();
+
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORAGE_STORE, "readwrite");
+        const st = tx.objectStore(STORAGE_STORE);
+
+        st.delete(scopedStorageKey(key, shared));
+
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+    },
+
+    async list(prefix = "", shared = false) {
+      const db = await openStorageDb();
+
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORAGE_STORE, "readonly");
+        const st = tx.objectStore(STORAGE_STORE);
+        const req = st.openCursor();
+
+        const scope = `${shared ? "shared" : "local"}:`;
+        const wanted = scope + prefix;
+        const keys = [];
+
+        req.onsuccess = () => {
+          const cursor = req.result;
+
+          if (!cursor) {
+            resolve({ keys });
+            return;
+          }
+
+          const rawKey = String(cursor.key);
+
+          if (rawKey.startsWith(wanted)) {
+            keys.push(rawKey.slice(scope.length));
+          }
+
+          cursor.continue();
+        };
+
+        req.onerror = () => reject(req.error);
+      });
+    },
+  };
+}const hasStore = typeof window !== "undefined" && window.storage;
 const mem = {};
 
 const store = {
@@ -3460,31 +3578,6 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
           {tab("login", tt("Belépés", "Log in"))}
           {tab("new", tt("Új világ", "New world"))}
         </div>
-
-        <p className="hint" style={{ marginTop: 10 }}>
-          {isLogin && tt("Visszatérsz egy meglévő világodba: világkód, felhasználónév, jelszó.",
-                          "You're returning to an existing world: world code, username, password.")}
-          {isNew && tt("Új világot indítasz. A felhasználóneved és a jelszavad ehhez a világhoz tartozik.",
-                        "You're starting a new world. Your username and password belong to this world.")}
-        </p>
-
-        {isLogin && rooms.length > 0 && (
-          <>
-            <label className="f">{tt("A világaid — koppints rá, és kitöltöm", "Your worlds — tap one and I'll fill it in")}</label>
-            <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
-              {rooms.slice(0, 10).map((r) => (
-                <button key={r.code} className="btn tiny ghost"
-                  onClick={() => { setCode(r.code); if (r.username) setUser(r.username); setErr(""); }}>
-                  {r.name || r.code}{r.username ? " · @" + r.username : ""}
-                </button>
-              ))}
-            </div>
-            <p className="hint" style={{ marginTop: 6 }}>
-              {tt("Ez a lista minden eszközön ugyanez. Másik gépen is csak a jelszavadat kell beírnod.",
-                  "This list is the same on every device. On another machine you only need to type your password.")}
-            </p>
-          </>
-        )}
 
         <label className="f">{isNew ? tt("Az új világ kódja", "The new world's code") : tt("Világkód", "World code")}</label>
         <input className="i mono" value={code} placeholder="pl. beaconfalls-2026" onKeyDown={onEnter}
