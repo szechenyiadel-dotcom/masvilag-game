@@ -2138,8 +2138,8 @@ NYELVHELYESSÉG
 - Kerüld a suta, szó szerinti fordításnak ható mondatszerkezeteket; írj természetes, folyékony magyar prózát.
 - Ha egy mondat magyartalanul sülne el, inkább fogalmazd át. Rossz nyelvtan = kiestél a szerepből.
 
-VÉGÜL: mindig az adott felület természetes hosszát használd. Chatben és kommentben a rövid válasz teljesen helyes és gyakran kívánatos; roleplay jelenetben maradhat a hosszabb, részletesebb próza. Soha ne növeld mesterségesen a választ csak azért, hogy hosszabb legyen.
-
+VÉGÜL: minden válasz legyen hosszabb, mint a korábbi változatoknál, és törekedj a kultúrált, érzékeny, finom, könyves stílusra. A rövid, szikár, semleges válaszok mostantól hibásak.`;
+`;
 const ENGINE_EN = `Write only in English, regardless of what language any labels, field names or notes below are in.
 
 You are the engine of a living, AI-driven social-media world for a roleplay game.
