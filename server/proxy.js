@@ -259,7 +259,7 @@ app.post("/auth/login", async (req, res) => {
     const username = cleanUsername(req.body?.username);
     const password = String(req.body?.password || "");
 
-    if (!code || !username || password.length < 4) {
+    if (!code || !username || !password) {
       return res.status(400).json({
         error: "World code, username and password are required.",
       });
@@ -603,7 +603,7 @@ app.post("/auth/migrate", async (req, res) => {
 
     const code = cleanCode(incomingWorld.code);
 
-    if (!code || !username || password.length < 4) {
+    if (!code || !username || !password) {
       return res.status(400).json({
         error: "World code, username and password are required.",
       });
