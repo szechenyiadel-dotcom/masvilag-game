@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
   X, Trash2, ChevronLeft, Loader2, Heart, Lock, Zap, Pencil,
-  Image as ImageIcon, Download, Upload, Film, Network, Copy, UserCircle, Check, Bell
+  Image as ImageIcon, Upload, Film, Network, Copy, UserCircle, Check, Bell
 } from "lucide-react";
 
 /* ============================================================
@@ -3511,7 +3511,7 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
   const [err, setErr] = useState("");
   const [peek, setPeek] = useState(null);
   const [rooms, setRooms] = useState([]);
-  const impRef = useRef(null);
+  
 
   // ezen az eszközön korábban használt szobák — gyors belépéshez
   // A világlista nem csak az eszközödön él: a jegyzékből is feltöltjük, így
@@ -3869,30 +3869,7 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
 
 
   /* Mentésfájlból is be lehet lépni — ez a biztos út másik eszközön. */
-  const importFile = async (e) => {
-    const f = e.target.files && e.target.files[0];
-    e.target.value = "";
-    if (!f) return;
-    setBusy(true); setErr("");
-    try {
-      const data = JSON.parse(await f.text());
-      const wld = data && data.world ? migrate(data.world) : null;
-      if (!wld || !wld.universe) throw new Error(tt("Ez a fájl nem másvilág-mentés.", "This file is not a másvilág save."));
-
-      // ha itt már van ilyen kódú világ, a mentés lép a helyébe
-      const meIds = Object.keys(wld.accounts || {});
-      if (!meIds.length) throw new Error(tt("A mentésben nincs profil.", "There's no profile in this save."));
-      const id = meIds[0];
-
-      wld.rev = (wld.rev || 0) + 1;
-      if (!(await saveWorld(wld))) throw new Error(tt("A világ mentése nem sikerült.", "Failed to save the world."));
-      if (data.media && Object.keys(data.media).length) await saveMedia(wld.code, data.media);
-      await addToIndex(wld, id);
-      onReady(wld, id);
-      return;
-    } catch (e2) { setErr((e2 && e2.message) || tt("A visszatöltés nem sikerült.", "Failed to restore.")); }
-    setBusy(false);
-  };
+  
 
   const onEnter = (e) => { if (e.key === "Enter" && !busy) go(); };
   const tab = (k, label) => (
@@ -3993,17 +3970,7 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
         </button>
       </div>
 
-      <div className="card">
-        <label className="f" style={{ marginTop: 0 }}>{tt("Belépés mentésfájlból", "Log in from a save file")}</label>
-        <p className="hint">
-          {tt("Ha másik eszközön vagy, és a világod nem jelenik meg a listában, töltsd fel a biztonsági mentésedet — azonnal beenged, és onnantól ezen az eszközön is megmarad.",
-              "If you're on another device and your world doesn't show up in the list, upload your backup — it lets you in right away, and it stays on this device from then on.")}
-        </p>
-        <button className="btn full" style={{ marginTop: 10 }} onClick={() => impRef.current && impRef.current.click()} disabled={busy}>
-          {busy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />} {tt("Mentés kiválasztása", "Choose save file")}
-        </button>
-        <input ref={impRef} type="file" accept="application/json" style={{ display: "none" }} onChange={importFile} />
-      </div>
+
 
       <p className="hint" style={{ textAlign: "center", marginTop: 12, lineHeight: 1.6 }}>
         {tt("A jelszó egyszerű zár, nem banki védelem: sózott ellenőrzőösszegként tárolódik, de a szoba adatai a kódot ismerők számára elérhetők. Ne használj olyan jelszót, amit máshol is használsz.",
@@ -6076,7 +6043,7 @@ function Alerts({ w, onClose, onOpen, onClear }) {
 /* ============================================================
    Szoba
    ============================================================ */
-function World({ w, update, onLeave, onDeleteAccount, setErr, onRestore, onRooms, auto, onAuto, detail, onDetail, onLang }) {
+function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onAuto, detail, onDetail, onLang }) {
   const { tt, lang } = useLang();
   const [editPlayer, setEditPlayer] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -6085,8 +6052,8 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRestore, onRooms
   const [pwNew, setPwNew] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState("");
-  const { media } = useMedia();
-  const fileRef = useRef(null);
+  
+  
   const acc = (w.accounts || {})[w.meId] || null;
   const currentLang = worldLanguage(w, w.meId);
 
@@ -6114,30 +6081,11 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRestore, onRooms
     setPwBusy(false);
   };
 
-  const backup = () => {
-    try {
-      const blob = new Blob([JSON.stringify({ v: 1, world: w, media })], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `masvilag-${w.code}-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-    } catch (e) { setErr(tt("A mentés nem sikerült.", "Save failed.")); }
-  };
+ 
 
-  const restore = async (e) => {
-    const f = e.target.files && e.target.files[0];
-    e.target.value = "";
-    if (!f) return;
-    try {
-      const data = JSON.parse(await f.text());
-      if (!data.world || !data.world.universe) throw new Error("invalid file");
-      onRestore(migrate(data.world), data.media || {});
-    } catch (e2) { setErr(tt("Ez a fájl nem másvilág-mentés.", "This file is not a másvilág save.")); }
-  };
+ 
 
-  const mb = (mediaBytes(media) / 1048576).toFixed(1);
+  
 
   return (
     <>
@@ -6307,17 +6255,7 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRestore, onRooms
         {w.log.map((l, i) => <div key={i} className="hint" style={{ marginTop: 6 }}>· {l}</div>)}
       </div>
 
-      <div className="card">
-        <label className="f" style={{ marginTop: 0 }}>{tt("Biztonsági mentés", "Backup")}</label>
-        <p className="hint">{tt("Egy fájlba menti az egész világot: karakterek, posztok, beszélgetések, kapcsolatok, képek. Tedd el időnként.", "Saves the whole world into one file: characters, posts, conversations, bonds, images. Do this from time to time.")}</p>
-        <div className="row" style={{ marginTop: 10, gap: 8 }}>
-          <button className="btn full" onClick={backup}><Download size={14} /> {tt("Letöltés", "Download")}</button>
-          <button className="btn full" onClick={() => fileRef.current && fileRef.current.click()}><Upload size={14} /> {tt("Visszatöltés", "Restore")}</button>
-        </div>
-        <input ref={fileRef} type="file" accept="application/json" style={{ display: "none" }} onChange={restore} />
-        <p className="hint" style={{ marginTop: 10 }}>{tt(`Képtár mérete: ${mb} MB / 40 MB`, `Media size: ${mb} MB / 40 MB`)}</p>
-
-      </div>
+      
 
       <button className="btn full" style={{ marginTop: 12 }} onClick={onRooms}><Globe2 size={14} /> {tt("Világaim — váltás, új világ", "My worlds — switch, new world")}</button>
       <button className="btn ghost full" style={{ marginTop: 8, color: "var(--muted)" }} onClick={onLeave}>{tt("Kijelentkezés", "Log out")}</button>
@@ -7682,25 +7620,7 @@ const signOut = useCallback(async () => {
     setJump({ ...link, n: now() });
   };
 
-  const restore = (w2, m2) => {
-    const merged = {
-      ...w2, code: world.code, rev: (world.rev || 0) + 1,
-      accounts: { ...(w2.accounts || {}), ...(world.accounts || {}) },
-      players: { ...(w2.players || {}), ...(world.players || {}) },
-      userSettings: { ...(w2.userSettings || {}), ...(world.userSettings || {}) },
-    };
-    Object.keys(merged.deleted || {}).forEach((id) => {
-      delete merged.players[id];
-      delete merged.accounts[id];
-      if (merged.userSettings) delete merged.userSettings[id];
-    });
-    setWorld(merged);
-    setMedia(m2 || {});
-    mediaReady.current = true;
-    saveWorld(merged);
-    saveMedia(merged.code || world.code, m2 || {});
-    setErr(tt("A mentés visszatöltve.", "Save restored."));
-  };
+
 
   return (
     <LangCtx.Provider value={langCtxValue}>
@@ -7748,7 +7668,7 @@ const signOut = useCallback(async () => {
   w={view}
   update={update}
   setErr={setErr}
-  onRestore={restore}
+ 
   onLeave={signOut}
   onDeleteAccount={deleteOwnAccount}
             onRooms={() => setShowRooms(true)} auto={auto} onAuto={changeAuto}
