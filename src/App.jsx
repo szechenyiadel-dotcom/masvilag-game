@@ -4066,30 +4066,18 @@ function Rooms({ w, onOpen, onCreate, onClose, setErr, onSignOut, onNeedLogin })
   useEffect(() => { refresh(); }, [refresh]);
 
   const open = async (r) => {
-    setBusy(r.code);
-    try {
-      const wld = await loadWorld(r.code);
-      if (!wld) throw new Error(tt("Ez a világ már nem érhető el.", "This world is no longer available."));
-      let id = r.meId && wld.accounts && wld.accounts[r.meId] ? r.meId : null;
-      if (!id && r.username) {
-        const acc = accByUser(wld, r.username);
-        if (acc) id = acc.id;
-      }
-      if (!id) { onNeedLogin(r.code); return; }
-      onOpen(wld, id);
-    } catch (e) { setErr((e && e.message) || tt("Nem sikerült megnyitni.", "Failed to open.")); }
-    setBusy("");
-  };
+  if (!r || !r.code) return;
 
-  const remove = async (r) => {
-    setBusy(r.code);
-    try {
-      await forgetRoom(r.code);
-      await refresh();
-      setConfirm(null);
-    } catch (e) { setErr((e && e.message) || tt("A törlés nem sikerült.", "Removal failed.")); }
-    setBusy("");
-  };
+  /*
+   * ONLINE világot soha nem nyitunk meg
+   * közvetlenül a helyi IndexedDB backupból.
+   *
+   * A világkódot átadjuk a belépőképernyőnek,
+   * ahol a PostgreSQL szerver hitelesíti a usert
+   * és onnan tölti le az aktuális világot.
+   */
+  onNeedLogin(r.code);
+};
 
   return (
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
