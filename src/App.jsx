@@ -292,6 +292,91 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     white-space: nowrap;
     touch-action: manipulation;
   }
+    /* ---------- ROLE PLAY / ÚJ JELENET MOBILON ---------- */
+
+.scene-create-sheet {
+  width: 100%;
+  max-width: none;
+
+  height: calc(100dvh - 82px);
+  max-height: calc(100dvh - 82px);
+
+  margin: 0;
+  box-sizing: border-box;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  padding: 16px 14px;
+  padding-bottom: calc(90px + env(safe-area-inset-bottom));
+
+  border-radius: 18px 18px 0 0;
+}
+
+.scene-create-sheet .row {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.scene-create-sheet .row .btn {
+  flex: 0 1 auto;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.scene-create-sheet .i {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.scene-create-sheet .mobile-action-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1002;
+
+  margin-left: -14px;
+  margin-right: -14px;
+  margin-bottom: calc(-90px - env(safe-area-inset-bottom));
+
+  width: calc(100% + 28px);
+
+  padding: 10px 14px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+  .scene-create-sheet {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.scene-create-sheet {
+  padding-top: max(16px, env(safe-area-inset-top));
+}
+
+.scene-create-scrim {
+  align-items: stretch;
+  box-sizing: border-box;
+  padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  overflow: hidden;
+}
+
+.scene-create-scrim .scene-create-sheet {
+  width: 100%;
+  max-width: none;
+
+  height: 100%;
+  max-height: 100%;
+
+  margin: 0;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
 }
 `;
 
@@ -6575,12 +6660,12 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
 
  return (
   <div
-    className="scrim"
+    className="scrim scene-create-scrim"
     onClick={(e) => {
       if (e.target === e.currentTarget) onClose();
     }}
   >
-    <div className="sheet">
+    <div className="sheet scene-create-sheet">
       <div className="between">
         <h2 style={{ fontSize: 20 }}>
           {tt("Új jelenet", "New scene")}
