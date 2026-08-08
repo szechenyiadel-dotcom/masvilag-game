@@ -6784,8 +6784,10 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
         )}
   </button>
 </div>
+
     </div>
-  );
+  </div>
+);
 }
 
 function Scene({ w, scene, update, setErr, onBack }) {
