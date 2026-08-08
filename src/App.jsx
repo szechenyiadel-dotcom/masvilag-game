@@ -7233,20 +7233,23 @@ KARAKTERHŰ CHATSTÍLUS:
 
 EMOJI:
 
-- Az emoji-használat legyen TÉNYLEGESEN jelen, HA a megszólaló karakterek között van olyan, aki természetesen használ emojit.
-- Ha az aktuális válaszolók között van emoji-használó karakter, legalább egy generált üzenet tartalmazzon emojit.
-- Általában 1-2 emoji elég egy üzenetben.
-- Néha egyetlen emoji is lehet teljes válasz.
-- Az emoji lehet a szöveg elején, közepén vagy végén.
-- Nem kell minden karakternek emojit használnia.
-- Nem kell minden körben emojinak lennie, ha egyik természetesen megszólaló karakter sem használna.
-- Ne kényszeríts emojit olyan karakterre, akinek ez nem illik.
-- Ritkán több emoji is természetes lehet egy expresszív karakternél.
-- Ne használják folyton ugyanazokat az emojikat.
-- Ne legyen minden flört ❤️ vagy 😏.
-- Ne legyen minden nevetés 😂 vagy 😭.
-- Ne legyen minden döbbenet 💀.
-- Az emoji típusa igazodjon ahhoz, KI ír, KINEK ír és milyen hangulatban van.
+- Az emoji-használat legyen valódi része ${c.name} privát chatstílusának, ne csak elméleti lehetőség.
+- A személyiséged, beszédstílusod, korod, online szokásaid és aktuális hangulatod alapján döntsd el, mennyire használsz emojit.
+- Ha ${c.name} természetesen használna emojikat, AKKOR ténylegesen jelenjenek is meg időről időre a válaszaiban.
+- Ha az előző néhány üzenetedben nem használtál emojit, és a karaktered nem kifejezetten emoji-kerülő, most különösen fontold meg 1 megfelelő emoji használatát.
+- Ne legyen az az alapértelmezett döntés, hogy mindig 0 emoji.
+- Általában 0-2 emoji legyen egy üzenetben.
+- Néha egyetlen emoji is lehet teljes válasz, például egy reakció.
+- Az emoji lehet az üzenet elején, közepén vagy végén.
+- Ne használj emojit minden egyes üzenetben.
+- Egy visszafogott, rideg vagy formális karakter használhat nagyon ritkán emojit.
+- Egy játékos, flörtölős, impulzív, fiatalos vagy online aktív karakter használhat gyakrabban.
+- Az emoji mindig az adott karakterhez és pillanathoz illeszkedjen.
+- Ne használd folyton ugyanazokat az emojikat.
+- Ne legyen automatikusan minden flört ❤️ vagy 😏.
+- Ne legyen automatikusan minden nevetés 😂 vagy 😭.
+- Ne legyen automatikusan minden düh 😡.
+- Az emoji ne dekoráció legyen: ugyanúgy hordozhat iróniát, feszültséget, flörtöt, gúnyt, zavart, szeretetet vagy közönyt, mint a szavak.
 
 CHAT-RITMUS:
 
@@ -8482,6 +8485,24 @@ VALÓDI PRIVÁT CHAT:
 - Ne írd le, hogyan nézel, mosolyogsz, sóhajtasz, mozogsz vagy mit csinálsz fizikailag.
 - Csak azt írd, amit ténylegesen elküldenél neki üzenetként.
 
+EMOJI:
+
+- Az emoji-használat legyen valódi része ${bot.name} privát chatstílusának, ha az illik hozzá.
+- Ne legyen az alapértelmezett döntés, hogy mindig emoji nélkül írsz.
+- Ha ${bot.name} személyisége, beszédstílusa, kora, online viselkedése vagy aktuális hangulata alapján természetesen használna emojit, akkor ténylegesen használj is.
+- Ha az előző néhány saját DM-edben nem használtál emojit, és ${bot.name} nem kifejezetten emoji-kerülő karakter, most különösen fontold meg 1 megfelelő emoji használatát.
+- Általában 0-2 emoji elég.
+- Néha egyetlen emoji is lehet teljes üzenet vagy reakció.
+- Egy játékos, flörtölős, impulzív, fiatalos vagy online aktív karakter használhat gyakrabban emojit.
+- Egy rideg, visszafogott vagy formális karakter használhat ritkábban.
+- Az emoji tükrözze ${bot.name} saját humorát, személyiségét, hangulatát és a konkrét helyzetet.
+- Ne használd folyton ugyanazokat az emojikat.
+- Ne legyen minden flört ❤️ vagy 😏.
+- Ne legyen minden nevetés 😂 vagy 😭.
+- Ne legyen minden düh 😡.
+- Az emoji lehet ironikus, gúnyos, flörtölős, szeretetteljes, kínos, passzív-agresszív vagy száraz reakció is.
+- Ne tegyél emojit minden üzenetbe csak azért, mert használhatsz.
+
 TERMÉSZETES CHATSTÍLUS:
 
 - Lehet beszólás.
@@ -8790,7 +8811,18 @@ PRIVÁT VÁLASZ:
 - Ne narráljon cselekvést vagy belső gondolatot.
 - Ne magyarázza túl, mit érez.
 - Közvetlenül a note-ra reagáljon.
-- Használhat emojit, ha az adott karakter természetesen használna.
+- Az emoji-használat legyen tényleges része a privát válasznak, ha az adott karakter chatstílusához természetesen illik.
+- Ne legyen automatikusan mindig 0 emoji.
+- Ha az adott karakter személyisége, beszédstílusa, kora, online szokásai vagy aktuális hangulata alapján rendszeresen használna emojit privát chatben, akkor időnként ténylegesen tegyél is emojit a DM-be.
+- Általában 0-2 emoji elég.
+- Néha egy emoji önmagában, vagy egy emoji néhány szóval együtt is lehet teljes privát reakció.
+- Egy játékos, flörtölős, impulzív, expresszív vagy online aktív karakter használhat gyakrabban emojit.
+- Egy rideg, minimalista, visszafogott vagy formális karakter használhat ritkán vagy akár egyáltalán nem.
+- Az emoji típusa mindig az adott karakter személyiségéhez és a konkrét note jelentéséhez igazodjon.
+- Az emoji lehet szeretetteljes, ironikus, gúnyos, flörtölős, féltékeny, kínos, passzív-agresszív, döbbent vagy száraz reakció is.
+- Ne ismételd folyton ugyanazokat az emojikat.
+- Ne legyen minden flört ❤️ vagy 😏, minden nevetés 😂 vagy 😭, minden düh 😡.
+- Ne tegyél emojit minden DM-be kötelezően; a cél a természetes változatosság, nem az emoji-spam.
 - A karakter saját beszédstílusa, kisbetű/nagybetű használata, szlengje és írásjelei maradjanak felismerhetők.
 - A példamondatok csak stílusiránymutatások; ne másold és ne parafrazáld őket.
 
