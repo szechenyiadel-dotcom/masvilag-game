@@ -295,105 +295,144 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 /* ---------- ROLE PLAY MOBIL ---------- */
 
 .scene-create-scrim {
-  align-items: flex-end !important;
-  box-sizing: border-box;
-  padding-bottom: 72px;
-  overflow: hidden;
+  position: fixed !important;
+
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 72px !important;
+
+  width: 100% !important;
+  height: auto !important;
+
+  z-index: 50 !important;
+
+  display: block !important;
+
+  padding: 0 !important;
+  margin: 0 !important;
+
+  overflow: hidden !important;
+
+  background: var(--ink) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .scene-create-sheet {
+  position: relative !important;
+
   display: block !important;
-  flex: none !important;
 
   width: 100% !important;
-  max-width: 100% !important;
+  max-width: none !important;
 
-  height: auto !important;
-  max-height: calc(100dvh - 90px) !important;
+  height: 100% !important;
+  max-height: none !important;
 
   margin: 0 !important;
-  padding: 16px !important;
 
-  box-sizing: border-box;
+  padding: 18px 16px 100px !important;
+  padding-top: max(18px, env(safe-area-inset-top)) !important;
+
+  box-sizing: border-box !important;
+
   overflow-y: auto !important;
   overflow-x: hidden !important;
 
-  border-radius: 18px 18px 0 0;
+  border: none !important;
+  border-radius: 0 !important;
 
   -webkit-overflow-scrolling: touch;
-}
-
-.scene-create-sheet > * {
-  max-width: 100%;
-  box-sizing: border-box;
+  overscroll-behavior: contain;
 }
 
 .scene-create-sheet .between {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: space-between;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+
+  width: 100% !important;
 }
 
 .scene-create-sheet label.f {
-  display: block;
-  width: 100%;
-  margin-top: 14px;
+  display: block !important;
+
+  width: 100% !important;
+
+  margin-top: 18px !important;
+  margin-bottom: 6px !important;
 }
 
 .scene-create-sheet .i {
-  display: block;
+  display: block !important;
+
   width: 100% !important;
   min-width: 0 !important;
   max-width: 100% !important;
-  box-sizing: border-box;
+
+  box-sizing: border-box !important;
 }
 
 .scene-create-sheet textarea.i {
-  min-height: 100px;
+  min-height: 110px !important;
 }
 
 .scene-create-sheet .row {
   display: flex !important;
+
   flex-direction: row !important;
   flex-wrap: wrap !important;
 
   width: 100% !important;
-  gap: 6px !important;
+
+  gap: 8px !important;
 }
 
 .scene-create-sheet .row .btn {
   flex: 0 0 auto !important;
+
   width: auto !important;
-  max-width: 100%;
+  min-width: 0 !important;
+  max-width: 100% !important;
 
-  min-height: 40px;
+  min-height: 42px !important;
 
-  white-space: normal;
-  word-break: normal;
+  white-space: normal !important;
+  word-break: normal !important;
 }
 
 .scene-create-sheet > .btn.full {
+  display: flex !important;
+
   width: 100% !important;
+  min-height: 48px !important;
 }
 
 .scene-create-sheet .mobile-action-bar {
   position: sticky !important;
-  bottom: 0 !important;
-  z-index: 1002;
+
+  left: 0 !important;
+  right: 0 !important;
+  bottom: -100px !important;
+
+  z-index: 100 !important;
 
   width: calc(100% + 32px) !important;
 
   margin-left: -16px !important;
   margin-right: -16px !important;
-  margin-bottom: -16px !important;
-  margin-top: 16px !important;
+  margin-top: 20px !important;
 
-  padding: 10px 16px;
-  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  padding: 10px 16px !important;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom)) !important;
 
-  background: rgba(10, 9, 16, 0.98);
-}   
+  box-sizing: border-box !important;
+
+  background: var(--ink) !important;
+
+  border-top: 1px solid var(--line);
+}
 }
 `;
 
@@ -6683,6 +6722,7 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
     }}
   >
     <div className="sheet scene-create-sheet">
+
       <div className="between">
         <h2 style={{ fontSize: 20 }}>
           {tt("Új jelenet", "New scene")}
@@ -6695,10 +6735,8 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
           <X size={14} />
         </button>
       </div>
-          <button className="btn tiny ghost" onClick={onClose}><X size={14} /></button>
-        </div>
 
-        <label className="f">{tt("Cím", "Title")}</label>
+      <label className="f">{tt("Cím", "Title")}</label>
         <input className="i" value={title} placeholder={tt("pl. A parti a régi malomban", "e.g. The party at the old mill")} onChange={(e) => setTitle(e.target.value)} />
 
         <label className="f">{tt("Helyzet — hol, mikor, mi a tét", "Situation — where, when, what's at stake")}</label>
