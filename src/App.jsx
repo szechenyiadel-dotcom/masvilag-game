@@ -4986,13 +4986,122 @@ function applyComments(n, postId, out, label) {
       if (!who || !c.text) return;
       const body = cleanGeneratedUtterance(n, who, c.text, 240);
       if (!body) return;
-      const tag = String((c.reply_to !== undefined ? c.reply_to : c.replyTo) || "").trim().toLowerCase();
-      let parent = byLabel[tag] || null;
-      const pc = parent && p.comments.find((x) => x.id === parent);
-      if (pc && pc.parent) parent = pc.parent;
-      const made = { id: uid(), authorId: who, text: body, ts: now(), parent, language: worldLanguage(n, n.meId) };
-      p.comments.push(made);
-      noteComment(n, p, made);
+      const tag = String(
+  (
+    c.reply_to !== undefined
+      ? c.reply_to
+      : c.replyTo
+  ) || ""
+)
+  .trim()
+  .toLowerCase();
+
+let parent =
+  byLabel[tag] || null;
+
+const pc =
+  parent &&
+  p.comments.find(
+    (x) => x.id === parent
+  );
+
+/*
+ * Ha az AI konkrét kommentre válaszolt,
+ * az esemény célpontja annak a kommentnek
+ * a szerzője legyen.
+ *
+ * Ha csak simán kommentelt,
+ * akkor a poszt szerzője.
+ */
+const targetId =
+  pc && pc.authorId
+    ? pc.authorId
+    : p.authorId || "";
+
+/*
+ * A UI jelenlegi thread-rendszere
+ * a mélyebb válaszokat a gyökérkommenthez
+ * rendezi, ezt nem változtatjuk meg.
+ */
+if (pc && pc.parent) {
+  parent = pc.parent;
+}
+
+const made = {
+  id: uid(),
+  authorId: who,
+  text: body,
+  ts: now(),
+  parent,
+  language: worldLanguage(
+    n,
+    n.meId
+  ),
+};
+
+p.comments.push(made);
+
+noteComment(
+  n,
+  p,
+  made
+);
+
+recordSocialEvent(
+  n,
+  {
+    type:
+      tag
+        ? "reply"
+        : "comment",
+
+    refId: made.id,
+    ts: made.ts,
+
+    actorId: who,
+
+    targetIds:
+      targetId &&
+      targetId !== who
+        ? [targetId]
+        : [],
+
+    visibility: "public",
+    factLevel: "observed",
+
+    importance:
+      tag
+        ? 28
+        : 20,
+
+    drama: 0,
+    romance: 0,
+    embarrassment: 0,
+
+    source: "ai",
+
+    text: made.text,
+
+    tags: [
+      "social",
+      "ai-comment",
+      tag
+        ? "reply"
+        : "comment",
+    ],
+
+    meta: {
+      postId: p.id,
+      commentId: made.id,
+      parentId:
+        made.parent || "",
+      postAuthorId:
+        p.authorId || "",
+      targetId:
+        targetId || "",
+    },
+  }
+);
       rememberKnowledge(n, who, {
         kind: "conversation",
         source: "self_action",
@@ -6028,15 +6137,170 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
         <Post key={p.id} w={w} post={p} busy={busy} onComments={askComments} onAskReply={askReply}
           highlight={hl === p.id} nodeRef={(el) => { refs.current[p.id] = el; }}
           onComment={(id, text2, parent) => update((n) => {
-            const x = n.posts.find((y) => y.id === id);
-            if (!x) return;
-            const made = { id: uid(), authorId: n.meId || w.meId, text: text2, ts: now(), parent: parent || null };
-            x.comments.push(made);
-            noteComment(n, x, made);
-          })}
-          onLike={(id) => update((n) => { const x = n.posts.find((y) => y.id === id); if (x) x.likes = (x.likes || 0) + 1; })} />
-      ))}
-    </>
+  const x = n.posts.find(
+    (y) => y.id === id
+  );
+
+  if (!x) return;
+
+  const actorId =
+    n.meId || w.meId;
+
+  const parentComment =
+    parent
+      ? (x.comments || []).find(
+          (c) => c.id === parent
+        )
+      : null;
+
+  const targetId =
+    parentComment &&
+    parentComment.authorId
+      ? parentComment.authorId
+      : x.authorId;
+
+  const made = {
+    id: uid(),
+    authorId: actorId,
+    text: text2,
+    ts: now(),
+    parent: parent || null,
+  };
+
+  if (!Array.isArray(x.comments)) {
+    x.comments = [];
+  }
+
+  x.comments.push(made);
+
+  noteComment(
+    n,
+    x,
+    made
+  );
+recordSocialEvent(
+  n,
+  {
+    type:
+      parent
+        ? "reply"
+        : "comment",
+
+    refId: made.id,
+    ts: made.ts,
+
+    actorId,
+
+    targetIds:
+      targetId &&
+      targetId !== actorId
+        ? [targetId]
+        : [],
+
+    visibility: "public",
+    factLevel: "observed",
+
+    importance:
+      parent
+        ? 30
+        : 22,
+
+    drama: 0,
+    romance: 0,
+    embarrassment: 0,
+
+    source: "player",
+
+    text: made.text,
+
+    tags: [
+      "social",
+      "player-comment",
+      parent
+        ? "reply"
+        : "comment",
+    ],
+
+    meta: {
+      postId: x.id,
+      commentId: made.id,
+      parentId:
+        made.parent || "",
+      postAuthorId:
+        x.authorId || "",
+      targetId:
+        targetId || "",
+    },
+  }
+);
+})}
+  /*
+   * SOCIAL EVENT LEDGER
+   *
+   * A játékos publikus kommentjei és
+   * kommentválaszai innentől valódi
+   * világ-eseményként is megmaradnak.
+   */
+  recordSocialEvent(
+    n,
+    {
+      type:
+        parent
+          ? "reply"
+          : "comment",
+
+      refId: made.id,
+
+      ts: made.ts,
+
+      actorId,
+
+      targetIds:
+        targetId &&
+        targetId !== actorId
+          ? [targetId]
+          : [],
+
+      visibility: "public",
+
+      factLevel: "observed",
+
+      importance:
+        parent
+          ? 30
+          : 22,
+
+      drama: 0,
+      romance: 0,
+      embarrassment: 0,
+
+      source: "player",
+
+      text: made.text,
+
+      tags: [
+        "social",
+        "player-comment",
+        parent
+          ? "reply"
+          : "comment",
+      ],
+
+      meta: {
+        postId: x.id,
+        commentId: made.id,
+        parentId:
+          made.parent || "",
+
+        postAuthorId:
+          x.authorId || "",
+
+        targetId:
+          targetId || "",
+      },
+    }
+  );
+})}
   );
 }
 
