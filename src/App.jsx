@@ -5896,14 +5896,116 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
   };
 
   const post = () => {
-    const t = text.trim();
-    if (!t && !img) return;
-    const imageId = imageIdOf(img);
-    const p = { id: uid(), authorId: w.meId, ts: now(), likes: 0, text: t, imageId: imageId || "", image: imageId ? "" : (img || ""), comments: [] };
-    update((n) => { n.posts.unshift(p); noteMentions(n, t, w.meId, { type: "post", id: p.id }); });
-    if (onSignal) onSignal({ type: "player-post", postId: p.id });
-    setText(""); setImg("");
+  const t = text.trim();
+
+  if (!t && !img) return;
+
+  const imageId =
+    imageIdOf(img);
+
+  const p = {
+    id: uid(),
+    authorId: w.meId,
+    ts: now(),
+    likes: 0,
+    text: t,
+    imageId: imageId || "",
+    image:
+      imageId
+        ? ""
+        : (img || ""),
+    comments: [],
   };
+
+  update((n) => {
+    /*
+     * A poszt bekerül a feedbe.
+     */
+    n.posts.unshift(p);
+
+    /*
+     * A régi mention / knowledge rendszer
+     * továbbra is működik.
+     */
+    noteMentions(
+      n,
+      t,
+      w.meId,
+      {
+        type: "post",
+        id: p.id,
+      }
+    );
+
+    /*
+     * SOCIAL EVENT LEDGER
+     *
+     * A játékos nyilvános posztját
+     * strukturált eseményként is megőrizzük.
+     */
+    recordSocialEvent(
+      n,
+      {
+        type: "post",
+
+        refId: p.id,
+
+        ts: p.ts,
+
+        actorId: w.meId,
+
+        targetIds: [],
+
+        visibility: "public",
+
+        factLevel: "observed",
+
+        importance:
+          img ? 30 : 24,
+
+        drama: 0,
+
+        romance: 0,
+
+        embarrassment: 0,
+
+        source: "player",
+
+        text:
+          t ||
+          "Image post",
+
+        tags: [
+          "post",
+          "player-post",
+          img
+            ? "image-post"
+            : "text-post",
+        ],
+
+        meta: {
+          postId: p.id,
+          hasImage: Boolean(img),
+        },
+      }
+    );
+  });
+
+  /*
+   * Ez marad:
+   * az AI-k automatikusan reagálhatnak
+   * a játékos új posztjára.
+   */
+  if (onSignal) {
+    onSignal({
+      type: "player-post",
+      postId: p.id,
+    });
+  }
+
+  setText("");
+  setImg("");
+};
 
   const advance = () => {
     if (!w.chars.length) return setErr(tt("Előbb hozz létre karaktereket.", "First create some characters."));
@@ -9041,7 +9143,238 @@ function ensureSocialSimulationState(w) {
   if (!Array.isArray(w.socialEvents)) {
     w.socialEvents = [];
   }
+/*
+ * =========================================================
+ * SOCIAL EVENT LEDGER
+ * =========================================================
+ *
+ * Minden fontos társadalmi történés egységes formában
+ * kerül majd ide.
+ *
+ * Ebből dolgozhat később:
+ * - Whisper Wire
+ * - pletykarendszer
+ * - virality
+ * - hype
+ * - reputation
+ * - relationship következmények
+ */
 
+function socialScore(value, fallback = 0) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n)) {
+    return fallback;
+  }
+
+  return Math.max(
+    0,
+    Math.min(100, Math.round(n))
+  );
+}
+
+function recordSocialEvent(
+  w,
+  event = {}
+) {
+  if (!w || typeof w !== "object") {
+    return null;
+  }
+
+  ensureSocialSimulationState(w);
+
+  const type =
+    String(
+      event.type || "event"
+    ).trim() || "event";
+
+  /*
+   * Ha ugyanazt a konkrét posztot /
+   * kommentet / eseményt egy retry miatt
+   * még egyszer próbálnánk naplózni,
+   * ne készüljön belőle duplikáció.
+   */
+  const refId =
+    event.refId !== undefined &&
+    event.refId !== null
+      ? String(event.refId)
+      : "";
+
+  if (refId) {
+    const existing =
+      (w.socialEvents || []).find(
+        (x) =>
+          x &&
+          x.type === type &&
+          String(x.refId || "") ===
+            refId
+      );
+
+    if (existing) {
+      return existing;
+    }
+  }
+
+  const rawTargets =
+    Array.isArray(event.targetIds)
+      ? event.targetIds
+      : event.targetId
+        ? [event.targetId]
+        : [];
+
+  const targetIds = [
+    ...new Set(
+      rawTargets
+        .filter(Boolean)
+        .map((x) => String(x))
+    ),
+  ];
+
+  const rawWitnesses =
+    Array.isArray(event.witnessIds)
+      ? event.witnessIds
+      : [];
+
+  const witnessIds = [
+    ...new Set(
+      rawWitnesses
+        .filter(Boolean)
+        .map((x) => String(x))
+    ),
+  ];
+
+  const allowedVisibility = [
+    "public",
+    "private",
+    "group",
+    "limited",
+    "system",
+  ];
+
+  const visibility =
+    allowedVisibility.includes(
+      event.visibility
+    )
+      ? event.visibility
+      : "public";
+
+  const allowedFactLevels = [
+    "observed",
+    "inferred",
+    "rumor",
+    "speculation",
+  ];
+
+  const factLevel =
+    allowedFactLevels.includes(
+      event.factLevel
+    )
+      ? event.factLevel
+      : "observed";
+
+  const tags = Array.isArray(event.tags)
+    ? [
+        ...new Set(
+          event.tags
+            .map((x) =>
+              String(x || "")
+                .trim()
+                .toLowerCase()
+            )
+            .filter(Boolean)
+        ),
+      ].slice(0, 12)
+    : [];
+
+  const entry = {
+    id:
+      event.id ||
+      "se_" + uid(),
+
+    refId,
+
+    ts:
+      Number(event.ts) ||
+      now(),
+
+    type,
+
+    actorId:
+      event.actorId
+        ? String(event.actorId)
+        : "",
+
+    targetIds,
+
+    witnessIds,
+
+    visibility,
+
+    factLevel,
+
+    importance:
+      socialScore(
+        event.importance,
+        20
+      ),
+
+    drama:
+      socialScore(
+        event.drama,
+        0
+      ),
+
+    romance:
+      socialScore(
+        event.romance,
+        0
+      ),
+
+    embarrassment:
+      socialScore(
+        event.embarrassment,
+        0
+      ),
+
+    source:
+      String(
+        event.source || "world"
+      ),
+
+    text:
+      String(
+        event.text || ""
+      ).trim(),
+
+    tags,
+
+    meta:
+      event.meta &&
+      typeof event.meta === "object" &&
+      !Array.isArray(event.meta)
+        ? {
+            ...event.meta,
+          }
+        : {},
+  };
+
+  /*
+   * A legújabb esemény legyen elöl.
+   */
+  w.socialEvents.unshift(entry);
+
+  /*
+   * Ne nőjön végtelenre a teljes world JSON.
+   *
+   * A nagyon régi fontos történeteket később
+   * a Whisper Wire / history rendszer fogja
+   * összefoglalva megőrizni.
+   */
+  w.socialEvents =
+    w.socialEvents.slice(0, 600);
+
+  return entry;
+}
   /*
    * Aura / popularity / reputation / hype stb.
    */
