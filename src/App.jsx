@@ -6233,13 +6233,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
     }
   );
 })}
-  /*
-   * SOCIAL EVENT LEDGER
-   *
-   * A játékos publikus kommentjei és
-   * kommentválaszai innentől valódi
-   * világ-eseményként is megmaradnak.
-   */
   recordSocialEvent(
     n,
     {
