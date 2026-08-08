@@ -3806,8 +3806,94 @@ function seedWorld(code) {
         "Kisváros a hegyek között, ahol mindenki ismer mindenkit, és minden titok végül kiszivárog. Modern világ, mágia nincs. A történet a Beacon Falls Gimnázium utolsó éve körül forog: bulik, pletykák, régi sérelmek és egy tavalyi baleset, amiről senki nem beszél szívesen.",
       at: now(),
     },
-    chars, extras: [], rels: {}, posts: [], chats: {}, mems: {}, charMemory: {}, userSettings: {}, log: [], scenes: [], groups: [], notes: [],
-    accounts: {}, players: {}, deleted: {}, notify: {},
+    chars,
+extras: [],
+rels: {},
+posts: [],
+chats: {},
+mems: {},
+charMemory: {},
+userSettings: {},
+log: [],
+scenes: [],
+groups: [],
+notes: [],
+
+/*
+ * SOCIAL SIMULATION
+ *
+ * Strukturált események. Ebből fog később dolgozni
+ * a virality, gossip, Whisper Wire és reputation rendszer.
+ */
+socialEvents: [],
+
+/*
+ * Közösségi statisztikák karakterenként.
+ *
+ * Példa:
+ * socialStats[characterId] = {
+ *   aura: 0,
+ *   popularity: 0,
+ *   reputation: 0,
+ *   hype: 0,
+ *   followers: 0,
+ *   following: 0
+ * }
+ */
+socialStats: {},
+
+/*
+ * Aktuális trendek / felkapott témák.
+ * Nem kötelező mindig lennie trendnek.
+ */
+trends: [],
+
+/*
+ * Pletykák és azok terjedése.
+ *
+ * Itt később külön tudjuk követni:
+ * - ki mit hallott;
+ * - kitől hallotta;
+ * - mennyire hiszi el;
+ * - továbbadta-e;
+ * - hogyan változott a pletyka.
+ */
+rumors: [],
+
+/*
+ * The Whisper Wire történeti memóriája.
+ *
+ * Nem maga a feed:
+ * itt azt tároljuk majd, milyen sztorikat dolgozott már fel,
+ * milyen eseményeket kapcsolt össze,
+ * és mire tud később visszautalni.
+ */
+whisperWire: {
+  stories: [],
+  usedEventIds: [],
+  history: [],
+},
+
+/*
+ * Gossip & Media beállítások.
+ */
+gossipSettings: {
+  whisperWire: true,
+  frequency: "normal",
+  articleLength: "dynamic",
+  characterGossip: true,
+  relationshipImpact: "normal",
+},
+
+/*
+ * Random / Pop-up események.
+ */
+popupEvents: [],
+
+accounts: {},
+players: {},
+deleted: {},
+notify: {},
   };
   // példa mellékszereplő: van, akiről csak beszélnek
   const dad = { id: "x" + uid(), name: "Cole Márk", note: "Ryan apja, három éve elköltözött a városból", updatedAt: now() };
@@ -5840,7 +5926,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
         </div>
         {autoOn && <p className="hint" style={{ marginTop: 8 }}>{tt("Az élő világ be van kapcsolva — maguktól reagálnak rá.", "The live world is on — they'll react on their own.")}</p>}
       </div>
-      
+
 
       {w.posts.length === 0 && (
         <p className="hint" style={{ textAlign: "center", marginTop: 24 }}>
