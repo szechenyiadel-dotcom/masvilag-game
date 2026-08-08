@@ -292,91 +292,108 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     white-space: nowrap;
     touch-action: manipulation;
   }
-    /* ---------- ROLE PLAY / ÚJ JELENET MOBILON ---------- */
-
-.scene-create-sheet {
-  width: 100%;
-  max-width: none;
-
-  height: calc(100dvh - 82px);
-  max-height: calc(100dvh - 82px);
-
-  margin: 0;
-  box-sizing: border-box;
-
-  overflow-y: auto;
-  overflow-x: hidden;
-
-  padding: 16px 14px;
-  padding-bottom: calc(90px + env(safe-area-inset-bottom));
-
-  border-radius: 18px 18px 0 0;
-}
-
-.scene-create-sheet .row {
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-.scene-create-sheet .row .btn {
-  flex: 0 1 auto;
-  max-width: 100%;
-  white-space: normal;
-  word-break: break-word;
-}
-
-.scene-create-sheet .i {
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-.scene-create-sheet .mobile-action-bar {
-  position: sticky;
-  bottom: 0;
-  z-index: 1002;
-
-  margin-left: -14px;
-  margin-right: -14px;
-  margin-bottom: calc(-90px - env(safe-area-inset-bottom));
-
-  width: calc(100% + 28px);
-
-  padding: 10px 14px;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom));
-}
-  .scene-create-sheet {
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-}
-
-.scene-create-sheet {
-  padding-top: max(16px, env(safe-area-inset-top));
-}
+/* ---------- ROLE PLAY MOBIL ---------- */
 
 .scene-create-scrim {
-  align-items: stretch;
+  align-items: flex-end !important;
   box-sizing: border-box;
-  padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  padding-bottom: 72px;
   overflow: hidden;
 }
 
-.scene-create-scrim .scene-create-sheet {
-  width: 100%;
-  max-width: none;
+.scene-create-sheet {
+  display: block !important;
+  flex: none !important;
 
-  height: 100%;
-  max-height: 100%;
+  width: 100% !important;
+  max-width: 100% !important;
 
-  margin: 0;
+  height: auto !important;
+  max-height: calc(100dvh - 90px) !important;
 
-  overflow-y: auto;
-  overflow-x: hidden;
+  margin: 0 !important;
+  padding: 16px !important;
+
+  box-sizing: border-box;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+
+  border-radius: 18px 18px 0 0;
 
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
 }
+
+.scene-create-sheet > * {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.scene-create-sheet .between {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.scene-create-sheet label.f {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+}
+
+.scene-create-sheet .i {
+  display: block;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  box-sizing: border-box;
+}
+
+.scene-create-sheet textarea.i {
+  min-height: 100px;
+}
+
+.scene-create-sheet .row {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+
+  width: 100% !important;
+  gap: 6px !important;
+}
+
+.scene-create-sheet .row .btn {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  max-width: 100%;
+
+  min-height: 40px;
+
+  white-space: normal;
+  word-break: normal;
+}
+
+.scene-create-sheet > .btn.full {
+  width: 100% !important;
+}
+
+.scene-create-sheet .mobile-action-bar {
+  position: sticky !important;
+  bottom: 0 !important;
+  z-index: 1002;
+
+  width: calc(100% + 32px) !important;
+
+  margin-left: -16px !important;
+  margin-right: -16px !important;
+  margin-bottom: -16px !important;
+  margin-top: 16px !important;
+
+  padding: 10px 16px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+
+  background: rgba(10, 9, 16, 0.98);
+}   
 }
 `;
 
