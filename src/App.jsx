@@ -7973,18 +7973,17 @@ Formátum:
       }
     });
   } catch (e) {
+  console.error("CHAT SEND ERROR:", e);
+
   setErr(
     (e && e.message) ||
-      tt(
-        "Az AI most nem válaszolt. Próbáld újra.",
-        "The AI didn't respond. Try again."
-      )
+    tt(
+      "Az AI most nem válaszolt. Próbáld újra.",
+      "The AI didn't respond. Try again."
+    )
   );
 } finally {
-  sendLockRef.current = false;
-  setBusy(false);
-}
-};
+  
 
 const group = gid
   ? (w.groups || []).find(
