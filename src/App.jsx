@@ -5686,17 +5686,11 @@ function NotesStrip({ w, update, setErr, onOpenChat, jump, onRequestNoteReaction
     );
   };
 
-  return (
-    <div className="card" style={{ paddingBottom: 10 }}>
-      <div className="between">
-        <label className="f" style={{ margin: 0 }}>{tt("Jegyzetek", "Notes")}</label>
-        {mine && (
-          <button className="btn tiny ghost" onClick={askReactions}>
-            <Sparkles size={12} color="var(--gold)" />
-            {tt("Reagáljanak", "Let them react")}
-          </button>
-        )}
-      </div>
+ return (
+  <div className="card" style={{ paddingBottom: 10 }}>
+    <label className="f" style={{ margin: 0 }}>
+      {tt("Jegyzetek", "Notes")}
+    </label>
 
       <div className="note-strip">
         {!mine && (
@@ -5846,11 +5840,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
         </div>
         {autoOn && <p className="hint" style={{ marginTop: 8 }}>{tt("Az élő világ be van kapcsolva — maguktól reagálnak rá.", "The live world is on — they'll react on their own.")}</p>}
       </div>
-
-      <button className="btn full" style={{ marginTop: 12 }} onClick={advance}>
-        <Sparkles size={15} color="var(--gold)" />
-        {resting ? tt("Sorban áll…", "Waiting in line…") : tt("Történjen most valami", "Make something happen")}
-      </button>
+      
 
       {w.posts.length === 0 && (
         <p className="hint" style={{ textAlign: "center", marginTop: 24 }}>
