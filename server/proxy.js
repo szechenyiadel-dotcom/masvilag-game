@@ -12,7 +12,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || process.env.AI_API_KE
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const DEFAULT_PROVIDER = process.env.AI_PROVIDER || "anthropic";
-app.use(bodyParser.json({ limit: "8mb" }));
+app.use(bodyParser.json({ limit: "60mb" }));
 /* ---------- PostgreSQL ---------- */
 
 const pool = process.env.DATABASE_URL
@@ -36,7 +36,13 @@ const dbReady = pool
         account_id TEXT NOT NULL,
         expires_at TIMESTAMPTZ NOT NULL
       );
-
+CREATE TABLE IF NOT EXISTS world_media (
+  world_code TEXT PRIMARY KEY
+    REFERENCES worlds(code)
+    ON DELETE CASCADE,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
       CREATE INDEX IF NOT EXISTS sessions_expires_idx
       ON sessions (expires_at);
     `).then(() => {
@@ -928,7 +934,110 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
+/* ---------- CLOUD MEDIA ---------- */
 
+app.get("/media/load", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT data
+      FROM world_media
+      WHERE world_code = $1
+      LIMIT 1
+      `,
+      [session.worldCode]
+    );
+
+    return res.json({
+      ok: true,
+      media:
+        result.rows.length &&
+        result.rows[0].data &&
+        typeof result.rows[0].data === "object"
+          ? result.rows[0].data
+          : {},
+    });
+  } catch (err) {
+    console.error("Media load error:", err);
+
+    return res.status(500).json({
+      error: "Media load failed.",
+    });
+  }
+});
+
+app.post("/media/save", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
+
+    const media =
+      req.body &&
+      req.body.media &&
+      typeof req.body.media === "object"
+        ? req.body.media
+        : {};
+
+    const json = JSON.stringify(media);
+
+    if (json.length > 45 * 1024 * 1024) {
+      return res.status(413).json({
+        error: "Media library is too large.",
+      });
+    }
+
+    await pool.query(
+      `
+      INSERT INTO world_media (
+        world_code,
+        data,
+        updated_at
+      )
+      VALUES ($1, $2::jsonb, NOW())
+
+      ON CONFLICT (world_code)
+      DO UPDATE SET
+        data = EXCLUDED.data,
+        updated_at = NOW()
+      `,
+      [
+        session.worldCode,
+        json,
+      ]
+    );
+
+    return res.json({
+      ok: true,
+    });
+  } catch (err) {
+    console.error("Media save error:", err);
+
+    return res.status(500).json({
+      error: "Media save failed.",
+    });
+  }
+});
 app.post("/ai/messages", async (req, res) => {
   const provider = getProvider(req.body);
   if (provider === "openai") {

@@ -3339,18 +3339,240 @@ async function dropBig(base) {
 const mediaBytes = (m) => Object.keys(m || {}).reduce((sum, k) => sum + ((m[k] && m[k].length) || 0), 0);
 const MEDIA_CAP = 40 * 1048576;
 
-async function loadMedia(code) {
-  const local = await readBigScoped(MKEY(code), false);
-  const cloud = await readBig(MKEY(code));
-  const txt = local || cloud;
-  if (!txt) return {};
-  try { return JSON.parse(txt) || {}; } catch (e) { return {}; }
+async function serverLoadMedia() {
+  const res = await fetch("/media/load", {
+    method: "GET",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  let data = {};
+
+  try {
+    data = await res.json();
+  } catch (e) {
+    data = {};
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      data?.error ||
+      `Media load failed (${res.status})`
+    );
+  }
+
+  return (
+    data?.media &&
+    typeof data.media === "object"
+      ? data.media
+      : {}
+  );
 }
 
+
+async function serverSaveMedia(media) {
+  const res = await fetch("/media/save", {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      media: media || {},
+    }),
+  });
+
+  let data = {};
+
+  try {
+    data = await res.json();
+  } catch (e) {
+    data = {};
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      data?.error ||
+      `Media save failed (${res.status})`
+    );
+  }
+
+  return true;
+}
+
+
+async function loadMedia(code) {
+  /*
+    1. Képek erről az eszközről.
+  */
+  const localTxt =
+    await readBigScoped(
+      MKEY(code),
+      false
+    );
+
+  /*
+    2. Régi shared/browser media storage.
+  */
+  const legacyTxt =
+    await readBig(
+      MKEY(code)
+    );
+
+  const parseMedia = (txt) => {
+    if (!txt) return {};
+
+    try {
+      const parsed = JSON.parse(txt);
+
+      return (
+        parsed &&
+        typeof parsed === "object"
+          ? parsed
+          : {}
+      );
+    } catch (e) {
+      return {};
+    }
+  };
+
+  const localMedia =
+    parseMedia(localTxt);
+
+  const legacyMedia =
+    parseMedia(legacyTxt);
+
+  /*
+    3. PostgreSQL-ben tárolt közös médiatár.
+  */
+  let cloudMedia = {};
+
+  try {
+    cloudMedia =
+      await serverLoadMedia();
+  } catch (e) {
+    console.warn(
+      "Cloud media load failed:",
+      e
+    );
+  }
+
+  /*
+    Először a régi böngészős képek,
+    utána az adott eszköz helyi képei,
+    végül a szerver.
+
+    Így:
+    - a PC régi képei nem vesznek el;
+    - a telefon megkapja a cloud képeket;
+    - ha ugyanaz a kép már szerveren is
+      létezik, a szerveres verzió az elsődleges.
+  */
+  const merged = {
+    ...legacyMedia,
+    ...localMedia,
+    ...cloudMedia,
+  };
+
+  /*
+    A cloudból érkezett képeket
+    ezen az eszközön is cache-eljük.
+  */
+  try {
+    await writeBigScoped(
+      MKEY(code),
+      JSON.stringify(merged),
+      false
+    );
+  } catch (e) {
+    console.warn(
+      "Local media cache failed:",
+      e
+    );
+  }
+
+  /*
+    MIGRÁCIÓ:
+    ha ezen az eszközön vannak régi képek,
+    amelyek még nincsenek a PostgreSQL-ben,
+    automatikusan feltöltjük őket.
+  */
+  const hasLocalMedia =
+    Object.keys(localMedia).length > 0 ||
+    Object.keys(legacyMedia).length > 0;
+
+  const mergedJson =
+    JSON.stringify(merged);
+
+  const cloudJson =
+    JSON.stringify(cloudMedia);
+
+  if (
+    hasLocalMedia &&
+    mergedJson !== cloudJson
+  ) {
+    try {
+      await serverSaveMedia(merged);
+    } catch (e) {
+      console.warn(
+        "Cloud media migration failed:",
+        e
+      );
+    }
+  }
+
+  return merged;
+}
+
+
 async function saveMedia(code, media) {
-  const txt = JSON.stringify(media || {});
-  await writeBigScoped(MKEY(code), txt, false);
-  return writeBig(MKEY(code), txt);
+  const safeMedia =
+    media &&
+    typeof media === "object"
+      ? media
+      : {};
+
+  const txt =
+    JSON.stringify(safeMedia);
+
+  /*
+    1. Helyi cache / biztonsági másolat.
+  */
+  try {
+    await writeBigScoped(
+      MKEY(code),
+      txt,
+      false
+    );
+  } catch (e) {
+    console.warn(
+      "Local media save failed:",
+      e
+    );
+  }
+
+  /*
+    2. PostgreSQL.
+    Ettől lesz ugyanaz a kép elérhető
+    PC-n, telefonon és más eszközön is.
+  */
+  try {
+    await serverSaveMedia(
+      safeMedia
+    );
+
+    return true;
+  } catch (e) {
+    console.warn(
+      "Cloud media save failed:",
+      e
+    );
+
+    return false;
+  }
 }
 
 async function dropMedia(code) {
@@ -10933,6 +11155,7 @@ const signOut = useCallback(async () => {
       if (alive) {
         const loaded = m || {};
         setMedia(loaded);
+        mediaRef.current = loaded;
         lastSavedMedia.current = JSON.stringify(loaded);
         mediaReady.current = true;
       }
