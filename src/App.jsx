@@ -7983,7 +7983,10 @@ Formátum:
     )
   );
 } finally {
-  
+  sendLockRef.current = false;
+  setBusy(false);
+}
+};
 
 const group = gid
   ? (w.groups || []).find(
