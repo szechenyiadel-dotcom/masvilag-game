@@ -242,7 +242,57 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 .err { border:1px solid var(--oxblood); background:rgba(138,29,59,.15); border-radius:10px; padding:9px 12px; font-size:13px; margin-top:12px; }
 .hint { font-size:12px; color:var(--muted); }
 .sep { height:1px; background:var(--line); margin:16px 0; }
-.spin { animation:spin 1s linear infinite } @keyframes spin { to { transform:rotate(360deg) } }
+.spin { animation:spin 1s linear infinite }
+@keyframes spin {
+  to { transform:rotate(360deg) }
+}
+
+
+/* ---------- MOBILOS ACTION GOMBOK ---------- */
+
+@media (max-width: 768px) {
+
+  .mobile-action-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 1000;
+
+    display: flex;
+    gap: 10px;
+
+    width: 100%;
+    box-sizing: border-box;
+
+    padding: 10px 12px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+
+    background: rgba(10, 9, 16, 0.96);
+
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+
+    border-top: 1px solid var(--line);
+  }
+
+  .mobile-action-bar .btn {
+    flex: 1;
+
+    min-height: 48px;
+    height: auto;
+
+    padding: 12px 14px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 15px;
+    font-weight: 700;
+
+    white-space: nowrap;
+    touch-action: manipulation;
+  }
+}
 `;
 
 
@@ -6105,16 +6155,34 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
           </>
         )}
 
-        <button className="btn primary full" style={{ marginTop: 18 }}
-          onClick={() => {
-            if (!c.name || !c.name.trim()) return setErr(tt("A névnek muszáj lennie.", "The name is required."));
-            onSave({ ...c, username: (c.username || c.name).toLowerCase().replace(/[^a-z0-9._]/g, "") }, rels, newPeople);
-          }}>{tt("Mentés", "Save")}</button>
+        <div className="mobile-action-bar" style={{ marginTop: 18 }}>
+  <button
+    className="btn primary full"
+    onClick={() => {
+      if (!c.name || !c.name.trim()) {
+        return setErr(
+          tt(
+            "A névnek muszáj lennie.",
+            "The name is required."
+          )
+        );
+      }
 
-        {initial.id && !isHuman(w, initial.id) && !isNew && (
-          <button className="btn ghost full" style={{ marginTop: 8, color: "var(--steel)" }} onClick={() => onDelete(initial.id)}>
-            <Trash2 size={14} /> {tt("Karakter törlése", "Delete character")}
-          </button>
+      onSave(
+        {
+          ...c,
+          username: (c.username || c.name)
+            .toLowerCase()
+            .replace(/[^a-z0-9._]/g, "")
+        },
+        rels,
+        newPeople
+      );
+    }}
+  >
+    {tt("Mentés", "Save")}
+  </button>
+</div>
         )}
       </div>
     </div>
@@ -6534,11 +6602,33 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
           {busy ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} color="var(--gold)" />} {tt("Jelenet-ötlet kérése", "Ask for a scene idea")}
         </button>
 
-        <button className="btn primary full" style={{ marginTop: 8 }} disabled={!ids.length}
-          onClick={() => {
-            onCreate({ id: uid(), title: title.trim() || tt("Névtelen jelenet", "Unnamed scene"), setting: setting.trim(), cast: ids, turns: [], open: true, ts: now() });
-          }}>{ids.length ? tt(`Jelenet indítása (${ids.length} szereplő)`, `Start scene (${ids.length} characters)`) : tt("Válassz legalább egy szereplőt", "Choose at least one character")}</button>
-      </div>
+       <div className="mobile-action-bar" style={{ marginTop: 8 }}>
+  <button
+    className="btn primary full"
+    disabled={!ids.length}
+    onClick={() => {
+      onCreate({
+        id: uid(),
+        title: title.trim() || tt("Névtelen jelenet", "Unnamed scene"),
+        setting: setting.trim(),
+        cast: ids,
+        turns: [],
+        open: true,
+        ts: now()
+      });
+    }}
+  >
+    {ids.length
+      ? tt(
+          `Jelenet indítása (${ids.length} szereplő)`,
+          `Start scene (${ids.length} characters)`
+        )
+      : tt(
+          "Válassz legalább egy szereplőt",
+          "Choose at least one character"
+        )}
+  </button>
+</div>
     </div>
   );
 }
