@@ -6573,11 +6573,26 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
     setBusy(false);
   };
 
-  return (
-    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="sheet">
-        <div className="between">
-          <h2 style={{ fontSize: 20 }}>{tt("Új jelenet", "New scene")}</h2>
+ return (
+  <div
+    className="scrim"
+    onClick={(e) => {
+      if (e.target === e.currentTarget) onClose();
+    }}
+  >
+    <div className="sheet">
+      <div className="between">
+        <h2 style={{ fontSize: 20 }}>
+          {tt("Új jelenet", "New scene")}
+        </h2>
+
+        <button
+          className="btn tiny ghost"
+          onClick={onClose}
+        >
+          <X size={14} />
+        </button>
+      </div>
           <button className="btn tiny ghost" onClick={onClose}><X size={14} /></button>
         </div>
 
