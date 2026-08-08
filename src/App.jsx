@@ -7973,7 +7973,7 @@ Formátum:
       }
     });
   } catch (e) {
-    
+
   setErr(
   "CHAT: " +
   (
@@ -12403,7 +12403,17 @@ const signOut = useCallback(async () => {
         ok = true;
       } catch (e) {
         if (action && action.source === "manual" && alive) {
-          setErr((e && e.message) ? e.message : tt("Az AI-kérés nem sikerült.", "AI request failed."));
+          setErr(
+  "SIM: " +
+  (
+    (e && e.message)
+      ? e.message
+      : tt(
+          "Az AI-kérés nem sikerült.",
+          "AI request failed."
+        )
+  )
+);
         }
       }
       update((n) => {
