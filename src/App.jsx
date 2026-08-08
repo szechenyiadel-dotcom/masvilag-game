@@ -9329,24 +9329,13 @@ Formátum:
 function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
-  const needBrief = [view.player]
-    .concat(view.chars || [])
-    .filter(
-      (c) =>
-        c &&
-        ["hiányzik", "elavult"].indexOf(
-          briefState(c)
-        ) >= 0
-    )[0];
-
-  if (needBrief) {
-    return mkAction(
-      "brief",
-      `brief:${needBrief.id}:${rawLen(needBrief)}`,
-      { id: needBrief.id }
-    );
-  }
-
+  /*
+   * 1. A JÁTÉKOS AKCIÓI MINDIG ELSŐBBSÉGET KAPNAK.
+   *
+   * Ha a játékos posztolt vagy kommentelt,
+   * ne egy háttér-karbantartási feladat
+   * fusson le előbb.
+   */
   const pending = findUnanswered(view);
 
   if (pending && pending.comment) {
@@ -9369,126 +9358,158 @@ function planAutoAction(view) {
       `comments:${pending.post.id}:${
         (pending.post.comments || []).length
       }`,
-      { postId: pending.post.id }
+      {
+        postId: pending.post.id,
+      }
     );
   }
 
-const myNote = noteOf(
-  view,
-  view.meId
-);
-
-if (myNote) {
-  const reactedBy = new Set(
-    myNote.reactedBy || []
+  /*
+   * 2. A JÁTÉKOS NOTE-JÁRA IS MAGUKTÓL REAGÁLNAK.
+   */
+  const myNote = noteOf(
+    view,
+    view.meId
   );
 
-  const remainingReactors = (
-    view.chars || []
-  ).filter(
-    (c) =>
-      c &&
-      !isHuman(view, c.id) &&
-      !reactedBy.has(c.id)
-  );
+  if (myNote) {
+    const reactedBy = new Set(
+      myNote.reactedBy || []
+    );
+
+    const remainingReactors = (
+      view.chars || []
+    ).filter(
+      (c) =>
+        c &&
+        !isHuman(view, c.id) &&
+        !reactedBy.has(c.id)
+    );
+
+    if (
+      remainingReactors.length > 0 &&
+      now() - (myNote.ts || 0) < NOTE_LIFE
+    ) {
+      return mkAction(
+        "note-react",
+        `note-react:${myNote.id}`,
+        {
+          noteId: myNote.id,
+        }
+      );
+    }
+  }
+
+  /*
+   * 3. BRIEF KARBANTARTÁS
+   *
+   * Ez továbbra is fontos,
+   * de többé nem blokkolja folyamatosan
+   * a valódi közösségi aktivitást.
+   */
+  const needBrief = [view.player]
+    .concat(view.chars || [])
+    .filter(
+      (c) =>
+        c &&
+        ["hiányzik", "elavult"].indexOf(
+          briefState(c)
+        ) >= 0
+    )[0];
 
   if (
-    remainingReactors.length > 0 &&
-    now() - (myNote.ts || 0) < NOTE_LIFE
+    needBrief &&
+    Math.random() < 0.12
   ) {
     return mkAction(
-      "note-react",
-      `note-react:${myNote.id}`,
-      { noteId: myNote.id }
+      "brief",
+      `brief:${needBrief.id}:${rawLen(needBrief)}`,
+      {
+        id: needBrief.id,
+      }
     );
   }
-}
 
   const roll = Math.random();
 
+  /*
+   * 4. AUTONÓM NOTE
+   *
+   * Ritkább, mint eddig.
+   * Ne a note-ok zabálják fel
+   * az összes automatikus kört.
+   */
   const noteless = (
-  view.chars || []
-)
-  .filter(
-    (c) =>
-      c &&
-      !isHuman(view, c.id) &&
-      !noteOf(view, c.id)
+    view.chars || []
   )
-  .map((c) => {
-    /*
-     * Megnézzük, mikor volt ennek a
-     * karakternek legutóbb note-ja.
-     *
-     * Ha még soha nem volt, 0-t kap,
-     * tehát előnyt élvez.
-     */
-    const previousNotes = (
-      view.notes || []
-    ).filter(
-      (x) =>
-        x &&
-        x.authorId === c.id
-    );
-
-    const lastNoteAt =
-      previousNotes.reduce(
-        (latest, x) =>
-          Math.max(
-            latest,
-            Number(x.ts) || 0
-          ),
-        0
+    .filter(
+      (c) =>
+        c &&
+        !isHuman(view, c.id) &&
+        !noteOf(view, c.id)
+    )
+    .map((c) => {
+      const previousNotes = (
+        view.notes || []
+      ).filter(
+        (x) =>
+          x &&
+          x.authorId === c.id
       );
 
-    return {
-      c,
-      lastNoteAt,
-      tie: Math.random(),
-    };
-  })
-  .sort((a, b) => {
-    /*
-     * Aki régebben írt note-ot,
-     * az jön előbb.
-     *
-     * Ha egyikük sem írt még,
-     * véletlenszerű a sorrend.
-     */
-    if (
-      a.lastNoteAt !==
-      b.lastNoteAt
-    ) {
-      return (
-        a.lastNoteAt -
+      const lastNoteAt =
+        previousNotes.reduce(
+          (latest, x) =>
+            Math.max(
+              latest,
+              Number(x.ts) || 0
+            ),
+          0
+        );
+
+      return {
+        c,
+        lastNoteAt,
+        tie: Math.random(),
+      };
+    })
+    .sort((a, b) => {
+      if (
+        a.lastNoteAt !==
         b.lastNoteAt
-      );
-    }
+      ) {
+        return (
+          a.lastNoteAt -
+          b.lastNoteAt
+        );
+      }
 
-    return a.tie - b.tie;
-  });
-
-if (
-  roll < 0.28 &&
-  noteless.length
-) {
-  const bot =
-    noteless[0].c;
-
-  return mkAction(
-    "note",
-    `note:${bot.id}:${Math.floor(
-      now() / 1800000
-    )}`,
-    { botId: bot.id }
-  );
-}
+      return a.tie - b.tie;
+    });
 
   /*
-   * LÉTEZŐ GROUP CHATEK
-   *
-   * Csak olyan csoport jöhet szóba,
-   * amelyben van legalább egy valódi AI-tag.
+   * Kb. 10% note.
+   */
+  if (
+    roll < 0.10 &&
+    noteless.length
+  ) {
+    const bot =
+      noteless[0].c;
+
+    return mkAction(
+      "note",
+      `note:${bot.id}:${Math.floor(
+        now() / 1800000
+      )}`,
+      {
+        botId: bot.id,
+      }
+    );
+  }
+
+  /*
+   * 5. LÉTEZŐ GROUP CHATEK
    */
   const existingGroups = (
     view.groups || []
@@ -9509,10 +9530,8 @@ if (
   });
 
   /*
-   * Egy csoport ne kapjon új autonóm
-   * üzeneteket közvetlenül az előző aktivitás után.
-   *
-   * Minimum kb. 45 perc pihenő.
+   * Ne pörögjön ugyanaz a group chat
+   * folyamatosan.
    */
   const groupTurnCandidates =
     existingGroups.filter((g) => {
@@ -9526,12 +9545,6 @@ if (
       );
     });
 
-  /*
-   * Ha bármelyik group chat aktív volt
-   * az elmúlt 8 órában, inkább a már
-   * létező csoportokat használják,
-   * és ne gyártsanak rögtön újat.
-   */
   const recentGroup =
     existingGroups.some((g) => {
       const t =
@@ -9549,17 +9562,15 @@ if (
     !recentGroup;
 
   /*
-   * GROUP CHAT ZÓNA
+   * 6. GROUP CHAT
    *
-   * Az automatikus körök kb. 10%-ában
-   * történhet valami csoporttal.
-   *
-   * Elsősorban egy meglévő csoport
-   * folytatódik. Új csoport ritkább.
+   * Kb. 8%.
+   * A meglévő csoport előnyt élvez
+   * az új létrehozásával szemben.
    */
   if (
-    roll >= 0.28 &&
-    roll < 0.38
+    roll >= 0.10 &&
+    roll < 0.18
   ) {
     const preferExisting =
       groupTurnCandidates.length > 0 &&
@@ -9588,11 +9599,6 @@ if (
       );
     }
 
-    /*
-     * Új csoport csak akkor,
-     * ha mostanában nem volt friss
-     * group aktivitás.
-     */
     if (canTryNewGroup) {
       return mkAction(
         "group",
@@ -9603,12 +9609,6 @@ if (
       );
     }
 
-    /*
-     * Ha új csoport nem készülhet,
-     * de van használható régi,
-     * akkor inkább abban próbáljanak
-     * természetesen tovább beszélgetni.
-     */
     if (
       groupTurnCandidates.length
     ) {
@@ -9632,7 +9632,15 @@ if (
     }
   }
 
-  if (roll < 0.66) {
+  /*
+   * 7. PRIVÁT ÜZENET
+   *
+   * Kb. 32%.
+   *
+   * A pickInitiator továbbra is eldönti,
+   * kinek van valódi oka írni.
+   */
+  if (roll < 0.50) {
     const bot =
       pickInitiator(view);
 
@@ -9642,11 +9650,22 @@ if (
         `dm:${bot.id}:${Math.floor(
           now() / 300000
         )}`,
-        { botId: bot.id }
+        {
+          botId: bot.id,
+        }
       );
     }
   }
 
+  /*
+   * 8. WORLD / FEED
+   *
+   * A maradék körökben a világ magától
+   * posztol és kommentel.
+   *
+   * Ez most lényegesen gyakoribb,
+   * mint korábban.
+   */
   return mkAction(
     "world",
     `world:${Math.floor(
