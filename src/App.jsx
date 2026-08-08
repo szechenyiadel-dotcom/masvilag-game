@@ -6134,165 +6134,122 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
       )}
 
       {w.posts.map((p) => (
-        <Post key={p.id} w={w} post={p} busy={busy} onComments={askComments} onAskReply={askReply}
-          highlight={hl === p.id} nodeRef={(el) => { refs.current[p.id] = el; }}
+        <Post
+          key={p.id}
+          w={w}
+          post={p}
+          busy={busy}
+          onComments={askComments}
+          onAskReply={askReply}
+          highlight={hl === p.id}
+          nodeRef={(el) => { refs.current[p.id] = el; }}
           onComment={(id, text2, parent) => update((n) => {
-  const x = n.posts.find(
-    (y) => y.id === id
-  );
+            const x = n.posts.find(
+              (y) => y.id === id
+            );
 
-  if (!x) return;
+            if (!x) return;
 
-  const actorId =
-    n.meId || w.meId;
+            const actorId =
+              n.meId || w.meId;
 
-  if (!Array.isArray(x.comments)) {
-    x.comments = [];
-  }
+            if (!Array.isArray(x.comments)) {
+              x.comments = [];
+            }
 
-  const parentComment =
-    parent
-      ? x.comments.find(
-          (c) => c.id === parent
-        )
-      : null;
+            const parentComment =
+              parent
+                ? x.comments.find(
+                    (c) => c.id === parent
+                  )
+                : null;
 
-  const targetId =
-    parentComment &&
-    parentComment.authorId
-      ? parentComment.authorId
-      : x.authorId;
+            const targetId =
+              parentComment &&
+              parentComment.authorId
+                ? parentComment.authorId
+                : x.authorId;
 
-  const made = {
-    id: uid(),
-    authorId: actorId,
-    text: text2,
-    ts: now(),
-    parent: parent || null,
-  };
+            const made = {
+              id: uid(),
+              authorId: actorId,
+              text: text2,
+              ts: now(),
+              parent: parent || null,
+            };
 
-  x.comments.push(made);
+            x.comments.push(made);
 
-  noteComment(
-    n,
-    x,
-    made
-  );
+            noteComment(
+              n,
+              x,
+              made
+            );
 
-  recordSocialEvent(
-    n,
-    {
-      type:
-        parent
-          ? "reply"
-          : "comment",
+            recordSocialEvent(
+              n,
+              {
+                type:
+                  parent
+                    ? "reply"
+                    : "comment",
 
-      refId: made.id,
-      ts: made.ts,
-      actorId,
+                refId: made.id,
+                ts: made.ts,
+                actorId,
 
-      targetIds:
-        targetId &&
-        targetId !== actorId
-          ? [targetId]
-          : [],
+                targetIds:
+                  targetId &&
+                  targetId !== actorId
+                    ? [targetId]
+                    : [],
 
-      visibility: "public",
-      factLevel: "observed",
+                visibility: "public",
+                factLevel: "observed",
 
-      importance:
-        parent
-          ? 30
-          : 22,
+                importance:
+                  parent
+                    ? 30
+                    : 22,
 
-      drama: 0,
-      romance: 0,
-      embarrassment: 0,
+                drama: 0,
+                romance: 0,
+                embarrassment: 0,
 
-      source: "player",
-      text: made.text,
+                source: "player",
+                text: made.text,
 
-      tags: [
-        "social",
-        "player-comment",
-        parent
-          ? "reply"
-          : "comment",
-      ],
+                tags: [
+                  "social",
+                  "player-comment",
+                  parent
+                    ? "reply"
+                    : "comment",
+                ],
 
-      meta: {
-        postId: x.id,
-        commentId: made.id,
-        parentId:
-          made.parent || "",
-        postAuthorId:
-          x.authorId || "",
-        targetId:
-          targetId || "",
-      },
-    }
-  );
-})}
-  recordSocialEvent(
-    n,
-    {
-      type:
-        parent
-          ? "reply"
-          : "comment",
+                meta: {
+                  postId: x.id,
+                  commentId: made.id,
+                  parentId: made.parent || "",
+                  postAuthorId: x.authorId || "",
+                  targetId: targetId || "",
+                },
+              }
+            );
+          })}
+          onLike={(id) => update((n) => {
+            const x = n.posts.find(
+              (y) => y.id === id
+            );
 
-      refId: made.id,
-
-      ts: made.ts,
-
-      actorId,
-
-      targetIds:
-        targetId &&
-        targetId !== actorId
-          ? [targetId]
-          : [],
-
-      visibility: "public",
-
-      factLevel: "observed",
-
-      importance:
-        parent
-          ? 30
-          : 22,
-
-      drama: 0,
-      romance: 0,
-      embarrassment: 0,
-
-      source: "player",
-
-      text: made.text,
-
-      tags: [
-        "social",
-        "player-comment",
-        parent
-          ? "reply"
-          : "comment",
-      ],
-
-      meta: {
-        postId: x.id,
-        commentId: made.id,
-        parentId:
-          made.parent || "",
-
-        postAuthorId:
-          x.authorId || "",
-
-        targetId:
-          targetId || "",
-      },
-    }
-  );
-})}
+            if (x) {
+              x.likes =
+                (x.likes || 0) + 1;
+            }
+          })}
+        />
+      ))}
+    </>
   );
 }
 
