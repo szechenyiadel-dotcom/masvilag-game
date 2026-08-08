@@ -6146,9 +6146,13 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
   const actorId =
     n.meId || w.meId;
 
+  if (!Array.isArray(x.comments)) {
+    x.comments = [];
+  }
+
   const parentComment =
     parent
-      ? (x.comments || []).find(
+      ? x.comments.find(
           (c) => c.id === parent
         )
       : null;
@@ -6167,10 +6171,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
     parent: parent || null,
   };
 
-  if (!Array.isArray(x.comments)) {
-    x.comments = [];
-  }
-
   x.comments.push(made);
 
   noteComment(
@@ -6178,61 +6178,60 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
     x,
     made
   );
-recordSocialEvent(
-  n,
-  {
-    type:
-      parent
-        ? "reply"
-        : "comment",
 
-    refId: made.id,
-    ts: made.ts,
+  recordSocialEvent(
+    n,
+    {
+      type:
+        parent
+          ? "reply"
+          : "comment",
 
-    actorId,
+      refId: made.id,
+      ts: made.ts,
+      actorId,
 
-    targetIds:
-      targetId &&
-      targetId !== actorId
-        ? [targetId]
-        : [],
+      targetIds:
+        targetId &&
+        targetId !== actorId
+          ? [targetId]
+          : [],
 
-    visibility: "public",
-    factLevel: "observed",
+      visibility: "public",
+      factLevel: "observed",
 
-    importance:
-      parent
-        ? 30
-        : 22,
+      importance:
+        parent
+          ? 30
+          : 22,
 
-    drama: 0,
-    romance: 0,
-    embarrassment: 0,
+      drama: 0,
+      romance: 0,
+      embarrassment: 0,
 
-    source: "player",
+      source: "player",
+      text: made.text,
 
-    text: made.text,
+      tags: [
+        "social",
+        "player-comment",
+        parent
+          ? "reply"
+          : "comment",
+      ],
 
-    tags: [
-      "social",
-      "player-comment",
-      parent
-        ? "reply"
-        : "comment",
-    ],
-
-    meta: {
-      postId: x.id,
-      commentId: made.id,
-      parentId:
-        made.parent || "",
-      postAuthorId:
-        x.authorId || "",
-      targetId:
-        targetId || "",
-    },
-  }
-);
+      meta: {
+        postId: x.id,
+        commentId: made.id,
+        parentId:
+          made.parent || "",
+        postAuthorId:
+          x.authorId || "",
+        targetId:
+          targetId || "",
+      },
+    }
+  );
 })}
   /*
    * SOCIAL EVENT LEDGER
