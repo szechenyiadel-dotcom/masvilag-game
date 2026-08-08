@@ -10277,12 +10277,19 @@ async function runSimulationAction(view, update, action) {
           return;
         }
 
-        reactNote(
-          n,
-          note.id,
-          who,
-          r.emoji
-        );
+        const targetNote = (n.notes || []).find(
+  (x) => x.id === note.id
+);
+
+if (targetNote) {
+  targetNote.reacts = [
+    ...(targetNote.reacts || []),
+    {
+      by: who,
+      e: String(r.emoji || "❤️"),
+    },
+  ];
+}
 
         markReacted(who);
       }
