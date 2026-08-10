@@ -2057,6 +2057,143 @@ function recentOverusedEmojis(w, id, limit = 6) {
     .slice(0, 6);
 }
 
+function recentPrivateChatTexts(w, id, limit = 8) {
+  if (!w || !id) return [];
+
+  const ck = chatKey(
+    w.meId,
+    id
+  );
+
+  return (
+    (w.chats && w.chats[ck]) ||
+    []
+  )
+    .filter(
+      (m) =>
+        m &&
+        m.from === "them" &&
+        m.text
+    )
+    .map((m) =>
+      String(m.text)
+    )
+    .slice(-limit);
+}
+
+function chatEmojiAvoidList(w, id) {
+  const recent =
+    recentPrivateChatTexts(
+      w,
+      id,
+      8
+    );
+
+  const counts = {};
+
+  recent.forEach((line) => {
+    emojiTokens(line).forEach(
+      (emoji) => {
+        counts[emoji] =
+          (counts[emoji] || 0) + 1;
+      }
+    );
+  });
+
+  /*
+   * Az utolsó 3 AI-DM bármely emojija
+   * ideiglenesen tiltólistára kerül,
+   * így nem tud ugyanaz az emoji
+   * üzenetről üzenetre visszatérni.
+   */
+  const veryRecent = new Set();
+
+  recent
+    .slice(-3)
+    .forEach((line) => {
+      emojiTokens(line).forEach(
+        (emoji) =>
+          veryRecent.add(emoji)
+      );
+    });
+
+  /*
+   * Az utóbbi 8 DM-ben legalább kétszer
+   * használt emoji szintén túlhasználtnak
+   * számít.
+   */
+  Object.keys(counts).forEach(
+    (emoji) => {
+      if (counts[emoji] >= 2) {
+        veryRecent.add(emoji);
+      }
+    }
+  );
+
+  return [
+    ...veryRecent,
+  ].slice(0, 10);
+}
+
+function chatEmojiGuard(w, id) {
+  const blocked =
+    chatEmojiAvoidList(
+      w,
+      id
+    );
+
+  if (!blocked.length) {
+    return "";
+  }
+
+  const lang =
+    worldLanguage(
+      w,
+      w && w.meId
+    );
+
+  if (lang === "en") {
+    return `
+PRIVATE CHAT EMOJI VARIETY — HARD RULE:
+- Do NOT use any of these recently used emojis in this reply: ${blocked.join(" ")}
+- Choose a genuinely different emoji only if another emoji fits the meaning naturally.
+- If no different emoji fits, write the reply WITHOUT an emoji.
+- Do not replace one repeated emoji with a near-identical repeated combination.
+- This rule overrides the general suggestion to use emojis sometimes.`;
+  }
+
+  return `
+PRIVÁT CHAT EMOJI-VÁLTOZATOSSÁG — SZIGORÚ SZABÁLY:
+- EBBEN a válaszban NE használd ezeket a nemrég használt emojikat: ${blocked.join(" ")}
+- Csak akkor válassz másik emojit, ha annak jelentése természetesen illik a válaszhoz.
+- Ha nincs megfelelő másik emoji, írj inkább EMOJI NÉLKÜL.
+- Ne cseréld le az ismétlődő emojit egy szinte ugyanolyan ismétlődő kombinációra.
+- Ez a szabály felülírja azt az általános javaslatot, hogy időnként használj emojit.`;
+}
+
+function usesBlockedChatEmoji(
+  w,
+  id,
+  text
+) {
+  const blocked =
+    new Set(
+      chatEmojiAvoidList(
+        w,
+        id
+      )
+    );
+
+  if (!blocked.size) {
+    return false;
+  }
+
+  return emojiTokens(text).some(
+    (emoji) =>
+      blocked.has(emoji)
+  );
+}
+
 function repetitionGuard(w, ids, label) {
   const lang = worldLanguage(w, w && w.meId);
   const tt = (hu, en) => (lang === "en" ? en : hu);
@@ -8408,6 +8545,17 @@ ${hist}
 
 ${voiceCard(c)}
 
+${repetitionGuard(
+  requestWorld,
+  [c.id],
+  "privát üzenetek"
+)}
+
+${chatEmojiGuard(
+  requestWorld,
+  c.id
+)}
+
 PRIVÁT CHAT SZABÁLYOK:
 
 - Most KÖZVETLENÜL a játékos legutóbbi üzenetére válaszolj.
@@ -8438,12 +8586,83 @@ Formátum:
 {"reply":"a válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
     );
 
-    const reply = String(
+    let reply = String(
       out &&
       out.reply !== undefined
         ? out.reply
         : ""
     ).trim();
+
+    /*
+     * Ha a modell a prompt ellenére is
+     * visszanyúl egy frissen túlhasznált
+     * emojihoz, egyszer újraíratjuk vele
+     * ugyanazt a reakciót.
+     */
+    if (
+      reply &&
+      usesBlockedChatEmoji(
+        requestWorld,
+        c.id,
+        reply
+      )
+    ) {
+      const retryOut =
+        await askWorldJSON(
+          requestWorld,
+          engineFor(
+            requestWorld
+          ),
+          `${worldContext(
+            requestWorld,
+            [c.id],
+            true,
+            c.id
+          )}
+
+TE MOST ${c.name.toUpperCase()} VAGY.
+
+Az előző válaszod tartalma alapvetően jó volt,
+de az emoji-használat ismétlődött.
+
+${voiceCard(c)}
+
+${chatEmojiGuard(
+  requestWorld,
+  c.id
+)}
+
+EREDETI VÁLASZ:
+${reply}
+
+Írd újra ugyanazt a természetes privát chatreakciót.
+A jelentést és a karakter hangját tartsd meg.
+Lehet teljesen emoji nélküli is.
+NE magyarázd meg az átírást.
+
+Formátum:
+{"reply":"az új, természetes chatválasz"}${TAIL}`
+        );
+
+      const retryReply =
+        String(
+          retryOut &&
+          retryOut.reply !== undefined
+            ? retryOut.reply
+            : ""
+        ).trim();
+
+      if (
+        retryReply &&
+        !usesBlockedChatEmoji(
+          requestWorld,
+          c.id,
+          retryReply
+        )
+      ) {
+        reply = retryReply;
+      }
+    }
 
     if (!reply) {
       throw new Error(
@@ -9194,6 +9413,11 @@ ${repetitionGuard(
   w,
   [bot.id],
   "privát üzenetek"
+)}
+
+${chatEmojiGuard(
+  w,
+  bot.id
 )}
 
 PRIVÁT ÜZENET SZABÁLYOK:
