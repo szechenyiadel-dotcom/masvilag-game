@@ -551,6 +551,73 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   .social-actions { margin-left:34px; }
 }
 
+
+.social-profile-tabs {
+  display:flex;
+  gap:2px;
+  margin-top:12px;
+  border-bottom:1px solid var(--line);
+}
+.social-profile-tab {
+  position:relative;
+  flex:1;
+  border:0;
+  background:none;
+  color:var(--muted);
+  padding:10px 8px;
+  font:inherit;
+  font-size:12px;
+  cursor:pointer;
+}
+.social-profile-tab.on { color:var(--bone); font-weight:600; }
+.social-profile-tab.on:after {
+  content:"";
+  position:absolute;
+  left:18%;
+  right:18%;
+  bottom:-1px;
+  height:2px;
+  border-radius:99px;
+  background:var(--rose);
+}
+.social-profile-feed { margin:0 -16px -16px; }
+.social-profile-post {
+  padding:13px 16px;
+  border-bottom:1px solid var(--line);
+}
+.social-profile-post-text {
+  margin-top:5px;
+  white-space:pre-wrap;
+  word-break:break-word;
+  font-size:14px;
+  line-height:1.5;
+}
+.social-profile-post-media {
+  width:100%;
+  max-height:420px;
+  object-fit:cover;
+  margin-top:9px;
+  border-radius:12px;
+  border:1px solid var(--line);
+}
+.social-person-row {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:11px 0;
+  border-bottom:1px solid var(--line);
+}
+.social-person-row:last-child { border-bottom:0; }
+.social-person-row-main { flex:1; min-width:0; }
+.social-background-followers {
+  padding:12px;
+  margin-top:10px;
+  border:1px dashed var(--line);
+  border-radius:12px;
+  color:var(--muted);
+  font-size:12px;
+}
+
 /* ---------- MOBILOS ACTION GOMBOK ---------- */
 
 @media (max-width: 768px) {
@@ -6279,7 +6346,7 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
 /* ============================================================
    Feed — szálas kommentekkel
    ============================================================ */
-function CommentNode({ w, c, allComments, onReply, depth }) {
+function CommentNode({ w, c, allComments, onReply, depth, onOpenProfile }) {
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
   const [txt, setTxt] = useState("");
@@ -6306,19 +6373,29 @@ function CommentNode({ w, c, allComments, onReply, depth }) {
       } : null}
     >
       <div className="cmt">
-        <Av
-          src={a.avatar}
-          name={a.name}
-          size={depth ? 24 : 28}
-          radius={depth ? 8 : 9}
-        />
+        <button
+          className="social-author-click"
+          onClick={() => onOpenProfile && onOpenProfile(a.id)}
+          title={tt("Profil megnyitása", "Open profile")}
+        >
+          <Av src={a.avatar} name={a.name} size={depth ? 24 : 28} radius={depth ? 8 : 9} />
+        </button>
+
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="social-post-meta">
-            <span className="cmt-name">{a.name}</span>
+            <button
+              className="social-author-click"
+              onClick={() => onOpenProfile && onOpenProfile(a.id)}
+            >
+              <span className="cmt-name">{a.name}</span>
+            </button>
             <span className="handle mono">@{a.username}</span>
-            <span className="handle mono">· {timeAgo(c.ts)}</span>
+            <span className="social-dot-sep">·</span>
+            <span className="handle mono">{timeAgo(c.ts)}</span>
           </div>
+
           <div className="cmt-body">{c.text}</div>
+
           <button
             className="social-comment-action"
             onClick={() => setOpen(!open)}
@@ -6331,12 +6408,7 @@ function CommentNode({ w, c, allComments, onReply, depth }) {
       {open && (
         <div
           className="row"
-          style={{
-            gap: 8,
-            marginTop: 8,
-            marginLeft: depth ? 0 : 36,
-            alignItems: "center",
-          }}
+          style={{ gap: 8, marginTop: 8, marginLeft: depth ? 0 : 36, alignItems: "center" }}
         >
           <input
             className="i"
@@ -6345,15 +6417,9 @@ function CommentNode({ w, c, allComments, onReply, depth }) {
             autoFocus
             placeholder={tt(`Válasz neki: ${a.name}`, `Reply to ${a.name}`)}
             onChange={(e) => setTxt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") send();
-            }}
+            onKeyDown={(e) => { if (e.key === "Enter") send(); }}
           />
-          <button
-            className="btn primary tiny"
-            onClick={send}
-            disabled={!txt.trim()}
-          >
+          <button className="btn primary tiny" onClick={send} disabled={!txt.trim()}>
             <Send size={12} />
           </button>
         </div>
@@ -6367,6 +6433,7 @@ function CommentNode({ w, c, allComments, onReply, depth }) {
           allComments={allComments}
           depth={(depth || 0) + 1}
           onReply={onReply}
+          onOpenProfile={onOpenProfile}
         />
       ))}
     </div>
@@ -6379,6 +6446,7 @@ function Post({
   onLike,
   onComment,
   onToggleFollow,
+  onOpenProfile,
   highlight,
   nodeRef,
 }) {
@@ -6417,35 +6485,37 @@ function Post({
       ref={nodeRef}
     >
       <div className="social-post-head">
-        <Av src={author.avatar} name={author.name} />
+        <button
+          className="social-author-click"
+          onClick={() => onOpenProfile && onOpenProfile(author.id)}
+          title={tt("Profil megnyitása", "Open profile")}
+        >
+          <Av src={author.avatar} name={author.name} />
+        </button>
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="between">
-            <div className="social-post-meta">
-              <span className="name">{author.name}</span>
+            <div className="social-post-meta" style={{ minWidth: 0 }}>
+              <button
+                className="social-author-click"
+                onClick={() => onOpenProfile && onOpenProfile(author.id)}
+              >
+                <span className="name">{author.name}</span>
+              </button>
               <span className="handle mono">@{author.username}</span>
-              <span className="handle mono">· {timeAgo(post.ts)}</span>
+              <span className="social-dot-sep">·</span>
+              <span className="handle mono">{timeAgo(post.ts)}</span>
             </div>
 
             {author.id !== w.meId ? (
               <button
-                className={
-                  following
-                    ? "btn tiny ghost social-following"
-                    : "btn tiny ghost"
-                }
+                className={following ? "btn tiny ghost social-following" : "btn tiny ghost"}
                 onClick={() => onToggleFollow(author.id)}
               >
                 {following ? (
-                  <>
-                    <Check size={12} />
-                    {tt("Követed", "Following")}
-                  </>
+                  <><Check size={12} />{tt("Követed", "Following")}</>
                 ) : (
-                  <>
-                    <Plus size={12} />
-                    {tt("Követés", "Follow")}
-                  </>
+                  <><Plus size={12} />{tt("Követés", "Follow")}</>
                 )}
               </button>
             ) : null}
@@ -6453,17 +6523,12 @@ function Post({
         </div>
       </div>
 
-      {post.text ? (
-        <div className="social-post-body">{post.text}</div>
-      ) : null}
+      {post.text ? <div className="social-post-body">{post.text}</div> : null}
 
       {(post.imageId || post.image) ? (
         <img
           className="social-post-media"
-          src={resolveImg(
-            post.imageId ? imageRef(post.imageId) : post.image,
-            media
-          )}
+          src={resolveImg(post.imageId ? imageRef(post.imageId) : post.image, media)}
           alt=""
         />
       ) : null}
@@ -6472,17 +6537,16 @@ function Post({
         <button
           className={"social-action" + (liked ? " liked" : "")}
           onClick={() => onLike(post.id)}
+          aria-label={tt("Kedvelés", "Like")}
         >
-          <Heart
-            size={17}
-            fill={liked ? "currentColor" : "none"}
-          />
+          <Heart size={17} fill={liked ? "currentColor" : "none"} />
           <span>{post.likes || 0}</span>
         </button>
 
         <button
           className="social-action"
           onClick={() => commentInput.current && commentInput.current.focus()}
+          aria-label={tt("Hozzászólás", "Comment")}
         >
           <MessageCircle size={17} />
           <span>{comments.length}</span>
@@ -6498,40 +6562,330 @@ function Post({
               c={c}
               allComments={comments}
               depth={0}
-              onReply={(parentId, text) =>
-                onComment(post.id, text, parentId)
+              onReply={(parentId, replyText) =>
+                onComment(post.id, replyText, parentId)
               }
+              onOpenProfile={onOpenProfile}
             />
           ))}
         </div>
       ) : null}
 
       <div className="social-comment-box">
-        <Av
-          src={w.player.avatar}
-          name={w.player.name}
-          size={28}
-          radius={9}
-        />
+        <button
+          className="social-author-click"
+          onClick={() => onOpenProfile && onOpenProfile(w.meId)}
+        >
+          <Av src={w.player.avatar} name={w.player.name} size={28} radius={9} />
+        </button>
+
         <input
           ref={commentInput}
           className="i"
           value={cmt}
           placeholder={tt("Írj hozzászólást…", "Write a comment…")}
           onChange={(e) => setCmt(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") sendCmt();
-          }}
+          onKeyDown={(e) => { if (e.key === "Enter") sendCmt(); }}
         />
-        <button
-          className="btn primary tiny"
-          onClick={sendCmt}
-          disabled={!cmt.trim()}
-        >
+
+        <button className="btn primary tiny" onClick={sendCmt} disabled={!cmt.trim()}>
           <Send size={13} />
         </button>
       </div>
     </article>
+  );
+}
+
+function SocialProfileModal({
+  w,
+  c,
+  update,
+  onClose,
+  onChat,
+  onOpenProfile,
+}) {
+  useEditLock();
+
+  const { tt } = useLang();
+  const { media } = useMedia();
+  const [tab, setTab] = useState("posts");
+
+  if (!c) return null;
+
+  const mine = c.id === w.meId;
+  const following = !mine && isFollowing(w, w.meId, c.id);
+
+  const posts = (w.posts || [])
+    .filter((p) => p && p.authorId === c.id)
+    .slice()
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+  const knownFollowers = socialProfiles(w).filter(
+    (person) =>
+      person &&
+      person.id !== c.id &&
+      isFollowing(w, person.id, c.id)
+  );
+
+  const knownFollowing = socialProfiles(w).filter(
+    (person) =>
+      person &&
+      person.id !== c.id &&
+      isFollowing(w, c.id, person.id)
+  );
+
+  const totalFollowers = displayFollowerCount(w, c.id);
+  const backgroundFollowers = Math.max(
+    0,
+    totalFollowers - knownFollowers.length
+  );
+
+  const toggleFollow = () => {
+    if (mine) return;
+
+    update((n) => {
+      setFollowState(
+        n,
+        n.meId || w.meId,
+        c.id,
+        !isFollowing(n, n.meId || w.meId, c.id),
+        "player"
+      );
+    });
+  };
+
+  return (
+    <div
+      className="scrim"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="sheet">
+        <div className="between">
+          <button className="btn tiny ghost" onClick={onClose}>
+            <ChevronLeft size={14} /> {tt("Vissza", "Back")}
+          </button>
+
+          {!mine ? (
+            <button
+              className="btn tiny ghost"
+              onClick={() => onChat && onChat(c.id)}
+            >
+              <MessageCircle size={13} /> {tt("Üzenet", "Message")}
+            </button>
+          ) : null}
+        </div>
+
+        <div className="card social-profile" style={{ marginTop: 12 }}>
+          <div
+            className="social-cover"
+            style={{
+              background:
+                `radial-gradient(circle at 18% 15%, hsla(${hue(c.username || c.name)}, 70%, 65%, .42), transparent 35%), linear-gradient(135deg, hsl(${hue(c.name)} 32% 19%), hsl(${(hue(c.name) + 55) % 360} 38% 10%))`,
+            }}
+          />
+
+          <div className="social-profile-main">
+            <div className="social-profile-top">
+              <div className="social-profile-avatar">
+                <Av src={c.avatar} name={c.name} size={76} radius={18} />
+              </div>
+
+              {!mine ? (
+                <div className="social-profile-actions">
+                  <button
+                    className={following ? "btn tiny ghost social-following" : "btn tiny primary"}
+                    onClick={toggleFollow}
+                  >
+                    {following ? (
+                      <><Check size={13} />{tt("Követed", "Following")}</>
+                    ) : (
+                      <><Plus size={13} />{tt("Követés", "Follow")}</>
+                    )}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="social-profile-name">
+              <h2 style={{ fontSize: 22 }}>{c.name}</h2>
+              <div className="handle mono">@{c.username}</div>
+            </div>
+
+            {c.bio ? (
+              <div style={{ marginTop: 8, fontSize: 13.5, whiteSpace: "pre-wrap" }}>
+                {c.bio}
+              </div>
+            ) : (
+              <div className="hint" style={{ marginTop: 8 }}>
+                {tt("Nincs bio megadva.", "No bio yet.")}
+              </div>
+            )}
+
+            <div className="social-profile-meta">
+              {c.job ? <span>{c.job}</span> : null}
+              {c.city ? <span>· {c.city}</span> : null}
+              {ageOf(c, w) ? (
+                <span>· {ageOf(c, w)} {termText("yearsOld", worldLanguage(w))}</span>
+              ) : null}
+            </div>
+
+            <div className="social-profile-stats">
+              <button
+                className="social-profile-stat social-author-click"
+                onClick={() => setTab("posts")}
+              >
+                <strong>{formatSocialCount(posts.length)}</strong>
+                <span>{tt("Poszt", "Posts")}</span>
+              </button>
+
+              <button
+                className="social-profile-stat social-author-click"
+                onClick={() => setTab("followers")}
+              >
+                <strong>{formatSocialCount(totalFollowers)}</strong>
+                <span>{tt("Követő", "Followers")}</span>
+              </button>
+
+              <button
+                className="social-profile-stat social-author-click"
+                onClick={() => setTab("following")}
+              >
+                <strong>{formatSocialCount(displayFollowingCount(w, c.id))}</strong>
+                <span>{tt("Követés", "Following")}</span>
+              </button>
+            </div>
+
+            {!mine && isFollowing(w, c.id, w.meId) ? (
+              <div className="social-count" style={{ marginTop: 8 }}>
+                {tt("Követ téged", "Follows you")}
+              </div>
+            ) : null}
+
+            <div className="social-profile-tabs">
+              <button
+                className={"social-profile-tab" + (tab === "posts" ? " on" : "")}
+                onClick={() => setTab("posts")}
+              >
+                {tt("Posztok", "Posts")}
+              </button>
+              <button
+                className={"social-profile-tab" + (tab === "followers" ? " on" : "")}
+                onClick={() => setTab("followers")}
+              >
+                {tt("Követők", "Followers")}
+              </button>
+              <button
+                className={"social-profile-tab" + (tab === "following" ? " on" : "")}
+                onClick={() => setTab("following")}
+              >
+                {tt("Követések", "Following")}
+              </button>
+            </div>
+
+            {tab === "posts" ? (
+              <div className="social-profile-feed">
+                {posts.length ? posts.map((p) => (
+                  <div className="social-profile-post" key={p.id}>
+                    <div className="handle mono">
+                      {timeAgo(p.ts)} · {p.likes || 0} {tt("kedvelés", "likes")} · {(p.comments || []).length} {tt("hozzászólás", "comments")}
+                    </div>
+
+                    {p.text ? (
+                      <div className="social-profile-post-text">{p.text}</div>
+                    ) : null}
+
+                    {(p.imageId || p.image) ? (
+                      <img
+                        className="social-profile-post-media"
+                        src={resolveImg(p.imageId ? imageRef(p.imageId) : p.image, media)}
+                        alt=""
+                      />
+                    ) : null}
+                  </div>
+                )) : (
+                  <div className="social-empty">
+                    {tt("Még nincs poszt.", "No posts yet.")}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {tab === "followers" ? (
+              <div>
+                {backgroundFollowers > 0 ? (
+                  <div className="social-background-followers">
+                    {tt(
+                      `${formatSocialCount(backgroundFollowers)} további háttérkövető tartozik ehhez a profilhoz. Ők a világ közönségének részei, de nem külön AI-karakterek.`,
+                      `${formatSocialCount(backgroundFollowers)} additional background followers belong to this profile. They are part of the world's audience but are not separate AI characters.`
+                    )}
+                  </div>
+                ) : null}
+
+                {knownFollowers.length ? knownFollowers.map((person) => (
+                  <div className="social-person-row" key={person.id}>
+                    <button
+                      className="social-author-click"
+                      onClick={() => onOpenProfile && onOpenProfile(person.id)}
+                    >
+                      <Av src={person.avatar} name={person.name} size={38} radius={12} />
+                    </button>
+                    <div className="social-person-row-main">
+                      <button
+                        className="social-author-click"
+                        onClick={() => onOpenProfile && onOpenProfile(person.id)}
+                      >
+                        <div className="name">{person.name}</div>
+                        <div className="handle mono">@{person.username}</div>
+                      </button>
+                    </div>
+                  </div>
+                )) : (
+                  <p className="hint">
+                    {tt(
+                      "Nincs külön játékbeli karakterként ismert követő.",
+                      "There are no known in-game followers."
+                    )}
+                  </p>
+                )}
+              </div>
+            ) : null}
+
+            {tab === "following" ? (
+              <div>
+                {knownFollowing.length ? knownFollowing.map((person) => (
+                  <div className="social-person-row" key={person.id}>
+                    <button
+                      className="social-author-click"
+                      onClick={() => onOpenProfile && onOpenProfile(person.id)}
+                    >
+                      <Av src={person.avatar} name={person.name} size={38} radius={12} />
+                    </button>
+                    <div className="social-person-row-main">
+                      <button
+                        className="social-author-click"
+                        onClick={() => onOpenProfile && onOpenProfile(person.id)}
+                      >
+                        <div className="name">{person.name}</div>
+                        <div className="handle mono">@{person.username}</div>
+                      </button>
+                    </div>
+                  </div>
+                )) : (
+                  <p className="hint">
+                    {tt(
+                      "Még nem követ külön játékbeli profilt.",
+                      "This profile does not follow any known in-game profiles yet."
+                    )}
+                  </p>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -7982,6 +8336,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
   const [hl, setHl] = useState("");
   const [feedMode, setFeedMode] = useState("all");
   const [showMedia, setShowMedia] = useState(false);
+  const [profileId, setProfileId] = useState("");
   const refs = useRef({});
 
   useEffect(() => {
@@ -8208,12 +8563,18 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
 
       <div className="social-composer">
         <div className="social-composer-main">
-          <Av
-            src={w.player.avatar}
-            name={w.player.name}
-            size={38}
-            radius={12}
-          />
+          <button
+            className="social-author-click"
+            onClick={() => setProfileId(w.meId)}
+            title={tt("Saját profil megnyitása", "Open your profile")}
+          >
+            <Av
+              src={w.player.avatar}
+              name={w.player.name}
+              size={38}
+              radius={12}
+            />
+          </button>
           <textarea
             className="i"
             value={text}
@@ -8286,6 +8647,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
           nodeRef={(el) => {
             refs.current[p.id] = el;
           }}
+          onOpenProfile={(id) => setProfileId(id)}
           onToggleFollow={(id) =>
             update((n) => {
               setFollowState(
@@ -8414,6 +8776,19 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
           }
         />
       ))}
+      {profileId && charById(w, profileId) ? (
+        <SocialProfileModal
+          w={w}
+          c={charById(w, profileId)}
+          update={update}
+          onClose={() => setProfileId("")}
+          onOpenProfile={(id) => setProfileId(id)}
+          onChat={(id) => {
+            setProfileId("");
+            onOpenChat(id);
+          }}
+        />
+      ) : null}
     </>
   );
 }
