@@ -366,6 +366,77 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 }
 
 
+
+/* A kattintható profilképek/nevek valódi linkként viselkednek,
+   de NEM kapják meg a böngésző alap fehér button-stílusát. */
+.social-author-click {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  border: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  font: inherit !important;
+  line-height: inherit !important;
+  letter-spacing: inherit !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  text-align: inherit;
+  vertical-align: middle;
+}
+
+.social-author-click:hover,
+.social-author-click:active,
+.social-author-click:focus {
+  background: transparent !important;
+  color: inherit !important;
+  box-shadow: none !important;
+}
+
+.social-author-click:focus-visible {
+  outline: 2px solid var(--rose) !important;
+  outline-offset: 3px !important;
+  border-radius: 8px;
+}
+
+.social-post-head > .social-author-click,
+.cmt > .social-author-click,
+.social-comment-box > .social-author-click {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.social-post-meta > .social-author-click {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+}
+
+.social-post-meta > .social-author-click .name,
+.social-post-meta > .social-author-click .cmt-name {
+  color: var(--bone) !important;
+}
+
+.social-profile-stat.social-author-click {
+  display: block;
+  width: auto;
+  flex: 1;
+  min-width: 0;
+  padding: 10px 5px !important;
+  text-align: center;
+}
+
+.social-person-row .social-author-click {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+
 /* ---------- HIBRID SOCIAL FEED ---------- */
 .social-feed-head {
   position: sticky;
@@ -6374,6 +6445,7 @@ function CommentNode({ w, c, allComments, onReply, depth, onOpenProfile }) {
     >
       <div className="cmt">
         <button
+          type="button"
           className="social-author-click"
           onClick={() => onOpenProfile && onOpenProfile(a.id)}
           title={tt("Profil megnyitása", "Open profile")}
@@ -6384,6 +6456,7 @@ function CommentNode({ w, c, allComments, onReply, depth, onOpenProfile }) {
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="social-post-meta">
             <button
+              type="button"
               className="social-author-click"
               onClick={() => onOpenProfile && onOpenProfile(a.id)}
             >
@@ -6486,6 +6559,7 @@ function Post({
     >
       <div className="social-post-head">
         <button
+          type="button"
           className="social-author-click"
           onClick={() => onOpenProfile && onOpenProfile(author.id)}
           title={tt("Profil megnyitása", "Open profile")}
@@ -6573,6 +6647,7 @@ function Post({
 
       <div className="social-comment-box">
         <button
+          type="button"
           className="social-author-click"
           onClick={() => onOpenProfile && onOpenProfile(w.meId)}
         >
@@ -6826,6 +6901,7 @@ function SocialProfileModal({
                 {knownFollowers.length ? knownFollowers.map((person) => (
                   <div className="social-person-row" key={person.id}>
                     <button
+                      type="button"
                       className="social-author-click"
                       onClick={() => onOpenProfile && onOpenProfile(person.id)}
                     >
@@ -6833,6 +6909,7 @@ function SocialProfileModal({
                     </button>
                     <div className="social-person-row-main">
                       <button
+                        type="button"
                         className="social-author-click"
                         onClick={() => onOpenProfile && onOpenProfile(person.id)}
                       >
@@ -6857,6 +6934,7 @@ function SocialProfileModal({
                 {knownFollowing.length ? knownFollowing.map((person) => (
                   <div className="social-person-row" key={person.id}>
                     <button
+                      type="button"
                       className="social-author-click"
                       onClick={() => onOpenProfile && onOpenProfile(person.id)}
                     >
@@ -6864,6 +6942,7 @@ function SocialProfileModal({
                     </button>
                     <div className="social-person-row-main">
                       <button
+                        type="button"
                         className="social-author-click"
                         onClick={() => onOpenProfile && onOpenProfile(person.id)}
                       >
@@ -8564,6 +8643,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
       <div className="social-composer">
         <div className="social-composer-main">
           <button
+            type="button"
             className="social-author-click"
             onClick={() => setProfileId(w.meId)}
             title={tt("Saját profil megnyitása", "Open your profile")}
