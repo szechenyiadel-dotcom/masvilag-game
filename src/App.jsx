@@ -2039,8 +2039,46 @@ function recentUtterancesFor(w, id, limit = 4) {
   return out.slice(-limit);
 }
 
+function emojiGraphemes(v) {
+  const s = String(v || "");
+
+  try {
+    if (
+      typeof Intl !== "undefined" &&
+      Intl.Segmenter
+    ) {
+      return [
+        ...new Intl.Segmenter(
+          undefined,
+          {
+            granularity: "grapheme",
+          }
+        ).segment(s),
+      ].map((x) => x.segment);
+    }
+  } catch (e) {
+    /* fallback below */
+  }
+
+  return Array.from(s);
+}
+
+function emojiKey(v) {
+  return String(v || "")
+    .replace(/\uFE0F/g, "")
+    .replace(
+      /[\u{1F3FB}-\u{1F3FF}]/gu,
+      ""
+    );
+}
+
 function emojiTokens(v) {
-  return String(v || "").match(/\p{Extended_Pictographic}/gu) || [];
+  return emojiGraphemes(v)
+    .filter((part) =>
+      /\p{Extended_Pictographic}/u.test(
+        part
+      )
+    );
 }
 
 function recentOverusedEmojis(w, id, limit = 6) {
@@ -2086,53 +2124,153 @@ function chatEmojiAvoidList(w, id) {
     recentPrivateChatTexts(
       w,
       id,
-      8
+      12
     );
 
-  const counts = {};
-
-  recent.forEach((line) => {
-    emojiTokens(line).forEach(
-      (emoji) => {
-        counts[emoji] =
-          (counts[emoji] || 0) + 1;
-      }
-    );
-  });
+  const blocked = new Map();
 
   /*
-   * Az utolsó 3 AI-DM bármely emojija
-   * ideiglenesen tiltólistára kerül,
-   * így nem tud ugyanaz az emoji
-   * üzenetről üzenetre visszatérni.
+   * HARD COOLDOWN:
+   * az utolsó 5 AI-DM-ben használt
+   * BÁRMELY emoji nem használható újra
+   * a következő válaszban.
    */
-  const veryRecent = new Set();
-
   recent
-    .slice(-3)
+    .slice(-5)
     .forEach((line) => {
       emojiTokens(line).forEach(
-        (emoji) =>
-          veryRecent.add(emoji)
+        (emoji) => {
+          const key =
+            emojiKey(emoji);
+
+          if (
+            key &&
+            !blocked.has(key)
+          ) {
+            blocked.set(
+              key,
+              emoji
+            );
+          }
+        }
       );
     });
 
   /*
-   * Az utóbbi 8 DM-ben legalább kétszer
-   * használt emoji szintén túlhasználtnak
-   * számít.
+   * Ha egy emoji az utóbbi 12 AI-DM-ben
+   * legalább kétszer előfordult,
+   * akkor akkor is túlhasználtnak számít,
+   * ha épp nem volt benne az utolsó ötben.
    */
+  const counts = {};
+  const samples = {};
+
+  recent.forEach((line) => {
+    emojiTokens(line).forEach(
+      (emoji) => {
+        const key =
+          emojiKey(emoji);
+
+        if (!key) return;
+
+        counts[key] =
+          (counts[key] || 0) + 1;
+
+        if (!samples[key]) {
+          samples[key] = emoji;
+        }
+      }
+    );
+  });
+
   Object.keys(counts).forEach(
-    (emoji) => {
-      if (counts[emoji] >= 2) {
-        veryRecent.add(emoji);
+    (key) => {
+      if (
+        counts[key] >= 2 &&
+        !blocked.has(key)
+      ) {
+        blocked.set(
+          key,
+          samples[key] || key
+        );
       }
     }
   );
 
   return [
-    ...veryRecent,
-  ].slice(0, 10);
+    ...blocked.values(),
+  ].slice(0, 14);
+}
+
+function stripBlockedChatEmojis(
+  w,
+  id,
+  text
+) {
+  const blockedKeys =
+    new Set(
+      chatEmojiAvoidList(
+        w,
+        id
+      ).map(emojiKey)
+    );
+
+  if (!blockedKeys.size) {
+    return String(
+      text || ""
+    ).trim();
+  }
+
+  const cleaned =
+    emojiGraphemes(text)
+      .filter((part) => {
+        if (
+          !/\p{Extended_Pictographic}/u.test(
+            part
+          )
+        ) {
+          return true;
+        }
+
+        return !blockedKeys.has(
+          emojiKey(part)
+        );
+      })
+      .join("")
+      .replace(
+        /\s+([,.!?;:])/g,
+        "$1"
+      )
+      .replace(
+        /[ \t]{2,}/g,
+        " "
+      )
+      .trim();
+
+  return cleaned;
+}
+
+function enforceChatEmojiVariety(
+  w,
+  id,
+  text
+) {
+  const raw =
+    String(text || "").trim();
+
+  if (!raw) return "";
+
+  /*
+   * Nem csak figyelmeztetjük az AI-t.
+   * Ha mégis visszatesz egy cooldownos
+   * emojit, a kimenetből ténylegesen
+   * kivesszük azt mentés előtt.
+   */
+  return stripBlockedChatEmojis(
+    w,
+    id,
+    raw
+  );
 }
 
 function chatEmojiGuard(w, id) {
@@ -2155,7 +2293,7 @@ function chatEmojiGuard(w, id) {
   if (lang === "en") {
     return `
 PRIVATE CHAT EMOJI VARIETY — HARD RULE:
-- Do NOT use any of these recently used emojis in this reply: ${blocked.join(" ")}
+- ABSOLUTE COOLDOWN: do NOT use any of these recently used emojis in this reply: ${blocked.join(" ")}
 - Choose a genuinely different emoji only if another emoji fits the meaning naturally.
 - If no different emoji fits, write the reply WITHOUT an emoji.
 - Do not replace one repeated emoji with a near-identical repeated combination.
@@ -2164,7 +2302,7 @@ PRIVATE CHAT EMOJI VARIETY — HARD RULE:
 
   return `
 PRIVÁT CHAT EMOJI-VÁLTOZATOSSÁG — SZIGORÚ SZABÁLY:
-- EBBEN a válaszban NE használd ezeket a nemrég használt emojikat: ${blocked.join(" ")}
+- ABSZOLÚT COOLDOWN: EBBEN a válaszban NE használd ezeket a nemrég használt emojikat: ${blocked.join(" ")}
 - Csak akkor válassz másik emojit, ha annak jelentése természetesen illik a válaszhoz.
 - Ha nincs megfelelő másik emoji, írj inkább EMOJI NÉLKÜL.
 - Ne cseréld le az ismétlődő emojit egy szinte ugyanolyan ismétlődő kombinációra.
@@ -2181,7 +2319,7 @@ function usesBlockedChatEmoji(
       chatEmojiAvoidList(
         w,
         id
-      )
+      ).map(emojiKey)
     );
 
   if (!blocked.size) {
@@ -2190,7 +2328,9 @@ function usesBlockedChatEmoji(
 
   return emojiTokens(text).some(
     (emoji) =>
-      blocked.has(emoji)
+      blocked.has(
+        emojiKey(emoji)
+      )
   );
 }
 
@@ -8664,6 +8804,66 @@ Formátum:
       }
     }
 
+    reply =
+      enforceChatEmojiVariety(
+        requestWorld,
+        c.id,
+        reply
+      );
+
+    if (!reply) {
+      /*
+       * Ha egy emoji-only válasz teljesen
+       * kiesett a cooldown miatt, kérünk
+       * egy rövid, kötelezően emoji nélküli
+       * újrafogalmazást.
+       */
+      const noEmojiOut =
+        await askWorldJSON(
+          requestWorld,
+          engineFor(
+            requestWorld
+          ),
+          `${worldContext(
+            requestWorld,
+            [c.id],
+            true,
+            c.id
+          )}
+
+TE MOST ${c.name.toUpperCase()} VAGY.
+
+Írj egy rövid, karakterhű privát chatválaszt
+${requestWorld.player.name} legutóbbi üzenetére.
+
+SZIGORÚ SZABÁLY:
+- EGYETLEN EMOJIT SE használj.
+- Legalább egy szót írj.
+- Ne narrálj.
+- Ne magyarázd az átírást.
+
+Formátum:
+{"reply":"emoji nélküli rövid válasz"}${TAIL}`
+        );
+
+      reply =
+        String(
+          noEmojiOut &&
+          noEmojiOut.reply !== undefined
+            ? noEmojiOut.reply
+            : ""
+        )
+          .replace(
+            /\p{Extended_Pictographic}/gu,
+            ""
+          )
+          .replace(
+            /\s+/g,
+            " "
+          )
+          .trim();
+    }
+
     if (!reply) {
       throw new Error(
         tt(
@@ -9459,7 +9659,6 @@ EMOJI:
 - Az emoji-használat legyen valódi része ${bot.name} privát chatstílusának, ha az illik hozzá.
 - Ne legyen az alapértelmezett döntés, hogy mindig emoji nélkül írsz.
 - Ha ${bot.name} személyisége, beszédstílusa, kora, online viselkedése vagy aktuális hangulata alapján természetesen használna emojit, akkor ténylegesen használj is.
-- Ha az előző néhány saját DM-edben nem használtál emojit, és ${bot.name} nem kifejezetten emoji-kerülő karakter, most különösen fontold meg 1 megfelelő emoji használatát.
 - Általában 0-2 emoji elég.
 - Néha egyetlen emoji is lehet teljes üzenet vagy reakció.
 - Egy játékos, flörtölős, impulzív, fiatalos vagy online aktív karakter használhat gyakrabban emojit.
@@ -11542,12 +11741,19 @@ async function runSimulationAction(view, update, action) {
           return;
         }
 
-        const msg =
+        const rawMsg =
           cleanGeneratedUtterance(
             n,
             who,
             d.text,
             280
+          );
+
+        const msg =
+          enforceChatEmojiVariety(
+            n,
+            who,
+            rawMsg
           );
 
         if (!msg) return;
@@ -12173,7 +12379,7 @@ if (targetNote) {
     const out =
       await genDM(view, bot);
 
-    const txt =
+    const rawTxt =
       cleanGeneratedUtterance(
         view,
         bot.id,
@@ -12181,6 +12387,13 @@ if (targetNote) {
           ? String(out.text).trim()
           : "",
         280
+      );
+
+    const txt =
+      enforceChatEmojiVariety(
+        view,
+        bot.id,
+        rawTxt
       );
 
     update((n) => {
