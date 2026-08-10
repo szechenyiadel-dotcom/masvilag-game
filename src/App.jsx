@@ -9669,6 +9669,135 @@ function ensureSocialSimulationState(w) {
   if (!Array.isArray(w.socialEvents)) {
     w.socialEvents = [];
   }
+  /*
+   * Aura / popularity / reputation / hype stb.
+   */
+  if (
+    !w.socialStats ||
+    typeof w.socialStats !== "object" ||
+    Array.isArray(w.socialStats)
+  ) {
+    w.socialStats = {};
+  }
+
+  /*
+   * Aktuális trendek.
+   */
+  if (!Array.isArray(w.trends)) {
+    w.trends = [];
+  }
+
+  /*
+   * Karakterek között terjedő pletykák.
+   */
+  if (!Array.isArray(w.rumors)) {
+    w.rumors = [];
+  }
+
+  /*
+   * The Whisper Wire memória.
+   */
+  if (
+    !w.whisperWire ||
+    typeof w.whisperWire !== "object" ||
+    Array.isArray(w.whisperWire)
+  ) {
+    w.whisperWire = {};
+  }
+
+  if (!Array.isArray(w.whisperWire.stories)) {
+    w.whisperWire.stories = [];
+  }
+
+  if (!Array.isArray(w.whisperWire.usedEventIds)) {
+    w.whisperWire.usedEventIds = [];
+  }
+
+  if (!Array.isArray(w.whisperWire.history)) {
+    w.whisperWire.history = [];
+  }
+
+  /*
+   * Gossip & Media settings.
+   *
+   * Meglévő értéket SOHA nem írunk felül,
+   * csak a hiányzó mezőket pótoljuk.
+   */
+  if (
+    !w.gossipSettings ||
+    typeof w.gossipSettings !== "object" ||
+    Array.isArray(w.gossipSettings)
+  ) {
+    w.gossipSettings = {};
+  }
+
+  if (
+    typeof w.gossipSettings.whisperWire !==
+    "boolean"
+  ) {
+    w.gossipSettings.whisperWire = true;
+  }
+
+  if (
+    ![
+      "low",
+      "normal",
+      "high",
+      "chaotic",
+    ].includes(
+      w.gossipSettings.frequency
+    )
+  ) {
+    w.gossipSettings.frequency =
+      "normal";
+  }
+
+  if (
+    ![
+      "dynamic",
+      "short",
+      "detailed",
+    ].includes(
+      w.gossipSettings.articleLength
+    )
+  ) {
+    w.gossipSettings.articleLength =
+      "dynamic";
+  }
+
+  if (
+    typeof w.gossipSettings
+      .characterGossip !== "boolean"
+  ) {
+    w.gossipSettings.characterGossip =
+      true;
+  }
+
+  if (
+    ![
+      "minimal",
+      "normal",
+      "strong",
+    ].includes(
+      w.gossipSettings
+        .relationshipImpact
+    )
+  ) {
+    w.gossipSettings
+      .relationshipImpact =
+      "normal";
+  }
+
+  /*
+   * Választható Pop-up Events.
+   */
+  if (!Array.isArray(w.popupEvents)) {
+    w.popupEvents = [];
+  }
+
+  return w;
+}
+
 /*
  * =========================================================
  * SOCIAL EVENT LEDGER
@@ -9900,134 +10029,6 @@ function recordSocialEvent(
     w.socialEvents.slice(0, 600);
 
   return entry;
-}
-  /*
-   * Aura / popularity / reputation / hype stb.
-   */
-  if (
-    !w.socialStats ||
-    typeof w.socialStats !== "object" ||
-    Array.isArray(w.socialStats)
-  ) {
-    w.socialStats = {};
-  }
-
-  /*
-   * Aktuális trendek.
-   */
-  if (!Array.isArray(w.trends)) {
-    w.trends = [];
-  }
-
-  /*
-   * Karakterek között terjedő pletykák.
-   */
-  if (!Array.isArray(w.rumors)) {
-    w.rumors = [];
-  }
-
-  /*
-   * The Whisper Wire memória.
-   */
-  if (
-    !w.whisperWire ||
-    typeof w.whisperWire !== "object" ||
-    Array.isArray(w.whisperWire)
-  ) {
-    w.whisperWire = {};
-  }
-
-  if (!Array.isArray(w.whisperWire.stories)) {
-    w.whisperWire.stories = [];
-  }
-
-  if (!Array.isArray(w.whisperWire.usedEventIds)) {
-    w.whisperWire.usedEventIds = [];
-  }
-
-  if (!Array.isArray(w.whisperWire.history)) {
-    w.whisperWire.history = [];
-  }
-
-  /*
-   * Gossip & Media settings.
-   *
-   * Meglévő értéket SOHA nem írunk felül,
-   * csak a hiányzó mezőket pótoljuk.
-   */
-  if (
-    !w.gossipSettings ||
-    typeof w.gossipSettings !== "object" ||
-    Array.isArray(w.gossipSettings)
-  ) {
-    w.gossipSettings = {};
-  }
-
-  if (
-    typeof w.gossipSettings.whisperWire !==
-    "boolean"
-  ) {
-    w.gossipSettings.whisperWire = true;
-  }
-
-  if (
-    ![
-      "low",
-      "normal",
-      "high",
-      "chaotic",
-    ].includes(
-      w.gossipSettings.frequency
-    )
-  ) {
-    w.gossipSettings.frequency =
-      "normal";
-  }
-
-  if (
-    ![
-      "dynamic",
-      "short",
-      "detailed",
-    ].includes(
-      w.gossipSettings.articleLength
-    )
-  ) {
-    w.gossipSettings.articleLength =
-      "dynamic";
-  }
-
-  if (
-    typeof w.gossipSettings
-      .characterGossip !== "boolean"
-  ) {
-    w.gossipSettings.characterGossip =
-      true;
-  }
-
-  if (
-    ![
-      "minimal",
-      "normal",
-      "strong",
-    ].includes(
-      w.gossipSettings
-        .relationshipImpact
-    )
-  ) {
-    w.gossipSettings
-      .relationshipImpact =
-      "normal";
-  }
-
-  /*
-   * Választható Pop-up Events.
-   */
-  if (!Array.isArray(w.popupEvents)) {
-    w.popupEvents = [];
-  }
-
-  return w;
 }
 
 function mkAction(type, key, payload = {}, source = "auto") {
