@@ -365,6 +365,192 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   margin-top: 12px;
 }
 
+
+/* ---------- HIBRID SOCIAL FEED ---------- */
+.social-feed-head {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  margin: 0 -14px;
+  padding: 0 14px;
+  background: rgba(10,9,16,.94);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.social-feed-title {
+  min-height: 46px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.social-feed-tabs { display:flex; gap:2px; }
+.social-feed-tab {
+  position:relative;
+  border:0;
+  background:none;
+  color:var(--muted);
+  padding:10px 12px;
+  font:inherit;
+  font-size:12px;
+  cursor:pointer;
+}
+.social-feed-tab.on { color:var(--bone); font-weight:600; }
+.social-feed-tab.on:after {
+  content:"";
+  position:absolute;
+  left:12px;
+  right:12px;
+  bottom:0;
+  height:2px;
+  border-radius:99px;
+  background:var(--rose);
+}
+
+.social-composer {
+  margin:12px -14px 0;
+  padding:14px;
+  background:var(--surface);
+  border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line);
+}
+.social-composer-main {
+  display:flex;
+  gap:10px;
+  align-items:flex-start;
+}
+.social-composer textarea.i {
+  min-height:56px;
+  padding:8px 0;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  resize:none;
+  font-size:15px;
+}
+.social-composer textarea.i:focus-visible { outline:none; }
+.social-composer-actions {
+  margin-left:48px;
+  padding-top:9px;
+  border-top:1px solid var(--line);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.social-media-panel { margin:10px 0 0 48px; }
+
+.social-post {
+  margin:0 -14px;
+  padding:14px;
+  border-bottom:1px solid var(--line);
+  background:transparent;
+}
+.social-post.highlight {
+  background:rgba(217,117,143,.06);
+  box-shadow:inset 3px 0 0 var(--rose);
+}
+.social-post-head {
+  display:flex;
+  gap:10px;
+  align-items:flex-start;
+}
+.social-post-meta {
+  min-width:0;
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:5px;
+}
+.social-post-body {
+  margin:8px 0 0 48px;
+  font-size:14.5px;
+  line-height:1.5;
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+.social-post-media {
+  display:block;
+  width:calc(100% - 48px);
+  max-height:560px;
+  object-fit:cover;
+  margin:10px 0 0 48px;
+  border:1px solid var(--line);
+  border-radius:14px;
+}
+.social-actions {
+  margin:10px 0 0 40px;
+  display:flex;
+  gap:8px;
+}
+.social-action {
+  min-width:56px;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border:0;
+  background:transparent;
+  color:var(--muted);
+  padding:6px 8px;
+  border-radius:9px;
+  font:inherit;
+  font-size:12px;
+  cursor:pointer;
+}
+.social-action:hover { background:var(--raised); color:var(--bone); }
+.social-action.liked { color:var(--rose); }
+
+.social-comments { margin:5px 0 0 48px; }
+.social-comment {
+  padding:8px 0;
+}
+.social-comment + .social-comment {
+  border-top:1px solid rgba(44,39,64,.55);
+}
+.social-comment-action {
+  border:0;
+  background:none;
+  color:var(--muted);
+  padding:0;
+  margin-top:4px;
+  font:inherit;
+  font-size:11.5px;
+  cursor:pointer;
+}
+.social-comment-action:hover { color:var(--rose); }
+
+.social-comment-box {
+  margin:8px 0 0 48px;
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+.social-comment-box input.i {
+  min-height:36px;
+  padding:7px 11px;
+  border-radius:99px;
+  background:var(--raised);
+}
+.social-empty {
+  padding:30px 18px;
+  text-align:center;
+  color:var(--muted);
+}
+
+@media (max-width:480px) {
+  .social-post-body,
+  .social-post-media,
+  .social-comments,
+  .social-comment-box,
+  .social-composer-actions,
+  .social-media-panel {
+    margin-left:42px;
+  }
+  .social-post-media { width:calc(100% - 42px); }
+  .social-actions { margin-left:34px; }
+}
+
 /* ---------- MOBILOS ACTION GOMBOK ---------- */
 
 @media (max-width: 768px) {
@@ -6093,65 +6279,130 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
 /* ============================================================
    Feed — szálas kommentekkel
    ============================================================ */
-function CommentNode({ w, c, allComments, onReply, onAskReply, busy, depth }) {
+function CommentNode({ w, c, allComments, onReply, depth }) {
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
   const [txt, setTxt] = useState("");
   const a = charById(w, c.authorId);
   const replies = (allComments || []).filter((x) => x.parent === c.id);
+
   if (!a) return null;
+
   const send = () => {
     const t = txt.trim();
     if (!t) return;
     onReply(c.id, t);
-    setTxt(""); setOpen(false);
+    setTxt("");
+    setOpen(false);
   };
+
   return (
-    <div style={depth ? { marginLeft: 20, paddingLeft: 10, borderLeft: "1px solid var(--line)" } : null}>
+    <div
+      className="social-comment"
+      style={depth ? {
+        marginLeft: 18,
+        paddingLeft: 10,
+        borderLeft: "1px solid var(--line)",
+      } : null}
+    >
       <div className="cmt">
-        <Av src={a.avatar} name={a.name} size={depth ? 24 : 28} radius={depth ? 8 : 9} />
+        <Av
+          src={a.avatar}
+          name={a.name}
+          size={depth ? 24 : 28}
+          radius={depth ? 8 : 9}
+        />
         <div style={{ minWidth: 0, flex: 1 }}>
-          <span className="cmt-name">{a.name} </span>
-          <span className="handle mono">@{a.username}</span>
-          <div className="cmt-body">{c.text}</div>
-          <div className="row" style={{ gap: 6, marginTop: 5 }}>
-            <button className="btn tiny ghost" onClick={() => setOpen(!open)}>{tt("Válasz", "Reply")}</button>
-            <button className="btn tiny ghost" onClick={() => onAskReply(c)} disabled={!!busy}>
-              {busy === "c:" + c.id ? <Loader2 size={12} className="spin" /> : <Sparkles size={12} color="var(--gold)" />}
-              {tt("Válaszoljanak", "Let them reply")}
-            </button>
+          <div className="social-post-meta">
+            <span className="cmt-name">{a.name}</span>
+            <span className="handle mono">@{a.username}</span>
+            <span className="handle mono">· {timeAgo(c.ts)}</span>
           </div>
+          <div className="cmt-body">{c.text}</div>
+          <button
+            className="social-comment-action"
+            onClick={() => setOpen(!open)}
+          >
+            {tt("Válasz", "Reply")}
+          </button>
         </div>
       </div>
 
       {open && (
-        <div className="row" style={{ gap: 8, marginTop: 8, marginLeft: depth ? 0 : 36, alignItems: "center" }}>
-          <input className="i" style={{ padding: "6px 10px", fontSize: 13 }} value={txt} autoFocus
-            placeholder={tt(`Válasz neki: ${a.name}`, `Reply to ${a.name}`)} onChange={(e) => setTxt(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") send(); }} />
-          <button className="btn primary tiny" onClick={send} disabled={!txt.trim()}><Send size={12} /></button>
+        <div
+          className="row"
+          style={{
+            gap: 8,
+            marginTop: 8,
+            marginLeft: depth ? 0 : 36,
+            alignItems: "center",
+          }}
+        >
+          <input
+            className="i"
+            style={{ padding: "6px 10px", fontSize: 13 }}
+            value={txt}
+            autoFocus
+            placeholder={tt(`Válasz neki: ${a.name}`, `Reply to ${a.name}`)}
+            onChange={(e) => setTxt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") send();
+            }}
+          />
+          <button
+            className="btn primary tiny"
+            onClick={send}
+            disabled={!txt.trim()}
+          >
+            <Send size={12} />
+          </button>
         </div>
       )}
 
       {replies.map((r) => (
-        <CommentNode key={r.id} w={w} c={r} allComments={allComments} depth={(depth || 0) + 1}
-          onReply={onReply} onAskReply={onAskReply} busy={busy} />
+        <CommentNode
+          key={r.id}
+          w={w}
+          c={r}
+          allComments={allComments}
+          depth={(depth || 0) + 1}
+          onReply={onReply}
+        />
       ))}
     </div>
   );
 }
 
-function Post({ w, post, onComments, busy, onLike, onComment, onAskReply, highlight, nodeRef }) {
+function Post({
+  w,
+  post,
+  onLike,
+  onComment,
+  onToggleFollow,
+  highlight,
+  nodeRef,
+}) {
   const { tt } = useLang();
   const { media } = useMedia();
   const [cmt, setCmt] = useState("");
+  const commentInput = useRef(null);
   const author = charById(w, post.authorId);
+
   if (!author) return null;
 
   const comments = post.comments || [];
   const tops = comments.filter((c) => !c.parent);
-  const repliesOf = (id) => comments.filter((c) => c.parent === id);
-  const orphans = comments.filter((c) => c.parent && !comments.some((x) => x.id === c.parent));
+  const orphans = comments.filter(
+    (c) => c.parent && !comments.some((x) => x.id === c.parent)
+  );
+
+  const liked =
+    Array.isArray(post.likedBy) &&
+    post.likedBy.includes(w.meId);
+
+  const following =
+    author.id !== w.meId &&
+    isFollowing(w, w.meId, author.id);
 
   const sendCmt = () => {
     const t = cmt.trim();
@@ -6161,51 +6412,126 @@ function Post({ w, post, onComments, busy, onLike, onComment, onAskReply, highli
   };
 
   return (
-    <div className="card" ref={nodeRef}
-      style={highlight ? { borderColor: "var(--rose)", boxShadow: "0 0 0 2px rgba(217,117,143,.25)" } : null}>
-      <div className="row">
+    <article
+      className={"social-post" + (highlight ? " highlight" : "")}
+      ref={nodeRef}
+    >
+      <div className="social-post-head">
         <Av src={author.avatar} name={author.name} />
+
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="between">
-            <div>
-              <div className="name">{author.name}</div>
-              <div className="handle mono">@{author.username}</div>
+            <div className="social-post-meta">
+              <span className="name">{author.name}</span>
+              <span className="handle mono">@{author.username}</span>
+              <span className="handle mono">· {timeAgo(post.ts)}</span>
             </div>
-            <div className="handle mono">{timeAgo(post.ts)}</div>
+
+            {author.id !== w.meId ? (
+              <button
+                className={
+                  following
+                    ? "btn tiny ghost social-following"
+                    : "btn tiny ghost"
+                }
+                onClick={() => onToggleFollow(author.id)}
+              >
+                {following ? (
+                  <>
+                    <Check size={12} />
+                    {tt("Követed", "Following")}
+                  </>
+                ) : (
+                  <>
+                    <Plus size={12} />
+                    {tt("Követés", "Follow")}
+                  </>
+                )}
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
-      <div className="body">{post.text}</div>
-      {(post.imageId || post.image) ? <img src={resolveImg(post.imageId ? imageRef(post.imageId) : post.image, media)} alt="" style={{ width: "100%", borderRadius: 10, marginTop: 10, border: "1px solid var(--line)" }} /> : null}
 
-      <div className="between" style={{ marginTop: 12 }}>
-        <button className="btn tiny ghost" onClick={() => onLike(post.id)}>
-          <Heart size={13} color="var(--rose)" /> {post.likes || 0}
+      {post.text ? (
+        <div className="social-post-body">{post.text}</div>
+      ) : null}
+
+      {(post.imageId || post.image) ? (
+        <img
+          className="social-post-media"
+          src={resolveImg(
+            post.imageId ? imageRef(post.imageId) : post.image,
+            media
+          )}
+          alt=""
+        />
+      ) : null}
+
+      <div className="social-actions">
+        <button
+          className={"social-action" + (liked ? " liked" : "")}
+          onClick={() => onLike(post.id)}
+        >
+          <Heart
+            size={17}
+            fill={liked ? "currentColor" : "none"}
+          />
+          <span>{post.likes || 0}</span>
         </button>
-        <button className="btn tiny ghost" onClick={() => onComments(post)} disabled={!!busy}>
-          {busy === post.id ? <Loader2 size={13} className="spin" /> : <MessageCircle size={13} />}
-          {comments.length ? tt("Több reakció", "More reactions") : tt("Reakciók kérése", "Ask for reactions")}
+
+        <button
+          className="social-action"
+          onClick={() => commentInput.current && commentInput.current.focus()}
+        >
+          <MessageCircle size={17} />
+          <span>{comments.length}</span>
         </button>
       </div>
 
-      {comments.length > 0 && (
-        <div className="cmts">
+      {comments.length > 0 ? (
+        <div className="social-comments">
           {tops.concat(orphans).map((c) => (
-            <CommentNode key={c.id} w={w} c={c} allComments={comments} depth={0} busy={busy}
-              onReply={(parentId, text) => onComment(post.id, text, parentId)}
-              onAskReply={(cc) => onAskReply(post, cc)} />
+            <CommentNode
+              key={c.id}
+              w={w}
+              c={c}
+              allComments={comments}
+              depth={0}
+              onReply={(parentId, text) =>
+                onComment(post.id, text, parentId)
+              }
+            />
           ))}
         </div>
-      )}
+      ) : null}
 
-      <div className="row" style={{ marginTop: 10, gap: 8, alignItems: "center" }}>
-        <Av src={w.player.avatar} name={w.player.name} size={28} radius={9} />
-        <input className="i" style={{ padding: "7px 11px", fontSize: 13.5 }} value={cmt}
-          placeholder={tt("Szólj hozzá…", "Say something\u2026")} onChange={(e) => setCmt(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") sendCmt(); }} />
-        <button className="btn primary tiny" onClick={sendCmt} disabled={!cmt.trim()}><Send size={13} /></button>
+      <div className="social-comment-box">
+        <Av
+          src={w.player.avatar}
+          name={w.player.name}
+          size={28}
+          radius={9}
+        />
+        <input
+          ref={commentInput}
+          className="i"
+          value={cmt}
+          placeholder={tt("Írj hozzászólást…", "Write a comment…")}
+          onChange={(e) => setCmt(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") sendCmt();
+          }}
+        />
+        <button
+          className="btn primary tiny"
+          onClick={sendCmt}
+          disabled={!cmt.trim()}
+        >
+          <Send size={13} />
+        </button>
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -7654,6 +7980,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
   const [busy, setBusy] = useState("");
   const [resting, setResting] = useState(cooldownLeft() > 0);
   const [hl, setHl] = useState("");
+  const [feedMode, setFeedMode] = useState("all");
+  const [showMedia, setShowMedia] = useState(false);
   const refs = useRef({});
 
   useEffect(() => {
@@ -7811,123 +8139,217 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
     if (!ok) setErr(tt("A világ már feldolgoz egy lépéskérést.", "The world is already processing a step request."));
   };
 
+  const visiblePosts =
+    feedMode === "following"
+      ? (w.posts || []).filter(
+          (p) =>
+            p &&
+            (
+              p.authorId === w.meId ||
+              isFollowing(w, w.meId, p.authorId)
+            )
+        )
+      : (w.posts || []);
+
   return (
     <>
-      <NotesStrip w={w} update={update} setErr={setErr} onOpenChat={onOpenChat} jump={jump}
-        onRequestNoteReactions={onRequestNoteReactions} onSignal={onSignal} />
+      <div className="social-feed-head">
+        <div className="social-feed-title">
+          <div>
+            <div className="name" style={{ fontSize: 16 }}>
+              {tt("Hírfolyam", "Feed")}
+            </div>
+            <div className="handle mono">@{w.player.username}</div>
+          </div>
 
-      <div className="card">
-        <textarea className="i" value={text} placeholder={tt(`Mi jár ${w.player.name} fejében?`, `What's on ${w.player.name}'s mind?`)} onChange={(e) => setText(e.target.value)} />
-        <ImagePicker value={img} onChange={setImg} label={tt("Kép a poszthoz", "Image for the post")} max={900} preview={64} category="post" />
-        <AlbumPick items={albumOf(w.player)} value={img} onPick={setImg} />
-        <div className="between" style={{ marginTop: 10 }}>
-          <span className="hint mono">@{w.player.username}</span>
-          <button className="btn primary" onClick={post} disabled={!text.trim() && !img}><Send size={14} /> {tt("Posztolás", "Post")}</button>
+          {autoOn ? (
+            <span className="chip">
+              <span
+                className="dot"
+                style={{ display: "inline-block", marginRight: 5 }}
+              />
+              {tt("élő", "live")}
+            </span>
+          ) : null}
         </div>
-        {autoOn && <p className="hint" style={{ marginTop: 8 }}>{tt("Az élő világ be van kapcsolva — maguktól reagálnak rá.", "The live world is on — they'll react on their own.")}</p>}
+
+        <div className="social-feed-tabs">
+          <button
+            className={
+              "social-feed-tab" +
+              (feedMode === "all" ? " on" : "")
+            }
+            onClick={() => setFeedMode("all")}
+          >
+            {tt("Neked", "For you")}
+          </button>
+
+          <button
+            className={
+              "social-feed-tab" +
+              (feedMode === "following" ? " on" : "")
+            }
+            onClick={() => setFeedMode("following")}
+          >
+            {tt("Követések", "Following")}
+          </button>
+        </div>
       </div>
 
+      <NotesStrip
+        w={w}
+        update={update}
+        setErr={setErr}
+        onOpenChat={onOpenChat}
+        jump={jump}
+        onRequestNoteReactions={onRequestNoteReactions}
+        onSignal={onSignal}
+      />
 
-      {w.posts.length === 0 && (
-        <p className="hint" style={{ textAlign: "center", marginTop: 24 }}>
-          {tt("Üres a feed. Írj egy posztot, vagy várj — a világ magától is elindul.", "The feed is empty. Write a post, or wait — the world will get going on its own.")}
-        </p>
-      )}
+      <div className="social-composer">
+        <div className="social-composer-main">
+          <Av
+            src={w.player.avatar}
+            name={w.player.name}
+            size={38}
+            radius={12}
+          />
+          <textarea
+            className="i"
+            value={text}
+            placeholder={tt(
+              `Mi jár ${w.player.name} fejében?`,
+              `What's on ${w.player.name}'s mind?`
+            )}
+            onChange={(e) => setText(e.target.value)}
+          />
+        </div>
 
-      {w.posts.map((p) => (
+        {(showMedia || img) ? (
+          <div className="social-media-panel">
+            <ImagePicker
+              value={img}
+              onChange={setImg}
+              label={tt("Kép", "Image")}
+              max={900}
+              preview={64}
+              category="post"
+            />
+          </div>
+        ) : null}
+
+        <div className="social-composer-actions">
+          <button
+            className="btn tiny ghost"
+            onClick={() => setShowMedia(!showMedia)}
+          >
+            <ImageIcon size={14} />
+            {img
+              ? tt("Kép hozzáadva", "Image added")
+              : tt("Kép", "Image")}
+          </button>
+
+          <button
+            className="btn primary"
+            onClick={() => {
+              post();
+              setShowMedia(false);
+            }}
+            disabled={!text.trim() && !img}
+          >
+            <Send size={14} />
+            {tt("Közzététel", "Post")}
+          </button>
+        </div>
+      </div>
+
+      {visiblePosts.length === 0 ? (
+        <div className="social-empty">
+          {feedMode === "following"
+            ? tt(
+                "Még nincs poszt azoktól, akiket követsz.",
+                "There are no posts from people you follow yet."
+              )
+            : tt(
+                "Üres a hírfolyam. Írj egy posztot, vagy várj — a világ magától is elindul.",
+                "The feed is empty. Write a post, or wait — the world will get going on its own."
+              )}
+        </div>
+      ) : null}
+
+      {visiblePosts.map((p) => (
         <Post
           key={p.id}
           w={w}
           post={p}
-          busy={busy}
-          onComments={askComments}
-          onAskReply={askReply}
           highlight={hl === p.id}
-          nodeRef={(el) => { refs.current[p.id] = el; }}
-          onComment={(id, text2, parent) => update((n) => {
-            const x = n.posts.find(
-              (y) => y.id === id
-            );
+          nodeRef={(el) => {
+            refs.current[p.id] = el;
+          }}
+          onToggleFollow={(id) =>
+            update((n) => {
+              setFollowState(
+                n,
+                n.meId || w.meId,
+                id,
+                !isFollowing(n, n.meId || w.meId, id),
+                "player"
+              );
+            })
+          }
+          onComment={(id, text2, parent) =>
+            update((n) => {
+              const x = n.posts.find((y) => y.id === id);
+              if (!x) return;
 
-            if (!x) return;
+              const actorId = n.meId || w.meId;
 
-            const actorId =
-              n.meId || w.meId;
+              if (!Array.isArray(x.comments)) {
+                x.comments = [];
+              }
 
-            if (!Array.isArray(x.comments)) {
-              x.comments = [];
-            }
-
-            const parentComment =
-              parent
-                ? x.comments.find(
-                    (c) => c.id === parent
-                  )
+              const parentComment = parent
+                ? x.comments.find((c) => c.id === parent)
                 : null;
 
-            const targetId =
-              parentComment &&
-              parentComment.authorId
-                ? parentComment.authorId
-                : x.authorId;
+              const targetId =
+                parentComment && parentComment.authorId
+                  ? parentComment.authorId
+                  : x.authorId;
 
-            const made = {
-              id: uid(),
-              authorId: actorId,
-              text: text2,
-              ts: now(),
-              parent: parent || null,
-            };
+              const made = {
+                id: uid(),
+                authorId: actorId,
+                text: text2,
+                ts: now(),
+                parent: parent || null,
+              };
 
-            x.comments.push(made);
+              x.comments.push(made);
+              noteComment(n, x, made);
 
-            noteComment(
-              n,
-              x,
-              made
-            );
-
-            recordSocialEvent(
-              n,
-              {
-                type:
-                  parent
-                    ? "reply"
-                    : "comment",
-
+              recordSocialEvent(n, {
+                type: parent ? "reply" : "comment",
                 refId: made.id,
                 ts: made.ts,
                 actorId,
-
                 targetIds:
-                  targetId &&
-                  targetId !== actorId
+                  targetId && targetId !== actorId
                     ? [targetId]
                     : [],
-
                 visibility: "public",
                 factLevel: "observed",
-
-                importance:
-                  parent
-                    ? 30
-                    : 22,
-
+                importance: parent ? 30 : 22,
                 drama: 0,
                 romance: 0,
                 embarrassment: 0,
-
                 source: "player",
                 text: made.text,
-
                 tags: [
                   "social",
                   "player-comment",
-                  parent
-                    ? "reply"
-                    : "comment",
+                  parent ? "reply" : "comment",
                 ],
-
                 meta: {
                   postId: x.id,
                   commentId: made.id,
@@ -7935,90 +8357,61 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
                   postAuthorId: x.authorId || "",
                   targetId: targetId || "",
                 },
+              });
+            })
+          }
+          onLike={(id) =>
+            update((n) => {
+              const x = n.posts.find((y) => y.id === id);
+              if (!x) return;
+
+              const actorId = n.meId || w.meId;
+              if (!actorId) return;
+
+              if (!Array.isArray(x.likedBy)) {
+                x.likedBy = [];
               }
-            );
-          })}
-          onLike={(id) => update((n) => {
-  const x = n.posts.find(
-    (y) => y.id === id
-  );
 
-  if (!x) return;
+              if (x.likedBy.includes(actorId)) {
+                return;
+              }
 
-  const actorId =
-    n.meId || w.meId;
+              x.likedBy.push(actorId);
 
-  if (!actorId) return;
+              x.likes = Math.max(
+                Number(x.likes) || 0,
+                x.likedBy.length
+              );
 
-  if (!Array.isArray(x.likedBy)) {
-    x.likedBy = [];
-  }
-
-  /*
-   * Ugyanaz a játékos ugyanazt
-   * a posztot csak egyszer lájkolhatja.
-   */
-  if (x.likedBy.includes(actorId)) {
-    return;
-  }
-
-  x.likedBy.push(actorId);
-
-  x.likes =
-    Math.max(
-      Number(x.likes) || 0,
-      x.likedBy.length
-    );
-
-  recordSocialEvent(
-    n,
-    {
-      type: "like",
-
-      refId:
-        `${x.id}:${actorId}`,
-
-      ts: now(),
-
-      actorId,
-
-      targetIds:
-        x.authorId &&
-        x.authorId !== actorId
-          ? [x.authorId]
-          : [],
-
-      visibility: "public",
-      factLevel: "observed",
-
-      /*
-       * Egyetlen like önmagában
-       * nem nagy társadalmi esemény.
-       */
-      importance: 8,
-      drama: 0,
-      romance: 0,
-      embarrassment: 0,
-
-      source: "player",
-
-      text:
-        "Liked a post.",
-
-      tags: [
-        "social",
-        "like",
-        "player-like",
-      ],
-
-      meta: {
-        postId: x.id,
-        postAuthorId:
-          x.authorId || "",
-      },
-    }
-  );
-})}
+              recordSocialEvent(n, {
+                type: "like",
+                refId: `${x.id}:${actorId}`,
+                ts: now(),
+                actorId,
+                targetIds:
+                  x.authorId && x.authorId !== actorId
+                    ? [x.authorId]
+                    : [],
+                visibility: "public",
+                factLevel: "observed",
+                importance: 8,
+                drama: 0,
+                romance: 0,
+                embarrassment: 0,
+                source: "player",
+                text: "Liked a post.",
+                tags: [
+                  "social",
+                  "like",
+                  "player-like",
+                ],
+                meta: {
+                  postId: x.id,
+                  postAuthorId: x.authorId || "",
+                },
+              });
+            })
+          }
         />
       ))}
     </>
@@ -8512,7 +8905,6 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
     {tt("Mentés", "Save")}
   </button>
 </div>
-        )}
       </div>
     </div>
   );
