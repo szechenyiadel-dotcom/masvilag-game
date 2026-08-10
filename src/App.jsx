@@ -5944,7 +5944,92 @@ function applyWorldStep(n, out) {
     },
   }
 );
-    rememberKnowledge(n, author, {
+    /*
+ * Azok a kommentek, amelyek már az
+ * AI-poszttal együtt megszülettek,
+ * külön Social Eventként is bekerülnek.
+ */
+made.forEach((mc) => {
+  const targetComment =
+    mc.parent
+      ? made.find(
+          (x) =>
+            x.id === mc.parent
+        )
+      : null;
+
+  const targetId =
+    targetComment &&
+    targetComment.authorId
+      ? targetComment.authorId
+      : fresh.authorId || "";
+
+  recordSocialEvent(
+    n,
+    {
+      type:
+        mc.parent
+          ? "reply"
+          : "comment",
+
+      refId: mc.id,
+      ts: mc.ts,
+
+      actorId:
+        mc.authorId,
+
+      targetIds:
+        targetId &&
+        targetId !== mc.authorId
+          ? [targetId]
+          : [],
+
+      visibility: "public",
+      factLevel: "observed",
+
+      importance:
+        mc.parent
+          ? 28
+          : 20,
+
+      drama: 0,
+      romance: 0,
+      embarrassment: 0,
+
+      source: "ai",
+
+      text:
+        mc.text || "",
+
+      tags: [
+        "social",
+        "ai-comment",
+        "generated-with-post",
+        mc.parent
+          ? "reply"
+          : "comment",
+      ],
+
+      meta: {
+        postId:
+          fresh.id,
+
+        commentId:
+          mc.id,
+
+        parentId:
+          mc.parent || "",
+
+        postAuthorId:
+          fresh.authorId || "",
+
+        targetId:
+          targetId || "",
+      },
+    }
+  );
+});
+rememberKnowledge(n, author, {
       kind: "event",
       source: "self_action",
       confidence: 1,
