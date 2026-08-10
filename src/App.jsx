@@ -5895,6 +5895,55 @@ function applyWorldStep(n, out) {
       text: postText, imageId: picId || "", image: picId ? "" : picRef, comments: made, language: worldLanguage(n, n.meId),
     };
     n.posts.unshift(fresh);
+    recordSocialEvent(
+  n,
+  {
+    type: "post",
+
+    refId: fresh.id,
+    ts: fresh.ts,
+
+    actorId: author,
+    targetIds: [],
+
+    visibility: "public",
+    factLevel: "observed",
+
+    importance:
+      (fresh.imageId || fresh.image)
+        ? 30
+        : 24,
+
+    drama: 0,
+    romance: 0,
+    embarrassment: 0,
+
+    source: "ai",
+
+    text:
+      fresh.text ||
+      "Image post",
+
+    tags: [
+      "social",
+      "post",
+      "ai-post",
+      (fresh.imageId || fresh.image)
+        ? "image-post"
+        : "text-post",
+    ],
+
+    meta: {
+      postId: fresh.id,
+
+      hasImage:
+        Boolean(
+          fresh.imageId ||
+          fresh.image
+        ),
+    },
+  }
+);
     rememberKnowledge(n, author, {
       kind: "event",
       source: "self_action",
