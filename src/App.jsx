@@ -5118,19 +5118,134 @@ recordSocialEvent(
       }
     });
     (out.likes || []).forEach((lid) => {
-      const who = aiVoice(n, lid);
-      if (!who || who === p.authorId) return;
-      p.likes = (p.likes || 0) + 1;
-      const a = charById(n, who);
-      if (isHuman(n, p.authorId))
-        pushNote(n, p.authorId, {
-          icon: "🤍",
-          translationKey: "likedYourPost",
-          params: { name: a ? a.name : sysTextFor(n, p.authorId, "someone") },
-          text: sysTextFor(n, p.authorId, "likedYourPost", { name: a ? a.name : sysTextFor(n, p.authorId, "someone") }),
-          link: { type: "post", id: p.id },
-        });
-    });
+  const who = aiVoice(
+    n,
+    lid
+  );
+
+  if (
+    !who ||
+    who === p.authorId
+  ) {
+    return;
+  }
+
+  if (!Array.isArray(p.likedBy)) {
+    p.likedBy = [];
+  }
+
+  /*
+   * Ugyanaz az AI ugyanazt a
+   * posztot csak egyszer lájkolhatja.
+   */
+  if (p.likedBy.includes(who)) {
+    return;
+  }
+
+  p.likedBy.push(who);
+
+  p.likes =
+    Math.max(
+      Number(p.likes) || 0,
+      p.likedBy.length
+    );
+
+  recordSocialEvent(
+    n,
+    {
+      type: "like",
+
+      refId:
+        `${p.id}:${who}`,
+
+      ts: now(),
+
+      actorId: who,
+
+      targetIds:
+        p.authorId &&
+        p.authorId !== who
+          ? [p.authorId]
+          : [],
+
+      visibility: "public",
+      factLevel: "observed",
+
+      importance: 8,
+      drama: 0,
+      romance: 0,
+      embarrassment: 0,
+
+      source: "ai",
+
+      text:
+        "Liked a post.",
+
+      tags: [
+        "social",
+        "like",
+        "ai-like",
+      ],
+
+      meta: {
+        postId: p.id,
+        postAuthorId:
+          p.authorId || "",
+      },
+    }
+  );
+
+  const a =
+    charById(
+      n,
+      who
+    );
+
+  if (isHuman(n, p.authorId)) {
+    pushNote(
+      n,
+      p.authorId,
+      {
+        icon: "🤍",
+        translationKey:
+          "likedYourPost",
+
+        params: {
+          name:
+            a
+              ? a.name
+              : sysTextFor(
+                  n,
+                  p.authorId,
+                  "someone"
+                ),
+        },
+
+        text:
+          sysTextFor(
+            n,
+            p.authorId,
+            "likedYourPost",
+            {
+              name:
+                a
+                  ? a.name
+                  : sysTextFor(
+                      n,
+                      p.authorId,
+                      "someone"
+                    ),
+            }
+          ),
+
+        link: {
+          type: "post",
+          id: p.id,
+        },
+      }
+    );
+  }
+});
   }
   applyChanges(n, out.changes);
   n.log = [...(out.events || []), ...n.log].slice(0, 30);
@@ -6238,15 +6353,86 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
             );
           })}
           onLike={(id) => update((n) => {
-            const x = n.posts.find(
-              (y) => y.id === id
-            );
+  const x = n.posts.find(
+    (y) => y.id === id
+  );
 
-            if (x) {
-              x.likes =
-                (x.likes || 0) + 1;
-            }
-          })}
+  if (!x) return;
+
+  const actorId =
+    n.meId || w.meId;
+
+  if (!actorId) return;
+
+  if (!Array.isArray(x.likedBy)) {
+    x.likedBy = [];
+  }
+
+  /*
+   * Ugyanaz a játékos ugyanazt
+   * a posztot csak egyszer lájkolhatja.
+   */
+  if (x.likedBy.includes(actorId)) {
+    return;
+  }
+
+  x.likedBy.push(actorId);
+
+  x.likes =
+    Math.max(
+      Number(x.likes) || 0,
+      x.likedBy.length
+    );
+
+  recordSocialEvent(
+    n,
+    {
+      type: "like",
+
+      refId:
+        `${x.id}:${actorId}`,
+
+      ts: now(),
+
+      actorId,
+
+      targetIds:
+        x.authorId &&
+        x.authorId !== actorId
+          ? [x.authorId]
+          : [],
+
+      visibility: "public",
+      factLevel: "observed",
+
+      /*
+       * Egyetlen like önmagában
+       * nem nagy társadalmi esemény.
+       */
+      importance: 8,
+      drama: 0,
+      romance: 0,
+      embarrassment: 0,
+
+      source: "player",
+
+      text:
+        "Liked a post.",
+
+      tags: [
+        "social",
+        "like",
+        "player-like",
+      ],
+
+      meta: {
+        postId: x.id,
+        postAuthorId:
+          x.authorId || "",
+      },
+    }
+  );
+})}
         />
       ))}
     </>
