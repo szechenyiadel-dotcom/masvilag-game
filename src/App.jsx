@@ -5891,7 +5891,7 @@ function applyWorldStep(n, out) {
     const picRef = pic ? (pic.imageId ? imageRef(pic.imageId) : pic.src) : "";
     const picId = imageIdOf(picRef);
     const fresh = {
-      id: uid(), authorId: author, ts: now(), likes: Math.floor(Math.random() * 30),
+      id: uid(), authorId: author, ts: now(), likes: 0, likedBy: [],
       text: postText, imageId: picId || "", image: picId ? "" : picRef, comments: made, language: worldLanguage(n, n.meId),
     };
     n.posts.unshift(fresh);
