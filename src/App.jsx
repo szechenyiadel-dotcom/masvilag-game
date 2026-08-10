@@ -1103,6 +1103,7 @@ function setRel(w, a, b, patch) {
 /* ---------- jegyzetek (mint az Instagram Notes) ----------
    Mindenkinek egy aktív jegyzete lehet, ami egy nap után magától lejár. */
 const NOTE_LIFE = 24 * 3600e3;
+const NOTE_REFRESH = 8 * 3600e3;
 const NOTE_MAX = 80;
 const liveNotes = (w) => (w.notes || []).filter((x) => x && now() - (x.ts || 0) < NOTE_LIFE);
 const noteOf = (w, id) => liveNotes(w).find((x) => x.authorId === id) || null;
@@ -2032,7 +2033,28 @@ function recentUtterancesFor(w, id, limit = 4) {
   (w.scenes || []).forEach((s) => {
     (s.turns || []).forEach((t) => { if (t && t.authorId === id && t.text) out.push(cut(t.text, 120)); });
   });
+  (w.notes || []).forEach((n) => {
+    if (n && n.authorId === id && n.text) out.push(cut(n.text, 120));
+  });
   return out.slice(-limit);
+}
+
+function emojiTokens(v) {
+  return String(v || "").match(/\p{Extended_Pictographic}/gu) || [];
+}
+
+function recentOverusedEmojis(w, id, limit = 6) {
+  const counts = {};
+  recentUtterancesFor(w, id, limit).forEach((line) => {
+    emojiTokens(line).forEach((emoji) => {
+      counts[emoji] = (counts[emoji] || 0) + 1;
+    });
+  });
+
+  return Object.keys(counts)
+    .filter((emoji) => counts[emoji] >= 2)
+    .sort((a, b) => counts[b] - counts[a])
+    .slice(0, 6);
 }
 
 function repetitionGuard(w, ids, label) {
@@ -2054,15 +2076,34 @@ function repetitionGuard(w, ids, label) {
     if (!c || !lines.length) return "";
     return `${c.name}: ${lines.join(" | ")}`;
   }).filter(Boolean);
-  if (!rows.length) return "";
+
+  const emojiRows = (ids || []).map((id) => {
+    const c = charById(w, id);
+    const overused = recentOverusedEmojis(w, id, 6);
+    if (!c || !overused.length) return "";
+    return `${c.name}: ${overused.join(" ")}`;
+  }).filter(Boolean);
+
+  if (!rows.length && !emojiRows.length) return "";
+
+  const emojiWarning = emojiRows.length
+    ? `
+${tt(
+  "TÚLHASZNÁLT EMOJIK — ezeket a következő megszólalásban lehetőleg kerüld; válassz más, jelentésben illő emojit, vagy írj emoji nélkül:",
+  "OVERUSED EMOJIS — preferably avoid these in the next utterance; choose a different semantically fitting emoji, or write without emojis:"
+)}
+${emojiRows.join("\n")}`
+    : "";
+
   return `
 
 ${tt("KERÜLD AZ ISMÉTLÉST", "AVOID REPETITION")}${scopedLabel ? ` — ${scopedLabel}` : ""}:
 - ${tt("Ne használd újra ugyanazokat a mondatkezdéseket, fordulatokat, sértéseket, bókokat vagy ritmust.", "Do not reuse the same sentence openings, turns of phrase, insults, compliments, or rhythm.")}
 - ${tt("Ne parafrazáld túl közelről a lentebbi friss megszólalásokat.", "Do not paraphrase the recent lines below too closely.")}
 - ${tt("Minden új szöveg vigyen új hangsúlyt, új képet vagy új támadási/szeretetnyelvet.", "Each new line must bring a fresh emphasis, image, or attack/affection style.")}
-${tt("Friss minták, amiket NEM szabad újrahasznosítani:", "Recent lines you must NOT recycle:")}
-${rows.join("\n")}`;
+${rows.length ? `${tt("Friss minták, amiket NEM szabad újrahasznosítani:", "Recent lines you must NOT recycle:")}
+${rows.join("\n")}` : ""}
+${emojiWarning}`;
 }
 
 const REP_WORD_MIN = 3;
@@ -10518,12 +10559,23 @@ function planAutoAction(view) {
   const noteless = (
     view.chars || []
   )
-    .filter(
-      (c) =>
-        c &&
-        !isHuman(view, c.id) &&
-        !noteOf(view, c.id)
-    )
+    .filter((c) => {
+      if (
+        !c ||
+        isHuman(view, c.id)
+      ) {
+        return false;
+      }
+
+      const active =
+        noteOf(view, c.id);
+
+      return (
+        !active ||
+        now() - (active.ts || 0) >=
+          NOTE_REFRESH
+      );
+    })
     .map((c) => {
       const previousNotes = (
         view.notes || []
@@ -10564,10 +10616,10 @@ function planAutoAction(view) {
     });
 
   /*
-   * Kb. 10% note.
+   * Kb. 16% note.
    */
   if (
-    roll < 0.10 &&
+    roll < 0.16 &&
     noteless.length
   ) {
     const bot =
@@ -10645,8 +10697,8 @@ function planAutoAction(view) {
    * az új létrehozásával szemben.
    */
   if (
-    roll >= 0.10 &&
-    roll < 0.18
+    roll >= 0.16 &&
+    roll < 0.24
   ) {
     const preferExisting =
       groupTurnCandidates.length > 0 &&
@@ -10716,7 +10768,7 @@ function planAutoAction(view) {
    * A pickInitiator továbbra is eldönti,
    * kinek van valódi oka írni.
    */
-  if (roll < 0.50) {
+  if (roll < 0.56) {
     const bot =
       pickInitiator(view);
 
@@ -11406,10 +11458,19 @@ if (targetNote) {
         action.payload.botId
     );
 
+    const activeNote =
+      bot
+        ? noteOf(view, bot.id)
+        : null;
+
     if (
       !bot ||
       isHuman(view, bot.id) ||
-      noteOf(view, bot.id)
+      (
+        activeNote &&
+        now() - (activeNote.ts || 0) <
+          NOTE_REFRESH
+      )
     ) {
       return null;
     }
