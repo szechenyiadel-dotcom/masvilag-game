@@ -256,39 +256,79 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 }
 
 .social-cover {
-  height: 112px;
+  height: 140px;
   position: relative;
+  z-index: 0;
+  overflow: hidden;
   border-bottom: 1px solid var(--line);
+  background: var(--raised);
+}
+
+.social-cover-img {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+
+.social-cover:after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent 58%,
+    rgba(10, 9, 16, .18)
+  );
 }
 
 .social-profile-main {
+  position: relative;
+  z-index: 2;
   padding: 0 16px 16px;
 }
 
 .social-profile-top {
+  position: relative;
+  z-index: 3;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  margin-top: -34px;
+
+  /*
+   * Facebook-szerű átfedés:
+   * a profilkép kerül a borítókép FÖLÉ,
+   * nem a borító takarja a profilképet.
+   */
+  margin-top: -42px;
 }
 
 .social-profile-avatar {
-  width: 76px;
-  height: 76px;
-  border-radius: 22px;
+  position: relative;
+  z-index: 4;
+  width: 82px;
+  height: 82px;
+  border-radius: 24px;
   border: 4px solid var(--surface);
   background: var(--surface);
   overflow: hidden;
   flex: none;
   display: grid;
   place-items: center;
+  box-shadow: 0 5px 18px rgba(0,0,0,.35);
 }
 
 .social-profile-avatar .av {
   width: 100% !important;
   height: 100% !important;
-  border-radius: 18px !important;
+  border-radius: 20px !important;
 }
 
 .social-profile-actions {
@@ -1019,10 +1059,36 @@ function normalizeWorldImages(world, media) {
     return imageRef(id);
   };
   Object.keys(w.players || {}).forEach((id) => {
-    if (w.players[id] && w.players[id].avatar) w.players[id].avatar = attach(w.players[id].avatar, { category: "profile", ownerUserId: id });
+    if (w.players[id] && w.players[id].avatar) {
+      w.players[id].avatar = attach(
+        w.players[id].avatar,
+        { category: "profile", ownerUserId: id }
+      );
+    }
+
+    if (w.players[id] && w.players[id].cover) {
+      w.players[id].cover = attach(
+        w.players[id].cover,
+        { category: "cover", ownerUserId: id }
+      );
+    }
   });
+
   (w.chars || []).forEach((c) => {
-    if (c.avatar) c.avatar = attach(c.avatar, { category: "profile", ownerCharacterId: c.id });
+    if (c.avatar) {
+      c.avatar = attach(
+        c.avatar,
+        { category: "profile", ownerCharacterId: c.id }
+      );
+    }
+
+    if (c.cover) {
+      c.cover = attach(
+        c.cover,
+        { category: "cover", ownerCharacterId: c.id }
+      );
+    }
+
     c.album = albumOf(c).map((item) => {
       const ref = attach(item.imageId ? imageRef(item.imageId) : item.src, { category: "album", ownerCharacterId: c.id });
       const iid = imageIdOf(ref);
@@ -1077,7 +1143,7 @@ function Av({ src, name = "?", size = 38, radius = 12 }) {
   );
 }
 
-function ImagePicker({ value, onChange, label, max = 512, preview = 80, category = "other" }) {
+function ImagePicker({ value, onChange, label, max = 512, preview = 80, previewWidth = preview, previewHeight = preview, category = "other" }) {
   const { media, addImage } = useMedia();
   const { tt } = useLang();
   const ref = useRef(null);
@@ -1105,9 +1171,9 @@ function ImagePicker({ value, onChange, label, max = 512, preview = 80, category
       <label className="f">{label || tt("Kép", "Image")}</label>
       <div className="row" style={{ alignItems: "center" }}>
         {url ? (
-          <img src={url} alt="" style={{ width: preview, height: preview, objectFit: "cover", borderRadius: 12, border: "1px solid var(--line)" }} />
+          <img src={url} alt="" style={{ width: previewWidth, height: previewHeight, objectFit: "cover", borderRadius: 12, border: "1px solid var(--line)" }} />
         ) : (
-          <div style={{ width: preview, height: preview, borderRadius: 12, border: "1px dashed var(--line)", display: "grid", placeItems: "center", color: "var(--muted)", fontSize: 11 }}>{tt("nincs kép", "no image")}</div>
+          <div style={{ width: previewWidth, height: previewHeight, borderRadius: 12, border: "1px dashed var(--line)", display: "grid", placeItems: "center", color: "var(--muted)", fontSize: 11 }}>{tt("nincs kép", "no image")}</div>
         )}
         <div style={{ flex: 1 }}>
           <button className="btn full" onClick={() => ref.current && ref.current.click()} disabled={busy}>
@@ -1314,7 +1380,7 @@ const kindOf = (w, id) => (isHuman(w, id) ? termText("player", worldLanguage(w))
 // A privát beszélgetések fiókonként külön élnek.
 const chatKey = (meId, charId) => String(meId) + "|" + String(charId);
 
-const PUBLIC_PROFILE_KEYS = ["name", "nick", "username", "birth", "gender", "orientation", "height", "job", "city", "bio", "looks", "avatar"];
+const PUBLIC_PROFILE_KEYS = ["name", "nick", "username", "birth", "gender", "orientation", "height", "job", "city", "bio", "looks", "avatar", "cover"];
 const PRIVATE_PROFILE_KEYS = ["personality", "traits", "speech", "voice", "goals", "fears", "likes", "secrets", "backstory", "extra", "brief", "briefSrc"];
 
 function defaultCharacterMemory() {
@@ -4535,6 +4601,7 @@ function seedWorld(code) {
   const mk = (o) => ({
     id: uid(),
     avatar: "",
+    cover: "",
     baseFollowers: 0,
     followerDelta: 0,
     followers: [],
@@ -4714,7 +4781,7 @@ function blankPlayer(id, name, username) {
     id, name: name || "Névtelen", username: username || "jatekos",
     birth: "", gender: "", orientation: "", height: "", job: "", city: "",
     bio: "", looks: "", personality: "", traits: "", speech: "", voice: "",
-    goals: "", fears: "", likes: "", secrets: "", backstory: "", avatar: "",
+    goals: "", fears: "", likes: "", secrets: "", backstory: "", avatar: "", cover: "",
     baseFollowers: 0,
     followerDelta: 0,
     followers: [],
@@ -4747,6 +4814,10 @@ function socialProfiles(w) {
 
 function ensureSocialProfileRow(c) {
   if (!c || !c.id) return c;
+
+  if (typeof c.cover !== "string") {
+    c.cover = "";
+  }
 
   c.baseFollowers =
     Math.max(
@@ -6685,6 +6756,12 @@ function SocialProfileModal({
   const { media } = useMedia();
   const [tab, setTab] = useState("posts");
 
+  const coverUrl =
+    resolveImg(
+      c && c.cover,
+      media
+    );
+
   if (!c) return null;
 
   const mine = c.id === w.meId;
@@ -6759,7 +6836,15 @@ function SocialProfileModal({
               background:
                 `radial-gradient(circle at 18% 15%, hsla(${hue(c.username || c.name)}, 70%, 65%, .42), transparent 35%), linear-gradient(135deg, hsl(${hue(c.name)} 32% 19%), hsl(${(hue(c.name) + 55) % 360} 38% 10%))`,
             }}
-          />
+          >
+            {coverUrl ? (
+              <img
+                className="social-cover-img"
+                src={coverUrl}
+                alt=""
+              />
+            ) : null}
+          </div>
 
           <div className="social-profile-main">
             <div className="social-profile-top">
@@ -9209,7 +9294,24 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
         <BudgetMeter c={c} setErr={setErr}
           onBrief={(brief, src) => setC((p2) => ({ ...p2, brief, briefSrc: src }))} />
 
-        <ImagePicker value={c.avatar} onChange={(v) => set("avatar", v)} label={tt("Profilkép", "Profile picture")} max={512} preview={80} category="profile" />
+        <ImagePicker
+          value={c.avatar}
+          onChange={(v) => set("avatar", v)}
+          label={tt("Profilkép", "Profile picture")}
+          max={512}
+          preview={80}
+          category="profile"
+        />
+
+        <ImagePicker
+          value={c.cover || ""}
+          onChange={(v) => set("cover", v)}
+          label={tt("Borítókép", "Cover photo")}
+          max={1400}
+          previewWidth={180}
+          previewHeight={90}
+          category="cover"
+        />
 
         <AlbumEditor value={c.album} onChange={(v) => set("album", v)} />
 
@@ -9388,6 +9490,13 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
   useEditLock();
 
   const { tt } = useLang();
+  const { media } = useMedia();
+
+  const coverUrl =
+    resolveImg(
+      c && c.cover,
+      media
+    );
 
   const rel =
     getRel(
@@ -9495,7 +9604,15 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
               background:
                 `radial-gradient(circle at 18% 15%, hsla(${hue(c.username || c.name)}, 70%, 65%, .42), transparent 35%), linear-gradient(135deg, hsl(${hue(c.name)} 32% 19%), hsl(${(hue(c.name) + 55) % 360} 38% 10%))`,
             }}
-          />
+          >
+            {coverUrl ? (
+              <img
+                className="social-cover-img"
+                src={coverUrl}
+                alt=""
+              />
+            ) : null}
+          </div>
 
           <div className="social-profile-main">
             <div className="social-profile-top">
