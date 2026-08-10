@@ -248,6 +248,123 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 }
 
 
+
+/* ---------- SAJÁT SOCIAL NETWORK PROFIL ---------- */
+.social-profile {
+  overflow: hidden;
+  padding: 0;
+}
+
+.social-cover {
+  height: 112px;
+  position: relative;
+  border-bottom: 1px solid var(--line);
+}
+
+.social-profile-main {
+  padding: 0 16px 16px;
+}
+
+.social-profile-top {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: -34px;
+}
+
+.social-profile-avatar {
+  width: 76px;
+  height: 76px;
+  border-radius: 22px;
+  border: 4px solid var(--surface);
+  background: var(--surface);
+  overflow: hidden;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+
+.social-profile-avatar .av {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 18px !important;
+}
+
+.social-profile-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-bottom: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.social-profile-name {
+  margin-top: 10px;
+}
+
+.social-profile-meta {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.social-profile-stats {
+  display: flex;
+  align-items: stretch;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  margin-top: 14px;
+}
+
+.social-profile-stat {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 5px;
+  text-align: center;
+}
+
+.social-profile-stat + .social-profile-stat {
+  border-left: 1px solid var(--line);
+}
+
+.social-profile-stat strong {
+  display: block;
+  font-size: 14px;
+  color: var(--bone);
+}
+
+.social-profile-stat span {
+  display: block;
+  margin-top: 1px;
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.social-following {
+  border-color: var(--rose) !important;
+  color: var(--rose) !important;
+}
+
+.social-count {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.social-edit-box {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  margin-top: 12px;
+}
+
 /* ---------- MOBILOS ACTION GOMBOK ---------- */
 
 @media (max-width: 768px) {
@@ -4091,7 +4208,15 @@ async function dropMedia(code) {
 
 /* ---------- kezdő világ ---------- */
 function seedWorld(code) {
-  const mk = (o) => ({ id: uid(), avatar: "", ...o });
+  const mk = (o) => ({
+    id: uid(),
+    avatar: "",
+    baseFollowers: 0,
+    followerDelta: 0,
+    followers: [],
+    following: [],
+    ...o,
+  });
   const chars = [
     mk({ name: "Ryan Cole", username: "ryancole", birth: "2008. február 2.", gender: "férfi", job: "diák, kosárcsapat", city: "Beacon Falls",
       looks: "sötét haj, hideg szürke szem, magas", personality: "arrogáns, éles nyelvű, versengő, mélyen sértett",
@@ -4266,7 +4391,423 @@ function blankPlayer(id, name, username) {
     birth: "", gender: "", orientation: "", height: "", job: "", city: "",
     bio: "", looks: "", personality: "", traits: "", speech: "", voice: "",
     goals: "", fears: "", likes: "", secrets: "", backstory: "", avatar: "",
+    baseFollowers: 0,
+    followerDelta: 0,
+    followers: [],
+    following: [],
   };
+}
+
+
+/* ============================================================
+   KÖVETŐRENDSZER
+   ============================================================ */
+
+/*
+ * A social hálózatban most a játékosok és a teljes AI-karakterek
+ * rendelkeznek valódi, követhető profillal.
+ * A mellékszereplők egyelőre nem.
+ */
+function socialProfiles(w) {
+  return humanChars(w)
+    .concat(w.chars || [])
+    .filter(
+      (c, i, arr) =>
+        c &&
+        c.id &&
+        arr.findIndex(
+          (x) => x && x.id === c.id
+        ) === i
+    );
+}
+
+function ensureSocialProfileRow(c) {
+  if (!c || !c.id) return c;
+
+  c.baseFollowers =
+    Math.max(
+      0,
+      Math.round(
+        Number(c.baseFollowers) || 0
+      )
+    );
+
+  c.followerDelta =
+    Math.round(
+      Number(c.followerDelta) || 0
+    );
+
+  if (!Array.isArray(c.followers)) {
+    c.followers = [];
+  }
+
+  if (!Array.isArray(c.following)) {
+    c.following = [];
+  }
+
+  c.followers = [
+    ...new Set(
+      c.followers
+        .filter(Boolean)
+        .map(String)
+        .filter((id) => id !== c.id)
+    ),
+  ];
+
+  c.following = [
+    ...new Set(
+      c.following
+        .filter(Boolean)
+        .map(String)
+        .filter((id) => id !== c.id)
+    ),
+  ];
+
+  return c;
+}
+
+function ensureFollowerSystem(w) {
+  if (!w || typeof w !== "object") {
+    return w;
+  }
+
+  const profiles =
+    socialProfiles(w);
+
+  const byId = {};
+
+  profiles.forEach((c) => {
+    ensureSocialProfileRow(c);
+    byId[c.id] = c;
+  });
+
+  /*
+   * A két oldal mindig legyen szinkronban:
+   * A.following tartalmazza B-t
+   * <=> B.followers tartalmazza A-t.
+   *
+   * Régi világoknál is automatikusan kijavítja
+   * a hiányzó ellenoldalt.
+   */
+  profiles.forEach((c) => {
+    c.following
+      .slice()
+      .forEach((targetId) => {
+        const target =
+          byId[targetId];
+
+        if (!target) {
+          c.following =
+            c.following.filter(
+              (id) => id !== targetId
+            );
+          return;
+        }
+
+        if (
+          !target.followers.includes(c.id)
+        ) {
+          target.followers.push(c.id);
+        }
+      });
+
+    c.followers
+      .slice()
+      .forEach((followerId) => {
+        const follower =
+          byId[followerId];
+
+        if (!follower) {
+          c.followers =
+            c.followers.filter(
+              (id) => id !== followerId
+            );
+          return;
+        }
+
+        if (
+          !follower.following.includes(c.id)
+        ) {
+          follower.following.push(c.id);
+        }
+      });
+  });
+
+  return w;
+}
+
+function socialProfileById(w, id) {
+  if (!w || !id) return null;
+
+  const c =
+    charById(w, id);
+
+  if (
+    !c ||
+    isExtra(w, id)
+  ) {
+    return null;
+  }
+
+  return c;
+}
+
+function isFollowing(
+  w,
+  followerId,
+  targetId
+) {
+  const follower =
+    socialProfileById(
+      w,
+      followerId
+    );
+
+  if (!follower) return false;
+
+  ensureSocialProfileRow(
+    follower
+  );
+
+  return follower.following.includes(
+    String(targetId)
+  );
+}
+
+function knownFollowerCount(w, id) {
+  const c =
+    socialProfileById(w, id);
+
+  if (!c) return 0;
+
+  ensureSocialProfileRow(c);
+
+  return c.followers.length;
+}
+
+function displayFollowerCount(w, id) {
+  const c =
+    socialProfileById(w, id);
+
+  if (!c) return 0;
+
+  ensureSocialProfileRow(c);
+
+  return Math.max(
+    0,
+    c.baseFollowers +
+      c.followerDelta +
+      c.followers.length
+  );
+}
+
+function displayFollowingCount(w, id) {
+  const c =
+    socialProfileById(w, id);
+
+  if (!c) return 0;
+
+  ensureSocialProfileRow(c);
+
+  return c.following.length;
+}
+
+function formatSocialCount(value) {
+  const n =
+    Math.max(
+      0,
+      Number(value) || 0
+    );
+
+  if (n < 1000) {
+    return String(
+      Math.round(n)
+    );
+  }
+
+  if (n < 1000000) {
+    const v =
+      n / 1000;
+
+    return (
+      (v >= 100
+        ? Math.round(v)
+        : Math.round(v * 10) / 10
+      ) + "K"
+    );
+  }
+
+  if (n < 1000000000) {
+    const v =
+      n / 1000000;
+
+    return (
+      (v >= 100
+        ? Math.round(v)
+        : Math.round(v * 10) / 10
+      ) + "M"
+    );
+  }
+
+  const v =
+    n / 1000000000;
+
+  return (
+    (v >= 100
+      ? Math.round(v)
+      : Math.round(v * 10) / 10
+    ) + "B"
+  );
+}
+
+function setFollowState(
+  w,
+  followerId,
+  targetId,
+  shouldFollow,
+  source = "world"
+) {
+  if (
+    !w ||
+    !followerId ||
+    !targetId ||
+    followerId === targetId
+  ) {
+    return false;
+  }
+
+  ensureFollowerSystem(w);
+
+  const follower =
+    socialProfileById(
+      w,
+      followerId
+    );
+
+  const target =
+    socialProfileById(
+      w,
+      targetId
+    );
+
+  if (
+    !follower ||
+    !target
+  ) {
+    return false;
+  }
+
+  const already =
+    follower.following.includes(
+      target.id
+    );
+
+  if (
+    shouldFollow === already
+  ) {
+    return false;
+  }
+
+  if (shouldFollow) {
+    follower.following.push(
+      target.id
+    );
+
+    target.followers.push(
+      follower.id
+    );
+  } else {
+    follower.following =
+      follower.following.filter(
+        (id) =>
+          id !== target.id
+      );
+
+    target.followers =
+      target.followers.filter(
+        (id) =>
+          id !== follower.id
+      );
+  }
+
+  follower.following = [
+    ...new Set(
+      follower.following
+    ),
+  ];
+
+  target.followers = [
+    ...new Set(
+      target.followers
+    ),
+  ];
+
+  /*
+   * Egy follow / unfollow önmagában kis esemény,
+   * de később trendként vagy kapcsolatmintaként
+   * össze lehet vonni több hasonló eseménnyel.
+   */
+  recordSocialEvent(
+    w,
+    {
+      type:
+        shouldFollow
+          ? "follow"
+          : "unfollow",
+
+      refId:
+        `${follower.id}:${target.id}:${shouldFollow ? "follow" : "unfollow"}:${now()}`,
+
+      ts: now(),
+
+      actorId:
+        follower.id,
+
+      targetIds: [
+        target.id,
+      ],
+
+      visibility: "public",
+      factLevel: "observed",
+
+      importance:
+        shouldFollow
+          ? 10
+          : 14,
+
+      drama:
+        shouldFollow
+          ? 0
+          : 4,
+
+      romance: 0,
+      embarrassment: 0,
+
+      source,
+
+      text:
+        shouldFollow
+          ? "Followed a profile."
+          : "Unfollowed a profile.",
+
+      tags: [
+        "social",
+        shouldFollow
+          ? "follow"
+          : "unfollow",
+      ],
+
+      meta: {
+        followerId:
+          follower.id,
+
+        targetId:
+          target.id,
+      },
+    }
+  );
+
+  return true;
 }
 
 async function addAccount(w, username, pw, charName) {
@@ -7231,6 +7772,43 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
 
         <AlbumEditor value={c.album} onChange={(v) => set("album", v)} />
 
+        <div className="social-edit-box">
+          <label className="f" style={{ marginTop: 0 }}>
+            {tt(
+              "Alap követőszám",
+              "Base follower count"
+            )}
+          </label>
+
+          <input
+            className="i mono"
+            type="number"
+            min="0"
+            step="1"
+            value={
+              Number(c.baseFollowers) || 0
+            }
+            onChange={(e) =>
+              set(
+                "baseFollowers",
+                Math.max(
+                  0,
+                  Math.round(
+                    Number(e.target.value) || 0
+                  )
+                )
+              )
+            }
+          />
+
+          <p className="hint" style={{ marginTop: 6 }}>
+            {tt(
+              "Ez a háttérközönség: olyan követők, akik léteznek a világban, de nem külön AI-karakterek. A valódi játékbeli karakterek követése ezen felül számít hozzá.",
+              "This is the background audience: followers who exist in the world but are not separate AI characters. Follows from actual in-game characters are added on top."
+            )}
+          </p>
+        </div>
+
         {FIELDS.map(([k, label, big]) => (
           <div key={k}>
             <label className="f">{tt(label, FIELD_LABELS_EN[k] || label)}</label>
@@ -7368,70 +7946,497 @@ function AlbumView({ items }) {
 
 function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
   useEditLock();
+
   const { tt } = useLang();
-  const rel = getRel(w, c.id, w.meId);
-  const others = relevantOthers(w, c.id).filter((x) => x.id !== w.meId);
+
+  const rel =
+    getRel(
+      w,
+      c.id,
+      w.meId
+    );
+
+  const others =
+    relevantOthers(
+      w,
+      c.id
+    ).filter(
+      (x) =>
+        x.id !== w.meId
+    );
+
+  const following =
+    isFollowing(
+      w,
+      w.meId,
+      c.id
+    );
+
+  const posts =
+    (w.posts || []).filter(
+      (p) =>
+        p &&
+        p.authorId === c.id
+    );
+
+  const followerCount =
+    displayFollowerCount(
+      w,
+      c.id
+    );
+
+  const followingCount =
+    displayFollowingCount(
+      w,
+      c.id
+    );
+
+  const toggleFollow = () => {
+    update((n) => {
+      setFollowState(
+        n,
+        n.meId || w.meId,
+        c.id,
+        !isFollowing(
+          n,
+          n.meId || w.meId,
+          c.id
+        ),
+        "player"
+      );
+    });
+  };
+
   return (
-    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div
+      className="scrim"
+      onClick={(e) => {
+        if (
+          e.target ===
+          e.currentTarget
+        ) {
+          onClose();
+        }
+      }}
+    >
       <div className="sheet">
         <div className="between">
-          <button className="btn tiny ghost" onClick={onClose}><ChevronLeft size={14} /> {tt("Vissza", "Back")}</button>
-          <button className="btn tiny ghost" onClick={() => onEdit(c)}><Pencil size={13} /> {tt("Szerkesztés", "Edit")}</button>
+          <button
+            className="btn tiny ghost"
+            onClick={onClose}
+          >
+            <ChevronLeft size={14} />
+            {tt("Vissza", "Back")}
+          </button>
+
+          <button
+            className="btn tiny ghost"
+            onClick={() =>
+              onEdit(c)
+            }
+          >
+            <Pencil size={13} />
+            {tt(
+              "Szerkesztés",
+              "Edit"
+            )}
+          </button>
         </div>
 
-        <div className="row" style={{ marginTop: 14, alignItems: "center" }}>
-          <Av src={c.avatar} name={c.name} size={54} radius={16} />
-          <div>
-            <h2 style={{ fontSize: 21 }}>{c.name}</h2>
-            <div className="handle mono">
-              @{c.username}{ageOf(c, w) ? ` · ${ageOf(c, w)} ${termText("yearsOld", worldLanguage(w))}` : ""}{zodiac(c.birth) ? ` · ${zodiac(c.birth)}` : ""}{c.city ? ` · ${c.city}` : ""}
-            </div>
-            {c.bio && <div style={{ fontSize: 13.5, marginTop: 4, color: "var(--bone)" }}>{c.bio}</div>}
-          </div>
-        </div>
+        <div
+          className="card social-profile"
+          style={{
+            marginTop: 12,
+          }}
+        >
+          <div
+            className="social-cover"
+            style={{
+              background:
+                `radial-gradient(circle at 18% 15%, hsla(${hue(c.username || c.name)}, 70%, 65%, .42), transparent 35%), linear-gradient(135deg, hsl(${hue(c.name)} 32% 19%), hsl(${(hue(c.name) + 55) % 360} 38% 10%))`,
+            }}
+          />
 
-        <div className="card" style={{ background: "var(--raised)", borderColor: "var(--rose)" }}>
-          <label className="f" style={{ marginTop: 0, color: "var(--rose)" }}>{tt("Ti ketten", "The two of you")}</label>
-          <RelPair w={w} aId={c.id} bId={w.meId} aName={c.name.split(" ")[0]} bName={tt("te", "you")} update={update} />
-        </div>
+          <div className="social-profile-main">
+            <div className="social-profile-top">
+              <div className="social-profile-avatar">
+                <Av
+                  src={c.avatar}
+                  name={c.name}
+                  size={76}
+                  radius={18}
+                />
+              </div>
 
-        <button className="btn primary full" style={{ marginTop: 10 }} onClick={() => onChat(c.id)}>
-          <MessageCircle size={14} /> {tt("Üzenet neki", "Send a message")}
-        </button>
+              <div className="social-profile-actions">
+                <button
+                  className={
+                    following
+                      ? "btn tiny ghost social-following"
+                      : "btn tiny primary"
+                  }
+                  onClick={
+                    toggleFollow
+                  }
+                >
+                  {following ? (
+                    <>
+                      <Check size={13} />
+                      {tt(
+                        "Követed",
+                        "Following"
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <Plus size={13} />
+                      {tt(
+                        "Követés",
+                        "Follow"
+                      )}
+                    </>
+                  )}
+                </button>
 
-        {albumOf(c).length > 0 && <AlbumView items={albumOf(c)} />}
-
-        {FIELDS.filter(([k]) => c[k] && String(c[k]).trim() && !["name", "username", "avatar", "bio"].includes(k)).map(([k, label]) => (
-          <div key={k}>
-            <label className="f">{tt(label, FIELD_LABELS_EN[k] || label)}</label>
-            <div style={{ fontSize: 14, whiteSpace: "pre-wrap" }}>{c[k]}</div>
-          </div>
-        ))}
-
-        <div className="sep" />
-        <label className="f" style={{ marginTop: 0 }}>{tt("Kapcsolatai a többiekkel", "Bonds with others")}</label>
-        <p className="hint">{tt("Mindkét irány külön állítható. Új személyt a Szerkesztés gombbal vagy a Kapcsolat fülön vehetsz fel.", "Both directions are set separately. Add a new person via the Edit button or the Bonds tab.")}</p>
-        {others.length === 0 && <p className="hint">{tt("Még nincs kivel.", "There's no one yet.")}</p>}
-        {others.map((o) => (
-          <div className="card" key={o.id} style={{ background: "var(--ink)" }}>
-            <div className="row" style={{ alignItems: "center", minWidth: 0, marginBottom: 8 }}>
-              <Av src={o.avatar} name={o.name} size={28} radius={9} />
-              <div style={{ minWidth: 0 }}>
-                <div className="name" style={{ fontSize: 13.5 }}>{o.name}</div>
-                <div className="handle mono">{kindOf(w, o.id)}</div>
+                <button
+                  className="btn tiny ghost"
+                  onClick={() =>
+                    onChat(c.id)
+                  }
+                >
+                  <MessageCircle
+                    size={13}
+                  />
+                  {tt(
+                    "Üzenet",
+                    "Message"
+                  )}
+                </button>
               </div>
             </div>
-            <RelPair w={w} aId={c.id} bId={o.id} aName={c.name.split(" ")[0]} bName={o.name.split(" ")[0]} update={update} />
+
+            <div className="social-profile-name">
+              <h2
+                style={{
+                  fontSize: 22,
+                }}
+              >
+                {c.name}
+              </h2>
+
+              <div className="handle mono">
+                @{c.username}
+              </div>
+            </div>
+
+            {c.bio ? (
+              <div
+                style={{
+                  fontSize: 13.5,
+                  marginTop: 8,
+                  whiteSpace:
+                    "pre-wrap",
+                }}
+              >
+                {c.bio}
+              </div>
+            ) : null}
+
+            <div className="social-profile-meta">
+              {c.job ? (
+                <span>{c.job}</span>
+              ) : null}
+
+              {c.city ? (
+                <span>· {c.city}</span>
+              ) : null}
+
+              {ageOf(c, w) ? (
+                <span>
+                  · {ageOf(c, w)}{" "}
+                  {termText(
+                    "yearsOld",
+                    worldLanguage(w)
+                  )}
+                </span>
+              ) : null}
+
+              {zodiac(c.birth) ? (
+                <span>
+                  · {zodiac(c.birth)}
+                </span>
+              ) : null}
+            </div>
+
+            <div className="social-profile-stats">
+              <div className="social-profile-stat">
+                <strong>
+                  {formatSocialCount(
+                    posts.length
+                  )}
+                </strong>
+                <span>
+                  {tt(
+                    "Poszt",
+                    "Posts"
+                  )}
+                </span>
+              </div>
+
+              <div className="social-profile-stat">
+                <strong>
+                  {formatSocialCount(
+                    followerCount
+                  )}
+                </strong>
+                <span>
+                  {tt(
+                    "Követő",
+                    "Followers"
+                  )}
+                </span>
+              </div>
+
+              <div className="social-profile-stat">
+                <strong>
+                  {formatSocialCount(
+                    followingCount
+                  )}
+                </strong>
+                <span>
+                  {tt(
+                    "Követés",
+                    "Following"
+                  )}
+                </span>
+              </div>
+            </div>
+
+            {Number(c.baseFollowers) > 0 ? (
+              <div
+                className="social-count"
+                style={{
+                  marginTop: 8,
+                }}
+              >
+                {tt(
+                  `${formatSocialCount(c.baseFollowers)} háttérkövető + ${knownFollowerCount(w, c.id)} ismert karakter`,
+                  `${formatSocialCount(c.baseFollowers)} background followers + ${knownFollowerCount(w, c.id)} known characters`
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div
+          className="card"
+          style={{
+            background:
+              "var(--raised)",
+            borderColor:
+              "var(--rose)",
+          }}
+        >
+          <label
+            className="f"
+            style={{
+              marginTop: 0,
+              color:
+                "var(--rose)",
+            }}
+          >
+            {tt(
+              "Ti ketten",
+              "The two of you"
+            )}
+          </label>
+
+          <RelPair
+            w={w}
+            aId={c.id}
+            bId={w.meId}
+            aName={
+              c.name.split(" ")[0]
+            }
+            bName={tt(
+              "te",
+              "you"
+            )}
+            update={update}
+          />
+        </div>
+
+        {albumOf(c).length >
+        0 ? (
+          <AlbumView
+            items={albumOf(c)}
+          />
+        ) : null}
+
+        {FIELDS
+          .filter(
+            ([k]) =>
+              c[k] &&
+              String(c[k]).trim() &&
+              ![
+                "name",
+                "username",
+                "avatar",
+                "bio",
+              ].includes(k)
+          )
+          .map(([k, label]) => (
+            <div key={k}>
+              <label className="f">
+                {tt(
+                  label,
+                  FIELD_LABELS_EN[k] ||
+                    label
+                )}
+              </label>
+
+              <div
+                style={{
+                  fontSize: 14,
+                  whiteSpace:
+                    "pre-wrap",
+                }}
+              >
+                {c[k]}
+              </div>
+            </div>
+          ))}
+
+        <div className="sep" />
+
+        <label
+          className="f"
+          style={{
+            marginTop: 0,
+          }}
+        >
+          {tt(
+            "Kapcsolatai a többiekkel",
+            "Bonds with others"
+          )}
+        </label>
+
+        <p className="hint">
+          {tt(
+            "Mindkét irány külön állítható. Új személyt a Szerkesztés gombbal vagy a Kapcsolat fülön vehetsz fel.",
+            "Both directions are set separately. Add a new person via the Edit button or the Bonds tab."
+          )}
+        </p>
+
+        {others.length === 0 ? (
+          <p className="hint">
+            {tt(
+              "Még nincs kivel.",
+              "There's no one yet."
+            )}
+          </p>
+        ) : null}
+
+        {others.map((o) => (
+          <div
+            className="card"
+            key={o.id}
+            style={{
+              background:
+                "var(--ink)",
+            }}
+          >
+            <div
+              className="row"
+              style={{
+                alignItems:
+                  "center",
+                minWidth: 0,
+                marginBottom: 8,
+              }}
+            >
+              <Av
+                src={o.avatar}
+                name={o.name}
+                size={28}
+                radius={9}
+              />
+
+              <div
+                style={{
+                  minWidth: 0,
+                }}
+              >
+                <div
+                  className="name"
+                  style={{
+                    fontSize:
+                      13.5,
+                  }}
+                >
+                  {o.name}
+                </div>
+
+                <div className="handle mono">
+                  {kindOf(
+                    w,
+                    o.id
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <RelPair
+              w={w}
+              aId={c.id}
+              bId={o.id}
+              aName={
+                c.name.split(
+                  " "
+                )[0]
+              }
+              bName={
+                o.name.split(
+                  " "
+                )[0]
+              }
+              update={update}
+            />
           </div>
         ))}
 
-        {(w.mems[c.id] || []).length > 0 && (
+        {(w.mems[c.id] || [])
+          .length > 0 ? (
           <>
             <div className="sep" />
-            <label className="f" style={{ marginTop: 0 }}>Amire emlékszik</label>
-            {w.mems[c.id].map((m, i) => <div key={i} className="hint" style={{ marginTop: 6 }}>· {m}</div>)}
+
+            <label
+              className="f"
+              style={{
+                marginTop: 0,
+              }}
+            >
+              {tt(
+                "Amire emlékszik",
+                "What they remember"
+              )}
+            </label>
+
+            {(w.mems[c.id] || []).map(
+              (m, i) => (
+                <div
+                  key={i}
+                  className="hint"
+                  style={{
+                    marginTop: 6,
+                  }}
+                >
+                  · {m}
+                </div>
+              )
+            )}
           </>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -7474,7 +8479,9 @@ function Cast({ w, update, setErr, goChat, jump }) {
             <Av src={w.player.avatar} name={w.player.name} size={44} radius={14} />
             <div style={{ minWidth: 0 }}>
               <div className="name">{w.player.name}</div>
-              <div className="handle mono">@{w.player.username}</div>
+              <div className="handle mono">
+                @{w.player.username} · {formatSocialCount(displayFollowerCount(w, w.meId))} {tt("követő", "followers")} · {formatSocialCount(displayFollowingCount(w, w.meId))} {tt("követés", "following")}
+              </div>
               {(w.player.bio || w.player.personality) && (
                 <div className="hint" style={{ marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{w.player.bio || w.player.personality}</div>
               )}
@@ -7508,8 +8515,39 @@ function Cast({ w, update, setErr, goChat, jump }) {
                   <div className="name">{c.name}</div>
                   <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score} · {relLabel(r)}</span>
                 </div>
-                <div className="handle mono">@{c.username}</div>
+                <div className="handle mono">
+                  @{c.username} · {formatSocialCount(displayFollowerCount(w, c.id))} {tt("követő", "followers")}
+                </div>
               </div>
+
+              <button
+                className={
+                  isFollowing(w, w.meId, c.id)
+                    ? "btn tiny ghost social-following"
+                    : "btn tiny ghost"
+                }
+                onClick={(e) => {
+                  e.stopPropagation();
+
+                  update((n) => {
+                    setFollowState(
+                      n,
+                      n.meId || w.meId,
+                      c.id,
+                      !isFollowing(
+                        n,
+                        n.meId || w.meId,
+                        c.id
+                      ),
+                      "player"
+                    );
+                  });
+                }}
+              >
+                {isFollowing(w, w.meId, c.id)
+                  ? tt("Követed", "Following")
+                  : tt("Követés", "Follow")}
+              </button>
             </div>
             <div style={{ marginTop: 10 }}><RelBar score={r.score} /></div>
             {(c.bio || c.personality) && <div className="hint" style={{ marginTop: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.bio || c.personality}</div>}
@@ -10143,6 +11181,11 @@ function ensureSocialSimulationState(w) {
   ) {
     w.socialStats = {};
   }
+
+  /*
+   * Követőháló migráció / javítás.
+   */
+  ensureFollowerSystem(w);
 
   /*
    * Aktuális trendek.
