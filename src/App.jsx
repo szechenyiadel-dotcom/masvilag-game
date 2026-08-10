@@ -4660,6 +4660,530 @@ function formatSocialCount(value) {
   );
 }
 
+
+function followBondWeight(rel) {
+  const bond =
+    String(
+      (rel && (rel.bond || rel.type)) || ""
+    ).toLowerCase();
+
+  if (!bond) return 0;
+
+  /*
+   * Erős, természetesen követést indokló kötelékek.
+   */
+  if (
+    /barát|friend|legjobb|best friend|közeli|close|crush|járnak|dating|jegyes|fiancé|házastárs|spouse|partner|testvér|sibling|család|family|szülő|parent|gyerek|child/.test(
+      bond
+    )
+  ) {
+    return 22;
+  }
+
+  /*
+   * Olyan kapcsolatok, ahol rendszeres társas érintkezés
+   * miatt teljesen természetes lehet a follow.
+   */
+  if (
+    /osztálytárs|classmate|munkatárs|coworker|szomszéd|neighbor|főnök|boss|beosztott|mentor|tanítvány|student|edző|coach|tanár|teacher/.test(
+      bond
+    )
+  ) {
+    return 12;
+  }
+
+  /*
+   * Ex, rivális vagy ellenség is követhet valakit azért,
+   * hogy figyelje, mit csinál — de ez kisebb súly.
+   */
+  if (
+    /ex|rivális|rival|ellenség|enemy/.test(
+      bond
+    )
+  ) {
+    return 8;
+  }
+
+  return 5;
+}
+
+function characterSocialFollowModifier(c) {
+  if (!c) return 0;
+
+  const raw =
+    [
+      c.personality,
+      c.traits,
+      c.speech,
+      c.voice,
+      c.job,
+      c.bio,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+  let mod = 0;
+
+  if (
+    /social|extrovert|extroverted|outgoing|influencer|creator|blogger|celebrity|celeb|pletyka|gossip|curious|kíváncsi|társasági|közösségi/.test(
+      raw
+    )
+  ) {
+    mod += 8;
+  }
+
+  if (
+    /antisocial|introvert|introverted|private|reserved|zárkózott|visszahúzódó|magának való|social media.*hate|utálja.*közösségi/.test(
+      raw
+    )
+  ) {
+    mod -= 10;
+  }
+
+  return mod;
+}
+
+function recentFollowInteractionScore(
+  w,
+  actorId,
+  targetId
+) {
+  let score = 0;
+
+  /*
+   * Nyilvános interakciók.
+   * Nem kell egyetlen like miatt rögtön követni valakit,
+   * de az ismétlődő érdeklődés már számít.
+   */
+  (w.posts || [])
+    .slice(0, 30)
+    .forEach((p) => {
+      if (!p) return;
+
+      const comments =
+        Array.isArray(p.comments)
+          ? p.comments
+          : [];
+
+      if (
+        p.authorId === targetId
+      ) {
+        if (
+          Array.isArray(p.likedBy) &&
+          p.likedBy.includes(actorId)
+        ) {
+          score += 5;
+        }
+
+        const actorComments =
+          comments.filter(
+            (c) =>
+              c &&
+              c.authorId === actorId
+          ).length;
+
+        score += Math.min(
+          14,
+          actorComments * 7
+        );
+      }
+
+      if (
+        p.authorId === actorId
+      ) {
+        if (
+          Array.isArray(p.likedBy) &&
+          p.likedBy.includes(targetId)
+        ) {
+          score += 3;
+        }
+
+        const targetComments =
+          comments.filter(
+            (c) =>
+              c &&
+              c.authorId === targetId
+          ).length;
+
+        score += Math.min(
+          10,
+          targetComments * 5
+        );
+      }
+    });
+
+  /*
+   * Közös group chat = van társas kapcsolatuk.
+   */
+  const sharedGroups =
+    (w.groups || []).filter(
+      (g) =>
+        g &&
+        Array.isArray(g.members) &&
+        g.members.includes(actorId) &&
+        g.members.includes(targetId)
+    ).length;
+
+  score += Math.min(
+    14,
+    sharedGroups * 7
+  );
+
+  /*
+   * Játékos <-> AI privát beszélgetés.
+   * Az appban a DM-ek a játékoshoz kötődnek,
+   * ezért csak ennél a párosnál értelmezhető.
+   */
+  if (
+    isHuman(w, targetId) &&
+    !isHuman(w, actorId)
+  ) {
+    const ck =
+      chatKey(
+        targetId,
+        actorId
+      );
+
+    const count =
+      (
+        (w.chats &&
+          w.chats[ck]) ||
+        []
+      ).length;
+
+    score += Math.min(
+      18,
+      count * 2
+    );
+  }
+
+  return Math.min(
+    38,
+    score
+  );
+}
+
+function followInterestScore(
+  w,
+  actorId,
+  targetId
+) {
+  const actor =
+    socialProfileById(
+      w,
+      actorId
+    );
+
+  const target =
+    socialProfileById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target ||
+    actor.id === target.id
+  ) {
+    return -999;
+  }
+
+  if (
+    isFollowing(
+      w,
+      actor.id,
+      target.id
+    )
+  ) {
+    return -999;
+  }
+
+  const rel =
+    getRel(
+      w,
+      actor.id,
+      target.id
+    );
+
+  let score = 0;
+
+  /*
+   * Ha már van köztük rögzített kapcsolat,
+   * az önmagában társas relevancia.
+   */
+  if (
+    linked(
+      w,
+      actor.id,
+      target.id
+    )
+  ) {
+    score += 12;
+  }
+
+  const relScore =
+    Number(rel.score) || 0;
+
+  /*
+   * Pozitív kapcsolatnál egyre valószínűbb,
+   * hogy érdekli a másik social jelenléte.
+   */
+  if (relScore > 0) {
+    score +=
+      Math.min(
+        32,
+        relScore * 0.4
+      );
+  }
+
+  /*
+   * Nagyon negatív kapcsolatnál is lehet érdeke követni:
+   * rivalizálás, féltékenység, ellenőrzés, hate-follow.
+   * Ez viszont gyengébb, mint egy pozitív kötődés.
+   */
+  if (relScore < -25) {
+    score +=
+      Math.min(
+        15,
+        Math.abs(relScore) *
+          0.16
+      );
+  }
+
+  score +=
+    followBondWeight(rel);
+
+  /*
+   * Ha a célpont már követi őt, az erős follow-back jel,
+   * de NEM automatikus kölcsönösség.
+   */
+  if (
+    isFollowing(
+      w,
+      target.id,
+      actor.id
+    )
+  ) {
+    score += 28;
+  }
+
+  score +=
+    recentFollowInteractionScore(
+      w,
+      actor.id,
+      target.id
+    );
+
+  /*
+   * Ismertebb profilok valamivel könnyebben kerülnek
+   * valakinek a radarjára. Ez csak kis bónusz:
+   * a követőszám soha nem írja felül a kapcsolatot.
+   */
+  const audience =
+    Math.max(
+      0,
+      Number(target.baseFollowers) ||
+        0,
+      displayFollowerCount(
+        w,
+        target.id
+      )
+    );
+
+  if (audience > 0) {
+    score += Math.min(
+      12,
+      Math.log10(
+        audience + 1
+      ) * 2.5
+    );
+  }
+
+  score +=
+    characterSocialFollowModifier(
+      actor
+    );
+
+  return Math.round(score);
+}
+
+function aiShouldFollow(
+  w,
+  actorId,
+  targetId,
+  trigger = "autonomous"
+) {
+  const actor =
+    socialProfileById(
+      w,
+      actorId
+    );
+
+  if (
+    !actor ||
+    isHuman(w, actor.id)
+  ) {
+    return false;
+  }
+
+  const score =
+    followInterestScore(
+      w,
+      actorId,
+      targetId
+    );
+
+  if (
+    !Number.isFinite(score)
+  ) {
+    return false;
+  }
+
+  /*
+   * Follow-backnél alacsonyabb a belépési küszöb,
+   * mert a másik fél már jelezte az érdeklődését.
+   * Még így sem követ vissza automatikusan mindenki.
+   */
+  if (trigger === "follow-back") {
+    if (score >= 52) {
+      return true;
+    }
+
+    if (score < 34) {
+      return false;
+    }
+
+    return (
+      Math.random() <
+      Math.min(
+        0.85,
+        0.22 +
+          (score - 34) / 28
+      )
+    );
+  }
+
+  /*
+   * Teljesen autonóm követéshez erősebb indok kell.
+   */
+  if (score >= 62) {
+    return true;
+  }
+
+  if (score < 40) {
+    return false;
+  }
+
+  return (
+    Math.random() <
+    Math.min(
+      0.72,
+      0.12 +
+        (score - 40) / 42
+    )
+  );
+}
+
+function pickAutonomousFollowAction(w) {
+  ensureFollowerSystem(w);
+
+  const actors =
+    (w.chars || []).filter(
+      (c) =>
+        c &&
+        !isHuman(w, c.id)
+    );
+
+  const targets =
+    socialProfiles(w);
+
+  const candidates = [];
+
+  actors.forEach((actor) => {
+    targets.forEach((target) => {
+      if (
+        !target ||
+        target.id === actor.id ||
+        isFollowing(
+          w,
+          actor.id,
+          target.id
+        )
+      ) {
+        return;
+      }
+
+      const score =
+        followInterestScore(
+          w,
+          actor.id,
+          target.id
+        );
+
+      if (score < 40) {
+        return;
+      }
+
+      candidates.push({
+        actorId:
+          actor.id,
+
+        targetId:
+          target.id,
+
+        score,
+
+        tie:
+          Math.random(),
+      });
+    });
+  });
+
+  candidates.sort((a, b) => {
+    if (a.score !== b.score) {
+      return b.score - a.score;
+    }
+
+    return a.tie - b.tie;
+  });
+
+  /*
+   * Ne mindig matematikailag ugyanaz a páros nyerjen:
+   * a legerősebb néhány jelölt közül választunk.
+   */
+  const pool =
+    candidates.slice(0, 5);
+
+  for (
+    let i = 0;
+    i < pool.length;
+    i++
+  ) {
+    const picked =
+      pool[
+        Math.floor(
+          Math.random() *
+            pool.length
+        )
+      ];
+
+    if (
+      picked &&
+      aiShouldFollow(
+        w,
+        picked.actorId,
+        picked.targetId,
+        "autonomous"
+      )
+    ) {
+      return picked;
+    }
+  }
+
+  return null;
+}
+
 function setFollowState(
   w,
   followerId,
@@ -4806,6 +5330,75 @@ function setFollowState(
       },
     }
   );
+
+  /*
+   * Ha egy AI követni kezdi a játékost,
+   * kapjon róla normál social értesítést.
+   * Unfollowról szándékosan nem küldünk értesítést.
+   */
+  if (
+    shouldFollow &&
+    !isHuman(w, follower.id) &&
+    isHuman(w, target.id)
+  ) {
+    pushNote(
+      w,
+      target.id,
+      {
+        icon: "👤",
+
+        text:
+          sysLangText(
+            w,
+            target.id,
+            `${follower.name} követni kezdett.`,
+            `${follower.name} started following you.`
+          ),
+
+        link: {
+          type: "char",
+          id: follower.id,
+        },
+      }
+    );
+  }
+
+  /*
+   * Ha a JÁTÉKOS követ be egy AI-karaktert,
+   * az AI külön eldöntheti, hogy érdekében áll-e
+   * visszakövetni.
+   *
+   * Nem automatikus follow-back.
+   * A kapcsolat, korábbi interakciók, közös groupok,
+   * DM-ek és a karakter social habitusza számítanak.
+   */
+  if (
+    shouldFollow &&
+    source === "player" &&
+    isHuman(w, follower.id) &&
+    !isHuman(w, target.id)
+  ) {
+    simEnqueue(
+      w,
+      mkAction(
+        "follow",
+        `follow-back:${target.id}:${follower.id}:${Math.floor(
+          now() / 1200000
+        )}`,
+        {
+          actorId:
+            target.id,
+
+          targetId:
+            follower.id,
+
+          trigger:
+            "follow-back",
+        },
+        "event"
+      )
+    );
+  }
 
   return true;
 }
@@ -8517,6 +9110,9 @@ function Cast({ w, update, setErr, goChat, jump }) {
                 </div>
                 <div className="handle mono">
                   @{c.username} · {formatSocialCount(displayFollowerCount(w, c.id))} {tt("követő", "followers")}
+                  {isFollowing(w, c.id, w.meId)
+                    ? ` · ${tt("követ téged", "follows you")}`
+                    : ""}
                 </div>
               </div>
 
@@ -12013,10 +12609,53 @@ function planAutoAction(view) {
     );
   }
 
+  /*
+   * 4. AUTONÓM FOLLOW
+   *
+   * Nem minden körben próbáljuk.
+   * A karakterek csak akkor kerülnek jelöltként ide,
+   * ha van valós társas okuk figyelni a másikat:
+   * kapcsolat, follow-back jel, közös interakció,
+   * group chat, DM vagy társadalmi relevancia.
+   *
+   * Így AI -> AI és AI -> játékos követés is
+   * organikusan kialakulhat.
+   */
+  if (
+    Math.random() < 0.14
+  ) {
+    const follow =
+      pickAutonomousFollowAction(
+        view
+      );
+
+    if (follow) {
+      return mkAction(
+        "follow",
+        `auto-follow:${follow.actorId}:${follow.targetId}:${Math.floor(
+          now() / 1800000
+        )}`,
+        {
+          actorId:
+            follow.actorId,
+
+          targetId:
+            follow.targetId,
+
+          trigger:
+            "autonomous",
+
+          score:
+            follow.score,
+        }
+      );
+    }
+  }
+
   const roll = Math.random();
 
   /*
-   * 4. AUTONÓM NOTE
+   * 5. AUTONÓM NOTE
    *
    * Ritkább, mint eddig.
    * Ne a note-ok zabálják fel
@@ -12103,7 +12742,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 5. LÉTEZŐ GROUP CHATEK
+   * 6. LÉTEZŐ GROUP CHATEK
    */
   const existingGroups = (
     view.groups || []
@@ -12156,7 +12795,7 @@ function planAutoAction(view) {
     !recentGroup;
 
   /*
-   * 6. GROUP CHAT
+   * 7. GROUP CHAT
    *
    * Kb. 8%.
    * A meglévő csoport előnyt élvez
@@ -12227,7 +12866,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 7. PRIVÁT ÜZENET
+   * 8. PRIVÁT ÜZENET
    *
    * Kb. 32%.
    *
@@ -12252,7 +12891,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 8. WORLD / FEED
+   * 9. WORLD / FEED
    *
    * A maradék körökben a világ magától
    * posztol és kommentel.
@@ -12604,6 +13243,90 @@ async function runSimulationAction(view, update, action) {
     }
 
     return null;
+  }
+
+  if (action.type === "follow") {
+    const actorId =
+      action.payload &&
+      action.payload.actorId;
+
+    const targetId =
+      action.payload &&
+      action.payload.targetId;
+
+    const trigger =
+      (
+        action.payload &&
+        action.payload.trigger
+      ) ||
+      "autonomous";
+
+    const actor =
+      actorId
+        ? socialProfileById(
+            view,
+            actorId
+          )
+        : null;
+
+    const target =
+      targetId
+        ? socialProfileById(
+            view,
+            targetId
+          )
+        : null;
+
+    if (
+      !actor ||
+      !target ||
+      isHuman(
+        view,
+        actor.id
+      ) ||
+      actor.id === target.id ||
+      isFollowing(
+        view,
+        actor.id,
+        target.id
+      )
+    ) {
+      return null;
+    }
+
+    /*
+     * A döntést mindig a futás pillanatában
+     * újraellenőrizzük, mert a queue-ba kerülés óta
+     * változhatott a kapcsolat vagy a követési állapot.
+     */
+    if (
+      !aiShouldFollow(
+        view,
+        actor.id,
+        target.id,
+        trigger
+      )
+    ) {
+      update((n) => {
+        n.autoAt = now();
+      });
+
+      return "follow";
+    }
+
+    update((n) => {
+      n.autoAt = now();
+
+      setFollowState(
+        n,
+        actor.id,
+        target.id,
+        true,
+        "ai"
+      );
+    });
+
+    return "follow";
   }
 
   if (action.type === "reply") {
