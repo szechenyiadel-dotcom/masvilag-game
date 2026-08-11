@@ -1654,13 +1654,58 @@ const MOOD_EXAMPLES = [
 
 // Amit a felületen mutatunk: elsősorban az, hogy MOST mit érez.
 function relLabel(r) {
-  const bond = (r && (r.bond || r.type)) || "";
-  const mood = (r && r.mood) || "";
-  if (mood && r.fixed && bond) return `${localizedBond(bond, CURRENT_LANG)} · ${mood}`;
-  if (mood) return mood;
-  if (r && r.fixed && bond) return `${localizedBond(bond, CURRENT_LANG)} · ${relMood(r.score)}`;
-  if (bond) return localizedBond(bond, CURRENT_LANG);
-  return relType(r ? r.score : 0);
+  const bond =
+    (r && (r.bond || r.type)) || "";
+
+  const mood =
+    (r && r.mood) || "";
+
+  const shownMood =
+    mood
+      ? localizedBond(
+          mood,
+          CURRENT_LANG
+        )
+      : "";
+
+  if (
+    shownMood &&
+    r.fixed &&
+    bond
+  ) {
+    return `${localizedBond(
+      bond,
+      CURRENT_LANG
+    )} · ${shownMood}`;
+  }
+
+  if (shownMood) {
+    return shownMood;
+  }
+
+  if (
+    r &&
+    r.fixed &&
+    bond
+  ) {
+    return `${localizedBond(
+      bond,
+      CURRENT_LANG
+    )} · ${relMood(
+      r.score
+    )}`;
+  }
+
+  if (bond) {
+    return localizedBond(
+      bond,
+      CURRENT_LANG
+    );
+  }
+
+  return relType(
+    r ? r.score : 0
+  );
 }
 const moodEmoji = (d) => (d >= 10 ? "🔥" : d > 0 ? "❤️" : d <= -10 ? "🖤" : d < 0 ? "💔" : "✨");
 function relColor(score) {
@@ -2394,53 +2439,489 @@ function aiVoice(n, id) {
   return who && !isHuman(n, who) ? who : null;
 }
 
-function applyChanges(n, changes) {
-  (changes || []).forEach((ch) => {
-    const a = findChar(n, ch.a), b = findChar(n, ch.b);
-    if (!a || !b || a === b) return;
-    const r = getRel(n, a, b);
-    const delta = Number(ch.delta) || 0;
-    const patch = { score: clamp(r.score + delta) };
-    // Az állandó köteléket (rokonság) az AI nem írhatja át, csak a változó viszonyt.
-    if (ch.bond && !r.fixed) patch.bond = String(ch.bond).slice(0, 40);
-    if (ch.mood) patch.mood = String(ch.mood).slice(0, 60);
-    if (ch.why) patch.why = String(ch.why).slice(0, 160);
-    setRel(n, a, b, patch);
-    const memA = ensureCharMemory(n, a);
-    const rk = relKey(a, b);
-    if (!memA.relationshipHistory[rk]) memA.relationshipHistory[rk] = [];
-    memA.relationshipHistory[rk] = memA.relationshipHistory[rk].concat([{
-      score: patch.score,
-      delta,
-      mood: patch.mood || r.mood || "",
-      why: patch.why || "",
-      timestamp: now(),
-    }]).slice(-20);
+function boostedRelationshipDelta(
+  value
+) {
+  const raw =
+    Number(value) || 0;
 
-    // értesítés akkor, ha egy szereplő érzése változott meg IRÁNTAD
-    [[a, b]].forEach(([x, y]) => {
-      if (!isHuman(n, y) || isHuman(n, x)) return;
-      const other = charById(n, x);
-      if (!other) return;
-      const why = ch.why ? String(ch.why) : (ch.mood ? String(ch.mood) : "");
-      const whyPart = why ? ` - ${why}` : "";
-      pushNote(n, y, {
-        icon: moodEmoji(delta),
-        translationKey: "relationshipDelta",
-        params: {
-          name: other.name,
-          delta: `${delta > 0 ? "+" : ""}${delta}`,
-          why: whyPart,
-        },
-        text: sysTextFor(n, y, "relationshipDelta", {
-          name: other.name,
-          delta: `${delta > 0 ? "+" : ""}${delta}`,
-          why: whyPart,
-        }),
-        mood: ch.mood ? String(ch.mood) : "",
-        link: { type: "char", id: x },
-      });
+  if (!raw) return 0;
+
+  const sign =
+    raw > 0
+      ? 1
+      : -1;
+
+  const abs =
+    Math.abs(raw);
+
+  /*
+   * Régen túl sok ±1 / ±3 / ±5 változás volt.
+   * Most egy VALÓDI érzelmi reakció láthatóbb.
+   *
+   * Példák:
+   *  3  ->  6
+   *  5  ->  8
+   * 10  -> 16
+   * 15  -> 24
+   * 20  -> 32
+   * 30+ -> max 40
+   */
+  const boosted =
+    abs <= 3
+      ? 6
+      : Math.max(
+          6,
+          Math.round(
+            abs * 1.6
+          )
+        );
+
+  return (
+    sign *
+    Math.min(
+      40,
+      boosted
+    )
+  );
+}
+
+function oneSidedRelationshipChange(
+  ch
+) {
+  if (
+    ch &&
+    ch.oneSided === true
+  ) {
+    return true;
+  }
+
+  const corpus =
+    [
+      ch && ch.bond,
+      ch && ch.mood,
+      ch && ch.why,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+  return (
+    /(?:titkos vonzalom|secret attraction|unrequited|viszonzatlan|egyoldalú|one[- ]sided)/i
+      .test(corpus)
+  );
+}
+
+function normalizedRelationshipChanges(
+  n,
+  changes
+) {
+  const explicit = [];
+
+  (Array.isArray(changes)
+    ? changes
+    : []
+  ).forEach((ch) => {
+    if (!ch) return;
+
+    const a =
+      findChar(
+        n,
+        ch.a
+      );
+
+    const b =
+      findChar(
+        n,
+        ch.b
+      );
+
+    if (
+      !a ||
+      !b ||
+      a === b
+    ) {
+      return;
+    }
+
+    explicit.push({
+      ...ch,
+      a,
+      b,
+      delta:
+        boostedRelationshipDelta(
+          ch.delta
+        ),
+      __autoEcho:false,
     });
+  });
+
+  const explicitPairs =
+    new Set(
+      explicit.map(
+        (ch) =>
+          relKey(
+            ch.a,
+            ch.b
+          )
+      )
+    );
+
+  const out = [
+    ...explicit,
+  ];
+
+  /*
+   * Biztonsági fallback:
+   * ha a modell egy tényleges interakciónál csak az egyik
+   * irányt adta vissza, a másik oldal score-ja is kaphat
+   * egy KISEBB "echo" változást.
+   *
+   * - nem lesz automatikusan szimmetrikus
+   * - nem másolunk bondot / moodot
+   * - oneSided változásnál nem történik
+   * - ha a modell explicit megadta a másik irányt,
+   *   azt tiszteletben tartjuk
+   */
+  explicit.forEach((ch) => {
+    if (
+      !ch.delta ||
+      oneSidedRelationshipChange(
+        ch
+      )
+    ) {
+      return;
+    }
+
+    const reverseKey =
+      relKey(
+        ch.b,
+        ch.a
+      );
+
+    if (
+      explicitPairs.has(
+        reverseKey
+      )
+    ) {
+      return;
+    }
+
+    const sign =
+      ch.delta > 0
+        ? 1
+        : -1;
+
+    const echo =
+      sign *
+      Math.min(
+        14,
+        Math.max(
+          4,
+          Math.round(
+            Math.abs(
+              ch.delta
+            ) * 0.42
+          )
+        )
+      );
+
+    out.push({
+      a:ch.b,
+      b:ch.a,
+      delta:echo,
+      mood:"",
+      bond:"",
+      fixed:false,
+      oneSided:false,
+      __autoEcho:true,
+      why:
+        worldLanguage(
+          n,
+          n.meId
+        ) === "en"
+          ? "The interaction affected this side of the relationship too."
+          : "A köztük történt interakció erre az oldalra is hatott.",
+    });
+  });
+
+  return out;
+}
+
+function applyChanges(
+  n,
+  changes
+) {
+  normalizedRelationshipChanges(
+    n,
+    changes
+  ).forEach((ch) => {
+    const a =
+      ch.a;
+
+    const b =
+      ch.b;
+
+    if (
+      !a ||
+      !b ||
+      a === b
+    ) {
+      return;
+    }
+
+    const r =
+      getRel(
+        n,
+        a,
+        b
+      );
+
+    const delta =
+      Number(
+        ch.delta
+      ) || 0;
+
+    const patch = {
+      score:
+        clamp(
+          r.score +
+          delta
+        ),
+    };
+
+    /*
+     * Állandó rokoni köteléket az AI nem írhat át.
+     * A score és mood viszont attól még változhat.
+     */
+    if (
+      ch.bond &&
+      !r.fixed
+    ) {
+      patch.bond =
+        String(
+          ch.bond
+        ).slice(
+          0,
+          40
+        );
+    }
+
+    if (
+      ch.mood
+    ) {
+      patch.mood =
+        String(
+          ch.mood
+        ).slice(
+          0,
+          60
+        );
+    }
+
+    if (
+      ch.why
+    ) {
+      patch.why =
+        String(
+          ch.why
+        ).slice(
+          0,
+          160
+        );
+    }
+
+    setRel(
+      n,
+      a,
+      b,
+      patch
+    );
+
+    const memA =
+      ensureCharMemory(
+        n,
+        a
+      );
+
+    const rk =
+      relKey(
+        a,
+        b
+      );
+
+    if (
+      !memA.relationshipHistory[rk]
+    ) {
+      memA.relationshipHistory[rk] =
+        [];
+    }
+
+    memA.relationshipHistory[rk] =
+      memA.relationshipHistory[rk]
+        .concat([
+          {
+            score:
+              patch.score,
+            delta,
+            mood:
+              patch.mood ||
+              r.mood ||
+              "",
+            why:
+              patch.why ||
+              "",
+            autoEcho:
+              Boolean(
+                ch.__autoEcho
+              ),
+            timestamp:
+              now(),
+          },
+        ])
+        .slice(-30);
+
+    /*
+     * 1) AI -> játékos:
+     *    "X kapcsolata veled +..."
+     */
+    if (
+      !isHuman(n,a) &&
+      isHuman(n,b) &&
+      delta
+    ) {
+      const other =
+        charById(
+          n,
+          a
+        );
+
+      if (other) {
+        const why =
+          ch.why
+            ? String(ch.why)
+            : (
+                ch.mood
+                  ? String(ch.mood)
+                  : ""
+              );
+
+        const whyPart =
+          why
+            ? ` - ${why}`
+            : "";
+
+        pushNote(
+          n,
+          b,
+          {
+            icon:
+              moodEmoji(
+                delta
+              ),
+            translationKey:
+              "relationshipDelta",
+            params:{
+              name:
+                other.name,
+              delta:
+                `${delta > 0 ? "+" : ""}${delta}`,
+              why:
+                whyPart,
+            },
+            text:
+              sysTextFor(
+                n,
+                b,
+                "relationshipDelta",
+                {
+                  name:
+                    other.name,
+                  delta:
+                    `${delta > 0 ? "+" : ""}${delta}`,
+                  why:
+                    whyPart,
+                }
+              ),
+            mood:
+              ch.mood
+                ? String(ch.mood)
+                : "",
+            link:{
+              type:"char",
+              id:a,
+            },
+          }
+        );
+      }
+    }
+
+    /*
+     * 2) játékos -> AI:
+     *    a SAJÁT irányod változása is látható legyen.
+     */
+    if (
+      isHuman(n,a) &&
+      !isHuman(n,b) &&
+      delta
+    ) {
+      const other =
+        charById(
+          n,
+          b
+        );
+
+      if (other) {
+        const why =
+          ch.why
+            ? String(ch.why)
+            : "";
+
+        const whyPart =
+          why
+            ? ` - ${why}`
+            : "";
+
+        pushNote(
+          n,
+          a,
+          {
+            icon:
+              moodEmoji(
+                delta
+              ),
+            translationKey:
+              "yourRelationshipDelta",
+            params:{
+              name:
+                other.name,
+              delta:
+                `${delta > 0 ? "+" : ""}${delta}`,
+              why:
+                whyPart,
+            },
+            text:
+              sysTextFor(
+                n,
+                a,
+                "yourRelationshipDelta",
+                {
+                  name:
+                    other.name,
+                  delta:
+                    `${delta > 0 ? "+" : ""}${delta}`,
+                  why:
+                    whyPart,
+                }
+              ),
+            link:{
+              type:"char",
+              id:b,
+            },
+          }
+        );
+      }
+    }
   });
 }
 function applyMemories(n, list) {
@@ -5014,19 +5495,32 @@ SZEREPLÉSI SZABÁLYOK
 
 A KAPCSOLAT EGYIRÁNYÚ — EZ FONTOS
 - Minden viszonyt két külön irány ír le: "A → B" azt jelenti, A mit érez B iránt. Ez nem feltétlenül ugyanaz, mint "B → A".
-- Egy vonzalom, egy gyűlölet vagy egy titkos érzés lehet teljesen egyoldalú. Ha az egyik odavan a másikért, abból még semmi nem következik a másik oldalon: lehet, hogy nem is tud róla, kínosnak találja, kihasználja, vagy viszonozza — de ezt a másik saját sora dönti el.
-- A "changes" minden eleme EGY irányra vonatkozik: az "a" mezőben az van, AKI érez, a "b" mezőben az, AKI IRÁNT. Ha tényleg mindkettejükben változott valami, adj két külön elemet.
+- Egy vonzalom, egy gyűlölet vagy egy titkos érzés lehet teljesen egyoldalú. Ha az egyik odavan a másikért, abból még semmi nem következik automatikusan a másik oldalon.
+- A "changes" minden eleme EGY irányra vonatkozik: az "a" mezőben az van, AKI érez, a "b" mezőben az, AKI IRÁNT.
+- A kapcsolatváltozás NEM csak AI → játékos lehet. Ugyanúgy lehet játékos → AI, AI → AI, és több szereplő között egyszerre több külön irányú változás is.
+- A játékos karakterének relation score-ja is változhat a történések hatására. Ez MECHANIKAI kapcsolatállapot, nem jogosít fel arra, hogy a játékos helyett beszélj, cselekedj vagy belső gondolatot írj.
+- Ha egy interakció mindkét felet ténylegesen érinti, értékeld KÜLÖN mindkét irányt, és adj két külön "changes" elemet. A két delta nem kell, hogy azonos előjelű vagy azonos nagyságú legyen.
+- Csoportban, jelenetben, kommentháborúban, pletykában vagy konfliktusban az AI karakterek EGYMÁS KÖZÖTTI viszonya is változzon, ha egymást támogatják, megalázzák, elárulják, megvédik, provokálják, féltékennyé teszik vagy közelebb kerülnek.
 - A titkos érzést soha ne vetítsd ki a másikra, és ne tedd kölcsönössé magadtól.
+- Ha egy változás kifejezetten egyoldalú belső érzés (pl. titkos crush), jelezheted "oneSided":true mezővel.
 - A rokoni kötelék a kivétel: az tény, és mindkét irányban érvényes — de az érzések ilyenkor is külön alakulnak.
-- ÁLLANDÓ KÖTELÉK (rokonság, pl. anya, apa, testvér, unokatestvér): megmásíthatatlan tény. Sosem írhatod felül, nem feledkezhetsz meg róla, és a szereplők úgy is beszélnek egymásról, ahogy egy ilyen viszonyban szokás — akkor is, ha épp utálják egymást. A pontszám ilyenkor csak azt mutatja, milyen most köztük a viszony, nem azt, hogy kik egymásnak.
-- Egy rokoni kapcsolat lehet mélyen rossz: ha egy szereplő gyűlöli a saját apját, akkor ő továbbra is az apja, de a hangneme keserű, elutasító vagy fájdalmas. Ezt tiszteld, ne simítsd el, és ne írd át békülőssé magadtól.
-- VÁLTOZÓ VISZONY (barát, ellenség, crush, exek stb.): ez alakulhat a történések hatására. Ha egy jelenet vagy beszélgetés valóban megváltoztatja, a "changes" mezőben új "bond" értéket is adhatsz hozzá.
+- ÁLLANDÓ KÖTELÉK (rokonság, pl. anya, apa, testvér, unokatestvér): megmásíthatatlan tény. Sosem írhatod felül.
+- Egy rokoni kapcsolat lehet mélyen rossz: a kötelék ténye marad, miközben a score és a mood lehet nagyon negatív.
+- VÁLTOZÓ VISZONY (barát, ellenség, crush, exek stb.): ez alakulhat a történések hatására. Ha valóban megváltozik, a "changes" mezőben új "bond" értéket is adhatsz hozzá.
 
-ÉRZELMI ÁLLAPOT — EZ A LEGFONTOSABB
-- Minden "changes" elemhez adj "mood" mezőt: néhány szó arról, hogy a szereplő MOST mit érez a másik iránt. Ez nem állandó cím, hanem pillanatnyi állapot, ami a következő jelenetben már más lehet.
-- Legyen konkrét, éles és a helyzethez szabott. Ilyen jellegűekre gondolj: "AZ ENYÉM. AZ ENYÉM.", "Ride or die", "Bármit megtenne érted", "Megszállott", "Túlságosan védelmező", "Titkos vonzalom", "Féltékeny", "Nem bízik benned", "Csak kihasznál", "Tisztel", "Retteg tőled", "Egy hajszál választja el attól, hogy megöljön", "Bosszút forral", "Hiányzol neki", "Próbál lenyűgözni". Sajátot is találhatsz ki, ha jobban illik.
-- Adj "why" mezőt is: egyetlen rövid mondat arról, mi váltotta ki a változást (pl. "Megvédted a többiek előtt.").
-- Csak akkor tegyél be változást, ha tényleg történt valami, ami hat a viszonyra. Az érték -20 és +20 között mozogjon, kivéve ha valami nagyon súlyos történt.
+ÉRZELMI ÁLLAPOT ÉS DELTA — EZ A LEGFONTOSABB
+- Minden "changes" elemhez adj "mood" mezőt: néhány szó arról, hogy a szereplő MOST mit érez a másik iránt.
+- Legyen konkrét, éles és a helyzethez szabott. Saját, karakterhű megfogalmazást használj.
+- Adj "why" mezőt is: egyetlen rövid mondat arról, mi váltotta ki a változást.
+- A + és a - EGYFORMÁN valós lehetőség. Ne torzíts automatikusan pozitív irányba.
+- Támogatás, védelem, közelség, őszinteség, lojalitás, flört vagy közös siker adhat PLUSZT.
+- Sértegetés, megalázás, árulás, hazugság, fenyegetés, féltékenység, elutasítás, konfliktus vagy csalódás adhat MÍNUSZT.
+- Ne adj 1-2 pontos alibi-változásokat. Ha tényleg történt valami, a változás legyen érezhető.
+- kisebb, de valódi hatás: kb. ±6–10
+- egyértelmű érzelmi hatás: kb. ±11–20
+- nagy konfliktus / nagy áttörés: kb. ±21–35
+- nagyon súlyos fordulat, árulás, megmentés stb.: akár ±36–45
+- Csak akkor tegyél be változást, ha tényleg történt valami, ami hat a viszonyra.
 - Két rokon között soha ne szőj romantikus vagy szexuális szálat.
 - A titkokat magától nem vallja be: elhallgatja, elterelí, vagy hazudik róla. Te döntöd el, mikor csúszik ki valami.
 - A szereplők egymással is beszélnek, nem csak a játékossal: vitáznak, pletykálnak, @taggelnek.
@@ -5170,21 +5664,32 @@ PERFORMANCE RULES
 - Sentences should be natural, direct, colorful, not rule-bound. Speech should be human, nuanced, sometimes jagged, sometimes more polished.
 
 THE RELATIONSHIP IS ONE-DIRECTIONAL — THIS MATTERS
-- Every bond is described by two separate directions: "A → B" means what A feels toward B. This isn't necessarily the same as "B → A".
-- An attraction, a hatred or a secret feeling can be entirely one-sided. If one of them is smitten, nothing follows automatically for the other side: they may not even know, may find it awkward, may exploit it, or may reciprocate — but that's the other person's own line to decide.
-- Every element of "changes" refers to ONE direction: the "a" field is WHO feels it, the "b" field is TOWARD WHOM. If something genuinely changed in both of them, give two separate entries.
-- Never project a secret feeling onto the other person, and never make it mutual on your own.
-- Family bonds are the exception: that's a fact, valid in both directions — but feelings still develop separately even then.
-- PERMANENT BOND (family — e.g. mother, father, sibling, cousin): an unchangeable fact. You can never overwrite it, never forget it, and characters talk about each other the way people in that kind of relationship do — even if they currently hate each other. The score here only shows how things stand between them now, not who they are to each other.
-- A family bond can be deeply bad: if a character hates their own father, he's still their father, but their tone is bitter, dismissive or pained. Respect that, don't smooth it over, and don't rewrite it into reconciliation on your own.
-- CHANGEABLE BOND (friend, enemy, crush, ex, etc.): this can evolve from events. If a scene or conversation genuinely changes it, you may add a new "bond" value in the "changes" field.
+- Every bond is described by two separate directions: "A → B" means what A feels toward B. This is not necessarily the same as "B → A".
+- Attraction, hatred or a secret feeling can be completely one-sided. Never make it mutual automatically.
+- Every element of "changes" refers to ONE direction: "a" is WHO feels it, "b" is TOWARD WHOM.
+- Relationship changes are NOT limited to AI → player. They may be player → AI, AI → AI, and several different directions may change in the same event.
+- The player character's relationship score may change mechanically because of what happens. That is a GAME STATE change only; it never gives you permission to speak, act or write internal thoughts for the player.
+- If an interaction genuinely affects both people, evaluate BOTH directions separately and output two "changes" entries. Their deltas do not need to have the same sign or magnitude.
+- In group chats, roleplay scenes, comment fights, gossip or conflicts, AI characters' relationships WITH EACH OTHER should also change when they support, humiliate, betray, defend, provoke, impress or disappoint one another.
+- Never project a secret feeling onto the other person and never make it mutual on your own.
+- If a change is explicitly a one-sided internal feeling (for example a secret crush), you may mark it with "oneSided":true.
+- Family bonds are factual and permanent, but the directional score and mood may still become strongly positive or negative.
+- CHANGEABLE BOND (friend, enemy, crush, ex, etc.) may evolve from events. If it genuinely changes, you may add a new "bond" value in "changes".
 
-EMOTIONAL STATE — THIS IS THE MOST IMPORTANT PART
-- Give every "changes" entry a "mood" field: a few words on what the character feels toward the other person RIGHT NOW. This isn't a permanent label, but a momentary state that may be different in the next scene.
-- Make it concrete, sharp and situation-specific. Think along these lines: "MINE. MINE.", "Ride or die", "Would do anything for them", "Obsessed", "Overly protective", "Secret attraction", "Jealous", "Doesn't trust you", "Just using you", "Respects you", "Terrified of you", "One step from killing you", "Plotting revenge", "Misses them", "Trying to impress". Invent your own if it fits better.
-- Also give a "why" field: one short sentence on what triggered the change (e.g. "You defended them in front of the others.").
-- Only add a change if something actually happened that affects the bond. Keep the value between -20 and +20, unless something very severe happened.
-- Never build a romantic or sexual thread between two family members.
+EMOTIONAL STATE AND DELTA — THIS IS THE MOST IMPORTANT PART
+- Give every "changes" entry a "mood" field describing what that person feels toward the other RIGHT NOW.
+- Make it concrete, sharp and specific to the situation.
+- Give a short "why" field explaining what caused it.
+- Positive and negative changes are EQUALLY valid. Do not bias relationship movement toward positive.
+- Support, protection, closeness, honesty, loyalty, flirting or shared success can cause PLUS changes.
+- Insults, humiliation, betrayal, lying, threats, jealousy, rejection, conflict or disappointment can cause MINUS changes.
+- Do not use meaningless 1–2 point token changes. If something matters, the delta should be noticeable.
+- small but real impact: about ±6–10
+- clear emotional impact: about ±11–20
+- major conflict / breakthrough: about ±21–35
+- severe turning point, betrayal, rescue, etc.: up to about ±36–45
+- Only add a change when something actually happened that affects the relationship.
+- Never create a romantic or sexual thread between family members.
 - A character doesn't confess secrets on their own: they hide, deflect, or lie about them. You decide when something slips out.
 - Characters talk to each other too, not just to the player: they argue, gossip, @tag each other.
 - No one may break the rules of the world or the current date.
@@ -6151,8 +6656,34 @@ function termText(key, lang = CURRENT_LANG) {
 
 function localizedBond(value, lang = CURRENT_LANG) {
   if (!value) return "";
-  const dict = (TERM_TEXT[asLang(lang)] || TERM_TEXT.hu).bonds || {};
-  return dict[value] || value;
+
+  const root =
+    TERM_TEXT[asLang(lang)] ||
+    TERM_TEXT.hu;
+
+  const bonds =
+    root.bonds || {};
+
+  const relTypes =
+    root.relTypes || {};
+
+  const relMoods =
+    root.relMoods || {};
+
+  /*
+   * A változó relation label-ek közül több
+   * (Barát, Legjobb barát, Ellenség, Rivális...)
+   * relTypes alatt van, miközben a BondPicker
+   * localizedBond()-ot használ.
+   *
+   * Ezért eddig angol módban bent maradhattak magyarul.
+   */
+  return (
+    bonds[value] ||
+    relTypes[value] ||
+    relMoods[value] ||
+    value
+  );
 }
 
 function localizedRelType(value, lang = CURRENT_LANG) {
@@ -6178,6 +6709,7 @@ const SYS_TEXT = {
     repliedYourComment: "{{name}} válaszolt a kommentedre: \"{{snippet}}\"",
     mentionedYou: "{{name}} megemlített téged.",
     relationshipDelta: "{{name}} kapcsolata veled: {{delta}}{{why}}",
+    yourRelationshipDelta: "A te kapcsolatod {{name}} felé: {{delta}}{{why}}",
     likedYourPost: "{{name}} kedvelte a posztodat.",
     wroteOnYourNote: "{{name}} a jegyzetedre írt: \"{{snippet}}\"",
     dmFrom: "{{name}} írt neked: \"{{snippet}}\"",
@@ -6190,6 +6722,7 @@ const SYS_TEXT = {
     repliedYourComment: "{{name}} replied to your comment: \"{{snippet}}\"",
     mentionedYou: "{{name}} mentioned you.",
     relationshipDelta: "{{name}} changed their relationship toward you: {{delta}}{{why}}",
+    yourRelationshipDelta: "Your relationship toward {{name}} changed: {{delta}}{{why}}",
     likedYourPost: "{{name}} liked your post.",
     wroteOnYourNote: "{{name}} wrote about your note: \"{{snippet}}\"",
     dmFrom: "{{name}} messaged you: \"{{snippet}}\"",
@@ -14373,7 +14906,7 @@ ${worldLanguage(w, w.meId) === "en"
 
 Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","kind":"speech vagy action","text":"..."}],
- "changes":[{"a":"aki érez","b":"aki iránt","delta":10,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék"}],
+ "changes":[{"a":"aki érez","b":"aki iránt","delta":16,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],
  "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
  "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"]}${TAIL}`);
 
@@ -14551,7 +15084,7 @@ Zárd le a jelenetet. Foglald össze 2-3 mondatban, mi történt és mi változo
 ${worldLanguage(w, w.meId) === "en"
   ? "- summary, memories, mood and why must all be English."
   : "- a summary, memories, mood és why mezők mind magyarul legyenek."}
-Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}],"changes":[{"a":"aki érez","b":"aki iránt","delta":0,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék"}]}${TAIL}`);
+Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}]}${TAIL}`);
 
       patch((s, n) => {
         s.open = false;
@@ -15093,7 +15626,7 @@ A válaszok első pillantásra úgy hassanak, mint egy valódi group chat követ
 
 Formátum:
 {"replies":[{"id":"tag azonosítója","text":"természetes rövid group chat üzenet"}],
-"changes":[{"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}],
+"changes":[{"a":"aki érez","b":"aki iránt","delta":12,"mood":"mit érez most iránta","why":"egy rövid mondat","oneSided":false}],
 "memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${TAIL}`,
       { maxTokens: 900 }
     );
@@ -15541,12 +16074,18 @@ PRIVÁT CHAT SZABÁLYOK:
 - ${requestWorld.player.name} karaktert E/2-ben, tegezve szólítsd meg.
 - Magázás tilos.
 
-A "mood" mezőben mindig add meg,
-mit érzel MOST iránta,
-akkor is, ha a "delta" nulla.
+KAPCSOLATVÁLTOZÁS:
+- A changes tömbben külön irányként kezeld ${c.name} → ${requestWorld.player.name} ÉS ${requestWorld.player.name} → ${c.name} kapcsolatát.
+- Ha a beszélgetés tényleg hatott mindkettőjükre, adj KÉT külön changes elemet.
+- A két irány delta-ja lehet eltérő nagyságú, sőt akár eltérő előjelű is.
+- A játékos → AI score-változás mechanikai state update; ettől még SOHA nem írhatsz a játékos helyett mondatot, cselekvést vagy belső gondolatot.
+- Negatív delta ugyanannyira természetes, mint pozitív.
+- Jelentős interakciónál ne adj alibi ±1/±2 értéket.
+- Ha nincs valódi érzelmi hatás, a changes lehet üres.
+- Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
 
 Formátum:
-{"reply":"a válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
+{"reply":"a válaszod","changes":[{"a":"${c.id}","b":"${requestWorld.meId}","delta":-12,"mood":"mit érez most iránta","why":"miért"},{"a":"${requestWorld.meId}","b":"${c.id}","delta":8,"mood":"","why":"miért"}],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
     );
 
     let reply = String(
@@ -15750,16 +16289,34 @@ Formátum:
         },
       ];
 
-      applyChanges(n, [
-        {
-          a: c.id,
-          b: requestWorld.meId,
-          delta:
-            Number(out.delta) || 0,
-          mood: out.mood,
-          why: out.why,
-        },
-      ]);
+      const dmChanges =
+        Array.isArray(
+          out &&
+          out.changes
+        )
+          ? out.changes
+          : [
+              {
+                a:c.id,
+                b:requestWorld.meId,
+                delta:
+                  Number(
+                    out &&
+                    out.delta
+                  ) || 0,
+                mood:
+                  out &&
+                  out.mood,
+                why:
+                  out &&
+                  out.why,
+              },
+            ];
+
+      applyChanges(
+        n,
+        dmChanges
+      );
 
       rememberKnowledge(
         n,
@@ -17334,10 +17891,15 @@ A DM első pillantásra úgy hasson, mint egy valódi ember spontán privát üz
 Formátum:
 
 Ha nincs természetes okod írni:
-{"skip":true,"text":"","mood":"","why":"","delta":0}
+{"skip":true,"text":"","changes":[]}
 
 Ha van:
-{"skip":false,"text":"a rövid privát üzenet","mood":"mit érzel most iránta","why":"egy rövid mondat arról, miért írtál rá","delta":0}${TAIL}`,
+- A changes mezőben AI → játékos és játékos → AI irány is szerepelhet, ha az interakció ténylegesen hat a viszonyra.
+- A két irány nem kötelezően szimmetrikus.
+- Plusz és mínusz egyformán lehetséges.
+- Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
+
+{"skip":false,"text":"a rövid privát üzenet","changes":[{"a":"${bot.id}","b":"${w.meId}","delta":10,"mood":"mit érzel most iránta","why":"miért"},{"a":"${w.meId}","b":"${bot.id}","delta":6,"mood":"","why":"miért"}]}${TAIL}`,
     { maxTokens: 700 }
   );
 }
@@ -19787,7 +20349,7 @@ A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saj
 - Rumort ne változtass ténnyé.
 - Follow/unfollow csak az engedélyezett célpontokra mehet.
 - A DM kizárólag a játékosnak szól.
-- Relationship change: a reagáló AI érzése változik egy érintett iránt; delta -20..+20.
+- Relationship change: a reagáló AI érzése változik egy érintett iránt; delta -30..+30. Lehet erősen pozitív VAGY erősen negatív, és AI → AI célpont is teljesen érvényes.
 
 VÁLASZ CSAK JSON:
 {"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","why":""}]}${TAIL}`,{maxTokens:1500});
@@ -19829,7 +20391,7 @@ function applyGossipReactions(n,postId,cast,out){
   });
   const safeChanges=(out&&Array.isArray(out.changes)?out.changes:[]).filter((ch)=>{
     const a=findChar(n,ch&&ch.a), b=findChar(n,ch&&ch.b);return a&&b&&castSet.has(a)&&allowedTargets.has(b)&&a!==b;
-  }).map((ch)=>({...ch,delta:Math.max(-20,Math.min(20,Number(ch.delta)||0))}));
+  }).map((ch)=>({...ch,delta:Math.max(-30,Math.min(30,Number(ch.delta)||0))}));
   applyChanges(n,safeChanges);refreshPostReach(n,post.id);refreshTrends(n);
 }
 
@@ -19925,7 +20487,7 @@ Készíts rövid váratlan popup helyzetet 3 választással.
 - tone csak: ignore | clarify | defend | joke | apologize | doubleDown | private | noComment
 - Ha tone="private", akkor CSAK akkor használd, ha van a helyzetben létező AI karakter, akinek reálisan lehet írni, és adj meg targetId-t.
 - A private választás targetId-je kizárólag létező AI karakter id lehet a helyzetből.
-- reactions: 0-3 létező AI várható kapcsolatreakciója; delta azt jelenti, AZ AI mit érez a játékos iránt, -12..+12.
+- reactions: 0-3 létező AI várható kapcsolatreakciója; delta azt jelenti, AZ AI mit érez a játékos iránt, -20..+20. A negatív reakció ugyanolyan reális, mint a pozitív.
 
 VÁLASZ CSAK JSON:
 {"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}]}]}${TAIL}`,{maxTokens:1200});
@@ -19937,7 +20499,7 @@ function normalizePopupEvent(w,seed,raw){
   const allowedTones=new Set(["ignore","clarify","defend","joke","apologize","doubleDown","private","noComment"]), validAiIds=new Set((w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)).map((c)=>c.id));
   const choices=(Array.isArray(raw.choices)?raw.choices:[]).slice(0,3).map((choice,index)=>{
     const tone=allowedTones.has(choice&&choice.tone)?choice.tone:"ignore";
-    const reactions=(choice&&Array.isArray(choice.reactions)?choice.reactions:[]).slice(0,3).map((r)=>({id:r&&r.id?String(r.id):"",delta:Math.max(-12,Math.min(12,Number(r&&r.delta)||0)),mood:cut(String(r&&r.mood||""),60),why:cut(String(r&&r.why||""),140)})).filter((r)=>validAiIds.has(r.id));
+    const reactions=(choice&&Array.isArray(choice.reactions)?choice.reactions:[]).slice(0,3).map((r)=>({id:r&&r.id?String(r.id):"",delta:Math.max(-20,Math.min(20,Number(r&&r.delta)||0)),mood:cut(String(r&&r.mood||""),60),why:cut(String(r&&r.why||""),140)})).filter((r)=>validAiIds.has(r.id));
     const targetId =
       choice &&
       choice.targetId &&
@@ -20555,7 +21117,26 @@ function resolvePopupEvent(w,eventId,choiceId){
   const choice=(event.choices||[]).find((c)=>c&&c.id===choiceId);if(!choice)return false;
   const impact=popupToneImpact(choice.tone), audience=Math.max(1,displayFollowerCount(w,w.meId)), followerDelta=Math.round(audience*(Number(impact.followerRate)||0));
   applyExplicitSocialImpact(w,w.meId,{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:followerDelta});
-  (choice.reactions||[]).forEach((r)=>{const c=charById(w,r.id);if(!c||isHuman(w,c.id))return;const rel=getRel(w,c.id,w.meId);setRel(w,c.id,w.meId,{score:clamp((Number(rel.score)||0)+(Number(r.delta)||0)),mood:r.mood||rel.mood||"",why:r.why||rel.why||""});});
+  applyChanges(
+    w,
+    (choice.reactions || [])
+      .map((r) => ({
+        a:
+          r && r.id
+            ? r.id
+            : "",
+        b:
+          w.meId,
+        delta:
+          Number(
+            r && r.delta
+          ) || 0,
+        mood:
+          r && r.mood,
+        why:
+          r && r.why,
+      }))
+  );
   event.resolved=true;event.resolvedAt=now();event.choiceId=choice.id;event.choiceTone=choice.tone;event.socialImpact={aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:followerDelta};
   recordSocialEvent(w,{type:"popup-choice",refId:`${event.id}:${choice.id}`,ts:event.resolvedAt,actorId:w.meId,targetIds:(choice.reactions||[]).map((r)=>r.id).filter(Boolean),visibility:"system",factLevel:"observed",importance:36,drama:Math.max(0,impact.hype*3),romance:0,embarrassment:0,source:"popup-event",text:choice.label,tags:["popup-event","choice",choice.tone],meta:{popupEventId:event.id,choiceId:choice.id,choiceImpact:{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:followerDelta}}});
   return true;
@@ -26164,20 +26745,33 @@ if (targetNote) {
         },
       ];
 
+      const dmChanges =
+        Array.isArray(
+          out &&
+          out.changes
+        )
+          ? out.changes
+          : [
+              {
+                a:bot.id,
+                b:view.meId,
+                delta:
+                  Number(
+                    out &&
+                    out.delta
+                  ) || 0,
+                mood:
+                  out &&
+                  out.mood,
+                why:
+                  out &&
+                  out.why,
+              },
+            ];
+
       applyChanges(
         n,
-        [
-          {
-            a: bot.id,
-            b: view.meId,
-            delta:
-              Number(
-                out.delta
-              ) || 0,
-            mood: out.mood,
-            why: out.why,
-          },
-        ]
+        dmChanges
       );
 
       rememberKnowledge(
@@ -26416,8 +27010,27 @@ export default function App() {
     return true;
   }, [meId]);
 
-  const langCtxValue = React.useMemo(() => ({ lang, tt }), [lang, tt]);
-  useEffect(() => { CURRENT_LANG = lang; }, [lang]);
+  /*
+   * A relation/zodiac/bond helper-ek egy része globális CURRENT_LANG-et
+   * olvas render közben. Ha ezt csak useEffectben állítjuk át, akkor a
+   * nyelvváltást kiváltó render még a RÉGI nyelvet látná, és pl.
+   * "Legjobb barát" bent maradhatna magyarul.
+   *
+   * Ezért a render aktuális nyelvét rögtön szinkronizáljuk.
+   */
+  CURRENT_LANG = lang;
+
+  const langCtxValue =
+    React.useMemo(
+      () => ({
+        lang,
+        tt,
+      }),
+      [
+        lang,
+        tt,
+      ]
+    );
 
   useEffect(() => { loadAuto().then(setAutoCfg); }, []);
 
