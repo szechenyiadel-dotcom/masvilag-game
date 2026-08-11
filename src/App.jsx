@@ -914,6 +914,31 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   }
 }
 
+
+.social-trends {
+  margin:10px -14px 0;
+  padding:9px 14px;
+  border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line);
+  background:rgba(20,18,32,.7);
+}
+.social-trends-head { display:flex; align-items:center; gap:6px; margin-bottom:7px; color:var(--muted); font-size:9.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
+.social-trend-list { display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+.social-trend-list::-webkit-scrollbar { display:none; }
+.social-trend { flex:none; border:1px solid var(--line); border-radius:99px; background:var(--raised); color:var(--bone); font:inherit; font-size:10.5px; padding:5px 9px; cursor:pointer; }
+.social-trend:hover { border-color:var(--rose); }
+.social-reach { cursor:default; opacity:.72; }
+.popup-event-scrim { z-index:90; }
+.popup-event-sheet { max-width:500px; max-height:min(86vh,760px); overflow-y:auto; }
+.popup-event-kicker { display:flex; align-items:center; gap:6px; color:var(--rose); font-size:9.5px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; }
+.popup-event-title { margin-top:7px; font-family:Fraunces,Georgia,serif; font-size:24px; line-height:1.15; }
+.popup-event-body { margin-top:9px; color:#DCD5CB; white-space:pre-wrap; }
+.popup-choice-list { display:flex; flex-direction:column; gap:8px; margin-top:16px; }
+.popup-choice { width:100%; text-align:left; justify-content:flex-start; padding:11px 12px; }
+.popup-choice-copy { min-width:0; }
+.popup-choice-label { font-weight:600; }
+.popup-choice-desc { margin-top:2px; color:var(--muted); font-size:11.5px; line-height:1.35; }
+
 /* ---------- MOBILOS ACTION GOMBOK ---------- */
 
 @media (max-width: 768px) {
@@ -7781,6 +7806,16 @@ function Post({
           <RefreshCcw size={17} />
           <span>{reposts}</span>
         </button>
+
+        {post.reach && Number(post.reach.impressions) > 0 ? (
+          <span
+            className="social-action social-reach"
+            title={tt("Becsült elérés", "Estimated reach")}
+          >
+            <Zap size={16} />
+            <span>{formatSocialCount(Number(post.reach.impressions) || 0)}</span>
+          </span>
+        ) : null}
       </div>
 
       {comments.length > 0 ? (
@@ -9705,6 +9740,9 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
       w
     );
 
+  const activeTrends =
+    (w.trends || []).slice(0, 5);
+
   const refs = useRef({});
 
   useEffect(() => {
@@ -10125,6 +10163,41 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
                 "Profile"
               )}
             </button>
+          </div>
+        </div>
+      ) : null}
+
+      {activeTrends.length ? (
+        <div className="social-trends">
+          <div className="social-trends-head">
+            <Zap size={11} />
+            {tt("Most felkapott", "Trending now")}
+          </div>
+          <div className="social-trend-list">
+            {activeTrends.map((trend) => (
+              <button
+                key={trend.id}
+                type="button"
+                className="social-trend"
+                onClick={() => {
+                  if (trend.subjectId && charById(w, trend.subjectId)) {
+                    setProfileId(trend.subjectId);
+                    return;
+                  }
+                  if (trend.postId) {
+                    setHl(trend.postId);
+                    setTimeout(() => {
+                      const el = refs.current[trend.postId];
+                      if (el && el.scrollIntoView) el.scrollIntoView({ behavior:"smooth", block:"center" });
+                    }, 30);
+                  }
+                }}
+              >
+                {worldLanguage(w, w.meId) === "en"
+                  ? (trend.labelEn || trend.labelHu)
+                  : (trend.labelHu || trend.labelEn)}
+              </button>
+            ))}
           </div>
         </div>
       ) : null}
@@ -11758,6 +11831,20 @@ function Bonds({ w, update, setErr }) {
 /* ============================================================
    Jelenetek (roleplay)
    ============================================================ */
+function detectSceneEventKind(scene) {
+  const hay = `${scene && scene.title ? scene.title : ""} ${scene && scene.setting ? scene.setting : ""}`.toLowerCase();
+  const partyWords = ["party","buli","afterparty","after party","house party","házibuli","rave","club","nightclub","klub","ball","bál","prom","szalagavató","birthday","születésnap","festival","fesztivál","concert","koncert","gala","gála","reception","fogadás","wedding","esküvő","banquet","bankett","bonfire","tábortűz"];
+  if (partyWords.some((word) => hay.includes(word))) return "party";
+  const eventWords = ["event","esemény","premiere","premier","opening","megnyitó","ceremony","ceremónia","dinner","vacsora","meeting","találkozó","reunion","összejövetel","competition","verseny","tournament","torna","game","meccs","match","show","bemutató"];
+  if (eventWords.some((word) => hay.includes(word))) return "event";
+  return "scene";
+}
+
+function sceneEventRecapEligible(scene, aiWitnessCount) {
+  const kind = (scene && scene.eventKind) || detectSceneEventKind(scene);
+  return Number(aiWitnessCount) >= 2 && (kind === "party" || kind === "event");
+}
+
 function SceneNew({ w, onClose, onCreate, setErr }) {
   useEditLock();
   const { tt } = useLang();
@@ -11839,6 +11926,7 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
         cast: ids,
         turns: [],
         open: true,
+        eventKind: detectSceneEventKind({ title: title.trim(), setting: setting.trim() }),
         ts: now()
       });
     }}
@@ -11966,6 +12054,10 @@ Formátum:
         const gossipEligible =
           aiWitnessIds.length >= 2;
 
+        const sceneKind = s.eventKind || detectSceneEventKind(s);
+        s.eventKind = sceneKind;
+        const eventRecapEligible = sceneEventRecapEligible(s, aiWitnessIds.length);
+
         const participantIds = [
           n.meId,
           ...aiWitnessIds,
@@ -12028,11 +12120,14 @@ Formátum:
                     s.title || "",
 
                   participantIds,
+                  attendeeIds: participantIds,
 
                   witnessCount:
                     aiWitnessIds.length,
 
                   gossipEligible,
+                  sceneKind,
+                  eventRecapEligible,
 
                   /*
                    * Nincs leakSourceId.
@@ -12095,6 +12190,10 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
           const gossipEligible =
             aiWitnessIds.length >= 2;
 
+          const sceneKind = s.eventKind || detectSceneEventKind(s);
+          s.eventKind = sceneKind;
+          const eventRecapEligible = sceneEventRecapEligible(s, aiWitnessIds.length);
+
           recordSocialEvent(
             n,
             {
@@ -12153,10 +12252,17 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
                   ...aiWitnessIds,
                 ].filter(Boolean),
 
+                attendeeIds: [
+                  n.meId,
+                  ...aiWitnessIds,
+                ].filter(Boolean),
+
                 witnessCount:
                   aiWitnessIds.length,
 
                 gossipEligible,
+                sceneKind,
+                eventRecapEligible,
 
                 sourceTraceRequired:
                   false,
@@ -13426,6 +13532,36 @@ function Alerts({ w, onClose, onOpen, onClear }) {
             <Trash2 size={14} /> {tt("Értesítések törlése", "Clear notifications")}
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+function PopupEventModal({ w, event, update }) {
+  const { tt } = useLang();
+  if (!event) return null;
+  return (
+    <div className="scrim popup-event-scrim">
+      <div className="sheet popup-event-sheet">
+        <div className="between">
+          <div>
+            <div className="popup-event-kicker"><Sparkles size={12} />{tt("Váratlan helyzet","Unexpected situation")}</div>
+            <div className="popup-event-title">{event.icon || "⚡"} {event.title}</div>
+          </div>
+          <button className="btn tiny ghost" title={tt("Később","Later")} onClick={() => update((n) => snoozePopupEvent(n,event.id))}><X size={14} /></button>
+        </div>
+        <div className="popup-event-body">{event.text}</div>
+        <div className="popup-choice-list">
+          {(event.choices || []).map((choice) => (
+            <button key={choice.id} className="btn popup-choice" onClick={() => update((n) => resolvePopupEvent(n,event.id,choice.id))}>
+              <div className="popup-choice-copy">
+                <div className="popup-choice-label">{choice.label}</div>
+                {choice.description ? <div className="popup-choice-desc">{choice.description}</div> : null}
+              </div>
+            </button>
+          ))}
+        </div>
+        <p className="hint" style={{ marginTop:12 }}>{tt("A választás hatással lehet a hype-ra, reputációra, követőkre és arra, hogyan viszonyulnak hozzád egyes karakterek.","Your choice can affect hype, reputation, followers and how some characters feel about you.")}</p>
       </div>
     </div>
   );
@@ -14760,6 +14896,12 @@ function ensureSocialSimulationState(w) {
     w.trends = [];
   }
 
+  if (!w.socialDiscoveryMigratedV1) {
+    refreshTrends(w);
+    refreshAllPostReach(w);
+    w.socialDiscoveryMigratedV1 = true;
+  }
+
   /*
    * Karakterek között terjedő pletykák.
    */
@@ -15354,133 +15496,47 @@ function gossipStoryFactLevel(events) {
   return "observed";
 }
 
-function buildGossipStoryCandidate(
-  w,
-  primary,
-  pool,
-  mode
-) {
-  const events =
-    clusterGossipStoryEvents(
-      w,
-      primary,
-      pool,
-      mode
-    );
-
-  const subjectIds =
-    events
-      .flatMap(
-        gossipEventSubjectIds
-      )
-      .filter(
-        (id, index, arr) =>
-          arr.indexOf(id) === index
-      );
-
-  const score =
-    Math.round(
-      events.reduce(
-        (sum, event, index) =>
-          sum +
-          gossipEventBaseScore(
-            w,
-            event,
-            mode
-          ) *
-            (
-              index === 0
-                ? 1
-                : 0.32
-            ),
-        0
-      )
-    );
-
-  const roleplayBased =
-    events.some(
-      (event) =>
-        event &&
-        event.meta &&
-        event.meta.sourceType ===
-          "roleplay"
-    );
-
-  const witnessCount =
-    events.reduce(
-      (max, event) =>
-        Math.max(
-          max,
-          Number(
-            event &&
-            event.meta &&
-            event.meta.witnessCount
-          ) || 0
-        ),
-      0
-    );
-
+function buildGossipStoryCandidate(w, primary, pool, mode) {
+  const sceneId = primary && primary.meta && primary.meta.sceneId;
+  const eventRecap = Boolean(primary && primary.meta && primary.meta.eventRecapEligible);
+  let events;
+  if (eventRecap && sceneId) {
+    events = (w.socialEvents || [])
+      .filter((event) => event && event.meta && event.meta.sceneId === sceneId && gossipPrivacyEligible(event))
+      .slice()
+      .sort((a,b) => (Number(a.ts)||0) - (Number(b.ts)||0))
+      .slice(-14);
+  } else {
+    events = clusterGossipStoryEvents(w, primary, pool, mode);
+  }
+  const primaryAttendees = primary && primary.meta && Array.isArray(primary.meta.attendeeIds) ? primary.meta.attendeeIds : [];
+  const subjectIds = (eventRecap && primaryAttendees.length ? primaryAttendees : events.flatMap(gossipEventSubjectIds))
+    .filter(Boolean)
+    .filter((id,index,arr) => arr.indexOf(id) === index);
+  const score = Math.round(events.reduce((sum,event,index) => sum + Math.max(0,gossipEventBaseScore(w,event,mode)) * (index === 0 ? 1 : eventRecap ? 0.22 : 0.32),0) + (eventRecap ? 22 : 0));
+  const roleplayBased = events.some((event) => event && event.meta && event.meta.sourceType === "roleplay");
+  const witnessCount = events.reduce((max,event) => Math.max(max,Number(event && event.meta && event.meta.witnessCount)||0),0);
+  const scene = sceneId ? (w.scenes || []).find((row) => row && row.id === sceneId) : null;
   return {
-    id: "gc_" + uid(),
-    mode,
-
-    mediaId:
-      (
-        activeGossipMediaAccount(w) ||
-        {}
-      ).id || "",
-
-    createdAt: now(),
-
-    score,
-    factLevel:
-      gossipStoryFactLevel(events),
-
-    primaryEventId:
-      primary.id || "",
-
-    eventIds:
-      events
-        .map((event) => event.id)
-        .filter(Boolean),
-
-    subjectIds,
-
-    roleplayBased,
-    witnessCount,
-
-    /*
-     * Szándékosan nincs kötelező rumor starter.
-     */
-    sourceTraceRequired: false,
-
-    events:
-      events.map((event) => ({
-        id: event.id || "",
-        type: event.type || "",
-        text: event.text || "",
-        ts: Number(event.ts) || 0,
-        factLevel:
-          event.factLevel || "observed",
-        importance:
-          Number(event.importance) || 0,
-        tags:
-          Array.isArray(event.tags)
-            ? event.tags.slice(0, 12)
-            : [],
-        sourceType:
-          (
-            event.meta &&
-            event.meta.sourceType
-          ) ||
-          event.source ||
-          "",
-        witnessCount:
-          Number(
-            event.meta &&
-            event.meta.witnessCount
-          ) || 0,
-      })),
+    id:"gc_"+uid(), mode,
+    mediaId:(activeGossipMediaAccount(w)||{}).id || "",
+    createdAt:now(), score,
+    factLevel:gossipStoryFactLevel(events),
+    primaryEventId:primary.id || "",
+    eventIds:events.map((event)=>event.id).filter(Boolean),
+    subjectIds, roleplayBased, witnessCount,
+    eventRecap,
+    eventKind:(primary && primary.meta && primary.meta.sceneKind) || (scene && scene.eventKind) || "",
+    eventTitle:(primary && primary.meta && primary.meta.sceneTitle) || (scene && scene.title) || "",
+    attendeeIds:eventRecap ? subjectIds : [],
+    sourceTraceRequired:false,
+    events:events.map((event)=>({
+      id:event.id||"", type:event.type||"", text:event.text||"", ts:Number(event.ts)||0,
+      factLevel:event.factLevel||"observed", importance:Number(event.importance)||0,
+      tags:Array.isArray(event.tags)?event.tags.slice(0,12):[],
+      sourceType:(event.meta && event.meta.sourceType) || event.source || "",
+      witnessCount:Number(event.meta && event.meta.witnessCount)||0,
+    })),
   };
 }
 
@@ -15645,6 +15701,18 @@ function gossipArticleLengthInstruction(
   w,
   candidate
 ) {
+  if (candidate && candidate.eventRecap) {
+    return `
+HOSSZ / EVENT RECAP:
+- Ez egy teljes party/event recap.
+- Írj hosszabb, több bekezdéses social gossip összefoglalót.
+- Az egész esemény hangulatát és több összefüggő történést fűzz össze.
+- Az összes ATTENDEE-t említsd meg legalább egyszer.
+- Ha valakiről nincs külön cselekvés az eventekben, róla CSAK azt mondhatod, hogy jelen volt / feltűnt az eseményen.
+- Ne találj ki neki külön konfliktust, flörtöt, idézetet vagy tettet.
+`;
+  }
+
   const setting =
     (
       w &&
@@ -15949,6 +16017,17 @@ ${gossipArticleLengthInstruction(
   candidate
 )}
 
+${candidate.eventRecap ? `
+KÜLÖN PARTY / EVENT RECAP SZABÁLY:
+- EVENT CÍME: ${candidate.eventTitle || "nincs külön cím"}
+- ATTENDEE ID-K: ${(candidate.attendeeIds || []).join(", ")}
+- Ez a jelenet szereplőgárdája: mindannyian ténylegesen jelen voltak.
+- Az összes attendee kerüljön bele legalább egyszer a recapba.
+- A jelenlét ténye használható.
+- Konkrét cselekvést / konfliktust / flörtöt / idézetet CSAK akkor rendelj hozzá valakihez, ha az EVENTEK ezt ténylegesen alátámasztják.
+- A preferált formátum: recap vagy long.
+` : ""}
+
 KORÁBBI ${media.name} POSZTOK — NE ISMÉTELD A SZERKEZETÜKET:
 ${recentMediaPosts || "még nincs"}
 
@@ -16024,11 +16103,11 @@ function normalizeGossipStoryOutput(
   ];
 
   const format =
-    allowedFormats.includes(
-      out.format
-    )
-      ? out.format
-      : "short";
+    candidate.eventRecap
+      ? (out.format === "long" ? "long" : "recap")
+      : allowedFormats.includes(out.format)
+        ? out.format
+        : "short";
 
   const headline =
     cut(
@@ -16079,20 +16158,12 @@ function normalizeGossipStoryOutput(
 
   const mentionedIds = [
     ...new Set(
-      (
-        Array.isArray(
-          out.mentionedIds
-        )
-          ? out.mentionedIds
-          : []
-      )
+      [
+        ...(Array.isArray(out.mentionedIds) ? out.mentionedIds : []),
+        ...(candidate.eventRecap && Array.isArray(candidate.attendeeIds) ? candidate.attendeeIds : []),
+      ]
         .map(String)
-        .filter(
-          (id) =>
-            candidateSubjectIds.has(
-              id
-            )
-        )
+        .filter((id) => candidateSubjectIds.has(id))
     ),
   ];
 
@@ -16236,6 +16307,13 @@ function publishGossipMediaStory(
         Number(
           candidate.witnessCount
         ) || 0,
+
+      eventRecap: Boolean(candidate.eventRecap),
+      eventTitle: candidate.eventTitle || "",
+      attendeeIds: Array.isArray(candidate.attendeeIds) ? candidate.attendeeIds : [],
+      reactedBy: [],
+      reactionRounds: 0,
+      rumorEvolvedAt: 0,
     },
   };
 
@@ -16509,6 +16587,314 @@ function gossipAutoCandidate(w) {
 
 
 /* ============================================================
+   TRENDS + REACH + GOSSIP REACTIONS + RUMOR EVOLUTION + POPUPS
+   ============================================================ */
+
+function refreshTrends(w) {
+  if (!w) return [];
+  if (!Array.isArray(w.trends)) w.trends = [];
+  const cutoff = now() - 48 * 3600e3;
+  const topics = {};
+  const add = (key, patch, weight) => {
+    if (!key || !(Number(weight) > 0)) return;
+    if (!topics[key]) topics[key] = {
+      id:key, type:patch.type || "topic", labelHu:patch.labelHu || "", labelEn:patch.labelEn || patch.labelHu || "",
+      subjectId:patch.subjectId || "", postId:patch.postId || "", score:0, updatedAt:now(),
+    };
+    topics[key].score += Number(weight) || 0;
+    if (patch.postId && !topics[key].postId) topics[key].postId = patch.postId;
+  };
+  (w.socialEvents || []).forEach((event) => {
+    if (!event || Number(event.ts) < cutoff) return;
+    const ageHours = Math.max(0,(now() - Number(event.ts))/3600e3);
+    const freshness = Math.max(0.18,1-ageHours/48);
+    const base = (Number(event.importance)||20)*0.1*freshness;
+    gossipEventSubjectIds(event).forEach((id) => {
+      if (!id || isMediaAccount(w,id)) return;
+      const c=charById(w,id); if(!c) return;
+      add(`person:${id}`,{type:"person",labelHu:c.name,labelEn:c.name,subjectId:id,postId:event.meta&&event.meta.postId},base);
+    });
+    const tags=Array.isArray(event.tags)?event.tags:[];
+    if(event.type==="viral"||tags.includes("viral")) add("topic:viral",{labelHu:"Virális",labelEn:"Viral",postId:event.meta&&event.meta.postId},12*freshness);
+    if(event.type==="cancel-wave"||tags.includes("cancel")||tags.includes("backlash")) add("topic:backlash",{labelHu:"Backlash",labelEn:"Backlash"},14*freshness);
+    if(event.type==="stan-wave"||tags.includes("stan")) add("topic:stan",{labelHu:"Stan-hullám",labelEn:"Stan wave"},10*freshness);
+    if(event.type==="gossip-story"||event.type==="rumor-evolution") add("topic:gossip",{labelHu:"Pletyka",labelEn:"Gossip",postId:event.meta&&event.meta.postId},11*freshness);
+    if(event.meta&&event.meta.eventRecapEligible&&event.meta.sceneTitle) add(`event:${event.meta.sceneId||event.meta.sceneTitle}`,{type:"event",labelHu:event.meta.sceneTitle,labelEn:event.meta.sceneTitle},13*freshness);
+  });
+  w.trends=Object.values(topics).map((row)=>({...row,score:Math.round(row.score*10)/10})).filter((row)=>row.score>=4).sort((a,b)=>b.score-a.score).slice(0,8);
+  return w.trends;
+}
+
+function trendBoostForPost(w,postId,authorId){
+  let score=0;
+  (w.trends||[]).forEach((trend)=>{
+    if(!trend)return;
+    if(postId&&trend.postId===postId) score+=Number(trend.score)||0;
+    if(authorId&&trend.subjectId===authorId) score+=(Number(trend.score)||0)*0.5;
+  });
+  return score;
+}
+
+function refreshPostReach(w,postId){
+  if(!w||!postId)return null;
+  const post=(w.posts||[]).find((p)=>p&&p.id===postId); if(!post)return null;
+  const audience=Math.max(1,displayFollowerCount(w,post.authorId));
+  const ageHours=Math.max(0,(now()-(Number(post.ts)||0))/3600e3);
+  const freshness=ageHours<=12?1:Math.max(0.32,1-(ageHours-12)/132);
+  const likes=Math.max(0,Number(post.likes)||0), comments=(post.comments||[]).length, reposts=repostCount(w,post.id);
+  const baseReach=audience*(0.3+freshness*0.52);
+  const engagementSpread=likes*2.8+comments*8+reposts*28;
+  const trendSpread=trendBoostForPost(w,post.id,post.authorId)*18;
+  const viralSpread=(Number(post.virality&&post.virality.score)||0)*(reposts>0?12:5);
+  const impressions=Math.max(1,Math.round((baseReach+engagementSpread+trendSpread+viralSpread)*freshness));
+  const knownReach=new Set([
+    ...(Array.isArray(post.likedBy)?post.likedBy:[]),
+    ...(post.comments||[]).map((c)=>c&&c.authorId).filter(Boolean),
+    ...repostRows(w).filter((r)=>r&&r.postId===post.id).map((r)=>r.actorId),
+  ]).size;
+  post.reach={impressions,knownReach,distributionScore:clampPositiveSocial(Math.log10(impressions+1)*18+reposts*3),updatedAt:now()};
+  return post.reach;
+}
+
+function refreshAllPostReach(w){ if(!w)return w; (w.posts||[]).forEach((p)=>p&&p.id&&refreshPostReach(w,p.id)); return w; }
+
+function gossipStoryReactionCandidates(w,post){
+  if(!w||!post||!post.gossipStory)return[];
+  const story=post.gossipStory, already=new Set(story.reactedBy||[]), mentioned=new Set(story.mentionedIds||[]);
+  return (w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)&&!already.has(c.id)).map((c)=>{
+    let score=0, role="observer", strongestRel=0;
+    if(mentioned.has(c.id)){score+=80; role="mentioned";}
+    (story.mentionedIds||[]).forEach((targetId)=>{ if(!targetId||targetId===c.id)return; const rs=Number(getRel(w,c.id,targetId).score)||0; if(Math.abs(rs)>Math.abs(strongestRel)) strongestRel=rs; });
+    if(strongestRel>=35){score+=34+strongestRel*0.25;if(role==="observer")role="supporter";}
+    else if(strongestRel<=-25){score+=30+Math.abs(strongestRel)*0.28;if(role==="observer")role="critic";}
+    if(isFollowing(w,c.id,post.authorId))score+=8;
+    if(story.attendeeIds&&story.attendeeIds.includes(c.id)){score+=28;if(role==="observer")role="witness";}
+    score+=characterSocialFollowModifier(c)*0.35;
+    return{id:c.id,score:Math.round(score),role,tie:Math.random()};
+  }).filter((row)=>row.score>=18).sort((a,b)=>a.score!==b.score?b.score-a.score:a.tie-b.tie).slice(0,5);
+}
+
+function pickGossipReactionAction(w){
+  const posts=(w.posts||[]).filter((p)=>p&&p.gossipStory&&now()-(Number(p.ts)||0)<48*3600e3&&Number(p.gossipStory.reactionRounds)<2).sort((a,b)=>(Number(b.ts)||0)-(Number(a.ts)||0));
+  for(const post of posts){ const cast=gossipStoryReactionCandidates(w,post); if(cast.length)return{postId:post.id,cast}; }
+  return null;
+}
+
+function gossipReactionKnowledgeContext(w,post,cast){
+  const story=post.gossipStory||{}, eventMap={};
+  (story.eventIds||[]).forEach((eventId)=>{const event=(w.socialEvents||[]).find((e)=>e&&e.id===eventId);if(event)eventMap[eventId]=event;});
+  return (cast||[]).map((row)=>{
+    const c=charById(w,row.id);if(!c)return"";
+    const personallyKnown=Object.values(eventMap).filter((event)=>{
+      const participants=event.meta&&Array.isArray(event.meta.participantIds)?event.meta.participantIds:[];
+      const witnesses=Array.isArray(event.witnessIds)?event.witnessIds:[];
+      return participants.includes(c.id)||witnesses.includes(c.id)||(Array.isArray(event.targetIds)&&event.targetIds.includes(c.id));
+    }).map((event)=>`- ${event.text}`).join("\n");
+    return `${c.name} [${c.id}]\nROLE: ${row.role}\nAMIT SZEMÉLYESEN TUDHAT A HÁTTÉRESEMÉNYBŐL:\n${personallyKnown||"- nincs külön személyes háttértudás; csak a nyilvános gossip-posztot ismeri"}`;
+  }).filter(Boolean).join("\n\n");
+}
+
+async function genGossipReactions(w,post,cast){
+  const story=post&&post.gossipStory;if(!post||!story||!(cast||[]).length)return{comments:[],reposts:[],follows:[],dms:[],statements:[],changes:[]};
+  const castIds=cast.map((x)=>x.id);
+  const allowedTargets=[post.authorId,...(story.mentionedIds||[]),w.meId].filter(Boolean).filter((id,index,arr)=>arr.indexOf(id)===index);
+  const currentComments=(post.comments||[]).slice(-8).map((c)=>{const a=charById(w,c.authorId);return`${a?a.name:"?"}: ${c.text}`;}).join("\n");
+  return askWorldJSON(w,engineFor(w),`${worldContext(w,[...castIds,...(story.mentionedIds||[]).filter((id)=>!isHuman(w,id))].filter((id,index,arr)=>arr.indexOf(id)===index),true,null)}
+
+FRISS GOSSIP MEDIA POSZT:
+${nameOfIn(w,post.authorId)}
+${story.headline?`HEADLINE: ${story.headline}`:""}
+BIZONYOSSÁG: ${story.factLevel||"rumor"}
+${post.text}
+
+EDDIGI NYILVÁNOS KOMMENTEK:
+${currentComments||"-"}
+
+REAKCIÓRA JELÖLT KARAKTEREK ÉS A SAJÁT TUDÁSUK:
+${gossipReactionKnowledgeContext(w,post,cast)}
+
+ENGEDÉLYEZETT FOLLOW/UNFOLLOW CÉLPONTOK:
+${allowedTargets.join(", ")}
+
+A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saját nyilvános statement, DM a játékosnak, kapcsolatváltozás.
+- Nem kell mindenkinek reagálnia, és ne csináljon mindenki mindent egyszerre.
+- Az érintett tagadhat, megerősíthet, gúnyolódhat, dühös lehet vagy ignorálhat.
+- Barát megvédheti, ellenség rátehet egy lapáttal.
+- A játékos helyett SOHA ne írj.
+- Aki személyesen nem tudja a háttéreseményt, CSAK a publikus gossip-posztból indulhat ki.
+- Ne adj át egyik karakter tudását egy másiknak.
+- Ne találj ki új tényt, leakert, titkos DM-et, idézetet vagy eseményt.
+- Rumort ne változtass ténnyé.
+- Follow/unfollow csak az engedélyezett célpontokra mehet.
+- A DM kizárólag a játékosnak szól.
+- Relationship change: a reagáló AI érzése változik egy érintett iránt; delta -20..+20.
+
+VÁLASZ CSAK JSON:
+{"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","why":""}]}${TAIL}`,{maxTokens:1500});
+}
+
+function applyGossipReactions(n,postId,cast,out){
+  const post=(n.posts||[]).find((p)=>p&&p.id===postId);if(!post||!post.gossipStory)return;
+  const castSet=new Set((cast||[]).map((r)=>r&&r.id).filter(Boolean));
+  const allowedTargets=new Set([post.authorId,...(post.gossipStory.mentionedIds||[]),n.meId].filter(Boolean));
+  if(!Array.isArray(post.gossipStory.reactedBy))post.gossipStory.reactedBy=[];
+  post.gossipStory.reactedBy=[...new Set([...post.gossipStory.reactedBy,...castSet])];
+  post.gossipStory.reactionRounds=Math.max(0,Number(post.gossipStory.reactionRounds)||0)+1;
+
+  (out&&Array.isArray(out.comments)?out.comments:[]).slice(0,5).forEach((item)=>{
+    const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
+    const body=cleanGeneratedUtterance(n,who,item.text,280);if(!body)return;
+    const made={id:uid(),authorId:who,text:body,ts:now(),parent:null,language:worldLanguage(n,n.meId)};
+    post.comments=Array.isArray(post.comments)?post.comments:[];post.comments.push(made);noteComment(n,post,made);
+    recordSocialEvent(n,{type:"comment",refId:made.id,ts:made.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:32,drama:24,romance:0,embarrassment:0,source:"gossip-reaction",text:made.text,tags:["social","gossip-reaction","comment"],meta:{postId:post.id,commentId:made.id,storyId:post.gossipStory.id||""}});
+  });
+  (out&&Array.isArray(out.reposts)?out.reposts:[]).slice(0,4).forEach((id)=>{const who=aiVoice(n,id);if(who&&castSet.has(who))createRepost(n,who,post.id,"gossip-reaction");});
+  (out&&Array.isArray(out.follows)?out.follows:[]).slice(0,5).forEach((item)=>{
+    const who=aiVoice(n,item&&item.id), targetId=item&&item.targetId?String(item.targetId):"";
+    if(!who||!castSet.has(who)||!allowedTargets.has(targetId)||who===targetId||!socialProfileById(n,targetId))return;
+    setFollowState(n,who,targetId,item.state!==false,"gossip-reaction");
+  });
+  (out&&Array.isArray(out.statements)?out.statements:[]).slice(0,2).forEach((item)=>{
+    const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
+    const body=cleanGeneratedUtterance(n,who,item.text,1200);if(!body)return;
+    const statement={id:uid(),authorId:who,ts:now(),likes:0,likedBy:[],text:body,imageId:"",image:"",comments:[],language:worldLanguage(n,n.meId),responseToGossipId:post.gossipStory.id||""};
+    n.posts.unshift(statement);
+    recordSocialEvent(n,{type:"post",refId:statement.id,ts:statement.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:42,drama:30,romance:0,embarrassment:0,source:"gossip-response",text:body,tags:["social","gossip-response","statement"],meta:{postId:statement.id,gossipPostId:post.id,storyId:post.gossipStory.id||""}});
+  });
+  (out&&Array.isArray(out.dms)?out.dms:[]).slice(0,3).forEach((item)=>{
+    const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text||!n.meId)return;
+    const raw=cleanGeneratedUtterance(n,who,item.text,320), body=enforceChatEmojiVariety(n,who,raw);if(!body)return;
+    const ck=chatKey(n.meId,who);n.chats[ck]=[...(n.chats[ck]||[]),{from:"them",text:body,ts:now(),language:worldLanguage(n,n.meId)}];
+    const a=charById(n,who);pushNote(n,n.meId,{icon:"✉️",text:sysLangText(n,n.meId,`${a?a.name:"Valaki"} írt neked a pletyka után.`,`${a?a.name:"Someone"} messaged you after the gossip post.`),link:{type:"dm",id:who}});
+  });
+  const safeChanges=(out&&Array.isArray(out.changes)?out.changes:[]).filter((ch)=>{
+    const a=findChar(n,ch&&ch.a), b=findChar(n,ch&&ch.b);return a&&b&&castSet.has(a)&&allowedTargets.has(b)&&a!==b;
+  }).map((ch)=>({...ch,delta:Math.max(-20,Math.min(20,Number(ch.delta)||0))}));
+  applyChanges(n,safeChanges);refreshPostReach(n,post.id);refreshTrends(n);
+}
+
+function pickRumorEvolutionCandidate(w){
+  const media=activeGossipMediaAccount(w);if(!media)return null;
+  return (w.posts||[]).filter((post)=>{
+    if(!post||post.authorId!==media.id||!post.gossipStory||post.gossipStory.rumorEvolution||post.gossipStory.rumorEvolvedAt)return false;
+    if(!["rumor","inferred","speculation"].includes(post.gossipStory.factLevel))return false;
+    const age=now()-(Number(post.ts)||0);if(age<20*60000||age>72*3600e3)return false;
+    const engagement=Math.max(0,Number(post.likes)||0)+(post.comments||[]).length*2+repostCount(w,post.id)*4;
+    return engagement>=3||trendBoostForPost(w,post.id,"")>=8||Number(post.virality&&post.virality.score)>=35;
+  }).sort((a,b)=>((Number(b.virality&&b.virality.score)||0)+trendBoostForPost(w,b.id,""))-((Number(a.virality&&a.virality.score)||0)+trendBoostForPost(w,a.id,"")))[0]||null;
+}
+
+async function genRumorEvolution(w,post){
+  if(!post||!post.gossipStory)return{skip:true};
+  const media=charById(w,post.authorId);
+  const publicComments=(post.comments||[]).slice(-10).map((c)=>{const a=charById(w,c.authorId);return`${a?a.name:"?"}: ${c.text}`;}).join("\n");
+  return askWorldJSON(w,engineFor(w),`${worldContext(w,(post.gossipStory.mentionedIds||[]).filter((id)=>!isHuman(w,id)),false,null)}
+
+${media?media.name:"GOSSIP MEDIA"} EGY KORÁBBI PLETYKÁJA TOVÁBB TERJED.
+EREDETI HEADLINE: ${post.gossipStory.headline||"-"}
+EREDETI POSZT: ${post.text}
+BIZONYOSSÁG: ${post.gossipStory.factLevel||"rumor"}
+NYILVÁNOS REAKCIÓK:\n${publicComments||"-"}
+
+Írj follow-up gossip posztot arról, hogyan TORZUL / SPEKULÁLÓDIK tovább a történet.
+- Ez NEM lehet új tényforrás.
+- Ne találj ki új konkrét eseményt, idézetet, leakert, titkos DM-et, fotót, helyszínt vagy szereplőt.
+- Megengedett: következtetés, túlértelmezés, shipping, motivációra vonatkozó találgatás, kérdésfelvetés.
+- A spekuláció legyen NYÍLTAN spekulációként megfogalmazva.
+- Soha ne változtasd biztos ténnyé.
+- A játékos helyett ne beszélj.
+
+VÁLASZ CSAK JSON:
+{"skip":false,"format":"analysis","headline":"follow-up headline","text":"follow-up gossip post","mentionedIds":["csak az eredeti sztori érintettjei"],"distortionLevel":35}${TAIL}`,{maxTokens:1100});
+}
+
+function publishRumorEvolution(w,parentPostId,raw){
+  const parent=(w.posts||[]).find((p)=>p&&p.id===parentPostId);if(!parent||!parent.gossipStory||!raw||raw.skip===true)return null;
+  const media=activeGossipMediaAccount(w);if(!media||media.id!==parent.authorId)return null;
+  const body=String(raw.text||"").replace(/\n{3,}/g,"\n\n").trim();
+  if(!body){parent.gossipStory.rumorEvolvedAt=now();return null;}
+  const allowed=new Set(parent.gossipStory.mentionedIds||[]);
+  const mentionedIds=[...new Set((Array.isArray(raw.mentionedIds)?raw.mentionedIds:[]).map(String).filter((id)=>allowed.has(id)))];
+  const distortionLevel=Math.max(0,Math.min(100,Math.round(Number(raw.distortionLevel)||30)));
+  const post={id:uid(),authorId:media.id,ts:now(),likes:0,likedBy:[],text:body.slice(0,5000),imageId:"",image:"",comments:[],language:worldLanguage(w,w.meId),gossipStory:{
+    id:"gs_"+uid(),mediaMode:w.gossipSettings.mediaMode,format:["analysis","short","long"].includes(raw.format)?raw.format:"analysis",
+    headline:cut(String(raw.headline||"").replace(/\s+/g," ").trim(),180),factLevel:"speculation",eventIds:parent.gossipStory.eventIds||[],
+    mentionedIds:mentionedIds.length?mentionedIds:(parent.gossipStory.mentionedIds||[]),roleplayBased:Boolean(parent.gossipStory.roleplayBased),
+    parentStoryId:parent.gossipStory.id||"",rumorEvolution:true,distortionLevel,reactedBy:[],reactionRounds:0,rumorEvolvedAt:0,
+  }};
+  parent.gossipStory.rumorEvolvedAt=now();w.posts.unshift(post);
+  if(!Array.isArray(w.rumors))w.rumors=[];
+  w.rumors.unshift({id:"rum_"+uid(),storyId:post.gossipStory.id,parentStoryId:parent.gossipStory.id||"",postId:post.id,text:post.text,factLevel:"speculation",distortionLevel,ts:post.ts,mentionedIds:post.gossipStory.mentionedIds});w.rumors=w.rumors.slice(0,160);
+  recordSocialEvent(w,{type:"rumor-evolution",refId:post.gossipStory.id,ts:post.ts,actorId:media.id,targetIds:post.gossipStory.mentionedIds,visibility:"public",factLevel:"speculation",importance:52,drama:30+distortionLevel*0.35,romance:0,embarrassment:0,source:"gossip-media",text:post.gossipStory.headline?`${post.gossipStory.headline} — ${cut(post.text,220)}`:cut(post.text,260),tags:["social","gossip-media","rumor","speculation","rumor-evolution"],meta:{postId:post.id,storyId:post.gossipStory.id,parentStoryId:parent.gossipStory.id||"",distortionLevel}});
+  if(post.gossipStory.mentionedIds.includes(w.meId))pushNote(w,w.meId,{icon:"🌀",text:sysLangText(w,w.meId,`${media.name} tovább pörgette a rólad szóló pletykát.`,`${media.name} posted a speculative follow-up about you.`),link:{type:"post",id:post.id}});
+  return post;
+}
+
+function pendingPopupEvent(w){return (w.popupEvents||[]).find((e)=>e&&!e.resolved)||null;}
+function currentPopupEvent(w){const e=pendingPopupEvent(w);if(!e)return null;const s=Number(e.snoozedAt)||0;return s&&now()-s<2*3600e3?null:e;}
+function pickPopupEventSeed(w){
+  if(!w||!w.meId||pendingPopupEvent(w))return null;
+  const used=new Set((w.popupEvents||[]).flatMap((e)=>Array.isArray(e.sourceEventIds)?e.sourceEventIds:[]));
+  const cutoff=now()-36*3600e3;
+  return (w.socialEvents||[]).filter((e)=>{
+    if(!e||Number(e.ts)<cutoff||used.has(e.id))return false;
+    const involves=e.actorId===w.meId||(e.targetIds||[]).includes(w.meId);if(!involves)return false;
+    return ["gossip-story","viral","cancel-wave","stan-wave","rumor-evolution"].includes(e.type);
+  }).sort((a,b)=>(Number(b.importance)||0)-(Number(a.importance)||0))[0]||null;
+}
+function popupToneImpact(tone){
+  const map={ignore:{aura:1,reputation:0,hype:-4,humor:0,followerRate:-0.0004},clarify:{aura:1,reputation:4,hype:2,humor:0,followerRate:0.0005},defend:{aura:3,reputation:1,hype:6,humor:0,followerRate:0.0008},joke:{aura:3,reputation:1,hype:5,humor:5,followerRate:0.001},apologize:{aura:-1,reputation:6,hype:-2,humor:0,followerRate:0.0002},doubleDown:{aura:4,reputation:-3,hype:9,humor:0,followerRate:0.0012},private:{aura:0,reputation:1,hype:-3,humor:0,followerRate:0},noComment:{aura:0,reputation:0,hype:-2,humor:0,followerRate:-0.0002}};
+  return map[tone]||map.ignore;
+}
+
+async function genPopupEvent(w,seed){
+  if(!seed)return{skip:true};
+  const relatedPostId=seed.meta&&seed.meta.postId;
+  const relatedPost=relatedPostId?(w.posts||[]).find((p)=>p&&p.id===relatedPostId):null;
+  const involved=gossipEventSubjectIds(seed).filter((id)=>id!==w.meId&&!isMediaAccount(w,id)).slice(0,6);
+  return askWorldJSON(w,engineFor(w),`${worldContext(w,involved.filter((id)=>!isHuman(w,id)),false,null)}
+
+A JÁTÉKOS KARAKTERE EGY FRISS SOCIAL HELYZET KÖZEPÉBE KERÜLT.
+TRIGGER: ${seed.type}\n${seed.text}
+${relatedPost?`KAPCSOLÓDÓ NYILVÁNOS POSZT:\n${relatedPost.gossipStory&&relatedPost.gossipStory.headline?relatedPost.gossipStory.headline:""}\n${relatedPost.text}`:""}
+
+Készíts rövid váratlan popup helyzetet 3 választással.
+- Nem írhatsz a játékos helyett konkrét mondatot.
+- A választások cselekvési STRATÉGIÁK legyenek.
+- Ne találj ki új létező személyt vagy új eseményt; a popup a fenti social helyzet következménye.
+- tone csak: ignore | clarify | defend | joke | apologize | doubleDown | private | noComment
+- reactions: 0-3 létező AI várható kapcsolatreakciója; delta azt jelenti, AZ AI mit érez a játékos iránt, -12..+12.
+
+VÁLASZ CSAK JSON:
+{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}]}]}${TAIL}`,{maxTokens:1200});
+}
+
+function normalizePopupEvent(w,seed,raw){
+  if(!raw||raw.skip===true)return null;
+  const title=cut(String(raw.title||"").replace(/\s+/g," ").trim(),120), body=String(raw.text||"").replace(/\n{3,}/g,"\n\n").trim().slice(0,900);if(!title||!body)return null;
+  const allowedTones=new Set(["ignore","clarify","defend","joke","apologize","doubleDown","private","noComment"]), validAiIds=new Set((w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)).map((c)=>c.id));
+  const choices=(Array.isArray(raw.choices)?raw.choices:[]).slice(0,3).map((choice,index)=>{
+    const tone=allowedTones.has(choice&&choice.tone)?choice.tone:"ignore";
+    const reactions=(choice&&Array.isArray(choice.reactions)?choice.reactions:[]).slice(0,3).map((r)=>({id:r&&r.id?String(r.id):"",delta:Math.max(-12,Math.min(12,Number(r&&r.delta)||0)),mood:cut(String(r&&r.mood||""),60),why:cut(String(r&&r.why||""),140)})).filter((r)=>validAiIds.has(r.id));
+    return{id:String(choice&&choice.id||`c${index+1}`),label:cut(String(choice&&choice.label||"").replace(/\s+/g," ").trim(),90)||`Choice ${index+1}`,description:cut(String(choice&&choice.description||"").replace(/\s+/g," ").trim(),180),tone,reactions};
+  }).filter((c)=>c.label);
+  if(choices.length<2)return null;
+  return{id:"pe_"+uid(),icon:String(raw.icon||"⚡").slice(0,6),title,text:body,ts:now(),resolved:false,snoozedAt:0,sourceEventIds:[seed.id].filter(Boolean),sourceType:seed.type||"",relatedPostId:seed.meta&&seed.meta.postId||"",choices};
+}
+function addPopupEvent(w,seed,raw){const row=normalizePopupEvent(w,seed,raw);if(!row)return null;w.popupEvents=[row,...(w.popupEvents||[])].slice(0,40);return row;}
+function resolvePopupEvent(w,eventId,choiceId){
+  const event=(w.popupEvents||[]).find((e)=>e&&e.id===eventId);if(!event||event.resolved)return false;
+  const choice=(event.choices||[]).find((c)=>c&&c.id===choiceId);if(!choice)return false;
+  const impact=popupToneImpact(choice.tone), audience=Math.max(1,displayFollowerCount(w,w.meId)), followerDelta=Math.round(audience*(Number(impact.followerRate)||0));
+  applyExplicitSocialImpact(w,w.meId,{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:followerDelta});
+  (choice.reactions||[]).forEach((r)=>{const c=charById(w,r.id);if(!c||isHuman(w,c.id))return;const rel=getRel(w,c.id,w.meId);setRel(w,c.id,w.meId,{score:clamp((Number(rel.score)||0)+(Number(r.delta)||0)),mood:r.mood||rel.mood||"",why:r.why||rel.why||""});});
+  event.resolved=true;event.resolvedAt=now();event.choiceId=choice.id;event.choiceTone=choice.tone;event.socialImpact={aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:followerDelta};
+  recordSocialEvent(w,{type:"popup-choice",refId:`${event.id}:${choice.id}`,ts:event.resolvedAt,actorId:w.meId,targetIds:(choice.reactions||[]).map((r)=>r.id).filter(Boolean),visibility:"system",factLevel:"observed",importance:36,drama:Math.max(0,impact.hype*3),romance:0,embarrassment:0,source:"popup-event",text:choice.label,tags:["popup-event","choice",choice.tone],meta:{popupEventId:event.id,choiceId:choice.id,choiceImpact:{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:followerDelta}}});
+  return true;
+}
+function snoozePopupEvent(w,eventId){const e=(w.popupEvents||[]).find((x)=>x&&x.id===eventId);if(e&&!e.resolved){e.snoozedAt=now();return true;}return false;}
+
+/* ============================================================
    SOCIAL STATS ENGINE
    ============================================================ */
 
@@ -16586,6 +16972,13 @@ function defaultSocialStatsRow() {
       cancelPressure: 0,
     },
 
+    fanbase: {
+      coreFans: 0,
+      activeStans: 0,
+      skeptics: 0,
+      antis: 0,
+    },
+
     viralPosts: 0,
 
     updatedAt: 0,
@@ -16646,6 +17039,17 @@ function ensureSocialStatsFor(
         typeof current.sentiment === "object" &&
         !Array.isArray(current.sentiment)
           ? current.sentiment
+          : {}
+      ),
+    },
+
+    fanbase: {
+      ...base.fanbase,
+      ...(
+        current.fanbase &&
+        typeof current.fanbase === "object" &&
+        !Array.isArray(current.fanbase)
+          ? current.fanbase
           : {}
       ),
     },
@@ -16716,6 +17120,10 @@ function ensureSocialStatsFor(
     clampPositiveSocial(
       row.sentiment.cancelPressure
     );
+
+  ["coreFans", "activeStans", "skeptics", "antis"].forEach((key) => {
+    row.fanbase[key] = Math.max(0, Math.round(Number(row.fanbase[key]) || 0));
+  });
 
   row.viralPosts =
     Math.max(
@@ -18381,6 +18789,18 @@ function refreshSocialStatsFor(
       characterId
     );
 
+  const fanAudience = Math.max(0, row.followers);
+  const stanShare = Math.min(0.28, (Number(row.sentiment.stanEnergy) || 0) / 420);
+  const antiShare = Math.min(0.24, (Number(row.sentiment.cancelPressure) || 0) / 460);
+  const skepticShare = Math.min(0.22, (Number(row.sentiment.controversy) || 0) / 520);
+  const coreShare = Math.min(0.35, 0.04 + (Number(row.sentiment.support) || 0) / 430);
+  row.fanbase = {
+    coreFans: Math.round(fanAudience * coreShare),
+    activeStans: Math.round(fanAudience * stanShare),
+    skeptics: Math.round(fanAudience * skepticShare),
+    antis: Math.round(fanAudience * antiShare),
+  };
+
   row.viralPosts =
     (w.posts || []).filter(
       (p) =>
@@ -18800,6 +19220,8 @@ function recordSocialEvent(
       "comment",
       "reply",
       "repost",
+      "gossip-story",
+      "rumor-evolution",
     ].includes(
       entry.type
     ) &&
@@ -18835,6 +19257,12 @@ function recordSocialEvent(
         );
       }
     );
+  }
+
+  refreshTrends(w);
+
+  if (entry.meta && entry.meta.postId) {
+    refreshPostReach(w, entry.meta.postId);
   }
 
   /*
@@ -20117,7 +20545,49 @@ function planAutoAction(view) {
   }
 
   /*
-   * 5. STAN / CANCEL / COUNTER-BACKLASH HULLÁM
+   * 5. GOSSIP REAKCIÓK
+   */
+  if (Math.random() < 0.72) {
+    const reaction = pickGossipReactionAction(view);
+    if (reaction) {
+      return mkAction(
+        "gossip-reaction",
+        `gossip-reaction:${reaction.postId}:${Math.floor(now() / 3600000)}`,
+        reaction
+      );
+    }
+  }
+
+  /*
+   * 6. RUMOR EVOLUTION / SPECULATION
+   */
+  if (Math.random() < 0.18) {
+    const rumorPost = pickRumorEvolutionCandidate(view);
+    if (rumorPost) {
+      return mkAction(
+        "rumor-evolution",
+        `rumor-evolution:${rumorPost.id}`,
+        { postId: rumorPost.id }
+      );
+    }
+  }
+
+  /*
+   * 7. VÁRATLAN POPUP EVENT
+   */
+  if (Math.random() < 0.12) {
+    const popupSeed = pickPopupEventSeed(view);
+    if (popupSeed) {
+      return mkAction(
+        "popup-event",
+        `popup-event:${popupSeed.id}`,
+        { seedEventId: popupSeed.id }
+      );
+    }
+  }
+
+  /*
+   * 8. STAN / CANCEL / COUNTER-BACKLASH HULLÁM
    *
    * Csak akkor indulhat, ha a már meglévő social aktivitás
    * ténylegesen felépített hozzá elég support / backlash energiát.
@@ -20154,7 +20624,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 6. AUTONÓM FOLLOW
+   * 9. AUTONÓM FOLLOW
    *
    * Nem minden körben próbáljuk.
    * A karakterek csak akkor kerülnek jelöltként ide,
@@ -20197,7 +20667,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 7. AUTONÓM REPOST
+   * 10. AUTONÓM REPOST
    *
    * Az AI csak olyan posztot oszt újra,
    * amelyhez van társas oka kapcsolódni.
@@ -20231,7 +20701,7 @@ function planAutoAction(view) {
   const roll = Math.random();
 
   /*
-   * 8. AUTONÓM NOTE
+   * 11. AUTONÓM NOTE
    *
    * Ritkább, mint eddig.
    * Ne a note-ok zabálják fel
@@ -20318,7 +20788,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 9. LÉTEZŐ GROUP CHATEK
+   * 12. LÉTEZŐ GROUP CHATEK
    */
   const existingGroups = (
     view.groups || []
@@ -20371,7 +20841,7 @@ function planAutoAction(view) {
     !recentGroup;
 
   /*
-   * 10. GROUP CHAT
+   * 13. GROUP CHAT
    *
    * Kb. 8%.
    * A meglévő csoport előnyt élvez
@@ -20442,7 +20912,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 11. PRIVÁT ÜZENET
+   * 14. PRIVÁT ÜZENET
    *
    * Kb. 32%.
    *
@@ -20467,7 +20937,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 12. WORLD / FEED
+   * 15. WORLD / FEED
    *
    * A maradék körökben a világ magától
    * posztol és kommentel.
@@ -20879,6 +21349,34 @@ async function runSimulationAction(view, update, action) {
     });
 
     return "gossip-story";
+  }
+
+  if (action.type === "gossip-reaction") {
+    const payload = action.payload || {};
+    const post = (view.posts || []).find((p) => p && p.id === payload.postId);
+    const cast = Array.isArray(payload.cast) ? payload.cast : [];
+    if (!post || !post.gossipStory || !cast.length) return null;
+    const out = await genGossipReactions(view, post, cast);
+    update((n) => { n.autoAt = now(); applyGossipReactions(n, post.id, cast, out); });
+    return "gossip-reaction";
+  }
+
+  if (action.type === "rumor-evolution") {
+    const postId = action.payload && action.payload.postId;
+    const post = (view.posts || []).find((p) => p && p.id === postId);
+    if (!post || !post.gossipStory || post.gossipStory.rumorEvolvedAt) return null;
+    const out = await genRumorEvolution(view, post);
+    update((n) => { n.autoAt = now(); publishRumorEvolution(n, post.id, out); });
+    return "rumor-evolution";
+  }
+
+  if (action.type === "popup-event") {
+    const seedId = action.payload && action.payload.seedEventId;
+    const seed = (view.socialEvents || []).find((event) => event && event.id === seedId);
+    if (!seed || pendingPopupEvent(view)) return null;
+    const out = await genPopupEvent(view, seed);
+    update((n) => { n.autoAt = now(); if (!pendingPopupEvent(n)) addPopupEvent(n, seed, out); });
+    return "popup-event";
   }
 
   if (action.type === "follow") {
@@ -23016,6 +23514,7 @@ const signOut = useCallback(async () => {
   const me = (world.players && world.players[meId]) || blankPlayer(meId, "Névtelen", "jatekos");
   const view = { ...world, meId, player: me };
   viewRef.current = view;
+  const activePopup = currentPopupEvent(view);
 
   const TABS = [["feed", tt("Feed", "Feed"), Home], ["cast", tt("Karakterek", "Characters"), Users], ["bonds", tt("Kapcsolat", "Bonds"), Network],
     ["scene", tt("Jelenet", "Scene"), Film], ["chat", tt("Üzenetek", "Messages"), MessageCircle], ["world", tt("Világ", "World"), Globe2]];
@@ -23101,6 +23600,8 @@ const signOut = useCallback(async () => {
         <Alerts w={view} onClose={() => { setShowNotes(false); markRead(null); }} onOpen={openNote}
           onClear={() => { update((n) => { if (n.notify) n.notify[meId] = []; }); setShowNotes(false); }} />
       )}
+
+      {activePopup ? <PopupEventModal w={view} event={activePopup} update={update} /> : null}
 
       {flash && !showNotes && (
         <div className="flash" onClick={() => openNote(flash)}>
