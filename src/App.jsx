@@ -6269,37 +6269,494 @@ KÖZVETLEN KÉRDÉS — NE DODGE-OLD AUTOMATIKUSAN:
 `;
 }
 
+function normalizeAddressText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function escapeAddressRegex(value) {
+  return String(value || "")
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function characterAddressAliases(c) {
+  if (!c) return [];
+
+  const raw = [
+    c.name,
+    c.nick,
+    c.username,
+    c.username ? `@${c.username}` : "",
+    c.name
+      ? String(c.name)
+          .trim()
+          .split(/\s+/)[0]
+      : "",
+  ]
+    .map((x) =>
+      String(x || "").trim()
+    )
+    .filter(Boolean);
+
+  return [
+    ...new Set(raw),
+  ];
+}
+
+function textDirectlyUsesSecondPerson(value) {
+  const t =
+    ` ${normalizeAddressText(value)} `;
+
+  return (
+    /\b(you|your|yours|yourself|u|ur)\b/.test(t) ||
+    /\b(te|teged|neked|veled|rolad|hozzad|toled|nalad|tied|magad|szerinted)\b/.test(t) ||
+    /[?？]/.test(t)
+  );
+}
+
+function latestConversationSpeakerId(
+  w,
+  rows,
+  candidateSet
+) {
+  const list =
+    Array.isArray(rows)
+      ? rows
+      : [];
+
+  for (
+    let i = list.length - 1;
+    i >= 0;
+    i--
+  ) {
+    const row =
+      list[i];
+
+    if (!row) continue;
+
+    const raw =
+      row.authorId !== undefined
+        ? row.authorId
+        : row.from;
+
+    if (
+      raw === "me" ||
+      raw === w.meId ||
+      raw === "narrator"
+    ) {
+      continue;
+    }
+
+    const id =
+      findChar(
+        w,
+        raw
+      ) ||
+      (
+        candidateSet.has(
+          String(raw)
+        )
+          ? String(raw)
+          : null
+      );
+
+    if (
+      id &&
+      candidateSet.has(
+        id
+      )
+    ) {
+      return {
+        id,
+        row,
+      };
+    }
+  }
+
+  return null;
+}
+
+function inferConversationAddressee(
+  w,
+  playerText,
+  candidateIds,
+  recentRows = [],
+  persistedFocusId = ""
+) {
+  const candidates =
+    (candidateIds || [])
+      .map((id) =>
+        charById(
+          w,
+          id
+        )
+      )
+      .filter(Boolean);
+
+  const candidateSet =
+    new Set(
+      candidates.map(
+        (c) => c.id
+      )
+    );
+
+  if (!candidates.length) {
+    return {
+      id: "",
+      confidence: 0,
+      reason: "none",
+    };
+  }
+
+  if (candidates.length === 1) {
+    return {
+      id:
+        candidates[0].id,
+      confidence: 1,
+      reason: "only-candidate",
+    };
+  }
+
+  const raw =
+    String(
+      playerText || ""
+    );
+
+  const normalized =
+    normalizeAddressText(
+      raw
+    );
+
+  const hits = [];
+
+  candidates.forEach((c) => {
+    const aliases =
+      characterAddressAliases(c);
+
+    aliases.forEach((alias) => {
+      const nAlias =
+        normalizeAddressText(
+          alias
+        );
+
+      if (
+        !nAlias ||
+        nAlias.length < 2
+      ) {
+        return;
+      }
+
+      const isHandle =
+        String(alias)
+          .startsWith("@");
+
+      const pattern =
+        new RegExp(
+          `(^|[^a-z0-9_])${escapeAddressRegex(
+            nAlias.replace(/^@/, "")
+          )}([^a-z0-9_]|$)`,
+          "i"
+        );
+
+      const haystack =
+        isHandle
+          ? normalizeAddressText(
+              raw.replace(
+                /@/g,
+                ""
+              )
+            )
+          : normalized;
+
+      const match =
+        pattern.exec(
+          haystack
+        );
+
+      if (!match) return;
+
+      let weight = 2;
+
+      if (isHandle) {
+        weight = 5;
+      } else if (
+        c.username &&
+        nAlias ===
+          normalizeAddressText(
+            c.username
+          )
+      ) {
+        weight = 4;
+      } else if (
+        c.name &&
+        nAlias ===
+          normalizeAddressText(
+            c.name
+          )
+      ) {
+        weight = 4;
+      } else if (
+        c.nick &&
+        nAlias ===
+          normalizeAddressText(
+            c.nick
+          )
+      ) {
+        weight = 4;
+      }
+
+      /*
+       * "Feng, ..." / "Feng?" / "to Feng" / "Fengnek..."
+       * jellegű megszólítás kapjon extra súlyt.
+       */
+      const vocative =
+        new RegExp(
+          `(^|[\\s,;:!?])${escapeAddressRegex(
+            nAlias.replace(/^@/, "")
+          )}(?=[\\s,;:!?]|$)`,
+          "i"
+        ).test(
+          haystack
+        );
+
+      if (vocative) {
+        weight += 2;
+      }
+
+      hits.push({
+        id: c.id,
+        weight,
+        index:
+          match.index,
+      });
+    });
+  });
+
+  if (hits.length) {
+    hits.sort(
+      (a, b) =>
+        b.weight !== a.weight
+          ? b.weight - a.weight
+          : b.index - a.index
+    );
+
+    const best =
+      hits[0];
+
+    const competing =
+      hits.find(
+        (h) =>
+          h.id !== best.id &&
+          h.weight === best.weight
+      );
+
+    if (!competing) {
+      return {
+        id: best.id,
+        confidence:
+          best.weight >= 5
+            ? 1
+            : 0.92,
+        reason:
+          "explicit-name",
+      };
+    }
+  }
+
+  const latest =
+    latestConversationSpeakerId(
+      w,
+      recentRows,
+      candidateSet
+    );
+
+  /*
+   * Ha az utolsó AI-üzenet kifejezetten A JÁTÉKOSNAK szólt,
+   * és a játékos most E/2-ben válaszol, az a beszélő az elsődleges célpont.
+   */
+  if (
+    latest &&
+    textDirectlyUsesSecondPerson(
+      raw
+    ) &&
+    (
+      latest.row &&
+      (
+        latest.row.to ===
+          w.meId ||
+        latest.row.to ===
+          "player" ||
+        !latest.row.to
+      )
+    )
+  ) {
+    return {
+      id: latest.id,
+      confidence: 0.84,
+      reason:
+        "reply-to-last-speaker",
+    };
+  }
+
+  /*
+   * Ha korábban már egyértelműen valakire fókuszált a játékos,
+   * ezt több körön át megőrizzük.
+   */
+  if (
+    persistedFocusId &&
+    candidateSet.has(
+      persistedFocusId
+    )
+  ) {
+    return {
+      id:
+        persistedFocusId,
+      confidence: 0.78,
+      reason:
+        "persisted-focus",
+    };
+  }
+
+  /*
+   * Rövid "igen/nem/oké/miért?" jellegű válasznál az utolsó beszélő
+   * általában természetesebb célpont, mint egy véletlen másik tag.
+   */
+  const words =
+    raw
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+
+  if (
+    latest &&
+    (
+      words.length <= 8 ||
+      /^[\s]*(yes|yeah|yep|no|nope|okay|ok|sure|why|what|igen|ja|aha|nem|oké|oke|miért|miert|mit|mi)\b/i.test(
+        raw
+      )
+    )
+  ) {
+    return {
+      id: latest.id,
+      confidence: 0.68,
+      reason:
+        "short-reply-last-speaker",
+    };
+  }
+
+  return {
+    id: "",
+    confidence: 0,
+    reason: "group-general",
+  };
+}
+
+function addresseePromptInstruction(
+  w,
+  targetId,
+  confidence = 1,
+  context = "chat"
+) {
+  const target =
+    targetId
+      ? charById(
+          w,
+          targetId
+        )
+      : null;
+
+  const en =
+    worldLanguage(
+      w,
+      w && w.meId
+    ) === "en";
+
+  if (!target) {
+    return en
+      ? `
+CURRENT ADDRESSEE:
+- No single addressee is confidently resolved for the player's latest message.
+- Do NOT randomly assign "you" to a character.
+- Use explicit names/@mentions, established conversational focus and reply context. If still genuinely ambiguous, respond as a group or ask one short clarification.
+`
+      : `
+AKTUÁLIS CÍMZETT:
+- A játékos legutóbbi üzenetéhez most nincs biztosan feloldott egyetlen címzett.
+- NE válassz véletlenszerűen karaktert a "te/neked/you" mögé.
+- A konkrét neveket/@megszólítást, a már kialakult beszélgetési fókuszt és a közvetlen válasz-kontektszt használd. Ha még így is valóban kétértelmű, reagáljatok csoportként vagy kérdezzetek vissza röviden.
+`;
+  }
+
+  return en
+    ? `
+CURRENT ADDRESSEE LOCK:
+- The player's latest message is directed primarily to ${target.name} [${target.id}].
+- Confidence: ${Math.round(
+        confidence * 100
+      )}%.
+- In THIS turn, player-authored "you / your / yours" refers to ${target.name} unless the player explicitly names a different person.
+- Other characters may notice, interrupt, tease or react as bystanders, but they MUST NOT answer a direct question as if it was addressed to them.
+- Keep this conversational focus until the player clearly redirects it.
+`
+    : `
+AKTUÁLIS CÍMZETT — RÖGZÍTETT FÓKUSZ:
+- A játékos legutóbbi üzenete elsősorban ${target.name} [${target.id}] karakternek szól.
+- Bizonyosság: ${Math.round(
+        confidence * 100
+      )}%.
+- EBBEN a körben a játékos "te / neked / veled / rólad" jellegű megszólításai ${target.name} karakterre vonatkoznak, hacsak a játékos kifejezetten nem nevez meg valaki mást.
+- Mások közbeszólhatnak, reagálhatnak vagy ugratást tehetnek hozzá, de közvetlen kérdésre NE válaszoljanak úgy, mintha hozzájuk szólt volna.
+- Ezt a beszélgetési fókuszt addig tartsd meg, amíg a játékos egyértelműen át nem irányítja másra.
+`;
+}
+
 function chatReferenceInstruction(
   w,
   playerName,
   addresseeName = "",
   groupMode = false
 ) {
-  if (
+  const en =
     worldLanguage(
       w,
       w && w.meId
-    ) !== "en"
-  ) {
-    return "";
+    ) === "en";
+
+  if (en) {
+    return `
+REFERENCE MAP FOR THIS CONVERSATION:
+- In text written by ${playerName}, I / me / my / mine = ${playerName}.
+- ${
+      groupMode
+        ? `A concrete name or @mention overrides everything. Otherwise "you" follows the CURRENT ADDRESSEE / reply focus, not a random group member.`
+        : `In this private DM, you / your / yours = ${addresseeName}.`
+    }
+- "about myself / me" = ${playerName}.
+- ${
+      groupMode
+        ? `"about you" follows the resolved current addressee.`
+        : `"about you" = ${addresseeName}.`
+    }
+- he / she / they should follow the most recently clear compatible third person; a concrete name or @handle always overrides a pronoun.
+- Preserve the resolved conversational target across consecutive turns until ${playerName} clearly redirects the message.
+- Do not intentionally misunderstand ordinary references.
+`;
   }
 
   return `
-ENGLISH REFERENCE MAP FOR THIS CONVERSATION:
-- In text written by ${playerName}, I / me / my / mine = ${playerName}.
+HIVATKOZÁSI TÉRKÉP EHHEZ A BESZÉLGETÉSHEZ:
+- A ${playerName} által írt "én / engem / nekem / velem / rólam" ${playerName} saját karakterére utal.
 - ${
     groupMode
-      ? `A named or @mentioned person is the strongest target of "you"; otherwise use the immediate reply context or the group as a whole.`
-      : `In this private DM, you / your / yours = ${addresseeName}.`
+      ? `A konkrét név vagy @megszólítás mindent felülír. Egyébként a "te / téged / neked / veled / rólad" az AKTUÁLIS CÍMZETTET / válaszfókuszt követi, nem egy véletlen csoporttagot.`
+      : `Ebben a privát chatben a "te / téged / neked / veled / rólad" = ${addresseeName}.`
   }
-- "about myself / me" = ${playerName}.
-- ${
-    groupMode
-      ? `"about you" must follow the named/replied-to target from context.`
-      : `"about you" = ${addresseeName}.`
-  }
-- he / she / they should follow the most recently clear compatible third person; a concrete name or @handle always overrides a pronoun.
-- Do not intentionally misunderstand these references.
+- Az "magamról / rólam / nekem" ${playerName} karakterére utal.
+- Ő / neki / vele / róla esetén a legutóbbi egyértelműen azonosított harmadik személyt kövesd; a konkrét név vagy @handle mindig felülírja a névmást.
+- A már feloldott beszélgetési célpontot több egymást követő körön át őrizd meg, amíg ${playerName} egyértelműen át nem irányítja máshoz.
+- Ne tegyél úgy, mintha nem értenéd az egyértelmű hétköznapi hivatkozásokat.
 `;
 }
 
@@ -18989,24 +19446,84 @@ function Scene({ w, scene, update, setErr, onBack }) {
 
   const advance = async (playerText) => {
     setBusy("turn");
-    if (playerText) patch((s) => { s.turns.push({ authorId: w.meId, kind: "action", text: playerText, ts: now() }); });
+
+    const playerTarget =
+      playerText
+        ? inferConversationAddressee(
+            w,
+            playerText,
+            scene.cast || [],
+            scene.turns || [],
+            scene.playerFocusId || ""
+          )
+        : {
+            id: "",
+            confidence: 0,
+            reason: "none",
+          };
+
+    if (playerText) {
+      patch((s) => {
+        s.turns.push({
+          authorId: w.meId,
+          to:
+            playerTarget.id ||
+            "",
+          kind: "action",
+          text: playerText,
+          ts: now(),
+        });
+
+        if (playerTarget.id) {
+          s.playerFocusId =
+            playerTarget.id;
+        }
+      });
+    }
+
     try {
       const log = scene.turns.slice(-16).map((t) => {
         if (t.authorId === "narrator") return `(${t.text})`;
         const a = who(t.authorId);
-        return `${a ? a.name : "?"}: ${t.text}`;
+        const target =
+          t.to
+            ? who(t.to)
+            : null;
+        return `${a ? a.name : "?"}${
+          target
+            ? ` -> ${target.name}`
+            : ""
+        }: ${t.text}`;
       }).join("\n");
 
       let out = await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
 
 JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
+
+${playerText
+  ? addresseePromptInstruction(
+      w,
+      playerTarget.id,
+      playerTarget.confidence,
+      "roleplay-retry"
+    )
+  : ""}
 JELEN VANNAK: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ")}, valamint ${w.player.name} [${w.meId}] — őt a felhasználó játssza.
 
 EDDIG TÖRTÉNT:
 ${log || "a jelenet most kezdődik"}
 
 ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` : "A játékos most nem lép közbe; a szereplők maguktól viszik tovább a jelenetet."}
+
+${playerText
+  ? addresseePromptInstruction(
+      w,
+      playerTarget.id,
+      playerTarget.confidence,
+      "roleplay"
+    )
+  : ""}
 
 /*
  * A worldContext(..., true, ...) már tartalmazza minden jelenlévő AI
@@ -19032,6 +19549,8 @@ ${matureContentInstruction(
 
 ROLEPLAY FOLYTATÁS — FONTOS:
 
+- Ha fent AKTUÁLIS CÍMZETT van megadva a játékos mostani megszólalásához, a közvetlen "te/you" és a kérdés elsősorban ANNAK a karakternek szól. Más jelenlévő ne reagáljon úgy, mintha hozzá beszélt volna, hacsak természetesen közbe nem szól.
+- A játékos korábban egyértelműen feloldott beszélgetési fókuszát őrizd meg több körön át; ne felejtsd el csak azért, mert közben más karakter is megszólalt.
 - Írd meg a folytatást 3-5 természetes mozzanatban. Egy mozzanat lehet beszéd, cselekvés vagy rövid narrátori átvezetés.
 - Ne kötelezően minden jelenlévő szereplő kapjon sort minden körben. Az szólaljon meg vagy cselekedjen, akinek ebben a pillanatban természetes oka van rá.
 - Nagyobb társas jelenetben/buliban a karakterek EGYMÁSSAL is beszéljenek és reagáljanak egymásra; ne mindenki a játékos körül forogjon.
@@ -19055,7 +19574,7 @@ ${worldLanguage(w, w.meId) === "en"
   : "- Minden felhasználónak látható turn, narráció, memória, mood, indok és event-összefoglaló természetes, hibátlan magyar legyen."}
 
 Formátum:
-{"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","kind":"speech vagy action","text":"..."}],
+{"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","to":"annak a jelenlévő karakternek/játékosnak az id-ja, akinek a speech közvetlenül szól, vagy üres","kind":"speech vagy action","text":"..."}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":16,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],
  "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
  "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"]}${TAIL}`);
@@ -19082,8 +19601,42 @@ Formátum:
                     : ""
                 );
 
+            const rawTo =
+              t &&
+              t.to;
+
+            const resolvedTo =
+              rawTo
+                ? (
+                    findChar(
+                      w,
+                      rawTo
+                    ) ||
+                    (
+                      String(rawTo) ===
+                        String(w.meId)
+                        ? w.meId
+                        : null
+                    )
+                  )
+                : null;
+
+            const allowedTo =
+              resolvedTo &&
+              (
+                resolvedTo ===
+                  w.meId ||
+                (scene.cast || []).includes(
+                  resolvedTo
+                )
+              )
+                ? resolvedTo
+                : "";
+
             return {
               authorId: allowed ? resolvedId : null,
+              to:
+                allowedTo,
               kind: t && t.kind === "action" ? "action" : "speech",
               text: freshText,
             };
@@ -19697,14 +20250,37 @@ function GroupChat({ w, group, update, setErr, onBack }) {
 const turn = async (mine) => {
   setBusy(true);
 
+  const playerTarget =
+    mine
+      ? inferConversationAddressee(
+          w,
+          mine,
+          group.members || [],
+          msgs,
+          group.playerFocusId || ""
+        )
+      : {
+          id: "",
+          confidence: 0,
+          reason: "none",
+        };
+
   if (mine) {
     patch((g) => {
       g.msgs.push({
         id: uid(),
         from: w.meId,
+        to:
+          playerTarget.id ||
+          "",
         text: mine,
         ts: now(),
       });
+
+      if (playerTarget.id) {
+        g.playerFocusId =
+          playerTarget.id;
+      }
 
       g.updatedAt = now();
     });
@@ -19717,6 +20293,9 @@ const turn = async (mine) => {
           ? [
               {
                 from: w.meId,
+                to:
+                  playerTarget.id ||
+                  "",
                 text: mine,
               },
             ]
@@ -19729,7 +20308,19 @@ const turn = async (mine) => {
             ? w.player
             : charById(w, m.from);
 
-        return `${a ? a.name : "?"}: ${m.text}`;
+        const target =
+          m.to
+            ? charById(
+                w,
+                m.to
+              )
+            : null;
+
+        return `${a ? a.name : "?"}${
+          target
+            ? ` -> ${target.name}`
+            : ""
+        }: ${m.text}`;
       })
       .join("\n");
 
@@ -19761,6 +20352,13 @@ ${chatReferenceInstruction(
   w.player.name,
   "",
   true
+)}
+
+${addresseePromptInstruction(
+  w,
+  playerTarget.id,
+  playerTarget.confidence,
+  "group"
 )}
 
 ${chatQuestionInstruction(
@@ -19821,6 +20419,8 @@ CSOPORTCHAT SZABÁLYOK:
 HA ${w.player.name} MOST ÍRT:
 
 - Elsősorban arra reagáljanak, amit ${w.player.name} TÉNYLEG mondott.
+- Ha fent AKTUÁLIS CÍMZETT van megadva, AZ a karakter kapja a közvetlen megszólítást/kérdést. Más AI ne "lopja el" a választ csak azért, mert ugyanabban a csoportban van.
+- Ha a játékos előző körben egyértelműen valakihez beszélt, a fókusz megmarad, amíg névvel/@megszólítással vagy egyértelmű helyzetváltással át nem irányítja.
 - Ne reagáljanak egy általános kapcsolati sablonra.
 - Ne ismételjék vissza szükségtelenül ${w.player.name} üzenetét.
 - Nem kell minden AI-tagnak közvetlenül a játékosnak válaszolnia.
@@ -19953,7 +20553,7 @@ LEGFONTOSABB:
 A válaszok első pillantásra úgy hassanak, mint egy valódi group chat következő néhány üzenete. Ha inkább úgy néznek ki, mint több AI-karakter egymás mellé rakott mini monológjai, egy előre megírt jelenet vagy túl rendezett dialógus, ÍRD ÚJRA rövidebbre, lazábbra és egymásra reagálóbbra.
 
 Formátum:
-{"replies":[{"id":"tag azonosítója","text":"természetes rövid group chat üzenet"}],
+{"replies":[{"id":"tag azonosítója","to":"annak az id-ja, akinek közvetlenül szól, vagy üres","text":"természetes rövid group chat üzenet"}],
 "changes":[{"a":"aki érez","b":"aki iránt","delta":12,"mood":"mit érez most iránta","why":"egy rövid mondat","oneSided":false}],
 "memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${TAIL}`,
       { maxTokens: 900 }
@@ -19991,9 +20591,27 @@ Formátum:
 
         if (!body) return null;
 
+        const to =
+          findChar(
+            w,
+            r &&
+            r.to
+          );
+
+        const allowedTo =
+          to &&
+          (
+            to === w.meId ||
+            (group.members || []).includes(to)
+          )
+            ? to
+            : "";
+
         return {
           id: uid(),
           from: id,
+          to:
+            allowedTo,
           text: body,
           ts: now(),
         };
@@ -20309,6 +20927,7 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
     id:
       "dm_" + uid(),
     from:"me",
+    to:c.id,
     text:t,
     ts:sentAt,
     imageId:
@@ -20372,8 +20991,8 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
         (m) =>
           `${
             m.from === "me"
-              ? requestWorld.player.name
-              : c.name
+              ? `${requestWorld.player.name} -> ${c.name}`
+              : `${c.name} -> ${requestWorld.player.name}`
           }: ${
             m.text || ""
           }${
@@ -20475,6 +21094,13 @@ ${chatReferenceInstruction(
   requestWorld.player.name,
   c.name,
   false
+)}
+
+${addresseePromptInstruction(
+  requestWorld,
+  c.id,
+  1,
+  "private"
 )}
 
 ${chatQuestionInstruction(
@@ -20803,6 +21429,7 @@ Formátum:
           id:
             "dm_" + uid(),
           from:"them",
+          to:n.meId,
           text:reply,
           ts:now(),
           imageId:
