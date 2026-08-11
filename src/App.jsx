@@ -13743,12 +13743,114 @@ function Cast({ w, update, setErr, goChat, jump }) {
           }}
           onSave={(c, relDrafts, newPeople) => {
             update((n) => {
-              const stamped = { ...c, username: uniqueHandle(n, c.username, c.id), updatedAt: now() };
-              const i = n.chars.findIndex((x) => x.id === stamped.id);
-              if (i >= 0) n.chars[i] = stamped;
-              else n.chars.push(stamped);
-              commitForm(n, stamped.id, relDrafts, newPeople);
+              const stamped = {
+                ...c,
+                username: uniqueHandle(
+                  n,
+                  c.username,
+                  c.id
+                ),
+                updatedAt: now()
+              };
+
+              const i =
+                n.chars.findIndex(
+                  (x) =>
+                    x.id === stamped.id
+                );
+
+              const reallyNew =
+                i < 0;
+
+              if (i >= 0) {
+                n.chars[i] = stamped;
+              } else {
+                n.chars.push(stamped);
+              }
+
+              commitForm(
+                n,
+                stamped.id,
+                relDrafts,
+                newPeople
+              );
+
+              /*
+               * Minden valóban újonnan behozott AI karakter
+               * azonnal bekerül a Trending rendszerbe.
+               *
+               * Szerkesztésnél NEM kap új arrival eventet.
+               */
+              if (reallyNew) {
+                recordSocialEvent(
+                  n,
+                  {
+                    type:
+                      "character-arrival",
+
+                    refId:
+                      `arrival:${stamped.id}`,
+
+                    ts:
+                      now(),
+
+                    actorId:
+                      stamped.id,
+
+                    targetIds: [
+                      stamped.id,
+                    ],
+
+                    visibility:
+                      "public",
+
+                    factLevel:
+                      "observed",
+
+                    importance:
+                      100,
+
+                    drama:
+                      8,
+
+                    romance:
+                      0,
+
+                    embarrassment:
+                      0,
+
+                    source:
+                      "character-create",
+
+                    text:
+                      worldLanguage(
+                        n,
+                        n.meId
+                      ) === "en"
+                        ? `${stamped.name} just entered the world.`
+                        : `${stamped.name} megérkezett a világba.`,
+
+                    tags: [
+                      "social",
+                      "new-character",
+                      "trending",
+                      "arrival",
+                    ],
+
+                    meta: {
+                      characterId:
+                        stamped.id,
+
+                      newCharacter:
+                        true,
+                    },
+                  }
+                );
+
+                refreshTrends(n);
+              }
             });
+
             setForm(null);
           }} />
       )}
@@ -18862,6 +18964,32 @@ function refreshTrends(w) {
       add(`person:${id}`,{type:"person",labelHu:c.name,labelEn:c.name,subjectId:id,postId:event.meta&&event.meta.postId},base);
     });
     const tags=Array.isArray(event.tags)?event.tags:[];
+
+    /*
+     * ÚJ KARAKTER = AUTOMATIKUS TRENDING
+     *
+     * A sima subject-score fölött külön boostot kap, így nem tűnik el
+     * egy erősebb viral/gossip téma mögött rögtön. A trendrendszer
+     * 48 órás ablaka miatt természetesen később kifut.
+     */
+    if(event.type==="character-arrival"){
+      gossipEventSubjectIds(event).forEach((id)=>{
+        if(!id||isMediaAccount(w,id))return;
+        const c=charById(w,id); if(!c)return;
+        add(
+          `person:${id}`,
+          {
+            type:"person",
+            labelHu:c.name,
+            labelEn:c.name,
+            subjectId:id,
+            postId:event.meta&&event.meta.postId
+          },
+          32*freshness
+        );
+      });
+    }
+
     if(event.type==="viral"||tags.includes("viral")) add("topic:viral",{labelHu:"Virális",labelEn:"Viral",postId:event.meta&&event.meta.postId},12*freshness);
     if(event.type==="cancel-wave"||tags.includes("cancel")||tags.includes("backlash")) add("topic:backlash",{labelHu:"Backlash",labelEn:"Backlash"},14*freshness);
     if(event.type==="stan-wave"||tags.includes("stan")) add("topic:stan",{labelHu:"Stan-hullám",labelEn:"Stan wave"},10*freshness);
