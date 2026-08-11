@@ -10641,6 +10641,91 @@ function SocialProfileModal({
             ) : null}
 
             <div className="social-sentiment-strip">
+              {Number(socialStats.clout) > 0 ? (
+                <span className="social-sentiment-chip">
+                  ⚡
+                  <strong>
+                    {Math.round(
+                      Number(
+                        socialStats.clout
+                      ) || 0
+                    )}
+                  </strong>
+                  {tt(
+                    "clout",
+                    "clout"
+                  )}
+                </span>
+              ) : null}
+
+              {Number(socialStats.popularity) > 0 ? (
+                <span className="social-sentiment-chip">
+                  ◉
+                  <strong>
+                    {Math.round(
+                      Number(
+                        socialStats.popularity
+                      ) || 0
+                    )}
+                  </strong>
+                  {tt(
+                    "népszerűség",
+                    "popularity"
+                  )}
+                </span>
+              ) : null}
+
+              {Number(socialStats.aura) !== 0 ? (
+                <span className="social-sentiment-chip">
+                  ✦
+                  <strong>
+                    {Math.round(
+                      Number(
+                        socialStats.aura
+                      ) || 0
+                    )}
+                  </strong>
+                  {tt(
+                    "aura",
+                    "aura"
+                  )}
+                </span>
+              ) : null}
+
+              {Number(socialStats.reputation) !== 0 ? (
+                <span className="social-sentiment-chip">
+                  ◆
+                  <strong>
+                    {Math.round(
+                      Number(
+                        socialStats.reputation
+                      ) || 0
+                    )}
+                  </strong>
+                  {tt(
+                    "hírnév",
+                    "reputation"
+                  )}
+                </span>
+              ) : null}
+
+              {Number(socialStats.humor) !== 0 ? (
+                <span className="social-sentiment-chip">
+                  ☺
+                  <strong>
+                    {Math.round(
+                      Number(
+                        socialStats.humor
+                      ) || 0
+                    )}
+                  </strong>
+                  {tt(
+                    "humor",
+                    "humor"
+                  )}
+                </span>
+              ) : null}
+
               {Number(socialStats.hype) > 0 ? (
                 <span className="social-sentiment-chip">
                   🔥
@@ -18701,11 +18786,20 @@ function gossipEventBaseScore(
     fameBoost = Math.max(
       fameBoost,
       (
-        Number(stat.popularity) || 0
-      ) * 0.18 +
+        Number(
+          stat.clout
+        ) || 0
+      ) * 0.32 +
       (
-        Number(stat.hype) || 0
-      ) * 0.22
+        Number(
+          stat.popularity
+        ) || 0
+      ) * 0.12 +
+      (
+        Number(
+          stat.hype
+        ) || 0
+      ) * 0.16
     );
   });
 
@@ -18783,6 +18877,7 @@ function gossipEventEligibleForMedia(
         return (
           stat &&
           (
+            Number(stat.clout) >= 55 ||
             Number(stat.popularity) >= 55 ||
             Number(stat.hype) >= 55
           )
@@ -19253,9 +19348,21 @@ function gossipCandidateSubjectContext(
             ? `bio: ${cut(c.bio, 220)}`
             : "",
           stats
-            ? `popularity: ${Math.round(
+            ? `clout: ${Math.round(
+                Number(
+                  stats.clout
+                ) || 0
+              )}, popularity: ${Math.round(
                 Number(
                   stats.popularity
+                ) || 0
+              )}, aura: ${Math.round(
+                Number(
+                  stats.aura
+                ) || 0
+              )}, reputation: ${Math.round(
+                Number(
+                  stats.reputation
                 ) || 0
               )}, hype: ${Math.round(
                 Number(
@@ -21152,11 +21259,13 @@ function snoozePopupEvent(w,eventId){const e=(w.popupEvents||[]).find((x)=>x&&x.
  * állapot külön dolgok.
  *
  * - followers/following: tényleges profiladat
- * - popularity: ismertség / közönségméret + tartós engagement
- * - hype: mennyire beszélnek róla MOST
- * - aura: társas "vibe" / karizma, később tartalmi eseményekből
- * - reputation: pozitív vagy negatív megítélés, később sentimentből
- * - humor: mennyire tartják viccesnek, később tartalomelemzésből
+ * - followerPower: a követőszám 0–100 logaritmikus social ereje
+ * - popularity: követőszám + tartós engagement
+ * - aura: core aura + követőszám social leverage
+ * - reputation: core reputation + kisebb követőszám-hatás
+ * - humor: core humor + enyhe követőszám-hatás
+ * - hype: friss események + követőszám alap-buzz
+ * - clout: követőszám + popularity + aura + hype + reputation + humor összesített befolyása
  *
  * Nem kap valaki automatikusan +reputation pontot csak azért,
  * mert kommenteltek neki. A figyelem és a jó hírnév nem ugyanaz.
@@ -21196,11 +21305,38 @@ function clampPositiveSocial(value) {
 
 function defaultSocialStatsRow() {
   return {
+    /*
+     * A felületen látható, DERIVED értékek.
+     */
     aura: 0,
     popularity: 0,
     reputation: 0,
     hype: 0,
     humor: 0,
+    clout: 0,
+
+    /*
+     * Tartalmi / történeti alapértékek.
+     *
+     * Ezeket módosítják a gossip, popup, virality stb.
+     * A követőszám bónusza NEM ide íródik, így refreshkor
+     * nem halmozódik újra és újra.
+     */
+    auraCore: 0,
+    reputationCore: 0,
+    humorCore: 0,
+
+    /*
+     * A hype eseményalapú és időérzékeny.
+     * Az explicit +/- módosítás 24 óra alatt kifut.
+     */
+    hypeModifier: 0,
+    hypeModifierAt: 0,
+
+    /*
+     * Követőszámból számolt 0–100 social power.
+     */
+    followerPower: 0,
 
     followers: 0,
     following: 0,
@@ -21303,6 +21439,72 @@ function ensureSocialStatsFor(
       ),
     },
   };
+
+  /*
+   * Régi world migráció:
+   * az eddigi látható aura/reputation/humor érték legyen
+   * az első "core", így semmi nem vész el.
+   *
+   * Ha a core már létezik, onnantól azt tartjuk meg.
+   */
+  row.auraCore =
+    Object.prototype.hasOwnProperty.call(
+      current,
+      "auraCore"
+    )
+      ? clampSignedSocial(
+          current.auraCore
+        )
+      : clampSignedSocial(
+          current.aura
+        );
+
+  row.reputationCore =
+    Object.prototype.hasOwnProperty.call(
+      current,
+      "reputationCore"
+    )
+      ? clampSignedSocial(
+          current.reputationCore
+        )
+      : clampSignedSocial(
+          current.reputation
+        );
+
+  row.humorCore =
+    Object.prototype.hasOwnProperty.call(
+      current,
+      "humorCore"
+    )
+      ? clampSignedSocial(
+          current.humorCore
+        )
+      : clampSignedSocial(
+          current.humor
+        );
+
+  row.hypeModifier =
+    clampSignedSocial(
+      row.hypeModifier
+    );
+
+  row.hypeModifierAt =
+    Math.max(
+      0,
+      Number(
+        row.hypeModifierAt
+      ) || 0
+    );
+
+  row.followerPower =
+    clampPositiveSocial(
+      row.followerPower
+    );
+
+  row.clout =
+    clampPositiveSocial(
+      row.clout
+    );
 
   row.aura =
     clampSignedSocial(
@@ -21421,6 +21623,170 @@ function followerPopularityBase(
     ) * 16
   );
 }
+
+/*
+ * Ugyanazt a logaritmikus követőskálát használjuk
+ * "social power"-ként is.
+ *
+ * Ez azért jó, mert:
+ * - 100 -> kb. 32
+ * - 1K  -> kb. 48
+ * - 10K -> kb. 64
+ * - 100K -> kb. 80
+ * - 1M -> kb. 96
+ *
+ * Tehát a követőszám nagyon számít, de 1 millió után
+ * sem robban végtelenre.
+ */
+function followerSocialPower(
+  followers
+) {
+  return followerPopularityBase(
+    followers
+  );
+}
+
+/*
+ * CLOUT = összesített társadalmi befolyás.
+ *
+ * A követőszám a legerősebb komponens,
+ * de a jó aura, popularity, hype, reputation és humor
+ * ténylegesen tovább emeli.
+ *
+ * Így két azonos követőszámú karakter közül annak lesz
+ * nagyobb cloutja, akinek a többi social statja is erősebb.
+ */
+function socialCloutScore(
+  row,
+  followerPower
+) {
+  if (!row) return 0;
+
+  const fp =
+    clampPositiveSocial(
+      followerPower
+    );
+
+  const popularity =
+    clampPositiveSocial(
+      row.popularity
+    );
+
+  const hype =
+    clampPositiveSocial(
+      row.hype
+    );
+
+  const aura =
+    Math.max(
+      0,
+      clampSignedSocial(
+        row.aura
+      )
+    );
+
+  const reputation =
+    Math.max(
+      0,
+      clampSignedSocial(
+        row.reputation
+      )
+    );
+
+  const humor =
+    Math.max(
+      0,
+      clampSignedSocial(
+        row.humor
+      )
+    );
+
+  return clampPositiveSocial(
+    fp * 0.50 +
+    popularity * 0.20 +
+    aura * 0.12 +
+    hype * 0.08 +
+    reputation * 0.06 +
+    humor * 0.04
+  );
+}
+
+/*
+ * Követőszám-bónusz a külön social statokhoz.
+ *
+ * Nem ugyanannyit ad mindenhez:
+ * - aura: erősen számít a social presence
+ * - hype: nagy közönség önmagában is ad alap buzz-t
+ * - reputation: enyhébben számít
+ * - humor: csak kis mértékben, mert sok követő != automatikusan vicces
+ */
+function followerDerivedSocialBoost(
+  followerPower
+) {
+  const fp =
+    clampPositiveSocial(
+      followerPower
+    );
+
+  return {
+    aura:
+      fp * 0.25,
+
+    reputation:
+      fp * 0.10,
+
+    humor:
+      fp * 0.06,
+
+    hype:
+      fp * 0.20,
+  };
+}
+
+/*
+ * Az explicit hype +/- hatás 24 óra alatt fokozatosan kifut.
+ */
+function liveHypeModifier(
+  row
+) {
+  if (!row) return 0;
+
+  const value =
+    Number(
+      row.hypeModifier
+    ) || 0;
+
+  const at =
+    Number(
+      row.hypeModifierAt
+    ) || 0;
+
+  if (!value || !at) {
+    return 0;
+  }
+
+  const age =
+    Math.max(
+      0,
+      now() - at
+    );
+
+  const life =
+    24 * 3600e3;
+
+  if (age >= life) {
+    return 0;
+  }
+
+  return (
+    value *
+    (
+      1 -
+      age / life
+    )
+  );
+}
+
 
 function socialSignalsFor(
   w,
@@ -23018,18 +23384,81 @@ function refreshSocialStatsFor(
   row.signals =
     signals;
 
-  row.popularity =
-    clampPositiveSocial(
-      followerPopularityBase(
-        followers
-      ) +
-        engagementBonus
+  const followerPower =
+    followerSocialPower(
+      followers
     );
 
+  const followerBoost =
+    followerDerivedSocialBoost(
+      followerPower
+    );
+
+  row.followerPower =
+    followerPower;
+
+  row.popularity =
+    clampPositiveSocial(
+      followerPower +
+      engagementBonus
+    );
+
+  /*
+   * AURA / REPUTATION / HUMOR
+   *
+   * A karakter történeti/tartalmi core pontjai megmaradnak,
+   * erre jön rá a követőszámból származó social leverage.
+   */
+  row.aura =
+    clampSignedSocial(
+      Number(
+        row.auraCore
+      ) +
+      followerBoost.aura
+    );
+
+  row.reputation =
+    clampSignedSocial(
+      Number(
+        row.reputationCore
+      ) +
+      followerBoost.reputation
+    );
+
+  row.humor =
+    clampSignedSocial(
+      Number(
+        row.humorCore
+      ) +
+      followerBoost.humor
+    );
+
+  /*
+   * HYPE:
+   * friss esemény + követőszám alap-buzz + ideiglenes explicit +/-.
+   */
   row.hype =
-    recentHypeFor(
-      w,
-      characterId
+    clampPositiveSocial(
+      recentHypeFor(
+        w,
+        characterId
+      ) +
+      followerBoost.hype +
+      liveHypeModifier(
+        row
+      )
+    );
+
+  /*
+   * CLOUT:
+   * követőszám + a többi social pont.
+   *
+   * Minél magasabbak ezek a pontok, annál magasabb a clout.
+   */
+  row.clout =
+    socialCloutScore(
+      row,
+      followerPower
     );
 
   row.sentiment =
@@ -23109,10 +23538,14 @@ function applyExplicitSocialImpact(
       Number(impact.aura)
     )
   ) {
-    row.aura =
+    row.auraCore =
       clampSignedSocial(
-        row.aura +
-        Number(impact.aura)
+        Number(
+          row.auraCore
+        ) +
+        Number(
+          impact.aura
+        )
       );
   }
 
@@ -23121,9 +23554,11 @@ function applyExplicitSocialImpact(
       Number(impact.reputation)
     )
   ) {
-    row.reputation =
+    row.reputationCore =
       clampSignedSocial(
-        row.reputation +
+        Number(
+          row.reputationCore
+        ) +
         Number(
           impact.reputation
         )
@@ -23135,10 +23570,14 @@ function applyExplicitSocialImpact(
       Number(impact.humor)
     )
   ) {
-    row.humor =
+    row.humorCore =
       clampSignedSocial(
-        row.humor +
-        Number(impact.humor)
+        Number(
+          row.humorCore
+        ) +
+        Number(
+          impact.humor
+        )
       );
   }
 
@@ -23147,11 +23586,18 @@ function applyExplicitSocialImpact(
       Number(impact.hype)
     )
   ) {
-    row.hype =
-      clampPositiveSocial(
-        row.hype +
-        Number(impact.hype)
+    row.hypeModifier =
+      clampSignedSocial(
+        Number(
+          row.hypeModifier
+        ) +
+        Number(
+          impact.hype
+        )
       );
+
+    row.hypeModifierAt =
+      now();
   }
 
   const profile =
@@ -23183,6 +23629,20 @@ function applyExplicitSocialImpact(
           impact.followers
         )
       );
+  }
+
+  /*
+   * A követőszám és a core pontok módosítása után
+   * azonnal újraszámoljuk a derived statokat + cloutot.
+   */
+  const refreshed =
+    refreshSocialStatsFor(
+      w,
+      characterId
+    );
+
+  if (refreshed) {
+    return refreshed;
   }
 
   row.updatedAt =
