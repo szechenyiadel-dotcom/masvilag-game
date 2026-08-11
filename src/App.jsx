@@ -1607,29 +1607,397 @@ function normalizeWorldImages(world, media) {
 async function readFile(file) {
   return new Promise((res, rej) => {
     const r = new FileReader();
-    r.onload = () => res(r.result);
-    r.onerror = () => rej(new Error("Nem sikerült beolvasni a fájlt."));
+
+    r.onload = () =>
+      res(
+        typeof r.result === "string"
+          ? r.result
+          : ""
+      );
+
+    r.onerror = () =>
+      rej(
+        new Error(
+          "Nem sikerült beolvasni a fájlt."
+        )
+      );
+
+    r.onabort = () =>
+      rej(
+        new Error(
+          "A kép beolvasása megszakadt."
+        )
+      );
+
     r.readAsDataURL(file);
   });
 }
-async function shrink(file, maxSize) {
-  const dataUrl = await readFile(file);
-  // az animált GIF csak akkor marad eredetiben, ha nem túl nagy;
-  // a nagy GIF-ből az első kocka lesz, különben pillanatok alatt megtelne a tár
-  if (file.type === "image/gif" && file.size <= 2 * 1024 * 1024) return dataUrl;
-  if (file.type === "image/png" && file.size < 400 * 1024) return dataUrl;
-  const img = await new Promise((res, rej) => {
-    const i = new Image();
-    i.onload = () => res(i);
-    i.onerror = () => rej(new Error("Ez a fájl nem kép."));
-    i.src = dataUrl;
-  });
-  const s = Math.min(1, maxSize / Math.max(img.width, img.height));
-  const cv = document.createElement("canvas");
-  cv.width = Math.max(1, Math.round(img.width * s));
-  cv.height = Math.max(1, Math.round(img.height * s));
-  cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
-  return cv.toDataURL("image/jpeg", 0.72);
+
+function dataUrlMimeType(value) {
+  const match =
+    String(value || "")
+      .match(/^data:([^;,]+)[;,]/i);
+
+  return (
+    match &&
+    match[1]
+      ? String(match[1]).toLowerCase()
+      : ""
+  );
+}
+
+function dataUrlPayloadLength(value) {
+  const raw =
+    String(value || "");
+
+  const comma =
+    raw.indexOf(",");
+
+  if (comma < 0) {
+    return raw.length;
+  }
+
+  const payload =
+    raw.slice(comma + 1);
+
+  /*
+   * Base64 -> byte becslés.
+   */
+  return Math.max(
+    0,
+    Math.floor(
+      payload.length * 0.75
+    ) -
+    (
+      payload.endsWith("==")
+        ? 2
+        : payload.endsWith("=")
+          ? 1
+          : 0
+    )
+  );
+}
+
+function canvasToBlob(
+  canvas,
+  type = "image/jpeg",
+  quality = 0.76
+) {
+  return new Promise(
+    (resolve, reject) => {
+      try {
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(
+                new Error(
+                  "A kép tömörítése nem sikerült."
+                )
+              );
+              return;
+            }
+
+            resolve(blob);
+          },
+          type,
+          quality
+        );
+      } catch (e) {
+        reject(e);
+      }
+    }
+  );
+}
+
+async function loadImageForResize(
+  file
+) {
+  const objectUrl =
+    URL.createObjectURL(file);
+
+  const img =
+    new Image();
+
+  img.decoding = "async";
+
+  try {
+    await new Promise(
+      (resolve, reject) => {
+        img.onload = resolve;
+
+        img.onerror = () =>
+          reject(
+            new Error(
+              "Ezt a képfájlt a böngésző nem tudja megnyitni."
+            )
+          );
+
+        img.src =
+          objectUrl;
+      }
+    );
+
+    return {
+      img,
+      objectUrl,
+    };
+  } catch (e) {
+    try {
+      URL.revokeObjectURL(
+        objectUrl
+      );
+    } catch (revokeErr) {}
+
+    throw e;
+  }
+}
+
+async function shrink(
+  file,
+  maxSize
+) {
+  if (
+    !file ||
+    !String(
+      file.type || ""
+    ).startsWith("image/")
+  ) {
+    throw new Error(
+      "A kiválasztott fájl nem kép."
+    );
+  }
+
+  const wantedMax =
+    Math.max(
+      320,
+      Math.min(
+        1600,
+        Number(maxSize) || 900
+      )
+    );
+
+  /*
+   * A kicsi GIF-et megőrizzük animálva.
+   * Ez az egyetlen eset, amikor az eredeti fájl kerül közvetlenül
+   * base64-be, és ezt is szigorúan kis méretre korlátozzuk.
+   */
+  if (
+    file.type === "image/gif" &&
+    file.size <= 1200 * 1024
+  ) {
+    return readFile(file);
+  }
+
+  /*
+   * Apró PNG-nél nincs értelme újratömöríteni.
+   */
+  if (
+    file.type === "image/png" &&
+    file.size <= 280 * 1024
+  ) {
+    return readFile(file);
+  }
+
+  let img = null;
+  let objectUrl = "";
+  let bitmap = null;
+  let canvas = null;
+
+  try {
+    const loaded =
+      await loadImageForResize(
+        file
+      );
+
+    img =
+      loaded.img;
+
+    objectUrl =
+      loaded.objectUrl;
+
+    const sourceWidth =
+      Math.max(
+        1,
+        Number(
+          img.naturalWidth ||
+          img.width
+        ) || 1
+      );
+
+    const sourceHeight =
+      Math.max(
+        1,
+        Number(
+          img.naturalHeight ||
+          img.height
+        ) || 1
+      );
+
+    const scale =
+      Math.min(
+        1,
+        wantedMax /
+          Math.max(
+            sourceWidth,
+            sourceHeight
+          )
+      );
+
+    const width =
+      Math.max(
+        1,
+        Math.round(
+          sourceWidth * scale
+        )
+      );
+
+    const height =
+      Math.max(
+        1,
+        Math.round(
+          sourceHeight * scale
+        )
+      );
+
+    let source =
+      img;
+
+    /*
+     * Modern böngészőnél a resize már a bitmap létrehozásakor
+     * megtörténhet. Ez különösen fontos nagy iPhone-fotóknál,
+     * mert nem kell egy 30-50 MP-es teljes bitmapet canvason tartani.
+     */
+    if (
+      typeof createImageBitmap ===
+        "function" &&
+      (
+        width <
+          sourceWidth ||
+        height <
+          sourceHeight
+      )
+    ) {
+      try {
+        bitmap =
+          await createImageBitmap(
+            file,
+            {
+              resizeWidth:
+                width,
+              resizeHeight:
+                height,
+              resizeQuality:
+                "high",
+              imageOrientation:
+                "from-image",
+            }
+          );
+
+        source =
+          bitmap;
+      } catch (bitmapError) {
+        /*
+         * Safari / speciális formátum esetén marad a normál img fallback.
+         */
+        bitmap = null;
+        source = img;
+      }
+    }
+
+    canvas =
+      document.createElement(
+        "canvas"
+      );
+
+    canvas.width =
+      width;
+
+    canvas.height =
+      height;
+
+    const ctx =
+      canvas.getContext(
+        "2d",
+        {
+          alpha: false,
+        }
+      );
+
+    if (!ctx) {
+      throw new Error(
+        "A böngésző nem tudta előkészíteni a képet."
+      );
+    }
+
+    /*
+     * JPEG outputnál legyen stabil háttér transzparens PNG esetén is.
+     */
+    ctx.fillStyle =
+      "#ffffff";
+
+    ctx.fillRect(
+      0,
+      0,
+      width,
+      height
+    );
+
+    ctx.drawImage(
+      source,
+      0,
+      0,
+      width,
+      height
+    );
+
+    const blob =
+      await canvasToBlob(
+        canvas,
+        "image/jpeg",
+        0.76
+      );
+
+    /*
+     * Csak a már lekicsinyített blobot alakítjuk data URL-lé.
+     */
+    return await readFile(
+      blob
+    );
+  } finally {
+    if (
+      bitmap &&
+      typeof bitmap.close ===
+        "function"
+    ) {
+      try {
+        bitmap.close();
+      } catch (e) {}
+    }
+
+    if (img) {
+      try {
+        img.src = "";
+      } catch (e) {}
+    }
+
+    if (objectUrl) {
+      try {
+        URL.revokeObjectURL(
+          objectUrl
+        );
+      } catch (e) {}
+    }
+
+    if (canvas) {
+      /*
+       * iOS Safari memória felszabadítását segíti.
+       */
+      try {
+        canvas.width = 1;
+        canvas.height = 1;
+      } catch (e) {}
+    }
+  }
 }
 
 function Av({ src, name = "?", size = 38, radius = 12 }) {
@@ -1657,9 +2025,43 @@ function ImagePicker({ value, onChange, label, max = 512, preview = 80, previewW
     if (!f) return;
     setBusy(true); setErr("");
     try {
-      if (f.size > 6 * 1024 * 1024) throw new Error(tt("Túl nagy fájl (max 6 MB).", "File too large (max 6 MB)."));
-      const data = await shrink(f, max);
-      const ref2 = addImage(data, { category, originalFileName: f.name, mimeType: f.type, size: f.size });
+      if (
+        f.size >
+        12 * 1024 * 1024
+      ) {
+        throw new Error(
+          tt(
+            "Túl nagy fájl (max 12 MB).",
+            "File too large (max 12 MB)."
+          )
+        );
+      }
+
+      const data =
+        await shrink(
+          f,
+          max
+        );
+
+      const ref2 =
+        addImage(
+          data,
+          {
+            category,
+            originalFileName:
+              f.name,
+            mimeType:
+              dataUrlMimeType(
+                data
+              ) ||
+              f.type ||
+              "image/jpeg",
+            size:
+              dataUrlPayloadLength(
+                data
+              ),
+          }
+        );
       if (!ref2) throw new Error(tt("Megtelt a világ képtára — törölj pár képet, hogy férjen újabb.", "The world's media storage is full — delete a few images to make room for more."));
       onChange(ref2);
     } catch (e2) { setErr(e2.message || tt("Nem sikerült.", "Failed.")); }
@@ -1676,10 +2078,10 @@ function ImagePicker({ value, onChange, label, max = 512, preview = 80, previewW
           <div style={{ width: previewWidth, height: previewHeight, borderRadius: 12, border: "1px dashed var(--line)", display: "grid", placeItems: "center", color: "var(--muted)", fontSize: 11 }}>{tt("nincs kép", "no image")}</div>
         )}
         <div style={{ flex: 1 }}>
-          <button className="btn full" onClick={() => ref.current && ref.current.click()} disabled={busy}>
+          <button type="button" className="btn full" onClick={() => ref.current && ref.current.click()} disabled={busy}>
             {busy ? <Loader2 size={14} className="spin" /> : <ImageIcon size={14} />} {tt("Feltöltés", "Upload")}
           </button>
-          {value ? <button className="btn ghost full tiny" style={{ marginTop: 6 }} onClick={() => onChange("")}>{tt("Törlés", "Delete")}</button> : null}
+          {value ? <button type="button" className="btn ghost full tiny" style={{ marginTop: 6 }} onClick={() => onChange("")}>{tt("Törlés", "Delete")}</button> : null}
         </div>
       </div>
       <input ref={ref} type="file" accept="image/*" style={{ display: "none" }} onChange={pick} />
@@ -3385,23 +3787,49 @@ function AlbumEditor({ value, onChange, owner }) {
 
     for (let i = 0; i < files.length; i++) {
       try {
-        if (files[i].size > 6 * 1024 * 1024) {
+        if (
+          files[i].size >
+          12 * 1024 * 1024
+        ) {
           throw new Error(
             tt(
-              `"${files[i].name}" túl nagy (max 6 MB).`,
-              `"${files[i].name}" is too large (max 6 MB).`
+              `"${files[i].name}" túl nagy (max 12 MB).`,
+              `"${files[i].name}" is too large (max 12 MB).`
             )
           );
         }
 
-        const data = await shrink(files[i], 900);
-        const ref2 = addImage(data, {
-          category: "album",
-          originalFileName: files[i].name,
-          mimeType: files[i].type,
-          size: files[i].size,
-          ownerCharacterId: owner && owner.id ? owner.id : "",
-        });
+        const data =
+          await shrink(
+            files[i],
+            900
+          );
+
+        const ref2 =
+          addImage(
+            data,
+            {
+              category:
+                "album",
+              originalFileName:
+                files[i].name,
+              mimeType:
+                dataUrlMimeType(
+                  data
+                ) ||
+                files[i].type ||
+                "image/jpeg",
+              size:
+                dataUrlPayloadLength(
+                  data
+                ),
+              ownerCharacterId:
+                owner &&
+                owner.id
+                  ? owner.id
+                  : "",
+            }
+          );
 
         if (!ref2) {
           throw new Error(
@@ -8030,8 +8458,91 @@ async function writeBig(base, txt) {
 async function dropBig(base) {
   return dropBigScoped(base, true);
 }
-const mediaBytes = (m) => Object.keys(m || {}).reduce((sum, k) => sum + ((m[k] && m[k].length) || 0), 0);
-const MEDIA_CAP = 40 * 1048576;
+const mediaBytes = (m) =>
+  Object.keys(
+    m || {}
+  ).reduce(
+    (sum, k) => {
+      const raw =
+        m[k];
+
+      if (!raw) {
+        return sum;
+      }
+
+      if (
+        typeof raw ===
+        "string"
+      ) {
+        return (
+          sum +
+          raw.length
+        );
+      }
+
+      return (
+        sum +
+        String(
+          raw.dataUrl ||
+          raw.url ||
+          ""
+        ).length
+      );
+    },
+    0
+  );
+
+/*
+ * A backend 45 MB körüli teljes JSON payloadot enged.
+ * 32 MB base64 képanyag mellett marad tartalék a metaadatoknak
+ * és kisebb a mobil böngésző memória-csúcsa.
+ */
+const MEDIA_CAP =
+  32 * 1048576;
+
+function mediaFingerprint(
+  media
+) {
+  return Object.keys(
+    media || {}
+  )
+    .sort()
+    .map((id) => {
+      const raw =
+        media[id];
+
+      if (!raw) {
+        return `${id}:0`;
+      }
+
+      if (
+        typeof raw ===
+        "string"
+      ) {
+        return `${id}:legacy:${raw.length}:${raw.slice(-18)}`;
+      }
+
+      const data =
+        String(
+          raw.dataUrl ||
+          raw.url ||
+          ""
+        );
+
+      return [
+        id,
+        raw.status || "",
+        raw.updatedAt || "",
+        raw.deletedAt || "",
+        raw.category || "",
+        raw.ownerUserId || "",
+        raw.ownerCharacterId || "",
+        data.length,
+        data.slice(-18),
+      ].join(":");
+    })
+    .join("|");
+}
 
 async function serverLoadMedia() {
   const data =
@@ -31245,8 +31756,33 @@ const signOut = useCallback(async () => {
   const code = world ? world.code : null;
 
   const addImage = useCallback((dataUrl, meta = {}) => {
-    const cur = mediaRef.current;
-    if (mediaBytes(cur) + dataUrl.length > MEDIA_CAP) return null;
+    const safeDataUrl =
+      String(
+        dataUrl || ""
+      );
+
+    if (
+      !isInlineImageData(
+        safeDataUrl
+      )
+    ) {
+      console.warn(
+        "Rejected invalid image payload."
+      );
+      return null;
+    }
+
+    const cur =
+      mediaRef.current ||
+      {};
+
+    if (
+      mediaBytes(cur) +
+        safeDataUrl.length >
+      MEDIA_CAP
+    ) {
+      return null;
+    }
     const id = uid();
     const nowTs = now();
     const ext = String((meta.mimeType || "image/jpeg").split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg";
@@ -31265,7 +31801,8 @@ const signOut = useCallback(async () => {
         deletedAt: null,
         ownerUserId: meId || "",
         ownerCharacterId: meta.ownerCharacterId || "",
-        dataUrl,
+        dataUrl:
+          safeDataUrl,
       },
     };
     setMedia(nextMedia);
@@ -31317,7 +31854,9 @@ const signOut = useCallback(async () => {
       setMedia(loaded);
       mediaRef.current = loaded;
       lastSavedMedia.current =
-        JSON.stringify(loaded);
+        mediaFingerprint(
+          loaded
+        );
       mediaReady.current = true;
     }).catch((e) => {
       if (!alive) return;
@@ -31341,7 +31880,10 @@ const signOut = useCallback(async () => {
     if (!normalized.changed) return;
     mediaRef.current = normalized.media;
     setMedia(normalized.media);
-    lastSavedMedia.current = JSON.stringify(normalized.media);
+    lastSavedMedia.current =
+      mediaFingerprint(
+        normalized.media
+      );
     setWorld(normalized.world);
   }, [world ? world.code : null, world ? world.rev : 0, code, media]);
 
@@ -31735,7 +32277,7 @@ const signOut = useCallback(async () => {
                 mediaResult.media || {};
 
               const incomingJson =
-                JSON.stringify(
+                mediaFingerprint(
                   incomingMedia
                 );
 
@@ -31751,7 +32293,7 @@ const signOut = useCallback(async () => {
 
               if (
                 incomingJson !==
-                JSON.stringify(
+                mediaFingerprint(
                   mediaRef.current || {}
                 )
               ) {
@@ -31956,7 +32498,7 @@ const signOut = useCallback(async () => {
 
     const snap = media;
     const mediaJson =
-      JSON.stringify(
+      mediaFingerprint(
         snap || {}
       );
 
@@ -32053,12 +32595,12 @@ const signOut = useCallback(async () => {
             snap || {};
 
           const acceptedJson =
-            JSON.stringify(
+            mediaFingerprint(
               acceptedMedia
             );
 
           const currentJson =
-            JSON.stringify(
+            mediaFingerprint(
               mediaRef.current || {}
             );
 
