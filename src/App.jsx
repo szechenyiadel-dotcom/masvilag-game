@@ -3671,22 +3671,20 @@ function applyChanges(
           b
         );
 
-      const bondText =
-        String(
-          patch.bond ||
-          r.bond ||
-          r.type ||
-          ""
-        ).toLowerCase();
-
-      const especiallyLinked =
-        /best friend|legjobb bar|close friend|közeli bar|friend|barát|crush|dating|járnak|engaged|jegyes|spouse|házastárs|partner|mother|father|parent|sibling|brother|sister|cousin|aunt|uncle|grand|anya|apa|szül|testvér|unokatestvér|nagynéni|nagybácsi|nagyszül|rokon/.test(
-          bondText
+      const eligibility =
+        aiFollowEligibility(
+          n,
+          a,
+          b
         );
 
       if (
-        followScore >= 42 ||
-        especiallyLinked
+        eligibility.allowed &&
+        (
+          eligibility.mode !==
+            "enemy-secret-crush"
+        ) &&
+        followScore >= 34
       ) {
         simEnqueue(
           n,
@@ -10953,11 +10951,78 @@ function ensureFollowerSystem(w) {
   });
 
   /*
-   * A jóban lévő AI-karakterek, közeli barátok és családtagok
-   * social graphja tükrözze a kapcsolatot.
+   * TAKARÍTÁS:
+   * a korábbi hate-follow logika miatt megmaradt AI -> enemy/rival
+   * követéseket automatikusan eltávolítjuk.
    *
-   * A játékos saját following listáját NEM írjuk felül automatikusan,
-   * de az AI-karakter követheti a játékost, ha közeli/családi a viszony.
+   * A játékos SAJÁT following listájához nem nyúlunk.
+   * Secret crush-os ellenségnél a meglévő követést meghagyjuk,
+   * mert az lehet karakterhű — de újat nem garantálunk.
+   */
+  profiles.forEach((actor) => {
+    if (
+      !actor ||
+      isHuman(
+        w,
+        actor.id
+      ) ||
+      isMediaAccount(
+        w,
+        actor.id
+      )
+    ) {
+      return;
+    }
+
+    actor.following
+      .slice()
+      .forEach((targetId) => {
+        const target =
+          byId[targetId];
+
+        if (
+          !target ||
+          isMediaAccount(
+            w,
+            targetId
+          )
+        ) {
+          return;
+        }
+
+        const eligibility =
+          aiFollowEligibility(
+            w,
+            actor.id,
+            targetId
+          );
+
+        if (
+          eligibility.allowed
+        ) {
+          return;
+        }
+
+        actor.following =
+          actor.following.filter(
+            (id) =>
+              id !== targetId
+          );
+
+        target.followers =
+          target.followers.filter(
+            (id) =>
+              id !== actor.id
+          );
+      });
+  });
+
+  /*
+   * Csak tényleges social kötelékből legyen automatikus follow:
+   * család, barát/partner/crush, csapattárs/szervezeti társ stb.
+   *
+   * Enemy/rival secret-crush eset NEM kerül ide automatikusan;
+   * azt az autonóm döntés ritkán külön kezelheti.
    */
   profiles.forEach((actor) => {
     if (
@@ -10977,31 +11042,17 @@ function ensureFollowerSystem(w) {
         return;
       }
 
-      const forward =
-        getRel(
+      const eligibility =
+        aiFollowEligibility(
           w,
           actor.id,
           target.id
         );
 
-      const reverse =
-        getRel(
-          w,
-          target.id,
-          actor.id
-        );
-
-      const closeByScore =
-        Number(forward.score || 0) >= 35 ||
-        Number(reverse.score || 0) >= 35;
-
-      const closeByBond =
-        followBondWeight(forward) >= 34 ||
-        followBondWeight(reverse) >= 34;
-
       if (
-        !closeByScore &&
-        !closeByBond
+        !eligibility.allowed ||
+        eligibility.mode ===
+          "enemy-secret-crush"
       ) {
         return;
       }
@@ -11331,12 +11382,322 @@ function followBondWeight(rel) {
     return 16;
   }
 
-  /* hate-follow / ex / rivalry */
+  /*
+   * Ellenség/rivális NEM kap hate-follow bónuszt.
+   * Ex önmagában sem automatikus follow-indok.
+   */
   if (/ex|rivális|rival|ellenség|enemy/.test(bond)) {
-    return 10;
+    return 0;
+  }
+
+  if (
+    /csapattárs|teammate|team mate|team-mate|klubtárs|clubmate|dojo mate|dojótárs|squadmate|squad mate|bandmate|band mate/.test(
+      bond
+    )
+  ) {
+    return 30;
   }
 
   return 7;
+}
+
+
+function followBondText(rel) {
+  return String(
+    (rel &&
+      (
+        rel.bond ||
+        rel.type
+      )) ||
+    ""
+  ).toLowerCase();
+}
+
+function followHiddenText(rel, actor, target) {
+  return [
+    rel && rel.hidden,
+    rel && rel.mood,
+    actor &&
+      target
+      ? ownStorySnippetAbout(
+          actor,
+          target
+        )
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function hasEnemyOrRivalBond(rel) {
+  const bond =
+    followBondText(rel);
+
+  return /ellenség|enemy|rivális|rival/.test(
+    bond
+  );
+}
+
+function hasSecretCrushSignal(
+  rel,
+  actor,
+  target
+) {
+  const hidden =
+    followHiddenText(
+      rel,
+      actor,
+      target
+    );
+
+  return /secret crush|titkos crush|titkos vonzalom|secret attraction|secretly in love|titokban szerelmes|szerelmes belé|vonzódik hozzá|crush on|has a crush|rejtett vonzalom/.test(
+    hidden
+  );
+}
+
+function hasPositiveFollowBond(rel) {
+  const bond =
+    followBondText(rel);
+
+  return /barát|friend|best friend|close friend|közeli barát|crush|mutual crush|kölcsönös crush|járnak|dating|jegyes|engaged|házastárs|spouse|partner|osztálytárs|classmate|munkatárs|coworker|colleague|szomszéd|neighbor|főnök|boss|beosztott|mentor|tanítvány|student|edző|coach|tanár|teacher|csapattárs|teammate|team mate|team-mate|klubtárs|clubmate|dojo mate|dojótárs|squadmate|squad mate|bandmate|band mate/.test(
+    bond
+  );
+}
+
+function hasFamilyFollowBond(rel) {
+  const bond =
+    followBondText(rel);
+
+  return Boolean(
+    rel &&
+    (
+      rel.fixed ||
+      /anya|apa|szülő|parent|gyerek|child|fia|lánya|son|daughter|testvér|sibling|ikertestvér|twin|féltestvér|half-sibling|mostohatestvér|stepsibling|nagymama|grandmother|nagypapa|grandfather|nagyszülő|grandparent|unoka|grandchild|unokatestvér|cousin|nagynéni|aunt|nagybácsi|uncle|rokon|relative|család|family/.test(
+        bond
+      )
+    )
+  );
+}
+
+function sameFollowTeamOrFaction(
+  actor,
+  target
+) {
+  if (!actor || !target) {
+    return false;
+  }
+
+  const af =
+    factionFlags(actor);
+
+  const tf =
+    factionFlags(target);
+
+  return Boolean(
+    (af.pogue && tf.pogue) ||
+    (af.kook && tf.kook) ||
+    (af.hydra && tf.hydra) ||
+    (af.shield && tf.shield) ||
+    (af.cobraKai && tf.cobraKai) ||
+    (af.miyagiFang && tf.miyagiFang) ||
+    (af.ironDragons && tf.ironDragons)
+  );
+}
+
+function opposingFollowFaction(
+  actor,
+  target
+) {
+  if (!actor || !target) {
+    return false;
+  }
+
+  const af =
+    factionFlags(actor);
+
+  const tf =
+    factionFlags(target);
+
+  return Boolean(
+    (af.pogue && tf.kook) ||
+    (af.kook && tf.pogue) ||
+    (af.hydra && tf.shield) ||
+    (af.shield && tf.hydra) ||
+    (af.cobraKai && tf.miyagiFang) ||
+    (af.miyagiFang && tf.cobraKai) ||
+    (
+      af.ironDragons &&
+      (
+        tf.cobraKai ||
+        tf.miyagiFang
+      )
+    ) ||
+    (
+      tf.ironDragons &&
+      (
+        af.cobraKai ||
+        af.miyagiFang
+      )
+    )
+  );
+}
+
+function aiFollowEligibility(
+  w,
+  actorId,
+  targetId
+) {
+  const actor =
+    socialProfileById(
+      w,
+      actorId
+    );
+
+  const target =
+    socialProfileById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target ||
+    actor.id === target.id
+  ) {
+    return {
+      allowed:false,
+      mode:"blocked",
+      reason:"invalid",
+    };
+  }
+
+  /*
+   * Médiaoldalak külön kategória:
+   * ezek nem karakter-kapcsolatok.
+   */
+  if (
+    isMediaAccount(
+      w,
+      target.id
+    )
+  ) {
+    return {
+      allowed:true,
+      mode:"media",
+      reason:"media-account",
+    };
+  }
+
+  const rel =
+    getRel(
+      w,
+      actor.id,
+      target.id
+    );
+
+  const reverse =
+    getRel(
+      w,
+      target.id,
+      actor.id
+    );
+
+  const secretCrush =
+    hasSecretCrushSignal(
+      rel,
+      actor,
+      target
+    );
+
+  /*
+   * ELLENSÉG/RIVÁLIS:
+   * nincs hate-follow.
+   * Egyetlen kivétel a tényleges, rejtett crush/vonzalom.
+   * Ez sem automatikus; csak ritka follow-esélyt enged.
+   */
+  if (
+    hasEnemyOrRivalBond(
+      rel
+    ) ||
+    opposingFollowFaction(
+      actor,
+      target
+    )
+  ) {
+    if (secretCrush) {
+      return {
+        allowed:true,
+        mode:"enemy-secret-crush",
+        reason:"secret-crush",
+      };
+    }
+
+    return {
+      allowed:false,
+      mode:"blocked",
+      reason:"enemy-or-rival",
+    };
+  }
+
+  /*
+   * Családi tény bármelyik irányban elég.
+   */
+  if (
+    hasFamilyFollowBond(
+      rel
+    ) ||
+    hasFamilyFollowBond(
+      reverse
+    )
+  ) {
+    return {
+      allowed:true,
+      mode:"family",
+      reason:"family",
+    };
+  }
+
+  /*
+   * Saját pozitív/valós social bond.
+   */
+  if (
+    hasPositiveFollowBond(
+      rel
+    )
+  ) {
+    return {
+      allowed:true,
+      mode:"bond",
+      reason:"positive-bond",
+    };
+  }
+
+  /*
+   * Ugyanaz a valódi csapat/szervezet/dojo.
+   */
+  if (
+    sameFollowTeamOrFaction(
+      actor,
+      target
+    )
+  ) {
+    return {
+      allowed:true,
+      mode:"team",
+      reason:"same-team",
+    };
+  }
+
+  /*
+   * Pusztán magas score, közös chat, like vagy ismertség
+   * NEM elég automatikus follow-hoz.
+   */
+  return {
+    allowed:false,
+    mode:"blocked",
+    reason:"no-social-bond",
+  };
 }
 
 function characterSocialFollowModifier(c) {
@@ -11531,6 +11892,19 @@ function followInterestScore(
     return -999;
   }
 
+  const eligibility =
+    aiFollowEligibility(
+      w,
+      actor.id,
+      target.id
+    );
+
+  if (
+    !eligibility.allowed
+  ) {
+    return -999;
+  }
+
   const rel =
     getRel(
       w,
@@ -11538,11 +11912,15 @@ function followInterestScore(
       target.id
     );
 
-  let score = 0;
+  let score =
+    eligibility.mode ===
+      "enemy-secret-crush"
+      ? 22
+      : 0;
 
   /*
-   * Ha már van köztük rögzített kapcsolat,
-   * az önmagában társas relevancia.
+   * Csak már engedélyezett kapcsolatnál számít pluszban,
+   * hogy ténylegesen van kapcsolatuk.
    */
   if (
     linked(
@@ -11551,7 +11929,7 @@ function followInterestScore(
       target.id
     )
   ) {
-    score += 18;
+    score += 14;
   }
 
   const relScore =
@@ -11570,19 +11948,8 @@ function followInterestScore(
   }
 
   /*
-   * Nagyon negatív kapcsolatnál is lehet érdeke követni:
-   * rivalizálás, féltékenység, ellenőrzés, hate-follow.
-   * Ez viszont gyengébb, mint egy pozitív kötődés.
+   * Nincs hate-follow bónusz negatív kapcsolatért.
    */
-  if (relScore < -25) {
-    score +=
-      Math.min(
-        15,
-        Math.abs(relScore) *
-          0.16
-      );
-  }
-
   score +=
     followBondWeight(rel);
 
@@ -11689,32 +12056,16 @@ function followInterestScore(
   }
 
   /*
-   * Ugyanaz a csapat/szervezet gyakran erős social relevancia,
-   * ellenfelet pedig lehet hate-follow miatt figyelni.
+   * Ugyanaz a csapat/szervezet erős social relevancia.
+   * ELLENFÉL oldalért nincs többé hate-follow bónusz.
    */
-  const af = factionFlags(actor);
-  const tf = factionFlags(target);
-
   if (
-    (af.pogue && tf.pogue) ||
-    (af.kook && tf.kook) ||
-    (af.hydra && tf.hydra) ||
-    (af.shield && tf.shield) ||
-    (af.cobraKai && tf.cobraKai) ||
-    (af.miyagiFang && tf.miyagiFang) ||
-    (af.ironDragons && tf.ironDragons)
+    sameFollowTeamOrFaction(
+      actor,
+      target
+    )
   ) {
     score += 18;
-  }
-
-  if (
-    (af.pogue && tf.kook) || (af.kook && tf.pogue) ||
-    (af.hydra && tf.shield) || (af.shield && tf.hydra) ||
-    (af.cobraKai && tf.miyagiFang) || (af.miyagiFang && tf.cobraKai) ||
-    (af.ironDragons && (tf.cobraKai || tf.miyagiFang)) ||
-    (tf.ironDragons && (af.cobraKai || af.miyagiFang))
-  ) {
-    score += 9; // rival/hate-follow relevancia
   }
 
   return Math.round(score);
@@ -11739,6 +12090,19 @@ function aiShouldFollow(
     return false;
   }
 
+  const eligibility =
+    aiFollowEligibility(
+      w,
+      actorId,
+      targetId
+    );
+
+  if (
+    !eligibility.allowed
+  ) {
+    return false;
+  }
+
   const score =
     followInterestScore(
       w,
@@ -11750,6 +12114,41 @@ function aiShouldFollow(
     !Number.isFinite(score)
   ) {
     return false;
+  }
+
+  /*
+   * Ellenség/rivális + TITKOS CRUSH:
+   * megengedett, de még így sem alapértelmezett.
+   * Nem lehet "score >= X => biztos follow".
+   */
+  if (
+    eligibility.mode ===
+      "enemy-secret-crush"
+  ) {
+    const obsession =
+      relationshipObsessionLevel(
+        w,
+        actorId,
+        targetId
+      );
+
+    const chance =
+      trigger === "follow-back"
+        ? (
+            obsession >= 3
+              ? 0.34
+              : 0.22
+          )
+        : (
+            obsession >= 3
+              ? 0.24
+              : 0.12
+          );
+
+    return (
+      Math.random() <
+      chance
+    );
   }
 
   /*
@@ -11940,6 +12339,26 @@ function setFollowState(
 
   if (
     shouldFollow === already
+  ) {
+    return false;
+  }
+
+  /*
+   * AI-karaktert semmilyen háttérút ne tudjon
+   * jogosulatlan enemy/hate-followba tenni.
+   * A játékos saját follow-ja továbbra is kézi döntés.
+   */
+  if (
+    shouldFollow &&
+    !isHuman(
+      w,
+      follower.id
+    ) &&
+    !aiFollowEligibility(
+      w,
+      follower.id,
+      target.id
+    ).allowed
   ) {
     return false;
   }
