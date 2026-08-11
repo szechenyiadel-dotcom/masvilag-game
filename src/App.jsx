@@ -939,6 +939,10 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 .popup-choice-label { font-weight:600; }
 .popup-choice-desc { margin-top:2px; color:var(--muted); font-size:11.5px; line-height:1.35; }
 
+.character-detail-mobile-edit {
+  display: none;
+}
+
 /* ---------- MOBILOS ACTION GOMBOK ---------- */
 
 @media (max-width: 768px) {
@@ -1000,29 +1004,52 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   .char-edit-sheet {
     width: 100% !important;
     max-width: none !important;
-    height: 100dvh !important;
-    max-height: 100dvh !important;
+
+    height: 100svh !important;
+    max-height: 100svh !important;
+    min-height: 100svh !important;
+
     margin: 0 !important;
-    padding: max(12px, env(safe-area-inset-top)) 14px 112px !important;
+    padding: 0 14px calc(122px + env(safe-area-inset-bottom)) !important;
     box-sizing: border-box !important;
     border: 0 !important;
     border-radius: 0 !important;
+
     overflow-y: auto !important;
     overflow-x: hidden !important;
     -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
+    overscroll-behavior-y: contain;
+    scroll-behavior: auto;
+    touch-action: pan-y;
+  }
+
+  @supports (height: 100dvh) {
+    .char-edit-sheet {
+      height: 100dvh !important;
+      max-height: 100dvh !important;
+      min-height: 100dvh !important;
+    }
   }
 
   .char-edit-header {
-    position: sticky;
-    top: calc(-1 * max(12px, env(safe-area-inset-top)));
-    z-index: 25;
-    margin: calc(-1 * max(12px, env(safe-area-inset-top))) -14px 12px;
-    padding: max(12px, env(safe-area-inset-top)) 14px 10px;
-    background: rgba(10, 9, 16, .97);
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 140 !important;
+
+    min-height: 58px;
+    margin: 0 -14px 12px !important;
+    padding: calc(10px + env(safe-area-inset-top)) 14px 10px !important;
+
+    background: rgba(10, 9, 16, .985);
     border-bottom: 1px solid var(--line);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
+  }
+
+  .char-edit-header .btn {
+    min-width: 44px;
+    min-height: 44px;
+    touch-action: manipulation;
   }
 
   .char-edit-sheet .card {
@@ -1144,29 +1171,74 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   .character-detail-sheet {
     width: 100% !important;
     max-width: none !important;
-    height: 100dvh !important;
-    max-height: 100dvh !important;
+
+    height: 100svh !important;
+    max-height: 100svh !important;
+    min-height: 100svh !important;
+
     margin: 0 !important;
-    padding: max(12px, env(safe-area-inset-top)) 14px calc(92px + env(safe-area-inset-bottom)) !important;
+    padding: 0 14px calc(104px + env(safe-area-inset-bottom)) !important;
     box-sizing: border-box !important;
     border: 0 !important;
     border-radius: 0 !important;
+
     overflow-y: auto !important;
     overflow-x: hidden !important;
     -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
+    overscroll-behavior-y: contain;
+    scroll-behavior: auto;
+    touch-action: pan-y;
+  }
+
+  @supports (height: 100dvh) {
+    .character-detail-sheet {
+      height: 100dvh !important;
+      max-height: 100dvh !important;
+      min-height: 100dvh !important;
+    }
   }
 
   .character-detail-header {
-    position: sticky;
-    top: calc(-1 * max(12px, env(safe-area-inset-top)));
-    z-index: 30;
-    margin: calc(-1 * max(12px, env(safe-area-inset-top))) -14px 10px;
-    padding: max(12px, env(safe-area-inset-top)) 14px 10px;
-    background: rgba(10, 9, 16, .97);
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 120 !important;
+
+    min-height: 58px;
+    margin: 0 -14px 12px !important;
+    padding: calc(10px + env(safe-area-inset-top)) 14px 10px !important;
+
+    background: rgba(10, 9, 16, .985);
     border-bottom: 1px solid var(--line);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
+  }
+
+  .character-detail-header .btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 12px !important;
+    touch-action: manipulation;
+    position: relative;
+    z-index: 2;
+  }
+
+  .character-detail-mobile-edit {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+
+    position: fixed !important;
+    right: 14px !important;
+    bottom: calc(82px + env(safe-area-inset-bottom)) !important;
+    z-index: 180 !important;
+
+    min-height: 48px !important;
+    padding: 12px 16px !important;
+
+    border-radius: 999px !important;
+    box-shadow: 0 10px 28px rgba(0,0,0,.42);
+    touch-action: manipulation;
   }
 
   .character-detail-sheet .social-profile-actions {
@@ -15782,6 +15854,18 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
 
   const { tt } = useLang();
   const { media } = useMedia();
+  const detailSheetRef = useRef(null);
+
+  useEffect(() => {
+    const el = detailSheetRef.current;
+    if (!el) return;
+
+    try {
+      el.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    } catch (e) {
+      el.scrollTop = 0;
+    }
+  }, [c && c.id]);
 
   const coverUrl =
     resolveImg(
@@ -15859,7 +15943,10 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
         }
       }}
     >
-      <div className="sheet character-detail-sheet">
+      <div
+        ref={detailSheetRef}
+        className="sheet character-detail-sheet"
+      >
         <div className="between character-detail-header">
           <button
             className="btn tiny ghost"
@@ -15882,6 +15969,15 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
             )}
           </button>
         </div>
+
+        <button
+          className="btn primary character-detail-mobile-edit"
+          onClick={() => onEdit(c)}
+          aria-label={tt("Karakter szerkesztése", "Edit character")}
+        >
+          <Pencil size={16} />
+          {tt("Szerkesztés", "Edit")}
+        </button>
 
         <div
           className="card social-profile"
@@ -33093,4 +33189,4 @@ const signOut = useCallback(async () => {
     </MediaCtx.Provider>
     </LangCtx.Provider>
   );
-} 
+}
