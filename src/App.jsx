@@ -809,6 +809,68 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   font-weight:600;
 }
 
+
+.social-media-account-bar {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin:10px -14px 0;
+  padding:10px 14px;
+  border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line);
+  background:rgba(30,26,44,.52);
+}
+
+.social-media-account-main {
+  flex:1;
+  min-width:0;
+}
+
+.social-media-account-tag {
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  margin-top:2px;
+  color:var(--muted);
+  font-size:10.5px;
+}
+
+.social-media-account-actions {
+  display:flex;
+  gap:6px;
+  align-items:center;
+  flex:none;
+}
+
+.gossip-mode-grid {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:6px;
+  margin-top:8px;
+}
+
+.gossip-media-preview {
+  margin-top:12px;
+  padding:12px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:var(--raised);
+}
+
+@media (max-width:480px) {
+  .social-media-account-bar {
+    align-items:flex-start;
+  }
+
+  .social-media-account-actions {
+    flex-direction:column;
+  }
+
+  .gossip-mode-grid {
+    grid-template-columns:1fr;
+  }
+}
+
 /* ---------- MOBILOS ACTION GOMBOK ---------- */
 
 @media (max-width: 768px) {
@@ -1175,6 +1237,29 @@ function normalizeWorldImages(world, media) {
       return iid ? { ...item, imageId: iid } : item;
     });
   });
+
+  allGossipMediaAccounts(w).forEach((m) => {
+    if (m.avatar) {
+      m.avatar = attach(
+        m.avatar,
+        {
+          category: "profile",
+          ownerCharacterId: m.id,
+        }
+      );
+    }
+
+    if (m.cover) {
+      m.cover = attach(
+        m.cover,
+        {
+          category: "cover",
+          ownerCharacterId: m.id,
+        }
+      );
+    }
+  });
+
   (w.posts || []).forEach((p) => {
     const ref = attach(p.imageId ? imageRef(p.imageId) : p.image, { category: "post", ownerCharacterId: p.authorId });
     const iid = imageIdOf(ref);
@@ -1443,12 +1528,259 @@ function accByUser(w, username) {
   return null;
 }
 
+const GOSSIP_MEDIA_LOCAL_ID =
+  "media_spill_chill";
+
+const GOSSIP_MEDIA_GLOBAL_ID =
+  "media_rumor_has_it";
+
+function defaultGossipMediaAccount(
+  kind
+) {
+  if (kind === "global") {
+    return {
+      id:
+        GOSSIP_MEDIA_GLOBAL_ID,
+
+      mediaKind:
+        "global",
+
+      name:
+        "RumorHasIt",
+
+      username:
+        "rumorhasit",
+
+      bio:
+        "Celebrities, scandals, receipts & the stories everyone is talking about.",
+
+      avatar: "",
+      cover: "",
+
+      baseFollowers:
+        8700000,
+
+      followerDelta: 0,
+      followers: [],
+      following: [],
+    };
+  }
+
+  return {
+    id:
+      GOSSIP_MEDIA_LOCAL_ID,
+
+    mediaKind:
+      "local",
+
+    name:
+      "Spill&Chill",
+
+    username:
+      "spillandchill",
+
+    bio:
+      "Small-town secrets, sightings & side-eyes. Send tips.",
+
+    avatar: "",
+    cover: "",
+
+    baseFollowers:
+      3400,
+
+    followerDelta: 0,
+    followers: [],
+    following: [],
+  };
+}
+
+function ensureGossipMediaState(w) {
+  if (
+    !w ||
+    typeof w !== "object"
+  ) {
+    return w;
+  }
+
+  if (
+    !w.gossipSettings ||
+    typeof w.gossipSettings !==
+      "object" ||
+    Array.isArray(
+      w.gossipSettings
+    )
+  ) {
+    w.gossipSettings = {};
+  }
+
+  if (
+    ![
+      "off",
+      "local",
+      "global",
+    ].includes(
+      w.gossipSettings.mediaMode
+    )
+  ) {
+    /*
+     * Régi világokban ne jelenjen meg
+     * automatikusan pletykaoldal.
+     */
+    w.gossipSettings.mediaMode =
+      "off";
+  }
+
+  if (
+    !w.mediaAccounts ||
+    typeof w.mediaAccounts !==
+      "object" ||
+    Array.isArray(
+      w.mediaAccounts
+    )
+  ) {
+    w.mediaAccounts = {};
+  }
+
+  ["local", "global"].forEach(
+    (kind) => {
+      const defaults =
+        defaultGossipMediaAccount(
+          kind
+        );
+
+      const current =
+        w.mediaAccounts[kind] &&
+        typeof
+          w.mediaAccounts[kind] ===
+          "object" &&
+        !Array.isArray(
+          w.mediaAccounts[kind]
+        )
+          ? w.mediaAccounts[kind]
+          : {};
+
+      const row = {
+        ...defaults,
+        ...current,
+
+        /*
+         * Rendszerprofil: ezek fixek.
+         */
+        id:
+          defaults.id,
+
+        mediaKind:
+          kind,
+
+        name:
+          defaults.name,
+
+        username:
+          defaults.username,
+      };
+
+      ensureSocialProfileRow(
+        row
+      );
+
+      w.mediaAccounts[kind] =
+        row;
+    }
+  );
+
+  return w;
+}
+
+function allGossipMediaAccounts(w) {
+  if (
+    !w ||
+    !w.mediaAccounts
+  ) {
+    return [];
+  }
+
+  return [
+    w.mediaAccounts.local,
+    w.mediaAccounts.global,
+  ].filter(
+    (x) =>
+      x &&
+      x.id
+  );
+}
+
+function activeGossipMediaAccount(w) {
+  if (
+    !w ||
+    !w.gossipSettings
+  ) {
+    return null;
+  }
+
+  const mode =
+    w.gossipSettings.mediaMode;
+
+  if (
+    mode !== "local" &&
+    mode !== "global"
+  ) {
+    return null;
+  }
+
+  return (
+    w.mediaAccounts &&
+    w.mediaAccounts[mode]
+  ) || null;
+}
+
+function isMediaAccount(w, id) {
+  if (!id) return false;
+
+  return allGossipMediaAccounts(
+    w
+  ).some(
+    (m) =>
+      m &&
+      m.id === id
+  );
+}
+
 // Bármely szereplő azonosító alapján: játékos, bot vagy mellékszereplő.
 function charById(w, id) {
   if (!id) return null;
-  if (w.players && w.players[id]) return w.players[id];
-  return (w.chars || []).find((c) => c.id === id) ||
-         (w.extras || []).find((c) => c.id === id) || null;
+
+  if (
+    w.players &&
+    w.players[id]
+  ) {
+    return w.players[id];
+  }
+
+  const core =
+    (w.chars || []).find(
+      (c) =>
+        c.id === id
+    );
+
+  if (core) return core;
+
+  const extra =
+    (w.extras || []).find(
+      (c) =>
+        c.id === id
+    );
+
+  if (extra) return extra;
+
+  return (
+    allGossipMediaAccounts(w)
+      .find(
+        (m) =>
+          m &&
+          m.id === id
+      ) ||
+    null
+  );
 }
 const isExtra = (w, id) => !!(w.extras || []).find((c) => c.id === id);
 const isHuman = (w, id) => !!(w.players && w.players[id]);
@@ -1456,7 +1788,28 @@ const isHuman = (w, id) => !!(w.players && w.players[id]);
 const humanChars = (w) => Object.keys(w.players || {}).map((id) => w.players[id]).filter(Boolean);
 // Mindenki, akinek kapcsolata lehet: játékosok, botok, mellékszereplők.
 const allSubjects = (w) => humanChars(w).concat(w.chars || []).concat(w.extras || []);
-const kindOf = (w, id) => (isHuman(w, id) ? termText("player", worldLanguage(w)) : isExtra(w, id) ? termText("extra", worldLanguage(w)) : termText("ai", worldLanguage(w)));
+const kindOf = (w, id) => (
+  isHuman(w, id)
+    ? termText(
+        "player",
+        worldLanguage(w)
+      )
+    : isExtra(w, id)
+      ? termText(
+          "extra",
+          worldLanguage(w)
+        )
+      : isMediaAccount(w, id)
+        ? (
+            worldLanguage(w) === "en"
+              ? "media"
+              : "média"
+          )
+        : termText(
+            "ai",
+            worldLanguage(w)
+          )
+);
 // A privát beszélgetések fiókonként külön élnek.
 const chatKey = (meId, charId) => String(meId) + "|" + String(charId);
 
@@ -4800,11 +5153,52 @@ whisperWire: {
  * Gossip & Media beállítások.
  */
 gossipSettings: {
+  /*
+   * off    = nincs külön pletykamédia-profil
+   * local  = Spill&Chill
+   * global = RumorHasIt
+   */
+  mediaMode: "off",
+
   whisperWire: true,
   frequency: "normal",
   articleLength: "dynamic",
   characterGossip: true,
   relationshipImpact: "normal",
+},
+
+/*
+ * A pletykaoldalak valódi social profilok.
+ * Egyszerre csak a mediaMode által kiválasztott oldal aktív.
+ */
+mediaAccounts: {
+  local: {
+    id: "media_spill_chill",
+    mediaKind: "local",
+    name: "Spill&Chill",
+    username: "spillandchill",
+    bio: "Small-town secrets, sightings & side-eyes. Send tips.",
+    avatar: "",
+    cover: "",
+    baseFollowers: 3400,
+    followerDelta: 0,
+    followers: [],
+    following: [],
+  },
+
+  global: {
+    id: "media_rumor_has_it",
+    mediaKind: "global",
+    name: "RumorHasIt",
+    username: "rumorhasit",
+    bio: "Celebrities, scandals, receipts & the stories everyone is talking about.",
+    avatar: "",
+    cover: "",
+    baseFollowers: 8700000,
+    followerDelta: 0,
+    followers: [],
+    following: [],
+  },
 },
 
 /*
@@ -5250,14 +5644,26 @@ function pickAutonomousRepostAction(w) {
  * A mellékszereplők egyelőre nem.
  */
 function socialProfiles(w) {
+  const activeMedia =
+    activeGossipMediaAccount(
+      w
+    );
+
   return humanChars(w)
     .concat(w.chars || [])
+    .concat(
+      activeMedia
+        ? [activeMedia]
+        : []
+    )
     .filter(
       (c, i, arr) =>
         c &&
         c.id &&
         arr.findIndex(
-          (x) => x && x.id === c.id
+          (x) =>
+            x &&
+            x.id === c.id
         ) === i
     );
 }
@@ -5849,6 +6255,45 @@ function followInterestScore(
     characterSocialFollowModifier(
       actor
     );
+
+  /*
+   * Az aktív gossip oldal social szempontból
+   * természetesen releváns lehet.
+   * Nem automatikus follow: a karakter saját social habitusa
+   * és a többi follow-jel továbbra is számít.
+   */
+  if (
+    isMediaAccount(
+      w,
+      target.id
+    )
+  ) {
+    score +=
+      target.mediaKind ===
+        "local"
+        ? 30
+        : 26;
+
+    if (
+      target.mediaKind ===
+        "local" &&
+      actor.city
+    ) {
+      score += 5;
+    }
+
+    if (
+      target.mediaKind ===
+        "global" &&
+      (
+        Number(
+          actor.baseFollowers
+        ) || 0
+      ) >= 10000
+    ) {
+      score += 8;
+    }
+  }
 
   return Math.round(score);
 }
@@ -7291,7 +7736,20 @@ function SocialProfileModal({
   if (!c) return null;
 
   const mine = c.id === w.meId;
-  const following = !mine && isFollowing(w, w.meId, c.id);
+
+  const mediaAccount =
+    isMediaAccount(
+      w,
+      c.id
+    );
+
+  const following =
+    !mine &&
+    isFollowing(
+      w,
+      w.meId,
+      c.id
+    );
 
   const posts = (w.posts || [])
     .filter((p) => p && p.authorId === c.id)
@@ -7356,10 +7814,14 @@ function SocialProfileModal({
             <ChevronLeft size={14} /> {tt("Vissza", "Back")}
           </button>
 
-          {!mine ? (
+          {!mine &&
+          !mediaAccount ? (
             <button
               className="btn tiny ghost"
-              onClick={() => onChat && onChat(c.id)}
+              onClick={() =>
+                onChat &&
+                onChat(c.id)
+              }
             >
               <MessageCircle size={13} /> {tt("Üzenet", "Message")}
             </button>
@@ -7408,6 +7870,21 @@ function SocialProfileModal({
             <div className="social-profile-name">
               <h2 style={{ fontSize: 22 }}>{c.name}</h2>
               <div className="handle mono">@{c.username}</div>
+
+              {mediaAccount ? (
+                <div className="social-media-account-tag">
+                  <Globe2 size={11} />
+                  {c.mediaKind === "local"
+                    ? tt(
+                        "helyi pletykamédia",
+                        "local gossip media"
+                      )
+                    : tt(
+                        "világszintű pletykamédia",
+                        "global gossip media"
+                      )}
+                </div>
+              ) : null}
             </div>
 
             {c.bio ? (
@@ -9108,6 +9585,12 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
   const [feedMode, setFeedMode] = useState("all");
   const [showMedia, setShowMedia] = useState(false);
   const [profileId, setProfileId] = useState("");
+
+  const activeMedia =
+    activeGossipMediaAccount(
+      w
+    );
+
   const refs = useRef({});
 
   useEffect(() => {
@@ -9408,6 +9891,129 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
         onRequestNoteReactions={onRequestNoteReactions}
         onSignal={onSignal}
       />
+
+      {activeMedia ? (
+        <div className="social-media-account-bar">
+          <button
+            type="button"
+            className="social-author-click"
+            onClick={() =>
+              setProfileId(
+                activeMedia.id
+              )
+            }
+          >
+            <Av
+              src={activeMedia.avatar}
+              name={activeMedia.name}
+              size={36}
+              radius={11}
+            />
+          </button>
+
+          <div className="social-media-account-main">
+            <button
+              type="button"
+              className="social-author-click"
+              onClick={() =>
+                setProfileId(
+                  activeMedia.id
+                )
+              }
+            >
+              <div className="name">
+                {activeMedia.name}
+              </div>
+
+              <div className="handle mono">
+                @{activeMedia.username} ·{" "}
+                {formatSocialCount(
+                  displayFollowerCount(
+                    w,
+                    activeMedia.id
+                  )
+                )}{" "}
+                {tt(
+                  "követő",
+                  "followers"
+                )}
+              </div>
+            </button>
+
+            <div className="social-media-account-tag">
+              <Globe2 size={11} />
+              {activeMedia.mediaKind === "local"
+                ? tt(
+                    "helyi pletykaoldal",
+                    "local gossip page"
+                  )
+                : tt(
+                    "világszintű pletykaoldal",
+                    "global gossip page"
+                  )}
+            </div>
+          </div>
+
+          <div className="social-media-account-actions">
+            <button
+              className={
+                isFollowing(
+                  w,
+                  w.meId,
+                  activeMedia.id
+                )
+                  ? "btn tiny ghost social-following"
+                  : "btn tiny ghost"
+              }
+              onClick={() =>
+                update((n) => {
+                  setFollowState(
+                    n,
+                    n.meId ||
+                      w.meId,
+                    activeMedia.id,
+                    !isFollowing(
+                      n,
+                      n.meId ||
+                        w.meId,
+                      activeMedia.id
+                    ),
+                    "player"
+                  );
+                })
+              }
+            >
+              {isFollowing(
+                w,
+                w.meId,
+                activeMedia.id
+              )
+                ? tt(
+                    "Követed",
+                    "Following"
+                  )
+                : tt(
+                    "Követés",
+                    "Follow"
+                  )}
+            </button>
+
+            <button
+              className="btn tiny ghost"
+              onClick={() =>
+                setProfileId(
+                  activeMedia.id
+                )
+              }
+            >
+              {tt(
+                "Profil",
+                "Profile"
+              )}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="social-composer">
         <div className="social-composer-main">
@@ -12529,6 +13135,48 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
   const acc = (w.accounts || {})[w.meId] || null;
   const currentLang = worldLanguage(w, w.meId);
 
+  const activeMedia =
+    activeGossipMediaAccount(
+      w
+    );
+
+  const setGossipMediaMode = (
+    mode
+  ) => {
+    update((n) => {
+      ensureGossipMediaState(n);
+
+      n.gossipSettings.mediaMode =
+        mode;
+    });
+  };
+
+  const editGossipMedia = (
+    field,
+    value
+  ) => {
+    update((n) => {
+      ensureGossipMediaState(n);
+
+      const mode =
+        n.gossipSettings.mediaMode;
+
+      if (
+        mode !== "local" &&
+        mode !== "global"
+      ) {
+        return;
+      }
+
+      n.mediaAccounts[mode][field] =
+        value;
+
+      ensureSocialProfileRow(
+        n.mediaAccounts[mode]
+      );
+    });
+  };
+
   const copyCode = () => {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(w.code);
@@ -12625,6 +13273,293 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
           {tt("A felület és az AI által generált új tartalmak ugyanazt a nyelvet követik. Nyelvváltás után az új posztok, kommentek, üzenetek, értesítések és események azonnal az új nyelven készülnek.",
               "Both the UI and newly generated AI content follow this language. After switching, new posts, comments, messages, notifications and events are generated immediately in the selected language.")}
         </p>
+      </div>
+
+      <div className="card">
+        <label
+          className="f"
+          style={{
+            marginTop: 0,
+          }}
+        >
+          Gossip & Media
+        </label>
+
+        <p className="hint">
+          {tt(
+            "Válaszd ki, hogy legyen-e külön pletykamédia ebben a világban. Egyszerre egy oldal aktív.",
+            "Choose whether this world has a dedicated gossip-media account. Only one page is active at a time."
+          )}
+        </p>
+
+        <div className="gossip-mode-grid">
+          <button
+            className={
+              "btn tiny full " +
+              (
+                w.gossipSettings &&
+                w.gossipSettings.mediaMode === "off"
+                  ? "primary"
+                  : "ghost"
+              )
+            }
+            onClick={() =>
+              setGossipMediaMode(
+                "off"
+              )
+            }
+          >
+            {tt(
+              "Kikapcsolva",
+              "Off"
+            )}
+          </button>
+
+          <button
+            className={
+              "btn tiny full " +
+              (
+                w.gossipSettings &&
+                w.gossipSettings.mediaMode === "local"
+                  ? "primary"
+                  : "ghost"
+              )
+            }
+            onClick={() =>
+              setGossipMediaMode(
+                "local"
+              )
+            }
+          >
+            Spill&Chill
+          </button>
+
+          <button
+            className={
+              "btn tiny full " +
+              (
+                w.gossipSettings &&
+                w.gossipSettings.mediaMode === "global"
+                  ? "primary"
+                  : "ghost"
+              )
+            }
+            onClick={() =>
+              setGossipMediaMode(
+                "global"
+              )
+            }
+          >
+            RumorHasIt
+          </button>
+        </div>
+
+        {activeMedia ? (
+          <div className="gossip-media-preview">
+            <div
+              className="between"
+              style={{
+                alignItems:
+                  "flex-start",
+              }}
+            >
+              <div
+                className="row"
+                style={{
+                  alignItems:
+                    "center",
+                }}
+              >
+                <Av
+                  src={
+                    activeMedia.avatar
+                  }
+                  name={
+                    activeMedia.name
+                  }
+                  size={42}
+                  radius={12}
+                />
+
+                <div>
+                  <div className="name">
+                    {activeMedia.name}
+                  </div>
+
+                  <div className="handle mono">
+                    @{activeMedia.username}
+                  </div>
+
+                  <div className="social-media-account-tag">
+                    <Globe2 size={11} />
+
+                    {activeMedia.mediaKind === "local"
+                      ? tt(
+                          "kisvárosi / helyi média",
+                          "small-town / local media"
+                        )
+                      : tt(
+                          "világszintű tabloid",
+                          "global tabloid"
+                        )}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                className={
+                  isFollowing(
+                    w,
+                    w.meId,
+                    activeMedia.id
+                  )
+                    ? "btn tiny ghost social-following"
+                    : "btn tiny ghost"
+                }
+                onClick={() =>
+                  update((n) => {
+                    setFollowState(
+                      n,
+                      n.meId ||
+                        w.meId,
+                      activeMedia.id,
+                      !isFollowing(
+                        n,
+                        n.meId ||
+                          w.meId,
+                        activeMedia.id
+                      ),
+                      "player"
+                    );
+                  })
+                }
+              >
+                {isFollowing(
+                  w,
+                  w.meId,
+                  activeMedia.id
+                )
+                  ? tt(
+                      "Követed",
+                      "Following"
+                    )
+                  : tt(
+                      "Követés",
+                      "Follow"
+                    )}
+              </button>
+            </div>
+
+            <label className="f">
+              {tt(
+                "Alap követőszám",
+                "Base follower count"
+              )}
+            </label>
+
+            <input
+              className="i mono"
+              type="number"
+              min="0"
+              step="1"
+              value={
+                Number(
+                  activeMedia.baseFollowers
+                ) || 0
+              }
+              onChange={(e) =>
+                editGossipMedia(
+                  "baseFollowers",
+                  Math.max(
+                    0,
+                    Math.round(
+                      Number(
+                        e.target.value
+                      ) || 0
+                    )
+                  )
+                )
+              }
+            />
+
+            <ImagePicker
+              value={
+                activeMedia.avatar ||
+                ""
+              }
+              onChange={(v) =>
+                editGossipMedia(
+                  "avatar",
+                  v
+                )
+              }
+              label={tt(
+                "Oldal profilképe",
+                "Page profile picture"
+              )}
+              max={512}
+              preview={70}
+              category="profile"
+            />
+
+            <ImagePicker
+              value={
+                activeMedia.cover ||
+                ""
+              }
+              onChange={(v) =>
+                editGossipMedia(
+                  "cover",
+                  v
+                )
+              }
+              label={tt(
+                "Oldal borítóképe",
+                "Page cover photo"
+              )}
+              max={1400}
+              previewWidth={180}
+              previewHeight={90}
+              category="cover"
+            />
+
+            <p
+              className="hint"
+              style={{
+                marginTop: 8,
+              }}
+            >
+              {activeMedia.mediaKind === "local"
+                ? tt(
+                    "A Spill&Chill később alacsonyabb hírküszöbbel dolgozik majd: helyi bulik, kapcsolatok, konfliktusok és kisebb social jelek is hírré válhatnak.",
+                    "Spill&Chill will later use a lower news threshold: local parties, relationships, conflicts and smaller social signals can become stories."
+                  )
+                : tt(
+                    "A RumorHasIt később magasabb hírküszöbbel dolgozik majd: nagyobb fame, virality, botrány vagy széles nyilvánosság kell egy sztorihoz.",
+                    "RumorHasIt will later use a higher news threshold: stronger fame, virality, scandal or broad public attention will be needed for a story."
+                  )}
+            </p>
+
+            <p className="hint">
+              {tt(
+                "Ebben a lépésben még csak a médiafiók és a követési infrastruktúra készült el. Automatikus pletykacikk még nincs bekapcsolva.",
+                "This step only adds the media profile and follow infrastructure. Automatic gossip stories are not enabled yet."
+              )}
+            </p>
+          </div>
+        ) : (
+          <p
+            className="hint"
+            style={{
+              marginTop: 10,
+            }}
+          >
+            {tt(
+              "Kikapcsolva: nincs Spill&Chill vagy RumorHasIt profil a social hálózaton.",
+              "Off: there is no Spill&Chill or RumorHasIt profile on the social network."
+            )}
+          </p>
+        )}
       </div>
 
       <div className="card">
@@ -13487,6 +14422,11 @@ function ensureSocialSimulationState(w) {
   }
 
   /*
+   * Gossip media profilok / mód migrációja.
+   */
+  ensureGossipMediaState(w);
+
+  /*
    * Követőháló migráció / javítás.
    */
   ensureFollowerSystem(w);
@@ -13549,6 +14489,19 @@ function ensureSocialSimulationState(w) {
     Array.isArray(w.gossipSettings)
   ) {
     w.gossipSettings = {};
+  }
+
+  if (
+    ![
+      "off",
+      "local",
+      "global",
+    ].includes(
+      w.gossipSettings.mediaMode
+    )
+  ) {
+    w.gossipSettings.mediaMode =
+      "off";
   }
 
   if (
