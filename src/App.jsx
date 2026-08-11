@@ -3702,6 +3702,180 @@ function applyChanges(
     }
   });
 }
+function socialTextRelationshipDelta(
+  w,
+  actorId,
+  targetId,
+  text,
+  directReply = false
+) {
+  if (
+    !w ||
+    !actorId ||
+    !targetId ||
+    actorId === targetId
+  ) {
+    return 0;
+  }
+
+  const raw =
+    String(text || "")
+      .toLowerCase();
+
+  if (!raw.trim()) {
+    return 0;
+  }
+
+  /*
+   * Ez nem "sentiment AI", csak egy óvatos social mikro-jel.
+   * A nagyobb változásokat továbbra is az AI-generated changes adja.
+   */
+  const positive =
+    /(^|\s)(love|luv|ily|adore|cute|pretty|beautiful|gorgeous|hot|proud|congrats|congratulations|thanks|thank you|miss you|best|sweet|amazing|perfect|szeretlek|imádlak|cuki|szép|gyönyörű|büszke|gratulálok|köszi|köszönöm|hiányzol|kedvenc)(\s|$|[!?.])/i.test(
+      raw
+    );
+
+  const negative =
+    /(^|\s)(hate|shut up|fuck off|idiot|stupid|loser|pathetic|disgusting|creep|annoying|liar|bitch|asshole|utállak|fogd be|hülye|idióta|vesztes|szánalmas|undorító|idegesítő|hazug|kurva|seggfej)(\s|$|[!?.])/i.test(
+      raw
+    );
+
+  let delta = 0;
+
+  if (
+    positive &&
+    !negative
+  ) {
+    delta =
+      directReply
+        ? 3
+        : 2;
+  } else if (
+    negative &&
+    !positive
+  ) {
+    delta =
+      directReply
+        ? -4
+        : -3;
+  } else if (directReply) {
+    /*
+     * Maga a közvetlen reakció is társas jel:
+     * valaki időt/figyelmet adott a másiknak.
+     */
+    delta = 1;
+  }
+
+  const obsession =
+    relationshipObsessionLevel(
+      w,
+      targetId,
+      actorId
+    );
+
+  if (
+    obsession >= 3 &&
+    delta !== 0
+  ) {
+    /*
+     * A megszállott fél erősebben reagál arra,
+     * ha a célpont közvetlenül foglalkozik vele.
+     */
+    delta +=
+      delta > 0
+        ? 2
+        : -2;
+  }
+
+  return Math.max(
+    -7,
+    Math.min(
+      6,
+      delta
+    )
+  );
+}
+
+function applyPlayerSocialRelationshipSignal(
+  n,
+  actorId,
+  targetId,
+  text,
+  kind = "comment"
+) {
+  if (
+    !n ||
+    !actorId ||
+    !targetId ||
+    actorId === targetId ||
+    !isHuman(n, actorId) ||
+    isHuman(n, targetId)
+  ) {
+    return;
+  }
+
+  const directReply =
+    kind === "reply";
+
+  const delta =
+    socialTextRelationshipDelta(
+      n,
+      actorId,
+      targetId,
+      text,
+      directReply
+    );
+
+  if (!delta) {
+    return;
+  }
+
+  const target =
+    charById(
+      n,
+      targetId
+    );
+
+  if (!target) {
+    return;
+  }
+
+  const why =
+    worldLanguage(
+      n,
+      actorId
+    ) === "en"
+      ? (
+          directReply
+            ? "Your direct reply changed how they feel about you."
+            : "Your public interaction affected how they feel about you."
+        )
+      : (
+          directReply
+            ? "A közvetlen válaszod hatott arra, mit érez irántad."
+            : "A nyilvános interakciód hatott arra, mit érez irántad."
+        );
+
+  /*
+   * Az AI -> játékos irány változik:
+   * az AI reagál arra, hogy a játékos mit tett vele.
+   * applyChanges maga küldi a +N / -N értesítést.
+   */
+  applyChanges(
+    n,
+    [
+      {
+        a: targetId,
+        b: actorId,
+        delta,
+        mood: "",
+        why,
+        oneSided: true,
+      },
+    ]
+  );
+}
+
 function applyMemories(n, list) {
   (list || []).forEach((m) => {
     const id = findChar(n, m && m.id);
@@ -6330,13 +6504,13 @@ function relationshipBehaviorCard(
       en
         ? (
             obsessionLevel >= 3
-              ? "ACTIVE OBSESSION: show multiple, varied signs over time — unusually close attention, remembering tiny details, faster/more frequent reactions, noticing who the target talks to, jealousy, possessive slips, checking their public posts/Notes, extra protectiveness or territorial behavior when character-appropriate. Do NOT use every sign in every message, and do not invent off-screen stalking that canon has not established."
-              : "possessive fixation is active: let extra attention, jealousy, territorial wording, protectiveness or heightened reaction to the target's social interactions leak through naturally and in varied ways"
+              ? "ACTIVE OBSESSION: this must be VISIBLE, not merely stored as hidden metadata. In most direct interactions with the target, let at least one recognizable sign leak through when context allows: unusually close attention, remembering tiny details, faster/more frequent reactions, noticing who the target talks to, jealousy, possessive slips, territorial language, checking public posts/Notes, protectiveness, irritation at rivals, or disproportionate emotional investment. Vary the signs; do not repeat one catchphrase. Do NOT invent off-screen stalking that canon has not established."
+              : "possessive fixation is active: make the extra attention, jealousy, territorial wording, protectiveness or heightened reaction to the target's social interactions visibly leak through rather than keeping it permanently hidden"
           )
         : (
             obsessionLevel >= 3
-              ? "AKTÍV MEGSZÁLLOTTSÁG: több, változatos jel látszódjon idővel — szokatlanul erős figyelem, apró részletek megjegyzése, gyorsabb/gyakoribb reakció, annak figyelése, kivel beszél a célpont, féltékenység, birtokló elszólások, a nyilvános posztok/Note-ok fokozott figyelése, túlzott védelmezés vagy territoriális viselkedés, ha karakterhű. Ne minden jel legyen benne minden mondatban, és ne találj ki a kánon által nem megalapozott offline stalkolást."
-              : "aktív birtokló fixáció: természetesen szivárogjon át a plusz figyelem, féltékenység, territoriális szóhasználat, védelmezés vagy a célpont social interakcióira adott erősebb reakció"
+              ? "AKTÍV MEGSZÁLLOTTSÁG: ezt LÁTHATÓAN mutassa ki, ne csak rejtett metaadat legyen. A célponttal való közvetlen interakciók többségében, ha a helyzet engedi, legalább egy felismerhető jel szivárogjon át: szokatlanul erős figyelem, apró részletek megjegyzése, gyorsabb/gyakoribb reakció, annak figyelése, kivel beszél a célpont, féltékenység, birtokló elszólás, territoriális szóhasználat, a nyilvános posztok/Note-ok fokozott figyelése, védelmezés, riválisokra adott túl erős reakció vagy aránytalan érzelmi befektetés. Változatos legyen; ne ugyanazt a mondatot ismételje. Ne találj ki a kánon által nem megalapozott offline stalkolást."
+              : "aktív birtokló fixáció: a plusz figyelem, féltékenység, territoriális szóhasználat, védelmezés vagy a célpont social interakcióira adott erősebb reakció LÁTHATÓAN szivárogjon át, ne maradjon örökké rejtve"
           )
     );
   }
@@ -9565,7 +9739,10 @@ function repostInterestScore(
   const engagement =
     Math.max(
       0,
-      Number(post.likes) || 0
+      displayPostLikeCount(
+        w,
+        post
+      )
     ) +
     (post.comments || []).length * 2 +
     repostCount(
@@ -9952,6 +10129,153 @@ function displayFollowerCount(w, id) {
     c.baseFollowers +
       c.followerDelta +
       c.followers.length
+  );
+}
+
+function postFollowerLikeBaseline(
+  w,
+  post
+) {
+  if (
+    !w ||
+    !post ||
+    !post.authorId
+  ) {
+    return 0;
+  }
+
+  const followers =
+    displayFollowerCount(
+      w,
+      post.authorId
+    );
+
+  if (followers <= 0) {
+    return 0;
+  }
+
+  /*
+   * Determinisztikus, post-ID alapú engagement:
+   * nem ugrál minden rendernél, de a követőszámhoz igazodik.
+   */
+  const seed =
+    (
+      hue(
+        String(
+          post.id ||
+          post.authorId
+        )
+      ) %
+      100
+    ) / 100;
+
+  let minRate = 0.08;
+  let maxRate = 0.18;
+
+  if (followers < 100) {
+    minRate = 0.18;
+    maxRate = 0.42;
+  } else if (followers < 1000) {
+    minRate = 0.12;
+    maxRate = 0.28;
+  } else if (followers < 10000) {
+    minRate = 0.08;
+    maxRate = 0.20;
+  } else if (followers < 100000) {
+    minRate = 0.045;
+    maxRate = 0.13;
+  } else {
+    minRate = 0.018;
+    maxRate = 0.075;
+  }
+
+  const rate =
+    minRate +
+    (
+      maxRate -
+      minRate
+    ) * seed;
+
+  const ageMs =
+    Math.max(
+      0,
+      now() -
+      (Number(post.ts) || now())
+    );
+
+  /*
+   * Friss postnál fokozatosan épüljön fel a szám,
+   * kb. 3 óra után érje el a follower-alapú baseline-t.
+   */
+  const ageFactor =
+    Math.max(
+      0.12,
+      Math.min(
+        1,
+        ageMs /
+          (3 * 3600e3)
+      )
+    );
+
+  const viralBoost =
+    post.virality &&
+    (
+      post.virality.status === "viral" ||
+      post.virality.status === "breakout"
+    )
+      ? (
+          post.virality.status === "breakout"
+            ? 1.9
+            : 1.45
+        )
+      : 1;
+
+  return Math.max(
+    0,
+    Math.round(
+      followers *
+      rate *
+      ageFactor *
+      viralBoost
+    )
+  );
+}
+
+function displayPostLikeCount(
+  w,
+  post
+) {
+  if (!post) return 0;
+
+  const explicitIds =
+    Array.isArray(
+      post.likedBy
+    )
+      ? [
+          ...new Set(
+            post.likedBy
+          ),
+        ]
+      : [];
+
+  const explicitCount =
+    explicitIds.length;
+
+  const followerBaseline =
+    postFollowerLikeBaseline(
+      w,
+      post
+    );
+
+  /*
+   * Background/audience like-ok NEM személyhez kötöttek.
+   * A konkrét AI-like-ok továbbra is likedBy-ban élnek,
+   * így külön értesítést tudunk róluk küldeni.
+   */
+  return Math.max(
+    Number(post.likes) || 0,
+    followerBaseline +
+      explicitCount
   );
 }
 
@@ -10788,13 +11112,69 @@ function setFollowState(
   }
 
   /*
+   * Ha a JÁTÉKOS követ / kikövet egy AI-karaktert,
+   * az maga is egy valódi társas jel legyen.
+   */
+  if (
+    source === "player" &&
+    isHuman(w, follower.id) &&
+    !isHuman(w, target.id)
+  ) {
+    const obsession =
+      relationshipObsessionLevel(
+        w,
+        target.id,
+        follower.id
+      );
+
+    const followDelta =
+      shouldFollow
+        ? (
+            obsession >= 3
+              ? 5
+              : 2
+          )
+        : (
+            obsession >= 3
+              ? -7
+              : -3
+          );
+
+    applyChanges(
+      w,
+      [
+        {
+          a: target.id,
+          b: follower.id,
+          delta: followDelta,
+          mood: "",
+          why:
+            worldLanguage(
+              w,
+              follower.id
+            ) === "en"
+              ? (
+                  shouldFollow
+                    ? "You followed them, and they noticed."
+                    : "You unfollowed them, and they noticed."
+                )
+              : (
+                  shouldFollow
+                    ? "Bekövetted, és ezt észrevette."
+                    : "Kikövetted, és ezt észrevette."
+                ),
+          oneSided: true,
+        },
+      ]
+    );
+  }
+
+  /*
    * Ha a JÁTÉKOS követ be egy AI-karaktert,
    * az AI külön eldöntheti, hogy érdekében áll-e
    * visszakövetni.
    *
    * Nem automatikus follow-back.
-   * A kapcsolat, korábbi interakciók, közös groupok,
-   * DM-ek és a karakter social habitusza számítanak.
    */
   if (
     shouldFollow &&
@@ -12611,7 +12991,7 @@ function Post({
           aria-label={tt("Kedvelés", "Like")}
         >
           <Heart size={17} fill={liked ? "currentColor" : "none"} />
-          <span>{post.likes || 0}</span>
+          <span>{formatSocialCount(displayPostLikeCount(w, post))}</span>
         </button>
 
         <button
@@ -13746,6 +14126,15 @@ recordSocialEvent(
             }
           ),
 
+        /*
+         * namedActorId jelzi, hogy ez NEM háttér-like,
+         * hanem egy tényleges játékbeli AI-karakter like-ja.
+         */
+        namedActorId:
+          a
+            ? a.id
+            : who,
+
         link: {
           type: "post",
           id: p.id,
@@ -14035,6 +14424,9 @@ KOMMENTVÁLASZ-KARAKTERHŰSÉG:
 - A válaszoló teljes karakterlapja és saját emlékezete aktív.
 - A reply legyen felismerhetően az adott karakteré, ne generikus social reakció.
 - A korábbi saját kommentjeinek/DM-jeinek/posztjainak fordulatait se használja újra.
+- Ha a komment vagy a válasz ténylegesen közelebb hozza, felidegesíti, féltékennyé teszi, megsérti, megnevetteti vagy másképp érzelmileg megmozdítja a karaktert, ezt a "changes" tömbben IS jelezd. Ne csak a reply szövegében jelenjen meg.
+- Kis social reakcióhoz kis változás illik (általában 1-6 pont); nagyobb változás csak erős, konkrét érzelmi okból legyen.
+- Ha semmi érdemi nem változik, nem kötelező delta.
 
 KÖZVETLEN KAPCSOLATI DINAMIKA A KOMMENT SZERZŐJÉHEZ:
 ${cast
@@ -14173,12 +14565,49 @@ function applyReplies(n, postId, rootId, out) {
     const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
     p.comments.push(made);
     noteComment(n, p, made);
+
+    const rootComment =
+      (p.comments || []).find(
+        (x) =>
+          x &&
+          x.id === rootId
+      );
+
+    const replyTargetId =
+      rootComment &&
+      rootComment.authorId
+        ? rootComment.authorId
+        : p.authorId || "";
+
     rememberKnowledge(n, who, {
       kind: "conversation",
       source: "self_action",
       confidence: 1,
       text: sysLangText(n, who, `Válaszoltam: ${cut(made.text, 110)}`, `I replied: ${cut(made.text, 110)}`),
     });
+
+    if (
+      replyTargetId &&
+      replyTargetId !== who
+    ) {
+      rememberAboutTarget(
+        n,
+        who,
+        replyTargetId,
+        {
+          kind: "event",
+          source: "comment_reply",
+          confidence: 1,
+          text:
+            sysLangText(
+              n,
+              who,
+              `${nameOfIn(n, replyTargetId)} kommentjére válaszoltam: ${cut(made.text, 100)}`,
+              `I replied to ${nameOfIn(n, replyTargetId)}'s comment: ${cut(made.text, 100)}`
+            ),
+        }
+      );
+    }
   });
   applyChanges(n, out.changes);
   n.log = [...(out.events || []), ...n.log].slice(0, 30);
@@ -15695,6 +16124,21 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   targetId: targetId || "",
                 },
               });
+
+              /*
+               * A komment / kommentválasz ne csak Social Event legyen:
+               * közvetlen AI-célpontnál a kapcsolat is reagálhat rá,
+               * és applyChanges azonnal megmutatja az értesítésben.
+               */
+              applyPlayerSocialRelationshipSignal(
+                n,
+                actorId,
+                targetId,
+                made.text,
+                parent
+                  ? "reply"
+                  : "comment"
+              );
             })
           }
           onRepost={(id) =>
