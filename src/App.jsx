@@ -4705,9 +4705,16 @@ socialEvents: [],
  *   popularity: 0,
  *   reputation: 0,
  *   hype: 0,
+ *   humor: 0,
  *   followers: 0,
- *   following: 0
+ *   following: 0,
+ *   signals: { ... }
  * }
+ *
+ * FONTOS:
+ * popularity és hype részben a tényleges social aktivitásból
+ * számolódik; aura / reputation / humor később tartalmi
+ * eseményekből változhat.
  */
 socialStats: {},
 
@@ -13323,6 +13330,15 @@ function ensureSocialSimulationState(w) {
   ensureFollowerSystem(w);
 
   /*
+   * Social Stats migráció.
+   *
+   * A popularity/followers/following már a jelenlegi
+   * social profiladatokból is újraszámolható,
+   * ezért a régi világok sem nulláról indulnak.
+   */
+  refreshAllSocialStats(w);
+
+  /*
    * Aktuális trendek.
    */
   if (!Array.isArray(w.trends)) {
@@ -13438,6 +13454,597 @@ function ensureSocialSimulationState(w) {
   }
 
   return w;
+}
+
+/* ============================================================
+   SOCIAL STATS ENGINE
+   ============================================================ */
+
+/*
+ * A social médiában látható számok és a játékbeli társadalmi
+ * állapot külön dolgok.
+ *
+ * - followers/following: tényleges profiladat
+ * - popularity: ismertség / közönségméret + tartós engagement
+ * - hype: mennyire beszélnek róla MOST
+ * - aura: társas "vibe" / karizma, később tartalmi eseményekből
+ * - reputation: pozitív vagy negatív megítélés, később sentimentből
+ * - humor: mennyire tartják viccesnek, később tartalomelemzésből
+ *
+ * Nem kap valaki automatikusan +reputation pontot csak azért,
+ * mert kommenteltek neki. A figyelem és a jó hírnév nem ugyanaz.
+ */
+
+function clampSignedSocial(value) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n)) {
+    return 0;
+  }
+
+  return Math.max(
+    -100,
+    Math.min(
+      100,
+      Math.round(n * 10) / 10
+    )
+  );
+}
+
+function clampPositiveSocial(value) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n)) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Math.min(
+      100,
+      Math.round(n * 10) / 10
+    )
+  );
+}
+
+function defaultSocialStatsRow() {
+  return {
+    aura: 0,
+    popularity: 0,
+    reputation: 0,
+    hype: 0,
+    humor: 0,
+
+    followers: 0,
+    following: 0,
+
+    signals: {
+      posts: 0,
+      likesReceived: 0,
+      commentsReceived: 0,
+      repostsReceived: 0,
+      knownFollowers: 0,
+    },
+
+    updatedAt: 0,
+  };
+}
+
+function ensureSocialStatsFor(
+  w,
+  characterId
+) {
+  if (
+    !w ||
+    !characterId
+  ) {
+    return null;
+  }
+
+  if (
+    !w.socialStats ||
+    typeof w.socialStats !== "object" ||
+    Array.isArray(w.socialStats)
+  ) {
+    w.socialStats = {};
+  }
+
+  const id =
+    String(characterId);
+
+  const current =
+    w.socialStats[id] &&
+    typeof w.socialStats[id] === "object" &&
+    !Array.isArray(w.socialStats[id])
+      ? w.socialStats[id]
+      : {};
+
+  const base =
+    defaultSocialStatsRow();
+
+  const row = {
+    ...base,
+    ...current,
+
+    signals: {
+      ...base.signals,
+      ...(
+        current.signals &&
+        typeof current.signals === "object" &&
+        !Array.isArray(current.signals)
+          ? current.signals
+          : {}
+      ),
+    },
+  };
+
+  row.aura =
+    clampSignedSocial(
+      row.aura
+    );
+
+  row.reputation =
+    clampSignedSocial(
+      row.reputation
+    );
+
+  row.humor =
+    clampSignedSocial(
+      row.humor
+    );
+
+  row.popularity =
+    clampPositiveSocial(
+      row.popularity
+    );
+
+  row.hype =
+    clampPositiveSocial(
+      row.hype
+    );
+
+  row.followers =
+    Math.max(
+      0,
+      Math.round(
+        Number(row.followers) || 0
+      )
+    );
+
+  row.following =
+    Math.max(
+      0,
+      Math.round(
+        Number(row.following) || 0
+      )
+    );
+
+  row.updatedAt =
+    Number(row.updatedAt) || 0;
+
+  w.socialStats[id] = row;
+
+  return row;
+}
+
+/*
+ * Követőszámból kiinduló ismertségi alap.
+ *
+ * Logaritmikus skála kell, mert 1 000 -> 10 000 követő között
+ * társadalmilag sokkal nagyobb a különbség, mint pusztán +9000.
+ *
+ * Körülbelül:
+ * 10 követő      -> 16
+ * 100            -> 32
+ * 1 000          -> 48
+ * 10 000         -> 64
+ * 100 000        -> 80
+ * 1 000 000      -> 96
+ */
+function followerPopularityBase(
+  followers
+) {
+  const n =
+    Math.max(
+      0,
+      Number(followers) || 0
+    );
+
+  if (!n) return 0;
+
+  return clampPositiveSocial(
+    Math.log10(
+      n + 1
+    ) * 16
+  );
+}
+
+function socialSignalsFor(
+  w,
+  characterId
+) {
+  const posts =
+    (w.posts || []).filter(
+      (p) =>
+        p &&
+        p.authorId ===
+          characterId
+    );
+
+  let likesReceived = 0;
+  let commentsReceived = 0;
+  let repostsReceived = 0;
+
+  posts.forEach((post) => {
+    likesReceived +=
+      Math.max(
+        0,
+        Number(post.likes) || 0
+      );
+
+    commentsReceived +=
+      (post.comments || []).filter(
+        (c) =>
+          c &&
+          c.authorId !==
+            characterId
+      ).length;
+
+    repostsReceived +=
+      repostCount(
+        w,
+        post.id
+      );
+  });
+
+  const profile =
+    socialProfileById(
+      w,
+      characterId
+    );
+
+  const knownFollowers =
+    profile
+      ? knownFollowerCount(
+          w,
+          characterId
+        )
+      : 0;
+
+  return {
+    posts:
+      posts.length,
+
+    likesReceived,
+
+    commentsReceived,
+
+    repostsReceived,
+
+    knownFollowers,
+  };
+}
+
+/*
+ * A HYPE időérzékeny.
+ *
+ * Egy régi like nem tart valakit örökké felkapott állapotban.
+ * A Social Event Ledger elmúlt 24 órája adja a fő impulzust,
+ * és az újabb esemény többet ér, mint a régebbi.
+ */
+function recentHypeFor(
+  w,
+  characterId
+) {
+  const cutoff =
+    now() -
+    24 * 3600e3;
+
+  let heat = 0;
+
+  (w.socialEvents || []).forEach(
+    (event) => {
+      if (
+        !event ||
+        Number(event.ts) <
+          cutoff
+      ) {
+        return;
+      }
+
+      const actorHit =
+        event.actorId ===
+          characterId;
+
+      const targetHit =
+        Array.isArray(
+          event.targetIds
+        ) &&
+        event.targetIds.includes(
+          characterId
+        );
+
+      if (
+        !actorHit &&
+        !targetHit
+      ) {
+        return;
+      }
+
+      const ageHours =
+        Math.max(
+          0,
+          (
+            now() -
+            Number(event.ts)
+          ) /
+            3600e3
+        );
+
+      /*
+       * 24 óra alatt fokozatosan halványul.
+       */
+      const freshness =
+        Math.max(
+          0.08,
+          1 -
+            ageHours / 24
+        );
+
+      let weight = 0;
+
+      if (
+        event.type ===
+          "post" &&
+        actorHit
+      ) {
+        weight = 1.5;
+      }
+
+      if (
+        event.type ===
+          "like" &&
+        targetHit
+      ) {
+        weight = 0.7;
+      }
+
+      if (
+        (
+          event.type ===
+            "comment" ||
+          event.type ===
+            "reply"
+        ) &&
+        targetHit
+      ) {
+        weight = 1.8;
+      }
+
+      if (
+        event.type ===
+          "repost" &&
+        targetHit
+      ) {
+        weight = 4;
+      }
+
+      if (
+        event.type ===
+          "follow" &&
+        targetHit
+      ) {
+        weight = 2.2;
+      }
+
+      /*
+       * Az unfollow is figyelem / social mozgás.
+       * Később a reputation/cancel dönti el,
+       * hogy ez negatív-e; itt csak hype.
+       */
+      if (
+        event.type ===
+          "unfollow" &&
+        targetHit
+      ) {
+        weight = 2.8;
+      }
+
+      heat +=
+        weight *
+        freshness;
+    }
+  );
+
+  /*
+   * Kis szereplőgárdánál is legyen érzékelhető,
+   * de ne érje el két like-kal a 100-at.
+   */
+  return clampPositiveSocial(
+    heat * 4
+  );
+}
+
+function refreshSocialStatsFor(
+  w,
+  characterId
+) {
+  const profile =
+    socialProfileById(
+      w,
+      characterId
+    );
+
+  if (!profile) {
+    return null;
+  }
+
+  const row =
+    ensureSocialStatsFor(
+      w,
+      characterId
+    );
+
+  if (!row) return null;
+
+  const followers =
+    displayFollowerCount(
+      w,
+      characterId
+    );
+
+  const following =
+    displayFollowingCount(
+      w,
+      characterId
+    );
+
+  const signals =
+    socialSignalsFor(
+      w,
+      characterId
+    );
+
+  /*
+   * Tartós engagement-bónusz.
+   *
+   * Ez NEM reputation.
+   * Egy botrányos ember is lehet nagyon népszerű.
+   */
+  const engagementTotal =
+    signals.likesReceived +
+    signals.commentsReceived * 2 +
+    signals.repostsReceived * 4;
+
+  const engagementBonus =
+    engagementTotal > 0
+      ? Math.min(
+          12,
+          Math.log10(
+            engagementTotal + 1
+          ) * 5
+        )
+      : 0;
+
+  row.followers =
+    followers;
+
+  row.following =
+    following;
+
+  row.signals =
+    signals;
+
+  row.popularity =
+    clampPositiveSocial(
+      followerPopularityBase(
+        followers
+      ) +
+        engagementBonus
+    );
+
+  row.hype =
+    recentHypeFor(
+      w,
+      characterId
+    );
+
+  row.updatedAt =
+    now();
+
+  return row;
+}
+
+function refreshAllSocialStats(w) {
+  if (!w) return w;
+
+  socialProfiles(w).forEach(
+    (c) => {
+      refreshSocialStatsFor(
+        w,
+        c.id
+      );
+    }
+  );
+
+  return w;
+}
+
+/*
+ * Későbbi tartalmi rendszereknek:
+ * gossip / cancel / stan / virality / popup event
+ * adhat célzott társadalmi következményt.
+ *
+ * A jelenlegi like/comment/follow rendszer ezt NEM használja
+ * reputation vagy aura automatikus farmolására.
+ */
+function applyExplicitSocialImpact(
+  w,
+  characterId,
+  impact = {}
+) {
+  const row =
+    ensureSocialStatsFor(
+      w,
+      characterId
+    );
+
+  if (!row) return null;
+
+  if (
+    Number.isFinite(
+      Number(impact.aura)
+    )
+  ) {
+    row.aura =
+      clampSignedSocial(
+        row.aura +
+        Number(impact.aura)
+      );
+  }
+
+  if (
+    Number.isFinite(
+      Number(impact.reputation)
+    )
+  ) {
+    row.reputation =
+      clampSignedSocial(
+        row.reputation +
+        Number(
+          impact.reputation
+        )
+      );
+  }
+
+  if (
+    Number.isFinite(
+      Number(impact.humor)
+    )
+  ) {
+    row.humor =
+      clampSignedSocial(
+        row.humor +
+        Number(impact.humor)
+      );
+  }
+
+  if (
+    Number.isFinite(
+      Number(impact.hype)
+    )
+  ) {
+    row.hype =
+      clampPositiveSocial(
+        row.hype +
+        Number(impact.hype)
+      );
+  }
+
+  row.updatedAt =
+    now();
+
+  return row;
 }
 
 /*
@@ -13669,6 +14276,66 @@ function recordSocialEvent(
    */
   w.socialEvents =
     w.socialEvents.slice(0, 600);
+
+  /*
+   * Csak az érintett profilokat frissítjük.
+   * Így egy like/comment/repost azonnal megjelenik a
+   * popularity/hype számításban, de nem fut végig fölöslegesen
+   * az egész karaktergárdán.
+   */
+  const touchedIds = [
+    entry.actorId,
+    ...(entry.targetIds || []),
+  ]
+    .filter(Boolean);
+
+  [
+    ...new Set(
+      touchedIds
+    ),
+  ].forEach((id) => {
+    refreshSocialStatsFor(
+      w,
+      id
+    );
+  });
+
+  /*
+   * Későbbi rendszerek küldhetnek például:
+   *
+   * meta: {
+   *   socialImpact: {
+   *     reputation: -8,
+   *     aura: 3
+   *   }
+   * }
+   *
+   * Ez most még csak infrastruktúra.
+   */
+  if (
+    entry.meta &&
+    entry.meta.socialImpact &&
+    typeof entry.meta.socialImpact ===
+      "object"
+  ) {
+    const impactTargetIds =
+      entry.targetIds &&
+      entry.targetIds.length
+        ? entry.targetIds
+        : entry.actorId
+          ? [entry.actorId]
+          : [];
+
+    impactTargetIds.forEach(
+      (id) => {
+        applyExplicitSocialImpact(
+          w,
+          id,
+          entry.meta.socialImpact
+        );
+      }
+    );
+  }
 
   return entry;
 }
