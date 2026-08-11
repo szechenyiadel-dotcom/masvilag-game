@@ -983,6 +983,111 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     white-space: nowrap;
     touch-action: manipulation;
   }
+
+  /* ---------- KARAKTERSZERKESZTŐ MOBIL ---------- */
+
+  .char-edit-scrim {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 70 !important;
+    display: block !important;
+    padding: 0 !important;
+    background: var(--ink) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .char-edit-sheet {
+    width: 100% !important;
+    max-width: none !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    margin: 0 !important;
+    padding: max(12px, env(safe-area-inset-top)) 14px 112px !important;
+    box-sizing: border-box !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  .char-edit-header {
+    position: sticky;
+    top: calc(-1 * max(12px, env(safe-area-inset-top)));
+    z-index: 25;
+    margin: calc(-1 * max(12px, env(safe-area-inset-top))) -14px 12px;
+    padding: max(12px, env(safe-area-inset-top)) 14px 10px;
+    background: rgba(10, 9, 16, .97);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .char-edit-sheet .card {
+    padding: 13px !important;
+  }
+
+  .char-edit-sheet label.f {
+    margin-top: 16px;
+  }
+
+  .char-edit-sheet .i,
+  .char-edit-sheet input,
+  .char-edit-sheet textarea,
+  .char-edit-sheet select {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    font-size: 16px;
+  }
+
+  .char-edit-sheet textarea.i {
+    min-height: 120px;
+    line-height: 1.45;
+  }
+
+  .char-edit-add-person {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .char-edit-add-person > * {
+    width: 100% !important;
+    flex: 1 1 auto !important;
+  }
+
+  .char-edit-add-person > .btn {
+    min-height: 44px;
+  }
+
+  .char-edit-rel-card {
+    padding: 10px 0 2px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+  }
+
+  .char-edit-rel-card .between {
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .char-edit-rel-card .relnum {
+    flex: 0 0 auto;
+    text-align: right;
+  }
+
+  .char-edit-sheet .mobile-action-bar {
+    bottom: 0 !important;
+    width: calc(100% + 28px);
+    margin-left: -14px;
+    margin-right: -14px;
+    margin-bottom: -112px;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
 /* ---------- ROLE PLAY MOBIL ---------- */
 
 .scene-create-scrim {
@@ -1105,7 +1210,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 
   left: 0 !important;
   right: 0 !important;
-  bottom: -100px !important;
+  bottom: 0 !important;
 
   z-index: 100 !important;
 
@@ -2111,12 +2216,71 @@ function setRel(w, a, b, patch) {
 /* ---------- jegyzetek (mint az Instagram Notes) ----------
    Mindenkinek egy aktív jegyzete lehet, ami egy nap után magától lejár. */
 const NOTE_LIFE = 24 * 3600e3;
-const NOTE_REFRESH = 8 * 3600e3;
+const NOTE_REFRESH = NOTE_LIFE;
 const NOTE_MAX = 80;
-const liveNotes = (w) => (w.notes || []).filter((x) => x && now() - (x.ts || 0) < NOTE_LIFE);
-const noteOf = (w, id) => liveNotes(w).find((x) => x.authorId === id) || null;
+
+function pruneExpiredNotes(w) {
+  if (!w || !Array.isArray(w.notes)) {
+    if (w) w.notes = [];
+    return w;
+  }
+
+  const cutoff =
+    now() - NOTE_LIFE;
+
+  const newestByAuthor = {};
+
+  w.notes.forEach((x) => {
+    if (
+      !x ||
+      !x.authorId ||
+      Number(x.ts || 0) <= cutoff
+    ) {
+      return;
+    }
+
+    const prev =
+      newestByAuthor[x.authorId];
+
+    if (
+      !prev ||
+      Number(x.ts || 0) >
+        Number(prev.ts || 0)
+    ) {
+      newestByAuthor[x.authorId] = x;
+    }
+  });
+
+  w.notes =
+    Object.values(
+      newestByAuthor
+    )
+      .sort(
+        (a, b) =>
+          Number(b.ts || 0) -
+          Number(a.ts || 0)
+      )
+      .slice(0, 80);
+
+  return w;
+}
+
+const liveNotes = (w) =>
+  (w.notes || []).filter(
+    (x) =>
+      x &&
+      now() - (x.ts || 0) <
+        NOTE_LIFE
+  );
+
+const noteOf = (w, id) =>
+  liveNotes(w).find(
+    (x) => x.authorId === id
+  ) || null;
 
 function setNote(n, authorId, text, forcedId) {
+  pruneExpiredNotes(n);
+
   const t = String(text || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -2987,6 +3151,30 @@ FONTOS:
     );
   }
 
+  if (c.traits) {
+    bits.push(
+      `Tulajdonságok, amiknek ténylegesen látszódniuk kell a viselkedésben: ${spread(c.traits, 420)}`
+    );
+  }
+
+  if (c.backstory) {
+    bits.push(
+      `Történet/múlt — EZ NEM DÍSZLET, ma is ebből reagálsz emberekre, csoportokra és helyzetekre: ${spread(c.backstory, 900)}`
+    );
+  }
+
+  if (c.goals) {
+    bits.push(
+      `Aktív célok/motiváció: ${spread(c.goals, 320)}`
+    );
+  }
+
+  if (c.extra) {
+    bits.push(
+      `Egyéb fontos szabályok és élethelyzet: ${spread(c.extra, 360)}`
+    );
+  }
+
   if (!bits.length) return "";
 
   return `
@@ -3357,7 +3545,7 @@ function repetitionGuard(w, ids, label) {
   const scopedLabel = lang === "en" ? (labelMap[label] || label || "") : (label || "");
   const rows = (ids || []).map((id) => {
     const c = charById(w, id);
-    const lines = recentUtterancesFor(w, id, 3);
+    const lines = recentUtterancesFor(w, id, 8);
     if (!c || !lines.length) return "";
     return `${c.name}: ${lines.join(" | ")}`;
   }).filter(Boolean);
@@ -3392,8 +3580,8 @@ ${emojiWarning}`;
 }
 
 const REP_WORD_MIN = 3;
-const REP_JACCARD_LIMIT = 0.74;
-const REP_PREFIX_LEN = 42;
+const REP_JACCARD_LIMIT = 0.68;
+const REP_PREFIX_LEN = 34;
 
 function normUtterance(v) {
   return String(v || "")
@@ -3424,7 +3612,7 @@ function isRepetitiveUtterance(w, id, text) {
   if (!base || base.length < 18) return false;
   const first = base.slice(0, REP_PREFIX_LEN);
   const mine = wordSet(base);
-  const prev = recentUtterancesFor(w, id, 6);
+  const prev = recentUtterancesFor(w, id, 10);
   for (let i = 0; i < prev.length; i++) {
     const old = normUtterance(prev[i]);
     if (!old) continue;
@@ -3439,6 +3627,658 @@ function cleanGeneratedUtterance(w, id, text, maxLen = 500) {
   if (!t) return "";
   if (isRepetitiveUtterance(w, id, t)) return "";
   return t.length > maxLen ? t.slice(0, maxLen) : t;
+}
+
+/* ============================================================
+   KARAKTERDINAMIKA — kapcsolat + történet + frakció + személyiség
+   ============================================================ */
+
+function characterLoreCorpus(c) {
+  if (!c) return "";
+
+  return [
+    c.bio,
+    c.personality,
+    c.traits,
+    c.speech,
+    c.goals,
+    c.fears,
+    c.likes,
+    c.secrets,
+    c.backstory,
+    c.extra,
+    c.job,
+    c.city,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+}
+
+function loreHas(c, words) {
+  const hay =
+    characterLoreCorpus(c);
+
+  return (words || []).some(
+    (word) =>
+      hay.includes(
+        String(word).toLowerCase()
+      )
+  );
+}
+
+function factionFlags(c) {
+  return {
+    cobraKai:
+      loreHas(
+        c,
+        [
+          "cobra kai",
+          "cobra-kai",
+        ]
+      ),
+
+    miyagiFang:
+      loreHas(
+        c,
+        [
+          "miyagi-fang",
+          "miyagi fang",
+          "miyagi-do",
+          "miyagi do",
+          "eagle fang",
+          "eagle-fang",
+        ]
+      ),
+
+    ironDragons:
+      loreHas(
+        c,
+        [
+          "iron dragons",
+          "iron dragon",
+        ]
+      ),
+  };
+}
+
+function bondLooksRomantic(rel) {
+  const bond =
+    String(
+      rel &&
+      (
+        rel.bond ||
+        rel.type
+      ) ||
+      ""
+    ).toLowerCase();
+
+  const hidden =
+    String(
+      rel &&
+      rel.hidden ||
+      ""
+    ).toLowerCase();
+
+  const mood =
+    String(
+      rel &&
+      rel.mood ||
+      ""
+    ).toLowerCase();
+
+  return (
+    /crush|vonzalom|attraction|szerel|love|flört|flirt|obsess|megszáll|féltéken|jealous/.test(
+      `${bond} ${hidden} ${mood}`
+    )
+  );
+}
+
+function characterIsFlirty(c) {
+  return loreHas(
+    c,
+    [
+      "flört",
+      "flirt",
+      "flirty",
+      "csábító",
+      "csábít",
+      "seductive",
+      "teasing",
+      "tease",
+      "provokatív",
+      "provocative",
+      "playful",
+      "játékos",
+    ]
+  );
+}
+
+function ownStorySnippetAbout(
+  actor,
+  target
+) {
+  if (!actor || !target) return "";
+
+  const source = [
+    actor.backstory,
+    actor.extra,
+    actor.personality,
+    actor.goals,
+    actor.fears,
+    actor.secrets,
+    actor.likes,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  if (!source) return "";
+
+  const names = [
+    target.name,
+    target.username,
+    target.nick,
+    String(target.name || "")
+      .split(/\s+/)[0],
+  ]
+    .filter(
+      (v) =>
+        v &&
+        String(v).trim().length >= 3
+    )
+    .map(
+      (v) =>
+        String(v)
+          .trim()
+          .toLowerCase()
+    );
+
+  const lower =
+    source.toLowerCase();
+
+  let hit = -1;
+
+  for (const name of names) {
+    const at =
+      lower.indexOf(name);
+
+    if (at >= 0) {
+      hit = at;
+      break;
+    }
+  }
+
+  if (hit < 0) return "";
+
+  const start =
+    Math.max(
+      0,
+      hit - 260
+    );
+
+  const end =
+    Math.min(
+      source.length,
+      hit + 520
+    );
+
+  return source
+    .slice(start, end)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function relationshipBehaviorCard(
+  w,
+  actorId,
+  targetId
+) {
+  if (
+    !w ||
+    !actorId ||
+    !targetId ||
+    actorId === targetId
+  ) {
+    return "";
+  }
+
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target
+  ) {
+    return "";
+  }
+
+  const rel =
+    getRel(
+      w,
+      actorId,
+      targetId
+    );
+
+  const lang =
+    worldLanguage(
+      w,
+      w.meId
+    );
+
+  const en =
+    lang === "en";
+
+  const score =
+    Number(
+      rel.score
+    ) || 0;
+
+  const bond =
+    rel.bond ||
+    rel.type ||
+    "";
+
+  const parts = [];
+
+  if (score <= -60) {
+    parts.push(
+      en
+        ? "strongly hostile: cold, contemptuous, distrustful or openly antagonistic; do NOT default to warmth"
+        : "erősen ellenséges: hideg, lenéző, bizalmatlan vagy nyíltan antagonisztikus; NE legyen alapból kedves"
+    );
+  } else if (score <= -25) {
+    parts.push(
+      en
+        ? "negative relationship: tension, impatience, rivalry, suspicion or sharpness should be visible"
+        : "rossz viszony: a feszültség, türelmetlenség, rivalizálás, gyanakvás vagy élesség látszódjon"
+    );
+  } else if (score >= 70) {
+    parts.push(
+      en
+        ? "very close bond: familiarity, loyalty, protectiveness or easy warmth should feel natural"
+        : "nagyon közeli viszony: természetes legyen a közvetlenség, lojalitás, védelmezés vagy melegség"
+    );
+  } else if (score >= 35) {
+    parts.push(
+      en
+        ? "good relationship: they should generally sound warmer, more patient or more willing to engage"
+        : "jó viszony: általában legyen melegebb, türelmesebb, nyitottabb vagy készségesebb a hangja"
+    );
+  } else {
+    parts.push(
+      en
+        ? "mixed/neutral relationship: do not manufacture intimacy or hostility that is not supported"
+        : "vegyes/semleges viszony: ne találj ki indokolatlan intimitást vagy ellenségességet"
+    );
+  }
+
+  if (bond) {
+    const lb =
+      localizedBond(
+        bond,
+        lang
+      );
+
+    parts.push(
+      en
+        ? `bond: ${lb}`
+        : `kötelék: ${lb}`
+    );
+  }
+
+  const storySnippet =
+    ownStorySnippetAbout(
+      actor,
+      target
+    );
+
+  if (storySnippet) {
+    parts.push(
+      en
+        ? `your OWN story explicitly connects you to this person; treat this as active history, not trivia: ${spread(storySnippet, 520)}`
+        : `a SAJÁT történeted konkrétan összeköt ezzel az emberrel; ezt aktív közös múltnak kezeld, ne díszletnek: ${spread(storySnippet, 520)}`
+    );
+  }
+
+  const actorAge =
+    ageOf(actor, w);
+
+  const targetAge =
+    ageOf(target, w);
+
+  const adultRomanceAllowed =
+    !(
+      (
+        Number(actorAge) > 0 &&
+        Number(actorAge) < 18
+      ) ||
+      (
+        Number(targetAge) > 0 &&
+        Number(targetAge) < 18
+      )
+    );
+
+  if (
+    adultRomanceAllowed &&
+    bondLooksRomantic(rel)
+  ) {
+    parts.push(
+      en
+        ? "attraction/crush is active: let it leak through attention, teasing, jealousy, awkwardness, protectiveness or flirting when character-appropriate; do not automatically confess it"
+        : "aktív vonzalom/crush: érződjön a figyelemből, ugratásból, féltékenységből, zavarból, védelmezésből vagy flörtből, ha karakterhű; ne vallja be automatikusan"
+    );
+  }
+
+  if (
+    adultRomanceAllowed &&
+    characterIsFlirty(actor)
+  ) {
+    parts.push(
+      en
+        ? "this character is naturally flirty: when the situation and target make sense, let them actually flirt instead of flattening them into neutral friendliness"
+        : "ez a karakter természetesen flörtölős: ha a helyzet és a célpont indokolja, ténylegesen flörtöljön, ne laposodjon semleges kedvességgé"
+    );
+  }
+
+  const af =
+    factionFlags(actor);
+
+  const tf =
+    factionFlags(target);
+
+  if (
+    af.cobraKai &&
+    tf.miyagiFang
+  ) {
+    parts.push(
+      en
+        ? "Cobra Kai vs Miyagi-Fang/Miyagi-Do/Eagle Fang rivalry is part of their worldview: default to competitive contempt, suspicion or dojo pride unless the PERSONAL relationship strongly overrides it; even then the history should still color the interaction"
+        : "a Cobra Kai vs Miyagi-Fang/Miyagi-Do/Eagle Fang rivalizálás a világnézet része: alapból jelenjen meg versengő lenézés, gyanakvás vagy dojo-büszkeség, hacsak a SZEMÉLYES kapcsolat ezt erősen felül nem írja; a közös történet akkor is színezze a viselkedést"
+    );
+  } else if (
+    af.miyagiFang &&
+    tf.cobraKai
+  ) {
+    parts.push(
+      en
+        ? "Miyagi-Fang/Miyagi-Do/Eagle Fang vs Cobra Kai history matters: caution, rivalry, defensiveness or distrust may surface unless their personal bond genuinely overrides it"
+        : "a Miyagi-Fang/Miyagi-Do/Eagle Fang vs Cobra Kai múlt számít: megjelenhet óvatosság, rivalizálás, védekezés vagy bizalmatlanság, hacsak a személyes kötelék valóban felül nem írja"
+    );
+  }
+
+  if (
+    af.ironDragons &&
+    tf.cobraKai
+  ) {
+    parts.push(
+      en
+        ? "their dojo histories can create competitive tension; infer the exact tone from their written backstories rather than treating them as strangers"
+        : "a dojo-múltjuk versengő feszültséget okozhat; a pontos hangot a leírt történetükből vezesd le, ne kezeld őket idegenként"
+    );
+  }
+
+  if (rel.mood) {
+    parts.push(
+      en
+        ? `current feeling: ${rel.mood}`
+        : `aktuális érzés: ${rel.mood}`
+    );
+  }
+
+  if (rel.hidden) {
+    parts.push(
+      en
+        ? `hidden feeling (do not state it outright unless it realistically slips): ${rel.hidden}`
+        : `rejtett érzés (ne mondd ki direkt, hacsak életszerűen ki nem csúszik): ${rel.hidden}`
+    );
+  }
+
+  return `${actor.name} → ${target.name}: ${parts.join("; ")}`;
+}
+
+function multiActorPerformanceContext(
+  w,
+  ids
+) {
+  const cast =
+    (ids || [])
+      .map(
+        (id) =>
+          charById(
+            w,
+            id
+          )
+      )
+      .filter(
+        (c) =>
+          c &&
+          !isHuman(
+            w,
+            c.id
+          )
+      );
+
+  if (!cast.length) {
+    return "";
+  }
+
+  const lang =
+    worldLanguage(
+      w,
+      w.meId
+    );
+
+  const en =
+    lang === "en";
+
+  const inPlayIds = [
+    w.meId,
+    ...cast.map(
+      (c) => c.id
+    ),
+  ].filter(Boolean);
+
+  const blocks =
+    cast.map(
+      (c) => {
+        const relationLines =
+          inPlayIds
+            .filter(
+              (targetId) =>
+                targetId &&
+                targetId !== c.id
+            )
+            .map(
+              (targetId) =>
+                relationshipBehaviorCard(
+                  w,
+                  c.id,
+                  targetId
+                )
+            )
+            .filter(Boolean)
+            .join("\n");
+
+        return `
+[${c.id}] ${String(c.name).toUpperCase()}
+${en ? "PRIVATE PERFORMANCE DATA — only use this to write THIS character. Other characters do not magically know it." : "PRIVÁT JÁTÉKVEZETÉSI ADAT — csak ENNEK a karakternek a megírásához használd. Más karakterek ezt nem tudják mágikusan."}
+${c.personality ? `${en ? "Personality" : "Személyiség"}: ${spread(c.personality, 700)}` : ""}
+${c.traits ? `${en ? "Traits" : "Tulajdonságok"}: ${spread(c.traits, 360)}` : ""}
+${c.speech ? `${en ? "Speech style" : "Beszédstílus"}: ${spread(c.speech, 420)}` : ""}
+${c.voice ? `${en ? "Voice examples — STYLE ONLY, never copy" : "Példamondatok — CSAK STÍLUS, soha ne másold"}: ${spread(c.voice, 650)}` : ""}
+${c.backstory ? `${en ? "Story/history that still shapes behavior" : "Történet/múlt, ami ma is alakítja"}: ${spread(c.backstory, 850)}` : ""}
+${c.extra ? `${en ? "Other important rules/context" : "Egyéb fontos szabály/kontekstus"}: ${spread(c.extra, 450)}` : ""}
+${relationLines ? `${en ? "HOW THIS CHARACTER SHOULD BEHAVE TOWARD PEOPLE IN THIS SCENE" : "HOGYAN VISELKEDJEN A JELENLÉVŐKKEL"}:\n${relationLines}` : ""}
+`;
+      }
+    )
+      .join("\n");
+
+  return `
+
+${en ? "PRIVATE CHARACTER PERFORMANCE CONTEXT" : "PRIVÁT KARAKTERJÁTÉK-KONTEXTUS"}:
+${en
+  ? "- Use each block only to perform that specific character.\n- Do not transfer one character's secrets, private personality notes or hidden feelings into another character's knowledge.\n- Personal history, loyalties, rivalries and organizations written in the sheets must actively affect behavior. Do not treat established rivals, allies, crushes or enemies like neutral strangers."
+  : "- Minden blokkot csak az adott karakter eljátszására használj.\n- Egyik karakter titkait, rejtett személyiségét vagy titkos érzéseit se add át egy másik karakter tudásának.\n- A leírt történetek, lojalitások, rivalizálások és szervezetek AKTÍVAN hassanak a viselkedésre. A már létező riválisokat, szövetségeseket, crushokat vagy ellenségeket ne kezeld semleges idegenként."}
+${blocks}`;
+}
+
+/* ============================================================
+   PRIVÁT CHAT — ne találjon ki fizikai jelenlétet
+   ============================================================ */
+
+const DM_PRESENCE_RISK_RE =
+  /\b(?:i(?:'|’)m|im|i am)\s+(?:right\s+)?(?:outside|downstairs|at\s+your\s+(?:door|place|house|home))\b|(?:outside|at)\s+your\s+door|open\s+the\s+door|let\s+me\s+in|i(?:'|’)m\s+here\b|az\s+ajt[oó]d?n[aá]l|az\s+ajt[oó]d?\s+el[oő]tt|kin[t]?t\s+vagyok|itt\s+vagyok\s+(?:lent|n[aá]lad|el[oő]tted)|nyisd\s+ki\s+az\s+ajt[oó]t|engedj\s+be|felmegyek\s+hozz[aá]d|leugrottam\s+hozz[aá]d/i;
+
+const DM_MEET_CONTEXT_RE =
+  /\bcome\s+over\b|\bcome\s+here\b|\bmy\s+place\b|\byour\s+place\b|\bmeet\s+me\b|\bdoor\b|\boutside\b|\bdownstairs\b|gyere\s+[aá]t|gyere\s+ide|tal[aá]lkozz|ajt[oó]|n[aá]lam|n[aá]lad|felj[oö]ssz|felmegyek|lent\s+vagy/i;
+
+function dmHasEstablishedPhysicalContext(
+  w,
+  botId,
+  contextText = ""
+) {
+  if (
+    DM_MEET_CONTEXT_RE.test(
+      String(contextText || "")
+    )
+  ) {
+    return true;
+  }
+
+  const recentCutoff =
+    now() -
+    2 * 3600e3;
+
+  return (w.scenes || []).some(
+    (scene) => {
+      if (
+        !scene ||
+        !Array.isArray(
+          scene.cast
+        ) ||
+        !scene.cast.includes(
+          botId
+        )
+      ) {
+        return false;
+      }
+
+      const last =
+        (scene.turns || [])
+          .slice(-1)[0];
+
+      return (
+        scene.open &&
+        last &&
+        Number(last.ts) >=
+          recentCutoff
+      );
+    }
+  );
+}
+
+function sanitizePhoneDm(
+  w,
+  botId,
+  value,
+  contextText = ""
+) {
+  let text =
+    String(value || "")
+      .replace(
+        /\*[^*]{1,180}\*/g,
+        ""
+      )
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim();
+
+  if (!text) return "";
+
+  if (
+    !dmHasEstablishedPhysicalContext(
+      w,
+      botId,
+      contextText
+    ) &&
+    DM_PRESENCE_RISK_RE.test(
+      text
+    )
+  ) {
+    const pieces =
+      text
+        .split(
+          /(?<=[.!?])\s+|\n+/g
+        )
+        .map(
+          (part) =>
+            part.trim()
+        )
+        .filter(Boolean)
+        .filter(
+          (part) =>
+            !DM_PRESENCE_RISK_RE.test(
+              part
+            )
+        );
+
+    text =
+      pieces
+        .join(" ")
+        .trim();
+  }
+
+  return text;
+}
+
+function dmPresenceGuardInstruction(
+  w,
+  botId,
+  contextText = ""
+) {
+  if (
+    dmHasEstablishedPhysicalContext(
+      w,
+      botId,
+      contextText
+    )
+  ) {
+    return "";
+  }
+
+  const en =
+    worldLanguage(
+      w,
+      w.meId
+    ) === "en";
+
+  return en
+    ? `
+PHONE-CHAT REALITY CHECK:
+- This is a remote DM unless the conversation or a current roleplay scene EXPLICITLY established that you are physically together.
+- Do NOT suddenly claim "I'm outside", "I'm at your door", "open the door", "let me in", "I'm downstairs", "I'm at your place", or any equivalent.
+- Do not invent that you travelled to the player's home/location.
+- If you want to meet, ASK or suggest meeting in a normal text message instead of magically already being there.
+`
+    : `
+TELEFONOS CHAT VALÓSÁGELLENŐRZÉS:
+- Ez távoli DM, hacsak a beszélgetés vagy egy most futó roleplay jelenet KIFEJEZETTEN nem állapította meg, hogy fizikailag egy helyen vagytok.
+- Ne találd ki hirtelen, hogy „az ajtód előtt állok”, „kint vagyok”, „nyisd ki”, „engedj be”, „lent vagyok”, „nálad vagyok” vagy bármi hasonlót.
+- Ne találj ki olyat, hogy odautaztál a játékos otthonához/helyszínére.
+- Ha találkozni akarsz, ÜZENETBEN kérdezd meg vagy javasold, ne jelenj meg mágikusan a helyszínen.
+`;
 }
 
 /* Kihez hogyan viszonyul — IRÁNYÍTOTTAN: külön amit ő érez, és külön,
@@ -3551,6 +4391,7 @@ ${roster || "-"}
 
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
 ${cast.map((c) => (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId === c.id ? "private" : "public"))).join("\n") || "-"}
+${!observerId && deep ? multiActorPerformanceContext(w, cast.map((c) => c.id)) : ""}
 ${extras.length ? `
 ${tt("EMLÍTETT SZEMÉLYEK — léteznek, de nem szólalnak meg maguktól", "MENTIONED PEOPLE — they exist, but do not speak on their own")}: 
 ${extras.map((e) => `[${e.id}] ${e.name}${e.note ? " — " + cut(e.note, 90) : ""}`).join("\n")}` : ""}
@@ -7389,11 +8230,13 @@ function Rooms({ w, onOpen, onCreate, onClose, setErr, onSignOut, onNeedLogin })
 
         <div className="sep" />
         <button className="btn full" onClick={onSignOut}>
-          <Zap size={14} /> Belépés másik világba kóddal
+          <Zap size={14} /> {tt("Belépés másik világba kóddal", "Log in to another world with a code")}
         </button>
         <p className="hint" style={{ marginTop: 10 }}>
-          Itt minden világ szerepel, amit létrehoztál. Ahol van profilod, oda egy kattintással belépsz;
-          ahol még nincs, ott a belépőképernyőn adod meg a neved.
+          {tt(
+            "Itt minden világ szerepel, amit létrehoztál. Ahol van profilod, oda egy kattintással belépsz; ahol még nincs, ott a belépőképernyőn adod meg a neved.",
+            "This list contains the worlds you've created. If you already have a profile there, you can enter with one click; otherwise you'll enter your details on the login screen."
+          )}
         </p>
       </div>
     </div>
@@ -7868,7 +8711,7 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
         </div>
 
         <label className="f">{isNew ? tt("Az új világ kódja", "The new world's code") : tt("Világkód", "World code")}</label>
-        <input className="i mono" value={code} placeholder="pl. beaconfalls-2026" onKeyDown={onEnter}
+        <input className="i mono" value={code} placeholder={tt("pl. beaconfalls-2026", "e.g. beaconfalls-2026")} onKeyDown={onEnter}
           onChange={(e) => setCode(e.target.value.replace(/\s+/g, "-").toLowerCase())} />
 
         {peek && code.trim() && (
@@ -7885,7 +8728,7 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
         )}
 
         <label className="f">{tt("Felhasználóneved", "Your username")}</label>
-        <input className="i mono" value={user} placeholder="pl. anita" onKeyDown={onEnter}
+        <input className="i mono" value={user} placeholder={tt("pl. anita", "e.g. anita")} onKeyDown={onEnter}
           autoComplete={isLogin ? "username" : "off"}
           onChange={(e) => setUser(e.target.value.toLowerCase())} />
 
@@ -7911,7 +8754,7 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
         {needName && (
           <>
             <label className="f">{tt("A karaktered neve", "Your character's name")}</label>
-            <input className="i" value={name} placeholder="pl. Anita Kovács" onKeyDown={onEnter}
+            <input className="i" value={name} placeholder={tt("pl. Anita Kovács", "e.g. Anita Kovacs")} onKeyDown={onEnter}
               onChange={(e) => setName(e.target.value)} />
             <p className="hint" style={{ marginTop: 6 }}>
               {tt("Ezzel a karakterrel posztolsz, csetelsz és játszol a jelenetekben. Az adatlapját később bármikor kitöltöd.",
@@ -8861,6 +9704,19 @@ ${cast
   )
   .join("")}
 
+KÖZVETLEN KAPCSOLATI DINAMIKA A POSZT SZERZŐJÉHEZ:
+${cast
+  .map(
+    (c) =>
+      relationshipBehaviorCard(
+        w,
+        c.id,
+        post.authorId
+      )
+  )
+  .filter(Boolean)
+  .join("\n") || "-"}
+
 ${repetitionGuard(
   w,
   cast.map((c) => c.id),
@@ -8920,6 +9776,17 @@ TERMÉSZETES SOCIAL MEDIA STÍLUS:
 - Egy visszafogott karakter ne váljon emoji-spammelővé.
 - Egy online aktív, fiatalos karakter használhasson természetes internetes nyelvet.
 - A kommentek ne legyenek egymással felcserélhetők: már a megfogalmazásból is érződjön, KI írta őket.
+
+KAPCSOLAT + TÖRTÉNET KÖTELEZŐEN HAT A KOMMENTRE:
+
+- A fenti PRIVÁT KARAKTERJÁTÉK-KONTEXTUST ténylegesen használd minden kommentelőnél.
+- Ha valaki jóban van a poszt szerzőjével, ne legyen indokolatlanul távolságtartó: természetesen jöhet támogatás, belsős hang, védelem, ugratás vagy közvetlenség.
+- Ha rosszban vannak, ne váljon hirtelen semleges rajongóvá: a feszültség, gúny, rivalizálás, szkepticizmus vagy ellenszenv jelenjen meg, ha a poszt ad rá alkalmat.
+- Crush/vonzalom esetén a figyelem, flört, féltékenység, kínos túlreagálás vagy birtoklás érződhet — de ne vallja be automatikusan.
+- Ha a karakter alapból flörtölős, és a célpont/helyzet indokolja, ténylegesen flörtölhet; ne lapítsd általános kedvességgé.
+- A karakterlap történetéből kiolvasható szervezeti/dojo-lojalitás és rivalizálás is számít. Például Cobra Kai karakter ne kezeljen automatikusan baráti semlegességgel egy Miyagi-Fang/Miyagi-Do/Eagle Fang riválist.
+- A személyes kapcsolat felülírhat egy csoportos rivalizálást, de a közös múlt akkor is színezze a hangot.
+- Ne mondd ki ezeket magyarázatként. A komment SZÖVEGÉBŐL érződjenek.
 
 FONTOS VÁLTOZATOSSÁG:
 
@@ -9138,7 +10005,12 @@ recordSocialEvent(
           kind: "event",
           source: "interaction",
           confidence: 0.95,
-          text: `${nameOfIn(n, p.authorId)} posztjára reagáltam`,
+          text: sysLangText(
+            n,
+            who,
+            `${nameOfIn(n, p.authorId)} posztjára reagáltam.`,
+            `I reacted to ${nameOfIn(n, p.authorId)}'s post.`
+          ),
         });
       }
     });
@@ -9275,12 +10147,123 @@ recordSocialEvent(
   applyChanges(n, out.changes);
   n.log = [...(out.events || []), ...n.log].slice(0, 30);
 }
+function socialInteractionInterest(
+  w,
+  actorId,
+  targetId
+) {
+  if (
+    !actorId ||
+    !targetId ||
+    actorId === targetId
+  ) {
+    return 0;
+  }
+
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target
+  ) {
+    return 0;
+  }
+
+  const rel =
+    getRel(
+      w,
+      actorId,
+      targetId
+    );
+
+  const score =
+    Number(
+      rel.score
+    ) || 0;
+
+  let interest =
+    Math.min(
+      34,
+      Math.abs(score) *
+        0.34
+    );
+
+  const bond =
+    String(
+      rel.bond ||
+      rel.type ||
+      ""
+    ).toLowerCase();
+
+  if (
+    /crush|rival|ellens|enemy|dating|járnak|spouse|házastárs|ex/.test(
+      bond
+    )
+  ) {
+    interest += 24;
+  }
+
+  if (
+    rel.mood ||
+    rel.hidden
+  ) {
+    interest += 8;
+  }
+
+  if (
+    ownStorySnippetAbout(
+      actor,
+      target
+    )
+  ) {
+    interest += 22;
+  }
+
+  const af =
+    factionFlags(actor);
+
+  const tf =
+    factionFlags(target);
+
+  if (
+    (
+      af.cobraKai &&
+      tf.miyagiFang
+    ) ||
+    (
+      af.miyagiFang &&
+      tf.cobraKai
+    )
+  ) {
+    interest += 26;
+  }
+
+  if (
+    characterIsFlirty(actor) &&
+    bondLooksRomantic(rel)
+  ) {
+    interest += 12;
+  }
+
+  return interest;
+}
+
 /*
- * FAIR COMMENT ACTIVITY
+ * FAIR + RELATIONSHIP-AWARE COMMENT ACTIVITY
  *
- * Hosszabb távon minden AI-karakter
- * hasonló mennyiségű kommentelési
- * lehetőséget kap.
+ * A fairness továbbra is számít, de a poszthoz
+ * ténylegesen kötődő barátok, crushok, riválisok
+ * és történeti ellenfelek nagyobb eséllyel reagálnak.
  */
 function fairCommentCast(w, targetId) {
   const cutoff =
@@ -9326,30 +10309,36 @@ function fairCommentCast(w, targetId) {
         c,
         recentComments,
         lastCommentAt,
+        interest:
+          socialInteractionInterest(
+            w,
+            c.id,
+            targetId
+          ),
         tie: Math.random(),
       };
     });
 
   chars.sort((a, b) => {
     /*
-     * Elsőként az legyen jelölt,
-     * aki az utóbbi 48 órában
-     * kevesebbet kommentelt.
+     * Kapcsolati/történeti relevancia + fairness együtt.
+     *
+     * Egy rivális vagy crush ne maradjon le csak azért,
+     * mert tegnap már kommentelt egyszer; ugyanakkor
+     * ugyanaz a karakter se uralja folyamatosan a feedet.
      */
-    if (
-      a.recentComments !==
-      b.recentComments
-    ) {
-      return (
-        a.recentComments -
-        b.recentComments
-      );
+    const ap =
+      a.recentComments * 18 -
+      a.interest;
+
+    const bp =
+      b.recentComments * 18 -
+      b.interest;
+
+    if (ap !== bp) {
+      return ap - bp;
     }
 
-    /*
-     * Döntetlennél az kerüljön előre,
-     * aki régebben kommentelt.
-     */
     if (
       a.lastCommentAt !==
       b.lastCommentAt
@@ -9422,6 +10411,19 @@ ${cast
       )
   )
   .join("")}
+
+KÖZVETLEN KAPCSOLATI DINAMIKA A KOMMENT SZERZŐJÉHEZ:
+${cast
+  .map(
+    (c) =>
+      relationshipBehaviorCard(
+        w,
+        c.id,
+        comment.authorId
+      )
+  )
+  .filter(Boolean)
+  .join("\n") || "-"}
 
 ${repetitionGuard(
   w,
@@ -10168,7 +11170,7 @@ function NotesStrip({ w, update, setErr, onOpenChat, jump, onRequestNoteReaction
             placeholder={tt("Egy gondolat, max pár szó…", "A thought, a few words max\u2026")} onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") saveMine(); }} />
           <div className="between" style={{ marginTop: 8 }}>
-            <span className="hint">{draft.length}/{NOTE_MAX} · {tt("egy nap után lejár", "expires after a day")}</span>
+            <span className="hint">{draft.length}/{NOTE_MAX} · {tt("24 óra után lejár", "expires after 24 hours")}</span>
             <div className="row" style={{ gap: 6 }}>
               {mine && <button className="btn tiny ghost" style={{ color: "var(--steel)" }}
                 onClick={() => { update((n) => setNote(n, w.meId, "")); setEditing(false); }}>{tt("Törlés", "Delete")}</button>}
@@ -11074,34 +12076,70 @@ const MEASURED = [
 const NO_LIMIT_UI = { name: 1, username: 1, birth: 1, height: 1, avatar: 1 };
 
 const FieldLimit = React.memo(function FieldLimit({ field, value }) {
+  const { tt, lang } = useLang();
+  const safeLang = asLang(lang);
+  const locale = safeLang === "en" ? "en" : "hu";
   const len = React.useMemo(() => cleanLen(value), [value]);
+
   if (NO_LIMIT_UI[field]) return null;
+
   if (isFree(field) && !CORE_CAP[field]) {
     return (
       <p className="hint" style={{ marginTop: 4, color: "var(--muted)" }}>
-        {len ? `${len.toLocaleString("hu")} karakter · ` : ""}teljes egészében átmegy
+        {len
+          ? tt(
+              `${len.toLocaleString("hu")} karakter · teljes egészében átmegy`,
+              `${len.toLocaleString("en")} characters · passed through in full`
+            )
+          : tt(
+              "teljes egészében átmegy",
+              "passed through in full"
+            )}
       </p>
     );
   }
+
   const cap = CORE_CAP[field] || fieldCap(field, true);
   if (!cap) return null;
+
   const over = len > cap;
   const pct = Math.min(100, Math.round((len / cap) * 100));
+
   return (
     <>
       <div className="bar" style={{ marginTop: 5, height: 3 }}>
-        <div className="bar-fill" style={{ left: 0, width: pct + "%", background: over ? "var(--gold)" : "var(--steel)" }} />
+        <div
+          className="bar-fill"
+          style={{
+            left: 0,
+            width: pct + "%",
+            background: over ? "var(--gold)" : "var(--steel)",
+          }}
+        />
       </div>
-      <p className="hint" style={{ marginTop: 4, color: over ? "var(--gold)" : "var(--muted)" }}>
-        {len.toLocaleString("hu")} / {cap.toLocaleString("hu")} karakter
-        {over ? ` — ${(len - cap).toLocaleString("hu")} nem fér be minden hívásba` : ""}
+
+      <p
+        className="hint"
+        style={{
+          marginTop: 4,
+          color: over ? "var(--gold)" : "var(--muted)",
+        }}
+      >
+        {len.toLocaleString(locale)} / {cap.toLocaleString(locale)}{" "}
+        {tt("karakter", "characters")}
+        {over
+          ? tt(
+              ` — ${(len - cap).toLocaleString("hu")} nem fér be minden hívásba`,
+              ` — ${(len - cap).toLocaleString("en")} may be left out of some calls`
+            )
+          : ""}
       </p>
     </>
   );
 });
 
 function BudgetMeter({ c, onBrief, setErr }) {
-  const { tt } = useLang();
+  const { tt, lang } = useLang();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const src = React.useMemo(
@@ -11184,7 +12222,9 @@ function BudgetMeter({ c, onBrief, setErr }) {
           {free.map((r) => (
             <div className="between" key={r.k} style={{ marginTop: 5 }}>
               <span style={{ fontSize: 12.5 }}>{tt(r.label, FIELD_LABELS_EN[r.k] || r.label)}</span>
-              <span className="handle mono">{r.raw.toLocaleString("hu")} ✓</span>
+              <span className="handle mono">
+                {r.raw.toLocaleString(asLang(lang) === "en" ? "en" : "hu")} ✓
+              </span>
             </div>
           ))}
 
@@ -11193,15 +12233,17 @@ function BudgetMeter({ c, onBrief, setErr }) {
             <div className="between" key={r.k} style={{ marginTop: 5 }}>
               <span style={{ fontSize: 12.5, color: r.over ? "var(--gold)" : "var(--bone)" }}>{tt(r.label, FIELD_LABELS_EN[r.k] || r.label)}</span>
               <span className="handle mono">
-                {r.raw.toLocaleString("hu")} / {r.cap.toLocaleString("hu")}
+                {r.raw.toLocaleString(asLang(lang) === "en" ? "en" : "hu")} / {r.cap.toLocaleString(asLang(lang) === "en" ? "en" : "hu")}
                 {r.over ? tt(` · ${r.over.toLocaleString("hu")} kimarad`, ` · ${r.over.toLocaleString("en")} left out`) : " ✓"}
               </span>
             </div>
           ))}
 
           <p className="hint" style={{ marginTop: 10 }}>
-            A túlcsorduló mezőkből az elejét, a közepét és a végét is elviszi, tehát az egész
-            terjedelemből kap ízelítőt — de a legfontosabbat érdemes a mező elejére tenni.
+            {tt(
+              "A túlcsorduló mezőkből az elejét, a közepét és a végét is elviszi, tehát az egész terjedelemből kap ízelítőt — de a legfontosabbat érdemes a mező elejére tenni.",
+              "For overflowing fields, the AI receives the beginning, middle and end, so it still gets a sample from the whole text — but the most important information is best placed near the start."
+            )}
           </p>
         </>
       )}
@@ -11256,7 +12298,10 @@ function CharForm({ initial, onSave, onClose, onDelete, setErr, w, isNew }) {
       const out = await askWorldJSON(w, engineFor(w), `Készíts egy teljes karakter-adatlapot ehhez a leíráshoz: "${idea}"
 ${wy ? `A világban most ${wy}-t írunk, a születési dátum ehhez képest legyen életszerű (formátum: "2008. március 14.").` : ""}
 A "bio" mező egy rövid, nyilvános Instagram-stílusú bemutatkozás, amit MÁSOK is látnak — ez csak dísz, ne áruljon el titkot.
-Formátum (minden mező szöveg, magyarul, a titkok legyenek érdekesek és kijátszhatók):
+${worldLanguage(w, w && w.meId) === "en"
+  ? "All user-visible generated profile fields must be in English."
+  : "Minden generált, felhasználónak látható profilmező magyar legyen."}
+Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók):
 {"name":"","nick":"","username":"","birth":"","gender":"","orientation":"","height":"","job":"","city":"","bio":"","looks":"","personality":"","traits":"","speech":"","voice":"két-három tipikus mondat tőle, idézőjelben","goals":"","fears":"","likes":"","secrets":"","backstory":""}`);
       setC((p) => ({ ...p, ...out }));
     } catch (e) { setErr((e && e.message) || tt("A generálás nem sikerült. Próbáld újra.", "Generation failed. Try again.")); }
@@ -11299,9 +12344,9 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
   };
 
   return (
-    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="sheet">
-        <div className="between">
+    <div className="scrim char-edit-scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="sheet char-edit-sheet">
+        <div className="between char-edit-header">
           <h2 style={{ fontSize: 20 }}>{initial.id ? tt("Karakter szerkesztése", "Edit character") : tt("Új karakter", "New character")}</h2>
           <button className="btn tiny ghost" onClick={onClose}><X size={14} /></button>
         </div>
@@ -11396,7 +12441,10 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
               <p className="hint" style={{ marginTop: 6 }}>
                 {ageOf(c, w) ? tt(`${ageOf(c, w)} éves`, `${ageOf(c, w)} years old`) : ""}
                 {ageOf(c, w) && zodiac(c.birth) ? " · " : ""}
-                {zodiac(c.birth)}
+                {localizedZodiac(
+                  zodiac(c.birth),
+                  worldLanguage(w, w && w.meId)
+                )}
                 {!wy && c.birth ? tt(" — add meg a Világ fülön, milyen évet írunk", " — set the current year on the World tab") : ""}
               </p>
             )}
@@ -11412,7 +12460,7 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
                   "Bots, players and side characters all appear here. Anyone not yet in the world — father, mother, sibling, ex, teacher — you can add right here. A family bond stays permanent, but the relationship itself can still be hateful: drag the slider into the negative.")}
             </p>
 
-            <div className="row" style={{ gap: 8, marginTop: 8, alignItems: "flex-start" }}>
+            <div className="row char-edit-add-person" style={{ gap: 8, marginTop: 8, alignItems: "flex-start" }}>
               <input className="i" style={{ flex: 1.1 }} value={nx} placeholder={tt("Új személy neve — pl. Cole Márk", "New person's name — e.g. Cole Mark")}
                 onChange={(e) => setNx(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addPerson(); }} />
               <input className="i" style={{ flex: 1 }} value={nxNote} placeholder={tt("ki ő? — pl. az apja, alkoholista", "who are they? — e.g. their father, an alcoholic")}
@@ -11430,7 +12478,7 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
               const r = rels[o.id] || { score: 0, hidden: "", bond: "", fixed: false };
               const fresh = newPeople.some((p) => p.id === o.id);
               return (
-                <div key={o.id} style={{ marginTop: 12 }}>
+                <div key={o.id} className="char-edit-rel-card" style={{ marginTop: 12 }}>
                   <div className="between" style={{ marginBottom: 4 }}>
                     <span style={{ fontSize: 13 }}>
                       {o.id === w.meId ? tt(`${o.name} (te)`, `${o.name} (you)`) : o.name}
@@ -11744,7 +12792,10 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
 
               {zodiac(c.birth) ? (
                 <span>
-                  · {zodiac(c.birth)}
+                  · {localizedZodiac(
+                    zodiac(c.birth),
+                    worldLanguage(w, w && w.meId)
+                  )}
                 </span>
               ) : null}
             </div>
@@ -12481,11 +13532,27 @@ ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` :
 ${cast.slice(0, 3).map(voiceCard).join("")}
 ${repetitionGuard(w, cast.map((c) => c.id), "jelenetfolytatás")}
 
-Írd meg a folytatást 3-5 mozzanatban, minden mozzanat 2-4 jól megírt mondatból. Ne legyenek rövid, lapos, sablonos sorok, és ne ismételd ugyanazt a ritmust vagy a szókincset.
-Mindenki a SAJÁT hangmintája szerint szólaljon meg — a mondataik ne legyenek felcserélhetők, ne legyenek gépiesen egyformák, és ne hangozzanak úgy, mintha egyetlen, közös beszédmód lenne.
-Ha ${w.player.name} karakterhez beszélnek, tegezzék, E/2-ben; magukról E/1-ben beszélnek. Feszes jelenet legyen: párbeszéd és cselekvés, nem összefoglaló. A párbeszédek legyenek természetesek, hosszabbak, színesek, irodalmibbak, magyarul hibátlanul megfogalmazva.
-A "narrator" a jelenet leírása (mit látni, mit hallani, milyen a hangulat) — legfeljebb egy ilyen legyen, és ne legyen semleges, hanem érzékletes, pontos, könyvesen megírt.
-${w.player.name} helyett soha ne beszélj és ne cselekedj.
+ROLEPLAY FOLYTATÁS — FONTOS:
+
+- Írd meg a folytatást 3-5 természetes mozzanatban. Egy mozzanat lehet beszéd, cselekvés vagy rövid narrátori átvezetés.
+- Ne kötelezően minden jelenlévő szereplő kapjon sort minden körben. Az szólaljon meg vagy cselekedjen, akinek ebben a pillanatban természetes oka van rá.
+- Nagyobb társas jelenetben/buliban a karakterek EGYMÁSSAL is beszéljenek és reagáljanak egymásra; ne mindenki a játékos körül forogjon.
+- Tartsd fejben, hogy minden felsorolt szereplő jelen van akkor is, ha ebben a körben nem kerül fókuszba.
+- A korábbi történések térbeli és időbeli folytonossága maradjon meg. Ne teleportáljon senki, ne találj ki hirtelen új érkezést/távozást, ha azt a jelenet nem alapozta meg.
+- Ne reseteld a kapcsolatokat minden kör elején. A jó viszony legyen ténylegesen közvetlenebb/melegebb; a rossz viszony legyen feszültebb/élesebb; crush/vonzalom színezze a figyelmet, zavart, féltékenységet vagy flörtöt; a flörtölős karakter ténylegesen flörtölhet, ha természetes.
+- A karakterlap TÖRTÉNETÉBŐL eredő lojalitás, ellenségeskedés, dojo- vagy szervezeti rivalizálás aktív marad. Például Cobra Kai ↔ Miyagi-Fang/Miyagi-Do/Eagle Fang ellentét ne tűnjön el semleges viselkedésbe, hacsak a személyes kapcsolat ezt hitelesen felül nem írja.
+- Mindenki a SAJÁT hangmintája szerint szólaljon meg. A mondataik ne legyenek felcserélhetők, gépiesen egyformák vagy ugyanazon hangon megírva.
+- A párbeszéd és a cselekvés vigye a jelenetet, ne összefoglaló.
+- A szereplők kezdeményezhetnek, megszakíthatják egymást, kerülhetnek valakit, provokálhatnak, flörtölhetnek, összeveszhetnek vagy elterelhetik a témát, ha ez a személyiségükből és a helyzetből következik.
+- A "narrator" csak a jelenet érzékelhető leírása: mit látni, hallani, milyen a tér és a hangulat. Legfeljebb egy narrator-turn legyen ebben a körben.
+- A szereplők belső érzései megjelenhetnek a roleplay prózában, de ne adj nekik olyan TUDÁST, amit a saját karakterük nem szerezhetett meg.
+- Ne zárd le automatikusan a jelenetet; azt csak a külön "Jelenet lezárása" funkció teszi.
+- ${w.player.name} helyett SOHA ne beszélj, ne dönts és ne cselekedj. Ha az ő reakciója kellene a folytatáshoz, állj meg előtte.
+- Ha ${w.player.name} karakterhez beszélnek, E/2-ben, tegezve szóljanak hozzá; magukról E/1-ben beszéljenek.
+${worldLanguage(w, w.meId) === "en"
+  ? "- Every user-visible turn, narration, memory, mood, reason and event summary in the JSON must be natural English."
+  : "- Minden felhasználónak látható turn, narráció, memória, mood, indok és event-összefoglaló természetes, hibátlan magyar legyen."}
+
 Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","kind":"speech vagy action","text":"..."}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":10,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék"}],
@@ -12661,6 +13728,11 @@ JELENET: ${scene.title}
 ${log}
 
 Zárd le a jelenetet. Foglald össze 2-3 mondatban, mi történt és mi változott, majd mondd meg, ki mit visz tovább magával.
+- A kapcsolati változások a már meglévő viszonyból és a mostani eseményből következzenek; ne reseteld a jó/rossz/crush/rivális dinamikát.
+- A történetből eredő lojalitások és rivalizálások a lezárásban is számítsanak.
+${worldLanguage(w, w.meId) === "en"
+  ? "- summary, memories, mood and why must all be English."
+  : "- a summary, memories, mood és why mezők mind magyarul legyenek."}
 Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}],"changes":[{"a":"aki érez","b":"aki iránt","delta":0,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék"}]}${TAIL}`);
 
       patch((s, n) => {
@@ -13051,6 +14123,15 @@ HA ${w.player.name} MOST ÍRT:
 - Az egyik AI reagálhat ${w.player.name} üzenetére, a következő pedig már az előző AI reakciójára.
 - Az AI-tagok egymással is beszéljenek, ne csak a játékos körül forogjon minden.
 - ${w.player.name} helyett SOHA ne írj választ, reakciót vagy cselekvést.
+
+KAPCSOLATOK ÉS TÖRTÉNET A GROUP CHATBEN:
+
+- A fenti PRIVÁT KARAKTERJÁTÉK-KONTEXTUST ténylegesen alkalmazd minden megszólalónál.
+- A jóban lévő karakterek lehetnek közvetlenebbek, belsős poénosabbak, támogatóbbak vagy védelmezőbbek.
+- A rosszban lévők ne beszéljenek egymással automatikusan úgy, mint semleges haverok: jöhet feszültség, gúny, versengés, kerülés vagy támadás.
+- Crush/vonzalom és flörtölős személyiség természetesen látszódhat a szóválasztásban, féltékenységben, ugratásban vagy figyelemben.
+- A történetből eredő lojalitásokat és rivalizálásokat tartsd aktívan; például dojo/szervezeti ellenfelek viselkedése ne resetelődjön semlegesre.
+- A személyes kapcsolat felülírhat egy csoportos rivalizálást, de csak ha a karakterlap és a jelenlegi kapcsolat tényleg alátámasztja.
 
 VALÓDI GROUP CHAT DINAMIKA:
 
@@ -13528,6 +14609,13 @@ Kapcsolat: ${rel.score}${
           : ""
       }
 
+KÖTELEZŐ VISELKEDÉSI IRÁNY A KAPCSOLATOTOK ALAPJÁN:
+${relationshipBehaviorCard(
+  requestWorld,
+  c.id,
+  requestWorld.meId
+)}
+
 Amire emlékszel:
 ${selfMemoryForPrompt(
   requestWorld,
@@ -13550,6 +14638,12 @@ ${chatEmojiGuard(
   c.id
 )}
 
+${dmPresenceGuardInstruction(
+  requestWorld,
+  c.id,
+  hist
+)}
+
 PRIVÁT CHAT SZABÁLYOK:
 
 - Most KÖZVETLENÜL a játékos legutóbbi üzenetére válaszolj.
@@ -13567,6 +14661,11 @@ PRIVÁT CHAT SZABÁLYOK:
 - Ha a karakter természetesen használ emojit, használhatsz valódi emojit is.
 - Ha nem használ emojit, ne erőltesd.
 - Ne legyél udvarias asszisztens.
+- A kapcsolat pontszáma, bondja, aktuális moodja, rejtett érzése és a karakter története KÖTELEZŐEN hasson a hangodra.
+- Jó viszonynál ne légy mesterségesen hideg; rossz viszonynál ne légy mesterségesen kedves.
+- Crushnál/vonzalomnál a viselkedésedből érződjön a plusz figyelem, zavar, féltékenység, flört vagy ragaszkodás, ha rád illik — ne mondd ki sablonosan.
+- Ha a személyiséged flörtölős, megfelelő helyzetben ténylegesen flörtölj.
+- A történetedben szereplő lojalitások és rivalizálások is aktívak maradnak.
 - Ne írj a játékos helyett.
 - Magadról E/1-ben beszélj.
 - ${requestWorld.player.name} karaktert E/2-ben, tegezve szólítsd meg.
@@ -13665,6 +14764,14 @@ Formátum:
         reply
       );
 
+    reply =
+      sanitizePhoneDm(
+        requestWorld,
+        c.id,
+        reply,
+        hist
+      );
+
     if (!reply) {
       /*
        * Ha egy emoji-only válasz teljesen
@@ -13689,6 +14796,18 @@ TE MOST ${c.name.toUpperCase()} VAGY.
 
 Írj egy rövid, karakterhű privát chatválaszt
 ${requestWorld.player.name} legutóbbi üzenetére.
+
+${relationshipBehaviorCard(
+  requestWorld,
+  c.id,
+  requestWorld.meId
+)}
+
+${dmPresenceGuardInstruction(
+  requestWorld,
+  c.id,
+  hist
+)}
 
 SZIGORÚ SZABÁLY:
 - EGYETLEN EMOJIT SE használj.
@@ -13716,6 +14835,14 @@ Formátum:
             " "
           )
           .trim();
+
+      reply =
+        sanitizePhoneDm(
+          requestWorld,
+          c.id,
+          reply,
+          hist
+        );
     }
 
     if (!reply) {
@@ -14682,16 +15809,63 @@ const BRIEF_SYS = `You compress character sheets for roleplay. Keep the characte
 The result must be practical for another AI to act as the character without flattening nuance.`;
 
 async function genBrief(c) {
+  const lang =
+    asLang(CURRENT_LANG);
+
+  const en =
+    lang === "en";
+
+  const labels = en
+    ? {
+        personality: "PERSONALITY",
+        secrets: "SECRETS",
+        backstory: "BACKSTORY",
+        extra: "OTHER IMPORTANT INFO",
+      }
+    : {
+        personality: "SZEMÉLYISÉG",
+        secrets: "TITKOK",
+        backstory: "HÁTTÉRTÖRTÉNET",
+        extra: "EGYÉB",
+      };
+
   const src = FREE_KEYS
     .map((k) => {
       const t = clean(c[k]);
       if (!t) return "";
-      const label = { personality: "SZEMÉLYISÉG", secrets: "TITKOK", backstory: "HÁTTÉRTÖRTÉNET", extra: "EGYÉB" }[k];
+
+      const label =
+        labels[k] ||
+        k.toUpperCase();
+
       return `### ${label}\n${t.slice(0, 45000)}`;
     })
-    .filter(Boolean).join("\n\n");
+    .filter(Boolean)
+    .join("\n\n");
 
-  const out = await askJSON(BRIEF_SYS, `Ez ${c.name} karakterlapja:
+  const prompt = en
+    ? `This is ${c.name}'s character sheet:
+
+${src}
+
+Compress it to at most ${briefTarget()} characters. Give roughly half to two-thirds of the space to PERSONALITY and BACKSTORY — those are the two most important sections.
+
+Structure it like this:
+
+PERSONALITY — the fullest section. Who they really are, their contradictions, what sets them off, what softens them, how they behave under pressure, what they do when hurt, and what they are like when nobody is watching. Keep the darker and more difficult parts too.
+
+BACKSTORY — the turning points that still affect them now: what happened, who did what, what they carried away from it, what they lie to themselves about. Keep concrete events instead of flattening them into generalizations.
+
+SECRETS — what they hide, who knows, and what could happen if it came out.
+
+HOW THEY SPEAK — sentence length, vocabulary, humor, when they go quiet, plus 3-5 characteristic example lines. Example lines are style reference, not future dialogue templates.
+
+IMPORTANT PEOPLE — who matters to them and what they feel toward them.
+
+Dense, factual prose, not an essay. Do not praise, judge or sanitize them.
+Return JSON only:
+{"brief":"compressed profile in English"}`
+    : `Ez ${c.name} karakterlapja:
 
 ${src}
 
@@ -14710,13 +15884,32 @@ mit vitt el belőle, mit hazudik róla magának. A konkrét eseményeket tartsd 
 TITKAI — mit rejteget, ki tud róla, mi történne, ha kiderülne.
 
 HOGYAN BESZÉL — mondathossz, szavajárás, min viccelődik, mikor hallgat el, plusz 3-5
-jellemző mondat tőle szó szerint.
+jellemző mondat tőle. Ezek csak stílusminták, nem később újrahasználandó kész párbeszédek.
 
 FONTOS EMBEREK — kik ők neki, és mit érez irántuk.
 
 Sűrű, tényszerű mondatok, nem esszé. Ne dicsérd, ne ítéld meg, ne szépítsd.
-Formátum: {"brief":"a kivonat"}`, { language: asLang(CURRENT_LANG) });
-  return out && out.brief ? String(out.brief).slice(0, briefTarget() + 800) : "";
+Csak JSON:
+{"brief":"a kivonat magyarul"}`;
+
+  const out =
+    await askJSON(
+      BRIEF_SYS,
+      prompt,
+      {
+        language: lang,
+      }
+    );
+
+  return out &&
+    out.brief
+    ? String(
+        out.brief
+      ).slice(
+        0,
+        briefTarget() + 800
+      )
+    : "";
 }
 
 /* Egy bot magától ír privátban. */
@@ -14801,6 +15994,13 @@ ${rel.score}${
         : ""
     }
 
+KÖTELEZŐ VISELKEDÉSI IRÁNY A KAPCSOLATOTOK ALAPJÁN:
+${relationshipBehaviorCard(
+  w,
+  bot.id,
+  w.meId
+)}
+
 AMIRE EMLÉKSZEL:
 ${selfMemoryForPrompt(
   w,
@@ -14831,6 +16031,12 @@ ${repetitionGuard(
 ${chatEmojiGuard(
   w,
   bot.id
+)}
+
+${dmPresenceGuardInstruction(
+  w,
+  bot.id,
+  hist
 )}
 
 PRIVÁT ÜZENET SZABÁLYOK:
@@ -14910,6 +16116,11 @@ TERMÉSZETES CHATSTÍLUS:
 - Ne legyen minden spontán DM flört.
 - Ne legyen minden spontán DM mély érzelmi vallomás.
 - A konkrét szándék mindig abból következzen, aki vagy és ami a világban éppen történik.
+- A kapcsolat pontszáma, bondja, moodja, rejtett érzése és a történeted ténylegesen irányítsa a viselkedést.
+- Jó viszonynál természetesebb lehet a közvetlenség, bizalom, védelem vagy ugratás; rossz viszonynál a feszültség, gúny, türelmetlenség vagy rivalizálás.
+- Crush/vonzalom esetén a plusz figyelem, flört, zavar, féltékenység vagy birtoklás megjelenhet, ha karakterhű, anélkül hogy mindent kimondanál.
+- Ha alapból flörtölős vagy, megfelelő helyzetben ténylegesen flörtölj.
+- A történetedből származó lojalitásokat és rivalizálásokat ne felejtsd el; dojo/szervezeti ellenféllel ne viselkedj automatikusan semleges idegenként.
 
 - Használhatsz kisbetűt, NAGYBETŰT, szlenget, rövidítéseket, internetes nyelvet, elnyújtott szavakat, több kérdőjelet vagy felkiáltójelet, ha ez a karaktered természetes chatstílusa.
 - Nem kell minden mondatnak szabályos nagybetűvel indulnia.
@@ -15185,6 +16396,8 @@ EMOJI-REAKCIÓ:
 PRIVÁT VÁLASZ:
 
 - Olyan legyen, mint egy valódi telefonos DM a note-ra reagálva.
+- A reagáló karakter saját kapcsolatát a játékossal és a saját történetét használd: jó viszony, rossz viszony, crush, féltékenység, flörtölős személyiség vagy történeti rivalizálás ténylegesen látszódjon a hangon.
+- Ez távoli telefonos DM. Ne találd ki, hogy a karakter már a játékos ajtajánál, házánál, lent vagy kint áll, hacsak a note vagy egy aktuális közös jelenet ezt kifejezetten nem alapozza meg.
 - Legyen rövid és spontán.
 - Általában 1-3 rövid mondat vagy üzenetrész elég.
 - Akár néhány szó, kérdés vagy rövid beszólás is lehet.
@@ -15339,6 +16552,13 @@ function ensureSocialSimulationState(w) {
   if (!w || typeof w !== "object") {
     return w;
   }
+
+  /*
+   * A Notes ténylegesen csak 24 óráig él.
+   * Nem csak a UI rejti el: a lejárt elemeket
+   * a világ állapotából is kiszedjük.
+   */
+  pruneExpiredNotes(w);
 
   /*
    * Strukturált társadalmi események.
@@ -17259,7 +18479,7 @@ function applyGossipReactions(n,postId,cast,out){
   });
   (out&&Array.isArray(out.dms)?out.dms:[]).slice(0,3).forEach((item)=>{
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text||!n.meId)return;
-    const raw=cleanGeneratedUtterance(n,who,item.text,320), body=enforceChatEmojiVariety(n,who,raw);if(!body)return;
+    const raw=cleanGeneratedUtterance(n,who,item.text,320), body=sanitizePhoneDm(n,who,enforceChatEmojiVariety(n,who,raw),post.text||"");if(!body)return;
     const ck=chatKey(n.meId,who);n.chats[ck]=[...(n.chats[ck]||[]),{from:"them",text:body,ts:now(),language:worldLanguage(n,n.meId)}];
     const a=charById(n,who);pushNote(n,n.meId,{icon:"✉️",text:sysLangText(n,n.meId,`${a?a.name:"Valaki"} írt neked a pletyka után.`,`${a?a.name:"Someone"} messaged you after the gossip post.`),link:{type:"dm",id:who}});
   });
@@ -22279,10 +23499,15 @@ async function runSimulationAction(view, update, action) {
           );
 
         const msg =
-          enforceChatEmojiVariety(
+          sanitizePhoneDm(
             n,
             who,
-            rawMsg
+            enforceChatEmojiVariety(
+              n,
+              who,
+              rawMsg
+            ),
+            liveNote.text || ""
           );
 
         if (!msg) return;
@@ -22919,10 +24144,31 @@ if (targetNote) {
       );
 
     const txt =
-      enforceChatEmojiVariety(
+      sanitizePhoneDm(
         view,
         bot.id,
-        rawTxt
+        enforceChatEmojiVariety(
+          view,
+          bot.id,
+          rawTxt
+        ),
+        (
+          view.chats[
+            chatKey(
+              view.meId,
+              bot.id
+            )
+          ] || []
+        )
+          .slice(-14)
+          .map(
+            (m) =>
+              m &&
+              m.text
+                ? m.text
+                : ""
+          )
+          .join("\n")
       );
 
     update((n) => {
