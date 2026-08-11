@@ -9016,6 +9016,12 @@ MATURE 18+ CONTENT MODE — ${channelLabel}:
 - The tone may be clearly adult, rougher, darker and less sanitized when that fits the characters and situation.
 - Strong profanity, adult humor, alcohol/drug references, threats, toxic dynamics, manipulation, jealousy, obsession, possessiveness, violence, fear and other mature story themes are allowed when character-accurate.
 - Romance and attraction may be more intense, direct, suggestive, sensual or sexually charged when it naturally follows from the relationship.
+- IMPORTANT: adult AI characters are allowed to TAKE ROMANTIC INITIATIVE. They do not have to wait for the player to make every first move.
+- When character-accurate and mutually welcome, an AI may be the one who moves closer, initiates a kiss, kisses back more intensely, starts making out, asks the other person to come somewhere private, openly admits desire, or initiates a non-graphic transition toward adult intimacy.
+- Do not make romantic initiative mechanically rare just because the player has not explicitly started it. A bold, flirtatious, impulsive, dominant, deeply attracted or established-partner character should be capable of making the first move.
+- The player still controls the player's own character. Never narrate the player's consent, reciprocal kiss, undressing, sexual action or acceptance for them. If the AI initiates something that requires the player's response, perform the AI's move and STOP before deciding the player's reaction.
+- Consent must remain meaningful. Obsession, jealousy, possessiveness, dominance or a power imbalance never count as consent by themselves.
+- If the other character has already clearly reciprocated and the scene naturally escalates, the AI may continue initiating within the established consent and relationship.
 - Do NOT turn every interaction sexual. Personality, relationship, current mood, history, power dynamics and consent still control the scene.
 - Never override a character's established boundaries or personality merely because Mature mode is enabled.
 - No explicit pornographic sexual detail. When intimacy would become graphically sexual, keep it non-graphic or transition naturally with a fade-to-black / implied continuation.
@@ -9033,6 +9039,12 @@ MATURE 18+ TARTALMI MÓD — ${channelLabel}:
 - A hangvétel lehet egyértelműen felnőttesebb, nyersebb, sötétebb és kevésbé steril, ha ez illik a karakterekhez és a helyzethez.
 - Erősebb káromkodás, felnőtt humor, alkohol/drog mint történeti elem, fenyegetés, toxikus dinamika, manipuláció, féltékenység, megszállottság, birtoklás, erőszak, félelem és más mature témák megjelenhetnek, ha karakterhűek.
 - A romantika és vonzalom lehet intenzívebb, direktebb, kétértelműbb, érzékibb vagy szexuálisan feszültebb, ha természetesen következik a kapcsolatból.
+- FONTOS: a felnőtt AI-karakterek KEZDEMÉNYEZHETNEK romantikusan. Nem kell mindig arra várniuk, hogy a játékos tegye meg az első lépést.
+- Ha karakterhű és kölcsönösen kívánatos a helyzet, az AI lehet az, aki közelebb lép, megpróbál megcsókolni valakit, intenzívebben visszacsókol, csókolózást/making outot kezdeményez, félrevonulást javasol, nyíltabban kimutatja a vágyát, vagy nem részletező módon felnőtt intimitás felé viszi a helyzetet.
+- Ne legyen mesterségesen ritka a romantikus kezdeményezés csak azért, mert a játékos még nem kezdte el. Egy merész, flörtölős, impulzív, domináns, erősen vonzódó vagy már intim kapcsolatban lévő karakter ténylegesen teheti meg az első lépést.
+- A játékos továbbra is a SAJÁT karakterét irányítja. SOHA ne írd le helyette, hogy beleegyezik, visszacsókol, levetkőzik, szexuális cselekvést végez vagy elfogad valamit. Az AI kezdeményezheti a mozdulatot, de ahol a játékos reakciója szükséges, ÁLLJ MEG előtte.
+- A beleegyezés maradjon valódi. Megszállottság, féltékenység, birtoklás, dominancia vagy erőfölény önmagában soha nem jelent beleegyezést.
+- Ha a másik fél már egyértelműen viszonozta a közeledést, és a jelenet természetesen eszkalálódik, az AI tovább is kezdeményezhet a kialakult kölcsönösségen belül.
 - NE váljon minden interakció szexuálissá. A személyiség, kapcsolat, aktuális mood, közös történet, erőviszonyok és beleegyezés továbbra is meghatározó.
 - A Mature mód miatt soha ne írj felül egy karakterhez tartozó határt vagy személyiséget.
 - Explicit pornográf szexuális részleteket ne írj. Ha az intimitás grafikusan szexuálissá válna, maradjon nem részletező, vagy természetesen válts fade-to-black / utalásos folytatásra.
@@ -19331,6 +19343,7 @@ function SceneNew({ w, onClose, onCreate, setErr }) {
 
 Találj ki egy jelenetet ${ids.length ? "ezekkel a szereplőkkel: " + cast.map((c) => c.name).join(", ") : "a világ szereplőivel"}.
 Legyen benne feszültség vagy tét, és kapcsolódjon ahhoz, ami mostanában történt.
+Ha a kiválasztott felnőtt szereplők között már van valódi vonzalom/crush/intim kapcsolat, a jelenet ötlete természetesen adhat alkalmat arra is, hogy valamelyik AI-karakter maga kezdeményezzen romantikus közeledést vagy csókot. Ne erőltesd, ha a kapcsolatok ezt nem támasztják alá.
 
 ${matureContentInstruction(
   w,
@@ -19562,6 +19575,10 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - Mindenki a SAJÁT hangmintája szerint szólaljon meg. A mondataik ne legyenek felcserélhetők, gépiesen egyformák vagy ugyanazon hangon megírva.
 - A párbeszéd és a cselekvés vigye a jelenetet, ne összefoglaló.
 - A szereplők kezdeményezhetnek, megszakíthatják egymást, kerülhetnek valakit, provokálhatnak, flörtölhetnek, összeveszhetnek vagy elterelhetik a témát, ha ez a személyiségükből és a helyzetből következik.
+- ROMANTIKUS KEZDEMÉNYEZÉS: ha a karakterlap, kapcsolat, vonzalom és az aktuális helyzet indokolja, az AI ne csak reagáljon a játékos közeledésére. Ő maga is tehet első lépést: közelebb mehet, megérintheti a másik kezét/arcát karakterhű módon, megpróbálhat csókot kezdeményezni, viszonzott vonzalomnál csókolózást kezdeményezhet, vagy Mature 18+ módban felnőtt szereplők között nem részletező intimebb folytatást indíthat.
+- A romantikus kezdeményezés NEM kötelező minden vonzalomnál és ne legyen random. A merészebb/flörtölősebb/dominánsabb/impulzívabb karakterek könnyebben teszik meg az első lépést; a félénkebb, bizalmatlanabb vagy visszafogottabb karakterekhez lassabb kezdeményezés illik.
+- Ha az AI a JÁTÉKOS karakterével kezdeményez csókot vagy intimebb lépést, csak a saját karakter mozdulatát írd le. A játékos válaszát soha ne döntsd el helyette; hagyj neki valódi lehetőséget reagálni.
+- Obsessed/possessive karakter lehet intenzívebb, féltékenyebb és kezdeményezőbb, de a megszállottság nem írja felül a beleegyezést.
 - A "narrator" csak a jelenet érzékelhető leírása: mit látni, hallani, milyen a tér és a hangulat. Legfeljebb egy narrator-turn legyen ebben a körben.
 - A szereplők belső érzései megjelenhetnek a roleplay prózában, de ne adj nekik olyan TUDÁST, amit a saját karakterük nem szerezhetett meg.
 - Ha a jelenetben TÉNYLEG megtörténik megfigyelhető romantikus/szaftos esemény — például csók, csókolózás/making out, nyilvános kavarás/hookup, egyértelmű flört, megcsalás vagy lebukás — azt az "events" tömbben külön, tényszerű eseményként is rögzítsd a konkrét érintettekkel. Ne puhítsd "volt köztük valami feszültség" típusú homályos összefoglalássá, ha konkrétan csók történt.
@@ -23481,6 +23498,8 @@ PRIVÁT ÜZENET SZABÁLYOK:
 - Az ok lehet egészen hétköznapi is.
 - Nem kell minden spontán DM mögé nagy történés, konfliktus vagy dráma.
 - Lehet, hogy csak eszedbe jutott valami, láttál valamit, kérdeznél valamit, átküldenél egy reakciót, piszkálnád, flörtölnél vele vagy akarsz tőle valamit.
+- Ha köztetek tényleges vonzalom/intim feszültség van, te is KEZDEMÉNYEZHETSZ: írhatsz direkt flörtöt, utalhatsz arra, hogy meg akarod csókolni, találkozót javasolhatsz, vagy Mature 18+ módban felnőtt szereplőként nem explicit módon jelezheted, hogy intimebb találkozást akarsz. Ne várj mindig arra, hogy a játékos hozza fel először.
+- A chat azonban továbbra is távoli chat: ne írd úgy, mintha fizikailag már megcsókoltad volna vagy hozzáértél volna, hacsak a jelenet szerint ténylegesen egy helyen vagytok.
 - Ne találj ki mesterséges drámát csak azért, hogy legyen üzenet.
 - Ne generálj üzenetet pusztán azért, mert eltelt valamennyi idő.
 - Ha nincs valódi, karakterhű okod írni, legyen "skip": true.
