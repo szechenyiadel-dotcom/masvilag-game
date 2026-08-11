@@ -3380,6 +3380,159 @@ function normalizedRelationshipChanges(
   return out;
 }
 
+const AUTO_EVOLVING_SOCIAL_BONDS = new Set([
+  "",
+  "Ellenség",
+  "Rivális",
+  "Ismerős",
+  "Barát",
+  "Közeli barát",
+  "Legjobb barát",
+]);
+
+function canonicalSocialBondFromScore(
+  score
+) {
+  const s =
+    Number(score) || 0;
+
+  if (s <= -70) {
+    return "Ellenség";
+  }
+
+  if (s <= -30) {
+    return "Rivális";
+  }
+
+  if (s < 25) {
+    return "Ismerős";
+  }
+
+  if (s < 55) {
+    return "Barát";
+  }
+
+  if (s < 80) {
+    return "Közeli barát";
+  }
+
+  return "Legjobb barát";
+}
+
+function isPermanentFamilyBond(
+  rel
+) {
+  if (!rel) return false;
+
+  const bond =
+    String(
+      rel.bond ||
+      rel.type ||
+      ""
+    );
+
+  return (
+    Boolean(rel.fixed) ||
+    FIXED_BONDS.includes(
+      bond
+    )
+  );
+}
+
+function evolvedBondForChange(
+  rel,
+  ch,
+  nextScore
+) {
+  /*
+   * Család mindig család marad.
+   */
+  if (
+    isPermanentFamilyBond(
+      rel
+    )
+  ) {
+    return {
+      bond:
+        rel.bond ||
+        rel.type ||
+        "",
+      changed: false,
+      source: "family-fixed",
+    };
+  }
+
+  const explicit =
+    String(
+      ch &&
+      ch.bond ||
+      ""
+    )
+      .trim()
+      .slice(
+        0,
+        40
+      );
+
+  /*
+   * Ha az AI konkrétan felismerte a bond-váltást,
+   * az mindig elsőbbséget élvez.
+   */
+  if (explicit) {
+    const changed =
+      explicit !==
+      String(
+        rel.bond ||
+        rel.type ||
+        ""
+      );
+
+    return {
+      bond: explicit,
+      changed,
+      source: "explicit",
+    };
+  }
+
+  const current =
+    String(
+      rel.bond ||
+      rel.type ||
+      ""
+    );
+
+  /*
+   * A sima social skála automatikusan is tud fejlődni/romlani,
+   * így Barát nem marad örökké Barát +95-nél vagy -80-nál.
+   *
+   * Romantikus, munkahelyi, mentor stb. bondot viszont nem
+   * találunk ki pusztán score-ból; ezekhez az AI explicit bond-váltása kell.
+   */
+  if (
+    AUTO_EVOLVING_SOCIAL_BONDS.has(
+      current
+    )
+  ) {
+    const next =
+      canonicalSocialBondFromScore(
+        nextScore
+      );
+
+    return {
+      bond: next,
+      changed:
+        next !== current,
+      source: "score-fallback",
+    };
+  }
+
+  return {
+    bond: current,
+    changed: false,
+    source: "preserve-specialized",
+  };
+}
+
 function applyChanges(
   n,
   changes
@@ -3414,29 +3567,45 @@ function applyChanges(
         ch.delta
       ) || 0;
 
+    const nextScore =
+      clamp(
+        r.score +
+        delta
+      );
+
+    const bondEvolution =
+      evolvedBondForChange(
+        r,
+        ch,
+        nextScore
+      );
+
+    const oldBond =
+      String(
+        r.bond ||
+        r.type ||
+        ""
+      );
+
     const patch = {
       score:
-        clamp(
-          r.score +
-          delta
-        ),
+        nextScore,
     };
 
     /*
-     * Állandó rokoni köteléket az AI nem írhat át.
-     * A score és mood viszont attól még változhat.
+     * A családi bond változatlan.
+     * Minden más bond változhat:
+     * - explicit AI döntéssel bármilyen történetileg indokolt irányba
+     * - egyszerű social bondnál score-alapú fallbackkel is.
      */
     if (
-      ch.bond &&
-      !r.fixed
+      !isPermanentFamilyBond(
+        r
+      ) &&
+      bondEvolution.bond
     ) {
       patch.bond =
-        String(
-          ch.bond
-        ).slice(
-          0,
-          40
-        );
+        bondEvolution.bond;
     }
 
     if (
@@ -3554,6 +3723,19 @@ function applyChanges(
               patch.mood ||
               r.mood ||
               "",
+            bond:
+              patch.bond ||
+              r.bond ||
+              r.type ||
+              "",
+            previousBond:
+              oldBond,
+            bondChanged:
+              Boolean(
+                bondEvolution.changed
+              ),
+            bondSource:
+              bondEvolution.source,
             why:
               patch.why ||
               "",
@@ -3574,7 +3756,10 @@ function applyChanges(
     if (
       !isHuman(n,a) &&
       isHuman(n,b) &&
-      delta
+      (
+        delta ||
+        bondEvolution.changed
+      )
     ) {
       const other =
         charById(
@@ -3592,6 +3777,21 @@ function applyChanges(
                   : ""
               );
 
+        const bondPart =
+          bondEvolution.changed
+            ? ` · ${
+                oldBond
+                  ? `${localizedBond(
+                      oldBond,
+                      CURRENT_LANG
+                    )} → `
+                  : ""
+              }${localizedBond(
+                bondEvolution.bond,
+                CURRENT_LANG
+              )}`
+            : "";
+
         const whyPart =
           why
             ? ` - ${why}`
@@ -3602,16 +3802,18 @@ function applyChanges(
           b,
           {
             icon:
-              moodEmoji(
-                delta
-              ),
+              delta
+                ? moodEmoji(
+                    delta
+                  )
+                : "🔗",
             translationKey:
               "relationshipDelta",
             params:{
               name:
                 other.name,
               delta:
-                `${delta > 0 ? "+" : ""}${delta}`,
+                `${delta ? `${delta > 0 ? "+" : ""}${delta}` : ""}${bondPart}`,
               why:
                 whyPart,
             },
@@ -3624,7 +3826,7 @@ function applyChanges(
                   name:
                     other.name,
                   delta:
-                    `${delta > 0 ? "+" : ""}${delta}`,
+                    `${delta ? `${delta > 0 ? "+" : ""}${delta}` : ""}${bondPart}`,
                   why:
                     whyPart,
                 }
@@ -3649,7 +3851,10 @@ function applyChanges(
     if (
       isHuman(n,a) &&
       !isHuman(n,b) &&
-      delta
+      (
+        delta ||
+        bondEvolution.changed
+      )
     ) {
       const other =
         charById(
@@ -3663,6 +3868,21 @@ function applyChanges(
             ? String(ch.why)
             : "";
 
+        const bondPart =
+          bondEvolution.changed
+            ? ` · ${
+                oldBond
+                  ? `${localizedBond(
+                      oldBond,
+                      CURRENT_LANG
+                    )} → `
+                  : ""
+              }${localizedBond(
+                bondEvolution.bond,
+                CURRENT_LANG
+              )}`
+            : "";
+
         const whyPart =
           why
             ? ` - ${why}`
@@ -3673,16 +3893,18 @@ function applyChanges(
           a,
           {
             icon:
-              moodEmoji(
-                delta
-              ),
+              delta
+                ? moodEmoji(
+                    delta
+                  )
+                : "🔗",
             translationKey:
               "yourRelationshipDelta",
             params:{
               name:
                 other.name,
               delta:
-                `${delta > 0 ? "+" : ""}${delta}`,
+                `${delta ? `${delta > 0 ? "+" : ""}${delta}` : ""}${bondPart}`,
               why:
                 whyPart,
             },
@@ -3695,7 +3917,7 @@ function applyChanges(
                   name:
                     other.name,
                   delta:
-                    `${delta > 0 ? "+" : ""}${delta}`,
+                    `${delta ? `${delta > 0 ? "+" : ""}${delta}` : ""}${bondPart}`,
                   why:
                     whyPart,
                 }
@@ -4236,7 +4458,7 @@ function BondPicker({ value, fixed, onChange, style }) {
         <optgroup label={tt("Rokoni kötelék — állandó, sosem változik", "Family bond — permanent, never changes")}>
           {FIXED_BONDS.map((b) => <option key={b} value={"fix:" + b}>{localizedBond(b, CURRENT_LANG)}</option>)}
         </optgroup>
-        <optgroup label={tt("Változó viszony — alakulhat a történettel", "Changeable bond — can evolve with the story")}>
+        <optgroup label={tt("Változó viszony — csak kiinduló állapot, később változhat", "Changeable bond — starting state only, can evolve later")}>
           {SOFT_BONDS.map((b) => <option key={b} value={"soft:" + b}>{localizedBond(b, CURRENT_LANG)}</option>)}
         </optgroup>
         <option value="egyeb">{tt("Egyéb — saját szöveggel", "Other — custom text")}</option>
@@ -7578,7 +7800,11 @@ A KAPCSOLAT EGYIRÁNYÚ — EZ FONTOS
 - A rokoni kötelék a kivétel: az tény, és mindkét irányban érvényes — de az érzések ilyenkor is külön alakulnak.
 - ÁLLANDÓ KÖTELÉK (rokonság, pl. anya, apa, testvér, unokatestvér): megmásíthatatlan tény. Sosem írhatod felül.
 - Egy rokoni kapcsolat lehet mélyen rossz: a kötelék ténye marad, miközben a score és a mood lehet nagyon negatív.
-- VÁLTOZÓ VISZONY (barát, ellenség, crush, exek stb.): ez alakulhat a történések hatására. Ha valóban megváltozik, a "changes" mezőben új "bond" értéket is adhatsz hozzá.
+- VÁLTOZÓ VISZONY (barát, ellenség, crush, exek stb.): ez NEM rögzített címke. A karakterlapon kézzel kiválasztott bond csak a KIINDULÓ állapot.
+- MINDEN valódi relationship change-nél gondold újra, hogy a jelenlegi bond még igaz-e. Ha már nem írja le hitelesen a kapcsolatot, KÖTELEZŐ új "bond" értéket adnod a "changes" elemben.
+- Példák: Ismerős → Barát → Közeli barát → Legjobb barát; Barát → Rivális/Ellenség; Crush → Kölcsönös crush/Járnak; Járnak → Exek; Rivális → Barát stb. Csak akkor válts, ha az események tényleg alátámasztják.
+- Ne ragaszkodj egy kézzel kiválasztott nem-rokoni bondhoz csak azért, mert korábban azt állította be a játékos.
+- KIVÉTEL: rokoni/családi bond SOHA nem változik más bonddá. Anya, apa, testvér, unokatestvér stb. mindig ugyanaz a családi tény marad; csak a score, mood és why változik.
 
 ÉRZELMI ÁLLAPOT ÉS DELTA — EZ A LEGFONTOSABB
 - Minden "changes" elemhez adj "mood" mezőt: néhány szó arról, hogy a szereplő MOST mit érez a másik iránt.
@@ -7773,7 +7999,11 @@ THE RELATIONSHIP IS ONE-DIRECTIONAL — THIS MATTERS
 - Never project a secret feeling onto the other person and never make it mutual on your own.
 - If a change is explicitly a one-sided internal feeling (for example a secret crush), you may mark it with "oneSided":true.
 - Family bonds are factual and permanent, but the directional score and mood may still become strongly positive or negative.
-- CHANGEABLE BOND (friend, enemy, crush, ex, etc.) may evolve from events. If it genuinely changes, you may add a new "bond" value in "changes".
+- Every NON-FAMILY bond selected in the character editor is only a STARTING STATE, never a permanent lock.
+- On every meaningful relationship change, reconsider whether the current bond still describes the relationship. If it no longer does, you MUST include the new "bond" in that "changes" entry.
+- Examples: Acquaintance → Friend → Close friend → Best friend; Friend → Rival/Enemy; Crush → Mutual crush/Dating; Dating → Exes; Rival → Friend, etc. Only change it when the actual story supports it.
+- Do not preserve a manually selected non-family bond merely because the player originally chose it.
+- EXCEPTION: family/kinship bonds never transform into another bond. Mother, father, sibling, cousin, etc. remain factual family labels; only score, mood and why can change.
 
 EMOTIONAL STATE AND DELTA — THIS IS THE MOST IMPORTANT PART
 - Give every "changes" entry a "mood" field describing what that person feels toward the other RIGHT NOW.
@@ -18846,7 +19076,35 @@ function commitForm(n, subjectId, relDrafts, newPeople) {
   Object.keys(relDrafts).forEach((otherId) => {
     const d = relDrafts[otherId];
     if (!d || otherId === subjectId) return;
-    setRel(n, subjectId, otherId, { score: d.score || 0, hidden: d.hidden || "", bond: d.bond || "", fixed: !!d.fixed });
+    const savedBond =
+      String(
+        d.bond || ""
+      );
+
+    /*
+     * Csak családi kötelék lehet fix.
+     * Minden más kézzel kiválasztott bond automatikusan változhat később.
+     */
+    const familyFixed =
+      FIXED_BONDS.includes(
+        savedBond
+      );
+
+    setRel(
+      n,
+      subjectId,
+      otherId,
+      {
+        score:
+          d.score || 0,
+        hidden:
+          d.hidden || "",
+        bond:
+          savedBond,
+        fixed:
+          familyFixed,
+      }
+    );
   });
 }
 
