@@ -18,7 +18,6 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const DEFAULT_PROVIDER = process.env.AI_PROVIDER || "anthropic";
 app.use(bodyParser.json({ limit: "60mb" }));
-
 /* ---------- PostgreSQL ---------- */
 
 const pool = process.env.DATABASE_URL
@@ -42,38 +41,59 @@ const dbReady = pool
         account_id TEXT NOT NULL,
         expires_at TIMESTAMPTZ NOT NULL
       );
+CREATE TABLE IF NOT EXISTS world_media (
+  world_code TEXT PRIMARY KEY
+    REFERENCES worlds(code)
+    ON DELETE CASCADE,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-      CREATE TABLE IF NOT EXISTS world_media (
-        world_code TEXT PRIMARY KEY
+      /*
+       * One global login profile can own/join several worlds.
+       * The character @username remains inside each world's players row
+       * and is deliberately separate from this login username.
+       */
+      CREATE TABLE IF NOT EXISTS profiles (
+        username TEXT PRIMARY KEY,
+        salt TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS profile_worlds (
+        profile_username TEXT NOT NULL
+          REFERENCES profiles(username)
+          ON DELETE CASCADE,
+        world_code TEXT NOT NULL
           REFERENCES worlds(code)
           ON DELETE CASCADE,
-        data JSONB NOT NULL DEFAULT '{}'::jsonb,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        account_id TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (profile_username, world_code)
       );
+
+      CREATE INDEX IF NOT EXISTS profile_worlds_world_idx
+      ON profile_worlds (world_code);
 
       CREATE INDEX IF NOT EXISTS sessions_expires_idx
       ON sessions (expires_at);
-    `)
-      .then(() => {
-        console.log("PostgreSQL ready");
-      })
-      .catch((err) => {
-        console.error("PostgreSQL init error:", err);
-      })
+    `).then(() => {
+      console.log("PostgreSQL ready");
+    }).catch((err) => {
+      console.error("PostgreSQL init error:", err);
+    })
   : Promise.resolve();
 
 async function requireDb(res) {
   if (!pool) {
-    res.status(503).json({
-      error: "Database not configured",
-    });
+    res.status(503).json({ error: "Database not configured" });
     return false;
   }
 
   await dbReady;
   return true;
 }
-
 /* ---------- biztonságos account + session segédek ---------- */
 
 const SESSION_COOKIE = "mv_session";
@@ -155,10 +175,12 @@ async function createSession(worldCode, accountId) {
   const tokenHash = sessionTokenHash(token);
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
 
-  await pool.query(`
+  await pool.query(
+    `
     DELETE FROM sessions
     WHERE expires_at <= NOW()
-  `);
+    `
+  );
 
   await pool.query(
     `
@@ -226,7 +248,6 @@ async function getSession(req) {
     world: result.rows[0].data,
   };
 }
-
 function legacyPasswordHash(password, salt) {
   const txt = String(salt) + "::" + String(password);
   let h1 = 0x811c9dc5;
@@ -234,10 +255,7 @@ function legacyPasswordHash(password, salt) {
 
   for (let i = 0; i < txt.length; i++) {
     h1 = ((h1 ^ txt.charCodeAt(i)) * 16777619) >>> 0;
-    h2 =
-      ((h2 + txt.charCodeAt(i) * (i + 7)) *
-        2654435761) >>>
-      0;
+    h2 = ((h2 + txt.charCodeAt(i) * (i + 7)) * 2654435761) >>> 0;
   }
 
   return "f1:" + h1.toString(16) + h2.toString(16);
@@ -259,19 +277,154 @@ function verifyPassword(password, account) {
   return safeEqual(calculated, account.hash);
 }
 
+function loginProfileUsernameFromWorld(world, accountId) {
+  return cleanUsername(
+    world &&
+    world.accounts &&
+    world.accounts[accountId] &&
+    world.accounts[accountId].username
+  );
+}
+
+async function getProfileRow(db, username, forUpdate = false) {
+  const u = cleanUsername(username);
+  if (!u) return null;
+
+  const result = await db.query(
+    `
+    SELECT username, salt, hash, created_at
+    FROM profiles
+    WHERE username = $1
+    ${forUpdate ? "FOR UPDATE" : ""}
+    LIMIT 1
+    `,
+    [u]
+  );
+
+  return result.rows.length ? result.rows[0] : null;
+}
+
+async function ensureGlobalProfileCredential(db, username, password) {
+  const u = cleanUsername(username);
+  const pw = String(password || "");
+
+  if (!u || !pw) {
+    const err = new Error("Missing global profile credentials.");
+    err.status = 400;
+    throw err;
+  }
+
+  let row = await getProfileRow(db, u, true);
+
+  if (row) {
+    if (!verifyPassword(pw, row)) {
+      const err = new Error(
+        "This username belongs to a profile with a different password."
+      );
+      err.status = 401;
+      err.code = "PROFILE_PASSWORD_MISMATCH";
+      throw err;
+    }
+
+    return row;
+  }
+
+  const salt = crypto.randomBytes(18).toString("hex");
+  const hash = passwordHash(pw, salt);
+
+  const inserted = await db.query(
+    `
+    INSERT INTO profiles (username, salt, hash)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (username) DO NOTHING
+    RETURNING username, salt, hash, created_at
+    `,
+    [u, salt, hash]
+  );
+
+  if (inserted.rows.length) {
+    return inserted.rows[0];
+  }
+
+  row = await getProfileRow(db, u, true);
+
+  if (!row || !verifyPassword(pw, row)) {
+    const err = new Error(
+      "This username belongs to a profile with a different password."
+    );
+    err.status = 401;
+    err.code = "PROFILE_PASSWORD_MISMATCH";
+    throw err;
+  }
+
+  return row;
+}
+
+async function linkProfileWorld(db, username, worldCode, accountId) {
+  const u = cleanUsername(username);
+  const code = cleanCode(worldCode);
+
+  if (!u || !code || !accountId) return;
+
+  await db.query(
+    `
+    INSERT INTO profile_worlds (
+      profile_username,
+      world_code,
+      account_id
+    )
+    VALUES ($1, $2, $3)
+    ON CONFLICT (profile_username, world_code)
+    DO UPDATE SET account_id = EXCLUDED.account_id
+    `,
+    [u, code, String(accountId)]
+  );
+}
+
+async function currentProfileForSession(session) {
+  if (!session) return null;
+
+  const username = loginProfileUsernameFromWorld(
+    session.world,
+    session.accountId
+  );
+
+  if (!username) return null;
+
+  const profile = await getProfileRow(pool, username, false);
+
+  return profile
+    ? { ...profile, username }
+    : null;
+}
 function worldSyncRevServer(world) {
   return Math.max(
     0,
-    Math.floor(Number(world && world.syncRev) || 0)
+    Math.floor(
+      Number(
+        world && world.syncRev
+      ) || 0
+    )
   );
 }
 
 function safeWorldForClient(world) {
-  const clean = JSON.parse(JSON.stringify(world || {}));
+  const clean =
+    JSON.parse(
+      JSON.stringify(
+        world || {}
+      )
+    );
 
-  clean.syncRev = worldSyncRevServer(clean);
+  clean.syncRev =
+    worldSyncRevServer(clean);
 
-  for (const account of Object.values(clean.accounts || {})) {
+  for (
+    const account of
+    Object.values(
+      clean.accounts || {}
+    )
+  ) {
     if (!account) continue;
 
     delete account.hash;
@@ -289,20 +442,30 @@ function mediaEnvelopeFromRow(raw) {
     raw &&
     typeof raw === "object" &&
     !Array.isArray(raw) &&
-    raw.__masvilagMediaEnvelope === MEDIA_ENVELOPE_VERSION &&
+    raw.__masvilagMediaEnvelope ===
+      MEDIA_ENVELOPE_VERSION &&
     raw.media &&
     typeof raw.media === "object" &&
     !Array.isArray(raw.media)
   ) {
     return {
-      syncRev: Math.max(
-        0,
-        Math.floor(Number(raw.syncRev) || 0)
-      ),
+      syncRev:
+        Math.max(
+          0,
+          Math.floor(
+            Number(
+              raw.syncRev
+            ) || 0
+          )
+        ),
       media: raw.media,
     };
   }
 
+  /*
+   * Backward compatibility:
+   * the old world_media.data row was the raw image map itself.
+   */
   return {
     syncRev: 0,
     media:
@@ -314,15 +477,20 @@ function mediaEnvelopeFromRow(raw) {
   };
 }
 
-function makeMediaEnvelope(media, syncRev) {
+function makeMediaEnvelope(
+  media,
+  syncRev
+) {
   return {
-    __masvilagMediaEnvelope: MEDIA_ENVELOPE_VERSION,
-
-    syncRev: Math.max(
-      0,
-      Math.floor(Number(syncRev) || 0)
-    ),
-
+    __masvilagMediaEnvelope:
+      MEDIA_ENVELOPE_VERSION,
+    syncRev:
+      Math.max(
+        0,
+        Math.floor(
+          Number(syncRev) || 0
+        )
+      ),
     media:
       media &&
       typeof media === "object" &&
@@ -332,13 +500,16 @@ function makeMediaEnvelope(media, syncRev) {
   };
 }
 
-/* ---------- WORLD CODE PEEK ---------- */
-
+/* -------------------------------------------------------------------------
+   WORLD CODE PEEK
+   Public, intentionally returns NO usernames/account data.
+   ------------------------------------------------------------------------- */
 app.get("/world/peek", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
 
-    const code = cleanCode(req.query?.code);
+    const code =
+      cleanCode(req.query?.code);
 
     if (!code) {
       return res.status(400).json({
@@ -346,17 +517,18 @@ app.get("/world/peek", async (req, res) => {
       });
     }
 
-    const result = await pool.query(
-      `
-      SELECT
-        code,
-        data->'universe'->>'name' AS name
-      FROM worlds
-      WHERE code = $1
-      LIMIT 1
-      `,
-      [code]
-    );
+    const result =
+      await pool.query(
+        `
+        SELECT
+          code,
+          data->'universe'->>'name' AS name
+        FROM worlds
+        WHERE code = $1
+        LIMIT 1
+        `,
+        [code]
+      );
 
     if (!result.rows.length) {
       return res.json({
@@ -370,10 +542,15 @@ app.get("/world/peek", async (req, res) => {
       ok: true,
       found: true,
       code,
-      name: result.rows[0].name || code,
+      name:
+        result.rows[0].name ||
+        code,
     });
   } catch (err) {
-    console.error("World peek error:", err);
+    console.error(
+      "World peek error:",
+      err
+    );
 
     return res.status(500).json({
       error: "World lookup failed.",
@@ -381,88 +558,127 @@ app.get("/world/peek", async (req, res) => {
   }
 });
 
-/* ---------- LOGIN ---------- */
-
+/* -------------------------------------------------------------------------
+   LOGIN
+   Password initialization is also serialized with SELECT ... FOR UPDATE.
+   ------------------------------------------------------------------------- */
 app.post("/auth/login", async (req, res) => {
   let client = null;
 
   try {
     if (!(await requireDb(res))) return;
 
-    const code = cleanCode(req.body?.code);
-    const username = cleanUsername(req.body?.username);
-    const password = String(req.body?.password || "");
+    const code =
+      cleanCode(req.body?.code);
 
-    if (!code || !username || !password) {
+    const username =
+      cleanUsername(
+        req.body?.username
+      );
+
+    const password =
+      String(
+        req.body?.password || ""
+      );
+
+    if (
+      !code ||
+      !username ||
+      !password
+    ) {
       return res.status(400).json({
         error:
           "World code, username and password are required.",
       });
     }
 
-    client = await pool.connect();
+    client =
+      await pool.connect();
 
     await client.query("BEGIN");
 
-    const result = await client.query(
-      `
-      SELECT data
-      FROM worlds
-      WHERE code = $1
-      LIMIT 1
-      FOR UPDATE
-      `,
-      [code]
-    );
+    const result =
+      await client.query(
+        `
+        SELECT data
+        FROM worlds
+        WHERE code = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [code]
+      );
 
     if (!result.rows.length) {
-      await client.query("ROLLBACK");
+      await client.query(
+        "ROLLBACK"
+      );
 
       client.release();
-      client = null;
+            client = null;
 
       return res.status(404).json({
         error: "World not found.",
       });
     }
 
-    const world = result.rows[0].data;
+    const world =
+      result.rows[0].data;
 
-    world.syncRev = worldSyncRevServer(world);
+    world.syncRev =
+      worldSyncRevServer(world);
 
-    const found = findAccountByUsername(world, username);
+    const found =
+      findAccountByUsername(
+        world,
+        username
+      );
 
     if (!found) {
-      await client.query("ROLLBACK");
+      await client.query(
+        "ROLLBACK"
+      );
 
       client.release();
       client = null;
 
       return res.status(401).json({
-        error: "Wrong username or password.",
+        error:
+          "Wrong username or password.",
       });
     }
 
-    const accountId = found.id;
-    const account = found.account;
+    const accountId =
+      found.id;
+
+    const account =
+      found.account;
 
     if (!account.hash) {
-      account.salt = crypto
-        .randomBytes(18)
-        .toString("hex");
+      account.salt =
+        crypto
+          .randomBytes(18)
+          .toString("hex");
 
-      account.hash = passwordHash(
-        password,
-        account.salt
-      );
+      account.hash =
+        passwordHash(
+          password,
+          account.salt
+        );
 
-      world.rev = Number(world.rev || 0) + 1;
+      world.rev =
+        Number(
+          world.rev || 0
+        ) + 1;
 
       world.syncRev =
-        worldSyncRevServer(world) + 1;
+        worldSyncRevServer(
+          world
+        ) + 1;
 
       if (world.universe) {
-        world.universe.at = Date.now();
+        world.universe.at =
+          Date.now();
       }
 
       await client.query(
@@ -472,51 +688,125 @@ app.post("/auth/login", async (req, res) => {
             updated_at = NOW()
         WHERE code = $1
         `,
-        [code, JSON.stringify(world)]
+        [
+          code,
+          JSON.stringify(world),
+        ]
       );
-    } else if (!verifyPassword(password, account)) {
-      await client.query("ROLLBACK");
+    } else if (
+      !verifyPassword(
+        password,
+        account
+      )
+    ) {
+      await client.query(
+        "ROLLBACK"
+      );
 
       client.release();
       client = null;
 
       return res.status(401).json({
-        error: "Wrong username or password.",
+        error:
+          "Wrong username or password.",
       });
     }
 
-    await client.query("COMMIT");
+    /*
+     * Global profile credential. The first successfully authenticated
+     * world creates it; every later world must use the same password.
+     */
+    let globalProfile;
 
+    try {
+      globalProfile =
+        await ensureGlobalProfileCredential(
+          client,
+          username,
+          password
+        );
+    } catch (profileErr) {
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
+
+      return res.status(profileErr.status || 401).json({
+        code: profileErr.code || "PROFILE_LOGIN_FAILED",
+        error: profileErr.message || "Profile login failed.",
+      });
+    }
+
+    /* Keep the per-world account credential aligned with the global profile. */
+    if (globalProfile) {
+      account.salt = globalProfile.salt;
+      account.hash = globalProfile.hash;
+    }
+
+    await linkProfileWorld(
+      client,
+      username,
+      code,
+      accountId
+    );
+
+    /* Persist a possible credential alignment too. */
+    await client.query(
+      `
+      UPDATE worlds
+      SET data = $2::jsonb,
+          updated_at = NOW()
+      WHERE code = $1
+      `,
+      [code, JSON.stringify(world)]
+    );
+
+    await client.query("COMMIT");
     client.release();
     client = null;
 
-    const token = await createSession(code, accountId);
+    const token =
+      await createSession(
+        code,
+        accountId
+      );
 
-    setSessionCookie(res, token);
+    setSessionCookie(
+      res,
+      token
+    );
 
     return res.json({
       ok: true,
       meId: accountId,
-      syncRev: worldSyncRevServer(world),
-      world: safeWorldForClient(world),
+      profileUsername: username,
+      syncRev:
+        worldSyncRevServer(world),
+      world:
+        safeWorldForClient(world),
     });
   } catch (err) {
     if (client) {
       try {
-        await client.query("ROLLBACK");
+        await client.query(
+          "ROLLBACK"
+        );
       } catch (e) {}
 
       client.release();
       client = null;
     }
 
-    console.error("Login error:", err);
+    console.error(
+      "Login error:",
+      err
+    );
 
     return res.status(500).json({
       error: "Login failed.",
     });
   }
 });
+
 /* -------------------------------------------------------------------------
    SESSION RESTORE
    Always returns the CURRENT PostgreSQL world through getSession().
@@ -567,6 +857,8 @@ app.get("/auth/session", async (req, res) => {
       authenticated: true,
       meId:
         session.accountId,
+      profileUsername:
+        cleanUsername(account.username),
       syncRev:
         worldSyncRevServer(
           session.world
@@ -792,6 +1084,25 @@ app.post("/account/delete", async (req, res) => {
       ]
     );
 
+    const profileUsername =
+      cleanUsername(
+        session.world &&
+        session.world.accounts &&
+        session.world.accounts[accountId] &&
+        session.world.accounts[accountId].username
+      );
+
+    if (profileUsername) {
+      await client.query(
+        `
+        DELETE FROM profile_worlds
+        WHERE profile_username = $1
+          AND world_code = $2
+        `,
+        [profileUsername, worldCode]
+      );
+    }
+
     await client.query(
       `
       DELETE FROM sessions
@@ -840,6 +1151,7 @@ app.post("/account/delete", async (req, res) => {
     });
   }
 });
+
 /* -------------------------------------------------------------------------
    ONE-TIME LOCAL -> POSTGRES MIGRATION / NEW WORLD CREATION
    PostgreSQL unique constraint is authoritative for the world code.
@@ -945,52 +1257,178 @@ app.post("/auth/migrate", async (req, res) => {
       ) + 1;
 
     /*
-     * Ezt kizárólag a szerver kezeli.
-     * Régi/local syncRev-et nem fogadunk el igazságként.
+     * Create/verify the global profile before this new world is inserted.
+     * The per-world account keeps the login username, while the player
+     * character can use a completely different social @username.
      */
-    world.syncRev = 1;
-
-    if (world.universe) {
-      world.universe.at =
-        Date.now();
-    }
+    let globalProfile;
 
     try {
-      await pool.query(
+      globalProfile =
+        await ensureGlobalProfileCredential(
+          pool,
+          username,
+          password
+        );
+    } catch (profileErr) {
+      return res.status(profileErr.status || 401).json({
+        code: profileErr.code || "PROFILE_LOGIN_FAILED",
+        error: profileErr.message || "Profile login failed.",
+      });
+    }
+
+    if (globalProfile) {
+      account.salt = globalProfile.salt;
+      account.hash = globalProfile.hash;
+    }
+          client = null;
+
+      return res.status(404).json({
+        error: "World not found.",
+      });
+    }
+
+    const world =
+      result.rows[0].data;
+
+    world.syncRev =
+      worldSyncRevServer(world);
+
+    const found =
+      findAccountByUsername(
+        world,
+        username
+      );
+
+    if (!found) {
+      await client.query(
+        "ROLLBACK"
+      );
+
+      client.release();
+      client = null;
+
+      return res.status(401).json({
+        error:
+          "Wrong username or password.",
+      });
+    }
+
+    const accountId =
+      found.id;
+
+    const account =
+      found.account;
+
+    if (!account.hash) {
+      account.salt =
+        crypto
+          .randomBytes(18)
+          .toString("hex");
+
+      account.hash =
+        passwordHash(
+          password,
+          account.salt
+        );
+
+      world.rev =
+        Number(
+          world.rev || 0
+        ) + 1;
+
+      world.syncRev =
+        worldSyncRevServer(
+          world
+        ) + 1;
+
+      if (world.universe) {
+        world.universe.at =
+          Date.now();
+      }
+
+      await client.query(
         `
-        INSERT INTO worlds (
-          code,
-          data,
-          updated_at
-        )
-        VALUES ($1, $2::jsonb, NOW())
+        UPDATE worlds
+        SET data = $2::jsonb,
+            updated_at = NOW()
+        WHERE code = $1
         `,
         [
           code,
           JSON.stringify(world),
         ]
       );
-    } catch (err) {
-      /*
-       * Ha közben egy másik kliens ugyanazzal
-       * a world code-dal létrehozta a világot,
-       * nem írjuk felül.
-       */
-      if (
-        err &&
-        err.code === "23505"
-      ) {
-        return res.status(409).json({
-          code:
-            "WORLD_ALREADY_EXISTS",
+    } else if (
+      !verifyPassword(
+        password,
+        account
+      )
+    ) {
+      await client.query(
+        "ROLLBACK"
+      );
 
-          error:
-            "World already exists on the server.",
-        });
-      }
+      client.release();
+      client = null;
 
-      throw err;
+      return res.status(401).json({
+        error:
+          "Wrong username or password.",
+      });
     }
+
+    /*
+     * Global profile credential. The first successfully authenticated
+     * world creates it; every later world must use the same password.
+     */
+    let globalProfile;
+
+    try {
+      globalProfile =
+        await ensureGlobalProfileCredential(
+          client,
+          username,
+          password
+        );
+    } catch (profileErr) {
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
+
+      return res.status(profileErr.status || 401).json({
+        code: profileErr.code || "PROFILE_LOGIN_FAILED",
+        error: profileErr.message || "Profile login failed.",
+      });
+    }
+
+    /* Keep the per-world account credential aligned with the global profile. */
+    if (globalProfile) {
+      account.salt = globalProfile.salt;
+      account.hash = globalProfile.hash;
+    }
+
+    await linkProfileWorld(
+      client,
+      username,
+      code,
+      accountId
+    );
+
+    /* Persist a possible credential alignment too. */
+    await client.query(
+      `
+      UPDATE worlds
+      SET data = $2::jsonb,
+          updated_at = NOW()
+      WHERE code = $1
+      `,
+      [code, JSON.stringify(world)]
+    );
+
+    await client.query("COMMIT");
+    client.release();
+    client = null;
 
     const token =
       await createSession(
@@ -1003,353 +1441,14 @@ app.post("/auth/migrate", async (req, res) => {
       token
     );
 
-    console.log(
-      `Migrated world ${code}`
-    );
-
     return res.json({
       ok: true,
-      migrated: true,
-
-      meId:
-        accountId,
-
-      syncRev: 1,
-
-      world:
-        safeWorldForClient(
-          world
-        ),
-    });
-  } catch (err) {
-    console.error(
-      "World migration error:",
-      err
-    );
-
-    return res.status(500).json({
-      error:
-        "World migration failed.",
-    });
-  }
-});
-
-/* -------------------------------------------------------------------------
-   AUTHORITATIVE WORLD AUTOSAVE
-
-   expectedSyncRev != current server syncRev esetén:
-
-   - HTTP 409
-   - a régi kliens NEM írhatja felül a világot
-   - visszakapja az aktuális PostgreSQL worldöt
-   ------------------------------------------------------------------------- */
-app.post("/world/save", async (req, res) => {
-  let client = null;
-
-  try {
-    if (!(await requireDb(res))) return;
-
-    const session =
-      await getSession(req);
-
-    if (!session) {
-      clearSessionCookie(res);
-
-      return res.status(401).json({
-        error:
-          "Not authenticated.",
-      });
-    }
-
-    const incomingWorld =
-      req.body?.world;
-
-    if (
-      !incomingWorld ||
-      typeof incomingWorld !==
-        "object" ||
-      !incomingWorld.code
-    ) {
-      return res.status(400).json({
-        error:
-          "Missing world data.",
-      });
-    }
-
-    const incomingCode =
-      cleanCode(
-        incomingWorld.code
-      );
-
-    if (
-      incomingCode !==
-      session.worldCode
-    ) {
-      return res.status(403).json({
-        error:
-          "You cannot save another world.",
-      });
-    }
-
-    /*
-     * A kliens azt mondja:
-     * "én ebből a szerververzióból indultam".
-     */
-    const expectedSyncRev =
-      Math.max(
-        0,
-        Math.floor(
-          Number(
-            req.body?.syncRev ??
-            incomingWorld.syncRev
-          ) || 0
-        )
-      );
-
-    client =
-      await pool.connect();
-
-    await client.query(
-      "BEGIN"
-    );
-
-    /*
-     * A world sort lezárjuk a transaction idejére.
-     * Így két eszköz nem tud egyszerre ugyanabba
-     * a verzióba menteni.
-     */
-    const existingResult =
-      await client.query(
-        `
-        SELECT data
-        FROM worlds
-        WHERE code = $1
-        LIMIT 1
-        FOR UPDATE
-        `,
-        [
-          session.worldCode,
-        ]
-      );
-
-    if (
-      !existingResult.rows.length
-    ) {
-      await client.query(
-        "ROLLBACK"
-      );
-
-      client.release();
-      client = null;
-
-      return res.status(404).json({
-        error:
-          "World not found.",
-      });
-    }
-
-    const existingWorld =
-      existingResult.rows[0].data;
-
-    const serverSyncRev =
-      worldSyncRevServer(
-        existingWorld
-      );
-
-    /*
-     * STALE SNAPSHOT PROTECTION
-     */
-    if (
-      expectedSyncRev !==
-      serverSyncRev
-    ) {
-      await client.query(
-        "ROLLBACK"
-      );
-
-      client.release();
-      client = null;
-
-      return res.status(409).json({
-        code:
-          "WORLD_CONFLICT",
-
-        error:
-          "The world changed on another client.",
-
-        meId:
-          session.accountId,
-
-        expectedSyncRev,
-
-        serverSyncRev,
-
-        /*
-         * Ezt kell a frontendnek authoritative
-         * verzióként átvennie.
-         */
-        world:
-          safeWorldForClient(
-            existingWorld
-          ),
-      });
-    }
-
-    const nextWorld =
-      JSON.parse(
-        JSON.stringify(
-          incomingWorld
-        )
-      );
-
-    /*
-     * A frontend természetesen nem kapja meg
-     * a password hash/salt adatokat.
-     *
-     * Mentésnél ezeket a PostgreSQL-ben jelenleg
-     * tárolt authoritative példányból visszatesszük.
-     */
-    if (
-      !nextWorld.accounts
-    ) {
-      nextWorld.accounts = {};
-    }
-
-    for (
-      const [
-        accountId,
-        oldAccount,
-      ] of Object.entries(
-        existingWorld.accounts || {}
-      )
-    ) {
-      /*
-       * Ha a kliensben tombstone jelzi,
-       * hogy az account törölve lett,
-       * akkor ne támasszuk fel.
-       */
-      const wasDeleted =
-        Boolean(
-          nextWorld.deleted &&
-          nextWorld.deleted[
-            accountId
-          ]
-        );
-
-      if (
-        wasDeleted &&
-        !nextWorld.accounts[
-          accountId
-        ]
-      ) {
-        continue;
-      }
-
-      /*
-       * Ha valamiért az account hiányzik,
-       * de nincs törlési tombstone,
-       * megtartjuk a szerveres accountot.
-       */
-      if (
-        !nextWorld.accounts[
-          accountId
-        ]
-      ) {
-        nextWorld.accounts[
-          accountId
-        ] =
-          JSON.parse(
-            JSON.stringify(
-              oldAccount
-            )
-          );
-      }
-
-      if (
-        oldAccount?.hash
-      ) {
-        nextWorld.accounts[
-          accountId
-        ].hash =
-          oldAccount.hash;
-      }
-
-      if (
-        oldAccount?.salt
-      ) {
-        nextWorld.accounts[
-          accountId
-        ].salt =
-          oldAccount.salt;
-      }
-    }
-
-    nextWorld.code =
-      session.worldCode;
-
-    /*
-     * A régi rev továbbra is megmarad kompatibilitás miatt.
-     */
-    nextWorld.rev =
-      Math.max(
-        Number(
-          nextWorld.rev || 0
-        ),
-
-        Number(
-          existingWorld.rev || 0
-        )
-      ) + 1;
-
-    /*
-     * EZ az authoritative concurrency verzió.
-     */
-    nextWorld.syncRev =
-      serverSyncRev + 1;
-
-    if (
-      nextWorld.universe
-    ) {
-      nextWorld.universe.at =
-        Date.now();
-    }
-
-    await client.query(
-      `
-      UPDATE worlds
-      SET data = $2::jsonb,
-          updated_at = NOW()
-      WHERE code = $1
-      `,
-      [
-        session.worldCode,
-
-        JSON.stringify(
-          nextWorld
-        ),
-      ]
-    );
-
-    await client.query(
-      "COMMIT"
-    );
-
-    client.release();
-    client = null;
-
-    return res.json({
-      ok: true,
-
-      meId:
-        session.accountId,
-
+      meId: accountId,
+      profileUsername: username,
       syncRev:
-        nextWorld.syncRev,
-
+        worldSyncRevServer(world),
       world:
-        safeWorldForClient(
-          nextWorld
-        ),
+        safeWorldForClient(world),
     });
   } catch (err) {
     if (client) {
@@ -1364,368 +1463,586 @@ app.post("/world/save", async (req, res) => {
     }
 
     console.error(
-      "World save error:",
+      "Login error:",
+      err
+    );
+
+    return res.status(500).json({
+      error: "Login failed.",
+    });
+  }
+});
+
+/* -------------------------------------------------------------------------
+   SESSION RESTORE
+   Always returns the CURRENT PostgreSQL world through getSession().
+   ------------------------------------------------------------------------- */
+app.get("/auth/session", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session =
+      await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        authenticated: false,
+      });
+    }
+
+    const account =
+      session.world?.accounts?.[
+        session.accountId
+      ];
+
+    if (!account) {
+      if (session.token) {
+        await pool.query(
+          `
+          DELETE FROM sessions
+          WHERE token_hash = $1
+          `,
+          [
+            sessionTokenHash(
+              session.token
+            ),
+          ]
+        );
+      }
+
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        authenticated: false,
+      });
+    }
+
+    return res.json({
+      authenticated: true,
+      meId:
+        session.accountId,
+      profileUsername:
+        cleanUsername(account.username),
+      syncRev:
+        worldSyncRevServer(
+          session.world
+        ),
+      world:
+        safeWorldForClient(
+          session.world
+        ),
+    });
+  } catch (err) {
+    console.error(
+      "Session restore error:",
       err
     );
 
     return res.status(500).json({
       error:
-        "World save failed.",
+        "Session restore failed.",
     });
   }
 });
-function extractText(content) {
-  if (typeof content === "string") return content;
 
-  if (Array.isArray(content)) {
-    return content
-      .map((part) =>
-        typeof part === "string"
-          ? part
-          : part.text || ""
-      )
-      .join("");
-  }
+/* ---------- LOGOUT ---------- */
 
-  if (
-    content &&
-    typeof content === "object"
-  ) {
-    if (
-      typeof content.text ===
-      "string"
-    ) {
-      return content.text;
+app.post("/auth/logout", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const token = readCookie(req, SESSION_COOKIE);
+
+    if (token) {
+      await pool.query(
+        `
+        DELETE FROM sessions
+        WHERE token_hash = $1
+        `,
+        [sessionTokenHash(token)]
+      );
     }
 
-    if (
-      Array.isArray(
-        content.parts
-      )
-    ) {
-      return content.parts
-        .map((part) =>
-          typeof part === "string"
-            ? part
-            : part.text || ""
-        )
-        .join("");
-    }
-  }
+    clearSessionCookie(res);
 
-  return "";
-}
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Logout error:", err);
 
-function getProvider(body = {}) {
-  const provider =
-    String(
-      body?.provider || ""
-    ).toLowerCase();
+    clearSessionCookie(res);
 
-  if (provider === "gemini") {
-    return "gemini";
-  }
-
-  if (provider === "openai") {
-    return "openai";
-  }
-
-  if (
-    provider === "anthropic"
-  ) {
-    return "anthropic";
-  }
-
-  const model =
-    String(
-      body?.model || ""
-    ).toLowerCase();
-
-  if (
-    model.startsWith(
-      "gemini"
-    )
-  ) {
-    return "gemini";
-  }
-
-  if (
-    model.startsWith("gpt") ||
-    model.startsWith("o1") ||
-    model.startsWith("o3")
-  ) {
-    return "openai";
-  }
-
-  return DEFAULT_PROVIDER;
-}
-
-function buildGeminiPayload(body = {}) {
-  const messages =
-    Array.isArray(
-      body.messages
-    )
-      ? body.messages
-      : [];
-
-  const parts = [];
-
-  if (body.system) {
-    parts.push({
-      text: body.system,
+    return res.json({
+      ok: true,
     });
   }
+});
 
-  for (
-    const item of messages
-  ) {
-    const text =
-      extractText(
-        item?.content || ""
+/* -------------------------------------------------------------------------
+   ACCOUNT DELETE
+   Serialized against world saves. Deletion increments syncRev.
+   ------------------------------------------------------------------------- */
+app.post("/account/delete", async (req, res) => {
+  let client = null;
+
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session =
+      await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
+
+    const worldCode =
+      session.worldCode;
+
+    const accountId =
+      session.accountId;
+
+    client =
+      await pool.connect();
+
+    await client.query("BEGIN");
+
+    const result =
+      await client.query(
+        `
+        SELECT data
+        FROM worlds
+        WHERE code = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [worldCode]
       );
 
-    if (!text) continue;
+    if (!result.rows.length) {
+      await client.query(
+        "ROLLBACK"
+      );
 
+      client.release();
+      client = null;
+
+      clearSessionCookie(res);
+
+      return res.status(404).json({
+        error: "World not found.",
+      });
+    }
+
+    const world =
+      result.rows[0].data;
+
+    world.syncRev =
+      worldSyncRevServer(world);
+
+    if (
+      !world.accounts ||
+      !world.accounts[accountId]
+    ) {
+      await client.query(
+        `
+        DELETE FROM sessions
+        WHERE world_code = $1
+          AND account_id = $2
+        `,
+        [worldCode, accountId]
+      );
+
+      await client.query("COMMIT");
+      client.release();
+      client = null;
+
+      clearSessionCookie(res);
+
+      return res.json({
+        ok: true,
+        alreadyDeleted: true,
+      });
+    }
+
+    if (!world.deleted) {
+      world.deleted = {};
+    }
+
+    world.deleted[accountId] =
+      Date.now();
+
+    if (world.accounts) {
+      delete world.accounts[
+        accountId
+      ];
+    }
+
+    if (world.players) {
+      delete world.players[
+        accountId
+      ];
+    }
+
+    if (world.userSettings) {
+      delete world.userSettings[
+        accountId
+      ];
+    }
+
+    if (world.notify) {
+      delete world.notify[
+        accountId
+      ];
+    }
+
+    if (world.mems) {
+      delete world.mems[
+        accountId
+      ];
+    }
+
+    if (world.charMemory) {
+      delete world.charMemory[
+        accountId
+      ];
+    }
+
+    if (
+      world.owner ===
+      accountId
+    ) {
+      world.owner =
+        Object.keys(
+          world.accounts || {}
+        )[0] || "";
+    }
+
+    world.rev =
+      Number(
+        world.rev || 0
+      ) + 1;
+
+    world.syncRev =
+      worldSyncRevServer(
+        world
+      ) + 1;
+
+    if (world.universe) {
+      world.universe.at =
+        Date.now();
+    }
+
+    await client.query(
+      `
+      UPDATE worlds
+      SET data = $2::jsonb,
+          updated_at = NOW()
+      WHERE code = $1
+      `,
+      [
+        worldCode,
+        JSON.stringify(world),
+      ]
+    );
+
+    const profileUsername =
+      cleanUsername(
+        session.world &&
+        session.world.accounts &&
+        session.world.accounts[accountId] &&
+        session.world.accounts[accountId].username
+      );
+
+    if (profileUsername) {
+      await client.query(
+        `
+        DELETE FROM profile_worlds
+        WHERE profile_username = $1
+          AND world_code = $2
+        `,
+        [profileUsername, worldCode]
+      );
+    }
+
+    await client.query(
+      `
+      DELETE FROM sessions
+      WHERE world_code = $1
+        AND account_id = $2
+      `,
+      [worldCode, accountId]
+    );
+
+    await client.query("COMMIT");
+    client.release();
+    client = null;
+
+    clearSessionCookie(res);
+
+    console.log(
+      `Deleted account ${accountId} from world ${worldCode}`
+    );
+
+    return res.json({
+      ok: true,
+      deleted: true,
+      syncRev:
+        worldSyncRevServer(world),
+    });
+  } catch (err) {
+    if (client) {
+      try {
+        await client.query(
+          "ROLLBACK"
+        );
+      } catch (e) {}
+
+      client.release();
+      client = null;
+    }
+
+    console.error(
+      "Account delete error:",
+      err
+    );
+
+    return res.status(500).json({
+      error:
+        "Account deletion failed.",
+    });
+  }
+});
+
+/* -------------------------------------------------------------------------
+   ONE-TIME LOCAL -> POSTGRES MIGRATION / NEW WORLD CREATION
+   PostgreSQL unique constraint is authoritative for the world code.
+   ------------------------------------------------------------------------- */
+app.post("/auth/migrate", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const incomingWorld =
+      req.body?.world;
+
+    const username =
+      cleanUsername(
+        req.body?.username
+      );
+
+    const password =
+      String(
+        req.body?.password || ""
+      );
+
+    if (
+      !incomingWorld ||
+      typeof incomingWorld !==
+        "object" ||
+      !incomingWorld.code
+    ) {
+      return res.status(400).json({
+        error: "Missing world data.",
+      });
+    }
+
+    const code =
+      cleanCode(
+        incomingWorld.code
+      );
+
+    if (
+      !code ||
+      !username ||
+      !password
+    ) {
+      return res.status(400).json({
+        error:
+          "World code, username and password are required.",
+      });
+    }
+
+    const world =
+      JSON.parse(
+        JSON.stringify(
+          incomingWorld
+        )
+      );
+
+    world.code = code;
+
+    const found =
+      findAccountByUsername(
+        world,
+        username
+      );
+
+    if (!found) {
+      return res.status(401).json({
+        error:
+          "Wrong username or password.",
+      });
+    }
+
+    const accountId =
+      found.id;
+
+    const account =
+      found.account;
+
+    if (!account.hash) {
+      account.salt =
+        crypto
+          .randomBytes(18)
+          .toString("hex");
+
+      account.hash =
+        passwordHash(
+          password,
+          account.salt
+        );
+    } else if (
+      !verifyPassword(
+        password,
+        account
+      )
+    ) {
+      return res.status(401).json({
+        error:
+          "Wrong username or password.",
+      });
+    }
+
+    world.rev =
+      Number(
+        world.rev || 0
+      ) + 1;
+
+    /*
+     * Create/verify the global profile before this new world is inserted.
+     * The per-world account keeps the login username, while the player
+     * character can use a completely different social @username.
+     */
+    let globalProfile;
+
+    try {
+      globalProfile =
+        await ensureGlobalProfileCredential(
+          pool,
+          username,
+          password
+        );
+    } catch (profileErr) {
+      return res.status(profileErr.status || 401).json({
+        code: profileErr.code || "PROFILE_LOGIN_FAILED",
+        error: profileErr.message || "Profile login failed.",
+      });
+    }
+
+    if (globalProfile) {
+      account.salt = globalProfile.salt;
+      account.hash = globalProfile.hash;
+    }
+      const parts = [];
+  if (body.system) parts.push({ text: body.system });
+  for (const item of messages) {
+    const text = extractText(item?.content || "");
+    if (!text) continue;
     parts.push({ text });
   }
-
   const payload = {
     contents: [
       {
         role: "user",
-        parts: [
-          {
-            text: parts
-              .map(
-                (part) =>
-                  part.text
-              )
-              .join("\n\n"),
-          },
-        ],
+        parts: [{ text: parts.map((part) => part.text).join("\n\n") }],
       },
     ],
-
     generationConfig: {
-      maxOutputTokens:
-        body.max_tokens ??
-        700,
+      maxOutputTokens: body.max_tokens ?? 700,
     },
   };
-
   if (body.system) {
-    payload.systemInstruction =
-      {
-        role: "system",
-
-        parts: [
-          {
-            text:
-              body.system,
-          },
-        ],
-      };
+    payload.systemInstruction = {
+      role: "system",
+      parts: [{ text: body.system }],
+    };
   }
-
   return payload;
 }
 
 function normalizeGeminiResponse(data) {
-  const candidate =
-    data?.candidates?.[0];
-
-  const text =
-    candidate?.content?.parts
-      ?.map(
-        (p) =>
-          p.text || ""
-      )
-      .join("") || "";
-
+  const candidate = data?.candidates?.[0];
+  const text = candidate?.content?.parts?.map((p) => p.text || "").join("") || "";
   return {
-    model:
-      data?.model ||
-      "gemini",
-
-    id:
-      candidate?.finishReason
-        ? `gemini-${Date.now()}`
-        : undefined,
-
+    model: data?.model || "gemini",
+    id: candidate?.finishReason ? `gemini-${Date.now()}` : undefined,
     type: "message",
     role: "assistant",
-
-    content: [
-      {
-        type: "text",
-        text,
-      },
-    ],
-
+    content: [{ type: "text", text }],
     usage: {
-      input_tokens:
-        data?.usageMetadata
-          ?.promptTokenCount ||
-        0,
-
-      output_tokens:
-        data?.usageMetadata
-          ?.candidatesTokenCount ||
-        0,
+      input_tokens: data?.usageMetadata?.promptTokenCount || 0,
+      output_tokens: data?.usageMetadata?.candidatesTokenCount || 0,
     },
   };
 }
 
 function buildOpenAIPayload(body = {}) {
-  const messages =
-    Array.isArray(
-      body.messages
-    )
-      ? body.messages
-      : [];
-
+  const messages = Array.isArray(body.messages) ? body.messages : [];
   const out = [];
-
-  if (body.system) {
-    out.push({
-      role: "system",
-      content: body.system,
-    });
-  }
-
-  for (
-    const item of messages
-  ) {
-    const text =
-      extractText(
-        item?.content || ""
-      );
-
+  if (body.system) out.push({ role: "system", content: body.system });
+  for (const item of messages) {
+    const text = extractText(item?.content || "");
     if (!text) continue;
-
-    out.push({
-      role:
-        item?.role ===
-        "assistant"
-          ? "assistant"
-          : "user",
-
-      content: text,
-    });
+    out.push({ role: item?.role === "assistant" ? "assistant" : "user", content: text });
   }
-
   return {
-    model:
-      body.model ||
-      "gpt-4o-mini",
-
+    model: body.model || "gpt-4o-mini",
     messages: out,
-
-    max_tokens:
-      body.max_tokens ??
-      1024,
-
-    temperature:
-      body.temperature,
+    max_tokens: body.max_tokens ?? 1024,
+    temperature: body.temperature,
   };
 }
 
 function normalizeOpenAIResponse(data) {
-  const choice =
-    data?.choices?.[0];
-
-  const text =
-    choice?.message?.content ||
-    "";
-
+  const choice = data?.choices?.[0];
+  const text = choice?.message?.content || "";
   return {
-    model:
-      data?.model ||
-      "gpt",
-
-    id:
-      data?.id,
-
-    type:
-      "message",
-
-    role:
-      "assistant",
-
-    content: [
-      {
-        type: "text",
-        text,
-      },
-    ],
-
+    model: data?.model || "gpt",
+    id: data?.id,
+    type: "message",
+    role: "assistant",
+    content: [{ type: "text", text }],
     usage: {
-      input_tokens:
-        data?.usage
-          ?.prompt_tokens ||
-        0,
-
-      output_tokens:
-        data?.usage
-          ?.completion_tokens ||
-        0,
+      input_tokens: data?.usage?.prompt_tokens || 0,
+      output_tokens: data?.usage?.completion_tokens || 0,
     },
   };
 }
 
-if (
-  !ANTHROPIC_API_KEY &&
-  !GEMINI_API_KEY &&
-  !OPENAI_API_KEY
-) {
-  console.warn(
-    "No AI API key configured. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY before starting the proxy."
-  );
-} else if (
-  !ANTHROPIC_API_KEY
-) {
-  console.info(
-    "Anthropic API key not configured; using other providers if requested."
-  );
+if (!ANTHROPIC_API_KEY && !GEMINI_API_KEY && !OPENAI_API_KEY) {
+  console.warn("No AI API key configured. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY before starting the proxy.");
+} else if (!ANTHROPIC_API_KEY) {
+  console.info("Anthropic API key not configured; using other providers if requested.");
 }
 
-/*
- * CORS
- */
-app.use(
-  (req, res, next) => {
-    res.setHeader(
-      "Access-Control-Allow-Origin",
-      "*"
-    );
 
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET,POST,OPTIONS"
-    );
 
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type,Authorization"
-    );
-
-    if (
-      req.method ===
-      "OPTIONS"
-    ) {
-      return res.sendStatus(
-        200
-      );
-    }
-
-    next();
-  }
-);
+// CORS: engedélyezzük a fejlesztéshez (ha szükséges, szűkítsd a domaineket).
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
 
 /* -------------------------------------------------------------------------
    CLOUD MEDIA LOAD
-
-   Régi world_media.data formátummal is kompatibilis.
+   Backward-compatible with old raw world_media.data rows.
    ------------------------------------------------------------------------- */
 app.get("/media/load", async (req, res) => {
   try {
@@ -1738,8 +2055,7 @@ app.get("/media/load", async (req, res) => {
       clearSessionCookie(res);
 
       return res.status(401).json({
-        error:
-          "Not authenticated.",
+        error: "Not authenticated.",
       });
     }
 
@@ -1751,9 +2067,7 @@ app.get("/media/load", async (req, res) => {
         WHERE world_code = $1
         LIMIT 1
         `,
-        [
-          session.worldCode,
-        ]
+        [session.worldCode]
       );
 
     const envelope =
@@ -1765,10 +2079,8 @@ app.get("/media/load", async (req, res) => {
 
     return res.json({
       ok: true,
-
       syncRev:
         envelope.syncRev,
-
       media:
         envelope.media,
     });
@@ -1779,8 +2091,7 @@ app.get("/media/load", async (req, res) => {
     );
 
     return res.status(500).json({
-      error:
-        "Media load failed.",
+      error: "Media load failed.",
     });
   }
 });
@@ -1788,14 +2099,9 @@ app.get("/media/load", async (req, res) => {
 /* -------------------------------------------------------------------------
    CLOUD MEDIA SAVE
 
-   A media library külön syncRev-et kap.
-
-   Ha két eszköz egyszerre ment:
-   - a régi verzió HTTP 409-et kap;
-   - nem írhatja felül a frissebb képtárat.
-
-   PostgreSQL advisory transaction lock védi azt az esetet is,
-   amikor a world_media sor még nem létezik.
+   Uses a JSON envelope in the EXISTING JSONB column, so no DB schema change
+   is required. An advisory transaction lock also protects the "row absent"
+   first-save case where SELECT ... FOR UPDATE alone cannot lock a missing row.
    ------------------------------------------------------------------------- */
 app.post("/media/save", async (req, res) => {
   let client = null;
@@ -1810,8 +2116,7 @@ app.post("/media/save", async (req, res) => {
       clearSessionCookie(res);
 
       return res.status(401).json({
-        error:
-          "Not authenticated.",
+        error: "Not authenticated.",
       });
     }
 
@@ -1829,7 +2134,6 @@ app.post("/media/save", async (req, res) => {
     const expectedSyncRev =
       Math.max(
         0,
-
         Math.floor(
           Number(
             req.body?.syncRev
@@ -1838,9 +2142,7 @@ app.post("/media/save", async (req, res) => {
       );
 
     const mediaJson =
-      JSON.stringify(
-        media
-      );
+      JSON.stringify(media);
 
     if (
       mediaJson.length >
@@ -1855,13 +2157,10 @@ app.post("/media/save", async (req, res) => {
     client =
       await pool.connect();
 
-    await client.query(
-      "BEGIN"
-    );
+    await client.query("BEGIN");
 
     /*
-     * A lock akkor is működik,
-     * ha még nincs world_media sor.
+     * Stable per-world transaction lock, including when the row doesn't exist.
      */
     await client.query(
       `
@@ -1883,22 +2182,16 @@ app.post("/media/save", async (req, res) => {
         LIMIT 1
         FOR UPDATE
         `,
-        [
-          session.worldCode,
-        ]
+        [session.worldCode]
       );
 
     const current =
       mediaEnvelopeFromRow(
         currentResult.rows.length
-          ? currentResult.rows[0]
-              .data
+          ? currentResult.rows[0].data
           : {}
       );
 
-    /*
-     * STALE MEDIA SNAPSHOT
-     */
     if (
       expectedSyncRev !==
       current.syncRev
@@ -1911,17 +2204,12 @@ app.post("/media/save", async (req, res) => {
       client = null;
 
       return res.status(409).json({
-        code:
-          "MEDIA_CONFLICT",
-
+        code: "MEDIA_CONFLICT",
         error:
           "The media library changed on another client.",
-
         expectedSyncRev,
-
         serverSyncRev:
           current.syncRev,
-
         media:
           current.media,
       });
@@ -1952,26 +2240,18 @@ app.post("/media/save", async (req, res) => {
       `,
       [
         session.worldCode,
-
-        JSON.stringify(
-          envelope
-        ),
+        JSON.stringify(envelope),
       ]
     );
 
-    await client.query(
-      "COMMIT"
-    );
-
+    await client.query("COMMIT");
     client.release();
     client = null;
 
     return res.json({
       ok: true,
-
       syncRev:
         nextSyncRev,
-
       media,
     });
   } catch (err) {
@@ -1992,422 +2272,321 @@ app.post("/media/save", async (req, res) => {
     );
 
     return res.status(500).json({
-      error:
-        "Media save failed.",
+      error: "Media save failed.",
     });
   }
 });
 
-/* -------------------------------------------------------------------------
-   AI PROXY
-   OpenAI / Gemini / Anthropic
-   ------------------------------------------------------------------------- */
+function parseImageDataUrl(value) {
+  const raw = String(value || "");
+  const match = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/);
 
-app.post("/ai/messages", async (req, res) => {
-  const provider =
-    getProvider(
-      req.body
-    );
+  if (!match) return null;
 
-  /* ---------- OpenAI ---------- */
-  if (
-    provider ===
-    "openai"
-  ) {
-    if (
-      !OPENAI_API_KEY
-    ) {
-      return res
-        .status(500)
-        .json({
-          error:
-            "Missing OPENAI_API_KEY environment variable. Configure it before using OpenAI.",
-        });
-    }
+  return {
+    mimeType: match[1].toLowerCase(),
+    base64: match[2].replace(/\s+/g, ""),
+    dataUrl: raw,
+  };
+}
 
-    try {
-      const r =
-        await fetch(
-          "https://api.openai.com/v1/chat/completions",
-          {
-            method: "POST",
+function visionTextFromAnthropic(data) {
+  return Array.isArray(data?.content)
+    ? data.content.map((x) => x?.type === "text" ? x.text || "" : "").join("")
+    : "";
+}
 
-            headers: {
-              "Content-Type":
-                "application/json",
-
-              Authorization:
-                `Bearer ${OPENAI_API_KEY}`,
-            },
-
-            body:
-              JSON.stringify(
-                buildOpenAIPayload(
-                  req.body
-                )
-              ),
-          }
-        );
-
-      const text =
-        await r.text();
-
-      let payload;
-
-      try {
-        payload =
-          JSON.parse(text);
-      } catch {
-        payload = {
-          error: {
-            message: text,
-          },
-        };
-      }
-
-      if (!r.ok) {
-        return res
-          .status(r.status)
-          .json(payload);
-      }
-
-      return res.json(
-        normalizeOpenAIResponse(
-          payload
-        )
-      );
-    } catch (e) {
-      console.error(
-        "OpenAI proxy error:",
-        e
-      );
-
-      return res
-        .status(502)
-        .json({
-          error:
-            "OpenAI proxy error",
-        });
-    }
-  }
-
-  /* ---------- Gemini ---------- */
-  if (
-    provider ===
-    "gemini"
-  ) {
-    if (
-      !GEMINI_API_KEY
-    ) {
-      return res
-        .status(500)
-        .json({
-          error:
-            "Missing GEMINI_API_KEY environment variable. Configure it before using Gemini.",
-        });
-    }
-
-    try {
-      const model =
-        req.body?.model ||
-        "gemini-3.6-flash";
-
-      const modelsToTry = [
-        ...new Set([
-          model,
-
-          process.env
-            .GEMINI_FALLBACK_MODEL ||
-            "gemini-3.5-flash",
-        ]),
-      ];
-
-      let r = null;
-      let payload = null;
-
-      for (
-        const candidateModel
-        of modelsToTry
-      ) {
-        const url =
-          new URL(
-            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-              candidateModel
-            )}:generateContent`
-          );
-
-        url.searchParams.set(
-          "key",
-          GEMINI_API_KEY
-        );
-
-        for (
-          let attempt = 1;
-          attempt <= 3;
-          attempt++
-        ) {
-          r =
-            await fetch(
-              url,
-              {
-                method:
-                  "POST",
-
-                headers: {
-                  "Content-Type":
-                    "application/json",
-                },
-
-                body:
-                  JSON.stringify(
-                    buildGeminiPayload(
-                      req.body
-                    )
-                  ),
-              }
-            );
-
-          const text =
-            await r.text();
-
-          try {
-            payload =
-              JSON.parse(
-                text
-              );
-          } catch {
-            payload = {
-              error: {
-                message:
-                  text,
-              },
-            };
-          }
-
-          if (r.ok) {
-            return res.json(
-              normalizeGeminiResponse(
-                payload
-              )
-            );
-          }
-
-          const retryable =
-            [
-              429,
-              500,
-              503,
-            ].includes(
-              r.status
-            );
-
-          if (!retryable) {
-            return res
-              .status(
-                r.status
-              )
-              .json(
-                payload
-              );
-          }
-
-          console.warn(
-            `Gemini ${candidateModel} returned ${r.status} (attempt ${attempt}/3)`
-          );
-
-          if (
-            attempt < 3
-          ) {
-            await new Promise(
-              (resolve) =>
-                setTimeout(
-                  resolve,
-                  1200 *
-                    attempt
-                )
-            );
-          }
-        }
-      }
-
-      return res
-        .status(
-          r?.status ||
-          503
-        )
-        .json(
-          payload || {
-            error: {
-              message:
-                "Gemini is temporarily unavailable after retries.",
-            },
-          }
-        );
-    } catch (e) {
-      console.error(
-        "Gemini proxy error:",
-        e
-      );
-
-      return res
-        .status(502)
-        .json({
-          error:
-            "Gemini proxy error",
-        });
-    }
-  }
-
-  /* ---------- Anthropic ---------- */
-
-  if (
-    !ANTHROPIC_API_KEY
-  ) {
-    return res
-      .status(500)
-      .json({
-        error:
-          "Missing ANTHROPIC_API_KEY environment variable. Configure it before using Anthropic.",
-      });
-  }
-
+app.post("/ai/vision", async (req, res) => {
   try {
-    const {
-      provider,
-      ...rest
-    } =
-      req.body || {};
+    if (!(await requireDb(res))) return;
 
-    const outboundBody = {
-      ...rest,
+    const session = await getSession(req);
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
 
-      max_tokens:
-        req.body
-          ?.max_tokens ??
-        1024,
-    };
+    const image = parseImageDataUrl(req.body?.image);
+    const prompt = String(
+      req.body?.prompt ||
+      "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when actually visible. Do not identify real people by name."
+    ).slice(0, 5000);
 
-    const r =
-      await fetch(
-        "https://api.anthropic.com/v1/messages",
-        {
-          method:
-            "POST",
+    if (!image) {
+      return res.status(400).json({ error: "A valid base64 image data URL is required." });
+    }
 
-          headers: {
-            "Content-Type":
-              "application/json",
+    if (image.base64.length > 12 * 1024 * 1024) {
+      return res.status(413).json({ error: "Image is too large for vision analysis." });
+    }
 
-            "x-api-key":
-              ANTHROPIC_API_KEY,
+    const provider = getProvider(req.body || {});
 
-            "anthropic-version":
-              process.env
-                .ANTHROPIC_VERSION ||
-              "2023-06-01",
+    if (provider === "openai") {
+      if (!OPENAI_API_KEY) {
+        return res.status(500).json({ error: "Missing OPENAI_API_KEY." });
+      }
 
-            Accept:
-              "application/json",
-          },
+      const requested = String(req.body?.model || "");
+      const model = /^(gpt|o1|o3)/i.test(requested)
+        ? requested
+        : (process.env.OPENAI_VISION_MODEL || "gpt-4o-mini");
 
-          body:
-            JSON.stringify(
-              outboundBody
-            ),
-        }
-      );
-
-    const text =
-      await r.text();
-
-    let payload;
-
-    try {
-      payload =
-        JSON.parse(text);
-    } catch {
-      payload = {
-        error: {
-          message: text,
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENAI_API_KEY}`,
         },
-      };
-    }
-
-    res.status(
-      r.status
-    );
-
-    /*
-     * Useful for rate-limit handling.
-     */
-    if (
-      r.headers.get(
-        "retry-after"
-      )
-    ) {
-      res.setHeader(
-        "retry-after",
-
-        r.headers.get(
-          "retry-after"
-        )
-      );
-    }
-
-    return res.json(
-      payload
-    );
-  } catch (e) {
-    console.error(
-      "Proxy error:",
-      e
-    );
-
-    return res
-      .status(502)
-      .json({
-        error:
-          "Proxy error",
+        body: JSON.stringify({
+          model,
+          max_tokens: 350,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: prompt },
+              { type: "image_url", image_url: { url: image.dataUrl } },
+            ],
+          }],
+        }),
       });
+
+      const payload = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(payload);
+
+      return res.json({
+        ok: true,
+        text: payload?.choices?.[0]?.message?.content || "",
+        provider: "openai",
+      });
+    }
+
+    if (provider === "gemini") {
+      if (!GEMINI_API_KEY) {
+        return res.status(500).json({ error: "Missing GEMINI_API_KEY." });
+      }
+
+      const requested = String(req.body?.model || "");
+      const model = requested.startsWith("gemini")
+        ? requested
+        : (process.env.GEMINI_VISION_MODEL || "gemini-3.5-flash");
+
+      const url = new URL(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+      );
+      url.searchParams.set("key", GEMINI_API_KEY);
+
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            role: "user",
+            parts: [
+              { text: prompt },
+              { inlineData: { mimeType: image.mimeType, data: image.base64 } },
+            ],
+          }],
+          generationConfig: { maxOutputTokens: 350 },
+        }),
+      });
+
+      const payload = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(payload);
+
+      const text = payload?.candidates?.[0]?.content?.parts
+        ?.map((p) => p?.text || "")
+        .join("") || "";
+
+      return res.json({ ok: true, text, provider: "gemini" });
+    }
+
+    if (!ANTHROPIC_API_KEY) {
+      return res.status(500).json({ error: "Missing ANTHROPIC_API_KEY." });
+    }
+
+    const requested = String(req.body?.model || "");
+    const model = requested.startsWith("claude")
+      ? requested
+      : (process.env.ANTHROPIC_VISION_MODEL || "claude-sonnet-4-6");
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": process.env.ANTHROPIC_VERSION || "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 350,
+        messages: [{
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: image.mimeType,
+                data: image.base64,
+              },
+            },
+            { type: "text", text: prompt },
+          ],
+        }],
+      }),
+    });
+
+    const payload = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(r.status).json(payload);
+
+    return res.json({
+      ok: true,
+      text: visionTextFromAnthropic(payload),
+      provider: "anthropic",
+    });
+  } catch (err) {
+    console.error("Vision proxy error:", err);
+    return res.status(502).json({ error: "Vision analysis failed." });
   }
 });
 
-/* -------------------------------------------------------------------------
-   SERVE BUILT REACT / VITE APP
-   ------------------------------------------------------------------------- */
+app.post("/ai/messages", async (req, res) => {
+  const provider = getProvider(req.body);
+  if (provider === "openai") {
+    if (!OPENAI_API_KEY) return res.status(500).json({ error: "Missing OPENAI_API_KEY environment variable. Configure it before using OpenAI." });
+    try {
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify(buildOpenAIPayload(req.body)),
+      });
+      const text = await r.text();
+      let payload;
+      try { payload = JSON.parse(text); } catch { payload = { error: { message: text } }; }
+      if (!r.ok) {
+        return res.status(r.status).json(payload);
+      }
+      return res.json(normalizeOpenAIResponse(payload));
+    } catch (e) {
+      console.error("OpenAI proxy error:", e);
+      return res.status(502).json({ error: "OpenAI proxy error" });
+    }
+  }
 
-app.use(
-  express.static(
-    "dist"
-  )
-);
+  if (provider === "gemini") {
+    if (!GEMINI_API_KEY) return res.status(500).json({ error: "Missing GEMINI_API_KEY environment variable. Configure it before using Gemini." });
+    try {
+    const model = req.body?.model || "gemini-3.6-flash";
 
-app.use(
-  (req, res, next) => {
-    if (
-      req.method ===
-        "GET" &&
-      !req.path.startsWith(
-        "/ai/"
-      )
-    ) {
-      return res.sendFile(
-        "index.html",
-        {
-          root:
-            "dist",
-        }
-      );
+const modelsToTry = [
+  ...new Set([
+    model,
+    process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash",
+  ]),
+];
+
+let r = null;
+let payload = null;
+
+for (const candidateModel of modelsToTry) {
+  const url = new URL(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidateModel)}:generateContent`
+  );
+  url.searchParams.set("key", GEMINI_API_KEY);
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildGeminiPayload(req.body)),
+    });
+
+    const text = await r.text();
+
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = { error: { message: text } };
     }
 
-    next();
+    if (r.ok) {
+      return res.json(normalizeGeminiResponse(payload));
+    }
+
+    const retryable = [429, 500, 503].includes(r.status);
+
+    if (!retryable) {
+      return res.status(r.status).json(payload);
+    }
+
+    console.warn(
+      `Gemini ${candidateModel} returned ${r.status} (attempt ${attempt}/3)`
+    );
+
+    if (attempt < 3) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, 1200 * attempt)
+      );
+    }
+  }
+}
+
+return res.status(r?.status || 503).json(
+  payload || {
+    error: {
+      message: "Gemini is temporarily unavailable after retries.",
+    },
   }
 );
+    } catch (e) {
+      console.error("Gemini proxy error:", e);
+      return res.status(502).json({ error: "Gemini proxy error" });
+    }
+  }
 
-app.listen(
-  PORT,
-  () =>
-    console.log(
-      `App + AI proxy listening on port ${PORT}`
-    )
-);
+  if (!ANTHROPIC_API_KEY) return res.status(500).json({ error: "Missing ANTHROPIC_API_KEY environment variable. Configure it before using Anthropic." });
+  try {
+    const { provider, ...rest } = req.body || {};
+    const outboundBody = {
+      ...rest,
+      max_tokens: req.body?.max_tokens ?? 1024,
+    };
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": process.env.ANTHROPIC_VERSION || "2023-06-01",
+        "Accept": "application/json",
+      },
+      body: JSON.stringify(outboundBody),
+    });
+    const text = await r.text();
+    let payload;
+    try { payload = JSON.parse(text); } catch { payload = { error: { message: text } }; }
+    res.status(r.status);
+    // propagate headers that may be useful (e.g. retry-after)
+    if (r.headers.get("retry-after")) res.setHeader("retry-after", r.headers.get("retry-after"));
+    return res.json(payload);
+  } catch (e) {
+    console.error("Proxy error:", e);
+    return res.status(502).json({ error: "Proxy error" });
+  }
+});
+
+// Serve the built React/Vite app in production
+app.use(express.static("dist"));
+
+app.use((req, res, next) => {
+  if (req.method === "GET" && !req.path.startsWith("/ai/")) {
+    return res.sendFile("index.html", { root: "dist" });
+  }
+  next();
+});
+
+app.listen(PORT, () => console.log(`App + AI proxy listening on port ${PORT}`));

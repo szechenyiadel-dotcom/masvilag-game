@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
-  X, Trash2, ChevronLeft, Loader2, Heart, Lock, Zap, Pencil,
+  X, Trash2, ChevronLeft, ChevronRight, Loader2, Heart, Lock, Zap, Pencil,
   Image as ImageIcon, Upload, Film, Network, Copy, UserCircle, Check, Bell
 } from "lucide-react";
 
@@ -1555,7 +1555,7 @@ function parseDate(s) {
   const year = ym ? Number(ym[1]) : null;
   if (ym) str = str.replace(ym[1], " ");
   let m = null, d = null;
-  const mi = HU_MONTHS.findIndex((n) => str.indexOf(n.slice(0, 4)) >= 0);
+  const mi = HU_MONTHS.findIndex((n) => str.indexOf(n.slice(0, 10)) >= 0);
   if (mi >= 0) { m = mi + 1; str = str.replace(HU_MONTHS[mi], " "); }
   const nums = (str.match(/\d{1,2}/g) || []).map(Number);
   if (m === null) { m = nums.length > 0 ? nums[0] : null; d = nums.length > 1 ? nums[1] : null; }
@@ -2032,7 +2032,10 @@ const kindOf = (w, id) => (
 const chatKey = (meId, charId) => String(meId) + "|" + String(charId);
 
 const PUBLIC_PROFILE_KEYS = ["name", "nick", "username", "birth", "gender", "orientation", "height", "job", "city", "bio", "looks", "avatar", "cover"];
-const PRIVATE_PROFILE_KEYS = ["personality", "traits", "speech", "voice", "goals", "fears", "likes", "secrets", "backstory", "extra", "brief", "briefSrc"];
+const PRIVATE_PROFILE_KEYS = [
+  "personality", "traits", "speech", "voice", "goals", "fears", "likes", "secrets", "backstory", "extra", "brief", "briefSrc",
+  "skills", "abilities", "combat", "rank", "role", "organization", "affiliation"
+];
 
 function defaultCharacterMemory() {
   return {
@@ -2323,7 +2326,7 @@ const noteOf = (w, id) =>
     (x) => x.authorId === id
   ) || null;
 
-function setNote(n, authorId, text, forcedId) {
+function setNote(n, authorId, text, forcedId, extra = {}) {
   pruneExpiredNotes(n);
 
   const t = String(text || "")
@@ -2331,24 +2334,38 @@ function setNote(n, authorId, text, forcedId) {
     .trim()
     .slice(0, NOTE_MAX);
 
+  const musicRaw =
+    extra && extra.music && typeof extra.music === "object"
+      ? extra.music
+      : {};
+
+  const music = {
+    title: String(musicRaw.title || "").trim().slice(0, 120),
+    artist: String(musicRaw.artist || "").trim().slice(0, 120),
+    summary: String(musicRaw.summary || "").trim().slice(0, 700),
+  };
+
+  const hasMusic = Boolean(music.title || music.artist);
+
   // Egy karakternek egyszerre csak egy aktív note-ja lehet.
-  // Üres szöveg esetén ez egyben törlésként is működik.
   n.notes = (n.notes || []).filter(
     (x) => x && x.authorId !== authorId
   );
 
-  if (t) {
+  if (t || hasMusic) {
     const createdAt = now();
 
     n.notes.unshift({
       id: forcedId || uid(),
       authorId,
       text: t,
+      music: hasMusic ? music : null,
       ts: createdAt,
       reacts: [],
       reactedBy: [],
     });
   }
+
   n.notes = n.notes.slice(0, 80);
 }
 
@@ -2356,10 +2373,17 @@ function setNote(n, authorId, text, forcedId) {
 function notesForAI(w) {
   const list = liveNotes(w);
   if (!list.length) return "";
-  return list.map((x) => {
-    const a = charById(w, x.authorId);
-    return `${a ? a.name : "?"} [${x.authorId}]: "${x.text}"`;
-  }).join("\n");
+
+  return list
+    .map((x) => {
+      const a = charById(w, x.authorId);
+      const music = x.music && (x.music.title || x.music.artist)
+        ? ` | MUSIC: ${x.music.title || "?"}${x.music.artist ? ` — ${x.music.artist}` : ""}${x.music.summary ? ` | AI-understood theme/mood: ${x.music.summary}` : ""}`
+        : "";
+
+      return `${a ? a.name : "?"} [${x.authorId}]: "${x.text || ""}"${music}`;
+    })
+    .join("\n");
 }
 
 /* ---------- értesítések ---------- */
@@ -2412,23 +2436,151 @@ function noteComment(n, post, c) {
 }
 
 /* @említések felismerése: kit szólítottak meg a szövegben. */
+function mentionedIdsInText(w, txt, authorId = "") {
+  if (!w || !txt) return [];
+
+  const low = String(txt).toLowerCase();
+  const ids = [];
+
+  socialProfiles(w).forEach((person) => {
+    if (!person || person.id === authorId) return;
+
+    const handle = String(person.username || "")
+      .trim()
+      .toLowerCase();
+
+    if (!handle) return;
+
+    const re = new RegExp(
+      `(^|[^a-z0-9._-])@${handle.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?=$|[^a-z0-9._-])`,
+      "i"
+    );
+
+    if (re.test(low)) {
+      ids.push(person.id);
+    }
+  });
+
+  return [...new Set(ids)];
+}
+
+function addMentionToText(value, person) {
+  if (!person || !person.username) return String(value || "");
+
+  const tag = `@${person.username}`;
+  const current = String(value || "");
+
+  if (current.toLowerCase().includes(tag.toLowerCase())) {
+    return current;
+  }
+
+  return `${current}${current && !/\\s$/.test(current) ? " " : ""}${tag} `;
+}
+
 function noteMentions(n, txt, authorId, link) {
   if (!txt) return;
-  const low = String(txt).toLowerCase();
-  Object.keys(n.players || {}).forEach((pid) => {
-    if (pid === authorId) return;
-    const h = (n.players[pid].username || "").toLowerCase();
-    if (!h || low.indexOf("@" + h) === -1) return;
+
+  const targets = mentionedIdsInText(
+    n,
+    txt,
+    authorId
+  );
+
+  targets.forEach((targetId) => {
     const who = charById(n, authorId);
-    const nm = who ? who.name : sysTextFor(n, pid, "someone");
-    pushNote(n, pid, {
-      icon: "📣",
-      translationKey: "mentionedYou",
-      params: { name: nm },
-      text: sysTextFor(n, pid, "mentionedYou", { name: nm }),
-      link,
-    });
+    const target = charById(n, targetId);
+
+    if (isHuman(n, targetId)) {
+      const nm = who
+        ? who.name
+        : sysTextFor(n, targetId, "someone");
+
+      pushNote(n, targetId, {
+        icon: "📣",
+        translationKey: "mentionedYou",
+        params: { name: nm },
+        text: sysTextFor(
+          n,
+          targetId,
+          "mentionedYou",
+          { name: nm }
+        ),
+        link,
+      });
+    } else if (target && !isMediaAccount(n, targetId)) {
+      /*
+       * AI-karaktereknél az @tag nem UI notification,
+       * hanem valódi nyilvános tudás/esemény.
+       */
+      rememberKnowledge(n, targetId, {
+        kind: "event",
+        source: "public_mention",
+        confidence: 1,
+        text: sysLangText(
+          n,
+          targetId,
+          `${who ? who.name : "Valaki"} nyilvánosan megjelölt: ${cut(txt, 140)}`,
+          `${who ? who.name : "Someone"} publicly tagged me: ${cut(txt, 140)}`
+        ),
+      });
+    }
   });
+
+  return targets;
+}
+
+function MentionBar({ w, value, onChange, compact = false }) {
+  const { tt } = useLang();
+  const [open, setOpen] = useState(false);
+
+  const people = socialProfiles(w)
+    .filter((person) =>
+      person &&
+      person.id !== w.meId &&
+      !isMediaAccount(w, person.id)
+    )
+    .slice()
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+
+  if (!people.length) return null;
+
+  return (
+    <div style={{ marginTop: compact ? 5 : 7 }}>
+      <button
+        type="button"
+        className="btn tiny ghost"
+        onClick={() => setOpen(!open)}
+      >
+        @ {tt("Megjelölés", "Tag")}
+      </button>
+
+      {open ? (
+        <div
+          className="row"
+          style={{
+            gap: 5,
+            flexWrap: "wrap",
+            marginTop: 6,
+          }}
+        >
+          {people.map((person) => (
+            <button
+              type="button"
+              key={person.id}
+              className="btn tiny ghost"
+              style={{ fontSize: 10.5 }}
+              onClick={() => {
+                onChange(addMentionToText(value, person));
+                setOpen(false);
+              }}
+            >
+              @{person.username}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /* Egy változás mindig egyirányú: "a" mit érez ezután "b" iránt. */
@@ -2738,6 +2890,60 @@ function applyChanges(
       patch
     );
 
+    /*
+     * SOCIAL FOLLOW CONSEQUENCE:
+     * ha egy AI-nak erős társas oka van követni a másikat
+     * (jó kapcsolat, crush, család, közeli barát, közös frakció stb.),
+     * ne csak a ritka háttér-tickre várjunk.
+     *
+     * Ez AI -> AI követéseket is létrehoz.
+     */
+    if (
+      !isHuman(n, a) &&
+      socialProfileById(n, b) &&
+      !isFollowing(n, a, b)
+    ) {
+      const followScore =
+        followInterestScore(
+          n,
+          a,
+          b
+        );
+
+      const bondText =
+        String(
+          patch.bond ||
+          r.bond ||
+          r.type ||
+          ""
+        ).toLowerCase();
+
+      const especiallyLinked =
+        /best friend|legjobb bar|close friend|közeli bar|friend|barát|crush|dating|járnak|engaged|jegyes|spouse|házastárs|partner|mother|father|parent|sibling|brother|sister|cousin|aunt|uncle|grand|anya|apa|szül|testvér|unokatestvér|nagynéni|nagybácsi|nagyszül|rokon/.test(
+          bondText
+        );
+
+      if (
+        followScore >= 42 ||
+        especiallyLinked
+      ) {
+        simEnqueue(
+          n,
+          mkAction(
+            "follow",
+            `relationship-follow:${a}:${b}:${Math.floor(now() / 3600000)}`,
+            {
+              actorId:a,
+              targetId:b,
+              trigger:"relationship",
+              score:followScore,
+            },
+            "event"
+          )
+        );
+      }
+    }
+
     const memA =
       ensureCharMemory(
         n,
@@ -2978,7 +3184,7 @@ function rememberAboutTarget(w, observerId, targetId, payload) {
 }
 
 /* Album-szerkesztő: több kép feltöltése képaláírással. */
-function AlbumEditor({ value, onChange }) {
+function AlbumEditor({ value, onChange, owner }) {
   const { media, addImage } = useMedia();
   const { tt } = useLang();
   const ref = useRef(null);
@@ -2990,48 +3196,204 @@ function AlbumEditor({ value, onChange }) {
     const files = Array.from((e.target && e.target.files) || []);
     e.target.value = "";
     if (!files.length) return;
-    setBusy(true); setErr("");
+
+    setBusy(true);
+    setErr("");
+
     const added = [];
+
     for (let i = 0; i < files.length; i++) {
       try {
-        if (files[i].size > 6 * 1024 * 1024) throw new Error(tt(`"${files[i].name}" túl nagy (max 6 MB).`, `"${files[i].name}" is too large (max 6 MB).`));
+        if (files[i].size > 6 * 1024 * 1024) {
+          throw new Error(
+            tt(
+              `"${files[i].name}" túl nagy (max 6 MB).`,
+              `"${files[i].name}" is too large (max 6 MB).`
+            )
+          );
+        }
+
         const data = await shrink(files[i], 900);
-        const ref2 = addImage(data, { category: "album", originalFileName: files[i].name, mimeType: files[i].type, size: files[i].size });
-        if (!ref2) throw new Error(tt("Megtelt a világ képtára — törölj pár képet, hogy férjen újabb.", "The world's media storage is full — delete a few images to make room for more."));
-        added.push({ id: uid(), imageId: imageIdOf(ref2), note: "" });
-      } catch (e2) { setErr((e2 && e2.message) || tt("Nem sikerült.", "Failed.")); break; }
+        const ref2 = addImage(data, {
+          category: "album",
+          originalFileName: files[i].name,
+          mimeType: files[i].type,
+          size: files[i].size,
+          ownerCharacterId: owner && owner.id ? owner.id : "",
+        });
+
+        if (!ref2) {
+          throw new Error(
+            tt(
+              "Megtelt a világ képtára — törölj pár képet, hogy férjen újabb.",
+              "The world's media storage is full — delete a few images to make room for more."
+            )
+          );
+        }
+
+        let vision = "";
+
+        try {
+          vision = await analyzeImageDataUrl(
+            data,
+            tt(
+              `Írd le röviden, mi látható ezen a ${owner && owner.name ? owner.name + " karakterhez" : "karakterhez"} tartozó képen. Ne azonosíts valódi személyt név szerint. Arra figyelj, mit csinál a képen látható személy, milyen ruhában van, milyen a helyszín és a hangulat. Csak azt állítsd, ami ténylegesen látható.`,
+              `Briefly describe what is visibly shown in this image belonging to ${owner && owner.name ? owner.name : "the character"}. Do not identify a real person by name. Focus on what the visible person is doing, clothing, location and mood. State only what is actually visible.`
+            )
+          );
+        } catch (visionErr) {
+          console.warn("Album vision analysis failed:", visionErr);
+        }
+
+        added.push({
+          id: uid(),
+          imageId: imageIdOf(ref2),
+          note: "",
+          vision,
+          analyzedAt: vision ? now() : 0,
+        });
+      } catch (e2) {
+        setErr(
+          (e2 && e2.message) ||
+          tt("Nem sikerült.", "Failed.")
+        );
+        break;
+      }
     }
-    if (added.length) onChange(list.concat(added));
+
+    if (added.length) {
+      onChange(list.concat(added));
+    }
+
     setBusy(false);
   };
 
   return (
     <>
-      <label className="f">{tt("Album — feltöltött képek, amiket ki lehet posztolni", "Album — uploaded images that can be posted")}</label>
+      <label className="f">
+        {tt(
+          "Fotóalbum — az AI innen tud képet posztolni vagy chatben küldeni",
+          "Photo album — the AI can post or send these images in chat"
+        )}
+      </label>
+
       <p className="hint">
-        {tt("Nyaralós képek, szelfik, buli, bármi. Írj mindegyikhez egy rövid képaláírást: ebből tudja az AI, mikor illik előhúzni. Egyszerre több képet is kijelölhetsz.",
-            "Vacation photos, selfies, parties, anything. Write a short caption for each: this is how the AI knows when it fits to bring it up. You can select several images at once.")}
+        {tt(
+          "A feltöltött képet az AI automatikusan megnézi, és megjegyzi, nagyjából mi látható rajta: mit csinál a karakter, miben van, hol lehet és milyen a hangulat. Írhatsz hozzá saját megjegyzést is. Ha egy képet posztként felhasznál, az kikerül az albumból, így nem posztolja újra.",
+          "The AI automatically inspects each uploaded image and remembers roughly what is visible: what the character is doing, what they're wearing, the setting and mood. You can add your own note too. Once an image is used in a post, it leaves the album so it cannot be posted again."
+        )}
       </p>
 
       <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 10 }}>
         {list.map((x, i) => (
-          <div key={x.id} style={{ width: 104 }}>
+          <div key={x.id} style={{ width: 124 }}>
             <div style={{ position: "relative" }}>
-              <img src={resolveImg(x.imageId ? imageRef(x.imageId) : x.src, media)} alt="" style={{ width: 104, height: 104, objectFit: "cover", borderRadius: 10, border: "1px solid var(--line)" }} />
-              <button className="btn tiny" style={{ position: "absolute", top: 4, right: 4, padding: "3px 6px", background: "rgba(10,9,16,.85)" }}
-                onClick={() => onChange(list.filter((y) => y.id !== x.id))}><Trash2 size={11} /></button>
-              <span className="chip" style={{ position: "absolute", bottom: 4, left: 4, background: "rgba(10,9,16,.85)" }}>{tt(`kép ${i + 1}`, `image ${i + 1}`)}</span>
+              <img
+                src={resolveImg(x.imageId ? imageRef(x.imageId) : x.src, media)}
+                alt=""
+                style={{
+                  width: 124,
+                  height: 124,
+                  objectFit: "cover",
+                  borderRadius: 10,
+                  border: "1px solid var(--line)",
+                }}
+              />
+
+              <button
+                type="button"
+                className="btn tiny"
+                style={{
+                  position: "absolute",
+                  top: 4,
+                  right: 4,
+                  padding: "3px 6px",
+                  background: "rgba(10,9,16,.85)",
+                }}
+                onClick={() =>
+                  onChange(
+                    list.filter((y) => y.id !== x.id)
+                  )
+                }
+              >
+                <Trash2 size={11} />
+              </button>
+
+              <span
+                className="chip"
+                style={{
+                  position: "absolute",
+                  bottom: 4,
+                  left: 4,
+                  background: "rgba(10,9,16,.85)",
+                }}
+              >
+                {tt(`kép ${i + 1}`, `image ${i + 1}`)}
+              </span>
             </div>
-            <input className="i" style={{ marginTop: 5, padding: "5px 8px", fontSize: 11.5 }} value={x.note || ""}
-              placeholder={tt("képaláírás", "caption")} onChange={(e) => onChange(list.map((y) => (y.id === x.id ? { ...y, note: e.target.value } : y)))} />
+
+            <input
+              className="i"
+              style={{ marginTop: 5, padding: "5px 8px", fontSize: 11.5 }}
+              value={x.note || ""}
+              placeholder={tt("saját megjegyzés", "your note")}
+              onChange={(e) =>
+                onChange(
+                  list.map((y) =>
+                    y.id === x.id
+                      ? { ...y, note: e.target.value }
+                      : y
+                  )
+                )
+              }
+            />
+
+            {x.vision ? (
+              <div
+                className="hint"
+                style={{
+                  marginTop: 5,
+                  fontSize: 10.5,
+                  lineHeight: 1.35,
+                }}
+              >
+                <Sparkles size={10} /> {x.vision}
+              </div>
+            ) : (
+              <div className="hint" style={{ marginTop: 5, fontSize: 10.5 }}>
+                {tt("nincs képelemzés", "no image analysis")}
+              </div>
+            )}
           </div>
         ))}
       </div>
 
-      <button className="btn full" style={{ marginTop: 10 }} onClick={() => ref.current && ref.current.click()} disabled={busy}>
-        {busy ? <Loader2 size={14} className="spin" /> : <ImageIcon size={14} />} {tt("Képek hozzáadása", "Add images")}
+      <button
+        type="button"
+        className="btn full"
+        style={{ marginTop: 10 }}
+        onClick={() => ref.current && ref.current.click()}
+        disabled={busy}
+      >
+        {busy ? (
+          <Loader2 size={14} className="spin" />
+        ) : (
+          <ImageIcon size={14} />
+        )}
+        {busy
+          ? tt("Kép elemzése…", "Analyzing image…")
+          : tt("Képek hozzáadása", "Add images")}
       </button>
-      <input ref={ref} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={pick} />
+
+      <input
+        ref={ref}
+        type="file"
+        accept="image/*"
+        multiple
+        style={{ display: "none" }}
+        onChange={pick}
+      />
+
       {err && <div className="err">{err}</div>}
     </>
   );
@@ -3104,7 +3466,19 @@ const albumOf = (c) => (c && Array.isArray(c.album) ? c.album : []);
 function albumList(c) {
   const a = albumOf(c);
   if (!a.length) return "";
-  return a.map((x, i) => `[kep${i + 1}] ${x.note || "cím nélküli kép"}`).join(" ; ");
+
+  return a
+    .map((x, i) => {
+      const details = [
+        x.note ? `manual note: ${x.note}` : "",
+        x.vision ? `visible image content: ${x.vision}` : "",
+      ]
+        .filter(Boolean)
+        .join(" | ");
+
+      return `[kep${i + 1}] ${details || "image without description"}`;
+    })
+    .join(" ; ");
 }
 
 /* Az AI "kep2" alakban hivatkozik, de a képaláírást is elfogadjuk. */
@@ -3117,7 +3491,15 @@ function albumFind(c, key) {
     const i = Number(m[1]) - 1;
     return a[i] || null;
   }
-  return a.find((x) => (x.note || "").toLowerCase() === k) || null;
+  return a.find((x) =>
+    (x.note || "").toLowerCase() === k ||
+    (x.vision || "").toLowerCase() === k
+  ) || null;
+}
+
+function consumeAlbumItem(c, item) {
+  if (!c || !item || !Array.isArray(c.album)) return;
+  c.album = c.album.filter((x) => x && x.id !== item.id);
 }
 
 /* ---------- Claude API ----------
@@ -3683,6 +4065,13 @@ function sheet(c, w, deep, isPlayerSheet, accessMode = "private") {
     ["város", "city", c.city],
     ["becenév", "nick", c.nick],
     ["egyéb", "extra", c.extra],
+    ["képességek", "skills", c.skills],
+    ["speciális képességek", "abilities", c.abilities],
+    ["harci tudás", "combat", c.combat],
+    ["rang", "rank", c.rank],
+    ["szerep", "role", c.role],
+    ["szervezet", "organization", c.organization],
+    ["hovatartozás", "affiliation", c.affiliation],
     ["háttér", "backstory", c.backstory],
     ["albuma", "album", albumList(c)],
   ];
@@ -3754,6 +4143,15 @@ function selfMemoryForPrompt(w, id) {
 /* A hang közvetlenül a feladat elé — így nem sikkad el a sok szöveg végén. */
 function voiceCard(c) {
   const bits = [];
+
+  const selfCanon = fullSelfCanon(c);
+
+  if (selfCanon) {
+    bits.push(
+      `TELJES SAJÁT KÁNON — EZEK NEM OPCIONÁLIS HÁTTÉRADATOK. Minden rólad szóló explicit tényből indulj ki, és a személyiségedet 100%-osan következetesen add át:
+${spread(selfCanon, 14000)}`
+    );
+  }
 
   if (c.gender) {
     bits.push(
@@ -4272,18 +4670,27 @@ function characterLoreCorpus(c) {
   if (!c) return "";
 
   return [
+    c.name,
+    c.nick,
+    c.username,
+    c.birth,
+    c.gender,
+    c.orientation,
+    c.height,
+    c.job,
+    c.city,
     c.bio,
+    c.looks,
     c.personality,
     c.traits,
     c.speech,
+    c.voice,
     c.goals,
     c.fears,
     c.likes,
     c.secrets,
     c.backstory,
     c.extra,
-    c.job,
-    c.city,
     c.skills,
     c.abilities,
     c.combat,
@@ -4291,57 +4698,133 @@ function characterLoreCorpus(c) {
     c.role,
     c.organization,
     c.affiliation,
+    c.brief,
   ]
     .filter(Boolean)
     .join("\n")
     .toLowerCase();
 }
 
+/*
+ * A karakter SAJÁT adatlapja kánon.
+ *
+ * Nem egy rövid personality kivonatból kell "kitalálni" őt:
+ * minden róla szóló mező aktív önismeret / karaktervezetési adat.
+ */
+function fullSelfCanon(c) {
+  if (!c) return "";
+
+  const rows = [
+    ["Name", c.name],
+    ["Nickname", c.nick],
+    ["Gender", c.gender],
+    ["Orientation", c.orientation],
+    ["Birth", c.birth],
+    ["Job / school", c.job],
+    ["City", c.city],
+    ["Public bio", c.bio],
+    ["Appearance", c.looks],
+    ["PERSONALITY", c.personality],
+    ["TRAITS", c.traits],
+    ["SPEECH STYLE", c.speech],
+    ["VOICE EXAMPLES — STYLE ONLY", c.voice],
+    ["GOALS", c.goals],
+    ["FEARS", c.fears],
+    ["LIKES", c.likes],
+    ["SECRETS", c.secrets],
+    ["FULL STORY / BACKSTORY", c.backstory],
+    ["OTHER IMPORTANT CANON", c.extra],
+    ["SKILLS", c.skills],
+    ["ABILITIES", c.abilities],
+    ["COMBAT", c.combat],
+    ["RANK", c.rank],
+    ["ROLE", c.role],
+    ["ORGANIZATION", c.organization],
+    ["AFFILIATION", c.affiliation],
+  ]
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+    .map(([label, value]) => `${label}: ${String(value).trim()}`);
+
+  return rows.join("\n");
+}
+
 function loreHas(c, words) {
-  const hay =
-    characterLoreCorpus(c);
+  const hay = characterLoreCorpus(c);
 
   return (words || []).some(
-    (word) =>
-      hay.includes(
-        String(word).toLowerCase()
-      )
+    (word) => hay.includes(String(word).toLowerCase())
   );
 }
 
 function factionFlags(c) {
   return {
-    cobraKai:
-      loreHas(
-        c,
-        [
-          "cobra kai",
-          "cobra-kai",
-        ]
-      ),
+    cobraKai: loreHas(c, ["cobra kai", "cobra-kai"]),
 
-    miyagiFang:
-      loreHas(
-        c,
-        [
-          "miyagi-fang",
-          "miyagi fang",
-          "miyagi-do",
-          "miyagi do",
-          "eagle fang",
-          "eagle-fang",
-        ]
-      ),
+    miyagiFang: loreHas(c, [
+      "miyagi-fang", "miyagi fang", "miyagi-do", "miyagi do",
+      "eagle fang", "eagle-fang"
+    ]),
 
-    ironDragons:
-      loreHas(
-        c,
-        [
-          "iron dragons",
-          "iron dragon",
-        ]
-      ),
+    ironDragons: loreHas(c, ["iron dragons", "iron dragon"]),
+
+    pogue: loreHas(c, [
+      "pogue", "pogues", "the pogues", "pogue life"
+    ]),
+
+    kook: loreHas(c, [
+      "kook", "kooks", "the kooks"
+    ]),
+
+    hydra: loreHas(c, [
+      "hydra", "hydra agent", "hydra operative"
+    ]),
+
+    shield: loreHas(c, [
+      "s.h.i.e.l.d", "s.h.i.e.l.d.", "shield", "shield agent", "shield operative",
+      "strategic homeland intervention"
+    ]),
   };
+}
+
+function franchiseFactionRivalryCard(actor, target, en) {
+  const af = factionFlags(actor);
+  const tf = factionFlags(target);
+  const lines = [];
+
+  const push = (hu, english) => lines.push(en ? english : hu);
+
+  if ((af.pogue && tf.kook) || (af.kook && tf.pogue)) {
+    push(
+      "Pogue–Kook társadalmi rivalizálás: alapból legyen jelen osztályfeszültség, bizalmatlanság, gúny vagy területi lojalitás; a személyes kapcsolat felülírhatja, de a háttér akkor sem tűnik el.",
+      "Pogue–Kook social rivalry is active: class tension, distrust, mockery or territorial loyalty should naturally color the interaction; a strong personal bond can override it, but the shared history never vanishes."
+    );
+  }
+
+  if ((af.hydra && tf.shield) || (af.shield && tf.hydra)) {
+    push(
+      "HYDRA–S.H.I.E.L.D. ellenséges szervezeti múlt: a másik oldal ne legyen automatikusan semleges ismerős; jelenjen meg stratégiai bizalmatlanság, fenyegetettség, ideológiai ellenségesség vagy óvatosság, ha a személyes történet nem írja felül.",
+      "HYDRA–S.H.I.E.L.D. organizational hostility is active: the opposing side is not a neutral stranger by default; strategic distrust, threat awareness, ideological hostility or caution should show unless personal canon strongly overrides it."
+    );
+  }
+
+  if ((af.cobraKai && tf.miyagiFang) || (af.miyagiFang && tf.cobraKai)) {
+    push(
+      "Cobra Kai–Miyagi-Do/Miyagi-Fang/Eagle Fang dojo-rivalizálás aktív: versengés, dojo-büszkeség, régi sérelmek és bizalmatlanság természetesen jelenjen meg.",
+      "Cobra Kai–Miyagi-Do/Miyagi-Fang/Eagle Fang dojo rivalry is active: competition, dojo pride, old grudges and distrust should naturally color the interaction."
+    );
+  }
+
+  if (
+    (af.ironDragons && (tf.cobraKai || tf.miyagiFang)) ||
+    (tf.ironDragons && (af.cobraKai || af.miyagiFang))
+  ) {
+    push(
+      "Iron Dragons-rivalizálás: az Iron Dragons természetes versenytársként/ellenfélként kezeli mind a Cobra Kait, mind a Miyagi-Do/Miyagi-Fang/Eagle Fang oldalt; ezt ne nullázd le semleges udvariassággá.",
+      "Iron Dragons rivalry is active: Iron Dragons naturally treats both Cobra Kai and the Miyagi-Do/Miyagi-Fang/Eagle Fang side as competitors/opponents; do not flatten this into neutral friendliness."
+    );
+  }
+
+  return lines.join(" ");
 }
 
 /* ============================================================
@@ -4981,41 +5464,15 @@ function relationshipBehaviorCard(
     );
   }
 
-  const af =
-    factionFlags(actor);
-
-  const tf =
-    factionFlags(target);
-
-  if (
-    af.cobraKai &&
-    tf.miyagiFang
-  ) {
-    parts.push(
+  const factionRivalry =
+    franchiseFactionRivalryCard(
+      actor,
+      target,
       en
-        ? "Cobra Kai vs Miyagi-Fang/Miyagi-Do/Eagle Fang rivalry is part of their worldview: default to competitive contempt, suspicion or dojo pride unless the PERSONAL relationship strongly overrides it; even then the history should still color the interaction"
-        : "a Cobra Kai vs Miyagi-Fang/Miyagi-Do/Eagle Fang rivalizálás a világnézet része: alapból jelenjen meg versengő lenézés, gyanakvás vagy dojo-büszkeség, hacsak a SZEMÉLYES kapcsolat ezt erősen felül nem írja; a közös történet akkor is színezze a viselkedést"
     );
-  } else if (
-    af.miyagiFang &&
-    tf.cobraKai
-  ) {
-    parts.push(
-      en
-        ? "Miyagi-Fang/Miyagi-Do/Eagle Fang vs Cobra Kai history matters: caution, rivalry, defensiveness or distrust may surface unless their personal bond genuinely overrides it"
-        : "a Miyagi-Fang/Miyagi-Do/Eagle Fang vs Cobra Kai múlt számít: megjelenhet óvatosság, rivalizálás, védekezés vagy bizalmatlanság, hacsak a személyes kötelék valóban felül nem írja"
-    );
-  }
 
-  if (
-    af.ironDragons &&
-    tf.cobraKai
-  ) {
-    parts.push(
-      en
-        ? "their dojo histories can create competitive tension; infer the exact tone from their written backstories rather than treating them as strangers"
-        : "a dojo-múltjuk versengő feszültséget okozhat; a pontos hangot a leírt történetükből vezesd le, ne kezeld őket idegenként"
-    );
+  if (factionRivalry) {
+    parts.push(factionRivalry);
   }
 
   const intimidation =
@@ -5116,12 +5573,8 @@ function multiActorPerformanceContext(
         return `
 [${c.id}] ${String(c.name).toUpperCase()}
 ${en ? "PRIVATE PERFORMANCE DATA — only use this to write THIS character. Other characters do not magically know it." : "PRIVÁT JÁTÉKVEZETÉSI ADAT — csak ENNEK a karakternek a megírásához használd. Más karakterek ezt nem tudják mágikusan."}
-${c.personality ? `${en ? "Personality" : "Személyiség"}: ${spread(c.personality, 700)}` : ""}
-${c.traits ? `${en ? "Traits" : "Tulajdonságok"}: ${spread(c.traits, 360)}` : ""}
-${c.speech ? `${en ? "Speech style" : "Beszédstílus"}: ${spread(c.speech, 420)}` : ""}
-${c.voice ? `${en ? "Voice examples — STYLE ONLY, never copy" : "Példamondatok — CSAK STÍLUS, soha ne másold"}: ${spread(c.voice, 650)}` : ""}
-${c.backstory ? `${en ? "Story/history that still shapes behavior" : "Történet/múlt, ami ma is alakítja"}: ${spread(c.backstory, 850)}` : ""}
-${c.extra ? `${en ? "Other important rules/context" : "Egyéb fontos szabály/kontekstus"}: ${spread(c.extra, 450)}` : ""}
+${en ? "FULL SELF-CANON — everything below about you is active and must shape your behavior" : "TELJES SAJÁT KÁNON — minden alábbi, rólad szóló adat aktív és alakítsa a viselkedésed"}:
+${spread(fullSelfCanon(c), 9000)}
 ${relationLines ? `${en ? "HOW THIS CHARACTER SHOULD BEHAVE TOWARD PEOPLE IN THIS SCENE" : "HOGYAN VISELKEDJEN A JELENLÉVŐKKEL"}:\n${relationLines}` : ""}
 `;
       }
@@ -5132,8 +5585,14 @@ ${relationLines ? `${en ? "HOW THIS CHARACTER SHOULD BEHAVE TOWARD PEOPLE IN THI
 
 ${en ? "PRIVATE CHARACTER PERFORMANCE CONTEXT" : "PRIVÁT KARAKTERJÁTÉK-KONTEXTUS"}:
 ${en
-  ? "- Use each block only to perform that specific character.\n- Do not transfer one character's secrets, private personality notes or hidden feelings into another character's knowledge.\n- Personal history, loyalties, rivalries and organizations written in the sheets must actively affect behavior. Do not treat established rivals, allies, crushes or enemies like neutral strangers."
-  : "- Minden blokkot csak az adott karakter eljátszására használj.\n- Egyik karakter titkait, rejtett személyiségét vagy titkos érzéseit se add át egy másik karakter tudásának.\n- A leírt történetek, lojalitások, rivalizálások és szervezetek AKTÍVAN hassanak a viselkedésre. A már létező riválisokat, szövetségeseket, crushokat vagy ellenségeket ne kezeld semleges idegenként."}
+  ? `- Use each block only to perform that specific character.
+- Do not transfer one character's secrets, private personality notes or hidden feelings into another character's knowledge.
+- Every explicit fact in each character's own sheet is canon. Read and use the full self-canon block, especially personality, full story, secrets, goals, fears, affiliations, skills and old relationships. Never flatten a distinctive character into a generic helpful AI voice.
+- Personal history, franchise/faction loyalties, rivalries and organizations written in the sheets must actively affect behavior. Do not treat established rivals, allies, relatives, crushes or enemies like neutral strangers.`
+  : `- Minden blokkot csak az adott karakter eljátszására használj.
+- Egyik karakter titkait, rejtett személyiségét vagy titkos érzéseit se add át egy másik karakter tudásának.
+- A karakter saját adatlapján szereplő MINDEN explicit adat kánon. Olvasd és használd a teljes saját-kánon blokkot, különösen a személyiséget, teljes történetet, titkokat, célokat, félelmeket, hovatartozást, képességeket és régi kapcsolatokat. Soha ne lapíts egy jellegzetes karaktert általános segítőkész AI-hanggá.
+- A leírt történetek, franchise/csoport-lojalitások, rivalizálások és szervezetek AKTÍVAN hassanak a viselkedésre. A már létező riválisokat, szövetségeseket, rokonokat, crushokat vagy ellenségeket ne kezeld semleges idegenként.`}
 ${blocks}`;
 }
 
@@ -5422,6 +5881,21 @@ const ENGINE = `Te egy élő, AI-vezérelt közösségi média világ motorja va
 Minden szereplőt a saját adatlapja alapján játszol el. Az adatlap nem háttérinfó: az a szereplő hangja.
 
 FŐ SZABÁLY: minden válasz legyen karakterhű, természetes, emberi és az adott helyzethez illő. A karakter személyisége, története, aktuális érzései és kapcsolatai határozzák meg, MIT mond — de a felület határozza meg, HOGYAN és milyen hosszan mondja.
+
+KARAKTERKÁNON — NEM OPCIONÁLIS
+- A karakter SAJÁT adatlapján szereplő minden információ aktív kánon: személyiség, tulajdonságok, teljes háttértörténet, titkok, félelmek, célok, kedvencek, beszédstílus, példamondatok mint stílusminta, képességek, harci tudás, rang, szerep, szervezet, affiliation és egyéb információ.
+- Ne csak 2-3 feltűnő tulajdonságot emelj ki. A teljes személyiséget és történetet egyetlen koherens emberként add vissza.
+- Ne szelídíts meg egy kegyetlen, arrogáns, manipulatív, instabil, domináns, félénk, naiv, féltékeny, megszállott vagy más erős személyiségű karaktert általános kedves AI-vá.
+- A saját történetében megnevezett személyekhez, traumákhoz, lojalitásokhoz, konfliktusokhoz és régi eseményekhez úgy viszonyuljon, mint valóban átélt múlthoz, ne mint elfelejthető háttérszöveghez.
+- Ha egy kánonadat és egy általános social-media szokás ütközik, a KARAKTER KÁNONJA nyer.
+
+SOROZAT-/FRAKCIÓKÁNON FELISMERÉSE
+- A Pogue/Pogues és Kook/Kooks ellentét aktív társadalmi rivalizálás, hacsak az adott személyes történet kifejezetten felül nem írja.
+- HYDRA és S.H.I.E.L.D./SHIELD alapból ellenséges szervezeti oldalak.
+- Cobra Kai és Miyagi-Do / Miyagi-Fang / Eagle Fang dojo-riválisok.
+- Iron Dragons természetes versenytársként/ellenfélként kezeli mind a Cobra Kai, mind a Miyagi-Do/Miyagi-Fang/Eagle Fang oldalt.
+- Ezeket az utalásokat akkor is ismerd fel, ha a teljes sorozatcím nincs kiírva, csak a csoport/dojo/szervezet neve szerepel a karakterlapban vagy történetben.
+- A frakciórivalizálás nem jelenti azt, hogy két konkrét ember személyes kapcsolata nem lehet kivétel; a személyes kánon felülírhatja, de az alapfeszültség és közös háttér ne tűnjön el mágikusan.
 
 KOMMUNIKÁCIÓS FORMÁTUM
 
@@ -5932,6 +6406,62 @@ async function serverDeleteAccount() {
   return apiJson("/account/delete", {
     method: "POST",
   });
+}
+
+async function serverProfileWorlds() {
+  return apiJson("/profile/worlds", {
+    method: "GET",
+  });
+}
+
+async function serverSwitchProfileWorld(code) {
+  return apiJson("/profile/worlds/switch", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+async function serverCreateProfileWorld(
+  world,
+  characterName,
+  characterUsername
+) {
+  return apiJson("/profile/worlds/create", {
+    method: "POST",
+    body: JSON.stringify({
+      world,
+      characterName,
+      characterUsername,
+    }),
+  });
+}
+
+async function analyzeImageDataUrl(
+  dataUrl,
+  prompt = ""
+) {
+  if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
+    return "";
+  }
+
+  const result = await apiJson("/ai/vision", {
+    method: "POST",
+    body: JSON.stringify({
+      provider: DEFAULT_AI_PROVIDER,
+      model: DEFAULT_AI_MODEL,
+      image: dataUrl,
+      prompt:
+        prompt ||
+        "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when visible. Do not identify real people by name.",
+    }),
+  });
+
+  return String(
+    (result && result.text) || ""
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 700);
 }
 
 function worldSyncRev(w) {
@@ -8398,49 +8928,39 @@ function formatSocialCount(value) {
 
 
 function followBondWeight(rel) {
-  const bond =
-    String(
-      (rel && (rel.bond || rel.type)) || ""
-    ).toLowerCase();
+  const bond = String(
+    (rel && (rel.bond || rel.type)) || ""
+  ).toLowerCase();
 
   if (!bond) return 0;
 
   /*
-   * Erős, természetesen követést indokló kötelékek.
+   * Az AI-k social gráfja tükrözze a valódi kapcsolatokat.
+   * Rokonok, szerelmi kapcsolatok, crushok és legjobb barátok
+   * nagyon erős follow-jelzést adnak.
    */
-  if (
-    /barát|friend|legjobb|best friend|közeli|close|crush|járnak|dating|jegyes|fiancé|házastárs|spouse|partner|testvér|sibling|család|family|szülő|parent|gyerek|child/.test(
-      bond
-    )
-  ) {
-    return 22;
+  if (/legjobb barát|best friend|közeli barát|close friend|kölcsönös crush|mutual crush|crush|járnak|dating|jegyes|engaged|fiancé|fiance|házastárs|spouse|partner/.test(bond)) {
+    return 46;
   }
 
-  /*
-   * Olyan kapcsolatok, ahol rendszeres társas érintkezés
-   * miatt teljesen természetes lehet a follow.
-   */
-  if (
-    /osztálytárs|classmate|munkatárs|coworker|szomszéd|neighbor|főnök|boss|beosztott|mentor|tanítvány|student|edző|coach|tanár|teacher/.test(
-      bond
-    )
-  ) {
-    return 12;
+  if (/anya|apa|szülő|parent|gyerek|child|fia|lánya|son|daughter|testvér|sibling|ikertestvér|twin|féltestvér|half-sibling|mostohatestvér|stepsibling|nagymama|grandmother|nagypapa|grandfather|nagyszülő|grandparent|unoka|grandchild|unokatestvér|cousin|nagynéni|aunt|nagybácsi|uncle|rokon|relative|család|family/.test(bond)) {
+    return 42;
   }
 
-  /*
-   * Ex, rivális vagy ellenség is követhet valakit azért,
-   * hogy figyelje, mit csinál — de ez kisebb súly.
-   */
-  if (
-    /ex|rivális|rival|ellenség|enemy/.test(
-      bond
-    )
-  ) {
-    return 8;
+  if (/barát|friend/.test(bond)) {
+    return 34;
   }
 
-  return 5;
+  if (/osztálytárs|classmate|munkatárs|coworker|szomszéd|neighbor|főnök|boss|beosztott|mentor|tanítvány|student|edző|coach|tanár|teacher/.test(bond)) {
+    return 16;
+  }
+
+  /* hate-follow / ex / rivalry */
+  if (/ex|rivális|rival|ellenség|enemy/.test(bond)) {
+    return 10;
+  }
+
+  return 7;
 }
 
 function characterSocialFollowModifier(c) {
@@ -8655,7 +9175,7 @@ function followInterestScore(
       target.id
     )
   ) {
-    score += 12;
+    score += 18;
   }
 
   const relScore =
@@ -8668,8 +9188,8 @@ function followInterestScore(
   if (relScore > 0) {
     score +=
       Math.min(
-        32,
-        relScore * 0.4
+        38,
+        relScore * 0.48
       );
   }
 
@@ -8780,6 +9300,35 @@ function followInterestScore(
     }
   }
 
+  /*
+   * Ugyanaz a csapat/szervezet gyakran erős social relevancia,
+   * ellenfelet pedig lehet hate-follow miatt figyelni.
+   */
+  const af = factionFlags(actor);
+  const tf = factionFlags(target);
+
+  if (
+    (af.pogue && tf.pogue) ||
+    (af.kook && tf.kook) ||
+    (af.hydra && tf.hydra) ||
+    (af.shield && tf.shield) ||
+    (af.cobraKai && tf.cobraKai) ||
+    (af.miyagiFang && tf.miyagiFang) ||
+    (af.ironDragons && tf.ironDragons)
+  ) {
+    score += 18;
+  }
+
+  if (
+    (af.pogue && tf.kook) || (af.kook && tf.pogue) ||
+    (af.hydra && tf.shield) || (af.shield && tf.hydra) ||
+    (af.cobraKai && tf.miyagiFang) || (af.miyagiFang && tf.cobraKai) ||
+    (af.ironDragons && (tf.cobraKai || tf.miyagiFang)) ||
+    (tf.ironDragons && (af.cobraKai || af.miyagiFang))
+  ) {
+    score += 9; // rival/hate-follow relevancia
+  }
+
   return Math.round(score);
 }
 
@@ -8842,11 +9391,11 @@ function aiShouldFollow(
   /*
    * Teljesen autonóm követéshez erősebb indok kell.
    */
-  if (score >= 62) {
+  if (score >= 56) {
     return true;
   }
 
-  if (score < 40) {
+  if (score < 34) {
     return false;
   }
 
@@ -8855,7 +9404,7 @@ function aiShouldFollow(
     Math.min(
       0.72,
       0.12 +
-        (score - 40) / 42
+        (score - 34) / 36
     )
   );
 }
@@ -8896,7 +9445,7 @@ function pickAutonomousFollowAction(w) {
           target.id
         );
 
-      if (score < 40) {
+      if (score < 34) {
         return;
       }
 
@@ -9178,20 +9727,77 @@ function setFollowState(
   return true;
 }
 
-async function addAccount(w, username, pw, charName) {
+async function addAccount(
+  w,
+  username,
+  pw,
+  charName,
+  characterUsername = ""
+) {
   const u = normUser(username);
   const id = "u" + uid();
-  // jelszó nélkül is létrejöhet a fiók; ilyenkor az első belépéskor adható meg
+
+  // Login username != social @username.
   let salt = "", hash = "";
-  if (pw) { salt = newSalt(); hash = await hashPw(pw, salt); }
-  w.accounts[id] = { id, username: u, salt, hash, created: now() };
-  w.players[id] = blankPlayer(id, charName || u, uniqueHandle(w, u, id));
-  if (!w.userSettings) w.userSettings = {};
-  w.userSettings[id] = { language: asLang(w.aiLang || CURRENT_LANG) };
+  if (pw) {
+    salt = newSalt();
+    hash = await hashPw(pw, salt);
+  }
+
+  w.accounts[id] = {
+    id,
+    username: u,
+    salt,
+    hash,
+    created: now(),
+  };
+
+  const wantedHandle =
+    normUser(characterUsername) ||
+    normUser(charName) ||
+    u;
+
+  w.players[id] =
+    blankPlayer(
+      id,
+      charName || u,
+      uniqueHandle(
+        w,
+        wantedHandle,
+        id
+      )
+    );
+
+  if (!w.userSettings) {
+    w.userSettings = {};
+  }
+
+  w.userSettings[id] = {
+    language:
+      asLang(
+        w.aiLang ||
+        CURRENT_LANG
+      ),
+  };
+
   (w.starter || []).forEach((st) => {
-    if (st && st.char) setRel(w, st.char, id, { score: st.score || 0, bond: st.bond || "", fixed: !!st.fixed });
+    if (st && st.char) {
+      setRel(
+        w,
+        st.char,
+        id,
+        {
+          score: st.score || 0,
+          bond: st.bond || "",
+          fixed: !!st.fixed,
+        }
+      );
+    }
   });
-  w.rev = (w.rev || 0) + 1;
+
+  w.rev =
+    (w.rev || 0) + 1;
+
   return id;
 }
 
@@ -9207,82 +9813,141 @@ async function saveNewAccount(code, username, pw, charName) {
 
 function NewWorld({ w, onReady, onClose, setErr }) {
   useEditLock();
+
   const { tt } = useLang();
-  const [code, setCode] = useState("");
-  const [pw, setPw] = useState("");
-  const [charName, setCharName] = useState(w ? w.player.name : "");
-  const [seed, setSeed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const username = w && w.accounts[w.meId] ? w.accounts[w.meId].username : "";
+
+  const [code, setCode] =
+    useState("");
+
+  const [charName, setCharName] =
+    useState(
+      w && w.player
+        ? w.player.name
+        : ""
+    );
+
+  const [charUsername, setCharUsername] =
+    useState(
+      w && w.player
+        ? w.player.username || ""
+        : ""
+    );
+
+  const [seed, setSeed] =
+    useState(false);
+
+  const [busy, setBusy] =
+    useState(false);
+
+  const loginUsername =
+    w &&
+    w.accounts &&
+    w.accounts[w.meId]
+      ? w.accounts[w.meId].username
+      : "";
 
   const go = async () => {
-    const c = code.trim().toLowerCase();
-    if (!c) return setErr(tt("Adj a világnak egy kódot.", "Give the world a code."));
-    if (pw.length < 4) return setErr(tt("A jelszó legyen legalább 4 karakter.", "The password must be at least 4 characters."));
-    if (!charName.trim()) return setErr(tt("Add meg a karaktered nevét ebben a világban.", "Enter your character's name in this world."));
+    const c =
+      code.trim().toLowerCase();
+
+    const handle =
+      normUser(
+        charUsername
+      );
+
+    if (!c) {
+      return setErr(
+        tt(
+          "Adj a világnak egy kódot.",
+          "Give the world a code."
+        )
+      );
+    }
+
+    if (!charName.trim()) {
+      return setErr(
+        tt(
+          "Add meg a karaktered nevét ebben a világban.",
+          "Enter your character's name in this world."
+        )
+      );
+    }
+
+    if (!handle) {
+      return setErr(
+        tt(
+          "Adj meg külön karakter-felhasználónevet (@név) ehhez a világhoz.",
+          "Choose a separate character username (@handle) for this world."
+        )
+      );
+    }
+
     setBusy(true);
+
     try {
+      /*
+       * A globális profil már hitelesítve van a HttpOnly sessionből.
+       * Itt NEM kérünk új jelszót, és NEM hozunk létre második login-profilt.
+       */
       const nw =
         seed
           ? seedWorld(c)
           : emptyWorld(c);
 
+      nw.aiLang =
+        worldLanguage(
+          w,
+          w.meId
+        );
+
+      /*
+       * Teljes player struktúrát építünk már kliensoldalon is
+       * (userSettings, starter relations, blankPlayer mezők).
+       * Jelszót nem kérünk és nem tárolunk itt; a backend a már
+       * hitelesített globális profil credentialjeit illeszti rá.
+       */
       const localMeId =
         await addAccount(
           nw,
-          username ||
+          loginUsername ||
             normUser(charName) ||
             "jatekos",
-          pw,
-          charName.trim()
+          "",
+          charName.trim(),
+          handle
         );
 
       nw.owner =
         localMeId;
 
-      let created;
+      const created =
+        await serverCreateProfileWorld(
+          nw,
+          charName.trim(),
+          handle
+        );
 
-      try {
-        created =
-          await serverMigrate(
-            nw,
-            username ||
-              normUser(charName) ||
-              "jatekos",
-            pw
-          );
-      } catch (e) {
-        if (
-          e &&
-          e.status === 409
-        ) {
-          throw new Error(
-            tt(
-              "Ez a világkód már foglalt a szerveren. Válassz másikat.",
-              "This world code is already taken on the server. Choose another."
-            )
-          );
-        }
-
-        throw e;
+      if (
+        !created ||
+        !created.world ||
+        !created.meId
+      ) {
+        throw new Error(
+          tt(
+            "A szerver hibás választ adott az új világ létrehozásakor.",
+            "The server returned an invalid response while creating the new world."
+          )
+        );
       }
 
       const serverWorld =
         migrate(
-          created &&
           created.world
-            ? created.world
-            : nw
         );
 
-      const serverMeId =
-        (
-          created &&
-          created.meId
-        ) ||
-        localMeId;
-
-      /* Emergency backup only, after server creation succeeded. */
+      /*
+       * Emergency helyi backup az új worldről.
+       */
       try {
         await saveWorldMerged(
           serverWorld
@@ -9291,168 +9956,643 @@ function NewWorld({ w, onReady, onClose, setErr }) {
 
       onReady(
         serverWorld,
-        serverMeId
+        created.meId
       );
-    } catch (e) { setErr((e && e.message) || tt("Nem sikerült létrehozni.", "Failed to create.")); }
-    setBusy(false);
+    } catch (e) {
+      if (
+        e &&
+        e.status === 409
+      ) {
+        setErr(
+          tt(
+            "Ez a világkód már foglalt. Válassz másikat.",
+            "This world code is already taken. Choose another."
+          )
+        );
+      } else {
+        setErr(
+          (e && e.message) ||
+          tt(
+            "Nem sikerült létrehozni a világot.",
+            "Failed to create the world."
+          )
+        );
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
-    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div
+      className="scrim"
+      onClick={(e) => {
+        if (
+          e.target ===
+          e.currentTarget
+        ) {
+          onClose();
+        }
+      }}
+    >
       <div className="sheet">
         <div className="between">
-          <h2 style={{ fontSize: 20 }}>{tt("Új világ", "New world")}</h2>
-          <button className="btn tiny ghost" onClick={onClose}><X size={14} /></button>
+          <h2 style={{ fontSize: 20 }}>
+            {tt(
+              "Új világ",
+              "New world"
+            )}
+          </h2>
+
+          <button
+            type="button"
+            className="btn tiny ghost"
+            onClick={onClose}
+          >
+            <X size={14} />
+          </button>
         </div>
-        <p className="hint" style={{ marginTop: 10 }}>
-          {tt("A felhasználóneved marad ", "Your username stays ")}<span className="mono">@{username}</span>{tt(", de a jelszót szobánként külön adod meg. A meglévő szobáid érintetlenek.", ", but you set the password separately per room. Your existing rooms are untouched.")}
+
+        <div
+          className="card"
+          style={{
+            marginTop: 12,
+            borderColor: "var(--gold)",
+          }}
+        >
+          <div className="name">
+            {tt(
+              "Ugyanaz a profil, új világ",
+              "Same profile, new world"
+            )}
+          </div>
+
+          <p
+            className="hint"
+            style={{
+              marginTop: 6,
+            }}
+          >
+            {tt(
+              "A bejelentkezési felhasználóneved és jelszavad változatlan marad. Csak a világkód és az ebben a világban használt karaktered változik.",
+              "Your login username and password stay the same. Only the world code and the character you use inside this world change."
+            )}
+          </p>
+
+          {loginUsername ? (
+            <div
+              className="handle mono"
+              style={{
+                marginTop: 7,
+              }}
+            >
+              {tt(
+                "Alapprofil",
+                "Base profile"
+              )}
+              : @{loginUsername}
+            </div>
+          ) : null}
+        </div>
+
+        <label className="f">
+          {tt(
+            "Az új világ kódja",
+            "The new world's code"
+          )}
+        </label>
+
+        <input
+          className="i mono"
+          value={code}
+          placeholder={tt(
+            "pl. eszaki-part-2027",
+            "e.g. northshore-2027"
+          )}
+          onChange={(e) =>
+            setCode(
+              e.target.value
+                .replace(/\s+/g, "-")
+                .toLowerCase()
+            )
+          }
+        />
+
+        <label className="f">
+          {tt(
+            "A karaktered neve ebben a világban",
+            "Your character's name in this world"
+          )}
+        </label>
+
+        <input
+          className="i"
+          value={charName}
+          onChange={(e) =>
+            setCharName(
+              e.target.value
+            )
+          }
+        />
+
+        <label className="f">
+          {tt(
+            "A karakter @felhasználóneve",
+            "Character @username"
+          )}
+        </label>
+
+        <input
+          className="i mono"
+          value={charUsername}
+          placeholder={tt(
+            "pl. meg.barnes",
+            "e.g. meg.barnes"
+          )}
+          onChange={(e) =>
+            setCharUsername(
+              e.target.value
+                .replace(/^@/, "")
+                .toLowerCase()
+            )
+          }
+        />
+
+        <p
+          className="hint"
+          style={{
+            marginTop: 6,
+          }}
+        >
+          {tt(
+            "Ez a közösségi médiás @név, nem a bejelentkezési felhasználóneved. Világonként eltérhet.",
+            "This is the social @handle, not your login username. It can be different in every world."
+          )}
         </p>
 
-        <label className="f">{tt("Az új világ kódja", "The new world's code")}</label>
-        <input className="i mono" value={code} placeholder={tt("pl. eszaki-part-2027", "e.g. northshore-2027")}
-          onChange={(e) => setCode(e.target.value.replace(/\s+/g, "-").toLowerCase())} />
+        <div
+          className="between"
+          style={{
+            marginTop: 14,
+          }}
+        >
+          <span className="hint">
+            {tt(
+              "Kezdés példakarakterekkel",
+              "Start with example characters"
+            )}
+          </span>
 
-        <label className="f">{tt("Jelszó ehhez a szobához", "Password for this room")}</label>
-        <input className="i" type="password" value={pw} placeholder={tt("legalább 4 karakter", "at least 4 characters")}
-          autoComplete="new-password" onChange={(e) => setPw(e.target.value)} />
-
-        <label className="f">{tt("A karaktered neve itt", "Your character's name here")}</label>
-        <input className="i" value={charName} onChange={(e) => setCharName(e.target.value)} />
-
-        <div className="between" style={{ marginTop: 14 }}>
-          <span className="hint">{tt("Kezdés példakarakterekkel", "Start with example characters")}</span>
-          <button className={"btn tiny " + (seed ? "primary" : "ghost")} onClick={() => setSeed(!seed)}>{seed ? tt("Igen", "Yes") : tt("Nem", "No")}</button>
+          <button
+            type="button"
+            className={
+              "btn tiny " +
+              (
+                seed
+                  ? "primary"
+                  : "ghost"
+              )
+            }
+            onClick={() =>
+              setSeed(!seed)
+            }
+          >
+            {seed
+              ? tt("Igen", "Yes")
+              : tt("Nem", "No")}
+          </button>
         </div>
 
-        <button className="btn primary full" style={{ marginTop: 16 }} onClick={go} disabled={busy}>
-          {busy ? <Loader2 size={15} className="spin" /> : <Zap size={15} />} {tt("Világ létrehozása", "Create world")}
+        <button
+          type="button"
+          className="btn primary full"
+          style={{
+            marginTop: 16,
+          }}
+          onClick={go}
+          disabled={busy}
+        >
+          {busy
+            ? (
+                <Loader2
+                  size={15}
+                  className="spin"
+                />
+              )
+            : (
+                <Zap size={15} />
+              )}
+
+          {tt(
+            "Világ létrehozása",
+            "Create world"
+          )}
         </button>
       </div>
     </div>
   );
 }
 
-function Rooms({ w, onOpen, onCreate, onClose, setErr, onSignOut, onNeedLogin }) {
+function Rooms({
+  w,
+  onOpen,
+  onCreate,
+  onClose,
+  setErr,
+  onSignOut,
+}) {
   useEditLock();
+
   const { tt } = useLang();
-  const [list, setList] = useState(null);
-  const [busy, setBusy] = useState("");
-  const [confirm, setConfirm] = useState(null);
 
-  const refresh = useCallback(async () => {
-  const mine = await loadRooms();
+  const [list, setList] =
+    useState(null);
 
-  setList(
-    (mine || [])
-      .filter((r) => r && r.code)
-      .map((r) => ({
-        code: r.code,
-        name: r.name || r.code,
-        meId: r.meId,
-        username: r.username,
-        owner: r.owner,
-      }))
-  );
-}, []);
+  const [busy, setBusy] =
+    useState("");
 
-  useEffect(() => { refresh(); }, [refresh]);
+  const [profileUsername, setProfileUsername] =
+    useState("");
 
-  const open = async (r) => {
-  if (!r || !r.code) return;
+  const refresh =
+    useCallback(
+      async () => {
+        try {
+          const result =
+            await serverProfileWorlds();
 
-  /*
-   * ONLINE világot soha nem nyitunk meg
-   * közvetlenül a helyi IndexedDB backupból.
-   *
-   * A világkódot átadjuk a belépőképernyőnek,
-   * ahol a PostgreSQL szerver hitelesíti a usert
-   * és onnan tölti le az aktuális világot.
-   */
-  onNeedLogin(r.code);
-};
+          const worlds =
+            Array.isArray(
+              result &&
+              result.worlds
+            )
+              ? result.worlds
+              : [];
 
-  const remove = async (r) => {
-    if (!r || !r.code) return;
+          setProfileUsername(
+            String(
+              (
+                result &&
+                result.profileUsername
+              ) ||
+              ""
+            )
+          );
 
-    setBusy(r.code);
+          setList(
+            worlds
+              .filter(
+                (r) =>
+                  r &&
+                  r.code
+              )
+              .map(
+                (r) => ({
+                  code:r.code,
+                  name:
+                    r.name ||
+                    r.code,
+                  meId:
+                    r.meId || "",
+                  characterName:
+                    r.characterName || "",
+                  characterUsername:
+                    r.characterUsername || "",
+                  updatedAt:
+                    r.updatedAt || "",
+                })
+              )
+          );
 
-    try {
-      await forgetRoom(r.code);
-      setConfirm(null);
-      await refresh();
-    } finally {
-      setBusy("");
-    }
-  };
+          return;
+        } catch (e) {
+          /*
+           * Offline fallback:
+           * csak tájékoztató emergency lista.
+           */
+          const mine =
+            await loadRooms();
+
+          setList(
+            (mine || [])
+              .filter(
+                (r) =>
+                  r &&
+                  r.code
+              )
+              .map(
+                (r) => ({
+                  code:r.code,
+                  name:
+                    r.name ||
+                    r.code,
+                  meId:
+                    r.meId || "",
+                  offlineOnly:true,
+                })
+              )
+          );
+        }
+      },
+      []
+    );
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const open =
+    async (r) => {
+      if (
+        !r ||
+        !r.code ||
+        (
+          w &&
+          r.code === w.code
+        )
+      ) {
+        return;
+      }
+
+      if (r.offlineOnly) {
+        setErr(
+          tt(
+            "Offline csak a helyi emergency világlista látható. Világváltáshoz csatlakozz az internethez.",
+            "Offline, only the local emergency world list is available. Connect to the internet to switch worlds."
+          )
+        );
+        return;
+      }
+
+      setBusy(r.code);
+
+      try {
+        const result =
+          await serverSwitchProfileWorld(
+            r.code
+          );
+
+        if (
+          !result ||
+          !result.world ||
+          !result.meId
+        ) {
+          throw new Error(
+            tt(
+              "A szerver hibás világváltási választ adott.",
+              "The server returned an invalid world-switch response."
+            )
+          );
+        }
+
+        const nextWorld =
+          migrate(
+            result.world
+          );
+
+        try {
+          await saveWorldMerged(
+            nextWorld
+          );
+        } catch (e) {}
+
+        onOpen(
+          nextWorld,
+          result.meId
+        );
+
+        onClose();
+      } catch (e) {
+        setErr(
+          (e && e.message) ||
+          tt(
+            "Nem sikerült világot váltani.",
+            "Failed to switch worlds."
+          )
+        );
+      } finally {
+        setBusy("");
+      }
+    };
 
   return (
-    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div
+      className="scrim"
+      onClick={(e) => {
+        if (
+          e.target ===
+          e.currentTarget
+        ) {
+          onClose();
+        }
+      }}
+    >
       <div className="sheet">
         <div className="between">
-          <h2 style={{ fontSize: 20 }}>{tt("Világaim", "My worlds")}</h2>
-          <button className="btn tiny ghost" onClick={onClose}><X size={14} /></button>
+          <div>
+            <h2 style={{ fontSize: 20 }}>
+              {tt(
+                "Világaim",
+                "My worlds"
+              )}
+            </h2>
+
+            {profileUsername ? (
+              <div
+                className="handle mono"
+                style={{
+                  marginTop: 3,
+                }}
+              >
+                {tt(
+                  "Alapprofil",
+                  "Base profile"
+                )}
+                : @{profileUsername}
+              </div>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            className="btn tiny ghost"
+            onClick={onClose}
+          >
+            <X size={14} />
+          </button>
         </div>
 
-        <button className="btn primary full" style={{ marginTop: 14 }} onClick={onCreate}>
-          <Plus size={15} /> {tt("Új világ létrehozása", "Create a new world")}
+        <p
+          className="hint"
+          style={{
+            marginTop: 10,
+          }}
+        >
+          {tt(
+            "Ugyanazzal a bejelentkezési felhasználónévvel és jelszóval több külön világod lehet. A karaktered neve és közösségi @felhasználóneve világonként eltérhet.",
+            "One login username and password can own multiple separate worlds. Your character name and social @username can differ in every world."
+          )}
+        </p>
+
+        <button
+          type="button"
+          className="btn primary full"
+          style={{
+            marginTop: 14,
+          }}
+          onClick={onCreate}
+        >
+          <Plus size={15} />
+          {tt(
+            "Új világ ezen a profilon",
+            "New world on this profile"
+          )}
         </button>
 
-        {list === null && <div className="thinking"><Loader2 size={13} className="spin" /> {tt("betöltés…", "loading\u2026")}</div>}
-        {list && list.length === 0 && <p className="hint" style={{ marginTop: 14 }}>{tt("Még nincs egyetlen világod sem.", "You don't have any worlds yet.")}</p>}
+        {list === null ? (
+          <div className="thinking">
+            <Loader2
+              size={13}
+              className="spin"
+            />
+            {tt(
+              "betöltés…",
+              "loading…"
+            )}
+          </div>
+        ) : null}
+
+        {list &&
+        list.length === 0 ? (
+          <p
+            className="hint"
+            style={{
+              marginTop: 14,
+            }}
+          >
+            {tt(
+              "Ehhez a profilhoz még nincs világ kapcsolva.",
+              "No worlds are linked to this profile yet."
+            )}
+          </p>
+        ) : null}
 
         {(list || []).map((r) => {
-          const here = w && r.code === w.code;
-          const mine = !!(r.meId || r.username);
+          const here =
+            Boolean(
+              w &&
+              r.code === w.code
+            );
+
           return (
-            <div className="card" key={r.code}>
+            <button
+              type="button"
+              className="card"
+              key={r.code}
+              onClick={() =>
+                open(r)
+              }
+              disabled={
+                here ||
+                Boolean(busy)
+              }
+              style={{
+                width:"100%",
+                textAlign:"left",
+                cursor:
+                  here
+                    ? "default"
+                    : "pointer",
+                borderColor:
+                  here
+                    ? "var(--rose)"
+                    : "var(--line)",
+              }}
+            >
               <div className="between">
-                <div style={{ minWidth: 0 }}>
-                  <div className="name">{r.name || r.code}</div>
-                  <div className="handle mono">{r.code}{r.username ? " · @" + r.username : ""}</div>
-                </div>
-                {here ? <span className="chip" style={{ color: "var(--rose)", borderColor: "var(--rose)" }}>{tt("itt vagy", "you're here")}</span> : null}
-              </div>
-
-              {!mine && !here && (
-                <p className="hint" style={{ marginTop: 6 }}>{tt("Ebben a világban még nincs profilod ezen az eszközön.", "You don't have a profile in this world on this device yet.")}</p>
-              )}
-
-              <div className="row" style={{ gap: 8, marginTop: 10 }}>
-                <button className="btn full" onClick={() => open(r)} disabled={here || busy === r.code}>
-                  {busy === r.code ? <Loader2 size={14} className="spin" /> : <Zap size={14} />}
-                  {mine ? tt("Belépés", "Log in") : tt("Belépés kóddal", "Log in with code")}
-                </button>
-                <button className="btn ghost" style={{ color: "var(--steel)" }} onClick={() => setConfirm(r)} disabled={busy === r.code}>
-                  <Trash2 size={14} />
-                </button>
-              </div>
-
-              {confirm && confirm.code === r.code && (
-                <div style={{ marginTop: 10 }}>
-                  <p className="hint">
-                    {tt("Eltünteted a listádból? A világ maga megmarad — a kóddal bárki, akinek profilja van benne, továbbra is beléphet.", "Remove it from your list? The world itself remains — anyone with a profile in it can still log in with the code.")}
-                  </p>
-                  <div className="row" style={{ gap: 8, marginTop: 8 }}>
-                    <button className="btn full tiny" style={{ background: "var(--oxblood)", borderColor: "var(--oxblood)" }}
-                      onClick={() => remove(r)}>{tt("Eltávolítás a listámból", "Remove from my list")}</button>
-                    <button className="btn ghost full tiny" onClick={() => setConfirm(null)}>{tt("Mégse", "Cancel")}</button>
+                <div
+                  style={{
+                    minWidth:0,
+                  }}
+                >
+                  <div className="name">
+                    {r.name ||
+                    r.code}
                   </div>
+
+                  <div className="handle mono">
+                    {r.code}
+                  </div>
+
+                  {r.characterName || r.characterUsername ? (
+                    <div
+                      className="hint"
+                      style={{
+                        marginTop:4,
+                      }}
+                    >
+                      {r.characterName || ""}
+                      {r.characterUsername
+                        ? `${r.characterName ? " · " : ""}@${r.characterUsername}`
+                        : ""}
+                    </div>
+                  ) : null}
                 </div>
-              )}
-            </div>
+
+                {here ? (
+                  <span
+                    className="chip"
+                    style={{
+                      color:"var(--rose)",
+                      borderColor:"var(--rose)",
+                    }}
+                  >
+                    {tt(
+                      "itt vagy",
+                      "current"
+                    )}
+                  </span>
+                ) : busy === r.code ? (
+                  <Loader2
+                    size={15}
+                    className="spin"
+                  />
+                ) : (
+                  <ChevronRight
+                    size={17}
+                  />
+                )}
+              </div>
+
+              {r.offlineOnly ? (
+                <div
+                  className="hint"
+                  style={{
+                    marginTop:6,
+                  }}
+                >
+                  {tt(
+                    "csak helyi emergency bejegyzés",
+                    "local emergency entry only"
+                  )}
+                </div>
+              ) : null}
+            </button>
           );
         })}
 
         <div className="sep" />
-        <button className="btn full" onClick={onSignOut}>
-          <Zap size={14} /> {tt("Belépés másik világba kóddal", "Log in to another world with a code")}
-        </button>
-        <p className="hint" style={{ marginTop: 10 }}>
+
+        <button
+          type="button"
+          className="btn ghost full"
+          onClick={onSignOut}
+        >
           {tt(
-            "Itt minden világ szerepel, amit létrehoztál. Ahol van profilod, oda egy kattintással belépsz; ahol még nincs, ott a belépőképernyőn adod meg a neved.",
-            "This list contains the worlds you've created. If you already have a profile there, you can enter with one click; otherwise you'll enter your details on the login screen."
+            "Kijelentkezés az alapprofilból",
+            "Log out of base profile"
           )}
-        </p>
+        </button>
       </div>
     </div>
   );
@@ -9466,6 +10606,7 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [name, setName] = useState("");
+  const [charUsername, setCharUsername] = useState("");
   const [seed, setSeed] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -9635,6 +10776,18 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
     );
   }
 
+  if (
+    isNew &&
+    !normUser(charUsername)
+  ) {
+    return setErr(
+      tt(
+        "Add meg a karaktered külön @felhasználónevét.",
+        "Enter a separate @username for your character."
+      )
+    );
+  }
+
   setBusy(true);
   setErr("");
 
@@ -9658,7 +10811,8 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
           w,
           u,
           pw,
-          name.trim()
+          name.trim(),
+          charUsername
         );
 
       w.owner =
@@ -9915,8 +11069,10 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
       {bootErr ? <div className="err" style={{ marginTop: 10 }}>{bootErr}</div> : null}
 
       <p className="hint" style={{ textAlign: "center", margin: "14px 0 4px" }}>
-        {tt("Minden világ egy kódon él. A kód, a felhasználóneved és a jelszavad együtt visz vissza oda, ahol abbahagytad.",
-            "Every world lives on a code. The code, your username and your password together bring you back where you left off.")}
+        {tt(
+          "Az első világoddal létrejön az alapprofilod. Ugyanazzal a login felhasználónévvel és jelszóval később több külön világot is hozzáadhatsz.",
+          "Your first world creates your base profile. Later you can attach multiple separate worlds to the same login username and password."
+        )}
       </p>
 
       <div className="card">
@@ -9971,9 +11127,39 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
             <label className="f">{tt("A karaktered neve", "Your character's name")}</label>
             <input className="i" value={name} placeholder={tt("pl. Anita Kovács", "e.g. Anita Kovacs")} onKeyDown={onEnter}
               onChange={(e) => setName(e.target.value)} />
+            <label className="f">
+              {tt(
+                "A karakter @felhasználóneve",
+                "Character @username"
+              )}
+            </label>
+            <input
+              className="i mono"
+              value={charUsername}
+              placeholder={tt(
+                "pl. meg.barnes",
+                "e.g. meg.barnes"
+              )}
+              onKeyDown={onEnter}
+              onChange={(e) =>
+                setCharUsername(
+                  e.target.value
+                    .replace(/^@/, "")
+                    .toLowerCase()
+                )
+              }
+            />
             <p className="hint" style={{ marginTop: 6 }}>
-              {tt("Ezzel a karakterrel posztolsz, csetelsz és játszol a jelenetekben. Az adatlapját később bármikor kitöltöd.",
-                  "You'll post, chat and play scenes with this character. You can fill in their sheet anytime later.")}
+              {tt(
+                "A login felhasználóneved a fiókodhoz tartozik; ez az @név a karaktered közösségi profiljához. A kettő eltérhet.",
+                "Your login username belongs to your account; this @handle belongs to your character's social profile. They can be different."
+              )}
+            </p>
+            <p className="hint" style={{ marginTop: 6 }}>
+              {tt(
+                "Ezzel a karakterrel posztolsz, csetelsz és játszol a jelenetekben. Az adatlapját később bármikor kitöltöd.",
+                "You'll post, chat and play scenes with this character. You can fill in their sheet anytime later."
+              )}
             </p>
           </>
         )}
@@ -10073,15 +11259,18 @@ function CommentNode({ w, c, allComments, onReply, depth, onOpenProfile }) {
           className="row"
           style={{ gap: 8, marginTop: 8, marginLeft: depth ? 0 : 36, alignItems: "center" }}
         >
-          <input
-            className="i"
-            style={{ padding: "6px 10px", fontSize: 13 }}
-            value={txt}
-            autoFocus
-            placeholder={tt(`Válasz neki: ${a.name}`, `Reply to ${a.name}`)}
-            onChange={(e) => setTxt(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") send(); }}
-          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <input
+              className="i"
+              style={{ padding: "6px 10px", fontSize: 13 }}
+              value={txt}
+              autoFocus
+              placeholder={tt(`Válasz neki: ${a.name}`, `Reply to ${a.name}`)}
+              onChange={(e) => setTxt(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") send(); }}
+            />
+            <MentionBar w={w} value={txt} onChange={setTxt} compact />
+          </div>
           <button className="btn primary tiny" onClick={send} disabled={!txt.trim()}>
             <Send size={12} />
           </button>
@@ -10399,14 +11588,17 @@ function Post({
           <Av src={w.player.avatar} name={w.player.name} size={28} radius={9} />
         </button>
 
-        <input
-          ref={commentInput}
-          className="i"
-          value={cmt}
-          placeholder={tt("Írj hozzászólást…", "Write a comment…")}
-          onChange={(e) => setCmt(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") sendCmt(); }}
-        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <input
+            ref={commentInput}
+            className="i"
+            value={cmt}
+            placeholder={tt("Írj hozzászólást…", "Write a comment…")}
+            onChange={(e) => setCmt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") sendCmt(); }}
+          />
+          <MentionBar w={w} value={cmt} onChange={setCmt} compact />
+        </div>
 
         <button className="btn primary tiny" onClick={sendCmt} disabled={!cmt.trim()}>
           <Send size={13} />
@@ -10423,6 +11615,7 @@ function SocialProfileModal({
   onClose,
   onChat,
   onOpenProfile,
+  onWorlds,
 }) {
   useEditLock();
 
@@ -10638,6 +11831,24 @@ function SocialProfileModal({
               <div className="social-count" style={{ marginTop: 8 }}>
                 {tt("Követ téged", "Follows you")}
               </div>
+            ) : null}
+
+            {mine && onWorlds ? (
+              <button
+                type="button"
+                className="btn full"
+                style={{ marginTop: 10 }}
+                onClick={() => {
+                  onClose();
+                  onWorlds();
+                }}
+              >
+                <Globe2 size={14} />
+                {tt(
+                  "Világaim — váltás / új világ",
+                  "My worlds — switch / new world"
+                )}
+              </button>
             ) : null}
 
             <div className="social-sentiment-strip">
@@ -10977,9 +12188,10 @@ POSZT — ${author ? author.name : "?"}:
 "${post.text}"
 
 ${
-  post.image
+  (post.imageId || post.image)
     ? `KÉP A POSZTBAN:
-A szereplők látják a poszthoz tartozó képet is.
+${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post.imageDescription}
+` : ""}A szereplők látják a poszthoz tartozó képet is.
 Ha természetes, reagáljanak arra, ami ténylegesen látható rajta: személyekre, helyszínre, hangulatra vagy más fontos részletre.
 A kép ugyanúgy része a kontextusnak, mint a poszt szövege.`
     : ""
@@ -11025,7 +12237,7 @@ ${repetitionGuard(
 
 KOMMENT SZABÁLYOK:
 
-- Adj 2-4 új kommentet.
+- Adj általában 4-8 új kommentet. Ha a poszt kevés embert érint, lehet kevesebb; ha felkapott/drámai és sok releváns karakter van, legyen több különböző reakció.
 - Csak olyan szereplő kommenteljen, akinek természetes oka van rá.
 - Ezek VALÓDI közösségi médiás kommentek, nem roleplay-jelenetek és nem mini novellák.
 - Úgy írjanak, mintha telefonról, gyorsan reagálnának egy Instagram/TikTok/X jellegű posztra.
@@ -11091,7 +12303,7 @@ KAPCSOLAT + TÖRTÉNET KÖTELEZŐEN HAT A KOMMENTRE:
 
 FONTOS VÁLTOZATOSSÁG:
 
-- Egy 2-4 kommentes csomagban ne legyen minden reakció ugyanolyan hosszú.
+- Egy 4-8 kommentes csomagban ne legyen minden reakció ugyanolyan hosszú.
 - Ha természetes, legyen legalább egy nagyon rövid komment a csomagban.
 - Ne legyen mindenki vicces.
 - Ne legyen mindenki támogató.
@@ -11103,7 +12315,7 @@ FONTOS VÁLTOZATOSSÁG:
 EMOJI:
 
 - Az emoji-használat legyen LÁTHATÓAN jelen a közösségi médiában, de maradjon karakterfüggő.
-- Ha a kiválasztott kommentelők között van olyan karakter, aki természetesen használ emojit, egy 2-4 kommentes csomagban legalább 1 komment tartalmazzon emojit.
+- Ha a kiválasztott kommentelők között van olyan karakter, aki természetesen használ emojit, egy 4-8 kommentes csomagban legalább 2-3 komment tartalmazzon emojit.
 - Az emoji ne mindig a mondat legvégén legyen.
 - Lehet az emoji önálló reakció vagy a szöveg része.
 - Általában 1-2 emoji elég.
@@ -11160,7 +12372,7 @@ Formátum:
 {"a":"aki érez","b":"aki iránt","delta":-15,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ],
 "events":["csak akkor egy rövid mondat, ha tényleg történt valami emlékezetes"]}${TAIL}`,
-    { maxTokens: 900 }
+    { maxTokens: 1400 }
   );
 
   return {
@@ -11537,16 +12749,20 @@ function socialInteractionInterest(
     factionFlags(target);
 
   if (
-    (
-      af.cobraKai &&
-      tf.miyagiFang
-    ) ||
-    (
-      af.miyagiFang &&
-      tf.cobraKai
-    )
+    (af.pogue && tf.kook) ||
+    (af.kook && tf.pogue) ||
+    (af.hydra && tf.shield) ||
+    (af.shield && tf.hydra) ||
+    (af.cobraKai && tf.miyagiFang) ||
+    (af.miyagiFang && tf.cobraKai) ||
+    (af.ironDragons && (tf.cobraKai || tf.miyagiFang)) ||
+    (tf.ironDragons && (af.cobraKai || af.miyagiFang))
   ) {
-    interest += 26;
+    /*
+     * Franchise/faction rivals pay attention to each other socially too:
+     * comments, subtweets, hate-likes and public reactions become more likely.
+     */
+    interest += 30;
   }
 
   if (
@@ -11655,7 +12871,7 @@ function fairCommentCast(w, targetId) {
 
   return chars
     .map((x) => x.c)
-    .slice(0, 5);
+    .slice(0, 8);
 }
 
 async function genReply(w, post, comment) {
@@ -12023,8 +13239,8 @@ A VILÁG MAGÁTÓL ÉL TOVÁBB.
 
 ${
   single
-    ? "Telt el egy kis idő. Adj EGY természetes új posztot valamelyik szereplőtől, és ha indokolt, 1-3 kommentet másoktól."
-    : "Léptesd a világot néhány órával. Adj 1-2 természetes új posztot különböző szereplőktől, és ha indokolt, posztonként 1-3 kommentet másoktól."
+    ? "Telt el egy kis idő. Adj EGY természetes új posztot valamelyik szereplőtől, és ha indokolt, 3-7 reakciót/kommentet másoktól."
+    : "Léptesd a világot néhány órával. Adj 1-2 természetes új posztot különböző szereplőktől, és ha indokolt, posztonként 3-7 különböző reakciót/kommentet másoktól."
 }
 
 ÁLTALÁNOS SZABÁLYOK:
@@ -12065,6 +13281,16 @@ POSZTOK:
 - A posztból már megfogalmazás alapján is érződjön, melyik karakter írta.
 - Különböző karakterek ne ugyanabban a rendezett, semleges stílusban posztoljanak.
 - A példamondatok és hangminták CSAK stílusiránymutatások; ne másold vagy parafrazáld őket.
+
+POSZT-TÍPUSOK VÁLTOZATOSSÁGA — KÖTELEZŐ:
+- Nézd meg ugyanannak a karakternek a közelmúltbeli posztjait, és NE ismételd ugyanazt a témát/formátumot.
+- Váltogasd természetesen a poszttípusokat: szelfi/outfit, hétköznapi pillanat, helyszín/scenery, buli vagy esemény, hobbi/munka/edzés, achievement, rant, vaguepost, poén/meme-szerű caption, kérdés, throwback, baráti/group pillanat, kapcsolati célzás, gyors life update, provokáció, belsős poén, hosszabb event recap.
+- Ne legyen minden karakterből folyamatosan drámai vagueposter.
+- Ne legyen minden kép szelfi, és ne legyen minden szöveges poszt panaszkodás.
+- A karakter személyisége és SAJÁT TELJES TÖRTÉNETE döntse el, melyik típus illik hozzá.
+- Ugyanaz a karakter két egymást követő posztban lehetőleg ne ugyanazt az archetipust használja.
+- Néha legyen teljesen hétköznapi poszt is. Ettől élő a világ.
+- Ha a karakter saját történetében konkrét hobbi, munka, dojo, szervezet, baráti kör, család, rivális vagy cél szerepel, abból természetesen szülessenek posztok is.
 
 POSZT EMOJI:
 
@@ -12135,7 +13361,8 @@ KOMMENT EMOJI:
 
 KÉPEK:
 
-- Akinek van albuma, néha képet is posztolhat belőle.
+- Akinek van Fotóalbuma, néha képet is posztolhat belőle.
+- Az albumlistában minden kép mellett ott lehet az AI által felismert látható tartalom is. Ezt KÖTELEZŐ figyelembe venni a megfelelő kép kiválasztásakor és a caption megírásakor.
 - Ilyenkor az "image" mezőbe a kép jele kerüljön, például "kep2".
 - SOHA ne találj ki olyan képet, ami nincs az adott karakter albumában.
 - Ha kép van a posztban, a kommentelők azt is látják.
@@ -12215,13 +13442,28 @@ function applyWorldStep(n, out) {
         text: sysLangText(n, cid, `Kommenteltem: ${cut(body, 110)}`, `I commented: ${cut(body, 110)}`),
       });
     });
-    const pic = p.image ? albumFind(charById(n, author), p.image) : null;
+    const authorChar = charById(n, author);
+    const pic = p.image ? albumFind(authorChar, p.image) : null;
     const picRef = pic ? (pic.imageId ? imageRef(pic.imageId) : pic.src) : "";
     const picId = imageIdOf(picRef);
     const fresh = {
       id: uid(), authorId: author, ts: now(), likes: 0, likedBy: [],
-      text: postText, imageId: picId || "", image: picId ? "" : picRef, comments: made, language: worldLanguage(n, n.meId),
+      text: postText,
+      imageId: picId || "",
+      image: picId ? "" : picRef,
+      imageDescription: pic ? String(pic.vision || pic.note || "").slice(0, 700) : "",
+      comments: made,
+      language: worldLanguage(n, n.meId),
     };
+
+    /*
+     * Fotóalbum = felhasználható AI-képkészlet.
+     * Ha a karakter kiposztolta, kikerül az albumából,
+     * de a media fájl természetesen megmarad a kész poszthoz.
+     */
+    if (pic && authorChar) {
+      consumeAlbumItem(authorChar, pic);
+    }
     n.posts.unshift(fresh);
     recordSocialEvent(
   n,
@@ -12232,7 +13474,7 @@ function applyWorldStep(n, out) {
     ts: fresh.ts,
 
     actorId: author,
-    targetIds: [],
+    targetIds: mentionedIdsInText(n, fresh.text, author),
 
     visibility: "public",
     factLevel: "observed",
@@ -12375,67 +13617,157 @@ function NotesStrip({ w, update, setErr, onOpenChat, jump, onRequestNoteReaction
   const { tt } = useLang();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [songTitle, setSongTitle] = useState("");
+  const [songArtist, setSongArtist] = useState("");
+  const [musicBusy, setMusicBusy] = useState(false);
   const mine = noteOf(w, w.meId);
   const others = liveNotes(w).filter((x) => x.authorId !== w.meId);
 
-  const saveMine = () => {
-  const t = String(draft || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, NOTE_MAX);
+  const beginEdit = (note = null) => {
+    setDraft(note ? String(note.text || "") : "");
+    setSongTitle(note && note.music ? String(note.music.title || "") : "");
+    setSongArtist(note && note.music ? String(note.music.artist || "") : "");
+    setEditing(true);
+  };
 
-  // Ha szerkesztés közben valójában semmi
-  // nem változott, maradjon ugyanaz a note ID,
-  // időbélyeg és reakcióelőzmény.
-  if (
-    mine &&
-    t === String(mine.text || "")
-  ) {
+  const saveMine = async () => {
+    const t = String(draft || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, NOTE_MAX);
+
+    const title = String(songTitle || "").trim().slice(0, 120);
+    const artist = String(songArtist || "").trim().slice(0, 120);
+    const hasMusic = Boolean(title || artist);
+
+    if (!t && !hasMusic) {
+      update((n) => setNote(n, w.meId, ""));
+      setEditing(false);
+      return;
+    }
+
+    const oldTitle = mine && mine.music ? String(mine.music.title || "") : "";
+    const oldArtist = mine && mine.music ? String(mine.music.artist || "") : "";
+
+    if (
+      mine &&
+      t === String(mine.text || "") &&
+      title === oldTitle &&
+      artist === oldArtist
+    ) {
+      setEditing(false);
+      return;
+    }
+
+    let musicSummary =
+      mine && mine.music && title === oldTitle && artist === oldArtist
+        ? String(mine.music.summary || "")
+        : "";
+
+    if (hasMusic && !musicSummary) {
+      setMusicBusy(true);
+
+      try {
+        const out = await askWorldJSONInteractive(
+          w,
+          engineFor(w),
+          `A játékos Instagram Notes-szerű jegyzetéhez ezt a zenét választotta:\nCím: ${title || "nincs megadva"}\nElőadó: ${artist || "nincs megadva"}\n\nA feladatod NEM dalszöveg-idézés. Röviden írd le a dal közismert témáját, érzelmi hangulatát és azt, milyen üzenetet/vibe-ot közvetíthet valaki azzal, hogy ezt teszi ki Note-ba. Ha nem ismered biztosan a számot, ne találj ki konkrét dalszöveget vagy tényt; csak a cím/előadó alapján adj óvatos hangulati értelmezést.\n\nFormátum: {"summary":"1-3 rövid mondat"}${TAIL}`,
+          { maxTokens: 350 }
+        );
+
+        musicSummary = String(out && out.summary || "").trim().slice(0, 700);
+      } catch (e) {
+        console.warn("Music note analysis failed:", e);
+        musicSummary = "";
+      } finally {
+        setMusicBusy(false);
+      }
+    }
+
+    const noteId = uid();
+
+    update((n) =>
+      setNote(
+        n,
+        w.meId,
+        t,
+        noteId,
+        {
+          music: hasMusic
+            ? {
+                title,
+                artist,
+                summary: musicSummary,
+              }
+            : null,
+        }
+      )
+    );
+
+    if (onSignal) {
+      onSignal({
+        type: "player-note",
+        noteId,
+      });
+    }
+
     setEditing(false);
     setDraft("");
-    return;
-  }
+    setSongTitle("");
+    setSongArtist("");
+  };
 
-  const noteId = uid();
-
-  update((n) =>
-    setNote(
-      n,
-      w.meId,
-      t,
-      noteId
-    )
-  );
-
-  // Csak valóban új vagy megváltoztatott
-  // note indítson új AI-reakciós folyamatot.
-  if (t && onSignal) {
-    onSignal({
-      type: "player-note",
-      noteId,
-    });
-  }
-
-  setEditing(false);
-  setDraft("");
-};
-
-  // reakciók már a központi motoron keresztül mennek
   const askReactions = () => {
     if (!mine || !w.chars.length) return;
     const ok = onRequestNoteReactions ? onRequestNoteReactions(mine.id) : false;
-    if (!ok) setErr(tt("A reakciókérést már feldolgozza a világ.", "A reaction request is already being processed."));
+    if (!ok) {
+      setErr(
+        tt(
+          "A reakciókérést már feldolgozza a világ.",
+          "A reaction request is already being processed."
+        )
+      );
+    }
   };
 
   const bubble = (x) => {
     const a = charById(w, x.authorId);
     if (!a) return null;
     const isMine = x.authorId === w.meId;
+    const hasMusic = x.music && (x.music.title || x.music.artist);
+
     return (
-      <button key={x.id} className="note-item"
-        onClick={() => { if (isMine) { setDraft(x.text); setEditing(true); } else onOpenChat(x.authorId, x.text); }}>
+      <button
+        key={x.id}
+        className="note-item"
+        onClick={() => {
+          if (isMine) {
+            beginEdit(x);
+          } else {
+            const payload = [
+              x.text || "",
+              hasMusic
+                ? `🎵 ${x.music.title || ""}${x.music.artist ? ` — ${x.music.artist}` : ""}`
+                : "",
+            ].filter(Boolean).join(" · ");
+            onOpenChat(x.authorId, payload);
+          }
+        }}
+      >
         <div className="note-bub">
-          {x.text}
+          {x.text ? <div>{x.text}</div> : null}
+          {hasMusic ? (
+            <div
+              style={{
+                marginTop: x.text ? 4 : 0,
+                fontSize: 10.5,
+                color: "var(--gold)",
+              }}
+            >
+              🎵 {x.music.title || tt("zene", "music")}
+              {x.music.artist ? ` — ${x.music.artist}` : ""}
+            </div>
+          ) : null}
           {(x.reacts || []).length > 0 && (
             <span className="note-react">{(x.reacts || []).map((r) => r.e).join("")}</span>
           )}
@@ -12446,44 +13778,110 @@ function NotesStrip({ w, update, setErr, onOpenChat, jump, onRequestNoteReaction
     );
   };
 
- return (
-  <div className="card" style={{ paddingBottom: 10 }}>
-    <label className="f" style={{ margin: 0 }}>
-      {tt("Jegyzetek", "Notes")}
-    </label>
+  return (
+    <div className="card" style={{ paddingBottom: 10 }}>
+      <label className="f" style={{ margin: 0 }}>
+        {tt("Jegyzetek", "Notes")}
+      </label>
 
       <div className="note-strip">
         {!mine && (
-          <button className="note-item" onClick={() => { setDraft(""); setEditing(true); }}>
-            <div className="note-bub note-empty">{tt("Írj valamit…", "Write something\u2026")}</div>
+          <button className="note-item" onClick={() => beginEdit(null)}>
+            <div className="note-bub note-empty">{tt("Írj valamit…", "Write something…")}</div>
             <Av src={w.player.avatar} name={w.player.name} size={44} radius={99} />
             <div className="note-nm">{tt("te", "you")}</div>
           </button>
         )}
         {mine ? bubble(mine) : null}
         {others.map(bubble)}
-        {!others.length && !mine && <span className="hint" style={{ alignSelf: "center" }}>{tt("Még senki nem írt ki semmit.", "No one has written anything yet.")}</span>}
+        {!others.length && !mine && (
+          <span className="hint" style={{ alignSelf: "center" }}>
+            {tt("Még senki nem írt ki semmit.", "No one has written anything yet.")}
+          </span>
+        )}
       </div>
 
       {editing && (
         <div style={{ marginTop: 10 }}>
-          <input className="i" autoFocus value={draft} maxLength={NOTE_MAX}
-            placeholder={tt("Egy gondolat, max pár szó…", "A thought, a few words max\u2026")} onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") saveMine(); }} />
-          <div className="between" style={{ marginTop: 8 }}>
-            <span className="hint">{draft.length}/{NOTE_MAX} · {tt("24 óra után lejár", "expires after 24 hours")}</span>
+          <input
+            className="i"
+            autoFocus
+            value={draft}
+            maxLength={NOTE_MAX}
+            placeholder={tt("Egy gondolat, max pár szó…", "A thought, a few words max…")}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+
+          <div className="card" style={{ marginTop: 8, padding: 10, background: "var(--ink)" }}>
+            <label className="f" style={{ marginTop: 0 }}>
+              🎵 {tt("Zene a jegyzetben — opcionális", "Music in your note — optional")}
+            </label>
             <div className="row" style={{ gap: 6 }}>
-              {mine && <button className="btn tiny ghost" style={{ color: "var(--steel)" }}
-                onClick={() => { update((n) => setNote(n, w.meId, "")); setEditing(false); }}>{tt("Törlés", "Delete")}</button>}
-              <button className="btn tiny ghost" onClick={() => setEditing(false)}>{tt("Mégse", "Cancel")}</button>
-              <button className="btn tiny primary" onClick={saveMine}>{tt("Kiírom", "Post it")}</button>
+              <input
+                className="i"
+                value={songTitle}
+                placeholder={tt("Dal címe", "Song title")}
+                onChange={(e) => setSongTitle(e.target.value)}
+              />
+              <input
+                className="i"
+                value={songArtist}
+                placeholder={tt("Előadó", "Artist")}
+                onChange={(e) => setSongArtist(e.target.value)}
+              />
+            </div>
+            <p className="hint" style={{ marginTop: 6 }}>
+              {tt(
+                "Nem játssza le a zenét. Az AI a dal témáját/hangulatát értelmezi, így a karakterek tudnak arra reagálni, mit üzensz vele. Dalszöveget nem kell bemásolnod.",
+                "It does not play the song. The AI interprets the song's theme/mood so characters can react to what you're conveying with it. You don't need to paste lyrics."
+              )}
+            </p>
+          </div>
+
+          <div className="between" style={{ marginTop: 8 }}>
+            <span className="hint">
+              {draft.length}/{NOTE_MAX} · {tt("24 óra után lejár", "expires after 24 hours")}
+            </span>
+            <div className="row" style={{ gap: 6 }}>
+              {mine && (
+                <button
+                  className="btn tiny ghost"
+                  style={{ color: "var(--steel)" }}
+                  onClick={() => {
+                    update((n) => setNote(n, w.meId, ""));
+                    setEditing(false);
+                  }}
+                >
+                  {tt("Törlés", "Delete")}
+                </button>
+              )}
+              <button className="btn tiny ghost" onClick={() => setEditing(false)}>
+                {tt("Mégse", "Cancel")}
+              </button>
+              <button
+                className="btn tiny primary"
+                onClick={saveMine}
+                disabled={musicBusy || (!draft.trim() && !songTitle.trim() && !songArtist.trim())}
+              >
+                {musicBusy ? <Loader2 size={12} className="spin" /> : null}
+                {tt("Kiírom", "Post it")}
+              </button>
             </div>
           </div>
         </div>
       )}
 
+      {mine && w.chars.length > 0 ? (
+        <button className="btn tiny ghost" style={{ marginTop: 8 }} onClick={askReactions}>
+          <Sparkles size={12} /> {tt("Reakciók kérése", "Request reactions")}
+        </button>
+      ) : null}
+
       <p className="hint" style={{ marginTop: 8 }}>
-        {tt("Koppints valakinek a jegyzetére, és válaszolhatsz rá privátban.", "Tap someone's note, and you can reply to it privately.")}
+        {tt(
+          "Koppints valakinek a jegyzetére, és válaszolhatsz rá privátban.",
+          "Tap someone's note, and you can reply to it privately."
+        )}
       </p>
     </div>
   );
@@ -12523,8 +13921,9 @@ function AlbumPick({ items, value, onPick }) {
   );
 }
 
-function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal }) {
+function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal }) {
   const { tt } = useLang();
+  const { media } = useMedia();
   const [text, setText] = useState("");
   const [img, setImg] = useState("");
   const [busy, setBusy] = useState("");
@@ -12581,117 +13980,98 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
     setBusy("");
   };
 
-  const post = () => {
-  const t = text.trim();
+  const post = async () => {
+    const t = text.trim();
 
-  if (!t && !img) return;
+    if ((!t && !img) || busy === "posting") return;
 
-  const imageId =
-    imageIdOf(img);
+    setBusy("posting");
 
-  const p = {
-    id: uid(),
-    authorId: w.meId,
-    ts: now(),
-    likes: 0,
-    text: t,
-    imageId: imageId || "",
-    image:
-      imageId
-        ? ""
-        : (img || ""),
-    comments: [],
-  };
+    const imageId = imageIdOf(img);
+    let imageDescription = "";
 
-  update((n) => {
-    /*
-     * A poszt bekerül a feedbe.
-     */
-    n.posts.unshift(p);
+    if (img) {
+      try {
+        const data = resolveImg(img, media);
 
-    /*
-     * A régi mention / knowledge rendszer
-     * továbbra is működik.
-     */
-    noteMentions(
-      n,
-      t,
-      w.meId,
-      {
-        type: "post",
-        id: p.id,
+        if (data && String(data).startsWith("data:image/")) {
+          imageDescription = await analyzeImageDataUrl(
+            data,
+            tt(
+              "Írd le 1-3 rövid mondatban, mi látható ezen a social media képen. Csak látható részleteket említs: személyek száma, tevékenység, ruha, helyszín, hangulat. Ne azonosíts valódi személyt név szerint.",
+              "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
+            )
+          );
+        }
+      } catch (e) {
+        console.warn("Player post image analysis failed:", e);
       }
-    );
+    }
 
-    /*
-     * SOCIAL EVENT LEDGER
-     *
-     * A játékos nyilvános posztját
-     * strukturált eseményként is megőrizzük.
-     */
-    recordSocialEvent(
-      n,
-      {
+    const p = {
+      id: uid(),
+      authorId: w.meId,
+      ts: now(),
+      likes: 0,
+      likedBy: [],
+      text: t,
+      imageId: imageId || "",
+      image: imageId ? "" : (img || ""),
+      imageDescription,
+      comments: [],
+      language: worldLanguage(w, w.meId),
+    };
+
+    update((n) => {
+      n.posts.unshift(p);
+
+      const mentions = noteMentions(
+        n,
+        t,
+        w.meId,
+        { type: "post", id: p.id }
+      ) || [];
+
+      recordSocialEvent(n, {
         type: "post",
-
         refId: p.id,
-
         ts: p.ts,
-
         actorId: w.meId,
-
-        targetIds: [],
-
+        targetIds: mentions,
         visibility: "public",
-
         factLevel: "observed",
-
-        importance:
-          img ? 30 : 24,
-
+        importance: img ? 30 : 24,
         drama: 0,
-
         romance: 0,
-
         embarrassment: 0,
-
         source: "player",
-
-        text:
-          t ||
-          "Image post",
-
+        text: t || "Image post",
         tags: [
           "post",
           "player-post",
-          img
-            ? "image-post"
-            : "text-post",
+          img ? "image-post" : "text-post",
+          ...(mentions.length ? ["mentions"] : []),
         ],
-
         meta: {
           postId: p.id,
           hasImage: Boolean(img),
+          imageDescription,
+          mentionedIds: mentions,
         },
-      }
-    );
-  });
-
-  /*
-   * Ez marad:
-   * az AI-k automatikusan reagálhatnak
-   * a játékos új posztjára.
-   */
-  if (onSignal) {
-    onSignal({
-      type: "player-post",
-      postId: p.id,
+      });
     });
-  }
 
-  setText("");
-  setImg("");
-};
+    if (onSignal) {
+      onSignal({
+        type: "player-post",
+        postId: p.id,
+      });
+    }
+
+    setText("");
+    setImg("");
+    setBusy("");
+  };
 
   const advance = () => {
     if (!w.chars.length) return setErr(tt("Előbb hozz létre karaktereket.", "First create some characters."));
@@ -13016,15 +14396,18 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
               radius={12}
             />
           </button>
-          <textarea
-            className="i"
-            value={text}
-            placeholder={tt(
-              `Mi jár ${w.player.name} fejében?`,
-              `What's on ${w.player.name}'s mind?`
-            )}
-            onChange={(e) => setText(e.target.value)}
-          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <textarea
+              className="i"
+              value={text}
+              placeholder={tt(
+                `Mi jár ${w.player.name} fejében?`,
+                `What's on ${w.player.name}'s mind?`
+              )}
+              onChange={(e) => setText(e.target.value)}
+            />
+            <MentionBar w={w} value={text} onChange={setText} />
+          </div>
         </div>
 
         {(showMedia || img) ? (
@@ -13053,11 +14436,11 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
 
           <button
             className="btn primary"
-            onClick={() => {
-              post();
+            onClick={async () => {
+              await post();
               setShowMedia(false);
             }}
-            disabled={!text.trim() && !img}
+            disabled={busy === "posting" || (!text.trim() && !img)}
           >
             <Send size={14} />
             {tt("Közzététel", "Post")}
@@ -13169,15 +14552,23 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
               x.comments.push(made);
               noteComment(n, x, made);
 
+              const mentionTargets = mentionedIdsInText(
+                n,
+                made.text,
+                actorId
+              );
+
+              const eventTargets = [
+                ...(targetId && targetId !== actorId ? [targetId] : []),
+                ...mentionTargets,
+              ].filter((id, index, arr) => id && id !== actorId && arr.indexOf(id) === index);
+
               recordSocialEvent(n, {
                 type: parent ? "reply" : "comment",
                 refId: made.id,
                 ts: made.ts,
                 actorId,
-                targetIds:
-                  targetId && targetId !== actorId
-                    ? [targetId]
-                    : [],
+                targetIds: eventTargets,
                 visibility: "public",
                 factLevel: "observed",
                 importance: parent ? 30 : 22,
@@ -13279,6 +14670,11 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
             setProfileId("");
             onOpenChat(id);
           }}
+          onWorlds={
+            profileId === w.meId
+              ? onOpenWorlds
+              : null
+          }
         />
       ) : null}
     </>
@@ -13683,7 +15079,7 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
           category="cover"
         />
 
-        <AlbumEditor value={c.album} onChange={(v) => set("album", v)} />
+        <AlbumEditor value={c.album} onChange={(v) => set("album", v)} owner={c} />
 
         <div className="social-edit-box">
           <label className="f" style={{ marginTop: 0 }}>
@@ -15457,8 +16853,14 @@ function GroupChat({ w, group, update, setErr, onBack }) {
     ) === "mature";
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [addingMembers, setAddingMembers] = useState(false);
   const endRef = useRef(null);
   const members = (group.members || []).map((id) => charById(w, id)).filter(Boolean);
+  const addableMembers = (w.chars || []).filter(
+    (c) =>
+      c &&
+      !(group.members || []).includes(c.id)
+  );
   const msgs = group.msgs || [];
 
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [msgs.length, group.id]);
@@ -15857,8 +17259,63 @@ Formátum:
             ) : null}
           </span>
           {members.slice(0, 4).map((m) => <Av key={m.id} src={m.avatar} name={m.name} size={22} radius={7} />)}
+          <button
+            type="button"
+            className={"btn tiny " + (addingMembers ? "primary" : "ghost")}
+            onClick={() => setAddingMembers((v) => !v)}
+            title={tt("Tag hozzáadása", "Add member")}
+          >
+            <Plus size={12} />
+          </button>
         </div>
       </div>
+
+      {addingMembers ? (
+        <div className="card" style={{ marginTop: 6 }}>
+          <div className="between">
+            <span className="f" style={{ margin: 0 }}>
+              {tt("Ember hozzáadása a csoporthoz", "Add someone to the group")}
+            </span>
+            <button
+              type="button"
+              className="btn tiny ghost"
+              onClick={() => setAddingMembers(false)}
+            >
+              <X size={12} />
+            </button>
+          </div>
+
+          {addableMembers.length ? (
+            <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+              {addableMembers.map((person) => (
+                <button
+                  type="button"
+                  className="btn tiny ghost"
+                  key={person.id}
+                  onClick={() => {
+                    patch((g) => {
+                      g.members = [
+                        ...new Set([
+                          ...(g.members || []),
+                          person.id,
+                        ]),
+                      ];
+                      g.updatedAt = now();
+                    });
+                  }}
+                >
+                  <Av src={person.avatar} name={person.name} size={20} radius={7} />
+                  {person.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="hint" style={{ marginTop: 8 }}>
+              {tt("Már minden AI-karakter benne van ebben a csoportban.", "Every AI character is already in this group.")}
+            </p>
+          )}
+        </div>
+      ) : null}
 
       <p className="hint" style={{ textAlign: "center" }}>{members.map((m) => m.name).join(" · ")}</p>
 
@@ -15908,12 +17365,15 @@ Formátum:
 /* Jegyzetsáv — a szereplők feje fölött egy-egy mondat, mint az Instagram Notes. */
 function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply }) {
   const { tt } = useLang();
+  const { media } = useMedia();
   const matureMode =
     worldContentLevel(
       w,
       w.meId
     ) === "mature";
   const [text, setText] = useState("");
+  const [chatImg, setChatImg] = useState("");
+  const [showChatMedia, setShowChatMedia] = useState(false);
   const [busy, setBusy] = useState(false);
   const sendLockRef = useRef(false);
   const [gid, setGid] = useState(null);
@@ -15945,8 +17405,11 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
       : text
   ).trim();
 
+  const selectedImg =
+    chatImg;
+
   if (
-    !t ||
+    (!t && !selectedImg) ||
     !c ||
     busy ||
     sendLockRef.current
@@ -15957,6 +17420,8 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   sendLockRef.current = true;
   setBusy(true);
   setText("");
+  setChatImg("");
+  setShowChatMedia(false);
 
   const ck = chatKey(
     w.meId,
@@ -15965,13 +17430,61 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
 
   const sentAt = now();
 
+  const outgoingImageId =
+    imageIdOf(
+      selectedImg
+    );
+
+  let outgoingImageDescription =
+    "";
+
   /*
-   * FONTOS:
+   * A feltöltött kép vizuális tartalmát egyszer röviden
+   * elemezzük, hogy a beszélgető AI tényleg tudjon arra
+   * reagálni, ami látható rajta.
+   */
+  if (selectedImg) {
+    try {
+      const imageData =
+        resolveImg(
+          selectedImg,
+          media
+        );
+
+      outgoingImageDescription =
+        await analyzeImageDataUrl(
+          imageData,
+          `This image was sent in a private chat by ${w.player.name} to ${c.name}. Describe only what is visibly present in 1-3 concise sentences: people, clothing, activity, setting, objects and mood when visible. Do not identify real people by name.`
+        );
+    } catch (visionErr) {
+      console.warn(
+        "Chat image analysis failed:",
+        visionErr
+      );
+    }
+  }
+
+  const outgoingMessage = {
+    id:
+      "dm_" + uid(),
+    from:"me",
+    text:t,
+    ts:sentAt,
+    imageId:
+      outgoingImageId ||
+      "",
+    image:
+      outgoingImageId
+        ? ""
+        : selectedImg || "",
+    imageDescription:
+      outgoingImageDescription ||
+      "",
+  };
+
+  /*
    * Az AI már AZ ELSŐ elküldött üzenetet is
    * a világ tényleges részeként kapja meg.
-   *
-   * Nem várunk arra, hogy a React újrarenderelje
-   * a w propot.
    */
   const requestWorld =
     JSON.parse(
@@ -15984,11 +17497,7 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
 
   requestWorld.chats[ck] = [
     ...(requestWorld.chats[ck] || []),
-    {
-      from: "me",
-      text: t,
-      ts: sentAt,
-    },
+    outgoingMessage,
   ];
 
   /*
@@ -16003,9 +17512,7 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
     n.chats[ck] = [
       ...(n.chats[ck] || []),
       {
-        from: "me",
-        text: t,
-        ts: sentAt,
+        ...outgoingMessage,
       },
     ];
   });
@@ -16026,7 +17533,23 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
             m.from === "me"
               ? requestWorld.player.name
               : c.name
-          }: ${m.text}`
+          }: ${
+            m.text || ""
+          }${
+            (m.imageId || m.image)
+              ? ` [IMAGE: ${
+                  m.imageDescription ||
+                  (
+                    worldLanguage(
+                      requestWorld,
+                      requestWorld.meId
+                    ) === "en"
+                      ? "an image was sent"
+                      : "képet küldött"
+                  )
+                }]`
+              : ""
+          }`
       )
       .join("\n");
 
@@ -16131,6 +17654,25 @@ ${matureContentInstruction(
   "chat"
 )}
 
+${
+  outgoingImageDescription
+    ? `A JÁTÉKOS MOST KÉPET IS KÜLDÖTT.
+A képen látható tartalom rövid vizuális leírása:
+${outgoingImageDescription}
+
+A válaszod természetesen reagálhat a kép konkrét, látható részleteire. Ne tegyél úgy, mintha olyasmit látnál, ami nincs a leírásban.`
+    : ""
+}
+
+SAJÁT FOTÓALBUMOD — PRIVÁTBAN CSAK EZEKBŐL KÜLDHETSZ KÉPET:
+${albumList(c) || "nincs használható albumkép"}
+
+Ha természetes része a válaszodnak, küldhetsz EGY képet a saját albumodból is.
+- Az "image" mezőbe csak a fenti kep1/kep2/... kulcs kerülhet.
+- Ha nincs értelmes ok képet küldeni, legyen üres.
+- Ne találj ki nem létező képet.
+- DM-ben elküldött albumkép NEM törlődik az albumból; csak a nyilvánosan kiposztolt albumkép egyszer használatos.
+
 PRIVÁT CHAT SZABÁLYOK:
 
 - Most KÖZVETLENÜL a játékos legutóbbi üzenetére válaszolj.
@@ -16170,8 +17712,46 @@ KAPCSOLATVÁLTOZÁS:
 - Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
 
 Formátum:
-{"reply":"a válaszod","changes":[{"a":"${c.id}","b":"${requestWorld.meId}","delta":-12,"mood":"mit érez most iránta","why":"miért"},{"a":"${requestWorld.meId}","b":"${c.id}","delta":8,"mood":"","why":"miért"}],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
+{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","changes":[{"a":"${c.id}","b":"${requestWorld.meId}","delta":-12,"mood":"mit érez most iránta","why":"miért"},{"a":"${requestWorld.meId}","b":"${c.id}","delta":8,"mood":"","why":"miért"}],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
     );
+
+    const aiPic =
+      out &&
+      out.image
+        ? albumFind(
+            c,
+            out.image
+          )
+        : null;
+
+    const aiImageId =
+      aiPic
+        ? imageIdOf(
+            aiPic.imageId ||
+            aiPic.image ||
+            ""
+          )
+        : "";
+
+    const aiImageRef =
+      aiPic
+        ? (
+            aiPic.imageId
+              ? imageRef(
+                  aiPic.imageId
+                )
+              : aiPic.image || ""
+          )
+        : "";
+
+    const aiImageDescription =
+      aiPic
+        ? String(
+            aiPic.vision ||
+            aiPic.note ||
+            ""
+          )
+        : "";
 
     let reply = String(
       out &&
@@ -16272,7 +17852,7 @@ Formátum:
         hist
       );
 
-    if (!reply) {
+    if (!reply && !aiImageRef) {
       /*
        * Ha egy emoji-only válasz teljesen
        * kiesett a cooldown miatt, kérünk
@@ -16351,7 +17931,7 @@ Formátum:
         );
     }
 
-    if (!reply) {
+    if (!reply && !aiImageRef) {
       throw new Error(
         tt(
           "Az AI nem adott chatválaszt.",
@@ -16364,13 +17944,26 @@ Formátum:
       n.chats[ck] = [
         ...(n.chats[ck] || []),
         {
-          from: "them",
-          text: reply,
-          ts: now(),
-          language: worldLanguage(
-            n,
-            n.meId
-          ),
+          id:
+            "dm_" + uid(),
+          from:"them",
+          text:reply,
+          ts:now(),
+          imageId:
+            aiImageId ||
+            "",
+          image:
+            aiImageId
+              ? ""
+              : aiImageRef || "",
+          imageDescription:
+            aiImageDescription ||
+            "",
+          language:
+            worldLanguage(
+              n,
+              n.meId
+            ),
         },
       ];
 
@@ -16414,11 +18007,21 @@ Formátum:
             n,
             c.id,
             `Privát üzenetet kaptam: ${cut(
-              reply,
+              reply ||
+              (
+                aiImageDescription
+                  ? `📷 ${aiImageDescription}`
+                  : "📷 kép"
+              ),
               110
             )}`,
             `I got a private message: ${cut(
-              reply,
+              reply ||
+              (
+                aiImageDescription
+                  ? `📷 ${aiImageDescription}`
+                  : "📷 image"
+              ),
               110
             )}`
           ),
@@ -16436,12 +18039,22 @@ Formátum:
           text: sysLangText(
             n,
             c.id,
-            `${requestWorld.player.name} ezt írta: ${cut(
-              t,
+            `${requestWorld.player.name} ezt küldte: ${cut(
+              t ||
+              (
+                outgoingImageDescription
+                  ? `📷 ${outgoingImageDescription}`
+                  : "📷 kép"
+              ),
               110
             )}`,
-            `${requestWorld.player.name} wrote: ${cut(
-              t,
+            `${requestWorld.player.name} sent: ${cut(
+              t ||
+              (
+                outgoingImageDescription
+                  ? `📷 ${outgoingImageDescription}`
+                  : "📷 image"
+              ),
               110
             )}`
           ),
@@ -16499,88 +18112,481 @@ if (group) {
 }
 
   if (!c) {
+    const conversationRows = [
+      ...(w.groups || []).map((g) => {
+        const groupMembers =
+          (g.members || [])
+            .map((id) =>
+              charById(
+                w,
+                id
+              )
+            )
+            .filter(Boolean);
+
+        const last =
+          (g.msgs || [])
+            .slice(-1)[0] ||
+          null;
+
+        const lastWho =
+          last
+            ? (
+                last.from === w.meId
+                  ? w.player
+                  : charById(
+                      w,
+                      last.from
+                    )
+              )
+            : null;
+
+        return {
+          kind:"group",
+          id:g.id,
+          ts:
+            Number(
+              last &&
+              last.ts
+            ) ||
+            Number(
+              g.updatedAt
+            ) ||
+            Number(
+              g.createdAt
+            ) ||
+            0,
+          g,
+          members:groupMembers,
+          last,
+          lastWho,
+        };
+      }),
+
+      ...(w.chars || []).map((x) => {
+        const ck =
+          chatKey(
+            w.meId,
+            x.id
+          );
+
+        const last =
+          (w.chats[ck] || [])
+            .slice(-1)[0] ||
+          null;
+
+        const fresh =
+          Boolean(
+            last &&
+            last.from === "them" &&
+            last.ts >
+              (
+                (
+                  w.seen &&
+                  w.seen[ck]
+                ) ||
+                0
+              )
+          );
+
+        return {
+          kind:"dm",
+          id:x.id,
+          ts:
+            Number(
+              last &&
+              last.ts
+            ) || 0,
+          x,
+          ck,
+          last,
+          fresh,
+          rel:
+            getRel(
+              w,
+              x.id,
+              w.meId
+            ),
+        };
+      }),
+    ].sort(
+      (a,b) =>
+        b.ts - a.ts ||
+        (
+          a.kind === "dm"
+            ? -1
+            : 1
+        )
+    );
+
     return (
       <>
-        <NotesStrip w={w} update={update} setErr={setErr} onOpenChat={(id) => setOpenId(id)} jump={jump} />
+        <NotesStrip
+          w={w}
+          update={update}
+          setErr={setErr}
+          onOpenChat={(id) =>
+            setOpenId(id)
+          }
+          jump={jump}
+        />
 
-        <div className="between" style={{ marginTop: 12 }}>
-          <label className="f" style={{ margin: 0, color: "var(--gold)" }}>{tt("Csoportos beszélgetések", "Group chats")}</label>
-          <button className="btn tiny primary" onClick={() => setCreating(true)}><Plus size={13} /> {tt("Új", "New")}</button>
+        <div
+          className="between"
+          style={{
+            marginTop:12,
+          }}
+        >
+          <label
+            className="f"
+            style={{
+              margin:0,
+              color:"var(--gold)",
+            }}
+          >
+            {tt(
+              "Beszélgetések",
+              "Messages"
+            )}
+          </label>
+
+          <button
+            type="button"
+            className="btn tiny primary"
+            onClick={() =>
+              setCreating(true)
+            }
+          >
+            <Plus size={13} />
+            {tt(
+              "Új csoport",
+              "New group"
+            )}
+          </button>
         </div>
 
-        {(w.groups || []).length === 0 && (
-          <p className="hint" style={{ marginTop: 8 }}>
-            {tt("Még nincs csoport. Rakj össze több karaktert egy beszélgetésbe — egymással is vitáznak, nem csak veled.", "There's no group yet. Put several characters into one conversation — they argue with each other too, not just with you.")}
-          </p>
-        )}
+        <p
+          className="hint"
+          style={{
+            marginTop:6,
+            marginBottom:10,
+          }}
+        >
+          {tt(
+            "A privát és csoportos beszélgetések együtt, a legutóbbi aktivitás sorrendjében jelennek meg.",
+            "Private and group conversations are mixed together and sorted by latest activity."
+          )}
+        </p>
 
-        {(w.groups || []).map((g) => {
-          const mem2 = (g.members || []).map((id) => charById(w, id)).filter(Boolean);
-          const last = (g.msgs || []).slice(-1)[0];
-          const lastWho = last ? charById(w, last.from) : null;
-          return (
-            <div className="card" key={g.id} onClick={() => setGid(g.id)} style={{ cursor: "pointer" }}>
-              <div className="between">
-                <div className="row" style={{ alignItems: "center", minWidth: 0 }}>
-                  <div className="row" style={{ gap: 3 }}>
-                    {mem2.slice(0, 3).map((m) => <Av key={m.id} src={m.avatar} name={m.name} size={26} radius={8} />)}
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div className="name" style={{ fontSize: 13.5 }}>{g.name}</div>
-                    <div className="hint" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {last ? `${lastWho ? lastWho.name : "?"}: ${last.text}` : tt(`${mem2.length} tag · még üres`, `${mem2.length} members · still empty`)}
+        {creating ? (
+          <GroupNew
+            w={w}
+            onClose={() =>
+              setCreating(false)
+            }
+            onCreate={(g) => {
+              update((n) => {
+                n.groups =
+                  (n.groups || [])
+                    .concat(g);
+              });
+
+              setCreating(false);
+              setGid(g.id);
+            }}
+          />
+        ) : null}
+
+        {!conversationRows.length ? (
+          <p
+            className="hint"
+            style={{
+              textAlign:"center",
+              marginTop:24,
+            }}
+          >
+            {tt(
+              "Még nincs beszélgetés.",
+              "No conversations yet."
+            )}
+          </p>
+        ) : null}
+
+        {conversationRows.map((row) => {
+          if (row.kind === "group") {
+            const {
+              g,
+              members:groupMembers,
+              last,
+              lastWho,
+            } = row;
+
+            const preview =
+              last
+                ? (
+                    (
+                      lastWho
+                        ? lastWho.name + ": "
+                        : ""
+                    ) +
+                    (
+                      last.text ||
+                      (
+                        last.imageId ||
+                        last.image
+                          ? tt("📷 Kép", "📷 Photo")
+                          : ""
+                      )
+                    )
+                  )
+                : tt(
+                    `${groupMembers.length} tag · még üres`,
+                    `${groupMembers.length} members · still empty`
+                  );
+
+            return (
+              <div
+                className="card"
+                key={"group:" + g.id}
+                onClick={() =>
+                  setGid(g.id)
+                }
+                style={{
+                  cursor:"pointer",
+                }}
+              >
+                <div className="between">
+                  <div
+                    className="row"
+                    style={{
+                      alignItems:"center",
+                      minWidth:0,
+                    }}
+                  >
+                    <div
+                      className="row"
+                      style={{
+                        gap:3,
+                      }}
+                    >
+                      {groupMembers
+                        .slice(0,3)
+                        .map((m) => (
+                          <Av
+                            key={m.id}
+                            src={m.avatar}
+                            name={m.name}
+                            size={26}
+                            radius={8}
+                          />
+                        ))}
+                    </div>
+
+                    <div
+                      style={{
+                        minWidth:0,
+                      }}
+                    >
+                      <div
+                        className="name"
+                        style={{
+                          fontSize:13.5,
+                        }}
+                      >
+                        {g.name}
+                        <span
+                          className="handle mono"
+                          style={{
+                            marginLeft:6,
+                          }}
+                        >
+                          {tt(
+                            "csoport",
+                            "group"
+                          )}
+                        </span>
+                      </div>
+
+                      <div
+                        className="hint"
+                        style={{
+                          overflow:"hidden",
+                          textOverflow:"ellipsis",
+                          whiteSpace:"nowrap",
+                        }}
+                      >
+                        {preview}
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="row" style={{ gap: 4, alignItems: "center" }}>
-                  {last && <span className="handle mono">{timeAgo(last.ts)}</span>}
-                  <button className="btn tiny ghost" style={{ color: "var(--steel)" }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      update((n) => {
-                        n.groups = (n.groups || []).filter((x) => x.id !== g.id);
-                        if (!n.deleted) n.deleted = {};
-                        n.deleted[g.id] = now();
-                      });
-                    }}><Trash2 size={12} /></button>
+
+                  <div
+                    className="row"
+                    style={{
+                      gap:4,
+                      alignItems:"center",
+                    }}
+                  >
+                    {row.ts ? (
+                      <span className="handle mono">
+                        {timeAgo(row.ts)}
+                      </span>
+                    ) : null}
+
+                    <button
+                      type="button"
+                      className="btn tiny ghost"
+                      style={{
+                        color:"var(--steel)",
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+
+                        update((n) => {
+                          n.groups =
+                            (n.groups || [])
+                              .filter(
+                                (x) =>
+                                  x.id !==
+                                  g.id
+                              );
+
+                          if (!n.deleted) {
+                            n.deleted = {};
+                          }
+
+                          n.deleted[g.id] =
+                            now();
+                        });
+                      }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          }
 
-        <div className="sep" />
-        <label className="f" style={{ marginTop: 0 }}>{tt("Privát üzenetek", "Private messages")}</label>
+          const {
+            x,
+            last,
+            fresh,
+            rel,
+          } = row;
 
-        {creating && (
-          <GroupNew w={w} onClose={() => setCreating(false)}
-            onCreate={(g) => { update((n) => { n.groups = (n.groups || []).concat(g); }); setCreating(false); setGid(g.id); }} />
-        )}
+          const preview =
+            last
+              ? (
+                  (
+                    last.from === "me"
+                      ? tt(
+                          "Te: ",
+                          "You: "
+                        )
+                      : ""
+                  ) +
+                  (
+                    last.text ||
+                    (
+                      last.imageId ||
+                      last.image
+                        ? tt(
+                            "📷 Kép",
+                            "📷 Photo"
+                          )
+                        : ""
+                    )
+                  )
+                )
+              : sysTextFor(
+                  w,
+                  w.meId,
+                  "noMessagesYet"
+                );
 
-        {w.chars.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 24 }}>{tt("Nincs kivel beszélgetned. Hozz létre karaktereket.", "There's no one to talk to. Create some characters.")}</p>}
-        {w.chars.map((x) => {
-          const ck = chatKey(w.meId, x.id);
-          const last = (w.chats[ck] || []).slice(-1)[0];
-          const r = getRel(w, x.id, w.meId);
-          const fresh = !!(last && last.from === "them" && last.ts > ((w.seen && w.seen[ck]) || 0));
           return (
-            <div className="card" key={x.id} onClick={() => setOpenId(x.id)}
-              style={{ cursor: "pointer", borderColor: fresh ? "var(--rose)" : "var(--line)" }}>
+            <div
+              className="card"
+              key={"dm:" + x.id}
+              onClick={() =>
+                setOpenId(x.id)
+              }
+              style={{
+                cursor:"pointer",
+                borderColor:
+                  fresh
+                    ? "var(--rose)"
+                    : "var(--line)",
+              }}
+            >
               <div className="row">
-                <Av src={x.avatar} name={x.name} />
-                <div style={{ flex: 1, minWidth: 0 }}>
+                <Av
+                  src={x.avatar}
+                  name={x.name}
+                />
+
+                <div
+                  style={{
+                    flex:1,
+                    minWidth:0,
+                  }}
+                >
                   <div className="between">
-                    <div className="row" style={{ gap: 6, alignItems: "center", minWidth: 0 }}>
-                      <div className="name">{x.name}</div>
-                      {fresh && <span className="dot" />}
+                    <div
+                      className="row"
+                      style={{
+                        gap:6,
+                        alignItems:"center",
+                        minWidth:0,
+                      }}
+                    >
+                      <div className="name">
+                        {x.name}
+                      </div>
+
+                      {fresh ? (
+                        <span className="dot" />
+                      ) : null}
                     </div>
-                    {last && <span className="handle mono">{timeAgo(last.ts)}</span>}
+
+                    {row.ts ? (
+                      <span className="handle mono">
+                        {timeAgo(row.ts)}
+                      </span>
+                    ) : null}
                   </div>
-                  <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                                fontSize: 12, color: fresh ? "var(--bone)" : "var(--muted)", fontWeight: fresh ? 600 : 400 }}>
-                    {last ? (last.from === "me" ? tt("Te: ", "You: ") : "") + last.text : sysTextFor(w, w.meId, "noMessagesYet")}
+
+                  <div
+                    style={{
+                      overflow:"hidden",
+                      textOverflow:"ellipsis",
+                      whiteSpace:"nowrap",
+                      fontSize:12,
+                      color:
+                        fresh
+                          ? "var(--bone)"
+                          : "var(--muted)",
+                      fontWeight:
+                        fresh
+                          ? 600
+                          : 400,
+                    }}
+                  >
+                    {preview}
                   </div>
-                  {r.mood ? <div style={{ fontSize: 11.5, color: "var(--rose)", marginTop: 2 }}>{r.mood}</div> : null}
+
+                  {rel.mood ? (
+                    <div
+                      style={{
+                        fontSize:11.5,
+                        color:"var(--rose)",
+                        marginTop:2,
+                      }}
+                    >
+                      {rel.mood}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -16628,7 +18634,41 @@ if (group) {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingBottom: 8 }}>
         {msgs.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 20 }}>{tt("Írj neki elsőként.", "Be the first to write.")}</p>}
-        {msgs.map((m, i) => <div key={i} className={"bub " + (m.from === "me" ? "me" : "them")}>{m.text}</div>)}
+        {msgs.map((m, i) => (
+          <div
+            key={m.id || i}
+            className={"bub " + (m.from === "me" ? "me" : "them")}
+            style={{
+              overflow:"hidden",
+            }}
+          >
+            {(m.imageId || m.image) ? (
+              <img
+                src={resolveImg(
+                  m.imageId
+                    ? imageRef(m.imageId)
+                    : m.image,
+                  media
+                )}
+                alt=""
+                style={{
+                  display:"block",
+                  width:"min(260px, 70vw)",
+                  maxWidth:"100%",
+                  maxHeight:340,
+                  objectFit:"cover",
+                  borderRadius:12,
+                  marginBottom:m.text ? 7 : 0,
+                }}
+              />
+            ) : null}
+            {m.text ? (
+              <div style={{ whiteSpace:"pre-wrap" }}>
+                {m.text}
+              </div>
+            ) : null}
+          </div>
+        ))}
         {busy && (
   <div className="typing-row">
     <div className="bub them typing-bub">
@@ -16641,21 +18681,101 @@ if (group) {
         <div ref={endRef} />
       </div>
 
-      <div className="row" style={{ marginTop: 8, gap: 8 }}>
-        <input className="i" value={text} placeholder={tt("Üzenet…", "Message\u2026")} onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
+      {showChatMedia || chatImg ? (
+        <div
+          className="card"
+          style={{
+            marginTop:8,
+          }}
+        >
+          <ImagePicker
+            value={chatImg}
+            onChange={setChatImg}
+            label={tt(
+              "Kép az üzenethez",
+              "Image for message"
+            )}
+            max={1000}
+            preview={100}
+            previewWidth={120}
+            previewHeight={120}
+            category="chat"
+          />
+        </div>
+      ) : null}
 
-    if (
-      !busy &&
-      text.trim()
-    ) {
-      send();
-    }
-  }
-}} />
-        <button className="btn primary" onClick={() => send()} disabled={busy || !text.trim()}><Send size={15} /></button>
+      <div
+        className="row"
+        style={{
+          marginTop:8,
+          gap:8,
+          alignItems:"center",
+        }}
+      >
+        <button
+          type="button"
+          className={"btn " + (chatImg ? "primary" : "ghost")}
+          onClick={() =>
+            setShowChatMedia(
+              (v) => !v
+            )
+          }
+          disabled={busy}
+          title={tt(
+            "Kép küldése",
+            "Send a photo"
+          )}
+        >
+          <ImageIcon size={15} />
+        </button>
+
+        <input
+          className="i"
+          value={text}
+          placeholder={tt(
+            "Üzenet…",
+            "Message…"
+          )}
+          onChange={(e) =>
+            setText(
+              e.target.value
+            )
+          }
+          onKeyDown={(e) => {
+            if (
+              e.key === "Enter"
+            ) {
+              e.preventDefault();
+
+              if (
+                !busy &&
+                (
+                  text.trim() ||
+                  chatImg
+                )
+              ) {
+                send();
+              }
+            }
+          }}
+        />
+
+        <button
+          type="button"
+          className="btn primary"
+          onClick={() =>
+            send()
+          }
+          disabled={
+            busy ||
+            (
+              !text.trim() &&
+              !chatImg
+            )
+          }
+        >
+          <Send size={15} />
+        </button>
       </div>
     </>
   );
@@ -17400,8 +19520,8 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
             >
               {activeMedia.mediaKind === "local"
                 ? tt(
-                    "A Spill&Chill később alacsonyabb hírküszöbbel dolgozik majd: helyi bulik, kapcsolatok, konfliktusok és kisebb social jelek is hírré válhatnak.",
-                    "Spill&Chill will later use a lower news threshold: local parties, relationships, conflicts and smaller social signals can become stories."
+                    "A Spill&Chill csak akkor posztol, ha tényleg szaftos helyi sztori történt: komoly konfliktus, romantikus botrány, árulás, megalázás, nagy buli-dráma vagy más erős esemény. Apró social jelekből nem gyárt hírt.",
+                    "Spill&Chill only posts when something genuinely juicy happens locally: a serious conflict, romantic scandal, betrayal, humiliation, major party drama or another strong event. It does not turn tiny social signals into stories."
                   )
                 : tt(
                     "A RumorHasIt később magasabb hírküszöbbel dolgozik majd: nagyobb fame, virality, botrány vagy széles nyilvánosság kell egy sztorihoz.",
@@ -17729,7 +19849,16 @@ async function genDM(w, bot) {
           m.from === "me"
             ? w.player.name
             : bot.name
-        }: ${m.text}`
+        }: ${
+          m.text || ""
+        }${
+          (m.imageId || m.image)
+            ? ` [IMAGE: ${
+                m.imageDescription ||
+                "image"
+              }]`
+            : ""
+        }`
     )
     .join("\n");
 
@@ -18001,6 +20130,15 @@ NYELVTAN ÉS NÉZŐPONT:
 - A természetes chatnyelv fontosabb, mint a túlságosan formális nyelvtani tökéletesség.
 - ${w.player.name} helyett SOHA ne írj választ vagy cselekvést.
 
+SAJÁT FOTÓALBUMOD:
+${albumList(bot) || "nincs használható albumkép"}
+
+- Ha teljesen természetes, hogy most egy saját képet küldenél át privátban, válassz legfeljebb EGYET a fenti kep1/kep2/... kulcsok közül.
+- A kép vizuális leírását használd annak eldöntésére, mit küldenél.
+- Ne találj ki olyan képet, ami nincs az albumodban.
+- Kép nélkül írni teljesen normális.
+- Privátban elküldött kép nem törlődik az albumból; csak a nyilvánosan kiposztolt albumfotó egyszer használatos.
+
 LEGFONTOSABB:
 
 A DM első pillantásra úgy hasson, mint egy valódi ember spontán privát üzenete. Ha inkább hangzik regénybeli dialógusnak, karakterelemzésnek, előre megírt drámai jelenetnek vagy AI által megfogalmazott tökéletes mini beszédnek, ÍRD ÚJRA rövidebb, lazább és természetesebb formában.
@@ -18008,7 +20146,7 @@ A DM első pillantásra úgy hasson, mint egy valódi ember spontán privát üz
 Formátum:
 
 Ha nincs természetes okod írni:
-{"skip":true,"text":"","changes":[]}
+{"skip":true,"text":"","image":"","changes":[]}
 
 Ha van:
 - A changes mezőben AI → játékos és játékos → AI irány is szerepelhet, ha az interakció ténylegesen hat a viszonyra.
@@ -18016,7 +20154,7 @@ Ha van:
 - Plusz és mínusz egyformán lehetséges.
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
-{"skip":false,"text":"a rövid privát üzenet","changes":[{"a":"${bot.id}","b":"${w.meId}","delta":10,"mood":"mit érzel most iránta","why":"miért"},{"a":"${w.meId}","b":"${bot.id}","delta":6,"mood":"","why":"miért"}]}${TAIL}`,
+{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","changes":[{"a":"${bot.id}","b":"${w.meId}","delta":10,"mood":"mit érzel most iránta","why":"miért"},{"a":"${w.meId}","b":"${bot.id}","delta":6,"mood":"","why":"miért"}]}${TAIL}`,
     { maxTokens: 700 }
   );
 }
@@ -18174,7 +20312,14 @@ async function genNoteReact(w, note) {
     )}
 
 ${w.player.name} ezt írta ki jegyzetként:
-"${note.text}"
+"${note.text || ""}"
+${note.music && (note.music.title || note.music.artist)
+  ? `
+A JEGYZETHEZ VÁLASZTOTT ZENE:
+🎵 ${note.music.title || "?"}${note.music.artist ? ` — ${note.music.artist}` : ""}
+${note.music.summary ? `A dal AI által értett témája/hangulata: ${note.music.summary}` : ""}
+A reakcióban ezt ugyanúgy vedd figyelembe, mint a note szövegét. A karakter reagálhat arra, milyen dalt választott, milyen üzenetet/vibe-ot sugall, vagy mit jelent számára a dal. Ne idézz dalszöveget.`
+  : ""}
 
 NOTE-REAKCIÓ SZABÁLYOK:
 
@@ -18848,7 +20993,35 @@ function gossipEventBaseScore(
 function gossipEventThreshold(mode) {
   return mode === "global"
     ? 62
-    : 34;
+    : 60;
+}
+
+function spillAndChillJuicyEnough(event, score) {
+  if (!event) return false;
+
+  const tags = Array.isArray(event.tags) ? event.tags : [];
+  const type = String(event.type || "");
+  const importance = Number(event.importance) || 0;
+  const drama = Number(event.drama) || 0;
+  const romance = Number(event.romance) || 0;
+  const embarrassment = Number(event.embarrassment) || 0;
+
+  const inherentlyJuicy = [
+    "viral", "cancel-wave", "rumor-evolution", "gossip-story"
+  ].includes(type) ||
+    tags.some((tag) =>
+      ["viral", "cancel", "scandal", "fight", "betrayal", "breakup", "cheating", "romance", "kiss", "humiliation", "party-drama"].includes(String(tag))
+    );
+
+  return Boolean(
+    score >= 72 ||
+    inherentlyJuicy ||
+    importance >= 48 ||
+    drama >= 35 ||
+    romance >= 38 ||
+    embarrassment >= 38 ||
+    (roleplayGossipEligible(event) && (drama + romance + embarrassment) >= 42)
+  );
 }
 
 function gossipEventEligibleForMedia(
@@ -18889,6 +21062,21 @@ function gossipEventEligibleForMedia(
   if (
     score <
     gossipEventThreshold(mode)
+  ) {
+    return false;
+  }
+
+  /*
+   * Spill&Chill NEM tölti meg a feedet minden aprósággal.
+   * Csak ténylegesen szaftos, konfliktusos, romantikus,
+   * megalázó, botrányos vagy nagyon fontos helyi sztori mehet ki.
+   */
+  if (
+    mode === "local" &&
+    !spillAndChillJuicyEnough(
+      event,
+      score
+    )
   ) {
     return false;
   }
@@ -25340,7 +27528,7 @@ function planAutoAction(view) {
    * ténylegesen felépített hozzá elég support / backlash energiát.
    */
   if (
-    Math.random() < 0.14
+    Math.random() < 0.32
   ) {
     const wave =
       pickSocialWaveAction(
@@ -27200,20 +29388,64 @@ if (targetNote) {
           .slice(-14)
           .map(
             (m) =>
-              m &&
-              m.text
-                ? m.text
+              m
+                ? (
+                    m.text ||
+                    m.imageDescription ||
+                    ""
+                  )
                 : ""
           )
           .join("\n")
       );
+
+    const aiPic =
+      out &&
+      out.image
+        ? albumFind(
+            bot,
+            out.image
+          )
+        : null;
+
+    const aiImageId =
+      aiPic
+        ? imageIdOf(
+            aiPic.imageId ||
+            aiPic.image ||
+            ""
+          )
+        : "";
+
+    const aiImageRef =
+      aiPic
+        ? (
+            aiPic.imageId
+              ? imageRef(
+                  aiPic.imageId
+                )
+              : aiPic.image || ""
+          )
+        : "";
+
+    const aiImageDescription =
+      aiPic
+        ? String(
+            aiPic.vision ||
+            aiPic.note ||
+            ""
+          )
+        : "";
 
     update((n) => {
       n.autoAt = now();
 
       if (
         out.skip ||
-        !txt
+        (
+          !txt &&
+          !aiImageRef
+        )
       ) {
         return;
       }
@@ -27226,9 +29458,21 @@ if (targetNote) {
       n.chats[ck] = [
         ...(n.chats[ck] || []),
         {
-          from: "them",
-          text: txt,
-          ts: now(),
+          id:
+            "dm_" + uid(),
+          from:"them",
+          text:txt,
+          ts:now(),
+          imageId:
+            aiImageId ||
+            "",
+          image:
+            aiImageId
+              ? ""
+              : aiImageRef || "",
+          imageDescription:
+            aiImageDescription ||
+            "",
           language:
             worldLanguage(
               n,
@@ -27276,12 +29520,22 @@ if (targetNote) {
           text: sysLangText(
             n,
             bot.id,
-            `Privátban írtam: ${cut(
-              txt,
+            `Privátban küldtem: ${cut(
+              txt ||
+              (
+                aiImageDescription
+                  ? `📷 ${aiImageDescription}`
+                  : "📷 kép"
+              ),
               110
             )}`,
-            `I sent a private message: ${cut(
-              txt,
+            `I sent privately: ${cut(
+              txt ||
+              (
+                aiImageDescription
+                  ? `📷 ${aiImageDescription}`
+                  : "📷 image"
+              ),
               110
             )}`
           ),
@@ -28130,91 +30384,259 @@ const signOut = useCallback(async () => {
              * a szerver azóta nem változott, ezért a lokális
              * változás biztonságosan felküldhető ugyanarról syncRev-ről.
              */
-            try {
-              const saved =
-                await serverSaveWorld(
-                  latestLocal
-                );
+            if (!worldSaveBusy.current) {
+              worldSaveBusy.current = true;
 
-              if (
-                saved &&
-                saved.world
-              ) {
-                const accepted =
-                  migrate(
-                    saved.world
+              try {
+                const saved =
+                  await serverSaveWorld(
+                    latestLocal
                   );
 
-                const acceptedRev =
-                  worldSyncRev(
-                    accepted
-                  );
+                if (
+                  saved &&
+                  saved.world
+                ) {
+                  const accepted =
+                    migrate(
+                      saved.world
+                    );
 
-                lastSavedContent.current =
-                  contentOf(
-                    accepted
-                  );
+                  const acceptedRev =
+                    worldSyncRev(
+                      accepted
+                    );
 
-                setWorld((cur) => {
-                  if (!cur) return cur;
+                  lastSavedContent.current =
+                    contentOf(
+                      accepted
+                    );
 
+                  setWorld((cur) => {
+                    if (!cur) return cur;
+
+                    if (
+                      contentOf(cur) ===
+                      contentOf(latestLocal)
+                    ) {
+                      return accepted;
+                    }
+
+                    if (
+                      worldSyncRev(cur) ===
+                      localRev
+                    ) {
+                      const next =
+                        JSON.parse(
+                          JSON.stringify(
+                            cur
+                          )
+                        );
+
+                      next.syncRev =
+                        acceptedRev;
+
+                      return next;
+                    }
+
+                    return cur;
+                  });
+
+                  setSaveState("saved");
+                  setSaveAt(now());
+                }
+              } catch (e) {
+                if (
+                  e &&
+                  e.status === 409 &&
+                  e.data &&
+                  e.data.world
+                ) {
+                  const conflictWorld =
+                    migrate(
+                      e.data.world
+                    );
+
+                  const conflictContent =
+                    contentOf(
+                      conflictWorld
+                    );
+
+                  const localContent =
+                    contentOf(
+                      latestLocal
+                    );
+
+                  /*
+                   * SAME-CLIENT DUPLICATE SAVE:
+                   * ha a szerver pontosan ugyanazt a snapshotot tartalmazza,
+                   * akkor nem "másik eszköz" frissített. Egy párhuzamos saját
+                   * autosave ért célba előbb. Csendben elfogadjuk.
+                   */
                   if (
-                    contentOf(cur) ===
-                    contentOf(latestLocal)
+                    conflictContent ===
+                    localContent
                   ) {
-                    return accepted;
-                  }
+                    lastSavedContent.current =
+                      conflictContent;
 
-                  if (
-                    worldSyncRev(cur) ===
-                    localRev
+                    setWorld((cur) => {
+                      if (!cur) return cur;
+
+                      if (
+                        contentOf(cur) ===
+                        localContent
+                      ) {
+                        return conflictWorld;
+                      }
+
+                      if (
+                        worldSyncRev(cur) ===
+                        localRev
+                      ) {
+                        const next =
+                          JSON.parse(
+                            JSON.stringify(
+                              cur
+                            )
+                          );
+
+                        next.syncRev =
+                          worldSyncRev(
+                            conflictWorld
+                          );
+
+                        return next;
+                      }
+
+                      return cur;
+                    });
+
+                    setSaveState("saved");
+                    setSaveAt(now());
+                  } else if (
+                    conflictContent ===
+                    lastSavedContent.current &&
+                    worldSyncRev(conflictWorld) ===
+                      localRev + 1
                   ) {
-                    const next =
-                      JSON.parse(
-                        JSON.stringify(
-                          cur
-                        )
-                      );
+                    /*
+                     * A saját előző mentésünk ért célba, miközben már van
+                     * újabb lokális tartalom. Csak átvezetjük az új syncRev-et,
+                     * és a következő autosave felküldi a frissebb lokális állapotot.
+                     */
+                    setWorld((cur) => {
+                      if (!cur) return cur;
 
-                    next.syncRev =
-                      acceptedRev;
+                      const next =
+                        JSON.parse(
+                          JSON.stringify(
+                            cur
+                          )
+                        );
 
-                    return next;
+                      next.syncRev =
+                        worldSyncRev(
+                          conflictWorld
+                        );
+
+                      return next;
+                    });
+
+                    setSaveState("retry");
+                  } else {
+                    /*
+                     * Valódi külső konfliktus: itt továbbra is a szerver nyer.
+                     */
+                    installAuthoritativeWorld(
+                      conflictWorld,
+                      e.data.meId || meId,
+                      "reconnect-conflict"
+                    );
                   }
-
-                  return cur;
-                });
-
-                setSaveState("saved");
-                setSaveAt(now());
-              }
-            } catch (e) {
-              if (
-                e &&
-                e.status === 409 &&
-                e.data &&
-                e.data.world
-              ) {
-                installAuthoritativeWorld(
-                  e.data.world,
-                  e.data.meId || meId,
-                  "reconnect-conflict"
-                );
+                }
+              } finally {
+                worldSaveBusy.current = false;
               }
             }
           } else if (
             serverRev !== localRev
           ) {
+            const serverContent =
+              contentOf(
+                serverWorld
+              );
+
+            const localContent =
+              contentOf(
+                latestLocal
+              );
+
             /*
-             * Valaki/másik eszköz már mentett.
-             * Nincs generikus JSON merge: a szerververzió nyer,
-             * a helyi állapot emergency backupként megmarad.
+             * Ha a tartalom azonos, csak a szerver syncRev-je
+             * van előrébb (tipikusan saját mentés ért célba).
              */
-            installAuthoritativeWorld(
-              serverWorld,
-              session.meId,
-              reason
-            );
+            if (
+              serverContent ===
+              localContent
+            ) {
+              lastSavedContent.current =
+                serverContent;
+
+              setWorld((cur) => {
+                if (!cur) return cur;
+
+                if (
+                  contentOf(cur) ===
+                  serverContent
+                ) {
+                  return serverWorld;
+                }
+
+                return cur;
+              });
+
+              setSaveState("saved");
+            } else if (
+              serverContent ===
+              lastSavedContent.current &&
+              serverRev ===
+                localRev + 1
+            ) {
+              /*
+               * A szerver a saját előző elfogadott állapotunk,
+               * a lokális world viszont már frissebb.
+               * Ne dobjuk el a lokális változást; csak vigyük át
+               * rá az új syncRev-et, aztán autosave újrapróbálja.
+               */
+              setWorld((cur) => {
+                if (!cur) return cur;
+
+                const next =
+                  JSON.parse(
+                    JSON.stringify(
+                      cur
+                    )
+                  );
+
+                next.syncRev =
+                  serverRev;
+
+                return next;
+              });
+
+              setSaveState("retry");
+            } else {
+              /*
+               * Valódi másik kliens/eszköz eltérő tartalma.
+               * Itt továbbra is a szerver az authority.
+               */
+              installAuthoritativeWorld(
+                serverWorld,
+                session.meId,
+                reason
+              );
+            }
           } else if (
             sameContent
           ) {
@@ -29129,6 +31551,22 @@ const signOut = useCallback(async () => {
         let lastError = null;
 
         if (worldSaveBusy.current) {
+          setSaveState("retry");
+
+          setTimeout(() => {
+            setWorld((cur) => {
+              if (!cur) return cur;
+
+              /*
+               * New object identity retriggers the debounced autosave,
+               * while content/rev stay untouched.
+               */
+              return {
+                ...cur,
+              };
+            });
+          }, 700);
+
           return;
         }
 
@@ -29192,18 +31630,120 @@ const signOut = useCallback(async () => {
             lastError.data &&
             lastError.data.world
           ) {
+            const conflictWorld =
+              migrate(
+                lastError.data.world
+              );
+
+            const conflictContent =
+              contentOf(
+                conflictWorld
+              );
+
+            const conflictSyncRev =
+              worldSyncRev(
+                conflictWorld
+              );
+
+            /*
+             * 1) UGYANAZ A SNAPSHOT VAN A SZERVEREN.
+             * Egy saját, párhuzamos mentés ért oda előbb.
+             * Ez NEM másik eszköz.
+             */
+            if (
+              conflictContent ===
+              json
+            ) {
+              lastSavedContent.current =
+                conflictContent;
+
+              setWorld((current) => {
+                if (!current) {
+                  return current;
+                }
+
+                if (
+                  contentOf(current) ===
+                  json
+                ) {
+                  return conflictWorld;
+                }
+
+                if (
+                  worldSyncRev(current) ===
+                  snapSyncRev
+                ) {
+                  const next =
+                    JSON.parse(
+                      JSON.stringify(
+                        current
+                      )
+                    );
+
+                  next.syncRev =
+                    conflictSyncRev;
+
+                  return next;
+                }
+
+                return current;
+              });
+
+              setSaveState("saved");
+              setSaveAt(now());
+              return;
+            }
+
+            /*
+             * 2) A SZERVER A SAJÁT ELŐZŐ ELFOGADOTT ÁLLAPOTUNKAT TARTJA,
+             * miközben ebben a tabban már újabb lokális módosítás van.
+             *
+             * Csak syncRev-et emelünk, nem dobjuk el az új lokális tartalmat.
+             */
+            if (
+              conflictContent ===
+              lastSavedContent.current &&
+              conflictSyncRev ===
+                snapSyncRev + 1
+            ) {
+              setWorld((current) => {
+                if (!current) {
+                  return current;
+                }
+
+                const next =
+                  JSON.parse(
+                    JSON.stringify(
+                      current
+                    )
+                  );
+
+                next.syncRev =
+                  conflictSyncRev;
+
+                return next;
+              });
+
+              setSaveState("retry");
+              return;
+            }
+
+            /*
+             * 3) VALÓDI ELTÉRŐ SZERVERÁLLAPOT.
+             * Csak itt jelenik meg a "másik eszköz" figyelmeztetés.
+             */
             setSaveState("conflict");
 
             installAuthoritativeWorld(
-              lastError.data.world,
+              conflictWorld,
               lastError.data.meId || meId,
               "autosave-conflict"
             );
 
             setErr(
               tt(
-                "Egy másik eszköz közben frissítette ezt a világot. A szerver legújabb verzióját töltöttük be; a helyi változat emergency backupként megmaradt.",
-                "Another device updated this world. The newest server version was loaded; your local version remains as an emergency backup."
+                "Egy másik eszköz közben ténylegesen módosította ezt a világot. A szerver legújabb verzióját töltöttük be; a helyi változat emergency backupként megmaradt.",
+                "Another device genuinely changed this world. The newest server version was loaded; your local version remains as an emergency backup."
               )
             );
 
@@ -29508,6 +32048,7 @@ const signOut = useCallback(async () => {
         <div className="mv-main">
           {tab === "feed" && <Feed w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
             onOpenChat={(id) => { setChatId(id); setTab("chat"); }}
+            onOpenWorlds={() => setShowRooms(true)}
             onRequestWorldStep={requestWorldStep}
             onRequestNoteReactions={requestNoteReactions}
             onSignal={signalSimulation} />}
