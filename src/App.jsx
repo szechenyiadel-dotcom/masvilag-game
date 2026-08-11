@@ -6209,6 +6209,164 @@ function worldLanguage(w, playerId) {
   return asLang(CURRENT_LANG);
 }
 
+const CONTENT_LEVELS = [
+  {
+    id: "standard",
+    nameHu: "Standard",
+    nameEn: "Standard",
+  },
+  {
+    id: "mature",
+    nameHu: "Mature 18+",
+    nameEn: "Mature 18+",
+  },
+];
+
+function worldContentLevel(
+  w,
+  playerId
+) {
+  const pid =
+    playerId ||
+    (w && w.meId);
+
+  const raw =
+    w &&
+    w.userSettings &&
+    pid &&
+    w.userSettings[pid] &&
+    w.userSettings[pid].contentLevel;
+
+  return raw === "mature"
+    ? "mature"
+    : "standard";
+}
+
+function isKnownAdultCharacter(
+  w,
+  characterId
+) {
+  const c =
+    charById(
+      w,
+      characterId
+    );
+
+  if (!c) return false;
+
+  const age =
+    Number(
+      ageOf(
+        c,
+        w
+      )
+    );
+
+  return (
+    Number.isFinite(age) &&
+    age >= 18
+  );
+}
+
+function matureParticipantsAreAdults(
+  w,
+  participantIds = []
+) {
+  const ids = [
+    w && w.meId,
+    ...(Array.isArray(participantIds)
+      ? participantIds
+      : []),
+  ]
+    .filter(Boolean)
+    .filter(
+      (id, index, arr) =>
+        arr.indexOf(id) === index
+    );
+
+  return (
+    ids.length > 0 &&
+    ids.every(
+      (id) =>
+        isKnownAdultCharacter(
+          w,
+          id
+        )
+    )
+  );
+}
+
+function matureContentInstruction(
+  w,
+  participantIds = [],
+  channel = "chat"
+) {
+  if (
+    worldContentLevel(
+      w,
+      w && w.meId
+    ) !== "mature"
+  ) {
+    return "";
+  }
+
+  const en =
+    worldLanguage(
+      w,
+      w && w.meId
+    ) === "en";
+
+  const allAdults =
+    matureParticipantsAreAdults(
+      w,
+      participantIds
+    );
+
+  const channelLabel =
+    channel === "roleplay"
+      ? "ROLEPLAY"
+      : channel === "group"
+        ? "GROUP CHAT"
+        : en
+          ? "PRIVATE CHAT"
+          : "PRIVÁT CHAT";
+
+  if (en) {
+    return `
+MATURE 18+ CONTENT MODE — ${channelLabel}:
+
+- The tone may be clearly adult, rougher, darker and less sanitized when that fits the characters and situation.
+- Strong profanity, adult humor, alcohol/drug references, threats, toxic dynamics, manipulation, jealousy, obsession, possessiveness, violence, fear and other mature story themes are allowed when character-accurate.
+- Romance and attraction may be more intense, direct, suggestive, sensual or sexually charged when it naturally follows from the relationship.
+- Do NOT turn every interaction sexual. Personality, relationship, current mood, history, power dynamics and consent still control the scene.
+- Never override a character's established boundaries or personality merely because Mature mode is enabled.
+- No explicit pornographic sexual detail. When intimacy would become graphically sexual, keep it non-graphic or transition naturally with a fade-to-black / implied continuation.
+- Never sexualize a minor. ${
+      allAdults
+        ? "Every currently involved participant has a known age of 18+, so adult romantic/suggestive tension may be used within the non-graphic limit."
+        : "At least one currently involved participant is under 18 or their age is not confirmed as 18+. Therefore do NOT generate sexual or sexually suggestive content involving that participant; keep mature material non-sexual."
+    }
+`;
+  }
+
+  return `
+MATURE 18+ TARTALMI MÓD — ${channelLabel}:
+
+- A hangvétel lehet egyértelműen felnőttesebb, nyersebb, sötétebb és kevésbé steril, ha ez illik a karakterekhez és a helyzethez.
+- Erősebb káromkodás, felnőtt humor, alkohol/drog mint történeti elem, fenyegetés, toxikus dinamika, manipuláció, féltékenység, megszállottság, birtoklás, erőszak, félelem és más mature témák megjelenhetnek, ha karakterhűek.
+- A romantika és vonzalom lehet intenzívebb, direktebb, kétértelműbb, érzékibb vagy szexuálisan feszültebb, ha természetesen következik a kapcsolatból.
+- NE váljon minden interakció szexuálissá. A személyiség, kapcsolat, aktuális mood, közös történet, erőviszonyok és beleegyezés továbbra is meghatározó.
+- A Mature mód miatt soha ne írj felül egy karakterhez tartozó határt vagy személyiséget.
+- Explicit pornográf szexuális részleteket ne írj. Ha az intimitás grafikusan szexuálissá válna, maradjon nem részletező, vagy természetesen válts fade-to-black / utalásos folytatásra.
+- Kiskorút soha ne szexualizálj. ${
+      allAdults
+        ? "A jelenlegi résztvevők mind ismerten 18 év felettiek, ezért felnőtt romantikus/kétértelmű feszültség megjelenhet a nem explicit határon belül."
+        : "Legalább egy jelenlegi résztvevő 18 év alatti, vagy az életkora nincs biztosan 18+-ként megadva. Ezért vele kapcsolatban semmilyen szexuális vagy szexuálisan kétértelmű tartalmat ne generálj; a mature témák maradjanak nem szexuálisak."
+    }
+`;
+}
+
+
 function sysTextFor(w, playerId, key, params) {
   const lang = worldLanguage(w, playerId);
   const dict = SYS_TEXT[lang] || SYS_TEXT.hu;
@@ -14048,6 +14206,15 @@ function SceneNew({ w, onClose, onCreate, setErr }) {
 
 Találj ki egy jelenetet ${ids.length ? "ezekkel a szereplőkkel: " + cast.map((c) => c.name).join(", ") : "a világ szereplőivel"}.
 Legyen benne feszültség vagy tét, és kapcsolódjon ahhoz, ami mostanában történt.
+
+${matureContentInstruction(
+  w,
+  ids.length
+    ? ids
+    : (w.chars || []).map((c) => c.id),
+  "roleplay"
+)}
+
 Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyzet, mi a tét","cast":["szereplők azonosítói"]}${TAIL}`);
       if (out.title) setTitle(out.title);
       if (out.setting) setSetting(out.setting);
@@ -14136,6 +14303,11 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
 
 function Scene({ w, scene, update, setErr, onBack }) {
   const { tt } = useLang();
+  const matureMode =
+    worldContentLevel(
+      w,
+      w.meId
+    ) === "mature";
   const [text, setText] = useState("");
   const [busy, setBusy] = useState("");
   const endRef = useRef(null);
@@ -14170,6 +14342,12 @@ ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` :
 
 ${cast.slice(0, 3).map(voiceCard).join("")}
 ${repetitionGuard(w, cast.map((c) => c.id), "jelenetfolytatás")}
+
+${matureContentInstruction(
+  w,
+  scene.cast || [],
+  "roleplay"
+)}
 
 ROLEPLAY FOLYTATÁS — FONTOS:
 
@@ -14493,7 +14671,21 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
       </div>
 
       <div style={{ marginTop: 6 }}>
-        <h2 style={{ fontSize: 22 }}>{scene.title}</h2>
+        <h2 style={{ fontSize: 22 }}>
+          {scene.title}
+          {matureMode ? (
+            <span
+              className="mono"
+              style={{
+                marginLeft: 8,
+                fontSize: 10,
+                color: "var(--rose)",
+              }}
+            >
+              18+
+            </span>
+          ) : null}
+        </h2>
         {scene.setting && <p className="hint" style={{ marginTop: 6 }}>{scene.setting}</p>}
       </div>
 
@@ -14640,6 +14832,11 @@ function GroupNew({ w, onClose, onCreate }) {
 
 function GroupChat({ w, group, update, setErr, onBack }) {
   const { tt } = useLang();
+  const matureMode =
+    worldContentLevel(
+      w,
+      w.meId
+    ) === "mature";
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const endRef = useRef(null);
@@ -14726,6 +14923,12 @@ ${repetitionGuard(
   w,
   group.members || [],
   "csoportchat"
+)}
+
+${matureContentInstruction(
+  w,
+  group.members || [],
+  "group"
 )}
 
 CSOPORTCHAT SZABÁLYOK:
@@ -15020,7 +15223,21 @@ Formátum:
       <div className="between" style={{ position: "sticky", top: 0, background: "var(--ink)", padding: "10px 0", zIndex: 5 }}>
         <button className="btn tiny ghost" onClick={onBack}><ChevronLeft size={14} /> {tt("Üzenetek", "Messages")}</button>
         <div className="row" style={{ alignItems: "center", gap: 6 }}>
-          <span className="name" style={{ fontSize: 13.5 }}>{group.name}</span>
+          <span className="name" style={{ fontSize: 13.5 }}>
+            {group.name}
+            {matureMode ? (
+              <span
+                className="mono"
+                style={{
+                  marginLeft: 6,
+                  fontSize: 9,
+                  color: "var(--rose)",
+                }}
+              >
+                18+
+              </span>
+            ) : null}
+          </span>
           {members.slice(0, 4).map((m) => <Av key={m.id} src={m.avatar} name={m.name} size={22} radius={7} />)}
         </div>
       </div>
@@ -15073,6 +15290,11 @@ Formátum:
 /* Jegyzetsáv — a szereplők feje fölött egy-egy mondat, mint az Instagram Notes. */
 function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply }) {
   const { tt } = useLang();
+  const matureMode =
+    worldContentLevel(
+      w,
+      w.meId
+    ) === "mature";
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const sendLockRef = useRef(false);
@@ -15285,6 +15507,12 @@ ${dmPresenceGuardInstruction(
   hist
 )}
 
+${matureContentInstruction(
+  requestWorld,
+  [c.id],
+  "chat"
+)}
+
 PRIVÁT CHAT SZABÁLYOK:
 
 - Most KÖZVETLENÜL a játékos legutóbbi üzenetére válaszolj.
@@ -15365,6 +15593,12 @@ ${voiceCard(c)}
 ${chatEmojiGuard(
   requestWorld,
   c.id
+)}
+
+${matureContentInstruction(
+  requestWorld,
+  [c.id],
+  "chat"
 )}
 
 EREDETI VÁLASZ:
@@ -15449,6 +15683,12 @@ ${dmPresenceGuardInstruction(
   requestWorld,
   c.id,
   hist
+)}
+
+${matureContentInstruction(
+  requestWorld,
+  [c.id],
+  "chat"
 )}
 
 SZIGORÚ SZABÁLY:
@@ -15716,7 +15956,21 @@ if (group) {
         <button className="btn tiny ghost" onClick={() => setOpenId(null)}><ChevronLeft size={14} /> {tt("Üzenetek", "Messages")}</button>
         <div className="row" style={{ alignItems: "center", gap: 8 }}>
           <div style={{ textAlign: "right" }}>
-            <div className="name">{c.name}</div>
+            <div className="name">
+              {c.name}
+              {matureMode ? (
+                <span
+                  className="mono"
+                  style={{
+                    marginLeft: 6,
+                    fontSize: 9,
+                    color: "var(--rose)",
+                  }}
+                >
+                  18+
+                </span>
+              ) : null}
+            </div>
             {relNow.mood ? <div style={{ fontSize: 11, color: "var(--rose)" }}>{relNow.mood}</div> : null}
           </div>
           <Av src={c.avatar} name={c.name} size={28} radius={9} />
@@ -15945,6 +16199,31 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
   
   const acc = (w.accounts || {})[w.meId] || null;
   const currentLang = worldLanguage(w, w.meId);
+  const currentContentLevel =
+    worldContentLevel(
+      w,
+      w.meId
+    );
+
+  const setContentLevel = (
+    level
+  ) => {
+    const next =
+      level === "mature"
+        ? "mature"
+        : "standard";
+
+    update((n) => {
+      if (!n.userSettings) {
+        n.userSettings = {};
+      }
+
+      n.userSettings[n.meId] = {
+        ...(n.userSettings[n.meId] || {}),
+        contentLevel: next,
+      };
+    });
+  };
 
   const activeMedia =
     activeGossipMediaAccount(
@@ -16083,6 +16362,111 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
         <p className="hint" style={{ marginTop: 8 }}>
           {tt("A felület és az AI által generált új tartalmak ugyanazt a nyelvet követik. Nyelvváltás után az új posztok, kommentek, üzenetek, értesítések és események azonnal az új nyelven készülnek.",
               "Both the UI and newly generated AI content follow this language. After switching, new posts, comments, messages, notifications and events are generated immediately in the selected language.")}
+        </p>
+      </div>
+
+      <div
+        className="card"
+        style={{
+          borderColor:
+            currentContentLevel === "mature"
+              ? "var(--rose)"
+              : "var(--line)",
+        }}
+      >
+        <div className="between">
+          <label
+            className="f"
+            style={{
+              margin: 0,
+              color:
+                currentContentLevel === "mature"
+                  ? "var(--rose)"
+                  : "var(--muted)",
+            }}
+          >
+            {tt(
+              "Roleplay & chat tartalmi szint",
+              "Roleplay & chat content level"
+            )}
+          </label>
+
+          {currentContentLevel === "mature" ? (
+            <span
+              className="mono"
+              style={{
+                fontSize: 10,
+                color: "var(--rose)",
+              }}
+            >
+              18+
+            </span>
+          ) : null}
+        </div>
+
+        <div
+          className="row"
+          style={{
+            gap: 6,
+            marginTop: 10,
+          }}
+        >
+          {CONTENT_LEVELS.map(
+            (level) => (
+              <button
+                key={level.id}
+                className={
+                  "btn tiny full " +
+                  (
+                    currentContentLevel ===
+                    level.id
+                      ? "primary"
+                      : "ghost"
+                  )
+                }
+                onClick={() =>
+                  setContentLevel(
+                    level.id
+                  )
+                }
+              >
+                {tt(
+                  level.nameHu,
+                  level.nameEn
+                )}
+              </button>
+            )
+          )}
+        </div>
+
+        <p
+          className="hint"
+          style={{
+            marginTop: 8,
+          }}
+        >
+          {currentContentLevel === "mature"
+            ? tt(
+                "Mature 18+: a roleplay, privát DM és group chat lehet nyersebb, sötétebb és felnőttesebb; erősebb káromkodás, toxikus dinamika, fenyegetés, felnőtt humor és intenzívebb romantikus/kétértelmű feszültség is megjelenhet, ha karakterhű. Explicit szexuális részletek helyett az intimitás nem részletező / fade-to-black marad. Kiskorút a rendszer nem szexualizál.",
+                "Mature 18+: roleplay, private DMs and group chats may be rougher, darker and more adult; stronger profanity, toxic dynamics, threats, adult humor and more intense romantic/suggestive tension can appear when character-accurate. Intimacy stays non-graphic / fade-to-black rather than explicit. The system never sexualizes minors."
+              )
+            : tt(
+                "Standard: a roleplay és chat továbbra is karakterhű lehet romantikus, feszült vagy sötét, de visszafogottabb felnőtt tartalmi szinten.",
+                "Standard: roleplay and chat can still be romantic, tense or dark when character-accurate, but stay at a more restrained content level."
+              )}
+        </p>
+
+        <p
+          className="hint"
+          style={{
+            marginTop: 6,
+            color: "var(--gold)",
+          }}
+        >
+          {tt(
+            "A 18+ mód csak a Roleplayre és a chatekre vonatkozik; a Feed, kommentek és Notes ettől nem válnak automatikusan felnőtt tartalmúvá.",
+            "18+ mode applies only to Roleplay and chats; Feed posts, comments and Notes do not automatically become adult-content."
+          )}
         </p>
       </div>
 
@@ -16776,6 +17160,12 @@ ${dmPresenceGuardInstruction(
   w,
   bot.id,
   hist
+)}
+
+${matureContentInstruction(
+  w,
+  [bot.id],
+  "chat"
 )}
 
 PRIVÁT ÜZENET SZABÁLYOK:
@@ -19870,6 +20260,12 @@ ${voiceCard(c)}
 FRISS CHAT:
 ${history}
 
+${matureContentInstruction(
+  requestWorld,
+  [c.id],
+  "chat"
+)}
+
 VÁLASZOLJ TÉNYLEG A LEGUTOLSÓ ÜZENETRE.
 - Ne válaszolj általánosságban.
 - A kapcsolatotok, személyiséged, történeted, lojalitásod, félelmed, rivalizálásod és crush/flört dinamika hasson a reakcióra.
@@ -22768,6 +23164,12 @@ ${repetitionGuard(
   "autonóm csoportchat"
 )}
 
+${matureContentInstruction(
+  w,
+  cast.map((c) => c.id),
+  "group"
+)}
+
 ÚJ GROUP CHAT SZABÁLYOK:
 
 - NE hozz létre csoportot csak azért, mert technikailag lehet.
@@ -24336,6 +24738,12 @@ ${repetitionGuard(
   w,
   memberIds,
   `csoportchat: ${group.name || "névtelen"}`
+)}
+
+${matureContentInstruction(
+  w,
+  memberIds,
+  "group"
 )}
 
 DÖNTSD EL, HOGY A CSOPORTBAN MOST TERMÉSZETESEN FOLYTATÓDNA-E A BESZÉLGETÉS.
