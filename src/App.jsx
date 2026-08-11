@@ -15805,31 +15805,109 @@ function Alerts({ w, onClose, onOpen, onClear }) {
   );
 }
 
-function PopupEventModal({ w, event, update }) {
+function PopupEventModal({ w, event, update, onChoose }) {
   const { tt } = useLang();
+  const [busyChoice, setBusyChoice] = useState("");
+
   if (!event) return null;
+
+  const choose = async (choice) => {
+    if (!choice || busyChoice) return;
+
+    setBusyChoice(choice.id);
+
+    try {
+      if (onChoose) {
+        await onChoose(event, choice);
+      } else {
+        update((n) =>
+          resolvePopupEvent(
+            n,
+            event.id,
+            choice.id
+          )
+        );
+      }
+    } finally {
+      setBusyChoice("");
+    }
+  };
+
   return (
     <div className="scrim popup-event-scrim">
       <div className="sheet popup-event-sheet">
         <div className="between">
           <div>
-            <div className="popup-event-kicker"><Sparkles size={12} />{tt("Váratlan helyzet","Unexpected situation")}</div>
-            <div className="popup-event-title">{event.icon || "⚡"} {event.title}</div>
+            <div className="popup-event-kicker">
+              <Sparkles size={12} />
+              {tt("Váratlan helyzet","Unexpected situation")}
+            </div>
+            <div className="popup-event-title">
+              {event.icon || "⚡"} {event.title}
+            </div>
           </div>
-          <button className="btn tiny ghost" title={tt("Később","Later")} onClick={() => update((n) => snoozePopupEvent(n,event.id))}><X size={14} /></button>
+
+          <button
+            className="btn tiny ghost"
+            title={tt("Később","Later")}
+            disabled={Boolean(busyChoice)}
+            onClick={() =>
+              update((n) =>
+                snoozePopupEvent(
+                  n,
+                  event.id
+                )
+              )
+            }
+          >
+            <X size={14} />
+          </button>
         </div>
-        <div className="popup-event-body">{event.text}</div>
+
+        <div className="popup-event-body">
+          {event.text}
+        </div>
+
         <div className="popup-choice-list">
-          {(event.choices || []).map((choice) => (
-            <button key={choice.id} className="btn popup-choice" onClick={() => update((n) => resolvePopupEvent(n,event.id,choice.id))}>
-              <div className="popup-choice-copy">
-                <div className="popup-choice-label">{choice.label}</div>
-                {choice.description ? <div className="popup-choice-desc">{choice.description}</div> : null}
-              </div>
-            </button>
-          ))}
+          {(event.choices || []).map(
+            (choice) => (
+              <button
+                key={choice.id}
+                className="btn popup-choice"
+                disabled={Boolean(busyChoice)}
+                onClick={() =>
+                  choose(choice)
+                }
+              >
+                {busyChoice === choice.id ? (
+                  <Loader2
+                    size={15}
+                    className="spin"
+                  />
+                ) : null}
+
+                <div className="popup-choice-copy">
+                  <div className="popup-choice-label">
+                    {choice.label}
+                  </div>
+
+                  {choice.description ? (
+                    <div className="popup-choice-desc">
+                      {choice.description}
+                    </div>
+                  ) : null}
+                </div>
+              </button>
+            )
+          )}
         </div>
-        <p className="hint" style={{ marginTop:12 }}>{tt("A választás hatással lehet a hype-ra, reputációra, követőkre és arra, hogyan viszonyulnak hozzád egyes karakterek.","Your choice can affect hype, reputation, followers and how some characters feel about you.")}</p>
+
+        <p className="hint" style={{ marginTop:12 }}>
+          {tt(
+            "A választás most már tényleges cselekvést is elindít: privát válasznál DM-et, nyilvános stratégiánál valódi posztot hoz létre.",
+            "Your choice now triggers a real action too: a private response creates a DM, while a public strategy creates an actual post."
+          )}
+        </p>
       </div>
     </div>
   );
@@ -19439,10 +19517,12 @@ Készíts rövid váratlan popup helyzetet 3 választással.
 - A választások cselekvési STRATÉGIÁK legyenek.
 - Ne találj ki új létező személyt vagy új eseményt; a popup a fenti social helyzet következménye.
 - tone csak: ignore | clarify | defend | joke | apologize | doubleDown | private | noComment
+- Ha tone="private", akkor CSAK akkor használd, ha van a helyzetben létező AI karakter, akinek reálisan lehet írni, és adj meg targetId-t.
+- A private választás targetId-je kizárólag létező AI karakter id lehet a helyzetből.
 - reactions: 0-3 létező AI várható kapcsolatreakciója; delta azt jelenti, AZ AI mit érez a játékos iránt, -12..+12.
 
 VÁLASZ CSAK JSON:
-{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}]}]}${TAIL}`,{maxTokens:1200});
+{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}]}]}${TAIL}`,{maxTokens:1200});
 }
 
 function normalizePopupEvent(w,seed,raw){
@@ -19452,12 +19532,575 @@ function normalizePopupEvent(w,seed,raw){
   const choices=(Array.isArray(raw.choices)?raw.choices:[]).slice(0,3).map((choice,index)=>{
     const tone=allowedTones.has(choice&&choice.tone)?choice.tone:"ignore";
     const reactions=(choice&&Array.isArray(choice.reactions)?choice.reactions:[]).slice(0,3).map((r)=>({id:r&&r.id?String(r.id):"",delta:Math.max(-12,Math.min(12,Number(r&&r.delta)||0)),mood:cut(String(r&&r.mood||""),60),why:cut(String(r&&r.why||""),140)})).filter((r)=>validAiIds.has(r.id));
-    return{id:String(choice&&choice.id||`c${index+1}`),label:cut(String(choice&&choice.label||"").replace(/\s+/g," ").trim(),90)||`Choice ${index+1}`,description:cut(String(choice&&choice.description||"").replace(/\s+/g," ").trim(),180),tone,reactions};
+    const targetId =
+      choice &&
+      choice.targetId &&
+      validAiIds.has(
+        String(choice.targetId)
+      )
+        ? String(choice.targetId)
+        : "";
+
+    return{
+      id:String(choice&&choice.id||`c${index+1}`),
+      label:cut(String(choice&&choice.label||"").replace(/\s+/g," ").trim(),90)||`Choice ${index+1}`,
+      description:cut(String(choice&&choice.description||"").replace(/\s+/g," ").trim(),180),
+      tone,
+      targetId,
+      reactions
+    };
   }).filter((c)=>c.label);
+
   if(choices.length<2)return null;
-  return{id:"pe_"+uid(),icon:String(raw.icon||"⚡").slice(0,6),title,text:body,ts:now(),resolved:false,snoozedAt:0,sourceEventIds:[seed.id].filter(Boolean),sourceType:seed.type||"",relatedPostId:seed.meta&&seed.meta.postId||"",choices};
+
+  return{
+    id:"pe_"+uid(),
+    icon:String(raw.icon||"⚡").slice(0,6),
+    title,
+    text:body,
+    ts:now(),
+    resolved:false,
+    snoozedAt:0,
+    sourceEventIds:[seed.id].filter(Boolean),
+    sourceType:seed.type||"",
+    relatedPostId:seed.meta&&seed.meta.postId||"",
+    involvedIds:gossipEventSubjectIds(seed)
+      .filter((id)=>id!==w.meId&&!isMediaAccount(w,id)),
+    choices
+  };
 }
 function addPopupEvent(w,seed,raw){const row=normalizePopupEvent(w,seed,raw);if(!row)return null;w.popupEvents=[row,...(w.popupEvents||[])].slice(0,40);return row;}
+
+function popupSourceEvent(w,event){
+  if(!w||!event)return null;
+
+  const ids=
+    Array.isArray(event.sourceEventIds)
+      ? event.sourceEventIds
+      : [];
+
+  return (w.socialEvents||[]).find(
+    (row)=>
+      row &&
+      ids.includes(row.id)
+  ) || null;
+}
+
+function popupPrivateTargetId(w,event,choice){
+  if(!w||!event||!choice)return "";
+
+  const candidates=[];
+
+  if(choice.targetId){
+    candidates.push(
+      String(choice.targetId)
+    );
+  }
+
+  (choice.reactions||[]).forEach(
+    (r)=>{
+      if(r&&r.id){
+        candidates.push(
+          String(r.id)
+        );
+      }
+    }
+  );
+
+  (event.involvedIds||[]).forEach(
+    (id)=>{
+      if(id){
+        candidates.push(
+          String(id)
+        );
+      }
+    }
+  );
+
+  const seed=
+    popupSourceEvent(
+      w,
+      event
+    );
+
+  if(seed){
+    gossipEventSubjectIds(seed)
+      .forEach((id)=>{
+        if(id){
+          candidates.push(
+            String(id)
+          );
+        }
+      });
+  }
+
+  const related=
+    event.relatedPostId
+      ? (w.posts||[]).find(
+          (p)=>
+            p &&
+            p.id===event.relatedPostId
+        )
+      : null;
+
+  if(related&&related.authorId){
+    candidates.push(
+      String(related.authorId)
+    );
+  }
+
+  return candidates.find(
+    (id)=>{
+      const c=
+        charById(
+          w,
+          id
+        );
+
+      return Boolean(
+        c &&
+        !isHuman(w,id) &&
+        !isMediaAccount(w,id)
+      );
+    }
+  ) || "";
+}
+
+function popupPublicTone(tone){
+  return [
+    "clarify",
+    "defend",
+    "joke",
+    "apologize",
+    "doubleDown",
+  ].includes(tone);
+}
+
+async function genPopupPlayerActionText(
+  w,
+  event,
+  choice,
+  mode,
+  targetId=""
+){
+  const lang=
+    worldLanguage(
+      w,
+      w.meId
+    );
+
+  const target=
+    targetId
+      ? charById(
+          w,
+          targetId
+        )
+      : null;
+
+  const seed=
+    popupSourceEvent(
+      w,
+      event
+    );
+
+  const related=
+    event.relatedPostId
+      ? (w.posts||[]).find(
+          (p)=>
+            p &&
+            p.id===event.relatedPostId
+        )
+      : null;
+
+  const out=
+    await askWorldJSONInteractive(
+      w,
+      engineFor(w),
+      `${worldContext(
+        w,
+        target
+          ? [target.id]
+          : [],
+        true,
+        w.meId
+      )}
+
+A JÁTÉKOS MOST EXPLICITEN EZT A STRATÉGIÁT VÁLASZTOTTA EGY POPUPBAN:
+${choice.label}
+${choice.description||""}
+
+HELYZET:
+${event.title}
+${event.text}
+${seed?`FORRÁS ESEMÉNY: ${seed.text||seed.type}`:""}
+${related?`KAPCSOLÓDÓ POSZT: ${related.text||""}`:""}
+${target?`CÉLZOTT PRIVÁT BESZÉLGETŐPARTNER: ${target.name}`:""}
+
+EZ MOST KIVÉTEL A "NE BESZÉLJ A JÁTÉKOS HELYETT" SZABÁLY ALÓL:
+a játékos a gomb megnyomásával kifejezetten engedélyezte, hogy EGYETLEN rövid üzenet/poszt készüljön, amely pontosan a kiválasztott stratégiát hajtja végre.
+
+SZABÁLYOK:
+- Ne változtasd meg a választott stratégiát.
+- Ne találj ki új tényt, új eseményt, bizonyítékot, helyszínt vagy szereplőt.
+- Ne írj olyasmit, amit a popupból és a meglévő világból nem lehet tudni.
+- A játékos saját karakterlapjának hangjához igazodj, de ne legyen túl hosszú.
+- ${mode==="private"
+  ? "Ez PRIVÁT DM. 1-2 rövid mondat. Olyan legyen, amit ténylegesen elküldene a célkarakternek."
+  : "Ez NYILVÁNOS SOCIAL POSZT. 1-3 rövid mondat. Ne legyen meta, ne említsd hogy popup vagy stratégia."}
+- Nyelv: ${lang==="en"?"ENGLISH":"MAGYAR"}.
+
+VÁLASZ CSAK JSON:
+{"text":"a tényleges elküldendő szöveg"}${TAIL}`,
+      {
+        maxTokens:500,
+        priority:100,
+        maxTries:3,
+      }
+    );
+
+  return cut(
+    String(
+      out&&out.text||""
+    ).trim(),
+    mode==="private"
+      ? 500
+      : 900
+  );
+}
+
+async function genPopupPrivateReply(
+  w,
+  targetId,
+  playerText
+){
+  const c=
+    charById(
+      w,
+      targetId
+    );
+
+  if(!c||isHuman(w,targetId)){
+    return "";
+  }
+
+  const ck=
+    chatKey(
+      w.meId,
+      targetId
+    );
+
+  const requestWorld=
+    JSON.parse(
+      JSON.stringify(w)
+    );
+
+  if(!requestWorld.chats){
+    requestWorld.chats={};
+  }
+
+  requestWorld.chats[ck]=[
+    ...(requestWorld.chats[ck]||[]),
+    {
+      from:"me",
+      text:playerText,
+      ts:now(),
+    },
+  ];
+
+  const history=
+    (requestWorld.chats[ck]||[])
+      .slice(-14)
+      .map(
+        (m)=>
+          `${
+            m.from==="me"
+              ? requestWorld.player.name
+              : c.name
+          }: ${m.text}`
+      )
+      .join("\\n");
+
+  const rel=
+    getRel(
+      requestWorld,
+      c.id,
+      requestWorld.meId
+    );
+
+  const out=
+    await askWorldJSONInteractive(
+      requestWorld,
+      engineFor(requestWorld),
+      `${worldContext(
+        requestWorld,
+        [c.id],
+        true,
+        c.id
+      )}
+
+TE MOST ${c.name.toUpperCase()} VAGY.
+A JÁTÉKOS MOST EGY DRÁMA POPUP "PRIVÁTBAN BESZÉLJÜK MEG" JELLEGŰ STRATÉGIÁJÁT HAJTOTTA VÉGRE, ÉS TÉNYLEG ÍRT NEKED PRIVÁTBAN.
+
+KAPCSOLAT:
+${relationshipBehaviorCard(
+  requestWorld,
+  c.id,
+  requestWorld.meId
+)}
+
+BESZÉDSTÍLUS:
+${voiceCard(c)}
+
+FRISS CHAT:
+${history}
+
+VÁLASZOLJ TÉNYLEG A LEGUTOLSÓ ÜZENETRE.
+- Ne válaszolj általánosságban.
+- A kapcsolatotok, személyiséged, történeted, lojalitásod, félelmed, rivalizálásod és crush/flört dinamika hasson a reakcióra.
+- Ha dühös vagy, legyél dühös; ha félősebb vagy egy veszélyesebb karaktertől, az érződjön.
+- Ne találd ki, hogy fizikailag az ajtónál vagy, úton vagy hozzá, a háza előtt állsz vagy ugyanazon a helyen vagytok, hacsak a chat ezt ténylegesen nem alapozta meg.
+- Rövid, természetes privát chatválasz.
+- Ne írj a játékos helyett.
+
+VÁLASZ CSAK JSON:
+{"text":"válasz"}${TAIL}`,
+      {
+        maxTokens:500,
+        priority:100,
+        maxTries:3,
+      }
+    );
+
+  const raw=
+    cleanGeneratedUtterance(
+      requestWorld,
+      c.id,
+      out&&out.text
+        ? String(out.text).trim()
+        : "",
+      500
+    );
+
+  return sanitizePhoneDm(
+    requestWorld,
+    c.id,
+    enforceChatEmojiVariety(
+      requestWorld,
+      c.id,
+      raw
+    ),
+    history
+  );
+}
+
+function appendPopupPrivateConversation(
+  w,
+  targetId,
+  playerText,
+  replyText,
+  event,
+  choice
+){
+  const c=
+    charById(
+      w,
+      targetId
+    );
+
+  if(!c)return false;
+
+  if(!w.chats){
+    w.chats={};
+  }
+
+  const ck=
+    chatKey(
+      w.meId,
+      targetId
+    );
+
+  const sentAt=now();
+
+  w.chats[ck]=[
+    ...(w.chats[ck]||[]),
+    {
+      from:"me",
+      text:playerText,
+      ts:sentAt,
+      language:
+        worldLanguage(
+          w,
+          w.meId
+        ),
+      popupAction:true,
+      popupEventId:event.id,
+    },
+  ];
+
+  if(replyText){
+    w.chats[ck].push({
+      from:"them",
+      text:replyText,
+      ts:sentAt+1,
+      language:
+        worldLanguage(
+          w,
+          w.meId
+        ),
+      popupAction:true,
+      popupEventId:event.id,
+    });
+  }
+
+  recordSocialEvent(
+    w,
+    {
+      type:
+        "popup-private-action",
+      refId:
+        `${event.id}:${choice.id}:dm`,
+      ts:sentAt,
+      actorId:w.meId,
+      targetIds:[targetId],
+      visibility:"private",
+      factLevel:"observed",
+      importance:34,
+      drama:
+        Math.max(
+          8,
+          Number(
+            popupToneImpact(
+              choice.tone
+            ).hype
+          )*2
+        ),
+      romance:0,
+      embarrassment:0,
+      source:"popup-event",
+      text:cut(
+        playerText,
+        220
+      ),
+      tags:[
+        "popup-event",
+        "choice",
+        "private",
+        "dm",
+      ],
+      meta:{
+        popupEventId:event.id,
+        choiceId:choice.id,
+        targetId,
+      },
+    }
+  );
+
+  rememberKnowledge(
+    w,
+    c.id,
+    {
+      kind:"conversation",
+      source:"popup_private",
+      confidence:1,
+      text:
+        sysLangText(
+          w,
+          c.id,
+          `${w.player.name} privátban megkeresett a friss dráma miatt.`,
+          `${w.player.name} reached out privately about the recent drama.`
+        ),
+    }
+  );
+
+  return true;
+}
+
+function appendPopupPublicPost(
+  w,
+  text,
+  event,
+  choice
+){
+  const post={
+    id:uid(),
+    authorId:w.meId,
+    ts:now(),
+    likes:0,
+    likedBy:[],
+    text,
+    imageId:"",
+    image:"",
+    comments:[],
+    language:
+      worldLanguage(
+        w,
+        w.meId
+      ),
+    popupAction:true,
+    popupEventId:event.id,
+    popupChoiceId:choice.id,
+  };
+
+  w.posts.unshift(post);
+
+  recordSocialEvent(
+    w,
+    {
+      type:
+        "popup-public-action",
+      refId:post.id,
+      ts:post.ts,
+      actorId:w.meId,
+      targetIds:
+        (event.involvedIds||[])
+          .filter(Boolean),
+      visibility:"public",
+      factLevel:"observed",
+      importance:44,
+      drama:
+        Math.max(
+          8,
+          Number(
+            popupToneImpact(
+              choice.tone
+            ).hype
+          )*3
+        ),
+      romance:0,
+      embarrassment:
+        choice.tone==="apologize"
+          ? 4
+          : 0,
+      source:"popup-event",
+      text,
+      tags:[
+        "post",
+        "player-post",
+        "popup-event",
+        "popup-response",
+        choice.tone,
+      ],
+      meta:{
+        postId:post.id,
+        popupEventId:event.id,
+        choiceId:choice.id,
+      },
+    }
+  );
+
+  noteMentions(
+    w,
+    text,
+    w.meId,
+    {
+      type:"post",
+      id:post.id,
+    }
+  );
+
+  return post;
+}
+
 function resolvePopupEvent(w,eventId,choiceId){
   const event=(w.popupEvents||[]).find((e)=>e&&e.id===eventId);if(!event||event.resolved)return false;
   const choice=(event.choices||[]).find((c)=>c&&c.id===choiceId);if(!choice)return false;
@@ -26493,6 +27136,260 @@ const signOut = useCallback(async () => {
     return false;
   }, [requestSimulationAction]);
 
+  const enactPopupChoice = useCallback(
+    async (event, choice) => {
+      if (!event || !choice) return false;
+
+      const view =
+        viewRef.current;
+
+      if (!view) return false;
+
+      try {
+        /*
+         * 1) PRIVÁT STRATÉGIA
+         *    -> tényleges DM
+         *    -> a célkarakter rögtön válaszol
+         *    -> automatikusan megnyitjuk a DM-et
+         */
+        if (choice.tone === "private") {
+          const targetId =
+            popupPrivateTargetId(
+              view,
+              event,
+              choice
+            );
+
+          if (!targetId) {
+            setErr(
+              tt(
+                "Ehhez a privát választáshoz nem található valódi érintett karakter.",
+                "There is no real involved character available for this private response."
+              )
+            );
+
+            return false;
+          }
+
+          const playerText =
+            await genPopupPlayerActionText(
+              view,
+              event,
+              choice,
+              "private",
+              targetId
+            );
+
+          if (!playerText) {
+            throw new Error(
+              tt(
+                "Nem sikerült létrehozni a privát üzenetet.",
+                "Couldn't create the private message."
+              )
+            );
+          }
+
+          let replyText = "";
+
+          try {
+            replyText =
+              await genPopupPrivateReply(
+                view,
+                targetId,
+                playerText
+              );
+          } catch (replyErr) {
+            /*
+             * A játékos DM-je ettől még megtörténik.
+             * A karakter később is reagálhat.
+             */
+            console.warn(
+              "Popup private reply generation failed:",
+              replyErr
+            );
+          }
+
+          update((n) => {
+            const ok =
+              resolvePopupEvent(
+                n,
+                event.id,
+                choice.id
+              );
+
+            if (!ok) return;
+
+            appendPopupPrivateConversation(
+              n,
+              targetId,
+              playerText,
+              replyText,
+              event,
+              choice
+            );
+          });
+
+          setChatId(targetId);
+          setTab("chat");
+
+          return true;
+        }
+
+        /*
+         * 2) NYILVÁNOS STRATÉGIA
+         * clarify / defend / joke / apologize / doubleDown
+         * -> tényleges poszt a játékos profiljáról
+         * -> Feedre ugrunk
+         * -> AI kommentreakció bekerül a queue-ba
+         */
+        if (
+          popupPublicTone(
+            choice.tone
+          )
+        ) {
+          const postText =
+            await genPopupPlayerActionText(
+              view,
+              event,
+              choice,
+              "public"
+            );
+
+          if (!postText) {
+            throw new Error(
+              tt(
+                "Nem sikerült létrehozni a nyilvános reakciót.",
+                "Couldn't create the public response."
+              )
+            );
+          }
+
+          const postId =
+            "popup_post_" +
+            uid();
+
+          update((n) => {
+            const ok =
+              resolvePopupEvent(
+                n,
+                event.id,
+                choice.id
+              );
+
+            if (!ok) return;
+
+            const p =
+              appendPopupPublicPost(
+                n,
+                postText,
+                event,
+                choice
+              );
+
+            if (p) {
+              /*
+               * Fix id a navigációhoz és queue-hoz.
+               */
+              p.id = postId;
+
+              const socialEvent =
+                (n.socialEvents || [])
+                  .find(
+                    (e) =>
+                      e &&
+                      e.type ===
+                        "popup-public-action" &&
+                      e.meta &&
+                      e.meta.popupEventId ===
+                        event.id &&
+                      e.meta.choiceId ===
+                        choice.id
+                  );
+
+              if (socialEvent) {
+                socialEvent.refId =
+                  postId;
+
+                if (
+                  socialEvent.meta
+                ) {
+                  socialEvent.meta.postId =
+                    postId;
+                }
+              }
+
+              simEnqueue(
+                n,
+                mkAction(
+                  "comments",
+                  `popup-post:${postId}`,
+                  {
+                    postId,
+                  },
+                  "event"
+                )
+              );
+            }
+          });
+
+          setSimPulse(
+            (x) => x + 1
+          );
+
+          setJump({
+            type:"post",
+            id:postId,
+            n:now(),
+          });
+
+          setTab("feed");
+
+          return true;
+        }
+
+        /*
+         * 3) IGNORE / NO COMMENT
+         * Ezeknél a választás lényege pont az,
+         * hogy nincs nyilvános/privát megszólalás.
+         * A social impact és kapcsolatreakció viszont megtörténik.
+         */
+        update((n) =>
+          resolvePopupEvent(
+            n,
+            event.id,
+            choice.id
+          )
+        );
+
+        return true;
+      } catch (e) {
+        console.error(
+          "Popup action failed:",
+          e
+        );
+
+        setErr(
+          "POPUP: " +
+          (
+            e &&
+            e.message
+              ? e.message
+              : tt(
+                  "A választott cselekvést most nem sikerült végrehajtani.",
+                  "The selected action couldn't be completed."
+                )
+          )
+        );
+
+        return false;
+      }
+    },
+    [
+      update,
+      tt,
+    ]
+  );
+
   useEffect(() => {
     if (!world || !meId) return;
     setWorld((prev) => {
@@ -26989,7 +27886,14 @@ const signOut = useCallback(async () => {
           onClear={() => { update((n) => { if (n.notify) n.notify[meId] = []; }); setShowNotes(false); }} />
       )}
 
-      {activePopup ? <PopupEventModal w={view} event={activePopup} update={update} /> : null}
+      {activePopup ? (
+        <PopupEventModal
+          w={view}
+          event={activePopup}
+          update={update}
+          onChoose={enactPopupChoice}
+        />
+      ) : null}
 
       {flash && !showNotes && (
         <div className="flash" onClick={() => openNote(flash)}>
