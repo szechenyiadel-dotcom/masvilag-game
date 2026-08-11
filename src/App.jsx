@@ -4689,15 +4689,33 @@ MIELŐTT ELKÜLDÖD, ELLENŐRIZD:
 /* Mennyit lásson az AI egy szereplő lapjából. Ez alkuképes: minél többet
    küldünk, annál hívebb a karakter, de annál lassabban engedi át a
    szolgáltató. A játékos állítja be a Világ fülön. */
+/*
+ * FULL CHARACTER SHEETS — FIXED ENGINE MODE
+ *
+ * A részletesség többé nem játékos-beállítás.
+ * Az AI-motor a promptba bevont karakter teljes adatlapját megkapja.
+ * Ez rendszer-szintű hozzáférés: attól egy karakter még nem "tudja"
+ * automatikusan egy másik karakter titkait; a tudáskorlátot az ENGINE
+ * és a memóriarendszer továbbra is külön kezeli.
+ */
+const FULL_CHARACTER_SHEETS = true;
+
 const DETAIL_LEVELS = [
   { id: 1, nameHu: "Takarékos", nameEn: "Economy", mul: 0.5, cast: 5, noteHu: "Fele keret, cserébe szinte sosem kell várni.", noteEn: "Half the budget, and you almost never have to wait." },
   { id: 2, nameHu: "Teljes", nameEn: "Full", mul: 1.0, cast: 4, noteHu: "Személyiség 10 000, történet 15 000 karakter.", noteEn: "Personality 10,000, story 15,000 characters." },
   { id: 3, nameHu: "Bőkezű", nameEn: "Generous", mul: 1.6, cast: 3, noteHu: "Másfélszeres keret, néha várni kell.", noteEn: "One and a half times the budget; expect occasional waiting." },
   { id: 4, nameHu: "Maximum", nameEn: "Maximum", mul: 2.4, cast: 2, noteHu: "A legtöbb, ami elfér — gyakori a várakozás.", noteEn: "The most that fits — waiting is common." },
 ];
-let DETAIL = 2;   // az app indításkor beállítja a mentett értékre
+let DETAIL = 4;   // kompatibilitási változó; a részletesség UI megszűnt
 let CURRENT_LANG = "hu";   // globálisan elérhető nyelv a nem-komponens (pl. timeAgo) függvényekhez
-const detailInfo = () => DETAIL_LEVELS.find((x) => x.id === DETAIL) || DETAIL_LEVELS[1];
+
+const detailInfo = () => ({
+  id: 4,
+  nameHu: "Teljes adatlap",
+  nameEn: "Full sheet",
+  mul: 1,
+  cast: 6,
+});
 
 /* Rövid mezők: ezekből pár mondat is elég, nem visszük el a keretet.
    Nem is skálázódnak a részletességgel — a hely a hosszú mezőknek kell. */
@@ -4875,6 +4893,29 @@ function sheet(c, w, deep, isPlayerSheet, accessMode = "private") {
   if (c.gender) {
     out += `\n  NEM (kötelező): ${clean(c.gender)}. A beszédmódjában, a reakcióiban és a viselkedésében ezt a nemet mindig tükröznie kell.`;
   }
+  /*
+   * A teljes adatlap módnál NINCS mezőnkénti vágás vagy brief-helyettesítés.
+   * Minden kitöltött mező szó szerint bekerül a karakter engine-csomagjába.
+   */
+  if (
+    FULL_CHARACTER_SHEETS &&
+    accessMode !== "public"
+  ) {
+    rows.forEach(
+      ([label, key, v]) => {
+        const t =
+          clean(v);
+
+        if (!t) return;
+
+        out +=
+          `\n  ${label}: ${t}`;
+      }
+    );
+
+    return out;
+  }
+
   if (accessMode !== "public" && useBrief(c)) out += `\n  AMI A LAPJÁN MÉG SZEREPEL (sűrítve): ${clean(c.brief)}`;
 
   rows.forEach(([label, key, v]) => {
@@ -4977,7 +5018,7 @@ function voiceCard(c) {
   if (selfCanon) {
     bits.push(
       `TELJES SAJÁT KÁNON — EZEK NEM OPCIONÁLIS HÁTTÉRADATOK. Minden rólad szóló explicit tényből indulj ki, és a személyiségedet 100%-osan következetesen add át:
-${spread(selfCanon, 14000)}`
+${selfCanon}`
     );
   }
 
@@ -6831,9 +6872,19 @@ function deepBrief(w, c, isPlayerSheet, observerId) {
     : [];
   const lines = recentLines(w, c.id);
   const bonds = bondLines(w, c.id, selfView);
-  const body = selfView
-    ? sheet(c, w, true, isPlayerSheet, "private")
-    : sheet(c, w, true, isPlayerSheet, "public");
+  /*
+   * Az engine minden aktív karakter TELJES adatlapját látja.
+   * A karakter szubjektív tudását ettől külön kezeljük:
+   * knownLinesForObserver / memóriák mondják meg, mit tudhat biztosan.
+   */
+  const body =
+    sheet(
+      c,
+      w,
+      true,
+      isPlayerSheet,
+      "private"
+    );
   return body +
     (!selfView ? knownLinesForObserver(w, observerId, c.id) : "") +
     (bonds.length ? `\n  ${tt("viszonyai", "relationships")}: ${bonds.join(" ; ")}` : "") +
@@ -6907,13 +6958,13 @@ ${tt(
     "Ha egy jelenet úgy folytatódna, hogy neki kellene lépnie, állj meg ott, és hagyd rá a döntést.",
     "If the scene would require the player's move next, stop there and leave the decision to them."
   )}
-${deep ? deepBrief(w, w.player, true, observerId) : sheet(w.player, w, false, true, observerId === w.meId ? "private" : "public")}
+${deep ? deepBrief(w, w.player, true, observerId) : sheet(w.player, w, false, true, "private")}
 
 ${tt("A VILÁG TELJES NÉVSORA — RAJTUK KÍVÜL SENKI NEM LÉTEZIK", "FULL WORLD ROSTER — NO ONE ELSE EXISTS")}: 
 ${roster || "-"}
 
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
-${cast.map((c) => (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId === c.id ? "private" : "public"))).join("\n") || "-"}
+${cast.map((c) => (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, "private"))).join("\n") || "-"}
 ${!observerId && deep ? multiActorPerformanceContext(w, cast.map((c) => c.id)) : ""}
 ${extras.length ? `
 ${tt("EMLÍTETT SZEMÉLYEK — léteznek, de nem szólalnak meg maguktól", "MENTIONED PEOPLE — they exist, but do not speak on their own")}: 
@@ -6942,6 +6993,9 @@ Minden szereplőt a saját adatlapja alapján játszol el. Az adatlap nem hátt�
 FŐ SZABÁLY: minden válasz legyen karakterhű, természetes, emberi és az adott helyzethez illő. A karakter személyisége, története, aktuális érzései és kapcsolatai határozzák meg, MIT mond — de a felület határozza meg, HOGYAN és milyen hosszan mondja.
 
 KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
+- A rendszer-motor a promptban szereplő karakterek TELJES adatlapját látja. Ez azért van, hogy mindegyikük 100%-osan karakterhű legyen.
+- FONTOS TUDÁSHATÁR: attól, hogy TE mint engine látod minden karakter teljes adatlapját, az egyik SZEREPLŐ nem tudhat automatikusan a másik titkairól, félelmeiről, belső céljairól vagy rejtett múltjáról. Egy karakter csak azt használhatja tudásként másokról, amit nyilvánosan láthatott, személyesen megtudott, átélt, neki elmondtak, vagy saját emléke/feltételezése alátámaszt.
+- Saját magáról viszont minden karakter teljes adatlapja aktív kánon.
 - A karakterlap TELJES tartalma viselkedési specifikáció, nem háttérdísz.
 - Minden generálás előtt egyeztesd a választ a személyiséggel, tulajdonságokkal, beszédstílussal, teljes történettel, titkokkal, félelmekkel, célokkal, kedvencekkel, képességekkel, szervezettel, ranggal, kapcsolatokkal és aktuális emlékekkel.
 - Ha egy mondatot több szereplő is ugyanúgy mondhatna, az NEM elég karakterhű: írd újra úgy, hogy felismerhető legyen, ki mondta.
@@ -8164,20 +8218,13 @@ async function removeFromIndex(code) {
 /* Az élő világ beállításai — eszközönként, mert ez indít AI-hívásokat. */
 const DETAILKEY = "masvilag:detail";
 async function loadDetail() {
-  try {
-    if (!hasStore) return Number(mem[DETAILKEY]) || 2;
-    const r = await window.storage.get(DETAILKEY, false);
-    const v = r ? Number(r.value) : 0;
-    return DETAIL_LEVELS.some((x) => x.id === v) ? v : 2;
-  } catch (e) { return 2; }
+  DETAIL = 4;
+  return 4;
 }
-async function saveDetail(v) {
-  DETAIL = v;
-  try {
-    if (!hasStore) { mem[DETAILKEY] = String(v); return true; }
-    await window.storage.set(DETAILKEY, String(v), false);
-    return true;
-  } catch (e) { return false; }
+
+async function saveDetail() {
+  DETAIL = 4;
+  return true;
 }
 
 /* Az alkalmazás nyelve — eszközszintű, a belépés előtt is elérhető.
@@ -8553,18 +8600,45 @@ function sysLangText(w, playerId, hu, en) {
 }
 
 const AUTO = "masvilag:auto";
-const AUTO_DEFAULT = { on: true, every: 6 };
+/*
+ * LIVE WORLD FIXED MODE
+ *
+ * Mindig be van kapcsolva, és az "Often" ütemet használja.
+ * Régi eszközön mentett "off" / ritkább érték sem írhatja ezt felül.
+ */
+const AUTO_DEFAULT = {
+  on: true,
+  every: 3,
+};
+
 async function loadAuto() {
-  if (!hasStore) return { ...AUTO_DEFAULT, ...(mem[AUTO] || {}) };
-  try {
-    const r = await window.storage.get(AUTO, false);
-    return r ? { ...AUTO_DEFAULT, ...JSON.parse(r.value) } : { ...AUTO_DEFAULT };
-  } catch (e) { return { ...AUTO_DEFAULT }; }
+  return {
+    ...AUTO_DEFAULT,
+  };
 }
-async function saveAuto(cfg) {
-  if (!hasStore) { mem[AUTO] = cfg; return true; }
-  try { await window.storage.set(AUTO, JSON.stringify(cfg), false); return true; }
-  catch (e) { return false; }
+
+async function saveAuto() {
+  if (!hasStore) {
+    mem[AUTO] = {
+      ...AUTO_DEFAULT,
+    };
+
+    return true;
+  }
+
+  try {
+    await window.storage.set(
+      AUTO,
+      JSON.stringify(
+        AUTO_DEFAULT
+      ),
+      false
+    );
+
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 /* A saját világaid listája ezen az eszközön. */
@@ -15694,8 +15768,8 @@ A VILÁG MAGÁTÓL ÉL TOVÁBB.
 
 ${
   single
-    ? "Telt el egy kis idő. Adj EGY természetes új posztot valamelyik szereplőtől, és ha indokolt, 3-7 reakciót/kommentet másoktól."
-    : "Léptesd a világot néhány órával. Adj 1-2 természetes új posztot különböző szereplőktől, és ha indokolt, posztonként 3-7 különböző reakciót/kommentet másoktól."
+    ? "Telt el egy kis idő. Adj EGY valódi, természetes új posztot valamelyik szereplőtől. Ne válaszolj üres posts tömbbel. Ha indokolt, adj 3-7 reakciót/kommentet másoktól."
+    : "Léptesd a világot néhány órával. Adj 2-3 természetes új posztot különböző szereplőktől, és ha indokolt, posztonként 3-7 különböző reakciót/kommentet másoktól."
 }
 
 ÁLTALÁNOS SZABÁLYOK:
@@ -22364,67 +22438,87 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
         {pwMsg && <p className="hint" style={{ marginTop: 8, color: "var(--gold)" }}>{pwMsg}</p>}
       </div>
 
-      <div className="card" style={{ borderColor: auto && auto.on ? "var(--rose)" : "var(--line)" }}>
+      <div
+        className="card"
+        style={{
+          borderColor: "var(--rose)",
+        }}
+      >
         <div className="between">
-          <label className="f" style={{ margin: 0, color: auto && auto.on ? "var(--rose)" : "var(--muted)" }}>{tt("Élő világ", "Live world")}</label>
-          <button className={"btn tiny " + (auto && auto.on ? "primary" : "ghost")} onClick={() => onAuto({ on: !(auto && auto.on) })}>
-            {auto && auto.on ? tt("Bekapcsolva", "On") : tt("Kikapcsolva", "Off")}
-          </button>
+          <label
+            className="f"
+            style={{
+              margin: 0,
+              color: "var(--rose)",
+            }}
+          >
+            {tt(
+              "Élő világ",
+              "Live world"
+            )}
+          </label>
+
+          <span
+            className="chip"
+            style={{
+              color: "var(--rose)",
+            }}
+          >
+            {tt(
+              "MINDIG ON · SŰRŰN",
+              "ALWAYS ON · OFTEN"
+            )}
+          </span>
         </div>
-        <p className="hint" style={{ marginTop: 8 }}>
-          {tt("Ha be van kapcsolva, a karakterek maguktól reagálnak, posztolnak, jegyzetet írnak és üzennek neked — akkor is, ha te épp nem csinálsz semmit.",
-              "When on, characters react, post, write notes and message you on their own — even when you're not doing anything.")}
+
+        <p
+          className="hint"
+          style={{ marginTop: 8 }}
+        >
+          {tt(
+            "Az Élő világ most állandóan fut. A karakterek maguktól posztolnak, kommentelnek, Note-ot írnak, üzennek és reagálnak; az alap világ-lépés körülbelül 3 percenként történhet, amikor nincs más AI-kérés folyamatban.",
+            "Live world now runs permanently. Characters post, comment, write Notes, message and react on their own; the base world step can run roughly every 3 minutes when no other AI request is already in progress."
+          )}
         </p>
-        {auto && auto.on && (
-          <>
-            <label className="f">{tt("Milyen sűrűn történjen valami", "How often should something happen")}</label>
-            <div className="row" style={{ gap: 6 }}>
-              {[[3, tt("Sűrűn", "Often")], [6, tt("Normál", "Normal")], [15, tt("Ritkán", "Rarely")], [40, tt("Nagyon ritkán", "Very rarely")]].map(([v, lbl]) => (
-                <button key={v} className={"btn tiny full " + (auto.every === v ? "primary" : "ghost")}
-                  onClick={() => onAuto({ every: v })}>{lbl}</button>
-              ))}
-            </div>
-            <p className="hint" style={{ marginTop: 8 }}>
-              {tt(`Kb. ${auto.every} percenként lép egyet a világ. Ez is fogyaszt a keretből, tehát ha sokat torlódsz, érdemes ritkítani vagy kikapcsolni.`,
-                  `The world advances roughly every ${auto.every} minutes. This also consumes from your quota, so if you're bottlenecking, it's worth making it rarer or turning it off.`)}
-            </p>
-          </>
-        )}
       </div>
 
       <div className="card" style={{ borderColor: "var(--gold)" }}>
-        <label className="f" style={{ marginTop: 0, color: "var(--gold)" }}>{tt("Mennyit lásson az AI a karakterlapokból", "How much of the character sheets should the AI see")}</label>
-        <p className="hint">
-          {tt("A ", "The ")}<b>{tt("személyiség 10 000", "personality gets 10,000")}</b>{tt(", a ", ", the ")}<b>{tt("történet 15 000", "story 15,000")}</b>{tt(" karaktert kap — ezek a legfontosabbak, ezekből következik minden. A titkok 1 800-at, az egyéb 1 200-at, a többi mező pedig szándékosan szűk. Ami a kereten kívül marad, azt a sűrített profil foglalja össze. Ez a kapcsoló az egészet arányosan növeli vagy csökkenti.",
-              " characters — these matter most, everything follows from them. Secrets get 1,800, extra 1,200, the other fields are intentionally narrow. Whatever's beyond the cap gets summarized by the compressed profile. This toggle scales all of it up or down proportionally.")}
-        </p>
-        <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-          {DETAIL_LEVELS.map((lv) => {
-            const est = estimateCall(w, lv.mul);
-            const heavy = est > 24000;
-            const lvlName = tt(lv.nameHu, lv.nameEn);
-            return (
-              <button key={lv.id} className={"btn tiny " + (detail === lv.id ? "primary" : "ghost")}
-                style={{ flex: "1 1 44%", flexDirection: "column", gap: 2, alignItems: "center" }}
-                onClick={() => onDetail(lv.id)}>
-                <span>{lvlName}</span>
-                <span style={{ fontSize: 9.5, opacity: 0.8, color: heavy ? "var(--gold)" : undefined }}>
-                  ~{(est / 1000).toFixed(0)}{tt("e token", "k tokens")}{heavy ? tt(" · lassú", " · slow") : ""}
-                </span>
-              </button>
-            );
-          })}
+        <div className="between" style={{ alignItems: "center" }}>
+          <label
+            className="f"
+            style={{
+              margin: 0,
+              color: "var(--gold)",
+            }}
+          >
+            {tt(
+              "AI karakterhűség",
+              "AI character fidelity"
+            )}
+          </label>
+
+          <span
+            className="chip"
+            style={{
+              color: "var(--gold)",
+            }}
+          >
+            {tt(
+              "TELJES ADATLAP",
+              "FULL SHEETS"
+            )}
+          </span>
         </div>
-        <p className="hint" style={{ marginTop: 8 }}>
-          {tt("A te világodban mérve. 24 ezer token fölött rendszeresen várni kell a szolgáltatóra — alatta gyakorlatilag folyamatos a játék.",
-              "Measured in your world. Above 24k tokens you'll regularly wait on the provider — below it, play is essentially continuous.")}
+
+        <p
+          className="hint"
+          style={{ marginTop: 8 }}
+        >
+          {tt(
+            "A részletesség többé nem állítható: az AI minden aktív karakter teljes karakterlapját megkapja. A rendszer ettől még külön kezeli, hogy egy szereplő mit tudhat másokról.",
+            "Detail level is no longer configurable: the AI receives the full character sheet for every active character. Character knowledge is still kept separate, so they do not magically know each other's secrets."
+          )}
         </p>
-        {DETAIL_LEVELS.filter((lv) => lv.id === detail).map((lv) => (
-          <p className="hint" key={lv.id} style={{ marginTop: 8 }}>
-            {tt(lv.noteHu, lv.noteEn)} {tt("Személyiség", "Personality")} {Math.round(10000 * lv.mul).toLocaleString(lang === "en" ? "en" : "hu")}, {tt("történet", "story")}
-            {" "}{Math.round(15000 * lv.mul).toLocaleString(lang === "en" ? "en" : "hu")} {tt("karakter. Egy jelenetbe", "characters. A scene fits")} {lv.cast} {tt("szereplő fér.", "characters.")}
-          </p>
-        ))}
       </div>
 
       <div className="card">
@@ -30362,9 +30456,12 @@ function planAutoAction(view) {
   );
 
   if (myNote) {
-    const reactedBy = new Set(
-      myNote.reactedBy || []
-    );
+    const processedBy =
+      new Set(
+        myNote.processedBy ||
+        myNote.reactedBy ||
+        []
+      );
 
     const remainingReactors = (
       view.chars || []
@@ -30372,12 +30469,17 @@ function planAutoAction(view) {
       (c) =>
         c &&
         !isHuman(view, c.id) &&
-        !reactedBy.has(c.id)
+        !processedBy.has(c.id)
     );
 
+    /*
+     * A Note fontos, de többé nem foglalhat le MINDEN egymást követő
+     * automatikus kört. Így közben a feed is ténylegesen él tovább.
+     */
     if (
       remainingReactors.length > 0 &&
-      now() - (myNote.ts || 0) < NOTE_LIFE
+      now() - (myNote.ts || 0) < NOTE_LIFE &&
+      Math.random() < 0.42
     ) {
       return mkAction(
         "note-react",
@@ -30387,6 +30489,24 @@ function planAutoAction(view) {
         }
       );
     }
+  }
+
+  /*
+   * FEED PRIORITÁS — gyakori autonóm posztok.
+   *
+   * A játékos kommentjeire/válaszaira továbbra is azonnal reagálunk,
+   * de utána a világ nagy eséllyel új posztot készít, mielőtt
+   * karbantartási vagy ritkább social akcióra váltana.
+   */
+  if (
+    Math.random() < 0.52
+  ) {
+    return mkAction(
+      "world",
+      `world-post-priority:${Math.floor(
+        now() / 180000
+      )}`
+    );
   }
 
   /*
@@ -30407,8 +30527,9 @@ function planAutoAction(view) {
     )[0];
 
   if (
+    !FULL_CHARACTER_SHEETS &&
     needBrief &&
-    Math.random() < 0.22
+    Math.random() < 0.08
   ) {
     return mkAction(
       "brief",
@@ -30671,10 +30792,10 @@ function planAutoAction(view) {
     });
 
   /*
-   * Kb. 16% note.
+   * Kb. 10% note a maradék körökből.
    */
   if (
-    roll < 0.16 &&
+    roll < 0.10 &&
     noteless.length
   ) {
     const bot =
@@ -30747,13 +30868,13 @@ function planAutoAction(view) {
   /*
    * 13. GROUP CHAT
    *
-   * Kb. 8%.
+   * Kb. 8% a maradék körökből.
    * A meglévő csoport előnyt élvez
    * az új létrehozásával szemben.
    */
   if (
-    roll >= 0.16 &&
-    roll < 0.24
+    roll >= 0.10 &&
+    roll < 0.18
   ) {
     const preferExisting =
       groupTurnCandidates.length > 0 &&
@@ -30818,12 +30939,12 @@ function planAutoAction(view) {
   /*
    * 14. PRIVÁT ÜZENET
    *
-   * Kb. 32%.
+   * Kb. 16% további DM-esély.
    *
-   * A pickInitiator továbbra is eldönti,
-   * kinek van valódi oka írni.
+   * A feed most szándékosan dominánsabb:
+   * a világ gyakrabban posztol, nem a privát üzenetek viszik el a köröket.
    */
-  if (roll < 0.56) {
+  if (roll < 0.34) {
     const bot =
       pickInitiator(view);
 
@@ -32765,8 +32886,18 @@ export default function App() {
   const [detail, setDetailState] = useState(DETAIL);
   useEffect(() => { loadDetail().then((v) => { DETAIL = v; setDetailState(v); }); }, []);
   const changeDetail = useCallback((v) => { saveDetail(v); setDetailState(v); }, []);
-  const changeAuto = useCallback((patch) => {
-    setAutoCfg((prev) => { const next = { ...prev, ...patch }; saveAuto(next); return next; });
+  const changeAuto = useCallback(() => {
+    const fixed = {
+      ...AUTO_DEFAULT,
+    };
+
+    setAutoCfg(
+      fixed
+    );
+
+    saveAuto(
+      fixed
+    );
   }, []);
 
   const SESSION = "masvilag:session";
@@ -34918,8 +35049,22 @@ const signOut = useCallback(async () => {
 
   let action = queued;
       if (!action) {
-        if (!auto.on || !canTick(view2, auto.every)) return;
-        action = planAutoAction(view2);
+        /*
+         * Live world hard-on: régi mentett state sem állíthatja le.
+         */
+        if (
+          !canTick(
+            view2,
+            AUTO_DEFAULT.every
+          )
+        ) {
+          return;
+        }
+
+        action =
+          planAutoAction(
+            view2
+          );
       }
       if (!action) return;
 
