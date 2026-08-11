@@ -14215,6 +14215,57 @@ function publicSentimentFor(
       }
 
       /*
+       * A nyilvános kommentek nem automatikusan pozitívak.
+       * A kommentelő meglévő kapcsolata segít eldönteni,
+       * hogy inkább támogatói vagy ellenséges social jelről van szó.
+       *
+       * Ez nem "szövegelemzés": csak társas kontextus.
+       */
+      if (
+        targetHit &&
+        event.actorId &&
+        event.actorId !==
+          characterId &&
+        (
+          event.type ===
+            "comment" ||
+          event.type ===
+            "reply"
+        )
+      ) {
+        const commentRel =
+          getRel(
+            w,
+            event.actorId,
+            characterId
+          );
+
+        const commentRelScore =
+          Number(
+            commentRel &&
+            commentRel.score
+          ) || 0;
+
+        if (
+          commentRelScore >= 25
+        ) {
+          supportHeat +=
+            1.3 * freshness;
+        } else if (
+          commentRelScore <= -20
+        ) {
+          dislikeHeat +=
+            1.6 * freshness;
+
+          controversyHeat +=
+            0.8 * freshness;
+        } else {
+          controversyHeat +=
+            0.25 * freshness;
+        }
+      }
+
+      /*
        * Későbbi gossip / cancel / popup rendszerek
        * explicit sentimentet is adhatnak.
        */
@@ -14807,6 +14858,547 @@ function refreshPostVirality(
   );
 
   return post.virality;
+}
+
+
+function recentSocialWave(
+  w,
+  characterId,
+  mode,
+  hours = 6
+) {
+  const cutoff =
+    now() -
+    hours * 3600e3;
+
+  return (
+    (w.socialEvents || []).some(
+      (event) =>
+        event &&
+        Number(event.ts) >=
+          cutoff &&
+        Array.isArray(
+          event.targetIds
+        ) &&
+        event.targetIds.includes(
+          characterId
+        ) &&
+        Array.isArray(
+          event.tags
+        ) &&
+        event.tags.includes(
+          "social-wave"
+        ) &&
+        event.tags.includes(
+          mode
+        )
+    )
+  );
+}
+
+function strongestSocialPostFor(
+  w,
+  characterId
+) {
+  return (
+    (w.posts || [])
+      .filter(
+        (post) =>
+          post &&
+          post.authorId ===
+            characterId
+      )
+      .slice()
+      .sort((a, b) => {
+        const av =
+          Number(
+            a.virality &&
+            a.virality.score
+          ) || 0;
+
+        const bv =
+          Number(
+            b.virality &&
+            b.virality.score
+          ) || 0;
+
+        if (av !== bv) {
+          return bv - av;
+        }
+
+        return (
+          (Number(b.ts) || 0) -
+          (Number(a.ts) || 0)
+        );
+      })[0] ||
+    null
+  );
+}
+
+function socialSupportScore(
+  w,
+  actorId,
+  targetId
+) {
+  if (
+    !actorId ||
+    !targetId ||
+    actorId === targetId
+  ) {
+    return -999;
+  }
+
+  const actor =
+    socialProfileById(
+      w,
+      actorId
+    );
+
+  const target =
+    socialProfileById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target ||
+    isHuman(w, actor.id)
+  ) {
+    return -999;
+  }
+
+  const rel =
+    getRel(
+      w,
+      actor.id,
+      target.id
+    );
+
+  const relScore =
+    Number(rel && rel.score) ||
+    0;
+
+  let score =
+    relScore;
+
+  if (
+    isFollowing(
+      w,
+      actor.id,
+      target.id
+    )
+  ) {
+    score += 24;
+  }
+
+  const targetPosts =
+    (w.posts || [])
+      .filter(
+        (p) =>
+          p &&
+          p.authorId ===
+            target.id
+      )
+      .slice(0, 8);
+
+  targetPosts.forEach((p) => {
+    if (
+      Array.isArray(
+        p.likedBy
+      ) &&
+      p.likedBy.includes(
+        actor.id
+      )
+    ) {
+      score += 5;
+    }
+
+    if (
+      hasReposted(
+        w,
+        actor.id,
+        p.id
+      )
+    ) {
+      score += 10;
+    }
+
+    score += Math.min(
+      10,
+      (p.comments || []).filter(
+        (c) =>
+          c &&
+          c.authorId ===
+            actor.id
+      ).length * 5
+    );
+  });
+
+  return Math.round(score);
+}
+
+function socialCriticScore(
+  w,
+  actorId,
+  targetId
+) {
+  if (
+    !actorId ||
+    !targetId ||
+    actorId === targetId
+  ) {
+    return -999;
+  }
+
+  const actor =
+    socialProfileById(
+      w,
+      actorId
+    );
+
+  const target =
+    socialProfileById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target ||
+    isHuman(w, actor.id)
+  ) {
+    return -999;
+  }
+
+  const rel =
+    getRel(
+      w,
+      actor.id,
+      target.id
+    );
+
+  const relScore =
+    Number(rel && rel.score) ||
+    0;
+
+  /*
+   * Erősen pozitív / fix családi kapcsolat ne váljon
+   * automatikusan cancel-mobbá csak azért, mert trend van.
+   */
+  if (
+    rel &&
+    rel.fixed &&
+    relScore > -20
+  ) {
+    return -999;
+  }
+
+  let score =
+    -relScore;
+
+  if (
+    isFollowing(
+      w,
+      actor.id,
+      target.id
+    )
+  ) {
+    score += 8;
+  }
+
+  if (
+    relScore <= -45
+  ) {
+    score += 18;
+  }
+
+  return Math.round(score);
+}
+
+function socialWaveCast(
+  w,
+  targetId,
+  mode
+) {
+  const rows =
+    (w.chars || [])
+      .filter(
+        (c) =>
+          c &&
+          c.id !== targetId &&
+          !isHuman(w, c.id)
+      )
+      .map((c) => {
+        const score =
+          mode === "cancel"
+            ? socialCriticScore(
+                w,
+                c.id,
+                targetId
+              )
+            : socialSupportScore(
+                w,
+                c.id,
+                targetId
+              );
+
+        return {
+          id: c.id,
+          score,
+          tie: Math.random(),
+        };
+      })
+      .filter(
+        (row) =>
+          row.score >
+          (
+            mode === "cancel"
+              ? 12
+              : 18
+          )
+      )
+      .sort((a, b) => {
+        if (
+          a.score !== b.score
+        ) {
+          return (
+            b.score -
+            a.score
+          );
+        }
+
+        return (
+          a.tie -
+          b.tie
+        );
+      });
+
+  return rows.slice(
+    0,
+    3
+  );
+}
+
+function pickSocialWaveAction(w) {
+  refreshAllSocialStats(w);
+
+  const candidates = [];
+
+  socialProfiles(w).forEach(
+    (target) => {
+      if (!target) return;
+
+      const row =
+        ensureSocialStatsFor(
+          w,
+          target.id
+        );
+
+      if (!row) return;
+
+      const sentiment =
+        row.sentiment ||
+        defaultSocialStatsRow()
+          .sentiment;
+
+      const post =
+        strongestSocialPostFor(
+          w,
+          target.id
+        );
+
+      /*
+       * Counter-backlash:
+       * egyszerre van komoly támadás ÉS erős védőtábor.
+       */
+      if (
+        sentiment.cancelPressure >=
+          32 &&
+        sentiment.stanEnergy >=
+          24 &&
+        !recentSocialWave(
+          w,
+          target.id,
+          "counter",
+          8
+        )
+      ) {
+        candidates.push({
+          targetId:
+            target.id,
+          mode: "counter",
+          score:
+            sentiment.cancelPressure +
+            sentiment.stanEnergy +
+            sentiment.controversy *
+              0.5,
+          postId:
+            post && post.id,
+        });
+      }
+
+      if (
+        sentiment.cancelPressure >=
+          24 &&
+        !recentSocialWave(
+          w,
+          target.id,
+          "cancel",
+          8
+        )
+      ) {
+        candidates.push({
+          targetId:
+            target.id,
+          mode: "cancel",
+          score:
+            sentiment.cancelPressure *
+              1.35 +
+            sentiment.controversy,
+          postId:
+            post && post.id,
+        });
+      }
+
+      if (
+        (
+          sentiment.stanEnergy >=
+            24 ||
+          (
+            row.hype >= 55 &&
+            sentiment.support >=
+              30
+          )
+        ) &&
+        !recentSocialWave(
+          w,
+          target.id,
+          "stan",
+          8
+        )
+      ) {
+        candidates.push({
+          targetId:
+            target.id,
+          mode: "stan",
+          score:
+            sentiment.stanEnergy *
+              1.25 +
+            row.hype * 0.45 +
+            sentiment.support *
+              0.35,
+          postId:
+            post && post.id,
+        });
+      }
+    }
+  );
+
+  candidates.sort(
+    (a, b) =>
+      b.score - a.score
+  );
+
+  const best =
+    candidates[0];
+
+  if (!best) return null;
+
+  const cast =
+    socialWaveCast(
+      w,
+      best.targetId,
+      best.mode === "cancel"
+        ? "cancel"
+        : "support"
+    );
+
+  if (!cast.length) {
+    return null;
+  }
+
+  return {
+    ...best,
+    cast,
+  };
+}
+
+function waveBackgroundFollowerDelta(
+  w,
+  targetId,
+  mode,
+  strength
+) {
+  const audience =
+    Math.max(
+      25,
+      displayFollowerCount(
+        w,
+        targetId
+      )
+    );
+
+  const normalized =
+    Math.max(
+      0,
+      Math.min(
+        1,
+        (
+          Number(strength) ||
+          0
+        ) / 100
+      )
+    );
+
+  if (mode === "cancel") {
+    return -Math.max(
+      2,
+      Math.min(
+        50000,
+        Math.round(
+          audience *
+          (
+            0.002 +
+            normalized *
+              0.018
+          )
+        )
+      )
+    );
+  }
+
+  if (mode === "counter") {
+    return Math.max(
+      1,
+      Math.min(
+        25000,
+        Math.round(
+          audience *
+          (
+            0.001 +
+            normalized *
+              0.009
+          )
+        )
+      )
+    );
+  }
+
+  return Math.max(
+    1,
+    Math.min(
+      30000,
+      Math.round(
+        audience *
+        (
+          0.001 +
+          normalized *
+            0.012
+        )
+      )
+    )
+  );
 }
 
 function refreshSocialStatsFor(
@@ -15729,6 +16321,763 @@ Formátum:
   );
 }
 
+
+async function genSocialWave(
+  w,
+  target,
+  post,
+  mode,
+  castRows
+) {
+  const cast =
+    (castRows || [])
+      .map(
+        (row) =>
+          charById(
+            w,
+            row.id
+          )
+      )
+      .filter(Boolean);
+
+  if (
+    !target ||
+    !cast.length
+  ) {
+    return {
+      comments: [],
+    };
+  }
+
+  const castIds =
+    cast.map(
+      (c) => c.id
+    );
+
+  const modeText =
+    mode === "cancel"
+      ? `
+NYILVÁNOS BACKLASH / CANCEL HULLÁM:
+A felsorolt karakterek közül azok szólaljanak meg,
+akik a saját személyiségük és ${target.name}-hez fűződő
+kapcsolatuk alapján tényleg kritikusan, ellenségesen,
+szkeptikusan vagy gúnyosan reagálnának.
+`
+      : mode === "counter"
+        ? `
+COUNTER-BACKLASH:
+${target.name} támadások alatt áll, de kialakult egy
+védőtábor is. A felsorolt karakterek közül azok
+szólaljanak meg, akik természetesen megvédenék,
+visszaszólnának a támadóknak vagy nyilvánosan mellé állnának.
+`
+        : `
+STAN / SUPPORT HULLÁM:
+${target.name} körül erős támogatói energia alakult ki.
+A felsorolt karakterek közül azok reagáljanak, akik
+természetesen támogatnák, hype-olnák vagy megvédenék.
+`;
+
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(
+      w,
+      castIds.concat(
+        [target.id]
+      ),
+      true,
+      null
+    )}
+
+SOCIAL MEDIA HULLÁM.
+
+CÉLPONT:
+${target.name} [${target.id}]
+
+${post
+  ? `A POSZT, AMI KÖRÜL A HULLÁM FUT:
+${target.name}: ${post.text || "[képes poszt]"}`
+  : "Nincs egyetlen konkrét poszt; a hullám a profil körül zajlik."}
+
+${modeText}
+
+MEGSZÓLALHATÓ KARAKTEREK:
+${cast
+  .map(
+    (c) =>
+      `${c.name} [${c.id}]
+${voiceCard(c)}`
+  )
+  .join("\n\n")}
+
+${repetitionGuard(
+  w,
+  castIds,
+  "kommentek"
+)}
+
+SZABÁLYOK:
+- CSAK a fenti AI-karakterek nevében írj.
+- A játékos helyett SOHA ne írj.
+- Ne szólaljon meg mindenki kötelezően.
+- 1-3 rövid, valódi social-media komment legyen.
+- Legtöbbször 1-15 szó bőven elég.
+- Ne írj esszét vagy narrációt.
+- A hangnem legyen karakterhű.
+- Ne használj ugyanazt a mondatot vagy emoji-mintát több szereplőnél.
+- Ne találj ki olyan titkos információt, amit a karakter nem tudhat.
+- ${mode === "cancel"
+  ? "A kritika lehet kemény vagy gúnyos, de ne legyen mindenki ugyanúgy dühös."
+  : "A támogatás lehet védelem, hype, száraz beszólás az ellenzőknek vagy egyszerű kiállás."}
+
+Formátum:
+{
+  "comments":[
+    {
+      "id":"karakter azonosítója",
+      "text":"rövid nyilvános komment"
+    }
+  ]
+}${TAIL}`,
+    {
+      maxTokens: 900,
+    }
+  );
+}
+
+function applySocialWave(
+  n,
+  action,
+  out
+) {
+  const payload =
+    action &&
+    action.payload
+      ? action.payload
+      : {};
+
+  const targetId =
+    payload.targetId;
+
+  const mode =
+    payload.mode ||
+    "stan";
+
+  const target =
+    socialProfileById(
+      n,
+      targetId
+    );
+
+  if (!target) {
+    return;
+  }
+
+  const row =
+    ensureSocialStatsFor(
+      n,
+      targetId
+    );
+
+  const sentiment =
+    row &&
+    row.sentiment
+      ? row.sentiment
+      : defaultSocialStatsRow()
+          .sentiment;
+
+  const post =
+    payload.postId
+      ? (n.posts || []).find(
+          (p) =>
+            p &&
+            p.id ===
+              payload.postId
+        )
+      : strongestSocialPostFor(
+          n,
+          targetId
+        );
+
+  const cast =
+    Array.isArray(
+      payload.cast
+    )
+      ? payload.cast
+      : [];
+
+  /*
+   * A konkrét létező AI-k is viselkednek:
+   * supportnál follow / like / repost,
+   * cancelnél unfollow.
+   */
+  cast.forEach((castRow) => {
+    const who =
+      castRow &&
+      castRow.id;
+
+    const actor =
+      socialProfileById(
+        n,
+        who
+      );
+
+    if (
+      !actor ||
+      isHuman(n, actor.id) ||
+      actor.id === targetId
+    ) {
+      return;
+    }
+
+    if (
+      mode === "cancel"
+    ) {
+      const rel =
+        getRel(
+          n,
+          actor.id,
+          targetId
+        );
+
+      const relScore =
+        Number(
+          rel && rel.score
+        ) || 0;
+
+      if (
+        isFollowing(
+          n,
+          actor.id,
+          targetId
+        ) &&
+        relScore < 15
+      ) {
+        setFollowState(
+          n,
+          actor.id,
+          targetId,
+          false,
+          "ai-social-wave"
+        );
+      }
+
+      return;
+    }
+
+    /*
+     * Stan / counter:
+     * a védők érdeklődése láthatóvá válhat.
+     */
+    if (
+      !isFollowing(
+        n,
+        actor.id,
+        targetId
+      ) &&
+      socialSupportScore(
+        n,
+        actor.id,
+        targetId
+      ) >= 28
+    ) {
+      setFollowState(
+        n,
+        actor.id,
+        targetId,
+        true,
+        "ai-social-wave"
+      );
+    }
+
+    if (post) {
+      if (
+        !Array.isArray(
+          post.likedBy
+        )
+      ) {
+        post.likedBy = [];
+      }
+
+      if (
+        !post.likedBy.includes(
+          actor.id
+        )
+      ) {
+        post.likedBy.push(
+          actor.id
+        );
+
+        post.likes =
+          Math.max(
+            Number(
+              post.likes
+            ) || 0,
+            post.likedBy.length
+          );
+
+        recordSocialEvent(
+          n,
+          {
+            type: "like",
+            refId:
+              `${post.id}:${actor.id}`,
+            ts: now(),
+            actorId:
+              actor.id,
+            targetIds:
+              post.authorId !==
+                actor.id
+                ? [
+                    post.authorId,
+                  ]
+                : [],
+            visibility:
+              "public",
+            factLevel:
+              "observed",
+            importance: 8,
+            drama: 0,
+            romance: 0,
+            embarrassment: 0,
+            source:
+              "ai-social-wave",
+            text:
+              "Liked a post.",
+            tags: [
+              "social",
+              "like",
+              "stan",
+              "support-wave",
+            ],
+            meta: {
+              postId:
+                post.id,
+              postAuthorId:
+                post.authorId ||
+                "",
+            },
+          }
+        );
+      }
+
+      if (
+        socialSupportScore(
+          n,
+          actor.id,
+          targetId
+        ) >= 50 &&
+        !hasReposted(
+          n,
+          actor.id,
+          post.id
+        )
+      ) {
+        createRepost(
+          n,
+          actor.id,
+          post.id,
+          "ai-social-wave"
+        );
+      }
+    }
+  });
+
+  /*
+   * AI által írt nyilvános kommentek.
+   */
+  if (post) {
+    (out &&
+    Array.isArray(out.comments)
+      ? out.comments
+      : []
+    ).slice(0, 3).forEach(
+      (comment) => {
+        const who =
+          aiVoice(
+            n,
+            comment &&
+            comment.id
+          );
+
+        if (
+          !who ||
+          !cast.some(
+            (row) =>
+              row &&
+              row.id === who
+          ) ||
+          !comment.text
+        ) {
+          return;
+        }
+
+        const body =
+          cleanGeneratedUtterance(
+            n,
+            who,
+            comment.text,
+            240
+          );
+
+        if (!body) return;
+
+        const made = {
+          id: uid(),
+          authorId: who,
+          text: body,
+          ts: now(),
+          parent: null,
+          language:
+            worldLanguage(
+              n,
+              n.meId
+            ),
+        };
+
+        if (
+          !Array.isArray(
+            post.comments
+          )
+        ) {
+          post.comments = [];
+        }
+
+        post.comments.push(
+          made
+        );
+
+        noteComment(
+          n,
+          post,
+          made
+        );
+
+        recordSocialEvent(
+          n,
+          {
+            type: "comment",
+            refId:
+              made.id,
+            ts:
+              made.ts,
+            actorId:
+              who,
+            targetIds: [
+              targetId,
+            ],
+            visibility:
+              "public",
+            factLevel:
+              "observed",
+            importance:
+              mode === "cancel"
+                ? 34
+                : 28,
+            drama:
+              mode === "cancel"
+                ? 28
+                : mode ===
+                    "counter"
+                  ? 20
+                  : 10,
+            romance: 0,
+            embarrassment: 0,
+            source:
+              "ai-social-wave",
+            text:
+              made.text,
+            tags:
+              mode === "cancel"
+                ? [
+                    "social",
+                    "comment",
+                    "cancel",
+                    "backlash",
+                    "controversy",
+                  ]
+                : mode ===
+                    "counter"
+                  ? [
+                      "social",
+                      "comment",
+                      "stan",
+                      "support-wave",
+                      "counter-backlash",
+                      "controversy",
+                    ]
+                  : [
+                      "social",
+                      "comment",
+                      "stan",
+                      "support-wave",
+                    ],
+            meta: {
+              postId:
+                post.id,
+              commentId:
+                made.id,
+              postAuthorId:
+                targetId,
+            },
+          }
+        );
+      }
+    );
+  }
+
+  const strength =
+    mode === "cancel"
+      ? Number(
+          sentiment.cancelPressure
+        ) || 0
+      : mode === "counter"
+        ? Math.max(
+            Number(
+              sentiment.cancelPressure
+            ) || 0,
+            Number(
+              sentiment.stanEnergy
+            ) || 0
+          )
+        : Number(
+            sentiment.stanEnergy
+          ) || 0;
+
+  const followerDelta =
+    waveBackgroundFollowerDelta(
+      n,
+      targetId,
+      mode,
+      strength
+    );
+
+  ensureSocialProfileRow(
+    target
+  );
+
+  target.followerDelta =
+    Math.round(
+      Number(
+        target.followerDelta
+      ) || 0
+    ) +
+    followerDelta;
+
+  const reputationDelta =
+    mode === "cancel"
+      ? -Math.max(
+          2,
+          Math.min(
+            10,
+            Math.round(
+              strength / 10
+            )
+          )
+        )
+      : mode === "counter"
+        ? Math.max(
+            1,
+            Math.min(
+              5,
+              Math.round(
+                strength / 20
+              )
+            )
+          )
+        : 0;
+
+  recordSocialEvent(
+    n,
+    {
+      type:
+        mode === "cancel"
+          ? "cancel-wave"
+          : "stan-wave",
+
+      refId:
+        `social-wave:${mode}:${targetId}:${Math.floor(
+          now() /
+          21600000
+        )}`,
+
+      ts: now(),
+
+      actorId: "",
+
+      targetIds: [
+        targetId,
+      ],
+
+      visibility:
+        "public",
+
+      factLevel:
+        "observed",
+
+      importance:
+        mode === "cancel"
+          ? 78
+          : mode ===
+              "counter"
+            ? 70
+            : 58,
+
+      drama:
+        mode === "cancel"
+          ? 72
+          : mode ===
+              "counter"
+            ? 55
+            : 25,
+
+      romance: 0,
+      embarrassment:
+        mode === "cancel"
+          ? 25
+          : 0,
+
+      source:
+        "social-engine",
+
+      text:
+        mode === "cancel"
+          ? "A public backlash wave formed."
+          : mode === "counter"
+            ? "A counter-backlash formed around the target."
+            : "A visible support wave formed.",
+
+      tags:
+        mode === "cancel"
+          ? [
+              "social",
+              "social-wave",
+              "cancel",
+              "backlash",
+              "controversy",
+            ]
+          : mode === "counter"
+            ? [
+                "social",
+                "social-wave",
+                "counter",
+                "stan",
+                "support-wave",
+                "counter-backlash",
+                "controversy",
+              ]
+            : [
+                "social",
+                "social-wave",
+                "stan",
+                "support-wave",
+              ],
+
+      meta: {
+        mode,
+        followerDelta,
+
+        publicSentiment:
+          mode === "cancel"
+            ? {
+                dislike: 18,
+                controversy: 15,
+                cancel: 18,
+              }
+            : mode ===
+                "counter"
+              ? {
+                  support: 16,
+                  controversy: 10,
+                  stan: 14,
+                }
+              : {
+                  support: 14,
+                  stan: 16,
+                },
+
+        socialImpact: {
+          hype:
+            mode === "cancel"
+              ? 12
+              : mode ===
+                  "counter"
+                ? 9
+                : 6,
+
+          reputation:
+            reputationDelta,
+        },
+      },
+    }
+  );
+
+  refreshSocialStatsFor(
+    n,
+    targetId
+  );
+
+  if (
+    isHuman(
+      n,
+      targetId
+    )
+  ) {
+    const absFollowers =
+      Math.abs(
+        followerDelta
+      );
+
+    pushNote(
+      n,
+      targetId,
+      {
+        icon:
+          mode === "cancel"
+            ? "⚠"
+            : mode ===
+                "counter"
+              ? "🛡️"
+              : "★",
+
+        text:
+          mode === "cancel"
+            ? sysLangText(
+                n,
+                targetId,
+                `Backlash indult körülötted. ${absFollowers} követőt veszítettél.`,
+                `A backlash wave formed around you. You lost ${absFollowers} followers.`
+              )
+            : mode === "counter"
+              ? sysLangText(
+                  n,
+                  targetId,
+                  `A védőtáborod visszavágott. +${absFollowers} követő`,
+                  `Your supporters pushed back. +${absFollowers} followers`
+                )
+              : sysLangText(
+                  n,
+                  targetId,
+                  `Támogatói hullám indult körülötted. +${absFollowers} követő`,
+                  `A support wave formed around you. +${absFollowers} followers`
+                ),
+
+        link:
+          post
+            ? {
+                type: "post",
+                id: post.id,
+              }
+            : {
+                type: "char",
+                id: targetId,
+              },
+      }
+    );
+  }
+}
+
 function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
@@ -15834,7 +17183,44 @@ function planAutoAction(view) {
   }
 
   /*
-   * 4. AUTONÓM FOLLOW
+   * 4. STAN / CANCEL / COUNTER-BACKLASH HULLÁM
+   *
+   * Csak akkor indulhat, ha a már meglévő social aktivitás
+   * ténylegesen felépített hozzá elég support / backlash energiát.
+   */
+  if (
+    Math.random() < 0.14
+  ) {
+    const wave =
+      pickSocialWaveAction(
+        view
+      );
+
+    if (wave) {
+      return mkAction(
+        "social-wave",
+        `social-wave:${wave.mode}:${wave.targetId}:${Math.floor(
+          now() / 21600000
+        )}`,
+        {
+          targetId:
+            wave.targetId,
+
+          mode:
+            wave.mode,
+
+          postId:
+            wave.postId || "",
+
+          cast:
+            wave.cast,
+        }
+      );
+    }
+  }
+
+  /*
+   * 5. AUTONÓM FOLLOW
    *
    * Nem minden körben próbáljuk.
    * A karakterek csak akkor kerülnek jelöltként ide,
@@ -15877,7 +17263,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 5. AUTONÓM REPOST
+   * 6. AUTONÓM REPOST
    *
    * Az AI csak olyan posztot oszt újra,
    * amelyhez van társas oka kapcsolódni.
@@ -15911,7 +17297,7 @@ function planAutoAction(view) {
   const roll = Math.random();
 
   /*
-   * 6. AUTONÓM NOTE
+   * 7. AUTONÓM NOTE
    *
    * Ritkább, mint eddig.
    * Ne a note-ok zabálják fel
@@ -15998,7 +17384,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 7. LÉTEZŐ GROUP CHATEK
+   * 8. LÉTEZŐ GROUP CHATEK
    */
   const existingGroups = (
     view.groups || []
@@ -16051,7 +17437,7 @@ function planAutoAction(view) {
     !recentGroup;
 
   /*
-   * 8. GROUP CHAT
+   * 9. GROUP CHAT
    *
    * Kb. 8%.
    * A meglévő csoport előnyt élvez
@@ -16122,7 +17508,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 9. PRIVÁT ÜZENET
+   * 10. PRIVÁT ÜZENET
    *
    * Kb. 32%.
    *
@@ -16147,7 +17533,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 10. WORLD / FEED
+   * 11. WORLD / FEED
    *
    * A maradék körökben a világ magától
    * posztol és kommentel.
@@ -16583,6 +17969,67 @@ async function runSimulationAction(view, update, action) {
     });
 
     return "follow";
+  }
+
+  if (action.type === "social-wave") {
+    const payload =
+      action.payload || {};
+
+    const target =
+      socialProfileById(
+        view,
+        payload.targetId
+      );
+
+    if (!target) {
+      return null;
+    }
+
+    const cast =
+      Array.isArray(
+        payload.cast
+      )
+        ? payload.cast
+        : [];
+
+    if (!cast.length) {
+      return null;
+    }
+
+    const post =
+      payload.postId
+        ? (view.posts || []).find(
+            (p) =>
+              p &&
+              p.id ===
+                payload.postId
+          )
+        : strongestSocialPostFor(
+            view,
+            target.id
+          );
+
+    const out =
+      await genSocialWave(
+        view,
+        target,
+        post,
+        payload.mode ||
+          "stan",
+        cast
+      );
+
+    update((n) => {
+      n.autoAt = now();
+
+      applySocialWave(
+        n,
+        action,
+        out
+      );
+    });
+
+    return "social-wave";
   }
 
   if (action.type === "repost") {
