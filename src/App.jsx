@@ -2047,6 +2047,14 @@ function defaultCharacterMemory() {
     suspicions: [],
     rumors: [],
     learnedSecrets: [],
+
+    /*
+     * Hosszabb távú személyes emlékezet.
+     * Ezek a részletes listák mellett a visszatérő, fontos
+     * érzelmi/történeti kapaszkodókat őrzik.
+     */
+    emotionalAnchors: [],
+    personalMilestones: [],
   };
 }
 
@@ -3143,7 +3151,7 @@ function applyMemories(n, list) {
       source: (m && m.source) || "self_memory",
       confidence: Number.isFinite(Number(m && m.confidence)) ? Number(m.confidence) : 0.9,
       timestamp: (m && m.timestamp) || now(),
-    }], "fact", 32);
+    }], "fact", 80);
   });
 }
 
@@ -3157,12 +3165,23 @@ function rememberKnowledge(w, observerId, payload) {
     confidence: Number.isFinite(Number(payload.confidence)) ? Number(payload.confidence) : 0.75,
     timestamp: payload.timestamp || now(),
   };
-  if (kind === "event") mem.witnessedEvents = mergeKnowledgeItems(mem.witnessedEvents, [entry], "event", 32);
-  else if (kind === "rumor") mem.rumors = mergeKnowledgeItems(mem.rumors, [entry], "rumor", 32);
-  else if (kind === "assumption") mem.suspicions = mergeKnowledgeItems(mem.suspicions, [entry], "assumption", 32);
-  else if (kind === "secret") mem.learnedSecrets = mergeKnowledgeItems(mem.learnedSecrets, [entry], "secret", 32);
-  else if (kind === "conversation") mem.conversations = mergeKnowledgeItems(mem.conversations, [entry], "conversation", 32);
-  else mem.knownFacts = mergeKnowledgeItems(mem.knownFacts, [entry], "fact", 32);
+  if (kind === "event") {
+    mem.witnessedEvents = mergeKnowledgeItems(mem.witnessedEvents, [entry], "event", 80);
+  } else if (kind === "rumor") {
+    mem.rumors = mergeKnowledgeItems(mem.rumors, [entry], "rumor", 60);
+  } else if (kind === "assumption") {
+    mem.suspicions = mergeKnowledgeItems(mem.suspicions, [entry], "assumption", 50);
+  } else if (kind === "secret") {
+    mem.learnedSecrets = mergeKnowledgeItems(mem.learnedSecrets, [entry], "secret", 60);
+  } else if (kind === "conversation") {
+    mem.conversations = mergeKnowledgeItems(mem.conversations, [entry], "conversation", 100);
+  } else if (kind === "anchor") {
+    mem.emotionalAnchors = mergeKnowledgeItems(mem.emotionalAnchors, [entry], "anchor", 50);
+  } else if (kind === "milestone") {
+    mem.personalMilestones = mergeKnowledgeItems(mem.personalMilestones, [entry], "milestone", 50);
+  } else {
+    mem.knownFacts = mergeKnowledgeItems(mem.knownFacts, [entry], "fact", 80);
+  }
 }
 
 function rememberAboutTarget(w, observerId, targetId, payload) {
@@ -3176,11 +3195,11 @@ function rememberAboutTarget(w, observerId, targetId, payload) {
     confidence: Number.isFinite(Number(payload.confidence)) ? Number(payload.confidence) : 0.7,
     timestamp: payload.timestamp || now(),
   };
-  if (payload.kind === "assumption") known.assumptions = mergeKnowledgeItems(known.assumptions, [entry], "assumption", 16);
-  else if (payload.kind === "event") known.knownEvents = mergeKnowledgeItems(known.knownEvents, [entry], "event", 16);
-  else if (payload.kind === "relationship") known.knownRelationships = mergeKnowledgeItems(known.knownRelationships, [entry], "relationship", 16);
-  else if (payload.kind === "observed_trait") known.observedTraits = mergeKnowledgeItems(known.observedTraits, [entry], "trait", 16);
-  else known.learnedInformation = mergeKnowledgeItems(known.learnedInformation, [entry], "fact", 16);
+  if (payload.kind === "assumption") known.assumptions = mergeKnowledgeItems(known.assumptions, [entry], "assumption", 36);
+  else if (payload.kind === "event") known.knownEvents = mergeKnowledgeItems(known.knownEvents, [entry], "event", 48);
+  else if (payload.kind === "relationship") known.knownRelationships = mergeKnowledgeItems(known.knownRelationships, [entry], "relationship", 40);
+  else if (payload.kind === "observed_trait") known.observedTraits = mergeKnowledgeItems(known.observedTraits, [entry], "trait", 36);
+  else known.learnedInformation = mergeKnowledgeItems(known.learnedInformation, [entry], "fact", 48);
 }
 
 /* Album-szerkesztő: több kép feltöltése képaláírással. */
@@ -4122,22 +4141,53 @@ function knownLinesForObserver(w, observerId, targetId) {
   const row = observerMem.knownCharacters && observerMem.knownCharacters[targetId];
   if (!row) return "";
   const parts = [];
-  if ((row.observedTraits || []).length) parts.push(`megfigyelt jegyek: ${(row.observedTraits || []).slice(-3).map(memoryToLine).join(" | ")}`);
-  if ((row.learnedInformation || []).length) parts.push(`megszerzett infók: ${(row.learnedInformation || []).slice(-3).map(memoryToLine).join(" | ")}`);
-  if ((row.assumptions || []).length) parts.push(`feltételezések (nem biztos): ${(row.assumptions || []).slice(-2).map(memoryToLine).join(" | ")}`);
-  if ((row.knownEvents || []).length) parts.push(`ismert események: ${(row.knownEvents || []).slice(-2).map(memoryToLine).join(" | ")}`);
+  if ((row.observedTraits || []).length) parts.push(`megfigyelt jegyek: ${(row.observedTraits || []).slice(-5).map(memoryToLine).join(" | ")}`);
+  if ((row.learnedInformation || []).length) parts.push(`megszerzett infók: ${(row.learnedInformation || []).slice(-6).map(memoryToLine).join(" | ")}`);
+  if ((row.assumptions || []).length) parts.push(`feltételezések (nem biztos): ${(row.assumptions || []).slice(-4).map(memoryToLine).join(" | ")}`);
+  if ((row.knownEvents || []).length) parts.push(`ismert események: ${(row.knownEvents || []).slice(-6).map(memoryToLine).join(" | ")}`);
   return parts.length ? `\n  amit róla tudsz: ${parts.join(" ; ")}` : "";
 }
 
 function selfMemoryForPrompt(w, id) {
   const mem = ensureCharMemory(w, id);
   const bits = [];
-  if ((mem.knownFacts || []).length) bits.push(`tények: ${(mem.knownFacts || []).slice(-5).map(memoryToLine).join(" | ")}`);
-  if ((mem.witnessedEvents || []).length) bits.push(`szemtanú események: ${(mem.witnessedEvents || []).slice(-4).map(memoryToLine).join(" | ")}`);
-  if ((mem.rumors || []).length) bits.push(`pletykák: ${(mem.rumors || []).slice(-3).map(memoryToLine).join(" | ")}`);
-  if ((mem.suspicions || []).length) bits.push(`feltételezések: ${(mem.suspicions || []).slice(-3).map(memoryToLine).join(" | ")}`);
-  if ((mem.learnedSecrets || []).length) bits.push(`megtanult titkok: ${(mem.learnedSecrets || []).slice(-2).map(memoryToLine).join(" | ")}`);
-  return bits.join(" ; ") || "semmi különös";
+
+  if ((mem.personalMilestones || []).length) {
+    bits.push(`fontos mérföldkövek: ${(mem.personalMilestones || []).slice(-6).map(memoryToLine).join(" | ")}`);
+  }
+  if ((mem.emotionalAnchors || []).length) {
+    bits.push(`érzelmi kapaszkodók: ${(mem.emotionalAnchors || []).slice(-6).map(memoryToLine).join(" | ")}`);
+  }
+  if ((mem.knownFacts || []).length) {
+    bits.push(`tények: ${(mem.knownFacts || []).slice(-10).map(memoryToLine).join(" | ")}`);
+  }
+  if ((mem.witnessedEvents || []).length) {
+    bits.push(`szemtanú események: ${(mem.witnessedEvents || []).slice(-10).map(memoryToLine).join(" | ")}`);
+  }
+  if ((mem.conversations || []).length) {
+    bits.push(`korábbi beszélgetésekből fontos: ${(mem.conversations || []).slice(-10).map(memoryToLine).join(" | ")}`);
+  }
+  if ((mem.rumors || []).length) {
+    bits.push(`pletykák: ${(mem.rumors || []).slice(-6).map(memoryToLine).join(" | ")}`);
+  }
+  if ((mem.suspicions || []).length) {
+    bits.push(`feltételezések: ${(mem.suspicions || []).slice(-5).map(memoryToLine).join(" | ")}`);
+  }
+  if ((mem.learnedSecrets || []).length) {
+    bits.push(`megtanult titkok: ${(mem.learnedSecrets || []).slice(-6).map(memoryToLine).join(" | ")}`);
+  }
+
+  return bits.join("\n") || "semmi különös";
+}
+
+function characterMemoryCard(w, c) {
+  if (!w || !c || !c.id) return "";
+  const memory = selfMemoryForPrompt(w, c.id);
+  if (!memory || memory === "semmi különös") return "";
+  return `
+--- ${String(c.name || c.id).toUpperCase()} SAJÁT EMLÉKEZETE ---
+${memory}
+--- eddig az emlékezet ---`;
 }
 
 /* A hang közvetlenül a feladat elé — így nem sikkad el a sok szöveg végén. */
@@ -4239,33 +4289,63 @@ function recentLines(w, id) {
   return out.slice(0, 3);
 }
 
-function recentUtterancesFor(w, id, limit = 4) {
-  const out = [];
-  (w.posts || []).slice(0, 16).forEach((p) => {
-    if (p.authorId === id && p.text) out.push(cut(p.text, 120));
-    (p.comments || []).forEach((c) => {
-      if (c.authorId === id && c.text) out.push(cut(c.text, 120));
+function recentUtterancesFor(w, id, limit = 24) {
+  const rows = [];
+
+  const add = (value, ts = 0) => {
+    const cleanValue = String(value || "").replace(/\s+/g, " ").trim();
+    if (!cleanValue) return;
+    rows.push({
+      text: cut(cleanValue, 420),
+      ts: Number(ts) || 0,
+    });
+  };
+
+  (w.posts || []).slice(0, 40).forEach((p) => {
+    if (p && p.authorId === id && p.text) add(p.text, p.ts);
+    (p && p.comments || []).forEach((c) => {
+      if (c && c.authorId === id && c.text) add(c.text, c.ts || p.ts);
     });
   });
+
   Object.keys(w.chats || {}).forEach((k) => {
-    const rows = w.chats[k] || [];
-    rows.forEach((m) => {
-      if (m && m.from === "them") {
-        const otherId = k.split("|")[1];
-        if (otherId === id && m.text) out.push(cut(m.text, 120));
-      }
+    const otherId = String(k).split("|")[1];
+    if (otherId !== id) return;
+    (w.chats[k] || []).forEach((m) => {
+      if (m && m.from === "them" && m.text) add(m.text, m.ts);
     });
   });
+
   (w.groups || []).forEach((g) => {
-    (g.msgs || []).forEach((m) => { if (m && m.from === id && m.text) out.push(cut(m.text, 120)); });
+    (g.msgs || []).forEach((m) => {
+      if (m && m.from === id && m.text) add(m.text, m.ts);
+    });
   });
+
   (w.scenes || []).forEach((s) => {
-    (s.turns || []).forEach((t) => { if (t && t.authorId === id && t.text) out.push(cut(t.text, 120)); });
+    (s.turns || []).forEach((t) => {
+      if (t && t.authorId === id && t.text) add(t.text, t.ts);
+    });
   });
+
   (w.notes || []).forEach((n) => {
-    if (n && n.authorId === id && n.text) out.push(cut(n.text, 120));
+    if (n && n.authorId === id && n.text) add(n.text, n.ts);
   });
-  return out.slice(-limit);
+
+  rows.sort((a, b) => b.ts - a.ts);
+
+  const unique = [];
+  const seen = new Set();
+
+  for (const row of rows) {
+    const sig = normUtterance(row.text);
+    if (!sig || seen.has(sig)) continue;
+    seen.add(sig);
+    unique.push(row.text);
+    if (unique.length >= Math.max(1, Number(limit) || 24)) break;
+  }
+
+  return unique;
 }
 
 function emojiGraphemes(v) {
@@ -4578,7 +4658,7 @@ function repetitionGuard(w, ids, label) {
   const scopedLabel = lang === "en" ? (labelMap[label] || label || "") : (label || "");
   const rows = (ids || []).map((id) => {
     const c = charById(w, id);
-    const lines = recentUtterancesFor(w, id, 8);
+    const lines = recentUtterancesFor(w, id, 20);
     if (!c || !lines.length) return "";
     return `${c.name}: ${lines.join(" | ")}`;
   }).filter(Boolean);
@@ -4613,8 +4693,8 @@ ${emojiWarning}`;
 }
 
 const REP_WORD_MIN = 3;
-const REP_JACCARD_LIMIT = 0.68;
-const REP_PREFIX_LEN = 34;
+const REP_JACCARD_LIMIT = 0.52;
+const REP_PREFIX_LEN = 26;
 
 function normUtterance(v) {
   return String(v || "")
@@ -4642,16 +4722,30 @@ function jaccard(a, b) {
 
 function isRepetitiveUtterance(w, id, text) {
   const base = normUtterance(text);
-  if (!base || base.length < 18) return false;
+  if (!base || base.length < 12) return false;
+
   const first = base.slice(0, REP_PREFIX_LEN);
   const mine = wordSet(base);
-  const prev = recentUtterancesFor(w, id, 10);
+  const mineWords = base.split(" ").filter(Boolean);
+  const prev = recentUtterancesFor(w, id, 32);
+
   for (let i = 0; i < prev.length; i++) {
     const old = normUtterance(prev[i]);
     if (!old) continue;
-    if (old.slice(0, REP_PREFIX_LEN) === first) return true;
+
+    if (old === base) return true;
+    if (base.length >= REP_PREFIX_LEN && old.slice(0, REP_PREFIX_LEN) === first) return true;
     if (jaccard(mine, wordSet(old)) >= REP_JACCARD_LIMIT) return true;
+
+    /* Ugyanaz a jellegzetes 4-szavas formula se csússzon át. */
+    if (mineWords.length >= 4) {
+      for (let j = 0; j <= mineWords.length - 4; j++) {
+        const phrase = mineWords.slice(j, j + 4).join(" ");
+        if (phrase.length >= 18 && old.includes(phrase)) return true;
+      }
+    }
   }
+
   return false;
 }
 
@@ -5882,6 +5976,19 @@ Minden szereplőt a saját adatlapja alapján játszol el. Az adatlap nem hátt�
 
 FŐ SZABÁLY: minden válasz legyen karakterhű, természetes, emberi és az adott helyzethez illő. A karakter személyisége, története, aktuális érzései és kapcsolatai határozzák meg, MIT mond — de a felület határozza meg, HOGYAN és milyen hosszan mondja.
 
+KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
+- A karakterlap TELJES tartalma viselkedési specifikáció, nem háttérdísz.
+- Minden generálás előtt egyeztesd a választ a személyiséggel, tulajdonságokkal, beszédstílussal, teljes történettel, titkokkal, félelmekkel, célokkal, kedvencekkel, képességekkel, szervezettel, ranggal, kapcsolatokkal és aktuális emlékekkel.
+- Ha egy mondatot több szereplő is ugyanúgy mondhatna, az NEM elég karakterhű: írd újra úgy, hogy felismerhető legyen, ki mondta.
+- A karakter hibái, sötét oldala, makacssága, humora, intelligenciája, agressziója, félelmei, dominanciája, manipulativitása, lojalitása vagy érzelmi zártsága ne kopjon ki idővel.
+- A korábbi történésekből tanuljon, emlékezzen arra, amit személyesen átélt vagy megtudott, és ez ténylegesen változtassa a későbbi döntéseit.
+- A példamondatokat SOHA ne másold. A hangot tanuld meg, a konkrét megfogalmazás mindig új legyen.
+
+UNIVERZÁLIS ISMÉTLÉSTILALOM:
+- Ugyanaz a karakter semmilyen felületen ne ismételje vagy közeli parafrázisban újrahasználja a korábbi saját posztját, kommentjét, DM-jét, group chat sorát, Note-ját vagy roleplay-mondatát/cselekvését.
+- Ne térjen vissza gépiesen ugyanahhoz a mondatkezdéshez, becenévhez, sértéshez, flörtformulához, fenyegetéshez, metaforához, poénhoz vagy emoji-kombinációhoz.
+- A hang lehet következetes; a konkrét szöveg viszont mindig legyen friss.
+
 KARAKTERKÁNON — NEM OPCIONÁLIS
 - A karakter SAJÁT adatlapján szereplő minden információ aktív kánon: személyiség, tulajdonságok, teljes háttértörténet, titkok, félelmek, célok, kedvencek, beszédstílus, példamondatok mint stílusminta, képességek, harci tudás, rang, szerep, szervezet, affiliation és egyéb információ.
 - Ne csak 2-3 feltűnő tulajdonságot emelj ki. A teljes személyiséget és történetet egyetlen koherens emberként add vissza.
@@ -6775,6 +6882,15 @@ function contentOf(w) {
    */
   delete copy.rev;
   delete copy.syncRev;
+
+  /*
+   * A backend minden sikeres mentésnél technikailag frissíti universe.at-et.
+   * Ez nem játékbeli tartalom, ezért nem okozhat hamis device-conflictet.
+   */
+  if (copy.universe && typeof copy.universe === "object") {
+    copy.universe = { ...copy.universe };
+    delete copy.universe.at;
+  }
 
   return JSON.stringify(copy);
 }
@@ -12205,16 +12321,14 @@ ${th.text}`
 }
 
 ${cast
-  .slice(0, 3)
-  .map(
-    (c) =>
-      publicVoiceCard(
-        w,
-        c,
-        null
-      )
-  )
+  .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
   .join("")}
+
+KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
+- Minden kommentelő teljes karakterlapját és saját emlékeit használd, nem csak a nyilvános bioját.
+- A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
+- A korábbi emlékei és a poszt szerzőjével való konkrét kapcsolata ténylegesen módosítsa a reakcióját.
+- Ha ugyanaz a komment több karakter szájából is hiteles lenne, nem elég specifikus: írd újra.
 
 KÖZVETLEN KAPCSOLATI DINAMIKA A POSZT SZERZŐJÉHEZ:
 ${cast
@@ -12237,7 +12351,7 @@ ${repetitionGuard(
 
 KOMMENT SZABÁLYOK:
 
-- Adj általában 4-8 új kommentet. Ha a poszt kevés embert érint, lehet kevesebb; ha felkapott/drámai és sok releváns karakter van, legyen több különböző reakció.
+- Adj általában 5-9 új kommentet. Ha a poszt kevés embert érint, lehet kevesebb; ha felkapott/drámai és sok releváns karakter van, legyen több különböző reakció.
 - Csak olyan szereplő kommenteljen, akinek természetes oka van rá.
 - Ezek VALÓDI közösségi médiás kommentek, nem roleplay-jelenetek és nem mini novellák.
 - Úgy írjanak, mintha telefonról, gyorsan reagálnának egy Instagram/TikTok/X jellegű posztra.
@@ -12303,7 +12417,7 @@ KAPCSOLAT + TÖRTÉNET KÖTELEZŐEN HAT A KOMMENTRE:
 
 FONTOS VÁLTOZATOSSÁG:
 
-- Egy 4-8 kommentes csomagban ne legyen minden reakció ugyanolyan hosszú.
+- Egy 5-9 kommentes csomagban ne legyen minden reakció ugyanolyan hosszú.
 - Ha természetes, legyen legalább egy nagyon rövid komment a csomagban.
 - Ne legyen mindenki vicces.
 - Ne legyen mindenki támogató.
@@ -12315,7 +12429,7 @@ FONTOS VÁLTOZATOSSÁG:
 EMOJI:
 
 - Az emoji-használat legyen LÁTHATÓAN jelen a közösségi médiában, de maradjon karakterfüggő.
-- Ha a kiválasztott kommentelők között van olyan karakter, aki természetesen használ emojit, egy 4-8 kommentes csomagban legalább 2-3 komment tartalmazzon emojit.
+- Ha a kiválasztott kommentelők között van olyan karakter, aki természetesen használ emojit, egy 5-9 kommentes csomagban legalább 2-3 komment tartalmazzon emojit.
 - Az emoji ne mindig a mondat legvégén legyen.
 - Lehet az emoji önálló reakció vagy a szöveg része.
 - Általában 1-2 emoji elég.
@@ -12918,16 +13032,13 @@ MOST KIFEJEZETTEN ERRE A KOMMENTRE VÁLASZOLNAK:
 ${target ? target.name : "?"}: "${comment.text}"
 
 ${cast
-  .slice(0, 3)
-  .map(
-    (c) =>
-      publicVoiceCard(
-        w,
-        c,
-        null
-      )
-  )
+  .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
   .join("")}
+
+KOMMENTVÁLASZ-KARAKTERHŰSÉG:
+- A válaszoló teljes karakterlapja és saját emlékezete aktív.
+- A reply legyen felismerhetően az adott karakteré, ne generikus social reakció.
+- A korábbi saját kommentjeinek/DM-jeinek/posztjainak fordulatait se használja újra.
 
 KÖZVETLEN KAPCSOLATI DINAMIKA A KOMMENT SZERZŐJÉHEZ:
 ${cast
@@ -13218,16 +13329,14 @@ ${(w.log || [])
   .join("\n") || "-"}
 
 ${cast
-  .slice(0, 5)
-  .map(
-    (c) =>
-      publicVoiceCard(
-        w,
-        c,
-        null
-      )
-  )
+  .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
   .join("")}
+
+KARAKTERHŰ POSZTOLÁS:
+- Minden kiválasztott karakter teljes saját kánonja és saját emlékezete aktív.
+- A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa és az is, hogy egyáltalán posztolna-e valamiről, a karakterlapjából következzen.
+- Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
+- A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
 
 ${repetitionGuard(
   w,
@@ -16354,7 +16463,14 @@ ${log || "a jelenet most kezdődik"}
 
 ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` : "A játékos most nem lép közbe; a szereplők maguktól viszik tovább a jelenetet."}
 
-${cast.slice(0, 3).map(voiceCard).join("")}
+${cast.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
+
+MINDEN JELENLÉVŐ KARAKTERNÉL KÖTELEZŐ:
+- A teljes saját karakterlapja ÉS saját emlékezete irányítsa a viselkedését.
+- Ne csak a personality első néhány jelzőjét használd.
+- A saját múltjából származó személyekre, traumákra, lojalitásokra, célokra, titkokra és félelmekre következetesen emlékezzen.
+- Ugyanazt a roleplay-sort, mozdulatot, fenyegetést, reakciót vagy közeli parafrázist ne használd újra.
+
 ${repetitionGuard(w, cast.map((c) => c.id), "jelenetfolytatás")}
 
 ${matureContentInstruction(
@@ -16396,9 +16512,17 @@ Formátum:
         const isNarr = String(raw || "").trim().toLowerCase() === "narrator";
         const resolvedId = isNarr ? "narrator" : (findChar(w, raw) || findChar(w, t && t.name));
         const allowed = isNarr || (resolvedId && !isHuman(w, resolvedId));
-        return { authorId: allowed ? resolvedId : null,
-                 kind: t && t.kind === "action" ? "action" : "speech",
-                 text: t && t.text ? String(t.text) : "" };
+
+        const rawText = t && t.text ? String(t.text) : "";
+        const freshText = isNarr
+          ? rawText
+          : (resolvedId ? cleanGeneratedUtterance(w, resolvedId, rawText, 2600) : "");
+
+        return {
+          authorId: allowed ? resolvedId : null,
+          kind: t && t.kind === "action" ? "action" : "speech",
+          text: freshText,
+        };
       }).filter((t) => t.authorId && t.text);
 
       if (!resolved.length) throw new Error(tt("Nem érkezett használható válasz.", "No usable reply arrived."));
@@ -16484,8 +16608,14 @@ Formátum:
                 factLevel:
                   "observed",
 
-                importance: 48,
-                drama: 26,
+                importance:
+                  eventRecapEligible
+                    ? 68
+                    : 48,
+                drama:
+                  eventRecapEligible
+                    ? 38
+                    : 26,
                 romance: 0,
                 embarrassment: 0,
 
@@ -16502,6 +16632,12 @@ Formátum:
                   gossipEligible
                     ? "gossip-eligible"
                     : "private-scene",
+                  eventRecapEligible
+                    ? "event-recap"
+                    : "scene-moment",
+                  eventRecapEligible
+                    ? "party-drama"
+                    : "roleplay-moment",
                 ],
 
                 meta: {
@@ -16532,6 +16668,27 @@ Formátum:
                 },
               }
             );
+
+            /* Minden AI-tanú automatikusan megjegyzi a tényleges RP-eseményt. */
+            aiWitnessIds.forEach((observerId) => {
+              rememberKnowledge(n, observerId, {
+                kind: "event",
+                source: "roleplay_witness",
+                confidence: 1,
+                text: eventText,
+              });
+
+              participantIds.forEach((targetId) => {
+                if (targetId && targetId !== observerId) {
+                  rememberAboutTarget(n, observerId, targetId, {
+                    kind: "event",
+                    source: "roleplay_witness",
+                    confidence: 1,
+                    text: eventText,
+                  });
+                }
+              });
+            });
           }
         );
 
@@ -16938,6 +17095,9 @@ ${
 "${mine}"`
     : "Senki nem szólt hozzá kívülről; a tagok maguktól folytatják a beszélgetést."
 }
+
+TAGOK TELJES KARAKTERKÁNONJA ÉS EMLÉKEZETE:
+${members.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
 
 ${repetitionGuard(
   w,
@@ -20175,6 +20335,7 @@ TE MOST ${String(
     ).toUpperCase()} VAGY.
 
 ${voiceCard(bot)}
+${characterMemoryCard(w, bot)}
 
 ${repetitionGuard(
   w,
@@ -20338,6 +20499,9 @@ ${cast
 
 MÁR REAGÁLTAK ERRE A NOTE-RA:
 ${alreadyReactedNames || "senki"}
+
+REAGÁLÓ KARAKTEREK TELJES KÁNONJA ÉS EMLÉKEZETE:
+${cast.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
 
 EMOJI-REAKCIÓ:
 
@@ -21441,9 +21605,11 @@ function gossipArticleLengthInstruction(
 ) {
   if (candidate && candidate.eventRecap) {
     return `
-HOSSZ / EVENT RECAP:
+HOSSZ / EVENT RECAP — SZAFTOS LONG READ:
 - Ez egy teljes party/event recap.
-- Írj hosszabb, több bekezdéses social gossip összefoglalót.
+- CÉLOZZ legalább 1200-2600 karakterre, ha az event-adatok ezt valódi tartalommal megtöltik.
+- Nyugodtan legyen 1000+ karakter: ez hosszú gossip-poszt / mini tabloid recap.
+- Írj több jól olvasható bekezdést, időrenddel, fokozással és side-eye hanggal.
 - Az egész esemény hangulatát és több összefüggő történést fűzz össze.
 - Az összes ATTENDEE-t említsd meg legalább egyszer.
 - Ha valakiről nincs külön cselekvés az eventekben, róla CSAK azt mondhatod, hogy jelen volt / feltűnt az eseményen.
@@ -21497,9 +21663,13 @@ HOSSZ:
     score >= 100
   ) {
     return `
-HOSSZ:
-- Ez nagyobb sztori: lehet hosszabb, több bekezdéses poszt.
-- Több emberről és több összefüggő történésről is írhat.
+HOSSZ — NAGY SZAFTOS SZTORI:
+- CÉLOZZ 1200-2600 karakterre, ha van hozzá elég tényszerű eseményanyag.
+- 1000+ karakter teljesen kívánatos.
+- Legyen 4-8 jól olvasható bekezdés, tabloid ritmussal.
+- Több emberről és több összefüggő történésről is írj.
+- Emeld ki az időzítést, társas feszültséget, kínos részleteket és következményeket.
+- Legyen szaftos és csípős, de SOHA ne találj ki új tényt.
 - Maradjon social-media/tabloid hangú, ne akadémiai cikk.
 `;
   }
@@ -21510,8 +21680,11 @@ HOSSZ:
   ) {
     return `
 HOSSZ:
-- Közepes vagy hosszabb gossip post.
-- Ha több esemény tartozik össze, egyetlen koherens történetté fűzd őket.
+- Közepes vagy hosszú gossip post.
+- CÉLOZZ kb. 900-1800 karakterre, ha a rendelkezésre álló tények indokolják.
+- 1000+ karakter teljesen rendben van.
+- Ha több esemény tartozik össze, egyetlen koherens, szaftosan megírt történetté fűzd őket.
+- Ne csak azt írd le, MI történt: a sorrend, a társas feszültség és a kínos/érdekes kontrasztok adják a gossip-hangot.
 `;
   }
 
@@ -21793,6 +21966,10 @@ SZIGORÚ TARTALMI SZABÁLYOK:
 - Nem kell minden felsorolt embert megemlíteni.
 - A poszt lehet többemberes és hosszú, HA a történet indokolja.
 - Ne írj semleges eseménynaplót. Meséld el social gossip postként.
+- A szöveg legyen SZAFTOS: jó felütés, fokozás, side-eye, társas dinamika és erős lezárás, de új tényt ettől még nem találhatsz ki.
+- Egyetlen gossip-poszt nyugodtan lehet 1000, 1500 vagy akár 2000+ karakter, ha az eseményanyag ezt indokolja.
+- Ha több ember érintett, ne csak felsorold őket: fűzd össze, hogyan kapcsolódnak ugyanahhoz a történéshez.
+- A hosszabb poszt se ismételje saját korábbi headline-jait, felütéseit, fordulatait vagy lezárásait.
 - Ne használd minden alkalommal ugyanazokat a formulákat ("we need to talk about", "sources say", "the internet is losing it").
 - A headline ne legyen teljes mondatos összefoglalás minden alkalommal.
 - Markdown headinget (#) ne használj.
@@ -21813,7 +21990,7 @@ VÁLASZ CSAK JSON:
   "mentionedIds": ["csak a ténylegesen említett karakter ID-k"]
 }${TAIL}`,
     {
-      maxTokens: 1600,
+      maxTokens: 2600,
     }
   );
 }
@@ -21965,6 +22142,36 @@ function publishGossipMediaStory(
     );
 
   if (!out) {
+    return null;
+  }
+
+  /*
+   * HARD GOSSIP REPETITION FILTER:
+   * a médiafiók se használhat újra közeli parafrázist ugyanabból
+   * a felütésből/cikkritmusból. Ha túl hasonló, ezt a generálást
+   * eldobjuk; az event nincs used-nak jelölve, tehát később friss
+   * megfogalmazással újrapróbálható.
+   */
+  if (isRepetitiveUtterance(w, media.id, out.text)) {
+    return null;
+  }
+
+  const recentHeadlines = (w.posts || [])
+    .filter((p) => p && p.authorId === media.id && p.gossipStory && p.gossipStory.headline)
+    .slice(0, 12)
+    .map((p) => normUtterance(p.gossipStory.headline));
+
+  const nextHeadline = normUtterance(out.headline || "");
+  if (
+    nextHeadline &&
+    recentHeadlines.some((oldHeadline) =>
+      oldHeadline &&
+      (
+        oldHeadline === nextHeadline ||
+        jaccard(wordSet(oldHeadline), wordSet(nextHeadline)) >= 0.58
+      )
+    )
+  ) {
     return null;
   }
 
@@ -22662,6 +22869,11 @@ ${currentComments||"-"}
 REAKCIÓRA JELÖLT KARAKTEREK ÉS A SAJÁT TUDÁSUK:
 ${gossipReactionKnowledgeContext(w,post,cast)}
 
+A REAGÁLÓ KARAKTEREK TELJES SAJÁT KÁNONJA ÉS EMLÉKEZETE:
+${cast.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
+
+${repetitionGuard(w, castIds, "gossip reakciók")}
+
 ENGEDÉLYEZETT FOLLOW/UNFOLLOW CÉLPONTOK:
 ${allowedTargets.join(", ")}
 
@@ -22762,6 +22974,7 @@ function publishRumorEvolution(w,parentPostId,raw){
   const media=activeGossipMediaAccount(w);if(!media||media.id!==parent.authorId)return null;
   const body=String(raw.text||"").replace(/\n{3,}/g,"\n\n").trim();
   if(!body){parent.gossipStory.rumorEvolvedAt=now();return null;}
+  if(isRepetitiveUtterance(w,media.id,body))return null;
   const allowed=new Set(parent.gossipStory.mentionedIds||[]);
   const mentionedIds=[...new Set((Array.isArray(raw.mentionedIds)?raw.mentionedIds:[]).map(String).filter((id)=>allowed.has(id)))];
   const distortionLevel=Math.max(0,Math.min(100,Math.round(Number(raw.distortionLevel)||30)));
@@ -22782,14 +22995,76 @@ function publishRumorEvolution(w,parentPostId,raw){
 function pendingPopupEvent(w){return (w.popupEvents||[]).find((e)=>e&&!e.resolved)||null;}
 function currentPopupEvent(w){const e=pendingPopupEvent(w);if(!e)return null;const s=Number(e.snoozedAt)||0;return s&&now()-s<2*3600e3?null:e;}
 function pickPopupEventSeed(w){
-  if(!w||!w.meId||pendingPopupEvent(w))return null;
-  const used=new Set((w.popupEvents||[]).flatMap((e)=>Array.isArray(e.sourceEventIds)?e.sourceEventIds:[]));
-  const cutoff=now()-36*3600e3;
-  return (w.socialEvents||[]).filter((e)=>{
-    if(!e||Number(e.ts)<cutoff||used.has(e.id))return false;
-    const involves=e.actorId===w.meId||(e.targetIds||[]).includes(w.meId);if(!involves)return false;
-    return ["gossip-story","viral","cancel-wave","stan-wave","rumor-evolution"].includes(e.type);
-  }).sort((a,b)=>(Number(b.importance)||0)-(Number(a.importance)||0))[0]||null;
+  if(!w || !w.meId || pendingPopupEvent(w)) return null;
+
+  const used = new Set(
+    (w.popupEvents || []).flatMap(
+      (e) => Array.isArray(e.sourceEventIds) ? e.sourceEventIds : []
+    )
+  );
+
+  const cutoff = now() - 48 * 3600e3;
+
+  const rows = (w.socialEvents || [])
+    .filter((e) => {
+      if(!e || Number(e.ts) < cutoff || used.has(e.id)) return false;
+
+      /* Privát DM soha nem lehet news/popup seed. */
+      if(
+        e.visibility === "private" ||
+        e.source === "dm" ||
+        (
+          Array.isArray(e.tags) &&
+          (e.tags.includes("dm") || e.tags.includes("private-dm"))
+        )
+      ){
+        return false;
+      }
+
+      const involves =
+        e.actorId === w.meId ||
+        (e.targetIds || []).includes(w.meId);
+
+      if(!involves) return false;
+
+      const roleplayPublicEnough =
+        (e.type === "roleplay-event" || e.type === "roleplay-summary") &&
+        roleplayGossipEligible(e);
+
+      const allowedType = [
+        "gossip-story",
+        "viral",
+        "cancel-wave",
+        "stan-wave",
+        "rumor-evolution",
+        "post",
+        "comment",
+        "reply",
+        "roleplay-event",
+        "roleplay-summary",
+      ].includes(e.type);
+
+      const newsScore =
+        (Number(e.importance) || 0) +
+        (Number(e.drama) || 0) +
+        (Number(e.romance) || 0) +
+        (Number(e.embarrassment) || 0);
+
+      return roleplayPublicEnough || (allowedType && newsScore >= 38);
+    })
+    .map((event) => ({
+      event,
+      score:
+        (Number(event.importance) || 0) * 1.2 +
+        (Number(event.drama) || 0) +
+        (Number(event.romance) || 0) * 0.8 +
+        (Number(event.embarrassment) || 0) * 0.8 +
+        (roleplayGossipEligible(event) ? 24 : 0) +
+        Math.random() * 14,
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  return (rows[0] && rows[0].event) || null;
 }
 function popupToneImpact(tone){
   const map={ignore:{aura:1,reputation:0,hype:-4,humor:0,followerRate:-0.0004},clarify:{aura:1,reputation:4,hype:2,humor:0,followerRate:0.0005},defend:{aura:3,reputation:1,hype:6,humor:0,followerRate:0.0008},joke:{aura:3,reputation:1,hype:5,humor:5,followerRate:0.001},apologize:{aura:-1,reputation:6,hype:-2,humor:0,followerRate:0.0002},doubleDown:{aura:4,reputation:-3,hype:9,humor:0,followerRate:0.0012},private:{aura:0,reputation:1,hype:-3,humor:0,followerRate:0},noComment:{aura:0,reputation:0,hype:-2,humor:0,followerRate:-0.0002}};
@@ -23143,8 +23418,9 @@ ${relationshipBehaviorCard(
   requestWorld.meId
 )}
 
-BESZÉDSTÍLUS:
+BESZÉDSTÍLUS / TELJES KÁNON:
 ${voiceCard(c)}
+${characterMemoryCard(requestWorld, c)}
 
 FRISS CHAT:
 ${history}
@@ -26416,7 +26692,7 @@ LEGUTÓBBI VILÁGESEMÉNYEK:
 ${(w.log || []).slice(0, 8).join("\n") || "nincs"}
 
 ${cast
-  .map((c) => publicVoiceCard(w, c, null))
+  .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
   .join("")}
 
 ${repetitionGuard(
@@ -26675,7 +26951,8 @@ ${cast
   .map(
     (c) =>
       `${c.name} [${c.id}]
-${voiceCard(c)}`
+${voiceCard(c)}
+${characterMemoryCard(w, c)}`
   )
   .join("\n\n")}
 
@@ -27439,7 +27716,7 @@ function planAutoAction(view) {
 
   if (
     needBrief &&
-    Math.random() < 0.12
+    Math.random() < 0.22
   ) {
     return mkAction(
       "brief",
@@ -27510,7 +27787,7 @@ function planAutoAction(view) {
   /*
    * 7. VÁRATLAN POPUP EVENT
    */
-  if (Math.random() < 0.12) {
+  if (Math.random() < 0.26) {
     const popupSeed = pickPopupEventSeed(view);
     if (popupSeed) {
       return mkAction(
@@ -27992,7 +28269,7 @@ LEGUTÓBBI VILÁGESEMÉNYEK:
 ${(w.log || []).slice(0, 8).join("\n") || "nincs"}
 
 ${members
-  .map((c) => publicVoiceCard(w, c, null))
+  .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
   .join("")}
 
 ${repetitionGuard(
