@@ -7315,6 +7315,20 @@ function Rooms({ w, onOpen, onCreate, onClose, setErr, onSignOut, onNeedLogin })
   onNeedLogin(r.code);
 };
 
+  const remove = async (r) => {
+    if (!r || !r.code) return;
+
+    setBusy(r.code);
+
+    try {
+      await forgetRoom(r.code);
+      setConfirm(null);
+      await refresh();
+    } finally {
+      setBusy("");
+    }
+  };
+
   return (
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="sheet">
@@ -13090,9 +13104,9 @@ KARAKTERHŰ CHATSTÍLUS:
 
 EMOJI:
 
-- Az emoji-használat legyen valódi része ${c.name} privát chatstílusának, ne csak elméleti lehetőség.
-- A személyiséged, beszédstílusod, korod, online szokásaid és aktuális hangulatod alapján döntsd el, mennyire használsz emojit.
-- Ha ${c.name} természetesen használna emojikat, AKKOR ténylegesen jelenjenek is meg időről időre a válaszaiban.
+- Az emoji-használat legyen valódi része minden megszólaló karakter saját group chat stílusának, ne csak elméleti lehetőség.
+- Minden karakter a SAJÁT személyisége, beszédstílusa, kora, online szokásai és aktuális hangulata alapján döntse el, mennyire használ emojit.
+- Ha egy adott karakter természetesen használna emojikat, AKKOR ténylegesen jelenjenek is meg időről időre a saját válaszaiban.
 - Ha az előző néhány üzenetedben nem használtál emojit, és a karaktered nem kifejezetten emoji-kerülő, most különösen fontold meg 1 megfelelő emoji használatát.
 - Ne legyen az az alapértelmezett döntés, hogy mindig 0 emoji.
 - Általában 0-2 emoji legyen egy üzenetben.
@@ -13303,11 +13317,11 @@ Formátum:
             </div>
           );
         })}
-        {busy && (
+        {busy && members[0] && (
   <div className="typing-row">
     <Av
-      src={c.avatar}
-      name={c.name}
+      src={members[0].avatar}
+      name={members[0].name}
       size={26}
       radius={99}
     />
