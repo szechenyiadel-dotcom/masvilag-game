@@ -1281,154 +1281,52 @@ app.post("/auth/migrate", async (req, res) => {
       account.salt = globalProfile.salt;
       account.hash = globalProfile.hash;
     }
-          client = null;
+        /* Server owns this value; never trust the imported/local value. */
+    world.syncRev = 1;
 
-      return res.status(404).json({
-        error: "World not found.",
-      });
+    if (world.universe) {
+      world.universe.at =
+        Date.now();
     }
 
-    const world =
-      result.rows[0].data;
-
-    world.syncRev =
-      worldSyncRevServer(world);
-
-    const found =
-      findAccountByUsername(
-        world,
-        username
-      );
-
-    if (!found) {
-      await client.query(
-        "ROLLBACK"
-      );
-
-      client.release();
-      client = null;
-
-      return res.status(401).json({
-        error:
-          "Wrong username or password.",
-      });
-    }
-
-    const accountId =
-      found.id;
-
-    const account =
-      found.account;
-
-    if (!account.hash) {
-      account.salt =
-        crypto
-          .randomBytes(18)
-          .toString("hex");
-
-      account.hash =
-        passwordHash(
-          password,
-          account.salt
-        );
-
-      world.rev =
-        Number(
-          world.rev || 0
-        ) + 1;
-
-      world.syncRev =
-        worldSyncRevServer(
-          world
-        ) + 1;
-
-      if (world.universe) {
-        world.universe.at =
-          Date.now();
-      }
-
-      await client.query(
+    try {
+      await pool.query(
         `
-        UPDATE worlds
-        SET data = $2::jsonb,
-            updated_at = NOW()
-        WHERE code = $1
+        INSERT INTO worlds (
+          code,
+          data,
+          updated_at
+        )
+        VALUES ($1, $2::jsonb, NOW())
         `,
         [
           code,
           JSON.stringify(world),
         ]
       );
-    } else if (
-      !verifyPassword(
-        password,
-        account
-      )
-    ) {
-      await client.query(
-        "ROLLBACK"
-      );
+    } catch (err) {
+      /* PostgreSQL unique_violation: another creator won the race. */
+      if (
+        err &&
+        err.code === "23505"
+      ) {
+        return res.status(409).json({
+          code:
+            "WORLD_ALREADY_EXISTS",
+          error:
+            "World already exists on the server.",
+        });
+      }
 
-      client.release();
-      client = null;
-
-      return res.status(401).json({
-        error:
-          "Wrong username or password.",
-      });
-    }
-
-    /*
-     * Global profile credential. The first successfully authenticated
-     * world creates it; every later world must use the same password.
-     */
-    let globalProfile;
-
-    try {
-      globalProfile =
-        await ensureGlobalProfileCredential(
-          client,
-          username,
-          password
-        );
-    } catch (profileErr) {
-      await client.query("ROLLBACK");
-      client.release();
-      client = null;
-
-      return res.status(profileErr.status || 401).json({
-        code: profileErr.code || "PROFILE_LOGIN_FAILED",
-        error: profileErr.message || "Profile login failed.",
-      });
-    }
-
-    /* Keep the per-world account credential aligned with the global profile. */
-    if (globalProfile) {
-      account.salt = globalProfile.salt;
-      account.hash = globalProfile.hash;
+      throw err;
     }
 
     await linkProfileWorld(
-      client,
+      pool,
       username,
       code,
       accountId
     );
-
-    /* Persist a possible credential alignment too. */
-    await client.query(
-      `
-      UPDATE worlds
-      SET data = $2::jsonb,
-          updated_at = NOW()
-      WHERE code = $1
-      `,
-      [code, JSON.stringify(world)]
-    );
-
-    await client.query("COMMIT");
-    client.release();
-    client = null;
 
     const token =
       await createSession(
@@ -1441,149 +1339,303 @@ app.post("/auth/migrate", async (req, res) => {
       token
     );
 
+    console.log(
+      `Migrated world ${code}`
+    );
+
     return res.json({
       ok: true,
+      migrated: true,
       meId: accountId,
       profileUsername: username,
-      syncRev:
-        worldSyncRevServer(world),
+      syncRev: 1,
       world:
         safeWorldForClient(world),
     });
   } catch (err) {
-    if (client) {
-      try {
-        await client.query(
-          "ROLLBACK"
-        );
-      } catch (e) {}
-
-      client.release();
-      client = null;
-    }
-
     console.error(
-      "Login error:",
-      err
-    );
-
-    return res.status(500).json({
-      error: "Login failed.",
-    });
-  }
-});
-
-/* -------------------------------------------------------------------------
-   SESSION RESTORE
-   Always returns the CURRENT PostgreSQL world through getSession().
-   ------------------------------------------------------------------------- */
-app.get("/auth/session", async (req, res) => {
-  try {
-    if (!(await requireDb(res))) return;
-
-    const session =
-      await getSession(req);
-
-    if (!session) {
-      clearSessionCookie(res);
-
-      return res.status(401).json({
-        authenticated: false,
-      });
-    }
-
-    const account =
-      session.world?.accounts?.[
-        session.accountId
-      ];
-
-    if (!account) {
-      if (session.token) {
-        await pool.query(
-          `
-          DELETE FROM sessions
-          WHERE token_hash = $1
-          `,
-          [
-            sessionTokenHash(
-              session.token
-            ),
-          ]
-        );
-      }
-
-      clearSessionCookie(res);
-
-      return res.status(401).json({
-        authenticated: false,
-      });
-    }
-
-    return res.json({
-      authenticated: true,
-      meId:
-        session.accountId,
-      profileUsername:
-        cleanUsername(account.username),
-      syncRev:
-        worldSyncRevServer(
-          session.world
-        ),
-      world:
-        safeWorldForClient(
-          session.world
-        ),
-    });
-  } catch (err) {
-    console.error(
-      "Session restore error:",
+      "World migration error:",
       err
     );
 
     return res.status(500).json({
       error:
-        "Session restore failed.",
-    });
-  }
-});
-
-/* ---------- LOGOUT ---------- */
-
-app.post("/auth/logout", async (req, res) => {
-  try {
-    if (!(await requireDb(res))) return;
-
-    const token = readCookie(req, SESSION_COOKIE);
-
-    if (token) {
-      await pool.query(
-        `
-        DELETE FROM sessions
-        WHERE token_hash = $1
-        `,
-        [sessionTokenHash(token)]
-      );
-    }
-
-    clearSessionCookie(res);
-
-    return res.json({ ok: true });
-  } catch (err) {
-    console.error("Logout error:", err);
-
-    clearSessionCookie(res);
-
-    return res.json({
-      ok: true,
+        "World migration failed.",
     });
   }
 });
 
 /* -------------------------------------------------------------------------
-   ACCOUNT DELETE
-   Serialized against world saves. Deletion increments syncRev.
+   GLOBAL PROFILE -> WORLDS
    ------------------------------------------------------------------------- */
-app.post("/account/delete", async (req, res) => {
+app.get("/profile/worlds", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
+
+    const profile = await currentProfileForSession(session);
+
+    if (!profile) {
+      return res.status(404).json({ error: "Global profile not found." });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+        pw.world_code AS code,
+        pw.account_id,
+        w.data->'universe'->>'name' AS name,
+        w.data #>> ARRAY['players', pw.account_id, 'name'] AS character_name,
+        w.data #>> ARRAY['players', pw.account_id, 'username'] AS character_username,
+        w.updated_at
+      FROM profile_worlds pw
+      JOIN worlds w ON w.code = pw.world_code
+      WHERE pw.profile_username = $1
+      ORDER BY w.updated_at DESC, pw.world_code ASC
+      `,
+      [profile.username]
+    );
+
+    return res.json({
+      ok: true,
+      profileUsername: profile.username,
+      currentWorldCode: session.worldCode,
+      worlds: result.rows.map((row) => ({
+        code: row.code,
+        name: row.name || row.code,
+        meId: row.account_id,
+        characterName: row.character_name || "",
+        characterUsername: row.character_username || "",
+        updatedAt: row.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error("Profile worlds error:", err);
+    return res.status(500).json({ error: "Failed to load profile worlds." });
+  }
+});
+
+app.post("/profile/worlds/switch", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
+
+    const profile = await currentProfileForSession(session);
+    const code = cleanCode(req.body?.code);
+
+    if (!profile || !code) {
+      return res.status(400).json({ error: "Missing profile or world code." });
+    }
+
+    const link = await pool.query(
+      `
+      SELECT pw.account_id, w.data
+      FROM profile_worlds pw
+      JOIN worlds w ON w.code = pw.world_code
+      WHERE pw.profile_username = $1
+        AND pw.world_code = $2
+      LIMIT 1
+      `,
+      [profile.username, code]
+    );
+
+    if (!link.rows.length) {
+      return res.status(404).json({
+        error: "This world is not linked to your profile.",
+      });
+    }
+
+    const accountId = link.rows[0].account_id;
+    const world = link.rows[0].data;
+
+    if (!world?.accounts?.[accountId]) {
+      return res.status(409).json({
+        error: "The linked world profile no longer exists.",
+      });
+    }
+
+    const token = await createSession(code, accountId);
+    setSessionCookie(res, token);
+
+    return res.json({
+      ok: true,
+      meId: accountId,
+      profileUsername: profile.username,
+      syncRev: worldSyncRevServer(world),
+      world: safeWorldForClient(world),
+    });
+  } catch (err) {
+    console.error("World switch error:", err);
+    return res.status(500).json({ error: "World switch failed." });
+  }
+});
+
+app.post("/profile/worlds/create", async (req, res) => {
+  let client = null;
+
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
+
+    const profile = await currentProfileForSession(session);
+    const incomingWorld = req.body?.world;
+
+    if (
+      !profile ||
+      !incomingWorld ||
+      typeof incomingWorld !== "object"
+    ) {
+      return res.status(400).json({ error: "Missing world data." });
+    }
+
+    const world = JSON.parse(JSON.stringify(incomingWorld));
+    const code = cleanCode(world.code);
+
+    if (!code) {
+      return res.status(400).json({ error: "World code is required." });
+    }
+
+    world.code = code;
+
+    const candidateIds = Object.keys(world.accounts || {});
+    let accountId = world.owner && world.accounts?.[world.owner]
+      ? String(world.owner)
+      : candidateIds.find((id) =>
+          cleanUsername(world.accounts?.[id]?.username) === profile.username
+        );
+
+    if (!accountId) {
+      accountId = `u${crypto.randomBytes(10).toString("hex")}`;
+      if (!world.accounts) world.accounts = {};
+      if (!world.players) world.players = {};
+      world.accounts[accountId] = {
+        id: accountId,
+        username: profile.username,
+        created: Date.now(),
+      };
+      world.players[accountId] = {
+        id: accountId,
+        name: String(req.body?.characterName || profile.username).slice(0, 120),
+        username: cleanUsername(req.body?.characterUsername) || profile.username,
+      };
+    }
+
+    if (!world.accounts) world.accounts = {};
+    if (!world.players) world.players = {};
+
+    const account = world.accounts[accountId] || {};
+    account.id = accountId;
+    account.username = profile.username;
+    account.salt = profile.salt;
+    account.hash = profile.hash;
+    account.created = Number(account.created) || Date.now();
+    world.accounts[accountId] = account;
+
+    const player = world.players[accountId] || { id: accountId };
+    player.id = accountId;
+
+    if (req.body?.characterName) {
+      player.name = String(req.body.characterName).trim().slice(0, 120);
+    }
+
+    const requestedHandle = cleanUsername(req.body?.characterUsername);
+    if (requestedHandle) {
+      player.username = requestedHandle;
+    } else if (!player.username) {
+      player.username = profile.username;
+    }
+
+    world.players[accountId] = player;
+    world.owner = accountId;
+    world.rev = Number(world.rev || 0) + 1;
+    world.syncRev = 1;
+
+    if (world.universe) {
+      world.universe.at = Date.now();
+    }
+
+    client = await pool.connect();
+    await client.query("BEGIN");
+
+    const exists = await client.query(
+      `SELECT 1 FROM worlds WHERE code = $1 LIMIT 1`,
+      [code]
+    );
+
+    if (exists.rows.length) {
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
+      return res.status(409).json({
+        code: "WORLD_ALREADY_EXISTS",
+        error: "World already exists on the server.",
+      });
+    }
+
+    await client.query(
+      `
+      INSERT INTO worlds (code, data, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      `,
+      [code, JSON.stringify(world)]
+    );
+
+    await linkProfileWorld(client, profile.username, code, accountId);
+
+    await client.query("COMMIT");
+    client.release();
+    client = null;
+
+    const token = await createSession(code, accountId);
+    setSessionCookie(res, token);
+
+    return res.json({
+      ok: true,
+      created: true,
+      meId: accountId,
+      profileUsername: profile.username,
+      syncRev: 1,
+      world: safeWorldForClient(world),
+    });
+  } catch (err) {
+    if (client) {
+      try { await client.query("ROLLBACK"); } catch (e) {}
+      client.release();
+      client = null;
+    }
+
+    console.error("Profile world create error:", err);
+    return res.status(500).json({ error: "World creation failed." });
+  }
+});
+
+/* -------------------------------------------------------------------------
+   AUTHORITATIVE WORLD AUTOSAVE
+
+   If expectedSyncRev != current server syncRev:
+   - reject stale client with HTTP 409
+   - return the authoritative server world
+   - NEVER overwrite it with the stale snapshot
+   ------------------------------------------------------------------------- */
+app.post("/world/save", async (req, res) => {
   let client = null;
 
   try {
@@ -1600,18 +1652,52 @@ app.post("/account/delete", async (req, res) => {
       });
     }
 
-    const worldCode =
-      session.worldCode;
+    const incomingWorld =
+      req.body?.world;
 
-    const accountId =
-      session.accountId;
+    if (
+      !incomingWorld ||
+      typeof incomingWorld !==
+        "object" ||
+      !incomingWorld.code
+    ) {
+      return res.status(400).json({
+        error: "Missing world data.",
+      });
+    }
+
+    const incomingCode =
+      cleanCode(
+        incomingWorld.code
+      );
+
+    if (
+      incomingCode !==
+      session.worldCode
+    ) {
+      return res.status(403).json({
+        error:
+          "You cannot save another world.",
+      });
+    }
+
+    const expectedSyncRev =
+      Math.max(
+        0,
+        Math.floor(
+          Number(
+            req.body?.syncRev ??
+            incomingWorld.syncRev
+          ) || 0
+        )
+      );
 
     client =
       await pool.connect();
 
     await client.query("BEGIN");
 
-    const result =
+    const existingResult =
       await client.query(
         `
         SELECT data
@@ -1620,10 +1706,10 @@ app.post("/account/delete", async (req, res) => {
         LIMIT 1
         FOR UPDATE
         `,
-        [worldCode]
+        [session.worldCode]
       );
 
-    if (!result.rows.length) {
+    if (!existingResult.rows.length) {
       await client.query(
         "ROLLBACK"
       );
@@ -1631,109 +1717,133 @@ app.post("/account/delete", async (req, res) => {
       client.release();
       client = null;
 
-      clearSessionCookie(res);
-
       return res.status(404).json({
         error: "World not found.",
       });
     }
 
-    const world =
-      result.rows[0].data;
+    const existingWorld =
+      existingResult.rows[0].data;
 
-    world.syncRev =
-      worldSyncRevServer(world);
-
-    if (
-      !world.accounts ||
-      !world.accounts[accountId]
-    ) {
-      await client.query(
-        `
-        DELETE FROM sessions
-        WHERE world_code = $1
-          AND account_id = $2
-        `,
-        [worldCode, accountId]
+    const serverSyncRev =
+      worldSyncRevServer(
+        existingWorld
       );
 
-      await client.query("COMMIT");
+    if (
+      expectedSyncRev !==
+      serverSyncRev
+    ) {
+      await client.query(
+        "ROLLBACK"
+      );
+
       client.release();
       client = null;
 
-      clearSessionCookie(res);
-
-      return res.json({
-        ok: true,
-        alreadyDeleted: true,
+      return res.status(409).json({
+        code: "WORLD_CONFLICT",
+        error:
+          "The world changed on another client.",
+        meId:
+          session.accountId,
+        expectedSyncRev,
+        serverSyncRev,
+        world:
+          safeWorldForClient(
+            existingWorld
+          ),
       });
     }
 
-    if (!world.deleted) {
-      world.deleted = {};
+    const nextWorld =
+      JSON.parse(
+        JSON.stringify(
+          incomingWorld
+        )
+      );
+
+    /*
+     * The client never receives password hashes/salts.
+     * Restore every server-secret field from the locked authoritative row.
+     */
+    if (!nextWorld.accounts) {
+      nextWorld.accounts = {};
     }
 
-    world.deleted[accountId] =
-      Date.now();
-
-    if (world.accounts) {
-      delete world.accounts[
-        accountId
-      ];
-    }
-
-    if (world.players) {
-      delete world.players[
-        accountId
-      ];
-    }
-
-    if (world.userSettings) {
-      delete world.userSettings[
-        accountId
-      ];
-    }
-
-    if (world.notify) {
-      delete world.notify[
-        accountId
-      ];
-    }
-
-    if (world.mems) {
-      delete world.mems[
-        accountId
-      ];
-    }
-
-    if (world.charMemory) {
-      delete world.charMemory[
-        accountId
-      ];
-    }
-
-    if (
-      world.owner ===
-      accountId
+    for (
+      const [
+        accountId,
+        oldAccount,
+      ] of Object.entries(
+        existingWorld.accounts || {}
+      )
     ) {
-      world.owner =
-        Object.keys(
-          world.accounts || {}
-        )[0] || "";
+      const wasDeleted =
+        Boolean(
+          nextWorld.deleted &&
+          nextWorld.deleted[
+            accountId
+          ]
+        );
+
+      if (
+        wasDeleted &&
+        !nextWorld.accounts[
+          accountId
+        ]
+      ) {
+        continue;
+      }
+
+      if (
+        !nextWorld.accounts[
+          accountId
+        ]
+      ) {
+        nextWorld.accounts[
+          accountId
+        ] =
+          JSON.parse(
+            JSON.stringify(
+              oldAccount
+            )
+          );
+      }
+
+      if (oldAccount?.hash) {
+        nextWorld.accounts[
+          accountId
+        ].hash =
+          oldAccount.hash;
+      }
+
+      if (oldAccount?.salt) {
+        nextWorld.accounts[
+          accountId
+        ].salt =
+          oldAccount.salt;
+      }
     }
 
-    world.rev =
-      Number(
-        world.rev || 0
+    nextWorld.code =
+      session.worldCode;
+
+    nextWorld.rev =
+      Math.max(
+        Number(
+          nextWorld.rev || 0
+        ),
+        Number(
+          existingWorld.rev || 0
+        )
       ) + 1;
 
-    world.syncRev =
-      worldSyncRevServer(
-        world
-      ) + 1;
+    nextWorld.syncRev =
+      serverSyncRev + 1;
 
-    if (world.universe) {
-      world.universe.at =
+    if (nextWorld.universe) {
+      nextWorld.universe.at =
         Date.now();
     }
 
@@ -1745,54 +1855,27 @@ app.post("/account/delete", async (req, res) => {
       WHERE code = $1
       `,
       [
-        worldCode,
-        JSON.stringify(world),
+        session.worldCode,
+        JSON.stringify(
+          nextWorld
+        ),
       ]
-    );
-
-    const profileUsername =
-      cleanUsername(
-        session.world &&
-        session.world.accounts &&
-        session.world.accounts[accountId] &&
-        session.world.accounts[accountId].username
-      );
-
-    if (profileUsername) {
-      await client.query(
-        `
-        DELETE FROM profile_worlds
-        WHERE profile_username = $1
-          AND world_code = $2
-        `,
-        [profileUsername, worldCode]
-      );
-    }
-
-    await client.query(
-      `
-      DELETE FROM sessions
-      WHERE world_code = $1
-        AND account_id = $2
-      `,
-      [worldCode, accountId]
     );
 
     await client.query("COMMIT");
     client.release();
     client = null;
 
-    clearSessionCookie(res);
-
-    console.log(
-      `Deleted account ${accountId} from world ${worldCode}`
-    );
-
     return res.json({
       ok: true,
-      deleted: true,
+      meId:
+        session.accountId,
       syncRev:
-        worldSyncRevServer(world),
+        nextWorld.syncRev,
+      world:
+        safeWorldForClient(
+          nextWorld
+        ),
     });
   } catch (err) {
     if (client) {
@@ -1807,147 +1890,41 @@ app.post("/account/delete", async (req, res) => {
     }
 
     console.error(
-      "Account delete error:",
+      "World save error:",
       err
     );
 
     return res.status(500).json({
-      error:
-        "Account deletion failed.",
+      error: "World save failed.",
     });
   }
 });
 
-/* -------------------------------------------------------------------------
-   ONE-TIME LOCAL -> POSTGRES MIGRATION / NEW WORLD CREATION
-   PostgreSQL unique constraint is authoritative for the world code.
-   ------------------------------------------------------------------------- */
-app.post("/auth/migrate", async (req, res) => {
-  try {
-    if (!(await requireDb(res))) return;
+function extractText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.map((part) => (typeof part === "string" ? part : part.text || "")).join("");
+  if (content && typeof content === "object") {
+    if (typeof content.text === "string") return content.text;
+    if (Array.isArray(content.parts)) return content.parts.map((part) => (typeof part === "string" ? part : part.text || "")).join("");
+  }
+  return "";
+}
 
-    const incomingWorld =
-      req.body?.world;
+function getProvider(body = {}) {
+  const provider = String(body?.provider || "").toLowerCase();
+  if (provider === "gemini") return "gemini";
+  if (provider === "openai") return "openai";
+  if (provider === "anthropic") return "anthropic";
+  const model = String(body?.model || "").toLowerCase();
+  if (model.startsWith("gemini")) return "gemini";
+  if (model.startsWith("gpt") || model.startsWith("o1") || model.startsWith("o3")) return "openai";
+  return DEFAULT_PROVIDER;
+}
 
-    const username =
-      cleanUsername(
-        req.body?.username
-      );
-
-    const password =
-      String(
-        req.body?.password || ""
-      );
-
-    if (
-      !incomingWorld ||
-      typeof incomingWorld !==
-        "object" ||
-      !incomingWorld.code
-    ) {
-      return res.status(400).json({
-        error: "Missing world data.",
-      });
-    }
-
-    const code =
-      cleanCode(
-        incomingWorld.code
-      );
-
-    if (
-      !code ||
-      !username ||
-      !password
-    ) {
-      return res.status(400).json({
-        error:
-          "World code, username and password are required.",
-      });
-    }
-
-    const world =
-      JSON.parse(
-        JSON.stringify(
-          incomingWorld
-        )
-      );
-
-    world.code = code;
-
-    const found =
-      findAccountByUsername(
-        world,
-        username
-      );
-
-    if (!found) {
-      return res.status(401).json({
-        error:
-          "Wrong username or password.",
-      });
-    }
-
-    const accountId =
-      found.id;
-
-    const account =
-      found.account;
-
-    if (!account.hash) {
-      account.salt =
-        crypto
-          .randomBytes(18)
-          .toString("hex");
-
-      account.hash =
-        passwordHash(
-          password,
-          account.salt
-        );
-    } else if (
-      !verifyPassword(
-        password,
-        account
-      )
-    ) {
-      return res.status(401).json({
-        error:
-          "Wrong username or password.",
-      });
-    }
-
-    world.rev =
-      Number(
-        world.rev || 0
-      ) + 1;
-
-    /*
-     * Create/verify the global profile before this new world is inserted.
-     * The per-world account keeps the login username, while the player
-     * character can use a completely different social @username.
-     */
-    let globalProfile;
-
-    try {
-      globalProfile =
-        await ensureGlobalProfileCredential(
-          pool,
-          username,
-          password
-        );
-    } catch (profileErr) {
-      return res.status(profileErr.status || 401).json({
-        code: profileErr.code || "PROFILE_LOGIN_FAILED",
-        error: profileErr.message || "Profile login failed.",
-      });
-    }
-
-    if (globalProfile) {
-      account.salt = globalProfile.salt;
-      account.hash = globalProfile.hash;
-    }
-      const parts = [];
+function buildGeminiPayload(body = {}) {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+}
+  const parts = [];
   if (body.system) parts.push({ text: body.system });
   for (const item of messages) {
     const text = extractText(item?.content || "");
