@@ -2647,13 +2647,25 @@ function albumFind(c, key) {
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 const AI = {
-  chain: Promise.resolve(),  // a sor: minden hívás az előző után fut
-  last: 0,                   // mikor futott le az utolsó
-  gap: 8000,                 // legalább ennyi teljen el két hívás között
-  cooldownUntil: 0,          // eddig nem küldünk semmit
-  strikes: 0,                // hányszor utasított el minket zsinórban
-  pending: 0,                // hány kérés vár épp válaszra
+  chain: Promise.resolve(),  // kompatibilitás miatt marad
+  last: 0,                   // mikor futott le az utolsó AI-hívás
+  gap: 8000,                 // háttér-hívások közti alap szünet
+  interactiveGap: 2200,      // játékos által kiváltott chat/RP gyorsabb prioritása
+  cooldownUntil: 0,
+  strikes: 0,
+  pending: 0,
+  interactivePending: 0,
   listeners: [],
+
+  /*
+   * Valódi prioritásos queue.
+   *
+   * A háttér-szimuláció nem tud több hosszú AI-kéréssel
+   * a játékos frissen elküldött DM-je elé beállni.
+   */
+  queue: [],
+  queueRunning: false,
+  queueSeq: 0,
 };
 const cooldownLeft = () => Math.max(0, AI.cooldownUntil - now());
 const onCooldown = (fn) => { AI.listeners.push(fn); return () => { AI.listeners = AI.listeners.filter((x) => x !== fn); }; };
@@ -2662,21 +2674,89 @@ function setCooldown(ms) {
   AI.listeners.forEach((fn) => { try { fn(cooldownLeft()); } catch (e) {} });
 }
 
-/* Sorba állítás: egyszerre egy kérés, közte szünet, pihenő alatt várakozás. */
-function queued(fn) {
-  const run = AI.chain.then(async () => {
-    for (let guard = 0; guard < 40; guard++) {
-      const left = cooldownLeft();
-      if (left <= 0) break;
-      await wait(Math.min(left, 5000) + 150);
+/* -------------------------------------------------------------------------
+   PRIORITÁSOS AI QUEUE
+
+   priority 0   = háttérvilág
+   priority 100 = játékos közvetlen akciója (DM / group chat / roleplay)
+
+   A már futó kérés természetesen nem szakítható félbe, de amint véget ér,
+   a játékos kérése ugrik a következő helyre.
+   ------------------------------------------------------------------------- */
+async function pumpAiQueue() {
+  if (AI.queueRunning) return;
+
+  AI.queueRunning = true;
+
+  try {
+    while (AI.queue.length) {
+      AI.queue.sort((a, b) => {
+        if (b.priority !== a.priority) {
+          return b.priority - a.priority;
+        }
+
+        return a.seq - b.seq;
+      });
+
+      const task = AI.queue.shift();
+
+      try {
+        for (let guard = 0; guard < 40; guard++) {
+          const left = cooldownLeft();
+
+          if (left <= 0) break;
+
+          await wait(
+            Math.min(left, 5000) + 150
+          );
+        }
+
+        const since =
+          now() - AI.last;
+
+        const gap =
+          task.priority >= 50
+            ? AI.interactiveGap
+            : AI.gap;
+
+        if (since < gap) {
+          await wait(
+            gap - since
+          );
+        }
+
+        const value =
+          await task.fn();
+
+        AI.last = now();
+
+        task.resolve(value);
+      } catch (err) {
+        AI.last = now();
+        task.reject(err);
+      }
     }
-    const since = now() - AI.last;
-    if (since < AI.gap) await wait(AI.gap - since);
-    try { return await fn(); }
-    finally { AI.last = now(); }
-  });
-  AI.chain = run.then(() => {}, () => {});
-  return run;
+  } finally {
+    AI.queueRunning = false;
+  }
+}
+
+function queued(fn, priority = 0) {
+  return new Promise(
+    (resolve, reject) => {
+      AI.queue.push({
+        fn,
+        priority:
+          Number(priority) || 0,
+        seq:
+          ++AI.queueSeq,
+        resolve,
+        reject,
+      });
+
+      pumpAiQueue();
+    }
+  );
 }
 
 const DEFAULT_AI_MODEL = import.meta.env.VITE_AI_MODEL || "claude-sonnet-4-6";
@@ -2807,11 +2887,35 @@ function validateGeneratedLanguage(result, expectedLanguage) {
 async function askJSON(system, prompt, options = {}) {
   const lang = asLang(options && options.language ? options.language : CURRENT_LANG);
   let strictMode = !!(options && options.strictLanguageMode);
+
+  const priority =
+    Number(
+      options &&
+      options.priority
+    ) || 0;
+
+  const maxTries =
+    Math.max(
+      2,
+      Math.min(
+        4,
+        Number(
+          options &&
+          options.maxTries
+        ) || 2
+      )
+    );
+
   AI.pending++;
+
   try {
     return await queued(async () => {
       let last = null, tries = 0, busyWaits = 0;
-      while (tries < 2 && busyWaits < 4) {
+
+      while (
+        tries < maxTries &&
+        busyWaits < 4
+      ) {
         try {
           const langRule = languageInstruction(lang, strictMode);
           const jsonRule = lang === "en"
@@ -2848,16 +2952,66 @@ async function askJSON(system, prompt, options = {}) {
             continue;                 // ez nem számít elrontott próbálkozásnak
           }
           tries++;
-          if (tries < 4) await wait(700 * tries);
+
+          if (tries < maxTries) {
+            await wait(
+              700 * tries
+            );
+          }
         }
       }
       throw last || new Error("Hibás válasz");
-    });
-  } finally { AI.pending--; }
+    }, priority);
+  } finally {
+    AI.pending--;
+  }
 }
 
 function askWorldJSON(w, system, prompt, options = {}) {
-  return askJSON(system, prompt, { ...options, language: worldLanguage(w) });
+  return askJSON(
+    system,
+    prompt,
+    {
+      ...options,
+      language:
+        worldLanguage(w),
+    }
+  );
+}
+
+/*
+ * Közvetlen játékosi akcióhoz.
+ * A háttér-autonómia elé kerül az AI queue-ban.
+ */
+async function askWorldJSONInteractive(
+  w,
+  system,
+  prompt,
+  options = {}
+) {
+  AI.interactivePending++;
+
+  try {
+    return await askJSON(
+      system,
+      prompt,
+      {
+        ...options,
+        language:
+          worldLanguage(w),
+        priority: 100,
+        maxTries:
+          options.maxTries ||
+          3,
+      }
+    );
+  } finally {
+    AI.interactivePending =
+      Math.max(
+        0,
+        AI.interactivePending - 1
+      );
+  }
 }
 
 
@@ -3649,6 +3803,13 @@ function characterLoreCorpus(c) {
     c.extra,
     c.job,
     c.city,
+    c.skills,
+    c.abilities,
+    c.combat,
+    c.rank,
+    c.role,
+    c.organization,
+    c.affiliation,
   ]
     .filter(Boolean)
     .join("\n")
@@ -3701,6 +3862,356 @@ function factionFlags(c) {
       ),
   };
 }
+
+/* ============================================================
+   ERŐ / FÉLELEM / HIERARCHIA
+
+   Nem csak a kapcsolatpont számít.
+   Egy gyengébb, civil vagy óvatos karakter ne álljon bele
+   gondolkodás nélkül egy hírhedten veszélyes, erősebb vagy
+   kiszámíthatatlan alakba csak azért, mert rosszban vannak.
+   ============================================================ */
+
+function threatProfile(c) {
+  if (!c) {
+    return {
+      danger: 0,
+      combat: 0,
+      authority: 0,
+      courage: 0,
+      volatility: 0,
+    };
+  }
+
+  const hay =
+    characterLoreCorpus(c);
+
+  let danger = 0;
+  let combat = 0;
+  let authority = 0;
+  let courage = 0;
+  let volatility = 0;
+
+  const addIf = (
+    re,
+    amount,
+    key
+  ) => {
+    if (!re.test(hay)) return;
+
+    if (key === "combat") {
+      combat += amount;
+    } else if (
+      key === "authority"
+    ) {
+      authority += amount;
+    } else if (
+      key === "courage"
+    ) {
+      courage += amount;
+    } else if (
+      key === "volatility"
+    ) {
+      volatility += amount;
+    } else {
+      danger += amount;
+    }
+  };
+
+  addIf(
+    /\bsensei\b|\bmaster\b|\bmester\b|\bcommander\b|\bparancsnok\b|\bboss\b|\bleader\b|\bvezető\b/,
+    18,
+    "authority"
+  );
+
+  addIf(
+    /\bblack belt\b|\bfekete öv\b|\bdan\b|二段|\belite fighter\b|\belit harcos\b|\bchampion\b|\bbajnok\b/,
+    22,
+    "combat"
+  );
+
+  addIf(
+    /\bkarate\b|\bmartial art|\bharcműv|\bfighter\b|\bharcos\b|\bcombat\b|\bközelharc\b|\bboxer\b|\bwrestl|\bkickbox/,
+    10,
+    "combat"
+  );
+
+  addIf(
+    /\bassassin\b|\bhitman\b|\bbérgyilkos\b|\bkiller\b|\bgyilkos\b|\bspecial forces\b|\bkülönleges egység\b|\bmilitary\b|\bkatonai\b|\bbodyguard\b|\btestőr\b/,
+    24,
+    "danger"
+  );
+
+  addIf(
+    /\bruthless\b|\bmerciless\b|\bkíméletlen\b|\bno mercy\b|\bsadistic\b|\bszadiszt|\bbrutal\b|\bbrutális\b|\bviolent\b|\berőszakos\b|\bdangerous\b|\bveszélyes\b|\bintimidat|\bfélelmetes\b/,
+    18,
+    "danger"
+  );
+
+  addIf(
+    /\bpsychotic\b|\bpszichot|\bpsychopath\b|\bpszichopat|\bsociopath\b|\bszociopat|\bunhinged\b|\belmebeteg\b|\bunstable\b|\bkiszámíthatatlan\b|\bvolatile\b/,
+    22,
+    "volatility"
+  );
+
+  addIf(
+    /\bfearless\b|\brettenthetetlen\b|\bdoesn'?t back down\b|\bnever backs down\b|\bdefiant\b|\bdacos\b|\breckless\b|\bvakmerő\b|\bhot[- ]?headed\b|\bforrófejű\b|\bimpulsive\b|\bimpulzív\b/,
+    24,
+    "courage"
+  );
+
+  addIf(
+    /\bdominant\b|\bdomináns\b|\bcommanding\b|\btekintélyt parancsoló\b|\bcontrolling\b|\bkontrolláló\b/,
+    10,
+    "courage"
+  );
+
+  addIf(
+    /\btimid\b|\bfélénk\b|\bshy\b|\bvisszahúzódó\b|\banxious\b|\bszorongó\b|\bcoward\b|\bgyáva\b|\bconflict[- ]?avoid|\bkonfliktuskerülő\b|\bpacifist\b|\bpacifista\b/,
+    -22,
+    "courage"
+  );
+
+  addIf(
+    /\bcivilian\b|\bcivil\b|\buntrained\b|\bképzetlen\b|\binexperienced\b|\btapasztalatlan\b/,
+    -12,
+    "combat"
+  );
+
+  danger +=
+    combat * 0.55 +
+    authority * 0.30 +
+    volatility * 0.45;
+
+  return {
+    danger:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(danger)
+        )
+      ),
+
+    combat:
+      Math.max(
+        -30,
+        Math.min(
+          100,
+          Math.round(combat)
+        )
+      ),
+
+    authority:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(authority)
+        )
+      ),
+
+    courage:
+      Math.max(
+        -50,
+        Math.min(
+          100,
+          Math.round(courage)
+        )
+      ),
+
+    volatility:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(volatility)
+        )
+      ),
+  };
+}
+
+function specificFearFromStory(
+  actor,
+  target
+) {
+  const snippet =
+    ownStorySnippetAbout(
+      actor,
+      target
+    );
+
+  if (!snippet) return 0;
+
+  const hay =
+    snippet.toLowerCase();
+
+  let score = 0;
+
+  if (
+    /afraid|terrified|scared|fear(?:s|ed)?|intimidat|fél tőle|félt tőle|rettegett|retteg|tart tőle|megijed|megfélemlít/.test(
+      hay
+    )
+  ) {
+    score += 35;
+  }
+
+  if (
+    /respects? (?:his|her|their) power|knows? (?:he|she|they) (?:is|are) dangerous|tudja,? hogy veszélyes|tiszteli az erej|nem mer vele/.test(
+      hay
+    )
+  ) {
+    score += 18;
+  }
+
+  if (
+    /not afraid|doesn'?t fear|never feared|nem fél tőle|nem ijed meg tőle|nem tart tőle/.test(
+      hay
+    )
+  ) {
+    score -= 35;
+  }
+
+  return score;
+}
+
+function intimidationGap(
+  w,
+  actorId,
+  targetId
+) {
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target
+  ) {
+    return 0;
+  }
+
+  const a =
+    threatProfile(actor);
+
+  const t =
+    threatProfile(target);
+
+  let gap =
+    t.danger -
+    (
+      a.danger * 0.72 +
+      Math.max(
+        0,
+        a.courage
+      ) * 0.42
+    );
+
+  gap +=
+    specificFearFromStory(
+      actor,
+      target
+    );
+
+  const actorHay =
+    characterLoreCorpus(actor);
+
+  const targetHay =
+    characterLoreCorpus(target);
+
+  if (
+    /\bstudent\b|\btanítvány\b|\bpupil\b|\bdiák\b/.test(
+      actorHay
+    ) &&
+    /\bsensei\b|\bmaster\b|\bmester\b|\bteacher\b|\btanár\b/.test(
+      targetHay
+    )
+  ) {
+    gap += 12;
+  }
+
+  return Math.round(gap);
+}
+
+function intimidationBehaviorCard(
+  w,
+  actorId,
+  targetId
+) {
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target ||
+    actorId === targetId
+  ) {
+    return "";
+  }
+
+  const lang =
+    worldLanguage(
+      w,
+      w.meId
+    );
+
+  const en =
+    lang === "en";
+
+  const a =
+    threatProfile(actor);
+
+  const t =
+    threatProfile(target);
+
+  const gap =
+    intimidationGap(
+      w,
+      actorId,
+      targetId
+    );
+
+  if (gap < 16) {
+    return "";
+  }
+
+  const reckless =
+    a.courage >= 24;
+
+  if (gap >= 38) {
+    if (reckless) {
+      return en
+        ? `power/intimidation: ${target.name} is substantially more dangerous or intimidating than ${actor.name}. ${actor.name} is bold/reckless enough to challenge them, but the danger MUST still register; any defiance should feel impulsive, emotional, strategic or costly — never relaxed equality or consequence-free trash talk`
+        : `erő/félelem: ${target.name} lényegesen veszélyesebb vagy félelmetesebb ${actor.name} számára. ${actor.name} elég vakmerő/dacos ahhoz, hogy akár szembeszálljon vele, de a veszélynek AKKOR IS érződnie kell; a dac legyen impulzív, érzelmi, stratégiai vagy kockázatos — ne laza egyenrangúság és következmény nélküli pofázás`;
+    }
+
+    return en
+      ? `major intimidation gap: ${actor.name} has a realistic reason to fear or avoid directly challenging ${target.name}. Do NOT make them casually mouth off, threaten, humiliate or square up just because they dislike them. Prefer caution, nervousness, deference, appeasement, silence, strategic retreat, indirect resistance or choosing allies. Hatred/rivalry does NOT erase fear. They may still intervene for a powerful personal reason, but the fear/risk must show`
+      : `nagy megfélemlítési különbség: ${actor.name} számára reális ok van félni ${target.name} karaktertől vagy kerülni a közvetlen összecsapást. NE álljon bele lazán, NE fenyegetőzzön, alázza vagy provokálja gondolkodás nélkül csak azért, mert nem kedveli. Inkább legyen óvatos, ideges, tisztelettartó, békítő, hallgatag, stratégikusan visszavonuló, közvetetten ellenálló vagy keressen maga mellé erősebb szövetségest. Az ellenszenv/rivalizálás NEM törli a félelmet. Erős személyes okból közbeléphet, de a kockázat érződjön`;
+  }
+
+  return en
+    ? `intimidation matters: ${target.name} currently has a noticeable power/danger advantage over ${actor.name}. ${actor.name} should not behave as if this is a perfectly equal, consequence-free confrontation; show some caution, calculation, hesitation, guardedness or respect unless their written courage/recklessness genuinely overrides it`
+    : `a megfélemlítés számít: ${target.name} jelenleg érezhető erő-/veszélyfölényben van ${actor.name} karakterrel szemben. ${actor.name} ne úgy viselkedjen, mintha ez teljesen egyenlő és következmény nélküli konfliktus lenne; jelenjen meg némi óvatosság, számítás, habozás, zárkózottság vagy tisztelet, hacsak a leírt bátorsága/vakmerősége tényleg felül nem írja`;
+}
+
 
 function bondLooksRomantic(rel) {
   const bond =
@@ -4023,6 +4534,19 @@ function relationshipBehaviorCard(
       en
         ? "their dojo histories can create competitive tension; infer the exact tone from their written backstories rather than treating them as strangers"
         : "a dojo-múltjuk versengő feszültséget okozhat; a pontos hangot a leírt történetükből vezesd le, ne kezeld őket idegenként"
+    );
+  }
+
+  const intimidation =
+    intimidationBehaviorCard(
+      w,
+      actorId,
+      targetId
+    );
+
+  if (intimidation) {
+    parts.push(
+      intimidation
     );
   }
 
@@ -9786,6 +10310,7 @@ KAPCSOLAT + TÖRTÉNET KÖTELEZŐEN HAT A KOMMENTRE:
 - Ha a karakter alapból flörtölős, és a célpont/helyzet indokolja, ténylegesen flörtölhet; ne lapítsd általános kedvességgé.
 - A karakterlap történetéből kiolvasható szervezeti/dojo-lojalitás és rivalizálás is számít. Például Cobra Kai karakter ne kezeljen automatikusan baráti semlegességgel egy Miyagi-Fang/Miyagi-Do/Eagle Fang riválist.
 - A személyes kapcsolat felülírhat egy csoportos rivalizálást, de a közös múlt akkor is színezze a hangot.
+- Az ERŐVISZONY/FÉLELEM a nyilvános kommentben is számít: egy gyengébb vagy félő karakter ne kezdjen automatikusan nyílt kommentháborút egy hírhedten veszélyes, kiszámíthatatlan vagy jóval erősebb figurával. Inkább lehet óvatos, hallgathat, kerülheti a direkt provokációt vagy csak finoman célozhat rá. Ha a karakterlapja szerint vakmerő, akkor szembeszállhat, de ne legyen érzéketlen a veszélyre.
 - Ne mondd ki ezeket magyarázatként. A komment SZÖVEGÉBŐL érződjenek.
 
 FONTOS VÁLTOZATOSSÁG:
@@ -13518,7 +14043,7 @@ function Scene({ w, scene, update, setErr, onBack }) {
         return `${a ? a.name : "?"}: ${t.text}`;
       }).join("\n");
 
-      const out = await askWorldJSON(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
+      const out = await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
 
 JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
@@ -13541,6 +14066,7 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - A korábbi történések térbeli és időbeli folytonossága maradjon meg. Ne teleportáljon senki, ne találj ki hirtelen új érkezést/távozást, ha azt a jelenet nem alapozta meg.
 - Ne reseteld a kapcsolatokat minden kör elején. A jó viszony legyen ténylegesen közvetlenebb/melegebb; a rossz viszony legyen feszültebb/élesebb; crush/vonzalom színezze a figyelmet, zavart, féltékenységet vagy flörtöt; a flörtölős karakter ténylegesen flörtölhet, ha természetes.
 - A karakterlap TÖRTÉNETÉBŐL eredő lojalitás, ellenségeskedés, dojo- vagy szervezeti rivalizálás aktív marad. Például Cobra Kai ↔ Miyagi-Fang/Miyagi-Do/Eagle Fang ellentét ne tűnjön el semleges viselkedésbe, hacsak a személyes kapcsolat ezt hitelesen felül nem írja.
+- ERŐVISZONY/FÉLELEM: a veszélyesség, harci tapasztalat, rang, tekintély és kiszámíthatatlanság ténylegesen hasson arra, ki mer kinek nekimenni. Egy jóval gyengébb vagy kevésbé bátor karakter ne provokáljon lazán egy hírhedten veszélyes senseit/vezetőt/harcost csak a dráma kedvéért. Lehet, hogy fél, kerül, enged, segítséget keres, visszafogja magát vagy csak közvetetten áll ellen. Egy vakmerő karakter szembeszállhat vele, de a kockázatot akkor is érzékelje.
 - Mindenki a SAJÁT hangmintája szerint szólaljon meg. A mondataik ne legyenek felcserélhetők, gépiesen egyformák vagy ugyanazon hangon megírva.
 - A párbeszéd és a cselekvés vigye a jelenetet, ne összefoglaló.
 - A szereplők kezdeményezhetnek, megszakíthatják egymást, kerülhetnek valakit, provokálhatnak, flörtölhetnek, összeveszhetnek vagy elterelhetik a témát, ha ez a személyiségükből és a helyzetből következik.
@@ -13722,7 +14248,7 @@ Formátum:
         const a = who(t.authorId);
         return t.authorId === "narrator" ? `(${t.text})` : `${a ? a.name : "?"}: ${t.text}`;
       }).join("\n");
-      const out = await askWorldJSON(w, engineFor(w), `${worldContext(w, scene.cast, false, null)}
+      const out = await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, false, null)}
 
 JELENET: ${scene.title}
 ${log}
@@ -14052,7 +14578,7 @@ const turn = async (mine) => {
       })
       .join("\n");
 
-    const out = await askWorldJSON(
+    const out = await askWorldJSONInteractive(
       w,
       engineFor(w),
       `${worldContext(
@@ -14132,6 +14658,7 @@ KAPCSOLATOK ÉS TÖRTÉNET A GROUP CHATBEN:
 - Crush/vonzalom és flörtölős személyiség természetesen látszódhat a szóválasztásban, féltékenységben, ugratásban vagy figyelemben.
 - A történetből eredő lojalitásokat és rivalizálásokat tartsd aktívan; például dojo/szervezeti ellenfelek viselkedése ne resetelődjön semlegesre.
 - A személyes kapcsolat felülírhat egy csoportos rivalizálást, de csak ha a karakterlap és a jelenlegi kapcsolat tényleg alátámasztja.
+- ERŐHIERARCHIA: egy fizikailag/szociálisan jóval gyengébb, kevésbé tapasztalt vagy félő karakter ne álljon bele automatikusan egy hírhedten veszélyes, kiszámíthatatlan senseibe/vezetőbe/harcosba. Lehet dacos vagy provokatív, HA a saját karakterlapja szerint tényleg ilyen, de a veszély és következmény tudata látszódjon.
 
 VALÓDI GROUP CHAT DINAMIKA:
 
@@ -14555,7 +15082,7 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
       requestWorld.meId
     );
 
-    const out = await askWorldJSON(
+    const out = await askWorldJSONInteractive(
       requestWorld,
       engineFor(requestWorld),
       `${worldContext(
@@ -14666,6 +15193,7 @@ PRIVÁT CHAT SZABÁLYOK:
 - Crushnál/vonzalomnál a viselkedésedből érződjön a plusz figyelem, zavar, féltékenység, flört vagy ragaszkodás, ha rád illik — ne mondd ki sablonosan.
 - Ha a személyiséged flörtölős, megfelelő helyzetben ténylegesen flörtölj.
 - A történetedben szereplő lojalitások és rivalizálások is aktívak maradnak.
+- AZ ERŐVISZONY ÉS FÉLELEM IS VALÓS: ha a másik karakter nálad sokkal veszélyesebb, erősebb, magasabb rangú vagy kiszámíthatatlanabb, és a saját történeted/személyiséged alapján nem vagy hozzá mérhetően vakmerő, ne beszélj vele úgy, mintha következmények nélkül bármit megtehetnél. Az ellenszenv nem egyenlő bátorsággal.
 - Ne írj a játékos helyett.
 - Magadról E/1-ben beszélj.
 - ${requestWorld.player.name} karaktert E/2-ben, tegezve szólítsd meg.
@@ -14701,7 +15229,7 @@ Formátum:
       )
     ) {
       const retryOut =
-        await askWorldJSON(
+        await askWorldJSONInteractive(
           requestWorld,
           engineFor(
             requestWorld
@@ -14780,7 +15308,7 @@ Formátum:
        * újrafogalmazást.
        */
       const noEmojiOut =
-        await askWorldJSON(
+        await askWorldJSONInteractive(
           requestWorld,
           engineFor(
             requestWorld
@@ -14935,19 +15463,22 @@ Formátum:
       }
     });
   } catch (e) {
-
-  setErr(
-  "CHAT: " +
-  (
-    (e && e.message) ||
-    tt(
-      "Az AI most nem válaszolt. Próbáld újra.",
-      "The AI didn't respond. Try again."
-    )
-  )
-);
-
-} finally {
+    /*
+     * A játékos üzenete már biztosan bent marad.
+     * A közvetlen chat-hívás 3 automatikus próbát kapott,
+     * ezért itt már csak valódi szolgáltatói/hálózati hibát jelzünk.
+     */
+    setErr(
+      "CHAT: " +
+      (
+        (e && e.message) ||
+        tt(
+          "A válasz most technikai okból nem érkezett meg. Az üzeneted el lett mentve.",
+          "The reply couldn't arrive because of a technical issue. Your message was saved."
+        )
+      )
+    );
+  } finally {
   sendLockRef.current = false;
   setBusy(false);
 }
@@ -25950,6 +26481,18 @@ const signOut = useCallback(async () => {
   // A háttér-automatizmust továbbra is visszafoghatja cooldown,
   // nyitott szerkesztő vagy háttérbe tett böngészőfül.
   if (!manualQueued && EditLock.n > 0) return;
+
+  /*
+   * Ha a játékos épp DM-et küld, group chatet vagy RP-lépést kér,
+   * a háttérvilág ne tegyen még egy AI-kérést elé.
+   */
+  if (
+    !manualQueued &&
+    AI.interactivePending > 0
+  ) {
+    return;
+  }
+
   if (!manualQueued && cooldownLeft() > 0) return;
   if (!manualQueued && typeof document !== "undefined" && document.hidden) return;
 
