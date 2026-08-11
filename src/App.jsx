@@ -871,6 +871,49 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   }
 }
 
+
+.gossip-post-kicker {
+  margin: 9px 0 -2px 48px;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-wrap:wrap;
+  color:var(--muted);
+  font-size:9.5px;
+  font-weight:700;
+  letter-spacing:.09em;
+  text-transform:uppercase;
+}
+
+.gossip-post-kicker .rumor {
+  color:var(--rose);
+}
+
+.gossip-post-kicker .confirmed {
+  color:var(--gold);
+}
+
+.gossip-post-headline {
+  margin:8px 0 0 48px;
+  font-family:Fraunces, Georgia, serif;
+  font-size:19px;
+  font-weight:700;
+  line-height:1.22;
+  letter-spacing:-.01em;
+  color:var(--bone);
+}
+
+@media (max-width:480px) {
+  .gossip-post-kicker,
+  .gossip-post-headline {
+    margin-left:42px;
+  }
+
+  .gossip-post-headline {
+    font-size:18px;
+  }
+}
+
 /* ---------- MOBILOS ACTION GOMBOK ---------- */
 
 @media (max-width: 768px) {
@@ -5148,6 +5191,7 @@ whisperWire: {
   usedEventIds: [],
   history: [],
   lastCandidate: null,
+  lastPublishedAt: 0,
 },
 
 /*
@@ -7612,6 +7656,75 @@ function Post({
           </div>
         </div>
       </div>
+
+      {post.gossipStory ? (
+        <>
+          <div className="gossip-post-kicker">
+            <span
+              className={
+                post.gossipStory.factLevel === "observed"
+                  ? "confirmed"
+                  : "rumor"
+              }
+            >
+              {post.gossipStory.factLevel === "observed"
+                ? tt(
+                    "megerősített",
+                    "confirmed"
+                  )
+                : post.gossipStory.factLevel === "speculation"
+                  ? tt(
+                      "spekuláció",
+                      "speculation"
+                    )
+                  : post.gossipStory.factLevel === "inferred"
+                    ? tt(
+                        "következtetés",
+                        "inference"
+                      )
+                    : tt(
+                        "pletyka",
+                        "rumor"
+                      )}
+            </span>
+
+            <span>·</span>
+
+            <span>
+              {post.gossipStory.format === "breaking"
+                ? tt(
+                    "breaking",
+                    "breaking"
+                  )
+                : post.gossipStory.format === "recap"
+                  ? tt(
+                      "összefoglaló",
+                      "recap"
+                    )
+                  : post.gossipStory.format === "analysis"
+                    ? tt(
+                        "elemzés",
+                        "analysis"
+                      )
+                    : post.gossipStory.format === "long"
+                      ? tt(
+                          "hosszú sztori",
+                          "long read"
+                        )
+                      : tt(
+                          "sztori",
+                          "story"
+                        )}
+            </span>
+          </div>
+
+          {post.gossipStory.headline ? (
+            <div className="gossip-post-headline">
+              {post.gossipStory.headline}
+            </div>
+          ) : null}
+        </>
+      ) : null}
 
       {post.text ? <div className="social-post-body">{post.text}</div> : null}
 
@@ -14686,6 +14799,16 @@ function ensureSocialSimulationState(w) {
     w.whisperWire.lastCandidate = null;
   }
 
+  if (
+    !Number.isFinite(
+      Number(
+        w.whisperWire.lastPublishedAt
+      )
+    )
+  ) {
+    w.whisperWire.lastPublishedAt = 0;
+  }
+
   /*
    * Gossip & Media settings.
    *
@@ -15428,6 +15551,958 @@ function selectGossipStoryCandidate(w) {
    */
   w.whisperWire.lastCandidate =
     candidate;
+
+  return candidate;
+}
+
+
+/* ============================================================
+   GOSSIP AUTO-PUBLISHER
+   ============================================================ */
+
+function gossipPublicationFactLevel(
+  candidate
+) {
+  if (!candidate) {
+    return "rumor";
+  }
+
+  /*
+   * Több tanús roleplay valóban megtörtént,
+   * de a média szempontjából kiszivárgott információ.
+   * Ezért publikációkor RUMOR-ként kezeljük,
+   * nem mágikus első kézből ismert tényként.
+   */
+  if (candidate.roleplayBased) {
+    return "rumor";
+  }
+
+  if (
+    [
+      "observed",
+      "inferred",
+      "rumor",
+      "speculation",
+    ].includes(
+      candidate.factLevel
+    )
+  ) {
+    return candidate.factLevel;
+  }
+
+  return "rumor";
+}
+
+function gossipPublishCooldownMs(w) {
+  const frequency =
+    (
+      w &&
+      w.gossipSettings &&
+      w.gossipSettings.frequency
+    ) ||
+    "normal";
+
+  if (frequency === "low") {
+    return 120 * 60000;
+  }
+
+  if (frequency === "high") {
+    return 20 * 60000;
+  }
+
+  if (frequency === "chaotic") {
+    return 8 * 60000;
+  }
+
+  return 45 * 60000;
+}
+
+function gossipPublishChance(w) {
+  const frequency =
+    (
+      w &&
+      w.gossipSettings &&
+      w.gossipSettings.frequency
+    ) ||
+    "normal";
+
+  if (frequency === "low") {
+    return 0.34;
+  }
+
+  if (frequency === "high") {
+    return 0.78;
+  }
+
+  if (frequency === "chaotic") {
+    return 0.94;
+  }
+
+  return 0.58;
+}
+
+function gossipArticleLengthInstruction(
+  w,
+  candidate
+) {
+  const setting =
+    (
+      w &&
+      w.gossipSettings &&
+      w.gossipSettings.articleLength
+    ) ||
+    "dynamic";
+
+  if (setting === "short") {
+    return `
+HOSSZ:
+- Rövid social gossip post.
+- Általában 1-3 rövid bekezdés.
+- Ne írj esszét.
+`;
+  }
+
+  if (setting === "detailed") {
+    return `
+HOSSZ:
+- Részletes gossip post / mini-cikk.
+- Több bekezdés is lehet.
+- Ha több összefüggő esemény van, mindet természetesen fűzd össze.
+- Ne töltsd fel üres szócsépléssel.
+`;
+  }
+
+  const eventCount =
+    candidate &&
+    Array.isArray(
+      candidate.events
+    )
+      ? candidate.events.length
+      : 1;
+
+  const score =
+    Number(
+      candidate &&
+      candidate.score
+    ) || 0;
+
+  if (
+    eventCount >= 4 ||
+    score >= 100
+  ) {
+    return `
+HOSSZ:
+- Ez nagyobb sztori: lehet hosszabb, több bekezdéses poszt.
+- Több emberről és több összefüggő történésről is írhat.
+- Maradjon social-media/tabloid hangú, ne akadémiai cikk.
+`;
+  }
+
+  if (
+    eventCount >= 2 ||
+    score >= 72
+  ) {
+    return `
+HOSSZ:
+- Közepes vagy hosszabb gossip post.
+- Ha több esemény tartozik össze, egyetlen koherens történetté fűzd őket.
+`;
+  }
+
+  return `
+HOSSZ:
+- Rövid vagy közepes gossip post.
+- Csak annyit írj, amennyit az esemény ténylegesen indokol.
+`;
+}
+
+function gossipCandidateSubjectContext(
+  w,
+  candidate
+) {
+  const rows =
+    (
+      candidate &&
+      Array.isArray(
+        candidate.subjectIds
+      )
+        ? candidate.subjectIds
+        : []
+    )
+      .map((id) => {
+        const c =
+          charById(w, id);
+
+        if (
+          !c ||
+          isMediaAccount(
+            w,
+            id
+          )
+        ) {
+          return "";
+        }
+
+        const stats =
+          w.socialStats &&
+          w.socialStats[id];
+
+        const bits = [
+          `${c.name} [${c.id}]`,
+          c.username
+            ? `@${c.username}`
+            : "",
+          c.city
+            ? `város: ${c.city}`
+            : "",
+          c.job
+            ? `munka: ${c.job}`
+            : "",
+          c.bio
+            ? `bio: ${cut(c.bio, 220)}`
+            : "",
+          stats
+            ? `popularity: ${Math.round(
+                Number(
+                  stats.popularity
+                ) || 0
+              )}, hype: ${Math.round(
+                Number(
+                  stats.hype
+                ) || 0
+              )}`
+            : "",
+        ].filter(Boolean);
+
+        return bits.join(" | ");
+      })
+      .filter(Boolean);
+
+  return rows.join("\n");
+}
+
+function gossipCandidateEventContext(
+  candidate
+) {
+  return (
+    candidate &&
+    Array.isArray(
+      candidate.events
+    )
+      ? candidate.events
+      : []
+  )
+    .map(
+      (event, index) =>
+        `${index + 1}. EVENT ID: ${event.id}
+TÍPUS: ${event.type}
+BIZONYOSSÁG: ${event.factLevel}
+FORRÁSTÍPUS: ${event.sourceType || "-"}
+TANÚK SZÁMA: ${event.witnessCount || 0}
+TÉNYLEGES ESEMÉNY: ${event.text}`
+    )
+    .join("\n\n");
+}
+
+async function genGossipMediaStory(
+  w,
+  candidate
+) {
+  const media =
+    activeGossipMediaAccount(
+      w
+    );
+
+  if (
+    !media ||
+    !candidate ||
+    candidate.mode !==
+      w.gossipSettings.mediaMode
+  ) {
+    return {
+      skip: true,
+    };
+  }
+
+  const publicationFactLevel =
+    gossipPublicationFactLevel(
+      candidate
+    );
+
+  const local =
+    media.mediaKind ===
+      "local";
+
+  const recentMediaPosts =
+    (w.posts || [])
+      .filter(
+        (p) =>
+          p &&
+          p.authorId ===
+            media.id
+      )
+      .slice(0, 5)
+      .map(
+        (p) =>
+          `${p.gossipStory && p.gossipStory.headline
+            ? p.gossipStory.headline + " — "
+            : ""}${cut(p.text, 180)}`
+      )
+      .join("\n");
+
+  const style =
+    local
+      ? `
+SPILL&CHILL HANG:
+- helyi / kisvárosi gossip account;
+- cheeky, kíváncsi, ironikus, enyhén gonosz, játékosan kegyetlen lehet;
+- olyan érzés legyen, mintha mindenki ismerne mindenkit;
+- kisebb társas jeleket is észrevesz;
+- lehet side-eye, száraz humor, "okay but..." energia;
+- ne legyen minden mondat caps lock vagy clickbait.
+`
+      : `
+RUMORHASIT HANG:
+- világszintű social tabloid;
+- gyors, magabiztos, szellemes, csípős és médiaérzékeny;
+- fame, virality, botrány, public image és nagyobb social hullámok érdeklik;
+- lehet headline-szerű és drámai, de ne legyen minden mondat clickbait;
+- ne hangozzon hivatalos híradónak.
+`;
+
+  const certainty =
+    publicationFactLevel ===
+      "observed"
+      ? `
+BIZONYOSSÁG:
+OBSERVED / PUBLIC.
+A megadott eseményt tényként kezelheted, de csak azt állíthatod,
+ami az EVENTEK-ben ténylegesen szerepel.
+`
+      : publicationFactLevel ===
+          "inferred"
+        ? `
+BIZONYOSSÁG:
+INFERENCE.
+Világosan jelezd, hogy ez következtetés: "úgy tűnik", "looks like",
+"az időzítés alapján" stb. Ne változtasd biztos ténnyé.
+`
+        : publicationFactLevel ===
+            "speculation"
+          ? `
+BIZONYOSSÁG:
+SPECULATION.
+Világosan spekulációként kezeld. Ne állítsd biztosra.
+`
+          : `
+BIZONYOSSÁG:
+RUMOR.
+A háttérben lehet valós esemény, de a média kiszivárgott / terjedő
+információként jutott hozzá. Használhatsz "állítólag", "word is",
+"apparently", "az terjed" jellegű megfogalmazást.
+NE nevezd meg, ki szivárogtatta ki, mert ezt a rendszer nem tudja.
+`;
+
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(
+      w,
+      (
+        candidate.subjectIds ||
+        []
+      ).filter(
+        (id) =>
+          !isHuman(w, id)
+      ),
+      false,
+      null
+    )}
+
+TE MOST A ${media.name.toUpperCase()} SOCIAL MEDIA FIÓK SZERKESZTŐI HANGJA VAGY.
+
+${style}
+
+A KÖVETKEZŐ STORY CANDIDATE VALÓS VILÁGBELI ESEMÉNYEKBŐL ÉPÜL.
+
+POTENCIÁLISAN ÉRINTETT / JELEN LÉVŐ SZEMÉLYEK:
+${gossipCandidateSubjectContext(
+  w,
+  candidate
+) || "-"}
+
+FONTOS:
+A fenti listában lehetnek TANÚK is.
+Ne állítsd róluk, hogy részesei voltak a botránynak csak azért,
+mert jelen voltak. Csak azt a személyt tedd a sztori szereplőjévé,
+akit az eseményleírás ténylegesen alátámaszt.
+
+ESEMÉNYEK:
+${gossipCandidateEventContext(
+  candidate
+)}
+
+${certainty}
+
+${gossipArticleLengthInstruction(
+  w,
+  candidate
+)}
+
+KORÁBBI ${media.name} POSZTOK — NE ISMÉTELD A SZERKEZETÜKET:
+${recentMediaPosts || "még nincs"}
+
+SZIGORÚ TARTALMI SZABÁLYOK:
+- SOHA ne találj ki új eseményt, új szereplőt, új helyszínt, új idézetet vagy titkos részletet.
+- Ne találj ki "forrást", "bennfentest", szemtanút vagy leakert.
+- Ha az adat nem mondja, ki szivárogtatta ki, NE nevezd meg.
+- Privát DM tartalmát ne találj ki.
+- A roleplayből csak a fent felsorolt kivont eseményt használhatod.
+- Megfigyelt tényből írhatsz csípős kommentárt, de a kommentár ne váljon új ténnyé.
+- Ha több event egy sztori része, összefűzheted őket.
+- Nem kell minden eventet felhasználni.
+- Nem kell minden felsorolt embert megemlíteni.
+- A poszt lehet többemberes és hosszú, HA a történet indokolja.
+- Ne írj semleges eseménynaplót. Meséld el social gossip postként.
+- Ne használd minden alkalommal ugyanazokat a formulákat ("we need to talk about", "sources say", "the internet is losing it").
+- A headline ne legyen teljes mondatos összefoglalás minden alkalommal.
+- Markdown headinget (#) ne használj.
+
+DÖNTHETSZ ÚGY, HOGY MÉGSEM ÉRDEMES PUBLIKÁLNI.
+Ilyenkor: "skip": true.
+
+FORMAT LEHET:
+breaking | short | long | recap | analysis
+
+VÁLASZ CSAK JSON:
+{
+  "skip": false,
+  "format": "short",
+  "headline": "rövid social/tabloid headline",
+  "text": "a teljes poszt szövege",
+  "usedEventIds": ["csak a ténylegesen felhasznált EVENT ID-k"],
+  "mentionedIds": ["csak a ténylegesen említett karakter ID-k"]
+}${TAIL}`,
+    {
+      maxTokens: 1600,
+    }
+  );
+}
+
+function normalizeGossipStoryOutput(
+  candidate,
+  out
+) {
+  if (
+    !candidate ||
+    !out ||
+    out.skip === true
+  ) {
+    return null;
+  }
+
+  const text =
+    String(
+      out.text || ""
+    )
+      .replace(
+        /\n{3,}/g,
+        "\n\n"
+      )
+      .trim();
+
+  if (!text) {
+    return null;
+  }
+
+  const allowedFormats = [
+    "breaking",
+    "short",
+    "long",
+    "recap",
+    "analysis",
+  ];
+
+  const format =
+    allowedFormats.includes(
+      out.format
+    )
+      ? out.format
+      : "short";
+
+  const headline =
+    cut(
+      String(
+        out.headline || ""
+      )
+        .replace(/\s+/g, " ")
+        .trim(),
+      180
+    );
+
+  const candidateEventIds =
+    new Set(
+      candidate.eventIds || []
+    );
+
+  let usedEventIds =
+    Array.isArray(
+      out.usedEventIds
+    )
+      ? out.usedEventIds
+          .map(String)
+          .filter(
+            (id) =>
+              candidateEventIds.has(id)
+          )
+      : [];
+
+  usedEventIds = [
+    ...new Set(
+      usedEventIds
+    ),
+  ];
+
+  if (
+    !usedEventIds.length &&
+    candidate.primaryEventId
+  ) {
+    usedEventIds = [
+      candidate.primaryEventId,
+    ];
+  }
+
+  const candidateSubjectIds =
+    new Set(
+      candidate.subjectIds || []
+    );
+
+  const mentionedIds = [
+    ...new Set(
+      (
+        Array.isArray(
+          out.mentionedIds
+        )
+          ? out.mentionedIds
+          : []
+      )
+        .map(String)
+        .filter(
+          (id) =>
+            candidateSubjectIds.has(
+              id
+            )
+        )
+    ),
+  ];
+
+  return {
+    format,
+    headline,
+    text:
+      text.length > 6000
+        ? text.slice(0, 6000)
+        : text,
+
+    usedEventIds,
+    mentionedIds,
+  };
+}
+
+function publishGossipMediaStory(
+  w,
+  candidate,
+  rawOut
+) {
+  if (
+    !w ||
+    !candidate
+  ) {
+    return null;
+  }
+
+  ensureGossipMediaState(w);
+  ensureSocialSimulationState(w);
+
+  const media =
+    activeGossipMediaAccount(
+      w
+    );
+
+  if (
+    !media ||
+    candidate.mode !==
+      w.gossipSettings.mediaMode
+  ) {
+    return null;
+  }
+
+  const out =
+    normalizeGossipStoryOutput(
+      candidate,
+      rawOut
+    );
+
+  if (!out) {
+    return null;
+  }
+
+  const alreadyUsed =
+    new Set(
+      w.whisperWire.usedEventIds ||
+      []
+    );
+
+  const liveUsedEventIds =
+    out.usedEventIds.filter(
+      (id) =>
+        !alreadyUsed.has(id)
+    );
+
+  /*
+   * Ha mire az AI-válasz megérkezik, a sztori fő eseményét
+   * már egy másik publikáció felhasználta, ne duplikáljuk.
+   */
+  if (
+    candidate.primaryEventId &&
+    alreadyUsed.has(
+      candidate.primaryEventId
+    )
+  ) {
+    return null;
+  }
+
+  const publicationFactLevel =
+    gossipPublicationFactLevel(
+      candidate
+    );
+
+  const post = {
+    id: uid(),
+
+    authorId:
+      media.id,
+
+    ts: now(),
+
+    likes: 0,
+    likedBy: [],
+
+    text:
+      out.text,
+
+    imageId: "",
+    image: "",
+
+    comments: [],
+
+    language:
+      worldLanguage(
+        w,
+        w.meId
+      ),
+
+    gossipStory: {
+      id:
+        "gs_" + uid(),
+
+      candidateId:
+        candidate.id || "",
+
+      mediaMode:
+        candidate.mode,
+
+      format:
+        out.format,
+
+      headline:
+        out.headline,
+
+      factLevel:
+        publicationFactLevel,
+
+      eventIds:
+        liveUsedEventIds,
+
+      mentionedIds:
+        out.mentionedIds,
+
+      roleplayBased:
+        Boolean(
+          candidate.roleplayBased
+        ),
+
+      witnessCount:
+        Number(
+          candidate.witnessCount
+        ) || 0,
+    },
+  };
+
+  /*
+   * ELŐBB jelöljük used-nak az eseményeket.
+   * A recordSocialEvent maga újra lefuttathatja a selectort,
+   * így nem választhatja ki ugyanazt a sztorit újra.
+   */
+  w.whisperWire.usedEventIds = [
+    ...new Set([
+      ...(
+        w.whisperWire.usedEventIds ||
+        []
+      ),
+      ...liveUsedEventIds,
+    ]),
+  ].slice(-800);
+
+  w.posts.unshift(post);
+
+  const storyRow = {
+    id:
+      post.gossipStory.id,
+
+    postId:
+      post.id,
+
+    mediaId:
+      media.id,
+
+    mediaMode:
+      candidate.mode,
+
+    format:
+      out.format,
+
+    headline:
+      out.headline,
+
+    text:
+      out.text,
+
+    factLevel:
+      publicationFactLevel,
+
+    publishedAt:
+      post.ts,
+
+    eventIds:
+      liveUsedEventIds,
+
+    mentionedIds:
+      out.mentionedIds,
+
+    roleplayBased:
+      Boolean(
+        candidate.roleplayBased
+      ),
+  };
+
+  w.whisperWire.stories = [
+    storyRow,
+    ...(
+      w.whisperWire.stories ||
+      []
+    ),
+  ].slice(0, 120);
+
+  w.whisperWire.history = [
+    {
+      ...storyRow,
+      candidateScore:
+        Number(
+          candidate.score
+        ) || 0,
+    },
+    ...(
+      w.whisperWire.history ||
+      []
+    ),
+  ].slice(0, 240);
+
+  w.whisperWire.lastPublishedAt =
+    post.ts;
+
+  w.whisperWire.lastCandidate =
+    null;
+
+  const mentionedIds =
+    out.mentionedIds.length
+      ? out.mentionedIds
+      : (
+          candidate.subjectIds ||
+          []
+        ).filter(
+          (id) =>
+            !isMediaAccount(
+              w,
+              id
+            )
+        );
+
+  recordSocialEvent(
+    w,
+    {
+      type:
+        "gossip-story",
+
+      refId:
+        post.gossipStory.id,
+
+      ts:
+        post.ts,
+
+      actorId:
+        media.id,
+
+      targetIds:
+        mentionedIds,
+
+      visibility:
+        "public",
+
+      factLevel:
+        publicationFactLevel,
+
+      importance:
+        Math.min(
+          100,
+          Math.max(
+            40,
+            Number(
+              candidate.score
+            ) || 40
+          )
+        ),
+
+      drama:
+        Math.min(
+          100,
+          Math.max(
+            18,
+            (
+              Number(
+                candidate.score
+              ) || 40
+            ) * 0.55
+          )
+        ),
+
+      romance: 0,
+      embarrassment: 0,
+
+      source:
+        "gossip-media",
+
+      text:
+        out.headline
+          ? `${out.headline} — ${cut(
+              out.text,
+              240
+            )}`
+          : cut(
+              out.text,
+              280
+            ),
+
+      tags: [
+        "social",
+        "gossip-media",
+        candidate.mode,
+        out.format,
+        publicationFactLevel,
+        candidate.roleplayBased
+          ? "roleplay-source"
+          : "ledger-source",
+      ],
+
+      meta: {
+        postId:
+          post.id,
+
+        storyId:
+          post.gossipStory.id,
+
+        eventIds:
+          liveUsedEventIds,
+
+        mentionedIds,
+
+        mediaMode:
+          candidate.mode,
+
+        roleplayBased:
+          Boolean(
+            candidate.roleplayBased
+          ),
+      },
+    }
+  );
+
+  /*
+   * Ha a játékos ténylegesen szerepel a publikált sztoriban,
+   * kapjon értesítést.
+   */
+  if (
+    mentionedIds.includes(
+      w.meId
+    )
+  ) {
+    pushNote(
+      w,
+      w.meId,
+      {
+        icon: "🗞️",
+
+        text:
+          sysLangText(
+            w,
+            w.meId,
+            `${media.name} posztolt rólad.`,
+            `${media.name} posted about you.`
+          ),
+
+        link: {
+          type: "post",
+          id: post.id,
+        },
+      }
+    );
+  }
+
+  return post;
+}
+
+function gossipAutoCandidate(w) {
+  const media =
+    activeGossipMediaAccount(
+      w
+    );
+
+  if (!media) {
+    return null;
+  }
+
+  const candidate =
+    selectGossipStoryCandidate(
+      w
+    );
+
+  if (!candidate) {
+    return null;
+  }
+
+  const lastPublishedAt =
+    Number(
+      w.whisperWire &&
+      w.whisperWire.lastPublishedAt
+    ) || 0;
+
+  if (
+    lastPublishedAt > 0 &&
+    now() - lastPublishedAt <
+      gossipPublishCooldownMs(w)
+  ) {
+    return null;
+  }
 
   return candidate;
 }
@@ -19013,7 +20088,36 @@ function planAutoAction(view) {
   }
 
   /*
-   * 4. STAN / CANCEL / COUNTER-BACKLASH HULLÁM
+   * 4. SPILL&CHILL / RUMORHASIT PUBLIKÁLÁS
+   *
+   * Csak valódi Story Selector-jelöltből készülhet.
+   * Első publikációnál nincs cooldown; utána a beállított
+   * gossip frequency szabályozza, milyen sűrűn posztolhat.
+   */
+  const gossipCandidate =
+    gossipAutoCandidate(
+      view
+    );
+
+  if (
+    gossipCandidate &&
+    Math.random() <
+      gossipPublishChance(
+        view
+      )
+  ) {
+    return mkAction(
+      "gossip-story",
+      `gossip-story:${gossipCandidate.mode}:${gossipCandidate.primaryEventId}`,
+      {
+        candidate:
+          gossipCandidate,
+      }
+    );
+  }
+
+  /*
+   * 5. STAN / CANCEL / COUNTER-BACKLASH HULLÁM
    *
    * Csak akkor indulhat, ha a már meglévő social aktivitás
    * ténylegesen felépített hozzá elég support / backlash energiát.
@@ -19050,7 +20154,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 5. AUTONÓM FOLLOW
+   * 6. AUTONÓM FOLLOW
    *
    * Nem minden körben próbáljuk.
    * A karakterek csak akkor kerülnek jelöltként ide,
@@ -19093,7 +20197,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 6. AUTONÓM REPOST
+   * 7. AUTONÓM REPOST
    *
    * Az AI csak olyan posztot oszt újra,
    * amelyhez van társas oka kapcsolódni.
@@ -19127,7 +20231,7 @@ function planAutoAction(view) {
   const roll = Math.random();
 
   /*
-   * 7. AUTONÓM NOTE
+   * 8. AUTONÓM NOTE
    *
    * Ritkább, mint eddig.
    * Ne a note-ok zabálják fel
@@ -19214,7 +20318,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 8. LÉTEZŐ GROUP CHATEK
+   * 9. LÉTEZŐ GROUP CHATEK
    */
   const existingGroups = (
     view.groups || []
@@ -19267,7 +20371,7 @@ function planAutoAction(view) {
     !recentGroup;
 
   /*
-   * 9. GROUP CHAT
+   * 10. GROUP CHAT
    *
    * Kb. 8%.
    * A meglévő csoport előnyt élvez
@@ -19338,7 +20442,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 10. PRIVÁT ÜZENET
+   * 11. PRIVÁT ÜZENET
    *
    * Kb. 32%.
    *
@@ -19363,7 +20467,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 11. WORLD / FEED
+   * 12. WORLD / FEED
    *
    * A maradék körökben a világ magától
    * posztol és kommentel.
@@ -19715,6 +20819,66 @@ async function runSimulationAction(view, update, action) {
     }
 
     return null;
+  }
+
+  if (action.type === "gossip-story") {
+    const payload =
+      action.payload || {};
+
+    const candidate =
+      payload.candidate;
+
+    const media =
+      activeGossipMediaAccount(
+        view
+      );
+
+    if (
+      !candidate ||
+      !media ||
+      candidate.mode !==
+        (
+          view.gossipSettings &&
+          view.gossipSettings.mediaMode
+        )
+    ) {
+      return null;
+    }
+
+    /*
+     * Ha időközben már más publikáció elhasználta
+     * a fő eseményt, ezt a queued actiont eldobjuk.
+     */
+    if (
+      candidate.primaryEventId &&
+      view.whisperWire &&
+      Array.isArray(
+        view.whisperWire.usedEventIds
+      ) &&
+      view.whisperWire.usedEventIds.includes(
+        candidate.primaryEventId
+      )
+    ) {
+      return null;
+    }
+
+    const out =
+      await genGossipMediaStory(
+        view,
+        candidate
+      );
+
+    update((n) => {
+      n.autoAt = now();
+
+      publishGossipMediaStory(
+        n,
+        candidate,
+        out
+      );
+    });
+
+    return "gossip-story";
   }
 
   if (action.type === "follow") {
