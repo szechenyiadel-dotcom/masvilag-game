@@ -16855,13 +16855,44 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
         ? "mature"
         : "standard";
 
+    /*
+     * FONTOS:
+     * A World komponens a renderelt "view"-t kapja,
+     * amiben benne van w.meId.
+     *
+     * Az update() viszont a nyers world state-et klónozza,
+     * és abban nincs külön n.meId mező.
+     *
+     * Emiatt a korábbi kód valójában ezt írta:
+     * userSettings["undefined"].contentLevel
+     *
+     * és a saját userSettings sorod nem változott.
+     */
+    const ownerId =
+      w.meId;
+
+    if (!ownerId) {
+      setErr(
+        tt(
+          "Nem található az aktív játékos azonosítója.",
+          "The active player ID could not be found."
+        )
+      );
+
+      return;
+    }
+
     update((n) => {
-      if (!n.userSettings) {
+      if (
+        !n.userSettings ||
+        typeof n.userSettings !== "object" ||
+        Array.isArray(n.userSettings)
+      ) {
         n.userSettings = {};
       }
 
-      n.userSettings[n.meId] = {
-        ...(n.userSettings[n.meId] || {}),
+      n.userSettings[ownerId] = {
+        ...(n.userSettings[ownerId] || {}),
         contentLevel: next,
       };
     });
@@ -17056,6 +17087,7 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
           {CONTENT_LEVELS.map(
             (level) => (
               <button
+                type="button"
                 key={level.id}
                 className={
                   "btn tiny full " +
