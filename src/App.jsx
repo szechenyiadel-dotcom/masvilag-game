@@ -15816,9 +15816,17 @@ function PopupEventModal({ w, event, update, onChoose }) {
 
     setBusyChoice(choice.id);
 
+    let completed = false;
+
     try {
       if (onChoose) {
-        await onChoose(event, choice);
+        completed =
+          (
+            await onChoose(
+              event,
+              choice
+            )
+          ) === true;
       } else {
         update((n) =>
           resolvePopupEvent(
@@ -15827,9 +15835,17 @@ function PopupEventModal({ w, event, update, onChoose }) {
             choice.id
           )
         );
+
+        completed = true;
       }
     } finally {
-      setBusyChoice("");
+      /*
+       * Siker esetén a popup eltűnik.
+       * Nem küldünk új setState-et a már lecsatolt modalra.
+       */
+      if (!completed) {
+        setBusyChoice("");
+      }
     }
   };
 
@@ -19901,31 +19917,44 @@ function appendPopupPrivateConversation(
   event,
   choice
 ){
-  const c=
+  const c =
     charById(
       w,
       targetId
     );
 
-  if(!c)return false;
+  if (!c) return false;
 
-  if(!w.chats){
-    w.chats={};
+  if (
+    !w.chats ||
+    typeof w.chats !== "object" ||
+    Array.isArray(w.chats)
+  ) {
+    w.chats = {};
   }
 
-  const ck=
+  const ck =
     chatKey(
       w.meId,
       targetId
     );
 
-  const sentAt=now();
+  const sentAt =
+    now();
 
-  w.chats[ck]=[
-    ...(w.chats[ck]||[]),
+  const previous =
+    Array.isArray(
+      w.chats[ck]
+    )
+      ? w.chats[ck]
+      : [];
+
+  const next = [
+    ...previous,
     {
+      id:"popup_dm_" + uid(),
       from:"me",
-      text:playerText,
+      text:String(playerText || ""),
       ts:sentAt,
       language:
         worldLanguage(
@@ -19934,14 +19963,16 @@ function appendPopupPrivateConversation(
         ),
       popupAction:true,
       popupEventId:event.id,
+      popupChoiceId:choice.id,
     },
   ];
 
-  if(replyText){
-    w.chats[ck].push({
+  if (replyText) {
+    next.push({
+      id:"popup_reply_" + uid(),
       from:"them",
-      text:replyText,
-      ts:sentAt+1,
+      text:String(replyText || ""),
+      ts:sentAt + 1,
       language:
         worldLanguage(
           w,
@@ -19949,80 +19980,95 @@ function appendPopupPrivateConversation(
         ),
       popupAction:true,
       popupEventId:event.id,
+      popupChoiceId:choice.id,
     });
   }
 
-  recordSocialEvent(
-    w,
-    {
-      type:
-        "popup-private-action",
-      refId:
-        `${event.id}:${choice.id}:dm`,
-      ts:sentAt,
-      actorId:w.meId,
-      targetIds:[targetId],
-      visibility:"private",
-      factLevel:"observed",
-      importance:34,
-      drama:
-        Math.max(
-          8,
-          Number(
-            popupToneImpact(
-              choice.tone
-            ).hype
-          )*2
-        ),
-      romance:0,
-      embarrassment:0,
-      source:"popup-event",
-      text:cut(
-        playerText,
-        220
-      ),
-      tags:[
-        "popup-event",
-        "choice",
-        "private",
-        "dm",
-      ],
-      meta:{
-        popupEventId:event.id,
-        choiceId:choice.id,
-        targetId,
-      },
-    }
-  );
+  /*
+   * A tényleges DM legyen az első és kötelező művelet.
+   */
+  w.chats[ck] = next;
 
-  rememberKnowledge(
-    w,
-    c.id,
-    {
-      kind:"conversation",
-      source:"popup_private",
-      confidence:1,
-      text:
-        sysLangText(
-          w,
-          c.id,
-          `${w.player.name} privátban megkeresett a friss dráma miatt.`,
-          `${w.player.name} reached out privately about the recent drama.`
-        ),
-    }
-  );
+  /*
+   * A ledger/memória kiegészítő rendszer.
+   * Egy régi vagy furcsa world-adat miatt ez nem döntheti le a UI-t.
+   */
+  try {
+    recordSocialEvent(
+      w,
+      {
+        type:"popup-private-action",
+        refId:`${event.id}:${choice.id}:dm`,
+        ts:sentAt,
+        actorId:w.meId,
+        targetIds:[targetId],
+        visibility:"private",
+        factLevel:"observed",
+        importance:34,
+        drama:8,
+        romance:0,
+        embarrassment:0,
+        source:"popup-event",
+        text:cut(playerText,220),
+        tags:[
+          "popup-event",
+          "choice",
+          "private",
+          "dm",
+        ],
+        meta:{
+          popupEventId:event.id,
+          choiceId:choice.id,
+          targetId,
+        },
+      }
+    );
+  } catch (socialErr) {
+    console.warn(
+      "Popup private social ledger failed:",
+      socialErr
+    );
+  }
+
+  try {
+    rememberKnowledge(
+      w,
+      c.id,
+      {
+        kind:"conversation",
+        source:"popup_private",
+        confidence:1,
+        text:
+          sysLangText(
+            w,
+            c.id,
+            `${w.player && w.player.name ? w.player.name : "A játékos"} privátban megkeresett a friss dráma miatt.`,
+            `${w.player && w.player.name ? w.player.name : "The player"} reached out privately about the recent drama.`
+          ),
+      }
+    );
+  } catch (memoryErr) {
+    console.warn(
+      "Popup private memory write failed:",
+      memoryErr
+    );
+  }
 
   return true;
 }
-
 function appendPopupPublicPost(
   w,
   text,
   event,
-  choice
+  choice,
+  forcedId=""
 ){
+  if (!Array.isArray(w.posts)) {
+    w.posts = [];
+  }
+
   const post={
-    id:uid(),
+    id:forcedId || uid(),
     authorId:w.meId,
     ts:now(),
     likes:0,
@@ -20088,15 +20134,22 @@ function appendPopupPublicPost(
     }
   );
 
-  noteMentions(
-    w,
-    text,
-    w.meId,
-    {
-      type:"post",
-      id:post.id,
-    }
-  );
+  try {
+    noteMentions(
+      w,
+      text,
+      w.meId,
+      {
+        type:"post",
+        id:post.id,
+      }
+    );
+  } catch (mentionErr) {
+    console.warn(
+      "Popup post mention processing failed:",
+      mentionErr
+    );
+  }
 
   return post;
 }
@@ -25840,6 +25893,7 @@ export default function App() {
   const [simPulse, setSimPulse] = useState(0);
   const [flash, setFlash] = useState(null);
   const [jump, setJump] = useState(null);
+  const [popupNav, setPopupNav] = useState(null);
   const seenNote = useRef(null);
   const flashTimer = useRef(null);
   const [makeWorld, setMakeWorld] = useState(false);
@@ -27229,8 +27283,12 @@ const signOut = useCallback(async () => {
             );
           });
 
-          setChatId(targetId);
-          setTab("chat");
+          setPopupNav({
+            type:"dm",
+            id:targetId,
+            eventId:event.id,
+            at:now(),
+          });
 
           return true;
         }
@@ -27283,52 +27341,29 @@ const signOut = useCallback(async () => {
                 n,
                 postText,
                 event,
-                choice
+                choice,
+                postId
               );
 
             if (p) {
-              /*
-               * Fix id a navigációhoz és queue-hoz.
-               */
-              p.id = postId;
-
-              const socialEvent =
-                (n.socialEvents || [])
-                  .find(
-                    (e) =>
-                      e &&
-                      e.type ===
-                        "popup-public-action" &&
-                      e.meta &&
-                      e.meta.popupEventId ===
-                        event.id &&
-                      e.meta.choiceId ===
-                        choice.id
-                  );
-
-              if (socialEvent) {
-                socialEvent.refId =
-                  postId;
-
-                if (
-                  socialEvent.meta
-                ) {
-                  socialEvent.meta.postId =
-                    postId;
-                }
+              try {
+                simEnqueue(
+                  n,
+                  mkAction(
+                    "comments",
+                    `popup-post:${postId}`,
+                    {
+                      postId,
+                    },
+                    "event"
+                  )
+                );
+              } catch (queueErr) {
+                console.warn(
+                  "Popup comment queue failed:",
+                  queueErr
+                );
               }
-
-              simEnqueue(
-                n,
-                mkAction(
-                  "comments",
-                  `popup-post:${postId}`,
-                  {
-                    postId,
-                  },
-                  "event"
-                )
-              );
             }
           });
 
@@ -27336,13 +27371,12 @@ const signOut = useCallback(async () => {
             (x) => x + 1
           );
 
-          setJump({
+          setPopupNav({
             type:"post",
             id:postId,
-            n:now(),
+            eventId:event.id,
+            at:now(),
           });
-
-          setTab("feed");
 
           return true;
         }
@@ -27389,6 +27423,105 @@ const signOut = useCallback(async () => {
       tt,
     ]
   );
+
+  /*
+   * A popup választás után előbb megvárjuk,
+   * hogy a DM/poszt ténylegesen bekerüljön a world state-be.
+   * Csak ezután váltunk Chat/Feed tabra.
+   */
+  useEffect(() => {
+    if (
+      !popupNav ||
+      !world
+    ) {
+      return;
+    }
+
+    if (
+      popupNav.type === "dm"
+    ) {
+      const target =
+        (world.chars || [])
+          .find(
+            (c) =>
+              c &&
+              c.id ===
+                popupNav.id
+          );
+
+      const ck =
+        target
+          ? chatKey(
+              world.meId,
+              target.id
+            )
+          : "";
+
+      const messages =
+        ck &&
+        world.chats &&
+        Array.isArray(
+          world.chats[ck]
+        )
+          ? world.chats[ck]
+          : [];
+
+      const committed =
+        Boolean(
+          target &&
+          messages.some(
+            (m) =>
+              m &&
+              m.popupEventId ===
+                popupNav.eventId
+          )
+        );
+
+      if (!committed) {
+        return;
+      }
+
+      setChatId(
+        popupNav.id
+      );
+
+      setTab("chat");
+
+      setPopupNav(null);
+
+      return;
+    }
+
+    if (
+      popupNav.type === "post"
+    ) {
+      const committed =
+        (world.posts || [])
+          .some(
+            (p) =>
+              p &&
+              p.id ===
+                popupNav.id
+          );
+
+      if (!committed) {
+        return;
+      }
+
+      setTab("feed");
+
+      setJump({
+        type:"post",
+        id:popupNav.id,
+        n:now(),
+      });
+
+      setPopupNav(null);
+    }
+  }, [
+    popupNav,
+    world,
+  ]);
 
   useEffect(() => {
     if (!world || !meId) return;
