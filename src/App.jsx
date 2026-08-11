@@ -1088,6 +1088,96 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     padding-right: 14px;
   }
 
+  /* ---------- KARAKTERLISTA + KARAKTERLAP MOBIL ---------- */
+
+  .character-list-card {
+    position: relative;
+    min-height: 74px;
+    padding: 12px !important;
+    border-radius: 16px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+
+  .character-list-card:active {
+    transform: scale(.995);
+    border-color: rgba(178, 51, 86, .72);
+  }
+
+  .character-list-card > .row {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .character-list-main {
+    flex: 1 1 180px !important;
+    min-width: 0 !important;
+  }
+
+  .character-list-follow {
+    flex: 0 0 auto;
+    min-height: 42px;
+    padding: 9px 11px !important;
+    touch-action: manipulation;
+  }
+
+  .character-list-card .relnum {
+    max-width: 46%;
+    text-align: right;
+    white-space: normal;
+    line-height: 1.2;
+  }
+
+  .character-detail-scrim {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 72 !important;
+    display: block !important;
+    padding: 0 !important;
+    background: var(--ink) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .character-detail-sheet {
+    width: 100% !important;
+    max-width: none !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    margin: 0 !important;
+    padding: max(12px, env(safe-area-inset-top)) 14px calc(92px + env(safe-area-inset-bottom)) !important;
+    box-sizing: border-box !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  .character-detail-header {
+    position: sticky;
+    top: calc(-1 * max(12px, env(safe-area-inset-top)));
+    z-index: 30;
+    margin: calc(-1 * max(12px, env(safe-area-inset-top))) -14px 10px;
+    padding: max(12px, env(safe-area-inset-top)) 14px 10px;
+    background: rgba(10, 9, 16, .97);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .character-detail-sheet .social-profile-actions {
+    gap: 7px;
+    flex-wrap: wrap;
+  }
+
+  .character-detail-sheet .social-profile-actions .btn {
+    min-height: 42px;
+  }
+
 /* ---------- ROLE PLAY MOBIL ---------- */
 
 .scene-create-scrim {
@@ -5408,6 +5498,165 @@ function ownStorySnippetAbout(
     .trim();
 }
 
+function messageLooksLikeQuestion(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+
+  if (/[?？]/.test(text)) return true;
+
+  return /^(who|what|when|where|why|how|which|whose|do|does|did|are|is|was|were|can|could|would|will|have|has|had|should|may|might|ki|mi|mikor|hol|miért|hogyan|melyik|kinek|kivel|mit|mivel|van|volt|lesz|tudsz|akarod|szerinted)\b/i.test(text);
+}
+
+function chatQuestionInstruction(
+  w,
+  playerText,
+  addresseeName = "",
+  groupMode = false
+) {
+  if (!messageLooksLikeQuestion(playerText)) {
+    return "";
+  }
+
+  const en =
+    worldLanguage(
+      w,
+      w && w.meId
+    ) === "en";
+
+  if (en) {
+    return `
+DIRECT QUESTION — DO NOT AUTO-DODGE:
+- The player's latest message contains a real question.
+- Give a concrete answer to what was asked whenever ${groupMode ? "at least one relevant group member" : addresseeName || "the character"} realistically knows and is willing to answer.
+- Do NOT replace every answer with "why do you ask?", another question, a joke, flirting, silence or a vague one-liner.
+- You may tease, flirt, challenge or ask a counter-question AFTER answering.
+- Refuse / lie / evade only if the character has a specific canon-consistent reason: a secret, distrust, danger, lack of knowledge, manipulation, shame, etc.
+- If refusing, make it obvious that the question was understood.
+`;
+  }
+
+  return `
+KÖZVETLEN KÉRDÉS — NE DODGE-OLD AUTOMATIKUSAN:
+- A játékos legutóbbi üzenete valódi kérdést tartalmaz.
+- Adj konkrét választ arra, amit kérdezett, ha ${groupMode ? "legalább egy releváns csoporttag" : addresseeName || "a karakter"} reálisan tudja és hajlandó elmondani.
+- Ne válts ki minden választ visszakérdezéssel, poénnal, flörttel, hallgatással vagy ködös egysorossal.
+- Válasz UTÁN nyugodtan jöhet ugratás, flört, provokáció vagy visszakérdezés.
+- Csak akkor tagadj meg / hazudj / térj ki, ha erre konkrét karakterhű ok van: titok, bizalmatlanság, veszély, tudáshiány, manipuláció, szégyen stb.
+- Ha kitérsz, akkor is látszódjon, hogy pontosan értetted a kérdést.
+`;
+}
+
+function chatReferenceInstruction(
+  w,
+  playerName,
+  addresseeName = "",
+  groupMode = false
+) {
+  if (
+    worldLanguage(
+      w,
+      w && w.meId
+    ) !== "en"
+  ) {
+    return "";
+  }
+
+  return `
+ENGLISH REFERENCE MAP FOR THIS CONVERSATION:
+- In text written by ${playerName}, I / me / my / mine = ${playerName}.
+- ${
+    groupMode
+      ? `A named or @mentioned person is the strongest target of "you"; otherwise use the immediate reply context or the group as a whole.`
+      : `In this private DM, you / your / yours = ${addresseeName}.`
+  }
+- "about myself / me" = ${playerName}.
+- ${
+    groupMode
+      ? `"about you" must follow the named/replied-to target from context.`
+      : `"about you" = ${addresseeName}.`
+  }
+- he / she / they should follow the most recently clear compatible third person; a concrete name or @handle always overrides a pronoun.
+- Do not intentionally misunderstand these references.
+`;
+}
+
+function relationshipObsessionLevel(
+  w,
+  actorId,
+  targetId
+) {
+  if (
+    !w ||
+    !actorId ||
+    !targetId ||
+    actorId === targetId
+  ) {
+    return 0;
+  }
+
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (!actor || !target) {
+    return 0;
+  }
+
+  const rel =
+    getRel(
+      w,
+      actorId,
+      targetId
+    );
+
+  const direct =
+    [
+      rel && rel.mood,
+      rel && rel.hidden,
+      rel && rel.bond,
+      rel && rel.type,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+  const story =
+    String(
+      ownStorySnippetAbout(
+        actor,
+        target
+      ) || ""
+    ).toLowerCase();
+
+  const strong =
+    /obsess|obsessed|obsession|fixat|fixated|fixation|megszáll|mániás|mániákus|rá van kattanva|nem tudja kiverni|can't stop thinking|cannot stop thinking|all mine|az enyém az enyém/.test(
+      `${direct} ${story}`
+    );
+
+  if (strong) {
+    return 3;
+  }
+
+  const possessive =
+    /possess|possessive|possessiveness|birtokl|birtokló|féltékenyen ragaszkod|jealously possessive|mine\b|enyém\b/.test(
+      direct
+    );
+
+  if (possessive) {
+    return 2;
+  }
+
+  return 0;
+}
+
 function relationshipBehaviorCard(
   w,
   actorId,
@@ -5566,6 +5815,29 @@ function relationshipBehaviorCard(
       en
         ? "this character is naturally flirty: when the situation and target make sense, let them actually flirt instead of flattening them into neutral friendliness"
         : "ez a karakter természetesen flörtölős: ha a helyzet és a célpont indokolja, ténylegesen flörtöljön, ne laposodjon semleges kedvességgé"
+    );
+  }
+
+  const obsessionLevel =
+    relationshipObsessionLevel(
+      w,
+      actorId,
+      targetId
+    );
+
+  if (obsessionLevel >= 2) {
+    parts.push(
+      en
+        ? (
+            obsessionLevel >= 3
+              ? "ACTIVE OBSESSION: show multiple, varied signs over time — unusually close attention, remembering tiny details, faster/more frequent reactions, noticing who the target talks to, jealousy, possessive slips, checking their public posts/Notes, extra protectiveness or territorial behavior when character-appropriate. Do NOT use every sign in every message, and do not invent off-screen stalking that canon has not established."
+              : "possessive fixation is active: let extra attention, jealousy, territorial wording, protectiveness or heightened reaction to the target's social interactions leak through naturally and in varied ways"
+          )
+        : (
+            obsessionLevel >= 3
+              ? "AKTÍV MEGSZÁLLOTTSÁG: több, változatos jel látszódjon idővel — szokatlanul erős figyelem, apró részletek megjegyzése, gyorsabb/gyakoribb reakció, annak figyelése, kivel beszél a célpont, féltékenység, birtokló elszólások, a nyilvános posztok/Note-ok fokozott figyelése, túlzott védelmezés vagy territoriális viselkedés, ha karakterhű. Ne minden jel legyen benne minden mondatban, és ne találj ki a kánon által nem megalapozott offline stalkolást."
+              : "aktív birtokló fixáció: természetesen szivárogjon át a plusz figyelem, féltékenység, territoriális szóhasználat, védelmezés vagy a célpont social interakcióira adott erősebb reakció"
+          )
     );
   }
 
@@ -6000,6 +6272,15 @@ UNIVERZÁLIS ISMÉTLÉSTILALOM:
 - Ne térjen vissza gépiesen ugyanahhoz a mondatkezdéshez, becenévhez, sértéshez, flörtformulához, fenyegetéshez, metaforához, poénhoz vagy emoji-kombinációhoz.
 - A hang lehet következetes; a konkrét szöveg viszont mindig legyen friss.
 
+ANGOL NÉVMÁSOK ÉS REFERENCIÁK — KÖTELEZŐ MEGÉRTÉS:
+- Ha a világ nyelve angol, természetes beszélgetésként oldd fel az I / me / my / mine, you / your / yours, he / him, she / her, they / them névmásokat.
+- A játékos által írt "I / me / my / mine" a játékos saját karakterére utal.
+- Privát chatben a játékos által írt "you / your / yours" azzal az AI-karakterrel azonos, akinek éppen ír.
+- Ha a játékos azt írja, hogy "I was talking about you", értsd úgy, hogy az AI-karakterről beszélt. Ha azt írja, hogy "about myself / me", a játékos saját karakteréről beszél.
+- Harmadik személyű he / she / they névmásnál a legutóbb egyértelműen megnevezett, nemileg és kontextusban megfelelő szereplőt kövesd. A konkrét név vagy @handle mindig felülírja a névmásos következtetést.
+- Csoportchatben a "you" lehet egy megnevezett/@taggelt személy vagy a csoport egésze; a közvetlen előzményből döntsd el.
+- Ha tényleg több, egyformán valós referens van, kérdezz vissza röviden. Ne tegyél úgy, mintha nem értenéd az egyszerű angol névmásokat.
+
 KARAKTERKÁNON — NEM OPCIONÁLIS
 - A karakter SAJÁT adatlapján szereplő minden információ aktív kánon: személyiség, tulajdonságok, teljes háttértörténet, titkok, félelmek, célok, kedvencek, beszédstílus, példamondatok mint stílusminta, képességek, harci tudás, rang, szerep, szervezet, affiliation és egyéb információ.
 - Ne csak 2-3 feltűnő tulajdonságot emelj ki. A teljes személyiséget és történetet egyetlen koherens emberként add vissza.
@@ -6182,6 +6463,27 @@ You are the engine of a living, AI-driven social-media world for a roleplay game
 You play every character strictly from their own sheet. The sheet is not background info — it IS the character's voice.
 
 MAIN RULE: every response must be true to character, natural, human and appropriate to the current situation. Personality, history, current emotions and relationships determine WHAT a character says — but the communication format determines HOW they say it and how long the response should be.
+
+CHARACTER FIDELITY — ABSOLUTE PRIORITY:
+- Treat the ENTIRE character sheet as active behavioral canon, not decorative background.
+- Reconcile every response with personality, traits, speech style, full history, secrets, fears, goals, likes, abilities, organization, rank, relationships and current memories.
+- If a line could be moved unchanged to several other characters, it is not character-specific enough.
+- Do not sand down obsessive, possessive, cruel, arrogant, manipulative, chaotic, shy, jealous, dominant or emotionally closed characters into generic assistant politeness.
+- Example dialogue is style guidance only. Never recycle it as a catchphrase.
+
+ENGLISH PRONOUN / REFERENCE RESOLUTION — HARD RULE:
+- In player-authored text, "I / me / my / mine" means the player's own character.
+- In a private chat, player-authored "you / your / yours" means the AI character receiving that DM.
+- "I was talking about you" means the current addressee; "I was talking about myself / me" means the player's own character.
+- Resolve he / him, she / her and they / them from the most recently clear compatible person in the conversation. A concrete name or @handle overrides a pronoun.
+- In group chat, "you" may mean a named/@mentioned person or the group, depending on the immediate conversational context.
+- If two references are genuinely equally plausible, ask one short clarification. Do not pretend not to understand ordinary English pronouns.
+
+QUESTION ANSWERING:
+- When the player asks a direct question in chat, answer the actual question instead of automatically dodging it with another question, flirting, a joke or a vague reaction.
+- A character may refuse, lie, evade or say they do not know ONLY when their canon, secrets, knowledge or relationship gives them a real reason.
+- Even then, make the refusal deliberate and character-specific; do not act as if the question was not understood.
+- It is fine to answer first and THEN tease, deflect, challenge or ask something back.
 
 COMMUNICATION FORMAT
 
@@ -8926,6 +9228,82 @@ function ensureFollowerSystem(w) {
       });
   });
 
+  /*
+   * A jóban lévő AI-karakterek, közeli barátok és családtagok
+   * social graphja tükrözze a kapcsolatot.
+   *
+   * A játékos saját following listáját NEM írjuk felül automatikusan,
+   * de az AI-karakter követheti a játékost, ha közeli/családi a viszony.
+   */
+  profiles.forEach((actor) => {
+    if (
+      !actor ||
+      isHuman(w, actor.id) ||
+      isMediaAccount(w, actor.id)
+    ) {
+      return;
+    }
+
+    profiles.forEach((target) => {
+      if (
+        !target ||
+        target.id === actor.id ||
+        isMediaAccount(w, target.id)
+      ) {
+        return;
+      }
+
+      const forward =
+        getRel(
+          w,
+          actor.id,
+          target.id
+        );
+
+      const reverse =
+        getRel(
+          w,
+          target.id,
+          actor.id
+        );
+
+      const closeByScore =
+        Number(forward.score || 0) >= 35 ||
+        Number(reverse.score || 0) >= 35;
+
+      const closeByBond =
+        followBondWeight(forward) >= 34 ||
+        followBondWeight(reverse) >= 34;
+
+      if (
+        !closeByScore &&
+        !closeByBond
+      ) {
+        return;
+      }
+
+      if (
+        !actor.following.includes(
+          target.id
+        )
+      ) {
+        actor.following.push(
+          target.id
+        );
+      }
+
+      if (
+        !target.followers.includes(
+          actor.id
+        )
+      ) {
+        target.followers.push(
+          actor.id
+        );
+      }
+    });
+  });
+
   return w;
 }
 
@@ -9336,6 +9714,18 @@ function followInterestScore(
 
   score +=
     followBondWeight(rel);
+
+  const obsessionLevel =
+    relationshipObsessionLevel(
+      w,
+      actor.id,
+      target.id
+    );
+
+  if (obsessionLevel > 0) {
+    score +=
+      obsessionLevel * 28;
+  }
 
   /*
    * Ha a célpont már követi őt, az erős follow-back jel,
@@ -12897,6 +13287,18 @@ function socialInteractionInterest(
     interest += 12;
   }
 
+  const obsessionLevel =
+    relationshipObsessionLevel(
+      w,
+      actorId,
+      targetId
+    );
+
+  if (obsessionLevel > 0) {
+    interest +=
+      obsessionLevel * 30;
+  }
+
   return interest;
 }
 
@@ -15447,7 +15849,7 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
 
   return (
     <div
-      className="scrim"
+      className="scrim character-detail-scrim"
       onClick={(e) => {
         if (
           e.target ===
@@ -15457,8 +15859,8 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
         }
       }}
     >
-      <div className="sheet">
-        <div className="between">
+      <div className="sheet character-detail-sheet">
+        <div className="between character-detail-header">
           <button
             className="btn tiny ghost"
             onClick={onClose}
@@ -15956,10 +16358,26 @@ function Cast({ w, update, setErr, goChat, jump }) {
       {w.chars.map((c) => {
         const r = getRel(w, c.id, w.meId);
         return (
-          <div className="card" key={c.id} onClick={() => setOpen(c.id)} style={{ cursor: "pointer" }}>
+          <div
+            className="card character-list-card"
+            key={c.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => setOpen(c.id)}
+            onKeyDown={(e) => {
+              if (
+                e.key === "Enter" ||
+                e.key === " "
+              ) {
+                e.preventDefault();
+                setOpen(c.id);
+              }
+            }}
+            style={{ cursor: "pointer" }}
+          >
             <div className="row">
               <Av src={c.avatar} name={c.name} />
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="character-list-main" style={{ flex: 1, minWidth: 0 }}>
                 <div className="between">
                   <div className="name">{c.name}</div>
                   <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score} · {relLabel(r)}</span>
@@ -15974,9 +16392,11 @@ function Cast({ w, update, setErr, goChat, jump }) {
 
               <button
                 className={
-                  isFollowing(w, w.meId, c.id)
-                    ? "btn tiny ghost social-following"
-                    : "btn tiny ghost"
+                  (
+                    isFollowing(w, w.meId, c.id)
+                      ? "btn tiny ghost social-following "
+                      : "btn tiny ghost "
+                  ) + "character-list-follow"
                 }
                 onClick={(e) => {
                   e.stopPropagation();
@@ -16318,6 +16738,74 @@ function detectSceneEventKind(scene) {
   return "scene";
 }
 
+function roleplayEventSocialSignals(value) {
+  const text =
+    String(value || "")
+      .toLowerCase();
+
+  const tags = [];
+  let romance = 0;
+  let drama = 0;
+  let embarrassment = 0;
+  let importance = 0;
+
+  const hasKiss =
+    /\bkiss(?:ed|ing|es)?\b|csók|megcsókol|csókolóz/.test(
+      text
+    );
+
+  const hasHookup =
+    /\bhook[\s-]?up\b|\bhooked up\b|\bmake(?:s|ing)? out\b|\bmade out\b|\bslept with\b|kavar|kavart|összejött|összejöttek/.test(
+      text
+    );
+
+  const hasFlirt =
+    /\bflirt(?:ed|ing|s)?\b|flört|ráhajt|hajtott rá|chemistry|vonzalom/.test(
+      text
+    );
+
+  const hasCheating =
+    /\bcheat(?:ed|ing|s)?\b|megcsal|félrelép|affair|viszony/.test(
+      text
+    );
+
+  if (hasKiss) {
+    tags.push("romance", "kiss");
+    romance = Math.max(romance, 76);
+    drama = Math.max(drama, 32);
+    importance = Math.max(importance, 66);
+  }
+
+  if (hasHookup) {
+    tags.push("romance", "hookup");
+    romance = Math.max(romance, 72);
+    drama = Math.max(drama, 38);
+    importance = Math.max(importance, 68);
+  }
+
+  if (hasFlirt) {
+    tags.push("romance", "flirt");
+    romance = Math.max(romance, 46);
+    importance = Math.max(importance, 48);
+  }
+
+  if (hasCheating) {
+    tags.push("romance", "cheating", "betrayal", "scandal");
+    romance = Math.max(romance, 64);
+    drama = Math.max(drama, 78);
+    embarrassment = Math.max(embarrassment, 52);
+    importance = Math.max(importance, 82);
+  }
+
+  return {
+    romance,
+    drama,
+    embarrassment,
+    importance,
+    tags: [...new Set(tags)],
+  };
+}
+
 function sceneEventRecapEligible(scene, aiWitnessCount) {
   const kind = (scene && scene.eventKind) || detectSceneEventKind(scene);
   return Number(aiWitnessCount) >= 2 && (kind === "party" || kind === "event");
@@ -16511,6 +16999,8 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - A szereplők kezdeményezhetnek, megszakíthatják egymást, kerülhetnek valakit, provokálhatnak, flörtölhetnek, összeveszhetnek vagy elterelhetik a témát, ha ez a személyiségükből és a helyzetből következik.
 - A "narrator" csak a jelenet érzékelhető leírása: mit látni, hallani, milyen a tér és a hangulat. Legfeljebb egy narrator-turn legyen ebben a körben.
 - A szereplők belső érzései megjelenhetnek a roleplay prózában, de ne adj nekik olyan TUDÁST, amit a saját karakterük nem szerezhetett meg.
+- Ha a jelenetben TÉNYLEG megtörténik megfigyelhető romantikus/szaftos esemény — például csók, csókolózás/making out, nyilvános kavarás/hookup, egyértelmű flört, megcsalás vagy lebukás — azt az "events" tömbben külön, tényszerű eseményként is rögzítsd a konkrét érintettekkel. Ne puhítsd "volt köztük valami feszültség" típusú homályos összefoglalássá, ha konkrétan csók történt.
+- Ugyanakkor csak azt rögzítsd, ami ténylegesen megtörtént vagy látható volt; puszta kémiából ne találj ki csókot/kavarást.
 - Ne zárd le automatikusan a jelenetet; azt csak a külön "Jelenet lezárása" funkció teszi.
 - ${w.player.name} helyett SOHA ne beszélj, ne dönts és ne cselekedj. Ha az ő reakciója kellene a folytatáshoz, állj meg előtte.
 - Ha ${w.player.name} karakterhez beszélnek, E/2-ben, tegezve szóljanak hozzá; magukról E/1-ben beszéljenek.
@@ -16688,6 +17178,11 @@ VÁLASZ CSAK JSON:
           (eventText, index) => {
             const eventTs = now();
 
+            const socialSignals =
+              roleplayEventSocialSignals(
+                eventText
+              );
+
             recordSocialEvent(
               n,
               {
@@ -16711,15 +17206,23 @@ VÁLASZ CSAK JSON:
                   "observed",
 
                 importance:
-                  eventRecapEligible
-                    ? 68
-                    : 48,
+                  Math.max(
+                    eventRecapEligible
+                      ? 68
+                      : 48,
+                    socialSignals.importance
+                  ),
                 drama:
-                  eventRecapEligible
-                    ? 38
-                    : 26,
-                romance: 0,
-                embarrassment: 0,
+                  Math.max(
+                    eventRecapEligible
+                      ? 38
+                      : 26,
+                    socialSignals.drama
+                  ),
+                romance:
+                  socialSignals.romance,
+                embarrassment:
+                  socialSignals.embarrassment,
 
                 source:
                   "roleplay",
@@ -16740,6 +17243,7 @@ VÁLASZ CSAK JSON:
                   eventRecapEligible
                     ? "party-drama"
                     : "roleplay-moment",
+                  ...socialSignals.tags,
                 ],
 
                 meta: {
@@ -16852,6 +17356,10 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
           const sceneKind = s.eventKind || detectSceneEventKind(s);
           s.eventKind = sceneKind;
           const eventRecapEligible = sceneEventRecapEligible(s, aiWitnessIds.length);
+          const summarySignals =
+            roleplayEventSocialSignals(
+              String(out.summary || "")
+            );
 
           recordSocialEvent(
             n,
@@ -16877,10 +17385,20 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
               factLevel:
                 "observed",
 
-              importance: 38,
-              drama: 18,
-              romance: 0,
-              embarrassment: 0,
+              importance:
+                Math.max(
+                  38,
+                  summarySignals.importance
+                ),
+              drama:
+                Math.max(
+                  18,
+                  summarySignals.drama
+                ),
+              romance:
+                summarySignals.romance,
+              embarrassment:
+                summarySignals.embarrassment,
 
               source:
                 "roleplay",
@@ -16894,6 +17412,7 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
                 gossipEligible
                   ? "gossip-eligible"
                   : "private-scene",
+                ...summarySignals.tags,
               ],
 
               meta: {
@@ -17190,6 +17709,20 @@ ${w.player.name} [${w.meId}]
 
 EDDIGI ÜZENETEK:
 ${hist || "a beszélgetés most kezdődik"}
+
+${chatReferenceInstruction(
+  w,
+  w.player.name,
+  "",
+  true
+)}
+
+${chatQuestionInstruction(
+  w,
+  mine,
+  "",
+  true
+)}
 
 ${
   mine
@@ -17891,6 +18424,20 @@ ${selfMemoryForPrompt(
 BESZÉLGETÉS:
 ${hist}
 
+${chatReferenceInstruction(
+  requestWorld,
+  requestWorld.player.name,
+  c.name,
+  false
+)}
+
+${chatQuestionInstruction(
+  requestWorld,
+  t,
+  c.name,
+  false
+)}
+
 ${voiceCard(c)}
 
 ${repetitionGuard(
@@ -17947,6 +18494,7 @@ PRIVÁT CHAT SZABÁLYOK:
 - Ne írj belső gondolatokat.
 - Ne használj *csillagok közé tett cselekvéseket*.
 - Reagálj arra, amit a játékos TÉNYLEG most írt.
+- Ha konkrét kérdést tett fel, ne cseréld le automatikusan a választ egy visszakérdezésre vagy ködös reakcióra. Ha tudod és nincs karakterhű okod titkolni, VÁLASZOLJ rá konkrétan; utána jöhet flört, poén, provokáció vagy visszakérdezés.
 - Maradj teljesen karakterhű.
 - A példamondatok és hangminták kizárólag stílusirányok, soha ne másold vagy parafrazáld őket.
 - Ha a karakter természetesen használ emojit, használhatsz valódi emojit is.
@@ -20313,6 +20861,7 @@ TERMÉSZETES CHATSTÍLUS:
 - A kapcsolat pontszáma, bondja, moodja, rejtett érzése és a történeted ténylegesen irányítsa a viselkedést.
 - Jó viszonynál természetesebb lehet a közvetlenség, bizalom, védelem vagy ugratás; rossz viszonynál a feszültség, gúny, türelmetlenség vagy rivalizálás.
 - Crush/vonzalom esetén a plusz figyelem, flört, zavar, féltékenység vagy birtoklás megjelenhet, ha karakterhű, anélkül hogy mindent kimondanál.
+- Ha a kapcsolatod / hidden moodod / történeted szerint OBSESSED vagy megszállott vagy vele, ennek ne csak egyetlen féltékeny mondat legyen a jele. Idővel változatosan látszódhat: gyorsabb ráírás, több figyelem, apró részletek megjegyzése, annak észrevétele, kivel beszél, birtokló elszólás, fokozott reagálás a posztjaira/Note-jaira vagy intenzívebb féltékenység. Ne mindet használd egyszerre, és ne találj ki nem létező offline követést.
 - Ha alapból flörtölős vagy, megfelelő helyzetben ténylegesen flörtölj.
 - A történetedből származó lojalitásokat és rivalizálásokat ne felejtsd el; dojo/szervezeti ellenféllel ne viselkedj automatikusan semleges idegenként.
 
@@ -20703,9 +21252,26 @@ function pickInitiator(w) {
       }
     }
 
+    const obsessionLevel =
+      relationshipObsessionLevel(
+        w,
+        c.id,
+        w.meId
+      );
+
+    const obsessionRecencyBonus =
+      obsessionLevel *
+      60 * 60 * 1000;
+
     return {
       c,
       lastOwnDm,
+      priorityAt:
+        lastOwnDm > 0
+          ? lastOwnDm -
+            obsessionRecencyBonus
+          : -obsessionRecencyBonus,
+      obsessionLevel,
       tie: Math.random(),
     };
   });
@@ -20722,11 +21288,22 @@ function pickInitiator(w) {
    */
   pool.sort((a, b) => {
     if (
-      a.lastOwnDm !== b.lastOwnDm
+      a.priorityAt !==
+      b.priorityAt
     ) {
       return (
-        a.lastOwnDm -
-        b.lastOwnDm
+        a.priorityAt -
+        b.priorityAt
+      );
+    }
+
+    if (
+      a.obsessionLevel !==
+      b.obsessionLevel
+    ) {
+      return (
+        b.obsessionLevel -
+        a.obsessionLevel
       );
     }
 
@@ -21892,6 +22469,7 @@ TÍPUS: ${event.type}
 BIZONYOSSÁG: ${event.factLevel}
 FORRÁSTÍPUS: ${event.sourceType || "-"}
 TANÚK SZÁMA: ${event.witnessCount || 0}
+TAGEK: ${Array.isArray(event.tags) && event.tags.length ? event.tags.join(", ") : "-"}
 TÉNYLEGES ESEMÉNY: ${event.text}`
     )
     .join("\n\n");
@@ -22050,11 +22628,20 @@ KÜLÖN PARTY / EVENT RECAP SZABÁLY:
 - Az összes attendee kerüljön bele legalább egyszer a recapba.
 - A jelenlét ténye használható.
 - Konkrét cselekvést / konfliktust / flörtöt / idézetet CSAK akkor rendelj hozzá valakihez, ha az EVENTEK ezt ténylegesen alátámasztják.
+- Ha az EVENTEK csókot, making outot, kavarást/hookupot, megcsalást vagy több romantikus párost tartalmaznak, ezek kapjanak látható, szaftos fókuszt a recapban.
 - A preferált formátum: recap vagy long.
 ` : ""}
 
 KORÁBBI ${media.name} POSZTOK — NE ISMÉTELD A SZERKEZETÜKET:
 ${recentMediaPosts || "még nincs"}
+
+SZAFTOS ROMANTIKUS / KAVARÁS PRIORITÁS:
+- Ha az EVENTEK konkrétan csókot, csókolózást/making outot, hookupot/kavarást, megcsalást, lebukást, nyilvános flörtöt vagy más egyértelmű romantikus történést tartalmaznak, EZT NE HAGYD KI a gossip-posztból.
+- Ha konkrétan az szerepel, hogy két ember megcsókolta egymást, írd le egyértelműen, hogy megcsókolták egymást; ne puhítsd pusztán "chemistry" vagy "vibes" szintre.
+- Ha több külön páros vagy egymásba érő kavarás van ugyanazon bulin/eseményen, követhetően fűzd össze, ki kivel mit csinált.
+- Megcsalásnál / háromszögnél / ex + új kavarásnál a kapcsolati kontraszt és az időzítés lehet a sztori gerince, HA az EVENTEK ezt alátámasztják.
+- A bizonyossági szintet tartsd meg: rumor maradjon rumor, speculation maradjon speculation.
+- Ne találj ki csókot, hookupot vagy romantikus kapcsolatot pusztán azért, hogy szaftosabb legyen.
 
 SZIGORÚ TARTALMI SZABÁLYOK:
 - SOHA ne találj ki új eseményt, új szereplőt, új helyszínt, új idézetet vagy titkos részletet.
