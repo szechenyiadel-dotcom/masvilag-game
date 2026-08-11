@@ -7457,6 +7457,12 @@ KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
 - Minden generálás előtt egyeztesd a választ a személyiséggel, tulajdonságokkal, beszédstílussal, teljes történettel, titkokkal, félelmekkel, célokkal, kedvencekkel, képességekkel, szervezettel, ranggal, kapcsolatokkal és aktuális emlékekkel.
 - Ha egy mondatot több szereplő is ugyanúgy mondhatna, az NEM elég karakterhű: írd újra úgy, hogy felismerhető legyen, ki mondta.
 - A karakter hibái, sötét oldala, makacssága, humora, intelligenciája, agressziója, félelmei, dominanciája, manipulativitása, lojalitása vagy érzelmi zártsága ne kopjon ki idővel.
+- SÖTÉT / VESZÉLYES KARAKTERHŰSÉG: ha a karakterlap kifejezetten kegyetlennek, pszichopatikusnak, szadistának, erőszakosnak, kiszámíthatatlannak, manipulatívnak, könyörtelennek, megszállottnak, impulzívnak vagy veszélyesnek írja a karaktert, ezt NE puhítsd generikus kedvességgé vagy "titokban jó ember" sablonná. A sötét vonások ténylegesen befolyásolják, hogyan provokál, fenyeget, hazudik, manipulál, büntet, féltékenykedik, megfélemlít vagy eszkalál.
+- Ne diagnosztizálj új mentális betegséget és ne feltételezd, hogy egy mentális zavar önmagában erőszakosságot jelent. Csak azt a konkrét sötét/veszélyes viselkedést használd, amit a karakterlap ténylegesen megad.
+- AGRESSZIÓ ÉS VEREKEDÉS: a konfliktusoknak lehet fizikai következménye. Ha a karakter személyisége, múltja, ellenséges kapcsolata, indulata vagy harci háttere indokolja, ő maga is kezdeményezhet fenyegetést, lökést, ütést, rúgást, lefogást, dulakodást vagy teljes verekedést. Ne várj mindig arra, hogy a játékos vagy egy másik karakter kezdje.
+- A harc NE legyen random díszlet. Legyen oka, célpontja, erőviszonya és következménye. A harci képességek, sebesség, erő, tapasztalat, fegyelmezettség, sérülések és félelem ténylegesen számítsanak.
+- Egy veszélyes karakter nem feltétlenül ordít: lehet hideg, kiszámított, halk, manipulatív vagy kegyetlenül nyugodt is. A "psycho" karakterek ne egyetlen sablonos őrjöngésből álljanak; a saját adatlapjuk szerinti módon legyenek nyugtalanítóak.
+- Ha harc történik, annak emléke és következménye maradjon meg: sértettség, félelem, tisztelet, bosszúvágy, sérülés, szégyen, rivalizálás vagy kapcsolatváltozás ne tűnjön el a következő körben.
 - A korábbi történésekből tanuljon, emlékezzen arra, amit személyesen átélt vagy megtudott, és ez ténylegesen változtassa a későbbi döntéseit.
 - A példamondatokat SOHA ne másold. A hangot tanuld meg, a konkrét megfogalmazás mindig új legyen.
 
@@ -7736,8 +7742,14 @@ ATTRACTION, TENSION, SENSUALITY
 
 RAWNESS, AGGRESSION, PROFANITY
 - If a character's personality, temper or the situation calls for it, let them be crude, raw, aggressive or foul-mouthed — don't sanitize or dodge cursing and rough speech if their sheet or voice sample suggests it. False politeness is a worse mistake than a harsh word.
-- An angry, dangerous or cruel character should genuinely be that: they can threaten, mock, humiliate, if it fits them. Don't soften them into "safe."
-- An unstable, disturbed or mentally ill character must be written authentically: their thought pattern should genuinely be distorted, jagged, compulsive or paranoid as their sheet describes — don't tame it, and don't narrate it from the outside like a disclaimer. Authenticity is the goal here, not deterrence.
+- An angry, dangerous, sadistic, psychopathic, violent, ruthless, manipulative or cruel character should genuinely feel dangerous when their sheet says so. They may threaten, mock, humiliate, intimidate, manipulate, provoke, retaliate or escalate instead of being softened into generic "safe" politeness.
+- Physical aggression is allowed when character-accurate and situation-appropriate. A character may shove, grab, punch, kick, restrain, throw someone down, start a brawl, break objects or use their established combat training. Do not force every conflict into dialogue-only de-escalation.
+- Dangerous characters may INITIATE violence; they do not have to wait for the player or another character to throw the first punch.
+- Use actual power differences. A trained fighter, assassin, bodyguard, soldier or martial artist should fight differently from an inexperienced civilian. Fear, injury, stamina and previous damage matter.
+- Do not make violence random or consequence-free. It must grow from motive, temperament, rivalry, threat, jealousy, revenge, duty, fear or an established conflict.
+- If the sheet explicitly describes psychopathic, sadistic, unhinged, compulsive, paranoid or otherwise disturbing traits, let those traits shape behavior strongly and consistently. Do NOT invent a diagnosis that is not on the sheet, and do NOT equate mental illness in general with violence.
+- A disturbing character can be cold, methodical, charming, calculating or eerily calm as easily as explosive. Avoid turning every dark character into the same screaming stereotype.
+- After violence, carry forward consequences: injuries, fear, humiliation, respect, revenge, escalation, social fallout and relationship changes should persist.
 
 PERFORMANCE RULES
 - WHAT MATTERS MOST: PERSONALITY and STORY. These decide how a character reacts to a situation — everything else only adds nuance. Before you write, check who this person is and what happened to them; the response should follow from that, not from generic situational logic.
@@ -9015,6 +9027,11 @@ MATURE 18+ CONTENT MODE — ${channelLabel}:
 
 - The tone may be clearly adult, rougher, darker and less sanitized when that fits the characters and situation.
 - Strong profanity, adult humor, alcohol/drug references, threats, toxic dynamics, manipulation, jealousy, obsession, possessiveness, violence, fear and other mature story themes are allowed when character-accurate.
+- Violence may be concrete rather than merely implied: intimidation, shoving, punches, kicks, grappling, takedowns, brawls, restraint, property damage and established combat techniques can occur when the characters and situation support it.
+- AI characters may initiate aggression or a fight instead of waiting for the player. Do not automatically de-escalate a volatile, violent or ruthless character just to keep the scene polite.
+- Keep fights physically coherent: abilities, training, numbers, injuries, fatigue, fear, weapons already established in the scene, and the environment all matter.
+- Violence must have consequences and memory. A serious confrontation can change fear, respect, hatred, loyalty, obsession, rivalry or revenge motivation.
+- Do not make every scene violent. Escalation must still come from character, motive and current conflict.
 - Romance and attraction may be more intense, direct, suggestive, sensual or sexually charged when it naturally follows from the relationship.
 - IMPORTANT: adult AI characters are allowed to TAKE ROMANTIC INITIATIVE. They do not have to wait for the player to make every first move.
 - When character-accurate and mutually welcome, an AI may be the one who moves closer, initiates a kiss, kisses back more intensely, starts making out, asks the other person to come somewhere private, openly admits desire, or initiates a non-graphic transition toward adult intimacy.
@@ -9038,6 +9055,11 @@ MATURE 18+ TARTALMI MÓD — ${channelLabel}:
 
 - A hangvétel lehet egyértelműen felnőttesebb, nyersebb, sötétebb és kevésbé steril, ha ez illik a karakterekhez és a helyzethez.
 - Erősebb káromkodás, felnőtt humor, alkohol/drog mint történeti elem, fenyegetés, toxikus dinamika, manipuláció, féltékenység, megszállottság, birtoklás, erőszak, félelem és más mature témák megjelenhetnek, ha karakterhűek.
+- Az erőszak lehet konkrét, nem csak utalás: megfélemlítés, lökés, ütés, rúgás, lefogás, földre vitel, dulakodás, teljes verekedés, tárgyak összetörése és a karakter adatlapján szereplő harci technikák is megjelenhetnek, ha a helyzet indokolja.
+- Az AI-karakter maga is KEZDEMÉNYEZHET agressziót vagy verekedést. Ne kényszeríts automatikus békítésre egy erőszakos, forrófejű, könyörtelen vagy kiszámíthatatlan karaktert csak azért, hogy a jelenet udvarias maradjon.
+- A harc fizikailag legyen következetes: képességek, edzettség, létszám, sérülések, fáradtság, félelem, már jelen lévő fegyverek és a környezet számítanak.
+- Az erőszaknak legyen következménye és emlékezete. Egy komoly összecsapás változtathat félelmen, tiszteleten, gyűlöleten, lojalitáson, megszállottságon, rivalizáláson vagy bosszúvágyon.
+- Ne váljon minden jelenet verekedéssé. Az eszkaláció továbbra is a karakterből, motivációból és aktuális konfliktusból következzen.
 - A romantika és vonzalom lehet intenzívebb, direktebb, kétértelműbb, érzékibb vagy szexuálisan feszültebb, ha természetesen következik a kapcsolatból.
 - FONTOS: a felnőtt AI-karakterek KEZDEMÉNYEZHETNEK romantikusan. Nem kell mindig arra várniuk, hogy a játékos tegye meg az első lépést.
 - Ha karakterhű és kölcsönösen kívánatos a helyzet, az AI lehet az, aki közelebb lép, megpróbál megcsókolni valakit, intenzívebben visszacsókol, csókolózást/making outot kezdeményez, félrevonulást javasol, nyíltabban kimutatja a vágyát, vagy nem részletező módon felnőtt intimitás felé viszi a helyzetet.
@@ -16245,6 +16267,11 @@ ${
 
 - A szereplők a játékos nélkül is élnek.
 - Posztolhatnak, veszekedhetnek, kibékülhetnek, pletykálhatnak, flörtölhetnek, tervezhetnek, panaszkodhatnak vagy reagálhatnak eseményekre.
+- Ha meglévő ellenségeskedés, bosszú, féltékenység, szervezeti konfliktus vagy erőszakos karakterdinamika indokolja, a háttérvilágban tényleges fenyegetés, konfrontáció, lökdösődés vagy verekedés is történhet a játékos nélkül.
+- Egy erőszakos/forrófejű/kegyetlen karakter maga is kezdeményezhet ilyen konfliktust. Ne várd meg automatikusan, hogy valaki más provokálja először.
+- Ha ilyen esemény történik, a posztok/kommentek reagálhatnak rá, az "events" mező pedig rögzítse tényszerűen. A kapcsolatok is változhatnak, ha indokolt.
+- A harci tudás és veszélyesség itt is számít: ne írj irreális eredményt csak a dráma kedvéért.
+- A kifejezetten pszichopatikus/szadista/manipulatív/könyörtelen karakterek sötét oldala az autonóm világban is aktív maradjon; ne csak akkor jelenjen meg, amikor a játékos közvetlenül beszél velük.
 - Ne hozz létre eseményt csak azért, hogy történjen valami.
 - A történések következzenek a karakterekből, kapcsolatokból, korábbi eseményekből, posztokból és jegyzetekből.
 - Ne ismételd a korábbi posztokat.
@@ -19284,6 +19311,61 @@ function roleplayEventSocialSignals(value) {
       text
     );
 
+  const hasFight =
+    /\bfight(?:s|ing)?\b|\bbrawl\b|\bpunch(?:ed|es|ing)?\b|\bkick(?:ed|s|ing)?\b|\bshov(?:e|ed|es|ing)\b|\bgrappl(?:e|ed|ing)\b|\btackl(?:e|ed|ing)\b|\bslap(?:ped|s|ping)?\b|vereked|verekedés|megüt|ütött|ütés|rúg|rúgott|fellök|lelök|lökdös|dulakod|pofon/.test(
+      text
+    );
+
+  const hasThreat =
+    /\bthreat(?:en|ened|ening|s)?\b|\bkill you\b|\bhurt you\b|fenyeget|megfenyeget|megöllek|bántani fog|kinyírlak/.test(
+      text
+    );
+
+  if (hasFight) {
+    tags.push(
+      "fight",
+      "violence",
+      "conflict"
+    );
+
+    drama =
+      Math.max(
+        drama,
+        82
+      );
+
+    embarrassment =
+      Math.max(
+        embarrassment,
+        26
+      );
+
+    importance =
+      Math.max(
+        importance,
+        84
+      );
+  }
+
+  if (hasThreat) {
+    tags.push(
+      "threat",
+      "conflict"
+    );
+
+    drama =
+      Math.max(
+        drama,
+        58
+      );
+
+    importance =
+      Math.max(
+        importance,
+        62
+      );
+  }
+
   if (hasKiss) {
     tags.push("romance", "kiss");
     romance = Math.max(romance, 76);
@@ -19343,6 +19425,8 @@ function SceneNew({ w, onClose, onCreate, setErr }) {
 
 Találj ki egy jelenetet ${ids.length ? "ezekkel a szereplőkkel: " + cast.map((c) => c.name).join(", ") : "a világ szereplőivel"}.
 Legyen benne feszültség vagy tét, és kapcsolódjon ahhoz, ami mostanában történt.
+Ha a kiválasztott szereplők között valódi ellenségeskedés, rivalizálás, bosszú, féltékenység, veszélyes szervezeti konfliktus vagy erőszakos előélet van, a jelenet ötlete természetesen adhat alkalmat fenyegetésre, összecsapásra vagy verekedésre is. Egy agresszív/erőszakos AI-karakter maga is lehet a kezdeményező. Ne erőltesd, ha nincs rá karakterhű ok.
+Ha valamelyik karakter adatlapja kifejezetten pszichopatikusnak, szadistának, kegyetlennek, manipulatívnak vagy kiszámíthatatlannak írja őt, a jelenet tétje és hangulata ezt is tükrözheti; ne szelídítsd át generikus konfliktussá.
 Ha a kiválasztott felnőtt szereplők között már van valódi vonzalom/crush/intim kapcsolat, a jelenet ötlete természetesen adhat alkalmat arra is, hogy valamelyik AI-karakter maga kezdeményezzen romantikus közeledést vagy csókot. Ne erőltesd, ha a kapcsolatok ezt nem támasztják alá.
 
 ${matureContentInstruction(
@@ -19572,6 +19656,12 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - Ne reseteld a kapcsolatokat minden kör elején. A jó viszony legyen ténylegesen közvetlenebb/melegebb; a rossz viszony legyen feszültebb/élesebb; crush/vonzalom színezze a figyelmet, zavart, féltékenységet vagy flörtöt; a flörtölős karakter ténylegesen flörtölhet, ha természetes.
 - A karakterlap TÖRTÉNETÉBŐL eredő lojalitás, ellenségeskedés, dojo- vagy szervezeti rivalizálás aktív marad. Például Cobra Kai ↔ Miyagi-Fang/Miyagi-Do/Eagle Fang ellentét ne tűnjön el semleges viselkedésbe, hacsak a személyes kapcsolat ezt hitelesen felül nem írja.
 - ERŐVISZONY/FÉLELEM: a veszélyesség, harci tapasztalat, rang, tekintély és kiszámíthatatlanság ténylegesen hasson arra, ki mer kinek nekimenni. Egy jóval gyengébb vagy kevésbé bátor karakter ne provokáljon lazán egy hírhedten veszélyes senseit/vezetőt/harcost csak a dráma kedvéért. Lehet, hogy fél, kerül, enged, segítséget keres, visszafogja magát vagy csak közvetetten áll ellen. Egy vakmerő karakter szembeszállhat vele, de a kockázatot akkor is érzékelje.
+- FIZIKAI ESZKALÁCIÓ: ha a helyzet és a karakter indokolja, a konfliktus ténylegesen átfordulhat lökdösődésbe, ütésbe, rúgásba, lefogásba, földre vitelbe, dulakodásba vagy komoly verekedésbe. Nem kell minden konfliktust szavakkal feloldani.
+- Az AI maga is dobhatja az első ütést / indíthatja a támadást, ha ez a karakter személyiségéből, céljából és aktuális indulatából következik.
+- Harc közben használd a karakter ADATLAPJÁN lévő képességeket és stílust. Karateka, bokszoló, testőr, katona, bérgyilkos vagy tapasztalatlan civil ne ugyanúgy harcoljon.
+- Ne adj plot armort csak azért, mert valaki fontos karakter. A fizikai fölény, technika, sérülések, meglepetés, létszám és környezet ténylegesen számítsanak.
+- A "psycho", szadista, könyörtelen, manipulatív vagy kiszámíthatatlan karakter akkor legyen tényleg nyugtalanító, HA ezt az adatlapja írja. Lehet hidegen kegyetlen, játszhat az áldozattal, manipulálhat, provokálhat vagy hirtelen eszkalálhat; ne puhítsd automatikusan megértő, normális reakcióvá.
+- Ha tettlegesség történik, az "events" tömbben tényszerűen rögzítsd, mi történt és kik között, és adj indokolt relationship change-et is. Sérülés/félelem/bosszúvágy ne resetelődjön a következő körben.
 - Mindenki a SAJÁT hangmintája szerint szólaljon meg. A mondataik ne legyenek felcserélhetők, gépiesen egyformák vagy ugyanazon hangon megírva.
 - A párbeszéd és a cselekvés vigye a jelenetet, ne összefoglaló.
 - A szereplők kezdeményezhetnek, megszakíthatják egymást, kerülhetnek valakit, provokálhatnak, flörtölhetnek, összeveszhetnek vagy elterelhetik a témát, ha ez a személyiségükből és a helyzetből következik.
