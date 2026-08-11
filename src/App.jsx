@@ -2935,6 +2935,14 @@ function setNote(n, authorId, text, forcedId, extra = {}) {
       ts: createdAt,
       reacts: [],
       reactedBy: [],
+
+      /*
+       * processedBy = már "látta/értelmezte" ezt a note-ot.
+       * Nem ugyanaz, mint reactedBy: valaki észreveheti és érzelmileg
+       * reagálhat rá anélkül, hogy emojit/DM-et küldene.
+       */
+      processedBy: [],
+      relationshipReactedBy: [],
     });
   }
 
@@ -13707,6 +13715,19 @@ ${cast
   .filter(Boolean)
   .join("\n") || "-"}
 
+SZUBJEKTÍV POSZTÉRTELMEZÉS — EZ KAPCSOLATOT IS VÁLTOZTATHAT:
+- A karakterek nem mindent objektíven értelmeznek. Ugyanazt a posztot a saját kapcsolatuk, emlékeik, féltékenységük, crushuk, konfliktusuk, bűntudatuk vagy megszállottságuk alapján másképp olvashatják.
+- Ha a poszt homályos, célzós, romantikus, dühös, féltékeny, "valakinek szóló", belsős vagy provokatív, döntsd el KARAKTERENKÉNT, hogy ő azt hiheti-e: neki/róla szól.
+- Ez NEM objektív tény. Ha valaki csak azt HISZI, hogy róla szól, az a saját feltételezése legyen.
+- Az obsessed / possessive / nagyon féltékeny karakter könnyebben veheti magára vagy kötheti saját magához/riválishoz a posztot, de ne automatikusan.
+- Ha egy karakter azt hiszi, hogy a poszt neki/róla szól, annak lehet pozitív vagy negatív kapcsolatváltozás a következménye: öröm, remény, féltékenység, sértettség, düh, birtoklás, bizalmatlanság stb.
+- Ha azt hiszi, hogy a poszt VALAKI MÁSRÓL szól, az is befolyásolhatja a poszt szerzőjéhez való érzéseit, például féltékenység vagy csalódás miatt.
+- Kis social jelhez kis delta illik. A perception "delta" mező általában -8 és +8 között legyen.
+- Ne változtass kapcsolatot pusztán azért, mert van poszt; csak ha a karakter reakciója/értelmezése tényleg érzelmileg számít.
+- A "perceptions" mezőben add meg a karakter SAJÁT értelmezését. "aboutMe": true csak azt jelenti, hogy Ő azt hiszi, hogy róla/neki szól.
+- A "changes" mezőt használd más közvetlen social interakciókhoz is, ha tényleg indokolt.
+- Ha ugyanaz a karakter ezt a konkrét posztot már egyszer személyesen értelmezte, ne generálj ugyanabból újra relationship deltát.
+
 ${repetitionGuard(
   w,
   cast.map((c) => c.id),
@@ -13846,17 +13867,906 @@ Formátum:
 {"id":"szereplő azonosítója","text":"természetes social media komment","reply_to":"k2 vagy üres"}
 ],
 "likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
+"perceptions":[
+{"id":"AI id","aboutMe":true,"confidence":0.78,"interpretation":"mit HISZ, mire/kire utal a poszt","delta":-4,"mood":"mit érez emiatt","why":"miért változik ettől az érzése"}
+],
 "changes":[
-{"a":"aki érez","b":"aki iránt","delta":-15,"mood":"mit érez most iránta","why":"egy rövid mondat"}
+{"a":"aki érez","b":"aki iránt","delta":-6,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ],
 "events":["csak akkor egy rövid mondat, ha tényleg történt valami emlékezetes"]}${TAIL}`,
-    { maxTokens: 1400 }
+    { maxTokens: 1650 }
   );
+
+  /*
+   * Nem küldjük az AI-nak vissza, csak az applyComments használja
+   * annak ellenőrzésére, kik értelmezhették ezt a konkrét posztot.
+   */
+  out.__castIds =
+    cast.map(
+      (c) => c.id
+    );
 
   return {
     out,
     label: th.label,
   };
+}
+
+function normalizePerceptionConfidence(value) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n)) {
+    return 0.5;
+  }
+
+  return Math.max(
+    0,
+    Math.min(
+      1,
+      n
+    )
+  );
+}
+
+function clampSocialPerceptionDelta(value) {
+  return Math.max(
+    -8,
+    Math.min(
+      8,
+      Math.round(
+        Number(value) || 0
+      )
+    )
+  );
+}
+
+function rememberContentInterpretation(
+  n,
+  actorId,
+  authorId,
+  source,
+  interpretation,
+  aboutMe,
+  confidence
+) {
+  if (
+    !n ||
+    !actorId ||
+    !authorId ||
+    actorId === authorId ||
+    !interpretation
+  ) {
+    return;
+  }
+
+  const actor =
+    charById(
+      n,
+      actorId
+    );
+
+  if (!actor) {
+    return;
+  }
+
+  const en =
+    worldLanguage(
+      n,
+      actorId
+    ) === "en";
+
+  const prefix =
+    aboutMe
+      ? (
+          en
+            ? "I suspect this may be about me"
+            : "Azt gyanítom, hogy ez rólam/nekem szólhat"
+        )
+      : (
+          en
+            ? "My interpretation"
+            : "Az én értelmezésem"
+        );
+
+  rememberAboutTarget(
+    n,
+    actorId,
+    authorId,
+    {
+      kind: "assumption",
+      source,
+      confidence:
+        normalizePerceptionConfidence(
+          confidence
+        ),
+      text:
+        `${prefix}: ${cut(
+          String(
+            interpretation
+          ),
+          180
+        )}`,
+    }
+  );
+}
+
+function applyPostPerceptionImpact(
+  n,
+  post,
+  out
+) {
+  if (
+    !n ||
+    !post ||
+    !post.authorId
+  ) {
+    return;
+  }
+
+  if (
+    !Array.isArray(
+      post.perceivedBy
+    )
+  ) {
+    post.perceivedBy = [];
+  }
+
+  if (
+    !Array.isArray(
+      post.relationshipReactedBy
+    )
+  ) {
+    post.relationshipReactedBy = [];
+  }
+
+  const perceived =
+    new Set(
+      post.perceivedBy
+    );
+
+  const relationshipDone =
+    new Set(
+      post.relationshipReactedBy
+    );
+
+  const castIds =
+    Array.isArray(
+      out &&
+      out.__castIds
+    )
+      ? out.__castIds
+          .map(String)
+      : [];
+
+  const castSet =
+    new Set(
+      castIds
+    );
+
+  const directChanges = [];
+  const otherChanges = [];
+
+  /*
+   * 1) Mit HISZ a karakter a posztról?
+   *
+   * Ez szándékosan szubjektív.
+   * "aboutMe" nem azt jelenti, hogy tényleg róla szólt,
+   * csak azt, hogy ő így értelmezte.
+   */
+  (
+    out &&
+    Array.isArray(
+      out.perceptions
+    )
+      ? out.perceptions
+      : []
+  )
+    .slice(0, 12)
+    .forEach((row) => {
+      const actorId =
+        findChar(
+          n,
+          row &&
+            (
+              row.id !== undefined
+                ? row.id
+                : row.name
+            )
+        );
+
+      if (
+        !actorId ||
+        actorId ===
+          post.authorId ||
+        isHuman(
+          n,
+          actorId
+        ) ||
+        (
+          castSet.size &&
+          !castSet.has(
+            actorId
+          )
+        )
+      ) {
+        return;
+      }
+
+      const confidence =
+        normalizePerceptionConfidence(
+          row &&
+          row.confidence
+        );
+
+      const interpretation =
+        String(
+          (
+            row &&
+            (
+              row.interpretation ||
+              row.thought ||
+              row.reason
+            )
+          ) || ""
+        )
+          .replace(
+            /\s+/g,
+            " "
+          )
+          .trim();
+
+      if (
+        interpretation &&
+        !perceived.has(
+          actorId
+        )
+      ) {
+        rememberContentInterpretation(
+          n,
+          actorId,
+          post.authorId,
+          "post_interpretation",
+          interpretation,
+          Boolean(
+            row &&
+            row.aboutMe
+          ),
+          confidence
+        );
+      }
+
+      perceived.add(
+        actorId
+      );
+
+      const delta =
+        clampSocialPerceptionDelta(
+          row &&
+          row.delta
+        );
+
+      if (
+        delta &&
+        !relationshipDone.has(
+          actorId
+        )
+      ) {
+        directChanges.push(
+          {
+            a: actorId,
+            b: post.authorId,
+            delta,
+            mood:
+              String(
+                (
+                  row &&
+                  row.mood
+                ) || ""
+              ),
+            why:
+              String(
+                (
+                  row &&
+                  row.why
+                ) ||
+                interpretation ||
+                (
+                  worldLanguage(
+                    n,
+                    actorId
+                  ) === "en"
+                    ? "They interpreted the post personally."
+                    : "Személyesnek értelmezte a posztot."
+                )
+              ),
+            oneSided: true,
+          }
+        );
+
+        relationshipDone.add(
+          actorId
+        );
+      }
+    });
+
+  /*
+   * 2) A modell normál "changes" mezője.
+   *
+   * A poszt SZERZŐJÉRE adott első érzelmi reakció csak egyszer
+   * mozgathatja ugyanannál a karakternél a kapcsolatot erre a posztra.
+   * Más szereplőre irányuló változást nem dobunk el.
+   */
+  (
+    out &&
+    Array.isArray(
+      out.changes
+    )
+      ? out.changes
+      : []
+  )
+    .slice(0, 16)
+    .forEach((ch) => {
+      const a =
+        findChar(
+          n,
+          ch &&
+          ch.a
+        );
+
+      const b =
+        findChar(
+          n,
+          ch &&
+          ch.b
+        );
+
+      if (
+        !a ||
+        !b ||
+        a === b
+      ) {
+        return;
+      }
+
+      const safe = {
+        ...ch,
+        a,
+        b,
+        delta:
+          clampSocialPerceptionDelta(
+            ch &&
+            ch.delta
+          ),
+      };
+
+      if (
+        b ===
+        post.authorId &&
+        !isHuman(
+          n,
+          a
+        )
+      ) {
+        if (
+          relationshipDone.has(
+            a
+          )
+        ) {
+          return;
+        }
+
+        relationshipDone.add(
+          a
+        );
+
+        directChanges.push(
+          {
+            ...safe,
+            oneSided: true,
+          }
+        );
+
+        return;
+      }
+
+      /*
+       * Kommentelő -> másik kommentelő típusú változás maradhat,
+       * de social felületen ne legyen irreálisan nagy ugrás.
+       */
+      otherChanges.push(
+        safe
+      );
+    });
+
+  /*
+   * 3) Egy konkrét AI-like önmagában is apró pozitív figyelem-jel.
+   * Background like-ok ide nem kerülnek.
+   */
+  (
+    out &&
+    Array.isArray(
+      out.likes
+    )
+      ? out.likes
+      : []
+  ).forEach((rawId) => {
+    const actorId =
+      aiVoice(
+        n,
+        rawId
+      );
+
+    if (
+      !actorId ||
+      actorId ===
+        post.authorId ||
+      relationshipDone.has(
+        actorId
+      )
+    ) {
+      return;
+    }
+
+    const obsession =
+      relationshipObsessionLevel(
+        n,
+        actorId,
+        post.authorId
+      );
+
+    directChanges.push(
+      {
+        a: actorId,
+        b: post.authorId,
+        delta:
+          obsession >= 3
+            ? 2
+            : 1,
+        mood: "",
+        why:
+          worldLanguage(
+            n,
+            actorId
+          ) === "en"
+            ? (
+                obsession >= 3
+                  ? "They reacted to the post with unusually strong attention."
+                  : "They liked the post."
+              )
+            : (
+                obsession >= 3
+                  ? "Szokatlanul erős figyelemmel reagált a posztra."
+                  : "Lájkolta a posztot."
+              ),
+        oneSided: true,
+      }
+    );
+
+    relationshipDone.add(
+      actorId
+    );
+  });
+
+  castIds.forEach(
+    (id) =>
+      perceived.add(
+        id
+      )
+  );
+
+  post.perceivedBy =
+    [...perceived];
+
+  post.relationshipReactedBy =
+    [...relationshipDone];
+
+  applyChanges(
+    n,
+    [
+      ...directChanges,
+      ...otherChanges,
+    ]
+  );
+}
+
+function noteEmojiRelationshipDelta(
+  emoji,
+  obsessionLevel = 0
+) {
+  const raw =
+    String(
+      emoji || ""
+    );
+
+  if (
+    /❤️|♥️|💗|💖|💕|💞|💓|💘|🥰|😍|😘|🫶|🔥/.test(
+      raw
+    )
+  ) {
+    return (
+      obsessionLevel >= 3
+        ? 3
+        : 2
+    );
+  }
+
+  if (
+    /😡|🤬|🤮|👎|💢/.test(
+      raw
+    )
+  ) {
+    return (
+      obsessionLevel >= 3
+        ? -3
+        : -2
+    );
+  }
+
+  if (
+    /🙄|😒|😬/.test(
+      raw
+    )
+  ) {
+    return -1;
+  }
+
+  return 0;
+}
+
+function applyNotePerceptionImpact(
+  n,
+  note,
+  out
+) {
+  if (
+    !n ||
+    !note ||
+    !note.authorId
+  ) {
+    return;
+  }
+
+  if (
+    !Array.isArray(
+      note.processedBy
+    )
+  ) {
+    note.processedBy = [];
+  }
+
+  if (
+    !Array.isArray(
+      note.relationshipReactedBy
+    )
+  ) {
+    note.relationshipReactedBy = [];
+  }
+
+  const processed =
+    new Set(
+      note.processedBy
+    );
+
+  const relationshipDone =
+    new Set(
+      note.relationshipReactedBy
+    );
+
+  const castIds =
+    Array.isArray(
+      out &&
+      out.__castIds
+    )
+      ? out.__castIds
+          .map(String)
+      : [];
+
+  const castSet =
+    new Set(
+      castIds
+    );
+
+  const changes = [];
+
+  (
+    out &&
+    Array.isArray(
+      out.perceptions
+    )
+      ? out.perceptions
+      : []
+  )
+    .slice(0, 12)
+    .forEach((row) => {
+      const actorId =
+        findChar(
+          n,
+          row &&
+            (
+              row.id !== undefined
+                ? row.id
+                : row.name
+            )
+        );
+
+      if (
+        !actorId ||
+        actorId ===
+          note.authorId ||
+        isHuman(
+          n,
+          actorId
+        ) ||
+        (
+          castSet.size &&
+          !castSet.has(
+            actorId
+          )
+        )
+      ) {
+        return;
+      }
+
+      const interpretation =
+        String(
+          (
+            row &&
+            (
+              row.interpretation ||
+              row.thought ||
+              row.reason
+            )
+          ) || ""
+        )
+          .replace(
+            /\s+/g,
+            " "
+          )
+          .trim();
+
+      if (
+        interpretation &&
+        !processed.has(
+          actorId
+        )
+      ) {
+        rememberContentInterpretation(
+          n,
+          actorId,
+          note.authorId,
+          "note_interpretation",
+          interpretation,
+          Boolean(
+            row &&
+            row.aboutMe
+          ),
+          row &&
+          row.confidence
+        );
+      }
+
+      processed.add(
+        actorId
+      );
+
+      const delta =
+        clampSocialPerceptionDelta(
+          row &&
+          row.delta
+        );
+
+      if (
+        delta &&
+        !relationshipDone.has(
+          actorId
+        )
+      ) {
+        changes.push(
+          {
+            a: actorId,
+            b: note.authorId,
+            delta,
+            mood:
+              String(
+                (
+                  row &&
+                  row.mood
+                ) || ""
+              ),
+            why:
+              String(
+                (
+                  row &&
+                  row.why
+                ) ||
+                interpretation ||
+                (
+                  worldLanguage(
+                    n,
+                    actorId
+                  ) === "en"
+                    ? "They interpreted the Note personally."
+                    : "Személyesnek értelmezte a Note-ot."
+                )
+              ),
+            oneSided: true,
+          }
+        );
+
+        relationshipDone.add(
+          actorId
+        );
+      }
+    });
+
+  /*
+   * Explicit AI-generated relationship changes.
+   */
+  (
+    out &&
+    Array.isArray(
+      out.changes
+    )
+      ? out.changes
+      : []
+  )
+    .slice(0, 12)
+    .forEach((ch) => {
+      const a =
+        findChar(
+          n,
+          ch &&
+          ch.a
+        );
+
+      const b =
+        findChar(
+          n,
+          ch &&
+          ch.b
+        );
+
+      if (
+        !a ||
+        !b ||
+        a === b
+      ) {
+        return;
+      }
+
+      if (
+        b ===
+          note.authorId &&
+        !isHuman(
+          n,
+          a
+        )
+      ) {
+        if (
+          relationshipDone.has(
+            a
+          )
+        ) {
+          return;
+        }
+
+        relationshipDone.add(
+          a
+        );
+      }
+
+      changes.push(
+        {
+          ...ch,
+          a,
+          b,
+          delta:
+            clampSocialPerceptionDelta(
+              ch &&
+              ch.delta
+            ),
+          oneSided:
+            b ===
+            note.authorId
+              ? true
+              : ch.oneSided,
+        }
+      );
+    });
+
+  /*
+   * Emoji fallback:
+   * ha az AI nem adott külön delta-t, a nagyon egyértelmű
+   * reakció-emojiból lehet apró kapcsolatváltozás.
+   */
+  (
+    out &&
+    Array.isArray(
+      out.reacts
+    )
+      ? out.reacts
+      : []
+  ).forEach((r) => {
+    const actorId =
+      findChar(
+        n,
+        r &&
+          (
+            r.id !== undefined
+              ? r.id
+              : r.name
+          )
+      );
+
+    if (
+      !actorId ||
+      actorId ===
+        note.authorId ||
+      isHuman(
+        n,
+        actorId
+      ) ||
+      relationshipDone.has(
+        actorId
+      )
+    ) {
+      return;
+    }
+
+    const delta =
+      noteEmojiRelationshipDelta(
+        r &&
+        r.emoji,
+        relationshipObsessionLevel(
+          n,
+          actorId,
+          note.authorId
+        )
+      );
+
+    if (!delta) {
+      return;
+    }
+
+    changes.push(
+      {
+        a: actorId,
+        b: note.authorId,
+        delta,
+        mood: "",
+        why:
+          worldLanguage(
+            n,
+            actorId
+          ) === "en"
+            ? "Their reaction to the Note affected how they feel."
+            : "A Note-ra adott reakciója hatott arra, mit érez.",
+        oneSided: true,
+      }
+    );
+
+    relationshipDone.add(
+      actorId
+    );
+  });
+
+  castIds.forEach(
+    (id) =>
+      processed.add(
+        id
+      )
+  );
+
+  note.processedBy =
+    [...processed];
+
+  note.relationshipReactedBy =
+    [...relationshipDone];
+
+  applyChanges(
+    n,
+    changes
+  );
 }
 
 function applyComments(n, postId, out, label) {
@@ -14144,7 +15054,17 @@ recordSocialEvent(
   }
 });
   }
-  applyChanges(n, out.changes);
+
+  /*
+   * A poszt jelentése és az arra adott konkrét reakció most már
+   * kapcsolatot is mozgathat — egyszer, karakterenként, posztonként.
+   */
+  applyPostPerceptionImpact(
+    n,
+    p,
+    out
+  );
+
   n.log = [...(out.events || []), ...n.log].slice(0, 30);
 }
 function socialInteractionInterest(
@@ -14389,9 +15309,10 @@ async function genReply(w, post, comment) {
     post
   );
 
-  return askWorldJSON(
-    w,
-    engineFor(w),
+  const out =
+    await askWorldJSON(
+      w,
+      engineFor(w),
     `${worldContext(
       w,
       cast.map((c) => c.id),
@@ -22130,6 +23051,12 @@ async function genNoteReact(w, note) {
     note.reactedBy || []
   );
 
+  const processedBy = new Set(
+    note.processedBy ||
+    note.reactedBy ||
+    []
+  );
+
   const cast = pickCast(
     w,
     note.authorId
@@ -22138,7 +23065,7 @@ async function genNoteReact(w, note) {
       c &&
       !isHuman(w, c.id) &&
       c.id !== note.authorId &&
-      !reactedBy.has(c.id)
+      !processedBy.has(c.id)
   );
 
   // Ha a kiválasztott körben már nincs
@@ -22148,7 +23075,9 @@ async function genNoteReact(w, note) {
     return {
       reacts: [],
       dms: [],
+      perceptions: [],
       changes: [],
+      __castIds: [],
     };
   }
 
@@ -22205,6 +23134,19 @@ ${alreadyReactedNames || "senki"}
 REAGÁLÓ KARAKTEREK TELJES KÁNONJA ÉS EMLÉKEZETE:
 ${cast.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
 
+SZUBJEKTÍV NOTE-ÉRTELMEZÉS — FONTOS:
+- A Note gyakran szándékosan homályos. Minden karakter a SAJÁT emlékei, kapcsolata, féltékenysége, vonzalma, konfliktusa és személyisége alapján értelmezze.
+- Döntsd el, hogy az adott karakter azt HIHETI-e, hogy a Note neki/róla szól. Ez nem tény, hanem feltételezés.
+- Egy obsessed / possessive karakter könnyebben veheti magára a Note-ot, könnyebben gondolhatja, hogy neki szól, vagy hogy egy riválisról szól — de ne automatikusan.
+- Ha valaki azt hiszi, hogy neki szól egy romantikus/hiányzós/haragos/célzós Note, az ténylegesen változtathatja a kapcsolatát a szerzővel.
+- Ha azt hiszi, hogy a Note valaki MÁSNAK szól, abból is lehet féltékenység, sértettség, bizalmatlanság vagy távolodás.
+- A "perceptions" mező az ő SZUBJEKTÍV olvasata legyen.
+- "aboutMe": true csak azt jelenti, hogy Ő úgy gondolja, hogy neki/róla szól.
+- "confidence": 0 és 1 között legyen.
+- "delta" csak akkor legyen nem nulla, ha ez az értelmezés tényleg változtat azon, mit érez a Note szerzője iránt. Általában -8..+8.
+- Nem kell nyilvánosan kimondania a feltételezését. Lehet, hogy csak az emoji/DM hangjából és a relationship változásból látszik.
+- Ne adj neki biztos tudást arról, kinek szánta valójában a játékos.
+
 EMOJI-REAKCIÓ:
 
 - Az emoji illeszkedjen a karakter személyiségéhez és ahhoz, mit jelent számára a note.
@@ -22249,11 +23191,21 @@ Formátum:
 "dms":[
   {"id":"szereplő azonosítója","text":"rövid privát reakció"}
 ],
+"perceptions":[
+  {"id":"AI id","aboutMe":true,"confidence":0.82,"interpretation":"mit HISZ a Note jelentéséről","delta":4,"mood":"mit érez emiatt","why":"miért hat ez a kapcsolatára"}
+],
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":3,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ]}${TAIL}`,
-    { maxTokens: 900 }
-  );
+      { maxTokens: 1100 }
+    );
+
+  out.__castIds =
+    cast.map(
+      (c) => c.id
+    );
+
+  return out;
 }
 
 /* Kit szólaltassunk meg magától: akinek erős a viszonya veled, és rég nem szólt. */
@@ -30642,8 +31594,10 @@ async function runSimulationAction(view, update, action) {
     return null;
   }
 
-  const alreadyReacted = new Set(
-    note.reactedBy || []
+  const alreadyProcessed = new Set(
+    note.processedBy ||
+    note.reactedBy ||
+    []
   );
 
   const hasSomeoneLeft = (
@@ -30652,11 +31606,11 @@ async function runSimulationAction(view, update, action) {
     (c) =>
       c &&
       !isHuman(view, c.id) &&
-      !alreadyReacted.has(c.id)
+      !alreadyProcessed.has(c.id)
   );
 
-  // Ha már minden AI-karakter reagált erre
-  // a konkrét note-ra, nincs több teendő.
+  // Ha már minden AI-karakter látta/értelmezte ezt
+  // a konkrét note-ot, nincs több teendő.
   if (!hasSomeoneLeft) {
     return null;
   }
@@ -30868,9 +31822,15 @@ if (targetNote) {
       }
     );
 
-    applyChanges(
+    /*
+     * A Note szubjektív értelmezése (pl. "ez biztos nekem szól")
+     * akkor is mozgathat kapcsolatot, ha a karakter csak emojit ad,
+     * DM-et ír, vagy akár kívülről nem reagál.
+     */
+    applyNotePerceptionImpact(
       n,
-      out.changes
+      liveNote,
+      out
     );
   });
 
