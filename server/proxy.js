@@ -1923,7 +1923,6 @@ function getProvider(body = {}) {
 
 function buildGeminiPayload(body = {}) {
   const messages = Array.isArray(body.messages) ? body.messages : [];
-}
   const parts = [];
   if (body.system) parts.push({ text: body.system });
   for (const item of messages) {
