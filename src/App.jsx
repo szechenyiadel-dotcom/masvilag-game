@@ -4184,9 +4184,15 @@ function characterMemoryCard(w, c) {
   if (!w || !c || !c.id) return "";
   const memory = selfMemoryForPrompt(w, c.id);
   if (!memory || memory === "semmi különös") return "";
+
+  /*
+   * A teljes memória a világban továbbra is megmarad, de egyetlen AI-kérésbe
+   * nem öntjük bele korlátlanul. Így a karakter emlékszik, miközben a prompt
+   * nem nő akkorára, hogy a modell üres / használhatatlan JSON-t adjon vissza.
+   */
   return `
 --- ${String(c.name || c.id).toUpperCase()} SAJÁT EMLÉKEZETE ---
-${memory}
+${spread(memory, 2600)}
 --- eddig az emlékezet ---`;
 }
 
@@ -4656,9 +4662,14 @@ function repetitionGuard(w, ids, label) {
     "jegyzetek": "notes",
   };
   const scopedLabel = lang === "en" ? (labelMap[label] || label || "") : (label || "");
+  const historyLimit =
+    label === "jelenetfolytatás"
+      ? 10
+      : 20;
+
   const rows = (ids || []).map((id) => {
     const c = charById(w, id);
-    const lines = recentUtterancesFor(w, id, 20);
+    const lines = recentUtterancesFor(w, id, historyLimit);
     if (!c || !lines.length) return "";
     return `${c.name}: ${lines.join(" | ")}`;
   }).filter(Boolean);
@@ -16452,7 +16463,7 @@ function Scene({ w, scene, update, setErr, onBack }) {
         return `${a ? a.name : "?"}: ${t.text}`;
       }).join("\n");
 
-      const out = await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
+      let out = await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
 
 JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
@@ -16463,7 +16474,13 @@ ${log || "a jelenet most kezdődik"}
 
 ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` : "A játékos most nem lép közbe; a szereplők maguktól viszik tovább a jelenetet."}
 
-${cast.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
+/*
+ * A worldContext(..., true, ...) már tartalmazza minden jelenlévő AI
+ * teljes PRIVÁT CHARACTER PERFORMANCE CONTEXT blokkját. Itt ezért nem
+ * duplázzuk meg még egyszer a 10-20 ezer karakteres voiceCardokat.
+ * Csak az egyéni, futás közben szerzett emlékezet kerül közvetlenül ide.
+ */
+${cast.map((c) => characterMemoryCard(w, c)).join("")}
 
 MINDEN JELENLÉVŐ KARAKTERNÉL KÖTELEZŐ:
 - A teljes saját karakterlapja ÉS saját emlékezete irányítsa a viselkedését.
@@ -16507,25 +16524,110 @@ Formátum:
  "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
  "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"]}${TAIL}`);
 
-      const resolved = (out.turns || []).map((t) => {
-        const raw = t && (t.id !== undefined ? t.id : t.name);
-        const isNarr = String(raw || "").trim().toLowerCase() === "narrator";
-        const resolvedId = isNarr ? "narrator" : (findChar(w, raw) || findChar(w, t && t.name));
-        const allowed = isNarr || (resolvedId && !isHuman(w, resolvedId));
+      const resolveSceneTurns = (candidateOut) =>
+        (candidateOut && Array.isArray(candidateOut.turns)
+          ? candidateOut.turns
+          : []
+        )
+          .map((t) => {
+            const raw = t && (t.id !== undefined ? t.id : t.name);
+            const isNarr = String(raw || "").trim().toLowerCase() === "narrator";
+            const resolvedId = isNarr
+              ? "narrator"
+              : (findChar(w, raw) || findChar(w, t && t.name));
+            const allowed = isNarr || (resolvedId && !isHuman(w, resolvedId));
 
-        const rawText = t && t.text ? String(t.text) : "";
-        const freshText = isNarr
-          ? rawText
-          : (resolvedId ? cleanGeneratedUtterance(w, resolvedId, rawText, 2600) : "");
+            const rawText = t && t.text ? String(t.text) : "";
+            const freshText = isNarr
+              ? rawText.trim()
+              : (
+                  resolvedId
+                    ? cleanGeneratedUtterance(w, resolvedId, rawText, 2600)
+                    : ""
+                );
 
-        return {
-          authorId: allowed ? resolvedId : null,
-          kind: t && t.kind === "action" ? "action" : "speech",
-          text: freshText,
-        };
-      }).filter((t) => t.authorId && t.text);
+            return {
+              authorId: allowed ? resolvedId : null,
+              kind: t && t.kind === "action" ? "action" : "speech",
+              text: freshText,
+            };
+          })
+          .filter((t) => t.authorId && t.text);
 
-      if (!resolved.length) throw new Error(tt("Nem érkezett használható válasz.", "No usable reply arrived."));
+      let resolved = resolveSceneTurns(out);
+
+      /*
+       * A szigorú cross-surface ismétlésvédelem helyesen kidobhat egy-egy
+       * generált sort. Régen, ha véletlenül AZ ÖSSZESET kidobta, a jelenet
+       * egyszerűen "No usable reply arrived" hibával megállt.
+       *
+       * Most automatikusan kérünk egy MÁSODIK, kisebb és célzottabb generálást,
+       * amelynek kifejezett feladata teljesen új megfogalmazás létrehozása.
+       */
+      if (!resolved.length) {
+        const retryCast = cast
+          .map((c) => {
+            const core = c.brief || c.personality || c.speech || c.bio || "";
+            const memory = selfMemoryForPrompt(w, c.id);
+            return `[${c.id}] ${c.name}
+KARAKTERMAG: ${spread(core, 1100)}
+EMLÉKEZET: ${spread(memory, 900)}`;
+          })
+          .join("\n\n");
+
+        const retryOut = await askWorldJSONInteractive(
+          w,
+          engineFor(w),
+          `ROLEPLAY ÚJRAGENERÁLÁS — az előző kimenet nem volt használható, mert minden sora túl közel állt korábbi megszólalásokhoz vagy hibás szereplő-ID-t használt.
+
+JELENET: ${scene.title}
+HELYZET: ${scene.setting || "-"}
+JELEN VANNAK: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ")}, valamint ${w.player.name} [${w.meId}] — őt kizárólag a felhasználó irányítja.
+
+EDDIG TÖRTÉNT:
+${log || "a jelenet most kezdődik"}
+
+${playerText ? `${w.player.name} most ezt teszi vagy mondja:
+"${playerText}"` : "A játékos most nem lép közbe."}
+
+KARAKTEREK — TÖMÖR, DE KÖTELEZŐ KÁNON + EMLÉKEZET:
+${retryCast}
+
+${repetitionGuard(w, cast.map((c) => c.id), "jelenetfolytatás")}
+
+SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
+- Adj 2-4 TELJESEN FRISS mozzanatot.
+- Egyetlen korábbi mondatot, akciót, poént, fenyegetést, flörtformulát vagy közeli parafrázist se használj újra.
+- CSAK a fent megadott [ID]-kat vagy a "narrator" értéket használd.
+- A szereplők karakterhűek legyenek; ne váljanak semleges AI-hanggá.
+- A játékos helyett ne beszélj és ne cselekedj.
+- A jelenetet ne zárd le automatikusan.
+- Ne magyarázd, hogy újragenerálsz.
+
+VÁLASZ CSAK JSON:
+{"turns":[{"id":"pontos karakter-ID vagy narrator","kind":"speech vagy action","text":"friss megszólalás vagy cselekvés"}],"changes":[],"memories":[],"events":[]}${TAIL}`,
+          {
+            maxTokens: 1500,
+            maxTries: 3,
+          }
+        );
+
+        const retryResolved = resolveSceneTurns(retryOut);
+
+        if (retryResolved.length) {
+          out = retryOut;
+          resolved = retryResolved;
+        }
+      }
+
+      if (!resolved.length) {
+        throw new Error(
+          tt(
+            "Az AI kétszer is csak ismétlődő vagy hibás szereplőhöz tartozó választ adott. Próbáld újra — a jelenet és a memóriák megmaradtak.",
+            "The AI twice returned only repeated text or turns assigned to invalid characters. Try again — the scene and memories were preserved."
+          )
+        );
+      }
 
       patch((s, n) => {
         resolved.forEach((t) => {
