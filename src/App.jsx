@@ -729,6 +729,40 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   font-size:12px;
 }
 
+
+.social-action.reposted {
+  color: var(--gold);
+}
+
+.social-repost-wrap {
+  position: relative;
+}
+
+.social-repost-note {
+  margin: 10px 14px -5px 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.social-repost-note button {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.social-repost-note button:hover {
+  color: var(--bone);
+  text-decoration: underline;
+}
+
 /* ---------- MOBILOS ACTION GOMBOK ---------- */
 
 @media (max-width: 768px) {
@@ -4644,6 +4678,7 @@ function seedWorld(code) {
 extras: [],
 rels: {},
 posts: [],
+reposts: [],
 chats: {},
 mems: {},
 charMemory: {},
@@ -4787,6 +4822,368 @@ function blankPlayer(id, name, username) {
     followers: [],
     following: [],
   };
+}
+
+
+/* ============================================================
+   ÚJRAOSZTÁS / REPOST
+   ============================================================ */
+
+function repostRows(w) {
+  if (!w || typeof w !== "object") return [];
+  if (!Array.isArray(w.reposts)) w.reposts = [];
+  return w.reposts;
+}
+
+function hasReposted(w, actorId, postId) {
+  if (!w || !actorId || !postId) return false;
+
+  return repostRows(w).some(
+    (r) =>
+      r &&
+      r.actorId === actorId &&
+      r.postId === postId
+  );
+}
+
+function repostCount(w, postId) {
+  if (!w || !postId) return 0;
+
+  return repostRows(w).filter(
+    (r) =>
+      r &&
+      r.postId === postId
+  ).length;
+}
+
+function createRepost(
+  w,
+  actorId,
+  postId,
+  source = "world"
+) {
+  if (!w || !actorId || !postId) {
+    return null;
+  }
+
+  const actor =
+    socialProfileById(
+      w,
+      actorId
+    );
+
+  const post =
+    (w.posts || []).find(
+      (p) =>
+        p &&
+        p.id === postId
+    );
+
+  if (
+    !actor ||
+    !post ||
+    post.authorId === actorId ||
+    hasReposted(
+      w,
+      actorId,
+      postId
+    )
+  ) {
+    return null;
+  }
+
+  const row = {
+    id: "rp_" + uid(),
+    actorId,
+    postId,
+    ts: now(),
+  };
+
+  repostRows(w).unshift(row);
+  w.reposts =
+    w.reposts.slice(0, 500);
+
+  recordSocialEvent(
+    w,
+    {
+      type: "repost",
+      refId: row.id,
+      ts: row.ts,
+      actorId,
+      targetIds:
+        post.authorId &&
+        post.authorId !== actorId
+          ? [post.authorId]
+          : [],
+      visibility: "public",
+      factLevel: "observed",
+      importance: 16,
+      drama: 0,
+      romance: 0,
+      embarrassment: 0,
+      source,
+      text: "Reposted a post.",
+      tags: [
+        "social",
+        "repost",
+      ],
+      meta: {
+        repostId: row.id,
+        postId: post.id,
+        originalAuthorId:
+          post.authorId || "",
+      },
+    }
+  );
+
+  /*
+   * AI -> játékos repost értesítés.
+   */
+  if (
+    isHuman(
+      w,
+      post.authorId
+    ) &&
+    !isHuman(
+      w,
+      actor.id
+    )
+  ) {
+    pushNote(
+      w,
+      post.authorId,
+      {
+        icon: "↻",
+        text:
+          sysLangText(
+            w,
+            post.authorId,
+            `${actor.name} újraosztotta a posztodat.`,
+            `${actor.name} reposted your post.`
+          ),
+        link: {
+          type: "post",
+          id: post.id,
+        },
+      }
+    );
+  }
+
+  return row;
+}
+
+function repostInterestScore(
+  w,
+  actorId,
+  post
+) {
+  if (
+    !w ||
+    !actorId ||
+    !post ||
+    !post.id ||
+    post.authorId === actorId ||
+    hasReposted(
+      w,
+      actorId,
+      post.id
+    )
+  ) {
+    return -999;
+  }
+
+  const actor =
+    socialProfileById(
+      w,
+      actorId
+    );
+
+  const author =
+    socialProfileById(
+      w,
+      post.authorId
+    );
+
+  if (
+    !actor ||
+    !author ||
+    isHuman(w, actor.id)
+  ) {
+    return -999;
+  }
+
+  const age =
+    now() -
+    (Number(post.ts) || 0);
+
+  if (
+    age >
+    48 * 3600e3
+  ) {
+    return -999;
+  }
+
+  let score = 0;
+
+  if (
+    isFollowing(
+      w,
+      actor.id,
+      author.id
+    )
+  ) {
+    score += 18;
+  }
+
+  const rel =
+    getRel(
+      w,
+      actor.id,
+      author.id
+    );
+
+  const relScore =
+    Number(
+      rel && rel.score
+    ) || 0;
+
+  if (
+    linked(
+      w,
+      actor.id,
+      author.id
+    )
+  ) {
+    score += 8;
+  }
+
+  if (relScore > 0) {
+    score += Math.min(
+      24,
+      relScore * 0.3
+    );
+  }
+
+  if (
+    Array.isArray(
+      post.likedBy
+    ) &&
+    post.likedBy.includes(
+      actor.id
+    )
+  ) {
+    score += 24;
+  }
+
+  const actorComments =
+    (post.comments || []).filter(
+      (c) =>
+        c &&
+        c.authorId ===
+          actor.id
+    ).length;
+
+  score += Math.min(
+    14,
+    actorComments * 7
+  );
+
+  const engagement =
+    Math.max(
+      0,
+      Number(post.likes) || 0
+    ) +
+    (post.comments || []).length * 2 +
+    repostCount(
+      w,
+      post.id
+    ) * 3;
+
+  score += Math.min(
+    12,
+    Math.log10(
+      engagement + 1
+    ) * 5
+  );
+
+  return Math.round(score);
+}
+
+function pickAutonomousRepostAction(w) {
+  const actors =
+    (w.chars || []).filter(
+      (c) =>
+        c &&
+        !isHuman(
+          w,
+          c.id
+        )
+    );
+
+  const posts =
+    (w.posts || [])
+      .filter(Boolean)
+      .slice(0, 30);
+
+  const candidates = [];
+
+  actors.forEach((actor) => {
+    posts.forEach((post) => {
+      const score =
+        repostInterestScore(
+          w,
+          actor.id,
+          post
+        );
+
+      if (score < 34) return;
+
+      candidates.push({
+        actorId: actor.id,
+        postId: post.id,
+        score,
+        tie: Math.random(),
+      });
+    });
+  });
+
+  candidates.sort((a, b) => {
+    if (a.score !== b.score) {
+      return b.score - a.score;
+    }
+
+    return a.tie - b.tie;
+  });
+
+  const pool =
+    candidates.slice(0, 5);
+
+  if (!pool.length) {
+    return null;
+  }
+
+  const picked =
+    pool[
+      Math.floor(
+        Math.random() *
+          pool.length
+      )
+    ];
+
+  if (
+    picked.score < 52 &&
+    Math.random() >
+      Math.min(
+        0.72,
+        0.22 +
+          (picked.score - 34) /
+            30
+      )
+  ) {
+    return null;
+  }
+
+  return picked;
 }
 
 
@@ -6589,6 +6986,7 @@ function Post({
   post,
   onLike,
   onComment,
+  onRepost,
   onToggleFollow,
   onOpenProfile,
   highlight,
@@ -6611,6 +7009,19 @@ function Post({
   const liked =
     Array.isArray(post.likedBy) &&
     post.likedBy.includes(w.meId);
+
+  const reposted =
+    hasReposted(
+      w,
+      w.meId,
+      post.id
+    );
+
+  const reposts =
+    repostCount(
+      w,
+      post.id
+    );
 
   const following =
     author.id !== w.meId &&
@@ -6695,6 +7106,33 @@ function Post({
         >
           <MessageCircle size={17} />
           <span>{comments.length}</span>
+        </button>
+
+        <button
+          className={
+            "social-action" +
+            (
+              reposted
+                ? " reposted"
+                : ""
+            )
+          }
+          onClick={() => {
+            if (
+              !reposted &&
+              onRepost
+            ) {
+              onRepost(post.id);
+            }
+          }}
+          disabled={reposted}
+          aria-label={tt(
+            "Újraosztás",
+            "Repost"
+          )}
+        >
+          <RefreshCcw size={17} />
+          <span>{reposts}</span>
         </button>
       </div>
 
@@ -8658,17 +9096,94 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
     if (!ok) setErr(tt("A világ már feldolgoz egy lépéskérést.", "The world is already processing a step request."));
   };
 
-  const visiblePosts =
+  const basePosts =
     feedMode === "following"
       ? (w.posts || []).filter(
           (p) =>
             p &&
             (
               p.authorId === w.meId ||
-              isFollowing(w, w.meId, p.authorId)
+              isFollowing(
+                w,
+                w.meId,
+                p.authorId
+              )
             )
         )
       : (w.posts || []);
+
+  const baseItems =
+    basePosts.map(
+      (post) => ({
+        kind: "post",
+        id: "post:" + post.id,
+        ts:
+          Number(post.ts) || 0,
+        post,
+        repost: null,
+      })
+    );
+
+  const repostItems =
+    repostRows(w)
+      .map((repost) => {
+        const post =
+          (w.posts || []).find(
+            (p) =>
+              p &&
+              p.id ===
+                repost.postId
+          );
+
+        const reposter =
+          socialProfileById(
+            w,
+            repost.actorId
+          );
+
+        if (
+          !post ||
+          !reposter
+        ) {
+          return null;
+        }
+
+        if (
+          feedMode ===
+            "following" &&
+          reposter.id !==
+            w.meId &&
+          !isFollowing(
+            w,
+            w.meId,
+            reposter.id
+          )
+        ) {
+          return null;
+        }
+
+        return {
+          kind: "repost",
+          id:
+            "repost:" +
+            repost.id,
+          ts:
+            Number(
+              repost.ts
+            ) || 0,
+          post,
+          repost,
+        };
+      })
+      .filter(Boolean);
+
+  const timelineItems =
+    baseItems
+      .concat(repostItems)
+      .sort(
+        (a, b) =>
+          b.ts - a.ts
+      );
 
   return (
     <>
@@ -8789,7 +9304,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
         </div>
       </div>
 
-      {visiblePosts.length === 0 ? (
+      {timelineItems.length === 0 ? (
         <div className="social-empty">
           {feedMode === "following"
             ? tt(
@@ -8803,9 +9318,47 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
         </div>
       ) : null}
 
-      {visiblePosts.map((p) => (
-        <Post
-          key={p.id}
+      {timelineItems.map((item) => {
+        const p = item.post;
+
+        const reposter =
+          item.repost
+            ? socialProfileById(
+                w,
+                item.repost.actorId
+              )
+            : null;
+
+        return (
+          <div
+            className={
+              item.repost
+                ? "social-repost-wrap"
+                : ""
+            }
+            key={item.id}
+          >
+            {reposter ? (
+              <div className="social-repost-note">
+                <RefreshCcw size={13} />
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setProfileId(
+                      reposter.id
+                    )
+                  }
+                >
+                  {tt(
+                    `${reposter.name} újraosztotta`,
+                    `${reposter.name} reposted`
+                  )}
+                </button>
+              </div>
+            ) : null}
+
+            <Post
           w={w}
           post={p}
           highlight={hl === p.id}
@@ -8887,6 +9440,17 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
               });
             })
           }
+          onRepost={(id) =>
+            update((n) => {
+              createRepost(
+                n,
+                n.meId ||
+                  w.meId,
+                id,
+                "player"
+              );
+            })
+          }
           onLike={(id) =>
             update((n) => {
               const x = n.posts.find((y) => y.id === id);
@@ -8940,7 +9504,9 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
             })
           }
         />
-      ))}
+          </div>
+        );
+      })}
       {profileId && charById(w, profileId) ? (
         <SocialProfileModal
           w={w}
@@ -12731,6 +13297,15 @@ function ensureSocialSimulationState(w) {
   if (!Array.isArray(w.socialEvents)) {
     w.socialEvents = [];
   }
+
+  /*
+   * Újraosztások / repostok.
+   * Külön tároljuk őket az eredeti posztoktól.
+   */
+  if (!Array.isArray(w.reposts)) {
+    w.reposts = [];
+  }
+
   /*
    * Aura / popularity / reputation / hype stb.
    */
@@ -13616,10 +14191,42 @@ function planAutoAction(view) {
     }
   }
 
+  /*
+   * 5. AUTONÓM REPOST
+   *
+   * Az AI csak olyan posztot oszt újra,
+   * amelyhez van társas oka kapcsolódni.
+   */
+  if (
+    Math.random() < 0.08
+  ) {
+    const repost =
+      pickAutonomousRepostAction(
+        view
+      );
+
+    if (repost) {
+      return mkAction(
+        "repost",
+        `auto-repost:${repost.actorId}:${repost.postId}:${Math.floor(
+          now() / 3600000
+        )}`,
+        {
+          actorId:
+            repost.actorId,
+          postId:
+            repost.postId,
+          score:
+            repost.score,
+        }
+      );
+    }
+  }
+
   const roll = Math.random();
 
   /*
-   * 5. AUTONÓM NOTE
+   * 6. AUTONÓM NOTE
    *
    * Ritkább, mint eddig.
    * Ne a note-ok zabálják fel
@@ -13706,7 +14313,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 6. LÉTEZŐ GROUP CHATEK
+   * 7. LÉTEZŐ GROUP CHATEK
    */
   const existingGroups = (
     view.groups || []
@@ -13759,7 +14366,7 @@ function planAutoAction(view) {
     !recentGroup;
 
   /*
-   * 7. GROUP CHAT
+   * 8. GROUP CHAT
    *
    * Kb. 8%.
    * A meglévő csoport előnyt élvez
@@ -13830,7 +14437,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 8. PRIVÁT ÜZENET
+   * 9. PRIVÁT ÜZENET
    *
    * Kb. 32%.
    *
@@ -13855,7 +14462,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 9. WORLD / FEED
+   * 10. WORLD / FEED
    *
    * A maradék körökben a világ magától
    * posztol és kommentel.
@@ -14291,6 +14898,78 @@ async function runSimulationAction(view, update, action) {
     });
 
     return "follow";
+  }
+
+  if (action.type === "repost") {
+    const actorId =
+      action.payload &&
+      action.payload.actorId;
+
+    const postId =
+      action.payload &&
+      action.payload.postId;
+
+    const actor =
+      actorId
+        ? socialProfileById(
+            view,
+            actorId
+          )
+        : null;
+
+    const post =
+      postId
+        ? (view.posts || []).find(
+            (p) =>
+              p &&
+              p.id === postId
+          )
+        : null;
+
+    if (
+      !actor ||
+      !post ||
+      isHuman(
+        view,
+        actor.id
+      ) ||
+      post.authorId ===
+        actor.id ||
+      hasReposted(
+        view,
+        actor.id,
+        post.id
+      )
+    ) {
+      return null;
+    }
+
+    if (
+      repostInterestScore(
+        view,
+        actor.id,
+        post
+      ) < 30
+    ) {
+      update((n) => {
+        n.autoAt = now();
+      });
+
+      return "repost";
+    }
+
+    update((n) => {
+      n.autoAt = now();
+
+      createRepost(
+        n,
+        actor.id,
+        post.id,
+        "ai"
+      );
+    });
+
+    return "repost";
   }
 
   if (action.type === "reply") {
