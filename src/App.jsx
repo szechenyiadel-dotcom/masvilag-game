@@ -4064,16 +4064,52 @@ async function serverDeleteAccount() {
   });
 }
 
+function worldSyncRev(w) {
+  return Math.max(
+    0,
+    Math.floor(
+      Number(
+        w && w.syncRev
+      ) || 0
+    )
+  );
+}
+
+async function serverWorldPeek(code) {
+  const c = encodeURIComponent(
+    String(code || "")
+      .trim()
+      .toLowerCase()
+  );
+
+  return apiJson(
+    `/world/peek?code=${c}`,
+    {
+      method: "GET",
+    }
+  );
+}
+
 async function serverSaveWorld(world) {
   return apiJson("/world/save", {
     method: "POST",
     body: JSON.stringify({
       world,
+      syncRev:
+        worldSyncRev(world),
     }),
   });
 }
 function migrate(w) {
   if (!w || !w.universe) return w;
+
+  /*
+   * syncRev kizárólag a PostgreSQL szerver által kezelt
+   * konkurencia-verzió. Régi világok 0-ról indulnak.
+   */
+  w.syncRev =
+    worldSyncRev(w);
+
   if (!w.universe.year) w.universe.year = String(new Date().getFullYear());
   if (w.universe.date === undefined) w.universe.date = "";
   const y = worldYear(w);
@@ -4281,6 +4317,7 @@ async function writeWorldSnapshot(code, world, shared) {
     id,
     code,
     rev: Number(world.rev || 0),
+    syncRev: worldSyncRev(world),
     savedAt: now(),
     updatedAt: Number((world.universe && world.universe.at) || 0),
   };
@@ -4330,7 +4367,15 @@ const newer = (a, b) => (stamp(a) >= stamp(b) ? a : b);
 function contentOf(w) {
   if (!w) return "";
   const copy = { ...w };
+
+  /*
+   * A rev helyi tartalom-verzió, a syncRev pedig
+   * szerver-konkurencia verzió. Egyik se számít
+   * önmagában tartalmi változásnak.
+   */
   delete copy.rev;
+  delete copy.syncRev;
+
   return JSON.stringify(copy);
 }
 
@@ -4488,20 +4533,65 @@ function mergeWorlds(remote, local) {
 }
 
 async function saveWorld(w) {
-  return writeBig(KEY(w.code), JSON.stringify(w));
+  if (!w || !w.code) return false;
+
+  /*
+   * LOCAL EMERGENCY BACKUP ONLY.
+   * Online játék közben ez soha nem az igazság forrása.
+   */
+  return writeBigScoped(
+    KEY(w.code),
+    JSON.stringify(w),
+    false
+  );
 }
 
-/* Mindig a tárolt állapottal összefésülve mentünk. */
+/*
+ * A név kompatibilitás miatt marad, de NEM merge-el
+ * semmilyen régi böngészős világot az online állapotba.
+ * PostgreSQL az egyetlen authoritative world online.
+ */
 async function saveWorldMerged(local) {
-  const remote = await loadPrimaryWorld(local.code);
-  const merged = remote ? mergeWorlds(remote, local) : local;
-  await writeWorldSnapshot(local.code, merged, false);
-  const ok = await saveWorld(merged);
-  if (ok) {
-    await writeWorldSnapshot(local.code, merged, true);
-    return { world: merged, mode: "cloud" };
+  if (!local || !local.code) {
+    return {
+      world: local,
+      mode: "memory",
+    };
   }
-  return { world: merged, mode: "local" };
+
+  const snapshot =
+    JSON.parse(
+      JSON.stringify(local)
+    );
+
+  let snapshotOk = false;
+  let primaryOk = false;
+
+  try {
+    snapshotOk =
+      await writeWorldSnapshot(
+        local.code,
+        snapshot,
+        false
+      );
+  } catch (e) {
+    snapshotOk = false;
+  }
+
+  try {
+    primaryOk =
+      await saveWorld(snapshot);
+  } catch (e) {
+    primaryOk = false;
+  }
+
+  return {
+    world: snapshot,
+    mode:
+      snapshotOk || primaryOk
+        ? "local"
+        : "memory",
+  };
 }
 
 /* Közös szobajegyzék: minden létrehozott szoba bekerül ide, oda, ahol maguk a
@@ -4857,238 +4947,507 @@ const mediaBytes = (m) => Object.keys(m || {}).reduce((sum, k) => sum + ((m[k] &
 const MEDIA_CAP = 40 * 1048576;
 
 async function serverLoadMedia() {
-  const res = await fetch("/media/load", {
-    method: "GET",
-    credentials: "include",
-    headers: {
-      Accept: "application/json",
-    },
-  });
-
-  let data = {};
-
-  try {
-    data = await res.json();
-  } catch (e) {
-    data = {};
-  }
-
-  if (!res.ok) {
-    throw new Error(
-      data?.error ||
-      `Media load failed (${res.status})`
+  const data =
+    await apiJson(
+      "/media/load",
+      {
+        method: "GET",
+      }
     );
-  }
 
-  return (
-    data?.media &&
-    typeof data.media === "object"
-      ? data.media
-      : {}
+  return {
+    media:
+      data &&
+      data.media &&
+      typeof data.media === "object"
+        ? data.media
+        : {},
+
+    syncRev:
+      Math.max(
+        0,
+        Math.floor(
+          Number(
+            data &&
+            data.syncRev
+          ) || 0
+        )
+      ),
+  };
+}
+
+async function serverSaveMedia(
+  media,
+  syncRev
+) {
+  return apiJson(
+    "/media/save",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        media:
+          media || {},
+        syncRev:
+          Math.max(
+            0,
+            Math.floor(
+              Number(syncRev) || 0
+            )
+          ),
+      }),
+    }
   );
 }
 
-
-async function serverSaveMedia(media) {
-  const res = await fetch("/media/save", {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      media: media || {},
-    }),
-  });
-
-  let data = {};
+function parseStoredMedia(txt) {
+  if (!txt) return {};
 
   try {
-    data = await res.json();
-  } catch (e) {
-    data = {};
-  }
+    const parsed =
+      JSON.parse(txt);
 
-  if (!res.ok) {
-    throw new Error(
-      data?.error ||
-      `Media save failed (${res.status})`
+    return (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+        ? parsed
+        : {}
     );
+  } catch (e) {
+    return {};
   }
-
-  return true;
 }
 
+function referencedMediaIds(world) {
+  return new Set(
+    Object.keys(
+      (
+        world &&
+        world.images
+      ) || {}
+    )
+  );
+}
 
-async function loadMedia(code) {
-  /*
-    1. Képek erről az eszközről.
-  */
+async function cacheMediaLocally(
+  code,
+  media
+) {
+  try {
+    await writeBigScoped(
+      MKEY(code),
+      JSON.stringify(
+        media || {}
+      ),
+      false
+    );
+
+    return true;
+  } catch (e) {
+    console.warn(
+      "Local media cache failed:",
+      e
+    );
+
+    return false;
+  }
+}
+
+/*
+ * CLOUD-FIRST média betöltés.
+ *
+ * Online: PostgreSQL az authoritative kép-tár.
+ * Régi helyi képből csak olyan ID-t migrálunk vissza,
+ * amelyre az authoritative world.images ténylegesen hivatkozik.
+ * Így egy régi böngészőcache nem tud törölt/stale képeket
+ * véletlenül visszaönteni a felhőbe.
+ *
+ * Offline: helyi emergency cache használható.
+ */
+async function loadMedia(
+  code,
+  world
+) {
   const localTxt =
     await readBigScoped(
       MKEY(code),
       false
     );
 
-  /*
-    2. Régi shared/browser media storage.
-  */
   const legacyTxt =
     await readBig(
       MKEY(code)
     );
 
-  const parseMedia = (txt) => {
-    if (!txt) return {};
-
-    try {
-      const parsed = JSON.parse(txt);
-
-      return (
-        parsed &&
-        typeof parsed === "object"
-          ? parsed
-          : {}
-      );
-    } catch (e) {
-      return {};
-    }
-  };
-
   const localMedia =
-    parseMedia(localTxt);
+    parseStoredMedia(
+      localTxt
+    );
 
   const legacyMedia =
-    parseMedia(legacyTxt);
+    parseStoredMedia(
+      legacyTxt
+    );
 
-  /*
-    3. PostgreSQL-ben tárolt közös médiatár.
-  */
-  let cloudMedia = {};
+  const offline =
+    typeof navigator !== "undefined" &&
+    navigator.onLine === false;
+
+  if (offline) {
+    const fallback = {
+      ...legacyMedia,
+      ...localMedia,
+    };
+
+    await cacheMediaLocally(
+      code,
+      fallback
+    );
+
+    return {
+      media: fallback,
+      syncRev: 0,
+      mode: "local",
+    };
+  }
+
+  let cloud;
 
   try {
-    cloudMedia =
+    cloud =
       await serverLoadMedia();
   } catch (e) {
     console.warn(
       "Cloud media load failed:",
       e
     );
+
+    const fallback = {
+      ...legacyMedia,
+      ...localMedia,
+    };
+
+    await cacheMediaLocally(
+      code,
+      fallback
+    );
+
+    return {
+      media: fallback,
+      syncRev: 0,
+      mode: "local",
+      error: e,
+    };
   }
 
-  /*
-    Először a régi böngészős képek,
-    utána az adott eszköz helyi képei,
-    végül a szerver.
-
-    Így:
-    - a PC régi képei nem vesznek el;
-    - a telefon megkapja a cloud képeket;
-    - ha ugyanaz a kép már szerveren is
-      létezik, a szerveres verzió az elsődleges.
-  */
-  const merged = {
-    ...legacyMedia,
-    ...localMedia,
-    ...cloudMedia,
+  let cloudMedia = {
+    ...(
+      cloud &&
+      cloud.media
+        ? cloud.media
+        : {}
+    ),
   };
 
-  /*
-    A cloudból érkezett képeket
-    ezen az eszközön is cache-eljük.
-  */
-  try {
-    await writeBigScoped(
-      MKEY(code),
-      JSON.stringify(merged),
-      false
+  let cloudSyncRev =
+    Math.max(
+      0,
+      Math.floor(
+        Number(
+          cloud &&
+          cloud.syncRev
+        ) || 0
+      )
     );
-  } catch (e) {
-    console.warn(
-      "Local media cache failed:",
-      e
-    );
-  }
 
   /*
-    MIGRÁCIÓ:
-    ha ezen az eszközön vannak régi képek,
-    amelyek még nincsenek a PostgreSQL-ben,
-    automatikusan feltöltjük őket.
-  */
-  const hasLocalMedia =
-    Object.keys(localMedia).length > 0 ||
-    Object.keys(legacyMedia).length > 0;
+   * Egyszeri, biztonságos legacy media migráció.
+   */
+  const referenced =
+    referencedMediaIds(world);
 
-  const mergedJson =
-    JSON.stringify(merged);
+  const legacyPool = {
+    ...legacyMedia,
+    ...localMedia,
+  };
 
-  const cloudJson =
-    JSON.stringify(cloudMedia);
+  const missingReferenced = {};
+
+  Object.keys(
+    legacyPool
+  ).forEach((id) => {
+    if (
+      referenced.has(id) &&
+      !cloudMedia[id]
+    ) {
+      missingReferenced[id] =
+        legacyPool[id];
+    }
+  });
 
   if (
-    hasLocalMedia &&
-    mergedJson !== cloudJson
+    Object.keys(
+      missingReferenced
+    ).length
   ) {
+    const candidate = {
+      ...cloudMedia,
+      ...missingReferenced,
+    };
+
     try {
-      await serverSaveMedia(merged);
+      const saved =
+        await serverSaveMedia(
+          candidate,
+          cloudSyncRev
+        );
+
+      if (
+        saved &&
+        saved.media
+      ) {
+        cloudMedia =
+          saved.media;
+
+        cloudSyncRev =
+          Math.max(
+            0,
+            Math.floor(
+              Number(
+                saved.syncRev
+              ) || 0
+            )
+          );
+      }
     } catch (e) {
-      console.warn(
-        "Cloud media migration failed:",
-        e
-      );
+      if (
+        e &&
+        e.status === 409 &&
+        e.data
+      ) {
+        const serverMedia =
+          e.data.media &&
+          typeof e.data.media === "object"
+            ? e.data.media
+            : {};
+
+        const merged = {
+          ...candidate,
+          ...serverMedia,
+        };
+
+        try {
+          const retry =
+            await serverSaveMedia(
+              merged,
+              Number(
+                e.data.serverSyncRev
+              ) || 0
+            );
+
+          cloudMedia =
+            retry &&
+            retry.media
+              ? retry.media
+              : merged;
+
+          cloudSyncRev =
+            Math.max(
+              0,
+              Math.floor(
+                Number(
+                  retry &&
+                  retry.syncRev
+                ) ||
+                Number(
+                  e.data.serverSyncRev
+                ) || 0
+              )
+            );
+        } catch (retryError) {
+          console.warn(
+            "Legacy media migration conflict retry failed:",
+            retryError
+          );
+        }
+      } else {
+        console.warn(
+          "Legacy media migration failed:",
+          e
+        );
+      }
     }
   }
 
-  return merged;
+  await cacheMediaLocally(
+    code,
+    cloudMedia
+  );
+
+  return {
+    media:
+      cloudMedia,
+    syncRev:
+      cloudSyncRev,
+    mode:
+      "cloud",
+  };
 }
 
-
-async function saveMedia(code, media) {
+/*
+ * Revision-aware média autosave.
+ *
+ * Konfliktusnál a szerver meglévő image ID-je nyer,
+ * az ezen az eszközön létrejött ÚJ image ID-k viszont
+ * megmaradnak és egyszer újrapróbáljuk a mentést.
+ */
+async function saveMedia(
+  code,
+  media,
+  expectedSyncRev = 0
+) {
   const safeMedia =
     media &&
     typeof media === "object"
       ? media
       : {};
 
-  const txt =
-    JSON.stringify(safeMedia);
+  await cacheMediaLocally(
+    code,
+    safeMedia
+  );
 
-  /*
-    1. Helyi cache / biztonsági másolat.
-  */
-  try {
-    await writeBigScoped(
-      MKEY(code),
-      txt,
-      false
-    );
-  } catch (e) {
-    console.warn(
-      "Local media save failed:",
-      e
-    );
+  const offline =
+    typeof navigator !== "undefined" &&
+    navigator.onLine === false;
+
+  if (offline) {
+    return {
+      ok: true,
+      mode: "local",
+      media:
+        safeMedia,
+      syncRev:
+        Math.max(
+          0,
+          Math.floor(
+            Number(
+              expectedSyncRev
+            ) || 0
+          )
+        ),
+    };
   }
 
-  /*
-    2. PostgreSQL.
-    Ettől lesz ugyanaz a kép elérhető
-    PC-n, telefonon és más eszközön is.
-  */
   try {
-    await serverSaveMedia(
-      safeMedia
-    );
+    const saved =
+      await serverSaveMedia(
+        safeMedia,
+        expectedSyncRev
+      );
 
-    return true;
+    return {
+      ok: true,
+      mode: "cloud",
+      media:
+        saved &&
+        saved.media
+          ? saved.media
+          : safeMedia,
+      syncRev:
+        Math.max(
+          0,
+          Math.floor(
+            Number(
+              saved &&
+              saved.syncRev
+            ) || 0
+          )
+        ),
+    };
   } catch (e) {
-    console.warn(
-      "Cloud media save failed:",
-      e
-    );
+    if (
+      e &&
+      e.status === 409 &&
+      e.data
+    ) {
+      const serverMedia =
+        e.data.media &&
+        typeof e.data.media === "object"
+          ? e.data.media
+          : {};
 
-    return false;
+      /*
+       * Server wins on an existing ID; unique local uploads survive.
+       */
+      const reconciled = {
+        ...safeMedia,
+        ...serverMedia,
+      };
+
+      try {
+        const retry =
+          await serverSaveMedia(
+            reconciled,
+            Number(
+              e.data.serverSyncRev
+            ) || 0
+          );
+
+        const finalMedia =
+          retry &&
+          retry.media
+            ? retry.media
+            : reconciled;
+
+        await cacheMediaLocally(
+          code,
+          finalMedia
+        );
+
+        return {
+          ok: true,
+          mode: "cloud",
+          media:
+            finalMedia,
+          syncRev:
+            Math.max(
+              0,
+              Math.floor(
+                Number(
+                  retry &&
+                  retry.syncRev
+                ) ||
+                Number(
+                  e.data.serverSyncRev
+                ) || 0
+              )
+            ),
+          reconciled: true,
+        };
+      } catch (retryError) {
+        return {
+          ok: false,
+          mode: "local",
+          media:
+            safeMedia,
+          syncRev:
+            expectedSyncRev,
+          error:
+            retryError,
+        };
+      }
+    }
+
+    return {
+      ok: false,
+      mode: "local",
+      media:
+        safeMedia,
+      syncRev:
+        expectedSyncRev,
+      error: e,
+    };
   }
 }
 
@@ -5132,7 +5491,7 @@ function seedWorld(code) {
       backstory: "Mindenkiről tud valamit, és mindent a megfelelő pillanatra tartogat." }),
   ];
   const w = {
-    code: String(code).toLowerCase().trim(), rev: 1,
+    code: String(code).toLowerCase().trim(), rev: 1, syncRev: 0,
     universe: {
       name: "Beacon Falls",
       year: String(new Date().getFullYear()),
@@ -6807,12 +7166,77 @@ function NewWorld({ w, onReady, onClose, setErr }) {
     if (!charName.trim()) return setErr(tt("Add meg a karaktered nevét ebben a világban.", "Enter your character's name in this world."));
     setBusy(true);
     try {
-      if (await loadWorld(c)) throw new Error(tt("Ez a világkód már foglalt. Válassz másikat.", "This world code is already taken. Choose another."));
-      const nw = seed ? seedWorld(c) : emptyWorld(c);
-      const meId = await addAccount(nw, username || normUser(charName) || "jatekos", pw, charName.trim());
-      nw.owner = meId;
-      if (!(await saveWorld(nw))) throw new Error(tt("A világ mentése nem sikerült.", "Failed to save the world."));
-      onReady(nw, meId);
+      const nw =
+        seed
+          ? seedWorld(c)
+          : emptyWorld(c);
+
+      const localMeId =
+        await addAccount(
+          nw,
+          username ||
+            normUser(charName) ||
+            "jatekos",
+          pw,
+          charName.trim()
+        );
+
+      nw.owner =
+        localMeId;
+
+      let created;
+
+      try {
+        created =
+          await serverMigrate(
+            nw,
+            username ||
+              normUser(charName) ||
+              "jatekos",
+            pw
+          );
+      } catch (e) {
+        if (
+          e &&
+          e.status === 409
+        ) {
+          throw new Error(
+            tt(
+              "Ez a világkód már foglalt a szerveren. Válassz másikat.",
+              "This world code is already taken on the server. Choose another."
+            )
+          );
+        }
+
+        throw e;
+      }
+
+      const serverWorld =
+        migrate(
+          created &&
+          created.world
+            ? created.world
+            : nw
+        );
+
+      const serverMeId =
+        (
+          created &&
+          created.meId
+        ) ||
+        localMeId;
+
+      /* Emergency backup only, after server creation succeeded. */
+      try {
+        await saveWorldMerged(
+          serverWorld
+        );
+      } catch (e) {}
+
+      onReady(
+        serverWorld,
+        serverMeId
+      );
     } catch (e) { setErr((e && e.message) || tt("Nem sikerült létrehozni.", "Failed to create.")); }
     setBusy(false);
   };
@@ -7004,25 +7428,88 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
   };
 }, []);
 
-  // a szobakód ellenőrzése gépelés közben
+  // A szobakód ellenőrzése gépelés közben: online mindig a szerver az igazság.
   useEffect(() => {
-    const c = code.trim().toLowerCase();
-    if (!c) { setPeek(null); return; }
+    const c =
+      code.trim().toLowerCase();
+
+    if (!c) {
+      setPeek(null);
+      return;
+    }
+
     let alive = true;
-    const t = setTimeout(async () => {
-      const wld = await loadWorld(c);
-      if (!alive) return;
-      setPeek(wld ? {
-        found: true,
-        name: (wld.universe && wld.universe.name) || c,
-        users: Object.keys(wld.accounts || {}).map((id) => (wld.accounts[id] || {}).username).filter(Boolean),
-      } : { found: false });
-    }, 450);
-    return () => { alive = false; clearTimeout(t); };
+
+    const t =
+      setTimeout(async () => {
+        const offline =
+          typeof navigator !== "undefined" &&
+          navigator.onLine === false;
+
+        if (!offline) {
+          try {
+            const result =
+              await serverWorldPeek(c);
+
+            if (!alive) return;
+
+            setPeek({
+              found:
+                Boolean(
+                  result &&
+                  result.found
+                ),
+              name:
+                (
+                  result &&
+                  result.name
+                ) || c,
+              server: true,
+            });
+
+            return;
+          } catch (e) {
+            /*
+             * Online szerverhibánál nem állítjuk egy régi cache-ről,
+             * hogy az a valós szerverállapot.
+             */
+            if (!alive) return;
+            setPeek(null);
+            return;
+          }
+        }
+
+        /* Offline csak tájékoztató emergency cache. */
+        const wld =
+          await loadWorld(c);
+
+        if (!alive) return;
+
+        setPeek(
+          wld
+            ? {
+                found: true,
+                name:
+                  (
+                    wld.universe &&
+                    wld.universe.name
+                  ) || c,
+                server: false,
+              }
+            : {
+                found: false,
+                server: false,
+              }
+        );
+      }, 450);
+
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
   }, [code]);
 
   const u = normUser(user);
-  const known = peek && peek.found ? peek.users : [];
   const isLogin = mode === "login";
   const isNew = mode === "new";
   const needName = !isLogin;
@@ -7085,63 +7572,44 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
        ======================================================== */
 
     if (isNew) {
-      /*
-        Először csak azt nézzük meg, hogy ezen az eszközön
-        nincs-e már ilyen kódú régi világ.
-      */
-      const localExisting = await loadWorld(c);
-
-      if (localExisting) {
-        throw new Error(
-          tt(
-            "Ez a világkód már foglalt. Válassz másikat, vagy lépj be a Belépés fülön.",
-            "This world code is already taken. Choose another, or log in on the Login tab."
-          )
-        );
-      }
-
       const w = seed
         ? seedWorld(c)
         : emptyWorld(c);
 
-      w.aiLang = lang === "en" ? "en" : "hu";
+      w.aiLang =
+        lang === "en"
+          ? "en"
+          : "hu";
 
-      const localMeId = await addAccount(
-        w,
-        u,
-        pw,
-        name.trim()
-      );
-
-      w.owner = localMeId;
-
-      /*
-        Helyi biztonsági másolat továbbra is készül.
-      */
-      if (!(await saveWorld(w))) {
-        throw new Error(
-          tt(
-            "A világ helyi mentése nem sikerült.",
-            "Failed to save the world locally."
-          )
+      const localMeId =
+        await addAccount(
+          w,
+          u,
+          pw,
+          name.trim()
         );
-      }
+
+      w.owner =
+        localMeId;
 
       /*
-        Az új világot rögtön feltöltjük PostgreSQL-be.
-        A migrate endpoint azt is ellenőrzi, hogy a kód
-        nincs-e már foglalva a szerveren.
-      */
+       * A kódfoglaltságról kizárólag PostgreSQL dönt.
+       * Egy régi helyi backup nem blokkolhat új világot.
+       */
       let created;
 
       try {
-        created = await serverMigrate(
-          w,
-          u,
-          pw
-        );
+        created =
+          await serverMigrate(
+            w,
+            u,
+            pw
+          );
       } catch (e) {
-        if (e && e.status === 409) {
+        if (
+          e &&
+          e.status === 409
+        ) {
           throw new Error(
             tt(
               "Ez a világkód már foglalt a szerveren. Válassz másikat.",
@@ -7153,15 +7621,29 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
         throw e;
       }
 
-      const serverWorld = migrate(
-        created && created.world
-          ? created.world
-          : w
-      );
+      const serverWorld =
+        migrate(
+          created &&
+          created.world
+            ? created.world
+            : w
+        );
 
       const serverMeId =
-        (created && created.meId) ||
+        (
+          created &&
+          created.meId
+        ) ||
         localMeId;
+
+      /*
+       * Helyi emergency backup csak a sikeres szerveres létrehozás után.
+       */
+      try {
+        await saveWorldMerged(
+          serverWorld
+        );
+      } catch (e) {}
 
       onReady(
         serverWorld,
@@ -22603,6 +23085,15 @@ export default function App() {
   const [saveState, setSaveState] = useState("saved");
   const [saveAt, setSaveAt] = useState(0);
   const lastSavedMedia = useRef("");
+
+  /* Authoritative multi-device sync state. */
+  const mediaSyncRev = useRef(0);
+  const worldSaveBusy = useRef(false);
+  const mediaSaveBusy = useRef(false);
+  const syncRefreshBusy = useRef(false);
+  const lastServerCheckAt = useRef(0);
+  const pendingServerWorld = useRef(null);
+
   wRef.current = world;
   mediaRef.current = media;
 
@@ -22630,6 +23121,76 @@ export default function App() {
     });
   }, [meId]);
   const tt = useCallback((hu, en) => (lang === "en" ? en : hu), [lang]);
+
+  const installAuthoritativeWorld = useCallback((serverWorld, serverMeId, reason = "sync") => {
+    if (!serverWorld) return false;
+
+    const authoritative =
+      migrate(
+        JSON.parse(
+          JSON.stringify(
+            serverWorld
+          )
+        )
+      );
+
+    if (!authoritative) {
+      return false;
+    }
+
+    const id =
+      serverMeId ||
+      meId;
+
+    if (
+      !id ||
+      !authoritative.accounts ||
+      !authoritative.accounts[id]
+    ) {
+      return false;
+    }
+
+    if (EditLock.n > 0) {
+      pendingServerWorld.current = {
+        world: authoritative,
+        meId: id,
+        reason,
+      };
+
+      setSaveState("conflict");
+      return false;
+    }
+
+    const current =
+      wRef.current;
+
+    if (
+      current &&
+      current.code === authoritative.code &&
+      contentOf(current) !== contentOf(authoritative)
+    ) {
+      /*
+       * Mielőtt a szerververziót átvesszük,
+       * a helyi változat emergency backupként megmarad.
+       */
+      void saveWorldMerged(
+        current
+      ).catch(() => {});
+    }
+
+    pendingServerWorld.current = null;
+
+    lastSavedContent.current =
+      contentOf(authoritative);
+
+    setWorld(authoritative);
+    setMeId(id);
+    setSaveState("saved");
+    setSaveAt(now());
+
+    return true;
+  }, [meId]);
+
   const langCtxValue = React.useMemo(() => ({ lang, tt }), [lang, tt]);
   useEffect(() => { CURRENT_LANG = lang; }, [lang]);
 
@@ -22708,16 +23269,23 @@ useEffect(() => {
       }
     } catch (e) {
       /*
-        Nincs még szerveres session / a világ még nincs migrálva.
-        Ez az átállás alatt teljesen normális.
-      */
+       * ONLINE nincs automatikus local-world fallback.
+       * Ha a session lejárt / nincs session, a login képernyő jön.
+       * Ettől nem tud egy régi browser snapshot szerverállapotnak látszani.
+       */
+      const offline =
+        typeof navigator !== "undefined" &&
+        navigator.onLine === false;
+
+      if (!offline) {
+        return;
+      }
     }
 
     /*
-      2. Fallback: a mostani böngészős mentésed.
-      Ezt egyelőre megtartjuk, nehogy a jelenlegi világod
-      eltűnjön az adatbázisra költözés előtt.
-    */
+     * 2. OFFLINE emergency fallback.
+     * Csak ténylegesen offline böngészőben használható.
+     */
     if (!hasStore || !alive) return;
 
     try {
@@ -22764,6 +23332,9 @@ useEffect(() => {
 
       setWorld(wld);
       setMeId(sess.meId);
+      lastSavedContent.current =
+        contentOf(wld);
+      setSaveState("local");
     } catch (e) {
       /* nincs helyi munkamenet sem */
     }
@@ -22789,6 +23360,8 @@ useEffect(() => {
     seenNote.current = mine0.length ? mine0[0].id : "";
     lastSavedContent.current = contentOf(wld);
     lastSavedMedia.current = "";
+    mediaSyncRev.current = 0;
+    pendingServerWorld.current = null;
     setSaveState("saved");
     setSaveAt(now());
     if (hasStore) { try { window.storage.set(SESSION, JSON.stringify({ code: wld.code, meId: id }), false); } catch (e) {} }
@@ -22922,6 +23495,8 @@ useEffect(() => {
     setPrefill("");
 
     mediaReady.current = false;
+    mediaSyncRev.current = 0;
+    pendingServerWorld.current = null;
 
     setSaveState("saved");
   } catch (e) {
@@ -22973,7 +23548,8 @@ const signOut = useCallback(async () => {
       try {
         await saveMedia(
           w.code,
-          mediaRef.current || {}
+          mediaRef.current || {},
+          mediaSyncRev.current
         );
       } catch (e) {
         // A média mentési hiba se akadályozza a logoutot.
@@ -23014,6 +23590,8 @@ const signOut = useCallback(async () => {
   setMedia({});
 
   mediaReady.current = false;
+  mediaSyncRev.current = 0;
+  pendingServerWorld.current = null;
   setSaveState("saved");
 }, []);
 
@@ -23053,26 +23631,62 @@ const signOut = useCallback(async () => {
       n.rev = (n.rev || 0) + 1;
       return n;
     });
-    if (code) {
-      void saveMedia(code, nextMedia).catch(() => {});
-    }
+    /*
+     * A tényleges cloud mentést a debounced media autosave végzi.
+     * Így két gyors kép-hozzáadás nem indít párhuzamos, azonos
+     * syncRev-ről induló szerverírást.
+     */
     return imageRef(id);
   }, [code, meId]);
 
   useEffect(() => {
     if (!code) return;
+
     let alive = true;
     mediaReady.current = false;
-    loadMedia(code).then((m) => {
-      if (alive) {
-        const loaded = m || {};
-        setMedia(loaded);
-        mediaRef.current = loaded;
-        lastSavedMedia.current = JSON.stringify(loaded);
-        mediaReady.current = true;
-      }
+
+    loadMedia(
+      code,
+      wRef.current
+    ).then((result) => {
+      if (!alive) return;
+
+      const loaded =
+        result &&
+        result.media
+          ? result.media
+          : {};
+
+      mediaSyncRev.current =
+        Math.max(
+          0,
+          Math.floor(
+            Number(
+              result &&
+              result.syncRev
+            ) || 0
+          )
+        );
+
+      setMedia(loaded);
+      mediaRef.current = loaded;
+      lastSavedMedia.current =
+        JSON.stringify(loaded);
+      mediaReady.current = true;
+    }).catch((e) => {
+      if (!alive) return;
+
+      console.warn(
+        "Media initialization failed:",
+        e
+      );
+
+      mediaReady.current = true;
     });
-    return () => { alive = false; };
+
+    return () => {
+      alive = false;
+    };
   }, [code]);
 
   useEffect(() => {
@@ -23086,65 +23700,623 @@ const signOut = useCallback(async () => {
   }, [world ? world.code : null, world ? world.rev : 0, code, media]);
 
   useEffect(() => {
-    const onOnline = () => {
-      const w = wRef.current;
-      if (!w || !w.code) return;
-      setSaveState("retry");
-      void (async () => {
-        const result = await saveWorldMerged(w);
-        const mediaOk = await saveMedia(w.code, mediaRef.current || {});
-        if (result && result.mode === "cloud" && mediaOk) {
-          lastSavedContent.current = contentOf(result.world);
-          lastSavedMedia.current = JSON.stringify(mediaRef.current || {});
-          setSaveState("saved");
-          setSaveAt(now());
-          if (EditLock.n === 0 && contentOf(result.world) !== contentOf(wRef.current || {})) setWorld(result.world);
-        } else {
-          setSaveState((typeof navigator !== "undefined" && navigator.onLine === false) ? "local" : "error");
+    let alive = true;
+
+    const refreshFromServer =
+      async (reason = "focus") => {
+        const current =
+          wRef.current;
+
+        if (
+          !alive ||
+          !current ||
+          !current.code ||
+          !meId
+        ) {
+          return;
         }
-      })();
+
+        if (
+          typeof navigator !== "undefined" &&
+          navigator.onLine === false
+        ) {
+          return;
+        }
+
+        const ts = now();
+
+        if (
+          reason !== "online" &&
+          ts - lastServerCheckAt.current < 4000
+        ) {
+          return;
+        }
+
+        if (
+          syncRefreshBusy.current ||
+          worldSaveBusy.current
+        ) {
+          return;
+        }
+
+        syncRefreshBusy.current = true;
+        lastServerCheckAt.current = ts;
+
+        try {
+          const session =
+            await serverSession();
+
+          if (
+            !alive ||
+            !session ||
+            !session.authenticated ||
+            !session.world ||
+            !session.meId
+          ) {
+            return;
+          }
+
+          const serverWorld =
+            migrate(
+              session.world
+            );
+
+          const latestLocal =
+            wRef.current;
+
+          if (
+            !latestLocal ||
+            latestLocal.code !==
+              serverWorld.code ||
+            session.meId !== meId
+          ) {
+            return;
+          }
+
+          const serverRev =
+            worldSyncRev(
+              serverWorld
+            );
+
+          const localRev =
+            worldSyncRev(
+              latestLocal
+            );
+
+          const sameContent =
+            contentOf(
+              latestLocal
+            ) ===
+            contentOf(
+              serverWorld
+            );
+
+          if (
+            serverRev === localRev &&
+            !sameContent
+          ) {
+            /*
+             * Tipikus offline-edit eset:
+             * a szerver azóta nem változott, ezért a lokális
+             * változás biztonságosan felküldhető ugyanarról syncRev-ről.
+             */
+            try {
+              const saved =
+                await serverSaveWorld(
+                  latestLocal
+                );
+
+              if (
+                saved &&
+                saved.world
+              ) {
+                const accepted =
+                  migrate(
+                    saved.world
+                  );
+
+                const acceptedRev =
+                  worldSyncRev(
+                    accepted
+                  );
+
+                lastSavedContent.current =
+                  contentOf(
+                    accepted
+                  );
+
+                setWorld((cur) => {
+                  if (!cur) return cur;
+
+                  if (
+                    contentOf(cur) ===
+                    contentOf(latestLocal)
+                  ) {
+                    return accepted;
+                  }
+
+                  if (
+                    worldSyncRev(cur) ===
+                    localRev
+                  ) {
+                    const next =
+                      JSON.parse(
+                        JSON.stringify(
+                          cur
+                        )
+                      );
+
+                    next.syncRev =
+                      acceptedRev;
+
+                    return next;
+                  }
+
+                  return cur;
+                });
+
+                setSaveState("saved");
+                setSaveAt(now());
+              }
+            } catch (e) {
+              if (
+                e &&
+                e.status === 409 &&
+                e.data &&
+                e.data.world
+              ) {
+                installAuthoritativeWorld(
+                  e.data.world,
+                  e.data.meId || meId,
+                  "reconnect-conflict"
+                );
+              }
+            }
+          } else if (
+            serverRev !== localRev
+          ) {
+            /*
+             * Valaki/másik eszköz már mentett.
+             * Nincs generikus JSON merge: a szerververzió nyer,
+             * a helyi állapot emergency backupként megmarad.
+             */
+            installAuthoritativeWorld(
+              serverWorld,
+              session.meId,
+              reason
+            );
+          } else if (
+            sameContent
+          ) {
+            lastSavedContent.current =
+              contentOf(
+                serverWorld
+              );
+          }
+
+          /*
+           * Média külön revisionnel szinkronizálódik.
+           * A cloud az authority, hiányzó új lokális image ID
+           * konfliktus esetén append-only módon visszakerülhet.
+           */
+          try {
+            if (mediaSaveBusy.current) {
+              return;
+            }
+
+            const mediaResult =
+              await loadMedia(
+                current.code,
+                serverRev !== localRev
+                  ? serverWorld
+                  : wRef.current
+              );
+
+            if (
+              alive &&
+              mediaResult &&
+              mediaResult.mode === "cloud"
+            ) {
+              const incomingMedia =
+                mediaResult.media || {};
+
+              const incomingJson =
+                JSON.stringify(
+                  incomingMedia
+                );
+
+              mediaSyncRev.current =
+                Math.max(
+                  0,
+                  Math.floor(
+                    Number(
+                      mediaResult.syncRev
+                    ) || 0
+                  )
+                );
+
+              if (
+                incomingJson !==
+                JSON.stringify(
+                  mediaRef.current || {}
+                )
+              ) {
+                mediaRef.current =
+                  incomingMedia;
+                setMedia(
+                  incomingMedia
+                );
+              }
+
+              lastSavedMedia.current =
+                incomingJson;
+            }
+          } catch (e) {
+            console.warn(
+              "Media refresh failed:",
+              e
+            );
+          }
+        } catch (e) {
+          if (
+            e &&
+            e.status === 401
+          ) {
+            setSaveState("error");
+            setErr(
+              tt(
+                "A szerveres munkameneted lejárt. A helyi biztonsági mentésed megmaradt; jelentkezz be újra.",
+                "Your server session expired. Your local emergency backup is safe; please log in again."
+              )
+            );
+          }
+        } finally {
+          syncRefreshBusy.current = false;
+        }
+      };
+
+    const onOnline = () => {
+      setSaveState("retry");
+      void refreshFromServer(
+        "online"
+      );
     };
+
+    const onFocus = () => {
+      void refreshFromServer(
+        "focus"
+      );
+    };
+
+    const onVisibility = () => {
+      if (
+        typeof document !== "undefined" &&
+        !document.hidden
+      ) {
+        void refreshFromServer(
+          "visible"
+        );
+      }
+    };
+
     const onPageHide = () => {
-      const w = wRef.current;
-      if (!w || !w.code) return;
-      void writeWorldSnapshot(w.code, w, false);
-      void writeBigScoped(MKEY(w.code), JSON.stringify(mediaRef.current || {}), false);
+      const w =
+        wRef.current;
+
+      if (
+        !w ||
+        !w.code
+      ) {
+        return;
+      }
+
+      void saveWorldMerged(w);
+
+      void cacheMediaLocally(
+        w.code,
+        mediaRef.current || {}
+      );
     };
-    if (typeof window !== "undefined") {
-      window.addEventListener("online", onOnline);
-      window.addEventListener("pagehide", onPageHide);
+
+    if (
+      typeof window !== "undefined"
+    ) {
+      window.addEventListener(
+        "online",
+        onOnline
+      );
+
+      window.addEventListener(
+        "focus",
+        onFocus
+      );
+
+      window.addEventListener(
+        "pagehide",
+        onPageHide
+      );
+
+      if (
+        typeof document !== "undefined"
+      ) {
+        document.addEventListener(
+          "visibilitychange",
+          onVisibility
+        );
+      }
+
+      /*
+       * Nyitva hagyott két eszköz is közel valós időben
+       * észreveszi egymás mentéseit, nem csak fókuszváltáskor.
+       */
+      const poll =
+        setInterval(() => {
+          if (
+            typeof document === "undefined" ||
+            !document.hidden
+          ) {
+            void refreshFromServer(
+              "poll"
+            );
+          }
+        }, 20000);
+
       return () => {
-        window.removeEventListener("online", onOnline);
-        window.removeEventListener("pagehide", onPageHide);
+        alive = false;
+
+        window.removeEventListener(
+          "online",
+          onOnline
+        );
+
+        window.removeEventListener(
+          "focus",
+          onFocus
+        );
+
+        window.removeEventListener(
+          "pagehide",
+          onPageHide
+        );
+
+        if (
+          typeof document !== "undefined"
+        ) {
+          document.removeEventListener(
+            "visibilitychange",
+            onVisibility
+          );
+        }
+
+        clearInterval(poll);
       };
     }
-    return undefined;
-  }, []);
+
+    return () => {
+      alive = false;
+    };
+  }, [meId, installAuthoritativeWorld, tt]);
+
+  /*
+   * Ha konfliktus szerkesztés közben érkezett, csak az editor
+   * bezárása után vesszük át az authoritative szerver-worldöt.
+   */
+  useEffect(() => {
+    const i =
+      setInterval(() => {
+        const pending =
+          pendingServerWorld.current;
+
+        if (
+          !pending ||
+          EditLock.n > 0
+        ) {
+          return;
+        }
+
+        installAuthoritativeWorld(
+          pending.world,
+          pending.meId,
+          pending.reason ||
+            "deferred-conflict"
+        );
+      }, 500);
+
+    return () =>
+      clearInterval(i);
+  }, [installAuthoritativeWorld]);
 
   useEffect(() => {
-    if (!code || !mediaReady.current) return;
-    if (mediaTimer.current) clearTimeout(mediaTimer.current);
+    if (
+      !code ||
+      !mediaReady.current
+    ) {
+      return;
+    }
+
+    if (mediaTimer.current) {
+      clearTimeout(
+        mediaTimer.current
+      );
+    }
+
     const snap = media;
-    const mediaJson = JSON.stringify(snap || {});
-    if (mediaJson === lastSavedMedia.current) return;
-    setSaveState(typeof navigator !== "undefined" && navigator.onLine === false ? "local" : "saving");
-    mediaTimer.current = setTimeout(async () => {
-      // csendben újrapróbálkozunk; csak akkor szólunk, ha végleg nem megy
-      for (let i = 0; i < 3; i++) {
-        if (await saveMedia(code, snap)) {
-          lastSavedMedia.current = mediaJson;
-          setSaveState("saved");
+    const mediaJson =
+      JSON.stringify(
+        snap || {}
+      );
+
+    if (
+      mediaJson ===
+      lastSavedMedia.current
+    ) {
+      return;
+    }
+
+    const offline =
+      typeof navigator !== "undefined" &&
+      navigator.onLine === false;
+
+    setSaveState(
+      offline
+        ? "local"
+        : "saving"
+    );
+
+    const runMediaSave = async () => {
+        if (mediaSaveBusy.current) {
+          /*
+           * Egy korábbi upload még fut. Nem dobjuk el az újabb
+           * snapshotot: röviden várunk, aztán ugyanazt a legfrissebb
+           * debounced mentést újrapróbáljuk.
+           */
+          mediaTimer.current =
+            setTimeout(
+              runMediaSave,
+              650
+            );
+          return;
+        }
+
+        mediaSaveBusy.current = true;
+
+        let result = null;
+
+        for (
+          let i = 0;
+          i < 3;
+          i++
+        ) {
+          result =
+            await saveMedia(
+              code,
+              snap,
+              mediaSyncRev.current
+            );
+
+          if (
+            result &&
+            result.ok
+          ) {
+            break;
+          }
+
+          if (
+            result &&
+            result.error &&
+            result.error.status === 401
+          ) {
+            break;
+          }
+
+          await wait(
+            1200 * (i + 1)
+          );
+        }
+
+        mediaSaveBusy.current = false;
+
+        if (
+          result &&
+          result.ok
+        ) {
+          if (
+            result.mode === "cloud"
+          ) {
+            mediaSyncRev.current =
+              Math.max(
+                0,
+                Math.floor(
+                  Number(
+                    result.syncRev
+                  ) || 0
+                )
+              );
+          }
+
+          const acceptedMedia =
+            result.media ||
+            snap || {};
+
+          const acceptedJson =
+            JSON.stringify(
+              acceptedMedia
+            );
+
+          const currentJson =
+            JSON.stringify(
+              mediaRef.current || {}
+            );
+
+          if (
+            currentJson === mediaJson &&
+            acceptedJson !== currentJson
+          ) {
+            mediaRef.current =
+              acceptedMedia;
+
+            setMedia(
+              acceptedMedia
+            );
+          }
+
+          lastSavedMedia.current =
+            acceptedJson;
+
+          setSaveState(
+            result.mode === "cloud"
+              ? "saved"
+              : "local"
+          );
+
           setSaveAt(now());
           return;
         }
-        await wait(1200 * (i + 1));
+
+        setSaveState(
+          (
+            typeof navigator !== "undefined" &&
+            navigator.onLine === false
+          )
+            ? "local"
+            : "retry"
+        );
+
+        if (
+          result &&
+          result.error &&
+          result.error.status === 401
+        ) {
+          setErr(
+            tt(
+              "A képek felhőmentéséhez újra be kell jelentkezned. A helyi emergency másolat megmaradt.",
+              "Log in again to sync images to the cloud. The local emergency copy is safe."
+            )
+          );
+        } else {
+          setErr(
+            tt(
+              "A képek felhőmentése most nem sikerült. A helyi emergency másolat megmaradt, és később újrapróbáljuk.",
+              "Cloud image saving failed for now. The local emergency copy is safe and we'll retry later."
+            )
+          );
+        }
+      };
+
+    mediaTimer.current =
+      setTimeout(
+        runMediaSave,
+        1500
+      );
+
+    return () => {
+      if (mediaTimer.current) {
+        clearTimeout(
+          mediaTimer.current
+        );
       }
-      setSaveState((typeof navigator !== "undefined" && navigator.onLine === false) ? "local" : "retry");
-      setErr(tt("A képeket most nem sikerült elmenteni. A Világ fülön ments biztonsági mentést, hogy semmi ne vesszen el.",
-            "Couldn't save images right now. Create a backup from the World tab so nothing gets lost."));
-    }, 1500);
-    return () => mediaTimer.current && clearTimeout(mediaTimer.current);
-  }, [media, code]);
+    };
+  }, [media, code, tt]);
 
   const update = useCallback((fn) => {
   setWorld((prev) => {
@@ -23218,179 +24390,258 @@ const signOut = useCallback(async () => {
   }, [world ? world.code : null, meId, tab, chatId]);
 
   useEffect(() => {
-  if (!world) return;
+    if (!world) return;
 
-  const json = contentOf(world);
+    const json =
+      contentOf(world);
 
-  if (json === lastSavedContent.current) return;
-
-  if (timer.current) {
-    clearTimeout(timer.current);
-  }
-
-  const snap = world;
-
-  const offline =
-    typeof navigator !== "undefined" &&
-    navigator.onLine === false;
-
-  setSaveState(
-    offline ? "local" : "saving"
-  );
-
-  timer.current = setTimeout(async () => {
-    /*
-      1. Mindig készítünk helyi biztonsági mentést is.
-      Így egy pillanatnyi szerverhiba miatt nem veszhet el,
-      amit éppen csináltál.
-    */
-    let localResult = null;
-
-    try {
-      localResult = await saveWorldMerged(snap);
-    } catch (e) {
-      localResult = null;
-    }
-
-    /*
-      Ha nincs internet, itt megállunk.
-      A helyi példány megvan, később újrapróbáljuk a szervert.
-    */
     if (
+      json ===
+      lastSavedContent.current
+    ) {
+      return;
+    }
+
+    if (timer.current) {
+      clearTimeout(
+        timer.current
+      );
+    }
+
+    const snap =
+      JSON.parse(
+        JSON.stringify(
+          world
+        )
+      );
+
+    const snapSyncRev =
+      worldSyncRev(
+        snap
+      );
+
+    const offline =
       typeof navigator !== "undefined" &&
-      navigator.onLine === false
-    ) {
-      if (localResult && localResult.world) {
-        lastSavedContent.current =
-          contentOf(localResult.world);
+      navigator.onLine === false;
 
-        setSaveState("local");
-        setSaveAt(now());
-      }
-
-      return;
-    }
-
-    /*
-      2. PostgreSQL autosave.
-      Ezt legfeljebb háromszor próbáljuk meg.
-    */
-    let serverResult = null;
-    let lastError = null;
-
-    for (
-      let i = 0;
-      i < 3 && !serverResult;
-      i++
-    ) {
-      try {
-        const saved =
-          await serverSaveWorld(snap);
-
-        if (saved && saved.world) {
-          serverResult = saved;
-          break;
-        }
-      } catch (e) {
-        lastError = e;
-
-        /*
-          Lejárt / érvénytelen session esetén
-          nincs értelme háromszor ugyanazt próbálni.
-        */
-        if (e && e.status === 401) {
-          break;
-        }
-
-        await wait(1000 * (i + 1));
-      }
-    }
-
-    /*
-      A helyi backup megvan, de a szerveres mentés nem.
-    */
-    if (!serverResult) {
-      if (localResult && localResult.world) {
-        lastSavedContent.current =
-          contentOf(localResult.world);
-
-        setSaveAt(now());
-      }
-
-      setSaveState("error");
-
-      if (
-        lastError &&
-        lastError.status === 401
-      ) {
-        setErr(
-          tt(
-            "A szerveres munkameneted lejárt. Jelentkezz be újra; a helyi mentésed megmaradt.",
-            "Your server session expired. Log in again; your local save is still safe."
-          )
-        );
-      } else {
-        setErr(
-          tt(
-            "A felhőmentés most nem sikerült. A helyi mentésed megmaradt, és újra fogjuk próbálni.",
-            "Cloud saving failed for now. Your local save is safe and we'll retry."
-          )
-        );
-      }
-
-      return;
-    }
-
-    /*
-      3. Sikeres PostgreSQL mentés.
-    */
-    const savedWorld = migrate(
-      serverResult.world
+    setSaveState(
+      offline
+        ? "local"
+        : "saving"
     );
 
-    lastSavedContent.current =
-      contentOf(savedWorld);
+    timer.current =
+      setTimeout(async () => {
+        /*
+         * 1. MINDIG emergency local backup.
+         * Ez soha nem merge-el vissza automatikusan online worldbe.
+         */
+        let localResult = null;
 
-    setSaveState("saved");
-    setSaveAt(now());
+        try {
+          localResult =
+            await saveWorldMerged(
+              snap
+            );
+        } catch (e) {
+          localResult = null;
+        }
 
-    /*
-      A szerver esetleg növelte a rev-et vagy
-      normalizált valamit. Csak akkor frissítjük
-      a React state-et, ha ténylegesen különbözik.
-    */
-    if (EditLock.n === 0) {
-  setWorld((current) => {
-    if (!current) return current;
+        if (
+          typeof navigator !== "undefined" &&
+          navigator.onLine === false
+        ) {
+          lastSavedContent.current =
+            json;
 
-    /*
-      Fontos: az autosave egy korábbi world snapshotot mentett.
-      Ha közben történt új változás — például megérkezett egy
-      chatválasz — a régi szerverválasz SOHA ne írja felül.
-    */
-    if (contentOf(current) !== json) {
-      return current;
-    }
+          setSaveState("local");
+          setSaveAt(now());
+          return;
+        }
 
-    /*
-      Ha a szerver pontosan ugyanazt adta vissza,
-      nincs szükség state-cserére.
-    */
-    if (contentOf(savedWorld) === json) {
-      return current;
-    }
+        /*
+         * 2. Revision-aware PostgreSQL save.
+         */
+        let serverResult = null;
+        let lastError = null;
 
-    return savedWorld;
-  });
-}
-  }, 800);
+        if (worldSaveBusy.current) {
+          return;
+        }
 
-  return () => {
-    if (timer.current) {
-      clearTimeout(timer.current);
-    }
-  };
-}, [world]);
+        worldSaveBusy.current = true;
+
+        for (
+          let i = 0;
+          i < 3 &&
+          !serverResult;
+          i++
+        ) {
+          try {
+            const saved =
+              await serverSaveWorld(
+                snap
+              );
+
+            if (
+              saved &&
+              saved.world
+            ) {
+              serverResult =
+                saved;
+              break;
+            }
+          } catch (e) {
+            lastError = e;
+
+            /*
+             * 409 = másik kliens már mentett.
+             * NEM próbáljuk újra a stale snapshotot.
+             */
+            if (
+              e &&
+              e.status === 409
+            ) {
+              break;
+            }
+
+            if (
+              e &&
+              e.status === 401
+            ) {
+              break;
+            }
+
+            await wait(
+              1000 * (i + 1)
+            );
+          }
+        }
+
+        worldSaveBusy.current = false;
+
+        if (!serverResult) {
+          setSaveAt(now());
+
+          if (
+            lastError &&
+            lastError.status === 409 &&
+            lastError.data &&
+            lastError.data.world
+          ) {
+            setSaveState("conflict");
+
+            installAuthoritativeWorld(
+              lastError.data.world,
+              lastError.data.meId || meId,
+              "autosave-conflict"
+            );
+
+            setErr(
+              tt(
+                "Egy másik eszköz közben frissítette ezt a világot. A szerver legújabb verzióját töltöttük be; a helyi változat emergency backupként megmaradt.",
+                "Another device updated this world. The newest server version was loaded; your local version remains as an emergency backup."
+              )
+            );
+
+            return;
+          }
+
+          setSaveState("error");
+
+          if (
+            lastError &&
+            lastError.status === 401
+          ) {
+            setErr(
+              tt(
+                "A szerveres munkameneted lejárt. Jelentkezz be újra; a helyi emergency mentésed megmaradt.",
+                "Your server session expired. Log in again; your local emergency save is safe."
+              )
+            );
+          } else {
+            setErr(
+              tt(
+                "A felhőmentés most nem sikerült. A helyi emergency mentésed megmaradt, és később újrapróbáljuk.",
+                "Cloud saving failed for now. Your local emergency save is safe and we'll retry later."
+              )
+            );
+          }
+
+          return;
+        }
+
+        /*
+         * 3. Sikeres szerver save.
+         */
+        const savedWorld =
+          migrate(
+            serverResult.world
+          );
+
+        const savedSyncRev =
+          worldSyncRev(
+            savedWorld
+          );
+
+        lastSavedContent.current =
+          contentOf(
+            savedWorld
+          );
+
+        setSaveState("saved");
+        setSaveAt(now());
+
+        setWorld((current) => {
+          if (!current) {
+            return current;
+          }
+
+          const currentContent =
+            contentOf(current);
+
+          /*
+           * Ha a save request alatt új lokális változás történt,
+           * az új tartalmat megtartjuk, DE átvezetjük rá a szerver
+           * frissen kiosztott syncRev-jét. Így a következő autosave
+           * nem ütközik a saját előző mentésünkkel.
+           */
+          if (
+            currentContent !== json
+          ) {
+            if (
+              worldSyncRev(
+                current
+              ) === snapSyncRev
+            ) {
+              const next =
+                JSON.parse(
+                  JSON.stringify(
+                    current
+                  )
+                );
+
+              next.syncRev =
+                savedSyncRev;
+
+              return next;
+            }
+
+            return current;
+          }
+
+          return savedWorld;
+        });
+      }, 800);
+
+    return () => {
+      if (timer.current) {
+        clearTimeout(
+          timer.current
+        );
+      }
+    };
+  }, [world, meId, installAuthoritativeWorld, tt]);
   const myNotes = (world && meId && world.notify && world.notify[meId]) || [];
   const unread = myNotes.filter((x) => !x.read).length;
   const topNoteId = myNotes.length ? myNotes[0].id : "";
@@ -23402,7 +24653,12 @@ const signOut = useCallback(async () => {
         ? tt("Offline – helyi mentés készült", "Offline – saved locally")
         : saveState === "retry"
           ? tt("Újrapróbálkozás…", "Retrying…")
-          : tt("A mentés sikertelen", "Save failed");
+          : saveState === "conflict"
+            ? tt(
+                "Másik eszköz frissített – szerververzió betöltése…",
+                "Another device updated this world – loading server version…"
+              )
+            : tt("A mentés sikertelen", "Save failed");
 
   useEffect(() => {
     if (!world || !meId || !topNoteId) return;
