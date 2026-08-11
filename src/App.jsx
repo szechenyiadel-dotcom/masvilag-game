@@ -7294,14 +7294,14 @@ function relationshipBehaviorCard(
   } else if (score >= 70) {
     parts.push(
       en
-        ? "very close bond: familiarity, loyalty, protectiveness or easy warmth should feel natural"
-        : "nagyon közeli viszony: természetes legyen a közvetlenség, lojalitás, védelmezés vagy melegség"
+        ? "VERY CLOSE BASELINE: familiarity, loyalty, protectiveness and easy warmth should feel natural. HARD RULE: do not make them suddenly cruel, contemptuous, insulting, dismissive or hostile toward this person unless a concrete current event, established recurring dynamic, or an explicit trait in THEIR OWN sheet actually justifies that reaction. Friendly teasing may be sharp only when it still reads as affection, not random humiliation."
+        : "NAGYON KÖZELI ALAPHANG: természetes legyen a közvetlenség, lojalitás, védelmezés és melegség. KEMÉNY SZABÁLY: ne legyen hirtelen kegyetlen, lenéző, sértegető, lekezelő vagy ellenséges ezzel az emberrel, hacsak egy KONKRÉT aktuális esemény, már kialakult közös dinamika vagy a SAJÁT adatlapján lévő explicit tulajdonság tényleg nem indokolja. Az ugratás lehet csípős, de barátinak kell érződnie, nem random megalázásnak."
     );
   } else if (score >= 35) {
     parts.push(
       en
-        ? "good relationship: they should generally sound warmer, more patient or more willing to engage"
-        : "jó viszony: általában legyen melegebb, türelmesebb, nyitottabb vagy készségesebb a hangja"
+        ? "GOOD RELATIONSHIP BASELINE: they should generally be warmer, more patient, receptive or friendly. HARD RULE: no random rudeness, insults, cold dismissal, hostility or mean-spirited mockery toward this person without a specific trigger or character-canon reason. Do not manufacture conflict merely for variety."
+        : "JÓ VISZONY ALAPHANG: általában legyen melegebb, türelmesebb, nyitottabb és barátibb. KEMÉNY SZABÁLY: ne legyen random bunkóság, sértegetés, hideg lepattintás, ellenségesség vagy rosszindulatú gúny konkrét kiváltó ok vagy karakterkánon nélkül. Ne gyárts konfliktust pusztán a változatosság kedvéért."
     );
   } else {
     parts.push(
@@ -7526,11 +7526,13 @@ ${en
   ? `- Use each block only to perform that specific character.
 - Do not transfer one character's secrets, private personality notes or hidden feelings into another character's knowledge.
 - Every explicit fact in each character's own sheet is canon. Read and use the full self-canon block, especially personality, full story, secrets, goals, fears, affiliations, skills and old relationships. Never flatten a distinctive character into a generic helpful AI voice.
-- Personal history, franchise/faction loyalties, rivalries and organizations written in the sheets must actively affect behavior. Do not treat established rivals, allies, relatives, crushes or enemies like neutral strangers.`
+- Personal history, franchise/faction loyalties, rivalries and organizations written in the sheets must actively affect behavior. Do not treat established rivals, allies, relatives, crushes or enemies like neutral strangers.
+- Positive relationships are NOT blank slates for random snark: if a character has a good/close bond with someone, hostility, insults or cold dismissal require a real trigger or explicit canon reason. Do not force one rude response into a group merely for variety.`
   : `- Minden blokkot csak az adott karakter eljátszására használj.
 - Egyik karakter titkait, rejtett személyiségét vagy titkos érzéseit se add át egy másik karakter tudásának.
 - A karakter saját adatlapján szereplő MINDEN explicit adat kánon. Olvasd és használd a teljes saját-kánon blokkot, különösen a személyiséget, teljes történetet, titkokat, célokat, félelmeket, hovatartozást, képességeket és régi kapcsolatokat. Soha ne lapíts egy jellegzetes karaktert általános segítőkész AI-hanggá.
-- A leírt történetek, franchise/csoport-lojalitások, rivalizálások és szervezetek AKTÍVAN hassanak a viselkedésre. A már létező riválisokat, szövetségeseket, rokonokat, crushokat vagy ellenségeket ne kezeld semleges idegenként.`}
+- A leírt történetek, franchise/csoport-lojalitások, rivalizálások és szervezetek AKTÍVAN hassanak a viselkedésre. A már létező riválisokat, szövetségeseket, rokonokat, crushokat vagy ellenségeket ne kezeld semleges idegenként.
+- A pozitív kapcsolat NEM üres lap random beszólásokhoz: jó/közeli viszonynál az ellenségességhez, sértegetéshez vagy hideg lepattintáshoz valódi kiváltó ok vagy explicit kánon kell. Ne kényszeríts bele egy bunkó reakciót a csoportba csak a változatosság kedvéért.`}
 ${blocks}`;
 }
 
@@ -7838,6 +7840,10 @@ KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
 - Minden generálás előtt egyeztesd a választ a személyiséggel, tulajdonságokkal, beszédstílussal, teljes történettel, titkokkal, félelmekkel, célokkal, kedvencekkel, képességekkel, szervezettel, ranggal, kapcsolatokkal és aktuális emlékekkel.
 - Ha egy mondatot több szereplő is ugyanúgy mondhatna, az NEM elég karakterhű: írd újra úgy, hogy felismerhető legyen, ki mondta.
 - A karakter hibái, sötét oldala, makacssága, humora, intelligenciája, agressziója, félelmei, dominanciája, manipulativitása, lojalitása vagy érzelmi zártsága ne kopjon ki idővel.
+- KAPCSOLATI ALAPHANG — NEM RANDOM: a kapcsolat score/bond/mood valódi viselkedési korlát. Ha két ember jóban van, barát, közeli barát, családtag vagy partner, NE generálj közöttük a semmiből bunkóságot, sértegetést, lenézést, hideg lepattintást vagy ellenségességet csak azért, hogy legyen dráma/változatosság. Negatív reakcióhoz legyen konkrét aktuális ok, korábbi sérelem vagy a karakter SAJÁT adatlapján szereplő olyan tulajdonság, ami ezt ténylegesen indokolja.
+- Egy baráti ugratás nem ugyanaz, mint a rosszindulat. Jó kapcsolatnál a csípős humor is maradjon felismerhetően bizalmas/baráti, hacsak épp valódi konfliktus nem történik.
+- Ha egy jó kapcsolatban lévő karakter ténylegesen durván viselkedik, azt kezeld ESEMÉNYKÉNT: legyen oka és indokolt relationship consequence-e. Ne legyen következmény nélküli random személyiségcsere.
+- Egy pszichopatikus/sötét/agresszív karakter sötét vonásai sem jelentik automatikusan azt, hogy minden barátjával vagy szövetségesével ok nélkül szemét. A saját adatlapja mondja meg, KIVEL és MILYEN helyzetben ilyen.
 - SÖTÉT / VESZÉLYES KARAKTERHŰSÉG: ha a karakterlap kifejezetten kegyetlennek, pszichopatikusnak, szadistának, erőszakosnak, kiszámíthatatlannak, manipulatívnak, könyörtelennek, megszállottnak, impulzívnak vagy veszélyesnek írja a karaktert, ezt NE puhítsd generikus kedvességgé vagy "titokban jó ember" sablonná. A sötét vonások ténylegesen befolyásolják, hogyan provokál, fenyeget, hazudik, manipulál, büntet, féltékenykedik, megfélemlít vagy eszkalál.
 - Ne diagnosztizálj új mentális betegséget és ne feltételezd, hogy egy mentális zavar önmagában erőszakosságot jelent. Csak azt a konkrét sötét/veszélyes viselkedést használd, amit a karakterlap ténylegesen megad.
 - AGRESSZIÓ ÉS VEREKEDÉS: a konfliktusoknak lehet fizikai következménye. Ha a karakter személyisége, múltja, ellenséges kapcsolata, indulata vagy harci háttere indokolja, ő maga is kezdeményezhet fenyegetést, lökést, ütést, rúgást, lefogást, dulakodást vagy teljes verekedést. Ne várj mindig arra, hogy a játékos vagy egy másik karakter kezdje.
@@ -8053,6 +8059,11 @@ CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - Reconcile every response with personality, traits, speech style, full history, secrets, fears, goals, likes, abilities, organization, rank, relationships and current memories.
 - If a line could be moved unchanged to several other characters, it is not character-specific enough.
 - Do not sand down obsessive, possessive, cruel, arrogant, manipulative, chaotic, shy, jealous, dominant or emotionally closed characters into generic assistant politeness.
+- RELATIONSHIP BASELINE IS NOT RANDOM: score/bond/mood are behavioral constraints. Friends, close friends, family, partners and strongly positive relationships must not suddenly become insulting, contemptuous, cold, dismissive or hostile merely to create variety or drama.
+- A negative reaction toward someone they normally like needs a concrete current trigger, an established grievance, or an explicit trait/dynamic in that character's OWN canon. If none exists, do not invent hostility.
+- Friendly teasing may be sharp, but in a good relationship it should still read as familiar/affectionate rather than mean-spirited humiliation.
+- If a normally positive relationship genuinely produces harsh behavior, treat that as a meaningful event with a cause and relationship consequence instead of a consequence-free personality flip.
+- Dark, psychopathic, aggressive or cruel traits do not automatically mean indiscriminate cruelty toward every friend or ally. Apply those traits exactly as the character sheet and relationship support them.
 - Example dialogue is style guidance only. Never recycle it as a catchphrase.
 
 ENGLISH PRONOUN / REFERENCE RESOLUTION — HARD RULE:
@@ -9680,6 +9691,72 @@ function mediaFingerprint(
     .join("|");
 }
 
+function mergeIncomingMediaPreservingUnsavedLocal(
+  incoming,
+  localCurrent,
+  lastSavedFingerprint = ""
+) {
+  const cloud =
+    incoming &&
+    typeof incoming === "object"
+      ? incoming
+      : {};
+
+  const local =
+    localCurrent &&
+    typeof localCurrent === "object"
+      ? localCurrent
+      : {};
+
+  /*
+   * Csak akkor őrzünk lokális plusz ID-kat, ha ténylegesen van
+   * még el nem mentett média-változás ezen az eszközön.
+   *
+   * Ez megakadályozza azt a race conditiont, amikor:
+   * 1. feltöltesz egy képet,
+   * 2. azonnal posztolod,
+   * 3. még az 1.5s media autosave előtt lefut egy cloud refresh,
+   * 4. a szerver régebbi médiatára letörli a friss lokális képet.
+   */
+  const localDirty =
+    mediaFingerprint(local) !==
+    String(lastSavedFingerprint || "");
+
+  if (!localDirty) {
+    return cloud;
+  }
+
+  const merged = {
+    ...cloud,
+  };
+
+  Object.keys(local)
+    .forEach((id) => {
+      if (merged[id]) {
+        return;
+      }
+
+      const entry =
+        normalizeMediaEntry(
+          id,
+          local[id]
+        );
+
+      if (
+        !entry ||
+        entry.status === "deleted" ||
+        !entry.dataUrl
+      ) {
+        return;
+      }
+
+      merged[id] =
+        local[id];
+    });
+
+  return merged;
+}
+
 async function serverLoadMedia() {
   const data =
     await apiJson(
@@ -10951,71 +11028,10 @@ function ensureFollowerSystem(w) {
   });
 
   /*
-   * TAKARÍTÁS:
-   * a korábbi hate-follow logika miatt megmaradt AI -> enemy/rival
-   * követéseket automatikusan eltávolítjuk.
-   *
-   * A játékos SAJÁT following listájához nem nyúlunk.
-   * Secret crush-os ellenségnél a meglévő követést meghagyjuk,
-   * mert az lehet karakterhű — de újat nem garantálunk.
+   * A korábbi hibás/megromlott follow-kat NEM töröljük itt csendben.
+   * Az autonóm unfollow rendszer valódi social actionként kezeli őket,
+   * így AI -> AI és AI -> játékos kikövetés is megtörténhet.
    */
-  profiles.forEach((actor) => {
-    if (
-      !actor ||
-      isHuman(
-        w,
-        actor.id
-      ) ||
-      isMediaAccount(
-        w,
-        actor.id
-      )
-    ) {
-      return;
-    }
-
-    actor.following
-      .slice()
-      .forEach((targetId) => {
-        const target =
-          byId[targetId];
-
-        if (
-          !target ||
-          isMediaAccount(
-            w,
-            targetId
-          )
-        ) {
-          return;
-        }
-
-        const eligibility =
-          aiFollowEligibility(
-            w,
-            actor.id,
-            targetId
-          );
-
-        if (
-          eligibility.allowed
-        ) {
-          return;
-        }
-
-        actor.following =
-          actor.following.filter(
-            (id) =>
-              id !== targetId
-          );
-
-        target.followers =
-          target.followers.filter(
-            (id) =>
-              id !== actor.id
-          );
-      });
-  });
 
   /*
    * Csak tényleges social kötelékből legyen automatikus follow:
@@ -12196,6 +12212,331 @@ function aiShouldFollow(
   );
 }
 
+function aiUnfollowPressure(
+  w,
+  actorId,
+  targetId
+) {
+  const actor =
+    socialProfileById(
+      w,
+      actorId
+    );
+
+  const target =
+    socialProfileById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target ||
+    actor.id === target.id ||
+    isMediaAccount(
+      w,
+      target.id
+    ) ||
+    !isFollowing(
+      w,
+      actor.id,
+      target.id
+    )
+  ) {
+    return -999;
+  }
+
+  const rel =
+    getRel(
+      w,
+      actor.id,
+      target.id
+    );
+
+  const score =
+    Number(
+      rel.score
+    ) || 0;
+
+  const bond =
+    followBondText(rel);
+
+  const enemy =
+    hasEnemyOrRivalBond(
+      rel
+    ) ||
+    opposingFollowFaction(
+      actor,
+      target
+    );
+
+  const secretCrush =
+    hasSecretCrushSignal(
+      rel,
+      actor,
+      target
+    );
+
+  const obsession =
+    relationshipObsessionLevel(
+      w,
+      actor.id,
+      target.id
+    );
+
+  const family =
+    hasFamilyFollowBond(
+      rel
+    );
+
+  let pressure = 0;
+
+  if (enemy) {
+    pressure +=
+      secretCrush
+        ? 24
+        : 100;
+  }
+
+  if (
+    /exek|exes|\bex\b/.test(
+      bond
+    )
+  ) {
+    pressure +=
+      score <= 0
+        ? 72
+        : 42;
+  }
+
+  if (score <= -70) {
+    pressure += 82;
+  } else if (score <= -40) {
+    pressure += 58;
+  } else if (score <= -20) {
+    pressure += 34;
+  }
+
+  /*
+   * Ha már nincs olyan bond/csapat/családi ok, ami miatt eredetileg
+   * követte, a követés természetesen kikophat.
+   */
+  const eligibility =
+    aiFollowEligibility(
+      w,
+      actor.id,
+      target.id
+    );
+
+  if (
+    !eligibility.allowed
+  ) {
+    pressure += 48;
+  }
+
+  /*
+   * Családtagot is ki LEHET követni, de csak nagyon rossz
+   * viszonynál; a családi bond ettől természetesen nem változik.
+   */
+  if (family) {
+    if (score > -65) {
+      return 0;
+    }
+
+    pressure -= 22;
+  }
+
+  /*
+   * Titkos crush / obsession gyakran pont azt eredményezi,
+   * hogy konfliktus ellenére is tovább figyeli.
+   */
+  if (secretCrush) {
+    pressure -= 36;
+  }
+
+  if (obsession >= 3) {
+    pressure -= 46;
+  } else if (obsession >= 2) {
+    pressure -= 26;
+  }
+
+  /*
+   * Jó kapcsolatot soha ne kövessen ki random.
+   */
+  if (
+    score >= 35 &&
+    !enemy &&
+    !/exek|exes|\bex\b/.test(
+      bond
+    )
+  ) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Math.round(
+      pressure
+    )
+  );
+}
+
+function aiShouldUnfollow(
+  w,
+  actorId,
+  targetId
+) {
+  const pressure =
+    aiUnfollowPressure(
+      w,
+      actorId,
+      targetId
+    );
+
+  if (pressure <= 0) {
+    return false;
+  }
+
+  if (pressure >= 90) {
+    return true;
+  }
+
+  if (pressure >= 65) {
+    return (
+      Math.random() <
+      0.72
+    );
+  }
+
+  if (pressure >= 45) {
+    return (
+      Math.random() <
+      0.44
+    );
+  }
+
+  if (pressure >= 25) {
+    return (
+      Math.random() <
+      0.22
+    );
+  }
+
+  return (
+    Math.random() <
+    0.08
+  );
+}
+
+function pickAutonomousUnfollowAction(
+  w
+) {
+  ensureFollowerSystem(w);
+
+  const actors =
+    (w.chars || [])
+      .filter(
+        (c) =>
+          c &&
+          !isHuman(
+            w,
+            c.id
+          ) &&
+          !isMediaAccount(
+            w,
+            c.id
+          )
+      );
+
+  const candidates = [];
+
+  actors.forEach((actor) => {
+    ensureSocialProfileRow(
+      actor
+    );
+
+    actor.following
+      .slice()
+      .forEach((targetId) => {
+        const target =
+          socialProfileById(
+            w,
+            targetId
+          );
+
+        if (
+          !target ||
+          isMediaAccount(
+            w,
+            targetId
+          )
+        ) {
+          return;
+        }
+
+        const pressure =
+          aiUnfollowPressure(
+            w,
+            actor.id,
+            targetId
+          );
+
+        if (pressure < 20) {
+          return;
+        }
+
+        candidates.push({
+          actorId:
+            actor.id,
+          targetId,
+          pressure,
+          tie:
+            Math.random(),
+        });
+      });
+  });
+
+  candidates.sort(
+    (a, b) =>
+      b.pressure !== a.pressure
+        ? b.pressure - a.pressure
+        : a.tie - b.tie
+  );
+
+  const pool =
+    candidates.slice(
+      0,
+      5
+    );
+
+  for (
+    let i = 0;
+    i < pool.length;
+    i++
+  ) {
+    const picked =
+      pool[
+        Math.floor(
+          Math.random() *
+          pool.length
+        )
+      ];
+
+    if (
+      picked &&
+      aiShouldUnfollow(
+        w,
+        picked.actorId,
+        picked.targetId
+      )
+    ) {
+      return picked;
+    }
+  }
+
+  return null;
+}
+
 function pickAutonomousFollowAction(w) {
   ensureFollowerSystem(w);
 
@@ -12463,12 +12804,9 @@ function setFollowState(
   );
 
   /*
-   * Ha egy AI követni kezdi a játékost,
-   * kapjon róla normál social értesítést.
-   * Unfollowról szándékosan nem küldünk értesítést.
+   * AI -> játékos follow/unfollow legyen látható social esemény.
    */
   if (
-    shouldFollow &&
     !isHuman(w, follower.id) &&
     isHuman(w, target.id)
   ) {
@@ -12476,14 +12814,21 @@ function setFollowState(
       w,
       target.id,
       {
-        icon: "👤",
+        icon:
+          shouldFollow
+            ? "👤"
+            : "↩️",
 
         text:
           sysLangText(
             w,
             target.id,
-            `${follower.name} követni kezdett.`,
-            `${follower.name} started following you.`
+            shouldFollow
+              ? `${follower.name} követni kezdett.`
+              : `${follower.name} kikövetett.`,
+            shouldFollow
+              ? `${follower.name} started following you.`
+              : `${follower.name} unfollowed you.`
           ),
 
         link: {
@@ -15138,11 +15483,11 @@ KOMMENT SZABÁLYOK:
 TERMÉSZETES SOCIAL MEDIA STÍLUS:
 
 - A komment elsődlegesen REAKCIÓ legyen, ne elemzés.
-- Lehet beszólás.
+- Lehet beszólás, DE csak ha a karakter személyisége + kapcsolata + konkrét poszt indokolja; jó baráttal ne legyen random rosszindulat.
 - Lehet poén.
 - Lehet flört.
-- Lehet gúny.
-- Lehet vita.
+- Lehet gúny, ha valóban karakter- és kapcsolatindokolt.
+- Lehet vita, ha van konkrét nézeteltérés vagy előzmény.
 - Lehet támogatás.
 - Lehet kérdés.
 - Lehet hitetlenkedés.
@@ -15180,8 +15525,8 @@ FONTOS VÁLTOZATOSSÁG:
 - Egy 5-9 kommentes csomagban ne legyen minden reakció ugyanolyan hosszú.
 - Ha természetes, legyen legalább egy nagyon rövid komment a csomagban.
 - Ne legyen mindenki vicces.
-- Ne legyen mindenki támogató.
-- Ne legyen mindenki ellenséges.
+- Ne legyen mindenki ugyanolyan támogató, DE ne gyárts mesterséges bunkóságot egy jó kapcsolatból csak azért, hogy legyen negatív komment is.
+- Ne legyen mindenki ellenséges; ellenséges reakció csak olyan karaktertől jöjjön, akinél a kapcsolat, a személyiség vagy a konkrét esemény ezt ténylegesen indokolja.
 - Ne reagáljanak mindannyian ugyanarra a részletre.
 - Különböző karakterek ugyanazt a posztot különböző szempontból értelmezhetik.
 - A kapcsolatuk, aktuális hangulatuk, féltékenységük, vonzalmuk, konfliktusuk és előzményeik befolyásolják, mire reagálnak.
@@ -17858,6 +18203,23 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     };
 
     update((n) => {
+      /*
+       * A poszt world-metaadata is rögtön hivatkozzon a képre.
+       * Ez különösen fontos, ha media sync/reconnect pont a posztolás
+       * pillanatában fut le.
+       */
+      if (
+        imageId &&
+        media &&
+        media[imageId]
+      ) {
+        registerImageMeta(
+          n,
+          imageId,
+          media[imageId]
+        );
+      }
+
       n.posts.unshift(p);
 
       const mentions = noteMentions(
@@ -32233,7 +32595,42 @@ function planAutoAction(view) {
   }
 
   /*
-   * 9. AUTONÓM FOLLOW
+   * 9. AUTONÓM UNFOLLOW
+   *
+   * Az AI-k egymást és a játékost is kikövethetik, ha a kapcsolat
+   * ténylegesen megromlott, ellenséggé/riválissá vált, szakítás történt,
+   * vagy már nincs valódi social okuk tovább követni.
+   *
+   * Jó barátot / jó kapcsolatot nem követnek ki random.
+   */
+  if (
+    Math.random() < 0.16
+  ) {
+    const unfollow =
+      pickAutonomousUnfollowAction(
+        view
+      );
+
+    if (unfollow) {
+      return mkAction(
+        "unfollow",
+        `auto-unfollow:${unfollow.actorId}:${unfollow.targetId}:${Math.floor(
+          now() / 1800000
+        )}`,
+        {
+          actorId:
+            unfollow.actorId,
+          targetId:
+            unfollow.targetId,
+          pressure:
+            unfollow.pressure,
+        }
+      );
+    }
+  }
+
+  /*
+   * 10. AUTONÓM FOLLOW
    *
    * Nem minden körben próbáljuk.
    * A karakterek csak akkor kerülnek jelöltként ide,
@@ -32276,7 +32673,7 @@ function planAutoAction(view) {
   }
 
   /*
-   * 10. AUTONÓM REPOST
+   * 11. AUTONÓM REPOST
    *
    * Az AI csak olyan posztot oszt újra,
    * amelyhez van társas oka kapcsolódni.
@@ -32310,7 +32707,7 @@ function planAutoAction(view) {
   const roll = Math.random();
 
   /*
-   * 11. AUTONÓM NOTE
+   * 12. AUTONÓM NOTE
    *
    * Ritkább, mint eddig.
    * Ne a note-ok zabálják fel
@@ -32992,6 +33389,81 @@ async function runSimulationAction(view, update, action) {
     const out = await genPopupEvent(view, seed);
     update((n) => { n.autoAt = now(); if (!pendingPopupEvent(n)) addPopupEvent(n, seed, out); });
     return "popup-event";
+  }
+
+  if (action.type === "unfollow") {
+    const actorId =
+      action.payload &&
+      action.payload.actorId;
+
+    const targetId =
+      action.payload &&
+      action.payload.targetId;
+
+    const actor =
+      actorId
+        ? socialProfileById(
+            view,
+            actorId
+          )
+        : null;
+
+    const target =
+      targetId
+        ? socialProfileById(
+            view,
+            targetId
+          )
+        : null;
+
+    if (
+      !actor ||
+      !target ||
+      isHuman(
+        view,
+        actor.id
+      ) ||
+      actor.id === target.id ||
+      !isFollowing(
+        view,
+        actor.id,
+        target.id
+      )
+    ) {
+      return null;
+    }
+
+    /*
+     * Queue közben változhatott a kapcsolat, ezért futáskor
+     * újra eldöntjük, valóban ki akarja-e követni.
+     */
+    if (
+      !aiShouldUnfollow(
+        view,
+        actor.id,
+        target.id
+      )
+    ) {
+      update((n) => {
+        n.autoAt = now();
+      });
+
+      return "unfollow";
+    }
+
+    update((n) => {
+      n.autoAt = now();
+
+      setFollowState(
+        n,
+        actor.id,
+        target.id,
+        false,
+        "ai"
+      );
+    });
+
+    return "unfollow";
   }
 
   if (action.type === "follow") {
@@ -34926,6 +35398,19 @@ const signOut = useCallback(async () => {
     };
     setMedia(nextMedia);
     mediaRef.current = nextMedia;
+
+    /*
+     * A friss feltöltést AZONNAL tegyük helyi emergency cache-be.
+     * Így még egy közben érkező focus/poll/cloud refresh sem tudja
+     * eltüntetni a játékos frissen posztolt képét.
+     */
+    if (code) {
+      void cacheMediaLocally(
+        code,
+        nextMedia
+      );
+    }
+
     setWorld((prev) => {
       if (!prev) return prev;
       const n = JSON.parse(JSON.stringify(prev));
@@ -35393,7 +35878,11 @@ const signOut = useCallback(async () => {
               mediaResult.mode === "cloud"
             ) {
               const incomingMedia =
-                mediaResult.media || {};
+                mergeIncomingMediaPreservingUnsavedLocal(
+                  mediaResult.media || {},
+                  mediaRef.current || {},
+                  lastSavedMedia.current
+                );
 
               const incomingJson =
                 mediaFingerprint(
