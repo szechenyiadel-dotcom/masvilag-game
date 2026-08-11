@@ -763,6 +763,52 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   text-decoration: underline;
 }
 
+
+.social-viral-badge {
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  padding:2px 7px;
+  border:1px solid var(--line);
+  border-radius:99px;
+  font-size:9.5px;
+  font-weight:700;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  color:var(--gold);
+  background:rgba(200,164,92,.08);
+}
+
+.social-viral-badge.breakout {
+  color:var(--rose);
+  border-color:var(--oxblood);
+  background:rgba(138,29,59,.15);
+}
+
+.social-sentiment-strip {
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  margin-top:10px;
+}
+
+.social-sentiment-chip {
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  padding:4px 8px;
+  border:1px solid var(--line);
+  border-radius:99px;
+  background:var(--raised);
+  color:var(--muted);
+  font-size:10.5px;
+}
+
+.social-sentiment-chip strong {
+  color:var(--bone);
+  font-weight:600;
+}
+
 /* ---------- MOBILOS ACTION GOMBOK ---------- */
 
 @media (max-width: 768px) {
@@ -7068,6 +7114,41 @@ function Post({
               <span className="handle mono">@{author.username}</span>
               <span className="social-dot-sep">·</span>
               <span className="handle mono">{timeAgo(post.ts)}</span>
+
+              {post.virality &&
+              post.virality.status &&
+              post.virality.status !==
+                "normal" ? (
+                <span
+                  className={
+                    "social-viral-badge" +
+                    (
+                      post.virality.status ===
+                        "breakout"
+                        ? " breakout"
+                        : ""
+                    )
+                  }
+                >
+                  🔥{" "}
+                  {post.virality.status ===
+                  "breakout"
+                    ? tt(
+                        "Kitört",
+                        "Breakout"
+                      )
+                    : post.virality.status ===
+                        "viral"
+                      ? tt(
+                          "Virális",
+                          "Viral"
+                        )
+                      : tt(
+                          "Felkapott",
+                          "Rising"
+                        )}
+                </span>
+              ) : null}
             </div>
 
             {author.id !== w.meId ? (
@@ -7237,6 +7318,17 @@ function SocialProfileModal({
     totalFollowers - knownFollowers.length
   );
 
+  const socialStats =
+    (
+      w.socialStats &&
+      w.socialStats[c.id]
+    ) ||
+    defaultSocialStatsRow();
+
+  const sentiment =
+    socialStats.sentiment ||
+    defaultSocialStatsRow().sentiment;
+
   const toggleFollow = () => {
     if (mine) return;
 
@@ -7367,6 +7459,76 @@ function SocialProfileModal({
                 {tt("Követ téged", "Follows you")}
               </div>
             ) : null}
+
+            <div className="social-sentiment-strip">
+              {Number(socialStats.hype) > 0 ? (
+                <span className="social-sentiment-chip">
+                  🔥
+                  <strong>
+                    {Math.round(
+                      Number(
+                        socialStats.hype
+                      ) || 0
+                    )}
+                  </strong>
+                  {tt(
+                    "hype",
+                    "hype"
+                  )}
+                </span>
+              ) : null}
+
+              {Number(sentiment.stanEnergy) > 0 ? (
+                <span className="social-sentiment-chip">
+                  ★
+                  <strong>
+                    {Math.round(
+                      Number(
+                        sentiment.stanEnergy
+                      ) || 0
+                    )}
+                  </strong>
+                  {tt(
+                    "stan",
+                    "stan"
+                  )}
+                </span>
+              ) : null}
+
+              {Number(sentiment.cancelPressure) > 0 ? (
+                <span className="social-sentiment-chip">
+                  ⚠
+                  <strong>
+                    {Math.round(
+                      Number(
+                        sentiment.cancelPressure
+                      ) || 0
+                    )}
+                  </strong>
+                  {tt(
+                    "backlash",
+                    "backlash"
+                  )}
+                </span>
+              ) : null}
+
+              {Number(sentiment.controversy) > 0 ? (
+                <span className="social-sentiment-chip">
+                  ◐
+                  <strong>
+                    {Math.round(
+                      Number(
+                        sentiment.controversy
+                      ) || 0
+                    )}
+                  </strong>
+                  {tt(
+                    "megosztó",
+                    "controversy"
+                  )}
+                </span>
+              ) : null}
+            </div>
 
             <div className="social-profile-tabs">
               <button
@@ -13526,6 +13688,16 @@ function defaultSocialStatsRow() {
       knownFollowers: 0,
     },
 
+    sentiment: {
+      support: 0,
+      dislike: 0,
+      controversy: 0,
+      stanEnergy: 0,
+      cancelPressure: 0,
+    },
+
+    viralPosts: 0,
+
     updatedAt: 0,
   };
 }
@@ -13576,6 +13748,17 @@ function ensureSocialStatsFor(
           : {}
       ),
     },
+
+    sentiment: {
+      ...base.sentiment,
+      ...(
+        current.sentiment &&
+        typeof current.sentiment === "object" &&
+        !Array.isArray(current.sentiment)
+          ? current.sentiment
+          : {}
+      ),
+    },
   };
 
   row.aura =
@@ -13616,6 +13799,39 @@ function ensureSocialStatsFor(
       0,
       Math.round(
         Number(row.following) || 0
+      )
+    );
+
+  row.sentiment.support =
+    clampPositiveSocial(
+      row.sentiment.support
+    );
+
+  row.sentiment.dislike =
+    clampPositiveSocial(
+      row.sentiment.dislike
+    );
+
+  row.sentiment.controversy =
+    clampPositiveSocial(
+      row.sentiment.controversy
+    );
+
+  row.sentiment.stanEnergy =
+    clampPositiveSocial(
+      row.sentiment.stanEnergy
+    );
+
+  row.sentiment.cancelPressure =
+    clampPositiveSocial(
+      row.sentiment.cancelPressure
+    );
+
+  row.viralPosts =
+    Math.max(
+      0,
+      Math.round(
+        Number(row.viralPosts) || 0
       )
     );
 
@@ -13850,6 +14066,36 @@ function recentHypeFor(
         weight = 2.8;
       }
 
+      if (
+        event.type ===
+          "viral" &&
+        actorHit
+      ) {
+        weight = 9;
+      }
+
+      if (
+        event.type ===
+          "cancel-wave" &&
+        (
+          actorHit ||
+          targetHit
+        )
+      ) {
+        weight = 10;
+      }
+
+      if (
+        event.type ===
+          "stan-wave" &&
+        (
+          actorHit ||
+          targetHit
+        )
+      ) {
+        weight = 8;
+      }
+
       heat +=
         weight *
         freshness;
@@ -13863,6 +14109,704 @@ function recentHypeFor(
   return clampPositiveSocial(
     heat * 4
   );
+}
+
+
+function publicSentimentFor(
+  w,
+  characterId
+) {
+  const cutoff =
+    now() -
+    72 * 3600e3;
+
+  let supportHeat = 0;
+  let dislikeHeat = 0;
+  let controversyHeat = 0;
+  let explicitStan = 0;
+  let explicitCancel = 0;
+
+  const supporterActions = {};
+
+  (w.socialEvents || []).forEach(
+    (event) => {
+      if (
+        !event ||
+        Number(event.ts) <
+          cutoff
+      ) {
+        return;
+      }
+
+      const targetHit =
+        Array.isArray(
+          event.targetIds
+        ) &&
+        event.targetIds.includes(
+          characterId
+        );
+
+      const actorHit =
+        event.actorId ===
+          characterId;
+
+      if (
+        !targetHit &&
+        !actorHit
+      ) {
+        return;
+      }
+
+      const ageHours =
+        Math.max(
+          0,
+          (
+            now() -
+            Number(event.ts)
+          ) /
+            3600e3
+        );
+
+      const freshness =
+        Math.max(
+          0.12,
+          1 -
+            ageHours / 72
+        );
+
+      /*
+       * Támogató jelek.
+       * Ezek figyelmet / támogatást jeleznek,
+       * de NEM automatikusan jó reputationt.
+       */
+      if (
+        targetHit &&
+        event.type === "like"
+      ) {
+        supportHeat +=
+          0.8 * freshness;
+      }
+
+      if (
+        targetHit &&
+        event.type === "repost"
+      ) {
+        supportHeat +=
+          2.5 * freshness;
+      }
+
+      if (
+        targetHit &&
+        event.type === "follow"
+      ) {
+        supportHeat +=
+          1.7 * freshness;
+      }
+
+      /*
+       * Unfollow már valódi negatív social jel.
+       */
+      if (
+        targetHit &&
+        event.type === "unfollow"
+      ) {
+        dislikeHeat +=
+          2.6 * freshness;
+      }
+
+      /*
+       * Későbbi gossip / cancel / popup rendszerek
+       * explicit sentimentet is adhatnak.
+       */
+      const publicSentiment =
+        event.meta &&
+        event.meta.publicSentiment &&
+        typeof event.meta.publicSentiment ===
+          "object"
+          ? event.meta.publicSentiment
+          : null;
+
+      if (publicSentiment) {
+        supportHeat +=
+          Math.max(
+            0,
+            Number(
+              publicSentiment.support
+            ) || 0
+          ) *
+          0.18 *
+          freshness;
+
+        dislikeHeat +=
+          Math.max(
+            0,
+            Number(
+              publicSentiment.dislike
+            ) || 0
+          ) *
+          0.18 *
+          freshness;
+
+        controversyHeat +=
+          Math.max(
+            0,
+            Number(
+              publicSentiment.controversy
+            ) || 0
+          ) *
+          0.18 *
+          freshness;
+
+        explicitStan +=
+          Math.max(
+            0,
+            Number(
+              publicSentiment.stan
+            ) || 0
+          ) *
+          0.18 *
+          freshness;
+
+        explicitCancel +=
+          Math.max(
+            0,
+            Number(
+              publicSentiment.cancel
+            ) || 0
+          ) *
+          0.18 *
+          freshness;
+      }
+
+      const tags =
+        Array.isArray(event.tags)
+          ? event.tags
+          : [];
+
+      if (
+        tags.includes("stan") ||
+        tags.includes("support-wave")
+      ) {
+        explicitStan +=
+          6 * freshness;
+      }
+
+      if (
+        tags.includes("cancel") ||
+        tags.includes("backlash")
+      ) {
+        explicitCancel +=
+          7 * freshness;
+        dislikeHeat +=
+          3 * freshness;
+      }
+
+      if (
+        tags.includes("controversy")
+      ) {
+        controversyHeat +=
+          6 * freshness;
+      }
+
+      /*
+       * Stan energy: ugyanaz a létező karakter többször
+       * támogatja ugyanazt a személyt.
+       */
+      if (
+        targetHit &&
+        event.actorId &&
+        event.actorId !==
+          characterId &&
+        [
+          "like",
+          "repost",
+          "follow",
+        ].includes(
+          event.type
+        )
+      ) {
+        const actorId =
+          event.actorId;
+
+        supporterActions[
+          actorId
+        ] =
+          (
+            supporterActions[
+              actorId
+            ] || 0
+          ) + 1;
+      }
+    }
+  );
+
+  let repeatedSupport = 0;
+
+  Object.values(
+    supporterActions
+  ).forEach((count) => {
+    if (count >= 2) {
+      repeatedSupport +=
+        Math.min(
+          4,
+          count - 1
+        );
+    }
+  });
+
+  const support =
+    clampPositiveSocial(
+      supportHeat * 5
+    );
+
+  const dislike =
+    clampPositiveSocial(
+      dislikeHeat * 6
+    );
+
+  const stanEnergy =
+    clampPositiveSocial(
+      repeatedSupport * 10 +
+      support * 0.28 +
+      explicitStan * 4
+    );
+
+  const cancelPressure =
+    clampPositiveSocial(
+      dislike * 0.8 +
+      explicitCancel * 4
+    );
+
+  /*
+   * Controversy akkor nő igazán, ha egyszerre van
+   * támogatás ÉS ellenállás / backlash.
+   */
+  const controversy =
+    clampPositiveSocial(
+      controversyHeat * 4 +
+      Math.min(
+        support,
+        dislike
+      ) *
+        0.9 +
+      cancelPressure *
+        0.22
+    );
+
+  return {
+    support,
+    dislike,
+    controversy,
+    stanEnergy,
+    cancelPressure,
+  };
+}
+
+function postViralityScore(
+  w,
+  post
+) {
+  if (
+    !w ||
+    !post ||
+    !post.id
+  ) {
+    return 0;
+  }
+
+  const ageHours =
+    Math.max(
+      0,
+      (
+        now() -
+        (Number(post.ts) || 0)
+      ) /
+        3600e3
+    );
+
+  /*
+   * 72 óránál régebbi poszt már ne kezdjen
+   * magától hirtelen virálissá válni.
+   */
+  if (ageHours > 72) {
+    return 0;
+  }
+
+  const audience =
+    Math.max(
+      25,
+      displayFollowerCount(
+        w,
+        post.authorId
+      )
+    );
+
+  const likes =
+    Math.max(
+      0,
+      Number(post.likes) || 0
+    );
+
+  const comments =
+    (post.comments || []).length;
+
+  const reposts =
+    repostCount(
+      w,
+      post.id
+    );
+
+  const engagement =
+    likes +
+    comments * 2 +
+    reposts * 5;
+
+  if (!engagement) {
+    return 0;
+  }
+
+  /*
+   * Kis account is tudjon virális lenni:
+   * a saját közönségéhez képesti engagement erősen számít.
+   */
+  const rate =
+    engagement /
+    audience;
+
+  const relativeScore =
+    Math.min(
+      56,
+      rate * 420
+    );
+
+  /*
+   * Nagy accountnál az abszolút számok is számítanak.
+   */
+  const absoluteScore =
+    Math.min(
+      28,
+      Math.log10(
+        engagement + 1
+      ) * 10
+    );
+
+  /*
+   * Repost a legerősebb terjedési jel.
+   */
+  const spreadScore =
+    Math.min(
+      22,
+      reposts * 4.5
+    );
+
+  const freshness =
+    ageHours <= 12
+      ? 1
+      : Math.max(
+          0.58,
+          1 -
+            (ageHours - 12) /
+              120
+        );
+
+  return clampPositiveSocial(
+    (
+      relativeScore +
+      absoluteScore +
+      spreadScore
+    ) *
+      freshness
+  );
+}
+
+function viralityStatus(score) {
+  const n =
+    Number(score) || 0;
+
+  if (n >= 82) {
+    return "breakout";
+  }
+
+  if (n >= 60) {
+    return "viral";
+  }
+
+  if (n >= 35) {
+    return "rising";
+  }
+
+  return "normal";
+}
+
+function viralFollowerGainFor(
+  w,
+  post,
+  score
+) {
+  const audience =
+    Math.max(
+      25,
+      displayFollowerCount(
+        w,
+        post.authorId
+      )
+    );
+
+  const engagement =
+    Math.max(
+      1,
+      Number(post.likes) || 0
+    ) +
+    (post.comments || []).length * 2 +
+    repostCount(
+      w,
+      post.id
+    ) * 5;
+
+  const strength =
+    Math.max(
+      0,
+      Math.min(
+        1,
+        (
+          Number(score) -
+          60
+        ) /
+          40
+      )
+    );
+
+  /*
+   * Viralitás új követőket hozhat akkor is,
+   * ha később a tartalom megosztóvá válik.
+   * A cancel motor majd külön tud követőket levonni.
+   */
+  const proportional =
+    audience *
+    (
+      0.002 +
+      strength * 0.018
+    );
+
+  const engagementFloor =
+    engagement *
+    (
+      0.35 +
+      strength * 0.45
+    );
+
+  return Math.max(
+    2,
+    Math.min(
+      50000,
+      Math.round(
+        Math.max(
+          proportional,
+          engagementFloor
+        )
+      )
+    )
+  );
+}
+
+function refreshPostVirality(
+  w,
+  postId
+) {
+  if (
+    !w ||
+    !postId
+  ) {
+    return null;
+  }
+
+  const post =
+    (w.posts || []).find(
+      (p) =>
+        p &&
+        p.id === postId
+    );
+
+  if (!post) {
+    return null;
+  }
+
+  const score =
+    postViralityScore(
+      w,
+      post
+    );
+
+  const status =
+    viralityStatus(score);
+
+  const previous =
+    post.virality &&
+    typeof post.virality ===
+      "object"
+      ? post.virality
+      : {};
+
+  const wasViral =
+    Boolean(
+      previous.viralAt
+    );
+
+  post.virality = {
+    ...previous,
+    score,
+    status,
+    updatedAt: now(),
+  };
+
+  /*
+   * Egy poszt csak egyszer kapja meg az első
+   * virális követőnövekedést.
+   */
+  if (
+    score >= 60 &&
+    !wasViral
+  ) {
+    const author =
+      socialProfileById(
+        w,
+        post.authorId
+      );
+
+    if (author) {
+      ensureSocialProfileRow(
+        author
+      );
+
+      const followerGain =
+        viralFollowerGainFor(
+          w,
+          post,
+          score
+        );
+
+      author.followerDelta =
+        Math.round(
+          Number(
+            author.followerDelta
+          ) || 0
+        ) +
+        followerGain;
+
+      post.virality.viralAt =
+        now();
+
+      post.virality.followerGain =
+        followerGain;
+
+      /*
+       * A viral event külön bekerül a ledgerbe,
+       * így később a gossip / trend rendszer is látja.
+       */
+      recordSocialEvent(
+        w,
+        {
+          type: "viral",
+
+          refId:
+            `viral:${post.id}`,
+
+          ts: now(),
+
+          actorId:
+            post.authorId,
+
+          targetIds: [],
+
+          visibility:
+            "public",
+
+          factLevel:
+            "observed",
+
+          importance:
+            status ===
+              "breakout"
+              ? 90
+              : 72,
+
+          drama:
+            status ===
+              "breakout"
+              ? 30
+              : 14,
+
+          romance: 0,
+          embarrassment: 0,
+
+          source:
+            "social-engine",
+
+          text:
+            "A post went viral.",
+
+          tags: [
+            "social",
+            "viral",
+            status,
+          ],
+
+          meta: {
+            postId:
+              post.id,
+
+            viralScore:
+              score,
+
+            followerGain,
+
+            socialImpact: {
+              hype:
+                status ===
+                  "breakout"
+                  ? 15
+                  : 8,
+            },
+          },
+        }
+      );
+
+      if (
+        isHuman(
+          w,
+          post.authorId
+        )
+      ) {
+        pushNote(
+          w,
+          post.authorId,
+          {
+            icon: "🔥",
+
+            text:
+              sysLangText(
+                w,
+                post.authorId,
+                `A posztod felkapott lett. +${followerGain} követő`,
+                `Your post is taking off. +${followerGain} followers`
+              ),
+
+            link: {
+              type: "post",
+              id: post.id,
+            },
+          }
+        );
+      }
+    }
+  }
+
+  refreshSocialStatsFor(
+    w,
+    post.authorId
+  );
+
+  return post.virality;
 }
 
 function refreshSocialStatsFor(
@@ -13948,6 +14892,24 @@ function refreshSocialStatsFor(
       w,
       characterId
     );
+
+  row.sentiment =
+    publicSentimentFor(
+      w,
+      characterId
+    );
+
+  row.viralPosts =
+    (w.posts || []).filter(
+      (p) =>
+        p &&
+        p.authorId ===
+          characterId &&
+        p.virality &&
+        Number(
+          p.virality.score
+        ) >= 60
+    ).length;
 
   row.updatedAt =
     now();
@@ -14038,6 +15000,37 @@ function applyExplicitSocialImpact(
       clampPositiveSocial(
         row.hype +
         Number(impact.hype)
+      );
+  }
+
+  const profile =
+    socialProfileById(
+      w,
+      characterId
+    );
+
+  if (
+    profile &&
+    Number.isFinite(
+      Number(
+        impact.followers
+      )
+    )
+  ) {
+    ensureSocialProfileRow(
+      profile
+    );
+
+    profile.followerDelta =
+      Math.round(
+        Number(
+          profile.followerDelta
+        ) || 0
+      ) +
+      Math.round(
+        Number(
+          impact.followers
+        )
       );
   }
 
@@ -14312,6 +15305,31 @@ function recordSocialEvent(
    *
    * Ez most még csak infrastruktúra.
    */
+  /*
+   * Like / comment / reply / repost után azonnal újraszámoljuk
+   * az érintett eredeti poszt terjedését.
+   *
+   * A "viral" eventet direkt kihagyjuk, így nincs rekurzív loop.
+   */
+  if (
+    [
+      "post",
+      "like",
+      "comment",
+      "reply",
+      "repost",
+    ].includes(
+      entry.type
+    ) &&
+    entry.meta &&
+    entry.meta.postId
+  ) {
+    refreshPostVirality(
+      w,
+      entry.meta.postId
+    );
+  }
+
   if (
     entry.meta &&
     entry.meta.socialImpact &&
