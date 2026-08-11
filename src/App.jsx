@@ -5147,6 +5147,7 @@ whisperWire: {
   stories: [],
   usedEventIds: [],
   history: [],
+  lastCandidate: null,
 },
 
 /*
@@ -11792,7 +11793,7 @@ Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","kind":"speech vagy action","text":"..."}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":10,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék"}],
  "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
- "events":["egy mondat, ha a világ szempontjából fontos történt"]}${TAIL}`);
+ "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"]}${TAIL}`);
 
       const resolved = (out.turns || []).map((t) => {
         const raw = t && (t.id !== undefined ? t.id : t.name);
@@ -11821,7 +11822,120 @@ Formátum:
         });
         applyChanges(n, out.changes);
         applyMemories(n, out.memories);
-        n.log = (out.events || []).concat(n.log).slice(0, 30);
+
+        const sceneEvents =
+          Array.isArray(out.events)
+            ? out.events
+                .map(
+                  (value) =>
+                    String(value || "").trim()
+                )
+                .filter(Boolean)
+            : [];
+
+        /*
+         * ROLEPLAY PRIVACY:
+         *
+         * User + 1 AI  -> privát, nem gossip source.
+         * User + 2+ AI -> több tanú, ezért valós alapon
+         *                 kiszivároghat.
+         *
+         * Nem tároljuk kötelezően, kitől indult.
+         */
+        const aiWitnessIds =
+          (s.cast || [])
+            .filter(
+              (id) =>
+                id &&
+                !isHuman(n, id)
+            );
+
+        const gossipEligible =
+          aiWitnessIds.length >= 2;
+
+        const participantIds = [
+          n.meId,
+          ...aiWitnessIds,
+        ].filter(Boolean);
+
+        sceneEvents.forEach(
+          (eventText, index) => {
+            const eventTs = now();
+
+            recordSocialEvent(
+              n,
+              {
+                type:
+                  "roleplay-event",
+
+                refId:
+                  `scene:${s.id}:${eventTs}:${index}`,
+
+                ts: eventTs,
+
+                actorId: "",
+
+                targetIds:
+                  participantIds,
+
+                visibility:
+                  "limited",
+
+                factLevel:
+                  "observed",
+
+                importance: 48,
+                drama: 26,
+                romance: 0,
+                embarrassment: 0,
+
+                source:
+                  "roleplay",
+
+                text:
+                  eventText,
+
+                tags: [
+                  "roleplay",
+                  "scene",
+                  "observed",
+                  gossipEligible
+                    ? "gossip-eligible"
+                    : "private-scene",
+                ],
+
+                meta: {
+                  sourceType:
+                    "roleplay",
+
+                  sceneId:
+                    s.id,
+
+                  sceneTitle:
+                    s.title || "",
+
+                  participantIds,
+
+                  witnessCount:
+                    aiWitnessIds.length,
+
+                  gossipEligible,
+
+                  /*
+                   * Nincs leakSourceId.
+                   */
+                  sourceTraceRequired:
+                    false,
+                },
+              }
+            );
+          }
+        );
+
+        n.log =
+          sceneEvents
+            .concat(n.log)
+            .slice(0, 30);
       });
       setText("");
     } catch (e) {
@@ -11850,7 +11964,93 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
         s.summary = out.summary || "";
         applyMemories(n, out.memories);
         applyChanges(n, out.changes);
-        if (out.summary) n.log = [out.summary].concat(n.log).slice(0, 30);
+        if (out.summary) {
+          n.log = [
+            out.summary,
+          ]
+            .concat(n.log)
+            .slice(0, 30);
+
+          const aiWitnessIds =
+            (s.cast || [])
+              .filter(
+                (id) =>
+                  id &&
+                  !isHuman(n, id)
+              );
+
+          const gossipEligible =
+            aiWitnessIds.length >= 2;
+
+          recordSocialEvent(
+            n,
+            {
+              type:
+                "roleplay-summary",
+
+              refId:
+                `scene-summary:${s.id}`,
+
+              ts: now(),
+
+              actorId: "",
+
+              targetIds: [
+                n.meId,
+                ...aiWitnessIds,
+              ].filter(Boolean),
+
+              visibility:
+                "limited",
+
+              factLevel:
+                "observed",
+
+              importance: 38,
+              drama: 18,
+              romance: 0,
+              embarrassment: 0,
+
+              source:
+                "roleplay",
+
+              text:
+                String(out.summary),
+
+              tags: [
+                "roleplay",
+                "scene-summary",
+                gossipEligible
+                  ? "gossip-eligible"
+                  : "private-scene",
+              ],
+
+              meta: {
+                sourceType:
+                  "roleplay",
+
+                sceneId:
+                  s.id,
+
+                sceneTitle:
+                  s.title || "",
+
+                participantIds: [
+                  n.meId,
+                  ...aiWitnessIds,
+                ].filter(Boolean),
+
+                witnessCount:
+                  aiWitnessIds.length,
+
+                gossipEligible,
+
+                sourceTraceRequired:
+                  false,
+              },
+            }
+          );
+        }
       });
     } catch (e) { setErr((e && e.message) || tt("A lezárás nem sikerült. Próbáld újra.", "Closing failed. Try again.")); }
     setBusy("");
@@ -14477,6 +14677,15 @@ function ensureSocialSimulationState(w) {
     w.whisperWire.history = [];
   }
 
+  if (
+    !Object.prototype.hasOwnProperty.call(
+      w.whisperWire,
+      "lastCandidate"
+    )
+  ) {
+    w.whisperWire.lastCandidate = null;
+  }
+
   /*
    * Gossip & Media settings.
    *
@@ -14570,6 +14779,659 @@ function ensureSocialSimulationState(w) {
 
   return w;
 }
+
+/* ============================================================
+   GOSSIP STORY SELECTOR
+   ============================================================ */
+
+/*
+ * Ez a réteg MÉG NEM publikál pletykaposztot.
+ * Csak azt választja ki, miből lenne reális Spill&Chill /
+ * RumorHasIt sztori.
+ */
+
+function gossipEventSubjectIds(event) {
+  if (!event) return [];
+
+  return [
+    event.actorId,
+    ...(
+      Array.isArray(event.targetIds)
+        ? event.targetIds
+        : []
+    ),
+    ...(
+      event.meta &&
+      Array.isArray(event.meta.participantIds)
+        ? event.meta.participantIds
+        : []
+    ),
+  ]
+    .filter(Boolean)
+    .filter(
+      (id, index, arr) =>
+        arr.indexOf(id) === index
+    );
+}
+
+function roleplayGossipEligible(event) {
+  if (
+    !event ||
+    !event.meta ||
+    event.meta.sourceType !== "roleplay"
+  ) {
+    return false;
+  }
+
+  /*
+   * USER + 1 AI:
+   * privát jelenet.
+   *
+   * USER + 2 vagy több AI:
+   * több tanú, ezért valós alapja van annak,
+   * hogy a történet később kiszivárogjon.
+   *
+   * Nem kötelező tudni, pontosan ki indította el.
+   */
+  return (
+    event.meta.gossipEligible === true &&
+    Number(event.meta.witnessCount) >= 2
+  );
+}
+
+function gossipPrivacyEligible(event) {
+  if (!event) return false;
+
+  if (event.visibility === "public") {
+    return true;
+  }
+
+  /*
+   * Később más rendszerek explicit leaket is jelölhetnek.
+   */
+  if (
+    event.meta &&
+    event.meta.leaked === true
+  ) {
+    return true;
+  }
+
+  if (roleplayGossipEligible(event)) {
+    return true;
+  }
+
+  /*
+   * Private DM, zárt group és 1-AI roleplay
+   * nem válik automatikusan média-információvá.
+   */
+  return false;
+}
+
+function gossipEventBaseScore(
+  w,
+  event,
+  mode
+) {
+  if (
+    !w ||
+    !event ||
+    !gossipPrivacyEligible(event)
+  ) {
+    return -999;
+  }
+
+  if (
+    event.actorId &&
+    isMediaAccount(w, event.actorId)
+  ) {
+    return -999;
+  }
+
+  const ageHours =
+    Math.max(
+      0,
+      (
+        now() -
+        (Number(event.ts) || 0)
+      ) /
+        3600e3
+    );
+
+  /*
+   * 5 napnál régebbi esemény önmagában már ne legyen
+   * friss hír. Később history-contextként még előkerülhet.
+   */
+  if (ageHours > 120) {
+    return -999;
+  }
+
+  const freshness =
+    ageHours <= 12
+      ? 1
+      : Math.max(
+          0.35,
+          1 -
+            (ageHours - 12) / 156
+        );
+
+  let score =
+    Number(event.importance) || 0;
+
+  score +=
+    (Number(event.drama) || 0) * 0.42;
+
+  score +=
+    (Number(event.romance) || 0) * 0.36;
+
+  score +=
+    (Number(event.embarrassment) || 0) * 0.3;
+
+  const tags =
+    Array.isArray(event.tags)
+      ? event.tags
+      : [];
+
+  const type =
+    String(event.type || "");
+
+  if (
+    type === "viral" ||
+    tags.includes("viral")
+  ) {
+    score += 28;
+  }
+
+  if (
+    type === "cancel-wave" ||
+    tags.includes("cancel")
+  ) {
+    score += 34;
+  }
+
+  if (
+    type === "stan-wave" ||
+    tags.includes("counter-backlash")
+  ) {
+    score += 18;
+  }
+
+  if (type === "unfollow") {
+    score += 8;
+  }
+
+  if (type === "follow") {
+    score += 3;
+  }
+
+  if (type === "repost") {
+    score += 4;
+  }
+
+  if (type === "roleplay-event") {
+    /*
+     * A Spill&Chill kisebb, több tanús RP-eseményt is
+     * felkaphat. RumorHasItnek ennél több kell.
+     */
+    score +=
+      mode === "local"
+        ? 16
+        : 4;
+
+    score += Math.min(
+      12,
+      (
+        Number(
+          event.meta &&
+          event.meta.witnessCount
+        ) || 0
+      ) * 3
+    );
+  }
+
+  if (event.factLevel === "observed") {
+    score += 7;
+  } else if (event.factLevel === "rumor") {
+    score -= 4;
+  } else if (
+    event.factLevel === "speculation"
+  ) {
+    score -= 9;
+  }
+
+  const subjectIds =
+    gossipEventSubjectIds(event);
+
+  let fameBoost = 0;
+
+  subjectIds.forEach((id) => {
+    const stat =
+      w.socialStats &&
+      w.socialStats[id];
+
+    if (!stat) return;
+
+    fameBoost = Math.max(
+      fameBoost,
+      (
+        Number(stat.popularity) || 0
+      ) * 0.18 +
+      (
+        Number(stat.hype) || 0
+      ) * 0.22
+    );
+  });
+
+  score +=
+    mode === "global"
+      ? fameBoost
+      : fameBoost * 0.35;
+
+  return Math.round(
+    score * freshness
+  );
+}
+
+function gossipEventThreshold(mode) {
+  return mode === "global"
+    ? 62
+    : 34;
+}
+
+function gossipEventEligibleForMedia(
+  w,
+  event,
+  mode
+) {
+  if (
+    mode !== "local" &&
+    mode !== "global"
+  ) {
+    return false;
+  }
+
+  const used =
+    w.whisperWire &&
+    Array.isArray(
+      w.whisperWire.usedEventIds
+    )
+      ? w.whisperWire.usedEventIds
+      : [];
+
+  if (
+    event &&
+    event.id &&
+    used.includes(event.id)
+  ) {
+    return false;
+  }
+
+  const score =
+    gossipEventBaseScore(
+      w,
+      event,
+      mode
+    );
+
+  if (
+    score <
+    gossipEventThreshold(mode)
+  ) {
+    return false;
+  }
+
+  /*
+   * RumorHasIt: random civil apró eseménye nem elég.
+   */
+  if (mode === "global") {
+    const subjectIds =
+      gossipEventSubjectIds(event);
+
+    const hasGlobalSubject =
+      subjectIds.some((id) => {
+        const stat =
+          w.socialStats &&
+          w.socialStats[id];
+
+        return (
+          stat &&
+          (
+            Number(stat.popularity) >= 55 ||
+            Number(stat.hype) >= 55
+          )
+        );
+      });
+
+    const globallyImportant =
+      event.type === "viral" ||
+      event.type === "cancel-wave" ||
+      (
+        Array.isArray(event.tags) &&
+        (
+          event.tags.includes("viral") ||
+          event.tags.includes("cancel")
+        )
+      );
+
+    if (
+      !hasGlobalSubject &&
+      !globallyImportant
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function gossipEventsOverlap(a, b) {
+  if (!a || !b) return false;
+
+  const aIds =
+    gossipEventSubjectIds(a);
+
+  const bIds =
+    gossipEventSubjectIds(b);
+
+  if (
+    aIds.some(
+      (id) => bIds.includes(id)
+    )
+  ) {
+    return true;
+  }
+
+  const aScene =
+    a.meta && a.meta.sceneId;
+
+  const bScene =
+    b.meta && b.meta.sceneId;
+
+  return Boolean(
+    aScene &&
+    bScene &&
+    aScene === bScene
+  );
+}
+
+function clusterGossipStoryEvents(
+  w,
+  primary,
+  pool,
+  mode
+) {
+  if (!primary) return [];
+
+  const primaryTs =
+    Number(primary.ts) || 0;
+
+  const maxGap =
+    mode === "global"
+      ? 48 * 3600e3
+      : 72 * 3600e3;
+
+  const clustered = [primary];
+
+  (pool || []).forEach((event) => {
+    if (
+      !event ||
+      event.id === primary.id ||
+      clustered.length >= 6
+    ) {
+      return;
+    }
+
+    if (
+      Math.abs(
+        (Number(event.ts) || 0) -
+        primaryTs
+      ) > maxGap
+    ) {
+      return;
+    }
+
+    if (
+      !gossipEventsOverlap(
+        primary,
+        event
+      )
+    ) {
+      return;
+    }
+
+    clustered.push(event);
+  });
+
+  return clustered;
+}
+
+function gossipStoryFactLevel(events) {
+  const levels =
+    (events || [])
+      .map(
+        (event) =>
+          event &&
+          event.factLevel
+      )
+      .filter(Boolean);
+
+  if (
+    levels.includes("speculation")
+  ) {
+    return "speculation";
+  }
+
+  if (levels.includes("rumor")) {
+    return "rumor";
+  }
+
+  if (levels.includes("inferred")) {
+    return "inferred";
+  }
+
+  return "observed";
+}
+
+function buildGossipStoryCandidate(
+  w,
+  primary,
+  pool,
+  mode
+) {
+  const events =
+    clusterGossipStoryEvents(
+      w,
+      primary,
+      pool,
+      mode
+    );
+
+  const subjectIds =
+    events
+      .flatMap(
+        gossipEventSubjectIds
+      )
+      .filter(
+        (id, index, arr) =>
+          arr.indexOf(id) === index
+      );
+
+  const score =
+    Math.round(
+      events.reduce(
+        (sum, event, index) =>
+          sum +
+          gossipEventBaseScore(
+            w,
+            event,
+            mode
+          ) *
+            (
+              index === 0
+                ? 1
+                : 0.32
+            ),
+        0
+      )
+    );
+
+  const roleplayBased =
+    events.some(
+      (event) =>
+        event &&
+        event.meta &&
+        event.meta.sourceType ===
+          "roleplay"
+    );
+
+  const witnessCount =
+    events.reduce(
+      (max, event) =>
+        Math.max(
+          max,
+          Number(
+            event &&
+            event.meta &&
+            event.meta.witnessCount
+          ) || 0
+        ),
+      0
+    );
+
+  return {
+    id: "gc_" + uid(),
+    mode,
+
+    mediaId:
+      (
+        activeGossipMediaAccount(w) ||
+        {}
+      ).id || "",
+
+    createdAt: now(),
+
+    score,
+    factLevel:
+      gossipStoryFactLevel(events),
+
+    primaryEventId:
+      primary.id || "",
+
+    eventIds:
+      events
+        .map((event) => event.id)
+        .filter(Boolean),
+
+    subjectIds,
+
+    roleplayBased,
+    witnessCount,
+
+    /*
+     * Szándékosan nincs kötelező rumor starter.
+     */
+    sourceTraceRequired: false,
+
+    events:
+      events.map((event) => ({
+        id: event.id || "",
+        type: event.type || "",
+        text: event.text || "",
+        ts: Number(event.ts) || 0,
+        factLevel:
+          event.factLevel || "observed",
+        importance:
+          Number(event.importance) || 0,
+        tags:
+          Array.isArray(event.tags)
+            ? event.tags.slice(0, 12)
+            : [],
+        sourceType:
+          (
+            event.meta &&
+            event.meta.sourceType
+          ) ||
+          event.source ||
+          "",
+        witnessCount:
+          Number(
+            event.meta &&
+            event.meta.witnessCount
+          ) || 0,
+      })),
+  };
+}
+
+function selectGossipStoryCandidate(w) {
+  if (
+    !w ||
+    !w.gossipSettings ||
+    !w.whisperWire
+  ) {
+    return null;
+  }
+
+  const mode =
+    w.gossipSettings.mediaMode;
+
+  if (
+    mode !== "local" &&
+    mode !== "global"
+  ) {
+    w.whisperWire.lastCandidate = null;
+    return null;
+  }
+
+  const eligible =
+    (w.socialEvents || [])
+      .filter(
+        (event) =>
+          gossipEventEligibleForMedia(
+            w,
+            event,
+            mode
+          )
+      )
+      .sort(
+        (a, b) =>
+          gossipEventBaseScore(
+            w,
+            b,
+            mode
+          ) -
+          gossipEventBaseScore(
+            w,
+            a,
+            mode
+          )
+      );
+
+  const primary =
+    eligible[0];
+
+  if (!primary) {
+    w.whisperWire.lastCandidate = null;
+    return null;
+  }
+
+  const candidate =
+    buildGossipStoryCandidate(
+      w,
+      primary,
+      eligible,
+      mode
+    );
+
+  /*
+   * Preview/cache only.
+   * Eventet csak a KÉSŐBBI tényleges publikálás után
+   * jelölünk used-nak.
+   */
+  w.whisperWire.lastCandidate =
+    candidate;
+
+  return candidate;
+}
+
 
 /* ============================================================
    SOCIAL STATS ENGINE
@@ -16898,6 +17760,21 @@ function recordSocialEvent(
         );
       }
     );
+  }
+
+  /*
+   * Aktív pletykamédiánál frissítjük a következő
+   * valós alapú sztori-jelöltet.
+   * EZ MÉG NEM PUBLIKÁL POSZTOT.
+   */
+  if (
+    w.gossipSettings &&
+    (
+      w.gossipSettings.mediaMode === "local" ||
+      w.gossipSettings.mediaMode === "global"
+    )
+  ) {
+    selectGossipStoryCandidate(w);
   }
 
   return entry;
