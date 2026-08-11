@@ -11764,7 +11764,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, autoOn, onRequestWorldStep,
     );
 
   const activeTrends =
-    (w.trends || []).slice(0, 5);
+    (w.trends || []).slice(0, 8);
 
   const refs = useRef({});
 
@@ -13782,6 +13782,18 @@ function Cast({ w, update, setErr, goChat, jump }) {
                * Szerkesztésnél NEM kap új arrival eventet.
                */
               if (reallyNew) {
+                const arrivalAt =
+                  now();
+
+                stamped.createdAt =
+                  Number(
+                    stamped.createdAt
+                  ) ||
+                  arrivalAt;
+
+                stamped.arrivalTrendAt =
+                  arrivalAt;
+
                 recordSocialEvent(
                   n,
                   {
@@ -13792,7 +13804,7 @@ function Cast({ w, update, setErr, goChat, jump }) {
                       `arrival:${stamped.id}`,
 
                     ts:
-                      now(),
+                      arrivalAt,
 
                     actorId:
                       stamped.id,
@@ -17245,6 +17257,22 @@ function ensureSocialSimulationState(w) {
     w.trends = [];
   }
 
+  /*
+   * V2 migration:
+   * a Trending patch ELŐTT frissen felvett karaktereket
+   * egyszer visszamenőleg felismerjük.
+   */
+  if (!w.characterArrivalTrendMigratedV2) {
+    ensureRecentCharacterArrivalTrends(
+      w
+    );
+
+    refreshTrends(w);
+
+    w.characterArrivalTrendMigratedV2 =
+      true;
+  }
+
   if (!w.socialDiscoveryMigratedV1) {
     refreshTrends(w);
     refreshAllPostReach(w);
@@ -18939,6 +18967,159 @@ function gossipAutoCandidate(w) {
    TRENDS + REACH + GOSSIP REACTIONS + RUMOR EVOLUTION + POPUPS
    ============================================================ */
 
+
+function ensureRecentCharacterArrivalTrends(w) {
+  if (
+    !w ||
+    !Array.isArray(w.chars)
+  ) {
+    return;
+  }
+
+  if (!Array.isArray(w.socialEvents)) {
+    w.socialEvents = [];
+  }
+
+  const recentCutoff =
+    now() -
+    7 * 24 * 3600e3;
+
+  const alreadyArrived =
+    new Set(
+      (w.socialEvents || [])
+        .filter(
+          (event) =>
+            event &&
+            event.type ===
+              "character-arrival"
+        )
+        .flatMap(
+          (event) =>
+            gossipEventSubjectIds(
+              event
+            )
+        )
+        .filter(Boolean)
+    );
+
+  (w.chars || []).forEach(
+    (c) => {
+      if (
+        !c ||
+        !c.id ||
+        alreadyArrived.has(
+          c.id
+        ) ||
+        Number(
+          c.arrivalTrendAt
+        ) > 0
+      ) {
+        return;
+      }
+
+      const createdAt =
+        Number(
+          c.createdAt
+        ) || 0;
+
+      const updatedAt =
+        Number(
+          c.updatedAt
+        ) || 0;
+
+      const likelyArrivalAt =
+        createdAt ||
+        (
+          updatedAt >= recentCutoff
+            ? updatedAt
+            : 0
+        );
+
+      if (!likelyArrivalAt) {
+        return;
+      }
+
+      c.createdAt =
+        createdAt ||
+        likelyArrivalAt;
+
+      c.arrivalTrendAt =
+        likelyArrivalAt;
+
+      w.socialEvents.unshift({
+        id:
+          "se_" + uid(),
+
+        type:
+          "character-arrival",
+
+        refId:
+          `arrival:${c.id}`,
+
+        ts:
+          likelyArrivalAt,
+
+        actorId:
+          c.id,
+
+        targetIds: [
+          c.id,
+        ],
+
+        visibility:
+          "public",
+
+        factLevel:
+          "observed",
+
+        importance:
+          100,
+
+        drama:
+          8,
+
+        romance:
+          0,
+
+        embarrassment:
+          0,
+
+        source:
+          "character-arrival-backfill",
+
+        text:
+          worldLanguage(
+            w,
+            w.meId
+          ) === "en"
+            ? `${c.name} just entered the world.`
+            : `${c.name} megérkezett a világba.`,
+
+        tags: [
+          "social",
+          "new-character",
+          "trending",
+          "arrival",
+          "backfill",
+        ],
+
+        meta: {
+          characterId:
+            c.id,
+          newCharacter:
+            true,
+          backfilled:
+            true,
+        },
+      });
+
+      alreadyArrived.add(
+        c.id
+      );
+    }
+  );
+}
+
 function refreshTrends(w) {
   if (!w) return [];
   if (!Array.isArray(w.trends)) w.trends = [];
@@ -18949,9 +19130,18 @@ function refreshTrends(w) {
     if (!topics[key]) topics[key] = {
       id:key, type:patch.type || "topic", labelHu:patch.labelHu || "", labelEn:patch.labelEn || patch.labelHu || "",
       subjectId:patch.subjectId || "", postId:patch.postId || "", score:0, updatedAt:now(),
+      pinnedUntil:Number(patch.pinnedUntil)||0,
     };
     topics[key].score += Number(weight) || 0;
     if (patch.postId && !topics[key].postId) topics[key].postId = patch.postId;
+
+    if (
+      Number(patch.pinnedUntil) >
+      Number(topics[key].pinnedUntil || 0)
+    ) {
+      topics[key].pinnedUntil =
+        Number(patch.pinnedUntil) || 0;
+    }
   };
   (w.socialEvents || []).forEach((event) => {
     if (!event || Number(event.ts) < cutoff) return;
@@ -18983,7 +19173,8 @@ function refreshTrends(w) {
             labelHu:c.name,
             labelEn:c.name,
             subjectId:id,
-            postId:event.meta&&event.meta.postId
+            postId:event.meta&&event.meta.postId,
+            pinnedUntil:(Number(event.ts)||now()) + 24*3600e3
           },
           32*freshness
         );
@@ -18996,7 +19187,17 @@ function refreshTrends(w) {
     if(event.type==="gossip-story"||event.type==="rumor-evolution") add("topic:gossip",{labelHu:"Pletyka",labelEn:"Gossip",postId:event.meta&&event.meta.postId},11*freshness);
     if(event.meta&&event.meta.eventRecapEligible&&event.meta.sceneTitle) add(`event:${event.meta.sceneId||event.meta.sceneTitle}`,{type:"event",labelHu:event.meta.sceneTitle,labelEn:event.meta.sceneTitle},13*freshness);
   });
-  w.trends=Object.values(topics).map((row)=>({...row,score:Math.round(row.score*10)/10})).filter((row)=>row.score>=4).sort((a,b)=>b.score-a.score).slice(0,8);
+  w.trends=Object.values(topics)
+    .map((row)=>({...row,score:Math.round(row.score*10)/10}))
+    .filter((row)=>row.score>=4)
+    .sort((a,b)=>{
+      const ap=Number(a.pinnedUntil)>now()?1:0;
+      const bp=Number(b.pinnedUntil)>now()?1:0;
+
+      if(ap!==bp)return bp-ap;
+      return b.score-a.score;
+    })
+    .slice(0,12);
   return w.trends;
 }
 
