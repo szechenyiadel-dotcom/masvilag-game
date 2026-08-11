@@ -3281,9 +3281,21 @@ function normalizedRelationshipChanges(
       a,
       b,
       delta:
-        boostedRelationshipDelta(
-          ch.delta
-        ),
+        ch.micro === true
+          ? Math.max(
+              -5,
+              Math.min(
+                5,
+                Math.round(
+                  Number(
+                    ch.delta
+                  ) || 0
+                )
+              )
+            )
+          : boostedRelationshipDelta(
+              ch.delta
+            ),
       __autoEcho:false,
     });
   });
@@ -3932,6 +3944,155 @@ function applyChanges(
     }
   });
 }
+function applyPlayerLikeRelationshipSignal(
+  n,
+  playerId,
+  post
+) {
+  if (
+    !n ||
+    !playerId ||
+    !post ||
+    !post.authorId ||
+    post.authorId === playerId ||
+    isHuman(
+      n,
+      post.authorId
+    ) ||
+    isMediaAccount(
+      n,
+      post.authorId
+    )
+  ) {
+    return;
+  }
+
+  const authorId =
+    post.authorId;
+
+  const author =
+    charById(
+      n,
+      authorId
+    );
+
+  if (!author) {
+    return;
+  }
+
+  const rel =
+    getRel(
+      n,
+      authorId,
+      playerId
+    );
+
+  const obsessionLevel =
+    relationshipObsessionLevel(
+      n,
+      authorId,
+      playerId
+    );
+
+  const romantic =
+    bondLooksRomantic(
+      rel
+    );
+
+  /*
+   * Egy like valódi, de kicsi social jel.
+   * Nem kapja meg a normál ±6..40 relationship boostot.
+   */
+  let delta = 1;
+
+  if (
+    obsessionLevel >= 3
+  ) {
+    delta = 4;
+  } else if (
+    obsessionLevel >= 2
+  ) {
+    delta = 3;
+  } else if (romantic) {
+    delta = 2;
+  }
+
+  const en =
+    worldLanguage(
+      n,
+      playerId
+    ) === "en";
+
+  let why =
+    en
+      ? "They noticed that you liked their post."
+      : "Észrevette, hogy lájkoltad a posztját.";
+
+  if (
+    obsessionLevel >= 3
+  ) {
+    why =
+      en
+        ? "They read much more into your like than most people would and latched onto the attention."
+        : "A like-odnak a szokásosnál jóval nagyobb jelentőséget tulajdonított, és rákapott a figyelmedre.";
+  } else if (romantic) {
+    why =
+      en
+        ? "Your like felt personal to them because of the attraction between you."
+        : "A köztetek lévő vonzalom miatt személyesebb jelentőséget adott a like-odnak.";
+  } else if (
+    Number(rel.score) <= -30
+  ) {
+    why =
+      en
+        ? "They noticed that you liked their post despite the tension between you."
+        : "Észrevette, hogy a köztetek lévő feszültség ellenére lájkoltad a posztját.";
+  }
+
+  applyChanges(
+    n,
+    [
+      {
+        a:
+          authorId,
+        b:
+          playerId,
+        delta,
+        mood: "",
+        why,
+        oneSided: true,
+        micro: true,
+      },
+    ]
+  );
+
+  /*
+   * Ne csak pont legyen: az AI emlékezzen is rá, hogy konkrétan
+   * a játékos adott neki figyelmet.
+   */
+  rememberAboutTarget(
+    n,
+    authorId,
+    playerId,
+    {
+      kind: "event",
+      source:
+        "player_like",
+      confidence: 1,
+      text:
+        en
+          ? `${nameOfIn(
+              n,
+              playerId
+            )} liked my post${post.text ? `: ${cut(post.text, 90)}` : "."}`
+          : `${nameOfIn(
+              n,
+              playerId
+            )} lájkolta a posztomat${post.text ? `: ${cut(post.text, 90)}` : "."}`,
+    }
+  );
+}
+
 function socialTextRelationshipDelta(
   w,
   actorId,
@@ -17923,6 +18084,16 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   postAuthorId: x.authorId || "",
                 },
               });
+
+              /*
+               * A játékos like-ja maga is relationship signal.
+               * Csak a poszt AI-szerzőjének iránya változik a játékos felé.
+               */
+              applyPlayerLikeRelationshipSignal(
+                n,
+                actorId,
+                x
+              );
             })
           }
         />
