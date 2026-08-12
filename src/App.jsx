@@ -9794,10 +9794,77 @@ function appendAiChatImageMessage(n, characterId, snap) {
   return true;
 }
 
+const SNAP_VISUAL_IDENTITY_CACHE = new Map();
+
+async function describeCharacterReferenceImage(ref, media, prompt) {
+  const resolved = resolveImg(ref, media);
+  if (!resolved || !isInlineImageData(resolved)) return "";
+  const key = String(ref || resolved).slice(0, 180);
+  if (SNAP_VISUAL_IDENTITY_CACHE.has(key)) {
+    return SNAP_VISUAL_IDENTITY_CACHE.get(key) || "";
+  }
+  try {
+    const desc = await analyzeImageDataUrl(
+      resolved,
+      prompt || "Describe the main person's stable visible appearance in 1-3 concise sentences for identity-consistent image generation. Focus on face shape, hair, coloring, age vibe and other stable traits only."
+    );
+    const clean = cut(String(desc || "").replace(/\s+/g, " ").trim(), 320);
+    SNAP_VISUAL_IDENTITY_CACHE.set(key, clean);
+    return clean;
+  } catch (err) {
+    console.warn("Character reference image analysis failed:", err);
+    SNAP_VISUAL_IDENTITY_CACHE.set(key, "");
+    return "";
+  }
+}
+
+async function buildCharacterSnapIdentity(character, media) {
+  if (!character) return "";
+
+  const parts = [];
+  const seen = new Set();
+  const pushUnique = (label, value) => {
+    const clean = cut(String(value || "").replace(/\s+/g, " ").trim(), 320);
+    if (!clean) return;
+    const key = normUtterance(clean);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    parts.push(`${label}: ${clean}`);
+  };
+
+  pushUnique("Written looks", character.looks || character.bio || "");
+
+  const avatarDesc = await describeCharacterReferenceImage(
+    character.avatar,
+    media,
+    `Describe the stable visible appearance of the main person in this profile image for identity-consistent image generation. Focus on face shape, hair style/color, complexion, age vibe and other stable traits. Mention clothing only if it seems identity-defining.`
+  );
+  pushUnique("Profile photo appearance", avatarDesc);
+
+  const album = albumOf(character).slice(0, 4);
+  for (const item of album) {
+    if (!item) continue;
+    pushUnique("Album appearance hint", item.vision || item.note || "");
+    if (!(item.vision || item.note)) {
+      const ref = item.imageId ? imageRef(item.imageId) : (item.src || item.image || "");
+      const itemDesc = await describeCharacterReferenceImage(
+        ref,
+        media,
+        `Describe the main person's visible appearance and vibe in this character album image for identity-consistent image generation. Focus on stable face/hair/build traits first, then scene briefly.`
+      );
+      pushUnique("Album appearance hint", itemDesc);
+    }
+    if (parts.length >= 5) break;
+  }
+
+  return cut(parts.join("\n"), 1200);
+}
+
 async function generateAiChatSnap(
   character,
   snapPrompt,
-  addImage
+  addImage,
+  media
 ) {
   const prompt = String(
     snapPrompt || ""
@@ -9812,12 +9879,22 @@ async function generateAiChatSnap(
     (character && character.name) || "the character"
   ).trim();
 
+  const identityAnchor = await buildCharacterSnapIdentity(
+    character,
+    media
+  );
+
   const basePrompt = `Create a realistic candid smartphone snap that ${actorName} could naturally send in a private chat. ${prompt}
+
+Character identity anchor:
+${identityAnchor || "Use the same person identity consistently across snaps based on the character's established look."}
 
 Rules:
 - phone snapshot / snap style
 - believable, grounded, social-media-realistic
 - no watermark, no text overlay, no collage
+- the sender must look like the SAME person as in their profile/album references
+- keep face shape, hair color/style, skin tone, age vibe and overall identity consistent
 - keep the person and scene consistent with the requested character and moment
 - if the prompt implies a party, coffee, mirror selfie, street, room, gym or similar, show that naturally.`;
 
@@ -24592,6 +24669,7 @@ Ha természetes része a válaszodnak, küldhetsz EGY képet.
 - Az "image" mezőbe csak a fenti kep1/kep2/... kulcs kerülhet.
 - Ha a helyzethez inkább egy friss, most készített snap illene, az "image" mező maradjon üres, és töltsd ki röviden az "imagePrompt" mezőt.
 - Az imagePrompt egy tömör leírás legyen arról, mit fotóznál le MOST a saját nézőpontodból / magadról / a jelenlegi helyzetedből.
+- A rendszer a profilképedből és albumképeidből próbálja megtartani ugyanazt az arcot és alap kinézetet, ezért az imagePrompt főleg a jelenetet, pózt, helyszínt vagy hangulatot írja le.
 - Az imagePrompt csak valós, karakterhű és a sztoriba illő képet írhat le.
 - Ha nincs értelmes ok képet küldeni, mind az "image", mind az "imagePrompt" legyen üres.
 - Ne találj ki nem létező albumképet.
@@ -24683,7 +24761,8 @@ Formátum:
         ? await generateAiChatSnap(
             c,
             requestedImagePrompt,
-            addImage
+            addImage,
+            media
           )
         : null;
 
@@ -24934,7 +25013,8 @@ Formátum:
       void generateAiChatSnap(
         c,
         requestedImagePrompt,
-        addImage
+        addImage,
+        media
       )
         .then((lateSnap) => {
           if (
@@ -27100,6 +27180,7 @@ ${albumList(bot) || "nincs használható albumkép"}
 - A kép vizuális leírását használd annak eldöntésére, mit küldenél.
 - Ha nincs megfelelő albumképed, de karakterhűen most egy friss snapet küldenél, az "image" maradjon üres, és töltsd ki röviden az "imagePrompt" mezőt.
 - Az imagePrompt egy rövid, konkrét leírás legyen arról, milyen saját képet küldenél MOST (pl. tükörszelfi készülődés közben, kávé az asztalon, buli a háttérben, laptop+jegyzetek, stb.).
+- A rendszer a profilképedből és albumképeidből próbálja megtartani ugyanazt az arcot és alap kinézetet, ezért az imagePrompt főleg a pillanatnyi jelenetet írja le.
 - Az imagePrompt is csak olyan jelenetet írhat le, ami a karakteredhez és az aktuális helyzethez reálisan illik.
 - Ne találj ki olyan albumképet, ami nincs az albumodban.
 - Kép nélkül írni teljesen normális.
@@ -37397,7 +37478,8 @@ if (targetNote) {
         ? await generateAiChatSnap(
             bot,
             out.imagePrompt,
-            addImage
+            addImage,
+            media
           )
         : null;
 
