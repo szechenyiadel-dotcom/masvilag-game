@@ -2649,6 +2649,19 @@ function defaultCharacterMemory() {
     personalMilestones: [],
 
     /*
+     * ROLEPLAY MEMORY LAYERS
+     *
+     * roleplayRecent   = rövid/középtávú, karakter-POV jelenetemlékek.
+     * roleplayLongTerm = csak a tartósan fontos RP-mérföldkövek.
+     * roleplayShared   = célkarakterenként külön közös történet, hogy az AI
+     *                    ne csak azt tudja, hogy "valami történt", hanem azt is,
+     *                    hogy KIVEL történt.
+     */
+    roleplayRecent: [],
+    roleplayLongTerm: [],
+    roleplayShared: {},
+
+    /*
      * DYNAMIC SELF-STATE
      *
      * A karakter saját, futás közben változó állapota. Nem helyettesíti a
@@ -2708,6 +2721,12 @@ function ensureCharMemory(w, observerId) {
   if (typeof mem.selfState.intent !== "string") mem.selfState.intent = "";
   if (!Array.isArray(mem.selfState.openLoops)) mem.selfState.openLoops = [];
   if (!Number.isFinite(Number(mem.selfState.updatedAt))) mem.selfState.updatedAt = 0;
+  if (!Array.isArray(mem.roleplayRecent)) mem.roleplayRecent = [];
+  if (!Array.isArray(mem.roleplayLongTerm)) mem.roleplayLongTerm = [];
+  if (!mem.roleplayShared || typeof mem.roleplayShared !== "object" || Array.isArray(mem.roleplayShared)) mem.roleplayShared = {};
+  Object.keys(mem.roleplayShared).forEach((targetId) => {
+    if (!Array.isArray(mem.roleplayShared[targetId])) mem.roleplayShared[targetId] = [];
+  });
   return mem;
 }
 
@@ -5983,6 +6002,23 @@ function selfMemoryForPrompt(w, id) {
   }
   if ((mem.learnedSecrets || []).length) {
     bits.push(`megtanult titkok: ${(mem.learnedSecrets || []).slice(-6).map(memoryToLine).join(" | ")}`);
+  }
+  if ((mem.roleplayLongTerm || []).length) {
+    bits.push(`hosszú távú roleplay-emlékek: ${(mem.roleplayLongTerm || []).slice(-10).map(memoryToLine).join(" | ")}`);
+  }
+  if ((mem.roleplayRecent || []).length) {
+    bits.push(`friss roleplay-emlékek: ${(mem.roleplayRecent || []).slice(-8).map(memoryToLine).join(" | ")}`);
+  }
+  const sharedRows = Object.entries(mem.roleplayShared || {})
+    .map(([targetId, rows]) => {
+      const target = charById(w, targetId);
+      const recent = Array.isArray(rows) ? rows.slice(-4).map(memoryToLine).join(" | ") : "";
+      return recent ? `${target ? target.name : targetId}: ${recent}` : "";
+    })
+    .filter(Boolean)
+    .slice(-6);
+  if (sharedRows.length) {
+    bits.push(`közös roleplay-történet személyenként: ${sharedRows.join(" ; ")}`);
   }
 
   if (mem.selfState && (mem.selfState.mood || mem.selfState.intent || (mem.selfState.openLoops || []).length)) {
@@ -11062,15 +11098,38 @@ function mergeWorlds(remote, local) {
   Object.keys(local.charMemory || {}).forEach((k) => {
     const base = out.charMemory[k] || defaultCharacterMemory();
     const mine = local.charMemory[k] || defaultCharacterMemory();
+    const shared = { ...(base.roleplayShared || {}) };
+    Object.keys(mine.roleplayShared || {}).forEach((targetId) => {
+      shared[targetId] = mergeKnowledgeItems(
+        shared[targetId],
+        mine.roleplayShared[targetId],
+        "roleplay_shared",
+        36
+      );
+    });
+    const newerState = Number(mine?.selfState?.updatedAt || 0) >= Number(base?.selfState?.updatedAt || 0)
+      ? (mine.selfState || {})
+      : (base.selfState || {});
     out.charMemory[k] = {
       knownCharacters: { ...(base.knownCharacters || {}), ...(mine.knownCharacters || {}) },
-      knownFacts: mergeKnowledgeItems(base.knownFacts, mine.knownFacts, "fact", 32),
-      witnessedEvents: mergeKnowledgeItems(base.witnessedEvents, mine.witnessedEvents, "event", 32),
-      conversations: mergeKnowledgeItems(base.conversations, mine.conversations, "conversation", 32),
+      knownFacts: mergeKnowledgeItems(base.knownFacts, mine.knownFacts, "fact", 80),
+      witnessedEvents: mergeKnowledgeItems(base.witnessedEvents, mine.witnessedEvents, "event", 80),
+      conversations: mergeKnowledgeItems(base.conversations, mine.conversations, "conversation", 100),
       relationshipHistory: { ...(base.relationshipHistory || {}), ...(mine.relationshipHistory || {}) },
-      suspicions: mergeKnowledgeItems(base.suspicions, mine.suspicions, "assumption", 32),
-      rumors: mergeKnowledgeItems(base.rumors, mine.rumors, "rumor", 32),
-      learnedSecrets: mergeKnowledgeItems(base.learnedSecrets, mine.learnedSecrets, "secret", 32),
+      suspicions: mergeKnowledgeItems(base.suspicions, mine.suspicions, "assumption", 50),
+      rumors: mergeKnowledgeItems(base.rumors, mine.rumors, "rumor", 60),
+      learnedSecrets: mergeKnowledgeItems(base.learnedSecrets, mine.learnedSecrets, "secret", 60),
+      emotionalAnchors: mergeKnowledgeItems(base.emotionalAnchors, mine.emotionalAnchors, "anchor", 60),
+      personalMilestones: mergeKnowledgeItems(base.personalMilestones, mine.personalMilestones, "milestone", 60),
+      roleplayRecent: mergeKnowledgeItems(base.roleplayRecent, mine.roleplayRecent, "roleplay_recent", 40),
+      roleplayLongTerm: mergeKnowledgeItems(base.roleplayLongTerm, mine.roleplayLongTerm, "roleplay_long", 70),
+      roleplayShared: shared,
+      selfState: {
+        mood: String(newerState.mood || ""),
+        intent: String(newerState.intent || ""),
+        openLoops: Array.isArray(newerState.openLoops) ? newerState.openLoops.slice(-8) : [],
+        updatedAt: Number(newerState.updatedAt || 0),
+      },
     };
   });
   Object.keys(out.deleted).forEach((id) => { delete out.charMemory[id]; });
@@ -11719,7 +11778,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v37-balanced-events-player-closes-contextual-invites";
+const BUILD_VERSION = "v38-roleplay-memory-layers";
 
 const AUTO = "masvilag:auto";
 /*
@@ -23308,7 +23367,208 @@ function ensureSceneEventState(scene) {
   if (scene.rewardItemGranted === undefined) scene.rewardItemGranted = "";
   if (scene.success === undefined) scene.success = null;
   if (scene.earlyEnd === undefined) scene.earlyEnd = false;
+  ensureSceneRoleplayMemory(scene);
   return scene;
+}
+
+function defaultSceneRoleplayMemory() {
+  return {
+    summary: "",
+    continuity: [],
+    openThreads: [],
+    participantStates: {},
+    updatedAt: 0,
+  };
+}
+
+function normalizeRoleplayMemoryText(value, max = 280) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > max ? `${text.slice(0, Math.max(1, max - 1))}…` : text;
+}
+
+function normalizeRoleplayMemoryList(value, limit = 12, max = 280) {
+  const rows = Array.isArray(value) ? value : [];
+  const out = [];
+  const seen = new Set();
+  rows.forEach((row) => {
+    const text = normalizeRoleplayMemoryText(typeof row === "string" ? row : row && (row.text || row.state), max);
+    if (!text) return;
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(text);
+  });
+  return out.slice(-limit);
+}
+
+function ensureSceneRoleplayMemory(scene) {
+  if (!scene || typeof scene !== "object") return defaultSceneRoleplayMemory();
+  if (!scene.rpMemory || typeof scene.rpMemory !== "object" || Array.isArray(scene.rpMemory)) {
+    scene.rpMemory = defaultSceneRoleplayMemory();
+  }
+  const mem = scene.rpMemory;
+  if (typeof mem.summary !== "string") mem.summary = "";
+  mem.continuity = normalizeRoleplayMemoryList(mem.continuity, 16, 260);
+  mem.openThreads = normalizeRoleplayMemoryList(mem.openThreads, 16, 260);
+  if (!mem.participantStates || typeof mem.participantStates !== "object" || Array.isArray(mem.participantStates)) mem.participantStates = {};
+  Object.keys(mem.participantStates).forEach((id) => {
+    const clean = normalizeRoleplayMemoryText(mem.participantStates[id], 260);
+    if (clean) mem.participantStates[id] = clean;
+    else delete mem.participantStates[id];
+  });
+  if (!Number.isFinite(Number(mem.updatedAt))) mem.updatedAt = 0;
+  return mem;
+}
+
+function sceneRoleplayMemoryCard(scene, w) {
+  const mem = ensureSceneRoleplayMemory(scene);
+  const en = worldLanguage(w, w.meId) === "en";
+  const states = Object.entries(mem.participantStates || {})
+    .map(([id, state]) => {
+      const c = charById(w, id);
+      return `${c ? c.name : id}: ${state}`;
+    })
+    .slice(-12);
+
+  if (!mem.summary && !mem.continuity.length && !mem.openThreads.length && !states.length) {
+    return en ? "No compressed scene memory yet." : "Még nincs tömörített jelenetemlék.";
+  }
+
+  return [
+    mem.summary ? `${en ? "Compressed scene so far" : "Tömörített jelenet eddig"}: ${mem.summary}` : "",
+    mem.continuity.length ? `${en ? "Continuity facts" : "Folytonossági tények"}: ${mem.continuity.join(" | ")}` : "",
+    mem.openThreads.length ? `${en ? "Unresolved threads" : "Nyitott szálak"}: ${mem.openThreads.join(" | ")}` : "",
+    states.length ? `${en ? "Current participant states" : "Aktuális résztvevői állapotok"}: ${states.join(" | ")}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function applySceneRoleplayMemoryUpdate(scene, out) {
+  if (!scene || !out || typeof out !== "object") return;
+  const row = out.sceneMemory || out.shortTermMemory || null;
+  if (!row || typeof row !== "object" || Array.isArray(row)) return;
+  const mem = ensureSceneRoleplayMemory(scene);
+  const summary = normalizeRoleplayMemoryText(row.summary, 1200);
+  if (summary) mem.summary = summary;
+  if (Array.isArray(row.continuity)) mem.continuity = normalizeRoleplayMemoryList(row.continuity, 16, 260);
+  if (Array.isArray(row.openThreads)) mem.openThreads = normalizeRoleplayMemoryList(row.openThreads, 16, 260);
+  if (Array.isArray(row.participantStates)) {
+    const next = {};
+    row.participantStates.slice(0, 20).forEach((item) => {
+      if (!item || typeof item !== "object") return;
+      const id = String(item.id || "").trim();
+      const state = normalizeRoleplayMemoryText(item.state || item.text, 260);
+      if (id && state) next[id] = state;
+    });
+    mem.participantStates = next;
+  } else if (row.participantStates && typeof row.participantStates === "object") {
+    const next = {};
+    Object.entries(row.participantStates).slice(0, 20).forEach(([id, value]) => {
+      const state = normalizeRoleplayMemoryText(value, 260);
+      if (id && state) next[id] = state;
+    });
+    mem.participantStates = next;
+  }
+  mem.updatedAt = now();
+}
+
+function rememberRoleplayObservedTurn(n, scene, turn) {
+  if (!n || !scene || !turn || !turn.authorId || turn.authorId === "narrator") return;
+  const text = normalizeRoleplayMemoryText(turn.text, 220);
+  if (!text) return;
+  const actorId = turn.authorId;
+  const actor = charById(n, actorId);
+  const sceneTitle = normalizeRoleplayMemoryText(scene.title || "Roleplay", 80);
+  const source = `roleplay:${String(scene.id || "scene").slice(0, 24)}`;
+  const kindLabel = turn.kind === "action" ? "action" : "speech";
+  const line = `${sceneTitle} — ${actor ? actor.name : actorId} (${kindLabel}): ${text}`;
+
+  (scene.cast || [])
+    .filter((observerId) => observerId && !isHuman(n, observerId))
+    .forEach((observerId) => {
+      const mem = ensureCharMemory(n, observerId);
+      mem.roleplayRecent = mergeKnowledgeItems(mem.roleplayRecent, [{
+        text: line,
+        source,
+        confidence: 1,
+        timestamp: turn.ts || now(),
+      }], "roleplay_recent", 40);
+
+      if (observerId !== actorId) {
+        if (!Array.isArray(mem.roleplayShared[actorId])) mem.roleplayShared[actorId] = [];
+        mem.roleplayShared[actorId] = mergeKnowledgeItems(mem.roleplayShared[actorId], [{
+          text: `${actor ? actor.name : actorId}: ${text}`,
+          source,
+          confidence: 1,
+          timestamp: turn.ts || now(),
+        }], "roleplay_shared", 28);
+
+        rememberAboutTarget(n, observerId, actorId, {
+          kind: "event",
+          source: "roleplay_witness",
+          confidence: 1,
+          timestamp: turn.ts || now(),
+          text: `${sceneTitle}: ${actor ? actor.name : actorId} ${kindLabel === "action" ? "tett valamit" : "ezt mondta"}: ${text}`,
+        });
+      }
+    });
+}
+
+function safeAiRoleplayLongTermMemories(out) {
+  return safeAiArray(out, "longTermMemories")
+    .filter((row) => row && typeof row === "object");
+}
+
+function applyRoleplayLongTermMemories(n, scene, out) {
+  safeAiRoleplayLongTermMemories(out).slice(0, 16).forEach((row) => {
+    const observerId = findChar(n, row.id !== undefined ? row.id : row.name);
+    if (!observerId || isHuman(n, observerId)) return;
+    const importanceRaw = Number(row.importance);
+    const importance = Number.isFinite(importanceRaw) ? Math.max(0, Math.min(100, importanceRaw)) : 75;
+    if (importance < 60) return;
+    const text = normalizeRoleplayMemoryText(row.text, 300);
+    if (!text) return;
+    const mem = ensureCharMemory(n, observerId);
+    const source = `roleplay_long:${String(scene && scene.id || "scene").slice(0, 20)}`;
+    const entry = { text, source, confidence: 1, timestamp: now() };
+    mem.roleplayLongTerm = mergeKnowledgeItems(mem.roleplayLongTerm, [entry], "roleplay_long", 70);
+
+    const targetId = row.targetId ? findChar(n, row.targetId) : null;
+    if (targetId && targetId !== observerId) {
+      if (!Array.isArray(mem.roleplayShared[targetId])) mem.roleplayShared[targetId] = [];
+      mem.roleplayShared[targetId] = mergeKnowledgeItems(mem.roleplayShared[targetId], [entry], "roleplay_shared", 36);
+      rememberAboutTarget(n, observerId, targetId, {
+        kind: row.kind === "relationship" ? "relationship" : "event",
+        source: "roleplay_long_term",
+        confidence: 1,
+        text,
+      });
+    }
+
+    const kind = String(row.kind || "event").toLowerCase();
+    if (kind === "milestone") mem.personalMilestones = mergeKnowledgeItems(mem.personalMilestones, [entry], "milestone", 60);
+    else if (kind === "anchor") mem.emotionalAnchors = mergeKnowledgeItems(mem.emotionalAnchors, [entry], "anchor", 60);
+    else if (kind === "secret") mem.learnedSecrets = mergeKnowledgeItems(mem.learnedSecrets, [entry], "secret", 60);
+    else mem.witnessedEvents = mergeKnowledgeItems(mem.witnessedEvents, [entry], "event", 90);
+  });
+}
+
+function commitSceneSummaryToRoleplayMemory(n, scene, summaryText) {
+  if (!n || !scene) return;
+  const summary = normalizeRoleplayMemoryText(summaryText, 500);
+  if (!summary) return;
+  const source = `roleplay_summary:${String(scene.id || "scene").slice(0, 18)}`;
+  (scene.cast || []).filter((id) => id && !isHuman(n, id)).forEach((observerId) => {
+    const mem = ensureCharMemory(n, observerId);
+    const entry = {
+      text: `${scene.title || "Roleplay"}: ${summary}`,
+      source,
+      confidence: 1,
+      timestamp: now(),
+    };
+    mem.roleplayLongTerm = mergeKnowledgeItems(mem.roleplayLongTerm, [entry], "roleplay_long", 70);
+    mem.personalMilestones = mergeKnowledgeItems(mem.personalMilestones, [entry], "milestone", 60);
+  });
 }
 
 function sceneEventProgress(scene, at = now()) {
@@ -23653,16 +23913,18 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
           };
 
     if (playerText) {
-      patch((s) => {
-        s.turns.push({
-          authorId: w.meId,
+      patch((s, n) => {
+        const playerTurn = {
+          authorId: n.meId,
           to:
             playerTarget.id ||
             "",
           kind: "action",
           text: playerText,
           ts: now(),
-        });
+        };
+        s.turns.push(playerTurn);
+        rememberRoleplayObservedTurn(n, s, playerTurn);
 
         if (playerTarget.id) {
           s.playerFocusId =
@@ -23672,7 +23934,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
     }
 
     try {
-      const log = scene.turns.slice(-16).map((t) => {
+      const log = scene.turns.slice(-14).map((t) => {
         if (t.authorId === "narrator") return `(${t.text})`;
         const a = who(t.authorId);
         const target =
@@ -23693,6 +23955,16 @@ HELYZET: ${scene.setting || "-"}
 EVENT CÉLJA: ${scene.goal || "nincs külön megadva"}
 EVENT AJÁNLOTT MINIMUMA: ${scene.limitMode === "minutes" ? `${scene.targetMinutes || 20} perc` : `${scene.targetTurns || 16} üzenet`}
 AKTUÁLIS HALADÁS: ${sceneEventProgressText(scene, worldLanguage(w, w.meId))}
+
+ROLEPLAY RÖVID TÁVÚ MEMÓRIA — EZ A KORÁBBI KÖRÖK TÖMÖRÍTETT FOLYTONOSSÁGA, NEM ÚJ TÖRTÉNÉS:
+${sceneRoleplayMemoryCard(scene, w)}
+
+MEMÓRIA-RÉTEGEK SZABÁLYA:
+- RÖVID TÁVÚ JELENETMEMÓRIA: minden válasz végén frissítsd a sceneMemory mezőt. Tartsa meg a helyszínt, pozíciókat, sérüléseket, tárgyakat, ki mit tudott meg, félbehagyott kérdéseket, ígéreteket, fenyegetéseket, terveket és azt, hogy éppen min dolgozik a jelenet. Ne találj ki új tényt.
+- HOSSZÚ TÁVÚ ROLEPLAY-MEMÓRIA: longTermMemories-ba CSAK valóban tartós jelentőségű dolgot tegyél: kapcsolat-mérföldkő, árulás, kibékülés, első csók, komoly verekedés/sérülés, titok/reveláció, fontos ígéret vagy fenyegetés, megmentés, megalázás, ajándék, döntés vagy olyan esemény, ami később is megváltoztatja a viselkedést. Small talkot és jelentéktelen mozdulatot NE ments.
+- KARAKTERMEMÓRIA / POV: egy longTermMemory csak annál a karakter-ID-nél jelenjen meg, aki tényleg átélte, látta, hallotta vagy hitelesen megtudta. A motor tudása nem egyenlő a karakter tudásával. A játékos ki nem mondott gondolatát/érzését soha ne mentsd más karakter emlékébe.
+- targetId-t akkor adj, ha az emlék egy konkrét másik szereplőhöz kötődik; ettől a közös történetük külön is megmarad.
+
 - EZ A LIMIT CSAK TELJESÍTÉSI / JUTALMI KÜSZÖB, NEM AUTOMATIKUS LEZÁRÁS.
 - SOHA ne zárd le, ne epilógusozd el és ne jelentsd késznek az Eventet csak azért, mert a küszöb teljesült. A JÁTÉKOS dönti el, mikor fejezi be és mikor nyomja meg a lezárás gombot.
 - Ha a küszöb már teljesült, ugyanúgy folytasd a jelenetet természetesen addig, amíg a játékos le nem zárja.
@@ -23786,6 +24058,8 @@ Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","to":"annak a jelenlévő karakternek/játékosnak az id-ja, akinek a speech közvetlenül szól, vagy üres","kind":"speech vagy action","text":"..."}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":16,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],
  "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
+ "sceneMemory":{"summary":"3-6 mondatos tömör, tényszerű összefoglaló arról, ami a teljes nyitott jelenet folytonosságához kell","continuity":["aktuális hely/pozíció/sérülés/tárgy vagy más fizikai-faktuális folytonosság"],"openThreads":["még nincs lezárva: kérdés, vita, ígéret, fenyegetés, terv, döntés"],"participantStates":[{"id":"jelenlévő pontos id-ja","state":"rövid aktuális, jelenetben releváns állapot; ne titkos gondolat"}]},
+ "longTermMemories":[{"id":"annak az AI-nak az id-ja, aki ezt valóban tudja/átélte","targetId":"ha konkrét személyhez kötődik, annak id-ja, különben üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":80,"text":"csak tartósan fontos, később is releváns karakter-POV emlék"}],
  "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"],
  "statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"csak akkor adj ilyet, ha az Event során tényleges állapotváltozás történt: megváltozott valaki hangulata, vagy egy korábban elindított folyamat/ígéret/fenyegetés/terv lezárult"}],
  "selfUpdates":[{"id":"AI id","mood":"a jelenet után benne maradó belső állapot","intent":"a következő saját szándéka","openLoops":["ami számára még nincs lezárva"]}]}${TAIL}`);
@@ -23904,8 +24178,11 @@ SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
 - A jelenetet ne zárd le automatikusan.
 - Ne magyarázd, hogy újragenerálsz.
 
+RÖVID TÁVÚ JELENETMEMÓRIA:
+${sceneRoleplayMemoryCard(scene, w)}
+
 VÁLASZ CSAK JSON:
-{"turns":[{"id":"pontos karakter-ID vagy narrator","kind":"speech vagy action","text":"friss megszólalás vagy cselekvés"}],"changes":[],"memories":[],"events":[]}${TAIL}`,
+{"turns":[{"id":"pontos karakter-ID vagy narrator","kind":"speech vagy action","text":"friss megszólalás vagy cselekvés"}],"changes":[],"memories":[],"sceneMemory":{"summary":"","continuity":[],"openThreads":[],"participantStates":[]},"longTermMemories":[],"events":[]}${TAIL}`,
           {
             maxTokens: 1500,
             maxTries: 3,
@@ -23931,8 +24208,10 @@ VÁLASZ CSAK JSON:
 
       patch((s, n) => {
         resolved.forEach((t) => {
-          s.turns.push({ ...t, ts: now(), language: worldLanguage(n, n.meId) });
+          const storedTurn = { ...t, ts: now(), language: worldLanguage(n, n.meId) };
+          s.turns.push(storedTurn);
           noteMentions(n, t.text, t.authorId, { type: "scene", id: s.id });
+          rememberRoleplayObservedTurn(n, s, storedTurn);
           if (t.authorId !== "narrator" && !isHuman(n, t.authorId)) {
             rememberKnowledge(n, t.authorId, {
               kind: "conversation",
@@ -23942,6 +24221,8 @@ VÁLASZ CSAK JSON:
             });
           }
         });
+        applySceneRoleplayMemoryUpdate(s, out);
+        applyRoleplayLongTermMemories(n, s, out);
         applySceneChangesWithStatus(n, s, safeAiChanges(out));
         applyMemories(n, safeAiMemories(out));
         applySelfUpdates(n, out);
@@ -24154,12 +24435,14 @@ ${log || "nem történt még érdemi mozzanat"}
 - A kapcsolati változások a már meglévő viszonyból és a mostani eseményből következzenek; ne reseteld a jó/rossz/crush/rivális dinamikát.
 - A történetből eredő lojalitások és rivalizálások a lezárásban is számítsanak.
 - statusUpdates csak tényleges állapotváltozás legyen: mood-változás vagy egy korábban elindított folyamat/ígéret/fenyegetés/terv lezárulása.
+- longTermMemories karakterenként külön mentse el, mit visz tovább ebből az Eventből. Csak tartós jelentőségű emléket adj; és csak annak, aki tényleg átélte/látta/hallotta/megtudta. targetId-del jelöld, ha egy konkrét másik szereplőhöz kötődik.
+- A játékos kimondatlan gondolatait/érzéseit ne tedd AI-karakter emlékévé.
 ${worldLanguage(w, w.meId) === "en"
   ? "- summary, diary, goalResult, statusUpdates, memories, mood and why must all be English."
   : "- a summary, diary, goalResult, statusUpdates, memories, mood és why mezők mind magyarul legyenek."}
 
 Formátum:
-{"summary":"","diary":"","success":true,"outcome":"success vagy partial vagy failed","goalResult":"egy rövid konkrét értékelés","memories":[{"id":"szereplő azonosítója","text":""}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],"statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"mi változott / mi zárult le"}]}${TAIL}`);
+{"summary":"","diary":"","success":true,"outcome":"success vagy partial vagy failed","goalResult":"egy rövid konkrét értékelés","memories":[{"id":"szereplő azonosítója","text":""}],"longTermMemories":[{"id":"AI id","targetId":"konkrét másik szereplő id-ja vagy üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":85,"text":"tartós karakter-POV emlék"}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],"statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"mi változott / mi zárult le"}]}${TAIL}`);
 
       const safeOut = out && typeof out === "object" ? out : {};
 
@@ -24183,6 +24466,16 @@ Formátum:
         s.diaryEntry = String(safeOut.diary || safeOut.summary || "");
 
         applyMemories(n, safeAiMemories(safeOut));
+        applyRoleplayLongTermMemories(n, s, safeOut);
+        commitSceneSummaryToRoleplayMemory(n, s, safeOut.summary || safeOut.diary || "");
+        applySceneRoleplayMemoryUpdate(s, {
+          sceneMemory: {
+            summary: safeOut.summary || (s.rpMemory && s.rpMemory.summary) || "",
+            continuity: [],
+            openThreads: [],
+            participantStates: [],
+          },
+        });
         applySceneChangesWithStatus(n, s, safeAiChanges(safeOut));
         applySceneAiStatusUpdates(n, s, safeOut);
 
