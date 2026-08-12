@@ -2674,6 +2674,27 @@ function defaultCharacterMemory() {
       openLoops: [],
       updatedAt: 0,
     },
+
+    /*
+     * CHARACTER AGENT RUNTIME
+     *
+     * This is the cross-surface executive state shared by feed, comments,
+     * DMs, group chat and roleplay. It does NOT replace canon/personality.
+     * It records what the character most recently perceived, which social
+     * thread they are carrying, what plan is active and what action they
+     * actually executed so the same person continues across surfaces.
+     */
+    agentRuntime: {
+      currentSurface: "",
+      currentTargetId: "",
+      lastPerceptionAt: 0,
+      lastActionAt: 0,
+      lastAction: "",
+      lastActionRef: "",
+      activeThreads: [],
+      activePlans: [],
+      updatedAt: 0,
+    },
   };
 }
 
@@ -2724,6 +2745,24 @@ function ensureCharMemory(w, observerId) {
   if (!Array.isArray(mem.roleplayRecent)) mem.roleplayRecent = [];
   if (!Array.isArray(mem.roleplayLongTerm)) mem.roleplayLongTerm = [];
   if (!mem.roleplayShared || typeof mem.roleplayShared !== "object" || Array.isArray(mem.roleplayShared)) mem.roleplayShared = {};
+  if (!mem.agentRuntime || typeof mem.agentRuntime !== "object" || Array.isArray(mem.agentRuntime)) {
+    mem.agentRuntime = {
+      currentSurface: "", currentTargetId: "", lastPerceptionAt: 0, lastActionAt: 0,
+      lastAction: "", lastActionRef: "", activeThreads: [], activePlans: [], updatedAt: 0,
+    };
+  }
+  const runtime = mem.agentRuntime;
+  if (typeof runtime.currentSurface !== "string") runtime.currentSurface = "";
+  if (typeof runtime.currentTargetId !== "string") runtime.currentTargetId = "";
+  if (!Number.isFinite(Number(runtime.lastPerceptionAt))) runtime.lastPerceptionAt = 0;
+  if (!Number.isFinite(Number(runtime.lastActionAt))) runtime.lastActionAt = 0;
+  if (typeof runtime.lastAction !== "string") runtime.lastAction = "";
+  if (typeof runtime.lastActionRef !== "string") runtime.lastActionRef = "";
+  if (!Array.isArray(runtime.activeThreads)) runtime.activeThreads = [];
+  if (!Array.isArray(runtime.activePlans)) runtime.activePlans = [];
+  runtime.activeThreads = runtime.activeThreads.filter(Boolean).slice(-12);
+  runtime.activePlans = runtime.activePlans.filter(Boolean).slice(-8);
+  if (!Number.isFinite(Number(runtime.updatedAt))) runtime.updatedAt = 0;
   Object.keys(mem.roleplayShared).forEach((targetId) => {
     if (!Array.isArray(mem.roleplayShared[targetId])) mem.roleplayShared[targetId] = [];
   });
@@ -6369,6 +6408,19 @@ function selfMemoryForPrompt(w, id) {
     bits.push(stateBits.join(" ; "));
   }
 
+  const runtime = mem.agentRuntime || {};
+  const runtimeBits = [];
+  if (runtime.currentSurface) runtimeBits.push(`aktuális social/RP csatorna: ${runtime.currentSurface}`);
+  if (runtime.currentTargetId) runtimeBits.push(`aktuális fókusz: ${nameOfIn(w, runtime.currentTargetId)}`);
+  if (runtime.lastAction) runtimeBits.push(`legutóbbi végrehajtott akció: ${runtime.lastAction}`);
+  if (Array.isArray(runtime.activeThreads) && runtime.activeThreads.length) {
+    runtimeBits.push(`aktív cross-surface szálak: ${runtime.activeThreads.slice(-6).map((row) => row && row.text ? row.text : "").filter(Boolean).join(" | ")}`);
+  }
+  if (Array.isArray(runtime.activePlans) && runtime.activePlans.length) {
+    runtimeBits.push(`aktív tervek: ${runtime.activePlans.slice(-5).map((row) => row && row.text ? row.text : "").filter(Boolean).join(" | ")}`);
+  }
+  if (runtimeBits.length) bits.push(runtimeBits.join(" ; "));
+
   return bits.join("\n") || "semmi különös";
 }
 
@@ -8364,6 +8416,292 @@ PLAYER'S EXACT INPUT: "${text.slice(0, 900)}"`
 - Csak akkor kérdezz vissza, ha a teljes közeli kontextus után is két lényegesen eltérő értelmezés marad.
 - A játékos angolját ne javítgasd és ne az elütésre reagálj a jelentés helyett.
 A JÁTÉKOS PONTOS INPUTJA: "${text.slice(0, 900)}"`;
+}
+
+
+/* ============================================================
+   CHARACTER AGENT RUNTIME — cross-surface perception / state / action
+   ============================================================ */
+function characterAgentSurfaceActions(surface) {
+  const key = String(surface || "").toLowerCase();
+  if (key === "dm" || key === "chat") {
+    return ["REPLY_DM", "SEND_SNAP", "IGNORE", "PROPOSE_MEET", "ACCEPT_MEET", "CREATE_EVENT", "INVITE_RELEVANT_PEOPLE"];
+  }
+  if (key === "comment" || key === "reply" || key === "feed") {
+    return ["LIKE", "COMMENT", "REPLY", "IGNORE", "DEFEND", "CHALLENGE", "FLIRT", "PILE_ON", "MENTION"];
+  }
+  if (key === "group") {
+    return ["SEND_GROUP_MESSAGE", "REPLY_TO_MEMBER", "IGNORE", "INVITE_RELEVANT_PERSON", "PROPOSE_EVENT"];
+  }
+  if (key === "roleplay" || key === "scene") {
+    return ["SPEAK", "ACT", "WAIT", "INTERACT_WITH_PRESENT_CHARACTER", "INITIATE_ROMANCE", "ESCALATE_CONFLICT", "ADVANCE_PLAN", "START_EVENT", "INVITE_RELEVANT_PEOPLE"];
+  }
+  if (key === "autonomy") {
+    return ["CREATE_POST", "COMMENT", "REPLY", "SEND_DM", "CREATE_GROUP", "START_EVENT", "WRITE_NOTE", "LIKE", "REPOST", "IGNORE"];
+  }
+  return ["RESPOND", "IGNORE"];
+}
+
+function characterAgentRuntimeState(w, actorId) {
+  if (!w || !actorId) return {
+    currentSurface: "", currentTargetId: "", lastPerceptionAt: 0, lastActionAt: 0,
+    lastAction: "", lastActionRef: "", activeThreads: [], activePlans: [], updatedAt: 0,
+  };
+  return ensureCharMemory(w, actorId).agentRuntime;
+}
+
+function compactCharacterAgentRelationship(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || actorId === targetId) return null;
+  const rel = getRel(w, actorId, targetId) || {};
+  const target = charById(w, targetId);
+  return {
+    targetId,
+    targetName: target ? target.name : String(targetId),
+    score: Number(rel.score) || 0,
+    label: relLabel(rel) || "",
+    bond: String(rel.bond || rel.type || ""),
+    mood: String(rel.mood || ""),
+    hidden: String(rel.hidden || ""),
+    fixed: Boolean(rel.fixed),
+    ownSensei: isOwnSenseiRelationship(w, actorId, targetId),
+    preferredAddress: isOwnSenseiRelationship(w, actorId, targetId)
+      ? preferredSenseiAddress(target)
+      : "",
+  };
+}
+
+function characterAgentThreadRows(post, limit = 14) {
+  if (!post) return [];
+  return safePostComments(post)
+    .slice(-Math.max(1, limit))
+    .map((row) => ({
+      id: String(row.id || ""),
+      authorId: String(row.authorId || ""),
+      parentId: String(row.parent || row.reply_to || ""),
+      text: cut(String(row.text || ""), 420),
+      ts: Number(row.ts) || 0,
+    }));
+}
+
+function characterAgentConversationRows(w, actorId, rows, kind = "dm", limit = 14) {
+  const list = Array.isArray(rows) ? rows.slice(-Math.max(1, limit)) : [];
+  return list.map((row) => {
+    let authorId = String(row && row.authorId || "");
+    let targetId = String(row && row.to || "");
+    if (!authorId && row) {
+      if (row.from === "me") authorId = String(w && w.meId || "");
+      else if (row.from === "them") authorId = String(actorId || "");
+      else if (row.from) authorId = String(row.from);
+    }
+    return {
+      id: String(row && row.id || ""),
+      kind,
+      authorId,
+      authorName: nameOfIn(w, authorId),
+      targetId,
+      targetName: targetId ? nameOfIn(w, targetId) : "",
+      text: cut(String(row && row.text || ""), 520),
+      imageDescription: cut(String(row && row.imageDescription || ""), 260),
+      ts: Number(row && row.ts) || 0,
+      ownedBySelf: Boolean(actorId && authorId === actorId),
+      ownedByPlayer: Boolean(w && authorId === w.meId),
+    };
+  });
+}
+
+function compactAgentMemoryForPacket(w, actorId, targetId = "") {
+  if (!w || !actorId) return {};
+  const mem = ensureCharMemory(w, actorId);
+  const shared = targetId && mem.roleplayShared && Array.isArray(mem.roleplayShared[targetId])
+    ? mem.roleplayShared[targetId].slice(-4).map(memoryToLine)
+    : [];
+  const knownTarget = targetId && mem.knownCharacters ? mem.knownCharacters[targetId] : null;
+  return {
+    selfState: {
+      mood: String(mem.selfState && mem.selfState.mood || ""),
+      intent: String(mem.selfState && mem.selfState.intent || ""),
+      openLoops: (mem.selfState && Array.isArray(mem.selfState.openLoops) ? mem.selfState.openLoops : []).slice(-6),
+    },
+    recentConversations: (mem.conversations || []).slice(-5).map(memoryToLine),
+    recentEvents: (mem.witnessedEvents || []).slice(-5).map(memoryToLine),
+    longTermRoleplay: (mem.roleplayLongTerm || []).slice(-4).map(memoryToLine),
+    sharedRoleplayWithTarget: shared,
+    knownAboutTarget: knownTarget ? {
+      observedTraits: (knownTarget.observedTraits || []).slice(-4).map(memoryToLine),
+      knownEvents: (knownTarget.knownEvents || []).slice(-4).map(memoryToLine),
+      assumptions: (knownTarget.assumptions || []).slice(-3).map(memoryToLine),
+    } : null,
+    runtime: {
+      currentSurface: String(mem.agentRuntime && mem.agentRuntime.currentSurface || ""),
+      currentTargetId: String(mem.agentRuntime && mem.agentRuntime.currentTargetId || ""),
+      lastAction: String(mem.agentRuntime && mem.agentRuntime.lastAction || ""),
+      activeThreads: (mem.agentRuntime && Array.isArray(mem.agentRuntime.activeThreads) ? mem.agentRuntime.activeThreads : []).slice(-6),
+      activePlans: (mem.agentRuntime && Array.isArray(mem.agentRuntime.activePlans) ? mem.agentRuntime.activePlans : []).slice(-5),
+    },
+  };
+}
+
+function characterAgentRuntimePacket(w, actorId, options = {}) {
+  const actor = charById(w, actorId);
+  if (!w || !actor) return null;
+  const surface = String(options.surface || "unknown");
+  const targetId = String(options.targetId || "");
+  const inputText = String(options.playerText || options.inputText || "").trim();
+  const inputAuthorId = String(options.inputAuthorId || (inputText ? w.meId : ""));
+  const post = options.post || null;
+  const comment = options.comment || null;
+  const scene = options.scene || null;
+  const group = options.group || null;
+  const messages = options.messages || null;
+
+  let conversation = [];
+  if (messages) conversation = characterAgentConversationRows(w, actorId, messages, surface, 14);
+  else if (scene) conversation = characterAgentConversationRows(w, actorId, scene.turns || [], "roleplay", 16);
+
+  const latestOther = [...conversation].reverse().find((row) => row && row.authorId && row.authorId !== inputAuthorId) || null;
+  const replyTarget = options.replyTarget || comment || latestOther || null;
+  const replyTargetAuthorId = String(
+    options.replyTargetAuthorId ||
+    (replyTarget && (replyTarget.authorId || (replyTarget.from === "me" ? w.meId : replyTarget.from === "them" ? actorId : replyTarget.from))) ||
+    ""
+  );
+
+  const packet = {
+    runtimeVersion: 1,
+    surface,
+    self: {
+      id: actor.id,
+      name: actor.name,
+      username: actor.username || "",
+      nickname: actor.nick || actor.nickname || "",
+      isSensei: characterIsSensei(actor),
+      role: cut(String(actor.role || actor.job || ""), 260),
+      organization: cut(String(actor.organization || actor.affiliation || ""), 260),
+    },
+    relationshipToTarget: compactCharacterAgentRelationship(w, actorId, targetId),
+    memory: compactAgentMemoryForPacket(w, actorId, targetId),
+    perception: {
+      input: inputText ? {
+        authorId: inputAuthorId,
+        authorName: nameOfIn(w, inputAuthorId),
+        text: cut(inputText, 900),
+        ownedBySelf: inputAuthorId === actorId,
+        ownedByPlayer: inputAuthorId === w.meId,
+      } : null,
+      replyTarget: replyTarget ? {
+        id: String(replyTarget.id || ""),
+        authorId: replyTargetAuthorId,
+        authorName: nameOfIn(w, replyTargetAuthorId),
+        text: cut(String(replyTarget.text || ""), 700),
+        ownedBySelf: replyTargetAuthorId === actorId,
+        ownedByPlayer: replyTargetAuthorId === w.meId,
+      } : null,
+      post: post ? {
+        id: String(post.id || ""),
+        authorId: String(post.authorId || ""),
+        authorName: nameOfIn(w, post.authorId),
+        text: cut(String(post.text || ""), 800),
+        imageDescription: cut(String(post.imageDescription || ""), 360),
+        thread: characterAgentThreadRows(post, 14),
+      } : null,
+      conversation,
+      group: group ? {
+        id: String(group.id || ""),
+        name: String(group.name || ""),
+        memberIds: (group.members || []).slice(0, 20),
+      } : null,
+      scene: scene ? {
+        id: String(scene.id || ""),
+        title: String(scene.title || ""),
+        setting: cut(String(scene.setting || ""), 700),
+        goal: cut(String(scene.goal || ""), 420),
+        presentAiIds: (scene.cast || []).slice(0, 20),
+        playerId: w.meId,
+        playerFocusId: String(scene.playerFocusId || ""),
+        shortTermMemory: sceneRoleplayMemoryCard(scene, w),
+        open: scene.open !== false,
+      } : null,
+    },
+    availableActions: characterAgentSurfaceActions(surface),
+    invariants: [
+      "Treat author IDs and reply-target IDs as ground truth; never reassign who said or did something.",
+      "[SELF] means this character. A line authored by SELF is this character's own previous statement/action, not the player's.",
+      "Player controls only the player character; never invent the player's unspoken dialogue, actions or thoughts.",
+      "Canon + relationship + memory + current context outrank generic drama or generic personality stereotypes.",
+      "Only act on information this character could actually perceive or remember.",
+      "Choose only actions supported by this surface and execute them through the requested JSON schema, not by narrating UI clicks.",
+    ],
+  };
+
+  return packet;
+}
+
+function characterAgentRuntimeCard(w, actorIds, options = {}) {
+  const ids = [...new Set((Array.isArray(actorIds) ? actorIds : [actorIds]).filter(Boolean))].slice(0, 10);
+  const packets = ids.map((id) => characterAgentRuntimePacket(w, id, options)).filter(Boolean);
+  if (!packets.length) return "";
+  const en = worldLanguage(w, w.meId) === "en";
+  return `${en ? "CHARACTER AGENT RUNTIME — STRUCTURED GROUND TRUTH" : "CHARACTER AGENT RUNTIME — STRUKTURÁLT VALÓSÁG"}:
+${JSON.stringify(packets)}
+${en
+  ? "Use this packet as state, not prose. Resolve speaker ownership, reply targets, perception, memory, plans and allowed actions from it BEFORE generating language. Never contradict its IDs just because nearby prose is ambiguous."
+  : "Ezt állapotként kezeld, ne prózaként. MIELŐTT szöveget generálsz, ebből oldd fel a beszélő tulajdonjogát, reply-célpontot, percepciót, memóriát, terveket és engedélyezett akciókat. A benne lévő ID-ket ne írd felül azért, mert a környező próza kétértelmű."}`;
+}
+
+function normalizeAgentRuntimeThread(value) {
+  if (!value || typeof value !== "object") return null;
+  const text = cut(String(value.text || value.summary || ""), 360).trim();
+  if (!text) return null;
+  return {
+    id: String(value.id || uid()),
+    surface: String(value.surface || ""),
+    targetId: String(value.targetId || ""),
+    refId: String(value.refId || ""),
+    text,
+    ts: Number(value.ts) || now(),
+  };
+}
+
+function recordCharacterAgentPerception(w, actorId, details = {}) {
+  if (!w || !actorId || isHuman(w, actorId)) return;
+  const runtime = characterAgentRuntimeState(w, actorId);
+  const ts = Number(details.ts) || now();
+  runtime.currentSurface = String(details.surface || runtime.currentSurface || "");
+  runtime.currentTargetId = String(details.targetId || runtime.currentTargetId || "");
+  runtime.lastPerceptionAt = ts;
+  runtime.updatedAt = ts;
+  const row = normalizeAgentRuntimeThread({
+    id: details.id || `${runtime.currentSurface}:${details.refId || ts}`,
+    surface: runtime.currentSurface,
+    targetId: runtime.currentTargetId,
+    refId: details.refId || "",
+    text: details.text || details.summary || "",
+    ts,
+  });
+  if (row) {
+    runtime.activeThreads = [...(runtime.activeThreads || []).filter((x) => x && x.id !== row.id), row].slice(-12);
+  }
+}
+
+function recordCharacterAgentAction(w, actorId, details = {}) {
+  if (!w || !actorId || isHuman(w, actorId)) return;
+  const runtime = characterAgentRuntimeState(w, actorId);
+  const ts = Number(details.ts) || now();
+  runtime.currentSurface = String(details.surface || runtime.currentSurface || "");
+  runtime.currentTargetId = String(details.targetId || runtime.currentTargetId || "");
+  runtime.lastActionAt = ts;
+  runtime.lastAction = String(details.action || "").slice(0, 80);
+  runtime.lastActionRef = String(details.refId || "").slice(0, 120);
+  runtime.updatedAt = ts;
+  const plan = details.plan ? normalizeAgentRuntimeThread({
+    id: details.planId || `plan:${details.refId || ts}`,
+    surface: runtime.currentSurface,
+    targetId: runtime.currentTargetId,
+    refId: details.refId || "",
+    text: details.plan,
+    ts,
+  }) : null;
+  if (plan) runtime.activePlans = [...(runtime.activePlans || []).filter((x) => x && x.id !== plan.id), plan].slice(-8);
 }
 
 function preferredSenseiAddress(character) {
@@ -11553,16 +11891,29 @@ function mergeWorlds(remote, local) {
   (local.scenes || []).concat(remote.scenes || []).forEach((sc) => {
     if (!sc || !sc.id) return;
     if (!sById[sc.id]) {
-      sById[sc.id] = { ...sc, turns: (sc.turns || []).slice() };
+      sById[sc.id] = {
+        ...sc,
+        playerTurnJournal: mergeRoleplayTurnStreams(sc.playerTurnJournal || []),
+        turns: mergeRoleplayTurnStreams(sc.turns || [], sc.playerTurnJournal || []),
+      };
       sOrder.push(sc.id);
       return;
     }
     const current = sById[sc.id];
     const meta = newer(sc, current);
+    const mergedPlayerJournal = mergeRoleplayTurnStreams(
+      current.playerTurnJournal || [],
+      sc.playerTurnJournal || []
+    );
     sById[sc.id] = {
       ...current,
       ...meta,
-      turns: mergeSceneTurns(current.turns, sc.turns),
+      playerTurnJournal: mergedPlayerJournal,
+      turns: mergeRoleplayTurnStreams(
+        current.turns,
+        sc.turns,
+        mergedPlayerJournal
+      ),
       sceneMemory: stamp(sc) >= stamp(current)
         ? (sc.sceneMemory || current.sceneMemory)
         : (current.sceneMemory || sc.sceneMemory),
@@ -11643,6 +11994,25 @@ function mergeWorlds(remote, local) {
     const newerState = Number(mine?.selfState?.updatedAt || 0) >= Number(base?.selfState?.updatedAt || 0)
       ? (mine.selfState || {})
       : (base.selfState || {});
+    const baseRuntime = base.agentRuntime || {};
+    const mineRuntime = mine.agentRuntime || {};
+    const newerRuntime = Number(mineRuntime.updatedAt || 0) >= Number(baseRuntime.updatedAt || 0)
+      ? mineRuntime
+      : baseRuntime;
+    const mergeRuntimeRows = (a, b, limit) => {
+      const rows = [];
+      const seen = new Set();
+      [...(a || []), ...(b || [])]
+        .filter(Boolean)
+        .sort((x, y) => (Number(x && x.ts) || 0) - (Number(y && y.ts) || 0))
+        .forEach((row) => {
+          const key = String(row && (row.id || `${row.surface || ""}|${row.refId || ""}|${row.text || ""}`));
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          rows.push(row);
+        });
+      return rows.slice(-limit);
+    };
     out.charMemory[k] = {
       knownCharacters: { ...(base.knownCharacters || {}), ...(mine.knownCharacters || {}) },
       knownFacts: mergeKnowledgeItems(base.knownFacts, mine.knownFacts, "fact", 80),
@@ -11662,6 +12032,17 @@ function mergeWorlds(remote, local) {
         intent: String(newerState.intent || ""),
         openLoops: Array.isArray(newerState.openLoops) ? newerState.openLoops.slice(-8) : [],
         updatedAt: Number(newerState.updatedAt || 0),
+      },
+      agentRuntime: {
+        currentSurface: String(newerRuntime.currentSurface || ""),
+        currentTargetId: String(newerRuntime.currentTargetId || ""),
+        lastPerceptionAt: Math.max(Number(baseRuntime.lastPerceptionAt || 0), Number(mineRuntime.lastPerceptionAt || 0)),
+        lastActionAt: Math.max(Number(baseRuntime.lastActionAt || 0), Number(mineRuntime.lastActionAt || 0)),
+        lastAction: String(newerRuntime.lastAction || ""),
+        lastActionRef: String(newerRuntime.lastActionRef || ""),
+        activeThreads: mergeRuntimeRows(baseRuntime.activeThreads, mineRuntime.activeThreads, 12),
+        activePlans: mergeRuntimeRows(baseRuntime.activePlans, mineRuntime.activePlans, 8),
+        updatedAt: Math.max(Number(baseRuntime.updatedAt || 0), Number(mineRuntime.updatedAt || 0)),
       },
     };
   });
@@ -12311,7 +12692,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v42-reply-attribution-rp-turn-visibility";
+const BUILD_VERSION = "v43-character-agent-runtime-rp-journal";
 
 const AUTO = "masvilag:auto";
 /*
@@ -18438,6 +18819,16 @@ ${th.text}`
     : "Még nincs komment."
 }
 
+${characterAgentRuntimeCard(
+  w,
+  cast.map((c) => c.id),
+  {
+    surface: "comment",
+    targetId: post.authorId,
+    post,
+  }
+)}
+
 ${cast
   .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
   .join("")}
@@ -19600,6 +19991,21 @@ recordSocialEvent(
     },
   }
 );
+      recordCharacterAgentPerception(n, who, {
+        surface: tag ? "reply" : "comment",
+        targetId: targetId || p.authorId || "",
+        refId: p.id,
+        text: `Post by ${nameOfIn(n, p.authorId)}: ${cut(p.text || p.imageDescription || "", 260)}`,
+        ts: made.ts,
+      });
+      recordCharacterAgentAction(n, who, {
+        surface: tag ? "reply" : "comment",
+        action: tag ? "REPLY" : "COMMENT",
+        targetId: targetId || p.authorId || "",
+        refId: made.id,
+        ts: made.ts,
+      });
+
       rememberKnowledge(n, who, {
         kind: "conversation",
         source: "self_action",
@@ -20173,6 +20579,20 @@ ${commentOwnershipInstruction(w, post, comment)}
 
 ${playerInputUnderstandingInstruction(w, comment.text, "comment")}
 
+${characterAgentRuntimeCard(
+  w,
+  cast.map((c) => c.id),
+  {
+    surface: "reply",
+    targetId: comment.authorId,
+    inputText: comment.text,
+    inputAuthorId: comment.authorId,
+    post,
+    comment,
+    replyTarget: comment,
+  }
+)}
+
 PUBLIKUS THREAD REALIZMUS:
 - Ez nyilvános kommentmező, NEM kétfős privát beszélgetés. Egy reply után nem csak az eredeti komment szerzője válaszolhat.
 - BÁRMELYIK itt megadott AI beszállhat, ha hitelesen látja a threadet és van személyes oka: barátság, rivalizálás, védelem, féltékenység, érintettség, kíváncsiság, pletyka, konfliktus vagy a poszt témája.
@@ -20645,6 +21065,21 @@ function applyReplies(n, postId, rootId, out) {
       },
     });
 
+    recordCharacterAgentPerception(n, who, {
+      surface: "reply",
+      targetId: replyTargetId || "",
+      refId: rootComment ? rootComment.id : rootId,
+      text: rootComment ? `${nameOfIn(n, rootComment.authorId)}: ${cut(rootComment.text, 320)}` : `Public thread reply target ${rootId}`,
+      ts: made.ts,
+    });
+    recordCharacterAgentAction(n, who, {
+      surface: "reply",
+      action: "REPLY",
+      targetId: replyTargetId || "",
+      refId: made.id,
+      ts: made.ts,
+    });
+
     rememberKnowledge(n, who, {
       kind: "conversation",
       source: "self_action",
@@ -20795,6 +21230,12 @@ ${notesForAI(w) || "nincs"}
 
 KORÁBBI ESEMÉNYEK:
 ${recentStructuredWorldLines(w, 6).join("\n") || "-"}
+
+${characterAgentRuntimeCard(
+  w,
+  cast.map((c) => c.id),
+  { surface: "autonomy" }
+)}
 
 ${cast
   .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
@@ -21272,7 +21713,23 @@ made.forEach((mc) => {
     }
   );
 });
-rememberKnowledge(n, author, {
+recordCharacterAgentAction(n, author, {
+      surface: "feed",
+      action: "CREATE_POST",
+      targetId: "",
+      refId: fresh.id,
+      ts: fresh.ts,
+    });
+    made.forEach((mc) => {
+      recordCharacterAgentAction(n, mc.authorId, {
+        surface: mc.parent ? "reply" : "comment",
+        action: mc.parent ? "REPLY" : "COMMENT",
+        targetId: fresh.authorId,
+        refId: mc.id,
+        ts: mc.ts,
+      });
+    });
+    rememberKnowledge(n, author, {
       kind: "event",
       source: "self_action",
       confidence: 1,
@@ -24264,8 +24721,37 @@ function sceneEventRecapEligible(scene, aiWitnessCount) {
    - reduced affection and no item on early close;
    - diary entry + visible status updates.
    ------------------------------------------------------------------------- */
+
+function mergeRoleplayTurnStreams(...streams) {
+  const rows = [];
+  const seen = new Set();
+  streams
+    .flatMap((list) => Array.isArray(list) ? list : [])
+    .filter(Boolean)
+    .sort((a, b) => (Number(a && a.ts) || 0) - (Number(b && b.ts) || 0))
+    .forEach((turn) => {
+      const key = String(
+        turn.id ||
+        `${turn.authorId || "?"}|${Number(turn.ts) || 0}|${turn.kind || ""}|${String(turn.text || "").trim()}`
+      );
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      rows.push(turn);
+    });
+  return rows;
+}
+
 function ensureSceneEventState(scene) {
   if (!scene || typeof scene !== "object") return scene;
+
+  if (!Array.isArray(scene.turns)) scene.turns = [];
+  if (!Array.isArray(scene.playerTurnJournal)) scene.playerTurnJournal = [];
+  /*
+   * PLAYER TURN JOURNAL is append-only redundancy for the human player's RP
+   * input. A transient sync conflict is therefore unable to make the line
+   * disappear from the scene after the AI has already received it.
+   */
+  scene.turns = mergeRoleplayTurnStreams(scene.turns, scene.playerTurnJournal);
 
   if (!scene.goal) scene.goal = "";
   if (scene.limitMode !== "minutes" && scene.limitMode !== "turns") scene.limitMode = "turns";
@@ -24744,6 +25230,7 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
         setting: setting.trim(),
         cast: ids,
         turns: [],
+        playerTurnJournal: [],
         open: true,
         goal: goal.trim(),
         limitMode,
@@ -24798,25 +25285,22 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const eventProgress = sceneEventProgress(scene, clockNow);
   const eventLang = worldLanguage(w, w.meId);
   const eventLimitLabel = sceneEventProgressText(scene, eventLang, clockNow);
-  const canonicalTurnIds = new Set(
-    (scene.turns || []).map((turn) => turn && turn.id).filter(Boolean)
+  /*
+   * Three-layer render source:
+   * 1) canonical scene.turns
+   * 2) append-only playerTurnJournal (survives sync races)
+   * 3) component-local optimisticTurns (survives the round-trip itself)
+   *
+   * We intentionally DO NOT delete the optimistic copy as soon as a canonical
+   * copy flashes into existence. A later 409 reconciliation may temporarily
+   * replace scene.turns with an older server snapshot; keeping the local copy
+   * means the player's just-sent line never vanishes from the open scene.
+   */
+  const visibleTurns = mergeRoleplayTurnStreams(
+    scene.turns || [],
+    scene.playerTurnJournal || [],
+    optimisticTurns
   );
-  const visibleTurns = [
-    ...(scene.turns || []),
-    ...optimisticTurns.filter(
-      (turn) => turn && turn.id && !canonicalTurnIds.has(turn.id)
-    ),
-  ].sort((a, b) => (Number(a && a.ts) || 0) - (Number(b && b.ts) || 0));
-
-  useEffect(() => {
-    if (!optimisticTurns.length) return;
-    const ids = new Set(
-      (scene.turns || []).map((turn) => turn && turn.id).filter(Boolean)
-    );
-    setOptimisticTurns((prev) =>
-      prev.filter((turn) => turn && turn.id && !ids.has(turn.id))
-    );
-  }, [scene.turns, optimisticTurns.length]);
 
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [visibleTurns.length]);
   useEffect(() => {
@@ -24876,19 +25360,34 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
 
       patch((s, n) => {
         if (!Array.isArray(s.turns)) s.turns = [];
-        if (!s.turns.some((turn) => turn && turn.id === optimisticPlayerTurn.id)) {
-          const playerTurn = { ...optimisticPlayerTurn, authorId: n.meId };
+        if (!Array.isArray(s.playerTurnJournal)) s.playerTurnJournal = [];
+        const playerTurn = { ...optimisticPlayerTurn, authorId: n.meId };
+        if (!s.playerTurnJournal.some((turn) => turn && turn.id === playerTurn.id)) {
+          s.playerTurnJournal.push(playerTurn);
+        }
+        if (!s.turns.some((turn) => turn && turn.id === playerTurn.id)) {
           s.turns.push(playerTurn);
           rememberRoleplayObservedTurn(n, s, playerTurn);
         }
+        (s.cast || []).filter((id) => id && !isHuman(n, id)).forEach((actorId) => {
+          recordCharacterAgentPerception(n, actorId, {
+            surface: "roleplay",
+            targetId: n.meId,
+            refId: playerTurn.id,
+            text: `${nameOfIn(n, n.meId)}: ${playerTurn.text}`,
+            ts: playerTurn.ts,
+          });
+        });
         if (playerTarget.id) s.playerFocusId = playerTarget.id;
       });
     }
 
     try {
-      const promptTurns = optimisticPlayerTurn
-        ? [...(scene.turns || []), optimisticPlayerTurn]
-        : (scene.turns || []);
+      const promptTurns = mergeRoleplayTurnStreams(
+        scene.turns || [],
+        scene.playerTurnJournal || [],
+        optimisticPlayerTurn ? [optimisticPlayerTurn] : []
+      );
       const log = promptTurns.slice(-14).map((t) => {        if (t.authorId === "narrator") return `(${t.text})`;
         const a = who(t.authorId);
         const target =
@@ -24949,6 +25448,18 @@ ${playerText ? conversationOwnershipInstruction(
 ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` : "A játékos most nem lép közbe; a szereplők maguktól viszik tovább a jelenetet."}
 
 ${playerText ? playerInputUnderstandingInstruction(w, playerText, "roleplay") : ""}
+
+${characterAgentRuntimeCard(
+  w,
+  cast.map((c) => c.id),
+  {
+    surface: "roleplay",
+    targetId: playerTarget.id || w.meId,
+    playerText,
+    inputAuthorId: playerText ? w.meId : "",
+    scene: { ...scene, turns: promptTurns },
+  }
+)}
 
 ${playerText
   ? addresseePromptInstruction(
@@ -25194,11 +25705,18 @@ VÁLASZ CSAK JSON:
 
       patch((s, n) => {
         if (!Array.isArray(s.turns)) s.turns = [];
-        if (optimisticPlayerTurn && !s.turns.some((turn) => turn && turn.id === optimisticPlayerTurn.id)) {
+        if (!Array.isArray(s.playerTurnJournal)) s.playerTurnJournal = [];
+        if (optimisticPlayerTurn) {
           const playerTurn = { ...optimisticPlayerTurn, authorId: n.meId };
-          s.turns.push(playerTurn);
-          rememberRoleplayObservedTurn(n, s, playerTurn);
+          if (!s.playerTurnJournal.some((turn) => turn && turn.id === playerTurn.id)) {
+            s.playerTurnJournal.push(playerTurn);
+          }
+          if (!s.turns.some((turn) => turn && turn.id === playerTurn.id)) {
+            s.turns.push(playerTurn);
+            rememberRoleplayObservedTurn(n, s, playerTurn);
+          }
         }
+        s.turns = mergeRoleplayTurnStreams(s.turns, s.playerTurnJournal);
 
         resolved.forEach((t) => {
           const storedTurn = { id: "turn_" + uid(), ...t, ts: now(), language: worldLanguage(n, n.meId) };
@@ -25206,6 +25724,15 @@ VÁLASZ CSAK JSON:
           noteMentions(n, t.text, t.authorId, { type: "scene", id: s.id });
           rememberRoleplayObservedTurn(n, s, storedTurn);
           if (t.authorId !== "narrator" && !isHuman(n, t.authorId)) {
+            recordCharacterAgentAction(n, t.authorId, {
+              surface: "roleplay",
+              action: t.kind === "action" ? "ACT" : "SPEAK",
+              targetId: t.to || s.playerFocusId || n.meId,
+              refId: storedTurn.id,
+              plan: s.open ? `Continue active Event: ${s.title}${s.goal ? ` — goal: ${s.goal}` : ""}` : "",
+              planId: `scene:${s.id}`,
+              ts: storedTurn.ts,
+            });
             rememberKnowledge(n, t.authorId, {
               kind: "conversation",
               source: "scene",
@@ -25404,7 +25931,11 @@ VÁLASZ CSAK JSON:
     const earlyEnd = Boolean(earlyRequested || !liveProgress.complete);
 
     try {
-      const log = (scene.turns || []).map((t) => {
+      const log = mergeRoleplayTurnStreams(
+        scene.turns || [],
+        scene.playerTurnJournal || [],
+        optimisticTurns
+      ).map((t) => {
         const a = who(t.authorId);
         return t.authorId === "narrator" ? `(${t.text})` : `${a ? a.name : "?"}: ${t.text}`;
       }).join("\n");
@@ -25820,7 +26351,7 @@ function Scenes({ w, update, setErr, jump, onSignal }) {
             {s.goal ? <p className="hint" style={{ marginTop: 6 }}><b>{tt("Cél: ", "Goal: ")}</b>{s.goal}</p> : null}
             <div className="row" style={{ marginTop: 10, gap: 4, alignItems: "center" }}>
               {cast.slice(0, 6).map((c) => <Av key={c.id} src={c.avatar} name={c.name} size={22} radius={7} />)}
-              <span className="handle mono" style={{ marginLeft: "auto" }}>{tt(`${s.turns.length} mozzanat`, `${s.turns.length} beats`)}</span>
+              <span className="handle mono" style={{ marginLeft: "auto" }}>{(() => { const count = mergeRoleplayTurnStreams(s.turns || [], s.playerTurnJournal || []).length; return tt(`${count} mozzanat`, `${count} beats`); })()}</span>
             </div>
           </div>
         );
@@ -25956,15 +26487,25 @@ const turn = async (mine) => {
         : groupAiIds.slice(0, 1);
 
   if (mine) {
-    patch((g) => {
-      g.msgs.push({
+    patch((g, n) => {
+      const playerGroupMessage = {
         id: uid(),
-        from: w.meId,
+        from: n.meId,
         to:
           playerTarget.id ||
           "",
         text: mine,
         ts: now(),
+      };
+      g.msgs.push(playerGroupMessage);
+      (g.members || []).filter((id) => id && !isHuman(n, id)).forEach((actorId) => {
+        recordCharacterAgentPerception(n, actorId, {
+          surface: "group",
+          targetId: playerTarget.id || n.meId,
+          refId: playerGroupMessage.id,
+          text: `${nameOfIn(n, n.meId)}: ${mine}`,
+          ts: playerGroupMessage.ts,
+        });
       });
 
       if (playerTarget.id) {
@@ -26038,6 +26579,21 @@ ${w.player.name} [${w.meId}]
 
 EDDIGI ÜZENETEK:
 ${hist || "a beszélgetés most kezdődik"}
+
+${mine ? playerInputUnderstandingInstruction(w, mine, "chat") : ""}
+
+${characterAgentRuntimeCard(
+  w,
+  groupAiIds,
+  {
+    surface: "group",
+    targetId: playerTarget.id || "",
+    playerText: mine,
+    inputAuthorId: mine ? w.meId : "",
+    messages: msgs.concat(mine ? [{ id: "pending_player_group", from: w.meId, to: playerTarget.id || "", text: mine, ts: now() }] : []),
+    group,
+  }
+)}
 
 ${mine ? conversationOwnershipInstruction(
   w,
@@ -26467,6 +27023,13 @@ Formátum:
             ),
           }
         );
+        recordCharacterAgentAction(n, r.from, {
+          surface: "group",
+          action: "SEND_GROUP_MESSAGE",
+          targetId: r.to || "",
+          refId: r.id,
+          ts: r.ts,
+        });
       });
 
       g.updatedAt = now();
@@ -26806,6 +27369,13 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
         ...outgoingMessage,
       },
     ];
+    recordCharacterAgentPerception(n, c.id, {
+      surface: "dm",
+      targetId: n.meId,
+      refId: outgoingMessage.id,
+      text: `${nameOfIn(n, n.meId)}: ${t || outgoingImageDescription || "[image]"}`,
+      ts: outgoingMessage.ts,
+    });
   });
 
   try {
@@ -26919,6 +27489,18 @@ ${selfMemoryForPrompt(
 
 BESZÉLGETÉS:
 ${hist}
+
+${characterAgentRuntimeCard(
+  requestWorld,
+  [c.id],
+  {
+    surface: "dm",
+    targetId: requestWorld.meId,
+    playerText: t,
+    inputAuthorId: requestWorld.meId,
+    messages: requestWorld.chats[ck] || [],
+  }
+)}
 
 ${conversationOwnershipInstruction(
   requestWorld,
@@ -27196,15 +27778,16 @@ Formátum:
     }
 
     update((n) => {
+      const storedReplyId = "dm_" + uid();
+      const storedReplyTs = now();
       n.chats[ck] = [
         ...(n.chats[ck] || []),
         {
-          id:
-            "dm_" + uid(),
+          id: storedReplyId,
           from:"them",
           to:n.meId,
           text:reply,
-          ts:now(),
+          ts:storedReplyTs,
           imageId:
             aiImageId ||
             "",
@@ -27224,12 +27807,23 @@ Formátum:
         },
       ];
 
+      recordCharacterAgentAction(n, c.id, {
+        surface: "dm",
+        action: aiImageRef ? (reply ? "REPLY_DM+SEND_SNAP" : "SEND_SNAP") : "REPLY_DM",
+        targetId: n.meId,
+        refId: storedReplyId,
+        plan: bridgePlan ? `Concrete physical plan created from DM: ${bridgePlan.title}` : "",
+        planId: bridgePlan ? `scene:${bridgeSceneId}` : "",
+        ts: storedReplyTs,
+      });
+
       if (bridgePlan && !existingBridgeScene) {
         const scene = {
           id: bridgeSceneId,
           title: bridgePlan.title,
           setting: bridgePlan.setting,
           cast: bridgePlan.cast,
+          playerTurnJournal: [],
           turns: [{
             id: "turn_" + uid(),
             authorId: c.id,
@@ -29296,6 +29890,16 @@ AMIRE EMLÉKSZEL:
 ${selfMemoryForPrompt(
   w,
   bot.id
+)}
+
+${characterAgentRuntimeCard(
+  w,
+  [bot.id],
+  {
+    surface: "dm",
+    targetId: w.meId,
+    messages: w.chats[chatKey(w.meId, bot.id)] || [],
+  }
 )}
 
 LEGUTÓBBI POSZTOK:
@@ -37647,6 +38251,16 @@ ${voiceCard(bot)}
 ${characterMemoryCard(w, bot)}
 ${relCard}
 
+${characterAgentRuntimeCard(
+  w,
+  [bot.id],
+  {
+    surface: "roleplay",
+    targetId: w.meId,
+    messages: w.chats[chatKey(w.meId, bot.id)] || [],
+  }
+)}
+
 TE MOST ${bot.name} VAGY, ÉS SAJÁT MAGADTÓL KEZDEMÉNYEZHETSZ EGY ÚJ ROLEPLAY EVENTET. ${w.player.name} lehet résztvevő, de egy társas Event közönsége NEM állhat automatikusan csak belőle.
 
 EZ NEM RENDSZER-ÖTLET GENERÁLÁS. Ez ${bot.name} SAJÁT DÖNTÉSE a világon belül.
@@ -38986,6 +39600,7 @@ async function runSimulationAction(view, update, action, addImage) {
         title,
         setting,
         cast: castIds,
+        playerTurnJournal: [],
         turns: firstText ? [{
           authorId: bot.id,
           to: n.meId,
@@ -39024,6 +39639,25 @@ async function runSimulationAction(view, update, action, addImage) {
           language: worldLanguage(n, n.meId), roleplayInviteSceneId: sceneId,
         }];
       }
+
+      recordCharacterAgentAction(n, bot.id, {
+        surface: "roleplay",
+        action: "START_EVENT",
+        targetId: n.meId,
+        refId: sceneId,
+        plan: `Active Event: ${title}${goal ? ` — goal: ${goal}` : ""}`,
+        planId: `scene:${sceneId}`,
+        ts: now(),
+      });
+      castIds.filter((id) => id && id !== bot.id).forEach((inviteeId) => {
+        recordCharacterAgentPerception(n, inviteeId, {
+          surface: "roleplay",
+          targetId: bot.id,
+          refId: sceneId,
+          text: `${bot.name} included/invited me to Event: ${title}`,
+          ts: now(),
+        });
+      });
 
       rememberKnowledge(n, bot.id, {
         kind: "event", source: "self_action", confidence: 1,
@@ -40021,6 +40655,13 @@ if (targetNote) {
             ),
           }
         );
+        recordCharacterAgentAction(n, msg.from, {
+          surface: "group",
+          action: "SEND_GROUP_MESSAGE",
+          targetId: msg.to || "",
+          refId: msg.id,
+          ts: msg.ts,
+        });
       });
 
       target.updatedAt = now();
@@ -40400,14 +41041,15 @@ if (targetNote) {
         bot.id
       );
 
+      const spontaneousDmId = "dm_" + uid();
+      const spontaneousDmTs = now();
       n.chats[ck] = [
         ...(n.chats[ck] || []),
         {
-          id:
-            "dm_" + uid(),
+          id: spontaneousDmId,
           from:"them",
           text:txt,
-          ts:now(),
+          ts:spontaneousDmTs,
           imageId:
             aiImageId ||
             "",
@@ -40425,6 +41067,14 @@ if (targetNote) {
             ),
         },
       ];
+
+      recordCharacterAgentAction(n, bot.id, {
+        surface: "dm",
+        action: aiImageRef ? (txt ? "REPLY_DM+SEND_SNAP" : "SEND_SNAP") : "REPLY_DM",
+        targetId: n.meId,
+        refId: spontaneousDmId,
+        ts: spontaneousDmTs,
+      });
 
       const dmChangesRaw =
         Array.isArray(
