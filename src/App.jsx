@@ -5279,37 +5279,68 @@ const DEFAULT_AI_PROVIDER = DEFAULT_AI_MODEL.startsWith("gemini") ? "gemini"
 const DEFAULT_IMAGE_MODEL = import.meta.env.VITE_IMAGE_MODEL || "gpt-image-2";
 const DEFAULT_IMAGE_PROVIDER = import.meta.env.VITE_IMAGE_PROVIDER || "openai";
 
+/*
+ * Production-safe backend routing.
+ * - Same-origin is the default.
+ * - VITE_API_BASE_URL may point to Railway when frontend/backend are split.
+ * - NEVER fall back to insecure localhost from an HTTPS production page.
+ */
+const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "")
+  .trim()
+  .replace(/\/+$/, "");
+
+function backendUrl(path) {
+  const raw = String(path || "").trim();
+  if (!raw) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const normalized = raw.startsWith("/") ? raw : `/${raw}`;
+  return API_BASE_URL ? `${API_BASE_URL}${normalized}` : normalized;
+}
+
+function isLocalDevBrowser() {
+  if (typeof window === "undefined" || !window.location) return false;
+  const host = String(window.location.hostname || "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
 async function requestAiProxy(payload, signal) {
-  const urls = ["/ai/messages"];
-  if (typeof window !== "undefined" && window.location) {
-    const host = window.location.hostname || "localhost";
+  const urls = [
+    backendUrl("/ai/messages"),
+    backendUrl("/ai/chat"),
+  ];
+
+  if (isLocalDevBrowser()) {
+    const host = window.location.hostname || "127.0.0.1";
     urls.push(`http://${host}:3000/ai/messages`);
+    urls.push("http://127.0.0.1:3000/ai/messages");
   }
-  urls.push("http://127.0.0.1:3000/ai/messages");
 
   let lastErr = null;
-  for (const url of urls) {
+  for (const url of [...new Set(urls)]) {
     try {
-const res = await fetch(url, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(payload),
-  signal,
-});
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+        signal,
+      });
+
       if (res.ok) return res;
 
       /*
-       * 404 jelentheti azt, hogy ezen a hoston nincs proxy-route, ezért ott
-       * van értelme a következő címre próbálni. 502 viszont már egy LÉTEZŐ
-       * proxy/backend hibája lehet: azt ne sokszorozzuk meg további azonos
-       * AI-kérésekkel más címeken.
+       * Only route discovery 404 may try the alias. A real upstream/provider
+       * error is authoritative and must not be fanned out repeatedly.
        */
       if (res.status !== 404) return res;
       lastErr = new Error(`HTTP ${res.status}`);
+      lastErr.status = res.status;
     } catch (e) {
       lastErr = e;
+      if (!isLocalDevBrowser()) break;
     }
   }
+
   throw lastErr || new Error("AI proxy unavailable");
 }
 
@@ -9903,7 +9934,7 @@ async function apiJson(path, options = {}) {
     ...(options.headers || {}),
   };
 
-  const res = await fetch(path, {
+  const res = await fetch(backendUrl(path), {
     ...options,
     headers,
     credentials: "include",
@@ -10002,7 +10033,11 @@ async function analyzeImageDataUrl(
   dataUrl,
   prompt = ""
 ) {
-  if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
+  const imageInput = String(dataUrl || "").trim();
+  if (
+    !imageInput ||
+    (!isInlineImageData(imageInput) && !/^https:\/\//i.test(imageInput))
+  ) {
     return "";
   }
 
@@ -10011,7 +10046,7 @@ async function analyzeImageDataUrl(
     body: JSON.stringify({
       provider: DEFAULT_AI_PROVIDER,
       model: DEFAULT_AI_MODEL,
-      image: dataUrl,
+      image: imageInput,
       prompt:
         prompt ||
         "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when visible. Do not identify real people by name.",
@@ -10028,16 +10063,16 @@ async function analyzeImageDataUrl(
 
 async function requestAiImageProxy(payload) {
   const paths = ["/ai/image", "/ai/images", "/ai/generate-image"];
-  const urls = [...paths];
+  const urls = paths.map(backendUrl);
 
-  if (typeof window !== "undefined" && window.location) {
-    const host = window.location.hostname || "localhost";
+  if (isLocalDevBrowser()) {
+    const host = window.location.hostname || "127.0.0.1";
     paths.forEach((path) => urls.push(`http://${host}:3000${path}`));
   }
 
   let lastErr = null;
 
-  for (const url of urls) {
+  for (const url of [...new Set(urls)]) {
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -10143,8 +10178,11 @@ function appendAiChatImageMessage(n, characterId, snap) {
 const SNAP_VISUAL_IDENTITY_CACHE = new Map();
 
 async function describeCharacterReferenceImage(ref, media, prompt) {
-  const resolved = resolveImg(ref, media);
-  if (!resolved || !isInlineImageData(resolved)) return "";
+  const resolved = String(resolveImg(ref, media) || "").trim();
+  if (
+    !resolved ||
+    (!isInlineImageData(resolved) && !/^https:\/\//i.test(resolved))
+  ) return "";
   const key = String(ref || resolved).slice(0, 180);
   if (SNAP_VISUAL_IDENTITY_CACHE.has(key)) {
     return SNAP_VISUAL_IDENTITY_CACHE.get(key) || "";
@@ -10207,12 +10245,17 @@ async function buildCharacterSnapIdentity(character, media) {
 }
 
 function characterSnapReferenceImages(character, media, limit = 3) {
-  if (!character || !media) return [];
+  if (!character) return [];
   const refs = [];
   const add = (ref) => {
     if (!ref || refs.length >= limit) return;
-    const resolved = resolveImg(ref, media);
-    if (!resolved || !isInlineImageData(resolved)) return;
+    const resolved = String(resolveImg(ref, media) || "").trim();
+    if (
+      !resolved ||
+      (!isInlineImageData(resolved) && !/^https:\/\//i.test(resolved))
+    ) {
+      return;
+    }
     if (!refs.includes(resolved)) refs.push(resolved);
   };
   add(character.avatar);
@@ -10290,6 +10333,8 @@ Rules:
     response_format: "b64_json",
     background: "auto",
     referenceImages,
+    reference_images: referenceImages,
+    require_reference: referenceImages.length > 0,
   };
 
   const result = await requestAiImageProxy(payload);
@@ -11556,7 +11601,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v34-social-rpg-core";
+const BUILD_VERSION = "v35-production-api-reference-selfies";
 
 const AUTO = "masvilag:auto";
 /*
