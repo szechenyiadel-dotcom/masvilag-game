@@ -3098,6 +3098,243 @@ function mentionedIdsInText(w, txt, authorId = "") {
   return [...new Set(ids)];
 }
 
+
+/* -------------------------------------------------------------------------
+   ÉLŐ KOMMENT-THREAD CÍMZÉS
+
+   A kommentekből valódi többkörös beszélgetés lehet. A motor nem azért
+   válaszol, mert "minden kommentre kötelező", hanem mert a szöveg és a
+   thread egyértelműen választ vár egy konkrét AI-karaktertől.
+   ------------------------------------------------------------------------- */
+function commentThreadDepth(post, comment) {
+  if (!post || !comment) return 0;
+  const comments = safePostComments(post);
+  const byId = new Map(comments.map((c) => [c.id, c]));
+  let depth = 0;
+  let cur = comment;
+  const seen = new Set();
+
+  while (cur && cur.parent && depth < 12) {
+    if (seen.has(cur.id)) break;
+    seen.add(cur.id);
+    cur = byId.get(cur.parent) || null;
+    depth += 1;
+  }
+
+  return depth;
+}
+
+function consecutiveAiThreadTurns(w, post, comment) {
+  if (!w || !post || !comment) return 0;
+  const comments = safePostComments(post);
+  const byId = new Map(comments.map((c) => [c.id, c]));
+  let turns = 0;
+  let cur = comment;
+  const seen = new Set();
+
+  while (cur && turns < 12) {
+    if (seen.has(cur.id)) break;
+    seen.add(cur.id);
+    if (isHuman(w, cur.authorId)) break;
+    turns += 1;
+    cur = cur.parent ? (byId.get(cur.parent) || null) : null;
+  }
+
+  return turns;
+}
+
+function commentReplyCueScore(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return 0;
+  const low = raw.toLowerCase();
+  let score = 0;
+
+  /* Kérdés / direkt válaszkérés. */
+  if (/\?/.test(raw)) score += 34;
+  if (/\b(why|how|what|who|when|where|which|really|seriously|right|agree|thoughts|explain|tell me|answer me)\b/i.test(low)) score += 18;
+  if (/\b(miért|hogy|hogyan|mit|ki|mikor|hol|melyik|tényleg|komolyan|ugye|szerinted|mondd|válaszolj)\b/i.test(low)) score += 18;
+
+  /* Provokáció / vita / challenge. */
+  if (/\b(lie|lying|bullshit|bs|wrong|prove it|fight me|try me|say that again|coward|jealous|mad|obsessed)\b/i.test(low)) score += 22;
+  if (/\b(hazudsz|kamu|baromság|tévedsz|bizonyítsd|gyáva|féltékeny|mérges|megszállott|mondd még egyszer)\b/i.test(low)) score += 22;
+
+  /* Flört / személyes odaszúrás gyakran kap visszaválaszt. */
+  if (/\b(babe|baby|pretty|handsome|cute|hot|mine|miss me|kiss|date me)\b/i.test(low)) score += 16;
+  if (/\b(bébi|babe|szép|cuki|dögös|enyém|hiányzom|csók|randi)\b/i.test(low)) score += 16;
+
+  /* @mention önmagában erős direkt címzés. */
+  if (/@[a-z0-9._-]+/i.test(raw)) score += 30;
+
+  /* Nagyon rövid, lezáró reakció önmagában kevésbé kíván választ. */
+  if (raw.length <= 5 && !/[?@]/.test(raw)) score -= 12;
+
+  return Math.max(0, score);
+}
+
+function naturalCommentReplyTargets(w, post, comment) {
+  if (!w || !post || !comment || !comment.authorId) return [];
+
+  const comments = safePostComments(post);
+  const candidates = [];
+  const push = (id, reason, base) => {
+    if (!id || id === comment.authorId || isHuman(w, id)) return;
+    if (!charById(w, id)) return;
+    if (candidates.some((row) => row.id === id)) return;
+    candidates.push({ id, reason, base });
+  };
+
+  /* 1. A konkrét @mention a legerősebb címzett. */
+  mentionedIdsInText(w, comment.text, comment.authorId)
+    .forEach((id) => push(id, "mention", 76));
+
+  /* 2. Reply esetén annak a szerzője a természetes címzett. */
+  const parent = comment.parent
+    ? comments.find((c) => c && c.id === comment.parent)
+    : null;
+  if (parent && parent.authorId) {
+    push(parent.authorId, "parent", 70);
+  }
+
+  /* 3. Top-level komment AI-poszton: a poszt szerzője reagálhat. */
+  if (!comment.parent && post.authorId) {
+    push(post.authorId, "post-author", 50);
+  }
+
+  const cue = commentReplyCueScore(comment.text);
+
+  return candidates
+    .map((row) => {
+      const relInterest = Math.min(
+        32,
+        Math.max(
+          0,
+          socialInteractionInterest(w, row.id, comment.authorId)
+        ) * 0.35
+      );
+      return {
+        ...row,
+        score: row.base + cue + relInterest,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
+function commentAlreadyAnsweredBy(post, commentId, responderId) {
+  if (!post || !commentId || !responderId) return false;
+  return safePostComments(post).some(
+    (c) =>
+      c &&
+      c.parent === commentId &&
+      c.authorId === responderId
+  );
+}
+
+function commentWarrantsAiReply(w, post, comment, targetId) {
+  if (!w || !post || !comment || !targetId) return false;
+  if (comment.authorId === targetId || isHuman(w, targetId)) return false;
+  if (commentAlreadyAnsweredBy(post, comment.id, targetId)) return false;
+
+  const targets = naturalCommentReplyTargets(w, post, comment);
+  const row = targets.find((x) => x.id === targetId);
+  if (!row) return false;
+
+  /* Ne induljon végtelen AI↔AI pingpong. Emberi megszólalás újra megnyitja a láncot. */
+  const aiTurns = consecutiveAiThreadTurns(w, post, comment);
+  if (!isHuman(w, comment.authorId) && aiTurns >= 3) {
+    return false;
+  }
+
+  /* A direkt reply/@mention már önmagában elég; a sima post-author válaszhoz kell tartalom. */
+  if (row.reason === "mention" || row.reason === "parent") {
+    return row.score >= 66;
+  }
+
+  return row.score >= 82;
+}
+
+function findNaturalThreadReply(w, onlyPostId = "") {
+  if (!w) return null;
+  const posts = (w.posts || [])
+    .filter((p) => p && (!onlyPostId || p.id === onlyPostId))
+    .slice(0, 12);
+
+  for (let i = 0; i < posts.length; i++) {
+    const post = posts[i];
+    const comments = safePostComments(post)
+      .slice()
+      .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
+
+    for (let j = 0; j < comments.length; j++) {
+      const comment = comments[j];
+      if (!comment) continue;
+
+      /* Régi threadet ne keltsünk fel véletlenszerűen napokkal később. */
+      if (now() - (Number(comment.ts) || 0) > 6 * 3600e3) continue;
+
+      const targets = naturalCommentReplyTargets(w, post, comment);
+      for (let k = 0; k < targets.length; k++) {
+        const target = targets[k];
+        if (commentWarrantsAiReply(w, post, comment, target.id)) {
+          return {
+            post,
+            comment,
+            targetId: target.id,
+            reason: target.reason,
+            score: target.score,
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function enqueueNaturalThreadReply(w, postId, preferredCommentIds = []) {
+  if (!w || !postId) return false;
+  const post = (w.posts || []).find((p) => p && p.id === postId);
+  if (!post) return false;
+
+  const preferred = new Set((preferredCommentIds || []).filter(Boolean));
+  let candidate = null;
+
+  if (preferred.size) {
+    const comments = safePostComments(post)
+      .filter((c) => c && preferred.has(c.id))
+      .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
+
+    for (const comment of comments) {
+      const targets = naturalCommentReplyTargets(w, post, comment);
+      const target = targets.find((row) =>
+        commentWarrantsAiReply(w, post, comment, row.id)
+      );
+      if (target) {
+        candidate = { post, comment, targetId: target.id, reason: target.reason, score: target.score };
+        break;
+      }
+    }
+  }
+
+  if (!candidate) candidate = findNaturalThreadReply(w, postId);
+  if (!candidate) return false;
+
+  return simEnqueue(
+    w,
+    mkAction(
+      "reply",
+      `thread-reply:${candidate.post.id}:${candidate.comment.id}:${candidate.targetId}`,
+      {
+        postId: candidate.post.id,
+        commentId: candidate.comment.id,
+        rootId: candidate.comment.id,
+        targetId: candidate.targetId,
+        trigger: "natural-thread",
+      },
+      "event"
+    )
+  );
+}
+
 function addMentionToText(value, person) {
   if (!person || !person.username) return String(value || "");
 
@@ -17308,13 +17545,9 @@ const targetId =
     : p.authorId || "";
 
 /*
- * A UI jelenlegi thread-rendszere
- * a mélyebb válaszokat a gyökérkommenthez
- * rendezi, ezt nem változtatjuk meg.
+ * Valódi nested thread: ha egy reply-ra válaszol, közvetlenül AZ alá kerül.
+ * A CommentNode rekurzívan renderel, ezért nincs szükség gyökérre lapításra.
  */
-if (pc && pc.parent) {
-  parent = pc.parent;
-}
 
 const made = {
   id: uid(),
@@ -17809,15 +18042,27 @@ async function genReply(w, post, comment) {
    * AZ az AI legyen az elsődleges válaszoló.
    * Más karakterek továbbra is beszállhatnak, de nem nyomhatják el a címzettet.
    */
+  const explicitMentionTarget =
+    mentionedIdsInText(
+      w,
+      comment.text,
+      comment.authorId
+    ).find((id) => !isHuman(w, id));
+
   const directResponder =
-    parentComment &&
-    parentComment.authorId &&
-    !isHuman(w, parentComment.authorId)
-      ? charById(w, parentComment.authorId)
+    explicitMentionTarget
+      ? charById(w, explicitMentionTarget)
       : (
-          !isHuman(w, post.authorId)
-            ? charById(w, post.authorId)
-            : null
+          parentComment &&
+          parentComment.authorId &&
+          !isHuman(w, parentComment.authorId)
+            ? charById(w, parentComment.authorId)
+            : (
+                !comment.parent &&
+                !isHuman(w, post.authorId)
+                  ? charById(w, post.authorId)
+                  : null
+              )
         );
 
   const fairCast = fairCommentCast(
@@ -17900,10 +18145,11 @@ ${repetitionGuard(
 KOMMENTVÁLASZ SZABÁLYOK:
 
 ${directResponder ? `KÖZVETLEN CÍMZETT: ${directResponder.name} [${directResponder.id}]
-- A játékos közvetlenül ${directResponder.name} kommentjére/posztjára válaszolt.
-- ${directResponder.name} az elsődleges válaszoló, és normál esetben reagáljon erre a konkrét válaszra.
-- Csak akkor maradjon csendben, ha a személyisége és a konkrét tartalom alapján kifejezetten természetes lenne ignorálnia.
-- Más AI beszállhat mellé, de nem helyettesítheti automatikusan a közvetlen címzettet.` : ""}
+- Ez a komment/reply közvetlenül ${directResponder.name} felé irányul (reply-parent, @mention vagy a saját posztjára érkező direkt reakció).
+- ${directResponder.name} az elsődleges válaszoló, és ha a konkrét szöveg természetesen választ kíván, reagáljon rá.
+- Kérdés, direkt megszólítás, provokáció, vita, flört, féltékenység, személyes odaszúrás vagy egyértelmű challenge erősen növeli a válasz valószínűségét.
+- Nem kell válaszolnia egy lezáró, semleges vagy csak like-szerű reakcióra.
+- Más AI beszállhat mellé csak akkor, ha neki is valódi oka van; ne lopja el a közvetlen címzett válaszát.` : ""}
 
 - Csak olyan karakter válaszoljon, akinek természetes oka van rá.
 - Adj 1-3 választ.
@@ -18009,6 +18255,13 @@ Formátum:
 "events":[]}${TAIL}`,
     { maxTokens: 900 }
   );
+
+  /*
+   * Event-driven AI→AI threadnél a scheduler konkrét célkaraktert is kérhet.
+   * A modell továbbra is láthat releváns mellékszereplőket, de a direkt címzett
+   * ne vesszen el egy véletlen másik válaszoló miatt.
+   */
+  return out;
 }
 
 function applyReplies(n, postId, rootId, out) {
@@ -18016,6 +18269,7 @@ function applyReplies(n, postId, rootId, out) {
   if (!p) return;
 
   p.comments = safePostComments(p);
+  const createdReplyIds = [];
 
   safeAiComments(out).forEach((c) => {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
@@ -18024,6 +18278,7 @@ function applyReplies(n, postId, rootId, out) {
     if (!body) return;
     const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
     p.comments.push(made);
+    createdReplyIds.push(made.id);
     noteComment(n, p, made);
 
     const rootComment =
@@ -18038,6 +18293,33 @@ function applyReplies(n, postId, rootId, out) {
       rootComment.authorId
         ? rootComment.authorId
         : p.authorId || "";
+
+    recordSocialEvent(n, {
+      type: "reply",
+      refId: made.id,
+      ts: made.ts,
+      actorId: who,
+      targetIds:
+        replyTargetId && replyTargetId !== who
+          ? [replyTargetId]
+          : [],
+      visibility: "public",
+      factLevel: "observed",
+      importance: 28,
+      drama: 0,
+      romance: 0,
+      embarrassment: 0,
+      source: "ai",
+      text: made.text,
+      tags: ["social", "ai-comment", "reply", "thread"],
+      meta: {
+        postId: p.id,
+        commentId: made.id,
+        parentId: made.parent || "",
+        postAuthorId: p.authorId || "",
+        targetId: replyTargetId || "",
+      },
+    });
 
     rememberKnowledge(n, who, {
       kind: "conversation",
@@ -18071,6 +18353,12 @@ function applyReplies(n, postId, rootId, out) {
   });
   applyChanges(n, safeAiChanges(out));
   n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
+
+  /* Egy AI reply is indíthat újabb természetes AI reply-t, de a helper
+     lánchossz-korlátja megakadályozza a végtelen bot-pingpongot. */
+  if (createdReplyIds.length) {
+    enqueueNaturalThreadReply(n, postId, createdReplyIds);
+  }
 }
 /*
  * FAIR POST ACTIVITY
@@ -33850,6 +34138,29 @@ function planAutoAction(view) {
   }
 
   /*
+   * 1.25 ÉLŐ AI→AI KOMMENT-THREAD
+   *
+   * Egy kérdés, direkt reply, @mention, provokáció vagy más természetesen
+   * válaszra hívó AI-komment ne maradjon örökre lógva. A játékos karakterét
+   * SOHA nem vezéreljük automatikusan; csak AI-címzett válaszolhat.
+   */
+  const naturalThread = findNaturalThreadReply(view);
+  if (naturalThread) {
+    return mkAction(
+      "reply",
+      `auto-thread:${naturalThread.post.id}:${naturalThread.comment.id}:${naturalThread.targetId}`,
+      {
+        postId: naturalThread.post.id,
+        commentId: naturalThread.comment.id,
+        rootId: naturalThread.comment.id,
+        targetId: naturalThread.targetId,
+        trigger: "natural-thread",
+      },
+      "event"
+    );
+  }
+
+  /*
    * 1.5 FEED WATCHDOG
    *
    * A maintenance akciók (follow, note, gossip stb.) nem tarthatják
@@ -35216,11 +35527,26 @@ async function runSimulationAction(view, update, action) {
       return null;
     }
 
-    const out = await genReply(
+    const rawOut = await genReply(
       view,
       post,
       comment
     );
+
+    const requestedTargetId =
+      action.payload &&
+      action.payload.targetId;
+
+    const out = requestedTargetId
+      ? {
+          ...(rawOut || {}),
+          comments: safeAiComments(rawOut).filter((row) => {
+            const who = row && (row.id !== undefined ? row.id : row.name);
+            const resolved = aiVoice(view, who);
+            return resolved === requestedTargetId;
+          }),
+        }
+      : rawOut;
 
     update((n) => {
       n.autoAt = now();
@@ -35228,7 +35554,7 @@ async function runSimulationAction(view, update, action) {
       applyReplies(
         n,
         post.id,
-        /* közvetlenül arra válaszoljon, amit a játékos most írt */
+        /* mindig közvetlenül arra a kommentre válaszoljon, ami kiváltotta */
         comment.id,
         out
       );
@@ -35255,12 +35581,24 @@ async function runSimulationAction(view, update, action) {
     update((n) => {
       n.autoAt = now();
 
+      const livePost = (n.posts || []).find((p) => p && p.id === post.id);
+      const beforeIds = new Set(safePostComments(livePost).map((c) => c.id));
+
       applyComments(
         n,
         post.id,
         out,
         label
       );
+
+      const refreshedPost = (n.posts || []).find((p) => p && p.id === post.id);
+      const newCommentIds = safePostComments(refreshedPost)
+        .filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId))
+        .map((c) => c.id);
+
+      if (newCommentIds.length) {
+        enqueueNaturalThreadReply(n, post.id, newCommentIds);
+      }
     });
 
     return "comments";
@@ -37955,14 +38293,37 @@ const signOut = useCallback(async () => {
       event.postId &&
       event.commentId
     ) {
+      const live = viewRef.current;
+      const livePost = live && (live.posts || []).find((p) => p && p.id === event.postId);
+      const liveComment = livePost && safePostComments(livePost).find((c) => c && c.id === event.commentId);
+      const naturalTarget = livePost && liveComment
+        ? naturalCommentReplyTargets(live, livePost, liveComment)
+            .find((row) => commentWarrantsAiReply(live, livePost, liveComment, row.id))
+        : null;
+
+      const openReplyCue = liveComment
+        ? commentReplyCueScore(liveComment.text)
+        : 0;
+
+      /*
+       * Direkt reply/@mention esetén a naturalTarget megvan. Ha nincs konkrét
+       * címzett, csak valóban válaszra hívó nyitott komment (pl. kérdés) kapjon
+       * cast-választ. Egy sima "nice" / "lol" ne kényszerítsen bot-replyt.
+       */
+      if (!naturalTarget && openReplyCue < 34) {
+        return false;
+      }
+
       return requestSimulationAction(
         mkAction(
           "reply",
-          `event-reply:${event.postId}:${event.commentId}`,
+          `event-reply:${event.postId}:${event.commentId}:${naturalTarget ? naturalTarget.id : "cast"}`,
           {
             postId: event.postId,
             commentId: event.commentId,
             rootId: event.commentId,
+            targetId: naturalTarget ? naturalTarget.id : "",
+            trigger: "player-comment",
           },
           "event"
         )
