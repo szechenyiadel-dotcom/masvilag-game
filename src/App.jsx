@@ -3703,6 +3703,42 @@ function applyChanges(
       }
     }
 
+    /*
+     * Ha egy meglévő AI -> bárki követés mögötti kapcsolat ténylegesen
+     * megromlik, az unfollow ne csak egy ritka random háttér-tick legyen.
+     * AI -> AI és AI -> játékos irányban is queue-ba kerülhet.
+     * Pozitív kapcsolatot az aiUnfollowPressure fent külön 0-ra véd.
+     */
+    if (
+      !isHuman(n, a) &&
+      socialProfileById(n, b) &&
+      isFollowing(n, a, b)
+    ) {
+      const unfollowPressure =
+        aiUnfollowPressure(
+          n,
+          a,
+          b
+        );
+
+      if (unfollowPressure >= 45) {
+        simEnqueue(
+          n,
+          mkAction(
+            "unfollow",
+            `relationship-unfollow:${a}:${b}:${Math.floor(now() / 1800000)}`,
+            {
+              actorId:a,
+              targetId:b,
+              pressure:unfollowPressure,
+              trigger:"relationship",
+            },
+            "event"
+          )
+        );
+      }
+    }
+
     const memA =
       ensureCharMemory(
         n,
@@ -7410,7 +7446,15 @@ function relationshipBehaviorCard(
     );
 
   if (factionRivalry) {
-    parts.push(factionRivalry);
+    if (score >= 35) {
+      parts.push(
+        en
+          ? "A faction rivalry may exist in the background, but this positive personal relationship OVERRIDES it in direct behavior. Faction membership alone is NOT a valid reason for random rudeness, contempt, hostility, insults or cold dismissal toward this person."
+          : "Lehet köztük háttérben frakció-rivalizálás, de ezt a pozitív személyes kapcsolat FELÜLÍRJA a közvetlen viselkedésben. A frakciótagság önmagában NEM indok random bunkóságra, lenézésre, ellenségességre, sértegetésre vagy hideg lepattintásra vele szemben."
+      );
+    } else {
+      parts.push(factionRivalry);
+    }
   }
 
   const intimidation =
@@ -7432,6 +7476,14 @@ function relationshipBehaviorCard(
         ? `current feeling: ${rel.mood}`
         : `aktuális érzés: ${rel.mood}`
     );
+
+    if (score >= 35) {
+      parts.push(
+        en
+          ? "A temporary mood may color the reply, but it must NOT silently rewrite a good relationship into hostility. Strong rudeness needs a concrete CURRENT trigger visible in the conversation/event, not merely an old mood label."
+          : "Az átmeneti hangulat színezheti a reakciót, de NEM írhat át észrevétlenül egy jó kapcsolatot ellenségessé. Erős bunkósághoz konkrét, JELENLEGI kiváltó ok kell a beszélgetésben/eseményben, nem elég egy régi mood-címke."
+      );
+    }
   }
 
   if (rel.hidden) {
@@ -8151,9 +8203,11 @@ PERFORMANCE RULES
 - WHAT MATTERS MOST: PERSONALITY and STORY. These decide how a character reacts to a situation — everything else only adds nuance. Before you write, check who this person is and what happened to them; the response should follow from that, not from generic situational logic.
 - What a character has lived through still affects them today. If something in their story was left open, it bleeds into their current lines too.
 - THE VOICE SAMPLE IS GUIDANCE, NOT A TEMPLATE. If a character has a "SPEAKS LIKE THIS" sample, learn their vocabulary, rhythm, humor, slang, punctuation, level of profanity, emotional tone and general manner of speaking from it. NEVER repeatedly copy, closely paraphrase or recycle the actual example sentences. Every new situation requires new, original dialogue.
-- Neutral, smooth, "nice" phrasing = a mistake. It's the sign you fell out of character.
+- Neutral, smooth, generic "assistant-nice" phrasing = a mistake. It's the sign you fell out of character.
+- IMPORTANT: this rule NEVER means "add snark, hostility or cruelty for personality." Warmth, affection, patience, loyalty, softness, playful teasing and genuine friendliness are ALSO strong characterization when the sheet + relationship support them. Do not make a good relationship rude just to avoid sounding generic.
+- RELATIONSHIP CONSISTENCY HAS PRIORITY OVER VARIETY: if A → B is good/close, do not invent contempt, insults, dismissiveness, hostility or mean-spirited mockery without a concrete current trigger or explicit canon trait. Friendly teasing must still read as affection.
 - Don't describe the personality — show it in what they say and do.
-- There is no neutral, helpful "assistant" tone. Everyone has a mood, an opinion and a goal, and it's active right now.
+- There is no neutral, helpful "assistant" tone. Everyone has a mood, an opinion and a goal, but those must remain consistent with their actual personality, relationship and current events.
 - A character only knows what they've lived through, seen or heard. They can freely reference their memories and old grievances.
 - The relationship score sets the tone: in the negative they aren't sweet, at a high score they aren't distant. A hidden feeling isn't spoken aloud, only felt.
 - Sentences should be natural, direct, colorful, not rule-bound. Speech should be human, nuanced, sometimes jagged, sometimes more polished.
@@ -12318,9 +12372,12 @@ function aiUnfollowPressure(
     hasEnemyOrRivalBond(
       rel
     ) ||
-    opposingFollowFaction(
-      actor,
-      target
+    (
+      score < 20 &&
+      opposingFollowFaction(
+        actor,
+        target
+      )
     );
 
   const secretCrush =
@@ -12418,7 +12475,6 @@ function aiUnfollowPressure(
    */
   if (
     score >= 35 &&
-    !enemy &&
     !/exek|exes|\bex\b/.test(
       bond
     )
@@ -15513,6 +15569,7 @@ ${cast
 
 KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - Minden kommentelő teljes karakterlapját és saját emlékeit használd, nem csak a nyilvános bioját.
+- KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT explicit kánonja.
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
 - A korábbi emlékei és a poszt szerzőjével való konkrét kapcsolata ténylegesen módosítsa a reakcióját.
 - Ha ugyanaz a komment több karakter szájából is hiteles lenne, nem elég specifikus: írd újra.
@@ -17167,9 +17224,9 @@ POSZT — ${nameOfIn(w, post.authorId)}:
 "${post.text}"
 
 ${
-  post.image
+  (post.imageId || post.image)
     ? `KÉP A POSZTBAN:
-A kommentelők látták a képet is. Ha természetes, reagálhatnak arra, ami ténylegesen látható rajta.`
+${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post.imageDescription}\n` : ""}A kommentelők látták a képet is. Ha természetes, reagálhatnak arra, ami ténylegesen látható rajta.`
     : ""
 }
 
@@ -17186,6 +17243,7 @@ ${cast
 
 KOMMENTVÁLASZ-KARAKTERHŰSÉG:
 - A válaszoló teljes karakterlapja és saját emlékezete aktív.
+- KAPCSOLATI PRIORITÁS: a jó/közeli kapcsolat nem válhat random bunkósággá csak a változatosság kedvéért. Sértegetés, lenézés, hideg lepattintás vagy rosszindulatú gúny csak konkrét jelenlegi triggerből vagy a karakter SAJÁT explicit kánonjából jöhet.
 - A reply legyen felismerhetően az adott karakteré, ne generikus social reakció.
 - A korábbi saját kommentjeinek/DM-jeinek/posztjainak fordulatait se használja újra.
 - Ha a komment vagy a válasz ténylegesen közelebb hozza, felidegesíti, féltékennyé teszi, megsérti, megnevetteti vagy másképp érzelmileg megmozdítja a karaktert, ezt a "changes" tömbben IS jelezd. Ne csak a reply szövegében jelenjen meg.
@@ -35651,6 +35709,17 @@ const signOut = useCallback(async () => {
     let alive = true;
     mediaReady.current = false;
 
+    /*
+     * FONTOS: a cloud media betöltése közben a játékos már tölthet fel képet.
+     * Megjegyezzük, milyen media-state-ről indult a load, hogy a közben
+     * létrejött friss lokális image ID-kat a később beérkező régebbi
+     * szerverválasz ne tudja eltüntetni.
+     */
+    const mediaAtLoadStart =
+      mediaFingerprint(
+        mediaRef.current || {}
+      );
+
     loadMedia(
       code,
       wRef.current
@@ -35663,6 +35732,23 @@ const signOut = useCallback(async () => {
           ? result.media
           : {};
 
+      const localNow =
+        mediaRef.current || {};
+
+      const localChangedDuringLoad =
+        mediaFingerprint(
+          localNow
+        ) !== mediaAtLoadStart;
+
+      const installedMedia =
+        localChangedDuringLoad
+          ? mergeIncomingMediaPreservingUnsavedLocal(
+              loaded,
+              localNow,
+              mediaAtLoadStart
+            )
+          : loaded;
+
       mediaSyncRev.current =
         Math.max(
           0,
@@ -35674,8 +35760,14 @@ const signOut = useCallback(async () => {
           )
         );
 
-      setMedia(loaded);
-      mediaRef.current = loaded;
+      setMedia(installedMedia);
+      mediaRef.current = installedMedia;
+
+      /*
+       * A lastSaved fingerprint továbbra is a valóban cloudból érkezett
+       * állapot legyen. Ha közben új lokális kép született, így az autosave
+       * dirtynek látja és fel is tölti a szerverre.
+       */
       lastSavedMedia.current =
         mediaFingerprint(
           loaded
