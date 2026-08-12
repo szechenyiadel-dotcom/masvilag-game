@@ -8888,7 +8888,7 @@ function migrate(w) {
     }
   };
   ["rels", "chats", "mems", "accounts", "players", "deleted", "notify", "charMemory", "userSettings", "images"].forEach((k) => { if (!w[k]) w[k] = {}; });
-  ["posts", "log", "scenes", "extras", "groups", "notes"].forEach((k) => { if (!w[k]) w[k] = []; });
+  ["posts", "log", "scenes", "extras", "groups", "notes", "inventory", "diary"].forEach((k) => { if (!w[k]) w[k] = []; });
 
   /*
    * CRASH-GUARD: a posts/comments adatot a migráció LEGELEJÉN tisztítjuk,
@@ -8934,6 +8934,9 @@ function migrate(w) {
     const items = (w.mems[id] || []).map((text) => ({ text, source: "legacy_memory", confidence: 0.85, timestamp: now() }));
     mem.knownFacts = mergeKnowledgeItems(mem.knownFacts, items, "fact", 32);
   });
+
+  /* Régi roleplay jeleneteket is felhúzzuk az új Event-sémára. */
+  (w.scenes || []).forEach((scene) => ensureSceneEventState(scene));
 
   /* Idempotens második védőháló régi migrációs ágak után. */
   sanitizeWorldPosts(w);
@@ -9262,6 +9265,15 @@ function mergeWorlds(remote, local) {
     if ((sc.turns || []).length > (sById[sc.id].turns || []).length) sById[sc.id] = sc;
   });
   out.scenes = sOrder.filter((id) => !out.deleted[id]).map((id) => sById[id]);
+  out.scenes.forEach((scene) => ensureSceneEventState(scene));
+
+  /* Event reward inventory + diary are id-based append-only world data. */
+  out.inventory = mergeById(remote.inventory || [], local.inventory || [], null)
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+    .slice(0, 500);
+  out.diary = mergeById(remote.diary || [], local.diary || [], null)
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+    .slice(0, 300);
 
   const gById = {}, gOrder = [];
   (local.groups || []).concat(remote.groups || []).forEach((g) => {
@@ -10701,6 +10713,8 @@ log: [],
 scenes: [],
 groups: [],
 notes: [],
+inventory: [],
+diary: [],
 
 /*
  * SOCIAL SIMULATION
@@ -10859,7 +10873,7 @@ notify: {},
 
 function emptyWorld(code) {
   const w = seedWorld(code);
-  w.chars = []; w.extras = []; w.rels = {}; w.posts = []; w.log = []; w.scenes = []; w.groups = []; w.notes = []; w.starter = [];
+  w.chars = []; w.extras = []; w.rels = {}; w.posts = []; w.log = []; w.scenes = []; w.groups = []; w.notes = []; w.inventory = []; w.diary = []; w.starter = [];
   w.universe = {
     name: "Névtelen világ",
     year: String(new Date().getFullYear()),
@@ -21026,11 +21040,156 @@ function sceneEventRecapEligible(scene, aiWitnessCount) {
   return Number(aiWitnessCount) >= 2 && (kind === "party" || kind === "event");
 }
 
+/* -------------------------------------------------------------------------
+   ROLEPLAY EVENT MECHANICS
+
+   A roleplay scene now behaves like a temporary Event:
+   - concrete goal;
+   - fixed message/turn or time limit;
+   - success evaluation on close;
+   - affection + unique-item reward on full successful completion;
+   - reduced affection and no item on early close;
+   - diary entry + visible status updates.
+   ------------------------------------------------------------------------- */
+function ensureSceneEventState(scene) {
+  if (!scene || typeof scene !== "object") return scene;
+
+  if (!scene.goal) scene.goal = "";
+  if (scene.limitMode !== "minutes" && scene.limitMode !== "turns") scene.limitMode = "turns";
+  scene.targetTurns = Math.max(4, Math.min(60, Math.round(Number(scene.targetTurns) || 16)));
+  scene.targetMinutes = Math.max(5, Math.min(240, Math.round(Number(scene.targetMinutes) || 20)));
+  scene.rewardAffection = Math.max(0, Math.min(50, Math.round(Number(scene.rewardAffection) || 12)));
+  if (scene.rewardItem === undefined) scene.rewardItem = "";
+  if (!scene.startedAt) scene.startedAt = Number(scene.ts) || now();
+  if (!Array.isArray(scene.statusUpdates)) scene.statusUpdates = [];
+  if (scene.rewardGranted === undefined) scene.rewardGranted = false;
+  if (scene.rewardAffectionGranted === undefined) scene.rewardAffectionGranted = 0;
+  if (scene.rewardItemGranted === undefined) scene.rewardItemGranted = "";
+  if (scene.success === undefined) scene.success = null;
+  if (scene.earlyEnd === undefined) scene.earlyEnd = false;
+  return scene;
+}
+
+function sceneEventProgress(scene, at = now()) {
+  const s = scene || {};
+  const mode = s.limitMode === "minutes" ? "minutes" : "turns";
+  const target = mode === "minutes"
+    ? Math.max(5, Number(s.targetMinutes) || 20)
+    : Math.max(4, Number(s.targetTurns) || 16);
+
+  const current = mode === "minutes"
+    ? Math.max(0, (Number(at) - (Number(s.startedAt) || Number(s.ts) || Number(at))) / 60000)
+    : (Array.isArray(s.turns)
+        ? s.turns.filter((t) => t && t.authorId !== "narrator").length
+        : 0);
+
+  const complete = current >= target;
+  const pct = Math.max(0, Math.min(100, Math.round((current / target) * 100)));
+
+  return { mode, target, current, complete, pct };
+}
+
+function sceneEventProgressText(scene, lang, at = now()) {
+  const p = sceneEventProgress(scene, at);
+  if (p.mode === "minutes") {
+    const cur = Math.min(p.target, Math.max(0, Math.floor(p.current)));
+    return lang === "en"
+      ? `${cur}/${p.target} min`
+      : `${cur}/${p.target} perc`;
+  }
+  return lang === "en"
+    ? `${Math.min(p.target, Math.floor(p.current))}/${p.target} messages`
+    : `${Math.min(p.target, Math.floor(p.current))}/${p.target} üzenet`;
+}
+
+function addSceneStatusUpdate(n, scene, text, kind = "status", actorId = "") {
+  if (!scene || !text) return;
+  ensureSceneEventState(scene);
+  const row = {
+    id: uid(),
+    ts: now(),
+    kind: String(kind || "status").slice(0, 24),
+    actorId: actorId || "",
+    text: String(text).slice(0, 280),
+  };
+  scene.statusUpdates.unshift(row);
+  scene.statusUpdates = scene.statusUpdates.slice(0, 24);
+
+  if (n && n.meId) {
+    pushNote(n, n.meId, {
+      icon: kind === "mood" ? "💭" : "⚡",
+      text: row.text,
+      link: { type: "scene", id: scene.id },
+    });
+  }
+}
+
+function applySceneChangesWithStatus(n, scene, changes) {
+  const list = Array.isArray(changes) ? changes.filter(Boolean) : [];
+  const before = list.map((ch) => {
+    const r = ch && ch.a && ch.b ? getRel(n, ch.a, ch.b) : EMPTY_REL;
+    return {
+      a: ch && ch.a,
+      b: ch && ch.b,
+      mood: String((r && r.mood) || ""),
+      score: Number((r && r.score) || 0),
+    };
+  });
+
+  applyChanges(n, list);
+
+  list.forEach((ch, i) => {
+    if (!ch || !ch.a || !ch.b) return;
+    const after = getRel(n, ch.a, ch.b);
+    const old = before[i] || {};
+    const newMood = String((after && after.mood) || "");
+    const involvesPlayer = ch.a === n.meId || ch.b === n.meId;
+
+    if (involvesPlayer && newMood && newMood !== old.mood) {
+      const actor = charById(n, ch.a);
+      const target = charById(n, ch.b);
+      addSceneStatusUpdate(
+        n,
+        scene,
+        sysLangText(
+          n,
+          n.meId,
+          `${actor ? actor.name : "Valaki"} hangulata megváltozott ${target ? target.name : "veled"} kapcsolatban: ${newMood}`,
+          `${actor ? actor.name : "Someone"}'s mood toward ${target ? target.name : "you"} changed: ${newMood}`
+        ),
+        "mood",
+        ch.a
+      );
+    }
+  });
+}
+
+function applySceneAiStatusUpdates(n, scene, out) {
+  safeAiArray(out, "statusUpdates").slice(0, 8).forEach((row) => {
+    if (!row) return;
+    const text = typeof row === "string" ? row : row.text;
+    if (!text) return;
+    addSceneStatusUpdate(
+      n,
+      scene,
+      text,
+      typeof row === "object" && row.kind ? row.kind : "status",
+      typeof row === "object" && row.id ? row.id : ""
+    );
+  });
+}
+
 function SceneNew({ w, onClose, onCreate, setErr }) {
   useEditLock();
   const { tt } = useLang();
   const [title, setTitle] = useState("");
   const [setting, setSetting] = useState("");
+  const [goal, setGoal] = useState("");
+  const [limitMode, setLimitMode] = useState("turns");
+  const [targetTurns, setTargetTurns] = useState(16);
+  const [targetMinutes, setTargetMinutes] = useState(20);
+  const [rewardAffection, setRewardAffection] = useState(12);
+  const [rewardItem, setRewardItem] = useState("");
   const [ids, setIds] = useState([]);
   const [busy, setBusy] = useState(false);
   const toggle = (id) => setIds((p) => (p.indexOf(id) >= 0 ? p.filter((x) => x !== id) : p.concat(id)));
@@ -21055,9 +21214,17 @@ ${matureContentInstruction(
   "roleplay"
 )}
 
-Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyzet, mi a tét","cast":["szereplők azonosítói"]}${TAIL}`);
+Az ötlet legyen valódi EVENT: adj hozzá egy konkrét, teljesíthető célt, egy ésszerű üzenetlimitet vagy időlimitet, valamint egy egyedi jutalomtárgyat. A jutalomtárgy illeszkedjen a jelenethez, ne legyen generikus pénz vagy pont.
+
+Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyzet, mi a tét","goal":"egy konkrét teljesítési cél","limitMode":"turns vagy minutes","targetTurns":16,"targetMinutes":20,"rewardAffection":12,"rewardItem":"egyedi jutalomtárgy neve","cast":["szereplők azonosítói"]}${TAIL}`);
       if (out.title) setTitle(out.title);
       if (out.setting) setSetting(out.setting);
+      if (out.goal) setGoal(String(out.goal));
+      if (out.limitMode === "minutes" || out.limitMode === "turns") setLimitMode(out.limitMode);
+      if (Number(out.targetTurns)) setTargetTurns(Math.max(4, Math.min(60, Math.round(Number(out.targetTurns)))));
+      if (Number(out.targetMinutes)) setTargetMinutes(Math.max(5, Math.min(240, Math.round(Number(out.targetMinutes)))));
+      if (Number(out.rewardAffection)) setRewardAffection(Math.max(0, Math.min(50, Math.round(Number(out.rewardAffection)))));
+      if (out.rewardItem) setRewardItem(String(out.rewardItem));
       if (!ids.length && Array.isArray(out.cast))
         setIds(out.cast.filter((id) => w.chars.some((c) => c.id === id)));
     } catch (e) { setErr((e && e.message) || tt("Nem sikerült ötletet kérni.", "Failed to get an idea.")); }
@@ -21075,7 +21242,7 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
 
       <div className="between">
         <h2 style={{ fontSize: 20 }}>
-          {tt("Új jelenet", "New scene")}
+          {tt("Új Event", "New Event")}
         </h2>
 
         <button
@@ -21093,6 +21260,50 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
         <textarea className="i" value={setting} placeholder={tt("Éjfél után, a hangfalak még szólnak. Ryan egész este kerül téged, Nora pedig figyel.", "After midnight, the speakers are still going. Ryan has been avoiding you all night, and Nora is watching.")}
           onChange={(e) => setSetting(e.target.value)} />
 
+        <label className="f">{tt("Event célja", "Event goal")}</label>
+        <textarea
+          className="i"
+          value={goal}
+          placeholder={tt("pl. Érd el, hogy Nora elmondja, mit tud a tavalyi balesetről.", "e.g. Get Nora to reveal what she knows about last year's accident.")}
+          onChange={(e) => setGoal(e.target.value)}
+        />
+
+        <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
+          <div style={{ flex: 1 }}>
+            <label className="f">{tt("Limit típusa", "Limit type")}</label>
+            <select className="i" value={limitMode} onChange={(e) => setLimitMode(e.target.value === "minutes" ? "minutes" : "turns")}>
+              <option value="turns">{tt("Üzenetszám", "Message count")}</option>
+              <option value="minutes">{tt("Időtartam", "Duration")}</option>
+            </select>
+          </div>
+          <div style={{ width: 130 }}>
+            <label className="f">{limitMode === "minutes" ? tt("Perc", "Minutes") : tt("Üzenet", "Messages")}</label>
+            <input
+              className="i"
+              type="number"
+              min={limitMode === "minutes" ? 5 : 4}
+              max={limitMode === "minutes" ? 240 : 60}
+              value={limitMode === "minutes" ? targetMinutes : targetTurns}
+              onChange={(e) => {
+                const v = Number(e.target.value) || 0;
+                if (limitMode === "minutes") setTargetMinutes(v);
+                else setTargetTurns(v);
+              }}
+            />
+          </div>
+        </div>
+
+        <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
+          <div style={{ flex: 1 }}>
+            <label className="f">{tt("Egyedi jutalomtárgy", "Unique reward item")}</label>
+            <input className="i" value={rewardItem} placeholder={tt("pl. Nora ezüst medálja", "e.g. Nora's silver pendant")} onChange={(e) => setRewardItem(e.target.value)} />
+          </div>
+          <div style={{ width: 130 }}>
+            <label className="f">Affection +</label>
+            <input className="i" type="number" min={0} max={50} value={rewardAffection} onChange={(e) => setRewardAffection(Number(e.target.value) || 0)} />
+          </div>
+        </div>
+
         <label className="f">{tt("Kik vannak jelen — koppints a nevekre", "Who's present — tap the names")}</label>
         <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
           {w.chars.map((c) => (
@@ -21104,13 +21315,13 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
         {w.chars.length === 0 && <p className="hint" style={{ marginTop: 8 }}>{tt("Előbb hozz létre karaktereket.", "First create some characters.")}</p>}
 
         <button className="btn full" style={{ marginTop: 14 }} onClick={idea} disabled={busy}>
-          {busy ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} color="var(--gold)" />} {tt("Jelenet-ötlet kérése", "Ask for a scene idea")}
+          {busy ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} color="var(--gold)" />} {tt("Event-ötlet kérése", "Ask for an Event idea")}
         </button>
 
        <div className="mobile-action-bar" style={{ marginTop: 8 }}>
   <button
     className="btn primary full"
-    disabled={!ids.length}
+    disabled={!ids.length || !goal.trim()}
     onClick={() => {
       onCreate({
         id: uid(),
@@ -21119,20 +21330,32 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
         cast: ids,
         turns: [],
         open: true,
+        goal: goal.trim(),
+        limitMode,
+        targetTurns: Math.max(4, Math.min(60, Math.round(Number(targetTurns) || 16))),
+        targetMinutes: Math.max(5, Math.min(240, Math.round(Number(targetMinutes) || 20))),
+        rewardAffection: Math.max(0, Math.min(50, Math.round(Number(rewardAffection) || 0))),
+        rewardItem: rewardItem.trim() || tt(`${title.trim() || "Event"} emléktárgya`, `${title.trim() || "Event"} keepsake`),
+        rewardGranted: false,
+        rewardAffectionGranted: 0,
+        rewardItemGranted: "",
+        statusUpdates: [],
+        success: null,
+        earlyEnd: false,
+        startedAt: now(),
         eventKind: detectSceneEventKind({ title: title.trim(), setting: setting.trim() }),
         ts: now()
       });
     }}
   >
-    {ids.length
-      ? tt(
-          `Jelenet indítása (${ids.length} szereplő)`,
-          `Start scene (${ids.length} characters)`
-        )
-      : tt(
-          "Válassz legalább egy szereplőt",
-          "Choose at least one character"
-        )}
+    {!ids.length
+      ? tt("Válassz legalább egy szereplőt", "Choose at least one character")
+      : !goal.trim()
+        ? tt("Adj meg egy konkrét Event-célt", "Set a concrete Event goal")
+        : tt(
+            `Event indítása (${ids.length} szereplő)`,
+            `Start Event (${ids.length} characters)`
+          )}
   </button>
 </div>
 
@@ -21150,12 +21373,23 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
     ) === "mature";
   const [text, setText] = useState("");
   const [busy, setBusy] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [clockNow, setClockNow] = useState(now());
   const endRef = useRef(null);
   const sendLockRef = useRef(false);
-  const cast = w.chars.filter((c) => scene.cast.indexOf(c.id) >= 0);
+  const autoFinishRef = useRef(false);
+  const cast = (w.chars || []).filter((c) => (scene.cast || []).indexOf(c.id) >= 0);
   const who = (id) => charById(w, id);
+  const eventProgress = sceneEventProgress(scene, clockNow);
+  const eventLang = worldLanguage(w, w.meId);
+  const eventLimitLabel = sceneEventProgressText(scene, eventLang, clockNow);
 
-  useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [scene.turns.length]);
+  useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [(scene.turns || []).length]);
+  useEffect(() => {
+    if (!scene.open || scene.limitMode !== "minutes") return undefined;
+    const i = setInterval(() => setClockNow(now()), 15000);
+    return () => clearInterval(i);
+  }, [scene.open, scene.limitMode, scene.id]);
 
   const patch = (fn) => update((n) => { const s = n.scenes.find((x) => x.id === scene.id); if (s) fn(s, n); });
 
@@ -21213,8 +21447,13 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
 
       let out = await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
 
-JELENET: ${scene.title}
+EVENT / JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
+EVENT CÉLJA: ${scene.goal || "nincs külön megadva"}
+EVENT LIMIT: ${scene.limitMode === "minutes" ? `${scene.targetMinutes || 20} perc` : `${scene.targetTurns || 16} üzenet`}
+AKTUÁLIS HALADÁS: ${sceneEventProgressText(scene, worldLanguage(w, w.meId))}
+- A célt NE teljesítsd automatikusan csak azért, mert közeledik a limit. A történetből kell következnie.
+- A szereplők természetesen haladhatnak a cél felé, akadályozhatják vagy akár meg is hiúsíthatják azt.
 
 ${playerText
   ? addresseePromptInstruction(
@@ -21302,7 +21541,8 @@ Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","to":"annak a jelenlévő karakternek/játékosnak az id-ja, akinek a speech közvetlenül szól, vagy üres","kind":"speech vagy action","text":"..."}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":16,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],
  "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
- "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"]}${TAIL}`);
+ "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"],
+ "statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"csak akkor adj ilyet, ha az Event során tényleges állapotváltozás történt: megváltozott valaki hangulata, vagy egy korábban elindított folyamat/ígéret/fenyegetés/terv lezárult"}]}${TAIL}`);
 
       const resolveSceneTurns = (candidateOut) =>
         (candidateOut && Array.isArray(candidateOut.turns)
@@ -21456,8 +21696,9 @@ VÁLASZ CSAK JSON:
             });
           }
         });
-        applyChanges(n, safeAiChanges(out));
+        applySceneChangesWithStatus(n, s, safeAiChanges(out));
         applyMemories(n, safeAiMemories(out));
+        applySceneAiStatusUpdates(n, s, out);
 
         const sceneEvents =
           Array.isArray(safeAiEvents(out))
@@ -21634,170 +21875,267 @@ VÁLASZ CSAK JSON:
     setBusy("");
   };
 
-  const finish = async () => {
+  const finish = async (earlyRequested = false) => {
     setBusy("end");
+    const liveProgress = sceneEventProgress(scene, now());
+    const earlyEnd = Boolean(earlyRequested || !liveProgress.complete);
+
     try {
-      const log = scene.turns.map((t) => {
+      const log = (scene.turns || []).map((t) => {
         const a = who(t.authorId);
         return t.authorId === "narrator" ? `(${t.text})` : `${a ? a.name : "?"}: ${t.text}`;
       }).join("\n");
+
       const out = await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, false, null)}
 
-JELENET: ${scene.title}
-${log}
+EVENT / JELENET: ${scene.title}
+HELYZET: ${scene.setting || "-"}
+CÉL: ${scene.goal || "nincs külön megadva"}
+LIMIT: ${scene.limitMode === "minutes" ? `${scene.targetMinutes || 20} perc` : `${scene.targetTurns || 16} üzenet`}
+HALADÁS A LEZÁRÁSKOR: ${sceneEventProgressText(scene, worldLanguage(w, w.meId))}
+LEZÁRÁS TÍPUSA: ${earlyEnd ? "IDŐ ELŐTTI MANUÁLIS LEZÁRÁS" : "NORMÁL LEZÁRÁS A LIMIT ELÉRÉSE UTÁN"}
 
-Zárd le a jelenetet. Foglald össze 2-3 mondatban, mi történt és mi változott, majd mondd meg, ki mit visz tovább magával.
+TELJES EVENT-NAPLÓ:
+${log || "nem történt még érdemi mozzanat"}
+
+ÉRTÉKELD ÉS ZÁRD LE AZ EVENTET.
+- A success mező CSAK akkor legyen true, ha a megadott cél a történetben ténylegesen teljesült. A limit elérése önmagában nem siker.
+- Ha nincs külön cél megadva, azt értékeld, hogy a jelenetnek lett-e érdemi, karakterhű kimenetele.
+- Ha a játékos idő előtt zárta le, ezt az outcome/goalResult tükrözze; ne találj ki utólag olyan sikert, ami nem történt meg.
+- Foglald össze 2-3 mondatban, mi történt és mi változott.
+- Írj külön Diary entry-t 2-4 mondatban úgy, mint egy játékbeli naplóbejegyzést, ami később is érthető.
 - A kapcsolati változások a már meglévő viszonyból és a mostani eseményből következzenek; ne reseteld a jó/rossz/crush/rivális dinamikát.
 - A történetből eredő lojalitások és rivalizálások a lezárásban is számítsanak.
+- statusUpdates csak tényleges állapotváltozás legyen: mood-változás vagy egy korábban elindított folyamat/ígéret/fenyegetés/terv lezárulása.
 ${worldLanguage(w, w.meId) === "en"
-  ? "- summary, memories, mood and why must all be English."
-  : "- a summary, memories, mood és why mezők mind magyarul legyenek."}
-Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}]}${TAIL}`);
+  ? "- summary, diary, goalResult, statusUpdates, memories, mood and why must all be English."
+  : "- a summary, diary, goalResult, statusUpdates, memories, mood és why mezők mind magyarul legyenek."}
+
+Formátum:
+{"summary":"","diary":"","success":true,"outcome":"success vagy partial vagy failed","goalResult":"egy rövid konkrét értékelés","memories":[{"id":"szereplő azonosítója","text":""}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],"statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"mi változott / mi zárult le"}]}${TAIL}`);
+
+      const safeOut = out && typeof out === "object" ? out : {};
 
       patch((s, n) => {
+        ensureSceneEventState(s);
+
+        const alreadyRewarded = Boolean(s.rewardGranted);
+        const fullLimitReached = liveProgress.complete && !earlyEnd;
+        const success = Boolean(safeOut.success);
+        const outcome = ["success", "partial", "failed"].includes(String(safeOut.outcome || ""))
+          ? String(safeOut.outcome)
+          : (success ? (earlyEnd ? "partial" : "success") : "failed");
+
         s.open = false;
-        s.summary = out.summary || "";
-        applyMemories(n, safeAiMemories(out));
-        applyChanges(n, safeAiChanges(out));
-        if (out.summary) {
-          n.log = [
-            out.summary,
-          ]
-            .concat(n.log)
-            .slice(0, 30);
+        s.endedAt = now();
+        s.earlyEnd = earlyEnd;
+        s.success = success;
+        s.outcome = outcome;
+        s.goalResult = String(safeOut.goalResult || "").slice(0, 500);
+        s.summary = String(safeOut.summary || "");
+        s.diaryEntry = String(safeOut.diary || safeOut.summary || "");
 
-          const aiWitnessIds =
-            (s.cast || [])
-              .filter(
-                (id) =>
-                  id &&
-                  !isHuman(n, id)
+        applyMemories(n, safeAiMemories(safeOut));
+        applySceneChangesWithStatus(n, s, safeAiChanges(safeOut));
+        applySceneAiStatusUpdates(n, s, safeOut);
+
+        const aiWitnessIds = (s.cast || []).filter((id) => id && !isHuman(n, id));
+        const baseAffection = Math.max(0, Math.min(50, Math.round(Number(s.rewardAffection) || 0)));
+        const affectionGranted = alreadyRewarded
+          ? 0
+          : (success
+              ? (fullLimitReached ? baseAffection : Math.floor(baseAffection * 0.25))
+              : 0);
+        const itemGranted = !alreadyRewarded && success && fullLimitReached
+          ? String(s.rewardItem || "").trim()
+          : "";
+
+        /* Fix jutalom: Affection = az AI-karakter(ek) játékos felé mutató relation score-ja. */
+        if (affectionGranted > 0) {
+          applyChanges(
+            n,
+            aiWitnessIds.map((id) => ({
+              a: id,
+              b: n.meId,
+              delta: affectionGranted,
+              why: sysLangText(
+                n,
+                n.meId,
+                `Event jutalom: ${s.title}`,
+                `Event reward: ${s.title}`
+              ),
+            }))
+          );
+        }
+
+        if (!alreadyRewarded) {
+          s.rewardGranted = true;
+          s.rewardAffectionGranted = affectionGranted;
+          s.rewardItemGranted = itemGranted;
+        }
+
+        if (itemGranted) {
+          if (!Array.isArray(n.inventory)) n.inventory = [];
+          if (!n.inventory.some((item) => item && item.sceneId === s.id && item.name === itemGranted)) {
+            n.inventory.unshift({
+              id: "evt_item_" + uid(),
+              name: itemGranted,
+              source: "roleplay-event",
+              sceneId: s.id,
+              sceneTitle: s.title || "",
+              ts: now(),
+            });
+            n.inventory = n.inventory.slice(0, 500);
+          }
+        }
+
+        if (!Array.isArray(n.diary)) n.diary = [];
+        const diaryRow = {
+          id: `diary_scene_${s.id}`,
+          sceneId: s.id,
+          title: s.title || "",
+          text: s.diaryEntry || s.summary || "",
+          success,
+          outcome,
+          earlyEnd,
+          goal: s.goal || "",
+          goalResult: s.goalResult || "",
+          rewardAffection: s.rewardAffectionGranted || 0,
+          rewardItem: s.rewardItemGranted || "",
+          ts: s.endedAt,
+        };
+        n.diary = [diaryRow]
+          .concat(n.diary.filter((row) => row && row.sceneId !== s.id))
+          .slice(0, 300);
+
+        if (!alreadyRewarded) {
+          const rewardText = success
+            ? (fullLimitReached
+                ? sysLangText(
+                    n,
+                    n.meId,
+                    `Event teljesítve: +${affectionGranted} Affection${itemGranted ? ` · Tárgy: ${itemGranted}` : ""}`,
+                    `Event completed: +${affectionGranted} Affection${itemGranted ? ` · Item: ${itemGranted}` : ""}`
+                  )
+                : sysLangText(
+                    n,
+                    n.meId,
+                    `Event idő előtt lezárva: +${affectionGranted} Affection · egyedi tárgy nem jár.`,
+                    `Event ended early: +${affectionGranted} Affection · no unique item awarded.`
+                  ))
+            : sysLangText(
+                n,
+                n.meId,
+                "Az Event célja nem teljesült, ezért nem jár teljesítési jutalom.",
+                "The Event goal was not completed, so no completion reward was awarded."
               );
+          pushNote(n, n.meId, {
+            icon: success ? "🏆" : "📓",
+            text: rewardText,
+            link: { type: "scene", id: s.id },
+          });
+        }
 
-          const gossipEligible =
-            aiWitnessIds.length >= 2;
+        if (s.summary) {
+          n.log = [s.summary].concat(n.log || []).slice(0, 30);
 
+          const gossipEligible = aiWitnessIds.length >= 2;
           const sceneKind = s.eventKind || detectSceneEventKind(s);
           s.eventKind = sceneKind;
           const eventRecapEligible = sceneEventRecapEligible(s, aiWitnessIds.length);
-          const summarySignals =
-            roleplayEventSocialSignals(
-              String(out.summary || "")
-            );
+          const summarySignals = roleplayEventSocialSignals(s.summary);
 
-          recordSocialEvent(
-            n,
-            {
-              type:
-                "roleplay-summary",
-
-              refId:
-                `scene-summary:${s.id}`,
-
-              ts: now(),
-
-              actorId: "",
-
-              targetIds: [
-                n.meId,
-                ...aiWitnessIds,
-              ].filter(Boolean),
-
-              visibility:
-                "limited",
-
-              factLevel:
-                "observed",
-
-              importance:
-                Math.max(
-                  38,
-                  summarySignals.importance
-                ),
-              drama:
-                Math.max(
-                  18,
-                  summarySignals.drama
-                ),
-              romance:
-                summarySignals.romance,
-              embarrassment:
-                summarySignals.embarrassment,
-
-              source:
-                "roleplay",
-
-              text:
-                String(out.summary),
-
-              tags: [
-                "roleplay",
-                "scene-summary",
-                gossipEligible
-                  ? "gossip-eligible"
-                  : "private-scene",
-                ...summarySignals.tags,
-              ],
-
-              meta: {
-                sourceType:
-                  "roleplay",
-
-                sceneId:
-                  s.id,
-
-                sceneTitle:
-                  s.title || "",
-
-                participantIds: [
-                  n.meId,
-                  ...aiWitnessIds,
-                ].filter(Boolean),
-
-                attendeeIds: [
-                  n.meId,
-                  ...aiWitnessIds,
-                ].filter(Boolean),
-
-                witnessCount:
-                  aiWitnessIds.length,
-
-                gossipEligible,
-                sceneKind,
-                eventRecapEligible,
-
-                sourceTraceRequired:
-                  false,
-              },
-            }
-          );
+          recordSocialEvent(n, {
+            type: "roleplay-summary",
+            refId: `scene-summary:${s.id}`,
+            ts: s.endedAt,
+            actorId: "",
+            targetIds: [n.meId, ...aiWitnessIds].filter(Boolean),
+            visibility: "limited",
+            factLevel: "observed",
+            importance: Math.max(38, summarySignals.importance),
+            drama: Math.max(18, summarySignals.drama),
+            romance: summarySignals.romance,
+            embarrassment: summarySignals.embarrassment,
+            source: "roleplay",
+            text: s.summary,
+            tags: [
+              "roleplay",
+              "scene-summary",
+              success ? "event-success" : "event-failed",
+              earlyEnd ? "event-ended-early" : "event-complete",
+              gossipEligible ? "gossip-eligible" : "private-scene",
+              ...summarySignals.tags,
+            ],
+            meta: {
+              sourceType: "roleplay",
+              sceneId: s.id,
+              sceneTitle: s.title || "",
+              participantIds: [n.meId, ...aiWitnessIds].filter(Boolean),
+              attendeeIds: [n.meId, ...aiWitnessIds].filter(Boolean),
+              witnessCount: aiWitnessIds.length,
+              gossipEligible,
+              sceneKind,
+              eventRecapEligible,
+              success,
+              outcome,
+              earlyEnd,
+              goal: s.goal || "",
+              goalResult: s.goalResult || "",
+              rewardAffection: s.rewardAffectionGranted || 0,
+              rewardItem: s.rewardItemGranted || "",
+              sourceTraceRequired: false,
+            },
+          });
         }
       });
 
-      /*
-       * FONTOS: csak a sikeresen lezárt és már state-be mentett RP után
-       * indítjuk a world-stepet. Így az autonóm világ a friss summaryt,
-       * memóriákat, kapcsolatváltozásokat és roleplay social eventet látja.
-       */
+      /* A lezárt Event után a világ azonnal reagálhat a következményekre. */
       if (onSignal) {
         onSignal({
           type: "roleplay-ended",
           sceneId: scene.id,
           finishedAt: now(),
+          earlyEnd,
         });
       }
-    } catch (e) { setErr((e && e.message) || tt("A lezárás nem sikerült. Próbáld újra.", "Closing failed. Try again.")); }
+    } catch (e) {
+      autoFinishRef.current = false;
+      setErr((e && e.message) || tt("Az Event lezárása nem sikerült. Próbáld újra.", "Closing the Event failed. Try again."));
+    }
     setBusy("");
   };
+
+  /* Normál Event: a fix limit elérése után automatikusan lezár és értékel. */
+  useEffect(() => {
+    if (!scene.open || !eventProgress.complete || busy || autoFinishRef.current) return undefined;
+    autoFinishRef.current = true;
+    const t = setTimeout(() => finish(false), 500);
+    return () => clearTimeout(t);
+  }, [scene.open, eventProgress.complete, busy, scene.id]);
 
   return (
     <>
       <div className="scene-hd between">
-        <button className="btn tiny ghost" onClick={onBack}><ChevronLeft size={14} /> {tt("Jelenetek", "Scenes")}</button>
-        <div className="row" style={{ gap: 4 }}>
+        <button className="btn tiny ghost" onClick={onBack}><ChevronLeft size={14} /> {tt("Eventek", "Events")}</button>
+        <div className="row" style={{ gap: 4, alignItems: "center" }}>
           {cast.slice(0, 5).map((c) => <Av key={c.id} src={c.avatar} name={c.name} size={24} radius={8} />)}
+          {scene.open ? (
+            <button className="btn tiny ghost" onClick={() => setMenuOpen((v) => !v)} title={tt("Event menü", "Event menu")}>•••</button>
+          ) : null}
         </div>
       </div>
+
+      {menuOpen && scene.open ? (
+        <div className="card" style={{ marginTop: 6, borderColor: "var(--line)" }}>
+          <button className="btn ghost full tiny" onClick={() => { setMenuOpen(false); finish(true); }} disabled={!!busy}>
+            {tt("Event idő előtti lezárása", "End Event early")}
+          </button>
+          <p className="hint" style={{ marginTop: 6 }}>
+            {tt("Idő előtti lezárásnál legfeljebb csökkentett Affection jár, egyedi tárgy nem.", "Ending early can grant reduced Affection at most; the unique item is not awarded.")}
+          </p>
+        </div>
+      ) : null}
 
       <div style={{ marginTop: 6 }}>
         <h2 style={{ fontSize: 22 }}>
@@ -21818,7 +22156,26 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
         {scene.setting && <p className="hint" style={{ marginTop: 6 }}>{scene.setting}</p>}
       </div>
 
-      {scene.turns.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 20 }}>{tt("Kezdd el: írd meg, mit tesz a karaktered — vagy hagyd, hogy ők kezdjenek.", "Get started: write what your character does — or let them start.")}</p>}
+      <div className="card" style={{ marginTop: 10, borderColor: eventProgress.complete ? "var(--gold)" : "var(--line)" }}>
+        <div className="between">
+          <label className="f" style={{ margin: 0, color: eventProgress.complete ? "var(--gold)" : "var(--muted)" }}>
+            {tt("EVENT CÉL", "EVENT GOAL")}
+          </label>
+          <span className="chip">{eventLimitLabel}</span>
+        </div>
+        <div style={{ fontSize: 14, marginTop: 6 }}>
+          {scene.goal || tt("Nincs külön cél megadva — a lezáráskor az AI a jelenet érdemi kimenetelét értékeli.", "No separate goal is set — the AI will evaluate whether the scene reached a meaningful outcome when it closes.")}
+        </div>
+        <div className="bar" style={{ marginTop: 10, height: 4 }}>
+          <div className="bar-fill" style={{ left: 0, width: eventProgress.pct + "%" }} />
+        </div>
+        <div className="between" style={{ marginTop: 8 }}>
+          <span className="hint">{eventProgress.complete ? tt("A limit teljesült — az Event értékelhető.", "Limit reached — the Event can be evaluated.") : tt("Az Event még fut.", "The Event is still running.")}</span>
+          <span className="mono" style={{ fontSize: 10 }}>+{Number(scene.rewardAffection) || 0} Affection{scene.rewardItem ? ` · ${scene.rewardItem}` : ""}</span>
+        </div>
+      </div>
+
+      {(scene.turns || []).length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 20 }}>{tt("Kezdd el: írd meg, mit tesz a karaktered — vagy hagyd, hogy ők kezdjenek.", "Get started: write what your character does — or let them start.")}</p>}
 
       {scene.turns.map((t, i) => {
         if (t.authorId === "narrator") return <p className="narr" key={i}>{t.text}</p>;
@@ -21839,10 +22196,34 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
 
       {scene.summary && (
         <div className="card" style={{ borderColor: "var(--gold)" }}>
-          <label className="f" style={{ marginTop: 0, color: "var(--gold)" }}>{tt("A jelenet vége", "The end of the scene")}</label>
+          <div className="between">
+            <label className="f" style={{ marginTop: 0, color: "var(--gold)" }}>{tt("Event eredmény", "Event result")}</label>
+            <span className="chip">{scene.success ? tt("siker", "success") : (scene.outcome === "partial" ? tt("részleges", "partial") : tt("lezárva", "closed"))}</span>
+          </div>
           <div style={{ fontSize: 14 }}>{scene.summary}</div>
+          {scene.goalResult ? <p className="hint" style={{ marginTop: 8 }}><b>{tt("Cél: ", "Goal: ")}</b>{scene.goalResult}</p> : null}
+          {scene.diaryEntry ? (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+              <label className="f" style={{ marginTop: 0 }}>{tt("Diary entry", "Diary entry")}</label>
+              <div style={{ fontSize: 13.5 }}>{scene.diaryEntry}</div>
+            </div>
+          ) : null}
+          {(Number(scene.rewardAffectionGranted) > 0 || scene.rewardItemGranted) ? (
+            <p className="hint" style={{ marginTop: 10, color: "var(--gold)" }}>
+              {tt("Jutalom: ", "Reward: ")}+{Number(scene.rewardAffectionGranted) || 0} Affection{scene.rewardItemGranted ? ` · ${scene.rewardItemGranted}` : ""}
+            </p>
+          ) : null}
         </div>
       )}
+
+      {Array.isArray(scene.statusUpdates) && scene.statusUpdates.length ? (
+        <div className="card">
+          <label className="f" style={{ marginTop: 0 }}>{tt("Állapotfrissítések", "Status updates")}</label>
+          {scene.statusUpdates.slice(0, 6).map((row) => (
+            <p className="hint" key={row.id} style={{ marginTop: 6 }}>{row.kind === "mood" ? "💭 " : "⚡ "}{row.text}</p>
+          ))}
+        </div>
+      ) : null}
 
       {scene.open ? (
         <div className="card">
@@ -21855,13 +22236,21 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
               <Sparkles size={14} color="var(--gold)" /> {tt("Történjen valami", "Make something happen")}
             </button>
           </div>
-          <button className="btn ghost full tiny" style={{ marginTop: 8, color: "var(--muted)" }} onClick={finish} disabled={!!busy}>
-            {busy === "end" ? <Loader2 size={13} className="spin" /> : null} {tt("Jelenet lezárása", "Close scene")}
+          <button
+            className={"btn full tiny " + (eventProgress.complete ? "primary" : "ghost")}
+            style={{ marginTop: 8, color: eventProgress.complete ? undefined : "var(--muted)" }}
+            onClick={() => finish(!eventProgress.complete)}
+            disabled={!!busy}
+          >
+            {busy === "end" ? <Loader2 size={13} className="spin" /> : null}
+            {eventProgress.complete
+              ? tt("Event teljesítése és értékelése", "Complete and evaluate Event")
+              : tt("Event idő előtti lezárása", "End Event early")}
           </button>
         </div>
       ) : (
-        <button className="btn full" style={{ marginTop: 12 }} onClick={() => patch((s) => { s.open = true; s.summary = ""; })}>
-          {tt("Jelenet újranyitása", "Reopen scene")}
+        <button className="btn full" style={{ marginTop: 12 }} onClick={onBack}>
+          <ChevronLeft size={14} /> {tt("Vissza az Eventekhez", "Back to Events")}
         </button>
       )}
     </>
@@ -21884,13 +22273,13 @@ function Scenes({ w, update, setErr, jump, onSignal }) {
   return (
     <>
       <button className="btn primary full" style={{ marginTop: 12 }} onClick={() => setCreating(true)}>
-        <Plus size={15} /> {tt("Új jelenet", "New scene")}
+        <Plus size={15} /> {tt("Új Event", "New Event")}
       </button>
       <p className="hint" style={{ textAlign: "center", marginTop: 8 }}>
-        {tt("Jelenetben te csak a saját karakteredet játszod, a többieket az AI viszi.", "In a scene you only play your own character, the AI runs everyone else.")}
+        {tt("Az Eventben te csak a saját karakteredet játszod; a cél, limit, jutalom és lezárási értékelés a rendszer része.", "In an Event you only play your own character; goal, limit, rewards and closing evaluation are handled by the system.")}
       </p>
 
-      {scenes.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 24 }}>{tt("Még nincs jelenet. Egy buli, egy veszekedés, egy éjszakai beszélgetés — bármi lehet.", "There's no scene yet. A party, an argument, a late-night talk — it can be anything.")}</p>}
+      {scenes.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 24 }}>{tt("Még nincs Event. Egy buli, egy veszekedés, egy küldetés vagy egy éjszakai beszélgetés — bármi lehet.", "There are no Events yet. A party, an argument, a mission or a late-night talk — it can be anything.")}</p>}
 
       {scenes.map((s) => {
         const cast = w.chars.filter((c) => s.cast.indexOf(c.id) >= 0);
@@ -21901,6 +22290,7 @@ function Scenes({ w, update, setErr, jump, onSignal }) {
               <span className="chip">{s.open ? tt("fut", "running") : tt("lezárva", "closed")}</span>
             </div>
             {s.setting && <p className="hint" style={{ marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{s.setting}</p>}
+            {s.goal ? <p className="hint" style={{ marginTop: 6 }}><b>{tt("Cél: ", "Goal: ")}</b>{s.goal}</p> : null}
             <div className="row" style={{ marginTop: 10, gap: 4, alignItems: "center" }}>
               {cast.slice(0, 6).map((c) => <Av key={c.id} src={c.avatar} name={c.name} size={22} radius={7} />)}
               <span className="handle mono" style={{ marginLeft: "auto" }}>{tt(`${s.turns.length} mozzanat`, `${s.turns.length} beats`)}</span>
