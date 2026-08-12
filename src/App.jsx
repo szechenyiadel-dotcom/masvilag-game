@@ -9657,6 +9657,135 @@ async function analyzeImageDataUrl(
     .slice(0, 700);
 }
 
+async function generateAiChatSnap(
+  character,
+  snapPrompt,
+  addImage
+) {
+  const prompt = String(
+    snapPrompt || ""
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+
+  if (!prompt) return null;
+
+  const actorName = String(
+    (character && character.name) || "the character"
+  ).trim();
+
+  const basePrompt = `Create a realistic candid smartphone snap that ${actorName} could naturally send in a private chat. ${prompt}
+
+Rules:
+- phone snapshot / snap style
+- believable, grounded, social-media-realistic
+- no watermark, no text overlay, no collage
+- keep the person and scene consistent with the requested character and moment
+- if the prompt implies a party, coffee, mirror selfie, street, room, gym or similar, show that naturally.`;
+
+  const payload = {
+    provider: DEFAULT_AI_PROVIDER,
+    model: DEFAULT_AI_MODEL,
+    prompt: basePrompt,
+  };
+
+  const endpoints = [
+    "/ai/image",
+    "/ai/generate-image",
+    "/ai/text2image",
+  ];
+
+  let result = null;
+
+  for (const endpoint of endpoints) {
+    try {
+      result = await apiJson(endpoint, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (result) break;
+    } catch (err) {
+      result = null;
+    }
+  }
+
+  if (!result) return null;
+
+  let raw = [
+    result.dataUrl,
+    result.image,
+    result.url,
+    result.src,
+  ].find(
+    (value) =>
+      typeof value === "string" &&
+      String(value).trim()
+  );
+
+  if (!raw) return null;
+
+  raw = String(raw).trim();
+
+  let imageId = "";
+  let image = raw;
+
+  if (
+    isInlineImageData(raw) &&
+    typeof addImage === "function"
+  ) {
+    const mime =
+      (raw.match(/^data:([^;]+);/i) || [])[1] ||
+      "image/jpeg";
+
+    const ref = addImage(raw, {
+      category: "chat",
+      ownerCharacterId:
+        (character && character.id) || "",
+      originalFileName: `${
+        (character && character.username) ||
+        (character && character.id) ||
+        "ai"
+      }-snap-${uid()}.jpg`,
+      mimeType: mime,
+    });
+
+    imageId = imageIdOf(ref) || "";
+    image = imageId ? "" : raw;
+  }
+
+  let imageDescription = String(
+    result.vision ||
+    result.description ||
+    result.caption ||
+    result.note ||
+    ""
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 700);
+
+  if (!imageDescription && isInlineImageData(raw)) {
+    try {
+      imageDescription = await analyzeImageDataUrl(
+        raw,
+        `Describe what is visibly shown in this private snap from ${actorName} in 1-3 concise sentences. Mention only visible people, clothing, activity, setting, objects and mood.`
+      );
+    } catch (visionErr) {
+      console.warn(
+        "Generated chat snap analysis failed:",
+        visionErr
+      );
+    }
+  }
+
+  return {
+    imageId,
+    image,
+    imageDescription,
+  };
+}
+
 function worldSyncRev(w) {
   return Math.max(
     0,
@@ -16592,8 +16721,10 @@ ${
     ? `KÉP A POSZTBAN:
 ${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post.imageDescription}
 ` : ""}A szereplők látják a poszthoz tartozó képet is.
-Ha természetes, reagáljanak arra, ami ténylegesen látható rajta: személyekre, helyszínre, hangulatra vagy más fontos részletre.
-A kép ugyanúgy része a kontextusnak, mint a poszt szövege.`
+Ha természetes, reagáljanak arra, ami ténylegesen látható rajta: személyekre, outfitre, helyszínre, hangulatra vagy más fontos részletre.
+A kép ugyanúgy része a kontextusnak, mint a poszt szövege.
+A kommentek legyenek képföldeltek: ne írjanak olyan részletről, ami nincs a poszt szövegében vagy a látható képleírásban.
+Ha a szerző a saját képét posztolta, a többiek ennek megfelelően reagálhatnak rá reálisan.`
     : ""
 }
 
@@ -18411,7 +18542,7 @@ POSZT — ${nameOfIn(w, post.authorId)}:
 ${
   (post.imageId || post.image)
     ? `KÉP A POSZTBAN:
-${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post.imageDescription}\n` : ""}A kommentelők látták a képet is. Ha természetes, reagálhatnak arra, ami ténylegesen látható rajta.`
+${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post.imageDescription}\n` : ""}A kommentelők látták a képet is. Ha természetes, reagálhatnak arra, ami ténylegesen látható rajta.\nA reply se találjon ki olyan vizuális részletet, ami nincs a poszt szövegében vagy a képleírásban. Ha a reply a képre utal, maradjon képföldelt és következetes.`
     : ""
 }
 
@@ -18973,10 +19104,13 @@ KÉPEK:
 
 - Akinek van Fotóalbuma, néha képet is posztolhat belőle.
 - Az albumlistában minden kép mellett ott lehet az AI által felismert látható tartalom is. Ezt KÖTELEZŐ figyelembe venni a megfelelő kép kiválasztásakor és a caption megírásakor.
+- A poszt szerzője is "tudja", mi van a saját feltöltött fotóján. A captionnek és a későbbi kommentválaszainak is ehhez kell igazodniuk.
+- Előbb döntsd el, MELYIK konkrét kép illik a jelenethez, és csak UTÁNA írd meg a captiont. A caption ne legyen felcserélhető egy teljesen másik képpel.
 - Ilyenkor az "image" mezőbe a kép jele kerüljön, például "kep2".
 - SOHA ne találj ki olyan képet, ami nincs az adott karakter albumában.
 - Ha kép van a posztban, a kommentelők azt is látják.
-- Reagálhatnak a képen látható személyre, helyszínre, hangulatra vagy fontos részletre.
+- A kommentelők és reply-zók csak olyan részletre reagáljanak, ami a poszt szövegéből vagy a kép látható tartalmából reálisan következik.
+- Reagálhatnak a képen látható személyre, outfitre, helyszínre, hangulatra vagy fontos tárgyra, de ne találjanak ki nem látható dolgokat.
 - A kép ne csak dekoráció legyen, hanem valódi kontextus.
 
 VÁLASZOK KOMMENTEKRE:
@@ -24299,10 +24433,14 @@ A válaszod természetesen reagálhat a kép konkrét, látható részleteire. N
 SAJÁT FOTÓALBUMOD — PRIVÁTBAN CSAK EZEKBŐL KÜLDHETSZ KÉPET:
 ${albumList(c) || "nincs használható albumkép"}
 
-Ha természetes része a válaszodnak, küldhetsz EGY képet a saját albumodból is.
+Ha természetes része a válaszodnak, küldhetsz EGY képet.
+- Elsőként a saját albumodból válassz, ha ott van hozzá illő kép.
 - Az "image" mezőbe csak a fenti kep1/kep2/... kulcs kerülhet.
-- Ha nincs értelmes ok képet küldeni, legyen üres.
-- Ne találj ki nem létező képet.
+- Ha a helyzethez inkább egy friss, most készített snap illene, az "image" mező maradjon üres, és töltsd ki röviden az "imagePrompt" mezőt.
+- Az imagePrompt egy tömör leírás legyen arról, mit fotóznál le MOST a saját nézőpontodból / magadról / a jelenlegi helyzetedből.
+- Az imagePrompt csak valós, karakterhű és a sztoriba illő képet írhat le.
+- Ha nincs értelmes ok képet küldeni, mind az "image", mind az "imagePrompt" legyen üres.
+- Ne találj ki nem létező albumképet.
 - DM-ben elküldött albumkép NEM törlődik az albumból; csak a nyilvánosan kiposztolt albumkép egyszer használatos.
 
 PRIVÁT CHAT SZABÁLYOK:
@@ -24345,7 +24483,7 @@ KAPCSOLATVÁLTOZÁS:
 - Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
 
 Formátum:
-{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","changes":[{"a":"${c.id}","b":"${requestWorld.meId}","delta":-12,"mood":"mit érez most iránta","why":"miért"},{"a":"${requestWorld.meId}","b":"${c.id}","delta":8,"mood":"","why":"miért"}],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
+{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","imagePrompt":"rövid snap-leírás vagy üres","changes":[{"a":"${c.id}","b":"${requestWorld.meId}","delta":-12,"mood":"mit érez most iránta","why":"miért"},{"a":"${requestWorld.meId}","b":"${c.id}","delta":8,"mood":"","why":"miért"}],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
     );
 
     const aiPic =
@@ -24357,6 +24495,19 @@ Formátum:
           )
         : null;
 
+    const generatedAiSnap =
+      !aiPic &&
+      out &&
+      String(
+        out.imagePrompt || ""
+      ).trim()
+        ? await generateAiChatSnap(
+            c,
+            out.imagePrompt,
+            addImage
+          )
+        : null;
+
     const aiImageId =
       aiPic
         ? imageIdOf(
@@ -24364,7 +24515,10 @@ Formátum:
             aiPic.image ||
             ""
           )
-        : "";
+        : (
+            generatedAiSnap &&
+            generatedAiSnap.imageId
+          ) || "";
 
     const aiImageRef =
       aiPic
@@ -24375,7 +24529,16 @@ Formátum:
                 )
               : aiPic.image || ""
           )
-        : "";
+        : (
+            generatedAiSnap &&
+            (
+              generatedAiSnap.imageId
+                ? imageRef(
+                    generatedAiSnap.imageId
+                  )
+                : generatedAiSnap.image || ""
+            )
+          ) || "";
 
     const aiImageDescription =
       aiPic
@@ -24384,7 +24547,10 @@ Formátum:
             aiPic.note ||
             ""
           )
-        : "";
+        : (
+            generatedAiSnap &&
+            generatedAiSnap.imageDescription
+          ) || "";
 
     let reply = String(
       out &&
@@ -26796,7 +26962,10 @@ ${albumList(bot) || "nincs használható albumkép"}
 
 - Ha teljesen természetes, hogy most egy saját képet küldenél át privátban, válassz legfeljebb EGYET a fenti kep1/kep2/... kulcsok közül.
 - A kép vizuális leírását használd annak eldöntésére, mit küldenél.
-- Ne találj ki olyan képet, ami nincs az albumodban.
+- Ha nincs megfelelő albumképed, de karakterhűen most egy friss snapet küldenél, az "image" maradjon üres, és töltsd ki röviden az "imagePrompt" mezőt.
+- Az imagePrompt egy rövid, konkrét leírás legyen arról, milyen saját képet küldenél MOST (pl. tükörszelfi készülődés közben, kávé az asztalon, buli a háttérben, laptop+jegyzetek, stb.).
+- Az imagePrompt is csak olyan jelenetet írhat le, ami a karakteredhez és az aktuális helyzethez reálisan illik.
+- Ne találj ki olyan albumképet, ami nincs az albumodban.
 - Kép nélkül írni teljesen normális.
 - Privátban elküldött kép nem törlődik az albumból; csak a nyilvánosan kiposztolt albumfotó egyszer használatos.
 
@@ -26815,7 +26984,7 @@ Ha van:
 - Plusz és mínusz egyformán lehetséges.
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
-{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","changes":[{"a":"${bot.id}","b":"${w.meId}","delta":10,"mood":"mit érzel most iránta","why":"miért"},{"a":"${w.meId}","b":"${bot.id}","delta":6,"mood":"","why":"miért"}],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}]}${TAIL}`,
+{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","imagePrompt":"rövid snap-leírás vagy üres","changes":[{"a":"${bot.id}","b":"${w.meId}","delta":10,"mood":"mit érzel most iránta","why":"miért"},{"a":"${w.meId}","b":"${bot.id}","delta":6,"mood":"","why":"miért"}],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}]}${TAIL}`,
     { maxTokens: 700 }
   );
 }
@@ -37054,6 +37223,19 @@ if (targetNote) {
           )
         : null;
 
+    const generatedAiSnap =
+      !aiPic &&
+      out &&
+      String(
+        out.imagePrompt || ""
+      ).trim()
+        ? await generateAiChatSnap(
+            bot,
+            out.imagePrompt,
+            addImage
+          )
+        : null;
+
     const aiImageId =
       aiPic
         ? imageIdOf(
@@ -37061,7 +37243,10 @@ if (targetNote) {
             aiPic.image ||
             ""
           )
-        : "";
+        : (
+            generatedAiSnap &&
+            generatedAiSnap.imageId
+          ) || "";
 
     const aiImageRef =
       aiPic
@@ -37072,7 +37257,16 @@ if (targetNote) {
                 )
               : aiPic.image || ""
           )
-        : "";
+        : (
+            generatedAiSnap &&
+            (
+              generatedAiSnap.imageId
+                ? imageRef(
+                    generatedAiSnap.imageId
+                  )
+                : generatedAiSnap.image || ""
+            )
+          ) || "";
 
     const aiImageDescription =
       aiPic
@@ -37081,7 +37275,10 @@ if (targetNote) {
             aiPic.note ||
             ""
           )
-        : "";
+        : (
+            generatedAiSnap &&
+            generatedAiSnap.imageDescription
+          ) || "";
 
     if (
       !out ||
