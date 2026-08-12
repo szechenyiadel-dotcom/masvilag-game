@@ -25743,11 +25743,16 @@ function findUnanswered(w) {
  * Most a szimuláció saját contentAt órát használ.
  */
 const AUTO_MIN_CONTENT_INTERVAL_MS = 30000;
+const AUTO_MIN_LOCAL_ACTION_INTERVAL_MS = 30000;
 
+/*
+ * FONTOS: ez az ellenőrző függvény SZÁNDÉKOSAN nem hívja
+ * az ensureSimState()-et és nem módosítja a world/view objektumot.
+ * A régi v5 ezt megtette, ami régi mentéseknél instabil React-state-et
+ * tudott okozni. State-et csak update(...) belsejében inicializálunk.
+ */
 const canTick = (w, minutes) => {
   if (!w) return false;
-
-  const sim = ensureSimState(w);
 
   const interval =
     Math.max(
@@ -25758,10 +25763,30 @@ const canTick = (w, minutes) => {
       ) * 60000
     );
 
+  /*
+   * A stabil, régi world.autoAt marad az AUTONÓM TARTALOM órája.
+   * Ezt a React világállapot már korábban is használta, ezért nem vezetünk
+   * be még egy külön authoritative időbélyeget az ütemezéshez.
+   */
+  const contentAt =
+    Number(w.autoAt) || 0;
+
   return (
-    now() -
-      (Number(sim.contentAt) || 0) >
-    interval
+    now() - contentAt > interval
+  );
+};
+
+const canRunLocalSimulationAction = (w) => {
+  const localAt =
+    Number(
+      w &&
+      w.sim &&
+      w.sim.localAt
+    ) || 0;
+
+  return (
+    now() - localAt >=
+    AUTO_MIN_LOCAL_ACTION_INTERVAL_MS
   );
 };
 
@@ -25853,7 +25878,13 @@ function markSimulationCadence(w, action) {
       action
     )
   ) {
-    sim.contentAt = now();
+    const ts = now();
+    /*
+     * A tényleges generatív/autonóm tartalom a régi, stabil autoAt órát
+     * frissíti. A sim.contentAt csak kompatibilitási/debug mező marad.
+     */
+    w.autoAt = ts;
+    sim.contentAt = ts;
   }
 }
 
@@ -37726,6 +37757,20 @@ const signOut = useCallback(async () => {
           );
       }
       if (!action) return;
+
+      /*
+       * A gyors lokális social akciók nem fogyasztanak AI-t, de ettől még
+       * nem futhatnak 12 másodpercenként végtelenül. Ez megakadályozza,
+       * hogy follow/unfollow/repost hullámok túl sok state-update-et és
+       * renderelést okozzanak. A kézi queue-t ez nem korlátozza.
+       */
+      if (
+        !manualQueued &&
+        FAST_LOCAL_SIM_ACTIONS.has(action.type) &&
+        !canRunLocalSimulationAction(view2)
+      ) {
+        return;
+      }
 
       autoRunning.current = true;
       setAutoBusy(true);
