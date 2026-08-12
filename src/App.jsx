@@ -9782,12 +9782,20 @@ const AUTO = "masvilag:auto";
 /*
  * LIVE WORLD FIXED MODE
  *
- * Mindig be van kapcsolva, és az "Often" ütemet használja.
+ * Mindig be van kapcsolva, gyors "live" ütemet használ.
  * Régi eszközön mentett "off" / ritkább érték sem írhatja ezt felül.
  */
 const AUTO_DEFAULT = {
   on: true,
-  every: 3,
+
+  /*
+   * Valóban élő háttérvilág:
+   * 0.75 perc = kb. 45 mp két AUTONÓM tartalmi kör között.
+   *
+   * Az AI queue saját token/rate-limit throttlingja ettől külön működik,
+   * tehát ha a providernek több pihenő kell, továbbra is biztonságosan vár.
+   */
+  every: 0.75,
 };
 
 async function loadAuto() {
@@ -25725,24 +25733,130 @@ function findUnanswered(w) {
   return null;
 }
 
-/* Egyszerre csak egy lépés fusson: a világba írt időbélyeg a foglalás. */
-const canTick = (w, minutes) => now() - (w.autoAt || 0) > Math.max(1, minutes) * 60000;
+/*
+ * AUTONÓM TARTALMI ÜTEMEZÉS
+ *
+ * Régen minden háttérmozdulat ugyanazt a w.autoAt órát nullázta.
+ * Emiatt egy sima follow/unfollow/repost is percekre blokkolhatta
+ * a következő valódi posztot, DM-et vagy group-chat aktivitást.
+ *
+ * Most a szimuláció saját contentAt órát használ.
+ */
+const AUTO_MIN_CONTENT_INTERVAL_MS = 30000;
+
+const canTick = (w, minutes) => {
+  if (!w) return false;
+
+  const sim = ensureSimState(w);
+
+  const interval =
+    Math.max(
+      AUTO_MIN_CONTENT_INTERVAL_MS,
+      Math.max(
+        0,
+        Number(minutes) || 0
+      ) * 60000
+    );
+
+  return (
+    now() -
+      (Number(sim.contentAt) || 0) >
+    interval
+  );
+};
 
 const SIM_DONE_TTL = 20 * 60000;
 const SIM_QUEUE_LIMIT = 40;
 
 function ensureSimState(w) {
-  if (!w.sim) w.sim = { queue: [], done: {}, running: "", at: 0 };
+  if (!w.sim) {
+    w.sim = {
+      queue: [],
+      done: {},
+      running: "",
+      at: 0,
+      contentAt: 0,
+      localAt: 0,
+    };
+  }
+
   if (!Array.isArray(w.sim.queue)) w.sim.queue = [];
   if (!w.sim.done || typeof w.sim.done !== "object") w.sim.done = {};
   if (typeof w.sim.running !== "string") w.sim.running = "";
   if (!Number.isFinite(Number(w.sim.at))) w.sim.at = 0;
+  if (!Number.isFinite(Number(w.sim.contentAt))) w.sim.contentAt = 0;
+  if (!Number.isFinite(Number(w.sim.localAt))) w.sim.localAt = 0;
+
   const cutoff = now() - SIM_DONE_TTL;
   Object.keys(w.sim.done).forEach((k) => {
     if (Number(w.sim.done[k] || 0) < cutoff) delete w.sim.done[k];
   });
   return w.sim;
 }
+
+/*
+ * Ezek a lépések teljesen lokálisak: nem használnak generatív AI-hívást.
+ * Ezért nem szabad velük leállítani a következő poszt/world kört.
+ */
+const FAST_LOCAL_SIM_ACTIONS = new Set([
+  "follow",
+  "unfollow",
+  "repost",
+]);
+
+/*
+ * A játékos akciójára adott közvetlen reakció fontos és azonnali,
+ * de ne "egye meg" az autonóm világ következő saját tartalmi körét.
+ */
+const PLAYER_REACTIVE_SIM_ACTIONS = new Set([
+  "reply",
+  "comments",
+  "note-react",
+]);
+
+function simulationActionBlocksContentCadence(action) {
+  if (!action || !action.type) return false;
+
+  if (
+    FAST_LOCAL_SIM_ACTIONS.has(
+      action.type
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    PLAYER_REACTIVE_SIM_ACTIONS.has(
+      action.type
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function markSimulationCadence(w, action) {
+  const sim = ensureSimState(w);
+
+  if (
+    FAST_LOCAL_SIM_ACTIONS.has(
+      action && action.type
+    )
+  ) {
+    sim.localAt = now();
+    return;
+  }
+
+  if (
+    simulationActionBlocksContentCadence(
+      action
+    )
+  ) {
+    sim.contentAt = now();
+  }
+}
+
 function ensureSocialSimulationState(w) {
   if (!w || typeof w !== "object") {
     return w;
@@ -32809,7 +32923,14 @@ function planAutoAction(view) {
 
   if (
     relationshipFollow &&
-    relationshipFollow.strongRelationship
+    relationshipFollow.strongRelationship &&
+    /*
+     * A régi follow-hibákat gyorsan javítjuk, de ne álljon sorban
+     * 8-10 follow-helyreállítás a feed előtt. Mivel a follow lokális
+     * akció és nem nullázza a contentAt órát, pár másodperccel később
+     * újra próbálkozhat a motor.
+     */
+    Math.random() < 0.46
   ) {
     return mkAction(
       "follow",
@@ -32834,7 +32955,7 @@ function planAutoAction(view) {
    * karbantartási vagy ritkább social akcióra váltana.
    */
   if (
-    Math.random() < 0.52
+    Math.random() < 0.66
   ) {
     return mkAction(
       "world",
@@ -33215,7 +33336,7 @@ function planAutoAction(view) {
       return (
         !t ||
         now() - t >
-          45 * 60 * 1000
+          12 * 60 * 1000
       );
     });
 
@@ -37609,8 +37730,18 @@ const signOut = useCallback(async () => {
       autoRunning.current = true;
       setAutoBusy(true);
       update((n) => {
-        n.autoAt = now();
+        /*
+         * A futó akciót lefoglaljuk, de csak a valódi autonóm tartalmi
+         * akció nullázza a content cadence órát.
+         *
+         * Follow/unfollow/repost és a játékosra adott közvetlen reply
+         * nem tudja többé percekre "lefagyasztani" a világot.
+         */
         simMarkRunning(n, action);
+        markSimulationCadence(
+          n,
+          action
+        );
       });
       let ok = false;
       try {
@@ -37639,7 +37770,13 @@ const signOut = useCallback(async () => {
       autoRunning.current = false;
       if (alive) setAutoBusy(false);
     };
-    const i = setInterval(beat, 30000);
+    /*
+     * 12 másodpercenként nézzük meg, van-e teendő.
+     * Ez NEM jelent 12 másodpercenként AI-hívást:
+     * a contentAt + AI queue/token throttling továbbra is korlátozza
+     * a generatív kérések tényleges sűrűségét.
+     */
+    const i = setInterval(beat, 12000);
     const first = setTimeout(beat, 100);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update, simPulse]);
