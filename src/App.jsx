@@ -4720,9 +4720,21 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 const AI = {
   chain: Promise.resolve(),  // kompatibilitás miatt marad
   last: 0,                   // mikor futott le az utolsó AI-hívás
-  gap: 8000,                 // háttér-hívások közti alap szünet
+  gap: 9000,                 // háttér-hívások közti minimum szünet
   interactiveGap: 2200,      // játékos által kiváltott chat/RP gyorsabb prioritása
+
+  /*
+   * Token-aware throttling.
+   * A teljes karakterlapok miatt két kérés költsége között óriási különbség
+   * lehet. A következő hívás minimum várakozását az előző prompt becsült
+   * tokenköltsége is meghatározza, így nem lövünk nagy promptokat fix 8 mp-es
+   * ritmusban a szolgáltatóra.
+   */
+  lastCostGap: 0,
+  targetTokensPerMinute: Math.max(12000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 36000),
+
   cooldownUntil: 0,
+  visibleCooldownUntil: 0,
   strikes: 0,
   pending: 0,
   interactivePending: 0,
@@ -4739,10 +4751,56 @@ const AI = {
   queueSeq: 0,
 };
 const cooldownLeft = () => Math.max(0, AI.cooldownUntil - now());
+const visibleCooldownLeft = () => Math.max(0, AI.visibleCooldownUntil - now());
 const onCooldown = (fn) => { AI.listeners.push(fn); return () => { AI.listeners = AI.listeners.filter((x) => x !== fn); }; };
-function setCooldown(ms) {
-  AI.cooldownUntil = Math.max(AI.cooldownUntil, now() + ms);
-  AI.listeners.forEach((fn) => { try { fn(cooldownLeft()); } catch (e) {} });
+function setCooldown(ms, visible = true) {
+  const until = now() + Math.max(0, Number(ms) || 0);
+  AI.cooldownUntil = Math.max(AI.cooldownUntil, until);
+
+  /*
+   * Háttérvilág miatti provider-throttle ne villogjon úgy a játékosnak,
+   * mintha az ő konkrét kérésével lenne baj. A queue ettől még ugyanúgy
+   * kivárja a globális cooldown-t.
+   */
+  if (visible) {
+    AI.visibleCooldownUntil = Math.max(AI.visibleCooldownUntil, until);
+  }
+
+  AI.listeners.forEach((fn) => {
+    try { fn(visibleCooldownLeft()); } catch (e) {}
+  });
+}
+
+function estimatedAiRequestTokens(system, prompt, maxTokens) {
+  /*
+   * Durva, de biztonságos kliensoldali becslés: természetes szövegnél
+   * ~4 karakter/token körül járunk. Kicsit konzervatívabb 3.6-tal számolunk.
+   */
+  const inputChars =
+    String(system || "").length +
+    String(prompt || "").length;
+
+  return Math.max(
+    1,
+    Math.ceil(inputChars / 3.6) +
+      Math.max(0, Number(maxTokens) || 0)
+  );
+}
+
+function aiCostGapFor(system, prompt, maxTokens) {
+  const tokens = estimatedAiRequestTokens(system, prompt, maxTokens);
+  const raw = Math.ceil(
+    (tokens / AI.targetTokensPerMinute) * 60000
+  );
+
+  /*
+   * Ne legyen indokolatlanul lassú egy kis DM, de egy hatalmas full-sheet
+   * prompt után legyen ideje fellélegezni a token/minute keretnek.
+   */
+  return Math.max(
+    1800,
+    Math.min(45000, raw)
+  );
 }
 
 /* -------------------------------------------------------------------------
@@ -4785,10 +4843,15 @@ async function pumpAiQueue() {
         const since =
           now() - AI.last;
 
-        const gap =
+        const baseGap =
           task.priority >= 50
             ? AI.interactiveGap
             : AI.gap;
+
+        const gap = Math.max(
+          baseGap,
+          Number(AI.lastCostGap) || 0
+        );
 
         if (since < gap) {
           await wait(
@@ -4852,7 +4915,14 @@ const res = await fetch(url, {
   signal,
 });
       if (res.ok) return res;
-      if (res.status !== 404 && res.status !== 502) return res;
+
+      /*
+       * 404 jelentheti azt, hogy ezen a hoston nincs proxy-route, ezért ott
+       * van értelme a következő címre próbálni. 502 viszont már egy LÉTEZŐ
+       * proxy/backend hibája lehet: azt ne sokszorozzuk meg további azonos
+       * AI-kérésekkel más címeken.
+       */
+      if (res.status !== 404) return res;
       lastErr = new Error(`HTTP ${res.status}`);
     } catch (e) {
       lastErr = e;
@@ -4861,7 +4931,18 @@ const res = await fetch(url, {
   throw lastErr || new Error("AI proxy unavailable");
 }
 
-async function callClaude(system, prompt, maxTokens = 1200) {
+async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
+  /*
+   * Ezt a költséget a KÖVETKEZŐ queue-elem előtt használjuk.
+   * Így a nagy full-sheet hívások automatikusan nagyobb lélegzetvételt kapnak,
+   * a rövid chatválaszok viszont nem lassulnak feleslegesen.
+   */
+  AI.lastCostGap = aiCostGapFor(
+    system,
+    prompt,
+    maxTokens
+  );
+
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), 60000);
   let res;
@@ -4883,7 +4964,7 @@ async function callClaude(system, prompt, maxTokens = 1200) {
     if (e && e.message) {
       if (e && e.retryable === false) {
         AI.strikes = Math.min(AI.strikes + 1, 3);
-        setCooldown(15000 * AI.strikes);
+        setCooldown(15000 * AI.strikes, !!requestMeta.interactive);
       }
       throw e;
     }
@@ -4904,16 +4985,42 @@ async function callClaude(system, prompt, maxTokens = 1200) {
       err.busy = false;
       err.retryable = false;
       AI.strikes = Math.min(AI.strikes + 1, 3);
-      setCooldown(15000 * AI.strikes);
+      setCooldown(15000 * AI.strikes, !!requestMeta.interactive);
       throw err;
     }
     if (busy) {
       // ismétlődő elutasításnál egyre hosszabb pihenő, hogy kimásszunk a gödörből
       AI.strikes = Math.min(AI.strikes + 1, 3);
-      const ra = Number(res.headers && res.headers.get && res.headers.get("retry-after"));
-      const base = code === 429 ? 20000 : 10000;
-      const restMs = ra > 0 ? ra * 1000 : base * AI.strikes;
-      setCooldown(restMs);
+      const retryAfterRaw =
+        res.headers && res.headers.get
+          ? res.headers.get("retry-after")
+          : "";
+
+      let retryAfterMs = 0;
+      const retryAfterSeconds = Number(retryAfterRaw);
+
+      if (retryAfterSeconds > 0) {
+        retryAfterMs = retryAfterSeconds * 1000;
+      } else if (retryAfterRaw) {
+        const retryDate = Date.parse(retryAfterRaw);
+        if (Number.isFinite(retryDate)) {
+          retryAfterMs = Math.max(0, retryDate - Date.now());
+        }
+      }
+
+      /*
+       * Exponenciálisabb backoff kevesebb újraütéssel. A rövid provider
+       * retry-after értéket is tiszteletben tartjuk, de 429 esetén legalább
+       * 12 mp pihenőt adunk, hogy ne essünk vissza azonnal ugyanabba a limitbe.
+       */
+      const base = code === 429 ? 12000 : 8000;
+      const adaptive = Math.min(60000, base * Math.pow(1.8, Math.max(0, AI.strikes - 1)));
+      const restMs = Math.max(retryAfterMs, adaptive);
+
+      setCooldown(
+        restMs,
+        !!requestMeta.interactive
+      );
       const err = new Error(`Az AI most nem győzi — ${Math.ceil(restMs / 1000)} másodperc pihenő.`);
       err.busy = true;
       throw err;
@@ -4983,9 +5090,20 @@ async function askJSON(system, prompt, options = {}) {
     return await queued(async () => {
       let last = null, tries = 0, busyWaits = 0;
 
+      /*
+       * A háttérvilág ne kalapálja négyszer egymás után a már throttlingoló
+       * providert. Egy háttérkérés egyetlen kivárt busy-retry-t kap; a játékos
+       * közvetlen akciója kettőt. Ha még mindig limit van, a későbbi engine
+       * kör újra megpróbálhatja anélkül, hogy request-storm alakulna ki.
+       */
+      const maxBusyWaits =
+        priority >= 50
+          ? 3   // első busy + legfeljebb 2 újrapróbálás
+          : 2;  // első busy + legfeljebb 1 újrapróbálás
+
       while (
         tries < maxTries &&
-        busyWaits < 4
+        busyWaits < maxBusyWaits
       ) {
         try {
           const langRule = languageInstruction(lang, strictMode);
@@ -4998,7 +5116,14 @@ async function askJSON(system, prompt, options = {}) {
             : (lang === "en"
               ? "\n\nPrevious output was invalid. Return only compact valid JSON in English."
               : "\n\nAz előző válasz hibás volt. Most csak rövid, érvényes JSON jöjjön, magyarul.");
-          const raw = await callClaude(sys, prompt + hint, Number(options.maxTokens || 1200));
+          const raw = await callClaude(
+            sys,
+            prompt + hint,
+            Number(options.maxTokens || 1200),
+            {
+              interactive: priority >= 50,
+            }
+          );
           const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
           if (a === -1 || b === -1) throw new Error("Az AI válasza nem tartalmazott feldolgozható JSON-t.");
           const parsed = JSON.parse(raw.slice(a, b + 1));
@@ -24717,13 +24842,14 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
 /* Pihenő-kijelző: ha a szolgáltató visszafogott minket, itt látszik, meddig. */
 function RestBar() {
   const { tt } = useLang();
-  const [left, setLeft] = useState(cooldownLeft());
+  const [left, setLeft] = useState(visibleCooldownLeft());
   useEffect(() => {
     const off = onCooldown((ms) => setLeft(ms));
-    const i = setInterval(() => setLeft(cooldownLeft()), 500);
+    const i = setInterval(() => setLeft(visibleCooldownLeft()), 500);
     return () => { off(); clearInterval(i); };
   }, []);
-  if (left <= 0) return null;
+  /* Az utolsó ~1.2 mp-ben ne villanjon fel egy értelmetlen "1 second" banner. */
+  if (left <= 1200) return null;
   return (
     <div className="rest">
       <Loader2 size={14} className="spin" />
