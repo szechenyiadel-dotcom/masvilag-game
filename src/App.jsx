@@ -2685,6 +2685,32 @@ function ensureKnownCharacter(mem, targetId, publicProfile) {
   return row;
 }
 
+function safePostComments(post) {
+  return post && Array.isArray(post.comments)
+    ? post.comments.filter((c) => c && typeof c === "object")
+    : [];
+}
+
+function sanitizeWorldPosts(w) {
+  if (!w || typeof w !== "object") return [];
+
+  const rawPosts = Array.isArray(w.posts) ? w.posts : [];
+
+  w.posts = rawPosts.filter(
+    (post) => post && typeof post === "object"
+  );
+
+  w.posts.forEach((post) => {
+    post.comments = safePostComments(post);
+
+    post.comments.forEach((comment) => {
+      if (comment.parent === undefined) comment.parent = null;
+    });
+  });
+
+  return w.posts;
+}
+
 function characterPublicData(w, c) {
   if (!c) return {};
   const out = { id: c.id, type: isHuman(w, c.id) ? "player" : (isExtra(w, c.id) ? "extra" : "ai") };
@@ -2695,7 +2721,7 @@ function characterPublicData(w, c) {
     .filter((p) => p && p.authorId === c.id)
     .slice(0, 3)
     .map((p) => cut(p.text, 110));
-  out.publicComments = (w.posts || []).flatMap((p) => (p.comments || [])
+  out.publicComments = (w.posts || []).flatMap((p) => safePostComments(p)
     .filter((x) => x.authorId === c.id)
     .map((x) => cut(x.text, 90))).slice(0, 3);
   return out;
@@ -2989,6 +3015,7 @@ function renderNoteText(w, playerId, note) {
 
 /* Egy új komment nyomán keletkező értesítések. */
 function noteComment(n, post, c) {
+  if (!post || typeof post !== "object" || !c || typeof c !== "object") return;
   const link = { type: "post", id: post.id };
   const who = charById(n, c.authorId);
   const nm = who ? who.name : sysTextFor(n, post.authorId, "someone");
@@ -3002,7 +3029,7 @@ function noteComment(n, post, c) {
       link,
     });
   if (c.parent) {
-    const parent = (post.comments || []).find((x) => x.id === c.parent);
+    const parent = safePostComments(post).find((x) => x && x.id === c.parent);
     if (parent && isHuman(n, parent.authorId) && parent.authorId !== c.authorId && parent.authorId !== post.authorId)
       pushNote(n, parent.authorId, {
         icon: "↩️",
@@ -5644,8 +5671,9 @@ function publicVoiceCard(w, c, observerId) {
 function recentLines(w, id) {
   const out = [];
   (w.posts || []).slice(0, 12).forEach((p) => {
+    if (!p || typeof p !== "object") return;
     if (p.authorId === id) out.push(`posztja: ${cut(p.text, 90)}`);
-    (p.comments || []).forEach((c) => { if (c.authorId === id) out.push(`kommentje: ${cut(c.text, 70)}`); });
+    safePostComments(p).forEach((c) => { if (c.authorId === id) out.push(`kommentje: ${cut(c.text, 70)}`); });
   });
   return out.slice(0, 3);
 }
@@ -8834,6 +8862,15 @@ function migrate(w) {
   };
   ["rels", "chats", "mems", "accounts", "players", "deleted", "notify", "charMemory", "userSettings", "images"].forEach((k) => { if (!w[k]) w[k] = {}; });
   ["posts", "log", "scenes", "extras", "groups", "notes"].forEach((k) => { if (!w[k]) w[k] = []; });
+
+  /*
+   * CRASH-GUARD: a posts/comments adatot a migráció LEGELEJÉN tisztítjuk,
+   * még mielőtt bármely memória-, social-, follow- vagy feed-helper hozzáérne.
+   * Régi/félbemaradt syncből maradó null/undefined post így nem juthat el
+   * egyetlen `post.comments` olvasásig sem.
+   */
+  sanitizeWorldPosts(w);
+
   if (!w.universe.at) w.universe.at = 0;
 
   // Régi, egyfelhasználós világ átemelése fiókos szerkezetre.
@@ -8871,23 +8908,8 @@ function migrate(w) {
     mem.knownFacts = mergeKnowledgeItems(mem.knownFacts, items, "fact", 32);
   });
 
-  /*
-   * Régi / félbeszakadt syncből maradhat null/undefined elem a posts tömbben.
-   * Ezek korábban már a world migráció közben white screent okozhattak, mert
-   * a kód po.comments-ot olvasott anélkül, hogy po létezését ellenőrizte volna.
-   * Itt egyszer, központilag kitakarítjuk a hibás sorokat és normalizáljuk a
-   * comment tömböket, hogy a teljes social UI null-safe állapotból induljon.
-   */
-  w.posts = (w.posts || []).filter((po) => po && typeof po === "object");
-  w.posts.forEach((po) => {
-    po.comments = Array.isArray(po.comments)
-      ? po.comments.filter((c) => c && typeof c === "object")
-      : [];
-
-    po.comments.forEach((c) => {
-      if (c.parent === undefined) c.parent = null;
-    });
-  });
+  /* Idempotens második védőháló régi migrációs ágak után. */
+  sanitizeWorldPosts(w);
   // a lejárt jegyzetek nem cipelődnek tovább; szerzőnként egy marad
   {
     const byAuthor = {};
@@ -11086,7 +11108,7 @@ function repostInterestScore(
   }
 
   const actorComments =
-    (post.comments || []).filter(
+    safePostComments(post).filter(
       (c) =>
         c &&
         c.authorId ===
@@ -11106,7 +11128,7 @@ function repostInterestScore(
         post
       )
     ) +
-    (post.comments || []).length * 2 +
+    safePostComments(post).length * 2 +
     repostCount(
       w,
       post.id
@@ -12002,9 +12024,7 @@ function recentFollowInteractionScore(
       if (!p) return;
 
       const comments =
-        Array.isArray(p.comments)
-          ? p.comments
-          : [];
+        safePostComments(p);
 
       if (
         p.authorId === targetId
@@ -15541,7 +15561,7 @@ function SocialProfileModal({
                 {posts.length ? posts.map((p) => (
                   <div className="social-profile-post" key={p.id}>
                     <div className="handle mono">
-                      {timeAgo(p.ts)} · {p.likes || 0} {tt("kedvelés", "likes")} · {(p.comments || []).length} {tt("hozzászólás", "comments")}
+                      {timeAgo(p.ts)} · {p.likes || 0} {tt("kedvelés", "likes")} · {safePostComments(p).length} {tt("hozzászólás", "comments")}
                     </div>
 
                     {p.text ? (
@@ -16794,8 +16814,9 @@ function applyNotePerceptionImpact(
 }
 
 function applyComments(n, postId, out, label) {
-  const p = n.posts.find((x) => x.id === postId);
+  const p = (n.posts || []).find((x) => x && x.id === postId);
   if (p) {
+    p.comments = safePostComments(p);
     const byLabel = {};
     Object.keys(label || {}).forEach((cid) => { byLabel[label[cid]] = cid; });
     (out.comments || []).forEach((c) => {
@@ -17241,7 +17262,7 @@ function fairCommentCast(w, targetId) {
       let lastCommentAt = 0;
 
       (w.posts || []).forEach((p) => {
-        (p.comments || []).forEach(
+        safePostComments(p).forEach(
           (comment) => {
             if (
               !comment ||
@@ -17536,7 +17557,10 @@ Formátum:
 }
 
 function applyReplies(n, postId, rootId, out) {
-  const p = n.posts.find((x) => x.id === postId);
+  const p = (n.posts || []).find((x) => x && x.id === postId);
+  if (p) {
+    p.comments = safePostComments(p);
+  }
   if (p) (out.comments || []).forEach((c) => {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
@@ -17547,7 +17571,7 @@ function applyReplies(n, postId, rootId, out) {
     noteComment(n, p, made);
 
     const rootComment =
-      (p.comments || []).find(
+      safePostComments(p).find(
         (x) =>
           x &&
           x.id === rootId
@@ -17945,7 +17969,7 @@ function applyWorldStep(n, out) {
     const postText = cleanGeneratedUtterance(n, author, p.text, 700);
     if (!postText) return;
     const made = [];
-    (p.comments || []).forEach((c, idx) => {
+    safePostComments(p).forEach((c, idx) => {
       const cid = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!cid || !c.text) return;
       const body = cleanGeneratedUtterance(n, cid, c.text, 240);
@@ -25712,7 +25736,8 @@ function findUnanswered(w) {
 
   for (let i = 0; i < posts.length; i++) {
     const po = posts[i];
-    const cs = Array.isArray(po.comments) ? po.comments : [];
+    if (!po || typeof po !== "object") continue;
+    const cs = safePostComments(po);
 
     /*
      * Nem csak a poszt abszolút utolsó kommentjét nézzük.
@@ -28063,7 +28088,7 @@ function refreshPostReach(w,postId){
   const audience=Math.max(1,displayFollowerCount(w,post.authorId));
   const ageHours=Math.max(0,(now()-(Number(post.ts)||0))/3600e3);
   const freshness=ageHours<=12?1:Math.max(0.32,1-(ageHours-12)/132);
-  const likes=Math.max(0,Number(post.likes)||0), comments=(post.comments||[]).length, reposts=repostCount(w,post.id);
+  const likes=Math.max(0,Number(post.likes)||0), comments=safePostComments(post).length, reposts=repostCount(w,post.id);
   const baseReach=audience*(0.3+freshness*0.52);
   const engagementSpread=likes*2.8+comments*8+reposts*28;
   const trendSpread=trendBoostForPost(w,post.id,post.authorId)*18;
@@ -28071,7 +28096,7 @@ function refreshPostReach(w,postId){
   const impressions=Math.max(1,Math.round((baseReach+engagementSpread+trendSpread+viralSpread)*freshness));
   const knownReach=new Set([
     ...(Array.isArray(post.likedBy)?post.likedBy:[]),
-    ...(post.comments||[]).map((c)=>c&&c.authorId).filter(Boolean),
+    ...safePostComments(post).map((c)=>c&&c.authorId).filter(Boolean),
     ...repostRows(w).filter((r)=>r&&r.postId===post.id).map((r)=>r.actorId),
   ]).size;
   post.reach={impressions,knownReach,distributionScore:clampPositiveSocial(Math.log10(impressions+1)*18+reposts*3),updatedAt:now()};
@@ -28120,7 +28145,7 @@ async function genGossipReactions(w,post,cast){
   const story=post&&post.gossipStory;if(!post||!story||!(cast||[]).length)return{comments:[],reposts:[],follows:[],dms:[],statements:[],changes:[]};
   const castIds=cast.map((x)=>x.id);
   const allowedTargets=[post.authorId,...(story.mentionedIds||[]),w.meId].filter(Boolean).filter((id,index,arr)=>arr.indexOf(id)===index);
-  const currentComments=(post.comments||[]).slice(-8).map((c)=>{const a=charById(w,c.authorId);return`${a?a.name:"?"}: ${c.text}`;}).join("\n");
+  const currentComments=safePostComments(post).slice(-8).map((c)=>{const a=charById(w,c.authorId);return`${a?a.name:"?"}: ${c.text}`;}).join("\n");
   return askWorldJSON(w,engineFor(w),`${worldContext(w,[...castIds,...(story.mentionedIds||[]).filter((id)=>!isHuman(w,id))].filter((id,index,arr)=>arr.indexOf(id)===index),true,null)}
 
 FRISS GOSSIP MEDIA POSZT:
@@ -28206,7 +28231,7 @@ function pickRumorEvolutionCandidate(w){
     if(!post||post.authorId!==media.id||!post.gossipStory||post.gossipStory.rumorEvolution||post.gossipStory.rumorEvolvedAt)return false;
     if(!["rumor","inferred","speculation"].includes(post.gossipStory.factLevel))return false;
     const age=now()-(Number(post.ts)||0);if(age<20*60000||age>72*3600e3)return false;
-    const engagement=Math.max(0,Number(post.likes)||0)+(post.comments||[]).length*2+repostCount(w,post.id)*4;
+    const engagement=Math.max(0,Number(post.likes)||0)+safePostComments(post).length*2+repostCount(w,post.id)*4;
     return engagement>=3||trendBoostForPost(w,post.id,"")>=8||Number(post.virality&&post.virality.score)>=35;
   }).sort((a,b)=>((Number(b.virality&&b.virality.score)||0)+trendBoostForPost(w,b.id,""))-((Number(a.virality&&a.virality.score)||0)+trendBoostForPost(w,a.id,"")))[0]||null;
 }
@@ -28214,7 +28239,7 @@ function pickRumorEvolutionCandidate(w){
 async function genRumorEvolution(w,post){
   if(!post||!post.gossipStory)return{skip:true};
   const media=charById(w,post.authorId);
-  const publicComments=(post.comments||[]).slice(-10).map((c)=>{const a=charById(w,c.authorId);return`${a?a.name:"?"}: ${c.text}`;}).join("\n");
+  const publicComments=safePostComments(post).slice(-10).map((c)=>{const a=charById(w,c.authorId);return`${a?a.name:"?"}: ${c.text}`;}).join("\n");
   return askWorldJSON(w,engineFor(w),`${worldContext(w,(post.gossipStory.mentionedIds||[]).filter((id)=>!isHuman(w,id)),false,null)}
 
 ${media?media.name:"GOSSIP MEDIA"} EGY KORÁBBI PLETYKÁJA TOVÁBB TERJED.
@@ -29574,7 +29599,7 @@ function socialSignalsFor(
       );
 
     commentsReceived +=
-      (post.comments || []).filter(
+      safePostComments(post).filter(
         (c) =>
           c &&
           c.authorId !==
@@ -30174,7 +30199,7 @@ function postViralityScore(
     );
 
   const comments =
-    (post.comments || []).length;
+    safePostComments(post).length;
 
   const reposts =
     repostCount(
@@ -30269,6 +30294,8 @@ function viralFollowerGainFor(
   post,
   score
 ) {
+  if (!w || !post || typeof post !== "object" || !post.id) return 0;
+
   const audience =
     Math.max(
       25,
@@ -30283,7 +30310,7 @@ function viralFollowerGainFor(
       1,
       Number(post.likes) || 0
     ) +
-    (post.comments || []).length * 2 +
+    safePostComments(post).length * 2 +
     repostCount(
       w,
       post.id
@@ -30701,7 +30728,7 @@ function socialSupportScore(
 
     score += Math.min(
       10,
-      (p.comments || []).filter(
+      safePostComments(p).filter(
         (c) =>
           c &&
           c.authorId ===
@@ -32922,7 +32949,7 @@ function planAutoAction(view) {
     return mkAction(
       "comments",
       `comments:${pending.post.id}:${
-        (pending.post.comments || []).length
+        safePostComments(pending.post).length
       }`,
       {
         postId: pending.post.id,
@@ -34262,6 +34289,7 @@ async function runSimulationAction(view, update, action) {
       view.posts || []
     ).find(
       (p) =>
+        p &&
         p.id ===
         (action.payload &&
           action.payload.postId)
@@ -34269,8 +34297,9 @@ async function runSimulationAction(view, update, action) {
 
     const comment =
       post &&
-      (post.comments || []).find(
+      safePostComments(post).find(
         (c) =>
+          c &&
           c.id ===
           (action.payload &&
             action.payload.commentId)
