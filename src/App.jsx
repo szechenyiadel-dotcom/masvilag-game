@@ -2934,7 +2934,7 @@ function setRel(w, a, b, patch) {
 /* ---------- jegyzetek (mint az Instagram Notes) ----------
    Mindenkinek egy aktív jegyzete lehet, ami egy nap után magától lejár. */
 const NOTE_LIFE = 24 * 3600e3;
-const NOTE_REFRESH = NOTE_LIFE;
+const NOTE_REFRESH = 4 * 3600e3;
 const NOTE_MAX = 80;
 
 function pruneExpiredNotes(w) {
@@ -5925,10 +5925,10 @@ function characterIntensityDirective(c) {
   if (!lore) return "";
 
   const rows = [];
-  if (/jealous|jealousy|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(lore)) {
+  if (/jealous|jealousy|féltéken|possess|birtokl|territorial|obsess|megszáll|yandere|controlling|kontrollál|paranoid|paranoi/.test(lore)) {
     rows.push("FÉLTÉKENYSÉG / BIRTOKLÁS MAGVONÁS: ha ezt a kánon explicit megadja, ne kezeld enyhe opcionális fűszerként. Releváns társas triggerre erősen reagáljon: rivális figyelem, flört, érintés, kizárás, bizonytalanság vagy elvesztéstől való félelem ténylegesen mozgassa a figyelmét, hangját és döntéseit. A megnyilvánulás változzon: lehet célzás, kontrolligény, túlzott figyelem, ingerültség, birtokló humor, konfrontáció vagy hideg visszahúzódás — pontosan a saját személyisége szerint.");
   }
-  if (/psychopath|psychopathic|psycho|pszichopat|szadist|sadist|unhinged|kegyetlen|cruel|remorseless|könyörtelen|volatile|kiszámíthatatlan/.test(lore)) {
+  if (/psychopath|psychopathic|psychotic|psycho|pszichopat|sociopath|szociopat|szadist|sadist|unhinged|kegyetlen|cruel|remorseless|könyörtelen|volatile|kiszámíthatatlan/.test(lore)) {
     rows.push("SÖTÉT / PSYCHO MAGVONÁS: ha ez explicit kánon, legyen ténylegesen érezhető. Ne normalizáld empatikus, udvarias, konfliktuskerülő átlagemberré. A saját kánonja szerint lehet hidegen kegyetlen, nyugtalanítóan nyugodt, manipulatív, játékosan fenyegető, impulzív, szadista vagy hirtelen eszkaláló. Ne legyen karikatúra és ne legyen minden pillanatban őrjöngő; attól hiteles, hogy a veszélyesség a döntéseiben is megmarad.");
   }
   if (/manipulat|manipulál|calculating|számító|deceit|hazug|schem|intrig/.test(lore)) {
@@ -8894,6 +8894,25 @@ function rosterLine(w) {
   return rows.join("\n");
 }
 
+function recentStructuredWorldLines(w, limit = 6) {
+  const rows = (w && Array.isArray(w.socialEvents) ? w.socialEvents : [])
+    .filter((event) =>
+      event &&
+      event.text &&
+      event.visibility === "public" &&
+      event.factLevel !== "speculation"
+    )
+    .slice(0, Math.max(1, limit))
+    .map((event) => {
+      const actor = event.actorId ? charById(w, event.actorId) : null;
+      const prefix = actor && actor.name ? `${actor.name}: ` : "";
+      return cut(prefix + String(event.text || ""), 140);
+    })
+    .filter(Boolean);
+
+  return rows;
+}
+
 function worldContext(w, ids, deep, observerId) {
   const focus = ids && ids.length ? ids : null;
   let cast = (w.chars || []).filter((c) => !focus || focus.indexOf(c.id) >= 0);
@@ -8976,7 +8995,7 @@ ${rels.join("\n") || tt("még nincs rögzítve", "nothing recorded yet")}
 ${notes ? `\n${tt("MOSTANI JEGYZETEK", "CURRENT NOTES")}:\n${cut(notes, 260)}` : ""}
 
 ${tt("MOSTANÁBAN TÖRTÉNT", "RECENT EVENTS")}: 
-${(observerId ? knownTimeline : (w.log || []).slice(0, 4).map((l) => cut(l, 120))).join("\n") || "-"}`;
+${(observerId ? knownTimeline : recentStructuredWorldLines(w, 4)).join("\n") || "-"}`;
 }
 
 const ENGINE = `Te egy élő, AI-vezérelt közösségi média világ motorja vagy egy szerepjátékhoz.
@@ -10940,7 +10959,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v22-images-roleplay";
+const BUILD_VERSION = "v23-background-runtime";
 
 const AUTO = "masvilag:auto";
 /*
@@ -18984,9 +19003,7 @@ MOSTANI JEGYZETEK:
 ${notesForAI(w) || "nincs"}
 
 KORÁBBI ESEMÉNYEK:
-${(w.log || [])
-  .slice(0, 6)
-  .join("\n") || "-"}
+${recentStructuredWorldLines(w, 6).join("\n") || "-"}
 
 ${cast
   .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
@@ -27105,6 +27122,46 @@ Ha van:
     { maxTokens: 700 }
   );
 }
+function characterNoteActivityScore(w, c) {
+  if (!w || !c || isHuman(w, c.id)) return -999;
+
+  const lore = [
+    c.personality,
+    c.traits,
+    c.speech,
+    c.extra,
+    c.goals,
+    c.brief,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const mem = ensureCharMemory(w, c.id);
+  let score = 12;
+
+  if (/social|társas|outgoing|extrovert|influencer|creator|online|active|aktív|gossip|pletyka|flirt|flört|impulsive|impulzív/.test(lore)) score += 18;
+  if (/private|zárkózott|reserved|shy|félénk|quiet|csendes|low.?profile|visszahúzód/.test(lore)) score -= 10;
+  if (mem.selfState && mem.selfState.mood) score += 5;
+  if (mem.selfState && mem.selfState.intent) score += 7;
+  if (mem.selfState && Array.isArray(mem.selfState.openLoops) && mem.selfState.openLoops.length) score += 6;
+  score += relationshipObsessionLevel(w, c.id, w.meId) * 5;
+
+  return score;
+}
+
+function pickNoteReactionCast(w, authorId, processedBy) {
+  const done = processedBy instanceof Set ? processedBy : new Set(processedBy || []);
+  return (w.chars || [])
+    .filter((c) => c && !isHuman(w, c.id) && c.id !== authorId && !done.has(c.id))
+    .map((c) => {
+      const relInterest = socialInteractionInterest(w, c.id, authorId);
+      const follows = isFollowing(w, c.id, authorId) ? 16 : 0;
+      const obsession = relationshipObsessionLevel(w, c.id, authorId) * 10;
+      return { c, score: relInterest + follows + obsession + Math.random() * 14 };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map((row) => row.c);
+}
+
 /* Egy bot kiír magának egy jegyzetet. */
 async function genNote(w, bot) {
   return askWorldJSON(
@@ -27132,7 +27189,8 @@ ${repetitionGuard(
 
 INSTAGRAM NOTES SZABÁLYOK:
 
-- Írj egy valódi közösségi médiás Note-ot ${bot.name} nevében.
+- Először döntsd el, ${bot.name} MOST tényleg kiírna-e Note-ot. Ha a személyisége, aktuális hangulata és online szokásai alapján nem, legyen "skip": true.
+- Ha igen, írj egy valódi közösségi médiás Note-ot ${bot.name} nevében.
 - Ez NEM poszt, NEM naplóbejegyzés és NEM roleplay jelenet.
 - Legfeljebb ${NOTE_MAX} karakter lehet.
 - Törekedj rövidségre: gyakran csak néhány szó vagy egy rövid félmondat természetes.
@@ -27195,17 +27253,19 @@ MOSTANI AKTÍV NOTE-OK:
 ${notesForAI(w) || "nincs"}
 
 MOSTANÁBAN TÖRTÉNT:
-${(w.log || [])
-  .slice(0, 5)
-  .join("\n") || "-"}
+${recentStructuredWorldLines(w, 5).join("\n") || "-"}
 
 VÉGSŐ ELLENŐRZÉS:
 
 Ha a szöveg inkább posztnak, naplóbejegyzésnek, idézetnek vagy AI által megírt mini-monológnak tűnik, írd át rövidebbre, lazábbra és spontánabbra.
 
 Formátum:
-{"text":"a note"}${TAIL}`,
-    { maxTokens: 500 }
+Ha most nem írna Note-ot:
+{"skip":true,"text":"","selfUpdates":[]}
+
+Ha ír:
+{"skip":false,"text":"a note","selfUpdates":[{"id":"${bot.id}","mood":"csak ha a Note valóban kifejez/frissít egy pillanatnyi állapotot","intent":"csak ha a Note mögött konkrét szándék van","openLoops":[]}]}${TAIL}`,
+    { maxTokens: 520 }
   );
 }
 
@@ -27221,15 +27281,10 @@ async function genNoteReact(w, note) {
     []
   );
 
-  const cast = pickCast(
+  const cast = pickNoteReactionCast(
     w,
-    note.authorId
-  ).filter(
-    (c) =>
-      c &&
-      !isHuman(w, c.id) &&
-      c.id !== note.authorId &&
-      !processedBy.has(c.id)
+    note.authorId,
+    processedBy
   );
 
   // Ha a kiválasztott körben már nincs
@@ -27302,13 +27357,13 @@ SZUBJEKTÍV NOTE-ÉRTELMEZÉS — FONTOS:
 - A Note gyakran szándékosan homályos. Minden karakter a SAJÁT emlékei, kapcsolata, féltékenysége, vonzalma, konfliktusa és személyisége alapján értelmezze.
 - Döntsd el, hogy az adott karakter azt HIHETI-e, hogy a Note neki/róla szól. Ez nem tény, hanem feltételezés.
 - Egy obsessed / possessive karakter könnyebben veheti magára a Note-ot, könnyebben gondolhatja, hogy neki szól, vagy hogy egy riválisról szól — de ne automatikusan.
-- Ha valaki azt hiszi, hogy neki szól egy romantikus/hiányzós/haragos/célzós Note, az ténylegesen változtathatja a kapcsolatát a szerzővel.
-- Ha azt hiszi, hogy a Note valaki MÁSNAK szól, abból is lehet féltékenység, sértettség, bizalmatlanság vagy távolodás.
+- Ha valaki azt hiszi, hogy neki szól egy romantikus/hiányzós/haragos/célzós Note, ez befolyásolhatja a belső értelmezését és a DM hangját.
+- Ha azt hiszi, hogy a Note valaki MÁSNAK szól, lehet féltékeny, sértett vagy bizalmatlan, de a puszta gondolat önmagában NEM módosít kapcsolatpontot.
 - A "perceptions" mező az ő SZUBJEKTÍV olvasata legyen.
 - "aboutMe": true csak azt jelenti, hogy Ő úgy gondolja, hogy neki/róla szól.
 - "confidence": 0 és 1 között legyen.
-- "delta" csak akkor legyen nem nulla, ha ez az értelmezés tényleg változtat azon, mit érez a Note szerzője iránt. Általában -8..+8.
-- Nem kell nyilvánosan kimondania a feltételezését. Lehet, hogy csak az emoji/DM hangjából és a relationship változásból látszik.
+- "delta" csak akkor lehet nem nulla, ha ugyanaz a karakter ebben a körben tényleges DM-et is küld a Note-ra reagálva. Emoji-only vagy láthatatlan belső értelmezés után delta = 0.
+- Nem kell nyilvánosan kimondania a feltételezését; a DM hangjából finoman érződhet.
 - Ne adj neki biztos tudást arról, kinek szánta valójában a játékos.
 
 EMOJI-REAKCIÓ:
@@ -27386,98 +27441,59 @@ Formátum:
  * folyamatosan aktív.
  */
 function pickInitiator(w) {
-  const chars = (w.chars || []).filter(
-    (c) =>
-      c &&
-      !isHuman(w, c.id)
-  );
-
+  const chars = (w.chars || []).filter((c) => c && !isHuman(w, c.id));
   if (!chars.length) return null;
 
   const pool = chars.map((c) => {
-    const msgs =
-      w.chats[
-        chatKey(w.meId, c.id)
-      ] || [];
-
+    const msgs = w.chats[chatKey(w.meId, c.id)] || [];
     let lastOwnDm = 0;
 
-    for (
-      let i = msgs.length - 1;
-      i >= 0;
-      i -= 1
-    ) {
+    for (let i = msgs.length - 1; i >= 0; i -= 1) {
       const m = msgs[i];
-
-      if (
-        m &&
-        m.from === "them"
-      ) {
-        lastOwnDm =
-          Number(m.ts) || 0;
+      if (m && m.from === "them") {
+        lastOwnDm = Number(m.ts) || 0;
         break;
       }
     }
 
-    const obsessionLevel =
-      relationshipObsessionLevel(
-        w,
-        c.id,
-        w.meId
-      );
+    const rel = getRel(w, c.id, w.meId);
+    const mem = ensureCharMemory(w, c.id);
+    const lore = [
+      c.personality,
+      c.traits,
+      c.speech,
+      c.goals,
+      c.extra,
+      c.brief,
+      rel && rel.mood,
+      rel && rel.hidden,
+      rel && rel.bond,
+    ].filter(Boolean).join(" ").toLowerCase();
 
-    const obsessionRecencyBonus =
-      obsessionLevel *
-      60 * 60 * 1000;
+    const sinceHours = lastOwnDm
+      ? Math.min(36, Math.max(0, (now() - lastOwnDm) / 3600e3))
+      : 36;
 
-    return {
-      c,
-      lastOwnDm,
-      priorityAt:
-        lastOwnDm > 0
-          ? lastOwnDm -
-            obsessionRecencyBonus
-          : -obsessionRecencyBonus,
-      obsessionLevel,
-      tie: Math.random(),
-    };
-  });
+    let score = sinceHours * 1.25;
+    score += socialInteractionInterest(w, c.id, w.meId) * 0.55;
+    score += relationshipObsessionLevel(w, c.id, w.meId) * 18;
 
-  /*
-   * Aki legrégebben kezdeményezett,
-   * az kerül előre.
-   *
-   * Aki még SOHA nem írt magától,
-   * annak lastOwnDm = 0, ezért elsőbbséget kap.
-   *
-   * Ha többen ugyanott állnak,
-   * köztük véletlenszerű a sorrend.
-   */
-  pool.sort((a, b) => {
-    if (
-      a.priorityAt !==
-      b.priorityAt
-    ) {
-      return (
-        a.priorityAt -
-        b.priorityAt
-      );
-    }
+    if (/social|társas|outgoing|extrovert|chatty|beszédes|flirt|flört|impulsive|impulzív|gossip|pletyka|possess|birtokl|obsess|megszáll/.test(lore)) score += 14;
+    if (/reserved|zárkózott|shy|félénk|quiet|csendes|private|low.?profile|visszahúzód/.test(lore)) score -= 9;
+    if (mem.selfState && mem.selfState.intent) score += 10;
+    if (mem.selfState && Array.isArray(mem.selfState.openLoops) && mem.selfState.openLoops.length) score += 8;
 
-    if (
-      a.obsessionLevel !==
-      b.obsessionLevel
-    ) {
-      return (
-        b.obsessionLevel -
-        a.obsessionLevel
-      );
-    }
+    /* Ne írjon rá ugyanaz a karakter újra pár percen belül csak a fairness miatt. */
+    if (lastOwnDm && now() - lastOwnDm < 12 * 60 * 1000) score -= 36;
 
-    return a.tie - b.tie;
-  });
+    return { c, score: score + Math.random() * 12 };
+  })
+    .sort((a, b) => b.score - a.score);
 
-  return pool[0].c;
+  const eligible = pool.filter((row) => row.score >= 12).slice(0, 3);
+  if (!eligible.length) return null;
+
+  return eligible[Math.floor(Math.random() * eligible.length)].c;
 }
 
 /* Van-e olyan, amit tőled láttak, de még nem reagáltak rá? */
@@ -33852,7 +33868,7 @@ MOSTANI JEGYZETEK:
 ${notesForAI(w) || "nincs"}
 
 LEGUTÓBBI VILÁGESEMÉNYEK:
-${(w.log || []).slice(0, 8).join("\n") || "nincs"}
+${recentStructuredWorldLines(w, 8).join("\n") || "nincs"}
 
 ${cast
   .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
@@ -34856,7 +34872,11 @@ function pickRoleplayInitiator(w) {
     .filter((c) => c && !isHuman(w, c.id))
     .map((c) => ({ c, score: roleplayInitiatorScore(w, c) }))
     .sort((a,b) => b.score - a.score);
-  return pool.length ? pool[Math.min(pool.length - 1, Math.floor(Math.random() * Math.min(3, pool.length)))].c : null;
+
+  const eligible = pool.filter((row) => row.score >= 20).slice(0, 3);
+  return eligible.length
+    ? eligible[Math.floor(Math.random() * eligible.length)].c
+    : null;
 }
 
 async function genRoleplayInitiation(w, bot) {
@@ -35403,6 +35423,7 @@ function planAutoAction(view) {
       return {
         c,
         lastNoteAt,
+        noteScore: characterNoteActivityScore(view, c),
         tie: Math.random(),
       };
     })
@@ -35424,11 +35445,12 @@ function planAutoAction(view) {
    * Kb. 10% note a maradék körökből.
    */
   if (
-    roll < 0.10 &&
-    noteless.length
+    roll < 0.14 &&
+    noteless.some((row) => row.noteScore >= 8)
   ) {
-    const bot =
-      noteless[0].c;
+    const eligibleNotes = noteless.filter((row) => row.noteScore >= 8).slice(0, 4);
+    eligibleNotes.sort((a, b) => (b.noteScore - a.noteScore) || (a.lastNoteAt - b.lastNoteAt) || (a.tie - b.tie));
+    const bot = eligibleNotes[Math.floor(Math.random() * Math.min(2, eligibleNotes.length))].c;
 
     return mkAction(
       "note",
@@ -35502,8 +35524,8 @@ function planAutoAction(view) {
    * az új létrehozásával szemben.
    */
   if (
-    roll >= 0.10 &&
-    roll < 0.18
+    roll >= 0.14 &&
+    roll < 0.23
   ) {
     const preferExisting =
       groupTurnCandidates.length > 0 &&
@@ -35572,7 +35594,7 @@ function planAutoAction(view) {
    * A feed watchdog külön garantál friss posztot, ezért itt bátrabban
    * engedjük, hogy a karakterek privátban is megmozdítsák a történetet.
    */
-  if (roll < 0.34) {
+  if (roll < 0.42) {
     const bot =
       pickInitiator(view);
 
@@ -35707,7 +35729,7 @@ MOSTANI JEGYZETEK:
 ${notesForAI(w) || "nincs"}
 
 LEGUTÓBBI VILÁGESEMÉNYEK:
-${(w.log || []).slice(0, 8).join("\n") || "nincs"}
+${recentStructuredWorldLines(w, 8).join("\n") || "nincs"}
 
 ${members
   .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
@@ -36846,6 +36868,8 @@ if (targetNote) {
     const out =
       await genNote(view, bot);
 
+    if (!out || out.skip) return null;
+
     const txt =
       cleanGeneratedUtterance(
         view,
@@ -37028,6 +37052,21 @@ if (targetNote) {
 
       target.updatedAt = now();
 
+      const lastVisibleGroupMsg = rows[rows.length - 1];
+      const lastVisibleGroupActor = lastVisibleGroupMsg ? charById(n, lastVisibleGroupMsg.from) : null;
+      if (lastVisibleGroupMsg) {
+        pushNote(n, n.meId, {
+          icon: "💬",
+          text: sysLangText(
+            n,
+            n.meId,
+            `${target.name || "Csoport"}: ${lastVisibleGroupActor ? lastVisibleGroupActor.name + ": " : ""}${cut(lastVisibleGroupMsg.text, 70)}`,
+            `${target.name || "Group"}: ${lastVisibleGroupActor ? lastVisibleGroupActor.name + ": " : ""}${cut(lastVisibleGroupMsg.text, 70)}`
+          ),
+          link: { type: "group", id: groupId },
+        });
+      }
+
       const rowActors = new Set(rows.map((row) => row.from));
       const groupMembers = new Set(target.members || []);
       const causalGroupChanges = safeAiChanges(out).filter((ch) => {
@@ -37195,6 +37234,18 @@ if (targetNote) {
         ...(n.groups || []),
         freshGroup,
       ];
+
+      const creatorChar = charById(n, creator);
+      pushNote(n, n.meId, {
+        icon: "👥",
+        text: sysLangText(
+          n,
+          n.meId,
+          `${creatorChar ? creatorChar.name : "Valaki"} létrehozta a(z) ${groupName} csoportot.`,
+          `${creatorChar ? creatorChar.name : "Someone"} created the ${groupName} group chat.`
+        ),
+        link: { type: "group", id: groupId },
+      });
 
       messages.forEach(
         (msg) => {
@@ -37551,8 +37602,10 @@ if (targetNote) {
             "dmFrom",
           params: {
             name: bot.name,
-            snippet:
-              txt.slice(0, 70),
+            snippet: cut(
+              txt || (aiImageDescription ? `📷 ${aiImageDescription}` : "📷 kép"),
+              70
+            ),
           },
           text: sysTextFor(
             n,
@@ -37560,11 +37613,10 @@ if (targetNote) {
             "dmFrom",
             {
               name: bot.name,
-              snippet:
-                txt.slice(
-                  0,
-                  70
-                ),
+              snippet: cut(
+                txt || (aiImageDescription ? `📷 ${aiImageDescription}` : "📷 image"),
+                70
+              ),
             }
           ),
           mood: out.mood
@@ -40162,6 +40214,21 @@ const signOut = useCallback(async () => {
   }
 
   if (!manualQueued && cooldownLeft() > 0) return;
+
+  /*
+   * Ne indítsunk egymás után 5 másodpercenként új generatív háttérhívást
+   * csak azért, mert a feed contentAt órája már esedékes. A queue-s reakciók
+   * (komment/reply/forced gossip) továbbra is azonnal futhatnak.
+   */
+  if (
+    !queued &&
+    view2.sim &&
+    Number(view2.sim.at || 0) > 0 &&
+    now() - Number(view2.sim.at || 0) < 8000
+  ) {
+    return;
+  }
+
   /* Background tabs may be browser-throttled, but we do not intentionally stop the world. */
 
   let action = queued;
