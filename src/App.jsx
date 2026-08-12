@@ -4528,25 +4528,29 @@ function socialTextRelationshipDelta(
 
   const raw =
     String(text || "")
-      .toLowerCase();
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
 
-  if (!raw.trim()) {
+  if (!raw) {
     return 0;
   }
 
   /*
-   * Ez nem "sentiment AI", csak egy óvatos social mikro-jel.
-   * A nagyobb változásokat továbbra is az AI-generated changes adja.
+   * Csak FALLBACK arra az esetre, ha az AI-s jelentésértékelés nem érhető el.
+   * A normál út a teljes kommentet + thread-kontextust + kapcsolatot értelmezi.
+   * Fontos: egy direkt reply önmagában NEM jár automatikus plusszal.
    */
   const positive =
-    /(^|\s)(love|luv|ily|adore|cute|pretty|beautiful|gorgeous|hot|proud|congrats|congratulations|thanks|thank you|miss you|best|sweet|amazing|perfect|szeretlek|imádlak|cuki|szép|gyönyörű|büszke|gratulálok|köszi|köszönöm|hiányzol|kedvenc)(\s|$|[!?.])/i.test(
+    /(^|\s)(love|luv|ily|adore|cute|pretty|beautiful|gorgeous|hot|proud|congrats|congratulations|thanks|thank you|miss you|best|sweet|amazing|perfect|legend|queen|king|icon|szeretlek|imádlak|cuki|szép|gyönyörű|büszke|gratulálok|köszi|köszönöm|hiányzol|kedvenc|imádom|zseniális|király)(\s|$|[!?.])/i.test(
       raw
     );
 
   const negative =
-    /(^|\s)(hate|shut up|fuck off|idiot|stupid|loser|pathetic|disgusting|creep|annoying|liar|bitch|asshole|utállak|fogd be|hülye|idióta|vesztes|szánalmas|undorító|idegesítő|hazug|kurva|seggfej)(\s|$|[!?.])/i.test(
+    /(^|\s)(hate|shut up|stfu|fuck off|fuck you|idiot|stupid|loser|pathetic|disgusting|creep|annoying|liar|bitch|asshole|moron|trash|clown|cringe|ew|utállak|fogd be|kuss|húzz el|menj a francba|menj a faszba|hülye|idióta|vesztes|szánalmas|undorító|idegesítő|hazug|kurva|seggfej|bohóc|gáz|ciki)(\s|$|[!?.])/i.test(
       raw
-    );
+    ) ||
+    /(^|\s)(🤡|🙄|🖕)(\s|$)/u.test(raw);
 
   let delta = 0;
 
@@ -4556,22 +4560,16 @@ function socialTextRelationshipDelta(
   ) {
     delta =
       directReply
-        ? 3
-        : 2;
+        ? 6
+        : 5;
   } else if (
     negative &&
     !positive
   ) {
     delta =
       directReply
-        ? -4
-        : -3;
-  } else if (directReply) {
-    /*
-     * Maga a közvetlen reakció is társas jel:
-     * valaki időt/figyelmet adott a másiknak.
-     */
-    delta = 1;
+        ? -8
+        : -6;
   }
 
   const obsession =
@@ -4585,10 +4583,6 @@ function socialTextRelationshipDelta(
     obsession >= 3 &&
     delta !== 0
   ) {
-    /*
-     * A megszállott fél erősebben reagál arra,
-     * ha a célpont közvetlenül foglalkozik vele.
-     */
     delta +=
       delta > 0
         ? 2
@@ -4596,12 +4590,365 @@ function socialTextRelationshipDelta(
   }
 
   return Math.max(
-    -7,
+    -12,
     Math.min(
-      6,
+      10,
       delta
     )
   );
+}
+
+function playerSocialImpactFallbackChanges(
+  w,
+  actorId,
+  targetIds,
+  text,
+  kind = "comment"
+) {
+  const directReply =
+    kind === "reply";
+
+  return (targetIds || [])
+    .map((targetId) => {
+      if (
+        !targetId ||
+        targetId === actorId ||
+        isHuman(w, targetId)
+      ) {
+        return null;
+      }
+
+      const delta =
+        socialTextRelationshipDelta(
+          w,
+          actorId,
+          targetId,
+          text,
+          directReply
+        );
+
+      if (!delta) {
+        return null;
+      }
+
+      const en =
+        worldLanguage(
+          w,
+          actorId
+        ) === "en";
+
+      return {
+        a: targetId,
+        b: actorId,
+        delta,
+        mood: "",
+        why:
+          en
+            ? (
+                delta < 0
+                  ? "They took the public comment negatively."
+                  : "They took the public comment positively."
+              )
+            : (
+                delta < 0
+                  ? "Negatívan érintette a nyilvános kommented."
+                  : "Pozitívan érintette a nyilvános kommented."
+              ),
+        oneSided: true,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function assessPlayerSocialRelationshipImpact(
+  w,
+  post,
+  comment,
+  targetIds,
+  kind = "comment"
+) {
+  if (
+    !w ||
+    !post ||
+    !comment ||
+    !comment.authorId
+  ) {
+    return {
+      assessed: false,
+      changes: [],
+    };
+  }
+
+  const actorId =
+    comment.authorId;
+
+  const targets =
+    [...new Set(targetIds || [])]
+      .map((id) =>
+        charById(
+          w,
+          id
+        )
+      )
+      .filter(
+        (c) =>
+          c &&
+          !isHuman(
+            w,
+            c.id
+          ) &&
+          c.id !== actorId
+      )
+      .slice(0, 5);
+
+  if (!targets.length) {
+    return {
+      assessed: true,
+      changes: [],
+    };
+  }
+
+  const parentComment =
+    comment.parent
+      ? safePostComments(post).find(
+          (c) =>
+            c &&
+            c.id === comment.parent
+        )
+      : null;
+
+  const threadContext =
+    safePostComments(post)
+      .slice(-12)
+      .map(
+        (c) =>
+          `${nameOfIn(w, c.authorId)}: ${String(c.text || "").slice(0, 220)}`
+      )
+      .join("\n");
+
+  const out =
+    await askWorldJSONInteractive(
+      w,
+      engineFor(w),
+      `${worldContext(
+        w,
+        targets.map(
+          (c) => c.id
+        ),
+        true,
+        null
+      )}
+
+NYILVÁNOS KOMMENT / REPLY KAPCSOLATI HATÁSÁNAK ÉRTÉKELÉSE
+
+A JÁTÉKOS:
+${nameOfIn(w, actorId)}
+
+POSZT:
+${nameOfIn(w, post.authorId)}: "${String(post.text || "").slice(0, 800)}"
+
+${post.imageDescription ? `KÉP LEÍRÁSA: ${String(post.imageDescription).slice(0, 700)}` : ""}
+
+${parentComment ? `KÖZVETLENÜL AZ ALÁBBI KOMMENTRE VÁLASZOLT:
+${nameOfIn(w, parentComment.authorId)}: "${String(parentComment.text || "").slice(0, 500)}"` : ""}
+
+A JÁTÉKOS MOST EZT ÍRTA:
+"${String(comment.text || "").slice(0, 700)}"
+
+THREAD RÖVID KONTEXTUSA:
+${threadContext || "-"}
+
+ÉRINTETT AI-K:
+${targets
+  .map(
+    (c) =>
+      `${voiceCard(c)}
+${characterMemoryCard(w, c)}
+${relationshipBehaviorCard(
+        w,
+        c.id,
+        actorId
+      )}`
+  )
+  .join("\n")}
+
+FELADAT:
+Csak azt döntsd el, hogyan változik AZ ÉRINTETT AI-K → JÁTÉKOS kapcsolatiránya ettől a konkrét kommenttől/reply-tól.
+
+SZABÁLYOK:
+- A pontos szöveget és a thread-kontextust értelmezd, ne kulcsszavakat.
+- A negatív beszólás, sértés, gúny, nyilvános megalázás, lekezelés, elutasítás vagy támadás adjon MÍNUSZT annak, akinek szól.
+- Kedves válasz, támogatás, bók, védelem, flört vagy őszinte bocsánatkérés adhat PLUSZT.
+- Semleges kérdés, tárgyilagos válasz vagy jelentéktelen reakció legyen 0.
+- A DIREKT REPLY önmagában SOHA nem jelent automatikus pozitív pontot.
+- Szarkazmust és baráti ugratást KONTEXTUSBAN értelmezz. Egy közeli barátnál a "bitch 😭" lehet játékos; ellenségnél ugyanaz lehet sértés.
+- A karakter személyisége számít: ugyanaz a mondat nem mindenkit ugyanúgy érint.
+- A meglévő kapcsolat számít, de NE semlegesíts egy egyértelmű sértést csak azért, mert eddig jóban voltak.
+- Egy ordinary social kommentnél általában ±4–15 elég.
+- Egyértelmű nyilvános megalázás / súlyos sértés / komoly érzelmi támogatás lehet kb. ±16–25.
+- 0-t adj, ha nincs valódi kapcsolati hatás.
+- Csak az itt felsorolt AI-k szerepelhetnek.
+- "a" mindig az AI id-ja legyen; "b" mindig a játékos id-ja.
+- A mood azt írja le, MIT ÉREZ most az AI a játékos iránt.
+- A why röviden nevezze meg a konkrét okot.
+- Ha a bond még ugyanaz, ne találj ki újat. Ha tényleg fordulópont történt, adhatsz bondot.
+- Ne generálj kommentválaszt, csak kapcsolatértékelést.
+
+Formátum:
+{"changes":[{"a":"AI id","b":"${actorId}","delta":-12,"mood":"rövid aktuális érzés","why":"konkrét ok","bond":"opcionális"}]}${TAIL}`,
+      {
+        maxTokens: 650,
+        maxTries: 2,
+      }
+    );
+
+  const allowed =
+    new Set(
+      targets.map(
+        (c) => c.id
+      )
+    );
+
+  const changes = [];
+
+  safeAiChanges(out)
+    .slice(0, targets.length + 3)
+    .forEach((row) => {
+      const a =
+        findChar(
+          w,
+          row &&
+          (
+            row.a !== undefined
+              ? row.a
+              : (
+                  row.id !== undefined
+                    ? row.id
+                    : row.name
+                )
+          )
+        );
+
+      if (
+        !a ||
+        !allowed.has(a)
+      ) {
+        return;
+      }
+
+      let delta =
+        Number(
+          row &&
+          row.delta
+        ) || 0;
+
+      if (
+        delta !== 0 &&
+        Math.abs(delta) < 4
+      ) {
+        delta =
+          delta > 0
+            ? 4
+            : -4;
+      }
+
+      delta =
+        Math.max(
+          -25,
+          Math.min(
+            25,
+            Math.round(delta)
+          )
+        );
+
+      if (!delta) {
+        return;
+      }
+
+      const change = {
+        a,
+        b: actorId,
+        delta,
+        mood:
+          String(
+            (
+              row &&
+              row.mood
+            ) || ""
+          ).slice(0, 60),
+        why:
+          String(
+            (
+              row &&
+              row.why
+            ) || ""
+          ).slice(0, 180),
+        oneSided: true,
+      };
+
+      if (
+        row &&
+        row.bond
+      ) {
+        change.bond =
+          String(
+            row.bond
+          ).slice(0, 80);
+      }
+
+      changes.push(change);
+    });
+
+  return {
+    assessed: true,
+    changes,
+  };
+}
+
+function rememberPlayerSocialCommentImpact(
+  n,
+  actorId,
+  targetIds,
+  text,
+  kind = "comment"
+) {
+  (targetIds || [])
+    .forEach(
+      (targetId) => {
+        if (
+          !targetId ||
+          targetId === actorId ||
+          isHuman(
+            n,
+            targetId
+          )
+        ) {
+          return;
+        }
+
+        rememberAboutTarget(
+          n,
+          targetId,
+          actorId,
+          {
+            kind:
+              "conversation",
+            source:
+              kind === "reply"
+                ? "player_comment_reply"
+                : "player_comment",
+            confidence: 1,
+            text:
+              sysLangText(
+                n,
+                targetId,
+                `${nameOfIn(n, actorId)} ${kind === "reply" ? "közvetlenül válaszolt nekem" : "nyilvánosan kommentelt"}: ${cut(String(text || ""), 150)}`,
+                `${nameOfIn(n, actorId)} ${kind === "reply" ? "replied directly to me" : "commented publicly"}: ${cut(String(text || ""), 150)}`
+              ),
+          }
+        );
+      }
+    );
 }
 
 function applyPlayerSocialRelationshipSignal(
@@ -4622,65 +4969,28 @@ function applyPlayerSocialRelationshipSignal(
     return;
   }
 
-  const directReply =
-    kind === "reply";
-
-  const delta =
-    socialTextRelationshipDelta(
+  const changes =
+    playerSocialImpactFallbackChanges(
       n,
       actorId,
-      targetId,
+      [targetId],
       text,
-      directReply
+      kind
     );
 
-  if (!delta) {
-    return;
-  }
-
-  const target =
-    charById(
+  if (changes.length) {
+    applyChanges(
       n,
-      targetId
+      changes
     );
-
-  if (!target) {
-    return;
   }
 
-  const why =
-    worldLanguage(
-      n,
-      actorId
-    ) === "en"
-      ? (
-          directReply
-            ? "Your direct reply changed how they feel about you."
-            : "Your public interaction affected how they feel about you."
-        )
-      : (
-          directReply
-            ? "A közvetlen válaszod hatott arra, mit érez irántad."
-            : "A nyilvános interakciód hatott arra, mit érez irántad."
-        );
-
-  /*
-   * Az AI -> játékos irány változik:
-   * az AI reagál arra, hogy a játékos mit tett vele.
-   * applyChanges maga küldi a +N / -N értesítést.
-   */
-  applyChanges(
+  rememberPlayerSocialCommentImpact(
     n,
-    [
-      {
-        a: targetId,
-        b: actorId,
-        delta,
-        mood: "",
-        why,
-        oneSided: true,
-      },
-    ]
+    actorId,
+    [targetId],
+    text,
+    kind
   );
 }
 
@@ -11778,7 +12088,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v38-roleplay-memory-layers";
+const BUILD_VERSION = "v39-comment-sensitive-relationships";
 
 const AUTO = "masvilag:auto";
 /*
@@ -21427,14 +21737,64 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               );
             })
           }
-          onComment={(id, text2, parent) => {
+          onComment={async (id, text2, parent) => {
             const madeId = uid();
+            const actorId = w.meId;
+            const currentParent =
+              parent
+                ? safePostComments(p).find(
+                    (c) =>
+                      c &&
+                      c.id === parent
+                  )
+                : null;
+
+            const primaryTargetId =
+              currentParent &&
+              currentParent.authorId
+                ? currentParent.authorId
+                : p.authorId;
+
+            const mentionTargets =
+              mentionedIdsInText(
+                w,
+                text2,
+                actorId
+              );
+
+            const impactTargetIds =
+              [
+                ...(
+                  primaryTargetId &&
+                  primaryTargetId !== actorId
+                    ? [primaryTargetId]
+                    : []
+                ),
+                ...mentionTargets,
+              ]
+                .filter(
+                  (target, index, arr) =>
+                    target &&
+                    target !== actorId &&
+                    !isHuman(w, target) &&
+                    arr.indexOf(target) === index
+                )
+                .slice(0, 5);
+
+            const madeForImpact = {
+              id: madeId,
+              authorId: actorId,
+              text: text2,
+              ts: now(),
+              parent: parent || null,
+            };
 
             update((n) => {
               const x = n.posts.find((y) => y.id === id);
               if (!x) return;
 
-              const actorId = n.meId || w.meId;
+              const freshActorId =
+                n.meId || actorId;
 
               x.comments = safePostComments(x);
 
@@ -21448,28 +21808,26 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   : x.authorId;
 
               const made = {
-                id: madeId,
-                authorId: actorId,
-                text: text2,
-                ts: now(),
-                parent: parent || null,
+                ...madeForImpact,
+                authorId:
+                  freshActorId,
               };
 
               x.comments.push(made);
               noteComment(n, x, made);
 
-              const mentionTargets = mentionedIdsInText(
+              const freshMentionTargets = mentionedIdsInText(
                 n,
                 made.text,
-                actorId
+                freshActorId
               );
 
               const eventTargets = [
-                ...(targetId && targetId !== actorId ? [targetId] : []),
-                ...mentionTargets,
+                ...(targetId && targetId !== freshActorId ? [targetId] : []),
+                ...freshMentionTargets,
               ].filter((target, index, arr) =>
                 target &&
-                target !== actorId &&
+                target !== freshActorId &&
                 arr.indexOf(target) === index
               );
 
@@ -21477,7 +21835,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 type: parent ? "reply" : "comment",
                 refId: made.id,
                 ts: made.ts,
-                actorId,
+                actorId: freshActorId,
                 targetIds: eventTargets,
                 visibility: "public",
                 factLevel: "observed",
@@ -21491,6 +21849,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   "social",
                   "player-comment",
                   parent ? "reply" : "comment",
+                  "relationship-impact-pending",
                 ],
                 meta: {
                   postId: x.id,
@@ -21498,17 +21857,81 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   parentId: made.parent || "",
                   postAuthorId: x.authorId || "",
                   targetId: targetId || "",
+                  impactTargets:
+                    impactTargetIds,
                 },
               });
-
-              applyPlayerSocialRelationshipSignal(
-                n,
-                actorId,
-                targetId,
-                made.text,
-                parent ? "reply" : "comment"
-              );
             });
+
+            /*
+             * A relationship consequence a komment TARTALMÁBÓL jön.
+             * Nem az számít, hogy "reply volt", hanem hogy mit mondott,
+             * kinek mondta, milyen kapcsolatban vannak és milyen a thread.
+             *
+             * A komment azonnal megjelenik; ez az értékelés utána fut le.
+             * A következő AI-reply csak ezután kap signal-t, így már a
+             * friss kapcsolatállapotból reagál.
+             */
+            if (impactTargetIds.length) {
+              let impact = null;
+
+              try {
+                impact =
+                  await assessPlayerSocialRelationshipImpact(
+                    w,
+                    p,
+                    madeForImpact,
+                    impactTargetIds,
+                    parent
+                      ? "reply"
+                      : "comment"
+                  );
+              } catch (e) {
+                console.warn(
+                  "Comment relationship impact AI assessment failed; using local fallback:",
+                  e
+                );
+              }
+
+              update((n) => {
+                const freshActorId =
+                  n.meId || actorId;
+
+                const changes =
+                  impact &&
+                  impact.assessed
+                    ? impact.changes
+                    : playerSocialImpactFallbackChanges(
+                        n,
+                        freshActorId,
+                        impactTargetIds,
+                        text2,
+                        parent
+                          ? "reply"
+                          : "comment"
+                      );
+
+                if (
+                  Array.isArray(changes) &&
+                  changes.length
+                ) {
+                  applyChanges(
+                    n,
+                    changes
+                  );
+                }
+
+                rememberPlayerSocialCommentImpact(
+                  n,
+                  freshActorId,
+                  impactTargetIds,
+                  text2,
+                  parent
+                    ? "reply"
+                    : "comment"
+                );
+              });
+            }
 
             if (onSignal) {
               onSignal({
