@@ -7030,8 +7030,45 @@ function isRepetitiveUtterance(w, id, text) {
   return false;
 }
 
-function cleanGeneratedUtterance(w, id, text, maxLen = 500) {
-  const t = String(text || "").replace(/\s+/g, " ").trim();
+const SOCIAL_UI_PHONE_NAG_RE =
+  /\b(?:quit|stop)\s+(?:staring|looking)\s+at\s+(?:your\s+)?(?:phone|screen)\b|\b(?:look|get)\s+up\s+from\s+(?:your\s+)?phone\b|\bput\s+(?:your\s+)?phone\s+down\b|\b(?:get|stay)\s+off\s+(?:your\s+)?(?:phone|screen|the\s+app|social\s+media|instagram)\b|\b(?:quit|stop)\s+scrolling\b|\blog\s+off\s+(?:the\s+app|social\s+media|instagram)?\b|\btouch\s+grass\b|\b(?:tedd|rakd)\s+le\s+a\s+telefon(?:od|odat)?\b|\bne\s+(?:a\s+)?telefon(?:od|odat)?\s+b[aá]muld\b|\bsz[aá]llj\s+le\s+(?:a\s+)?telefon(?:od|ról|rol)?\b|\bhagyd\s+abba\s+a\s+g[oö]rget[eé]st\b|\bne\s+g[oö]rgess\b/i;
+
+function sanitizeSocialUiMetaText(value) {
+  const source = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!source) return "";
+  if (!SOCIAL_UI_PHONE_NAG_RE.test(source)) return source;
+
+  const parts = source
+    .split(/(?<=[.!?])\s+|\n+/g)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !SOCIAL_UI_PHONE_NAG_RE.test(part));
+
+  return parts.join(" ").trim();
+}
+
+function cleanGeneratedUtterance(
+  w,
+  id,
+  text,
+  maxLen = 500,
+  allowPhysicalPhoneMeta = false
+) {
+  let t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+
+  /*
+   * A social-media UI kommunikációs csatorna, nem automatikus in-world
+   * "telefonbámulás". Fizikai telefonos megjegyzés csak dedikált RP-ben
+   * maradhat meg, ahol a jelenet ténylegesen alátámaszthatja.
+   */
+  if (!allowPhysicalPhoneMeta) {
+    t = sanitizeSocialUiMetaText(t);
+  }
+
   if (!t) return "";
   if (isRepetitiveUtterance(w, id, t)) return "";
   return t.length > maxLen ? t.slice(0, maxLen) : t;
@@ -8792,6 +8829,9 @@ function sanitizePhoneDm(
 
   if (!text) return "";
 
+  text = sanitizeSocialUiMetaText(text);
+  if (!text) return "";
+
   if (
     !dmHasEstablishedPhysicalContext(
       w,
@@ -9114,6 +9154,12 @@ KOMMUNIKÁCIÓS FORMÁTUM
 
 - JEGYZET / NOTE: rövid, spontán közösségi médiás Note legyen. Gyakran csak néhány szó vagy egy rövid félmondat. Ne váljon mini-poszttá, naplóbejegyzéssé vagy monológgá.
 
+SOCIAL MEDIA IMMERSION — KEMÉNY SZABÁLY:
+- A feed, DM, group chat, komment, poszt és Note maga a kommunikációs felület. NE kezeld úgy, mintha a játékos karaktere fizikailag egész nap a telefonját bámulná.
+- Social felületen NE mondd neki, hogy „tedd le a telefont”, „hagyd abba a görgetést”, „ne bámuld a kijelzőt”, „szállj le az appról”, „touch grass”, „quit staring at your phone” vagy ezek közeli változatát csak azért, mert az interakció egy social-media appban történik.
+- A készülék vagy az app használata önmagában NEM in-world történés és NEM személyiségkritika.
+- Ilyen fizikai telefonos megjegyzés kizárólag dedikált ROLEPLAY / JELENET közben lehet természetes, ha a jelenetben ténylegesen látható, hogy valaki a telefonját nézi, és a karakternek konkrét oka van erre reagálni.
+
 EMOJI
 
 - Chatben, group chatben, kommentben, posztban és Note-ban az emoji-használat mindig az adott karakter természetes online kommunikációjához igazodjon.
@@ -9321,6 +9367,12 @@ COMMUNICATION FORMAT
 - POST: let the content, character and situation determine the length. A post may be a short spontaneous thought, but it may also be longer and more detailed when there is a natural reason for it. Do not automatically make posts short or automatically make them long.
 
 - NOTE: keep it short and spontaneous, like a real social media Note. It may often be only a few words or a short fragment. Do not turn it into a mini-post, diary entry or monologue.
+
+SOCIAL-MEDIA IMMERSION — HARD RULE:
+- The feed, DMs, group chats, comments, posts and Notes are the communication medium. Do NOT treat the player character as physically staring at a phone all day merely because the game interface is social-media based.
+- Outside dedicated ROLEPLAY / SCENE, never tell the player to “put your phone down”, “stop scrolling”, “get off the app”, “quit staring at your phone/screen”, “touch grass”, or close paraphrases merely because they are using the social interface.
+- Using the app/device is NOT by itself an in-world event, flaw, addiction or reason for another character to nag them.
+- Physical comments about someone looking at their phone are allowed only inside a dedicated ROLEPLAY / SCENE when the scene actually establishes that visible behavior and the speaking character has a concrete reason to react to it.
 
 EMOJI USE
 
@@ -11120,7 +11172,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v29-chat-auto-retry";
+const BUILD_VERSION = "v30-social-activity-group-chat";
 
 const AUTO = "masvilag:auto";
 /*
@@ -13264,6 +13316,81 @@ function aiFollowEligibility(
   }
 
   return { allowed:false, mode:"blocked", reason:"no-social-bond" };
+}
+
+function characterOnlineActivityProfile(w, c) {
+  if (!c || (w && isHuman(w, c.id))) {
+    return {
+      overall: 0,
+      post: 0,
+      group: 0,
+      dm: 0,
+      note: 0,
+    };
+  }
+
+  const lore = [
+    characterLoreCorpus(c),
+    c.activity,
+    c.activityLevel,
+    c.onlineActivity,
+    c.socialActivity,
+    c.socialMedia,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  let overall = 1;
+
+  /* Explicitly very-online / very-social characters really are more active. */
+  if (/chronically online|always online|very active|hyperactive|terminally online|folyamatosan online|nagyon akt[ií]v|állandóan online/.test(lore)) {
+    overall += 0.55;
+  }
+
+  if (/extrovert|extroverted|outgoing|social|t[aá]rsas[aá]gi|chatty|talkative|besz[eé]des|influencer|creator|blogger|celebrity|gossip|pletyka|attention.?seeking|figyelemk[eé]r/.test(lore)) {
+    overall += 0.30;
+  }
+
+  if (/impulsive|impulz[ií]v|chaotic|k[aá]osz|flirt|fl[oö]rt|curious|k[ií]v[aá]ncsi/.test(lore)) {
+    overall += 0.12;
+  }
+
+  if (/introvert|introverted|reserved|private|quiet|csendes|z[aá]rk[oó]zott|visszah[uú]z[oó]d|shy|f[eé]l[eé]nk|low.?profile/.test(lore)) {
+    overall -= 0.30;
+  }
+
+  if (/antisocial|offline|rarely posts|rarely online|hates social media|social media.*hate|ut[aá]lja.*k[oö]z[oö]ss[eé]gi|ritk[aá]n posztol|ritk[aá]n online/.test(lore)) {
+    overall -= 0.35;
+  }
+
+  /*
+   * Semleges karakterek se legyenek teljesen klónok: egy stabil, kicsi,
+   * karakter-ID-ből származó eltérés ad saját online ritmust anélkül,
+   * hogy minden új rendernél random személyiséget kapnának.
+   */
+  const stableJitter =
+    ((commentSeedNumber(c.id || c.name || "character") % 21) - 10) / 100;
+
+  overall += stableJitter;
+  overall = Math.max(0.30, Math.min(1.95, overall));
+
+  const postBias = /influencer|creator|blogger|celebrity|content|fot[oó]|fashion|modell/.test(lore) ? 0.18 : 0;
+  const groupBias = /chatty|talkative|besz[eé]des|gossip|pletyka|outgoing|t[aá]rsas[aá]gi|chaotic|k[aá]osz/.test(lore) ? 0.18 : 0;
+  const dmBias = /flirt|fl[oö]rt|possess|birtokl|obsess|megsz[aá]ll|protect|v[eé]delmez|chatty|talkative/.test(lore) ? 0.16 : 0;
+  const noteBias = /online|influencer|creator|impulsive|impulz[ií]v|expressive|kifejez[oő]|gossip|pletyka/.test(lore) ? 0.14 : 0;
+
+  const quietPenalty = /reserved|private|quiet|csendes|z[aá]rk[oó]zott|visszah[uú]z[oó]d|shy|f[eé]l[eé]nk/.test(lore) ? 0.10 : 0;
+
+  const clamp = (value) => Math.max(0.25, Math.min(2.15, value));
+
+  return {
+    overall: clamp(overall),
+    post: clamp(overall + postBias - quietPenalty * 0.4),
+    group: clamp(overall + groupBias - quietPenalty),
+    dm: clamp(overall + dmBias - quietPenalty * 0.6),
+    note: clamp(overall + noteBias - quietPenalty * 0.5),
+  };
 }
 
 function characterSocialFollowModifier(c) {
@@ -18491,11 +18618,11 @@ function socialInteractionInterest(
 }
 
 /*
- * FAIR + RELATIONSHIP-AWARE COMMENT ACTIVITY
+ * CHARACTER-DRIVEN + RELATIONSHIP-AWARE COMMENT ACTIVITY
  *
- * A fairness továbbra is számít, de a poszthoz
- * ténylegesen kötődő barátok, crushok, riválisok
- * és történeti ellenfelek nagyobb eséllyel reagálnak.
+ * A kommentelési gyakoriság karakterenként eltér. Az online aktív,
+ * beszédes karakterek több kommentet bírnak el; a quiet/private karakterek
+ * ritkábban jelennek meg. A kapcsolat és relevancia továbbra is elsődleges.
  */
 function fairCommentCast(w, targetId) {
   const cutoff =
@@ -18577,10 +18704,12 @@ function fairCommentCast(w, targetId) {
         storyLinked ||
         interest >= 24;
 
+      const activity = characterOnlineActivityProfile(w, c).overall;
+
       const discoveryChance =
         Math.min(
-          0.28,
-          0.06 + interest / 420
+          0.34,
+          (0.05 + interest / 420) * Math.max(0.45, activity)
         );
 
       const discovered =
@@ -18605,25 +18734,28 @@ function fairCommentCast(w, targetId) {
         eligible:
           naturallyLinked || discovered,
         visibilityBonus,
+        activity,
         tie: Math.random(),
       };
     });
 
   chars.sort((a, b) => {
     /*
-     * Relevance + believable feed visibility + fairness together.
-     * Someone close can react repeatedly when it makes sense, but the same
-     * handful of characters should not monopolize every post forever.
+     * Relevance + believable feed visibility + PERSONAL activity rhythm.
+     * A highly-online character may comment repeatedly; a private character
+     * pays a larger recent-activity penalty and therefore appears less often.
      */
     const ap =
-      a.recentComments * 20 -
+      a.recentComments * (20 / Math.max(0.35, a.activity)) -
       a.interest -
-      a.visibilityBonus;
+      a.visibilityBonus -
+      (a.activity - 1) * 24;
 
     const bp =
-      b.recentComments * 20 -
+      b.recentComments * (20 / Math.max(0.35, b.activity)) -
       b.interest -
-      b.visibilityBonus;
+      b.visibilityBonus -
+      (b.activity - 1) * 24;
 
     if (ap !== bp) {
       return ap - bp;
@@ -19028,110 +19160,65 @@ function applyReplies(n, postId, rootId, out) {
   return createdReplyIds.length;
 }
 /*
- * FAIR POST ACTIVITY
+ * CHARACTER-DRIVEN POST ACTIVITY
  *
- * Az AI-karaktereket úgy rendezi sorba,
- * hogy hosszabb távon mindegyikük
- * hasonló mennyiségű lehetőséget kapjon
- * önálló posztolásra.
- *
- * Nem katonás körforgás:
- * azonos aktivitásnál véletlenszerű
- * marad a sorrend.
+ * Nem minden AI egyformán aktív. A személyiségből, online szokásokból
+ * és stabil karakter-ritmusból származó aktivitás szabja meg, ki mennyit
+ * posztol. A hosszú csend továbbra is ad esélyt a ritkább posztolóknak.
  */
 function fairPostCast(w) {
   const chars = (w.chars || []).filter(
-    (c) =>
-      c &&
-      !isHuman(w, c.id)
+    (c) => c && !isHuman(w, c.id)
   );
 
-  if (!chars.length) {
-    return [];
-  }
+  if (!chars.length) return [];
 
-  /*
-   * Csak az utóbbi 48 órát nézzük,
-   * így egy régi aktív időszak
-   * nem bünteti örökké a karaktert.
-   */
-  const cutoff =
-    now() - 48 * 3600e3;
+  const cutoff = now() - 48 * 3600e3;
 
   const ranked = chars.map((c) => {
     let recentPosts = 0;
     let lastPostAt = 0;
 
     (w.posts || []).forEach((p) => {
-      if (
-        !p ||
-        p.authorId !== c.id
-      ) {
-        return;
-      }
-
-      const ts =
-        Number(p.ts) || 0;
-
-      if (ts >= cutoff) {
-        recentPosts += 1;
-      }
-
-      lastPostAt = Math.max(
-        lastPostAt,
-        ts
-      );
+      if (!p || p.authorId !== c.id) return;
+      const ts = Number(p.ts) || 0;
+      if (ts >= cutoff) recentPosts += 1;
+      lastPostAt = Math.max(lastPostAt, ts);
     });
+
+    const activity = characterOnlineActivityProfile(w, c).post;
+    const idleHours = lastPostAt
+      ? Math.min(72, Math.max(0, (now() - lastPostAt) / 3600e3))
+      : 72;
+
+    /*
+     * Nem egyenlítjük ki mesterségesen a karaktereket.
+     * Az aktívabb személyiség több posztot bír el büntetés nélkül,
+     * a ritkán posztoló karakter viszont hosszú csend után továbbra is
+     * kaphat természetes lehetőséget.
+     */
+    const pressure =
+      idleHours * (0.45 + activity) +
+      activity * 25 -
+      recentPosts * (20 / Math.max(0.35, activity)) +
+      Math.random() * 9;
 
     return {
       c,
+      activity,
       recentPosts,
       lastPostAt,
-      tie: Math.random(),
+      pressure,
     };
   });
 
-  ranked.sort((a, b) => {
-    /*
-     * Először az kapjon lehetőséget,
-     * aki az elmúlt 48 órában
-     * kevesebbet posztolt.
-     */
-    if (
-      a.recentPosts !==
-      b.recentPosts
-    ) {
-      return (
-        a.recentPosts -
-        b.recentPosts
-      );
-    }
+  ranked.sort((a, b) =>
+    (b.pressure - a.pressure) ||
+    (b.activity - a.activity) ||
+    (a.lastPostAt - b.lastPostAt)
+  );
 
-    /*
-     * Ha ugyanannyit posztoltak,
-     * az kerüljön előrébb,
-     * aki régebben posztolt.
-     */
-    if (
-      a.lastPostAt !==
-      b.lastPostAt
-    ) {
-      return (
-        a.lastPostAt -
-        b.lastPostAt
-      );
-    }
-
-    /*
-     * Teljes döntetlennél maradjon
-     * egy kis természetes véletlen.
-     */
-    return a.tie - b.tie;
-  });
-
-  return ranked
-    .map((x) => x.c)
-    .slice(0, 5);
+  return ranked.map((x) => x.c).slice(0, 5);
 }
 async function genWorldStep(w, single) {
   const cast = fairPostCast(w);
@@ -23026,7 +23113,7 @@ Formátum:
               ? rawText.trim()
               : (
                   resolvedId
-                    ? cleanGeneratedUtterance(w, resolvedId, rawText, 2600)
+                    ? cleanGeneratedUtterance(w, resolvedId, rawText, 2600, true)
                     : ""
                 );
 
@@ -23864,17 +23951,35 @@ const turn = async (mine) => {
     .map((m) => m && m.from)
     .filter((id) => id && id !== w.meId && (group.members || []).includes(id));
 
+  const rankedGroupIds = fairGroupCast(
+    w,
+    group.members || []
+  ).map((c) => c.id);
+
+  const generalGroupTurn =
+    !playerTarget.id ||
+    Number(playerTarget.confidence || 0) < 0.72;
+
   const groupAiIds = [...new Set([
     playerTarget.id || "",
+    ...(generalGroupTurn ? [] : recentAiIds.slice(0, 1)),
+    ...rankedGroupIds,
     ...recentAiIds,
     ...(group.members || []),
   ])]
     .filter((id) => id && !isHuman(w, id) && charById(w, id))
-    .slice(0, 4);
+    .slice(0, 5);
 
   const groupAiMembers = groupAiIds
     .map((id) => charById(w, id))
     .filter(Boolean);
+
+  const mandatorySpeakerIds =
+    generalGroupTurn && groupAiIds.length >= 2
+      ? groupAiIds.slice(0, 2)
+      : playerTarget.id
+        ? [playerTarget.id]
+        : groupAiIds.slice(0, 1);
 
   if (mine) {
     patch((g) => {
@@ -24006,10 +24111,13 @@ ${matureContentInstruction(
 CSOPORTCHAT SZABÁLYOK:
 
 - Ez VALÓDI group chat, NEM roleplay-jelenet.
-- Írj 1-3 új üzenetet a csoport AI-tagjaitól.
-- Ha 1 válasz természetesebb, adj csak 1-et.
+- ${generalGroupTurn && groupAiIds.length >= 2
+    ? `Ez az üzenet most a CSOPORTNAK szól. Adj 2-4 rövid új üzenetet, és legalább KÉT KÜLÖNBÖZŐ AI-karakter szólaljon meg. A minimum két megszólaló: ${mandatorySpeakerIds.map((id) => nameOfIn(w, id)).join(" és ")}.`
+    : `Ha a játékos egy konkrét karakterhez szólt, a közvetlen címzett válaszoljon. Mellette 0-2 másik AI-tag is beszállhat, ha tényleg természetes reakciója lenne.`}
+- Ne legyen az az alapértelmezés, hogy egy egész group chatben mindig csak ugyanaz az egy ember reagál.
 - Nem kell minden tagnak minden körben megszólalnia.
-- Csak az írjon, akinek tényleg van oka reagálni.
+- Csak az írjon, akinek tényleg van oka reagálni, DE általános csoportos megszólításnál legalább két különböző AI reagáljon.
+- A karakterek online aktivitása NEM azonos: egy beszédes/online aktív karakter gyakrabban szólhat, egy private/quiet karakter ritkábban. Ne próbáld mesterségesen egyenlő kvótára hozni őket.
 - Ugyanaz a karakter küldhet két egymást követő rövid üzenetet is, ha ez természetes.
 - A legtöbb üzenet legyen rövid.
 - Egyetlen szó is lehet teljes üzenet.
@@ -24195,7 +24303,7 @@ Formátum:
       );
     }
 
-    const rows = (
+    let rows = (
       (out && out.replies) ||
       (out && out.comments) ||
       []
@@ -24253,6 +24361,77 @@ Formátum:
         };
       })
       .filter(Boolean);
+
+    /*
+     * Hard guarantee for an actual group-addressed player message:
+     * if the model still returned only one speaker, ask ONE different
+     * character for a tiny follow-up instead of silently accepting a
+     * one-person "group" conversation.
+     */
+    if (
+      generalGroupTurn &&
+      groupAiIds.length >= 2 &&
+      new Set(rows.map((r) => r.from)).size < 2
+    ) {
+      const used = new Set(rows.map((r) => r.from));
+      const missingId =
+        mandatorySpeakerIds.find((id) => !used.has(id)) ||
+        groupAiIds.find((id) => !used.has(id)) ||
+        "";
+      const missingChar = missingId ? charById(w, missingId) : null;
+
+      if (missingChar) {
+        try {
+          const latestGenerated = rows
+            .map((r) => `${nameOfIn(w, r.from)}: ${r.text}`)
+            .join("\n");
+
+          const repair = await askWorldJSONInteractive(
+            w,
+            engineFor(w),
+            `${worldContext(w, [missingChar.id], false, missingChar.id)}
+
+TE MOST ${missingChar.name.toUpperCase()} VAGY.
+Ez egy valódi group chat: ${group.name}.
+${w.player.name} ezt írta a csoportnak: "${mine || ""}"
+Az első friss reakció(k):
+${latestGenerated || "még nincs"}
+
+${voiceCard(missingChar)}
+${characterMemoryCard(w, missingChar)}
+
+Írj EGY rövid, természetes group chat üzenetet ${missingChar.name} nevében, ami reagál a játékos vagy az előző AI üzenetére. Ne narrálj, ne írj a játékos helyett, és ne beszélj telefonbámulásról / görgetésről csak azért, mert ez social-media felület.
+
+Formátum:
+{"text":"rövid group chat üzenet"}${TAIL}`,
+            { maxTokens: 260, maxTries: 1, timeoutMs: 22000 }
+          );
+
+          const repairedText = cleanGeneratedUtterance(
+            w,
+            missingChar.id,
+            String(
+              (repair && repair.text) ||
+              (repair && repair.reply) ||
+              ""
+            ),
+            280
+          );
+
+          if (repairedText) {
+            rows.push({
+              id: uid(),
+              from: missingChar.id,
+              to: rows.length ? rows[rows.length - 1].from : w.meId,
+              text: repairedText,
+              ts: now(),
+            });
+          }
+        } catch (repairErr) {
+          console.warn("Group second-speaker repair failed:", repairErr);
+        }
+      }
+    }
 
     if (!rows.length) {
       throw new Error(
@@ -27285,6 +27464,7 @@ function characterNoteActivityScore(w, c) {
   if (mem.selfState && mem.selfState.intent) score += 7;
   if (mem.selfState && Array.isArray(mem.selfState.openLoops) && mem.selfState.openLoops.length) score += 6;
   score += relationshipObsessionLevel(w, c.id, w.meId) * 5;
+  score += (characterOnlineActivityProfile(w, c).note - 1) * 18;
 
   return score;
 }
@@ -27573,14 +27753,10 @@ Formátum:
 /*
  * Spontán privát kezdeményező kiválasztása.
  *
- * FAIR ACTIVITY:
- * minden AI-karakter azonos eséllyel kapjon
- * lehetőséget, és aki régebben írt utoljára,
- * az kerüljön előrébb.
- *
- * A kapcsolat erőssége NEM döntheti el,
- * hogy ugyanaz a néhány karakter legyen
- * folyamatosan aktív.
+ * CHARACTER-DRIVEN ACTIVITY:
+ * A beszédes, online aktív, impulzív vagy erősen kötődő AI gyakrabban
+ * kezdeményezhet. A private/quiet karakter ritkábban ír magától.
+ * Nincs mesterséges azonos aktivitási kvóta.
  */
 function pickInitiator(w) {
   const chars = (w.chars || []).filter((c) => c && !isHuman(w, c.id));
@@ -27616,17 +27792,23 @@ function pickInitiator(w) {
       ? Math.min(36, Math.max(0, (now() - lastOwnDm) / 3600e3))
       : 36;
 
-    let score = sinceHours * 1.25;
+    const activity = characterOnlineActivityProfile(w, c).dm;
+
+    let score = sinceHours * (0.72 + activity * 0.58);
     score += socialInteractionInterest(w, c.id, w.meId) * 0.55;
     score += relationshipObsessionLevel(w, c.id, w.meId) * 18;
+    score += (activity - 1) * 28;
 
     if (/social|társas|outgoing|extrovert|chatty|beszédes|flirt|flört|impulsive|impulzív|gossip|pletyka|possess|birtokl|obsess|megszáll/.test(lore)) score += 14;
     if (/reserved|zárkózott|shy|félénk|quiet|csendes|private|low.?profile|visszahúzód/.test(lore)) score -= 9;
     if (mem.selfState && mem.selfState.intent) score += 10;
     if (mem.selfState && Array.isArray(mem.selfState.openLoops) && mem.selfState.openLoops.length) score += 8;
 
-    /* Ne írjon rá ugyanaz a karakter újra pár percen belül csak a fairness miatt. */
-    if (lastOwnDm && now() - lastOwnDm < 12 * 60 * 1000) score -= 36;
+    /* Az aktív karakter hamarabb pingelhet újra; a visszahúzódó nagyobb szünetet tart. */
+    const personalDmGapMs =
+      (14 * 60 * 1000) / Math.max(0.35, activity);
+
+    if (lastOwnDm && now() - lastOwnDm < personalDmGapMs) score -= 40;
 
     return { c, score: score + Math.random() * 12 };
   })
@@ -33854,30 +34036,24 @@ function simMarkDone(w, action) {
   sim.at = now();
 }
 /*
- * FAIR GROUP ACTIVITY
+ * CHARACTER-DRIVEN GROUP ACTIVITY
  *
- * Azokat az AI-karaktereket részesíti
- * előnyben, akik az utóbbi időben
- * kevesebbet beszéltek group chatekben.
+ * A beszédes/online aktív karakterek természetesen többet írhatnak,
+ * a csendes/private karakterek ritkábban. Nincs mesterséges egyenlő kvóta.
  */
 function fairGroupCast(w, allowedIds = null) {
-  const cutoff =
-    now() - 48 * 3600e3;
+  const cutoff = now() - 48 * 3600e3;
 
-  const allowed =
-    Array.isArray(allowedIds)
-      ? new Set(allowedIds)
-      : null;
+  const allowed = Array.isArray(allowedIds)
+    ? new Set(allowedIds)
+    : null;
 
   const chars = (w.chars || [])
     .filter(
       (c) =>
         c &&
         !isHuman(w, c.id) &&
-        (
-          !allowed ||
-          allowed.has(c.id)
-        )
+        (!allowed || allowed.has(c.id))
     )
     .map((c) => {
       let recentGroupMessages = 0;
@@ -33885,59 +34061,38 @@ function fairGroupCast(w, allowedIds = null) {
 
       (w.groups || []).forEach((g) => {
         (g.msgs || []).forEach((m) => {
-          if (
-            !m ||
-            m.from !== c.id
-          ) {
-            return;
-          }
-
-          const ts =
-            Number(m.ts) || 0;
-
-          if (ts >= cutoff) {
-            recentGroupMessages += 1;
-          }
-
-          lastGroupMessageAt =
-            Math.max(
-              lastGroupMessageAt,
-              ts
-            );
+          if (!m || m.from !== c.id) return;
+          const ts = Number(m.ts) || 0;
+          if (ts >= cutoff) recentGroupMessages += 1;
+          lastGroupMessageAt = Math.max(lastGroupMessageAt, ts);
         });
       });
 
+      const activity = characterOnlineActivityProfile(w, c).group;
+      const idleHours = lastGroupMessageAt
+        ? Math.min(72, Math.max(0, (now() - lastGroupMessageAt) / 3600e3))
+        : 72;
+
+      const pressure =
+        idleHours * (0.35 + activity) +
+        activity * 22 -
+        recentGroupMessages * (15 / Math.max(0.35, activity)) +
+        Math.random() * 8;
+
       return {
         c,
+        activity,
         recentGroupMessages,
         lastGroupMessageAt,
-        tie: Math.random(),
+        pressure,
       };
     });
 
-  chars.sort((a, b) => {
-    if (
-      a.recentGroupMessages !==
-      b.recentGroupMessages
-    ) {
-      return (
-        a.recentGroupMessages -
-        b.recentGroupMessages
-      );
-    }
-
-    if (
-      a.lastGroupMessageAt !==
-      b.lastGroupMessageAt
-    ) {
-      return (
-        a.lastGroupMessageAt -
-        b.lastGroupMessageAt
-      );
-    }
-
-    return a.tie - b.tie;
-  });
+  chars.sort((a, b) =>
+    (b.pressure - a.pressure) ||
+    (b.activity - a.activity) ||
+    (a.lastGroupMessageAt - b.lastGroupMessageAt)
+  );
 
   return chars.map((x) => x.c);
 }
@@ -35570,14 +35725,12 @@ function planAutoAction(view) {
       };
     })
     .sort((a, b) => {
-      if (
-        a.lastNoteAt !==
-        b.lastNoteAt
-      ) {
-        return (
-          a.lastNoteAt -
-          b.lastNoteAt
-        );
+      if (a.noteScore !== b.noteScore) {
+        return b.noteScore - a.noteScore;
+      }
+
+      if (a.lastNoteAt !== b.lastNoteAt) {
+        return a.lastNoteAt - b.lastNoteAt;
       }
 
       return a.tie - b.tie;
@@ -35847,12 +36000,12 @@ AI-TAGOK:
 ${members
   .map((c) => `${c.name} [${c.id}]`)
   .join("\n")}
-  AKTIVITÁSI EGYENSÚLY:
-- A fenti AI-tagok aktivitási prioritás szerint vannak sorba rendezve.
-- Ha több karakternek egyformán természetes lenne megszólalnia, elsősorban a lista elején álló, mostanában kevésbé aktív karaktert válaszd.
-- Ne ugyanazok a karakterek uralják folyamatosan a group chatet.
-- Hosszabb távon minden AI-tag kapjon hasonló mennyiségű lehetőséget megszólalni.
-- Az aktivitási egyensúly ne írja felül a beszélgetés logikáját: ha egy konkrét kérdést vagy megszólítást egy adott karakternek címeztek, ő válaszolhat.
+  KARAKTERENKÉNT ELTÉRŐ ONLINE AKTIVITÁS:
+- A fenti AI-tagok karakterhű aktivitási prioritás szerint vannak sorba rendezve.
+- NINCS egyenlő aktivitási kvóta. Egy beszédes, extrovertált, impulzív, pletykás vagy erősen online karakter természetesen sokkal gyakrabban írhat.
+- Egy private, csendes, introvertált vagy low-profile karakter természetesen ritkábban szólalhat meg.
+- Ne próbáld hosszú távon ugyanannyi group chat üzenetre kiegyenlíteni a karaktereket.
+- A lista eleje magasabb jelenlegi megszólalási hajlamot jelez, de a beszélgetés konkrét logikája és címzettje továbbra is számít.
 
 A játékos:
 ${w.player.name} [${w.meId}]
@@ -35908,9 +36061,10 @@ DÖNTSD EL, HOGY A CSOPORTBAN MOST TERMÉSZETESEN FOLYTATÓDNA-E A BESZÉLGETÉS
 GROUP CHAT STÍLUS:
 
 - Ez VALÓDI csoportos chat, NEM roleplay-jelenet.
-- Adj 1-3 új üzenetet.
-- Ha 1 üzenet természetesebb, adj csak 1-et.
+- Ha folytatod a csoportot és legalább két AI-tag van jelen, adj 2-4 rövid új üzenetet LEGALÁBB KÉT KÜLÖNBÖZŐ AI-karaktertől.
+- Ne legyen az autonóm group chat rendszeresen egyetlen karakter egyszemélyes csatornája.
 - Nem kell minden AI-tagnak megszólalnia.
+- Egy aktívabb karakter írhat többször, de legalább egy másik tag is reagáljon ugyanebben a természetes mini-körben.
 - Ugyanaz a karakter küldhet két egymást követő rövid üzenetet is, ha ez természetes.
 - A legtöbb üzenet legyen rövid.
 - Egyetlen szó is lehet teljes üzenet.
@@ -36046,7 +36200,8 @@ Ha most nincs természetes folytatás:
 Ha van természetes folytatás:
 {"skip":false,
 "replies":[
-{"id":"AI-tag azonosítója","text":"természetes rövid group chat üzenet"}
+{"id":"első AI-tag azonosítója","text":"természetes rövid group chat üzenet"},
+{"id":"egy MÁSODIK AI-tag azonosítója","text":"rövid reakció az előzőre vagy a témára"}
 ],
 "changes":[
 {"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}
@@ -37119,9 +37274,17 @@ if (targetNote) {
         };
       })
       .filter(Boolean)
-      .slice(0, 3);
+      .slice(0, 4);
 
     if (!rows.length) {
+      return null;
+    }
+
+    /* A spontán group-turn se jelenjen meg egyszemélyes csatornaként. */
+    if (
+      allowedMembers.size >= 2 &&
+      new Set(rows.map((row) => row.from)).size < 2
+    ) {
       return null;
     }
 
