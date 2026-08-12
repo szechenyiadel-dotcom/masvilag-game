@@ -9876,7 +9876,7 @@ const AUTO_DEFAULT = {
    * Az AI queue saját token/rate-limit throttlingja ettől külön működik,
    * tehát ha a providernek több pihenő kell, továbbra is biztonságosan vár.
    */
-  every: 0.75,
+  every: 0.50,
 };
 
 async function loadAuto() {
@@ -18000,7 +18000,7 @@ Formátum:
 }
 
 function applyWorldStep(n, out) {
-  (out.posts || []).forEach((p) => {
+  safeAiArray(out, "posts").forEach((p) => {
     const author = aiVoice(n, p && (p.id !== undefined ? p.id : p.name));
     if (!author || !p.text) return;
     const postText = cleanGeneratedUtterance(n, author, p.text, 700);
@@ -25835,7 +25835,7 @@ function findUnanswered(w) {
  *
  * Most a szimuláció saját contentAt órát használ.
  */
-const AUTO_MIN_CONTENT_INTERVAL_MS = 30000;
+const AUTO_MIN_CONTENT_INTERVAL_MS = 20000;
 const AUTO_MIN_LOCAL_ACTION_INTERVAL_MS = 30000;
 
 /*
@@ -25861,8 +25861,25 @@ const canTick = (w, minutes) => {
    * Ezt a React világállapot már korábban is használta, ezért nem vezetünk
    * be még egy külön authoritative időbélyeget az ütemezéshez.
    */
-  const contentAt =
-    Number(w.autoAt) || 0;
+  /*
+   * A generatív világ saját órája. Ha a sim state már létezik, a régi
+   * w.autoAt többé NEM számít bele: azt sok régi action még mindig frissíti
+   * follow/reply/note közben, és ettől korábban éhen halt a feed.
+   * Régi mentésnél, ahol még nincs sim state, egyszer fallbackelünk autoAt-ra.
+   */
+  const hasSimClock =
+    Boolean(
+      w.sim &&
+      typeof w.sim === "object" &&
+      Object.prototype.hasOwnProperty.call(
+        w.sim,
+        "contentAt"
+      )
+    );
+
+  const contentAt = hasSimClock
+    ? Number(w.sim.contentAt) || 0
+    : Number(w.autoAt) || 0;
 
   return (
     now() - contentAt > interval
@@ -25895,6 +25912,9 @@ function ensureSimState(w) {
       at: 0,
       contentAt: 0,
       localAt: 0,
+      lastSuccessAt: 0,
+      lastAttemptAt: 0,
+      lastError: "",
     };
   }
 
@@ -25904,6 +25924,9 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.at))) w.sim.at = 0;
   if (!Number.isFinite(Number(w.sim.contentAt))) w.sim.contentAt = 0;
   if (!Number.isFinite(Number(w.sim.localAt))) w.sim.localAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastSuccessAt))) w.sim.lastSuccessAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastAttemptAt))) w.sim.lastAttemptAt = 0;
+  if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
   Object.keys(w.sim.done).forEach((k) => {
@@ -32945,6 +32968,38 @@ function applySocialWave(
   }
 }
 
+function lastAiFeedPostAt(w) {
+  return (w && Array.isArray(w.posts) ? w.posts : [])
+    .filter(
+      (p) =>
+        p &&
+        p.authorId &&
+        !isHuman(w, p.authorId)
+    )
+    .reduce(
+      (latest, p) =>
+        Math.max(
+          latest,
+          Number(p.ts) || 0
+        ),
+      0
+    );
+}
+
+function feedNeedsFreshPost(w) {
+  const last = lastAiFeedPostAt(w);
+
+  /*
+   * Ha még sosem volt AI-poszt, azonnal életet kérünk a feedbe.
+   * Egyébként 75 mp csend után a poszt elsőbbséget kap a maintenance
+   * actionökkel szemben. A provider-throttle ettől még külön érvényes.
+   */
+  return (
+    !last ||
+    now() - last >= 75000
+  );
+}
+
 function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
@@ -32983,6 +33038,21 @@ function planAutoAction(view) {
       {
         postId: pending.post.id,
       }
+    );
+  }
+
+  /*
+   * 1.5 FEED WATCHDOG
+   *
+   * A maintenance akciók (follow, note, gossip stb.) nem tarthatják
+   * percekig üresen a fő feedet. Ha túl régen volt AI-poszt, előbb posztolunk.
+   */
+  if (feedNeedsFreshPost(view)) {
+    return mkAction(
+      "world",
+      `feed-watchdog:${Math.floor(
+        now() / 60000
+      )}`
     );
   }
 
@@ -33075,7 +33145,7 @@ function planAutoAction(view) {
    * karbantartási vagy ritkább social akcióra váltana.
    */
   if (
-    Math.random() < 0.66
+    Math.random() < 0.80
   ) {
     return mkAction(
       "world",
@@ -35389,6 +35459,20 @@ if (targetNote) {
       view,
       action.type !== "world-full"
     );
+
+  /*
+   * Üres/stale AI-result nem számít sikeres világkörnek. Így nem indítjuk
+   * újra a content timert úgy, hogy közben semmi sem jelent meg a játékban.
+   */
+  if (
+    !out ||
+    !Array.isArray(out.posts) ||
+    !out.posts.some(
+      (p) => p && p.text
+    )
+  ) {
+    return null;
+  }
 
   update((n) => {
     n.autoAt = now();
@@ -37860,29 +37944,34 @@ const signOut = useCallback(async () => {
         FAST_LOCAL_SIM_ACTIONS.has(action.type) &&
         !canRunLocalSimulationAction(view2)
       ) {
-        return;
+        /*
+         * Ne dobjuk el az egész beatet csak azért, mert egy follow/repost
+         * még local cooldownon van. Ha a generatív content már esedékes,
+         * használjuk ezt a beatet feed-posztra.
+         */
+        action = mkAction(
+          "world",
+          `local-cooldown-feed:${Math.floor(
+            now() / 60000
+          )}`
+        );
       }
 
       autoRunning.current = true;
       setAutoBusy(true);
       update((n) => {
         /*
-         * A futó akciót lefoglaljuk, de csak a valódi autonóm tartalmi
-         * akció nullázza a content cadence órát.
-         *
-         * Follow/unfollow/repost és a játékosra adott közvetlen reply
-         * nem tudja többé percekre "lefagyasztani" a világot.
+         * Itt CSAK lefoglaljuk a futó actiont. A content cadence-et kizárólag
+         * SIKERES futás után jelöljük, különben egy timeout/429/üres output
+         * úgy nézne ki, mintha történt volna valami, és a világ újra várna.
          */
         simMarkRunning(n, action);
-        markSimulationCadence(
-          n,
-          action
-        );
       });
       let ok = false;
+      let result = null;
       try {
-        await runSimulationAction(viewRef.current, update, action);
-        ok = true;
+        result = await runSimulationAction(viewRef.current, update, action);
+        ok = Boolean(result);
       } catch (e) {
         if (action && action.source === "manual" && alive) {
           setErr(
@@ -37900,19 +37989,37 @@ const signOut = useCallback(async () => {
       }
       update((n) => {
         if (queued) simDropQueued(n, action.id);
-        if (ok) simMarkDone(n, action);
-        else ensureSimState(n).running = "";
+
+        if (ok) {
+          /*
+           * Sikeres action után frissül a megfelelő óra. A local/reactive
+           * actionök nem érintik sim.contentAt-ot, tehát nem éheztetik a feedet.
+           */
+          markSimulationCadence(
+            n,
+            action
+          );
+          simMarkDone(n, action);
+
+          const sim = ensureSimState(n);
+          sim.lastSuccessAt = now();
+          sim.lastError = "";
+        } else {
+          const sim = ensureSimState(n);
+          sim.running = "";
+          sim.lastAttemptAt = now();
+        }
       });
       autoRunning.current = false;
       if (alive) setAutoBusy(false);
     };
     /*
-     * 12 másodpercenként nézzük meg, van-e teendő.
-     * Ez NEM jelent 12 másodpercenként AI-hívást:
+     * 8 másodpercenként nézzük meg, van-e teendő.
+     * Ez NEM jelent 8 másodpercenként AI-hívást:
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 12000);
+    const i = setInterval(beat, 8000);
     const first = setTimeout(beat, 100);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update, simPulse]);
