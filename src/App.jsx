@@ -5322,7 +5322,12 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
 
   if (!res.ok) {
     const code = res.status;
-    const busy = code === 429 || code === 529 || code === 503 || code === 500;
+    /*
+     * Only real rate-limit / overload statuses enter the visible cooldown path.
+     * A generic HTTP 500 can be a config or server bug and must not be presented
+     * as "the AI can't keep up".
+     */
+    const busy = code === 429 || code === 529 || code === 503;
     if (code === 404 || code === 502) {
       const msg = (data && data.error && data.error.message) || `HTTP ${code}`;
       const err = new Error(`Az AI-szerver nem érhető el: ${msg}`);
@@ -5489,14 +5494,36 @@ async function askJSON(system, prompt, options = {}) {
           if (err && err.busy) {
             busyWaits++;
             /*
-             * Direct player chat must stay responsive. If the provider asks for
-             * a long cooldown, surface the retry state instead of freezing the
-             * chat UI for tens of seconds. Background actions may wait safely.
+             * Player-triggered DM/group chat/RP really DOES restart itself now.
+             * Previously we threw as soon as the cooldown exceeded 3 seconds,
+             * while the UI incorrectly promised an automatic restart.
+             *
+             * For interactive work we wait through a short provider cooldown and
+             * retry the SAME queued request. Very long cooldowns are capped so a
+             * broken provider cannot freeze the UI forever.
              */
-            if (priority >= 50 && cooldownLeft() > 3000) {
-              throw err;
+            const left = cooldownLeft();
+            const interactiveWaitCap = 15000;
+
+            if (priority >= 50 && left > interactiveWaitCap) {
+              const tooLong = new Error(
+                lang === "en"
+                  ? `The AI provider asked for a ${Math.ceil(left / 1000)}s cooldown. Please retry after the cooldown.`
+                  : `Az AI szolgáltató ${Math.ceil(left / 1000)} másodperces pihenőt kért. A pihenő után próbáld újra.`
+              );
+              tooLong.busy = true;
+              tooLong.retryable = false;
+              throw tooLong;
             }
-            await wait(Math.min(cooldownLeft() + 250, priority >= 50 ? 3000 : 20000));
+
+            await wait(
+              Math.min(
+                left + 250,
+                priority >= 50
+                  ? interactiveWaitCap
+                  : 20000
+              )
+            );
             continue;
           }
           tries++;
@@ -11093,7 +11120,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v28-chat-group-stable";
+const BUILD_VERSION = "v29-chat-auto-retry";
 
 const AUTO = "masvilag:auto";
 /*
@@ -26779,8 +26806,8 @@ function RestBar() {
   return (
     <div className="rest">
       <Loader2 size={14} className="spin" />
-      <span>{tt(`Az AI most nem győzi — ${Math.ceil(left / 1000)} másodperc múlva folytatjuk. Amit kértél, magától újraindul.`,
-                 `The AI can't keep up right now — we'll continue in ${Math.ceil(left / 1000)} seconds. What you asked for will restart on its own.`)}</span>
+      <span>{tt(`Az AI most rövid pihenőt kér — ${Math.ceil(left / 1000)} másodperc múlva ugyanazt a kérést automatikusan újrapróbáljuk.`,
+                 `The AI needs a short cooldown — we'll automatically retry the same request in ${Math.ceil(left / 1000)} seconds.`)}</span>
     </div>
   );
 }
