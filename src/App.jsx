@@ -9932,9 +9932,14 @@ Rules:
     provider: DEFAULT_IMAGE_PROVIDER,
     model: DEFAULT_IMAGE_MODEL,
     prompt: basePrompt,
+    input: basePrompt,
+    text: basePrompt,
     size: "1024x1024",
+    image_size: "1024x1024",
     quality: "low",
     output_format: "jpeg",
+    response_format: "b64_json",
+    background: "auto",
     referenceImages,
     reference_images: referenceImages,
   };
@@ -9947,8 +9952,24 @@ Rules:
       ? result.data[0]
       : null;
 
+  const firstNestedDataRow =
+    result && result.result && Array.isArray(result.result.data) && result.result.data[0]
+      ? result.result.data[0]
+      : (
+          result && result.response && Array.isArray(result.response.data) && result.response.data[0]
+            ? result.response.data[0]
+            : null
+        );
+
+  const firstOutputImage =
+    result && Array.isArray(result.output) && result.output[0] && Array.isArray(result.output[0].content)
+      ? result.output[0].content.find((item) => item && (item.b64_json || item.image_url || item.url))
+      : null;
+
   const b64 = String(
     (firstDataRow && firstDataRow.b64_json) ||
+    (firstNestedDataRow && firstNestedDataRow.b64_json) ||
+    (firstOutputImage && firstOutputImage.b64_json) ||
     result.b64_json ||
     ""
   ).trim();
@@ -9958,7 +9979,9 @@ Rules:
     result.image,
     result.url,
     result.src,
-    firstDataRow && firstDataRow.url,
+    firstDataRow && (firstDataRow.url || firstDataRow.image_url),
+    firstNestedDataRow && (firstNestedDataRow.url || firstNestedDataRow.image_url),
+    firstOutputImage && (firstOutputImage.image_url || firstOutputImage.url),
     b64 ? `data:image/jpeg;base64,${b64}` : "",
   ].find(
     (value) =>
@@ -11068,7 +11091,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v26-generated-dm-snaps";
+const BUILD_VERSION = "v27-chat-image-backend";
 
 const AUTO = "masvilag:auto";
 /*
@@ -24831,10 +24854,15 @@ Formátum:
 
     if (!reply && !aiImageRef) {
       throw new Error(
-        tt(
-          "Az AI nem adott chatválaszt.",
-          "The AI returned no chat reply."
-        )
+        explicitImageRequest
+          ? tt(
+              "A karakter nem tudott AI-alapú képet küldeni. Ellenőrizd az /ai/image backend útvonalat és az image modellt.",
+              "The character could not send an AI-generated image. Check the /ai/image backend route and the image model."
+            )
+          : tt(
+              "Az AI nem adott chatválaszt.",
+              "The AI returned no chat reply."
+            )
       );
     }
 
