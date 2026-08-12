@@ -5333,8 +5333,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       const err = new Error(`Az AI-szerver nem érhető el: ${msg}`);
       err.busy = false;
       err.retryable = false;
-      AI.strikes = Math.min(AI.strikes + 1, 3);
-      setCooldown(15000 * AI.strikes, !!requestMeta.interactive);
+      // A proxy/config hiba nem rate-limit. Ne indítsunk hamis cooldown bannert.
       throw err;
     }
     if (busy) {
@@ -5366,9 +5365,14 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       const adaptive = Math.min(60000, base * Math.pow(1.8, Math.max(0, AI.strikes - 1)));
       const restMs = Math.max(retryAfterMs, adaptive);
 
+      /*
+       * A rate-limitet a queue belül kezeli és ugyanazt a játékosi kérést
+       * újrapróbálja. Ezt nem mutatjuk globális "AI can't keep up" bannerként,
+       * mert DM/group chat közben csak félrevezető és zajos.
+       */
       setCooldown(
         restMs,
-        !!requestMeta.interactive
+        false
       );
       const err = new Error(`Az AI most nem győzi — ${Math.ceil(restMs / 1000)} másodperc pihenő.`);
       err.busy = true;
@@ -5447,7 +5451,7 @@ async function askJSON(system, prompt, options = {}) {
        */
       const maxBusyWaits =
         priority >= 50
-          ? 3   // első busy + legfeljebb 2 újrapróbálás
+          ? 4   // játékosi DM/group chat: több belső retry, látható banner nélkül
           : 2;  // első busy + legfeljebb 1 újrapróbálás
 
       while (
@@ -5503,7 +5507,7 @@ async function askJSON(system, prompt, options = {}) {
              * broken provider cannot freeze the UI forever.
              */
             const left = cooldownLeft();
-            const interactiveWaitCap = 15000;
+            const interactiveWaitCap = 30000;
 
             if (priority >= 50 && left > interactiveWaitCap) {
               const tooLong = new Error(
@@ -11172,7 +11176,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v30-social-activity-group-chat";
+const BUILD_VERSION = "v31-silent-chat-retry";
 
 const AUTO = "masvilag:auto";
 /*
@@ -26973,22 +26977,12 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
 
 /* Pihenő-kijelző: ha a szolgáltató visszafogott minket, itt látszik, meddig. */
 function RestBar() {
-  const { tt } = useLang();
-  const [left, setLeft] = useState(visibleCooldownLeft());
-  useEffect(() => {
-    const off = onCooldown((ms) => setLeft(ms));
-    const i = setInterval(() => setLeft(visibleCooldownLeft()), 500);
-    return () => { off(); clearInterval(i); };
-  }, []);
-  /* Az utolsó ~1.2 mp-ben ne villanjon fel egy értelmetlen "1 second" banner. */
-  if (left <= 1200) return null;
-  return (
-    <div className="rest">
-      <Loader2 size={14} className="spin" />
-      <span>{tt(`Az AI most rövid pihenőt kér — ${Math.ceil(left / 1000)} másodperc múlva ugyanazt a kérést automatikusan újrapróbáljuk.`,
-                 `The AI needs a short cooldown — we'll automatically retry the same request in ${Math.ceil(left / 1000)} seconds.`)}</span>
-    </div>
-  );
+  /*
+   * v31: a provider cooldown belső queue-állapot. A DM/group chat kérés
+   * automatikusan kivárja és újrapróbálja, ezért nincs több globális
+   * "AI can't keep up" / countdown banner.
+   */
+  return null;
 }
 
 /* ============================================================

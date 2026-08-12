@@ -1,7 +1,3 @@
-// MÁSVILÁG proxy.js — v28 — PART 1/4
-// Original line range: 1-673
-// Paste parts 1 → 2 → 3 → 4 into ONE server/proxy.js file.
-
 /*
  * MÁSVILÁG — server/proxy.js
  * Full drop-in backend with authoritative multi-device world + media sync.
@@ -674,12 +670,12 @@ app.post("/auth/login", async (req, res) => {
         Number(
           world.rev || 0
         ) + 1;
-              world.syncRev =
+
+      world.syncRev =
         worldSyncRevServer(
           world
         ) + 1;
-
-      if (world.universe) {
+              if (world.universe) {
         world.universe.at =
           Date.now();
       }
@@ -1348,7 +1344,7 @@ app.post("/auth/migrate", async (req, res) => {
     );
 
     return res.json({
-            ok: true,
+      ok: true,
       migrated: true,
       meId: accountId,
       profileUsername: username,
@@ -1356,7 +1352,7 @@ app.post("/auth/migrate", async (req, res) => {
       world:
         safeWorldForClient(world),
     });
-  } catch (err) {
+      } catch (err) {
     console.error(
       "World migration error:",
       err
@@ -1979,22 +1975,13 @@ function buildOpenAIPayload(body = {}) {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const out = [];
 
-  if (body.system) {
-    out.push({
-      role: "system",
-      content: body.system,
-    });
-  }
+  if (body.system) out.push({ role: "system", content: body.system });
 
   for (const item of messages) {
     const text = extractText(item?.content || "");
     if (!text) continue;
-
     out.push({
-      role:
-        item?.role === "assistant"
-          ? "assistant"
-          : "user",
+      role: item?.role === "assistant" ? "assistant" : "user",
       content: text,
     });
   }
@@ -2034,24 +2021,13 @@ if (!ANTHROPIC_API_KEY && !GEMINI_API_KEY && !OPENAI_API_KEY) {
   );
 }
 
-// CORS
+// CORS: engedélyezzük a fejlesztéshez
 app.use((req, res, next) => {
-  res.setHeader(
-    "Access-Control-Allow-Origin",
-    "*"
-  );
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET,POST,OPTIONS"
-  );
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type,Authorization"
-  );
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
 
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
+  if (req.method === "OPTIONS") return res.sendStatus(200);
 
   next();
 });
@@ -2069,8 +2045,7 @@ app.get("/media/load", async (req, res) => {
 
     if (!session) {
       clearSessionCookie(res);
-
-      return res.status(401).json({
+            return res.status(401).json({
         error: "Not authenticated.",
       });
     }
@@ -2302,10 +2277,8 @@ function parseImageDataUrl(value) {
   if (!match) return null;
 
   return {
-    mimeType:
-      match[1].toLowerCase(),
-    base64:
-      match[2].replace(/\s+/g, ""),
+    mimeType: match[1].toLowerCase(),
+    base64: match[2].replace(/\s+/g, ""),
     dataUrl: raw,
   };
 }
@@ -2313,11 +2286,10 @@ function parseImageDataUrl(value) {
 function visionTextFromAnthropic(data) {
   return Array.isArray(data?.content)
     ? data.content
-        .map(
-          (x) =>
-            x?.type === "text"
-              ? x.text || ""
-              : ""
+        .map((x) =>
+          x?.type === "text"
+            ? x.text || ""
+            : ""
         )
         .join("")
     : "";
@@ -2327,12 +2299,10 @@ app.post("/ai/vision", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
 
-    const session =
-      await getSession(req);
+    const session = await getSession(req);
 
     if (!session) {
       clearSessionCookie(res);
-
       return res.status(401).json({
         error: "Not authenticated.",
       });
@@ -2374,8 +2344,7 @@ app.post("/ai/vision", async (req, res) => {
     if (provider === "openai") {
       if (!OPENAI_API_KEY) {
         return res.status(500).json({
-          error:
-            "Missing OPENAI_API_KEY.",
+          error: "Missing OPENAI_API_KEY.",
         });
       }
 
@@ -2385,13 +2354,10 @@ app.post("/ai/vision", async (req, res) => {
         );
 
       const model =
-        /^(gpt|o1|o3)/i.test(
-          requested
-        )
+        /^(gpt|o1|o3)/i.test(requested)
           ? requested
           : (
-              process.env
-                .OPENAI_VISION_MODEL ||
+              process.env.OPENAI_VISION_MODEL ||
               "gpt-4o-mini"
             );
 
@@ -2410,47 +2376,36 @@ app.post("/ai/vision", async (req, res) => {
               JSON.stringify({
                 model,
                 max_tokens: 350,
-                messages: [
-                  {
-                    role: "user",
-                    content: [
-                      {
-                        type: "text",
-                        text: prompt,
+                messages: [{
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: prompt,
+                    },
+                    {
+                      type: "image_url",
+                      image_url: {
+                        url: image.dataUrl,
                       },
-                      {
-                        type:
-                          "image_url",
-                        image_url: {
-                          url:
-                            image.dataUrl,
-                        },
-                      },
-                    ],
-                  },
-                ],
+                    },
+                  ],
+                }],
               }),
           }
         );
 
       const payload =
-        await r
-          .json()
-          .catch(() => ({}));
+        await r.json().catch(() => ({}));
 
       if (!r.ok) {
-        return res
-          .status(r.status)
-          .json(payload);
+        return res.status(r.status).json(payload);
       }
 
       return res.json({
         ok: true,
         text:
-          payload
-            ?.choices?.[0]
-            ?.message
-            ?.content || "",
+          payload?.choices?.[0]?.message?.content || "",
         provider: "openai",
       });
     }
@@ -2458,8 +2413,7 @@ app.post("/ai/vision", async (req, res) => {
     if (provider === "gemini") {
       if (!GEMINI_API_KEY) {
         return res.status(500).json({
-          error:
-            "Missing GEMINI_API_KEY.",
+          error: "Missing GEMINI_API_KEY.",
         });
       }
 
@@ -2469,13 +2423,10 @@ app.post("/ai/vision", async (req, res) => {
         );
 
       const model =
-        requested.startsWith(
-          "gemini"
-        )
+        requested.startsWith("gemini")
           ? requested
           : (
-              process.env
-                .GEMINI_VISION_MODEL ||
+              process.env.GEMINI_VISION_MODEL ||
               "gemini-3.5-flash"
             );
 
@@ -2500,53 +2451,37 @@ app.post("/ai/vision", async (req, res) => {
             },
             body:
               JSON.stringify({
-                contents: [
-                  {
-                    role: "user",
-                    parts: [
-                      {
-                        text:
-                          prompt,
+                contents: [{
+                  role: "user",
+                  parts: [
+                    { text: prompt },
+                    {
+                      inlineData: {
+                        mimeType:
+                          image.mimeType,
+                        data:
+                          image.base64,
                       },
-                      {
-                        inlineData: {
-                          mimeType:
-                            image.mimeType,
-                          data:
-                            image.base64,
-                        },
-                      },
-                    ],
-                  },
-                ],
+                    },
+                  ],
+                }],
                 generationConfig: {
-                  maxOutputTokens:
-                    350,
+                  maxOutputTokens: 350,
                 },
               }),
           }
         );
 
       const payload =
-        await r
-          .json()
-          .catch(() => ({}));
+        await r.json().catch(() => ({}));
 
       if (!r.ok) {
-        return res
-          .status(r.status)
-          .json(payload);
+        return res.status(r.status).json(payload);
       }
 
       const text =
-        payload
-          ?.candidates?.[0]
-          ?.content
-          ?.parts
-          ?.map(
-            (p) =>
-              p?.text || ""
-          )
+        payload?.candidates?.[0]?.content?.parts
+          ?.map((p) => p?.text || "")
           .join("") || "";
 
       return res.json({
@@ -2569,13 +2504,10 @@ app.post("/ai/vision", async (req, res) => {
       );
 
     const model =
-      requested.startsWith(
-        "claude"
-      )
+      requested.startsWith("claude")
         ? requested
         : (
-            process.env
-              .ANTHROPIC_VISION_MODEL ||
+            process.env.ANTHROPIC_VISION_MODEL ||
             "claude-sonnet-4-6"
           );
 
@@ -2590,60 +2522,47 @@ app.post("/ai/vision", async (req, res) => {
             "x-api-key":
               ANTHROPIC_API_KEY,
             "anthropic-version":
-              process.env
-                .ANTHROPIC_VERSION ||
+              process.env.ANTHROPIC_VERSION ||
               "2023-06-01",
           },
           body:
             JSON.stringify({
               model,
               max_tokens: 350,
-              messages: [
-                {
-                  role: "user",
-                  content: [
-                    {
-                      type:
-                        "image",
-                      source: {
-                        type:
-                          "base64",
-                        media_type:
-                          image.mimeType,
-                        data:
-                          image.base64,
-                      },
+              messages: [{
+                role: "user",
+                content: [
+                  {
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type:
+                        image.mimeType,
+                      data:
+                        image.base64,
                     },
-                    {
-                      type:
-                        "text",
-                      text:
-                        prompt,
-                    },
-                  ],
-                },
-              ],
+                  },
+                  {
+                    type: "text",
+                    text: prompt,
+                  },
+                ],
+              }],
             }),
         }
       );
 
     const payload =
-      await r
-        .json()
-        .catch(() => ({}));
+      await r.json().catch(() => ({}));
 
     if (!r.ok) {
-      return res
-        .status(r.status)
-        .json(payload);
+      return res.status(r.status).json(payload);
     }
 
     return res.json({
       ok: true,
       text:
-        visionTextFromAnthropic(
-          payload
-        ),
+        visionTextFromAnthropic(payload),
       provider: "anthropic",
     });
   } catch (err) {
@@ -2667,16 +2586,14 @@ const AI_UPSTREAM_TIMEOUT_MS =
   Math.max(
     12000,
     Number(
-      process.env
-        .AI_UPSTREAM_TIMEOUT_MS
+      process.env.AI_UPSTREAM_TIMEOUT_MS
     ) || 45000
   );
 
 async function fetchWithTimeout(
   url,
   options = {},
-  timeoutMs =
-    AI_UPSTREAM_TIMEOUT_MS
+  timeoutMs = AI_UPSTREAM_TIMEOUT_MS
 ) {
   const ctrl =
     new AbortController();
@@ -2719,8 +2636,7 @@ async function responseJsonSafe(r) {
 
 function proxyErrorMessage(
   payload,
-  fallback =
-    "AI provider error"
+  fallback = "AI provider error"
 ) {
   return String(
     payload?.error?.message ||
@@ -2730,9 +2646,7 @@ function proxyErrorMessage(
   );
 }
 
-function retryableProviderStatus(
-  status
-) {
+function retryableProviderStatus(status) {
   return [
     408,
     409,
@@ -2748,9 +2662,7 @@ function retryableProviderStatus(
   );
 }
 
-function imagePromptFromBody(
-  body = {}
-) {
+function imagePromptFromBody(body = {}) {
   return String(
     body.prompt ||
     body.input ||
@@ -2758,10 +2670,7 @@ function imagePromptFromBody(
     ""
   )
     .trim()
-    .slice(
-      0,
-      12000
-    );
+    .slice(0, 12000);
 }
 
 app.post(
@@ -2772,35 +2681,23 @@ app.post(
   ],
   async (req, res) => {
     try {
-      if (
-        !(await requireDb(res))
-      ) {
-        return;
-      }
+      if (!(await requireDb(res))) return;
 
       const session =
         await getSession(req);
 
       if (!session) {
-        clearSessionCookie(
-          res
-        );
+        clearSessionCookie(res);
 
-        return res
-          .status(401)
-          .json({
-            error:
-              "Not authenticated.",
-          });
+        return res.status(401).json({
+          error: "Not authenticated.",
+        });
       }
 
       if (!OPENAI_API_KEY) {
-        return res
-          .status(500)
-          .json({
-            error:
-              "Missing OPENAI_API_KEY.",
-          });
+        return res.status(500).json({
+          error: "Missing OPENAI_API_KEY.",
+        });
       }
 
       const prompt =
@@ -2809,19 +2706,15 @@ app.post(
         );
 
       if (!prompt) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "Missing image prompt.",
-          });
+        return res.status(400).json({
+          error: "Missing image prompt.",
+        });
       }
 
       const model =
         String(
           req.body?.model ||
-          process.env
-            .OPENAI_IMAGE_MODEL ||
+          process.env.OPENAI_IMAGE_MODEL ||
           "gpt-image-2"
         );
 
@@ -2829,24 +2722,21 @@ app.post(
         String(
           req.body?.size ||
           req.body?.image_size ||
-          process.env
-            .OPENAI_IMAGE_SIZE ||
+          process.env.OPENAI_IMAGE_SIZE ||
           "1024x1024"
         );
 
       const quality =
         String(
           req.body?.quality ||
-          process.env
-            .OPENAI_IMAGE_QUALITY ||
+          process.env.OPENAI_IMAGE_QUALITY ||
           "low"
         );
 
       const outputFormat =
         String(
           req.body?.output_format ||
-          process.env
-            .OPENAI_IMAGE_FORMAT ||
+          process.env.OPENAI_IMAGE_FORMAT ||
           "jpeg"
         );
 
@@ -2870,12 +2760,10 @@ app.post(
                 output_format:
                   outputFormat,
                 background:
-                  req.body
-                    ?.background ||
+                  req.body?.background ||
                   "auto",
                 moderation:
-                  req.body
-                    ?.moderation ||
+                  req.body?.moderation ||
                   "auto",
               }),
           },
@@ -2886,21 +2774,15 @@ app.post(
         );
 
       const payload =
-        await responseJsonSafe(
-          r
-        );
+        await responseJsonSafe(r);
 
       if (!r.ok) {
         if (
-          r.headers.get(
-            "retry-after"
-          )
+          r.headers.get("retry-after")
         ) {
           res.setHeader(
             "retry-after",
-            r.headers.get(
-              "retry-after"
-            )
+            r.headers.get("retry-after")
           );
         }
 
@@ -2910,9 +2792,7 @@ app.post(
       }
 
       const first =
-        Array.isArray(
-          payload?.data
-        )
+        Array.isArray(payload?.data)
           ? payload.data[0]
           : null;
 
@@ -2931,16 +2811,11 @@ app.post(
           ""
         ).trim();
 
-      if (
-        !b64 &&
-        !url
-      ) {
-        return res
-          .status(502)
-          .json({
-            error:
-              "OpenAI image generation returned no image payload.",
-          });
+      if (!b64 && !url) {
+        return res.status(502).json({
+          error:
+            "OpenAI image generation returned no image payload.",
+        });
       }
 
       const mime =
@@ -2959,16 +2834,11 @@ app.post(
         model,
         data:
           b64
-            ? [
-                {
-                  b64_json:
-                    b64,
-                  revised_prompt:
-                    first
-                      ?.revised_prompt ||
-                    "",
-                },
-              ]
+            ? [{
+                b64_json: b64,
+                revised_prompt:
+                  first?.revised_prompt || "",
+              }]
             : [],
         b64_json: b64,
         dataUrl,
@@ -2976,9 +2846,7 @@ app.post(
           dataUrl || url,
         url,
         revised_prompt:
-          first
-            ?.revised_prompt ||
-          "",
+          first?.revised_prompt || "",
       });
     } catch (err) {
       console.error(
@@ -2987,22 +2855,16 @@ app.post(
       );
 
       const timeout =
-        err?.name ===
-        "AbortError";
+        err?.name === "AbortError";
 
       return res
-        .status(
-          timeout
-            ? 504
-            : 502
-        )
+        .status(timeout ? 504 : 502)
         .json({
           error:
             timeout
               ? "Image generation timed out."
               : (
-                  err
-                    ?.message ||
+                  err?.message ||
                   "Image generation failed."
                 ),
         });
@@ -3010,9 +2872,7 @@ app.post(
   }
 );
 
-async function proxyOpenAIMessage(
-  body
-) {
+async function proxyOpenAIMessage(body) {
   if (!OPENAI_API_KEY) {
     return {
       unavailable: true,
@@ -3033,9 +2893,7 @@ async function proxyOpenAIMessage(
         },
         body:
           JSON.stringify(
-            buildOpenAIPayload(
-              body
-            )
+            buildOpenAIPayload(body)
           ),
       }
     );
@@ -3049,22 +2907,16 @@ async function proxyOpenAIMessage(
       status: r.status,
       payload,
       retryAfter:
-        r.headers.get(
-          "retry-after"
-        ),
+        r.headers.get("retry-after"),
       provider: "openai",
     };
   }
 
   const normalized =
-    normalizeOpenAIResponse(
-      payload
-    );
+    normalizeOpenAIResponse(payload);
 
   const hasText =
-    Array.isArray(
-      normalized?.content
-    ) &&
+    Array.isArray(normalized?.content) &&
     normalized.content.some(
       (x) =>
         String(
@@ -3091,9 +2943,7 @@ async function proxyOpenAIMessage(
       };
 }
 
-async function proxyGeminiMessage(
-  body
-) {
+async function proxyGeminiMessage(body) {
   if (!GEMINI_API_KEY) {
     return {
       unavailable: true,
@@ -3107,30 +2957,18 @@ async function proxyGeminiMessage(
     );
 
   const modelsToTry =
-    [
-      ...new Set(
-        [
-          requested.startsWith(
-            "gemini"
-          )
-            ? requested
-            : "",
-          process.env
-            .GEMINI_MODEL ||
-            "",
-          process.env
-            .GEMINI_FALLBACK_MODEL ||
-            "gemini-3.5-flash",
-        ].filter(Boolean)
-      ),
-    ];
+    [...new Set([
+      requested.startsWith("gemini")
+        ? requested
+        : "",
+      process.env.GEMINI_MODEL || "",
+      process.env.GEMINI_FALLBACK_MODEL ||
+        "gemini-3.5-flash",
+    ].filter(Boolean))];
 
   let last = null;
 
-  for (
-    const model of
-    modelsToTry
-  ) {
+  for (const model of modelsToTry) {
     const url =
       new URL(
         `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
@@ -3166,38 +3004,28 @@ async function proxyGeminiMessage(
         );
 
       const payload =
-        await responseJsonSafe(
-          r
-        );
+        await responseJsonSafe(r);
 
       if (r.ok) {
         const normalized =
-          normalizeGeminiResponse(
-            payload
-          );
+          normalizeGeminiResponse(payload);
 
         const hasText =
           Array.isArray(
-            normalized
-              ?.content
+            normalized?.content
           ) &&
-          normalized
-            .content
-            .some(
-              (x) =>
-                String(
-                  x?.text ||
-                  ""
-                ).trim()
-            );
+          normalized.content.some(
+            (x) =>
+              String(
+                x?.text || ""
+              ).trim()
+          );
 
         if (hasText) {
           return {
             ok: true,
-            payload:
-              normalized,
-            provider:
-              "gemini",
+            payload: normalized,
+            provider: "gemini",
           };
         }
 
@@ -3210,8 +3038,7 @@ async function proxyGeminiMessage(
                 "Gemini returned empty content.",
             },
           },
-          provider:
-            "gemini",
+          provider: "gemini",
         };
 
         break;
@@ -3219,21 +3046,15 @@ async function proxyGeminiMessage(
 
       last = {
         ok: false,
-        status:
-          r.status,
+        status: r.status,
         payload,
         retryAfter:
-          r.headers.get(
-            "retry-after"
-          ),
-        provider:
-          "gemini",
+          r.headers.get("retry-after"),
+        provider: "gemini",
       };
 
       if (
-        !retryableProviderStatus(
-          r.status
-        ) ||
+        !retryableProviderStatus(r.status) ||
         attempt >= 2
       ) {
         break;
@@ -3243,8 +3064,7 @@ async function proxyGeminiMessage(
         (resolve) =>
           setTimeout(
             resolve,
-            700 *
-              attempt
+            700 * attempt
           )
       );
     }
@@ -3253,20 +3073,16 @@ async function proxyGeminiMessage(
   return (
     last || {
       unavailable: true,
-      provider:
-        "gemini",
+      provider: "gemini",
     }
   );
 }
 
-async function proxyAnthropicMessage(
-  body
-) {
+async function proxyAnthropicMessage(body) {
   if (!ANTHROPIC_API_KEY) {
     return {
       unavailable: true,
-      provider:
-        "anthropic",
+      provider: "anthropic",
     };
   }
 
@@ -3276,28 +3092,15 @@ async function proxyAnthropicMessage(
     );
 
   const modelsToTry =
-    [
-      ...new Set(
-        [
-          requestedModel
-            .startsWith(
-              "claude"
-            )
-            ? requestedModel
-            : "",
-          process.env
-            .ANTHROPIC_MODEL ||
-            "",
-          process.env
-            .ANTHROPIC_FALLBACK_MODEL ||
-            "",
-        ].filter(Boolean)
-      ),
-    ];
+    [...new Set([
+      requestedModel.startsWith("claude")
+        ? requestedModel
+        : "",
+      process.env.ANTHROPIC_MODEL || "",
+      process.env.ANTHROPIC_FALLBACK_MODEL || "",
+    ].filter(Boolean))];
 
-  if (
-    !modelsToTry.length
-  ) {
+  if (!modelsToTry.length) {
     modelsToTry.push(
       requestedModel ||
       "claude-sonnet-4-6"
@@ -3306,10 +3109,7 @@ async function proxyAnthropicMessage(
 
   let last = null;
 
-  for (
-    const model of
-    modelsToTry
-  ) {
+  for (const model of modelsToTry) {
     const {
       provider,
       ...rest
@@ -3319,8 +3119,7 @@ async function proxyAnthropicMessage(
       ...rest,
       model,
       max_tokens:
-        body?.max_tokens ??
-        1024,
+        body?.max_tokens ?? 1024,
     };
 
     for (
@@ -3339,8 +3138,7 @@ async function proxyAnthropicMessage(
               "x-api-key":
                 ANTHROPIC_API_KEY,
               "anthropic-version":
-                process.env
-                  .ANTHROPIC_VERSION ||
+                process.env.ANTHROPIC_VERSION ||
                 "2023-06-01",
               "Accept":
                 "application/json",
@@ -3353,33 +3151,26 @@ async function proxyAnthropicMessage(
         );
 
       const payload =
-        await responseJsonSafe(
-          r
-        );
+        await responseJsonSafe(r);
 
       if (r.ok) {
         const hasText =
           Array.isArray(
             payload?.content
           ) &&
-          payload
-            .content
-            .some(
-              (x) =>
-                x?.type ===
-                  "text" &&
-                String(
-                  x?.text ||
-                  ""
-                ).trim()
-            );
+          payload.content.some(
+            (x) =>
+              x?.type === "text" &&
+              String(
+                x?.text || ""
+              ).trim()
+          );
 
         if (hasText) {
           return {
             ok: true,
             payload,
-            provider:
-              "anthropic",
+            provider: "anthropic",
           };
         }
 
@@ -3392,8 +3183,7 @@ async function proxyAnthropicMessage(
                 "Anthropic returned empty content.",
             },
           },
-          provider:
-            "anthropic",
+          provider: "anthropic",
         };
 
         break;
@@ -3401,21 +3191,15 @@ async function proxyAnthropicMessage(
 
       last = {
         ok: false,
-        status:
-          r.status,
+        status: r.status,
         payload,
         retryAfter:
-          r.headers.get(
-            "retry-after"
-          ),
-        provider:
-          "anthropic",
+          r.headers.get("retry-after"),
+        provider: "anthropic",
       };
 
       if (
-        !retryableProviderStatus(
-          r.status
-        ) ||
+        !retryableProviderStatus(r.status) ||
         attempt >= 2
       ) {
         break;
@@ -3425,8 +3209,7 @@ async function proxyAnthropicMessage(
         (resolve) =>
           setTimeout(
             resolve,
-            700 *
-              attempt
+            700 * attempt
           )
       );
     }
@@ -3435,8 +3218,7 @@ async function proxyAnthropicMessage(
   return (
     last || {
       unavailable: true,
-      provider:
-        "anthropic",
+      provider: "anthropic",
     }
   );
 }
@@ -3445,200 +3227,191 @@ async function callMessageProvider(
   provider,
   body
 ) {
-  if (
-    provider ===
-    "openai"
-  ) {
-    return proxyOpenAIMessage(
-      body
-    );
+  if (provider === "openai") {
+    return proxyOpenAIMessage(body);
   }
 
-  if (
-    provider ===
-    "gemini"
-  ) {
-    return proxyGeminiMessage(
-      body
-    );
+  if (provider === "gemini") {
+    return proxyGeminiMessage(body);
   }
 
-  return proxyAnthropicMessage(
-    body
-  );
+  return proxyAnthropicMessage(body);
 }
 
-app.post(
-  "/ai/messages",
-  async (req, res) => {
-    const requestedProvider =
-      getProvider(
-        req.body || {}
-      );
-
-    const configuredFallbacks =
-      [
-        "anthropic",
-        "openai",
-        "gemini",
-      ]
-        .filter(
-          (p) =>
-            p !==
-            requestedProvider
-        )
-        .filter(
-          (p) =>
-            p ===
-            "anthropic"
-              ? ANTHROPIC_API_KEY
-              : p ===
-                "openai"
-                ? OPENAI_API_KEY
-                : GEMINI_API_KEY
-        );
-
-    const providers = [
-      requestedProvider,
-      ...configuredFallbacks,
-    ];
-
-    let last = null;
-
-    for (
-      const provider of
-      providers
-    ) {
-      try {
-        const result =
-          await callMessageProvider(
-            provider,
-            req.body || {}
-          );
-
-        if (result?.ok) {
-          res.setHeader(
-            "x-masvilag-ai-provider",
-            result.provider ||
-              provider
-          );
-
-          return res.json(
-            result.payload
-          );
-        }
-
-        if (
-          result?.unavailable
-        ) {
-          continue;
-        }
-
-        last = result;
-
-        if (
-          !retryableProviderStatus(
-            result?.status
-          ) &&
-          ![
-            400,
-            404,
-          ].includes(
-            Number(
-              result?.status
-            )
-          )
-        ) {
-          break;
-        }
-      } catch (err) {
-        last = {
-          status:
-            err?.name ===
-            "AbortError"
-              ? 504
-              : 502,
-          payload: {
-            error: {
-              message:
-                err?.name ===
-                "AbortError"
-                  ? `${provider} timed out.`
-                  : (
-                      err
-                        ?.message ||
-                      `${provider} proxy error`
-                    ),
-            },
-          },
-          provider,
-        };
-      }
-    }
-
-    const status =
-      Number(
-        last?.status
-      ) || 503;
-
-    if (
-      last?.retryAfter
-    ) {
-      res.setHeader(
-        "retry-after",
-        last.retryAfter
-      );
-    }
-
-    console.error(
-      "AI message providers exhausted:",
-      requestedProvider,
-      proxyErrorMessage(
-        last?.payload,
-        "No provider returned a usable response."
-      )
+app.post("/ai/messages", async (req, res) => {
+  const requestedProvider =
+    getProvider(
+      req.body || {}
     );
 
-    return res
-      .status(status)
-      .json(
-        last?.payload || {
+  const configuredFallbacks =
+    ["anthropic", "openai", "gemini"]
+      .filter(
+        (p) =>
+          p !== requestedProvider
+      )
+      .filter(
+        (p) =>
+          p === "anthropic"
+            ? ANTHROPIC_API_KEY
+            : p === "openai"
+              ? OPENAI_API_KEY
+              : GEMINI_API_KEY
+      );
+
+  const providers = [
+    requestedProvider,
+    ...configuredFallbacks,
+  ];
+
+  let last = null;
+
+  for (const provider of providers) {
+    try {
+      const result =
+        await callMessageProvider(
+          provider,
+          req.body || {}
+        );
+
+      if (result?.ok) {
+        res.setHeader(
+          "x-masvilag-ai-provider",
+          result.provider || provider
+        );
+
+        return res.json(
+          result.payload
+        );
+      }
+
+      if (result?.unavailable) {
+        continue;
+      }
+
+      last = result;
+
+      if (
+        !retryableProviderStatus(
+          result?.status
+        ) &&
+        ![400, 404].includes(
+          Number(result?.status)
+        )
+      ) {
+        break;
+      }
+    } catch (err) {
+      last = {
+        status:
+          err?.name === "AbortError"
+            ? 504
+            : 502,
+        payload: {
           error: {
             message:
-              "No configured AI provider returned a usable response.",
+              err?.name === "AbortError"
+                ? `${provider} timed out.`
+                : (
+                    err?.message ||
+                    `${provider} proxy error`
+                  ),
           },
-        }
-      );
+        },
+        provider,
+      };
+    }
   }
-);
 
-// Serve the built React/Vite app in production
+  const status =
+    Number(
+      last?.status
+    ) || 503;
+
+  if (last?.retryAfter) {
+    res.setHeader(
+      "retry-after",
+      last.retryAfter
+    );
+  }
+
+  console.error(
+    "AI message providers exhausted:",
+    requestedProvider,
+    proxyErrorMessage(
+      last?.payload,
+      "No provider returned a usable response."
+    )
+  );
+
+  return res
+    .status(status)
+    .json(
+      last?.payload || {
+        error: {
+          message:
+            "No configured AI provider returned a usable response.",
+        },
+      }
+    );
+});
+
+// Serve the built React/Vite app in production.
+// v31: never let an old frontend bundle survive a deploy in browser/proxy cache.
+app.use((req, res, next) => {
+  if (req.method === "GET") {
+    res.setHeader(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+    );
+    res.setHeader(
+      "Pragma",
+      "no-cache"
+    );
+    res.setHeader(
+      "Expires",
+      "0"
+    );
+    res.setHeader(
+      "Surrogate-Control",
+      "no-store"
+    );
+  }
+
+  next();
+});
+
 app.use(
   express.static(
-    "dist"
+    "dist",
+    {
+      etag: false,
+      maxAge: 0,
+      setHeaders(res) {
+        res.setHeader(
+          "Cache-Control",
+          "no-store, no-cache, must-revalidate, max-age=0"
+        );
+      },
+    }
   )
 );
 
-app.use(
-  (req, res, next) => {
-    if (
-      req.method ===
-        "GET" &&
-      !req.path.startsWith(
-        "/ai/"
-      )
-    ) {
-      return res.sendFile(
-        "index.html",
-        {
-          root: "dist",
-        }
-      );
-    }
-
-    next();
+app.use((req, res, next) => {
+  if (
+    req.method === "GET" &&
+    !req.path.startsWith("/ai/")
+  ) {
+    return res.sendFile(
+      "index.html",
+      {
+        root: "dist",
+      }
+    );
   }
-);
+
+  next();
+});
 
 app.listen(
   PORT,
