@@ -5058,6 +5058,7 @@ const AI = {
   last: 0,                   // mikor futott le az utolsó AI-hívás
   gap: 9000,                 // háttér-hívások közti minimum szünet
   interactiveGap: 2200,      // játékos által kiváltott chat/RP gyorsabb prioritása
+  initiativeGap: 3500,       // autonóm DM / group / RP ne éhezzen a nagy feed promptok mögött
 
   /*
    * Token-aware throttling.
@@ -5182,15 +5183,25 @@ async function pumpAiQueue() {
         const baseGap =
           task.priority >= 50
             ? AI.interactiveGap
-            : AI.gap;
+            : task.priority >= 15
+              ? AI.initiativeGap
+              : AI.gap;
 
         const gap =
           task.priority >= 50
             ? baseGap
-            : Math.max(
-                baseGap,
-                Number(AI.lastCostGap) || 0
-              );
+            : task.priority >= 15
+              ? Math.max(
+                  baseGap,
+                  Math.min(
+                    9000,
+                    Number(AI.lastCostGap) || 0
+                  )
+                )
+              : Math.max(
+                  baseGap,
+                  Number(AI.lastCostGap) || 0
+                );
 
         if (since < gap) {
           await wait(
@@ -11176,7 +11187,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v31-silent-chat-retry";
+const BUILD_VERSION = "v32-high-autonomy-initiative";
 
 const AUTO = "masvilag:auto";
 /*
@@ -11195,7 +11206,7 @@ const AUTO_DEFAULT = {
    * Az AI queue saját token/rate-limit throttlingja ettől külön működik,
    * tehát ha a providernek több pihenő kell, továbbra is biztonságosan vár.
    */
-  every: 0.25,
+  every: 0.18,
 };
 
 async function loadAuto() {
@@ -13330,6 +13341,7 @@ function characterOnlineActivityProfile(w, c) {
       group: 0,
       dm: 0,
       note: 0,
+      roleplay: 0,
     };
   }
 
@@ -13349,23 +13361,23 @@ function characterOnlineActivityProfile(w, c) {
 
   /* Explicitly very-online / very-social characters really are more active. */
   if (/chronically online|always online|very active|hyperactive|terminally online|folyamatosan online|nagyon akt[ií]v|állandóan online/.test(lore)) {
-    overall += 0.55;
+    overall += 0.75;
   }
 
   if (/extrovert|extroverted|outgoing|social|t[aá]rsas[aá]gi|chatty|talkative|besz[eé]des|influencer|creator|blogger|celebrity|gossip|pletyka|attention.?seeking|figyelemk[eé]r/.test(lore)) {
-    overall += 0.30;
+    overall += 0.42;
   }
 
   if (/impulsive|impulz[ií]v|chaotic|k[aá]osz|flirt|fl[oö]rt|curious|k[ií]v[aá]ncsi/.test(lore)) {
-    overall += 0.12;
+    overall += 0.20;
   }
 
   if (/introvert|introverted|reserved|private|quiet|csendes|z[aá]rk[oó]zott|visszah[uú]z[oó]d|shy|f[eé]l[eé]nk|low.?profile/.test(lore)) {
-    overall -= 0.30;
+    overall -= 0.38;
   }
 
   if (/antisocial|offline|rarely posts|rarely online|hates social media|social media.*hate|ut[aá]lja.*k[oö]z[oö]ss[eé]gi|ritk[aá]n posztol|ritk[aá]n online/.test(lore)) {
-    overall -= 0.35;
+    overall -= 0.48;
   }
 
   /*
@@ -13377,16 +13389,17 @@ function characterOnlineActivityProfile(w, c) {
     ((commentSeedNumber(c.id || c.name || "character") % 21) - 10) / 100;
 
   overall += stableJitter;
-  overall = Math.max(0.30, Math.min(1.95, overall));
+  overall = Math.max(0.22, Math.min(2.45, overall));
 
-  const postBias = /influencer|creator|blogger|celebrity|content|fot[oó]|fashion|modell/.test(lore) ? 0.18 : 0;
-  const groupBias = /chatty|talkative|besz[eé]des|gossip|pletyka|outgoing|t[aá]rsas[aá]gi|chaotic|k[aá]osz/.test(lore) ? 0.18 : 0;
-  const dmBias = /flirt|fl[oö]rt|possess|birtokl|obsess|megsz[aá]ll|protect|v[eé]delmez|chatty|talkative/.test(lore) ? 0.16 : 0;
-  const noteBias = /online|influencer|creator|impulsive|impulz[ií]v|expressive|kifejez[oő]|gossip|pletyka/.test(lore) ? 0.14 : 0;
+  const postBias = /influencer|creator|blogger|celebrity|content|fot[oó]|fashion|modell/.test(lore) ? 0.28 : 0;
+  const groupBias = /chatty|talkative|besz[eé]des|gossip|pletyka|outgoing|t[aá]rsas[aá]gi|chaotic|k[aá]osz/.test(lore) ? 0.34 : 0;
+  const dmBias = /flirt|fl[oö]rt|possess|birtokl|obsess|megsz[aá]ll|protect|v[eé]delmez|chatty|talkative|curious|k[ií]v[aá]ncsi/.test(lore) ? 0.36 : 0;
+  const noteBias = /online|influencer|creator|impulsive|impulz[ií]v|expressive|kifejez[oő]|gossip|pletyka/.test(lore) ? 0.22 : 0;
+  const roleplayBias = /outgoing|extrovert|social|t[aá]rsas|party|buli|flirt|fl[oö]rt|impulsive|impulz[ií]v|adventure|kaland|possess|birtokl|obsess|megsz[aá]ll|dominant|domin[aá]ns|protect|v[eé]delmez/.test(lore) ? 0.42 : 0;
 
   const quietPenalty = /reserved|private|quiet|csendes|z[aá]rk[oó]zott|visszah[uú]z[oó]d|shy|f[eé]l[eé]nk/.test(lore) ? 0.10 : 0;
 
-  const clamp = (value) => Math.max(0.25, Math.min(2.15, value));
+  const clamp = (value) => Math.max(0.18, Math.min(2.75, value));
 
   return {
     overall: clamp(overall),
@@ -13394,6 +13407,7 @@ function characterOnlineActivityProfile(w, c) {
     group: clamp(overall + groupBias - quietPenalty),
     dm: clamp(overall + dmBias - quietPenalty * 0.6),
     note: clamp(overall + noteBias - quietPenalty * 0.5),
+    roleplay: clamp(overall + roleplayBias - quietPenalty * 0.8),
   };
 }
 
@@ -19202,9 +19216,9 @@ function fairPostCast(w) {
      * kaphat természetes lehetőséget.
      */
     const pressure =
-      idleHours * (0.45 + activity) +
-      activity * 25 -
-      recentPosts * (20 / Math.max(0.35, activity)) +
+      idleHours * (0.22 + activity * 0.62) +
+      activity * 42 -
+      recentPosts * (8 / Math.max(0.30, activity * activity)) +
       Math.random() * 9;
 
     return {
@@ -27242,7 +27256,10 @@ ${matureContentInstruction(
 
 PRIVÁT ÜZENET SZABÁLYOK:
 
-- Csak akkor írj rá, ha MOST tényleg van rá karakterhű okod.
+- Ezt a kört a rendszer azért adta NEKED, mert a személyiséged, kapcsolatod és online aktivitásod alapján most te vagy az egyik legvalószínűbb spontán kezdeményező.
+- Ne várj feltétlenül nagy eseményre. Egy valódi ember is ráírhat valakire pusztán egy apró kérdés, poén, gondolat, pletyka, meghívás, kép, "hol vagy?", praktikus ügy vagy pillanatnyi késztetés miatt.
+- A skip:true legyen RITKA: csak akkor használd, ha a karaktered tényleg tudatosan nem keresné most ${w.player.name} karaktert, vagy a jelenlegi kánon ezt kifejezetten indokolja.
+- Ha nincs nagy történés, találj egy KICSI, hétköznapi, de karakterhű indokot a ráírásra; ne találj ki hozzá új tényt vagy drámát.
 - Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz, tervhez vagy egyszerűen valamihez, amit most akarsz tőle.
 - Az ok lehet egészen hétköznapi is.
 - Nem kell minden spontán DM mögé nagy történés, konfliktus vagy dráma.
@@ -27434,7 +27451,7 @@ Ha van:
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
 {"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}]}${TAIL}`,
-    { maxTokens: 700 }
+    { maxTokens: 700, priority: 22 }
   );
 }
 function characterNoteActivityScore(w, c) {
@@ -27800,7 +27817,13 @@ function pickInitiator(w) {
 
     /* Az aktív karakter hamarabb pingelhet újra; a visszahúzódó nagyobb szünetet tart. */
     const personalDmGapMs =
-      (14 * 60 * 1000) / Math.max(0.35, activity);
+      Math.max(
+        75 * 1000,
+        Math.min(
+          12 * 60 * 1000,
+          (4 * 60 * 1000) / Math.max(0.28, activity)
+        )
+      );
 
     if (lastOwnDm && now() - lastOwnDm < personalDmGapMs) score -= 40;
 
@@ -27808,7 +27831,7 @@ function pickInitiator(w) {
   })
     .sort((a, b) => b.score - a.score);
 
-  const eligible = pool.filter((row) => row.score >= 12).slice(0, 3);
+  const eligible = pool.filter((row) => row.score >= 7).slice(0, 4);
   if (!eligible.length) return null;
 
   return eligible[Math.floor(Math.random() * eligible.length)].c;
@@ -27964,6 +27987,8 @@ function ensureSimState(w) {
       lastSuccessAt: 0,
       lastAttemptAt: 0,
       roleplayAttemptAt: 0,
+      dmAttemptAt: 0,
+      groupAttemptAt: 0,
       lastError: "",
     };
   }
@@ -27977,6 +28002,8 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.lastSuccessAt))) w.sim.lastSuccessAt = 0;
   if (!Number.isFinite(Number(w.sim.lastAttemptAt))) w.sim.lastAttemptAt = 0;
   if (!Number.isFinite(Number(w.sim.roleplayAttemptAt))) w.sim.roleplayAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.dmAttemptAt))) w.sim.dmAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.groupAttemptAt))) w.sim.groupAttemptAt = 0;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -34068,9 +34095,9 @@ function fairGroupCast(w, allowedIds = null) {
         : 72;
 
       const pressure =
-        idleHours * (0.35 + activity) +
-        activity * 22 -
-        recentGroupMessages * (15 / Math.max(0.35, activity)) +
+        idleHours * (0.18 + activity * 0.55) +
+        activity * 38 -
+        recentGroupMessages * (6 / Math.max(0.30, activity * activity)) +
         Math.random() * 8;
 
       return {
@@ -34332,7 +34359,7 @@ Formátum:
 ],
 "selfUpdates":[{"id":"AI id","mood":"mi dolgozik benne","intent":"mit akar most","openLoops":["nyitott terv vagy ügy"]}],
 "event":"egy rövid mondat arról, miért jött létre a csoport"}${TAIL}`,
-    { maxTokens: 1200 }
+    { maxTokens: 1200, priority: 18 }
   );
 }
 
@@ -35116,7 +35143,7 @@ function feedNeedsFreshPost(w) {
    */
   return (
     !last ||
-    now() - last >= 25000
+    now() - last >= 45000
   );
 }
 
@@ -35135,12 +35162,12 @@ function canAiInitiateRoleplay(w) {
   /* Egy aktív AI-Event elég; ne spammeljen egyszerre több meghívással. */
   if (openAiScenes >= 1) return false;
   const last = lastAiInitiatedRoleplayAt(w);
-  return !last || now() - last >= 2 * 60 * 1000;
+  return !last || now() - last >= 90 * 1000;
 }
 
 function roleplayInitiationProbeDue(w) {
   const attemptAt = Number(w && w.sim && w.sim.roleplayAttemptAt) || 0;
-  return !attemptAt || now() - attemptAt >= 45 * 1000;
+  return !attemptAt || now() - attemptAt >= 30 * 1000;
 }
 
 function roleplayInitiatorScore(w, c) {
@@ -35151,6 +35178,7 @@ function roleplayInitiatorScore(w, c) {
     .filter(Boolean).join(" ").toLowerCase();
   score += Math.min(26, Math.abs(Number(rel && rel.score) || 0) * 0.22);
   score += relationshipObsessionLevel(w, c.id, w.meId) * 16;
+  score += (characterOnlineActivityProfile(w, c).roleplay - 1) * 24;
   if (/party|buli|social|társas|outgoing|extrovert|impulsive|impulzív|adventure|kaland|flirt|flört/.test(lore)) score += 14;
   if (/jealous|féltéken|possess|birtokl|obsess|megszáll|dominant|domináns|psycho|pszichopat|unhinged|kiszámíthatatlan/.test(lore)) score += 10;
   const mem = ensureCharMemory(w, c.id);
@@ -35164,7 +35192,7 @@ function pickRoleplayInitiator(w) {
     .map((c) => ({ c, score: roleplayInitiatorScore(w, c) }))
     .sort((a,b) => b.score - a.score);
 
-  const eligible = pool.filter((row) => row.score >= 20).slice(0, 3);
+  const eligible = pool.filter((row) => row.score >= 14).slice(0, 4);
   return eligible.length
     ? eligible[Math.floor(Math.random() * eligible.length)].c
     : null;
@@ -35189,9 +35217,11 @@ ${relCard}
 TE MOST ${bot.name} VAGY, ÉS SAJÁT MAGADTÓL KEZDEMÉNYEZHETSZ EGY ÚJ ROLEPLAY EVENTET ${w.player.name} FELÉ.
 
 EZ NEM RENDSZER-ÖTLET GENERÁLÁS. Ez ${bot.name} SAJÁT DÖNTÉSE a világon belül.
-- Csak akkor kezdeményezz, ha a személyiségedből, célodból, kapcsolatodból, aktuális érzelmedből vagy friss eseményből természetesen következik.
-- NE várj nagy drámára. Ha van bármilyen természetes hétköznapi ok arra, hogy keresd, meghívd, lásd vagy bevond valamibe, KEZDEMÉNYEZZ.
-- skip:true csak akkor legyen, ha a karaktered és a jelenlegi világhelyzet alapján tényleg semmilyen hiteles ok nincs még egy rövid találkozóra/meghívásra sem.
+- Ezt a kezdeményezési kört azért kaptad, mert a karaktered jelenlegi aktivitása és kapcsolati hajlama alapján IDŐSZERŰ, hogy te mozdítsd meg a történetet.
+- Csak akkor kezdeményezz, ha a személyiségedből, célodból, kapcsolatodból, aktuális érzelmedből vagy friss eseményből hitelesen következhet — de ehhez NEM kell nagy dráma vagy különleges esemény.
+- Ha van bármilyen természetes hétköznapi ok arra, hogy keresd, meghívd, lásd vagy bevond valamibe, KEZDEMÉNYEZZ.
+- A skip:true KIVÉTELES legyen. Csak akkor használd, ha a kánon vagy a jelenlegi helyzet ténylegesen kizárja, hogy most akár egy egyszerű programot, találkozót, edzést, kávét, sétát, bulit, segítségkérést vagy közös ügyet kezdeményezz.
+- Ha nincs nagy esemény, válassz egy KICSI, hétköznapi, karakterhű kezdeményezést. Ne találj ki új off-screen tényt csak azért, hogy legyen Event.
 - Lehet teljesen hétköznapi program: buli, kávé, séta, edzés, autózás, shopping, tanulás, közös munka, küldetés, segítségkérés, "gyere ide", közös terv.
 - Lehet konfliktusos is: számonkérés, rivális miatti féltékenység, fenyegető találkozó, váratlan konfrontáció, ha a kánon ezt indokolja.
 - Ha társasági/bulis karakter vagy, magadtól is meghívhatsz buliba vagy szervezhetsz programot.
@@ -35214,8 +35244,146 @@ Az Event legyen konkrét, ne generikus. Adj célt, de a cél ne irányítsa a j�
 
 JSON:
 {"skip":false,"mode":"dm_invite vagy arrival vagy encounter","title":"rövid Event cím","setting":"2-4 mondat, hol/mikor/miért indul; a játékos döntését ne írd meg","goal":"konkrét Event cél","cast":["AI id-k; ${bot.id} kötelező"],"openingKind":"speech vagy action","opening":"${bot.name} első saját mondata vagy cselekvése; a játékos reakciója nélkül","dmText":"csak dm_invite esetén rövid valódi chat-üzenet, különben üres","targetTurns":16,"targetMinutes":20,"limitMode":"turns vagy minutes","rewardAffection":12,"rewardItem":"jelenethez illő egyedi emléktárgy","selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned","intent":"miért kezdeményezed","openLoops":["amit ezzel az Eventtel el akarsz intézni"]}]}${TAIL}`,
-    { maxTokens: 1450 }
+    { maxTokens: 1450, priority: 26 }
   );
+}
+
+function lastAiPrivateMessageAt(w) {
+  let latest = 0;
+  Object.values((w && w.chats) || {}).forEach((msgs) => {
+    (Array.isArray(msgs) ? msgs : []).forEach((m) => {
+      if (!m || m.from !== "them") return;
+      latest = Math.max(latest, Number(m.ts) || 0);
+    });
+  });
+  return latest;
+}
+
+function lastAiGroupMessageAt(w) {
+  let latest = 0;
+  ((w && w.groups) || []).forEach((g) => {
+    ((g && g.msgs) || []).forEach((m) => {
+      if (!m || !m.from || isHuman(w, m.from)) return;
+      latest = Math.max(latest, Number(m.ts) || 0);
+    });
+  });
+  return latest;
+}
+
+function channelActivityPeak(w, key) {
+  const vals = ((w && w.chars) || [])
+    .filter((c) => c && !isHuman(w, c.id))
+    .map((c) => Number(characterOnlineActivityProfile(w, c)[key]) || 0);
+  return vals.length ? Math.max(...vals) : 0;
+}
+
+/*
+ * AUTONOMOUS INITIATIVE WATCHDOG
+ *
+ * A feed nem ehet meg minden háttérkört. A privát DM, group chat és RP
+ * külön saját éhezési órát kap. Ha valamelyik túl régóta nem történt meg,
+ * az a csatorna a következő újabb feed-poszt ELŐTT kap egy próbát.
+ */
+function pickInitiativeWatchdogAction(view) {
+  if (!view || !(view.chars || []).length) return null;
+
+  const ts = now();
+  const sim = (view && view.sim) || {};
+  const candidates = [];
+
+  const dmPeak = Math.max(0.25, channelActivityPeak(view, "dm"));
+  const dmLast = Math.max(
+    lastAiPrivateMessageAt(view),
+    Number(sim.dmAttemptAt) || 0
+  );
+  const dmTarget = Math.max(45000, Math.round(105000 / dmPeak));
+  const dmElapsed = dmLast ? ts - dmLast : dmTarget * 3;
+  if (dmElapsed >= dmTarget) {
+    const bot = pickInitiator(view);
+    if (bot) {
+      candidates.push({
+        urgency: Math.min(4, dmElapsed / dmTarget) + 0.25 + Math.random() * 0.2,
+        action: mkAction(
+          "dm",
+          `initiative-dm:${bot.id}:${Math.floor(ts / 60000)}`,
+          { botId: bot.id },
+          "event"
+        ),
+      });
+    }
+  }
+
+  const groups = (view.groups || []).filter((g) =>
+    g && g.id && Array.isArray(g.members) &&
+    g.members.filter((id) => charById(view, id) && !isHuman(view, id)).length >= 2
+  );
+  const groupPeak = Math.max(0.25, channelActivityPeak(view, "group"));
+  const groupLast = Math.max(
+    lastAiGroupMessageAt(view),
+    Number(sim.groupAttemptAt) || 0
+  );
+  const groupTarget = Math.max(70000, Math.round(150000 / groupPeak));
+  const groupElapsed = groupLast ? ts - groupLast : groupTarget * 2.4;
+  if (groupElapsed >= groupTarget) {
+    if (groups.length) {
+      const rankedGroups = groups
+        .map((g) => ({
+          g,
+          last: (g.msgs || []).reduce((m, x) => Math.max(m, Number(x && x.ts) || 0), 0),
+          jitter: Math.random(),
+        }))
+        .sort((a, b) => (a.last - b.last) || (a.jitter - b.jitter));
+      const group = rankedGroups[0].g;
+      candidates.push({
+        urgency: Math.min(4, groupElapsed / groupTarget) + 0.05 + Math.random() * 0.2,
+        action: mkAction(
+          "group-turn",
+          `initiative-group-turn:${group.id}:${Math.floor(ts / 90000)}`,
+          { groupId: group.id },
+          "event"
+        ),
+      });
+    } else if ((view.chars || []).filter((c) => c && !isHuman(view, c.id)).length >= 2) {
+      candidates.push({
+        urgency: Math.min(4, groupElapsed / groupTarget) + Math.random() * 0.2,
+        action: mkAction(
+          "group",
+          `initiative-group:${Math.floor(ts / 180000)}`,
+          {},
+          "event"
+        ),
+      });
+    }
+  }
+
+  if (canAiInitiateRoleplay(view) && roleplayInitiationProbeDue(view)) {
+    const rpPeak = Math.max(0.25, channelActivityPeak(view, "roleplay"));
+    const rpLastSuccess = lastAiInitiatedRoleplayAt(view);
+    const rpLastSignal = Math.max(
+      rpLastSuccess,
+      Number(sim.roleplayAttemptAt) || 0
+    );
+    const rpTarget = Math.max(95000, Math.round(210000 / rpPeak));
+    const rpElapsed = rpLastSignal ? ts - rpLastSignal : rpTarget * 2.8;
+    if (rpElapsed >= rpTarget) {
+      const initiator = pickRoleplayInitiator(view);
+      if (initiator) {
+        candidates.push({
+          urgency: Math.min(4, rpElapsed / rpTarget) + 0.35 + Math.random() * 0.2,
+          action: mkAction(
+            "roleplay-initiate",
+            `initiative-roleplay:${initiator.id}:${Math.floor(ts / 90000)}`,
+            { botId: initiator.id },
+            "event"
+          ),
+        });
+      }
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.urgency - a.urgency);
+  return candidates[0].action;
 }
 
 function planAutoAction(view) {
@@ -35283,24 +35451,14 @@ function planAutoAction(view) {
   }
 
   /*
-   * 1.5 AI-KEZDEMÉNYEZETT ROLEPLAY EVENT — KÜLÖN PRIORITÁS
+   * 1.5 AUTONÓM KEZDEMÉNYEZÉSI SÁV
    *
-   * Nem a feed-watchdog mögött próbál szerencsét. Ha esedékes a proaktív
-   * Event-probe, a karakter ténylegesen kap egy kezdeményezési kört.
+   * DM / group chat / roleplay saját watchdogot kap. Ha bármelyik csatorna
+   * túl régóta néma, az újabb feed-poszt előtt kap egy valódi próbát.
    */
-  if (
-    canAiInitiateRoleplay(view) &&
-    roleplayInitiationProbeDue(view)
-  ) {
-    const initiator = pickRoleplayInitiator(view);
-    if (initiator) {
-      return mkAction(
-        "roleplay-initiate",
-        `roleplay-initiate:${initiator.id}:${Math.floor(now() / 45000)}`,
-        { botId: initiator.id },
-        "event"
-      );
-    }
+  const initiativeAction = pickInitiativeWatchdogAction(view);
+  if (initiativeAction) {
+    return initiativeAction;
   }
 
   /*
@@ -35310,7 +35468,7 @@ function planAutoAction(view) {
     return mkAction(
       "world",
       `feed-watchdog:${Math.floor(
-        now() / 25000
+        now() / 45000
       )}`
     );
   }
@@ -35404,7 +35562,7 @@ function planAutoAction(view) {
    * karbantartási vagy ritkább social akcióra váltana.
    */
   if (
-    Math.random() < 0.46
+    Math.random() < 0.22
   ) {
     return mkAction(
       "world",
@@ -35785,7 +35943,7 @@ function planAutoAction(view) {
       return (
         !t ||
         now() - t >
-          4 * 60 * 1000
+          90 * 1000
       );
     });
 
@@ -35797,7 +35955,7 @@ function planAutoAction(view) {
       return (
         t > 0 &&
         now() - t <
-          90 * 60 * 1000
+          20 * 60 * 1000
       );
     });
 
@@ -35883,7 +36041,7 @@ function planAutoAction(view) {
    * A feed watchdog külön garantál friss posztot, ezért itt bátrabban
    * engedjük, hogy a karakterek privátban is megmozdítsák a történetet.
    */
-  if (roll < 0.42) {
+  if (roll < 0.58) {
     const bot =
       pickInitiator(view);
 
@@ -36039,9 +36197,10 @@ ${matureContentInstruction(
 DÖNTSD EL, HOGY A CSOPORTBAN MOST TERMÉSZETESEN FOLYTATÓDNA-E A BESZÉLGETÉS.
 
 - Nem kötelező minden alkalommal megszólalniuk.
-- Ha nincs semmi, ami miatt valamelyik tag MOST természetesen írna, legyen "skip": true.
-- Ne generálj üzenetet csak azért, mert a rendszer megkérdezte.
-- Ne folytasd mesterségesen a beszélgetést, ha az természetesen már elhalt.
+- Ez egy aktív közösségi világ: egy group chatnek nem kell nagy eseményre várnia. Rövid poén, visszakérdezés, szervezés, pletyka, praktikus kérdés, random reakció vagy apró közbeszólás is teljesen elég a folytatáshoz.
+- Ha legalább két jelenlévő AI-tag karakterhűen tudna egymásnak írni valami rövidet, FOLYTASD a beszélgetést.
+- A "skip": true inkább akkor legyen, ha a csoport tényleg teljesen kifutott ÉS egyik tag személyisége / aktuális ügye sem ad még egy apró természetes megszólalást sem.
+- Ne találj ki nagy eseményt csak azért, hogy legyen aktivitás; a hétköznapi mikro-chat viszont valódi aktivitás.
 - Ha van befejezetlen téma, friss esemény, poszt, komment, jegyzet, pletyka, terv, konfliktus, poén, kérdés vagy más karakterhű indok, folytathatják.
 - Egy egészen hétköznapi reakció is elég ok lehet.
 - Reagálhatnak egymás korábbi üzeneteire.
@@ -36205,7 +36364,7 @@ Ha van természetes folytatás:
 ],
 "selfUpdates":[{"id":"AI-tag azonosítója","mood":"mi dolgozik benne","intent":"mit akar most","openLoops":["nyitott terv vagy ügy"]}],
 "event":"csak akkor egy rövid mondat, ha a beszélgetésben tényleg történt valami emlékezetes, különben üres"}${TAIL}`,
-    { maxTokens: 900 }
+    { maxTokens: 900, priority: 18 }
   );
 }
 /* Egy központi szimulációs akció futtatása. Mindig pontosan egy AI-hívás. */
@@ -40602,6 +40761,12 @@ const signOut = useCallback(async () => {
         simMarkRunning(n, action);
         if (action && action.type === "roleplay-initiate") {
           ensureSimState(n).roleplayAttemptAt = now();
+        }
+        if (action && action.type === "dm") {
+          ensureSimState(n).dmAttemptAt = now();
+        }
+        if (action && (action.type === "group" || action.type === "group-turn")) {
+          ensureSimState(n).groupAttemptAt = now();
         }
       });
       let ok = false;
