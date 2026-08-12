@@ -2642,3 +2642,742 @@ async function imageReferencesFromBody(body = {}, limit = 3) {
 }
 
 function multipartTextPart(boundary, name, value) {
+    return Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+    `${String(value)}\r\n`,
+    "utf8"
+  );
+}
+
+function multipartImagePart(boundary, name, image, index) {
+  const ext = image.mimeType === "image/png"
+    ? "png"
+    : image.mimeType === "image/webp"
+      ? "webp"
+      : "jpg";
+
+  const head = Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="${name}"; filename="reference-${index + 1}.${ext}"\r\n` +
+    `Content-Type: ${image.mimeType}\r\n\r\n`,
+    "utf8"
+  );
+
+  const data = Buffer.from(image.base64, "base64");
+  return Buffer.concat([head, data, Buffer.from("\r\n", "utf8")]);
+}
+
+function buildImageEditMultipart({
+  model,
+  prompt,
+  size,
+  quality,
+  outputFormat,
+  background,
+  moderation,
+  references,
+}) {
+  const boundary = `----masvilag-${crypto.randomBytes(18).toString("hex")}`;
+  const chunks = [
+    multipartTextPart(boundary, "model", model),
+    multipartTextPart(boundary, "prompt", prompt),
+    multipartTextPart(boundary, "size", size),
+    multipartTextPart(boundary, "quality", quality),
+    multipartTextPart(boundary, "output_format", outputFormat),
+    multipartTextPart(boundary, "background", background),
+    multipartTextPart(boundary, "moderation", moderation),
+  ];
+
+  /*
+   * OpenAI Image Edit accepts multiple input images as image[].
+   * For GPT Image 2 these references act as high-fidelity identity inputs.
+   */
+  references.forEach((image, index) => {
+    chunks.push(
+      multipartImagePart(boundary, "image[]", image, index)
+    );
+  });
+
+  chunks.push(Buffer.from(`--${boundary}--\r\n`, "utf8"));
+
+  return {
+    boundary,
+    body: Buffer.concat(chunks),
+  };
+}
+
+app.post(["/ai/image", "/ai/images", "/ai/generate-image"], async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+    const session = await getSession(req);
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
+    if (!OPENAI_API_KEY) {
+      return res.status(500).json({ error: "Missing OPENAI_API_KEY." });
+    }
+
+    const prompt = imagePromptFromBody(req.body || {});
+    if (!prompt) return res.status(400).json({ error: "Missing image prompt." });
+
+    const model = String(req.body?.model || process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
+    const size = String(req.body?.size || req.body?.image_size || process.env.OPENAI_IMAGE_SIZE || "1024x1024");
+    const quality = String(req.body?.quality || process.env.OPENAI_IMAGE_QUALITY || "medium");
+    const outputFormat = String(req.body?.output_format || process.env.OPENAI_IMAGE_FORMAT || "jpeg");
+    const background = String(req.body?.background || "auto");
+    const moderation = String(req.body?.moderation || "auto");
+    const references = await imageReferencesFromBody(req.body || {}, 3);
+
+    if (req.body?.require_reference && !references.length) {
+      return res.status(422).json({
+        error: "Character reference images were supplied, but none could be loaded. Refusing prompt-only generation because identity would be unreliable.",
+      });
+    }
+
+    let endpoint = "https://api.openai.com/v1/images/generations";
+    let options;
+
+    if (references.length) {
+      /*
+       * CRITICAL IDENTITY FIX:
+       * Generations cannot actually consume our profile/album reference images.
+       * When references exist, use the Image Edit endpoint and send them as
+       * multipart image[] inputs so the model can preserve the character face.
+       */
+      endpoint = "https://api.openai.com/v1/images/edits";
+      const multipart = buildImageEditMultipart({
+        model,
+        prompt,
+        size,
+        quality,
+        outputFormat,
+        background,
+        moderation,
+        references,
+      });
+
+      options = {
+        method: "POST",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${multipart.boundary}`,
+          "Content-Length": String(multipart.body.length),
+          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: multipart.body,
+      };
+    } else {
+      options = {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model,
+          prompt,
+          size,
+          quality,
+          output_format: outputFormat,
+          background,
+          moderation,
+        }),
+      };
+    }
+
+    const r = await fetchWithTimeout(
+      endpoint,
+      options,
+      Math.max(AI_UPSTREAM_TIMEOUT_MS, references.length ? 120000 : 90000)
+    );
+
+    const payload = await responseJsonSafe(r);
+    if (!r.ok) {
+      if (r.headers.get("retry-after")) res.setHeader("retry-after", r.headers.get("retry-after"));
+      console.error(
+        "OpenAI image upstream error:",
+        r.status,
+        references.length ? "edit-reference" : "generation",
+        proxyErrorMessage(payload, "Image request failed")
+      );
+      return res.status(r.status).json(payload);
+    }
+
+    const first = Array.isArray(payload?.data) ? payload.data[0] : null;
+    const b64 = String(first?.b64_json || payload?.b64_json || "").trim();
+    const url = String(first?.url || first?.image_url || payload?.url || "").trim();
+
+    if (!b64 && !url) {
+      return res.status(502).json({
+        error: "OpenAI image generation returned no image payload."
+      });
+    }
+
+    const mime = outputFormat === "png"
+      ? "image/png"
+      : outputFormat === "webp"
+        ? "image/webp"
+        : "image/jpeg";
+
+    const dataUrl = b64
+      ? `data:${mime};base64,${b64}`
+      : "";
+
+    return res.json({
+      ok: true,
+      provider: "openai",
+      model,
+      mode: references.length ? "edit-reference" : "generation",
+      referenceCount: references.length,
+      data: b64
+        ? [{
+            b64_json: b64,
+            revised_prompt: first?.revised_prompt || "",
+          }]
+        : [],
+      b64_json: b64,
+      dataUrl,
+      image: dataUrl || url,
+      url,
+      revised_prompt: first?.revised_prompt || "",
+    });
+  } catch (err) {
+    console.error("Image generation proxy error:", err);
+
+    const timeout =
+      err?.name === "AbortError";
+
+    return res
+      .status(timeout ? 504 : 502)
+      .json({
+        error:
+          timeout
+            ? "Image generation timed out."
+            : (err?.message || "Image generation failed."),
+      });
+  }
+});
+
+async function proxyOpenAIMessage(body) {
+  if (!OPENAI_API_KEY) {
+    return {
+      unavailable: true,
+      provider: "openai",
+    };
+  }
+
+  const r = await fetchWithTimeout(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify(buildOpenAIPayload(body)),
+    }
+  );
+
+  const payload = await responseJsonSafe(r);
+
+  if (!r.ok) {
+    return {
+      ok: false,
+      status: r.status,
+      payload,
+      retryAfter: r.headers.get("retry-after"),
+      provider: "openai",
+    };
+  }
+
+  const normalized =
+    normalizeOpenAIResponse(payload);
+
+  const hasText =
+    Array.isArray(normalized?.content) &&
+    normalized.content.some(
+      (x) => String(x?.text || "").trim()
+    );
+
+  return hasText
+    ? {
+        ok: true,
+        payload: normalized,
+        provider: "openai",
+      }
+    : {
+        ok: false,
+        status: 502,
+        payload: {
+          error: {
+            message: "OpenAI returned empty content.",
+          },
+        },
+        provider: "openai",
+      };
+}
+
+async function proxyGeminiMessage(body) {
+  if (!GEMINI_API_KEY) {
+    return {
+      unavailable: true,
+      provider: "gemini",
+    };
+  }
+
+  const requested =
+    String(body?.model || "");
+
+  const modelsToTry =
+    [...new Set([
+      requested.startsWith("gemini")
+        ? requested
+        : "",
+      process.env.GEMINI_MODEL || "",
+      process.env.GEMINI_FALLBACK_MODEL ||
+        "gemini-3.5-flash",
+    ].filter(Boolean))];
+
+  let last = null;
+
+  for (const model of modelsToTry) {
+    const url =
+      new URL(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+      );
+
+    url.searchParams.set(
+      "key",
+      GEMINI_API_KEY
+    );
+
+    for (
+      let attempt = 1;
+      attempt <= 2;
+      attempt++
+    ) {
+      const r =
+        await fetchWithTimeout(
+          url,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body:
+              JSON.stringify(
+                buildGeminiPayload({
+                  ...body,
+                  model,
+                })
+              ),
+          }
+        );
+
+      const payload =
+        await responseJsonSafe(r);
+
+      if (r.ok) {
+        const normalized =
+          normalizeGeminiResponse(payload);
+
+        const hasText =
+          Array.isArray(normalized?.content) &&
+          normalized.content.some(
+            (x) =>
+              String(x?.text || "").trim()
+          );
+
+        if (hasText) {
+          return {
+            ok: true,
+            payload: normalized,
+            provider: "gemini",
+          };
+        }
+
+        last = {
+          ok: false,
+          status: 502,
+          payload: {
+            error: {
+              message: "Gemini returned empty content.",
+            },
+          },
+          provider: "gemini",
+        };
+
+        break;
+      }
+
+      last = {
+        ok: false,
+        status: r.status,
+        payload,
+        retryAfter: r.headers.get("retry-after"),
+        provider: "gemini",
+      };
+
+      if (
+        !retryableProviderStatus(r.status) ||
+        attempt >= 2
+      ) {
+        break;
+      }
+
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            700 * attempt
+          )
+      );
+    }
+  }
+
+  return last || {
+    unavailable: true,
+    provider: "gemini",
+  };
+}
+
+async function proxyAnthropicMessage(body) {
+  if (!ANTHROPIC_API_KEY) {
+    return {
+      unavailable: true,
+      provider: "anthropic",
+    };
+  }
+
+  const requestedModel =
+    String(body?.model || "");
+
+  const modelsToTry =
+    [...new Set([
+      requestedModel.startsWith("claude")
+        ? requestedModel
+        : "",
+      process.env.ANTHROPIC_MODEL || "",
+      process.env.ANTHROPIC_FALLBACK_MODEL || "",
+    ].filter(Boolean))];
+
+  if (!modelsToTry.length) {
+    modelsToTry.push(
+      requestedModel ||
+      "claude-sonnet-4-6"
+    );
+  }
+
+  let last = null;
+
+  for (const model of modelsToTry) {
+    const {
+      provider,
+      ...rest
+    } = body || {};
+
+    const outboundBody = {
+      ...rest,
+      model,
+      max_tokens:
+        body?.max_tokens ?? 1024,
+    };
+
+    for (
+      let attempt = 1;
+      attempt <= 2;
+      attempt++
+    ) {
+      const r =
+        await fetchWithTimeout(
+          "https://api.anthropic.com/v1/messages",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": ANTHROPIC_API_KEY,
+              "anthropic-version":
+                process.env.ANTHROPIC_VERSION ||
+                "2023-06-01",
+              "Accept": "application/json",
+            },
+            body:
+              JSON.stringify(outboundBody),
+          }
+        );
+
+      const payload =
+        await responseJsonSafe(r);
+
+      if (r.ok) {
+        const hasText =
+          Array.isArray(payload?.content) &&
+          payload.content.some(
+            (x) =>
+              x?.type === "text" &&
+              String(x?.text || "").trim()
+          );
+
+        if (hasText) {
+          return {
+            ok: true,
+            payload,
+            provider: "anthropic",
+          };
+        }
+
+        last = {
+          ok: false,
+          status: 502,
+          payload: {
+            error: {
+              message: "Anthropic returned empty content.",
+            },
+          },
+          provider: "anthropic",
+        };
+
+        break;
+      }
+
+      last = {
+        ok: false,
+        status: r.status,
+        payload,
+        retryAfter: r.headers.get("retry-after"),
+        provider: "anthropic",
+      };
+
+      if (
+        !retryableProviderStatus(r.status) ||
+        attempt >= 2
+      ) {
+        break;
+      }
+
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            700 * attempt
+          )
+      );
+    }
+  }
+
+  return last || {
+    unavailable: true,
+    provider: "anthropic",
+  };
+}
+
+async function callMessageProvider(provider, body) {
+  if (provider === "openai") {
+    return proxyOpenAIMessage(body);
+  }
+
+  if (provider === "gemini") {
+    return proxyGeminiMessage(body);
+  }
+
+  return proxyAnthropicMessage(body);
+}
+
+app.get("/ai/health", (req, res) => {
+  return res.json({
+    ok: true,
+    version: "v35-production-api-reference-selfies",
+    routes: {
+      messages: true,
+      image: true,
+      vision: true,
+    },
+    providers: {
+      anthropic: Boolean(ANTHROPIC_API_KEY),
+      gemini: Boolean(GEMINI_API_KEY),
+      openai: Boolean(OPENAI_API_KEY),
+    },
+  });
+});
+
+app.post(
+  ["/ai/messages", "/ai/chat", "/ai/respond"],
+  async (req, res) => {
+    const requestedProvider =
+      getProvider(req.body || {});
+
+    const configuredFallbacks =
+      ["anthropic", "openai", "gemini"]
+        .filter(
+          (p) => p !== requestedProvider
+        )
+        .filter(
+          (p) =>
+            p === "anthropic"
+              ? ANTHROPIC_API_KEY
+              : p === "openai"
+                ? OPENAI_API_KEY
+                : GEMINI_API_KEY
+        );
+
+    const providers = [
+      requestedProvider,
+      ...configuredFallbacks,
+    ];
+
+    let last = null;
+
+    for (const provider of providers) {
+      try {
+        const result =
+          await callMessageProvider(
+            provider,
+            req.body || {}
+          );
+
+        if (result?.ok) {
+          res.setHeader(
+            "x-masvilag-ai-provider",
+            result.provider || provider
+          );
+
+          return res.json(
+            result.payload
+          );
+        }
+
+        if (result?.unavailable) {
+          continue;
+        }
+
+        last = result;
+
+        if (
+          !retryableProviderStatus(
+            result?.status
+          ) &&
+          ![400, 404].includes(
+            Number(result?.status)
+          )
+        ) {
+          break;
+        }
+      } catch (err) {
+        last = {
+          status:
+            err?.name === "AbortError"
+              ? 504
+              : 502,
+          payload: {
+            error: {
+              message:
+                err?.name === "AbortError"
+                  ? `${provider} timed out.`
+                  : (
+                      err?.message ||
+                      `${provider} proxy error`
+                    ),
+            },
+          },
+          provider,
+        };
+      }
+    }
+
+    const status =
+      Number(last?.status) || 503;
+
+    if (last?.retryAfter) {
+      res.setHeader(
+        "retry-after",
+        last.retryAfter
+      );
+    }
+
+    console.error(
+      "AI message providers exhausted:",
+      requestedProvider,
+      proxyErrorMessage(
+        last?.payload,
+        "No provider returned a usable response."
+      )
+    );
+
+    return res
+      .status(status)
+      .json(
+        last?.payload || {
+          error: {
+            message:
+              "No configured AI provider returned a usable response.",
+          },
+        }
+      );
+  }
+);
+
+// Serve the built React/Vite app in production.
+// v31: never let an old frontend bundle survive a deploy in browser/proxy cache.
+app.use((req, res, next) => {
+  if (req.method === "GET") {
+    res.setHeader(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+    );
+    res.setHeader(
+      "Pragma",
+      "no-cache"
+    );
+    res.setHeader(
+      "Expires",
+      "0"
+    );
+    res.setHeader(
+      "Surrogate-Control",
+      "no-store"
+    );
+  }
+
+  next();
+});
+
+app.use(
+  express.static(
+    "dist",
+    {
+      etag: false,
+      maxAge: 0,
+      setHeaders(res) {
+        res.setHeader(
+          "Cache-Control",
+          "no-store, no-cache, must-revalidate, max-age=0"
+        );
+      },
+    }
+  )
+);
+
+app.use((req, res, next) => {
+  if (
+    req.method === "GET" &&
+    !req.path.startsWith("/ai/")
+  ) {
+    return res.sendFile(
+      "index.html",
+      {
+        root: "dist",
+      }
+    );
+  }
+
+  next();
+});
+
+app.listen(
+  PORT,
+  () =>
+    console.log(
+      `App + AI proxy listening on port ${PORT}`
+    )
+);
