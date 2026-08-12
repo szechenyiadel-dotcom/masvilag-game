@@ -2691,6 +2691,12 @@ function safePostComments(post) {
     : [];
 }
 
+function safeAiComments(out) {
+  return out && Array.isArray(out.comments)
+    ? out.comments.filter((c) => c && typeof c === "object")
+    : [];
+}
+
 function sanitizeWorldPosts(w) {
   if (!w || typeof w !== "object") return [];
 
@@ -9220,7 +9226,12 @@ function mergeWorlds(remote, local) {
       if (c.id && !t.comments.some((x) => x && x.id === c.id)) t.comments.push(c);
     });
   });
-  order.forEach((id) => byId[id].comments.sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+  order.forEach((id) => {
+    const row = byId[id];
+    if (!row) return;
+    row.comments = safePostComments(row);
+    row.comments.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  });
   out.posts = order.filter((id) => !out.deleted[id]).map((id) => byId[id]).sort((a, b) => (b.ts || 0) - (a.ts || 0));
 
   const sById = {}, sOrder = [];
@@ -14840,7 +14851,7 @@ function Post({
 
   if (!author) return null;
 
-  const comments = Array.isArray(post.comments) ? post.comments.filter(Boolean) : [];
+  const comments = safePostComments(post);
   const tops = comments.filter((c) => !c.parent);
   const orphans = comments.filter(
     (c) => c.parent && !comments.some((x) => x.id === c.parent)
@@ -15675,9 +15686,7 @@ function pickCast(w, excludeId) {
 const nameOfIn = (w, id) => { const a = charById(w, id); return a ? a.name : "?"; };
 
 function threadOf(w, post) {
-  const cs = post && Array.isArray(post.comments)
-    ? post.comments.filter(Boolean)
-    : [];
+  const cs = safePostComments(post);
   const label = {};
   cs.forEach((c, i) => { label[c.id] = "k" + (i + 1); });
   return {
@@ -16819,7 +16828,7 @@ function applyComments(n, postId, out, label) {
     p.comments = safePostComments(p);
     const byLabel = {};
     Object.keys(label || {}).forEach((cid) => { byLabel[label[cid]] = cid; });
-    (out.comments || []).forEach((c) => {
+    safeAiComments(out).forEach((c) => {
       const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!who || !c.text) return;
       const body = cleanGeneratedUtterance(n, who, c.text, 240);
@@ -17339,14 +17348,18 @@ function fairCommentCast(w, targetId) {
 }
 
 async function genReply(w, post, comment) {
+  if (!post || typeof post !== "object" || !comment || typeof comment !== "object") {
+    return { comments: [], changes: [], events: [] };
+  }
+
   const target = charById(
     w,
     comment.authorId
   );
 
   const parentComment =
-    comment.parent && Array.isArray(post.comments)
-      ? post.comments.find((c) => c && c.id === comment.parent)
+    comment.parent
+      ? safePostComments(post).find((c) => c && c.id === comment.parent)
       : null;
 
   /*
@@ -17561,7 +17574,7 @@ function applyReplies(n, postId, rootId, out) {
   if (p) {
     p.comments = safePostComments(p);
   }
-  if (p) (out.comments || []).forEach((c) => {
+  if (p) safeAiComments(out).forEach((c) => {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
     const body = cleanGeneratedUtterance(n, who, c.text, 240);
@@ -19090,12 +19103,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
 
               const actorId = n.meId || w.meId;
 
-              if (!Array.isArray(x.comments)) {
-                x.comments = [];
-              }
+              x.comments = safePostComments(x);
 
               const parentComment = parent
-                ? x.comments.find((c) => c.id === parent)
+                ? x.comments.find((c) => c && c.id === parent)
                 : null;
 
               const targetId =
@@ -22250,8 +22261,8 @@ Formátum:
     );
 
     const rows = (
-      out.replies ||
-      out.comments ||
+      (out && out.replies) ||
+      (out && out.comments) ||
       []
     )
       .map((r) => {
@@ -28197,7 +28208,7 @@ function applyGossipReactions(n,postId,cast,out){
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
     const body=cleanGeneratedUtterance(n,who,item.text,280);if(!body)return;
     const made={id:uid(),authorId:who,text:body,ts:now(),parent:null,language:worldLanguage(n,n.meId)};
-    post.comments=Array.isArray(post.comments)?post.comments:[];post.comments.push(made);noteComment(n,post,made);
+    post.comments=safePostComments(post);post.comments.push(made);noteComment(n,post,made);
     recordSocialEvent(n,{type:"comment",refId:made.id,ts:made.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:32,drama:24,romance:0,embarrassment:0,source:"gossip-reaction",text:made.text,tags:["social","gossip-reaction","comment"],meta:{postId:post.id,commentId:made.id,storyId:post.gossipStory.id||""}});
   });
   (out&&Array.isArray(out.reposts)?out.reposts:[]).slice(0,4).forEach((id)=>{const who=aiVoice(n,id);if(who&&castSet.has(who))createRepost(n,who,post.id,"gossip-reaction");});
@@ -32574,13 +32585,7 @@ function applySocialWave(
             ),
         };
 
-        if (
-          !Array.isArray(
-            post.comments
-          )
-        ) {
-          post.comments = [];
-        }
+        post.comments = safePostComments(post);
 
         post.comments.push(
           made
