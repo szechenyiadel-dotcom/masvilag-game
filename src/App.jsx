@@ -8871,8 +8871,22 @@ function migrate(w) {
     mem.knownFacts = mergeKnowledgeItems(mem.knownFacts, items, "fact", 32);
   });
 
-  (w.posts || []).forEach((po) => {
-    (po.comments || []).forEach((c) => { if (c.parent === undefined) c.parent = null; });
+  /*
+   * Régi / félbeszakadt syncből maradhat null/undefined elem a posts tömbben.
+   * Ezek korábban már a world migráció közben white screent okozhattak, mert
+   * a kód po.comments-ot olvasott anélkül, hogy po létezését ellenőrizte volna.
+   * Itt egyszer, központilag kitakarítjuk a hibás sorokat és normalizáljuk a
+   * comment tömböket, hogy a teljes social UI null-safe állapotból induljon.
+   */
+  w.posts = (w.posts || []).filter((po) => po && typeof po === "object");
+  w.posts.forEach((po) => {
+    po.comments = Array.isArray(po.comments)
+      ? po.comments.filter((c) => c && typeof c === "object")
+      : [];
+
+    po.comments.forEach((c) => {
+      if (c.parent === undefined) c.parent = null;
+    });
   });
   // a lejárt jegyzetek nem cipelődnek tovább; szerzőnként egy marad
   {
@@ -9166,10 +9180,23 @@ function mergeWorlds(remote, local) {
   const byId = {}, order = [];
   (local.posts || []).concat(remote.posts || []).forEach((po) => {
     if (!po || !po.id) return;
-    if (!byId[po.id]) { byId[po.id] = { ...po, comments: (po.comments || []).slice() }; order.push(po.id); return; }
+
+    const safeComments = Array.isArray(po.comments)
+      ? po.comments.filter((c) => c && typeof c === "object")
+      : [];
+
+    if (!byId[po.id]) {
+      byId[po.id] = { ...po, comments: safeComments.slice() };
+      order.push(po.id);
+      return;
+    }
+
     const t = byId[po.id];
+    if (!Array.isArray(t.comments)) t.comments = [];
     t.likes = Math.max(t.likes || 0, po.likes || 0);
-    (po.comments || []).forEach((c) => { if (c && c.id && !t.comments.some((x) => x.id === c.id)) t.comments.push(c); });
+    safeComments.forEach((c) => {
+      if (c.id && !t.comments.some((x) => x && x.id === c.id)) t.comments.push(c);
+    });
   });
   order.forEach((id) => byId[id].comments.sort((a, b) => (a.ts || 0) - (b.ts || 0)));
   out.posts = order.filter((id) => !out.deleted[id]).map((id) => byId[id]).sort((a, b) => (b.ts || 0) - (a.ts || 0));
@@ -14785,11 +14812,15 @@ function Post({
   const { media } = useMedia();
   const [cmt, setCmt] = useState("");
   const commentInput = useRef(null);
+
+  /* Egy sérült/stale feed-hivatkozás ne dönthesse le az egész React fát. */
+  if (!post || typeof post !== "object") return null;
+
   const author = charById(w, post.authorId);
 
   if (!author) return null;
 
-  const comments = post.comments || [];
+  const comments = Array.isArray(post.comments) ? post.comments.filter(Boolean) : [];
   const tops = comments.filter((c) => !c.parent);
   const orphans = comments.filter(
     (c) => c.parent && !comments.some((x) => x.id === c.parent)
@@ -15624,7 +15655,9 @@ function pickCast(w, excludeId) {
 const nameOfIn = (w, id) => { const a = charById(w, id); return a ? a.name : "?"; };
 
 function threadOf(w, post) {
-  const cs = post.comments || [];
+  const cs = post && Array.isArray(post.comments)
+    ? post.comments.filter(Boolean)
+    : [];
   const label = {};
   cs.forEach((c, i) => { label[c.id] = "k" + (i + 1); });
   return {
