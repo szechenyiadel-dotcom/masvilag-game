@@ -5233,6 +5233,10 @@ const DEFAULT_AI_MODEL = import.meta.env.VITE_AI_MODEL || "claude-sonnet-4-6";
 const DEFAULT_AI_PROVIDER = DEFAULT_AI_MODEL.startsWith("gemini") ? "gemini"
   : /^(gpt|o1|o3)/.test(DEFAULT_AI_MODEL) ? "openai" : "anthropic";
 
+/* A képgenerálás külön modellt kap; a szöveges world-engine modelljét nem használjuk képre. */
+const DEFAULT_IMAGE_MODEL = import.meta.env.VITE_IMAGE_MODEL || "gpt-image-2";
+const DEFAULT_IMAGE_PROVIDER = import.meta.env.VITE_IMAGE_PROVIDER || "openai";
+
 async function requestAiProxy(payload, signal) {
   const urls = ["/ai/messages"];
   if (typeof window !== "undefined" && window.location) {
@@ -9657,6 +9661,75 @@ async function analyzeImageDataUrl(
     .slice(0, 700);
 }
 
+async function requestAiImageProxy(payload) {
+  const paths = ["/ai/image", "/ai/images", "/ai/generate-image"];
+  const urls = [...paths];
+
+  if (typeof window !== "undefined" && window.location) {
+    const host = window.location.hostname || "localhost";
+    paths.forEach((path) => urls.push(`http://${host}:3000${path}`));
+  }
+
+  let lastErr = null;
+
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
+
+      let data = null;
+      try { data = await res.json(); } catch (e) { data = null; }
+
+      if (res.ok) return data;
+      if (res.status !== 404) {
+        const err = new Error(
+          (data && data.error && (data.error.message || data.error)) ||
+          (data && data.error) ||
+          `HTTP ${res.status}`
+        );
+        err.status = res.status;
+        throw err;
+      }
+      lastErr = new Error(`HTTP ${res.status}`);
+      lastErr.status = 404;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  if (lastErr && Number(lastErr.status) !== 404) {
+    console.warn("AI image proxy unavailable:", lastErr);
+  }
+  return null;
+}
+
+function bestAlbumSnapFallback(character, prompt) {
+  const items = albumOf(character);
+  if (!items.length) return null;
+
+  const terms = normUtterance(prompt)
+    .split(" ")
+    .filter((word) => word.length >= 4);
+  if (!terms.length) return null;
+
+  let best = null;
+  let bestScore = 0;
+
+  items.forEach((item) => {
+    if (!item) return;
+    const hay = normUtterance(`${item.note || ""} ${item.vision || ""}`);
+    let score = 0;
+    terms.forEach((term) => { if (hay.includes(term)) score += 1; });
+    if (score > bestScore) { bestScore = score; best = item; }
+  });
+
+  return bestScore >= 1 ? best : null;
+}
+
 async function generateAiChatSnap(
   character,
   snapPrompt,
@@ -9685,38 +9758,35 @@ Rules:
 - if the prompt implies a party, coffee, mirror selfie, street, room, gym or similar, show that naturally.`;
 
   const payload = {
-    provider: DEFAULT_AI_PROVIDER,
-    model: DEFAULT_AI_MODEL,
+    provider: DEFAULT_IMAGE_PROVIDER,
+    model: DEFAULT_IMAGE_MODEL,
     prompt: basePrompt,
+    size: "1024x1024",
+    quality: "low",
+    output_format: "jpeg",
   };
 
-  const endpoints = [
-    "/ai/image",
-    "/ai/generate-image",
-    "/ai/text2image",
-  ];
-
-  let result = null;
-
-  for (const endpoint of endpoints) {
-    try {
-      result = await apiJson(endpoint, {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      if (result) break;
-    } catch (err) {
-      result = null;
-    }
-  }
-
+  const result = await requestAiImageProxy(payload);
   if (!result) return null;
+
+  const firstDataRow =
+    Array.isArray(result.data) && result.data[0]
+      ? result.data[0]
+      : null;
+
+  const b64 = String(
+    (firstDataRow && firstDataRow.b64_json) ||
+    result.b64_json ||
+    ""
+  ).trim();
 
   let raw = [
     result.dataUrl,
     result.image,
     result.url,
     result.src,
+    firstDataRow && firstDataRow.url,
+    b64 ? `data:image/jpeg;base64,${b64}` : "",
   ].find(
     (value) =>
       typeof value === "string" &&
@@ -19167,6 +19237,8 @@ Formátum:
 }
 
 function applyWorldStep(n, out) {
+  let createdPosts = 0;
+
   safeAiArray(out, "posts").forEach((p) => {
     const author = aiVoice(n, p && (p.id !== undefined ? p.id : p.name));
     if (!author || !p.text) return;
@@ -19212,6 +19284,7 @@ function applyWorldStep(n, out) {
       consumeAlbumItem(authorChar, pic);
     }
     n.posts.unshift(fresh);
+    createdPosts += 1;
     recordSocialEvent(
   n,
   {
@@ -19355,9 +19428,14 @@ rememberKnowledge(n, author, {
     noteMentions(n, fresh.text, author, { type: "post", id: fresh.id });
     made.forEach((mc) => noteMentions(n, mc.text, mc.authorId, { type: "post", id: fresh.id }));
   });
-  applyChanges(n, safeAiChanges(out));
-  applySelfUpdates(n, out);
-  n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
+
+  if (createdPosts > 0) {
+    applyChanges(n, safeAiChanges(out));
+    applySelfUpdates(n, out);
+    n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
+  }
+
+  return createdPosts;
 }
 
 /* Jegyzet-sáv: a szereplők egysoros gondolatai, mint az Instagramon. */
@@ -24508,11 +24586,24 @@ Formátum:
           )
         : null;
 
+    const fallbackAiPic =
+      !aiPic &&
+      !generatedAiSnap &&
+      out &&
+      out.imagePrompt
+        ? bestAlbumSnapFallback(
+            c,
+            out.imagePrompt
+          )
+        : null;
+
+    const effectiveAiPic = aiPic || fallbackAiPic;
+
     const aiImageId =
-      aiPic
+      effectiveAiPic
         ? imageIdOf(
-            aiPic.imageId ||
-            aiPic.image ||
+            effectiveAiPic.imageId ||
+            effectiveAiPic.image ||
             ""
           )
         : (
@@ -24521,13 +24612,13 @@ Formátum:
           ) || "";
 
     const aiImageRef =
-      aiPic
+      effectiveAiPic
         ? (
-            aiPic.imageId
+            effectiveAiPic.imageId
               ? imageRef(
-                  aiPic.imageId
+                  effectiveAiPic.imageId
                 )
-              : aiPic.image || ""
+              : effectiveAiPic.image || ""
           )
         : (
             generatedAiSnap &&
@@ -24541,10 +24632,10 @@ Formátum:
           ) || "";
 
     const aiImageDescription =
-      aiPic
+      effectiveAiPic
         ? String(
-            aiPic.vision ||
-            aiPic.note ||
+            effectiveAiPic.vision ||
+            effectiveAiPic.note ||
             ""
           )
         : (
@@ -27553,26 +27644,23 @@ const PLAYER_REACTIVE_SIM_ACTIONS = new Set([
   "note-react",
 ]);
 
+const PUBLIC_CONTENT_SIM_ACTIONS = new Set([
+  "world",
+  "world-full",
+  "gossip-story",
+  "gossip-story-force",
+  "rumor-evolution",
+]);
+
 function simulationActionBlocksContentCadence(action) {
   if (!action || !action.type) return false;
 
-  if (
-    FAST_LOCAL_SIM_ACTIONS.has(
-      action.type
-    )
-  ) {
-    return false;
-  }
-
-  if (
-    PLAYER_REACTIVE_SIM_ACTIONS.has(
-      action.type
-    )
-  ) {
-    return false;
-  }
-
-  return true;
+  /*
+   * Csak az új, publikus feed-tartalom fogyasztja a feed cadence-et.
+   * DM, Note, group chat, RP, popup, follow és social-wave nem tolhatja el
+   * a következő tényleges posztot.
+   */
+  return PUBLIC_CONTENT_SIM_ACTIONS.has(action.type);
 }
 
 function markSimulationCadence(w, action) {
@@ -35776,7 +35864,7 @@ Ha van természetes folytatás:
   );
 }
 /* Egy központi szimulációs akció futtatása. Mindig pontosan egy AI-hívás. */
-async function runSimulationAction(view, update, action) {
+async function runSimulationAction(view, update, action, addImage) {
   if (!view || !action) return null;
 
   if (action.type === "brief") {
@@ -35793,7 +35881,7 @@ async function runSimulationAction(view, update, action) {
 
     if (brief) {
       update((n) => {
-        n.autoAt = now();
+        
 
         const src = rawLen(target);
 
@@ -35848,6 +35936,11 @@ async function runSimulationAction(view, update, action) {
       out = fallbackForcedRoleplayGossipStory(view, candidate);
     }
     if (!out || !String(out.text || "").trim()) return null;
+
+    const gossipProbe = JSON.parse(JSON.stringify(view));
+    const probeCandidate = forcedRoleplayGossipCandidate(gossipProbe, sceneId) || candidate;
+    const probePost = publishGossipMediaStory(gossipProbe, probeCandidate, out);
+    if (!probePost) return null;
 
     update((n) => {
       const liveCandidate = forcedRoleplayGossipCandidate(n, sceneId) || candidate;
@@ -36004,9 +36097,15 @@ async function runSimulationAction(view, update, action) {
         candidate
       );
 
-    update((n) => {
-      n.autoAt = now();
+    const gossipProbe = JSON.parse(JSON.stringify(view));
+    const probePost = publishGossipMediaStory(
+      gossipProbe,
+      candidate,
+      out
+    );
+    if (!probePost) return null;
 
+    update((n) => {
       publishGossipMediaStory(
         n,
         candidate,
@@ -36023,7 +36122,7 @@ async function runSimulationAction(view, update, action) {
     const cast = Array.isArray(payload.cast) ? payload.cast : [];
     if (!post || !post.gossipStory || !cast.length) return null;
     const out = await genGossipReactions(view, post, cast);
-    update((n) => { n.autoAt = now(); applyGossipReactions(n, post.id, cast, out); });
+    update((n) => {  applyGossipReactions(n, post.id, cast, out); });
     return "gossip-reaction";
   }
 
@@ -36032,7 +36131,10 @@ async function runSimulationAction(view, update, action) {
     const post = (view.posts || []).find((p) => p && p.id === postId);
     if (!post || !post.gossipStory || post.gossipStory.rumorEvolvedAt) return null;
     const out = await genRumorEvolution(view, post);
-    update((n) => { n.autoAt = now(); publishRumorEvolution(n, post.id, out); });
+    const rumorProbe = JSON.parse(JSON.stringify(view));
+    const probePost = publishRumorEvolution(rumorProbe, post.id, out);
+    if (!probePost) return null;
+    update((n) => { publishRumorEvolution(n, post.id, out); });
     return "rumor-evolution";
   }
 
@@ -36041,7 +36143,7 @@ async function runSimulationAction(view, update, action) {
     const seed = (view.socialEvents || []).find((event) => event && event.id === seedId);
     if (!seed || pendingPopupEvent(view)) return null;
     const out = await genPopupEvent(view, seed);
-    update((n) => { n.autoAt = now(); if (!pendingPopupEvent(n)) addPopupEvent(n, seed, out); });
+    update((n) => {  if (!pendingPopupEvent(n)) addPopupEvent(n, seed, out); });
     return "popup-event";
   }
 
@@ -36098,15 +36200,11 @@ async function runSimulationAction(view, update, action) {
         target.id
       )
     ) {
-      update((n) => {
-        n.autoAt = now();
-      });
-
-      return "unfollow";
+      return null;
     }
 
     update((n) => {
-      n.autoAt = now();
+      
 
       setFollowState(
         n,
@@ -36182,15 +36280,11 @@ async function runSimulationAction(view, update, action) {
         trigger
       )
     ) {
-      update((n) => {
-        n.autoAt = now();
-      });
-
-      return "follow";
+      return null;
     }
 
     update((n) => {
-      n.autoAt = now();
+      
 
       setFollowState(
         n,
@@ -36253,7 +36347,7 @@ async function runSimulationAction(view, update, action) {
       );
 
     update((n) => {
-      n.autoAt = now();
+      
 
       applySocialWave(
         n,
@@ -36316,15 +36410,11 @@ async function runSimulationAction(view, update, action) {
         post
       ) < 30
     ) {
-      update((n) => {
-        n.autoAt = now();
-      });
-
-      return "repost";
+      return null;
     }
 
     update((n) => {
-      n.autoAt = now();
+      
 
       createRepost(
         n,
@@ -36384,7 +36474,7 @@ async function runSimulationAction(view, update, action) {
       : rawOut;
 
     update((n) => {
-      n.autoAt = now();
+      
 
       applyReplies(
         n,
@@ -36414,7 +36504,7 @@ async function runSimulationAction(view, update, action) {
       await genComments(view, post);
 
     update((n) => {
-      n.autoAt = now();
+      
 
       const livePost = (n.posts || []).find((p) => p && p.id === post.id);
       const beforeIds = new Set(safePostComments(livePost).map((c) => c.id));
@@ -36479,7 +36569,7 @@ async function runSimulationAction(view, update, action) {
     await genNoteReact(view, note);
 
   update((n) => {
-    n.autoAt = now();
+    
 
     // Az AI-hívás közben a játékos akár
     // törölhette vagy lecserélhette a note-ot.
@@ -36737,7 +36827,7 @@ if (targetNote) {
     if (!txt) return null;
 
     update((n) => {
-      n.autoAt = now();
+      
       setNote(
         n,
         bot.id,
@@ -36838,7 +36928,7 @@ if (targetNote) {
     }
 
     update((n) => {
-      n.autoAt = now();
+      
 
       const target = (
         n.groups || []
@@ -37067,7 +37157,7 @@ if (targetNote) {
     }
 
     update((n) => {
-      n.autoAt = now();
+      
 
       const freshGroup = {
         id: groupId,
@@ -37236,11 +37326,24 @@ if (targetNote) {
           )
         : null;
 
+    const fallbackAiPic =
+      !aiPic &&
+      !generatedAiSnap &&
+      out &&
+      out.imagePrompt
+        ? bestAlbumSnapFallback(
+            bot,
+            out.imagePrompt
+          )
+        : null;
+
+    const effectiveAiPic = aiPic || fallbackAiPic;
+
     const aiImageId =
-      aiPic
+      effectiveAiPic
         ? imageIdOf(
-            aiPic.imageId ||
-            aiPic.image ||
+            effectiveAiPic.imageId ||
+            effectiveAiPic.image ||
             ""
           )
         : (
@@ -37249,13 +37352,13 @@ if (targetNote) {
           ) || "";
 
     const aiImageRef =
-      aiPic
+      effectiveAiPic
         ? (
-            aiPic.imageId
+            effectiveAiPic.imageId
               ? imageRef(
-                  aiPic.imageId
+                  effectiveAiPic.imageId
                 )
-              : aiPic.image || ""
+              : effectiveAiPic.image || ""
           )
         : (
             generatedAiSnap &&
@@ -37269,10 +37372,10 @@ if (targetNote) {
           ) || "";
 
     const aiImageDescription =
-      aiPic
+      effectiveAiPic
         ? String(
-            aiPic.vision ||
-            aiPic.note ||
+            effectiveAiPic.vision ||
+            effectiveAiPic.note ||
             ""
           )
         : (
@@ -37292,7 +37395,7 @@ if (targetNote) {
     }
 
     update((n) => {
-      n.autoAt = now();
+      
 
       const ck = chatKey(
         view.meId,
@@ -37455,17 +37558,22 @@ if (targetNote) {
    */
   if (
     !out ||
-    !Array.isArray(out.posts) ||
-    !out.posts.some(
-      (p) => p && p.text
-    )
+    !Array.isArray(out.posts)
   ) {
     return null;
   }
 
-  update((n) => {
-    n.autoAt = now();
+  const worldProbe = JSON.parse(JSON.stringify(view));
+  const visiblePostsCreated = applyWorldStep(
+    worldProbe,
+    out
+  );
 
+  if (!visiblePostsCreated) {
+    return null;
+  }
+
+  update((n) => {
     applyWorldStep(
       n,
       out
@@ -40049,7 +40157,7 @@ const signOut = useCallback(async () => {
       let ok = false;
       let result = null;
       try {
-        result = await runSimulationAction(viewRef.current, update, action);
+        result = await runSimulationAction(viewRef.current, update, action, addImage);
         ok = Boolean(result);
       } catch (e) {
         if (action && action.source === "manual" && alive) {
@@ -40101,7 +40209,7 @@ const signOut = useCallback(async () => {
     const i = setInterval(beat, 5000);
     const first = setTimeout(beat, 100);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
-  }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update, simPulse]);
+  }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update, simPulse, addImage]);
 
   useEffect(() => { if (err) { const t = setTimeout(() => setErr(""), 9000); return () => clearTimeout(t); } }, [err]);
 
