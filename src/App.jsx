@@ -5538,7 +5538,7 @@ async function askWorldJSONInteractive(
         priority: 100,
         maxTries:
           options.maxTries ||
-          3,
+          2,
       }
     );
   } finally {
@@ -17192,6 +17192,17 @@ function applyPostPerceptionImpact(
       castIds
     );
 
+  const visibleReactors = new Set([
+    ...safePostComments(post)
+      .map((c) => c && c.authorId)
+      .filter(Boolean),
+    ...(
+      Array.isArray(post.likedBy)
+        ? post.likedBy
+        : []
+    ),
+  ]);
+
   const directChanges = [];
   const otherChanges = [];
 
@@ -17296,6 +17307,7 @@ function applyPostPerceptionImpact(
 
       if (
         delta &&
+        visibleReactors.has(actorId) &&
         !relationshipDone.has(
           actorId
         )
@@ -17394,7 +17406,8 @@ function applyPostPerceptionImpact(
         !isHuman(
           n,
           a
-        )
+        ) &&
+        visibleReactors.has(a)
       ) {
         if (
           relationshipDone.has(
@@ -17422,9 +17435,11 @@ function applyPostPerceptionImpact(
        * Kommentelő -> másik kommentelő típusú változás maradhat,
        * de social felületen ne legyen irreálisan nagy ugrás.
        */
-      otherChanges.push(
-        safe
-      );
+      /*
+       * Nincs látható, konkrét A -> B interakció ebben a posztkörben,
+       * ezért nem engedünk mellékesen másik karakterpárra kapcsolatdeltát.
+       */
+      return;
     });
 
   /*
@@ -17615,6 +17630,19 @@ function applyNotePerceptionImpact(
       castIds
     );
 
+  const visibleReactors = new Set([
+    ...(
+      out && Array.isArray(out.reacts)
+        ? out.reacts.map((r) => findChar(n, r && (r.id !== undefined ? r.id : r.name)))
+        : []
+    ),
+    ...(
+      out && Array.isArray(out.dms)
+        ? out.dms.map((r) => findChar(n, r && (r.id !== undefined ? r.id : r.name)))
+        : []
+    ),
+  ].filter(Boolean));
+
   const changes = [];
 
   (
@@ -17706,6 +17734,7 @@ function applyNotePerceptionImpact(
 
       if (
         delta &&
+        visibleReactors.has(actorId) &&
         !relationshipDone.has(
           actorId
         )
@@ -17789,7 +17818,8 @@ function applyNotePerceptionImpact(
         !isHuman(
           n,
           a
-        )
+        ) &&
+        visibleReactors.has(a)
       ) {
         if (
           relationshipDone.has(
@@ -17802,6 +17832,10 @@ function applyNotePerceptionImpact(
         relationshipDone.add(
           a
         );
+      }
+
+      if (!visibleReactors.has(a) || b !== note.authorId) {
+        return;
       }
 
       changes.push(
@@ -18234,7 +18268,7 @@ recordSocialEvent(
   );
   applySelfUpdates(n, out);
 
-  n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
+  /* Raw AI "events" are not a second reality. Concrete social objects above are the source of truth. */
 }
 function socialInteractionInterest(
   w,
@@ -18789,6 +18823,7 @@ function applyReplies(n, postId, rootId, out) {
 
   p.comments = safePostComments(p);
   const createdReplyIds = [];
+  const createdReplyActors = new Set();
 
   safeAiComments(out).forEach((c) => {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
@@ -18799,6 +18834,7 @@ function applyReplies(n, postId, rootId, out) {
     const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
     p.comments.push(made);
     createdReplyIds.push(made.id);
+    createdReplyActors.add(who);
     noteComment(n, p, made);
 
     const rootComment =
@@ -18871,9 +18907,24 @@ function applyReplies(n, postId, rootId, out) {
       );
     }
   });
-  applyChanges(n, safeAiChanges(out));
-  applySelfUpdates(n, out);
-  n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
+  const rootComment = safePostComments(p).find((x) => x && x.id === rootId);
+  const rootTargetId = rootComment && rootComment.authorId
+    ? rootComment.authorId
+    : p.authorId;
+
+  const causalReplyChanges = safeAiChanges(out).filter((ch) => {
+    const a = findChar(n, ch && ch.a);
+    const b = findChar(n, ch && ch.b);
+    return Boolean(
+      a && b && a !== b &&
+      createdReplyActors.has(a) &&
+      b === rootTargetId
+    );
+  });
+
+  applyChanges(n, causalReplyChanges);
+  if (createdReplyIds.length) applySelfUpdates(n, out);
+  /* Raw AI "events" are ignored here; the saved reply is the actual event. */
 
   /* Egy AI reply is indíthat újabb természetes AI reply-t, de a helper
      lánchossz-korlátja megakadályozza a végtelen bot-pingpongot. */
@@ -19238,6 +19289,7 @@ Formátum:
 
 function applyWorldStep(n, out) {
   let createdPosts = 0;
+  const causalPairs = new Set();
 
   safeAiArray(out, "posts").forEach((p) => {
     const author = aiVoice(n, p && (p.id !== undefined ? p.id : p.name));
@@ -19285,6 +19337,19 @@ function applyWorldStep(n, out) {
     }
     n.posts.unshift(fresh);
     createdPosts += 1;
+
+    mentionedIdsInText(n, fresh.text, author).forEach((targetId) => {
+      if (targetId && targetId !== author) causalPairs.add(`${author}>${targetId}`);
+    });
+
+    made.forEach((mc) => {
+      const parentRow = mc.parent ? made.find((x) => x.id === mc.parent) : null;
+      const targetId = parentRow && parentRow.authorId ? parentRow.authorId : author;
+      if (mc.authorId && targetId && mc.authorId !== targetId) {
+        causalPairs.add(`${mc.authorId}>${targetId}`);
+      }
+    });
+
     recordSocialEvent(
   n,
   {
@@ -19430,9 +19495,15 @@ rememberKnowledge(n, author, {
   });
 
   if (createdPosts > 0) {
-    applyChanges(n, safeAiChanges(out));
+    const causalChanges = safeAiChanges(out).filter((ch) => {
+      const a = findChar(n, ch && ch.a);
+      const b = findChar(n, ch && ch.b);
+      return Boolean(a && b && a !== b && causalPairs.has(`${a}>${b}`));
+    });
+
+    applyChanges(n, causalChanges);
     applySelfUpdates(n, out);
-    n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
+    /* The created posts/comments above are the event. Raw model event prose is not logged separately. */
   }
 
   return createdPosts;
@@ -24187,7 +24258,7 @@ Formátum:
 /* Jegyzetsáv — a szereplők feje fölött egy-egy mondat, mint az Instagram Notes. */
 function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply }) {
   const { tt } = useLang();
-  const { media } = useMedia();
+  const { media, addImage } = useMedia();
   const matureMode =
     worldContentLevel(
       w,
@@ -24564,6 +24635,12 @@ Formátum:
 {"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","imagePrompt":"rövid snap-leírás vagy üres","changes":[{"a":"${c.id}","b":"${requestWorld.meId}","delta":-12,"mood":"mit érez most iránta","why":"miért"},{"a":"${requestWorld.meId}","b":"${c.id}","delta":8,"mood":"","why":"miért"}],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
     );
 
+    const requestedReplyText = String(
+      out && out.reply !== undefined
+        ? out.reply
+        : ""
+    ).trim();
+
     const aiPic =
       out &&
       out.image
@@ -24578,7 +24655,8 @@ Formátum:
       out &&
       String(
         out.imagePrompt || ""
-      ).trim()
+      ).trim() &&
+      !requestedReplyText
         ? await generateAiChatSnap(
             c,
             out.imagePrompt,
@@ -24643,12 +24721,7 @@ Formátum:
             generatedAiSnap.imageDescription
           ) || "";
 
-    let reply = String(
-      out &&
-      out.reply !== undefined
-        ? out.reply
-        : ""
-    ).trim();
+    let reply = requestedReplyText;
 
     /*
      * Ha a modell a prompt ellenére is
@@ -24858,7 +24931,7 @@ Formátum:
         },
       ];
 
-      const dmChanges =
+      const dmChangesRaw =
         Array.isArray(
           out &&
           safeAiChanges(out)
@@ -24881,6 +24954,18 @@ Formátum:
                   out.why,
               },
             ];
+
+      const dmChanges = dmChangesRaw.filter((ch) => {
+        const a = findChar(n, ch && ch.a);
+        const b = findChar(n, ch && ch.b);
+        return Boolean(
+          a && b && a !== b &&
+          (
+            (a === c.id && b === requestWorld.meId) ||
+            (a === requestWorld.meId && b === c.id)
+          )
+        );
+      });
 
       applyChanges(
         n,
@@ -24962,6 +25047,51 @@ Formátum:
         ].slice(-16);
       }
     });
+
+    /*
+     * Text + fresh Snap esetén a chatválasz AZONNAL megjelenik.
+     * A képgenerálás nem blokkolja a beszélgetést; ha elkészül,
+     * külön képes üzenetként csatlakozik utána.
+     */
+    if (
+      requestedReplyText &&
+      !aiPic &&
+      out &&
+      String(out.imagePrompt || "").trim()
+    ) {
+      void generateAiChatSnap(
+        c,
+        out.imagePrompt,
+        addImage
+      )
+        .then((lateSnap) => {
+          if (
+            !lateSnap ||
+            !(lateSnap.imageId || lateSnap.image)
+          ) return;
+
+          update((n) => {
+            const liveKey = chatKey(n.meId, c.id);
+            n.chats[liveKey] = [
+              ...(n.chats[liveKey] || []),
+              {
+                id: "dm_" + uid(),
+                from: "them",
+                to: n.meId,
+                text: "",
+                ts: now(),
+                imageId: lateSnap.imageId || "",
+                image: lateSnap.imageId ? "" : (lateSnap.image || ""),
+                imageDescription: lateSnap.imageDescription || "",
+                language: worldLanguage(n, n.meId),
+              },
+            ];
+          });
+        })
+        .catch((snapErr) => {
+          console.warn("Late AI snap generation failed:", snapErr);
+        });
+    }
   } catch (e) {
     /*
      * A játékos üzenete már biztosan bent marad.
@@ -30029,6 +30159,7 @@ VÁLASZ CSAK JSON:
 function applyGossipReactions(n,postId,cast,out){
   const post=(n.posts||[]).find((p)=>p&&p.id===postId);if(!post||!post.gossipStory)return;
   const castSet=new Set((cast||[]).map((r)=>r&&r.id).filter(Boolean));
+  const visibleActors=new Set();
   const allowedTargets=new Set([post.authorId,...(post.gossipStory.mentionedIds||[]),n.meId].filter(Boolean));
   if(!Array.isArray(post.gossipStory.reactedBy))post.gossipStory.reactedBy=[];
   post.gossipStory.reactedBy=[...new Set([...post.gossipStory.reactedBy,...castSet])];
@@ -30038,30 +30169,30 @@ function applyGossipReactions(n,postId,cast,out){
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
     const body=cleanGeneratedUtterance(n,who,item.text,280);if(!body)return;
     const made={id:uid(),authorId:who,text:body,ts:now(),parent:null,language:worldLanguage(n,n.meId)};
-    post.comments=safePostComments(post);post.comments.push(made);noteComment(n,post,made);
+    post.comments=safePostComments(post);post.comments.push(made);visibleActors.add(who);noteComment(n,post,made);
     recordSocialEvent(n,{type:"comment",refId:made.id,ts:made.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:32,drama:24,romance:0,embarrassment:0,source:"gossip-reaction",text:made.text,tags:["social","gossip-reaction","comment"],meta:{postId:post.id,commentId:made.id,storyId:post.gossipStory.id||""}});
   });
-  (out&&Array.isArray(out.reposts)?out.reposts:[]).slice(0,4).forEach((id)=>{const who=aiVoice(n,id);if(who&&castSet.has(who))createRepost(n,who,post.id,"gossip-reaction");});
+  (out&&Array.isArray(out.reposts)?out.reposts:[]).slice(0,4).forEach((id)=>{const who=aiVoice(n,id);if(who&&castSet.has(who)&&createRepost(n,who,post.id,"gossip-reaction"))visibleActors.add(who);});
   (out&&Array.isArray(out.follows)?out.follows:[]).slice(0,5).forEach((item)=>{
     const who=aiVoice(n,item&&item.id), targetId=item&&item.targetId?String(item.targetId):"";
     if(!who||!castSet.has(who)||!allowedTargets.has(targetId)||who===targetId||!socialProfileById(n,targetId))return;
-    setFollowState(n,who,targetId,item.state!==false,"gossip-reaction");
+    if(setFollowState(n,who,targetId,item.state!==false,"gossip-reaction"))visibleActors.add(who);
   });
   (out&&Array.isArray(out.statements)?out.statements:[]).slice(0,2).forEach((item)=>{
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
     const body=cleanGeneratedUtterance(n,who,item.text,1200);if(!body)return;
     const statement={id:uid(),authorId:who,ts:now(),likes:0,likedBy:[],text:body,imageId:"",image:"",comments:[],language:worldLanguage(n,n.meId),responseToGossipId:post.gossipStory.id||""};
-    n.posts.unshift(statement);
+    n.posts.unshift(statement);visibleActors.add(who);
     recordSocialEvent(n,{type:"post",refId:statement.id,ts:statement.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:42,drama:30,romance:0,embarrassment:0,source:"gossip-response",text:body,tags:["social","gossip-response","statement"],meta:{postId:statement.id,gossipPostId:post.id,storyId:post.gossipStory.id||""}});
   });
   (out&&Array.isArray(out.dms)?out.dms:[]).slice(0,3).forEach((item)=>{
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text||!n.meId)return;
     const raw=cleanGeneratedUtterance(n,who,item.text,320), body=sanitizePhoneDm(n,who,enforceChatEmojiVariety(n,who,raw),post.text||"");if(!body)return;
-    const ck=chatKey(n.meId,who);n.chats[ck]=[...(n.chats[ck]||[]),{from:"them",text:body,ts:now(),language:worldLanguage(n,n.meId)}];
+    const ck=chatKey(n.meId,who);n.chats[ck]=[...(n.chats[ck]||[]),{from:"them",text:body,ts:now(),language:worldLanguage(n,n.meId)}];visibleActors.add(who);
     const a=charById(n,who);pushNote(n,n.meId,{icon:"✉️",text:sysLangText(n,n.meId,`${a?a.name:"Valaki"} írt neked a pletyka után.`,`${a?a.name:"Someone"} messaged you after the gossip post.`),link:{type:"dm",id:who}});
   });
   const safeChanges=(out&&Array.isArray(safeAiChanges(out))?safeAiChanges(out):[]).filter((ch)=>{
-    const a=findChar(n,ch&&ch.a), b=findChar(n,ch&&ch.b);return a&&b&&castSet.has(a)&&allowedTargets.has(b)&&a!==b;
+    const a=findChar(n,ch&&ch.a), b=findChar(n,ch&&ch.b);return a&&b&&castSet.has(a)&&visibleActors.has(a)&&allowedTargets.has(b)&&a!==b;
   }).map((ch)=>({...ch,delta:Math.max(-30,Math.min(30,Number(ch.delta)||0))}));
   applyChanges(n,safeChanges);refreshPostReach(n,post.id);refreshTrends(n);
 }
@@ -37318,7 +37449,8 @@ if (targetNote) {
       out &&
       String(
         out.imagePrompt || ""
-      ).trim()
+      ).trim() &&
+      !txt
         ? await generateAiChatSnap(
             bot,
             out.imagePrompt,
@@ -37428,7 +37560,7 @@ if (targetNote) {
         },
       ];
 
-      const dmChanges =
+      const dmChangesRaw =
         Array.isArray(
           out &&
           safeAiChanges(out)
@@ -37451,6 +37583,18 @@ if (targetNote) {
                   out.why,
               },
             ];
+
+      const dmChanges = dmChangesRaw.filter((ch) => {
+        const a = findChar(n, ch && ch.a);
+        const b = findChar(n, ch && ch.b);
+        return Boolean(
+          a && b && a !== b &&
+          (
+            (a === bot.id && b === view.meId) ||
+            (a === view.meId && b === bot.id)
+          )
+        );
+      });
 
       applyChanges(
         n,
