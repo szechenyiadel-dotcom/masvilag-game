@@ -11719,7 +11719,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v36-relationship-title-boundaries";
+const BUILD_VERSION = "v37-balanced-events-player-closes-contextual-invites";
 
 const AUTO = "masvilag:auto";
 /*
@@ -23285,7 +23285,8 @@ function sceneEventRecapEligible(scene, aiWitnessCount) {
 
    A roleplay scene now behaves like a temporary Event:
    - concrete goal;
-   - fixed message/turn or time limit;
+   - recommended message/turn or time completion threshold;
+   - the player decides when the Event closes;
    - success evaluation on close;
    - affection + unique-item reward on full successful completion;
    - reduced affection and no item on early close;
@@ -23332,14 +23333,15 @@ function sceneEventProgress(scene, at = now()) {
 function sceneEventProgressText(scene, lang, at = now()) {
   const p = sceneEventProgress(scene, at);
   if (p.mode === "minutes") {
-    const cur = Math.min(p.target, Math.max(0, Math.floor(p.current)));
+    const cur = Math.max(0, Math.floor(p.current));
     return lang === "en"
       ? `${cur}/${p.target} min`
       : `${cur}/${p.target} perc`;
   }
+  const cur = Math.max(0, Math.floor(p.current));
   return lang === "en"
-    ? `${Math.min(p.target, Math.floor(p.current))}/${p.target} messages`
-    : `${Math.min(p.target, Math.floor(p.current))}/${p.target} üzenet`;
+    ? `${cur}/${p.target} messages`
+    : `${cur}/${p.target} üzenet`;
 }
 
 function addSceneStatusUpdate(n, scene, text, kind = "status", actorId = "") {
@@ -23617,7 +23619,6 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const [clockNow, setClockNow] = useState(now());
   const endRef = useRef(null);
   const sendLockRef = useRef(false);
-  const autoFinishRef = useRef(false);
   const cast = (w.chars || []).filter((c) => (scene.cast || []).indexOf(c.id) >= 0);
   const who = (id) => charById(w, id);
   const eventProgress = sceneEventProgress(scene, clockNow);
@@ -23690,9 +23691,12 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
 EVENT / JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
 EVENT CÉLJA: ${scene.goal || "nincs külön megadva"}
-EVENT LIMIT: ${scene.limitMode === "minutes" ? `${scene.targetMinutes || 20} perc` : `${scene.targetTurns || 16} üzenet`}
+EVENT AJÁNLOTT MINIMUMA: ${scene.limitMode === "minutes" ? `${scene.targetMinutes || 20} perc` : `${scene.targetTurns || 16} üzenet`}
 AKTUÁLIS HALADÁS: ${sceneEventProgressText(scene, worldLanguage(w, w.meId))}
-- A célt NE teljesítsd automatikusan csak azért, mert közeledik a limit. A történetből kell következnie.
+- EZ A LIMIT CSAK TELJESÍTÉSI / JUTALMI KÜSZÖB, NEM AUTOMATIKUS LEZÁRÁS.
+- SOHA ne zárd le, ne epilógusozd el és ne jelentsd késznek az Eventet csak azért, mert a küszöb teljesült. A JÁTÉKOS dönti el, mikor fejezi be és mikor nyomja meg a lezárás gombot.
+- Ha a küszöb már teljesült, ugyanúgy folytasd a jelenetet természetesen addig, amíg a játékos le nem zárja.
+- A célt NE teljesítsd automatikusan csak azért, mert közeledik a küszöb. A történetből kell következnie.
 - A szereplők természetesen haladhatnak a cél felé, akadályozhatják vagy akár meg is hiúsíthatják azt.
 
 ${playerText
@@ -23747,6 +23751,7 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - A játékos korábban egyértelműen feloldott beszélgetési fókuszát őrizd meg több körön át; ne felejtsd el csak azért, mert közben más karakter is megszólalt.
 - Írd meg a folytatást 3-5 természetes mozzanatban. Egy mozzanat lehet beszéd, cselekvés vagy rövid narrátori átvezetés.
 - Ne kötelezően minden jelenlévő szereplő kapjon sort minden körben. Az szólaljon meg vagy cselekedjen, akinek ebben a pillanatban természetes oka van rá.
+- NE SIESS A LEZÁRÁSSAL. Ne írj végső búcsút, végleges kimenetelt, „mindenki hazament” montázst vagy jelenetzáró epilógust azért, mert a kör hosszú lett vagy a minimum teljesült. Egy részkonfliktus vagy beszélgetés lezárulhat, de maga az Event nyitva marad, amíg a játékos le nem zárja.
 - Nagyobb társas jelenetben/buliban a karakterek EGYMÁSSAL is beszéljenek és reagáljanak egymásra; ne mindenki a játékos körül forogjon.
 - Tartsd fejben, hogy minden felsorolt szereplő jelen van akkor is, ha ebben a körben nem kerül fókuszba.
 - A korábbi történések térbeli és időbeli folytonossága maradjon meg. Ne teleportáljon senki, ne találj ki hirtelen új érkezést/távozást, ha azt a jelenet nem alapozta meg.
@@ -24135,7 +24140,7 @@ HELYZET: ${scene.setting || "-"}
 CÉL: ${scene.goal || "nincs külön megadva"}
 LIMIT: ${scene.limitMode === "minutes" ? `${scene.targetMinutes || 20} perc` : `${scene.targetTurns || 16} üzenet`}
 HALADÁS A LEZÁRÁSKOR: ${sceneEventProgressText(scene, worldLanguage(w, w.meId))}
-LEZÁRÁS TÍPUSA: ${earlyEnd ? "IDŐ ELŐTTI MANUÁLIS LEZÁRÁS" : "NORMÁL LEZÁRÁS A LIMIT ELÉRÉSE UTÁN"}
+LEZÁRÁS TÍPUSA: ${earlyEnd ? "IDŐ ELŐTTI MANUÁLIS LEZÁRÁS" : "A TELJESÍTÉSI KÜSZÖB ELÉRÉSE UTÁN A JÁTÉKOS MOST MANUÁLISAN LEZÁRTA"}
 
 TELJES EVENT-NAPLÓ:
 ${log || "nem történt még érdemi mozzanat"}
@@ -24343,19 +24348,10 @@ Formátum:
         });
       }
     } catch (e) {
-      autoFinishRef.current = false;
       setErr((e && e.message) || tt("Az Event lezárása nem sikerült. Próbáld újra.", "Closing the Event failed. Try again."));
     }
     setBusy("");
   };
-
-  /* Normál Event: a fix limit elérése után automatikusan lezár és értékel. */
-  useEffect(() => {
-    if (!scene.open || !eventProgress.complete || busy || autoFinishRef.current) return undefined;
-    autoFinishRef.current = true;
-    const t = setTimeout(() => finish(false), 500);
-    return () => clearTimeout(t);
-  }, [scene.open, eventProgress.complete, busy, scene.id]);
 
   return (
     <>
@@ -24413,7 +24409,7 @@ Formátum:
           <div className="bar-fill" style={{ left: 0, width: eventProgress.pct + "%" }} />
         </div>
         <div className="between" style={{ marginTop: 8 }}>
-          <span className="hint">{eventProgress.complete ? tt("A limit teljesült — az Event értékelhető.", "Limit reached — the Event can be evaluated.") : tt("Az Event még fut.", "The Event is still running.")}</span>
+          <span className="hint">{eventProgress.complete ? tt("A minimum teljesült — folytathatod, és te döntöd el, mikor zárod le.", "Minimum reached — you can keep playing, and you decide when to close it.") : tt("Az Event még fut.", "The Event is still running.")}</span>
           <span className="mono" style={{ fontSize: 10 }}>+{Number(scene.rewardAffection) || 0} Affection{scene.rewardItem ? ` · ${scene.rewardItem}` : ""}</span>
         </div>
       </div>
@@ -24487,7 +24483,7 @@ Formátum:
           >
             {busy === "end" ? <Loader2 size={13} className="spin" /> : null}
             {eventProgress.complete
-              ? tt("Event teljesítése és értékelése", "Complete and evaluate Event")
+              ? tt("Event lezárása és értékelése", "Close and evaluate Event")
               : tt("Event idő előtti lezárása", "End Event early")}
           </button>
         </div>
@@ -35800,13 +35796,15 @@ function feedNeedsFreshPost(w) {
   const last = lastAiFeedPostAt(w);
 
   /*
-   * Ha még sosem volt AI-poszt, azonnal életet kérünk a feedbe.
-   * Egyébként 45 mp csend után a poszt elsőbbséget kap a maintenance
-   * actionökkel szemben. A provider-throttle ettől még külön érvényes.
+   * CHANNEL BALANCE v37:
+   * A feed nem kap többé 45 másodpercenként kötelező új posztot, miközben
+   * a DM / group / roleplay csak próbálkozik. A publikus feed is ugyanazon
+   * nagyságrendű ütemben él, mint a többi valódi történéscsatorna.
+   * A karakterenkénti aktivitás ettől még különbözhet.
    */
   return (
     !last ||
-    now() - last >= 45000
+    now() - last >= 105000
   );
 }
 
@@ -35861,6 +35859,194 @@ function pickRoleplayInitiator(w) {
     : null;
 }
 
+
+function roleplayBirthYear(c) {
+  const raw = String((c && c.birth) || "");
+  const m = raw.match(/\b(19\d{2}|20\d{2})\b/);
+  return m ? Number(m[1]) : 0;
+}
+
+function roleplayAffiliationTags(c) {
+  if (!c) return [];
+  const text = [
+    c.job,
+    c.bio,
+    c.backstory,
+    c.extra,
+    c.goals,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const defs = [
+    ["cobra-kai", /cobra\s*kai/],
+    ["iron-dragons", /iron\s*dragons?/],
+    ["miyagi-do", /miyagi[\s-]*do/],
+    ["miyagi-fang", /miyagi[\s-]*fang/],
+    ["eagle-fang", /eagle\s*fang/],
+    ["la-mamba", /la\s*mamba/],
+    ["borderland", /borderland|borderline\s*games?/],
+  ];
+
+  return defs
+    .filter(([, re]) => re.test(text))
+    .map(([tag]) => tag);
+}
+
+function roleplayInviteeRoster(w, host) {
+  if (!w || !host) return "-";
+  const hostTags = new Set(roleplayAffiliationTags(host));
+  const hostYear = roleplayBirthYear(host);
+
+  return (w.chars || [])
+    .filter((c) => c && c.id !== host.id && !isHuman(w, c.id))
+    .map((c) => {
+      const rel = getRel(w, host.id, c.id);
+      const tags = roleplayAffiliationTags(c);
+      const shared = tags.filter((tag) => hostTags.has(tag));
+      const year = roleplayBirthYear(c);
+      const ownStudent = isOwnSenseiRelationship(w, c.id, host.id);
+      const hostOwnSensei = isOwnSenseiRelationship(w, host.id, c.id);
+      return {
+        c,
+        rel,
+        year,
+        shared,
+        ownStudent,
+        hostOwnSensei,
+        sensei: characterIsSensei(c),
+        proximity:
+          Math.abs(Number(rel && rel.score) || 0) +
+          (ownStudent || hostOwnSensei ? 70 : 0) +
+          shared.length * 30 +
+          (hostYear && year ? Math.max(0, 18 - Math.abs(hostYear - year) * 2) : 0),
+      };
+    })
+    .sort((a, b) => b.proximity - a.proximity)
+    .slice(0, 40)
+    .map((row) => {
+      const bits = [
+        `${row.c.name} [${row.c.id}]`,
+        row.c.birth ? `birth=${cut(String(row.c.birth), 36)}` : "",
+        row.c.job ? `role=${cut(String(row.c.job), 70)}` : "",
+        row.shared.length ? `shared=${row.shared.join(",")}` : "",
+        row.ownStudent ? "THIS PERSON IS YOUR OWN STUDENT" : "",
+        row.hostOwnSensei ? "THIS PERSON IS YOUR OWN SENSEI/TEACHER" : "",
+        row.sensei ? "sensei=true" : "",
+        row.rel && row.rel.bond ? `bond=${cut(String(row.rel.bond), 36)}` : "",
+        Number(row.rel && row.rel.score) ? `rel=${Number(row.rel.score)}` : "",
+      ].filter(Boolean);
+      return `- ${bits.join(" | ")}`;
+    })
+    .join("\n") || "-";
+}
+
+function roleplayEventAudienceScore(w, host, candidate, descriptor, explicit = false) {
+  if (!w || !host || !candidate || candidate.id === host.id || isHuman(w, candidate.id)) return -999;
+
+  const eventText = String(descriptor || "").toLowerCase();
+  const candidateText = [
+    candidate.job,
+    candidate.bio,
+    candidate.backstory,
+    candidate.extra,
+    candidate.goals,
+    candidate.personality,
+    candidate.traits,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const hostTags = new Set(roleplayAffiliationTags(host));
+  const candTags = roleplayAffiliationTags(candidate);
+  const sharedTags = candTags.filter((tag) => hostTags.has(tag));
+  const eventTags = roleplayAffiliationTags({ job: eventText });
+  const rel = getRel(w, host.id, candidate.id);
+  const reverse = getRel(w, candidate.id, host.id);
+  const relScore = Number(rel && rel.score) || 0;
+  const reverseScore = Number(reverse && reverse.score) || 0;
+  const ownStudent = isOwnSenseiRelationship(w, candidate.id, host.id);
+  const hostOwnSensei = isOwnSenseiRelationship(w, host.id, candidate.id);
+  const candidateSensei = characterIsSensei(candidate);
+  const hostYear = roleplayBirthYear(host);
+  const candYear = roleplayBirthYear(candidate);
+  const yearDiff = hostYear && candYear ? Math.abs(hostYear - candYear) : 99;
+
+  const isTraining = /\b(?:practice|training|train|dojo|karate|lesson|class|sparring|edz[eé]s|gyakorl[aá]s|karate|dojo|sparring)\b/.test(eventText);
+  const isParty = /\b(?:party|buli|cabin|house\s*party|bonfire|club\s*night|afterparty|h[aá]zibuli|kabinos?\s*buli)\b/.test(eventText);
+  const isTeam = /\b(?:meeting|briefing|mission|team|crew|squad|practice|training|munka|megbesz[eé]l[eé]s|küldet[eé]s|csapat)\b/.test(eventText);
+
+  let score = explicit ? 120 : 0;
+  score += Math.max(-18, Math.min(28, relScore * 0.22));
+  score += Math.max(-10, Math.min(16, reverseScore * 0.10));
+  if (rel && /friend|bar[aá]t|close|best|ally|sz[oö]vets[eé]ges|partner/.test(String(rel.bond || "").toLowerCase())) score += 24;
+  if (sharedTags.length) score += 18 + sharedTags.length * 12;
+  if (eventTags.some((tag) => candTags.includes(tag))) score += 34;
+
+  if (isTraining) {
+    if (ownStudent) score += 95;
+    if (hostOwnSensei) score += 55;
+    if (candidateSensei && (sharedTags.length || eventTags.some((tag) => candTags.includes(tag)))) score += 52;
+    if (/student|di[aá]k|karate|fighter|harcos|sensei|coach|edz[oő]|instructor/.test(candidateText)) score += 18;
+    if (!ownStudent && !hostOwnSensei && !sharedTags.length && !eventTags.some((tag) => candTags.includes(tag))) score -= 32;
+  }
+
+  if (isParty) {
+    if (yearDiff <= 4) score += 30;
+    else if (yearDiff <= 8) score += 20;
+    else if (yearDiff <= 12) score += 8;
+    if (candYear && new Date().getFullYear() - candYear <= 35) score += 10;
+    score += Math.round((characterOnlineActivityProfile(w, candidate).group - 1) * 12);
+    if (/outgoing|extrovert|social|party|buli|chatty|gossip|flirt|impulsive/.test(candidateText)) score += 15;
+    if (candidateSensei && yearDiff > 12 && relScore < 25) score -= 14;
+  }
+
+  if (isTeam && !isParty) {
+    if (sharedTags.length) score += 24;
+    if (ownStudent || hostOwnSensei) score += 20;
+  }
+
+  return score;
+}
+
+function contextualRoleplayCast(w, host, generatedCast, descriptor) {
+  if (!w || !host) return host ? [host.id] : [];
+
+  const explicitIds = new Set(
+    (Array.isArray(generatedCast) ? generatedCast : [])
+      .map((id) => findChar(w, id))
+      .filter((id) => id && id !== w.meId && id !== host.id && charById(w, id) && !isHuman(w, id))
+  );
+
+  const eventText = String(descriptor || "").toLowerCase();
+  const groupEvent = /\b(?:party|buli|cabin|house\s*party|bonfire|practice|training|dojo|karate|class|lesson|meeting|briefing|team|crew|squad|edz[eé]s|gyakorl[aá]s|megbesz[eé]l[eé]s|csapat)\b/.test(eventText);
+  const isTraining = /\b(?:practice|training|dojo|karate|class|lesson|sparring|edz[eé]s|gyakorl[aá]s)\b/.test(eventText);
+  const isParty = /\b(?:party|buli|cabin|house\s*party|bonfire|afterparty|h[aá]zibuli)\b/.test(eventText);
+
+  const ranked = (w.chars || [])
+    .filter((c) => c && c.id !== host.id && !isHuman(w, c.id))
+    .map((c) => ({
+      id: c.id,
+      explicit: explicitIds.has(c.id),
+      score: roleplayEventAudienceScore(w, host, c, eventText, explicitIds.has(c.id)) + Math.random() * 4,
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  const maxCast = isTraining ? 10 : isParty ? 9 : groupEvent ? 8 : 5;
+  const minOthers = isTraining ? 2 : isParty ? 3 : groupEvent ? 2 : 0;
+  const selected = [host.id];
+
+  ranked.forEach((row) => {
+    if (selected.length >= maxCast) return;
+    if (row.explicit || row.score >= (groupEvent ? 18 : 34)) selected.push(row.id);
+  });
+
+  if (groupEvent && selected.length - 1 < minOthers) {
+    ranked.forEach((row) => {
+      if (selected.length - 1 >= minOthers || selected.length >= maxCast) return;
+      if (!selected.includes(row.id) && row.score > -10) selected.push(row.id);
+    });
+  }
+
+  return [...new Set(selected)].filter(Boolean).slice(0, maxCast);
+}
+
 async function genRoleplayInitiation(w, bot) {
   if (!w || !bot) return { skip: true };
   const relCard = relationshipBehaviorCard(w, bot.id, w.meId);
@@ -35877,7 +36063,7 @@ ${voiceCard(bot)}
 ${characterMemoryCard(w, bot)}
 ${relCard}
 
-TE MOST ${bot.name} VAGY, ÉS SAJÁT MAGADTÓL KEZDEMÉNYEZHETSZ EGY ÚJ ROLEPLAY EVENTET ${w.player.name} FELÉ.
+TE MOST ${bot.name} VAGY, ÉS SAJÁT MAGADTÓL KEZDEMÉNYEZHETSZ EGY ÚJ ROLEPLAY EVENTET. ${w.player.name} lehet résztvevő, de egy társas Event közönsége NEM állhat automatikusan csak belőle.
 
 EZ NEM RENDSZER-ÖTLET GENERÁLÁS. Ez ${bot.name} SAJÁT DÖNTÉSE a világon belül.
 - Ezt a kezdeményezési kört azért kaptad, mert a karaktered jelenlegi aktivitása és kapcsolati hajlama alapján IDŐSZERŰ, hogy te mozdítsd meg a történetet.
@@ -35892,8 +36078,17 @@ EZ NEM RENDSZER-ÖTLET GENERÁLÁS. Ez ${bot.name} SAJÁT DÖNTÉSE a világon b
 - Ha a kánon szerint psycho/kiszámíthatatlan/manipulatív vagy, az iniciatíva lehet nyugtalanítóbb, kontrollálóbb vagy meglepőbb, DE csak a saját kánon és valós információk alapján.
 - Megjelenhetsz a játékosnál / váratlanul felbukkanhatsz CSAK akkor, ha hiteles, hogy tudod hol van/lakik és a kapcsolatod/kánonod ezt lehetővé teszi. Ne találj ki mágikus helyismeretet vagy off-screen stalkingot.
 - DM-ben is meghívhatod valahova. Ilyenkor a DM csak a meghívás/kezdeményezés; maga az Event külön megnyitható jelenetként létrejön.
-- Több AI-t is bevonhatsz (pl. buli/group program), de csak létező karakter-ID-ket használj, és te mindig legyél a castban.
+- Több AI-t is bevonhatsz, és TÁRSAS / CSOPORTOS EVENTNÉL ez az alapértelmezett. Csak létező karakter-ID-ket használj, és te mindig legyél a castban.
+- A meghívottakat az EVENT LOGIKÁJA alapján válaszd, ne random és ne csak aszerint, ki áll közel a játékoshoz.
+- BULI / cabin party / house party: a host természetes barátai, kortársai, fiatalabb társasági köre, releváns riválisai vagy azok legyenek jelen, akiket ő tényleg meghívna. Ne legyen automatikusan minden idősebb tekintélyszereplő ott.
+- DOJO / karate practice / edzés: a host SAJÁT TANÍTVÁNYAI kapjanak elsőbbséget, továbbá ugyanahhoz a dojohoz/szervezethez tartozó releváns senseiek, edzők vagy haladó tagok. Egy Cobra Kai practice például Cobra Kai-diákokat és releváns Cobra Kai-senseieket hívjon, ne random barátokat.
+- CSAPAT / szervezet / munka / küldetés: az adott team, szervezet, munka vagy konkrét ügy releváns tagjait hívd.
+- Kettesben való találkozó továbbra is lehet valóban kettesben, HA az esemény természete privát (randi, négyszemközti beszélgetés, személyes konfrontáció stb.).
+- Ne tegyél valakit a castba csak azért, mert létezik. A kor, szerep, dojo/szervezet, személyes kapcsolat, konfliktus és az, hogy a host ténylegesen ismeri-e, számítson.
 - A játékos elfogadását, reakcióját vagy cselekvését SOHA ne döntsd el helyette. Az Event azon a ponton induljon, ahol neki még valódi döntése van.
+
+LEHETSÉGES AI-MEGHÍVOTTAK — NYILVÁNOS / KAPCSOLATI KONTEXTUS:
+${roleplayInviteeRoster(w, bot)}
 
 LEGUTÓBBI PRIVÁT CHAT KÖZTETEK:
 ${recentDm || "-"}
@@ -35906,7 +36101,7 @@ VÁLASSZ KEZDEMÉNYEZÉSI MÓDOT:
 Az Event legyen konkrét, ne generikus. Adj célt, de a cél ne irányítsa a játékos karakterét helyette.
 
 JSON:
-{"skip":false,"mode":"dm_invite vagy arrival vagy encounter","title":"rövid Event cím","setting":"2-4 mondat, hol/mikor/miért indul; a játékos döntését ne írd meg","goal":"konkrét Event cél","cast":["AI id-k; ${bot.id} kötelező"],"openingKind":"speech vagy action","opening":"${bot.name} első saját mondata vagy cselekvése; a játékos reakciója nélkül","dmText":"csak dm_invite esetén rövid valódi chat-üzenet, különben üres","targetTurns":16,"targetMinutes":20,"limitMode":"turns vagy minutes","rewardAffection":12,"rewardItem":"jelenethez illő egyedi emléktárgy","selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned","intent":"miért kezdeményezed","openLoops":["amit ezzel az Eventtel el akarsz intézni"]}]}${TAIL}`,
+{"skip":false,"mode":"dm_invite vagy arrival vagy encounter","title":"rövid Event cím","setting":"2-4 mondat, hol/mikor/miért indul; a játékos döntését ne írd meg","goal":"konkrét Event cél","cast":["az eventhez ténylegesen illő AI-id-k; ${bot.id} kötelező; társas eventnél több releváns meghívott"],"openingKind":"speech vagy action","opening":"${bot.name} első saját mondata vagy cselekvése; a játékos reakciója nélkül","dmText":"csak dm_invite esetén rövid valódi chat-üzenet, különben üres","targetTurns":20,"targetMinutes":30,"limitMode":"turns vagy minutes","rewardAffection":12,"rewardItem":"jelenethez illő egyedi emléktárgy","selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned","intent":"miért kezdeményezed","openLoops":["amit ezzel az Eventtel el akarsz intézni"]}]}${TAIL}`,
     { maxTokens: 1450, priority: 26 }
   );
 }
@@ -35954,21 +36149,29 @@ function pickInitiativeWatchdogAction(view) {
   const sim = (view && view.sim) || {};
   const candidates = [];
 
+  /*
+   * v37 CHANNEL BALANCER
+   *
+   * Fontos különbség: a sikertelen PRÓBÁLKOZÁS többé nem számít úgy,
+   * mintha tényleges DM/group/RP történt volna. Az attemptAt csak rövid
+   * retry-védelmet ad; a starvation órát kizárólag a valóban létrejött
+   * tartalom nullázza. Ettől nem tud egy skip/üres provider-válasz órákra
+   * elnémítani egy csatornát.
+   */
   const dmPeak = Math.max(0.25, channelActivityPeak(view, "dm"));
-  const dmLast = Math.max(
-    lastAiPrivateMessageAt(view),
-    Number(sim.dmAttemptAt) || 0
-  );
-  const dmTarget = Math.max(45000, Math.round(105000 / dmPeak));
+  const dmLast = lastAiPrivateMessageAt(view);
+  const dmTarget = Math.max(65000, Math.round(95000 / dmPeak));
   const dmElapsed = dmLast ? ts - dmLast : dmTarget * 3;
-  if (dmElapsed >= dmTarget) {
+  const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 25000;
+
+  if (dmElapsed >= dmTarget && dmRetryReady) {
     const bot = pickInitiator(view);
     if (bot) {
       candidates.push({
-        urgency: Math.min(4, dmElapsed / dmTarget) + 0.25 + Math.random() * 0.2,
+        urgency: Math.min(5, dmElapsed / dmTarget) + 0.35 + Math.random() * 0.15,
         action: mkAction(
           "dm",
-          `initiative-dm:${bot.id}:${Math.floor(ts / 60000)}`,
+          `initiative-dm:${bot.id}:${Math.floor(ts / 30000)}`,
           { botId: bot.id },
           "event"
         ),
@@ -35981,13 +36184,12 @@ function pickInitiativeWatchdogAction(view) {
     g.members.filter((id) => charById(view, id) && !isHuman(view, id)).length >= 2
   );
   const groupPeak = Math.max(0.25, channelActivityPeak(view, "group"));
-  const groupLast = Math.max(
-    lastAiGroupMessageAt(view),
-    Number(sim.groupAttemptAt) || 0
-  );
-  const groupTarget = Math.max(70000, Math.round(150000 / groupPeak));
-  const groupElapsed = groupLast ? ts - groupLast : groupTarget * 2.4;
-  if (groupElapsed >= groupTarget) {
+  const groupLast = lastAiGroupMessageAt(view);
+  const groupTarget = Math.max(80000, Math.round(115000 / groupPeak));
+  const groupElapsed = groupLast ? ts - groupLast : groupTarget * 2.5;
+  const groupRetryReady = !Number(sim.groupAttemptAt) || ts - Number(sim.groupAttemptAt) >= 35000;
+
+  if (groupElapsed >= groupTarget && groupRetryReady) {
     if (groups.length) {
       const rankedGroups = groups
         .map((g) => ({
@@ -35998,20 +36200,20 @@ function pickInitiativeWatchdogAction(view) {
         .sort((a, b) => (a.last - b.last) || (a.jitter - b.jitter));
       const group = rankedGroups[0].g;
       candidates.push({
-        urgency: Math.min(4, groupElapsed / groupTarget) + 0.05 + Math.random() * 0.2,
+        urgency: Math.min(5, groupElapsed / groupTarget) + 0.18 + Math.random() * 0.15,
         action: mkAction(
           "group-turn",
-          `initiative-group-turn:${group.id}:${Math.floor(ts / 90000)}`,
+          `initiative-group-turn:${group.id}:${Math.floor(ts / 45000)}`,
           { groupId: group.id },
           "event"
         ),
       });
     } else if ((view.chars || []).filter((c) => c && !isHuman(view, c.id)).length >= 2) {
       candidates.push({
-        urgency: Math.min(4, groupElapsed / groupTarget) + Math.random() * 0.2,
+        urgency: Math.min(5, groupElapsed / groupTarget) + 0.12 + Math.random() * 0.15,
         action: mkAction(
           "group",
-          `initiative-group:${Math.floor(ts / 180000)}`,
+          `initiative-group:${Math.floor(ts / 60000)}`,
           {},
           "event"
         ),
@@ -36019,29 +36221,45 @@ function pickInitiativeWatchdogAction(view) {
     }
   }
 
-  if (canAiInitiateRoleplay(view) && roleplayInitiationProbeDue(view)) {
+  if (canAiInitiateRoleplay(view)) {
     const rpPeak = Math.max(0.25, channelActivityPeak(view, "roleplay"));
-    const rpLastSuccess = lastAiInitiatedRoleplayAt(view);
-    const rpLastSignal = Math.max(
-      rpLastSuccess,
-      Number(sim.roleplayAttemptAt) || 0
-    );
-    const rpTarget = Math.max(95000, Math.round(210000 / rpPeak));
-    const rpElapsed = rpLastSignal ? ts - rpLastSignal : rpTarget * 2.8;
-    if (rpElapsed >= rpTarget) {
+    const rpLast = lastAiInitiatedRoleplayAt(view);
+    const rpTarget = Math.max(120000, Math.round(175000 / rpPeak));
+    const rpElapsed = rpLast ? ts - rpLast : rpTarget * 2.7;
+    const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 45000;
+
+    if (rpElapsed >= rpTarget && rpRetryReady) {
       const initiator = pickRoleplayInitiator(view);
       if (initiator) {
         candidates.push({
-          urgency: Math.min(4, rpElapsed / rpTarget) + 0.35 + Math.random() * 0.2,
+          urgency: Math.min(5, rpElapsed / rpTarget) + 0.30 + Math.random() * 0.15,
           action: mkAction(
             "roleplay-initiate",
-            `initiative-roleplay:${initiator.id}:${Math.floor(ts / 90000)}`,
+            `initiative-roleplay:${initiator.id}:${Math.floor(ts / 60000)}`,
             { botId: initiator.id },
             "event"
           ),
         });
       }
     }
+  }
+
+  /* A feed ugyanebben a deficit-versenyben vesz részt; nem külön VIP-sáv. */
+  const feedLast = lastAiFeedPostAt(view);
+  const postPeak = Math.max(0.25, channelActivityPeak(view, "post"));
+  const feedTarget = Math.max(85000, Math.round(115000 / postPeak));
+  const feedElapsed = feedLast ? ts - feedLast : feedTarget * 2.2;
+
+  if (feedElapsed >= feedTarget) {
+    candidates.push({
+      urgency: Math.min(5, feedElapsed / feedTarget) + 0.10 + Math.random() * 0.12,
+      action: mkAction(
+        "world",
+        `balanced-feed:${Math.floor(ts / 60000)}`,
+        {},
+        "event"
+      ),
+    });
   }
 
   if (!candidates.length) return null;
@@ -36116,8 +36334,8 @@ function planAutoAction(view) {
   /*
    * 1.5 AUTONÓM KEZDEMÉNYEZÉSI SÁV
    *
-   * DM / group chat / roleplay saját watchdogot kap. Ha bármelyik csatorna
-   * túl régóta néma, az újabb feed-poszt előtt kap egy valódi próbát.
+   * DM / group chat / roleplay / feed ugyanazon deficit-alapú watchdogban
+   * versenyez. A legrégebben éhező csatorna kapja a következő valódi kört.
    */
   const initiativeAction = pickInitiativeWatchdogAction(view);
   if (initiativeAction) {
@@ -36125,13 +36343,14 @@ function planAutoAction(view) {
   }
 
   /*
-   * 1.75 FEED WATCHDOG
+   * 1.75 FEED SAFETY NET
+   * A normál arányt a közös channel balancer adja; ez csak végső biztosíték.
    */
   if (feedNeedsFreshPost(view)) {
     return mkAction(
       "world",
-      `feed-watchdog:${Math.floor(
-        now() / 45000
+      `feed-safety-net:${Math.floor(
+        now() / 105000
       )}`
     );
   }
@@ -36244,7 +36463,7 @@ function planAutoAction(view) {
    * FEED PRIORITÁS — gyakori autonóm posztok, de nem a gossip rovására.
    */
   if (
-    Math.random() < (storySettingsOf(view).dramaLevel === "low" ? 0.12 : storySettingsOf(view).dramaLevel === "chaotic" ? 0.20 : 0.16)
+    Math.random() < (storySettingsOf(view).dramaLevel === "low" ? 0.05 : storySettingsOf(view).dramaLevel === "chaotic" ? 0.10 : 0.07)
   ) {
     return mkAction(
       "world",
@@ -36554,7 +36773,7 @@ function planAutoAction(view) {
    * Kb. 10% note a maradék körökből.
    */
   if (
-    roll < 0.14 &&
+    roll < 0.12 &&
     noteless.some((row) => row.noteScore >= 8)
   ) {
     const eligibleNotes = noteless.filter((row) => row.noteScore >= 8).slice(0, 4);
@@ -36633,8 +36852,8 @@ function planAutoAction(view) {
    * az új létrehozásával szemben.
    */
   if (
-    roll >= 0.14 &&
-    roll < 0.23
+    roll >= 0.12 &&
+    roll < 0.30
   ) {
     const preferExisting =
       groupTurnCandidates.length > 0 &&
@@ -36703,7 +36922,7 @@ function planAutoAction(view) {
    * A feed watchdog külön garantál friss posztot, ezért itt bátrabban
    * engedjük, hogy a karakterek privátban is megmozdítsák a történetet.
    */
-  if (roll < 0.58) {
+  if (roll < 0.62) {
     const bot =
       pickInitiator(view);
 
@@ -37163,10 +37382,13 @@ async function runSimulationAction(view, update, action, addImage) {
 
     const validModes = new Set(["dm_invite", "arrival", "encounter"]);
     const mode = validModes.has(String(out.mode || "")) ? String(out.mode) : "dm_invite";
-    const castIds = [...new Set([
-      bot.id,
-      ...(Array.isArray(out.cast) ? out.cast.map((id) => findChar(view, id)).filter(Boolean) : []),
-    ])].filter((id) => id && !isHuman(view, id) && charById(view, id)).slice(0, 5);
+    const eventDescriptor = [out.title, out.setting, out.goal].filter(Boolean).join(" ");
+    const castIds = contextualRoleplayCast(
+      view,
+      bot,
+      Array.isArray(out.cast) ? out.cast : [],
+      eventDescriptor
+    );
     if (!castIds.includes(bot.id)) castIds.unshift(bot.id);
 
     const opening = cleanGeneratedUtterance(view, bot.id, String(out.opening || out.dmText || ""), 1800);
@@ -37197,8 +37419,8 @@ async function runSimulationAction(view, update, action, addImage) {
         open: true,
         goal,
         limitMode: out.limitMode === "minutes" ? "minutes" : "turns",
-        targetTurns: Math.max(6, Math.min(40, Math.round(Number(out.targetTurns) || 16))),
-        targetMinutes: Math.max(5, Math.min(120, Math.round(Number(out.targetMinutes) || 20))),
+        targetTurns: Math.max(8, Math.min(60, Math.round(Number(out.targetTurns) || 20))),
+        targetMinutes: Math.max(8, Math.min(180, Math.round(Number(out.targetMinutes) || 30))),
         rewardAffection: Math.max(0, Math.min(30, Math.round(Number(out.rewardAffection) || 10))),
         rewardItem: String(out.rewardItem || "").trim().slice(0, 160) || sysLangText(n, n.meId, `${title} emléktárgya`, `${title} keepsake`),
         rewardGranted: false,
@@ -37233,6 +37455,20 @@ async function runSimulationAction(view, update, action, addImage) {
         kind: "event", source: "roleplay_invitation", confidence: 1,
         text: sysLangText(n, bot.id, `${(charById(n, n.meId) || {}).name || "A játékos"} karaktert meghívtam / bevontam ebbe: ${title}`, `I invited/involved the player in: ${title}`),
       });
+      castIds
+        .filter((id) => id && id !== bot.id)
+        .forEach((inviteeId) => {
+          const invitee = charById(n, inviteeId);
+          if (!invitee) return;
+          rememberAboutTarget(n, bot.id, inviteeId, {
+            kind: "event", source: "roleplay_invitation", confidence: 1,
+            text: sysLangText(n, bot.id, `${invitee.name} karaktert is meghívtam / bevontam ebbe: ${title}`, `I also invited/involved ${invitee.name} in: ${title}`),
+          });
+          rememberKnowledge(n, inviteeId, {
+            kind: "event", source: "roleplay_invitation", confidence: 1,
+            text: sysLangText(n, inviteeId, `${bot.name} bevont ebbe az Eventbe: ${title}`, `${bot.name} included me in the Event: ${title}`),
+          });
+        });
       applySelfUpdates(n, out);
       recordSocialEvent(n, {
         type: "roleplay-initiated", refId: sceneId, ts: now(), actorId: bot.id,
@@ -37247,8 +37483,8 @@ async function runSimulationAction(view, update, action, addImage) {
       pushNote(n, n.meId, {
         icon: mode === "dm_invite" ? "✉️" : "🎬",
         text: sysLangText(n, n.meId,
-          `${bot.name} Eventet kezdeményezett: ${title}`,
-          `${bot.name} initiated an Event: ${title}`),
+          `${bot.name} Eventet kezdeményezett: ${title}${castIds.length > 1 ? ` · ${castIds.length} AI résztvevő` : ""}`,
+          `${bot.name} initiated an Event: ${title}${castIds.length > 1 ? ` · ${castIds.length} AI participants` : ""}`),
         link: { type: "scene", id: sceneId },
       });
     });
