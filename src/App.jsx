@@ -7083,6 +7083,88 @@ function commentPublicBehaviorCard(w, c, targetId) {
   return bits.join(" ");
 }
 
+function socialCommentLooksWarmPraise(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  return (
+    messageLooksLikePositiveSocialReaction(text) ||
+    /\b(?:looks?\s+(?:good|great|amazing|stunning|hot)|suits?\s+you|that\s+(?:color|colour|fit|outfit|dress|shirt|look)\s+(?:really\s+)?suits?\s+you|you(?:'re|\s+are)\s+(?:so\s+)?(?:pretty|beautiful|gorgeous|stunning|cute|hot|sexy|handsome)|damn[, ]+.*(?:suits?\s+you|looks?\s+good)|love\s+(?:the|your)\s+(?:look|fit|outfit|dress|hair|makeup))\b/i.test(text) ||
+    /(?:😍|🥰|😘|❤️|🩷|💗|💖|💕|🔥)/u.test(text)
+  );
+}
+
+function socialCommentLooksDirectlyHostile(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  return /\b(?:shut\s+up|stfu|fuck\s+off|fuck\s+you|hate\s+you|idiot|moron|loser|pathetic|trash|bitch|asshole|disgusting|go\s+away|get\s+lost|kuss|kussolj|fogd\s+be|h[uü]lye|idi[oó]ta|sz[aá]nalmas|rohadj)\b/i.test(text);
+}
+
+function socialCommentLooksPlayful(value) {
+  const text = String(value || "");
+  return /(?:😭|😂|🤣|💀|🙄|🤡|lmao|lol|jk|pls|pleaseee|girl|babe|bestie)/i.test(text);
+}
+
+function socialCommentContradictsRelationship(w, actorId, targetId, text) {
+  if (!w || !actorId || !targetId || actorId === targetId) return false;
+  const tier = relationshipFilterTier(getRel(w, actorId, targetId));
+  if ((tier === "negative" || tier === "hostile") && socialCommentLooksWarmPraise(text)) {
+    return true;
+  }
+  if ((tier === "good" || tier === "close") && socialCommentLooksDirectlyHostile(text) && !socialCommentLooksPlayful(text)) {
+    return true;
+  }
+  return false;
+}
+
+function socialThreadAllyHostilityMismatch(w, responderId, commenterId, postAuthorId, text) {
+  if (!w || !responderId || !commenterId || !postAuthorId) return false;
+  const toCommenter = relationshipFilterTier(getRel(w, responderId, commenterId));
+  const toPoster = relationshipFilterTier(getRel(w, responderId, postAuthorId));
+  const commenterToPoster = relationshipFilterTier(getRel(w, commenterId, postAuthorId));
+  return (
+    (toCommenter === "good" || toCommenter === "close") &&
+    (toPoster === "negative" || toPoster === "hostile") &&
+    (commenterToPoster === "negative" || commenterToPoster === "hostile") &&
+    socialCommentLooksDirectlyHostile(text)
+  );
+}
+
+function commentThreadRelationshipTriangleCard(w, responderId, commenterId, postAuthorId) {
+  if (!w || !responderId || !commenterId || !postAuthorId) return "";
+  const responderToCommenter = relationshipFilterTier(getRel(w, responderId, commenterId));
+  const responderToPoster = relationshipFilterTier(getRel(w, responderId, postAuthorId));
+  const commenterToPoster = relationshipFilterTier(getRel(w, commenterId, postAuthorId));
+  const responder = nameOfIn(w, responderId);
+  const commenter = nameOfIn(w, commenterId);
+  const poster = nameOfIn(w, postAuthorId);
+
+  const rules = [
+    `THREAD SOCIAL TRIANGLE for ${responder}: toward latest commenter ${commenter} = ${responderToCommenter}; toward post author ${poster} = ${responderToPoster}; ${commenter}'s relation toward ${poster} = ${commenterToPoster}.`,
+    "A public reply must respect BOTH relationships, not just the latest line.",
+  ];
+
+  if (
+    (responderToCommenter === "good" || responderToCommenter === "close") &&
+    (responderToPoster === "negative" || responderToPoster === "hostile")
+  ) {
+    rules.push(
+      `The latest commenter is ${responder}'s friend/ally while the post author is someone ${responder} dislikes. Do NOT suddenly treat ${commenter} like an enemy. If ${responder} disagrees with ${commenter}'s praise/support of ${poster}, use familiar allied teasing, disbelief, or redirect the jab toward the post/poster; the friendship must still read as friendship.`
+    );
+  }
+
+  if (
+    (responderToCommenter === "good" || responderToCommenter === "close") &&
+    (commenterToPoster === "negative" || commenterToPoster === "hostile") &&
+    (responderToPoster === "negative" || responderToPoster === "hostile")
+  ) {
+    rules.push(
+      `${responder} and ${commenter} are socially on the same side against ${poster}. Default to solidarity/shared-side banter, not random friend-on-friend hostility.`
+    );
+  }
+
+  return rules.join(" ");
+}
+
 const GENERIC_SOCIAL_COMMENT_PATTERNS = [
   /^(?:so+\s+)?iconic[.!?]*$/i,
   /^slay+([.!?]+)?$/i,
@@ -11551,7 +11633,45 @@ function migrate(w) {
   });
 
   /* Régi roleplay jeleneteket is felhúzzuk az új Event-sémára. */
-  (w.scenes || []).forEach((scene) => ensureSceneEventState(scene));
+  {
+    const fallbackPlayerId =
+      (w.owner && w.players && w.players[w.owner] ? w.owner : "") ||
+      Object.keys(w.players || {})[0] ||
+      "";
+
+    (w.scenes || []).forEach((scene) => {
+      ensureSceneEventState(scene);
+      if (!fallbackPlayerId) return;
+
+      /*
+       * v43 could overwrite the optimistic player's authorId with n.meId even
+       * though the persisted world object itself does not store meId. Repair
+       * those already-saved journal entries and their matching turn copies.
+       */
+      scene.playerTurnJournal = (scene.playerTurnJournal || []).map((turn) =>
+        turn && !turn.authorId
+          ? { ...turn, authorId: fallbackPlayerId }
+          : turn
+      );
+
+      const journalIds = new Set(
+        (scene.playerTurnJournal || [])
+          .filter(Boolean)
+          .map((turn) => String(turn.id || ""))
+      );
+
+      scene.turns = (scene.turns || []).map((turn) =>
+        turn && !turn.authorId && journalIds.has(String(turn.id || ""))
+          ? { ...turn, authorId: fallbackPlayerId }
+          : turn
+      );
+
+      scene.turns = mergeRoleplayTurnStreams(
+        scene.turns,
+        scene.playerTurnJournal
+      );
+    });
+  }
 
   /* Idempotens második védőháló régi migrációs ágak után. */
   sanitizeWorldPosts(w);
@@ -12692,7 +12812,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v43-character-agent-runtime-rp-journal";
+const BUILD_VERSION = "v44-agent-thread-targets-rp-visibility";
 
 const AUTO = "masvilag:auto";
 /*
@@ -18848,6 +18968,7 @@ NYILVÁNOS VS. PRIVÁT REALIZMUS:
 - A büszke/státuszérzékeny karakter formálhatja úgy a reakcióját, hogy ne veszítsen arcot.
 - A féltékeny/crush/obsessed karakter sem köteles minden poszt alatt nyíltan leleplezni magát; az érzés finoman is kiszivároghat.
 - Az ellenség/rivális dönthet úgy, hogy nem ad engagementet. Az ignore ugyanúgy karakterhű reakció lehet, mint a beszólás.
+- NEGATÍV CÉLPONT HARD RULE: ha a kommentelő rossz/ellenséges viszonyban van a POSZT SZERZŐJÉVEL, ne írjon neki őszinte "you look amazing / that color suits you / gorgeous / 🔥" jellegű hype-ot csak social változatosságból. Ilyenkor inkább ignore, száraz megjegyzés, szkepszis, backhanded/szarkasztikus reakció vagy konkrét rivalry-jellegű komment legyen. Őszinte dicséret csak akkor fér bele, ha a FRISS történetben tényleges, explicit oka van rá.
 - A kapcsolat legyen HANGSZŰRŐ, ne állandó kommenttéma. Ne írják minden poszt alatt újra a kapcsolatuk lényegét.
 - SOCIAL FRIENDSHIP DEFAULT: ha a kommentelő és a poszt szerzője barát / közeli barát / best friend / partner vagy egyértelműen erős pozitív kapcsolatban vannak, a normál social baseline legyen láthatóan meleg, kényelmes és ismerős. Fotónál teljesen természetes egy rövid bók, hype, becenév, szeretetteljes ugratás vagy “ily”-jellegű közelség, HA az adott karakter így kommunikál.
 - Egy szarkasztikus vagy nyers barát is lehet kedves: a stílusa maradhat csípős, de ne változtasd a szeretetet megvetéssé. A “baráti roast” után is legyen egyértelmű, hogy ez közelség, nem ellenségeskedés.
@@ -19909,6 +20030,25 @@ const targetId =
     : p.authorId || "";
 
 /*
+ * Deterministic social sanity check. If a model sincerely hypes someone the
+ * character explicitly dislikes, or seriously attacks a close friend with no
+ * playful cue, drop that line rather than persisting a relationship-breaking
+ * hallucination into memory/gossip. A later world step can generate a better
+ * reaction naturally.
+ */
+if (
+  targetId &&
+  socialCommentContradictsRelationship(
+    n,
+    who,
+    targetId,
+    body
+  )
+) {
+  return;
+}
+
+/*
  * Valódi nested thread: ha egy reply-ra válaszol, közvetlenül AZ alá kerül.
  * A CommentNode rekurzívan renderel, ezért nincs szükség gyökérre lapításra.
  */
@@ -20517,9 +20657,16 @@ async function genReply(w, post, comment, forcedResponderId = "") {
       ? charById(w, forcedResponderId)
       : null;
 
+  /*
+   * IMPORTANT THREAD TARGETING:
+   * `forcedResponder` is a scheduler-selected BYSTANDER, not automatically
+   * the person the latest comment was addressed to. Treating it as the
+   * direct addressee made friends answer innocent third-party comments as if
+   * they had personally been attacked. The direct responder is derived only
+   * from reply-parent / explicit @mention / top-level post ownership.
+   */
   const directResponder =
-    forcedResponder ||
-    (explicitMentionTarget
+    explicitMentionTarget
       ? charById(w, explicitMentionTarget)
       : (
           parentComment &&
@@ -20532,19 +20679,21 @@ async function genReply(w, post, comment, forcedResponderId = "") {
                   ? charById(w, post.authorId)
                   : null
               )
-        ));
+        );
 
   const fairCast = fairCommentCast(
     w,
     comment.authorId
   );
 
-  const cast = directResponder
-    ? [
-        directResponder,
-        ...fairCast.filter((c) => c && c.id !== directResponder.id),
-      ].slice(0, 8)
-    : fairCast;
+  const priorityCast = [directResponder, forcedResponder]
+    .filter(Boolean)
+    .filter((c, index, arr) => arr.findIndex((x) => x && x.id === c.id) === index);
+
+  const cast = [
+    ...priorityCast,
+    ...fairCast.filter((c) => c && !priorityCast.some((x) => x.id === c.id)),
+  ].slice(0, 8);
 
   const th = threadOf(
     w,
@@ -20629,6 +20778,9 @@ ${cast
   )
   .filter(Boolean)
   .join("\n") || "-"}
+
+THREAD KAPCSOLATI HÁROMSZÖG — KOMMENTELŐ + POSZTOLÓ + VÁLASZOLÓ:
+${cast.map((c) => c ? commentThreadRelationshipTriangleCard(w, c.id, comment.authorId, post.authorId) : "").filter(Boolean).join("\n") || "-"}
 
 NYILVÁNOS REPLY-SZŰRŐ KARAKTERENKÉNT:
 ${cast.map((c) => c ? `[${c.id}] ${c.name}: ${spread(commentPublicBehaviorCard(w, c, comment.authorId), 650)} | releváns célzott memória: ${spread(commentTargetMemoryCard(w, c, comment.authorId), 480)}` : "").filter(Boolean).join("\n") || "-"}
@@ -20948,6 +21100,8 @@ JSON: {"reply":"short natural reply"}${TAIL}`,
 ${voiceCard(forcedResponder)}
 ${characterMemoryCard(w, forcedResponder)}
 ${relationshipBehaviorCard(w, forcedResponder.id, comment.authorId)}
+${post.authorId && post.authorId !== comment.authorId ? relationshipBehaviorCard(w, forcedResponder.id, post.authorId) : ""}
+${commentThreadRelationshipTriangleCard(w, forcedResponder.id, comment.authorId, post.authorId)}
 
 PUBLIC THREAD BYSTANDER REPLY
 Post by ${nameOfIn(w, post.authorId)}: "${String(post.text || "").slice(0, 500)}"
@@ -20960,7 +21114,9 @@ ${nameOfIn(w, comment.authorId)}: "${String(comment.text || "").slice(0, 500)}"
 ${playerInputUnderstandingInstruction(w, comment.text, "comment")}
 
 ${forcedResponder.name} has already been selected by the social scheduler because their relationship/history/personality gives them a REAL reason to jump into this public thread.
+- IMPORTANT: the latest comment is NOT automatically addressed to ${forcedResponder.name}. They are a BYSTANDER joining a public thread. React to what the commenter said about the post/poster; do not pretend the commenter attacked or addressed ${forcedResponder.name} unless the thread actually says so.
 - Write only ${forcedResponder.name}'s natural public reply to the latest comment.
+- Respect both relationships: ${forcedResponder.name} → latest commenter AND ${forcedResponder.name} → post author. If the commenter is their friend but the post author is disliked, do not randomly turn on the friend; shared-side banter, playful disagreement or redirecting the jab toward the poster is more natural.
 - Do not make them act like the thread is a private DM.
 - Keep it character-specific, usually 1-12 words.
 - They may defend, pile on, tease, flirt, challenge, gossip, correct or react depending on their actual relationship/context.
@@ -21017,6 +21173,30 @@ function applyReplies(n, postId, rootId, out) {
       body = sanitizeIncorrectSenseiAddress(n, who, addressTargetId, body);
     }
     if (!body) return;
+    if (
+      addressTargetId &&
+      socialCommentContradictsRelationship(
+        n,
+        who,
+        addressTargetId,
+        body
+      )
+    ) {
+      return;
+    }
+    if (
+      rootForAddress &&
+      p.authorId &&
+      socialThreadAllyHostilityMismatch(
+        n,
+        who,
+        rootForAddress.authorId,
+        p.authorId,
+        body
+      )
+    ) {
+      return;
+    }
     const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
     p.comments.push(made);
     createdReplyIds.push(made.id);
@@ -25268,6 +25448,7 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
 
 function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const { tt } = useLang();
+  const playerId = w.meId;
   const matureMode =
     worldContentLevel(
       w,
@@ -25296,9 +25477,22 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
    * replace scene.turns with an older server snapshot; keeping the local copy
    * means the player's just-sent line never vanishes from the open scene.
    */
+  const repairedPlayerJournal = (scene.playerTurnJournal || []).map((turn) =>
+    turn && !turn.authorId
+      ? { ...turn, authorId: playerId }
+      : turn
+  );
+  const repairedJournalIds = new Set(
+    repairedPlayerJournal.filter(Boolean).map((turn) => String(turn.id || ""))
+  );
+  const repairedSceneTurns = (scene.turns || []).map((turn) =>
+    turn && !turn.authorId && repairedJournalIds.has(String(turn.id || ""))
+      ? { ...turn, authorId: playerId }
+      : turn
+  );
   const visibleTurns = mergeRoleplayTurnStreams(
-    scene.turns || [],
-    scene.playerTurnJournal || [],
+    repairedSceneTurns,
+    repairedPlayerJournal,
     optimisticTurns
   );
 
@@ -25361,7 +25555,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
       patch((s, n) => {
         if (!Array.isArray(s.turns)) s.turns = [];
         if (!Array.isArray(s.playerTurnJournal)) s.playerTurnJournal = [];
-        const playerTurn = { ...optimisticPlayerTurn, authorId: n.meId };
+        const playerTurn = { ...optimisticPlayerTurn, authorId: playerId };
         if (!s.playerTurnJournal.some((turn) => turn && turn.id === playerTurn.id)) {
           s.playerTurnJournal.push(playerTurn);
         }
@@ -25372,9 +25566,9 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
         (s.cast || []).filter((id) => id && !isHuman(n, id)).forEach((actorId) => {
           recordCharacterAgentPerception(n, actorId, {
             surface: "roleplay",
-            targetId: n.meId,
+            targetId: playerId,
             refId: playerTurn.id,
-            text: `${nameOfIn(n, n.meId)}: ${playerTurn.text}`,
+            text: `${nameOfIn(n, playerId)}: ${playerTurn.text}`,
             ts: playerTurn.ts,
           });
         });
@@ -25707,7 +25901,7 @@ VÁLASZ CSAK JSON:
         if (!Array.isArray(s.turns)) s.turns = [];
         if (!Array.isArray(s.playerTurnJournal)) s.playerTurnJournal = [];
         if (optimisticPlayerTurn) {
-          const playerTurn = { ...optimisticPlayerTurn, authorId: n.meId };
+          const playerTurn = { ...optimisticPlayerTurn, authorId: playerId };
           if (!s.playerTurnJournal.some((turn) => turn && turn.id === playerTurn.id)) {
             s.playerTurnJournal.push(playerTurn);
           }
@@ -25719,7 +25913,7 @@ VÁLASZ CSAK JSON:
         s.turns = mergeRoleplayTurnStreams(s.turns, s.playerTurnJournal);
 
         resolved.forEach((t) => {
-          const storedTurn = { id: "turn_" + uid(), ...t, ts: now(), language: worldLanguage(n, n.meId) };
+          const storedTurn = { id: "turn_" + uid(), ...t, ts: now(), language: worldLanguage(n, playerId) };
           s.turns.push(storedTurn);
           noteMentions(n, t.text, t.authorId, { type: "scene", id: s.id });
           rememberRoleplayObservedTurn(n, s, storedTurn);
@@ -25727,7 +25921,7 @@ VÁLASZ CSAK JSON:
             recordCharacterAgentAction(n, t.authorId, {
               surface: "roleplay",
               action: t.kind === "action" ? "ACT" : "SPEAK",
-              targetId: t.to || s.playerFocusId || n.meId,
+              targetId: t.to || s.playerFocusId || playerId,
               refId: storedTurn.id,
               plan: s.open ? `Continue active Event: ${s.title}${s.goal ? ` — goal: ${s.goal}` : ""}` : "",
               planId: `scene:${s.id}`,
@@ -25783,7 +25977,7 @@ VÁLASZ CSAK JSON:
         const eventRecapEligible = sceneEventRecapEligible(s, aiWitnessIds.length);
 
         const participantIds = [
-          n.meId,
+          playerId,
           ...aiWitnessIds,
         ].filter(Boolean);
 
