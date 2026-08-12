@@ -2934,7 +2934,7 @@ function setRel(w, a, b, patch) {
 /* ---------- jegyzetek (mint az Instagram Notes) ----------
    Mindenkinek egy aktív jegyzete lehet, ami egy nap után magától lejár. */
 const NOTE_LIFE = 24 * 3600e3;
-const NOTE_REFRESH = 4 * 3600e3;
+const NOTE_REFRESH = NOTE_LIFE; // 24 óra: egy karakter Note-ja legfeljebb naponta egyszer frissül
 const NOTE_MAX = 80;
 
 function pruneExpiredNotes(w) {
@@ -10959,7 +10959,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v23-background-runtime";
+const BUILD_VERSION = "v24-unlimited-characters";
 
 const AUTO = "masvilag:auto";
 /*
@@ -21821,6 +21821,11 @@ function Cast({ w, update, setErr, goChat, jump }) {
         {tt("Karakterek — őket az AI játssza", "Characters — played by the AI")}
       </label>
 
+      {/*
+        NINCS karakterdarabszám-limit. A világ tetszőleges számú AI-karaktert
+        tárolhat; a promptok saját cast-limitje csak egyetlen AI-hívás
+        kontextusméretét szabályozza, nem a létrehozható karakterek számát.
+      */}
       <button className="btn primary full" style={{ marginTop: 8 }} onClick={() => { setForm({ id: uid(), name: "" }); setFormIsNew(true); }}>
         <Plus size={15} /> {tt("Új karakter", "New character")}
       </button>
@@ -37802,29 +37807,89 @@ export default function App() {
     const current =
       wRef.current;
 
+    let nextWorld =
+      authoritative;
+
     if (
       current &&
-      current.code === authoritative.code &&
-      contentOf(current) !== contentOf(authoritative)
+      current.code === authoritative.code
     ) {
-      /*
-       * Mielőtt a szerververziót átvesszük,
-       * a helyi változat emergency backupként megmarad.
-       */
-      void saveWorldMerged(
-        current
-      ).catch(() => {});
+      const currentContent =
+        contentOf(current);
+
+      const serverContent =
+        contentOf(authoritative);
+
+      const localDirty =
+        Boolean(
+          lastSavedContent.current &&
+          currentContent !==
+            lastSavedContent.current
+        );
+
+      if (localDirty) {
+        /*
+         * FONTOS: a szerver-poll nem törölhet ki egy még el nem mentett
+         * helyi karaktert. Ez korábban úgy tudott kinézni, mintha 8 AI
+         * karakter után hard limit lenne: a 9. létrejött, majd egy régebbi
+         * szerver snapshot rögtön visszaírta a világot.
+         *
+         * Dirty lokális state esetén ID alapján összeolvasztjuk a kettőt.
+         * A szerver syncRev-je marad az authoritative konkurencia-verzió,
+         * de a helyi új karakterek / friss módosítások nem vesznek el.
+         */
+        nextWorld =
+          mergeWorlds(
+            authoritative,
+            current
+          );
+
+        nextWorld.syncRev =
+          worldSyncRev(
+            authoritative
+          );
+
+        void saveWorldMerged(
+          nextWorld
+        ).catch(() => {});
+
+        setSaveState("retry");
+      } else if (
+        currentContent !==
+        serverContent
+      ) {
+        /*
+         * Nincs lokális dirty módosítás: a szerver az igazság forrása,
+         * de az előző helyi verzió emergency backupként megmaradhat.
+         */
+        void saveWorldMerged(
+          current
+        ).catch(() => {});
+      }
     }
 
     pendingServerWorld.current = null;
 
-    lastSavedContent.current =
-      contentOf(authoritative);
+    /*
+     * Ha dirty lokális state-et olvasztottunk össze, NEM jelöljük azonnal
+     * elmentettnek az összevont világot. Így az autosave visszaküldi a
+     * szervernek, és a 9., 10., 20. stb. karakter is tartósan megmarad.
+     */
+    const mergedDirty =
+      nextWorld !== authoritative;
 
-    setWorld(authoritative);
+    if (!mergedDirty) {
+      lastSavedContent.current =
+        contentOf(authoritative);
+    }
+
+    setWorld(nextWorld);
     setMeId(id);
-    setSaveState("saved");
-    setSaveAt(now());
+
+    if (!mergedDirty) {
+      setSaveState("saved");
+      setSaveAt(now());
+    }
 
     return true;
   }, [meId]);
