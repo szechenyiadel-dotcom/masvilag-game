@@ -376,12 +376,12 @@ async function linkProfileWorld(db, username, worldCode, accountId) {
       account_id
     )
     VALUES ($1, $2, $3)
-        ON CONFLICT (profile_username, world_code)
+    ON CONFLICT (profile_username, world_code)
     DO UPDATE SET account_id = EXCLUDED.account_id
     `,
     [u, code, String(accountId)]
   );
-}
+  }
 
 async function currentProfileForSession(session) {
   if (!session) return null;
@@ -714,10 +714,6 @@ app.post("/auth/login", async (req, res) => {
       });
     }
 
-    /*
-     * Global profile credential. The first successfully authenticated
-     * world creates it; every later world must use the same password.
-     */
     let globalProfile;
 
     try {
@@ -738,7 +734,6 @@ app.post("/auth/login", async (req, res) => {
       });
     }
 
-    /* Keep the per-world account credential aligned with the global profile. */
     if (globalProfile) {
       account.salt = globalProfile.salt;
       account.hash = globalProfile.hash;
@@ -751,9 +746,9 @@ app.post("/auth/login", async (req, res) => {
       accountId
     );
 
-    /* Persist a possible credential alignment too. */
     await client.query(
-      `      UPDATE worlds
+      `
+      UPDATE worlds
       SET data = $2::jsonb,
           updated_at = NOW()
       WHERE code = $1
@@ -810,7 +805,6 @@ app.post("/auth/login", async (req, res) => {
 
 /* -------------------------------------------------------------------------
    SESSION RESTORE
-   Always returns the CURRENT PostgreSQL world through getSession().
    ------------------------------------------------------------------------- */
 app.get("/auth/session", async (req, res) => {
   try {
@@ -882,8 +876,6 @@ app.get("/auth/session", async (req, res) => {
   }
 });
 
-/* ---------- LOGOUT ---------- */
-
 app.post("/auth/logout", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
@@ -913,11 +905,6 @@ app.post("/auth/logout", async (req, res) => {
     });
   }
 });
-
-/* -------------------------------------------------------------------------
-   ACCOUNT DELETE
-   Serialized against world saves. Deletion increments syncRev.
-   ------------------------------------------------------------------------- */
 app.post("/account/delete", async (req, res) => {
   let client = null;
 
@@ -1131,7 +1118,7 @@ app.post("/account/delete", async (req, res) => {
     });
   } catch (err) {
     if (client) {
-            try {
+      try {
         await client.query(
           "ROLLBACK"
         );
@@ -1153,10 +1140,6 @@ app.post("/account/delete", async (req, res) => {
   }
 });
 
-/* -------------------------------------------------------------------------
-   ONE-TIME LOCAL -> POSTGRES MIGRATION / NEW WORLD CREATION
-   PostgreSQL unique constraint is authoritative for the world code.
-   ------------------------------------------------------------------------- */
 app.post("/auth/migrate", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
@@ -1257,11 +1240,6 @@ app.post("/auth/migrate", async (req, res) => {
         world.rev || 0
       ) + 1;
 
-    /*
-     * Create/verify the global profile before this new world is inserted.
-     * The per-world account keeps the login username, while the player
-     * character can use a completely different social @username.
-     */
     let globalProfile;
 
     try {
@@ -1282,8 +1260,8 @@ app.post("/auth/migrate", async (req, res) => {
       account.salt = globalProfile.salt;
       account.hash = globalProfile.hash;
     }
-        /* Server owns this value; never trust the imported/local value. */
-            world.syncRev = 1;
+
+    world.syncRev = 1;
 
     if (world.universe) {
       world.universe.at =
@@ -1306,7 +1284,6 @@ app.post("/auth/migrate", async (req, res) => {
         ]
       );
     } catch (err) {
-      /* PostgreSQL unique_violation: another creator won the race. */
       if (
         err &&
         err.code === "23505"
@@ -1366,9 +1343,6 @@ app.post("/auth/migrate", async (req, res) => {
   }
 });
 
-/* -------------------------------------------------------------------------
-   GLOBAL PROFILE -> WORLDS
-   ------------------------------------------------------------------------- */
 app.get("/profile/worlds", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
@@ -1482,7 +1456,6 @@ app.post("/profile/worlds/switch", async (req, res) => {
     return res.status(500).json({ error: "World switch failed." });
   }
 });
-
 app.post("/profile/worlds/create", async (req, res) => {
   let client = null;
 
@@ -1509,7 +1482,8 @@ app.post("/profile/worlds/create", async (req, res) => {
 
     const world = JSON.parse(JSON.stringify(incomingWorld));
     const code = cleanCode(world.code);
-        if (!code) {
+
+    if (!code) {
       return res.status(400).json({ error: "World code is required." });
     }
 
@@ -1627,14 +1601,6 @@ app.post("/profile/worlds/create", async (req, res) => {
   }
 });
 
-/* -------------------------------------------------------------------------
-   AUTHORITATIVE WORLD AUTOSAVE
-
-   If expectedSyncRev != current server syncRev:
-   - reject stale client with HTTP 409
-   - return the authoritative server world
-   - NEVER overwrite it with the stale snapshot
-   ------------------------------------------------------------------------- */
 app.post("/world/save", async (req, res) => {
   let client = null;
 
@@ -1763,10 +1729,6 @@ app.post("/world/save", async (req, res) => {
         )
       );
 
-    /*
-     * The client never receives password hashes/salts.
-     * Restore every server-secret field from the locked authoritative row.
-     */
     if (!nextWorld.accounts) {
       nextWorld.accounts = {};
     }
@@ -1886,7 +1848,7 @@ app.post("/world/save", async (req, res) => {
       } catch (e) {}
 
       client.release();
-            client = null;
+      client = null;
     }
 
     console.error(
@@ -1899,143 +1861,395 @@ app.post("/world/save", async (req, res) => {
     });
   }
 });
-
 function extractText(content) {
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map((part) => (typeof part === "string" ? part : part.text || "")).join("");
-  if (content && typeof content === "object") {
-    if (typeof content.text === "string") return content.text;
-    if (Array.isArray(content.parts)) return content.parts.map((part) => (typeof part === "string" ? part : part.text || "")).join("");
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) =>
+        typeof part === "string"
+          ? part
+          : part.text || ""
+      )
+      .join("");
   }
+
+  if (
+    content &&
+    typeof content === "object"
+  ) {
+    if (
+      typeof content.text === "string"
+    ) {
+      return content.text;
+    }
+
+    if (Array.isArray(content.parts)) {
+      return content.parts
+        .map((part) =>
+          typeof part === "string"
+            ? part
+            : part.text || ""
+        )
+        .join("");
+    }
+  }
+
   return "";
 }
 
 function getProvider(body = {}) {
-  const provider = String(body?.provider || "").toLowerCase();
-  if (provider === "gemini") return "gemini";
-  if (provider === "openai") return "openai";
-  if (provider === "anthropic") return "anthropic";
-  const model = String(body?.model || "").toLowerCase();
-  if (model.startsWith("gemini")) return "gemini";
-  if (model.startsWith("gpt") || model.startsWith("o1") || model.startsWith("o3")) return "openai";
+  const provider =
+    String(body?.provider || "")
+      .toLowerCase();
+
+  if (provider === "gemini") {
+    return "gemini";
+  }
+
+  if (provider === "openai") {
+    return "openai";
+  }
+
+  if (provider === "anthropic") {
+    return "anthropic";
+  }
+
+  const model =
+    String(body?.model || "")
+      .toLowerCase();
+
+  if (model.startsWith("gemini")) {
+    return "gemini";
+  }
+
+  if (
+    model.startsWith("gpt") ||
+    model.startsWith("o1") ||
+    model.startsWith("o3") ||
+    model.startsWith("o4")
+  ) {
+    return "openai";
+  }
+
   return DEFAULT_PROVIDER;
 }
 
 function buildGeminiPayload(body = {}) {
-  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const messages =
+    Array.isArray(body.messages)
+      ? body.messages
+      : [];
+
   const parts = [];
-    if (body.system) parts.push({ text: body.system });
-  for (const item of messages) {
-    const text = extractText(item?.content || "");
-    if (!text) continue;
-    parts.push({ text });
+
+  if (body.system) {
+    parts.push({
+      text: body.system,
+    });
   }
+
+  for (const item of messages) {
+    const text =
+      extractText(
+        item?.content || ""
+      );
+
+    if (!text) continue;
+
+    parts.push({
+      text,
+    });
+  }
+
   const payload = {
     contents: [
       {
         role: "user",
-        parts: [{ text: parts.map((part) => part.text).join("\n\n") }],
+        parts: [
+          {
+            text:
+              parts
+                .map(
+                  (part) =>
+                    part.text
+                )
+                .join("\n\n"),
+          },
+        ],
       },
     ],
     generationConfig: {
-      maxOutputTokens: body.max_tokens ?? 700,
+      maxOutputTokens:
+        body.max_tokens ?? 700,
     },
   };
+
   if (body.system) {
     payload.systemInstruction = {
       role: "system",
-      parts: [{ text: body.system }],
+      parts: [
+        {
+          text: body.system,
+        },
+      ],
     };
   }
+
   return payload;
 }
 
 function normalizeGeminiResponse(data) {
-  const candidate = data?.candidates?.[0];
-  const text = candidate?.content?.parts?.map((p) => p.text || "").join("") || "";
+  const candidate =
+    data?.candidates?.[0];
+
+  const text =
+    candidate?.content?.parts
+      ?.map(
+        (p) =>
+          p.text || ""
+      )
+      .join("") || "";
+
   return {
-    model: data?.model || "gemini",
-    id: candidate?.finishReason ? `gemini-${Date.now()}` : undefined,
+    model:
+      data?.model || "gemini",
+    id:
+      candidate?.finishReason
+        ? `gemini-${Date.now()}`
+        : undefined,
     type: "message",
     role: "assistant",
-    content: [{ type: "text", text }],
+    content: [
+      {
+        type: "text",
+        text,
+      },
+    ],
     usage: {
-      input_tokens: data?.usageMetadata?.promptTokenCount || 0,
-      output_tokens: data?.usageMetadata?.candidatesTokenCount || 0,
+      input_tokens:
+        data?.usageMetadata
+          ?.promptTokenCount || 0,
+      output_tokens:
+        data?.usageMetadata
+          ?.candidatesTokenCount || 0,
     },
   };
+}
+
+function openAIChatModel(requested) {
+  const value =
+    String(requested || "")
+      .trim();
+
+  if (
+    /^(gpt|o1|o3|o4)/i.test(value)
+  ) {
+    return value;
+  }
+
+  return String(
+    process.env.OPENAI_CHAT_MODEL ||
+    "gpt-4o-mini"
+  ).trim();
+}
+
+function geminiChatModel(requested) {
+  const value =
+    String(requested || "")
+      .trim();
+
+  if (
+    value.startsWith("gemini")
+  ) {
+    return value;
+  }
+
+  return String(
+    process.env.GEMINI_MODEL ||
+    "gemini-3.6-flash"
+  ).trim();
+}
+
+function anthropicChatModel(requested) {
+  const value =
+    String(requested || "")
+      .trim();
+
+  if (
+    value.startsWith("claude")
+  ) {
+    return value;
+  }
+
+  return String(
+    process.env.ANTHROPIC_MODEL ||
+    "claude-sonnet-4-6"
+  ).trim();
 }
 
 function buildOpenAIPayload(body = {}) {
-  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const messages =
+    Array.isArray(body.messages)
+      ? body.messages
+      : [];
+
   const out = [];
-  if (body.system) out.push({ role: "system", content: body.system });
-  for (const item of messages) {
-    const text = extractText(item?.content || "");
-    if (!text) continue;
-    out.push({ role: item?.role === "assistant" ? "assistant" : "user", content: text });
+
+  if (body.system) {
+    out.push({
+      role: "system",
+      content: body.system,
+    });
   }
-  return {
-    model: body.model || "gpt-4o-mini",
+
+  for (const item of messages) {
+    const text =
+      extractText(
+        item?.content || ""
+      );
+
+    if (!text) continue;
+
+    out.push({
+      role:
+        item?.role === "assistant"
+          ? "assistant"
+          : "user",
+      content: text,
+    });
+  }
+
+  const payload = {
+    model:
+      openAIChatModel(
+        body.model
+      ),
     messages: out,
-    max_tokens: body.max_tokens ?? 1024,
-    temperature: body.temperature,
+    max_tokens:
+      body.max_tokens ?? 1024,
   };
+
+  if (
+    Number.isFinite(
+      Number(body.temperature)
+    )
+  ) {
+    payload.temperature =
+      Number(body.temperature);
+  }
+
+  return payload;
 }
 
 function normalizeOpenAIResponse(data) {
-  const choice = data?.choices?.[0];
-  const text = choice?.message?.content || "";
+  const choice =
+    data?.choices?.[0];
+
+  const text =
+    choice?.message?.content ||
+    "";
+
   return {
-    model: data?.model || "gpt",
+    model:
+      data?.model || "gpt",
     id: data?.id,
     type: "message",
     role: "assistant",
-    content: [{ type: "text", text }],
+    content: [
+      {
+        type: "text",
+        text,
+      },
+    ],
     usage: {
-      input_tokens: data?.usage?.prompt_tokens || 0,
-      output_tokens: data?.usage?.completion_tokens || 0,
+      input_tokens:
+        data?.usage
+          ?.prompt_tokens || 0,
+      output_tokens:
+        data?.usage
+          ?.completion_tokens || 0,
     },
   };
 }
 
-if (!ANTHROPIC_API_KEY && !GEMINI_API_KEY && !OPENAI_API_KEY) {
-  console.warn("No AI API key configured. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY before starting the proxy.");
-} else if (!ANTHROPIC_API_KEY) {
-  console.info("Anthropic API key not configured; using other providers if requested.");
+if (
+  !ANTHROPIC_API_KEY &&
+  !GEMINI_API_KEY &&
+  !OPENAI_API_KEY
+) {
+  console.warn(
+    "No AI API key configured. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY before starting the proxy."
+  );
+} else if (
+  !ANTHROPIC_API_KEY
+) {
+  console.info(
+    "Anthropic API key not configured; using other providers if requested."
+  );
 }
 
-
-
-// CORS: engedélyezzük a fejlesztéshez (ha szükséges, szűkítsd a domaineket).
 app.use((req, res, next) => {
-  const origin = String(req.headers.origin || "").trim();
-  const configured = String(process.env.CORS_ORIGINS || "")
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
+  const origin =
+    String(
+      req.headers.origin || ""
+    ).trim();
+
+  const configured =
+    String(
+      process.env.CORS_ORIGINS ||
+      ""
+    )
+      .split(",")
+      .map(
+        (x) =>
+          x.trim()
+      )
+      .filter(Boolean);
 
   const allowOrigin =
     origin &&
-    (!configured.length || configured.includes(origin));
+    (
+      !configured.length ||
+      configured.includes(origin)
+    );
 
   if (allowOrigin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
+      "Access-Control-Allow-Origin",
+      origin
+    );
+
+    res.setHeader(
+      "Vary",
+      "Origin"
+    );
+
+    res.setHeader(
+      "Access-Control-Allow-Credentials",
+      "true"
+    );
   }
 
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,OPTIONS"
+  );
 
-  if (req.method === "OPTIONS") return res.sendStatus(204);
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type,Authorization"
+  );
+
+  if (
+    req.method === "OPTIONS"
+  ) {
+    return res.sendStatus(204);
+  }
+
   next();
 });
 
-/* -------------------------------------------------------------------------
-   CLOUD MEDIA LOAD
-   Backward-compatible with old raw world_media.data rows.
-   ------------------------------------------------------------------------- */
 app.get("/media/load", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
@@ -2083,18 +2297,12 @@ app.get("/media/load", async (req, res) => {
     );
 
     return res.status(500).json({
-      error: "Media load failed.",
+      error:
+        "Media load failed.",
     });
   }
 });
 
-/* -------------------------------------------------------------------------
-   CLOUD MEDIA SAVE
-
-   Uses a JSON envelope in the EXISTING JSONB column, so no DB schema change
-   is required. An advisory transaction lock also protects the "row absent"
-   first-save case where SELECT ... FOR UPDATE alone cannot lock a missing row.
-   ------------------------------------------------------------------------- */
 app.post("/media/save", async (req, res) => {
   let client = null;
 
@@ -2151,9 +2359,6 @@ app.post("/media/save", async (req, res) => {
 
     await client.query("BEGIN");
 
-    /*
-     * Stable per-world transaction lock, including when the row doesn't exist.
-     */
     await client.query(
       `
       SELECT pg_advisory_xact_lock(
@@ -2264,27 +2469,44 @@ app.post("/media/save", async (req, res) => {
     );
 
     return res.status(500).json({
-            error: "Media save failed.",
+      error:
+        "Media save failed.",
     });
   }
 });
-
 function parseImageDataUrl(value) {
-  const raw = String(value || "");
-  const match = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/);
+  const raw =
+    String(value || "");
+
+  const match =
+    raw.match(
+      /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/
+    );
 
   if (!match) return null;
 
   return {
-    mimeType: match[1].toLowerCase(),
-    base64: match[2].replace(/\s+/g, ""),
+    mimeType:
+      match[1].toLowerCase(),
+    base64:
+      match[2]
+        .replace(/\s+/g, ""),
     dataUrl: raw,
   };
 }
 
 function visionTextFromAnthropic(data) {
-  return Array.isArray(data?.content)
-    ? data.content.map((x) => x?.type === "text" ? x.text || "" : "").join("")
+  return Array.isArray(
+    data?.content
+  )
+    ? data.content
+        .map(
+          (x) =>
+            x?.type === "text"
+              ? x.text || ""
+              : ""
+        )
+        .join("")
     : "";
 }
 
@@ -2292,184 +2514,407 @@ app.post("/ai/vision", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
 
-    const session = await getSession(req);
+    const session =
+      await getSession(req);
+
     if (!session) {
       clearSessionCookie(res);
-      return res.status(401).json({ error: "Not authenticated." });
+
+      return res
+        .status(401)
+        .json({
+          error:
+            "Not authenticated.",
+        });
     }
 
-    const image = await resolveInputImage(req.body?.image);
-    const prompt = String(
-      req.body?.prompt ||
-      "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when actually visible. Do not identify real people by name."
-    ).slice(0, 5000);
+    const image =
+      await resolveInputImage(
+        req.body?.image
+      );
+
+    const prompt =
+      String(
+        req.body?.prompt ||
+        "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when actually visible. Do not identify real people by name."
+      ).slice(0, 5000);
 
     if (!image) {
-      return res.status(400).json({ error: "A valid base64 data URL or public HTTPS image URL is required." });
+      return res
+        .status(400)
+        .json({
+          error:
+            "A valid base64 data URL or public HTTPS image URL is required.",
+        });
     }
 
-    if (image.base64.length > 12 * 1024 * 1024) {
-      return res.status(413).json({ error: "Image is too large for vision analysis." });
+    if (
+      image.base64.length >
+      12 * 1024 * 1024
+    ) {
+      return res
+        .status(413)
+        .json({
+          error:
+            "Image is too large for vision analysis.",
+        });
     }
 
-    const provider = getProvider(req.body || {});
+    const provider =
+      getProvider(
+        req.body || {}
+      );
 
-    if (provider === "openai") {
+    if (
+      provider === "openai"
+    ) {
       if (!OPENAI_API_KEY) {
-        return res.status(500).json({ error: "Missing OPENAI_API_KEY." });
+        return res
+          .status(500)
+          .json({
+            error:
+              "Missing OPENAI_API_KEY.",
+          });
       }
 
-      const requested = String(req.body?.model || "");
-      const model = /^(gpt|o1|o3)/i.test(requested)
-        ? requested
-        : (process.env.OPENAI_VISION_MODEL || "gpt-4o-mini");
+      const requested =
+        String(
+          req.body?.model || ""
+        );
 
-      const r = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 350,
-          messages: [{
-            role: "user",
-            content: [
-              { type: "text", text: prompt },
-              { type: "image_url", image_url: { url: image.dataUrl } },
-            ],
-          }],
-        }),
-      });
+      const model =
+        /^(gpt|o1|o3)/i.test(
+          requested
+        )
+          ? requested
+          : (
+              process.env
+                .OPENAI_VISION_MODEL ||
+              "gpt-4o-mini"
+            );
 
-      const payload = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(payload);
+      const r =
+        await fetch(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+              "Authorization":
+                `Bearer ${OPENAI_API_KEY}`,
+            },
+            body:
+              JSON.stringify({
+                model,
+                max_tokens: 350,
+                messages: [
+                  {
+                    role: "user",
+                    content: [
+                      {
+                        type: "text",
+                        text: prompt,
+                      },
+                      {
+                        type:
+                          "image_url",
+                        image_url: {
+                          url:
+                            image.dataUrl,
+                        },
+                      },
+                    ],
+                  },
+                ],
+              }),
+          }
+        );
+
+      const payload =
+        await r
+          .json()
+          .catch(() => ({}));
+
+      if (!r.ok) {
+        return res
+          .status(r.status)
+          .json(payload);
+      }
 
       return res.json({
         ok: true,
-        text: payload?.choices?.[0]?.message?.content || "",
+        text:
+          payload?.choices?.[0]
+            ?.message?.content ||
+          "",
         provider: "openai",
       });
     }
 
-    if (provider === "gemini") {
+    if (
+      provider === "gemini"
+    ) {
       if (!GEMINI_API_KEY) {
-        return res.status(500).json({ error: "Missing GEMINI_API_KEY." });
+        return res
+          .status(500)
+          .json({
+            error:
+              "Missing GEMINI_API_KEY.",
+          });
       }
 
-      const requested = String(req.body?.model || "");
-      const model = requested.startsWith("gemini")
-        ? requested
-        : (process.env.GEMINI_VISION_MODEL || "gemini-3.5-flash");
+      const requested =
+        String(
+          req.body?.model || ""
+        );
 
-      const url = new URL(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+      const model =
+        requested.startsWith(
+          "gemini"
+        )
+          ? requested
+          : (
+              process.env
+                .GEMINI_VISION_MODEL ||
+              "gemini-3.6-flash"
+            );
+
+      const url =
+        new URL(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+        );
+
+      url.searchParams.set(
+        "key",
+        GEMINI_API_KEY
       );
-      url.searchParams.set("key", GEMINI_API_KEY);
 
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{
-            role: "user",
-            parts: [
-              { text: prompt },
-              { inlineData: { mimeType: image.mimeType, data: image.base64 } },
-            ],
-          }],
-          generationConfig: { maxOutputTokens: 350 },
-        }),
+      const r =
+        await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body:
+            JSON.stringify({
+              contents: [
+                {
+                  role: "user",
+                  parts: [
+                    {
+                      text: prompt,
+                    },
+                    {
+                      inlineData: {
+                        mimeType:
+                          image.mimeType,
+                        data:
+                          image.base64,
+                      },
+                    },
+                  ],
+                },
+              ],
+              generationConfig: {
+                maxOutputTokens:
+                  350,
+              },
+            }),
+        });
+
+      const payload =
+        await r
+          .json()
+          .catch(() => ({}));
+
+      if (!r.ok) {
+        return res
+          .status(r.status)
+          .json(payload);
+      }
+
+      const text =
+        payload?.candidates?.[0]
+          ?.content?.parts
+          ?.map(
+            (p) =>
+              p?.text || ""
+          )
+          .join("") || "";
+
+      return res.json({
+        ok: true,
+        text,
+        provider: "gemini",
       });
-
-      const payload = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(payload);
-
-      const text = payload?.candidates?.[0]?.content?.parts
-        ?.map((p) => p?.text || "")
-        .join("") || "";
-
-      return res.json({ ok: true, text, provider: "gemini" });
     }
 
     if (!ANTHROPIC_API_KEY) {
-      return res.status(500).json({ error: "Missing ANTHROPIC_API_KEY." });
+      return res
+        .status(500)
+        .json({
+          error:
+            "Missing ANTHROPIC_API_KEY.",
+        });
     }
 
-    const requested = String(req.body?.model || "");
-    const model = requested.startsWith("claude")
-      ? requested
-      : (process.env.ANTHROPIC_VISION_MODEL || "claude-sonnet-4-6");
+    const requested =
+      String(
+        req.body?.model || ""
+      );
 
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": process.env.ANTHROPIC_VERSION || "2023-06-01",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 350,
-        messages: [{
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: image.mimeType,
-                data: image.base64,
-              },
-            },
-            { type: "text", text: prompt },
-          ],
-        }],
-      }),
-    });
+    const model =
+      requested.startsWith(
+        "claude"
+      )
+        ? requested
+        : (
+            process.env
+              .ANTHROPIC_VISION_MODEL ||
+            "claude-sonnet-4-6"
+          );
 
-    const payload = await r.json().catch(() => ({}));
-    if (!r.ok) return res.status(r.status).json(payload);
+    const r =
+      await fetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+            "x-api-key":
+              ANTHROPIC_API_KEY,
+            "anthropic-version":
+              process.env
+                .ANTHROPIC_VERSION ||
+              "2023-06-01",
+          },
+          body:
+            JSON.stringify({
+              model,
+              max_tokens: 350,
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "image",
+                      source: {
+                        type: "base64",
+                        media_type:
+                          image.mimeType,
+                        data:
+                          image.base64,
+                      },
+                    },
+                    {
+                      type: "text",
+                      text: prompt,
+                    },
+                  ],
+                },
+              ],
+            }),
+        }
+      );
+
+    const payload =
+      await r
+        .json()
+        .catch(() => ({}));
+
+    if (!r.ok) {
+      return res
+        .status(r.status)
+        .json(payload);
+    }
 
     return res.json({
       ok: true,
-      text: visionTextFromAnthropic(payload),
+      text:
+        visionTextFromAnthropic(
+          payload
+        ),
       provider: "anthropic",
     });
   } catch (err) {
-    console.error("Vision proxy error:", err);
-    return res.status(502).json({ error: "Vision analysis failed." });
+    console.error(
+      "Vision proxy error:",
+      err
+    );
+
+    return res
+      .status(502)
+      .json({
+        error:
+          "Vision analysis failed.",
+      });
   }
 });
 
+const AI_UPSTREAM_TIMEOUT_MS =
+  Math.max(
+    12000,
+    Number(
+      process.env
+        .AI_UPSTREAM_TIMEOUT_MS
+    ) || 45000
+  );
 
-/* -------------------------------------------------------------------------
-   STABLE AI PROXY HELPERS + IMAGE GENERATION
-   ------------------------------------------------------------------------- */
-const AI_UPSTREAM_TIMEOUT_MS = Math.max(
-  12000,
-  Number(process.env.AI_UPSTREAM_TIMEOUT_MS) || 45000
-);
+async function fetchWithTimeout(
+  url,
+  options = {},
+  timeoutMs =
+    AI_UPSTREAM_TIMEOUT_MS
+) {
+  const ctrl =
+    new AbortController();
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = AI_UPSTREAM_TIMEOUT_MS) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const timer =
+    setTimeout(
+      () =>
+        ctrl.abort(),
+      timeoutMs
+    );
+
   try {
-    return await fetch(url, { ...options, signal: ctrl.signal });
+    return await fetch(
+      url,
+      {
+        ...options,
+        signal:
+          ctrl.signal,
+      }
+    );
   } finally {
     clearTimeout(timer);
   }
 }
 
 async function responseJsonSafe(r) {
-  const raw = await r.text();
+  const raw =
+    await r.text();
+
   if (!raw) return {};
-  try { return JSON.parse(raw); }
-  catch { return { error: { message: raw } }; }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {
+      error: {
+        message: raw,
+      },
+    };
+  }
 }
 
-function proxyErrorMessage(payload, fallback = "AI provider error") {
+function proxyErrorMessage(
+  payload,
+  fallback =
+    "AI provider error"
+) {
   return String(
     payload?.error?.message ||
     payload?.error ||
@@ -2478,29 +2923,94 @@ function proxyErrorMessage(payload, fallback = "AI provider error") {
   );
 }
 
-function retryableProviderStatus(status) {
-  return [408, 409, 425, 429, 500, 502, 503, 504, 529].includes(Number(status));
+function retryableProviderStatus(
+  status
+) {
+  return [
+    408,
+    409,
+    425,
+    429,
+    500,
+    502,
+    503,
+    504,
+    529,
+  ].includes(
+    Number(status)
+  );
 }
 
-function imagePromptFromBody(body = {}) {
-  return String(body.prompt || body.input || body.text || "").trim().slice(0, 12000);
+function imagePromptFromBody(
+  body = {}
+) {
+  return String(
+    body.prompt ||
+    body.input ||
+    body.text ||
+    ""
+  )
+    .trim()
+    .slice(0, 12000);
 }
 
-function isPrivateAddress(address) {
-  const value = String(address || "").toLowerCase();
+function isPrivateAddress(
+  address
+) {
+  const value =
+    String(address || "")
+      .toLowerCase();
+
   if (!value) return true;
 
-  if (net.isIP(value) === 4) {
-    const p = value.split(".").map(Number);
-    if (p[0] === 10 || p[0] === 127 || p[0] === 0) return true;
-    if (p[0] === 169 && p[1] === 254) return true;
-    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
-    if (p[0] === 192 && p[1] === 168) return true;
-    if (p[0] >= 224) return true;
+  if (
+    net.isIP(value) === 4
+  ) {
+    const p =
+      value
+        .split(".")
+        .map(Number);
+
+    if (
+      p[0] === 10 ||
+      p[0] === 127 ||
+      p[0] === 0
+    ) {
+      return true;
+    }
+
+    if (
+      p[0] === 169 &&
+      p[1] === 254
+    ) {
+      return true;
+    }
+
+    if (
+      p[0] === 172 &&
+      p[1] >= 16 &&
+      p[1] <= 31
+    ) {
+      return true;
+    }
+
+    if (
+      p[0] === 192 &&
+      p[1] === 168
+    ) {
+      return true;
+    }
+
+    if (p[0] >= 224) {
+      return true;
+    }
+
     return false;
   }
 
-  if (net.isIP(value) === 6) {
+  if (
+    net.isIP(value) === 6
+  ) {
     return (
       value === "::1" ||
       value === "::" ||
@@ -2515,119 +3025,311 @@ function isPrivateAddress(address) {
 
   return false;
 }
+async function assertPublicHttpsUrl(
+  rawUrl
+) {
+  const url =
+    new URL(
+      String(
+        rawUrl || ""
+      ).trim()
+    );
 
-async function assertPublicHttpsUrl(rawUrl) {
-  const url = new URL(String(rawUrl || "").trim());
-  if (url.protocol !== "https:") {
-    throw new Error("Only HTTPS image references are allowed.");
+  if (
+    url.protocol !== "https:"
+  ) {
+    throw new Error(
+      "Only HTTPS image references are allowed."
+    );
   }
 
-  const host = String(url.hostname || "").toLowerCase();
-  if (!host || host === "localhost" || host.endsWith(".localhost")) {
-    throw new Error("Local image reference is not allowed.");
+  const host =
+    String(
+      url.hostname || ""
+    ).toLowerCase();
+
+  if (
+    !host ||
+    host === "localhost" ||
+    host.endsWith(
+      ".localhost"
+    )
+  ) {
+    throw new Error(
+      "Local image reference is not allowed."
+    );
   }
 
   if (net.isIP(host)) {
-    if (isPrivateAddress(host)) {
-      throw new Error("Private-network image reference is not allowed.");
+    if (
+      isPrivateAddress(host)
+    ) {
+      throw new Error(
+        "Private-network image reference is not allowed."
+      );
     }
   } else {
-    const resolved = await dns.lookup(host, { all: true });
-    if (!resolved.length || resolved.some((row) => isPrivateAddress(row.address))) {
-      throw new Error("Image reference resolved to a private network.");
+    const resolved =
+      await dns.lookup(
+        host,
+        {
+          all: true,
+        }
+      );
+
+    if (
+      !resolved.length ||
+      resolved.some(
+        (row) =>
+          isPrivateAddress(
+            row.address
+          )
+      )
+    ) {
+      throw new Error(
+        "Image reference resolved to a private network."
+      );
     }
   }
 
   return url;
 }
 
-async function fetchRemoteImageReference(rawUrl, redirectsLeft = 3) {
-  const url = await assertPublicHttpsUrl(rawUrl);
+async function fetchRemoteImageReference(
+  rawUrl,
+  redirectsLeft = 3
+) {
+  const url =
+    await assertPublicHttpsUrl(
+      rawUrl
+    );
 
-  const r = await fetchWithTimeout(
-    url,
-    {
-      method: "GET",
-      redirect: "manual",
-      headers: {
-        "Accept": "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.7",
-        "User-Agent": "MasvilagImageReference/1.0",
+  const r =
+    await fetchWithTimeout(
+      url,
+      {
+        method: "GET",
+        redirect: "manual",
+        headers: {
+          "Accept":
+            "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.7",
+          "User-Agent":
+            "MasvilagImageReference/1.0",
+        },
       },
-    },
-    20000
-  );
+      20000
+    );
 
-  if ([301, 302, 303, 307, 308].includes(r.status)) {
-    if (redirectsLeft <= 0) throw new Error("Too many image-reference redirects.");
-    const location = r.headers.get("location");
-    if (!location) throw new Error("Image-reference redirect has no location.");
-    const next = new URL(location, url);
-    return fetchRemoteImageReference(next.toString(), redirectsLeft - 1);
+  if (
+    [
+      301,
+      302,
+      303,
+      307,
+      308,
+    ].includes(r.status)
+  ) {
+    if (
+      redirectsLeft <= 0
+    ) {
+      throw new Error(
+        "Too many image-reference redirects."
+      );
+    }
+
+    const location =
+      r.headers.get(
+        "location"
+      );
+
+    if (!location) {
+      throw new Error(
+        "Image-reference redirect has no location."
+      );
+    }
+
+    const next =
+      new URL(
+        location,
+        url
+      );
+
+    return fetchRemoteImageReference(
+      next.toString(),
+      redirectsLeft - 1
+    );
   }
 
   if (!r.ok) {
-    throw new Error(`Reference image fetch failed with HTTP ${r.status}.`);
+    throw new Error(
+      `Reference image fetch failed with HTTP ${r.status}.`
+    );
   }
 
-  const mimeType = String(r.headers.get("content-type") || "")
-    .split(";")[0]
-    .trim()
-    .toLowerCase();
+  const mimeType =
+    String(
+      r.headers.get(
+        "content-type"
+      ) || ""
+    )
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
 
-  if (!["image/jpeg", "image/jpg", "image/png", "image/webp"].includes(mimeType)) {
-    throw new Error(`Unsupported reference image type: ${mimeType || "unknown"}.`);
+  if (
+    ![
+      "image/jpeg",
+      "image/jpg",
+      "image/png",
+      "image/webp",
+    ].includes(mimeType)
+  ) {
+    throw new Error(
+      `Unsupported reference image type: ${mimeType || "unknown"}.`
+    );
   }
 
-  const announced = Number(r.headers.get("content-length") || 0);
-  if (announced && announced > 12 * 1024 * 1024) {
-    throw new Error("Reference image is too large.");
+  const announced =
+    Number(
+      r.headers.get(
+        "content-length"
+      ) || 0
+    );
+
+  if (
+    announced &&
+    announced >
+      12 * 1024 * 1024
+  ) {
+    throw new Error(
+      "Reference image is too large."
+    );
   }
 
-  const buffer = Buffer.from(await r.arrayBuffer());
-  if (!buffer.length || buffer.length > 12 * 1024 * 1024) {
-    throw new Error("Reference image is empty or too large.");
+  const buffer =
+    Buffer.from(
+      await r.arrayBuffer()
+    );
+
+  if (
+    !buffer.length ||
+    buffer.length >
+      12 * 1024 * 1024
+  ) {
+    throw new Error(
+      "Reference image is empty or too large."
+    );
   }
+
+  const normalizedMime =
+    mimeType === "image/jpg"
+      ? "image/jpeg"
+      : mimeType;
 
   return {
-    mimeType: mimeType === "image/jpg" ? "image/jpeg" : mimeType,
-    base64: buffer.toString("base64"),
-    dataUrl: `data:${mimeType === "image/jpg" ? "image/jpeg" : mimeType};base64,${buffer.toString("base64")}`,
+    mimeType:
+      normalizedMime,
+    base64:
+      buffer.toString(
+        "base64"
+      ),
+    dataUrl:
+      `data:${normalizedMime};base64,${buffer.toString("base64")}`,
     source: "remote",
   };
 }
 
-async function resolveInputImage(value) {
-  const raw = String(value || "").trim();
+async function resolveInputImage(
+  value
+) {
+  const raw =
+    String(value || "")
+      .trim();
+
   if (!raw) return null;
 
-  const inline = parseImageDataUrl(raw);
-  if (inline) return { ...inline, source: "inline" };
+  const inline =
+    parseImageDataUrl(raw);
 
-  if (/^https:\/\//i.test(raw)) {
-    return fetchRemoteImageReference(raw);
+  if (inline) {
+    return {
+      ...inline,
+      source: "inline",
+    };
+  }
+
+  if (
+    /^https:\/\//i.test(
+      raw
+    )
+  ) {
+    return fetchRemoteImageReference(
+      raw
+    );
   }
 
   return null;
 }
 
-async function imageReferencesFromBody(body = {}, limit = 3) {
-  const raw = Array.isArray(body.referenceImages)
-    ? body.referenceImages
-    : (Array.isArray(body.reference_images) ? body.reference_images : []);
+async function imageReferencesFromBody(
+  body = {},
+  limit = 3
+) {
+  const raw =
+    Array.isArray(
+      body.referenceImages
+    )
+      ? body.referenceImages
+      : (
+          Array.isArray(
+            body.reference_images
+          )
+            ? body.reference_images
+            : []
+        );
 
   const refs = [];
-  const seen = new Set();
+  const seen =
+    new Set();
 
-  for (const value of raw) {
-    if (refs.length >= limit) break;
-    const key = String(value || "").trim();
-    if (!key || seen.has(key)) continue;
+  for (
+    const value of raw
+  ) {
+    if (
+      refs.length >= limit
+    ) {
+      break;
+    }
+
+    const key =
+      String(
+        value || ""
+      ).trim();
+
+    if (
+      !key ||
+      seen.has(key)
+    ) {
+      continue;
+    }
+
     seen.add(key);
 
     try {
-      const parsed = await resolveInputImage(key);
+      const parsed =
+        await resolveInputImage(
+          key
+        );
+
       if (!parsed) continue;
-      if (parsed.base64.length > 16 * 1024 * 1024) continue;
+
+      if (
+        parsed.base64.length >
+        16 * 1024 * 1024
+      ) {
+        continue;
+      }
+
       refs.push(parsed);
     } catch (err) {
       console.warn(
@@ -2641,8 +3343,12 @@ async function imageReferencesFromBody(body = {}, limit = 3) {
   return refs;
 }
 
-function multipartTextPart(boundary, name, value) {
-    return Buffer.from(
+function multipartTextPart(
+  boundary,
+  name,
+  value
+) {
+  return Buffer.from(
     `--${boundary}\r\n` +
     `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
     `${String(value)}\r\n`,
@@ -2650,22 +3356,43 @@ function multipartTextPart(boundary, name, value) {
   );
 }
 
-function multipartImagePart(boundary, name, image, index) {
-  const ext = image.mimeType === "image/png"
-    ? "png"
-    : image.mimeType === "image/webp"
-      ? "webp"
-      : "jpg";
+function multipartImagePart(
+  boundary,
+  name,
+  image,
+  index
+) {
+  const ext =
+    image.mimeType ===
+      "image/png"
+      ? "png"
+      : image.mimeType ===
+          "image/webp"
+        ? "webp"
+        : "jpg";
 
-  const head = Buffer.from(
-    `--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="${name}"; filename="reference-${index + 1}.${ext}"\r\n` +
-    `Content-Type: ${image.mimeType}\r\n\r\n`,
-    "utf8"
-  );
+  const head =
+    Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${name}"; filename="reference-${index + 1}.${ext}"\r\n` +
+      `Content-Type: ${image.mimeType}\r\n\r\n`,
+      "utf8"
+    );
 
-  const data = Buffer.from(image.base64, "base64");
-  return Buffer.concat([head, data, Buffer.from("\r\n", "utf8")]);
+  const data =
+    Buffer.from(
+      image.base64,
+      "base64"
+    );
+
+  return Buffer.concat([
+    head,
+    data,
+    Buffer.from(
+      "\r\n",
+      "utf8"
+    ),
+  ]);
 }
 
 function buildImageEditMultipart({
@@ -2678,226 +3405,475 @@ function buildImageEditMultipart({
   moderation,
   references,
 }) {
-  const boundary = `----masvilag-${crypto.randomBytes(18).toString("hex")}`;
+  const boundary =
+    `----masvilag-${crypto.randomBytes(18).toString("hex")}`;
+
   const chunks = [
-    multipartTextPart(boundary, "model", model),
-    multipartTextPart(boundary, "prompt", prompt),
-    multipartTextPart(boundary, "size", size),
-    multipartTextPart(boundary, "quality", quality),
-    multipartTextPart(boundary, "output_format", outputFormat),
-    multipartTextPart(boundary, "background", background),
-    multipartTextPart(boundary, "moderation", moderation),
+    multipartTextPart(
+      boundary,
+      "model",
+      model
+    ),
+    multipartTextPart(
+      boundary,
+      "prompt",
+      prompt
+    ),
+    multipartTextPart(
+      boundary,
+      "size",
+      size
+    ),
+    multipartTextPart(
+      boundary,
+      "quality",
+      quality
+    ),
+    multipartTextPart(
+      boundary,
+      "output_format",
+      outputFormat
+    ),
+    multipartTextPart(
+      boundary,
+      "background",
+      background
+    ),
+    multipartTextPart(
+      boundary,
+      "moderation",
+      moderation
+    ),
   ];
 
-  /*
-   * OpenAI Image Edit accepts multiple input images as image[].
-   * For GPT Image 2 these references act as high-fidelity identity inputs.
-   */
-  references.forEach((image, index) => {
-    chunks.push(
-      multipartImagePart(boundary, "image[]", image, index)
-    );
-  });
+  references.forEach(
+    (image, index) => {
+      chunks.push(
+        multipartImagePart(
+          boundary,
+          "image[]",
+          image,
+          index
+        )
+      );
+    }
+  );
 
-  chunks.push(Buffer.from(`--${boundary}--\r\n`, "utf8"));
+  chunks.push(
+    Buffer.from(
+      `--${boundary}--\r\n`,
+      "utf8"
+    )
+  );
 
   return {
     boundary,
-    body: Buffer.concat(chunks),
+    body:
+      Buffer.concat(
+        chunks
+      ),
   };
 }
 
-app.post(["/ai/image", "/ai/images", "/ai/generate-image"], async (req, res) => {
-  try {
-    if (!(await requireDb(res))) return;
-    const session = await getSession(req);
-    if (!session) {
-      clearSessionCookie(res);
-      return res.status(401).json({ error: "Not authenticated." });
-    }
-    if (!OPENAI_API_KEY) {
-      return res.status(500).json({ error: "Missing OPENAI_API_KEY." });
-    }
+app.post(
+  [
+    "/ai/image",
+    "/ai/images",
+    "/ai/generate-image",
+  ],
+  async (req, res) => {
+    try {
+      if (
+        !(await requireDb(res))
+      ) {
+        return;
+      }
 
-    const prompt = imagePromptFromBody(req.body || {});
-    if (!prompt) return res.status(400).json({ error: "Missing image prompt." });
+      const session =
+        await getSession(req);
 
-    const model = String(req.body?.model || process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
-    const size = String(req.body?.size || req.body?.image_size || process.env.OPENAI_IMAGE_SIZE || "1024x1024");
-    const quality = String(req.body?.quality || process.env.OPENAI_IMAGE_QUALITY || "medium");
-    const outputFormat = String(req.body?.output_format || process.env.OPENAI_IMAGE_FORMAT || "jpeg");
-    const background = String(req.body?.background || "auto");
-    const moderation = String(req.body?.moderation || "auto");
-    const references = await imageReferencesFromBody(req.body || {}, 3);
+      if (!session) {
+        clearSessionCookie(res);
 
-    if (req.body?.require_reference && !references.length) {
-      return res.status(422).json({
-        error: "Character reference images were supplied, but none could be loaded. Refusing prompt-only generation because identity would be unreliable.",
-      });
-    }
+        return res
+          .status(401)
+          .json({
+            error:
+              "Not authenticated.",
+          });
+      }
 
-    let endpoint = "https://api.openai.com/v1/images/generations";
-    let options;
+      if (
+        !OPENAI_API_KEY
+      ) {
+        return res
+          .status(500)
+          .json({
+            error:
+              "Missing OPENAI_API_KEY.",
+          });
+      }
 
-    if (references.length) {
-      /*
-       * CRITICAL IDENTITY FIX:
-       * Generations cannot actually consume our profile/album reference images.
-       * When references exist, use the Image Edit endpoint and send them as
-       * multipart image[] inputs so the model can preserve the character face.
-       */
-      endpoint = "https://api.openai.com/v1/images/edits";
-      const multipart = buildImageEditMultipart({
+      const prompt =
+        imagePromptFromBody(
+          req.body || {}
+        );
+
+      if (!prompt) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Missing image prompt.",
+          });
+      }
+
+      const model =
+        String(
+          req.body?.model ||
+          process.env
+            .OPENAI_IMAGE_MODEL ||
+          "gpt-image-2"
+        );
+
+      const size =
+        String(
+          req.body?.size ||
+          req.body
+            ?.image_size ||
+          process.env
+            .OPENAI_IMAGE_SIZE ||
+          "1024x1024"
+        );
+
+      const quality =
+        String(
+          req.body?.quality ||
+          process.env
+            .OPENAI_IMAGE_QUALITY ||
+          "medium"
+        );
+
+      const outputFormat =
+        String(
+          req.body
+            ?.output_format ||
+          process.env
+            .OPENAI_IMAGE_FORMAT ||
+          "jpeg"
+        );
+
+      const background =
+        String(
+          req.body
+            ?.background ||
+          "auto"
+        );
+
+      const moderation =
+        String(
+          req.body
+            ?.moderation ||
+          "auto"
+        );
+
+      const references =
+        await imageReferencesFromBody(
+          req.body || {},
+          3
+        );
+
+      if (
+        req.body
+          ?.require_reference &&
+        !references.length
+      ) {
+        return res
+          .status(422)
+          .json({
+            error:
+              "Character reference images were supplied, but none could be loaded. Refusing prompt-only generation because identity would be unreliable.",
+          });
+      }
+
+      let endpoint =
+        "https://api.openai.com/v1/images/generations";
+
+      let options;
+
+      if (
+        references.length
+      ) {
+        endpoint =
+          "https://api.openai.com/v1/images/edits";
+
+        const multipart =
+          buildImageEditMultipart({
+            model,
+            prompt,
+            size,
+            quality,
+            outputFormat,
+            background,
+            moderation,
+            references,
+          });
+
+        options = {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              `multipart/form-data; boundary=${multipart.boundary}`,
+            "Content-Length":
+              String(
+                multipart.body
+                  .length
+              ),
+            "Authorization":
+              `Bearer ${OPENAI_API_KEY}`,
+          },
+          body:
+            multipart.body,
+        };
+      } else {
+        options = {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+            "Authorization":
+              `Bearer ${OPENAI_API_KEY}`,
+          },
+          body:
+            JSON.stringify({
+              model,
+              prompt,
+              size,
+              quality,
+              output_format:
+                outputFormat,
+              background,
+              moderation,
+            }),
+        };
+      }
+
+      const r =
+        await fetchWithTimeout(
+          endpoint,
+          options,
+          Math.max(
+            AI_UPSTREAM_TIMEOUT_MS,
+            references.length
+              ? 120000
+              : 90000
+          )
+        );
+
+      const payload =
+        await responseJsonSafe(
+          r
+        );
+
+      if (!r.ok) {
+        if (
+          r.headers.get(
+            "retry-after"
+          )
+        ) {
+          res.setHeader(
+            "retry-after",
+            r.headers.get(
+              "retry-after"
+            )
+          );
+        }
+
+        console.error(
+          "OpenAI image upstream error:",
+          r.status,
+          references.length
+            ? "edit-reference"
+            : "generation",
+          proxyErrorMessage(
+            payload,
+            "Image request failed"
+          )
+        );
+
+        return res
+          .status(r.status)
+          .json(payload);
+      }
+
+      const first =
+        Array.isArray(
+          payload?.data
+        )
+          ? payload.data[0]
+          : null;
+
+      const b64 =
+        String(
+          first?.b64_json ||
+          payload?.b64_json ||
+          ""
+        ).trim();
+
+      const url =
+        String(
+          first?.url ||
+          first?.image_url ||
+          payload?.url ||
+          ""
+        ).trim();
+
+      if (
+        !b64 &&
+        !url
+      ) {
+        return res
+          .status(502)
+          .json({
+            error:
+              "OpenAI image generation returned no image payload.",
+          });
+      }
+
+      const mime =
+        outputFormat === "png"
+          ? "image/png"
+          : outputFormat ===
+              "webp"
+            ? "image/webp"
+            : "image/jpeg";
+
+      const dataUrl =
+        b64
+          ? `data:${mime};base64,${b64}`
+          : "";
+
+      return res.json({
+        ok: true,
+        provider: "openai",
         model,
-        prompt,
-        size,
-        quality,
-        outputFormat,
-        background,
-        moderation,
-        references,
+        mode:
+          references.length
+            ? "edit-reference"
+            : "generation",
+        referenceCount:
+          references.length,
+        data:
+          b64
+            ? [
+                {
+                  b64_json:
+                    b64,
+                  revised_prompt:
+                    first?.revised_prompt ||
+                    "",
+                },
+              ]
+            : [],
+        b64_json: b64,
+        dataUrl,
+        image:
+          dataUrl || url,
+        url,
+        revised_prompt:
+          first?.revised_prompt ||
+          "",
       });
-
-      options = {
-        method: "POST",
-        headers: {
-          "Content-Type": `multipart/form-data; boundary=${multipart.boundary}`,
-          "Content-Length": String(multipart.body.length),
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        },
-        body: multipart.body,
-      };
-    } else {
-      options = {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model,
-          prompt,
-          size,
-          quality,
-          output_format: outputFormat,
-          background,
-          moderation,
-        }),
-      };
-    }
-
-    const r = await fetchWithTimeout(
-      endpoint,
-      options,
-      Math.max(AI_UPSTREAM_TIMEOUT_MS, references.length ? 120000 : 90000)
-    );
-
-    const payload = await responseJsonSafe(r);
-    if (!r.ok) {
-      if (r.headers.get("retry-after")) res.setHeader("retry-after", r.headers.get("retry-after"));
+    } catch (err) {
       console.error(
-        "OpenAI image upstream error:",
-        r.status,
-        references.length ? "edit-reference" : "generation",
-        proxyErrorMessage(payload, "Image request failed")
+        "Image generation proxy error:",
+        err
       );
-      return res.status(r.status).json(payload);
-    }
 
-    const first = Array.isArray(payload?.data) ? payload.data[0] : null;
-    const b64 = String(first?.b64_json || payload?.b64_json || "").trim();
-    const url = String(first?.url || first?.image_url || payload?.url || "").trim();
+      const timeout =
+        err?.name ===
+        "AbortError";
 
-    if (!b64 && !url) {
-      return res.status(502).json({
-        error: "OpenAI image generation returned no image payload."
-      });
-    }
-
-    const mime = outputFormat === "png"
-      ? "image/png"
-      : outputFormat === "webp"
-        ? "image/webp"
-        : "image/jpeg";
-
-    const dataUrl = b64
-      ? `data:${mime};base64,${b64}`
-      : "";
-
-    return res.json({
-      ok: true,
-      provider: "openai",
-      model,
-      mode: references.length ? "edit-reference" : "generation",
-      referenceCount: references.length,
-      data: b64
-        ? [{
-            b64_json: b64,
-            revised_prompt: first?.revised_prompt || "",
-          }]
-        : [],
-      b64_json: b64,
-      dataUrl,
-      image: dataUrl || url,
-      url,
-      revised_prompt: first?.revised_prompt || "",
-    });
-  } catch (err) {
-    console.error("Image generation proxy error:", err);
-
-    const timeout =
-      err?.name === "AbortError";
-
-    return res
-      .status(timeout ? 504 : 502)
-      .json({
-        error:
+      return res
+        .status(
           timeout
-            ? "Image generation timed out."
-            : (err?.message || "Image generation failed."),
-      });
+            ? 504
+            : 502
+        )
+        .json({
+          error:
+            timeout
+              ? "Image generation timed out."
+              : (
+                  err?.message ||
+                  "Image generation failed."
+                ),
+        });
+    }
   }
-});
-
-async function proxyOpenAIMessage(body) {
-  if (!OPENAI_API_KEY) {
+);
+async function proxyOpenAIMessage(
+  body
+) {
+  if (
+    !OPENAI_API_KEY
+  ) {
     return {
       unavailable: true,
       provider: "openai",
     };
   }
 
-  const r = await fetchWithTimeout(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify(buildOpenAIPayload(body)),
-    }
-  );
+  const r =
+    await fetchWithTimeout(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+          "Authorization":
+            `Bearer ${OPENAI_API_KEY}`,
+        },
+        body:
+          JSON.stringify(
+            buildOpenAIPayload(
+              body
+            )
+          ),
+      }
+    );
 
-  const payload = await responseJsonSafe(r);
+  const payload =
+    await responseJsonSafe(r);
 
   if (!r.ok) {
     return {
       ok: false,
       status: r.status,
       payload,
-      retryAfter: r.headers.get("retry-after"),
+      retryAfter:
+        r.headers.get(
+          "retry-after"
+        ),
       provider: "openai",
     };
   }
 
   const normalized =
-    normalizeOpenAIResponse(payload);
+    normalizeOpenAIResponse(
+      payload
+    );
 
   const hasText =
-    Array.isArray(normalized?.content) &&
+    Array.isArray(
+      normalized?.content
+    ) &&
     normalized.content.some(
-      (x) => String(x?.text || "").trim()
+      (x) =>
+        String(
+          x?.text || ""
+        ).trim()
     );
 
   return hasText
@@ -2911,15 +3887,20 @@ async function proxyOpenAIMessage(body) {
         status: 502,
         payload: {
           error: {
-            message: "OpenAI returned empty content.",
+            message:
+              "OpenAI returned empty content.",
           },
         },
         provider: "openai",
       };
 }
 
-async function proxyGeminiMessage(body) {
-  if (!GEMINI_API_KEY) {
+async function proxyGeminiMessage(
+  body
+) {
+  if (
+    !GEMINI_API_KEY
+  ) {
     return {
       unavailable: true,
       provider: "gemini",
@@ -2927,21 +3908,35 @@ async function proxyGeminiMessage(body) {
   }
 
   const requested =
-    String(body?.model || "");
+    String(
+      body?.model || ""
+    );
 
   const modelsToTry =
-    [...new Set([
-      requested.startsWith("gemini")
-        ? requested
-        : "",
-      process.env.GEMINI_MODEL || "",
-      process.env.GEMINI_FALLBACK_MODEL ||
-        "gemini-3.5-flash",
-    ].filter(Boolean))];
+    [
+      ...new Set(
+        [
+          requested.startsWith(
+            "gemini"
+          )
+            ? requested
+            : "",
+          process.env
+            .GEMINI_MODEL ||
+            "",
+          process.env
+            .GEMINI_FALLBACK_MODEL ||
+            "gemini-3.6-flash",
+        ].filter(Boolean)
+      ),
+    ];
 
   let last = null;
 
-  for (const model of modelsToTry) {
+  for (
+    const model of
+    modelsToTry
+  ) {
     const url =
       new URL(
         `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
@@ -2963,7 +3958,8 @@ async function proxyGeminiMessage(body) {
           {
             method: "POST",
             headers: {
-              "Content-Type": "application/json",
+              "Content-Type":
+                "application/json",
             },
             body:
               JSON.stringify(
@@ -2976,24 +3972,34 @@ async function proxyGeminiMessage(body) {
         );
 
       const payload =
-        await responseJsonSafe(r);
+        await responseJsonSafe(
+          r
+        );
 
       if (r.ok) {
         const normalized =
-          normalizeGeminiResponse(payload);
+          normalizeGeminiResponse(
+            payload
+          );
 
         const hasText =
-          Array.isArray(normalized?.content) &&
+          Array.isArray(
+            normalized?.content
+          ) &&
           normalized.content.some(
             (x) =>
-              String(x?.text || "").trim()
+              String(
+                x?.text || ""
+              ).trim()
           );
 
         if (hasText) {
           return {
             ok: true,
-            payload: normalized,
-            provider: "gemini",
+            payload:
+              normalized,
+            provider:
+              "gemini",
           };
         }
 
@@ -3002,7 +4008,8 @@ async function proxyGeminiMessage(body) {
           status: 502,
           payload: {
             error: {
-              message: "Gemini returned empty content.",
+              message:
+                "Gemini returned empty content.",
             },
           },
           provider: "gemini",
@@ -3015,12 +4022,17 @@ async function proxyGeminiMessage(body) {
         ok: false,
         status: r.status,
         payload,
-        retryAfter: r.headers.get("retry-after"),
+        retryAfter:
+          r.headers.get(
+            "retry-after"
+          ),
         provider: "gemini",
       };
 
       if (
-        !retryableProviderStatus(r.status) ||
+        !retryableProviderStatus(
+          r.status
+        ) ||
         attempt >= 2
       ) {
         break;
@@ -3036,14 +4048,20 @@ async function proxyGeminiMessage(body) {
     }
   }
 
-  return last || {
-    unavailable: true,
-    provider: "gemini",
-  };
+  return (
+    last || {
+      unavailable: true,
+      provider: "gemini",
+    }
+  );
 }
 
-async function proxyAnthropicMessage(body) {
-  if (!ANTHROPIC_API_KEY) {
+async function proxyAnthropicMessage(
+  body
+) {
+  if (
+    !ANTHROPIC_API_KEY
+  ) {
     return {
       unavailable: true,
       provider: "anthropic",
@@ -3051,27 +4069,38 @@ async function proxyAnthropicMessage(body) {
   }
 
   const requestedModel =
-    String(body?.model || "");
+    String(
+      body?.model || ""
+    );
 
   const modelsToTry =
-    [...new Set([
-      requestedModel.startsWith("claude")
-        ? requestedModel
-        : "",
-      process.env.ANTHROPIC_MODEL || "",
-      process.env.ANTHROPIC_FALLBACK_MODEL || "",
-    ].filter(Boolean))];
-
-  if (!modelsToTry.length) {
-    modelsToTry.push(
-      requestedModel ||
-      "claude-sonnet-4-6"
-    );
-  }
+    [
+      ...new Set(
+        [
+          requestedModel.startsWith(
+            "claude"
+          )
+            ? requestedModel
+            : "",
+          process.env
+            .ANTHROPIC_MODEL ||
+            "",
+          process.env
+            .ANTHROPIC_FALLBACK_MODEL ||
+            "",
+          anthropicChatModel(
+            requestedModel
+          ),
+        ].filter(Boolean)
+      ),
+    ];
 
   let last = null;
 
-  for (const model of modelsToTry) {
+  for (
+    const model of
+    modelsToTry
+  ) {
     const {
       provider,
       ...rest
@@ -3081,7 +4110,8 @@ async function proxyAnthropicMessage(body) {
       ...rest,
       model,
       max_tokens:
-        body?.max_tokens ?? 1024,
+        body?.max_tokens ??
+        1024,
     };
 
     for (
@@ -3095,35 +4125,49 @@ async function proxyAnthropicMessage(body) {
           {
             method: "POST",
             headers: {
-              "Content-Type": "application/json",
-              "x-api-key": ANTHROPIC_API_KEY,
+              "Content-Type":
+                "application/json",
+              "x-api-key":
+                ANTHROPIC_API_KEY,
               "anthropic-version":
-                process.env.ANTHROPIC_VERSION ||
+                process.env
+                  .ANTHROPIC_VERSION ||
                 "2023-06-01",
-              "Accept": "application/json",
+              "Accept":
+                "application/json",
             },
             body:
-              JSON.stringify(outboundBody),
+              JSON.stringify(
+                outboundBody
+              ),
           }
         );
 
       const payload =
-        await responseJsonSafe(r);
+        await responseJsonSafe(
+          r
+        );
 
       if (r.ok) {
         const hasText =
-          Array.isArray(payload?.content) &&
+          Array.isArray(
+            payload?.content
+          ) &&
           payload.content.some(
             (x) =>
-              x?.type === "text" &&
-              String(x?.text || "").trim()
+              x?.type ===
+                "text" &&
+              String(
+                x?.text || ""
+              ).trim()
           );
 
         if (hasText) {
           return {
             ok: true,
             payload,
-            provider: "anthropic",
+            provider:
+              "anthropic",
           };
         }
 
@@ -3132,10 +4176,12 @@ async function proxyAnthropicMessage(body) {
           status: 502,
           payload: {
             error: {
-              message: "Anthropic returned empty content.",
+              message:
+                "Anthropic returned empty content.",
             },
           },
-          provider: "anthropic",
+          provider:
+            "anthropic",
         };
 
         break;
@@ -3145,12 +4191,18 @@ async function proxyAnthropicMessage(body) {
         ok: false,
         status: r.status,
         payload,
-        retryAfter: r.headers.get("retry-after"),
-        provider: "anthropic",
+        retryAfter:
+          r.headers.get(
+            "retry-after"
+          ),
+        provider:
+          "anthropic",
       };
 
       if (
-        !retryableProviderStatus(r.status) ||
+        !retryableProviderStatus(
+          r.status
+        ) ||
         attempt >= 2
       ) {
         break;
@@ -3166,51 +4218,92 @@ async function proxyAnthropicMessage(body) {
     }
   }
 
-  return last || {
-    unavailable: true,
-    provider: "anthropic",
-  };
+  return (
+    last || {
+      unavailable: true,
+      provider:
+        "anthropic",
+    }
+  );
 }
 
-async function callMessageProvider(provider, body) {
-  if (provider === "openai") {
-    return proxyOpenAIMessage(body);
+async function callMessageProvider(
+  provider,
+  body
+) {
+  if (
+    provider === "openai"
+  ) {
+    return proxyOpenAIMessage(
+      body
+    );
   }
 
-  if (provider === "gemini") {
-    return proxyGeminiMessage(body);
+  if (
+    provider === "gemini"
+  ) {
+    return proxyGeminiMessage(
+      body
+    );
   }
 
-  return proxyAnthropicMessage(body);
+  return proxyAnthropicMessage(
+    body
+  );
 }
 
-app.get("/ai/health", (req, res) => {
-  return res.json({
-    ok: true,
-    version: "v35-production-api-reference-selfies",
-    routes: {
-      messages: true,
-      image: true,
-      vision: true,
-    },
-    providers: {
-      anthropic: Boolean(ANTHROPIC_API_KEY),
-      gemini: Boolean(GEMINI_API_KEY),
-      openai: Boolean(OPENAI_API_KEY),
-    },
-  });
-});
+app.get(
+  "/ai/health",
+  (req, res) => {
+    return res.json({
+      ok: true,
+      version:
+        "v36-provider-model-routing",
+      routes: {
+        messages: true,
+        image: true,
+        vision: true,
+      },
+      providers: {
+        anthropic:
+          Boolean(
+            ANTHROPIC_API_KEY
+          ),
+        gemini:
+          Boolean(
+            GEMINI_API_KEY
+          ),
+        openai:
+          Boolean(
+            OPENAI_API_KEY
+          ),
+      },
+    });
+  }
+);
 
 app.post(
-  ["/ai/messages", "/ai/chat", "/ai/respond"],
+  [
+    "/ai/messages",
+    "/ai/chat",
+    "/ai/respond",
+  ],
   async (req, res) => {
     const requestedProvider =
-      getProvider(req.body || {});
+      getProvider(
+        req.body || {}
+      );
 
     const configuredFallbacks =
-      ["anthropic", "openai", "gemini"]
+      [
+        "anthropic",
+        "openai",
+        "gemini",
+      ]
         .filter(
-          (p) => p !== requestedProvider
+          (p) =>
+            p !==
+            requestedProvider
         )
         .filter(
           (p) =>
@@ -3228,7 +4321,10 @@ app.post(
 
     let last = null;
 
-    for (const provider of providers) {
+    for (
+      const provider of
+      providers
+    ) {
       try {
         const result =
           await callMessageProvider(
@@ -3239,7 +4335,8 @@ app.post(
         if (result?.ok) {
           res.setHeader(
             "x-masvilag-ai-provider",
-            result.provider || provider
+            result.provider ||
+              provider
           );
 
           return res.json(
@@ -3247,7 +4344,9 @@ app.post(
           );
         }
 
-        if (result?.unavailable) {
+        if (
+          result?.unavailable
+        ) {
           continue;
         }
 
@@ -3257,8 +4356,13 @@ app.post(
           !retryableProviderStatus(
             result?.status
           ) &&
-          ![400, 404].includes(
-            Number(result?.status)
+          ![
+            400,
+            404,
+          ].includes(
+            Number(
+              result?.status
+            )
           )
         ) {
           break;
@@ -3266,13 +4370,15 @@ app.post(
       } catch (err) {
         last = {
           status:
-            err?.name === "AbortError"
+            err?.name ===
+              "AbortError"
               ? 504
               : 502,
           payload: {
             error: {
               message:
-                err?.name === "AbortError"
+                err?.name ===
+                  "AbortError"
                   ? `${provider} timed out.`
                   : (
                       err?.message ||
@@ -3285,19 +4391,42 @@ app.post(
       }
     }
 
-    const status =
-      Number(last?.status) || 503;
+    const upstreamStatus =
+      Number(
+        last?.status
+      ) || 503;
 
-    if (last?.retryAfter) {
+    const status =
+      upstreamStatus === 404
+        ? 502
+        : upstreamStatus;
+
+    if (
+      last?.retryAfter
+    ) {
       res.setHeader(
         "retry-after",
         last.retryAfter
       );
     }
 
+    res.setHeader(
+      "x-masvilag-ai-provider",
+      last?.provider ||
+        requestedProvider
+    );
+
+    res.setHeader(
+      "x-masvilag-ai-upstream-status",
+      String(
+        upstreamStatus
+      )
+    );
+
     console.error(
       "AI message providers exhausted:",
       requestedProvider,
+      `upstream=${upstreamStatus}`,
       proxyErrorMessage(
         last?.payload,
         "No provider returned a usable response."
@@ -3317,30 +4446,35 @@ app.post(
   }
 );
 
-// Serve the built React/Vite app in production.
-// v31: never let an old frontend bundle survive a deploy in browser/proxy cache.
-app.use((req, res, next) => {
-  if (req.method === "GET") {
-    res.setHeader(
-      "Cache-Control",
-      "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
-    );
-    res.setHeader(
-      "Pragma",
-      "no-cache"
-    );
-    res.setHeader(
-      "Expires",
-      "0"
-    );
-    res.setHeader(
-      "Surrogate-Control",
-      "no-store"
-    );
-  }
+app.use(
+  (req, res, next) => {
+    if (
+      req.method === "GET"
+    ) {
+      res.setHeader(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+      );
 
-  next();
-});
+      res.setHeader(
+        "Pragma",
+        "no-cache"
+      );
+
+      res.setHeader(
+        "Expires",
+        "0"
+      );
+
+      res.setHeader(
+        "Surrogate-Control",
+        "no-store"
+      );
+    }
+
+    next();
+  }
+);
 
 app.use(
   express.static(
@@ -3358,21 +4492,25 @@ app.use(
   )
 );
 
-app.use((req, res, next) => {
-  if (
-    req.method === "GET" &&
-    !req.path.startsWith("/ai/")
-  ) {
-    return res.sendFile(
-      "index.html",
-      {
-        root: "dist",
-      }
-    );
-  }
+app.use(
+  (req, res, next) => {
+    if (
+      req.method === "GET" &&
+      !req.path.startsWith(
+        "/ai/"
+      )
+    ) {
+      return res.sendFile(
+        "index.html",
+        {
+          root: "dist",
+        }
+      );
+    }
 
-  next();
-});
+    next();
+  }
+);
 
 app.listen(
   PORT,
