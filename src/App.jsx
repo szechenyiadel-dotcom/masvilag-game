@@ -9740,6 +9740,41 @@ function bestAlbumSnapFallback(character, prompt) {
   return bestScore >= 1 ? best : null;
 }
 
+function chatExplicitlyRequestsImage(text) {
+  const t = String(text || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!t) return false;
+
+  return /(?:küldj|küldenél|küldesz|mutass|dobj át|dobd át|kérek|akarok|szeretnék|send|show|lemme see|let me see|can i see|could i see|give me|drop)\b[^.!?]{0,70}\b(?:kép|képet|fotó|fotót|selfie|szelfi|snap|pic|picture|photo|image)|\b(?:kép|képet|fotó|fotót|selfie|szelfi|snap|pic|picture|photo|image)\b[^.!?]{0,60}\b(?:küld|send|show|please|pls|plz)/i.test(t);
+}
+
+function forcedChatSnapPrompt(playerText, character) {
+  return `Create the exact kind of current private-chat snap requested by the player: "${cut(String(playerText || ""), 220)}". The sender is ${(character && character.name) || "the character"}. Keep it realistic, current, casual, character-faithful and visually consistent with the request. Do not invent extra people or events unless the request or current context requires them.`;
+}
+
+function appendAiChatImageMessage(n, characterId, snap) {
+  if (!n || !characterId || !snap || !(snap.imageId || snap.image)) return false;
+  const ck = chatKey(n.meId, characterId);
+  n.chats[ck] = [
+    ...(n.chats[ck] || []),
+    {
+      id: "dm_" + uid(),
+      from: "them",
+      to: n.meId,
+      text: "",
+      ts: now(),
+      imageId: snap.imageId || "",
+      image: snap.imageId ? "" : (snap.image || ""),
+      imageDescription: snap.imageDescription || "",
+      language: worldLanguage(n, n.meId),
+    },
+  ];
+  return true;
+}
+
 async function generateAiChatSnap(
   character,
   snapPrompt,
@@ -10905,7 +10940,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v21-runtime-rebase";
+const BUILD_VERSION = "v22-images-roleplay";
 
 const AUTO = "masvilag:auto";
 /*
@@ -24198,7 +24233,7 @@ Formátum:
 }
 
 /* Jegyzetsáv — a szereplők feje fölött egy-egy mondat, mint az Instagram Notes. */
-function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply }) {
+function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply, onOpenScene }) {
   const { tt } = useLang();
   const { media, addImage } = useMedia();
   const matureMode =
@@ -24521,6 +24556,12 @@ A válaszod természetesen reagálhat a kép konkrét, látható részleteire. N
     : ""
 }
 
+${chatExplicitlyRequestsImage(t) ? `A JÁTÉKOS KIFEJEZETTEN KÉPET KÉRT.
+- Ebben a válaszban NEM elég csak azt írnod, hogy "persze", "mindjárt" vagy hasonlót.
+- KÖTELEZŐ tényleges képet választanod az albumból az "image" mezőben VAGY kitöltened az "imagePrompt" mezőt egy friss Snap generálásához.
+- Ha a kérés konkrét (pl. selfie, outfit, kávé, buli, hol vagy most), a választott/generált kép pontosan ahhoz igazodjon.
+- A szöveges reply lehet mellette, de a kép nem maradhat el.` : ""}
+
 SAJÁT FOTÓALBUMOD — PRIVÁTBAN CSAK EZEKBŐL KÜLDHETSZ KÉPET:
 ${albumList(c) || "nincs használható albumkép"}
 
@@ -24586,6 +24627,19 @@ Formátum:
         : ""
     ).trim();
 
+    const explicitImageRequest =
+      chatExplicitlyRequestsImage(t);
+
+    const requestedImagePrompt =
+      String(
+        out && out.imagePrompt || ""
+      ).trim() ||
+      (
+        explicitImageRequest
+          ? forcedChatSnapPrompt(t, c)
+          : ""
+      );
+
     const aiPic =
       out &&
       out.image
@@ -24593,18 +24647,20 @@ Formátum:
             c,
             out.image
           )
-        : null;
+        : (
+            explicitImageRequest
+              ? bestAlbumSnapFallback(c, t)
+              : null
+          );
 
     const generatedAiSnap =
       !aiPic &&
       out &&
-      String(
-        out.imagePrompt || ""
-      ).trim() &&
+      requestedImagePrompt &&
       !requestedReplyText
         ? await generateAiChatSnap(
             c,
-            out.imagePrompt,
+            requestedImagePrompt,
             addImage
           )
         : null;
@@ -24612,11 +24668,10 @@ Formátum:
     const fallbackAiPic =
       !aiPic &&
       !generatedAiSnap &&
-      out &&
-      out.imagePrompt
+      requestedImagePrompt
         ? bestAlbumSnapFallback(
             c,
-            out.imagePrompt
+            requestedImagePrompt
           )
         : null;
 
@@ -24852,40 +24907,70 @@ Formátum:
     if (
       requestedReplyText &&
       !aiPic &&
-      out &&
-      String(out.imagePrompt || "").trim()
+      requestedImagePrompt
     ) {
       void generateAiChatSnap(
         c,
-        out.imagePrompt,
+        requestedImagePrompt,
         addImage
       )
         .then((lateSnap) => {
           if (
-            !lateSnap ||
-            !(lateSnap.imageId || lateSnap.image)
-          ) return;
+            lateSnap &&
+            (lateSnap.imageId || lateSnap.image)
+          ) {
+            update((n) => {
+              appendAiChatImageMessage(n, c.id, lateSnap);
+            });
+            return;
+          }
 
-          update((n) => {
-            const liveKey = chatKey(n.meId, c.id);
-            n.chats[liveKey] = [
-              ...(n.chats[liveKey] || []),
-              {
-                id: "dm_" + uid(),
-                from: "them",
-                to: n.meId,
-                text: "",
-                ts: now(),
-                imageId: lateSnap.imageId || "",
-                image: lateSnap.imageId ? "" : (lateSnap.image || ""),
-                imageDescription: lateSnap.imageDescription || "",
-                language: worldLanguage(n, n.meId),
-              },
-            ];
-          });
+          const fallback =
+            bestAlbumSnapFallback(
+              c,
+              requestedImagePrompt
+            ) ||
+            (
+              explicitImageRequest &&
+              albumOf(c).length
+                ? albumOf(c)[0]
+                : null
+            );
+
+          if (fallback) {
+            const fallbackRef = fallback.imageId
+              ? imageRef(fallback.imageId)
+              : fallback.image || fallback.src || "";
+            const fallbackId = imageIdOf(fallbackRef) || "";
+            update((n) => {
+              appendAiChatImageMessage(n, c.id, {
+                imageId: fallbackId,
+                image: fallbackId ? "" : fallbackRef,
+                imageDescription: String(fallback.vision || fallback.note || ""),
+              });
+            });
+            return;
+          }
+
+          if (explicitImageRequest) {
+            setErr(
+              tt(
+                "A karakter megpróbálta elküldeni a képet, de a képgeneráló backend nem adott vissza képet, és nincs megfelelő albumképe.",
+                "The character tried to send the requested image, but the image-generation backend returned no image and there is no suitable album photo."
+              )
+            );
+          }
         })
         .catch((snapErr) => {
           console.warn("Late AI snap generation failed:", snapErr);
+          if (explicitImageRequest) {
+            setErr(
+              tt(
+                "A kért kép generálása technikai okból nem sikerült.",
+                "The requested image could not be generated because of a technical error."
+              )
+            );
+          }
         });
     }
   } catch (e) {
@@ -25483,6 +25568,19 @@ if (group) {
               <div style={{ whiteSpace:"pre-wrap" }}>
                 {m.text}
               </div>
+            ) : null}
+            {m.roleplayInviteSceneId ? (
+              <button
+                type="button"
+                className="btn tiny primary"
+                style={{ marginTop: 8 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onOpenScene) onOpenScene(m.roleplayInviteSceneId);
+                }}
+              >
+                🎬 {tt("Event megnyitása", "Open Event")}
+              </button>
             ) : null}
           </div>
         ))}
@@ -27531,6 +27629,7 @@ function ensureSimState(w) {
       localAt: 0,
       lastSuccessAt: 0,
       lastAttemptAt: 0,
+      roleplayAttemptAt: 0,
       lastError: "",
     };
   }
@@ -27543,6 +27642,7 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.localAt))) w.sim.localAt = 0;
   if (!Number.isFinite(Number(w.sim.lastSuccessAt))) w.sim.lastSuccessAt = 0;
   if (!Number.isFinite(Number(w.sim.lastAttemptAt))) w.sim.lastAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.roleplayAttemptAt))) w.sim.roleplayAttemptAt = 0;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -34725,9 +34825,15 @@ function lastAiInitiatedRoleplayAt(w) {
 function canAiInitiateRoleplay(w) {
   if (!w || !(w.chars || []).length) return false;
   const openAiScenes = (w.scenes || []).filter((scene) => scene && scene.open && scene.aiInitiated).length;
-  if (openAiScenes >= 2) return false;
+  /* Egy aktív AI-Event elég; ne spammeljen egyszerre több meghívással. */
+  if (openAiScenes >= 1) return false;
   const last = lastAiInitiatedRoleplayAt(w);
-  return !last || now() - last >= 3 * 60 * 1000;
+  return !last || now() - last >= 2 * 60 * 1000;
+}
+
+function roleplayInitiationProbeDue(w) {
+  const attemptAt = Number(w && w.sim && w.sim.roleplayAttemptAt) || 0;
+  return !attemptAt || now() - attemptAt >= 45 * 1000;
 }
 
 function roleplayInitiatorScore(w, c) {
@@ -34763,7 +34869,7 @@ async function genRoleplayInitiation(w, bot) {
   return askWorldJSON(
     w,
     engineFor(w),
-    `${worldContext(w, [bot.id], true, bot.id)}
+    `${worldContext(w, [bot.id], false, bot.id)}
 
 ${voiceCard(bot)}
 ${characterMemoryCard(w, bot)}
@@ -34773,7 +34879,8 @@ TE MOST ${bot.name} VAGY, ÉS SAJÁT MAGADTÓL KEZDEMÉNYEZHETSZ EGY ÚJ ROLEPLA
 
 EZ NEM RENDSZER-ÖTLET GENERÁLÁS. Ez ${bot.name} SAJÁT DÖNTÉSE a világon belül.
 - Csak akkor kezdeményezz, ha a személyiségedből, célodból, kapcsolatodból, aktuális érzelmedből vagy friss eseményből természetesen következik.
-- Ha nincs valódi okod MOST találkozást/jelenetet kezdeményezni, legyen skip:true.
+- NE várj nagy drámára. Ha van bármilyen természetes hétköznapi ok arra, hogy keresd, meghívd, lásd vagy bevond valamibe, KEZDEMÉNYEZZ.
+- skip:true csak akkor legyen, ha a karaktered és a jelenlegi világhelyzet alapján tényleg semmilyen hiteles ok nincs még egy rövid találkozóra/meghívásra sem.
 - Lehet teljesen hétköznapi program: buli, kávé, séta, edzés, autózás, shopping, tanulás, közös munka, küldetés, segítségkérés, "gyere ide", közös terv.
 - Lehet konfliktusos is: számonkérés, rivális miatti féltékenység, fenyegető találkozó, váratlan konfrontáció, ha a kánon ezt indokolja.
 - Ha társasági/bulis karakter vagy, magadtól is meghívhatsz buliba vagy szervezhetsz programot.
@@ -34865,10 +34972,28 @@ function planAutoAction(view) {
   }
 
   /*
-   * 1.5 FEED WATCHDOG
+   * 1.5 AI-KEZDEMÉNYEZETT ROLEPLAY EVENT — KÜLÖN PRIORITÁS
    *
-   * A maintenance akciók (follow, note, gossip stb.) nem tarthatják
-   * percekig üresen a fő feedet. Ha túl régen volt AI-poszt, előbb posztolunk.
+   * Nem a feed-watchdog mögött próbál szerencsét. Ha esedékes a proaktív
+   * Event-probe, a karakter ténylegesen kap egy kezdeményezési kört.
+   */
+  if (
+    canAiInitiateRoleplay(view) &&
+    roleplayInitiationProbeDue(view)
+  ) {
+    const initiator = pickRoleplayInitiator(view);
+    if (initiator) {
+      return mkAction(
+        "roleplay-initiate",
+        `roleplay-initiate:${initiator.id}:${Math.floor(now() / 45000)}`,
+        { botId: initiator.id },
+        "event"
+      );
+    }
+  }
+
+  /*
+   * 1.75 FEED WATCHDOG
    */
   if (feedNeedsFreshPost(view)) {
     return mkAction(
@@ -34877,28 +35002,6 @@ function planAutoAction(view) {
         now() / 25000
       )}`
     );
-  }
-
-  /*
-   * 1.75 AI-KEZDEMÉNYEZETT ROLEPLAY EVENT
-   *
-   * A karakterek nem csak a felhasználó által létrehozott jelenetekben élnek.
-   * Meghívhatnak valahova, programot szervezhetnek, konfrontálhatnak vagy
-   * hiteles helyzetben személyesen felbukkanhatnak.
-   */
-  if (
-    canAiInitiateRoleplay(view) &&
-    Math.random() < 0.24
-  ) {
-    const initiator = pickRoleplayInitiator(view);
-    if (initiator) {
-      return mkAction(
-        "roleplay-initiate",
-        `roleplay-initiate:${initiator.id}:${Math.floor(now() / 180000)}`,
-        { botId: initiator.id },
-        "event"
-      );
-    }
   }
 
   /*
@@ -35938,6 +36041,7 @@ async function runSimulationAction(view, update, action, addImage) {
         aiInitiated: true,
         initiatedBy: bot.id,
         initiationMode: mode,
+        invitationStatus: "pending",
       };
       n.scenes = [...(n.scenes || []), scene];
 
@@ -37233,8 +37337,7 @@ if (targetNote) {
       out &&
       String(
         out.imagePrompt || ""
-      ).trim() &&
-      !txt
+      ).trim()
         ? await generateAiChatSnap(
             bot,
             out.imagePrompt,
@@ -40116,6 +40219,9 @@ const signOut = useCallback(async () => {
          * úgy nézne ki, mintha történt volna valami, és a világ újra várna.
          */
         simMarkRunning(n, action);
+        if (action && action.type === "roleplay-initiate") {
+          ensureSimState(n).roleplayAttemptAt = now();
+        }
       });
       let ok = false;
       let result = null;
@@ -40277,7 +40383,7 @@ const signOut = useCallback(async () => {
           {tab === "cast" && <Cast w={view} update={update} setErr={setErr} jump={jump} goChat={(id) => { setChatId(id); setTab("chat"); }} />}
           {tab === "bonds" && <Bonds w={view} update={update} setErr={setErr} />}
           {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} />}
-          {tab === "chat" && <Chat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} />}
+          {tab === "chat" && <Chat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={(sceneId) => { setJump({ type: "scene", id: sceneId, at: now() }); setTab("scene"); }} />}
           {tab === "world" && <World
   w={view}
   update={update}
