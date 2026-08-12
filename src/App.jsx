@@ -7512,21 +7512,14 @@ function intimidationGap(
       target
     );
 
-  const actorHay =
-    characterLoreCorpus(actor);
-
-  const targetHay =
-    characterLoreCorpus(target);
-
   if (
-    /\bstudent\b|\btanítvány\b|\bpupil\b|\bdiák\b/.test(
-      actorHay
-    ) &&
-    /\bsensei\b|\bmaster\b|\bmester\b|\bteacher\b|\btanár\b/.test(
-      targetHay
+    isOwnSenseiRelationship(
+      w,
+      actorId,
+      targetId
     )
   ) {
-    gap += 12;
+    gap += 18;
   }
 
   return Math.round(gap);
@@ -7656,78 +7649,193 @@ function characterIsFlirty(c) {
   );
 }
 
-function ownStorySnippetAbout(
-  actor,
-  target
-) {
-  if (!actor || !target) return "";
+function regexEscapeLiteral(value) {
+  return String(value || "")
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-  const source = [
-    actor.backstory,
-    actor.extra,
-    actor.personality,
-    actor.goals,
-    actor.fears,
-    actor.secrets,
-    actor.likes,
-  ]
-    .filter(Boolean)
-    .join("\n");
+function canonTargetAliases(target) {
+  if (!target) return [];
 
-  if (!source) return "";
+  const full = String(target.name || "").trim();
+  const words = full.split(/\s+/).filter(Boolean);
 
-  const names = [
-    target.name,
+  return [
+    full,
     target.username,
     target.nick,
-    String(target.name || "")
-      .split(/\s+/)[0],
+    words[0],
+    words.length > 1 ? words[words.length - 1] : "",
   ]
-    .filter(
-      (v) =>
-        v &&
-        String(v).trim().length >= 3
-    )
-    .map(
-      (v) =>
-        String(v)
-          .trim()
-          .toLowerCase()
+    .map((value) => String(value || "").trim())
+    .filter((value) => value.length >= 3)
+    .filter((value, index, arr) =>
+      arr.findIndex((other) => other.toLowerCase() === value.toLowerCase()) === index
     );
+}
 
-  const lower =
-    source.toLowerCase();
+function canonTargetEvidence(actor, target, maxSnippets = 3) {
+  if (!actor || !target) return [];
 
-  let hit = -1;
+  /*
+   * IMPORTANT: hierarchy / shared-history facts can live anywhere on a sheet,
+   * not only in backstory. Read the whole self-canon and collect several
+   * independent mentions instead of trusting a single first hit.
+   */
+  const source = fullSelfCanon(actor);
+  if (!source) return [];
 
-  for (const name of names) {
-    const at =
-      lower.indexOf(name);
+  const aliases = canonTargetAliases(target);
+  if (!aliases.length) return [];
 
-    if (at >= 0) {
-      hit = at;
-      break;
+  const lower = source.toLowerCase();
+  const hits = [];
+
+  aliases.forEach((alias) => {
+    const needle = alias.toLowerCase();
+    let from = 0;
+
+    while (from < lower.length && hits.length < 12) {
+      const at = lower.indexOf(needle, from);
+      if (at < 0) break;
+      hits.push(at);
+      from = at + Math.max(needle.length, 1);
     }
+  });
+
+  hits.sort((a, b) => a - b);
+
+  const snippets = [];
+  for (const hit of hits) {
+    const start = Math.max(0, hit - 300);
+    const end = Math.min(source.length, hit + 620);
+    const snippet = source.slice(start, end).replace(/\s+/g, " ").trim();
+    if (!snippet) continue;
+
+    const normalized = snippet.toLowerCase();
+    if (snippets.some((old) => {
+      const a = old.toLowerCase();
+      return a.includes(normalized.slice(0, 180)) || normalized.includes(a.slice(0, 180));
+    })) {
+      continue;
+    }
+
+    snippets.push(snippet);
+    if (snippets.length >= maxSnippets) break;
   }
 
-  if (hit < 0) return "";
+  return snippets;
+}
 
-  const start =
-    Math.max(
-      0,
-      hit - 260
-    );
+function ownStorySnippetAbout(actor, target) {
+  return canonTargetEvidence(actor, target, 3)
+    .join(" | ")
+    .slice(0, 1800);
+}
 
-  const end =
-    Math.min(
-      source.length,
-      hit + 520
-    );
+function preferredTitleSurname(character) {
+  const name = String(character && character.name || "").trim();
+  if (!name) return "";
 
-  return source
-    .slice(start, end)
-    .replace(/\s+/g, " ")
-    .trim();
+  const words = name
+    .split(/\s+/)
+    .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}.'-]+$/gu, ""))
+    .filter(Boolean);
+
+  if (!words.length) return name;
+  return words[words.length - 1];
+}
+
+function characterIsSensei(character) {
+  const hay = characterLoreCorpus(character);
+  return /\bsensei\b|\bdojo\s+(?:master|instructor|owner|head)\b|\bkarate\s+(?:master|instructor|teacher)\b|\bmartial\s+arts\s+(?:master|instructor|teacher)\b|\bkarateoktat[oó]\b|\bdojo\s+vezet[oő]\b/.test(hay);
+}
+
+function canonSaysOwnSensei(actor, target) {
+  if (!actor || !target) return false;
+
+  const evidence = canonTargetEvidence(actor, target, 5).join(" ").toLowerCase();
+  if (!evidence) return false;
+
+  const aliases = canonTargetAliases(target)
+    .map((value) => regexEscapeLiteral(value.toLowerCase()));
+
+  if (!aliases.length) return false;
+
+  const alias = `(?:${aliases.join("|")})`;
+  const role = "(?:sensei|teacher|mentor|karate instructor|martial arts instructor|coach|master|tan[aá]r|mentor|edz[oő]|mester|senseie|sensei-je)";
+
+  const patterns = [
+    new RegExp(`(?:my|his|her|their|saj[aá]t|az \\w+)?\\s*${role}[^.!?]{0,100}${alias}`, "i"),
+    new RegExp(`${alias}[^.!?]{0,100}(?:is|was|became|remains|mint|a|az)?\\s*(?:my|his|her|their|saj[aá]t)?\\s*${role}`, "i"),
+    new RegExp(`(?:trained by|trains under|trained under|student of|pupil of|tan[ií]tv[aá]nya|alatta edz|n[aá]la edz|t[oő]le tanul)[^.!?]{0,100}${alias}`, "i"),
+    new RegExp(`${alias}[^.!?]{0,100}(?:trained|trains|teaches|mentors|edzi|tan[ií]tja)[^.!?]{0,70}(?:him|her|them|actor|student|tan[ií]tv[aá]ny)`, "i"),
+    new RegExp(`\\bsensei\\s+${alias}\\b`, "i"),
+  ];
+
+  return patterns.some((pattern) => pattern.test(evidence));
+}
+
+function isOwnSenseiRelationship(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || actorId === targetId) return false;
+
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target || !characterIsSensei(target)) return false;
+
+  const rel = getRel(w, actorId, targetId) || {};
+  const relationText = `${rel.bond || ""} ${rel.type || ""} ${rel.hidden || ""}`.toLowerCase();
+
+  if (/\b(?:my\s+)?sensei\b|\bteacher\b|\bmentor\b|\bkarate instructor\b|\bmartial arts instructor\b|\btan[aá]r\b|\bedz[oő]\b|\bmester\b/.test(relationText)) {
+    return true;
+  }
+
+  return canonSaysOwnSensei(actor, target);
+}
+
+function hierarchyBehaviorCard(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || actorId === targetId) return "";
+
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target) return "";
+
+  const targetSensei = characterIsSensei(target);
+  if (!targetSensei) return "";
+
+  const en = worldLanguage(w, w.meId) === "en";
+  const ownSensei = isOwnSenseiRelationship(w, actorId, targetId);
+  const actorSensei = characterIsSensei(actor);
+  const targetThreat = threatProfile(target);
+  const dangerousSensei =
+    targetThreat.danger >= 42 ||
+    targetThreat.combat >= 58 ||
+    targetThreat.authority >= 55;
+
+  const surname = preferredTitleSurname(target) || target.name;
+  const ownAddress = `Sensei ${surname}`;
+
+  if (ownSensei) {
+    return en
+      ? `HIERARCHY CANON — OWN SENSEI: ${target.name} is ${actor.name}'s own sensei/teacher according to ${actor.name}'s canon. Default direct address is "${ownAddress}", NOT the sensei's casual first name, unless the character sheet explicitly establishes another private form of address. Student/teacher hierarchy remains active even when they argue. ${dangerousSensei ? "This sensei is also dangerous/high-authority: do not turn the student into casually disrespectful, consequence-free trash talk. Fear, discipline, caution, ingrained respect or the cost of rebellion must register." : "Respect/deference should be recognizable without making the student robotic or blindly obedient."}`
+      : `HIERARCHIA-KÁNON — SAJÁT SENSEI: ${target.name} ${actor.name} saját senseie/tanára a karakterkánon szerint. Közvetlen megszólításban alapból „${ownAddress}”, NEM a sensei laza keresztneve, hacsak a karakterlap kifejezetten más privát megszólítást nem rögzít. A tanítvány–tanár hierarchia vita közben is aktív. ${dangerousSensei ? "Ez a sensei veszélyes/magas tekintélyű is: a tanítvány ne váltson következmény nélküli, laza tiszteletlenségbe. A félelem, fegyelem, óvatosság, berögzült tisztelet vagy a lázadás ára érződjön." : "A tisztelet legyen felismerhető anélkül, hogy a tanítvány robotikusan engedelmes lenne."}`;
+  }
+
+  if (actorSensei) {
+    return en
+      ? `SENSEI PEER RULE: ${target.name} is a sensei, but NOT ${actor.name}'s own sensei. ${actor.name} is also a sensei/peer authority, so they may challenge, disrespect or confront ${target.name} if their own canon and relationship justify it. Do NOT force "Sensei ${surname}" as a student-style address unless their canon explicitly uses that courtesy.`
+      : `SENSEI-KORTÁRS SZABÁLY: ${target.name} sensei, de NEM ${actor.name} saját senseie. ${actor.name} maga is sensei/tekintélyi kortárs, ezért a saját kánonja és kapcsolatuk alapján kihívhatja, konfrontálhatja vagy akár tiszteletlen is lehet vele. Ne erőltesd a tanítványi „Sensei ${surname}” megszólítást, hacsak a kánonjuk nem használja ezt udvariasságból.`;
+  }
+
+  if (dangerousSensei) {
+    return en
+      ? `DANGEROUS SENSEI — NOT YOUR SENSEI: ${target.name} is NOT ${actor.name}'s teacher, so ${actor.name} must NOT call them "Sensei ${surname}" merely because they hold that title. However, ${target.name}'s dangerous/high-authority status is real: non-sensei characters should not casually mouth off, mock or disrespect them without a strong canon/current reason. Use their normal name/surname/form of address while showing believable caution, guarded respect or awareness of consequences.`
+      : `VESZÉLYES SENSEI — NEM A SAJÁT SENSEI: ${target.name} NEM ${actor.name} tanára, ezért ${actor.name} ne hívja „Sensei ${surname}”-nek pusztán a cím miatt. Viszont ${target.name} veszélyes/magas tekintélyű státusza valós: nem-sensei karakter ne pofázzon, gúnyolódjon vagy legyen lazán tiszteletlen vele erős kánonbeli/jelenlegi ok nélkül. A normál nevét/vezetéknevét/megszólítását használja, miközben érződik az óvatosság, őrzött tisztelet vagy a következmények tudata.`;
+  }
+
+  return en
+    ? `TITLE BOUNDARY: ${target.name} is a sensei, but NOT ${actor.name}'s own sensei. Do NOT automatically call them "Sensei ${surname}". That title-as-address belongs to their own students unless explicit canon establishes a different courtesy relationship.`
+    : `CÍMHATÁR: ${target.name} sensei, de NEM ${actor.name} saját senseie. Ne hívd automatikusan „Sensei ${surname}”-nek. Ez a megszólítás alapból a saját tanítványaihoz tartozik, hacsak explicit kánon nem rögzít más udvariassági viszonyt.`;
 }
 
 function messageLooksLikeQuestion(value) {
@@ -8635,6 +8743,19 @@ function relationshipBehaviorCard(
     }
   }
 
+  const hierarchy =
+    hierarchyBehaviorCard(
+      w,
+      actorId,
+      targetId
+    );
+
+  if (hierarchy) {
+    parts.push(
+      hierarchy
+    );
+  }
+
   const intimidation =
     intimidationBehaviorCard(
       w,
@@ -8883,6 +9004,78 @@ function sanitizePhoneDm(
   return text;
 }
 
+
+const DM_COLD_DISMISSAL_RE =
+  /\b(?:stop|quit)\s+(?:texting|messaging|dm(?:ing)?)\b|\bdon['’]?t\s+(?:text|message|dm)\s+me\b|\bleave\s+me\s+alone\b|\bgo\s+away\b|\bget\s+lost\b|\bfuck\s+off\b|\bshut\s+up\b|\bne\s+[ií]rj(?:\s+nekem)?\b|\bhagyj\s+b[eé]k[eé]n\b|\bkopj\s+le\b|\bt[uű]nj\s+el\b/i;
+
+function messageLooksLikePositiveSocialReaction(value) {
+  const text = String(value || "").toLowerCase();
+  if (!text.trim()) return false;
+
+  return /\b(?:love\s+(?:it|this|that|the\s+(?:pic|photo|picture))|like\s+(?:it|this|that|the\s+(?:pic|photo|picture))|nice\s+(?:pic|photo|picture|post)|great\s+(?:pic|photo|picture|post)|beautiful|gorgeous|pretty|handsome|cute|adorable|amazing|stunning|hot|fire|looks?\s+(?:good|great|amazing)|proud\s+of\s+you|congrats?|well\s+done|thank\s+you|thanks)|(?:im[aá]dom|tetszik|sz[eé]p|gy[oö]ny[oö]r[uű]|cuki|aranyos|men[oő]|d[oö]g[oö]s|j[oó]\s+k[eé]p|nagyon\s+j[oó]\s+k[eé]p|j[oó]l\s+n[eé]zel\s+ki|b[uü]szke\s+vagyok\s+r[aá]d|gratul[aá]lok|k[oö]szi|k[oö]sz[oö]n[oö]m)\b/i.test(text);
+}
+
+function messageLooksLikeCurrentHostility(value) {
+  const text = String(value || "").toLowerCase();
+  return /\b(?:fuck\s+you|hate\s+you|idiot|moron|bitch|asshole|shut\s+up|i['’]?ll\s+(?:hurt|kill)|threat|leave\s+me\s+alone|stupid|rohadj|ut[aá]llak|idi[oó]ta|h[uü]lye|kurva|meg[oö]llek|kussolj|hagyj\s+b[eé]k[eé]n)\b/i.test(text);
+}
+
+function positiveDmContinuityInstruction(w, botId, playerText) {
+  if (!messageLooksLikePositiveSocialReaction(playerText)) return "";
+
+  const rel = getRel(w, botId, w.meId);
+  const tier = relationshipFilterTier(rel);
+  const en = worldLanguage(w, w.meId) === "en";
+
+  if (tier === "hostile" || tier === "negative" || messageLooksLikeCurrentHostility(playerText)) {
+    return "";
+  }
+
+  return en
+    ? `CURRENT SPEECH ACT = POSITIVE REACTION / COMPLIMENT. Respond like a person who actually heard the compliment. You may be smug, shy, teasing, suspicious, flirty, reserved or briefly appreciative according to your canon, but DO NOT invent a new boundary such as "stop texting", "don't message me", "leave me alone" or equivalent without a concrete current reason.`
+    : `A JELENLEGI BESZÉDAKTUS = POZITÍV REAKCIÓ / DICSÉRET. Úgy reagálj, mint aki tényleg hallotta a dicséretet. Lehetsz pökhendi, zavarban lévő, ugrató, gyanakvó, flörtös, zárkózott vagy röviden hálás a kánonod szerint, de NE találj ki új határhúzást („ne írj”, „hagyj békén”, „stop texting” stb.) konkrét jelenlegi ok nélkül.`;
+}
+
+function emergencyPositiveDmReply(w, botId) {
+  const c = charById(w, botId);
+  const en = worldLanguage(w, w.meId) === "en";
+
+  if (c && characterIsFlirty(c)) {
+    return en ? "Yeah? You liked it?" : "Ja? Tetszett?";
+  }
+
+  if (c && loreHas(c, ["arrogant", "cocky", "conceited", "magabiztos", "arrogáns", "öntelt"])) {
+    return en ? "I know." : "Tudom.";
+  }
+
+  if (c && loreHas(c, ["shy", "reserved", "quiet", "zárkózott", "félénk", "visszafogott"])) {
+    return en ? "...thanks." : "...köszi.";
+  }
+
+  return en ? "Thanks." : "Köszi.";
+}
+
+function sanitizeUnjustifiedColdDm(w, botId, playerText, value) {
+  let text = String(value || "").trim();
+  if (!text || !DM_COLD_DISMISSAL_RE.test(text)) return text;
+
+  const positive = messageLooksLikePositiveSocialReaction(playerText);
+  if (!positive || messageLooksLikeCurrentHostility(playerText)) return text;
+
+  const rel = getRel(w, botId, w.meId);
+  const tier = relationshipFilterTier(rel);
+  if (tier === "hostile" || tier === "negative") return text;
+
+  const pieces = text
+    .split(/(?<=[.!?])\s+|\n+/g)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !DM_COLD_DISMISSAL_RE.test(part));
+
+  const cleaned = pieces.join(" ").trim();
+  return cleaned || emergencyPositiveDmReply(w, botId);
+}
+
 function dmPresenceGuardInstruction(
   w,
   botId,
@@ -9102,7 +9295,11 @@ KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
 - FONTOS TUDÁSHATÁR: attól, hogy TE mint engine látod minden karakter teljes adatlapját, az egyik SZEREPLŐ nem tudhat automatikusan a másik titkairól, félelmeiről, belső céljairól vagy rejtett múltjáról. Egy karakter csak azt használhatja tudásként másokról, amit nyilvánosan láthatott, személyesen megtudott, átélt, neki elmondtak, vagy saját emléke/feltételezése alátámaszt.
 - Saját magáról viszont minden karakter teljes adatlapja aktív kánon.
 - A karakterlap TELJES tartalma viselkedési specifikáció, nem háttérdísz.
+- KÁNON-KERESZTHIVATKOZÁS: ugyanaz a kapcsolat/rang/szerep több mezőben is szerepelhet. Ha a történet, extra infó, rang, szervezet, kapcsolat vagy más adatlapmező ugyanazt a tényt erősíti (pl. valaki a karakter SAJÁT senseie), azt erős kánonként kezeld, ne hagyd elveszni egyetlen mezőben.
+- HIERARCHIA ÉS MEGSZÓLÍTÁS: címeket személyes kapcsolathoz kösd, ne puszta foglalkozáshoz. A karakter a SAJÁT senseiét alapból „Sensei + vezetéknév” formában szólítsa (pl. Sensei Silver), ne lazán a keresztnevén, hacsak a saját kánonjuk más megszólítást nem rögzít. Más ember senseiét NEM hívja automatikusan senseinek. Egy veszélyes/magas tekintélyű senseivel nem-sensei karakter ne legyen ok nélkül lazán tiszteletlen; más sensei mint tekintélyi kortárs viszont a saját kánonja alapján nyíltan kihívhatja vagy tiszteletlen lehet vele.
 - Minden generálás előtt egyeztesd a választ a személyiséggel, tulajdonságokkal, beszédstílussal, teljes történettel, titkokkal, félelmekkel, célokkal, kedvencekkel, képességekkel, szervezettel, ranggal, kapcsolatokkal és aktuális emlékekkel.
+- EMBERI BESZÉLGETÉSI FOLYTONOSSÁG: előbb értsd meg a másik beszédaktusát (dicséret, kérdés, vicc, meghívás, bocsánatkérés, provokáció, flört, támogatás), és ARRA reagálj. A domináns/szarkasztikus/sötét karakter sem random válaszgép: egy dicséretre lehet pökhendi, zavart, gyanakvó, játékos vagy röviden hálás, de ne gyártson a semmiből „stop texting / leave me alone” határhúzást.
+- A „bunkó”, „szarkasztikus”, „hideg”, „domináns” vagy „veszélyes” tulajdonság NEM univerzális engedély minden interakció ellenségessé tételére. A reakciónak mindig legyen oka a személyiség + kapcsolat + friss kontextus metszetében.
 - Ha egy mondatot több szereplő is ugyanúgy mondhatna, az NEM elég karakterhű: írd újra úgy, hogy felismerhető legyen, ki mondta.
 - A karakter hibái, sötét oldala, makacssága, humora, intelligenciája, agressziója, félelmei, dominanciája, manipulativitása, lojalitása vagy érzelmi zártsága ne kopjon ki idővel.
 - KAPCSOLATI ALAPHANG — NEM RANDOM: a kapcsolat score/bond/mood valódi viselkedési korlát. Ha két ember jóban van, barát, közeli barát, családtag vagy partner, NE generálj közöttük a semmiből bunkóságot, sértegetést, lenézést, hideg lepattintást vagy ellenségességet csak azért, hogy legyen dráma/változatosság. Negatív reakcióhoz legyen konkrét aktuális ok, korábbi sérelem vagy a karakter SAJÁT adatlapján szereplő olyan tulajdonság, ami ezt ténylegesen indokolja.
@@ -9157,7 +9354,7 @@ SOROZAT-/FRAKCIÓKÁNON FELISMERÉSE
 
 KOMMUNIKÁCIÓS FORMÁTUM
 
-- PRIVÁT CHAT / DM: valódi telefonos üzenetváltásnak hasson. Általában rövid legyen; gyakran 1–4 rövid mondat vagy üzenetrész, de akár egyetlen szó, néhány szó vagy töredékes reakció is teljesen természetes. Ne írj esszét, monológot, narrációt vagy regényszerű bekezdéseket normál chatben.
+- PRIVÁT CHAT / DM: valódi social-media privát üzenetváltásnak hasson. Általában rövid legyen; gyakran 1–4 rövid mondat vagy üzenetrész, de akár egyetlen szó, néhány szó vagy töredékes reakció is teljesen természetes. Ne írj esszét, monológot, narrációt vagy regényszerű bekezdéseket normál chatben.
 
 - GROUP CHAT: gyors, közvetlen, spontán csevegésnek hasson. A szereplők reagáljanak egymásra, félbeszakíthatják egymást, visszakérdezhetnek, beszólhatnak, viccelődhetnek vagy nagyon röviden reagálhatnak. Ne mindenki külön monológot mondjon. Egy üzenet gyakran csak néhány szó vagy egy rövid mondat.
 
@@ -9345,7 +9542,11 @@ FILTER EXAMPLE: a sarcastic character can still be sharp with a best friend, but
 
 CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - Treat the ENTIRE character sheet as active behavioral canon, not decorative background.
+- CROSS-REFERENCE CANON ACROSS FIELDS: the same relationship, rank or role may appear in history, extra info, organizations, relationships, rank or other fields. Repeated/consistent evidence is strong canon. Do not lose a fact just because it is not stored in one preferred field.
+- HIERARCHY AND ADDRESS ARE RELATIONSHIP-SPECIFIC: if someone is THIS character's own sensei, default direct address is "Sensei + surname" (for example, Sensei Silver), not the sensei's casual first name, unless explicit canon establishes another private address. Do NOT automatically call somebody else's sensei "Sensei". A dangerous/high-authority sensei should not receive casual consequence-free disrespect from non-sensei characters without strong canon/current cause; another sensei is a peer authority and may challenge or disrespect them if canon supports it.
 - Reconcile every response with personality, traits, speech style, full history, secrets, fears, goals, likes, abilities, organization, rank, relationships and current memories.
+- HUMAN CONVERSATIONAL CONTINUITY: identify what the other person just did socially — compliment, question, joke, invitation, apology, provocation, flirting, support — and respond to THAT act. A dark, dominant, sarcastic or rude character may react smugly, awkwardly, teasingly, suspiciously or tersely to praise, but must not manufacture a random "stop texting / leave me alone" boundary with no current reason.
+- "Cold", "rude", "sarcastic", "dominant" or "dangerous" is not a universal license for hostility in every exchange. The reaction must come from personality + relationship + current context together.
 - If a line could be moved unchanged to several other characters, it is not character-specific enough.
 - Do not sand down obsessive, possessive, cruel, arrogant, manipulative, chaotic, shy, jealous, dominant or emotionally closed characters into generic assistant politeness.
 - RELATIONSHIP BASELINE IS NOT RANDOM: score/bond/mood are behavioral constraints. Friends, close friends, family, partners and strongly positive relationships must not suddenly become insulting, contemptuous, cold, dismissive or hostile merely to create variety or drama.
@@ -9371,7 +9572,7 @@ QUESTION ANSWERING:
 
 COMMUNICATION FORMAT
 
-- PRIVATE CHAT / DM: write like real people texting on their phones. Keep it generally short. Often 1–4 short sentences or message fragments are enough, but a single word, a few words or an incomplete reaction can also feel completely natural. Do not turn ordinary chat into an essay, monologue, narrated scene or novel-like paragraph.
+- PRIVATE CHAT / DM: write like real people using private messages on a social-media app. Keep it generally short. Often 1–4 short sentences or message fragments are enough, but a single word, a few words or an incomplete reaction can also feel completely natural. Do not turn ordinary chat into an essay, monologue, narrated scene or novel-like paragraph.
 
 - GROUP CHAT: keep messages quick, direct, spontaneous and conversational. Characters should react to each other, interrupt, ask follow-up questions, joke, tease, argue or give very short reactions instead of each delivering a separate speech. A message may often be only a few words or one short sentence.
 
@@ -9386,6 +9587,7 @@ COMMUNICATION FORMAT
 SOCIAL-MEDIA IMMERSION — HARD RULE:
 - The feed, DMs, group chats, comments, posts and Notes are the communication medium. Do NOT treat the player character as physically staring at a phone all day merely because the game interface is social-media based.
 - Outside dedicated ROLEPLAY / SCENE, never tell the player to “put your phone down”, “stop scrolling”, “get off the app”, “quit staring at your phone/screen”, “touch grass”, or close paraphrases merely because they are using the social interface.
+- A DM being a DM is NOT by itself a reason to say “stop texting me”, “don’t message me”, “leave me alone” or similar. Such a boundary needs an actual relationship/current-context reason.
 - Using the app/device is NOT by itself an in-world event, flaw, addiction or reason for another character to nag them.
 - Physical comments about someone looking at their phone are allowed only inside a dedicated ROLEPLAY / SCENE when the scene actually establishes that visible behavior and the speaking character has a concrete reason to react to it.
 
@@ -9823,6 +10025,16 @@ async function requestAiImageProxy(payload) {
       lastErr.status = 404;
     } catch (err) {
       lastErr = err;
+
+      /*
+       * A real backend/image-provider error is authoritative. Do NOT fan the
+       * same expensive image request out to every alias, because that can
+       * multiply rate limits and costs. Only 404/network discovery failures
+       * are allowed to fall through to the next candidate URL.
+       */
+      if (err && Number(err.status) && Number(err.status) !== 404) {
+        throw err;
+      }
     }
   }
 
@@ -10013,8 +10225,11 @@ Rules:
 - phone snapshot / snap style
 - believable, grounded, social-media-realistic
 - no watermark, no text overlay, no collage
-- the sender must look like the SAME person as in their profile/album references
-- keep face shape, hair color/style, skin tone, age vibe and overall identity consistent
+- the sender must be recognizably the SAME fictional character/person as in the supplied profile + album reference images
+- treat the FIRST reference as the primary face/identity anchor and the remaining album references as secondary identity evidence
+- preserve facial structure, eye shape, eyebrows, nose, lips, skin tone, hair identity, age vibe and stable distinguishing features
+- create a NEW photograph: do not copy the exact pose, background, composition or outfit from a reference unless the chat request specifically asks for it
+- only one version of the character; no collage, no reference-image montage, no duplicate person
 - keep the person and scene consistent with the requested character and moment
 - if the prompt implies a party, coffee, mirror selfie, street, room, gym or similar, show that naturally.`;
 
@@ -10032,12 +10247,11 @@ Rules:
     text: basePrompt,
     size: "1024x1024",
     image_size: "1024x1024",
-    quality: "low",
+    quality: "medium",
     output_format: "jpeg",
     response_format: "b64_json",
     background: "auto",
     referenceImages,
-    reference_images: referenceImages,
   };
 
   const result = await requestAiImageProxy(payload);
@@ -11187,7 +11401,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v32-high-autonomy-initiative";
+const BUILD_VERSION = "v33-canon-hierarchy-gossip-selfies";
 
 const AUTO = "masvilag:auto";
 /*
@@ -24943,6 +25157,12 @@ ${chatQuestionInstruction(
   false
 )}
 
+${positiveDmContinuityInstruction(
+  requestWorld,
+  c.id,
+  t
+)}
+
 ${voiceCard(c)}
 
 ${repetitionGuard(
@@ -25002,7 +25222,7 @@ PRIVÁT CHAT SZABÁLYOK:
 - Most KÖZVETLENÜL a játékos legutóbbi üzenetére válaszolj.
 - Már egyetlen játékosi üzenet is elegendő ahhoz, hogy válaszolj.
 - Soha ne várj arra, hogy a játékos még egy üzenetet küldjön.
-- Ez telefonos privát chat, nem roleplay-jelenet.
+- Ez social-media privát DM, nem roleplay-jelenet. A felületet vagy a „textinget” ne tedd a beszélgetés tárgyává önmagában.
 - A válasz lehet egyetlen szó, félmondat, rövid mondat vagy néhány rövid üzenetszerű mondat.
 - Ne írj fölöslegesen hosszú monológot.
 - Ne narrálj cselekvéseket.
@@ -25079,7 +25299,10 @@ Formátum:
 
     const generatedAiSnap =
       generatedRequestPrompt &&
-      !requestedReplyText
+      (
+        !requestedReplyText ||
+        explicitImageRequest
+      )
         ? await generateAiChatSnap(
             c,
             generatedRequestPrompt,
@@ -25120,6 +25343,26 @@ Formátum:
         reply,
         hist
       );
+
+    reply =
+      sanitizeUnjustifiedColdDm(
+        requestWorld,
+        c.id,
+        t,
+        reply
+      );
+
+    if (
+      explicitImageRequest &&
+      !aiImageRef
+    ) {
+      throw new Error(
+        tt(
+          "A karakter nem tudott referenciaképes AI-selfiet készíteni. Ellenőrizd az /ai/image backend image-edit útvonalat és az OPENAI_API_KEY-t.",
+          "The character could not create a reference-guided AI selfie. Check the /ai/image image-edit backend route and OPENAI_API_KEY."
+        )
+      );
+    }
 
     if (!reply && !aiImageRef) {
       throw new Error(
@@ -25291,7 +25534,8 @@ Formátum:
      */
     if (
       requestedReplyText &&
-      generatedRequestPrompt
+      generatedRequestPrompt &&
+      !explicitImageRequest
     ) {
       void generateAiChatSnap(
         c,
@@ -28570,8 +28814,8 @@ function gossipEventBaseScore(
 
 function gossipEventThreshold(mode) {
   return mode === "global"
-    ? 62
-    : 60;
+    ? 58
+    : 36;
 }
 
 function spillAndChillJuicyEnough(event, score) {
@@ -28592,13 +28836,13 @@ function spillAndChillJuicyEnough(event, score) {
     );
 
   return Boolean(
-    score >= 72 ||
+    score >= 58 ||
     inherentlyJuicy ||
-    importance >= 48 ||
-    drama >= 35 ||
-    romance >= 38 ||
-    embarrassment >= 38 ||
-    (roleplayGossipEligible(event) && (drama + romance + embarrassment) >= 42)
+    importance >= 28 ||
+    drama >= 26 ||
+    romance >= 28 ||
+    embarrassment >= 28 ||
+    (roleplayGossipEligible(event) && (drama + romance + embarrassment) >= 30)
   );
 }
 
@@ -28975,18 +29219,18 @@ function gossipPublishCooldownMs(w) {
     "normal";
 
   if (frequency === "low") {
-    return 90 * 60000;
+    return 25 * 60000;
   }
 
   if (frequency === "high") {
-    return 8 * 60000;
+    return 4 * 60000;
   }
 
   if (frequency === "chaotic") {
-    return 3 * 60000;
+    return 2 * 60000;
   }
 
-  return 18 * 60000;
+  return 8 * 60000;
 }
 
 function gossipPublishChance(w) {
@@ -35555,14 +35799,33 @@ function planAutoAction(view) {
   }
 
   /*
-   * FEED PRIORITÁS — gyakori autonóm posztok.
-   *
-   * A játékos kommentjeire/válaszaira továbbra is azonnal reagálunk,
-   * de utána a világ nagy eséllyel új posztot készít, mielőtt
-   * karbantartási vagy ritkább social akcióra váltana.
+   * GOSSIP WATCHDOG — ha van publikálható, friss Story Selector-jelölt,
+   * ne hagyjuk, hogy az újabb feed-posztok folyamatosan kiéheztessék.
+   * A gossipAutoCandidate már ellenőrzi a felhasználó gossip módját
+   * és a cooldown végét, ezért egy valóban esedékes jelölt publikálható.
+   */
+  const dueGossipCandidate =
+    gossipAutoCandidate(
+      view
+    );
+
+  if (dueGossipCandidate) {
+    return mkAction(
+      "gossip-story",
+      `gossip-watchdog:${dueGossipCandidate.mode}:${dueGossipCandidate.primaryEventId}`,
+      {
+        candidate:
+          dueGossipCandidate,
+      },
+      "event"
+    );
+  }
+
+  /*
+   * FEED PRIORITÁS — gyakori autonóm posztok, de nem a gossip rovására.
    */
   if (
-    Math.random() < 0.22
+    Math.random() < 0.16
   ) {
     return mkAction(
       "world",
@@ -35610,27 +35873,7 @@ function planAutoAction(view) {
    * Első publikációnál nincs cooldown; utána a beállított
    * gossip frequency szabályozza, milyen sűrűn posztolhat.
    */
-  const gossipCandidate =
-    gossipAutoCandidate(
-      view
-    );
-
-  if (
-    gossipCandidate &&
-    Math.random() <
-      gossipPublishChance(
-        view
-      )
-  ) {
-    return mkAction(
-      "gossip-story",
-      `gossip-story:${gossipCandidate.mode}:${gossipCandidate.primaryEventId}`,
-      {
-        candidate:
-          gossipCandidate,
-      }
-    );
-  }
+  /* Gossip publication is handled by the watchdog above. */
 
   /*
    * 5. GOSSIP REAKCIÓK
