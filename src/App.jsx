@@ -7806,8 +7806,69 @@ function preferredTitleSurname(character) {
 }
 
 function characterIsSensei(character) {
-  const hay = characterLoreCorpus(character);
-  return /\bsensei\b|\bdojo\s+(?:master|instructor|owner|head)\b|\bkarate\s+(?:master|instructor|teacher)\b|\bmartial\s+arts\s+(?:master|instructor|teacher)\b|\bkarateoktat[oó]\b|\bdojo\s+vezet[oő]\b/.test(hay);
+  if (!character) return false;
+
+  /*
+   * IMPORTANT: "sensei" appearing anywhere in somebody's biography does NOT
+   * make that person a sensei. A student sheet naturally contains lines such
+   * as "Sensei Silver trained her" or "her sensei is ...". v35 used the full
+   * lore corpus here, which could therefore promote a student/player into a
+   * sensei simply because their own teacher was mentioned in backstory.
+   *
+   * First trust fields that describe the character's OWN job/rank/role. Only
+   * then accept prose when it explicitly predicates the title of the character
+   * themselves. References to "my/her/his/their sensei" or "Sensei <other>"
+   * are deliberately not enough.
+   */
+  const explicitSelfRole = [
+    character.job,
+    character.rank,
+    character.role,
+    character.brief,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+
+  if (
+    /\bsensei\b|\bdojo\s+(?:master|instructor|owner|head)\b|\bkarate\s+(?:master|instructor|teacher)\b|\bmartial\s+arts\s+(?:master|instructor|teacher)\b|\bkarateoktat[oó]\b|\bdojo\s+vezet[oő]\b/.test(
+      explicitSelfRole
+    )
+  ) {
+    return true;
+  }
+
+  const prose = [
+    character.bio,
+    character.backstory,
+    character.extra,
+    character.skills,
+    character.abilities,
+    character.combat,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+
+  if (!prose) return false;
+
+  const aliases = canonTargetAliases(character)
+    .map((value) => regexEscapeLiteral(String(value).toLowerCase()))
+    .filter(Boolean);
+
+  const subject = aliases.length
+    ? `(?:${aliases.join("|")}|he|she|they|i|the character)`
+    : "(?:he|she|they|i|the character)";
+
+  const selfSenseiPatterns = [
+    new RegExp(`\b${subject}\s+(?:is|was|became|remains|works\s+as|serves\s+as|acts\s+as|is\s+known\s+as)\s+(?:an?\s+|the\s+)?sensei\b`, "i"),
+    new RegExp(`\b${subject}\s+(?:is|was|became|remains)\s+(?:an?\s+|the\s+)?(?:dojo|karate|martial\s+arts)\s+(?:master|instructor|teacher|head)\b`, "i"),
+    new RegExp(`\b${subject}\s+(?:egy\s+|a\s+|az\s+)?sensei\b`, "i"),
+    new RegExp(`\b${subject}\s+(?:karateoktat[oó]|dojo\s+vezet[oő]|mester)\b`, "i"),
+  ];
+
+  return selfSenseiPatterns.some((pattern) => pattern.test(prose));
 }
 
 function canonSaysOwnSensei(actor, target) {
@@ -7860,9 +7921,15 @@ function hierarchyBehaviorCard(w, actorId, targetId) {
   if (!actor || !target) return "";
 
   const targetSensei = characterIsSensei(target);
-  if (!targetSensei) return "";
-
   const en = worldLanguage(w, w.meId) === "en";
+
+  if (!targetSensei) {
+    const surname = preferredTitleSurname(target) || target.name;
+    return en
+      ? `TITLE FACT: ${target.name} is NOT a sensei. Do NOT address them as "Sensei ${surname}" or give them a sensei/teacher title merely because their biography mentions a sensei, teacher or dojo. Use the form of address supported by their actual relationship.`
+      : `CÍMTÉNY: ${target.name} NEM sensei. Ne szólítsd „Sensei ${surname}”-nek, és ne adj neki sensei/tanári címet csak azért, mert a történetében szerepel sensei, tanár vagy dojo. A tényleges kapcsolatuknak megfelelő megszólítást használd.`;
+  }
+
   const ownSensei = isOwnSenseiRelationship(w, actorId, targetId);
   const actorSensei = characterIsSensei(actor);
   const targetThreat = threatProfile(target);
@@ -9004,6 +9071,49 @@ function dmHasEstablishedPhysicalContext(
   );
 }
 
+function sanitizeIncorrectSenseiAddress(
+  w,
+  actorId,
+  targetId,
+  value
+) {
+  let text = String(value || "");
+  if (!text || !w || !actorId || !targetId || actorId === targetId) return text;
+
+  const target = charById(w, targetId);
+  if (!target) return text;
+
+  /*
+   * A title is relationship-specific. Even a real sensei should only receive
+   * the student-style "Sensei + surname" from this actor when that actor is
+   * actually their student (or explicit canon establishes that courtesy).
+   * Most importantly, a non-sensei can never acquire the title just because
+   * their sheet mentions somebody else's sensei.
+   */
+  if (isOwnSenseiRelationship(w, actorId, targetId)) return text;
+
+  const fullName = String(target.name || "").trim();
+  const words = fullName.split(/\s+/).filter(Boolean);
+  const firstName = words[0] || fullName;
+  const surname = preferredTitleSurname(target);
+  const replacement = String(target.nick || firstName || fullName || "").trim();
+
+  const targetNameParts = [fullName, firstName, surname, target.username, target.nick]
+    .map((x) => String(x || "").trim())
+    .filter((x) => x.length >= 2)
+    .filter((x, i, arr) => arr.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i);
+
+  for (const name of targetNameParts) {
+    const escaped = regexEscapeLiteral(name);
+    text = text.replace(
+      new RegExp(`\bSensei\s+${escaped}\b`, "gi"),
+      replacement || name
+    );
+  }
+
+  return text;
+}
+
 function sanitizePhoneDm(
   w,
   botId,
@@ -9025,6 +9135,14 @@ function sanitizePhoneDm(
   if (!text) return "";
 
   text = sanitizeSocialUiMetaText(text);
+  if (!text) return "";
+
+  text = sanitizeIncorrectSenseiAddress(
+    w,
+    botId,
+    w && w.meId,
+    text
+  );
   if (!text) return "";
 
   if (
@@ -11601,7 +11719,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v35-production-api-reference-selfies";
+const BUILD_VERSION = "v36-relationship-title-boundaries";
 
 const AUTO = "masvilag:auto";
 /*
