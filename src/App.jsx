@@ -2619,6 +2619,20 @@ function defaultCharacterMemory() {
      */
     emotionalAnchors: [],
     personalMilestones: [],
+
+    /*
+     * DYNAMIC SELF-STATE
+     *
+     * A karakter saját, futás közben változó állapota. Nem helyettesíti a
+     * karakterlapot: a canon marad az identitás, ez csak azt tartja életben,
+     * hogy MOST milyen állapotban van és milyen ügyeket visz tovább.
+     */
+    selfState: {
+      mood: "",
+      intent: "",
+      openLoops: [],
+      updatedAt: 0,
+    },
   };
 }
 
@@ -2659,6 +2673,13 @@ function ensureCharMemory(w, observerId) {
   const base = defaultCharacterMemory();
   Object.keys(base).forEach((k) => { if (!mem[k]) mem[k] = Array.isArray(base[k]) ? [] : {}; });
   if (!mem.knownCharacters || typeof mem.knownCharacters !== "object") mem.knownCharacters = {};
+  if (!mem.selfState || typeof mem.selfState !== "object" || Array.isArray(mem.selfState)) {
+    mem.selfState = { mood: "", intent: "", openLoops: [], updatedAt: 0 };
+  }
+  if (typeof mem.selfState.mood !== "string") mem.selfState.mood = "";
+  if (typeof mem.selfState.intent !== "string") mem.selfState.intent = "";
+  if (!Array.isArray(mem.selfState.openLoops)) mem.selfState.openLoops = [];
+  if (!Number.isFinite(Number(mem.selfState.updatedAt))) mem.selfState.updatedAt = 0;
   return mem;
 }
 
@@ -2716,6 +2737,30 @@ function safeAiEvents(out) {
 function safeAiMemories(out) {
   return safeAiArray(out, "memories")
     .filter((m) => m && typeof m === "object");
+}
+
+function safeAiSelfUpdates(out) {
+  return safeAiArray(out, "selfUpdates")
+    .filter((row) => row && typeof row === "object");
+}
+
+function applySelfUpdates(w, out) {
+  if (!w) return;
+  safeAiSelfUpdates(out).slice(0, 12).forEach((row) => {
+    const id = findChar(w, row.id !== undefined ? row.id : row.name);
+    if (!id || isHuman(w, id)) return;
+    const mem = ensureCharMemory(w, id);
+    const prev = mem.selfState || { mood: "", intent: "", openLoops: [], updatedAt: 0 };
+    const loops = Array.isArray(row.openLoops)
+      ? row.openLoops.map((x) => normalizeMemoryText(x)).filter(Boolean).slice(-8)
+      : (prev.openLoops || []);
+    mem.selfState = {
+      mood: row.mood !== undefined ? String(row.mood || "").slice(0, 180) : String(prev.mood || ""),
+      intent: row.intent !== undefined ? String(row.intent || "").slice(0, 220) : String(prev.intent || ""),
+      openLoops: loops,
+      updatedAt: now(),
+    };
+  });
 }
 
 function sanitizeWorldPosts(w) {
@@ -5823,6 +5868,14 @@ function selfMemoryForPrompt(w, id) {
     bits.push(`megtanult titkok: ${(mem.learnedSecrets || []).slice(-6).map(memoryToLine).join(" | ")}`);
   }
 
+  if (mem.selfState && (mem.selfState.mood || mem.selfState.intent || (mem.selfState.openLoops || []).length)) {
+    const stateBits = [];
+    if (mem.selfState.mood) stateBits.push(`mostani belső állapot: ${mem.selfState.mood}`);
+    if (mem.selfState.intent) stateBits.push(`mostani szándék: ${mem.selfState.intent}`);
+    if ((mem.selfState.openLoops || []).length) stateBits.push(`nyitott ügyek/tervek: ${(mem.selfState.openLoops || []).slice(-6).join(" | ")}`);
+    bits.push(stateBits.join(" ; "));
+  }
+
   return bits.join("\n") || "semmi különös";
 }
 
@@ -5842,17 +5895,61 @@ ${spread(memory, 2600)}
 --- eddig az emlékezet ---`;
 }
 
+/*
+ * STRONG TRAIT AMPLIFIER
+ *
+ * Nem talál ki új tulajdonságot. Csak azt akadályozza meg, hogy a karakterlap
+ * legerősebb, explicit vonásai néhány kör után generikus AI-kedvességgé
+ * laposodjanak.
+ */
+function characterIntensityDirective(c) {
+  if (!c) return "";
+  const lore = [
+    c.personality, c.traits, c.speech, c.goals, c.fears,
+    c.secrets, c.backstory, c.extra, c.brief
+  ].filter(Boolean).join(" ").toLowerCase();
+  if (!lore) return "";
+
+  const rows = [];
+  if (/jealous|jealousy|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(lore)) {
+    rows.push("FÉLTÉKENYSÉG / BIRTOKLÁS MAGVONÁS: ha ezt a kánon explicit megadja, ne kezeld enyhe opcionális fűszerként. Releváns társas triggerre erősen reagáljon: rivális figyelem, flört, érintés, kizárás, bizonytalanság vagy elvesztéstől való félelem ténylegesen mozgassa a figyelmét, hangját és döntéseit. A megnyilvánulás változzon: lehet célzás, kontrolligény, túlzott figyelem, ingerültség, birtokló humor, konfrontáció vagy hideg visszahúzódás — pontosan a saját személyisége szerint.");
+  }
+  if (/psychopath|psychopathic|psycho|pszichopat|szadist|sadist|unhinged|kegyetlen|cruel|remorseless|könyörtelen|volatile|kiszámíthatatlan/.test(lore)) {
+    rows.push("SÖTÉT / PSYCHO MAGVONÁS: ha ez explicit kánon, legyen ténylegesen érezhető. Ne normalizáld empatikus, udvarias, konfliktuskerülő átlagemberré. A saját kánonja szerint lehet hidegen kegyetlen, nyugtalanítóan nyugodt, manipulatív, játékosan fenyegető, impulzív, szadista vagy hirtelen eszkaláló. Ne legyen karikatúra és ne legyen minden pillanatban őrjöngő; attól hiteles, hogy a veszélyesség a döntéseiben is megmarad.");
+  }
+  if (/manipulat|manipulál|calculating|számító|deceit|hazug|schem|intrig/.test(lore)) {
+    rows.push("MANIPULATÍV MAGVONÁS: ne csak mondd, hogy manipulatív — a céljaiért használjon időzítést, információt, kétértelműséget, társas nyomást, charmot vagy stratégiai hallgatást, amikor ez illik hozzá.");
+  }
+  if (/aggress|agres|violent|erőszak|hot.?headed|forrófej|dominant|domináns|intimidat|megféleml/.test(lore)) {
+    rows.push("AGRESSZIÓ / DOMINANCIA MAGVONÁS: konfliktusnál ne mindig hátráljon vagy racionalizáljon. Ha a helyzet és erőviszony indokolja, ő maga is kezdeményezhet konfrontációt, nyomást vagy eszkalációt a saját stílusában.");
+  }
+  if (/shy|félénk|timid|visszahúzód|reserved|zárkózott|emotionally closed|érzelmileg zárt/.test(lore)) {
+    rows.push("VISSZAFOGOTTSÁG MAGVONÁS: az erős érzelem nem változtathatja automatikusan beszédessé vagy vallomásossá. A feszültség inkább kerülésben, rövidségben, testbeszédben, késleltetett válaszban vagy apró gesztusban szivárogjon ki.");
+  }
+  if (/flirt|flört|charming|elbűvölő|seduct|csábít/.test(lore)) {
+    rows.push("FLÖRT / CHARM MAGVONÁS: megfelelő célpontnál és helyzetben ténylegesen használja. Ne lapítsd általános kedvességgé; a saját stílusában kezdeményezhet, tesztelhet, ugratással közeledhet vagy direkt lehet.");
+  }
+  if (!rows.length) return "";
+  return `KARAKTERINTENZITÁS — KÖTELEZŐ FOLYTONOSSÁG:
+- ${rows.join("\n- ")}`;
+}
+
 /* A hang közvetlenül a feladat elé — így nem sikkad el a sok szöveg végén. */
 function voiceCard(c) {
   const bits = [];
 
   const selfCanon = fullSelfCanon(c);
+  const intensityDirective = characterIntensityDirective(c);
 
   if (selfCanon) {
     bits.push(
       `TELJES SAJÁT KÁNON — EZEK NEM OPCIONÁLIS HÁTTÉRADATOK. Minden rólad szóló explicit tényből indulj ki, és a személyiségedet 100%-osan következetesen add át:
 ${selfCanon}`
     );
+  }
+
+  if (intensityDirective) {
+    bits.push(intensityDirective);
   }
 
   if (c.gender) {
@@ -6356,10 +6453,12 @@ function commentVariationCard(w, cast, post) {
 
     const lenses = commentReactionLenses(w, c, targetId, post);
     const memory = commentTargetMemoryCard(w, c, targetId);
+    const publicMask = commentPublicBehaviorCard(w, c, targetId);
 
     return `
 [${c.id}] ${String(c.name || c.id).toUpperCase()}
 - FRISS REAKCIÓIRÁNYOK EHHEZ A POSZTHOZ: ${lenses.join(" ; ") || "react naturally from canon"}
+- NYILVÁNOS VISELKEDÉSI SZŰRŐ: ${spread(publicMask, 800)}
 - CÉLZOTT KÖZÖS EMLÉK/KONTEXTUS: ${spread(memory, 700)}
 - KORÁBBI FEED-KOMMENTJEI — EZEKET ÉS KÖZELI PARAFRÁZISUKAT MOST TILOS ÚJRAHASZNÁLNI: ${avoid}`;
   }).filter(Boolean);
@@ -6373,7 +6472,113 @@ KARAKTERENKÉNTI KOMMENT-MEMÓRIA ÉS FRISS REAKCIÓIRÁNY:
 - A reakcióirány NEM kész mondat és nem kötelező sablon. Válassz belőle olyan nézőpontot, ami a konkrét poszthoz természetesen illik.
 - Ugyanaz a karakter ne mindig ugyanazon az érzelmi csatornán kommenteljen: egy best friend lehet egyszer belsős poénos, máskor védelmező, máskor száraz, máskor csak egy rövid kérdést dob be — mindezt ugyanazon személyiségen belül.
 - A közös emléket csak akkor utald vissza, ha tényleg releváns; NE erőltesd minden kommentbe.
+- A KAPCSOLAT SZŰRŐ, NEM KÖTELEZŐ TÉMA. A best friend nem mindig belsős poénnal, a crush nem mindig flörttel, a rivális nem mindig támadással reagál. Az aktuális poszt aktiválja azt az oldalt, ami most hiteles.
+- A nyilvános viselkedési szűrő fontos: különítsd el, mit érez valójában attól, mit vállal fel kommentben mások előtt.
 ${rows.join("\n")}`;
+}
+
+
+/* -------------------------------------------------------------------------
+   PUBLIC COMMENT REALISM
+
+   A character's public comment is not identical to their private inner state.
+   Relationship and personality decide what leaks out, what stays hidden, and
+   whether they comment at all. This keeps comments human instead of turning
+   every crush into public flirting or every rival into a compulsory attack.
+   ------------------------------------------------------------------------- */
+function commentPublicBehaviorCard(w, c, targetId) {
+  if (!w || !c || !c.id || !targetId) return "";
+
+  const rel = getRel(w, c.id, targetId);
+  const score = Number(rel && rel.score) || 0;
+  const bond = String((rel && (rel.bond || rel.type)) || "");
+  const mood = String((rel && rel.mood) || "");
+  const lore = commentPersonalityText(c);
+  const follows = isFollowing(w, c.id, targetId);
+  const bits = [];
+
+  bits.push(
+    follows
+      ? "Látja a posztot természetesen a saját feedjében, mert követi a szerzőt."
+      : "Nem követi a szerzőt: csak akkor reagáljon, ha a kapcsolat, közös kör, rivalizálás vagy a poszt jelentősége hihetően elé hozná."
+  );
+
+  bits.push(
+    `Kapcsolati hőmérséklet: score ${score}${bond ? `, bond: ${bond}` : ""}${mood ? `, aktuális érzés: ${cut(mood, 80)}` : ""}.`
+  );
+
+  if (/reserved|private|introvert|zárkózott|visszafogott|quiet|csendes|stoic|guarded|titkoló/.test(lore)) {
+    bits.push("Nyilvánosan visszafogottabb, mint privátban: rövid, célzós vagy akár csak like; ne öntse ki az érzelmeit kommentben.");
+  }
+
+  if (/proud|büszke|image|reputation|hírnév|status|státusz|arrogant|arrogáns|controlled|fegyelmezett/.test(lore)) {
+    bits.push("Figyel arra, hogyan néz ki mások előtt: a nyilvános reakció lehet tudatosan hűvösebb, elegánsabb vagy státuszvédőbb a belső érzésénél.");
+  }
+
+  if (/jealous|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(lore)) {
+    bits.push("A féltékenységet/birtoklást ne vallja be automatikusan nyilvánosan. Ha a poszt tényleg triggereli, inkább kiszivároghat túl pontos figyelemben, célzásban, kérdésben, feszültebb humorban vagy rövid területjelzésben.");
+  }
+
+  if (/flirt|flört|seduct|csábít|tease/.test(lore)) {
+    bits.push("Flört csak akkor jelenjen meg, ha a helyzet + kapcsolat tényleg támogatja; a nyilvános flört intenzitása illeszkedjen ahhoz, mennyire vállalja fel ezt mások előtt.");
+  }
+
+  if (/aggress|agress|violent|erőszak|dominant|domináns|danger|veszély|ruthless|könyörtelen|intimidat|megféleml/.test(lore)) {
+    bits.push("A veszélyesség nem egyenlő állandó fenyegető monológgal. Nyilvánosan lehet rövid, hideg, kontrollált vagy csak egyértelműen nyomásgyakorló.");
+  }
+
+  if (/loyal|lojális|protect|védelmez|warm|kedves|affection|szeretet/.test(lore) && score > 20) {
+    bits.push("Jó kapcsolatnál a támogatás lehet természetes és saját hangú; ne motivációs idézet vagy generikus hype legyen.");
+  }
+
+  if (score < -20 || hasEnemyOrRivalBond(rel)) {
+    bits.push("Rossz kapcsolatnál az IGNORE is hiteles döntés. Nem köteles minden posztnak engagementet adni; ha kommentel, legyen konkrét oka a posztban vagy a friss konfliktusban.");
+  }
+
+  return bits.join(" ");
+}
+
+const GENERIC_SOCIAL_COMMENT_PATTERNS = [
+  /^(?:so+\s+)?iconic[.!?]*$/i,
+  /^slay+([.!?]+)?$/i,
+  /^queen+([.!?]+)?$/i,
+  /^you\s+ate([.!?]+)?$/i,
+  /^ate\s+(?:and\s+)?left\s+no\s+crumbs?([.!?]+)?$/i,
+  /^obsessed+([.!?]+)?$/i,
+  /^period+t?([.!?]+)?$/i,
+  /^mother+([.!?]+)?$/i,
+  /^serving+([.!?]+)?$/i,
+  /^main\s+character(?:\s+energy)?([.!?]+)?$/i,
+];
+
+function isUncharacteristicGenericComment(w, id, text) {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+  if (!raw || raw.length > 70) return false;
+
+  const matched = GENERIC_SOCIAL_COMMENT_PATTERNS.find((rx) => rx.test(raw));
+  if (!matched) return false;
+
+  const c = charById(w, id);
+  if (!c) return true;
+
+  /*
+   * If this kind of wording is explicitly present in the character's own
+   * speech/voice, let it through. Otherwise stock influencer filler is not a
+   * substitute for characterization.
+   */
+  const ownVoice = normUtterance([
+    c.speech,
+    c.voice,
+    c.bio,
+    c.personality,
+  ].filter(Boolean).join(" "));
+  const phrase = normUtterance(raw);
+
+  const signatureTokens = phrase
+    .split(" ")
+    .filter((x) => x.length >= 4);
+
+  return !signatureTokens.some((token) => ownVoice.includes(token));
 }
 
 function emojiGraphemes(v) {
@@ -8796,6 +9001,14 @@ KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
 - A korábbi történésekből tanuljon, emlékezzen arra, amit személyesen átélt vagy megtudott, és ez ténylegesen változtassa a későbbi döntéseit.
 - A példamondatokat SOHA ne másold. A hangot tanuld meg, a konkrét megfogalmazás mindig új legyen.
 
+ÉRZELMI REALIZMUS — NEM METAADAT, HANEM OK-OKOZAT:
+- A karakterek érzelmei úgy működjenek, mint jól megírt regénykaraktereknél: az érzés változtassa meg, mit vesznek észre, mire emlékeznek, mit kerülnek, milyen gyorsan reagálnak, mit mernek kimondani és milyen döntést hoznak.
+- Ne csak a "mood" mezőben nevezd meg az érzést. A szöveg ritmusából, szóválasztásból, humorból, hallgatásból, testbeszédből (roleplayben), kezdeményezésből és következő lépésből is látszódjon.
+- Az emberek egyszerre több dolgot is érezhetnek. A szeretet + sértettség, vonzalom + féltékenység, félelem + düh, lojalitás + csalódás hitelesebb lehet, mint egyetlen steril címke.
+- Egy jelentős érzelem ne resetelődjön a következő AI-kérésnél. Addig maradjon aktív, amíg esemény, beszélgetés, idő vagy kapcsolatváltozás hitelesen át nem alakítja.
+- Ha a karakter kánonja szerint valamelyik érzés különösen erős (pl. féltékeny, megszállott, bosszúálló, szorongó, arrogáns), az érzelmi küszöbe és reakciója is ehhez igazodjon; ne átlagold középre.
+- Nyilvános felületen maszkolhatja az érzést; privát DM-ben másképp szivároghat ki; roleplayben a test és cselekvés is hordozza. Ugyanaz az érzés felületenként másképp jelenjen meg.
+
 UNIVERZÁLIS ISMÉTLÉSTILALOM:
 - Ugyanaz a karakter semmilyen felületen ne ismételje vagy közeli parafrázisban újrahasználja a korábbi saját posztját, kommentjét, DM-jét, group chat sorát, Note-ját vagy roleplay-mondatát/cselekvését.
 - Ne térjen vissza gépiesen ugyanahhoz a mondatkezdéshez, becenévhez, sértéshez, flörtformulához, fenyegetéshez, metaforához, poénhoz vagy emoji-kombinációhoz.
@@ -10495,12 +10708,12 @@ const AUTO_DEFAULT = {
 
   /*
    * Valóban élő háttérvilág:
-   * 0.75 perc = kb. 45 mp két AUTONÓM tartalmi kör között.
+   * 0.25 perc = kb. 15 mp két AUTONÓM tartalmi kör között.
    *
    * Az AI queue saját token/rate-limit throttlingja ettől külön működik,
    * tehát ha a providernek több pihenő kell, továbbra is biztonságosan vár.
    */
-  every: 0.50,
+  every: 0.25,
 };
 
 async function loadAuto() {
@@ -16404,6 +16617,19 @@ KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - Ha ugyanaz a komment több karakter szájából is hiteles lenne, nem elég specifikus: írd újra.
 - TILOS generikus AI-social formulákkal kitölteni a csomagot (pl. ugyanaz a "girl...", "damn", "real", "obsessed", "okayyy", "iconic", "you ate" jellegű reakció újra meg újra), hacsak az adott karakter saját online hangja ÉS a friss kommentmemóriája tényleg indokolja.
 
+NYILVÁNOS VS. PRIVÁT REALIZMUS:
+- A karakter belső érzése NEM automatikusan a nyilvános kommentje. Mindenkinél döntsd el, mit mer/akar mások előtt megmutatni.
+- A zárkózott karakter lehet nagyon érintett, mégis csak két szót ír vagy csak lájkol.
+- A büszke/státuszérzékeny karakter formálhatja úgy a reakcióját, hogy ne veszítsen arcot.
+- A féltékeny/crush/obsessed karakter sem köteles minden poszt alatt nyíltan leleplezni magát; az érzés finoman is kiszivároghat.
+- Az ellenség/rivális dönthet úgy, hogy nem ad engagementet. Az ignore ugyanúgy karakterhű reakció lehet, mint a beszólás.
+- A kapcsolat legyen HANGSZŰRŐ, ne állandó kommenttéma. Ne írják minden poszt alatt újra a kapcsolatuk lényegét.
+
+KONKRÉT POSZTHOZ KÖTÉS:
+- Minden új kommentnek legyen konkrét kiváltó oka EBBEN a posztban: egy szó, kép-részlet, implikáció, korábbi thread-sor vagy ténylegesen releváns közös emlék.
+- Ha a komment csak egy általános bók/reakció lenne, ami száz másik poszt alatt is ugyanúgy állhatna, inkább írd újra vagy legyen like/ignore.
+- Ne erőltesd a backstory-t: a mély közös múlt csak akkor bukkanjon fel, ha a poszt tényleg megnyomja azt a gombot.
+
 KÖZVETLEN KAPCSOLATI DINAMIKA A POSZT SZERZŐJÉHEZ:
 ${cast
   .map(
@@ -16444,9 +16670,11 @@ ${repetitionGuard(
 
 KOMMENT SZABÁLYOK:
 
-- Adj általában 5-9 új kommentet. Ha a poszt kevés embert érint, lehet kevesebb; ha felkapott/drámai és sok releváns karakter van, legyen több különböző reakció.
+- NINCS KOMMENTKVÓTA. Ne tölts fel mesterségesen minden posztot.
+- Egy átlagos posztnál gyakran 2-5 valódi karakter kommentel; egy csendes/személyes posztnál lehet 0-2; egy drámai, felkapott vagy sok embert közvetlenül érintő posztnál lehet 4-7.
+- Minden jelölt külön döntsön: KOMMENT / LIKE / IGNORE. Az IGNORE teljesen érvényes kimenet, és nem kell külön listázni.
 - Egy generálási körben ugyanaz a karakter legfeljebb EGY új kommentet írjon. Ne töltsd fel a csomagot ugyanannak az embernek több hasonló reakciójával.
-- Csak olyan szereplő kommenteljen, akinek természetes oka van rá.
+- Csak olyan szereplő kommenteljen, akinek természetes oka van rá. Ha nincs konkrét mondanivalója, inkább like vagy semmi.
 - Minden komment előtt nézd meg az adott karakter fenti KORÁBBI FEED-KOMMENTJEIT. A feed-komment memória fontosabb ismétlésvédelmi forrás, mint az, hogy közben DM-ben vagy RP-ben mást mondott.
 - Ezek VALÓDI közösségi médiás kommentek, nem roleplay-jelenetek és nem mini novellák.
 - Úgy írjanak, mintha telefonról, gyorsan reagálnának egy Instagram/TikTok/X jellegű posztra.
@@ -16525,8 +16753,8 @@ FONTOS VÁLTOZATOSSÁG:
 
 EMOJI:
 
-- Az emoji-használat legyen LÁTHATÓAN jelen a közösségi médiában, de maradjon karakterfüggő.
-- Ha a kiválasztott kommentelők között van olyan karakter, aki természetesen használ emojit, egy 5-9 kommentes csomagban legalább 2-3 komment tartalmazzon emojit.
+- Az emoji-használat kizárólag karakterfüggő legyen; NINCS kötelező emoji-kvóta. Egy teljes kommentcsomagban akár nulla emoji is lehet, ha ezek a karakterek így hitelesek.
+- Aki természetesen használ emojit, használhatja; aki nem, annál ne próbáld social-media dísznek ráerőltetni.
 - Az emoji ne mindig a mondat legvégén legyen.
 - Lehet az emoji önálló reakció vagy a szöveg része.
 - Általában 1-2 emoji elég.
@@ -16576,7 +16804,7 @@ A kommentnek első pillantásra úgy kell kinéznie, mint amit egy valódi ember
 Formátum:
 
 {"comments":[
-{"id":"szereplő azonosítója","text":"természetes social media komment","reply_to":"k2 vagy üres"}
+{"id":"szereplő azonosítója","text":"természetes social media komment","reply_to":"k2 vagy üres","trigger":"max 8 szó: mi konkrétan váltotta ki ezt a reakciót"}
 ],
 "likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
 "perceptions":[
@@ -16585,7 +16813,10 @@ Formátum:
 "changes":[
 {"a":"aki érez","b":"aki iránt","delta":-6,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ],
-"events":["csak akkor egy rövid mondat, ha tényleg történt valami emlékezetes"]}${TAIL}`,
+"events":["csak akkor egy rövid mondat, ha tényleg történt valami emlékezetes"],
+"selfUpdates":[
+{"id":"AI id","mood":"mi marad benne a poszt után","intent":"mit akar most tenni, ha változott","openLoops":["nyitott saját ügy, ha lett"]}
+]}${TAIL}`,
     { maxTokens: 1650 }
   );
 
@@ -16593,13 +16824,18 @@ Formátum:
    * Nem küldjük az AI-nak vissza, csak az applyComments használja
    * annak ellenőrzésére, kik értelmezhették ezt a konkrét posztot.
    */
-  out.__castIds =
+  const normalizedOut =
+    out && typeof out === "object"
+      ? out
+      : { comments: [], likes: [], perceptions: [], changes: [], events: [] };
+
+  normalizedOut.__castIds =
     cast.map(
       (c) => c.id
     );
 
   return {
-    out,
+    out: normalizedOut,
     label: th.label,
   };
 }
@@ -17498,6 +17734,8 @@ function applyComments(n, postId, out, label) {
       /* Egy karakter egy körben egy friss komment: több variációt ne spammeljen. */
       if (commentedThisBatch.has(who)) return;
 
+      if (isUncharacteristicGenericComment(n, who, c.text)) return;
+
       const body = cleanGeneratedComment(n, who, c.text, 240);
       if (!body) return;
 
@@ -17793,6 +18031,7 @@ recordSocialEvent(
     p,
     out
   );
+  applySelfUpdates(n, out);
 
   n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
 }
@@ -17934,6 +18173,9 @@ function fairCommentCast(w, targetId) {
   const cutoff =
     now() - 48 * 3600e3;
 
+  const target =
+    charById(w, targetId);
+
   const chars = (w.chars || [])
     .filter(
       (c) =>
@@ -17970,35 +18212,90 @@ function fairCommentCast(w, targetId) {
         );
       });
 
+      const rel =
+        getRel(w, c.id, targetId);
+      const score =
+        Number(rel && rel.score) || 0;
+      const bond =
+        String((rel && (rel.bond || rel.type)) || "");
+      const interest =
+        socialInteractionInterest(
+          w,
+          c.id,
+          targetId
+        );
+      const following =
+        isFollowing(
+          w,
+          c.id,
+          targetId
+        );
+      const storyLinked =
+        Boolean(
+          target &&
+          ownStorySnippetAbout(c, target)
+        );
+
+      /*
+       * Feed realism: a follower or someone with a real personal/story reason
+       * naturally sees the post. A totally unrelated non-follower can still
+       * discover it occasionally, but should not behave like a guaranteed
+       * member of every comment section.
+       */
+      const naturallyLinked =
+        following ||
+        Math.abs(score) >= 18 ||
+        Boolean(bond) ||
+        storyLinked ||
+        interest >= 24;
+
+      const discoveryChance =
+        Math.min(
+          0.28,
+          0.06 + interest / 420
+        );
+
+      const discovered =
+        !naturallyLinked &&
+        Math.random() < discoveryChance;
+
+      const visibilityBonus =
+        following
+          ? 34
+          : naturallyLinked
+            ? 14
+            : discovered
+              ? 4
+              : 0;
+
       return {
         c,
         recentComments,
         lastCommentAt,
-        interest:
-          socialInteractionInterest(
-            w,
-            c.id,
-            targetId
-          ),
+        interest,
+        following,
+        eligible:
+          naturallyLinked || discovered,
+        visibilityBonus,
         tie: Math.random(),
       };
     });
 
   chars.sort((a, b) => {
     /*
-     * Kapcsolati/történeti relevancia + fairness együtt.
-     *
-     * Egy rivális vagy crush ne maradjon le csak azért,
-     * mert tegnap már kommentelt egyszer; ugyanakkor
-     * ugyanaz a karakter se uralja folyamatosan a feedet.
+     * Relevance + believable feed visibility + fairness together.
+     * Someone close can react repeatedly when it makes sense, but the same
+     * handful of characters should not monopolize every post forever.
      */
     const ap =
-      a.recentComments * 18 -
-      a.interest;
+      a.recentComments * 20 -
+      a.interest -
+      a.visibilityBonus;
 
     const bp =
-      b.recentComments * 18 -
-      b.interest;
+      b.recentComments * 20 -
+      b.interest -
+      b.visibilityBonus;
 
     if (ap !== bp) {
       return ap - bp;
@@ -18017,9 +18314,24 @@ function fairCommentCast(w, targetId) {
     return a.tie - b.tie;
   });
 
-  return chars
+  const eligible =
+    chars.filter((x) => x.eligible);
+
+  /*
+   * Keep enough candidates for an active world, but do not pretend every
+   * unrelated NPC saw every post. The AI still decides comment / like / ignore.
+   */
+  const pool =
+    eligible.length >= 4
+      ? eligible
+      : chars.slice(
+          0,
+          Math.min(5, chars.length)
+        );
+
+  return pool
     .map((x) => x.c)
-    .slice(0, 8);
+    .slice(0, 9);
 }
 
 async function genReply(w, post, comment) {
@@ -18136,6 +18448,12 @@ ${cast
   .filter(Boolean)
   .join("\n") || "-"}
 
+NYILVÁNOS REPLY-SZŰRŐ KARAKTERENKÉNT:
+${cast.map((c) => c ? `[${c.id}] ${c.name}: ${spread(commentPublicBehaviorCard(w, c, comment.authorId), 650)} | releváns célzott memória: ${spread(commentTargetMemoryCard(w, c, comment.authorId), 480)}` : "").filter(Boolean).join("\n") || "-"}
+
+- A reply-ban se mondd ki automatikusan a teljes belső érzést. A nyilvános arc, büszkeség, félelem, titkolózás és kapcsolat szabja meg, mennyi szivárog ki.
+- A kapcsolat itt is HANGSZŰRŐ. Ne csinálj minden crush-replyból flörtöt, minden rivalizálásból sértést vagy minden best-friend replyból belsős poént.
+
 ${repetitionGuard(
   w,
   cast.map((c) => c.id),
@@ -18152,7 +18470,7 @@ ${directResponder ? `KÖZVETLEN CÍMZETT: ${directResponder.name} [${directRespo
 - Más AI beszállhat mellé csak akkor, ha neki is valódi oka van; ne lopja el a közvetlen címzett válaszát.` : ""}
 
 - Csak olyan karakter válaszoljon, akinek természetes oka van rá.
-- Adj 1-3 választ.
+- Általában EGY közvetlen válasz a legreálisabb. Legfeljebb 2 AI válaszoljon ugyanarra a kommentre, és a második csak akkor, ha neki is külön, konkrét oka van beszállni.
 - Ezek VALÓDI social media reply-k, nem roleplay-jelenetek és nem mini dialógusok egy regényből.
 - Úgy írjanak, mintha telefonról gyorsan válaszolnának egy kommentre.
 - A válaszok TÖBBSÉGE 1-12 szó legyen.
@@ -18196,9 +18514,8 @@ KÖZVETLEN REAKCIÓ:
 
 EMOJI:
 
-- Az emoji-használat legyen ténylegesen jelen, ha a válaszoló karakter természetesen használ emojit.
-- Ha a generált válaszolók között van emoji-használó karakter, legalább egy válasz tartalmazzon emojit.
-- Általában 1-2 emoji elég.
+- Az emoji csak akkor jelenjen meg, ha a válaszoló karakter ténylegesen így kommunikál; NINCS kötelező emoji-kvóta.
+- Általában 1-2 emoji elég, de a nulla emoji teljesen normális.
 - Az emoji lehet a mondat elején, közepén, végén vagy önálló reakcióként.
 - Ne használjon minden karakter emojit.
 - Ne erőltesd emojira azt a karaktert, aki alapvetően nem így kommunikál.
@@ -18247,12 +18564,13 @@ A reply első pillantásra úgy hasson, mint egy valódi komment alatti gyors v�
 Formátum:
 
 {"comments":[
-  {"id":"szereplő azonosítója","text":"természetes rövid kommentválasz"}
+  {"id":"szereplő azonosítója","text":"természetes rövid kommentválasz","trigger":"max 8 szó: mire reagál konkrétan"}
 ],
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ],
-"events":[]}${TAIL}`,
+"events":[],
+"selfUpdates":[{"id":"AI id","mood":"mi marad benne ettől a reply-tól","intent":"mi a következő saját szándéka","openLoops":["ami nyitva maradt"]}]}${TAIL}`,
     { maxTokens: 900 }
   );
 
@@ -18274,7 +18592,8 @@ function applyReplies(n, postId, rootId, out) {
   safeAiComments(out).forEach((c) => {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
-    const body = cleanGeneratedUtterance(n, who, c.text, 240);
+    if (isUncharacteristicGenericComment(n, who, c.text)) return;
+    const body = cleanGeneratedComment(n, who, c.text, 240);
     if (!body) return;
     const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
     p.comments.push(made);
@@ -18352,6 +18671,7 @@ function applyReplies(n, postId, rootId, out) {
     }
   });
   applyChanges(n, safeAiChanges(out));
+  applySelfUpdates(n, out);
   n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
 
   /* Egy AI reply is indíthat újabb természetes AI reply-t, de a helper
@@ -18521,7 +18841,7 @@ A VILÁG MAGÁTÓL ÉL TOVÁBB.
 
 ${
   single
-    ? "Telt el egy kis idő. Adj EGY valódi, természetes új posztot valamelyik szereplőtől. Ne válaszolj üres posts tömbbel. Ha indokolt, adj 3-7 reakciót/kommentet másoktól."
+    ? "A világ közben ténylegesen ment tovább. Adj EGY valódi, természetes új posztot valamelyik szereplőtől. Ne válaszolj üres posts tömbbel. A poszt mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Ha indokolt, adj 2-6 reakciót/kommentet másoktól; ha valaki inkább nem reagálna, ne erőltesd."
     : "Léptesd a világot néhány órával. Adj 2-3 természetes új posztot különböző szereplőktől, és ha indokolt, posztonként 3-7 különböző reakciót/kommentet másoktól."
 }
 
@@ -18534,6 +18854,9 @@ ${
 - Ha ilyen esemény történik, a posztok/kommentek reagálhatnak rá, az "events" mező pedig rögzítse tényszerűen. A kapcsolatok is változhatnak, ha indokolt.
 - A harci tudás és veszélyesség itt is számít: ne írj irreális eredményt csak a dráma kedvéért.
 - A kifejezetten pszichopatikus/szadista/manipulatív/könyörtelen karakterek sötét oldala az autonóm világban is aktív maradjon; ne csak akkor jelenjen meg, amikor a játékos közvetlenül beszél velük.
+- A kifejezetten féltékeny/possessive/obsessed karakter társas radarja legyen érzékenyebb: ha valós trigger van a világban, ne reagáljon úgy, mint egy átlagosan nyugodt karakter. A reakció legyen erős, de a saját stílusában és a tényleges információhatárokon belül.
+- A karakterek ne csak reagáljanak: kezdeményezzenek terveket, találkozókat, bulikat, vitákat, békülést, pletykát, kihívást, edzést, közös programot vagy konfliktust, ha a személyiségük/céljuk ezt indokolja.
+- Az érzelmekből legyen következő lépés: aki dühös lehet, hogy számon kér; aki féltékeny lehet, hogy ráír vagy megjelenik egy társas helyzetben; aki fél, kerülhet; aki lelkes, szervezhet valamit. Ne maradjon minden érzés puszta mood-szöveg.
 - Ne hozz létre eseményt csak azért, hogy történjen valami.
 - A történések következzenek a karakterekből, kapcsolatokból, korábbi eseményekből, posztokból és jegyzetekből.
 - Ne ismételd a korábbi posztokat.
@@ -18697,6 +19020,9 @@ Formátum:
 ],
 "events":[
   "csak valódi, emlékezetes történés kerüljön ide"
+],
+"selfUpdates":[
+  {"id":"AI azonosító","mood":"mit érez most általában / mi dolgozik benne","intent":"mi a következő saját szándéka","openLoops":["legfeljebb néhány még nyitott saját ügy, terv, ígéret vagy konfliktus"]}
 ]}${TAIL}`,
     {
       maxTokens: single
@@ -18896,6 +19222,7 @@ rememberKnowledge(n, author, {
     made.forEach((mc) => noteMentions(n, mc.text, mc.authorId, { type: "post", id: fresh.id }));
   });
   applyChanges(n, safeAiChanges(out));
+  applySelfUpdates(n, out);
   n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
 }
 
@@ -22235,7 +22562,8 @@ Formátum:
  "changes":[{"a":"aki érez","b":"aki iránt","delta":16,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],
  "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
  "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"],
- "statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"csak akkor adj ilyet, ha az Event során tényleges állapotváltozás történt: megváltozott valaki hangulata, vagy egy korábban elindított folyamat/ígéret/fenyegetés/terv lezárult"}]}${TAIL}`);
+ "statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"csak akkor adj ilyet, ha az Event során tényleges állapotváltozás történt: megváltozott valaki hangulata, vagy egy korábban elindított folyamat/ígéret/fenyegetés/terv lezárult"}],
+ "selfUpdates":[{"id":"AI id","mood":"a jelenet után benne maradó belső állapot","intent":"a következő saját szándéka","openLoops":["ami számára még nincs lezárva"]}]}${TAIL}`);
 
       const resolveSceneTurns = (candidateOut) =>
         (candidateOut && Array.isArray(candidateOut.turns)
@@ -22391,6 +22719,7 @@ VÁLASZ CSAK JSON:
         });
         applySceneChangesWithStatus(n, s, safeAiChanges(out));
         applyMemories(n, safeAiMemories(out));
+        applySelfUpdates(n, out);
         applySceneAiStatusUpdates(n, s, out);
 
         const sceneEvents =
@@ -22790,6 +23119,7 @@ Formátum:
           sceneId: scene.id,
           finishedAt: now(),
           earlyEnd,
+          aiCount: (scene.cast || []).filter((id) => id && !isHuman(w, id) && charById(w, id)).length,
         });
       }
     } catch (e) {
@@ -26374,6 +26704,9 @@ TERMÉSZETES CHATSTÍLUS:
 - Ne legyen minden spontán DM konfliktus.
 - Ne legyen minden spontán DM flört.
 - Ne legyen minden spontán DM mély érzelmi vallomás.
+- VÁLTOGASD a kezdeményezés funkcióját is: hétköznapi ping, poén/meme-szerű reakció, konkrét kérdés, pletyka, meghívás, találkozó-javaslat, segítségkérés, terv, számonkérés, flört, féltés, riválisról szóló reakció, bocsánatkérés, "hol vagy?"-jellegű rövid keresés vagy teljesen praktikus üzenet. Ne használd ugyanazt a kategóriát gépiesen egymás után.
+- Az előző 10-14 DM ritmusa számít: ne indíts újra ugyanazzal a mondatkezdéssel, ugyanazzal a kérdéssel vagy ugyanazzal az érzelmi fogással.
+- Az erős érzelmet ne magyarázd el mindig. Egy feszült "ki volt az?" karakterhűbb lehet, mint egy hosszú vallomás arról, hogy féltékeny.
 - A konkrét szándék mindig abból következzen, aki vagy és ami a világban éppen történik.
 - A kapcsolat pontszáma, bondja, moodja, rejtett érzése és a történeted ténylegesen irányítsa a viselkedést.
 - Jó viszonynál természetesebb lehet a közvetlenség, bizalom, védelem vagy ugratás; rossz viszonynál a feszültség, gúny, türelmetlenség vagy rivalizálás.
@@ -26482,7 +26815,7 @@ Ha van:
 - Plusz és mínusz egyformán lehetséges.
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
-{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","changes":[{"a":"${bot.id}","b":"${w.meId}","delta":10,"mood":"mit érzel most iránta","why":"miért"},{"a":"${w.meId}","b":"${bot.id}","delta":6,"mood":"","why":"miért"}]}${TAIL}`,
+{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","changes":[{"a":"${bot.id}","b":"${w.meId}","delta":10,"mood":"mit érzel most iránta","why":"miért"},{"a":"${w.meId}","b":"${bot.id}","delta":6,"mood":"","why":"miért"}],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}]}${TAIL}`,
     { maxTokens: 700 }
   );
 }
@@ -26931,7 +27264,7 @@ function findUnanswered(w) {
  *
  * Most a szimuláció saját contentAt órát használ.
  */
-const AUTO_MIN_CONTENT_INTERVAL_MS = 20000;
+const AUTO_MIN_CONTENT_INTERVAL_MS = 12000;
 const AUTO_MIN_LOCAL_ACTION_INTERVAL_MS = 30000;
 
 /*
@@ -27996,18 +28329,18 @@ function gossipPublishCooldownMs(w) {
     "normal";
 
   if (frequency === "low") {
-    return 120 * 60000;
+    return 90 * 60000;
   }
 
   if (frequency === "high") {
-    return 20 * 60000;
-  }
-
-  if (frequency === "chaotic") {
     return 8 * 60000;
   }
 
-  return 45 * 60000;
+  if (frequency === "chaotic") {
+    return 3 * 60000;
+  }
+
+  return 18 * 60000;
 }
 
 function gossipPublishChance(w) {
@@ -28020,18 +28353,18 @@ function gossipPublishChance(w) {
     "normal";
 
   if (frequency === "low") {
-    return 0.34;
+    return 0.42;
   }
 
   if (frequency === "high") {
-    return 0.78;
+    return 0.90;
   }
 
   if (frequency === "chaotic") {
-    return 0.94;
+    return 0.98;
   }
 
-  return 0.58;
+  return 0.72;
 }
 
 function gossipArticleLengthInstruction(
@@ -28040,8 +28373,8 @@ function gossipArticleLengthInstruction(
 ) {
   if (candidate && candidate.eventRecap) {
     return `
-HOSSZ / EVENT RECAP — SZAFTOS LONG READ:
-- Ez egy teljes party/event recap.
+HOSSZ / ROLEPLAY-EVENT RECAP — SZAFTOS LONG READ:
+- Ez egy teljes több-szereplős roleplay/event recap.
 - CÉLOZZ legalább 1200-2600 karakterre, ha az event-adatok ezt valódi tartalommal megtöltik.
 - Nyugodtan legyen 1000+ karakter: ez hosszú gossip-poszt / mini tabloid recap.
 - Írj több jól olvasható bekezdést, időrenddel, fokozással és side-eye hanggal.
@@ -28350,6 +28683,19 @@ TE MOST A ${media.name.toUpperCase()} SOCIAL MEDIA FIÓK SZERKESZTŐI HANGJA VAG
 
 ${style}
 
+GLOSSY ANONIM GOSSIP NARRÁTOR — REALISZTIKUS, SZAFTOS, CSÍPŐS:
+- A hang legyen társasági bennfentes energiájú: gyors észjárás, side-eye, társas hierarchia, időzítés, kínos kontrasztok, "ki nézett oda / ki maradt túl csendben" jellegű fókusz CSAK akkor, ha az eseményadat ezt alátámasztja.
+- Legyen játékosan gonosz és szellemes, de ne váljon azonos catchphrase-ek sorozatává.
+- A mondatok ritmusa változzon: rövid odaszúrások + választékosabb, gördülő recap mondatok.
+- Használj több emojit, mint egy átlag posztban: rövid sztorinál általában 1-3, hosszú/event recapnál kb. 3-7 jól elhelyezett emoji természetes. Ne minden mondat végén legyen és ne ugyanazokat ismételd. 👀🍸🔥💋🫢🖤✨🥂📸 jellegű készletből csak azt használd, ami valóban illik a konkrét történethez.
+- Ne másolj ismert sorozatos catchphrase-t vagy fix aláírást; a hangulat legyen saját, friss és változatos.
+- A pletyka akkor jó, ha a TÉNYEKET szaftosan rendezi el, nem akkor, ha új tényt talál ki.
+
+${candidate.forcePublish ? `KÖTELEZŐ ROLEPLAY UTÓÉLET:
+- Ez a story egy lezárt, több-AI-s roleplay után KÖTELEZŐ publikáció, mert a gossip média be van kapcsolva.
+- "skip": true TILOS. A rendelkezésre álló eseményekből készíts publikálható recapot akkor is, ha a jelenet nem botrányos; a társas dinamika, hangulat, furcsa pillanatok, szövetségek, feszültségek vagy meglepő kontrasztok adhatják a sztorit.
+- Ne találj ki semmit csak azért, mert kötelező posztolni.` : ""}
+
 A KÖVETKEZŐ STORY CANDIDATE VALÓS VILÁGBELI ESEMÉNYEKBŐL ÉPÜL.
 
 POTENCIÁLISAN ÉRINTETT / JELEN LÉVŐ SZEMÉLYEK:
@@ -28377,7 +28723,7 @@ ${gossipArticleLengthInstruction(
 )}
 
 ${candidate.eventRecap ? `
-KÜLÖN PARTY / EVENT RECAP SZABÁLY:
+KÜLÖN ROLEPLAY / PARTY / EVENT RECAP SZABÁLY:
 - EVENT CÍME: ${candidate.eventTitle || "nincs külön cím"}
 - ATTENDEE ID-K: ${(candidate.attendeeIds || []).join(", ")}
 - Ez a jelenet szereplőgárdája: mindannyian ténylegesen jelen voltak.
@@ -28419,8 +28765,10 @@ SZIGORÚ TARTALMI SZABÁLYOK:
 - A headline ne legyen teljes mondatos összefoglalás minden alkalommal.
 - Markdown headinget (#) ne használj.
 
-DÖNTHETSZ ÚGY, HOGY MÉGSEM ÉRDEMES PUBLIKÁLNI.
-Ilyenkor: "skip": true.
+${candidate.forcePublish
+  ? "EZ KÖTELEZŐ RP-RECAP: skip:true nem használható."
+  : `DÖNTHETSZ ÚGY, HOGY MÉGSEM ÉRDEMES PUBLIKÁLNI.
+Ilyenkor: "skip": true.`}
 
 FORMAT LEHET:
 breaking | short | long | recap | analysis
@@ -28447,7 +28795,7 @@ function normalizeGossipStoryOutput(
   if (
     !candidate ||
     !out ||
-    out.skip === true
+    (out.skip === true && !candidate.forcePublish)
   ) {
     return null;
   }
@@ -28597,7 +28945,10 @@ function publishGossipMediaStory(
    * eldobjuk; az event nincs used-nak jelölve, tehát később friss
    * megfogalmazással újrapróbálható.
    */
-  if (isRepetitiveUtterance(w, media.id, out.text)) {
+  if (
+    !candidate.forcePublish &&
+    isRepetitiveUtterance(w, media.id, out.text)
+  ) {
     return null;
   }
 
@@ -28608,6 +28959,7 @@ function publishGossipMediaStory(
 
   const nextHeadline = normUtterance(out.headline || "");
   if (
+    !candidate.forcePublish &&
     nextHeadline &&
     recentHeadlines.some((oldHeadline) =>
       oldHeadline &&
@@ -28637,6 +28989,7 @@ function publishGossipMediaStory(
    * már egy másik publikáció felhasználta, ne duplikáljuk.
    */
   if (
+    !candidate.forcePublish &&
     candidate.primaryEventId &&
     alreadyUsed.has(
       candidate.primaryEventId
@@ -28949,6 +29302,83 @@ function publishGossipMediaStory(
   }
 
   return post;
+}
+
+function forcedRoleplayGossipCandidate(w, sceneId) {
+  if (!w || !sceneId) return null;
+  const media = activeGossipMediaAccount(w);
+  if (!media) return null;
+  const mode = w.gossipSettings && w.gossipSettings.mediaMode;
+  if (mode !== "local" && mode !== "global") return null;
+
+  const scene = (w.scenes || []).find((row) => row && row.id === sceneId);
+  if (!scene) return null;
+  const aiIds = (scene.cast || []).filter((id) => id && !isHuman(w, id) && charById(w, id));
+  if (aiIds.length < 2) return null;
+
+  const sceneEvents = (w.socialEvents || [])
+    .filter((event) => event && event.meta && event.meta.sceneId === sceneId && gossipPrivacyEligible(event))
+    .slice()
+    .sort((a,b) => (Number(a.ts)||0) - (Number(b.ts)||0));
+  const primary = [...sceneEvents].reverse().find((event) => event && event.type === "roleplay-summary") || sceneEvents[sceneEvents.length - 1];
+  if (!primary) return null;
+
+  const candidate = buildGossipStoryCandidate(w, primary, sceneEvents, mode);
+  candidate.forcePublish = true;
+  candidate.eventRecap = true;
+  candidate.roleplayBased = true;
+  candidate.eventKind = scene.eventKind || detectSceneEventKind(scene);
+  candidate.eventTitle = scene.title || candidate.eventTitle || "";
+  candidate.attendeeIds = [w.meId, ...aiIds].filter(Boolean);
+  candidate.subjectIds = [...new Set(candidate.attendeeIds)];
+  candidate.witnessCount = aiIds.length;
+  candidate.score = Math.max(120, Number(candidate.score) || 0);
+  candidate.events = sceneEvents.slice(-18).map((event) => ({
+    id:event.id||"", type:event.type||"", text:event.text||"", ts:Number(event.ts)||0,
+    factLevel:event.factLevel||"observed", importance:Number(event.importance)||0,
+    tags:Array.isArray(event.tags)?event.tags.slice(0,12):[],
+    sourceType:(event.meta && event.meta.sourceType) || event.source || "",
+    witnessCount:Number(event.meta && event.meta.witnessCount)||0,
+  }));
+  candidate.eventIds = candidate.events.map((event) => event.id).filter(Boolean);
+  candidate.primaryEventId = primary.id || candidate.primaryEventId || "";
+  return candidate;
+}
+
+function fallbackForcedRoleplayGossipStory(w, candidate) {
+  if (!w || !candidate) return null;
+  const lang = worldLanguage(w, w.meId);
+  const en = lang === "en";
+  const names = (candidate.attendeeIds || candidate.subjectIds || [])
+    .map((id) => charById(w, id))
+    .filter(Boolean)
+    .map((c) => c.name)
+    .filter(Boolean);
+  const facts = (candidate.events || [])
+    .map((event) => event && event.text ? cut(String(event.text), 520) : "")
+    .filter(Boolean)
+    .slice(-6);
+  if (!facts.length) return null;
+
+  const title = String(candidate.eventTitle || (en ? "Event recap" : "Event recap")).trim();
+  const people = names.length ? names.join(", ") : (en ? "the people who were there" : "akik ott voltak");
+  const headline = en
+    ? `👀 ${title}: the aftermath`
+    : `👀 ${title}: az utóélet`;
+  const intro = en
+    ? `👀 Okay, this one is not leaving without a recap. ${people} were all there — so yes, we are looking at the aftermath. 🥂`
+    : `👀 Na, ezt nem hagyjuk recap nélkül. ${people} mind ott voltak — úgyhogy igen, nézzük az utóéletet. 🥂`;
+  const outro = en
+    ? `\n\n🫢 That is the confirmed version. The side-eyes can do the rest.`
+    : `\n\n🫢 Ennyi a biztos verzió. A side-eye-t már mindenki intézze magának.`;
+  return {
+    skip: false,
+    format: "recap",
+    headline,
+    text: `${intro}\n\n${facts.join("\n\n")} ${outro}`.slice(0, 6000),
+    usedEventIds: (candidate.eventIds || []).slice(-18),
+    mentionedIds: (candidate.subjectIds || []).slice(0, 20),
+  };
 }
 
 function gossipAutoCandidate(w) {
@@ -33307,6 +33737,7 @@ Formátum:
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ],
+"selfUpdates":[{"id":"AI id","mood":"mi dolgozik benne","intent":"mit akar most","openLoops":["nyitott terv vagy ügy"]}],
 "event":"egy rövid mondat arról, miért jött létre a csoport"}${TAIL}`,
     { maxTokens: 1200 }
   );
@@ -34087,12 +34518,99 @@ function feedNeedsFreshPost(w) {
 
   /*
    * Ha még sosem volt AI-poszt, azonnal életet kérünk a feedbe.
-   * Egyébként 75 mp csend után a poszt elsőbbséget kap a maintenance
+   * Egyébként 45 mp csend után a poszt elsőbbséget kap a maintenance
    * actionökkel szemben. A provider-throttle ettől még külön érvényes.
    */
   return (
     !last ||
-    now() - last >= 75000
+    now() - last >= 45000
+  );
+}
+
+function lastAiInitiatedRoleplayAt(w) {
+  return (w && Array.isArray(w.scenes) ? w.scenes : []).reduce(
+    (latest, scene) => scene && scene.aiInitiated
+      ? Math.max(latest, Number(scene.startedAt || scene.ts) || 0)
+      : latest,
+    0
+  );
+}
+
+function canAiInitiateRoleplay(w) {
+  if (!w || !(w.chars || []).length) return false;
+  const openAiScenes = (w.scenes || []).filter((scene) => scene && scene.open && scene.aiInitiated).length;
+  if (openAiScenes >= 2) return false;
+  const last = lastAiInitiatedRoleplayAt(w);
+  return !last || now() - last >= 3 * 60 * 1000;
+}
+
+function roleplayInitiatorScore(w, c) {
+  if (!w || !c || isHuman(w, c.id)) return -999;
+  let score = 12 + socialInteractionInterest(w, c.id, w.meId) * 0.42;
+  const rel = getRel(w, c.id, w.meId);
+  const lore = [c.personality,c.traits,c.goals,c.backstory,c.extra,rel && rel.mood,rel && rel.hidden,rel && rel.bond]
+    .filter(Boolean).join(" ").toLowerCase();
+  score += Math.min(26, Math.abs(Number(rel && rel.score) || 0) * 0.22);
+  score += relationshipObsessionLevel(w, c.id, w.meId) * 16;
+  if (/party|buli|social|társas|outgoing|extrovert|impulsive|impulzív|adventure|kaland|flirt|flört/.test(lore)) score += 14;
+  if (/jealous|féltéken|possess|birtokl|obsess|megszáll|dominant|domináns|psycho|pszichopat|unhinged|kiszámíthatatlan/.test(lore)) score += 10;
+  const mem = ensureCharMemory(w, c.id);
+  if (mem.selfState && mem.selfState.intent) score += 8;
+  return score + Math.random() * 18;
+}
+
+function pickRoleplayInitiator(w) {
+  const pool = (w.chars || [])
+    .filter((c) => c && !isHuman(w, c.id))
+    .map((c) => ({ c, score: roleplayInitiatorScore(w, c) }))
+    .sort((a,b) => b.score - a.score);
+  return pool.length ? pool[Math.min(pool.length - 1, Math.floor(Math.random() * Math.min(3, pool.length)))].c : null;
+}
+
+async function genRoleplayInitiation(w, bot) {
+  if (!w || !bot) return { skip: true };
+  const relCard = relationshipBehaviorCard(w, bot.id, w.meId);
+  const recentDm = (w.chats && w.chats[chatKey(w.meId, bot.id)] || []).slice(-10)
+    .map((m) => `${m && m.from === "them" ? bot.name : w.player.name}: ${m && m.text || ""}`)
+    .join("\n");
+
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(w, [bot.id], true, bot.id)}
+
+${voiceCard(bot)}
+${characterMemoryCard(w, bot)}
+${relCard}
+
+TE MOST ${bot.name} VAGY, ÉS SAJÁT MAGADTÓL KEZDEMÉNYEZHETSZ EGY ÚJ ROLEPLAY EVENTET ${w.player.name} FELÉ.
+
+EZ NEM RENDSZER-ÖTLET GENERÁLÁS. Ez ${bot.name} SAJÁT DÖNTÉSE a világon belül.
+- Csak akkor kezdeményezz, ha a személyiségedből, célodból, kapcsolatodból, aktuális érzelmedből vagy friss eseményből természetesen következik.
+- Ha nincs valódi okod MOST találkozást/jelenetet kezdeményezni, legyen skip:true.
+- Lehet teljesen hétköznapi program: buli, kávé, séta, edzés, autózás, shopping, tanulás, közös munka, küldetés, segítségkérés, "gyere ide", közös terv.
+- Lehet konfliktusos is: számonkérés, rivális miatti féltékenység, fenyegető találkozó, váratlan konfrontáció, ha a kánon ezt indokolja.
+- Ha társasági/bulis karakter vagy, magadtól is meghívhatsz buliba vagy szervezhetsz programot.
+- Ha féltékeny/possessive/obsessed típus vagy ÉS van valós trigger, a kezdeményezés lehet intenzívebb, sürgetőbb vagy territoriálisabb. Ne tompítsd át semleges meghívássá.
+- Ha a kánon szerint psycho/kiszámíthatatlan/manipulatív vagy, az iniciatíva lehet nyugtalanítóbb, kontrollálóbb vagy meglepőbb, DE csak a saját kánon és valós információk alapján.
+- Megjelenhetsz a játékosnál / váratlanul felbukkanhatsz CSAK akkor, ha hiteles, hogy tudod hol van/lakik és a kapcsolatod/kánonod ezt lehetővé teszi. Ne találj ki mágikus helyismeretet vagy off-screen stalkingot.
+- DM-ben is meghívhatod valahova. Ilyenkor a DM csak a meghívás/kezdeményezés; maga az Event külön megnyitható jelenetként létrejön.
+- Több AI-t is bevonhatsz (pl. buli/group program), de csak létező karakter-ID-ket használj, és te mindig legyél a castban.
+- A játékos elfogadását, reakcióját vagy cselekvését SOHA ne döntsd el helyette. Az Event azon a ponton induljon, ahol neki még valódi döntése van.
+
+LEGUTÓBBI PRIVÁT CHAT KÖZTETEK:
+${recentDm || "-"}
+
+VÁLASSZ KEZDEMÉNYEZÉSI MÓDOT:
+- dm_invite: üzenetben hívod valahova / találkozót kezdeményezel
+- arrival: személyesen megjelensz/felbukkansz nála vagy egy hitelesen ismert helyen
+- encounter: te hozol létre olyan helyzetet, ahol találkoztok (pl. odahívod, megvárod, útját állod, programot indítasz)
+
+Az Event legyen konkrét, ne generikus. Adj célt, de a cél ne irányítsa a játékos karakterét helyette.
+
+JSON:
+{"skip":false,"mode":"dm_invite vagy arrival vagy encounter","title":"rövid Event cím","setting":"2-4 mondat, hol/mikor/miért indul; a játékos döntését ne írd meg","goal":"konkrét Event cél","cast":["AI id-k; ${bot.id} kötelező"],"openingKind":"speech vagy action","opening":"${bot.name} első saját mondata vagy cselekvése; a játékos reakciója nélkül","dmText":"csak dm_invite esetén rövid valódi chat-üzenet, különben üres","targetTurns":16,"targetMinutes":20,"limitMode":"turns vagy minutes","rewardAffection":12,"rewardItem":"jelenethez illő egyedi emléktárgy","selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned","intent":"miért kezdeményezed","openLoops":["amit ezzel az Eventtel el akarsz intézni"]}]}${TAIL}`,
+    { maxTokens: 1450 }
   );
 }
 
@@ -34170,9 +34688,31 @@ function planAutoAction(view) {
     return mkAction(
       "world",
       `feed-watchdog:${Math.floor(
-        now() / 60000
+        now() / 45000
       )}`
     );
+  }
+
+  /*
+   * 1.75 AI-KEZDEMÉNYEZETT ROLEPLAY EVENT
+   *
+   * A karakterek nem csak a felhasználó által létrehozott jelenetekben élnek.
+   * Meghívhatnak valahova, programot szervezhetnek, konfrontálhatnak vagy
+   * hiteles helyzetben személyesen felbukkanhatnak.
+   */
+  if (
+    canAiInitiateRoleplay(view) &&
+    Math.random() < 0.24
+  ) {
+    const initiator = pickRoleplayInitiator(view);
+    if (initiator) {
+      return mkAction(
+        "roleplay-initiate",
+        `roleplay-initiate:${initiator.id}:${Math.floor(now() / 180000)}`,
+        { botId: initiator.id },
+        "event"
+      );
+    }
   }
 
   /*
@@ -34264,7 +34804,7 @@ function planAutoAction(view) {
    * karbantartási vagy ritkább social akcióra váltana.
    */
   if (
-    Math.random() < 0.80
+    Math.random() < 0.46
   ) {
     return mkAction(
       "world",
@@ -34645,7 +35185,7 @@ function planAutoAction(view) {
       return (
         !t ||
         now() - t >
-          12 * 60 * 1000
+          4 * 60 * 1000
       );
     });
 
@@ -34657,7 +35197,7 @@ function planAutoAction(view) {
       return (
         t > 0 &&
         now() - t <
-          8 * 3600e3
+          90 * 60 * 1000
       );
     });
 
@@ -34739,10 +35279,9 @@ function planAutoAction(view) {
   /*
    * 14. PRIVÁT ÜZENET
    *
-   * Kb. 16% további DM-esély.
-   *
-   * A feed most szándékosan dominánsabb:
-   * a világ gyakrabban posztol, nem a privát üzenetek viszik el a köröket.
+   * A DM most valódi autonóm kezdeményezési csatorna.
+   * A feed watchdog külön garantál friss posztot, ezért itt bátrabban
+   * engedjük, hogy a karakterek privátban is megmozdítsák a történetet.
    */
   if (roll < 0.34) {
     const bot =
@@ -35062,6 +35601,7 @@ Ha van természetes folytatás:
 "memories":[
 {"id":"AI-tag azonosítója","text":"amit ebből érdemes megjegyeznie"}
 ],
+"selfUpdates":[{"id":"AI-tag azonosítója","mood":"mi dolgozik benne","intent":"mit akar most","openLoops":["nyitott terv vagy ügy"]}],
 "event":"csak akkor egy rövid mondat, ha a beszélgetésben tényleg történt valami emlékezetes, különben üres"}${TAIL}`,
     { maxTokens: 900 }
   );
@@ -35120,6 +35660,132 @@ async function runSimulationAction(view, update, action) {
     }
 
     return null;
+  }
+
+  if (action.type === "gossip-story-force") {
+    const sceneId = action.payload && action.payload.sceneId;
+    const candidate = forcedRoleplayGossipCandidate(view, sceneId);
+    if (!candidate) return null;
+
+    let out = null;
+    try {
+      out = await genGossipMediaStory(view, candidate);
+    } catch (e) {
+      /* Kötelező RP-gossipnál provider-hiba sem törölheti el az utóéletet. */
+      out = null;
+    }
+
+    if (!out || out.skip === true || !String(out.text || "").trim()) {
+      out = fallbackForcedRoleplayGossipStory(view, candidate);
+    }
+    if (!out || !String(out.text || "").trim()) return null;
+
+    update((n) => {
+      const liveCandidate = forcedRoleplayGossipCandidate(n, sceneId) || candidate;
+      publishGossipMediaStory(n, liveCandidate, out);
+    });
+    return "gossip-story-force";
+  }
+
+  if (action.type === "roleplay-initiate") {
+    const botId = action.payload && action.payload.botId;
+    const bot = botId ? charById(view, botId) : null;
+    if (!bot || isHuman(view, bot.id) || !canAiInitiateRoleplay(view)) return null;
+
+    const out = await genRoleplayInitiation(view, bot);
+    if (!out || out.skip === true) return null;
+
+    const validModes = new Set(["dm_invite", "arrival", "encounter"]);
+    const mode = validModes.has(String(out.mode || "")) ? String(out.mode) : "dm_invite";
+    const castIds = [...new Set([
+      bot.id,
+      ...(Array.isArray(out.cast) ? out.cast.map((id) => findChar(view, id)).filter(Boolean) : []),
+    ])].filter((id) => id && !isHuman(view, id) && charById(view, id)).slice(0, 5);
+    if (!castIds.includes(bot.id)) castIds.unshift(bot.id);
+
+    const opening = cleanGeneratedUtterance(view, bot.id, String(out.opening || out.dmText || ""), 1800);
+    const dmText = cleanGeneratedUtterance(view, bot.id, String(out.dmText || ""), 360);
+    const title = String(out.title || "").trim().slice(0, 120) || sysLangText(view, view.meId, `${bot.name} kezdeményezése`, `${bot.name}'s invitation`);
+    const setting = String(out.setting || "").trim().slice(0, 1400);
+    const goal = String(out.goal || "").trim().slice(0, 500);
+    if (!setting || !goal || (!opening && !dmText)) return null;
+
+    const sceneId = "ai_evt_" + uid();
+    update((n) => {
+      const liveBot = charById(n, bot.id);
+      if (!liveBot) return;
+      const firstText = opening || dmText;
+      const scene = {
+        id: sceneId,
+        title,
+        setting,
+        cast: castIds,
+        turns: firstText ? [{
+          authorId: bot.id,
+          to: n.meId,
+          kind: out.openingKind === "action" ? "action" : "speech",
+          text: firstText,
+          ts: now(),
+          language: worldLanguage(n, n.meId),
+        }] : [],
+        open: true,
+        goal,
+        limitMode: out.limitMode === "minutes" ? "minutes" : "turns",
+        targetTurns: Math.max(6, Math.min(40, Math.round(Number(out.targetTurns) || 16))),
+        targetMinutes: Math.max(5, Math.min(120, Math.round(Number(out.targetMinutes) || 20))),
+        rewardAffection: Math.max(0, Math.min(30, Math.round(Number(out.rewardAffection) || 10))),
+        rewardItem: String(out.rewardItem || "").trim().slice(0, 160) || sysLangText(n, n.meId, `${title} emléktárgya`, `${title} keepsake`),
+        rewardGranted: false,
+        rewardAffectionGranted: 0,
+        rewardItemGranted: "",
+        statusUpdates: [],
+        success: null,
+        earlyEnd: false,
+        startedAt: now(),
+        ts: now(),
+        eventKind: detectSceneEventKind({ title, setting }),
+        aiInitiated: true,
+        initiatedBy: bot.id,
+        initiationMode: mode,
+      };
+      n.scenes = [...(n.scenes || []), scene];
+
+      if (mode === "dm_invite" && dmText) {
+        const ck = chatKey(n.meId, bot.id);
+        n.chats[ck] = [...(n.chats[ck] || []), {
+          id: "dm_" + uid(), from: "them", text: dmText, ts: now(),
+          language: worldLanguage(n, n.meId), roleplayInviteSceneId: sceneId,
+        }];
+      }
+
+      rememberKnowledge(n, bot.id, {
+        kind: "event", source: "self_action", confidence: 1,
+        text: sysLangText(n, bot.id, `Én kezdeményeztem egy Eventet: ${title}`, `I initiated an Event: ${title}`),
+      });
+      rememberAboutTarget(n, bot.id, n.meId, {
+        kind: "event", source: "roleplay_invitation", confidence: 1,
+        text: sysLangText(n, bot.id, `${(charById(n, n.meId) || {}).name || "A játékos"} karaktert meghívtam / bevontam ebbe: ${title}`, `I invited/involved the player in: ${title}`),
+      });
+      applySelfUpdates(n, out);
+      recordSocialEvent(n, {
+        type: "roleplay-initiated", refId: sceneId, ts: now(), actorId: bot.id,
+        targetIds: [n.meId, ...castIds.filter((id) => id !== bot.id)],
+        visibility: "limited", factLevel: "observed", importance: 42, drama: 18,
+        romance: bondLooksRomantic(getRel(n, bot.id, n.meId)) ? 18 : 0,
+        embarrassment: 0, source: "ai-roleplay-initiation",
+        text: `${bot.name}: ${title}`,
+        tags: ["roleplay", "ai-initiated", mode],
+        meta: { sceneId, participantIds: [n.meId, ...castIds], sourceType: "roleplay-initiation" },
+      });
+      pushNote(n, n.meId, {
+        icon: mode === "dm_invite" ? "✉️" : "🎬",
+        text: sysLangText(n, n.meId,
+          `${bot.name} Eventet kezdeményezett: ${title}`,
+          `${bot.name} initiated an Event: ${title}`),
+        link: { type: "scene", id: sceneId },
+      });
+    });
+    return "roleplay-initiate";
   }
 
   if (action.type === "gossip-story") {
@@ -35899,16 +36565,16 @@ if (targetNote) {
         NOTE_MAX
       );
 
+    if (!txt) return null;
+
     update((n) => {
       n.autoAt = now();
-
-      if (txt) {
-        setNote(
-          n,
-          bot.id,
-          txt
-        );
-      }
+      setNote(
+        n,
+        bot.id,
+        txt
+      );
+      applySelfUpdates(n, out);
     });
 
     return "note";
@@ -35942,11 +36608,7 @@ if (targetNote) {
       !out ||
       out.skip
     ) {
-      update((n) => {
-        n.autoAt = now();
-      });
-
-      return "group-turn";
+      return null;
     }
 
     const allowedMembers =
@@ -36003,11 +36665,7 @@ if (targetNote) {
       .slice(0, 3);
 
     if (!rows.length) {
-      update((n) => {
-        n.autoAt = now();
-      });
-
-      return "group-turn";
+      return null;
     }
 
     update((n) => {
@@ -36088,6 +36746,7 @@ if (targetNote) {
         n,
         safeAiMemories(out)
       );
+      applySelfUpdates(n, out);
 
       if (
         out.event &&
@@ -36114,11 +36773,7 @@ if (targetNote) {
       !out ||
       out.skip
     ) {
-      update((n) => {
-        n.autoAt = now();
-      });
-
-      return "group";
+      return null;
     }
 
     const memberIds =
@@ -36166,11 +36821,7 @@ if (targetNote) {
         creator
       ) < 0
     ) {
-      update((n) => {
-        n.autoAt = now();
-      });
-
-      return "group";
+      return null;
     }
 
     const groupName =
@@ -36181,11 +36832,7 @@ if (targetNote) {
         .slice(0, 70);
 
     if (!groupName) {
-      update((n) => {
-        n.autoAt = now();
-      });
-
-      return "group";
+      return null;
     }
 
     const groupId =
@@ -36247,11 +36894,7 @@ if (targetNote) {
       .slice(0, 5);
 
     if (!messages.length) {
-      update((n) => {
-        n.autoAt = now();
-      });
-
-      return "group";
+      return null;
     }
 
     update((n) => {
@@ -36326,6 +36969,7 @@ if (targetNote) {
         n,
         safeAiChanges(out)
       );
+      applySelfUpdates(n, out);
 
       if (
         out.event &&
@@ -36439,18 +37083,19 @@ if (targetNote) {
           )
         : "";
 
+    if (
+      !out ||
+      out.skip ||
+      (
+        !txt &&
+        !aiImageRef
+      )
+    ) {
+      return null;
+    }
+
     update((n) => {
       n.autoAt = now();
-
-      if (
-        out.skip ||
-        (
-          !txt &&
-          !aiImageRef
-        )
-      ) {
-        return;
-      }
 
       const ck = chatKey(
         view.meId,
@@ -36511,6 +37156,7 @@ if (targetNote) {
         n,
         dmChanges
       );
+      applySelfUpdates(n, out);
 
       rememberKnowledge(
         n,
@@ -38265,11 +38911,30 @@ const signOut = useCallback(async () => {
     if (event.type === "roleplay-ended" && event.sceneId) {
       /*
        * A lezárt RP azonnal váljon világ-eseménnyé.
-       * A finish() addigra már elmentette a summaryt, memóriákat,
-       * relationship change-eket és social eventet, így a következő
-       * world-full ezeket már friss kontextusként látja.
+       * Ha legalább KÉT AI volt jelen rajtad kívül és a gossip média aktív,
+       * a gossip-poszt NEM esély: külön kötelező queue-action készül.
        */
-      return requestSimulationAction(
+      let queuedAny = false;
+      const live = viewRef.current;
+      const liveScene = live && (live.scenes || []).find((row) => row && row.id === event.sceneId);
+      const aiCount = liveScene
+        ? (liveScene.cast || []).filter((id) => id && !isHuman(live, id) && charById(live, id)).length
+        : Number(event.aiCount) || 0;
+      const gossipOn = live && live.gossipSettings &&
+        (live.gossipSettings.mediaMode === "local" || live.gossipSettings.mediaMode === "global");
+
+      if (gossipOn && aiCount >= 2) {
+        queuedAny = requestSimulationAction(
+          mkAction(
+            "gossip-story-force",
+            `forced-rp-gossip:${event.sceneId}`,
+            { sceneId: event.sceneId },
+            "event"
+          )
+        ) || queuedAny;
+      }
+
+      queuedAny = requestSimulationAction(
         mkAction(
           "world-full",
           `event-world-after-rp:${event.sceneId}:${event.finishedAt || now()}`,
@@ -38279,7 +38944,9 @@ const signOut = useCallback(async () => {
           },
           "event"
         )
-      );
+      ) || queuedAny;
+
+      return queuedAny;
     }
 
     /*
@@ -39229,12 +39896,12 @@ const signOut = useCallback(async () => {
       if (alive) setAutoBusy(false);
     };
     /*
-     * 8 másodpercenként nézzük meg, van-e teendő.
-     * Ez NEM jelent 8 másodpercenként AI-hívást:
+     * 5 másodpercenként nézzük meg, van-e teendő.
+     * Ez NEM jelent 5 másodpercenként AI-hívást:
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 8000);
+    const i = setInterval(beat, 5000);
     const first = setTimeout(beat, 100);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update, simPulse]);
