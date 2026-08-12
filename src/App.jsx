@@ -11690,6 +11690,42 @@ function aiFollowEligibility(
   }
 
   /*
+   * A dinamikus kapcsolatcímkék miatt nem hagyatkozhatunk kizárólag
+   * a bond szövegére. Ha az AI saját oldaláról ténylegesen jó a kapcsolat,
+   * az önmagában is legitim social ok a követésre.
+   *
+   * Ez különösen fontos olyan egyedi bondoknál, mint "ride or die",
+   * "az enyém", stb., amelyeket a regex nem tud előre felsorolni.
+   */
+  const relScore = Number(rel && rel.score) || 0;
+  const interactionScore = recentFollowInteractionScore(
+    w,
+    actor.id,
+    target.id
+  );
+
+  if (relScore >= 25) {
+    return {
+      allowed:true,
+      mode:"relationship-score",
+      reason:"positive-relationship-score",
+    };
+  }
+
+  /*
+   * Ismétlődő valódi interakciók (kommentek, DM-ek, group chat)
+   * szintén felépíthetik azt a társas okot, ami miatt természetes a follow.
+   * Egyetlen like továbbra sem elég.
+   */
+  if (relScore >= 10 && interactionScore >= 16) {
+    return {
+      allowed:true,
+      mode:"interaction-bond",
+      reason:"repeated-positive-interaction",
+    };
+  }
+
+  /*
    * Ugyanaz a valódi csapat/szervezet/dojo.
    */
   if (
@@ -11705,10 +11741,6 @@ function aiFollowEligibility(
     };
   }
 
-  /*
-   * Pusztán magas score, közös chat, like vagy ismertség
-   * NEM elég automatikus follow-hoz.
-   */
   return {
     allowed:false,
     mode:"blocked",
@@ -11929,10 +11961,13 @@ function followInterestScore(
     );
 
   let score =
-    eligibility.mode ===
-      "enemy-secret-crush"
+    eligibility.mode === "enemy-secret-crush"
       ? 22
-      : 0;
+      : eligibility.mode === "relationship-score"
+        ? 14
+        : eligibility.mode === "interaction-bond"
+          ? 10
+          : 0;
 
   /*
    * Csak már engedélyezett kapcsolatnál számít pluszban,
@@ -12165,6 +12200,24 @@ function aiShouldFollow(
       Math.random() <
       chance
     );
+  }
+
+  /*
+   * Erős, pozitív kapcsolatnál a follow ne legyen szerencsejáték.
+   * Ha barát/közeli barát/család/romantikus kapcsolat, vagy a dinamikus
+   * kapcsolatpontszám egyértelműen pozitív, az AI természetesen beköveti.
+   */
+  const rel = getRel(w, actorId, targetId);
+  const relScore = Number(rel && rel.score) || 0;
+  const strongBond = followBondWeight(rel) >= 34;
+
+  if (
+    eligibility.mode === "family" ||
+    strongBond ||
+    relScore >= 45 ||
+    (trigger === "relationship" && score >= 34)
+  ) {
+    return true;
   }
 
   /*
@@ -12577,6 +12630,27 @@ function pickAutonomousFollowAction(w) {
         return;
       }
 
+      const eligibility = aiFollowEligibility(
+        w,
+        actor.id,
+        target.id
+      );
+
+      const rel = getRel(
+        w,
+        actor.id,
+        target.id
+      );
+
+      const strongRelationship = Boolean(
+        eligibility.allowed &&
+        ["family", "bond", "relationship-score"].includes(eligibility.mode) &&
+        (
+          followBondWeight(rel) >= 34 ||
+          (Number(rel && rel.score) || 0) >= 25
+        )
+      );
+
       candidates.push({
         actorId:
           actor.id,
@@ -12586,6 +12660,8 @@ function pickAutonomousFollowAction(w) {
 
         score,
 
+        strongRelationship,
+
         tie:
           Math.random(),
       });
@@ -12593,6 +12669,10 @@ function pickAutonomousFollowAction(w) {
   });
 
   candidates.sort((a, b) => {
+    if (a.strongRelationship !== b.strongRelationship) {
+      return a.strongRelationship ? -1 : 1;
+    }
+
     if (a.score !== b.score) {
       return b.score - a.score;
     }
@@ -12606,6 +12686,21 @@ function pickAutonomousFollowAction(w) {
    */
   const pool =
     candidates.slice(0, 5);
+
+  const strongestRelationship =
+    pool.find((row) => row && row.strongRelationship);
+
+  if (
+    strongestRelationship &&
+    aiShouldFollow(
+      w,
+      strongestRelationship.actorId,
+      strongestRelationship.targetId,
+      "relationship"
+    )
+  ) {
+    return strongestRelationship;
+  }
 
   for (
     let i = 0;
@@ -17019,10 +17114,38 @@ async function genReply(w, post, comment) {
     comment.authorId
   );
 
-  const cast = fairCommentCast(
+  const parentComment =
+    comment.parent && Array.isArray(post.comments)
+      ? post.comments.find((c) => c && c.id === comment.parent)
+      : null;
+
+  /*
+   * Ha a játékos konkrétan egy AI kommentjére válaszolt,
+   * AZ az AI legyen az elsődleges válaszoló.
+   * Más karakterek továbbra is beszállhatnak, de nem nyomhatják el a címzettet.
+   */
+  const directResponder =
+    parentComment &&
+    parentComment.authorId &&
+    !isHuman(w, parentComment.authorId)
+      ? charById(w, parentComment.authorId)
+      : (
+          !isHuman(w, post.authorId)
+            ? charById(w, post.authorId)
+            : null
+        );
+
+  const fairCast = fairCommentCast(
     w,
     comment.authorId
   );
+
+  const cast = directResponder
+    ? [
+        directResponder,
+        ...fairCast.filter((c) => c && c.id !== directResponder.id),
+      ].slice(0, 8)
+    : fairCast;
 
   const th = threadOf(
     w,
@@ -17089,6 +17212,12 @@ ${repetitionGuard(
 )}
 
 KOMMENTVÁLASZ SZABÁLYOK:
+
+${directResponder ? `KÖZVETLEN CÍMZETT: ${directResponder.name} [${directResponder.id}]
+- A játékos közvetlenül ${directResponder.name} kommentjére/posztjára válaszolt.
+- ${directResponder.name} az elsődleges válaszoló, és normál esetben reagáljon erre a konkrét válaszra.
+- Csak akkor maradjon csendben, ha a személyisége és a konkrét tartalom alapján kifejezetten természetes lenne ignorálnia.
+- Más AI beszállhat mellé, de nem helyettesítheti automatikusan a közvetlen címzettet.` : ""}
 
 - Csak olyan karakter válaszoljon, akinek természetes oka van rá.
 - Adj 1-3 választ.
@@ -18718,7 +18847,9 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               );
             })
           }
-          onComment={(id, text2, parent) =>
+          onComment={(id, text2, parent) => {
+            const madeId = uid();
+
             update((n) => {
               const x = n.posts.find((y) => y.id === id);
               if (!x) return;
@@ -18739,7 +18870,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   : x.authorId;
 
               const made = {
-                id: uid(),
+                id: madeId,
                 authorId: actorId,
                 text: text2,
                 ts: now(),
@@ -18758,7 +18889,11 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               const eventTargets = [
                 ...(targetId && targetId !== actorId ? [targetId] : []),
                 ...mentionTargets,
-              ].filter((id, index, arr) => id && id !== actorId && arr.indexOf(id) === index);
+              ].filter((target, index, arr) =>
+                target &&
+                target !== actorId &&
+                arr.indexOf(target) === index
+              );
 
               recordSocialEvent(n, {
                 type: parent ? "reply" : "comment",
@@ -18788,22 +18923,26 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 },
               });
 
-              /*
-               * A komment / kommentválasz ne csak Social Event legyen:
-               * közvetlen AI-célpontnál a kapcsolat is reagálhat rá,
-               * és applyChanges azonnal megmutatja az értesítésben.
-               */
               applyPlayerSocialRelationshipSignal(
                 n,
                 actorId,
                 targetId,
                 made.text,
-                parent
-                  ? "reply"
-                  : "comment"
+                parent ? "reply" : "comment"
               );
-            })
-          }
+            });
+
+            if (onSignal) {
+              onSignal({
+                type: parent
+                  ? "player-comment-reply"
+                  : "player-comment",
+                postId: id,
+                commentId: madeId,
+                parentId: parent || "",
+              });
+            }
+          }}
           onRepost={(id) =>
             update((n) => {
               createRepost(
@@ -25358,14 +25497,61 @@ function pickInitiator(w) {
 
 /* Van-e olyan, amit tőled láttak, de még nem reagáltak rá? */
 function findUnanswered(w) {
-  const posts = (w.posts || []).slice(0, 6);
+  const posts = (w.posts || []).slice(0, 10);
+
   for (let i = 0; i < posts.length; i++) {
     const po = posts[i];
-    const cs = po.comments || [];
-    const last = cs.length ? cs[cs.length - 1] : null;
-    if (last && isHuman(w, last.authorId)) return { post: po, comment: last };
-    if (isHuman(w, po.authorId) && !cs.some((c) => !isHuman(w, c.authorId))) return { post: po, comment: null };
+    const cs = Array.isArray(po.comments) ? po.comments : [];
+
+    /*
+     * Nem csak a poszt abszolút utolsó kommentjét nézzük.
+     * Ha a játékos válaszolt valakinek, majd közben egy másik AI is kommentelt,
+     * attól a játékos válasza még nem válhat "láthatatlanná" a reply motornak.
+     */
+    for (let j = cs.length - 1; j >= 0; j--) {
+      const playerComment = cs[j];
+
+      if (!playerComment || !isHuman(w, playerComment.authorId)) {
+        continue;
+      }
+
+      const parentComment = playerComment.parent
+        ? cs.find((c) => c && c.id === playerComment.parent)
+        : null;
+
+      const directTargetId =
+        parentComment && parentComment.authorId && !isHuman(w, parentComment.authorId)
+          ? parentComment.authorId
+          : (!isHuman(w, po.authorId) ? po.authorId : "");
+
+      const directReplies = cs.filter(
+        (c) =>
+          c &&
+          c.parent === playerComment.id &&
+          !isHuman(w, c.authorId)
+      );
+
+      const answered = directTargetId
+        ? directReplies.some((c) => c.authorId === directTargetId)
+        : directReplies.length > 0;
+
+      if (!answered) {
+        return {
+          post: po,
+          comment: playerComment,
+          targetId: directTargetId,
+        };
+      }
+    }
+
+    if (
+      isHuman(w, po.authorId) &&
+      !cs.some((c) => c && !c.parent && !isHuman(w, c.authorId))
+    ) {
+      return { post: po, comment: null, targetId: "" };
+    }
   }
+
   return null;
 }
 
@@ -32374,8 +32560,11 @@ function planAutoAction(view) {
       {
         postId: pending.post.id,
         commentId: pending.comment.id,
+        /*
+         * A következő AI-válasz közvetlenül a JÁTÉKOS új kommentjére
+         * kerüljön, ne annak korábbi parentjére.
+         */
         rootId:
-          pending.comment.parent ||
           pending.comment.id,
       }
     );
@@ -32435,6 +32624,36 @@ function planAutoAction(view) {
         }
       );
     }
+  }
+
+  /*
+   * 2.5 KAPCSOLATI FOLLOW-HELYREÁLLÍTÁS
+   *
+   * Ha egy már meglévő világban valaki tényleges barát/közeli kapcsolat,
+   * de a régebbi follow-logika miatt még nem követi a másikat, ezt ne
+   * bízzuk egy ritka 14%-os háttérpróbára. Körönként legfeljebb egy ilyen
+   * hiányzó, erős kapcsolatot javítunk.
+   */
+  const relationshipFollow =
+    pickAutonomousFollowAction(view);
+
+  if (
+    relationshipFollow &&
+    relationshipFollow.strongRelationship
+  ) {
+    return mkAction(
+      "follow",
+      `relationship-repair:${relationshipFollow.actorId}:${relationshipFollow.targetId}:${Math.floor(
+        now() / 300000
+      )}`,
+      {
+        actorId: relationshipFollow.actorId,
+        targetId: relationshipFollow.targetId,
+        trigger: "relationship",
+        score: relationshipFollow.score,
+      },
+      "event"
+    );
   }
 
   /*
@@ -33718,8 +33937,8 @@ async function runSimulationAction(view, update, action) {
       applyReplies(
         n,
         post.id,
-        action.payload.rootId ||
-          comment.id,
+        /* közvetlenül arra válaszoljon, amit a játékos most írt */
+        comment.id,
         out
       );
     });
@@ -36328,12 +36547,54 @@ const signOut = useCallback(async () => {
 
   const signalSimulation = useCallback((event) => {
     if (!event || !event.type) return false;
+
     if (event.type === "player-post" && event.postId) {
-      return requestSimulationAction(mkAction("comments", `event-post:${event.postId}`, { postId: event.postId }, "event"));
+      return requestSimulationAction(
+        mkAction(
+          "comments",
+          `event-post:${event.postId}`,
+          { postId: event.postId },
+          "event"
+        )
+      );
     }
+
+    /*
+     * A komment és kommentválasz azonnali esemény.
+     * Ne kelljen megvárni a következő háttér-ticket, mert addig más
+     * kommentek kerülhetnek mögé és a beszélgetés elveszítheti a fonalat.
+     */
+    if (
+      (event.type === "player-comment" ||
+        event.type === "player-comment-reply") &&
+      event.postId &&
+      event.commentId
+    ) {
+      return requestSimulationAction(
+        mkAction(
+          "reply",
+          `event-reply:${event.postId}:${event.commentId}`,
+          {
+            postId: event.postId,
+            commentId: event.commentId,
+            rootId: event.commentId,
+          },
+          "event"
+        )
+      );
+    }
+
     if (event.type === "player-note" && event.noteId) {
-      return requestSimulationAction(mkAction("note-react", `event-note:${event.noteId}`, { noteId: event.noteId }, "event"));
+      return requestSimulationAction(
+        mkAction(
+          "note-react",
+          `event-note:${event.noteId}`,
+          { noteId: event.noteId },
+          "event"
+        )
+      );
     }
+
     return false;
   }, [requestSimulationAction]);
 
