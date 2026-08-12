@@ -21141,7 +21141,7 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
 );
 }
 
-function Scene({ w, scene, update, setErr, onBack }) {
+function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const { tt } = useLang();
   const matureMode =
     worldContentLevel(
@@ -21773,6 +21773,19 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
           );
         }
       });
+
+      /*
+       * FONTOS: csak a sikeresen lezárt és már state-be mentett RP után
+       * indítjuk a world-stepet. Így az autonóm világ a friss summaryt,
+       * memóriákat, kapcsolatváltozásokat és roleplay social eventet látja.
+       */
+      if (onSignal) {
+        onSignal({
+          type: "roleplay-ended",
+          sceneId: scene.id,
+          finishedAt: now(),
+        });
+      }
     } catch (e) { setErr((e && e.message) || tt("A lezárás nem sikerült. Próbáld újra.", "Closing failed. Try again.")); }
     setBusy("");
   };
@@ -21855,7 +21868,7 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
   );
 }
 
-function Scenes({ w, update, setErr, jump }) {
+function Scenes({ w, update, setErr, jump, onSignal }) {
   const { tt } = useLang();
   const [openId, setOpenId] = useState(null);
   const [creating, setCreating] = useState(false);
@@ -21866,7 +21879,7 @@ function Scenes({ w, update, setErr, jump }) {
     if (jump && jump.type === "scene" && scenes.some((s) => s.id === jump.id)) setOpenId(jump.id);
   }, [jump, scenes]);
 
-  if (scene) return <Scene w={w} scene={scene} update={update} setErr={setErr} onBack={() => setOpenId(null)} />;
+  if (scene) return <Scene w={w} scene={scene} update={update} setErr={setErr} onBack={() => setOpenId(null)} onSignal={onSignal} />;
 
   return (
     <>
@@ -37080,11 +37093,57 @@ const signOut = useCallback(async () => {
     if (!event || !event.type) return false;
 
     if (event.type === "player-post" && event.postId) {
-      return requestSimulationAction(
+      /*
+       * A játékos saját posztja nem csak komment-esemény:
+       * a világ is azonnal kapjon egy teljes autonóm lépést.
+       * Így a poszt után más AI-k posztolhatnak, Note-ot írhatnak,
+       * követhetnek/kikövethetnek, DM-et/groupot indíthatnak vagy
+       * a publikus eseményből további social következmény születhet.
+       *
+       * A két action külön queue-elemként fut, ezért az AI throttle/priority
+       * továbbra is megakadályozza a párhuzamos API-spamet.
+       */
+      let queuedAny = false;
+
+      queuedAny = requestSimulationAction(
         mkAction(
           "comments",
           `event-post:${event.postId}`,
           { postId: event.postId },
+          "event"
+        )
+      ) || queuedAny;
+
+      queuedAny = requestSimulationAction(
+        mkAction(
+          "world-full",
+          `event-world-after-post:${event.postId}`,
+          {
+            trigger: "player-post",
+            postId: event.postId,
+          },
+          "event"
+        )
+      ) || queuedAny;
+
+      return queuedAny;
+    }
+
+    if (event.type === "roleplay-ended" && event.sceneId) {
+      /*
+       * A lezárt RP azonnal váljon világ-eseménnyé.
+       * A finish() addigra már elmentette a summaryt, memóriákat,
+       * relationship change-eket és social eventet, így a következő
+       * world-full ezeket már friss kontextusként látja.
+       */
+      return requestSimulationAction(
+        mkAction(
+          "world-full",
+          `event-world-after-rp:${event.sceneId}:${event.finishedAt || now()}`,
+          {
+            trigger: "roleplay-ended",
+            sceneId: event.sceneId,
+          },
           "event"
         )
       );
@@ -38125,7 +38184,7 @@ const signOut = useCallback(async () => {
             onSignal={signalSimulation} />}
           {tab === "cast" && <Cast w={view} update={update} setErr={setErr} jump={jump} goChat={(id) => { setChatId(id); setTab("chat"); }} />}
           {tab === "bonds" && <Bonds w={view} update={update} setErr={setErr} />}
-          {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} />}
+          {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} />}
           {tab === "chat" && <Chat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} />}
           {tab === "world" && <World
   w={view}
