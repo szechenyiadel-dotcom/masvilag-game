@@ -9885,6 +9885,16 @@ SOROZAT-/FRAKCIÓKÁNON FELISMERÉSE
 - Ezeket az utalásokat akkor is ismerd fel, ha a teljes sorozatcím nincs kiírva, csak a csoport/dojo/szervezet neve szerepel a karakterlapban vagy történetben.
 - A frakciórivalizálás nem jelenti azt, hogy két konkrét ember személyes kapcsolata nem lehet kivétel; a személyes kánon felülírhatja, de az alapfeszültség és közös háttér ne tűnjön el mágikusan.
 
+SOCIAL-MEDIA TERMÉSZETESSÉG — KEMÉNY SZABÁLY:
+- A social felületek valódi Instagram / Threads / X / Snapchat baráti hálónak hassanak, ne egymás után beszélő, túlcsiszolt AI-karaktereknek.
+- ELŐSZÖR a kapcsolatot olvasd, utána válassz attitűdöt. Közeli barátok és partnerek normálisan kényelmesek, ismerősek és válaszkészek egymással. Ha egy közeli barát őszintén bókol, a másik alapból a SAJÁT stílusában melegen fogadja: rövid köszönet, becenév, viszontszeretet, játékos zavar, szeretetteljes ugratás vagy mikroreakció teljesen természetes. Ne válaszolj random hidegen csak azért, mert a karakter szarkasztikus, domináns, sötét vagy nyers.
+- Példa csak a DINAMIKÁRA, nem másolandó sablon: egy barát írja, hogy „omg you are so pretty”, a másik válasza lehet „thank you babe”, „stoppp ily”, egy szív, becenév vagy más karakterhű meleg mikroreply. A konkrét szöveget mindig az adott karakterből generáld.
+- A pozitív kapcsolat LÁTSZÓDJON is az online viselkedésben. Barátok roastolhatják egymást, de friss konfliktus nélkül a szeretet/közelség legyen olvasható.
+- Tükrözd a bejövő social aktus méretét és energiáját. Rövid bókra rövid emberi reakció, poénra poén/reakció, támogatásra acknowledgement, direkt kérdésre válasz, petty beszólásra lehet petty beszólás.
+- Használj természetes internetes mikronyelvet, HA illik a karakterhez: kisbetű, rövidítés, elnyújtott szó, becenév, gyors írásjel, fragment, @mention, emoji és kissé tökéletlen emberi ritmus. Ne erőltesd rá a formális vagy visszafogott karakterre.
+- Ne magyarázd túl nyilvánosan a kapcsolatot. A közeli emberek inkább HANGZANAK közelinek, mintsem kimondják, hogy „te vagy a legjobb barátom”.
+- Kerüld az asszisztensszerű megnyugtatást, terápiás mondatokat és mini-monológokat normál social felületen.
+
 KOMMUNIKÁCIÓS FORMÁTUM
 
 - PRIVÁT CHAT / DM: valódi social-media privát üzenetváltásnak hasson. Általában rövid legyen; gyakran 1–4 rövid mondat vagy üzenetrész, de akár egyetlen szó, néhány szó vagy töredékes reakció is teljesen természetes. Ne írj esszét, monológot, narrációt vagy regényszerű bekezdéseket normál chatben.
@@ -10102,6 +10112,16 @@ QUESTION ANSWERING:
 - A character may refuse, lie, evade or say they do not know ONLY when their canon, secrets, knowledge or relationship gives them a real reason.
 - Even then, make the refusal deliberate and character-specific; do not act as if the question was not understood.
 - It is fine to answer first and THEN tease, deflect, challenge or ask something back.
+
+SOCIAL-MEDIA NATURALISM — HARD RULE:
+- Social surfaces must read like an actual Instagram / Threads / X / Snapchat friend network, not like characters taking turns delivering polished AI dialogue.
+- Match the relationship before choosing the attitude. Close friends and partners normally sound comfortable, familiar and responsive to each other. If one close friend gives a sincere compliment, the other should normally receive it warmly in THEIR own style: affectionate shorthand, a nickname, a quick thank-you, reciprocal affection, playful embarrassment or warm teasing are all natural. Do not answer warmth with random coldness merely because the character is sarcastic, dominant, dark or blunt.
+- Example of the SOCIAL DYNAMIC only (never copy as a template): one friend says “omg you are so pretty” and the other may answer with something like “thank you babe”, “stoppp ily”, a heart, a nickname, or another character-specific warm micro-reply. The exact wording must come from that character.
+- Positive relationships should visibly LOOK positive online. Friends can roast each other, but the affection must still be legible unless a current conflict gives the roast real teeth.
+- Mirror the size and energy of the incoming social act. A two-word compliment usually needs a short human reply, not a paragraph or a philosophical line. A joke gets a joke/reaction; support gets acknowledgement; a direct question gets an answer; a petty jab can get a petty jab.
+- Use natural internet micro-language when it fits the character: lowercase, contractions, stretched words, abbreviations, pet names, quick punctuation, reaction emojis, fragments, @mentions and imperfect-but-human rhythm. Do not force these traits onto characters whose own style is formal or restrained.
+- Do not over-explain relationships in public. People who are close usually SOUND close instead of announcing “you are my best friend”.
+- Avoid generic assistant-like reassurance, therapeutic phrasing and miniature monologues on ordinary social surfaces.
 
 COMMUNICATION FORMAT
 
@@ -12088,7 +12108,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v39-comment-sensitive-relationships";
+const BUILD_VERSION = "v40-social-warmth-rp-initiative-conflict-merge";
 
 const AUTO = "masvilag:auto";
 /*
@@ -18235,6 +18255,9 @@ NYILVÁNOS VS. PRIVÁT REALIZMUS:
 - A féltékeny/crush/obsessed karakter sem köteles minden poszt alatt nyíltan leleplezni magát; az érzés finoman is kiszivároghat.
 - Az ellenség/rivális dönthet úgy, hogy nem ad engagementet. Az ignore ugyanúgy karakterhű reakció lehet, mint a beszólás.
 - A kapcsolat legyen HANGSZŰRŐ, ne állandó kommenttéma. Ne írják minden poszt alatt újra a kapcsolatuk lényegét.
+- SOCIAL FRIENDSHIP DEFAULT: ha a kommentelő és a poszt szerzője barát / közeli barát / best friend / partner vagy egyértelműen erős pozitív kapcsolatban vannak, a normál social baseline legyen láthatóan meleg, kényelmes és ismerős. Fotónál teljesen természetes egy rövid bók, hype, becenév, szeretetteljes ugratás vagy “ily”-jellegű közelség, HA az adott karakter így kommunikál.
+- Egy szarkasztikus vagy nyers barát is lehet kedves: a stílusa maradhat csípős, de ne változtasd a szeretetet megvetéssé. A “baráti roast” után is legyen egyértelmű, hogy ez közelség, nem ellenségeskedés.
+- Ha a poszt kifejezetten jó hír, szelfi, outfit, siker vagy sebezhető pillanat, a valódi barátok gyakran röviden támogatnak/hype-olnak. Ne legyen minden pozitív kapcsolat indokolatlanul hűvös csak azért, hogy “edgy” maradjon.
 
 KONKRÉT POSZTHOZ KÖTÉS:
 - Minden új kommentnek legyen konkrét kiváltó oka EBBEN a posztban: egy szó, kép-részlet, implikáció, korábbi thread-sor vagy ténylegesen releváns közös emlék.
@@ -19911,7 +19934,7 @@ async function genReply(w, post, comment) {
     post
   );
 
-  const out =
+  let out =
     await askWorldJSON(
       w,
       engineFor(w),
@@ -19970,6 +19993,9 @@ ${cast.map((c) => c ? `[${c.id}] ${c.name}: ${spread(commentPublicBehaviorCard(w
 
 - A reply-ban se mondd ki automatikusan a teljes belső érzést. A nyilvános arc, büszkeség, félelem, titkolózás és kapcsolat szabja meg, mennyi szivárog ki.
 - A kapcsolat itt is HANGSZŰRŐ. Ne csinálj minden crush-replyból flörtöt, minden rivalizálásból sértést vagy minden best-friend replyból belsős poént.
+- WARM INPUT → WARM FRIEND RESPONSE: ha egy barát/közeli barát/partner kedvesen bókol, támogat, szeretetet fejez ki vagy hype-ol, és nincs friss konfliktus, a közvetlen válaszoló NE reagáljon hidegen, ellenségesen vagy feleslegesen távolságtartóan. Válaszoljon röviden, természetesen és felismerhetően szeretetteljesen a saját hangján.
+- Példa csak a DINAMIKÁRA, nem sablon: “omg you are so pretty” → egy közeli baráttól természetes lehet “thank you babe”, “stoppp ily”, “look who’s talking 😭”, egy becenév vagy hasonló meleg mikroreakció. Ne másold ezeket automatikusan; a karakter saját internetes hangját használd.
+- A “cold / rude / dominant / sarcastic” személyiségjegy nem írhatja felül a jó kapcsolatot. A karakter lehet száraz vagy csípős, de a jóindulat legyen olvasható, hacsak tényleges aktuális oka nincs a haragra.
 
 ${repetitionGuard(
   w,
@@ -20090,6 +20116,174 @@ Formátum:
 "selfUpdates":[{"id":"AI id","mood":"mi marad benne ettől a reply-tól","intent":"mi a következő saját szándéka","openLoops":["ami nyitva maradt"]}]}${TAIL}`,
     { maxTokens: 900 }
   );
+
+  /*
+   * v40 FRIENDLY SOCIAL REPAIR
+   *
+   * A nagy prompt önmagában sem garantálta, hogy egy közeli barát egy
+   * egyértelmű kedves bókra tényleg kedvesen válaszoljon. Ezért a közvetlen
+   * címzettnél egy második, nagyon kicsi social pass kötelező, ha:
+   *   1) a kapcsolat ténylegesen jó/közeli; ÉS
+   *   2) a bejövő komment egyértelműen meleg/bókoló/támogató.
+   *
+   * Ez NEM sablonválaszt ír be. Ugyanaz az AI újrafogalmazza a saját hangján.
+   */
+  if (directResponder) {
+    const directRel =
+      getRel(
+        w,
+        directResponder.id,
+        comment.authorId
+      );
+
+    const directBond =
+      String(
+        directRel &&
+        directRel.bond ||
+        ""
+      ).toLowerCase();
+
+    const directScore =
+      Number(
+        directRel &&
+        directRel.score
+      ) || 0;
+
+    const closePositive =
+      directScore >= 32 ||
+      /best\s*friend|close\s*friend|friend|bar[aá]t|partner|dating|girlfriend|boyfriend|wife|husband|lover|ride\s*or\s*die/.test(
+        directBond
+      );
+
+    const incoming =
+      String(
+        comment.text ||
+        ""
+      ).toLowerCase();
+
+    const warmIncoming =
+      /\b(?:pretty|beautiful|gorgeous|stunning|cute|hot|love\s*(?:you|u)?|luv\s*u|ily|proud\s+of\s+you|proud\s+of\s+u|amazing|perfect|queen|king|babe|baby|bestie|sz[eé]p|gy[oö]ny[oö]r[uű]|cuki|szeretlek|im[aá]dlak|b[uü]szke\s+vagyok\s+r[aá]d|csod[aá]s)\b/i.test(
+        incoming
+      ) ||
+      /(?:❤️|🩷|💗|💖|💕|🥹|😍|😘|🫶)/u.test(
+        incoming
+      );
+
+    if (
+      closePositive &&
+      warmIncoming
+    ) {
+      try {
+        const repaired =
+          await askWorldJSONInteractive(
+            w,
+            engineFor(w),
+            `${worldContext(
+              w,
+              [directResponder.id],
+              true,
+              directResponder.id
+            )}
+
+${voiceCard(directResponder)}
+${characterMemoryCard(w, directResponder)}
+${relationshipBehaviorCard(
+  w,
+  directResponder.id,
+  comment.authorId
+)}
+
+SOCIAL MEDIA MICRO-REPLY REPAIR
+
+${nameOfIn(w, comment.authorId)} just wrote this warm/supportive comment to ${directResponder.name}:
+"${String(comment.text || "").slice(0, 500)}"
+
+Write ONLY ${directResponder.name}'s natural direct social-media reply.
+- They have a positive/close relationship. There is no current trigger here that justifies random hostility.
+- The reply must unmistakably RECEIVE the warmth warmly, but remain exactly in ${directResponder.name}'s own voice.
+- It may be affectionate, teasing, embarrassed, dry-but-soft, nickname-heavy, reciprocal, lowercase, slangy or emoji-light depending on the character.
+- Think real friend comment sections: quick, intimate shorthand instead of polished dialogue.
+- Usually 1-8 words. Never a paragraph. Never narration.
+- Do not explain the relationship. Do not become assistant-like.
+- Do not copy example phrases from the prompt. Generate a fresh line.
+
+JSON: {"reply":"short natural reply"}${TAIL}`,
+            {
+              maxTokens: 180,
+              maxTries: 2,
+            }
+          );
+
+        const repairedText =
+          String(
+            repaired &&
+            repaired.reply ||
+            ""
+          )
+            .replace(/\s+/g, " ")
+            .trim();
+
+        if (repairedText) {
+          const existing =
+            safeAiComments(out);
+
+          let replaced = false;
+
+          const nextComments =
+            existing.map((row) => {
+              const rowId =
+                findChar(
+                  w,
+                  row &&
+                  (
+                    row.id !== undefined
+                      ? row.id
+                      : row.name
+                  )
+                );
+
+              if (
+                !replaced &&
+                rowId ===
+                  directResponder.id
+              ) {
+                replaced = true;
+                return {
+                  ...row,
+                  id: directResponder.id,
+                  text: repairedText,
+                  trigger:
+                    row.trigger ||
+                    "warm direct reply",
+                };
+              }
+
+              return row;
+            });
+
+          if (!replaced) {
+            nextComments.unshift({
+              id: directResponder.id,
+              text: repairedText,
+              trigger:
+                "warm direct reply",
+            });
+          }
+
+          out = {
+            ...(out || {}),
+            comments:
+              nextComments.slice(0, 2),
+          };
+        }
+      } catch (repairErr) {
+        console.warn(
+          "Friendly social reply repair failed:",
+          repairErr
+        );
+      }
+    }
+  }
 
   /*
    * Event-driven AI→AI threadnél a scheduler konkrét célkaraktert is kérhet.
@@ -24440,6 +24634,12 @@ ${matureContentInstruction(
   "roleplay"
 )}
 
+${roleplayRomanticInitiativeCard(
+  w,
+  scene,
+  cast
+)}
+
 ROLEPLAY FOLYTATÁS — FONTOS:
 
 - Ha fent AKTUÁLIS CÍMZETT van megadva a játékos mostani megszólalásához, a közvetlen "te/you" és a kérdés elsősorban ANNAK a karakternek szól. Más jelenlévő ne reagáljon úgy, mintha hozzá beszélt volna, hacsak természetesen közbe nem szól.
@@ -24599,6 +24799,7 @@ SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
 - A szereplők karakterhűek legyenek; ne váljanak semleges AI-hanggá.
 - A játékos helyett ne beszélj és ne cselekedj.
 - A jelenetet ne zárd le automatikusan.
+- Ha a fenti mature/relationship kontextus szerint erős felnőtt romantikus kezdeményezési lehetőség van, ne reseteld semleges small talkra: az AI tehet konkrét első lépést (érintés/csókkezdeményezés/privátabb folytatás), de a játékos reakcióját ne írd meg.
 - Ne magyarázd, hogy újragenerálsz.
 
 RÖVID TÁVÚ JELENETMEMÓRIA:
@@ -36763,6 +36964,122 @@ function contextualRoleplayCast(w, host, generatedCast, descriptor) {
   return [...new Set(selected)].filter(Boolean).slice(0, maxCast);
 }
 
+function roleplayRomanticInitiativeCard(w, scene, cast) {
+  if (
+    !w ||
+    !scene ||
+    worldContentLevel(w, w.meId) !== "mature"
+  ) {
+    return "";
+  }
+
+  const recentText =
+    (scene.turns || [])
+      .slice(-18)
+      .map((t) => String(t && t.text || ""))
+      .join(" ")
+      .toLowerCase();
+
+  const explicitBoundary =
+    /\b(?:stop|don't|do not|not now|leave me|back off|no\b|állj|hagyd|ne\s+érj|ne\s+csináld|most\s+ne)\b/i.test(
+      recentText
+    );
+
+  if (explicitBoundary) {
+    return `ROMANTIC INITIATIVE CHECK: a recent explicit boundary/refusal is present. Do not escalate romance or intimacy unless that boundary is clearly and voluntarily changed later.`;
+  }
+
+  const player =
+    charById(w, w.meId);
+
+  const targets =
+    [player, ...(cast || [])]
+      .filter(Boolean);
+
+  const rows = [];
+
+  (cast || []).forEach((actor) => {
+    if (!actor || isHuman(w, actor.id)) return;
+
+    targets.forEach((target) => {
+      if (
+        !target ||
+        target.id === actor.id ||
+        !matureParticipantsAreAdults(
+          w,
+          [actor.id, target.id]
+        )
+      ) {
+        return;
+      }
+
+      const rel =
+        getRel(
+          w,
+          actor.id,
+          target.id
+        );
+
+      const score =
+        Number(rel && rel.score) || 0;
+
+      const bond =
+        String(rel && rel.bond || "")
+          .toLowerCase();
+
+      const lore =
+        [
+          actor.personality,
+          actor.traits,
+          actor.bio,
+          actor.backstory,
+          actor.extra,
+          actor.goals,
+          actor.likes,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+      let initiative = score;
+
+      if (bondLooksRomantic(rel)) initiative += 46;
+      if (/crush|dating|partner|girlfriend|boyfriend|lover|wife|husband|romance|attract|vonz|szerelm|intim/.test(bond)) initiative += 36;
+      if (/flirt|bold|merész|dominant|domináns|impulsive|impulzív|passionate|szenvedély|possess|birtokl|obsess|megszáll|confident|magabiztos/.test(lore)) initiative += 18;
+      if (/shy|félénk|reserved|visszafogott|avoidant|bizalmatlan/.test(lore)) initiative -= 12;
+      if (/kiss|csók|making out|make out|csókolóz|desire|vágy|attraction|vonzalom|chemistry|kémia|flirt|flört/.test(recentText)) initiative += 18;
+
+      if (initiative >= 62) {
+        rows.push({
+          actor,
+          target,
+          initiative,
+          score,
+          bond,
+        });
+      }
+    });
+  });
+
+  if (!rows.length) {
+    return `ROMANTIC INITIATIVE CHECK: no currently strong, adult, canon-supported initiative candidate. Do not manufacture romance.`;
+  }
+
+  rows.sort((a, b) => b.initiative - a.initiative);
+  const top = rows.slice(0, 4);
+  const hasConcreteEscalation =
+    /\b(?:kiss(?:ed|ing|es)?|making\s*out|make\s*out|cs[oó]k|cs[oó]kol|cs[oó]kol[oó]z|came\s+closer|moved\s+closer|meg[eé]rint|touch(?:ed|es|ing)?\s+(?:her|his|their|your)\s+(?:face|hand|waist))\b/i.test(
+      recentText
+    );
+
+  const sustained =
+    (scene.turns || []).length >= 4 &&
+    !hasConcreteEscalation &&
+    top[0].initiative >= 78;
+
+  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}`).join("\n")}\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating a non-graphic transition toward adult intimacy.\n- If the target is the PLAYER, write only the AI's initiating action and stop before the player's reaction/consent.\n- If intimacy would become graphically sexual, keep it non-graphic / implied / fade-to-black.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
+}
+
 async function genRoleplayInitiation(w, bot) {
   if (!w || !bot) return { skip: true };
   const relCard = relationshipBehaviorCard(w, bot.id, w.meId);
@@ -36789,6 +37106,8 @@ EZ NEM RENDSZER-ÖTLET GENERÁLÁS. Ez ${bot.name} SAJÁT DÖNTÉSE a világon b
 - Ha nincs nagy esemény, válassz egy KICSI, hétköznapi, karakterhű kezdeményezést. Ne találj ki új off-screen tényt csak azért, hogy legyen Event.
 - Lehet teljesen hétköznapi program: buli, kávé, séta, edzés, autózás, shopping, tanulás, közös munka, küldetés, segítségkérés, "gyere ide", közös terv.
 - Lehet konfliktusos is: számonkérés, rivális miatti féltékenység, fenyegető találkozó, váratlan konfrontáció, ha a kánon ezt indokolja.
+- FELNŐTT / ROMANTIKUS INITIATIVE: ha ${bot.name} és egy másik igazoltan felnőtt szereplő között már valódi vonzalom, crush, dating/partner dinamika vagy kialakult intim előzmény van, NE szűkítsd az Event-öt mindig semleges kávéra/sétára. Karakterhűen kezdeményezhet randit, késő esti privát találkozót, “gyere át” jellegű meghívást, ottalvást vagy olyan kettesben programot, amelyből természetesen lehet csók, making out vagy nem grafikus/fade-to-black felnőtt intimitás. A másik fél válaszát soha ne döntsd el helyette.
+- Ha ${bot.name} agresszív/erőszakos és valódi konfliktus-trigger van, az Event maga is indulhat konfrontációként vagy fizikai eszkaláció veszélyével; ne alakíts minden veszélyes kezdeményezést békés beszélgetéssé.
 - Ha társasági/bulis karakter vagy, magadtól is meghívhatsz buliba vagy szervezhetsz programot.
 - Ha féltékeny/possessive/obsessed típus vagy ÉS van valós trigger, a kezdeményezés lehet intenzívebb, sürgetőbb vagy territoriálisabb. Ne tompítsd át semleges meghívássá.
 - Ha a kánon szerint psycho/kiszámíthatatlan/manipulatív vagy, az iniciatíva lehet nyugtalanítóbb, kontrollálóbb vagy meglepőbb, DE csak a saját kánon és valós információk alapján.
@@ -40832,13 +41151,20 @@ const signOut = useCallback(async () => {
                     setSaveState("retry");
                   } else {
                     /*
-                     * Valódi külső konfliktus: itt továbbra is a szerver nyer.
+                     * v40: eltérő reconnect snapshotnál se dobjuk el egyik
+                     * oldalt sem. Összeolvasztjuk, átvesszük a szerver revjét,
+                     * majd az autosave visszaküldi az egységes állapotot.
                      */
-                    installAuthoritativeWorld(
-                      conflictWorld,
-                      e.data.meId || meId,
-                      "reconnect-conflict"
+                    const reconciled = migrate(
+                      mergeWorlds(
+                        conflictWorld,
+                        wRef.current || latestLocal
+                      )
                     );
+                    reconciled.syncRev =
+                      worldSyncRev(conflictWorld);
+                    setWorld(reconciled);
+                    setSaveState("retry");
                   }
                 }
               } finally {
@@ -40914,14 +41240,21 @@ const signOut = useCallback(async () => {
               setSaveState("retry");
             } else {
               /*
-               * Valódi másik kliens/eszköz eltérő tartalma.
-               * Itt továbbra is a szerver az authority.
+               * v40 multi-device reconciliation: a szerver revje marad az
+               * authority, de az eltérő lokális és szerver tartalom ID-alapon
+               * összeolvad ahelyett, hogy az egyik teljes snapshot törölné a
+               * másikat. A következő autosave az egyesített state-et küldi fel.
                */
-              installAuthoritativeWorld(
-                serverWorld,
-                session.meId,
-                reason
+              const reconciled = migrate(
+                mergeWorlds(
+                  serverWorld,
+                  latestLocal
+                )
               );
+              reconciled.syncRev =
+                serverRev;
+              setWorld(reconciled);
+              setSaveState("retry");
             }
           } else if (
             sameContent
@@ -42151,23 +42484,43 @@ const signOut = useCallback(async () => {
             }
 
             /*
-             * 3) VALÓDI ELTÉRŐ SZERVERÁLLAPOT.
-             * Csak itt jelenik meg a "másik eszköz" figyelmeztetés.
+             * 3) ELTÉRŐ SZERVERÁLLAPOT — v40 SAFE RECONCILIATION.
+             *
+             * A háttér-AI, polling és autosave ugyanabban a tabban is tud olyan
+             * sorrendet létrehozni, amely kívülről "másik eszköznek" látszik.
+             * Régen ilyenkor a kliens ledobta a saját frissebb állapotát és
+             * ijesztő conflict üzenetet mutatott. Most az ID/timestamp-alapú
+             * mergeWorlds összeolvasztja a szerver és a pillanatnyi lokális
+             * világot, a szerver syncRev-jét veszi át, majd csendben újramenti.
+             * Ez valódi másik eszköz esetén is sokkal kevésbé destruktív.
              */
-            setSaveState("conflict");
+            const latestLocal =
+              wRef.current &&
+              wRef.current.code === conflictWorld.code
+                ? wRef.current
+                : snap;
 
-            installAuthoritativeWorld(
-              conflictWorld,
-              lastError.data.meId || meId,
-              "autosave-conflict"
+            const reconciled =
+              migrate(
+                mergeWorlds(
+                  conflictWorld,
+                  latestLocal
+                )
+              );
+
+            reconciled.syncRev =
+              conflictSyncRev;
+
+            void saveWorldMerged(
+              reconciled
+            ).catch(() => {});
+
+            setWorld(
+              reconciled
             );
 
-            setErr(
-              tt(
-                "Egy másik eszköz közben ténylegesen módosította ezt a világot. A szerver legújabb verzióját töltöttük be; a helyi változat emergency backupként megmaradt.",
-                "Another device genuinely changed this world. The newest server version was loaded; your local version remains as an emergency backup."
-              )
-            );
+            setSaveState("retry");
+            setSaveAt(now());
 
             return;
           }
