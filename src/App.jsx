@@ -8913,6 +8913,100 @@ HIVATKOZÁSI TÉRKÉP EHHEZ A BESZÉLGETÉSHEZ:
 `;
 }
 
+function conversationSpeakerLabel(w, row, playerId = "") {
+  if (!row || typeof row !== "object") return "UNKNOWN";
+  const authorId = row.authorId || row.from || row.id || "";
+  const isPlayer =
+    authorId === "me" ||
+    authorId === "player" ||
+    authorId === playerId ||
+    authorId === (w && w.meId);
+
+  if (isPlayer) return `PLAYER (${w && w.player ? w.player.name : "player"})`;
+  if (authorId === "narrator") return "NARRATOR";
+
+  const c = w ? charById(w, authorId) : null;
+  return `AI (${c ? c.name : String(authorId || "unknown")})`;
+}
+
+function conversationOwnershipInstruction(
+  w,
+  playerText,
+  rows = [],
+  surface = "chat",
+  playerId = ""
+) {
+  const exact = String(playerText || "").trim();
+  if (!exact) return "";
+
+  const recent = (Array.isArray(rows) ? rows : [])
+    .filter((row) => row && typeof row === "object" && String(row.text || "").trim())
+    .slice(-8)
+    .map((row) => {
+      const speaker = conversationSpeakerLabel(w, row, playerId);
+      const targetId = row.to || "";
+      const target = targetId && w
+        ? (targetId === w.meId || targetId === "me" || targetId === "player"
+            ? w.player
+            : charById(w, targetId))
+        : null;
+      return `[${speaker}${target ? ` -> ${target.name}` : ""}] ${String(row.text || "").trim().slice(0, 520)}`;
+    })
+    .join("\n");
+
+  const en = worldLanguage(w, w && w.meId) === "en";
+  const followup = /^(why|what\??|what do you mean|how|how so|since when|who|where|when|really|seriously|you did\??|you are\??|you were\??|about what|and\??|then what|why would you say that|what are you talking about|miért|miert|mit\??|hogyhogy|hogyan|mióta|miota|ki\??|hol\??|mikor\??|tényleg|tenyleg|és\??|es\??)/i.test(exact);
+
+  if (en) {
+    return `
+SPEAKER OWNERSHIP / FOLLOW-UP LOCK — ${String(surface || "conversation").toUpperCase()}:
+- Every line below has an explicit author. AUTHORSHIP IS IMMUTABLE. Never move a statement, action, opinion, plan or fact from one speaker to another.
+- If an AI said something and the PLAYER now asks a follow-up such as “why?”, “what do you mean?”, “how so?”, “since when?”, “who?”, “really?”, or otherwise refers back to it, interpret the question as asking about THE AI'S OWN PREVIOUS MESSAGE/ACTION.
+- NEVER answer as though the player originally made the AI's statement. Never say “you said…” when the referenced sentence was authored by the AI.
+- If the current message is elliptical/short, resolve its missing subject/proposition from the immediately relevant prior AI line before inventing a new topic.
+- The current player message is new input, not a rewrite of the previous AI line.${followup ? " THIS LOOKS LIKE A FOLLOW-UP: explicitly anchor it to the immediately relevant AI-authored line." : ""}
+RECENT AUTHOR-LOCKED CONTEXT:
+${recent || "(no earlier authored lines)"}
+CURRENT PLAYER INPUT: "${exact.slice(0, 900)}"
+`;
+  }
+
+  return `
+BESZÉLŐ-TULAJDONJOG / VISSZAKÉRDEZÉS-RÖGZÍTÉS — ${String(surface || "conversation").toUpperCase()}:
+- Az alábbi sorok szerzője explicit. A SZERZŐSÉG NEM VÁLTOZHAT. Ne adj át egy kijelentést, cselekvést, véleményt, tervet vagy tényt egyik beszélőtől a másiknak.
+- Ha egy AI mondott valamit, és a JÁTÉKOS most visszakérdez (pl. „miért?”, „mit értesz ez alatt?”, „hogyhogy?”, „mióta?”, „ki?”, „tényleg?”), akkor a kérdés AZ AI SAJÁT ELŐZŐ ÜZENETÉRE/CSELEKVÉSÉRE vonatkozik.
+- SOHA ne válaszolj úgy, mintha az AI korábbi mondatát eredetileg a játékos mondta volna. Ne írd, hogy „te mondtad…”, ha azt valójában az AI írta.
+- Rövid/elliptikus kérdésnél a hiányzó alanyt vagy állítást a közvetlenül releváns előző AI-sorból oldd fel, ne találj ki új témát.
+- A játékos mostani szövege új input, nem az AI előző mondatának átírása.${followup ? " EZ VISSZAKÉRDEZÉSNEK TŰNIK: kifejezetten az előző releváns AI-sorhoz kösd." : ""}
+KÖZELI, SZERZŐHÖZ RÖGZÍTETT KONTEXTUS:
+${recent || "(nincs korábbi sor)"}
+A JÁTÉKOS MOSTANI INPUTJA: "${exact.slice(0, 900)}"
+`;
+}
+
+function commentOwnershipInstruction(w, post, comment) {
+  if (!post || !comment) return "";
+  const comments = safePostComments(post);
+  const byId = new Map(comments.filter(Boolean).map((row) => [row.id, row]));
+  const chain = [];
+  let cur = comment;
+  let guard = 0;
+
+  while (cur && guard < 6) {
+    chain.unshift(cur);
+    cur = cur.parent ? (byId.get(cur.parent) || null) : null;
+    guard += 1;
+  }
+
+  return conversationOwnershipInstruction(
+    w,
+    comment.text,
+    chain,
+    "public comment thread",
+    w && w.meId
+  );
+}
+
 function relationshipObsessionLevel(
   w,
   actorId,
@@ -12217,7 +12311,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v41-social-threads-gossip-chat-rp-bridge";
+const BUILD_VERSION = "v42-reply-attribution-rp-turn-visibility";
 
 const AUTO = "masvilag:auto";
 /*
@@ -20075,6 +20169,8 @@ ${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post
 KOMMENTSZÁL:
 ${th.text}
 
+${commentOwnershipInstruction(w, post, comment)}
+
 ${playerInputUnderstandingInstruction(w, comment.text, "comment")}
 
 PUBLIKUS THREAD REALIZMUS:
@@ -24696,13 +24792,33 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const [clockNow, setClockNow] = useState(now());
   const endRef = useRef(null);
   const sendLockRef = useRef(false);
+  const [optimisticTurns, setOptimisticTurns] = useState([]);
   const cast = (w.chars || []).filter((c) => (scene.cast || []).indexOf(c.id) >= 0);
   const who = (id) => charById(w, id);
   const eventProgress = sceneEventProgress(scene, clockNow);
   const eventLang = worldLanguage(w, w.meId);
   const eventLimitLabel = sceneEventProgressText(scene, eventLang, clockNow);
+  const canonicalTurnIds = new Set(
+    (scene.turns || []).map((turn) => turn && turn.id).filter(Boolean)
+  );
+  const visibleTurns = [
+    ...(scene.turns || []),
+    ...optimisticTurns.filter(
+      (turn) => turn && turn.id && !canonicalTurnIds.has(turn.id)
+    ),
+  ].sort((a, b) => (Number(a && a.ts) || 0) - (Number(b && b.ts) || 0));
 
-  useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [(scene.turns || []).length]);
+  useEffect(() => {
+    if (!optimisticTurns.length) return;
+    const ids = new Set(
+      (scene.turns || []).map((turn) => turn && turn.id).filter(Boolean)
+    );
+    setOptimisticTurns((prev) =>
+      prev.filter((turn) => turn && turn.id && !ids.has(turn.id))
+    );
+  }, [scene.turns, optimisticTurns.length]);
+
+  useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [visibleTurns.length]);
   useEffect(() => {
     if (!scene.open || scene.limitMode !== "minutes") return undefined;
     const i = setInterval(() => setClockNow(now()), 15000);
@@ -24718,6 +24834,8 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   });
 
   const advance = async (playerText) => {
+    if (sendLockRef.current) return;
+    sendLockRef.current = true;
     setBusy("turn");
 
     const playerTarget =
@@ -24748,10 +24866,21 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
       : null;
 
     if (optimisticPlayerTurn) {
+      /* UI-FIRST: keep the player's RP line visible before the AI returns. */
+      setOptimisticTurns((prev) =>
+        prev.some((turn) => turn && turn.id === optimisticPlayerTurn.id)
+          ? prev
+          : [...prev, optimisticPlayerTurn]
+      );
+      setText("");
+
       patch((s, n) => {
-        const playerTurn = { ...optimisticPlayerTurn, authorId: n.meId };
-        s.turns.push(playerTurn);
-        rememberRoleplayObservedTurn(n, s, playerTurn);
+        if (!Array.isArray(s.turns)) s.turns = [];
+        if (!s.turns.some((turn) => turn && turn.id === optimisticPlayerTurn.id)) {
+          const playerTurn = { ...optimisticPlayerTurn, authorId: n.meId };
+          s.turns.push(playerTurn);
+          rememberRoleplayObservedTurn(n, s, playerTurn);
+        }
         if (playerTarget.id) s.playerFocusId = playerTarget.id;
       });
     }
@@ -24808,6 +24937,14 @@ JELEN VANNAK: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ")}, valamint ${w
 
 EDDIG TÖRTÉNT:
 ${log || "a jelenet most kezdődik"}
+
+${playerText ? conversationOwnershipInstruction(
+  w,
+  playerText,
+  promptTurns,
+  "roleplay",
+  w.meId
+) : ""}
 
 ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` : "A játékos most nem lép közbe; a szereplők maguktól viszik tovább a jelenetet."}
 
@@ -24999,6 +25136,14 @@ JELEN VANNAK: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ")}, valamint ${w
 EDDIG TÖRTÉNT:
 ${log || "a jelenet most kezdődik"}
 
+${playerText ? conversationOwnershipInstruction(
+  w,
+  playerText,
+  promptTurns,
+  "roleplay retry",
+  w.meId
+) : ""}
+
 ${playerText ? `${w.player.name} most ezt teszi vagy mondja:
 "${playerText}"` : "A játékos most nem lép közbe."}
 
@@ -25048,6 +25193,13 @@ VÁLASZ CSAK JSON:
       }
 
       patch((s, n) => {
+        if (!Array.isArray(s.turns)) s.turns = [];
+        if (optimisticPlayerTurn && !s.turns.some((turn) => turn && turn.id === optimisticPlayerTurn.id)) {
+          const playerTurn = { ...optimisticPlayerTurn, authorId: n.meId };
+          s.turns.push(playerTurn);
+          rememberRoleplayObservedTurn(n, s, playerTurn);
+        }
+
         resolved.forEach((t) => {
           const storedTurn = { id: "turn_" + uid(), ...t, ts: now(), language: worldLanguage(n, n.meId) };
           s.turns.push(storedTurn);
@@ -25237,11 +25389,13 @@ VÁLASZ CSAK JSON:
             .concat(n.log)
             .slice(0, 30);
       });
-      setText("");
+      if (!playerText) setText("");
     } catch (e) {
       setErr(((e && e.message) ? e.message + " " : "") + tt("Nyomd meg még egyszer — ha újra elakad, rövidítsd a helyzet leírását vagy csökkentsd a szereplők számát.", "Press it again — if it gets stuck again, shorten the situation description or reduce the number of characters."));
+    } finally {
+      sendLockRef.current = false;
+      setBusy("");
     }
-    setBusy("");
   };
 
   const finish = async (earlyRequested = false) => {
@@ -25548,14 +25702,14 @@ Formátum:
         </div>
       </div>
 
-      {(scene.turns || []).length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 20 }}>{tt("Kezdd el: írd meg, mit tesz a karaktered — vagy hagyd, hogy ők kezdjenek.", "Get started: write what your character does — or let them start.")}</p>}
+      {visibleTurns.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 20 }}>{tt("Kezdd el: írd meg, mit tesz a karaktered — vagy hagyd, hogy ők kezdjenek.", "Get started: write what your character does — or let them start.")}</p>}
 
-      {scene.turns.map((t, i) => {
+      {visibleTurns.map((t, i) => {
         if (t.authorId === "narrator") return <p className="narr" key={i}>{t.text}</p>;
         const a = t.authorId === w.meId ? w.player : who(t.authorId);
         if (!a) return null;
         return (
-          <div className="turn" key={i}>
+          <div className="turn" key={t.id || i}>
             <Av src={a.avatar} name={a.name} size={30} radius={10} />
             <div style={{ minWidth: 0, flex: 1 }}>
               <div className="turn-name">{a.name}</div>
@@ -25884,6 +26038,16 @@ ${w.player.name} [${w.meId}]
 
 EDDIGI ÜZENETEK:
 ${hist || "a beszélgetés most kezdődik"}
+
+${mine ? conversationOwnershipInstruction(
+  w,
+  mine,
+  msgs.concat(
+    mine ? [{ from: w.meId, to: playerTarget.id || "", text: mine }] : []
+  ),
+  "group chat",
+  w.meId
+) : ""}
 
 ${chatReferenceInstruction(
   w,
@@ -26755,6 +26919,14 @@ ${selfMemoryForPrompt(
 
 BESZÉLGETÉS:
 ${hist}
+
+${conversationOwnershipInstruction(
+  requestWorld,
+  t,
+  requestWorld.chats[ck] || [],
+  "private DM",
+  requestWorld.meId
+)}
 
 ${playerInputUnderstandingInstruction(requestWorld, t, "chat")}
 
