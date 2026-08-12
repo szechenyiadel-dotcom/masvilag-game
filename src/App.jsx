@@ -5184,10 +5184,13 @@ async function pumpAiQueue() {
             ? AI.interactiveGap
             : AI.gap;
 
-        const gap = Math.max(
-          baseGap,
-          Number(AI.lastCostGap) || 0
-        );
+        const gap =
+          task.priority >= 50
+            ? baseGap
+            : Math.max(
+                baseGap,
+                Number(AI.lastCostGap) || 0
+              );
 
         if (since < gap) {
           await wait(
@@ -5284,7 +5287,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   );
 
   const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), 60000);
+  const to = setTimeout(() => ctrl.abort(), requestMeta.interactive ? 22000 : 60000);
   let res;
   try {
     // Fejlesztéshez: a kliens most egy lokális proxyhoz fordul, amely beállítja
@@ -5482,10 +5485,17 @@ async function askJSON(system, prompt, options = {}) {
             throw err;
           }
           if (err && err.busy) {
-            // a visszafogás nem hiba: megvárjuk a pihenőt, és megyünk tovább
             busyWaits++;
-            await wait(cooldownLeft() + 500);
-            continue;                 // ez nem számít elrontott próbálkozásnak
+            /*
+             * Direct player chat must stay responsive. If the provider asks for
+             * a long cooldown, surface the retry state instead of freezing the
+             * chat UI for tens of seconds. Background actions may wait safely.
+             */
+            if (priority >= 50 && cooldownLeft() > 3000) {
+              throw err;
+            }
+            await wait(Math.min(cooldownLeft() + 250, priority >= 50 ? 3000 : 20000));
+            continue;
           }
           tries++;
 
@@ -10895,6 +10905,8 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
+const BUILD_VERSION = "v21-runtime-rebase";
+
 const AUTO = "masvilag:auto";
 /*
  * LIVE WORLD FIXED MODE
@@ -16216,7 +16228,6 @@ function SocialProfileModal({
   onOpenProfile,
   onWorlds,
 }) {
-  useEditLock();
 
   const { tt } = useLang();
   const { media } = useMedia();
@@ -17443,73 +17454,9 @@ function applyPostPerceptionImpact(
     });
 
   /*
-   * 3) Egy konkrét AI-like önmagában is apró pozitív figyelem-jel.
-   * Background like-ok ide nem kerülnek.
+   * Like = visible social signal, not an automatic affection mutation.
+   * Relationship points move only from an explicit, meaningful interaction.
    */
-  (
-    out &&
-    Array.isArray(
-      out.likes
-    )
-      ? out.likes
-      : []
-  ).forEach((rawId) => {
-    const actorId =
-      aiVoice(
-        n,
-        rawId
-      );
-
-    if (
-      !actorId ||
-      actorId ===
-        post.authorId ||
-      relationshipDone.has(
-        actorId
-      )
-    ) {
-      return;
-    }
-
-    const obsession =
-      relationshipObsessionLevel(
-        n,
-        actorId,
-        post.authorId
-      );
-
-    directChanges.push(
-      {
-        a: actorId,
-        b: post.authorId,
-        delta:
-          obsession >= 3
-            ? 2
-            : 1,
-        mood: "",
-        why:
-          worldLanguage(
-            n,
-            actorId
-          ) === "en"
-            ? (
-                obsession >= 3
-                  ? "They reacted to the post with unusually strong attention."
-                  : "They liked the post."
-              )
-            : (
-                obsession >= 3
-                  ? "Szokatlanul erős figyelemmel reagált a posztra."
-                  : "Lájkolta a posztot."
-              ),
-        oneSided: true,
-      }
-    );
-
-    relationshipDone.add(
-      actorId
-    );
-  });
 
   castIds.forEach(
     (id) =>
@@ -17643,6 +17590,14 @@ function applyNotePerceptionImpact(
     ),
   ].filter(Boolean));
 
+  const relationshipReactors = new Set(
+    out && Array.isArray(out.dms)
+      ? out.dms
+          .map((r) => findChar(n, r && (r.id !== undefined ? r.id : r.name)))
+          .filter(Boolean)
+      : []
+  );
+
   const changes = [];
 
   (
@@ -17734,7 +17689,7 @@ function applyNotePerceptionImpact(
 
       if (
         delta &&
-        visibleReactors.has(actorId) &&
+        relationshipReactors.has(actorId) &&
         !relationshipDone.has(
           actorId
         )
@@ -17819,7 +17774,7 @@ function applyNotePerceptionImpact(
           n,
           a
         ) &&
-        visibleReactors.has(a)
+        relationshipReactors.has(a)
       ) {
         if (
           relationshipDone.has(
@@ -17834,7 +17789,7 @@ function applyNotePerceptionImpact(
         );
       }
 
-      if (!visibleReactors.has(a) || b !== note.authorId) {
+      if (!relationshipReactors.has(a) || b !== note.authorId) {
         return;
       }
 
@@ -17857,88 +17812,7 @@ function applyNotePerceptionImpact(
       );
     });
 
-  /*
-   * Emoji fallback:
-   * ha az AI nem adott külön delta-t, a nagyon egyértelmű
-   * reakció-emojiból lehet apró kapcsolatváltozás.
-   */
-  (
-    out &&
-    Array.isArray(
-      out.reacts
-    )
-      ? out.reacts
-      : []
-  ).forEach((r) => {
-    const actorId =
-      findChar(
-        n,
-        r &&
-          (
-            r.id !== undefined
-              ? r.id
-              : r.name
-          )
-      );
-
-    if (
-      !actorId ||
-      actorId ===
-        note.authorId ||
-      isHuman(
-        n,
-        actorId
-      ) ||
-      relationshipDone.has(
-        actorId
-      )
-    ) {
-      return;
-    }
-
-    const delta =
-      noteEmojiRelationshipDelta(
-        r &&
-        r.emoji,
-        relationshipObsessionLevel(
-          n,
-          actorId,
-          note.authorId
-        )
-      );
-
-    if (!delta) {
-      return;
-    }
-
-    changes.push(
-      {
-        a: actorId,
-        b: note.authorId,
-        delta,
-        mood: "",
-        why:
-          worldLanguage(
-            n,
-            actorId
-          ) === "en"
-            ? "Their reaction to the Note affected how they feel."
-            : "A Note-ra adott reakciója hatott arra, mit érez.",
-        oneSided: true,
-      }
-    );
-
-    relationshipDone.add(
-      actorId
-    );
-  });
-
-  castIds.forEach(
-    (id) =>
-      processed.add(
-        id
-      )
-  );
+  /* Emoji-only reactions do not mutate relationship points. */
 
   note.processedBy =
     [...processed];
@@ -17954,8 +17828,9 @@ function applyNotePerceptionImpact(
 
 function applyComments(n, postId, out, label) {
   const p = (n.posts || []).find((x) => x && x.id === postId);
-  if (!p) return;
+  if (!p) return 0;
 
+  let createdVisible = 0;
   p.comments = safePostComments(p);
   {
     const byLabel = {};
@@ -18035,6 +17910,7 @@ const made = {
 };
 
 p.comments.push(made);
+createdVisible += 1;
 
 noteComment(
   n,
@@ -18143,6 +18019,7 @@ recordSocialEvent(
   }
 
   p.likedBy.push(who);
+  createdVisible += 1;
 
   p.likes =
     Math.max(
@@ -18269,6 +18146,7 @@ recordSocialEvent(
   applySelfUpdates(n, out);
 
   /* Raw AI "events" are not a second reality. Concrete social objects above are the source of truth. */
+  return createdVisible;
 }
 function socialInteractionInterest(
   w,
@@ -18819,7 +18697,7 @@ Formátum:
 
 function applyReplies(n, postId, rootId, out) {
   const p = (n.posts || []).find((x) => x && x.id === postId);
-  if (!p) return;
+  if (!p) return 0;
 
   p.comments = safePostComments(p);
   const createdReplyIds = [];
@@ -18931,6 +18809,8 @@ function applyReplies(n, postId, rootId, out) {
   if (createdReplyIds.length) {
     enqueueNaturalThreadReply(n, postId, createdReplyIds);
   }
+
+  return createdReplyIds.length;
 }
 /*
  * FAIR POST ACTIVITY
@@ -19284,6 +19164,69 @@ Formátum:
         ? 1800
         : 4096,
     }
+  );
+}
+
+
+async function genFocusedWorldStep(w) {
+  const author = fairPostCast(w)[0];
+  if (!author) return null;
+
+  const recentOwn = (w.posts || [])
+    .filter((p) => p && p.authorId === author.id)
+    .slice(0, 5)
+    .map((p) => `${p.text || ""}${p.imageDescription ? ` [image: ${p.imageDescription}]` : ""}`)
+    .join("\n");
+
+  const recentWorld = (w.posts || [])
+    .slice(0, 5)
+    .map((p) => `${nameOfIn(w, p.authorId)}: ${cut(p.text || p.imageDescription || "", 180)}`)
+    .join("\n");
+
+  const selfState = (w.charMemory && w.charMemory[author.id] && w.charMemory[author.id].selfState) || {};
+
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(w, [author.id], false, author.id)}
+
+${voiceCard(author)}
+${characterMemoryCard(w, author)}
+
+TE MOST ${String(author.name || "").toUpperCase()} VAGY, ÉS SAJÁT MAGADTÓL POSZTOLSZ.
+
+AKTUÁLIS SAJÁT ÁLLAPOTOD:
+- mood: ${selfState.mood || "-"}
+- intent: ${selfState.intent || "-"}
+- open loops: ${(selfState.openLoops || []).slice(-4).join(" | ") || "-"}
+
+KAPCSOLATOD A JÁTÉKOSSAL:
+${relationshipBehaviorCard(w, author.id, w.meId) || "-"}
+
+SAJÁT LEGUTÓBBI POSZTJAID — NE ISMÉTELD ŐKET:
+${recentOwn || "-"}
+
+LEGUTÓBBI FEED:
+${recentWorld || "-"}
+
+SAJÁT FOTÓALBUMOD:
+${albumList(author) || "nincs használható albumkép"}
+
+ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
+- A poszt kizárólag ${author.name} saját életéből, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
+- Ne legyen rendszer-poszt vagy mesterséges filler.
+- Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
+- Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
+- Ha albumképet választasz, ELŐBB a visible image content alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra a képre illik.
+- Kép nélkül is teljesen jó poszt.
+- Ne generálj kommenteket ebben a hívásban; a többi AI külön fog reagálni rá a saját karakteréből.
+- A játékos helyett soha ne írj.
+
+${repetitionGuard(w, [author.id], "autonóm posztok és kommentek")}
+
+JSON:
+{"posts":[{"id":"${author.id}","text":"a poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}]}${TAIL}`,
+    { maxTokens: 900 }
   );
 }
 
@@ -21203,7 +21146,6 @@ function AlbumView({ items }) {
 }
 
 function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
-  useEditLock();
 
   const { tt } = useLang();
   const { media } = useMedia();
@@ -24459,7 +24401,7 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
       `${worldContext(
         requestWorld,
         [c.id],
-        true,
+        false,
         c.id
       )}
 
@@ -24622,6 +24564,9 @@ PRIVÁT CHAT SZABÁLYOK:
 - Magázás tilos.
 
 KAPCSOLATVÁLTOZÁS:
+- Alapértelmezés: "relationshipImpact": false és changes: [].
+- Egy hétköznapi válasz, poén, emoji, sima kérdés, képreakció, small talk vagy rutinszerű flört NEM mozgat automatikusan kapcsolatpontot.
+- "relationshipImpact": true CSAK akkor lehet, ha EBBEN a konkrét üzenetváltásban ténylegesen történt érzelmileg jelentős dolog: vallomás, komoly sértés, bizalom, árulás, féltékenységi trigger, megbocsátás, határátlépés, fontos támogatás vagy hasonló valódi fordulat.
 - A changes tömbben külön irányként kezeld ${c.name} → ${requestWorld.player.name} ÉS ${requestWorld.player.name} → ${c.name} kapcsolatát.
 - Ha a beszélgetés tényleg hatott mindkettőjükre, adj KÉT külön changes elemet.
 - A két irány delta-ja lehet eltérő nagyságú, sőt akár eltérő előjelű is.
@@ -24632,7 +24577,7 @@ KAPCSOLATVÁLTOZÁS:
 - Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
 
 Formátum:
-{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","imagePrompt":"rövid snap-leírás vagy üres","changes":[{"a":"${c.id}","b":"${requestWorld.meId}","delta":-12,"mood":"mit érez most iránta","why":"miért"},{"a":"${requestWorld.meId}","b":"${c.id}","delta":8,"mood":"","why":"miért"}],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
+{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","imagePrompt":"rövid snap-leírás vagy üres","relationshipImpact":false,"changes":[],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
     );
 
     const requestedReplyText = String(
@@ -24724,82 +24669,8 @@ Formátum:
     let reply = requestedReplyText;
 
     /*
-     * Ha a modell a prompt ellenére is
-     * visszanyúl egy frissen túlhasznált
-     * emojihoz, egyszer újraíratjuk vele
-     * ugyanazt a reakciót.
+     * No second AI round-trip for emoji cleanup. Local sanitizers handle it.
      */
-    if (
-      reply &&
-      usesBlockedChatEmoji(
-        requestWorld,
-        c.id,
-        reply
-      )
-    ) {
-      const retryOut =
-        await askWorldJSONInteractive(
-          requestWorld,
-          engineFor(
-            requestWorld
-          ),
-          `${worldContext(
-            requestWorld,
-            [c.id],
-            true,
-            c.id
-          )}
-
-TE MOST ${c.name.toUpperCase()} VAGY.
-
-Az előző válaszod tartalma alapvetően jó volt,
-de az emoji-használat ismétlődött.
-
-${voiceCard(c)}
-
-${chatEmojiGuard(
-  requestWorld,
-  c.id
-)}
-
-${matureContentInstruction(
-  requestWorld,
-  [c.id],
-  "chat"
-)}
-
-EREDETI VÁLASZ:
-${reply}
-
-Írd újra ugyanazt a természetes privát chatreakciót.
-A jelentést és a karakter hangját tartsd meg.
-Lehet teljesen emoji nélküli is.
-NE magyarázd meg az átírást.
-
-Formátum:
-{"reply":"az új, természetes chatválasz"}${TAIL}`
-        );
-
-      const retryReply =
-        String(
-          retryOut &&
-          retryOut.reply !== undefined
-            ? retryOut.reply
-            : ""
-        ).trim();
-
-      if (
-        retryReply &&
-        !usesBlockedChatEmoji(
-          requestWorld,
-          c.id,
-          retryReply
-        )
-      ) {
-        reply = retryReply;
-      }
-    }
-
     reply =
       enforceChatEmojiVariety(
         requestWorld,
@@ -24814,85 +24685,6 @@ Formátum:
         reply,
         hist
       );
-
-    if (!reply && !aiImageRef) {
-      /*
-       * Ha egy emoji-only válasz teljesen
-       * kiesett a cooldown miatt, kérünk
-       * egy rövid, kötelezően emoji nélküli
-       * újrafogalmazást.
-       */
-      const noEmojiOut =
-        await askWorldJSONInteractive(
-          requestWorld,
-          engineFor(
-            requestWorld
-          ),
-          `${worldContext(
-            requestWorld,
-            [c.id],
-            true,
-            c.id
-          )}
-
-TE MOST ${c.name.toUpperCase()} VAGY.
-
-Írj egy rövid, karakterhű privát chatválaszt
-${requestWorld.player.name} legutóbbi üzenetére.
-
-${relationshipBehaviorCard(
-  requestWorld,
-  c.id,
-  requestWorld.meId
-)}
-
-${dmPresenceGuardInstruction(
-  requestWorld,
-  c.id,
-  hist
-)}
-
-${matureContentInstruction(
-  requestWorld,
-  [c.id],
-  "chat"
-)}
-
-SZIGORÚ SZABÁLY:
-- EGYETLEN EMOJIT SE használj.
-- Legalább egy szót írj.
-- Ne narrálj.
-- Ne magyarázd az átírást.
-
-Formátum:
-{"reply":"emoji nélküli rövid válasz"}${TAIL}`
-        );
-
-      reply =
-        String(
-          noEmojiOut &&
-          noEmojiOut.reply !== undefined
-            ? noEmojiOut.reply
-            : ""
-        )
-          .replace(
-            /\p{Extended_Pictographic}/gu,
-            ""
-          )
-          .replace(
-            /\s+/g,
-            " "
-          )
-          .trim();
-
-      reply =
-        sanitizePhoneDm(
-          requestWorld,
-          c.id,
-          reply,
-          hist
-        );
-    }
 
     if (!reply && !aiImageRef) {
       throw new Error(
@@ -24955,17 +24747,21 @@ Formátum:
               },
             ];
 
-      const dmChanges = dmChangesRaw.filter((ch) => {
-        const a = findChar(n, ch && ch.a);
-        const b = findChar(n, ch && ch.b);
-        return Boolean(
-          a && b && a !== b &&
-          (
-            (a === c.id && b === requestWorld.meId) ||
-            (a === requestWorld.meId && b === c.id)
-          )
-        );
-      });
+      const dmChanges = out && out.relationshipImpact === true
+        ? dmChangesRaw.filter((ch) => {
+            const a = findChar(n, ch && ch.a);
+            const b = findChar(n, ch && ch.b);
+            return Boolean(
+              a && b && a !== b &&
+              Math.abs(Number(ch && ch.delta) || 0) >= 3 &&
+              String((ch && ch.why) || "").trim().length >= 8 &&
+              (
+                (a === c.id && b === requestWorld.meId) ||
+                (a === requestWorld.meId && b === c.id)
+              )
+            );
+          })
+        : [];
 
       applyChanges(
         n,
@@ -25095,7 +24891,7 @@ Formátum:
   } catch (e) {
     /*
      * A játékos üzenete már biztosan bent marad.
-     * A közvetlen chat-hívás 3 automatikus próbát kapott,
+     * A közvetlen chat-hívás rövid, korlátozott próbálkozást kapott,
      * ezért itt már csak valódi szolgáltatói/hálózati hibát jelzünk.
      */
     setErr(
@@ -25806,7 +25602,6 @@ if (group) {
    Értesítések (harang)
    ============================================================ */
 function Alerts({ w, onClose, onOpen, onClear }) {
-  useEditLock();
   const { tt } = useLang();
   const list = (w.notify && w.notify[w.meId]) || [];
   return (
@@ -26923,7 +26718,7 @@ async function genDM(w, bot) {
     `${worldContext(
       w,
       [bot.id],
-      true,
+      false,
       bot.id
     )}
 
@@ -27200,12 +26995,15 @@ Ha nincs természetes okod írni:
 {"skip":true,"text":"","image":"","changes":[]}
 
 Ha van:
+- Alapértelmezés: "relationshipImpact": false és changes: [].
+- Hétköznapi spontán ping, poén, praktikus kérdés, kép, sima flört vagy small talk önmagában ne változtasson kapcsolatpontot.
+- "relationshipImpact": true csak konkrét, érzelmileg jelentős fordulatnál lehet.
 - A changes mezőben AI → játékos és játékos → AI irány is szerepelhet, ha az interakció ténylegesen hat a viszonyra.
 - A két irány nem kötelezően szimmetrikus.
 - Plusz és mínusz egyformán lehetséges.
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
-{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","imagePrompt":"rövid snap-leírás vagy üres","changes":[{"a":"${bot.id}","b":"${w.meId}","delta":10,"mood":"mit érzel most iránta","why":"miért"},{"a":"${w.meId}","b":"${bot.id}","delta":6,"mood":"","why":"miért"}],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}]}${TAIL}`,
+{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","imagePrompt":"rövid snap-leírás vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}]}${TAIL}`,
     { maxTokens: 700 }
   );
 }
@@ -27217,7 +27015,7 @@ async function genNote(w, bot) {
     `${worldContext(
       w,
       [bot.id],
-      true,
+      false,
       bot.id
     )}
 
@@ -30667,7 +30465,7 @@ async function genPopupPrivateReply(
       `${worldContext(
         requestWorld,
         [c.id],
-        true,
+        false,
         c.id
       )}
 
@@ -34911,7 +34709,7 @@ function feedNeedsFreshPost(w) {
    */
   return (
     !last ||
-    now() - last >= 45000
+    now() - last >= 25000
   );
 }
 
@@ -35076,7 +34874,7 @@ function planAutoAction(view) {
     return mkAction(
       "world",
       `feed-watchdog:${Math.floor(
-        now() / 45000
+        now() / 25000
       )}`
     );
   }
@@ -35311,7 +35109,7 @@ function planAutoAction(view) {
    * ténylegesen felépített hozzá elég support / backlash energiát.
    */
   if (
-    Math.random() < 0.32
+    false
   ) {
     const wave =
       pickSocialWaveAction(
@@ -36604,9 +36402,11 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : rawOut;
 
-    update((n) => {
-      
+    const replyProbe = JSON.parse(JSON.stringify(view));
+    const replyCount = applyReplies(replyProbe, post.id, comment.id, out);
+    if (!replyCount) return null;
 
+    update((n) => {
       applyReplies(
         n,
         post.id,
@@ -36634,18 +36434,15 @@ async function runSimulationAction(view, update, action, addImage) {
     const { out, label } =
       await genComments(view, post);
 
-    update((n) => {
-      
+    const commentsProbe = JSON.parse(JSON.stringify(view));
+    const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
+    if (!visibleReactionCount) return null;
 
+    update((n) => {
       const livePost = (n.posts || []).find((p) => p && p.id === post.id);
       const beforeIds = new Set(safePostComments(livePost).map((c) => c.id));
 
-      applyComments(
-        n,
-        post.id,
-        out,
-        label
-      );
+      applyComments(n, post.id, out, label);
 
       const refreshedPost = (n.posts || []).find((p) => p && p.id === post.id);
       const newCommentIds = safePostComments(refreshedPost)
@@ -37127,28 +36924,20 @@ if (targetNote) {
 
       target.updatedAt = now();
 
-      applyChanges(
-        n,
-        safeAiChanges(out)
-      );
+      const rowActors = new Set(rows.map((row) => row.from));
+      const groupMembers = new Set(target.members || []);
+      const causalGroupChanges = safeAiChanges(out).filter((ch) => {
+        const a = findChar(n, ch && ch.a);
+        const b = findChar(n, ch && ch.b);
+        if (!a || !b || a === b || !rowActors.has(a) || !groupMembers.has(b)) return false;
+        const authored = rows.filter((row) => row.from === a);
+        return authored.some((row) => mentionedIdsInText(n, row.text, a).includes(b));
+      });
 
-      applyMemories(
-        n,
-        safeAiMemories(out)
-      );
+      applyChanges(n, causalGroupChanges);
+      applyMemories(n, safeAiMemories(out));
       applySelfUpdates(n, out);
-
-      if (
-        out.event &&
-        String(out.event).trim()
-      ) {
-        n.log = [
-          String(
-            out.event
-          ).trim(),
-          ...(n.log || []),
-        ].slice(0, 30);
-      }
+      /* The saved group messages are the event; raw model event prose is ignored. */
     });
 
     return "group-turn";
@@ -37355,23 +37144,18 @@ if (targetNote) {
         }
       );
 
-      applyChanges(
-        n,
-        safeAiChanges(out)
-      );
+      const messageActors = new Set(messages.map((msg) => msg.from));
+      const groupMembers = new Set(memberIds);
+      const causalGroupChanges = safeAiChanges(out).filter((ch) => {
+        const a = findChar(n, ch && ch.a);
+        const b = findChar(n, ch && ch.b);
+        if (!a || !b || a === b || !messageActors.has(a) || !groupMembers.has(b)) return false;
+        const authored = messages.filter((msg) => msg.from === a);
+        return authored.some((msg) => mentionedIdsInText(n, msg.text, a).includes(b));
+      });
+      applyChanges(n, causalGroupChanges);
       applySelfUpdates(n, out);
-
-      if (
-        out.event &&
-        String(out.event).trim()
-      ) {
-        n.log = [
-          String(
-            out.event
-          ).trim(),
-          ...(n.log || []),
-        ].slice(0, 30);
-      }
+      /* The created group + its saved messages are the event; no phantom raw log entry. */
     });
 
     return "group";
@@ -37584,17 +37368,21 @@ if (targetNote) {
               },
             ];
 
-      const dmChanges = dmChangesRaw.filter((ch) => {
-        const a = findChar(n, ch && ch.a);
-        const b = findChar(n, ch && ch.b);
-        return Boolean(
-          a && b && a !== b &&
-          (
-            (a === bot.id && b === view.meId) ||
-            (a === view.meId && b === bot.id)
-          )
-        );
-      });
+      const dmChanges = out && out.relationshipImpact === true
+        ? dmChangesRaw.filter((ch) => {
+            const a = findChar(n, ch && ch.a);
+            const b = findChar(n, ch && ch.b);
+            return Boolean(
+              a && b && a !== b &&
+              Math.abs(Number(ch && ch.delta) || 0) >= 3 &&
+              String((ch && ch.why) || "").trim().length >= 8 &&
+              (
+                (a === bot.id && b === view.meId) ||
+                (a === view.meId && b === bot.id)
+              )
+            );
+          })
+        : [];
 
       applyChanges(
         n,
@@ -37691,10 +37479,12 @@ if (targetNote) {
   }
 
   const out =
-    await genWorldStep(
-      view,
-      action.type !== "world-full"
-    );
+    action.type === "world"
+      ? await genFocusedWorldStep(view)
+      : await genWorldStep(
+          view,
+          false
+        );
 
   /*
    * Üres/stale AI-result nem számít sikeres világkörnek. Így nem indítjuk
@@ -37718,10 +37508,26 @@ if (targetNote) {
   }
 
   update((n) => {
-    applyWorldStep(
-      n,
-      out
+    const beforePostIds = new Set((n.posts || []).map((p) => p && p.id).filter(Boolean));
+    applyWorldStep(n, out);
+
+    const freshPosts = (n.posts || []).filter(
+      (p) => p && !beforePostIds.has(p.id) && !isHuman(n, p.authorId)
     );
+
+    freshPosts.forEach((freshPost) => {
+      if (!safePostComments(freshPost).length) {
+        simEnqueue(
+          n,
+          mkAction(
+            "comments",
+            `auto-comments:${freshPost.id}:0`,
+            { postId: freshPost.id },
+            "event"
+          )
+        );
+      }
+    });
   });
 
   return "world";
@@ -37748,6 +37554,7 @@ export default function App() {
   const [auto, setAutoCfg] = useState(AUTO_DEFAULT);
   const [autoBusy, setAutoBusy] = useState(false);
   const autoRunning = useRef(false);
+  const autoRunningSince = useRef(0);
   const viewRef = useRef(null);
   const [simPulse, setSimPulse] = useState(0);
   const [flash, setFlash] = useState(null);
@@ -40216,7 +40023,18 @@ const signOut = useCallback(async () => {
     if (!langReady || !world || !meId) return;
     let alive = true;
     const beat = async () => {
-  if (!alive || autoRunning.current) return;
+  if (!alive) return;
+
+  if (autoRunning.current) {
+    /* Recover from a rejected/aborted render cycle that left the engine locked. */
+    if (autoRunningSince.current && now() - autoRunningSince.current > 90000) {
+      autoRunning.current = false;
+      autoRunningSince.current = 0;
+      setAutoBusy(false);
+    } else {
+      return;
+    }
+  }
 
   const view2 = viewRef.current;
   if (!view2 || !(view2.chars || []).length) return;
@@ -40241,7 +40059,7 @@ const signOut = useCallback(async () => {
   }
 
   if (!manualQueued && cooldownLeft() > 0) return;
-  if (!manualQueued && typeof document !== "undefined" && document.hidden) return;
+  /* Background tabs may be browser-throttled, but we do not intentionally stop the world. */
 
   let action = queued;
       if (!action) {
@@ -40289,6 +40107,7 @@ const signOut = useCallback(async () => {
       }
 
       autoRunning.current = true;
+      autoRunningSince.current = now();
       setAutoBusy(true);
       update((n) => {
         /*
@@ -40342,6 +40161,7 @@ const signOut = useCallback(async () => {
         }
       });
       autoRunning.current = false;
+      autoRunningSince.current = 0;
       if (alive) setAutoBusy(false);
     };
     /*
@@ -40425,7 +40245,7 @@ const signOut = useCallback(async () => {
           <div className="hdr-row">
             <div style={{ minWidth: 0 }}>
               <div className="mark">más<i>világ</i></div>
-              <div className="hdr-meta">{world.universe.name} · <span className="mono">{world.code}</span> · <span className="mono">@{me.username}</span></div>
+              <div className="hdr-meta">{world.universe.name} · <span className="mono">{world.code}</span> · <span className="mono">@{me.username}</span> · <span className="mono">{BUILD_VERSION}</span></div>
               <div className="hint" style={{ marginTop: 4 }}>{saveLabel}{saveAt ? ` · ${timeAgo(saveAt)}` : ""}</div>
             </div>
             <button className="btn tiny ghost" onClick={() => changeAuto({ on: !auto.on })}
