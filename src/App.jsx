@@ -5287,7 +5287,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   );
 
   const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), requestMeta.interactive ? 22000 : 60000);
+  const timeoutMs = Math.max(8000, Number(requestMeta.timeoutMs) || (requestMeta.interactive ? 28000 : 60000));
+  const to = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
   try {
     // Fejlesztéshez: a kliens most egy lokális proxyhoz fordul, amely beállítja
@@ -5465,6 +5466,7 @@ async function askJSON(system, prompt, options = {}) {
             Number(options.maxTokens || 1200),
             {
               interactive: priority >= 50,
+              timeoutMs: Number(options.timeoutMs) || undefined,
             }
           );
           const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
@@ -11091,7 +11093,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v27-chat-image-backend";
+const BUILD_VERSION = "v28-chat-group-stable";
 
 const AUTO = "masvilag:auto";
 /*
@@ -23830,6 +23832,23 @@ const turn = async (mine) => {
           reason: "none",
         };
 
+  const recentAiIds = [...msgs]
+    .reverse()
+    .map((m) => m && m.from)
+    .filter((id) => id && id !== w.meId && (group.members || []).includes(id));
+
+  const groupAiIds = [...new Set([
+    playerTarget.id || "",
+    ...recentAiIds,
+    ...(group.members || []),
+  ])]
+    .filter((id) => id && !isHuman(w, id) && charById(w, id))
+    .slice(0, 4);
+
+  const groupAiMembers = groupAiIds
+    .map((id) => charById(w, id))
+    .filter(Boolean);
+
   if (mine) {
     patch((g) => {
       g.msgs.push({
@@ -23889,13 +23908,15 @@ const turn = async (mine) => {
       })
       .join("\n");
 
-    const out = await askWorldJSONInteractive(
-      w,
-      engineFor(w),
+    let out;
+    try {
+      out = await askWorldJSONInteractive(
+        w,
+        engineFor(w),
       `${worldContext(
         w,
-        group.members,
-        true,
+        groupAiIds,
+        false,
         null
       )}
 
@@ -23941,17 +23962,17 @@ ${
 }
 
 TAGOK TELJES KARAKTERKÁNONJA ÉS EMLÉKEZETE:
-${members.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
+${groupAiMembers.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
 
 ${repetitionGuard(
   w,
-  group.members || [],
+  groupAiIds,
   "csoportchat"
 )}
 
 ${matureContentInstruction(
   w,
-  group.members || [],
+  groupAiIds,
   "group"
 )}
 
@@ -24121,8 +24142,31 @@ Formátum:
 {"replies":[{"id":"tag azonosítója","to":"annak az id-ja, akinek közvetlenül szól, vagy üres","text":"természetes rövid group chat üzenet"}],
 "changes":[{"a":"aki érez","b":"aki iránt","delta":12,"mood":"mit érez most iránta","why":"egy rövid mondat","oneSided":false}],
 "memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${TAIL}`,
-      { maxTokens: 900 }
-    );
+      { maxTokens: 700, maxTries: 1, timeoutMs: 32000 }
+      );
+    } catch (primaryGroupErr) {
+      const fallbackId = playerTarget.id || groupAiIds[0] || "";
+      const fallbackChar = fallbackId ? charById(w, fallbackId) : null;
+      if (!fallbackChar) throw primaryGroupErr;
+
+      out = await askWorldJSONInteractive(
+        w,
+        engineFor(w),
+        `${worldContext(w, [fallbackChar.id], false, fallbackChar.id)}
+
+TE MOST ${fallbackChar.name.toUpperCase()} VAGY.
+Ez egy valódi group chat: ${group.name}.
+${w.player.name} most ezt írta: "${mine || ""}"
+Válaszolj neki röviden és közvetlenül a saját karaktered hangján. Ne narrálj cselekvést, ne írj a játékos helyett.
+
+${voiceCard(fallbackChar)}
+${relationshipBehaviorCard(w, fallbackChar.id, w.meId)}
+
+Formátum:
+{"replies":[{"id":"${fallbackChar.id}","to":"${w.meId}","text":"rövid természetes válasz"}],"changes":[],"memories":[]}${TAIL}`,
+        { maxTokens: 380, maxTries: 1, timeoutMs: 22000 }
+      );
+    }
 
     const rows = (
       (out && out.replies) ||
@@ -24773,6 +24817,7 @@ KAPCSOLATVÁLTOZÁS:
 
 Formátum:
 {"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
+    , { maxTries: 1, maxTokens: 650, timeoutMs: 28000 }
     );
 
     const requestedReplyText = String(
