@@ -2108,6 +2108,7 @@ function timeAgo(ts) {
 
 /* ---------- dátum, kor, csillagjegy ---------- */
 const HU_MONTHS = ["január", "február", "március", "április", "május", "június", "július", "augusztus", "szeptember", "október", "november", "december"];
+const EN_MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 const SIGNS = [["Bak", "Vízöntő", 20], ["Vízöntő", "Halak", 19], ["Halak", "Kos", 21], ["Kos", "Bika", 20],
   ["Bika", "Ikrek", 21], ["Ikrek", "Rák", 21], ["Rák", "Oroszlán", 23], ["Oroszlán", "Szűz", 23],
   ["Szűz", "Mérleg", 23], ["Mérleg", "Skorpió", 23], ["Skorpió", "Nyilas", 22], ["Nyilas", "Bak", 22]];
@@ -2119,8 +2120,13 @@ function parseDate(s) {
   const year = ym ? Number(ym[1]) : null;
   if (ym) str = str.replace(ym[1], " ");
   let m = null, d = null;
-  const mi = HU_MONTHS.findIndex((n) => str.indexOf(n.slice(0, 10)) >= 0);
-  if (mi >= 0) { m = mi + 1; str = str.replace(HU_MONTHS[mi], " "); }
+  let mi = HU_MONTHS.findIndex((n) => str.indexOf(n.slice(0, 10)) >= 0);
+  let monthWord = mi >= 0 ? HU_MONTHS[mi] : "";
+  if (mi < 0) {
+    mi = EN_MONTHS.findIndex((n) => str.indexOf(n) >= 0);
+    monthWord = mi >= 0 ? EN_MONTHS[mi] : "";
+  }
+  if (mi >= 0) { m = mi + 1; str = str.replace(monthWord, " "); }
   const nums = (str.match(/\d{1,2}/g) || []).map(Number);
   if (m === null) { m = nums.length > 0 ? nums[0] : null; d = nums.length > 1 ? nums[1] : null; }
   else d = nums.length > 0 ? nums[0] : null;
@@ -2155,6 +2161,28 @@ const worldToday = (w) => {
   if (y) return String(y);
   return d || termText("notSet", worldLanguage(w));
 };
+
+function advanceWorldClock(w, hours) {
+  if (!w || !w.universe) return;
+  const safeHours = Math.max(1, Math.min(24 * 30, Math.round(Number(hours) || 0)));
+  const story = ensureStorySettings(w);
+  story.elapsedHours = Math.max(0, Number(story.elapsedHours) || 0) + safeHours;
+  story.lastTimeSkipAt = now();
+
+  const parsed = parseDate(w.universe.date);
+  const y = worldYear(w);
+  if (parsed && parsed.m && parsed.d && y) {
+    const dt = new Date(Date.UTC(y, parsed.m - 1, parsed.d, 12, 0, 0));
+    dt.setUTCHours(dt.getUTCHours() + safeHours);
+    w.universe.year = String(dt.getUTCFullYear());
+    const lang = worldLanguage(w, w.meId);
+    w.universe.date = lang === "en"
+      ? `${EN_MONTHS[dt.getUTCMonth()][0].toUpperCase()}${EN_MONTHS[dt.getUTCMonth()].slice(1)} ${dt.getUTCDate()}`
+      : `${HU_MONTHS[dt.getUTCMonth()]} ${dt.getUTCDate()}.`;
+  }
+  w.universe.at = now();
+}
+
 
 /* A kapcsolat IRÁNYÍTOTT: külön tároljuk, hogy A mit érez B iránt, és külön
    azt, hogy B mit érez A iránt. Így lehet egyoldalú a vonzalom, a gyűlölet
@@ -9237,6 +9265,16 @@ function worldContext(w, ids, deep, observerId) {
 ${tt("VILÁG", "WORLD")}: ${w.universe.name} — ${worldToday(w)}
 ${spread(w.universe.description, WORLD_CAP)}
 
+${(() => {
+  const story = storyScenarioText(w, outLang);
+  return `${tt("AKTÍV KEZDŐ / KAMPÁNY-FORGATÓKÖNYV", "ACTIVE START / CAMPAIGN SCENARIO")}: ${story.title}\n${story.premise}\n${tt("DIGITÁLIS / TÁRSAS CÉL", "DIGITAL / SOCIAL GOAL")}: ${story.career}\n${dramaInstruction(w, outLang)}`;
+})()}
+
+${tt(
+  "18+ JÁTÉK-ALAPHANG: nincs Standard/Mature kapcsoló. A világ felnőttes témákat, káromkodást, sötétebb kapcsolatokat, erőszakot, alkoholt/drogot mint történeti elemet és nem explicit felnőtt romantikus feszültséget használhat, ha karakterhű. Kiskorút soha ne szexualizálj; explicit pornográf részleteket ne generálj.",
+  "18+ GAME BASELINE: there is no Standard/Mature toggle. The world may use adult themes, profanity, darker relationships, violence, alcohol/drugs as story elements, and non-graphic adult romantic tension when character-accurate. Never sexualize a minor and never generate explicit pornographic detail."
+)}
+
 ${tt("A JÁTÉKOS KARAKTERE — ŐT KIZÁRÓLAG A FELHASZNÁLÓ IRÁNYÍTJA.", "THE PLAYER CHARACTER — ONLY THE USER CONTROLS THEM.")}
 ${tt(
     "Soha ne adj a szájába szöveget, ne írj helyette posztot, kommentet, üzenetet vagy jegyzetet,\nne lájkoltass vele, és ne írd le, mit tesz vagy mit érez. Csak REAGÁLJ rá.",
@@ -10410,6 +10448,7 @@ function migrate(w) {
 
   if (!w.universe.year) w.universe.year = String(new Date().getFullYear());
   if (w.universe.date === undefined) w.universe.date = "";
+  ensureStorySettings(w);
   const y = worldYear(w);
   const fix = (c) => {
     if (c && !c.birth && c.age && y) {
@@ -10454,8 +10493,11 @@ function migrate(w) {
   (w.chars || []).forEach(fix);
 
   Object.keys(w.players || {}).forEach((id) => {
-    if (!w.userSettings[id]) w.userSettings[id] = { language: asLang(w.aiLang || "hu") };
-    else w.userSettings[id].language = asLang(w.userSettings[id].language);
+    if (!w.userSettings[id]) w.userSettings[id] = { language: asLang(w.aiLang || "hu"), contentLevel: "mature" };
+    else {
+      w.userSettings[id].language = asLang(w.userSettings[id].language);
+      w.userSettings[id].contentLevel = "mature";
+    }
   });
 
   // régi memóriák felhúzása az új, karakterenkénti tudás-tárba
@@ -11212,35 +11254,148 @@ function worldLanguage(w, playerId) {
 
 const CONTENT_LEVELS = [
   {
-    id: "standard",
-    nameHu: "Standard",
-    nameEn: "Standard",
-  },
-  {
     id: "mature",
     nameHu: "Mature 18+",
     nameEn: "Mature 18+",
   },
 ];
 
-function worldContentLevel(
-  w,
-  playerId
-) {
-  const pid =
-    playerId ||
-    (w && w.meId);
+/*
+ * MÁSVILÁG is an adult-rated social RPG by default.
+ * There is deliberately NO Standard / 18+ mode switch anymore.
+ * Character-age safety remains separate: a minor is never sexualized.
+ */
+function worldContentLevel() {
+  return "mature";
+}
 
-  const raw =
-    w &&
-    w.userSettings &&
-    pid &&
-    w.userSettings[pid] &&
-    w.userSettings[pid].contentLevel;
+const STORY_SCENARIOS = [
+  {
+    id: "accidental-fame",
+    titleHu: "Véletlenül híres lettem",
+    titleEn: "Accidentally Famous",
+    premiseHu: "A játékos karakterének egy posztja, képe, videója vagy váratlan nyilvános pillanata hirtelen felkapott lett. Az új figyelem követőket, rajongókat, irigységet, lehetőségeket, pletykákat és új kapcsolatokat hoz. A hírnév oka és következményei a meglévő univerzumból és karakterekből fejlődjenek tovább, ne előre megírt történetként.",
+    premiseEn: "A post, photo, video, or unexpected public moment involving the player character suddenly went viral. The new attention brings followers, fans, jealousy, opportunities, gossip, and new relationships. The reason for the fame and its consequences must grow from the existing universe and characters rather than following a prewritten plot.",
+    careerHu: "A hirtelen figyelmet valódi társadalmi státusszá vagy digitális karrierré alakítani anélkül, hogy a kapcsolatok szétesnének.",
+    careerEn: "Turn sudden attention into real social status or a digital career without destroying existing relationships.",
+  },
+  {
+    id: "new-arrival",
+    titleHu: "Új vagyok itt",
+    titleEn: "New Here",
+    premiseHu: "A játékos karaktere frissen érkezett ebbe a közegbe. Még nincs kész társas helye: barátságokat, rivalizálást, vonzalmat, reputációt és követői kört a tényleges interakciók alakítanak ki.",
+    premiseEn: "The player character has just entered this social environment. Their place is not predetermined: friendships, rivalries, attraction, reputation, and audience develop from actual interactions.",
+    careerHu: "Saját nevet és társas pozíciót építeni az új közegben.",
+    careerEn: "Build a name and social position in the new environment.",
+  },
+  {
+    id: "public-rivalry",
+    titleHu: "Nyilvános rivalizálás",
+    titleEn: "Public Rivalry",
+    premiseHu: "Egy már létező konfliktus vagy rivalizálás kikerült a nyilvánosság elé. A feed, kommentek, pletykaoldal, baráti körök és privát üzenetek különböző oldalakról reagálnak rá. A konfliktus kimenetele nincs előre eldöntve.",
+    premiseEn: "An existing conflict or rivalry has spilled into public view. The feed, comments, gossip media, friend groups, and private messages react from different sides. The outcome is not predetermined.",
+    careerHu: "Megőrizni vagy átformálni a reputációt, miközben a konfliktus valódi társas következményekkel jár.",
+    careerEn: "Protect or reshape reputation while the conflict creates real social consequences.",
+  },
+  {
+    id: "secret-exposed",
+    titleHu: "Kiszivárgott valami",
+    titleEn: "Something Leaked",
+    premiseHu: "Egy kellemetlen, érzékeny vagy félreérthető információ elkezdett terjedni. Nem minden karakter tud ugyanannyit, és nem minden pletyka igaz. A történet a tudáshatárokból, lojalitásokból és a játékos döntéseiből épüljön.",
+    premiseEn: "An awkward, sensitive, or ambiguous piece of information has started spreading. Characters do not all know the same things, and not every rumor is true. The story should grow from knowledge boundaries, loyalties, and player decisions.",
+    careerHu: "Eldönteni, hogy tagadod, tisztázod, felvállalod vagy a saját javadra fordítod a történetet.",
+    careerEn: "Decide whether to deny, clarify, own, or strategically use the story.",
+  },
+  {
+    id: "established-life",
+    titleHu: "Már benne élek ebben a világban",
+    titleEn: "Already Part of This World",
+    premiseHu: "A játékos karaktere nem új szereplő: már létező barátai, ellenségei, kötődései, céljai és múltja vannak. A sztori nem mesterséges kezdőeseményből, hanem a karakterlapok és a jelenlegi kapcsolati háló nyitott ügyeiből indul.",
+    premiseEn: "The player character is not a newcomer: they already have friends, enemies, bonds, goals, and history. The story begins from open loops in the character sheets and current relationship network rather than a forced opening incident.",
+    careerHu: "A meglévő társas helyzetből organikusan továbbépíteni a státuszt, kapcsolatokat és saját történetet.",
+    careerEn: "Organically grow status, relationships, and personal story from the existing social position.",
+  },
+  {
+    id: "fresh-start",
+    titleHu: "Tiszta lap",
+    titleEn: "Fresh Start",
+    premiseHu: "A játékos karaktere valamilyen korábbi korszak után új fejezetet kezd. A múlt nem törlődik, de a jelenlegi döntéseknek lehetőségük van új reputációt, baráti kört és életirányt kialakítani.",
+    premiseEn: "The player character is starting a new chapter after an earlier phase of life. The past is not erased, but present decisions can build a new reputation, circle, and direction.",
+    careerHu: "Új identitást és pályát építeni úgy, hogy a múlt következményei továbbra is léteznek.",
+    careerEn: "Build a new identity and trajectory while the consequences of the past still exist.",
+  },
+  {
+    id: "custom",
+    titleHu: "Saját forgatókönyv",
+    titleEn: "Custom Scenario",
+    premiseHu: "A kezdőhelyzetet a játékos adja meg.",
+    premiseEn: "The player defines the starting situation.",
+    careerHu: "A játékos által megadott cél.",
+    careerEn: "A goal defined by the player.",
+  },
+];
 
-  return raw === "mature"
-    ? "mature"
-    : "standard";
+const DRAMA_LEVELS = [
+  { id: "low", hu: "Lassú / hétköznapi", en: "Low / everyday" },
+  { id: "balanced", hu: "Kiegyensúlyozott", en: "Balanced" },
+  { id: "high", hu: "Magas", en: "High" },
+  { id: "chaotic", hu: "Kaotikus", en: "Chaotic" },
+];
+
+function storyScenarioById(id) {
+  return STORY_SCENARIOS.find((row) => row.id === id) || STORY_SCENARIOS.find((row) => row.id === "established-life");
+}
+
+function storySettingsOf(w) {
+  const raw = w && w.storySettings && typeof w.storySettings === "object" && !Array.isArray(w.storySettings)
+    ? w.storySettings
+    : {};
+  const preset = storyScenarioById(raw.scenarioId || "established-life");
+  return {
+    scenarioId: raw.scenarioId || preset.id,
+    scenarioTitle: String(raw.scenarioTitle || ""),
+    scenarioPremise: String(raw.scenarioPremise || ""),
+    careerGoal: String(raw.careerGoal || ""),
+    dramaLevel: ["low", "balanced", "high", "chaotic"].includes(raw.dramaLevel) ? raw.dramaLevel : "balanced",
+    elapsedHours: Math.max(0, Number(raw.elapsedHours) || 0),
+    lastTimeSkipAt: Math.max(0, Number(raw.lastTimeSkipAt) || 0),
+  };
+}
+
+function ensureStorySettings(w) {
+  if (!w) return storySettingsOf(null);
+  const current = storySettingsOf(w);
+  w.storySettings = {
+    ...(w.storySettings && typeof w.storySettings === "object" && !Array.isArray(w.storySettings) ? w.storySettings : {}),
+    ...current,
+  };
+  return w.storySettings;
+}
+
+function storyScenarioText(w, lang) {
+  const settings = storySettingsOf(w);
+  const preset = storyScenarioById(settings.scenarioId);
+  const title = settings.scenarioTitle.trim() || (lang === "en" ? preset.titleEn : preset.titleHu);
+  const premise = settings.scenarioPremise.trim() || (lang === "en" ? preset.premiseEn : preset.premiseHu);
+  const career = settings.careerGoal.trim() || (lang === "en" ? preset.careerEn : preset.careerHu);
+  return { ...settings, title, premise, career };
+}
+
+function dramaInstruction(w, lang) {
+  const level = storySettingsOf(w).dramaLevel;
+  const en = lang === "en";
+  if (level === "low") return en
+    ? "DRAMA LEVEL: LOW. Prefer ordinary life, slow-burn relationship changes, routine posts, subtle tension and believable quiet periods. Major conflict should require a real cause."
+    : "DRÁMASZINT: ALACSONY. Legyen több hétköznapi élet, slow-burn kapcsolatváltozás, rutinposzt és finom feszültség. Nagy konfliktushoz valódi ok kell.";
+  if (level === "high") return en
+    ? "DRAMA LEVEL: HIGH. Open conflicts, jealousy, consequences, gossip, rivalry, romantic tension and ambitious social moves should surface more readily when supported by character and context. Do not invent random drama."
+    : "DRÁMASZINT: MAGAS. A meglévő okokból könnyebben felszínre kerülhet konfliktus, féltékenység, következmény, pletyka, rivalizálás, romantikus feszültség és merész társas lépés. Random drámát ne találj ki.";
+  if (level === "chaotic") return en
+    ? "DRAMA LEVEL: CHAOTIC. The world may escalate quickly when real triggers exist: public arguments, parties going wrong, confrontations, impulsive romance, sudden alliances, betrayal, viral posts and gossip cascades are welcome. Causality and character canon still outrank spectacle."
+    : "DRÁMASZINT: KAOTIKUS. Valódi trigger esetén gyorsabban eszkalálódhat a világ: nyilvános vita, félresikerült buli, konfrontáció, impulzív romantika, hirtelen szövetség, árulás, virális poszt és pletykalánc is jöhet. Az okság és a kánon továbbra is fontosabb a látványnál.";
+  return en
+    ? "DRAMA LEVEL: BALANCED. Mix ordinary social life with meaningful conflict, romance, gossip and consequences. Do not force drama, but do not automatically defuse it either."
+    : "DRÁMASZINT: KIEGYENSÚLYOZOTT. Keverd a hétköznapi társas életet a valódi konfliktussal, romantikával, pletykával és következményekkel. Ne erőltesd a drámát, de ne is békíts automatikusan.";
 }
 
 function isKnownAdultCharacter(
@@ -11401,7 +11556,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v33-canon-hierarchy-gossip-selfies";
+const BUILD_VERSION = "v34-social-rpg-core";
 
 const AUTO = "masvilag:auto";
 /*
@@ -12201,22 +12356,22 @@ function seedWorld(code) {
     ...o,
   });
   const chars = [
-    mk({ name: "Ryan Cole", username: "ryancole", birth: "2008. február 2.", gender: "férfi", job: "diák, kosárcsapat", city: "Beacon Falls",
+    mk({ name: "Ryan Cole", username: "ryancole", birth: "2005. február 2.", gender: "férfi", job: "diák, kosárcsapat", city: "Beacon Falls",
       looks: "sötét haj, hideg szürke szem, magas", personality: "arrogáns, éles nyelvű, versengő, mélyen sértett",
       traits: "IQ magas, empátia alacsony, humor száraz", speech: "rövid, gunyoros mondatok, ritka emoji",
       goals: "bizonyítani, hogy nem szorul senkire", secrets: "az apja elhagyta a családot, senkinek sem mondta el",
       backstory: "A város kedvence a pályán, otthon viszont üres a ház." }),
-    mk({ name: "Mia Halvorsen", username: "miaaa", birth: "2008. szeptember 30.", gender: "nő", job: "diák, iskolaújság", city: "Beacon Falls",
+    mk({ name: "Mia Halvorsen", username: "miaaa", birth: "2005. szeptember 30.", gender: "nő", job: "diák, iskolaújság", city: "Beacon Falls",
       looks: "vörösesszőke haj, szeplők", personality: "kedves, kíváncsi, konfliktuskerülő, de kitartó",
       traits: "empátia magas, bátorság közepes", speech: "meleg hangnem, sok emoji, kérdez",
       goals: "megírni a cikket, ami felrobbantja a várost", secrets: "tud valamit Ryan apjáról",
       backstory: "Mindenki hozzá fordul, de őt senki nem kérdezi meg, hogy van." }),
-    mk({ name: "James Okoro", username: "jamesok", birth: "2007. július 19.", gender: "férfi", job: "diák, DJ", city: "Beacon Falls",
+    mk({ name: "James Okoro", username: "jamesok", birth: "2004. július 19.", gender: "férfi", job: "diák, DJ", city: "Beacon Falls",
       looks: "magas, mindig kapucnis", personality: "vicces, lojális, provokál, ha unatkozik",
       traits: "humor magas, türelem alacsony", speech: "sok szleng, kisbetűk, tagel másokat",
       goals: "a nyár legjobb buliját megcsinálni", secrets: "titokban zenét ír Miáról",
       backstory: "Ryan legrégebbi barátja, és az egyetlen, aki mer nemet mondani neki." }),
-    mk({ name: "Nora Vasquez", username: "nora.v", birth: "2008. november 8.", gender: "nő", job: "diák", city: "Beacon Falls",
+    mk({ name: "Nora Vasquez", username: "nora.v", birth: "2005. november 8.", gender: "nő", job: "diák", city: "Beacon Falls",
       looks: "fekete bob, mindig sminkelt", personality: "manipulatív, elbűvölő, számító",
       traits: "EQ magas, őszinteség alacsony", speech: "választékos, kétértelmű mondatok",
       goals: "átvenni Miától a figyelmet", secrets: "ő terjesztette a pletykát tavaly",
@@ -12231,6 +12386,15 @@ function seedWorld(code) {
       description:
         "Kisváros a hegyek között, ahol mindenki ismer mindenkit, és minden titok végül kiszivárog. Modern világ, mágia nincs. A történet a Beacon Falls Gimnázium utolsó éve körül forog: bulik, pletykák, régi sérelmek és egy tavalyi baleset, amiről senki nem beszél szívesen.",
       at: now(),
+    },
+    storySettings: {
+      scenarioId: "established-life",
+      scenarioTitle: "",
+      scenarioPremise: "",
+      careerGoal: "",
+      dramaLevel: "balanced",
+      elapsedHours: 0,
+      lastTimeSkipAt: 0,
     },
     chars,
 extras: [],
@@ -12321,7 +12485,7 @@ gossipSettings: {
    * local  = Spill&Chill
    * global = RumorHasIt
    */
-  mediaMode: "off",
+  mediaMode: "local",
 
   whisperWire: true,
   frequency: "normal",
@@ -12415,6 +12579,16 @@ function emptyWorld(code) {
       : "Írd le a világot: hol játszódik, milyen szabályok érvényesek, kik a fontos szereplők, mi történt nemrég.",
     at: now(),
   };
+  w.storySettings = {
+    scenarioId: "accidental-fame",
+    scenarioTitle: "",
+    scenarioPremise: "",
+    careerGoal: "",
+    dramaLevel: "balanced",
+    elapsedHours: 0,
+    lastTimeSkipAt: 0,
+  };
+  if (w.gossipSettings) w.gossipSettings.mediaMode = "local";
   return w;
 }
 
@@ -14959,6 +15133,7 @@ async function addAccount(
         w.aiLang ||
         CURRENT_LANG
       ),
+    contentLevel: "mature",
   };
 
   (w.starter || []).forEach((st) => {
@@ -15017,6 +15192,17 @@ function NewWorld({ w, onReady, onClose, setErr }) {
   const [seed, setSeed] =
     useState(false);
 
+  const [scenarioId, setScenarioId] = useState("accidental-fame");
+  const [scenarioPremise, setScenarioPremise] = useState(() =>
+    tt(storyScenarioById("accidental-fame").premiseHu, storyScenarioById("accidental-fame").premiseEn)
+  );
+  const [careerGoal, setCareerGoal] = useState(() =>
+    tt(storyScenarioById("accidental-fame").careerHu, storyScenarioById("accidental-fame").careerEn)
+  );
+  const [dramaLevel, setDramaLevel] = useState("balanced");
+  const [universeName, setUniverseName] = useState("");
+  const [universeDescription, setUniverseDescription] = useState("");
+
   const [busy, setBusy] =
     useState(false);
 
@@ -15026,6 +15212,13 @@ function NewWorld({ w, onReady, onClose, setErr }) {
     w.accounts[w.meId]
       ? w.accounts[w.meId].username
       : "";
+
+  const chooseScenario = (id) => {
+    const preset = storyScenarioById(id);
+    setScenarioId(preset.id);
+    setScenarioPremise(tt(preset.premiseHu, preset.premiseEn));
+    setCareerGoal(tt(preset.careerHu, preset.careerEn));
+  };
 
   const go = async () => {
     const c =
@@ -15081,6 +15274,25 @@ function NewWorld({ w, onReady, onClose, setErr }) {
           w.meId
         );
 
+      const scenarioPreset = storyScenarioById(scenarioId);
+      nw.storySettings = {
+        scenarioId: scenarioPreset.id,
+        scenarioTitle: tt(scenarioPreset.titleHu, scenarioPreset.titleEn),
+        scenarioPremise: String(scenarioPremise || tt(scenarioPreset.premiseHu, scenarioPreset.premiseEn)).trim(),
+        careerGoal: String(careerGoal || tt(scenarioPreset.careerHu, scenarioPreset.careerEn)).trim(),
+        dramaLevel,
+        elapsedHours: 0,
+        lastTimeSkipAt: 0,
+      };
+
+      if (String(universeName || "").trim()) {
+        nw.universe.name = String(universeName).trim().slice(0, 140);
+      }
+      if (String(universeDescription || "").trim()) {
+        nw.universe.description = String(universeDescription).trim().slice(0, WORLD_CAP * 2);
+      }
+      if (nw.gossipSettings) nw.gossipSettings.mediaMode = "local";
+
       /*
        * Teljes player struktúrát építünk már kliensoldalon is
        * (userSettings, starter relations, blankPlayer mezők).
@@ -15100,6 +15312,32 @@ function NewWorld({ w, onReady, onClose, setErr }) {
 
       nw.owner =
         localMeId;
+
+      nw.log = [
+        tt(
+          `Kezdő forgatókönyv: ${nw.storySettings.scenarioTitle} — ${nw.storySettings.scenarioPremise}`,
+          `Starting scenario: ${nw.storySettings.scenarioTitle} — ${nw.storySettings.scenarioPremise}`
+        ),
+        ...(nw.log || []),
+      ].slice(0, 120);
+
+      recordSocialEvent(nw, {
+        type: "scenario-start",
+        refId: `scenario:${nw.storySettings.scenarioId}:${localMeId}`,
+        ts: now(),
+        actorId: localMeId,
+        targetIds: [],
+        visibility: "system",
+        factLevel: "observed",
+        importance: 45,
+        drama: dramaLevel === "chaotic" ? 70 : dramaLevel === "high" ? 50 : dramaLevel === "low" ? 10 : 30,
+        romance: 0,
+        embarrassment: 0,
+        source: "scenario",
+        text: nw.storySettings.scenarioPremise,
+        tags: ["scenario", nw.storySettings.scenarioId],
+        meta: { careerGoal: nw.storySettings.careerGoal },
+      });
 
       const created =
         await serverCreateProfileWorld(
@@ -15310,6 +15548,61 @@ function NewWorld({ w, onReady, onClose, setErr }) {
             "This is the social @handle, not your login username. It can be different in every world."
           )}
         </p>
+
+        <div className="card" style={{ marginTop: 14, borderColor: "var(--rose)" }}>
+          <label className="f" style={{ marginTop: 0 }}>{tt("Kiinduló forgatókönyv", "Starting scenario")}</label>
+          <select
+            className="i"
+            value={scenarioId}
+            onChange={(e) => chooseScenario(e.target.value)}
+          >
+            {STORY_SCENARIOS.map((row) => (
+              <option key={row.id} value={row.id}>{tt(row.titleHu, row.titleEn)}</option>
+            ))}
+          </select>
+
+          <label className="f">{tt("Kezdőhelyzet — az AI ezt tartós kampány-premiseként kezeli", "Starting premise — the AI treats this as a persistent campaign premise")}</label>
+          <textarea
+            className="i"
+            style={{ minHeight: 100 }}
+            value={scenarioPremise}
+            onChange={(e) => setScenarioPremise(e.target.value)}
+          />
+
+          <label className="f">{tt("Digitális / társas cél", "Digital / social goal")}</label>
+          <input className="i" value={careerGoal} onChange={(e) => setCareerGoal(e.target.value)} />
+
+          <label className="f">{tt("Drámaszint", "Drama level")}</label>
+          <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+            {DRAMA_LEVELS.map((row) => (
+              <button
+                type="button"
+                key={row.id}
+                className={"btn tiny " + (dramaLevel === row.id ? "primary" : "ghost")}
+                onClick={() => setDramaLevel(row.id)}
+              >
+                {tt(row.hu, row.en)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="card" style={{ marginTop: 10 }}>
+          <label className="f" style={{ marginTop: 0 }}>{tt("Univerzum", "Universe")}</label>
+          <input
+            className="i"
+            value={universeName}
+            placeholder={tt("pl. Beacon Falls / Devil's Night / saját univerzum", "e.g. Beacon Falls / Devil's Night / custom universe")}
+            onChange={(e) => setUniverseName(e.target.value)}
+          />
+          <textarea
+            className="i"
+            style={{ minHeight: 90, marginTop: 7 }}
+            value={universeDescription}
+            placeholder={tt("Opcionális: világ szabályai, helyszínek, szervezetek, jelenlegi korszak. Később is szerkeszthető.", "Optional: world rules, locations, organizations, current era. You can edit it later too.")}
+            onChange={(e) => setUniverseDescription(e.target.value)}
+          />
+        </div>
 
         <div
           className="between"
@@ -19452,7 +19745,7 @@ function fairPostCast(w) {
 
   return ranked.map((x) => x.c).slice(0, 5);
 }
-async function genWorldStep(w, single) {
+async function genWorldStep(w, single, timeSkipHours = 0) {
   const cast = fairPostCast(w);
 
   const recent = (w.posts || [])
@@ -19504,9 +19797,11 @@ ${repetitionGuard(
 A VILÁG MAGÁTÓL ÉL TOVÁBB.
 
 ${
-  single
-    ? "A világ közben ténylegesen ment tovább. Adj EGY valódi, természetes új posztot valamelyik szereplőtől. Ne válaszolj üres posts tömbbel. A poszt mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Ha indokolt, adj 2-6 reakciót/kommentet másoktól; ha valaki inkább nem reagálna, ne erőltesd."
-    : "Léptesd a világot néhány órával. Adj 2-3 természetes új posztot különböző szereplőktől, és ha indokolt, posztonként 3-7 különböző reakciót/kommentet másoktól."
+  Number(timeSkipHours) > 0
+    ? `IDŐUGRÁS / TIME SKIP: a játékos kifejezetten azt kérte, hogy körülbelül ${Math.round(Number(timeSkipHours))} órával ugorjunk előre. A köztes időben a karakterek a saját életüket élték; generálj 2-4 olyan posztot / reakciót / megfigyelhető eseményt, amelyek természetesen összefoglalják, mi változott. Ne írd le a játékos döntéseit vagy cselekedeteit helyette. Nyitott konfliktusok, kapcsolatok, célok, gossip és saját karakterügyek haladhatnak tovább. Az időugrás ne resetelje az emlékeket vagy kapcsolatokat.`
+    : single
+      ? "A világ közben ténylegesen ment tovább. Adj EGY valódi, természetes új posztot valamelyik szereplőtől. Ne válaszolj üres posts tömbbel. A poszt mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Ha indokolt, adj 2-6 reakciót/kommentet másoktól; ha valaki inkább nem reagálna, ne erőltesd."
+      : "Léptesd a világot néhány órával. Adj 2-3 természetes új posztot különböző szereplőktől, és ha indokolt, posztonként 3-7 különböző reakciót/kommentet másoktól."
 }
 
 ÁLTALÁNOS SZABÁLYOK:
@@ -26477,61 +26772,42 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
   
   const acc = (w.accounts || {})[w.meId] || null;
   const currentLang = worldLanguage(w, w.meId);
-  const currentContentLevel =
-    worldContentLevel(
-      w,
-      w.meId
-    );
+  const currentContentLevel = "mature";
+  const currentStory = storyScenarioText(w, currentLang);
+  const currentDrama = storySettingsOf(w).dramaLevel;
 
-  const setContentLevel = (
-    level
-  ) => {
-    const next =
-      level === "mature"
-        ? "mature"
-        : "standard";
+  const setDramaLevel = (level) => {
+    update((n) => {
+      const story = ensureStorySettings(n);
+      story.dramaLevel = ["low", "balanced", "high", "chaotic"].includes(level) ? level : "balanced";
+    });
+  };
 
-    /*
-     * FONTOS:
-     * A World komponens a renderelt "view"-t kapja,
-     * amiben benne van w.meId.
-     *
-     * Az update() viszont a nyers world state-et klónozza,
-     * és abban nincs külön n.meId mező.
-     *
-     * Emiatt a korábbi kód valójában ezt írta:
-     * userSettings["undefined"].contentLevel
-     *
-     * és a saját userSettings sorod nem változott.
-     */
-    const ownerId =
-      w.meId;
+  const updateStoryField = (field, value) => {
+    update((n) => {
+      const story = ensureStorySettings(n);
+      story[field] = String(value || "").slice(0, field === "scenarioPremise" ? 2400 : 700);
+    });
+  };
 
-    if (!ownerId) {
-      setErr(
-        tt(
-          "Nem található az aktív játékos azonosítója.",
-          "The active player ID could not be found."
+  const requestTimeSkip = (hours) => {
+    const safeHours = Math.max(1, Math.min(24 * 30, Math.round(Number(hours) || 0)));
+    if (!safeHours) return;
+    let queued = false;
+    update((n) => {
+      queued = simEnqueue(
+        n,
+        mkAction(
+          "time-skip",
+          `manual-time-skip:${safeHours}:${Math.floor(now() / 3000)}`,
+          { hours: safeHours },
+          "manual"
         )
       );
-
-      return;
-    }
-
-    update((n) => {
-      if (
-        !n.userSettings ||
-        typeof n.userSettings !== "object" ||
-        Array.isArray(n.userSettings)
-      ) {
-        n.userSettings = {};
-      }
-
-      n.userSettings[ownerId] = {
-        ...(n.userSettings[ownerId] || {}),
-        contentLevel: next,
-      };
     });
+    if (!queued) {
+      setErr(tt("Az AI már dolgozik egy másik időugráson vagy világkérésen.", "The AI is already processing another time skip or world request."));
+    }
   };
 
   const activeMedia =
@@ -26674,108 +26950,88 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
         </p>
       </div>
 
-      <div
-        className="card"
-        style={{
-          borderColor:
-            currentContentLevel === "mature"
-              ? "var(--rose)"
-              : "var(--line)",
-        }}
-      >
+      <div className="card" style={{ borderColor: "var(--rose)" }}>
         <div className="between">
-          <label
-            className="f"
-            style={{
-              margin: 0,
-              color:
-                currentContentLevel === "mature"
-                  ? "var(--rose)"
-                  : "var(--muted)",
-            }}
-          >
-            {tt(
-              "Roleplay & chat tartalmi szint",
-              "Roleplay & chat content level"
-            )}
+          <label className="f" style={{ margin: 0, color: "var(--rose)" }}>
+            {tt("Mature 18+ játék", "Mature 18+ game")}
           </label>
-
-          {currentContentLevel === "mature" ? (
-            <span
-              className="mono"
-              style={{
-                fontSize: 10,
-                color: "var(--rose)",
-              }}
-            >
-              18+
-            </span>
-          ) : null}
+          <span className="mono" style={{ fontSize: 10, color: "var(--rose)" }}>ALWAYS ON · 18+</span>
         </div>
-
-        <div
-          className="row"
-          style={{
-            gap: 6,
-            marginTop: 10,
-          }}
-        >
-          {CONTENT_LEVELS.map(
-            (level) => (
-              <button
-                type="button"
-                key={level.id}
-                className={
-                  "btn tiny full " +
-                  (
-                    currentContentLevel ===
-                    level.id
-                      ? "primary"
-                      : "ghost"
-                  )
-                }
-                onClick={() =>
-                  setContentLevel(
-                    level.id
-                  )
-                }
-              >
-                {tt(
-                  level.nameHu,
-                  level.nameEn
-                )}
-              </button>
-            )
-          )}
-        </div>
-
-        <p
-          className="hint"
-          style={{
-            marginTop: 8,
-          }}
-        >
-          {currentContentLevel === "mature"
-            ? tt(
-                "Mature 18+: a roleplay, privát DM és group chat lehet nyersebb, sötétebb és felnőttesebb; erősebb káromkodás, toxikus dinamika, fenyegetés, felnőtt humor és intenzívebb romantikus/kétértelmű feszültség is megjelenhet, ha karakterhű. Explicit szexuális részletek helyett az intimitás nem részletező / fade-to-black marad. Kiskorút a rendszer nem szexualizál.",
-                "Mature 18+: roleplay, private DMs and group chats may be rougher, darker and more adult; stronger profanity, toxic dynamics, threats, adult humor and more intense romantic/suggestive tension can appear when character-accurate. Intimacy stays non-graphic / fade-to-black rather than explicit. The system never sexualizes minors."
-              )
-            : tt(
-                "Standard: a roleplay és chat továbbra is karakterhű lehet romantikus, feszült vagy sötét, de visszafogottabb felnőtt tartalmi szinten.",
-                "Standard: roleplay and chat can still be romantic, tense or dark when character-accurate, but stay at a more restrained content level."
-              )}
-        </p>
-
-        <p
-          className="hint"
-          style={{
-            marginTop: 6,
-            color: "var(--gold)",
-          }}
-        >
+        <p className="hint" style={{ marginTop: 8 }}>
           {tt(
-            "A 18+ mód csak a Roleplayre és a chatekre vonatkozik; a Feed, kommentek és Notes ettől nem válnak automatikusan felnőtt tartalmúvá.",
-            "18+ mode applies only to Roleplay and chats; Feed posts, comments and Notes do not automatically become adult-content."
+            "Nincs Standard/18+ kapcsoló: a MÁSVILÁG alapból felnőtteknek szánt social-RPG. A karakterhű történetben lehet erősebb nyelvezet, sötétebb tematika, toxikus dinamika, erőszak és felnőtt romantikus feszültség. A rendszer kiskorút nem szexualizál, az intimitás pedig nem explicit / fade-to-black marad.",
+            "There is no Standard/18+ switch: MÁSVILÁG is an adult-rated social RPG by default. Character-accurate stories may use stronger language, darker themes, toxic dynamics, violence, and adult romantic tension. Minors are never sexualized, and intimacy stays non-graphic / fade-to-black."
+          )}
+        </p>
+      </div>
+
+      <div className="card" style={{ borderColor: "var(--gold)" }}>
+        <div className="between">
+          <label className="f" style={{ margin: 0, color: "var(--gold)" }}>
+            {tt("Story Engine", "Story Engine")}
+          </label>
+          <span className="chip" style={{ color: "var(--gold)" }}>
+            {tt("SZABAD SZÖVEGES RPG", "FREE-TEXT RPG")}
+          </span>
+        </div>
+
+        <label className="f">{tt("Aktív forgatókönyv", "Active scenario")}</label>
+        <select
+          className="i"
+          value={storySettingsOf(w).scenarioId}
+          onChange={(e) => {
+            const preset = storyScenarioById(e.target.value);
+            update((n) => {
+              const story = ensureStorySettings(n);
+              story.scenarioId = preset.id;
+              story.scenarioTitle = tt(preset.titleHu, preset.titleEn);
+              story.scenarioPremise = tt(preset.premiseHu, preset.premiseEn);
+              story.careerGoal = tt(preset.careerHu, preset.careerEn);
+            });
+          }}
+        >
+          {STORY_SCENARIOS.map((row) => (
+            <option key={row.id} value={row.id}>{tt(row.titleHu, row.titleEn)}</option>
+          ))}
+        </select>
+
+        <label className="f">{tt("Kampány-premise", "Campaign premise")}</label>
+        <textarea
+          className="i"
+          style={{ minHeight: 96 }}
+          value={currentStory.premise}
+          onChange={(e) => updateStoryField("scenarioPremise", e.target.value)}
+        />
+
+        <label className="f">{tt("Digitális / társas cél", "Digital / social goal")}</label>
+        <input className="i" value={currentStory.career} onChange={(e) => updateStoryField("careerGoal", e.target.value)} />
+
+        <label className="f">{tt("Drámaszint", "Drama level")}</label>
+        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+          {DRAMA_LEVELS.map((row) => (
+            <button
+              type="button"
+              key={row.id}
+              className={"btn tiny " + (currentDrama === row.id ? "primary" : "ghost")}
+              onClick={() => setDramaLevel(row.id)}
+            >
+              {tt(row.hu, row.en)}
+            </button>
+          ))}
+        </div>
+
+        <label className="f">{tt("AI time skip", "AI time skip")}</label>
+        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+          <button type="button" className="btn tiny" onClick={() => requestTimeSkip(3)}>+3h</button>
+          <button type="button" className="btn tiny" onClick={() => requestTimeSkip(12)}>+12h</button>
+          <button type="button" className="btn tiny" onClick={() => requestTimeSkip(24)}>+1d</button>
+          <button type="button" className="btn tiny" onClick={() => requestTimeSkip(72)}>+3d</button>
+          <button type="button" className="btn tiny" onClick={() => requestTimeSkip(168)}>+1w</button>
+        </div>
+        <p className="hint" style={{ marginTop: 8 }}>
+          {tt(
+            "Az időugrás nem reset: a karakterek közben tovább élnek, az AI összefoglalja a köztes változásokat, a kapcsolatok és emlékek megmaradnak, és a világ dátuma is előrelép, ha értelmezhető.",
+            "A time skip is not a reset: characters keep living in the background, the AI summarizes meaningful changes, relationships and memories persist, and the world date advances when it can be parsed."
           )}
         </p>
       </div>
@@ -27136,8 +27392,8 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
           style={{ marginTop: 8 }}
         >
           {tt(
-            "Az Élő világ most állandóan fut. A karakterek maguktól posztolnak, kommentelnek, Note-ot írnak, üzennek és reagálnak; az alap világ-lépés körülbelül 3 percenként történhet, amikor nincs más AI-kérés folyamatban.",
-            "Live world now runs permanently. Characters post, comment, write Notes, message and react on their own; the base world step can run roughly every 3 minutes when no other AI request is already in progress."
+            "Az Élő világ állandóan fut. A karakterek személyiségfüggő ritmusban maguktól posztolnak, kommentelnek, Note-ot írnak, DM-et kezdeményeznek, group chatben beszélnek, pletykálnak és Roleplay/Eventet indítanak. Nem minden karakter ugyanolyan aktív.",
+            "Live world runs continuously. Characters autonomously post, comment, write Notes, initiate DMs, talk in group chats, gossip, and start Roleplay/Events at personality-dependent rates. Not every character is equally active."
           )}
         </p>
       </div>
@@ -35825,7 +36081,7 @@ function planAutoAction(view) {
    * FEED PRIORITÁS — gyakori autonóm posztok, de nem a gossip rovására.
    */
   if (
-    Math.random() < 0.16
+    Math.random() < (storySettingsOf(view).dramaLevel === "low" ? 0.12 : storySettingsOf(view).dramaLevel === "chaotic" ? 0.20 : 0.16)
   ) {
     return mkAction(
       "world",
@@ -35906,7 +36162,7 @@ function planAutoAction(view) {
   /*
    * 7. VÁRATLAN POPUP EVENT
    */
-  if (Math.random() < 0.26) {
+  if (Math.random() < (storySettingsOf(view).dramaLevel === "low" ? 0.10 : storySettingsOf(view).dramaLevel === "high" ? 0.34 : storySettingsOf(view).dramaLevel === "chaotic" ? 0.46 : 0.26)) {
     const popupSeed = pickPopupEventSeed(view);
     if (popupSeed) {
       return mkAction(
@@ -36613,6 +36869,44 @@ Ha van természetes folytatás:
 /* Egy központi szimulációs akció futtatása. Mindig pontosan egy AI-hívás. */
 async function runSimulationAction(view, update, action, addImage) {
   if (!view || !action) return null;
+
+  if (action.type === "time-skip") {
+    const hours = Math.max(1, Math.min(24 * 30, Math.round(Number(action.payload && action.payload.hours) || 6)));
+    const out = await genWorldStep(view, false, hours);
+    if (!out || !Array.isArray(out.posts)) return null;
+
+    const probe = JSON.parse(JSON.stringify(view));
+    const visible = applyWorldStep(probe, out);
+    if (!visible && !(Array.isArray(out.events) && out.events.length)) return null;
+
+    update((n) => {
+      applyWorldStep(n, out);
+      advanceWorldClock(n, hours);
+      n.log = [
+        sysLangText(n, n.meId, `Időugrás: +${hours} óra.`, `Time skip: +${hours} hours.`),
+        ...(n.log || []),
+      ].slice(0, 120);
+      recordSocialEvent(n, {
+        type: "time-skip",
+        refId: `time-skip:${now()}:${hours}`,
+        ts: now(),
+        actorId: n.meId,
+        targetIds: [],
+        visibility: "system",
+        factLevel: "observed",
+        importance: 30,
+        drama: storySettingsOf(n).dramaLevel === "chaotic" ? 45 : storySettingsOf(n).dramaLevel === "high" ? 32 : 15,
+        romance: 0,
+        embarrassment: 0,
+        source: "manual-time-skip",
+        text: sysLangText(n, n.meId, `${hours} órával előreugrott a világ.`, `The world advanced by ${hours} hours.`),
+        tags: ["time-skip"],
+        meta: { hours },
+      });
+    });
+
+    return "time-skip";
+  }
 
   if (action.type === "brief") {
     const targetId =
