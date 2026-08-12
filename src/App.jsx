@@ -5764,6 +5764,381 @@ function recentUtterancesFor(w, id, limit = 24) {
   return unique;
 }
 
+
+/* -------------------------------------------------------------------------
+   COMMENT-SPECIFIC MEMORY + VARIETY
+
+   A generic repetition guard is not enough for social comments because DM/RP
+   traffic can push old feed comments out of the shared history window, and
+   very short comments used to bypass the >=12 character repetition check.
+   These helpers keep a dedicated feed-comment memory per character.
+   ------------------------------------------------------------------------- */
+function recentCommentTextsFor(w, id, limit = 32) {
+  if (!w || !id) return [];
+
+  const rows = [];
+
+  (w.posts || [])
+    .slice(0, 90)
+    .forEach((post) => {
+      if (!post || typeof post !== "object") return;
+
+      safePostComments(post).forEach((comment) => {
+        if (
+          !comment ||
+          comment.authorId !== id ||
+          !comment.text
+        ) {
+          return;
+        }
+
+        rows.push({
+          text: String(comment.text).replace(/\s+/g, " ").trim(),
+          ts: Number(comment.ts) || Number(post.ts) || 0,
+        });
+      });
+    });
+
+  rows.sort((a, b) => b.ts - a.ts);
+
+  const seen = new Set();
+  const out = [];
+
+  for (const row of rows) {
+    const sig = commentComparable(row.text);
+    if (!sig || seen.has(sig)) continue;
+    seen.add(sig);
+    out.push(row.text);
+    if (out.length >= Math.max(1, Number(limit) || 32)) break;
+  }
+
+  return out;
+}
+
+function commentComparable(value) {
+  const words = normUtterance(value);
+  const emojis = emojiTokens(value)
+    .map(emojiKey)
+    .filter(Boolean)
+    .join(" ");
+
+  return `${words} | ${emojis}`.trim();
+}
+
+function isNearDuplicateCommentText(a, b) {
+  const A = String(a || "").replace(/\s+/g, " ").trim();
+  const B = String(b || "").replace(/\s+/g, " ").trim();
+
+  if (!A || !B) return false;
+
+  const sa = commentComparable(A);
+  const sb = commentComparable(B);
+
+  if (sa && sa === sb) return true;
+
+  const na = normUtterance(A);
+  const nb = normUtterance(B);
+
+  /* Emoji-only / punctuation-only reactions. */
+  if (!na && !nb) {
+    const ea = emojiTokens(A).map(emojiKey).join(" ");
+    const eb = emojiTokens(B).map(emojiKey).join(" ");
+    return Boolean(ea && ea === eb);
+  }
+
+  if (na && nb && na === nb) return true;
+
+  const wa = na.split(" ").filter(Boolean);
+  const wb = nb.split(" ").filter(Boolean);
+  const sim = jaccard(wordSet(na), wordSet(nb));
+
+  /*
+   * Rövid kommenteknél már 1-4 szó is maga a teljes formula, ezért ezekre
+   * szigorúbb duplicate-védelem kell. Ez fogja meg a folytonos "real",
+   * "damn", "oh wow", "girl 😭" stb. köröket is.
+   */
+  if (
+    wa.length <= 4 &&
+    wb.length <= 4 &&
+    sim >= 0.72
+  ) {
+    return true;
+  }
+
+  if (
+    wa.length >= 3 &&
+    wb.length >= 3 &&
+    sim >= 0.62
+  ) {
+    return true;
+  }
+
+  const prefixLen = 18;
+  if (
+    na.length >= prefixLen &&
+    nb.length >= prefixLen &&
+    na.slice(0, prefixLen) === nb.slice(0, prefixLen)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function isRepetitiveComment(w, id, text) {
+  const fresh = String(text || "").replace(/\s+/g, " ").trim();
+  if (!fresh) return true;
+
+  const history = recentCommentTextsFor(w, id, 40);
+
+  for (const old of history) {
+    if (isNearDuplicateCommentText(fresh, old)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function cleanGeneratedComment(w, id, text, maxLen = 240) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+
+  /* Dedicated feed history first, then the universal cross-surface guard. */
+  if (isRepetitiveComment(w, id, t)) return "";
+  if (isRepetitiveUtterance(w, id, t)) return "";
+
+  return t.length > maxLen
+    ? t.slice(0, maxLen)
+    : t;
+}
+
+function commentSeedNumber(value) {
+  const s = String(value || "");
+  let h = 2166136261;
+
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+
+  return h >>> 0;
+}
+
+function commentPersonalityText(c) {
+  return [
+    c && c.personality,
+    c && c.traits,
+    c && c.speech,
+    c && c.voice,
+    c && c.backstory,
+    c && c.extra,
+    c && c.bio,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function commentReactionLenses(w, c, targetId, post) {
+  if (!c) return [];
+
+  const rel = getRel(w, c.id, targetId);
+  const score = Number(rel && rel.score) || 0;
+  const bond = String(
+    (rel && (rel.bond || rel.type)) || ""
+  ).toLowerCase();
+  const lore = commentPersonalityText(c);
+  const lanes = [];
+
+  const push = (...items) => {
+    items.forEach((item) => {
+      if (item && !lanes.includes(item)) lanes.push(item);
+    });
+  };
+
+  /* Relationship gives the emotional lane; personality decides its delivery. */
+  if (
+    bondLooksRomantic(rel) ||
+    /crush|dating|partner|spouse|szerel|vonzalom/.test(bond)
+  ) {
+    push(
+      "subtle flirt or charged attention without a generic compliment",
+      "jealous/possessive subtext only if this exact post gives a reason",
+      "private-feeling callback or teasing familiarity",
+      "a short question that reveals unusually close attention",
+      "understated protectiveness or territorial humor"
+    );
+  } else if (
+    score >= 65 ||
+    /best friend|close friend|legjobb barát|közeli barát|ride or die/.test(bond)
+  ) {
+    push(
+      "inside-joke energy or shorthand only these two would use",
+      "affectionate teasing that still clearly reads as loyalty",
+      "specific supportive/protective reaction instead of generic praise",
+      "callback to shared history or a remembered detail",
+      "casual one-liner showing high familiarity"
+    );
+  } else if (
+    score >= 25 ||
+    hasPositiveFollowBond(rel)
+  ) {
+    push(
+      "warm but character-specific reaction",
+      "playful question about one concrete detail",
+      "light teasing if it fits their established dynamic",
+      "specific encouragement rather than generic hype",
+      "brief callback to something they already know about the author"
+    );
+  } else if (
+    score <= -25 ||
+    hasEnemyOrRivalBond(rel)
+  ) {
+    push(
+      "skeptical or challenging reaction tied to the actual post",
+      "dry jab or rivalry-coded one-liner without generic villain dialogue",
+      "pointed question that exposes their distrust",
+      "cold understatement or deliberate nonchalance",
+      "indirect/publicly safe provocation if direct escalation would be risky"
+    );
+  } else {
+    push(
+      "react to one concrete detail other people might ignore",
+      "short question rather than a statement",
+      "dry observation",
+      "brief spontaneous reaction",
+      "like-only is valid if saying something would feel forced"
+    );
+  }
+
+  if (/sarcast|szark|dry|deadpan|cinical|cynical|gúny|csípős/.test(lore)) {
+    push("deadpan or dry humor in their own rhythm", "understated sarcastic observation");
+  }
+  if (/chaotic|káosz|impulsive|impulz|wild|unhinged|hyper|hangos/.test(lore)) {
+    push("abrupt chaotic reaction, broken phrasing or caps if natural", "unexpected tangent that still connects to the post");
+  }
+  if (/reserved|private|introvert|zárkózott|visszafogott|quiet|csendes|stoic/.test(lore)) {
+    push("very short understated reaction", "quietly specific question", "like-only instead of forced chatter");
+  }
+  if (/flirt|flört|csábít|seductive|tease/.test(lore)) {
+    push("character-specific flirt, not a stock compliment", "playful double meaning if the post supports it");
+  }
+  if (/jealous|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(lore)) {
+    push("territorial or jealous subtext only when there is a visible trigger", "too-attentive detail that reveals fixation");
+  }
+  if (/protect|védelmez|loyal|lojális|ride or die/.test(lore)) {
+    push("protective shorthand", "public backing that sounds like them, not a motivational quote");
+  }
+  if (/gossip|pletyka|nosy|kíváncsi|curious/.test(lore)) {
+    push("probing question or implication", "notice a social detail and fish for context");
+  }
+  if (/aggress|agress|confront|provok|dominant|domináns|brutal|harcias/.test(lore)) {
+    push("blunt challenge when the relationship/context allows it", "short dominant reaction without theatrical monologue");
+  }
+  if (/smart|intellig|analyt|manipul|strateg|ravasz|calculat/.test(lore)) {
+    push("precise inference or baiting question", "notice an implication rather than stating the obvious");
+  }
+
+  if (post && (post.imageId || post.image)) {
+    push("react to a specific visible image detail instead of only the caption");
+  }
+
+  /* Rotate choices per post + character + their own recent feed activity. */
+  const recentCount = recentCommentTextsFor(w, c.id, 24).length;
+  const start = commentSeedNumber(
+    `${post && post.id || "post"}:${c.id}:${recentCount}`
+  ) % Math.max(1, lanes.length);
+
+  const rotated = [];
+  for (let i = 0; i < lanes.length && rotated.length < 4; i++) {
+    const lane = lanes[(start + i) % lanes.length];
+    if (lane && !rotated.includes(lane)) rotated.push(lane);
+  }
+
+  return rotated;
+}
+
+function commentTargetMemoryCard(w, c, targetId) {
+  if (!w || !c || !c.id || !targetId || c.id === targetId) return "";
+
+  const target = charById(w, targetId);
+  const row = ensureCharMemory(w, c.id).knownCharacters &&
+    ensureCharMemory(w, c.id).knownCharacters[targetId];
+  const parts = [];
+
+  const known = knownLinesForObserver(w, c.id, targetId);
+  if (known) parts.push(known.replace(/^\n\s*/, ""));
+
+  if (row) {
+    if ((row.knownRelationships || []).length) {
+      parts.push(
+        `kapcsolati emlékek: ${(row.knownRelationships || [])
+          .slice(-4)
+          .map(memoryToLine)
+          .join(" | ")}`
+      );
+    }
+    if ((row.knownEvents || []).length) {
+      parts.push(
+        `közös/ismert események: ${(row.knownEvents || [])
+          .slice(-5)
+          .map(memoryToLine)
+          .join(" | ")}`
+      );
+    }
+  }
+
+  const story = target
+    ? ownStorySnippetAbout(c, target)
+    : "";
+  if (story) {
+    parts.push(`saját történetedben róla: ${spread(story, 420)}`);
+  }
+
+  return parts.length
+    ? parts.join(" ; ")
+    : "nincs külön célzott emlék";
+}
+
+function commentVariationCard(w, cast, post) {
+  if (!w || !post || !Array.isArray(cast) || !cast.length) return "";
+
+  const targetId = post.authorId;
+
+  const rows = cast.map((c) => {
+    if (!c) return "";
+
+    const recent = recentCommentTextsFor(w, c.id, 12);
+    const avoid = recent.length
+      ? recent
+          .slice(0, 8)
+          .map((x) => `“${cut(x, 90)}”`)
+          .join(" | ")
+      : "-";
+
+    const lenses = commentReactionLenses(w, c, targetId, post);
+    const memory = commentTargetMemoryCard(w, c, targetId);
+
+    return `
+[${c.id}] ${String(c.name || c.id).toUpperCase()}
+- FRISS REAKCIÓIRÁNYOK EHHEZ A POSZTHOZ: ${lenses.join(" ; ") || "react naturally from canon"}
+- CÉLZOTT KÖZÖS EMLÉK/KONTEXTUS: ${spread(memory, 700)}
+- KORÁBBI FEED-KOMMENTJEI — EZEKET ÉS KÖZELI PARAFRÁZISUKAT MOST TILOS ÚJRAHASZNÁLNI: ${avoid}`;
+  }).filter(Boolean);
+
+  if (!rows.length) return "";
+
+  return `
+
+KARAKTERENKÉNTI KOMMENT-MEMÓRIA ÉS FRISS REAKCIÓIRÁNY:
+- Ez a blokk KÜLÖN a feed-kommentekhez tartozik; a DM/RP előzmények nem írják felül.
+- A reakcióirány NEM kész mondat és nem kötelező sablon. Válassz belőle olyan nézőpontot, ami a konkrét poszthoz természetesen illik.
+- Ugyanaz a karakter ne mindig ugyanazon az érzelmi csatornán kommenteljen: egy best friend lehet egyszer belsős poénos, máskor védelmező, máskor száraz, máskor csak egy rövid kérdést dob be — mindezt ugyanazon személyiségen belül.
+- A közös emléket csak akkor utald vissza, ha tényleg releváns; NE erőltesd minden kommentbe.
+${rows.join("\n")}`;
+}
+
 function emojiGraphemes(v) {
   const s = String(v || "");
 
@@ -15787,8 +16162,10 @@ KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - Minden kommentelő teljes karakterlapját és saját emlékeit használd, nem csak a nyilvános bioját.
 - KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT explicit kánonja.
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
-- A korábbi emlékei és a poszt szerzőjével való konkrét kapcsolata ténylegesen módosítsa a reakcióját.
+- A korábbi emlékei és a poszt szerzőjével való konkrét kapcsolata ténylegesen módosítsa a reakcióját. Ha van releváns közös múlt, belső poén, korábbi vita, ígéret, flört vagy kínos esemény, UTALHAT rá — de ne ugyanarra minden alkalommal.
+- Ne csak a komment TARTALMA, hanem a mikrostílusa is karakterfüggő legyen: mondathossz, kis-/nagybetű, írásjel, szleng, emoji, kérdezés, közvetlenség, szárazság, káromkodás, flört és humor ritmusa is.
 - Ha ugyanaz a komment több karakter szájából is hiteles lenne, nem elég specifikus: írd újra.
+- TILOS generikus AI-social formulákkal kitölteni a csomagot (pl. ugyanaz a "girl...", "damn", "real", "obsessed", "okayyy", "iconic", "you ate" jellegű reakció újra meg újra), hacsak az adott karakter saját online hangja ÉS a friss kommentmemóriája tényleg indokolja.
 
 KÖZVETLEN KAPCSOLATI DINAMIKA A POSZT SZERZŐJÉHEZ:
 ${cast
@@ -15816,6 +16193,12 @@ SZUBJEKTÍV POSZTÉRTELMEZÉS — EZ KAPCSOLATOT IS VÁLTOZTATHAT:
 - A "changes" mezőt használd más közvetlen social interakciókhoz is, ha tényleg indokolt.
 - Ha ugyanaz a karakter ezt a konkrét posztot már egyszer személyesen értelmezte, ne generálj ugyanabból újra relationship deltát.
 
+${commentVariationCard(
+  w,
+  cast,
+  post
+)}
+
 ${repetitionGuard(
   w,
   cast.map((c) => c.id),
@@ -15825,7 +16208,9 @@ ${repetitionGuard(
 KOMMENT SZABÁLYOK:
 
 - Adj általában 5-9 új kommentet. Ha a poszt kevés embert érint, lehet kevesebb; ha felkapott/drámai és sok releváns karakter van, legyen több különböző reakció.
+- Egy generálási körben ugyanaz a karakter legfeljebb EGY új kommentet írjon. Ne töltsd fel a csomagot ugyanannak az embernek több hasonló reakciójával.
 - Csak olyan szereplő kommenteljen, akinek természetes oka van rá.
+- Minden komment előtt nézd meg az adott karakter fenti KORÁBBI FEED-KOMMENTJEIT. A feed-komment memória fontosabb ismétlésvédelmi forrás, mint az, hogy közben DM-ben vagy RP-ben mást mondott.
 - Ezek VALÓDI közösségi médiás kommentek, nem roleplay-jelenetek és nem mini novellák.
 - Úgy írjanak, mintha telefonról, gyorsan reagálnának egy Instagram/TikTok/X jellegű posztra.
 - A kommentek TÖBBSÉGE 1-12 szó legyen.
@@ -15891,6 +16276,8 @@ KAPCSOLAT + TÖRTÉNET KÖTELEZŐEN HAT A KOMMENTRE:
 FONTOS VÁLTOZATOSSÁG:
 
 - Egy 5-9 kommentes csomagban ne legyen minden reakció ugyanolyan hosszú.
+- A csomag kommentjei ne csak szavakban, hanem FUNKCIÓBAN is különbözzenek: ne legyen öt bók, öt poén vagy öt azonos típusú kérdés.
+- Két külön karakter ne kapjon azonos szerkezetű vagy közeli parafrázisú kommentet. Ha két sor cserélhető lenne köztük, az egyiket írd újra a karakter saját ritmusára és nézőpontjára.
 - Ha természetes, legyen legalább egy nagyon rövid komment a csomagban.
 - Ne legyen mindenki vicces.
 - Ne legyen mindenki ugyanolyan támogató, DE ne gyárts mesterséges bunkóságot egy jó kapcsolatból csak azért, hogy legyen negatív komment is.
@@ -16864,12 +17251,30 @@ function applyComments(n, postId, out, label) {
   p.comments = safePostComments(p);
   {
     const byLabel = {};
+    const acceptedBodies = [];
+    const commentedThisBatch = new Set();
     Object.keys(label || {}).forEach((cid) => { byLabel[label[cid]] = cid; });
     safeAiComments(out).forEach((c) => {
       const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!who || !c.text) return;
-      const body = cleanGeneratedUtterance(n, who, c.text, 240);
+
+      /* Egy karakter egy körben egy friss komment: több variációt ne spammeljen. */
+      if (commentedThisBatch.has(who)) return;
+
+      const body = cleanGeneratedComment(n, who, c.text, 240);
       if (!body) return;
+
+      /* A csomagon belül se legyen két karakternek ugyanaz a generikus reakciója. */
+      if (
+        acceptedBodies.some((prev) =>
+          isNearDuplicateCommentText(prev, body)
+        )
+      ) {
+        return;
+      }
+
+      commentedThisBatch.add(who);
+      acceptedBodies.push(body);
       const tag = String(
   (
     c.reply_to !== undefined
