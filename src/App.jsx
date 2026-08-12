@@ -3198,6 +3198,32 @@ function mentionedIdsInText(w, txt, authorId = "") {
    válaszol, mert "minden kommentre kötelező", hanem mert a szöveg és a
    thread egyértelműen választ vár egy konkrét AI-karaktertől.
    ------------------------------------------------------------------------- */
+function publicSocialJuiceSignals(text) {
+  const raw = String(text || "").trim();
+  const low = raw.toLowerCase();
+  let drama = 0, romance = 0, embarrassment = 0, importance = 0;
+  const tags = ["social"];
+
+  if (/\b(?:liar|lying|bullshit|bitch|slut|whore|idiot|loser|coward|pathetic|shut\s+up|fuck\s+you|hate\s+you|embarrassing|obsessed|jealous|fake|trash|stupid|hazud|kurva|ribanc|idióta|vesztes|gyáva|szánalmas|kuss|utállak|kamu|ciki|megszállott|féltékeny)\b/i.test(low)) {
+    drama += 30; embarrassment += 14; importance += 12; tags.push("callout", "public-drama");
+  }
+  if (/\b(?:fight\s+me|try\s+me|say\s+that\s+again|i['’]?ll\s+(?:hit|kill|ruin)|watch\s+your\s+back|megöl|megver|próbáld\s+meg|mondd\s+még\s+egyszer)\b/i.test(low)) {
+    drama += 34; importance += 16; tags.push("threat", "fight");
+  }
+  if (/\b(?:kiss|kissed|making\s*out|hooked\s*up|hookup|dating|date\s+me|mine|my\s+girl|my\s+boy|babe|baby|hot|gorgeous|beautiful|pretty|love\s+you|ily|csók|csókol|kavar|randi|enyém|szeretlek|gyönyörű|dögös)\b/i.test(low)) {
+    romance += 24; importance += 8; tags.push("romance");
+  }
+  if (/\b(?:cheat|cheated|cheating|affair|caught|exposed|receipts|screenshots?|leak|leaked|megcsal|lebuk|bizonyíték|kiszivárg)\b/i.test(low)) {
+    drama += 30; embarrassment += 28; importance += 18; tags.push("scandal", "receipts");
+  }
+  if ((raw.match(/!/g) || []).length >= 3 || /\b(?:OMG|WTF)\b/.test(raw)) drama += 5;
+  return {
+    drama: Math.min(80, drama), romance: Math.min(80, romance),
+    embarrassment: Math.min(80, embarrassment), importance: Math.min(40, importance),
+    tags: [...new Set(tags)], juicy: drama >= 22 || romance >= 20 || embarrassment >= 20,
+  };
+}
+
 function commentThreadDepth(post, comment) {
   if (!post || !comment) return 0;
   const comments = safePostComments(post);
@@ -3265,50 +3291,57 @@ function commentReplyCueScore(text) {
 
 function naturalCommentReplyTargets(w, post, comment) {
   if (!w || !post || !comment || !comment.authorId) return [];
-
   const comments = safePostComments(post);
   const candidates = [];
   const push = (id, reason, base) => {
-    if (!id || id === comment.authorId || isHuman(w, id)) return;
-    if (!charById(w, id)) return;
-    if (candidates.some((row) => row.id === id)) return;
+    if (!id || id === comment.authorId || isHuman(w, id) || !charById(w, id)) return;
+    const existing = candidates.find((row) => row.id === id);
+    if (existing) {
+      existing.base = Math.max(existing.base, base);
+      if (!existing.reason.includes(reason)) existing.reason += `+${reason}`;
+      return;
+    }
     candidates.push({ id, reason, base });
   };
 
-  /* 1. A konkrét @mention a legerősebb címzett. */
-  mentionedIdsInText(w, comment.text, comment.authorId)
-    .forEach((id) => push(id, "mention", 76));
-
-  /* 2. Reply esetén annak a szerzője a természetes címzett. */
-  const parent = comment.parent
-    ? comments.find((c) => c && c.id === comment.parent)
-    : null;
-  if (parent && parent.authorId) {
-    push(parent.authorId, "parent", 70);
-  }
-
-  /* 3. Top-level komment AI-poszton: a poszt szerzője reagálhat. */
-  if (!comment.parent && post.authorId) {
-    push(post.authorId, "post-author", 50);
-  }
+  mentionedIdsInText(w, comment.text, comment.authorId).forEach((id) => push(id, "mention", 82));
+  const parent = comment.parent ? comments.find((c) => c && c.id === comment.parent) : null;
+  if (parent && parent.authorId) push(parent.authorId, "parent", 74);
+  if (!comment.parent && post.authorId) push(post.authorId, "post-author", 54);
 
   const cue = commentReplyCueScore(comment.text);
+  const juice = publicSocialJuiceSignals(comment.text);
+  const parentAuthorId = parent && parent.authorId ? parent.authorId : "";
 
-  return candidates
-    .map((row) => {
-      const relInterest = Math.min(
-        32,
-        Math.max(
-          0,
-          socialInteractionInterest(w, row.id, comment.authorId)
-        ) * 0.35
-      );
-      return {
-        ...row,
-        score: row.base + cue + relInterest,
-      };
-    })
-    .sort((a, b) => b.score - a.score);
+  (w.chars || []).forEach((observer) => {
+    if (!observer || observer.id === comment.authorId || isHuman(w, observer.id)) return;
+    if (candidates.some((row) => row.id === observer.id)) return;
+    const toCommenter = socialInteractionInterest(w, observer.id, comment.authorId);
+    const toParent = parentAuthorId ? socialInteractionInterest(w, observer.id, parentAuthorId) : 0;
+    const toPostAuthor = post.authorId ? socialInteractionInterest(w, observer.id, post.authorId) : 0;
+    const followsPostAuthor = post.authorId ? isFollowing(w, observer.id, post.authorId) : false;
+    const followsCommenter = isFollowing(w, observer.id, comment.authorId);
+    const rel = getRel(w, observer.id, comment.authorId) || {};
+    const bond = String(rel.bond || rel.type || "").toLowerCase();
+    const lore = [observer.personality, observer.traits, observer.bio, observer.extra].filter(Boolean).join(" ").toLowerCase();
+    let base = 16;
+    base += Math.min(30, Math.max(0, toCommenter) * 0.32);
+    base += Math.min(18, Math.max(0, toParent) * 0.18);
+    base += Math.min(14, Math.max(0, toPostAuthor) * 0.14);
+    if (followsPostAuthor) base += 10;
+    if (followsCommenter) base += 7;
+    if (/friend|best|close|partner|dating|rival|enemy|ellens|ex|crush|ride\s*or\s*die/.test(bond)) base += 15;
+    if (/gossip|nosy|curious|argumentative|confront|chaotic|dramatic|protective|possess|jealous|flirt|chatty|social|pletyk|kíváncsi|veszeked|konfront|féltéken/.test(lore)) base += 10;
+    base += Math.min(18, cue * 0.26);
+    if (juice.juicy) base += 16;
+    const hasRealReason = toCommenter >= 18 || toParent >= 22 || toPostAuthor >= 22 || followsPostAuthor || followsCommenter || Boolean(bond) || juice.juicy;
+    if (hasRealReason && base >= 46) push(observer.id, "bystander", base);
+  });
+
+  return candidates.map((row) => {
+    const relInterest = Math.min(26, Math.max(0, socialInteractionInterest(w, row.id, comment.authorId)) * 0.28);
+    return { ...row, score: row.base + cue + relInterest + (juice.juicy ? 8 : 0) };
+  }).sort((a, b) => b.score - a.score);
 }
 
 function commentAlreadyAnsweredBy(post, commentId, responderId) {
@@ -3332,16 +3365,11 @@ function commentWarrantsAiReply(w, post, comment, targetId) {
 
   /* Ne induljon végtelen AI↔AI pingpong. Emberi megszólalás újra megnyitja a láncot. */
   const aiTurns = consecutiveAiThreadTurns(w, post, comment);
-  if (!isHuman(w, comment.authorId) && aiTurns >= 3) {
-    return false;
-  }
-
-  /* A direkt reply/@mention már önmagában elég; a sima post-author válaszhoz kell tartalom. */
-  if (row.reason === "mention" || row.reason === "parent") {
-    return row.score >= 66;
-  }
-
-  return row.score >= 82;
+  const juice = publicSocialJuiceSignals(comment.text);
+  if (!isHuman(w, comment.authorId) && aiTurns >= (juice.juicy ? 6 : 4)) return false;
+  if (row.reason.includes("mention") || row.reason.includes("parent")) return row.score >= 64;
+  if (row.reason.includes("bystander")) return row.score >= (juice.juicy ? 64 : 76);
+  return row.score >= 80;
 }
 
 function findNaturalThreadReply(w, onlyPostId = "") {
@@ -4754,6 +4782,8 @@ ${nameOfIn(w, parentComment.authorId)}: "${String(parentComment.text || "").slic
 
 A JÁTÉKOS MOST EZT ÍRTA:
 "${String(comment.text || "").slice(0, 700)}"
+
+${playerInputUnderstandingInstruction(w, comment.text, "comment")}
 
 THREAD RÖVID KONTEXTUSA:
 ${threadContext || "-"}
@@ -8285,12 +8315,12 @@ function hierarchyBehaviorCard(w, actorId, targetId) {
     targetThreat.authority >= 55;
 
   const surname = preferredTitleSurname(target) || target.name;
-  const ownAddress = `Sensei ${surname}`;
+  const ownAddress = preferredSenseiAddress(target) || `Sensei ${surname}`;
 
   if (ownSensei) {
     return en
-      ? `HIERARCHY CANON — OWN SENSEI: ${target.name} is ${actor.name}'s own sensei/teacher according to ${actor.name}'s canon. Default direct address is "${ownAddress}", NOT the sensei's casual first name, unless the character sheet explicitly establishes another private form of address. Student/teacher hierarchy remains active even when they argue. ${dangerousSensei ? "This sensei is also dangerous/high-authority: do not turn the student into casually disrespectful, consequence-free trash talk. Fear, discipline, caution, ingrained respect or the cost of rebellion must register." : "Respect/deference should be recognizable without making the student robotic or blindly obedient."}`
-      : `HIERARCHIA-KÁNON — SAJÁT SENSEI: ${target.name} ${actor.name} saját senseie/tanára a karakterkánon szerint. Közvetlen megszólításban alapból „${ownAddress}”, NEM a sensei laza keresztneve, hacsak a karakterlap kifejezetten más privát megszólítást nem rögzít. A tanítvány–tanár hierarchia vita közben is aktív. ${dangerousSensei ? "Ez a sensei veszélyes/magas tekintélyű is: a tanítvány ne váltson következmény nélküli, laza tiszteletlenségbe. A félelem, fegyelem, óvatosság, berögzült tisztelet vagy a lázadás ára érződjön." : "A tisztelet legyen felismerhető anélkül, hogy a tanítvány robotikusan engedelmes lenne."}`;
+      ? `HIERARCHY CANON — OWN SENSEI: ${target.name} is ${actor.name}'s own sensei/teacher according to ${actor.name}'s canon. Default direct address is EXACTLY "${ownAddress}", NOT a title rebuilt from the legal surname and NOT the sensei's casual first name, unless the character sheet explicitly establishes another private form of address. If the Nickname field itself contains a Sensei-form (for example "Sensei Wolf"), that exact nickname wins over "Sensei ${surname}". Student/teacher hierarchy remains active even when they argue. ${dangerousSensei ? "This sensei is also dangerous/high-authority: do not turn the student into casually disrespectful, consequence-free trash talk. Fear, discipline, caution, ingrained respect or the cost of rebellion must register." : "Respect/deference should be recognizable without making the student robotic or blindly obedient."}`
+      : `HIERARCHIA-KÁNON — SAJÁT SENSEI: ${target.name} ${actor.name} saját senseie/tanára a karakterkánon szerint. Közvetlen megszólításban alapból PONTOSAN „${ownAddress}”, NEM a hivatalos vezetéknévből újraépített cím és nem a sensei laza keresztneve, hacsak a karakterlap kifejezetten más privát megszólítást nem rögzít. Ha a Nickname mező maga Sensei-megszólítást tartalmaz (pl. „Sensei Wolf”), az pontosan felülírja a „Sensei ${surname}” alakot. A tanítvány–tanár hierarchia vita közben is aktív. ${dangerousSensei ? "Ez a sensei veszélyes/magas tekintélyű is: a tanítvány ne váltson következmény nélküli, laza tiszteletlenségbe. A félelem, fegyelem, óvatosság, berögzült tisztelet vagy a lázadás ára érződjön." : "A tisztelet legyen felismerhető anélkül, hogy a tanítvány robotikusan engedelmes lenne."}`;
   }
 
   if (actorSensei) {
@@ -8308,6 +8338,40 @@ function hierarchyBehaviorCard(w, actorId, targetId) {
   return en
     ? `TITLE BOUNDARY: ${target.name} is a sensei, but NOT ${actor.name}'s own sensei. Do NOT automatically call them "Sensei ${surname}". That title-as-address belongs to their own students unless explicit canon establishes a different courtesy relationship.`
     : `CÍMHATÁR: ${target.name} sensei, de NEM ${actor.name} saját senseie. Ne hívd automatikusan „Sensei ${surname}”-nek. Ez a megszólítás alapból a saját tanítványaihoz tartozik, hacsak explicit kánon nem rögzít más udvariassági viszonyt.`;
+}
+
+function playerInputUnderstandingInstruction(w, rawText, surface = "chat") {
+  const text = String(rawText || "").trim();
+  if (!text) return "";
+  const en = worldLanguage(w, w.meId) === "en";
+  const surfaceName = surface === "roleplay" ? "roleplay turn" : surface === "comment" ? "public comment/reply" : "private message";
+  return en
+    ? `PLAYER INPUT COMPREHENSION — ${surfaceName.toUpperCase()}:
+- Read the player's exact text for MEANING before deciding tone. Casual English, slang, contractions, lowercase, abbreviations, typos, missing punctuation and non-native phrasing are still meaningful language.
+- Silently resolve obvious spelling/grammar slips from context. Do NOT deliberately misread a recognizable sentence just because it is informal or imperfect.
+- Code-switching is normal: the player may mix English, Hungarian, slang, names and fandom terms in the same sentence. Understand the intended meaning across languages instead of treating the mixed sentence as broken input.
+- Preserve who "you", pronouns, names, nicknames and @mentions refer to using the immediate conversation/thread/scene focus.
+- If one interpretation is overwhelmingly natural, use it. Do not manufacture ambiguity.
+- Ask a clarification ONLY when two materially different interpretations remain genuinely plausible after using recent context.
+- Never mock or correct the player's English instead of responding to the intended meaning.
+PLAYER'S EXACT INPUT: "${text.slice(0, 900)}"`
+    : `JÁTÉKOSI INPUT ÉRTELMEZÉSE — ${surfaceName.toUpperCase()}:
+- Először a játékos PONTOS szövegének jelentését értsd meg. A laza angol, szleng, rövidítés, kisbetű, elütés, hiányzó írásjel vagy nem anyanyelvi megfogalmazás ettől még értelmes nyelv.
+- A nyilvánvaló nyelvtani/elírási hibát csendben oldd fel a kontextusból. Ne érts félre szándékosan felismerhető mondatot.
+- A code-switching normális: a játékos keverheti az angolt, magyart, szlenget, neveket és fandom-kifejezéseket ugyanabban a mondatban. A vegyes mondat szándékát értsd meg, ne kezeld hibás inputként.
+- A "you", névmások, nevek, becenevek és @mentionök referenciáját a közvetlen chat/thread/jelenet fókuszából oldd fel.
+- Ha egy értelmezés egyértelműen természetesebb, azt használd. Ne gyárts mesterséges kétértelműséget.
+- Csak akkor kérdezz vissza, ha a teljes közeli kontextus után is két lényegesen eltérő értelmezés marad.
+- A játékos angolját ne javítgasd és ne az elütésre reagálj a jelentés helyett.
+A JÁTÉKOS PONTOS INPUTJA: "${text.slice(0, 900)}"`;
+}
+
+function preferredSenseiAddress(character) {
+  if (!character) return "";
+  const nick = String(character.nick || character.nickname || "").replace(/\s+/g, " ").trim();
+  if (/^sensei\b/i.test(nick)) return nick;
+  const surname = preferredTitleSurname(character) || String(character.name || "").trim();
+  return surname ? `Sensei ${surname}` : "Sensei";
 }
 
 function messageLooksLikeQuestion(value) {
@@ -9436,23 +9500,41 @@ function sanitizeIncorrectSenseiAddress(
    * Most importantly, a non-sensei can never acquire the title just because
    * their sheet mentions somebody else's sensei.
    */
-  if (isOwnSenseiRelationship(w, actorId, targetId)) return text;
+  const ownSensei = isOwnSenseiRelationship(w, actorId, targetId);
 
   const fullName = String(target.name || "").trim();
   const words = fullName.split(/\s+/).filter(Boolean);
   const firstName = words[0] || fullName;
   const surname = preferredTitleSurname(target);
-  const replacement = String(target.nick || firstName || fullName || "").trim();
+  const rawNick = String(target.nick || target.nickname || "").trim();
+  const replacement = String((rawNick && !/^sensei\b/i.test(rawNick) ? rawNick : "") || firstName || fullName || "").trim();
 
   const targetNameParts = [fullName, firstName, surname, target.username, target.nick]
     .map((x) => String(x || "").trim())
     .filter((x) => x.length >= 2)
     .filter((x, i, arr) => arr.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i);
 
+  if (ownSensei) {
+    const preferred = preferredSenseiAddress(target);
+    const legalSenseiForms = [fullName, firstName, surname, target.username]
+      .map((x) => String(x || "").trim())
+      .filter((x) => x.length >= 2);
+
+    for (const name of legalSenseiForms) {
+      const escaped = regexEscapeLiteral(name);
+      text = text.replace(
+        new RegExp(`\\bSensei\\s+${escaped}\\b`, "gi"),
+        preferred
+      );
+    }
+
+    return text;
+  }
+
   for (const name of targetNameParts) {
     const escaped = regexEscapeLiteral(name);
     text = text.replace(
-      new RegExp(`\bSensei\s+${escaped}\b`, "gi"),
+      new RegExp(`\\bSensei\\s+${escaped}\\b`, "gi"),
       replacement || name
     );
   }
@@ -11360,10 +11442,37 @@ function mergeWorlds(remote, local) {
   out.posts = order.filter((id) => !out.deleted[id]).map((id) => byId[id]).sort((a, b) => (b.ts || 0) - (a.ts || 0));
 
   const sById = {}, sOrder = [];
+  const mergeSceneTurns = (a, b) => {
+    const rows = [];
+    const seen = new Set();
+    [...(a || []), ...(b || [])]
+      .filter(Boolean)
+      .sort((x, y) => (Number(x.ts) || 0) - (Number(y.ts) || 0))
+      .forEach((turn) => {
+        const key = turn.id || `${turn.authorId || "?"}|${Number(turn.ts) || 0}|${turn.kind || ""}|${String(turn.text || "").trim()}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        rows.push(turn);
+      });
+    return rows;
+  };
   (local.scenes || []).concat(remote.scenes || []).forEach((sc) => {
     if (!sc || !sc.id) return;
-    if (!sById[sc.id]) { sById[sc.id] = sc; sOrder.push(sc.id); return; }
-    if ((sc.turns || []).length > (sById[sc.id].turns || []).length) sById[sc.id] = sc;
+    if (!sById[sc.id]) {
+      sById[sc.id] = { ...sc, turns: (sc.turns || []).slice() };
+      sOrder.push(sc.id);
+      return;
+    }
+    const current = sById[sc.id];
+    const meta = newer(sc, current);
+    sById[sc.id] = {
+      ...current,
+      ...meta,
+      turns: mergeSceneTurns(current.turns, sc.turns),
+      sceneMemory: stamp(sc) >= stamp(current)
+        ? (sc.sceneMemory || current.sceneMemory)
+        : (current.sceneMemory || sc.sceneMemory),
+    };
   });
   out.scenes = sOrder.filter((id) => !out.deleted[id]).map((id) => sById[id]);
   out.scenes.forEach((scene) => ensureSceneEventState(scene));
@@ -12108,7 +12217,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v40-social-warmth-rp-initiative-conflict-merge";
+const BUILD_VERSION = "v41-social-threads-gossip-chat-rp-bridge";
 
 const AUTO = "masvilag:auto";
 /*
@@ -19340,6 +19449,8 @@ noteComment(
   made
 );
 
+const socialJuice = publicSocialJuiceSignals(made.text);
+
 recordSocialEvent(
   n,
   {
@@ -19363,13 +19474,11 @@ recordSocialEvent(
     factLevel: "observed",
 
     importance:
-      tag
-        ? 28
-        : 20,
+      (tag ? 28 : 20) + socialJuice.importance,
 
-    drama: 0,
-    romance: 0,
-    embarrassment: 0,
+    drama: socialJuice.drama,
+    romance: socialJuice.romance,
+    embarrassment: socialJuice.embarrassment,
 
     source: "ai",
 
@@ -19381,6 +19490,8 @@ recordSocialEvent(
       tag
         ? "reply"
         : "comment",
+      ...socialJuice.tags,
+      ...(socialJuice.juicy ? ["gossip-worthy-thread"] : []),
     ],
 
     meta: {
@@ -19874,7 +19985,7 @@ function fairCommentCast(w, targetId) {
     .slice(0, 9);
 }
 
-async function genReply(w, post, comment) {
+async function genReply(w, post, comment, forcedResponderId = "") {
   if (!post || typeof post !== "object" || !comment || typeof comment !== "object") {
     return { comments: [], changes: [], events: [] };
   }
@@ -19901,8 +20012,14 @@ async function genReply(w, post, comment) {
       comment.authorId
     ).find((id) => !isHuman(w, id));
 
+  const forcedResponder =
+    forcedResponderId && !isHuman(w, forcedResponderId)
+      ? charById(w, forcedResponderId)
+      : null;
+
   const directResponder =
-    explicitMentionTarget
+    forcedResponder ||
+    (explicitMentionTarget
       ? charById(w, explicitMentionTarget)
       : (
           parentComment &&
@@ -19915,7 +20032,7 @@ async function genReply(w, post, comment) {
                   ? charById(w, post.authorId)
                   : null
               )
-        );
+        ));
 
   const fairCast = fairCommentCast(
     w,
@@ -19957,6 +20074,15 @@ ${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post
 
 KOMMENTSZÁL:
 ${th.text}
+
+${playerInputUnderstandingInstruction(w, comment.text, "comment")}
+
+PUBLIKUS THREAD REALIZMUS:
+- Ez nyilvános kommentmező, NEM kétfős privát beszélgetés. Egy reply után nem csak az eredeti komment szerzője válaszolhat.
+- BÁRMELYIK itt megadott AI beszállhat, ha hitelesen látja a threadet és van személyes oka: barátság, rivalizálás, védelem, féltékenység, érintettség, kíváncsiság, pletyka, konfliktus vagy a poszt témája.
+- Ne kényszeríts mellékszereplőt a threadbe, ha nincs oka, de ne is zárd le mesterségesen két emberre.
+- Egy szaftos nyilvános beszólásból könnyen lehet többemberes pile-on, védelem, flört, vita vagy későbbi gossip-forrás.
+${forcedResponder ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott hiteles beszálló; az ő reply-ja kötelező, második természetes válaszoló opcionális.` : ""}
 
 MOST KIFEJEZETTEN ERRE A KOMMENTRE VÁLASZOLNAK:
 
@@ -20286,10 +20412,72 @@ JSON: {"reply":"short natural reply"}${TAIL}`,
   }
 
   /*
-   * Event-driven AI→AI threadnél a scheduler konkrét célkaraktert is kérhet.
-   * A modell továbbra is láthat releváns mellékszereplőket, de a direkt címzett
-   * ne vesszen el egy véletlen másik válaszoló miatt.
+   * Ha a scheduler egy releváns BYSTANDER-t választott ki, annak ténylegesen
+   * legyen lehetősége beszállni. A nagy modellkör néha visszacsúszik az eredeti
+   * két emberre; ilyenkor egy apró repair-pass csak a kiválasztott harmadik fél
+   * természetes reply-ját kéri, nem random karaktert.
    */
+  if (forcedResponder) {
+    const alreadyPresent = safeAiComments(out).some((row) =>
+      findChar(w, row && (row.id !== undefined ? row.id : row.name)) === forcedResponder.id
+    );
+
+    if (!alreadyPresent) {
+      try {
+        const repairedBystander = await askWorldJSONInteractive(
+          w,
+          engineFor(w),
+          `${worldContext(w, [forcedResponder.id], true, forcedResponder.id)}
+
+${voiceCard(forcedResponder)}
+${characterMemoryCard(w, forcedResponder)}
+${relationshipBehaviorCard(w, forcedResponder.id, comment.authorId)}
+
+PUBLIC THREAD BYSTANDER REPLY
+Post by ${nameOfIn(w, post.authorId)}: "${String(post.text || "").slice(0, 500)}"
+Thread:
+${th.text}
+
+The latest comment is:
+${nameOfIn(w, comment.authorId)}: "${String(comment.text || "").slice(0, 500)}"
+
+${playerInputUnderstandingInstruction(w, comment.text, "comment")}
+
+${forcedResponder.name} has already been selected by the social scheduler because their relationship/history/personality gives them a REAL reason to jump into this public thread.
+- Write only ${forcedResponder.name}'s natural public reply to the latest comment.
+- Do not make them act like the thread is a private DM.
+- Keep it character-specific, usually 1-12 words.
+- They may defend, pile on, tease, flirt, challenge, gossip, correct or react depending on their actual relationship/context.
+- Do not invent a reason that is not supported by the visible thread/character context.
+- No narration. No assistant language.
+
+JSON: {"reply":"short public reply"}${TAIL}`,
+          { maxTokens: 180, maxTries: 2 }
+        );
+
+        const repairedText = String(repairedBystander && repairedBystander.reply || "")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        if (repairedText) {
+          const current = safeAiComments(out);
+          out = {
+            ...(out || {}),
+            comments: [
+              { id: forcedResponder.id, text: repairedText, trigger: "relevant bystander" },
+              ...current,
+            ].filter((row, index, arr) => {
+              const id = findChar(w, row && (row.id !== undefined ? row.id : row.name));
+              return id && arr.findIndex((other) => findChar(w, other && (other.id !== undefined ? other.id : other.name)) === id) === index;
+            }).slice(0, 2),
+          };
+        }
+      } catch (bystanderRepairErr) {
+        console.warn("Public thread bystander repair failed:", bystanderRepairErr);
+      }
+    }
+  }
+
   return out;
 }
 
@@ -20305,7 +20493,13 @@ function applyReplies(n, postId, rootId, out) {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
     if (isUncharacteristicGenericComment(n, who, c.text)) return;
-    const body = cleanGeneratedComment(n, who, c.text, 240);
+    let body = cleanGeneratedComment(n, who, c.text, 240);
+    if (!body) return;
+    const rootForAddress = safePostComments(p).find((x) => x && x.id === rootId);
+    const addressTargetId = rootForAddress && rootForAddress.authorId ? rootForAddress.authorId : p.authorId;
+    if (addressTargetId) {
+      body = sanitizeIncorrectSenseiAddress(n, who, addressTargetId, body);
+    }
     if (!body) return;
     const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
     p.comments.push(made);
@@ -20326,6 +20520,8 @@ function applyReplies(n, postId, rootId, out) {
         ? rootComment.authorId
         : p.authorId || "";
 
+    const replyJuice = publicSocialJuiceSignals(made.text);
+
     recordSocialEvent(n, {
       type: "reply",
       refId: made.id,
@@ -20337,13 +20533,13 @@ function applyReplies(n, postId, rootId, out) {
           : [],
       visibility: "public",
       factLevel: "observed",
-      importance: 28,
-      drama: 0,
-      romance: 0,
-      embarrassment: 0,
+      importance: 28 + replyJuice.importance,
+      drama: replyJuice.drama,
+      romance: replyJuice.romance,
+      embarrassment: replyJuice.embarrassment,
       source: "ai",
       text: made.text,
-      tags: ["social", "ai-comment", "reply", "thread"],
+      tags: ["social", "ai-comment", "reply", "thread", ...replyJuice.tags, ...(replyJuice.juicy ? ["gossip-worthy-thread"] : [])],
       meta: {
         postId: p.id,
         commentId: made.id,
@@ -22025,6 +22221,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 arr.indexOf(target) === index
               );
 
+              const playerCommentJuice = publicSocialJuiceSignals(made.text);
+
               recordSocialEvent(n, {
                 type: parent ? "reply" : "comment",
                 refId: made.id,
@@ -22033,10 +22231,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 targetIds: eventTargets,
                 visibility: "public",
                 factLevel: "observed",
-                importance: parent ? 30 : 22,
-                drama: 0,
-                romance: 0,
-                embarrassment: 0,
+                importance: (parent ? 30 : 22) + playerCommentJuice.importance,
+                drama: playerCommentJuice.drama,
+                romance: playerCommentJuice.romance,
+                embarrassment: playerCommentJuice.embarrassment,
                 source: "player",
                 text: made.text,
                 tags: [
@@ -22044,6 +22242,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   "player-comment",
                   parent ? "reply" : "comment",
                   "relationship-impact-pending",
+                  ...playerCommentJuice.tags,
+                  ...(playerCommentJuice.juicy ? ["gossip-worthy-thread"] : []),
                 ],
                 meta: {
                   postId: x.id,
@@ -24509,7 +24709,13 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
     return () => clearInterval(i);
   }, [scene.open, scene.limitMode, scene.id]);
 
-  const patch = (fn) => update((n) => { const s = n.scenes.find((x) => x.id === scene.id); if (s) fn(s, n); });
+  const patch = (fn) => update((n) => {
+    const s = n.scenes.find((x) => x.id === scene.id);
+    if (s) {
+      fn(s, n);
+      s.updatedAt = now();
+    }
+  });
 
   const advance = async (playerText) => {
     setBusy("turn");
@@ -24529,30 +24735,32 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
             reason: "none",
           };
 
-    if (playerText) {
-      patch((s, n) => {
-        const playerTurn = {
-          authorId: n.meId,
-          to:
-            playerTarget.id ||
-            "",
+    const optimisticPlayerTurn = playerText
+      ? {
+          id: "turn_" + uid(),
+          authorId: w.meId,
+          to: playerTarget.id || "",
           kind: "action",
           text: playerText,
           ts: now(),
-        };
+          language: worldLanguage(w, w.meId),
+        }
+      : null;
+
+    if (optimisticPlayerTurn) {
+      patch((s, n) => {
+        const playerTurn = { ...optimisticPlayerTurn, authorId: n.meId };
         s.turns.push(playerTurn);
         rememberRoleplayObservedTurn(n, s, playerTurn);
-
-        if (playerTarget.id) {
-          s.playerFocusId =
-            playerTarget.id;
-        }
+        if (playerTarget.id) s.playerFocusId = playerTarget.id;
       });
     }
 
     try {
-      const log = scene.turns.slice(-14).map((t) => {
-        if (t.authorId === "narrator") return `(${t.text})`;
+      const promptTurns = optimisticPlayerTurn
+        ? [...(scene.turns || []), optimisticPlayerTurn]
+        : (scene.turns || []);
+      const log = promptTurns.slice(-14).map((t) => {        if (t.authorId === "narrator") return `(${t.text})`;
         const a = who(t.authorId);
         const target =
           t.to
@@ -24602,6 +24810,8 @@ EDDIG TÖRTÉNT:
 ${log || "a jelenet most kezdődik"}
 
 ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` : "A játékos most nem lép közbe; a szereplők maguktól viszik tovább a jelenetet."}
+
+${playerText ? playerInputUnderstandingInstruction(w, playerText, "roleplay") : ""}
 
 ${playerText
   ? addresseePromptInstruction(
@@ -24741,12 +24951,17 @@ Formátum:
                 ? resolvedTo
                 : "";
 
+            const addressedText =
+              !isNarr && allowedTo && resolvedId
+                ? sanitizeIncorrectSenseiAddress(w, resolvedId, allowedTo, freshText)
+                : freshText;
+
             return {
               authorId: allowed ? resolvedId : null,
               to:
                 allowedTo,
               kind: t && t.kind === "action" ? "action" : "speech",
-              text: freshText,
+              text: addressedText,
             };
           })
           .filter((t) => t.authorId && t.text);
@@ -24786,6 +25001,8 @@ ${log || "a jelenet most kezdődik"}
 
 ${playerText ? `${w.player.name} most ezt teszi vagy mondja:
 "${playerText}"` : "A játékos most nem lép közbe."}
+
+${playerText ? playerInputUnderstandingInstruction(w, playerText, "roleplay") : ""}
 
 KARAKTEREK — TÖMÖR, DE KÖTELEZŐ KÁNON + EMLÉKEZET:
 ${retryCast}
@@ -24832,7 +25049,7 @@ VÁLASZ CSAK JSON:
 
       patch((s, n) => {
         resolved.forEach((t) => {
-          const storedTurn = { ...t, ts: now(), language: worldLanguage(n, n.meId) };
+          const storedTurn = { id: "turn_" + uid(), ...t, ts: now(), language: worldLanguage(n, n.meId) };
           s.turns.push(storedTurn);
           noteMentions(n, t.text, t.authorId, { type: "scene", id: s.id });
           rememberRoleplayObservedTurn(n, s, storedTurn);
@@ -25335,7 +25552,7 @@ Formátum:
 
       {scene.turns.map((t, i) => {
         if (t.authorId === "narrator") return <p className="narr" key={i}>{t.text}</p>;
-        const a = who(t.authorId);
+        const a = t.authorId === w.meId ? w.player : who(t.authorId);
         if (!a) return null;
         return (
           <div className="turn" key={i}>
@@ -26240,6 +26457,38 @@ Formátum:
 }
 
 /* Jegyzetsáv — a szereplők feje fölött egy-egy mondat, mint az Instagram Notes. */
+function normalizeDmRoleplayBridge(w, bot, raw, playerText, replyText) {
+  if (!w || !bot || !raw || raw.activate !== true) return null;
+  const kind = ["private_meet", "arrival", "party", "training", "team_event"].includes(String(raw.kind || ""))
+    ? String(raw.kind)
+    : "private_meet";
+  const title = String(raw.title || "").trim().slice(0, 120) || `${bot.name} · ${kind.replace(/_/g, " ")}`;
+  const setting = String(raw.setting || "").trim().slice(0, 1400);
+  const goal = String(raw.goal || "").trim().slice(0, 500) || "Continue the concrete plan agreed in chat.";
+  const explicitOpening = String(raw.opening || "").trim().slice(0, 1800);
+  if (!setting) return null;
+  const en = worldLanguage(w, w.meId) === "en";
+  const fallbackOpening = kind === "arrival" || kind === "private_meet"
+    ? (en ? `${bot.name} arrives at ${setting}.` : `${bot.name} megérkezik ide: ${setting}.`)
+    : (en ? `${bot.name}'s planned ${kind.replace(/_/g, " ")} is now underway at ${setting}.` : `${bot.name} megszervezett programja elkezdődik itt: ${setting}.`);
+  const opening = explicitOpening || fallbackOpening;
+  const descriptor = `${kind} ${title} ${setting} ${goal} ${playerText || ""} ${replyText || ""}`;
+  const generated = Array.isArray(raw.cast) ? raw.cast : [];
+  const cast = contextualRoleplayCast(w, bot, generated, descriptor);
+  if (!cast.includes(bot.id)) cast.unshift(bot.id);
+  return {
+    kind, title, setting, goal, opening,
+    openingKind: raw.openingKind === "action" ? "action" : "speech",
+    cast: [...new Set(cast)].filter(Boolean),
+  };
+}
+
+function recentDmBridgeScene(w, botId, chatKeyValue) {
+  return (w.scenes || [])
+    .filter((scene) => scene && scene.open && scene.chatBridge === true && scene.initiatedBy === botId && scene.sourceChatKey === chatKeyValue)
+    .sort((a, b) => (Number(b.startedAt || b.ts) || 0) - (Number(a.startedAt || a.ts) || 0))[0] || null;
+}
+
 function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply, onOpenScene }) {
   const { tt } = useLang();
   const { media, addImage } = useMedia();
@@ -26507,6 +26756,8 @@ ${selfMemoryForPrompt(
 BESZÉLGETÉS:
 ${hist}
 
+${playerInputUnderstandingInstruction(requestWorld, t, "chat")}
+
 ${chatReferenceInstruction(
   requestWorld,
   requestWorld.player.name,
@@ -26617,6 +26868,17 @@ PRIVÁT CHAT SZABÁLYOK:
 - ${requestWorld.player.name} karaktert E/2-ben, tegezve szólítsd meg.
 - Magázás tilos.
 
+CHAT ↔ ROLEPLAY BRIDGE — CSAK VALÓDI FIZIKAI TERVNÉL:
+- Ha ebben a DM-ben KONKRÉTAN megegyeztek egy személyes találkozóban/programban, vagy a játékos azt írja, hogy "come here / come over / meet me at... / come to..." és te ténylegesen elfogadod, a roleplayBridge.activate legyen true.
+- Ugyanez igaz, ha te most konkrétan megszervezel egy bulit, edzést, találkozót vagy más Eventet, és ez már tényleges terv, nem hipotetikus ötlet.
+- Ha csak beszéltek róla, bizonytalan, elutasítod, későbbre lebegtetitek vagy nincs konkrét fizikai találkozás, activate=false.
+- private_meet / arrival: CSAK te legyél AI-cast; a játékos automatikusan jelen van. Ne rakj be random harmadik embert.
+- party: csak valódi barátok/kortársak/társasági kör és releváns meghívottak.
+- training: saját tanítványok + ugyanahhoz a dojohoz tartozó releváns senseiek/edzők/tagok.
+- team_event: az adott szervezet/team konkrét releváns tagjai.
+- A cast csak AI-ID-ket tartalmazzon; ${c.id} kötelező. A frontend kánon/kapcsolat alapján még egyszer megszűri.
+- Az opening az Event ELSŐ fizikai pillanata legyen, a játékos reakciója nélkül.
+
 KAPCSOLATVÁLTOZÁS:
 - Alapértelmezés: "relationshipImpact": false és changes: [].
 - Egy hétköznapi válasz, poén, emoji, sima kérdés, képreakció, small talk vagy rutinszerű flört NEM mozgat automatikusan kapcsolatpontot.
@@ -26631,7 +26893,7 @@ KAPCSOLATVÁLTOZÁS:
 - Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
 
 Formátum:
-{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
+{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"memory":"egy mondat, ha történt valami emlékezetes, különben üres","roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
     , { maxTries: 1, maxTokens: 650, timeoutMs: 28000 }
     );
 
@@ -26696,6 +26958,18 @@ Formátum:
       (generatedAiSnap && generatedAiSnap.imageDescription) || "";
 
     let reply = requestedReplyText;
+
+    const bridgePlan = normalizeDmRoleplayBridge(
+      requestWorld,
+      c,
+      out && out.roleplayBridge,
+      t,
+      requestedReplyText
+    );
+    const existingBridgeScene = bridgePlan ? recentDmBridgeScene(requestWorld, c.id, ck) : null;
+    const bridgeSceneId = bridgePlan
+      ? (existingBridgeScene ? existingBridgeScene.id : "chat_evt_" + uid())
+      : "";
 
     /*
      * No second AI round-trip for emoji cleanup. Local sanitizers handle it.
@@ -26774,8 +27048,68 @@ Formátum:
               n,
               n.meId
             ),
+          roleplayInviteSceneId: bridgeSceneId || "",
         },
       ];
+
+      if (bridgePlan && !existingBridgeScene) {
+        const scene = {
+          id: bridgeSceneId,
+          title: bridgePlan.title,
+          setting: bridgePlan.setting,
+          cast: bridgePlan.cast,
+          turns: [{
+            id: "turn_" + uid(),
+            authorId: c.id,
+            to: n.meId,
+            kind: bridgePlan.openingKind,
+            text: bridgePlan.opening,
+            ts: now(),
+            language: worldLanguage(n, n.meId),
+          }],
+          open: true,
+          goal: bridgePlan.goal,
+          limitMode: "turns",
+          targetTurns: 20,
+          targetMinutes: 30,
+          rewardAffection: 10,
+          rewardItem: sysLangText(n, n.meId, `${bridgePlan.title} emléke`, `${bridgePlan.title} keepsake`),
+          rewardGranted: false,
+          rewardAffectionGranted: 0,
+          rewardItemGranted: "",
+          statusUpdates: [],
+          success: null,
+          earlyEnd: false,
+          startedAt: now(),
+          updatedAt: now(),
+          ts: now(),
+          eventKind: detectSceneEventKind({ title: bridgePlan.title, setting: bridgePlan.setting }),
+          aiInitiated: true,
+          initiatedBy: c.id,
+          initiationMode: "chat_bridge",
+          invitationStatus: "accepted_in_chat",
+          chatBridge: true,
+          sourceChatKey: ck,
+        };
+        n.scenes = [...(n.scenes || []), scene];
+        rememberKnowledge(n, c.id, {
+          kind: "event", source: "chat_roleplay_bridge", confidence: 1,
+          text: sysLangText(n, c.id, `A privát chatből konkrét találkozó/Event lett: ${bridgePlan.title}`, `The private chat turned into a concrete meet/Event: ${bridgePlan.title}`),
+        });
+        bridgePlan.cast.filter((id) => id && id !== c.id).forEach((inviteeId) => {
+          const invitee = charById(n, inviteeId);
+          if (!invitee) return;
+          rememberKnowledge(n, inviteeId, {
+            kind: "event", source: "chat_roleplay_bridge", confidence: 1,
+            text: sysLangText(n, inviteeId, `${c.name} bevont ebbe: ${bridgePlan.title}`, `${c.name} included me in: ${bridgePlan.title}`),
+          });
+        });
+        pushNote(n, n.meId, {
+          icon: "🎬",
+          text: sysLangText(n, n.meId, `A chatből Event lett: ${bridgePlan.title}`, `The chat became an Event: ${bridgePlan.title}`),
+          link: { type: "scene", id: bridgeSceneId },
+        });
+      }
 
       const dmChangesRaw =
         Array.isArray(
@@ -30146,8 +30480,8 @@ function gossipEventBaseScore(
 
 function gossipEventThreshold(mode) {
   return mode === "global"
-    ? 58
-    : 36;
+    ? 54
+    : 28;
 }
 
 function spillAndChillJuicyEnough(event, score) {
@@ -30168,12 +30502,13 @@ function spillAndChillJuicyEnough(event, score) {
     );
 
   return Boolean(
-    score >= 58 ||
+    score >= 46 ||
     inherentlyJuicy ||
-    importance >= 28 ||
-    drama >= 26 ||
-    romance >= 28 ||
-    embarrassment >= 28 ||
+    tags.includes("gossip-worthy-thread") ||
+    importance >= 24 ||
+    drama >= 18 ||
+    romance >= 20 ||
+    embarrassment >= 20 ||
     (roleplayGossipEligible(event) && (drama + romance + embarrassment) >= 30)
   );
 }
@@ -30551,18 +30886,18 @@ function gossipPublishCooldownMs(w) {
     "normal";
 
   if (frequency === "low") {
-    return 25 * 60000;
+    return 15 * 60000;
   }
 
   if (frequency === "high") {
-    return 4 * 60000;
+    return 3 * 60000;
   }
 
   if (frequency === "chaotic") {
-    return 2 * 60000;
+    return 90 * 1000;
   }
 
-  return 8 * 60000;
+  return 5 * 60000;
 }
 
 function gossipPublishChance(w) {
@@ -30913,10 +31248,13 @@ GLOSSY ANONIM GOSSIP NARRÁTOR — REALISZTIKUS, SZAFTOS, CSÍPŐS:
 - Ne másolj ismert sorozatos catchphrase-t vagy fix aláírást; a hangulat legyen saját, friss és változatos.
 - A pletyka akkor jó, ha a TÉNYEKET szaftosan rendezi el, nem akkor, ha új tényt talál ki.
 
-${candidate.forcePublish ? `KÖTELEZŐ ROLEPLAY UTÓÉLET:
+${candidate.forcePublish && candidate.eventRecap ? `KÖTELEZŐ ROLEPLAY UTÓÉLET:
 - Ez a story egy lezárt, több-AI-s roleplay után KÖTELEZŐ publikáció, mert a gossip média be van kapcsolva.
 - "skip": true TILOS. A rendelkezésre álló eseményekből készíts publikálható recapot akkor is, ha a jelenet nem botrányos; a társas dinamika, hangulat, furcsa pillanatok, szövetségek, feszültségek vagy meglepő kontrasztok adhatják a sztorit.
-- Ne találj ki semmit csak azért, mert kötelező posztolni.` : ""}
+- Ne találj ki semmit csak azért, mert kötelező posztolni.` : candidate.forcePublish ? `KÖTELEZŐ GOSSIP WATCHDOG:
+- Ez már eleve átment a publikus gossip-alkalmassági szűrőn, és az oldal túl régóta hallgat / a thread elég szaftos.
+- "skip": true TILOS. A felsorolt NYILVÁNOS tényekből készíts valódi gossip-posztot.
+- Ne találj ki új tényt, titkos forrást vagy privát információt; a szaftosság a megfogalmazásból és a valós társas dinamikából jöjjön.` : ""}
 
 A KÖVETKEZŐ STORY CANDIDATE VALÓS VILÁGBELI ESEMÉNYEKBŐL ÉPÜL.
 
@@ -30988,7 +31326,9 @@ SZIGORÚ TARTALMI SZABÁLYOK:
 - Markdown headinget (#) ne használj.
 
 ${candidate.forcePublish
-  ? "EZ KÖTELEZŐ RP-RECAP: skip:true nem használható."
+  ? (candidate.eventRecap
+      ? "EZ KÖTELEZŐ RP-RECAP: skip:true nem használható."
+      : "EZ KÖTELEZŐ, MÁR ELŐSZŰRT GOSSIP-PUBLIKÁCIÓ: skip:true nem használható.")
   : `DÖNTHETSZ ÚGY, HOGY MÉGSEM ÉRDEMES PUBLIKÁLNI.
 Ilyenkor: "skip": true.`}
 
@@ -31634,6 +31974,29 @@ function gossipAutoCandidate(w) {
       gossipPublishCooldownMs(w)
   ) {
     return null;
+  }
+
+  /*
+   * Gossip starvation guard: a publishable story must not sit forever because
+   * the language model repeatedly chooses skip:true. Once the page has been
+   * quiet for meaningfully longer than its own cadence, publication is forced
+   * from the already-eligible public facts. A particularly juicy public thread
+   * can also force the next post after the normal cooldown.
+   */
+  const frequency = String(w.gossipSettings && w.gossipSettings.frequency || "normal");
+  const starvationMs = frequency === "low"
+    ? 35 * 60000
+    : frequency === "high"
+      ? 10 * 60000
+      : frequency === "chaotic"
+        ? 6 * 60000
+        : 18 * 60000;
+  const candidateTags = (candidate.events || []).flatMap((event) => Array.isArray(event && event.tags) ? event.tags : []);
+  const threadJuice = candidateTags.includes("gossip-worthy-thread");
+  const starved = !lastPublishedAt || now() - lastPublishedAt >= starvationMs;
+  if (starved || (threadJuice && Number(candidate.score || 0) >= 50)) {
+    candidate.forcePublish = true;
+    candidate.forceReason = starved ? "starvation-watchdog" : "juicy-public-thread";
   }
 
   return candidate;
@@ -36924,43 +37287,59 @@ function roleplayEventAudienceScore(w, host, candidate, descriptor, explicit = f
 
 function contextualRoleplayCast(w, host, generatedCast, descriptor) {
   if (!w || !host) return host ? [host.id] : [];
-
-  const explicitIds = new Set(
-    (Array.isArray(generatedCast) ? generatedCast : [])
-      .map((id) => findChar(w, id))
-      .filter((id) => id && id !== w.meId && id !== host.id && charById(w, id) && !isHuman(w, id))
-  );
+  const explicitIds = new Set((Array.isArray(generatedCast) ? generatedCast : [])
+    .map((id) => findChar(w, id))
+    .filter((id) => id && id !== w.meId && id !== host.id && charById(w, id) && !isHuman(w, id)));
 
   const eventText = String(descriptor || "").toLowerCase();
-  const groupEvent = /\b(?:party|buli|cabin|house\s*party|bonfire|practice|training|dojo|karate|class|lesson|meeting|briefing|team|crew|squad|edz[eé]s|gyakorl[aá]s|megbesz[eé]l[eé]s|csapat)\b/.test(eventText);
   const isTraining = /\b(?:practice|training|dojo|karate|class|lesson|sparring|edz[eé]s|gyakorl[aá]s)\b/.test(eventText);
-  const isParty = /\b(?:party|buli|cabin|house\s*party|bonfire|afterparty|h[aá]zibuli)\b/.test(eventText);
+  const isParty = /\b(?:party|buli|cabin\s*party|house\s*party|bonfire|afterparty|club\s*night|h[aá]zibuli)\b/.test(eventText);
+  const isTeam = /\b(?:meeting|briefing|mission|team|crew|squad|operation|work\s+meeting|munka|megbesz[eé]l[eé]s|küldet[eé]s|csapat)\b/.test(eventText);
+  const isGroupSocial = /\b(?:group\s+hangout|everyone|everybody|friends\s+over|game\s+night|dinner\s+party|barbecue|bbq|közös\s+program|társaság|mindenkit)\b/.test(eventText);
+  const groupEvent = isTraining || isParty || isTeam || isGroupSocial;
 
+  /* Non-group event = player + host only. No random third wheel. */
+  if (!groupEvent) return [host.id];
+
+  const hostTags = roleplayAffiliationTags(host);
+  const hostYear = roleplayBirthYear(host);
   const ranked = (w.chars || [])
     .filter((c) => c && c.id !== host.id && !isHuman(w, c.id))
-    .map((c) => ({
-      id: c.id,
-      explicit: explicitIds.has(c.id),
-      score: roleplayEventAudienceScore(w, host, c, eventText, explicitIds.has(c.id)) + Math.random() * 4,
-    }))
-    .sort((a, b) => b.score - a.score);
+    .map((c) => {
+      const score = roleplayEventAudienceScore(w, host, c, eventText, explicitIds.has(c.id));
+      const rel = getRel(w, host.id, c.id) || {};
+      const bond = String(rel.bond || rel.type || "").toLowerCase();
+      const shared = roleplayAffiliationTags(c).filter((tag) => hostTags.includes(tag));
+      const ownStudent = isOwnSenseiRelationship(w, c.id, host.id);
+      const hostOwnSensei = isOwnSenseiRelationship(w, host.id, c.id);
+      const candidateSensei = characterIsSensei(c);
+      const cy = roleplayBirthYear(c);
+      const yearDiff = hostYear && cy ? Math.abs(hostYear - cy) : 99;
+      const knownPersonally = Math.abs(Number(rel.score) || 0) >= 12 || Boolean(bond) ||
+        socialInteractionInterest(w, host.id, c.id) >= 20 || Boolean(ownStorySnippetAbout(host, c));
+      let contextFit = false;
+      if (isTraining) {
+        contextFit = ownStudent || hostOwnSensei ||
+          (shared.length > 0 && (candidateSensei || /student|karate|fighter|coach|instructor|sensei|di[aá]k|harcos|edz[oő]/i.test([c.job,c.bio,c.extra].filter(Boolean).join(" "))));
+      } else if (isParty) {
+        contextFit = knownPersonally && (yearDiff <= 10 || /friend|best|close|partner|dating|rival|ally|bar[aá]t|sz[oö]vets/.test(bond) || characterOnlineActivityProfile(w, c).group >= 1.0);
+      } else if (isTeam) {
+        contextFit = shared.length > 0 || ownStudent || hostOwnSensei || (explicitIds.has(c.id) && knownPersonally);
+      } else {
+        contextFit = knownPersonally && explicitIds.has(c.id);
+      }
+      return { id: c.id, score, explicit: explicitIds.has(c.id), contextFit };
+    })
+    .filter((row) => row.contextFit)
+    .sort((a, b) => (b.score - a.score) || String(a.id).localeCompare(String(b.id)));
 
-  const maxCast = isTraining ? 10 : isParty ? 9 : groupEvent ? 8 : 5;
-  const minOthers = isTraining ? 2 : isParty ? 3 : groupEvent ? 2 : 0;
+  const maxCast = isTraining ? 10 : isParty ? 9 : isTeam ? 8 : 7;
   const selected = [host.id];
-
   ranked.forEach((row) => {
     if (selected.length >= maxCast) return;
-    if (row.explicit || row.score >= (groupEvent ? 18 : 34)) selected.push(row.id);
+    const threshold = isTraining ? 22 : isParty ? 24 : 20;
+    if (row.explicit || row.score >= threshold) selected.push(row.id);
   });
-
-  if (groupEvent && selected.length - 1 < minOthers) {
-    ranked.forEach((row) => {
-      if (selected.length - 1 >= minOthers || selected.length >= maxCast) return;
-      if (!selected.includes(row.id) && row.score > -10) selected.push(row.id);
-    });
-  }
-
   return [...new Set(selected)].filter(Boolean).slice(0, maxCast);
 }
 
@@ -37113,7 +37492,8 @@ EZ NEM RENDSZER-ÖTLET GENERÁLÁS. Ez ${bot.name} SAJÁT DÖNTÉSE a világon b
 - Ha a kánon szerint psycho/kiszámíthatatlan/manipulatív vagy, az iniciatíva lehet nyugtalanítóbb, kontrollálóbb vagy meglepőbb, DE csak a saját kánon és valós információk alapján.
 - Megjelenhetsz a játékosnál / váratlanul felbukkanhatsz CSAK akkor, ha hiteles, hogy tudod hol van/lakik és a kapcsolatod/kánonod ezt lehetővé teszi. Ne találj ki mágikus helyismeretet vagy off-screen stalkingot.
 - DM-ben is meghívhatod valahova. Ilyenkor a DM csak a meghívás/kezdeményezés; maga az Event külön megnyitható jelenetként létrejön.
-- Több AI-t is bevonhatsz, és TÁRSAS / CSOPORTOS EVENTNÉL ez az alapértelmezett. Csak létező karakter-ID-ket használj, és te mindig legyél a castban.
+- Több AI-t CSAK TÁRSAS / CSOPORTOS EVENTNÉL vonj be. Csak létező karakter-ID-ket használj, és te mindig legyél a castban.
+- KETTESBEN PROGRAM / randi / kávé / séta / privát beszélgetés / "gyere ide" / négyszemközti konfrontáció esetén a castban CSAK TE legyél AI-ként; a játékos automatikusan jelen van. Ne adj hozzá harmadik szereplőt csak a dráma kedvéért.
 - A meghívottakat az EVENT LOGIKÁJA alapján válaszd, ne random és ne csak aszerint, ki áll közel a játékoshoz.
 - BULI / cabin party / house party: a host természetes barátai, kortársai, fiatalabb társasági köre, releváns riválisai vagy azok legyenek jelen, akiket ő tényleg meghívna. Ne legyen automatikusan minden idősebb tekintélyszereplő ott.
 - DOJO / karate practice / edzés: a host SAJÁT TANÍTVÁNYAI kapjanak elsőbbséget, továbbá ugyanahhoz a dojohoz/szervezethez tartozó releváns senseiek, edzők vagy haladó tagok. Egy Cobra Kai practice például Cobra Kai-diákokat és releváns Cobra Kai-senseieket hívjon, ne random barátokat.
@@ -37378,6 +37758,20 @@ function planAutoAction(view) {
   }
 
   /*
+   * 1.6 GOSSIP WATCHDOG
+   * A friss, publikálható nyilvános dráma/thread nem vár follow-karbantartás mögött.
+   */
+  const urgentGossipCandidate = gossipAutoCandidate(view);
+  if (urgentGossipCandidate) {
+    return mkAction(
+      "gossip-story",
+      `gossip-priority:${urgentGossipCandidate.mode}:${urgentGossipCandidate.primaryEventId}`,
+      { candidate: urgentGossipCandidate },
+      "event"
+    );
+  }
+
+  /*
    * 1.75 FEED SAFETY NET
    * A normál arányt a közös channel balancer adja; ez csak végső biztosíték.
    */
@@ -37466,29 +37860,6 @@ function planAutoAction(view) {
         targetId: relationshipFollow.targetId,
         trigger: "relationship",
         score: relationshipFollow.score,
-      },
-      "event"
-    );
-  }
-
-  /*
-   * GOSSIP WATCHDOG — ha van publikálható, friss Story Selector-jelölt,
-   * ne hagyjuk, hogy az újabb feed-posztok folyamatosan kiéheztessék.
-   * A gossipAutoCandidate már ellenőrzi a felhasználó gossip módját
-   * és a cooldown végét, ezért egy valóban esedékes jelölt publikálható.
-   */
-  const dueGossipCandidate =
-    gossipAutoCandidate(
-      view
-    );
-
-  if (dueGossipCandidate) {
-    return mkAction(
-      "gossip-story",
-      `gossip-watchdog:${dueGossipCandidate.mode}:${dueGossipCandidate.primaryEventId}`,
-      {
-        candidate:
-          dueGossipCandidate,
       },
       "event"
     );
@@ -38928,15 +39299,16 @@ async function runSimulationAction(view, update, action, addImage) {
       return null;
     }
 
-    const rawOut = await genReply(
-      view,
-      post,
-      comment
-    );
-
     const requestedTargetId =
       action.payload &&
       action.payload.targetId;
+
+    const rawOut = await genReply(
+      view,
+      post,
+      comment,
+      requestedTargetId || ""
+    );
 
     const out = requestedTargetId
       ? {
