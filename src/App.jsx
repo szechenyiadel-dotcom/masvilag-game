@@ -2691,10 +2691,31 @@ function safePostComments(post) {
     : [];
 }
 
+function safeAiArray(out, key) {
+  if (!out || typeof out !== "object") return [];
+  const value = out[key];
+  return Array.isArray(value) ? value : [];
+}
+
 function safeAiComments(out) {
-  return out && Array.isArray(out.comments)
-    ? out.comments.filter((c) => c && typeof c === "object")
-    : [];
+  return safeAiArray(out, "comments")
+    .filter((c) => c && typeof c === "object");
+}
+
+function safeAiChanges(out) {
+  return safeAiArray(out, "changes")
+    .filter((ch) => ch && typeof ch === "object");
+}
+
+function safeAiEvents(out) {
+  return safeAiArray(out, "events")
+    .map((e) => String(e || "").trim())
+    .filter(Boolean);
+}
+
+function safeAiMemories(out) {
+  return safeAiArray(out, "memories")
+    .filter((m) => m && typeof m === "object");
 }
 
 function sanitizeWorldPosts(w) {
@@ -16252,9 +16273,9 @@ function applyPostPerceptionImpact(
   (
     out &&
     Array.isArray(
-      out.changes
+      safeAiChanges(out)
     )
-      ? out.changes
+      ? safeAiChanges(out)
       : []
   )
     .slice(0, 16)
@@ -16658,9 +16679,9 @@ function applyNotePerceptionImpact(
   (
     out &&
     Array.isArray(
-      out.changes
+      safeAiChanges(out)
     )
-      ? out.changes
+      ? safeAiChanges(out)
       : []
   )
     .slice(0, 12)
@@ -16824,8 +16845,10 @@ function applyNotePerceptionImpact(
 
 function applyComments(n, postId, out, label) {
   const p = (n.posts || []).find((x) => x && x.id === postId);
-  if (p) {
-    p.comments = safePostComments(p);
+  if (!p) return;
+
+  p.comments = safePostComments(p);
+  {
     const byLabel = {};
     Object.keys(label || {}).forEach((cid) => { byLabel[label[cid]] = cid; });
     safeAiComments(out).forEach((c) => {
@@ -16969,7 +16992,7 @@ recordSocialEvent(
         });
       }
     });
-    (out.likes || []).forEach((lid) => {
+    safeAiArray(out, "likes").forEach((lid) => {
   const who = aiVoice(
     n,
     lid
@@ -17119,7 +17142,7 @@ recordSocialEvent(
     out
   );
 
-  n.log = [...(out.events || []), ...n.log].slice(0, 30);
+  n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
 }
 function socialInteractionInterest(
   w,
@@ -17571,10 +17594,11 @@ Formátum:
 
 function applyReplies(n, postId, rootId, out) {
   const p = (n.posts || []).find((x) => x && x.id === postId);
-  if (p) {
-    p.comments = safePostComments(p);
-  }
-  if (p) safeAiComments(out).forEach((c) => {
+  if (!p) return;
+
+  p.comments = safePostComments(p);
+
+  safeAiComments(out).forEach((c) => {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
     const body = cleanGeneratedUtterance(n, who, c.text, 240);
@@ -17626,8 +17650,8 @@ function applyReplies(n, postId, rootId, out) {
       );
     }
   });
-  applyChanges(n, out.changes);
-  n.log = [...(out.events || []), ...n.log].slice(0, 30);
+  applyChanges(n, safeAiChanges(out));
+  n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
 }
 /*
  * FAIR POST ACTIVITY
@@ -18164,8 +18188,8 @@ rememberKnowledge(n, author, {
     noteMentions(n, fresh.text, author, { type: "post", id: fresh.id });
     made.forEach((mc) => noteMentions(n, mc.text, mc.authorId, { type: "post", id: fresh.id }));
   });
-  applyChanges(n, out.changes);
-  n.log = [...(out.events || []), ...n.log].slice(0, 30);
+  applyChanges(n, safeAiChanges(out));
+  n.log = [...(safeAiEvents(out) || []), ...(n.log || [])].slice(0, 30);
 }
 
 /* Jegyzet-sáv: a szereplők egysoros gondolatai, mint az Instagramon. */
@@ -21432,12 +21456,12 @@ VÁLASZ CSAK JSON:
             });
           }
         });
-        applyChanges(n, out.changes);
-        applyMemories(n, out.memories);
+        applyChanges(n, safeAiChanges(out));
+        applyMemories(n, safeAiMemories(out));
 
         const sceneEvents =
-          Array.isArray(out.events)
-            ? out.events
+          Array.isArray(safeAiEvents(out))
+            ? safeAiEvents(out)
                 .map(
                   (value) =>
                     String(value || "").trim()
@@ -21633,8 +21657,8 @@ Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}]
       patch((s, n) => {
         s.open = false;
         s.summary = out.summary || "";
-        applyMemories(n, out.memories);
-        applyChanges(n, out.changes);
+        applyMemories(n, safeAiMemories(out));
+        applyChanges(n, safeAiChanges(out));
         if (out.summary) {
           n.log = [
             out.summary,
@@ -22375,12 +22399,12 @@ Formátum:
 
       applyChanges(
         n,
-        out.changes
+        safeAiChanges(out)
       );
 
       applyMemories(
         n,
-        out.memories
+        safeAiMemories(out)
       );
     });
 
@@ -23154,9 +23178,9 @@ Formátum:
       const dmChanges =
         Array.isArray(
           out &&
-          out.changes
+          safeAiChanges(out)
         )
-          ? out.changes
+          ? safeAiChanges(out)
           : [
               {
                 a:c.id,
@@ -28230,7 +28254,7 @@ function applyGossipReactions(n,postId,cast,out){
     const ck=chatKey(n.meId,who);n.chats[ck]=[...(n.chats[ck]||[]),{from:"them",text:body,ts:now(),language:worldLanguage(n,n.meId)}];
     const a=charById(n,who);pushNote(n,n.meId,{icon:"✉️",text:sysLangText(n,n.meId,`${a?a.name:"Valaki"} írt neked a pletyka után.`,`${a?a.name:"Someone"} messaged you after the gossip post.`),link:{type:"dm",id:who}});
   });
-  const safeChanges=(out&&Array.isArray(out.changes)?out.changes:[]).filter((ch)=>{
+  const safeChanges=(out&&Array.isArray(safeAiChanges(out))?safeAiChanges(out):[]).filter((ch)=>{
     const a=findChar(n,ch&&ch.a), b=findChar(n,ch&&ch.b);return a&&b&&castSet.has(a)&&allowedTargets.has(b)&&a!==b;
   }).map((ch)=>({...ch,delta:Math.max(-30,Math.min(30,Number(ch.delta)||0))}));
   applyChanges(n,safeChanges);refreshPostReach(n,post.id);refreshTrends(n);
@@ -34841,12 +34865,12 @@ if (targetNote) {
 
       applyChanges(
         n,
-        out.changes
+        safeAiChanges(out)
       );
 
       applyMemories(
         n,
-        out.memories
+        safeAiMemories(out)
       );
 
       if (
@@ -35084,7 +35108,7 @@ if (targetNote) {
 
       applyChanges(
         n,
-        out.changes
+        safeAiChanges(out)
       );
 
       if (
@@ -35246,9 +35270,9 @@ if (targetNote) {
       const dmChanges =
         Array.isArray(
           out &&
-          out.changes
+          safeAiChanges(out)
         )
-          ? out.changes
+          ? safeAiChanges(out)
           : [
               {
                 a:bot.id,
