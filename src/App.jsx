@@ -9860,6 +9860,30 @@ async function buildCharacterSnapIdentity(character, media) {
   return cut(parts.join("\n"), 1200);
 }
 
+function characterSnapReferenceImages(character, media, limit = 3) {
+  if (!character || !media) return [];
+  const refs = [];
+  const add = (ref) => {
+    if (!ref || refs.length >= limit) return;
+    const resolved = resolveImg(ref, media);
+    if (!resolved || !isInlineImageData(resolved)) return;
+    if (!refs.includes(resolved)) refs.push(resolved);
+  };
+  add(character.avatar);
+  for (const item of albumOf(character)) {
+    if (refs.length >= limit) break;
+    if (!item) continue;
+    add(item.imageId ? imageRef(item.imageId) : (item.src || item.image || ""));
+  }
+  return refs;
+}
+
+function albumIntentToGeneratedSnapPrompt(character, item, fallbackPrompt = "") {
+  if (!item) return String(fallbackPrompt || "").trim();
+  const visible = String(item.vision || item.note || "").replace(/\s+/g, " ").trim();
+  return `Generate a NEW private-chat smartphone selfie/snap of ${(character && character.name) || "the character"}. Use the album item only as visual identity/reference inspiration, never resend or recreate the exact stored photo. ${visible ? `Reference image context: ${visible}.` : ""} ${String(fallbackPrompt || "").trim()}`.trim();
+}
+
 async function generateAiChatSnap(
   character,
   snapPrompt,
@@ -9898,6 +9922,12 @@ Rules:
 - keep the person and scene consistent with the requested character and moment
 - if the prompt implies a party, coffee, mirror selfie, street, room, gym or similar, show that naturally.`;
 
+  const referenceImages = characterSnapReferenceImages(
+    character,
+    media,
+    3
+  );
+
   const payload = {
     provider: DEFAULT_IMAGE_PROVIDER,
     model: DEFAULT_IMAGE_MODEL,
@@ -9905,6 +9935,8 @@ Rules:
     size: "1024x1024",
     quality: "low",
     output_format: "jpeg",
+    referenceImages,
+    reference_images: referenceImages,
   };
 
   const result = await requestAiImageProxy(payload);
@@ -11036,7 +11068,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v24-unlimited-characters";
+const BUILD_VERSION = "v26-generated-dm-snaps";
 
 const AUTO = "masvilag:auto";
 /*
@@ -24657,23 +24689,22 @@ A válaszod természetesen reagálhat a kép konkrét, látható részleteire. N
 
 ${chatExplicitlyRequestsImage(t) ? `A JÁTÉKOS KIFEJEZETTEN KÉPET KÉRT.
 - Ebben a válaszban NEM elég csak azt írnod, hogy "persze", "mindjárt" vagy hasonlót.
-- KÖTELEZŐ tényleges képet választanod az albumból az "image" mezőben VAGY kitöltened az "imagePrompt" mezőt egy friss Snap generálásához.
-- Ha a kérés konkrét (pl. selfie, outfit, kávé, buli, hol vagy most), a választott/generált kép pontosan ahhoz igazodjon.
-- A szöveges reply lehet mellette, de a kép nem maradhat el.` : ""}
+- KÖTELEZŐ kitöltened az "imagePrompt" mezőt egy ÚJ, AI-generált Snap/selfie elkészítéséhez.
+- Albumképet SOHA nem küldesz el közvetlenül DM-ben.
+- Ha a kérés konkrét (pl. selfie, outfit, kávé, buli, hol vagy most), a generált kép pontosan ahhoz igazodjon.
+- A szöveges reply lehet mellette, de a generált kép nem maradhat el.` : ""}
 
-SAJÁT FOTÓALBUMOD — PRIVÁTBAN CSAK EZEKBŐL KÜLDHETSZ KÉPET:
-${albumList(c) || "nincs használható albumkép"}
+VIZUÁLIS REFERENCIA A GENERÁLT SNAPHEZ — EZEKET NEM KÜLDHETED EL KÖZVETLENÜL:
+${albumList(c) || "nincs albumkép; a profilkép/looks marad referencia"}
 
-Ha természetes része a válaszodnak, küldhetsz EGY képet.
-- Elsőként a saját albumodból válassz, ha ott van hozzá illő kép.
-- Az "image" mezőbe csak a fenti kep1/kep2/... kulcs kerülhet.
-- Ha a helyzethez inkább egy friss, most készített snap illene, az "image" mező maradjon üres, és töltsd ki röviden az "imagePrompt" mezőt.
-- Az imagePrompt egy tömör leírás legyen arról, mit fotóznál le MOST a saját nézőpontodból / magadról / a jelenlegi helyzetedből.
-- A rendszer a profilképedből és albumképeidből próbálja megtartani ugyanazt az arcot és alap kinézetet, ezért az imagePrompt főleg a jelenetet, pózt, helyszínt vagy hangulatot írja le.
-- Az imagePrompt csak valós, karakterhű és a sztoriba illő képet írhat le.
-- Ha nincs értelmes ok képet küldeni, mind az "image", mind az "imagePrompt" legyen üres.
-- Ne találj ki nem létező albumképet.
-- DM-ben elküldött albumkép NEM törlődik az albumból; csak a nyilvánosan kiposztolt albumkép egyszer használatos.
+Ha természetes része a válaszodnak, küldhetsz EGY ÚJONNAN GENERÁLT képet.
+- DM-ben az album képei CSAK arc/kinézet/referencia céljára szolgálnak.
+- Az "image" mező MINDIG legyen üres. Régi kep1/kep2 albumkulcsot ne adj vissza DM-ben.
+- Ha képet küldenél, töltsd ki az "imagePrompt" mezőt.
+- Az imagePrompt röviden írja le a MOST készülő selfie/snap jelenetét: póz, hely, outfit, hangulat, mit mutatsz a kamerának.
+- A rendszer a profilképedet és albumképeidet vizuális referenciaként adja a képgenerátornak, hogy ugyanaz az arc és alap kinézet maradjon.
+- SOHA ne kérd az eredeti albumkép újraküldését vagy pontos másolatát; mindig új pillanat készüljön.
+- Ha nincs értelmes ok képet küldeni, az "imagePrompt" legyen üres.
 
 PRIVÁT CHAT SZABÁLYOK:
 
@@ -24718,7 +24749,7 @@ KAPCSOLATVÁLTOZÁS:
 - Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
 
 Formátum:
-{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","imagePrompt":"rövid snap-leírás vagy üres","relationshipImpact":false,"changes":[],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
+{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"memory":"egy mondat, ha történt valami emlékezetes, különben üres"}${TAIL}`
     );
 
     const requestedReplyText = String(
@@ -24740,87 +24771,43 @@ Formátum:
           : ""
       );
 
-    const aiPic =
-      out &&
-      out.image
-        ? albumFind(
-            c,
-            out.image
-          )
-        : (
-            explicitImageRequest
-              ? bestAlbumSnapFallback(c, t)
-              : null
-          );
+    const legacyAlbumIntent =
+      out && out.image
+        ? albumFind(c, out.image)
+        : null;
+
+    const generatedRequestPrompt =
+      String(out && out.imagePrompt || "").trim() ||
+      (legacyAlbumIntent
+        ? albumIntentToGeneratedSnapPrompt(c, legacyAlbumIntent, t)
+        : "") ||
+      (explicitImageRequest
+        ? forcedChatSnapPrompt(t, c)
+        : "");
 
     const generatedAiSnap =
-      !aiPic &&
-      out &&
-      requestedImagePrompt &&
+      generatedRequestPrompt &&
       !requestedReplyText
         ? await generateAiChatSnap(
             c,
-            requestedImagePrompt,
+            generatedRequestPrompt,
             addImage,
             media
           )
         : null;
 
-    const fallbackAiPic =
-      !aiPic &&
-      !generatedAiSnap &&
-      requestedImagePrompt
-        ? bestAlbumSnapFallback(
-            c,
-            requestedImagePrompt
-          )
-        : null;
-
-    const effectiveAiPic = aiPic || fallbackAiPic;
-
     const aiImageId =
-      effectiveAiPic
-        ? imageIdOf(
-            effectiveAiPic.imageId ||
-            effectiveAiPic.image ||
-            ""
-          )
-        : (
-            generatedAiSnap &&
-            generatedAiSnap.imageId
-          ) || "";
+      (generatedAiSnap && generatedAiSnap.imageId) || "";
 
     const aiImageRef =
-      effectiveAiPic
-        ? (
-            effectiveAiPic.imageId
-              ? imageRef(
-                  effectiveAiPic.imageId
-                )
-              : effectiveAiPic.image || ""
-          )
-        : (
-            generatedAiSnap &&
-            (
-              generatedAiSnap.imageId
-                ? imageRef(
-                    generatedAiSnap.imageId
-                  )
-                : generatedAiSnap.image || ""
-            )
-          ) || "";
+      generatedAiSnap
+        ? (generatedAiSnap.imageId
+            ? imageRef(generatedAiSnap.imageId)
+            : generatedAiSnap.image || "")
+        : "";
 
     const aiImageDescription =
-      effectiveAiPic
-        ? String(
-            effectiveAiPic.vision ||
-            effectiveAiPic.note ||
-            ""
-          )
-        : (
-            generatedAiSnap &&
-            generatedAiSnap.imageDescription
-          ) || "";
+      (generatedAiSnap && generatedAiSnap.imageDescription) || "";
 
     let reply = requestedReplyText;
 
@@ -25007,12 +24994,11 @@ Formátum:
      */
     if (
       requestedReplyText &&
-      !aiPic &&
-      requestedImagePrompt
+      generatedRequestPrompt
     ) {
       void generateAiChatSnap(
         c,
-        requestedImagePrompt,
+        generatedRequestPrompt,
         addImage,
         media
       )
@@ -25027,38 +25013,11 @@ Formátum:
             return;
           }
 
-          const fallback =
-            bestAlbumSnapFallback(
-              c,
-              requestedImagePrompt
-            ) ||
-            (
-              explicitImageRequest &&
-              albumOf(c).length
-                ? albumOf(c)[0]
-                : null
-            );
-
-          if (fallback) {
-            const fallbackRef = fallback.imageId
-              ? imageRef(fallback.imageId)
-              : fallback.image || fallback.src || "";
-            const fallbackId = imageIdOf(fallbackRef) || "";
-            update((n) => {
-              appendAiChatImageMessage(n, c.id, {
-                imageId: fallbackId,
-                image: fallbackId ? "" : fallbackRef,
-                imageDescription: String(fallback.vision || fallback.note || ""),
-              });
-            });
-            return;
-          }
-
           if (explicitImageRequest) {
             setErr(
               tt(
-                "A karakter megpróbálta elküldeni a képet, de a képgeneráló backend nem adott vissza képet, és nincs megfelelő albumképe.",
-                "The character tried to send the requested image, but the image-generation backend returned no image and there is no suitable album photo."
+                "A karakter megpróbált új AI-generált képet készíteni, de a képgeneráló backend nem adott vissza képet.",
+                "The character tried to create a new AI-generated image, but the image-generation backend returned no image."
               )
             );
           }
@@ -27173,18 +27132,15 @@ NYELVTAN ÉS NÉZŐPONT:
 - A természetes chatnyelv fontosabb, mint a túlságosan formális nyelvtani tökéletesség.
 - ${w.player.name} helyett SOHA ne írj választ vagy cselekvést.
 
-SAJÁT FOTÓALBUMOD:
-${albumList(bot) || "nincs használható albumkép"}
+VIZUÁLIS REFERENCIA A PRIVÁT SNAP GENERÁLÁSÁHOZ:
+${albumList(bot) || "nincs albumkép; a profilkép/looks marad referencia"}
 
-- Ha teljesen természetes, hogy most egy saját képet küldenél át privátban, válassz legfeljebb EGYET a fenti kep1/kep2/... kulcsok közül.
-- A kép vizuális leírását használd annak eldöntésére, mit küldenél.
-- Ha nincs megfelelő albumképed, de karakterhűen most egy friss snapet küldenél, az "image" maradjon üres, és töltsd ki röviden az "imagePrompt" mezőt.
-- Az imagePrompt egy rövid, konkrét leírás legyen arról, milyen saját képet küldenél MOST (pl. tükörszelfi készülődés közben, kávé az asztalon, buli a háttérben, laptop+jegyzetek, stb.).
-- A rendszer a profilképedből és albumképeidből próbálja megtartani ugyanazt az arcot és alap kinézetet, ezért az imagePrompt főleg a pillanatnyi jelenetet írja le.
-- Az imagePrompt is csak olyan jelenetet írhat le, ami a karakteredhez és az aktuális helyzethez reálisan illik.
-- Ne találj ki olyan albumképet, ami nincs az albumodban.
+- DM-ben SOHA ne küldj közvetlenül albumképet.
+- Az album és a profilkép csak vizuális referencia az arcodhoz és kinézetedhez.
+- Ha természetesen képet küldenél, az "image" mező maradjon üres és az "imagePrompt" írja le az ÚJONNAN generálandó snap/selfie jelenetét.
+- Az imagePrompt röviden írja le a jelenlegi pillanatot: selfie/tükörszelfi, outfit, helyszín, kameraállás, hangulat vagy mit mutatsz.
+- A generált képen ugyanaz a karakter maradjon, de az eredeti profil-/albumfotót ne másolja és ne küldje vissza.
 - Kép nélkül írni teljesen normális.
-- Privátban elküldött kép nem törlődik az albumból; csak a nyilvánosan kiposztolt albumfotó egyszer használatos.
 
 LEGFONTOSABB:
 
@@ -27204,7 +27160,7 @@ Ha van:
 - Plusz és mínusz egyformán lehetséges.
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
-{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"kep1 vagy üres","imagePrompt":"rövid snap-leírás vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}]}${TAIL}`,
+{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}]}${TAIL}`,
     { maxTokens: 700 }
   );
 }
@@ -37460,85 +37416,39 @@ if (targetNote) {
           .join("\n")
       );
 
-    const aiPic =
-      out &&
-      out.image
-        ? albumFind(
-            bot,
-            out.image
-          )
+    const legacyAlbumIntent =
+      out && out.image
+        ? albumFind(bot, out.image)
         : null;
 
+    const spontaneousImagePrompt =
+      String(out && out.imagePrompt || "").trim() ||
+      (legacyAlbumIntent
+        ? albumIntentToGeneratedSnapPrompt(bot, legacyAlbumIntent, txt)
+        : "");
+
     const generatedAiSnap =
-      !aiPic &&
-      out &&
-      String(
-        out.imagePrompt || ""
-      ).trim()
+      spontaneousImagePrompt
         ? await generateAiChatSnap(
             bot,
-            out.imagePrompt,
+            spontaneousImagePrompt,
             addImage,
             media
           )
         : null;
 
-    const fallbackAiPic =
-      !aiPic &&
-      !generatedAiSnap &&
-      out &&
-      out.imagePrompt
-        ? bestAlbumSnapFallback(
-            bot,
-            out.imagePrompt
-          )
-        : null;
-
-    const effectiveAiPic = aiPic || fallbackAiPic;
-
     const aiImageId =
-      effectiveAiPic
-        ? imageIdOf(
-            effectiveAiPic.imageId ||
-            effectiveAiPic.image ||
-            ""
-          )
-        : (
-            generatedAiSnap &&
-            generatedAiSnap.imageId
-          ) || "";
+      (generatedAiSnap && generatedAiSnap.imageId) || "";
 
     const aiImageRef =
-      effectiveAiPic
-        ? (
-            effectiveAiPic.imageId
-              ? imageRef(
-                  effectiveAiPic.imageId
-                )
-              : effectiveAiPic.image || ""
-          )
-        : (
-            generatedAiSnap &&
-            (
-              generatedAiSnap.imageId
-                ? imageRef(
-                    generatedAiSnap.imageId
-                  )
-                : generatedAiSnap.image || ""
-            )
-          ) || "";
+      generatedAiSnap
+        ? (generatedAiSnap.imageId
+            ? imageRef(generatedAiSnap.imageId)
+            : generatedAiSnap.image || "")
+        : "";
 
     const aiImageDescription =
-      effectiveAiPic
-        ? String(
-            effectiveAiPic.vision ||
-            effectiveAiPic.note ||
-            ""
-          )
-        : (
-            generatedAiSnap &&
-            generatedAiSnap.imageDescription
-          ) || "";
+      (generatedAiSnap && generatedAiSnap.imageDescription) || "";
 
     if (
       !out ||
