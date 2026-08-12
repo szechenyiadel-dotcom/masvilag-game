@@ -7379,6 +7379,73 @@ function relationshipObsessionLevel(
   return 0;
 }
 
+function relationshipFilterTier(rel) {
+  const score =
+    Number(
+      rel && rel.score
+    ) || 0;
+
+  const bond =
+    String(
+      rel &&
+      (
+        rel.bond ||
+        rel.type
+      ) ||
+      ""
+    ).toLowerCase();
+
+  /*
+   * LAYERED RELATIONSHIP FILTER
+   *
+   * A score az aktuális kapcsolat-hőmérő.
+   * A bond a társas/romantikus státusz és közös szerep.
+   * A bond NEM írhat felül egy valóban megromlott kapcsolatot,
+   * viszont egy Best friend / Close friend / Crush / Dating címke
+   * nem eshet vissza "semleges idegenné" csak azért, mert a score
+   * még 0 körül áll vagy a státusz-futtató később szinkronizál.
+   */
+  if (score <= -60) return "hostile";
+  if (score <= -25) return "negative";
+
+  if (
+    /ellenség|enemy|rivális|rival/.test(bond) &&
+    score < 25
+  ) {
+    return "negative";
+  }
+
+  if (score >= 70) return "close";
+  if (score >= 35) return "good";
+
+  if (
+    score > -15 &&
+    /legjobb barát|best friend|közeli barát|close friend|kölcsönös crush|mutual crush|járnak|dating|jegyes|engaged|házastárs|spouse|partner/.test(bond)
+  ) {
+    return "close";
+  }
+
+  if (
+    score > -15 &&
+    /barát|friend|crush|vonzalom|attraction|titkos viszony|secret affair/.test(bond)
+  ) {
+    return "good";
+  }
+
+  const hiddenMood =
+    `${String(rel && rel.hidden || "")} ${String(rel && rel.mood || "")}`
+      .toLowerCase();
+
+  if (
+    score > -15 &&
+    /secret crush|titkos crush|titkos vonzalom|secret attraction|secretly in love|titokban szerelmes|szerelmes belé|vonzódik hozzá|crush on|has a crush|rejtett vonzalom/.test(hiddenMood)
+  ) {
+    return "good";
+  }
+
+  return "neutral";
+}
+
 function relationshipBehaviorCard(
   w,
   actorId,
@@ -7439,38 +7506,54 @@ function relationshipBehaviorCard(
     "";
 
   const parts = [];
+  const filterTier =
+    relationshipFilterTier(
+      rel
+    );
 
-  if (score <= -60) {
+  parts.push(
+    en
+      ? "RELATIONSHIP FILTER, NOT A PERSONALITY REWRITE: keep your own personality/backstory/voice fully intact; this layer only changes how that same personality is expressed toward this specific person"
+      : "KAPCSOLATI SZŰRŐ, NEM SZEMÉLYISÉGCSERE: a saját személyiséged/történeted/hangod maradjon teljesen aktív; ez a réteg csak azt módosítja, hogyan fejezed ki ugyanazt a személyiséget ezzel a konkrét emberrel"
+  );
+
+  if (filterTier === "hostile") {
     parts.push(
       en
         ? "strongly hostile: cold, contemptuous, distrustful or openly antagonistic; do NOT default to warmth"
         : "erősen ellenséges: hideg, lenéző, bizalmatlan vagy nyíltan antagonisztikus; NE legyen alapból kedves"
     );
-  } else if (score <= -25) {
+  } else if (filterTier === "negative") {
     parts.push(
       en
         ? "negative relationship: tension, impatience, rivalry, suspicion or sharpness should be visible"
         : "rossz viszony: a feszültség, türelmetlenség, rivalizálás, gyanakvás vagy élesség látszódjon"
     );
-  } else if (score >= 70) {
+  } else if (filterTier === "close") {
     parts.push(
       en
-        ? "VERY CLOSE BASELINE: familiarity, loyalty, protectiveness and easy warmth should feel natural. HARD RULE: do not make them suddenly cruel, contemptuous, insulting, dismissive or hostile toward this person unless a concrete current event, established recurring dynamic, or an explicit trait in THEIR OWN sheet actually justifies that reaction. Friendly teasing may be sharp only when it still reads as affection, not random humiliation."
-        : "NAGYON KÖZELI ALAPHANG: természetes legyen a közvetlenség, lojalitás, védelmezés és melegség. KEMÉNY SZABÁLY: ne legyen hirtelen kegyetlen, lenéző, sértegető, lekezelő vagy ellenséges ezzel az emberrel, hacsak egy KONKRÉT aktuális esemény, már kialakult közös dinamika vagy a SAJÁT adatlapján lévő explicit tulajdonság tényleg nem indokolja. Az ugratás lehet csípős, de barátinak kell érződnie, nem random megalázásnak."
+        ? "VERY CLOSE FILTER: familiarity, loyalty, protectiveness, trust and easy warmth should be the default toward THIS person. Their own personality still determines the form: a sarcastic character may tease affectionately, a reserved character may show loyalty quietly, a blunt character may be direct without becoming cruel. HARD RULE: no sudden contempt, insults, cold dismissal, hostility or mean-spirited humiliation unless the CURRENT conversation/event contains a real trigger or their own canon explicitly supports that exact reaction."
+        : "NAGYON KÖZELI SZŰRŐ: ezzel az emberrel a közvetlenség, lojalitás, védelmezés, bizalom és természetes melegség legyen az alap. A saját személyisége mondja meg a formát: a szarkasztikus karakter szeretettel ugrathat, a zárkózott csendesen lehet lojális, a nyers lehet egyenes anélkül, hogy kegyetlen lenne. KEMÉNY SZABÁLY: nincs hirtelen lenézés, sértegetés, hideg lepattintás, ellenségesség vagy rosszindulatú megalázás, hacsak a JELENLEGI beszélgetés/esemény nem ad valódi kiváltó okot, vagy a saját kánonja nem indokolja pontosan ezt a reakciót."
     );
-  } else if (score >= 35) {
+  } else if (filterTier === "good") {
     parts.push(
       en
-        ? "GOOD RELATIONSHIP BASELINE: they should generally be warmer, more patient, receptive or friendly. HARD RULE: no random rudeness, insults, cold dismissal, hostility or mean-spirited mockery toward this person without a specific trigger or character-canon reason. Do not manufacture conflict merely for variety."
-        : "JÓ VISZONY ALAPHANG: általában legyen melegebb, türelmesebb, nyitottabb és barátibb. KEMÉNY SZABÁLY: ne legyen random bunkóság, sértegetés, hideg lepattintás, ellenségesség vagy rosszindulatú gúny konkrét kiváltó ok vagy karakterkánon nélkül. Ne gyárts konfliktust pusztán a változatosság kedvéért."
+        ? "GOOD RELATIONSHIP FILTER: default to familiarity, receptiveness, patience, friendly interest or attraction in a form that matches the character. HARD RULE: no random rudeness, insults, cold dismissal, hostility or mean-spirited mockery without a concrete CURRENT trigger or explicit canon reason. Do not manufacture conflict merely for variety."
+        : "JÓ KAPCSOLATI SZŰRŐ: alapból legyen ismerős-közvetlenebb, nyitottabb, türelmesebb, baráti érdeklődésű vagy vonzódó — mindig a saját karakteréhez illő formában. KEMÉNY SZABÁLY: nincs random bunkóság, sértegetés, hideg lepattintás, ellenségesség vagy rosszindulatú gúny konkrét JELENLEGI kiváltó ok vagy explicit karakterkánon nélkül. Ne gyárts konfliktust pusztán a változatosság kedvéért."
     );
   } else {
     parts.push(
       en
-        ? "mixed/neutral relationship: do not manufacture intimacy or hostility that is not supported"
-        : "vegyes/semleges viszony: ne találj ki indokolatlan intimitást vagy ellenségességet"
+        ? "mixed/neutral relationship filter: do not manufacture intimacy or hostility that is not supported"
+        : "vegyes/semleges kapcsolati szűrő: ne találj ki indokolatlan intimitást vagy ellenségességet"
     );
   }
+
+  parts.push(
+    en
+      ? "SHORT-TERM CONTINUITY: the latest 10-20 direct messages/replies/thread lines in the current prompt are the strongest evidence for the immediate conversational temperature. If the recent exchange has been friendly, stay in that friendly groove. If a real conflict is unfolding now, it may temporarily sharpen the tone. Never invent a mood swing that is absent from the recent context."
+      : "RÖVID TÁVÚ FOLYTONOSSÁG: az aktuális promptban szereplő legutóbbi 10-20 közvetlen üzenet/válasz/thread-sor a legerősebb bizonyíték a közvetlen beszélgetési hangulatra. Ha a friss váltás baráti volt, maradjon abban a baráti mederben. Ha MOST valódi konfliktus zajlik, átmenetileg élesedhet a hang. Ne találj ki olyan hangulatváltást, ami nincs benne a friss kontextusban."
+  );
 
   if (bond) {
     const lb =
@@ -7571,7 +7654,10 @@ function relationshipBehaviorCard(
     );
 
   if (factionRivalry) {
-    if (score >= 35) {
+    if (
+      filterTier === "good" ||
+      filterTier === "close"
+    ) {
       parts.push(
         en
           ? "A faction rivalry may exist in the background, but this positive personal relationship OVERRIDES it in direct behavior. Faction membership alone is NOT a valid reason for random rudeness, contempt, hostility, insults or cold dismissal toward this person."
@@ -7602,7 +7688,10 @@ function relationshipBehaviorCard(
         : `aktuális érzés: ${rel.mood}`
     );
 
-    if (score >= 35) {
+    if (
+      filterTier === "good" ||
+      filterTier === "close"
+    ) {
       parts.push(
         en
           ? "A temporary mood may color the reply, but it must NOT silently rewrite a good relationship into hostility. Strong rudeness needs a concrete CURRENT trigger visible in the conversation/event, not merely an old mood label."
@@ -8009,6 +8098,16 @@ Minden szereplőt a saját adatlapja alapján játszol el. Az adatlap nem hátt�
 
 FŐ SZABÁLY: minden válasz legyen karakterhű, természetes, emberi és az adott helyzethez illő. A karakter személyisége, története, aktuális érzései és kapcsolatai határozzák meg, MIT mond — de a felület határozza meg, HOGYAN és milyen hosszan mondja.
 
+VÉGREHAJTÁSI ELSŐBBSÉG — HA KÉT SZABÁLY LÁTSZÓLAG ÜTKÖZIK:
+1. SAJÁT KÁNON / RENDSZER-RÉTEG: a karakter személyisége, backstory-ja, értékei, hibái, beszédstílusa és motivációi a legerősebb réteg. Ez mondja meg, KI ő.
+2. KAPCSOLATI SZŰRŐ: a score + bond + aktív érzés azt modulálja, HOGYAN fejezi ki ugyanazt a személyiséget az adott ember felé. A filter nem cseréli le a személyiséget.
+3. RÖVID TÁVÚ KONTEXTUS: a legutóbbi 10-20 közvetlen üzenet, reply vagy jelenlegi thread hangulata határozza meg a pillanatnyi kommunikációs hőmérsékletet. A baráti folytonosság maradjon baráti; a valóban kibontakozó konfliktus látszódhat.
+4. HOSSZÚ TÁVÚ EMLÉKEK / KÖZÖS MÚLT: a fontos mérföldkövek, sérelmek, közös poénok, lojalitás és korábbi események stabilan színezik a kapcsolatot.
+5. AKTUÁLIS ESEMÉNY: egy konkrét mostani történés ideiglenesen felülírhatja az alaphangot, de csak ha ténylegesen megtörtént.
+6. VÁLTOZATOSSÁG: ez a leggyengébb réteg. SOHA ne találj ki random bunkóságot, konfliktust vagy személyiségváltást pusztán azért, hogy más legyen a következő válasz.
+
+PÉLDA A FILTERRE: egy szarkasztikus karakter a legjobb barátjával lehet csípős, de a csípősség bizalmas/szeretetteljes marad; egy zárkózott karakter lehet nagyon lojális anélkül, hogy nyálas lenne; egy nyers karakter lehet őszinte anélkül, hogy ok nélkül megalázó lenne.
+
 KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
 - A rendszer-motor a promptban szereplő karakterek TELJES adatlapját látja. Ez azért van, hogy mindegyikük 100%-osan karakterhű legyen.
 - FONTOS TUDÁSHATÁR: attól, hogy TE mint engine látod minden karakter teljes adatlapját, az egyik SZEREPLŐ nem tudhat automatikusan a másik titkairól, félelmeiről, belső céljairól vagy rejtett múltjáról. Egy karakter csak azt használhatja tudásként másokról, amit nyilvánosan láthatott, személyesen megtudott, átélt, neki elmondtak, vagy saját emléke/feltételezése alátámaszt.
@@ -8230,6 +8329,16 @@ You are the engine of a living, AI-driven social-media world for a roleplay game
 You play every character strictly from their own sheet. The sheet is not background info — it IS the character's voice.
 
 MAIN RULE: every response must be true to character, natural, human and appropriate to the current situation. Personality, history, current emotions and relationships determine WHAT a character says — but the communication format determines HOW they say it and how long the response should be.
+
+EXECUTION PRIORITY — WHEN TWO RULES APPEAR TO CONFLICT:
+1. OWN CANON / SYSTEM LAYER: the character's personality, backstory, values, flaws, speech style and motivations are the strongest layer. This decides WHO they are.
+2. RELATIONSHIP FILTER: score + bond + active feeling modulate HOW that same personality is expressed toward this specific person. The filter never replaces personality.
+3. SHORT-TERM CONTEXT: the latest 10-20 direct messages, replies or current thread lines determine the immediate conversational temperature. Friendly continuity should stay friendly; a conflict that is genuinely unfolding now may sharpen it.
+4. LONG-TERM MEMORY / SHARED HISTORY: important milestones, old grievances, inside jokes, loyalty and prior events provide stable continuity.
+5. CURRENT EVENT: a concrete event happening now may temporarily shift the baseline, but only if it actually happened.
+6. VARIETY: this is the weakest layer. NEVER invent random rudeness, conflict or a personality swing merely to make the next response different.
+
+FILTER EXAMPLE: a sarcastic character can still be sharp with a best friend, but the sharpness should read as familiar/affectionate; a reserved character can be deeply loyal without becoming gushy; a blunt character can be direct without randomly humiliating someone they care about.
 
 CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - Treat the ENTIRE character sheet as active behavioral canon, not decorative background.
@@ -11743,188 +11852,64 @@ function aiFollowEligibility(
   actorId,
   targetId
 ) {
-  const actor =
-    socialProfileById(
-      w,
-      actorId
-    );
+  const actor = socialProfileById(w, actorId);
+  const target = socialProfileById(w, targetId);
 
-  const target =
-    socialProfileById(
-      w,
-      targetId
-    );
-
-  if (
-    !actor ||
-    !target ||
-    actor.id === target.id
-  ) {
-    return {
-      allowed:false,
-      mode:"blocked",
-      reason:"invalid",
-    };
+  if (!actor || !target || actor.id === target.id) {
+    return { allowed:false, mode:"blocked", reason:"invalid" };
   }
 
-  /*
-   * Médiaoldalak külön kategória:
-   * ezek nem karakter-kapcsolatok.
-   */
-  if (
-    isMediaAccount(
-      w,
-      target.id
-    )
-  ) {
-    return {
-      allowed:true,
-      mode:"media",
-      reason:"media-account",
-    };
+  if (isMediaAccount(w, target.id)) {
+    return { allowed:true, mode:"media", reason:"media-account" };
   }
 
-  const rel =
-    getRel(
-      w,
-      actor.id,
-      target.id
-    );
-
-  const reverse =
-    getRel(
-      w,
-      target.id,
-      actor.id
-    );
-
-  const secretCrush =
-    hasSecretCrushSignal(
-      rel,
-      actor,
-      target
-    );
-
-  /*
-   * ELLENSÉG/RIVÁLIS:
-   * nincs hate-follow.
-   * Egyetlen kivétel a tényleges, rejtett crush/vonzalom.
-   * Ez sem automatikus; csak ritka follow-esélyt enged.
-   */
-  if (
-    hasEnemyOrRivalBond(
-      rel
-    ) ||
-    opposingFollowFaction(
-      actor,
-      target
-    )
-  ) {
-    if (secretCrush) {
-      return {
-        allowed:true,
-        mode:"enemy-secret-crush",
-        reason:"secret-crush",
-      };
-    }
-
-    return {
-      allowed:false,
-      mode:"blocked",
-      reason:"enemy-or-rival",
-    };
-  }
-
-  /*
-   * Családi tény bármelyik irányban elég.
-   */
-  if (
-    hasFamilyFollowBond(
-      rel
-    ) ||
-    hasFamilyFollowBond(
-      reverse
-    )
-  ) {
-    return {
-      allowed:true,
-      mode:"family",
-      reason:"family",
-    };
-  }
-
-  /*
-   * Saját pozitív/valós social bond.
-   */
-  if (
-    hasPositiveFollowBond(
-      rel
-    )
-  ) {
-    return {
-      allowed:true,
-      mode:"bond",
-      reason:"positive-bond",
-    };
-  }
-
-  /*
-   * A dinamikus kapcsolatcímkék miatt nem hagyatkozhatunk kizárólag
-   * a bond szövegére. Ha az AI saját oldaláról ténylegesen jó a kapcsolat,
-   * az önmagában is legitim social ok a követésre.
-   *
-   * Ez különösen fontos olyan egyedi bondoknál, mint "ride or die",
-   * "az enyém", stb., amelyeket a regex nem tud előre felsorolni.
-   */
+  const rel = getRel(w, actor.id, target.id);
+  const reverse = getRel(w, target.id, actor.id);
   const relScore = Number(rel && rel.score) || 0;
-  const interactionScore = recentFollowInteractionScore(
-    w,
-    actor.id,
-    target.id
-  );
+  const secretCrush = hasSecretCrushSignal(rel, actor, target);
+  const interactionScore = recentFollowInteractionScore(w, actor.id, target.id);
+
+  /* PERSONAL RELATIONSHIP > FACTION DEFAULT. */
+  if (hasFamilyFollowBond(rel) || hasFamilyFollowBond(reverse)) {
+    return { allowed:true, mode:"family", reason:"family" };
+  }
+
+  if (hasEnemyOrRivalBond(rel)) {
+    if (secretCrush) {
+      return { allowed:true, mode:"enemy-secret-crush", reason:"secret-crush" };
+    }
+    return { allowed:false, mode:"blocked", reason:"explicit-enemy-or-rival" };
+  }
+
+  if (hasPositiveFollowBond(rel)) {
+    return { allowed:true, mode:"bond", reason:"positive-personal-bond" };
+  }
 
   if (relScore >= 25) {
-    return {
-      allowed:true,
-      mode:"relationship-score",
-      reason:"positive-relationship-score",
-    };
+    return { allowed:true, mode:"relationship-score", reason:"positive-relationship-score" };
   }
 
-  /*
-   * Ismétlődő valódi interakciók (kommentek, DM-ek, group chat)
-   * szintén felépíthetik azt a társas okot, ami miatt természetes a follow.
-   * Egyetlen like továbbra sem elég.
-   */
+  if (secretCrush && !opposingFollowFaction(actor, target)) {
+    return { allowed:true, mode:"secret-crush", reason:"secret-crush" };
+  }
+
   if (relScore >= 10 && interactionScore >= 16) {
-    return {
-      allowed:true,
-      mode:"interaction-bond",
-      reason:"repeated-positive-interaction",
-    };
+    return { allowed:true, mode:"interaction-bond", reason:"repeated-positive-interaction" };
   }
 
-  /*
-   * Ugyanaz a valódi csapat/szervezet/dojo.
-   */
-  if (
-    sameFollowTeamOrFaction(
-      actor,
-      target
-    )
-  ) {
-    return {
-      allowed:true,
-      mode:"team",
-      reason:"same-team",
-    };
+  /* Faction rivalry is only a default after personal relationship evidence. */
+  if (opposingFollowFaction(actor, target)) {
+    if (secretCrush) {
+      return { allowed:true, mode:"enemy-secret-crush", reason:"faction-rival-secret-crush" };
+    }
+    return { allowed:false, mode:"blocked", reason:"faction-rivalry-without-personal-bond" };
   }
 
-  return {
-    allowed:false,
-    mode:"blocked",
-    reason:"no-social-bond",
-  };
+  if (sameFollowTeamOrFaction(actor, target)) {
+    return { allowed:true, mode:"team", reason:"same-team" };
+  }
+
+  return { allowed:false, mode:"blocked", reason:"no-social-bond" };
 }
 
 function characterSocialFollowModifier(c) {
@@ -12392,8 +12377,9 @@ function aiShouldFollow(
 
   if (
     eligibility.mode === "family" ||
+    eligibility.mode === "secret-crush" ||
     strongBond ||
-    relScore >= 45 ||
+    relScore >= 25 ||
     (trigger === "relationship" && score >= 34)
   ) {
     return true;
@@ -12825,7 +12811,7 @@ function pickAutonomousFollowAction(w) {
 
       const strongRelationship = Boolean(
         eligibility.allowed &&
-        ["family", "bond", "relationship-score"].includes(eligibility.mode) &&
+        ["family", "bond", "relationship-score", "secret-crush"].includes(eligibility.mode) &&
         (
           followBondWeight(rel) >= 34 ||
           (Number(rel && rel.score) || 0) >= 25
