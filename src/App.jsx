@@ -28250,7 +28250,7 @@ Formátum:
 /* Jegyzetsáv — a szereplők feje fölött egy-egy mondat, mint az Instagram Notes. */
 function normalizeDmRoleplayBridge(w, bot, raw, playerText, replyText) {
   if (!w || !bot || !raw || raw.activate !== true) return null;
-  const kind = ["private_meet", "arrival", "party", "training", "team_event"].includes(String(raw.kind || ""))
+  const kind = ["private_meet", "arrival", "party", "training", "team_event", "group_social"].includes(String(raw.kind || ""))
     ? String(raw.kind)
     : "private_meet";
   const title = String(raw.title || "").trim().slice(0, 120) || `${bot.name} · ${kind.replace(/_/g, " ")}`;
@@ -28265,7 +28265,18 @@ function normalizeDmRoleplayBridge(w, bot, raw, playerText, replyText) {
   const opening = explicitOpening || fallbackOpening;
   const descriptor = `${kind} ${title} ${setting} ${goal} ${playerText || ""} ${replyText || ""}`;
   const generated = Array.isArray(raw.cast) ? raw.cast : [];
-  const cast = contextualRoleplayCast(w, bot, generated, descriptor);
+  const privateKinds = new Set(["private_meet", "arrival"]);
+  const groupKinds = new Set(["party", "training", "team_event", "group_social"]);
+  const cast = contextualRoleplayCast(
+    w,
+    bot,
+    generated,
+    descriptor,
+    {
+      forcePrivate: privateKinds.has(kind),
+      forceGroup: groupKinds.has(kind),
+    }
+  );
   if (!cast.includes(bot.id)) cast.unshift(bot.id);
   return {
     kind, title, setting, goal, opening,
@@ -28701,6 +28712,8 @@ CHAT ↔ ROLEPLAY BRIDGE — CSAK VALÓDI FIZIKAI TERVNÉL:
 - Ugyanez igaz, ha te most konkrétan megszervezel egy bulit, edzést, találkozót vagy más Eventet, és ez már tényleges terv, nem hipotetikus ötlet.
 - Ha csak beszéltek róla, bizonytalan, elutasítod, későbbre lebegtetitek vagy nincs konkrét fizikai találkozás, activate=false.
 - private_meet / arrival: CSAK te legyél AI-cast; a játékos automatikusan jelen van. Ne rakj be random harmadik embert.
+- HARD AUDIENCE RULE: ha a meghívás nyelvtanilag és tartalmilag kettőtökről szól ("you and me", randi, kávé, séta, privát beszélgetés, gyere át, találkozz velem, kettes edzés, négyszemközti konfrontáció), kind=private_meet vagy arrival legyen, és cast=["${c.id}"]. Attól, hogy a helyszín dojo/iskola/bulihely vagy a mondat említi a training/party szót, még NEM válik csoportossá.
+- party / training / team_event / group_social CSAK akkor legyen, ha maga a PROGRAM ténylegesen több résztvevős: buli több meghívottal, közös/csapatedzés, team meeting, group hangout, vacsora/társasági program stb.
 - party: csak valódi barátok/kortársak/társasági kör és releváns meghívottak.
 - training: saját tanítványok + ugyanahhoz a dojohoz tartozó releváns senseiek/edzők/tagok.
 - team_event: az adott szervezet/team konkrét releváns tagjai.
@@ -28721,7 +28734,7 @@ KAPCSOLATVÁLTOZÁS:
 - Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
 
 Formátum:
-{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"memory":"egy mondat, ha történt valami emlékezetes, különben üres","roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
+{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"memory":"egy mondat, ha történt valami emlékezetes, különben üres","roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event vagy group_social","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
     , { maxTries: 1, maxTokens: 650, timeoutMs: 28000 }
     );
 
@@ -40857,8 +40870,18 @@ function roleplayEventAudienceScore(w, host, candidate, descriptor, explicit = f
   return score;
 }
 
-function contextualRoleplayCast(w, host, generatedCast, descriptor) {
+function contextualRoleplayCast(w, host, generatedCast, descriptor, options = {}) {
   if (!w || !host) return host ? [host.id] : [];
+
+  /*
+   * PRIVATE INVITE HARD GUARD
+   *
+   * A chatből / privát meghívásból létrejövő kettesben Eventet a setting
+   * szövege SOHA nem minősítheti át csoportossá. Pl. "coffee after training"
+   * tartalmazhatja a training szót, ettől még nem jelenhet meg random dojo-cast.
+   * A forcePrivate magasabb prioritású minden descriptor-keywordnél.
+   */
+  if (options && options.forcePrivate === true) return [host.id];
   const explicitIds = new Set((Array.isArray(generatedCast) ? generatedCast : [])
     .map((id) => findChar(w, id))
     .filter((id) => id && id !== w.meId && id !== host.id && charById(w, id) && !isHuman(w, id)));
@@ -40868,7 +40891,8 @@ function contextualRoleplayCast(w, host, generatedCast, descriptor) {
   const isParty = /\b(?:party|buli|cabin\s*party|house\s*party|bonfire|afterparty|club\s*night|h[aá]zibuli)\b/.test(eventText);
   const isTeam = /\b(?:meeting|briefing|mission|team|crew|squad|operation|work\s+meeting|munka|megbesz[eé]l[eé]s|küldet[eé]s|csapat)\b/.test(eventText);
   const isGroupSocial = /\b(?:group\s+hangout|everyone|everybody|friends\s+over|game\s+night|dinner\s+party|barbecue|bbq|közös\s+program|társaság|mindenkit)\b/.test(eventText);
-  const groupEvent = isTraining || isParty || isTeam || isGroupSocial;
+  const detectedGroupEvent = isTraining || isParty || isTeam || isGroupSocial;
+  const groupEvent = options && options.forceGroup === true ? true : detectedGroupEvent;
 
   /* Non-group event = player + host only. No random third wheel. */
   if (!groupEvent) return [host.id];
@@ -41095,10 +41119,17 @@ VÁLASSZ KEZDEMÉNYEZÉSI MÓDOT:
 - arrival: személyesen megjelensz/felbukkansz nála vagy egy hitelesen ismert helyen
 - encounter: te hozol létre olyan helyzetet, ahol találkoztok (pl. odahívod, megvárod, útját állod, programot indítasz)
 
+AUDIENCE / EVENT KIND — KÖTELEZŐ:
+- audience="private": a program ténylegesen ${bot.name} + ${w.player.name} kettesben. Ilyenkor cast=["${bot.id}"] és a frontend ezt hard módon lezárja.
+- audience="group": maga az esemény több résztvevőre épül. Csak ekkor adhatsz további AI-kat.
+- eventKind="private_meet" kettes randi/kávé/séta/privát beszélgetés/gyere át/négyszemközti konfliktus esetén.
+- eventKind="party", "training", "team_event" vagy "group_social" csak valóban társas eseménynél.
+- Egy dojo, iskola vagy klub mint HELYSZÍN önmagában nem jelent csoportos eseményt. A "meet me after training" például private, ha csak kettőtöket hívod.
+
 Az Event legyen konkrét, ne generikus. Adj célt, de a cél ne irányítsa a játékos karakterét helyette.
 
 JSON:
-{"skip":false,"mode":"dm_invite vagy arrival vagy encounter","title":"rövid Event cím","setting":"2-4 mondat, hol/mikor/miért indul; a játékos döntését ne írd meg","goal":"konkrét Event cél","cast":["az eventhez ténylegesen illő AI-id-k; ${bot.id} kötelező; társas eventnél több releváns meghívott"],"openingKind":"speech vagy action","opening":"${bot.name} első saját mondata vagy cselekvése; a játékos reakciója nélkül","dmText":"csak dm_invite esetén rövid valódi chat-üzenet, különben üres","targetTurns":20,"targetMinutes":30,"limitMode":"turns vagy minutes","rewardAffection":12,"rewardItem":"jelenethez illő egyedi emléktárgy","selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned","intent":"miért kezdeményezed","openLoops":["amit ezzel az Eventtel el akarsz intézni"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"mi dolgozik benned kifejezetten vele kapcsolatban","currentIntent":"mit akarsz vele elérni ezzel az Eventtel","lastTone":"kezdeményező/inviting/tense/playful/etc","perceivedTargetMood":"üres, ha nem tudhatod","addOpenLoops":["ami kettőtök között ezzel nyitva marad"],"resolveOpenLoops":[],"addPromises":[],"resolvePromises":[],"addPlans":["csak ha a meghívás konkrét közös tervet hoz létre"],"resolvePlans":[]}]}${TAIL}`,
+{"skip":false,"mode":"dm_invite vagy arrival vagy encounter","audience":"private vagy group","eventKind":"private_meet vagy party vagy training vagy team_event vagy group_social","title":"rövid Event cím","setting":"2-4 mondat, hol/mikor/miért indul; a játékos döntését ne írd meg","goal":"konkrét Event cél","cast":["az eventhez ténylegesen illő AI-id-k; ${bot.id} kötelező; private audience esetén CSAK ${bot.id}"],"openingKind":"speech vagy action","opening":"${bot.name} első saját mondata vagy cselekvése; a játékos reakciója nélkül","dmText":"csak dm_invite esetén rövid valódi chat-üzenet, különben üres","targetTurns":20,"targetMinutes":30,"limitMode":"turns vagy minutes","rewardAffection":12,"rewardItem":"jelenethez illő egyedi emléktárgy","selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned","intent":"miért kezdeményezed","openLoops":["amit ezzel az Eventtel el akarsz intézni"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"mi dolgozik benned kifejezetten vele kapcsolatban","currentIntent":"mit akarsz vele elérni ezzel az Eventtel","lastTone":"kezdeményező/inviting/tense/playful/etc","perceivedTargetMood":"üres, ha nem tudhatod","addOpenLoops":["ami kettőtök között ezzel nyitva marad"],"resolveOpenLoops":[],"addPromises":[],"resolvePromises":[],"addPlans":["csak ha a meghívás konkrét közös tervet hoz létre"],"resolvePlans":[]}]}${TAIL}`,
     { maxTokens: 1450, priority: 26 }
   );
 }
@@ -41119,7 +41150,7 @@ You are ${bot.name}. Initiate one small, believable event with ${w.player.name} 
 Choose the smallest canon-consistent option that gives the player something to respond to. Do not invent the player's acceptance/action. Do not invent off-screen history.
 Prefer dm_invite unless arriving/encountering is clearly more natural.
 JSON ONLY:
-{"skip":false,"mode":"dm_invite","title":"short event title","setting":"2-3 sentences","goal":"concrete goal","cast":["${bot.id}"],"openingKind":"speech","opening":"short first line","dmText":"short invitation DM","targetTurns":20,"targetMinutes":30,"limitMode":"turns","rewardAffection":10,"rewardItem":"small fitting keepsake","selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
+{"skip":false,"mode":"dm_invite","audience":"private","eventKind":"private_meet","title":"short event title","setting":"2-3 sentences","goal":"concrete goal","cast":["${bot.id}"],"openingKind":"speech","opening":"short first line","dmText":"short invitation DM","targetTurns":20,"targetMinutes":30,"limitMode":"turns","rewardAffection":10,"rewardItem":"small fitting keepsake","selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
     { maxTokens: 650, priority: 27 }
   );
 }
@@ -42553,6 +42584,8 @@ async function runSimulationAction(view, update, action, addImage) {
       out = {
         skip: false,
         mode: "dm_invite",
+        audience: "private",
+        eventKind: "private_meet",
         title: en ? `${bot.name} wants to meet` : `${bot.name} találkozni akar`,
         setting: en
           ? `${bot.name} messages ${view.player.name} with a simple invitation to meet somewhere that fits their established world and relationship.`
@@ -42575,11 +42608,30 @@ async function runSimulationAction(view, update, action, addImage) {
     const validModes = new Set(["dm_invite", "arrival", "encounter"]);
     const mode = validModes.has(String(out.mode || "")) ? String(out.mode) : "dm_invite";
     const eventDescriptor = [out.title, out.setting, out.goal].filter(Boolean).join(" ");
+    const declaredAudience = String(out.audience || "").toLowerCase();
+    const declaredEventKind = String(out.eventKind || "").toLowerCase();
+    /* Explicit audience is authoritative. If the model contradicts itself,
+       private wins whenever it explicitly said this is a two-person invite. */
+    const forcePrivate = declaredAudience === "private"
+      ? true
+      : declaredAudience === "group"
+        ? false
+        : declaredEventKind === "private_meet";
+    const forceGroup = forcePrivate
+      ? false
+      : declaredAudience === "group"
+        ? true
+        : ["party", "training", "team_event", "group_social"].includes(declaredEventKind);
     const castIds = contextualRoleplayCast(
       view,
       bot,
       Array.isArray(out.cast) ? out.cast : [],
-      eventDescriptor
+      eventDescriptor,
+      {
+        /* Explicit PRIVATE always wins over keywords in the setting. */
+        forcePrivate,
+        forceGroup,
+      }
     );
     if (!castIds.includes(bot.id)) castIds.unshift(bot.id);
 
@@ -42624,7 +42676,9 @@ async function runSimulationAction(view, update, action, addImage) {
         earlyEnd: false,
         startedAt: now(),
         ts: now(),
-        eventKind: detectSceneEventKind({ title, setting }),
+        eventKind: ["private_meet", "party", "training", "team_event", "group_social"].includes(declaredEventKind)
+          ? declaredEventKind
+          : detectSceneEventKind({ title, setting }),
         aiInitiated: true,
         initiatedBy: bot.id,
         initiationMode: mode,
