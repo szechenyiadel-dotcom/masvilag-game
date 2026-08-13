@@ -214,6 +214,13 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 .flash { position:fixed; left:50%; transform:translateX(-50%); top:14px; z-index:60; width:calc(100% - 28px); max-width:520px;
   border:1px solid var(--gold); background:#22190E; border-radius:12px; padding:11px 14px; font-size:13.5px;
   box-shadow:0 12px 34px rgba(0,0,0,.55); display:flex; gap:10px; align-items:flex-start; cursor:pointer; }
+.invite-toast { position:fixed; left:50%; transform:translateX(-50%); top:14px; z-index:75; width:calc(100% - 28px); max-width:520px;
+  border:1px solid var(--gold); background:#22190E; border-radius:12px; padding:11px 14px; font-size:13.5px;
+  box-shadow:0 12px 34px rgba(0,0,0,.62); display:flex; gap:10px; align-items:flex-start; cursor:pointer; }
+.invite-toast:hover { border-color:var(--rose); }
+.invite-toast-title { font-weight:700; color:var(--bone); line-height:1.3; }
+.invite-toast-sub { color:var(--muted); font-size:12px; margin-top:2px; }
+.invite-toast button { background:none; border:none; color:var(--muted); cursor:pointer; padding:0; margin-left:auto; flex:none; }
 .badge { position:absolute; top:-4px; right:-4px; min-width:15px; height:15px; padding:0 4px; border-radius:99px;
   background:var(--rose); color:#0A0910; font-size:9.5px; font-weight:700; display:grid; place-items:center; }
 .note-row { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-bottom:1px solid var(--line); cursor:pointer; }
@@ -13687,7 +13694,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v57-rp-invites-gossip-reactions";
+const BUILD_VERSION = "v58-event-invite-toast";
 
 const AUTO = "masvilag:auto";
 /*
@@ -43271,13 +43278,9 @@ async function runSimulationAction(view, update, action, addImage) {
         tags: ["roleplay", "ai-initiated", mode],
         meta: { sceneId, participantIds: [n.meId, ...castIds], sourceType: "roleplay-initiation" },
       });
-      pushNote(n, n.meId, {
-        icon: mode === "dm_invite" ? "✉️" : "🎬",
-        text: sysLangText(n, n.meId,
-          `${bot.name} Eventet kezdeményezett: ${title}${castIds.length > 1 ? ` · ${castIds.length} AI résztvevő` : ""}`,
-          `${bot.name} initiated an Event: ${title}${castIds.length > 1 ? ` · ${castIds.length} AI participants` : ""}`),
-        link: { type: "scene", id: sceneId },
-      });
+      /* v58: Event invitations use an ephemeral clickable banner only.
+         Do not add them to the persistent notification center. The App-level
+         invite watcher below detects the new pending scene and opens its toast. */
     });
     return "roleplay-initiate";
   }
@@ -44957,6 +44960,10 @@ export default function App() {
   const viewRef = useRef(null);
   const [simPulse, setSimPulse] = useState(0);
   const [flash, setFlash] = useState(null);
+  const [inviteToast, setInviteToast] = useState(null);
+  const inviteToastTimer = useRef(null);
+  const seenInviteToasts = useRef(new Set());
+  const inviteToastWorldCode = useRef("");
   const [jump, setJump] = useState(null);
   const [popupNav, setPopupNav] = useState(null);
   const seenNote = useRef(null);
@@ -47614,6 +47621,78 @@ const signOut = useCallback(async () => {
     flashTimer.current = setTimeout(() => setFlash(null), 6000);
   }, [topNoteId, world, meId]);
 
+  /* v58 — EPHEMERAL EVENT INVITE TOAST
+     New AI Roleplay/Event invitations are not persistent notifications.
+     A short clickable banner appears once and opens the exact pending invite. */
+  useEffect(() => {
+    if (!world || !meId) return;
+
+    const code = String(world.code || "");
+    const pending = (world.scenes || [])
+      .filter((scene) =>
+        scene &&
+        scene.aiInitiated &&
+        scene.invitationStatus === "pending" &&
+        !scene.archived &&
+        !roleplayInviteIsExpired(scene)
+      )
+      .sort((a, b) => (Number(a.invitedAt || a.ts) || 0) - (Number(b.invitedAt || b.ts) || 0));
+
+    /* On world load/reload, consider already-existing invitations seen.
+       The banner is for a newly arriving invite, not a replay after refresh. */
+    if (inviteToastWorldCode.current !== code) {
+      inviteToastWorldCode.current = code;
+      seenInviteToasts.current = new Set(pending.map((scene) => scene.id).filter(Boolean));
+      setInviteToast(null);
+      return;
+    }
+
+    /* If the currently shown invite was resolved/expired elsewhere, dismiss it. */
+    if (inviteToast) {
+      const stillPending = pending.some((scene) => scene.id === inviteToast.sceneId);
+      if (!stillPending) setInviteToast(null);
+      return;
+    }
+
+    const next = pending.find((scene) => scene.id && !seenInviteToasts.current.has(scene.id));
+    if (!next) return;
+
+    seenInviteToasts.current.add(next.id);
+    const inviter = charById(viewRef.current || { ...world, meId }, next.initiatedBy);
+    setInviteToast({
+      sceneId: next.id,
+      inviterId: next.initiatedBy || "",
+      inviterName: inviter ? inviter.name : tt("Egy karakter", "A character"),
+      title: String(next.title || tt("Event meghívás", "Event invitation")),
+      invitedAt: Number(next.invitedAt || next.ts) || now(),
+    });
+  }, [world, meId, inviteToast, tt]);
+
+  useEffect(() => {
+    if (inviteToastTimer.current) {
+      clearTimeout(inviteToastTimer.current);
+      inviteToastTimer.current = null;
+    }
+    if (!inviteToast) return;
+    inviteToastTimer.current = setTimeout(() => setInviteToast(null), 6500);
+    return () => {
+      if (inviteToastTimer.current) {
+        clearTimeout(inviteToastTimer.current);
+        inviteToastTimer.current = null;
+      }
+    };
+  }, [inviteToast && inviteToast.sceneId]);
+
+  const openInviteToast = useCallback(() => {
+    if (!inviteToast || !world) return;
+    const scene = (world.scenes || []).find((row) => row && row.id === inviteToast.sceneId);
+    setInviteToast(null);
+    if (!scene || scene.archived || scene.invitationStatus !== "pending" || roleplayInviteIsExpired(scene)) return;
+    setSceneId(scene.id);
+    setJump({ type: "scene", id: scene.id, n: now() });
+    setTab("scene");
+  }, [inviteToast, world]);
+
   /* Központi szimulációs engine: queue-t és automata lépéseket is ugyanúgy futtat.
      Egy körben mindig pontosan egy AI-hívás megy. */
   useEffect(() => {
@@ -47951,7 +48030,23 @@ const signOut = useCallback(async () => {
         />
       ) : null}
 
-      {flash && !showNotes && (
+      {inviteToast && !showNotes && (
+        <div className="invite-toast" onClick={openInviteToast} role="button" tabIndex={0}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openInviteToast(); } }}>
+          <span className="note-ico">✉️</span>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div className="invite-toast-title">
+              {tt(`${inviteToast.inviterName} meghívott`, `${inviteToast.inviterName} invited you`)}
+            </div>
+            <div className="invite-toast-sub">
+              {inviteToast.title} · {tt("Kattints a meghívás megnyitásához", "Click to open the invitation")}
+            </div>
+          </div>
+          <button aria-label={tt("Bezárás", "Close")} onClick={(e) => { e.stopPropagation(); setInviteToast(null); }}><X size={14} /></button>
+        </div>
+      )}
+
+      {flash && !showNotes && !inviteToast && (
         <div className="flash" onClick={() => openNote(flash)}>
           <span className="note-ico">{flash.icon || "✨"}</span>
           <div style={{ minWidth: 0, flex: 1 }}>
