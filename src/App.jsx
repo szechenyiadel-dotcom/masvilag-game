@@ -3013,7 +3013,7 @@ function sanitizeWorldPosts(w) {
 
 function characterPublicData(w, c) {
   if (!c) return {};
-  const out = { id: c.id, type: isHuman(w, c.id) ? "player" : (isExtra(w, c.id) ? "extra" : "ai") };
+  const out = { id: c.id, type: isHuman(w, c.id) ? "player" : "ai" };
   PUBLIC_PROFILE_KEYS.forEach((k) => { if (c[k] !== undefined && c[k] !== null && c[k] !== "") out[k] = c[k]; });
   const age = ageOf(c, w);
   if (age) out.age = age;
@@ -3400,6 +3400,79 @@ function publicSocialJuiceSignals(text) {
     drama: Math.min(80, drama), romance: Math.min(80, romance),
     embarrassment: Math.min(80, embarrassment), importance: Math.min(40, importance),
     tags: [...new Set(tags)], juicy: drama >= 22 || romance >= 20 || embarrassment >= 20,
+  };
+}
+
+function publicCancelRiskSignals(text) {
+  const raw = String(text || "").trim();
+  const low = raw.toLowerCase();
+  let support = 0;
+  let dislike = 0;
+  let controversy = 0;
+  let cancel = 0;
+  let embarrassment = 0;
+  const tags = [];
+
+  /* Cringe / keyboard-smash: small risk, not instant cancellation. */
+  const compact = raw.replace(/\s+/g, "");
+  const commonLaugh = /^(?:ha){2,}|^(?:he){2,}|^(?:lol)+$|^(?:lmao)+$|^(?:xd)+$/i.test(compact);
+  const keyboardSmash =
+    !commonLaugh &&
+    compact.length >= 5 &&
+    compact.length <= 20 &&
+    /^[a-záéíóöőúüű]+$/i.test(compact) &&
+    /[bcdfghjklmnpqrstvwxyz]{4,}/i.test(compact);
+
+  if (keyboardSmash) {
+    dislike += 5;
+    controversy += 4;
+    embarrassment += 10;
+    tags.push("cringe-risk", "keyboard-smash");
+  }
+
+  /* Direct aggression / humiliating public callout. */
+  if (/\b(?:fuck\s+you|shut\s+up|bitch|idiot|loser|pathetic|trash|fake|liar|lying|hate\s+you|kuss|idióta|vesztes|szánalmas|kamu|hazudsz|utállak)\b/i.test(low)) {
+    dislike += 9;
+    controversy += 12;
+    cancel += 5;
+    embarrassment += 8;
+    tags.push("public-callout", "backlash-risk");
+  }
+
+  if (/\b(?:i['’]?ll\s+(?:kill|hit|ruin)|watch\s+your\s+back|fight\s+me|try\s+me|megöllek|megverlek|tönkreteszlek)\b/i.test(low)) {
+    dislike += 12;
+    controversy += 18;
+    cancel += 11;
+    tags.push("threat", "cancel-risk");
+  }
+
+  /* Admitted fabrication / clout-chasing is a strong cancel seed. */
+  if (/\b(?:i\s+(?:lied|made\s+it\s+up|faked)|fake(?:d)?\s+(?:a\s+)?(?:funeral|death|story)|for\s+(?:likes|clout|attention)|hazudtam|kitaláltam|megrendeztem|lájkokért|figyelemért)\b/i.test(low)) {
+    dislike += 18;
+    controversy += 22;
+    cancel += 26;
+    embarrassment += 20;
+    tags.push("dishonesty", "clout-chasing", "cancel-risk");
+  }
+
+  /* "Hot take" / deliberately provocative opinion = controversy, not automatic guilt. */
+  if (/\b(?:hot\s+take|unpopular\s+opinion|overrated|everyone\s+is\s+too\s+sensitive|cry\s+about\s+it|not\s+that\s+deep|népszerűtlen\s+vélemény|túlértékelt|mindenki\s+túl\s+érzékeny|sírjatok|nem\s+olyan\s+mély)\b/i.test(low)) {
+    dislike += 5;
+    controversy += 12;
+    cancel += 3;
+    tags.push("hot-take", "controversy");
+  }
+
+  return {
+    publicSentiment: {
+      support: Math.min(100, Math.round(support)),
+      dislike: Math.min(100, Math.round(dislike * LIVE_WORLD_CANCEL_SENSITIVITY)),
+      controversy: Math.min(100, Math.round(controversy * LIVE_WORLD_CANCEL_SENSITIVITY)),
+      cancel: Math.min(100, Math.round(cancel * LIVE_WORLD_CANCEL_SENSITIVITY)),
+    },
+    embarrassment: Math.min(80, Math.round(embarrassment)),
+    tags: [...new Set(tags)],
+    risky: cancel >= 8 || controversy >= 15 || dislike >= 12,
   };
 }
 
@@ -5620,12 +5693,46 @@ function consumeAlbumItem(c, item) {
    köztük szünet van, és ha mégis elutasítás jön, mindenki vár egy kicsit. */
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+/*
+ * LIVE WORLD DEPLOY-TIME TUNING
+ *
+ * Ezek NEM titkok, hanem játékmenet-konfigurációk. Vite buildnél a VITE_*
+ * változók a kliens bundle-be kerülnek, ezért Railway -> Service -> Variables
+ * alatt állíthatók, majd egy új deploy után lépnek életbe.
+ *
+ * Ajánlott Railway értékek egy kifejezetten élő világhoz:
+ * VITE_WORLD_ACTIVITY_MULTIPLIER=1.35
+ * VITE_WORLD_POST_MULTIPLIER=1.15
+ * VITE_WORLD_COMMENT_MULTIPLIER=1.25
+ * VITE_WORLD_DM_MULTIPLIER=1.20
+ * VITE_WORLD_GROUP_MULTIPLIER=1.15
+ * VITE_WORLD_ROLEPLAY_MULTIPLIER=1.25
+ * VITE_WORLD_NOTE_MULTIPLIER=1.10
+ * VITE_WORLD_CONTENT_INTERVAL_MS=9000
+ * VITE_WORLD_POPUP_CADENCE_MULTIPLIER=0.80
+ * VITE_WORLD_CANCEL_SENSITIVITY=1.35
+ * VITE_AI_BACKGROUND_GAP_MS=8000
+ */
+const LIVE_WORLD_ACTIVITY_MULTIPLIER = Math.max(0.55, Math.min(2.40, Number(import.meta.env.VITE_WORLD_ACTIVITY_MULTIPLIER) || 1.28));
+const LIVE_WORLD_POST_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_POST_MULTIPLIER) || 1.15));
+const LIVE_WORLD_COMMENT_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_COMMENT_MULTIPLIER) || 1.25));
+const LIVE_WORLD_DM_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_DM_MULTIPLIER) || 1.20));
+const LIVE_WORLD_GROUP_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_GROUP_MULTIPLIER) || 1.15));
+const LIVE_WORLD_ROLEPLAY_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_ROLEPLAY_MULTIPLIER) || 1.25));
+const LIVE_WORLD_NOTE_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_NOTE_MULTIPLIER) || 1.10));
+const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(7000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 9000));
+const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.45, Math.min(2.50, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 0.82));
+const LIVE_WORLD_CANCEL_SENSITIVITY = Math.max(0.60, Math.min(2.20, Number(import.meta.env.VITE_WORLD_CANCEL_SENSITIVITY) || 1.32));
+const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(import.meta.env.VITE_WORLD_MAX_POPUP_REROLLS) || 5)));
+const AI_BACKGROUND_GAP_MS = Math.max(3500, Math.min(30000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 8000));
+const AI_INITIATIVE_GAP_MS = Math.max(1800, Math.min(15000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 3000));
+
 const AI = {
   chain: Promise.resolve(),  // kompatibilitás miatt marad
   last: 0,                   // mikor futott le az utolsó AI-hívás
-  gap: 9000,                 // háttér-hívások közti minimum szünet
+  gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
   interactiveGap: 2200,      // játékos által kiváltott chat/RP gyorsabb prioritása
-  initiativeGap: 3500,       // autonóm DM / group / RP ne éhezzen a nagy feed promptok mögött
+  initiativeGap: AI_INITIATIVE_GAP_MS, // autonóm DM / group / RP ne éhezzen a nagy feed promptok mögött
 
   /*
    * Token-aware throttling.
@@ -13279,7 +13386,7 @@ const AUTO_DEFAULT = {
    * Az AI queue saját token/rate-limit throttlingja ettől külön működik,
    * tehát ha a providernek több pihenő kell, továbbra is biztonságosan vár.
    */
-  every: 0.18,
+  every: Math.max(0.12, LIVE_WORLD_CONTENT_INTERVAL_MS / 60000),
 };
 
 async function loadAuto() {
@@ -14207,7 +14314,7 @@ gossipSettings: {
   mediaMode: "local",
 
   whisperWire: true,
-  frequency: "normal",
+  frequency: "high",
   articleLength: "dynamic",
   characterGossip: true,
   relationshipImpact: "normal",
@@ -14922,10 +15029,7 @@ function socialProfileById(w, id) {
   const c =
     charById(w, id);
 
-  if (
-    !c ||
-    isExtra(w, id)
-  ) {
+  if (!c) {
     return null;
   }
 
@@ -15447,6 +15551,7 @@ function characterOnlineActivityProfile(w, c) {
     return {
       overall: 0,
       post: 0,
+      comment: 0,
       group: 0,
       dm: 0,
       note: 0,
@@ -15498,7 +15603,14 @@ function characterOnlineActivityProfile(w, c) {
     ((commentSeedNumber(c.id || c.name || "character") % 21) - 10) / 100;
 
   overall += stableJitter;
-  overall = Math.max(0.22, Math.min(2.45, overall));
+
+  /*
+   * Globális world-aktivitás szorzó. Nem írja felül a személyiséget: a quiet
+   * karakter továbbra is ritkább, csak az egész világ alapritmusát emeli vagy
+   * csökkenti. Railway VITE_WORLD_ACTIVITY_MULTIPLIER-rel hangolható.
+   */
+  overall *= LIVE_WORLD_ACTIVITY_MULTIPLIER;
+  overall = Math.max(0.22, Math.min(2.75, overall));
 
   const postBias = /influencer|creator|blogger|celebrity|content|fot[oó]|fashion|modell/.test(lore) ? 0.28 : 0;
   const groupBias = /chatty|talkative|besz[eé]des|gossip|pletyka|outgoing|t[aá]rsas[aá]gi|chaotic|k[aá]osz/.test(lore) ? 0.34 : 0;
@@ -15512,11 +15624,12 @@ function characterOnlineActivityProfile(w, c) {
 
   return {
     overall: clamp(overall),
-    post: clamp(overall + postBias - quietPenalty * 0.4),
-    group: clamp(overall + groupBias - quietPenalty),
-    dm: clamp(overall + dmBias - quietPenalty * 0.6),
-    note: clamp(overall + noteBias - quietPenalty * 0.5),
-    roleplay: clamp(overall + roleplayBias - quietPenalty * 0.8),
+    post: clamp((overall + postBias - quietPenalty * 0.4) * LIVE_WORLD_POST_MULTIPLIER),
+    comment: clamp((overall + groupBias * 0.22 - quietPenalty * 0.45) * LIVE_WORLD_COMMENT_MULTIPLIER),
+    group: clamp((overall + groupBias - quietPenalty) * LIVE_WORLD_GROUP_MULTIPLIER),
+    dm: clamp((overall + dmBias - quietPenalty * 0.6) * LIVE_WORLD_DM_MULTIPLIER),
+    note: clamp((overall + noteBias - quietPenalty * 0.5) * LIVE_WORLD_NOTE_MULTIPLIER),
+    roleplay: clamp((overall + roleplayBias - quietPenalty * 0.8) * LIVE_WORLD_ROLEPLAY_MULTIPLIER),
   };
 }
 
@@ -21005,7 +21118,7 @@ function fairCommentCast(w, targetId) {
         storyLinked ||
         interest >= 24;
 
-      const activity = characterOnlineActivityProfile(w, c).overall;
+      const activity = characterOnlineActivityProfile(w, c).comment;
 
       const discoveryChance =
         Math.min(
@@ -22814,6 +22927,9 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       language: worldLanguage(w, w.meId),
     };
 
+    const playerPostJuice = publicSocialJuiceSignals(t || imageDescription || "");
+    const playerPostCancelRisk = publicCancelRiskSignals(t || "");
+
     update((n) => {
       /*
        * A poszt world-metaadata is rögtön hivatkozzon a képre.
@@ -22849,10 +22965,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         targetIds: mentions,
         visibility: "public",
         factLevel: "observed",
-        importance: img ? 30 : 24,
-        drama: 0,
-        romance: 0,
-        embarrassment: 0,
+        importance: (img ? 30 : 24) + playerPostJuice.importance + (playerPostCancelRisk.risky ? 8 : 0),
+        drama: Math.min(100, playerPostJuice.drama + playerPostCancelRisk.publicSentiment.controversy * 0.55),
+        romance: playerPostJuice.romance,
+        embarrassment: Math.min(100, playerPostJuice.embarrassment + playerPostCancelRisk.embarrassment),
         source: "player",
         text: t || "Image post",
         tags: [
@@ -22860,12 +22976,18 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
           "player-post",
           img ? "image-post" : "text-post",
           ...(mentions.length ? ["mentions"] : []),
+          ...playerPostJuice.tags,
+          ...playerPostCancelRisk.tags,
+          ...(playerPostJuice.juicy || playerPostCancelRisk.risky ? ["gossip-worthy-thread"] : []),
         ],
         meta: {
           postId: p.id,
           hasImage: Boolean(img),
           imageDescription,
           mentionedIds: mentions,
+          publicSentiment: playerPostCancelRisk.publicSentiment,
+          sentimentTargetIds: [w.meId],
+          cancelRiskSeed: playerPostCancelRisk.risky,
         },
       });
     });
@@ -23425,6 +23547,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               );
 
               const playerCommentJuice = publicSocialJuiceSignals(made.text);
+              const playerCommentCancelRisk = publicCancelRiskSignals(made.text);
 
               recordSocialEvent(n, {
                 type: parent ? "reply" : "comment",
@@ -23434,10 +23557,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 targetIds: eventTargets,
                 visibility: "public",
                 factLevel: "observed",
-                importance: (parent ? 30 : 22) + playerCommentJuice.importance,
-                drama: playerCommentJuice.drama,
+                importance: (parent ? 30 : 22) + playerCommentJuice.importance + (playerCommentCancelRisk.risky ? 7 : 0),
+                drama: Math.min(100, playerCommentJuice.drama + playerCommentCancelRisk.publicSentiment.controversy * 0.5),
                 romance: playerCommentJuice.romance,
-                embarrassment: playerCommentJuice.embarrassment,
+                embarrassment: Math.min(100, playerCommentJuice.embarrassment + playerCommentCancelRisk.embarrassment),
                 source: "player",
                 text: made.text,
                 tags: [
@@ -23446,7 +23569,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   parent ? "reply" : "comment",
                   "relationship-impact-pending",
                   ...playerCommentJuice.tags,
-                  ...(playerCommentJuice.juicy ? ["gossip-worthy-thread"] : []),
+                  ...playerCommentCancelRisk.tags,
+                  ...(playerCommentJuice.juicy || playerCommentCancelRisk.risky ? ["gossip-worthy-thread"] : []),
                 ],
                 meta: {
                   postId: x.id,
@@ -23456,6 +23580,9 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   targetId: targetId || "",
                   impactTargets:
                     impactTargetIds,
+                  publicSentiment: playerCommentCancelRisk.publicSentiment,
+                  sentimentTargetIds: [freshActorId],
+                  cancelRiskSeed: playerCommentCancelRisk.risky,
                 },
               });
             });
@@ -29412,55 +29539,71 @@ function Alerts({ w, onClose, onOpen, onClear }) {
   );
 }
 
-function PopupEventModal({ w, event, update, onChoose }) {
+function PopupEventModal({ w, event, update, onChoose, onReroll, onCustom }) {
   const { tt } = useLang();
   const [busyChoice, setBusyChoice] = useState("");
+  const [rerollBusy, setRerollBusy] = useState(false);
+  const [customBusy, setCustomBusy] = useState(false);
+  const [customText, setCustomText] = useState("");
 
   if (!event) return null;
 
+  const isBusy = Boolean(busyChoice || rerollBusy || customBusy);
+  const rerollsUsed = Math.max(0, Number(event.rerollsUsed) || 0);
+  const maxRerolls = Math.max(1, Math.min(5, Number(event.maxRerolls) || LIVE_WORLD_MAX_POPUP_REROLLS));
+  const canReroll = rerollsUsed < maxRerolls;
+
   const choose = async (choice) => {
-    if (!choice || busyChoice) return;
-
+    if (!choice || isBusy) return;
     setBusyChoice(choice.id);
-
     let completed = false;
-
     try {
       if (onChoose) {
-        completed =
-          (
-            await onChoose(
-              event,
-              choice
-            )
-          ) === true;
+        completed = (await onChoose(event, choice)) === true;
       } else {
-        update((n) =>
-          resolvePopupEvent(
-            n,
-            event.id,
-            choice.id
-          )
-        );
-
+        update((n) => resolvePopupEvent(n, event.id, choice.id));
         completed = true;
       }
     } finally {
-      /*
-       * Siker esetén a popup eltűnik.
-       * Nem küldünk új setState-et a már lecsatolt modalra.
-       */
-      if (!completed) {
-        setBusyChoice("");
-      }
+      if (!completed) setBusyChoice("");
     }
   };
+
+  const reroll = async () => {
+    if (!canReroll || isBusy || !onReroll) return;
+    setRerollBusy(true);
+    try {
+      await onReroll(event);
+    } finally {
+      setRerollBusy(false);
+    }
+  };
+
+  const submitCustom = async () => {
+    const text = customText.trim();
+    if (!text || isBusy || !onCustom) return;
+    setCustomBusy(true);
+    let completed = false;
+    try {
+      completed = (await onCustom(event, text)) === true;
+      if (completed) setCustomText("");
+    } finally {
+      if (!completed) setCustomBusy(false);
+    }
+  };
+
+  const visibilityLabel =
+    event.visibility === "public"
+      ? tt("nyilvános helyzet", "public situation")
+      : event.visibility === "private"
+        ? tt("négyszemközti helyzet", "private situation")
+        : tt("néhányan láthatják", "a few people may witness it");
 
   return (
     <div className="scrim popup-event-scrim">
       <div className="sheet popup-event-sheet">
-        <div className="between">
-          <div>
+        <div className="between" style={{ alignItems: "flex-start" }}>
+          <div style={{ minWidth: 0 }}>
             <div className="popup-event-kicker">
               <Sparkles size={12} />
               {tt("Váratlan helyzet","Unexpected situation")}
@@ -29468,23 +29611,33 @@ function PopupEventModal({ w, event, update, onChoose }) {
             <div className="popup-event-title">
               {event.icon || "⚡"} {event.title}
             </div>
+            {(event.location || event.visibility) ? (
+              <div className="hint" style={{ marginTop: 5 }}>
+                {[event.location, visibilityLabel].filter(Boolean).join(" · ")}
+              </div>
+            ) : null}
           </div>
 
-          <button
-            className="btn tiny ghost"
-            title={tt("Később","Later")}
-            disabled={Boolean(busyChoice)}
-            onClick={() =>
-              update((n) =>
-                snoozePopupEvent(
-                  n,
-                  event.id
-                )
-              )
-            }
-          >
-            <X size={14} />
-          </button>
+          <div className="row" style={{ gap: 6, flex: "none" }}>
+            <button
+              className="btn tiny ghost"
+              title={canReroll ? tt("Dobj új helyzetet", "Reroll the situation") : tt("Elfogytak az újradobások", "No rerolls left")}
+              disabled={isBusy || !canReroll || !onReroll}
+              onClick={reroll}
+            >
+              {rerollBusy ? <Loader2 size={13} className="spin" /> : <span aria-hidden="true">🎲</span>}
+              <span className="mono">{rerollsUsed}/{maxRerolls}</span>
+            </button>
+
+            <button
+              className="btn tiny ghost"
+              title={tt("Később","Later")}
+              disabled={isBusy}
+              onClick={() => update((n) => snoozePopupEvent(n, event.id))}
+            >
+              <X size={14} />
+            </button>
+          </div>
         </div>
 
         <div className="popup-event-body">
@@ -29492,43 +29645,58 @@ function PopupEventModal({ w, event, update, onChoose }) {
         </div>
 
         <div className="popup-choice-list">
-          {(event.choices || []).map(
-            (choice) => (
-              <button
-                key={choice.id}
-                className="btn popup-choice"
-                disabled={Boolean(busyChoice)}
-                onClick={() =>
-                  choose(choice)
-                }
-              >
-                {busyChoice === choice.id ? (
-                  <Loader2
-                    size={15}
-                    className="spin"
-                  />
-                ) : null}
+          {(event.choices || []).map((choice) => (
+            <button
+              key={choice.id}
+              className="btn popup-choice"
+              disabled={isBusy}
+              onClick={() => choose(choice)}
+            >
+              {busyChoice === choice.id ? <Loader2 size={15} className="spin" /> : null}
+              <div className="popup-choice-copy">
+                <div className="popup-choice-label">{choice.label}</div>
+                {choice.description ? <div className="popup-choice-desc">{choice.description}</div> : null}
+              </div>
+            </button>
+          ))}
+        </div>
 
-                <div className="popup-choice-copy">
-                  <div className="popup-choice-label">
-                    {choice.label}
-                  </div>
-
-                  {choice.description ? (
-                    <div className="popup-choice-desc">
-                      {choice.description}
-                    </div>
-                  ) : null}
-                </div>
-              </button>
-            )
-          )}
+        <div className="card" style={{ marginTop: 14, background: "var(--raised)" }}>
+          <label className="f" style={{ marginTop: 0 }}>
+            {tt("Saját reakció", "Custom response")}
+          </label>
+          <p className="hint" style={{ marginTop: 4 }}>
+            {tt(
+              "Nem muszáj a kész opciók közül választanod. Írd le pontosan, mit mond vagy tesz a karaktered; az AI ebből számolja tovább a kapcsolatokat, társas következményeket, tanúkat, pletykát és esetleges backlash-t.",
+              "You do not have to use a preset option. Write exactly what your character says or does; the AI will continue the relationships, social consequences, witnesses, gossip and possible backlash from that action."
+            )}
+          </p>
+          <textarea
+            className="i"
+            value={customText}
+            maxLength={1200}
+            disabled={isBusy}
+            placeholder={tt("Pl. Félrehívom Brentet, és megkérdezem, mégis mit akar tőlem...", "E.g. I pull Brent aside and ask what he actually wants from me...")}
+            onChange={(e) => setCustomText(e.target.value)}
+            style={{ marginTop: 8, minHeight: 84 }}
+          />
+          <div className="between" style={{ marginTop: 7 }}>
+            <span className="hint mono">{customText.length}/1200</span>
+            <button
+              className="btn primary"
+              disabled={!customText.trim() || isBusy || !onCustom}
+              onClick={submitCustom}
+            >
+              {customBusy ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
+              {tt("Ezt teszem", "Do this")}
+            </button>
+          </div>
         </div>
 
         <p className="hint" style={{ marginTop:12 }}>
           {tt(
-            "A választás most már tényleges cselekvést is elindít: privát válasznál DM-et, nyilvános stratégiánál valódi posztot hoz létre.",
-            "Your choice now triggers a real action too: a private response creates a DM, while a public strategy creates an actual post."
+            "A döntés valódi world-state esemény. Hathat a kapcsolatokra, aura/reputation/hype értékekre, követőkre, és ha mások látták vagy elég szaftos, később pletykaoldal-, komment- vagy cancel-hullámot is elindíthat.",
+            "Your decision becomes a real world-state event. It can affect relationships, aura/reputation/hype, followers, and—if witnessed or juicy enough—can later trigger gossip-page coverage, comment fallout or a cancel wave."
           )}
         </p>
       </div>
@@ -31199,8 +31367,8 @@ function findUnanswered(w) {
  *
  * Most a szimuláció saját contentAt órát használ.
  */
-const AUTO_MIN_CONTENT_INTERVAL_MS = 12000;
-const AUTO_MIN_LOCAL_ACTION_INTERVAL_MS = 30000;
+const AUTO_MIN_CONTENT_INTERVAL_MS = LIVE_WORLD_CONTENT_INTERVAL_MS;
+const AUTO_MIN_LOCAL_ACTION_INTERVAL_MS = Math.max(18000, Math.round(30000 / LIVE_WORLD_ACTIVITY_MULTIPLIER));
 
 /*
  * FONTOS: ez az ellenőrző függvény SZÁNDÉKOSAN nem hívja
@@ -31602,6 +31770,20 @@ function ensureSocialSimulationState(w) {
     w.popupEvents = [];
   }
 
+  /* Existing saves: enrich old popup rows without breaking them. */
+  w.popupEvents.forEach((event) => {
+    if (!event || typeof event !== "object") return;
+    if (!Number.isFinite(Number(event.rerollsUsed))) event.rerollsUsed = 0;
+    if (!Number.isFinite(Number(event.maxRerolls))) event.maxRerolls = LIVE_WORLD_MAX_POPUP_REROLLS;
+    if (!Array.isArray(event.variantHistory)) event.variantHistory = [];
+    if (!Array.isArray(event.witnessIds)) event.witnessIds = [];
+    if (!Array.isArray(event.involvedIds)) event.involvedIds = [];
+    if (!["public","limited","private"].includes(event.visibility)) event.visibility = "limited";
+    if (!Number.isFinite(Number(event.gossipPotential))) event.gossipPotential = event.visibility === "public" ? 55 : 30;
+    if (typeof event.location !== "string") event.location = "";
+    if (typeof event.eventKind !== "string") event.eventKind = "social";
+  });
+
   /*
    * v50 POPUP WATCHDOG
    *
@@ -31865,6 +32047,10 @@ function gossipSeedHeat(event) {
   if (tags.some((tag) => ["scandal","fight","threat","kiss","hookup","cheating","betrayal","party-drama","receipts","viral"].includes(String(tag)))) heat += 18;
   if (event.type === "roleplay-summary" || event.type === "roleplay-event") heat += 12;
   if (event.type === "dm-message") heat += 4;
+  if (event.source === "popup-event" && event.meta) {
+    heat += Math.min(28, Math.max(0, Number(event.meta.gossipPotential) || 0) * 0.28);
+    if (event.meta.gossipEligible === true) heat += 8;
+  }
   return Math.round(heat);
 }
 
@@ -32565,6 +32751,22 @@ function gossipPrivacyEligible(event) {
   }
 
   if (roleplayGossipEligible(event)) {
+    return true;
+  }
+
+  /*
+   * Popup / in-world event: limited visibility mellett csak akkor válhat
+   * pletykává, ha a feloldott esemény explicit gossipEligible és valódi
+   * witness-listát hordoz. Ettől egy sulis folyosói jelenet kiszivároghat,
+   * egy négyszemközti pillanat viszont nem válik mágikusan köztudottá.
+   */
+  if (
+    event.source === "popup-event" &&
+    event.meta &&
+    event.meta.gossipEligible === true &&
+    Number(event.meta.witnessCount || 0) >= 1 &&
+    event.visibility === "limited"
+  ) {
     return true;
   }
 
@@ -34780,10 +34982,16 @@ function popupGenerationBlocked(w) {
 
 function popupCadenceMs(w) {
   const level = storySettingsOf(w).dramaLevel;
-  if (level === "low") return 8 * 60 * 1000;
-  if (level === "high") return 3 * 60 * 1000;
-  if (level === "chaotic") return 2 * 60 * 1000;
-  return 4.5 * 60 * 1000;
+  const base =
+    level === "low"
+      ? 8 * 60 * 1000
+      : level === "high"
+        ? 3 * 60 * 1000
+        : level === "chaotic"
+          ? 2 * 60 * 1000
+          : 4.5 * 60 * 1000;
+
+  return Math.max(60 * 1000, Math.round(base * LIVE_WORLD_POPUP_CADENCE_MULTIPLIER));
 }
 
 function popupLastGeneratedAt(w) {
@@ -34942,11 +35150,11 @@ async function genPopupEvent(w,seed){
   if(!seed)return{skip:true};
   const relatedPostId=seed.meta&&seed.meta.postId;
   const relatedPost=relatedPostId?(w.posts||[]).find((p)=>p&&p.id===relatedPostId):null;
-  const involved=gossipEventSubjectIds(seed).filter((id)=>id!==w.meId&&!isMediaAccount(w,id)).slice(0,4);
+  const involved=gossipEventSubjectIds(seed).filter((id)=>id!==w.meId&&!isMediaAccount(w,id)).slice(0,5);
   const ambient = seed.type === "ambient-popup" || Boolean(seed.meta && seed.meta.ambient);
   const triggerRule = ambient
-    ? `EZ MOST VALÓDI RANDOM / AMBIENT LIVE-WORLD EVENT. Hozz létre egy FRISS, váratlan, de a meglévő kánonból és kapcsolatokból természetesen következő helyzetet. Lehet hirtelen meghívás, váratlan találkozás, social komplikáció, kihívás, lehetőség, kellemetlen pillanat vagy kisebb konfliktus. CSAK létező karaktereket használj. Ne találj ki múltbeli tényt csak azért, hogy dráma legyen.`
-    : `Ez a popup a fenti, MÁR MEGTÖRTÉNT social helyzet következménye. Ne találj ki új alap-eseményt vagy új személyt.`;
+    ? `EZ MOST VALÓDI RANDOM / AMBIENT LIVE-WORLD EVENT. Hozz létre egy FRISS, váratlan, de a meglévő kánonból, helyszínből, rutinból és kapcsolatokból természetesen következő helyzetet. Lehet például: valaki odalép a játékoshoz suliban/munkahelyen/utcán; váratlanul elhívja valahova; meghívás érkezik buliba/randira/eseményre; egy rivális konfrontál; valaki segítséget kér; kínos helyzet alakul ki mások előtt; társas kihívás, lehetőség, félreértés vagy spontán találkozás történik. CSAK létező karaktereket használj. Ne találj ki múltbeli tényt csak azért, hogy dráma legyen.`
+    : `Ez a popup a fenti, MÁR MEGTÖRTÉNT social helyzet következménye. Ne találj ki új alap-eseményt vagy új személyt; a következmény a valódi eseményből nőjön ki.`;
 
   return askWorldJSON(w,engineFor(w),`${worldContext(w,involved.filter((id)=>!isHuman(w,id)),false,null)}
 
@@ -34956,63 +35164,260 @@ ${relatedPost?`KAPCSOLÓDÓ NYILVÁNOS POSZT:\n${relatedPost.gossipStory&&relate
 
 ${triggerRule}
 
-Készíts rövid, telefonon is egy pillantással érthető popup helyzetet 3 választással.
-- Nem írhatsz a játékos helyett konkrét mondatot vagy reakciót.
-- A választások cselekvési STRATÉGIÁK legyenek, a játékos majd eldönti mit tesz.
-- A popup legyen valódi történeti elágazás, ne generikus rendszerüzenet.
+Készíts rövid, telefonon is egy pillantással érthető, KONKRÉT popup helyzetet 3 eltérő választási stratégiával.
+
+KÖTELEZŐ REALIZMUS:
+- A popup konkrétan mondja el, MI történik most. Példa-szerkezet: "Brent odalép Angelhez a suli folyosóján, miközben két ismerősük a közelben van, és ... Mit teszel?" Ne generikus rendszerüzenetet írj.
+- location: rövid valódi helyszín a jelenlegi univerzum alapján (pl. iskola folyosó, parkoló, edzőterem, buli, kávézó). Ha nincs biztos helyszín, maradjon általános, ne találj ki kánonellenes konkrétumot.
+- visibility csak: public | limited | private. public = sokan láthatják; limited = néhány valós szereplő/tanú jelen van; private = csak a közvetlen résztvevők.
+- witnessIds: csak LÉTEZŐ AI-karakter ID-k, akik reálisan jelen lehetnek és tényleges tanúk. Ne adj tanút privát helyzethez. 0-4 ID.
+- gossipPotential: 0-100. Magasabb, ha nyilvános, kínos, romantikus, konfliktusos, botrányos vagy több tanú van. Ez NEM jelenti azt, hogy automatikusan pletyka lesz belőle.
+- eventKind: rövid kategória, pl. encounter | invitation | confrontation | opportunity | awkward | romance | rivalry | social.
+- Nem írhatsz a játékos helyett konkrét mondatot, cselekvést, gondolatot vagy reakciót.
+- A választások STRATÉGIÁK legyenek, a játékos majd eldönti mit tesz.
+- A popup valódi történeti elágazás legyen: a három opció érezhetően más társas következményt indíthasson el.
 - tone csak: ignore | clarify | defend | joke | apologize | doubleDown | private | noComment
-- Ha tone="private", akkor CSAK akkor használd, ha van a helyzetben létező AI karakter, akinek reálisan lehet írni, és adj meg targetId-t.
-- A private választás targetId-je kizárólag létező AI karakter id lehet a helyzetből.
-- reactions: 0-3 létező AI várható kapcsolatreakciója; delta azt jelenti, AZ AI mit érez a játékos iránt, -20..+20.
+- Ha tone="private", csak akkor használd, ha van a helyzetben létező AI karakter, akinek reálisan lehet írni, és adj meg targetId-t.
+- reactions: 0-4 létező AI várható EGYIRÁNYÚ kapcsolatreakciója; delta azt jelenti, AZ AI mit érez a játékos iránt, -20..+20.
+- socialImpact: opcionális, kicsi közvetlen stat-hatás. aura -8..8, reputation -12..12, hype -12..16, humor -8..8, followerRate -0.01..0.01. Ne jutalmazz/büntess mindent; csak ha valóban van társas következmény.
+- publicSentiment: support/dislike/controversy/cancel 0..100. Cancel ne legyen automatikus: csak akkor legyen jelentős, ha az adott stratégia nyilvánosan kínos, agresszív, hazug, érzéketlen, botrányos vagy "double down" jellegű.
 
 VÁLASZ CSAK JSON:
-{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}]}]}${TAIL}`,{maxTokens:850,priority:18});
+{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat konkrét helyzet","location":"","visibility":"limited","witnessIds":[],"gossipPotential":45,"eventKind":"encounter","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":1,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1150,priority:18});
 }
 
 function normalizePopupEvent(w,seed,raw){
   if(!raw||raw.skip===true)return null;
-  const title=cut(String(raw.title||"").replace(/\s+/g," ").trim(),120), body=String(raw.text||"").replace(/\n{3,}/g,"\n\n").trim().slice(0,900);if(!title||!body)return null;
-  const allowedTones=new Set(["ignore","clarify","defend","joke","apologize","doubleDown","private","noComment"]), validAiIds=new Set((w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)).map((c)=>c.id));
+  const title=cut(String(raw.title||"").replace(/\s+/g," ").trim(),120);
+  const body=String(raw.text||"").replace(/\n{3,}/g,"\n\n").trim().slice(0,1000);
+  if(!title||!body)return null;
+
+  const allowedTones=new Set(["ignore","clarify","defend","joke","apologize","doubleDown","private","noComment"]);
+  const allowedVisibility=new Set(["public","limited","private"]);
+  const validAiIds=new Set((w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)).map((c)=>c.id));
+  const clampNum=(value,min,max,fallback=0)=>{
+    const n=Number(value);
+    return Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback;
+  };
+
   const choices=(Array.isArray(raw.choices)?raw.choices:[]).slice(0,3).map((choice,index)=>{
     const tone=allowedTones.has(choice&&choice.tone)?choice.tone:"ignore";
-    const reactions=(choice&&Array.isArray(choice.reactions)?choice.reactions:[]).slice(0,3).map((r)=>({id:r&&r.id?String(r.id):"",delta:Math.max(-20,Math.min(20,Number(r&&r.delta)||0)),mood:cut(String(r&&r.mood||""),60),why:cut(String(r&&r.why||""),140)})).filter((r)=>validAiIds.has(r.id));
-    const targetId =
-      choice &&
-      choice.targetId &&
-      validAiIds.has(
-        String(choice.targetId)
-      )
-        ? String(choice.targetId)
-        : "";
+    const reactions=(choice&&Array.isArray(choice.reactions)?choice.reactions:[]).slice(0,4).map((r)=>({
+      id:r&&r.id?String(r.id):"",
+      delta:Math.max(-20,Math.min(20,Number(r&&r.delta)||0)),
+      mood:cut(String(r&&r.mood||""),60),
+      why:cut(String(r&&r.why||""),160)
+    })).filter((r)=>validAiIds.has(r.id));
+    const targetId = choice&&choice.targetId&&validAiIds.has(String(choice.targetId))?String(choice.targetId):"";
+    const si=choice&&choice.socialImpact&&typeof choice.socialImpact==="object"?choice.socialImpact:{};
+    const ps=choice&&choice.publicSentiment&&typeof choice.publicSentiment==="object"?choice.publicSentiment:{};
 
     return{
       id:String(choice&&choice.id||`c${index+1}`),
-      label:cut(String(choice&&choice.label||"").replace(/\s+/g," ").trim(),90)||`Choice ${index+1}`,
-      description:cut(String(choice&&choice.description||"").replace(/\s+/g," ").trim(),180),
+      label:cut(String(choice&&choice.label||"").replace(/\s+/g," ").trim(),100)||`Choice ${index+1}`,
+      description:cut(String(choice&&choice.description||"").replace(/\s+/g," ").trim(),220),
       tone,
       targetId,
-      reactions
+      reactions,
+      socialImpact:{
+        aura:clampNum(si.aura,-8,8,0),
+        reputation:clampNum(si.reputation,-12,12,0),
+        hype:clampNum(si.hype,-12,16,0),
+        humor:clampNum(si.humor,-8,8,0),
+        followerRate:clampNum(si.followerRate,-0.01,0.01,0),
+      },
+      publicSentiment:{
+        support:clampNum(ps.support,0,100,0),
+        dislike:clampNum(ps.dislike,0,100,0),
+        controversy:clampNum(ps.controversy,0,100,0),
+        cancel:clampNum(ps.cancel,0,100,0),
+      },
     };
   }).filter((c)=>c.label);
 
   if(choices.length<2)return null;
+
+  const visibility=allowedVisibility.has(String(raw.visibility||""))?String(raw.visibility):"limited";
+  const witnessIds=visibility==="private"?[]:(Array.isArray(raw.witnessIds)?raw.witnessIds:[])
+    .map((id)=>String(id||""))
+    .filter((id,index,arr)=>validAiIds.has(id)&&arr.indexOf(id)===index)
+    .slice(0,4);
+  const gossipPotential=Math.round(clampNum(raw.gossipPotential,0,100,visibility==="public"?55:visibility==="limited"?35:5));
 
   return{
     id:"pe_"+uid(),
     icon:String(raw.icon||"⚡").slice(0,6),
     title,
     text:body,
+    location:cut(String(raw.location||"").replace(/\s+/g," ").trim(),120),
+    visibility,
+    witnessIds,
+    gossipPotential,
+    eventKind:cut(String(raw.eventKind||"social").replace(/\s+/g," ").trim(),40)||"social",
     ts:now(),
     resolved:false,
     snoozedAt:0,
+    rerollsUsed:0,
+    maxRerolls:LIVE_WORLD_MAX_POPUP_REROLLS,
+    variantHistory:[],
     sourceEventIds:[seed.id].filter(Boolean),
     sourceType:seed.type||"",
     relatedPostId:seed.meta&&seed.meta.postId||"",
+    seedActorId:seed.actorId||"",
+    seedTargetIds:Array.isArray(seed.targetIds)?seed.targetIds.slice(0,6):[],
+    seedText:cut(String(seed.text||""),900),
     involvedIds:gossipEventSubjectIds(seed)
       .filter((id)=>id!==w.meId&&!isMediaAccount(w,id)),
     choices
   };
 }
+
+function popupSeedFromEvent(event){
+  return{
+    id:(event.sourceEventIds&&event.sourceEventIds[0])||event.id,
+    type:event.sourceType||"ambient-popup",
+    actorId:event.seedActorId||"",
+    targetIds:Array.isArray(event.seedTargetIds)?event.seedTargetIds:[],
+    text:event.seedText||event.text||"",
+    meta:{
+      postId:event.relatedPostId||"",
+      ambient:event.sourceType==="ambient-popup",
+      participantIds:Array.isArray(event.involvedIds)?event.involvedIds:[],
+    },
+  };
+}
+
+async function genPopupEventReroll(w,event){
+  if(!event)return{skip:true};
+  const already=[
+    ...(Array.isArray(event.variantHistory)?event.variantHistory:[]),
+    `${event.title}: ${event.text}`,
+  ].slice(-5).join("\n---\n");
+  const cast=(w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)).slice(0,10).map((c)=>c.id);
+
+  return askWorldJSON(w,engineFor(w),`${worldContext(w,cast,false,null)}
+
+A játékos a 🎲 kockával ÚJ VÁLTOZATOT kér ugyanahhoz a jelenlegi világpillanathoz.
+Az előző variánsok, amiket NEM szabad lényegében megismételni:
+${cut(already,2200)}
+
+EREDTI TRIGGER / KONTEXTUS:
+${cut(event.seedText||event.text,1000)}
+
+Készíts EGY ÉREZHETŐEN MÁS, de ugyanúgy karakterhű és okszerű váratlan helyzetet. Lehet más létező AI-karakter a kezdeményező, ha a világkánon alapján természetes. Ne találj ki új embert. Ne ismételd átnevezve ugyanazt a szituációt vagy ugyanazokat a választásokat.
+
+Ugyanazokat a szabályokat tartsd, mint egy normál popupnál:
+- konkrét 1-3 mondatos helyzet;
+- 3 eltérő stratégia;
+- location;
+- visibility: public | limited | private;
+- witnessIds csak létező AI-ID-k, 0-4;
+- gossipPotential 0-100;
+- eventKind;
+- tone csak ignore | clarify | defend | joke | apologize | doubleDown | private | noComment;
+- reactions 0-4, delta -20..20;
+- socialImpact és publicSentiment opcionális, reális és arányos;
+- a játékos helyett soha ne dönts/cselekedj.
+
+JSON:
+{"skip":false,"icon":"🎲","title":"","text":"","location":"","visibility":"limited","witnessIds":[],"gossipPotential":40,"eventKind":"encounter","choices":[{"id":"c1","label":"","description":"","tone":"clarify","targetId":"","reactions":[],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1100,priority:22});
+}
+
+function applyPopupReroll(w,eventId,raw){
+  const event=(w.popupEvents||[]).find((e)=>e&&e.id===eventId);
+  if(!event||event.resolved)return false;
+  const used=Math.max(0,Number(event.rerollsUsed)||0);
+  const max=Math.max(1,Math.min(5,Number(event.maxRerolls)||LIVE_WORLD_MAX_POPUP_REROLLS));
+  if(used>=max)return false;
+  const next=normalizePopupEvent(w,popupSeedFromEvent(event),raw);
+  if(!next)return false;
+
+  const oldVariant=`${event.title}: ${event.text}`;
+  event.variantHistory=[...(event.variantHistory||[]),oldVariant].slice(-5);
+  event.icon=next.icon;
+  event.title=next.title;
+  event.text=next.text;
+  event.location=next.location;
+  event.visibility=next.visibility;
+  event.witnessIds=next.witnessIds;
+  event.gossipPotential=next.gossipPotential;
+  event.eventKind=next.eventKind;
+  event.involvedIds=next.involvedIds.length?next.involvedIds:event.involvedIds;
+  event.choices=next.choices;
+  event.rerollsUsed=used+1;
+  event.maxRerolls=max;
+  event.rerolledAt=now();
+  return true;
+}
+
+async function genPopupCustomOutcome(w,event,customText){
+  const text=String(customText||"").trim().slice(0,1200);
+  if(!event||!text)return{skip:true};
+  const cast=[...(event.involvedIds||[]),...(event.witnessIds||[])].filter((id,index,arr)=>id&&!isHuman(w,id)&&arr.indexOf(id)===index).slice(0,8);
+
+  return askWorldJSON(w,engineFor(w),`${worldContext(w,cast,false,null)}
+
+POPUP HELYZET:
+${event.title}\n${event.text}
+Helyszín: ${event.location||"nincs megadva"}
+Láthatóság: ${event.visibility||"limited"}
+Tanúk: ${(event.witnessIds||[]).map((id)=>`${nameOfIn(w,id)} [${id}]`).join(", ")||"nincs"}
+
+A JÁTÉKOS SAJÁT, SZABAD REAKCIÓJA / CSELEKVÉSE:
+"${text}"
+
+NE írd át a játékos cselekvését más cselekvéssé. A feladatod kizárólag a KÖVETKEZMÉNYEK értelmezése a létező karakterek és világ alapján.
+- summary: 1 rövid mondat arról, mi történt a játékos reakciójával együtt, de ne adj hozzá új játékos-cselekvést.
+- tone: a legközelebbi kategória az ignore | clarify | defend | joke | apologize | doubleDown | private | noComment közül.
+- visibility: public | limited | private az esemény és a reakció után.
+- witnessIds: csak létező AI-karakter ID-k, akik ténylegesen láthatták/hallhatták; 0-4.
+- gossipPotential 0-100; ne legyen mindenből pletyka.
+- reactions: 0-4 AI egyirányú kapcsolatváltozása a játékos felé, delta -20..20.
+- socialImpact: aura -10..10, reputation -15..15, hype -15..20, humor -10..10, followerRate -0.015..0.015.
+- publicSentiment: support/dislike/controversy/cancel 0..100. Cancel csak akkor legyen magas, ha a játékos reakciója nyilvánosan botrányos, hazug, agresszív, megalázó, érzéketlen vagy visszaütő.
+- drama/romance/embarrassment 0..100 a tényleges eseményhez.
+- gossipTags: legfeljebb 5 rövid tag, pl. confrontation, awkward, romance, fight, public-drama, scandal, receipts, cringe, backlash.
+
+JSON:
+{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{maxTokens:800,priority:65});
+}
+
+function normalizePopupCustomOutcome(w,event,customText,raw){
+  if(!raw||raw.skip===true)return null;
+  const validAiIds=new Set((w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)).map((c)=>c.id));
+  const allowedVisibility=new Set(["public","limited","private"]);
+  const allowedTones=new Set(["ignore","clarify","defend","joke","apologize","doubleDown","private","noComment"]);
+  const clampNum=(value,min,max,fallback=0)=>{
+    const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback;
+  };
+  const visibility=allowedVisibility.has(String(raw.visibility||""))?String(raw.visibility):(event.visibility||"limited");
+  const witnessIds=visibility==="private"?[]:(Array.isArray(raw.witnessIds)?raw.witnessIds:[]).map((id)=>String(id||"")).filter((id,index,arr)=>validAiIds.has(id)&&arr.indexOf(id)===index).slice(0,4);
+  const reactions=(Array.isArray(raw.reactions)?raw.reactions:[]).slice(0,4).map((r)=>({
+    id:String(r&&r.id||""),delta:Math.max(-20,Math.min(20,Number(r&&r.delta)||0)),mood:cut(String(r&&r.mood||""),60),why:cut(String(r&&r.why||""),160)
+  })).filter((r)=>validAiIds.has(r.id));
+  const si=raw.socialImpact&&typeof raw.socialImpact==="object"?raw.socialImpact:{};
+  const ps=raw.publicSentiment&&typeof raw.publicSentiment==="object"?raw.publicSentiment:{};
+  const tags=(Array.isArray(raw.gossipTags)?raw.gossipTags:[]).map((x)=>String(x||"").trim().toLowerCase()).filter(Boolean).slice(0,5);
+
+  return{
+    customText:String(customText||"").trim().slice(0,1200),
+    summary:cut(String(raw.summary||customText||"").replace(/\s+/g," ").trim(),700),
+    tone:allowedTones.has(String(raw.tone||""))?String(raw.tone):"clarify",
+    visibility,
+    witnessIds,
+    gossipPotential:Math.round(clampNum(raw.gossipPotential,0,100,event.gossipPotential||30)),
+    reactions,
+    socialImpact:{
+      aura:clampNum(si.aura,-10,10,0),reputation:clampNum(si.reputation,-15,15,0),hype:clampNum(si.hype,-15,20,0),humor:clampNum(si.humor,-10,10,0),followerRate:clampNum(si.followerRate,-0.015,0.015,0),
+    },
+    publicSentiment:{
+      support:clampNum(ps.support,0,100,0),dislike:clampNum(ps.dislike,0,100,0),controversy:clampNum(ps.controversy,0,100,0),cancel:clampNum(ps.cancel,0,100,0),
+    },
+    drama:clampNum(raw.drama,0,100,20),romance:clampNum(raw.romance,0,100,0),embarrassment:clampNum(raw.embarrassment,0,100,0),
+    tags,
+  };
+}
+
 function addPopupEvent(w,seed,raw){
   const row=normalizePopupEvent(w,seed,raw);
   if(!row)return null;
@@ -35597,35 +36002,151 @@ function appendPopupPublicPost(
   return post;
 }
 
+function popupCombinedImpact(w,choice){
+  const base=popupToneImpact(choice&&choice.tone);
+  const extra=choice&&choice.socialImpact&&typeof choice.socialImpact==="object"?choice.socialImpact:{};
+  const clampLocal=(n,min,max)=>Math.max(min,Math.min(max,Number(n)||0));
+  const followerRate=clampLocal((Number(base.followerRate)||0)+(Number(extra.followerRate)||0),-0.02,0.02);
+  const audience=Math.max(1,displayFollowerCount(w,w.meId));
+  return{
+    aura:clampLocal((Number(base.aura)||0)+(Number(extra.aura)||0),-14,14),
+    reputation:clampLocal((Number(base.reputation)||0)+(Number(extra.reputation)||0),-18,18),
+    hype:clampLocal((Number(base.hype)||0)+(Number(extra.hype)||0),-20,24),
+    humor:clampLocal((Number(base.humor)||0)+(Number(extra.humor)||0),-12,12),
+    followerRate,
+    followers:Math.round(audience*followerRate),
+  };
+}
+
+function popupEventGossipEligible(event,visibility,witnessIds,gossipPotential){
+  if(!event)return false;
+  if(visibility==="public")return gossipPotential>=18;
+  if(visibility==="limited")return (witnessIds||[]).length>=1&&gossipPotential>=28;
+  return false;
+}
+
 function resolvePopupEvent(w,eventId,choiceId){
   const event=(w.popupEvents||[]).find((e)=>e&&e.id===eventId);if(!event||event.resolved)return false;
   const choice=(event.choices||[]).find((c)=>c&&c.id===choiceId);if(!choice)return false;
-  const impact=popupToneImpact(choice.tone), audience=Math.max(1,displayFollowerCount(w,w.meId)), followerDelta=Math.round(audience*(Number(impact.followerRate)||0));
-  applyExplicitSocialImpact(w,w.meId,{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:followerDelta});
+  const impact=popupCombinedImpact(w,choice);
+  applyExplicitSocialImpact(w,w.meId,{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers});
   applyChanges(
     w,
-    (choice.reactions || [])
-      .map((r) => ({
-        a:
-          r && r.id
-            ? r.id
-            : "",
-        b:
-          w.meId,
-        delta:
-          Number(
-            r && r.delta
-          ) || 0,
-        mood:
-          r && r.mood,
-        why:
-          r && r.why,
-      }))
+    (choice.reactions || []).map((r) => ({
+      a:r&&r.id?r.id:"",b:w.meId,delta:Number(r&&r.delta)||0,mood:r&&r.mood,why:r&&r.why,
+    }))
   );
-  event.resolved=true;event.resolvedAt=now();event.choiceId=choice.id;event.choiceTone=choice.tone;event.socialImpact={aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:followerDelta};
-  recordSocialEvent(w,{type:"popup-choice",refId:`${event.id}:${choice.id}`,ts:event.resolvedAt,actorId:w.meId,targetIds:(choice.reactions||[]).map((r)=>r.id).filter(Boolean),visibility:"system",factLevel:"observed",importance:36,drama:Math.max(0,impact.hype*3),romance:0,embarrassment:0,source:"popup-event",text:choice.label,tags:["popup-event","choice",choice.tone],meta:{popupEventId:event.id,choiceId:choice.id,choiceImpact:{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:followerDelta}}});
+
+  const visibility=["public","limited","private"].includes(event.visibility)?event.visibility:"limited";
+  const witnessIds=visibility==="private"?[]:(event.witnessIds||[]).filter(Boolean).slice(0,4);
+  const gossipPotential=Math.max(0,Math.min(100,Number(event.gossipPotential)||0));
+  const gossipEligible=popupEventGossipEligible(event,visibility,witnessIds,gossipPotential);
+  const ps=choice.publicSentiment&&typeof choice.publicSentiment==="object"?choice.publicSentiment:{};
+  const cancelRisk=(Number(ps.cancel)||0)>=12||(Number(ps.controversy)||0)>=28;
+  const participantIds=[...(event.involvedIds||[]),w.meId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
+
+  event.resolved=true;
+  event.resolvedAt=now();
+  event.choiceId=choice.id;
+  event.choiceTone=choice.tone;
+  event.socialImpact={aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers};
+  event.publicSentiment={...ps};
+  event.gossipEligible=gossipEligible;
+
+  recordSocialEvent(w,{
+    type:"popup-choice",
+    refId:`${event.id}:${choice.id}`,
+    ts:event.resolvedAt,
+    actorId:w.meId,
+    targetIds:(event.involvedIds||[]).filter(Boolean),
+    witnessIds,
+    visibility,
+    factLevel:"observed",
+    importance:Math.min(100,36+Math.round(gossipPotential*0.32)),
+    drama:Math.min(100,Math.max(0,impact.hype*3)+Math.round(gossipPotential*0.35)),
+    romance:event.eventKind==="romance"?Math.min(75,20+Math.round(gossipPotential*0.3)):0,
+    embarrassment:Math.min(100,(choice.tone==="apologize"?4:0)+Math.round((Number(ps.dislike)||0)*0.28)),
+    source:"popup-event",
+    text:`${event.title}: ${event.text} → ${choice.label}`,
+    tags:[
+      "popup-event","choice",choice.tone,event.eventKind||"social",
+      ...(gossipEligible&&gossipPotential>=45?["gossip-worthy-thread"]:[]),
+      ...(cancelRisk?["controversy","backlash-risk"]:[]),
+    ],
+    meta:{
+      popupEventId:event.id,choiceId:choice.id,location:event.location||"",gossipEligible,witnessCount:witnessIds.length,participantIds,
+      gossipPotential,publicSentiment:{support:Number(ps.support)||0,dislike:Number(ps.dislike)||0,controversy:Number(ps.controversy)||0,cancel:Number(ps.cancel)||0},
+      sentimentTargetIds:[w.meId],choiceImpact:{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers},
+    }
+  });
   return true;
 }
+
+function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
+  const event=(w.popupEvents||[]).find((e)=>e&&e.id===eventId);if(!event||event.resolved)return false;
+  const outcome=normalizePopupCustomOutcome(w,event,customText,outcomeRaw);if(!outcome)return false;
+  const audience=Math.max(1,displayFollowerCount(w,w.meId));
+  const followerDelta=Math.round(audience*(Number(outcome.socialImpact.followerRate)||0));
+  applyExplicitSocialImpact(w,w.meId,{
+    aura:outcome.socialImpact.aura,reputation:outcome.socialImpact.reputation,hype:outcome.socialImpact.hype,humor:outcome.socialImpact.humor,followers:followerDelta,
+  });
+  applyChanges(w,(outcome.reactions||[]).map((r)=>({a:r.id,b:w.meId,delta:r.delta,mood:r.mood,why:r.why})));
+
+  const visibility=outcome.visibility;
+  const witnessIds=outcome.witnessIds||[];
+  const gossipEligible=popupEventGossipEligible(event,visibility,witnessIds,outcome.gossipPotential);
+  const participantIds=[...(event.involvedIds||[]),w.meId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
+  const risk=publicCancelRiskSignals(outcome.customText);
+  const publicSentiment={
+    support:Math.max(Number(outcome.publicSentiment.support)||0,Number(risk.publicSentiment.support)||0),
+    dislike:Math.max(Number(outcome.publicSentiment.dislike)||0,Number(risk.publicSentiment.dislike)||0),
+    controversy:Math.max(Number(outcome.publicSentiment.controversy)||0,Number(risk.publicSentiment.controversy)||0),
+    cancel:Math.max(Number(outcome.publicSentiment.cancel)||0,Number(risk.publicSentiment.cancel)||0),
+  };
+  const cancelRisk=publicSentiment.cancel>=12||publicSentiment.controversy>=28;
+
+  event.resolved=true;
+  event.resolvedAt=now();
+  event.choiceId="custom";
+  event.choiceTone=outcome.tone;
+  event.customResponse=outcome.customText;
+  event.customOutcome=outcome.summary;
+  event.visibility=visibility;
+  event.witnessIds=witnessIds;
+  event.gossipPotential=outcome.gossipPotential;
+  event.gossipEligible=gossipEligible;
+  event.socialImpact={...outcome.socialImpact,followers:followerDelta};
+  event.publicSentiment=publicSentiment;
+
+  recordSocialEvent(w,{
+    type:"popup-choice",
+    refId:`${event.id}:custom`,
+    ts:event.resolvedAt,
+    actorId:w.meId,
+    targetIds:(event.involvedIds||[]).filter(Boolean),
+    witnessIds,
+    visibility,
+    factLevel:"observed",
+    importance:Math.min(100,42+Math.round(outcome.gossipPotential*0.35)),
+    drama:Math.max(outcome.drama,Math.round(publicSentiment.controversy*0.7)),
+    romance:outcome.romance,
+    embarrassment:Math.max(outcome.embarrassment,risk.embarrassment),
+    source:"popup-event",
+    text:`${event.title}: ${outcome.summary||outcome.customText}`,
+    tags:[
+      "popup-event","custom-response",outcome.tone,event.eventKind||"social",...outcome.tags,...risk.tags,
+      ...(gossipEligible&&outcome.gossipPotential>=45?["gossip-worthy-thread"]:[]),
+      ...(cancelRisk?["controversy","backlash-risk"]:[]),
+    ],
+    meta:{
+      popupEventId:event.id,choiceId:"custom",location:event.location||"",gossipEligible,witnessCount:witnessIds.length,participantIds,gossipPotential:outcome.gossipPotential,
+      publicSentiment,sentimentTargetIds:[w.meId],customResponse:outcome.customText,
+      socialImpact:{aura:outcome.socialImpact.aura,reputation:outcome.socialImpact.reputation,hype:outcome.socialImpact.hype,humor:outcome.socialImpact.humor,followers:followerDelta},
+    }
+  });
+  return true;
+}
+
 function snoozePopupEvent(w,eventId){const e=(w.popupEvents||[]).find((x)=>x&&x.id===eventId);if(e&&!e.resolved){e.snoozedAt=now();return true;}return false;}
 
 /* ============================================================
@@ -37508,6 +38029,10 @@ function pickSocialWaveAction(w) {
   refreshAllSocialStats(w);
 
   const candidates = [];
+  const cancelThreshold = Math.max(14, 24 / LIVE_WORLD_CANCEL_SENSITIVITY);
+  const gossipCancelThreshold = Math.max(9, 16 / LIVE_WORLD_CANCEL_SENSITIVITY);
+  const counterCancelThreshold = Math.max(20, 32 / LIVE_WORLD_CANCEL_SENSITIVITY);
+  const counterStanThreshold = Math.max(18, 24 / Math.sqrt(LIVE_WORLD_CANCEL_SENSITIVITY));
 
   socialProfiles(w).forEach(
     (target) => {
@@ -37544,9 +38069,9 @@ function pickSocialWaveAction(w) {
        */
       if (
         sentiment.cancelPressure >=
-          32 &&
+          counterCancelThreshold &&
         sentiment.stanEnergy >=
-          24 &&
+          counterStanThreshold &&
         !recentSocialWave(
           w,
           target.id,
@@ -37571,9 +38096,9 @@ function pickSocialWaveAction(w) {
 
       if (
         sentiment.cancelPressure >=
-          24 &&
+          cancelThreshold &&
         gossipPressure.negative >=
-          16 &&
+          gossipCancelThreshold &&
         !recentSocialWave(
           w,
           target.id,
@@ -39552,9 +40077,10 @@ function feedNeedsFreshPost(w) {
    * nagyságrendű ütemben él, mint a többi valódi történéscsatorna.
    * A karakterenkénti aktivitás ettől még különbözhet.
    */
+  const target = Math.max(55000, Math.round(105000 / LIVE_WORLD_ACTIVITY_MULTIPLIER));
   return (
     !last ||
-    now() - last >= 105000
+    now() - last >= target
   );
 }
 
@@ -39573,7 +40099,8 @@ function canAiInitiateRoleplay(w) {
   /* Egy aktív AI-Event elég; ne spammeljen egyszerre több meghívással. */
   if (openAiScenes >= 1) return false;
   const last = lastAiInitiatedRoleplayAt(w);
-  return !last || now() - last >= 90 * 1000;
+  const target = Math.max(55 * 1000, Math.round((90 * 1000) / LIVE_WORLD_ACTIVITY_MULTIPLIER));
+  return !last || now() - last >= target;
 }
 
 function roleplayInitiationProbeDue(w) {
@@ -40528,7 +41055,10 @@ function planAutoAction(view) {
    */
   if (
     hasRecentWidespreadGossip(view) &&
-    Math.random() < (storySettingsOf(view).dramaLevel === "chaotic" ? 0.30 : storySettingsOf(view).dramaLevel === "high" ? 0.22 : 0.14)
+    Math.random() < Math.min(
+      0.70,
+      (storySettingsOf(view).dramaLevel === "chaotic" ? 0.30 : storySettingsOf(view).dramaLevel === "high" ? 0.22 : 0.14) * LIVE_WORLD_CANCEL_SENSITIVITY
+    )
   ) {
     const wave =
       pickSocialWaveAction(
@@ -44985,6 +45515,15 @@ const signOut = useCallback(async () => {
             at:now(),
           });
 
+          requestSimulationAction(
+            mkAction(
+              "world-full",
+              `popup-followup:${event.id}:${choice.id}`,
+              { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id },
+              "event"
+            )
+          );
+
           return true;
         }
 
@@ -45073,6 +45612,15 @@ const signOut = useCallback(async () => {
             at:now(),
           });
 
+          requestSimulationAction(
+            mkAction(
+              "world-full",
+              `popup-followup:${event.id}:${choice.id}`,
+              { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id, postId },
+              "event"
+            )
+          );
+
           return true;
         }
 
@@ -45087,6 +45635,15 @@ const signOut = useCallback(async () => {
             n,
             event.id,
             choice.id
+          )
+        );
+
+        requestSimulationAction(
+          mkAction(
+            "world-full",
+            `popup-followup:${event.id}:${choice.id}`,
+            { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id },
+            "event"
           )
         );
 
@@ -45116,7 +45673,78 @@ const signOut = useCallback(async () => {
     [
       update,
       tt,
+      requestSimulationAction,
     ]
+  );
+
+  const enactPopupReroll = useCallback(
+    async (event) => {
+      if (!event) return false;
+      const view = viewRef.current;
+      if (!view) return false;
+      const used = Math.max(0, Number(event.rerollsUsed) || 0);
+      const max = Math.max(1, Math.min(5, Number(event.maxRerolls) || LIVE_WORLD_MAX_POPUP_REROLLS));
+      if (used >= max) return false;
+
+      try {
+        const raw = await genPopupEventReroll(view, event);
+        const preview = normalizePopupEvent(view, popupSeedFromEvent(event), raw);
+        if (!preview) {
+          setErr(tt("Most nem sikerült új helyzetet dobni.", "Couldn't reroll the situation right now."));
+          return false;
+        }
+        update((n) => {
+          applyPopupReroll(n, event.id, raw);
+        });
+        return true;
+      } catch (e) {
+        console.error("Popup reroll failed:", e);
+        setErr((e && e.message) || tt("Most nem sikerült új helyzetet dobni.", "Couldn't reroll the situation right now."));
+        return false;
+      }
+    },
+    [update, tt]
+  );
+
+  const enactPopupCustomResponse = useCallback(
+    async (event, customText) => {
+      const text = String(customText || "").trim();
+      if (!event || !text) return false;
+      const view = viewRef.current;
+      if (!view) return false;
+
+      try {
+        const raw = await genPopupCustomOutcome(view, event, text);
+        const preview = normalizePopupCustomOutcome(view, event, text, raw);
+        if (!preview) {
+          setErr(tt("A saját reakció következményeit most nem sikerült feldolgozni.", "Couldn't process the consequences of your custom response."));
+          return false;
+        }
+
+        update((n) => {
+          const ok = resolvePopupCustomResponse(n, event.id, text, raw) === true;
+          if (ok) {
+            simEnqueue(
+              n,
+              mkAction(
+                "world-full",
+                `popup-custom-followup:${event.id}`,
+                { trigger:"popup-custom-response", popupEventId:event.id },
+                "event"
+              )
+            );
+          }
+        });
+
+        setSimPulse((x) => x + 1);
+        return true;
+      } catch (e) {
+        console.error("Popup custom response failed:", e);
+        setErr((e && e.message) || tt("A saját reakció következményeit most nem sikerült feldolgozni.", "Couldn't process the consequences of your custom response."));
+        return false;
+      }
+    },
+    [update, tt]
   );
 
   /*
@@ -45966,6 +46594,8 @@ const signOut = useCallback(async () => {
           event={activePopup}
           update={update}
           onChoose={enactPopupChoice}
+          onReroll={enactPopupReroll}
+          onCustom={enactPopupCustomResponse}
         />
       ) : null}
 
