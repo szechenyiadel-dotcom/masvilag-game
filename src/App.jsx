@@ -7164,6 +7164,85 @@ function socialCommentLooksPlayful(value) {
   return /(?:😭|😂|🤣|💀|🙄|🤡|lmao|lol|jk|pls|pleaseee|girl|babe|bestie)/i.test(text);
 }
 
+/*
+ * PHOTO-FIRST SOCIAL CONTEXT
+ *
+ * A normal selfie / outfit / travel / beauty photo is not itself "drama".
+ * Close friends should not hallucinate a fight, scandal, attention-seeking or
+ * contemptuous roast merely because a sarcastic trait exists in their sheet.
+ * Playful teasing is still allowed when it is actually anchored to the photo,
+ * caption or a fresh shared joke.
+ */
+function postLooksLikePersonalPhotoShowcase(post) {
+  if (!post || !(post.imageId || post.image)) return false;
+
+  const caption = String(post.text || "").replace(/\s+/g, " ").trim();
+  const desc = String(post.imageDescription || "").replace(/\s+/g, " ").trim();
+  const combined = `${caption} ${desc}`.toLowerCase();
+
+  const explicitDrama = /\b(?:fight|fighting|argument|arguing|yelling|crying|blood|injur|police|arrest|breakup|broke\s+up|cheat|scandal|exposed|callout|threat|hospital|weapon|funeral|funerary|veszeked|vereked|sír|sírás|vér|sérül|rendőr|szakítás|megcsal|botrány|lebuk)\b/i.test(combined);
+  if (explicitDrama) return false;
+
+  const personalVisual = /\b(?:selfie|portrait|woman|girl|man|boy|person|people|face|hair|makeup|outfit|dress|bikini|swimsuit|shirt|jacket|beach|pool|sea|ocean|sunset|vacation|travel|posing|pose|standing|sitting|smiling|photo|picture|fotó|kép|szelfi|nő|lány|férfi|haj|smink|ruha|bikini|strand|tenger|nyaral)\b/i.test(combined);
+
+  /* Image-only posts are treated as visual showcase unless the vision text says otherwise. */
+  return personalVisual || !caption;
+}
+
+function socialCommentLooksUngroundedMockingLabel(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+
+  return /\b(?:drama\s*queen|attention\s*seeker|pick\s*me|messy|chaos\s*queen|troublemaker|here\s+we\s+go|of\s+course\s+you\s+would|desperate|thirsty|narcissist|main\s+character\s+syndrome|felt\s+the\s+need\s+to|trying\s+too\s+hard|dráma\s*királynő|figyelemhajhász|feltűnési\s+viszketegség)\b/i.test(text);
+}
+
+function socialCommentContradictsPostContext(w, actorId, post, targetId, text, parentId = null) {
+  if (!w || !actorId || !post || !targetId || actorId === targetId) return false;
+  if (parentId) return false;
+  if (targetId !== post.authorId) return false;
+
+  const tier = relationshipFilterTier(getRel(w, actorId, targetId));
+  const photoShowcase = postLooksLikePersonalPhotoShowcase(post);
+
+  if (!photoShowcase) return false;
+
+  /*
+   * This deliberately ignores the generic "💀 means playful" escape hatch.
+   * "drama queen 💀" is still semantically an ungrounded mock label when the
+   * actual post is just a normal attractive/travel photo.
+   */
+  if (
+    (tier === "good" || tier === "close") &&
+    socialCommentLooksUngroundedMockingLabel(text) &&
+    !socialCommentLooksWarmPraise(text)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function friendPhotoReactionContract(w, cast, post) {
+  if (!postLooksLikePersonalPhotoShowcase(post)) return "";
+
+  const authorId = post && post.authorId;
+  const author = nameOfIn(w, authorId);
+  const rows = (cast || [])
+    .map((c) => {
+      if (!c || !c.id || c.id === authorId) return "";
+      const tier = relationshipFilterTier(getRel(w, c.id, authorId));
+      if (tier !== "good" && tier !== "close") return "";
+      return `- ${c.name} → ${author}: ${tier}. On this normal photo, default to visibly friendly/familiar reception: genuine hype, affectionate shorthand, warm teasing tied to something actually visible, a nickname, reciprocal affection, or simply LIKE/IGNORE. Do NOT invent "drama queen", "attention seeker", "pick me", "messy" or other contempt labels unless the caption/current event truly gives a concrete reason.`;
+    })
+    .filter(Boolean);
+
+  if (!rows.length) return "";
+
+  return `PHOTO-FIRST FRIENDSHIP CONTRACT:
+${rows.join("\n")}
+A skull/laughing emoji does NOT magically make an unrelated insult relationship-consistent. Friendly roast must be grounded in the actual photo/caption or a fresh shared joke.`;
+}
+
 function socialCommentContradictsRelationship(w, actorId, targetId, text) {
   if (!w || !actorId || !targetId || actorId === targetId) return false;
   const tier = relationshipFilterTier(getRel(w, actorId, targetId));
@@ -13044,7 +13123,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v48-identity-alias-ownership";
+const BUILD_VERSION = "v49-photo-social-context";
 
 const AUTO = "masvilag:auto";
 /*
@@ -19222,6 +19301,14 @@ NYILVÁNOS VS. PRIVÁT REALIZMUS:
 - Egy szarkasztikus vagy nyers barát is lehet kedves: a stílusa maradhat csípős, de ne változtasd a szeretetet megvetéssé. A “baráti roast” után is legyen egyértelmű, hogy ez közelség, nem ellenségeskedés.
 - Ha a poszt kifejezetten jó hír, szelfi, outfit, siker vagy sebezhető pillanat, a valódi barátok gyakran röviden támogatnak/hype-olnak. Ne legyen minden pozitív kapcsolat indokolatlanul hűvös csak azért, hogy “edgy” maradjon.
 
+${friendPhotoReactionContract(w, cast, post)}
+
+FOTÓ-ELSŐ SZEMANTIKA:
+- Ha a poszt lényegében egy normál szelfi / outfit / bikini / travel / beauty fotó és nincs drámai caption vagy tényleges konfliktus, NE találj ki hozzá botrányt, személyiségvádat vagy kapcsolatdrámát.
+- Ilyen fotónál a komment legyen a KÉPHEZ kötve: kinézet, outfit, helyszín, vibe, utazás, fotóminőség, valódi közös poén, vagy like/ignore.
+- A "drama queen 💀", "attention seeker", "pick me", "messy", "here we go" jellegű sor NEM képföldelt reakció önmagában. Csak akkor megengedett, ha a caption, a látható jelenet vagy egy FRISS konkrét közös esemény ténylegesen ezt indokolja.
+- Közeli barátnál a szarkazmus nem írhatja felül a kapcsolatot: a roastból is olvasható legyen a szeretet, és legyen konkrét oka.
+
 KONKRÉT POSZTHOZ KÖTÉS:
 - Minden új kommentnek legyen konkrét kiváltó oka EBBEN a posztban: egy szó, kép-részlet, implikáció, korábbi thread-sor vagy ténylegesen releváns közös emlék.
 - Ha a komment csak egy általános bók/reakció lenne, ami száz másik poszt alatt is ugyanúgy állhatna, inkább írd újra vagy legyen like/ignore.
@@ -19425,6 +19512,50 @@ Formátum:
     out && typeof out === "object"
       ? out
       : { comments: [], likes: [], perceptions: [], changes: [], events: [] };
+
+  /*
+   * Deterministic photo-context guard. If the model still produces an
+   * ungrounded contempt label toward a friend on a normal photo, do not let
+   * that hallucinated social meaning enter the feed/memory/gossip graph.
+   * Convert the failed comment into a like instead of inventing a new line.
+   */
+  if (postLooksLikePersonalPhotoShowcase(post)) {
+    const fallbackLikes = new Set(
+      Array.isArray(normalizedOut.likes)
+        ? normalizedOut.likes.map(String)
+        : []
+    );
+
+    normalizedOut.comments = safeAiComments(normalizedOut).filter((row) => {
+      const actorId = findChar(
+        w,
+        row && (row.id !== undefined ? row.id : row.name)
+      );
+      const replyTag = String(
+        (row && (row.reply_to !== undefined ? row.reply_to : row.replyTo)) || ""
+      ).trim();
+
+      if (
+        actorId &&
+        !replyTag &&
+        socialCommentContradictsPostContext(
+          w,
+          actorId,
+          post,
+          post.authorId,
+          row && row.text,
+          null
+        )
+      ) {
+        fallbackLikes.add(actorId);
+        return false;
+      }
+
+      return true;
+    });
+
+    normalizedOut.likes = [...fallbackLikes];
+  }
 
   normalizedOut.__castIds =
     cast.map(
@@ -20296,6 +20427,20 @@ if (
     who,
     targetId,
     body
+  )
+) {
+  return;
+}
+
+if (
+  targetId &&
+  socialCommentContradictsPostContext(
+    n,
+    who,
+    p,
+    targetId,
+    body,
+    parent
   )
 ) {
   return;
