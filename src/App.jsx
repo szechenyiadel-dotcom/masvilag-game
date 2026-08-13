@@ -945,6 +945,189 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 
 /* ---------- MOBILOS ACTION GOMBOK ---------- */
 
+/* ---------- ROLEPLAY / EVENT CREATOR ---------- */
+
+.scene-create-sheet {
+  display:flex;
+  flex-direction:column;
+  width:min(680px,calc(100vw - 28px));
+  max-width:680px;
+  max-height:min(88vh,860px);
+  overflow:hidden;
+  padding:0;
+}
+
+.scene-create-header {
+  flex:none;
+  padding:16px 18px 12px;
+  border-bottom:1px solid var(--line);
+  background:var(--ink);
+}
+
+.scene-create-header h2 {
+  margin:2px 0 0;
+  font-size:20px;
+}
+
+.scene-create-kicker {
+  color:var(--rose);
+  font-size:9px;
+  font-weight:800;
+  letter-spacing:.14em;
+}
+
+.scene-create-scroll {
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:hidden;
+  padding:4px 18px 20px;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;
+}
+
+.scene-create-section {
+  margin-top:14px;
+}
+
+.scene-create-section label.f {
+  display:block;
+  margin:12px 0 6px;
+}
+
+.scene-create-section .i {
+  width:100%;
+  box-sizing:border-box;
+}
+
+.scene-create-setting,
+.scene-create-goal {
+  min-height:88px;
+  resize:vertical;
+}
+
+.scene-create-section-head {
+  align-items:center;
+  gap:8px;
+}
+
+.scene-create-count {
+  color:var(--muted);
+  font-size:10.5px;
+  white-space:nowrap;
+}
+
+.scene-cast-search {
+  margin-top:9px;
+}
+
+.scene-cast-picker {
+  display:flex;
+  flex-wrap:wrap;
+  gap:7px;
+  margin-top:9px;
+}
+
+.scene-cast-chip {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  min-height:38px;
+  max-width:100%;
+  border:1px solid var(--line);
+  border-radius:999px;
+  background:var(--raised);
+  color:var(--bone);
+  padding:7px 10px 7px 8px;
+  font:inherit;
+  cursor:pointer;
+  touch-action:manipulation;
+}
+
+.scene-cast-chip.selected {
+  border-color:var(--rose);
+  background:rgba(190,54,107,.16);
+}
+
+.scene-cast-check {
+  display:grid;
+  place-items:center;
+  width:20px;
+  height:20px;
+  flex:none;
+  border-radius:50%;
+  background:rgba(255,255,255,.06);
+  color:var(--rose);
+  font-size:12px;
+  font-weight:800;
+}
+
+.scene-cast-name {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.scene-idea-btn {
+  margin-top:14px;
+  min-height:46px;
+}
+
+.scene-create-advanced {
+  border:1px solid var(--line);
+  border-radius:12px;
+  overflow:hidden;
+  background:rgba(255,255,255,.015);
+}
+
+.scene-create-advanced-toggle {
+  width:100%;
+  min-height:46px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 12px;
+  border:0;
+  background:transparent;
+  color:var(--bone);
+  font:inherit;
+  font-weight:650;
+  cursor:pointer;
+}
+
+.scene-create-chevron {
+  color:var(--rose);
+  font-size:20px;
+  line-height:1;
+}
+
+.scene-create-advanced-body {
+  padding:0 12px 12px;
+  border-top:1px solid var(--line);
+}
+
+.scene-create-pair {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 140px;
+  gap:9px;
+  align-items:end;
+}
+
+.scene-create-actions {
+  flex:none;
+  padding:10px 18px 14px;
+  padding-bottom:max(14px,env(safe-area-inset-bottom));
+  border-top:1px solid var(--line);
+  background:rgba(10,9,16,.98);
+  backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);
+}
+
+.scene-create-actions .btn {
+  min-height:50px;
+}
+
 @media (max-width: 768px) {
 
   .mobile-action-bar {
@@ -1250,147 +1433,119 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     min-height: 42px;
   }
 
-/* ---------- ROLE PLAY MOBIL ---------- */
+/* ---------- ROLEPLAY / EVENT CREATOR MOBILE ---------- */
+  .scene-create-scrim {
+    position:fixed !important;
+    inset:0 0 72px 0 !important;
+    width:100% !important;
+    height:auto !important;
+    z-index:150 !important;
+    display:block !important;
+    padding:0 !important;
+    margin:0 !important;
+    overflow:hidden !important;
+    background:var(--ink) !important;
+    backdrop-filter:none !important;
+    -webkit-backdrop-filter:none !important;
+  }
 
-.scene-create-scrim {
-  position: fixed !important;
+  .scene-create-sheet {
+    position:relative !important;
+    width:100% !important;
+    max-width:none !important;
+    height:100% !important;
+    max-height:none !important;
+    margin:0 !important;
+    padding:0 !important;
+    border:0 !important;
+    border-radius:0 !important;
+    background:var(--ink) !important;
+  }
 
-  top: 0 !important;
-  left: 0 !important;
-  right: 0 !important;
-  bottom: 72px !important;
+  .scene-create-header {
+    padding:calc(10px + env(safe-area-inset-top)) 14px 10px !important;
+  }
 
-  width: 100% !important;
-  height: auto !important;
+  .scene-create-header h2 {
+    font-size:19px !important;
+  }
 
-  z-index: 50 !important;
+  .scene-create-close {
+    min-width:42px !important;
+    min-height:42px !important;
+  }
 
-  display: block !important;
+  .scene-create-scroll {
+    padding:2px 14px 18px !important;
+  }
 
-  padding: 0 !important;
-  margin: 0 !important;
+  .scene-create-section {
+    margin-top:10px !important;
+  }
 
-  overflow: hidden !important;
+  .scene-create-section label.f {
+    margin-top:10px !important;
+    margin-bottom:5px !important;
+  }
 
-  background: var(--ink) !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
+  .scene-create-section .i,
+  .scene-cast-search {
+    min-height:44px !important;
+    font-size:16px !important; /* iOS: ne zoomoljon input fókusznál */
+  }
 
-.scene-create-sheet {
-  position: relative !important;
+  .scene-create-setting,
+  .scene-create-goal {
+    min-height:76px !important;
+    max-height:150px;
+  }
 
-  display: block !important;
+  .scene-cast-picker {
+    flex-wrap:nowrap !important;
+    overflow-x:auto !important;
+    overflow-y:hidden !important;
+    margin-left:-14px;
+    margin-right:-14px;
+    padding:1px 14px 8px;
+    scroll-padding-left:14px;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:none;
+  }
 
-  width: 100% !important;
-  max-width: none !important;
+  .scene-cast-picker::-webkit-scrollbar {
+    display:none;
+  }
 
-  height: 100% !important;
-  max-height: none !important;
+  .scene-cast-chip {
+    flex:0 0 auto;
+    min-height:42px;
+    max-width:210px;
+  }
 
-  margin: 0 !important;
+  .scene-idea-btn {
+    min-height:48px !important;
+  }
 
-  padding: 18px 16px 100px !important;
-  padding-top: max(18px, env(safe-area-inset-top)) !important;
+  .scene-create-pair {
+    grid-template-columns:1fr !important;
+    gap:0 !important;
+  }
 
-  box-sizing: border-box !important;
+  .scene-create-advanced-toggle {
+    min-height:48px;
+    text-align:left;
+  }
 
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
+  .scene-create-actions {
+    padding:9px 14px !important;
+    padding-bottom:calc(9px + env(safe-area-inset-bottom)) !important;
+  }
 
-  border: none !important;
-  border-radius: 0 !important;
+  .scene-create-actions .btn {
+    min-height:52px !important;
+    font-size:14px;
+  }
 
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
-}
-
-.scene-create-sheet .between {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-
-  width: 100% !important;
-}
-
-.scene-create-sheet label.f {
-  display: block !important;
-
-  width: 100% !important;
-
-  margin-top: 18px !important;
-  margin-bottom: 6px !important;
-}
-
-.scene-create-sheet .i {
-  display: block !important;
-
-  width: 100% !important;
-  min-width: 0 !important;
-  max-width: 100% !important;
-
-  box-sizing: border-box !important;
-}
-
-.scene-create-sheet textarea.i {
-  min-height: 110px !important;
-}
-
-.scene-create-sheet .row {
-  display: flex !important;
-
-  flex-direction: row !important;
-  flex-wrap: wrap !important;
-
-  width: 100% !important;
-
-  gap: 8px !important;
-}
-
-.scene-create-sheet .row .btn {
-  flex: 0 0 auto !important;
-
-  width: auto !important;
-  min-width: 0 !important;
-  max-width: 100% !important;
-
-  min-height: 42px !important;
-
-  white-space: normal !important;
-  word-break: normal !important;
-}
-
-.scene-create-sheet > .btn.full {
-  display: flex !important;
-
-  width: 100% !important;
-  min-height: 48px !important;
-}
-
-.scene-create-sheet .mobile-action-bar {
-  position: sticky !important;
-
-  left: 0 !important;
-  right: 0 !important;
-  bottom: 0 !important;
-
-  z-index: 100 !important;
-
-  width: calc(100% + 32px) !important;
-
-  margin-left: -16px !important;
-  margin-right: -16px !important;
-  margin-top: 20px !important;
-
-  padding: 10px 16px !important;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom)) !important;
-
-  box-sizing: border-box !important;
-
-  background: var(--ink) !important;
-
-  border-top: 1px solid var(--line);
-}
 }
 `;
 
@@ -13075,7 +13230,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v49-self-name-vocative-guard";
+const BUILD_VERSION = "v50-popup-events-mobile-roleplay";
 
 const AUTO = "masvilag:auto";
 /*
@@ -14067,6 +14222,10 @@ mediaAccounts: {
  * Random / Pop-up események.
  */
 popupEvents: [],
+popupRuntime: {
+  startedAt: now(),
+  lastGeneratedAt: 0,
+},
 
 accounts: {},
 players: {},
@@ -25557,7 +25716,16 @@ function SceneNew({ w, onClose, onCreate, setErr }) {
   const [rewardItem, setRewardItem] = useState("");
   const [ids, setIds] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [castQuery, setCastQuery] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(() =>
+    typeof window === "undefined" ? true : window.innerWidth > 768
+  );
   const toggle = (id) => setIds((p) => (p.indexOf(id) >= 0 ? p.filter((x) => x !== id) : p.concat(id)));
+  const visibleChars = (w.chars || []).filter((c) => {
+    const q = castQuery.trim().toLowerCase();
+    if (!q) return true;
+    return `${c.name || ""} ${c.username || ""} ${c.nickname || ""}`.toLowerCase().includes(q);
+  });
 
   const idea = async () => {
     setBusy(true);
@@ -25604,127 +25772,213 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
     }}
   >
     <div className="sheet scene-create-sheet">
-
-      <div className="between">
-        <h2 style={{ fontSize: 20 }}>
-          {tt("Új Event", "New Event")}
-        </h2>
-
-        <button
-          className="btn tiny ghost"
-          onClick={onClose}
-        >
-          <X size={14} />
+      <div className="scene-create-header between">
+        <div>
+          <div className="scene-create-kicker">{tt("ROLEPLAY / EVENT", "ROLEPLAY / EVENT")}</div>
+          <h2>{tt("Új Event", "New Event")}</h2>
+        </div>
+        <button className="btn tiny ghost scene-create-close" onClick={onClose} aria-label={tt("Bezárás", "Close")}>
+          <X size={16} />
         </button>
       </div>
 
-      <label className="f">{tt("Cím", "Title")}</label>
-        <input className="i" value={title} placeholder={tt("pl. A parti a régi malomban", "e.g. The party at the old mill")} onChange={(e) => setTitle(e.target.value)} />
+      <div className="scene-create-scroll">
+        <section className="scene-create-section">
+          <label className="f">{tt("Cím", "Title")}</label>
+          <input
+            className="i"
+            value={title}
+            placeholder={tt("pl. A parti a régi malomban", "e.g. The party at the old mill")}
+            onChange={(e) => setTitle(e.target.value)}
+          />
 
-        <label className="f">{tt("Helyzet — hol, mikor, mi a tét", "Situation — where, when, what's at stake")}</label>
-        <textarea className="i" value={setting} placeholder={tt("Éjfél után, a hangfalak még szólnak. Ryan egész este kerül téged, Nora pedig figyel.", "After midnight, the speakers are still going. Ryan has been avoiding you all night, and Nora is watching.")}
-          onChange={(e) => setSetting(e.target.value)} />
+          <label className="f">{tt("Helyzet — hol, mikor, mi a tét", "Situation — where, when, what's at stake")}</label>
+          <textarea
+            className="i scene-create-setting"
+            value={setting}
+            placeholder={tt(
+              "Éjfél után, a hangfalak még szólnak. Ryan egész este kerül téged, Nora pedig figyel.",
+              "After midnight, the speakers are still going. Ryan has been avoiding you all night, and Nora is watching."
+            )}
+            onChange={(e) => setSetting(e.target.value)}
+          />
 
-        <label className="f">{tt("Event célja", "Event goal")}</label>
-        <textarea
-          className="i"
-          value={goal}
-          placeholder={tt("pl. Érd el, hogy Nora elmondja, mit tud a tavalyi balesetről.", "e.g. Get Nora to reveal what she knows about last year's accident.")}
-          onChange={(e) => setGoal(e.target.value)}
-        />
+          <label className="f">{tt("Event célja", "Event goal")}</label>
+          <textarea
+            className="i scene-create-goal"
+            value={goal}
+            placeholder={tt(
+              "pl. Érd el, hogy Nora elmondja, mit tud a tavalyi balesetről.",
+              "e.g. Get Nora to reveal what she knows about last year's accident."
+            )}
+            onChange={(e) => setGoal(e.target.value)}
+          />
+        </section>
 
-        <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
-          <div style={{ flex: 1 }}>
-            <label className="f">{tt("Limit típusa", "Limit type")}</label>
-            <select className="i" value={limitMode} onChange={(e) => setLimitMode(e.target.value === "minutes" ? "minutes" : "turns")}>
-              <option value="turns">{tt("Üzenetszám", "Message count")}</option>
-              <option value="minutes">{tt("Időtartam", "Duration")}</option>
-            </select>
+        <section className="scene-create-section scene-create-cast-section">
+          <div className="between scene-create-section-head">
+            <label className="f" style={{ margin: 0 }}>
+              {tt("Kik vannak jelen", "Who's present")}
+            </label>
+            <span className="scene-create-count">
+              {tt(`${ids.length} kiválasztva`, `${ids.length} selected`)}
+            </span>
           </div>
-          <div style={{ width: 130 }}>
-            <label className="f">{limitMode === "minutes" ? tt("Perc", "Minutes") : tt("Üzenet", "Messages")}</label>
+
+          {(w.chars || []).length > 7 ? (
             <input
-              className="i"
-              type="number"
-              min={limitMode === "minutes" ? 5 : 4}
-              max={limitMode === "minutes" ? 240 : 60}
-              value={limitMode === "minutes" ? targetMinutes : targetTurns}
-              onChange={(e) => {
-                const v = Number(e.target.value) || 0;
-                if (limitMode === "minutes") setTargetMinutes(v);
-                else setTargetTurns(v);
-              }}
+              className="i scene-cast-search"
+              value={castQuery}
+              placeholder={tt("Karakter keresése…", "Search characters…")}
+              onChange={(e) => setCastQuery(e.target.value)}
             />
-          </div>
-        </div>
+          ) : null}
 
-        <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
-          <div style={{ flex: 1 }}>
-            <label className="f">{tt("Egyedi jutalomtárgy", "Unique reward item")}</label>
-            <input className="i" value={rewardItem} placeholder={tt("pl. Nora ezüst medálja", "e.g. Nora's silver pendant")} onChange={(e) => setRewardItem(e.target.value)} />
+          <div className="scene-cast-picker" role="list">
+            {visibleChars.map((c) => {
+              const selected = ids.indexOf(c.id) >= 0;
+              return (
+                <button
+                  type="button"
+                  key={c.id}
+                  className={`scene-cast-chip ${selected ? "selected" : ""}`}
+                  aria-pressed={selected}
+                  onClick={() => toggle(c.id)}
+                >
+                  <span className="scene-cast-check">{selected ? "✓" : "+"}</span>
+                  <span className="scene-cast-name">{c.name}</span>
+                </button>
+              );
+            })}
           </div>
-          <div style={{ width: 130 }}>
-            <label className="f">Affection +</label>
-            <input className="i" type="number" min={0} max={50} value={rewardAffection} onChange={(e) => setRewardAffection(Number(e.target.value) || 0)} />
-          </div>
-        </div>
 
-        <label className="f">{tt("Kik vannak jelen — koppints a nevekre", "Who's present — tap the names")}</label>
-        <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
-          {w.chars.map((c) => (
-            <button key={c.id} className={"btn tiny " + (ids.indexOf(c.id) >= 0 ? "primary" : "ghost")} onClick={() => toggle(c.id)}>
-              {c.name}
-            </button>
-          ))}
-        </div>
-        {w.chars.length === 0 && <p className="hint" style={{ marginTop: 8 }}>{tt("Előbb hozz létre karaktereket.", "First create some characters.")}</p>}
+          {visibleChars.length === 0 && (w.chars || []).length > 0 ? (
+            <p className="hint" style={{ marginTop: 8 }}>
+              {tt("Nincs ilyen karakter.", "No matching character.")}
+            </p>
+          ) : null}
+          {(w.chars || []).length === 0 ? (
+            <p className="hint" style={{ marginTop: 8 }}>
+              {tt("Előbb hozz létre karaktereket.", "First create some characters.")}
+            </p>
+          ) : null}
+        </section>
 
-        <button className="btn full" style={{ marginTop: 14 }} onClick={idea} disabled={busy}>
-          {busy ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} color="var(--gold)" />} {tt("Event-ötlet kérése", "Ask for an Event idea")}
+        <button className="btn full scene-idea-btn" onClick={idea} disabled={busy}>
+          {busy ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} color="var(--gold)" />}
+          {tt("AI Event-ötlet", "AI Event idea")}
         </button>
 
-       <div className="mobile-action-bar" style={{ marginTop: 8 }}>
-  <button
-    className="btn primary full"
-    disabled={!ids.length || !goal.trim()}
-    onClick={() => {
-      onCreate({
-        id: uid(),
-        title: title.trim() || tt("Névtelen jelenet", "Unnamed scene"),
-        setting: setting.trim(),
-        cast: ids,
-        turns: [],
-        playerTurnJournal: [],
-        open: true,
-        goal: goal.trim(),
-        limitMode,
-        targetTurns: Math.max(4, Math.min(60, Math.round(Number(targetTurns) || 16))),
-        targetMinutes: Math.max(5, Math.min(240, Math.round(Number(targetMinutes) || 20))),
-        rewardAffection: Math.max(0, Math.min(50, Math.round(Number(rewardAffection) || 0))),
-        rewardItem: rewardItem.trim() || tt(`${title.trim() || "Event"} emléktárgya`, `${title.trim() || "Event"} keepsake`),
-        rewardGranted: false,
-        rewardAffectionGranted: 0,
-        rewardItemGranted: "",
-        statusUpdates: [],
-        success: null,
-        earlyEnd: false,
-        startedAt: now(),
-        eventKind: detectSceneEventKind({ title: title.trim(), setting: setting.trim() }),
-        ts: now()
-      });
-    }}
-  >
-    {!ids.length
-      ? tt("Válassz legalább egy szereplőt", "Choose at least one character")
-      : !goal.trim()
-        ? tt("Adj meg egy konkrét Event-célt", "Set a concrete Event goal")
-        : tt(
-            `Event indítása (${ids.length} szereplő)`,
-            `Start Event (${ids.length} characters)`
-          )}
-  </button>
-</div>
+        <section className="scene-create-section scene-create-advanced">
+          <button
+            type="button"
+            className="scene-create-advanced-toggle"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            aria-expanded={advancedOpen}
+          >
+            <span>{tt("Limit és jutalom", "Limit & reward")}</span>
+            <span className="scene-create-chevron">{advancedOpen ? "−" : "+"}</span>
+          </button>
 
+          {advancedOpen ? (
+            <div className="scene-create-advanced-body">
+              <div className="scene-create-pair">
+                <div>
+                  <label className="f">{tt("Limit típusa", "Limit type")}</label>
+                  <select
+                    className="i"
+                    value={limitMode}
+                    onChange={(e) => setLimitMode(e.target.value === "minutes" ? "minutes" : "turns")}
+                  >
+                    <option value="turns">{tt("Üzenetszám", "Message count")}</option>
+                    <option value="minutes">{tt("Időtartam", "Duration")}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="f">{limitMode === "minutes" ? tt("Perc", "Minutes") : tt("Üzenet", "Messages")}</label>
+                  <input
+                    className="i"
+                    type="number"
+                    min={limitMode === "minutes" ? 5 : 4}
+                    max={limitMode === "minutes" ? 240 : 60}
+                    value={limitMode === "minutes" ? targetMinutes : targetTurns}
+                    onChange={(e) => {
+                      const v = Number(e.target.value) || 0;
+                      if (limitMode === "minutes") setTargetMinutes(v);
+                      else setTargetTurns(v);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="scene-create-pair">
+                <div>
+                  <label className="f">{tt("Egyedi jutalomtárgy", "Unique reward item")}</label>
+                  <input
+                    className="i"
+                    value={rewardItem}
+                    placeholder={tt("pl. Nora ezüst medálja", "e.g. Nora's silver pendant")}
+                    onChange={(e) => setRewardItem(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="f">Affection +</label>
+                  <input
+                    className="i"
+                    type="number"
+                    min={0}
+                    max={50}
+                    value={rewardAffection}
+                    onChange={(e) => setRewardAffection(Number(e.target.value) || 0)}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      </div>
+
+      <div className="scene-create-actions">
+        <button
+          className="btn primary full"
+          disabled={!ids.length || !goal.trim()}
+          onClick={() => {
+            onCreate({
+              id: uid(),
+              title: title.trim() || tt("Névtelen jelenet", "Unnamed scene"),
+              setting: setting.trim(),
+              cast: ids,
+              turns: [],
+              playerTurnJournal: [],
+              open: true,
+              goal: goal.trim(),
+              limitMode,
+              targetTurns: Math.max(4, Math.min(60, Math.round(Number(targetTurns) || 16))),
+              targetMinutes: Math.max(5, Math.min(240, Math.round(Number(targetMinutes) || 20))),
+              rewardAffection: Math.max(0, Math.min(50, Math.round(Number(rewardAffection) || 0))),
+              rewardItem: rewardItem.trim() || tt(
+                `${title.trim() || "Event"} emléktárgya`,
+                `${title.trim() || "Event"} keepsake`
+              ),
+              rewardGranted: false,
+              rewardAffectionGranted: 0,
+              rewardItemGranted: "",
+              statusUpdates: [],
+              success: null,
+              earlyEnd: false,
+              startedAt: now(),
+              eventKind: detectSceneEventKind({ title: title.trim(), setting: setting.trim() }),
+              ts: now(),
+            });
+          }}
+        >
+          {!ids.length
+            ? tt("Válassz szereplőt", "Choose a character")
+            : !goal.trim()
+              ? tt("Adj meg Event-célt", "Set an Event goal")
+              : tt(`Event indítása · ${ids.length}`, `Start Event · ${ids.length}`)}
+        </button>
+      </div>
     </div>
   </div>
 );
@@ -31172,6 +31426,7 @@ function ensureSimState(w) {
       roleplayAttemptAt: 0,
       dmAttemptAt: 0,
       groupAttemptAt: 0,
+      popupAttemptAt: 0,
       lastError: "",
     };
   }
@@ -31187,6 +31442,7 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.roleplayAttemptAt))) w.sim.roleplayAttemptAt = 0;
   if (!Number.isFinite(Number(w.sim.dmAttemptAt))) w.sim.dmAttemptAt = 0;
   if (!Number.isFinite(Number(w.sim.groupAttemptAt))) w.sim.groupAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.popupAttemptAt))) w.sim.popupAttemptAt = 0;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -31489,6 +31745,35 @@ function ensureSocialSimulationState(w) {
    */
   if (!Array.isArray(w.popupEvents)) {
     w.popupEvents = [];
+  }
+
+  /*
+   * v50 POPUP WATCHDOG
+   *
+   * A régi popup-rendszer kizárólag friss, magas pontszámú socialEvents
+   * eseményekből tudott seedet választani. Ha ilyen épp nem volt, a
+   * "random" felvillanó helyzetek teljesen eltűntek. Külön runtime-óra
+   * tartja életben az ambient / váratlan eseményeket is.
+   */
+  if (
+    !w.popupRuntime ||
+    typeof w.popupRuntime !== "object" ||
+    Array.isArray(w.popupRuntime)
+  ) {
+    w.popupRuntime = {};
+  }
+
+  if (!Number.isFinite(Number(w.popupRuntime.startedAt))) {
+    w.popupRuntime.startedAt = now();
+  }
+
+  if (!Number.isFinite(Number(w.popupRuntime.lastGeneratedAt))) {
+    w.popupRuntime.lastGeneratedAt = Math.max(
+      0,
+      ...(w.popupEvents || []).map((event) =>
+        Number(event && (event.ts || event.resolvedAt || event.snoozedAt)) || 0
+      )
+    );
   }
 
   return w;
@@ -34607,14 +34892,121 @@ function publishRumorEvolution(w,parentPostId,raw){
   return post;
 }
 
-function pendingPopupEvent(w){return (w.popupEvents||[]).find((e)=>e&&!e.resolved)||null;}
-function currentPopupEvent(w){const e=pendingPopupEvent(w);if(!e)return null;const s=Number(e.snoozedAt)||0;return s&&now()-s<2*3600e3?null:e;}
-function pickPopupEventSeed(w){
-  if(!w || !w.meId || pendingPopupEvent(w)) return null;
+function popupIsTemporarilySnoozed(event, at = now()) {
+  if (!event || event.resolved) return false;
+  const snoozedAt = Number(event.snoozedAt) || 0;
+  return Boolean(snoozedAt && at - snoozedAt < 2 * 3600e3);
+}
+
+function pendingPopupEvent(w) {
+  return (w.popupEvents || []).find((event) => event && !event.resolved) || null;
+}
+
+function currentPopupEvent(w) {
+  const at = now();
+  return (
+    (w.popupEvents || []).find(
+      (event) =>
+        event &&
+        !event.resolved &&
+        !popupIsTemporarilySnoozed(event, at)
+    ) || null
+  );
+}
+
+function popupGenerationBlocked(w) {
+  /*
+   * A "Later" gomb többé nem fagyasztja le az egész popup-rendszert két
+   * órára. Csak az adott popupot rejti el; egy másik váratlan helyzet
+   * később továbbra is megjelenhet.
+   */
+  return Boolean(currentPopupEvent(w));
+}
+
+function popupCadenceMs(w) {
+  const level = storySettingsOf(w).dramaLevel;
+  if (level === "low") return 8 * 60 * 1000;
+  if (level === "high") return 3 * 60 * 1000;
+  if (level === "chaotic") return 2 * 60 * 1000;
+  return 4.5 * 60 * 1000;
+}
+
+function popupLastGeneratedAt(w) {
+  const runtimeAt = Number(w && w.popupRuntime && w.popupRuntime.lastGeneratedAt) || 0;
+  const historyAt = Math.max(
+    0,
+    ...((w && w.popupEvents) || []).map((event) =>
+      Number(event && (event.ts || event.resolvedAt)) || 0
+    )
+  );
+  return Math.max(runtimeAt, historyAt);
+}
+
+function popupEventOverdue(w) {
+  if (!w || popupGenerationBlocked(w)) return false;
+  const lastAttemptAt = Number(w.sim && w.sim.popupAttemptAt) || 0;
+  if (lastAttemptAt && now() - lastAttemptAt < 90 * 1000) return false;
+  const runtimeStarted = Number(w.popupRuntime && w.popupRuntime.startedAt) || 0;
+  const lastAt = popupLastGeneratedAt(w) || runtimeStarted;
+  if (!lastAt) return false;
+  return now() - lastAt >= popupCadenceMs(w);
+}
+
+function ambientPopupSeed(w) {
+  if (!w || !w.meId) return null;
+
+  const candidates = (w.chars || [])
+    .filter((c) => c && !isHuman(w, c.id))
+    .map((c) => {
+      const rel = getRel(w, c.id, w.meId) || {};
+      const activity = characterOnlineActivityProfile(w, c);
+      const recentChat = ((w.chats && w.chats[chatKey(w.meId, c.id)]) || []).slice(-1)[0];
+      const recentChatBoost = recentChat && now() - Number(recentChat.ts || 0) < 6 * 3600e3 ? 16 : 0;
+      const relationInterest = Math.min(42, Math.abs(Number(rel.score) || 0) * 0.32);
+      const activityBoost = ((Number(activity.dm) || 0) + (Number(activity.roleplay) || 0) + (Number(activity.post) || 0)) * 6;
+      return {
+        c,
+        score: 12 + relationInterest + activityBoost + recentChatBoost + Math.random() * 22,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  if (!candidates.length) return null;
+
+  const lead = candidates[0].c;
+  const second = candidates[1] && Math.random() < 0.28 ? candidates[1].c : null;
+  const participantIds = [lead.id, second && second.id, w.meId].filter(Boolean);
+  const names = [lead.name, second && second.name].filter(Boolean).join(" + ");
+
+  return {
+    id: `ambient-popup:${Math.floor(now() / 60000)}:${lead.id}`,
+    type: "ambient-popup",
+    refId: "",
+    ts: now(),
+    actorId: lead.id,
+    targetIds: [w.meId],
+    visibility: "system",
+    factLevel: "observed",
+    importance: 34,
+    drama: storySettingsOf(w).dramaLevel === "chaotic" ? 34 : 18,
+    romance: 0,
+    embarrassment: 0,
+    source: "ambient-popup",
+    text: `Unexpected live-world situation involving ${names || lead.name}. Generate a fresh but canon-consistent interruption, opportunity, invitation, social complication or encounter using only existing characters and current world facts.`,
+    tags: ["popup-event", "ambient", "live-world"],
+    meta: {
+      ambient: true,
+      participantIds,
+    },
+  };
+}
+
+function pickPopupEventSeed(w, options = {}) {
+  if (!w || !w.meId || popupGenerationBlocked(w)) return null;
 
   const used = new Set(
     (w.popupEvents || []).flatMap(
-      (e) => Array.isArray(e.sourceEventIds) ? e.sourceEventIds : []
+      (e) => (Array.isArray(e.sourceEventIds) ? e.sourceEventIds : [])
     )
   );
 
@@ -34622,25 +35014,19 @@ function pickPopupEventSeed(w){
 
   const rows = (w.socialEvents || [])
     .filter((e) => {
-      if(!e || Number(e.ts) < cutoff || used.has(e.id)) return false;
+      if (!e || Number(e.ts) < cutoff || used.has(e.id)) return false;
 
       /* Privát DM soha nem lehet news/popup seed. */
-      if(
+      if (
         e.visibility === "private" ||
         e.source === "dm" ||
-        (
-          Array.isArray(e.tags) &&
-          (e.tags.includes("dm") || e.tags.includes("private-dm"))
-        )
-      ){
+        (Array.isArray(e.tags) && (e.tags.includes("dm") || e.tags.includes("private-dm")))
+      ) {
         return false;
       }
 
-      const involves =
-        e.actorId === w.meId ||
-        (e.targetIds || []).includes(w.meId);
-
-      if(!involves) return false;
+      const involves = e.actorId === w.meId || (e.targetIds || []).includes(w.meId);
+      if (!involves) return false;
 
       const roleplayPublicEnough =
         (e.type === "roleplay-event" || e.type === "roleplay-summary") &&
@@ -34679,7 +35065,18 @@ function pickPopupEventSeed(w){
     }))
     .sort((a, b) => b.score - a.score);
 
-  return (rows[0] && rows[0].event) || null;
+  if (rows[0] && rows[0].event) return rows[0].event;
+
+  /*
+   * Ha nincs friss social-event seed, a régi rendszer itt null-lal leállt.
+   * v50-ben az esedékes watchdog ambient, de továbbra is karakter-/kánon-
+   * alapú random helyzetet enged létrehozni.
+   */
+  if (options.allowAmbient !== false && popupEventOverdue(w)) {
+    return ambientPopupSeed(w);
+  }
+
+  return null;
 }
 function popupToneImpact(tone){
   const map={ignore:{aura:1,reputation:0,hype:-4,humor:0,followerRate:-0.0004},clarify:{aura:1,reputation:4,hype:2,humor:0,followerRate:0.0005},defend:{aura:3,reputation:1,hype:6,humor:0,followerRate:0.0008},joke:{aura:3,reputation:1,hype:5,humor:5,followerRate:0.001},apologize:{aura:-1,reputation:6,hype:-2,humor:0,followerRate:0.0002},doubleDown:{aura:4,reputation:-3,hype:9,humor:0,followerRate:0.0012},private:{aura:0,reputation:1,hype:-3,humor:0,followerRate:0},noComment:{aura:0,reputation:0,hype:-2,humor:0,followerRate:-0.0002}};
@@ -34690,24 +35087,31 @@ async function genPopupEvent(w,seed){
   if(!seed)return{skip:true};
   const relatedPostId=seed.meta&&seed.meta.postId;
   const relatedPost=relatedPostId?(w.posts||[]).find((p)=>p&&p.id===relatedPostId):null;
-  const involved=gossipEventSubjectIds(seed).filter((id)=>id!==w.meId&&!isMediaAccount(w,id)).slice(0,6);
+  const involved=gossipEventSubjectIds(seed).filter((id)=>id!==w.meId&&!isMediaAccount(w,id)).slice(0,4);
+  const ambient = seed.type === "ambient-popup" || Boolean(seed.meta && seed.meta.ambient);
+  const triggerRule = ambient
+    ? `EZ MOST VALÓDI RANDOM / AMBIENT LIVE-WORLD EVENT. Hozz létre egy FRISS, váratlan, de a meglévő kánonból és kapcsolatokból természetesen következő helyzetet. Lehet hirtelen meghívás, váratlan találkozás, social komplikáció, kihívás, lehetőség, kellemetlen pillanat vagy kisebb konfliktus. CSAK létező karaktereket használj. Ne találj ki múltbeli tényt csak azért, hogy dráma legyen.`
+    : `Ez a popup a fenti, MÁR MEGTÖRTÉNT social helyzet következménye. Ne találj ki új alap-eseményt vagy új személyt.`;
+
   return askWorldJSON(w,engineFor(w),`${worldContext(w,involved.filter((id)=>!isHuman(w,id)),false,null)}
 
-A JÁTÉKOS KARAKTERE EGY FRISS SOCIAL HELYZET KÖZEPÉBE KERÜLT.
+A JÁTÉKOS KARAKTERE EGY VÁRATLAN HELYZET KÖZEPÉBE KERÜL.
 TRIGGER: ${seed.type}\n${seed.text}
-${relatedPost?`KAPCSOLÓDÓ NYILVÁNOS POSZT:\n${relatedPost.gossipStory&&relatedPost.gossipStory.headline?relatedPost.gossipStory.headline:""}\n${relatedPost.text}`:""}
+${relatedPost?`KAPCSOLÓDÓ NYILVÁNOS POSZT:\n${relatedPost.gossipStory&&relatedPost.gossipStory.headline?relatedPost.gossipStory.headline:""}\n${cut(relatedPost.text,500)}`:""}
 
-Készíts rövid váratlan popup helyzetet 3 választással.
-- Nem írhatsz a játékos helyett konkrét mondatot.
-- A választások cselekvési STRATÉGIÁK legyenek.
-- Ne találj ki új létező személyt vagy új eseményt; a popup a fenti social helyzet következménye.
+${triggerRule}
+
+Készíts rövid, telefonon is egy pillantással érthető popup helyzetet 3 választással.
+- Nem írhatsz a játékos helyett konkrét mondatot vagy reakciót.
+- A választások cselekvési STRATÉGIÁK legyenek, a játékos majd eldönti mit tesz.
+- A popup legyen valódi történeti elágazás, ne generikus rendszerüzenet.
 - tone csak: ignore | clarify | defend | joke | apologize | doubleDown | private | noComment
 - Ha tone="private", akkor CSAK akkor használd, ha van a helyzetben létező AI karakter, akinek reálisan lehet írni, és adj meg targetId-t.
 - A private választás targetId-je kizárólag létező AI karakter id lehet a helyzetből.
-- reactions: 0-3 létező AI várható kapcsolatreakciója; delta azt jelenti, AZ AI mit érez a játékos iránt, -20..+20. A negatív reakció ugyanolyan reális, mint a pozitív.
+- reactions: 0-3 létező AI várható kapcsolatreakciója; delta azt jelenti, AZ AI mit érez a játékos iránt, -20..+20.
 
 VÁLASZ CSAK JSON:
-{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}]}]}${TAIL}`,{maxTokens:1200});
+{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}]}]}${TAIL}`,{maxTokens:850,priority:18});
 }
 
 function normalizePopupEvent(w,seed,raw){
@@ -34754,7 +35158,15 @@ function normalizePopupEvent(w,seed,raw){
     choices
   };
 }
-function addPopupEvent(w,seed,raw){const row=normalizePopupEvent(w,seed,raw);if(!row)return null;w.popupEvents=[row,...(w.popupEvents||[])].slice(0,40);return row;}
+function addPopupEvent(w,seed,raw){
+  const row=normalizePopupEvent(w,seed,raw);
+  if(!row)return null;
+  w.popupEvents=[row,...(w.popupEvents||[])].slice(0,40);
+  if(!w.popupRuntime||typeof w.popupRuntime!=="object")w.popupRuntime={};
+  if(!Number.isFinite(Number(w.popupRuntime.startedAt)))w.popupRuntime.startedAt=now();
+  w.popupRuntime.lastGeneratedAt=row.ts||now();
+  return row;
+}
 
 function popupSourceEvent(w,event){
   if(!w||!event)return null;
@@ -40038,6 +40450,29 @@ function planAutoAction(view) {
   }
 
   /*
+   * 1.7 RANDOM POPUP WATCHDOG
+   *
+   * A felvillanó Event többé nem függ attól, hogy épp van-e elég magas
+   * pontszámú nyilvános socialEvents seed. Ha túl régóta nem volt popup,
+   * egy karakterhű ambient helyzet kap elsőbbséget a következő feed-post
+   * safety net előtt. Ez nem vezérli a játékost, csak választást kínál.
+   */
+  if (popupEventOverdue(view)) {
+    const popupSeed = pickPopupEventSeed(view, { allowAmbient: true });
+    if (popupSeed) {
+      return mkAction(
+        "popup-event",
+        `popup-watchdog:${popupSeed.id}`,
+        {
+          seedEventId: popupSeed.id,
+          seed: popupSeed.type === "ambient-popup" ? popupSeed : null,
+        },
+        "event"
+      );
+    }
+  }
+
+  /*
    * 1.75 FEED SAFETY NET
    * A normál arányt a közös channel balancer adja; ez csak végső biztosíték.
    */
@@ -40217,12 +40652,15 @@ function planAutoAction(view) {
    * 7. VÁRATLAN POPUP EVENT
    */
   if (Math.random() < (storySettingsOf(view).dramaLevel === "low" ? 0.10 : storySettingsOf(view).dramaLevel === "high" ? 0.34 : storySettingsOf(view).dramaLevel === "chaotic" ? 0.46 : 0.26)) {
-    const popupSeed = pickPopupEventSeed(view);
+    const popupSeed = pickPopupEventSeed(view, { allowAmbient: true });
     if (popupSeed) {
       return mkAction(
         "popup-event",
         `popup-event:${popupSeed.id}`,
-        { seedEventId: popupSeed.id }
+        {
+          seedEventId: popupSeed.id,
+          seed: popupSeed.type === "ambient-popup" ? popupSeed : null,
+        }
       );
     }
   }
@@ -41293,11 +41731,28 @@ async function runSimulationAction(view, update, action, addImage) {
   }
 
   if (action.type === "popup-event") {
-    const seedId = action.payload && action.payload.seedEventId;
-    const seed = (view.socialEvents || []).find((event) => event && event.id === seedId);
-    if (!seed || pendingPopupEvent(view)) return null;
+    const payload = action.payload || {};
+    const seedId = payload.seedEventId;
+    const seed =
+      (view.socialEvents || []).find((event) => event && event.id === seedId) ||
+      (payload.seed && typeof payload.seed === "object" ? payload.seed : null);
+
+    if (!seed || popupGenerationBlocked(view)) return null;
+
     const out = await genPopupEvent(view, seed);
-    update((n) => {  if (!pendingPopupEvent(n)) addPopupEvent(n, seed, out); });
+    if (!out || out.skip === true) return null;
+
+    /* React state-updater is async, ezért előbb egy másolaton validáljuk. */
+    const probe = JSON.parse(JSON.stringify(view));
+    const probeEvent = addPopupEvent(probe, seed, out);
+    if (!probeEvent) return null;
+
+    update((n) => {
+      if (!popupGenerationBlocked(n)) {
+        addPopupEvent(n, seed, out);
+        ensureSimState(n).popupAttemptAt = now();
+      }
+    });
     return "popup-event";
   }
 
@@ -45467,6 +45922,9 @@ const signOut = useCallback(async () => {
         }
         if (action && (action.type === "group" || action.type === "group-turn")) {
           ensureSimState(n).groupAttemptAt = now();
+        }
+        if (action && action.type === "popup-event") {
+          ensureSimState(n).popupAttemptAt = now();
         }
       });
       let ok = false;
