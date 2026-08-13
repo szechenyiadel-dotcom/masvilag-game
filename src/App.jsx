@@ -6603,11 +6603,11 @@ const detailInfo = () => ({
 /* A LÉNYEG: a személyiség és a történet kapja a legnagyobb keretet, mert
    ezekből következik minden. A többi mező szándékosan szűk — azokat te
    tömörebbre tudod írni. [ha csak jelen van, ha ő a főszereplő] */
-const CORE_CAP = { personality: 10000, backstory: 15000, secrets: 1800, extra: 1200, connections: 2000 };
+const CORE_CAP = { personality: 10000, backstory: 15000, secrets: 1800, extra: 1200, connections: 4000 };
 
 /* A te karakterednél szűkebb a keret: az AI SOHA nem játszik téged, csak
    reagál rád — ezért nem kell ismernie a teljes belső világodat. */
-const PLAYER_CORE = { personality: 4000, backstory: 3500, secrets: 800, extra: 600, connections: 2000 };
+const PLAYER_CORE = { personality: 4000, backstory: 3500, secrets: 800, extra: 600, connections: 4000 };
 
 const coreCap = (key, isPlayerSheet, deep) => {
   const base = (isPlayerSheet ? PLAYER_CORE : CORE_CAP)[key] || 0;
@@ -12303,7 +12303,7 @@ function migrate(w) {
       if (!character || !line) return;
       const before = String(character.connections || "").trim();
       if (before.toLowerCase().includes(line.toLowerCase())) return;
-      character.connections = [before, line].filter(Boolean).join("\n").slice(0, 2000);
+      character.connections = [before, line].filter(Boolean).join("\n").slice(0, 4000);
     };
     active.forEach((character) => {
       legacyExtras.forEach((person) => {
@@ -24283,7 +24283,7 @@ ${worldLanguage(w, w && w.meId) === "en"
   ? "All user-visible generated profile fields must be in English."
   : "Minden generált, felhasználónak látható profilmező magyar legyen."}
 Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók):
-{"name":"","nick":"","username":"","birth":"","gender":"","orientation":"","height":"","job":"","city":"","bio":"","looks":"","personality":"","traits":"","speech":"","voice":"két-három tipikus mondat tőle, idézőjelben","goals":"","fears":"","likes":"","secrets":"","backstory":"","connections":"fontos, játékban nem feltétlenül létező személyek és a karakter viszonya hozzájuk; max. 2000 karakter"}`);
+{"name":"","nick":"","username":"","birth":"","gender":"","orientation":"","height":"","job":"","city":"","bio":"","looks":"","personality":"","traits":"","speech":"","voice":"két-három tipikus mondat tőle, idézőjelben","goals":"","fears":"","likes":"","secrets":"","backstory":"","connections":"fontos, játékban nem feltétlenül létező személyek és a karakter viszonya hozzájuk; max. 4000 karakter"}`);
       setC((p) => ({ ...p, ...out }));
     } catch (e) { setErr((e && e.message) || tt("A generálás nem sikerült. Próbáld újra.", "Generation failed. Try again.")); }
     setBusy(false);
@@ -24376,7 +24376,7 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
               <textarea
                 className="i"
                 value={c[k] || ""}
-                maxLength={k === "connections" ? 2000 : undefined}
+                maxLength={k === "connections" ? 4000 : undefined}
                 style={k === "connections" ? { minHeight: 150 } : undefined}
                 onChange={(e) => set(k, e.target.value)}
               />
@@ -24388,8 +24388,8 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
             {k === "connections" && (
               <p className="hint" style={{ marginTop: 6 }}>
                 {tt(
-                  "Ide írd szabad szövegként azokat a fontos embereket és kapcsolatokat, akik a karakter múltjához vagy életéhez tartoznak, de nem akarsz nekik külön AI-karaktert létrehozni — például szülő, testvér, ex, mentor, régi barát vagy rivális. Legfeljebb 2000 karakter. Ez privát karakterkánon: a karakter emlékszik rájuk és reagálhat rájuk, de ezek a személyek nem kapnak profilt, ID-t, chatet, relationship score-t vagy AI-agentet, és más karakterek nem tudnak róluk automatikusan.",
-                  "Write important people and relationships here as free text when they belong to the character's history or life but should not become separate AI characters — for example a parent, sibling, ex, mentor, old friend, or rival. Maximum 2000 characters. This is private character canon: the character remembers and can react to them, but these people get no profile, ID, chat, relationship score, or AI agent, and other characters do not automatically know about them."
+                  "Ide írd szabad szövegként azokat a fontos embereket és kapcsolatokat, akik a karakter múltjához vagy életéhez tartoznak, de nem akarsz nekik külön AI-karaktert létrehozni — például szülő, testvér, ex, mentor, régi barát vagy rivális. Legfeljebb 4000 karakter. Ez privát karakterkánon: a karakter emlékszik rájuk és reagálhat rájuk, de ezek a személyek nem kapnak profilt, ID-t, chatet, relationship score-t vagy AI-agentet, és más karakterek nem tudnak róluk automatikusan.",
+                  "Write important people and relationships here as free text when they belong to the character's history or life but should not become separate AI characters — for example a parent, sibling, ex, mentor, old friend, or rival. Maximum 4000 characters. This is private character canon: the character remembers and can react to them, but these people get no profile, ID, chat, relationship score, or AI agent, and other characters do not automatically know about them."
                 )}
               </p>
             )}
@@ -24466,7 +24466,7 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
       onSave(
         {
           ...c,
-          connections: String(c.connections || "").slice(0, 2000),
+          connections: String(c.connections || "").slice(0, 4000),
           username: (c.username || c.name)
             .toLowerCase()
             .replace(/[^a-z0-9._]/g, "")
