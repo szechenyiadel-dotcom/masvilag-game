@@ -5907,9 +5907,9 @@ function consumeAlbumItem(c, item) {
 
 /* ---------- Claude API ----------
    A szolgáltatónak percenkénti korlátja van, és nem az számít, hányan
-   játszotok: ha az app egyszerre vagy túl sűrűn küld kéréseket, "túlterhelt"
-   választ kapunk. Ezért minden hívás egy sorba áll be: egyszerre csak egy fut,
-   köztük szünet van, és ha mégis elutasítás jön, mindenki vár egy kicsit. */
+   játszotok: ha az app túl sűrűn küld kéréseket, "túlterhelt" választ kapunk.
+   A provider-hívások ezért prioritásos sorban haladnak, miközben a UI több
+   külön DM/RP/group munkát is háttérben pending állapotban tarthat. */
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 /*
@@ -5998,6 +5998,87 @@ const AI = {
 };
 const cooldownLeft = () => Math.max(0, AI.cooldownUntil - now());
 const visibleCooldownLeft = () => Math.max(0, AI.visibleCooldownUntil - now());
+
+/* -------------------------------------------------------------------------
+   v61 — PERSISTENT INTERACTIVE JOBS
+
+   DM / group chat / Roleplay generation must survive navigation. React
+   components are mounted/unmounted when the player switches tabs, so a local
+   `busy` state is not enough: the request may still be running while the UI
+   forgets that the character is typing. This tiny runtime registry is NOT
+   persisted to the save file; it exists only while this browser session is
+   alive and represents genuinely in-flight requests.
+
+   Jobs are keyed per conversation/scene, therefore an RP turn can be pending
+   while a completely different DM/group request is also pending. The provider
+   queue may serialize expensive calls to protect rate limits, but navigation
+   and typing state no longer block each other.
+   ------------------------------------------------------------------------- */
+const INTERACTIVE_JOBS = {
+  rows: new Map(),
+  listeners: new Set(),
+  seq: 0,
+};
+
+function interactiveJobKey(surface, id) {
+  const a = String(surface || "interactive").trim() || "interactive";
+  const b = String(id || "").trim();
+  return b ? `${a}:${b}` : a;
+}
+
+function emitInteractiveJobs() {
+  INTERACTIVE_JOBS.listeners.forEach((fn) => {
+    try { fn(); } catch (e) {}
+  });
+}
+
+function interactiveJobFor(key) {
+  return key ? (INTERACTIVE_JOBS.rows.get(String(key)) || null) : null;
+}
+
+function interactiveJobActive(key) {
+  return Boolean(interactiveJobFor(key));
+}
+
+function beginInteractiveJob(key, details = {}) {
+  const k = String(key || "").trim();
+  if (!k || INTERACTIVE_JOBS.rows.has(k)) return "";
+  const token = `ij_${++INTERACTIVE_JOBS.seq}_${now()}`;
+  INTERACTIVE_JOBS.rows.set(k, {
+    key: k,
+    token,
+    startedAt: now(),
+    surface: String(details.surface || ""),
+    mode: String(details.mode || "typing"),
+    characterId: String(details.characterId || ""),
+    sceneId: String(details.sceneId || ""),
+    groupId: String(details.groupId || ""),
+  });
+  emitInteractiveJobs();
+  return token;
+}
+
+function endInteractiveJob(key, token) {
+  const k = String(key || "").trim();
+  const row = INTERACTIVE_JOBS.rows.get(k);
+  if (!row) return false;
+  if (token && row.token !== token) return false;
+  INTERACTIVE_JOBS.rows.delete(k);
+  emitInteractiveJobs();
+  return true;
+}
+
+/* Subscribe even when key is empty so conversation/event list screens also
+   refresh when a background typing job starts or finishes. */
+function useInteractiveJob(key) {
+  const [, forceInteractiveJobRender] = useState(0);
+  useEffect(() => {
+    const listener = () => forceInteractiveJobRender((v) => v + 1);
+    INTERACTIVE_JOBS.listeners.add(listener);
+    return () => INTERACTIVE_JOBS.listeners.delete(listener);
+  }, []);
+  return interactiveJobFor(key);
+}
 const onCooldown = (fn) => { AI.listeners.push(fn); return () => { AI.listeners = AI.listeners.filter((x) => x !== fn); }; };
 function setCooldown(ms, visible = true) {
   const until = now() + Math.max(0, Number(ms) || 0);
@@ -13774,7 +13855,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v60-chat-image-502-fix";
+const BUILD_VERSION = "v61-parallel-chat-roleplay";
 
 const AUTO = "masvilag:auto";
 /*
@@ -26686,12 +26767,13 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
       w.meId
     ) === "mature";
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [clockNow, setClockNow] = useState(now());
   const endRef = useRef(null);
-  const sendLockRef = useRef(false);
   const [optimisticTurns, setOptimisticTurns] = useState([]);
+  const sceneJobKey = interactiveJobKey("scene", scene.id);
+  const sceneJob = useInteractiveJob(sceneJobKey);
+  const busy = sceneJob ? String(sceneJob.mode || "turn") : "";
   const cast = (w.chars || []).filter((c) => (scene.cast || []).indexOf(c.id) >= 0);
   const who = (id) => charById(w, id);
   const eventProgress = sceneEventProgress(scene, clockNow);
@@ -26755,9 +26837,13 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   });
 
   const advance = async (playerText) => {
-    if (sendLockRef.current) return;
-    sendLockRef.current = true;
-    setBusy("turn");
+    if (interactiveJobActive(sceneJobKey)) return;
+    const sceneJobToken = beginInteractiveJob(sceneJobKey, {
+      surface: "roleplay",
+      mode: "turn",
+      sceneId: scene.id,
+    });
+    if (!sceneJobToken) return;
 
     const playerTarget =
       playerText
@@ -27386,13 +27472,18 @@ VÁLASZ CSAK JSON:
     } catch (e) {
       setErr(((e && e.message) ? e.message + " " : "") + tt("Nyomd meg még egyszer — ha újra elakad, rövidítsd a helyzet leírását vagy csökkentsd a szereplők számát.", "Press it again — if it gets stuck again, shorten the situation description or reduce the number of characters."));
     } finally {
-      sendLockRef.current = false;
-      setBusy("");
+      endInteractiveJob(sceneJobKey, sceneJobToken);
     }
   };
 
   const finish = async (earlyRequested = false) => {
-    setBusy("end");
+    if (interactiveJobActive(sceneJobKey)) return;
+    const sceneJobToken = beginInteractiveJob(sceneJobKey, {
+      surface: "roleplay",
+      mode: "end",
+      sceneId: scene.id,
+    });
+    if (!sceneJobToken) return;
     const liveProgress = sceneEventProgress(scene, now());
     const earlyEnd = Boolean(earlyRequested || !liveProgress.complete);
 
@@ -27634,8 +27725,9 @@ Formátum:
       }
     } catch (e) {
       setErr((e && e.message) || tt("Az Event lezárása nem sikerült. Próbáld újra.", "Closing the Event failed. Try again."));
+    } finally {
+      endInteractiveJob(sceneJobKey, sceneJobToken);
     }
-    setBusy("");
   };
 
   if (scene.aiInitiated && scene.invitationStatus === "pending") {
@@ -27813,6 +27905,7 @@ Formátum:
 
 function Scenes({ w, update, setErr, jump, onSignal, openId, setOpenId }) {
   const { tt } = useLang();
+  useInteractiveJob("");
   const [creating, setCreating] = useState(false);
   const [, setInviteClock] = useState(now());
   const allScenes = w.scenes || [];
@@ -27858,7 +27951,9 @@ function Scenes({ w, update, setErr, jump, onSignal, openId, setOpenId }) {
           <div className="card" key={s.id} onClick={() => setOpenId(s.id)} style={{ cursor: "pointer" }}>
             <div className="between">
               <h3 style={{ fontSize: 16 }}>{s.title}</h3>
-              <span className="chip">{s.aiInitiated && s.invitationStatus === "pending" ? tt("meghívás", "invite") : (s.open ? tt("fut", "running") : tt("lezárva", "closed"))}</span>
+              <span className="chip">{interactiveJobActive(interactiveJobKey("scene", s.id))
+                ? tt("ír…", "writing…")
+                : (s.aiInitiated && s.invitationStatus === "pending" ? tt("meghívás", "invite") : (s.open ? tt("fut", "running") : tt("lezárva", "closed")))}</span>
             </div>
             {s.setting && <p className="hint" style={{ marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{s.setting}</p>}
             {s.goal ? <p className="hint" style={{ marginTop: 6 }}><b>{tt("Cél: ", "Goal: ")}</b>{s.goal}</p> : null}
@@ -27946,7 +28041,9 @@ function GroupChat({ w, group, update, setErr, onBack }) {
       w.meId
     ) === "mature";
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const groupJobKey = interactiveJobKey("group", group.id);
+  const groupJob = useInteractiveJob(groupJobKey);
+  const busy = Boolean(groupJob);
   const [addingMembers, setAddingMembers] = useState(false);
   const endRef = useRef(null);
   const members = (group.members || []).map((id) => charById(w, id)).filter(Boolean);
@@ -27965,7 +28062,13 @@ function GroupChat({ w, group, update, setErr, onBack }) {
   });
 
 const turn = async (mine) => {
-  setBusy(true);
+  if (interactiveJobActive(groupJobKey)) return;
+  const groupJobToken = beginInteractiveJob(groupJobKey, {
+    surface: "group",
+    mode: "typing",
+    groupId: group.id,
+  });
+  if (!groupJobToken) return;
 
   const playerTarget =
     mine
@@ -28587,7 +28690,7 @@ Formátum:
     );
   }
 
-  setBusy(false);
+  endInteractiveJob(groupJobKey, groupJobToken);
 };
 
   return (
@@ -28769,12 +28872,13 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   const [text, setText] = useState("");
   const [chatImg, setChatImg] = useState("");
   const [showChatMedia, setShowChatMedia] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const sendLockRef = useRef(false);
   const [gid, setGid] = useState(null);
   const [creating, setCreating] = useState(false);
   const endRef = useRef(null);
   const c = openId ? w.chars.find((x) => x.id === openId) : null;
+  const dmJobKey = c ? interactiveJobKey("dm", chatKey(w.meId, c.id)) : "";
+  const dmJob = useInteractiveJob(dmJobKey);
+  const busy = Boolean(dmJob);
   const msgs = (openId && w.chats[chatKey(w.meId, openId)]) || [];
 
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [msgs.length, openId]);
@@ -28806,22 +28910,26 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   if (
     (!t && !selectedImg) ||
     !c ||
-    busy ||
-    sendLockRef.current
+    interactiveJobActive(dmJobKey)
   ) {
     return;
   }
-
-  sendLockRef.current = true;
-  setBusy(true);
-  setText("");
-  setChatImg("");
-  setShowChatMedia(false);
 
   const ck = chatKey(
     w.meId,
     c.id
   );
+  const requestJobKey = interactiveJobKey("dm", ck);
+  const dmJobToken = beginInteractiveJob(requestJobKey, {
+    surface: "dm",
+    mode: "typing",
+    characterId: c.id,
+  });
+  if (!dmJobToken) return;
+
+  setText("");
+  setChatImg("");
+  setShowChatMedia(false);
 
   const sentAt = now();
 
@@ -29636,9 +29744,8 @@ Formátum:
       )
     );
   } finally {
-  sendLockRef.current = false;
-  setBusy(false);
-}
+    endInteractiveJob(requestJobKey, dmJobToken);
+  }
 };
 
 const group = gid
@@ -29869,28 +29976,30 @@ if (group) {
               lastWho,
             } = row;
 
-            const preview =
-              last
-                ? (
-                    (
-                      lastWho
-                        ? lastWho.name + ": "
-                        : ""
-                    ) +
-                    (
-                      last.text ||
+            const groupTyping = interactiveJobActive(interactiveJobKey("group", g.id));
+            const preview = groupTyping
+              ? tt("gépelnek…", "typing…")
+              : (last
+                  ? (
                       (
-                        last.imageId ||
-                        last.image
-                          ? tt("📷 Kép", "📷 Photo")
+                        lastWho
+                          ? lastWho.name + ": "
                           : ""
+                      ) +
+                      (
+                        last.text ||
+                        (
+                          last.imageId ||
+                          last.image
+                            ? tt("📷 Kép", "📷 Photo")
+                            : ""
+                        )
                       )
                     )
-                  )
-                : tt(
-                    `${groupMembers.length} tag · még üres`,
-                    `${groupMembers.length} members · still empty`
-                  );
+                  : tt(
+                      `${groupMembers.length} tag · még üres`,
+                      `${groupMembers.length} members · still empty`
+                    ));
 
             return (
               <div
@@ -30023,35 +30132,37 @@ if (group) {
             rel,
           } = row;
 
-          const preview =
-            last
-              ? (
-                  (
-                    last.from === "me"
-                      ? tt(
-                          "Te: ",
-                          "You: "
-                        )
-                      : ""
-                  ) +
-                  (
-                    last.text ||
+          const dmTyping = interactiveJobActive(interactiveJobKey("dm", row.ck));
+          const preview = dmTyping
+            ? tt(`${x.name} gépel…`, `${x.name} is typing…`)
+            : (last
+                ? (
                     (
-                      last.imageId ||
-                      last.image
+                      last.from === "me"
                         ? tt(
-                            "📷 Kép",
-                            "📷 Photo"
+                            "Te: ",
+                            "You: "
                           )
                         : ""
+                    ) +
+                    (
+                      last.text ||
+                      (
+                        last.imageId ||
+                        last.image
+                          ? tt(
+                              "📷 Kép",
+                              "📷 Photo"
+                            )
+                          : ""
+                      )
                     )
                   )
-                )
-              : sysTextFor(
-                  w,
-                  w.meId,
-                  "noMessagesYet"
-                );
+                : sysTextFor(
+                    w,
+                    w.meId,
+                    "noMessagesYet"
+                  ));
 
           return (
             <div
@@ -48031,7 +48142,22 @@ const signOut = useCallback(async () => {
 
   const me = (world.players && world.players[meId]) || blankPlayer(meId, "Névtelen", "jatekos");
   const view = { ...world, meId, player: me };
-  view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
+  /*
+   * v61: leaving the Scene TAB does not mean leaving the ongoing Event. The
+   * selected accepted/open scene remains the player's active RP session while
+   * they temporarily answer DMs. This also preserves the earlier rule that
+   * popup Events must not appear on top of an ongoing Roleplay.
+   */
+  const selectedLiveScene = sceneId
+    ? (world.scenes || []).find((s) => s && s.id === sceneId)
+    : null;
+  const selectedSceneIsOngoing = Boolean(
+    selectedLiveScene &&
+    selectedLiveScene.open !== false &&
+    !(selectedLiveScene.aiInitiated && selectedLiveScene.invitationStatus === "pending") &&
+    !["rejected", "expired"].includes(String(selectedLiveScene.invitationStatus || ""))
+  );
+  view.activeSceneId = selectedSceneIsOngoing ? sceneId : "";
   setLiveUiActiveSceneId(view.activeSceneId);
   viewRef.current = view;
   const activePopup = currentPopupEvent(view);
