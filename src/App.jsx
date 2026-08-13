@@ -2710,7 +2710,8 @@ function isMediaAccount(w, id) {
   );
 }
 
-// Bármely szereplő azonosító alapján: játékos, bot vagy mellékszereplő.
+// Bármely AKTÍV szereplő azonosító alapján: játékos, AI-karakter vagy médiaprofil.
+// A karakterlap Connections / Kapcsolódások mezőjében említett emberek NEM entitások.
 function charById(w, id) {
   if (!id) return null;
 
@@ -2729,14 +2730,6 @@ function charById(w, id) {
 
   if (core) return core;
 
-  const extra =
-    (w.extras || []).find(
-      (c) =>
-        c.id === id
-    );
-
-  if (extra) return extra;
-
   return (
     allGossipMediaAccounts(w)
       .find(
@@ -2747,40 +2740,34 @@ function charById(w, id) {
     null
   );
 }
-const isExtra = (w, id) => !!(w.extras || []).find((c) => c.id === id);
 const isHuman = (w, id) => !!(w.players && w.players[id]);
 // Minden emberi játékos karaktere.
 const humanChars = (w) => Object.keys(w.players || {}).map((id) => w.players[id]).filter(Boolean);
-// Mindenki, akinek kapcsolata lehet: játékosok, botok, mellékszereplők.
-const allSubjects = (w) => humanChars(w).concat(w.chars || []).concat(w.extras || []);
+// Dinamikus kapcsolat csak tényleges játékbeli karakterek között létezhet.
+const allSubjects = (w) => humanChars(w).concat(w.chars || []);
 const kindOf = (w, id) => (
   isHuman(w, id)
     ? termText(
         "player",
         worldLanguage(w)
       )
-    : isExtra(w, id)
-      ? termText(
-          "extra",
+    : isMediaAccount(w, id)
+      ? (
+          worldLanguage(w) === "en"
+            ? "media"
+            : "média"
+        )
+      : termText(
+          "ai",
           worldLanguage(w)
         )
-      : isMediaAccount(w, id)
-        ? (
-            worldLanguage(w) === "en"
-              ? "media"
-              : "média"
-          )
-        : termText(
-            "ai",
-            worldLanguage(w)
-          )
 );
 // A privát beszélgetések fiókonként külön élnek.
 const chatKey = (meId, charId) => String(meId) + "|" + String(charId);
 
 const PUBLIC_PROFILE_KEYS = ["name", "nick", "username", "birth", "gender", "orientation", "height", "job", "city", "bio", "looks", "avatar", "cover"];
 const PRIVATE_PROFILE_KEYS = [
-  "personality", "traits", "speech", "voice", "goals", "fears", "likes", "secrets", "backstory", "extra", "brief", "briefSrc",
+  "personality", "traits", "speech", "voice", "goals", "fears", "likes", "secrets", "backstory", "extra", "connections", "brief", "briefSrc",
   "skills", "abilities", "combat", "rank", "role", "organization", "affiliation"
 ];
 
@@ -3089,8 +3076,8 @@ function buildKnownCharacterContext(observerId, allCharacters, w) {
     });
 }
 
-/* A @felhasználónév mindenkinél egyedi: a játékosok, a botok és a
-   mellékszereplők között sem lehet két egyforma. Ha foglalt, számot kap. */
+/* A @felhasználónév minden tényleges profillal rendelkező játékosnál és AI-karakternél egyedi.
+   Ha foglalt, számot kap. */
 function uniqueHandle(w, desired, selfId) {
   const base = String(desired || "jatekos").toLowerCase().replace(/[^a-z0-9._]/g, "") || "jatekos";
   const taken = {};
@@ -3098,7 +3085,7 @@ function uniqueHandle(w, desired, selfId) {
     const pl = w.players[id];
     if (pl && id !== selfId && pl.username) taken[String(pl.username).toLowerCase()] = 1;
   });
-  (w.chars || []).concat(w.extras || []).forEach((c) => {
+  (w.chars || []).forEach((c) => {
     if (c && c.id !== selfId && c.username) taken[String(c.username).toLowerCase()] = 1;
   });
   if (!taken[base]) return base;
@@ -3124,7 +3111,7 @@ function findChar(w, key) {
     if ((pl.name || "").toLowerCase() === k) return pids[i];
     if ((pl.name || "").toLowerCase().split(" ")[0] === k) return pids[i];
   }
-  const list = (w.chars || []).concat(w.extras || []);
+  const list = (w.chars || []);
   const hit =
     list.find((x) => String(x.id).toLowerCase() === k) ||
     list.find((x) => (x.username || "").toLowerCase() === k) ||
@@ -3138,12 +3125,10 @@ function findChar(w, key) {
 // Bármelyik irányban van-e rögzített kapcsolat kettejük között.
 const linked = (w, a, b) => !!(w.rels && (w.rels[relKey(a, b)] || w.rels[relKey(b, a)]));
 
-/* Kihez tartozhat viszony az adott szereplő lapján: a játékosok és a botok
-   mindig, a mellékszereplők viszont csak akkor, ha nála tényleg be van állítva. */
+/* Dinamikus viszony csak tényleges játékbeli karakterek között szerkeszthető.
+   A karakterlapon említett, játékban nem létező személyek a Connections mezőben maradnak szöveges kánonként. */
 function relevantOthers(w, id) {
-  const core = humanChars(w).concat(w.chars || []).filter((x) => x.id !== id);
-  const side = (w.extras || []).filter((x) => x.id !== id && linked(w, id, x.id));
-  return core.concat(side);
+  return humanChars(w).concat(w.chars || []).filter((x) => x.id !== id);
 }
 
 const EMPTY_REL = { score: 0, hidden: "", type: "", bond: "", fixed: false, mood: "", why: "" };
@@ -6334,11 +6319,11 @@ const detailInfo = () => ({
 /* A LÉNYEG: a személyiség és a történet kapja a legnagyobb keretet, mert
    ezekből következik minden. A többi mező szándékosan szűk — azokat te
    tömörebbre tudod írni. [ha csak jelen van, ha ő a főszereplő] */
-const CORE_CAP = { personality: 10000, backstory: 15000, secrets: 1800, extra: 1200 };
+const CORE_CAP = { personality: 10000, backstory: 15000, secrets: 1800, extra: 1200, connections: 2000 };
 
 /* A te karakterednél szűkebb a keret: az AI SOHA nem játszik téged, csak
    reagál rád — ezért nem kell ismernie a teljes belső világodat. */
-const PLAYER_CORE = { personality: 4000, backstory: 3500, secrets: 800, extra: 600 };
+const PLAYER_CORE = { personality: 4000, backstory: 3500, secrets: 800, extra: 600, connections: 2000 };
 
 const coreCap = (key, isPlayerSheet, deep) => {
   const base = (isPlayerSheet ? PLAYER_CORE : CORE_CAP)[key] || 0;
@@ -6359,7 +6344,7 @@ const FIELD_BASE = {
 /* Korlátlan mezők: ezek teljes egészében átmennek, bármilyen hosszúak.
    Itt lakik a karakter lényege, ezért nem nyúlunk hozzájuk. */
 const FIELD_FREE = {
-  personality: 1, secrets: 1, backstory: 1, extra: 1,
+  personality: 1, secrets: 1, backstory: 1, extra: 1, connections: 1,
   nick: 1, job: 1, city: 1, gender: 1, orientation: 1, birth: 1, height: 1, album: 1, bio: 1,
 };
 
@@ -6384,7 +6369,7 @@ const briefTarget = () => Math.round(2500 * detailInfo().mul);
 /* A személyiségből és a történetből a kivonat MELLETT nyers részlet is megy:
    a kivonat az ívet adja, a nyers szöveg a te fogalmazásod ízét. */
 
-const FREE_KEYS = ["personality", "secrets", "backstory", "extra"];
+const FREE_KEYS = ["personality", "secrets", "backstory", "extra", "connections"];
 const rawLen = (c) => FREE_KEYS.reduce((sum, k) => sum + cleanLen(c && c[k]), 0);
 
 /* Kell-e (újra) sűríteni? Akkor is, ha időközben sokat írtál hozzá. */
@@ -6464,7 +6449,8 @@ function cleanLen(v) {
 }
 
 function sheet(c, w, deep, isPlayerSheet, accessMode = "private") {
-  const privateOnly = { personality: 1, traits: 1, speech: 1, voice: 1, goals: 1, fears: 1, likes: 1, secrets: 1, backstory: 1, extra: 1, album: 1 };
+  const privateOnly = { personality: 1, traits: 1, speech: 1, voice: 1, goals: 1, fears: 1, likes: 1, secrets: 1, backstory: 1, extra: 1, connections: 1, album: 1 };
+  const hideConnections = accessMode === "private_no_connections";
   const rows = [
     ["személyiség", "personality", c.personality],
     ["beszédstílus", "speech", c.speech],
@@ -6481,6 +6467,7 @@ function sheet(c, w, deep, isPlayerSheet, accessMode = "private") {
     ["foglalkozás", "job", c.job],
     ["város", "city", c.city],
     ["becenév", "nick", c.nick],
+    ["kapcsolódások", "connections", c.connections],
     ["egyéb", "extra", c.extra],
     ["képességek", "skills", c.skills],
     ["speciális képességek", "abilities", c.abilities],
@@ -6511,6 +6498,7 @@ function sheet(c, w, deep, isPlayerSheet, accessMode = "private") {
   ) {
     rows.forEach(
       ([label, key, v]) => {
+        if (hideConnections && key === "connections") return;
         const t =
           clean(v);
 
@@ -6528,6 +6516,7 @@ function sheet(c, w, deep, isPlayerSheet, accessMode = "private") {
 
   rows.forEach(([label, key, v]) => {
     if (accessMode === "public" && privateOnly[key]) return;
+    if (hideConnections && key === "connections") return;
     const t = clean(v);
     if (!t) return;
 
@@ -10207,12 +10196,12 @@ ${en ? "PRIVATE CHARACTER PERFORMANCE CONTEXT" : "PRIVÁT KARAKTERJÁTÉK-KONTEX
 ${en
   ? `- Use each block only to perform that specific character.
 - Do not transfer one character's secrets, private personality notes or hidden feelings into another character's knowledge.
-- Every explicit fact in each character's own sheet is canon. Read and use the full self-canon block, especially personality, full story, secrets, goals, fears, affiliations, skills and old relationships. Never flatten a distinctive character into a generic helpful AI voice.
+- Every explicit fact in each character's own sheet is canon. Read and use the full self-canon block, especially personality, full story, secrets, goals, fears, affiliations, skills and Connections/old relationships. Connections are private to that character unless another character independently learned the same information. Never flatten a distinctive character into a generic helpful AI voice.
 - Personal history, franchise/faction loyalties, rivalries and organizations written in the sheets must actively affect behavior. Do not treat established rivals, allies, relatives, crushes or enemies like neutral strangers.
 - Positive relationships are NOT blank slates for random snark: if a character has a good/close bond with someone, hostility, insults or cold dismissal require a real trigger or explicit canon reason. Do not force one rude response into a group merely for variety.`
   : `- Minden blokkot csak az adott karakter eljátszására használj.
 - Egyik karakter titkait, rejtett személyiségét vagy titkos érzéseit se add át egy másik karakter tudásának.
-- A karakter saját adatlapján szereplő MINDEN explicit adat kánon. Olvasd és használd a teljes saját-kánon blokkot, különösen a személyiséget, teljes történetet, titkokat, célokat, félelmeket, hovatartozást, képességeket és régi kapcsolatokat. Soha ne lapíts egy jellegzetes karaktert általános segítőkész AI-hanggá.
+- A karakter saját adatlapján szereplő MINDEN explicit adat kánon. Olvasd és használd a teljes saját-kánon blokkot, különösen a személyiséget, teljes történetet, titkokat, célokat, félelmeket, hovatartozást, képességeket és Kapcsolódásokat/régi kapcsolatokat. A Kapcsolódások privátak az adott karakter számára, hacsak egy másik szereplő ugyanazt az információt külön meg nem tanulta. Soha ne lapíts egy jellegzetes karaktert általános segítőkész AI-hanggá.
 - A leírt történetek, franchise/csoport-lojalitások, rivalizálások és szervezetek AKTÍVAN hassanak a viselkedésre. A már létező riválisokat, szövetségeseket, rokonokat, crushokat vagy ellenségeket ne kezeld semleges idegenként.
 - A pozitív kapcsolat NEM üres lap random beszólásokhoz: jó/közeli viszonynál az ellenségességhez, sértegetéshez vagy hideg lepattintáshoz valódi kiváltó ok vagy explicit kánon kell. Ne kényszeríts bele egy bunkó reakciót a csoportba csak a változatosság kedvéért.`}
 ${blocks}`;
@@ -10651,7 +10640,7 @@ function deepBrief(w, c, isPlayerSheet, observerId) {
       w,
       true,
       isPlayerSheet,
-      "private"
+      observerId && !selfView ? "private_no_connections" : "private"
     );
   return body +
     (!selfView ? knownLinesForObserver(w, observerId, c.id) : "") +
@@ -10666,7 +10655,6 @@ function rosterLine(w) {
   const rows = [];
   humanChars(w).forEach((h) => rows.push(`${h.name} (@${h.username}) — ${termText("player", worldLanguage(w))}`));
   (w.chars || []).forEach((c) => rows.push(`${c.name} (@${c.username})`));
-  (w.extras || []).forEach((e) => rows.push(`${e.name}${e.note ? " — " + cut(e.note, 60) : ""}`));
   return rows.join("\n");
 }
 
@@ -10693,7 +10681,6 @@ function worldContext(w, ids, deep, observerId) {
   const focus = ids && ids.length ? ids : null;
   let cast = (w.chars || []).filter((c) => !focus || focus.indexOf(c.id) >= 0);
   if (!focus) cast = cast.slice(0, detailInfo().cast);
-  const extras = (w.extras || []).slice(0, 8);
   const knownCtx = observerId
     ? buildKnownCharacterContext(observerId, [w.player].concat(cast), w)
     : [];
@@ -10755,17 +10742,14 @@ ${tt(
     "Ha egy jelenet úgy folytatódna, hogy neki kellene lépnie, állj meg ott, és hagyd rá a döntést.",
     "If the scene would require the player's move next, stop there and leave the decision to them."
   )}
-${deep ? deepBrief(w, w.player, true, observerId) : sheet(w.player, w, false, true, "private")}
+${deep ? deepBrief(w, w.player, true, observerId) : sheet(w.player, w, false, true, observerId && observerId !== w.player.id ? "private_no_connections" : "private")}
 
 ${tt("A VILÁG TELJES NÉVSORA — RAJTUK KÍVÜL SENKI NEM LÉTEZIK", "FULL WORLD ROSTER — NO ONE ELSE EXISTS")}: 
 ${roster || "-"}
 
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
-${cast.map((c) => (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, "private"))).join("\n") || "-"}
+${cast.map((c) => (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId && observerId !== c.id ? "private_no_connections" : "private"))).join("\n") || "-"}
 ${!observerId && deep ? multiActorPerformanceContext(w, cast.map((c) => c.id)) : ""}
-${extras.length ? `
-${tt("EMLÍTETT SZEMÉLYEK — léteznek, de nem szólalnak meg maguktól", "MENTIONED PEOPLE — they exist, but do not speak on their own")}: 
-${extras.map((e) => `[${e.id}] ${e.name}${e.note ? " — " + cut(e.note, 90) : ""}`).join("\n")}` : ""}
 ${knownCtx.length ? `
 
 ${tt("AMIT MÁSOKRÓL KÜLÖN TUDSZ (saját emlék, pletyka, következtetés)", "WHAT YOU SPECIFICALLY KNOW ABOUT OTHERS (memory, rumor, inference)")}: 
@@ -10847,7 +10831,9 @@ ANGOL NÉVMÁSOK ÉS REFERENCIÁK — KÖTELEZŐ MEGÉRTÉS:
 - Ha tényleg több, egyformán valós referens van, kérdezz vissza röviden. Ne tegyél úgy, mintha nem értenéd az egyszerű angol névmásokat.
 
 KARAKTERKÁNON — NEM OPCIONÁLIS
-- A karakter SAJÁT adatlapján szereplő minden információ aktív kánon: személyiség, tulajdonságok, teljes háttértörténet, titkok, félelmek, célok, kedvencek, beszédstílus, példamondatok mint stílusminta, képességek, harci tudás, rang, szerep, szervezet, affiliation és egyéb információ.
+- A karakter SAJÁT adatlapján szereplő minden információ aktív kánon: személyiség, tulajdonságok, teljes háttértörténet, titkok, félelmek, célok, kedvencek, beszédstílus, példamondatok mint stílusminta, képességek, harci tudás, rang, szerep, szervezet, affiliation, Kapcsolódások és egyéb információ.
+- A KAPCSOLÓDÁSOK mező privát saját-kánon: az ott szövegként megnevezett szülő, testvér, ex, mentor, régi barát, rivális vagy más személy valóban része ennek a karakternek a múltjának/életének, ezért a karakter emlékezhet rá, beszélhet róla és a viszony befolyásolhatja a reakcióit. Ezek a személyek azonban NEM világ-entitások: nincs ID-jük, profiljuk, relationship score-juk, chatjük vagy AI-agentjük.
+- PRIVÁT TUDÁSHATÁR: egy karakter Kapcsolódások mezőjének tartalma nem válik automatikusan más karakter tudásává. Más szereplő csak akkor tudhat róla, ha a saját kánonja is tartalmazza, vagy a játék során ténylegesen megtudta/emlékként megszerezte.
 - Ne csak 2-3 feltűnő tulajdonságot emelj ki. A teljes személyiséget és történetet egyetlen koherens emberként add vissza.
 - Ne szelídíts meg egy kegyetlen, arrogáns, manipulatív, instabil, domináns, félénk, naiv, féltékeny, megszállott vagy más erős személyiségű karaktert általános kedves AI-vá.
 - A saját történetében megnevezett személyekhez, traumákhoz, lojalitásokhoz, konfliktusokhoz és régi eseményekhez úgy viszonyuljon, mint valóban átélt múlthoz, ne mint elfelejthető háttérszöveghez.
@@ -11061,10 +11047,12 @@ FILTER EXAMPLE: a sarcastic character can still be sharp with a best friend, but
 
 CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - Treat the ENTIRE character sheet as active behavioral canon, not decorative background.
+- CONNECTIONS is private self-canon: a parent, sibling, ex, mentor, old friend, rival, or other person named there as text genuinely belongs to THIS character's history/life, so THIS character may remember them, talk about them, and be emotionally shaped by that relationship. These named people are NOT world entities: they have no ID, profile, relationship score, chat, or AI agent.
+- PRIVATE KNOWLEDGE BOUNDARY: one character's Connections field never becomes another character's knowledge automatically. Another character may know that person/fact only if it also exists in their own canon or they actually learned it during play and retained it in memory.
 - CROSS-REFERENCE CANON ACROSS FIELDS: the same relationship, rank or role may appear in history, extra info, organizations, relationships, rank or other fields. Repeated/consistent evidence is strong canon. Do not lose a fact just because it is not stored in one preferred field.
 - HIERARCHY AND ADDRESS ARE RELATIONSHIP-SPECIFIC: if someone is THIS character's own sensei, default direct address is "Sensei + surname" (for example, Sensei Silver), not the sensei's casual first name, unless explicit canon establishes another private address. Do NOT automatically call somebody else's sensei "Sensei". A dangerous/high-authority sensei should not receive casual consequence-free disrespect from non-sensei characters without strong canon/current cause; another sensei is a peer authority and may challenge or disrespect them if canon supports it.
 - NAME / NICKNAME OWNERSHIP IS ABSOLUTE: every SELF identifier belongs to THAT character — full name, first name, surname, nickname and @handle. Never address a different person using ANY SELF name variant merely because it appears prominently in SELF's profile. Examples: if Feng Xiao's nickname is "Wolf", Feng must never call another person "wolf"; Terrance Silver must never call the listener "Terry"; Park Nam-gyu must never call the listener "Nam-gyu", unless TARGET independently has that exact alias. Resolve the addressee exclusively from TARGET identity, never from SELF identity fields.
-- Reconcile every response with personality, traits, speech style, full history, secrets, fears, goals, likes, abilities, organization, rank, relationships and current memories.
+- Reconcile every response with personality, traits, speech style, full history, secrets, fears, goals, likes, abilities, organization, rank, Connections, dynamic relationships and current memories.
 - HUMAN CONVERSATIONAL CONTINUITY: identify what the other person just did socially — compliment, question, joke, invitation, apology, provocation, flirting, support — and respond to THAT act. A dark, dominant, sarcastic or rude character may react smugly, awkwardly, teasingly, suspiciously or tersely to praise, but must not manufacture a random "stop texting / leave me alone" boundary with no current reason.
 - "Cold", "rude", "sarcastic", "dominant" or "dangerous" is not a universal license for hostility in every exchange. The reaction must come from personality + relationship + current context together.
 - If a line could be moved unchanged to several other characters, it is not character-specific enough.
@@ -11963,7 +11951,9 @@ function migrate(w) {
     }
   };
   ["rels", "chats", "mems", "accounts", "players", "deleted", "notify", "charMemory", "userSettings", "images"].forEach((k) => { if (!w[k]) w[k] = {}; });
-  ["posts", "log", "scenes", "extras", "groups", "notes", "inventory", "diary"].forEach((k) => { if (!w[k]) w[k] = []; });
+  ["posts", "log", "scenes", "groups", "notes", "inventory", "diary"].forEach((k) => { if (!w[k]) w[k] = []; });
+
+
 
   /*
    * CRASH-GUARD: a posts/comments adatot a migráció LEGELEJÉN tisztítjuk,
@@ -11997,6 +11987,44 @@ function migrate(w) {
 
   Object.keys(w.players).forEach((id) => fix(w.players[id]));
   (w.chars || []).forEach(fix);
+
+  /*
+   * vConnections migráció: a régi Side character / Mellékszereplő entitásokat
+   * egyszeri szöveges karakterkánonná alakítjuk, majd megszüntetjük őket mint világ-entitásokat.
+   * Így régi mentés sem veszti el az anya/apa/ex/mentor infókat, de ezek többé nem kapnak ID-t,
+   * profilt, relationship score-t, chatet vagy AI-agent szerepet.
+   */
+  const legacyExtras = Array.isArray(w.extras) ? w.extras.filter(Boolean) : [];
+  if (legacyExtras.length) {
+    const legacyIds = new Set(legacyExtras.map((x) => String(x.id || "")).filter(Boolean));
+    const active = humanChars(w).concat(w.chars || []).filter(Boolean);
+    const appendConnection = (character, line) => {
+      if (!character || !line) return;
+      const before = String(character.connections || "").trim();
+      if (before.toLowerCase().includes(line.toLowerCase())) return;
+      character.connections = [before, line].filter(Boolean).join("\n").slice(0, 2000);
+    };
+    active.forEach((character) => {
+      legacyExtras.forEach((person) => {
+        if (!person || !person.id) return;
+        const direct = w.rels[relKey(character.id, person.id)] || w.rels[`${character.id}|${person.id}`] || null;
+        const reverseShared = w.rels[`${person.id}|${character.id}`] || null;
+        const rel = direct || reverseShared;
+        if (!rel) return;
+        const pieces = [String(person.name || "").trim() || "Unnamed person"];
+        if (person.note) pieces.push(String(person.note).trim());
+        const bond = String(rel.bond || rel.type || "").trim();
+        if (bond) pieces.push(`Relationship: ${bond}`);
+        if (rel.hidden) pieces.push(`Private feeling: ${String(rel.hidden).trim()}`);
+        appendConnection(character, pieces.filter(Boolean).join(" — "));
+      });
+    });
+    Object.keys(w.rels || {}).forEach((key) => {
+      const ids = key.includes(">") ? key.split(">") : key.split("|");
+      if (ids.some((id) => legacyIds.has(String(id)))) delete w.rels[key];
+    });
+  }
+  delete w.extras;
 
   Object.keys(w.players || {}).forEach((id) => {
     if (!w.userSettings[id]) w.userSettings[id] = { language: asLang(w.aiLang || "hu"), contentLevel: "mature" };
@@ -12326,8 +12354,13 @@ function mergeMemoryEntries(existing = [], incoming = [], limit = 16) {
 }
 
 function mergeWorlds(remote, local) {
-  if (!remote) return local;
+  if (!remote) {
+    const only = { ...local };
+    delete only.extras;
+    return only;
+  }
   const out = { ...local };
+  delete out.extras;
   out.rev = Math.max(remote.rev || 0, local.rev || 0) + 1;
 
   out.deleted = { ...(remote.deleted || {}), ...(local.deleted || {}) };
@@ -12341,7 +12374,6 @@ function mergeWorlds(remote, local) {
   Object.keys(out.deleted).forEach((id) => { delete out.userSettings[id]; });
 
   out.chars = mergeById(remote.chars, local.chars, out.deleted);
-  out.extras = mergeById(remote.extras, local.extras, out.deleted);
   out.universe = newer(local.universe, remote.universe);
   out.rels = mergeMapById(remote.rels, local.rels);
 
@@ -12754,7 +12786,6 @@ const TERM_TEXT = {
     yearsOld: "éves",
     player: "játékos",
     ai: "bot",
-    extra: "mellékszereplő",
     relTypes: {
       "Ellenség": "Ellenség",
       "Rivális": "Rivális",
@@ -12795,7 +12826,6 @@ const TERM_TEXT = {
     yearsOld: "years old",
     player: "player",
     ai: "bot",
-    extra: "side character",
     relTypes: {
       "Ellenség": "Enemy",
       "Rivális": "Rival",
@@ -14071,7 +14101,6 @@ function seedWorld(code) {
       lastTimeSkipAt: 0,
     },
     chars,
-extras: [],
 rels: {},
 posts: [],
 reposts: [],
@@ -14232,10 +14261,8 @@ players: {},
 deleted: {},
 notify: {},
   };
-  // példa mellékszereplő: van, akiről csak beszélnek
-  const dad = { id: "x" + uid(), name: "Cole Márk", note: "Ryan apja, három éve elköltözött a városból", updatedAt: now() };
-  w.extras.push(dad);
-  setRel(w, chars[0].id, dad.id, { score: -65, bond: "Apa", fixed: true, hidden: "hiába gyűlöli, még mindig várja, hogy felhívja" });
+  // Játékban nem létező személy: csak Ryan saját Connections/Kapcsolódások kánonjában él.
+  chars[0].connections = "Cole Márk — Ryan apja, három éve elköltözött a városból. A kapcsolatuk rossz; Ryan hiába gyűlöli, még mindig várja, hogy felhívja.";
   setRel(w, chars[0].id, chars[2].id, { score: 70, bond: "Legjobb barát", fixed: false });
   setRel(w, chars[1].id, chars[3].id, { score: -25, bond: "Rivális", fixed: false });
   setRel(w, chars[2].id, chars[1].id, { score: 40, bond: "Crush", fixed: false, hidden: "titokban szerelmes belé, de sosem vallaná be" });
@@ -14263,7 +14290,7 @@ notify: {},
 
 function emptyWorld(code) {
   const w = seedWorld(code);
-  w.chars = []; w.extras = []; w.rels = {}; w.posts = []; w.log = []; w.scenes = []; w.groups = []; w.notes = []; w.inventory = []; w.diary = []; w.starter = [];
+  w.chars = []; w.rels = {}; w.posts = []; w.log = []; w.scenes = []; w.groups = []; w.notes = []; w.inventory = []; w.diary = []; w.starter = [];
   w.universe = {
     name: "Névtelen világ",
     year: String(new Date().getFullYear()),
@@ -14673,9 +14700,9 @@ function pickAutonomousRepostAction(w) {
    ============================================================ */
 
 /*
- * A social hálózatban most a játékosok és a teljes AI-karakterek
- * rendelkeznek valódi, követhető profillal.
- * A mellékszereplők egyelőre nem.
+ * A social hálózatban csak a játékosok és a teljes AI-karakterek
+ * rendelkeznek valódi, követhető profillal. A Connections/Kapcsolódások mező
+ * szöveges személyei nem világ-entitások, ezért nincs profiljuk.
  */
 function socialProfiles(w) {
   const activeMedia =
@@ -21188,7 +21215,7 @@ ${characterAgentRuntimeCard(
 PUBLIKUS THREAD REALIZMUS:
 - Ez nyilvános kommentmező, NEM kétfős privát beszélgetés. Egy reply után nem csak az eredeti komment szerzője válaszolhat.
 - BÁRMELYIK itt megadott AI beszállhat, ha hitelesen látja a threadet és van személyes oka: barátság, rivalizálás, védelem, féltékenység, érintettség, kíváncsiság, pletyka, konfliktus vagy a poszt témája.
-- Ne kényszeríts mellékszereplőt a threadbe, ha nincs oka, de ne is zárd le mesterségesen két emberre.
+- Ne kényszeríts második vagy harmadik karaktert a threadbe, ha nincs oka, de ne is zárd le mesterségesen két emberre.
 - Egy szaftos nyilvános beszólásból könnyen lehet többemberes pile-on, védelem, flört, vita vagy későbbi gossip-forrás.
 ${forcedResponder ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott hiteles beszálló; az ő reply-ja kötelező, második természetes válaszoló opcionális.` : ""}
 
@@ -23624,6 +23651,7 @@ const FIELDS = [
   ["looks", "Külső leírás", 1], ["personality", "Személyiség (rejtve, ez irányítja a viselkedést)", 1], ["traits", "Tulajdonságok (IQ, EQ, humor, türelem…)", 1],
   ["speech", "Beszédstílus", 1], ["voice", "Példamondatok — így beszél", 1], ["goals", "Célok", 1], ["fears", "Félelmek", 1], ["likes", "Kedvenc dolgok", 1],
   ["secrets", "Titkok (csak az AI látja)", 1], ["backstory", "Háttértörténet", 1],
+  ["connections", "Kapcsolódások", 1],
   ["extra", "Egyéb információk — amit az AI-nak tudnia érdemes", 1],
 ];
 const FIELD_LABELS_EN = {
@@ -23634,6 +23662,7 @@ const FIELD_LABELS_EN = {
   looks: "Appearance", personality: "Personality (hidden, drives behavior)", traits: "Traits (IQ, EQ, humor, patience…)",
   speech: "Speech style", voice: "Example lines — how they talk", goals: "Goals", fears: "Fears", likes: "Favorite things",
   secrets: "Secrets (AI only)", backstory: "Backstory",
+  connections: "Connections",
   extra: "Other info — anything the AI should know",
 };
 
@@ -23698,7 +23727,7 @@ const MEASURED = [
   ["personality", "Személyiség"], ["speech", "Beszédstílus"], ["voice", "Példamondatok"],
   ["traits", "Tulajdonságok"], ["goals", "Célok"], ["fears", "Félelmek"],
   ["secrets", "Titkok"], ["likes", "Kedvencek"], ["looks", "Külső"],
-  ["extra", "Egyéb"], ["backstory", "Háttértörténet"],
+  ["connections", "Kapcsolódások"], ["extra", "Egyéb"], ["backstory", "Háttértörténet"],
 ];
 
 /* Mezőnkénti keretjelző: írás közben látod, mennyi fér át. */
@@ -23773,7 +23802,7 @@ function BudgetMeter({ c, onBrief, setErr }) {
   const [busy, setBusy] = useState(false);
   const src = React.useMemo(
     () => rawLen(c),
-    [c.personality, c.secrets, c.backstory, c.extra]
+    [c.personality, c.secrets, c.backstory, c.extra, c.connections]
   );
   const state = React.useMemo(
     () => briefState({ ...c, __src: src }),
@@ -23886,10 +23915,6 @@ function CharForm({ initial, onSave, onClose, onDelete, setErr, w, isNew }) {
   const [c, setC] = useState(initial);
   const [idea, setIdea] = useState("");
   const [busy, setBusy] = useState(false);
-  // Új, még nem létező személyek, akiket itt helyben veszünk fel (család, ex, tanár…)
-  const [newPeople, setNewPeople] = useState([]);
-  const [nx, setNx] = useState("");
-  const [nxNote, setNxNote] = useState("");
   const [rels, setRelsState] = useState(() => {
     const out = {};
     if (!w || !initial.id) return out;
@@ -23903,22 +23928,10 @@ function CharForm({ initial, onSave, onClose, onDelete, setErr, w, isNew }) {
   const set = (k, v) => setC((p) => ({ ...p, [k]: v }));
   const setRelDraft = (otherId, patch) => setRelsState((p) => ({ ...p, [otherId]: { ...(p[otherId] || { score: 0, hidden: "", bond: "", fixed: false }), ...patch } }));
   const wy = worldYear(w);
-  // a mellékszereplők közül csak azok, akikhez már van viszony — vagy akiket most vettél fel
-  const others = (() => {
-    if (!w) return newPeople;
-    const base = relevantOthers(w, initial.id).filter((x) => x.id !== c.id);
-    const drafted = (w.extras || []).filter((x) => x.id !== c.id && rels[x.id] && !base.some((b) => b.id === x.id));
-    return base.concat(drafted).concat(newPeople);
-  })();
-
-  const addPerson = () => {
-    const nm = nx.trim();
-    if (!nm) return;
-    const id = "x" + uid();
-    setNewPeople((p) => p.concat({ id, name: nm, note: nxNote.trim() }));
-    setRelDraft(id, { score: 0 });
-    setNx(""); setNxNote("");
-  };
+  // Csak tényleges játékbeli karakterek kapnak dinamikus relationship score/bond állapotot.
+  const others = w
+    ? relevantOthers(w, initial.id).filter((x) => x.id !== c.id)
+    : [];
 
   const generate = async () => {
     if (!idea.trim()) return;
@@ -23931,46 +23944,13 @@ ${worldLanguage(w, w && w.meId) === "en"
   ? "All user-visible generated profile fields must be in English."
   : "Minden generált, felhasználónak látható profilmező magyar legyen."}
 Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók):
-{"name":"","nick":"","username":"","birth":"","gender":"","orientation":"","height":"","job":"","city":"","bio":"","looks":"","personality":"","traits":"","speech":"","voice":"két-három tipikus mondat tőle, idézőjelben","goals":"","fears":"","likes":"","secrets":"","backstory":""}`);
+{"name":"","nick":"","username":"","birth":"","gender":"","orientation":"","height":"","job":"","city":"","bio":"","looks":"","personality":"","traits":"","speech":"","voice":"két-három tipikus mondat tőle, idézőjelben","goals":"","fears":"","likes":"","secrets":"","backstory":"","connections":"fontos, játékban nem feltétlenül létező személyek és a karakter viszonya hozzájuk; max. 2000 karakter"}`);
       setC((p) => ({ ...p, ...out }));
     } catch (e) { setErr((e && e.message) || tt("A generálás nem sikerült. Próbáld újra.", "Generation failed. Try again.")); }
     setBusy(false);
   };
 
-  // Családtagok kitalálása: felveszi őket mellékszereplőként, viszonnyal együtt.
-  const suggestFamily = async () => {
-    setBusy(true);
-    try {
-      const out = await askWorldJSON(w, engineFor(w), `${w ? worldContext(w, [], false, null) : ""}
 
-KARAKTER: ${c.name || "névtelen"}
-${c.backstory ? "Háttér: " + String(c.backstory).slice(0, 800) : ""}
-${c.personality ? "Személyiség: " + String(c.personality).slice(0, 300) : ""}
-
-Találd ki a családját és a legfontosabb, meg nem írt szereplőket (szülők, testvérek, ex, nagyszülő, főnök).
-Add meg, milyen most köztük a viszony: a "score" -100 és 100 közötti szám, a "bond" a rokoni vagy egyéb kötelék
-(pl. Anya, Apa, Testvér, Nagymama, Exek), a "hidden" pedig az, amit sosem mondana ki hangosan.
-A rossz viszony is jó: nem kell mindenkit szeretnie.
-Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"hidden":""}]}${TAIL}`);
-
-      const list = (out.people || []).slice(0, 8);
-      if (!list.length) throw new Error("Nem érkezett használható javaslat.");
-      const added = [];
-      list.forEach((p) => {
-        if (!p || !p.name) return;
-        const id = "x" + uid();
-        added.push({ id, name: String(p.name), note: String(p.note || "") });
-        setRelDraft(id, {
-          score: clamp(Number(p.score) || 0),
-          bond: String(p.bond || "").slice(0, 40),
-          fixed: FIXED_BONDS.indexOf(String(p.bond || "")) >= 0,
-          hidden: String(p.hidden || ""),
-        });
-      });
-      setNewPeople((prev) => prev.concat(added));
-    } catch (e) { setErr((e && e.message) || tt("A javaslat nem sikerült.", "The suggestion failed.")); }
-    setBusy(false);
-  };
 
   return (
     <div className="scrim char-edit-scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -24054,12 +24034,26 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
           <div key={k}>
             <label className="f">{tt(label, FIELD_LABELS_EN[k] || label)}</label>
             {big ? (
-              <textarea className="i" value={c[k] || ""} onChange={(e) => set(k, e.target.value)} />
+              <textarea
+                className="i"
+                value={c[k] || ""}
+                maxLength={k === "connections" ? 2000 : undefined}
+                style={k === "connections" ? { minHeight: 150 } : undefined}
+                onChange={(e) => set(k, e.target.value)}
+              />
             ) : (
               <input className="i" value={c[k] || ""} onChange={(e) => set(k, e.target.value)}
                 placeholder={k === "birth" ? tt("pl. 2008. március 14.", "e.g. March 14, 2008") : ""} />
             )}
             <FieldLimit field={k} value={c[k]} />
+            {k === "connections" && (
+              <p className="hint" style={{ marginTop: 6 }}>
+                {tt(
+                  "Ide írd szabad szövegként azokat a fontos embereket és kapcsolatokat, akik a karakter múltjához vagy életéhez tartoznak, de nem akarsz nekik külön AI-karaktert létrehozni — például szülő, testvér, ex, mentor, régi barát vagy rivális. Legfeljebb 2000 karakter. Ez privát karakterkánon: a karakter emlékszik rájuk és reagálhat rájuk, de ezek a személyek nem kapnak profilt, ID-t, chatet, relationship score-t vagy AI-agentet, és más karakterek nem tudnak róluk automatikusan.",
+                  "Write important people and relationships here as free text when they belong to the character's history or life but should not become separate AI characters — for example a parent, sibling, ex, mentor, old friend, or rival. Maximum 2000 characters. This is private character canon: the character remembers and can react to them, but these people get no profile, ID, chat, relationship score, or AI agent, and other characters do not automatically know about them."
+                )}
+              </p>
+            )}
             {k === "extra" && (
               <p className="hint" style={{ marginTop: 6 }}>
                 {tt("Bármi, ami nem fért a többi mezőbe, de számít: szokások, betegség, allergia, munkahelyi helyzet, kisállat, lakás, anyagi helyzet, vallás, hobbi részletei, régi sérelmek, tervek, vagy amit te szabályként adsz meg neki. Az AI ezt is olvassa minden megszólalás előtt.",
@@ -24083,39 +24077,27 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
         {w && (
           <>
             <div className="sep" />
-            <label className="f" style={{ marginTop: 0 }}>{tt("Kapcsolatok — kihez hogyan viszonyul", "Bonds — how they relate to others")}</label>
+            <label className="f" style={{ marginTop: 0 }}>{tt("Kapcsolatok — aktív karakterek között", "Bonds — between active characters")}</label>
             <p className="hint">
-              {tt("Itt a botok, a játékosok és a mellékszereplők is szerepelnek. Aki még nincs a világban — apa, anya, testvér, ex, tanár —, azt itt helyben felveheted. A rokoni kötelék állandó marad, a viszony viszont lehet gyűlölködő is: húzd mínuszba a csúszkát.",
-                  "Bots, players and side characters all appear here. Anyone not yet in the world — father, mother, sibling, ex, teacher — you can add right here. A family bond stays permanent, but the relationship itself can still be hateful: drag the slider into the negative.")}
+              {tt(
+                "Itt csak a játékban ténylegesen létező játékos- és AI-karakterek közötti dinamikus viszonyt állítod. A játékban nem szereplő szülőket, testvéreket, exeket, mentorokat vagy más fontos embereket a fenti Kapcsolódások mezőbe írd szövegként.",
+                "This section only controls dynamic relationships between player and AI characters that actually exist in the game. Put parents, siblings, exes, mentors, or other important people who are not in the game into the Connections field above as text."
+              )}
             </p>
-
-            <div className="row char-edit-add-person" style={{ gap: 8, marginTop: 8, alignItems: "flex-start" }}>
-              <input className="i" style={{ flex: 1.1 }} value={nx} placeholder={tt("Új személy neve — pl. Cole Márk", "New person's name — e.g. Cole Mark")}
-                onChange={(e) => setNx(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addPerson(); }} />
-              <input className="i" style={{ flex: 1 }} value={nxNote} placeholder={tt("ki ő? — pl. az apja, alkoholista", "who are they? — e.g. their father, an alcoholic")}
-                onChange={(e) => setNxNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addPerson(); }} />
-              <button className="btn" onClick={addPerson} disabled={!nx.trim()}><Plus size={14} /></button>
-            </div>
-
-            <button className="btn full" style={{ marginTop: 8 }} onClick={suggestFamily} disabled={busy || !c.name}>
-              {busy ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} color="var(--gold)" />} {tt("Család és ismerősök kitalálása", "Invent family and acquaintances")}
-            </button>
 
             {others.length === 0 && <p className="hint" style={{ marginTop: 10 }}>{tt("Még nincs kihez viszonyulnia.", "There's no one to relate to yet.")}</p>}
 
             {others.map((o) => {
               const r = rels[o.id] || { score: 0, hidden: "", bond: "", fixed: false };
-              const fresh = newPeople.some((p) => p.id === o.id);
               return (
                 <div key={o.id} className="char-edit-rel-card" style={{ marginTop: 12 }}>
                   <div className="between" style={{ marginBottom: 4 }}>
                     <span style={{ fontSize: 13 }}>
                       {o.id === w.meId ? tt(`${o.name} (te)`, `${o.name} (you)`) : o.name}
-                      <span className="handle mono"> · {fresh ? tt("új mellékszereplő", "new side character") : kindOf(w, o.id)}</span>
+                      <span className="handle mono"> · {kindOf(w, o.id)}</span>
                     </span>
                     <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score} · {relLabel(r)}</span>
                   </div>
-                  {fresh && o.note ? <p className="hint" style={{ marginBottom: 4 }}>{o.note}</p> : null}
                   <RelBar score={r.score} />
                   <input className="i mono" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} type="range" min="-100" max="100"
                     value={r.score} onChange={(e) => setRelDraft(o.id, { score: Number(e.target.value) })} />
@@ -24123,12 +24105,6 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
                     onChange={(p) => setRelDraft(o.id, p)} />
                   <input className="i" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} value={r.hidden}
                     placeholder={tt("rejtett érzés (opcionális)", "hidden feeling (optional)")} onChange={(e) => setRelDraft(o.id, { hidden: e.target.value })} />
-                  {fresh && (
-                    <button className="btn ghost tiny" style={{ marginTop: 6, color: "var(--steel)" }}
-                      onClick={() => { setNewPeople((p) => p.filter((x) => x.id !== o.id)); setRelsState((p) => { const q = { ...p }; delete q[o.id]; return q; }); }}>
-                      <Trash2 size={12} /> {tt("Mégsem kell", "Never mind")}
-                    </button>
-                  )}
                 </div>
               );
             })}
@@ -24151,12 +24127,12 @@ Formátum: {"people":[{"name":"","note":"egy mondat róla","bond":"","score":0,"
       onSave(
         {
           ...c,
+          connections: String(c.connections || "").slice(0, 2000),
           username: (c.username || c.name)
             .toLowerCase()
             .replace(/[^a-z0-9._]/g, "")
         },
-        rels,
-        newPeople
+        rels
       );
     }}
   >
@@ -24607,8 +24583,8 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
 
         <p className="hint">
           {tt(
-            "Mindkét irány külön állítható. Új személyt a Szerkesztés gombbal vagy a Kapcsolat fülön vehetsz fel.",
-            "Both directions are set separately. Add a new person via the Edit button or the Bonds tab."
+            "Mindkét irány külön állítható, de itt csak tényleges játékbeli karakterek szerepelnek. A háttérben létező fontos emberek a karakter Kapcsolódások mezőjében vannak.",
+            "Both directions are set separately, but only actual in-game characters appear here. Important background people live in the character's Connections field."
           )}
         </p>
 
@@ -24726,46 +24702,23 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
   );
 }
 
-/* Az űrlapon felvett új személyek és kapcsolatok beírása a világba. */
-function commitForm(n, subjectId, relDrafts, newPeople) {
-  // a mellékszereplő csak annál a szereplőnél jelenik meg, akinél beállítottad
-  (newPeople || []).forEach((x) => {
-    if (!n.extras) n.extras = [];
-    if (!n.extras.some((e) => e.id === x.id)) n.extras.push({ id: x.id, name: x.name, note: x.note || "", updatedAt: now() });
-  });
+/* Az űrlapon szerkesztett dinamikus kapcsolatok mentése.
+   Itt kizárólag valódi játékbeli karakter-ID-k szerepelhetnek. */
+function commitForm(n, subjectId, relDrafts) {
   if (!relDrafts) return;
+  const activeIds = new Set(allSubjects(n).map((x) => String(x.id)));
   Object.keys(relDrafts).forEach((otherId) => {
     const d = relDrafts[otherId];
-    if (!d || otherId === subjectId) return;
-    const savedBond =
-      String(
-        d.bond || ""
-      );
+    if (!d || otherId === subjectId || !activeIds.has(String(otherId))) return;
+    const savedBond = String(d.bond || "");
+    const familyFixed = FIXED_BONDS.includes(savedBond);
 
-    /*
-     * Csak családi kötelék lehet fix.
-     * Minden más kézzel kiválasztott bond automatikusan változhat később.
-     */
-    const familyFixed =
-      FIXED_BONDS.includes(
-        savedBond
-      );
-
-    setRel(
-      n,
-      subjectId,
-      otherId,
-      {
-        score:
-          d.score || 0,
-        hidden:
-          d.hidden || "",
-        bond:
-          savedBond,
-        fixed:
-          familyFixed,
-      }
-    );
+    setRel(n, subjectId, otherId, {
+      score: d.score || 0,
+      hidden: d.hidden || "",
+      bond: savedBond,
+      fixed: familyFixed,
+    });
   });
 }
 
@@ -24802,7 +24755,7 @@ function Cast({ w, update, setErr, goChat, jump }) {
           <button className="btn tiny primary" onClick={() => setEditMe(true)}><Pencil size={13} /> {tt("Szerkesztés", "Edit")}</button>
         </div>
         <p className="hint" style={{ marginTop: 8 }}>
-          {tt("A saját családodat és ismerőseidet is itt állítod be — a szerkesztésen belül, a Kapcsolatok résznél.", "You also set up your own family and acquaintances here — inside Edit, in the Bonds section.")}
+          {tt("A játékban nem szereplő családtagokat és ismerősöket a szerkesztésen belüli Kapcsolódások mezőben írhatod le.", "Describe family and acquaintances who are not in the game in the Connections field inside Edit.")}
         </p>
       </div>
 
@@ -24900,10 +24853,10 @@ function Cast({ w, update, setErr, goChat, jump }) {
 
       {editMe && (
         <CharForm initial={w.player} isNew={false} setErr={setErr} w={w} onClose={() => setEditMe(false)} onDelete={() => {}}
-          onSave={(c, relDrafts, newPeople) => {
+          onSave={(c, relDrafts) => {
             update((n) => {
               n.players[w.meId] = { ...c, id: w.meId, username: uniqueHandle(n, c.username, w.meId), updatedAt: now() };
-              commitForm(n, w.meId, relDrafts, newPeople);
+              commitForm(n, w.meId, relDrafts);
             });
             setEditMe(false);
           }} />
@@ -24919,7 +24872,7 @@ function Cast({ w, update, setErr, goChat, jump }) {
             });
             setForm(null);
           }}
-          onSave={(c, relDrafts, newPeople) => {
+          onSave={(c, relDrafts) => {
             update((n) => {
               const stamped = {
                 ...c,
@@ -24949,8 +24902,7 @@ function Cast({ w, update, setErr, goChat, jump }) {
               commitForm(
                 n,
                 stamped.id,
-                relDrafts,
-                newPeople
+                relDrafts
               );
 
               /*
@@ -25049,109 +25001,18 @@ function Cast({ w, update, setErr, goChat, jump }) {
 }
 
 /* ============================================================
-   Kapcsolatok — mindenki mindenkihez, botként meg nem írt szereplőkkel is
+   Kapcsolatok — csak tényleges játékbeli karakterek között
    ============================================================ */
-function ExtraForm({ w, x, update, onClose }) {
-  useEditLock();
-  const { tt } = useLang();
-  const [name, setName] = useState(x.name || "");
-  const [note, setNote] = useState(x.note || "");
-  return (
-    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="sheet">
-        <div className="between">
-          <h2 style={{ fontSize: 20 }}>{tt("Mellékszereplő", "Side character")}</h2>
-          <button className="btn tiny ghost" onClick={onClose}><X size={14} /></button>
-        </div>
-        <label className="f">{tt("Név", "Name")}</label>
-        <input className="i" value={name} onChange={(e) => setName(e.target.value)} />
-        <label className="f">{tt("Egy mondat róla", "A sentence about them")}</label>
-        <textarea className="i" value={note} onChange={(e) => setNote(e.target.value)} />
-        <button className="btn primary full" style={{ marginTop: 16 }} onClick={() => {
-          if (!name.trim()) return;
-          update((n) => {
-            const i = (n.extras || []).findIndex((e2) => e2.id === x.id);
-            if (i >= 0) n.extras[i] = { ...n.extras[i], name: name.trim(), note: note.trim(), updatedAt: now() };
-          });
-          onClose();
-        }}>{tt("Mentés", "Save")}</button>
-      </div>
-    </div>
-  );
-}
-
 function Bonds({ w, update, setErr }) {
   const { tt } = useLang();
   const subjects = allSubjects(w);
   const [focus, setFocus] = useState(w.meId);
-  const [nx, setNx] = useState("");
-  const [nnote, setNnote] = useState("");
-  const [editExtra, setEditExtra] = useState(null);
 
   const me = subjects.find((x) => x.id === focus) || subjects[0];
   const others = me ? relevantOthers(w, me.id) : [];
-  // akikhez még nincs viszony rögzítve — ezeket kell külön hozzáadni
-  const addable = me ? (w.extras || []).filter((x) => x.id !== me.id && !linked(w, me.id, x.id)) : [];
-
-  const addExtra = () => {
-    const nm = nx.trim();
-    if (!nm) return;
-    const id = "x" + uid();
-    update((n) => {
-      if (!n.extras) n.extras = [];
-      n.extras.push({ id, name: nm, note: nnote.trim(), updatedAt: now() });
-    });
-    setNx(""); setNnote("");
-  };
-
-  const delExtra = (id) => {
-    update((n) => {
-      n.extras = (n.extras || []).filter((x) => x.id !== id);
-      if (!n.deleted) n.deleted = {};
-      n.deleted[id] = now();
-    });
-    setEditExtra(null);
-    if (focus === id) setFocus(w.meId);
-  };
 
   return (
     <>
-      <div className="card">
-        <label className="f" style={{ marginTop: 0 }}>{tt("Mellékszereplő felvétele", "Add side character")}</label>
-        <p className="hint">
-          {tt("Olyan emberek, akiket nem akarsz botként megírni — szülők, testvérek, exek, tanárok. Nem szólalnak meg maguktól, de léteznek a világban, lehet róluk beszélni, és bárkivel kapcsolatba állíthatók: a te karaktereddel és a botokkal is.",
-              "People you don't want to write as full AI bots — parents, siblings, exes, teachers. They don't speak on their own, but they exist in the world, can be talked about, and can be linked in relationships with your character and the bots too.")}
-        </p>
-        <input className="i" style={{ marginTop: 8 }} value={nx} placeholder={tt("Név — pl. Kovács Erika", "Name — e.g. Erika Kovacs")}
-          onChange={(e) => setNx(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addExtra(); }} />
-        <input className="i" style={{ marginTop: 6 }} value={nnote} placeholder={tt("Egy mondat róla (nem kötelező) — pl. Anita anyja, ápolónő", "One line about them (optional) — e.g. Anita's mother, a nurse")}
-          onChange={(e) => setNnote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addExtra(); }} />
-        <button className="btn full" style={{ marginTop: 8 }} onClick={addExtra} disabled={!nx.trim()}>
-          <Plus size={14} /> {tt("Hozzáadás", "Add")}
-        </button>
-      </div>
-
-      {(w.extras || []).length > 0 && (
-        <div className="card">
-          <label className="f" style={{ marginTop: 0 }}>{tt(`Mellékszereplők (${(w.extras || []).length})`, `Side characters (${(w.extras || []).length})`)}</label>
-          {(w.extras || []).map((x) => (
-            <div className="between" key={x.id} style={{ marginTop: 10 }}>
-              <div className="row" style={{ alignItems: "center", minWidth: 0 }}>
-                <Av name={x.name} size={28} radius={9} />
-                <div style={{ minWidth: 0 }}>
-                  <div className="name" style={{ fontSize: 13.5 }}>{x.name}</div>
-                  {x.note && <div className="hint" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{x.note}</div>}
-                </div>
-              </div>
-              <div className="row" style={{ gap: 4 }}>
-                <button className="btn tiny ghost" onClick={() => setEditExtra(x)}><Pencil size={12} /></button>
-                <button className="btn tiny ghost" style={{ color: "var(--steel)" }} onClick={() => delExtra(x.id)}><Trash2 size={12} /></button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
       <div className="card">
         <label className="f" style={{ marginTop: 0 }}>{tt("Kinek a kapcsolatait nézzük?", "Whose bonds are we looking at?")}</label>
         <select className="i" value={focus} onChange={(e) => setFocus(e.target.value)}>
@@ -25159,20 +25020,14 @@ function Bonds({ w, update, setErr }) {
             <option key={x.id} value={x.id}>{x.id === w.meId ? tt(`${x.name} (te)`, `${x.name} (you)`) : x.name} — {kindOf(w, x.id)}</option>
           ))}
         </select>
+        <p className="hint" style={{ marginTop: 8 }}>
+          {tt(
+            "Itt csak a világban ténylegesen létező játékos- és AI-karakterek dinamikus viszonyai szerepelnek. A nem aktív szülőket, testvéreket, exeket, mentorokat és más fontos embereket a karakter Szerkesztés → Kapcsolódások mezőjében írd le.",
+            "Only dynamic relationships between player and AI characters that actually exist in the world appear here. Describe non-active parents, siblings, exes, mentors, and other important people in the character's Edit → Connections field."
+          )}
+        </p>
         {subjects.length === 0 && <p className="hint" style={{ marginTop: 8 }}>{tt("Még nincs kihez kapcsolatot rögzíteni.", "There's no one to record a bond with yet.")}</p>}
       </div>
-
-      {me && addable.length > 0 && (
-        <div className="card">
-          <label className="f" style={{ marginTop: 0 }}>{tt(`Mellékszereplő hozzáadása ${me.name} kapcsolataihoz`, `Add a side character to ${me.name}'s bonds`)}</label>
-          <p className="hint">{tt("A mellékszereplők csak ott jelennek meg, ahol felvetted hozzájuk a viszonyt.", "Side characters only appear where you've set up a bond with them.")}</p>
-          <select className="i" style={{ marginTop: 8 }} value=""
-            onChange={(e) => { if (e.target.value) update((n) => setRel(n, me.id, e.target.value, {})); }}>
-            <option value="">{tt("Válassz…", "Choose\u2026")}</option>
-            {addable.map((x) => <option key={x.id} value={x.id}>{x.name}{x.note ? " — " + x.note : ""}</option>)}
-          </select>
-        </div>
-      )}
 
       {me && others.map((o) => (
         <div className="card" key={o.id}>
@@ -25186,8 +25041,6 @@ function Bonds({ w, update, setErr }) {
           <RelPair w={w} aId={me.id} bId={o.id} aName={me.name.split(" ")[0]} bName={o.name.split(" ")[0]} update={update} />
         </div>
       ))}
-
-      {editExtra && <ExtraForm w={w} x={editExtra} update={update} onClose={() => setEditExtra(null)} />}
     </>
   );
 }
@@ -30404,10 +30257,10 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
 
       {editPlayer && (
         <CharForm initial={w.player} setErr={setErr} w={w} onClose={() => setEditPlayer(false)} onDelete={() => {}}
-          onSave={(c, relDrafts, newPeople) => {
+          onSave={(c, relDrafts) => {
             update((n) => {
               n.players[w.meId] = { ...c, id: w.meId, username: uniqueHandle(n, c.username, w.meId), updatedAt: now() };
-              commitForm(n, w.meId, relDrafts, newPeople);
+              commitForm(n, w.meId, relDrafts);
             });
             setEditPlayer(false);
           }} />
@@ -30447,12 +30300,14 @@ async function genBrief(c) {
         personality: "PERSONALITY",
         secrets: "SECRETS",
         backstory: "BACKSTORY",
+        connections: "CONNECTIONS / IMPORTANT PEOPLE",
         extra: "OTHER IMPORTANT INFO",
       }
     : {
         personality: "SZEMÉLYISÉG",
         secrets: "TITKOK",
         backstory: "HÁTTÉRTÖRTÉNET",
+        connections: "KAPCSOLÓDÁSOK / FONTOS EMBEREK",
         extra: "EGYÉB",
       };
 
