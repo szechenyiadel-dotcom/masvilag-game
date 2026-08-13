@@ -11281,6 +11281,16 @@ FŐ SZABÁLY: minden válasz legyen karakterhű, természetes, emberi és az ado
 - Ismert felnőttek között a karakter reagálhat erre flörttel, zavarral, ugratással, féltékenységgel, humorral, vonzalommal vagy rosszallással a saját személyisége és kapcsolata szerint, nem grafikus módon.
 - Kiskorút vagy nem igazoltan 18+ személyt ne szexualizálj akkor sem, ha a szöveg felnőtt célzást tartalmaz.
 
+KÉP-ALAPÚ SOCIAL ÉRTELMEZÉS — HARD RULE:
+- A social poszt képe és captionje EGYETLEN közös kommunikációs aktus. Ha imageDescription / vizuális leírás rendelkezésre áll, azt látható bizonyítékként kezeld, ne dekorációként.
+- Képes posztnál a captionnek ehhez a KONKRÉT képhez kell illeszkednie. Lehet indirekt, ironikus, esztétikus, flörtös, rövid vagy belsős, de ne utaljon egy teljesen más jelenetre valódi világkontektsus nélkül.
+- Kommentnél/replynál a karakter a captiont ÉS a látható képtartalmat együtt értelmezi. Reagálhat outfitre, hajra, sminkre, helyszínre, tárgyra, sérülésre, testbeszédre, hangulatra vagy a képen szereplő ismert karakterekre, de kizárólag arra, ami ténylegesen benne van a kapott vizuális leírásban.
+- Többszereplős képnél az biztos tény lehet, hogy a szereplők együtt láthatók; ebből NEM következik automatikusan randi, csók, kapcsolat vagy titkos viszony. Ezek csak karakterenkénti értelmezések/feltételezések lehetnek.
+- Ugyanazt a képet különböző karakterek különbözően értelmezhetik a saját kapcsolatuk, emlékeik, féltékenységük, crushuk, rivalizálásuk, bizalmuk és személyiségük alapján. A szubjektív olvasatot ne emeld objektív ténnyé.
+- Ha a kép érzelmileg releváns, kiválthat kommentet, későbbi DM-et, relationship continuity/open loopot, gossipot vagy kapcsolatváltozást — de csak valódi karakterhű reakcióból, nem automatikusan.
+- Ha nincs imageDescription vagy megbízható vizuális metadata, NE találj ki képrészleteket.
+- Mature 18+ módban ismert felnőttek képein a nem grafikus thirst-trap, provokatív póz, felnőtt caption és szexuális célzás társas jelentését is értsd; ne találj ki explicit aktust a képből és ne szexualizálj kiskorút.
+
 VÉGREHAJTÁSI ELSŐBBSÉG — HA KÉT SZABÁLY LÁTSZÓLAG ÜTKÖZIK:
 1. SAJÁT KÁNON / RENDSZER-RÉTEG: a karakter személyisége, backstory-ja, értékei, hibái, beszédstílusa és motivációi a legerősebb réteg. Ez mondja meg, KI ő.
 2. KAPCSOLATI SZŰRŐ: a score + bond + aktív érzés azt modulálja, HOGYAN fejezi ki ugyanazt a személyiséget az adott ember felé. A filter nem cseréli le a személyiséget.
@@ -11548,6 +11558,16 @@ MAIN RULE: every response must be true to character, natural, human and appropri
 - Do not sanitize an obviously adult-coded line into an innocent literal interpretation.
 - Between known adults, characters may react to that subtext with flirting, embarrassment, teasing, jealousy, humor, attraction or disapproval according to personality and relationship, while remaining non-graphic.
 - Never sexualize a minor or a person whose age is not confirmed 18+, even when the language itself is adult-coded.
+
+IMAGE-GROUNDED SOCIAL REASONING — HARD RULE:
+- A social post's image and caption are ONE communication act. When imageDescription / visual metadata is supplied, treat it as visible evidence, not decoration.
+- For an image post, write a caption for THIS specific image. It may be indirect, ironic, aesthetic, flirtatious, brief or contextual, but it must not describe or imply an unrelated scene without real world context supporting that contrast.
+- In comments/replies, interpret caption AND visible image content together. Characters may react to outfit, hair, makeup, location, objects, injury, body language, mood, or known characters visibly present, but only when that detail exists in the supplied visual description.
+- In multi-person images, the fact that people appear together may be observed; dating, kissing, hooking up, secret relationships or intent are NOT automatically facts. Those may only be character-specific interpretations or rumors.
+- Different characters may read the same image differently based on their own relationship, memories, jealousy, crush, rivalry, trust and personality. Never upgrade subjective perception into objective truth.
+- A socially meaningful image may cause comments, later DMs, relationship-continuity/open loops, gossip or relationship changes, but only through a character-accurate reaction rather than an automatic stat change.
+- If no reliable imageDescription/visual metadata exists, do NOT hallucinate image details.
+- In Mature 18+ mode, known adults may understand non-graphic thirst-trap cues, provocative poses/captions and sexual innuendo in their natural social meaning, but never invent explicit sexual acts from an image and never sexualize a minor.
 
 EXECUTION PRIORITY — WHEN TWO RULES APPEAR TO CONFLICT:
 1. OWN CANON / SYSTEM LAYER: the character's personality, backstory, values, flaws, speech style and motivations are the strongest layer. This decides WHO they are.
@@ -13855,7 +13875,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v61-parallel-chat-roleplay";
+const BUILD_VERSION = "v62-image-grounded-social";
 
 const AUTO = "masvilag:auto";
 /*
@@ -19991,11 +20011,16 @@ ${post.authorId === w.meId && post.text ? playerInputUnderstandingInstruction(w,
 ${
   (post.imageId || post.image)
     ? `KÉP A POSZTBAN:
-${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post.imageDescription}
-` : ""}A szereplők látják a poszthoz tartozó képet is.
-Ha természetes, reagáljanak arra, ami ténylegesen látható rajta: személyekre, outfitre, helyszínre, hangulatra vagy más fontos részletre.
-A kép ugyanúgy része a kontextusnak, mint a poszt szövege.
-A kommentek legyenek képföldeltek: ne írjanak olyan részletről, ami nincs a poszt szövegében vagy a látható képleírásban.
+${post.imageDescription ? `A kép megbízható látható tartalma: ${post.imageDescription}
+` : ""}A karakterek a CAPTIONT ÉS A KÉPET EGYÜTT látják és értelmezik.
+- A kép látható bizonyíték, nem dekoráció.
+- Reagálhatnak konkrétan személyre, outfitre, hajra/sminkre, helyszínre, tárgyra, sérülésre, testbeszédre, közelségre, hangulatra vagy más ténylegesen leírt vizuális részletre.
+- Ne kommentálják mechanikusan a teljes képet; minden karakter azt a részletet vegye észre, ami NEKI számít a saját kapcsolatából, emlékeiből és személyiségéből.
+- Többszereplős képnél biztos tény csak az, hogy az adott személyek együtt láthatók. A romantikus/intim jelentés, féltékenység vagy gyanú SZUBJEKTÍV értelmezés legyen, hacsak más kontextus nem teszi ténnyé.
+- Egy barát hype-olhat, crush flörtölhet, rivális beszólhat, féltékeny karakter kiszúrhatja a másik személy közelségét — de csak ha a konkrét kapcsolat ezt indokolja.
+- Ha a kép társadalmilag jelentős a karakternek, nyithat későbbi DM/relationship-continuity szálat vagy kapcsolatváltozást; ne generálj automatikus deltát pusztán a kép létezéséből.
+- Ha nincs konkrét imageDescription, TILOS kitalálni, mi látszik a képen.
+- Mature 18+ módban ismert felnőtteknél értsd a nem grafikus thirst-trap/provokatív képi és caption-célzásokat is természetes felnőtt jelentésük szerint.
 Ha a szerző a saját képét posztolta, a többiek ennek megfelelően reagálhatnak rá reálisan.`
     : ""
 }
@@ -21811,7 +21836,7 @@ POSZT — ${nameOfIn(w, post.authorId)}:
 ${
   (post.imageId || post.image)
     ? `KÉP A POSZTBAN:
-${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post.imageDescription}\n` : ""}A kommentelők látták a képet is. Ha természetes, reagálhatnak arra, ami ténylegesen látható rajta.\nA reply se találjon ki olyan vizuális részletet, ami nincs a poszt szövegében vagy a képleírásban. Ha a reply a képre utal, maradjon képföldelt és következetes.`
+${post.imageDescription ? `A kép megbízható látható tartalma: ${post.imageDescription}\n` : ""}A reply írója a captiont és a képet EGYÜTT értelmezi. Reagálhat konkrét látható részletre, de nem találhat ki új személyt, tárgyat, sérülést, romantikus tényt vagy eseményt. Többszereplős képnél az együtt-láthatóság tény, a romantikus/féltékeny olvasat csak a karakter saját perceptionje lehet. Ha nincs imageDescription, ne találj ki képtartalmat.`
     : ""
 }
 
@@ -22491,7 +22516,7 @@ async function genWorldStep(w, single, timeSkipHours = 0) {
         `${nameOfIn(
           w,
           p.authorId
-        )}: ${p.text}`
+        )}: ${p.text || ""}${p.imageDescription ? ` [KÉP: ${cut(p.imageDescription, 320)}]` : ""}`
     )
     .join("\n");
 
@@ -22670,18 +22695,26 @@ KOMMENT EMOJI:
 - Ne legyen minden vicc 😂 vagy 😭.
 - Az emoji típusa igazodjon a karakterhez és a konkrét reakcióhoz.
 
-KÉPEK:
+KÉPEK — IMAGE-GROUNDED SOCIAL HARD RULE:
 
 - Akinek van Fotóalbuma, néha képet is posztolhat belőle.
-- Az albumlistában minden kép mellett ott lehet az AI által felismert látható tartalom is. Ezt KÖTELEZŐ figyelembe venni a megfelelő kép kiválasztásakor és a caption megírásakor.
-- A poszt szerzője is "tudja", mi van a saját feltöltött fotóján. A captionnek és a későbbi kommentválaszainak is ehhez kell igazodniuk.
-- Előbb döntsd el, MELYIK konkrét kép illik a jelenethez, és csak UTÁNA írd meg a captiont. A caption ne legyen felcserélhető egy teljesen másik képpel.
+- Az albumlistában minden kép mellett ott lehet az AI által felismert/megbízható látható tartalom. Ezt KÖTELEZŐ figyelembe venni a megfelelő kép kiválasztásakor ÉS a caption megírásakor.
+- FOLYAMAT: előbb válaszd ki a konkrét képet → olvasd el a látható tartalmát → csak EZUTÁN írj captiont hozzá.
+- A caption a KONKRÉT képhez készüljön. Lehet rövid, ironikus, indirekt, esztétikus, flörtös, provokatív vagy belsős, és nem kell szó szerint leírnia a képet, de nem lehet egy teljesen másik helyzet captionje valós kontextus nélkül.
+- Ha a tervezett caption és a kiválasztott kép egyértelműen nem passzol, a CAPTIONT javítsd/regeneráld a képhez; ne cseréld le önkényesen a világ eseményeit.
+- A poszt szerzője is "tudja", mi van a saját fotóján. A későbbi saját reply-jai se mondjanak ellent a kép tartalmának.
 - Ilyenkor az "image" mezőbe a kép jele kerüljön, például "kep2".
 - SOHA ne találj ki olyan képet, ami nincs az adott karakter albumában.
-- Ha kép van a posztban, a kommentelők azt is látják.
-- A kommentelők és reply-zók csak olyan részletre reagáljanak, ami a poszt szövegéből vagy a kép látható tartalmából reálisan következik.
-- Reagálhatnak a képen látható személyre, outfitre, helyszínre, hangulatra vagy fontos tárgyra, de ne találjanak ki nem látható dolgokat.
-- A kép ne csak dekoráció legyen, hanem valódi kontextus.
+- Ha kép van a posztban, a kommentelők ugyanúgy látják a képet és a captiont.
+- Komment/reply kizárólag olyan vizuális részletre reagálhat, ami a megbízható képleírásban vagy a captionben ténylegesen szerepel.
+- Reagálhatnak személyre, outfitre, hajra/sminkre, helyszínre, hangulatra, sérülésre, testbeszédre, tárgyra vagy a képen lévő másik ismert karakterre.
+- Több szereplő együtt-láthatósága OBSERVED FACT lehet; romantikus/intim jelentés csak külön karakter-perception, nem automatikus tény.
+- Ugyanaz a kép különböző karakterekből eltérő reakciót válthat ki: support, flört, féltékenység, gyanú, rivalizálás, hitetlenség, humor vagy közöny. A saját relationship + memory + personality dönt.
+- Egy jelentős kép későbbi DM-et, gossipot, relationship-continuity szálat vagy kapcsolatváltozást is kiválthat, ha a karakter számára valóban fontos.
+- Ne legyen automatikus kapcsolatdelta csak azért, mert két karakter együtt van egy képen.
+- Ha nincs megbízható képleírás, NE találj ki vizuális részleteket.
+- Mature 18+ módban ismert felnőttek esetén a nem grafikus thirst-trap/provokatív kép vagy kétértelmű caption felnőtt társas jelentését is értsd; ne találj ki explicit szexuális aktust a képből.
+- A kép ne csak dekoráció legyen, hanem valódi social kontextus.
 
 VÁLASZOK KOMMENTEKRE:
 
@@ -22791,6 +22824,8 @@ ${albumList(author) || "nincs használható albumkép"}
 - Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
 - Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
 - Ha albumképet választasz, ELŐBB a visible image content alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra a képre illik.
+- IMAGE/CAPTION CONSISTENCY: a caption lehet indirekt, ironikus vagy belsős, de ennek a konkrét képnek kell értelmet adnia. Ha a kettő egyértelműen mismatch, a captiont javítsd a képhez.
+- Ha több ismert karakter látható a képen, csak az együtt-láthatóságuk biztos tény; ne állíts automatikus románcot/intimitást.
 - Kép nélkül is teljesen jó poszt.
 - Ne generálj kommenteket ebben a hívásban; a többi AI külön fog reagálni rá a saját karakteréből.
 - A játékos helyett soha ne írj.
@@ -35914,6 +35949,11 @@ ${nameOfIn(w,post.authorId)}
 ${story.headline?`HEADLINE: ${story.headline}`:""}
 BIZONYOSSÁG: ${story.factLevel||"rumor"}
 ${post.text}
+${post.imageDescription ? `KÉP / VIZUÁLIS BIZONYÍTÉK: ${post.imageDescription}\n` : ""}
+IMAGE/GOSSIP GROUNDING:
+- Ha a gossip képre támaszkodik, válaszd külön a LÁTHATÓ TÉNYT attól, amit a cikk vagy a karakter csak BELEMAGYARÁZ.
+- Két ember együtt látszik = megfigyelhető tény. Románc, hookup, titkos kapcsolat vagy motiváció csak akkor tény, ha azt más megbízható esemény is rögzíti; különben interpretation/rumor.
+- A reagáló karakter lehet féltékeny, hitetlen, védelmező vagy gyanakvó a saját kapcsolata alapján, de ne találjon ki a képen nem látható részletet.
 
 EDDIGI NYILVÁNOS KOMMENTEK:
 ${currentComments||"-"}
