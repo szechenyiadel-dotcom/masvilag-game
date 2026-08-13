@@ -5948,7 +5948,7 @@ const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(10 * 60000, Math.min(3 * 360
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(10000, Math.min(120000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 22000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(2, Math.min(12, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 6)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(55 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 105 * 1000));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(75 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 125 * 1000));
 const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 3.5 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
 const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(15 * 1000, Math.min(3 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 45 * 1000));
@@ -13679,7 +13679,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v53-live-world-fairness-watchdog";
+const BUILD_VERSION = "v54-live-world-hard-lanes";
 
 const AUTO = "masvilag:auto";
 /*
@@ -31300,6 +31300,19 @@ JSON ONLY:
   );
 }
 
+function fallbackAutonomousDmResponse(w, bot) {
+  const en = worldLanguage(w, w.meId) === "en";
+  const rel = getRel(w, bot.id, w.meId) || {};
+  const bond = String(rel.bond || "").toLowerCase();
+  const romantic = bondLooksRomantic(rel) || /crush|dating|partner|lover|boyfriend|girlfriend|romance|szerelm|fl[oö]rt/.test(bond);
+  const negative = Number(rel.score) <= -25 || /enemy|rival|ellens|riv[aá]l/.test(bond);
+  let text;
+  if (romantic) text = en ? "you free later?" : "ráérsz később?";
+  else if (negative) text = en ? "we need to talk." : "beszélnünk kell.";
+  else text = en ? "you around?" : "ráérsz egy percre?";
+  return { skip:false, text, image:"", imagePrompt:"", relationshipImpact:false, changes:[], selfUpdates:[], relationshipUpdates:[] };
+}
+
 function characterNoteActivityScore(w, c) {
   if (!w || !c || isHuman(w, c.id)) return -999;
 
@@ -31849,6 +31862,7 @@ function ensureSimState(w) {
       lastPopupSuccessAt: 0,
       lastRoleplayInviteAt: 0,
       lastNoteReactionAt: 0,
+      liveWorldStartedAt: now(),
       lastError: "",
     };
   }
@@ -31880,6 +31894,7 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.lastPopupSuccessAt))) w.sim.lastPopupSuccessAt = 0;
   if (!Number.isFinite(Number(w.sim.lastRoleplayInviteAt))) w.sim.lastRoleplayInviteAt = 0;
   if (!Number.isFinite(Number(w.sim.lastNoteReactionAt))) w.sim.lastNoteReactionAt = 0;
+  if (!Number.isFinite(Number(w.sim.liveWorldStartedAt))) w.sim.liveWorldStartedAt = now();
   /* Backfill only objective successes; autonomous DM intentionally starts hungry
      on old saves because old DM rows did not distinguish replies from initiations. */
   if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
@@ -31888,16 +31903,21 @@ function ensureSimState(w) {
   /* v53 migration: do not let a backlog created by the old comment/feed scheduler
      delay the new fairness lanes for minutes. Manual requests survive; stale
      background actions are rebuilt by the new planner from current state. */
-  if (Number(w.sim.schedulerVersion) !== 53) {
+  if (Number(w.sim.schedulerVersion) !== 54) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
     w.sim.roleplayAttemptAt = 0;
     w.sim.popupAttemptAt = 0;
     w.sim.groupAttemptAt = 0;
-    w.sim.schedulerVersion = 53;
+    /* Start the new independent lanes slightly hungry. The old implementation
+       used a constant synthetic elapsed value when there had never been a
+       successful DM/Event, which meant their hard deadline could never be
+       reached for the FIRST occurrence. */
+    w.sim.liveWorldStartedAt = now() - 45000;
+    w.sim.schedulerVersion = 54;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 53;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 54;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -35428,12 +35448,12 @@ function popupCadenceMs(w) {
   const level = storySettingsOf(w).dramaLevel;
   const base =
     level === "low"
-      ? 4.5 * 60 * 1000
+      ? 3.5 * 60 * 1000
       : level === "high"
-        ? 1.7 * 60 * 1000
+        ? 1.45 * 60 * 1000
         : level === "chaotic"
-          ? 1.25 * 60 * 1000
-          : 2.25 * 60 * 1000;
+          ? 1.15 * 60 * 1000
+          : 1.75 * 60 * 1000;
 
   return Math.max(60 * 1000, Math.round(base * LIVE_WORLD_POPUP_CADENCE_MULTIPLIER));
 }
@@ -35452,7 +35472,9 @@ function popupLastGeneratedAt(w) {
 function popupOverdueByMs(w) {
   if (!w || popupGenerationBlocked(w)) return -Infinity;
   const runtimeStarted = Number(w.popupRuntime && w.popupRuntime.startedAt) || 0;
-  const lastAt = popupLastGeneratedAt(w) || runtimeStarted;
+  const laneStartedAt = Number(w.sim && w.sim.liveWorldStartedAt) || 0;
+  const lastSuccess = Number(w.sim && w.sim.lastPopupSuccessAt) || 0;
+  const lastAt = Math.max(lastSuccess, popupLastGeneratedAt(w)) || laneStartedAt || runtimeStarted;
   if (!lastAt) return -Infinity;
   return now() - lastAt - popupCadenceMs(w);
 }
@@ -40634,12 +40656,17 @@ function canAiInitiateRoleplay(w) {
     if (!scene || !scene.open || !scene.aiInitiated) return false;
     const started = Number(scene.startedAt || scene.ts) || 0;
     if (!started) return false;
-    const age = ts - started;
+    const latestTurnAt = (scene.turns || []).reduce(
+      (latest, turn) => Math.max(latest, Number(turn && turn.ts) || 0),
+      0
+    );
+    const lastActivityAt = Math.max(started, latestTurnAt);
+    const idleAge = ts - lastActivityAt;
     const hasPlayerTurns = (scene.turns || []).some((turn) => turn && turn.authorId === w.meId);
     const accepted = scene.invitationStatus === "accepted_in_chat" || hasPlayerTurns;
-    /* An actually entered Event gets breathing room; an unanswered pending
-       invitation only suppresses another invite briefly. */
-    return accepted ? age < 18 * 60 * 1000 : age < 5 * 60 * 1000;
+    /* Only a genuinely active Event suppresses a new invitation. A forgotten
+       open scene may remain in the UI without muting this lane for 18 minutes. */
+    return accepted ? idleAge < 7 * 60 * 1000 : idleAge < 2 * 60 * 1000;
   }).length;
   if (recentOpenAiScenes >= 1) return false;
 
@@ -41157,8 +41184,9 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   /* ONLY successful autonomous DMs reset this lane. Replies to the player's
      own DM, popup replies and Note-related messages must not fake activity. */
   const dmLast = Number(sim.lastAutonomousDmAt) || 0;
-  const dmTarget = Math.max(60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / Math.min(1.85, dmPeak)));
-  const dmElapsed = dmLast ? ts - dmLast : dmTarget * 1.15;
+  const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
+  const dmTarget = Math.max(75 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / Math.min(1.85, dmPeak)));
+  const dmElapsed = dmLast ? ts - dmLast : Math.max(0, ts - laneStartedAt);
   const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 22 * 1000;
 
   if (permits("dm") && dmElapsed >= dmTarget && dmRetryReady) {
@@ -41222,8 +41250,9 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
     const rpPeak = Math.max(0.25, channelActivityPeak(view, "roleplay"));
     const rpHistoryLast = lastAiInitiatedRoleplayAt(view);
     const rpLast = Math.max(Number(sim.lastRoleplayInviteAt) || 0, rpHistoryLast);
+    const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
     const rpTarget = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / Math.min(1.75, rpPeak)));
-    const rpElapsed = rpLast ? ts - rpLast : rpTarget * 1.12;
+    const rpElapsed = rpLast ? ts - rpLast : Math.max(0, ts - laneStartedAt);
     const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 35 * 1000;
 
     if (rpElapsed >= rpTarget && rpRetryReady) {
@@ -41276,9 +41305,10 @@ function hasRecentWidespreadGossip(w) {
 function autonomousDmOverdueByMs(w) {
   if (!w) return -Infinity;
   const dmPeak = Math.max(0.25, channelActivityPeak(w, "dm"));
-  const target = Math.max(60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / Math.min(1.85, dmPeak)));
+  const target = Math.max(75 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / Math.min(1.85, dmPeak)));
   const last = Number(w.sim && w.sim.lastAutonomousDmAt) || 0;
-  const elapsed = last ? now() - last : target * 1.15;
+  const startedAt = Number(w.sim && w.sim.liveWorldStartedAt) || now();
+  const elapsed = last ? now() - last : Math.max(0, now() - startedAt);
   return elapsed - target;
 }
 
@@ -41290,7 +41320,8 @@ function roleplayInviteOverdueByMs(w) {
     Number(w.sim && w.sim.lastRoleplayInviteAt) || 0,
     lastAiInitiatedRoleplayAt(w)
   );
-  const elapsed = last ? now() - last : target * 1.12;
+  const startedAt = Number(w.sim && w.sim.liveWorldStartedAt) || now();
+  const elapsed = last ? now() - last : Math.max(0, now() - startedAt);
   return elapsed - target;
 }
 
@@ -41320,7 +41351,45 @@ function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
   /*
-   * 1. A JÁTÉKOS AKCIÓI MINDIG ELSŐBBSÉGET KAPNAK.
+   * v54 HARD FAIRNESS WATCHDOG
+   *
+   * A normál sorrend feed-first, DE a lejárt kemény határidő megelőzi még a friss kommentthreadet is, így egy csatorna sem maradhat örökre
+   * a 25–40 másodpercenként esedékessé váló poszt mögött. Ha egy popup/DM/
+   * Note/Event már a saját célidején TÚL is jelentősen éhezik, egyetlen kört
+   * lefoglalhat a következő feed előtt. Ettől a poszt marad a leggyakoribb,
+   * de a világ nem válik kizárólag feed-generátorrá.
+   */
+  const popupLate = popupOverdueByMs(view);
+  if (popupLate >= 0) {
+    const forcedPopup = popupPriorityAction(view, "popup-starvation");
+    if (forcedPopup) return forcedPopup;
+  }
+
+  const dmLate = autonomousDmOverdueByMs(view);
+  if (dmLate >= 0) {
+    const forcedDm = pickInitiativeWatchdogAction(view, ["dm"]);
+    if (forcedDm) return forcedDm;
+  }
+
+  const noteUrgency = playerNoteReactionUrgency(view);
+  if (noteUrgency && noteUrgency.hardDue) {
+    return mkAction(
+      "note-react",
+      `note-starvation:${noteUrgency.note.id}:${noteUrgency.processedBy.size}`,
+      { noteId: noteUrgency.note.id },
+      "event"
+    );
+  }
+
+  const eventLate = roleplayInviteOverdueByMs(view);
+  if (eventLate >= 0) {
+    const forcedEvent = pickInitiativeWatchdogAction(view, ["roleplay"]);
+    if (forcedEvent) return forcedEvent;
+  }
+
+
+  /*
+   * 1.5 A FRISS JÁTÉKOS-AKCIÓK KÖVETKEZNEK A LEJÁRT HARD LANE-EK UTÁN.
    *
    * Ha a játékos posztolt vagy kommentelt,
    * ne egy háttér-karbantartási feladat
@@ -41355,43 +41424,6 @@ function planAutoAction(view) {
         postId: pending.post.id,
       }
     );
-  }
-
-  /*
-   * v53 HARD FAIRNESS WATCHDOG
-   *
-   * A sorrend továbbra is feed-first, DE egy csatorna sem maradhat örökre
-   * a 25–40 másodpercenként esedékessé váló poszt mögött. Ha egy popup/DM/
-   * Note/Event már a saját célidején TÚL is jelentősen éhezik, egyetlen kört
-   * lefoglalhat a következő feed előtt. Ettől a poszt marad a leggyakoribb,
-   * de a világ nem válik kizárólag feed-generátorrá.
-   */
-  const popupLate = popupOverdueByMs(view);
-  if (popupLate >= 20 * 1000) {
-    const forcedPopup = popupPriorityAction(view, "popup-starvation");
-    if (forcedPopup) return forcedPopup;
-  }
-
-  const dmLate = autonomousDmOverdueByMs(view);
-  if (dmLate >= 45 * 1000) {
-    const forcedDm = pickInitiativeWatchdogAction(view, ["dm"]);
-    if (forcedDm) return forcedDm;
-  }
-
-  const noteUrgency = playerNoteReactionUrgency(view);
-  if (noteUrgency && noteUrgency.hardDue) {
-    return mkAction(
-      "note-react",
-      `note-starvation:${noteUrgency.note.id}:${noteUrgency.processedBy.size}`,
-      { noteId: noteUrgency.note.id },
-      "event"
-    );
-  }
-
-  const eventLate = roleplayInviteOverdueByMs(view);
-  if (eventLate >= 60 * 1000) {
-    const forcedEvent = pickInitiativeWatchdogAction(view, ["roleplay"]);
-    if (forcedEvent) return forcedEvent;
   }
 
   /*
@@ -42516,7 +42548,29 @@ async function runSimulationAction(view, update, action, addImage) {
         console.warn("AI Event invitation retry failed:", eventRetryErr);
       }
     }
-    if (!out || out.skip === true) return null;
+    if (!out || out.skip === true) {
+      const en = worldLanguage(view, view.meId) === "en";
+      out = {
+        skip: false,
+        mode: "dm_invite",
+        title: en ? `${bot.name} wants to meet` : `${bot.name} találkozni akar`,
+        setting: en
+          ? `${bot.name} messages ${view.player.name} with a simple invitation to meet somewhere that fits their established world and relationship.`
+          : `${bot.name} egy egyszerű meghívással ráír ${view.player.name} karakterre, hogy találkozzanak a kapcsolatukhoz és világukhoz illő helyen.`,
+        goal: en ? "Meet and continue their current relationship naturally." : "Találkozzanak, és természetesen folytassák a jelenlegi kapcsolatukat.",
+        cast: [bot.id],
+        openingKind: "speech",
+        opening: en ? "you free? come meet me." : "ráérsz? találkozzunk.",
+        dmText: en ? "you free? come meet me." : "ráérsz? találkozzunk.",
+        targetTurns: 20,
+        targetMinutes: 30,
+        limitMode: "turns",
+        rewardAffection: 8,
+        rewardItem: en ? "a small memory from the meetup" : "egy apró emlék a találkozóról",
+        selfUpdates: [],
+        relationshipUpdates: [],
+      };
+    }
 
     const validModes = new Set(["dm_invite", "arrival", "encounter"]);
     const mode = validModes.has(String(out.mode || "")) ? String(out.mode) : "dm_invite";
@@ -43968,6 +44022,10 @@ if (targetNote) {
       } catch (dmRetryErr) {
         console.warn("Autonomous DM retry failed:", dmRetryErr);
       }
+    }
+
+    if (!out || out.skip === true || (!String(out.text || "").trim() && !String(out.imagePrompt || "").trim() && !String(out.image || "").trim())) {
+      out = fallbackAutonomousDmResponse(view, bot);
     }
 
     const rawTxt =
@@ -47042,6 +47100,14 @@ const signOut = useCallback(async () => {
           );
       }
       if (!action) return;
+
+      if (["popup-event", "dm", "roleplay-initiate", "note-react"].includes(action.type)) {
+        console.info("[live-world] selected", action.type, action.key || "", {
+          popupLate: popupOverdueByMs(view2),
+          dmLate: autonomousDmOverdueByMs(view2),
+          eventLate: roleplayInviteOverdueByMs(view2),
+        });
+      }
 
       /*
        * A gyors lokális social akciók nem fogyasztanak AI-t, de ettől még
