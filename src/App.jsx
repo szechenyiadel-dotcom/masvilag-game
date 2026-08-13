@@ -3167,6 +3167,30 @@ function sanitizeWorldPosts(w) {
     post.comments.forEach((comment) => {
       if (comment.parent === undefined) comment.parent = null;
     });
+
+    /*
+     * COMMENT IDENTITY HARD GUARD / LEGACY CLEANUP
+     * An AI must never comment on its own post or reply to its own comment.
+     * Older builds could persist these rows when the model returned SELF as
+     * the responder. Remove only AI self-interactions; the human player is
+     * still free to comment/reply to their own content manually.
+     */
+    const commentsById = new Map(
+      post.comments
+        .filter((comment) => comment && comment.id)
+        .map((comment) => [comment.id, comment])
+    );
+
+    post.comments = post.comments.filter((comment) => {
+      if (!comment || !comment.authorId || isHuman(w, comment.authorId)) return true;
+
+      if (!comment.parent) {
+        return comment.authorId !== post.authorId;
+      }
+
+      const parent = commentsById.get(comment.parent);
+      return !(parent && parent.authorId === comment.authorId);
+    });
   });
 
   return w.posts;
@@ -10699,7 +10723,7 @@ function sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, value) {
 
     // Opening / sentence-initial vocative: "Terry, ..." / "Wolf: ..."
     text = text.replace(
-      new RegExp(`(^|[.!?]\s+)([\"'“”‘’(]*)(?:${escaped})(\s*[,!:;—-]\s*)`, "gi"),
+      new RegExp(`(^|[.!?]\\s+)([\"'“”‘’(]*)(?:${escaped})(\\s*[,!:;—-]\\s*)`, "gi"),
       (_m, lead, quote, punct) => {
         if (replacement) return `${lead}${quote}${replacement}${punct}`;
         return `${lead}${quote}`;
@@ -10708,7 +10732,7 @@ function sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, value) {
 
     // Trailing vocative: "do it yourself, Terry" / "blink, Nam-gyu"
     text = text.replace(
-      new RegExp(`([,;:—-]\s*)(?:${escaped})(?=\s*[,;:!?.”’"']*(?:$|\n))`, "gi"),
+      new RegExp(`([,;:—-]\\s*)(?:${escaped})(?=\\s*[,;:!?.”’"']*(?:$|\\n))`, "gi"),
       (_m, lead) => replacement ? `${lead}${replacement}` : ""
     );
   }
@@ -20760,6 +20784,9 @@ function applyComments(n, postId, out, label) {
       const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!who || !c.text) return;
 
+      /* HARD GUARD: AI never comments on its own post. */
+      if (!isHuman(n, who) && who === p.authorId) return;
+
       /* Egy karakter egy körben egy friss komment: több variációt ne spammeljen. */
       if (commentedThisBatch.has(who)) return;
 
@@ -20797,6 +20824,11 @@ const pc =
   p.comments.find(
     (x) => x.id === parent
   );
+
+/* HARD GUARD: AI never replies to its own comment. */
+if (pc && pc.authorId === who && !isHuman(n, who)) {
+  return;
+}
 
 /*
  * Ha az AI konkrét kommentre válaszolt,
@@ -21440,7 +21472,9 @@ async function genReply(w, post, comment, forcedResponderId = "") {
     ).find((id) => !isHuman(w, id));
 
   const forcedResponder =
-    forcedResponderId && !isHuman(w, forcedResponderId)
+    forcedResponderId &&
+    forcedResponderId !== comment.authorId &&
+    !isHuman(w, forcedResponderId)
       ? charById(w, forcedResponderId)
       : null;
 
@@ -21475,6 +21509,7 @@ async function genReply(w, post, comment, forcedResponderId = "") {
 
   const priorityCast = [directResponder, forcedResponder]
     .filter(Boolean)
+    .filter((c) => c.id !== comment.authorId)
     .filter((c, index, arr) => arr.findIndex((x) => x && x.id === c.id) === index);
 
   const cast = [
@@ -21531,6 +21566,7 @@ ${characterAgentRuntimeCard(
 
 PUBLIKUS THREAD REALIZMUS:
 - Ez nyilvános kommentmező, NEM kétfős privát beszélgetés. Egy reply után nem csak az eredeti komment szerzője válaszolhat.
+- ABSZOLÚT SELF-REPLY TILTÁS: a legutóbbi komment szerzője NEM válaszolhat saját magának. Egy AI nem írhat reply-t a saját kommentje alá, és saját posztjára sem írhat külön AI-kommentet.
 - BÁRMELYIK itt megadott AI beszállhat, ha hitelesen látja a threadet és van személyes oka: barátság, rivalizálás, védelem, féltékenység, érintettség, kíváncsiság, pletyka, konfliktus vagy a poszt témája.
 - Ne kényszeríts második vagy harmadik karaktert a threadbe, ha nincs oka, de ne is zárd le mesterségesen két emberre.
 - Egy szaftos nyilvános beszólásból könnyen lehet többemberes pile-on, védelem, flört, vita vagy későbbi gossip-forrás.
@@ -21713,7 +21749,7 @@ Formátum:
    *
    * Ez NEM sablonválaszt ír be. Ugyanaz az AI újrafogalmazza a saját hangján.
    */
-  if (directResponder) {
+  if (directResponder && directResponder.id !== comment.authorId) {
     const directRel =
       getRel(
         w,
@@ -21955,11 +21991,15 @@ function applyReplies(n, postId, rootId, out) {
   safeAiComments(out).forEach((c) => {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
+    if (createdReplyActors.has(who)) return;
     if (isUncharacteristicGenericComment(n, who, c.text)) return;
     let body = cleanGeneratedComment(n, who, c.text, 240);
     if (!body) return;
     const rootForAddress = safePostComments(p).find((x) => x && x.id === rootId);
     const addressTargetId = rootForAddress && rootForAddress.authorId ? rootForAddress.authorId : p.authorId;
+
+    /* HARD GUARD: AI never answers its own comment / itself as target. */
+    if (!isHuman(n, who) && addressTargetId === who) return;
     if (addressTargetId) {
       body = sanitizeGeneratedDirectAddress(n, who, addressTargetId, body);
     }
