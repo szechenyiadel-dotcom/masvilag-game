@@ -8721,6 +8721,7 @@ function compactAgentMemoryForPacket(w, actorId, targetId = "") {
     },
     recentConversations: (mem.conversations || []).slice(-3).map(memoryToLine),
     recentEvents: (mem.witnessedEvents || []).slice(-3).map(memoryToLine),
+    heardRumors: (mem.rumors || []).slice(-4).map(memoryToLine),
     longTermRoleplay: (mem.roleplayLongTerm || []).slice(-3).map(memoryToLine),
     sharedRoleplayWithTarget: shared,
     knownAboutTarget: knownTarget ? {
@@ -12290,24 +12291,35 @@ function mergeWorlds(remote, local) {
   out.rumors = mergeById(remote.rumors || [], local.rumors || [], null)
     .sort((a,b) => (Number(b && b.ts) || 0) - (Number(a && a.ts) || 0)).slice(0, 160);
 
-  const remoteGp = ensureGossipPropagationState(remote) || { rumors: [], exchanges: [] };
-  const localGp = ensureGossipPropagationState(local) || { rumors: [], exchanges: [] };
+  const remoteGp = ensureGossipPropagationState(remote) || { rumors: [], exchanges: [], echoes: [] };
+  const localGp = ensureGossipPropagationState(local) || { rumors: [], exchanges: [], echoes: [] };
   const gpById = {};
   [...(remoteGp.rumors || []), ...(localGp.rumors || [])].forEach((r) => {
     if (!r || !r.id) return;
     const cur = gpById[r.id];
     if (!cur) { gpById[r.id] = JSON.parse(JSON.stringify(r)); return; }
     const holders = { ...(cur.holders || {}), ...(r.holders || {}) };
-    gpById[r.id] = { ...(Number(r.updatedAt || 0) >= Number(cur.updatedAt || 0) ? cur : r), ...(Number(r.updatedAt || 0) >= Number(cur.updatedAt || 0) ? r : cur), holders,
+    const echoedBy = { ...(cur.echoedBy || {}), ...(r.echoedBy || {}) };
+    gpById[r.id] = { ...(Number(r.updatedAt || 0) >= Number(cur.updatedAt || 0) ? cur : r), ...(Number(r.updatedAt || 0) >= Number(cur.updatedAt || 0) ? r : cur), holders, echoedBy,
       communitiesReached: [...new Set([...(cur.communitiesReached || []), ...(r.communitiesReached || [])])],
       spreadCount: Math.max(Number(cur.spreadCount || 0), Number(r.spreadCount || 0), Object.keys(holders).length - 1),
-      updatedAt: Math.max(Number(cur.updatedAt || 0), Number(r.updatedAt || 0)), lastSpreadAt: Math.max(Number(cur.lastSpreadAt || 0), Number(r.lastSpreadAt || 0)) };
+      publicEchoCount: Math.max(Number(cur.publicEchoCount || 0), Number(r.publicEchoCount || 0), Object.keys(echoedBy).length),
+      updatedAt: Math.max(Number(cur.updatedAt || 0), Number(r.updatedAt || 0)),
+      lastSpreadAt: Math.max(Number(cur.lastSpreadAt || 0), Number(r.lastSpreadAt || 0)),
+      lastEchoAt: Math.max(Number(cur.lastEchoAt || 0), Number(r.lastEchoAt || 0)) };
   });
   const exById = {};
   [...(remoteGp.exchanges || []), ...(localGp.exchanges || [])].forEach((x) => { if (x && x.id) exById[x.id] = x; });
-  out.gossipPropagation = { version: 1, rumors: Object.values(gpById).sort((a,b) => Number(a.createdAt || 0) - Number(b.createdAt || 0)).slice(-220),
+  const echoById = {};
+  [...(remoteGp.echoes || []), ...(localGp.echoes || [])].forEach((x) => { if (x && x.id) echoById[x.id] = x; });
+  out.gossipPropagation = {
+    version: 2,
+    rumors: Object.values(gpById).sort((a,b) => Number(a.createdAt || 0) - Number(b.createdAt || 0)).slice(-220),
     exchanges: Object.values(exById).sort((a,b) => Number(a.ts || 0) - Number(b.ts || 0)).slice(-500),
-    lastRoundAt: Math.max(Number(remoteGp.lastRoundAt || 0), Number(localGp.lastRoundAt || 0)) };
+    echoes: Object.values(echoById).sort((a,b) => Number(a.ts || 0) - Number(b.ts || 0)).slice(-320),
+    lastRoundAt: Math.max(Number(remoteGp.lastRoundAt || 0), Number(localGp.lastRoundAt || 0)),
+    lastEchoAt: Math.max(Number(remoteGp.lastEchoAt || 0), Number(localGp.lastEchoAt || 0)),
+  };
 
   const seenLog = {};
   out.log = (local.log || []).concat(remote.log || [])
@@ -12953,7 +12965,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v46-token-budget-agent-runtime";
+const BUILD_VERSION = "v47-networked-gossip-afterlife";
 
 const AUTO = "masvilag:auto";
 /*
@@ -13867,8 +13879,10 @@ rumors: [],
 gossipPropagation: {
   rumors: [],
   exchanges: [],
+  echoes: [],
   lastRoundAt: 0,
-  version: 1,
+  lastEchoAt: 0,
+  version: 2,
 },
 
 /*
@@ -31385,8 +31399,10 @@ function ensureGossipPropagationState(w) {
   const state = w.gossipPropagation;
   if (!Array.isArray(state.rumors)) state.rumors = [];
   if (!Array.isArray(state.exchanges)) state.exchanges = [];
+  if (!Array.isArray(state.echoes)) state.echoes = [];
   if (!Number.isFinite(Number(state.lastRoundAt))) state.lastRoundAt = 0;
-  state.version = 1;
+  if (!Number.isFinite(Number(state.lastEchoAt))) state.lastEchoAt = 0;
+  state.version = 2;
 
   state.rumors = state.rumors.filter(Boolean).map((rumor) => {
     if (!rumor || typeof rumor !== "object") return rumor;
@@ -31398,9 +31414,21 @@ function ensureGossipPropagationState(w) {
     if (!Number.isFinite(Number(rumor.createdAt))) rumor.createdAt = now();
     if (!Number.isFinite(Number(rumor.updatedAt))) rumor.updatedAt = rumor.createdAt;
     if (!Number.isFinite(Number(rumor.lastSpreadAt))) rumor.lastSpreadAt = 0;
+    if (!rumor.echoedBy || typeof rumor.echoedBy !== "object" || Array.isArray(rumor.echoedBy)) rumor.echoedBy = {};
+    if (!Number.isFinite(Number(rumor.publicEchoCount))) rumor.publicEchoCount = Object.keys(rumor.echoedBy).length;
+    if (!Number.isFinite(Number(rumor.lastEchoAt))) rumor.lastEchoAt = 0;
+    Object.keys(rumor.holders || {}).forEach((holderId) => {
+      const holder = rumor.holders[holderId] || {};
+      if (!holder.stance) holder.stance = "uncertain";
+      if (!holder.heardText) holder.heardText = rumor.text || "";
+      if (!Number.isFinite(Number(holder.shareCount))) holder.shareCount = 0;
+      if (!Number.isFinite(Number(holder.sourceTrust))) holder.sourceTrust = 0;
+      rumor.holders[holderId] = holder;
+    });
     return rumor;
   }).slice(-220);
   state.exchanges = state.exchanges.filter(Boolean).slice(-500);
+  state.echoes = state.echoes.filter(Boolean).slice(-320);
   return state;
 }
 
@@ -31432,12 +31460,41 @@ function gossipCommunityKeys(c) {
     String(value).split(/[|,;/]+/).map(gossipCommunityToken).filter((x) => x.length >= 3).slice(0, 5)
       .forEach((x) => keys.push(`org:${x}`));
   });
+
+  /*
+   * "Fandom" / scenario circles are represented by any explicit social
+   * institution stored on the character. The game does not need a literal
+   * fandom field: dojo, school, team, club, house, gang, crew and other
+   * communities all behave as dense rumor subgraphs.
+   */
+  [
+    ["dojo", c.dojo],
+    ["school", c.school],
+    ["team", c.team],
+    ["club", c.club],
+    ["house", c.house],
+    ["crew", c.crew],
+    ["fandom", c.fandom],
+    ["franchise", c.franchise],
+    ["series", c.series],
+    ["universe", c.universe],
+    ["circle", c.circle],
+  ].forEach(([kind, value]) => {
+    if (!value) return;
+    String(value)
+      .split(/[|,;/]+/)
+      .map(gossipCommunityToken)
+      .filter((x) => x.length >= 3)
+      .slice(0, 4)
+      .forEach((x) => keys.push(`${kind}:${x}`));
+  });
+
   if (c.city) keys.push(`city:${gossipCommunityToken(c.city)}`);
   if (c.job) {
     String(c.job).split(/[|,;/]+/).map(gossipCommunityToken).filter((x) => x.length >= 4).slice(0, 3)
       .forEach((x) => keys.push(`circle:${x}`));
   }
-  return [...new Set(keys)].filter((x) => !/:$/.test(x)).slice(0, 14);
+  return [...new Set(keys)].filter((x) => !/:$/.test(x)).slice(0, 22);
 }
 
 function gossipCommunityOverlap(a, b) {
@@ -31484,6 +31541,66 @@ function gossipRumorNegative(rumor) {
     (Number(rumor && rumor.drama) >= 36 && Number(rumor && rumor.romance) < 30);
 }
 
+
+function gossipHolderStance(w, rumorLike, holderId, sourceId = "") {
+  if (!w || !holderId) return "uncertain";
+  const subjectIds = Array.isArray(rumorLike && rumorLike.subjectIds)
+    ? rumorLike.subjectIds
+    : gossipEventSubjectIds(rumorLike || {});
+  const negative = gossipRumorNegative(rumorLike || {});
+  const rels = subjectIds
+    .filter((id) => id && id !== holderId)
+    .map((id) => Number(getRel(w, holderId, id).score) || 0);
+  const sourceTrust = sourceId ? (Number(getRel(w, holderId, sourceId).score) || 0) : 0;
+
+  if (negative) {
+    if (rels.some((score) => score >= 65)) return sourceTrust >= 55 ? "concerned" : "defend";
+    if (rels.some((score) => score <= -45)) return "amplify";
+    if (sourceId && sourceTrust <= -30) return "doubt";
+    return "judge";
+  }
+
+  if (Number(rumorLike && rumorLike.romance) >= 34) {
+    if (rels.some((score) => score >= 55)) return "tease";
+    if (rels.some((score) => score <= -35)) return "side-eye";
+    return "curious";
+  }
+
+  if (sourceId && sourceTrust <= -35) return "doubt";
+  return "curious";
+}
+
+function gossipExchangeMode(w, rumor, fromId, toId) {
+  const stance = gossipHolderStance(w, rumor, fromId, "");
+  const relation = Number(getRel(w, fromId, toId).score) || 0;
+  const overlap = gossipCommunityOverlap(charById(w, fromId), charById(w, toId)).length;
+
+  if (stance === "defend" || stance === "concerned") return relation >= 35 ? "confide" : "warn";
+  if (stance === "amplify") return relation >= 15 || overlap ? "spill" : "mock";
+  if (stance === "doubt") return "question";
+  if (Number(rumor && rumor.romance) >= 35) return relation >= 25 ? "tease" : "spill";
+  return relation >= 35 ? "confide" : "spill";
+}
+
+function gossipBackchannelLine(w, rumor, fromId, toId, mode) {
+  const from = charById(w, fromId);
+  const to = charById(w, toId);
+  const subjectNames = (rumor && rumor.subjectIds || [])
+    .map((id) => charById(w, id))
+    .filter(Boolean)
+    .map((c) => c.name)
+    .slice(0, 3)
+    .join(", ");
+  const prefix =
+    mode === "warn" ? "warned" :
+    mode === "confide" ? "confided in" :
+    mode === "question" ? "asked" :
+    mode === "mock" ? "mocked the situation with" :
+    mode === "tease" ? "gossiped playfully with" :
+    "spilled to";
+  return `${from ? from.name : fromId} ${prefix} ${to ? to.name : toId}${subjectNames ? ` about ${subjectNames}` : ""}: ${cut(String(rumor && rumor.text || ""), 260)}`;
+}
+
 function gossipSeedHeat(event) {
   if (!event || !event.text) return -999;
   const tags = Array.isArray(event.tags) ? event.tags : [];
@@ -31501,7 +31618,8 @@ function gossipSeedExcluded(w, event) {
   const privateAiToHuman = event.type === "dm-message" && event.visibility === "private" && event.actorId &&
     !isHuman(w, event.actorId) && Array.isArray(event.targetIds) && event.targetIds.length > 0 && event.targetIds.every((id) => isHuman(w, id));
   return privateAiToHuman ||
-    ["like","follow","repost","gossip-story","gossip-exchange","gossip-circulation","rumor-evolution","scenario-start"].includes(String(event.type || "")) ||
+    ["like","follow","repost","gossip-story","gossip-exchange","gossip-circulation","gossip-network-echo","rumor-evolution","scenario-start"].includes(String(event.type || "")) ||
+    event.source === "gossip-propagation" ||
     event.visibility === "system" || (event.actorId && String(event.actorId).startsWith("media_"));
 }
 
@@ -31556,7 +31674,20 @@ function seedGossipPropagationFromEvent(w, event) {
   const createdAt = Number(event.ts) || now();
   const holders = {};
   holderIds.forEach((id) => {
-    holders[id] = { learnedAt: createdAt, fromId: "", confidence: event.factLevel === "observed" ? 1 : 0.84, depth: 0 };
+    const confidence = event.factLevel === "observed" ? 1 : 0.84;
+    holders[id] = {
+      learnedAt: createdAt,
+      fromId: "",
+      confidence,
+      depth: 0,
+      stance: gossipHolderStance(w, {
+        ...event,
+        subjectIds,
+      }, id, ""),
+      heardText: cut(String(event.text || ""), 520),
+      shareCount: 0,
+      sourceTrust: 100,
+    };
     rememberKnowledge(w, id, { kind: event.factLevel === "observed" ? "event" : "rumor", source: "gossip_seed", confidence: holders[id].confidence, timestamp: createdAt, text: event.text });
     subjectIds.filter((targetId) => targetId !== id).forEach((targetId) => rememberAboutTarget(w, id, targetId, {
       kind: event.factLevel === "observed" ? "event" : "rumor", source: "gossip_seed", confidence: holders[id].confidence, timestamp: createdAt, text: event.text,
@@ -31572,6 +31703,12 @@ function seedGossipPropagationFromEvent(w, event) {
     tags: [...new Set([...(event.tags || []), "backchannel-gossip"])].slice(0, 20),
     importance: Number(event.importance) || 0, drama: Number(event.drama) || 0, romance: Number(event.romance) || 0,
     embarrassment: Number(event.embarrassment) || 0, heat, holders, communitiesReached, spreadCount: 0, lastSpreadAt: 0,
+    sourcePostId: String(event.meta && event.meta.postId || ""),
+    sourceCommentId: String(event.meta && event.meta.commentId || ""),
+    sourceSceneId: String(event.meta && event.meta.sceneId || ""),
+    echoedBy: {},
+    publicEchoCount: 0,
+    lastEchoAt: 0,
     circulationEventId: "", status: "active",
   };
   state.rumors.push(rumor);
@@ -31641,23 +31778,56 @@ function applyGossipPropagationRound(w, payload) {
   if (!fromHolder) return null;
 
   const depth = Math.max(1, Number(payload.depth) || (Number(fromHolder.depth) || 0) + 1);
-  const confidence = Math.max(0.48, Math.min(0.95, Number(fromHolder.confidence || 0.88) - 0.07 - depth * 0.025));
+  const sourceTrust = Number(getRel(w, to.id, from.id).score) || 0;
+  const trustPenalty = sourceTrust < -25 ? 0.12 : sourceTrust < 10 ? 0.06 : sourceTrust >= 60 ? -0.03 : 0;
+  const confidence = Math.max(
+    0.38,
+    Math.min(
+      0.97,
+      Number(fromHolder.confidence || 0.88) - 0.045 - depth * 0.018 - trustPenalty
+    )
+  );
   const ts = now();
-  rumor.holders[to.id] = { learnedAt: ts, fromId: from.id, confidence, depth };
+  const mode = gossipExchangeMode(w, rumor, from.id, to.id);
+  const stance = gossipHolderStance(w, rumor, to.id, from.id);
+  rumor.holders[to.id] = {
+    learnedAt: ts,
+    fromId: from.id,
+    confidence,
+    depth,
+    stance,
+    heardText: cut(String(fromHolder.heardText || rumor.text || ""), 520),
+    shareCount: 0,
+    sourceTrust,
+  };
+  fromHolder.shareCount = Math.max(0, Number(fromHolder.shareCount) || 0) + 1;
   rumor.spreadCount = Math.max(Number(rumor.spreadCount) || 0, Object.keys(rumor.holders).length - 1);
   rumor.lastSpreadAt = ts;
   rumor.updatedAt = ts;
   rumor.communitiesReached = [...new Set([...(rumor.communitiesReached || []), ...gossipCommunityKeys(to)])].slice(0, 80);
   state.lastRoundAt = ts;
 
-  const exchange = { id: `gx_${uid()}`, rumorId: rumor.id, sourceEventId: rumor.sourceEventId, fromId: from.id, toId: to.id,
-    ts, depth, confidence, subjectIds: rumor.subjectIds.slice(), communityOverlap: gossipCommunityOverlap(from, to) };
+  const exchange = {
+    id: `gx_${uid()}`,
+    rumorId: rumor.id,
+    sourceEventId: rumor.sourceEventId,
+    fromId: from.id,
+    toId: to.id,
+    ts,
+    depth,
+    confidence,
+    mode,
+    stance,
+    text: gossipBackchannelLine(w, rumor, from.id, to.id, mode),
+    subjectIds: rumor.subjectIds.slice(),
+    communityOverlap: gossipCommunityOverlap(from, to),
+  };
   state.exchanges.push(exchange);
   state.exchanges = state.exchanges.slice(-500);
 
   const sourceName = from.name || "someone";
   rememberKnowledge(w, to.id, { kind: "rumor", source: `heard_from:${from.id}`, confidence, timestamp: ts,
-    text: `${sourceName} told me: ${rumor.text}` });
+    text: `${sourceName} told me (${mode}, stance=${stance}): ${rumor.text}` });
   rumor.subjectIds.forEach((subjectId) => {
     if (!subjectId || subjectId === to.id) return;
     rememberAboutTarget(w, to.id, subjectId, { kind: "rumor", source: `heard_from:${from.id}`, confidence, timestamp: ts, text: rumor.text });
@@ -31706,13 +31876,361 @@ function gossipSpreadStatsForEvents(w, events) {
     (r.communitiesReached || []).forEach((key) => communities.add(key));
     exchanges += Number(r.spreadCount) || 0;
   });
-  return { holders: holders.size, communities: communities.size, maxDepth, exchanges };
+  const echoIds = new Set();
+  linkedRumors.forEach((r) => Object.keys(r.echoedBy || {}).forEach((id) => echoIds.add(id)));
+  return { holders: holders.size, communities: communities.size, maxDepth, exchanges, publicEchoes: echoIds.size };
 }
 
 function gossipPropagationContext(candidate) {
   const x = candidate && candidate.spreadStats;
   if (!x) return "BACKCHANNEL TERJEDÉS: nincs bizonyított off-screen terjedési adat; csak az eseményekből dolgozz.";
-  return `BACKCHANNEL TERJEDÉS: ${x.holders} AI-karakterhez jutott el, ${x.exchanges} továbbadási lépésben, max. ${x.maxDepth} hálózati ugrással. Ez NEM teszi automatikusan igazzá a pletykát; csak azt jelenti, hogy beszélnek róla.`;
+  return `BACKCHANNEL TERJEDÉS: ${x.holders} AI-karakterhez jutott el, ${x.exchanges} továbbadási lépésben, max. ${x.maxDepth} hálózati ugrással, ${Number(x.publicEchoes) || 0} külön AI pedig már nyilvánosan is visszhangozta. Ez NEM teszi automatikusan igazzá a pletykát; csak azt jelenti, hogy beszélnek róla.`;
+}
+
+
+function gossipEchoIntervalMs(w) {
+  const freq = String(w && w.gossipSettings && w.gossipSettings.frequency || "normal");
+  return freq === "low"
+    ? 12 * 60000
+    : freq === "high"
+      ? 2 * 60000
+      : freq === "chaotic"
+        ? 75 * 1000
+        : 4 * 60000;
+}
+
+function gossipRelatedPost(w, rumor) {
+  if (!w || !rumor) return null;
+  if (rumor.sourcePostId) {
+    const exact = (w.posts || []).find((p) => p && p.id === rumor.sourcePostId && !isMediaAccount(w, p.authorId));
+    if (exact) return exact;
+  }
+
+  const subjects = new Set((rumor.subjectIds || []).filter(Boolean));
+  const cutoff = now() - 48 * 3600e3;
+  const direct = (w.posts || [])
+    .filter((p) => p && Number(p.ts || 0) >= cutoff && !isMediaAccount(w, p.authorId) && subjects.has(p.authorId))
+    .sort((a,b) => Number(b.ts || 0) - Number(a.ts || 0))[0];
+  if (direct) return direct;
+
+  const names = (rumor.subjectIds || [])
+    .map((id) => charById(w, id))
+    .filter(Boolean)
+    .map((c) => String(c.name || "").toLowerCase())
+    .filter((name) => name.length >= 3);
+
+  return (w.posts || [])
+    .filter((p) => p && Number(p.ts || 0) >= cutoff && !isMediaAccount(w, p.authorId))
+    .sort((a,b) => Number(b.ts || 0) - Number(a.ts || 0))
+    .find((p) => names.some((name) => String(p.text || "").toLowerCase().includes(name))) || null;
+}
+
+function gossipEchoActorScore(w, rumor, actorId) {
+  const actor = charById(w, actorId);
+  const holder = rumor && rumor.holders && rumor.holders[actorId];
+  if (!actor || !holder || isHuman(w, actorId)) return -999;
+  let score =
+    (Number(holder.confidence) || 0.5) * 40 +
+    gossipSharePropensity(actor) * 32 +
+    Math.min(30, Number(rumor.heat || 0) * 0.22) -
+    (Number(holder.depth) || 0) * 3;
+  const rels = (rumor.subjectIds || []).map((sid) => Number(getRel(w, actorId, sid).score) || 0);
+  if (holder.stance === "amplify" || holder.stance === "judge" || holder.stance === "side-eye") score += 12;
+  if (holder.stance === "defend" || holder.stance === "concerned") score += 8;
+  if (rels.some((v) => Math.abs(v) >= 55)) score += 10;
+  return score;
+}
+
+function pickGossipNetworkEchoAction(w) {
+  if (!w || !w.gossipSettings || w.gossipSettings.characterGossip === false) return null;
+  const state = ensureGossipPropagationState(w);
+  const ts = now();
+  if (Number(state.lastEchoAt) && ts - Number(state.lastEchoAt) < gossipEchoIntervalMs(w)) return null;
+
+  const candidates = [];
+  (state.rumors || []).forEach((rumor) => {
+    if (!rumor || rumor.status === "dead") return;
+    if (ts - Number(rumor.createdAt || 0) > 4 * 24 * 3600e3) return;
+
+    const holderIds = Object.keys(rumor.holders || {}).filter((id) => charById(w, id) && !isHuman(w, id));
+    const holderCount = holderIds.length;
+    if (holderCount < 3 && !(holderCount >= 2 && Number(rumor.heat || 0) >= 78)) return;
+    if (Number(rumor.publicEchoCount || 0) >= 4) return;
+    if (Number(rumor.lastEchoAt) && ts - Number(rumor.lastEchoAt) < 5 * 60000) return;
+
+    const actorRows = holderIds
+      .filter((id) => !(rumor.subjectIds || []).includes(id))
+      .filter((id) => !rumor.echoedBy || !Number(rumor.echoedBy[id]))
+      .map((id) => ({ id, score: gossipEchoActorScore(w, rumor, id) }))
+      .filter((row) => row.score >= 34)
+      .sort((a,b) => b.score - a.score);
+
+    if (!actorRows.length) return;
+
+    const post = gossipRelatedPost(w, rumor);
+    const actorIds = actorRows.slice(0, post ? 3 : 1).map((row) => row.id);
+    const score =
+      Number(rumor.heat || 0) +
+      holderCount * 8 +
+      (rumor.communitiesReached || []).length * 3 +
+      Math.min(30, Number(rumor.spreadCount || 0) * 4) +
+      actorRows[0].score * 0.35;
+
+    candidates.push({
+      rumorId: rumor.id,
+      mode: post ? "comment" : "post",
+      postId: post ? post.id : "",
+      actorIds,
+      score,
+      holderCount,
+    });
+  });
+
+  if (!candidates.length) return null;
+  candidates.sort((a,b) => b.score - a.score);
+  return candidates[0];
+}
+
+function compactGossipActorContext(w, rumor, actorId) {
+  const actor = charById(w, actorId);
+  const holder = rumor && rumor.holders && rumor.holders[actorId] || {};
+  if (!actor) return "";
+  const subjectLines = (rumor.subjectIds || []).slice(0, 4).map((sid) => {
+    const subject = charById(w, sid);
+    const rel = getRel(w, actorId, sid) || {};
+    return `${subject ? subject.name : sid}: relationship=${Number(rel.score) || 0}${rel.bond ? `, bond=${rel.bond}` : ""}`;
+  });
+  return [
+    `ACTOR ${actor.name} [${actor.id}]`,
+    compactSelfCanonForPrompt(actor, 1600),
+    `RUMOR KNOWLEDGE: confidence=${Math.round((Number(holder.confidence) || 0) * 100)}%, depth=${Number(holder.depth) || 0}, stance=${holder.stance || "uncertain"}, heard-from=${holder.fromId ? nameOfIn(w, holder.fromId) : "first-hand/initial witness"}`,
+    subjectLines.join(" | "),
+  ].filter(Boolean).join("\n");
+}
+
+async function genGossipNetworkEcho(w, payload) {
+  const state = ensureGossipPropagationState(w);
+  const rumor = state && state.rumors.find((r) => r && r.id === payload.rumorId);
+  const actors = (payload.actorIds || []).map((id) => charById(w, id)).filter(Boolean).slice(0, 3);
+  const post = payload.postId ? (w.posts || []).find((p) => p && p.id === payload.postId) : null;
+  if (!rumor || !actors.length) return { comments: [], posts: [] };
+
+  const actorContext = actors.map((c) => compactGossipActorContext(w, rumor, c.id)).join("\n\n");
+  const postContext = post
+    ? `PUBLIC POST THEY CAN SEE:\nAuthor: ${nameOfIn(w, post.authorId)} [${post.authorId}]\nCaption: ${cut(String(post.text || ""), 800)}\nImage: ${cut(String(post.imageDescription || ""), 360)}`
+    : "There is no single existing post that naturally fits this rumor, so one informed character may make their own social-media post/vaguepost/callout.";
+
+  return askWorldJSON(
+    w,
+    `You generate a tiny amount of character-faithful social-media fallout from a rumor that genuinely propagated through an agent network. This is NOT an omniscient narrator. Every speaker may use only the rumor knowledge, source provenance, relationship and confidence explicitly supplied. Keep output compact JSON.`,
+    `${actorContext}
+
+RUMOR / BACKCHANNEL FACT:
+"${cut(String(rumor.text || ""), 900)}"
+
+Origin visibility: ${rumor.originVisibility || "unknown"}
+Fact level: ${rumor.factLevel || "rumor"}
+People involved: ${(rumor.subjectIds || []).map((id) => `${nameOfIn(w,id)} [${id}]`).join(", ")}
+Network spread: ${Object.keys(rumor.holders || {}).length} holders, ${Number(rumor.spreadCount || 0)} transmissions, ${(rumor.communitiesReached || []).length} community keys reached.
+
+${postContext}
+
+RULES:
+- They are autonomous people talking/reacting because they heard something, NOT a coordinated chorus.
+- A close friend of the subject may defend, doubt, check the facts, joke protectively or stay quiet instead of attacking.
+- An enemy/rival may amplify or mock it. A neutral character may be curious or skeptical.
+- Lower confidence/deeper-hop knowledge must sound less certain: "apparently", "heard", "is it true", vague side-eye, etc. Do not present hearsay as witnessed fact.
+- Do not expose a private DM verbatim. Preserve only the already-saved rumor summary above.
+- Do not invent new facts, receipts, witnesses, cheating, sex, violence or confessions that are not in the rumor.
+- Real social-media style: short, casual, slang allowed, character-specific. No narration, no essays, no assistant voice.
+- Only use the supplied actor IDs.
+${payload.mode === "comment"
+  ? `Return 1-${actors.length} comments that naturally fit the visible post. Not everyone must comment.`
+  : `Return at most ONE autonomous post from one supplied actor. It may be a vaguepost, callout, defense, joke, question or side-eye depending on that actor.`}
+
+FORMAT:
+{"comments":[{"id":"actor id","text":"comment"}],"posts":[{"id":"actor id","text":"post"}]}${TAIL}`,
+    { maxTokens: 520, maxTries: 2 }
+  );
+}
+
+function applyGossipNetworkEcho(w, payload, out) {
+  if (!w || !payload) return 0;
+  const state = ensureGossipPropagationState(w);
+  const rumor = state.rumors.find((r) => r && r.id === payload.rumorId);
+  if (!rumor) return 0;
+  if (!rumor.echoedBy || typeof rumor.echoedBy !== "object") rumor.echoedBy = {};
+
+  const allowed = new Set((payload.actorIds || []).filter((id) => rumor.holders && rumor.holders[id]));
+  const ts = now();
+  let madeCount = 0;
+
+  if (payload.mode === "comment" && payload.postId) {
+    const post = (w.posts || []).find((p) => p && p.id === payload.postId);
+    if (post) {
+      post.comments = safePostComments(post);
+      (out && Array.isArray(out.comments) ? out.comments : []).slice(0, 3).forEach((row) => {
+        const who = aiVoice(w, row && row.id);
+        if (!who || !allowed.has(who) || !row.text || rumor.echoedBy[who]) return;
+        const body = cleanGeneratedComment(w, who, row.text, 240);
+        if (!body) return;
+        const made = {
+          id: uid(),
+          authorId: who,
+          text: body,
+          ts,
+          parent: null,
+          language: worldLanguage(w, w.meId),
+        };
+        post.comments.push(made);
+        noteComment(w, post, made);
+        rumor.echoedBy[who] = ts;
+        madeCount++;
+
+        recordCharacterAgentAction(w, who, {
+          surface: "comment",
+          action: "COMMENT_FROM_HEARD_GOSSIP",
+          targetId: post.authorId || "",
+          refId: made.id,
+          plan: `Public echo of rumor: ${rumor.text}`,
+          planId: `rumor:${rumor.id}`,
+          ts,
+        });
+
+        recordSocialEvent(w, {
+          type: "comment",
+          refId: made.id,
+          ts,
+          actorId: who,
+          targetIds: [...new Set([post.authorId, ...(rumor.subjectIds || [])].filter(Boolean))],
+          visibility: "public",
+          factLevel: "observed",
+          importance: Math.min(65, 28 + Math.round(Number(rumor.heat || 0) * 0.22)),
+          drama: Math.min(75, Math.max(12, Number(rumor.drama || 0))),
+          romance: Number(rumor.romance) || 0,
+          embarrassment: Number(rumor.embarrassment) || 0,
+          source: "gossip-propagation",
+          text: made.text,
+          tags: ["social","comment","gossip-network-echo","heard-rumor"],
+          meta: {
+            postId: post.id,
+            commentId: made.id,
+            rumorId: rumor.id,
+            sourceEventId: rumor.sourceEventId,
+            heardFromId: rumor.holders[who] && rumor.holders[who].fromId || "",
+            confidence: rumor.holders[who] && rumor.holders[who].confidence || 0,
+            sentimentTargetIds: rumor.subjectIds || [],
+          },
+        });
+      });
+    }
+  } else {
+    const row = out && Array.isArray(out.posts) ? out.posts[0] : null;
+    const who = row ? aiVoice(w, row.id) : "";
+    if (who && allowed.has(who) && row.text && !rumor.echoedBy[who]) {
+      const body = cleanGeneratedUtterance(w, who, row.text, 500);
+      if (body) {
+        const post = {
+          id: uid(),
+          authorId: who,
+          ts,
+          likes: 0,
+          likedBy: [],
+          text: body,
+          image: "",
+          imageId: "",
+          imageDescription: "",
+          comments: [],
+          language: worldLanguage(w, w.meId),
+        };
+        w.posts = [post, ...(w.posts || [])].slice(0, 500);
+        rumor.echoedBy[who] = ts;
+        madeCount++;
+
+        recordCharacterAgentAction(w, who, {
+          surface: "feed",
+          action: "CREATE_POST_FROM_HEARD_GOSSIP",
+          targetId: rumor.primarySubjectId || "",
+          refId: post.id,
+          plan: `Public echo of rumor: ${rumor.text}`,
+          planId: `rumor:${rumor.id}`,
+          ts,
+        });
+
+        recordSocialEvent(w, {
+          type: "post",
+          refId: post.id,
+          ts,
+          actorId: who,
+          targetIds: (rumor.subjectIds || []).slice(),
+          visibility: "public",
+          factLevel: "observed",
+          importance: Math.min(70, 30 + Math.round(Number(rumor.heat || 0) * 0.25)),
+          drama: Math.min(80, Math.max(12, Number(rumor.drama || 0))),
+          romance: Number(rumor.romance) || 0,
+          embarrassment: Number(rumor.embarrassment) || 0,
+          source: "gossip-propagation",
+          text: body,
+          tags: ["social","post","gossip-network-echo","heard-rumor","vaguepost"],
+          meta: {
+            postId: post.id,
+            rumorId: rumor.id,
+            sourceEventId: rumor.sourceEventId,
+            heardFromId: rumor.holders[who] && rumor.holders[who].fromId || "",
+            confidence: rumor.holders[who] && rumor.holders[who].confidence || 0,
+            sentimentTargetIds: rumor.subjectIds || [],
+          },
+        });
+      }
+    }
+  }
+
+  if (madeCount > 0) {
+    rumor.publicEchoCount = Math.max(Number(rumor.publicEchoCount) || 0, Object.keys(rumor.echoedBy).length);
+    rumor.lastEchoAt = ts;
+    rumor.updatedAt = ts;
+    state.lastEchoAt = ts;
+    state.echoes.push({
+      id: `ge_${uid()}`,
+      rumorId: rumor.id,
+      ts,
+      mode: payload.mode,
+      postId: payload.postId || "",
+      actorIds: Object.keys(rumor.echoedBy).filter((id) => Number(rumor.echoedBy[id]) === ts),
+      sourceEventId: rumor.sourceEventId,
+    });
+    state.echoes = state.echoes.slice(-320);
+
+    recordSocialEvent(w, {
+      type: "gossip-network-echo",
+      refId: `gossip-echo:${rumor.id}:${Math.floor(ts / 60000)}`,
+      ts,
+      actorId: "",
+      targetIds: (rumor.subjectIds || []).slice(),
+      witnessIds: Object.keys(rumor.holders || {}),
+      visibility: "public",
+      factLevel: "rumor",
+      importance: Math.min(82, 35 + Object.keys(rumor.holders || {}).length * 6),
+      drama: Math.min(85, Math.max(Number(rumor.drama) || 0, 18 + madeCount * 6)),
+      romance: Number(rumor.romance) || 0,
+      embarrassment: Number(rumor.embarrassment) || 0,
+      source: "gossip-propagation",
+      text: rumor.text,
+      tags: ["gossip-network","public-echo","heard-from-others", Object.keys(rumor.holders || {}).length >= 6 ? "widespread" : "circulating"],
+      meta: {
+        leaked: true,
+        rumorId: rumor.id,
+        sourceEventId: rumor.sourceEventId,
+        holderCount: Object.keys(rumor.holders || {}).length,
+        spreadCount: Number(rumor.spreadCount) || 0,
+        communityCount: (rumor.communitiesReached || []).length,
+        publicEchoCount: rumor.publicEchoCount,
+        sentimentTargetIds: rumor.subjectIds || [],
+      },
+    });
+  }
+
+  return madeCount;
 }
 
 /* ============================================================
@@ -32243,11 +32761,22 @@ function buildGossipStoryCandidate(w, primary, pool, mode) {
   const subjectIds = (eventRecap && primaryAttendees.length ? primaryAttendees : events.flatMap(gossipEventSubjectIds))
     .filter(Boolean)
     .filter((id,index,arr) => arr.indexOf(id) === index);
-  const score = Math.round(events.reduce((sum,event,index) => sum + Math.max(0,gossipEventBaseScore(w,event,mode)) * (index === 0 ? 1 : eventRecap ? 0.22 : 0.32),0) + (eventRecap ? 22 : 0));
+  const baseScore = events.reduce((sum,event,index) => sum + Math.max(0,gossipEventBaseScore(w,event,mode)) * (index === 0 ? 1 : eventRecap ? 0.22 : 0.32),0) + (eventRecap ? 22 : 0);
   const roleplayBased = events.some((event) => event && event.meta && event.meta.sourceType === "roleplay");
   const witnessCount = events.reduce((max,event) => Math.max(max,Number(event && event.meta && event.meta.witnessCount)||0),0);
   const scene = sceneId ? (w.scenes || []).find((row) => row && row.id === sceneId) : null;
   const spreadStats = gossipSpreadStatsForEvents(w, events);
+  const spreadBonus = spreadStats
+    ? Math.min(
+        70,
+        spreadStats.holders * 5 +
+        spreadStats.communities * 4 +
+        spreadStats.exchanges * 2 +
+        spreadStats.maxDepth * 3 +
+        (Number(spreadStats.publicEchoes) || 0) * 8
+      )
+    : 0;
+  const score = Math.round(baseScore + spreadBonus);
   return {
     id:"gc_"+uid(), mode,
     mediaId:(activeGossipMediaAccount(w)||{}).id || "",
@@ -36567,6 +37096,32 @@ function socialWaveCast(
   );
 }
 
+
+function gossipPressureForTarget(w, targetId) {
+  const state = ensureGossipPropagationState(w);
+  if (!state || !targetId) return { total: 0, negative: 0, support: 0, holders: 0, echoes: 0 };
+  let total = 0, negative = 0, support = 0, holders = 0, echoes = 0;
+  (state.rumors || []).forEach((rumor) => {
+    if (!rumor || !(rumor.subjectIds || []).includes(targetId)) return;
+    const count = Object.keys(rumor.holders || {}).length;
+    const echoCount = Number(rumor.publicEchoCount || 0);
+    if (count < 3 && echoCount < 1) return;
+    const weight = Math.min(55, count * 5 + echoCount * 8 + Number(rumor.heat || 0) * 0.16);
+    total += weight;
+    holders += count;
+    echoes += echoCount;
+    if (gossipRumorNegative(rumor)) negative += weight;
+    else if (Number(rumor.romance || 0) < 30) support += Math.max(0, weight * 0.35);
+  });
+  return {
+    total: Math.round(total),
+    negative: Math.round(negative),
+    support: Math.round(support),
+    holders,
+    echoes,
+  };
+}
+
 function pickSocialWaveAction(w) {
   refreshAllSocialStats(w);
 
@@ -36595,6 +37150,12 @@ function pickSocialWaveAction(w) {
           target.id
         );
 
+      const gossipPressure =
+        gossipPressureForTarget(
+          w,
+          target.id
+        );
+
       /*
        * Counter-backlash:
        * egyszerre van komoly támadás ÉS erős védőtábor.
@@ -36619,7 +37180,8 @@ function pickSocialWaveAction(w) {
             sentiment.cancelPressure +
             sentiment.stanEnergy +
             sentiment.controversy *
-              0.5,
+              0.5 +
+            gossipPressure.negative * 0.55,
           postId:
             post && post.id,
         });
@@ -36628,6 +37190,8 @@ function pickSocialWaveAction(w) {
       if (
         sentiment.cancelPressure >=
           24 &&
+        gossipPressure.negative >=
+          16 &&
         !recentSocialWave(
           w,
           target.id,
@@ -36642,7 +37206,8 @@ function pickSocialWaveAction(w) {
           score:
             sentiment.cancelPressure *
               1.35 +
-            sentiment.controversy,
+            sentiment.controversy +
+            gossipPressure.negative * 0.8,
           postId:
             post && post.id,
         });
@@ -39305,6 +39870,34 @@ function planAutoAction(view) {
   }
 
   /*
+   * 1.45 GOSSIP PUBLIC ECHO
+   *
+   * Miután a hír ténylegesen több AI-hoz eljutott, az informált karakterek
+   * önállóan visszhangozhatják a közösségi médiában: beszállhatnak egy
+   * kapcsolódó kommentthreadbe, vagy saját vaguepost/callout/defense posztot
+   * írhatnak. Csak VALÓDI rumor-holder szólalhat meg.
+   */
+  const gossipEcho = pickGossipNetworkEchoAction(view);
+  if (
+    gossipEcho &&
+    Math.random() <
+      (
+        String(view.gossipSettings && view.gossipSettings.frequency || "normal") === "chaotic"
+          ? 0.78
+          : String(view.gossipSettings && view.gossipSettings.frequency || "normal") === "high"
+            ? 0.64
+            : 0.46
+      )
+  ) {
+    return mkAction(
+      "gossip-echo",
+      `gossip-echo:${gossipEcho.rumorId}:${gossipEcho.mode}:${Math.floor(now() / 60000)}`,
+      gossipEcho,
+      "event"
+    );
+  }
+
+  /*
    * 1.5 AUTONÓM KEZDEMÉNYEZÉSI SÁV
    *
    * DM / group chat / roleplay / feed ugyanazon deficit-alapú watchdogban
@@ -40482,6 +41075,18 @@ async function runSimulationAction(view, update, action, addImage) {
     if (!applyGossipPropagationRound(probe, payload)) return null;
     update((n) => { applyGossipPropagationRound(n, payload); });
     return "gossip-spread";
+  }
+
+  if (action.type === "gossip-echo") {
+    const payload = action.payload || {};
+    const state = ensureGossipPropagationState(view);
+    const rumor = state && state.rumors.find((r) => r && r.id === payload.rumorId);
+    if (!rumor) return null;
+    const out = await genGossipNetworkEcho(view, payload);
+    const probe = JSON.parse(JSON.stringify(view));
+    if (!applyGossipNetworkEcho(probe, payload, out)) return null;
+    update((n) => { applyGossipNetworkEcho(n, payload, out); });
+    return "gossip-echo";
   }
 
   if (action.type === "gossip-story") {
