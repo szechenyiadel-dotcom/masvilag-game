@@ -6199,7 +6199,16 @@ const DEFAULT_AI_PROVIDER = DEFAULT_AI_MODEL.startsWith("gemini") ? "gemini"
   : /^(gpt|o1|o3)/.test(DEFAULT_AI_MODEL) ? "openai" : "anthropic";
 
 /* A képgenerálás külön modellt kap; a szöveges world-engine modelljét nem használjuk képre. */
-const DEFAULT_IMAGE_MODEL = import.meta.env.VITE_IMAGE_MODEL || "gpt-image-2";
+const CONFIGURED_IMAGE_MODEL = String(import.meta.env.VITE_IMAGE_MODEL || "gpt-image-1").trim();
+/*
+ * v60 IMAGE MODEL SAFETY
+ * `gpt-image-2` was used by an older build as a guessed/default model name.
+ * Normalize that stale value to the supported GPT Image model so an old
+ * Railway VITE_IMAGE_MODEL cannot keep breaking chat image requests.
+ */
+const DEFAULT_IMAGE_MODEL = CONFIGURED_IMAGE_MODEL === "gpt-image-2"
+  ? "gpt-image-1"
+  : (CONFIGURED_IMAGE_MODEL || "gpt-image-1");
 const DEFAULT_IMAGE_PROVIDER = import.meta.env.VITE_IMAGE_PROVIDER || "openai";
 
 /*
@@ -11943,53 +11952,89 @@ async function requestAiImageProxy(payload) {
     paths.forEach((path) => urls.push(`http://${host}:3000${path}`));
   }
 
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const transientStatuses = new Set([429, 500, 502, 503, 504]);
   let lastErr = null;
 
   for (const url of [...new Set(urls)]) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(payload),
-      });
+    /*
+     * Image generation is slower and more bursty than text generation.
+     * A Railway/upstream 502/503/504 is frequently transient, so retry the
+     * SAME real route a couple of times instead of converting one blip into
+     * a failed chat turn. 404 remains route-discovery only.
+     */
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(payload),
+        });
 
-      let data = null;
-      try { data = await res.json(); } catch (e) { data = null; }
+        let data = null;
+        try { data = await res.json(); } catch (e) { data = null; }
 
-      if (res.ok) return data;
-      if (res.status !== 404) {
+        if (res.ok) return data;
+
+        if (res.status === 404) {
+          lastErr = new Error(`HTTP ${res.status}`);
+          lastErr.status = 404;
+          break;
+        }
+
         const err = new Error(
           (data && data.error && (data.error.message || data.error)) ||
           (data && data.error) ||
           `HTTP ${res.status}`
         );
         err.status = res.status;
-        throw err;
-      }
-      lastErr = new Error(`HTTP ${res.status}`);
-      lastErr.status = 404;
-    } catch (err) {
-      lastErr = err;
+        err.data = data;
+        lastErr = err;
 
-      /*
-       * A real backend/image-provider error is authoritative. Do NOT fan the
-       * same expensive image request out to every alias, because that can
-       * multiply rate limits and costs. Only 404/network discovery failures
-       * are allowed to fall through to the next candidate URL.
-       */
-      if (err && Number(err.status) && Number(err.status) !== 404) {
-        throw err;
+        if (!transientStatuses.has(res.status) || attempt >= 2) {
+          throw err;
+        }
+
+        let waitMs = 900 * Math.pow(2, attempt);
+        const retryAfter = res.headers && res.headers.get
+          ? res.headers.get("retry-after")
+          : "";
+        if (retryAfter) {
+          const seconds = Number(retryAfter);
+          if (seconds > 0) waitMs = Math.max(waitMs, seconds * 1000);
+        }
+        await sleep(Math.min(7000, waitMs));
+      } catch (err) {
+        lastErr = err;
+
+        const status = Number(err && err.status) || 0;
+        if (status === 404) break;
+
+        /* Network failures also get a short retry on the same endpoint. */
+        if (!status && attempt < 2) {
+          await sleep(900 * Math.pow(2, attempt));
+          continue;
+        }
+
+        if (status && transientStatuses.has(status) && attempt < 2) {
+          await sleep(900 * Math.pow(2, attempt));
+          continue;
+        }
+
+        /* A real provider/config error is authoritative for this route. */
+        if (status && status !== 404) throw err;
+        if (!status && !isLocalDevBrowser()) throw err;
       }
     }
   }
 
   if (lastErr && Number(lastErr.status) !== 404) {
     console.warn("AI image proxy unavailable:", lastErr);
+    throw lastErr;
   }
   return null;
 }
-
 function bestAlbumSnapFallback(character, prompt) {
   const items = albumOf(character);
   if (!items.length) return null;
@@ -12129,6 +12174,10 @@ function characterSnapReferenceImages(character, media, limit = 3) {
     ) {
       return;
     }
+    /* Avoid huge JSON bodies that can make a proxy/load-balancer answer 502/413. */
+    if (isInlineImageData(resolved) && resolved.length > 2500000) {
+      return;
+    }
     if (!refs.includes(resolved)) refs.push(resolved);
   };
   add(character.avatar);
@@ -12187,13 +12236,14 @@ Rules:
 - keep the person and scene consistent with the requested character and moment
 - if the prompt implies a party, coffee, mirror selfie, street, room, gym or similar, show that naturally.`;
 
+  /* One strong identity reference is enough here and keeps the proxy body small. */
   const referenceImages = characterSnapReferenceImages(
     character,
     media,
-    3
+    1
   );
 
-  const payload = {
+  const makePayload = (refs) => ({
     provider: DEFAULT_IMAGE_PROVIDER,
     model: DEFAULT_IMAGE_MODEL,
     prompt: basePrompt,
@@ -12205,13 +12255,43 @@ Rules:
     output_format: "jpeg",
     response_format: "b64_json",
     background: "auto",
-    referenceImages,
-    reference_images: referenceImages,
-    require_reference: referenceImages.length > 0,
-  };
+    referenceImages: refs,
+    reference_images: refs,
+    require_reference: refs.length > 0,
+  });
 
-  const result = await requestAiImageProxy(payload);
-  if (!result) return null;
+  let result = null;
+  let firstImageErr = null;
+  try {
+    result = await requestAiImageProxy(makePayload(referenceImages));
+  } catch (err) {
+    firstImageErr = err;
+  }
+
+  /*
+   * Some proxy/provider stacks fail specifically on reference-image/edit input.
+   * The written appearance + cached visual identity is already embedded in the
+   * prompt, so retry once as plain generation rather than failing the whole DM.
+   */
+  if (!result && referenceImages.length) {
+    const status = Number(firstImageErr && firstImageErr.status) || 0;
+    if (!status || [400, 413, 415, 422, 429, 500, 502, 503, 504].includes(status)) {
+      try {
+        result = await requestAiImageProxy(makePayload([]));
+        if (result) {
+          console.warn("AI chat snap succeeded without reference image after reference-guided request failed.");
+        }
+      } catch (fallbackErr) {
+        if (!firstImageErr) firstImageErr = fallbackErr;
+        else firstImageErr.fallbackError = fallbackErr;
+      }
+    }
+  }
+
+  if (!result) {
+    if (firstImageErr) throw firstImageErr;
+    return null;
+  }
 
   const firstDataRow =
     Array.isArray(result.data) && result.data[0]
@@ -13694,7 +13774,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v59-event-visibility";
+const BUILD_VERSION = "v60-chat-image-502-fix";
 
 const AUTO = "masvilag:auto";
 /*
@@ -29158,19 +29238,24 @@ Formátum:
         ? forcedChatSnapPrompt(t, c)
         : "");
 
-    const generatedAiSnap =
+    let generatedAiSnap = null;
+    let generatedSnapError = null;
+    if (
       generatedRequestPrompt &&
-      (
-        !requestedReplyText ||
-        explicitImageRequest
-      )
-        ? await generateAiChatSnap(
-            c,
-            generatedRequestPrompt,
-            addImage,
-            media
-          )
-        : null;
+      (!requestedReplyText || explicitImageRequest)
+    ) {
+      try {
+        generatedAiSnap = await generateAiChatSnap(
+          c,
+          generatedRequestPrompt,
+          addImage,
+          media
+        );
+      } catch (snapErr) {
+        generatedSnapError = snapErr;
+        console.warn("AI chat image request failed:", snapErr);
+      }
+    }
 
     const aiImageId =
       (generatedAiSnap && generatedAiSnap.imageId) || "";
@@ -29229,12 +29314,15 @@ Formátum:
       explicitImageRequest &&
       !aiImageRef
     ) {
-      throw new Error(
+      const imageErr = new Error(
         tt(
-          "A karakter nem tudott referenciaképes AI-selfiet készíteni. Ellenőrizd az /ai/image backend image-edit útvonalat és az OPENAI_API_KEY-t.",
-          "The character could not create a reference-guided AI selfie. Check the /ai/image image-edit backend route and OPENAI_API_KEY."
+          `A képgenerálás nem sikerült${generatedSnapError && generatedSnapError.message ? `: ${generatedSnapError.message}` : "."}`,
+          `Image generation failed${generatedSnapError && generatedSnapError.message ? `: ${generatedSnapError.message}` : "."}`
         )
       );
+      imageErr.scope = "image";
+      imageErr.status = Number(generatedSnapError && generatedSnapError.status) || 0;
+      throw imageErr;
     }
 
     if (!reply && !aiImageRef) {
@@ -29538,7 +29626,7 @@ Formátum:
      * ezért itt már csak valódi szolgáltatói/hálózati hibát jelzünk.
      */
     setErr(
-      "CHAT: " +
+      (e && e.scope === "image" ? "KÉP: " : "CHAT: ") +
       (
         (e && e.message) ||
         tt(
