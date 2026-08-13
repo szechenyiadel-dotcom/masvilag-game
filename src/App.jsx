@@ -7164,85 +7164,6 @@ function socialCommentLooksPlayful(value) {
   return /(?:😭|😂|🤣|💀|🙄|🤡|lmao|lol|jk|pls|pleaseee|girl|babe|bestie)/i.test(text);
 }
 
-/*
- * PHOTO-FIRST SOCIAL CONTEXT
- *
- * A normal selfie / outfit / travel / beauty photo is not itself "drama".
- * Close friends should not hallucinate a fight, scandal, attention-seeking or
- * contemptuous roast merely because a sarcastic trait exists in their sheet.
- * Playful teasing is still allowed when it is actually anchored to the photo,
- * caption or a fresh shared joke.
- */
-function postLooksLikePersonalPhotoShowcase(post) {
-  if (!post || !(post.imageId || post.image)) return false;
-
-  const caption = String(post.text || "").replace(/\s+/g, " ").trim();
-  const desc = String(post.imageDescription || "").replace(/\s+/g, " ").trim();
-  const combined = `${caption} ${desc}`.toLowerCase();
-
-  const explicitDrama = /\b(?:fight|fighting|argument|arguing|yelling|crying|blood|injur|police|arrest|breakup|broke\s+up|cheat|scandal|exposed|callout|threat|hospital|weapon|funeral|funerary|veszeked|vereked|sír|sírás|vér|sérül|rendőr|szakítás|megcsal|botrány|lebuk)\b/i.test(combined);
-  if (explicitDrama) return false;
-
-  const personalVisual = /\b(?:selfie|portrait|woman|girl|man|boy|person|people|face|hair|makeup|outfit|dress|bikini|swimsuit|shirt|jacket|beach|pool|sea|ocean|sunset|vacation|travel|posing|pose|standing|sitting|smiling|photo|picture|fotó|kép|szelfi|nő|lány|férfi|haj|smink|ruha|bikini|strand|tenger|nyaral)\b/i.test(combined);
-
-  /* Image-only posts are treated as visual showcase unless the vision text says otherwise. */
-  return personalVisual || !caption;
-}
-
-function socialCommentLooksUngroundedMockingLabel(value) {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
-  if (!text) return false;
-
-  return /\b(?:drama\s*queen|attention\s*seeker|pick\s*me|messy|chaos\s*queen|troublemaker|here\s+we\s+go|of\s+course\s+you\s+would|desperate|thirsty|narcissist|main\s+character\s+syndrome|felt\s+the\s+need\s+to|trying\s+too\s+hard|dráma\s*királynő|figyelemhajhász|feltűnési\s+viszketegség)\b/i.test(text);
-}
-
-function socialCommentContradictsPostContext(w, actorId, post, targetId, text, parentId = null) {
-  if (!w || !actorId || !post || !targetId || actorId === targetId) return false;
-  if (parentId) return false;
-  if (targetId !== post.authorId) return false;
-
-  const tier = relationshipFilterTier(getRel(w, actorId, targetId));
-  const photoShowcase = postLooksLikePersonalPhotoShowcase(post);
-
-  if (!photoShowcase) return false;
-
-  /*
-   * This deliberately ignores the generic "💀 means playful" escape hatch.
-   * "drama queen 💀" is still semantically an ungrounded mock label when the
-   * actual post is just a normal attractive/travel photo.
-   */
-  if (
-    (tier === "good" || tier === "close") &&
-    socialCommentLooksUngroundedMockingLabel(text) &&
-    !socialCommentLooksWarmPraise(text)
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-function friendPhotoReactionContract(w, cast, post) {
-  if (!postLooksLikePersonalPhotoShowcase(post)) return "";
-
-  const authorId = post && post.authorId;
-  const author = nameOfIn(w, authorId);
-  const rows = (cast || [])
-    .map((c) => {
-      if (!c || !c.id || c.id === authorId) return "";
-      const tier = relationshipFilterTier(getRel(w, c.id, authorId));
-      if (tier !== "good" && tier !== "close") return "";
-      return `- ${c.name} → ${author}: ${tier}. On this normal photo, default to visibly friendly/familiar reception: genuine hype, affectionate shorthand, warm teasing tied to something actually visible, a nickname, reciprocal affection, or simply LIKE/IGNORE. Do NOT invent "drama queen", "attention seeker", "pick me", "messy" or other contempt labels unless the caption/current event truly gives a concrete reason.`;
-    })
-    .filter(Boolean);
-
-  if (!rows.length) return "";
-
-  return `PHOTO-FIRST FRIENDSHIP CONTRACT:
-${rows.join("\n")}
-A skull/laughing emoji does NOT magically make an unrelated insult relationship-consistent. Friendly roast must be grounded in the actual photo/caption or a fresh shared joke.`;
-}
-
 function socialCommentContradictsRelationship(w, actorId, targetId, text) {
   if (!w || !actorId || !targetId || actorId === targetId) return false;
   const tier = relationshipFilterTier(getRel(w, actorId, targetId));
@@ -8909,7 +8830,7 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
     invariants: [
       "Treat author IDs and reply-target IDs as ground truth; never reassign who said or did something.",
       "[SELF] means this character. A line authored by SELF is this character's own previous statement/action, not the player's.",
-      "IDENTITY OWNERSHIP: SELF.name / SELF.nickname / SELF.username belong to SELF. Never use SELF's own nickname, handle or name as the addressee name for TARGET unless TARGET explicitly has that same alias too. If addressing TARGET by name, use TARGET identity from relationshipToTarget.",
+      "IDENTITY OWNERSHIP: SELF.name / SELF.first-name / SELF.surname / SELF.nickname / SELF.username all belong to SELF. Never use ANY of SELF's own name variants, nickname or handle as the addressee name for TARGET unless TARGET explicitly has that same alias too. If addressing TARGET by name, use TARGET identity from relationshipToTarget. A speaker must never call the listener by the speaker's own first name, surname, nickname or handle.",
       "Player controls only the player character; never invent the player's unspoken dialogue, actions or thoughts.",
       "Canon + relationship + memory + current context outrank generic drama or generic personality stereotypes.",
       "Only act on information this character could actually perceive or remember.",
@@ -10272,13 +10193,30 @@ function preferredDirectAddressForCharacter(w, actorId, targetId) {
 
 function sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, value) {
   let text = String(value || "");
-  if (!text || !w || !actorId || !targetId || actorId === targetId) return text;
+  if (!text || !w || !actorId) return text;
 
   const actor = charById(w, actorId);
-  const target = charById(w, targetId);
-  if (!actor || !target) return text;
+  const target = targetId ? charById(w, targetId) : null;
+  if (!actor) return text;
+
+  /*
+   * IDENTITY OWNERSHIP GUARD
+   * The old guard only considered nickname + @handle. That still allowed a
+   * character to address somebody else with THEIR OWN legal/first name, e.g.
+   * Terry Silver -> "keep auditioning, terry" or Park Nam-gyu ->
+   * "try blinking, nam-gyu".
+   */
+  const actorFullName = String(actor.name || "").replace(/\s+/g, " ").trim();
+  const actorNameWords = actorFullName.split(/\s+/).filter(Boolean);
+  const actorFirstName = actorNameWords[0] || "";
+  const actorLastName = actorNameWords.length > 1 ? actorNameWords[actorNameWords.length - 1] : "";
+  const actorSurname = preferredTitleSurname(actor) || "";
 
   const actorAliases = [
+    actorFullName,
+    actorFirstName,
+    actorLastName,
+    actorSurname,
     actor.nick,
     actor.nickname,
     actor.username,
@@ -10288,39 +10226,53 @@ function sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, value) {
     .filter((x) => x.length >= 2)
     .filter((x, i, arr) => arr.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i);
 
+  const targetFullName = String((target && target.name) || "").replace(/\s+/g, " ").trim();
+  const targetNameWords = targetFullName.split(/\s+/).filter(Boolean);
   const targetAliases = new Set(
     [
-      target.name,
-      target.nick,
-      target.nickname,
-      target.username,
-      target.username ? `@${target.username}` : "",
-      String(target.name || "").trim().split(/\s+/)[0] || "",
+      targetFullName,
+      targetNameWords[0] || "",
+      targetNameWords.length > 1 ? targetNameWords[targetNameWords.length - 1] : "",
+      target ? preferredTitleSurname(target) : "",
+      target && target.nick,
+      target && target.nickname,
+      target && target.username,
+      target && target.username ? `@${target.username}` : "",
     ]
       .map((x) => String(x || "").replace(/\s+/g, " ").trim().toLowerCase())
       .filter(Boolean)
   );
 
-  const replacement = preferredDirectAddressForCharacter(w, actorId, targetId);
+  const canReplaceWithTarget = Boolean(target && targetId !== actorId);
+  const replacement = canReplaceWithTarget
+    ? preferredDirectAddressForCharacter(w, actorId, targetId)
+    : "";
 
   for (const alias of actorAliases) {
     if (targetAliases.has(alias.toLowerCase())) continue;
     const escaped = regexEscapeLiteral(alias);
 
-    // Only repair clear VOCATIVE uses. Do not rewrite legitimate self-reference
-    // such as "they call me Wolf" or "Wolf doesn't apologize".
+    // Opening / sentence-initial vocative: "Terry, ..." / "Wolf: ..."
     text = text.replace(
-      new RegExp(`(^|[.!?]\\s+)([\"'“”‘’(]*)(?:${escaped})(\\s*[,!:;—-]\\s*)`, "gi"),
-      (_m, lead, quote, punct) => `${lead}${quote}${replacement || ""}${punct}`
+      new RegExp(`(^|[.!?]\s+)([\"'“”‘’(]*)(?:${escaped})(\s*[,!:;—-]\s*)`, "gi"),
+      (_m, lead, quote, punct) => {
+        if (replacement) return `${lead}${quote}${replacement}${punct}`;
+        return `${lead}${quote}`;
+      }
     );
 
+    // Trailing vocative: "do it yourself, Terry" / "blink, Nam-gyu"
     text = text.replace(
-      new RegExp(`([,;:—-]\\s*)(?:${escaped})(?=\\s*[,;:!?.”’"']*(?:$|\\n))`, "gi"),
+      new RegExp(`([,;:—-]\s*)(?:${escaped})(?=\s*[,;:!?.”’"']*(?:$|\n))`, "gi"),
       (_m, lead) => replacement ? `${lead}${replacement}` : ""
     );
   }
 
-  return text.replace(/\s+([,.!?;:])/g, "$1").replace(/ {2,}/g, " ").trim();
+  return text
+    .replace(/^[\s,;:—-]+/, "")
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .replace(/ {2,}/g, " ")
+    .trim();
 }
 
 function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
@@ -10956,7 +10908,7 @@ CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - Treat the ENTIRE character sheet as active behavioral canon, not decorative background.
 - CROSS-REFERENCE CANON ACROSS FIELDS: the same relationship, rank or role may appear in history, extra info, organizations, relationships, rank or other fields. Repeated/consistent evidence is strong canon. Do not lose a fact just because it is not stored in one preferred field.
 - HIERARCHY AND ADDRESS ARE RELATIONSHIP-SPECIFIC: if someone is THIS character's own sensei, default direct address is "Sensei + surname" (for example, Sensei Silver), not the sensei's casual first name, unless explicit canon establishes another private address. Do NOT automatically call somebody else's sensei "Sensei". A dangerous/high-authority sensei should not receive casual consequence-free disrespect from non-sensei characters without strong canon/current cause; another sensei is a peer authority and may challenge or disrespect them if canon supports it.
-- NAME / NICKNAME OWNERSHIP IS ABSOLUTE: a character's own nickname and @handle identify THAT character. Never address a different person using SELF's nickname just because it appears prominently in SELF's profile. Example: if Feng Xiao's nickname is "Wolf", Feng must never call another person "wolf" unless that other person's own profile independently says their name/nickname is Wolf. Resolve the addressee from the target character, never from the speaker's identity fields.
+- NAME / NICKNAME OWNERSHIP IS ABSOLUTE: every SELF identifier belongs to THAT character — full name, first name, surname, nickname and @handle. Never address a different person using ANY SELF name variant merely because it appears prominently in SELF's profile. Examples: if Feng Xiao's nickname is "Wolf", Feng must never call another person "wolf"; Terrance Silver must never call the listener "Terry"; Park Nam-gyu must never call the listener "Nam-gyu", unless TARGET independently has that exact alias. Resolve the addressee exclusively from TARGET identity, never from SELF identity fields.
 - Reconcile every response with personality, traits, speech style, full history, secrets, fears, goals, likes, abilities, organization, rank, relationships and current memories.
 - HUMAN CONVERSATIONAL CONTINUITY: identify what the other person just did socially — compliment, question, joke, invitation, apology, provocation, flirting, support — and respond to THAT act. A dark, dominant, sarcastic or rude character may react smugly, awkwardly, teasingly, suspiciously or tersely to praise, but must not manufacture a random "stop texting / leave me alone" boundary with no current reason.
 - "Cold", "rude", "sarcastic", "dominant" or "dangerous" is not a universal license for hostility in every exchange. The reaction must come from personality + relationship + current context together.
@@ -13123,7 +13075,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v49-photo-social-context";
+const BUILD_VERSION = "v49-self-name-vocative-guard";
 
 const AUTO = "masvilag:auto";
 /*
@@ -19301,14 +19253,6 @@ NYILVÁNOS VS. PRIVÁT REALIZMUS:
 - Egy szarkasztikus vagy nyers barát is lehet kedves: a stílusa maradhat csípős, de ne változtasd a szeretetet megvetéssé. A “baráti roast” után is legyen egyértelmű, hogy ez közelség, nem ellenségeskedés.
 - Ha a poszt kifejezetten jó hír, szelfi, outfit, siker vagy sebezhető pillanat, a valódi barátok gyakran röviden támogatnak/hype-olnak. Ne legyen minden pozitív kapcsolat indokolatlanul hűvös csak azért, hogy “edgy” maradjon.
 
-${friendPhotoReactionContract(w, cast, post)}
-
-FOTÓ-ELSŐ SZEMANTIKA:
-- Ha a poszt lényegében egy normál szelfi / outfit / bikini / travel / beauty fotó és nincs drámai caption vagy tényleges konfliktus, NE találj ki hozzá botrányt, személyiségvádat vagy kapcsolatdrámát.
-- Ilyen fotónál a komment legyen a KÉPHEZ kötve: kinézet, outfit, helyszín, vibe, utazás, fotóminőség, valódi közös poén, vagy like/ignore.
-- A "drama queen 💀", "attention seeker", "pick me", "messy", "here we go" jellegű sor NEM képföldelt reakció önmagában. Csak akkor megengedett, ha a caption, a látható jelenet vagy egy FRISS konkrét közös esemény ténylegesen ezt indokolja.
-- Közeli barátnál a szarkazmus nem írhatja felül a kapcsolatot: a roastból is olvasható legyen a szeretet, és legyen konkrét oka.
-
 KONKRÉT POSZTHOZ KÖTÉS:
 - Minden új kommentnek legyen konkrét kiváltó oka EBBEN a posztban: egy szó, kép-részlet, implikáció, korábbi thread-sor vagy ténylegesen releváns közös emlék.
 - Ha a komment csak egy általános bók/reakció lenne, ami száz másik poszt alatt is ugyanúgy állhatna, inkább írd újra vagy legyen like/ignore.
@@ -19512,50 +19456,6 @@ Formátum:
     out && typeof out === "object"
       ? out
       : { comments: [], likes: [], perceptions: [], changes: [], events: [] };
-
-  /*
-   * Deterministic photo-context guard. If the model still produces an
-   * ungrounded contempt label toward a friend on a normal photo, do not let
-   * that hallucinated social meaning enter the feed/memory/gossip graph.
-   * Convert the failed comment into a like instead of inventing a new line.
-   */
-  if (postLooksLikePersonalPhotoShowcase(post)) {
-    const fallbackLikes = new Set(
-      Array.isArray(normalizedOut.likes)
-        ? normalizedOut.likes.map(String)
-        : []
-    );
-
-    normalizedOut.comments = safeAiComments(normalizedOut).filter((row) => {
-      const actorId = findChar(
-        w,
-        row && (row.id !== undefined ? row.id : row.name)
-      );
-      const replyTag = String(
-        (row && (row.reply_to !== undefined ? row.reply_to : row.replyTo)) || ""
-      ).trim();
-
-      if (
-        actorId &&
-        !replyTag &&
-        socialCommentContradictsPostContext(
-          w,
-          actorId,
-          post,
-          post.authorId,
-          row && row.text,
-          null
-        )
-      ) {
-        fallbackLikes.add(actorId);
-        return false;
-      }
-
-      return true;
-    });
-
-    normalizedOut.likes = [...fallbackLikes];
-  }
 
   normalizedOut.__castIds =
     cast.map(
@@ -20427,20 +20327,6 @@ if (
     who,
     targetId,
     body
-  )
-) {
-  return;
-}
-
-if (
-  targetId &&
-  socialCommentContradictsPostContext(
-    n,
-    who,
-    p,
-    targetId,
-    body,
-    parent
   )
 ) {
   return;
