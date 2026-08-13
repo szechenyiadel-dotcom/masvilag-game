@@ -8651,19 +8651,25 @@ function compactCharacterAgentRelationship(w, actorId, targetId) {
   if (!w || !actorId || !targetId || actorId === targetId) return null;
   const rel = getRel(w, actorId, targetId) || {};
   const target = charById(w, targetId);
+  const targetName = target ? String(target.name || "") : String(targetId);
+  const targetWords = targetName.trim().split(/\s+/).filter(Boolean);
+  const ownSensei = isOwnSenseiRelationship(w, actorId, targetId);
   return {
     targetId,
-    targetName: target ? target.name : String(targetId),
+    targetName,
+    targetUsername: target ? String(target.username || "") : "",
+    targetNickname: target ? String(target.nick || target.nickname || "") : "",
+    targetFirstName: targetWords[0] || targetName,
     score: Number(rel.score) || 0,
     label: relLabel(rel) || "",
     bond: String(rel.bond || rel.type || ""),
     mood: String(rel.mood || ""),
     hidden: String(rel.hidden || ""),
     fixed: Boolean(rel.fixed),
-    ownSensei: isOwnSenseiRelationship(w, actorId, targetId),
-    preferredAddress: isOwnSenseiRelationship(w, actorId, targetId)
+    ownSensei,
+    preferredAddress: ownSensei
       ? preferredSenseiAddress(target)
-      : "",
+      : String((target && (target.nick || target.nickname)) || targetWords[0] || targetName || ""),
   };
 }
 
@@ -8824,6 +8830,7 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
     invariants: [
       "Treat author IDs and reply-target IDs as ground truth; never reassign who said or did something.",
       "[SELF] means this character. A line authored by SELF is this character's own previous statement/action, not the player's.",
+      "IDENTITY OWNERSHIP: SELF.name / SELF.nickname / SELF.username belong to SELF. Never use SELF's own nickname, handle or name as the addressee name for TARGET unless TARGET explicitly has that same alias too. If addressing TARGET by name, use TARGET identity from relationshipToTarget.",
       "Player controls only the player character; never invent the player's unspoken dialogue, actions or thoughts.",
       "Canon + relationship + memory + current context outrank generic drama or generic personality stereotypes.",
       "Only act on information this character could actually perceive or remember.",
@@ -10172,6 +10179,77 @@ function sanitizeIncorrectSenseiAddress(
   return text;
 }
 
+function preferredDirectAddressForCharacter(w, actorId, targetId) {
+  const target = charById(w, targetId);
+  if (!target) return "";
+  if (isOwnSenseiRelationship(w, actorId, targetId)) {
+    return preferredSenseiAddress(target);
+  }
+  const nick = String(target.nick || target.nickname || "").replace(/\s+/g, " ").trim();
+  if (nick) return nick;
+  const full = String(target.name || "").replace(/\s+/g, " ").trim();
+  return full.split(/\s+/).filter(Boolean)[0] || full;
+}
+
+function sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, value) {
+  let text = String(value || "");
+  if (!text || !w || !actorId || !targetId || actorId === targetId) return text;
+
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target) return text;
+
+  const actorAliases = [
+    actor.nick,
+    actor.nickname,
+    actor.username,
+    actor.username ? `@${actor.username}` : "",
+  ]
+    .map((x) => String(x || "").replace(/\s+/g, " ").trim())
+    .filter((x) => x.length >= 2)
+    .filter((x, i, arr) => arr.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i);
+
+  const targetAliases = new Set(
+    [
+      target.name,
+      target.nick,
+      target.nickname,
+      target.username,
+      target.username ? `@${target.username}` : "",
+      String(target.name || "").trim().split(/\s+/)[0] || "",
+    ]
+      .map((x) => String(x || "").replace(/\s+/g, " ").trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  const replacement = preferredDirectAddressForCharacter(w, actorId, targetId);
+
+  for (const alias of actorAliases) {
+    if (targetAliases.has(alias.toLowerCase())) continue;
+    const escaped = regexEscapeLiteral(alias);
+
+    // Only repair clear VOCATIVE uses. Do not rewrite legitimate self-reference
+    // such as "they call me Wolf" or "Wolf doesn't apologize".
+    text = text.replace(
+      new RegExp(`(^|[.!?]\\s+)([\"'“”‘’(]*)(?:${escaped})(\\s*[,!:;—-]\\s*)`, "gi"),
+      (_m, lead, quote, punct) => `${lead}${quote}${replacement || ""}${punct}`
+    );
+
+    text = text.replace(
+      new RegExp(`([,;:—-]\\s*)(?:${escaped})(?=\\s*[,;:!?.”’"']*(?:$|\\n))`, "gi"),
+      (_m, lead) => replacement ? `${lead}${replacement}` : ""
+    );
+  }
+
+  return text.replace(/\s+([,.!?;:])/g, "$1").replace(/ {2,}/g, " ").trim();
+}
+
+function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
+  let text = sanitizeIncorrectSenseiAddress(w, actorId, targetId, value);
+  text = sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, text);
+  return text;
+}
+
 function sanitizePhoneDm(
   w,
   botId,
@@ -10195,7 +10273,7 @@ function sanitizePhoneDm(
   text = sanitizeSocialUiMetaText(text);
   if (!text) return "";
 
-  text = sanitizeIncorrectSenseiAddress(
+  text = sanitizeGeneratedDirectAddress(
     w,
     botId,
     w && w.meId,
@@ -10799,6 +10877,7 @@ CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - Treat the ENTIRE character sheet as active behavioral canon, not decorative background.
 - CROSS-REFERENCE CANON ACROSS FIELDS: the same relationship, rank or role may appear in history, extra info, organizations, relationships, rank or other fields. Repeated/consistent evidence is strong canon. Do not lose a fact just because it is not stored in one preferred field.
 - HIERARCHY AND ADDRESS ARE RELATIONSHIP-SPECIFIC: if someone is THIS character's own sensei, default direct address is "Sensei + surname" (for example, Sensei Silver), not the sensei's casual first name, unless explicit canon establishes another private address. Do NOT automatically call somebody else's sensei "Sensei". A dangerous/high-authority sensei should not receive casual consequence-free disrespect from non-sensei characters without strong canon/current cause; another sensei is a peer authority and may challenge or disrespect them if canon supports it.
+- NAME / NICKNAME OWNERSHIP IS ABSOLUTE: a character's own nickname and @handle identify THAT character. Never address a different person using SELF's nickname just because it appears prominently in SELF's profile. Example: if Feng Xiao's nickname is "Wolf", Feng must never call another person "wolf" unless that other person's own profile independently says their name/nickname is Wolf. Resolve the addressee from the target character, never from the speaker's identity fields.
 - Reconcile every response with personality, traits, speech style, full history, secrets, fears, goals, likes, abilities, organization, rank, relationships and current memories.
 - HUMAN CONVERSATIONAL CONTINUITY: identify what the other person just did socially — compliment, question, joke, invitation, apology, provocation, flirting, support — and respond to THAT act. A dark, dominant, sarcastic or rude character may react smugly, awkwardly, teasingly, suspiciously or tersely to praise, but must not manufacture a random "stop texting / leave me alone" boundary with no current reason.
 - "Cold", "rude", "sarcastic", "dominant" or "dangerous" is not a universal license for hostility in every exchange. The reaction must come from personality + relationship + current context together.
@@ -12965,7 +13044,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v47-networked-gossip-afterlife";
+const BUILD_VERSION = "v48-identity-alias-ownership";
 
 const AUTO = "masvilag:auto";
 /*
@@ -20152,7 +20231,7 @@ function applyComments(n, postId, out, label) {
 
       if (isUncharacteristicGenericComment(n, who, c.text)) return;
 
-      const body = cleanGeneratedComment(n, who, c.text, 240);
+      let body = cleanGeneratedComment(n, who, c.text, 240);
       if (!body) return;
 
       /* A csomagon belül se legyen két karakternek ugyanaz a generikus reakciója. */
@@ -20197,6 +20276,11 @@ const targetId =
   pc && pc.authorId
     ? pc.authorId
     : p.authorId || "";
+
+if (targetId) {
+  body = sanitizeGeneratedDirectAddress(n, who, targetId, body);
+  if (!body) return;
+}
 
 /*
  * Deterministic social sanity check. If a model sincerely hypes someone the
@@ -21339,7 +21423,7 @@ function applyReplies(n, postId, rootId, out) {
     const rootForAddress = safePostComments(p).find((x) => x && x.id === rootId);
     const addressTargetId = rootForAddress && rootForAddress.authorId ? rootForAddress.authorId : p.authorId;
     if (addressTargetId) {
-      body = sanitizeIncorrectSenseiAddress(n, who, addressTargetId, body);
+      body = sanitizeGeneratedDirectAddress(n, who, addressTargetId, body);
     }
     if (!body) return;
     if (
@@ -25964,7 +26048,7 @@ Formátum:
 
             const addressedText =
               !isNarr && allowedTo && resolvedId
-                ? sanitizeIncorrectSenseiAddress(w, resolvedId, allowedTo, freshText)
+                ? sanitizeGeneratedDirectAddress(w, resolvedId, allowedTo, freshText)
                 : freshText;
 
             return {
