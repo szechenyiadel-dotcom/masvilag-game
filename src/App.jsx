@@ -3788,7 +3788,11 @@ function commentWarrantsAiReply(w, post, comment, targetId) {
 function findNaturalThreadReply(w, onlyPostId = "") {
   if (!w) return null;
   const posts = (w.posts || [])
-    .filter((p) => p && (!onlyPostId || p.id === onlyPostId))
+    .filter((p) =>
+      p &&
+      (!onlyPostId || p.id === onlyPostId) &&
+      now() - (Number(p.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS
+    )
     .slice(0, 12);
 
   for (let i = 0; i < posts.length; i++) {
@@ -3801,8 +3805,9 @@ function findNaturalThreadReply(w, onlyPostId = "") {
       const comment = comments[j];
       if (!comment) continue;
 
-      /* Régi threadet ne keltsünk fel véletlenszerűen napokkal később. */
-      if (now() - (Number(comment.ts) || 0) > 6 * 3600e3) continue;
+      /* Csak a ténylegesen friss feed él tovább automatikusan. Egy régi
+       * threadet az AI nem ás elő magától; a játékos friss válasza külön út. */
+      if (now() - (Number(comment.ts) || 0) > Math.min(45 * 60000, LIVE_WORLD_FRESH_COMMENT_WINDOW_MS)) continue;
 
       const targets = naturalCommentReplyTargets(w, post, comment);
       for (let k = 0; k < targets.length; k++) {
@@ -5885,6 +5890,17 @@ const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(7000, Math.min(60000, Number(imp
 const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.45, Math.min(2.50, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 0.82));
 const LIVE_WORLD_CANCEL_SENSITIVITY = Math.max(0.60, Math.min(2.20, Number(import.meta.env.VITE_WORLD_CANCEL_SENSITIVITY) || 1.32));
 const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(import.meta.env.VITE_WORLD_MAX_POPUP_REROLLS) || 5)));
+
+/*
+ * LIVING WORLD PRIORITY v51
+ * Feed-first rhythm: posts are the pulse of the world, comments cluster around
+ * genuinely fresh posts, then popup events, private contact and AI invitations.
+ * These are safe public Vite build-time tuning values (no secrets).
+ */
+const LIVE_WORLD_POST_TARGET_MS = Math.max(25000, Math.min(120000, Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 42000));
+const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(10 * 60000, Math.min(3 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 35 * 60000));
+const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(10000, Math.min(120000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 22000));
+const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(2, Math.min(12, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 6)));
 const AI_BACKGROUND_GAP_MS = Math.max(3500, Math.min(30000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 8000));
 const AI_INITIATIVE_GAP_MS = Math.max(1800, Math.min(15000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 3000));
 
@@ -31508,7 +31524,8 @@ function pickInitiator(w) {
 
 /* Van-e olyan, amit tőled láttak, de még nem reagáltak rá? */
 function findUnanswered(w) {
-  const posts = (w.posts || []).slice(0, 10);
+  const posts = (w.posts || []).slice(0, 14);
+  const tsNow = now();
 
   for (let i = 0; i < posts.length; i++) {
     const po = posts[i];
@@ -31524,6 +31541,12 @@ function findUnanswered(w) {
       const playerComment = cs[j];
 
       if (!playerComment || !isHuman(w, playerComment.authorId)) {
+        continue;
+      }
+
+      /* A régi posztot egy FRISS játékos-komment újra megnyithatja, de egy
+       * napokkal ezelőtti, már ott maradt komment miatt ne induljon újra thread. */
+      if (tsNow - (Number(playerComment.ts) || 0) > 45 * 60000) {
         continue;
       }
 
@@ -31558,6 +31581,7 @@ function findUnanswered(w) {
 
     if (
       isHuman(w, po.authorId) &&
+      tsNow - (Number(po.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS &&
       !cs.some((c) => c && !c.parent && !isHuman(w, c.authorId))
     ) {
       return { post: po, comment: null, targetId: "" };
@@ -31664,6 +31688,17 @@ function ensureSimState(w) {
   }
 
   if (!Array.isArray(w.sim.queue)) w.sim.queue = [];
+
+  /* v51 migration/runtime guard: a régi buildből bent maradt automatikus
+   * comment queue ne élesszen fel régi posztokat az új feed-first ritmusban. */
+  w.sim.queue = w.sim.queue.filter((action) => {
+    if (!action || action.type !== "comments") return true;
+    const postId = action.payload && action.payload.postId;
+    const post = (w.posts || []).find((p) => p && p.id === postId);
+    if (!post) return false;
+    return now() - (Number(post.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS;
+  });
+
   if (!w.sim.done || typeof w.sim.done !== "object") w.sim.done = {};
   if (typeof w.sim.running !== "string") w.sim.running = "";
   if (!Number.isFinite(Number(w.sim.at))) w.sim.at = 0;
@@ -35193,12 +35228,12 @@ function popupCadenceMs(w) {
   const level = storySettingsOf(w).dramaLevel;
   const base =
     level === "low"
-      ? 8 * 60 * 1000
+      ? 4.5 * 60 * 1000
       : level === "high"
-        ? 3 * 60 * 1000
+        ? 1.7 * 60 * 1000
         : level === "chaotic"
-          ? 2 * 60 * 1000
-          : 4.5 * 60 * 1000;
+          ? 1.25 * 60 * 1000
+          : 2.25 * 60 * 1000;
 
   return Math.max(60 * 1000, Math.round(base * LIVE_WORLD_POPUP_CADENCE_MULTIPLIER));
 }
@@ -40283,17 +40318,52 @@ function feedNeedsFreshPost(w) {
   const last = lastAiFeedPostAt(w);
 
   /*
-   * CHANNEL BALANCE v37:
-   * A feed nem kap többé 45 másodpercenként kötelező új posztot, miközben
-   * a DM / group / roleplay csak próbálkozik. A publikus feed is ugyanazon
-   * nagyságrendű ütemben él, mint a többi valódi történéscsatorna.
-   * A karakterenkénti aktivitás ettől még különbözhet.
+   * LIVING WORLD v51 — POST IS THE PRIMARY PULSE.
+   * A világ leggyakoribb önálló tartalmi mozdulata az új poszt. A karakter-
+   * aktivitás továbbra is számít, de a feed nem vár perceket DM/reply mögött.
    */
-  const target = Math.max(55000, Math.round(105000 / LIVE_WORLD_ACTIVITY_MULTIPLIER));
-  return (
-    !last ||
-    now() - last >= target
-  );
+  const postPeak = Math.max(0.55, channelActivityPeak(w, "post"));
+  const target = Math.max(25000, Math.round(LIVE_WORLD_POST_TARGET_MS / Math.min(1.85, postPeak)));
+  return !last || now() - last >= target;
+}
+
+function freshFeedPostCommentCandidate(w) {
+  if (!w) return null;
+  const ts = now();
+
+  const ranked = (w.posts || [])
+    .filter((post) => {
+      if (!post || !post.id || !post.authorId) return false;
+      const age = ts - (Number(post.ts) || 0);
+      if (age < 9000 || age > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) return false;
+
+      const comments = safePostComments(post);
+      if (comments.length >= LIVE_WORLD_FRESH_COMMENT_MAX) return false;
+      if (Number(post.autoCommentedAt) > 0) return false;
+
+      const lastCommentAt = comments.reduce(
+        (latest, c) => Math.max(latest, Number(c && c.ts) || 0),
+        0
+      );
+      if (lastCommentAt && ts - lastCommentAt < LIVE_WORLD_FRESH_COMMENT_GAP_MS) return false;
+      return true;
+    })
+    .map((post) => {
+      const age = Math.max(0, ts - (Number(post.ts) || 0));
+      const comments = safePostComments(post);
+      const ageRatio = Math.min(1, age / LIVE_WORLD_FRESH_COMMENT_WINDOW_MS);
+      const freshness = (1 - ageRatio) * 100;
+      const underCommented = Math.max(0, LIVE_WORLD_FRESH_COMMENT_MAX - comments.length) * 9;
+      const authorIsPlayer = isHuman(w, post.authorId) ? 18 : 0;
+      const juicy = publicSocialJuiceSignals(post.text || post.imageDescription || "").juicy ? 10 : 0;
+      return {
+        post,
+        score: freshness + underCommented + authorIsPlayer + juicy + Math.random() * 8,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return ranked.length ? ranked[0].post : null;
 }
 
 function lastAiInitiatedRoleplayAt(w) {
@@ -40311,13 +40381,13 @@ function canAiInitiateRoleplay(w) {
   /* Egy aktív AI-Event elég; ne spammeljen egyszerre több meghívással. */
   if (openAiScenes >= 1) return false;
   const last = lastAiInitiatedRoleplayAt(w);
-  const target = Math.max(55 * 1000, Math.round((90 * 1000) / LIVE_WORLD_ACTIVITY_MULTIPLIER));
+  const target = Math.max(4 * 60 * 1000, Math.round((6 * 60 * 1000) / LIVE_WORLD_ACTIVITY_MULTIPLIER));
   return !last || now() - last >= target;
 }
 
 function roleplayInitiationProbeDue(w) {
   const attemptAt = Number(w && w.sim && w.sim.roleplayAttemptAt) || 0;
-  return !attemptAt || now() - attemptAt >= 30 * 1000;
+  return !attemptAt || now() - attemptAt >= 90 * 1000;
 }
 
 function roleplayInitiatorScore(w, c) {
@@ -40776,12 +40846,16 @@ function channelActivityPeak(w, key) {
  * külön saját éhezési órát kap. Ha valamelyik túl régóta nem történt meg,
  * az a csatorna a következő újabb feed-poszt ELŐTT kap egy próbát.
  */
-function pickInitiativeWatchdogAction(view) {
+function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   if (!view || !(view.chars || []).length) return null;
 
   const ts = now();
   const sim = (view && view.sim) || {};
   const candidates = [];
+  const allowed = Array.isArray(allowedChannels) && allowedChannels.length
+    ? new Set(allowedChannels)
+    : null;
+  const permits = (channel) => !allowed || allowed.has(channel);
 
   /*
    * v37 CHANNEL BALANCER
@@ -40794,11 +40868,11 @@ function pickInitiativeWatchdogAction(view) {
    */
   const dmPeak = Math.max(0.25, channelActivityPeak(view, "dm"));
   const dmLast = lastAiPrivateMessageAt(view);
-  const dmTarget = Math.max(65000, Math.round(95000 / dmPeak));
+  const dmTarget = Math.max(150000, Math.round(215000 / dmPeak));
   const dmElapsed = dmLast ? ts - dmLast : dmTarget * 3;
   const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 25000;
 
-  if (dmElapsed >= dmTarget && dmRetryReady) {
+  if (permits("dm") && dmElapsed >= dmTarget && dmRetryReady) {
     const bot = pickInitiator(view);
     if (bot) {
       candidates.push({
@@ -40819,11 +40893,11 @@ function pickInitiativeWatchdogAction(view) {
   );
   const groupPeak = Math.max(0.25, channelActivityPeak(view, "group"));
   const groupLast = lastAiGroupMessageAt(view);
-  const groupTarget = Math.max(80000, Math.round(115000 / groupPeak));
+  const groupTarget = Math.max(210000, Math.round(290000 / groupPeak));
   const groupElapsed = groupLast ? ts - groupLast : groupTarget * 2.5;
   const groupRetryReady = !Number(sim.groupAttemptAt) || ts - Number(sim.groupAttemptAt) >= 35000;
 
-  if (groupElapsed >= groupTarget && groupRetryReady) {
+  if (permits("group") && groupElapsed >= groupTarget && groupRetryReady) {
     if (groups.length) {
       const rankedGroups = groups
         .map((g) => ({
@@ -40855,10 +40929,10 @@ function pickInitiativeWatchdogAction(view) {
     }
   }
 
-  if (canAiInitiateRoleplay(view)) {
+  if (permits("roleplay") && canAiInitiateRoleplay(view)) {
     const rpPeak = Math.max(0.25, channelActivityPeak(view, "roleplay"));
     const rpLast = lastAiInitiatedRoleplayAt(view);
-    const rpTarget = Math.max(120000, Math.round(175000 / rpPeak));
+    const rpTarget = Math.max(300000, Math.round(420000 / rpPeak));
     const rpElapsed = rpLast ? ts - rpLast : rpTarget * 2.7;
     const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 45000;
 
@@ -40884,7 +40958,7 @@ function pickInitiativeWatchdogAction(view) {
   const feedTarget = Math.max(85000, Math.round(115000 / postPeak));
   const feedElapsed = feedLast ? ts - feedLast : feedTarget * 2.2;
 
-  if (feedElapsed >= feedTarget) {
+  if (permits("feed") && feedElapsed >= feedTarget) {
     candidates.push({
       urgency: Math.min(5, feedElapsed / feedTarget) + 0.10 + Math.random() * 0.12,
       action: mkAction(
@@ -40951,14 +41025,42 @@ function planAutoAction(view) {
   }
 
   /*
-   * 1.25 ÉLŐ AI→AI KOMMENT-THREAD
-   *
-   * Egy kérdés, direkt reply, @mention, provokáció vagy más természetesen
-   * válaszra hívó AI-komment ne maradjon örökre lógva. A játékos karakterét
-   * SOHA nem vezéreljük automatikusan; csak AI-címzett válaszolhat.
+   * LIVING WORLD PRIORITY v51
+   * 1) ÚJ POSZT — ez a világ leggyakoribb autonóm tartalma.
    */
+  if (feedNeedsFreshPost(view)) {
+    return mkAction(
+      "world",
+      `feed-primary:${Math.floor(now() / 30000)}`,
+      { trigger: "feed-primary" },
+      "event"
+    );
+  }
+
+  /*
+   * 2) FRISS POSZT KOMMENTJEI.
+   * Csak a friss feedből választunk. Egy poszt maximum egy automatikus
+   * komment-kört kap; utána csak valódi reply/mention tarthatja életben.
+   * Így a kommentek sűrűek a friss posztokon, de nem eszik meg a világot.
+   */
+  const freshCommentPost = freshFeedPostCommentCandidate(view);
+  if (freshCommentPost && Math.random() < 0.72) {
+    return mkAction(
+      "comments",
+      `fresh-comments:${freshCommentPost.id}`,
+      {
+        postId: freshCommentPost.id,
+        trigger: "fresh-post",
+        maxComments: safePostComments(freshCommentPost).length === 0 ? 3 : 2,
+        allowThreadFollowup: false,
+      },
+      "event"
+    );
+  }
+
+  /* Friss AI→AI thread csak akkor él tovább, ha valóban reply-ra hív. */
   const naturalThread = findNaturalThreadReply(view);
-  if (naturalThread) {
+  if (naturalThread && Math.random() < 0.38) {
     return mkAction(
       "reply",
       `auto-thread:${naturalThread.post.id}:${naturalThread.comment.id}:${naturalThread.targetId}`,
@@ -40974,89 +41076,14 @@ function planAutoAction(view) {
   }
 
   /*
-   * 1.4 BACKCHANNEL GOSSIP ROUND
-   *
-   * Egy pletyka nem teleportál a teljes castba. Egy konkrét informált AI
-   * adja tovább egy olyan másik AI-nak, akihez tényleges társas út vezet.
-   * A kör gyors lokális state update, ezért nem fogyaszt feed/DM/RP cadence-et.
-   */
-  const gossipSpread = pickGossipPropagationAction(view);
-  if (gossipSpread && Math.random() < (String(view.gossipSettings && view.gossipSettings.frequency || "normal") === "chaotic" ? 0.78 : 0.58)) {
-    return mkAction(
-      "gossip-spread",
-      `gossip-spread:${gossipSpread.rumorId}:${gossipSpread.fromId}:${gossipSpread.toId}`,
-      gossipSpread,
-      "event"
-    );
-  }
-
-  /*
-   * 1.45 GOSSIP PUBLIC ECHO
-   *
-   * Miután a hír ténylegesen több AI-hoz eljutott, az informált karakterek
-   * önállóan visszhangozhatják a közösségi médiában: beszállhatnak egy
-   * kapcsolódó kommentthreadbe, vagy saját vaguepost/callout/defense posztot
-   * írhatnak. Csak VALÓDI rumor-holder szólalhat meg.
-   */
-  const gossipEcho = pickGossipNetworkEchoAction(view);
-  if (
-    gossipEcho &&
-    Math.random() <
-      (
-        String(view.gossipSettings && view.gossipSettings.frequency || "normal") === "chaotic"
-          ? 0.78
-          : String(view.gossipSettings && view.gossipSettings.frequency || "normal") === "high"
-            ? 0.64
-            : 0.46
-      )
-  ) {
-    return mkAction(
-      "gossip-echo",
-      `gossip-echo:${gossipEcho.rumorId}:${gossipEcho.mode}:${Math.floor(now() / 60000)}`,
-      gossipEcho,
-      "event"
-    );
-  }
-
-  /*
-   * 1.5 AUTONÓM KEZDEMÉNYEZÉSI SÁV
-   *
-   * DM / group chat / roleplay / feed ugyanazon deficit-alapú watchdogban
-   * versenyez. A legrégebben éhező csatorna kapja a következő valódi kört.
-   */
-  const initiativeAction = pickInitiativeWatchdogAction(view);
-  if (initiativeAction) {
-    return initiativeAction;
-  }
-
-  /*
-   * 1.6 GOSSIP WATCHDOG
-   * A friss, publikálható nyilvános dráma/thread nem vár follow-karbantartás mögött.
-   */
-  const urgentGossipCandidate = gossipAutoCandidate(view);
-  if (urgentGossipCandidate) {
-    return mkAction(
-      "gossip-story",
-      `gossip-priority:${urgentGossipCandidate.mode}:${urgentGossipCandidate.primaryEventId}`,
-      { candidate: urgentGossipCandidate },
-      "event"
-    );
-  }
-
-  /*
-   * 1.7 RANDOM POPUP WATCHDOG
-   *
-   * A felvillanó Event többé nem függ attól, hogy épp van-e elég magas
-   * pontszámú nyilvános socialEvents seed. Ha túl régóta nem volt popup,
-   * egy karakterhű ambient helyzet kap elsőbbséget a következő feed-post
-   * safety net előtt. Ez nem vezérli a játékost, csak választást kínál.
+   * 3) FELVILLANÓ EVENT — a feed után ez a következő nagy világmozdulat.
    */
   if (popupEventOverdue(view)) {
     const popupSeed = pickPopupEventSeed(view, { allowAmbient: true });
     if (popupSeed) {
       return mkAction(
         "popup-event",
-        `popup-watchdog:${popupSeed.id}`,
+        `popup-priority:${popupSeed.id}`,
         {
           seedEventId: popupSeed.id,
           seed: popupSeed.type === "ambient-popup" ? popupSeed : null,
@@ -41067,15 +41094,72 @@ function planAutoAction(view) {
   }
 
   /*
-   * 1.75 FEED SAFETY NET
-   * A normál arányt a közös channel balancer adja; ez csak végső biztosíték.
+   * 4) DM / NOTE-REAKCIÓ.
+   * A friss játékos-Note reakciója személyes és időszerű, de nem előzi meg
+   * az új feedet vagy a friss-feed kommenteket.
    */
-  if (feedNeedsFreshPost(view)) {
+  const priorityNote = noteOf(view, view.meId);
+  if (priorityNote) {
+    const processedBy = new Set(priorityNote.processedBy || priorityNote.reactedBy || []);
+    const someoneLeft = (view.chars || []).some(
+      (c) => c && !isHuman(view, c.id) && !processedBy.has(c.id)
+    );
+    if (
+      someoneLeft &&
+      now() - (Number(priorityNote.ts) || 0) < NOTE_LIFE &&
+      Math.random() < 0.48
+    ) {
+      return mkAction(
+        "note-react",
+        `note-priority:${priorityNote.id}:${processedBy.size}`,
+        { noteId: priorityNote.id },
+        "event"
+      );
+    }
+  }
+
+  const dmInitiative = pickInitiativeWatchdogAction(view, ["dm"]);
+  if (dmInitiative) return dmInitiative;
+
+  /*
+   * 5) AI ÁLTAL KEZDEMÉNYEZETT EVENT / MEGHÍVÁS.
+   * Ritkább és jelentősebb, mint egy DM vagy Note-reakció.
+   */
+  const eventInitiative = pickInitiativeWatchdogAction(view, ["roleplay"]);
+  if (eventInitiative) return eventInitiative;
+
+  /* Group chat a fő sorrend mögött él tovább, nem veheti át a feed helyét. */
+  const groupInitiative = pickInitiativeWatchdogAction(view, ["group"]);
+  if (groupInitiative && Math.random() < 0.45) return groupInitiative;
+
+  /* A pletyka-háló tovább él, de csak a fenti fő social ritmus után. */
+  const gossipSpread = pickGossipPropagationAction(view);
+  if (gossipSpread && Math.random() < (String(view.gossipSettings && view.gossipSettings.frequency || "normal") === "chaotic" ? 0.52 : 0.30)) {
     return mkAction(
-      "world",
-      `feed-safety-net:${Math.floor(
-        now() / 105000
-      )}`
+      "gossip-spread",
+      `gossip-spread:${gossipSpread.rumorId}:${gossipSpread.fromId}:${gossipSpread.toId}`,
+      gossipSpread,
+      "event"
+    );
+  }
+
+  const gossipEcho = pickGossipNetworkEchoAction(view);
+  if (gossipEcho && Math.random() < 0.22) {
+    return mkAction(
+      "gossip-echo",
+      `gossip-echo:${gossipEcho.rumorId}:${gossipEcho.mode}:${Math.floor(now() / 60000)}`,
+      gossipEcho,
+      "event"
+    );
+  }
+
+  const urgentGossipCandidate = gossipAutoCandidate(view);
+  if (urgentGossipCandidate && Math.random() < 0.35) {
+    return mkAction(
+      "gossip-story",
+      `gossip-priority:${urgentGossipCandidate.mode}:${urgentGossipCandidate.primaryEventId}`,
+      { candidate: urgentGossipCandidate },
+      "event"
     );
   }
 
@@ -41111,7 +41195,7 @@ function planAutoAction(view) {
     if (
       remainingReactors.length > 0 &&
       now() - (myNote.ts || 0) < NOTE_LIFE &&
-      Math.random() < 0.42
+      Math.random() < 0.18
     ) {
       return mkAction(
         "note-react",
@@ -41157,20 +41241,6 @@ function planAutoAction(view) {
         score: relationshipFollow.score,
       },
       "event"
-    );
-  }
-
-  /*
-   * FEED PRIORITÁS — gyakori autonóm posztok, de nem a gossip rovására.
-   */
-  if (
-    Math.random() < (storySettingsOf(view).dramaLevel === "low" ? 0.05 : storySettingsOf(view).dramaLevel === "chaotic" ? 0.10 : 0.07)
-  ) {
-    return mkAction(
-      "world",
-      `world-post-priority:${Math.floor(
-        now() / 180000
-      )}`
     );
   }
 
@@ -41245,7 +41315,7 @@ function planAutoAction(view) {
   /*
    * 7. VÁRATLAN POPUP EVENT
    */
-  if (Math.random() < (storySettingsOf(view).dramaLevel === "low" ? 0.10 : storySettingsOf(view).dramaLevel === "high" ? 0.34 : storySettingsOf(view).dramaLevel === "chaotic" ? 0.46 : 0.26)) {
+  if (Math.random() < (storySettingsOf(view).dramaLevel === "low" ? 0.04 : storySettingsOf(view).dramaLevel === "high" ? 0.10 : storySettingsOf(view).dramaLevel === "chaotic" ? 0.14 : 0.07)) {
     const popupSeed = pickPopupEventSeed(view, { allowAmbient: true });
     if (popupSeed) {
       return mkAction(
@@ -41478,10 +41548,10 @@ function planAutoAction(view) {
     });
 
   /*
-   * Kb. 10% note a maradék körökből.
+   * Ritka saját Note a maradék körökből.
    */
   if (
-    roll < 0.12 &&
+    roll < 0.07 &&
     noteless.some((row) => row.noteScore >= 8)
   ) {
     const eligibleNotes = noteless.filter((row) => row.noteScore >= 8).slice(0, 4);
@@ -41560,8 +41630,8 @@ function planAutoAction(view) {
    * az új létrehozásával szemben.
    */
   if (
-    roll >= 0.12 &&
-    roll < 0.30
+    roll >= 0.07 &&
+    roll < 0.18
   ) {
     const preferExisting =
       groupTurnCandidates.length > 0 &&
@@ -41630,7 +41700,7 @@ function planAutoAction(view) {
    * A feed watchdog külön garantál friss posztot, ezért itt bátrabban
    * engedjük, hogy a karakterek privátban is megmozdítsák a történetet.
    */
-  if (roll < 0.62) {
+  if (roll < 0.36) {
     const bot =
       pickInitiator(view);
 
@@ -42712,8 +42782,22 @@ async function runSimulationAction(view, update, action, addImage) {
 
     if (!post) return null;
 
-    const { out, label } =
+    /* Automatikus kommentelés csak friss feedre. A játékos kézi
+     * "reakciók kérése" funkciója nem ezen a sim-action útvonalon fut. */
+    if (now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) {
+      return null;
+    }
+
+    const { out: rawOut, label } =
       await genComments(view, post);
+
+    const maxComments = Math.max(1, Math.min(6, Number(action.payload && action.payload.maxComments) || 6));
+    const out = action.payload && action.payload.trigger === "fresh-post"
+      ? {
+          ...(rawOut || {}),
+          comments: safeAiComments(rawOut).slice(0, maxComments),
+        }
+      : rawOut;
 
     const commentsProbe = JSON.parse(JSON.stringify(view));
     const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
@@ -42726,11 +42810,21 @@ async function runSimulationAction(view, update, action, addImage) {
       applyComments(n, post.id, out, label);
 
       const refreshedPost = (n.posts || []).find((p) => p && p.id === post.id);
+      if (
+        refreshedPost &&
+        action.payload &&
+        action.payload.trigger === "fresh-post"
+      ) {
+        refreshedPost.autoCommentedAt = now();
+      }
       const newCommentIds = safePostComments(refreshedPost)
         .filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId))
         .map((c) => c.id);
 
-      if (newCommentIds.length) {
+      if (
+        newCommentIds.length &&
+        (!action.payload || action.payload.allowThreadFollowup !== false)
+      ) {
         enqueueNaturalThreadReply(n, post.id, newCommentIds);
       }
     });
@@ -43804,18 +43898,14 @@ if (targetNote) {
       (p) => p && !beforePostIds.has(p.id) && !isHuman(n, p.authorId)
     );
 
+    /*
+     * v51: NINCS többé kötelező azonnali comments queue minden poszt után.
+     * A scheduler a következő körökben csak a ténylegesen FRISS feedből
+     * választ kommentelhető posztot. Ettől a poszt marad az elsődleges
+     * világpulzus, és megszűnik a kommentlavina.
+     */
     freshPosts.forEach((freshPost) => {
-      if (!safePostComments(freshPost).length) {
-        simEnqueue(
-          n,
-          mkAction(
-            "comments",
-            `auto-comments:${freshPost.id}:0`,
-            { postId: freshPost.id },
-            "event"
-          )
-        );
-      }
+      freshPost.autoCommentedAt = Number(freshPost.autoCommentedAt) || 0;
     });
   });
 
