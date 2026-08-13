@@ -2818,6 +2818,16 @@ function defaultCharacterMemory() {
     },
 
     /*
+     * RELATIONSHIP CONTINUITY — actor -> target, directional and private.
+     *
+     * This is not the relationship score itself. It stores the unfinished
+     * social business that makes the NEXT interaction feel like a continuation:
+     * unanswered questions, promises, plans, temporary feelings/intent and the
+     * last meaningful tone with this specific person. A -> B is separate from B -> A.
+     */
+    relationshipContinuity: {},
+
+    /*
      * CHARACTER AGENT RUNTIME
      *
      * This is the cross-surface executive state shared by feed, comments,
@@ -2884,6 +2894,9 @@ function ensureCharMemory(w, observerId) {
   if (typeof mem.selfState.intent !== "string") mem.selfState.intent = "";
   if (!Array.isArray(mem.selfState.openLoops)) mem.selfState.openLoops = [];
   if (!Number.isFinite(Number(mem.selfState.updatedAt))) mem.selfState.updatedAt = 0;
+  if (!mem.relationshipContinuity || typeof mem.relationshipContinuity !== "object" || Array.isArray(mem.relationshipContinuity)) {
+    mem.relationshipContinuity = {};
+  }
   if (!Array.isArray(mem.roleplayRecent)) mem.roleplayRecent = [];
   if (!Array.isArray(mem.roleplayLongTerm)) mem.roleplayLongTerm = [];
   if (!mem.roleplayShared || typeof mem.roleplayShared !== "object" || Array.isArray(mem.roleplayShared)) mem.roleplayShared = {};
@@ -2934,6 +2947,153 @@ function ensureKnownCharacter(mem, targetId, publicProfile) {
   return row;
 }
 
+function relationshipContinuityBlank() {
+  return {
+    unresolved: [],
+    promises: [],
+    plans: [],
+    currentFeeling: "",
+    currentIntent: "",
+    lastTone: "",
+    perceivedTargetMood: "",
+    lastMeaningfulInteractionAt: 0,
+    updatedAt: 0,
+  };
+}
+
+function normalizeContinuityText(value) {
+  return normalizeMemoryText(value).slice(0, 260);
+}
+
+function ensureRelationshipContinuity(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || actorId === targetId) return null;
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target || isHuman(w, actorId)) return null;
+  const mem = ensureCharMemory(w, actorId);
+  if (!mem.relationshipContinuity[targetId] || typeof mem.relationshipContinuity[targetId] !== "object" || Array.isArray(mem.relationshipContinuity[targetId])) {
+    mem.relationshipContinuity[targetId] = relationshipContinuityBlank();
+  }
+  const row = mem.relationshipContinuity[targetId];
+  const blank = relationshipContinuityBlank();
+  ["unresolved", "promises", "plans"].forEach((key) => {
+    if (!Array.isArray(row[key])) row[key] = [];
+    row[key] = row[key].map(normalizeContinuityText).filter(Boolean).slice(-8);
+  });
+  ["currentFeeling", "currentIntent", "lastTone", "perceivedTargetMood"].forEach((key) => {
+    if (typeof row[key] !== "string") row[key] = blank[key];
+  });
+  if (!Number.isFinite(Number(row.lastMeaningfulInteractionAt))) row.lastMeaningfulInteractionAt = 0;
+  if (!Number.isFinite(Number(row.updatedAt))) row.updatedAt = 0;
+  return row;
+}
+
+function continuityTextSignature(value) {
+  return normalizeContinuityText(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function addContinuityItems(existing, incoming, limit = 8) {
+  const out = [];
+  const seen = new Set();
+  [...(existing || []), ...(incoming || [])].forEach((value) => {
+    const text = normalizeContinuityText(value);
+    const sig = continuityTextSignature(text);
+    if (!text || !sig || seen.has(sig)) return;
+    seen.add(sig);
+    out.push(text);
+  });
+  return out.slice(-limit);
+}
+
+function continuityMatchesResolution(item, hint) {
+  const a = continuityTextSignature(item);
+  const b = continuityTextSignature(hint);
+  if (!a || !b) return false;
+  if (a.includes(b) || b.includes(a)) return true;
+  const aw = new Set(a.split(/\s+/).filter((x) => x.length >= 3));
+  const bw = new Set(b.split(/\s+/).filter((x) => x.length >= 3));
+  if (!aw.size || !bw.size) return false;
+  let shared = 0;
+  aw.forEach((word) => { if (bw.has(word)) shared += 1; });
+  return shared >= 2 && shared / Math.min(aw.size, bw.size) >= 0.5;
+}
+
+function resolveContinuityItems(existing, hints) {
+  const rows = Array.isArray(existing) ? existing : [];
+  const resolutions = (Array.isArray(hints) ? hints : []).map(normalizeContinuityText).filter(Boolean);
+  if (!resolutions.length) return rows;
+  return rows.filter((item) => !resolutions.some((hint) => continuityMatchesResolution(item, hint)));
+}
+
+function safeAiRelationshipUpdates(out) {
+  return safeAiArray(out, "relationshipUpdates")
+    .filter((row) => row && typeof row === "object");
+}
+
+function applyRelationshipContinuityUpdates(w, out) {
+  if (!w) return;
+  safeAiRelationshipUpdates(out).slice(0, 24).forEach((raw) => {
+    const actorId = findChar(w, raw.id !== undefined ? raw.id : raw.actorId !== undefined ? raw.actorId : raw.name);
+    const targetId = findChar(w, raw.targetId !== undefined ? raw.targetId : raw.target !== undefined ? raw.target : raw.targetName);
+    if (!actorId || !targetId || actorId === targetId || isHuman(w, actorId)) return;
+    const row = ensureRelationshipContinuity(w, actorId, targetId);
+    if (!row) return;
+
+    row.unresolved = resolveContinuityItems(row.unresolved, raw.resolveOpenLoops || raw.resolvedOpenLoops || []);
+    row.promises = resolveContinuityItems(row.promises, raw.resolvePromises || raw.resolvedPromises || []);
+    row.plans = resolveContinuityItems(row.plans, raw.resolvePlans || raw.resolvedPlans || []);
+
+    row.unresolved = addContinuityItems(row.unresolved, raw.addOpenLoops || raw.openLoops || [], 8);
+    row.promises = addContinuityItems(row.promises, raw.addPromises || raw.promises || [], 8);
+    row.plans = addContinuityItems(row.plans, raw.addPlans || raw.plans || [], 8);
+
+    if (raw.currentFeeling !== undefined) row.currentFeeling = normalizeContinuityText(raw.currentFeeling).slice(0, 180);
+    if (raw.currentIntent !== undefined) row.currentIntent = normalizeContinuityText(raw.currentIntent).slice(0, 220);
+    if (raw.lastTone !== undefined) row.lastTone = normalizeContinuityText(raw.lastTone).slice(0, 120);
+    if (raw.perceivedTargetMood !== undefined) row.perceivedTargetMood = normalizeContinuityText(raw.perceivedTargetMood).slice(0, 160);
+    row.lastMeaningfulInteractionAt = Number(raw.lastMeaningfulInteractionAt) || now();
+    row.updatedAt = now();
+  });
+}
+
+function compactRelationshipContinuity(w, actorId, targetId) {
+  const row = ensureRelationshipContinuity(w, actorId, targetId);
+  if (!row) return null;
+  const hasContent = row.unresolved.length || row.promises.length || row.plans.length || row.currentFeeling || row.currentIntent || row.lastTone || row.perceivedTargetMood;
+  if (!hasContent) return null;
+  return {
+    unresolved: row.unresolved.slice(-6),
+    promises: row.promises.slice(-5),
+    plans: row.plans.slice(-5),
+    currentFeeling: row.currentFeeling,
+    currentIntent: row.currentIntent,
+    lastTone: row.lastTone,
+    perceivedTargetMood: row.perceivedTargetMood,
+    lastMeaningfulInteractionAt: Number(row.lastMeaningfulInteractionAt) || 0,
+  };
+}
+
+function relationshipContinuityCard(w, actorId, targetId) {
+  const state = compactRelationshipContinuity(w, actorId, targetId);
+  if (!state) return "";
+  const target = charById(w, targetId);
+  const en = worldLanguage(w, w.meId) === "en";
+  const lines = [];
+  if (state.unresolved.length) lines.push(`${en ? "unfinished between you" : "köztetek még nyitva"}: ${state.unresolved.join(" | ")}`);
+  if (state.promises.length) lines.push(`${en ? "promises still relevant" : "még releváns ígéretek"}: ${state.promises.join(" | ")}`);
+  if (state.plans.length) lines.push(`${en ? "shared/upcoming plans" : "közös/közelgő tervek"}: ${state.plans.join(" | ")}`);
+  if (state.currentFeeling) lines.push(`${en ? "current pair-specific feeling" : "aktuális, kifejezetten iránta érzett állapot"}: ${state.currentFeeling}`);
+  if (state.currentIntent) lines.push(`${en ? "current intention toward them" : "aktuális szándék vele kapcsolatban"}: ${state.currentIntent}`);
+  if (state.lastTone) lines.push(`${en ? "last meaningful tone" : "utolsó jelentős hangnem"}: ${state.lastTone}`);
+  if (state.perceivedTargetMood) lines.push(`${en ? "your current impression of their mood (may be wrong)" : "ahogy most az ő hangulatát érzékeled (tévedhetsz)"}: ${state.perceivedTargetMood}`);
+  return `${en ? "RELATIONSHIP CONTINUITY" : "KAPCSOLATI FOLYTONOSSÁG"} — ${target ? target.name : targetId}: ${lines.join("; ")}`;
+}
+
 function safePostComments(post) {
   return post && Array.isArray(post.comments)
     ? post.comments.filter((c) => c && typeof c === "object")
@@ -2974,6 +3134,7 @@ function safeAiSelfUpdates(out) {
 
 function applySelfUpdates(w, out) {
   if (!w) return;
+  applyRelationshipContinuityUpdates(w, out);
   safeAiSelfUpdates(out).slice(0, 12).forEach((row) => {
     const id = findChar(w, row.id !== undefined ? row.id : row.name);
     if (!id || isHuman(w, id)) return;
@@ -8976,6 +9137,7 @@ function compactAgentMemoryForPacket(w, actorId, targetId = "") {
       intent: String(mem.selfState && mem.selfState.intent || ""),
       openLoops: (mem.selfState && Array.isArray(mem.selfState.openLoops) ? mem.selfState.openLoops : []).slice(-6),
     },
+    relationshipContinuity: targetId ? compactRelationshipContinuity(w, actorId, targetId) : null,
     recentConversations: (mem.conversations || []).slice(-3).map(memoryToLine),
     recentEvents: (mem.witnessedEvents || []).slice(-3).map(memoryToLine),
     heardRumors: (mem.rumors || []).slice(-4).map(memoryToLine),
@@ -9022,7 +9184,7 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
   );
 
   const packet = {
-    runtimeVersion: 1,
+    runtimeVersion: 2,
     surface,
     self: {
       id: actor.id,
@@ -9149,6 +9311,13 @@ function recordCharacterAgentAction(w, actorId, details = {}) {
   runtime.lastAction = String(details.action || "").slice(0, 80);
   runtime.lastActionRef = String(details.refId || "").slice(0, 120);
   runtime.updatedAt = ts;
+  if (runtime.currentTargetId && runtime.currentTargetId !== actorId && charById(w, runtime.currentTargetId)) {
+    const continuity = ensureRelationshipContinuity(w, actorId, runtime.currentTargetId);
+    if (continuity) {
+      continuity.lastMeaningfulInteractionAt = ts;
+      continuity.updatedAt = Math.max(Number(continuity.updatedAt) || 0, ts);
+    }
+  }
   const plan = details.plan ? normalizeAgentRuntimeThread({
     id: details.planId || `plan:${details.refId || ts}`,
     surface: runtime.currentSurface,
@@ -10217,6 +10386,15 @@ function relationshipBehaviorCard(
       en
         ? `hidden feeling (do not state it outright unless it realistically slips): ${rel.hidden}`
         : `rejtett érzés (ne mondd ki direkt, hacsak életszerűen ki nem csúszik): ${rel.hidden}`
+    );
+  }
+
+  const continuity = relationshipContinuityCard(w, actorId, targetId);
+  if (continuity) {
+    parts.push(
+      en
+        ? `${continuity}. CONTINUE existing unfinished business naturally when it is relevant; do not force every old loop into every interaction.`
+        : `${continuity}. A meglévő félbehagyott ügyeket természetesen FOLYTASD, amikor relevánsak; ne erőltesd minden régi nyitott szálat minden interakcióba.`
     );
   }
 
@@ -19728,6 +19906,12 @@ LIKE:
 LEGFONTOSABB:
 A kommentnek első pillantásra úgy kell kinéznie, mint amit egy valódi ember odadobott egy social media poszt alá. Ha egy komment inkább hangzik dialógusnak egy regényből, pszichológiai elemzésnek vagy AI által megírt mini beszédnek, ÍRD ÚJRA rövidebb, spontánabb és internetesebb formában.
 
+KAPCSOLATI FOLYTONOSSÁG FRISSÍTÉSE:
+- relationshipUpdates csak akkor legyen, ha a MOSTANI látható interakció ténylegesen létrehoz, lezár vagy érdemben továbbvisz egy konkrét kétoldalú ügyet.
+- A frissítés IRÁNYÍTOTT: az "id" az az AI, akinek a fejében ez az állapot él, a targetId pedig a konkrét másik személy.
+- Ne találj ki ígéretet, tervet vagy félbehagyott múltat. A jelenlegi poszt/thread és az adott AI saját ismert memóriája az egyetlen alap.
+- Egy sima like vagy semleges rövid komment miatt nem kötelező relationshipUpdates.
+
 Formátum:
 
 {"comments":[
@@ -19743,7 +19927,11 @@ Formátum:
 "events":["csak akkor egy rövid mondat, ha tényleg történt valami emlékezetes"],
 "selfUpdates":[
 {"id":"AI id","mood":"mi marad benne a poszt után","intent":"mit akar most tenni, ha változott","openLoops":["nyitott saját ügy, ha lett"]}
-]}${TAIL}`,
+],
+"relationshipUpdates":[
+  {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
+]
+}${TAIL}`,
     { maxTokens: 1650 }
   );
 
@@ -21490,7 +21678,11 @@ Formátum:
   {"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ],
 "events":[],
-"selfUpdates":[{"id":"AI id","mood":"mi marad benne ettől a reply-tól","intent":"mi a következő saját szándéka","openLoops":["ami nyitva maradt"]}]}${TAIL}`,
+"selfUpdates":[{"id":"AI id","mood":"mi marad benne ettől a reply-tól","intent":"mi a következő saját szándéka","openLoops":["ami nyitva maradt"]}],
+"relationshipUpdates":[
+  {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
+]
+}${TAIL}`,
     { maxTokens: 900 }
   );
 
@@ -22207,7 +22399,11 @@ Formátum:
 ],
 "selfUpdates":[
   {"id":"AI azonosító","mood":"mit érez most általában / mi dolgozik benne","intent":"mi a következő saját szándéka","openLoops":["legfeljebb néhány még nyitott saját ügy, terv, ígéret vagy konfliktus"]}
-]}${TAIL}`,
+],
+"relationshipUpdates":[
+  {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
+]
+}${TAIL}`,
     {
       maxTokens: single
         ? 1800
@@ -22274,7 +22470,7 @@ ${albumList(author) || "nincs használható albumkép"}
 ${repetitionGuard(w, [author.id], "autonóm posztok és kommentek")}
 
 JSON:
-{"posts":[{"id":"${author.id}","text":"a poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}]}${TAIL}`,
+{"posts":[{"id":"${author.id}","text":"a poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}],"relationshipUpdates":[]}${TAIL}`,
     { maxTokens: 900 }
   );
 }
@@ -26255,7 +26451,11 @@ Formátum:
  "longTermMemories":[{"id":"annak az AI-nak az id-ja, aki ezt valóban tudja/átélte","targetId":"ha konkrét személyhez kötődik, annak id-ja, különben üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":80,"text":"csak tartósan fontos, később is releváns karakter-POV emlék"}],
  "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"],
  "statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"csak akkor adj ilyet, ha az Event során tényleges állapotváltozás történt: megváltozott valaki hangulata, vagy egy korábban elindított folyamat/ígéret/fenyegetés/terv lezárult"}],
- "selfUpdates":[{"id":"AI id","mood":"a jelenet után benne maradó belső állapot","intent":"a következő saját szándéka","openLoops":["ami számára még nincs lezárva"]}]}${TAIL}`);
+ "selfUpdates":[{"id":"AI id","mood":"a jelenet után benne maradó belső állapot","intent":"a következő saját szándéka","openLoops":["ami számára még nincs lezárva"]}],
+ "relationshipUpdates":[
+  {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
+]
+}${TAIL}`);
 
       const resolveSceneTurns = (candidateOut) =>
         (candidateOut && Array.isArray(candidateOut.turns)
@@ -30730,6 +30930,15 @@ PRIVÁT ÜZENET SZABÁLYOK:
 - Ne generálj üzenetet pusztán azért, mert eltelt valamennyi idő.
 - Ha nincs valódi, karakterhű okod írni, legyen "skip": true.
 
+KAPCSOLATI FOLYTONOSSÁG — EZ MOST ELSŐBBSÉGET KAP AZ ÚJ TÉMÁVAL SZEMBEN:
+
+- Mielőtt teljesen új ürügyet találnál a DM-re, nézd meg a CHARACTER AGENT RUNTIME relationshipContinuity részét és a KAPCSOLATI FOLYTONOSSÁG sort.
+- Ha van köztetek releváns félbehagyott kérdés, konkrét terv, ígéret vagy még élő szándék, természetes emberként inkább FOLYTATHATOD azt.
+- Ne mondd fel meta-szinten, hogy "van egy open loop"; egyszerűen térj vissza rá úgy, ahogy egy valódi ismerős/barát/rivális tenné.
+- Nem kell minden régi ügyet elővenni. Csak azt, ami most időben, érzelmileg vagy a friss történések miatt természetesen aktuális.
+- Ha egy korábbi terv/ígéret/nyitott kérdés ebben a körben ténylegesen lezárul, a relationshipUpdates resolve* mezőivel zárd le.
+- Új promise/plan/openLoop csak akkor keletkezzen, ha a mostani üzenet vagy a már ismert kontextus TÉNYLEG létrehozza. Ne találj ki hamis közös múltat.
+
 VALÓDI PRIVÁT CHAT:
 
 - Ez VALÓDI privát üzenet, NEM roleplay-jelenet.
@@ -30910,7 +31119,7 @@ Ha van:
 - Plusz és mínusz egyformán lehetséges.
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
-{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}]}${TAIL}`,
+{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"kifejezetten iránta MOST élő érzés vagy üres","currentIntent":"mit akarsz VELE kapcsolatban következőnek vagy üres","lastTone":"a mostani DM tényleges hangneme","perceivedTargetMood":"csak ha a meglévő beszélgetésből van róla benyomásod, különben üres","addOpenLoops":["csak új, ténylegesen nyitva maradó kettőtök közti ügy"],"resolveOpenLoops":["csak most ténylegesen lezárt korábbi ügy"],"addPromises":["csak explicit ígéret"],"resolvePromises":["teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["teljesült/lemondott terv"]}]}${TAIL}`,
     { maxTokens: 700, priority: 22 }
   );
 }
@@ -39292,6 +39501,9 @@ Formátum:
   {"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ],
 "selfUpdates":[{"id":"AI id","mood":"mi dolgozik benne","intent":"mit akar most","openLoops":["nyitott terv vagy ügy"]}],
+"relationshipUpdates":[
+  {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
+],
 "event":"egy rövid mondat arról, miért jött létre a csoport"}${TAIL}`,
     { maxTokens: 1200, priority: 18 }
   );
@@ -40523,7 +40735,7 @@ VÁLASSZ KEZDEMÉNYEZÉSI MÓDOT:
 Az Event legyen konkrét, ne generikus. Adj célt, de a cél ne irányítsa a játékos karakterét helyette.
 
 JSON:
-{"skip":false,"mode":"dm_invite vagy arrival vagy encounter","title":"rövid Event cím","setting":"2-4 mondat, hol/mikor/miért indul; a játékos döntését ne írd meg","goal":"konkrét Event cél","cast":["az eventhez ténylegesen illő AI-id-k; ${bot.id} kötelező; társas eventnél több releváns meghívott"],"openingKind":"speech vagy action","opening":"${bot.name} első saját mondata vagy cselekvése; a játékos reakciója nélkül","dmText":"csak dm_invite esetén rövid valódi chat-üzenet, különben üres","targetTurns":20,"targetMinutes":30,"limitMode":"turns vagy minutes","rewardAffection":12,"rewardItem":"jelenethez illő egyedi emléktárgy","selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned","intent":"miért kezdeményezed","openLoops":["amit ezzel az Eventtel el akarsz intézni"]}]}${TAIL}`,
+{"skip":false,"mode":"dm_invite vagy arrival vagy encounter","title":"rövid Event cím","setting":"2-4 mondat, hol/mikor/miért indul; a játékos döntését ne írd meg","goal":"konkrét Event cél","cast":["az eventhez ténylegesen illő AI-id-k; ${bot.id} kötelező; társas eventnél több releváns meghívott"],"openingKind":"speech vagy action","opening":"${bot.name} első saját mondata vagy cselekvése; a játékos reakciója nélkül","dmText":"csak dm_invite esetén rövid valódi chat-üzenet, különben üres","targetTurns":20,"targetMinutes":30,"limitMode":"turns vagy minutes","rewardAffection":12,"rewardItem":"jelenethez illő egyedi emléktárgy","selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned","intent":"miért kezdeményezed","openLoops":["amit ezzel az Eventtel el akarsz intézni"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"mi dolgozik benned kifejezetten vele kapcsolatban","currentIntent":"mit akarsz vele elérni ezzel az Eventtel","lastTone":"kezdeményező/inviting/tense/playful/etc","perceivedTargetMood":"üres, ha nem tudhatod","addOpenLoops":["ami kettőtök között ezzel nyitva marad"],"resolveOpenLoops":[],"addPromises":[],"resolvePromises":[],"addPlans":["csak ha a meghívás konkrét közös tervet hoz létre"],"resolvePlans":[]}]}${TAIL}`,
     { maxTokens: 1450, priority: 26 }
   );
 }
@@ -41740,6 +41952,9 @@ Ha van természetes folytatás:
 {"id":"AI-tag azonosítója","text":"amit ebből érdemes megjegyeznie"}
 ],
 "selfUpdates":[{"id":"AI-tag azonosítója","mood":"mi dolgozik benne","intent":"mit akar most","openLoops":["nyitott terv vagy ügy"]}],
+"relationshipUpdates":[
+  {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
+],
 "event":"csak akkor egy rövid mondat, ha a beszélgetésben tényleg történt valami emlékezetes, különben üres"}${TAIL}`,
     { maxTokens: 900, priority: 18 }
   );
