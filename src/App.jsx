@@ -13694,7 +13694,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v58-event-invite-toast";
+const BUILD_VERSION = "v59-event-visibility";
 
 const AUTO = "masvilag:auto";
 /*
@@ -26185,10 +26185,25 @@ function rejectRoleplayInvite(w, sceneId) {
 
 function sceneVisibleInEventList(scene, at = now()) {
   if (!scene) return false;
-  if (scene.archived || ["rejected", "expired"].includes(String(scene.invitationStatus || ""))) return false;
+
+  const invitationStatus = String(scene.invitationStatus || "").toLowerCase();
+
+  /*
+   * ACTIVE EVENT LIST — HARD STATUS RULES
+   *
+   * - Pending AI invitations ALWAYS stay visible until accepted, rejected or expired.
+   * - Accepted / ongoing Events ALWAYS stay visible while scene.open !== false.
+   * - Rejected / expired invitations disappear from the active list immediately.
+   * - Finished / closed Events disappear from the active list immediately, while the
+   *   persisted scene outcome, diary, memories and world history remain stored.
+   */
+  if (["rejected", "expired"].includes(invitationStatus)) return false;
+  if (scene.aiInitiated && invitationStatus === "pending") {
+    return !roleplayInviteIsExpired(scene, at);
+  }
+  if (scene.archived) return false;
   if (scene.open !== false) return true;
-  const ended = Number(scene.endedAt || scene.updatedAt) || 0;
-  return Boolean(ended && Number(at) - ended < CLOSED_SCENE_LIST_GRACE_MS);
+  return false;
 }
 
 function sceneEventProgress(scene, at = now()) {
