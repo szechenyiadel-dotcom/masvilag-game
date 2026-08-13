@@ -5947,6 +5947,11 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(25000, Math.min(120000, Number(import
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(10 * 60000, Math.min(3 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 35 * 60000));
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(10000, Math.min(120000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 22000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(2, Math.min(12, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 6)));
+/* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
+const LIVE_WORLD_DM_TARGET_MS = Math.max(55 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 105 * 1000));
+const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 3.5 * 60 * 1000));
+const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
+const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(15 * 1000, Math.min(3 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 45 * 1000));
 const AI_BACKGROUND_GAP_MS = Math.max(3500, Math.min(30000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 8000));
 const AI_INITIATIVE_GAP_MS = Math.max(1800, Math.min(15000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 3000));
 
@@ -13674,7 +13679,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v50-popup-events-mobile-roleplay";
+const BUILD_VERSION = "v53-live-world-fairness-watchdog";
 
 const AUTO = "masvilag:auto";
 /*
@@ -31270,6 +31275,31 @@ Ha van:
     { maxTokens: 700, priority: 22 }
   );
 }
+async function genForcedEverydayDM(w, bot) {
+  if (!w || !bot) return null;
+  const rel = getRel(w, bot.id, w.meId);
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(w,[bot.id],false,bot.id)}
+${voiceCard(bot)}
+${characterMemoryCard(w,bot)}
+${relationshipBehaviorCard(w,bot.id,w.meId)}
+${characterAgentRuntimeCard(w,[bot.id],{surface:"dm",targetId:w.meId,messages:w.chats[chatKey(w.meId,bot.id)]||[]})}
+
+AUTONOMOUS DM RETRY — DO NOT SKIP:
+You are ${bot.name}. Send ${w.player.name} ONE natural spontaneous private message now.
+This is not a dramatic scene. A tiny human reason is enough: unfinished conversation, question, joke, practical thing, gossip, plan, invitation, checking in, teasing, flirting or a simple thought.
+Do not invent off-screen facts. Respect relationship=${Number(rel.score)||0}${rel.bond?`, bond=${rel.bond}`:""}.
+Use only text you would actually send in chat. Usually 1 short line, maximum 2 short sentences. No narration, no *actions*, no assistant voice. Do not write for the player.
+${matureContentInstruction(w,[bot.id],"chat")}
+
+JSON ONLY:
+{"skip":false,"text":"short DM","image":"","imagePrompt":"","relationshipImpact":false,"changes":[],"selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
+    { maxTokens: 260, priority: 25 }
+  );
+}
+
 function characterNoteActivityScore(w, c) {
   if (!w || !c || isHuman(w, c.id)) return -999;
 
@@ -31815,6 +31845,10 @@ function ensureSimState(w) {
       dmAttemptAt: 0,
       groupAttemptAt: 0,
       popupAttemptAt: 0,
+      lastAutonomousDmAt: 0,
+      lastPopupSuccessAt: 0,
+      lastRoleplayInviteAt: 0,
+      lastNoteReactionAt: 0,
       lastError: "",
     };
   }
@@ -31842,6 +31876,28 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.dmAttemptAt))) w.sim.dmAttemptAt = 0;
   if (!Number.isFinite(Number(w.sim.groupAttemptAt))) w.sim.groupAttemptAt = 0;
   if (!Number.isFinite(Number(w.sim.popupAttemptAt))) w.sim.popupAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastAutonomousDmAt))) w.sim.lastAutonomousDmAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastPopupSuccessAt))) w.sim.lastPopupSuccessAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastRoleplayInviteAt))) w.sim.lastRoleplayInviteAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastNoteReactionAt))) w.sim.lastNoteReactionAt = 0;
+  /* Backfill only objective successes; autonomous DM intentionally starts hungry
+     on old saves because old DM rows did not distinguish replies from initiations. */
+  if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
+  if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
+
+  /* v53 migration: do not let a backlog created by the old comment/feed scheduler
+     delay the new fairness lanes for minutes. Manual requests survive; stale
+     background actions are rebuilt by the new planner from current state. */
+  if (Number(w.sim.schedulerVersion) !== 53) {
+    w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
+    w.sim.running = "";
+    w.sim.dmAttemptAt = 0;
+    w.sim.roleplayAttemptAt = 0;
+    w.sim.popupAttemptAt = 0;
+    w.sim.groupAttemptAt = 0;
+    w.sim.schedulerVersion = 53;
+  }
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 53;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -31893,6 +31949,14 @@ function simulationActionBlocksContentCadence(action) {
 
 function markSimulationCadence(w, action) {
   const sim = ensureSimState(w);
+  const ts = now();
+
+  /* v53: each autonomous lane owns a SUCCESS clock. Reactive DM traffic,
+     feed posts or failed attempts can no longer reset another lane's hunger. */
+  if (action && action.type === "dm") sim.lastAutonomousDmAt = ts;
+  if (action && action.type === "popup-event") sim.lastPopupSuccessAt = ts;
+  if (action && action.type === "roleplay-initiate") sim.lastRoleplayInviteAt = ts;
+  if (action && action.type === "note-react") sim.lastNoteReactionAt = ts;
 
   if (
     FAST_LOCAL_SIM_ACTIONS.has(
@@ -31908,7 +31972,6 @@ function markSimulationCadence(w, action) {
       action
     )
   ) {
-    const ts = now();
     /*
      * A tényleges generatív/autonóm tartalom a régi, stabil autoAt órát
      * frissíti. A sim.contentAt csak kompatibilitási/debug mező marad.
@@ -35386,14 +35449,21 @@ function popupLastGeneratedAt(w) {
   return Math.max(runtimeAt, historyAt);
 }
 
+function popupOverdueByMs(w) {
+  if (!w || popupGenerationBlocked(w)) return -Infinity;
+  const runtimeStarted = Number(w.popupRuntime && w.popupRuntime.startedAt) || 0;
+  const lastAt = popupLastGeneratedAt(w) || runtimeStarted;
+  if (!lastAt) return -Infinity;
+  return now() - lastAt - popupCadenceMs(w);
+}
+
 function popupEventOverdue(w) {
   if (!w || popupGenerationBlocked(w)) return false;
   const lastAttemptAt = Number(w.sim && w.sim.popupAttemptAt) || 0;
-  if (lastAttemptAt && now() - lastAttemptAt < 90 * 1000) return false;
-  const runtimeStarted = Number(w.popupRuntime && w.popupRuntime.startedAt) || 0;
-  const lastAt = popupLastGeneratedAt(w) || runtimeStarted;
-  if (!lastAt) return false;
-  return now() - lastAt >= popupCadenceMs(w);
+  /* Failed/empty generations retry quickly; a failed model answer must not mute
+     the entire popup lane for another minute and a half. */
+  if (lastAttemptAt && now() - lastAttemptAt < LIVE_WORLD_POPUP_RETRY_MS) return false;
+  return popupOverdueByMs(w) >= 0;
 }
 
 function ambientPopupSeed(w) {
@@ -35565,6 +35635,45 @@ KÖTELEZŐ REALIZMUS:
 
 VÁLASZ CSAK JSON:
 {"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat konkrét helyzet","location":"","visibility":"limited","witnessIds":[],"gossipPotential":45,"eventKind":"encounter","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":1,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1150,priority:18});
+}
+
+function fallbackPopupEventResponse(w, seed) {
+  if (!w || !seed) return null;
+  const leadId = seed.actorId && charById(w, seed.actorId) && !isHuman(w, seed.actorId)
+    ? seed.actorId
+    : ((seed.meta && Array.isArray(seed.meta.participantIds))
+        ? seed.meta.participantIds.find((id) => id && charById(w, id) && !isHuman(w, id))
+        : "");
+  const lead = leadId ? charById(w, leadId) : (w.chars || []).find((c) => c && !isHuman(w, c.id));
+  if (!lead) return null;
+  const en = worldLanguage(w, w.meId) === "en";
+  const ambient = seed.type === "ambient-popup" || Boolean(seed.meta && seed.meta.ambient);
+  const title = ambient
+    ? (en ? `Unexpected moment with ${lead.name}` : `Váratlan helyzet ${lead.name} karakterrel`)
+    : (en ? `${lead.name} reacts` : `${lead.name} reagál`);
+  const text = ambient
+    ? (en
+        ? `${lead.name} unexpectedly stops you and clearly wants your attention right now. The moment is small but real, and you have to decide how you handle it.`
+        : `${lead.name} váratlanul megállít, és láthatóan most akarja a figyelmedet. A helyzet hétköznapi, de valós döntési pont: rajtad áll, hogyan kezeled.`)
+    : (en
+        ? `${lead.name} responds directly to the recent situation and puts the next move in your hands. How do you handle them?`
+        : `${lead.name} közvetlenül reagál a friss helyzetre, és most rajtad van a következő lépés. Hogyan kezeled?`);
+  return {
+    skip: false,
+    icon: "⚡",
+    title,
+    text,
+    location: "",
+    visibility: "limited",
+    witnessIds: [],
+    gossipPotential: 24,
+    eventKind: ambient ? "encounter" : "social",
+    choices: [
+      { id: "c1", label: en ? "Hear them out" : "Hallgasd meg", description: en ? "Give them room to say what they want." : "Adj neki teret, hogy elmondja, mit akar.", tone: "clarify", targetId: lead.id, reactions: [], socialImpact: {}, publicSentiment: {} },
+      { id: "c2", label: en ? "Keep it light" : "Vedd lazára", description: en ? "Defuse the moment with humor or casual confidence." : "Oldd a helyzetet humorral vagy laza magabiztossággal.", tone: "joke", targetId: lead.id, reactions: [], socialImpact: {}, publicSentiment: {} },
+      { id: "c3", label: en ? "Take it private" : "Beszéljetek négyszemközt", description: en ? "Move the conversation somewhere private." : "Vidd át a beszélgetést privátba.", tone: "private", targetId: lead.id, reactions: [], socialImpact: {}, publicSentiment: {} },
+    ],
+  };
 }
 
 function normalizePopupEvent(w,seed,raw){
@@ -40518,17 +40627,33 @@ function lastAiInitiatedRoleplayAt(w) {
 
 function canAiInitiateRoleplay(w) {
   if (!w || !(w.chars || []).length) return false;
-  const openAiScenes = (w.scenes || []).filter((scene) => scene && scene.open && scene.aiInitiated).length;
-  /* Egy aktív AI-Event elég; ne spammeljen egyszerre több meghívással. */
-  if (openAiScenes >= 1) return false;
-  const last = lastAiInitiatedRoleplayAt(w);
-  const target = Math.max(4 * 60 * 1000, Math.round((6 * 60 * 1000) / LIVE_WORLD_ACTIVITY_MULTIPLIER));
-  return !last || now() - last >= target;
+  const ts = now();
+  /* A stale, régen megnyitva maradt AI-Event nem némíthatja el örökre az
+     új meghívásokat. Csak egy TÉNYLEG friss, még aktív kezdeményezés blokkol. */
+  const recentOpenAiScenes = (w.scenes || []).filter((scene) => {
+    if (!scene || !scene.open || !scene.aiInitiated) return false;
+    const started = Number(scene.startedAt || scene.ts) || 0;
+    if (!started) return false;
+    const age = ts - started;
+    const hasPlayerTurns = (scene.turns || []).some((turn) => turn && turn.authorId === w.meId);
+    const accepted = scene.invitationStatus === "accepted_in_chat" || hasPlayerTurns;
+    /* An actually entered Event gets breathing room; an unanswered pending
+       invitation only suppresses another invite briefly. */
+    return accepted ? age < 18 * 60 * 1000 : age < 5 * 60 * 1000;
+  }).length;
+  if (recentOpenAiScenes >= 1) return false;
+
+  const simLast = Number(w.sim && w.sim.lastRoleplayInviteAt) || 0;
+  const historyLast = lastAiInitiatedRoleplayAt(w);
+  const last = Math.max(simLast, historyLast);
+  const rpPeak = Math.max(0.55, channelActivityPeak(w, "roleplay"));
+  const target = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / Math.min(1.75, rpPeak)));
+  return !last || ts - last >= target;
 }
 
 function roleplayInitiationProbeDue(w) {
   const attemptAt = Number(w && w.sim && w.sim.roleplayAttemptAt) || 0;
-  return !attemptAt || now() - attemptAt >= 90 * 1000;
+  return !attemptAt || now() - attemptAt >= 35 * 1000;
 }
 
 function roleplayInitiatorScore(w, c) {
@@ -40951,6 +41076,27 @@ JSON:
   );
 }
 
+async function genForcedEverydayRoleplayInvitation(w, bot) {
+  if (!w || !bot) return null;
+  return askWorldJSON(
+    w,
+    engineFor(w),
+    `${worldContext(w,[bot.id],false,bot.id)}
+${voiceCard(bot)}
+${characterMemoryCard(w,bot)}
+${relationshipBehaviorCard(w,bot.id,w.meId)}
+${characterAgentRuntimeCard(w,[bot.id],{surface:"roleplay",targetId:w.meId,messages:w.chats[chatKey(w.meId,bot.id)]||[]})}
+
+AI EVENT INVITATION RETRY — DO NOT SKIP:
+You are ${bot.name}. Initiate one small, believable event with ${w.player.name} now. It may be coffee, training, a walk, driving somewhere, shopping, studying, work, party, "come here", a private talk, a date if the relationship supports it, or a confrontation if there is a real trigger.
+Choose the smallest canon-consistent option that gives the player something to respond to. Do not invent the player's acceptance/action. Do not invent off-screen history.
+Prefer dm_invite unless arriving/encountering is clearly more natural.
+JSON ONLY:
+{"skip":false,"mode":"dm_invite","title":"short event title","setting":"2-3 sentences","goal":"concrete goal","cast":["${bot.id}"],"openingKind":"speech","opening":"short first line","dmText":"short invitation DM","targetTurns":20,"targetMinutes":30,"limitMode":"turns","rewardAffection":10,"rewardItem":"small fitting keepsake","selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
+    { maxTokens: 650, priority: 27 }
+  );
+}
+
 function lastAiPrivateMessageAt(w) {
   let latest = 0;
   Object.values((w && w.chats) || {}).forEach((msgs) => {
@@ -41008,10 +41154,12 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
    * elnémítani egy csatornát.
    */
   const dmPeak = Math.max(0.25, channelActivityPeak(view, "dm"));
-  const dmLast = lastAiPrivateMessageAt(view);
-  const dmTarget = Math.max(150000, Math.round(215000 / dmPeak));
-  const dmElapsed = dmLast ? ts - dmLast : dmTarget * 3;
-  const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 25000;
+  /* ONLY successful autonomous DMs reset this lane. Replies to the player's
+     own DM, popup replies and Note-related messages must not fake activity. */
+  const dmLast = Number(sim.lastAutonomousDmAt) || 0;
+  const dmTarget = Math.max(60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / Math.min(1.85, dmPeak)));
+  const dmElapsed = dmLast ? ts - dmLast : dmTarget * 1.15;
+  const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 22 * 1000;
 
   if (permits("dm") && dmElapsed >= dmTarget && dmRetryReady) {
     const bot = pickInitiator(view);
@@ -41072,10 +41220,11 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
 
   if (permits("roleplay") && canAiInitiateRoleplay(view)) {
     const rpPeak = Math.max(0.25, channelActivityPeak(view, "roleplay"));
-    const rpLast = lastAiInitiatedRoleplayAt(view);
-    const rpTarget = Math.max(300000, Math.round(420000 / rpPeak));
-    const rpElapsed = rpLast ? ts - rpLast : rpTarget * 2.7;
-    const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 45000;
+    const rpHistoryLast = lastAiInitiatedRoleplayAt(view);
+    const rpLast = Math.max(Number(sim.lastRoleplayInviteAt) || 0, rpHistoryLast);
+    const rpTarget = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / Math.min(1.75, rpPeak)));
+    const rpElapsed = rpLast ? ts - rpLast : rpTarget * 1.12;
+    const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 35 * 1000;
 
     if (rpElapsed >= rpTarget && rpRetryReady) {
       const initiator = pickRoleplayInitiator(view);
@@ -41124,6 +41273,49 @@ function hasRecentWidespreadGossip(w) {
   );
 }
 
+function autonomousDmOverdueByMs(w) {
+  if (!w) return -Infinity;
+  const dmPeak = Math.max(0.25, channelActivityPeak(w, "dm"));
+  const target = Math.max(60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / Math.min(1.85, dmPeak)));
+  const last = Number(w.sim && w.sim.lastAutonomousDmAt) || 0;
+  const elapsed = last ? now() - last : target * 1.15;
+  return elapsed - target;
+}
+
+function roleplayInviteOverdueByMs(w) {
+  if (!w || !canAiInitiateRoleplay(w)) return -Infinity;
+  const rpPeak = Math.max(0.25, channelActivityPeak(w, "roleplay"));
+  const target = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / Math.min(1.75, rpPeak)));
+  const last = Math.max(
+    Number(w.sim && w.sim.lastRoleplayInviteAt) || 0,
+    lastAiInitiatedRoleplayAt(w)
+  );
+  const elapsed = last ? now() - last : target * 1.12;
+  return elapsed - target;
+}
+
+function playerNoteReactionUrgency(w) {
+  const note = w ? noteOf(w, w.meId) : null;
+  if (!note || now() - (Number(note.ts) || 0) >= NOTE_LIFE) return null;
+  const processedBy = new Set(note.processedBy || note.reactedBy || []);
+  const remaining = (w.chars || []).filter((c) => c && !isHuman(w, c.id) && !processedBy.has(c.id));
+  if (!remaining.length) return null;
+  const age = Math.max(0, now() - (Number(note.ts) || 0));
+  return { note, processedBy, remaining, age, hardDue: age >= LIVE_WORLD_NOTE_REACTION_DEADLINE_MS };
+}
+
+function popupPriorityAction(view, keyPrefix = "popup-priority") {
+  if (!popupEventOverdue(view)) return null;
+  const popupSeed = pickPopupEventSeed(view, { allowAmbient: true });
+  if (!popupSeed) return null;
+  return mkAction(
+    "popup-event",
+    `${keyPrefix}:${popupSeed.id}`,
+    { seedEventId: popupSeed.id, seed: popupSeed.type === "ambient-popup" ? popupSeed : null },
+    "event"
+  );
+}
+
 function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
@@ -41166,7 +41358,44 @@ function planAutoAction(view) {
   }
 
   /*
-   * LIVING WORLD PRIORITY v51
+   * v53 HARD FAIRNESS WATCHDOG
+   *
+   * A sorrend továbbra is feed-first, DE egy csatorna sem maradhat örökre
+   * a 25–40 másodpercenként esedékessé váló poszt mögött. Ha egy popup/DM/
+   * Note/Event már a saját célidején TÚL is jelentősen éhezik, egyetlen kört
+   * lefoglalhat a következő feed előtt. Ettől a poszt marad a leggyakoribb,
+   * de a világ nem válik kizárólag feed-generátorrá.
+   */
+  const popupLate = popupOverdueByMs(view);
+  if (popupLate >= 20 * 1000) {
+    const forcedPopup = popupPriorityAction(view, "popup-starvation");
+    if (forcedPopup) return forcedPopup;
+  }
+
+  const dmLate = autonomousDmOverdueByMs(view);
+  if (dmLate >= 45 * 1000) {
+    const forcedDm = pickInitiativeWatchdogAction(view, ["dm"]);
+    if (forcedDm) return forcedDm;
+  }
+
+  const noteUrgency = playerNoteReactionUrgency(view);
+  if (noteUrgency && noteUrgency.hardDue) {
+    return mkAction(
+      "note-react",
+      `note-starvation:${noteUrgency.note.id}:${noteUrgency.processedBy.size}`,
+      { noteId: noteUrgency.note.id },
+      "event"
+    );
+  }
+
+  const eventLate = roleplayInviteOverdueByMs(view);
+  if (eventLate >= 60 * 1000) {
+    const forcedEvent = pickInitiativeWatchdogAction(view, ["roleplay"]);
+    if (forcedEvent) return forcedEvent;
+  }
+
+  /*
+   * LIVING WORLD PRIORITY v53
    * 1) ÚJ POSZT — ez a világ leggyakoribb autonóm tartalma.
    */
   if (feedNeedsFreshPost(view)) {
@@ -41219,19 +41448,9 @@ function planAutoAction(view) {
   /*
    * 3) FELVILLANÓ EVENT — a feed után ez a következő nagy világmozdulat.
    */
-  if (popupEventOverdue(view)) {
-    const popupSeed = pickPopupEventSeed(view, { allowAmbient: true });
-    if (popupSeed) {
-      return mkAction(
-        "popup-event",
-        `popup-priority:${popupSeed.id}`,
-        {
-          seedEventId: popupSeed.id,
-          seed: popupSeed.type === "ambient-popup" ? popupSeed : null,
-        },
-        "event"
-      );
-    }
+  {
+    const popupAction = popupPriorityAction(view, "popup-priority");
+    if (popupAction) return popupAction;
   }
 
   /*
@@ -41239,24 +41458,14 @@ function planAutoAction(view) {
    * A friss játékos-Note reakciója személyes és időszerű, de nem előzi meg
    * az új feedet vagy a friss-feed kommenteket.
    */
-  const priorityNote = noteOf(view, view.meId);
-  if (priorityNote) {
-    const processedBy = new Set(priorityNote.processedBy || priorityNote.reactedBy || []);
-    const someoneLeft = (view.chars || []).some(
-      (c) => c && !isHuman(view, c.id) && !processedBy.has(c.id)
+  const priorityNoteState = playerNoteReactionUrgency(view);
+  if (priorityNoteState && Math.random() < 0.55) {
+    return mkAction(
+      "note-react",
+      `note-priority:${priorityNoteState.note.id}:${priorityNoteState.processedBy.size}`,
+      { noteId: priorityNoteState.note.id },
+      "event"
     );
-    if (
-      someoneLeft &&
-      now() - (Number(priorityNote.ts) || 0) < NOTE_LIFE &&
-      Math.random() < 0.48
-    ) {
-      return mkAction(
-        "note-react",
-        `note-priority:${priorityNote.id}:${processedBy.size}`,
-        { noteId: priorityNote.id },
-        "event"
-      );
-    }
   }
 
   const dmInitiative = pickInitiativeWatchdogAction(view, ["dm"]);
@@ -42299,7 +42508,14 @@ async function runSimulationAction(view, update, action, addImage) {
     const bot = botId ? charById(view, botId) : null;
     if (!bot || isHuman(view, bot.id) || !canAiInitiateRoleplay(view)) return null;
 
-    const out = await genRoleplayInitiation(view, bot);
+    let out = await genRoleplayInitiation(view, bot);
+    if (!out || out.skip === true) {
+      try {
+        out = await genForcedEverydayRoleplayInvitation(view, bot);
+      } catch (eventRetryErr) {
+        console.warn("AI Event invitation retry failed:", eventRetryErr);
+      }
+    }
     if (!out || out.skip === true) return null;
 
     const validModes = new Set(["dm_invite", "arrival", "encounter"]);
@@ -42367,6 +42583,7 @@ async function runSimulationAction(view, update, action, addImage) {
         n.chats[ck] = [...(n.chats[ck] || []), {
           id: "dm_" + uid(), from: "them", text: dmText, ts: now(),
           language: worldLanguage(n, n.meId), roleplayInviteSceneId: sceneId,
+          autonomous: true, source: "ai-event-invite",
         }];
       }
 
@@ -42550,12 +42767,19 @@ async function runSimulationAction(view, update, action, addImage) {
 
     if (!seed || popupGenerationBlocked(view)) return null;
 
-    const out = await genPopupEvent(view, seed);
-    if (!out || out.skip === true) return null;
+    let out = await genPopupEvent(view, seed);
+    /* A popup lane must be observable. If the provider skips or returns malformed
+       JSON, use a small canon-safe fallback rather than silently losing the turn. */
+    if (!out || out.skip === true) out = fallbackPopupEventResponse(view, seed);
 
     /* React state-updater is async, ezért előbb egy másolaton validáljuk. */
-    const probe = JSON.parse(JSON.stringify(view));
-    const probeEvent = addPopupEvent(probe, seed, out);
+    let probe = JSON.parse(JSON.stringify(view));
+    let probeEvent = addPopupEvent(probe, seed, out);
+    if (!probeEvent) {
+      out = fallbackPopupEventResponse(view, seed);
+      probe = JSON.parse(JSON.stringify(view));
+      probeEvent = out ? addPopupEvent(probe, seed, out) : null;
+    }
     if (!probeEvent) return null;
 
     update((n) => {
@@ -43735,8 +43959,16 @@ if (targetNote) {
       return null;
     }
 
-    const out =
+    let out =
       await genDM(view, bot);
+
+    if (!out || out.skip === true || (!String(out.text || "").trim() && !String(out.imagePrompt || "").trim() && !String(out.image || "").trim())) {
+      try {
+        out = await genForcedEverydayDM(view, bot);
+      } catch (dmRetryErr) {
+        console.warn("Autonomous DM retry failed:", dmRetryErr);
+      }
+    }
 
     const rawTxt =
       cleanGeneratedUtterance(
@@ -43856,12 +44088,14 @@ if (targetNote) {
               n,
               n.meId
             ),
+          autonomous: true,
+          source: "autonomous-dm",
         },
       ];
 
       recordCharacterAgentAction(n, bot.id, {
         surface: "dm",
-        action: aiImageRef ? (txt ? "REPLY_DM+SEND_SNAP" : "SEND_SNAP") : "REPLY_DM",
+        action: aiImageRef ? (txt ? "INITIATE_DM+SEND_SNAP" : "SEND_SNAP") : "INITIATE_DM",
         targetId: n.meId,
         refId: spontaneousDmId,
         ts: spontaneousDmTs,
