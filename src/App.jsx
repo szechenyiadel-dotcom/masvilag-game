@@ -13630,6 +13630,8 @@ MATURE 18+ CONTENT MODE — ${channelLabel}:
 - Do NOT turn every interaction sexual. Personality, relationship, current mood, history, power dynamics and consent still control the scene.
 - Never override a character's established boundaries or personality merely because Mature mode is enabled.
 - No explicit pornographic sexual detail. When intimacy would become graphically sexual, keep it non-graphic or transition naturally with a fade-to-black / implied continuation.
+- NON-GRAPHIC DOES NOT MEAN "END THE SCENE". If consenting known adults have already entered an intimate situation, you may keep the scene going through character-specific dialogue, kissing, closeness, emotion, atmosphere, movement to a private setting and implied time progression without anatomical detail.
+- If the player's latest actual RP turn clearly initiates or reciprocates adult intimacy, understand that meaning and respond to it in-character instead of dodging, moralizing, resetting to small talk or pretending the advance did not happen. Never invent the player's next response.
 - Never sexualize a minor. ${
       allAdults
         ? "Every currently involved participant has a known age of 18+, so adult romantic/suggestive tension may be used within the non-graphic limit."
@@ -13659,6 +13661,8 @@ MATURE 18+ TARTALMI MÓD — ${channelLabel}:
 - NE váljon minden interakció szexuálissá. A személyiség, kapcsolat, aktuális mood, közös történet, erőviszonyok és beleegyezés továbbra is meghatározó.
 - A Mature mód miatt soha ne írj felül egy karakterhez tartozó határt vagy személyiséget.
 - Explicit pornográf szexuális részleteket ne írj. Ha az intimitás grafikusan szexuálissá válna, maradjon nem részletező, vagy természetesen válts fade-to-black / utalásos folytatásra.
+- A NEM-GRAFIKUS NEM AZT JELENTI, HOGY "ZÁRD LE A JELENETET". Ha ismerten felnőtt, beleegyező szereplők már intim helyzetbe kerültek, a jelenet tovább futhat karakterhű párbeszéddel, csókkal, közelséggel, érzelemmel, hangulattal, privátabb helyre mozdulással és utalásos időbeli folytatással anatómiai részletezés nélkül.
+- Ha a játékos legutóbbi tényleges RP-turnje egyértelműen felnőtt intimitást kezdeményez vagy viszonoz, értsd ennek a jelentését és reagálj rá karakterhűen; ne dodge-old, ne moralizálj, ne reseteld small talkra és ne tegyél úgy, mintha nem történt volna meg. A játékos KÖVETKEZŐ reakcióját ettől még soha ne találd ki.
 - Kiskorút soha ne szexualizálj. ${
       allAdults
         ? "A jelenlegi résztvevők mind ismerten 18 év felettiek, ezért felnőtt romantikus/kétértelmű feszültség megjelenhet a nem explicit határon belül."
@@ -13679,7 +13683,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v55-popup-event-lock";
+const BUILD_VERSION = "v56-rp-memory-intimacy";
 
 const AUTO = "masvilag:auto";
 /*
@@ -25727,6 +25731,21 @@ function defaultSceneRoleplayMemory() {
     continuity: [],
     openThreads: [],
     participantStates: {},
+    /*
+     * Deterministic rolling scene ledger. Unlike the model-written summary,
+     * this is rebuilt from ACTUAL stored turns and therefore cannot silently
+     * forget a player action, a kiss, a threat, a position change, etc.
+     */
+    recentTurns: [],
+    lastTurnCount: 0,
+    /* Model-maintained semantic state. These fields are descriptive only;
+       the exact recentTurns ledger wins on any conflict. */
+    sceneState: {
+      location: "",
+      currentBeat: "",
+      intimacyStage: "",
+      boundaries: [],
+    },
     updatedAt: 0,
   };
 }
@@ -25759,8 +25778,17 @@ function ensureSceneRoleplayMemory(scene) {
   }
   const mem = scene.rpMemory;
   if (typeof mem.summary !== "string") mem.summary = "";
-  mem.continuity = normalizeRoleplayMemoryList(mem.continuity, 16, 260);
-  mem.openThreads = normalizeRoleplayMemoryList(mem.openThreads, 16, 260);
+  mem.continuity = normalizeRoleplayMemoryList(mem.continuity, 24, 320);
+  mem.openThreads = normalizeRoleplayMemoryList(mem.openThreads, 24, 320);
+  mem.recentTurns = normalizeRoleplayMemoryList(mem.recentTurns, 28, 520);
+  if (!Number.isFinite(Number(mem.lastTurnCount))) mem.lastTurnCount = 0;
+  if (!mem.sceneState || typeof mem.sceneState !== "object" || Array.isArray(mem.sceneState)) {
+    mem.sceneState = { location: "", currentBeat: "", intimacyStage: "", boundaries: [] };
+  }
+  mem.sceneState.location = normalizeRoleplayMemoryText(mem.sceneState.location, 260);
+  mem.sceneState.currentBeat = normalizeRoleplayMemoryText(mem.sceneState.currentBeat, 360);
+  mem.sceneState.intimacyStage = normalizeRoleplayMemoryText(mem.sceneState.intimacyStage, 180);
+  mem.sceneState.boundaries = normalizeRoleplayMemoryList(mem.sceneState.boundaries, 10, 260);
   if (!mem.participantStates || typeof mem.participantStates !== "object" || Array.isArray(mem.participantStates)) mem.participantStates = {};
   Object.keys(mem.participantStates).forEach((id) => {
     const clean = normalizeRoleplayMemoryText(mem.participantStates[id], 260);
@@ -25771,8 +25799,62 @@ function ensureSceneRoleplayMemory(scene) {
   return mem;
 }
 
-function sceneRoleplayMemoryCard(scene, w) {
+function syncSceneRoleplayTurnLedger(scene, w) {
+  if (!scene || !w) return defaultSceneRoleplayMemory();
   const mem = ensureSceneRoleplayMemory(scene);
+  const turns = mergeRoleplayTurnStreams(
+    scene.turns || [],
+    scene.playerTurnJournal || []
+  );
+  const recent = turns.slice(-28).map((turn) => {
+    if (!turn) return "";
+    if (turn.authorId === "narrator") {
+      return normalizeRoleplayMemoryText(`[narrator] ${turn.text || ""}`, 520);
+    }
+    const actor = charById(w, turn.authorId);
+    const target = turn.to ? charById(w, turn.to) : null;
+    const kind = turn.kind === "action" ? "action" : "speech";
+    return normalizeRoleplayMemoryText(
+      `${actor ? actor.name : turn.authorId}${target ? ` -> ${target.name}` : ""} (${kind}): ${turn.text || ""}`,
+      520
+    );
+  }).filter(Boolean);
+  mem.recentTurns = normalizeRoleplayMemoryList(recent, 28, 520);
+  mem.lastTurnCount = turns.length;
+  return mem;
+}
+
+function roleplayRecentPlayerTurns(w, scene, limit = 6) {
+  if (!w || !scene) return [];
+  return mergeRoleplayTurnStreams(scene.turns || [], scene.playerTurnJournal || [])
+    .filter((turn) => turn && turn.authorId === w.meId && turn.text)
+    .slice(-Math.max(1, limit));
+}
+
+function roleplayHasRecentExplicitPlayerBoundary(w, scene) {
+  const recent = roleplayRecentPlayerTurns(w, scene, 5);
+  if (!recent.length) return false;
+  const strongBoundary = /(?:\bstop\b|\bdon['’]?t\s+(?:touch|kiss|do|come|keep|continue)\b|\bdo\s+not\s+(?:touch|kiss|do|continue)\b|\bnot\s+now\b|\bleave\s+me\s+alone\b|\bback\s+off\b|\bi\s+don['’]?t\s+want\b|\bállj\b|\bhagyd\s+abba\b|\bne\s+érj\s+hozzám\b|\bne\s+csókolj\b|\bne\s+csináld\b|\bmost\s+ne\b|\bnem\s+akarom\b|\bhagyj\s+békén\b)/i;
+  return recent.some((turn) => strongBoundary.test(String(turn.text || "")));
+}
+
+function roleplayAdultIntimacyStage(w, scene) {
+  if (!w || !scene) return "none";
+  const text = mergeRoleplayTurnStreams(scene.turns || [], scene.playerTurnJournal || [])
+    .slice(-20)
+    .map((turn) => String(turn && turn.text || ""))
+    .join(" ")
+    .toLowerCase();
+  if (!text.trim()) return "none";
+  if (/(?:bedroom|bed\b|somewhere\s+private|private\s+room|fade\s*to\s*black|intimacy|intimate|szobába|ágy\b|kettesben|félrevonul|intim)/i.test(text)) return "private-intimacy";
+  if (/(?:making\s*out|make\s*out|deep(?:er)?\s+kiss|kiss(?:ed|ing)?\s+back|pulled\s+(?:him|her|them)\s+closer|csókolóz|visszacsókol|magához\s+húz)/i.test(text)) return "mutual-kissing";
+  if (/(?:kiss(?:ed|ing|es)?|csók|csókol|touch(?:ed|ing)?\s+(?:his|her|their|your)\s+(?:face|waist)|megérint(?:ette|i)?.*(?:arc|derek))/i.test(text)) return "kiss-touch";
+  if (/(?:flirt|flört|desire|vágy|attraction|vonzalom|want\s+you|akarlak|sexual|szexuális|thirst)/i.test(text)) return "sexual-tension";
+  return "none";
+}
+
+function sceneRoleplayMemoryCard(scene, w) {
+  const mem = syncSceneRoleplayTurnLedger(scene, w);
   const en = worldLanguage(w, w.meId) === "en";
   const states = Object.entries(mem.participantStates || {})
     .map(([id, state]) => {
@@ -25781,15 +25863,25 @@ function sceneRoleplayMemoryCard(scene, w) {
     })
     .slice(-12);
 
-  if (!mem.summary && !mem.continuity.length && !mem.openThreads.length && !states.length) {
-    return en ? "No compressed scene memory yet." : "Még nincs tömörített jelenetemlék.";
+  if (!mem.summary && !mem.continuity.length && !mem.openThreads.length && !states.length && !mem.recentTurns.length) {
+    return en ? "No scene memory yet." : "Még nincs jelenetemlék.";
   }
 
+  const sceneState = mem.sceneState || {};
+  const stateBits = [
+    sceneState.location ? `${en ? "location" : "hely"}=${sceneState.location}` : "",
+    sceneState.currentBeat ? `${en ? "current beat" : "aktuális beat"}=${sceneState.currentBeat}` : "",
+    sceneState.intimacyStage ? `${en ? "intimacy stage" : "intimitási szint"}=${sceneState.intimacyStage}` : "",
+    (sceneState.boundaries || []).length ? `${en ? "active boundaries" : "aktív határok"}=${sceneState.boundaries.join(" | ")}` : "",
+  ].filter(Boolean);
+
   return [
+    mem.recentTurns.length ? `${en ? "EXACT RECENT TURN LEDGER — ground truth, newest last" : "PONTOS LEGUTÓBBI TURN-NAPLÓ — ground truth, legújabb a végén"}:\n${mem.recentTurns.map((x, i) => `${i + 1}. ${x}`).join("\n")}` : "",
     mem.summary ? `${en ? "Compressed scene so far" : "Tömörített jelenet eddig"}: ${mem.summary}` : "",
     mem.continuity.length ? `${en ? "Continuity facts" : "Folytonossági tények"}: ${mem.continuity.join(" | ")}` : "",
     mem.openThreads.length ? `${en ? "Unresolved threads" : "Nyitott szálak"}: ${mem.openThreads.join(" | ")}` : "",
     states.length ? `${en ? "Current participant states" : "Aktuális résztvevői állapotok"}: ${states.join(" | ")}` : "",
+    stateBits.length ? `${en ? "Semantic scene state" : "Szemantikus jelenetállapot"}: ${stateBits.join(" | ")}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -25798,27 +25890,52 @@ function applySceneRoleplayMemoryUpdate(scene, out) {
   const row = out.sceneMemory || out.shortTermMemory || null;
   if (!row || typeof row !== "object" || Array.isArray(row)) return;
   const mem = ensureSceneRoleplayMemory(scene);
-  const summary = normalizeRoleplayMemoryText(row.summary, 1200);
+  const summary = normalizeRoleplayMemoryText(row.summary, 1600);
   if (summary) mem.summary = summary;
-  if (Array.isArray(row.continuity)) mem.continuity = normalizeRoleplayMemoryList(row.continuity, 16, 260);
-  if (Array.isArray(row.openThreads)) mem.openThreads = normalizeRoleplayMemoryList(row.openThreads, 16, 260);
+
+  /*
+   * IMPORTANT: model-written memory is MERGED, not blindly replaced.
+   * Otherwise one imperfect compression pass can erase a physical position,
+   * promise, unresolved question or intimacy milestone from the next turn.
+   */
+  if (Array.isArray(row.continuity)) {
+    mem.continuity = normalizeRoleplayMemoryList([...(mem.continuity || []), ...row.continuity], 24, 320);
+  }
+  if (Array.isArray(row.resolvedContinuity) && row.resolvedContinuity.length) {
+    const resolved = normalizeRoleplayMemoryList(row.resolvedContinuity, 24, 320).map((x) => x.toLowerCase());
+    mem.continuity = (mem.continuity || []).filter((x) => !resolved.some((r) => x.toLowerCase() === r || x.toLowerCase().includes(r) || r.includes(x.toLowerCase())));
+  }
+
+  if (Array.isArray(row.openThreads)) {
+    mem.openThreads = normalizeRoleplayMemoryList([...(mem.openThreads || []), ...row.openThreads], 24, 320);
+  }
+  if (Array.isArray(row.resolvedOpenThreads) && row.resolvedOpenThreads.length) {
+    const resolved = normalizeRoleplayMemoryList(row.resolvedOpenThreads, 24, 320).map((x) => x.toLowerCase());
+    mem.openThreads = (mem.openThreads || []).filter((x) => !resolved.some((r) => x.toLowerCase() === r || x.toLowerCase().includes(r) || r.includes(x.toLowerCase())));
+  }
+
+  /* Patch only supplied participant states; never erase everyone else. */
+  const patchParticipantState = (id, value) => {
+    const state = normalizeRoleplayMemoryText(value, 320);
+    if (id && state) mem.participantStates[id] = state;
+  };
   if (Array.isArray(row.participantStates)) {
-    const next = {};
     row.participantStates.slice(0, 20).forEach((item) => {
       if (!item || typeof item !== "object") return;
-      const id = String(item.id || "").trim();
-      const state = normalizeRoleplayMemoryText(item.state || item.text, 260);
-      if (id && state) next[id] = state;
+      patchParticipantState(String(item.id || "").trim(), item.state || item.text);
     });
-    mem.participantStates = next;
   } else if (row.participantStates && typeof row.participantStates === "object") {
-    const next = {};
-    Object.entries(row.participantStates).slice(0, 20).forEach(([id, value]) => {
-      const state = normalizeRoleplayMemoryText(value, 260);
-      if (id && state) next[id] = state;
-    });
-    mem.participantStates = next;
+    Object.entries(row.participantStates).slice(0, 20).forEach(([id, value]) => patchParticipantState(id, value));
   }
+
+  if (row.sceneState && typeof row.sceneState === "object" && !Array.isArray(row.sceneState)) {
+    const next = row.sceneState;
+    if (next.location !== undefined) mem.sceneState.location = normalizeRoleplayMemoryText(next.location, 260) || mem.sceneState.location;
+    if (next.currentBeat !== undefined) mem.sceneState.currentBeat = normalizeRoleplayMemoryText(next.currentBeat, 360) || mem.sceneState.currentBeat;
+    if (next.intimacyStage !== undefined) mem.sceneState.intimacyStage = normalizeRoleplayMemoryText(next.intimacyStage, 180) || mem.sceneState.intimacyStage;
+    if (Array.isArray(next.boundaries)) mem.sceneState.boundaries = normalizeRoleplayMemoryList(next.boundaries, 10, 260);
+  }
+
   mem.updatedAt = now();
 }
 
@@ -26448,7 +26565,21 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
         scene.playerTurnJournal || [],
         optimisticPlayerTurn ? [optimisticPlayerTurn] : []
       );
-      const log = promptTurns.slice(-14).map((t) => {        if (t.authorId === "narrator") return `(${t.text})`;
+      /*
+       * All roleplay reasoning must see the SAME freshest snapshot, including
+       * the player's just-submitted optimistic turn. Previously the main log
+       * saw it while short-term memory / romantic initiative could lag one
+       * turn behind, which caused intimacy and physical continuity resets.
+       */
+      const promptScene = {
+        ...scene,
+        turns: promptTurns,
+        playerTurnJournal: mergeRoleplayTurnStreams(
+          scene.playerTurnJournal || [],
+          optimisticPlayerTurn ? [optimisticPlayerTurn] : []
+        ),
+      };
+      const log = promptTurns.slice(-24).map((t) => {        if (t.authorId === "narrator") return `(${t.text})`;
         const a = who(t.authorId);
         const target =
           t.to
@@ -26470,10 +26601,13 @@ EVENT AJÁNLOTT MINIMUMA: ${scene.limitMode === "minutes" ? `${scene.targetMinut
 AKTUÁLIS HALADÁS: ${sceneEventProgressText(scene, worldLanguage(w, w.meId))}
 
 ROLEPLAY RÖVID TÁVÚ MEMÓRIA — EZ A KORÁBBI KÖRÖK TÖMÖRÍTETT FOLYTONOSSÁGA, NEM ÚJ TÖRTÉNÉS:
-${sceneRoleplayMemoryCard(scene, w)}
+${sceneRoleplayMemoryCard(promptScene, w)}
 
 MEMÓRIA-RÉTEGEK SZABÁLYA:
-- RÖVID TÁVÚ JELENETMEMÓRIA: minden válasz végén frissítsd a sceneMemory mezőt. Tartsa meg a helyszínt, pozíciókat, sérüléseket, tárgyakat, ki mit tudott meg, félbehagyott kérdéseket, ígéreteket, fenyegetéseket, terveket és azt, hogy éppen min dolgozik a jelenet. Ne találj ki új tényt.
+- RÖVID TÁVÚ JELENETMEMÓRIA: minden válasz végén frissítsd a sceneMemory mezőt. Tartsa meg a helyszínt, pozíciókat, sérüléseket, tárgyakat, ki mit tudott meg, félbehagyott kérdéseket, ígéreteket, fenyegetéseket, terveket, romantikus/intim folytonosságot és azt, hogy éppen min dolgozik a jelenet. Ne találj ki új tényt.
+- A fenti PONTOS LEGUTÓBBI TURN-NAPLÓ determinisztikus ground truth. Ha a tömörített summary bármiben ütközik vele, a pontos turnök nyernek. SOHA ne ismételj meg egy már megtörtént akciót csak azért, mert a summary nem emelte ki.
+- A continuity/openThreads mezők DELTA-jellegűek: a még igaz régi elemeket ne töröld. Amit most ténylegesen lezárt a jelenet, tedd resolvedContinuity / resolvedOpenThreads mezőbe.
+- sceneState-ben tartsd nyilván a jelenlegi helyet, a jelenet aktuális beatjét, a nem-grafikus intimitási szintet (ha releváns) és az explicit aktív határokat. A határ csak akkor kerüljön ide, ha a játékos vagy más szereplő ténylegesen kimondta/jelezte.
 - HOSSZÚ TÁVÚ ROLEPLAY-MEMÓRIA: longTermMemories-ba CSAK valóban tartós jelentőségű dolgot tegyél: kapcsolat-mérföldkő, árulás, kibékülés, első csók, komoly verekedés/sérülés, titok/reveláció, fontos ígéret vagy fenyegetés, megmentés, megalázás, ajándék, döntés vagy olyan esemény, ami később is megváltoztatja a viselkedést. Small talkot és jelentéktelen mozdulatot NE ments.
 - KARAKTERMEMÓRIA / POV: egy longTermMemory csak annál a karakter-ID-nél jelenjen meg, aki tényleg átélte, látta, hallotta vagy hitelesen megtudta. A motor tudása nem egyenlő a karakter tudásával. A játékos ki nem mondott gondolatát/érzését soha ne mentsd más karakter emlékébe.
 - targetId-t akkor adj, ha az emlék egy konkrét másik szereplőhöz kötődik; ettől a közös történetük külön is megmarad.
@@ -26517,7 +26651,7 @@ ${characterAgentRuntimeCard(
     targetId: playerTarget.id || w.meId,
     playerText,
     inputAuthorId: playerText ? w.meId : "",
-    scene: { ...scene, turns: promptTurns },
+    scene: promptScene,
   }
 )}
 
@@ -26554,7 +26688,7 @@ ${matureContentInstruction(
 
 ${roleplayRomanticInitiativeCard(
   w,
-  scene,
+  promptScene,
   cast
 )}
 
@@ -26583,6 +26717,9 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - ROMANTIKUS KEZDEMÉNYEZÉS: ha a karakterlap, kapcsolat, vonzalom és az aktuális helyzet indokolja, az AI ne csak reagáljon a játékos közeledésére. Ő maga is tehet első lépést: közelebb mehet, megérintheti a másik kezét/arcát karakterhű módon, megpróbálhat csókot kezdeményezni, viszonzott vonzalomnál csókolózást kezdeményezhet, vagy Mature 18+ módban felnőtt szereplők között nem részletező intimebb folytatást indíthat.
 - A romantikus kezdeményezés NEM kötelező minden vonzalomnál és ne legyen random. A merészebb/flörtölősebb/dominánsabb/impulzívabb karakterek könnyebben teszik meg az első lépést; a félénkebb, bizalmatlanabb vagy visszafogottabb karakterekhez lassabb kezdeményezés illik.
 - Ha az AI a JÁTÉKOS karakterével kezdeményez csókot vagy intimebb lépést, csak a saját karakter mozdulatát írd le. A játékos válaszát soha ne döntsd el helyette; hagyj neki valódi lehetőséget reagálni.
+- MATURE 18+ FOLYTONOSSÁG: ha minden érintett ismerten felnőtt, nincs friss explicit határ, és a játékos/karakterek már egyértelműen kölcsönösen elindítottak egy intim helyzetet, NE reseteld vissza small talkra vagy végtelen "majdnem csók" körre. Reagálj közvetlenül a megtörtént közeledésre, és a jelenet karakterhűen továbbhaladhat felnőtt intimitás felé nem-grafikus szinten.
+- A "nem-grafikus" NEM azt jelenti, hogy azonnal zárd le vagy fade-to-blackold a jelenetet. Maradhat felnőtt, intim, érzéki és konkrét a közelség, csók, ölelés, párbeszéd, hangulat, helyváltoztatás és az idő előrehaladása; csak anatómiai/pornográf részletekbe ne menj bele.
+- Ha a játékos legutóbbi saját akciója egyértelműen kezdeményez vagy viszonoz egy felnőtt intim lépést, ne moralizálj, ne válts témát, ne tegyél úgy, mintha nem értetted volna. A jelenlévő felnőtt AI a személyisége és kapcsolat alapján reagáljon rá, miközben a játékos következő döntését továbbra sem írhatod meg helyette.
 - Obsessed/possessive karakter lehet intenzívebb, féltékenyebb és kezdeményezőbb, de a megszállottság nem írja felül a beleegyezést.
 - A "narrator" csak a jelenet érzékelhető leírása: mit látni, hallani, milyen a tér és a hangulat. Legfeljebb egy narrator-turn legyen ebben a körben.
 - A szereplők belső érzései megjelenhetnek a roleplay prózában, de ne adj nekik olyan TUDÁST, amit a saját karakterük nem szerezhetett meg.
@@ -26599,7 +26736,7 @@ Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","to":"annak a jelenlévő karakternek/játékosnak az id-ja, akinek a speech közvetlenül szól, vagy üres","kind":"speech vagy action","text":"..."}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":16,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],
  "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
- "sceneMemory":{"summary":"3-6 mondatos tömör, tényszerű összefoglaló arról, ami a teljes nyitott jelenet folytonosságához kell","continuity":["aktuális hely/pozíció/sérülés/tárgy vagy más fizikai-faktuális folytonosság"],"openThreads":["még nincs lezárva: kérdés, vita, ígéret, fenyegetés, terv, döntés"],"participantStates":[{"id":"jelenlévő pontos id-ja","state":"rövid aktuális, jelenetben releváns állapot; ne titkos gondolat"}]},
+ "sceneMemory":{"summary":"3-6 mondatos tömör, tényszerű összefoglaló arról, ami a teljes nyitott jelenet folytonosságához kell","continuity":["ÚJ vagy továbbra is igaz hely/pozíció/sérülés/tárgy/fizikai vagy intim folytonosság"],"resolvedContinuity":["csak ami ebben a körben ténylegesen már nem igaz/lezárult"],"openThreads":["ÚJ vagy továbbra is nyitott kérdés, vita, ígéret, fenyegetés, terv, döntés"],"resolvedOpenThreads":["csak ami ebben a körben ténylegesen lezárult"],"participantStates":[{"id":"jelenlévő pontos id-ja","state":"rövid aktuális, jelenetben releváns állapot; ne titkos gondolat"}],"sceneState":{"location":"aktuális hely, ha ismert","currentBeat":"mi történik éppen most","intimacyStage":"none / tension / kiss-touch / mutual-kissing / private-intimacy vagy üres","boundaries":["csak explicit, jelenleg aktív határ"]}},
  "longTermMemories":[{"id":"annak az AI-nak az id-ja, aki ezt valóban tudja/átélte","targetId":"ha konkrét személyhez kötődik, annak id-ja, különben üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":80,"text":"csak tartósan fontos, később is releváns karakter-POV emlék"}],
  "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"],
  "statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"csak akkor adj ilyet, ha az Event során tényleges állapotváltozás történt: megváltozott valaki hangulata, vagy egy korábban elindított folyamat/ígéret/fenyegetés/terv lezárult"}],
@@ -26729,6 +26866,9 @@ ${retryCast}
 
 ${repetitionGuard(w, cast.map((c) => c.id), "jelenetfolytatás")}
 
+${matureContentInstruction(w, scene.cast || [], "roleplay")}
+${roleplayRomanticInitiativeCard(w, promptScene, cast)}
+
 SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
 - Adj 2-4 TELJESEN FRISS mozzanatot.
 - Egyetlen korábbi mondatot, akciót, poént, fenyegetést, flörtformulát vagy közeli parafrázist se használj újra.
@@ -26740,10 +26880,10 @@ SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
 - Ne magyarázd, hogy újragenerálsz.
 
 RÖVID TÁVÚ JELENETMEMÓRIA:
-${sceneRoleplayMemoryCard(scene, w)}
+${sceneRoleplayMemoryCard(promptScene, w)}
 
 VÁLASZ CSAK JSON:
-{"turns":[{"id":"pontos karakter-ID vagy narrator","kind":"speech vagy action","text":"friss megszólalás vagy cselekvés"}],"changes":[],"memories":[],"sceneMemory":{"summary":"","continuity":[],"openThreads":[],"participantStates":[]},"longTermMemories":[],"events":[]}${TAIL}`,
+{"turns":[{"id":"pontos karakter-ID vagy narrator","kind":"speech vagy action","text":"friss megszólalás vagy cselekvés"}],"changes":[],"memories":[],"sceneMemory":{"summary":"","continuity":[],"resolvedContinuity":[],"openThreads":[],"resolvedOpenThreads":[],"participantStates":[],"sceneState":{"location":"","currentBeat":"","intimacyStage":"","boundaries":[]}},"longTermMemories":[],"events":[]}${TAIL}`,
           {
             maxTokens: 1500,
             maxTries: 3,
@@ -26806,6 +26946,8 @@ VÁLASZ CSAK JSON:
           }
         });
         applySceneRoleplayMemoryUpdate(s, out);
+        /* Persist exact post-turn ledger after both player + AI turns are stored. */
+        syncSceneRoleplayTurnLedger(s, n);
         applyRoleplayLongTermMemories(n, s, out);
         applySceneChangesWithStatus(n, s, safeAiChanges(out));
         applyMemories(n, safeAiMemories(out));
@@ -41015,13 +41157,10 @@ function roleplayRomanticInitiativeCard(w, scene, cast) {
       .join(" ")
       .toLowerCase();
 
-  const explicitBoundary =
-    /\b(?:stop|don't|do not|not now|leave me|back off|no\b|állj|hagyd|ne\s+érj|ne\s+csináld|most\s+ne)\b/i.test(
-      recentText
-    );
+  const explicitBoundary = roleplayHasRecentExplicitPlayerBoundary(w, scene);
 
   if (explicitBoundary) {
-    return `ROMANTIC INITIATIVE CHECK: a recent explicit boundary/refusal is present. Do not escalate romance or intimacy unless that boundary is clearly and voluntarily changed later.`;
+    return `ROMANTIC INITIATIVE CHECK: the PLAYER has a recent, explicit intimacy boundary/refusal in their own last few turns. Do not escalate romance or intimacy until the player clearly changes that boundary. Do not infer a boundary merely from an unrelated word such as "no" in ordinary dialogue.`;
   }
 
   const player =
@@ -41083,6 +41222,10 @@ function roleplayRomanticInitiativeCard(w, scene, cast) {
       if (/flirt|bold|merész|dominant|domináns|impulsive|impulzív|passionate|szenvedély|possess|birtokl|obsess|megszáll|confident|magabiztos/.test(lore)) initiative += 18;
       if (/shy|félénk|reserved|visszafogott|avoidant|bizalmatlan/.test(lore)) initiative -= 12;
       if (/kiss|csók|making out|make out|csókolóz|desire|vágy|attraction|vonzalom|chemistry|kémia|flirt|flört/.test(recentText)) initiative += 18;
+      const intimacyStage = roleplayAdultIntimacyStage(w, scene);
+      if (intimacyStage === "kiss-touch") initiative += 10;
+      if (intimacyStage === "mutual-kissing") initiative += 22;
+      if (intimacyStage === "private-intimacy") initiative += 28;
 
       if (initiative >= 62) {
         rows.push({
@@ -41111,8 +41254,9 @@ function roleplayRomanticInitiativeCard(w, scene, cast) {
     (scene.turns || []).length >= 4 &&
     !hasConcreteEscalation &&
     top[0].initiative >= 78;
+  const intimacyStage = roleplayAdultIntimacyStage(w, scene);
 
-  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}`).join("\n")}\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating a non-graphic transition toward adult intimacy.\n- If the target is the PLAYER, write only the AI's initiating action and stop before the player's reaction/consent.\n- If intimacy would become graphically sexual, keep it non-graphic / implied / fade-to-black.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
+  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}`).join("\n")}\n- Current non-graphic intimacy stage inferred from ACTUAL recent turns: ${intimacyStage}.\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- If the scene is already at kiss-touch / mutual-kissing / private-intimacy and there is no recent explicit player boundary, DO NOT reset it back to coy small talk or another almost-kiss. Continue from the actual established physical/emotional state.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating/continuing a non-graphic transition toward adult intimacy.\n- If the player has already clearly reciprocated in an actual stored turn, the AI may respond to that reciprocity; still never invent the player's NEXT reaction.\n- Non-graphic adult intimacy may continue as a scene through dialogue, closeness, kissing, atmosphere and time progression; fade-to-black is optional, not mandatory. Never add graphic anatomical/pornographic detail.\n- If the target is the PLAYER, write only the AI's own next action/dialogue and stop before deciding the player's next choice.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
 }
 
 async function genRoleplayInitiation(w, bot) {
