@@ -3181,6 +3181,25 @@ function sanitizeWorldPosts(w) {
         .map((comment) => [comment.id, comment])
     );
 
+    /*
+     * Repair legacy AI vocatives too. Older rows may contain SELF-derived
+     * nicknames (for example a shortened version of the speaker's own name)
+     * even when the actual reply target is somebody else. Target IDs are the
+     * ground truth, so sanitize the stored line before rendering it again.
+     */
+    post.comments.forEach((comment) => {
+      if (!comment || !comment.authorId || isHuman(w, comment.authorId) || !comment.text) return;
+      const parent = comment.parent ? commentsById.get(comment.parent) : null;
+      const targetId = parent && parent.authorId ? parent.authorId : post.authorId;
+      if (!targetId || targetId === comment.authorId) return;
+      comment.text = sanitizeGeneratedDirectAddress(
+        w,
+        comment.authorId,
+        targetId,
+        comment.text
+      );
+    });
+
     post.comments = post.comments.filter((comment) => {
       if (!comment || !comment.authorId || isHuman(w, comment.authorId)) return true;
 
@@ -3576,6 +3595,9 @@ function publicSocialJuiceSignals(text) {
   }
   if (/\b(?:kiss|kissed|making\s*out|hooked\s*up|hookup|dating|date\s+me|mine|my\s+girl|my\s+boy|babe|baby|hot|gorgeous|beautiful|pretty|love\s+you|ily|csók|csókol|kavar|randi|enyém|szeretlek|gyönyörű|dögös)\b/i.test(low)) {
     romance += 24; importance += 8; tags.push("romance");
+  }
+  if (/\b(?:save\s+a\s+horse\s*,?\s*ride\s+(?:a|the|my|your|his|her)?\s*[a-z][a-z0-9_-]*|smash\s+or\s+pass|would\s+smash|ride\s+(?:me|you|him|her|them)|sit\s+on\s+(?:my|your|his|her)\s+(?:face|lap)|step\s+on\s+me|thirst\s*trap|turned\s+on|horny|breed\s+me|call\s+me\s+daddy)\b/i.test(low)) {
+    romance += 30; embarrassment += 8; importance += 10; tags.push("adult-innuendo", "suggestive");
   }
   if (/\b(?:cheat|cheated|cheating|affair|caught|exposed|receipts|screenshots?|leak|leaked|megcsal|lebuk|bizonyíték|kiszivárg)\b/i.test(low)) {
     drama += 30; embarrassment += 28; importance += 18; tags.push("scandal", "receipts");
@@ -9051,6 +9073,7 @@ function playerInputUnderstandingInstruction(w, rawText, surface = "chat") {
 - Read the player's exact text for MEANING before deciding tone. Casual English, slang, contractions, lowercase, abbreviations, typos, missing punctuation and non-native phrasing are still meaningful language.
 - Silently resolve obvious spelling/grammar slips from context. Do NOT deliberately misread a recognizable sentence just because it is informal or imperfect.
 - Code-switching is normal: the player may mix English, Hungarian, slang, names and fandom terms in the same sentence. Understand the intended meaning across languages instead of treating the mixed sentence as broken input.
+- MATURE SEMANTIC LITERACY: because this world is 18+, correctly recognize adult slang, thirst jokes, sexual innuendo, double entendres, suggestive euphemisms and deliberately provocative wordplay instead of flattening them into a literal/innocent reading. If all people implicated by the joke are known adults, characters may understand and respond to that adult meaning in a character-appropriate, non-graphic way. If a referenced person is a minor or their age is not confirmed 18+, you may understand that the phrase is adult-coded but must not sexualize that person.
 - Preserve who "you", pronouns, names, nicknames and @mentions refer to using the immediate conversation/thread/scene focus.
 - If one interpretation is overwhelmingly natural, use it. Do not manufacture ambiguity.
 - Ask a clarification ONLY when two materially different interpretations remain genuinely plausible after using recent context.
@@ -9060,6 +9083,7 @@ PLAYER'S EXACT INPUT: "${text.slice(0, 900)}"`
 - Először a játékos PONTOS szövegének jelentését értsd meg. A laza angol, szleng, rövidítés, kisbetű, elütés, hiányzó írásjel vagy nem anyanyelvi megfogalmazás ettől még értelmes nyelv.
 - A nyilvánvaló nyelvtani/elírási hibát csendben oldd fel a kontextusból. Ne érts félre szándékosan felismerhető mondatot.
 - A code-switching normális: a játékos keverheti az angolt, magyart, szlenget, neveket és fandom-kifejezéseket ugyanabban a mondatban. A vegyes mondat szándékát értsd meg, ne kezeld hibás inputként.
+- FELNŐTT JELENTÉSÉRTÉS: mivel ez 18+ világ, ismerd fel a felnőtt szlenget, thirst joke-okat, szexuális célzásokat, double entendre-öket, kétértelmű eufemizmusokat és provokatív szóvicceket; ne lapítsd őket ártatlan, szó szerinti jelentésre. Ha a célzásban érintett személyek mind biztosan felnőttek, a karakterek a felnőtt jelentést karakterhűen, nem grafikusan értelmezhetik és reagálhatják le. Ha valaki kiskorú vagy nem igazoltan 18+, a nyelvi célzás felismerhető, de az adott személyt nem szexualizálhatod.
 - A "you", névmások, nevek, becenevek és @mentionök referenciáját a közvetlen chat/thread/jelenet fókuszából oldd fel.
 - Ha egy értelmezés egyértelműen természetesebb, azt használd. Ne gyárts mesterséges kétértelműséget.
 - Csak akkor kérdezz vissza, ha a teljes közeli kontextus után is két lényegesen eltérő értelmezés marad.
@@ -10660,6 +10684,29 @@ function preferredDirectAddressForCharacter(w, actorId, targetId) {
   return full.split(/\s+/).filter(Boolean)[0] || full;
 }
 
+function likelySelfDerivedAliasToken(candidate, actorAliases) {
+  const clean = normalizeAddressText(candidate).replace(/[^a-z0-9]+/g, "");
+  if (clean.length < 3) return false;
+
+  return (actorAliases || []).some((alias) => {
+    const a = normalizeAddressText(alias).replace(/[^a-z0-9]+/g, "");
+    if (a.length < 3) return false;
+    if (a === clean) return true;
+
+    let common = 0;
+    const max = Math.min(a.length, clean.length);
+    while (common < max && a[common] === clean[common]) common += 1;
+
+    /*
+     * Catches natural/self-hallucinated shortenings such as a speaker turning
+     * their own longer first name into a shorter pet form, without treating
+     * unrelated ordinary words as names.
+     */
+    const shorter = Math.min(a.length, clean.length);
+    return common >= 3 && shorter >= 3 && (common / shorter) >= 0.60 && Math.abs(a.length - clean.length) <= 6;
+  });
+}
+
 function sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, value) {
   let text = String(value || "");
   if (!text || !w || !actorId) return text;
@@ -10736,6 +10783,34 @@ function sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, value) {
       (_m, lead) => replacement ? `${lead}${replacement}` : ""
     );
   }
+
+  const actorIdentityTokens = actorAliases
+    .flatMap((alias) => String(alias || "").replace(/^@/, "").split(/\s+/))
+    .map((x) => String(x || "").trim())
+    .filter((x) => x.length >= 3);
+
+  const replaceDerivedVocative = (candidate) => {
+    const normalized = String(candidate || "").trim().toLowerCase();
+    if (!normalized || targetAliases.has(normalized)) return candidate;
+    if (!likelySelfDerivedAliasToken(candidate, actorIdentityTokens)) return candidate;
+    return replacement || "";
+  };
+
+  text = text.replace(
+    /(^|[.!?]\s+)(["'“”‘’(]*)([A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]{2,20})(\s*[,!:;—-]\s*)/g,
+    (_m, lead, quote, candidate, punct) => {
+      const next = replaceDerivedVocative(candidate);
+      return next === candidate ? _m : `${lead}${quote}${next}${punct}`;
+    }
+  );
+
+  text = text.replace(
+    /([,;:—-]\s*)([A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]{2,20})(?=\s*[,;:!?.”’"']*(?:$|\n))/g,
+    (_m, lead, candidate) => {
+      const next = replaceDerivedVocative(candidate);
+      return next === candidate ? _m : (next ? `${lead}${next}` : "");
+    }
+  );
 
   return text
     .replace(/^[\s,;:—-]+/, "")
@@ -11054,8 +11129,8 @@ ${(() => {
 })()}
 
 ${tt(
-  "18+ JÁTÉK-ALAPHANG: nincs Standard/Mature kapcsoló. A világ felnőttes témákat, káromkodást, sötétebb kapcsolatokat, erőszakot, alkoholt/drogot mint történeti elemet és nem explicit felnőtt romantikus feszültséget használhat, ha karakterhű. Kiskorút soha ne szexualizálj; explicit pornográf részleteket ne generálj.",
-  "18+ GAME BASELINE: there is no Standard/Mature toggle. The world may use adult themes, profanity, darker relationships, violence, alcohol/drugs as story elements, and non-graphic adult romantic tension when character-accurate. Never sexualize a minor and never generate explicit pornographic detail."
+  "18+ JÁTÉK-ALAPHANG: nincs Standard/Mature kapcsoló. A világ felnőttes témákat, káromkodást, sötétebb kapcsolatokat, erőszakot, alkoholt/drogot mint történeti elemet és nem explicit felnőtt romantikus feszültséget használhat, ha karakterhű. A játékos felnőtt szlengjét, thirst joke-jait, szexuális célzásait, double entendre-jeit és kétértelmű szóvicceit JELENTÉS SZERINT értsd minden social felületen, ne szó szerint ártatlanítsd. Ismert felnőttek között erre lehet karakterhű, nem grafikus reakció. Kiskorút vagy nem igazoltan 18+ személyt soha ne szexualizálj; explicit pornográf részleteket ne generálj.",
+  "18+ GAME BASELINE: there is no Standard/Mature toggle. The world may use adult themes, profanity, darker relationships, violence, alcohol/drugs as story elements, and non-graphic adult romantic tension when character-accurate. Across every social surface, interpret the player's adult slang, thirst jokes, sexual innuendo, double entendres, suggestive euphemisms and provocative wordplay by their intended meaning rather than sanitizing them into an innocent literal reading. Known adults may react to that meaning in a character-appropriate, non-graphic way. Never sexualize a minor or a person whose age is not confirmed 18+, and never generate explicit pornographic detail."
 )}
 
 ${tt("A JÁTÉKOS KARAKTERE — ŐT KIZÁRÓLAG A FELHASZNÁLÓ IRÁNYÍTJA.", "THE PLAYER CHARACTER — ONLY THE USER CONTROLS THEM.")}
@@ -11097,6 +11172,12 @@ const ENGINE = `Te egy élő, AI-vezérelt közösségi média világ motorja va
 Minden szereplőt a saját adatlapja alapján játszol el. Az adatlap nem háttérinfó: az a szereplő hangja.
 
 FŐ SZABÁLY: minden válasz legyen karakterhű, természetes, emberi és az adott helyzethez illő. A karakter személyisége, története, aktuális érzései és kapcsolatai határozzák meg, MIT mond — de a felület határozza meg, HOGYAN és milyen hosszan mondja.
+
+18+ JELENTÉSÉRTÉS — HARD RULE:
+- Minden felületen értsd a felnőtt szlenget, szexuális célzást, thirst joke-ot, double entendre-t, kétértelmű eufemizmust és provokatív szóviccet a természetes társas jelentése szerint.
+- Ne sterilizáld vagy olvasd szándékosan szó szerint, ha az emberi olvasat egyértelműen felnőtt célzás.
+- Ismert felnőttek között a karakter reagálhat erre flörttel, zavarral, ugratással, féltékenységgel, humorral, vonzalommal vagy rosszallással a saját személyisége és kapcsolata szerint, nem grafikus módon.
+- Kiskorút vagy nem igazoltan 18+ személyt ne szexualizálj akkor sem, ha a szöveg felnőtt célzást tartalmaz.
 
 VÉGREHAJTÁSI ELSŐBBSÉG — HA KÉT SZABÁLY LÁTSZÓLAG ÜTKÖZIK:
 1. SAJÁT KÁNON / RENDSZER-RÉTEG: a karakter személyisége, backstory-ja, értékei, hibái, beszédstílusa és motivációi a legerősebb réteg. Ez mondja meg, KI ő.
@@ -11360,6 +11441,12 @@ You play every character strictly from their own sheet. The sheet is not backgro
 
 MAIN RULE: every response must be true to character, natural, human and appropriate to the current situation. Personality, history, current emotions and relationships determine WHAT a character says — but the communication format determines HOW they say it and how long the response should be.
 
+18+ SEMANTIC LITERACY — HARD RULE:
+- Across every surface, understand adult slang, sexual innuendo, thirst jokes, double entendres, suggestive euphemisms and provocative wordplay by their natural social meaning.
+- Do not sanitize an obviously adult-coded line into an innocent literal interpretation.
+- Between known adults, characters may react to that subtext with flirting, embarrassment, teasing, jealousy, humor, attraction or disapproval according to personality and relationship, while remaining non-graphic.
+- Never sexualize a minor or a person whose age is not confirmed 18+, even when the language itself is adult-coded.
+
 EXECUTION PRIORITY — WHEN TWO RULES APPEAR TO CONFLICT:
 1. OWN CANON / SYSTEM LAYER: the character's personality, backstory, values, flaws, speech style and motivations are the strongest layer. This decides WHO they are.
 2. RELATIONSHIP FILTER: score + bond + active feeling modulate HOW that same personality is expressed toward this specific person. The filter never replaces personality.
@@ -11376,7 +11463,7 @@ CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - PRIVATE KNOWLEDGE BOUNDARY: one character's Connections field never becomes another character's knowledge automatically. Another character may know that person/fact only if it also exists in their own canon or they actually learned it during play and retained it in memory.
 - CROSS-REFERENCE CANON ACROSS FIELDS: the same relationship, rank or role may appear in history, extra info, organizations, relationships, rank or other fields. Repeated/consistent evidence is strong canon. Do not lose a fact just because it is not stored in one preferred field.
 - HIERARCHY AND ADDRESS ARE RELATIONSHIP-SPECIFIC: if someone is THIS character's own sensei, default direct address is "Sensei + surname" (for example, Sensei Silver), not the sensei's casual first name, unless explicit canon establishes another private address. Do NOT automatically call somebody else's sensei "Sensei". A dangerous/high-authority sensei should not receive casual consequence-free disrespect from non-sensei characters without strong canon/current cause; another sensei is a peer authority and may challenge or disrespect them if canon supports it.
-- NAME / NICKNAME OWNERSHIP IS ABSOLUTE: every SELF identifier belongs to THAT character — full name, first name, surname, nickname and @handle. Never address a different person using ANY SELF name variant merely because it appears prominently in SELF's profile. Examples: if Feng Xiao's nickname is "Wolf", Feng must never call another person "wolf"; Terrance Silver must never call the listener "Terry"; Park Nam-gyu must never call the listener "Nam-gyu", unless TARGET independently has that exact alias. Resolve the addressee exclusively from TARGET identity, never from SELF identity fields.
+- NAME / NICKNAME OWNERSHIP IS ABSOLUTE: every SELF identifier belongs to THAT character — full name, first name, surname, nickname and @handle. Never address a different person using SELF's own name, surname, nickname, handle, or an invented shortening/pet-form derived from SELF's identity. Resolve the addressee exclusively from TARGET identity fields. If TARGET has no established nickname, use TARGET's real first name / valid title or omit the vocative instead of inventing one.
 - Reconcile every response with personality, traits, speech style, full history, secrets, fears, goals, likes, abilities, organization, rank, Connections, dynamic relationships and current memories.
 - HUMAN CONVERSATIONAL CONTINUITY: identify what the other person just did socially — compliment, question, joke, invitation, apology, provocation, flirting, support — and respond to THAT act. A dark, dominant, sarcastic or rude character may react smugly, awkwardly, teasingly, suspiciously or tersely to praise, but must not manufacture a random "stop texting / leave me alone" boundary with no current reason.
 - "Cold", "rude", "sarcastic", "dominant" or "dangerous" is not a universal license for hostility in every exchange. The reaction must come from personality + relationship + current context together.
@@ -13528,6 +13615,7 @@ MATURE 18+ CONTENT MODE — ${channelLabel}:
 - Violence must have consequences and memory. A serious confrontation can change fear, respect, hatred, loyalty, obsession, rivalry or revenge motivation.
 - Do not make every scene violent. Escalation must still come from character, motive and current conflict.
 - Romance and attraction may be more intense, direct, suggestive, sensual or sexually charged when it naturally follows from the relationship.
+- ADULT LANGUAGE COMPREHENSION: recognize sexual innuendo, thirst jokes, double meanings, suggestive slang/euphemisms and provocative captions as adult-coded language when context supports it. Do not automatically reinterpret them as innocent/literal. Known adults may answer that subtext with non-graphic flirting, teasing, embarrassment, jealousy, amusement, attraction, disapproval or other character-specific reactions.
 - IMPORTANT: adult AI characters are allowed to TAKE ROMANTIC INITIATIVE. They do not have to wait for the player to make every first move.
 - When character-accurate and mutually welcome, an AI may be the one who moves closer, initiates a kiss, kisses back more intensely, starts making out, asks the other person to come somewhere private, openly admits desire, or initiates a non-graphic transition toward adult intimacy.
 - Do not make romantic initiative mechanically rare just because the player has not explicitly started it. A bold, flirtatious, impulsive, dominant, deeply attracted or established-partner character should be capable of making the first move.
@@ -13556,6 +13644,7 @@ MATURE 18+ TARTALMI MÓD — ${channelLabel}:
 - Az erőszaknak legyen következménye és emlékezete. Egy komoly összecsapás változtathat félelmen, tiszteleten, gyűlöleten, lojalitáson, megszállottságon, rivalizáláson vagy bosszúvágyon.
 - Ne váljon minden jelenet verekedéssé. Az eszkaláció továbbra is a karakterből, motivációból és aktuális konfliktusból következzen.
 - A romantika és vonzalom lehet intenzívebb, direktebb, kétértelműbb, érzékibb vagy szexuálisan feszültebb, ha természetesen következik a kapcsolatból.
+- FELNŐTT NYELVI ÉRTELMEZÉS: a szexuális célzást, thirst joke-ot, kettős jelentést, kétértelmű felnőtt szlenget/eufemizmust és provokatív captiont a kontextus szerinti felnőtt jelentésével értsd; ne fordítsd automatikusan ártatlan, szó szerinti olvasatra. Ismert felnőttek erre nem grafikus flörttel, ugratással, zavarral, féltékenységgel, humorral, vonzalommal, rosszallással vagy más karakterhű reakcióval válaszolhatnak.
 - FONTOS: a felnőtt AI-karakterek KEZDEMÉNYEZHETNEK romantikusan. Nem kell mindig arra várniuk, hogy a játékos tegye meg az első lépést.
 - Ha karakterhű és kölcsönösen kívánatos a helyzet, az AI lehet az, aki közelebb lép, megpróbál megcsókolni valakit, intenzívebben visszacsókol, csókolózást/making outot kezdeményez, félrevonulást javasol, nyíltabban kimutatja a vágyát, vagy nem részletező módon felnőtt intimitás felé viszi a helyzetet.
 - Ne legyen mesterségesen ritka a romantikus kezdeményezés csak azért, mert a játékos még nem kezdte el. Egy merész, flörtölős, impulzív, domináns, erősen vonzódó vagy már intim kapcsolatban lévő karakter ténylegesen teheti meg az első lépést.
@@ -19715,6 +19804,8 @@ async function genComments(w, post) {
 
 POSZT — ${author ? author.name : "?"}:
 "${post.text}"
+
+${post.authorId === w.meId && post.text ? playerInputUnderstandingInstruction(w, post.text, "comment") : ""}
 
 ${
   (post.imageId || post.image)
@@ -31382,6 +31473,7 @@ async function genNoteReact(w, note) {
 
 ${w.player.name} ezt írta ki jegyzetként:
 "${note.text || ""}"
+${note.text ? playerInputUnderstandingInstruction(w, note.text, "comment") : ""}
 ${note.music && (note.music.title || note.music.artist)
   ? `
 A JEGYZETHEZ VÁLASZTOTT ZENE:
@@ -32747,7 +32839,7 @@ async function genGossipNetworkEcho(w, payload) {
 
   return askWorldJSON(
     w,
-    `You generate a tiny amount of character-faithful social-media fallout from a rumor that genuinely propagated through an agent network. This is NOT an omniscient narrator. Every speaker may use only the rumor knowledge, source provenance, relationship and confidence explicitly supplied. Keep output compact JSON.`,
+    `You generate a tiny amount of character-faithful social-media fallout from a rumor that genuinely propagated through an agent network. This is NOT an omniscient narrator. Every speaker may use only the rumor knowledge, source provenance, relationship and confidence explicitly supplied. This is an 18+ world: correctly understand adult slang, thirst jokes, sexual innuendo, double entendres and suggestive wordplay already present in the supplied rumor/post instead of sanitizing them into a literal innocent reading. For known adults, reactions may acknowledge that subtext in a non-graphic character-specific way. Never sexualize a minor/unknown-age person and never invent an actual sexual event that the source did not establish. Keep output compact JSON.`,
     `${actorContext}
 
 RUMOR / BACKCHANNEL FACT:
@@ -32797,7 +32889,10 @@ function applyGossipNetworkEcho(w, payload, out) {
       (out && Array.isArray(out.comments) ? out.comments : []).slice(0, 3).forEach((row) => {
         const who = aiVoice(w, row && row.id);
         if (!who || !allowed.has(who) || !row.text || rumor.echoedBy[who]) return;
-        const body = cleanGeneratedComment(w, who, row.text, 240);
+        if (!isHuman(w, who) && who === post.authorId) return;
+        let body = cleanGeneratedComment(w, who, row.text, 240);
+        if (!body) return;
+        body = sanitizeGeneratedDirectAddress(w, who, post.authorId, body);
         if (!body) return;
         const made = {
           id: uid(),
@@ -35145,7 +35240,9 @@ function applyGossipReactions(n,postId,cast,out){
 
   (out&&Array.isArray(out.comments)?out.comments:[]).slice(0,5).forEach((item)=>{
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
-    const body=cleanGeneratedUtterance(n,who,item.text,280);if(!body)return;
+    if(!isHuman(n,who)&&who===post.authorId)return;
+    let body=cleanGeneratedComment(n,who,item.text,280);if(!body)return;
+    body=sanitizeGeneratedDirectAddress(n,who,post.authorId,body);if(!body)return;
     const made={id:uid(),authorId:who,text:body,ts:now(),parent:null,language:worldLanguage(n,n.meId)};
     post.comments=safePostComments(post);post.comments.push(made);visibleActors.add(who);noteComment(n,post,made);
     recordSocialEvent(n,{type:"comment",refId:made.id,ts:made.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:32,drama:24,romance:0,embarrassment:0,source:"gossip-reaction",text:made.text,tags:["social","gossip-reaction","comment"],meta:{postId:post.id,commentId:made.id,storyId:post.gossipStory.id||""}});
@@ -39977,14 +40074,18 @@ function applySocialWave(
           return;
         }
 
-        const body =
-          cleanGeneratedUtterance(
+        if (!isHuman(n, who) && who === post.authorId) return;
+
+        let body =
+          cleanGeneratedComment(
             n,
             who,
             comment.text,
             240
           );
 
+        if (!body) return;
+        body = sanitizeGeneratedDirectAddress(n, who, post.authorId, body);
         if (!body) return;
 
         const made = {
