@@ -13679,7 +13679,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v54-live-world-hard-lanes";
+const BUILD_VERSION = "v55-popup-event-lock";
 
 const AUTO = "masvilag:auto";
 /*
@@ -27379,9 +27379,8 @@ Formátum:
   );
 }
 
-function Scenes({ w, update, setErr, jump, onSignal }) {
+function Scenes({ w, update, setErr, jump, onSignal, openId, setOpenId }) {
   const { tt } = useLang();
-  const [openId, setOpenId] = useState(null);
   const [creating, setCreating] = useState(false);
   const scenes = w.scenes || [];
   const scene = openId ? scenes.find((s) => s.id === openId) : null;
@@ -32254,6 +32253,21 @@ function ensureSocialSimulationState(w) {
     if (!Number.isFinite(Number(event.gossipPotential))) event.gossipPotential = event.visibility === "public" ? 55 : 30;
     if (typeof event.location !== "string") event.location = "";
     if (typeof event.eventKind !== "string") event.eventKind = "social";
+
+    /* v55 repair: an old malformed unresolved row must never become an invisible
+       permanent mutex that prevents every later popup. */
+    if (!event.resolved) {
+      const titleOk = Boolean(String(event.title || "").trim());
+      const textOk = Boolean(String(event.text || "").trim());
+      const choiceCount = Array.isArray(event.choices)
+        ? event.choices.filter((choice) => choice && String(choice.label || "").trim()).length
+        : 0;
+      if (!titleOk || !textOk || choiceCount < 2) {
+        event.resolved = true;
+        event.invalidatedAt = now();
+        event.invalidReason = "malformed-popup-v55";
+      }
+    }
   });
 
   /*
@@ -35426,6 +35440,49 @@ function publishRumorEvolution(w,parentPostId,raw){
   return post;
 }
 
+/* ============================================================
+   POPUP <-> ACTIVE EVENT UI LOCK
+
+   The currently OPEN Event is UI/session state, not world canon. Keep it
+   ephemeral so a refresh can never leave popup generation permanently locked.
+   ============================================================ */
+let LIVE_UI_ACTIVE_SCENE_ID = "";
+let POPUP_UI_RESUME_NOT_BEFORE = 0;
+
+function setLiveUiActiveSceneId(value) {
+  const next = String(value || "");
+  const prev = LIVE_UI_ACTIVE_SCENE_ID;
+  LIVE_UI_ACTIVE_SCENE_ID = next;
+
+  /* Leaving an Event should not cause a popup to slam onto the screen on the
+     exact same render. Give the player a small return-to-world grace period. */
+  if (prev && !next) {
+    POPUP_UI_RESUME_NOT_BEFORE = now() + 12000;
+  }
+}
+
+function playerInsideActiveEvent(w) {
+  if (!w) return false;
+  const activeId = String(w.activeSceneId || LIVE_UI_ACTIVE_SCENE_ID || "");
+  if (!activeId) return false;
+  const scene = (w.scenes || []).find((row) => row && row.id === activeId);
+  return Boolean(scene && scene.open !== false);
+}
+
+function popupUiResumeReady() {
+  return now() >= Number(POPUP_UI_RESUME_NOT_BEFORE || 0);
+}
+
+function popupEventRowIsUsable(event) {
+  if (!event || typeof event !== "object" || event.resolved) return false;
+  const title = String(event.title || "").trim();
+  const text = String(event.text || "").trim();
+  const choices = Array.isArray(event.choices)
+    ? event.choices.filter((choice) => choice && String(choice.label || "").trim())
+    : [];
+  return Boolean(title && text && choices.length >= 2);
+}
+
 function popupIsTemporarilySnoozed(event, at = now()) {
   if (!event || event.resolved) return false;
   const snoozedAt = Number(event.snoozedAt) || 0;
@@ -35433,27 +35490,30 @@ function popupIsTemporarilySnoozed(event, at = now()) {
 }
 
 function pendingPopupEvent(w) {
-  return (w.popupEvents || []).find((event) => event && !event.resolved) || null;
+  return (w.popupEvents || []).find((event) => popupEventRowIsUsable(event)) || null;
 }
 
 function currentPopupEvent(w) {
+  /* Never cover an active Event/Roleplay with an unrelated popup. This also
+     hides a popup that happened to finish generating during the transition. */
+  if (playerInsideActiveEvent(w) || !popupUiResumeReady()) return null;
+
   const at = now();
   return (
     (w.popupEvents || []).find(
       (event) =>
-        event &&
-        !event.resolved &&
+        popupEventRowIsUsable(event) &&
         !popupIsTemporarilySnoozed(event, at)
     ) || null
   );
 }
 
 function popupGenerationBlocked(w) {
-  /*
-   * A "Later" gomb többé nem fagyasztja le az egész popup-rendszert két
-   * órára. Csak az adott popupot rejti el; egy másik váratlan helyzet
-   * később továbbra is megjelenhet.
-   */
+  /* Active Event is a HARD lock, not just a modal visibility rule. No popup AI
+     request should be scheduled or committed while the player is in an Event. */
+  if (playerInsideActiveEvent(w) || !popupUiResumeReady()) return true;
+
+  /* "Later" hides only that popup; another future situation may still happen. */
   return Boolean(currentPopupEvent(w));
 }
 
@@ -42876,6 +42936,11 @@ async function runSimulationAction(view, update, action, addImage) {
     if (!seed || popupGenerationBlocked(view)) return null;
 
     let out = await genPopupEvent(view, seed);
+
+    /* The player may have opened an Event while the provider was generating.
+       Re-check the LIVE UI lock before validating/committing the popup. */
+    if (playerInsideActiveEvent(view) || !popupUiResumeReady()) return null;
+
     /* A popup lane must be observable. If the provider skips or returns malformed
        JSON, use a small canon-safe fallback rather than silently losing the turn. */
     if (!out || out.skip === true) out = fallbackPopupEventResponse(view, seed);
@@ -42890,11 +42955,14 @@ async function runSimulationAction(view, update, action, addImage) {
     }
     if (!probeEvent) return null;
 
+    /* We already re-checked the live Event lock immediately after generation.
+       Commit the validated popup deterministically now. If the player opens an
+       Event in the tiny interval after this check, currentPopupEvent() hides the
+       row until the Event is over instead of falsely marking a non-commit as a
+       successful popup. */
     update((n) => {
-      if (!popupGenerationBlocked(n)) {
-        addPopupEvent(n, seed, out);
-        ensureSimState(n).popupAttemptAt = now();
-      }
+      addPopupEvent(n, seed, out);
+      ensureSimState(n).popupAttemptAt = now();
     });
     return "popup-event";
   }
@@ -44407,6 +44475,7 @@ export default function App() {
   const [tab, setTab] = useState("feed");
   const [bootReady, setBootReady] = useState(false);
   const [chatId, setChatId] = useState(null);
+  const [sceneId, setSceneId] = useState(null);
   const [err, setErr] = useState("");
   const [media, setMedia] = useState({});
   const wRef = useRef(null);
@@ -46639,6 +46708,12 @@ const signOut = useCallback(async () => {
   ]);
 
   useEffect(() => {
+    /* Scenes used to own openId locally, so leaving the Scene tab implicitly
+       closed the UI scene. Preserve that behavior after lifting the state. */
+    if (tab !== "scene" && sceneId) setSceneId(null);
+  }, [tab, sceneId]);
+
+  useEffect(() => {
     if (!world || !meId) return;
     setWorld((prev) => {
       if (!prev || !prev.userSettings || !prev.userSettings[meId]) return prev;
@@ -47100,6 +47175,17 @@ const signOut = useCallback(async () => {
   const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
 
+  /* A popup queued just before entering an Event must not fire on top of it. */
+  if (
+    !manualQueued &&
+    queued &&
+    queued.type === "popup-event" &&
+    playerInsideActiveEvent(view2)
+  ) {
+    update((n) => simDropQueued(n, queued.id));
+    return;
+  }
+
   // A kézzel kért művelet mindig fusson le.
   // A háttér-automatizmust továbbra is visszafoghatja cooldown,
   // nyitott szerkesztő vagy háttérbe tett böngészőfül.
@@ -47299,6 +47385,8 @@ const signOut = useCallback(async () => {
 
   const me = (world.players && world.players[meId]) || blankPlayer(meId, "Névtelen", "jatekos");
   const view = { ...world, meId, player: me };
+  view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
+  setLiveUiActiveSceneId(view.activeSceneId);
   viewRef.current = view;
   const activePopup = currentPopupEvent(view);
 
@@ -47369,8 +47457,8 @@ const signOut = useCallback(async () => {
             onSignal={signalSimulation} />}
           {tab === "cast" && <Cast w={view} update={update} setErr={setErr} jump={jump} goChat={(id) => { setChatId(id); setTab("chat"); }} />}
           {tab === "bonds" && <Bonds w={view} update={update} setErr={setErr} />}
-          {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} />}
-          {tab === "chat" && <Chat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={(sceneId) => { setJump({ type: "scene", id: sceneId, at: now() }); setTab("scene"); }} />}
+          {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />}
+          {tab === "chat" && <Chat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={(nextSceneId) => { setSceneId(nextSceneId); setJump({ type: "scene", id: nextSceneId, at: now() }); setTab("scene"); }} />}
           {tab === "world" && <World
   w={view}
   update={update}
