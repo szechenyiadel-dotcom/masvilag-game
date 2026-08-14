@@ -13683,7 +13683,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v59-realism-cadence-cancel";
+const BUILD_VERSION = "v60-account-world-delete";
 
 const AUTO = "masvilag:auto";
 /*
@@ -13760,9 +13760,37 @@ async function forgetRoom(code) {
   return saveRooms(list.filter((r) => r && r.code !== code));
 }
 async function destroyWorld(code) {
-  await dropBig(KEY(code));
-  await dropMedia(code);
-  await removeFromIndex(code);
+  const c = String(code || "").trim().toLowerCase();
+  if (!c) return true;
+
+  /*
+   * FULL LOCAL PURGE. Account/world deletion must not leave behind an
+   * emergency backup or save-history snapshot that can make an already
+   * deleted world appear to exist while offline.
+   */
+  for (const shared of [false, true]) {
+    try {
+      const history = await loadSaveIndex(c, shared);
+      for (const entry of history || []) {
+        if (entry && entry.id) {
+          await dropBigScoped(SNAP_DATA_KEY(c, shared, entry.id), shared);
+        }
+      }
+      await store.del(SNAP_META_KEY(c, shared), shared);
+    } catch (e) {}
+
+    try {
+      await dropBigScoped(KEY(c), shared);
+    } catch (e) {}
+
+    try {
+      await dropBigScoped(MKEY(c), shared);
+    } catch (e) {}
+  }
+
+  try { await removeFromIndex(c); } catch (e) {}
+  try { await forgetRoom(c); } catch (e) {}
+
   return true;
 }
 
@@ -31248,24 +31276,24 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
       </p>
 
       <div className="card" style={{ borderColor: "var(--oxblood)" }}>
-        <label className="f" style={{ marginTop: 0, color: "var(--oxblood)" }}>{tt("Saját fiók törlése", "Delete my account")}</label>
+        <label className="f" style={{ marginTop: 0, color: "var(--oxblood)" }}>{tt("Fiók és világ törlése", "Delete account & world")}</label>
         {delAcc ? (
           <>
             <p className="hint">
-              {tt("Ez véglegesen törli a fiókodat és a karakteredet ebből a világból: a posztjaid, kommentjeid, üzeneteid és a kapcsolataid megmaradnak a többieknél, de te magad kijelentkezel, és ezzel a névvel többé nem léphetsz vissza. Csak a saját fiókodat érinti, másokét nem.",
-                  "This permanently deletes your account and character from this world: your posts, comments, messages and bonds remain for others, but you'll be signed out, and you can no longer log back in under this name. It only affects your own account, not anyone else's.")}
+              {tt("Ez véglegesen törli a fiókodat ÉS ezt a teljes világot a szerverről, a világkóddal, mentésekkel, médiával és emlékadatokkal együtt. A világkód ezután újra használható lesz. A törlés nem vonható vissza.",
+                  "This permanently deletes your account AND this entire world from the server, including its world code and saved world data. The code becomes available again. This cannot be undone.")}
             </p>
             <div className="row" style={{ gap: 8, marginTop: 10 }}>
               <button className="btn full tiny" style={{ background: "var(--oxblood)", borderColor: "var(--oxblood)" }}
-                onClick={onDeleteAccount}>{tt("Igen, töröld a fiókom", "Yes, delete my account")}</button>
+                onClick={onDeleteAccount}>{tt("Igen, töröld a fiókom és a világot", "Yes, delete my account and world")}</button>
               <button className="btn full tiny ghost" onClick={() => setDelAcc(false)}>{tt("Mégse", "Cancel")}</button>
             </div>
           </>
         ) : (
           <>
-            <p className="hint">{tt("Csak a saját fiókodat törölheted ebben a világban — mások fiókjához nincs hozzáférésed.", "You can only delete your own account in this world — you have no access to anyone else's.")}</p>
+            <p className="hint">{tt("Ez végleg törli a saját fiókodat és ezt a teljes világot. A világkód újra szabaddá válik.", "This permanently deletes your account and this entire world. The world code becomes available again.")}</p>
             <button className="btn full" style={{ marginTop: 10 }} onClick={() => setDelAcc(true)}>
-              <Trash2 size={14} /> {tt("Fiók törlése", "Delete account")}
+              <Trash2 size={14} /> {tt("Fiók és világ törlése", "Delete account & world")}
             </button>
           </>
         )}
@@ -45924,110 +45952,47 @@ useEffect(() => {
 
   if (!current || !id) return;
 
-  /*
-    Leállítjuk a függőben lévő autosave-et.
-    Account törlés közben semmi ne tudjon visszamenteni
-    egy régebbi állapotot.
-  */
-  if (timer.current) {
-    clearTimeout(timer.current);
-  }
-
-  if (mediaTimer.current) {
-    clearTimeout(mediaTimer.current);
-  }
+  /* Stop every delayed save before destructive deletion. */
+  if (timer.current) clearTimeout(timer.current);
+  if (mediaTimer.current) clearTimeout(mediaTimer.current);
 
   try {
     setSaveState("saving");
     setErr("");
 
     /*
-      1. A VALÓDI törlés a szerveren történik.
-      Ez törli az accountot PostgreSQL-ből és az összes
-      hozzá tartozó szerveres sessiont.
-    */
-    await serverDeleteAccount();
+     * v60 SINGLE-PLAYER DELETE CONTRACT:
+     * /account/delete deletes the CURRENT WORLD itself on PostgreSQL, not
+     * merely the player object inside it. That frees the world code too.
+     */
+    const deleted = await serverDeleteAccount();
+
+    if (
+      !deleted ||
+      !(deleted.worldDeleted || deleted.alreadyDeleted || deleted.deleted)
+    ) {
+      throw new Error(
+        tt(
+          "A szerver nem erősítette meg a világ törlését.",
+          "The server did not confirm world deletion."
+        )
+      );
+    }
 
     /*
-      2. A helyi példányból is kivesszük az accountot,
-      hogy az IndexedDB backup se tartalmazzon egy
-      "feltámasztható" régi felhasználót.
-    */
-    const next = JSON.parse(
-      JSON.stringify(current)
-    );
-
-    if (!next.deleted) {
-      next.deleted = {};
-    }
-
-    next.deleted[id] = now();
-
-    if (next.accounts) {
-      delete next.accounts[id];
-    }
-
-    if (next.players) {
-      delete next.players[id];
-    }
-
-    if (next.userSettings) {
-      delete next.userSettings[id];
-    }
-
-    if (next.notify) {
-      delete next.notify[id];
-    }
-
-    if (next.mems) {
-      delete next.mems[id];
-    }
-
-    if (next.charMemory) {
-      delete next.charMemory[id];
-    }
-
-    if (next.owner === id) {
-      next.owner =
-        Object.keys(next.accounts || {})[0] || "";
-    }
-
-    next.rev = Number(next.rev || 0) + 1;
-
-    /*
-      Ezt CSAK helyi backupként mentjük.
-      A szerveres törlést már az /account/delete
-      biztonságosan elvégezte.
-    */
+     * Never save a post-delete world snapshot. Old code did exactly that,
+     * which made an offline cache resurrect the deleted world.
+     */
     try {
-      await saveWorldMerged(next);
+      await destroyWorld(current.code);
     } catch (e) {}
 
-    /*
-      3. Régi helyi automatikus login törlése.
-    */
     if (hasStore) {
       try {
-        await window.storage.delete(
-          SESSION,
-          false
-        );
+        await window.storage.delete(SESSION, false);
       } catch (e) {}
     }
 
-    /*
-      A login képernyő se emlékezzen erre
-      az account/world kombinációra.
-    */
-    try {
-      await forgetRoom(current.code);
-    } catch (e) {}
-
-    /*
-      4. Kliens teljes kijelentkeztetése.
-      FONTOS: nem hívjuk a signOut()-ot,
-      mert az mentést próbálna végezni.
-    */
     wRef.current = null;
     mediaRef.current = {};
 
@@ -46047,8 +46012,8 @@ useEffect(() => {
     setErr(
       (e && e.message) ||
         tt(
-          "A fiók törlése nem sikerült.",
-          "Account deletion failed."
+          "A fiók és a világ törlése nem sikerült.",
+          "Account and world deletion failed."
         )
     );
   }
