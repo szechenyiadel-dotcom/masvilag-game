@@ -1552,13 +1552,43 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 
 
 /* Amíg bármilyen szerkesztő ablak nyitva van, a háttérben futó mentés nem
-   cseréli le az állapotot — így nem ugrik el, amin épp dolgozol. */
-const EditLock = { n: 0 };
+   cseréli le az állapotot — így nem ugrik el, amin épp dolgozol.
+   v69: ugyanez a lock a popup UI-t is blokkolja, így karakter készítés/szerkesztés
+   közben nem tud egy háttéresemény ráugrani az űrlapra. */
+const EditLock = { n: 0, listeners: new Set() };
+
+function emitEditLock() {
+  EditLock.listeners.forEach((listener) => {
+    try {
+      listener(EditLock.n);
+    } catch (e) {
+      /* Egy UI listener hibája ne törje el magát a lockot. */
+    }
+  });
+}
+
 function useEditLock() {
   useEffect(() => {
     EditLock.n++;
-    return () => { EditLock.n = Math.max(0, EditLock.n - 1); };
+    emitEditLock();
+    return () => {
+      EditLock.n = Math.max(0, EditLock.n - 1);
+      emitEditLock();
+    };
   }, []);
+}
+
+function useEditLockState() {
+  const [locked, setLocked] = useState(EditLock.n > 0);
+
+  useEffect(() => {
+    const listener = (count) => setLocked(Number(count) > 0);
+    EditLock.listeners.add(listener);
+    listener(EditLock.n);
+    return () => EditLock.listeners.delete(listener);
+  }, []);
+
+  return locked;
 }
 
 /* ---------- segédek ---------- */
@@ -14334,7 +14364,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v63-connections-priority";
+const BUILD_VERSION = "v69-character-editor-popup-lock";
 
 const AUTO = "masvilag:auto";
 /*
@@ -37231,9 +37261,10 @@ function pendingPopupEvent(w) {
 }
 
 function currentPopupEvent(w) {
-  /* Never cover an active Event/Roleplay with an unrelated popup. This also
-     hides a popup that happened to finish generating during the transition. */
-  if (playerInsideActiveEvent(w) || !popupUiResumeReady()) return null;
+  /* Never cover an active Event/Roleplay OR an editor with an unrelated popup.
+     CharForm uses EditLock for both new-character creation and editing, so a
+     pending popup stays hidden until the form is closed. */
+  if (EditLock.n > 0 || playerInsideActiveEvent(w) || !popupUiResumeReady()) return null;
 
   const at = now();
   return (
@@ -37246,9 +37277,10 @@ function currentPopupEvent(w) {
 }
 
 function popupGenerationBlocked(w) {
-  /* Active Event is a HARD lock, not just a modal visibility rule. No popup AI
-     request should be scheduled or committed while the player is in an Event. */
-  if (playerInsideActiveEvent(w) || !popupUiResumeReady()) return true;
+  /* Active Event + editor are HARD locks, not just modal visibility rules.
+     No popup AI request should be scheduled or committed while the player is
+     editing/creating a character (or another EditLock-protected form). */
+  if (EditLock.n > 0 || playerInsideActiveEvent(w) || !popupUiResumeReady()) return true;
 
   /* "Later" hides only that popup; another future situation may still happen. */
   return Boolean(currentPopupEvent(w));
@@ -45212,9 +45244,9 @@ async function runSimulationAction(view, update, action, addImage) {
 
     let out = await genPopupEvent(view, seed);
 
-    /* The player may have opened an Event while the provider was generating.
-       Re-check the LIVE UI lock before validating/committing the popup. */
-    if (playerInsideActiveEvent(view) || !popupUiResumeReady()) return null;
+    /* The player may have opened an Event OR an editor while the provider was
+       generating. Re-check the LIVE UI lock before validating/committing. */
+    if (EditLock.n > 0 || playerInsideActiveEvent(view) || !popupUiResumeReady()) return null;
 
     /* A popup lane must be observable. If the provider skips or returns malformed
        JSON, use a small canon-safe fallback rather than silently losing the turn. */
@@ -46894,6 +46926,9 @@ export default function App() {
   const [saveState, setSaveState] = useState("saved");
   const [saveAt, setSaveAt] = useState(0);
   const lastSavedMedia = useRef("");
+  /* Reactive mirror of the global editor lock so an already-visible popup is
+     removed immediately when CharForm opens, not only on the next world tick. */
+  const editLocked = useEditLockState();
 
   /* Authoritative multi-device sync state. */
   const mediaSyncRev = useRef(0);
@@ -49736,7 +49771,7 @@ const signOut = useCallback(async () => {
   view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
   setLiveUiActiveSceneId(view.activeSceneId);
   viewRef.current = view;
-  const activePopup = currentPopupEvent(view);
+  const activePopup = editLocked ? null : currentPopupEvent(view);
 
   const TABS = [["feed", tt("Feed", "Feed"), Home], ["cast", tt("Karakterek", "Characters"), Users], ["bonds", tt("Kapcsolat", "Bonds"), Network],
     ["scene", tt("Jelenet", "Scene"), Film], ["chat", tt("Üzenetek", "Messages"), MessageCircle], ["world", tt("Világ", "World"), Globe2]];
