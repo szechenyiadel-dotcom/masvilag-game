@@ -15911,23 +15911,38 @@ function ensureFollowerSystem(w) {
         return;
       }
 
-      if (
-        !actor.following.includes(
+      /*
+       * v64 FOLLOW NOTIFICATION FIX:
+       * Never create a brand-new AI follow by silently mutating the two arrays.
+       * Silent creation was the reason a character could later "unfollow" the
+       * player even though the player had never received the original follow
+       * notification. Queue the real social action instead; the actual state
+       * transition will go through setFollowState(), which records the event and
+       * notifies the human target exactly once.
+       */
+      const alreadyFollowing =
+        actor.following.includes(
           target.id
-        )
-      ) {
-        actor.following.push(
-          target.id
+        ) &&
+        target.followers.includes(
+          actor.id
         );
-      }
 
-      if (
-        !target.followers.includes(
-          actor.id
-        )
-      ) {
-        target.followers.push(
-          actor.id
+      if (!alreadyFollowing) {
+        simEnqueue(
+          w,
+          mkAction(
+            "follow",
+            `relationship-auto-follow:${actor.id}:${target.id}:${Math.floor(
+              now() / 3600000
+            )}`,
+            {
+              actorId: actor.id,
+              targetId: target.id,
+              trigger: "relationship",
+            },
+            "event"
+          )
         );
       }
     });
@@ -17530,6 +17545,39 @@ function pickAutonomousFollowAction(w) {
   return null;
 }
 
+function hasRecordedFollowEvent(
+  w,
+  followerId,
+  targetId
+) {
+  const follower = String(followerId || "");
+  const target = String(targetId || "");
+
+  if (!follower || !target) {
+    return false;
+  }
+
+  return (
+    Array.isArray(w && w.socialEvents)
+      ? w.socialEvents
+      : []
+  ).some((event) => {
+    if (
+      !event ||
+      event.type !== "follow" ||
+      String(event.actorId || "") !== follower
+    ) {
+      return false;
+    }
+
+    const targets = Array.isArray(event.targetIds)
+      ? event.targetIds.map(String)
+      : [];
+
+    return targets.includes(target);
+  });
+}
+
 function setFollowState(
   w,
   followerId,
@@ -17577,6 +17625,19 @@ function setFollowState(
   ) {
     return false;
   }
+
+  /*
+   * A legacy build could create follow state silently, without a matching
+   * public follow event. If such a stale/legacy edge is later removed, that is
+   * cleanup — not a user-visible "X unfollowed you" event.
+   */
+  const hadRecordedFollow =
+    !shouldFollow &&
+    hasRecordedFollowEvent(
+      w,
+      follower.id,
+      target.id
+    );
 
   /*
    * AI-karaktert semmilyen háttérút ne tudjon
@@ -17633,13 +17694,14 @@ function setFollowState(
   ];
 
   /*
-   * Egy follow / unfollow önmagában kis esemény,
-   * de később trendként vagy kapcsolatmintaként
-   * össze lehet vonni több hasonló eseménnyel.
+   * Egy follow / unfollow önmagában kis esemény. Legacy, korábban csendben
+   * létrehozott follow él törlése viszont csak state-cleanup: abból ne legyen
+   * hamis unfollow esemény vagy értesítés.
    */
-  recordSocialEvent(
-    w,
-    {
+  if (shouldFollow || hadRecordedFollow) {
+    recordSocialEvent(
+      w,
+      {
       type:
         shouldFollow
           ? "follow"
@@ -17687,22 +17749,27 @@ function setFollowState(
           : "unfollow",
       ],
 
-      meta: {
-        followerId:
-          follower.id,
+        meta: {
+          followerId:
+            follower.id,
 
-        targetId:
-          target.id,
-      },
-    }
-  );
+          targetId:
+            target.id,
+        },
+      }
+    );
+  }
 
   /*
    * AI -> játékos follow/unfollow legyen látható social esemény.
+   * Follow mindig értesít. Unfollow csak akkor, ha ehhez a párhoz ténylegesen
+   * volt korábban rögzített follow esemény; így a régi silent-follow bug nem
+   * tud többé fantom kikövetés-értesítést gyártani.
    */
   if (
     !isHuman(w, follower.id) &&
-    isHuman(w, target.id)
+    isHuman(w, target.id) &&
+    (shouldFollow || hadRecordedFollow)
   ) {
     pushNote(
       w,
