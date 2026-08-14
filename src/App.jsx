@@ -7440,7 +7440,7 @@ function commentPersonalityText(c) {
 
 
 /* -------------------------------------------------------------------------
-   VISUAL SOCIAL REACTIONS — v61
+   VISUAL SOCIAL REACTIONS — v61 + FRIENDSHIP TONE GUARD v62
 
    A photo is not treated like a text post with an optional attachment.
    Relationship + visible image content decide who pays attention and how.
@@ -7919,24 +7919,156 @@ function socialCommentLooksWarmPraise(value) {
   );
 }
 
-function socialCommentLooksDirectlyHostile(value) {
+/* -------------------------------------------------------------------------
+   FRIENDSHIP TONE GUARD — v62
+
+   Positive relationships are a hard behavioral baseline, not a suggestion.
+   A rude/sarcastic/dominant personality may change HOW warmth looks, but it
+   does not create random contempt toward a friend. Friend-on-friend hostility
+   needs a concrete current cause; mild affectionate teasing remains possible.
+   ------------------------------------------------------------------------- */
+const SOCIAL_SEVERE_HOSTILITY_RE =
+  /\b(?:shut\s+up|stfu|fuck\s+off|fuck\s+you|go\s+fuck\s+yourself|hate\s+you|i\s+hate\s+you|loser|pathetic|worthless|trash|disgusting|bitch|asshole|piece\s+of\s+shit|go\s+away|get\s+lost|nobody\s+wants\s+you|kuss|kussolj|fogd\s+be|rohadj|t[uű]nj\s+el|kopj\s+le|ut[aá]llak|sz[aá]nalmas|undor[ií]t[oó]|senki\s+nem\s+k[eé]r\s+bel[oő]led|d[oö]g[oö]lj)\b/i;
+
+const SOCIAL_MEAN_HOSTILITY_RE =
+  /\b(?:idiot|moron|stupid|dumb|annoying|insufferable|embarrassing|cringe|desperate|delusional|clown|attention\s+seeker|pick\s*me|nobody\s+asked|who\s+asked|who\s+cares|whatever|don['’]?t\s+care|do\s+not\s+care|not\s+my\s+problem|cool\s+story|couldn['’]?t\s+care\s+less|cry\s+about\s+it|cope|get\s+over\s+yourself|you['’]?re\s+so\s+full\s+of\s+yourself|h[uü]lye|idi[oó]ta|b[eé]na|ciki|g[aá]z|ideges[ií]t[oő]|nevets[eé]ges|k[eé]ts[eé]gbeesett|delulu|figyelemhajh[aá]sz|ki\s+k[eé]rdezett|kit\s+[eé]rdekel|senkit\s+nem\s+[eé]rdekel|nem\s+[eé]rdekel|leszarom|nem\s+az\s+[eé]n\s+bajom|oldd?\s+meg|sz[aá]llj\s+le\s+magadr[oó]l)\b/i;
+
+const FRIENDSHIP_HARD_CONFLICT_RE =
+  /\b(?:betray(?:ed|al)?|cheat(?:ed|ing)?|lied\s+to|stole\s+from|hit\s+me|hit\s+him|hit\s+her|threaten(?:ed|ing)?|humiliat(?:ed|ing)|blackmail(?:ed|ing)?|broke\s+(?:my|the)\s+promise|serious\s+fight|physical\s+fight|publicly\s+mocked|public\s+humiliation|árul(?:ás|t|ó)|megcsal(?:t|ás)|hazudott\s+nekem|ellop(?:ta|ott)|megüt(?:ött|öttél)|megvert|fenyeget(?:ett|és)|megaláz(?:ott|ás)|zsarol(?:t|ás)|megszegte\s+az\s+[ií]g[eé]ret|komoly\s+veszeked[eé]s|vereked[eé]s)\b/i;
+
+const FRIENDSHIP_SOFT_CONFLICT_RE =
+  /\b(?:argument|arguing|fight|fighting|mad\s+at|angry\s+at|upset\s+with|jealous|territorial|rivalry|resent|grudge|confront|called\s+me\s+out|insulted\s+me|rejected\s+me|blocked\s+me|veszeked|összevesz|haragsz|dühös|féltéken|rivaliz|neheztel|konfront|beszólt\s+nekem|megsértett|visszautas[ií]tott|letiltott)\b/i;
+
+const FRIENDSHIP_TEASING_CANON_RE =
+  /\b(?:sarcastic|teasing|banter|roast(?:s|ing)?|playful\s+mock|love[- ]hate|friendly\s+rival|szarkaszt|ugrat|csipkel[oő]d|heccel|bar[aá]ti\s+rival|szeretetb[oő]l\s+szivat)\b/i;
+
+function socialTextHostilityLevel(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
-  if (!text) return false;
-  return /\b(?:shut\s+up|stfu|fuck\s+off|fuck\s+you|hate\s+you|idiot|moron|loser|pathetic|trash|bitch|asshole|disgusting|go\s+away|get\s+lost|kuss|kussolj|fogd\s+be|h[uü]lye|idi[oó]ta|sz[aá]nalmas|rohadj)\b/i.test(text);
+  if (!text) return 0;
+  if (SOCIAL_SEVERE_HOSTILITY_RE.test(text)) return 2;
+  if (SOCIAL_MEAN_HOSTILITY_RE.test(text)) return 1;
+  return 0;
+}
+
+function socialCommentLooksDirectlyHostile(value) {
+  return socialTextHostilityLevel(value) >= 1;
 }
 
 function socialCommentLooksPlayful(value) {
   const text = String(value || "");
-  return /(?:😭|😂|🤣|💀|🙄|🤡|lmao|lol|jk|pls|pleaseee|girl|babe|bestie)/i.test(text);
+  return /(?:😭|😂|🤣|💀|lmao|lol|jk|joking|kidding|bestie|babe|bro|dude|girlll|pls|pleaseee|csak\s+viccelek|nyugi|tes[oó]|bestie)/i.test(text);
 }
 
-function socialCommentContradictsRelationship(w, actorId, targetId, text) {
+function friendshipConflictEvidenceLevel(
+  w,
+  actorId,
+  targetId,
+  contextText = ""
+) {
+  if (!w || !actorId || !targetId || actorId === targetId) return 0;
+
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  const rel = getRel(w, actorId, targetId) || {};
+  const continuity = compactRelationshipContinuity(w, actorId, targetId);
+  const story = actor && target ? ownStorySnippetAbout(actor, target) : "";
+
+  const evidence = [
+    contextText,
+    continuity && continuity.unresolved ? continuity.unresolved.join(" | ") : "",
+    continuity && continuity.currentFeeling,
+    continuity && continuity.currentIntent,
+    continuity && continuity.lastTone,
+    String(rel.reason || rel.why || ""),
+    story,
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  if (FRIENDSHIP_HARD_CONFLICT_RE.test(evidence)) return 2;
+  if (FRIENDSHIP_SOFT_CONFLICT_RE.test(evidence)) return 1;
+  return 0;
+}
+
+function friendshipHasTeasingDynamic(w, actorId, targetId) {
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target) return false;
+
+  return FRIENDSHIP_TEASING_CANON_RE.test(
+    `${commentPersonalityText(actor)} ${ownStorySnippetAbout(actor, target) || ""}`
+  );
+}
+
+function relationshipDeclaresFriendship(rel) {
+  const bond = String(
+    rel && (rel.bond || rel.type) || ""
+  ).toLowerCase();
+  return /\b(?:best\s+friend|close\s+friend|friend|bestie|ride\s*or\s*die|legjobb\s+bar[aá]t|k[oö]zeli\s+bar[aá]t|bar[aá]t)\b/i.test(bond);
+}
+
+function friendshipHostilityMismatch(
+  w,
+  actorId,
+  targetId,
+  text,
+  contextText = ""
+) {
   if (!w || !actorId || !targetId || actorId === targetId) return false;
-  const tier = relationshipFilterTier(getRel(w, actorId, targetId));
-  if ((tier === "negative" || tier === "hostile") && socialCommentLooksWarmPraise(text)) {
+
+  const rel = getRel(w, actorId, targetId) || {};
+  const tier = relationshipFilterTier(rel);
+  const declaredFriend = relationshipDeclaresFriendship(rel);
+  if (tier !== "good" && tier !== "close" && !declaredFriend) return false;
+
+  const hostility = socialTextHostilityLevel(text);
+  if (!hostility) return false;
+
+  const conflict = friendshipConflictEvidenceLevel(
+    w,
+    actorId,
+    targetId,
+    contextText
+  );
+
+  /* Serious contempt toward a friend needs a serious current cause. */
+  if (hostility >= 2) {
+    return conflict < 2;
+  }
+
+  /* Mild edge is okay when a real tension is active. */
+  if (conflict >= 1) return false;
+
+  /* Affectionate best-friend teasing may be sharp, but only when it READS playful. */
+  if (
+    (tier === "close" || declaredFriend) &&
+    socialCommentLooksPlayful(text) &&
+    friendshipHasTeasingDynamic(w, actorId, targetId)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function socialCommentContradictsRelationship(
+  w,
+  actorId,
+  targetId,
+  text,
+  contextText = ""
+) {
+  if (!w || !actorId || !targetId || actorId === targetId) return false;
+  const rel = getRel(w, actorId, targetId) || {};
+  const tier = relationshipFilterTier(rel);
+  if (
+    (tier === "negative" || tier === "hostile") &&
+    !relationshipDeclaresFriendship(rel) &&
+    socialCommentLooksWarmPraise(text)
+  ) {
     return true;
   }
-  if ((tier === "good" || tier === "close") && socialCommentLooksDirectlyHostile(text) && !socialCommentLooksPlayful(text)) {
+  if (friendshipHostilityMismatch(w, actorId, targetId, text, contextText)) {
     return true;
   }
   return false;
@@ -7951,7 +8083,7 @@ function socialThreadAllyHostilityMismatch(w, responderId, commenterId, postAuth
     (toCommenter === "good" || toCommenter === "close") &&
     (toPoster === "negative" || toPoster === "hostile") &&
     (commenterToPoster === "negative" || commenterToPoster === "hostile") &&
-    socialCommentLooksDirectlyHostile(text)
+    friendshipHostilityMismatch(w, responderId, commenterId, text, "shared public thread")
   );
 }
 
@@ -10556,14 +10688,14 @@ function relationshipBehaviorCard(
   } else if (filterTier === "close") {
     parts.push(
       en
-        ? "VERY CLOSE FILTER: familiarity, loyalty, protectiveness, trust and easy warmth should be the default toward THIS person. Their own personality still determines the form: a sarcastic character may tease affectionately, a reserved character may show loyalty quietly, a blunt character may be direct without becoming cruel. HARD RULE: no sudden contempt, insults, cold dismissal, hostility or mean-spirited humiliation unless the CURRENT conversation/event contains a real trigger or their own canon explicitly supports that exact reaction."
-        : "NAGYON KÖZELI SZŰRŐ: ezzel az emberrel a közvetlenség, lojalitás, védelmezés, bizalom és természetes melegség legyen az alap. A saját személyisége mondja meg a formát: a szarkasztikus karakter szeretettel ugrathat, a zárkózott csendesen lehet lojális, a nyers lehet egyenes anélkül, hogy kegyetlen lenne. KEMÉNY SZABÁLY: nincs hirtelen lenézés, sértegetés, hideg lepattintás, ellenségesség vagy rosszindulatú megalázás, hacsak a JELENLEGI beszélgetés/esemény nem ad valódi kiváltó okot, vagy a saját kánonja nem indokolja pontosan ezt a reakciót."
+        ? "VERY CLOSE FILTER: familiarity, loyalty, protectiveness, trust and easy warmth should be the default toward THIS person. Their own personality still determines the form: a sarcastic character may tease affectionately, a reserved character may show loyalty quietly, a blunt character may be direct without becoming cruel. HARD RULE: no sudden contempt, insults, cold dismissal, hostility or mean-spirited humiliation unless the CURRENT conversation/event contains a real trigger or their own canon explicitly supports that exact reaction. Being rude/sarcastic/dominant/chaotic in general is NOT by itself a trigger. Friendship changes the target-specific expression of those traits."
+        : "NAGYON KÖZELI SZŰRŐ: ezzel az emberrel a közvetlenség, lojalitás, védelmezés, bizalom és természetes melegség legyen az alap. A saját személyisége mondja meg a formát: a szarkasztikus karakter szeretettel ugrathat, a zárkózott csendesen lehet lojális, a nyers lehet egyenes anélkül, hogy kegyetlen lenne. KEMÉNY SZABÁLY: nincs hirtelen lenézés, sértegetés, hideg lepattintás, ellenségesség vagy rosszindulatú megalázás, hacsak a JELENLEGI beszélgetés/esemény nem ad valódi kiváltó okot, vagy a saját kánonja nem indokolja pontosan ezt a reakciót. Az, hogy a karakter általában bunkó/szarkasztikus/domináns/kaotikus, ÖNMAGÁBAN NEM kiváltó ok: a barátság célpontspecifikusan megszelídíti ugyanennek a tulajdonságnak a megnyilvánulását."
     );
   } else if (filterTier === "good") {
     parts.push(
       en
-        ? "GOOD RELATIONSHIP FILTER: default to familiarity, receptiveness, patience, friendly interest or attraction in a form that matches the character. HARD RULE: no random rudeness, insults, cold dismissal, hostility or mean-spirited mockery without a concrete CURRENT trigger or explicit canon reason. Do not manufacture conflict merely for variety."
-        : "JÓ KAPCSOLATI SZŰRŐ: alapból legyen ismerős-közvetlenebb, nyitottabb, türelmesebb, baráti érdeklődésű vagy vonzódó — mindig a saját karakteréhez illő formában. KEMÉNY SZABÁLY: nincs random bunkóság, sértegetés, hideg lepattintás, ellenségesség vagy rosszindulatú gúny konkrét JELENLEGI kiváltó ok vagy explicit karakterkánon nélkül. Ne gyárts konfliktust pusztán a változatosság kedvéért."
+        ? "GOOD RELATIONSHIP FILTER: default to familiarity, receptiveness, patience, friendly interest or attraction in a form that matches the character. HARD RULE: no random rudeness, insults, cold dismissal, hostility or mean-spirited mockery without a concrete CURRENT trigger or explicit canon reason. A generally rude/sarcastic/dominant personality is not enough; toward a friend those traits should read as familiar, restrained or affectionate unless something actually happened. Do not manufacture conflict merely for variety."
+        : "JÓ KAPCSOLATI SZŰRŐ: alapból legyen ismerős-közvetlenebb, nyitottabb, türelmesebb, baráti érdeklődésű vagy vonzódó — mindig a saját karakteréhez illő formában. KEMÉNY SZABÁLY: nincs random bunkóság, sértegetés, hideg lepattintás, ellenségesség vagy rosszindulatú gúny konkrét JELENLEGI kiváltó ok vagy explicit karakterkánon nélkül. Az általánosan bunkó/szarkasztikus/domináns személyiség ehhez nem elég: baráttal ugyanez legyen ismerős, visszafogott vagy szeretettel ugrató, amíg tényleg nem történt valami. Ne gyárts konfliktust pusztán a változatosság kedvéért."
     );
   } else {
     parts.push(
@@ -11235,25 +11367,68 @@ function emergencyPositiveDmReply(w, botId) {
   return en ? "Thanks." : "Köszi.";
 }
 
-function sanitizeUnjustifiedColdDm(w, botId, playerText, value) {
+function emergencyFriendlyDmReply(w, botId, contextText = "") {
+  if (messageLooksLikePositiveSocialReaction(contextText)) {
+    return emergencyPositiveDmReply(w, botId);
+  }
+
+  const en = worldLanguage(w, w.meId) === "en";
+  const c = charById(w, botId);
+  if (c && characterIsFlirty(c)) return en ? "yeah?" : "igen?";
+  if (c && loreHas(c, ["sarcastic", "dry", "szarkasztikus", "száraz"])) {
+    return en ? "okay, tell me." : "oké, mondd.";
+  }
+  return en ? "okay." : "oké.";
+}
+
+function sanitizeUnjustifiedColdDm(w, botId, contextText, value) {
   let text = String(value || "").trim();
-  if (!text || !DM_COLD_DISMISSAL_RE.test(text)) return text;
+  if (!text) return text;
 
-  const positive = messageLooksLikePositiveSocialReaction(playerText);
-  if (!positive || messageLooksLikeCurrentHostility(playerText)) return text;
+  const directCold = DM_COLD_DISMISSAL_RE.test(text);
+  const friendshipMismatch = friendshipHostilityMismatch(
+    w,
+    botId,
+    w.meId,
+    text,
+    contextText
+  );
 
+  if (!directCold && !friendshipMismatch) return text;
+
+  /* A current hostile/provoking exchange is a real cause; don't erase it. */
+  if (
+    friendshipConflictEvidenceLevel(w, botId, w.meId, contextText) >=
+    (socialTextHostilityLevel(text) >= 2 ? 2 : 1)
+  ) {
+    return text;
+  }
+
+  const positive = messageLooksLikePositiveSocialReaction(contextText);
   const rel = getRel(w, botId, w.meId);
   const tier = relationshipFilterTier(rel);
-  if (tier === "hostile" || tier === "negative") return text;
+
+  if ((tier === "hostile" || tier === "negative") && !positive) return text;
 
   const pieces = text
     .split(/(?<=[.!?])\s+|\n+/g)
     .map((part) => part.trim())
     .filter(Boolean)
-    .filter((part) => !DM_COLD_DISMISSAL_RE.test(part));
+    .filter((part) => {
+      if (DM_COLD_DISMISSAL_RE.test(part) && (positive || tier === "good" || tier === "close")) {
+        return false;
+      }
+      return !friendshipHostilityMismatch(
+        w,
+        botId,
+        w.meId,
+        part,
+        contextText
+      );
+    });
 
   const cleaned = pieces.join(" ").trim();
-  return cleaned || emergencyPositiveDmReply(w, botId);
+  return cleaned || emergencyFriendlyDmReply(w, botId, contextText);
 }
 
 function dmPresenceGuardInstruction(
@@ -11762,7 +11937,9 @@ CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - If a line could be moved unchanged to several other characters, it is not character-specific enough.
 - Do not sand down obsessive, possessive, cruel, arrogant, manipulative, chaotic, shy, jealous, dominant or emotionally closed characters into generic assistant politeness.
 - RELATIONSHIP BASELINE IS NOT RANDOM: score/bond/mood are behavioral constraints. Friends, close friends, family, partners and strongly positive relationships must not suddenly become insulting, contemptuous, cold, dismissive or hostile merely to create variety or drama.
-- A negative reaction toward someone they normally like needs a concrete current trigger, an established grievance, or an explicit trait/dynamic in that character's OWN canon. If none exists, do not invent hostility.
+- FRIENDSHIP IS A HARD TARGET-SPECIFIC BASELINE: "rude", "sarcastic", "dominant", "mocking", "chaotic" or "cold" in the personality sheet does NOT mean the character treats friends like enemies. Those traits must bend into familiar teasing, blunt honesty, dry humor, protectiveness or restraint when directed at someone they genuinely like.
+- A negative reaction toward someone they normally like needs a concrete current trigger, an established grievance, or an explicit relationship-specific dynamic in that character's OWN canon. If none exists, do not invent hostility. A bad mood by itself is not enough.
+- Jealousy/competition involving a mutual crush may add mild edge or awkwardness between friends, but it does NOT justify sudden contempt, humiliation or serious insults unless the friendship is actually in conflict now.
 - Friendly teasing may be sharp, but in a good relationship it should still read as familiar/affectionate rather than mean-spirited humiliation.
 - If a normally positive relationship genuinely produces harsh behavior, treat that as a meaningful event with a cause and relationship consequence instead of a consequence-free personality flip.
 - Dark, psychopathic, aggressive or cruel traits do not automatically mean indiscriminate cruelty toward every friend or ally. Apply those traits exactly as the character sheet and relationship support them.
@@ -20169,7 +20346,7 @@ ${cast
 
 KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - Minden kommentelő teljes karakterlapját és saját emlékeit használd, nem csak a nyilvános bioját.
-- KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT explicit kánonja.
+- KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT, kapcsolat-specifikus explicit kánonja. Az, hogy valaki általában szarkasztikus/bunkó/domináns, NEM elég ok arra, hogy a barátját megalázza vagy ellenségként kezelje.
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
 - A korábbi emlékei és a poszt szerzőjével való konkrét kapcsolata ténylegesen módosítsa a reakcióját. Ha van releváns közös múlt, belső poén, korábbi vita, ígéret, flört vagy kínos esemény, UTALHAT rá — de ne ugyanarra minden alkalommal.
 - Ne csak a komment TARTALMA, hanem a mikrostílusa is karakterfüggő legyen: mondathossz, kis-/nagybetű, írásjel, szleng, emoji, kérdezés, közvetlenség, szárazság, káromkodás, flört és humor ritmusa is.
@@ -21281,7 +21458,9 @@ if (
     n,
     who,
     targetId,
-    body
+    body,
+    `${p.text || ""}
+${p.imageDescription || ""}`
   )
 ) {
   return;
@@ -22094,7 +22273,7 @@ KÖZVETLEN REAKCIÓ:
 - Közvetlenül arra reagáljanak, amit a kommentelő mondott.
 - Ne indítsanak indokolatlanul teljesen új témát.
 - Lehet visszakérdezés.
-- Lehet beszólás.
+- Lehet beszólás, HA a konkrét kapcsolat és helyzet indokolja; barátoknál alapból ne legyen rosszindulatú.
 - Lehet poén.
 - Lehet flört.
 - Lehet gúny.
@@ -22449,7 +22628,10 @@ function applyReplies(n, postId, rootId, out) {
         n,
         who,
         addressTargetId,
-        body
+        body,
+        `${p.text || ""}
+${p.imageDescription || ""}
+${rootForAddress ? rootForAddress.text || "" : ""}`
       )
     ) {
       return;
@@ -22799,7 +22981,7 @@ KOMMENTEK:
 - Lehet töredékes.
 - Lehet száraz.
 - Lehet impulzív.
-- Lehet beszólás.
+- Lehet beszólás, HA a kapcsolat és az aktuális poszt ténylegesen indokolja; baráttal ez alapból ne legyen rosszindulatú.
 - Lehet poén.
 - Lehet flört.
 - Lehet gúny.
@@ -22954,6 +23136,7 @@ ${albumList(author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
 - A poszt kizárólag ${author.name} saját életéből, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
+- Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
 - Ne legyen rendszer-poszt vagy mesterséges filler.
 - Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
 - Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
@@ -22979,6 +23162,22 @@ function applyWorldStep(n, out) {
     if (!author || !p.text) return;
     const postText = cleanGeneratedUtterance(n, author, p.text, 700);
     if (!postText) return;
+
+    const mentionedPostTargets = mentionedIdsInText(n, postText, author);
+    if (
+      mentionedPostTargets.some((targetId) =>
+        friendshipHostilityMismatch(
+          n,
+          author,
+          targetId,
+          postText,
+          postText
+        )
+      )
+    ) {
+      return;
+    }
+
     const made = [];
     safePostComments(p).forEach((c, idx) => {
       const cid = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
@@ -22988,6 +23187,22 @@ function applyWorldStep(n, out) {
       const rt = Number(String((c.reply_to !== undefined ? c.reply_to : c.replyTo) || "").replace(/\D/g, ""));
       let parent = null;
       if (rt > 0 && made[rt - 1] && rt - 1 !== idx) parent = made[rt - 1].parent || made[rt - 1].id;
+      const parentRowForGuard = parent ? made.find((row) => row && row.id === parent) : null;
+      const commentTargetForGuard = parentRowForGuard && parentRowForGuard.authorId
+        ? parentRowForGuard.authorId
+        : author;
+      if (
+        commentTargetForGuard &&
+        socialCommentContradictsRelationship(
+          n,
+          cid,
+          commentTargetForGuard,
+          body,
+          postText
+        )
+      ) {
+        return;
+      }
       made.push({ id: uid(), authorId: cid, text: body, ts: now(), parent, language: worldLanguage(n, n.meId) });
       rememberKnowledge(n, cid, {
         kind: "conversation",
@@ -23021,7 +23236,7 @@ function applyWorldStep(n, out) {
     n.posts.unshift(fresh);
     createdPosts += 1;
 
-    mentionedIdsInText(n, fresh.text, author).forEach((targetId) => {
+    mentionedPostTargets.forEach((targetId) => {
       if (targetId && targetId !== author) causalPairs.add(`${author}>${targetId}`);
     });
 
@@ -28554,6 +28769,7 @@ KAPCSOLATOK ÉS TÖRTÉNET A GROUP CHATBEN:
 
 - A fenti PRIVÁT KARAKTERJÁTÉK-KONTEXTUST ténylegesen alkalmazd minden megszólalónál.
 - A jóban lévő karakterek lehetnek közvetlenebbek, belsős poénosabbak, támogatóbbak vagy védelmezőbbek.
+- BARÁTSÁG HARD RULE: jó/közeli kapcsolatnál a "bunkó/szarkasztikus/domináns" személyiség ne forduljon random megvetésbe vagy megalázásba. Egy baráti roastnak is egyértelműen barátinak kell érződnie. Komolyabb sértéshez vagy ellenséges hanghoz konkrét MOSTANI ok kell a chatben/eseményben.
 - A rosszban lévők ne beszéljenek egymással automatikusan úgy, mint semleges haverok: jöhet feszültség, gúny, versengés, kerülés vagy támadás.
 - Crush/vonzalom és flörtölős személyiség természetesen látszódhat a szóválasztásban, féltékenységben, ugratásban vagy figyelemben.
 - A történetből eredő lojalitásokat és rivalizálásokat tartsd aktívan; például dojo/szervezeti ellenfelek viselkedése ne resetelődjön semlegesre.
@@ -28568,13 +28784,13 @@ VALÓDI GROUP CHAT DINAMIKA:
 - Félbeszakíthatják egymást.
 - Visszakérdezhetnek.
 - Ugrathatják egymást.
-- Beszólhatnak egymásnak.
+- Beszólhatnak egymásnak, DE barátok/közeli barátok között ez alapból szeretettel ugrató vagy belsős legyen; valódi rosszindulathoz konkrét jelenlegi konfliktus kell.
 - Kijavíthatják egymást.
 - Rálicitálhatnak egymás poénjára.
 - Megvédhetik vagy támadhatják egymást.
 - Valaki reagálhat csak egy apró részletre.
 - Valaki teljesen figyelmen kívül hagyhat egy megjegyzést.
-- Veszekedhetnek.
+- Veszekedhetnek, HA tényleges nézeteltérés/előzmény van; jó barátságból ne gyárts random veszekedést pusztán a dinamika kedvéért.
 - Flörtölhetnek.
 - Pletykálhatnak.
 - Poénkodhatnak.
@@ -28764,6 +28980,34 @@ Formátum:
       .filter(Boolean);
 
     /*
+     * v62 deterministic friendship guard for group chat.
+     * The model may be sarcastic, but a positive bond cannot spontaneously
+     * become contempt. We infer the direct conversational target when needed.
+     */
+    rows = rows.filter((row, index, allRows) => {
+      const targetId = inferredGroupMessageTarget(
+        w,
+        row.from,
+        row.to,
+        row.text,
+        allRows.slice(0, index),
+        msgs,
+        [w.meId, ...(group.members || [])]
+      );
+
+      if (!targetId) return true;
+
+      return !friendshipHostilityMismatch(
+        w,
+        row.from,
+        targetId,
+        row.text,
+        `${mine || ""}
+${hist || ""}`
+      );
+    });
+
+    /*
      * Hard guarantee for an actual group-addressed player message:
      * if the model still returned only one speaker, ask ONE different
      * character for a tiny follow-up instead of silently accepting a
@@ -28786,6 +29030,9 @@ Formátum:
           const latestGenerated = rows
             .map((r) => `${nameOfIn(w, r.from)}: ${r.text}`)
             .join("\n");
+          const repairTargetId = rows.length
+            ? rows[rows.length - 1].from
+            : (playerTarget.id || w.meId);
 
           const repair = await askWorldJSONInteractive(
             w,
@@ -28800,6 +29047,7 @@ ${latestGenerated || "még nincs"}
 
 ${voiceCard(missingChar)}
 ${characterMemoryCard(w, missingChar)}
+${repairTargetId ? relationshipBehaviorCard(w, missingChar.id, repairTargetId) : ""}
 
 Írj EGY rövid, természetes group chat üzenetet ${missingChar.name} nevében, ami reagál a játékos vagy az előző AI üzenetére. Ne narrálj, ne írj a játékos helyett, és ne beszélj telefonbámulásról / görgetésről csak azért, mert ez social-media felület.
 
@@ -28819,11 +29067,21 @@ Formátum:
             280
           );
 
-          if (repairedText) {
+          if (
+            repairedText &&
+            !friendshipHostilityMismatch(
+              w,
+              missingChar.id,
+              repairTargetId,
+              repairedText,
+              `${mine || ""}
+${hist || ""}`
+            )
+          ) {
             rows.push({
               id: uid(),
               from: missingChar.id,
-              to: rows.length ? rows[rows.length - 1].from : w.meId,
+              to: repairTargetId || w.meId,
               text: repairedText,
               ts: now(),
             });
@@ -31987,7 +32245,7 @@ EMOJI:
 
 TERMÉSZETES CHATSTÍLUS:
 
-- Lehet beszólás.
+- Lehet beszólás, HA a kapcsolat és a MOSTANI beszélgetés indokolja; jó/közeli barátnál alapból legyen baráti ugratás, ne ellenséges vagy megalázó bunkóság.
 - Lehet visszakérdezés.
 - Lehet poén.
 - Lehet flört.
@@ -33846,6 +34104,15 @@ function applyGossipNetworkEcho(w, payload, out) {
         if (!body) return;
         body = sanitizeGeneratedDirectAddress(w, who, post.authorId, body);
         if (!body) return;
+        if (
+          friendshipHostilityMismatch(
+            w,
+            who,
+            post.authorId,
+            body,
+            rumor.text || ""
+          )
+        ) return;
         const made = {
           id: uid(),
           authorId: who,
@@ -33901,7 +34168,16 @@ function applyGossipNetworkEcho(w, payload, out) {
     const who = row ? aiVoice(w, row.id) : "";
     if (who && allowed.has(who) && row.text && !rumor.echoedBy[who]) {
       const body = cleanGeneratedUtterance(w, who, row.text, 500);
-      if (body) {
+      const hostileToFriendSubject = body && (rumor.subjectIds || []).some((targetId) =>
+        friendshipHostilityMismatch(
+          w,
+          who,
+          targetId,
+          body,
+          rumor.text || ""
+        )
+      );
+      if (body && !hostileToFriendSubject) {
         const post = {
           id: uid(),
           authorId: who,
@@ -40985,6 +41261,38 @@ function fairGroupCast(w, allowedIds = null) {
 
   return chars.map((x) => x.c);
 }
+function inferredGroupMessageTarget(
+  w,
+  actorId,
+  explicitTargetId,
+  text,
+  previousRows = [],
+  priorMessages = [],
+  allowedIds = []
+) {
+  const allowed = new Set((allowedIds || []).filter(Boolean));
+  const explicit = explicitTargetId && allowed.has(explicitTargetId)
+    ? explicitTargetId
+    : "";
+  if (explicit && explicit !== actorId) return explicit;
+
+  const mentioned = mentionedIdsInText(w, text, actorId)
+    .filter((id) => id && id !== actorId && (!allowed.size || allowed.has(id)));
+  if (mentioned.length === 1) return mentioned[0];
+
+  for (let i = previousRows.length - 1; i >= 0; i--) {
+    const id = previousRows[i] && previousRows[i].from;
+    if (id && id !== actorId && (!allowed.size || allowed.has(id))) return id;
+  }
+
+  for (let i = priorMessages.length - 1; i >= 0; i--) {
+    const id = priorMessages[i] && priorMessages[i].from;
+    if (id && id !== actorId && (!allowed.size || allowed.has(id))) return id;
+  }
+
+  return "";
+}
+
 async function genAutoGroup(w) {
   const cast = fairGroupCast(w, null).slice(0, 5);
 
@@ -41088,6 +41396,7 @@ ${matureContentInstruction(
 - A creator mindig szerepeljen a "members" listában.
 - Csak olyan karakter kerüljön be, akit a creator ténylegesen hozzáadna.
 - A tagok kapcsolatai is számítsanak: ne rakj össze egymással teljesen irreleváns embereket pusztán a változatosság kedvéért.
+- BARÁTSÁG HARD RULE: ha két tag jó/közeli barát, a nyitó üzenetek ne csináljanak belőlük random ellenséget. Bunkó/szarkasztikus személyiségük baráttal legyen belsős, száraz, szeretettel ugrató vagy egyenes; komoly beszóláshoz/veszekedéshez konkrét jelenlegi ok kell.
 - A játékos automatikusan résztvevője lehet a rendszer szerint, de a játékos ne kerüljön az AI "members" listájába, és helyette SOHA ne írj üzenetet.
 
 CSOPORTNÉV:
@@ -41121,7 +41430,7 @@ KEZDŐ ÜZENETEK:
 - Egy 1-3 szavas reakció teljesen természetes.
 - Lehet félmondat.
 - Lehet kérdés.
-- Lehet beszólás.
+- Lehet beszólás, HA a konkrét kapcsolat és a csoport létrejöttének oka indokolja; barátoknál alapból maradjon baráti/belsős.
 - Lehet poén.
 - Lehet pletyka.
 - Lehet flört.
@@ -41152,10 +41461,10 @@ VALÓDI GROUP CHAT DINAMIKA:
 - Visszakérdezhet.
 - Félbeszakíthatja a témát egy rövid reakcióval.
 - @néven megszólíthat valakit.
-- Két karakter röviden egymásnak is eshet.
+- Két karakter röviden egymásnak is eshet, DE csak ha tényleges konfliktusuk van; barátokat ne fordíts egymás ellen random drámáért.
 - Valaki reagálhat csak arra, amit az előző tag mondott.
 - Nem kell minden üzenetnek új információt tartalmaznia.
-- Egy "mi van??", "ne.", "te hülye", "????" jellegű SZERKEZET lehet természetes, de ezeket ne másold sablonként.
+- Egy "mi van??", "ne.", "bro...", "????" jellegű SZERKEZET lehet természetes, de ezeket ne másold sablonként. Baráti chathez ne használj sértést csak azért, mert rövid és internetesnek hangzik.
 - A beszélgetés lehet kissé kaotikus; nem kell tökéletesen rendezettnek lennie.
 
 KARAKTERHŰ ONLINE STÍLUS:
@@ -41219,8 +41528,8 @@ Formátum:
 "creator":"a létrehozó karakter azonosítója",
 "members":["karakter id","karakter id"],
 "messages":[
-  {"id":"karakter azonosítója","text":"rövid group chat üzenet"},
-  {"id":"karakter azonosítója","text":"rövid válasz"}
+  {"id":"karakter azonosítója","to":"közvetlen címzett id vagy üres","text":"rövid group chat üzenet"},
+  {"id":"karakter azonosítója","to":"annak az id-ja, akinek válaszol, vagy üres","text":"rövid válasz"}
 ],
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}
@@ -43738,6 +44047,7 @@ DÖNTSD EL, HOGY A CSOPORTBAN MOST TERMÉSZETESEN FOLYTATÓDNA-E A BESZÉLGETÉS
 - Ne találj ki indokolatlanul nagy eseményt csak azért, hogy legyen miről beszélni.
 - Ne legyen minden spontán group chat folytatás dráma, vita vagy pletyka.
 - Lehet teljesen hétköznapi, hülyéskedő vagy jelentéktelen beszélgetés is.
+- BARÁTSÁG HARD RULE: jó/közeli kapcsolatban álló AI-k ne kezdjenek random bunkózni, megalázni vagy ellenségként kezelni egymást. A szarkasztikus/bunkó személyiség baráttal inkább belsős, szeretettel ugrató, száraz vagy egyenes legyen. Komoly sértéshez konkrét jelenlegi konfliktus kell.
 
 GROUP CHAT STÍLUS:
 
@@ -43773,14 +44083,14 @@ VALÓDI GROUP CHAT DINAMIKA:
 - Félbeszakíthatják egymást.
 - Visszakérdezhetnek.
 - Ugrathatják egymást.
-- Beszólhatnak egymásnak.
+- Beszólhatnak egymásnak, DE barátok/közeli barátok között ez alapból szeretettel ugrató vagy belsős legyen; valódi rosszindulathoz konkrét jelenlegi konfliktus kell.
 - Kijavíthatják egymást.
 - Rálicitálhatnak egymás poénjára.
 - Egymás ellen fordíthatnak egy megjegyzést.
 - Valaki reagálhat mindössze egy rövid közbeszólással.
 - Valaki figyelmen kívül hagyhat egy témát és egy másik részletre reagálhat.
 - Pletykálhatnak egymásról vagy más szereplőkről.
-- Veszekedhetnek.
+- Veszekedhetnek, HA tényleges nézeteltérés/előzmény van; jó barátságból ne gyárts random veszekedést pusztán a dinamika kedvéért.
 - Flörtölhetnek.
 - Viccelődhetnek.
 - Panaszkodhatnak.
@@ -43881,8 +44191,8 @@ Ha most nincs természetes folytatás:
 Ha van természetes folytatás:
 {"skip":false,
 "replies":[
-{"id":"első AI-tag azonosítója","text":"természetes rövid group chat üzenet"},
-{"id":"egy MÁSODIK AI-tag azonosítója","text":"rövid reakció az előzőre vagy a témára"}
+{"id":"első AI-tag azonosítója","to":"közvetlen címzett AI/player id vagy üres","text":"természetes rövid group chat üzenet"},
+{"id":"egy MÁSODIK AI-tag azonosítója","to":"annak az id-ja, akinek reagál, vagy üres","text":"rövid reakció az előzőre vagy a témára"}
 ],
 "changes":[
 {"a":"aki érez","b":"aki iránt","delta":5,"mood":"mit érez most iránta","why":"egy rövid mondat"}
@@ -45179,15 +45489,56 @@ if (targetNote) {
 
         if (!text) return null;
 
+        const explicitTo = findChar(view, r && r.to);
         return {
           id: uid(),
           from: who,
+          to:
+            explicitTo &&
+            explicitTo !== who &&
+            (allowedMembers.has(explicitTo) || explicitTo === view.meId)
+              ? explicitTo
+              : "",
           text,
           ts: now(),
         };
       })
       .filter(Boolean)
       .slice(0, 4);
+
+    const priorGroupMessages = group.msgs || [];
+    const priorGroupContext = priorGroupMessages
+      .slice(-8)
+      .map((m) => `${nameOfIn(view, m.from)}${m.to ? ` -> ${nameOfIn(view, m.to)}` : ""}: ${m.text || ""}`)
+      .join("\n");
+    const groupAllowedIds = [view.meId, ...Array.from(allowedMembers)];
+    const guardedRows = [];
+    rows.forEach((row) => {
+      const targetId = inferredGroupMessageTarget(
+        view,
+        row.from,
+        row.to,
+        row.text,
+        guardedRows,
+        priorGroupMessages,
+        groupAllowedIds
+      );
+      if (
+        targetId &&
+        friendshipHostilityMismatch(
+          view,
+          row.from,
+          targetId,
+          row.text,
+          priorGroupContext
+        )
+      ) {
+        return;
+      }
+      guardedRows.push({ ...row, to: targetId || row.to || "" });
+    });
+    rows.length = 0;
+    rows.push(...guardedRows);
 
     if (!rows.length) {
       return null;
@@ -45425,9 +45776,16 @@ if (targetNote) {
           return null;
         }
 
+        const explicitTo = findChar(view, m && m.to);
         return {
           id: uid(),
           from: who,
+          to:
+            explicitTo &&
+            explicitTo !== who &&
+            (memberIds.includes(explicitTo) || explicitTo === view.meId)
+              ? explicitTo
+              : "",
           text,
           ts: now(),
           language:
@@ -45439,6 +45797,34 @@ if (targetNote) {
       })
       .filter(Boolean)
       .slice(0, 5);
+
+    const guardedMessages = [];
+    messages.forEach((msg) => {
+      const targetId = inferredGroupMessageTarget(
+        view,
+        msg.from,
+        msg.to,
+        msg.text,
+        guardedMessages,
+        [],
+        [view.meId, ...memberIds]
+      );
+      if (
+        targetId &&
+        friendshipHostilityMismatch(
+          view,
+          msg.from,
+          targetId,
+          msg.text,
+          out.event || ""
+        )
+      ) {
+        return;
+      }
+      guardedMessages.push({ ...msg, to: targetId || msg.to || "" });
+    });
+    messages.length = 0;
+    messages.push(...guardedMessages);
 
     if (!messages.length) {
       return null;
@@ -45580,7 +45966,28 @@ if (targetNote) {
         280
       );
 
-    const txt =
+    const recentDmContext = (
+      view.chats[
+        chatKey(
+          view.meId,
+          bot.id
+        )
+      ] || []
+    )
+      .slice(-14)
+      .map(
+        (m) =>
+          m
+            ? (
+                m.text ||
+                m.imageDescription ||
+                ""
+              )
+            : ""
+      )
+      .join("\n");
+
+    let txt =
       sanitizePhoneDm(
         view,
         bot.id,
@@ -45589,27 +45996,15 @@ if (targetNote) {
           bot.id,
           rawTxt
         ),
-        (
-          view.chats[
-            chatKey(
-              view.meId,
-              bot.id
-            )
-          ] || []
-        )
-          .slice(-14)
-          .map(
-            (m) =>
-              m
-                ? (
-                    m.text ||
-                    m.imageDescription ||
-                    ""
-                  )
-                : ""
-          )
-          .join("\n")
+        recentDmContext
       );
+
+    txt = sanitizeUnjustifiedColdDm(
+      view,
+      bot.id,
+      recentDmContext,
+      txt
+    );
 
     const legacyAlbumIntent =
       out && out.image
