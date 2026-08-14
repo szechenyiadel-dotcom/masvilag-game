@@ -23026,51 +23026,94 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
 /*
  * CHARACTER-DRIVEN POST ACTIVITY
  *
- * Nem minden AI egyformán aktív. A személyiségből, online szokásokból
- * és stabil karakter-ritmusból származó aktivitás szabja meg, ki mennyit
- * posztol. A hosszú csend továbbra is ad esélyt a ritkább posztolóknak.
+ * Normál karaktereknél a napi social ritmus szándékosan visszafogott:
+ * 1-2 saját poszt / gördülő 24 óra az alap, 3 a kemény felső plafon.
+ * A pletykamédia NEM ide tartozik: az csak valódi publishable történésből
+ * posztol, és külön gossip-cadence vezérli.
  */
+const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 3;
+const AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H = 2;
+const AUTONOMOUS_THIRD_POST_MIN_IDLE_MS = 5 * 3600e3;
+const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.40;
+
+function characterAutonomousPostStats24h(w, characterId) {
+  const cutoff24h = now() - 24 * 3600e3;
+  let count = 0;
+  let lastPostAt = 0;
+
+  (w && Array.isArray(w.posts) ? w.posts : []).forEach((p) => {
+    if (!p || p.authorId !== characterId) return;
+    const ts = Number(p.ts) || 0;
+    if (ts >= cutoff24h) count += 1;
+    lastPostAt = Math.max(lastPostAt, ts);
+  });
+
+  return { count, lastPostAt };
+}
+
+function characterCanAutonomouslyPost(w, c) {
+  if (!w || !c || !c.id || isHuman(w, c.id) || isMediaAccount(w, c.id)) {
+    return false;
+  }
+
+  const stats = characterAutonomousPostStats24h(w, c.id);
+  if (stats.count >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) return false;
+
+  /* 0-1 korábbi posztnál természetesen jöhet a következő. */
+  if (stats.count < AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H) return true;
+
+  /*
+   * A 3. poszt kivételes: csak tényleg erősen online karakter kaphatja,
+   * és akkor sem közvetlenül a második után. Így a világ alapból 1-2-nél marad.
+   */
+  const activity = characterOnlineActivityProfile(w, c).post;
+  const idleMs = stats.lastPostAt ? now() - stats.lastPostAt : Infinity;
+  return activity >= AUTONOMOUS_THIRD_POST_MIN_ACTIVITY && idleMs >= AUTONOMOUS_THIRD_POST_MIN_IDLE_MS;
+}
+
 function fairPostCast(w) {
   const chars = (w.chars || []).filter(
-    (c) => c && !isHuman(w, c.id)
+    (c) => c && characterCanAutonomouslyPost(w, c)
   );
 
   if (!chars.length) return [];
 
-  const cutoff = now() - 48 * 3600e3;
+  const cutoff48h = now() - 48 * 3600e3;
 
   const ranked = chars.map((c) => {
-    let recentPosts = 0;
+    let recentPosts48h = 0;
     let lastPostAt = 0;
 
     (w.posts || []).forEach((p) => {
       if (!p || p.authorId !== c.id) return;
       const ts = Number(p.ts) || 0;
-      if (ts >= cutoff) recentPosts += 1;
+      if (ts >= cutoff48h) recentPosts48h += 1;
       lastPostAt = Math.max(lastPostAt, ts);
     });
 
+    const dailyPosts = characterAutonomousPostStats24h(w, c.id).count;
     const activity = characterOnlineActivityProfile(w, c).post;
     const idleHours = lastPostAt
       ? Math.min(72, Math.max(0, (now() - lastPostAt) / 3600e3))
       : 72;
 
     /*
-     * Nem egyenlítjük ki mesterségesen a karaktereket.
-     * Az aktívabb személyiség több posztot bír el büntetés nélkül,
-     * a ritkán posztoló karakter viszont hosszú csend után továbbra is
-     * kaphat természetes lehetőséget.
+     * Aki ma még nem posztolt, erős prioritást kap. Egy poszt után már kisebb,
+     * kettő után pedig nagyon nagy büntetés jön: a harmadik csak ritka kivétel.
      */
+    const dailyPenalty = dailyPosts <= 0 ? 0 : dailyPosts === 1 ? 48 : 150;
     const pressure =
       idleHours * (0.22 + activity * 0.62) +
       activity * 42 -
-      recentPosts * (8 / Math.max(0.30, activity * activity)) +
+      recentPosts48h * (5 / Math.max(0.30, activity * activity)) -
+      dailyPenalty +
       Math.random() * 9;
 
     return {
       c,
       activity,
-      recentPosts,
+      dailyPosts,
+      recentPosts48h,
       lastPostAt,
       pressure,
     };
@@ -23078,6 +23121,7 @@ function fairPostCast(w) {
 
   ranked.sort((a, b) =>
     (b.pressure - a.pressure) ||
+    (a.dailyPosts - b.dailyPosts) ||
     (b.activity - a.activity) ||
     (a.lastPostAt - b.lastPostAt)
   );
@@ -23086,6 +23130,7 @@ function fairPostCast(w) {
 }
 async function genWorldStep(w, single, timeSkipHours = 0) {
   const cast = fairPostCast(w);
+  if (!cast.length) return null;
 
   const recent = (w.posts || [])
     .slice(0, 4)
@@ -23132,6 +23177,7 @@ KARAKTERHŰ POSZTOLÁS:
 - A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa és az is, hogy egyáltalán posztolna-e valamiről, a karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
+- NAPI POSZTRITMUS: normál karakter célja 1-2 saját poszt / gördülő 24 óra; 3 csak ritka felső plafon. Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
 
 ${repetitionGuard(
   w,
@@ -23389,6 +23435,7 @@ SAJÁT FOTÓALBUMOD:
 ${albumList(author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
+- A normál karakterek napi ritmusa 1-2 saját poszt / gördülő 24 óra; 3 csak ritka kemény felső plafon. Ne posztolj csak azért, hogy kitöltsd a feedet.
 - A poszt kizárólag ${author.name} saját életéből, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
 - Ne legyen rendszer-poszt vagy mesterséges filler.
@@ -23414,6 +23461,8 @@ function applyWorldStep(n, out) {
   safeAiArray(out, "posts").forEach((p) => {
     const author = aiVoice(n, p && (p.id !== undefined ? p.id : p.name));
     if (!author || !p.text) return;
+    const authorChar = charById(n, author);
+    if (!authorChar || !characterCanAutonomouslyPost(n, authorChar)) return;
     const postText = cleanGeneratedUtterance(n, author, p.text, 700);
     if (!postText) return;
 
@@ -23465,7 +23514,6 @@ function applyWorldStep(n, out) {
         text: sysLangText(n, cid, `Kommenteltem: ${cut(body, 110)}`, `I commented: ${cut(body, 110)}`),
       });
     });
-    const authorChar = charById(n, author);
     const pic = p.image ? albumFind(authorChar, p.image) : null;
     const picRef = pic ? (pic.imageId ? imageRef(pic.imageId) : pic.src) : "";
     const picId = imageIdOf(picRef);
@@ -42611,6 +42659,9 @@ function lastAiFeedPostAt(w) {
 function feedNeedsFreshPost(w) {
   const last = lastAiFeedPostAt(w);
 
+  /* Ha minden normál AI elérte a napi limitjét, ne pörgessünk üres feed-actionöket. */
+  if (!fairPostCast(w).length) return false;
+
   /*
    * v65 — posts are a slower feed pulse. The world can stay active through
    * comments/replies/DMs/groups between posts without flooding the feed.
@@ -43604,7 +43655,7 @@ function planAutoAction(view) {
   }
 
   const urgentGossipCandidate = gossipAutoCandidate(view);
-  if (urgentGossipCandidate && Math.random() < 0.35) {
+  if (urgentGossipCandidate && Math.random() < gossipPublishChance(view)) {
     return mkAction(
       "gossip-story",
       `gossip-priority:${urgentGossipCandidate.mode}:${urgentGossipCandidate.primaryEventId}`,
