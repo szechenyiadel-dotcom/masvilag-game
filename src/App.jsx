@@ -3919,6 +3919,86 @@ function enqueueNaturalThreadReply(w, postId, preferredCommentIds = []) {
   );
 }
 
+
+
+function visualCrushThreadConflictCandidate(w, postId, preferredCommentIds = []) {
+  const post = (w.posts || []).find((p) => p && p.id === postId);
+  if (!post) return null;
+
+  const visual = visualPostReactionProfile(w, post);
+  if (!visual.hasImage || !visual.adultAuthor || !visual.appearanceForward) return null;
+
+  const preferred = new Set((preferredCommentIds || []).filter(Boolean));
+  const recentComments = safePostComments(post)
+    .filter((row) => row && row.authorId && row.authorId !== post.authorId)
+    .filter((row) => !preferred.size || preferred.has(row.id))
+    .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
+
+  const romanticComment = recentComments.find((row) => {
+    if (isHuman(w, row.authorId) || !isKnownAdultCharacter(w, row.authorId)) return false;
+    return bondLooksRomantic(getRel(w, row.authorId, post.authorId));
+  });
+
+  if (!romanticComment) return null;
+
+  const responderPool = (w.chars || [])
+    .filter((c) => c && !isHuman(w, c.id))
+    .filter((c) => c.id !== romanticComment.authorId && c.id !== post.authorId)
+    .filter((c) => isKnownAdultCharacter(w, c.id))
+    .filter((c) => bondLooksRomantic(getRel(w, c.id, post.authorId)))
+    .map((c) => {
+      const lore = commentPersonalityText(c);
+      const toPoster = getRel(w, c.id, post.authorId);
+      const toOther = getRel(w, c.id, romanticComment.authorId);
+      let score = visualPostRelationshipPriority(w, c.id, post.authorId, post);
+
+      if (/jealous|féltéken|possess|birtokl|territorial|obsess|megszáll|competitive|verseng|rival/.test(lore)) score += 42;
+      if (hasEnemyOrRivalBond(toOther) || Number(toOther && toOther.score) <= -20) score += 28;
+      if (Number(toPoster && toPoster.score) >= 55) score += 12;
+      if (commentAlreadyAnsweredBy(post, romanticComment.id, c.id)) score -= 120;
+
+      return { c, score };
+    })
+    .filter((row) => row.score >= 58)
+    .sort((a, b) => b.score - a.score);
+
+  if (!responderPool.length) return null;
+
+  const top = responderPool[0];
+  const lore = commentPersonalityText(top.c);
+  const stronglyJealous = /jealous|féltéken|possess|birtokl|territorial|obsess|megszáll|competitive|verseng|rival/.test(lore);
+  const chance = stronglyJealous ? 0.82 : (visual.adultHighAttention ? 0.58 : 0.38);
+
+  if (Math.random() > chance) return null;
+
+  return {
+    post,
+    comment: romanticComment,
+    targetId: top.c.id,
+  };
+}
+
+function enqueueVisualCrushThreadFriction(w, postId, preferredCommentIds = []) {
+  const candidate = visualCrushThreadConflictCandidate(w, postId, preferredCommentIds);
+  if (!candidate) return false;
+
+  return simEnqueue(
+    w,
+    mkAction(
+      "reply",
+      `visual-crush-friction:${candidate.post.id}:${candidate.comment.id}:${candidate.targetId}`,
+      {
+        postId: candidate.post.id,
+        commentId: candidate.comment.id,
+        rootId: candidate.comment.id,
+        targetId: candidate.targetId,
+        trigger: "visual-crush-friction",
+      },
+      "event"
+    )
+  );
+}
+
 function addMentionToText(value, person) {
   if (!person || !person.username) return String(value || "");
 
@@ -7356,6 +7436,213 @@ function commentPersonalityText(c) {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+}
+
+
+/* -------------------------------------------------------------------------
+   VISUAL SOCIAL REACTIONS — v61
+
+   A photo is not treated like a text post with an optional attachment.
+   Relationship + visible image content decide who pays attention and how.
+   ------------------------------------------------------------------------- */
+function visualPostReactionProfile(w, post) {
+  const hasImage = Boolean(
+    post &&
+    (post.imageId || post.image)
+  );
+
+  const description = String(
+    post && post.imageDescription || ""
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const caption = String(
+    post && post.text || ""
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const low = `${description} ${caption}`.toLowerCase();
+  const adultAuthor = Boolean(
+    hasImage &&
+    post &&
+    post.authorId &&
+    isKnownAdultCharacter(w, post.authorId)
+  );
+
+  const personVisible = /\b(?:selfie|mirror\s*selfie|portrait|posing|poses?|woman|man|person|girl|boy|lány|fiú|nő|férfi|személy|pózol|szelfi|portré)\b/i.test(low);
+
+  const appearanceForward = hasImage && (
+    personVisible ||
+    /\b(?:outfit|look|fit\b|dress|skirt|top|makeup|hair|style|fashion|heels?|jacket|shirt|suit|ruha|szett|outfit|smink|haj|stílus|divat|szoknya|felső|cipő|kabát|ing|öltöny)\b/i.test(low)
+  );
+
+  /* Higher visual attention is only used as an attraction lane for known adults. */
+  const adultHighAttention = Boolean(
+    adultAuthor &&
+    (
+      /\b(?:bikini|swimsuit|swimwear|bathing\s*suit|two[-\s]?piece|beachwear|shirtless|thirst\s*trap|bodycon|mini\s*dress|mini\s*skirt)\b/i.test(low) ||
+      [
+        "bikini",
+        "fürdőruh",
+        "strandruha",
+        "miniruha",
+        "miniszoknya",
+        "felsőtest nélkül",
+      ].some((token) => low.includes(token))
+    )
+  );
+
+  const imageJuice = publicSocialJuiceSignals(`${caption} ${description}`);
+
+  return {
+    hasImage,
+    description,
+    caption,
+    adultAuthor,
+    personVisible,
+    appearanceForward,
+    adultHighAttention,
+    juicy: Boolean(imageJuice.juicy),
+    targetMin: adultHighAttention ? 6 : appearanceForward ? 5 : hasImage ? 4 : 2,
+    targetMax: adultHighAttention ? 9 : appearanceForward ? 8 : hasImage ? 7 : 5,
+  };
+}
+
+function visualPostRelationshipPriority(w, actorId, targetId, post) {
+  const visual = visualPostReactionProfile(w, post);
+  if (!visual.hasImage || !actorId || !targetId || actorId === targetId) return 0;
+
+  const rel = getRel(w, actorId, targetId);
+  const score = Number(rel && rel.score) || 0;
+  const bond = String(rel && (rel.bond || rel.type) || "").toLowerCase();
+  let priority = 8;
+
+  if (
+    visual.adultAuthor &&
+    isKnownAdultCharacter(w, actorId) &&
+    bondLooksRomantic(rel)
+  ) {
+    priority += visual.adultHighAttention ? 78 : visual.appearanceForward ? 62 : 46;
+  }
+
+  if (
+    score >= 55 ||
+    /best friend|close friend|legjobb barát|közeli barát|ride or die|partner|dating/.test(bond)
+  ) {
+    priority += visual.appearanceForward ? 52 : 36;
+  } else if (
+    score >= 22 ||
+    hasPositiveFollowBond(rel)
+  ) {
+    priority += visual.appearanceForward ? 30 : 20;
+  }
+
+  if (
+    score <= -25 ||
+    hasEnemyOrRivalBond(rel)
+  ) {
+    /* Rivals/enemies often LOOK even if they refuse to be supportive. */
+    priority += visual.appearanceForward ? 42 : 24;
+  }
+
+  if (isFollowing(w, actorId, targetId)) priority += 12;
+  if (visual.juicy) priority += 8;
+
+  return priority;
+}
+
+function visualPostReactionRole(w, c, post) {
+  if (!c || !post) return "neutral observer";
+
+  const rel = getRel(w, c.id, post.authorId);
+  const score = Number(rel && rel.score) || 0;
+  const bond = String(rel && (rel.bond || rel.type) || "").toLowerCase();
+  const visual = visualPostReactionProfile(w, post);
+
+  if (
+    visual.adultAuthor &&
+    isKnownAdultCharacter(w, c.id) &&
+    bondLooksRomantic(rel)
+  ) {
+    return "crush/romantic interest — stronger visual attention, attraction, flustered/flirty/jealous subtext if character-faithful";
+  }
+
+  if (
+    score >= 60 ||
+    /best friend|close friend|legjobb barát|közeli barát|ride or die/.test(bond)
+  ) {
+    return "close friend — praise/hype, affectionate teasing, protective support or familiar shorthand are natural";
+  }
+
+  if (
+    score <= -25 ||
+    hasEnemyOrRivalBond(rel)
+  ) {
+    return "enemy/rival — if they engage, use snark, backhanded remarks, rivalry, skepticism or deliberate provocation; do not turn them into a sincere fan";
+  }
+
+  if (score >= 20 || hasPositiveFollowBond(rel)) {
+    return "friend/friendly connection — warm specific compliment, question or playful reaction is natural";
+  }
+
+  return "neutral/loose connection — react only if the image genuinely catches their attention";
+}
+
+function visualPostReactionCard(w, post, cast) {
+  const visual = visualPostReactionProfile(w, post);
+  if (!visual.hasImage) return "";
+
+  const rows = (cast || [])
+    .filter(Boolean)
+    .map((c) => `[${c.id}] ${c.name}: ${visualPostReactionRole(w, c, post)}`)
+    .join("\n");
+
+  const adultSafety = visual.adultAuthor
+    ? `The post author is a KNOWN ADULT. If the image is appearance-forward, adult crushes/partners may visibly melt, flirt, get flustered or become jealous/territorial in a non-graphic social-media way when that fits their character.`
+    : `The post author is NOT confirmed as an adult. Do NOT sexualize their body, clothing or pose. Keep reactions age-safe even if the image is appearance-forward.`;
+
+  return `
+VISUAL POST REACTION ENGINE — THIS IMAGE MATTERS:
+- Treat the image itself as a PRIMARY social trigger, not decorative metadata. React to what is actually visible in the imageDescription.
+- ${adultSafety}
+- Friends and best friends should usually look recognizably supportive on a strong selfie/outfit/photo: specific praise, hype, affectionate teasing, nicknames or familiar shorthand are all natural when that is how they communicate.
+- Enemies/rivals who choose to comment should NOT randomly become fans. They can be dismissive, sarcastic, backhanded, competitive, provocative or intentionally unimpressed. Ignoring/like-refusal is also valid.
+- Crushes/romantic interests should receive noticeably stronger visual attention than neutral people. Their reaction may be flirty, flustered, too attentive, jealous, possessive or trying to play it cool depending on personality and public mask.
+- MULTIPLE CRUSHES: if two or more adult characters have genuine romantic/crush interest in the author, they are allowed to notice EACH OTHER'S comments. They may compete, tease, get territorial, snipe, defend their claim, challenge each other or start a short public argument when their personalities/relationships support it. Do not force a fight if they would realistically stay quiet or friendly.
+- Do not make the whole section one-note. A visually attention-grabbing post can naturally get praise + flirting + jealousy + a rival jab + jokes at the same time, but each reaction must come from a real relationship.
+- For this image, if enough relevant characters exist, aim for roughly ${visual.targetMin}-${visual.targetMax} visible comments/replies over the fresh thread rather than treating it like a quiet text-only post.
+
+RELATIONSHIP LANES FOR THIS IMAGE:
+${rows || "-"}`;
+}
+
+function visualCrushThreadFrictionInstruction(w, post, commenterId, responderId) {
+  const visual = visualPostReactionProfile(w, post);
+  if (
+    !visual.hasImage ||
+    !visual.adultAuthor ||
+    !commenterId ||
+    !responderId ||
+    commenterId === responderId ||
+    !isKnownAdultCharacter(w, commenterId) ||
+    !isKnownAdultCharacter(w, responderId)
+  ) {
+    return "";
+  }
+
+  const aRel = getRel(w, commenterId, post.authorId);
+  const bRel = getRel(w, responderId, post.authorId);
+
+  if (!bondLooksRomantic(aRel) || !bondLooksRomantic(bRel)) return "";
+
+  return `
+MULTI-CRUSH VISUAL THREAD:
+- ${nameOfIn(w, commenterId)} and ${nameOfIn(w, responderId)} both have genuine adult crush/romantic interest in ${nameOfIn(w, post.authorId)}.
+- The visible photo can make that rivalry/jealousy socially relevant. ${nameOfIn(w, responderId)} may react to ${nameOfIn(w, commenterId)}'s attention toward the poster instead of pretending the other crush does not exist.
+- A short territorial joke, competitive reply, snark, challenge, jealous correction, one-upmanship or argument is allowed if it fits both relationships and personalities.
+- Do NOT manufacture hatred if they are friends/allies; in that case the rivalry can be playful, awkward or restrained. Do NOT force conflict if this character would hide jealousy publicly.`;
 }
 
 function commentReactionLenses(w, c, targetId, post) {
@@ -19816,7 +20103,8 @@ function threadOf(w, post) {
 async function genComments(w, post) {
   const cast = fairCommentCast(
     w,
-    post.authorId
+    post.authorId,
+    post
   );
 
   const author = charById(
@@ -19855,6 +20143,8 @@ A kommentek legyenek képföldeltek: ne írjanak olyan részletről, ami nincs a
 Ha a szerző a saját képét posztolta, a többiek ennek megfelelően reagálhatnak rá reálisan.`
     : ""
 }
+
+${visualPostReactionCard(w, post, cast)}
 
 ${
   th.text
@@ -19943,8 +20233,10 @@ ${repetitionGuard(
 
 KOMMENT SZABÁLYOK:
 
-- NINCS KOMMENTKVÓTA. Ne tölts fel mesterségesen minden posztot.
-- Egy átlagos posztnál gyakran 2-5 valódi karakter kommentel; egy csendes/személyes posztnál lehet 0-2; egy drámai, felkapott vagy sok embert közvetlenül érintő posztnál lehet 4-7.
+- NINCS MEREV KOMMENTKVÓTA, de a vizuális posztokat ne kezeld ugyanolyan halknak, mint egy átlagos szöveges státuszt.
+- Szöveges átlagposztnál gyakran 2-5 valódi karakter kommentel; egy csendes/személyes szövegposztnál lehet 0-2; egy drámai/felkapott szövegposztnál lehet 4-7.
+- KÉPES POSZTNÁL a kép ténylegesen növeli a reakciósűrűséget: normál fotónál 4-7, erős selfie/outfit/appearance fókusznál 5-8, ismert felnőtt vizuálisan feltűnőbb beachwear/bikini/thirst-trap jellegű képnél kb. 6-9 természetes komment is reális, HA van ennyi kapcsolat/releváns szereplő.
+- A több komment NEM jelent több generikus bókot: barát hype-olhat, ellenség faszfejkedhet/szurkálhat, crush olvadozhat vagy féltékenykedhet, rivális provokálhat, más meg csak poénkodik vagy kérdez.
 - Minden jelölt külön döntsön: KOMMENT / LIKE / IGNORE. Az IGNORE teljesen érvényes kimenet, és nem kell külön listázni.
 - Egy generálási körben ugyanaz a karakter legfeljebb EGY új kommentet írjon. Ne töltsd fel a csomagot ugyanannak az embernek több hasonló reakciójával.
 - Csak olyan szereplő kommenteljen, akinek természetes oka van rá. Ha nincs konkrét mondanivalója, inkább like vagy semmi.
@@ -21402,7 +21694,7 @@ function socialInteractionInterest(
  * beszédes karakterek több kommentet bírnak el; a quiet/private karakterek
  * ritkábban jelennek meg. A kapcsolat és relevancia továbbra is elsődleges.
  */
-function fairCommentCast(w, targetId) {
+function fairCommentCast(w, targetId, post = null) {
   const cutoff =
     now() - 48 * 3600e3;
 
@@ -21457,6 +21749,13 @@ function fairCommentCast(w, targetId) {
           c.id,
           targetId
         );
+      const visualPriority =
+        visualPostRelationshipPriority(
+          w,
+          c.id,
+          targetId,
+          post
+        );
       const following =
         isFollowing(
           w,
@@ -21480,7 +21779,8 @@ function fairCommentCast(w, targetId) {
         Math.abs(score) >= 18 ||
         Boolean(bond) ||
         storyLinked ||
-        interest >= 24;
+        interest >= 24 ||
+        visualPriority >= 30;
 
       const activity = characterOnlineActivityProfile(w, c).comment;
 
@@ -21495,13 +21795,15 @@ function fairCommentCast(w, targetId) {
         Math.random() < discoveryChance;
 
       const visibilityBonus =
-        following
-          ? 34
-          : naturallyLinked
-            ? 14
-            : discovered
-              ? 4
-              : 0;
+        (
+          following
+            ? 34
+            : naturallyLinked
+              ? 14
+              : discovered
+                ? 4
+                : 0
+        ) + visualPriority;
 
       return {
         c,
@@ -21513,6 +21815,7 @@ function fairCommentCast(w, targetId) {
           naturallyLinked || discovered,
         visibilityBonus,
         activity,
+        visualPriority,
         tie: Math.random(),
       };
     });
@@ -21567,9 +21870,14 @@ function fairCommentCast(w, targetId) {
           Math.min(5, chars.length)
         );
 
+  const visual = visualPostReactionProfile(w, post);
+  const castLimit = visual.hasImage
+    ? (visual.appearanceForward ? 12 : 10)
+    : 9;
+
   return pool
     .map((x) => x.c)
-    .slice(0, 9);
+    .slice(0, castLimit);
 }
 
 async function genReply(w, post, comment, forcedResponderId = "") {
@@ -21732,6 +22040,8 @@ ${cast
 
 THREAD KAPCSOLATI HÁROMSZÖG — KOMMENTELŐ + POSZTOLÓ + VÁLASZOLÓ:
 ${cast.map((c) => c ? commentThreadRelationshipTriangleCard(w, c.id, comment.authorId, post.authorId) : "").filter(Boolean).join("\n") || "-"}
+
+${forcedResponder ? visualCrushThreadFrictionInstruction(w, post, comment.authorId, forcedResponder.id) : ""}
 
 NYILVÁNOS REPLY-SZŰRŐ KARAKTERENKÉNT:
 ${cast.map((c) => c ? `[${c.id}] ${c.name}: ${spread(commentPublicBehaviorCard(w, c, comment.authorId), 650)} | releváns célzott memória: ${spread(commentTargetMemoryCard(w, c, comment.authorId), 480)}` : "").filter(Boolean).join("\n") || "-"}
@@ -22057,6 +22367,7 @@ ${characterMemoryCard(w, forcedResponder)}
 ${relationshipBehaviorCard(w, forcedResponder.id, comment.authorId)}
 ${post.authorId && post.authorId !== comment.authorId ? relationshipBehaviorCard(w, forcedResponder.id, post.authorId) : ""}
 ${commentThreadRelationshipTriangleCard(w, forcedResponder.id, comment.authorId, post.authorId)}
+${visualCrushThreadFrictionInstruction(w, post, comment.authorId, forcedResponder.id)}
 
 PUBLIC THREAD BYSTANDER REPLY
 Post by ${nameOfIn(w, post.authorId)}: "${String(post.text || "").slice(0, 500)}"
@@ -23250,7 +23561,19 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     setBusy(post.id);
     try {
       const { out, label } = await genComments(w, post);
-      update((n) => applyComments(n, post.id, out, label));
+      update((n) => {
+        const livePost = (n.posts || []).find((p) => p && p.id === post.id);
+        const beforeIds = new Set(safePostComments(livePost).map((c) => c.id));
+        applyComments(n, post.id, out, label);
+        const refreshed = (n.posts || []).find((p) => p && p.id === post.id);
+        const newIds = safePostComments(refreshed)
+          .filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId))
+          .map((c) => c.id);
+        if (newIds.length) {
+          const queuedVisualFriction = enqueueVisualCrushThreadFriction(n, post.id, newIds);
+          if (!queuedVisualFriction) enqueueNaturalThreadReply(n, post.id, newIds);
+        }
+      });
     } catch (e) { setErr((e && e.message) || tt("Az AI most nem válaszolt. Próbáld újra.", "The AI didn't respond. Try again.")); }
     setBusy("");
   };
@@ -29125,11 +29448,18 @@ ${matureContentInstruction(
 
 ${
   outgoingImageDescription
-    ? `A JÁTÉKOS MOST KÉPET IS KÜLDÖTT.
+    ? `A JÁTÉKOS MOST KÉPET IS KÜLDÖTT — EZ A MOSTANI ÜZENET EGYIK FŐ TARTALMA.
 A képen látható tartalom rövid vizuális leírása:
 ${outgoingImageDescription}
 
-A válaszod természetesen reagálhat a kép konkrét, látható részleteire. Ne tegyél úgy, mintha olyasmit látnál, ami nincs a leírásban.`
+KÉPREAGÁLÁS KÖTELEZŐ REALIZMUSA:
+- Ha a játékos képet küldött, ne menj el mellette egy általános "haha / okay / nice" válasszal. A válasz legalább egy része reagáljon valamire, ami TÉNYLEG látható a leírásban, kivéve ha a mellé írt szöveg sürgősebb/komolyabb témát hoz.
+- Barát/közeli barát természetesen dicsérhet, hype-olhat, ugratással bókolhat vagy konkrét részletet emelhet ki.
+- Ellenség/rivális ne váljon véletlen rajongóvá: lehet száraz, gúnyos, backhanded, provokatív vagy direkt kellemetlen, ha ez illik hozzá.
+- Crush/romantikus érdeklődés esetén, ha MINDKÉT fél ismert felnőtt, a kép kiválthat erősebb figyelmet, zavart, flörtöt, olvadozást, féltékenységet vagy birtokló felhangot a karakter saját nyilvános/privát stílusában — nem grafikus módon.
+- Ha a játékos életkora nem ismert felnőtt, a képet SOHA ne szexualizáld; maradj age-safe.
+- Ne találj ki olyan testrészt, ruhát, pózt, helyszínt vagy eseményt, ami nincs a vizuális leírásban.
+- A reakció legyen személyiség- és kapcsolatfüggő, ne univerzális bóksablon.`
     : ""
 }
 
@@ -41713,7 +42043,11 @@ function freshFeedPostCommentCandidate(w) {
       if (age < 9000 || age > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) return false;
 
       const comments = safePostComments(post);
-      if (comments.length >= LIVE_WORLD_FRESH_COMMENT_MAX) return false;
+      const visual = visualPostReactionProfile(w, post);
+      const freshCommentCap = visual.hasImage
+        ? Math.max(LIVE_WORLD_FRESH_COMMENT_MAX, visual.targetMax)
+        : LIVE_WORLD_FRESH_COMMENT_MAX;
+      if (comments.length >= freshCommentCap) return false;
       if (Number(post.autoCommentedAt) > 0) return false;
 
       const lastCommentAt = comments.reduce(
@@ -41726,14 +42060,19 @@ function freshFeedPostCommentCandidate(w) {
     .map((post) => {
       const age = Math.max(0, ts - (Number(post.ts) || 0));
       const comments = safePostComments(post);
+      const visual = visualPostReactionProfile(w, post);
+      const freshCommentCap = visual.hasImage
+        ? Math.max(LIVE_WORLD_FRESH_COMMENT_MAX, visual.targetMax)
+        : LIVE_WORLD_FRESH_COMMENT_MAX;
       const ageRatio = Math.min(1, age / LIVE_WORLD_FRESH_COMMENT_WINDOW_MS);
       const freshness = (1 - ageRatio) * 100;
-      const underCommented = Math.max(0, LIVE_WORLD_FRESH_COMMENT_MAX - comments.length) * 9;
+      const underCommented = Math.max(0, freshCommentCap - comments.length) * 9;
       const authorIsPlayer = isHuman(w, post.authorId) ? 18 : 0;
+      const visualBoost = visual.adultHighAttention ? 22 : visual.appearanceForward ? 14 : visual.hasImage ? 7 : 0;
       const juicy = publicSocialJuiceSignals(post.text || post.imageDescription || "").juicy ? 10 : 0;
       return {
         post,
-        score: freshness + underCommented + authorIsPlayer + juicy + Math.random() * 8,
+        score: freshness + underCommented + authorIsPlayer + visualBoost + juicy + Math.random() * 8,
       };
     })
     .sort((a, b) => b.score - a.score);
@@ -42578,14 +42917,24 @@ function planAutoAction(view) {
    */
   const freshCommentPost = freshFeedPostCommentCandidate(view);
   if (freshCommentPost && Math.random() < 0.72) {
+    const visual = visualPostReactionProfile(view, freshCommentPost);
+    const existingCount = safePostComments(freshCommentPost).length;
+    const visualMax = visual.adultHighAttention
+      ? (existingCount === 0 ? 8 : 5)
+      : visual.appearanceForward
+        ? (existingCount === 0 ? 7 : 4)
+        : visual.hasImage
+          ? (existingCount === 0 ? 5 : 3)
+          : (existingCount === 0 ? 3 : 2);
+
     return mkAction(
       "comments",
       `fresh-comments:${freshCommentPost.id}`,
       {
         postId: freshCommentPost.id,
         trigger: "fresh-post",
-        maxComments: safePostComments(freshCommentPost).length === 0 ? 3 : 2,
-        allowThreadFollowup: false,
+        maxComments: visualMax,
+        allowThreadFollowup: Boolean(visual.appearanceForward),
       },
       "event"
     );
@@ -44395,7 +44744,7 @@ async function runSimulationAction(view, update, action, addImage) {
     const { out: rawOut, label } =
       await genComments(view, post);
 
-    const maxComments = Math.max(1, Math.min(6, Number(action.payload && action.payload.maxComments) || 6));
+    const maxComments = Math.max(1, Math.min(10, Number(action.payload && action.payload.maxComments) || 10));
     const out = action.payload && action.payload.trigger === "fresh-post"
       ? {
           ...(rawOut || {}),
@@ -44429,7 +44778,15 @@ async function runSimulationAction(view, update, action, addImage) {
         newCommentIds.length &&
         (!action.payload || action.payload.allowThreadFollowup !== false)
       ) {
-        enqueueNaturalThreadReply(n, post.id, newCommentIds);
+        const queuedVisualFriction = enqueueVisualCrushThreadFriction(
+          n,
+          post.id,
+          newCommentIds
+        );
+
+        if (!queuedVisualFriction) {
+          enqueueNaturalThreadReply(n, post.id, newCommentIds);
+        }
       }
     });
 
