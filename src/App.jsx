@@ -3123,8 +3123,11 @@ function safeAiEvents(out) {
 }
 
 function safeAiMemories(out) {
-  return safeAiArray(out, "memories")
-    .filter((m) => m && typeof m === "object");
+  /* v65 MEMORY GROUNDING: free-form model-written "memories" are not evidence.
+   * Observable messages/actions/events are already persisted deterministically
+   * elsewhere. Ignoring this field prevents the model from manufacturing a past
+   * event and then promoting its own invention into permanent character memory. */
+  return [];
 }
 
 function safeAiSelfUpdates(out) {
@@ -3243,6 +3246,19 @@ function memoryToLine(entry) {
   const src = entry.source ? ` [${entry.source}]` : "";
   const conf = Number.isFinite(Number(entry.confidence)) ? ` (bizt: ${Math.round(Number(entry.confidence) * 100)}%)` : "";
   return `${entry.text || ""}${src}${conf}`.trim();
+}
+
+function groundedMemoryEntryForPrompt(entry) {
+  if (!entry) return false;
+  const source = String(entry.source || "").toLowerCase();
+  /* Old versions promoted free-form model summaries into these source lanes.
+   * Keep them in saved data for non-destructive compatibility, but never feed
+   * them back to the model as factual memory. */
+  if (source === "self_memory" || source === "legacy_memory") return false;
+  if (source === "roleplay_long_term") return false;
+  if (source.startsWith("roleplay_long:")) return false;
+  if (source.startsWith("roleplay_summary:")) return false;
+  return true;
 }
 
 function getCharacterDataForObserver(observer, target, w) {
@@ -6023,7 +6039,16 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * genuinely fresh posts, then popup events, private contact and AI invitations.
  * These are safe public Vite build-time tuning values (no secrets).
  */
-const LIVE_WORLD_POST_TARGET_MS = Math.max(25000, Math.min(120000, Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 42000));
+/* v65 — autonomous feed posts are intentionally sparse. Other world activity
+ * (comments, replies, DMs, groups, follows, gossip reactions) may continue between
+ * posts, but a normal new AI feed post gets a hard ~10 minute floor. */
+const LIVE_WORLD_POST_TARGET_MS = Math.max(
+  10 * 60 * 1000,
+  Math.min(
+    30 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 10 * 60 * 1000
+  )
+);
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(10 * 60000, Math.min(3 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 35 * 60000));
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(10000, Math.min(120000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 22000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(2, Math.min(12, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 6)));
@@ -6966,51 +6991,70 @@ function knownLinesForObserver(w, observerId, targetId) {
   const row = observerMem.knownCharacters && observerMem.knownCharacters[targetId];
   if (!row) return "";
   const parts = [];
-  if ((row.observedTraits || []).length) parts.push(`megfigyelt jegyek: ${(row.observedTraits || []).slice(-5).map(memoryToLine).join(" | ")}`);
-  if ((row.learnedInformation || []).length) parts.push(`megszerzett infók: ${(row.learnedInformation || []).slice(-6).map(memoryToLine).join(" | ")}`);
-  if ((row.assumptions || []).length) parts.push(`feltételezések (nem biztos): ${(row.assumptions || []).slice(-4).map(memoryToLine).join(" | ")}`);
-  if ((row.knownEvents || []).length) parts.push(`ismert események: ${(row.knownEvents || []).slice(-6).map(memoryToLine).join(" | ")}`);
-  return parts.length ? `\n  amit róla tudsz: ${parts.join(" ; ")}` : "";
+  const grounded = (rows) => (rows || []).filter(groundedMemoryEntryForPrompt);
+  const traits = grounded(row.observedTraits);
+  const learned = grounded(row.learnedInformation);
+  const assumptions = grounded(row.assumptions);
+  const events = grounded(row.knownEvents);
+  if (traits.length) parts.push(`megfigyelt jegyek: ${traits.slice(-5).map(memoryToLine).join(" | ")}`);
+  if (learned.length) parts.push(`megszerzett infók: ${learned.slice(-6).map(memoryToLine).join(" | ")}`);
+  if (assumptions.length) parts.push(`feltételezések (nem biztos): ${assumptions.slice(-4).map(memoryToLine).join(" | ")}`);
+  if (events.length) parts.push(`ismert események: ${events.slice(-6).map(memoryToLine).join(" | ")}`);
+  return parts.length ? `
+  amit róla tudsz: ${parts.join(" ; ")}` : "";
 }
 
 function selfMemoryForPrompt(w, id) {
   const mem = ensureCharMemory(w, id);
   const bits = [];
+  const grounded = (rows) => (rows || []).filter(groundedMemoryEntryForPrompt);
 
-  if ((mem.personalMilestones || []).length) {
-    bits.push(`fontos mérföldkövek: ${(mem.personalMilestones || []).slice(-6).map(memoryToLine).join(" | ")}`);
+  const milestones = grounded(mem.personalMilestones);
+  const anchors = grounded(mem.emotionalAnchors);
+  const trustedFacts = grounded(mem.knownFacts);
+  const witnessed = grounded(mem.witnessedEvents);
+  const conversations = grounded(mem.conversations);
+  const rumors = grounded(mem.rumors);
+  const suspicions = grounded(mem.suspicions);
+  const secrets = grounded(mem.learnedSecrets);
+  const longRoleplay = grounded(mem.roleplayLongTerm);
+  const recentRoleplay = grounded(mem.roleplayRecent);
+
+  if (milestones.length) {
+    bits.push(`fontos mérföldkövek: ${milestones.slice(-6).map(memoryToLine).join(" | ")}`);
   }
-  if ((mem.emotionalAnchors || []).length) {
-    bits.push(`érzelmi kapaszkodók: ${(mem.emotionalAnchors || []).slice(-6).map(memoryToLine).join(" | ")}`);
+  if (anchors.length) {
+    bits.push(`érzelmi kapaszkodók: ${anchors.slice(-6).map(memoryToLine).join(" | ")}`);
   }
-  if ((mem.knownFacts || []).length) {
-    bits.push(`tények: ${(mem.knownFacts || []).slice(-10).map(memoryToLine).join(" | ")}`);
+  if (trustedFacts.length) {
+    bits.push(`tények: ${trustedFacts.slice(-10).map(memoryToLine).join(" | ")}`);
   }
-  if ((mem.witnessedEvents || []).length) {
-    bits.push(`szemtanú események: ${(mem.witnessedEvents || []).slice(-10).map(memoryToLine).join(" | ")}`);
+  if (witnessed.length) {
+    bits.push(`szemtanú események: ${witnessed.slice(-10).map(memoryToLine).join(" | ")}`);
   }
-  if ((mem.conversations || []).length) {
-    bits.push(`korábbi beszélgetésekből fontos: ${(mem.conversations || []).slice(-10).map(memoryToLine).join(" | ")}`);
+  if (conversations.length) {
+    bits.push(`korábbi beszélgetésekből fontos: ${conversations.slice(-10).map(memoryToLine).join(" | ")}`);
   }
-  if ((mem.rumors || []).length) {
-    bits.push(`pletykák: ${(mem.rumors || []).slice(-6).map(memoryToLine).join(" | ")}`);
+  if (rumors.length) {
+    bits.push(`pletykák: ${rumors.slice(-6).map(memoryToLine).join(" | ")}`);
   }
-  if ((mem.suspicions || []).length) {
-    bits.push(`feltételezések: ${(mem.suspicions || []).slice(-5).map(memoryToLine).join(" | ")}`);
+  if (suspicions.length) {
+    bits.push(`feltételezések: ${suspicions.slice(-5).map(memoryToLine).join(" | ")}`);
   }
-  if ((mem.learnedSecrets || []).length) {
-    bits.push(`megtanult titkok: ${(mem.learnedSecrets || []).slice(-6).map(memoryToLine).join(" | ")}`);
+  if (secrets.length) {
+    bits.push(`megtanult titkok: ${secrets.slice(-6).map(memoryToLine).join(" | ")}`);
   }
-  if ((mem.roleplayLongTerm || []).length) {
-    bits.push(`hosszú távú roleplay-emlékek: ${(mem.roleplayLongTerm || []).slice(-10).map(memoryToLine).join(" | ")}`);
+  if (longRoleplay.length) {
+    bits.push(`hosszú távú roleplay-emlékek: ${longRoleplay.slice(-10).map(memoryToLine).join(" | ")}`);
   }
-  if ((mem.roleplayRecent || []).length) {
-    bits.push(`friss roleplay-emlékek: ${(mem.roleplayRecent || []).slice(-8).map(memoryToLine).join(" | ")}`);
+  if (recentRoleplay.length) {
+    bits.push(`friss roleplay-emlékek: ${recentRoleplay.slice(-8).map(memoryToLine).join(" | ")}`);
   }
   const sharedRows = Object.entries(mem.roleplayShared || {})
     .map(([targetId, rows]) => {
       const target = charById(w, targetId);
-      const recent = Array.isArray(rows) ? rows.slice(-4).map(memoryToLine).join(" | ") : "";
+      const trusted = grounded(Array.isArray(rows) ? rows : []);
+      const recent = trusted.slice(-4).map(memoryToLine).join(" | ");
       return recent ? `${target ? target.name : targetId}: ${recent}` : "";
     })
     .filter(Boolean)
@@ -7054,8 +7098,9 @@ function characterMemoryCard(w, c) {
    * nem nő akkorára, hogy a modell üres / használhatatlan JSON-t adjon vissza.
    */
   return `
---- ${String(c.name || c.id).toUpperCase()} SAJÁT EMLÉKEZETE ---
+--- ${String(c.name || c.id).toUpperCase()} SAJÁT EMLÉKEZETE — GROUND TRUTH ---
 ${spread(memory, 1900)}
+MEMORY HARD RULE: csak a fent ténylegesen felsorolt emléket kezeld megtörtént múltnak. Ha egy konkrét közös jelenet, mondat, helyszín, ajándék, csók, vita, buli, sérülés, ígéret vagy más epizód NINCS itt, a jelenlegi chat/thread/scene pontos előzményeiben vagy a saját karakterlapodon explicit leírva, NE találj ki róla visszaemlékezést. A kapcsolat címkéje (pl. best friend/crush/ex) önmagában nem bizonyít egy konkrét múltbeli jelenetet.
 --- eddig az emlékezet ---`;
 }
 
@@ -7693,7 +7738,7 @@ function commentReactionLenses(w, c, targetId, post) {
       "inside-joke energy or shorthand only these two would use",
       "affectionate teasing that still clearly reads as loyalty",
       "specific supportive/protective reaction instead of generic praise",
-      "callback to shared history or a remembered detail",
+      "callback ONLY to an explicitly stored/canon shared detail; otherwise use familiarity without inventing an anecdote",
       "casual one-liner showing high familiarity"
     );
   } else if (
@@ -10839,8 +10884,8 @@ function relationshipBehaviorCard(
   if (storySnippet) {
     parts.push(
       en
-        ? `your OWN story explicitly connects you to this person; treat this as active history, not trivia: ${spread(storySnippet, 520)}`
-        : `a SAJÁT történeted konkrétan összeköt ezzel az emberrel; ezt aktív közös múltnak kezeld, ne díszletnek: ${spread(storySnippet, 520)}`
+        ? `your OWN story explicitly connects you to this person; treat ONLY the explicitly written details as active history: ${spread(storySnippet, 520)}. Do not invent an unspecified shared anecdote, place, event, promise, kiss, fight, gift, trip or conversation merely because the relationship exists.`
+        : `a SAJÁT történeted konkrétan összeköt ezzel az emberrel; CSAK az explicit leírt részleteket kezeld közös múltnak: ${spread(storySnippet, 520)}. Ne találj ki nem leírt közös sztorit, helyszínt, eseményt, ígéretet, csókot, vitát, ajándékot, utazást vagy beszélgetést pusztán azért, mert a kapcsolat létezik.`
     );
   }
 
@@ -11596,9 +11641,10 @@ function deepBrief(w, c, isPlayerSheet, observerId) {
   const selfView = observerId && observerId === c.id;
   const lang = worldLanguage(w, observerId || w.meId);
   const tt = (hu, en) => (lang === "en" ? en : hu);
-  const mems = selfView
-    ? (w.mems[c.id] || []).slice(-4).map((m) => cut(m, 90))
-    : [];
+  /* Raw w.mems rows may contain legacy/model-authored summaries from old
+   * versions. Do not re-inject them as factual memory; structured grounded
+   * memory from selfMemoryForPrompt/known-character state is authoritative. */
+  const mems = [];
   const lines = recentLines(w, c.id);
   const bonds = bondLines(w, c.id, selfView);
   /*
@@ -11755,7 +11801,7 @@ VÉGREHAJTÁSI ELSŐBBSÉG — HA KÉT SZABÁLY LÁTSZÓLAG ÜTKÖZIK:
 1. SAJÁT KÁNON / RENDSZER-RÉTEG: a karakter személyisége, backstory-ja, értékei, hibái, beszédstílusa és motivációi a legerősebb réteg. Ez mondja meg, KI ő.
 2. KAPCSOLATI SZŰRŐ: a score + bond + aktív érzés azt modulálja, HOGYAN fejezi ki ugyanazt a személyiséget az adott ember felé. A filter nem cseréli le a személyiséget.
 3. RÖVID TÁVÚ KONTEXTUS: a legutóbbi 10-20 közvetlen üzenet, reply vagy jelenlegi thread hangulata határozza meg a pillanatnyi kommunikációs hőmérsékletet. A baráti folytonosság maradjon baráti; a valóban kibontakozó konfliktus látszódhat.
-4. HOSSZÚ TÁVÚ EMLÉKEK / KÖZÖS MÚLT: a fontos mérföldkövek, sérelmek, közös poénok, lojalitás és korábbi események stabilan színezik a kapcsolatot.
+4. HOSSZÚ TÁVÚ EMLÉKEK / KÖZÖS MÚLT: CSAK az explicit karakterlapban vagy ténylegesen eltárolt, megfigyelt interakcióban szereplő részletek színezhetik a kapcsolatot. A bond/Connections megmondhatja, hogy két ember régóta barát, crush, ex stb., de ebből SOHA ne találj ki konkrét „emlékszel amikor…” jelenetet, helyet, mondatot, csókot, bulit, ajándékot, veszekedést vagy más múltbeli eseményt.
 5. AKTUÁLIS ESEMÉNY: egy konkrét mostani történés ideiglenesen felülírhatja az alaphangot, de csak ha ténylegesen megtörtént.
 6. VÁLTOZATOSSÁG: ez a leggyengébb réteg. SOHA ne találj ki random bunkóságot, konfliktust vagy személyiségváltást pusztán azért, hogy más legyen a következő válasz.
 
@@ -11766,6 +11812,7 @@ KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
 - FONTOS TUDÁSHATÁR: attól, hogy TE mint engine látod minden karakter teljes adatlapját, az egyik SZEREPLŐ nem tudhat automatikusan a másik titkairól, félelmeiről, belső céljairól vagy rejtett múltjáról. Egy karakter csak azt használhatja tudásként másokról, amit nyilvánosan láthatott, személyesen megtudott, átélt, neki elmondtak, vagy saját emléke/feltételezése alátámaszt.
 - Saját magáról viszont minden karakter teljes adatlapja aktív kánon.
 - A karakterlap TELJES tartalma viselkedési specifikáció, nem háttérdísz.
+- EMLÉK-GROUNDING HARD RULE: konkrét múltbeli epizódot csak akkor állíthatsz megtörténtnek, ha azt a saját karakterlap explicit leírja VAGY a tárolt, tényleges social/chat/RP előzmény bizonyítja. Kapcsolatcímkéből, hangulatból, crushból, best-friend státuszból vagy „közös múlt” általános tényéből ne gyárts új anekdotát. Ha nincs bizonyíték, maradj általános („régóta ismerlek”), vagy ne hivatkozz múltra.
 - KÁNON-KERESZTHIVATKOZÁS: ugyanaz a kapcsolat/rang/szerep több mezőben is szerepelhet. Ha a történet, extra infó, rang, szervezet, kapcsolat vagy más adatlapmező ugyanazt a tényt erősíti (pl. valaki a karakter SAJÁT senseie), azt erős kánonként kezeld, ne hagyd elveszni egyetlen mezőben.
 - HIERARCHIA ÉS MEGSZÓLÍTÁS: címeket személyes kapcsolathoz kösd, ne puszta foglalkozáshoz. A karakter a SAJÁT senseiét alapból „Sensei + vezetéknév” formában szólítsa (pl. Sensei Silver), ne lazán a keresztnevén, hacsak a saját kánonjuk más megszólítást nem rögzít. Más ember senseiét NEM hívja automatikusan senseinek. Egy veszélyes/magas tekintélyű senseivel nem-sensei karakter ne legyen ok nélkül lazán tiszteletlen; más sensei mint tekintélyi kortárs viszont a saját kánonja alapján nyíltan kihívhatja vagy tiszteletlen lehet vele.
 - Minden generálás előtt egyeztesd a választ a személyiséggel, tulajdonságokkal, beszédstílussal, teljes történettel, titkokkal, félelmekkel, célokkal, kedvencekkel, képességekkel, szervezettel, ranggal, kapcsolatokkal és aktuális emlékekkel.
@@ -12023,7 +12070,7 @@ EXECUTION PRIORITY — WHEN TWO RULES APPEAR TO CONFLICT:
 1. OWN CANON / SYSTEM LAYER: the character's personality, backstory, values, flaws, speech style and motivations are the strongest layer. This decides WHO they are.
 2. RELATIONSHIP FILTER: score + bond + active feeling modulate HOW that same personality is expressed toward this specific person. The filter never replaces personality.
 3. SHORT-TERM CONTEXT: the latest 10-20 direct messages, replies or current thread lines determine the immediate conversational temperature. Friendly continuity should stay friendly; a conflict that is genuinely unfolding now may sharpen it.
-4. LONG-TERM MEMORY / SHARED HISTORY: important milestones, old grievances, inside jokes, loyalty and prior events provide stable continuity.
+4. LONG-TERM MEMORY / SHARED HISTORY: ONLY details explicitly present in canon or actually stored from observed interactions may provide continuity. A bond/Connections entry may establish that two people are old friends, crushes, exes, etc., but NEVER invent a concrete “remember when…” scene, location, quote, kiss, party, gift, argument or other past event just because the relationship exists.
 5. CURRENT EVENT: a concrete event happening now may temporarily shift the baseline, but only if it actually happened.
 6. VARIETY: this is the weakest layer. NEVER invent random rudeness, conflict or a personality swing merely to make the next response different.
 
@@ -12031,6 +12078,7 @@ FILTER EXAMPLE: a sarcastic character can still be sharp with a best friend, but
 
 CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - Treat the ENTIRE character sheet as active behavioral canon, not decorative background.
+- MEMORY GROUNDING HARD RULE: claim a concrete past episode only when the character's own sheet explicitly states it OR stored observed social/chat/RP history proves it. Never fabricate an anecdote from a relationship label, mood, crush, best-friend bond or generic “shared history”. If evidence is absent, stay general or do not reference a past event.
 - CONNECTIONS is private self-canon: a parent, sibling, ex, mentor, old friend, rival, or other person named there as text genuinely belongs to THIS character's history/life, so THIS character may remember them, talk about them, and be emotionally shaped by that relationship. These named people are NOT world entities: they have no ID, profile, relationship score, chat, or AI agent.
 - PRIVATE KNOWLEDGE BOUNDARY: one character's Connections field never becomes another character's knowledge automatically. Another character may know that person/fact only if it also exists in their own canon or they actually learned it during play and retained it in memory.
 - CROSS-REFERENCE CANON ACROSS FIELDS: the same relationship, rank or role may appear in history, extra info, organizations, relationships, rank or other fields. Repeated/consistent evidence is strong canon. Do not lose a fact just because it is not stored in one preferred field.
@@ -26962,8 +27010,10 @@ function rememberRoleplayObservedTurn(n, scene, turn) {
 }
 
 function safeAiRoleplayLongTermMemories(out) {
-  return safeAiArray(out, "longTermMemories")
-    .filter((row) => row && typeof row === "object");
+  /* Same rule as generic memories: the model may summarize behavior, but it may
+   * not create authoritative past facts. Exact stored RP turns are the source of
+   * truth and are persisted by rememberRoleplayObservedTurn(). */
+  return [];
 }
 
 function applyRoleplayLongTermMemories(n, scene, out) {
@@ -27002,9 +27052,15 @@ function applyRoleplayLongTermMemories(n, scene, out) {
 
 function commitSceneSummaryToRoleplayMemory(n, scene, summaryText) {
   if (!n || !scene) return;
-  const summary = normalizeRoleplayMemoryText(summaryText, 500);
+
+  /* v65: never promote a model-written scene summary into factual long-term
+   * memory. Build the recap from the exact stored turn ledger instead. */
+  const ledger = syncSceneRoleplayTurnLedger(scene, n);
+  const exactTurns = (ledger.recentTurns || []).slice(-12);
+  const summary = normalizeRoleplayMemoryText(exactTurns.join(" | "), 900);
   if (!summary) return;
-  const source = `roleplay_summary:${String(scene.id || "scene").slice(0, 18)}`;
+
+  const source = `roleplay_exact:${String(scene.id || "scene").slice(0, 18)}`;
   (scene.cast || []).filter((id) => id && !isHuman(n, id)).forEach((observerId) => {
     const mem = ensureCharMemory(n, observerId);
     const entry = {
@@ -27014,7 +27070,6 @@ function commitSceneSummaryToRoleplayMemory(n, scene, summaryText) {
       timestamp: now(),
     };
     mem.roleplayLongTerm = mergeKnowledgeItems(mem.roleplayLongTerm, [entry], "roleplay_long", 70);
-    mem.personalMilestones = mergeKnowledgeItems(mem.personalMilestones, [entry], "milestone", 60);
   });
 }
 
@@ -29968,7 +30023,7 @@ KAPCSOLATVÁLTOZÁS:
 - Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
 
 Formátum:
-{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"memory":"egy mondat, ha történt valami emlékezetes, különben üres","roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event vagy group_social","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
+{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event vagy group_social","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
     , { maxTries: 1, maxTokens: 650, timeoutMs: 28000 }
     );
 
@@ -30266,19 +30321,19 @@ Formátum:
             n,
             c.id,
             `Privát üzenetet kaptam: ${cut(
-              reply ||
+              t ||
               (
-                aiImageDescription
-                  ? `📷 ${aiImageDescription}`
+                outgoingImageDescription
+                  ? `📷 ${outgoingImageDescription}`
                   : "📷 kép"
               ),
               110
             )}`,
             `I got a private message: ${cut(
-              reply ||
+              t ||
               (
-                aiImageDescription
-                  ? `📷 ${aiImageDescription}`
+                outgoingImageDescription
+                  ? `📷 ${outgoingImageDescription}`
                   : "📷 image"
               ),
               110
@@ -30320,15 +30375,9 @@ Formátum:
         }
       );
 
-      if (
-        out.memory &&
-        String(out.memory).trim()
-      ) {
-        n.mems[c.id] = [
-          ...(n.mems[c.id] || []),
-          String(out.memory).trim(),
-        ].slice(-16);
-      }
+      /* v65: no free-form AI memory is appended here. The actual incoming
+       * player message and the AI's actual sent reply are already stored through
+       * deterministic chat/event memory paths above. */
     });
 
     /*
@@ -42505,12 +42554,12 @@ function feedNeedsFreshPost(w) {
   const last = lastAiFeedPostAt(w);
 
   /*
-   * LIVING WORLD v51 — POST IS THE PRIMARY PULSE.
-   * A világ leggyakoribb önálló tartalmi mozdulata az új poszt. A karakter-
-   * aktivitás továbbra is számít, de a feed nem vár perceket DM/reply mögött.
+   * v65 — posts are a slower feed pulse. The world can stay active through
+   * comments/replies/DMs/groups between posts without flooding the feed.
    */
-  const postPeak = Math.max(0.55, channelActivityPeak(w, "post"));
-  const target = Math.max(25000, Math.round(LIVE_WORLD_POST_TARGET_MS / Math.min(1.85, postPeak)));
+  /* Character activity decides WHO posts, not whether the whole feed spams.
+   * New autonomous feed posts may not bypass the global 10-minute floor. */
+  const target = LIVE_WORLD_POST_TARGET_MS;
   return !last || now() - last >= target;
 }
 
@@ -43223,8 +43272,7 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
 
   /* A feed ugyanebben a deficit-versenyben vesz részt; nem külön VIP-sáv. */
   const feedLast = lastAiFeedPostAt(view);
-  const postPeak = Math.max(0.25, channelActivityPeak(view, "post"));
-  const feedTarget = Math.max(85000, Math.round(115000 / postPeak));
+  const feedTarget = LIVE_WORLD_POST_TARGET_MS;
   const feedElapsed = feedLast ? ts - feedLast : feedTarget * 2.2;
 
   if (permits("feed") && feedElapsed >= feedTarget) {
@@ -43379,8 +43427,8 @@ function planAutoAction(view) {
   }
 
   /*
-   * LIVING WORLD PRIORITY v53
-   * 1) ÚJ POSZT — ez a világ leggyakoribb autonóm tartalma.
+   * v65 FEED CADENCE
+   * 1) ÚJ POSZT — legkorábban kb. 10 percenként egy új autonóm feed-poszt.
    */
   if (feedNeedsFreshPost(view)) {
     return mkAction(
@@ -43398,7 +43446,7 @@ function planAutoAction(view) {
    * Így a kommentek sűrűek a friss posztokon, de nem eszik meg a világot.
    */
   const freshCommentPost = freshFeedPostCommentCandidate(view);
-  if (freshCommentPost && Math.random() < 0.72) {
+  if (freshCommentPost) {
     const visual = visualPostReactionProfile(view, freshCommentPost);
     const existingCount = safePostComments(freshCommentPost).length;
     const visualMax = visual.adultHighAttention
