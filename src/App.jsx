@@ -6029,7 +6029,7 @@ const LIVE_WORLD_GROUP_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.
 const LIVE_WORLD_ROLEPLAY_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_ROLEPLAY_MULTIPLIER) || 1.25));
 const LIVE_WORLD_NOTE_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_NOTE_MULTIPLIER) || 1.10));
 const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(7000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 9000));
-const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.45, Math.min(2.50, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 0.82));
+const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.60, Math.min(2.80, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 1.00));
 const LIVE_WORLD_CANCEL_SENSITIVITY = Math.max(0.60, Math.min(2.20, Number(import.meta.env.VITE_WORLD_CANCEL_SENSITIVITY) || 1.32));
 const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(import.meta.env.VITE_WORLD_MAX_POPUP_REROLLS) || 5)));
 
@@ -11579,6 +11579,40 @@ function sanitizeUnjustifiedColdDm(w, botId, contextText, value) {
 
   const cleaned = pieces.join(" ").trim();
   return cleaned || emergencyFriendlyDmReply(w, botId, contextText);
+}
+
+function autonomousDmWarmthInstruction(w, botId, contextText = "") {
+  if (!w || !botId || botId === w.meId) return "";
+
+  const rel = getRel(w, botId, w.meId) || {};
+  const tier = relationshipFilterTier(rel);
+  const declaredFriend = relationshipDeclaresFriendship(rel);
+  const positive = tier === "good" || tier === "close" || declaredFriend;
+  if (!positive) return "";
+
+  const conflict = friendshipConflictEvidenceLevel(
+    w,
+    botId,
+    w.meId,
+    contextText
+  );
+  const en = worldLanguage(w, w.meId) === "en";
+
+  if (conflict >= 2) {
+    return en
+      ? `GOOD RELATIONSHIP, REAL CURRENT CONFLICT: you genuinely care about this person, but a concrete serious conflict is active. The DM may be hurt, angry or tense because of THAT cause; do not turn the underlying bond into random contempt.`
+      : `JÓ KAPCSOLAT, VALÓDI AKTUÁLIS KONFLIKTUS: ténylegesen fontos neked ez az ember, de most konkrét komoly konfliktus van köztetek. A DM lehet sértett, dühös vagy feszült EBBŐL az okból; az alapkapcsolatot ne változtasd random megvetéssé.`;
+  }
+
+  if (conflict === 1) {
+    return en
+      ? `POSITIVE RELATIONSHIP BASELINE: there is some real tension, but you still like/care about this person. Let the message feel familiar and emotionally connected rather than hostile or dismissive. Mild edge, jealousy or affectionate sarcasm is fine; contempt is not.`
+      : `POZITÍV KAPCSOLATI ALAPHANG: van köztetek valós kisebb feszültség, de továbbra is kedveled/fontos neked. Az üzenet legyen ismerős és érzelmileg kapcsolódó, ne ellenséges vagy lekezelő. Enyhe csípősség, féltékenység vagy szeretetteljes szarkazmus belefér; megvetés nem.`;
+  }
+
+  return en
+    ? `FRIENDLY INITIATION — HARD RULE: you are voluntarily texting someone you genuinely like. The opening must READ as warm, comfortable, familiar or affectionate in YOUR own style. A sarcastic/blunt/cold personality may tease, be dry or brief, but the subtext must still be friendly. A close/best friend should not receive random suspicion, contempt, interrogation, dismissal or hostile attitude. Natural options include checking in, a casual joke, affectionate teasing, a small compliment, sharing a thought, asking what they are doing, inviting them somewhere, or simply reaching out because you enjoy talking to them. Do not become generic-sweet; stay character-faithful, just clearly kind toward this person.`
+    : `BARÁTSÁGOS KEZDEMÉNYEZÉS — HARD RULE: magadtól írsz rá valakire, akit ténylegesen kedvelsz. Már az első üzenetből ÉRZŐDJÖN, hogy meleg, kényelmes, ismerős vagy szeretetteljes a viszonyotok — a SAJÁT stílusodban. Egy szarkasztikus/nyers/rideg karakter lehet száraz, rövid vagy ugrató, de a mögöttes hang akkor is legyen baráti. Közeli/legjobb barátnál ne indulj random gyanakvással, megvetéssel, kihallgatással, lekezeléssel vagy ellenséges attitűddel. Természetes lehet egy check-in, laza poén, szeretetteljes ugratás, apró bók, gondolat megosztása, „mit csinálsz?”, meghívás vagy egyszerűen az, hogy jólesik vele beszélni. Ne válj generikusan cukivá; maradj karakterhű, csak vele egyértelműen kedves.`;
 }
 
 function dmPresenceGuardInstruction(
@@ -32393,6 +32427,12 @@ ${dmPresenceGuardInstruction(
   hist
 )}
 
+${autonomousDmWarmthInstruction(
+  w,
+  bot.id,
+  hist
+)}
+
 ${matureContentInstruction(
   w,
   [bot.id],
@@ -32618,6 +32658,7 @@ async function genForcedEverydayDM(w, bot) {
 ${voiceCard(bot)}
 ${characterMemoryCard(w,bot)}
 ${relationshipBehaviorCard(w,bot.id,w.meId)}
+${autonomousDmWarmthInstruction(w,bot.id,(w.chats[chatKey(w.meId,bot.id)]||[]).slice(-14).map((m)=>m&&m.text||"").join("\n"))}
 ${characterAgentRuntimeCard(w,[bot.id],{surface:"dm",targetId:w.meId,messages:w.chats[chatKey(w.meId,bot.id)]||[]})}
 
 AUTONOMOUS DM RETRY — DO NOT SKIP:
@@ -32637,12 +32678,28 @@ function fallbackAutonomousDmResponse(w, bot) {
   const en = worldLanguage(w, w.meId) === "en";
   const rel = getRel(w, bot.id, w.meId) || {};
   const bond = String(rel.bond || "").toLowerCase();
+  const tier = relationshipFilterTier(rel);
   const romantic = bondLooksRomantic(rel) || /crush|dating|partner|lover|boyfriend|girlfriend|romance|szerelm|fl[oö]rt/.test(bond);
+  const friendly = tier === "good" || tier === "close" || relationshipDeclaresFriendship(rel);
   const negative = Number(rel.score) <= -25 || /enemy|rival|ellens|riv[aá]l/.test(bond);
   let text;
-  if (romantic) text = en ? "you free later?" : "ráérsz később?";
-  else if (negative) text = en ? "we need to talk." : "beszélnünk kell.";
-  else text = en ? "you around?" : "ráérsz egy percre?";
+
+  if (romantic && !negative) {
+    const options = en
+      ? ["you free later?", "what are you doing rn?", "come talk to me for a sec", "kinda wanted to hear from you"]
+      : ["ráérsz később?", "mit csinálsz most?", "gyere beszélj velem egy kicsit", "most valamiért rád akartam írni"];
+    text = options[Math.floor(Math.random() * options.length)];
+  } else if (friendly && !negative) {
+    const options = en
+      ? ["what are you up to?", "you alive? 😭", "okay come talk to me", "random but how are you?"]
+      : ["mit csinálsz?", "élsz még? 😭", "na gyere beszélj velem", "random, de hogy vagy?"];
+    text = options[Math.floor(Math.random() * options.length)];
+  } else if (negative) {
+    text = en ? "we need to talk." : "beszélnünk kell.";
+  } else {
+    text = en ? "you around?" : "ráérsz egy percre?";
+  }
+
   return { skip:false, text, image:"", imagePrompt:"", relationshipImpact:false, changes:[], selfUpdates:[], relationshipUpdates:[] };
 }
 
@@ -36931,18 +36988,19 @@ function popupGenerationBlocked(w) {
 
 function popupCadenceMs(w) {
   const level = storySettingsOf(w).dramaLevel;
-  /* v59: popup is a meaningful interruption, not a second-by-second feed layer.
-     Even high/chaotic worlds should have breathing room between interruptions. */
+  /* v66: popup is an occasional story interruption, not a parallel feed.
+     Posts/comments/DMs keep the world alive between popups. Even chaotic mode
+     gets real breathing room instead of throwing a decision modal every few minutes. */
   const base =
     level === "low"
-      ? 10 * 60 * 1000
+      ? 24 * 60 * 1000
       : level === "high"
-        ? 5 * 60 * 1000
+        ? 12 * 60 * 1000
         : level === "chaotic"
-          ? 4 * 60 * 1000
-          : 6.5 * 60 * 1000;
+          ? 9 * 60 * 1000
+          : 16 * 60 * 1000;
 
-  return Math.max(3 * 60 * 1000, Math.round(base * LIVE_WORLD_POPUP_CADENCE_MULTIPLIER));
+  return Math.max(8 * 60 * 1000, Math.round(base * LIVE_WORLD_POPUP_CADENCE_MULTIPLIER));
 }
 
 function popupLastGeneratedAt(w) {
@@ -43707,7 +43765,10 @@ function planAutoAction(view) {
   /*
    * 7. VÁRATLAN POPUP EVENT
    */
-  if (Math.random() < (storySettingsOf(view).dramaLevel === "low" ? 0.04 : storySettingsOf(view).dramaLevel === "high" ? 0.10 : storySettingsOf(view).dramaLevel === "chaotic" ? 0.14 : 0.07)) {
+  if (
+    popupEventOverdue(view) &&
+    Math.random() < (storySettingsOf(view).dramaLevel === "low" ? 0.03 : storySettingsOf(view).dramaLevel === "high" ? 0.07 : storySettingsOf(view).dramaLevel === "chaotic" ? 0.09 : 0.05)
+  ) {
     const popupSeed = pickPopupEventSeed(view, { allowAmbient: true });
     if (popupSeed) {
       return mkAction(
@@ -46226,6 +46287,29 @@ if (targetNote) {
       recentDmContext,
       txt
     );
+
+    /* v66: if a positive relationship still collapses to an empty/hostile
+       autonomous opener after sanitization, use a friendly character-safe ping
+       instead of delivering accidental contempt. */
+    const autonomousRel = getRel(view, bot.id, view.meId) || {};
+    const autonomousTier = relationshipFilterTier(autonomousRel);
+    const autonomousFriendly =
+      autonomousTier === "good" ||
+      autonomousTier === "close" ||
+      relationshipDeclaresFriendship(autonomousRel);
+    const autonomousConflict = friendshipConflictEvidenceLevel(
+      view,
+      bot.id,
+      view.meId,
+      recentDmContext
+    );
+    if (
+      autonomousFriendly &&
+      autonomousConflict === 0 &&
+      (!txt || socialTextHostilityLevel(txt) > 0 || DM_COLD_DISMISSAL_RE.test(txt))
+    ) {
+      txt = fallbackAutonomousDmResponse(view, bot).text;
+    }
 
     const legacyAlbumIntent =
       out && out.image
