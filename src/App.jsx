@@ -3639,26 +3639,26 @@ function publicCancelRiskSignals(text) {
 
   /* Direct aggression / humiliating public callout. */
   if (/\b(?:fuck\s+you|shut\s+up|bitch|idiot|loser|pathetic|trash|fake|liar|lying|hate\s+you|kuss|idióta|vesztes|szánalmas|kamu|hazudsz|utállak)\b/i.test(low)) {
-    dislike += 9;
-    controversy += 12;
-    cancel += 5;
-    embarrassment += 8;
+    dislike += 12;
+    controversy += 16;
+    cancel += 8;
+    embarrassment += 10;
     tags.push("public-callout", "backlash-risk");
   }
 
   if (/\b(?:i['’]?ll\s+(?:kill|hit|ruin)|watch\s+your\s+back|fight\s+me|try\s+me|megöllek|megverlek|tönkreteszlek)\b/i.test(low)) {
-    dislike += 12;
-    controversy += 18;
-    cancel += 11;
+    dislike += 18;
+    controversy += 28;
+    cancel += 24;
     tags.push("threat", "cancel-risk");
   }
 
   /* Admitted fabrication / clout-chasing is a strong cancel seed. */
   if (/\b(?:i\s+(?:lied|made\s+it\s+up|faked)|fake(?:d)?\s+(?:a\s+)?(?:funeral|death|story)|for\s+(?:likes|clout|attention)|hazudtam|kitaláltam|megrendeztem|lájkokért|figyelemért)\b/i.test(low)) {
-    dislike += 18;
-    controversy += 22;
-    cancel += 26;
-    embarrassment += 20;
+    dislike += 26;
+    controversy += 34;
+    cancel += 46;
+    embarrassment += 30;
     tags.push("dishonesty", "clout-chasing", "cancel-risk");
   }
 
@@ -5916,13 +5916,13 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * VITE_WORLD_ACTIVITY_MULTIPLIER=1.35
  * VITE_WORLD_POST_MULTIPLIER=1.15
  * VITE_WORLD_COMMENT_MULTIPLIER=1.25
- * VITE_WORLD_DM_MULTIPLIER=1.20
+ * VITE_WORLD_DM_MULTIPLIER=1.00
  * VITE_WORLD_GROUP_MULTIPLIER=1.15
- * VITE_WORLD_ROLEPLAY_MULTIPLIER=1.25
+ * VITE_WORLD_ROLEPLAY_MULTIPLIER=1.00
  * VITE_WORLD_NOTE_MULTIPLIER=1.10
  * VITE_WORLD_CONTENT_INTERVAL_MS=9000
- * VITE_WORLD_POPUP_CADENCE_MULTIPLIER=0.80
- * VITE_WORLD_CANCEL_SENSITIVITY=1.35
+ * VITE_WORLD_POPUP_CADENCE_MULTIPLIER=1.00
+ * VITE_WORLD_CANCEL_SENSITIVITY=1.55
  * VITE_AI_BACKGROUND_GAP_MS=8000
  */
 const LIVE_WORLD_ACTIVITY_MULTIPLIER = Math.max(0.55, Math.min(2.40, Number(import.meta.env.VITE_WORLD_ACTIVITY_MULTIPLIER) || 1.28));
@@ -5948,10 +5948,10 @@ const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(10 * 60000, Math.min(3 * 360
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(10000, Math.min(120000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 22000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(2, Math.min(12, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 6)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(75 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 125 * 1000));
-const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 3.5 * 60 * 1000));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(20 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 6 * 60 * 1000));
+const LIVE_WORLD_EVENT_TARGET_MS = Math.max(6 * 60 * 1000, Math.min(30 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 12 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
-const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(15 * 1000, Math.min(3 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 45 * 1000));
+const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
 const AI_BACKGROUND_GAP_MS = Math.max(3500, Math.min(30000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 8000));
 const AI_INITIATIVE_GAP_MS = Math.max(1800, Math.min(15000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 3000));
 
@@ -13683,7 +13683,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v58-public-romantic-jealousy";
+const BUILD_VERSION = "v59-realism-cadence-cancel";
 
 const AUTO = "masvilag:auto";
 /*
@@ -31566,8 +31566,8 @@ PRIVÁT ÜZENET SZABÁLYOK:
 
 - Ezt a kört a rendszer azért adta NEKED, mert a személyiséged, kapcsolatod és online aktivitásod alapján most te vagy az egyik legvalószínűbb spontán kezdeményező.
 - Ne várj feltétlenül nagy eseményre. Egy valódi ember is ráírhat valakire pusztán egy apró kérdés, poén, gondolat, pletyka, meghívás, kép, "hol vagy?", praktikus ügy vagy pillanatnyi késztetés miatt.
-- A skip:true legyen RITKA: csak akkor használd, ha a karaktered tényleg tudatosan nem keresné most ${w.player.name} karaktert, vagy a jelenlegi kánon ezt kifejezetten indokolja.
-- Ha nincs nagy történés, találj egy KICSI, hétköznapi, de karakterhű indokot a ráírásra; ne találj ki hozzá új tényt vagy drámát.
+- A skip:true teljesen legitim. Csak akkor írj, ha MOST van természetes okod: nyitott ügy, friss történés, konkrét kérdés/terv, kapcsolati késztetés vagy valóban karakterhű hétköznapi kontaktus. Ne gyárts kötelező DM-et pusztán az idő múlásából.
+- Ha nincs nagy történés, egy KICSI, hétköznapi, karakterhű indok elég, DE ne erőltesd az üzenetet csak azért, mert a scheduler most neked adott kört. Ha a continuity, friss kontextus és személyiséged alapján sem lenne természetes, inkább skip:true.
 - Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz, tervhez vagy egyszerűen valamihez, amit most akarsz tőle.
 - Az ok lehet egészen hétköznapi is.
 - Nem kell minden spontán DM mögé nagy történés, konfliktus vagy dráma.
@@ -32399,7 +32399,7 @@ function ensureSimState(w) {
   /* v53 migration: do not let a backlog created by the old comment/feed scheduler
      delay the new fairness lanes for minutes. Manual requests survive; stale
      background actions are rebuilt by the new planner from current state. */
-  if (Number(w.sim.schedulerVersion) !== 54) {
+  if (Number(w.sim.schedulerVersion) !== 59) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -32410,10 +32410,10 @@ function ensureSimState(w) {
        used a constant synthetic elapsed value when there had never been a
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
-    w.sim.liveWorldStartedAt = now() - 45000;
-    w.sim.schedulerVersion = 54;
+    w.sim.liveWorldStartedAt = now();
+    w.sim.schedulerVersion = 59;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 54;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 59;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -36075,16 +36075,18 @@ function popupGenerationBlocked(w) {
 
 function popupCadenceMs(w) {
   const level = storySettingsOf(w).dramaLevel;
+  /* v59: popup is a meaningful interruption, not a second-by-second feed layer.
+     Even high/chaotic worlds should have breathing room between interruptions. */
   const base =
     level === "low"
-      ? 3.5 * 60 * 1000
+      ? 10 * 60 * 1000
       : level === "high"
-        ? 1.45 * 60 * 1000
+        ? 5 * 60 * 1000
         : level === "chaotic"
-          ? 1.15 * 60 * 1000
-          : 1.75 * 60 * 1000;
+          ? 4 * 60 * 1000
+          : 6.5 * 60 * 1000;
 
-  return Math.max(60 * 1000, Math.round(base * LIVE_WORLD_POPUP_CADENCE_MULTIPLIER));
+  return Math.max(3 * 60 * 1000, Math.round(base * LIVE_WORLD_POPUP_CADENCE_MULTIPLIER));
 }
 
 function popupLastGeneratedAt(w) {
@@ -36243,6 +36245,74 @@ function pickPopupEventSeed(w, options = {}) {
 
   return null;
 }
+function popupCharacterAgeNumber(w, c) {
+  if (!c) return null;
+  const value = Number(String(ageOf(c, w) || c.age || "").match(/\d{1,3}/)?.[0]);
+  return Number.isFinite(value) && value > 0 && value < 130 ? value : null;
+}
+
+function popupLifeStage(w, c) {
+  if (!c) return "unknown";
+  const age = popupCharacterAgeNumber(w, c);
+  const text = [c.job, c.bio, c.backstory, c.extra].filter(Boolean).join(" ").toLowerCase();
+  if (/\b(?:university|college|undergrad|undergraduate|campus|egyetem|egyetemista|f[oő]iskola|f[oő]iskol[aá]s)\b/.test(text)) return "university";
+  if (/\b(?:high\s*school|secondary\s*school|gimn[aá]zium|gimis|k[oö]z[eé]piskola|k[oö]z[eé]piskol[aá]s)\b/.test(text)) return "high-school";
+  if (/\b(?:student|di[aá]k)\b/.test(text)) {
+    if (age !== null && age <= 19) return "high-school";
+    if (age !== null && age >= 20) return "university";
+    return "student";
+  }
+  if (age !== null && age < 18) return "high-school";
+  return "adult";
+}
+
+function popupRealityRoster(w, seed) {
+  if (!w) return "-";
+  const ids = [w.meId, seed && seed.actorId, ...((seed && seed.targetIds) || []), ...((seed && seed.meta && seed.meta.participantIds) || [])]
+    .filter((id, index, arr) => id && arr.indexOf(id) === index);
+  return ids.map((id) => {
+    const c = charById(w, id);
+    if (!c) return null;
+    const age = popupCharacterAgeNumber(w, c);
+    return `- ${c.name} [${c.id}] | age=${age === null ? "unknown" : age} | lifeStage=${popupLifeStage(w, c)} | job/school=${cut(String(c.job || ""), 120) || "unknown"}`;
+  }).filter(Boolean).join("\n") || "-";
+}
+
+function popupRealismViolation(w, seed, raw) {
+  if (!w || !raw) return "";
+  const text = [raw.title, raw.text, raw.location, raw.eventKind].filter(Boolean).join(" ").toLowerCase();
+  const rawWitnesses = Array.isArray(raw.witnessIds) ? raw.witnessIds : [];
+  const choiceIds = (Array.isArray(raw.choices) ? raw.choices : []).flatMap((choice) => [
+    choice && choice.targetId,
+    ...((choice && Array.isArray(choice.reactions)) ? choice.reactions.map((r) => r && r.id) : []),
+  ]);
+  const ids = [w.meId, seed && seed.actorId, ...((seed && seed.targetIds) || []), ...((seed && seed.meta && seed.meta.participantIds) || []), ...rawWitnesses, ...choiceIds]
+    .map((id) => String(id || ""))
+    .filter((id, index, arr) => id && arr.indexOf(id) === index);
+  const chars = ids.map((id) => charById(w, id)).filter(Boolean);
+  const stages = chars.map((c) => ({ c, stage: popupLifeStage(w, c), age: popupCharacterAgeNumber(w, c) }));
+
+  const highSchoolVenue = /\b(?:high\s*school|secondary\s*school|school\s*(?:hallway|corridor|cafeteria|classroom|locker)|gimn[aá]zium|gimi(?:ben|be|ből)?|k[oö]z[eé]piskola|suli(?:ban|ba|ból)?|iskola(?:i|ban|ba|ból)?\s*(?:folyos[oó]|menza|tanterem|szekr[eé]ny))\b/.test(text);
+  const educationVenue = highSchoolVenue || /\b(?:university|college|campus|lecture\s*hall|egyetem|f[oő]iskola|iskola|school|tanterem|classroom)\b/.test(text);
+  const nightlifeVenue = /\b(?:nightclub|club\s*night|bar|pub|rave|casino|night\s*club|sz[oó]rakoz[oó]hely|kocsma|b[aá]r|kaszin[oó])\b/.test(text);
+  const alcohol = /\b(?:alcohol|beer|wine|vodka|whisk(?:e)?y|tequila|rum|cocktail|shots?|drunk|drinking|s[oö]r|bor|vodka|whisky|tequila|rum|kokt[eé]l|feles|alkohol|r[eé]szeg|iszik|inni)\b/.test(text);
+
+  if (highSchoolVenue) {
+    const misplacedUniversity = stages.some(({ c, stage }) => {
+      if (stage !== "university") return false;
+      const own = [c.job, c.bio, c.backstory, c.extra].filter(Boolean).join(" ").toLowerCase();
+      return !/\b(?:teacher|tan[aá]r|school\s*staff|iskolai\s*dolgoz[oó]|coach|edz[oő]|mentor|counselor|tan[aá]csad[oó])\b/.test(own);
+    });
+    if (misplacedUniversity) return "university-character-in-high-school-without-canon-reason";
+  }
+
+  if (educationVenue && alcohol) return "alcohol-in-school-or-education-setting";
+  if (alcohol && stages.some(({ age }) => age !== null && age < 18)) return "under-18-alcohol";
+  if (nightlifeVenue && stages.some(({ age }) => age !== null && age < 18)) return "under-18-nightlife-venue";
+
+  return "";
+}
+
 function popupToneImpact(tone){
   const map={ignore:{aura:1,reputation:0,hype:-4,humor:0,followerRate:-0.0004},clarify:{aura:1,reputation:4,hype:2,humor:0,followerRate:0.0005},defend:{aura:3,reputation:1,hype:6,humor:0,followerRate:0.0008},joke:{aura:3,reputation:1,hype:5,humor:5,followerRate:0.001},apologize:{aura:-1,reputation:6,hype:-2,humor:0,followerRate:0.0002},doubleDown:{aura:4,reputation:-3,hype:9,humor:0,followerRate:0.0012},private:{aura:0,reputation:1,hype:-3,humor:0,followerRate:0},noComment:{aura:0,reputation:0,hype:-2,humor:0,followerRate:-0.0002}};
   return map[tone]||map.ignore;
@@ -36255,7 +36325,7 @@ async function genPopupEvent(w,seed){
   const involved=gossipEventSubjectIds(seed).filter((id)=>id!==w.meId&&!isMediaAccount(w,id)).slice(0,5);
   const ambient = seed.type === "ambient-popup" || Boolean(seed.meta && seed.meta.ambient);
   const triggerRule = ambient
-    ? `EZ MOST VALÓDI RANDOM / AMBIENT LIVE-WORLD EVENT. Hozz létre egy FRISS, váratlan, de a meglévő kánonból, helyszínből, rutinból és kapcsolatokból természetesen következő helyzetet. Lehet például: valaki odalép a játékoshoz suliban/munkahelyen/utcán; váratlanul elhívja valahova; meghívás érkezik buliba/randira/eseményre; egy rivális konfrontál; valaki segítséget kér; kínos helyzet alakul ki mások előtt; társas kihívás, lehetőség, félreértés vagy spontán találkozás történik. CSAK létező karaktereket használj. Ne találj ki múltbeli tényt csak azért, hogy dráma legyen.`
+    ? `EZ MOST VALÓDI RANDOM / AMBIENT LIVE-WORLD EVENT. Hozz létre egy FRISS, váratlan, de a meglévő kánonból, életkorból, élethelyzetből, rutinból és kapcsolatokból természetesen következő helyzetet. Lehet például: valaki odalép a játékoshoz egy HOZZÁJUK ILLŐ helyen; váratlanul elhívja valahova; meghívás érkezik buliba/randira/eseményre; egy rivális konfrontál; valaki segítséget kér; kínos helyzet alakul ki mások előtt; társas kihívás, lehetőség, félreértés vagy spontán találkozás történik. CSAK létező karaktereket használj. Ne találj ki múltbeli tényt vagy oda nem illő intézményt csak azért, hogy dráma legyen.`
     : `Ez a popup a fenti, MÁR MEGTÖRTÉNT social helyzet következménye. Ne találj ki új alap-eseményt vagy új személyt; a következmény a valódi eseményből nőjön ki.`;
 
   return askWorldJSON(w,engineFor(w),`${worldContext(w,involved.filter((id)=>!isHuman(w,id)),false,null)}
@@ -36266,10 +36336,17 @@ ${relatedPost?`KAPCSOLÓDÓ NYILVÁNOS POSZT:\n${relatedPost.gossipStory&&relate
 
 ${triggerRule}
 
+ÉLETKOR / ÉLETHELYZET — GROUND TRUTH:
+${popupRealityRoster(w, seed)}
+
 Készíts rövid, telefonon is egy pillantással érthető, KONKRÉT popup helyzetet 3 eltérő választási stratégiával.
 
 KÖTELEZŐ REALIZMUS:
-- A popup konkrétan mondja el, MI történik most. Példa-szerkezet: "Brent odalép Angelhez a suli folyosóján, miközben két ismerősük a közelben van, és ... Mit teszel?" Ne generikus rendszerüzenetet írj.
+- A karakterek KORA és JOB / SCHOOL mezője hard canon. Gimnazista, egyetemista és dolgozó felnőtt nem cserélhető fel csak a jelenet kedvéért.
+- Egy egyetemista ne kerüljön random gimnáziumi folyosóra/osztályterembe. Iskolai helyszín csak akkor használható, ha a karakter élethelyzete vagy már létező kánonja ténylegesen odaköti.
+- Alkohol/ivás ne történjen iskolában, tanteremben, suli folyosóján vagy más oktatási környezetben. 18 év alatti karakterrel sehol ne generálj alkoholfogyasztást vagy 18+ nightlife helyszínt.
+- A helyszín, napszak, társaság és tevékenység legyen hihető az érintettek életkorához, munkájához/iskolájához és közös kapcsolódási pontjaihoz. Ha nincs biztos konkrét hely, használj semleges, hihető helyszínt ahelyett, hogy intézményt találnál ki.
+- A popup konkrétan mondja el, MI történik most. A helyzetben legyen világos, ki kezdeményez, hol vagytok és mi a döntési pont, de a helyszínt az érintettek élethelyzetéből válaszd. Ne generikus rendszerüzenetet írj.
 - location: rövid valódi helyszín a jelenlegi univerzum alapján (pl. iskola folyosó, parkoló, edzőterem, buli, kávézó). Ha nincs biztos helyszín, maradjon általános, ne találj ki kánonellenes konkrétumot.
 - visibility csak: public | limited | private. public = sokan láthatják; limited = néhány valós szereplő/tanú jelen van; private = csak a közvetlen résztvevők.
 - witnessIds: csak LÉTEZŐ AI-karakter ID-k, akik reálisan jelen lehetnek és tényleges tanúk. Ne adj tanút privát helyzethez. 0-4 ID.
@@ -36332,6 +36409,12 @@ function normalizePopupEvent(w,seed,raw){
   const title=cut(String(raw.title||"").replace(/\s+/g," ").trim(),120);
   const body=String(raw.text||"").replace(/\n{3,}/g,"\n\n").trim().slice(0,1000);
   if(!title||!body)return null;
+
+  const realismIssue = popupRealismViolation(w, seed, raw);
+  if (realismIssue) {
+    console.warn("[popup-realism] rejected generated popup:", realismIssue, { title, location: raw.location || "" });
+    return null;
+  }
 
   const allowedTones=new Set(["ignore","clarify","defend","joke","apologize","doubleDown","private","noComment"]);
   const allowedVisibility=new Set(["public","limited","private"]);
@@ -36448,6 +36531,8 @@ ${cut(event.seedText||event.text,1000)}
 Készíts EGY ÉREZHETŐEN MÁS, de ugyanúgy karakterhű és okszerű váratlan helyzetet. Lehet más létező AI-karakter a kezdeményező, ha a világkánon alapján természetes. Ne találj ki új embert. Ne ismételd átnevezve ugyanazt a szituációt vagy ugyanazokat a választásokat.
 
 Ugyanazokat a szabályokat tartsd, mint egy normál popupnál:
+- ÉLETKOR / ÉLETHELYZET: ${popupRealityRoster(w, popupSeedFromEvent(event))}
+- A location és tevékenység feleljen meg ezeknek. Egyetemista ne legyen random gimiben; oktatási helyszínen ne legyen alkohol; 18 év alatt ne legyen alkoholfogyasztás vagy 18+ nightlife.
 - konkrét 1-3 mondatos helyzet;
 - 3 eltérő stratégia;
 - location;
@@ -39166,6 +39251,38 @@ function gossipPressureForTarget(w, targetId) {
   };
 }
 
+function recentSeverePublicCancelPressure(w, characterId) {
+  if (!w || !characterId) return 0;
+  const cutoff = now() - 4 * 3600e3;
+  let strongest = 0;
+  (w.socialEvents || []).forEach((event) => {
+    if (!event || Number(event.ts || 0) < cutoff || event.visibility !== "public") return;
+    const actorHit = event.actorId === characterId;
+    const sentimentTargets = event.meta && Array.isArray(event.meta.sentimentTargetIds)
+      ? event.meta.sentimentTargetIds
+      : [];
+    if (!actorHit && !sentimentTargets.includes(characterId)) return;
+    const tags = new Set(Array.isArray(event.tags) ? event.tags : []);
+    const ps = event.meta && event.meta.publicSentiment && typeof event.meta.publicSentiment === "object"
+      ? event.meta.publicSentiment
+      : {};
+    let score = Math.max(0, Number(ps.cancel) || 0);
+    if (event.meta && event.meta.cancelRiskSeed) score = Math.max(score, 22);
+    if (["dishonesty", "clout-chasing", "threat", "cancel-risk", "scandal", "receipts"].some((tag) => tags.has(tag))) score += 20;
+    if (["public-callout", "backlash-risk", "controversy"].some((tag) => tags.has(tag))) score += 8;
+    score += Math.min(24, (Number(event.drama) || 0) * 0.18 + (Number(event.embarrassment) || 0) * 0.12);
+    strongest = Math.max(strongest, score);
+  });
+  return Math.min(100, Math.round(strongest));
+}
+
+function hasRecentSeverePublicCancel(w) {
+  if (!w) return false;
+  return [w.player, ...(w.chars || [])]
+    .filter(Boolean)
+    .some((c) => recentSeverePublicCancelPressure(w, c.id) >= 34);
+}
+
 function pickSocialWaveAction(w) {
   refreshAllSocialStats(w);
 
@@ -39235,29 +39352,31 @@ function pickSocialWaveAction(w) {
         });
       }
 
+      const severePublicCancel = recentSeverePublicCancelPressure(w, target.id);
+
       if (
-        sentiment.cancelPressure >=
-          cancelThreshold &&
-        gossipPressure.negative >=
-          gossipCancelThreshold &&
+        sentiment.cancelPressure >= cancelThreshold &&
+        (
+          gossipPressure.negative >= gossipCancelThreshold ||
+          severePublicCancel >= 34
+        ) &&
         !recentSocialWave(
           w,
           target.id,
           "cancel",
-          8
+          severePublicCancel >= 55 ? 4 : 8
         )
       ) {
         candidates.push({
-          targetId:
-            target.id,
+          targetId: target.id,
           mode: "cancel",
           score:
-            sentiment.cancelPressure *
-              1.35 +
+            sentiment.cancelPressure * 1.45 +
             sentiment.controversy +
-            gossipPressure.negative * 0.8,
-          postId:
-            post && post.id,
+            gossipPressure.negative * 0.8 +
+            severePublicCancel * 1.15,
+          postId: post && post.id,
+          severePublicCancel,
         });
       }
 
@@ -40983,6 +41102,17 @@ function applySocialWave(
           rel && rel.score
         ) || 0;
 
+      /* A serious public backlash may change real opinions, not just follower
+         counts. Loyal/close people resist more; hostile/neutral people move more. */
+      const severeSeed = Number(payload.severePublicCancel) || 0;
+      if (severeSeed >= 34) {
+        const loyaltyShield = Math.max(0, Math.min(0.82, (relScore + 20) / 150));
+        const delta = -Math.max(1, Math.min(12, Math.round((severeSeed / 9) * (1 - loyaltyShield))));
+        if (delta < 0) {
+          applyChanges(n, [{ a: actor.id, b: targetId, delta, why: "serious public backlash changed their opinion", oneSided: true }]);
+        }
+      }
+
       if (
         isFollowing(
           n,
@@ -41622,7 +41752,8 @@ function canAiInitiateRoleplay(w) {
   const historyLast = lastAiInitiatedRoleplayAt(w);
   const last = Math.max(simLast, historyLast);
   const rpPeak = Math.max(0.55, channelActivityPeak(w, "roleplay"));
-  const target = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / Math.min(1.75, rpPeak)));
+  const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
+  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   return !last || ts - last >= target;
 }
 
@@ -42153,7 +42284,8 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
      own DM, popup replies and Note-related messages must not fake activity. */
   const dmLast = Number(sim.lastAutonomousDmAt) || 0;
   const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
-  const dmTarget = Math.max(75 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / Math.min(1.85, dmPeak)));
+  const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
+  const dmTarget = Math.max(2.5 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const dmElapsed = dmLast ? ts - dmLast : Math.max(0, ts - laneStartedAt);
   const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 22 * 1000;
 
@@ -42219,7 +42351,8 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
     const rpHistoryLast = lastAiInitiatedRoleplayAt(view);
     const rpLast = Math.max(Number(sim.lastRoleplayInviteAt) || 0, rpHistoryLast);
     const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
-    const rpTarget = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / Math.min(1.75, rpPeak)));
+    const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
+    const rpTarget = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
     const rpElapsed = rpLast ? ts - rpLast : Math.max(0, ts - laneStartedAt);
     const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 35 * 1000;
 
@@ -42273,7 +42406,8 @@ function hasRecentWidespreadGossip(w) {
 function autonomousDmOverdueByMs(w) {
   if (!w) return -Infinity;
   const dmPeak = Math.max(0.25, channelActivityPeak(w, "dm"));
-  const target = Math.max(75 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / Math.min(1.85, dmPeak)));
+  const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
+  const target = Math.max(2.5 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const last = Number(w.sim && w.sim.lastAutonomousDmAt) || 0;
   const startedAt = Number(w.sim && w.sim.liveWorldStartedAt) || now();
   const elapsed = last ? now() - last : Math.max(0, now() - startedAt);
@@ -42283,7 +42417,8 @@ function autonomousDmOverdueByMs(w) {
 function roleplayInviteOverdueByMs(w) {
   if (!w || !canAiInitiateRoleplay(w)) return -Infinity;
   const rpPeak = Math.max(0.25, channelActivityPeak(w, "roleplay"));
-  const target = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / Math.min(1.75, rpPeak)));
+  const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
+  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   const last = Math.max(
     Number(w.sim && w.sim.lastRoleplayInviteAt) || 0,
     lastAiInitiatedRoleplayAt(w)
@@ -42685,11 +42820,15 @@ function planAutoAction(view) {
    * Csak akkor indulhat, ha a már meglévő social aktivitás
    * ténylegesen felépített hozzá elég support / backlash energiát.
    */
+  const severePublicBacklashDue = hasRecentSeverePublicCancel(view);
   if (
-    hasRecentWidespreadGossip(view) &&
-    Math.random() < Math.min(
-      0.70,
-      (storySettingsOf(view).dramaLevel === "chaotic" ? 0.30 : storySettingsOf(view).dramaLevel === "high" ? 0.22 : 0.14) * LIVE_WORLD_CANCEL_SENSITIVITY
+    (hasRecentWidespreadGossip(view) || severePublicBacklashDue) &&
+    (
+      severePublicBacklashDue ||
+      Math.random() < Math.min(
+        0.70,
+        (storySettingsOf(view).dramaLevel === "chaotic" ? 0.30 : storySettingsOf(view).dramaLevel === "high" ? 0.22 : 0.14) * LIVE_WORLD_CANCEL_SENSITIVITY
+      )
     )
   ) {
     const wave =
@@ -42715,6 +42854,9 @@ function planAutoAction(view) {
 
           cast:
             wave.cast,
+
+          severePublicCancel:
+            Number(wave.severePublicCancel) || 0,
         }
       );
     }
