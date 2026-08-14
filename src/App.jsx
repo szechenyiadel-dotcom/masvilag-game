@@ -7102,8 +7102,19 @@ function characterIntensityDirective(c) {
 function voiceCard(c) {
   const bits = [];
 
-  const selfCanon = compactSelfCanonForPrompt(c, 6200);
+  const selfCanon = compactSelfCanonForPrompt(c, 7800);
   const intensityDirective = characterIntensityDirective(c);
+  const ownConnections = String(c && c.connections || "").replace(/\s+/g, " ").trim();
+
+  if (ownConnections) {
+    bits.push(
+      `CONNECTIONS / KAPCSOLÓDÁSOK — KIEMELT PRIVÁT SAJÁT KÁNON:
+${spread(ownConnections, 3000)}
+- Ez NEM dekoratív háttérlista. Ha itt egy konkrét aktív karakterhez barátság, crush, szerelem, rivalizálás, ellenségesség, családi kötelék, mentor/sensei-viszony, lojalitás, félelem vagy más személyes ok van leírva, az KÖZVETLENÜL alakítsa, hogyan figyelsz rá, mit mersz előtte, hogyan beszélsz vele és hogyan reagálsz rá.
+- Ha a Connections azt is leírja, MIÉRT érzel így iránta, a viselkedésedben annak az oknak is meg kell jelennie; ne csak a címkét használd.
+- Ez a TE privát tudásod/érzésed. Ne add át automatikusan más karakternek, és ne mondd ki nyíltan csak azért, mert le van írva. Egy titkos crush például viselkedésben szivároghat ki anélkül, hogy automatikusan bevallanád.`
+    );
+  }
 
   if (selfCanon) {
     bits.push(
@@ -7440,7 +7451,7 @@ function commentPersonalityText(c) {
 
 
 /* -------------------------------------------------------------------------
-   VISUAL SOCIAL REACTIONS — v61 + FRIENDSHIP TONE GUARD v62
+   VISUAL SOCIAL REACTIONS — v61 + FRIENDSHIP TONE GUARD v62 + CONNECTIONS PRIORITY v63
 
    A photo is not treated like a text post with an optional attachment.
    Relationship + visible image content decide who pays attention and how.
@@ -8678,6 +8689,7 @@ function fullSelfCanon(c) {
     ["City", c.city],
     ["Public bio", c.bio],
     ["Appearance", c.looks],
+    ["CONNECTIONS / IMPORTANT PEOPLE — PRIVATE SELF-CANON", c.connections],
     ["PERSONALITY", c.personality],
     ["TRAITS", c.traits],
     ["SPEECH STYLE", c.speech],
@@ -8721,6 +8733,7 @@ function compactSelfCanonForPrompt(c, maxChars = 6200) {
     ["City", c.city, 160],
     ["Public bio", c.bio, 260],
     ["Appearance", c.looks, 420],
+    ["CONNECTIONS / IMPORTANT PEOPLE — PRIVATE SELF-CANON", c.connections, 1800],
     ["PERSONALITY", c.personality, 1500],
     ["TRAITS", c.traits, 520],
     ["SPEECH STYLE", c.speech, 720],
@@ -9313,6 +9326,73 @@ function ownStorySnippetAbout(actor, target) {
   return canonTargetEvidence(actor, target, 3)
     .join(" | ")
     .slice(0, 1800);
+}
+
+/* -------------------------------------------------------------------------
+   CONNECTIONS TARGET PRIORITY — v63
+
+   Connections is private SELF-canon. When it explicitly names an active
+   character, that target-specific line must be stronger than generic social
+   defaults. It may describe a crush, best friend, rival, mentor, family bond,
+   fear, loyalty, etc. Other characters still do not magically know it.
+   ------------------------------------------------------------------------- */
+function connectionCanonSnippetAbout(actor, target, maxChars = 1800) {
+  if (!actor || !target) return "";
+
+  const source = String(actor.connections || "").replace(/\s+/g, " ").trim();
+  if (!source) return "";
+
+  const aliases = canonTargetAliases(target);
+  if (!aliases.length) return "";
+
+  const lower = source.toLowerCase();
+  const hits = [];
+
+  aliases.forEach((alias) => {
+    const needle = String(alias || "").toLowerCase();
+    if (!needle) return;
+    let from = 0;
+    while (from < lower.length && hits.length < 16) {
+      const at = lower.indexOf(needle, from);
+      if (at < 0) break;
+      hits.push(at);
+      from = at + Math.max(needle.length, 1);
+    }
+  });
+
+  if (!hits.length) return "";
+  hits.sort((a, b) => a - b);
+
+  const snippets = [];
+  for (const hit of hits) {
+    const start = Math.max(0, hit - 240);
+    const end = Math.min(source.length, hit + 720);
+    const snippet = source.slice(start, end).trim();
+    if (!snippet) continue;
+    if (snippets.some((old) => old.toLowerCase().includes(snippet.toLowerCase().slice(0, 160)))) continue;
+    snippets.push(snippet);
+    if (snippets.length >= 3) break;
+  }
+
+  return snippets.join(" | ").slice(0, Math.max(200, Number(maxChars) || 1800));
+}
+
+function connectionRelationshipCue(actor, target) {
+  const snippet = connectionCanonSnippetAbout(actor, target, 1800);
+  const low = snippet.toLowerCase();
+
+  return {
+    snippet,
+    romantic: /crush|has a crush|secret crush|vonz[oó]d|vonzalom|szerelmes|szerelem|in love|love interest|romantic|romantikus|fl[oö]rt|flirt|attraction|attracted|obsess|megsz[aá]ll|r[aá] van kattanva/.test(low),
+    close: /best friend|close friend|ride or die|legjobb bar[aá]t|közeli bar[aá]t|testv[eé]rk[eé]nt|like a sibling/.test(low),
+    friendly: /friend|bar[aá]t|ally|sz[oö]vets[eé]ges|loyal|loj[aá]lis/.test(low),
+    hostile: /enemy|ellens[eé]g|hate|gy[uű]l[oö]l|nem b[ií]rja|despise|archenemy|f[oő]ellens[eé]g/.test(low),
+    rival: /rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(low),
+    family: /mother|father|mom|dad|sister|brother|cousin|family|anya|apa|testv[eé]r|unokatestv[eé]r|csal[aá]d/.test(low),
+    mentor: /sensei|mentor|teacher|coach|mester|tan[aá]r|edz[oő]/.test(low),
+    jealous: /jealous|f[eé]lt[eé]ken|possessive|birtokl[oó]|territorial/.test(low),
+    secret: /secret|hidden|titkos|rejtett|senki nem tud|doesn['’]?t know/.test(low),
+  };
 }
 
 function preferredTitleSurname(character) {
@@ -10662,10 +10742,27 @@ function relationshipBehaviorCard(
     "";
 
   const parts = [];
-  const filterTier =
+  const connectionCue = connectionRelationshipCue(actor, target);
+  let filterTier =
     relationshipFilterTier(
       rel
     );
+
+  const hasCurrentDynamicSignal = Boolean(
+    bond ||
+    Math.abs(score) >= 15 ||
+    String(rel && rel.mood || "").trim() ||
+    String(rel && rel.hidden || "").trim()
+  );
+
+  /* If the dynamic relationship has not developed enough to say otherwise,
+     explicit Connections canon supplies the target-specific baseline. */
+  if (!hasCurrentDynamicSignal && connectionCue.snippet) {
+    if (connectionCue.hostile) filterTier = "hostile";
+    else if (connectionCue.rival) filterTier = "negative";
+    else if (connectionCue.close) filterTier = "close";
+    else if (connectionCue.friendly || connectionCue.romantic) filterTier = "good";
+  }
 
   parts.push(
     en
@@ -10710,6 +10807,14 @@ function relationshipBehaviorCard(
       ? "SHORT-TERM CONTINUITY: the latest 10-20 direct messages/replies/thread lines in the current prompt are the strongest evidence for the immediate conversational temperature. If the recent exchange has been friendly, stay in that friendly groove. If a real conflict is unfolding now, it may temporarily sharpen the tone. Never invent a mood swing that is absent from the recent context."
       : "RÖVID TÁVÚ FOLYTONOSSÁG: az aktuális promptban szereplő legutóbbi 10-20 közvetlen üzenet/válasz/thread-sor a legerősebb bizonyíték a közvetlen beszélgetési hangulatra. Ha a friss váltás baráti volt, maradjon abban a baráti mederben. Ha MOST valódi konfliktus zajlik, átmenetileg élesedhet a hang. Ne találj ki olyan hangulatváltást, ami nincs benne a friss kontextusban."
   );
+
+  if (connectionCue.snippet) {
+    parts.push(
+      en
+        ? `CONNECTIONS PRIORITY — PRIVATE SELF-CANON ABOUT THIS EXACT PERSON: ${spread(connectionCue.snippet, 900)}. Treat the stated relationship AND the stated reason as active motivation. This is stronger than generic personality defaults. It does not mean the target knows about the feeling, and it does not force a confession.`
+        : `CONNECTIONS ELSŐBBSÉG — PRIVÁT SAJÁT KÁNON PONT ERRŐL AZ EMBERRŐL: ${spread(connectionCue.snippet, 900)}. A leírt kapcsolat ÉS annak leírt oka aktív motiváció legyen. Ez erősebb a generikus személyiség-defaultnál. Ettől a célpont még nem tud automatikusan az érzésről, és ez nem kényszerít vallomásra.`
+    );
+  }
 
   if (bond) {
     const lb =
@@ -10759,12 +10864,12 @@ function relationshipBehaviorCard(
 
   if (
     adultRomanceAllowed &&
-    bondLooksRomantic(rel)
+    (bondLooksRomantic(rel) || connectionCue.romantic)
   ) {
     parts.push(
       en
-        ? "attraction/crush is active: let it leak through attention, teasing, jealousy, awkwardness, protectiveness or flirting when character-appropriate; do not automatically confess it"
-        : "aktív vonzalom/crush: érződjön a figyelemből, ugratásból, féltékenységből, zavarból, védelmezésből vagy flörtből, ha karakterhű; ne vallja be automatikusan"
+        ? `attraction/crush is active${connectionCue.romantic ? " because your own Connections canon explicitly says so" : ""}: let it consistently affect attention, softness/awkwardness, jealousy, protectiveness, flirting, avoidance or fixation in the form your personality supports. If Connections explains WHY you like them, use that reason as a recurring lens. Do not automatically confess it.`
+        : `aktív vonzalom/crush${connectionCue.romantic ? " — ezt a saját Connections kánonod explicit rögzíti" : ""}: következetesen hasson a figyelmedre, lágyságodra/zavarodra, féltékenységedre, védelmezésedre, flörtödre, kerülésedre vagy fixációdra a személyiségedhez illő módon. Ha a Connections azt is leírja, MIÉRT tetszik neked, ez az ok visszatérő szűrőként hasson rád. Ne vallja be automatikusan.`
     );
   }
 
@@ -14147,7 +14252,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v60-account-world-delete";
+const BUILD_VERSION = "v63-connections-priority";
 
 const AUTO = "masvilag:auto";
 /*
@@ -34025,7 +34130,8 @@ function compactGossipActorContext(w, rumor, actorId) {
   const subjectLines = (rumor.subjectIds || []).slice(0, 4).map((sid) => {
     const subject = charById(w, sid);
     const rel = getRel(w, actorId, sid) || {};
-    return `${subject ? subject.name : sid}: relationship=${Number(rel.score) || 0}${rel.bond ? `, bond=${rel.bond}` : ""}`;
+    const connectionCanon = subject ? connectionCanonSnippetAbout(actor, subject, 520) : "";
+    return `${subject ? subject.name : sid}: relationship=${Number(rel.score) || 0}${rel.bond ? `, bond=${rel.bond}` : ""}${connectionCanon ? ` | PRIVATE CONNECTIONS CANON: ${connectionCanon}` : ""}`;
   });
   return [
     `ACTOR ${actor.name} [${actor.id}]`,
