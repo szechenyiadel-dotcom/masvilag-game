@@ -214,13 +214,6 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 .flash { position:fixed; left:50%; transform:translateX(-50%); top:14px; z-index:60; width:calc(100% - 28px); max-width:520px;
   border:1px solid var(--gold); background:#22190E; border-radius:12px; padding:11px 14px; font-size:13.5px;
   box-shadow:0 12px 34px rgba(0,0,0,.55); display:flex; gap:10px; align-items:flex-start; cursor:pointer; }
-.invite-toast { position:fixed; left:50%; transform:translateX(-50%); top:14px; z-index:75; width:calc(100% - 28px); max-width:520px;
-  border:1px solid var(--gold); background:#22190E; border-radius:12px; padding:11px 14px; font-size:13.5px;
-  box-shadow:0 12px 34px rgba(0,0,0,.62); display:flex; gap:10px; align-items:flex-start; cursor:pointer; }
-.invite-toast:hover { border-color:var(--rose); }
-.invite-toast-title { font-weight:700; color:var(--bone); line-height:1.3; }
-.invite-toast-sub { color:var(--muted); font-size:12px; margin-top:2px; }
-.invite-toast button { background:none; border:none; color:var(--muted); cursor:pointer; padding:0; margin-left:auto; flex:none; }
 .badge { position:absolute; top:-4px; right:-4px; min-width:15px; height:15px; padding:0 4px; border-radius:99px;
   background:var(--rose); color:#0A0910; font-size:9.5px; font-weight:700; display:grid; place-items:center; }
 .note-row { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-bottom:1px solid var(--line); cursor:pointer; }
@@ -5907,9 +5900,9 @@ function consumeAlbumItem(c, item) {
 
 /* ---------- Claude API ----------
    A szolgáltatónak percenkénti korlátja van, és nem az számít, hányan
-   játszotok: ha az app túl sűrűn küld kéréseket, "túlterhelt" választ kapunk.
-   A provider-hívások ezért prioritásos sorban haladnak, miközben a UI több
-   külön DM/RP/group munkát is háttérben pending állapotban tarthat. */
+   játszotok: ha az app egyszerre vagy túl sűrűn küld kéréseket, "túlterhelt"
+   választ kapunk. Ezért minden hívás egy sorba áll be: egyszerre csak egy fut,
+   köztük szünet van, és ha mégis elutasítás jön, mindenki vár egy kicsit. */
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 /*
@@ -5998,87 +5991,6 @@ const AI = {
 };
 const cooldownLeft = () => Math.max(0, AI.cooldownUntil - now());
 const visibleCooldownLeft = () => Math.max(0, AI.visibleCooldownUntil - now());
-
-/* -------------------------------------------------------------------------
-   v61 — PERSISTENT INTERACTIVE JOBS
-
-   DM / group chat / Roleplay generation must survive navigation. React
-   components are mounted/unmounted when the player switches tabs, so a local
-   `busy` state is not enough: the request may still be running while the UI
-   forgets that the character is typing. This tiny runtime registry is NOT
-   persisted to the save file; it exists only while this browser session is
-   alive and represents genuinely in-flight requests.
-
-   Jobs are keyed per conversation/scene, therefore an RP turn can be pending
-   while a completely different DM/group request is also pending. The provider
-   queue may serialize expensive calls to protect rate limits, but navigation
-   and typing state no longer block each other.
-   ------------------------------------------------------------------------- */
-const INTERACTIVE_JOBS = {
-  rows: new Map(),
-  listeners: new Set(),
-  seq: 0,
-};
-
-function interactiveJobKey(surface, id) {
-  const a = String(surface || "interactive").trim() || "interactive";
-  const b = String(id || "").trim();
-  return b ? `${a}:${b}` : a;
-}
-
-function emitInteractiveJobs() {
-  INTERACTIVE_JOBS.listeners.forEach((fn) => {
-    try { fn(); } catch (e) {}
-  });
-}
-
-function interactiveJobFor(key) {
-  return key ? (INTERACTIVE_JOBS.rows.get(String(key)) || null) : null;
-}
-
-function interactiveJobActive(key) {
-  return Boolean(interactiveJobFor(key));
-}
-
-function beginInteractiveJob(key, details = {}) {
-  const k = String(key || "").trim();
-  if (!k || INTERACTIVE_JOBS.rows.has(k)) return "";
-  const token = `ij_${++INTERACTIVE_JOBS.seq}_${now()}`;
-  INTERACTIVE_JOBS.rows.set(k, {
-    key: k,
-    token,
-    startedAt: now(),
-    surface: String(details.surface || ""),
-    mode: String(details.mode || "typing"),
-    characterId: String(details.characterId || ""),
-    sceneId: String(details.sceneId || ""),
-    groupId: String(details.groupId || ""),
-  });
-  emitInteractiveJobs();
-  return token;
-}
-
-function endInteractiveJob(key, token) {
-  const k = String(key || "").trim();
-  const row = INTERACTIVE_JOBS.rows.get(k);
-  if (!row) return false;
-  if (token && row.token !== token) return false;
-  INTERACTIVE_JOBS.rows.delete(k);
-  emitInteractiveJobs();
-  return true;
-}
-
-/* Subscribe even when key is empty so conversation/event list screens also
-   refresh when a background typing job starts or finishes. */
-function useInteractiveJob(key) {
-  const [, forceInteractiveJobRender] = useState(0);
-  useEffect(() => {
-    const listener = () => forceInteractiveJobRender((v) => v + 1);
-    INTERACTIVE_JOBS.listeners.add(listener);
-    return () => INTERACTIVE_JOBS.listeners.delete(listener);
-  }, []);
-  return interactiveJobFor(key);
-}
 const onCooldown = (fn) => { AI.listeners.push(fn); return () => { AI.listeners = AI.listeners.filter((x) => x !== fn); }; };
 function setCooldown(ms, visible = true) {
   const until = now() + Math.max(0, Number(ms) || 0);
@@ -6280,16 +6192,7 @@ const DEFAULT_AI_PROVIDER = DEFAULT_AI_MODEL.startsWith("gemini") ? "gemini"
   : /^(gpt|o1|o3)/.test(DEFAULT_AI_MODEL) ? "openai" : "anthropic";
 
 /* A képgenerálás külön modellt kap; a szöveges world-engine modelljét nem használjuk képre. */
-const CONFIGURED_IMAGE_MODEL = String(import.meta.env.VITE_IMAGE_MODEL || "gpt-image-1").trim();
-/*
- * v60 IMAGE MODEL SAFETY
- * `gpt-image-2` was used by an older build as a guessed/default model name.
- * Normalize that stale value to the supported GPT Image model so an old
- * Railway VITE_IMAGE_MODEL cannot keep breaking chat image requests.
- */
-const DEFAULT_IMAGE_MODEL = CONFIGURED_IMAGE_MODEL === "gpt-image-2"
-  ? "gpt-image-1"
-  : (CONFIGURED_IMAGE_MODEL || "gpt-image-1");
+const DEFAULT_IMAGE_MODEL = import.meta.env.VITE_IMAGE_MODEL || "gpt-image-2";
 const DEFAULT_IMAGE_PROVIDER = import.meta.env.VITE_IMAGE_PROVIDER || "openai";
 
 /*
@@ -11281,16 +11184,6 @@ FŐ SZABÁLY: minden válasz legyen karakterhű, természetes, emberi és az ado
 - Ismert felnőttek között a karakter reagálhat erre flörttel, zavarral, ugratással, féltékenységgel, humorral, vonzalommal vagy rosszallással a saját személyisége és kapcsolata szerint, nem grafikus módon.
 - Kiskorút vagy nem igazoltan 18+ személyt ne szexualizálj akkor sem, ha a szöveg felnőtt célzást tartalmaz.
 
-KÉP-ALAPÚ SOCIAL ÉRTELMEZÉS — HARD RULE:
-- A social poszt képe és captionje EGYETLEN közös kommunikációs aktus. Ha imageDescription / vizuális leírás rendelkezésre áll, azt látható bizonyítékként kezeld, ne dekorációként.
-- Képes posztnál a captionnek ehhez a KONKRÉT képhez kell illeszkednie. Lehet indirekt, ironikus, esztétikus, flörtös, rövid vagy belsős, de ne utaljon egy teljesen más jelenetre valódi világkontektsus nélkül.
-- Kommentnél/replynál a karakter a captiont ÉS a látható képtartalmat együtt értelmezi. Reagálhat outfitre, hajra, sminkre, helyszínre, tárgyra, sérülésre, testbeszédre, hangulatra vagy a képen szereplő ismert karakterekre, de kizárólag arra, ami ténylegesen benne van a kapott vizuális leírásban.
-- Többszereplős képnél az biztos tény lehet, hogy a szereplők együtt láthatók; ebből NEM következik automatikusan randi, csók, kapcsolat vagy titkos viszony. Ezek csak karakterenkénti értelmezések/feltételezések lehetnek.
-- Ugyanazt a képet különböző karakterek különbözően értelmezhetik a saját kapcsolatuk, emlékeik, féltékenységük, crushuk, rivalizálásuk, bizalmuk és személyiségük alapján. A szubjektív olvasatot ne emeld objektív ténnyé.
-- Ha a kép érzelmileg releváns, kiválthat kommentet, későbbi DM-et, relationship continuity/open loopot, gossipot vagy kapcsolatváltozást — de csak valódi karakterhű reakcióból, nem automatikusan.
-- Ha nincs imageDescription vagy megbízható vizuális metadata, NE találj ki képrészleteket.
-- Mature 18+ módban ismert felnőttek képein a nem grafikus thirst-trap, provokatív póz, felnőtt caption és szexuális célzás társas jelentését is értsd; ne találj ki explicit aktust a képből és ne szexualizálj kiskorút.
-
 VÉGREHAJTÁSI ELSŐBBSÉG — HA KÉT SZABÁLY LÁTSZÓLAG ÜTKÖZIK:
 1. SAJÁT KÁNON / RENDSZER-RÉTEG: a karakter személyisége, backstory-ja, értékei, hibái, beszédstílusa és motivációi a legerősebb réteg. Ez mondja meg, KI ő.
 2. KAPCSOLATI SZŰRŐ: a score + bond + aktív érzés azt modulálja, HOGYAN fejezi ki ugyanazt a személyiséget az adott ember felé. A filter nem cseréli le a személyiséget.
@@ -11558,16 +11451,6 @@ MAIN RULE: every response must be true to character, natural, human and appropri
 - Do not sanitize an obviously adult-coded line into an innocent literal interpretation.
 - Between known adults, characters may react to that subtext with flirting, embarrassment, teasing, jealousy, humor, attraction or disapproval according to personality and relationship, while remaining non-graphic.
 - Never sexualize a minor or a person whose age is not confirmed 18+, even when the language itself is adult-coded.
-
-IMAGE-GROUNDED SOCIAL REASONING — HARD RULE:
-- A social post's image and caption are ONE communication act. When imageDescription / visual metadata is supplied, treat it as visible evidence, not decoration.
-- For an image post, write a caption for THIS specific image. It may be indirect, ironic, aesthetic, flirtatious, brief or contextual, but it must not describe or imply an unrelated scene without real world context supporting that contrast.
-- In comments/replies, interpret caption AND visible image content together. Characters may react to outfit, hair, makeup, location, objects, injury, body language, mood, or known characters visibly present, but only when that detail exists in the supplied visual description.
-- In multi-person images, the fact that people appear together may be observed; dating, kissing, hooking up, secret relationships or intent are NOT automatically facts. Those may only be character-specific interpretations or rumors.
-- Different characters may read the same image differently based on their own relationship, memories, jealousy, crush, rivalry, trust and personality. Never upgrade subjective perception into objective truth.
-- A socially meaningful image may cause comments, later DMs, relationship-continuity/open loops, gossip or relationship changes, but only through a character-accurate reaction rather than an automatic stat change.
-- If no reliable imageDescription/visual metadata exists, do NOT hallucinate image details.
-- In Mature 18+ mode, known adults may understand non-graphic thirst-trap cues, provocative poses/captions and sexual innuendo in their natural social meaning, but never invent explicit sexual acts from an image and never sexualize a minor.
 
 EXECUTION PRIORITY — WHEN TWO RULES APPEAR TO CONFLICT:
 1. OWN CANON / SYSTEM LAYER: the character's personality, backstory, values, flaws, speech style and motivations are the strongest layer. This decides WHO they are.
@@ -12053,89 +11936,53 @@ async function requestAiImageProxy(payload) {
     paths.forEach((path) => urls.push(`http://${host}:3000${path}`));
   }
 
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const transientStatuses = new Set([429, 500, 502, 503, 504]);
   let lastErr = null;
 
   for (const url of [...new Set(urls)]) {
-    /*
-     * Image generation is slower and more bursty than text generation.
-     * A Railway/upstream 502/503/504 is frequently transient, so retry the
-     * SAME real route a couple of times instead of converting one blip into
-     * a failed chat turn. 404 remains route-discovery only.
-     */
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify(payload),
-        });
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
 
-        let data = null;
-        try { data = await res.json(); } catch (e) { data = null; }
+      let data = null;
+      try { data = await res.json(); } catch (e) { data = null; }
 
-        if (res.ok) return data;
-
-        if (res.status === 404) {
-          lastErr = new Error(`HTTP ${res.status}`);
-          lastErr.status = 404;
-          break;
-        }
-
+      if (res.ok) return data;
+      if (res.status !== 404) {
         const err = new Error(
           (data && data.error && (data.error.message || data.error)) ||
           (data && data.error) ||
           `HTTP ${res.status}`
         );
         err.status = res.status;
-        err.data = data;
-        lastErr = err;
+        throw err;
+      }
+      lastErr = new Error(`HTTP ${res.status}`);
+      lastErr.status = 404;
+    } catch (err) {
+      lastErr = err;
 
-        if (!transientStatuses.has(res.status) || attempt >= 2) {
-          throw err;
-        }
-
-        let waitMs = 900 * Math.pow(2, attempt);
-        const retryAfter = res.headers && res.headers.get
-          ? res.headers.get("retry-after")
-          : "";
-        if (retryAfter) {
-          const seconds = Number(retryAfter);
-          if (seconds > 0) waitMs = Math.max(waitMs, seconds * 1000);
-        }
-        await sleep(Math.min(7000, waitMs));
-      } catch (err) {
-        lastErr = err;
-
-        const status = Number(err && err.status) || 0;
-        if (status === 404) break;
-
-        /* Network failures also get a short retry on the same endpoint. */
-        if (!status && attempt < 2) {
-          await sleep(900 * Math.pow(2, attempt));
-          continue;
-        }
-
-        if (status && transientStatuses.has(status) && attempt < 2) {
-          await sleep(900 * Math.pow(2, attempt));
-          continue;
-        }
-
-        /* A real provider/config error is authoritative for this route. */
-        if (status && status !== 404) throw err;
-        if (!status && !isLocalDevBrowser()) throw err;
+      /*
+       * A real backend/image-provider error is authoritative. Do NOT fan the
+       * same expensive image request out to every alias, because that can
+       * multiply rate limits and costs. Only 404/network discovery failures
+       * are allowed to fall through to the next candidate URL.
+       */
+      if (err && Number(err.status) && Number(err.status) !== 404) {
+        throw err;
       }
     }
   }
 
   if (lastErr && Number(lastErr.status) !== 404) {
     console.warn("AI image proxy unavailable:", lastErr);
-    throw lastErr;
   }
   return null;
 }
+
 function bestAlbumSnapFallback(character, prompt) {
   const items = albumOf(character);
   if (!items.length) return null;
@@ -12275,10 +12122,6 @@ function characterSnapReferenceImages(character, media, limit = 3) {
     ) {
       return;
     }
-    /* Avoid huge JSON bodies that can make a proxy/load-balancer answer 502/413. */
-    if (isInlineImageData(resolved) && resolved.length > 2500000) {
-      return;
-    }
     if (!refs.includes(resolved)) refs.push(resolved);
   };
   add(character.avatar);
@@ -12337,14 +12180,13 @@ Rules:
 - keep the person and scene consistent with the requested character and moment
 - if the prompt implies a party, coffee, mirror selfie, street, room, gym or similar, show that naturally.`;
 
-  /* One strong identity reference is enough here and keeps the proxy body small. */
   const referenceImages = characterSnapReferenceImages(
     character,
     media,
-    1
+    3
   );
 
-  const makePayload = (refs) => ({
+  const payload = {
     provider: DEFAULT_IMAGE_PROVIDER,
     model: DEFAULT_IMAGE_MODEL,
     prompt: basePrompt,
@@ -12356,43 +12198,13 @@ Rules:
     output_format: "jpeg",
     response_format: "b64_json",
     background: "auto",
-    referenceImages: refs,
-    reference_images: refs,
-    require_reference: refs.length > 0,
-  });
+    referenceImages,
+    reference_images: referenceImages,
+    require_reference: referenceImages.length > 0,
+  };
 
-  let result = null;
-  let firstImageErr = null;
-  try {
-    result = await requestAiImageProxy(makePayload(referenceImages));
-  } catch (err) {
-    firstImageErr = err;
-  }
-
-  /*
-   * Some proxy/provider stacks fail specifically on reference-image/edit input.
-   * The written appearance + cached visual identity is already embedded in the
-   * prompt, so retry once as plain generation rather than failing the whole DM.
-   */
-  if (!result && referenceImages.length) {
-    const status = Number(firstImageErr && firstImageErr.status) || 0;
-    if (!status || [400, 413, 415, 422, 429, 500, 502, 503, 504].includes(status)) {
-      try {
-        result = await requestAiImageProxy(makePayload([]));
-        if (result) {
-          console.warn("AI chat snap succeeded without reference image after reference-guided request failed.");
-        }
-      } catch (fallbackErr) {
-        if (!firstImageErr) firstImageErr = fallbackErr;
-        else firstImageErr.fallbackError = fallbackErr;
-      }
-    }
-  }
-
-  if (!result) {
-    if (firstImageErr) throw firstImageErr;
-    return null;
-  }
+  const result = await requestAiImageProxy(payload);
+  if (!result) return null;
 
   const firstDataRow =
     Array.isArray(result.data) && result.data[0]
@@ -12686,10 +12498,6 @@ function migrate(w) {
       );
     });
   }
-
-  /* AI Roleplay-meghívások lejárata: a régi, válasz nélkül maradt pending meghívás
-     ne maradjon örökké aktív. A scene rekord + emlékezet megmarad, az aktív UI-ból archiváljuk. */
-  expirePendingRoleplayInvites(w, now());
 
   /* Idempotens második védőháló régi migrációs ágak után. */
   sanitizeWorldPosts(w);
@@ -13875,7 +13683,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v62-image-grounded-social";
+const BUILD_VERSION = "v58-public-romantic-jealousy";
 
 const AUTO = "masvilag:auto";
 /*
@@ -20011,16 +19819,11 @@ ${post.authorId === w.meId && post.text ? playerInputUnderstandingInstruction(w,
 ${
   (post.imageId || post.image)
     ? `KÉP A POSZTBAN:
-${post.imageDescription ? `A kép megbízható látható tartalma: ${post.imageDescription}
-` : ""}A karakterek a CAPTIONT ÉS A KÉPET EGYÜTT látják és értelmezik.
-- A kép látható bizonyíték, nem dekoráció.
-- Reagálhatnak konkrétan személyre, outfitre, hajra/sminkre, helyszínre, tárgyra, sérülésre, testbeszédre, közelségre, hangulatra vagy más ténylegesen leírt vizuális részletre.
-- Ne kommentálják mechanikusan a teljes képet; minden karakter azt a részletet vegye észre, ami NEKI számít a saját kapcsolatából, emlékeiből és személyiségéből.
-- Többszereplős képnél biztos tény csak az, hogy az adott személyek együtt láthatók. A romantikus/intim jelentés, féltékenység vagy gyanú SZUBJEKTÍV értelmezés legyen, hacsak más kontextus nem teszi ténnyé.
-- Egy barát hype-olhat, crush flörtölhet, rivális beszólhat, féltékeny karakter kiszúrhatja a másik személy közelségét — de csak ha a konkrét kapcsolat ezt indokolja.
-- Ha a kép társadalmilag jelentős a karakternek, nyithat későbbi DM/relationship-continuity szálat vagy kapcsolatváltozást; ne generálj automatikus deltát pusztán a kép létezéséből.
-- Ha nincs konkrét imageDescription, TILOS kitalálni, mi látszik a képen.
-- Mature 18+ módban ismert felnőtteknél értsd a nem grafikus thirst-trap/provokatív képi és caption-célzásokat is természetes felnőtt jelentésük szerint.
+${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post.imageDescription}
+` : ""}A szereplők látják a poszthoz tartozó képet is.
+Ha természetes, reagáljanak arra, ami ténylegesen látható rajta: személyekre, outfitre, helyszínre, hangulatra vagy más fontos részletre.
+A kép ugyanúgy része a kontextusnak, mint a poszt szövege.
+A kommentek legyenek képföldeltek: ne írjanak olyan részletről, ami nincs a poszt szövegében vagy a látható képleírásban.
 Ha a szerző a saját képét posztolta, a többiek ennek megfelelően reagálhatnak rá reálisan.`
     : ""
 }
@@ -21836,7 +21639,7 @@ POSZT — ${nameOfIn(w, post.authorId)}:
 ${
   (post.imageId || post.image)
     ? `KÉP A POSZTBAN:
-${post.imageDescription ? `A kép megbízható látható tartalma: ${post.imageDescription}\n` : ""}A reply írója a captiont és a képet EGYÜTT értelmezi. Reagálhat konkrét látható részletre, de nem találhat ki új személyt, tárgyat, sérülést, romantikus tényt vagy eseményt. Többszereplős képnél az együtt-láthatóság tény, a romantikus/féltékeny olvasat csak a karakter saját perceptionje lehet. Ha nincs imageDescription, ne találj ki képtartalmat.`
+${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post.imageDescription}\n` : ""}A kommentelők látták a képet is. Ha természetes, reagálhatnak arra, ami ténylegesen látható rajta.\nA reply se találjon ki olyan vizuális részletet, ami nincs a poszt szövegében vagy a képleírásban. Ha a reply a képre utal, maradjon képföldelt és következetes.`
     : ""
 }
 
@@ -22516,7 +22319,7 @@ async function genWorldStep(w, single, timeSkipHours = 0) {
         `${nameOfIn(
           w,
           p.authorId
-        )}: ${p.text || ""}${p.imageDescription ? ` [KÉP: ${cut(p.imageDescription, 320)}]` : ""}`
+        )}: ${p.text}`
     )
     .join("\n");
 
@@ -22695,26 +22498,18 @@ KOMMENT EMOJI:
 - Ne legyen minden vicc 😂 vagy 😭.
 - Az emoji típusa igazodjon a karakterhez és a konkrét reakcióhoz.
 
-KÉPEK — IMAGE-GROUNDED SOCIAL HARD RULE:
+KÉPEK:
 
 - Akinek van Fotóalbuma, néha képet is posztolhat belőle.
-- Az albumlistában minden kép mellett ott lehet az AI által felismert/megbízható látható tartalom. Ezt KÖTELEZŐ figyelembe venni a megfelelő kép kiválasztásakor ÉS a caption megírásakor.
-- FOLYAMAT: előbb válaszd ki a konkrét képet → olvasd el a látható tartalmát → csak EZUTÁN írj captiont hozzá.
-- A caption a KONKRÉT képhez készüljön. Lehet rövid, ironikus, indirekt, esztétikus, flörtös, provokatív vagy belsős, és nem kell szó szerint leírnia a képet, de nem lehet egy teljesen másik helyzet captionje valós kontextus nélkül.
-- Ha a tervezett caption és a kiválasztott kép egyértelműen nem passzol, a CAPTIONT javítsd/regeneráld a képhez; ne cseréld le önkényesen a világ eseményeit.
-- A poszt szerzője is "tudja", mi van a saját fotóján. A későbbi saját reply-jai se mondjanak ellent a kép tartalmának.
+- Az albumlistában minden kép mellett ott lehet az AI által felismert látható tartalom is. Ezt KÖTELEZŐ figyelembe venni a megfelelő kép kiválasztásakor és a caption megírásakor.
+- A poszt szerzője is "tudja", mi van a saját feltöltött fotóján. A captionnek és a későbbi kommentválaszainak is ehhez kell igazodniuk.
+- Előbb döntsd el, MELYIK konkrét kép illik a jelenethez, és csak UTÁNA írd meg a captiont. A caption ne legyen felcserélhető egy teljesen másik képpel.
 - Ilyenkor az "image" mezőbe a kép jele kerüljön, például "kep2".
 - SOHA ne találj ki olyan képet, ami nincs az adott karakter albumában.
-- Ha kép van a posztban, a kommentelők ugyanúgy látják a képet és a captiont.
-- Komment/reply kizárólag olyan vizuális részletre reagálhat, ami a megbízható képleírásban vagy a captionben ténylegesen szerepel.
-- Reagálhatnak személyre, outfitre, hajra/sminkre, helyszínre, hangulatra, sérülésre, testbeszédre, tárgyra vagy a képen lévő másik ismert karakterre.
-- Több szereplő együtt-láthatósága OBSERVED FACT lehet; romantikus/intim jelentés csak külön karakter-perception, nem automatikus tény.
-- Ugyanaz a kép különböző karakterekből eltérő reakciót válthat ki: support, flört, féltékenység, gyanú, rivalizálás, hitetlenség, humor vagy közöny. A saját relationship + memory + personality dönt.
-- Egy jelentős kép későbbi DM-et, gossipot, relationship-continuity szálat vagy kapcsolatváltozást is kiválthat, ha a karakter számára valóban fontos.
-- Ne legyen automatikus kapcsolatdelta csak azért, mert két karakter együtt van egy képen.
-- Ha nincs megbízható képleírás, NE találj ki vizuális részleteket.
-- Mature 18+ módban ismert felnőttek esetén a nem grafikus thirst-trap/provokatív kép vagy kétértelmű caption felnőtt társas jelentését is értsd; ne találj ki explicit szexuális aktust a képből.
-- A kép ne csak dekoráció legyen, hanem valódi social kontextus.
+- Ha kép van a posztban, a kommentelők azt is látják.
+- A kommentelők és reply-zók csak olyan részletre reagáljanak, ami a poszt szövegéből vagy a kép látható tartalmából reálisan következik.
+- Reagálhatnak a képen látható személyre, outfitre, helyszínre, hangulatra vagy fontos tárgyra, de ne találjanak ki nem látható dolgokat.
+- A kép ne csak dekoráció legyen, hanem valódi kontextus.
 
 VÁLASZOK KOMMENTEKRE:
 
@@ -22824,8 +22619,6 @@ ${albumList(author) || "nincs használható albumkép"}
 - Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
 - Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
 - Ha albumképet választasz, ELŐBB a visible image content alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra a képre illik.
-- IMAGE/CAPTION CONSISTENCY: a caption lehet indirekt, ironikus vagy belsős, de ennek a konkrét képnek kell értelmet adnia. Ha a kettő egyértelműen mismatch, a captiont javítsd a képhez.
-- Ha több ismert karakter látható a képen, csak az együtt-láthatóságuk biztos tény; ne állíts automatikus románcot/intimitást.
 - Kép nélkül is teljesen jó poszt.
 - Ne generálj kommenteket ebben a hívásban; a többi AI külön fog reagálni rá a saját karakteréből.
 - A játékos helyett soha ne írj.
@@ -25884,6 +25677,241 @@ function sceneEventRecapEligible(scene, aiWitnessCount) {
    - diary entry + visible status updates.
    ------------------------------------------------------------------------- */
 
+
+const ROLEPLAY_INVITE_TTL_MS = 20 * 60 * 1000;
+
+function roleplayInvitationStatus(scene) {
+  return String(scene && scene.invitationStatus || "").toLowerCase();
+}
+
+function roleplayInviteIsPending(scene, at = now()) {
+  if (!scene || !scene.aiInitiated) return false;
+  if (roleplayInvitationStatus(scene) !== "pending") return false;
+  const expiresAt = Number(scene.inviteExpiresAt) || 0;
+  return !expiresAt || at < expiresAt;
+}
+
+function roleplayInviteIsAccepted(scene) {
+  const status = roleplayInvitationStatus(scene);
+  return status === "accepted" || status === "accepted_in_chat";
+}
+
+function roleplayArchiveDiaryRow(w, scene, playerId) {
+  if (!w || !scene) return;
+  if (!Array.isArray(w.diary)) w.diary = [];
+  const row = {
+    id: `diary_scene_${scene.id}`,
+    sceneId: scene.id,
+    title: scene.title || "",
+    text: scene.diaryEntry || scene.summary || "",
+    success: Boolean(scene.success),
+    outcome: scene.outcome || "closed",
+    earlyEnd: Boolean(scene.earlyEnd),
+    goal: scene.goal || "",
+    goalResult: scene.goalResult || "",
+    rewardAffection: Number(scene.rewardAffectionGranted) || 0,
+    rewardItem: scene.rewardItemGranted || "",
+    ts: Number(scene.endedAt) || now(),
+  };
+  w.diary = [row].concat((w.diary || []).filter((old) => old && old.sceneId !== scene.id)).slice(0, 300);
+}
+
+function roleplayInvitationOutcomeText(w, scene, playerId, outcome) {
+  const actor = scene && scene.initiatedBy ? charById(w, scene.initiatedBy) : null;
+  const actorName = actor ? actor.name : (worldLanguage(w, playerId) === "en" ? "The character" : "A karakter");
+  const title = String(scene && scene.title || "").trim();
+  const en = worldLanguage(w, playerId) === "en";
+  if (outcome === "declined") {
+    return en
+      ? `${actorName}'s invitation${title ? ` (${title})` : ""} was declined.`
+      : `${actorName} meghívását${title ? ` (${title})` : ""} elutasították.`;
+  }
+  if (outcome === "expired") {
+    return en
+      ? `${actorName}'s invitation${title ? ` (${title})` : ""} expired without a response.`
+      : `${actorName} meghívása${title ? ` (${title})` : ""} válasz nélkül lejárt.`;
+  }
+  return en
+    ? `${actorName}'s invitation${title ? ` (${title})` : ""} was accepted.`
+    : `${actorName} meghívását${title ? ` (${title})` : ""} elfogadták.`;
+}
+
+function recordRoleplayInvitationOutcome(w, scene, playerId, outcome) {
+  if (!w || !scene || !scene.initiatedBy || scene.invitationOutcomeRecorded === outcome) return;
+  const initiator = charById(w, scene.initiatedBy);
+  const player = playerId ? charById(w, playerId) : null;
+  const text = roleplayInvitationOutcomeText(w, scene, playerId, outcome);
+  scene.invitationOutcomeRecorded = outcome;
+
+  if (initiator) {
+    rememberKnowledge(w, initiator.id, {
+      kind: "event",
+      source: `roleplay_invitation_${outcome}`,
+      confidence: 1,
+      timestamp: now(),
+      text,
+    });
+    if (playerId) {
+      rememberAboutTarget(w, initiator.id, playerId, {
+        kind: "event",
+        source: `roleplay_invitation_${outcome}`,
+        confidence: 1,
+        timestamp: now(),
+        text: player
+          ? `${player.name}: ${text}`
+          : text,
+      });
+    }
+  }
+
+  recordSocialEvent(w, {
+    type: `roleplay-invite-${outcome}`,
+    refId: `scene-invite:${scene.id}:${outcome}`,
+    ts: now(),
+    actorId: scene.initiatedBy || "",
+    targetIds: playerId ? [playerId] : [],
+    visibility: "private",
+    factLevel: "observed",
+    importance: outcome === "accepted" ? 20 : 16,
+    drama: 0,
+    romance: 0,
+    embarrassment: 0,
+    source: "roleplay-invitation",
+    text,
+    tags: ["roleplay", "invitation", outcome, "private"],
+    meta: { sceneId: scene.id, sourceType: "roleplay-invitation", outcome },
+  });
+}
+
+function acceptRoleplayInvitation(w, sceneId, playerId) {
+  if (!w || !sceneId) return false;
+  const scene = (w.scenes || []).find((row) => row && row.id === sceneId);
+  if (!scene || !roleplayInviteIsPending(scene)) return false;
+  ensureSceneEventState(scene);
+  const ts = now();
+
+  scene.invitationStatus = "accepted";
+  scene.acceptedAt = ts;
+  scene.open = true;
+  scene.archived = false;
+  scene.startedAt = ts;
+  scene.updatedAt = ts;
+  scene.endedAt = 0;
+  scene.outcome = "";
+  scene.success = null;
+  scene.earlyEnd = false;
+
+  if (scene.pendingOpening && typeof scene.pendingOpening === "object") {
+    if (!Array.isArray(scene.turns)) scene.turns = [];
+    const opening = {
+      ...scene.pendingOpening,
+      id: scene.pendingOpening.id || "turn_" + uid(),
+      ts,
+    };
+    if (!scene.turns.some((turn) => turn && turn.id === opening.id)) scene.turns.push(opening);
+    delete scene.pendingOpening;
+  }
+
+  recordRoleplayInvitationOutcome(w, scene, playerId, "accepted");
+  return true;
+}
+
+function declineRoleplayInvitation(w, sceneId, playerId) {
+  if (!w || !sceneId) return false;
+  const scene = (w.scenes || []).find((row) => row && row.id === sceneId);
+  if (!scene || !roleplayInviteIsPending(scene)) return false;
+  const ts = now();
+  const summary = roleplayInvitationOutcomeText(w, scene, playerId, "declined");
+  scene.invitationStatus = "declined";
+  scene.declinedAt = ts;
+  scene.open = false;
+  scene.archived = true;
+  scene.endedAt = ts;
+  scene.earlyEnd = true;
+  scene.success = false;
+  scene.outcome = "declined";
+  scene.goalResult = summary;
+  scene.summary = summary;
+  scene.diaryEntry = summary;
+  scene.updatedAt = ts;
+  recordRoleplayInvitationOutcome(w, scene, playerId, "declined");
+  roleplayArchiveDiaryRow(w, scene, playerId);
+  return true;
+}
+
+function expireRoleplayInvitation(w, scene, playerId) {
+  if (!w || !scene || roleplayInvitationStatus(scene) !== "pending") return false;
+  const ts = now();
+  const summary = roleplayInvitationOutcomeText(w, scene, playerId, "expired");
+  scene.invitationStatus = "expired";
+  scene.expiredAt = ts;
+  scene.open = false;
+  scene.archived = true;
+  scene.endedAt = ts;
+  scene.earlyEnd = true;
+  scene.success = false;
+  scene.outcome = "expired";
+  scene.goalResult = summary;
+  scene.summary = summary;
+  scene.diaryEntry = summary;
+  scene.updatedAt = ts;
+  recordRoleplayInvitationOutcome(w, scene, playerId, "expired");
+  roleplayArchiveDiaryRow(w, scene, playerId);
+  return true;
+}
+
+function maintainRoleplaySceneLifecycle(w, playerId = "") {
+  if (!w || !Array.isArray(w.scenes)) return false;
+  const ts = now();
+  let changed = false;
+  const fallbackPlayerId = playerId || (w.owner && w.players && w.players[w.owner] ? w.owner : "") || Object.keys(w.players || {})[0] || "";
+
+  w.scenes.forEach((scene) => {
+    if (!scene || typeof scene !== "object") return;
+    ensureSceneEventState(scene);
+
+    if (scene.aiInitiated && roleplayInvitationStatus(scene) === "pending") {
+      const invitedAt = Number(scene.invitedAt || scene.ts || scene.startedAt) || ts;
+      if (!Number.isFinite(Number(scene.inviteExpiresAt)) || Number(scene.inviteExpiresAt) <= 0) {
+        scene.invitedAt = invitedAt;
+        scene.inviteExpiresAt = invitedAt + ROLEPLAY_INVITE_TTL_MS;
+        changed = true;
+      }
+
+      /* Old builds created the physical opening before the player accepted.
+         Convert that one-sided opening into a pending opening and keep the
+         Event closed until the player explicitly accepts. */
+      const hasPlayerTurn = mergeRoleplayTurnStreams(scene.turns || [], scene.playerTurnJournal || [])
+        .some((turn) => turn && turn.authorId === fallbackPlayerId);
+      if (!hasPlayerTurn && scene.open) {
+        const firstAiTurn = (scene.turns || []).find((turn) => turn && turn.authorId && turn.authorId !== fallbackPlayerId && turn.authorId !== "narrator");
+        if (firstAiTurn && !scene.pendingOpening) scene.pendingOpening = { ...firstAiTurn };
+        scene.turns = (scene.turns || []).filter((turn) => turn && turn.authorId === fallbackPlayerId);
+        scene.open = false;
+        changed = true;
+      }
+
+      if (ts >= Number(scene.inviteExpiresAt || 0)) {
+        if (expireRoleplayInvitation(w, scene, fallbackPlayerId)) changed = true;
+      }
+      return;
+    }
+
+    /* Finished/declined/expired Events disappear from the active Events list,
+       but the scene object, diary, relationship changes and memories remain. */
+    if (scene.open === false && !scene.archived && (
+      Number(scene.endedAt) > 0 ||
+      ["declined", "expired", "closed"].includes(roleplayInvitationStatus(scene)) ||
+      scene.summary || scene.outcome
+    )) {
+      scene.archived = true;
+      changed = true;
+    }
+  });
+
+  return changed;
+}
+
 function mergeRoleplayTurnStreams(...streams) {
   const rows = [];
   const seen = new Set();
@@ -25928,6 +25956,13 @@ function ensureSceneEventState(scene) {
   if (scene.rewardItemGranted === undefined) scene.rewardItemGranted = "";
   if (scene.success === undefined) scene.success = null;
   if (scene.earlyEnd === undefined) scene.earlyEnd = false;
+  if (scene.archived === undefined) scene.archived = false;
+  if (scene.aiInitiated && !scene.invitationStatus) scene.invitationStatus = scene.open ? "accepted" : "closed";
+  if (scene.aiInitiated && scene.invitationStatus === "pending") {
+    const invitedAt = Number(scene.invitedAt || scene.ts || scene.startedAt) || now();
+    if (!scene.invitedAt) scene.invitedAt = invitedAt;
+    if (!Number(scene.inviteExpiresAt)) scene.inviteExpiresAt = invitedAt + ROLEPLAY_INVITE_TTL_MS;
+  }
   ensureSceneRoleplayMemory(scene);
   return scene;
 }
@@ -26243,163 +26278,6 @@ function commitSceneSummaryToRoleplayMemory(n, scene, summaryText) {
     mem.roleplayLongTerm = mergeKnowledgeItems(mem.roleplayLongTerm, [entry], "roleplay_long", 70);
     mem.personalMilestones = mergeKnowledgeItems(mem.personalMilestones, [entry], "milestone", 60);
   });
-}
-
-
-const ROLEPLAY_INVITE_TTL_MS = 10 * 60 * 1000;
-const CLOSED_SCENE_LIST_GRACE_MS = 60 * 1000;
-
-function roleplayInviteExpiresAt(scene) {
-  if (!scene || !scene.aiInitiated || String(scene.invitationStatus || "") !== "pending") return 0;
-  const explicit = Number(scene.inviteExpiresAt) || 0;
-  if (explicit > 0) return explicit;
-  const started = Number(scene.invitedAt || scene.startedAt || scene.ts) || 0;
-  return started ? started + ROLEPLAY_INVITE_TTL_MS : 0;
-}
-
-function roleplayInviteIsExpired(scene, at = now()) {
-  const exp = roleplayInviteExpiresAt(scene);
-  return Boolean(exp && Number(at) >= exp);
-}
-
-function archiveRoleplayInvite(w, scene, status = "expired", reason = "") {
-  if (!w || !scene || !scene.aiInitiated) return false;
-  const normalizedStatus = status === "rejected" ? "rejected" : "expired";
-  if (["rejected", "expired"].includes(String(scene.invitationStatus || ""))) return false;
-
-  const ts = now();
-  const playerId = w.meId || w.owner || Object.keys(w.players || {})[0] || "";
-  const initiator = charById(w, scene.initiatedBy);
-  const playerName = (playerId && nameOfIn(w, playerId)) || "the player";
-  const en = worldLanguage(w, playerId) === "en";
-  const summary = normalizedStatus === "rejected"
-    ? (en
-        ? `${playerName} declined ${initiator ? initiator.name + "'s" : "the"} invitation to “${scene.title || "Event"}”. The invitation ended without the Event taking place.`
-        : `${playerName} elutasította ${initiator ? initiator.name : "az AI"} „${scene.title || "Event"}” meghívását. Az Event nem indult el.`)
-    : (en
-        ? `${initiator ? initiator.name + "'s" : "The"} invitation to “${scene.title || "Event"}” expired without an answer, so the Event did not take place.`
-        : `${initiator ? initiator.name : "Az AI"} „${scene.title || "Event"}” meghívása válasz nélkül lejárt, ezért az Event nem indult el.`);
-
-  scene.invitationStatus = normalizedStatus;
-  scene.open = false;
-  scene.archived = true;
-  scene.archivedAt = ts;
-  scene.endedAt = ts;
-  scene.outcome = normalizedStatus;
-  scene.success = false;
-  scene.earlyEnd = true;
-  scene.summary = scene.summary || summary;
-  scene.goalResult = scene.goalResult || (normalizedStatus === "rejected"
-    ? (en ? "Invitation declined; the Event did not begin." : "A meghívást elutasították; az Event nem kezdődött el.")
-    : (en ? "Invitation expired before the Event began." : "A meghívás lejárt, mielőtt az Event elkezdődött volna."));
-  scene.inviteResolvedAt = ts;
-  if (reason) scene.inviteResolutionReason = String(reason).slice(0, 240);
-
-  if (initiator) {
-    rememberKnowledge(w, initiator.id, {
-      kind: "event",
-      source: normalizedStatus === "rejected" ? "roleplay_invite_rejected" : "roleplay_invite_expired",
-      confidence: 1,
-      timestamp: ts,
-      text: normalizedStatus === "rejected"
-        ? sysLangText(w, initiator.id, `${playerName} elutasította a meghívásomat erre: ${scene.title || "Event"}.`, `${playerName} declined my invitation to: ${scene.title || "Event"}.`)
-        : sysLangText(w, initiator.id, `A meghívásom válasz nélkül lejárt erre: ${scene.title || "Event"}.`, `My invitation expired without an answer: ${scene.title || "Event"}.`),
-    });
-    rememberAboutTarget(w, initiator.id, playerId, {
-      kind: "event",
-      source: normalizedStatus === "rejected" ? "roleplay_invite_rejected" : "roleplay_invite_expired",
-      confidence: 1,
-      timestamp: ts,
-      text: scene.summary,
-    });
-  }
-
-  /* No mechanical relationship penalty for saying no / not answering.
-     The character may react later from personality + memory. */
-  commitSceneSummaryToRoleplayMemory(w, scene, scene.summary);
-  recordSocialEvent(w, {
-    type: normalizedStatus === "rejected" ? "roleplay-invite-rejected" : "roleplay-invite-expired",
-    refId: `scene-invite:${scene.id}:${normalizedStatus}`,
-    ts,
-    actorId: scene.initiatedBy || "",
-    targetIds: [playerId].filter(Boolean),
-    visibility: "private",
-    factLevel: "observed",
-    importance: normalizedStatus === "rejected" ? 26 : 14,
-    drama: normalizedStatus === "rejected" ? 12 : 4,
-    romance: 0,
-    embarrassment: 0,
-    source: "roleplay-invitation",
-    text: scene.summary,
-    tags: ["roleplay", "invitation", normalizedStatus],
-    meta: { sceneId: scene.id, invitationStatus: normalizedStatus, sourceType: "roleplay-invitation" },
-  });
-  return true;
-}
-
-function expirePendingRoleplayInvites(w, at = now()) {
-  if (!w || !Array.isArray(w.scenes)) return 0;
-  let count = 0;
-  w.scenes.forEach((scene) => {
-    if (!scene || !scene.aiInitiated || String(scene.invitationStatus || "") !== "pending") return;
-    if (!scene.inviteExpiresAt) scene.inviteExpiresAt = roleplayInviteExpiresAt(scene);
-    if (roleplayInviteIsExpired(scene, at) && archiveRoleplayInvite(w, scene, "expired", "invite ttl elapsed")) count++;
-  });
-  return count;
-}
-
-function acceptRoleplayInvite(w, sceneId) {
-  if (!w || !sceneId) return false;
-  const scene = (w.scenes || []).find((s) => s && s.id === sceneId);
-  if (!scene || !scene.aiInitiated || String(scene.invitationStatus || "") !== "pending") return false;
-  if (roleplayInviteIsExpired(scene)) {
-    archiveRoleplayInvite(w, scene, "expired", "accepted after expiry");
-    return false;
-  }
-  scene.invitationStatus = "accepted";
-  scene.acceptedAt = now();
-  scene.open = true;
-  scene.archived = false;
-  scene.updatedAt = now();
-  const playerId = w.meId || w.owner || Object.keys(w.players || {})[0] || "";
-  const initiator = charById(w, scene.initiatedBy);
-  if (initiator) {
-    rememberKnowledge(w, initiator.id, {
-      kind: "event", source: "roleplay_invite_accepted", confidence: 1, timestamp: now(),
-      text: sysLangText(w, initiator.id, `${nameOfIn(w, playerId)} elfogadta a meghívásomat erre: ${scene.title || "Event"}.`, `${nameOfIn(w, playerId)} accepted my invitation to: ${scene.title || "Event"}.`),
-    });
-  }
-  return true;
-}
-
-function rejectRoleplayInvite(w, sceneId) {
-  if (!w || !sceneId) return false;
-  const scene = (w.scenes || []).find((s) => s && s.id === sceneId);
-  if (!scene || !scene.aiInitiated || String(scene.invitationStatus || "") !== "pending") return false;
-  return archiveRoleplayInvite(w, scene, "rejected", "player declined invitation");
-}
-
-function sceneVisibleInEventList(scene, at = now()) {
-  if (!scene) return false;
-
-  const invitationStatus = String(scene.invitationStatus || "").toLowerCase();
-
-  /*
-   * ACTIVE EVENT LIST — HARD STATUS RULES
-   *
-   * - Pending AI invitations ALWAYS stay visible until accepted, rejected or expired.
-   * - Accepted / ongoing Events ALWAYS stay visible while scene.open !== false.
-   * - Rejected / expired invitations disappear from the active list immediately.
-   * - Finished / closed Events disappear from the active list immediately, while the
-   *   persisted scene outcome, diary, memories and world history remain stored.
-   */
-  if (["rejected", "expired"].includes(invitationStatus)) return false;
-  if (scene.aiInitiated && invitationStatus === "pending") {
-    return !roleplayInviteIsExpired(scene, at);
-  }
-  if (scene.archived) return false;
-  if (scene.open !== false) return true;
-  return false;
 }
 
 function sceneEventProgress(scene, at = now()) {
@@ -26802,13 +26680,12 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
       w.meId
     ) === "mature";
   const [text, setText] = useState("");
+  const [busy, setBusy] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [clockNow, setClockNow] = useState(now());
   const endRef = useRef(null);
+  const sendLockRef = useRef(false);
   const [optimisticTurns, setOptimisticTurns] = useState([]);
-  const sceneJobKey = interactiveJobKey("scene", scene.id);
-  const sceneJob = useInteractiveJob(sceneJobKey);
-  const busy = sceneJob ? String(sceneJob.mode || "turn") : "";
   const cast = (w.chars || []).filter((c) => (scene.cast || []).indexOf(c.id) >= 0);
   const who = (id) => charById(w, id);
   const eventProgress = sceneEventProgress(scene, clockNow);
@@ -26850,18 +26727,6 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
     const i = setInterval(() => setClockNow(now()), 15000);
     return () => clearInterval(i);
   }, [scene.open, scene.limitMode, scene.id]);
-  useEffect(() => {
-    if (!(scene.aiInitiated && scene.invitationStatus === "pending")) return undefined;
-    const i = setInterval(() => {
-      const t = now();
-      setClockNow(t);
-      if (roleplayInviteIsExpired(scene, t)) {
-        update((n) => { expirePendingRoleplayInvites(n, t); });
-        onBack();
-      }
-    }, 5000);
-    return () => clearInterval(i);
-  }, [scene.id, scene.aiInitiated, scene.invitationStatus]);
 
   const patch = (fn) => update((n) => {
     const s = n.scenes.find((x) => x.id === scene.id);
@@ -26872,13 +26737,9 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   });
 
   const advance = async (playerText) => {
-    if (interactiveJobActive(sceneJobKey)) return;
-    const sceneJobToken = beginInteractiveJob(sceneJobKey, {
-      surface: "roleplay",
-      mode: "turn",
-      sceneId: scene.id,
-    });
-    if (!sceneJobToken) return;
+    if (sendLockRef.current) return;
+    sendLockRef.current = true;
+    setBusy("turn");
 
     const playerTarget =
       playerText
@@ -27507,18 +27368,13 @@ VÁLASZ CSAK JSON:
     } catch (e) {
       setErr(((e && e.message) ? e.message + " " : "") + tt("Nyomd meg még egyszer — ha újra elakad, rövidítsd a helyzet leírását vagy csökkentsd a szereplők számát.", "Press it again — if it gets stuck again, shorten the situation description or reduce the number of characters."));
     } finally {
-      endInteractiveJob(sceneJobKey, sceneJobToken);
+      sendLockRef.current = false;
+      setBusy("");
     }
   };
 
   const finish = async (earlyRequested = false) => {
-    if (interactiveJobActive(sceneJobKey)) return;
-    const sceneJobToken = beginInteractiveJob(sceneJobKey, {
-      surface: "roleplay",
-      mode: "end",
-      sceneId: scene.id,
-    });
-    if (!sceneJobToken) return;
+    setBusy("end");
     const liveProgress = sceneEventProgress(scene, now());
     const earlyEnd = Boolean(earlyRequested || !liveProgress.complete);
 
@@ -27575,6 +27431,8 @@ Formátum:
           : (success ? (earlyEnd ? "partial" : "success") : "failed");
 
         s.open = false;
+        s.archived = true;
+        if (s.aiInitiated && roleplayInviteIsAccepted(s)) s.invitationStatus = "closed";
         s.endedAt = now();
         s.earlyEnd = earlyEnd;
         s.success = success;
@@ -27760,36 +27618,46 @@ Formátum:
       }
     } catch (e) {
       setErr((e && e.message) || tt("Az Event lezárása nem sikerült. Próbáld újra.", "Closing the Event failed. Try again."));
-    } finally {
-      endInteractiveJob(sceneJobKey, sceneJobToken);
     }
+    setBusy("");
   };
 
-  if (scene.aiInitiated && scene.invitationStatus === "pending") {
-    const expiresAt = roleplayInviteExpiresAt(scene);
-    const minsLeft = Math.max(0, Math.ceil((expiresAt - clockNow) / 60000));
+  if (roleplayInviteIsPending(scene)) {
+    const inviter = scene.initiatedBy ? charById(w, scene.initiatedBy) : null;
+    const expiresAt = Number(scene.inviteExpiresAt) || 0;
+    const minutesLeft = expiresAt ? Math.max(0, Math.ceil((expiresAt - now()) / 60000)) : null;
     return (
       <>
         <div className="scene-hd between">
           <button className="btn tiny ghost" onClick={onBack}><ChevronLeft size={14} /> {tt("Eventek", "Events")}</button>
-          <span className="chip">{tt("meghívás", "invite")}</span>
+          {inviter ? <Av src={inviter.avatar} name={inviter.name} size={28} radius={9} /> : null}
         </div>
-        <div className="card" style={{ marginTop: 12, borderColor: "var(--gold)" }}>
-          <h2 style={{ fontSize: 22 }}>{scene.title}</h2>
+        <div className="card" style={{ marginTop: 14, borderColor: "var(--gold)" }}>
+          <label className="f" style={{ marginTop: 0, color: "var(--gold)" }}>{tt("ROLEPLAY MEGHÍVÁS", "ROLEPLAY INVITATION")}</label>
+          <h2 style={{ fontSize: 22, marginTop: 4 }}>{scene.title}</h2>
           {scene.setting ? <p className="hint" style={{ marginTop: 8 }}>{scene.setting}</p> : null}
-          {scene.goal ? <p style={{ marginTop: 10 }}><b>{tt("Cél: ", "Goal: ")}</b>{scene.goal}</p> : null}
-          <p className="hint" style={{ marginTop: 10 }}>{tt(`Ez az AI meghívása. Elfogadhatod vagy elutasíthatod; ${minsLeft} perc múlva automatikusan lejár.`, `This is an AI invitation. You can accept or decline it; it expires automatically in ${minsLeft} minutes.`)}</p>
-          <div className="row" style={{ marginTop: 14, gap: 8 }}>
-            <button className="btn primary" onClick={() => {
-              let accepted = false;
-              update((n) => { accepted = acceptRoleplayInvite(n, scene.id); });
-              if (!accepted) onBack();
-            }}>{tt("Elfogadás", "Accept")}</button>
-            <button className="btn ghost" onClick={() => {
-              update((n) => { rejectRoleplayInvite(n, scene.id); });
-              onBack();
-            }}>{tt("Elutasítás", "Decline")}</button>
+          {scene.goal ? <p style={{ marginTop: 10, fontSize: 14 }}><b>{tt("Cél: ", "Goal: ")}</b>{scene.goal}</p> : null}
+          {minutesLeft !== null ? <p className="hint" style={{ marginTop: 8 }}>{tt(`A meghívás kb. ${minutesLeft} percig él.`, `The invitation stays open for about ${minutesLeft} more minutes.`)}</p> : null}
+          <div className="row" style={{ gap: 8, marginTop: 14 }}>
+            <button
+              type="button"
+              className="btn primary full"
+              onClick={() => update((n) => { acceptRoleplayInvitation(n, scene.id, w.meId); })}
+            >
+              {tt("Elfogadás és Event indítása", "Accept & start Event")}
+            </button>
+            <button
+              type="button"
+              className="btn ghost full"
+              onClick={() => {
+                update((n) => { declineRoleplayInvitation(n, scene.id, w.meId); });
+                onBack();
+              }}
+            >
+              {tt("Elutasítás", "Decline")}
+            </button>
           </div>
+          <p className="hint" style={{ marginTop: 10 }}>{tt("Az elutasítás önmagában nem von le automatikusan kapcsolatpontot. A karakter megjegyezheti, hogy nemet mondtál, és később a saját személyisége szerint reagálhat rá.", "Declining does not automatically subtract relationship points. The character can remember that you said no and react later according to their personality.")}</p>
         </div>
       </>
     );
@@ -27940,31 +27808,22 @@ Formátum:
 
 function Scenes({ w, update, setErr, jump, onSignal, openId, setOpenId }) {
   const { tt } = useLang();
-  useInteractiveJob("");
   const [creating, setCreating] = useState(false);
-  const [, setInviteClock] = useState(now());
   const allScenes = w.scenes || [];
+  const scenes = allScenes.filter((s) => s && !s.archived && (s.open || roleplayInviteIsPending(s)));
   const scene = openId ? allScenes.find((s) => s.id === openId) : null;
-  const scenes = allScenes.filter((s) => sceneVisibleInEventList(s));
 
-  /* Pending AI invites expire even while the Events tab is open. This only
-     archives the active card; the persisted scene, final outcome and memories stay. */
-  useEffect(() => {
-    const tick = () => {
-      let expired = false;
-      update((n) => { expired = expirePendingRoleplayInvites(n, now()) > 0; });
-      if (expired && openId) {
-        const live = (w.scenes || []).find((s) => s && s.id === openId);
-        if (live && roleplayInviteIsExpired(live)) setOpenId(null);
-      }
-      setInviteClock(now());
-    };
-    const i = setInterval(tick, 15000);
-    return () => clearInterval(i);
-  }, [openId]);
+  const acceptInvite = (sceneId) => {
+    update((n) => { acceptRoleplayInvitation(n, sceneId, w.meId); });
+    setOpenId(sceneId);
+  };
+  const declineInvite = (sceneId) => {
+    update((n) => { declineRoleplayInvitation(n, sceneId, w.meId); });
+    if (openId === sceneId) setOpenId(null);
+  };
 
   useEffect(() => {
-    if (jump && jump.type === "scene" && allScenes.some((s) => s.id === jump.id && sceneVisibleInEventList(s))) setOpenId(jump.id);
+    if (jump && jump.type === "scene" && allScenes.some((s) => s.id === jump.id)) setOpenId(jump.id);
   }, [jump, allScenes]);
 
   if (scene) return <Scene w={w} scene={scene} update={update} setErr={setErr} onBack={() => setOpenId(null)} onSignal={onSignal} />;
@@ -27978,42 +27837,32 @@ function Scenes({ w, update, setErr, jump, onSignal, openId, setOpenId }) {
         {tt("Az Eventben te csak a saját karakteredet játszod; a cél, limit, jutalom és lezárási értékelés a rendszer része.", "In an Event you only play your own character; goal, limit, rewards and closing evaluation are handled by the system.")}
       </p>
 
-      {scenes.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 24 }}>{tt("Még nincs Event. Egy buli, egy veszekedés, egy küldetés vagy egy éjszakai beszélgetés — bármi lehet.", "There are no Events yet. A party, an argument, a mission or a late-night talk — it can be anything.")}</p>}
+      {scenes.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 24 }}>{tt("Nincs aktív Event vagy függő meghívás. A lezárt Eventek emlékei és eredményei a háttérben/Diary-ban megmaradnak.", "There is no active Event or pending invitation. Memories and outcomes from finished Events remain in the background/Diary.")}</p>}
 
       {scenes.map((s) => {
-        const cast = w.chars.filter((c) => s.cast.indexOf(c.id) >= 0);
+        const cast = w.chars.filter((c) => (s.cast || []).indexOf(c.id) >= 0);
         return (
-          <div className="card" key={s.id} onClick={() => setOpenId(s.id)} style={{ cursor: "pointer" }}>
+          <div className="card" key={s.id} onClick={() => { if (!roleplayInviteIsPending(s)) setOpenId(s.id); }} style={{ cursor: roleplayInviteIsPending(s) ? "default" : "pointer" }}>
             <div className="between">
               <h3 style={{ fontSize: 16 }}>{s.title}</h3>
-              <span className="chip">{interactiveJobActive(interactiveJobKey("scene", s.id))
-                ? tt("ír…", "writing…")
-                : (s.aiInitiated && s.invitationStatus === "pending" ? tt("meghívás", "invite") : (s.open ? tt("fut", "running") : tt("lezárva", "closed")))}</span>
+              <span className="chip">{roleplayInviteIsPending(s) ? tt("meghívás", "invitation") : (s.open ? tt("fut", "running") : tt("lezárva", "closed"))}</span>
             </div>
             {s.setting && <p className="hint" style={{ marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{s.setting}</p>}
             {s.goal ? <p className="hint" style={{ marginTop: 6 }}><b>{tt("Cél: ", "Goal: ")}</b>{s.goal}</p> : null}
-            {s.aiInitiated && s.invitationStatus === "pending" ? (
-              <div className="row" style={{ marginTop: 10, gap: 8 }}>
-                <button className="btn tiny primary" onClick={(e) => {
-                  e.stopPropagation();
-                  let accepted = false;
-                  update((n) => { accepted = acceptRoleplayInvite(n, s.id); });
-                  if (accepted) setOpenId(s.id);
-                }}>{tt("Elfogadás", "Accept")}</button>
-                <button className="btn tiny ghost" onClick={(e) => {
-                  e.stopPropagation();
-                  update((n) => { rejectRoleplayInvite(n, s.id); });
-                  if (openId === s.id) setOpenId(null);
-                }}>{tt("Elutasítás", "Decline")}</button>
-                <span className="hint" style={{ marginLeft: "auto" }}>
-                  {(() => { const left = Math.max(0, roleplayInviteExpiresAt(s) - now()); return tt(`${Math.ceil(left / 60000)} percig él`, `expires in ${Math.ceil(left / 60000)} min`); })()}
-                </span>
-              </div>
-            ) : null}
             <div className="row" style={{ marginTop: 10, gap: 4, alignItems: "center" }}>
               {cast.slice(0, 6).map((c) => <Av key={c.id} src={c.avatar} name={c.name} size={22} radius={7} />)}
-              <span className="handle mono" style={{ marginLeft: "auto" }}>{(() => { const count = mergeRoleplayTurnStreams(s.turns || [], s.playerTurnJournal || []).length; return tt(`${count} mozzanat`, `${count} beats`); })()}</span>
+              <span className="handle mono" style={{ marginLeft: "auto" }}>{roleplayInviteIsPending(s) ? tt("Válaszra vár", "Awaiting your response") : (() => { const count = mergeRoleplayTurnStreams(s.turns || [], s.playerTurnJournal || []).length; return tt(`${count} mozzanat`, `${count} beats`); })()}</span>
             </div>
+            {roleplayInviteIsPending(s) ? (
+              <div className="row" style={{ marginTop: 10, gap: 8 }} onClick={(e) => e.stopPropagation()}>
+                <button type="button" className="btn primary full tiny" onClick={() => acceptInvite(s.id)}>
+                  {tt("Elfogadás", "Accept")}
+                </button>
+                <button type="button" className="btn ghost full tiny" onClick={() => declineInvite(s.id)}>
+                  {tt("Elutasítás", "Decline")}
+                </button>
+              </div>
+            ) : null}
           </div>
         );
       })}
@@ -28076,9 +27925,7 @@ function GroupChat({ w, group, update, setErr, onBack }) {
       w.meId
     ) === "mature";
   const [text, setText] = useState("");
-  const groupJobKey = interactiveJobKey("group", group.id);
-  const groupJob = useInteractiveJob(groupJobKey);
-  const busy = Boolean(groupJob);
+  const [busy, setBusy] = useState(false);
   const [addingMembers, setAddingMembers] = useState(false);
   const endRef = useRef(null);
   const members = (group.members || []).map((id) => charById(w, id)).filter(Boolean);
@@ -28097,13 +27944,7 @@ function GroupChat({ w, group, update, setErr, onBack }) {
   });
 
 const turn = async (mine) => {
-  if (interactiveJobActive(groupJobKey)) return;
-  const groupJobToken = beginInteractiveJob(groupJobKey, {
-    surface: "group",
-    mode: "typing",
-    groupId: group.id,
-  });
-  if (!groupJobToken) return;
+  setBusy(true);
 
   const playerTarget =
     mine
@@ -28725,7 +28566,7 @@ Formátum:
     );
   }
 
-  endInteractiveJob(groupJobKey, groupJobToken);
+  setBusy(false);
 };
 
   return (
@@ -28892,7 +28733,7 @@ function normalizeDmRoleplayBridge(w, bot, raw, playerText, replyText) {
 
 function recentDmBridgeScene(w, botId, chatKeyValue) {
   return (w.scenes || [])
-    .filter((scene) => scene && scene.open && scene.chatBridge === true && scene.initiatedBy === botId && scene.sourceChatKey === chatKeyValue)
+    .filter((scene) => scene && !scene.archived && scene.chatBridge === true && scene.initiatedBy === botId && scene.sourceChatKey === chatKeyValue && (roleplayInviteIsPending(scene) || (scene.open && roleplayInviteIsAccepted(scene))))
     .sort((a, b) => (Number(b.startedAt || b.ts) || 0) - (Number(a.startedAt || a.ts) || 0))[0] || null;
 }
 
@@ -28907,13 +28748,12 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   const [text, setText] = useState("");
   const [chatImg, setChatImg] = useState("");
   const [showChatMedia, setShowChatMedia] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const sendLockRef = useRef(false);
   const [gid, setGid] = useState(null);
   const [creating, setCreating] = useState(false);
   const endRef = useRef(null);
   const c = openId ? w.chars.find((x) => x.id === openId) : null;
-  const dmJobKey = c ? interactiveJobKey("dm", chatKey(w.meId, c.id)) : "";
-  const dmJob = useInteractiveJob(dmJobKey);
-  const busy = Boolean(dmJob);
   const msgs = (openId && w.chats[chatKey(w.meId, openId)]) || [];
 
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [msgs.length, openId]);
@@ -28945,26 +28785,22 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   if (
     (!t && !selectedImg) ||
     !c ||
-    interactiveJobActive(dmJobKey)
+    busy ||
+    sendLockRef.current
   ) {
     return;
   }
+
+  sendLockRef.current = true;
+  setBusy(true);
+  setText("");
+  setChatImg("");
+  setShowChatMedia(false);
 
   const ck = chatKey(
     w.meId,
     c.id
   );
-  const requestJobKey = interactiveJobKey("dm", ck);
-  const dmJobToken = beginInteractiveJob(requestJobKey, {
-    surface: "dm",
-    mode: "typing",
-    characterId: c.id,
-  });
-  if (!dmJobToken) return;
-
-  setText("");
-  setChatImg("");
-  setShowChatMedia(false);
 
   const sentAt = now();
 
@@ -29381,24 +29217,19 @@ Formátum:
         ? forcedChatSnapPrompt(t, c)
         : "");
 
-    let generatedAiSnap = null;
-    let generatedSnapError = null;
-    if (
+    const generatedAiSnap =
       generatedRequestPrompt &&
-      (!requestedReplyText || explicitImageRequest)
-    ) {
-      try {
-        generatedAiSnap = await generateAiChatSnap(
-          c,
-          generatedRequestPrompt,
-          addImage,
-          media
-        );
-      } catch (snapErr) {
-        generatedSnapError = snapErr;
-        console.warn("AI chat image request failed:", snapErr);
-      }
-    }
+      (
+        !requestedReplyText ||
+        explicitImageRequest
+      )
+        ? await generateAiChatSnap(
+            c,
+            generatedRequestPrompt,
+            addImage,
+            media
+          )
+        : null;
 
     const aiImageId =
       (generatedAiSnap && generatedAiSnap.imageId) || "";
@@ -29457,15 +29288,12 @@ Formátum:
       explicitImageRequest &&
       !aiImageRef
     ) {
-      const imageErr = new Error(
+      throw new Error(
         tt(
-          `A képgenerálás nem sikerült${generatedSnapError && generatedSnapError.message ? `: ${generatedSnapError.message}` : "."}`,
-          `Image generation failed${generatedSnapError && generatedSnapError.message ? `: ${generatedSnapError.message}` : "."}`
+          "A karakter nem tudott referenciaképes AI-selfiet készíteni. Ellenőrizd az /ai/image backend image-edit útvonalat és az OPENAI_API_KEY-t.",
+          "The character could not create a reference-guided AI selfie. Check the /ai/image image-edit backend route and OPENAI_API_KEY."
         )
       );
-      imageErr.scope = "image";
-      imageErr.status = Number(generatedSnapError && generatedSnapError.status) || 0;
-      throw imageErr;
     }
 
     if (!reply && !aiImageRef) {
@@ -29538,7 +29366,8 @@ Formátum:
           setting: bridgePlan.setting,
           cast: bridgePlan.cast,
           playerTurnJournal: [],
-          turns: [{
+          turns: [],
+          pendingOpening: {
             id: "turn_" + uid(),
             authorId: c.id,
             to: n.meId,
@@ -29546,8 +29375,8 @@ Formátum:
             text: bridgePlan.opening,
             ts: now(),
             language: worldLanguage(n, n.meId),
-          }],
-          open: true,
+          },
+          open: false,
           goal: bridgePlan.goal,
           limitMode: "turns",
           targetTurns: 20,
@@ -29560,23 +29389,23 @@ Formátum:
           statusUpdates: [],
           success: null,
           earlyEnd: false,
-          startedAt: now(),
+          startedAt: 0,
+          invitedAt: now(),
+          inviteExpiresAt: now() + ROLEPLAY_INVITE_TTL_MS,
           updatedAt: now(),
           ts: now(),
-          eventKind: detectSceneEventKind({ title: bridgePlan.title, setting: bridgePlan.setting }),
+          eventKind: bridgePlan.kind || detectSceneEventKind({ title: bridgePlan.title, setting: bridgePlan.setting }),
           aiInitiated: true,
           initiatedBy: c.id,
           initiationMode: "chat_bridge",
-          invitationStatus: "accepted_in_chat",
-          acceptedAt: now(),
-          archived: false,
+          invitationStatus: "pending",
           chatBridge: true,
           sourceChatKey: ck,
         };
         n.scenes = [...(n.scenes || []), scene];
         rememberKnowledge(n, c.id, {
           kind: "event", source: "chat_roleplay_bridge", confidence: 1,
-          text: sysLangText(n, c.id, `A privát chatből konkrét találkozó/Event lett: ${bridgePlan.title}`, `The private chat turned into a concrete meet/Event: ${bridgePlan.title}`),
+          text: sysLangText(n, c.id, `A privát chatben meghívtam a játékost erre az Eventre: ${bridgePlan.title}`, `I invited the player to this Event in private chat: ${bridgePlan.title}`),
         });
         bridgePlan.cast.filter((id) => id && id !== c.id).forEach((inviteeId) => {
           const invitee = charById(n, inviteeId);
@@ -29588,7 +29417,7 @@ Formátum:
         });
         pushNote(n, n.meId, {
           icon: "🎬",
-          text: sysLangText(n, n.meId, `A chatből Event lett: ${bridgePlan.title}`, `The chat became an Event: ${bridgePlan.title}`),
+          text: sysLangText(n, n.meId, `Event-meghívást kaptál: ${bridgePlan.title}`, `You received an Event invitation: ${bridgePlan.title}`),
           link: { type: "scene", id: bridgeSceneId },
         });
       }
@@ -29769,7 +29598,7 @@ Formátum:
      * ezért itt már csak valódi szolgáltatói/hálózati hibát jelzünk.
      */
     setErr(
-      (e && e.scope === "image" ? "KÉP: " : "CHAT: ") +
+      "CHAT: " +
       (
         (e && e.message) ||
         tt(
@@ -29779,8 +29608,9 @@ Formátum:
       )
     );
   } finally {
-    endInteractiveJob(requestJobKey, dmJobToken);
-  }
+  sendLockRef.current = false;
+  setBusy(false);
+}
 };
 
 const group = gid
@@ -30011,30 +29841,28 @@ if (group) {
               lastWho,
             } = row;
 
-            const groupTyping = interactiveJobActive(interactiveJobKey("group", g.id));
-            const preview = groupTyping
-              ? tt("gépelnek…", "typing…")
-              : (last
-                  ? (
+            const preview =
+              last
+                ? (
+                    (
+                      lastWho
+                        ? lastWho.name + ": "
+                        : ""
+                    ) +
+                    (
+                      last.text ||
                       (
-                        lastWho
-                          ? lastWho.name + ": "
+                        last.imageId ||
+                        last.image
+                          ? tt("📷 Kép", "📷 Photo")
                           : ""
-                      ) +
-                      (
-                        last.text ||
-                        (
-                          last.imageId ||
-                          last.image
-                            ? tt("📷 Kép", "📷 Photo")
-                            : ""
-                        )
                       )
                     )
-                  : tt(
-                      `${groupMembers.length} tag · még üres`,
-                      `${groupMembers.length} members · still empty`
-                    ));
+                  )
+                : tt(
+                    `${groupMembers.length} tag · még üres`,
+                    `${groupMembers.length} members · still empty`
+                  );
 
             return (
               <div
@@ -30167,37 +29995,35 @@ if (group) {
             rel,
           } = row;
 
-          const dmTyping = interactiveJobActive(interactiveJobKey("dm", row.ck));
-          const preview = dmTyping
-            ? tt(`${x.name} gépel…`, `${x.name} is typing…`)
-            : (last
-                ? (
+          const preview =
+            last
+              ? (
+                  (
+                    last.from === "me"
+                      ? tt(
+                          "Te: ",
+                          "You: "
+                        )
+                      : ""
+                  ) +
+                  (
+                    last.text ||
                     (
-                      last.from === "me"
+                      last.imageId ||
+                      last.image
                         ? tt(
-                            "Te: ",
-                            "You: "
+                            "📷 Kép",
+                            "📷 Photo"
                           )
                         : ""
-                    ) +
-                    (
-                      last.text ||
-                      (
-                        last.imageId ||
-                        last.image
-                          ? tt(
-                              "📷 Kép",
-                              "📷 Photo"
-                            )
-                          : ""
-                      )
                     )
                   )
-                : sysTextFor(
-                    w,
-                    w.meId,
-                    "noMessagesYet"
-                  ));
+                )
+              : sysTextFor(
+                  w,
+                  w.meId,
+                  "noMessagesYet"
+                );
 
           return (
             <div
@@ -30362,29 +30188,50 @@ if (group) {
               </div>
             ) : null}
             {m.roleplayInviteSceneId ? (() => {
-              const inviteScene = (w.scenes || []).find((s) => s && s.id === m.roleplayInviteSceneId);
-              if (!inviteScene || ["rejected", "expired"].includes(String(inviteScene.invitationStatus || ""))) return null;
-              if (inviteScene.aiInitiated && inviteScene.invitationStatus === "pending") {
+              const inviteScene = (w.scenes || []).find((row) => row && row.id === m.roleplayInviteSceneId);
+              if (!inviteScene) return null;
+              const status = roleplayInvitationStatus(inviteScene);
+              if (status === "pending" && roleplayInviteIsPending(inviteScene)) {
                 return (
                   <div className="row" style={{ marginTop: 8, gap: 6 }}>
-                    <button type="button" className="btn tiny primary" onClick={(e) => {
-                      e.stopPropagation();
-                      let accepted = false;
-                      update((n) => { accepted = acceptRoleplayInvite(n, m.roleplayInviteSceneId); });
-                      if (accepted && onOpenScene) onOpenScene(m.roleplayInviteSceneId);
-                    }}>🎬 {tt("Elfogadás", "Accept")}</button>
-                    <button type="button" className="btn tiny ghost" onClick={(e) => {
-                      e.stopPropagation();
-                      update((n) => { rejectRoleplayInvite(n, m.roleplayInviteSceneId); });
-                    }}>{tt("Elutasítás", "Decline")}</button>
+                    <button
+                      type="button"
+                      className="btn tiny primary"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        update((n) => { acceptRoleplayInvitation(n, m.roleplayInviteSceneId, w.meId); });
+                        if (onOpenScene) onOpenScene(m.roleplayInviteSceneId);
+                      }}
+                    >
+                      ✓ {tt("Elfogadás", "Accept")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn tiny ghost"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        update((n) => { declineRoleplayInvitation(n, m.roleplayInviteSceneId, w.meId); });
+                      }}
+                    >
+                      ✕ {tt("Elutasítás", "Decline")}
+                    </button>
                   </div>
                 );
               }
+              if (status === "declined") return <div className="hint" style={{ marginTop: 7 }}>{tt("Meghívás elutasítva", "Invitation declined")}</div>;
+              if (status === "expired" || (status === "pending" && !roleplayInviteIsPending(inviteScene))) return <div className="hint" style={{ marginTop: 7 }}>{tt("Meghívás lejárt", "Invitation expired")}</div>;
               return (
-                <button type="button" className="btn tiny primary" style={{ marginTop: 8 }} onClick={(e) => {
-                  e.stopPropagation();
-                  if (onOpenScene) onOpenScene(m.roleplayInviteSceneId);
-                }}>🎬 {tt("Event megnyitása", "Open Event")}</button>
+                <button
+                  type="button"
+                  className="btn tiny primary"
+                  style={{ marginTop: 8 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onOpenScene) onOpenScene(m.roleplayInviteSceneId);
+                  }}
+                >
+                  🎬 {tt("Event megnyitása", "Open Event")}
+                </button>
               );
             })() : null}
           </div>
@@ -35458,6 +35305,21 @@ function publishGossipMediaStory(
    * Ha a játékos ténylegesen szerepel a publikált sztoriban,
    * kapjon értesítést.
    */
+  /* FIRST GOSSIP REACTION ROUND IS GUARANTEED. A freshly published gossip
+     story is queued immediately instead of waiting for a random scheduler roll. */
+  const requiredReactionCast = gossipStoryReactionCandidates(w, post);
+  if (requiredReactionCast.length) {
+    simEnqueue(
+      w,
+      mkAction(
+        "gossip-reaction",
+        `gossip-reaction-required:${post.id}:0`,
+        { postId: post.id, cast: requiredReactionCast },
+        "event"
+      )
+    );
+  }
+
   if (
     mentionedIds.includes(
       w.meId
@@ -35899,26 +35761,44 @@ function refreshAllPostReach(w){ if(!w)return w; (w.posts||[]).forEach((p)=>p&&p
 function gossipStoryReactionCandidates(w,post){
   if(!w||!post||!post.gossipStory)return[];
   const story=post.gossipStory, already=new Set(story.reactedBy||[]), mentioned=new Set(story.mentionedIds||[]);
-  const ranked=(w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)&&!already.has(c.id)).map((c)=>{
-    let score=0, role="observer", strongestRel=0;
+  const juice=publicSocialJuiceSignals(post.text||"");
+  const all=(w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)&&!already.has(c.id)).map((c)=>{
+    let score=0, role="observer", strongestRel=0, strongestTarget="";
     if(mentioned.has(c.id)){score+=80; role="mentioned";}
-    (story.mentionedIds||[]).forEach((targetId)=>{ if(!targetId||targetId===c.id)return; const rel=getRel(w,c.id,targetId); const rs=Number(rel&&rel.score)||0; if(Math.abs(rs)>Math.abs(strongestRel)) strongestRel=rs; });
+    (story.mentionedIds||[]).forEach((targetId)=>{
+      if(!targetId||targetId===c.id)return;
+      const rel=getRel(w,c.id,targetId), rs=Number(rel&&rel.score)||0;
+      if(Math.abs(rs)>Math.abs(strongestRel)){ strongestRel=rs; strongestTarget=targetId; }
+    });
     if(strongestRel>=35){score+=34+strongestRel*0.25;if(role==="observer")role="supporter";}
     else if(strongestRel<=-25){score+=30+Math.abs(strongestRel)*0.28;if(role==="observer")role="critic";}
     if(isFollowing(w,c.id,post.authorId))score+=8;
     if(story.attendeeIds&&story.attendeeIds.includes(c.id)){score+=28;if(role==="observer")role="witness";}
+
+    const lore=characterLoreCorpus(c).toLowerCase();
+    const strongTargetRel=strongestTarget?getRel(w,c.id,strongestTarget):null;
+    const romanticTie=strongTargetRel && (bondLooksRomantic(strongTargetRel) || Number(strongTargetRel.score)>=60);
+    if(juice.romance>=20 && romanticTie && /jealous|jealousy|féltéken|possess|birtokl|obsess|megszáll/.test(lore)){
+      score+=48;
+      if(role!=="mentioned"&&role!=="witness")role="jealous";
+    }
+    if(/skeptic|sceptic|distrust|suspicious|gyanak|kételk|hitetlen|cynic|cinikus/.test(lore)){
+      score+=18;
+      if(role==="observer")role="skeptic";
+    }
     score+=characterSocialFollowModifier(c)*0.35;
-    return{id:c.id,score:Math.round(score),role,tie:Math.random()};
+    return{id:c.id,score:Math.round(score),role,strongestTargetId:strongestTarget,tie:Math.random()};
   }).sort((a,b)=>a.score!==b.score?b.score-a.score:a.tie-b.tie);
-  const strong=ranked.filter((row)=>row.score>=18).slice(0,5);
-  /* Every gossip post must get a social reaction. If no relationship/witness
-     crosses the normal threshold, use the most plausible available observer
-     rather than leaving the media post eerily silent. */
-  return strong.length ? strong : ranked.slice(0,Math.min(2,ranked.length));
+
+  const relevant=all.filter((row)=>row.score>=18);
+  /* A gossip post must never land in a dead room. If no relationship-based
+     candidate crosses the normal threshold, pick the most socially plausible
+     available observer(s) anyway. */
+  return (relevant.length?relevant:all.slice(0,Math.min(3,all.length))).slice(0,5);
 }
 
 function pickGossipReactionAction(w){
-  const posts=(w.posts||[]).filter((p)=>p&&p.gossipStory&&now()-(Number(p.ts)||0)<48*3600e3&&Math.max(0,Number(p.gossipStory.reactionRounds)||0)<2).sort((a,b)=>(Number(b.ts)||0)-(Number(a.ts)||0));
+  const posts=(w.posts||[]).filter((p)=>p&&p.gossipStory&&now()-(Number(p.ts)||0)<48*3600e3&&Number(p.gossipStory.reactionRounds)<2).sort((a,b)=>(Number(b.ts)||0)-(Number(a.ts)||0));
   for(const post of posts){ const cast=gossipStoryReactionCandidates(w,post); if(cast.length)return{postId:post.id,cast}; }
   return null;
 }
@@ -35940,7 +35820,7 @@ function gossipReactionKnowledgeContext(w,post,cast){
 async function genGossipReactions(w,post,cast){
   const story=post&&post.gossipStory;if(!post||!story||!(cast||[]).length)return{comments:[],reposts:[],follows:[],dms:[],statements:[],changes:[]};
   const castIds=cast.map((x)=>x.id);
-  const allowedTargets=[post.authorId,...(story.mentionedIds||[]),w.meId].filter(Boolean).filter((id,index,arr)=>arr.indexOf(id)===index);
+  const allowedTargets=[post.authorId,...(story.mentionedIds||[])].filter(Boolean).filter((id,index,arr)=>arr.indexOf(id)===index);
   const currentComments=safePostComments(post).slice(-8).map((c)=>{const a=charById(w,c.authorId);return`${a?a.name:"?"}: ${c.text}`;}).join("\n");
   return askWorldJSON(w,engineFor(w),`${worldContext(w,[...castIds,...(story.mentionedIds||[]).filter((id)=>!isHuman(w,id))].filter((id,index,arr)=>arr.indexOf(id)===index),true,null)}
 
@@ -35949,11 +35829,6 @@ ${nameOfIn(w,post.authorId)}
 ${story.headline?`HEADLINE: ${story.headline}`:""}
 BIZONYOSSÁG: ${story.factLevel||"rumor"}
 ${post.text}
-${post.imageDescription ? `KÉP / VIZUÁLIS BIZONYÍTÉK: ${post.imageDescription}\n` : ""}
-IMAGE/GOSSIP GROUNDING:
-- Ha a gossip képre támaszkodik, válaszd külön a LÁTHATÓ TÉNYT attól, amit a cikk vagy a karakter csak BELEMAGYARÁZ.
-- Két ember együtt látszik = megfigyelhető tény. Románc, hookup, titkos kapcsolat vagy motiváció csak akkor tény, ha azt más megbízható esemény is rögzíti; különben interpretation/rumor.
-- A reagáló karakter lehet féltékeny, hitetlen, védelmező vagy gyanakvó a saját kapcsolata alapján, de ne találjon ki a képen nem látható részletet.
 
 EDDIGI NYILVÁNOS KOMMENTEK:
 ${currentComments||"-"}
@@ -35962,7 +35837,7 @@ REAKCIÓRA JELÖLT KARAKTEREK ÉS A SAJÁT TUDÁSUK:
 ${gossipReactionKnowledgeContext(w,post,cast)}
 
 A REAGÁLÓ KARAKTEREK TELJES SAJÁT KÁNONJA ÉS EMLÉKEZETE:
-${cast.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
+${cast.map((row) => charById(w, row.id)).filter(Boolean).map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
 
 ${repetitionGuard(w, castIds, "gossip reakciók")}
 
@@ -35970,13 +35845,13 @@ ENGEDÉLYEZETT FOLLOW/UNFOLLOW CÉLPONTOK:
 ${allowedTargets.join(", ")}
 
 A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saját nyilvános statement, DM a játékosnak, kapcsolatváltozás.
-- MINDEN gossip-posztra érkezzen legalább EGY valódi NYILVÁNOS komment valamelyik kijelölt karaktertől. A gossip-poszt nem maradhat néma.
+- EZ KÖTELEZŐ REAKCIÓKÖR: legalább EGY jelölt karakternek legyen tényleges, látható reakciója (komment / repost / statement / DM). Ne adj teljesen üres választ.
 - Nem kell mindenkinek reagálnia, és ne csináljon mindenki mindent egyszerre.
-- A reakciónak legyen valódi emberi álláspontja: féltékenység, hitetlenség, kíváncsiság, védelem, sértődés, káröröm, düh, szkepszis, lelkesedés vagy más karakterhű érzelem — ne semleges összefoglaló legyen.
-- Romantikus/kapcsolati pletykánál egy érintett vagy hozzá erősen kötődő karakter lehet féltékeny, territoriális, sértett vagy hitetlen, HA ezt a kapcsolat + személyiség tényleg támogatja; ne oszd ki ugyanazt a féltékenységet mindenkire.
-- Ha a pletyka érdemben változtatja egy reagáló AI véleményét valamelyik érintettről, adj relationship change-et is. Ez ronthat VAGY javíthat a kapcsolaton; ne legyen automatikusan negatív.
-- Az érintett tagadhat, megerősíthet, gúnyolódhat, dühös lehet vagy ignorálhat más csatornákat, de legalább egy kijelölt karakternek public kommentben reagálnia kell.
+- Az érintett tagadhat, megerősíthet, gúnyolódhat, dühös lehet vagy ignorálhat.
+- Pletyka esetén a HITETLENSÉG ugyanolyan valós reakció, mint az elhívés: kételkedő, bizalmatlan vagy személyes tanú karakter mondhatja, hogy nem hiszi el / nem így történt.
+- Romantikus vagy szexuális pletyka valódi FÉLTÉKENYSÉGET válthat ki abból, akinek a személyisége + kapcsolata ezt támogatja. Ne adj féltékenységet random karakternek.
 - Barát megvédheti, ellenség rátehet egy lapáttal.
+- A pletyka JAVÍTHAT és RONTHAT is kapcsolatot: lojalitás, védelem, közös oldal, hitetlenkedés pozitív irányba vihet; féltékenység, csalódás, árulásérzet, káröröm vagy elhitt negatív pletyka negatív irányba. Csak valódi karakterhű okból változtass pontot.
 - A játékos helyett SOHA ne írj.
 - Aki személyesen nem tudja a háttéreseményt, CSAK a publikus gossip-posztból indulhat ki.
 - Ne adj át egyik karakter tudását egy másiknak.
@@ -35984,48 +35859,45 @@ A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saj
 - Rumort ne változtass ténnyé.
 - Follow/unfollow csak az engedélyezett célpontokra mehet.
 - A DM kizárólag a játékosnak szól.
-- Relationship change: a reagáló AI érzése változik egy érintett iránt; delta -30..+30. Lehet erősen pozitív VAGY erősen negatív, és AI → AI célpont is teljesen érvényes.
+- Relationship change: a reagáló AI érzése változik egy érintett iránt; delta -35..+35. Lehet erősen pozitív VAGY erősen negatív, és AI → AI célpont is teljesen érvényes. A jealousy / disbelief / defense / betrayal érzéseket a mood és why mezőben konkrétan nevezd meg, ha tényleg ezek mozgatják a változást.
 
 VÁLASZ CSAK JSON:
 {"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","why":""}]}${TAIL}`,{maxTokens:1500});
 }
 
 
-function fallbackGossipReactionText(w, actorId, post) {
-  const actor = charById(w, actorId);
-  const story = post && post.gossipStory || {};
+function fallbackGossipReactionOutput(w, post, cast) {
+  const row = (cast || [])[0];
+  const c = row && charById(w, row.id);
+  if (!c) return { comments: [], reposts: [], follows: [], dms: [], statements: [], changes: [] };
   const en = worldLanguage(w, w.meId) === "en";
-  const targets = (story.mentionedIds || []).filter((id) => id && id !== actorId);
-  let strongest = null;
-  targets.forEach((targetId) => {
-    const rel = getRel(w, actorId, targetId);
-    const score = Number(rel && rel.score) || 0;
-    if (!strongest || Math.abs(score) > Math.abs(strongest.score)) strongest = { targetId, rel, score };
-  });
-  const body = `${story.headline || ""} ${post && post.text || ""}`.toLowerCase();
-  const romantic = Number(story.romance || 0) > 10 || /kiss|dating|date\b|hookup|hook up|flirt|crush|together|cs[oó]k|randi|fl[oö]rt|kavar|együtt/.test(body);
-  const bond = String(strongest && strongest.rel && strongest.rel.bond || "").toLowerCase();
-  const jealousyEligible = romantic && strongest && strongest.score >= 35 && /partner|dating|girlfriend|boyfriend|lover|wife|husband|crush|romance|szerelm|bar[aá]tn[oő]|bar[aá]tja|f[eé]rj|feles[eé]g|flirt/.test(bond + " " + characterLoreCorpus(actor));
-  if (jealousyEligible) return en ? "oh. so that's what we're doing now?" : "aha. szóval most ezt csináljuk?";
-  if (["rumor", "inferred", "speculation"].includes(String(story.factLevel || ""))) {
-    if (strongest && strongest.score >= 35) return en ? "you people will believe literally anything 😭" : "ti tényleg bármit elhisztek 😭";
-    return en ? "wait, is this even true? 😭" : "várj, ez egyáltalán igaz? 😭";
-  }
-  if (strongest && strongest.score <= -25) return en ? "yeah... somehow I'm not shocked." : "hát... valahogy nem lep meg.";
-  if (strongest && strongest.score >= 35) return en ? "okay, context matters here." : "jó, azért itt a kontextus nem mindegy.";
-  return en ? "wait WHAT 😭" : "várj MI 😭";
+  const role = String(row.role || "observer");
+  let text = en ? "wait WHAT" : "várj MI";
+  if (role === "witness") text = en ? "that's not even what happened." : "ez nem is így történt.";
+  else if (role === "skeptic") text = en ? "yeah… I don't buy this." : "aha… ezt nem veszem be.";
+  else if (role === "supporter") text = en ? "nah. I'm not buying that about them." : "na ezt róla nem veszem be.";
+  else if (role === "critic") text = en ? "called it." : "mondtam.";
+  else if (role === "jealous") text = en ? "oh. cute." : "ó. de cuki.";
+  else if (role === "mentioned") text = en ? "excuse me??" : "elnézést??";
+  return { comments: [{ id: c.id, text }], reposts: [], follows: [], dms: [], statements: [], changes: [] };
 }
 
 function applyGossipReactions(n,postId,cast,out){
   const post=(n.posts||[]).find((p)=>p&&p.id===postId);if(!post||!post.gossipStory)return;
   const castSet=new Set((cast||[]).map((r)=>r&&r.id).filter(Boolean));
   const visibleActors=new Set();
-  const allowedTargets=new Set([post.authorId,...(post.gossipStory.mentionedIds||[]),n.meId].filter(Boolean));
+  const allowedTargets=new Set([post.authorId,...(post.gossipStory.mentionedIds||[])].filter(Boolean));
   if(!Array.isArray(post.gossipStory.reactedBy))post.gossipStory.reactedBy=[];
-  post.gossipStory.reactedBy=[...new Set([...post.gossipStory.reactedBy,...castSet])];
-  post.gossipStory.reactionRounds=Math.max(0,Number(post.gossipStory.reactionRounds)||0)+1;
+  let reactionOut=out&&typeof out==="object"?out:null;
+  const hasVisible=Boolean(reactionOut&&(
+    (Array.isArray(reactionOut.comments)&&reactionOut.comments.length)||
+    (Array.isArray(reactionOut.reposts)&&reactionOut.reposts.length)||
+    (Array.isArray(reactionOut.statements)&&reactionOut.statements.length)||
+    (Array.isArray(reactionOut.dms)&&reactionOut.dms.length)
+  ));
+  if(!hasVisible)reactionOut=fallbackGossipReactionOutput(n,post,cast);
 
-  (out&&Array.isArray(out.comments)?out.comments:[]).slice(0,5).forEach((item)=>{
+  (reactionOut&&Array.isArray(reactionOut.comments)?reactionOut.comments:[]).slice(0,5).forEach((item)=>{
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
     if(!isHuman(n,who)&&who===post.authorId)return;
     let body=cleanGeneratedComment(n,who,item.text,280);if(!body)return;
@@ -36034,48 +35906,33 @@ function applyGossipReactions(n,postId,cast,out){
     post.comments=safePostComments(post);post.comments.push(made);visibleActors.add(who);noteComment(n,post,made);
     recordSocialEvent(n,{type:"comment",refId:made.id,ts:made.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:32,drama:24,romance:0,embarrassment:0,source:"gossip-reaction",text:made.text,tags:["social","gossip-reaction","comment"],meta:{postId:post.id,commentId:made.id,storyId:post.gossipStory.id||""}});
   });
-  /* Hard guarantee: a gossip-media post never stays socially silent. If the
-     model returned only private/secondary actions (or malformed comments),
-     add one short public stance from the highest-ranked eligible character. */
-  if (!visibleActors.size || !safePostComments(post).some((c) => c && castSet.has(c.authorId) && Number(c.ts || 0) >= Number(post.ts || 0))) {
-    const fallbackRow = (cast || []).find((row) => row && row.id && row.id !== post.authorId && charById(n, row.id));
-    if (fallbackRow) {
-      const who = fallbackRow.id;
-      let body = fallbackGossipReactionText(n, who, post);
-      body = cleanGeneratedComment(n, who, body, 280);
-      if (body) {
-        const targetId = (post.gossipStory.mentionedIds || []).find((id) => id && id !== who) || post.authorId;
-        body = sanitizeGeneratedDirectAddress(n, who, targetId, body);
-        if (body) {
-          const made = { id: uid(), authorId: who, text: body, ts: now(), parent: null, language: worldLanguage(n, n.meId) };
-          post.comments = safePostComments(post); post.comments.push(made); visibleActors.add(who); noteComment(n, post, made);
-          recordSocialEvent(n, { type:"comment", refId:made.id, ts:made.ts, actorId:who, targetIds:post.gossipStory.mentionedIds||[], visibility:"public", factLevel:"observed", importance:30, drama:22, romance:0, embarrassment:0, source:"gossip-reaction-fallback", text:made.text, tags:["social","gossip-reaction","comment","fallback"], meta:{postId:post.id,commentId:made.id,storyId:post.gossipStory.id||""} });
-        }
-      }
-    }
-  }
-  (out&&Array.isArray(out.reposts)?out.reposts:[]).slice(0,4).forEach((id)=>{const who=aiVoice(n,id);if(who&&castSet.has(who)&&createRepost(n,who,post.id,"gossip-reaction"))visibleActors.add(who);});
-  (out&&Array.isArray(out.follows)?out.follows:[]).slice(0,5).forEach((item)=>{
+  (reactionOut&&Array.isArray(reactionOut.reposts)?reactionOut.reposts:[]).slice(0,4).forEach((id)=>{const who=aiVoice(n,id);if(who&&castSet.has(who)&&createRepost(n,who,post.id,"gossip-reaction"))visibleActors.add(who);});
+  (reactionOut&&Array.isArray(reactionOut.follows)?reactionOut.follows:[]).slice(0,5).forEach((item)=>{
     const who=aiVoice(n,item&&item.id), targetId=item&&item.targetId?String(item.targetId):"";
     if(!who||!castSet.has(who)||!allowedTargets.has(targetId)||who===targetId||!socialProfileById(n,targetId))return;
     if(setFollowState(n,who,targetId,item.state!==false,"gossip-reaction"))visibleActors.add(who);
   });
-  (out&&Array.isArray(out.statements)?out.statements:[]).slice(0,2).forEach((item)=>{
+  (reactionOut&&Array.isArray(reactionOut.statements)?reactionOut.statements:[]).slice(0,2).forEach((item)=>{
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
     const body=cleanGeneratedUtterance(n,who,item.text,1200);if(!body)return;
     const statement={id:uid(),authorId:who,ts:now(),likes:0,likedBy:[],text:body,imageId:"",image:"",comments:[],language:worldLanguage(n,n.meId),responseToGossipId:post.gossipStory.id||""};
     n.posts.unshift(statement);visibleActors.add(who);
     recordSocialEvent(n,{type:"post",refId:statement.id,ts:statement.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:42,drama:30,romance:0,embarrassment:0,source:"gossip-response",text:body,tags:["social","gossip-response","statement"],meta:{postId:statement.id,gossipPostId:post.id,storyId:post.gossipStory.id||""}});
   });
-  (out&&Array.isArray(out.dms)?out.dms:[]).slice(0,3).forEach((item)=>{
+  (reactionOut&&Array.isArray(reactionOut.dms)?reactionOut.dms:[]).slice(0,3).forEach((item)=>{
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text||!n.meId)return;
     const raw=cleanGeneratedUtterance(n,who,item.text,320), body=sanitizePhoneDm(n,who,enforceChatEmojiVariety(n,who,raw),post.text||"");if(!body)return;
     const ck=chatKey(n.meId,who);n.chats[ck]=[...(n.chats[ck]||[]),{from:"them",text:body,ts:now(),language:worldLanguage(n,n.meId)}];visibleActors.add(who);
     const a=charById(n,who);pushNote(n,n.meId,{icon:"✉️",text:sysLangText(n,n.meId,`${a?a.name:"Valaki"} írt neked a pletyka után.`,`${a?a.name:"Someone"} messaged you after the gossip post.`),link:{type:"dm",id:who}});
   });
-  const safeChanges=(out&&Array.isArray(safeAiChanges(out))?safeAiChanges(out):[]).filter((ch)=>{
+  const safeChanges=(reactionOut&&Array.isArray(safeAiChanges(reactionOut))?safeAiChanges(reactionOut):[]).filter((ch)=>{
     const a=findChar(n,ch&&ch.a), b=findChar(n,ch&&ch.b);return a&&b&&castSet.has(a)&&visibleActors.has(a)&&allowedTargets.has(b)&&a!==b;
-  }).map((ch)=>({...ch,delta:Math.max(-30,Math.min(30,Number(ch.delta)||0))}));
+  }).map((ch)=>({...ch,delta:Math.max(-35,Math.min(35,Number(ch.delta)||0))}));
+  if(visibleActors.size){
+    post.gossipStory.reactedBy=[...new Set([...(post.gossipStory.reactedBy||[]),...visibleActors])];
+    post.gossipStory.reactionRounds=Math.max(0,Number(post.gossipStory.reactionRounds)||0)+1;
+    post.gossipStory.lastReactionAt=now();
+  }
   applyChanges(n,safeChanges);refreshPostReach(n,post.id);refreshTrends(n);
 }
 
@@ -36133,6 +35990,8 @@ function publishRumorEvolution(w,parentPostId,raw){
   if(!Array.isArray(w.rumors))w.rumors=[];
   w.rumors.unshift({id:"rum_"+uid(),storyId:post.gossipStory.id,parentStoryId:parent.gossipStory.id||"",postId:post.id,text:post.text,factLevel:"speculation",distortionLevel,ts:post.ts,mentionedIds:post.gossipStory.mentionedIds});w.rumors=w.rumors.slice(0,160);
   recordSocialEvent(w,{type:"rumor-evolution",refId:post.gossipStory.id,ts:post.ts,actorId:media.id,targetIds:post.gossipStory.mentionedIds,visibility:"public",factLevel:"speculation",importance:52,drama:30+distortionLevel*0.35,romance:0,embarrassment:0,source:"gossip-media",text:post.gossipStory.headline?`${post.gossipStory.headline} — ${cut(post.text,220)}`:cut(post.text,260),tags:["social","gossip-media","rumor","speculation","rumor-evolution"],meta:{postId:post.id,storyId:post.gossipStory.id,parentStoryId:parent.gossipStory.id||"",distortionLevel}});
+  const evolutionReactionCast=gossipStoryReactionCandidates(w,post);
+  if(evolutionReactionCast.length)simEnqueue(w,mkAction("gossip-reaction",`gossip-reaction-required:${post.id}:0`,{postId:post.id,cast:evolutionReactionCast},"event"));
   if(post.gossipStory.mentionedIds.includes(w.meId))pushNote(w,w.meId,{icon:"🌀",text:sysLangText(w,w.meId,`${media.name} tovább pörgette a rólad szóló pletykát.`,`${media.name} posted a speculative follow-up about you.`),link:{type:"post",id:post.id}});
   return post;
 }
@@ -39909,6 +39768,317 @@ function socialScore(value, fallback = 0) {
   );
 }
 
+
+/* ============================================================
+   PUBLIC / WITNESSED ROMANTIC CONSEQUENCES
+   ============================================================
+
+   A relationship score must not only change for the two people who are
+   directly talking. A third character who actually KNOWS about a public /
+   witnessed flirt, kiss or hookup can react too when they have a genuine
+   romantic stake in one of the participants.
+
+   Important: this is knowledge-gated. Private scenes do not magically leak.
+   ============================================================ */
+function romanticObserverSignal(event) {
+  if (!event || typeof event !== "object") return { active:false, strength:0 };
+  const tags = new Set((event.tags || []).map((x) => String(x || "").toLowerCase()));
+  const romance = Number(event.romance) || 0;
+  const text = String(event.text || "").toLowerCase();
+
+  let strength = romance;
+  if (["kiss","hookup","cheating","affair"].some((tag) => tags.has(tag))) strength = Math.max(strength, 72);
+  if (["romance","flirt","adult-innuendo","suggestive"].some((tag) => tags.has(tag))) strength = Math.max(strength, 28);
+  if (/\b(?:kiss|kissed|making\s*out|hook(?:ed)?\s*up|kavar|flirt|flört|date\s+me|babe|baby|mine|my\s+(?:girl|boy)|love\s+you|szeretlek|csók|csókol|randi)\b/i.test(text)) {
+    strength = Math.max(strength, 30);
+  }
+
+  return { active: strength >= 20, strength: Math.max(0, Math.min(100, Math.round(strength))) };
+}
+
+function romanticStakeForObserver(w, observerId, subjectId) {
+  if (!w || !observerId || !subjectId || observerId === subjectId) return null;
+  const observer = charById(w, observerId);
+  const subject = charById(w, subjectId);
+  if (!observer || !subject || isHuman(w, observerId)) return null;
+
+  const rel = getRel(w, observerId, subjectId) || {};
+  const relText = [rel.bond, rel.type, rel.hidden, rel.mood, rel.why]
+    .filter(Boolean).join(" ").toLowerCase();
+  const story = String(ownStorySnippetAbout(observer, subject) || "").toLowerCase();
+  const corpus = `${relText} ${story}`;
+
+  const nonExclusive = /\b(?:open\s+relationship|non[- ]?exclusive|poly(?:amorous|amory)?|nyitott\s+kapcsolat|poliamor)\b/i.test(corpus);
+  let stake = 0;
+  let label = "";
+
+  if (/\b(?:wife|husband|spouse|girlfriend|boyfriend|fianc[eé]e?|partner|dating|together|lover|relationship|járnak|párja|barátnő|barátja|jegyes|házastárs)\b/i.test(corpus)) {
+    stake = 4; label = "partner";
+  } else if (/\b(?:situationship|hooking\s*up|hookup|friends?\s+with\s+benefits|fwb|secret\s+affair|affair|titkos\s+viszony|kavar|kavarnak|összejár)\b/i.test(corpus)) {
+    stake = 3; label = "involved";
+  } else if (/\b(?:mutual\s+crush|crush|secret\s+crush|in\s+love|love\s+with|attraction|attracted|vonzalom|vonzód|szerelmes|titkos\s+vonzalom)\b/i.test(corpus) || bondLooksRomantic(rel)) {
+    stake = 2; label = "crush";
+  }
+
+  const lore = characterLoreCorpus(observer).toLowerCase();
+  const obsession = relationshipObsessionLevel(w, observerId, subjectId);
+  let jealousy = 0;
+  if (/jealous|jealousy|féltéken/.test(`${corpus} ${lore}`)) jealousy += 2;
+  if (/possess|possessive|birtokl|mine\b|enyém\b/.test(`${corpus} ${lore}`)) jealousy += 2;
+  if (/obsess|fixat|megszáll|máni/.test(`${corpus} ${lore}`)) jealousy += 2;
+  jealousy += obsession;
+
+  if (!stake && jealousy >= 3 && bondLooksRomantic(rel)) {
+    stake = 2; label = "romantic-fixation";
+  }
+  if (!stake) return null;
+
+  return {
+    observer,
+    subject,
+    rel,
+    stake,
+    label,
+    jealousy: Math.max(0, Math.min(8, jealousy)),
+    nonExclusive,
+  };
+}
+
+function observerActuallyKnowsSocialEvent(w, observerId, event) {
+  if (!w || !observerId || !event) return false;
+  const witnesses = new Set((event.witnessIds || []).map(String));
+  const participants = new Set([
+    event.actorId,
+    ...(event.targetIds || []),
+    ...((event.meta && Array.isArray(event.meta.participantIds)) ? event.meta.participantIds : []),
+    ...((event.meta && Array.isArray(event.meta.attendeeIds)) ? event.meta.attendeeIds : []),
+  ].filter(Boolean).map(String));
+
+  if (witnesses.has(String(observerId)) || participants.has(String(observerId))) return true;
+  if (event.visibility === "public") return true;
+  if (event.visibility === "group" || event.visibility === "limited") return witnesses.has(String(observerId));
+  return false;
+}
+
+function romanticObserverDelta(stakeInfo, event, strength) {
+  if (!stakeInfo || !event) return 0;
+  const isPublic = event.visibility === "public";
+  const tags = new Set((event.tags || []).map((x) => String(x || "").toLowerCase()));
+  const severe = strength >= 60 || tags.has("kiss") || tags.has("hookup") || tags.has("cheating") || tags.has("affair");
+
+  /* Explicitly non-exclusive relationships are not automatically punished.
+     A strongly jealous/possessive person can still react emotionally. */
+  if (stakeInfo.nonExclusive && stakeInfo.jealousy < 4) return 0;
+
+  let loss = 0;
+  if (stakeInfo.stake >= 4) loss = severe ? 14 : 9;
+  else if (stakeInfo.stake === 3) loss = severe ? 11 : 7;
+  else loss = severe ? 8 : 5;
+
+  if (stakeInfo.jealousy >= 2) loss += 2;
+  if (stakeInfo.jealousy >= 5) loss += 3;
+  if (isPublic) loss += severe ? 3 : 2; // public embarrassment / disrespect hurts more
+
+  return -Math.max(4, Math.min(22, Math.round(loss)));
+}
+
+function scheduleRomanticObserverReaction(w, event, observerId) {
+  if (!w || !event || !observerId) return;
+  const keyBase = `romantic-observer:${event.id || event.refId || event.ts}:${observerId}`;
+
+  /* A public flirt inside a comment thread should be allowed to explode
+     IN that same thread instead of always becoming an unrelated DM. */
+  if (
+    event.visibility === "public" &&
+    (event.type === "comment" || event.type === "reply") &&
+    event.meta && event.meta.postId && event.meta.commentId
+  ) {
+    simEnqueue(w, mkAction(
+      "reply",
+      `${keyBase}:thread`,
+      { postId: event.meta.postId, commentId: event.meta.commentId, targetId: observerId, trigger: "romantic-jealousy" },
+      "event"
+    ));
+    return;
+  }
+
+  /* For a witnessed scene / public post there may be no concrete comment
+     node to answer. Give the affected character a chance to confront the
+     person privately using the memory + continuity written below. */
+  simEnqueue(w, mkAction(
+    "dm",
+    `${keyBase}:dm`,
+    { botId: observerId, trigger: "romantic-jealousy", eventId: event.id || "" },
+    "event"
+  ));
+}
+
+function romanticEventParticipantIds(w, event) {
+  if (!w || !event) return [];
+  const explicit = event.meta && Array.isArray(event.meta.romanticParticipantIds)
+    ? event.meta.romanticParticipantIds.filter(Boolean)
+    : [];
+  if (explicit.length >= 2) return [...new Set(explicit)].slice(0, 4);
+
+  const actorId = event.actorId ? String(event.actorId) : "";
+  const targets = [...new Set((event.targetIds || []).filter(Boolean).map(String))];
+
+  /* Social messages have a reliable author + addressee structure. */
+  if (["comment","reply","post","dm"].includes(String(event.type || "")) && actorId && targets.length) {
+    return [...new Set([actorId, ...targets])].slice(0, 4);
+  }
+
+  const raw = String(event.text || "").toLowerCase();
+  const named = [];
+  const universe = [...new Set([actorId, ...targets, ...((event.meta && event.meta.participantIds) || [])].filter(Boolean))];
+  universe.forEach((id) => {
+    const c = charById(w, id);
+    if (!c) return;
+    const full = String(c.name || "").trim().toLowerCase();
+    const first = full.split(/\s+/)[0] || "";
+    const nick = String(c.nick || c.nickname || "").trim().toLowerCase();
+    const handle = String(c.username || "").trim().toLowerCase();
+    const aliases = [full, nick, handle ? `@${handle}` : "", first]
+      .filter((x) => x && x.length >= 3);
+    if (aliases.some((alias) => raw.includes(alias))) named.push(id);
+  });
+
+  const uniqueNamed = [...new Set(named)];
+  if (actorId && !uniqueNamed.includes(actorId) && targets.length === 1) uniqueNamed.unshift(actorId);
+  if (uniqueNamed.length >= 2) return uniqueNamed.slice(0, 4);
+
+  /* Two-person observed events are unambiguous even when the summary omits names. */
+  const fallback = [...new Set([actorId, ...targets].filter(Boolean))];
+  return fallback.length === 2 ? fallback : [];
+}
+
+function applyObservedRomanticThirdPartyConsequences(w, event) {
+  if (!w || !event || event.factLevel !== "observed") return 0;
+  if (event.meta && event.meta.skipRomanticObserverConsequences) return 0;
+
+  const signal = romanticObserverSignal(event);
+  if (!signal.active) return 0;
+
+  const participantIds = romanticEventParticipantIds(w, event);
+
+  /* Jealousy needs at least two identifiable people in the romantic interaction.
+     Other scene members remain WITNESSES, not romantic participants. */
+  if (participantIds.length < 2) return 0;
+
+  const participantSet = new Set(participantIds);
+  const candidates = [];
+
+  (w.chars || []).forEach((observer) => {
+    if (!observer || isHuman(w, observer.id) || participantSet.has(observer.id)) return;
+    if (!observerActuallyKnowsSocialEvent(w, observer.id, event)) return;
+
+    participantIds.forEach((subjectId) => {
+      if (!subjectId || subjectId === observer.id) return;
+      const stake = romanticStakeForObserver(w, observer.id, subjectId);
+      if (!stake) return;
+
+      const others = participantIds.filter((id) => id && id !== subjectId && id !== observer.id);
+      if (!others.length) return;
+
+      const delta = romanticObserverDelta(stake, event, signal.strength);
+      if (!delta) return;
+
+      candidates.push({
+        observerId: observer.id,
+        subjectId,
+        otherId: others[0],
+        delta,
+        stake,
+        severity: Math.abs(delta) + stake.stake * 3 + stake.jealousy,
+      });
+    });
+  });
+
+  /* One observer should not be punished twice for the same triangle/event. */
+  const bestByObserver = new Map();
+  candidates.sort((a,b) => b.severity - a.severity).forEach((row) => {
+    if (!bestByObserver.has(row.observerId)) bestByObserver.set(row.observerId, row);
+  });
+  const chosen = [...bestByObserver.values()].sort((a,b) => b.severity - a.severity).slice(0, 5);
+
+  chosen.forEach((row, index) => {
+    const observer = charById(w, row.observerId);
+    const subject = charById(w, row.subjectId);
+    const other = charById(w, row.otherId);
+    if (!observer || !subject || !other) return;
+
+    const isPublic = event.visibility === "public";
+    const feeling = row.stake.jealousy >= 5
+      ? sysLangText(w, observer.id, "erősen féltékeny, sértett és birtokló", "intensely jealous, hurt and possessive")
+      : sysLangText(w, observer.id, "féltékeny és sértett", "jealous and hurt");
+    const why = sysLangText(
+      w,
+      observer.id,
+      `${observer.name} látta, hogy ${subject.name} ${isPublic ? "nyilvánosan " : "mások előtt "}romantikusan/flörtölve viselkedett ${other.name} felé.`,
+      `${observer.name} saw ${subject.name} act romantically/flirtatiously with ${other.name} ${isPublic ? "in public" : "in front of others"}.`
+    );
+
+    applyChanges(w, [{
+      a: observer.id,
+      b: subject.id,
+      delta: row.delta,
+      mood: feeling,
+      why,
+      oneSided: true,
+    }]);
+
+    rememberAboutTarget(w, observer.id, subject.id, {
+      kind: "event",
+      source: isPublic ? "public_romantic_observation" : "witnessed_romantic_observation",
+      confidence: 1,
+      timestamp: Number(event.ts) || now(),
+      text: `${subject.name} ${isPublic ? "publicly" : "visibly"} flirted / had a romantic interaction with ${other.name}: ${cut(event.text || "", 240)}`,
+    });
+    rememberAboutTarget(w, observer.id, other.id, {
+      kind: "event",
+      source: isPublic ? "public_romantic_observation" : "witnessed_romantic_observation",
+      confidence: 1,
+      timestamp: Number(event.ts) || now(),
+      text: `${other.name} was the other person in a romantic/flirty interaction involving ${subject.name}.`,
+    });
+    recordCharacterAgentPerception(w, observer.id, {
+      surface: event.type === "comment" || event.type === "reply" ? "comment" : "social-event",
+      targetId: subject.id,
+      refId: event.refId || event.id || "",
+      text: why,
+      ts: Number(event.ts) || now(),
+    });
+
+    const continuity = ensureRelationshipContinuity(w, observer.id, subject.id);
+    if (continuity) {
+      continuity.currentFeeling = feeling;
+      continuity.currentIntent = row.stake.jealousy >= 4
+        ? sysLangText(w, observer.id, "számon akarja kérni / tisztázni akarja, mi volt ez", "wants to confront them / find out what that was")
+        : sysLangText(w, observer.id, "figyeli, mit jelent ez kettőjükre nézve", "is watching what this means for their relationship");
+      continuity.lastTone = isPublic
+        ? sysLangText(w, observer.id, "nyilvános féltékenységi trigger", "public jealousy trigger")
+        : sysLangText(w, observer.id, "látott féltékenységi trigger", "witnessed jealousy trigger");
+      continuity.unresolved = addContinuityItems(
+        continuity.unresolved,
+        [sysLangText(
+          w,
+          observer.id,
+          `Tisztázni akarja ${subject.name} és ${other.name} ${isPublic ? "nyilvános " : "látott "}flörtjét/romantikus pillanatát.`,
+          `Wants clarity about ${subject.name} and ${other.name}'s ${isPublic ? "public " : "witnessed "}flirt/romantic moment.`
+        )],
+        8
+      );
+      continuity.lastMeaningfulInteractionAt = Number(event.ts) || now();
+      continuity.updatedAt = now();
+    }
+
+    /* Keep visible fallout focused instead of making five people pile on at once. */
+    if (index < 2) scheduleRomanticObserverReaction(w, event, observer.id);
+  });
+
+  return chosen.length;
+}
+
 function recordSocialEvent(
   w,
   event = {}
@@ -40195,6 +40365,11 @@ function recordSocialEvent(
       }
     );
   }
+
+  /* Third-party romantic fallout: a crush / partner / situationship who
+   * actually saw a public or witnessed romantic interaction may become
+   * jealous, remember it, lose relationship points and react. */
+  applyObservedRomanticThirdPartyConsequences(w, entry);
 
   /*
    * A social ledger eseménye lehet egy backchannel rumor MAGJA.
@@ -41420,6 +41595,9 @@ function lastAiInitiatedRoleplayAt(w) {
 function canAiInitiateRoleplay(w) {
   if (!w || !(w.chars || []).length) return false;
   const ts = now();
+  /* One unanswered invitation at a time. Do not stack new RP calls while the
+     player still has a live Accept/Decline choice. */
+  if ((w.scenes || []).some((scene) => roleplayInviteIsPending(scene, ts))) return false;
   /* A stale, régen megnyitva maradt AI-Event nem némíthatja el örökre az
      új meghívásokat. Csak egy TÉNYLEG friss, még aktív kezdeményezés blokkol. */
   const recentOpenAiScenes = (w.scenes || []).filter((scene) => {
@@ -41433,7 +41611,7 @@ function canAiInitiateRoleplay(w) {
     const lastActivityAt = Math.max(started, latestTurnAt);
     const idleAge = ts - lastActivityAt;
     const hasPlayerTurns = (scene.turns || []).some((turn) => turn && turn.authorId === w.meId);
-    const accepted = ["accepted", "accepted_in_chat"].includes(String(scene.invitationStatus || "")) || hasPlayerTurns;
+    const accepted = roleplayInviteIsAccepted(scene) || hasPlayerTurns;
     /* Only a genuinely active Event suppresses a new invitation. A forgotten
        open scene may remain in the UI without muting this lane for 18 minutes. */
     return accepted ? idleAge < 7 * 60 * 1000 : idleAge < 2 * 60 * 1000;
@@ -42139,24 +42317,6 @@ function popupPriorityAction(view, keyPrefix = "popup-priority") {
 
 function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
-
-  /* Expired AI invitations are archived by runtime maintenance; they must not
-     remain active forever or block future invites. */
-  const expiredInviteIds = (view.scenes || []).filter((s) => s && s.aiInitiated && s.invitationStatus === "pending" && roleplayInviteIsExpired(s)).map((s) => s.id);
-  if (expiredInviteIds.length) {
-    return mkAction("expire-roleplay-invites", `expire-rp-invites:${expiredInviteIds.join(":")}`, { sceneIds: expiredInviteIds }, "event");
-  }
-
-  /* Gossip media is public social content: the first reaction round is a HARD
-     follow-up, not a probabilistic background task. This guarantees every new
-     gossip post receives visible human-like pushback/support/disbelief/etc. */
-  const urgentGossipReaction = pickGossipReactionAction(view);
-  if (urgentGossipReaction) {
-    const gp = (view.posts || []).find((p) => p && p.id === urgentGossipReaction.postId);
-    if (gp && gp.gossipStory && Math.max(0, Number(gp.gossipStory.reactionRounds) || 0) === 0) {
-      return mkAction("gossip-reaction", `gossip-reaction-first:${urgentGossipReaction.postId}`, urgentGossipReaction, "event");
-    }
-  }
 
   /*
    * v54 HARD FAIRNESS WATCHDOG
@@ -43343,11 +43503,6 @@ async function runSimulationAction(view, update, action, addImage) {
     return "gossip-story-force";
   }
 
-  if (action.type === "expire-roleplay-invites") {
-    update((n) => { expirePendingRoleplayInvites(n, now()); });
-    return "expire-roleplay-invites";
-  }
-
   if (action.type === "roleplay-initiate") {
     const botId = action.payload && action.payload.botId;
     const bot = botId ? charById(view, botId) : null;
@@ -43435,15 +43590,17 @@ async function runSimulationAction(view, update, action, addImage) {
         setting,
         cast: castIds,
         playerTurnJournal: [],
-        turns: firstText ? [{
+        turns: [],
+        pendingOpening: firstText ? {
+          id: "turn_" + uid(),
           authorId: bot.id,
           to: n.meId,
           kind: out.openingKind === "action" ? "action" : "speech",
           text: firstText,
           ts: now(),
           language: worldLanguage(n, n.meId),
-        }] : [],
-        open: true,
+        } : null,
+        open: false,
         goal,
         limitMode: out.limitMode === "minutes" ? "minutes" : "turns",
         targetTurns: Math.max(8, Math.min(60, Math.round(Number(out.targetTurns) || 20))),
@@ -43456,7 +43613,9 @@ async function runSimulationAction(view, update, action, addImage) {
         statusUpdates: [],
         success: null,
         earlyEnd: false,
-        startedAt: now(),
+        startedAt: 0,
+        invitedAt: now(),
+        inviteExpiresAt: now() + ROLEPLAY_INVITE_TTL_MS,
         ts: now(),
         eventKind: ["private_meet", "party", "training", "team_event", "group_social"].includes(declaredEventKind)
           ? declaredEventKind
@@ -43465,9 +43624,6 @@ async function runSimulationAction(view, update, action, addImage) {
         initiatedBy: bot.id,
         initiationMode: mode,
         invitationStatus: "pending",
-        invitedAt: now(),
-        inviteExpiresAt: now() + ROLEPLAY_INVITE_TTL_MS,
-        archived: false,
       };
       n.scenes = [...(n.scenes || []), scene];
 
@@ -43482,10 +43638,10 @@ async function runSimulationAction(view, update, action, addImage) {
 
       recordCharacterAgentAction(n, bot.id, {
         surface: "roleplay",
-        action: "START_EVENT",
+        action: "INVITE_EVENT",
         targetId: n.meId,
         refId: sceneId,
-        plan: `Active Event: ${title}${goal ? ` — goal: ${goal}` : ""}`,
+        plan: `Pending Event invitation: ${title}${goal ? ` — goal: ${goal}` : ""}`,
         planId: `scene:${sceneId}`,
         ts: now(),
       });
@@ -43532,9 +43688,13 @@ async function runSimulationAction(view, update, action, addImage) {
         tags: ["roleplay", "ai-initiated", mode],
         meta: { sceneId, participantIds: [n.meId, ...castIds], sourceType: "roleplay-initiation" },
       });
-      /* v58: Event invitations use an ephemeral clickable banner only.
-         Do not add them to the persistent notification center. The App-level
-         invite watcher below detects the new pending scene and opens its toast. */
+      pushNote(n, n.meId, {
+        icon: mode === "dm_invite" ? "✉️" : "🎬",
+        text: sysLangText(n, n.meId,
+          `${bot.name} Eventet kezdeményezett: ${title}${castIds.length > 1 ? ` · ${castIds.length} AI résztvevő` : ""}`,
+          `${bot.name} initiated an Event: ${title}${castIds.length > 1 ? ` · ${castIds.length} AI participants` : ""}`),
+        link: { type: "scene", id: sceneId },
+      });
     });
     return "roleplay-initiate";
   }
@@ -43630,8 +43790,20 @@ async function runSimulationAction(view, update, action, addImage) {
     const post = (view.posts || []).find((p) => p && p.id === payload.postId);
     const cast = Array.isArray(payload.cast) ? payload.cast : [];
     if (!post || !post.gossipStory || !cast.length) return null;
-    const out = await genGossipReactions(view, post, cast);
-    update((n) => {  applyGossipReactions(n, post.id, cast, out); });
+    let out = null;
+    try {
+      out = await genGossipReactions(view, post, cast);
+    } catch (gossipReactionErr) {
+      console.warn("Gossip reaction generation failed; using local fallback:", gossipReactionErr);
+    }
+    const hasVisibleReaction = Boolean(out && (
+      (Array.isArray(out.comments) && out.comments.length) ||
+      (Array.isArray(out.reposts) && out.reposts.length) ||
+      (Array.isArray(out.statements) && out.statements.length) ||
+      (Array.isArray(out.dms) && out.dms.length)
+    ));
+    if (!hasVisibleReaction) out = fallbackGossipReactionOutput(view, post, cast);
+    update((n) => { applyGossipReactions(n, post.id, cast, out); });
     return "gossip-reaction";
   }
 
@@ -45214,10 +45386,6 @@ export default function App() {
   const viewRef = useRef(null);
   const [simPulse, setSimPulse] = useState(0);
   const [flash, setFlash] = useState(null);
-  const [inviteToast, setInviteToast] = useState(null);
-  const inviteToastTimer = useRef(null);
-  const seenInviteToasts = useRef(new Set());
-  const inviteToastWorldCode = useRef("");
   const [jump, setJump] = useState(null);
   const [popupNav, setPopupNav] = useState(null);
   const seenNote = useRef(null);
@@ -46841,6 +47009,26 @@ const signOut = useCallback(async () => {
   });
 }, []);
 
+
+  /* Pending AI invitations expire on their own even if the player never opens
+     the Events tab. Closed/expired scenes stay in storage/Diary but disappear
+     from the active list. */
+  useEffect(() => {
+    if (!world || !meId) return undefined;
+    const sweep = () => {
+      setWorld((prev) => {
+        if (!prev) return prev;
+        const n = JSON.parse(JSON.stringify(prev));
+        if (!maintainRoleplaySceneLifecycle(n, meId)) return prev;
+        n.rev = (n.rev || 0) + 1;
+        return n;
+      });
+    };
+    sweep();
+    const timer = setInterval(sweep, 15000);
+    return () => clearInterval(timer);
+  }, [world ? world.code : null, meId]);
+
   const requestSimulationAction = useCallback((action) => {
     if (!action) return false;
     update((n) => { simEnqueue(n, action); });
@@ -47875,78 +48063,6 @@ const signOut = useCallback(async () => {
     flashTimer.current = setTimeout(() => setFlash(null), 6000);
   }, [topNoteId, world, meId]);
 
-  /* v58 — EPHEMERAL EVENT INVITE TOAST
-     New AI Roleplay/Event invitations are not persistent notifications.
-     A short clickable banner appears once and opens the exact pending invite. */
-  useEffect(() => {
-    if (!world || !meId) return;
-
-    const code = String(world.code || "");
-    const pending = (world.scenes || [])
-      .filter((scene) =>
-        scene &&
-        scene.aiInitiated &&
-        scene.invitationStatus === "pending" &&
-        !scene.archived &&
-        !roleplayInviteIsExpired(scene)
-      )
-      .sort((a, b) => (Number(a.invitedAt || a.ts) || 0) - (Number(b.invitedAt || b.ts) || 0));
-
-    /* On world load/reload, consider already-existing invitations seen.
-       The banner is for a newly arriving invite, not a replay after refresh. */
-    if (inviteToastWorldCode.current !== code) {
-      inviteToastWorldCode.current = code;
-      seenInviteToasts.current = new Set(pending.map((scene) => scene.id).filter(Boolean));
-      setInviteToast(null);
-      return;
-    }
-
-    /* If the currently shown invite was resolved/expired elsewhere, dismiss it. */
-    if (inviteToast) {
-      const stillPending = pending.some((scene) => scene.id === inviteToast.sceneId);
-      if (!stillPending) setInviteToast(null);
-      return;
-    }
-
-    const next = pending.find((scene) => scene.id && !seenInviteToasts.current.has(scene.id));
-    if (!next) return;
-
-    seenInviteToasts.current.add(next.id);
-    const inviter = charById(viewRef.current || { ...world, meId }, next.initiatedBy);
-    setInviteToast({
-      sceneId: next.id,
-      inviterId: next.initiatedBy || "",
-      inviterName: inviter ? inviter.name : tt("Egy karakter", "A character"),
-      title: String(next.title || tt("Event meghívás", "Event invitation")),
-      invitedAt: Number(next.invitedAt || next.ts) || now(),
-    });
-  }, [world, meId, inviteToast, tt]);
-
-  useEffect(() => {
-    if (inviteToastTimer.current) {
-      clearTimeout(inviteToastTimer.current);
-      inviteToastTimer.current = null;
-    }
-    if (!inviteToast) return;
-    inviteToastTimer.current = setTimeout(() => setInviteToast(null), 6500);
-    return () => {
-      if (inviteToastTimer.current) {
-        clearTimeout(inviteToastTimer.current);
-        inviteToastTimer.current = null;
-      }
-    };
-  }, [inviteToast && inviteToast.sceneId]);
-
-  const openInviteToast = useCallback(() => {
-    if (!inviteToast || !world) return;
-    const scene = (world.scenes || []).find((row) => row && row.id === inviteToast.sceneId);
-    setInviteToast(null);
-    if (!scene || scene.archived || scene.invitationStatus !== "pending" || roleplayInviteIsExpired(scene)) return;
-    setSceneId(scene.id);
-    setJump({ type: "scene", id: scene.id, n: now() });
-    setTab("scene");
-  }, [inviteToast, world]);
-
   /* Központi szimulációs engine: queue-t és automata lépéseket is ugyanúgy futtat.
      Egy körben mindig pontosan egy AI-hívás megy. */
   useEffect(() => {
@@ -48182,22 +48298,7 @@ const signOut = useCallback(async () => {
 
   const me = (world.players && world.players[meId]) || blankPlayer(meId, "Névtelen", "jatekos");
   const view = { ...world, meId, player: me };
-  /*
-   * v61: leaving the Scene TAB does not mean leaving the ongoing Event. The
-   * selected accepted/open scene remains the player's active RP session while
-   * they temporarily answer DMs. This also preserves the earlier rule that
-   * popup Events must not appear on top of an ongoing Roleplay.
-   */
-  const selectedLiveScene = sceneId
-    ? (world.scenes || []).find((s) => s && s.id === sceneId)
-    : null;
-  const selectedSceneIsOngoing = Boolean(
-    selectedLiveScene &&
-    selectedLiveScene.open !== false &&
-    !(selectedLiveScene.aiInitiated && selectedLiveScene.invitationStatus === "pending") &&
-    !["rejected", "expired"].includes(String(selectedLiveScene.invitationStatus || ""))
-  );
-  view.activeSceneId = selectedSceneIsOngoing ? sceneId : "";
+  view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
   setLiveUiActiveSceneId(view.activeSceneId);
   viewRef.current = view;
   const activePopup = currentPopupEvent(view);
@@ -48299,23 +48400,7 @@ const signOut = useCallback(async () => {
         />
       ) : null}
 
-      {inviteToast && !showNotes && (
-        <div className="invite-toast" onClick={openInviteToast} role="button" tabIndex={0}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openInviteToast(); } }}>
-          <span className="note-ico">✉️</span>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div className="invite-toast-title">
-              {tt(`${inviteToast.inviterName} meghívott`, `${inviteToast.inviterName} invited you`)}
-            </div>
-            <div className="invite-toast-sub">
-              {inviteToast.title} · {tt("Kattints a meghívás megnyitásához", "Click to open the invitation")}
-            </div>
-          </div>
-          <button aria-label={tt("Bezárás", "Close")} onClick={(e) => { e.stopPropagation(); setInviteToast(null); }}><X size={14} /></button>
-        </div>
-      )}
-
-      {flash && !showNotes && !inviteToast && (
+      {flash && !showNotes && (
         <div className="flash" onClick={() => openNote(flash)}>
           <span className="note-ico">{flash.icon || "✨"}</span>
           <div style={{ minWidth: 0, flex: 1 }}>
