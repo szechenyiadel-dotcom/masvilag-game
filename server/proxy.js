@@ -22,7 +22,6 @@ const GEMINI_EMBEDDING_MODEL = String(process.env.GEMINI_EMBEDDING_MODEL || "gem
 const GEMINI_EMBEDDING_DIM = Math.min(3072, Math.max(128, Number(process.env.GEMINI_EMBEDDING_DIM) || 768));
 const DEFAULT_PROVIDER = process.env.AI_PROVIDER || "anthropic";
 app.use(bodyParser.json({ limit: "60mb" }));
-
 /* ---------- PostgreSQL ---------- */
 
 const pool = process.env.DATABASE_URL
@@ -46,14 +45,13 @@ const dbReady = pool
         account_id TEXT NOT NULL,
         expires_at TIMESTAMPTZ NOT NULL
       );
-
-      CREATE TABLE IF NOT EXISTS world_media (
-        world_code TEXT PRIMARY KEY
-          REFERENCES worlds(code)
-          ON DELETE CASCADE,
-        data JSONB NOT NULL DEFAULT '{}'::jsonb,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
+CREATE TABLE IF NOT EXISTS world_media (
+  world_code TEXT PRIMARY KEY
+    REFERENCES worlds(code)
+    ON DELETE CASCADE,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
       /*
        * One global login profile can own/join several worlds.
@@ -133,7 +131,6 @@ async function requireDb(res) {
   await dbReady;
   return true;
 }
-
 /* ---------- biztonságos account + session segédek ---------- */
 
 const SESSION_COOKIE = "mv_session";
@@ -288,7 +285,6 @@ async function getSession(req) {
     world: result.rows[0].data,
   };
 }
-
 function legacyPasswordHash(password, salt) {
   const txt = String(salt) + "::" + String(password);
   let h1 = 0x811c9dc5;
@@ -438,7 +434,6 @@ async function currentProfileForSession(session) {
     ? { ...profile, username }
     : null;
 }
-
 function worldSyncRevServer(world) {
   return Math.max(
     0,
@@ -502,8 +497,6 @@ function mediaEnvelopeFromRow(raw) {
         ),
       media: raw.media,
     };
-  }
-      };
   }
 
   /*
@@ -701,10 +694,7 @@ app.get("/world/peek", async (req, res) => {
     });
   } catch (err) {
     if (client) {
-      try {
-        await client.query("ROLLBACK");
-      } catch (e) {}
-
+      try { await client.query("ROLLBACK"); } catch (e) {}
       client.release();
       client = null;
     }
@@ -891,22 +881,14 @@ app.post("/auth/login", async (req, res) => {
 
       return res.status(profileErr.status || 401).json({
         code: profileErr.code || "PROFILE_LOGIN_FAILED",
-        error:
-          profileErr.message ||
-          "Profile login failed.",
+        error: profileErr.message || "Profile login failed.",
       });
     }
 
-    /*
-     * Keep the per-world account credential aligned
-     * with the global profile.
-     */
+    /* Keep the per-world account credential aligned with the global profile. */
     if (globalProfile) {
-      account.salt =
-        globalProfile.salt;
-
-      account.hash =
-        globalProfile.hash;
+      account.salt = globalProfile.salt;
+      account.hash = globalProfile.hash;
     }
 
     await linkProfileWorld(
@@ -916,9 +898,7 @@ app.post("/auth/login", async (req, res) => {
       accountId
     );
 
-    /*
-     * Persist a possible credential alignment too.
-     */
+    /* Persist a possible credential alignment too. */
     await client.query(
       `
       UPDATE worlds
@@ -926,14 +906,10 @@ app.post("/auth/login", async (req, res) => {
           updated_at = NOW()
       WHERE code = $1
       `,
-      [
-        code,
-        JSON.stringify(world),
-      ]
+      [code, JSON.stringify(world)]
     );
 
     await client.query("COMMIT");
-
     client.release();
     client = null;
 
@@ -1022,7 +998,7 @@ app.get("/auth/session", async (req, res) => {
       clearSessionCookie(res);
 
       return res.status(401).json({
-                authenticated: false,
+        authenticated: false,
       });
     }
 
@@ -1085,7 +1061,6 @@ app.post("/auth/logout", async (req, res) => {
     });
   }
 });
-
 /* -------------------------------------------------------------------------
    ACCOUNT DELETE
    Serialized against world saves. Deletion increments syncRev.
@@ -1129,10 +1104,8 @@ app.post("/account/delete", async (req, res) => {
       );
 
       await client.query("COMMIT");
-
       client.release();
       client = null;
-
       clearSessionCookie(res);
 
       return res.json({
@@ -1144,41 +1117,30 @@ app.post("/account/delete", async (req, res) => {
     }
 
     const world = result.rows[0].data || {};
+    const account = world.accounts && world.accounts[accountId];
 
-    const account =
-      world.accounts &&
-      world.accounts[accountId];
-
-    const profileUsername =
-      cleanUsername(
-        (account && account.username) ||
-        (
-          session.world &&
-          session.world.accounts &&
-          session.world.accounts[accountId] &&
-          session.world.accounts[accountId].username
-        )
-      );
+    const profileUsername = cleanUsername(
+      (account && account.username) ||
+      (
+        session.world &&
+        session.world.accounts &&
+        session.world.accounts[accountId] &&
+        session.world.accounts[accountId].username
+      )
+    );
 
     /*
      * SINGLE-PLAYER WORLD CONTRACT:
      * deleting the human account deletes the WHOLE world. This prevents an
      * ownerless worlds row from continuing to reserve the world code.
      */
-    await deleteWorldGraph(
-      client,
-      worldCode
-    );
+    await deleteWorldGraph(client, worldCode);
 
     if (profileUsername) {
-      await deleteUnusedProfile(
-        client,
-        profileUsername
-      );
+      await deleteUnusedProfile(client, profileUsername);
     }
 
     await client.query("COMMIT");
-
     client.release();
     client = null;
 
@@ -1204,14 +1166,10 @@ app.post("/account/delete", async (req, res) => {
       client = null;
     }
 
-    console.error(
-      "Account/world delete error:",
-      err
-    );
+    console.error("Account/world delete error:", err);
 
     return res.status(500).json({
-      error:
-        "Account and world deletion failed.",
+      error: "Account and world deletion failed.",
     });
   }
 });
@@ -1335,30 +1293,18 @@ app.post("/auth/migrate", async (req, res) => {
           password
         );
     } catch (profileErr) {
-      return res.status(
-        profileErr.status || 401
-      ).json({
-        code:
-          profileErr.code ||
-          "PROFILE_LOGIN_FAILED",
-        error:
-          profileErr.message ||
-          "Profile login failed.",
+      return res.status(profileErr.status || 401).json({
+        code: profileErr.code || "PROFILE_LOGIN_FAILED",
+        error: profileErr.message || "Profile login failed.",
       });
     }
 
     if (globalProfile) {
-      account.salt =
-        globalProfile.salt;
-
-      account.hash =
-        globalProfile.hash;
+      account.salt = globalProfile.salt;
+      account.hash = globalProfile.hash;
     }
 
-    /*
-     * Server owns this value;
-     * never trust the imported/local value.
-     */
+    /* Server owns this value; never trust the imported/local value. */
     world.syncRev = 1;
 
     if (world.universe) {
@@ -1376,57 +1322,32 @@ app.post("/auth/migrate", async (req, res) => {
         )
         VALUES ($1, $2::jsonb, NOW())
         `,
-        [
-          code,
-          JSON.stringify(world),
-        ]
+        [code, JSON.stringify(world)]
       );
 
     try {
       await insertWorld();
     } catch (err) {
-      if (
-        err &&
-        err.code === "23505"
-      ) {
-        /*
-         * Old account-delete versions can leave
-         * a zero-account orphan.
-         */
-        const stale =
-          await pool.query(
-            `
-            SELECT data
-            FROM worlds
-            WHERE code = $1
-            LIMIT 1
-            `,
-            [code]
-          );
+      if (err && err.code === "23505") {
+        /* Old account-delete versions can leave a zero-account orphan. */
+        const stale = await pool.query(
+          `SELECT data FROM worlds WHERE code = $1 LIMIT 1`,
+          [code]
+        );
 
         if (
           stale.rows.length &&
-          !worldHasHumanAccount(
-            stale.rows[0].data
-          )
+          !worldHasHumanAccount(stale.rows[0].data)
         ) {
-          await deleteWorldGraph(
-            pool,
-            code
-          );
+          await deleteWorldGraph(pool, code);
 
           try {
             await insertWorld();
           } catch (retryErr) {
-            if (
-              retryErr &&
-              retryErr.code === "23505"
-            ) {
+            if (retryErr && retryErr.code === "23505") {
               return res.status(409).json({
-                code:
-                  "WORLD_ALREADY_EXISTS",
-                error:
-                  "World already exists on the server.",
+                code: "WORLD_ALREADY_EXISTS",
+                error: "World already exists on the server.",
               });
             }
 
@@ -1434,10 +1355,8 @@ app.post("/auth/migrate", async (req, res) => {
           }
         } else {
           return res.status(409).json({
-            code:
-              "WORLD_ALREADY_EXISTS",
-            error:
-              "World already exists on the server.",
+            code: "WORLD_ALREADY_EXISTS",
+            error: "World already exists on the server.",
           });
         }
       } else {
@@ -1496,8 +1415,7 @@ app.get("/profile/worlds", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
 
-    const session =
-      await getSession(req);
+    const session = await getSession(req);
 
     if (!session) {
       clearSessionCookie(res);
@@ -1507,76 +1425,49 @@ app.get("/profile/worlds", async (req, res) => {
       });
     }
 
-    const profile =
-      await currentProfileForSession(
-        session
-      );
+    const profile = await currentProfileForSession(session);
 
     if (!profile) {
       return res.status(404).json({
-        error:
-          "Global profile not found.",
+        error: "Global profile not found.",
       });
     }
 
-    const result =
-      await pool.query(
-        `
-        SELECT
-          pw.world_code AS code,
-          pw.account_id,
-          w.data->'universe'->>'name' AS name,
-          w.data #>> ARRAY['players', pw.account_id, 'name'] AS character_name,
-          w.data #>> ARRAY['players', pw.account_id, 'username'] AS character_username,
-          w.updated_at
-        FROM profile_worlds pw
-        JOIN worlds w
-          ON w.code = pw.world_code
-        WHERE
-          pw.profile_username = $1
-        ORDER BY
-          w.updated_at DESC,
-          pw.world_code ASC
-        `,
-        [profile.username]
-      );
+    const result = await pool.query(
+      `
+      SELECT
+        pw.world_code AS code,
+        pw.account_id,
+        w.data->'universe'->>'name' AS name,
+        w.data #>> ARRAY['players', pw.account_id, 'name'] AS character_name,
+        w.data #>> ARRAY['players', pw.account_id, 'username'] AS character_username,
+        w.updated_at
+      FROM profile_worlds pw
+      JOIN worlds w ON w.code = pw.world_code
+      WHERE pw.profile_username = $1
+      ORDER BY w.updated_at DESC, pw.world_code ASC
+      `,
+      [profile.username]
+    );
 
     return res.json({
       ok: true,
-      profileUsername:
-        profile.username,
-      currentWorldCode:
-        session.worldCode,
-      worlds:
-        result.rows.map(
-          (row) => ({
-            code:
-              row.code,
-            name:
-              row.name ||
-              row.code,
-            meId:
-              row.account_id,
-            characterName:
-              row.character_name ||
-              "",
-            characterUsername:
-              row.character_username ||
-              "",
-            updatedAt:
-              row.updated_at,
-          })
-        ),
+      profileUsername: profile.username,
+      currentWorldCode: session.worldCode,
+      worlds: result.rows.map((row) => ({
+        code: row.code,
+        name: row.name || row.code,
+        meId: row.account_id,
+        characterName: row.character_name || "",
+        characterUsername: row.character_username || "",
+        updatedAt: row.updated_at,
+      })),
     });
   } catch (err) {
-    console.error(
-      "Profile worlds error:",
-      err
-    );
+    console.error("Profile worlds error:", err);
 
     return res.status(500).json({
-      error:
-        "Failed to load profile worlds.",
+      error: "Failed to load profile worlds.",
     });
   }
 });
@@ -1589,6 +1480,7 @@ app.post("/profile/worlds/switch", async (req, res) => {
 
     if (!session) {
       clearSessionCookie(res);
+
       return res.status(401).json({
         error: "Not authenticated.",
       });
@@ -1659,7 +1551,10 @@ app.post("/profile/worlds/create", async (req, res) => {
 
     if (!session) {
       clearSessionCookie(res);
-      return res.status(401).json({ error: "Not authenticated." });
+
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
     }
 
     const profile = await currentProfileForSession(session);
@@ -1670,27 +1565,39 @@ app.post("/profile/worlds/create", async (req, res) => {
       !incomingWorld ||
       typeof incomingWorld !== "object"
     ) {
-      return res.status(400).json({ error: "Missing world data." });
+      return res.status(400).json({
+        error: "Missing world data.",
+      });
     }
 
     const world = JSON.parse(JSON.stringify(incomingWorld));
     const code = cleanCode(world.code);
 
     if (!code) {
-      return res.status(400).json({ error: "World code is required." });
+      return res.status(400).json({
+        error: "World code is required.",
+      });
     }
 
     world.code = code;
 
     const candidateIds = Object.keys(world.accounts || {});
-    let accountId = world.owner && world.accounts?.[world.owner]
-      ? String(world.owner)
-      : candidateIds.find((id) =>
-          cleanUsername(world.accounts?.[id]?.username) === profile.username
-        );
+
+    let accountId =
+      world.owner &&
+      world.accounts?.[world.owner]
+        ? String(world.owner)
+        : candidateIds.find(
+            (id) =>
+              cleanUsername(
+                world.accounts?.[id]?.username
+              ) === profile.username
+          );
 
     if (!accountId) {
-      accountId = `u${crypto.randomBytes(10).toString("hex")}`;
+      accountId =
+        `u${crypto.randomBytes(10).toString("hex")}`;
+
       if (!world.accounts) world.accounts = {};
       if (!world.players) world.players = {};
 
@@ -1702,19 +1609,24 @@ app.post("/profile/worlds/create", async (req, res) => {
 
       world.players[accountId] = {
         id: accountId,
-        name: String(
-          req.body?.characterName || profile.username
-        ).slice(0, 120),
+        name:
+          String(
+            req.body?.characterName ||
+            profile.username
+          ).slice(0, 120),
         username:
-          cleanUsername(req.body?.characterUsername) ||
-          profile.username,
+          cleanUsername(
+            req.body?.characterUsername
+          ) || profile.username,
       };
     }
 
     if (!world.accounts) world.accounts = {};
     if (!world.players) world.players = {};
 
-    const account = world.accounts[accountId] || {};
+    const account =
+      world.accounts[accountId] || {};
+
     account.id = accountId;
     account.username = profile.username;
     account.salt = profile.salt;
@@ -1731,11 +1643,12 @@ app.post("/profile/worlds/create", async (req, res) => {
     player.id = accountId;
 
     if (req.body?.characterName) {
-      player.name = String(
-        req.body.characterName
-      )
-        .trim()
-        .slice(0, 120);
+      player.name =
+        String(
+          req.body.characterName
+        )
+          .trim()
+          .slice(0, 120);
     }
 
     const requestedHandle =
@@ -1783,18 +1696,14 @@ app.post("/profile/worlds/create", async (req, res) => {
       );
 
     if (exists.rows.length) {
-      await client.query(
-        "ROLLBACK"
-      );
+      await client.query("ROLLBACK");
 
       client.release();
       client = null;
 
       return res.status(409).json({
-        code:
-          "WORLD_ALREADY_EXISTS",
-        error:
-          "World already exists on the server.",
+        code: "WORLD_ALREADY_EXISTS",
+        error: "World already exists on the server.",
       });
     }
 
@@ -1851,9 +1760,7 @@ app.post("/profile/worlds/create", async (req, res) => {
   } catch (err) {
     if (client) {
       try {
-        await client.query(
-          "ROLLBACK"
-        );
+        await client.query("ROLLBACK");
       } catch (e) {}
 
       client.release();
@@ -1866,12 +1773,10 @@ app.post("/profile/worlds/create", async (req, res) => {
     );
 
     return res.status(500).json({
-      error:
-        "World creation failed.",
+      error: "World creation failed.",
     });
   }
 });
-
 /* -------------------------------------------------------------------------
    AUTHORITATIVE WORLD AUTOSAVE
 
@@ -1893,8 +1798,7 @@ app.post("/world/save", async (req, res) => {
       clearSessionCookie(res);
 
       return res.status(401).json({
-        error:
-          "Not authenticated.",
+        error: "Not authenticated.",
       });
     }
 
@@ -1908,8 +1812,7 @@ app.post("/world/save", async (req, res) => {
       !incomingWorld.code
     ) {
       return res.status(400).json({
-        error:
-          "Missing world data.",
+        error: "Missing world data.",
       });
     }
 
@@ -1956,9 +1859,7 @@ app.post("/world/save", async (req, res) => {
         [session.worldCode]
       );
 
-    if (
-      !existingResult.rows.length
-    ) {
+    if (!existingResult.rows.length) {
       await client.query(
         "ROLLBACK"
       );
@@ -1967,8 +1868,7 @@ app.post("/world/save", async (req, res) => {
       client = null;
 
       return res.status(404).json({
-        error:
-          "World not found.",
+        error: "World not found.",
       });
     }
 
@@ -1992,8 +1892,7 @@ app.post("/world/save", async (req, res) => {
       client = null;
 
       return res.status(409).json({
-        code:
-          "WORLD_CONFLICT",
+        code: "WORLD_CONFLICT",
         error:
           "The world changed on another client.",
         meId:
@@ -2147,18 +2046,13 @@ app.post("/world/save", async (req, res) => {
     );
 
     return res.status(500).json({
-      error:
-        "World save failed.",
+      error: "World save failed.",
     });
   }
 });
 
 function extractText(content) {
-  if (
-    typeof content === "string"
-  ) {
-    return content;
-  }
+  if (typeof content === "string") return content;
 
   if (Array.isArray(content)) {
     return content
@@ -2269,7 +2163,9 @@ function buildGeminiPayload(
 
     if (!text) continue;
 
-    parts.push({ text });
+    parts.push({
+      text,
+    });
   }
 
   const payload = {
@@ -2499,7 +2395,8 @@ function normalizeOpenAIResponse(
   return {
     model:
       data?.model || "gpt",
-    id: data?.id,
+    id:
+      data?.id,
     type: "message",
     role: "assistant",
     content: [
@@ -2520,39 +2417,87 @@ function normalizeOpenAIResponse(
     },
   };
 }
-if (!ANTHROPIC_API_KEY && !GEMINI_API_KEY && !OPENAI_API_KEY) {
-  console.warn("No AI API key configured. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY before starting the proxy.");
-} else if (!ANTHROPIC_API_KEY) {
-  console.info("Anthropic API key not configured; using other providers if requested.");
+
+if (
+  !ANTHROPIC_API_KEY &&
+  !GEMINI_API_KEY &&
+  !OPENAI_API_KEY
+) {
+  console.warn(
+    "No AI API key configured. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY before starting the proxy."
+  );
+} else if (
+  !ANTHROPIC_API_KEY
+) {
+  console.info(
+    "Anthropic API key not configured; using other providers if requested."
+  );
 }
 
-
-
-// CORS: engedélyezzük a fejlesztéshez (ha szükséges, szűkítsd a domaineket).
+/* CORS */
 app.use((req, res, next) => {
-  const origin = String(req.headers.origin || "").trim();
-  const configured = String(process.env.CORS_ORIGINS || "")
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
+  const origin =
+    String(
+      req.headers.origin || ""
+    ).trim();
+
+  const configured =
+    String(
+      process.env.CORS_ORIGINS ||
+      ""
+    )
+      .split(",")
+      .map(
+        (x) =>
+          x.trim()
+      )
+      .filter(Boolean);
 
   const allowOrigin =
     origin &&
-    (!configured.length || configured.includes(origin));
+    (
+      !configured.length ||
+      configured.includes(
+        origin
+      )
+    );
 
   if (allowOrigin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
+      "Access-Control-Allow-Origin",
+      origin
+    );
+
+    res.setHeader(
+      "Vary",
+      "Origin"
+    );
+
+    res.setHeader(
+      "Access-Control-Allow-Credentials",
+      "true"
+    );
   }
 
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,OPTIONS"
+  );
 
-  if (req.method === "OPTIONS") return res.sendStatus(204);
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type,Authorization"
+  );
+
+  if (
+    req.method ===
+    "OPTIONS"
+  ) {
+    return res.sendStatus(204);
+  }
+
   next();
 });
-
 /* -------------------------------------------------------------------------
    CLOUD MEDIA LOAD
    Backward-compatible with old raw world_media.data rows.
@@ -2792,20 +2737,38 @@ app.post("/media/save", async (req, res) => {
 
 function parseImageDataUrl(value) {
   const raw = String(value || "");
-  const match = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/);
+
+  const match =
+    raw.match(
+      /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/
+    );
 
   if (!match) return null;
 
   return {
-    mimeType: match[1].toLowerCase(),
-    base64: match[2].replace(/\s+/g, ""),
+    mimeType:
+      match[1].toLowerCase(),
+    base64:
+      match[2].replace(
+        /\s+/g,
+        ""
+      ),
     dataUrl: raw,
   };
 }
 
 function visionTextFromAnthropic(data) {
-  return Array.isArray(data?.content)
-    ? data.content.map((x) => x?.type === "text" ? x.text || "" : "").join("")
+  return Array.isArray(
+    data?.content
+  )
+    ? data.content
+        .map(
+          (x) =>
+            x?.type === "text"
+              ? x.text || ""
+              : ""
+        )
+        .join("")
     : "";
 }
 
@@ -2813,158 +2776,364 @@ app.post("/ai/vision", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
 
-    const session = await getSession(req);
+    const session =
+      await getSession(req);
+
     if (!session) {
       clearSessionCookie(res);
-      return res.status(401).json({ error: "Not authenticated." });
+
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
     }
 
-    const image = await resolveInputImage(req.body?.image);
-    const prompt = String(
-      req.body?.prompt ||
-      "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when actually visible. Do not identify real people by name."
-    ).slice(0, 5000);
+    const image =
+      await resolveInputImage(
+        req.body?.image
+      );
+
+    const prompt =
+      String(
+        req.body?.prompt ||
+        "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when actually visible. Do not identify real people by name."
+      ).slice(
+        0,
+        5000
+      );
 
     if (!image) {
-      return res.status(400).json({ error: "A valid base64 data URL or public HTTPS image URL is required." });
+      return res.status(400).json({
+        error:
+          "A valid base64 data URL or public HTTPS image URL is required.",
+      });
     }
 
-    if (image.base64.length > 12 * 1024 * 1024) {
-      return res.status(413).json({ error: "Image is too large for vision analysis." });
+    if (
+      image.base64.length >
+      12 * 1024 * 1024
+    ) {
+      return res.status(413).json({
+        error:
+          "Image is too large for vision analysis.",
+      });
     }
 
-    const provider = getProvider(req.body || {});
+    const provider =
+      getProvider(
+        req.body || {}
+      );
 
-    if (provider === "openai") {
+    if (
+      provider === "openai"
+    ) {
       if (!OPENAI_API_KEY) {
-        return res.status(500).json({ error: "Missing OPENAI_API_KEY." });
+        return res.status(500).json({
+          error:
+            "Missing OPENAI_API_KEY.",
+        });
       }
 
-      const requested = String(req.body?.model || "");
-      const model = /^(gpt|o1|o3)/i.test(requested)
-        ? requested
-        : (process.env.OPENAI_VISION_MODEL || "gpt-4o-mini");
+      const requested =
+        String(
+          req.body?.model ||
+          ""
+        );
 
-      const r = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 350,
-          messages: [{
-            role: "user",
-            content: [
-              { type: "text", text: prompt },
-              { type: "image_url", image_url: { url: image.dataUrl } },
-            ],
-          }],
-        }),
-      });
+      const model =
+        /^(gpt|o1|o3)/i.test(
+          requested
+        )
+          ? requested
+          : (
+              process.env
+                .OPENAI_VISION_MODEL ||
+              "gpt-4o-mini"
+            );
 
-      const payload = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(payload);
+      const r =
+        await fetch(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+              "Authorization":
+                `Bearer ${OPENAI_API_KEY}`,
+            },
+            body:
+              JSON.stringify({
+                model,
+                max_tokens: 350,
+                messages: [
+                  {
+                    role: "user",
+                    content: [
+                      {
+                        type:
+                          "text",
+                        text:
+                          prompt,
+                      },
+                      {
+                        type:
+                          "image_url",
+                        image_url: {
+                          url:
+                            image.dataUrl,
+                        },
+                      },
+                    ],
+                  },
+                ],
+              }),
+          }
+        );
+
+      const payload =
+        await r
+          .json()
+          .catch(
+            () => ({})
+          );
+
+      if (!r.ok) {
+        return res
+          .status(r.status)
+          .json(payload);
+      }
 
       return res.json({
         ok: true,
-        text: payload?.choices?.[0]?.message?.content || "",
-        provider: "openai",
+        text:
+          payload
+            ?.choices?.[0]
+            ?.message
+            ?.content || "",
+        provider:
+          "openai",
       });
     }
 
-    if (provider === "gemini") {
+    if (
+      provider === "gemini"
+    ) {
       if (!GEMINI_API_KEY) {
-        return res.status(500).json({ error: "Missing GEMINI_API_KEY." });
+        return res.status(500).json({
+          error:
+            "Missing GEMINI_API_KEY.",
+        });
       }
 
-      const requested = String(req.body?.model || "");
-      const model = requested.startsWith("gemini")
-        ? requested
-        : (process.env.GEMINI_VISION_MODEL || "gemini-3.5-flash");
+      const requested =
+        String(
+          req.body?.model ||
+          ""
+        );
 
-      const url = new URL(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+      const model =
+        requested.startsWith(
+          "gemini"
+        )
+          ? requested
+          : (
+              process.env
+                .GEMINI_VISION_MODEL ||
+              "gemini-3.5-flash"
+            );
+
+      const url =
+        new URL(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+        );
+
+      url.searchParams.set(
+        "key",
+        GEMINI_API_KEY
       );
-      url.searchParams.set("key", GEMINI_API_KEY);
 
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{
-            role: "user",
-            parts: [
-              { text: prompt },
-              { inlineData: { mimeType: image.mimeType, data: image.base64 } },
-            ],
-          }],
-          generationConfig: { maxOutputTokens: 350 },
-        }),
-      });
-
-      const payload = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(payload);
-
-      const text = payload?.candidates?.[0]?.content?.parts
-        ?.map((p) => p?.text || "")
-        .join("") || "";
-
-      return res.json({ ok: true, text, provider: "gemini" });
-    }
-
-    if (!ANTHROPIC_API_KEY) {
-      return res.status(500).json({ error: "Missing ANTHROPIC_API_KEY." });
-    }
-
-    const requested = String(req.body?.model || "");
-    const model = requested.startsWith("claude")
-      ? requested
-      : (process.env.ANTHROPIC_VISION_MODEL || "claude-sonnet-4-6");
-
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": process.env.ANTHROPIC_VERSION || "2023-06-01",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 350,
-        messages: [{
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: image.mimeType,
-                data: image.base64,
-              },
+      const r =
+        await fetch(
+          url,
+          {
+            method:
+              "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
             },
-            { type: "text", text: prompt },
-          ],
-        }],
-      }),
-    });
+            body:
+              JSON.stringify({
+                contents: [
+                  {
+                    role:
+                      "user",
+                    parts: [
+                      {
+                        text:
+                          prompt,
+                      },
+                      {
+                        inlineData: {
+                          mimeType:
+                            image.mimeType,
+                          data:
+                            image.base64,
+                        },
+                      },
+                    ],
+                  },
+                ],
+                generationConfig: {
+                  maxOutputTokens:
+                    350,
+                },
+              }),
+          }
+        );
 
-    const payload = await r.json().catch(() => ({}));
-    if (!r.ok) return res.status(r.status).json(payload);
+      const payload =
+        await r
+          .json()
+          .catch(
+            () => ({})
+          );
+
+      if (!r.ok) {
+        return res
+          .status(r.status)
+          .json(payload);
+      }
+
+      const text =
+        payload
+          ?.candidates?.[0]
+          ?.content?.parts
+          ?.map(
+            (p) =>
+              p?.text || ""
+          )
+          .join("") ||
+        "";
+
+      return res.json({
+        ok: true,
+        text,
+        provider:
+          "gemini",
+      });
+    }
+
+    if (
+      !ANTHROPIC_API_KEY
+    ) {
+      return res.status(500).json({
+        error:
+          "Missing ANTHROPIC_API_KEY.",
+      });
+    }
+
+    const requested =
+      String(
+        req.body?.model ||
+        ""
+      );
+
+    const model =
+      requested.startsWith(
+        "claude"
+      )
+        ? requested
+        : (
+            process.env
+              .ANTHROPIC_VISION_MODEL ||
+            "claude-sonnet-4-6"
+          );
+
+    const r =
+      await fetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+            "x-api-key":
+              ANTHROPIC_API_KEY,
+            "anthropic-version":
+              process.env
+                .ANTHROPIC_VERSION ||
+              "2023-06-01",
+          },
+          body:
+            JSON.stringify({
+              model,
+              max_tokens:
+                350,
+              messages: [
+                {
+                  role:
+                    "user",
+                  content: [
+                    {
+                      type:
+                        "image",
+                      source: {
+                        type:
+                          "base64",
+                        media_type:
+                          image.mimeType,
+                        data:
+                          image.base64,
+                      },
+                    },
+                    {
+                      type:
+                        "text",
+                      text:
+                        prompt,
+                    },
+                  ],
+                },
+              ],
+            }),
+        }
+      );
+
+    const payload =
+      await r
+        .json()
+        .catch(
+          () => ({})
+        );
+
+    if (!r.ok) {
+      return res
+        .status(r.status)
+        .json(payload);
+    }
 
     return res.json({
       ok: true,
-      text: visionTextFromAnthropic(payload),
-      provider: "anthropic",
+      text:
+        visionTextFromAnthropic(
+          payload
+        ),
+      provider:
+        "anthropic",
     });
   } catch (err) {
-    console.error("Vision proxy error:", err);
-    return res.status(502).json({ error: "Vision analysis failed." });
+    console.error(
+      "Vision proxy error:",
+      err
+    );
+
+    return res.status(502).json({
+      error:
+        "Vision analysis failed.",
+    });
   }
 });
-
-
 /* -------------------------------------------------------------------------
    STABLE AI PROXY HELPERS + IMAGE GENERATION
    ------------------------------------------------------------------------- */
@@ -2973,11 +3142,25 @@ const AI_UPSTREAM_TIMEOUT_MS = Math.max(
   Number(process.env.AI_UPSTREAM_TIMEOUT_MS) || 45000
 );
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = AI_UPSTREAM_TIMEOUT_MS) {
+async function fetchWithTimeout(
+  url,
+  options = {},
+  timeoutMs = AI_UPSTREAM_TIMEOUT_MS
+) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const timer = setTimeout(
+    () => ctrl.abort(),
+    timeoutMs
+  );
+
   try {
-    return await fetch(url, { ...options, signal: ctrl.signal });
+    return await fetch(
+      url,
+      {
+        ...options,
+        signal: ctrl.signal,
+      }
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -2985,12 +3168,24 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = AI_UPSTREAM_TIMEO
 
 async function responseJsonSafe(r) {
   const raw = await r.text();
+
   if (!raw) return {};
-  try { return JSON.parse(raw); }
-  catch { return { error: { message: raw } }; }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {
+      error: {
+        message: raw,
+      },
+    };
+  }
 }
 
-function proxyErrorMessage(payload, fallback = "AI provider error") {
+function proxyErrorMessage(
+  payload,
+  fallback = "AI provider error"
+) {
   return String(
     payload?.error?.message ||
     payload?.error ||
@@ -3000,28 +3195,93 @@ function proxyErrorMessage(payload, fallback = "AI provider error") {
 }
 
 function retryableProviderStatus(status) {
-  return [408, 409, 425, 429, 500, 502, 503, 504, 529].includes(Number(status));
+  return [
+    408,
+    409,
+    425,
+    429,
+    500,
+    502,
+    503,
+    504,
+    529,
+  ].includes(
+    Number(status)
+  );
 }
 
 function imagePromptFromBody(body = {}) {
-  return String(body.prompt || body.input || body.text || "").trim().slice(0, 12000);
+  return String(
+    body.prompt ||
+    body.input ||
+    body.text ||
+    ""
+  )
+    .trim()
+    .slice(
+      0,
+      12000
+    );
 }
 
 function isPrivateAddress(address) {
-  const value = String(address || "").toLowerCase();
+  const value =
+    String(
+      address || ""
+    ).toLowerCase();
+
   if (!value) return true;
 
-  if (net.isIP(value) === 4) {
-    const p = value.split(".").map(Number);
-    if (p[0] === 10 || p[0] === 127 || p[0] === 0) return true;
-    if (p[0] === 169 && p[1] === 254) return true;
-    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
-    if (p[0] === 192 && p[1] === 168) return true;
-    if (p[0] >= 224) return true;
+  if (
+    net.isIP(value) === 4
+  ) {
+    const p =
+      value
+        .split(".")
+        .map(Number);
+
+    if (
+      p[0] === 10 ||
+      p[0] === 127 ||
+      p[0] === 0
+    ) {
+      return true;
+    }
+
+    if (
+      p[0] === 169 &&
+      p[1] === 254
+    ) {
+      return true;
+    }
+
+    if (
+      p[0] === 172 &&
+      p[1] >= 16 &&
+      p[1] <= 31
+    ) {
+      return true;
+    }
+
+    if (
+      p[0] === 192 &&
+      p[1] === 168
+    ) {
+      return true;
+    }
+
+    if (
+      p[0] >= 224
+    ) {
+      return true;
+    }
+
     return false;
   }
 
-  if (net.isIP(value) === 6) {
+  if (
+    net.isIP(value) === 6
+  ) {
     return (
       value === "::1" ||
       value === "::" ||
@@ -3037,125 +3297,348 @@ function isPrivateAddress(address) {
   return false;
 }
 
-async function assertPublicHttpsUrl(rawUrl) {
-  const url = new URL(String(rawUrl || "").trim());
-  if (url.protocol !== "https:") {
-    throw new Error("Only HTTPS image references are allowed.");
+async function assertPublicHttpsUrl(
+  rawUrl
+) {
+  const url =
+    new URL(
+      String(
+        rawUrl || ""
+      ).trim()
+    );
+
+  if (
+    url.protocol !==
+    "https:"
+  ) {
+    throw new Error(
+      "Only HTTPS image references are allowed."
+    );
   }
 
-  const host = String(url.hostname || "").toLowerCase();
-  if (!host || host === "localhost" || host.endsWith(".localhost")) {
-    throw new Error("Local image reference is not allowed.");
+  const host =
+    String(
+      url.hostname || ""
+    ).toLowerCase();
+
+  if (
+    !host ||
+    host ===
+      "localhost" ||
+    host.endsWith(
+      ".localhost"
+    )
+  ) {
+    throw new Error(
+      "Local image reference is not allowed."
+    );
   }
 
-  if (net.isIP(host)) {
-    if (isPrivateAddress(host)) {
-      throw new Error("Private-network image reference is not allowed.");
+  if (
+    net.isIP(host)
+  ) {
+    if (
+      isPrivateAddress(host)
+    ) {
+      throw new Error(
+        "Private-network image reference is not allowed."
+      );
     }
   } else {
-    const resolved = await dns.lookup(host, { all: true });
-    if (!resolved.length || resolved.some((row) => isPrivateAddress(row.address))) {
-      throw new Error("Image reference resolved to a private network.");
+    const resolved =
+      await dns.lookup(
+        host,
+        {
+          all: true,
+        }
+      );
+
+    if (
+      !resolved.length ||
+      resolved.some(
+        (row) =>
+          isPrivateAddress(
+            row.address
+          )
+      )
+    ) {
+      throw new Error(
+        "Image reference resolved to a private network."
+      );
     }
   }
 
   return url;
 }
 
-async function fetchRemoteImageReference(rawUrl, redirectsLeft = 3) {
-  const url = await assertPublicHttpsUrl(rawUrl);
+async function fetchRemoteImageReference(
+  rawUrl,
+  redirectsLeft = 3
+) {
+  const url =
+    await assertPublicHttpsUrl(
+      rawUrl
+    );
 
-  const r = await fetchWithTimeout(
-    url,
-    {
-      method: "GET",
-      redirect: "manual",
-      headers: {
-        "Accept": "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.7",
-        "User-Agent": "MasvilagImageReference/1.0",
+  const r =
+    await fetchWithTimeout(
+      url,
+      {
+        method: "GET",
+        redirect:
+          "manual",
+        headers: {
+          "Accept":
+            "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.7",
+          "User-Agent":
+            "MasvilagImageReference/1.0",
+        },
       },
-    },
-    20000
-  );
+      20000
+    );
 
-  if ([301, 302, 303, 307, 308].includes(r.status)) {
-    if (redirectsLeft <= 0) throw new Error("Too many image-reference redirects.");
-    const location = r.headers.get("location");
-    if (!location) throw new Error("Image-reference redirect has no location.");
-    const next = new URL(location, url);
-    return fetchRemoteImageReference(next.toString(), redirectsLeft - 1);
+  if (
+    [
+      301,
+      302,
+      303,
+      307,
+      308,
+    ].includes(
+      r.status
+    )
+  ) {
+    if (
+      redirectsLeft <= 0
+    ) {
+      throw new Error(
+        "Too many image-reference redirects."
+      );
+    }
+
+    const location =
+      r.headers.get(
+        "location"
+      );
+
+    if (!location) {
+      throw new Error(
+        "Image-reference redirect has no location."
+      );
+    }
+
+    const next =
+      new URL(
+        location,
+        url
+      );
+
+    return fetchRemoteImageReference(
+      next.toString(),
+      redirectsLeft - 1
+    );
   }
 
   if (!r.ok) {
-    throw new Error(`Reference image fetch failed with HTTP ${r.status}.`);
+    throw new Error(
+      `Reference image fetch failed with HTTP ${r.status}.`
+    );
   }
 
-  const mimeType = String(r.headers.get("content-type") || "")
-    .split(";")[0]
-    .trim()
-    .toLowerCase();
+  const mimeType =
+    String(
+      r.headers.get(
+        "content-type"
+      ) || ""
+    )
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
 
-  if (!["image/jpeg", "image/jpg", "image/png", "image/webp"].includes(mimeType)) {
-    throw new Error(`Unsupported reference image type: ${mimeType || "unknown"}.`);
+  if (
+    ![
+      "image/jpeg",
+      "image/jpg",
+      "image/png",
+      "image/webp",
+    ].includes(
+      mimeType
+    )
+  ) {
+    throw new Error(
+      `Unsupported reference image type: ${mimeType || "unknown"}.`
+    );
   }
 
-  const announced = Number(r.headers.get("content-length") || 0);
-  if (announced && announced > 12 * 1024 * 1024) {
-    throw new Error("Reference image is too large.");
+  const announced =
+    Number(
+      r.headers.get(
+        "content-length"
+      ) || 0
+    );
+
+  if (
+    announced &&
+    announced >
+      12 * 1024 * 1024
+  ) {
+    throw new Error(
+      "Reference image is too large."
+    );
   }
 
-  const buffer = Buffer.from(await r.arrayBuffer());
-  if (!buffer.length || buffer.length > 12 * 1024 * 1024) {
-    throw new Error("Reference image is empty or too large.");
+  const buffer =
+    Buffer.from(
+      await r.arrayBuffer()
+    );
+
+  if (
+    !buffer.length ||
+    buffer.length >
+      12 * 1024 * 1024
+  ) {
+    throw new Error(
+      "Reference image is empty or too large."
+    );
   }
 
   return {
-    mimeType: mimeType === "image/jpg" ? "image/jpeg" : mimeType,
-    base64: buffer.toString("base64"),
-    dataUrl: `data:${mimeType === "image/jpg" ? "image/jpeg" : mimeType};base64,${buffer.toString("base64")}`,
-    source: "remote",
+    mimeType:
+      mimeType ===
+      "image/jpg"
+        ? "image/jpeg"
+        : mimeType,
+    base64:
+      buffer.toString(
+        "base64"
+      ),
+    dataUrl:
+      `data:${
+        mimeType ===
+        "image/jpg"
+          ? "image/jpeg"
+          : mimeType
+      };base64,${
+        buffer.toString(
+          "base64"
+        )
+      }`,
+    source:
+      "remote",
   };
 }
 
-async function resolveInputImage(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return null;
+async function resolveInputImage(
+  value
+) {
+  const raw =
+    String(
+      value || ""
+    ).trim();
 
-  const inline = parseImageDataUrl(raw);
-  if (inline) return { ...inline, source: "inline" };
+  if (!raw) {
+    return null;
+  }
 
-  if (/^https:\/\//i.test(raw)) {
-    return fetchRemoteImageReference(raw);
+  const inline =
+    parseImageDataUrl(
+      raw
+    );
+
+  if (inline) {
+    return {
+      ...inline,
+      source:
+        "inline",
+    };
+  }
+
+  if (
+    /^https:\/\//i.test(
+      raw
+    )
+  ) {
+    return fetchRemoteImageReference(
+      raw
+    );
   }
 
   return null;
 }
-}
 
-async function imageReferencesFromBody(body = {}, limit = 3) {
-  const raw = Array.isArray(body.referenceImages)
-    ? body.referenceImages
-    : (Array.isArray(body.reference_images) ? body.reference_images : []);
+async function imageReferencesFromBody(
+  body = {},
+  limit = 3
+) {
+  const raw =
+    Array.isArray(
+      body.referenceImages
+    )
+      ? body.referenceImages
+      : (
+          Array.isArray(
+            body.reference_images
+          )
+            ? body.reference_images
+            : []
+        );
 
   const refs = [];
-  const seen = new Set();
+  const seen =
+    new Set();
 
-  for (const value of raw) {
-    if (refs.length >= limit) break;
-    const key = String(value || "").trim();
-    if (!key || seen.has(key)) continue;
+  for (
+    const value of raw
+  ) {
+    if (
+      refs.length >= limit
+    ) {
+      break;
+    }
+
+    const key =
+      String(
+        value || ""
+      ).trim();
+
+    if (
+      !key ||
+      seen.has(key)
+    ) {
+      continue;
+    }
+
     seen.add(key);
 
     try {
-      const parsed = await resolveInputImage(key);
-      if (!parsed) continue;
-      if (parsed.base64.length > 16 * 1024 * 1024) continue;
-      refs.push(parsed);
+      const parsed =
+        await resolveInputImage(
+          key
+        );
+
+      if (!parsed) {
+        continue;
+      }
+
+      if (
+        parsed.base64.length >
+        16 * 1024 * 1024
+      ) {
+        continue;
+      }
+
+      refs.push(
+        parsed
+      );
     } catch (err) {
       console.warn(
         "Skipping unusable image reference:",
-        key.slice(0, 120),
-        err?.message || err
+        key.slice(
+          0,
+          120
+        ),
+        err?.message ||
+        err
       );
     }
   }
@@ -3163,7 +3646,11 @@ async function imageReferencesFromBody(body = {}, limit = 3) {
   return refs;
 }
 
-function multipartTextPart(boundary, name, value) {
+function multipartTextPart(
+  boundary,
+  name,
+  value
+) {
   return Buffer.from(
     `--${boundary}\r\n` +
     `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
@@ -3172,22 +3659,45 @@ function multipartTextPart(boundary, name, value) {
   );
 }
 
-function multipartImagePart(boundary, name, image, index) {
-  const ext = image.mimeType === "image/png"
-    ? "png"
-    : image.mimeType === "image/webp"
-      ? "webp"
-      : "jpg";
+function multipartImagePart(
+  boundary,
+  name,
+  image,
+  index
+) {
+  const ext =
+    image.mimeType ===
+    "image/png"
+      ? "png"
+      : image.mimeType ===
+          "image/webp"
+        ? "webp"
+        : "jpg";
 
-  const head = Buffer.from(
-    `--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="${name}"; filename="reference-${index + 1}.${ext}"\r\n` +
-    `Content-Type: ${image.mimeType}\r\n\r\n`,
-    "utf8"
+  const head =
+    Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${name}"; filename="reference-${index + 1}.${ext}"\r\n` +
+      `Content-Type: ${image.mimeType}\r\n\r\n`,
+      "utf8"
+    );
+
+  const data =
+    Buffer.from(
+      image.base64,
+      "base64"
+    );
+
+  return Buffer.concat(
+    [
+      head,
+      data,
+      Buffer.from(
+        "\r\n",
+        "utf8"
+      ),
+    ]
   );
-
-  const data = Buffer.from(image.base64, "base64");
-  return Buffer.concat([head, data, Buffer.from("\r\n", "utf8")]);
 }
 
 function buildImageEditMultipart({
@@ -3200,267 +3710,920 @@ function buildImageEditMultipart({
   moderation,
   references,
 }) {
-  const boundary = `----masvilag-${crypto.randomBytes(18).toString("hex")}`;
+  const boundary =
+    `----masvilag-${
+      crypto
+        .randomBytes(18)
+        .toString("hex")
+    }`;
+
   const chunks = [
-    multipartTextPart(boundary, "model", model),
-    multipartTextPart(boundary, "prompt", prompt),
-    multipartTextPart(boundary, "size", size),
-    multipartTextPart(boundary, "quality", quality),
-    multipartTextPart(boundary, "output_format", outputFormat),
-    multipartTextPart(boundary, "background", background),
-    multipartTextPart(boundary, "moderation", moderation),
+    multipartTextPart(
+      boundary,
+      "model",
+      model
+    ),
+    multipartTextPart(
+      boundary,
+      "prompt",
+      prompt
+    ),
+    multipartTextPart(
+      boundary,
+      "size",
+      size
+    ),
+    multipartTextPart(
+      boundary,
+      "quality",
+      quality
+    ),
+    multipartTextPart(
+      boundary,
+      "output_format",
+      outputFormat
+    ),
+    multipartTextPart(
+      boundary,
+      "background",
+      background
+    ),
+    multipartTextPart(
+      boundary,
+      "moderation",
+      moderation
+    ),
   ];
 
   /*
    * OpenAI Image Edit accepts multiple input images as image[].
    * For GPT Image 2 these references act as high-fidelity identity inputs.
    */
-  references.forEach((image, index) => {
-    chunks.push(
-      multipartImagePart(boundary, "image[]", image, index)
-    );
-  });
+  references.forEach(
+    (
+      image,
+      index
+    ) => {
+      chunks.push(
+        multipartImagePart(
+          boundary,
+          "image[]",
+          image,
+          index
+        )
+      );
+    }
+  );
 
-  chunks.push(Buffer.from(`--${boundary}--\r\n`, "utf8"));
+  chunks.push(
+    Buffer.from(
+      `--${boundary}--\r\n`,
+      "utf8"
+    )
+  );
 
   return {
     boundary,
-    body: Buffer.concat(chunks),
+    body:
+      Buffer.concat(
+        chunks
+      ),
   };
 }
 
-app.post(["/ai/image", "/ai/images", "/ai/generate-image"], async (req, res) => {
-  try {
-    if (!(await requireDb(res))) return;
-    const session = await getSession(req);
-    if (!session) {
-      clearSessionCookie(res);
-      return res.status(401).json({ error: "Not authenticated." });
-    }
-    if (!OPENAI_API_KEY) {
-      return res.status(500).json({ error: "Missing OPENAI_API_KEY." });
-    }
+app.post(
+  [
+    "/ai/image",
+    "/ai/images",
+    "/ai/generate-image",
+  ],
+  async (req, res) => {
+    try {
+      if (
+        !(await requireDb(res))
+      ) {
+        return;
+      }
 
-    const prompt = imagePromptFromBody(req.body || {});
-    if (!prompt) return res.status(400).json({ error: "Missing image prompt." });
+      const session =
+        await getSession(req);
 
-    const model = String(req.body?.model || process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
-    const size = String(req.body?.size || req.body?.image_size || process.env.OPENAI_IMAGE_SIZE || "1024x1024");
-    const quality = String(req.body?.quality || process.env.OPENAI_IMAGE_QUALITY || "medium");
-    const outputFormat = String(req.body?.output_format || process.env.OPENAI_IMAGE_FORMAT || "jpeg");
-    const background = String(req.body?.background || "auto");
-    const moderation = String(req.body?.moderation || "auto");
-    const references = await imageReferencesFromBody(req.body || {}, 3);
+      if (!session) {
+        clearSessionCookie(
+          res
+        );
 
-    if (req.body?.require_reference && !references.length) {
-      return res.status(422).json({
-        error: "Character reference images were supplied, but none could be loaded. Refusing prompt-only generation because identity would be unreliable.",
-      });
-    }
+        return res
+          .status(401)
+          .json({
+            error:
+              "Not authenticated.",
+          });
+      }
 
-    let endpoint = "https://api.openai.com/v1/images/generations";
-    let options;
+      if (
+        !OPENAI_API_KEY
+      ) {
+        return res
+          .status(500)
+          .json({
+            error:
+              "Missing OPENAI_API_KEY.",
+          });
+      }
 
-    if (references.length) {
-      /*
-       * CRITICAL IDENTITY FIX:
-       * Generations cannot actually consume our profile/album reference images.
-       * When references exist, use the Image Edit endpoint and send them as
-       * multipart image[] inputs so the model can preserve the character face.
-       */
-      endpoint = "https://api.openai.com/v1/images/edits";
-      const multipart = buildImageEditMultipart({
+      const prompt =
+        imagePromptFromBody(
+          req.body || {}
+        );
+
+      if (!prompt) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Missing image prompt.",
+          });
+      }
+
+      const model =
+        String(
+          req.body?.model ||
+          process.env
+            .OPENAI_IMAGE_MODEL ||
+          "gpt-image-2"
+        );
+
+      const size =
+        String(
+          req.body?.size ||
+          req.body
+            ?.image_size ||
+          process.env
+            .OPENAI_IMAGE_SIZE ||
+          "1024x1024"
+        );
+
+      const quality =
+        String(
+          req.body
+            ?.quality ||
+          process.env
+            .OPENAI_IMAGE_QUALITY ||
+          "medium"
+        );
+
+      const outputFormat =
+        String(
+          req.body
+            ?.output_format ||
+          process.env
+            .OPENAI_IMAGE_FORMAT ||
+          "jpeg"
+        );
+
+      const background =
+        String(
+          req.body
+            ?.background ||
+          "auto"
+        );
+
+      const moderation =
+        String(
+          req.body
+            ?.moderation ||
+          "auto"
+        );
+
+      const references =
+        await imageReferencesFromBody(
+          req.body || {},
+          3
+        );
+
+      if (
+        req.body
+          ?.require_reference &&
+        !references.length
+      ) {
+        return res
+          .status(422)
+          .json({
+            error:
+              "Character reference images were supplied, but none could be loaded. Refusing prompt-only generation because identity would be unreliable.",
+          });
+      }
+
+      let endpoint =
+        "https://api.openai.com/v1/images/generations";
+
+      let options;
+
+      if (
+        references.length
+      ) {
+        /*
+         * CRITICAL IDENTITY FIX:
+         * Generations cannot actually consume our profile/album reference images.
+         * When references exist, use the Image Edit endpoint and send them as
+         * multipart image[] inputs so the model can preserve the character face.
+         */
+        endpoint =
+          "https://api.openai.com/v1/images/edits";
+
+        const multipart =
+          buildImageEditMultipart({
+            model,
+            prompt,
+            size,
+            quality,
+            outputFormat,
+            background,
+            moderation,
+            references,
+          });
+
+        options = {
+          method:
+            "POST",
+          headers: {
+            "Content-Type":
+              `multipart/form-data; boundary=${multipart.boundary}`,
+            "Content-Length":
+              String(
+                multipart
+                  .body
+                  .length
+              ),
+            "Authorization":
+              `Bearer ${OPENAI_API_KEY}`,
+          },
+          body:
+            multipart.body,
+        };
+      } else {
+        options = {
+          method:
+            "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+            "Authorization":
+              `Bearer ${OPENAI_API_KEY}`,
+          },
+          body:
+            JSON.stringify({
+              model,
+              prompt,
+              size,
+              quality,
+              output_format:
+                outputFormat,
+              background,
+              moderation,
+            }),
+        };
+      }
+
+      const r =
+        await fetchWithTimeout(
+          endpoint,
+          options,
+          Math.max(
+            AI_UPSTREAM_TIMEOUT_MS,
+            references.length
+              ? 120000
+              : 90000
+          )
+        );
+
+      const payload =
+        await responseJsonSafe(
+          r
+        );
+
+      if (!r.ok) {
+        if (
+          r.headers.get(
+            "retry-after"
+          )
+        ) {
+          res.setHeader(
+            "retry-after",
+            r.headers.get(
+              "retry-after"
+            )
+          );
+        }
+
+        console.error(
+          "OpenAI image upstream error:",
+          r.status,
+          references.length
+            ? "edit-reference"
+            : "generation",
+          proxyErrorMessage(
+            payload,
+            "Image request failed"
+          )
+        );
+
+        return res
+          .status(r.status)
+          .json(payload);
+      }
+
+      const first =
+        Array.isArray(
+          payload?.data
+        )
+          ? payload.data[0]
+          : null;
+
+      const b64 =
+        String(
+          first?.b64_json ||
+          payload?.b64_json ||
+          ""
+        ).trim();
+
+      const url =
+        String(
+          first?.url ||
+          first?.image_url ||
+          payload?.url ||
+          ""
+        ).trim();
+
+      if (
+        !b64 &&
+        !url
+      ) {
+        return res
+          .status(502)
+          .json({
+            error:
+              "OpenAI image generation returned no image payload.",
+          });
+      }
+
+      const mime =
+        outputFormat ===
+        "png"
+          ? "image/png"
+          : outputFormat ===
+              "webp"
+            ? "image/webp"
+            : "image/jpeg";
+
+      const dataUrl =
+        b64
+          ? `data:${mime};base64,${b64}`
+          : "";
+
+      return res.json({
+        ok: true,
+        provider:
+          "openai",
         model,
-        prompt,
-        size,
-        quality,
-        outputFormat,
-        background,
-        moderation,
-        references,
+        mode:
+          references.length
+            ? "edit-reference"
+            : "generation",
+        referenceCount:
+          references.length,
+        data:
+          b64
+            ? [
+                {
+                  b64_json:
+                    b64,
+                  revised_prompt:
+                    first
+                      ?.revised_prompt ||
+                    "",
+                },
+              ]
+            : [],
+        b64_json:
+          b64,
+        dataUrl,
+        image:
+          dataUrl ||
+          url,
+        url,
+        revised_prompt:
+          first
+            ?.revised_prompt ||
+          "",
       });
+    } catch (err) {
+      console.error(
+        "Image generation proxy error:",
+        err
+      );
 
-      options = {
-        method: "POST",
-        headers: {
-          "Content-Type": `multipart/form-data; boundary=${multipart.boundary}`,
-          "Content-Length": String(multipart.body.length),
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        },
-        body: multipart.body,
-      };
-    } else {
-      options = {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model,
-          prompt,
-          size,
-          quality,
-          output_format: outputFormat,
-          background,
-          moderation,
-        }),
-      };
+      const timeout =
+        err?.name ===
+        "AbortError";
+
+      return res
+        .status(
+          timeout
+            ? 504
+            : 502
+        )
+        .json({
+          error:
+            timeout
+              ? "Image generation timed out."
+              : (
+                  err?.message ||
+                  "Image generation failed."
+                ),
+        });
     }
+  }
+);
 
-    const r = await fetchWithTimeout(
-      endpoint,
-      options,
-      Math.max(AI_UPSTREAM_TIMEOUT_MS, references.length ? 120000 : 90000)
+async function proxyOpenAIMessage(
+  body
+) {
+  if (
+    !OPENAI_API_KEY
+  ) {
+    return {
+      unavailable: true,
+      provider:
+        "openai",
+    };
+  }
+
+  const r =
+    await fetchWithTimeout(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method:
+          "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+          "Authorization":
+            `Bearer ${OPENAI_API_KEY}`,
+        },
+        body:
+          JSON.stringify(
+            buildOpenAIPayload(
+              body
+            )
+          ),
+      }
     );
 
-    const payload = await responseJsonSafe(r);
-    if (!r.ok) {
-      if (r.headers.get("retry-after")) res.setHeader("retry-after", r.headers.get("retry-after"));
-      console.error(
-        "OpenAI image upstream error:",
+  const payload =
+    await responseJsonSafe(
+      r
+    );
+
+  if (!r.ok) {
+    return {
+      ok: false,
+      status:
         r.status,
-        references.length ? "edit-reference" : "generation",
-        proxyErrorMessage(payload, "Image request failed")
-      );
-      return res.status(r.status).json(payload);
-    }
-
-    const first = Array.isArray(payload?.data) ? payload.data[0] : null;
-    const b64 = String(first?.b64_json || payload?.b64_json || "").trim();
-    const url = String(first?.url || first?.image_url || payload?.url || "").trim();
-    if (!b64 && !url) {
-      return res.status(502).json({ error: "OpenAI image generation returned no image payload." });
-    }
-
-    const mime = outputFormat === "png"
-      ? "image/png"
-      : outputFormat === "webp"
-        ? "image/webp"
-        : "image/jpeg";
-    const dataUrl = b64 ? `data:${mime};base64,${b64}` : "";
-
-    return res.json({
-      ok: true,
-      provider: "openai",
-      model,
-      mode: references.length ? "edit-reference" : "generation",
-      referenceCount: references.length,
-      data: b64 ? [{ b64_json: b64, revised_prompt: first?.revised_prompt || "" }] : [],
-      b64_json: b64,
-      dataUrl,
-      image: dataUrl || url,
-      url,
-      revised_prompt: first?.revised_prompt || "",
-    });
-  } catch (err) {
-    console.error("Image generation proxy error:", err);
-    const timeout = err?.name === "AbortError";
-    return res.status(timeout ? 504 : 502).json({
-      error: timeout ? "Image generation timed out." : (err?.message || "Image generation failed."),
-    });
+      payload,
+      retryAfter:
+        r.headers.get(
+          "retry-after"
+        ),
+      provider:
+        "openai",
+    };
   }
-});
 
-async function proxyOpenAIMessage(body) {
-  if (!OPENAI_API_KEY) return { unavailable: true, provider: "openai" };
-  const r = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify(buildOpenAIPayload(body)),
-  });
-  const payload = await responseJsonSafe(r);
-  if (!r.ok) return { ok: false, status: r.status, payload, retryAfter: r.headers.get("retry-after"), provider: "openai" };
-  const normalized = normalizeOpenAIResponse(payload);
-  const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
-  return hasText ? { ok: true, payload: normalized, provider: "openai" } : { ok: false, status: 502, payload: { error: { message: "OpenAI returned empty content." } }, provider: "openai" };
-}
+  const normalized =
+    normalizeOpenAIResponse(
+      payload
+    );
 
-async function proxyGeminiMessage(body) {
-  if (!GEMINI_API_KEY) return { unavailable: true, provider: "gemini" };
-  const requested = String(body?.model || "");
-  const modelsToTry = [...new Set([
-    requested.startsWith("gemini") ? requested : "",
-    process.env.GEMINI_MODEL || "",
-    process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash",
-  ].filter(Boolean))];
+  const hasText =
+    Array.isArray(
+      normalized?.content
+    ) &&
+    normalized.content.some(
+      (x) =>
+        String(
+          x?.text || ""
+        ).trim()
+    );
 
-  let last = null;
-  for (const model of modelsToTry) {
-    const url = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`);
-    url.searchParams.set("key", GEMINI_API_KEY);
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      const r = await fetchWithTimeout(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildGeminiPayload({ ...body, model })),
-      });
-      const payload = await responseJsonSafe(r);
-      if (r.ok) {
-        const normalized = normalizeGeminiResponse(payload);
-        const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
-        if (hasText) return { ok: true, payload: normalized, provider: "gemini" };
-        last = { ok: false, status: 502, payload: { error: { message: "Gemini returned empty content." } }, provider: "gemini" };
-        break;
+  return hasText
+    ? {
+        ok: true,
+        payload:
+          normalized,
+        provider:
+          "openai",
       }
-      last = { ok: false, status: r.status, payload, retryAfter: r.headers.get("retry-after"), provider: "gemini" };
-      if (!retryableProviderStatus(r.status) || attempt >= 2) break;
-      await new Promise((resolve) => setTimeout(resolve, 700 * attempt));
-    }
-  }
-  return last || { unavailable: true, provider: "gemini" };
-}
-
-async function proxyAnthropicMessage(body) {
-  if (!ANTHROPIC_API_KEY) return { unavailable: true, provider: "anthropic" };
-  const requestedModel = String(body?.model || "");
-  const modelsToTry = [...new Set([
-    requestedModel.startsWith("claude") ? requestedModel : "",
-    process.env.ANTHROPIC_MODEL || "",
-    process.env.ANTHROPIC_FALLBACK_MODEL || "",
-  ].filter(Boolean))];
-  if (!modelsToTry.length) modelsToTry.push(requestedModel || "claude-sonnet-4-6");
-
-  let last = null;
-  for (const model of modelsToTry) {
-    const { provider, ...rest } = body || {};
-    const outboundBody = { ...rest, model, max_tokens: body?.max_tokens ?? 1024 };
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      const r = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": ANTHROPIC_API_KEY,
-          "anthropic-version": process.env.ANTHROPIC_VERSION || "2023-06-01",
-          "Accept": "application/json",
+    : {
+        ok: false,
+        status: 502,
+        payload: {
+          error: {
+            message:
+              "OpenAI returned empty content.",
+          },
         },
-        body: JSON.stringify(outboundBody),
-      });
-      const payload = await responseJsonSafe(r);
+        provider:
+          "openai",
+      };
+}
+
+async function proxyGeminiMessage(
+  body
+) {
+  if (
+    !GEMINI_API_KEY
+  ) {
+    return {
+      unavailable: true,
+      provider:
+        "gemini",
+    };
+  }
+
+  const requested =
+    String(
+      body?.model || ""
+    );
+
+  const modelsToTry =
+    [
+      ...new Set(
+        [
+          requested.startsWith(
+            "gemini"
+          )
+            ? requested
+            : "",
+          process.env
+            .GEMINI_MODEL ||
+            "",
+          process.env
+            .GEMINI_FALLBACK_MODEL ||
+            "gemini-3.5-flash",
+        ].filter(
+          Boolean
+        )
+      ),
+    ];
+
+  let last = null;
+
+  for (
+    const model of
+    modelsToTry
+  ) {
+    const url =
+      new URL(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+      );
+
+    url.searchParams.set(
+      "key",
+      GEMINI_API_KEY
+    );
+
+    for (
+      let attempt = 1;
+      attempt <= 2;
+      attempt++
+    ) {
+      const r =
+        await fetchWithTimeout(
+          url,
+          {
+            method:
+              "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body:
+              JSON.stringify(
+                buildGeminiPayload({
+                  ...body,
+                  model,
+                })
+              ),
+          }
+        );
+
+      const payload =
+        await responseJsonSafe(
+          r
+        );
+
       if (r.ok) {
-        const hasText = Array.isArray(payload?.content) && payload.content.some((x) => x?.type === "text" && String(x?.text || "").trim());
-        if (hasText) return { ok: true, payload, provider: "anthropic" };
-        last = { ok: false, status: 502, payload: { error: { message: "Anthropic returned empty content." } }, provider: "anthropic" };
+        const normalized =
+          normalizeGeminiResponse(
+            payload
+          );
+
+        const hasText =
+          Array.isArray(
+            normalized?.content
+          ) &&
+          normalized.content.some(
+            (x) =>
+              String(
+                x?.text ||
+                ""
+              ).trim()
+          );
+
+        if (hasText) {
+          return {
+            ok: true,
+            payload:
+              normalized,
+            provider:
+              "gemini",
+          };
+        }
+
+        last = {
+          ok: false,
+          status: 502,
+          payload: {
+            error: {
+              message:
+                "Gemini returned empty content.",
+            },
+          },
+          provider:
+            "gemini",
+        };
+
         break;
       }
-      last = { ok: false, status: r.status, payload, retryAfter: r.headers.get("retry-after"), provider: "anthropic" };
-      if (!retryableProviderStatus(r.status) || attempt >= 2) break;
-      await new Promise((resolve) => setTimeout(resolve, 700 * attempt));
+
+      last = {
+        ok: false,
+        status:
+          r.status,
+        payload,
+        retryAfter:
+          r.headers.get(
+            "retry-after"
+          ),
+        provider:
+          "gemini",
+      };
+
+      if (
+        !retryableProviderStatus(
+          r.status
+        ) ||
+        attempt >= 2
+      ) {
+        break;
+      }
+
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            700 *
+            attempt
+          )
+      );
     }
   }
-  return last || { unavailable: true, provider: "anthropic" };
+
+  return (
+    last ||
+    {
+      unavailable:
+        true,
+      provider:
+        "gemini",
+    }
+  );
 }
 
-async function callMessageProvider(provider, body) {
-  if (provider === "openai") return proxyOpenAIMessage(body);
-  if (provider === "gemini") return proxyGeminiMessage(body);
-  return proxyAnthropicMessage(body);
+async function proxyAnthropicMessage(
+  body
+) {
+  if (
+    !ANTHROPIC_API_KEY
+  ) {
+    return {
+      unavailable: true,
+      provider:
+        "anthropic",
+    };
+  }
+
+  const requestedModel =
+    String(
+      body?.model ||
+      ""
+    );
+
+  const modelsToTry =
+    [
+      ...new Set(
+        [
+          requestedModel.startsWith(
+            "claude"
+          )
+            ? requestedModel
+            : "",
+          process.env
+            .ANTHROPIC_MODEL ||
+            "",
+          process.env
+            .ANTHROPIC_FALLBACK_MODEL ||
+            "",
+        ].filter(
+          Boolean
+        )
+      ),
+    ];
+
+  if (
+    !modelsToTry.length
+  ) {
+    modelsToTry.push(
+      requestedModel ||
+      "claude-sonnet-4-6"
+    );
+  }
+
+  let last = null;
+
+  for (
+    const model of
+    modelsToTry
+  ) {
+    const {
+      provider,
+      ...rest
+    } =
+      body || {};
+
+    const outboundBody = {
+      ...rest,
+      model,
+      max_tokens:
+        body?.max_tokens ??
+        1024,
+    };
+
+    for (
+      let attempt = 1;
+      attempt <= 2;
+      attempt++
+    ) {
+      const r =
+        await fetchWithTimeout(
+          "https://api.anthropic.com/v1/messages",
+          {
+            method:
+              "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+              "x-api-key":
+                ANTHROPIC_API_KEY,
+              "anthropic-version":
+                process.env
+                  .ANTHROPIC_VERSION ||
+                "2023-06-01",
+              "Accept":
+                "application/json",
+            },
+            body:
+              JSON.stringify(
+                outboundBody
+              ),
+          }
+        );
+
+      const payload =
+        await responseJsonSafe(
+          r
+        );
+
+      if (r.ok) {
+        const hasText =
+          Array.isArray(
+            payload?.content
+          ) &&
+          payload.content.some(
+            (x) =>
+              x?.type ===
+                "text" &&
+              String(
+                x?.text ||
+                ""
+              ).trim()
+          );
+
+        if (hasText) {
+          return {
+            ok: true,
+            payload,
+            provider:
+              "anthropic",
+          };
+        }
+
+        last = {
+          ok: false,
+          status: 502,
+          payload: {
+            error: {
+              message:
+                "Anthropic returned empty content.",
+            },
+          },
+          provider:
+            "anthropic",
+        };
+
+        break;
+      }
+
+      last = {
+        ok: false,
+        status:
+          r.status,
+        payload,
+        retryAfter:
+          r.headers.get(
+            "retry-after"
+          ),
+        provider:
+          "anthropic",
+      };
+
+      if (
+        !retryableProviderStatus(
+          r.status
+        ) ||
+        attempt >= 2
+      ) {
+        break;
+      }
+
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            700 *
+            attempt
+          )
+      );
+    }
+  }
+
+  return (
+    last ||
+    {
+      unavailable:
+        true,
+      provider:
+        "anthropic",
+    }
+  );
 }
 
+async function callMessageProvider(
+  provider,
+  body
+) {
+  if (
+    provider === "openai"
+  ) {
+    return proxyOpenAIMessage(
+      body
+    );
+  }
 
+  if (
+    provider === "gemini"
+  ) {
+    return proxyGeminiMessage(
+      body
+    );
+  }
+
+  return proxyAnthropicMessage(
+    body
+  );
+}
 /* -------------------------------------------------------------------------
    SEMANTIC CHARACTER MEMORY — v37
 
@@ -3478,33 +4641,77 @@ function memoryString(value, max = 160) {
 
 function memorySubjects(value) {
   const rows = Array.isArray(value) ? value : [];
-  return [...new Set(rows.map((x) => memoryString(x, 120)).filter(Boolean))].slice(0, 20);
+
+  return [
+    ...new Set(
+      rows
+        .map((x) => memoryString(x, 120))
+        .filter(Boolean)
+    ),
+  ].slice(0, 20);
 }
 
 function clampNumber(value, min, max, fallback) {
   const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
+
+  if (!Number.isFinite(n)) {
+    return fallback;
+  }
+
+  return Math.min(
+    max,
+    Math.max(min, n)
+  );
 }
 
 function normalizeEmbedding(values) {
-  const vector = Array.isArray(values)
-    ? values.map(Number).filter((x) => Number.isFinite(x))
-    : [];
+  const vector =
+    Array.isArray(values)
+      ? values
+          .map(Number)
+          .filter(
+            (x) =>
+              Number.isFinite(x)
+          )
+      : [];
 
-  if (!vector.length) return [];
+  if (!vector.length) {
+    return [];
+  }
 
   // gemini-embedding-001 needs manual normalization when dimensions < 3072.
-  if (GEMINI_EMBEDDING_MODEL === "gemini-embedding-001" && vector.length !== 3072) {
-    const norm = Math.sqrt(vector.reduce((sum, x) => sum + x * x, 0));
-    if (norm > 0) return vector.map((x) => x / norm);
+  if (
+    GEMINI_EMBEDDING_MODEL ===
+      "gemini-embedding-001" &&
+    vector.length !== 3072
+  ) {
+    const norm =
+      Math.sqrt(
+        vector.reduce(
+          (sum, x) =>
+            sum + x * x,
+          0
+        )
+      );
+
+    if (norm > 0) {
+      return vector.map(
+        (x) =>
+          x / norm
+      );
+    }
   }
 
   return vector;
 }
 
 function cosineSimilarity(a, b) {
-  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || a.length !== b.length) {
+  if (
+    !Array.isArray(a) ||
+    !Array.isArray(b) ||
+    !a.length ||
+    a.length !== b.length
+  ) {
     return -1;
   }
 
@@ -3512,76 +4719,166 @@ function cosineSimilarity(a, b) {
   let aa = 0;
   let bb = 0;
 
-  for (let i = 0; i < a.length; i++) {
-    const x = Number(a[i]);
-    const y = Number(b[i]);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return -1;
+  for (
+    let i = 0;
+    i < a.length;
+    i++
+  ) {
+    const x =
+      Number(a[i]);
+
+    const y =
+      Number(b[i]);
+
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y)
+    ) {
+      return -1;
+    }
+
     dot += x * y;
     aa += x * x;
     bb += y * y;
   }
 
-  if (!aa || !bb) return -1;
-  return dot / (Math.sqrt(aa) * Math.sqrt(bb));
+  if (!aa || !bb) {
+    return -1;
+  }
+
+  return (
+    dot /
+    (
+      Math.sqrt(aa) *
+      Math.sqrt(bb)
+    )
+  );
 }
 
-async function geminiEmbedMemory(text, taskType = "RETRIEVAL_DOCUMENT", title = "") {
+async function geminiEmbedMemory(
+  text,
+  taskType = "RETRIEVAL_DOCUMENT",
+  title = ""
+) {
   if (!GEMINI_API_KEY) {
-    const err = new Error("Missing GEMINI_API_KEY for semantic memory embeddings.");
+    const err =
+      new Error(
+        "Missing GEMINI_API_KEY for semantic memory embeddings."
+      );
+
     err.status = 503;
     throw err;
   }
 
-  const clean = memoryText(text, 7000);
+  const clean =
+    memoryText(
+      text,
+      7000
+    );
+
   if (!clean) {
-    const err = new Error("Memory embedding text is empty.");
+    const err =
+      new Error(
+        "Memory embedding text is empty."
+      );
+
     err.status = 400;
     throw err;
   }
 
-  const model = GEMINI_EMBEDDING_MODEL;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:embedContent`;
+  const model =
+    GEMINI_EMBEDDING_MODEL;
+
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:embedContent`;
 
   const embedContentConfig = {
     taskType,
-    outputDimensionality: GEMINI_EMBEDDING_DIM,
-    autoTruncate: true,
+    outputDimensionality:
+      GEMINI_EMBEDDING_DIM,
+    autoTruncate:
+      true,
   };
 
-  if (taskType === "RETRIEVAL_DOCUMENT" && title) {
-    embedContentConfig.title = memoryText(title, 220);
+  if (
+    taskType ===
+      "RETRIEVAL_DOCUMENT" &&
+    title
+  ) {
+    embedContentConfig.title =
+      memoryText(
+        title,
+        220
+      );
   }
 
-  const r = await fetchWithTimeout(
-    url,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        model: `models/${model}`,
-        content: {
-          parts: [{ text: clean }],
+  const r =
+    await fetchWithTimeout(
+      url,
+      {
+        method:
+          "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+          "x-goog-api-key":
+            GEMINI_API_KEY,
         },
-        embedContentConfig,
-      }),
-    },
-    30000
-  );
+        body:
+          JSON.stringify({
+            model:
+              `models/${model}`,
+            content: {
+              parts: [
+                {
+                  text:
+                    clean,
+                },
+              ],
+            },
+            embedContentConfig,
+          }),
+      },
+      30000
+    );
 
-  const payload = await responseJsonSafe(r);
+  const payload =
+    await responseJsonSafe(
+      r
+    );
+
   if (!r.ok) {
-    const err = new Error(proxyErrorMessage(payload, `Gemini embedding failed with HTTP ${r.status}.`));
-    err.status = r.status;
-    err.payload = payload;
+    const err =
+      new Error(
+        proxyErrorMessage(
+          payload,
+          `Gemini embedding failed with HTTP ${r.status}.`
+        )
+      );
+
+    err.status =
+      r.status;
+
+    err.payload =
+      payload;
+
     throw err;
   }
 
-  const values = normalizeEmbedding(payload?.embedding?.values || []);
+  const values =
+    normalizeEmbedding(
+      payload
+        ?.embedding
+        ?.values ||
+      []
+    );
+
   if (!values.length) {
-    const err = new Error("Gemini embedding returned no vector values.");
+    const err =
+      new Error(
+        "Gemini embedding returned no vector values."
+      );
+
     err.status = 502;
     throw err;
   }
@@ -3589,495 +4886,675 @@ async function geminiEmbedMemory(text, taskType = "RETRIEVAL_DOCUMENT", title = 
   return values;
 }
 
-function memoryRowForClient(row, score = null) {
+function memoryRowForClient(
+  row,
+  score = null
+) {
   return {
-    id: Number(row.id),
-    characterId: row.character_id,
-    subjectIds: Array.isArray(row.subject_ids) ? row.subject_ids : [],
-    memoryType: row.memory_type,
-    source: row.source || "",
-    text: row.memory_text,
-    importance: Number(row.importance) || 0,
-    confidence: Number(row.confidence) || 0,
-    knowledgeType: row.knowledge_type,
-    visibility: row.visibility,
-    metadata: row.metadata && typeof row.metadata === "object" ? row.metadata : {},
-    function memoryRowForClient(row, score = null) {
-  return {
-    id: Number(row.id),
-    characterId: row.character_id,
-    subjectIds: Array.isArray(row.subject_ids) ? row.subject_ids : [],
-    memoryType: row.memory_type,
-    source: row.source || "",
-    text: row.memory_text,
-    importance: Number(row.importance) || 0,
-    confidence: Number(row.confidence) || 0,
-    knowledgeType: row.knowledge_type,
-    visibility: row.visibility,
-    metadata: row.metadata && typeof row.metadata === "object" ? row.metadata : {},
-    createdAt: row.created_at,
-    embeddingModel: row.embedding_model || "",
-    ...(score === null ? {} : { score }),
+    id:
+      Number(
+        row.id
+      ),
+    characterId:
+      row.character_id,
+    subjectIds:
+      Array.isArray(
+        row.subject_ids
+      )
+        ? row.subject_ids
+        : [],
+    memoryType:
+      row.memory_type,
+    source:
+      row.source ||
+      "",
+    text:
+      row.memory_text,
+    importance:
+      Number(
+        row.importance
+      ) || 0,
+    confidence:
+      Number(
+        row.confidence
+      ) || 0,
+    knowledgeType:
+      row.knowledge_type,
+    visibility:
+      row.visibility,
+    metadata:
+      row.metadata &&
+      typeof row.metadata ===
+        "object"
+        ? row.metadata
+        : {},
+    createdAt:
+      row.created_at,
+    embeddingModel:
+      row.embedding_model ||
+      "",
+    ...(
+      score === null
+        ? {}
+        : {
+            score,
+          }
+    ),
   };
 }
 
-app.get("/memory/health", async (req, res) => {
-  try {
-    if (!(await requireDb(res))) return;
-
-    const countResult = await pool.query(
-      `SELECT COUNT(*)::int AS count FROM character_memories`
-    );
-
-    const result = {
-      ok: true,
-      version: "v37-semantic-memory-backend",
-      database: true,
-      table: "character_memories",
-      rows: Number(countResult.rows?.[0]?.count) || 0,
-      geminiConfigured: Boolean(GEMINI_API_KEY),
-      embeddingModel: GEMINI_EMBEDDING_MODEL,
-      embeddingDimensions: GEMINI_EMBEDDING_DIM,
-    };
-
-    if (String(req.query?.probe || "") === "1") {
-      const vector = await geminiEmbedMemory(
-        "Masvilag semantic memory health probe.",
-        "RETRIEVAL_DOCUMENT",
-        "Masvilag memory probe"
-      );
-
-      result.embeddingProbe = {
-        ok: true,
-        dimensions: vector.length,
-        norm: Number(
-          Math.sqrt(
-            vector.reduce(
-              (sum, x) => sum + x * x,
-              0
-            )
-          ).toFixed(6)
-        ),
-      };
-    }
-
-    return res.json(result);
-  } catch (err) {
-    console.error(
-      "Memory health error:",
-      err
-    );
-
-    return res.status(
-      Number(err?.status) || 500
-    ).json({
-      ok: false,
-      error:
-        err?.message ||
-        "Memory health check failed.",
-    });
-  }
-});
-
-app.post("/memory/remember", async (req, res) => {
-  try {
-    if (!(await requireDb(res))) return;
-
-    const session =
-      await getSession(req);
-
-    if (!session) {
-      clearSessionCookie(res);
-
-      return res.status(401).json({
-        error: "Not authenticated.",
-      });
-    }
-
-    const characterId =
-      memoryString(
-        req.body?.characterId ||
-        req.body?.character_id,
-        120
-      );
-
-    const text =
-      memoryText(
-        req.body?.text ||
-        req.body?.memoryText ||
-        req.body?.memory_text,
-        7000
-      );
-
-    const memoryType =
-      memoryString(
-        req.body?.memoryType ||
-        req.body?.memory_type ||
-        "event",
-        80
-      );
-
-    const source =
-      memoryString(
-        req.body?.source ||
-        "world",
-        120
-      );
-
-    const knowledgeType =
-      memoryString(
-        req.body?.knowledgeType ||
-        req.body?.knowledge_type ||
-        "witnessed",
-        80
-      );
-
-    const visibility =
-      memoryString(
-        req.body?.visibility ||
-        "private",
-        80
-      );
-
-    const subjectIds =
-      memorySubjects(
-        req.body?.subjectIds ||
-        req.body?.subject_ids
-      );
-
-    const importance =
-      Math.round(
-        clampNumber(
-          req.body?.importance,
-          0,
-          100,
-          50
-        )
-      );
-
-    const confidence =
-      clampNumber(
-        req.body?.confidence,
-        0,
-        1,
-        1
-      );
-
-    const metadata =
-      req.body?.metadata &&
-      typeof req.body.metadata === "object" &&
-      !Array.isArray(req.body.metadata)
-        ? req.body.metadata
-        : {};
-
-    if (!characterId || !text) {
-      return res.status(400).json({
-        error:
-          "characterId and text are required.",
-      });
-    }
-
-    const title =
-      `${memoryType} memory for ${characterId}`;
-
-    const embedding =
-      await geminiEmbedMemory(
-        text,
-        "RETRIEVAL_DOCUMENT",
-        title
-      );
-
-    const inserted =
-      await pool.query(
-        `
-        INSERT INTO character_memories (
-          world_code,
-          character_id,
-          subject_ids,
-          memory_type,
-          source,
-          memory_text,
-          importance,
-          confidence,
-          knowledge_type,
-          visibility,
-          metadata,
-          embedding,
-          embedding_model
-        )
-        VALUES (
-          $1,$2,$3::jsonb,$4,$5,$6,$7,
-          $8,$9,$10,$11::jsonb,$12::jsonb,$13
-        )
-        RETURNING *
-        `,
-        [
-          session.worldCode,
-          characterId,
-          JSON.stringify(subjectIds),
-          memoryType,
-          source,
-          text,
-          importance,
-          confidence,
-          knowledgeType,
-          visibility,
-          JSON.stringify(metadata),
-          JSON.stringify(embedding),
-          GEMINI_EMBEDDING_MODEL,
-        ]
-      );
-
-    return res.json({
-      ok: true,
-      memory:
-        memoryRowForClient(
-          inserted.rows[0]
-        ),
-      embeddingDimensions:
-        embedding.length,
-    });
-  } catch (err) {
-    console.error(
-      "Memory remember error:",
-      err
-    );
-
-    return res.status(
-      Number(err?.status) || 500
-    ).json({
-      error:
-        err?.message ||
-        "Failed to store semantic memory.",
-    });
-  }
-});
-
-app.post("/memory/search", async (req, res) => {
-  try {
-    if (!(await requireDb(res))) return;
-
-    const session =
-      await getSession(req);
-
-    if (!session) {
-      clearSessionCookie(res);
-
-      return res.status(401).json({
-        error: "Not authenticated.",
-      });
-    }
-
-    const characterId =
-      memoryString(
-        req.body?.characterId ||
-        req.body?.character_id,
-        120
-      );
-
-    const query =
-      memoryText(
-        req.body?.query ||
-        req.body?.text,
-        5000
-      );
-
-    const topK =
-      Math.round(
-        clampNumber(
-          req.body?.topK ||
-          req.body?.top_k,
-          1,
-          12,
-          6
-        )
-      );
-
-    if (!characterId || !query) {
-      return res.status(400).json({
-        error:
-          "characterId and query are required.",
-      });
-    }
-
-    const queryEmbedding =
-      await geminiEmbedMemory(
-        query,
-        "RETRIEVAL_QUERY"
-      );
-
-    const candidates =
-      await pool.query(
-        `
-        SELECT *
-        FROM character_memories
-        WHERE world_code = $1
-          AND character_id = $2
-          AND embedding IS NOT NULL
-          AND embedding_model = $3
-        ORDER BY
-          importance DESC,
-          created_at DESC
-        LIMIT 600
-        `,
-        [
-          session.worldCode,
-          characterId,
-          GEMINI_EMBEDDING_MODEL,
-        ]
-      );
-
-    const now = Date.now();
-    const scored = [];
-
-    for (const row of candidates.rows) {
-      const vector =
-        Array.isArray(row.embedding)
-          ? row.embedding
-          : [];
-
+app.get(
+  "/memory/health",
+  async (req, res) => {
+    try {
       if (
-        vector.length !==
-        queryEmbedding.length
+        !(await requireDb(res))
       ) {
-        continue;
+        return;
       }
 
-      const semantic =
-        cosineSimilarity(
-          queryEmbedding,
-          vector
+      const countResult =
+        await pool.query(
+          `
+          SELECT COUNT(*)::int AS count
+          FROM character_memories
+          `
         );
 
+      const result = {
+        ok: true,
+        version:
+          "v37-semantic-memory-backend",
+        database:
+          true,
+        table:
+          "character_memories",
+        rows:
+          Number(
+            countResult
+              .rows?.[0]
+              ?.count
+          ) || 0,
+        geminiConfigured:
+          Boolean(
+            GEMINI_API_KEY
+          ),
+        embeddingModel:
+          GEMINI_EMBEDDING_MODEL,
+        embeddingDimensions:
+          GEMINI_EMBEDDING_DIM,
+      };
+
       if (
-        !Number.isFinite(semantic) ||
-        semantic < -0.5
+        String(
+          req.query?.probe ||
+          ""
+        ) === "1"
       ) {
-        continue;
+        const vector =
+          await geminiEmbedMemory(
+            "Masvilag semantic memory health probe.",
+            "RETRIEVAL_DOCUMENT",
+            "Masvilag memory probe"
+          );
+
+        result.embeddingProbe = {
+          ok: true,
+          dimensions:
+            vector.length,
+          norm:
+            Number(
+              Math.sqrt(
+                vector.reduce(
+                  (
+                    sum,
+                    x
+                  ) =>
+                    sum +
+                    x * x,
+                  0
+                )
+              ).toFixed(
+                6
+              )
+            ),
+        };
       }
 
+      return res.json(
+        result
+      );
+    } catch (err) {
+      console.error(
+        "Memory health error:",
+        err
+      );
+
+      return res
+        .status(
+          Number(
+            err?.status
+          ) || 500
+        )
+        .json({
+          ok: false,
+          error:
+            err?.message ||
+            "Memory health check failed.",
+        });
+    }
+  }
+);
+
+app.post(
+  "/memory/remember",
+  async (req, res) => {
+    try {
+      if (
+        !(await requireDb(res))
+      ) {
+        return;
+      }
+
+      const session =
+        await getSession(
+          req
+        );
+
+      if (!session) {
+        clearSessionCookie(
+          res
+        );
+
+        return res
+          .status(401)
+          .json({
+            error:
+              "Not authenticated.",
+          });
+      }
+
+      const characterId =
+        memoryString(
+          req.body
+            ?.characterId ||
+          req.body
+            ?.character_id,
+          120
+        );
+
+      const text =
+        memoryText(
+          req.body?.text ||
+          req.body
+            ?.memoryText ||
+          req.body
+            ?.memory_text,
+          7000
+        );
+
+      const memoryType =
+        memoryString(
+          req.body
+            ?.memoryType ||
+          req.body
+            ?.memory_type ||
+          "event",
+          80
+        );
+
+      const source =
+        memoryString(
+          req.body
+            ?.source ||
+          "world",
+          120
+        );
+
+      const knowledgeType =
+        memoryString(
+          req.body
+            ?.knowledgeType ||
+          req.body
+            ?.knowledge_type ||
+          "witnessed",
+          80
+        );
+
+      const visibility =
+        memoryString(
+          req.body
+            ?.visibility ||
+          "private",
+          80
+        );
+
+      const subjectIds =
+        memorySubjects(
+          req.body
+            ?.subjectIds ||
+          req.body
+            ?.subject_ids
+        );
+
       const importance =
-        clampNumber(
-          row.importance,
-          0,
-          100,
-          50
-        ) / 100;
+        Math.round(
+          clampNumber(
+            req.body
+              ?.importance,
+            0,
+            100,
+            50
+          )
+        );
 
       const confidence =
         clampNumber(
-          row.confidence,
+          req.body
+            ?.confidence,
           0,
           1,
           1
         );
 
-      const ageDays =
-        Math.max(
-          0,
-          (
-            now -
-            new Date(
-              row.created_at
-            ).getTime()
-          ) / 86400000
+      const metadata =
+        req.body
+          ?.metadata &&
+        typeof req.body
+          .metadata ===
+          "object" &&
+        !Array.isArray(
+          req.body
+            .metadata
+        )
+          ? req.body
+              .metadata
+          : {};
+
+      if (
+        !characterId ||
+        !text
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "characterId and text are required.",
+          });
+      }
+
+      const title =
+        `${memoryType} memory for ${characterId}`;
+
+      const embedding =
+        await geminiEmbedMemory(
+          text,
+          "RETRIEVAL_DOCUMENT",
+          title
         );
 
-      const recency =
-        Math.exp(
-          -ageDays / 90
+      const inserted =
+        await pool.query(
+          `
+          INSERT INTO character_memories (
+            world_code,
+            character_id,
+            subject_ids,
+            memory_type,
+            source,
+            memory_text,
+            importance,
+            confidence,
+            knowledge_type,
+            visibility,
+            metadata,
+            embedding,
+            embedding_model
+          )
+          VALUES (
+            $1,$2,$3::jsonb,$4,$5,$6,$7,
+            $8,$9,$10,$11::jsonb,$12::jsonb,$13
+          )
+          RETURNING *
+          `,
+          [
+            session.worldCode,
+            characterId,
+            JSON.stringify(
+              subjectIds
+            ),
+            memoryType,
+            source,
+            text,
+            importance,
+            confidence,
+            knowledgeType,
+            visibility,
+            JSON.stringify(
+              metadata
+            ),
+            JSON.stringify(
+              embedding
+            ),
+            GEMINI_EMBEDDING_MODEL,
+          ]
         );
 
-      const finalScore =
-        semantic * 0.72 +
-        importance * 0.16 +
-        confidence * 0.07 +
-        recency * 0.05;
-
-      scored.push({
-        row,
-        finalScore,
-        semantic,
+      return res.json({
+        ok: true,
+        memory:
+          memoryRowForClient(
+            inserted
+              .rows[0]
+          ),
+        embeddingDimensions:
+          embedding.length,
       });
+    } catch (err) {
+      console.error(
+        "Memory remember error:",
+        err
+      );
+
+      return res
+        .status(
+          Number(
+            err?.status
+          ) || 500
+        )
+        .json({
+          error:
+            err?.message ||
+            "Failed to store semantic memory.",
+        });
     }
+  }
+);
 
-    scored.sort(
-      (a, b) =>
-        b.finalScore -
-        a.finalScore
-    );
+app.post(
+  "/memory/search",
+  async (req, res) => {
+    try {
+      if (
+        !(await requireDb(res))
+      ) {
+        return;
+      }
 
+      const session =
+        await getSession(
+          req
+        );
+
+      if (!session) {
+        clearSessionCookie(
+          res
+        );
+
+        return res
+          .status(401)
+          .json({
+            error:
+              "Not authenticated.",
+          });
+      }
+
+      const characterId =
+        memoryString(
+          req.body
+            ?.characterId ||
+          req.body
+            ?.character_id,
+          120
+        );
+
+      const query =
+        memoryText(
+          req.body
+            ?.query ||
+          req.body
+            ?.text,
+          5000
+        );
+
+      const topK =
+        Math.round(
+          clampNumber(
+            req.body?.topK ||
+            req.body?.top_k,
+            1,
+            12,
+            6
+          )
+        );
+
+      if (
+        !characterId ||
+        !query
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "characterId and query are required.",
+          });
+      }
+
+      const queryEmbedding =
+        await geminiEmbedMemory(
+          query,
+          "RETRIEVAL_QUERY"
+        );
+
+      const candidates =
+        await pool.query(
+          `
+          SELECT *
+          FROM character_memories
+          WHERE world_code = $1
+            AND character_id = $2
+            AND embedding IS NOT NULL
+            AND embedding_model = $3
+          ORDER BY
+            importance DESC,
+            created_at DESC
+          LIMIT 600
+          `,
+          [
+            session.worldCode,
+            characterId,
+            GEMINI_EMBEDDING_MODEL,
+          ]
+        );
+
+      const now =
+        Date.now();
+
+      const scored = [];
+
+      for (
+        const row of
+        candidates.rows
+      ) {
+        const vector =
+          Array.isArray(
+            row.embedding
+          )
+            ? row.embedding
+            : [];
+
+        if (
+          vector.length !==
+          queryEmbedding.length
+        ) {
+          continue;
+        }
+
+        const semantic =
+          cosineSimilarity(
+            queryEmbedding,
+            vector
+          );
+
+        if (
+          !Number.isFinite(
+            semantic
+          ) ||
+          semantic < -0.5
+        ) {
+          continue;
+        }
+
+        const importance =
+          clampNumber(
+            row.importance,
+            0,
+            100,
+            50
+          ) / 100;
+
+        const confidence =
+          clampNumber(
+            row.confidence,
+            0,
+            1,
+            1
+          );
+
+        const ageDays =
+          Math.max(
+            0,
+            (
+              now -
+              new Date(
+                row.created_at
+              ).getTime()
+            ) /
+            86400000
+          );
+
+        const recency =
+          Math.exp(
+            -ageDays /
+            90
+          );
+
+        const finalScore =
+          semantic *
+            0.72 +
+          importance *
+            0.16 +
+          confidence *
+            0.07 +
+          recency *
+            0.05;
+
+        scored.push({
+          row,
+          finalScore,
+          semantic,
+        });
+      }
+
+      scored.sort(
+        (
+          a,
+          b
+        ) =>
+          b.finalScore -
+          a.finalScore
+      );
+
+      return res.json({
+        ok: true,
+        characterId,
+        query,
+        embeddingModel:
+          GEMINI_EMBEDDING_MODEL,
+        results:
+          scored
+            .slice(
+              0,
+              topK
+            )
+            .map(
+              ({
+                row,
+                finalScore,
+                semantic,
+              }) => ({
+                ...memoryRowForClient(
+                  row,
+                  Number(
+                    finalScore.toFixed(
+                      6
+                    )
+                  )
+                ),
+                semanticScore:
+                  Number(
+                    semantic.toFixed(
+                      6
+                    )
+                  ),
+              })
+            ),
+      });
+    } catch (err) {
+      console.error(
+        "Memory search error:",
+        err
+      );
+
+      return res
+        .status(
+          Number(
+            err?.status
+          ) || 500
+        )
+        .json({
+          error:
+            err?.message ||
+            "Semantic memory search failed.",
+        });
+    }
+  }
+);
+
+app.get(
+  "/ai/health",
+  (req, res) => {
     return res.json({
       ok: true,
-      characterId,
-      query,
-      embeddingModel:
-        GEMINI_EMBEDDING_MODEL,
-      results:
-        scored
-          .slice(0, topK)
-          .map(
-            ({
-              row,
-              finalScore,
-              semantic,
-            }) => ({
-              ...memoryRowForClient(
-                row,
-                Number(
-                  finalScore.toFixed(6)
-                )
-              ),
-              semanticScore:
-                Number(
-                  semantic.toFixed(6)
-                ),
-            })
+      version:
+        "v37-semantic-memory-backend",
+      routes: {
+        messages:
+          true,
+        image:
+          true,
+        vision:
+          true,
+        memory:
+          true,
+      },
+      providers: {
+        anthropic:
+          Boolean(
+            ANTHROPIC_API_KEY
           ),
-    });
-  } catch (err) {
-    console.error(
-      "Memory search error:",
-      err
-    );
-
-    return res.status(
-      Number(err?.status) || 500
-    ).json({
-      error:
-        err?.message ||
-        "Semantic memory search failed.",
+        gemini:
+          Boolean(
+            GEMINI_API_KEY
+          ),
+        openai:
+          Boolean(
+            OPENAI_API_KEY
+          ),
+      },
     });
   }
-});
-
-app.get("/ai/health", (req, res) => {
-  return res.json({
-    ok: true,
-    version:
-      "v37-semantic-memory-backend",
-    routes: {
-      messages: true,
-      image: true,
-      vision: true,
-      memory: true,
-    },
-    providers: {
-      anthropic:
-        Boolean(
-          ANTHROPIC_API_KEY
-        ),
-      gemini:
-        Boolean(
-          GEMINI_API_KEY
-        ),
-      openai:
-        Boolean(
-          OPENAI_API_KEY
-        ),
-    },
-  });
-});
+);
 
 app.post(
   [
@@ -4118,7 +5595,10 @@ app.post(
 
     let last = null;
 
-    for (const provider of providers) {
+    for (
+      const provider of
+      providers
+    ) {
       try {
         const result =
           await callMessageProvider(
@@ -4126,7 +5606,9 @@ app.post(
             req.body || {}
           );
 
-        if (result?.ok) {
+        if (
+          result?.ok
+        ) {
           res.setHeader(
             "x-masvilag-ai-provider",
             result.provider ||
@@ -4144,7 +5626,8 @@ app.post(
           continue;
         }
 
-        last = result;
+        last =
+          result;
 
         /*
          * Only fail over for transient/upstream/model availability problems.
@@ -4153,7 +5636,10 @@ app.post(
           !retryableProviderStatus(
             result?.status
           ) &&
-          ![400, 404].includes(
+          ![
+            400,
+            404,
+          ].includes(
             Number(
               result?.status
             )
@@ -4186,15 +5672,18 @@ app.post(
     }
 
     const upstreamStatus =
-      Number(last?.status) ||
-      503;
+      Number(
+        last?.status
+      ) || 503;
 
     const status =
       upstreamStatus === 404
         ? 502
         : upstreamStatus;
 
-    if (last?.retryAfter) {
+    if (
+      last?.retryAfter
+    ) {
       res.setHeader(
         "retry-after",
         last.retryAfter
@@ -4224,46 +5713,51 @@ app.post(
       )
     );
 
-    return res.status(
-      status
-    ).json(
-      last?.payload || {
-        error: {
-          message:
-            "No configured AI provider returned a usable response.",
-        },
-      }
-    );
+    return res
+      .status(status)
+      .json(
+        last?.payload || {
+          error: {
+            message:
+              "No configured AI provider returned a usable response.",
+          },
+        }
+      );
   }
 );
 
 // Serve the built React/Vite app in production.
 // v31: never let an old frontend bundle survive a deploy in browser/proxy cache.
-app.use((req, res, next) => {
-  if (req.method === "GET") {
-    res.setHeader(
-      "Cache-Control",
-      "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
-    );
+app.use(
+  (req, res, next) => {
+    if (
+      req.method ===
+      "GET"
+    ) {
+      res.setHeader(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+      );
 
-    res.setHeader(
-      "Pragma",
-      "no-cache"
-    );
+      res.setHeader(
+        "Pragma",
+        "no-cache"
+      );
 
-    res.setHeader(
-      "Expires",
-      "0"
-    );
+      res.setHeader(
+        "Expires",
+        "0"
+      );
 
-    res.setHeader(
-      "Surrogate-Control",
-      "no-store"
-    );
+      res.setHeader(
+        "Surrogate-Control",
+        "no-store"
+      );
+    }
+
+    next();
   }
-
-  next();
-});
+);
 
 app.use(
   express.static(
@@ -4281,23 +5775,27 @@ app.use(
   )
 );
 
-app.use((req, res, next) => {
-  if (
-    req.method === "GET" &&
-    !req.path.startsWith(
-      "/ai/"
-    )
-  ) {
-    return res.sendFile(
-      "index.html",
-      {
-        root: "dist",
-      }
-    );
-  }
+app.use(
+  (req, res, next) => {
+    if (
+      req.method ===
+        "GET" &&
+      !req.path.startsWith(
+        "/ai/"
+      )
+    ) {
+      return res.sendFile(
+        "index.html",
+        {
+          root:
+            "dist",
+        }
+      );
+    }
 
-  next();
-});
+    next();
+  }
+);
 
 app.listen(
   PORT,
