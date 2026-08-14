@@ -16556,6 +16556,91 @@ function aiFollowEligibility(
   return { allowed:false, mode:"blocked", reason:"no-social-bond" };
 }
 
+/*
+ * v68 — REALISTIC FOLLOW-BACK AFFINITY
+ *
+ * A player follow is a direct social signal. If the AI genuinely likes the
+ * player already, following back should not be a coin flip. "Likes" here means
+ * an established positive personal bond / friendship / romance / crush / family
+ * relation, a clearly positive relationship score, or an explicitly positive
+ * current relationship mood. Neutral acquaintances may still decide normally;
+ * enemies/rivals do not magically become mutuals because of one click.
+ */
+function aiLikesTargetEnoughForFollowBack(
+  w,
+  actorId,
+  targetId
+) {
+  const actor = socialProfileById(w, actorId);
+  const target = socialProfileById(w, targetId);
+
+  if (
+    !actor ||
+    !target ||
+    actor.id === target.id ||
+    isHuman(w, actor.id)
+  ) {
+    return false;
+  }
+
+  const rel = getRel(w, actor.id, target.id);
+  const relScore = Number(rel && rel.score) || 0;
+  const secretCrush = hasSecretCrushSignal(rel, actor, target);
+  const enemyOrRival = hasEnemyOrRivalBond(rel);
+  const bondWeight = followBondWeight(rel);
+  const mood = [
+    rel && rel.mood,
+    rel && rel.hidden,
+    rel && rel.why,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const explicitlyPositiveMood =
+    /kedvel|szeret|vonz[oó]d|szerelmes|hi[aá]nyzol|hi[aá]nyzik|ride or die|b[aá]rmit megtenne|v[eé]delmez|protect|adore|cares? about|likes? (?:you|them|him|her)|in love|attracted|trusts?|loyal|lojal|tisztel/.test(
+      mood
+    );
+
+  const explicitlyNegativeMood =
+    /gy[uű]l[oö]l|ut[aá]l|bossz[uú]|megvet|ki[aá]br[aá]ndult|nem b[ií]zik|betray|betrayal|hates?|despise|disgust|revenge|done with|can'?t stand/.test(
+      mood
+    );
+
+  /* An explicit enemy/rival label or an actually negative CURRENT state still
+     matters. A stale "friend" bond must not force a mutual follow while the
+     relationship is actively hostile. */
+  if (enemyOrRival || relScore <= -5 || explicitlyNegativeMood) {
+    return false;
+  }
+
+  if (hasFamilyFollowBond(rel)) {
+    return true;
+  }
+
+  if (bondWeight >= 34) {
+    return true;
+  }
+
+  if (relScore >= 25) {
+    return true;
+  }
+
+  if (secretCrush && relScore >= 0) {
+    return true;
+  }
+
+  if (
+    explicitlyPositiveMood &&
+    !explicitlyNegativeMood &&
+    relScore >= 8
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function characterOnlineActivityProfile(w, c) {
   if (!c || (w && isHuman(w, c.id))) {
     return {
@@ -17047,6 +17132,44 @@ function aiShouldFollow(
     return false;
   }
 
+  /*
+   * v68 FOLLOW-BACK RULE:
+   * If the PLAYER has just followed this AI and the AI already genuinely likes
+   * the player, follow back deterministically. The queued action is still
+   * re-validated at execution time, so a relationship rupture that happens
+   * before it runs can still cancel the follow-back.
+   */
+  if (
+    trigger === "follow-back" &&
+    isHuman(w, targetId) &&
+    isFollowing(w, targetId, actorId) &&
+    aiLikesTargetEnoughForFollowBack(w, actorId, targetId)
+  ) {
+    return true;
+  }
+
+  if (trigger === "follow-back") {
+    const followBackRel = getRel(w, actorId, targetId);
+    const followBackMood = [
+      followBackRel && followBackRel.mood,
+      followBackRel && followBackRel.why,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    const currentNegative =
+      hasEnemyOrRivalBond(followBackRel) ||
+      (Number(followBackRel && followBackRel.score) || 0) <= -5 ||
+      /gy[uű]l[oö]l|ut[aá]l|bossz[uú]|megvet|ki[aá]br[aá]ndult|nem b[ií]zik|haragszik|betray|hates?|despise|revenge|done with|can'?t stand/.test(
+        followBackMood
+      );
+
+    if (currentNegative) {
+      return false;
+    }
+  }
+
   const score =
     followInterestScore(
       w,
@@ -17105,11 +17228,14 @@ function aiShouldFollow(
   const strongBond = followBondWeight(rel) >= 34;
 
   if (
-    eligibility.mode === "family" ||
-    eligibility.mode === "secret-crush" ||
-    strongBond ||
-    relScore >= 25 ||
-    (trigger === "relationship" && score >= 34)
+    trigger !== "follow-back" &&
+    (
+      eligibility.mode === "family" ||
+      eligibility.mode === "secret-crush" ||
+      strongBond ||
+      relScore >= 25 ||
+      (trigger === "relationship" && score >= 34)
+    )
   ) {
     return true;
   }
@@ -17157,6 +17283,42 @@ function aiShouldFollow(
         (score - 34) / 36
     )
   );
+}
+
+function recentlyUnfollowedByTarget(
+  w,
+  actorId,
+  targetId,
+  windowMs = 7 * 24 * 3600e3
+) {
+  const cutoff = now() - Math.max(0, Number(windowMs) || 0);
+  const actor = String(actorId || "");
+  const target = String(targetId || "");
+
+  const latest = (
+    Array.isArray(w && w.socialEvents)
+      ? w.socialEvents
+      : []
+  )
+    .filter((event) => {
+      if (
+        !event ||
+        !["follow", "unfollow"].includes(String(event.type || "")) ||
+        String(event.actorId || "") !== target ||
+        Number(event.ts || 0) < cutoff
+      ) {
+        return false;
+      }
+
+      return (
+        Array.isArray(event.targetIds) &&
+        event.targetIds.map(String).includes(actor)
+      );
+    })
+    .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))[0];
+
+  /* A newer re-follow supersedes an older unfollow. */
+  return Boolean(latest && latest.type === "unfollow");
 }
 
 function aiUnfollowPressure(
@@ -17239,6 +17401,32 @@ function aiUnfollowPressure(
       rel
     );
 
+  const relMoodText = [
+    rel && rel.mood,
+    rel && rel.why,
+    rel && rel.hidden,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const severeCurrentRupture =
+    /gy[uű]l[oö]l|ut[aá]l|bossz[uú]|[aá]rul[aá]s|megcsal|megal[aá]z|fenyeget|megvet|betray|betrayal|cheat(?:ed|ing)?|humiliat|threat|revenge|hates?|despise|can'?t stand/.test(
+      relMoodText
+    );
+
+  const softerCurrentRupture =
+    /haragszik|d[uü]h[oö]s|ki[aá]br[aá]ndult|csal[oó]dott|nem b[ií]zik|ker[uü]l|s[eé]rtett|angry|hurt|disappointed|distrust|avoids?|upset/.test(
+      relMoodText
+    );
+
+  const targetRecentlyUnfollowed =
+    recentlyUnfollowedByTarget(
+      w,
+      actor.id,
+      target.id
+    );
+
   let pressure = 0;
 
   if (enemy) {
@@ -17246,6 +17434,31 @@ function aiUnfollowPressure(
       secretCrush
         ? 24
         : 100;
+  }
+
+  /*
+   * Concrete relationship changes can make an unfollow realistic even before
+   * the numeric score has fully caught up. A passing bad mood is not enough on
+   * its own, but betrayal/hate/threat-level rupture is a strong signal.
+   */
+  if (severeCurrentRupture) {
+    pressure += 42;
+  } else if (softerCurrentRupture && score < 35) {
+    pressure += 16;
+  }
+
+  /*
+   * If the other person actually unfollowed this AI recently, the AI may
+   * realistically reciprocate. Strong affection/family/obsession can make them
+   * keep following instead, so this is pressure rather than an automatic flip.
+   */
+  if (targetRecentlyUnfollowed) {
+    pressure +=
+      score < 0
+        ? 58
+        : score < 25
+          ? 38
+          : 18;
   }
 
   if (
@@ -17311,13 +17524,18 @@ function aiUnfollowPressure(
   }
 
   /*
-   * Jó kapcsolatot soha ne kövessen ki random.
+   * Jó kapcsolatot ne kövessen ki RANDOM. Viszont ha történt konkrét társas
+   * törés (a másik kikövette, komoly árulás/gyűlölet/fenyegetés jelent meg,
+   * enemy/rival lett a viszony), akkor a követési állapot is változhat.
    */
   if (
     score >= 35 &&
     !/exek|exes|\bex\b/.test(
       bond
-    )
+    ) &&
+    !enemy &&
+    !severeCurrentRupture &&
+    !targetRecentlyUnfollowed
   ) {
     return 0;
   }
@@ -17941,11 +18159,13 @@ function setFollowState(
   }
 
   /*
-   * Ha a JÁTÉKOS követ be egy AI-karaktert,
-   * az AI külön eldöntheti, hogy érdekében áll-e
-   * visszakövetni.
-   *
-   * Nem automatikus follow-back.
+   * v68 — HA A JÁTÉKOS BEKÖVET EGY AI-T:
+   * - ha az AI már ténylegesen kedveli (barát/közeli barát/crush/partner,
+   *   család, erős pozitív score vagy explicit pozitív kapcsolat), visszakövet;
+   * - semleges kapcsolatnál továbbra is saját social érdeklődése dönt;
+   * - ellenség/rivális nem lesz automatikusan mutual egyetlen follow miatt.
+   * A queue futáskor újraellenőrzi a kapcsolatot, ezért közben történt változás
+   * felülírhatja a még végre nem hajtott follow-backot.
    */
   if (
     shouldFollow &&
