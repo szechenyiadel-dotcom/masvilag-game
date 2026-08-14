@@ -1585,9 +1585,52 @@ app.post("/profile/worlds/switch", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
 
-    const session =
-      await getSession(req);
-          const token = await createSession(code, accountId);
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
+
+    const profile = await currentProfileForSession(session);
+    const code = cleanCode(req.body?.code);
+
+    if (!profile || !code) {
+      return res.status(400).json({
+        error: "Missing profile or world code.",
+      });
+    }
+
+    const link = await pool.query(
+      `
+      SELECT pw.account_id, w.data
+      FROM profile_worlds pw
+      JOIN worlds w ON w.code = pw.world_code
+      WHERE pw.profile_username = $1
+        AND pw.world_code = $2
+      LIMIT 1
+      `,
+      [profile.username, code]
+    );
+
+    if (!link.rows.length) {
+      return res.status(404).json({
+        error: "This world is not linked to your profile.",
+      });
+    }
+
+    const accountId = link.rows[0].account_id;
+    const world = link.rows[0].data;
+
+    if (!world?.accounts?.[accountId]) {
+      return res.status(409).json({
+        error: "The linked world profile no longer exists.",
+      });
+    }
+
+    const token = await createSession(code, accountId);
     setSessionCookie(res, token);
 
     return res.json({
@@ -1599,7 +1642,10 @@ app.post("/profile/worlds/switch", async (req, res) => {
     });
   } catch (err) {
     console.error("World switch error:", err);
-    return res.status(500).json({ error: "World switch failed." });
+
+    return res.status(500).json({
+      error: "World switch failed.",
+    });
   }
 });
 
