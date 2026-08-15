@@ -1,5 +1,5 @@
 /* MÁSVILÁG RECOVERY — ORIGINAL PRE-PATCH APP + sameCoreFaction ONLY — 20260815_2338 */
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
   X, Trash2, ChevronLeft, ChevronRight, Loader2, Heart, Lock, Zap, Pencil,
