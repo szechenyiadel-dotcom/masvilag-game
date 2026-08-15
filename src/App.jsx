@@ -8374,7 +8374,7 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
 );
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
-const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
+const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(4, Math.min(10, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 6)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
 const LIVE_WORLD_DM_TARGET_MS = Math.max(60 * 1000, Math.min(10 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 2.5 * 60 * 1000));
 const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 5 * 60 * 1000));
@@ -8482,10 +8482,8 @@ function aiCostGapFor(system, prompt, maxTokens) {
  * the end (current task + JSON schema + TAIL), which are the two most useful
  * regions if an emergency trim is needed.
  */
-/* PERFORMANCE v26: keep the rich canon, but stop shipping pathological 80k+ prompts.
- * The budgeter preserves both prompt edges, where the hard rules/canon locks live. */
-const AI_MAX_SYSTEM_CHARS = Math.max(18000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 36000);
-const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 60000);
+const AI_MAX_SYSTEM_CHARS = Math.max(18000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 42000);
+const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 82000);
 
 function preserveEdges(value, maxChars, label = "context") {
   const text = String(value || "");
@@ -17223,20 +17221,16 @@ Rules:
 - no watermark, no text overlay, no collage
 - the sender must be recognizably the SAME fictional character/person as in the supplied profile + album reference images
 - treat the FIRST reference as the primary face/identity anchor and the remaining album references as secondary identity evidence
-- preserve facial structure, face proportions, eye shape/color, eyebrows, nose, lips, jawline, skin tone, hairline/hair identity, age vibe and stable distinguishing features
-- IDENTITY HAS PRIORITY OVER AESTHETICS: do not beautify into a different person, average the face, change ethnicity, age, facial proportions or distinctive features
-- when reference images are supplied, match the SAME identity across them; the first reference is authoritative if secondary references differ in styling
+- preserve facial structure, eye shape, eyebrows, nose, lips, skin tone, hair identity, age vibe and stable distinguishing features
 - create a NEW photograph: do not copy the exact pose, background, composition or outfit from a reference unless the chat request specifically asks for it
 - only one version of the character; no collage, no reference-image montage, no duplicate person
 - keep the person and scene consistent with the requested character and moment
 - if the prompt implies a party, coffee, mirror selfie, street, room, gym or similar, show that naturally.`;
 
-  /* v26 IDENTITY LOCK: primary avatar + several album references give the
-   * image model more stable evidence for the same face across generations. */
   const referenceImages = characterSnapReferenceImages(
     character,
     media,
-    4
+    3
   );
 
   const payload = {
@@ -17247,7 +17241,7 @@ Rules:
     text: basePrompt,
     size: "1024x1024",
     image_size: "1024x1024",
-    quality: "high",
+    quality: "medium",
     output_format: "jpeg",
     response_format: "b64_json",
     background: "auto",
@@ -26111,7 +26105,7 @@ async function genComments(w, post, options = {}) {
   );
   const requestedMaxComments = Math.max(
     requestedMinComments || 1,
-    Math.min(cast.length || 1, Math.round(Number(options && options.maxComments) || cast.length || 1))
+    Math.min(8, cast.length || 1, Math.round(Number(options && options.maxComments) || 6))
   );
 
   const author = charById(
@@ -26203,8 +26197,6 @@ KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT, kapcsolat-specifikus explicit kánonja. Az, hogy valaki általában szarkasztikus/bunkó/domináns, NEM elég ok arra, hogy a barátját megalázza vagy ellenségként kezelje.
 - KÖLCSÖNÖS BARÁTSÁG: ha a kommentelő és a poszt szerzője mindkét irányban barátok, ezt a komment konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
-- SZEMÉLYISÉG HARD RULE: a PERSONALITY, TRAITS, SPEECH STYLE, VOICE EXAMPLES, GOALS, FEARS és BACKSTORY mezők nem díszítő háttéradatok, hanem viselkedési szerződés. A reakció döntése, intenzitása, szóhasználata és az is, hogy egyáltalán megszólal-e, ezekből következzen. Ne simítsd a karaktereket ugyanabba a kedves/generikus social-media hangba.
-- RIVÁLIS OLDAL HARD RULE: ha két szereplő rivális frakcióhoz/dojohoz tartozik (pl. eltérő ellenséges karate dojo), és nincs KIFEJEZETT személyes barátság/románc felülírás, közöttük NINCS cukiskodás, bestie-hang, őszinte hype vagy indokolatlan kedvesség. A nyilvános dinamika legyen karakterhű rivalizálás: beszólás, versengés, száraz szkepszis, backhanded megjegyzés, provokáció vagy tudatos ignore. A beszólás stílusát mindig a konkrét karakter személyisége határozza meg, ne legyen minden rivális ugyanúgy bunkó.
 - A korábbi emlékei és a poszt szerzőjével való konkrét kapcsolata ténylegesen módosítsa a reakcióját. Ha van releváns közös múlt, belső poén, korábbi vita, ígéret, flört vagy kínos esemény, UTALHAT rá — de ne ugyanarra minden alkalommal.
 - Ne csak a komment TARTALMA, hanem a mikrostílusa is karakterfüggő legyen: mondathossz, kis-/nagybetű, írásjel, szleng, emoji, kérdezés, közvetlenség, szárazság, káromkodás, flört és humor ritmusa is.
 - Ha ugyanaz a komment több karakter szájából is hiteles lenne, nem elég specifikus: írd újra.
@@ -26486,15 +26478,20 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
   const minWanted = Math.max(0, Math.round(Number(minComments) || 0));
   if (!minWanted || !w || !post) return baseOut;
 
+  /* PERFORMANCE: never deep-clone the entire world just to count accepted comments. */
   const beforeActors = topLevelAiCommenterIds(w, post);
-  const probe = JSON.parse(JSON.stringify(w));
-  applyComments(probe, post.id, baseOut, label);
-  const probePost = (probe.posts || []).find((row) => row && row.id === post.id);
-  const acceptedActors = probePost
-    ? [...topLevelAiCommenterIds(probe, probePost)].filter((id) => !beforeActors.has(id))
-    : [];
+  const baseActors = new Set(
+    safeAiComments(baseOut)
+      .map((row) => aiVoice(w, row && (row.id !== undefined ? row.id : row.name)))
+      .filter(Boolean)
+  );
+  const acceptedActors = [...baseActors].filter((id) => !beforeActors.has(id));
 
   if (acceptedActors.length >= minWanted) return baseOut;
+
+  /* PERFORMANCE HARD CAP: never launch a second large AI generation merely to
+   * fill a comment quota. A natural partial wave is preferable to freezing the UI. */
+  return baseOut;
 
   const missing = minWanted - acceptedActors.length;
   const rawActors = new Set(
@@ -27455,16 +27452,6 @@ if (!parent && tag) {
   }
 }
 
-/* v26 COMMENT ANTI-SPAM HARD GUARD: model/queue retries cannot give the same
- * AI multiple top-level comments on one post. Replies remain allowed. */
-if (
-  !parent &&
-  !isHuman(n, who) &&
-  p.comments.some((x) => x && !x.parent && x.authorId === who)
-) {
-  return;
-}
-
 const pc =
   parent &&
   p.comments.find(
@@ -28130,12 +28117,12 @@ function fairCommentCast(w, targetId, post = null) {
       .map((comment) => comment.authorId)
   );
 
-  /* v26 COMMENT ANTI-SPAM: once an AI has left a top-level comment on this
-   * post, do not cast it for another top-level round. It may still participate
-   * through genReply/applyReplies, so conversations can continue naturally. */
   const freshVoices = pool.filter((row) => !alreadyTopLevel.has(row.c.id));
+  const orderedPool = freshVoices.length >= Math.min(4, pool.length)
+    ? freshVoices.concat(pool.filter((row) => alreadyTopLevel.has(row.c.id)))
+    : pool;
 
-  return freshVoices
+  return orderedPool
     .map((x) => x.c)
     .slice(0, castLimit);
 }
@@ -28464,6 +28451,21 @@ Formátum:
 }${TAIL}`,
     { maxTokens: 900 }
   );
+
+  /* FAST PLAYER-REPLY PATH: direct player replies need one direct AI answer,
+   * not the optional background repair/bystander chain. */
+  if (isHuman(w, comment.authorId)) {
+    const responder = forcedResponder || directResponder;
+    if (responder && !isHuman(w, responder.id)) {
+      return {
+        ...(out || {}),
+        comments: safeAiComments(out).filter((row) => {
+          const who = aiVoice(w, row && (row.id !== undefined ? row.id : row.name));
+          return who === responder.id;
+        }).slice(0, 1),
+      };
+    }
+  }
 
   /*
    * v40 FRIENDLY SOCIAL REPAIR
@@ -31450,6 +31452,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 postId: id,
                 commentId: madeId,
                 parentId: parent || "",
+                targetId: primaryTargetId || "",
+                isDirectReplyToAi: Boolean(
+                  parent && currentParent && !isHuman(w, currentParent.authorId)
+                ),
               });
             }
           }}
@@ -52530,10 +52536,7 @@ async function runSimulationAction(view, update, action, addImage) {
     const out = await genWorldStep(view, false, hours);
     if (!out || !Array.isArray(out.posts)) return null;
 
-    const probe = JSON.parse(JSON.stringify(view));
-    const visible = applyWorldStep(probe, out);
-    if (!visible && !(Array.isArray(out.events) && out.events.length)) return null;
-
+    /* PERFORMANCE: apply once. Full-world cloning here blocked the UI. */
     update((n) => {
       applyWorldStep(n, out);
       advanceWorldClock(n, hours);
@@ -52633,11 +52636,7 @@ async function runSimulationAction(view, update, action, addImage) {
     }
     if (!out || !String(out.text || "").trim()) return null;
 
-    const gossipProbe = JSON.parse(JSON.stringify(view));
-    const probeCandidate = forcedRoleplayGossipCandidate(gossipProbe, sceneId) || candidate;
-    const probePost = publishGossipMediaStory(gossipProbe, probeCandidate, out);
-    if (!probePost) return null;
-
+    /* PERFORMANCE: publish once; the publisher has its own validity guards. */
     update((n) => {
       const liveCandidate = forcedRoleplayGossipCandidate(n, sceneId) || candidate;
       publishGossipMediaStory(n, liveCandidate, out);
@@ -52845,9 +52844,9 @@ async function runSimulationAction(view, update, action, addImage) {
 
   if (action.type === "gossip-spread") {
     const payload = action.payload || {};
-    const probe = JSON.parse(JSON.stringify(view));
-    if (!applyGossipPropagationRound(probe, payload)) return null;
-    update((n) => { applyGossipPropagationRound(n, payload); });
+    let changed = false;
+    update((n) => { changed = Boolean(applyGossipPropagationRound(n, payload)); });
+    if (!changed) return null;
     return "gossip-spread";
   }
 
@@ -52857,9 +52856,9 @@ async function runSimulationAction(view, update, action, addImage) {
     const rumor = state && state.rumors.find((r) => r && r.id === payload.rumorId);
     if (!rumor) return null;
     const out = await genGossipNetworkEcho(view, payload);
-    const probe = JSON.parse(JSON.stringify(view));
-    if (!applyGossipNetworkEcho(probe, payload, out)) return null;
-    update((n) => { applyGossipNetworkEcho(n, payload, out); });
+    let changed = false;
+    update((n) => { changed = Boolean(applyGossipNetworkEcho(n, payload, out)); });
+    if (!changed) return null;
     return "gossip-echo";
   }
 
@@ -52910,14 +52909,7 @@ async function runSimulationAction(view, update, action, addImage) {
         candidate
       );
 
-    const gossipProbe = JSON.parse(JSON.stringify(view));
-    const probePost = publishGossipMediaStory(
-      gossipProbe,
-      candidate,
-      out
-    );
-    if (!probePost) return null;
-
+    /* PERFORMANCE: no validation clone. publishGossipMediaStory validates during commit. */
     update((n) => {
       publishGossipMediaStory(
         n,
@@ -52956,10 +52948,9 @@ async function runSimulationAction(view, update, action, addImage) {
     const post = (view.posts || []).find((p) => p && p.id === postId);
     if (!post || !post.gossipStory || post.gossipStory.rumorEvolvedAt) return null;
     const out = await genRumorEvolution(view, post);
-    const rumorProbe = JSON.parse(JSON.stringify(view));
-    const probePost = publishRumorEvolution(rumorProbe, post.id, out);
-    if (!probePost) return null;
-    update((n) => { publishRumorEvolution(n, post.id, out); });
+    let changed = false;
+    update((n) => { changed = Boolean(publishRumorEvolution(n, post.id, out)); });
+    if (!changed) return null;
     return "rumor-evolution";
   }
 
@@ -52982,25 +52973,14 @@ async function runSimulationAction(view, update, action, addImage) {
        JSON, use a small canon-safe fallback rather than silently losing the turn. */
     if (!out || out.skip === true) out = fallbackPopupEventResponse(view, seed);
 
-    /* React state-updater is async, ezért előbb egy másolaton validáljuk. */
-    let probe = JSON.parse(JSON.stringify(view));
-    let probeEvent = addPopupEvent(probe, seed, out);
-    if (!probeEvent) {
-      out = fallbackPopupEventResponse(view, seed);
-      probe = JSON.parse(JSON.stringify(view));
-      probeEvent = out ? addPopupEvent(probe, seed, out) : null;
-    }
-    if (!probeEvent) return null;
-
-    /* We already re-checked the live Event lock immediately after generation.
-       Commit the validated popup deterministically now. If the player opens an
-       Event in the tiny interval after this check, currentPopupEvent() hides the
-       row until the Event is over instead of falsely marking a non-commit as a
-       successful popup. */
+    /* PERFORMANCE: addPopupEvent performs the authoritative guards during commit.
+       Do not JSON-clone the complete world just to validate a popup. */
+    let committed = false;
     update((n) => {
-      addPopupEvent(n, seed, out);
+      committed = Boolean(addPopupEvent(n, seed, out));
       ensureSimState(n).popupAttemptAt = now();
     });
+    if (!committed) return null;
     return "popup-event";
   }
 
@@ -53331,12 +53311,10 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : rawOut;
 
-    const replyProbe = JSON.parse(JSON.stringify(view));
-    const replyCount = applyReplies(replyProbe, post.id, comment.id, out);
-    if (!replyCount) return null;
-
+    /* PERFORMANCE: commit once. The old full-world JSON clone froze the main thread. */
+    let replyCount = 0;
     update((n) => {
-      applyReplies(
+      replyCount = applyReplies(
         n,
         post.id,
         /* mindig közvetlenül arra a kommentre válaszoljon, ami kiváltotta */
@@ -53345,7 +53323,7 @@ async function runSimulationAction(view, update, action, addImage) {
       );
     });
 
-    return "reply";
+    return replyCount ? "reply" : null;
   }
 
   if (action.type === "comments") {
@@ -53375,7 +53353,7 @@ async function runSimulationAction(view, update, action, addImage) {
       return null;
     }
 
-    const maxComments = Math.max(2, Math.min(20, Number(action.payload && action.payload.maxComments) || 14));
+    const maxComments = Math.max(2, Math.min(8, Number(action.payload && action.payload.maxComments) || 6));
     const minComments = Math.max(
       0,
       Math.min(maxComments, Number(action.payload && action.payload.minComments) || 0)
@@ -53403,29 +53381,29 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : quotaOut;
 
-    const commentsProbe = JSON.parse(JSON.stringify(view));
-    const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
-
-    if (!visibleReactionCount) {
-      if (isGuaranteedCoverage) {
-        update((n) => {
-          const failedPost = (n.posts || []).find((row) => row && row.id === post.id);
-          if (!failedPost) return;
+    /* PERFORMANCE: commit once. Do not clone the entire world for a probe. */
+    let visibleReactionCount = 0;
+    update((n) => {
+      visibleReactionCount = applyComments(n, post.id, out, label);
+      if (!visibleReactionCount && isGuaranteedCoverage) {
+        const failedPost = (n.posts || []).find((row) => row && row.id === post.id);
+        if (failedPost) {
           failedPost.commentCoverageAttemptAt = now();
           failedPost.commentCoverageAttempts =
             Math.max(0, Math.round(Number(failedPost.commentCoverageAttempts) || 0)) + 1;
-        });
+        }
       }
-      return null;
-    }
+    });
+
+    if (!visibleReactionCount) return null;
 
     update((n) => {
       const livePost = (n.posts || []).find((p) => p && p.id === post.id);
       const beforeIds = new Set(safePostComments(livePost).map((c) => c.id));
       const beforeTopLevelCount = livePost ? topLevelAiCommentCount(n, livePost) : 0;
 
-      applyComments(n, post.id, out, label);
-
+      /* The authoritative comment mutation already happened in the first update.
+       * Do not apply it a second time. */
       const refreshedPost = (n.posts || []).find((p) => p && p.id === post.id);
       if (refreshedPost && isGuaranteedCoverage) {
         refreshedPost.commentCoverageAttemptAt = now();
@@ -54669,16 +54647,8 @@ if (targetNote) {
     return null;
   }
 
-  const worldProbe = JSON.parse(JSON.stringify(view));
-  const visiblePostsCreated = applyWorldStep(
-    worldProbe,
-    out
-  );
-
-  if (!visiblePostsCreated) {
-    return null;
-  }
-
+  /* PERFORMANCE: commit the world step once. A full-world JSON clone here was
+   * one of the largest synchronous stalls in large worlds. */
   update((n) => {
     const beforePostIds = new Set((n.posts || []).map((p) => p && p.id).filter(Boolean));
     applyWorldStep(n, out);
@@ -56339,10 +56309,15 @@ const signOut = useCallback(async () => {
       const live = viewRef.current;
       const livePost = live && (live.posts || []).find((p) => p && p.id === event.postId);
       const liveComment = livePost && safePostComments(livePost).find((c) => c && c.id === event.commentId);
-      const naturalTarget = livePost && liveComment
+      const explicitTarget =
+        event.isDirectReplyToAi && event.targetId && live &&
+        !isHuman(live, event.targetId) && charById(live, event.targetId)
+          ? { id: event.targetId, reason: "parent", score: 100 }
+          : null;
+      const naturalTarget = explicitTarget || (livePost && liveComment
         ? naturalCommentReplyTargets(live, livePost, liveComment)
             .find((row) => commentWarrantsAiReply(live, livePost, liveComment, row.id))
-        : null;
+        : null);
 
       const openReplyCue = liveComment
         ? commentReplyCueScore(liveComment.text)
@@ -56365,10 +56340,10 @@ const signOut = useCallback(async () => {
             postId: event.postId,
             commentId: event.commentId,
             rootId: event.commentId,
-            targetId: naturalTarget ? naturalTarget.id : "",
-            trigger: "player-comment",
+            targetId: naturalTarget ? naturalTarget.id : (event.targetId || ""),
+            trigger: event.isDirectReplyToAi ? "player-direct-reply" : "player-comment",
           },
-          "event"
+          event.isDirectReplyToAi ? "manual" : "event"
         )
       );
     }
