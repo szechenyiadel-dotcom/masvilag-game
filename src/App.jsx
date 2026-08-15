@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v23 — REQUEST REACTIONS PERFORMANCE ONLY — 20260815_2118 */
+/* MÁSVILÁG BUILD v24 — INTERACTION FREEZE FIX — 20260815_2132 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -18672,7 +18672,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v23-request-reactions-performance";
+const BUILD_VERSION = "v24-interaction-freeze-fix";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -28951,7 +28951,7 @@ function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
   if (todayCount < AUTONOMOUS_IMAGE_START_TEXT_POSTS) return false;
 
   if (
-    autonomousAiImagePostsThisGameDay(w).length >=
+    autonomousAiImagePostsThisGameDay(w) >=
     AUTONOMOUS_DAILY_IMAGE_HARD_MAX
   ) {
     return false;
@@ -42545,29 +42545,50 @@ function selectGossipStoryCandidate(w) {
     return null;
   }
 
-  const eligible =
-    (w.socialEvents || [])
-      .filter(
-        (event) =>
-          gossipEventEligibleForMedia(
+  /*
+   * PERFORMANCE v24:
+   * Array.sort used to call gossipEventBaseScore repeatedly for the same
+   * events (O(n log n) expensive scoring). Compute each score exactly once,
+   * preserve original order as the tie-breaker, then pass the same ordered
+   * event list to the candidate builder.
+   */
+  const rankedEligible = [];
+
+  (w.socialEvents || []).forEach(
+    (event, index) => {
+      if (
+        !gossipEventEligibleForMedia(
+          w,
+          event,
+          mode
+        )
+      ) {
+        return;
+      }
+
+      rankedEligible.push({
+        event,
+        index,
+        score:
+          gossipEventBaseScore(
             w,
             event,
             mode
-          )
-      )
-      .sort(
-        (a, b) =>
-          gossipEventBaseScore(
-            w,
-            b,
-            mode
-          ) -
-          gossipEventBaseScore(
-            w,
-            a,
-            mode
-          )
-      );
+          ),
+      });
+    }
+  );
+
+  rankedEligible.sort(
+    (a, b) =>
+      b.score - a.score ||
+      a.index - b.index
+  );
+
+  const eligible =
+    rankedEligible.map(
+      (row) => row.event
+    );
 
   const primary =
     eligible[0];
@@ -48892,8 +48913,18 @@ function recordSocialEvent(
    * popularity/hype számításban, de nem fut végig fölöslegesen
    * az egész karaktergárdán.
    */
+  const targetOnlyStatTypes =
+    entry.type === "like" ||
+    entry.type === "comment" ||
+    entry.type === "reply" ||
+    entry.type === "repost";
+
   const touchedIds = [
-    entry.actorId,
+    ...(
+      targetOnlyStatTypes
+        ? []
+        : [entry.actorId]
+    ),
     ...(entry.targetIds || []),
   ]
     .filter(Boolean);
@@ -54359,6 +54390,15 @@ export default function App() {
   const autosavePending = useRef(false);
   const lastEmergencyBackupAt = useRef(0);
 
+  /*
+   * PERFORMANCE v24:
+   * postMessage({ world }) must structured-clone the whole JSON-compatible
+   * world before the Worker can stringify it. That clone happens on the main
+   * browser thread. Never begin it while the user is actively clicking,
+   * typing or scrolling.
+   */
+  const lastUiInteractionAt = useRef(now());
+
   const idleSaveHandle = useRef(null);
   const mediaSaveBusy = useRef(false);
   const syncRefreshBusy = useRef(false);
@@ -54371,6 +54411,31 @@ export default function App() {
 
   wRef.current = world;
   mediaRef.current = media;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const markUiActivity = () => {
+      lastUiInteractionAt.current = now();
+    };
+
+    const passiveCapture = {
+      passive: true,
+      capture: true,
+    };
+
+    window.addEventListener("pointerdown", markUiActivity, passiveCapture);
+    window.addEventListener("touchstart", markUiActivity, passiveCapture);
+    window.addEventListener("wheel", markUiActivity, passiveCapture);
+    window.addEventListener("keydown", markUiActivity, true);
+
+    return () => {
+      window.removeEventListener("pointerdown", markUiActivity, true);
+      window.removeEventListener("touchstart", markUiActivity, true);
+      window.removeEventListener("wheel", markUiActivity, true);
+      window.removeEventListener("keydown", markUiActivity, true);
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -55741,7 +55806,27 @@ const signOut = useCallback(async () => {
     if (!current.chats || typeof current.chats !== "object" || Array.isArray(current.chats)) current.chats = {};
     if (!Array.isArray(current.posts)) current.posts = [];
     if (!Array.isArray(current.socialEvents)) current.socialEvents = [];
+
+    const perfStart =
+      typeof performance !== "undefined" &&
+      typeof performance.now === "function"
+        ? performance.now()
+        : 0;
+
     fn(current);
+
+    if (perfStart) {
+      const elapsed =
+        performance.now() -
+        perfStart;
+
+      if (elapsed >= 80) {
+        console.warn(
+          `[mv-perf] slow world mutation: ${Math.round(elapsed)}ms`
+        );
+      }
+    }
+
     current.rev = (current.rev || 0) + 1;
     setWorld({ ...current });
     return true;
@@ -56498,15 +56583,14 @@ const signOut = useCallback(async () => {
       if (
         worldSaveBusy.current
       ) {
+        /*
+         * PERFORMANCE v24:
+         * A save already owns the network lane. Publishing a fake root copy
+         * here used to rerender the entire active tab solely to retry saving.
+         * The coalescing pipeline already knows how to run the latest snapshot.
+         */
+        autosavePending.current = true;
         setSaveState("retry");
-
-        setTimeout(() => {
-          setWorld((cur) => {
-            if (!cur) return cur;
-            return { ...cur };
-          });
-        }, 700);
-
         return;
       }
 
@@ -56782,19 +56866,109 @@ const signOut = useCallback(async () => {
       }
     };
 
-    /* Serialization/cloning is the heaviest synchronous operation in this
-     * component. Do it only during an idle slice so typing, scrolling and
-     * opening tabs never have to wait for a multi-MB world snapshot. */
-    timer.current = setTimeout(() => {
-      if (typeof requestIdleCallback === "function") {
-        idleSaveHandle.current = requestIdleCallback(
-          () => { idleSaveHandle.current = null; void runSave(); },
-          { timeout: 5000 }
+    /*
+     * PERFORMANCE v24 — TRUE INTERACTION-SAFE AUTOSAVE
+     *
+     * The Worker does the JSON.stringify off-thread, but sending the world to
+     * it still requires a synchronous structured clone on the browser thread.
+     * requestIdleCallback({timeout:5000}) could FORCE that clone while the
+     * player was scrolling/clicking, which produced the "random" freezes.
+     *
+     * Keep autosave, but only begin the full snapshot after a real quiet
+     * window. Continuous play simply postpones the snapshot until the player
+     * stops interacting for a moment.
+     */
+    const UI_QUIET_MS = 2200;
+
+    const uiInputPending = () => {
+      try {
+        return Boolean(
+          typeof navigator !== "undefined" &&
+          navigator.scheduling &&
+          typeof navigator.scheduling.isInputPending === "function" &&
+          navigator.scheduling.isInputPending({
+            includeContinuous: true,
+          })
         );
-      } else {
-        void runSave();
+      } catch (e) {
+        return false;
       }
-    }, 4500);
+    };
+
+    const scheduleQuietSave = () => {
+      const quietFor =
+        now() -
+        Number(lastUiInteractionAt.current || 0);
+
+      if (
+        quietFor < UI_QUIET_MS ||
+        uiInputPending()
+      ) {
+        const waitMs =
+          Math.max(
+            350,
+            UI_QUIET_MS - quietFor + 120
+          );
+
+        timer.current =
+          setTimeout(
+            scheduleQuietSave,
+            waitMs
+          );
+
+        return;
+      }
+
+      const executeIfStillQuiet = () => {
+        idleSaveHandle.current = null;
+
+        const stillQuietFor =
+          now() -
+          Number(lastUiInteractionAt.current || 0);
+
+        if (
+          stillQuietFor < UI_QUIET_MS ||
+          uiInputPending()
+        ) {
+          timer.current =
+            setTimeout(
+              scheduleQuietSave,
+              450
+            );
+          return;
+        }
+
+        void runSave();
+      };
+
+      if (
+        typeof requestIdleCallback ===
+        "function"
+      ) {
+        /*
+         * No short forcing timeout: the quiet gate above is the authority.
+         * A long timeout prevents pathological starvation, but the callback
+         * rechecks UI activity before it is allowed to snapshot.
+         */
+        idleSaveHandle.current =
+          requestIdleCallback(
+            executeIfStillQuiet,
+            { timeout: 30000 }
+          );
+      } else {
+        timer.current =
+          setTimeout(
+            executeIfStillQuiet,
+            250
+          );
+      }
+    };
+
+    timer.current =
+      setTimeout(
+        scheduleQuietSave,
+        4500
+      );
 
     return () => {
       if (timer.current) clearTimeout(timer.current);
@@ -57035,48 +57209,55 @@ const signOut = useCallback(async () => {
 );
         }
       }
-      update((n) => {
-        const liveHistoryEpoch = Math.max(
-          0,
-          Math.floor(Number(n && n.historyEpoch) || 0)
-        );
+      /*
+       * PERFORMANCE v24:
+       * runSimulationAction() publishes the visible content mutation itself.
+       * The block below is scheduler bookkeeping only (queue/done/cadence).
+       * Mutating the authoritative live world is enough; publishing another
+       * root snapshot here made every AI action render the Feed twice.
+       *
+       * The already-scheduled autosave reads wRef.current, so successful action
+       * metadata is still included in the persisted snapshot.
+       */
+      {
+        const n = wRef.current;
 
-        /* A pre-restart action may finish later. Do not let it alter the fresh
-         * scheduler clocks/done-state after its content commit was rejected. */
-        if (liveHistoryEpoch !== actionHistoryEpoch) {
-          const sim = ensureSimState(n);
-          sim.running = "";
-          return;
-        }
-
-        if (
-          queued &&
-          action &&
-          queued.id === action.id
-        ) {
-          simDropQueued(n, queued.id);
-        }
-
-        if (ok) {
-          /*
-           * Sikeres action után frissül a megfelelő óra. A local/reactive
-           * actionök nem érintik sim.contentAt-ot, tehát nem éheztetik a feedet.
-           */
-          markSimulationCadence(
-            n,
-            action
+        if (n) {
+          const liveHistoryEpoch = Math.max(
+            0,
+            Math.floor(Number(n && n.historyEpoch) || 0)
           );
-          simMarkDone(n, action);
 
-          const sim = ensureSimState(n);
-          sim.lastSuccessAt = now();
-          sim.lastError = "";
-        } else {
-          const sim = ensureSimState(n);
-          sim.running = "";
-          sim.lastAttemptAt = now();
+          if (liveHistoryEpoch !== actionHistoryEpoch) {
+            const sim = ensureSimState(n);
+            sim.running = "";
+          } else {
+            if (
+              queued &&
+              action &&
+              queued.id === action.id
+            ) {
+              simDropQueued(n, queued.id);
+            }
+
+            if (ok) {
+              markSimulationCadence(
+                n,
+                action
+              );
+              simMarkDone(n, action);
+
+              const sim = ensureSimState(n);
+              sim.lastSuccessAt = now();
+              sim.lastError = "";
+            } else {
+              const sim = ensureSimState(n);
+              sim.running = "";
+              sim.lastAttemptAt = now();
+            }
+          }
         }
-      });
+      }
       autoRunning.current = false;
       autoRunningSince.current = 0;
       if (alive) setAutoBusy(false);
