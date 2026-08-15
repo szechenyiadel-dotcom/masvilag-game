@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v12.1 — DEEP PERFORMANCE + WHITE SCREEN + RELATIONSHIP — 20260815_1954 */
+/* MÁSVILÁG BUILD v13 — PERFORMANCE ONLY — 20260815_1942 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -723,6 +723,13 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   padding:14px;
   border-bottom:1px solid var(--line);
   background:transparent;
+}
+
+/* PERFORMANCE v13: Chromium can skip off-screen feed layout/paint entirely. */
+.social-post,
+.social-repost-wrap {
+  content-visibility:auto;
+  contain-intrinsic-size:420px;
 }
 .social-post.highlight {
   background:rgba(217,117,143,.06);
@@ -3294,8 +3301,16 @@ function isMediaAccount(w, id) {
 
 // Bármely AKTÍV szereplő azonosító alapján: játékos, AI-karakter vagy médiaprofil.
 // A karakterlap Connections / Kapcsolódások mezőjében említett emberek NEM entitások.
+/*
+ * PERFORMANCE v13:
+ * Cache only id -> ARRAY INDEX, never the character object itself. This stays
+ * correct with the app's in-place character mutations while avoiding thousands
+ * of repeated Array.find scans during large renders.
+ */
+const CHAR_ARRAY_INDEX_CACHE = new WeakMap();
+
 function charById(w, id) {
-  if (!id) return null;
+  if (!w || !id) return null;
 
   if (
     w.players &&
@@ -3304,13 +3319,67 @@ function charById(w, id) {
     return w.players[id];
   }
 
-  const core =
-    (w.chars || []).find(
-      (c) =>
-        c.id === id
+  const chars =
+    Array.isArray(w.chars)
+      ? w.chars
+      : [];
+
+  let cached =
+    CHAR_ARRAY_INDEX_CACHE.get(
+      chars
     );
 
-  if (core) return core;
+  if (
+    !cached ||
+    cached.length !== chars.length
+  ) {
+    const byId = new Map();
+
+    for (
+      let i = 0;
+      i < chars.length;
+      i++
+    ) {
+      const c = chars[i];
+
+      if (
+        c &&
+        c.id
+      ) {
+        byId.set(
+          c.id,
+          i
+        );
+      }
+    }
+
+    cached = {
+      length: chars.length,
+      byId,
+    };
+
+    CHAR_ARRAY_INDEX_CACHE.set(
+      chars,
+      cached
+    );
+  }
+
+  const index =
+    cached.byId.get(id);
+
+  if (
+    index !== undefined
+  ) {
+    const core =
+      chars[index];
+
+    if (
+      core &&
+      core.id === id
+    ) {
+      return core;
+    }
+  }
 
   return (
     allGossipMediaAccounts(w)
@@ -18456,6 +18525,302 @@ function cloneWorldState(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+/* ---------- PERFORMANCE v13: NON-BLOCKING WORLD AUTOSAVE ---------- */
+let WORLD_SAVE_SERIALIZER = null;
+let WORLD_SAVE_SERIALIZER_SEQ = 0;
+const WORLD_SAVE_SERIALIZER_WAITERS = new Map();
+
+function ensureWorldSaveSerializer() {
+  if (WORLD_SAVE_SERIALIZER) return WORLD_SAVE_SERIALIZER;
+
+  if (
+    typeof Worker === "undefined" ||
+    typeof Blob === "undefined" ||
+    typeof URL === "undefined" ||
+    typeof URL.createObjectURL !== "function"
+  ) {
+    return null;
+  }
+
+  try {
+    const source = `
+self.onmessage = function(event) {
+  const msg = event && event.data ? event.data : {};
+  try {
+    const world = msg.world || null;
+    const worldJson = JSON.stringify(world);
+
+    let contentJson = "";
+    if (world && typeof world === "object") {
+      const copy = Object.assign({}, world);
+      delete copy.rev;
+      delete copy.syncRev;
+      if (copy.universe && typeof copy.universe === "object") {
+        copy.universe = Object.assign({}, copy.universe);
+        delete copy.universe.at;
+      }
+      contentJson = JSON.stringify(copy);
+    }
+
+    self.postMessage({
+      id: msg.id,
+      ok: true,
+      worldJson: worldJson,
+      contentJson: contentJson
+    });
+  } catch (error) {
+    self.postMessage({
+      id: msg.id,
+      ok: false,
+      error: error && error.message ? error.message : String(error || "serialize failed")
+    });
+  }
+};`;
+
+    const url = URL.createObjectURL(
+      new Blob([source], { type: "text/javascript" })
+    );
+
+    WORLD_SAVE_SERIALIZER = new Worker(url);
+
+    WORLD_SAVE_SERIALIZER.onmessage = (event) => {
+      const msg = event && event.data ? event.data : {};
+      const waiter = WORLD_SAVE_SERIALIZER_WAITERS.get(msg.id);
+      if (!waiter) return;
+
+      WORLD_SAVE_SERIALIZER_WAITERS.delete(msg.id);
+
+      if (msg.ok) {
+        waiter.resolve({
+          worldJson: String(msg.worldJson || ""),
+          contentJson: String(msg.contentJson || ""),
+        });
+      } else {
+        waiter.reject(
+          new Error(msg.error || "World serialization failed.")
+        );
+      }
+    };
+
+    WORLD_SAVE_SERIALIZER.onerror = () => {
+      for (const waiter of WORLD_SAVE_SERIALIZER_WAITERS.values()) {
+        waiter.reject(
+          new Error("World serialization worker failed.")
+        );
+      }
+
+      WORLD_SAVE_SERIALIZER_WAITERS.clear();
+
+      try {
+        WORLD_SAVE_SERIALIZER.terminate();
+      } catch (e) {}
+
+      WORLD_SAVE_SERIALIZER = null;
+    };
+
+    return WORLD_SAVE_SERIALIZER;
+  } catch (e) {
+    WORLD_SAVE_SERIALIZER = null;
+    return null;
+  }
+}
+
+function serializeWorldForSave(world) {
+  const worker = ensureWorldSaveSerializer();
+
+  if (!worker) {
+    return Promise.resolve().then(() => {
+      const worldJson = JSON.stringify(world);
+      const copy = { ...world };
+      delete copy.rev;
+      delete copy.syncRev;
+
+      if (copy.universe && typeof copy.universe === "object") {
+        copy.universe = { ...copy.universe };
+        delete copy.universe.at;
+      }
+
+      return {
+        worldJson,
+        contentJson: JSON.stringify(copy),
+      };
+    });
+  }
+
+  const id = ++WORLD_SAVE_SERIALIZER_SEQ;
+
+  return new Promise((resolve, reject) => {
+    WORLD_SAVE_SERIALIZER_WAITERS.set(id, { resolve, reject });
+
+    try {
+      worker.postMessage({ id, world });
+    } catch (e) {
+      WORLD_SAVE_SERIALIZER_WAITERS.delete(id);
+      reject(e);
+    }
+  });
+}
+
+async function writeWorldSnapshotSerialized(code, worldMeta, worldJson, shared) {
+  if (!code || !worldJson) return false;
+
+  const id = `${now()}-${uid()}`;
+  const entry = {
+    id,
+    code,
+    rev: Number((worldMeta && worldMeta.rev) || 0),
+    syncRev: worldSyncRev(worldMeta),
+    savedAt: now(),
+    updatedAt: Number(
+      (worldMeta && worldMeta.universe && worldMeta.universe.at) || 0
+    ),
+  };
+
+  const entryJson = JSON.stringify(entry);
+  const payload =
+    entryJson.slice(0, -1) +
+    `,"gameState":${worldJson}}`;
+
+  if (
+    !(await writeBigScoped(
+      SNAP_DATA_KEY(code, shared, id),
+      payload,
+      shared
+    ))
+  ) {
+    return false;
+  }
+
+  const existing = await loadSaveIndex(code, shared);
+  const next = [entry]
+    .concat(existing.filter((x) => x && x.id !== id))
+    .sort((a, b) => {
+      if ((b.rev || 0) !== (a.rev || 0)) {
+        return (b.rev || 0) - (a.rev || 0);
+      }
+
+      return (b.savedAt || 0) - (a.savedAt || 0);
+    });
+
+  const keep = next.slice(0, SAVE_HISTORY_LIMIT);
+  const stale = next.slice(SAVE_HISTORY_LIMIT);
+
+  await writeSaveIndex(code, shared, keep);
+
+  for (let i = 0; i < stale.length; i++) {
+    await dropBigScoped(
+      SNAP_DATA_KEY(code, shared, stale[i].id),
+      shared
+    );
+  }
+
+  return true;
+}
+
+async function saveWorldMergedSerialized(worldMeta, worldJson) {
+  if (!worldMeta || !worldMeta.code || !worldJson) {
+    return { mode: "memory" };
+  }
+
+  let snapshotOk = false;
+  let primaryOk = false;
+
+  try {
+    snapshotOk =
+      await writeWorldSnapshotSerialized(
+        worldMeta.code,
+        worldMeta,
+        worldJson,
+        false
+      );
+  } catch (e) {
+    snapshotOk = false;
+  }
+
+  try {
+    primaryOk =
+      await writeBigScoped(
+        KEY(worldMeta.code),
+        worldJson,
+        false
+      );
+  } catch (e) {
+    primaryOk = false;
+  }
+
+  return {
+    mode:
+      snapshotOk || primaryOk
+        ? "local"
+        : "memory",
+  };
+}
+
+async function serverSaveWorldSerialized(worldJson, expectedSyncRev) {
+  const cleanSyncRev =
+    Math.max(
+      0,
+      Math.floor(
+        Number(expectedSyncRev) || 0
+      )
+    );
+
+  const res =
+    await fetch(
+      backendUrl("/world/save"),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body:
+          `{"world":${worldJson},"syncRev":${cleanSyncRev}}`,
+      }
+    );
+
+  if (res.ok) {
+    /*
+     * The server echoes the complete multi-MB world. On success the body is
+     * redundant: the endpoint increments syncRev by exactly one. Not parsing
+     * that huge echo removes another long main-thread stall.
+     */
+    if (
+      res.body &&
+      typeof res.body.cancel === "function"
+    ) {
+      try {
+        await res.body.cancel();
+      } catch (e) {}
+    }
+
+    return {
+      ok: true,
+      syncRev: cleanSyncRev + 1,
+    };
+  }
+
+  let data = null;
+
+  try {
+    data = await res.json();
+  } catch (e) {
+    data = null;
+  }
+
+  const err =
+    new Error(
+      (data && data.error) ||
+      `HTTP ${res.status}`
+    );
+
+  err.status = res.status;
+  err.data = data;
+
+  throw err;
+}
+/* ---------- END PERFORMANCE v13 AUTOSAVE ---------- */
+
 const AUTO = "masvilag:auto";
 /*
  * LIVE WORLD FIXED MODE
@@ -29486,6 +29851,22 @@ function AlbumPick({ items, value, onPick }) {
   );
 }
 
+const MemoNotesStrip = React.memo(NotesStrip);
+
+/*
+ * Local Feed UI state (typing, media toggle, profile modal) must not rerender
+ * every heavy post card. A world revision change still rerenders posts exactly
+ * as before, so comments/likes/reposts remain immediate.
+ */
+const MemoPost = React.memo(
+  Post,
+  (prev, next) =>
+    prev.renderVersion === next.renderVersion &&
+    prev.post === next.post &&
+    prev.highlight === next.highlight &&
+    prev.w === next.w
+);
+
 function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal }) {
   const { tt } = useLang();
   const { media } = useMedia();
@@ -29693,7 +30074,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       if (post && post.id) map.set(post.id, post);
     });
     return map;
-  }, [w.posts]);
+  }, [w.posts, w.rev]);
 
   const followingIds = React.useMemo(() => {
     const set = new Set();
@@ -29703,65 +30084,118 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   }, [w, w.meId]);
 
   /*
-   * Feed arrays are maintained newest-first (posts/reposts unshift). We only
-   * need enough recent candidates to produce the existing 40-item UI. Scanning
-   * thousands of historical posts on every render was a major source of lag.
-   * We stop after 80 qualifying candidates, which preserves the visible latest
-   * 40 while leaving the underlying world/history untouched.
+   * PERFORMANCE v13:
+   * Composer/local UI state used to rebuild the complete feed candidate list
+   * on every keystroke. Recompute only when the actual world revision or feed
+   * mode changes.
    */
-  const baseItems = [];
-  const baseSource = w.posts || [];
-  for (let i = 0; i < baseSource.length && baseItems.length < 80; i++) {
-    const post = baseSource[i];
-    if (!post) continue;
-    if (
-      feedMode === "following" &&
-      post.authorId !== w.meId &&
-      !followingIds.has(post.authorId)
-    ) continue;
-    baseItems.push({
-      kind: "post",
-      id: "post:" + post.id,
-      ts: Number(post.ts) || 0,
-      post,
-      repost: null,
-    });
-  }
-
-  const repostItems = [];
-  const repostSource = repostRows(w);
-  for (let i = 0; i < repostSource.length && repostItems.length < 80; i++) {
-    const repost = repostSource[i];
-    if (!repost) continue;
-    if (
-      feedMode === "following" &&
-      repost.actorId !== w.meId &&
-      !followingIds.has(repost.actorId)
-    ) continue;
-
-    const post = postById.get(repost.postId);
-    const reposter = socialProfileMap.get(repost.actorId);
-    if (!post || !reposter) continue;
-
-    repostItems.push({
-      kind: "repost",
-      id: "repost:" + repost.id,
-      ts: Number(repost.ts) || 0,
-      post,
-      repost,
-    });
-  }
-
   const timelineItems =
-    baseItems
-      .concat(repostItems)
-      .sort(
-        (a, b) =>
-          b.ts - a.ts
-      )
-      .slice(0, 40);
+    React.useMemo(
+      () => {
+        const baseItems = [];
+        const baseSource = w.posts || [];
 
-  const visibleTimelineItems = timelineItems;
+        for (
+          let i = 0;
+          i < baseSource.length &&
+          baseItems.length < 80;
+          i++
+        ) {
+          const post =
+            baseSource[i];
+
+          if (!post) continue;
+
+          if (
+            feedMode === "following" &&
+            post.authorId !== w.meId &&
+            !followingIds.has(
+              post.authorId
+            )
+          ) {
+            continue;
+          }
+
+          baseItems.push({
+            kind: "post",
+            id: "post:" + post.id,
+            ts: Number(post.ts) || 0,
+            post,
+            repost: null,
+          });
+        }
+
+        const repostItems = [];
+        const repostSource =
+          repostRows(w);
+
+        for (
+          let i = 0;
+          i < repostSource.length &&
+          repostItems.length < 80;
+          i++
+        ) {
+          const repost =
+            repostSource[i];
+
+          if (!repost) continue;
+
+          if (
+            feedMode === "following" &&
+            repost.actorId !== w.meId &&
+            !followingIds.has(
+              repost.actorId
+            )
+          ) {
+            continue;
+          }
+
+          const post =
+            postById.get(
+              repost.postId
+            );
+
+          const reposter =
+            socialProfileById(
+              w,
+              repost.actorId
+            );
+
+          if (
+            !post ||
+            !reposter
+          ) {
+            continue;
+          }
+
+          repostItems.push({
+            kind: "repost",
+            id: "repost:" + repost.id,
+            ts: Number(repost.ts) || 0,
+            post,
+            repost,
+          });
+        }
+
+        return baseItems
+          .concat(repostItems)
+          .sort(
+            (a, b) =>
+              b.ts - a.ts
+          )
+          .slice(0, 40);
+      },
+      [
+        Number(w.rev || 0),
+        feedMode,
+        w.meId,
+        followingIds,
+        postById,
+      ]
+    );
+
+  const visibleTimelineItems =
+    timelineItems;
 
   return (
     <>
@@ -29808,7 +30242,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         </div>
       </div>
 
-      <NotesStrip
+      <MemoNotesStrip
         w={w}
         update={update}
         setErr={setErr}
@@ -30097,7 +30531,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               </div>
             ) : null}
 
-            <Post
+            <MemoPost
+          renderVersion={Number(w.rev || 0)}
           w={w}
           post={p}
           highlight={hl === p.id}
@@ -55724,361 +56159,344 @@ const signOut = useCallback(async () => {
       const latest = wRef.current || world;
       if (!latest) return;
 
-      /* The world revision is the cheap dirty signal. Avoid serializing the
-       * whole world just to discover that it has changed. The actual snapshot
-       * is created once below, inside the idle slice. */
-      const snap = cloneWorldState(latest);
-      const json = contentOf(snap);
-      if (json === lastSavedContent.current) return;
-      const snapSyncRev = worldSyncRev(snap);
+      /*
+       * PERFORMANCE v13:
+       * no structuredClone + JSON.stringify chain on the React thread.
+       * The worker captures one immutable snapshot and serializes it off-thread.
+       */
+      const snapMeta = {
+        code: latest.code,
+        rev: Number(latest.rev || 0),
+        syncRev: worldSyncRev(latest),
+        universe: {
+          at: Number(
+            (latest.universe && latest.universe.at) || 0
+          ),
+        },
+      };
+
+      let serialized = null;
+
+      try {
+        serialized =
+          await serializeWorldForSave(
+            latest
+          );
+      } catch (e) {
+        serialized = null;
+      }
+
+      if (
+        !serialized ||
+        !serialized.worldJson
+      ) {
+        setSaveState("error");
+        return;
+      }
+
+      const worldJson =
+        serialized.worldJson;
+
+      const json =
+        serialized.contentJson;
+
+      if (
+        json ===
+        lastSavedContent.current
+      ) {
+        return;
+      }
+
+      const snapSyncRev =
+        snapMeta.syncRev;
 
       const offline =
         typeof navigator !== "undefined" &&
         navigator.onLine === false;
 
-      setSaveState(offline ? "local" : "saving");
-        /*
-         * 1. MINDIG emergency local backup.
-         * Ez soha nem merge-el vissza automatikusan online worldbe.
-         */
-        let localResult = null;
+      setSaveState(
+        offline
+          ? "local"
+          : "saving"
+      );
 
+      /*
+       * 1. Emergency local backup.
+       * The already-serialized snapshot is reused for both history + primary
+       * backup, so the main thread does not clone/stringify the world again.
+       */
+      try {
+        await saveWorldMergedSerialized(
+          snapMeta,
+          worldJson
+        );
+      } catch (e) {}
+
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.onLine === false
+      ) {
+        lastSavedContent.current =
+          json;
+
+        setSaveState("local");
+        setSaveAt(now());
+        return;
+      }
+
+      /*
+       * 2. Revision-aware PostgreSQL save.
+       */
+      if (
+        worldSaveBusy.current
+      ) {
+        setSaveState("retry");
+
+        setTimeout(() => {
+          setWorld((cur) => {
+            if (!cur) return cur;
+            return { ...cur };
+          });
+        }, 700);
+
+        return;
+      }
+
+      worldSaveBusy.current = true;
+
+      let serverResult = null;
+      let lastError = null;
+
+      for (
+        let i = 0;
+        i < 3 &&
+        !serverResult;
+        i++
+      ) {
         try {
-          localResult =
-            await saveWorldMerged(
-              snap
+          serverResult =
+            await serverSaveWorldSerialized(
+              worldJson,
+              snapSyncRev
             );
         } catch (e) {
-          localResult = null;
-        }
-
-        if (
-          typeof navigator !== "undefined" &&
-          navigator.onLine === false
-        ) {
-          lastSavedContent.current =
-            json;
-
-          setSaveState("local");
-          setSaveAt(now());
-          return;
-        }
-
-        /*
-         * 2. Revision-aware PostgreSQL save.
-         */
-        let serverResult = null;
-        let lastError = null;
-
-        if (worldSaveBusy.current) {
-          setSaveState("retry");
-
-          setTimeout(() => {
-            setWorld((cur) => {
-              if (!cur) return cur;
-
-              /*
-               * New object identity retriggers the debounced autosave,
-               * while content/rev stay untouched.
-               */
-              return {
-                ...cur,
-              };
-            });
-          }, 700);
-
-          return;
-        }
-
-        worldSaveBusy.current = true;
-
-        for (
-          let i = 0;
-          i < 3 &&
-          !serverResult;
-          i++
-        ) {
-          try {
-            const saved =
-              await serverSaveWorld(
-                snap
-              );
-
-            if (
-              saved &&
-              saved.world
-            ) {
-              serverResult =
-                saved;
-              break;
-            }
-          } catch (e) {
-            lastError = e;
-
-            /*
-             * 409 = másik kliens már mentett.
-             * NEM próbáljuk újra a stale snapshotot.
-             */
-            if (
-              e &&
-              e.status === 409
-            ) {
-              break;
-            }
-
-            if (
-              e &&
-              e.status === 401
-            ) {
-              break;
-            }
-
-            await wait(
-              1000 * (i + 1)
-            );
-          }
-        }
-
-        worldSaveBusy.current = false;
-
-        if (!serverResult) {
-          setSaveAt(now());
+          lastError = e;
 
           if (
-            lastError &&
-            lastError.status === 409 &&
-            lastError.data &&
-            lastError.data.world
+            e &&
+            (
+              e.status === 409 ||
+              e.status === 401
+            )
           ) {
-            const conflictWorld =
-              migrate(
-                lastError.data.world
-              );
+            break;
+          }
 
-            const conflictContent =
-              contentOf(
-                conflictWorld
-              );
+          await wait(
+            1000 * (i + 1)
+          );
+        }
+      }
 
-            const conflictSyncRev =
-              worldSyncRev(
-                conflictWorld
-              );
+      worldSaveBusy.current = false;
 
-            /*
-             * 1) UGYANAZ A SNAPSHOT VAN A SZERVEREN.
-             * Egy saját, párhuzamos mentés ért oda előbb.
-             * Ez NEM másik eszköz.
-             */
-            if (
-              conflictContent ===
-              json
-            ) {
-              lastSavedContent.current =
-                conflictContent;
+      if (!serverResult) {
+        setSaveAt(now());
 
-              setWorld((current) => {
-                if (!current) {
-                  return current;
-                }
-
-                if (
-                  contentOf(current) ===
-                  json
-                ) {
-                  return conflictWorld;
-                }
-
-                if (
-                  worldSyncRev(current) ===
-                  snapSyncRev
-                ) {
-                  const next =
-                    JSON.parse(
-                      JSON.stringify(
-                        current
-                      )
-                    );
-
-                  next.syncRev =
-                    conflictSyncRev;
-
-                  return next;
-                }
-
-                return current;
-              });
-
-              setSaveState("saved");
-              setSaveAt(now());
-              setErr("");
-              return;
-            }
-
-            /*
-             * 2) A SZERVER A SAJÁT ELŐZŐ ELFOGADOTT ÁLLAPOTUNKAT TARTJA,
-             * miközben ebben a tabban már újabb lokális módosítás van.
-             *
-             * Csak syncRev-et emelünk, nem dobjuk el az új lokális tartalmat.
-             */
-            if (
-              conflictContent ===
-              lastSavedContent.current &&
-              conflictSyncRev ===
-                snapSyncRev + 1
-            ) {
-              setWorld((current) => {
-                if (!current) {
-                  return current;
-                }
-
-                const next =
-                  JSON.parse(
-                    JSON.stringify(
-                      current
-                    )
-                  );
-
-                next.syncRev =
-                  conflictSyncRev;
-
-                return next;
-              });
-
-              setSaveState("retry");
-              return;
-            }
-
-            /*
-             * 3) ELTÉRŐ SZERVERÁLLAPOT — v40 SAFE RECONCILIATION.
-             *
-             * A háttér-AI, polling és autosave ugyanabban a tabban is tud olyan
-             * sorrendet létrehozni, amely kívülről "másik eszköznek" látszik.
-             * Régen ilyenkor a kliens ledobta a saját frissebb állapotát és
-             * ijesztő conflict üzenetet mutatott. Most az ID/timestamp-alapú
-             * mergeWorlds összeolvasztja a szerver és a pillanatnyi lokális
-             * világot, a szerver syncRev-jét veszi át, majd csendben újramenti.
-             * Ez valódi másik eszköz esetén is sokkal kevésbé destruktív.
-             */
-            const latestLocal =
-              wRef.current &&
-              wRef.current.code === conflictWorld.code
-                ? wRef.current
-                : snap;
-
-            const reconciled =
-              migrate(
-                mergeWorlds(
-                  conflictWorld,
-                  latestLocal
-                )
-              );
-
-            reconciled.syncRev =
-              conflictSyncRev;
-
-            void saveWorldMerged(
-              reconciled
-            ).catch(() => {});
-
-            setWorld(
-              reconciled
+        if (
+          lastError &&
+          lastError.status === 409 &&
+          lastError.data &&
+          lastError.data.world
+        ) {
+          /*
+           * Conflict is rare. Only here do we pay the cost of inspecting the
+           * authoritative server world on the main thread.
+           */
+          const conflictWorld =
+            migrate(
+              lastError.data.world
             );
 
-            setSaveState("retry");
+          const conflictContent =
+            contentOf(
+              conflictWorld
+            );
+
+          const conflictSyncRev =
+            worldSyncRev(
+              conflictWorld
+            );
+
+          /*
+           * Same snapshot already reached the server from this client.
+           */
+          if (
+            conflictContent ===
+            json
+          ) {
+            lastSavedContent.current =
+              conflictContent;
+
+            const live =
+              wRef.current;
+
+            if (live) {
+              live.syncRev =
+                Math.max(
+                  worldSyncRev(live),
+                  conflictSyncRev
+                );
+            }
+
+            setSaveState("saved");
             setSaveAt(now());
             setErr("");
-
             return;
           }
 
-          setSaveState("error");
-
+          /*
+           * Our previous accepted save is on the server while a newer local
+           * state already exists. Carry the new server syncRev forward and
+           * allow the already-scheduled autosave to send the latest content.
+           */
           if (
-            lastError &&
-            lastError.status === 401
+            conflictContent ===
+              lastSavedContent.current &&
+            conflictSyncRev ===
+              snapSyncRev + 1
           ) {
-            setErr(
-              tt(
-                "A szerveres munkameneted lejárt. Jelentkezz be újra; a helyi emergency mentésed megmaradt.",
-                "Your server session expired. Log in again; your local emergency save is safe."
-              )
-            );
-          } else {
-            setErr(
-              tt(
-                "A felhőmentés most nem sikerült. A helyi emergency mentésed megmaradt, és később újrapróbáljuk.",
-                "Cloud saving failed for now. Your local emergency save is safe and we'll retry later."
-              )
-            );
+            const live =
+              wRef.current;
+
+            if (live) {
+              live.syncRev =
+                Math.max(
+                  worldSyncRev(live),
+                  conflictSyncRev
+                );
+            }
+
+            setSaveState("retry");
+            return;
           }
 
+          /*
+           * Genuine divergent state: preserve the existing safe reconciliation
+           * behavior. Snapshot parsing happens only on this conflict path.
+           */
+          let snapshotWorld = null;
+
+          try {
+            snapshotWorld =
+              JSON.parse(
+                worldJson
+              );
+          } catch (e) {
+            snapshotWorld = null;
+          }
+
+          const latestLocal =
+            wRef.current &&
+            wRef.current.code ===
+              conflictWorld.code
+              ? wRef.current
+              : snapshotWorld;
+
+          const reconciled =
+            migrate(
+              mergeWorlds(
+                conflictWorld,
+                latestLocal ||
+                  conflictWorld
+              )
+            );
+
+          reconciled.syncRev =
+            conflictSyncRev;
+
+          void saveWorldMerged(
+            reconciled
+          ).catch(() => {});
+
+          setWorld(
+            reconciled
+          );
+
+          setSaveState("retry");
+          setSaveAt(now());
+          setErr("");
           return;
         }
 
+        setSaveState("error");
+
+        if (
+          lastError &&
+          lastError.status === 401
+        ) {
+          setErr(
+            tt(
+              "A szerveres munkameneted lejárt. Jelentkezz be újra; a helyi emergency mentésed megmaradt.",
+              "Your server session expired. Log in again; your local emergency save is safe."
+            )
+          );
+        } else {
+          setErr(
+            tt(
+              "A felhőmentés most nem sikerült. A helyi emergency mentésed megmaradt, és később újrapróbáljuk.",
+              "Cloud saving failed for now. Your local emergency save is safe and we'll retry later."
+            )
+          );
+        }
+
+        return;
+      }
+
+      /*
+       * 3. Successful server save.
+       *
+       * /world/save increments syncRev by exactly one. Do NOT parse the huge
+       * echoed world response. Keep the current live world (including any edit
+       * made while the request was in flight) and only advance its syncRev.
+       */
+      const savedSyncRev =
+        Math.max(
+          snapSyncRev + 1,
+          Number(
+            serverResult.syncRev || 0
+          )
+        );
+
+      lastSavedContent.current =
+        json;
+
+      const live =
+        wRef.current;
+
+      if (live) {
+        live.syncRev =
+          Math.max(
+            worldSyncRev(live),
+            savedSyncRev
+          );
+
         /*
-         * 3. Sikeres szerver save.
+         * The backend advances rev on accepted saves. Mirroring that scalar
+         * in place keeps recovery ordering aligned without causing another
+         * React render/autosave cycle.
          */
-        const savedWorld =
-          migrate(
-            serverResult.world
+        live.rev =
+          Math.max(
+            Number(live.rev || 0),
+            Number(snapMeta.rev || 0) + 1
           );
+      }
 
-        const savedSyncRev =
-          worldSyncRev(
-            savedWorld
-          );
-
-        lastSavedContent.current =
-          contentOf(
-            savedWorld
-          );
-
-        setSaveState("saved");
-        setSaveAt(now());
-        setErr("");
-
-        setWorld((current) => {
-          if (!current) {
-            return current;
-          }
-
-          const currentContent =
-            contentOf(current);
-
-          /*
-           * Ha a save request alatt új lokális változás történt,
-           * az új tartalmat megtartjuk, DE átvezetjük rá a szerver
-           * frissen kiosztott syncRev-jét. Így a következő autosave
-           * nem ütközik a saját előző mentésünkkel.
-           */
-          if (
-            currentContent !== json
-          ) {
-            if (
-              worldSyncRev(
-                current
-              ) === snapSyncRev
-            ) {
-              const next =
-                JSON.parse(
-                  JSON.stringify(
-                    current
-                  )
-                );
-
-              next.syncRev =
-                savedSyncRev;
-
-              return next;
-            }
-
-            return current;
-          }
-
-          return savedWorld;
-        });
-      };
+      setSaveState("saved");
+      setSaveAt(now());
+      setErr("");
+    };
 
     /* Serialization/cloning is the heaviest synchronous operation in this
      * component. Do it only during an idle slice so typing, scrolling and
