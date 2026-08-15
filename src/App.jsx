@@ -8376,8 +8376,10 @@ const AI = {
   gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
   interactiveGap: 0,          // nincs mesterséges játékosi várakozás
   initiativeGap: AI_INITIATIVE_GAP_MS, // gyors autonóm DM / event / group lane
-  maxConcurrent: 2, // Két párhuzamos request, hogy a két felhasználó és az autonóm világ ne álljon sorban feleslegesen
+  maxConcurrent: 2, // Két párhuzamos request alapból; provider-busy esetén ideiglenesen 1 workerre váltunk, majd automatikusan visszaállunk
   activeWorkers: 0,
+  providerBusyUntil: 0,
+  providerBusyStreak: 0,
 
   /*
    * Token-aware throttling.
@@ -8553,7 +8555,7 @@ async function runAiQueueWorker() {
 function pumpAiQueue() {
   while (
     AI.queue.length &&
-    AI.activeWorkers < AI.maxConcurrent
+    AI.activeWorkers < (now() < AI.providerBusyUntil ? 1 : AI.maxConcurrent)
   ) {
     AI.activeWorkers++;
     AI.queueRunning = true;
@@ -8742,7 +8744,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
         const retryDate = Date.parse(retryAfterRaw);
         if (Number.isFinite(retryDate)) retryAfterMs = Math.max(0, retryDate - Date.now());
       }
-      const err = new Error("AI provider temporarily busy");
+      const err = new Error("AI request temporarily unavailable");
       err.busy = true;
       err.retryable = true;
       err.retryAfterMs = Math.min(5000, Math.max(0, retryAfterMs));
@@ -8754,6 +8756,11 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   }
 
   AI.strikes = 0;   // sikeres hívás: tiszta lap
+  AI.providerBusyStreak = 0;
+  if (now() >= AI.providerBusyUntil) {
+    AI.providerBusyUntil = 0;
+    AI.maxConcurrent = 2;
+  }
   if (!data || !data.content) throw new Error("Az AI üres választ adott.");
   const txt = data.content.map((b) => (b.type === "text" ? b.text : "")).join("");
   if (!txt.trim()) throw new Error("Az AI üres választ adott.");
@@ -8813,21 +8820,11 @@ async function askJSON(system, prompt, options = {}) {
     return await queued(async () => {
       let last = null, tries = 0, busyWaits = 0;
 
-      /*
-       * A háttérvilág ne kalapálja négyszer egymás után a már throttlingoló
-       * providert. Egy háttérkérés egyetlen kivárt busy-retry-t kap; a játékos
-       * közvetlen akciója kettőt. Ha még mindig limit van, a későbbi engine
-       * kör újra megpróbálhatja anélkül, hogy request-storm alakulna ki.
-       */
-      const maxBusyWaits =
-        priority >= 50
-          ? 1   // player action: one provider-guided retry, then return to queue
-          : 0;  // background: NEVER retry a 429/529/503 in the same request cycle
+      /* Provider-busy: a konkrét request röviden újrapróbálkozik. Nincs globális
+         app cooldown, nincs UI-várakoztató banner, és a többi queue-feladat mehet. */
+      const maxBusyWaits = priority >= 50 ? 4 : 3;
 
-      while (
-        tries < maxTries &&
-        busyWaits < maxBusyWaits
-      ) {
+      while (tries < maxTries) {
         try {
           const langRule = languageInstruction(lang, strictMode);
           const jsonRule = lang === "en"
@@ -8867,13 +8864,11 @@ async function askJSON(system, prompt, options = {}) {
           }
           if (err && err.busy) {
             busyWaits++;
-            /*
-             * No global cooldown. Retry this request locally for a very short
-             * window, then return control to the simulation queue. Other bots
-             * and player actions are never blocked by one provider rejection.
-             */
-            if (busyWaits <= 2) {
-              const retryMs = Math.min(2500, Math.max(250, Number(err.retryAfterMs) || 500));
+            const retryMs = Math.min(4000, Math.max(300, Number(err.retryAfterMs) || (350 * Math.pow(2, busyWaits - 1))));
+            AI.providerBusyUntil = Math.max(AI.providerBusyUntil, now() + retryMs);
+            AI.providerBusyStreak = Math.min(6, AI.providerBusyStreak + 1);
+            AI.maxConcurrent = 1;
+            if (busyWaits <= maxBusyWaits) {
               await wait(retryMs);
               continue;
             }
@@ -59090,6 +59085,15 @@ const signOut = useCallback(async () => {
   let action = coverageOverride || queued;
       if (!action) {
         if (!auto.on) {
+          return;
+        }
+
+        /*
+         * If the upstream just said busy, do not immediately manufacture another
+         * background request. This is an invisible provider retry guard, not an
+         * application cooldown, and it never blocks an explicit player action.
+         */
+        if (now() < Number(AI.providerBusyUntil || 0)) {
           return;
         }
 
