@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v9 — RELATIONSHIP/IDENTITY FIX — 20260815_1908 */
+/* MÁSVILÁG BUILD v10 — STABLE RUNTIME + LIVE IDENTITY/RELATIONSHIP SYNC — 20260815_1911 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -3294,68 +3294,33 @@ function isMediaAccount(w, id) {
 
 // Bármely AKTÍV szereplő azonosító alapján: játékos, AI-karakter vagy médiaprofil.
 // A karakterlap Connections / Kapcsolódások mezőjében említett emberek NEM entitások.
-//
-// PERFORMANCE v99: egy render / world-revision alatt ugyanazt a karakterlistát
-// nem lineárisan keressük végig több százszor. Kommentfákban és feed renderben
-// a charById az egyik legforróbb helper.
-const WORLD_ENTITY_INDEX_CACHE = new WeakMap();
-
-function invalidateWorldEntityIndex(w) {
-  if (w && typeof w === "object") {
-    WORLD_ENTITY_INDEX_CACHE.delete(w);
-  }
-}
-
-function worldEntityIndex(w) {
-  if (!w || typeof w !== "object") return new Map();
-
-  const rev = Number(w.rev) || 0;
-  const chars = Array.isArray(w.chars) ? w.chars : [];
-  const players = w.players && typeof w.players === "object" ? w.players : {};
-  const mediaAccounts = w.mediaAccounts && typeof w.mediaAccounts === "object" ? w.mediaAccounts : {};
-  const playerCount = Object.keys(players).length;
-
-  const cached = WORLD_ENTITY_INDEX_CACHE.get(w);
-  if (
-    cached &&
-    cached.rev === rev &&
-    cached.charsRef === chars &&
-    cached.charsLength === chars.length &&
-    cached.playersRef === players &&
-    cached.playerCount === playerCount &&
-    cached.mediaRef === mediaAccounts
-  ) {
-    return cached.map;
-  }
-
-  const map = new Map();
-  Object.keys(players).forEach((pid) => {
-    const person = players[pid];
-    if (person) map.set(String(pid), person);
-  });
-  chars.forEach((person) => {
-    if (person && person.id) map.set(String(person.id), person);
-  });
-  allGossipMediaAccounts(w).forEach((person) => {
-    if (person && person.id) map.set(String(person.id), person);
-  });
-
-  WORLD_ENTITY_INDEX_CACHE.set(w, {
-    rev,
-    charsRef: chars,
-    charsLength: chars.length,
-    playersRef: players,
-    playerCount,
-    mediaRef: mediaAccounts,
-    map,
-  });
-
-  return map;
-}
-
 function charById(w, id) {
-  if (!w || !id) return null;
-  return worldEntityIndex(w).get(String(id)) || null;
+  if (!id) return null;
+
+  if (
+    w.players &&
+    w.players[id]
+  ) {
+    return w.players[id];
+  }
+
+  const core =
+    (w.chars || []).find(
+      (c) =>
+        c.id === id
+    );
+
+  if (core) return core;
+
+  return (
+    allGossipMediaAccounts(w)
+      .find(
+        (m) =>
+          m &&
+          m.id === id
+      ) ||
+    null
+  );
 }
 const isHuman = (w, id) => !!(w.players && w.players[id]);
 // Minden emberi játékos karaktere.
@@ -4010,55 +3975,18 @@ function setRel(w, a, b, patch) {
    dynamic score happened to exist at the end of the previous run.
    ============================================================ */
 
-const RELATIONSHIP_CANON_VERSION = 6;
+const RELATIONSHIP_CANON_VERSION = 10;
+/* v10 invariant marker: if this exact string is visible in deployed source,
+   the stable runtime + relationship identity patch is the file being used. */
+const MASVILAG_RELATIONSHIP_PATCH = "v10-live-identity-20260815-1911";
+if (typeof console !== "undefined") console.info("[Másvilág] v10 stable relationship/identity patch loaded");
+
 
 function ensureRelationshipBaselineStore(w) {
   if (!w.relationshipBaselines || typeof w.relationshipBaselines !== "object") {
     w.relationshipBaselines = {};
   }
   return w.relationshipBaselines;
-}
-
-
-/* PERFORMANCE v99: rebuilding every directed character-sheet relationship is
- * expensive (O(cast²) plus Connections parsing). Server polling calls migrate()
- * repeatedly, so only rebuild when relationship-relevant canon actually changed. */
-function relationshipCanonFingerprint(w) {
-  if (!w) return "";
-
-  const people = allSubjects(w)
-    .filter((person) => person && person.id)
-    .slice()
-    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
-
-  let hash = 2166136261 >>> 0;
-  const add = (value) => {
-    const text = String(value || "");
-    for (let i = 0; i < text.length; i++) {
-      hash ^= text.charCodeAt(i);
-      hash = Math.imul(hash, 16777619) >>> 0;
-    }
-    hash ^= 31;
-    hash = Math.imul(hash, 16777619) >>> 0;
-  };
-
-  people.forEach((person) => {
-    add(person.id);
-    add(person.updatedAt);
-    add(person.name);
-    add(person.nick);
-    add(person.nickname);
-    add(person.username);
-    add(person.connections);
-    add(person.affiliation);
-    add(person.organization);
-    add(person.role);
-    add(person.rank);
-    add(person.job);
-    add(person.bio);
-  });
-
-  return `${people.length}:${hash >>> 0}`;
 }
 
 function clampRelationshipScore(value) {
@@ -4112,7 +4040,7 @@ function recordRelationshipBaseline(w, a, b, source = "manual") {
   ensureRelationshipBaselineStore(w)[relKey(a, b)] =
     relationshipBaselineSnapshot(rel, source, {
       mood:
-        source === "manual"
+        /^manual(?:-|$)/i.test(String(source || ""))
           ? String(rel.mood || "").slice(0, 500)
           : "",
       why: "",
@@ -4152,6 +4080,106 @@ function setConfiguredRel(w, a, b, patch, source = "manual") {
     }
   }
 }
+
+/*
+ * v10 LEGACY MANUAL-LOCK REPAIR
+ *
+ * Older CharacterForm versions submitted every visible relationship row on
+ * every profile save. commitForm() then persisted all of them as source
+ * "manual", even when the user never touched the relationship controls.
+ * That accidentally protected stale Tory->Angela-style runtime state from
+ * later Connections canon.
+ *
+ * New intentional edits use source "manual-user". During the v10 migration we
+ * only release OLD source==="manual" baselines when the actor's own Connections
+ * contains target-specific canon for that exact active character.
+ */
+function releaseLegacyAccidentalRelationshipManualLocks(w) {
+  if (!w) return 0;
+  const store = ensureRelationshipBaselineStore(w);
+  const people = allSubjects(w).filter((person) => person && person.id);
+  const byId = new Map(people.map((person) => [String(person.id), person]));
+  let released = 0;
+
+  Object.keys(store).forEach((key) => {
+    const row = store[key];
+    if (!row || String(row.source || "").toLowerCase() !== "manual") return;
+
+    const parts = String(key).split(">");
+    if (parts.length !== 2) return;
+
+    const actor = byId.get(parts[0]);
+    const target = byId.get(parts[1]);
+    if (!actor || !target || actor.id === target.id) return;
+
+    const evidence = canonicalRelationshipEvidence(w, actor, target);
+    if (!String(evidence || "").trim()) return;
+
+    delete store[key];
+    released += 1;
+  });
+
+  return released;
+}
+
+/*
+ * Apply freshly inferred Connections canon immediately to live state for every
+ * directed edge touching a character whose identity/profile was just edited.
+ * This is intentionally limited to automatic `connections` baselines:
+ * explicit manual-user overrides remain protected.
+ */
+function applyConnectionCanonTouchingCharacterNow(w, changedId) {
+  if (!w || !changedId) return;
+  const wanted = String(changedId);
+  const store = ensureRelationshipBaselineStore(w);
+
+  Object.keys(store).forEach((key) => {
+    const parts = String(key).split(">");
+    if (parts.length !== 2) return;
+    const [a, b] = parts;
+    if (a !== wanted && b !== wanted) return;
+
+    const baseline = store[key];
+    if (!baseline) return;
+    if (!/^connections(?:-|$)/i.test(String(baseline.source || ""))) return;
+
+    setRel(w, a, b, {
+      score: clampRelationshipScore(baseline.score),
+      bond: String(baseline.bond || baseline.type || ""),
+      hidden: String(baseline.hidden || ""),
+      fixed: !!baseline.fixed,
+      mood: String(baseline.mood || ""),
+      why: "",
+    });
+
+    /* A profile identity/canon edit starts this directed edge from the new
+       explicit canon, so stale contradictory transition history cannot keep
+       the old behavior alive. */
+    const mem = ensureCharMemory(w, a);
+    if (mem && mem.relationshipHistory) {
+      mem.relationshipHistory[relKey(a, b)] = [];
+    }
+
+    const continuity = ensureRelationshipContinuity(w, a, b);
+    if (continuity) {
+      continuity.lastBond = String(baseline.bond || baseline.type || "");
+      continuity.lastScore = clampRelationshipScore(baseline.score);
+      continuity.updatedAt = now();
+    }
+  });
+}
+
+/*
+ * One entry point used by every profile editor route.
+ * Full refresh is required because changing Angela's aliases can change how
+ * TORY'S Connections resolves even though Tory herself was not edited.
+ */
+function resyncRelationshipsAfterCharacterProfileEdit(w, changedId) {
+  if (!w || !changedId) return;
+  refreshCanonicalRelationshipBaselines(w);
+  applyConnectionCanonTouchingCharacterNow(w, changedId);
+}
+
 
 function canonicalRelationshipEvidence(w, actor, target) {
   if (!actor || !target) return "";
@@ -4381,11 +4409,6 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
 
 function refreshCanonicalRelationshipBaselines(w, focusId = "") {
   if (!w) return;
-
-  /* Identity/Connections may have been edited before w.rev is bumped by the
-     enclosing update(), so never reuse a pre-edit resolution cache here. */
-  invalidateCharacterIdentityResolutionCache(w);
-
   const store = ensureRelationshipBaselineStore(w);
   const people = allSubjects(w).filter((person) => person && person.id);
   const activeIds = new Set(people.map((person) => String(person.id)));
@@ -4453,23 +4476,19 @@ function refreshCanonicalRelationshipBaselines(w, focusId = "") {
       }
     });
   });
-
-  if (!focusId) {
-    w.relationshipCanonFingerprint = relationshipCanonFingerprint(w);
-  } else {
-    /* A target identity edit can affect reverse-directed Connections too.
-       Force the next full refresh unless the caller intentionally did one. */
-    w.relationshipCanonFingerprint = "";
-  }
 }
 
 function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
   if (!w) return;
 
   /*
-   * Re-read the character sheets at restart so edits to Connections/backstory
-   * immediately affect the next run.
+   * Re-read the character sheets at restart so edits to identity/Connections
+   * immediately affect the next run. Legacy accidental manual locks are also
+   * released here for worlds that reach restart before a normal migration save.
    */
+  if (Number(w.relationshipCanonVersion || 0) < RELATIONSHIP_CANON_VERSION) {
+    releaseLegacyAccidentalRelationshipManualLocks(w);
+  }
   refreshCanonicalRelationshipBaselines(w);
 
   const store = ensureRelationshipBaselineStore(w);
@@ -5358,31 +5377,16 @@ function MentionBar({ w, value, onChange, compact = false }) {
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
 
-  /* PERFORMANCE v99: Feedben egyszerre sok MentionBar van mountolva.
-     Csukott állapotban ne építsünk és rendezzünk teljes karakterlistát
-     minden egyes post/comment inputhoz minden world rendernél. */
-  const hasPotentialPeople =
-    (Array.isArray(w && w.chars) ? w.chars.length : 0) +
-      Object.keys((w && w.players) || {}).length +
-      (activeGossipMediaAccount(w) ? 1 : 0) >
-    1;
+  const people = socialProfiles(w)
+    .filter((person) =>
+      person &&
+      person.id !== w.meId &&
+      !isMediaAccount(w, person.id)
+    )
+    .slice()
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
 
-  const people = React.useMemo(() => {
-    if (!open || !hasPotentialPeople) return [];
-
-    return socialProfiles(w)
-      .filter((person) =>
-        person &&
-        person.id !== w.meId &&
-        !isMediaAccount(w, person.id)
-      )
-      .slice()
-      .sort((a, b) =>
-        String(a.name || "").localeCompare(String(b.name || ""))
-      );
-  }, [open, hasPotentialPeople, w && w.rev, w && w.meId]);
-
-  if (!hasPotentialPeople) return null;
+  if (!people.length) return null;
 
   return (
     <div style={{ marginTop: compact ? 5 : 7 }}>
@@ -6011,15 +6015,20 @@ function effectiveRelationshipForBehavior(w, a, b) {
       relationshipBondPolarity(live.bond || live.type) ||
       (Number(live.score) >= 25 ? 1 : Number(live.score) <= -25 ? -1 : 0);
 
-    if (livePolarity && livePolarity !== canon.polarity) {
+    const liveLooksNeutralOrWeak =
+      !livePolarity ||
+      (!String(live.bond || live.type || "").trim() && Math.abs(Number(live.score) || 0) < 25);
+
+    if (liveLooksNeutralOrWeak || livePolarity !== canon.polarity) {
       return {
         ...live,
         score:
           canon.polarity > 0
-            ? Math.max(60, Number(live.score) || 0)
-            : Math.min(-45, Number(live.score) || 0),
+            ? Math.max(clampRelationshipScore(canon.score), Number(live.score) || 0)
+            : Math.min(clampRelationshipScore(canon.score), Number(live.score) || 0),
         bond: String(canon.bond || canon.type || live.bond || ""),
-        mood: "",
+        hidden: String(canon.hidden || live.hidden || ""),
+        mood: String(canon.mood || ""),
         why: "",
         __canonCorrectedForBehavior: true,
       };
@@ -7803,7 +7812,7 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * VITE_WORLD_GROUP_MULTIPLIER=1.15
  * VITE_WORLD_ROLEPLAY_MULTIPLIER=1.00
  * VITE_WORLD_NOTE_MULTIPLIER=1.10
- * VITE_WORLD_CONTENT_INTERVAL_MS=15000
+ * VITE_WORLD_CONTENT_INTERVAL_MS=9000
  * VITE_WORLD_POPUP_CADENCE_MULTIPLIER=1.00
  * VITE_WORLD_CANCEL_SENSITIVITY=1.55
  * VITE_AI_BACKGROUND_GAP_MS=8000
@@ -7815,7 +7824,7 @@ const LIVE_WORLD_DM_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.met
 const LIVE_WORLD_GROUP_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_GROUP_MULTIPLIER) || 1.15));
 const LIVE_WORLD_ROLEPLAY_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_ROLEPLAY_MULTIPLIER) || 1.25));
 const LIVE_WORLD_NOTE_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_NOTE_MULTIPLIER) || 1.10));
-const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(12000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 15000));
+const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(7000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 7500));
 const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.60, Math.min(2.80, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 1.00));
 const LIVE_WORLD_CANCEL_SENSITIVITY = Math.max(0.60, Math.min(2.20, Number(import.meta.env.VITE_WORLD_CANCEL_SENSITIVITY) || 1.32));
 const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(import.meta.env.VITE_WORLD_MAX_POPUP_REROLLS) || 5)));
@@ -11622,46 +11631,6 @@ function regexEscapeLiteral(value) {
    nickname+surnames and @handles all resolve back to one canonical entity.
    Ambiguous loose matches intentionally resolve to null instead of guessing.
    ------------------------------------------------------------------------- */
-const CHARACTER_IDENTITY_ALIAS_ROWS_CACHE = new WeakMap();
-const CHARACTER_IDENTITY_RESOLUTION_CACHE = new WeakMap();
-const CONNECTION_RELATIONSHIP_ENTRIES_CACHE = new WeakMap();
-
-function invalidateCharacterIdentityResolutionCache(w) {
-  if (w && typeof w === "object") {
-    CHARACTER_IDENTITY_RESOLUTION_CACHE.delete(w);
-    CONNECTION_RELATIONSHIP_ENTRIES_CACHE.delete(w);
-  }
-}
-
-function characterIdentityResolutionCache(w) {
-  if (!w || typeof w !== "object") return null;
-  const rev = Number(w.rev) || 0;
-  let cached = CHARACTER_IDENTITY_RESOLUTION_CACHE.get(w);
-  if (!cached || cached.rev !== rev) {
-    cached = { rev, values: new Map() };
-    CHARACTER_IDENTITY_RESOLUTION_CACHE.set(w, cached);
-  }
-  return cached.values;
-}
-
-function characterIdentityAliasSignature(person) {
-  if (!person) return "";
-  const flat = (value) =>
-    Array.isArray(value)
-      ? value.map((x) => String(x || "")).join("|")
-      : String(value || "");
-  return [
-    person.name,
-    person.nick,
-    person.nickname,
-    flat(person.aliases),
-    person.alias,
-    person.aka,
-    person.alsoKnownAs,
-    person.username,
-  ].map((x) => String(x || "")).join("\u001f");
-}
-
 function normalizeCharacterIdentityText(value) {
   return String(value || "")
     .normalize("NFKD")
@@ -11684,6 +11653,9 @@ function characterIdentityNicknameParts(person) {
     person.alias,
     person.aka,
     person.alsoKnownAs,
+    person.callsign,
+    person.codeName,
+    person.codename,
   ];
 
   const out = [];
@@ -11693,8 +11665,14 @@ function characterIdentityNicknameParts(person) {
       .map((part) => part.replace(/\s+/g, " ").trim())
       .filter(Boolean)
       .forEach((part) => {
-        if (!out.some((old) => normalizeCharacterIdentityText(old) === normalizeCharacterIdentityText(part))) {
-          out.push(part);
+        /* Strip wrapping quotes/brackets, but keep spaces inside multi-word aliases. */
+        const clean = part
+          .replace(/^[\s"'“”‘’()[\]{}]+|[\s"'“”‘’()[\]{}]+$/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!clean) return;
+        if (!out.some((old) => normalizeCharacterIdentityText(old) === normalizeCharacterIdentityText(clean))) {
+          out.push(clean);
         }
       });
   };
@@ -11704,17 +11682,53 @@ function characterIdentityNicknameParts(person) {
     else push(value);
   });
 
+  /*
+   * Backward-compatible self-alias discovery.
+   * Older/imported sheets often stored a nickname inside a free-text field
+   * instead of the dedicated `nick` property:
+   *   Nickname: Wolf
+   *   Alias — The Wolf
+   *   AKA: Wolf
+   *   Becenév: Wolf
+   *   Known as: Wolf
+   * Only explicit SELF-identity labels are read here; arbitrary names from
+   * backstory/Connections are deliberately ignored to avoid false merges.
+   */
+  const selfIdentityText = [
+    person.bio,
+    person.extra,
+    person.backstory,
+    person.personality,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const labelledAliasRe =
+    /(?:^|\n)\s*(?:nickname|nick|alias(?:es)?|aka|a\.k\.a\.|also\s+known\s+as|known\s+as|called|callsign|code\s*name|codename|becen[eé]v|ragadv[aá]nyn[eé]v)\s*(?::|=|[-–—])\s*([^\n]{1,80})/giu;
+
+  let match;
+  while ((match = labelledAliasRe.exec(selfIdentityText))) {
+    const value = String(match[1] || "")
+      .split(/\s+(?:\||•|·)\s+/)[0]
+      .replace(/[.!?]+$/g, "")
+      .trim();
+    if (value) push(value);
+    if (labelledAliasRe.lastIndex === match.index) labelledAliasRe.lastIndex += 1;
+  }
+
+  /* Common name spellings: Feng "Wolf" Xiao / Feng 'Wolf' Xiao / Feng (Wolf) Xiao */
+  const displayName = String(person.name || "");
+  const quoted = displayName.match(/[“"'‘’]([^“”"'‘’]{2,40})[”"'‘’]/g) || [];
+  quoted.forEach((chunk) => push(chunk.slice(1, -1)));
+
+  const paren = displayName.match(/\(([^()]{2,40})\)/g) || [];
+  paren.forEach((chunk) => push(chunk.slice(1, -1)));
+
   return out;
 }
 
 function characterIdentityAliasRows(person) {
   if (!person) return [];
-
-  const signature = characterIdentityAliasSignature(person);
-  const cached = CHARACTER_IDENTITY_ALIAS_ROWS_CACHE.get(person);
-  if (cached && cached.signature === signature) {
-    return cached.rows;
-  }
 
   const full = String(person.name || "").replace(/\s+/g, " ").trim();
   const words = full.split(/\s+/).filter(Boolean);
@@ -11750,7 +11764,6 @@ function characterIdentityAliasRows(person) {
   push("first", first, 650);
   push("surname", surname, 300);
 
-  CHARACTER_IDENTITY_ALIAS_ROWS_CACHE.set(person, { signature, rows });
   return rows;
 }
 
@@ -11778,18 +11791,12 @@ function characterIdentityCandidates(w, options = {}) {
   const base = relationshipOnly
     ? allSubjects(w)
     : socialProfiles(w);
-  const seen = new Set();
-  const out = [];
 
-  (base || []).forEach((person) => {
-    if (!person || !person.id) return;
-    const id = String(person.id);
-    if (seen.has(id)) return;
-    seen.add(id);
-    out.push(person);
-  });
-
-  return out;
+  return (base || [])
+    .filter((person) => person && person.id)
+    .filter((person, index, arr) =>
+      arr.findIndex((other) => other && String(other.id) === String(person.id)) === index
+    );
 }
 
 function identityFirstNameCompatible(rawFirst, canonicalFirst) {
@@ -11826,18 +11833,6 @@ function resolveCharacterIdentity(w, rawName, options = {}) {
 
   const norm = normalizeCharacterIdentityText(raw);
   if (!norm) return null;
-
-  const resolutionCache = characterIdentityResolutionCache(w);
-  const cacheKey = `${options.relationshipOnly === true ? "r" : "s"}|${options.returnAmbiguous === true ? "a" : "n"}|${norm}`;
-  if (resolutionCache && resolutionCache.has(cacheKey)) {
-    return resolutionCache.get(cacheKey);
-  }
-
-  const finish = (value) => {
-    if (resolutionCache) resolutionCache.set(cacheKey, value);
-    return value;
-  };
-
   const rawWords = norm.replace(/^@/, "").split(/\s+/).filter(Boolean);
   const matches = [];
 
@@ -11901,29 +11896,27 @@ function resolveCharacterIdentity(w, rawName, options = {}) {
     if (best) matches.push(best);
   });
 
-  if (!matches.length) return finish(null);
+  if (!matches.length) return null;
   matches.sort((a, b) => b.score - a.score);
   const topScore = matches[0].score;
   const winners = matches.filter((match) => match.score === topScore);
   const uniqueIds = [...new Set(winners.map((match) => String(match.id)))];
 
   if (uniqueIds.length !== 1) {
-    return finish(
-      options.returnAmbiguous
-        ? {
-            id: "",
-            person: null,
-            score: topScore,
-            reason: "ambiguous",
-            alias: raw,
-            ambiguous: true,
-            candidateIds: uniqueIds,
-          }
-        : null
-    );
+    return options.returnAmbiguous
+      ? {
+          id: "",
+          person: null,
+          score: topScore,
+          reason: "ambiguous",
+          alias: raw,
+          ambiguous: true,
+          candidateIds: uniqueIds,
+        }
+      : null;
   }
 
-  return finish(winners[0]);
+  return winners[0];
 }
 
 function textExplicitlyMentionsCharacter(w, text, target, options = {}) {
@@ -12102,22 +12095,6 @@ function connectionRelationshipEntriesAbout(w, actor, target) {
     .trim();
 
   if (!source) return [];
-
-  const cacheKey = `${String(actor.id || "")}>${String(target.id || "")}`;
-  const cacheSignature = [
-    actor.updatedAt || "",
-    source,
-    characterIdentityAliasSignature(target),
-  ].join("\u001f");
-  let worldCache = CONNECTION_RELATIONSHIP_ENTRIES_CACHE.get(w);
-  if (!worldCache) {
-    worldCache = new Map();
-    CONNECTION_RELATIONSHIP_ENTRIES_CACHE.set(w, worldCache);
-  }
-  const cachedEntry = worldCache.get(cacheKey);
-  if (cachedEntry && cachedEntry.signature === cacheSignature) {
-    return cachedEntry.entries;
-  }
 
   const aliases = strictConnectionTargetAliases(target);
   if (!aliases.length) return [];
@@ -12371,9 +12348,7 @@ function connectionRelationshipEntriesAbout(w, actor, target) {
     }
   });
 
-  const entries = found.slice(0, 8);
-  worldCache.set(cacheKey, { signature: cacheSignature, entries });
-  return entries;
+  return found.slice(0, 8);
 }
 
 function exactConnectionBondLabel(w, actor, target) {
@@ -17031,34 +17006,24 @@ function migrate(w) {
   });
 
   /*
-   * v99 PERFORMANCE: migrate() runs on login, saves, conflict responses and
-   * periodic server sync. Re-parsing every Connections field for every
-   * actor->target pair each time caused major UI stalls on large casts.
-   * Rebuild only when relationship-relevant character canon changed.
+   * v10 relationship migration:
+   * 1) release accidental old CharacterForm "manual" locks when Connections
+   *    explicitly names that target;
+   * 2) rebuild ALL canonical baselines using the current identity resolver;
+   * 3) force the repaired canon into old live state once.
+   *
+   * This runs for old worlds, and new worlds naturally start on the same code.
    */
-  const currentRelationshipCanonFingerprint =
-    relationshipCanonFingerprint(w);
-  const relationshipCanonNeedsRefresh =
-    Number(w.relationshipCanonVersion || 0) < RELATIONSHIP_CANON_VERSION ||
-    !w.relationshipBaselines ||
-    typeof w.relationshipBaselines !== "object" ||
-    String(w.relationshipCanonFingerprint || "") !==
-      currentRelationshipCanonFingerprint;
+  const previousRelationshipCanonVersion =
+    Number(w.relationshipCanonVersion || 0);
 
-  if (relationshipCanonNeedsRefresh) {
-    refreshCanonicalRelationshipBaselines(w);
+  if (previousRelationshipCanonVersion < RELATIONSHIP_CANON_VERSION) {
+    releaseLegacyAccidentalRelationshipManualLocks(w);
   }
 
-  /*
-   * v94 one-time canon repair for stale impossible relationship states.
-   * Example: both character sheets say Best Friend but old runtime says Hate.
-   */
-  if (Number(w.relationshipCanonVersion || 0) < RELATIONSHIP_CANON_VERSION) {
-    /*
-     * v96 uses canonical ID resolution for full names, omitted middle names,
-     * explicit nicknames/handles and safe unique familiar-name+surname forms.
-     * Reconcile old live edges so Tory/Angel-style stale states are repaired.
-     */
+  refreshCanonicalRelationshipBaselines(w);
+
+  if (previousRelationshipCanonVersion < RELATIONSHIP_CANON_VERSION) {
     reconcileLiveRelationshipsWithStrongCanon(w, true);
     w.relationshipCanonVersion = RELATIONSHIP_CANON_VERSION;
   }
@@ -18299,7 +18264,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v99-performance-canon-cache-feed-tree";
+const BUILD_VERSION = "v98-no-full-world-clone-no-simpulse-loop";
 const WORLD_SCHEMA_VERSION = 97;
 
 /* Fast, safe clone for the large world state. */
@@ -19788,21 +19753,23 @@ function socialProfiles(w) {
       w
     );
 
-  const out = [];
-  const seen = new Set();
-  const push = (person) => {
-    if (!person || !person.id) return;
-    const id = String(person.id);
-    if (seen.has(id)) return;
-    seen.add(id);
-    out.push(person);
-  };
-
-  humanChars(w).forEach(push);
-  (w.chars || []).forEach(push);
-  if (activeMedia) push(activeMedia);
-
-  return out;
+  return humanChars(w)
+    .concat(w.chars || [])
+    .concat(
+      activeMedia
+        ? [activeMedia]
+        : []
+    )
+    .filter(
+      (c, i, arr) =>
+        c &&
+        c.id &&
+        arr.findIndex(
+          (x) =>
+            x &&
+            x.id === c.id
+        ) === i
+    );
 }
 
 function ensureSocialProfileRow(c) {
@@ -23766,18 +23733,12 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
 /* ============================================================
    Feed — szálas kommentekkel
    ============================================================ */
-function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
+function CommentNode({ w, c, allComments, onReply, depth, onOpenProfile }) {
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
   const [txt, setTxt] = useState("");
-  const [showAllReplies, setShowAllReplies] = useState(false);
   const a = charById(w, c.authorId);
-  const replies =
-    (commentModel && commentModel.children.get(c.id)) || [];
-  const visibleReplies =
-    showAllReplies || replies.length <= 5
-      ? replies
-      : replies.slice(-5);
+  const replies = (allComments || []).filter((x) => x.parent === c.id);
 
   if (!a) return null;
 
@@ -23810,8 +23771,7 @@ function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
 
         <div style={{ minWidth: 0, flex: 1 }}>
           {depth ? (() => {
-            const parentComment =
-              commentModel && commentModel.byId.get(c.parent);
+            const parentComment = (allComments || []).find((x) => x && x.id === c.parent);
             const parentAuthor = parentComment ? charById(w, parentComment.authorId) : null;
             return parentAuthor ? (
               <div className="social-comment-reply-target">
@@ -23869,33 +23829,17 @@ function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
         </div>
       )}
 
-      {!showAllReplies && replies.length > visibleReplies.length ? (
-        <button
-          type="button"
-          className="social-comment-action"
-          style={{ marginLeft: depth ? 18 : 36, marginTop: 5 }}
-          onClick={() => setShowAllReplies(true)}
-        >
-          {tt(
-            `Korábbi válaszok (${replies.length - visibleReplies.length})`,
-            `Earlier replies (${replies.length - visibleReplies.length})`
-          )}
-        </button>
-      ) : null}
-
-      {(depth || 0) < 12
-        ? visibleReplies.map((r) => (
-            <CommentNode
-              key={r.id}
-              w={w}
-              c={r}
-              commentModel={commentModel}
-              depth={(depth || 0) + 1}
-              onReply={onReply}
-              onOpenProfile={onOpenProfile}
-            />
-          ))
-        : null}
+      {replies.map((r) => (
+        <CommentNode
+          key={r.id}
+          w={w}
+          c={r}
+          allComments={allComments}
+          depth={(depth || 0) + 1}
+          onReply={onReply}
+          onOpenProfile={onOpenProfile}
+        />
+      ))}
     </div>
   );
 }
@@ -23914,45 +23858,7 @@ function Post({
   const { tt } = useLang();
   const { media } = useMedia();
   const [cmt, setCmt] = useState("");
-  const [visibleCommentRoots, setVisibleCommentRoots] = useState(6);
   const commentInput = useRef(null);
-
-  const commentModel = React.useMemo(() => {
-    const comments =
-      post && Array.isArray(post.comments)
-        ? post.comments.filter((c) => c && typeof c === "object")
-        : [];
-    const byId = new Map();
-    const children = new Map();
-    const roots = [];
-    const orphans = [];
-
-    comments.forEach((comment) => {
-      if (comment && comment.id) byId.set(comment.id, comment);
-    });
-
-    comments.forEach((comment) => {
-      if (!comment) return;
-      if (!comment.parent) {
-        roots.push(comment);
-        return;
-      }
-      if (!byId.has(comment.parent)) {
-        orphans.push(comment);
-        return;
-      }
-      const list = children.get(comment.parent) || [];
-      list.push(comment);
-      children.set(comment.parent, list);
-    });
-
-    return {
-      comments,
-      byId,
-      children,
-      roots: roots.concat(orphans),
-    };
-  }, [post && post.comments]);
 
   /* Egy sérült/stale feed-hivatkozás ne dönthesse le az egész React fát. */
   if (!post || typeof post !== "object") return null;
@@ -23961,12 +23867,11 @@ function Post({
 
   if (!author) return null;
 
-  const comments = commentModel.comments;
-  const rootComments = commentModel.roots;
-  const shownRootComments =
-    rootComments.length <= visibleCommentRoots
-      ? rootComments
-      : rootComments.slice(-visibleCommentRoots);
+  const comments = safePostComments(post);
+  const tops = comments.filter((c) => !c.parent);
+  const orphans = comments.filter(
+    (c) => c.parent && !comments.some((x) => x.id === c.parent)
+  );
 
   const liked =
     Array.isArray(post.likedBy) &&
@@ -24214,30 +24119,12 @@ function Post({
 
       {comments.length > 0 ? (
         <div className="social-comments">
-          {rootComments.length > shownRootComments.length ? (
-            <button
-              type="button"
-              className="social-comment-action"
-              style={{ marginBottom: 8 }}
-              onClick={() =>
-                setVisibleCommentRoots((value) =>
-                  Math.min(rootComments.length, value + 8)
-                )
-              }
-            >
-              {tt(
-                `Korábbi kommentek (${rootComments.length - shownRootComments.length})`,
-                `Earlier comments (${rootComments.length - shownRootComments.length})`
-              )}
-            </button>
-          ) : null}
-
-          {shownRootComments.map((c) => (
+          {tops.concat(orphans).map((c) => (
             <CommentNode
               key={c.id}
               w={w}
               c={c}
-              commentModel={commentModel}
+              allComments={comments}
               depth={0}
               onReply={(parentId, replyText) =>
                 onComment(post.id, replyText, parentId)
@@ -30663,8 +30550,25 @@ function CharForm({ initial, onSave, onClose, onDelete, setErr, w, isNew }) {
     });
     return out;
   });
+  /* Only relationship controls that the user actually changes become manual
+     overrides. Merely opening/saving a character sheet must never freeze every
+     current live relation as "manual". */
+  const [relDirtyIds, setRelDirtyIds] = useState(() => new Set());
   const set = (k, v) => setC((p) => ({ ...p, [k]: v }));
-  const setRelDraft = (otherId, patch) => setRelsState((p) => ({ ...p, [otherId]: { ...(p[otherId] || { score: 0, hidden: "", bond: "", fixed: false }), ...patch } }));
+  const setRelDraft = (otherId, patch) => {
+    setRelDirtyIds((prev) => {
+      const next = new Set(prev);
+      next.add(String(otherId));
+      return next;
+    });
+    setRelsState((p) => ({
+      ...p,
+      [otherId]: {
+        ...(p[otherId] || { score: 0, hidden: "", bond: "", fixed: false }),
+        ...patch,
+      },
+    }));
+  };
   const wy = worldYear(w);
   // Csak tényleges játékbeli karakterek kapnak dinamikus relationship score/bond állapotot.
   const others = w
@@ -30883,7 +30787,8 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
             .toLowerCase()
             .replace(/[^a-z0-9._]/g, "")
         },
-        rels
+        rels,
+        Array.from(relDirtyIds)
       );
     }}
   >
@@ -31455,21 +31360,30 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
 
 /* Az űrlapon szerkesztett dinamikus kapcsolatok mentése.
    Itt kizárólag valódi játékbeli karakter-ID-k szerepelhetnek. */
-function commitForm(n, subjectId, relDrafts) {
+function commitForm(n, subjectId, relDrafts, relDirtyIds = []) {
   if (!relDrafts) return;
+
+  const dirty = new Set(
+    (Array.isArray(relDirtyIds) ? relDirtyIds : [])
+      .map((id) => String(id))
+  );
+  if (!dirty.size) return;
+
   const activeIds = new Set(allSubjects(n).map((x) => String(x.id)));
-  Object.keys(relDrafts).forEach((otherId) => {
+
+  dirty.forEach((otherId) => {
     const d = relDrafts[otherId];
-    if (!d || otherId === subjectId || !activeIds.has(String(otherId))) return;
+    if (!d || String(otherId) === String(subjectId) || !activeIds.has(String(otherId))) return;
+
     const savedBond = String(d.bond || "");
     const familyFixed = FIXED_BONDS.includes(savedBond);
 
     setConfiguredRel(n, subjectId, otherId, {
-      score: d.score || 0,
+      score: Number(d.score) || 0,
       hidden: d.hidden || "",
       bond: savedBond,
       fixed: familyFixed,
-    }, "manual");
+    }, "manual-user");
   });
 }
 
@@ -31604,11 +31518,11 @@ function Cast({ w, update, setErr, goChat, jump }) {
 
       {editMe && (
         <CharForm initial={w.player} isNew={false} setErr={setErr} w={w} onClose={() => setEditMe(false)} onDelete={() => {}}
-          onSave={(c, relDrafts) => {
+          onSave={(c, relDrafts, relDirtyIds) => {
             update((n) => {
               n.players[w.meId] = { ...c, id: w.meId, username: uniqueHandle(n, c.username, w.meId), updatedAt: now() };
-              commitForm(n, w.meId, relDrafts);
-              refreshCanonicalRelationshipBaselines(n);
+              commitForm(n, w.meId, relDrafts, relDirtyIds);
+              resyncRelationshipsAfterCharacterProfileEdit(n, w.meId);
             });
             setEditMe(false);
           }} />
@@ -31624,7 +31538,7 @@ function Cast({ w, update, setErr, goChat, jump }) {
             });
             setForm(null);
           }}
-          onSave={(c, relDrafts) => {
+          onSave={(c, relDrafts, relDirtyIds) => {
             update((n) => {
               const stamped = {
                 ...c,
@@ -31654,14 +31568,19 @@ function Cast({ w, update, setErr, goChat, jump }) {
               commitForm(
                 n,
                 stamped.id,
-                relDrafts
+                relDrafts,
+                relDirtyIds
               );
 
-              /* One full pass is both more correct and much cheaper than the old
-               * new-character path that re-ran a partial O(cast²) refresh once
-               * for every existing person. It also catches reverse Connections
-               * whose target is this newly created/renamed character. */
-              refreshCanonicalRelationshipBaselines(n);
+              /*
+               * Full identity-aware resync: editing Angela can change how Tory's
+               * old "Angel" row resolves, so both outgoing and incoming canon
+               * touching this character are recalculated and applied NOW.
+               */
+              resyncRelationshipsAfterCharacterProfileEdit(
+                n,
+                stamped.id
+              );
 
               /*
                * Minden valóban újonnan behozott AI karakter
@@ -33316,7 +33235,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [visibleTurns.length]);
   useEffect(() => {
     if (!scene.open || scene.limitMode !== "minutes") return undefined;
-    const i = setInterval(() => setClockNow(now()), 30000);
+    const i = setInterval(() => setClockNow(now()), 15000);
     return () => clearInterval(i);
   }, [scene.open, scene.limitMode, scene.id]);
 
@@ -38474,10 +38393,11 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
 
       {editPlayer && (
         <CharForm initial={w.player} setErr={setErr} w={w} onClose={() => setEditPlayer(false)} onDelete={() => {}}
-          onSave={(c, relDrafts) => {
+          onSave={(c, relDrafts, relDirtyIds) => {
             update((n) => {
               n.players[w.meId] = { ...c, id: w.meId, username: uniqueHandle(n, c.username, w.meId), updatedAt: now() };
-              commitForm(n, w.meId, relDrafts);
+              commitForm(n, w.meId, relDrafts, relDirtyIds);
+              resyncRelationshipsAfterCharacterProfileEdit(n, w.meId);
             });
             setEditPlayer(false);
           }} />
@@ -54700,7 +54620,7 @@ const signOut = useCallback(async () => {
               "poll"
             );
           }
-        }, 60000);
+        }, 20000);
 
       return () => {
         alive = false;
@@ -54761,7 +54681,7 @@ const signOut = useCallback(async () => {
           pending.reason ||
             "deferred-conflict"
         );
-      }, 3000);
+      }, 1000);
 
     return () =>
       clearInterval(i);
@@ -54968,8 +54888,6 @@ const signOut = useCallback(async () => {
      */
     const current = wRef.current;
     if (!current) return false;
-    invalidateWorldEntityIndex(current);
-    invalidateCharacterIdentityResolutionCache(current);
     if (!current.sim || typeof current.sim !== "object" || Array.isArray(current.sim)) current.sim = {};
     if (!Array.isArray(current.sim.queue)) current.sim.queue = [];
     if (!current.notify || typeof current.notify !== "object" || Array.isArray(current.notify)) current.notify = {};
@@ -54978,8 +54896,6 @@ const signOut = useCallback(async () => {
     if (!Array.isArray(current.socialEvents)) current.socialEvents = [];
     fn(current);
     current.rev = (current.rev || 0) + 1;
-    invalidateWorldEntityIndex(current);
-    invalidateCharacterIdentityResolutionCache(current);
     setWorld({ ...current });
     return true;
   }, []);
@@ -54998,7 +54914,7 @@ const signOut = useCallback(async () => {
       setWorld({ ...current });
     };
     sweep();
-    const timer = setInterval(sweep, 60000);
+    const timer = setInterval(sweep, 15000);
     return () => clearInterval(timer);
   }, [world ? world.code : null, meId]);
 
@@ -55978,7 +55894,7 @@ const signOut = useCallback(async () => {
 
           return savedWorld;
         });
-      }, 2800);
+      }, 1800);
 
     return () => {
       if (timer.current) {
@@ -56260,8 +56176,8 @@ const signOut = useCallback(async () => {
       if (alive) setAutoBusy(false);
     };
     /*
-     * 9 másodpercenként nézzük meg, van-e sürgős queue-teendő.
-     * Ez NEM jelent 9 másodpercenként AI-hívást:
+     * 5 másodpercenként nézzük meg, van-e teendő.
+     * Ez NEM jelent 5 másodpercenként AI-hívást:
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
