@@ -1,4 +1,4 @@
-/* MÁSVILÁG SERVER v18 — POSTGRES UNICODE SURROGATE REPAIR — 20260815_2048 */
+/* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
 /*
  * MÁSVILÁG — server/proxy.js
  * Full drop-in backend with authoritative multi-device world + media sync.
@@ -53,6 +53,24 @@ CREATE TABLE IF NOT EXISTS world_media (
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+/*
+ * v19 — scalable image storage.
+ * New images are independent rows instead of one ever-growing JSONB library.
+ * The old world_media row remains readable for backwards compatibility.
+ */
+CREATE TABLE IF NOT EXISTS world_media_files (
+  world_code TEXT NOT NULL
+    REFERENCES worlds(code)
+    ON DELETE CASCADE,
+  image_id TEXT NOT NULL,
+  data JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (world_code, image_id)
+);
+
+CREATE INDEX IF NOT EXISTS world_media_files_world_updated_idx
+  ON world_media_files (world_code, updated_at DESC);
 
       /*
        * One global login profile can own/join several worlds.
@@ -2650,30 +2668,54 @@ app.get("/media/file/:id", async (req, res) => {
       return res.status(400).end();
     }
 
-    const result = await pool.query(
+    /* v19: new scalable table first. */
+    const fileResult = await pool.query(
       `
-      SELECT
-        CASE
-          WHEN data->>'__masvilagMediaEnvelope' = $3
-            THEN jsonb_extract_path(data->'media', $2::text)
-          ELSE jsonb_extract_path(data, $2::text)
-        END AS item
-      FROM world_media
+      SELECT data AS item
+      FROM world_media_files
       WHERE world_code = $1
+        AND image_id = $2
       LIMIT 1
       `,
-      [
-        session.worldCode,
-        imageId,
-        String(MEDIA_ENVELOPE_VERSION),
-      ]
+      [session.worldCode, imageId]
     );
 
-    if (!result.rows.length || result.rows[0].item == null) {
+    let raw =
+      fileResult.rows.length
+        ? fileResult.rows[0].item
+        : null;
+
+    /* Backwards-compatible fallback for every historical image. */
+    if (raw == null) {
+      const legacyResult = await pool.query(
+        `
+        SELECT
+          CASE
+            WHEN data->>'__masvilagMediaEnvelope' = $3
+              THEN jsonb_extract_path(data->'media', $2::text)
+            ELSE jsonb_extract_path(data, $2::text)
+          END AS item
+        FROM world_media
+        WHERE world_code = $1
+        LIMIT 1
+        `,
+        [
+          session.worldCode,
+          imageId,
+          String(MEDIA_ENVELOPE_VERSION),
+        ]
+      );
+
+      raw =
+        legacyResult.rows.length
+          ? legacyResult.rows[0].item
+          : null;
+    }
+
+    if (raw == null) {
       return res.status(404).end();
     }
 
-    const raw = result.rows[0].item;
     const entry =
       typeof raw === "string"
         ? { dataUrl: raw, status: "active" }
@@ -2718,6 +2760,113 @@ app.get("/media/file/:id", async (req, res) => {
   } catch (err) {
     console.error("Media file load error:", err);
     return res.status(500).end();
+  }
+});
+
+/*
+ * v19 — save exactly ONE image.
+ * This endpoint is intentionally append/update-per-file and never reads or
+ * rewrites the historical world_media JSONB blob.
+ */
+app.post("/media/file/:id", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSessionIdentity(req);
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
+
+    const imageId = String(req.params?.id || "").trim();
+    if (!imageId || imageId.length > 180) {
+      return res.status(400).json({
+        error: "Invalid image id.",
+      });
+    }
+
+    const rawEntry =
+      req.body &&
+      req.body.entry &&
+      typeof req.body.entry === "object" &&
+      !Array.isArray(req.body.entry)
+        ? req.body.entry
+        : null;
+
+    if (!rawEntry) {
+      return res.status(400).json({
+        error: "Missing media entry.",
+      });
+    }
+
+    const dataUrl =
+      String(
+        rawEntry.dataUrl ||
+        rawEntry.url ||
+        ""
+      );
+
+    if (
+      !/^data:image\//i.test(dataUrl) &&
+      !/^https:\/\//i.test(dataUrl)
+    ) {
+      return res.status(422).json({
+        error: "Invalid image payload.",
+      });
+    }
+
+    const entry = {
+      ...rawEntry,
+      id: imageId,
+      updatedAt: Date.now(),
+    };
+
+    const entryJson =
+      stringifyJsonbSafe(
+        entry,
+        "media-file-save"
+      );
+
+    /* Hard cap is per image, not per world. */
+    if (entryJson.length > 10 * 1024 * 1024) {
+      return res.status(413).json({
+        error: "Image payload is too large.",
+      });
+    }
+
+    await pool.query(
+      `
+      INSERT INTO world_media_files (
+        world_code,
+        image_id,
+        data,
+        updated_at
+      )
+      VALUES ($1, $2, $3::jsonb, NOW())
+
+      ON CONFLICT (world_code, image_id)
+      DO UPDATE SET
+        data = EXCLUDED.data,
+        updated_at = NOW()
+      `,
+      [
+        session.worldCode,
+        imageId,
+        entryJson,
+      ]
+    );
+
+    return res.json({
+      ok: true,
+      id: imageId,
+    });
+  } catch (err) {
+    console.error("Media file save error:", err);
+    return res.status(500).json({
+      error: "Media file save failed.",
+    });
   }
 });
 
