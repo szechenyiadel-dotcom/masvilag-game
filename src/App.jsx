@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v19 — FEED/COMMENT RENDER PERFORMANCE ONLY — 20260815_2055 */
+/* MÁSVILÁG BUILD v20 — SAME CORE FACTION RUNTIME FIX — 20260815_2050 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -13482,6 +13482,16 @@ function detailedCharacterCanonPacket(c, surface = "unknown") {
       secrets: cap(c.secrets, deep ? 1200 : 500),
     },
   };
+}
+
+/*
+ * RUNTIME FIX v20:
+ * exactPairCanonCard() has long referenced sameCoreFaction(), but the helper
+ * was never defined. Reuse the existing canonical faction/team comparison
+ * instead of duplicating faction rules.
+ */
+function sameCoreFaction(actor, target) {
+  return sameFollowTeamOrFaction(actor, target);
 }
 
 function exactPairCanonCard(w, actorId, targetId) {
