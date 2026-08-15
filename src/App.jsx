@@ -8360,23 +8360,23 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
   )
 );
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
-const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(15000, Math.min(120000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 30000));
+const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1000, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 5000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(3, Math.min(8, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 4)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(45 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 75 * 1000));
-const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2 * 60 * 1000, Math.min(12 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 3 * 60 * 1000));
-const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
-const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
-const AI_BACKGROUND_GAP_MS = Math.max(2500, Math.min(15000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 5000));
-const AI_INITIATIVE_GAP_MS = Math.max(1200, Math.min(10000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 2500));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(10 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 20 * 1000));
+const LIVE_WORLD_EVENT_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 60 * 1000));
+const LIVE_WORLD_POPUP_RETRY_MS = Math.max(3000, Math.min(60000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 10000));
+const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(10000, Math.min(3 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 20000));
+const AI_BACKGROUND_GAP_MS = Math.max(0, Math.min(5000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 0));
+const AI_INITIATIVE_GAP_MS = Math.max(0, Math.min(3000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 0));
 
 const AI = {
   chain: Promise.resolve(),  // kompatibilitás miatt marad
   last: 0,                   // mikor futott le az utolsó AI-hívás
   gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
-  interactiveGap: 1200,       // gyors játékosi DM/group/RP lane
+  interactiveGap: 0,          // nincs mesterséges játékosi várakozás
   initiativeGap: AI_INITIATIVE_GAP_MS, // gyors autonóm DM / event / group lane
-  maxConcurrent: 1, // Provider cooldown/rate-limit safety: never overlap provider requests
+  maxConcurrent: 2, // Két párhuzamos request, hogy a két felhasználó és az autonóm világ ne álljon sorban feleslegesen
   activeWorkers: 0,
 
   /*
@@ -8387,7 +8387,7 @@ const AI = {
    * ritmusban a szolgáltatóra.
    */
   lastCostGap: 0,
-  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 32000),
+  targetTokensPerMinute: Math.max(60000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 100000),
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
@@ -8454,8 +8454,8 @@ function aiCostGapFor(system, prompt, maxTokens) {
    * prompt után legyen ideje fellélegezni a token/minute keretnek.
    */
   return Math.max(
-    350,
-    Math.min(18000, raw)
+    0,
+    Math.min(3000, raw)
   );
 }
 
@@ -8469,8 +8469,8 @@ function aiCostGapFor(system, prompt, maxTokens) {
  * the end (current task + JSON schema + TAIL), which are the two most useful
  * regions if an emergency trim is needed.
  */
-const AI_MAX_SYSTEM_CHARS = Math.max(18000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 42000);
-const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 82000);
+const AI_MAX_SYSTEM_CHARS = Math.max(10000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 18000);
+const AI_MAX_PROMPT_CHARS = Math.max(14000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 26000);
 
 function preserveEdges(value, maxChars, label = "context") {
   const text = String(value || "");
@@ -8516,12 +8516,6 @@ async function runAiQueueWorker() {
       if (!task) break;
 
       try {
-        for (let guard = 0; guard < 40; guard++) {
-          const left = cooldownLeft();
-          if (left <= 0) break;
-          await wait(Math.min(left, 2500) + 50);
-        }
-
         const since = now() - AI.last;
         const baseGap =
           task.priority >= 50
@@ -8707,10 +8701,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   } catch (e) {
     if (e && e.name === "AbortError") throw new Error("Az AI nem válaszolt időben.");
     if (e && e.message) {
-      if (e && e.retryable === false) {
-        AI.strikes = Math.min(AI.strikes + 1, 3);
-        setCooldown(15000 * AI.strikes, !!requestMeta.interactive);
-      }
+      /* Never impose a client-side global cooldown for a provider/network error.
+         A failed request must not freeze every other bot or the player. */
       throw e;
     }
     throw new Error("Nem sikerült elérni az AI-t (hálózati hiba). A helyi proxy futása és az API kulcsok ellenőrzése szükséges.");
@@ -8738,49 +8730,22 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       throw err;
     }
     if (busy) {
-      // ismétlődő elutasításnál egyre hosszabb pihenő, hogy kimásszunk a gödörből
+      /* No global cooldown. This rejection is isolated to this request. */
       AI.strikes = Math.min(AI.strikes + 1, 3);
-      const retryAfterRaw =
-        res.headers && res.headers.get
-          ? res.headers.get("retry-after")
-          : "";
-
+      const retryAfterRaw = res.headers && res.headers.get
+        ? res.headers.get("retry-after")
+        : "";
       let retryAfterMs = 0;
       const retryAfterSeconds = Number(retryAfterRaw);
-
-      if (retryAfterSeconds > 0) {
-        retryAfterMs = retryAfterSeconds * 1000;
-      } else if (retryAfterRaw) {
+      if (retryAfterSeconds > 0) retryAfterMs = retryAfterSeconds * 1000;
+      else if (retryAfterRaw) {
         const retryDate = Date.parse(retryAfterRaw);
-        if (Number.isFinite(retryDate)) {
-          retryAfterMs = Math.max(0, retryDate - Date.now());
-        }
+        if (Number.isFinite(retryDate)) retryAfterMs = Math.max(0, retryDate - Date.now());
       }
-
-      /*
-       * Exponenciálisabb backoff kevesebb újraütéssel. A rövid provider
-       * retry-after értéket is tiszteletben tartjuk, de 429 esetén legalább
-       * 12 mp pihenőt adunk, hogy ne essünk vissza azonnal ugyanabba a limitbe.
-       */
-      const msgLower = String((data && data.error && data.error.message) || data?.error || "").toLowerCase();
-      const tokenMinuteLimit =
-        code === 429 &&
-        (msgLower.includes("tokens per min") || msgLower.includes("tokens per minute") || msgLower.includes("tpm"));
-      const base = tokenMinuteLimit ? 30000 : (code === 429 ? 12000 : 8000);
-      const adaptive = Math.min(60000, base * Math.pow(1.8, Math.max(0, AI.strikes - 1)));
-      const restMs = Math.max(retryAfterMs, adaptive);
-
-      /*
-       * A rate-limitet a queue belül kezeli és ugyanazt a játékosi kérést
-       * újrapróbálja. Ezt nem mutatjuk globális "AI can't keep up" bannerként,
-       * mert DM/group chat közben csak félrevezető és zajos.
-       */
-      setCooldown(
-        restMs,
-        false
-      );
-      const err = new Error(`Az AI most nem győzi — ${Math.ceil(restMs / 1000)} másodperc pihenő.`);
+      const err = new Error("AI provider temporarily busy");
       err.busy = true;
+      err.retryable = true;
+      err.retryAfterMs = Math.min(5000, Math.max(0, retryAfterMs));
       throw err;
     }
     AI.strikes = 0;
@@ -8877,7 +8842,7 @@ async function askJSON(system, prompt, options = {}) {
           const raw = await callClaude(
             sys,
             prompt + hint,
-            Number(options.maxTokens || 1200),
+            Math.min(900, Math.max(300, Number(options.maxTokens || 900))),
             {
               interactive: priority >= 50,
               timeoutMs: Number(options.timeoutMs) || undefined,
@@ -8903,40 +8868,17 @@ async function askJSON(system, prompt, options = {}) {
           if (err && err.busy) {
             busyWaits++;
             /*
-             * Player-triggered DM/group chat/RP really DOES restart itself now.
-             * Previously we threw as soon as the cooldown exceeded 3 seconds,
-             * while the UI incorrectly promised an automatic restart.
-             *
-             * For interactive work we wait through a short provider cooldown and
-             * retry the SAME queued request. Very long cooldowns are capped so a
-             * broken provider cannot freeze the UI forever.
+             * No global cooldown. Retry this request locally for a very short
+             * window, then return control to the simulation queue. Other bots
+             * and player actions are never blocked by one provider rejection.
              */
-            const left = cooldownLeft();
-            const interactiveWaitCap = 30000;
-
-            if (priority >= 50 && left > interactiveWaitCap) {
-              const tooLong = new Error(
-                lang === "en"
-                  ? `The AI provider asked for a ${Math.ceil(left / 1000)}s cooldown. Please retry after the cooldown.`
-                  : `Az AI szolgáltató ${Math.ceil(left / 1000)} másodperces pihenőt kért. A pihenő után próbáld újra.`
-              );
-              tooLong.busy = true;
-              tooLong.retryable = false;
-              throw tooLong;
+            if (busyWaits <= 2) {
+              const retryMs = Math.min(2500, Math.max(250, Number(err.retryAfterMs) || 500));
+              await wait(retryMs);
+              continue;
             }
-
-            if (priority < 50) {
-              err.retryable = false;
-              throw err;
-            }
-
-            await wait(
-              Math.min(
-                left + 250,
-                interactiveWaitCap
-              )
-            );
-            continue;
+            err.retryable = true;
+            throw err;
           }
           tries++;
 
@@ -19606,7 +19548,7 @@ const AUTO_DEFAULT = {
   ),
 };
 
-const LIVE_WORLD_MIN_ACTION_GAP_MS = 12000;
+const LIVE_WORLD_MIN_ACTION_GAP_MS = 0;
 
 async function loadAuto() {
   try {
@@ -31697,7 +31639,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   const [text, setText] = useState("");
   const [img, setImg] = useState("");
   const [busy, setBusy] = useState("");
-  const [resting, setResting] = useState(cooldownLeft() > 0);
+  const [resting, setResting] = useState(false);
   const [hl, setHl] = useState("");
   const [feedMode, setFeedMode] = useState("all");
   const [showMedia, setShowMedia] = useState(false);
@@ -31716,9 +31658,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   const refs = useRef({});
 
   useEffect(() => {
-    const off = onCooldown((ms) => setResting(ms > 0));
-    const i = setInterval(() => setResting(cooldownLeft() > 0), 1000);
-    return () => { off(); clearInterval(i); };
+    setResting(false);
   }, []);
 
   useEffect(() => {
@@ -52040,7 +51980,7 @@ function canAiInitiateRoleplay(w) {
   const last = Math.max(simLast, historyLast);
   const rpPeak = Math.max(0.55, channelActivityPeak(w, "roleplay"));
   const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-  const target = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+  const target = Math.max(30 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   return !last || ts - last >= target;
 }
 
@@ -52581,9 +52521,9 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   const dmLast = Number(sim.lastAutonomousDmAt) || 0;
   const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
-  const dmTarget = Math.max(45 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
+  const dmTarget = Math.max(10 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const dmElapsed = dmLast ? ts - dmLast : Math.max(0, ts - laneStartedAt);
-  const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 22 * 1000;
+  const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 5000;
 
   if (permits("dm") && dmElapsed >= dmTarget && dmRetryReady) {
     const bot = pickInitiator(view);
@@ -52648,9 +52588,9 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
     const rpLast = Math.max(Number(sim.lastRoleplayInviteAt) || 0, rpHistoryLast);
     const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
     const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-    const rpTarget = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+    const rpTarget = Math.max(30 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
     const rpElapsed = rpLast ? ts - rpLast : Math.max(0, ts - laneStartedAt);
-    const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 35 * 1000;
+    const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 10000;
 
     if (rpElapsed >= rpTarget && rpRetryReady) {
       const initiator = pickRoleplayInitiator(view);
@@ -52702,7 +52642,7 @@ function autonomousDmOverdueByMs(w) {
   if (!w) return -Infinity;
   const dmPeak = Math.max(0.25, channelActivityPeak(w, "dm"));
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
-  const target = Math.max(45 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
+  const target = Math.max(10 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const last = Number(w.sim && w.sim.lastAutonomousDmAt) || 0;
   const startedAt = Number(w.sim && w.sim.liveWorldStartedAt) || now();
   const elapsed = last ? now() - last : Math.max(0, now() - startedAt);
@@ -52713,7 +52653,7 @@ function roleplayInviteOverdueByMs(w) {
   if (!w || !canAiInitiateRoleplay(w)) return -Infinity;
   const rpPeak = Math.max(0.25, channelActivityPeak(w, "roleplay"));
   const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-  const target = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+  const target = Math.max(30 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   const last = Math.max(
     Number(w.sim && w.sim.lastRoleplayInviteAt) || 0,
     lastAiInitiatedRoleplayAt(w)
@@ -59088,7 +59028,7 @@ const signOut = useCallback(async () => {
     } catch (e) {}
 
     if (
-      idleFor < 8000 ||
+      idleFor < 500 ||
       inputPending
     ) {
       return;
@@ -59122,8 +59062,6 @@ const signOut = useCallback(async () => {
     return;
   }
 
-  if (!manualQueued && cooldownLeft() > 0) return;
-
   if (
     !manualQueued &&
     view2.sim &&
@@ -59142,7 +59080,7 @@ const signOut = useCallback(async () => {
     !queued &&
     view2.sim &&
     Number(view2.sim.at || 0) > 0 &&
-    now() - Number(view2.sim.at || 0) < 8000
+    now() - Number(view2.sim.at || 0) < 1000
   ) {
     return;
   }
@@ -59373,8 +59311,8 @@ const signOut = useCallback(async () => {
           }
         },
         nextQueued.source === "manual"
-          ? 700
-          : 2500);
+          ? 100
+          : 200);
       }
     };
 
@@ -59388,13 +59326,13 @@ const signOut = useCallback(async () => {
      */
     const i =
       auto.on
-        ? setInterval(beat, 8000)
+        ? setInterval(beat, 2000)
         : null;
 
     /* Az első autonóm ellenőrzés röviddel a világ betöltése után indul. */
     const first =
       auto.on
-        ? setTimeout(beat, 2500)
+        ? setTimeout(beat, 500)
         : null;
 
     return () => {
