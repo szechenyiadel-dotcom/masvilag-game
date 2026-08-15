@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v25 — CHARACTER SAVE FAST PATH — 20260815_2145 */
+/* MÁSVILÁG BUILD v26 — VISION ISOLATION + GUARANTEED COMMENTS + SAVE PERF — 20260815_2205 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -4080,49 +4080,34 @@ function relationshipCanonInputFingerprint(w) {
     .sort((a, b) => String(a.id).localeCompare(String(b.id)));
 
   let hash = 2166136261 >>> 0;
-  const push = (value) => {
-    const text = Array.isArray(value)
-      ? value.map((x) => String(x || "")).join("\u001f")
-      : String(value == null ? "" : value);
 
-    for (let i = 0; i < text.length; i += 1) {
-      hash ^= text.charCodeAt(i);
+  const push = (value) => {
+    const source = String(value == null ? "" : value);
+
+    for (let i = 0; i < source.length; i += 1) {
+      hash ^= source.charCodeAt(i);
       hash = Math.imul(hash, 16777619) >>> 0;
     }
+
     hash ^= 31;
     hash = Math.imul(hash, 16777619) >>> 0;
   };
 
+  /*
+   * PERFORMANCE v26:
+   * The previous fingerprint hashed entire personality/backstory/bio/skills
+   * fields for EVERY character on every character Save. Those fields can be
+   * tens of thousands of characters long and most edits do not affect
+   * relationship canon at all.
+   *
+   * These compact signatures already encode exactly the mechanical inputs:
+   * canonical identity aliases, Connections, and faction/dojo classification.
+   */
   people.forEach((person) => {
-    [
-      person.id,
-      person.name,
-      person.nick,
-      person.nickname,
-      person.aliases,
-      person.alias,
-      person.aka,
-      person.alsoKnownAs,
-      person.callsign,
-      person.codeName,
-      person.codename,
-      person.username,
-      person.connections,
-      /* labelled legacy aliases may live in these */
-      person.bio,
-      person.extra,
-      person.backstory,
-      person.personality,
-      /* faction/dojo inference inputs */
-      person.affiliation,
-      person.organization,
-      person.role,
-      person.rank,
-      person.job,
-      person.combat,
-      person.skills,
-      person.abilities,
-    ].forEach(push);
+    push(person.id);
+    push(relationshipProfileIdentitySignature(person));
+    push(relationshipProfileConnectionsSignature(person));
+    push(relationshipProfileFactionSignature(person));
   });
 
   return `${people.length}:${hash.toString(36)}`;
@@ -4130,7 +4115,7 @@ function relationshipCanonInputFingerprint(w) {
 /* v10 invariant marker: if this exact string is visible in deployed source,
    the stable runtime + relationship identity patch is the file being used. */
 const MASVILAG_RELATIONSHIP_PATCH = "v10-live-identity-20260815-1911";
-if (typeof console !== "undefined") console.info("[Másvilág] v10 stable relationship/identity patch loaded");
+if (typeof console !== "undefined") console.info("[Másvilág] v26 relationship/identity + performance patch loaded");
 
 
 function ensureRelationshipBaselineStore(w) {
@@ -7849,7 +7834,7 @@ function AlbumEditor({ value, onChange, owner }) {
    * overwritten and may provide identity/context the vision model cannot infer.
    */
   useEffect(() => {
-    if (visionScanRef.current || busy || autoVisionId) return;
+    if (visionScanRef.current || busy || autoVisionId || visionCircuitOpen()) return;
 
     const pending = list.find(
       (item) =>
@@ -7982,27 +7967,20 @@ function AlbumEditor({ value, onChange, owner }) {
           );
         }
 
-        let vision = "";
-
-        try {
-          vision = await analyzeImageDataUrl(
-            data,
-            tt(
-              `Írd le röviden, mi látható ezen a ${owner && owner.name ? owner.name + " karakterhez" : "karakterhez"} tartozó képen. Ne azonosíts valódi személyt név szerint. Arra figyelj, mit csinál a képen látható személy, milyen ruhában van, milyen a helyszín és a hangulat. Csak azt állítsd, ami ténylegesen látható.`,
-              `Briefly describe what is visibly shown in this image belonging to ${owner && owner.name ? owner.name : "the character"}. Do not identify a real person by name. Focus on what the visible person is doing, clothing, location and mood. State only what is actually visible.`
-            )
-          );
-        } catch (visionErr) {
-          console.warn("Album vision analysis failed:", visionErr);
-        }
-
+        /*
+         * PERFORMANCE v26:
+         * Upload completion must not wait on /ai/vision. Store the image
+         * immediately; the existing lazy album backfill can enrich `vision`
+         * later when the endpoint is healthy.
+         */
         added.push({
           id: uid(),
           imageId: imageIdOf(ref2),
           who: "",
           note: "",
-          vision,
-          analyzedAt: vision ? now() : 0,
+          vision: "",
+          analyzedAt: 0,
+          analysisAttemptedAt: 0,
         });
       } catch (e2) {
         setErr(
@@ -16942,11 +16920,67 @@ async function serverCreateProfileWorld(
   });
 }
 
+const VISION_RUNTIME = {
+  disabledUntil: 0,
+  failures: 0,
+  lastWarnAt: 0,
+};
+
+function visionCircuitOpen() {
+  return now() < Number(VISION_RUNTIME.disabledUntil || 0);
+}
+
+function pauseVisionAfterFailure(err) {
+  const status = Number(err && err.status) || 0;
+
+  VISION_RUNTIME.failures =
+    Math.min(
+      8,
+      Math.max(0, Number(VISION_RUNTIME.failures) || 0) + 1
+    );
+
+  const basePause =
+    status === 429
+      ? 2 * 60 * 1000
+      : status >= 500 || status === 0
+        ? 5 * 60 * 1000
+        : 60 * 1000;
+
+  const pauseMs =
+    Math.min(
+      15 * 60 * 1000,
+      basePause *
+        Math.max(
+          1,
+          Math.min(3, VISION_RUNTIME.failures)
+        )
+    );
+
+  VISION_RUNTIME.disabledUntil =
+    Math.max(
+      Number(VISION_RUNTIME.disabledUntil) || 0,
+      now() + pauseMs
+    );
+
+  if (
+    now() - Number(VISION_RUNTIME.lastWarnAt || 0) >
+    30000
+  ) {
+    VISION_RUNTIME.lastWarnAt = now();
+
+    console.warn(
+      `[vision] temporarily paused for ${Math.ceil(pauseMs / 1000)}s after failure`,
+      err
+    );
+  }
+}
+
 async function analyzeImageDataUrl(
   dataUrl,
   prompt = ""
 ) {
   const imageInput = String(dataUrl || "").trim();
+
   if (
     !imageInput ||
     (!isInlineImageData(imageInput) && !/^https:\/\//i.test(imageInput))
@@ -16954,24 +16988,70 @@ async function analyzeImageDataUrl(
     return "";
   }
 
-  const result = await apiJson("/ai/vision", {
-    method: "POST",
-    body: JSON.stringify({
-      provider: DEFAULT_AI_PROVIDER,
-      model: DEFAULT_AI_MODEL,
-      image: imageInput,
-      prompt:
-        prompt ||
-        "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when visible. Do not identify real people by name.",
-    }),
-  });
+  /*
+   * Vision is enrichment, not a blocking dependency. If the endpoint/provider
+   * is unhealthy (e.g. the observed /ai/vision 502), temporarily stop sending
+   * more requests instead of making every upload/editor/feed action wait.
+   */
+  if (visionCircuitOpen()) {
+    return "";
+  }
 
-  return String(
-    (result && result.text) || ""
-  )
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 700);
+  const controller =
+    typeof AbortController !== "undefined"
+      ? new AbortController()
+      : null;
+
+  const timeout =
+    setTimeout(
+      () => {
+        try {
+          controller && controller.abort();
+        } catch (e) {}
+      },
+      9000
+    );
+
+  try {
+    const result = await apiJson("/ai/vision", {
+      method: "POST",
+      signal:
+        controller
+          ? controller.signal
+          : undefined,
+      body: JSON.stringify({
+        provider:
+          String(
+            import.meta.env.VITE_VISION_PROVIDER ||
+            DEFAULT_AI_PROVIDER
+          ).trim(),
+        model:
+          String(
+            import.meta.env.VITE_VISION_MODEL ||
+            ""
+          ).trim(),
+        image: imageInput,
+        prompt:
+          prompt ||
+          "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when visible. Do not identify real people by name.",
+      }),
+    });
+
+    VISION_RUNTIME.failures = 0;
+    VISION_RUNTIME.disabledUntil = 0;
+
+    return String(
+      (result && result.text) || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 700);
+  } catch (err) {
+    pauseVisionAfterFailure(err);
+    return "";
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function requestAiImageProxy(payload) {
@@ -18967,7 +19047,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v25-character-save-fast-path";
+const BUILD_VERSION = "v26-vision-comments-save-perf";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -26093,10 +26173,27 @@ HARD CAPSULE BOUNDARY:
 }
 
 async function genComments(w, post, options = {}) {
+  const maxHint =
+    Math.max(
+      2,
+      Math.min(
+        8,
+        Math.round(
+          Number(options && options.maxComments) || 6
+        )
+      )
+    );
+
+  /*
+   * PERFORMANCE v26:
+   * The model can emit at most 8 comments in this lane, so feeding it 19-22
+   * full actor capsules wastes prompt construction, tokens and latency.
+   */
   const cast = fairCommentCast(
     w,
     post.authorId,
-    post
+    post,
+    Math.min(10, Math.max(6, maxHint + 2))
   );
 
   const requestedMinComments = Math.max(
@@ -26118,8 +26215,26 @@ async function genComments(w, post, options = {}) {
     post
   );
 
-  /* v71: understand the post once before any character applies a subjective lens. */
-  const postMeaning = await analyzeSocialPostMeaning(w, post);
+  /*
+   * v26 FAST SEMANTIC ANCHOR:
+   * Comment generation already receives the exact caption/image/thread.
+   * Avoid a separate AI request before every comment wave. If a richer anchor
+   * was previously stored, keep using it; otherwise use the deterministic
+   * grounded fallback and let the single comment model call do the language
+   * understanding.
+   */
+  const postMeaning =
+    post.socialMeaning &&
+    typeof post.socialMeaning === "object"
+      ? normalizeSocialPostMeaning(
+          w,
+          post,
+          post.socialMeaning
+        )
+      : fallbackSocialPostMeaning(
+          w,
+          post
+        );
 
   const out = await askWorldJSON(
     w,
@@ -26127,7 +26242,7 @@ async function genComments(w, post, options = {}) {
     `${worldContext(
       w,
       cast.map((c) => c.id),
-      true,
+      false,
       null,
       {
         includePlayer: publicSocialPlayerRelevant(w, post),
@@ -26449,7 +26564,15 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 2400 }
+    {
+      maxTokens: 1800,
+      priority:
+        Math.max(
+          0,
+          Number(options && options.priority) || 0
+        ),
+      maxTries: 2,
+    }
   );
 
   /*
@@ -26489,9 +26612,15 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
 
   if (acceptedActors.length >= minWanted) return baseOut;
 
-  /* PERFORMANCE HARD CAP: never launch a second large AI generation merely to
-   * fill a comment quota. A natural partial wave is preferable to freezing the UI. */
-  return baseOut;
+  /*
+   * If we already got at least one valid new commenter, let the guaranteed
+   * coverage follow-up round finish the quota later. Only a ZERO-comment wave
+   * gets an immediate lightweight repair so the player's post cannot stay
+   * completely silent.
+   */
+  if (acceptedActors.length > 0) {
+    return baseOut;
+  }
 
   const missing = minWanted - acceptedActors.length;
   const rawActors = new Set(
@@ -26501,20 +26630,33 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
   );
   const unavailable = new Set([...beforeActors, ...acceptedActors, ...rawActors]);
 
-  const candidates = fairCommentCast(w, post.authorId, post)
-    .filter((c) => c && !unavailable.has(c.id) && c.id !== post.authorId)
-    .slice(0, Math.max(missing, Math.min(missing + 3, 8)));
+  const candidates = fairCommentCast(
+    w,
+    post.authorId,
+    post,
+    Math.min(5, Math.max(3, missing + 1))
+  )
+    .filter(
+      (c) =>
+        c &&
+        !unavailable.has(c.id) &&
+        c.id !== post.authorId
+    )
+    .slice(
+      0,
+      Math.min(5, Math.max(2, missing))
+    );
 
   if (!candidates.length) return baseOut;
 
   try {
-    const repairOut = await askWorldJSONInteractive(
+    const repairOut = await askWorldJSON(
       w,
       engineFor(w),
       `${worldContext(
         w,
         candidates.map((c) => c.id),
-        true,
+        false,
         null,
         {
           includePlayer: publicSocialPlayerRelevant(w, post),
@@ -26555,7 +26697,22 @@ HARD RULES:
 
 JSON ONLY:
 {"comments":[{"id":"exact eligible id","text":"short natural comment","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
-      { maxTokens: Math.max(500, Math.min(1500, 220 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
+      {
+        maxTokens:
+          Math.max(
+            420,
+            Math.min(
+              900,
+              160 *
+                Math.min(
+                  candidates.length,
+                  missing + 1
+                )
+            )
+          ),
+        maxTries: 2,
+        priority: 35,
+      }
     );
 
     const combined = [...safeAiComments(baseOut), ...safeAiComments(repairOut)]
@@ -27925,12 +28082,96 @@ function socialInteractionInterest(
  * beszédes karakterek több kommentet bírnak el; a quiet/private karakterek
  * ritkábban jelennek meg. A kapcsolat és relevancia továbbra is elsődleges.
  */
-function fairCommentCast(w, targetId, post = null) {
+const COMMENT_ACTIVITY_READ_CACHE = new WeakMap();
+
+function commentActivityIndex(w) {
+  const posts =
+    w && Array.isArray(w.posts)
+      ? w.posts
+      : [];
+
+  const rev =
+    Math.max(
+      0,
+      Number(w && w.rev) || 0
+    );
+
+  const minuteBucket =
+    Math.floor(now() / 60000);
+
+  let cached =
+    COMMENT_ACTIVITY_READ_CACHE.get(posts);
+
+  if (
+    cached &&
+    cached.rev === rev &&
+    cached.minuteBucket === minuteBucket
+  ) {
+    return cached;
+  }
+
   const cutoff =
     now() - 48 * 3600e3;
 
+  const byAuthor =
+    new Map();
+
+  for (const p of posts) {
+    for (const comment of safePostComments(p)) {
+      if (!comment || !comment.authorId) continue;
+
+      let row =
+        byAuthor.get(comment.authorId);
+
+      if (!row) {
+        row = {
+          recentComments: 0,
+          lastCommentAt: 0,
+        };
+        byAuthor.set(
+          comment.authorId,
+          row
+        );
+      }
+
+      const ts =
+        Number(comment.ts) || 0;
+
+      if (ts >= cutoff) {
+        row.recentComments += 1;
+      }
+
+      if (ts > row.lastCommentAt) {
+        row.lastCommentAt = ts;
+      }
+    }
+  }
+
+  cached = {
+    rev,
+    minuteBucket,
+    byAuthor,
+  };
+
+  COMMENT_ACTIVITY_READ_CACHE.set(
+    posts,
+    cached
+  );
+
+  return cached;
+}
+
+function fairCommentCast(
+  w,
+  targetId,
+  post = null,
+  hardLimit = 0
+) {
   const target =
     charById(w, targetId);
+
+  const activityIndex =
+    commentActivityIndex(w);
 
   const chars = (w.chars || [])
     .filter(
@@ -27940,46 +28181,37 @@ function fairCommentCast(w, targetId, post = null) {
         c.id !== targetId
     )
     .map((c) => {
-      let recentComments = 0;
-      let lastCommentAt = 0;
+      const stats =
+        activityIndex.byAuthor.get(c.id) ||
+        {
+          recentComments: 0,
+          lastCommentAt: 0,
+        };
 
-      (w.posts || []).forEach((p) => {
-        safePostComments(p).forEach(
-          (comment) => {
-            if (
-              !comment ||
-              comment.authorId !== c.id
-            ) {
-              return;
-            }
+      const recentComments =
+        Number(stats.recentComments) || 0;
 
-            const ts =
-              Number(comment.ts) || 0;
-
-            if (ts >= cutoff) {
-              recentComments += 1;
-            }
-
-            lastCommentAt = Math.max(
-              lastCommentAt,
-              ts
-            );
-          }
-        );
-      });
+      const lastCommentAt =
+        Number(stats.lastCommentAt) || 0;
 
       const rel =
         getRel(w, c.id, targetId);
+
       const score =
         Number(rel && rel.score) || 0;
+
       const bond =
-        String((rel && (rel.bond || rel.type)) || "");
+        String(
+          (rel && (rel.bond || rel.type)) || ""
+        );
+
       const interest =
         socialInteractionInterest(
           w,
           c.id,
           targetId
         );
+
       const visualPriority =
         visualPostRelationshipPriority(
           w,
@@ -27987,24 +28219,23 @@ function fairCommentCast(w, targetId, post = null) {
           targetId,
           post
         );
+
       const following =
         isFollowing(
           w,
           c.id,
           targetId
         );
+
       const storyLinked =
         Boolean(
           target &&
-          ownStorySnippetAbout(c, target)
+          ownStorySnippetAbout(
+            c,
+            target
+          )
         );
 
-      /*
-       * Feed realism: a follower or someone with a real personal/story reason
-       * naturally sees the post. A totally unrelated non-follower can still
-       * discover it occasionally, but should not behave like a guaranteed
-       * member of every comment section.
-       */
       const naturallyLinked =
         following ||
         Math.abs(score) >= 10 ||
@@ -28013,12 +28244,17 @@ function fairCommentCast(w, targetId, post = null) {
         interest >= 14 ||
         visualPriority >= 20;
 
-      const activity = characterOnlineActivityProfile(w, c).comment;
+      const activity =
+        characterOnlineActivityProfile(
+          w,
+          c
+        ).comment;
 
       const discoveryChance =
         Math.min(
           0.72,
-          (0.18 + interest / 320) * Math.max(0.55, activity)
+          (0.18 + interest / 320) *
+            Math.max(0.55, activity)
         );
 
       const discovered =
@@ -28034,7 +28270,8 @@ function fairCommentCast(w, targetId, post = null) {
               : discovered
                 ? 4
                 : 0
-        ) + visualPriority;
+        ) +
+        visualPriority;
 
       return {
         c,
@@ -28043,7 +28280,8 @@ function fairCommentCast(w, targetId, post = null) {
         interest,
         following,
         eligible:
-          naturallyLinked || discovered,
+          naturallyLinked ||
+          discovered,
         visibilityBonus,
         activity,
         visualPriority,
@@ -28052,19 +28290,16 @@ function fairCommentCast(w, targetId, post = null) {
     });
 
   chars.sort((a, b) => {
-    /*
-     * Relevance + believable feed visibility + PERSONAL activity rhythm.
-     * A highly-online character may comment repeatedly; a private character
-     * pays a larger recent-activity penalty and therefore appears less often.
-     */
     const ap =
-      a.recentComments * (20 / Math.max(0.35, a.activity)) -
+      a.recentComments *
+        (20 / Math.max(0.35, a.activity)) -
       a.interest -
       a.visibilityBonus -
       (a.activity - 1) * 24;
 
     const bp =
-      b.recentComments * (20 / Math.max(0.35, b.activity)) -
+      b.recentComments *
+        (20 / Math.max(0.35, b.activity)) -
       b.interest -
       b.visibilityBonus -
       (b.activity - 1) * 24;
@@ -28087,12 +28322,11 @@ function fairCommentCast(w, targetId, post = null) {
   });
 
   const eligible =
-    chars.filter((x) => x.eligible);
+    chars.filter(
+      (x) =>
+        x.eligible
+    );
 
-  /*
-   * Keep enough candidates for an active world, but do not pretend every
-   * unrelated NPC saw every post. The AI still decides comment / like / ignore.
-   */
   const pool =
     eligible.length >= 5
       ? eligible
@@ -28101,26 +28335,69 @@ function fairCommentCast(w, targetId, post = null) {
           Math.min(8, chars.length)
         );
 
-  const visual = visualPostReactionProfile(w, post);
-  const castLimit = visual.hasImage
-    ? (visual.appearanceForward ? 22 : 20)
-    : 19;
+  const visual =
+    visualPostReactionProfile(
+      w,
+      post
+    );
 
-  /*
-   * Prefer NEW voices on a post before recycling somebody who has already left
-   * a top-level comment there. They can still re-enter naturally through the
-   * separate reply/thread system.
-   */
-  const alreadyTopLevel = new Set(
-    safePostComments(post)
-      .filter((comment) => comment && !comment.parent && comment.authorId)
-      .map((comment) => comment.authorId)
-  );
+  const naturalCastLimit =
+    visual.hasImage
+      ? (
+          visual.appearanceForward
+            ? 22
+            : 20
+        )
+      : 19;
 
-  const freshVoices = pool.filter((row) => !alreadyTopLevel.has(row.c.id));
-  const orderedPool = freshVoices.length >= Math.min(4, pool.length)
-    ? freshVoices.concat(pool.filter((row) => alreadyTopLevel.has(row.c.id)))
-    : pool;
+  const castLimit =
+    hardLimit > 0
+      ? Math.min(
+          naturalCastLimit,
+          Math.max(
+            1,
+            Math.round(
+              Number(hardLimit) || 1
+            )
+          )
+        )
+      : naturalCastLimit;
+
+  const alreadyTopLevel =
+    new Set(
+      safePostComments(post)
+        .filter(
+          (comment) =>
+            comment &&
+            !comment.parent &&
+            comment.authorId
+        )
+        .map(
+          (comment) =>
+            comment.authorId
+        )
+    );
+
+  const freshVoices =
+    pool.filter(
+      (row) =>
+        !alreadyTopLevel.has(
+          row.c.id
+        )
+    );
+
+  const orderedPool =
+    freshVoices.length >=
+    Math.min(4, pool.length)
+      ? freshVoices.concat(
+          pool.filter(
+            (row) =>
+              alreadyTopLevel.has(
+                row.c.id
+              )
+          )
+        )
+      : pool;
 
   return orderedPool
     .map((x) => x.c)
@@ -30611,22 +30888,23 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
 
     const imageId = imageIdOf(img);
     let imageDescription = "";
+    let deferredVisionInput = "";
 
-    if (img) {
+    if (img && !visionCircuitOpen()) {
       try {
         const data = resolveImg(img, media);
 
-        if (data && String(data).startsWith("data:image/")) {
-          imageDescription = await analyzeImageDataUrl(
-            data,
-            tt(
-              "Írd le 1-3 rövid mondatban, mi látható ezen a social media képen. Csak látható részleteket említs: személyek száma, tevékenység, ruha, helyszín, hangulat. Ne azonosíts valódi személyt név szerint.",
-              "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
-            )
-          );
+        if (
+          data &&
+          (
+            isInlineImageData(data) ||
+            /^https:\/\//i.test(String(data))
+          )
+        ) {
+          deferredVisionInput = data;
         }
       } catch (e) {
-        console.warn("Player post image analysis failed:", e);
+        deferredVisionInput = "";
       }
     }
 
@@ -30714,6 +30992,44 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       onSignal({
         type: "player-post",
         postId: p.id,
+      });
+    }
+
+    /*
+     * Non-blocking image enrichment. The post and its guaranteed comment
+     * action already exist before this request starts.
+     */
+    if (deferredVisionInput) {
+      void analyzeImageDataUrl(
+        deferredVisionInput,
+        tt(
+          "Írd le 1-3 rövid mondatban, mi látható ezen a social media képen. Csak látható részleteket említs: személyek száma, tevékenység, ruha, helyszín, hangulat. Ne azonosíts valódi személyt név szerint.",
+          "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
+        )
+      ).then((vision) => {
+        if (!vision) return;
+
+        update((n) => {
+          const livePost =
+            (n.posts || []).find(
+              (row) =>
+                row &&
+                row.id === p.id
+            );
+
+          if (
+            !livePost ||
+            String(livePost.imageDescription || "").trim()
+          ) {
+            return;
+          }
+
+          livePost.imageDescription =
+            String(vision)
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 700);
+        });
       });
     }
 
@@ -53366,6 +53682,14 @@ async function runSimulationAction(view, update, action, addImage) {
         {
           minComments: quotaEnforced ? minComments : 0,
           maxComments,
+          priority:
+            isGuaranteedCoverage
+              ? (
+                  post.authorId === view.meId
+                    ? 45
+                    : 28
+                )
+              : 12,
         }
       );
 
@@ -53381,60 +53705,138 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : quotaOut;
 
-    /* PERFORMANCE: commit once. Do not clone the entire world for a probe. */
+    /*
+     * PERFORMANCE + CORRECTNESS v26:
+     * Apply comments, update coverage metadata and enqueue thread follow-up in
+     * ONE world mutation. The previous two-update version rerendered the whole
+     * app twice and computed `beforeIds` only AFTER comments already existed,
+     * so newCommentIds was always empty.
+     */
     let visibleReactionCount = 0;
-    update((n) => {
-      visibleReactionCount = applyComments(n, post.id, out, label);
-      if (!visibleReactionCount && isGuaranteedCoverage) {
-        const failedPost = (n.posts || []).find((row) => row && row.id === post.id);
-        if (failedPost) {
-          failedPost.commentCoverageAttemptAt = now();
-          failedPost.commentCoverageAttempts =
-            Math.max(0, Math.round(Number(failedPost.commentCoverageAttempts) || 0)) + 1;
-        }
-      }
-    });
-
-    if (!visibleReactionCount) return null;
 
     update((n) => {
-      const livePost = (n.posts || []).find((p) => p && p.id === post.id);
-      const beforeIds = new Set(safePostComments(livePost).map((c) => c.id));
-      const beforeTopLevelCount = livePost ? topLevelAiCommentCount(n, livePost) : 0;
+      const livePost =
+        (n.posts || []).find(
+          (row) =>
+            row &&
+            row.id === post.id
+        );
 
-      /* The authoritative comment mutation already happened in the first update.
-       * Do not apply it a second time. */
-      const refreshedPost = (n.posts || []).find((p) => p && p.id === post.id);
-      if (refreshedPost && isGuaranteedCoverage) {
+      if (!livePost) return;
+
+      const beforeIds =
+        new Set(
+          safePostComments(livePost)
+            .map(
+              (comment) =>
+                comment && comment.id
+            )
+            .filter(Boolean)
+        );
+
+      const beforeTopLevelCount =
+        topLevelAiCommentCount(
+          n,
+          livePost
+        );
+
+      visibleReactionCount =
+        applyComments(
+          n,
+          post.id,
+          out,
+          label
+        );
+
+      const refreshedPost =
+        (n.posts || []).find(
+          (row) =>
+            row &&
+            row.id === post.id
+        );
+
+      if (!refreshedPost) return;
+
+      if (isGuaranteedCoverage) {
         refreshedPost.commentCoverageAttemptAt = now();
-        refreshedPost.commentCoverageLastSuccessAt = now();
         refreshedPost.commentCoverageAttempts =
-          Math.max(0, Math.round(Number(refreshedPost.commentCoverageAttempts) || 0)) + 1;
+          Math.max(
+            0,
+            Math.round(
+              Number(
+                refreshedPost.commentCoverageAttempts
+              ) || 0
+            )
+          ) + 1;
+
+        if (visibleReactionCount) {
+          refreshedPost.commentCoverageLastSuccessAt = now();
+        }
       }
 
       if (
-        refreshedPost &&
         action.payload &&
         action.payload.trigger === "fresh-post"
       ) {
-        const afterTopLevelCount = topLevelAiCommentCount(n, refreshedPost);
+        const afterTopLevelCount =
+          topLevelAiCommentCount(
+            n,
+            refreshedPost
+          );
+
         refreshedPost.autoCommentedAt = now();
-        refreshedPost.autoCommentAttempts = Math.max(
-          0,
-          Math.round(Number(refreshedPost.autoCommentAttempts) || 0)
-        ) + 1;
-        if (afterTopLevelCount > beforeTopLevelCount) {
-          refreshedPost.autoCommentRounds = Math.max(
+        refreshedPost.autoCommentAttempts =
+          Math.max(
             0,
-            Math.round(Number(refreshedPost.autoCommentRounds) || 0)
+            Math.round(
+              Number(
+                refreshedPost.autoCommentAttempts
+              ) || 0
+            )
           ) + 1;
+
+        if (
+          afterTopLevelCount >
+          beforeTopLevelCount
+        ) {
+          refreshedPost.autoCommentRounds =
+            Math.max(
+              0,
+              Math.round(
+                Number(
+                  refreshedPost.autoCommentRounds
+                ) || 0
+              )
+            ) + 1;
         }
       }
-      const newCommentIds = safePostComments(refreshedPost)
-        .filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId))
-        .map((c) => c.id);
 
-      if (refreshedPost && isGuaranteedCoverage) {
+      const newCommentIds =
+        safePostComments(
+          refreshedPost
+        )
+          .filter(
+            (comment) =>
+              comment &&
+              comment.id &&
+              !beforeIds.has(comment.id) &&
+              !isHuman(
+                n,
+                comment.authorId
+              )
+          )
+          .map(
+            (comment) =>
+              comment.id
+          );
+
+      if (
+        isGuaranteedCoverage &&
+        postCommentCoverageState(
+          n,
+          refreshedPost
+        ).missing > 0
+      ) {
         enqueueGuaranteedPostCommentCoverage(
           n,
           refreshedPost.id,
@@ -53444,21 +53846,47 @@ async function runSimulationAction(view, update, action, addImage) {
 
       if (
         newCommentIds.length &&
-        (!action.payload || action.payload.allowThreadFollowup !== false)
+        (
+          !action.payload ||
+          action.payload.allowThreadFollowup !== false
+        )
       ) {
-        const queuedVisualFriction = enqueueVisualCrushThreadFriction(
-          n,
-          post.id,
-          newCommentIds
-        );
+        const queuedVisualFriction =
+          enqueueVisualCrushThreadFriction(
+            n,
+            post.id,
+            newCommentIds
+          );
 
         if (!queuedVisualFriction) {
-          enqueueNaturalThreadReply(n, post.id, newCommentIds);
+          enqueueNaturalThreadReply(
+            n,
+            post.id,
+            newCommentIds
+          );
         }
       }
     });
 
-    return "comments";
+    if (!visibleReactionCount) {
+      console.warn(
+        "[comments] AI wave produced no visible comments",
+        {
+          postId: post.id,
+          trigger: commentTrigger,
+          rawComments:
+            safeAiComments(out).length,
+          requestedMin:
+            minComments,
+          requestedMax:
+            maxComments,
+        }
+      );
+    }
+
+    return visibleReactionCount
+      ? "comments"
+      : null;
   }
 
   if (action.type === "note-react") {
@@ -55529,7 +55957,8 @@ const signOut = useCallback(async () => {
       !world ||
       !code ||
       !mediaReady.current ||
-      albumVisionBusy.current
+      albumVisionBusy.current ||
+      visionCircuitOpen()
     ) {
       return;
     }
