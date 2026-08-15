@@ -285,6 +285,35 @@ async function getSession(req) {
     world: result.rows[0].data,
   };
 }
+
+/* PERFORMANCE v15: auth-only hot paths must not deserialize the entire world.
+   Saves, media sync and AI requests usually need only the session identity. */
+async function getSessionIdentity(req) {
+  const token = readCookie(req, SESSION_COOKIE);
+
+  if (!token || !pool) return null;
+
+  const result = await pool.query(
+    `
+    SELECT
+      world_code,
+      account_id
+    FROM sessions
+    WHERE token_hash = $1
+      AND expires_at > NOW()
+    LIMIT 1
+    `,
+    [sessionTokenHash(token)]
+  );
+
+  if (!result.rows.length) return null;
+
+  return {
+    token,
+    worldCode: result.rows[0].world_code,
+    accountId: result.rows[0].account_id,
+  };
+}
 function legacyPasswordHash(password, salt) {
   const txt = String(salt) + "::" + String(password);
   let h1 = 0x811c9dc5;
@@ -1027,6 +1056,53 @@ app.get("/auth/session", async (req, res) => {
       error:
         "Session restore failed.",
     });
+  }
+});
+
+/* -------------------------------------------------------------------------
+   LIGHTWEIGHT WORLD REVISION CHECK — performance v15
+   Returns no world JSON. Poll/focus checks use this before downloading state.
+   ------------------------------------------------------------------------- */
+app.get("/world/version", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSessionIdentity(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({
+        authenticated: false,
+        error: "Not authenticated.",
+      });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+        COALESCE(NULLIF(data->>'syncRev', '')::BIGINT, 0) AS sync_rev,
+        COALESCE(NULLIF(data->>'rev', '')::BIGINT, 0) AS rev
+      FROM worlds
+      WHERE code = $1
+      LIMIT 1
+      `,
+      [session.worldCode]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ error: "World not found." });
+    }
+
+    return res.json({
+      authenticated: true,
+      code: session.worldCode,
+      meId: session.accountId,
+      syncRev: Number(result.rows[0].sync_rev) || 0,
+      rev: Number(result.rows[0].rev) || 0,
+    });
+  } catch (err) {
+    console.error("World version error:", err);
+    return res.status(500).json({ error: "World version check failed." });
   }
 });
 
@@ -1791,211 +1867,115 @@ app.post("/world/save", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
 
-    const session =
-      await getSession(req);
+    /* Hot save path: do not JOIN/deserialise the full world merely to auth. */
+    const session = await getSessionIdentity(req);
 
     if (!session) {
       clearSessionCookie(res);
-
-      return res.status(401).json({
-        error: "Not authenticated.",
-      });
+      return res.status(401).json({ error: "Not authenticated." });
     }
 
-    const incomingWorld =
-      req.body?.world;
+    const incomingWorld = req.body?.world;
 
     if (
       !incomingWorld ||
-      typeof incomingWorld !==
-        "object" ||
+      typeof incomingWorld !== "object" ||
       !incomingWorld.code
     ) {
-      return res.status(400).json({
-        error: "Missing world data.",
-      });
+      return res.status(400).json({ error: "Missing world data." });
     }
 
-    const incomingCode =
-      cleanCode(
-        incomingWorld.code
-      );
+    const incomingCode = cleanCode(incomingWorld.code);
 
-    if (
-      incomingCode !==
-      session.worldCode
-    ) {
-      return res.status(403).json({
-        error:
-          "You cannot save another world.",
-      });
+    if (incomingCode !== session.worldCode) {
+      return res.status(403).json({ error: "You cannot save another world." });
     }
 
-    const expectedSyncRev =
-      Math.max(
-        0,
-        Math.floor(
-          Number(
-            req.body?.syncRev ??
-            incomingWorld.syncRev
-          ) || 0
-        )
-      );
+    const expectedSyncRev = Math.max(
+      0,
+      Math.floor(Number(req.body?.syncRev ?? incomingWorld.syncRev) || 0)
+    );
 
-    client =
-      await pool.connect();
-
+    client = await pool.connect();
     await client.query("BEGIN");
 
-    const existingResult =
-      await client.query(
-        `
-        SELECT data
-        FROM worlds
-        WHERE code = $1
-        LIMIT 1
-        FOR UPDATE
-        `,
+    /* Normal saves fetch only tiny scalars + account secrets, not the full JSONB
+       document. A full world is selected only on the rare conflict path. */
+    const existingResult = await client.query(
+      `
+      SELECT
+        COALESCE(NULLIF(data->>'syncRev', '')::BIGINT, 0) AS sync_rev,
+        COALESCE(NULLIF(data->>'rev', '')::BIGINT, 0) AS rev,
+        COALESCE(data->'accounts', '{}'::jsonb) AS accounts
+      FROM worlds
+      WHERE code = $1
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [session.worldCode]
+    );
+
+    if (!existingResult.rows.length) {
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
+      return res.status(404).json({ error: "World not found." });
+    }
+
+    const serverSyncRev = Number(existingResult.rows[0].sync_rev) || 0;
+    const existingRev = Number(existingResult.rows[0].rev) || 0;
+    const existingAccounts = existingResult.rows[0].accounts || {};
+
+    if (expectedSyncRev !== serverSyncRev) {
+      const conflictResult = await client.query(
+        `SELECT data FROM worlds WHERE code = $1 LIMIT 1`,
         [session.worldCode]
       );
 
-    if (!existingResult.rows.length) {
-      await client.query(
-        "ROLLBACK"
-      );
+      const existingWorld = conflictResult.rows.length
+        ? conflictResult.rows[0].data
+        : null;
 
-      client.release();
-      client = null;
-
-      return res.status(404).json({
-        error: "World not found.",
-      });
-    }
-
-    const existingWorld =
-      existingResult.rows[0].data;
-
-    const serverSyncRev =
-      worldSyncRevServer(
-        existingWorld
-      );
-
-    if (
-      expectedSyncRev !==
-      serverSyncRev
-    ) {
-      await client.query(
-        "ROLLBACK"
-      );
-
+      await client.query("ROLLBACK");
       client.release();
       client = null;
 
       return res.status(409).json({
         code: "WORLD_CONFLICT",
-        error:
-          "The world changed on another client.",
-        meId:
-          session.accountId,
+        error: "The world changed on another client.",
+        meId: session.accountId,
         expectedSyncRev,
         serverSyncRev,
-        world:
-          safeWorldForClient(
-            existingWorld
-          ),
+        world: existingWorld ? safeWorldForClient(existingWorld) : null,
       });
     }
 
-    const nextWorld =
-      JSON.parse(
-        JSON.stringify(
-          incomingWorld
-        )
-      );
+    /* Express already parsed a private request-body object. Reusing it avoids
+       another multi-MB JSON.stringify -> JSON.parse deep clone on every save. */
+    const nextWorld = incomingWorld;
 
-    /*
-     * The client never receives password hashes/salts.
-     * Restore every server-secret field from the locked authoritative row.
-     */
-    if (!nextWorld.accounts) {
-      nextWorld.accounts = {};
+    if (!nextWorld.accounts) nextWorld.accounts = {};
+
+    for (const [accountId, oldAccount] of Object.entries(existingAccounts)) {
+      const wasDeleted = Boolean(nextWorld.deleted && nextWorld.deleted[accountId]);
+
+      if (wasDeleted && !nextWorld.accounts[accountId]) continue;
+
+      if (!nextWorld.accounts[accountId]) {
+        nextWorld.accounts[accountId] = { ...(oldAccount || {}) };
+      }
+
+      if (oldAccount?.hash) nextWorld.accounts[accountId].hash = oldAccount.hash;
+      if (oldAccount?.salt) nextWorld.accounts[accountId].salt = oldAccount.salt;
     }
 
-    for (
-      const [
-        accountId,
-        oldAccount,
-      ] of Object.entries(
-        existingWorld.accounts || {}
-      )
-    ) {
-      const wasDeleted =
-        Boolean(
-          nextWorld.deleted &&
-          nextWorld.deleted[
-            accountId
-          ]
-        );
+    nextWorld.code = session.worldCode;
+    nextWorld.rev = Math.max(Number(nextWorld.rev || 0), existingRev) + 1;
+    nextWorld.syncRev = serverSyncRev + 1;
 
-      if (
-        wasDeleted &&
-        !nextWorld.accounts[
-          accountId
-        ]
-      ) {
-        continue;
-      }
+    if (nextWorld.universe) nextWorld.universe.at = Date.now();
 
-      if (
-        !nextWorld.accounts[
-          accountId
-        ]
-      ) {
-        nextWorld.accounts[
-          accountId
-        ] =
-          JSON.parse(
-            JSON.stringify(
-              oldAccount
-            )
-          );
-      }
-
-      if (oldAccount?.hash) {
-        nextWorld.accounts[
-          accountId
-        ].hash =
-          oldAccount.hash;
-      }
-
-      if (oldAccount?.salt) {
-        nextWorld.accounts[
-          accountId
-        ].salt =
-          oldAccount.salt;
-      }
-    }
-
-    nextWorld.code =
-      session.worldCode;
-
-    nextWorld.rev =
-      Math.max(
-        Number(
-          nextWorld.rev || 0
-        ),
-        Number(
-          existingWorld.rev || 0
-        )
-      ) + 1;
-
-    nextWorld.syncRev =
-      serverSyncRev + 1;
-
-    if (nextWorld.universe) {
-      nextWorld.universe.at =
-        Date.now();
-    }
+    const nextWorldJson = JSON.stringify(nextWorld);
 
     await client.query(
       `
@@ -2004,50 +1984,30 @@ app.post("/world/save", async (req, res) => {
           updated_at = NOW()
       WHERE code = $1
       `,
-      [
-        session.worldCode,
-        JSON.stringify(
-          nextWorld
-        ),
-      ]
+      [session.worldCode, nextWorldJson]
     );
 
     await client.query("COMMIT");
-
     client.release();
     client = null;
 
+    /* PERFORMANCE v15: successful saves return only tiny metadata. The client
+       already owns the accepted snapshot; echoing several MB back was wasteful. */
     return res.json({
       ok: true,
-      meId:
-        session.accountId,
-      syncRev:
-        nextWorld.syncRev,
-      world:
-        safeWorldForClient(
-          nextWorld
-        ),
+      meId: session.accountId,
+      syncRev: nextWorld.syncRev,
+      rev: nextWorld.rev,
     });
   } catch (err) {
     if (client) {
-      try {
-        await client.query(
-          "ROLLBACK"
-        );
-      } catch (e) {}
-
+      try { await client.query("ROLLBACK"); } catch (e) {}
       client.release();
       client = null;
     }
 
-    console.error(
-      "World save error:",
-      err
-    );
-
-    return res.status(500).json({
-      error: "World save failed.",
-    });
+    console.error("World save error:", err);
+    return res.status(500).json({ error: "World save failed." });
   }
 });
 
@@ -2502,12 +2462,43 @@ app.use((req, res, next) => {
    CLOUD MEDIA LOAD
    Backward-compatible with old raw world_media.data rows.
    ------------------------------------------------------------------------- */
+app.get("/media/version", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSessionIdentity(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT COALESCE(NULLIF(data->>'syncRev', '')::BIGINT, 0) AS sync_rev
+      FROM world_media
+      WHERE world_code = $1
+      LIMIT 1
+      `,
+      [session.worldCode]
+    );
+
+    return res.json({
+      ok: true,
+      syncRev: result.rows.length ? Number(result.rows[0].sync_rev) || 0 : 0,
+    });
+  } catch (err) {
+    console.error("Media version error:", err);
+    return res.status(500).json({ error: "Media version check failed." });
+  }
+});
+
 app.get("/media/load", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
 
     const session =
-      await getSession(req);
+      await getSessionIdentity(req);
 
     if (!session) {
       clearSessionCookie(res);
@@ -2568,7 +2559,7 @@ app.post("/media/save", async (req, res) => {
     if (!(await requireDb(res))) return;
 
     const session =
-      await getSession(req);
+      await getSessionIdentity(req);
 
     if (!session) {
       clearSessionCookie(res);
@@ -2710,7 +2701,6 @@ app.post("/media/save", async (req, res) => {
       ok: true,
       syncRev:
         nextSyncRev,
-      media,
     });
   } catch (err) {
     if (client) {
@@ -2777,7 +2767,7 @@ app.post("/ai/vision", async (req, res) => {
     if (!(await requireDb(res))) return;
 
     const session =
-      await getSession(req);
+      await getSessionIdentity(req);
 
     if (!session) {
       clearSessionCookie(res);
@@ -3806,7 +3796,7 @@ app.post(
       }
 
       const session =
-        await getSession(req);
+        await getSessionIdentity(req);
 
       if (!session) {
         clearSessionCookie(

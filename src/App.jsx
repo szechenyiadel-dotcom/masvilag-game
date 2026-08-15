@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v14 — PERFORMANCE PIPELINE ONLY — 20260815_2008 */
+/* MÁSVILÁG BUILD v15 — LIGHTWEIGHT SYNC PERFORMANCE ONLY — 20260815_2025 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -16488,6 +16488,20 @@ async function serverSession() {
   });
 }
 
+/* PERFORMANCE v15: polling/focus checks fetch only tiny revision scalars.
+   The multi-MB world/media payload is requested only when the revision changed. */
+async function serverWorldVersion() {
+  return apiJson("/world/version", {
+    method: "GET",
+  });
+}
+
+async function serverMediaVersion() {
+  return apiJson("/media/version", {
+    method: "GET",
+  });
+}
+
 async function serverLogout() {
   return apiJson("/auth/logout", {
     method: "POST",
@@ -18513,7 +18527,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v14-performance-pipeline";
+const BUILD_VERSION = "v15-lightweight-sync";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -54703,10 +54717,20 @@ const signOut = useCallback(async () => {
   useEffect(() => {
     let alive = true;
 
+    /*
+     * PERFORMANCE v15 — LIGHTWEIGHT MULTI-DEVICE SYNC
+     *
+     * Old behavior downloaded + migrated + JSON.stringify-compared the entire
+     * world on every poll/focus/visibility check, and also reloaded the full
+     * media library. For a multi-MB save this can freeze the browser main
+     * thread even when nothing changed.
+     *
+     * New behavior asks PostgreSQL for tiny syncRev scalars first. Full world
+     * or media data is fetched only when that particular revision changed.
+     */
     const refreshFromServer =
       async (reason = "focus") => {
-        const current =
-          wRef.current;
+        const current = wRef.current;
 
         if (
           !alive ||
@@ -54745,411 +54769,99 @@ const signOut = useCallback(async () => {
         lastServerCheckAt.current = ts;
 
         try {
-          const session =
-            await serverSession();
+          const version = await serverWorldVersion();
 
           if (
             !alive ||
-            !session ||
-            !session.authenticated ||
-            !session.world ||
-            !session.meId
+            !version ||
+            !version.authenticated ||
+            version.meId !== meId ||
+            String(version.code || "") !== String(current.code || "")
           ) {
             return;
           }
 
-          const serverWorld =
-            migrate(
-              session.world
-            );
+          const localRev = worldSyncRev(wRef.current);
+          const serverRev = Math.max(
+            0,
+            Math.floor(Number(version.syncRev) || 0)
+          );
 
-          const latestLocal =
-            wRef.current;
-
-          if (
-            !latestLocal ||
-            latestLocal.code !==
-              serverWorld.code ||
-            session.meId !== meId
-          ) {
-            return;
-          }
-
-          const serverRev =
-            worldSyncRev(
-              serverWorld
-            );
-
-          const localRev =
-            worldSyncRev(
-              latestLocal
-            );
-
-          /* Avoid serializing the whole world during every poll. Local
-           * mutations increment the runtime revision, so unequal revisions
-           * are already enough to enter the reconciliation branch. */
-          const sameContent =
-            serverRev === localRev
-              ? contentOf(latestLocal) === contentOf(serverWorld)
-              : false;
-
-          if (
-            serverRev === localRev &&
-            !sameContent
-          ) {
-            /*
-             * Tipikus offline-edit eset:
-             * a szerver azóta nem változott, ezért a lokális
-             * változás biztonságosan felküldhető ugyanarról syncRev-ről.
-             */
-            if (!worldSaveBusy.current) {
-              worldSaveBusy.current = true;
-
-              try {
-                const saved =
-                  await serverSaveWorld(
-                    latestLocal
-                  );
-
-                if (
-                  saved &&
-                  saved.world
-                ) {
-                  const accepted =
-                    migrate(
-                      saved.world
-                    );
-
-                  const acceptedRev =
-                    worldSyncRev(
-                      accepted
-                    );
-
-                  lastSavedContent.current =
-                    contentOf(
-                      accepted
-                    );
-
-                  setWorld((cur) => {
-                    if (!cur) return cur;
-
-                    if (
-                      contentOf(cur) ===
-                      contentOf(latestLocal)
-                    ) {
-                      return accepted;
-                    }
-
-                    if (
-                      worldSyncRev(cur) ===
-                      localRev
-                    ) {
-                      const next =
-                        JSON.parse(
-                          JSON.stringify(
-                            cur
-                          )
-                        );
-
-                      next.syncRev =
-                        acceptedRev;
-
-                      return next;
-                    }
-
-                    return cur;
-                  });
-
-                  setSaveState("saved");
-                  setSaveAt(now());
-                }
-              } catch (e) {
-                if (
-                  e &&
-                  e.status === 409 &&
-                  e.data &&
-                  e.data.world
-                ) {
-                  const conflictWorld =
-                    migrate(
-                      e.data.world
-                    );
-
-                  const conflictContent =
-                    contentOf(
-                      conflictWorld
-                    );
-
-                  const localContent =
-                    contentOf(
-                      latestLocal
-                    );
-
-                  /*
-                   * SAME-CLIENT DUPLICATE SAVE:
-                   * ha a szerver pontosan ugyanazt a snapshotot tartalmazza,
-                   * akkor nem "másik eszköz" frissített. Egy párhuzamos saját
-                   * autosave ért célba előbb. Csendben elfogadjuk.
-                   */
-                  if (
-                    conflictContent ===
-                    localContent
-                  ) {
-                    lastSavedContent.current =
-                      conflictContent;
-
-                    setWorld((cur) => {
-                      if (!cur) return cur;
-
-                      if (
-                        contentOf(cur) ===
-                        localContent
-                      ) {
-                        return conflictWorld;
-                      }
-
-                      if (
-                        worldSyncRev(cur) ===
-                        localRev
-                      ) {
-                        const next =
-                          JSON.parse(
-                            JSON.stringify(
-                              cur
-                            )
-                          );
-
-                        next.syncRev =
-                          worldSyncRev(
-                            conflictWorld
-                          );
-
-                        return next;
-                      }
-
-                      return cur;
-                    });
-
-                    setSaveState("saved");
-                    setSaveAt(now());
-                  } else if (
-                    conflictContent ===
-                    lastSavedContent.current &&
-                    worldSyncRev(conflictWorld) ===
-                      localRev + 1
-                  ) {
-                    /*
-                     * A saját előző mentésünk ért célba, miközben már van
-                     * újabb lokális tartalom. Csak átvezetjük az új syncRev-et,
-                     * és a következő autosave felküldi a frissebb lokális állapotot.
-                     */
-                    setWorld((cur) => {
-                      if (!cur) return cur;
-
-                      const next =
-                        JSON.parse(
-                          JSON.stringify(
-                            cur
-                          )
-                        );
-
-                      next.syncRev =
-                        worldSyncRev(
-                          conflictWorld
-                        );
-
-                      return next;
-                    });
-
-                    setSaveState("retry");
-                  } else {
-                    /*
-                     * v40: eltérő reconnect snapshotnál se dobjuk el egyik
-                     * oldalt sem. Összeolvasztjuk, átvesszük a szerver revjét,
-                     * majd az autosave visszaküldi az egységes állapotot.
-                     */
-                    const reconciled = migrate(
-                      mergeWorlds(
-                        conflictWorld,
-                        wRef.current || latestLocal
-                      )
-                    );
-                    reconciled.syncRev =
-                      worldSyncRev(conflictWorld);
-                    setWorld(reconciled);
-                    setSaveState("retry");
-                  }
-                }
-              } finally {
-                worldSaveBusy.current = false;
-              }
-            }
-          } else if (
-            serverRev !== localRev
-          ) {
-            const serverContent =
-              contentOf(
-                serverWorld
-              );
-
-            const localContent =
-              contentOf(
-                latestLocal
-              );
-
-            /*
-             * Ha a tartalom azonos, csak a szerver syncRev-je
-             * van előrébb (tipikusan saját mentés ért célba).
-             */
-            if (
-              serverContent ===
-              localContent
-            ) {
-              lastSavedContent.current =
-                serverContent;
-
-              setWorld((cur) => {
-                if (!cur) return cur;
-
-                if (
-                  contentOf(cur) ===
-                  serverContent
-                ) {
-                  return serverWorld;
-                }
-
-                return cur;
-              });
-
-              setSaveState("saved");
-            } else if (
-              serverContent ===
-              lastSavedContent.current &&
-              serverRev ===
-                localRev + 1
-            ) {
-              /*
-               * A szerver a saját előző elfogadott állapotunk,
-               * a lokális world viszont már frissebb.
-               * Ne dobjuk el a lokális változást; csak vigyük át
-               * rá az új syncRev-et, aztán autosave újrapróbálja.
-               */
-              setWorld((cur) => {
-                if (!cur) return cur;
-
-                const next =
-                  JSON.parse(
-                    JSON.stringify(
-                      cur
-                    )
-                  );
-
-                next.syncRev =
-                  serverRev;
-
-                return next;
-              });
-
-              setSaveState("retry");
-            } else {
-              /*
-               * v40 multi-device reconciliation: a szerver revje marad az
-               * authority, de az eltérő lokális és szerver tartalom ID-alapon
-               * összeolvad ahelyett, hogy az egyik teljes snapshot törölné a
-               * másikat. A következő autosave az egyesített state-et küldi fel.
-               */
-              const reconciled = migrate(
-                mergeWorlds(
-                  serverWorld,
-                  latestLocal
-                )
-              );
-              reconciled.syncRev =
-                serverRev;
-              setWorld(reconciled);
-              setSaveState("retry");
-            }
-          } else if (
-            sameContent
-          ) {
-            lastSavedContent.current =
-              contentOf(
-                serverWorld
-              );
-          }
-
-          /*
-           * Média külön revisionnel szinkronizálódik.
-           * A cloud az authority, hiányzó új lokális image ID
-           * konfliktus esetén append-only módon visszakerülhet.
-           */
-          try {
-            if (mediaSaveBusy.current) {
-              return;
-            }
-
-            const mediaResult =
-              await loadMedia(
-                current.code,
-                serverRev !== localRev
-                  ? serverWorld
-                  : wRef.current
-              );
+          /* Only a genuine server revision change justifies downloading the
+             complete world and running the expensive reconciliation path. */
+          if (serverRev !== localRev) {
+            const session = await serverSession();
 
             if (
               alive &&
-              mediaResult &&
-              mediaResult.mode === "cloud"
+              session &&
+              session.authenticated &&
+              session.world &&
+              session.meId === meId
             ) {
-              const incomingMedia =
-                mergeIncomingMediaPreservingUnsavedLocal(
-                  mediaResult.media || {},
-                  mediaRef.current || {},
-                  lastSavedMedia.current
-                );
+              installAuthoritativeWorld(
+                session.world,
+                session.meId,
+                reason || "revision-change"
+              );
+            }
+          }
 
-              const incomingJson =
-                mediaFingerprint(
-                  incomingMedia
-                );
-
-              mediaSyncRev.current =
-                Math.max(
-                  0,
-                  Math.floor(
-                    Number(
-                      mediaResult.syncRev
-                    ) || 0
-                  )
-                );
+          /* Media has its own revision. The full image map is fetched only
+             when that revision changed; ordinary world polls stay tiny. */
+          try {
+            if (!mediaSaveBusy.current) {
+              const mediaVersion = await serverMediaVersion();
+              const remoteMediaRev = Math.max(
+                0,
+                Math.floor(Number(mediaVersion && mediaVersion.syncRev) || 0)
+              );
 
               if (
-                incomingJson !==
-                mediaFingerprint(
-                  mediaRef.current || {}
-                )
+                alive &&
+                remoteMediaRev !== mediaSyncRev.current
               ) {
-                mediaRef.current =
-                  incomingMedia;
-                setMedia(
-                  incomingMedia
+                const mediaResult = await loadMedia(
+                  current.code,
+                  wRef.current
                 );
-              }
 
-              lastSavedMedia.current =
-                incomingJson;
+                if (
+                  alive &&
+                  mediaResult &&
+                  mediaResult.mode === "cloud"
+                ) {
+                  const incomingMedia =
+                    mergeIncomingMediaPreservingUnsavedLocal(
+                      mediaResult.media || {},
+                      mediaRef.current || {},
+                      lastSavedMedia.current
+                    );
+
+                  const incomingJson = mediaFingerprint(incomingMedia);
+
+                  mediaSyncRev.current = Math.max(
+                    0,
+                    Math.floor(Number(mediaResult.syncRev) || 0)
+                  );
+
+                  if (
+                    incomingJson !==
+                    mediaFingerprint(mediaRef.current || {})
+                  ) {
+                    mediaRef.current = incomingMedia;
+                    setMedia(incomingMedia);
+                  }
+
+                  lastSavedMedia.current = incomingJson;
+                }
+              }
             }
           } catch (e) {
-            console.warn(
-              "Media refresh failed:",
-              e
-            );
+            console.warn("Media revision refresh failed:", e);
           }
         } catch (e) {
-          if (
-            e &&
-            e.status === 401
-          ) {
+          if (e && e.status === 401) {
             setSaveState("error");
             setErr(
               tt(
