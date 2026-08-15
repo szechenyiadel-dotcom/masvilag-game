@@ -4017,64 +4017,23 @@ function canonicalRelationshipEvidence(actor, target) {
   if (!actor || !target) return "";
 
   /*
-   * Prefer the smallest target-specific clauses instead of a huge surrounding
-   * paragraph. Character sheets often contain compact lists such as:
-   * "Friends: A, B. Rivals: C, D." A wide snippet around C could otherwise
-   * accidentally see the word "Friends" from the previous list and seed the
-   * wrong relationship.
+   * v91 HARD DIRECTION RULE:
+   *
+   * Mechanical relationship state comes ONLY from actor -> THIS exact target
+   * entries in actor.connections.
+   *
+   * Example:
+   *   Angela -> Terry reads Angela's "Terry Silver — Relationship: ..."
+   *   Terry  -> Angela reads Terry's  "Angela Silverman — Relationship: ..."
+   *
+   * A sentence elsewhere saying "Johnny is my sensei" must NEVER make Daniel,
+   * Terry, Feng, etc. the actor's mentor merely because their name appears
+   * nearby in the same character sheet.
+   *
+   * Backstory/extra remain character-writing canon for the AI, but are NOT
+   * allowed to mechanically assign a relationship to another target.
    */
-  const aliases = canonTargetAliases(target)
-    .map((value) => String(value || "").toLowerCase())
-    .filter(Boolean);
-
-  const rawSources = [
-    actor.connections,
-    actor.backstory,
-    actor.extra,
-    actor.secrets,
-    actor.goals,
-    actor.bio,
-    actor.job,
-    actor.role,
-    actor.organization,
-    actor.affiliation,
-  ]
-    .filter(Boolean)
-    .map((value) => String(value));
-
-  const clauses = [];
-
-  rawSources.forEach((source) => {
-    source
-      .split(/\n+|(?<=[.!?])\s+|;\s*/g)
-      .map((part) => part.replace(/\s+/g, " ").trim())
-      .filter(Boolean)
-      .forEach((part) => {
-        const low = part.toLowerCase();
-        if (!aliases.some((alias) => low.includes(alias))) return;
-        if (!clauses.includes(part)) clauses.push(part);
-      });
-  });
-
-  if (clauses.length) {
-    return clauses
-      .slice(0, 6)
-      .join(" | ")
-      .slice(0, 2600);
-  }
-
-  const directConnections =
-    connectionCanonSnippetAbout(actor, target, 1100);
-
-  const ownStory =
-    ownStorySnippetAbout(actor, target);
-
-  return [directConnections, ownStory]
-    .filter(Boolean)
-    .join(" | ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 2200);
+  return connectionCanonSnippetAbout(actor, target, 2200);
 }
 
 function inferCanonicalRelationshipBaseline(w, actor, target) {
@@ -4084,6 +4043,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   const low = evidence.toLowerCase();
   const cue = connectionRelationshipCue(actor, target);
   const factionRivalry = factionRivalryActiveBetween(actor, target);
+  const exactBond = exactConnectionBondLabel(actor, target);
 
   const explicitBest =
     /best friend|ride\s*or\s*die|legjobb bar[aá]t|legjobb bar[aá]tn[oő]|legjobb bar[aá]tja/.test(low);
@@ -4107,7 +4067,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   const explicitMutualCrush =
     /mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction|k[oö]lcs[oö]n[oö]s vonzalom/.test(low);
   const explicitCrush =
-    /crush|has a crush|vonz[oó]d|vonzalom|attraction|attracted|in love|szerelmes|love interest/.test(low);
+    /crush|has a crush|vonz[oó]d|vonzalom|attraction|attracted|in love|szerelmes|love interest|fixation|obsess/.test(low);
   const explicitSecret =
     /secret crush|hidden crush|secret attraction|titkos crush|titkos vonzalom|rejtett vonzalom|senki nem tud|doesn['’]?t know/.test(low);
 
@@ -4131,93 +4091,93 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
    * If the sheet explicitly says they are friends/lovers/family, keep that.
    */
   if (explicitMother) {
-    return { score: 55, bond: "Anya", fixed: true, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 55, bond: exactBond || "Anya", fixed: true, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitFather) {
-    return { score: 55, bond: "Apa", fixed: true, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 55, bond: exactBond || "Apa", fixed: true, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitSibling) {
-    return { score: 55, bond: "Testvér", fixed: true, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 55, bond: exactBond || "Testvér", fixed: true, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitCousin) {
-    return { score: 45, bond: "Unokatestvér", fixed: true, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 45, bond: exactBond || "Unokatestvér", fixed: true, hidden: "", mood: "", why: "", source: "connections" };
   }
 
   if (explicitSpouse) {
-    return { score: 90, bond: "Házastárs", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 90, bond: exactBond || "Házastárs", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitEngaged) {
-    return { score: 85, bond: "Jegyesek", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 85, bond: exactBond || "Jegyesek", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitDating) {
-    return { score: 75, bond: "Járnak", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 75, bond: exactBond || "Járnak", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitEx) {
-    return { score: 0, bond: "Exek", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 0, bond: exactBond || "Exek", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitMutualCrush) {
-    return { score: 70, bond: "Kölcsönös crush", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 70, bond: exactBond || "Kölcsönös crush", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitCrush || cue.romantic) {
     return {
       score: 52,
-      bond: "Crush",
+      bond: exactBond || "Crush",
       fixed: false,
       hidden: explicitSecret || cue.secret ? "Secret crush" : "",
       mood: "",
       why: "",
-      source: "sheet",
+      source: "connections",
     };
   }
 
   if (explicitBest || cue.close) {
-    return { score: 92, bond: "Legjobb barát", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 92, bond: exactBond || "Legjobb barát", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitClose) {
-    return { score: 76, bond: "Közeli barát", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 76, bond: exactBond || "Közeli barát", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if ((explicitFriend || cue.friendly) && !(explicitEnemy || explicitRival || cue.hostile || cue.rival)) {
-    return { score: 55, bond: "Barát", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 55, bond: exactBond || "Barát", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
 
   if (explicitEnemy || cue.hostile) {
     return {
       score: -90,
-      bond: "Ellenség",
+      bond: exactBond || "Ellenség",
       fixed: false,
       hidden: "",
       mood: "hostile",
       why: "",
-      source: "sheet",
+      source: "connections",
     };
   }
 
   if (explicitRival || cue.rival) {
     return {
       score: -68,
-      bond: "Rivális",
+      bond: exactBond || "Rivális",
       fixed: false,
       hidden: "",
       mood: "competitive and distrustful",
       why: "",
-      source: "sheet",
+      source: "connections",
     };
   }
 
   if (explicitMentor && !explicitStudent) {
-    return { score: 25, bond: "Mentor", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 25, bond: exactBond || "Mentor", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitStudent && !explicitMentor) {
-    return { score: 20, bond: "Tanítvány", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 20, bond: exactBond || "Tanítvány", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitTeammate) {
-    return { score: 28, bond: "Teammate", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+    return { score: 28, bond: exactBond || "Teammate", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
 
   if (factionRivalry) {
     return {
       score: -72,
-      bond: "Rivális",
+      bond: exactBond || "Rivális",
       fixed: false,
       hidden: "",
       mood: "hostile and distrustful",
@@ -4276,7 +4236,7 @@ function refreshCanonicalRelationshipBaselines(w, focusId = "") {
        */
       if (
         existingBaseline &&
-        /^(?:sheet|faction)$/i.test(String(existingBaseline.source || ""))
+        /^(?:sheet|connections|faction)$/i.test(String(existingBaseline.source || ""))
       ) {
         delete store[key];
         return;
@@ -10834,45 +10794,231 @@ function ownStorySnippetAbout(actor, target) {
    defaults. It may describe a crush, best friend, rival, mentor, family bond,
    fear, loyalty, etc. Other characters still do not magically know it.
    ------------------------------------------------------------------------- */
-function connectionCanonSnippetAbout(actor, target, maxChars = 1800) {
-  if (!actor || !target) return "";
+function strictConnectionTargetAliases(target) {
+  if (!target) return [];
 
-  const source = String(actor.connections || "").replace(/\s+/g, " ").trim();
-  if (!source) return "";
+  const full = String(target.name || "").replace(/\s+/g, " ").trim();
+  const words = full.split(/\s+/).filter(Boolean);
+  const firstLast =
+    words.length >= 2
+      ? `${words[0]} ${words[words.length - 1]}`
+      : "";
 
-  const aliases = canonTargetAliases(target);
-  if (!aliases.length) return "";
+  const nickParts = String(target.nick || "")
+    .split(/[,/|;]/)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 
-  const lower = source.toLowerCase();
-  const hits = [];
+  return [
+    full,
+    firstLast,
+    target.username,
+    target.username ? `@${target.username}` : "",
+    ...nickParts,
+  ]
+    .map((value) => String(value || "").replace(/\s+/g, " ").trim())
+    .filter((value) => value.length >= 3)
+    .filter(
+      (value, index, arr) =>
+        arr.findIndex(
+          (other) => other.toLowerCase() === value.toLowerCase()
+        ) === index
+    );
+}
 
-  aliases.forEach((alias) => {
-    const needle = String(alias || "").toLowerCase();
-    if (!needle) return;
-    let from = 0;
-    while (from < lower.length && hits.length < 16) {
-      const at = lower.indexOf(needle, from);
-      if (at < 0) break;
-      hits.push(at);
-      from = at + Math.max(needle.length, 1);
+function normalizeConnectionSubject(value) {
+  return String(value || "")
+    .replace(/[()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[•*\-–—\s]+|[•*\-–—\s]+$/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function connectionSubjectIsExactTarget(subject, target) {
+  if (!subject || !target) return false;
+
+  const raw = normalizeConnectionSubject(subject);
+  if (!raw) return false;
+
+  /*
+   * These are group/generic subjects, NOT the named target:
+   * "Anyone who is close to Angela Silverman — Enemy"
+   * must not become Feng -> Angela = Enemy.
+   */
+  if (
+    /\b(?:anyone|anybody|everyone|everybody|people|person|friends?\s+of|close\s+to|anyone\s+who|those\s+who|students?\s*&?\s*senseis?|dojo\s+students?|dojo\s+senseis?|members?|mafia|team|club|organization)\b/i.test(
+      raw
+    )
+  ) {
+    return false;
+  }
+
+  const aliases = strictConnectionTargetAliases(target).map((alias) =>
+    normalizeConnectionSubject(alias)
+  );
+
+  if (aliases.includes(raw)) return true;
+
+  /*
+   * Explicit multi-name subject:
+   * "Johnny Lawrence, and Daniel LaRusso — senseis"
+   * Relation applies to both named people.
+   */
+  const parts = raw
+    .split(/\s*(?:,|&|\band\b|\bés\b|\+)\s*/i)
+    .map((part) => normalizeConnectionSubject(part))
+    .filter(Boolean);
+
+  return parts.some((part) => aliases.includes(part));
+}
+
+function connectionRelationshipEntriesAbout(actor, target) {
+  if (!actor || !target) return [];
+
+  const source = String(actor.connections || "")
+    .replace(/\r/g, "")
+    .trim();
+
+  if (!source) return [];
+
+  const aliases = strictConnectionTargetAliases(target);
+  if (!aliases.length) return [];
+
+  const rows = source
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  const found = [];
+
+  const add = (subject, relation, raw) => {
+    if (!connectionSubjectIsExactTarget(subject, target)) return;
+
+    const cleanRelation = String(relation || "")
+      .replace(/^\s*(?:relationship|kapcsolat)\s*:\s*/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!cleanRelation) return;
+
+    const key = `${normalizeConnectionSubject(subject)}|${cleanRelation.toLowerCase()}`;
+    if (found.some((entry) => entry.key === key)) return;
+
+    found.push({
+      key,
+      subject: String(subject || "").trim(),
+      relation: cleanRelation,
+      raw: String(raw || "").trim(),
+    });
+  };
+
+  rows.forEach((line) => {
+    /*
+     * Standard structured line:
+     * "Terry Silver — Relationship: Head Sensei / Mentor"
+     */
+    const dash = line.match(
+      /^(.+?)\s*[—–-]\s*(?:(?:Relationship|Kapcsolat)\s*:\s*)?(.+)$/
+    );
+
+    if (dash) {
+      add(dash[1], dash[2], line);
+      return;
+    }
+
+    /*
+     * Colon variant:
+     * "Terry Silver: Head Sensei / Mentor"
+     */
+    const colon = line.match(/^([^:]{2,160})\s*:\s*(.+)$/);
+    if (colon && connectionSubjectIsExactTarget(colon[1], target)) {
+      add(colon[1], colon[2], line);
+      return;
+    }
+
+    /*
+     * Narrative target-led entry:
+     * "Tory Nichols. The obsession. He still calls her his..."
+     * Only accepted when the ROW itself starts with this exact target alias.
+     */
+    for (const alias of aliases) {
+      const escaped = regexEscapeLiteral(alias);
+      const lead = line.match(
+        new RegExp(
+          `^\\s*${escaped}\\s*[.:-]\\s*(.+)$`,
+          "i"
+        )
+      );
+
+      if (lead) {
+        add(alias, lead[1], line);
+        break;
+      }
     }
   });
 
-  if (!hits.length) return "";
-  hits.sort((a, b) => a - b);
+  return found.slice(0, 8);
+}
 
-  const snippets = [];
-  for (const hit of hits) {
-    const start = Math.max(0, hit - 240);
-    const end = Math.min(source.length, hit + 720);
-    const snippet = source.slice(start, end).trim();
-    if (!snippet) continue;
-    if (snippets.some((old) => old.toLowerCase().includes(snippet.toLowerCase().slice(0, 160)))) continue;
-    snippets.push(snippet);
-    if (snippets.length >= 3) break;
-  }
+function exactConnectionBondLabel(actor, target) {
+  const text = connectionRelationshipEntriesAbout(actor, target)
+    .map((entry) => entry.relation)
+    .join(" | ")
+    .toLowerCase();
 
-  return snippets.join(" | ").slice(0, Math.max(200, Number(maxChars) || 1800));
+  if (!text) return "";
+
+  const labels = [];
+  const push = (label) => {
+    if (label && !labels.includes(label)) labels.push(label);
+  };
+
+  if (/mother|\bmom\b|\bmum\b|anya|édesany/.test(text)) push("Anya");
+  if (/father|\bdad\b|apa|édesap/.test(text)) push("Apa");
+  if (/sister|brother|sibling|testv[eé]r/.test(text)) push("Testvér");
+  if (/cousin|unokatestv[eé]r/.test(text)) push("Unokatestvér");
+
+  if (/best friend|ride\s*or\s*die|legjobb bar[aá]t/.test(text)) push("Legjobb barát");
+  else if (/close friend|k[oö]zeli bar[aá]t/.test(text)) push("Közeli barát");
+  else if (/\bfriend\b|bar[aá]t|ally|sz[oö]vets[eé]ges/.test(text)) push("Barát");
+
+  if (/enemy|ellens[eé]g|archenemy|hate|gy[uű]l[oö]l|despise/.test(text)) push("Ellenség");
+  else if (/rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(text)) push("Rivális");
+
+  if (/head sensei|\bsensei\b|mentor|teacher|coach|mester|tan[aá]r|edz[oő]/.test(text)) push("Mentor");
+  if (/head student|\bstudent\b|prot[eé]g[eé]|tan[ií]tv[aá]ny/.test(text)) push("Tanítvány");
+  if (/teammate|team mate|team-mate|csapatt[aá]rs|dojo mate|doj[oó]t[aá]rs/.test(text)) push("Teammate");
+  if (/frenemy/.test(text)) push("Frenemy");
+
+  if (/mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction/.test(text)) push("Kölcsönös crush");
+  else if (/obsess|fixation|megsz[aá]ll/.test(text)) push("Obsession");
+  else if (/crush|attraction|attracted|vonzalom|vonz[oó]d|in love|szerelmes|romantic/.test(text)) push("Crush");
+
+  if (/dating|boyfriend|girlfriend|j[aá]rnak|p[aá]rja/.test(text)) push("Járnak");
+  if (/engaged|fianc[eé]|jegyes/.test(text)) push("Jegyesek");
+  if (/husband|wife|spouse|h[aá]zast[aá]rs/.test(text)) push("Házastárs");
+  if (/\bex\b|ex-boyfriend|ex-girlfriend|volt p[aá]r/.test(text)) push("Exek");
+
+  return labels.slice(0, 3).join(" / ");
+}
+
+function connectionCanonSnippetAbout(actor, target, maxChars = 1800) {
+  const entries = connectionRelationshipEntriesAbout(actor, target);
+  if (!entries.length) return "";
+
+  /*
+   * Return ONLY rows whose SUBJECT is this exact target.
+   * No ±240/720 character window, so another person's "Sensei / Mentor" row
+   * cannot leak into this target's relationship.
+   */
+  return entries
+    .map(
+      (entry) =>
+        `${target.name || entry.subject} — Relationship: ${entry.relation}`
+    )
+    .join(" | ")
+    .slice(0, Math.max(200, Number(maxChars) || 1800));
 }
 
 function connectionRelationshipCue(actor, target) {
@@ -16379,7 +16525,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v90-relationship-baseline-image-vision";
+const BUILD_VERSION = "v91-exact-directed-connections";
 
 const AUTO = "masvilag:auto";
 /*
@@ -23029,6 +23175,8 @@ ${rows.join("\n")}
 
 RULE:
 - Each row is COMMENTER → THIS EXACT POST AUTHOR. Use that row for top-level tone.
+- ownConnections= contains ONLY the COMMENTER's Connections entry that explicitly names THIS post author.
+- Never borrow a Sensei/Mentor/Friend/Enemy label from a Connections row about somebody else.
 - Do not accidentally use POST AUTHOR → COMMENTER or another character's relationship.
 - For a reply, re-evaluate COMMENTER → PARENT COMMENT AUTHOR before writing the reply.
 `;
@@ -23281,7 +23429,7 @@ TERMÉSZETES SOCIAL MEDIA STÍLUS:
 KAPCSOLAT + TÖRTÉNET KÖTELEZŐEN HAT A KOMMENTRE:
 
 - MINDEN top-level komment előtt azonosítsd újra: a kommentelő = saját karakter ID; a célpont = a POST SZERZŐJE ${author ? author.name : "?"} [${post.authorId}]. Reply esetén a közvetlen parent komment szerzője is célpont, és mindkét kapcsolat számít.
-- A dinamikus relationship rekord ÉS a kommentelő SAJÁT Connections mezőjének pont erre a személyre vonatkozó sora elsődleges célpont-specifikus kánon. Ne cseréld össze másik karakter kapcsolataival.
+- A dinamikus relationship rekord ÉS a kommentelő SAJÁT Connections mezőjének PONT A POSZT SZERZŐJÉT név szerint megadó sora elsődleges célpont-specifikus kánon. Más karakter sorából semmilyen Sensei/Mentor/Friend/Enemy címke nem szivároghat át. Ha Angela → Daniel a kérdés, csak Angela Daniel-sora számít; Daniel → Angela esetén csak Daniel Angela-sora.
 - FRAKCIÓ/DOJO HARD RULE: Iron Dragons ↔ Cobra Kai, Iron Dragons ↔ Miyagi-Fang/Miyagi-Do/Eagle Fang, Cobra Kai ↔ Miyagi oldal, Pogue ↔ Kook és HYDRA ↔ SHIELD alapból rivalizáló/ellenséges háttér. Ilyen páros NE haverkodjon, NE hype-olja egymást és NE írjon bestie-szerű kommentet pusztán social változatosság kedvéért. Csak explicit pozitív személyes relationship vagy célpont-specifikus Connections-kánon írhatja ezt felül.
 - Ha a Connections szerint konkrétan barátok/közeli barátok/szövetségesek, az aktívan látszódjon. Ha ellenségek/riválisok, ne váljanak random rajongóvá. A Connections privát motiváció: a másik fél nem tudja automatikusan, de a kommentelő VISELKEDÉSÉT meghatározza.
 - A fenti PRIVÁT KARAKTERJÁTÉK-KONTEXTUST ténylegesen használd minden kommentelőnél.
@@ -28568,8 +28716,8 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
             <label className="f" style={{ marginTop: 0 }}>{tt("Kapcsolatok — aktív karakterek között", "Bonds — between active characters")}</label>
             <p className="hint">
               {tt(
-                "Itt kézzel felülírhatod a játékban létező karakterek KIINDULÓ kapcsolatát. Ez a beállítás restartkor visszaáll. Ha nem állítod kézzel, a karakterlap és a Connections név szerinti kánonja automatikusan seedelhet barátságot, rivalizálást, ellenséget, crush-t stb.; rivális dojo/frakciók explicit személyes kivétel nélkül negatív baseline-t kapnak.",
-                "Here you can manually override the STARTING relationship between active characters. This setting is restored on restart. If you do not set it manually, the character sheet and name-specific Connections canon may automatically seed friendship, rivalry, enemy, crush, etc.; rival dojos/factions receive a negative baseline unless explicit personal canon overrides it."
+                "Itt kézzel felülírhatod a játékban létező karakterek KIINDULÓ kapcsolatát. Ez restartkor visszaáll. Automatikus baseline-nál kizárólag az adott irány számít: A → B csak A Connections mezőjének B-t név szerint megadó sora alapján épül; B → A külön, B saját A-sora alapján. Más személyhez tartozó Sensei/Mentor/Friend/Enemy sor soha nem kerülhet át. Ha nincs személyes sor, a dojo/frakció rivalizálás adhat negatív alapot.",
+                "Here you can manually override the STARTING relationship between active characters. It is restored on restart. Automatic baselines are strictly directional: A → B is built only from A's Connections row that explicitly names B; B → A is separately built from B's own row naming A. A Sensei/Mentor/Friend/Enemy label belonging to somebody else can never leak across. If no personal row exists, dojo/faction rivalry may provide the negative default."
               )}
             </p>
 
@@ -35173,7 +35321,7 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 65,
+    schedulerVersion: 66,
     lastError: "",
   };
 }
@@ -37358,10 +37506,10 @@ function ensureSimState(w) {
   if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
   if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
 
-  /* v90 migration: clear stale background queue state from older schedulers.
+  /* v91 migration: clear stale background queue state from older schedulers.
      Manual requests survive; comments/follows/replies are rebuilt from the
      current world state without restart-created queue storms. */
-  if (Number(w.sim.schedulerVersion) !== 65) {
+  if (Number(w.sim.schedulerVersion) !== 66) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -37373,9 +37521,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 65;
+    w.sim.schedulerVersion = 66;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 65;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 66;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
