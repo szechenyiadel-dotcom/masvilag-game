@@ -6575,14 +6575,14 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * VITE_WORLD_CANCEL_SENSITIVITY=1.55
  * VITE_AI_BACKGROUND_GAP_MS=8000
  */
-const LIVE_WORLD_ACTIVITY_MULTIPLIER = Math.max(0.55, Math.min(2.40, Number(import.meta.env.VITE_WORLD_ACTIVITY_MULTIPLIER) || 1.28));
-const LIVE_WORLD_POST_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_POST_MULTIPLIER) || 1.15));
-const LIVE_WORLD_COMMENT_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_COMMENT_MULTIPLIER) || 1.25));
+const LIVE_WORLD_ACTIVITY_MULTIPLIER = Math.max(0.55, Math.min(2.40, Number(import.meta.env.VITE_WORLD_ACTIVITY_MULTIPLIER) || 1.45));
+const LIVE_WORLD_POST_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_POST_MULTIPLIER) || 1.35));
+const LIVE_WORLD_COMMENT_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_COMMENT_MULTIPLIER) || 1.50));
 const LIVE_WORLD_DM_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_DM_MULTIPLIER) || 1.20));
 const LIVE_WORLD_GROUP_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_GROUP_MULTIPLIER) || 1.15));
 const LIVE_WORLD_ROLEPLAY_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_ROLEPLAY_MULTIPLIER) || 1.25));
 const LIVE_WORLD_NOTE_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_NOTE_MULTIPLIER) || 1.10));
-const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(7000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 9000));
+const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(7000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 7500));
 const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.60, Math.min(2.80, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 1.00));
 const LIVE_WORLD_CANCEL_SENSITIVITY = Math.max(0.60, Math.min(2.20, Number(import.meta.env.VITE_WORLD_CANCEL_SENSITIVITY) || 1.32));
 const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(import.meta.env.VITE_WORLD_MAX_POPUP_REROLLS) || 5)));
@@ -8729,6 +8729,22 @@ function relationshipDeclaresFriendship(rel) {
   return /\b(?:best\s+friend|close\s+friend|friend|bestie|ride\s*or\s*die|legjobb\s+bar[aá]t|k[oö]zeli\s+bar[aá]t|bar[aá]t)\b/i.test(bond);
 }
 
+
+function areMutualFriends(w, aId, bId) {
+  if (!w || !aId || !bId || aId === bId) return false;
+  const ab = getRel(w, aId, bId) || {};
+  const ba = getRel(w, bId, aId) || {};
+  const friendAB =
+    relationshipDeclaresFriendship(ab) ||
+    relationshipFilterTier(ab) === "good" ||
+    relationshipFilterTier(ab) === "close";
+  const friendBA =
+    relationshipDeclaresFriendship(ba) ||
+    relationshipFilterTier(ba) === "good" ||
+    relationshipFilterTier(ba) === "close";
+  return friendAB && friendBA;
+}
+
 function friendshipHostilityMismatch(
   w,
   actorId,
@@ -8741,7 +8757,8 @@ function friendshipHostilityMismatch(
   const rel = getRel(w, actorId, targetId) || {};
   const tier = relationshipFilterTier(rel);
   const declaredFriend = relationshipDeclaresFriendship(rel);
-  if (tier !== "good" && tier !== "close" && !declaredFriend) return false;
+  const mutualFriends = areMutualFriends(w, actorId, targetId);
+  if (tier !== "good" && tier !== "close" && !declaredFriend && !mutualFriends) return false;
 
   const hostility = socialFriendHostilitySignal(text);
   if (!hostility) return false;
@@ -11907,6 +11924,15 @@ function relationshipBehaviorCard(
       : "KAPCSOLATI SZŰRŐ, NEM SZEMÉLYISÉGCSERE: a saját személyiséged/történeted/hangod maradjon teljesen aktív; ez a réteg csak azt módosítja, hogyan fejezed ki ugyanazt a személyiséget ezzel a konkrét emberrel"
   );
 
+
+  const mutualFriends = areMutualFriends(w, actorId, targetId);
+  if (mutualFriends) {
+    parts.push(
+      en
+        ? "MUTUAL FRIENDSHIP CONTRACT: you and this person are explicitly friends in BOTH relationship directions. Treat the friendship as an active social bond, not a label. Default behavior is familiarity, loyalty, warmth, checking in, defending each other, affectionate teasing, making plans together and reacting to each other because you genuinely matter to one another. Your personality still controls the style, but it must be expressed through friendship. Do NOT insult, demean, humiliate, coldly dismiss, antagonize or randomly pick fights with this friend. Sarcasm is allowed only when it clearly reads as affectionate/playful and the current context supports it. Do not manufacture conflict merely to create variety. When both friends are present in a public thread or event, their existing bond should visibly influence how they interact."
+        : "KÖLCSÖNÖS BARÁTSÁGI SZERZŐDÉS: te és ez az ember a kapcsolat MINDKÉT irányában kifejezetten barátok vagytok. A barátság aktív társas kötelék, nem puszta címke. Alapból legyen köztetek közvetlenség, lojalitás, melegség, egymásra figyelés, egymás védése, szeretetteljes ugratás, közös tervek és természetes reakció arra, hogy fontosak vagytok egymásnak. A személyiséged továbbra is határozza meg a stílust, de azt baráti módon kell kifejezned. NE sértegesd, alázd, pattintsd le hidegen, támadd vagy kezdj vele random konfliktust. A szarkazmus csak akkor megengedett, ha egyértelműen szeretetteljes/játékos és a jelenlegi helyzet is támogatja. Ne gyárts konfliktust pusztán változatosság kedvéért. Ha mindketten jelen vagytok egy nyilvános threadben vagy eseményen, a meglévő barátság láthatóan hasson a viselkedésetekre."
+    );
+  }
 
   parts.push(flirtIdentityInstruction(w, actorId, targetId, rel));
 
@@ -22279,6 +22305,7 @@ ${cast
 KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - Minden kommentelő teljes karakterlapját és saját emlékeit használd, nem csak a nyilvános bioját.
 - KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT, kapcsolat-specifikus explicit kánonja. Az, hogy valaki általában szarkasztikus/bunkó/domináns, NEM elég ok arra, hogy a barátját megalázza vagy ellenségként kezelje.
+- KÖLCSÖNÖS BARÁTSÁG: ha a kommentelő és a poszt szerzője mindkét irányban barátok, ezt a komment konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
 - A korábbi emlékei és a poszt szerzőjével való konkrét kapcsolata ténylegesen módosítsa a reakcióját. Ha van releváns közös múlt, belső poén, korábbi vita, ígéret, flört vagy kínos esemény, UTALHAT rá — de ne ugyanarra minden alkalommal.
 - Ne csak a komment TARTALMA, hanem a mikrostílusa is karakterfüggő legyen: mondathossz, kis-/nagybetű, írásjel, szleng, emoji, kérdezés, közvetlenség, szárazság, káromkodás, flört és humor ritmusa is.
@@ -24131,8 +24158,8 @@ function fairCommentCast(w, targetId, post = null) {
 
   const visual = visualPostReactionProfile(w, post);
   const castLimit = visual.hasImage
-    ? (visual.appearanceForward ? 18 : 16)
-    : 15;
+    ? (visual.appearanceForward ? 22 : 20)
+    : 19;
 
   /*
    * Prefer NEW voices on a post before recycling somebody who has already left
@@ -24315,6 +24342,7 @@ ${cast
 KOMMENTVÁLASZ-KARAKTERHŰSÉG:
 - A válaszoló teljes karakterlapja és saját emlékezete aktív.
 - KAPCSOLATI PRIORITÁS: a jó/közeli kapcsolat nem válhat random bunkósággá csak a változatosság kedvéért. Sértegetés, lenézés, hideg lepattintás vagy rosszindulatú gúny csak konkrét jelenlegi triggerből vagy a karakter SAJÁT explicit kánonjából jöhet.
+- KÖLCSÖNÖS BARÁTSÁG: ha a válaszoló és a kommentelő mindkét irányban barátok, ezt a reply konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A reply legyen felismerhetően az adott karakteré, ne generikus social reakció.
 - A korábbi saját kommentjeinek/DM-jeinek/posztjainak fordulatait se használja újra.
 - Ha a komment vagy a válasz ténylegesen közelebb hozza, felidegesíti, féltékennyé teszi, megsérti, megnevetteti vagy másképp érzelmileg megmozdítja a karaktert, ezt a "changes" tömbben IS jelezd. Ne csak a reply szövegében jelenjen meg.
@@ -25019,10 +25047,10 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
  * A pletykamédia NEM ide tartozik: az csak valódi publishable történésből
  * posztol, és külön gossip-cadence vezérli.
  */
-const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 3;
-const AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H = 2;
-const AUTONOMOUS_THIRD_POST_MIN_IDLE_MS = 5 * 3600e3;
-const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.40;
+const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 5;
+const AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H = 4;
+const AUTONOMOUS_THIRD_POST_MIN_IDLE_MS = 2.5 * 3600e3;
+const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.15;
 
 function characterAutonomousPostStats24h(w, characterId) {
   const cutoff24h = now() - 24 * 3600e3;
@@ -25165,7 +25193,7 @@ KARAKTERHŰ POSZTOLÁS:
 - A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa és az is, hogy egyáltalán posztolna-e valamiről, a karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
-- NAPI POSZTRITMUS: normál karakter célja 1-2 saját poszt / gördülő 24 óra; 3 csak ritka felső plafon. Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
+- NAPI POSZTRITMUS: normál karakter célja 2-4 saját poszt / gördülő 24 óra; 5 a kemény felső plafon. A karakter aktivitása ezt személyiség szerint módosíthatja. Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
 
 ${repetitionGuard(
   w,
@@ -25177,10 +25205,10 @@ A VILÁG MAGÁTÓL ÉL TOVÁBB.
 
 ${
   Number(timeSkipHours) > 0
-    ? `IDŐUGRÁS / TIME SKIP: a játékos kifejezetten azt kérte, hogy körülbelül ${Math.round(Number(timeSkipHours))} órával ugorjunk előre. A köztes időben a karakterek a saját életüket élték; generálj 2-4 olyan posztot / reakciót / megfigyelhető eseményt, amelyek természetesen összefoglalják, mi változott. Ne írd le a játékos döntéseit vagy cselekedeteit helyette. Nyitott konfliktusok, kapcsolatok, célok, gossip és saját karakterügyek haladhatnak tovább. Az időugrás ne resetelje az emlékeket vagy kapcsolatokat.`
+    ? `IDŐUGRÁS / TIME SKIP: a játékos kifejezetten azt kérte, hogy körülbelül ${Math.round(Number(timeSkipHours))} órával ugorjunk előre. A köztes időben a karakterek a saját életüket élték; generálj 4-7 olyan posztot / reakciót / megfigyelhető eseményt, amelyek természetesen összefoglalják, mi változott. Ne írd le a játékos döntéseit vagy cselekedeteit helyette. Nyitott konfliktusok, kapcsolatok, célok, gossip és saját karakterügyek haladhatnak tovább. Az időugrás ne resetelje az emlékeket vagy kapcsolatokat.`
     : single
-      ? "A világ közben ténylegesen ment tovább. Adj EGY valódi, természetes új posztot valamelyik szereplőtől. Ne válaszolj üres posts tömbbel. A poszt mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Ha indokolt, adj 2-6 reakciót/kommentet másoktól; ha valaki inkább nem reagálna, ne erőltesd."
-      : "Léptesd a világot néhány órával. Adj 2-3 természetes új posztot különböző szereplőktől, és ha indokolt, posztonként 3-7 különböző reakciót/kommentet másoktól."
+      ? "A világ közben ténylegesen ment tovább. Adj 2-3 valódi, természetes új posztot különböző szereplőktől. Ne válaszolj üres posts tömbbel. A posztok mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Adj posztonként 4-9 releváns reakciót/kommentet másoktól, és különösen keresd azokat a barátokat, akiknek a kapcsolatuk miatt természetes lenne reagálni. Ha valaki kifejezetten passzív/ritkán online, ne erőltesd."
+      : "Léptesd a világot néhány órával. Adj 4-5 természetes új posztot különböző szereplőktől, és posztonként 5-10 különböző, releváns reakciót/kommentet másoktól. A karakterek barátai és közeli kapcsolatai kapjanak valódi elsőbbséget a reakcióknál, mert egy élő közösségben az emberek nem úgy működnek, mint névtelen statiszták."
 }
 
 ÁLTALÁNOS SZABÁLYOK:
@@ -25423,9 +25451,10 @@ SAJÁT FOTÓALBUMOD:
 ${albumList(author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
-- A normál karakterek napi ritmusa 1-2 saját poszt / gördülő 24 óra; 3 csak ritka kemény felső plafon. Ne posztolj csak azért, hogy kitöltsd a feedet.
+- A normál karakterek napi ritmusa 2-4 saját poszt / gördülő 24 óra; 5 a kemény felső plafon. Ne posztolj csak azért, hogy kitöltsd a feedet.
 - A poszt kizárólag ${author.name} saját életéből, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
+- Ha a karakternek kölcsönös baráti kapcsolatai vannak, ezek legyenek aktív részei a social életének: természetesen posztolhat közös programról, megemlítheti vagy barátilag ugrasshatja a barátját, reagálhat annak életére, megvédheti, megkérdezheti, merre van, vagy szervezhet vele valamit. Ne kezeld a barátokat véletlenszerű idegenként.
 - Ne legyen rendszer-poszt vagy mesterséges filler.
 - Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
 - Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
