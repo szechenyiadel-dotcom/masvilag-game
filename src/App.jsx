@@ -8350,22 +8350,21 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * genuinely fresh posts, then popup events, private contact and AI invitations.
  * These are safe public Vite build-time tuning values (no secrets).
  */
-/* v65 — autonomous feed posts are intentionally sparse. Other world activity
- * (comments, replies, DMs, groups, follows, gossip reactions) may continue between
- * posts, but a normal new AI feed post gets a hard ~10 minute floor. */
+/* v66 — autonomous social activity is deliberately lively. Feed posts remain paced,
+ * while comments/replies/DMs/groups can keep the world moving between posts. */
 const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  3 * 60 * 1000,
+  90 * 1000,
   Math.min(
-    15 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 4 * 60 * 1000
+    10 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 2 * 60 * 1000
   )
 );
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(4, Math.min(10, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 6)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(60 * 1000, Math.min(10 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 2.5 * 60 * 1000));
-const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 5 * 60 * 1000));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(45 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 75 * 1000));
+const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2 * 60 * 1000, Math.min(12 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 3 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
 const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
 const AI_BACKGROUND_GAP_MS = Math.max(800, Math.min(12000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 1600));
@@ -19579,7 +19578,7 @@ async function serverSaveWorldSerialized(worldJson, expectedSyncRev) {
 }
 /* ---------- END PERFORMANCE v13 AUTOSAVE ---------- */
 
-const AUTO = "masvilag:auto:v30";
+const AUTO = "masvilag:auto:v31";
 
 /*
  * v30 SAFE BOOT
@@ -19592,19 +19591,19 @@ const AUTO = "masvilag:auto:v30";
  *
  * That made it impossible to stop a heavy/stale background queue.
  *
- * New sessions therefore start with autonomous background simulation OFF.
+ * New sessions therefore start with autonomous background simulation ON, with a paced scheduler and per-lane cooldowns.
  * Manual AI actions still work. The player can enable the live world once the
  * UI is stable, and the preference is then persisted under this new key.
  */
 const AUTO_DEFAULT = {
-  on: false,
+  on: true,
   every: Math.max(
     0.25,
     LIVE_WORLD_CONTENT_INTERVAL_MS / 60000
   ),
 };
 
-const LIVE_WORLD_MIN_ACTION_GAP_MS = 12000;
+const LIVE_WORLD_MIN_ACTION_GAP_MS = 7000;
 
 async function loadAuto() {
   try {
@@ -52038,7 +52037,7 @@ function canAiInitiateRoleplay(w) {
   const last = Math.max(simLast, historyLast);
   const rpPeak = Math.max(0.55, channelActivityPeak(w, "roleplay"));
   const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+  const target = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   return !last || ts - last >= target;
 }
 
@@ -52579,7 +52578,7 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   const dmLast = Number(sim.lastAutonomousDmAt) || 0;
   const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
-  const dmTarget = Math.max(2.5 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
+  const dmTarget = Math.max(45 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const dmElapsed = dmLast ? ts - dmLast : Math.max(0, ts - laneStartedAt);
   const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 22 * 1000;
 
@@ -52646,7 +52645,7 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
     const rpLast = Math.max(Number(sim.lastRoleplayInviteAt) || 0, rpHistoryLast);
     const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
     const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-    const rpTarget = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+    const rpTarget = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
     const rpElapsed = rpLast ? ts - rpLast : Math.max(0, ts - laneStartedAt);
     const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 35 * 1000;
 
@@ -52700,7 +52699,7 @@ function autonomousDmOverdueByMs(w) {
   if (!w) return -Infinity;
   const dmPeak = Math.max(0.25, channelActivityPeak(w, "dm"));
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
-  const target = Math.max(2.5 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
+  const target = Math.max(45 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const last = Number(w.sim && w.sim.lastAutonomousDmAt) || 0;
   const startedAt = Number(w.sim && w.sim.liveWorldStartedAt) || now();
   const elapsed = last ? now() - last : Math.max(0, now() - startedAt);
@@ -52711,7 +52710,7 @@ function roleplayInviteOverdueByMs(w) {
   if (!w || !canAiInitiateRoleplay(w)) return -Infinity;
   const rpPeak = Math.max(0.25, channelActivityPeak(w, "roleplay"));
   const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+  const target = Math.max(2 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   const last = Math.max(
     Number(w.sim && w.sim.lastRoleplayInviteAt) || 0,
     lastAiInitiatedRoleplayAt(w)
@@ -59154,12 +59153,15 @@ const signOut = useCallback(async () => {
         }
 
         /*
-         * Autonomous background planning only when Live World is explicitly ON.
+         * The planner tick is deliberately independent from the FEED cadence.
+         * The old code used AUTO_DEFAULT.every here (~7.5 min), which meant the
+         * scheduler itself could wake up but never even ASK what a bot should do.
+         * Feed posting has its own longer clock in feedNeedsFreshPost().
          */
         if (
           !canTick(
             view2,
-            AUTO_DEFAULT.every
+            0.125
           )
         ) {
           return;
@@ -59376,24 +59378,20 @@ const signOut = useCallback(async () => {
     simulationWakeRef.current = beat;
 
     /*
-     * 5 másodpercenként nézzük meg, van-e teendő.
-     * Ez NEM jelent 5 másodpercenként AI-hívást:
-     * a contentAt + AI queue/token throttling továbbra is korlátozza
-     * a generatív kérések tényleges sűrűségét.
+     * 8 másodpercenként nézzük meg, van-e teendő.
+     * Ez NEM jelent 8 másodpercenként AI-hívást: a külön feed/DM/event
+     * cadence-ek, a 7 mp-es action gap és az AI queue/token throttling
+     * továbbra is korlátozza a tényleges generatív kérések sűrűségét.
      */
     const i =
       auto.on
-        ? setInterval(beat, 30000)
+        ? setInterval(beat, 8000)
         : null;
 
-    /*
-     * Broad autonomous planning is intentionally slower than direct queued
-     * reactions. This keeps the world alive without taking the main thread
-     * every nine seconds while the player is using the UI.
-     */
+    /* Az első autonóm ellenőrzés röviddel a világ betöltése után indul. */
     const first =
       auto.on
-        ? setTimeout(beat, 12000)
+        ? setTimeout(beat, 2500)
         : null;
 
     return () => {
