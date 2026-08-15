@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v10 — STABLE RUNTIME + LIVE IDENTITY/RELATIONSHIP SYNC — 20260815_1911 */
+/* MÁSVILÁG BUILD v11 — BUILD FIX + WHITE SCREEN + LAG + RELATIONSHIP — 20260815_1932 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -55885,6 +55885,8 @@ const signOut = useCallback(async () => {
 
           return savedWorld;
         });
+      };
+
     /* Serialization/cloning is the heaviest synchronous operation in this
      * component. Do it only during an idle slice so typing, scrolling and
      * opening tabs never have to wait for a multi-MB world snapshot. */
