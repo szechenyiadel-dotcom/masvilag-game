@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v32 — BINARY-SAFE RENDER + NO WORLD CLONES — 20260815_2240 */
+/* MÁSVILÁG RECOVERY — ORIGINAL PRE-PATCH APP + sameCoreFaction ONLY — 20260815_2338 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -723,13 +723,6 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   padding:14px;
   border-bottom:1px solid var(--line);
   background:transparent;
-}
-
-/* PERFORMANCE v13: Chromium can skip off-screen feed layout/paint entirely. */
-.social-post,
-.social-repost-wrap {
-  content-visibility:auto;
-  contain-intrinsic-size:420px;
 }
 .social-post.highlight {
   background:rgba(217,117,143,.06);
@@ -1496,8 +1489,6 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   /* ---------- KARAKTERLISTA + KARAKTERLAP MOBIL ---------- */
 
   .character-list-card {
-  content-visibility:auto;
-  contain-intrinsic-size:82px;
     position: relative;
     min-height: 74px;
     padding: 12px !important;
@@ -1892,19 +1883,7 @@ const mediaDataUrl = (media, id) => {
 const resolveImg = (src, media) => {
   if (!src) return "";
   const id = imageIdOf(src);
-  if (id) {
-    const local = mediaDataUrl(media, id);
-    if (local) return local;
-
-    /*
-     * PERFORMANCE v17:
-     * Persisted cloud images are no longer hydrated into one giant base64
-     * object at startup. The browser requests the exact image only when an
-     * <img> actually needs it. Fresh unsaved uploads still use the local
-     * dataURL above until their cloud save succeeds.
-     */
-    return backendUrl(`/media/file/${encodeURIComponent(id)}`);
-  }
+  if (id) return mediaDataUrl(media, id);
   return src;
 };
 
@@ -1940,15 +1919,7 @@ function imageRefForValue(value) {
 
 function normalizeWorldImages(world, media) {
   if (!world) return { world, media, changed: false };
-
-  /*
-   * PERFORMANCE v32:
-   * This app's world store is mutation-oriented already. Deep-cloning the
-   * entire multi-MB world before a one-time image-reference migration doubled
-   * memory and blocked the main thread. Mutate the just-loaded runtime world
-   * directly and publish it once at the end.
-   */
-  const w = world;
+  const w = JSON.parse(JSON.stringify(world));
   const nextMedia = { ...(media || {}) };
   let changed = false;
   const attach = (raw, patch) => {
@@ -2449,7 +2420,7 @@ function Av({ src, name = "?", size = 38, radius = 12 }) {
   const url = resolveImg(src, media);
   return (
     <div className="av" style={{ ...avStyle(name), width: size, height: size, borderRadius: radius, fontSize: Math.round(size * 0.42) }}>
-      {url && !bad ? <img src={url} alt="" loading="lazy" decoding="async" onError={() => setBad(true)} /> : (name || "?")[0]}
+      {url && !bad ? <img src={url} alt="" onError={() => setBad(true)} /> : (name || "?")[0]}
     </div>
   );
 }
@@ -3323,95 +3294,68 @@ function isMediaAccount(w, id) {
 
 // Bármely AKTÍV szereplő azonosító alapján: játékos, AI-karakter vagy médiaprofil.
 // A karakterlap Connections / Kapcsolódások mezőjében említett emberek NEM entitások.
-/*
- * PERFORMANCE v13:
- * Cache only id -> ARRAY INDEX, never the character object itself. This stays
- * correct with the app's in-place character mutations while avoiding thousands
- * of repeated Array.find scans during large renders.
- */
-const CHAR_ARRAY_INDEX_CACHE = new WeakMap();
+//
+// PERFORMANCE v99: egy render / world-revision alatt ugyanazt a karakterlistát
+// nem lineárisan keressük végig több százszor. Kommentfákban és feed renderben
+// a charById az egyik legforróbb helper.
+const WORLD_ENTITY_INDEX_CACHE = new WeakMap();
+
+function invalidateWorldEntityIndex(w) {
+  if (w && typeof w === "object") {
+    WORLD_ENTITY_INDEX_CACHE.delete(w);
+  }
+}
+
+function worldEntityIndex(w) {
+  if (!w || typeof w !== "object") return new Map();
+
+  const rev = Number(w.rev) || 0;
+  const chars = Array.isArray(w.chars) ? w.chars : [];
+  const players = w.players && typeof w.players === "object" ? w.players : {};
+  const mediaAccounts = w.mediaAccounts && typeof w.mediaAccounts === "object" ? w.mediaAccounts : {};
+  const playerCount = Object.keys(players).length;
+
+  const cached = WORLD_ENTITY_INDEX_CACHE.get(w);
+  if (
+    cached &&
+    cached.rev === rev &&
+    cached.charsRef === chars &&
+    cached.charsLength === chars.length &&
+    cached.playersRef === players &&
+    cached.playerCount === playerCount &&
+    cached.mediaRef === mediaAccounts
+  ) {
+    return cached.map;
+  }
+
+  const map = new Map();
+  Object.keys(players).forEach((pid) => {
+    const person = players[pid];
+    if (person) map.set(String(pid), person);
+  });
+  chars.forEach((person) => {
+    if (person && person.id) map.set(String(person.id), person);
+  });
+  allGossipMediaAccounts(w).forEach((person) => {
+    if (person && person.id) map.set(String(person.id), person);
+  });
+
+  WORLD_ENTITY_INDEX_CACHE.set(w, {
+    rev,
+    charsRef: chars,
+    charsLength: chars.length,
+    playersRef: players,
+    playerCount,
+    mediaRef: mediaAccounts,
+    map,
+  });
+
+  return map;
+}
 
 function charById(w, id) {
   if (!w || !id) return null;
-
-  if (
-    w.players &&
-    w.players[id]
-  ) {
-    return w.players[id];
-  }
-
-  const chars =
-    Array.isArray(w.chars)
-      ? w.chars
-      : [];
-
-  let cached =
-    CHAR_ARRAY_INDEX_CACHE.get(
-      chars
-    );
-
-  if (
-    !cached ||
-    cached.length !== chars.length
-  ) {
-    const byId = new Map();
-
-    for (
-      let i = 0;
-      i < chars.length;
-      i++
-    ) {
-      const c = chars[i];
-
-      if (
-        c &&
-        c.id
-      ) {
-        byId.set(
-          c.id,
-          i
-        );
-      }
-    }
-
-    cached = {
-      length: chars.length,
-      byId,
-    };
-
-    CHAR_ARRAY_INDEX_CACHE.set(
-      chars,
-      cached
-    );
-  }
-
-  const index =
-    cached.byId.get(id);
-
-  if (
-    index !== undefined
-  ) {
-    const core =
-      chars[index];
-
-    if (
-      core &&
-      core.id === id
-    ) {
-      return core;
-    }
-  }
-
-  return (
-    allGossipMediaAccounts(w)
-      .find(
-        (m) =>
-          m &&
-          m.id === id
-      ) ||
-    null
-  );
+  return worldEntityIndex(w).get(String(id)) || null;
 }
 const isHuman = (w, id) => !!(w.players && w.players[id]);
 // Minden emberi játékos karaktere.
@@ -4066,23 +4010,21 @@ function setRel(w, a, b, patch) {
    dynamic score happened to exist at the end of the previous run.
    ============================================================ */
 
-const RELATIONSHIP_CANON_VERSION = 10;
+const RELATIONSHIP_CANON_VERSION = 6;
 
-/*
- * PERFORMANCE v12 — RELATIONSHIP CANON INPUT FINGERPRINT
- *
- * The identity/Connections resolver is intentionally powerful, but a full
- * actor × target rebuild is expensive in a large world. `migrate()` is called
- * after cloud loads/saves too, so rebuilding the exact same relationship graph
- * there caused repeated UI stalls.
- *
- * This compact FNV-style fingerprint watches every character field that can
- * change identity matching, Connections canon or faction rivalry. Feed posts,
- * chats, notifications and ordinary relationship score changes do NOT change
- * it, so those updates never trigger an O(n²) canon rebuild.
- */
-function relationshipCanonInputFingerprint(w) {
-  if (!w) return "0:0";
+function ensureRelationshipBaselineStore(w) {
+  if (!w.relationshipBaselines || typeof w.relationshipBaselines !== "object") {
+    w.relationshipBaselines = {};
+  }
+  return w.relationshipBaselines;
+}
+
+
+/* PERFORMANCE v99: rebuilding every directed character-sheet relationship is
+ * expensive (O(cast²) plus Connections parsing). Server polling calls migrate()
+ * repeatedly, so only rebuild when relationship-relevant canon actually changed. */
+function relationshipCanonFingerprint(w) {
+  if (!w) return "";
 
   const people = allSubjects(w)
     .filter((person) => person && person.id)
@@ -4090,49 +4032,33 @@ function relationshipCanonInputFingerprint(w) {
     .sort((a, b) => String(a.id).localeCompare(String(b.id)));
 
   let hash = 2166136261 >>> 0;
-
-  const push = (value) => {
-    const source = String(value == null ? "" : value);
-
-    for (let i = 0; i < source.length; i += 1) {
-      hash ^= source.charCodeAt(i);
+  const add = (value) => {
+    const text = String(value || "");
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
       hash = Math.imul(hash, 16777619) >>> 0;
     }
-
     hash ^= 31;
     hash = Math.imul(hash, 16777619) >>> 0;
   };
 
-  /*
-   * PERFORMANCE v26:
-   * The previous fingerprint hashed entire personality/backstory/bio/skills
-   * fields for EVERY character on every character Save. Those fields can be
-   * tens of thousands of characters long and most edits do not affect
-   * relationship canon at all.
-   *
-   * These compact signatures already encode exactly the mechanical inputs:
-   * canonical identity aliases, Connections, and faction/dojo classification.
-   */
   people.forEach((person) => {
-    push(person.id);
-    push(relationshipProfileIdentitySignature(person));
-    push(relationshipProfileConnectionsSignature(person));
-    push(relationshipProfileFactionSignature(person));
+    add(person.id);
+    add(person.updatedAt);
+    add(person.name);
+    add(person.nick);
+    add(person.nickname);
+    add(person.username);
+    add(person.connections);
+    add(person.affiliation);
+    add(person.organization);
+    add(person.role);
+    add(person.rank);
+    add(person.job);
+    add(person.bio);
   });
 
-  return `${people.length}:${hash.toString(36)}`;
-}
-/* v10 invariant marker: if this exact string is visible in deployed source,
-   the stable runtime + relationship identity patch is the file being used. */
-const MASVILAG_RELATIONSHIP_PATCH = "v10-live-identity-20260815-1911";
-if (typeof console !== "undefined") console.info("[Másvilág] v31 React render isolation loaded");
-
-
-function ensureRelationshipBaselineStore(w) {
-  if (!w.relationshipBaselines || typeof w.relationshipBaselines !== "object") {
-    w.relationshipBaselines = {};
-  }
-  return w.relationshipBaselines;
+  return `${people.length}:${hash >>> 0}`;
 }
 
 function clampRelationshipScore(value) {
@@ -4186,7 +4112,7 @@ function recordRelationshipBaseline(w, a, b, source = "manual") {
   ensureRelationshipBaselineStore(w)[relKey(a, b)] =
     relationshipBaselineSnapshot(rel, source, {
       mood:
-        /^manual(?:-|$)/i.test(String(source || ""))
+        source === "manual"
           ? String(rel.mood || "").slice(0, 500)
           : "",
       why: "",
@@ -4226,259 +4152,6 @@ function setConfiguredRel(w, a, b, patch, source = "manual") {
     }
   }
 }
-
-/*
- * v10 LEGACY MANUAL-LOCK REPAIR
- *
- * Older CharacterForm versions submitted every visible relationship row on
- * every profile save. commitForm() then persisted all of them as source
- * "manual", even when the user never touched the relationship controls.
- * That accidentally protected stale Tory->Angela-style runtime state from
- * later Connections canon.
- *
- * New intentional edits use source "manual-user". During the v10 migration we
- * only release OLD source==="manual" baselines when the actor's own Connections
- * contains target-specific canon for that exact active character.
- */
-function releaseLegacyAccidentalRelationshipManualLocks(w) {
-  if (!w) return 0;
-  const store = ensureRelationshipBaselineStore(w);
-  const people = allSubjects(w).filter((person) => person && person.id);
-  const byId = new Map(people.map((person) => [String(person.id), person]));
-  let released = 0;
-
-  Object.keys(store).forEach((key) => {
-    const row = store[key];
-    if (!row || String(row.source || "").toLowerCase() !== "manual") return;
-
-    const parts = String(key).split(">");
-    if (parts.length !== 2) return;
-
-    const actor = byId.get(parts[0]);
-    const target = byId.get(parts[1]);
-    if (!actor || !target || actor.id === target.id) return;
-
-    const evidence = canonicalRelationshipEvidence(w, actor, target);
-    if (!String(evidence || "").trim()) return;
-
-    delete store[key];
-    released += 1;
-  });
-
-  return released;
-}
-
-/*
- * Apply freshly inferred Connections canon immediately to live state for every
- * directed edge touching a character whose identity/profile was just edited.
- * This is intentionally limited to automatic `connections` baselines:
- * explicit manual-user overrides remain protected.
- */
-function applyConnectionCanonTouchingCharacterNow(w, changedId) {
-  if (!w || !changedId) return;
-  const wanted = String(changedId);
-  const store = ensureRelationshipBaselineStore(w);
-
-  Object.keys(store).forEach((key) => {
-    const parts = String(key).split(">");
-    if (parts.length !== 2) return;
-    const [a, b] = parts;
-    if (a !== wanted && b !== wanted) return;
-
-    const baseline = store[key];
-    if (!baseline) return;
-    if (!/^connections(?:-|$)/i.test(String(baseline.source || ""))) return;
-
-    setRel(w, a, b, {
-      score: clampRelationshipScore(baseline.score),
-      bond: String(baseline.bond || baseline.type || ""),
-      hidden: String(baseline.hidden || ""),
-      fixed: !!baseline.fixed,
-      mood: String(baseline.mood || ""),
-      why: "",
-    });
-
-    /* A profile identity/canon edit starts this directed edge from the new
-       explicit canon, so stale contradictory transition history cannot keep
-       the old behavior alive. */
-    const mem = ensureCharMemory(w, a);
-    if (mem && mem.relationshipHistory) {
-      mem.relationshipHistory[relKey(a, b)] = [];
-    }
-
-    const continuity = ensureRelationshipContinuity(w, a, b);
-    if (continuity) {
-      continuity.lastBond = String(baseline.bond || baseline.type || "");
-      continuity.lastScore = clampRelationshipScore(baseline.score);
-      continuity.updatedAt = now();
-    }
-  });
-}
-
-function relationshipProfileIdentitySignature(person) {
-  if (!person) return "";
-
-  return characterIdentityAliasRows(person)
-    .map(
-      (row) =>
-        `${row.kind}:${row.norm}`
-    )
-    .sort()
-    .join("|");
-}
-
-function relationshipProfileFactionSignature(person) {
-  if (!person) return "";
-
-  const flags =
-    factionFlags(person);
-
-  return [
-    flags.cobraKai ? "cobraKai" : "",
-    flags.miyagiFang ? "miyagiFang" : "",
-    flags.ironDragons ? "ironDragons" : "",
-    flags.wasabi ? "wasabi" : "",
-    flags.pogue ? "pogue" : "",
-    flags.kook ? "kook" : "",
-    flags.hydra ? "hydra" : "",
-    flags.shield ? "shield" : "",
-  ]
-    .filter(Boolean)
-    .join("|");
-}
-
-function relationshipProfileConnectionsSignature(person) {
-  return String(
-    (person && person.connections) ||
-    ""
-  )
-    .replace(/\r\n/g, "\n")
-    .trim();
-}
-
-/*
- * CHARACTER SAVE FAST PATH — v25
- *
- * A normal profile save used to rebuild every actor × target baseline even
- * when the user only edited appearance/personality/bio/etc. That is correct
- * only for identity ambiguity changes. Most edits need either no mechanical
- * relationship work or a single O(n) directed refresh.
- *
- * `beforeProfile` and `afterProfile` are the profile snapshots surrounding
- * this save. Older callers without them retain the conservative full refresh.
- */
-function resyncRelationshipsAfterCharacterProfileEdit(
-  w,
-  changedId,
-  beforeProfile = null,
-  afterProfile = null,
-  reallyNew = false
-) {
-  if (!w || !changedId) return;
-
-  if (
-    !beforeProfile ||
-    !afterProfile ||
-    reallyNew
-  ) {
-    refreshCanonicalRelationshipBaselines(w);
-    applyConnectionCanonTouchingCharacterNow(
-      w,
-      changedId
-    );
-    return;
-  }
-
-  const identityChanged =
-    relationshipProfileIdentitySignature(
-      beforeProfile
-    ) !==
-    relationshipProfileIdentitySignature(
-      afterProfile
-    );
-
-  const connectionsChanged =
-    relationshipProfileConnectionsSignature(
-      beforeProfile
-    ) !==
-    relationshipProfileConnectionsSignature(
-      afterProfile
-    );
-
-  const factionChanged =
-    relationshipProfileFactionSignature(
-      beforeProfile
-    ) !==
-    relationshipProfileFactionSignature(
-      afterProfile
-    );
-
-  /*
-   * Name/nickname/alias changes can create or remove ambiguity for somebody
-   * else's old Connections row, so this one case intentionally keeps the
-   * conservative full resolver pass.
-   */
-  if (identityChanged) {
-    refreshCanonicalRelationshipBaselines(w);
-    applyConnectionCanonTouchingCharacterNow(
-      w,
-      changedId
-    );
-    return;
-  }
-
-  /*
-   * Connections are strictly actor -> target, therefore editing this
-   * character's Connections only requires their outgoing edges.
-   *
-   * Faction rivalry is symmetric in membership facts, therefore a faction
-   * change refreshes both outgoing edges and all incoming edges to this one
-   * character — still O(n), not O(n²).
-   */
-  if (
-    connectionsChanged ||
-    factionChanged
-  ) {
-    refreshCanonicalRelationshipBaselines(
-      w,
-      changedId,
-      {
-        persistFingerprint:
-          !factionChanged,
-      }
-    );
-
-    if (factionChanged) {
-      refreshCanonicalRelationshipBaselinesForTarget(
-        w,
-        changedId,
-        {
-          persistFingerprint: true,
-        }
-      );
-    }
-
-    if (connectionsChanged) {
-      applyConnectionCanonTouchingCharacterNow(
-        w,
-        changedId
-      );
-    }
-
-    return;
-  }
-
-  /*
-   * Personality, appearance, bio text without an explicit alias label,
-   * goals, fears, secrets, speech, images, albums, follower count, etc. do
-   * not mechanically alter relationship baselines. Keep the persisted legacy
-   * fingerprint current so migrate() will not misinterpret this harmless
-   * profile edit as a reason for a later full rebuild.
-   */
-  w.relationshipCanonFingerprint =
-    relationshipCanonInputFingerprint(w);
-}
-
 
 function canonicalRelationshipEvidence(w, actor, target) {
   if (!actor || !target) return "";
@@ -4706,219 +4379,87 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   return null;
 }
 
-function refreshCanonicalRelationshipBaselineEdge(
-  w,
-  store,
-  actor,
-  target
-) {
-  if (
-    !w ||
-    !store ||
-    !actor ||
-    !target ||
-    actor.id === target.id
-  ) {
-    return;
-  }
-
-  const key =
-    relKey(actor.id, target.id);
-
-  const existingBaseline =
-    store[key];
-
-  if (
-    relationshipBaselineIsManual(
-      existingBaseline
-    )
-  ) {
-    return;
-  }
-
-  const inferred =
-    inferCanonicalRelationshipBaseline(
-      w,
-      actor,
-      target
-    );
-
-  if (inferred) {
-    store[key] = {
-      ...relationshipBaselineSnapshot(
-        inferred,
-        inferred.source || "sheet"
-      ),
-      ...inferred,
-      updatedAt: now(),
-    };
-    return;
-  }
-
-  /*
-   * If an earlier automatically inferred relation no longer exists in the
-   * edited sheet, remove it. Manual baselines never get deleted here.
-   */
-  if (
-    existingBaseline &&
-    /^(?:sheet|connections|faction)$/i.test(
-      String(
-        existingBaseline.source || ""
-      )
-    )
-  ) {
-    delete store[key];
-    return;
-  }
-
-  /*
-   * Migration fallback for old worlds that predate baselines. This is used
-   * only once when no stronger sheet/faction inference exists.
-   */
-  if (!existingBaseline) {
-    const current =
-      getRel(
-        w,
-        actor.id,
-        target.id
-      );
-
-    if (
-      relationshipLooksMeaningfulForBaseline(
-        current
-      )
-    ) {
-      store[key] =
-        relationshipBaselineSnapshot(
-          current,
-          "legacy",
-          {
-            mood: "",
-            why: "",
-          }
-        );
-    }
-  }
-}
-
-function refreshCanonicalRelationshipBaselines(
-  w,
-  focusId = "",
-  options = {}
-) {
+function refreshCanonicalRelationshipBaselines(w, focusId = "") {
   if (!w) return;
 
-  const store =
-    ensureRelationshipBaselineStore(w);
+  /* Identity/Connections may have been edited before w.rev is bumped by the
+     enclosing update(), so never reuse a pre-edit resolution cache here. */
+  invalidateCharacterIdentityResolutionCache(w);
 
-  const people =
-    allSubjects(w)
-      .filter(
-        (person) =>
-          person &&
-          person.id
-      );
-
-  const activeIds =
-    new Set(
-      people.map(
-        (person) =>
-          String(person.id)
-      )
-    );
+  const store = ensureRelationshipBaselineStore(w);
+  const people = allSubjects(w).filter((person) => person && person.id);
+  const activeIds = new Set(people.map((person) => String(person.id)));
 
   /* Drop baseline edges that point at a deleted character. */
-  Object.keys(store).forEach(
-    (key) => {
-      const parts =
-        String(key).split(">");
-
-      if (
-        parts.length !== 2 ||
-        !activeIds.has(parts[0]) ||
-        !activeIds.has(parts[1])
-      ) {
-        delete store[key];
-      }
+  Object.keys(store).forEach((key) => {
+    const parts = String(key).split(">");
+    if (
+      parts.length !== 2 ||
+      !activeIds.has(parts[0]) ||
+      !activeIds.has(parts[1])
+    ) {
+      delete store[key];
     }
-  );
+  });
 
   people.forEach((actor) => {
-    if (
-      focusId &&
-      actor.id !== focusId
-    ) {
-      return;
-    }
+    if (focusId && actor.id !== focusId) return;
 
     people.forEach((target) => {
-      refreshCanonicalRelationshipBaselineEdge(
-        w,
-        store,
-        actor,
-        target
-      );
+      if (!target || actor.id === target.id) return;
+      const key = relKey(actor.id, target.id);
+      const existingBaseline = store[key];
+
+      if (relationshipBaselineIsManual(existingBaseline)) {
+        return;
+      }
+
+      const inferred = inferCanonicalRelationshipBaseline(w, actor, target);
+
+      if (inferred) {
+        store[key] = {
+          ...relationshipBaselineSnapshot(inferred, inferred.source || "sheet"),
+          ...inferred,
+          updatedAt: now(),
+        };
+        return;
+      }
+
+      /*
+       * If an earlier automatically inferred relation no longer exists in the
+       * edited sheet, remove it. Manual baselines never get deleted here.
+       */
+      if (
+        existingBaseline &&
+        /^(?:sheet|connections|faction)$/i.test(String(existingBaseline.source || ""))
+      ) {
+        delete store[key];
+        return;
+      }
+
+      /*
+       * Migration fallback for old worlds that predate baselines. This is used
+       * only once when no stronger sheet/faction inference exists.
+       */
+      if (!existingBaseline) {
+        const current = getRel(w, actor.id, target.id);
+        if (relationshipLooksMeaningfulForBaseline(current)) {
+          store[key] =
+            relationshipBaselineSnapshot(current, "legacy", {
+              mood: "",
+              why: "",
+            });
+        }
+      }
     });
   });
 
-  if (
-    !options ||
-    options.persistFingerprint !== false
-  ) {
-    /* Persist only a tiny signature, never a runtime cache object. */
-    w.relationshipCanonFingerprint =
-      relationshipCanonInputFingerprint(w);
-  }
-}
-
-/*
- * Incoming-only canon refresh used by the character editor fast path.
- * This is O(character-count), not O(character-count²).
- */
-function refreshCanonicalRelationshipBaselinesForTarget(
-  w,
-  targetId,
-  options = {}
-) {
-  if (!w || !targetId) return;
-
-  const wanted =
-    String(targetId);
-
-  const store =
-    ensureRelationshipBaselineStore(w);
-
-  const people =
-    allSubjects(w)
-      .filter(
-        (person) =>
-          person &&
-          person.id
-      );
-
-  const target =
-    people.find(
-      (person) =>
-        String(person.id) === wanted
-    );
-
-  if (!target) return;
-
-  people.forEach((actor) => {
-    refreshCanonicalRelationshipBaselineEdge(
-      w,
-      store,
-      actor,
-      target
-    );
-  });
-
-  if (
-    !options ||
-    options.persistFingerprint !== false
-  ) {
-    w.relationshipCanonFingerprint =
-      relationshipCanonInputFingerprint(w);
+  if (!focusId) {
+    w.relationshipCanonFingerprint = relationshipCanonFingerprint(w);
+  } else {
+    /* A target identity edit can affect reverse-directed Connections too.
+       Force the next full refresh unless the caller intentionally did one. */
+    w.relationshipCanonFingerprint = "";
   }
 }
 
@@ -4926,35 +4467,10 @@ function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
   if (!w) return;
 
   /*
-   * PERFORMANCE v22 — RESTART CANON FAST PATH
-   *
-   * Restart used to rebuild EVERY actor × target canonical relationship even
-   * when no character name, alias, Connections or faction field had changed.
-   * The identity resolver is intentionally rich, so that O(n²) rebuild can be
-   * extremely expensive in a large cast.
-   *
-   * Character/profile edits already refresh and persist this fingerprint.
-   * At restart we only pay the full rebuild when those canonical inputs really
-   * changed (or an old world still needs the migration repair).
+   * Re-read the character sheets at restart so edits to Connections/backstory
+   * immediately affect the next run.
    */
-  const canonVersion =
-    Number(w.relationshipCanonVersion || 0);
-
-  if (canonVersion < RELATIONSHIP_CANON_VERSION) {
-    releaseLegacyAccidentalRelationshipManualLocks(w);
-  }
-
-  const currentCanonFingerprint =
-    relationshipCanonInputFingerprint(w);
-
-  const canonInputsChanged =
-    !w.relationshipCanonFingerprint ||
-    w.relationshipCanonFingerprint !== currentCanonFingerprint ||
-    canonVersion < RELATIONSHIP_CANON_VERSION;
-
-  if (canonInputsChanged) {
-    refreshCanonicalRelationshipBaselines(w);
-  }
+  refreshCanonicalRelationshipBaselines(w);
 
   const store = ensureRelationshipBaselineStore(w);
   const activeIds = new Set(allSubjects(w).map((person) => String(person.id)));
@@ -5618,7 +5134,7 @@ function findNaturalThreadReply(w, onlyPostId = "") {
   for (let i = 0; i < posts.length; i++) {
     const post = posts[i];
     const comments = safePostComments(post)
-      .slice(-80)
+      .slice()
       .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
 
     for (let j = 0; j < comments.length; j++) {
@@ -5842,16 +5358,31 @@ function MentionBar({ w, value, onChange, compact = false }) {
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
 
-  const people = socialProfiles(w)
-    .filter((person) =>
-      person &&
-      person.id !== w.meId &&
-      !isMediaAccount(w, person.id)
-    )
-    .slice()
-    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  /* PERFORMANCE v99: Feedben egyszerre sok MentionBar van mountolva.
+     Csukott állapotban ne építsünk és rendezzünk teljes karakterlistát
+     minden egyes post/comment inputhoz minden world rendernél. */
+  const hasPotentialPeople =
+    (Array.isArray(w && w.chars) ? w.chars.length : 0) +
+      Object.keys((w && w.players) || {}).length +
+      (activeGossipMediaAccount(w) ? 1 : 0) >
+    1;
 
-  if (!people.length) return null;
+  const people = React.useMemo(() => {
+    if (!open || !hasPotentialPeople) return [];
+
+    return socialProfiles(w)
+      .filter((person) =>
+        person &&
+        person.id !== w.meId &&
+        !isMediaAccount(w, person.id)
+      )
+      .slice()
+      .sort((a, b) =>
+        String(a.name || "").localeCompare(String(b.name || ""))
+      );
+  }, [open, hasPotentialPeople, w && w.rev, w && w.meId]);
+
+  if (!hasPotentialPeople) return null;
 
   return (
     <div style={{ marginTop: compact ? 5 : 7 }}>
@@ -6480,20 +6011,15 @@ function effectiveRelationshipForBehavior(w, a, b) {
       relationshipBondPolarity(live.bond || live.type) ||
       (Number(live.score) >= 25 ? 1 : Number(live.score) <= -25 ? -1 : 0);
 
-    const liveLooksNeutralOrWeak =
-      !livePolarity ||
-      (!String(live.bond || live.type || "").trim() && Math.abs(Number(live.score) || 0) < 25);
-
-    if (liveLooksNeutralOrWeak || livePolarity !== canon.polarity) {
+    if (livePolarity && livePolarity !== canon.polarity) {
       return {
         ...live,
         score:
           canon.polarity > 0
-            ? Math.max(clampRelationshipScore(canon.score), Number(live.score) || 0)
-            : Math.min(clampRelationshipScore(canon.score), Number(live.score) || 0),
+            ? Math.max(60, Number(live.score) || 0)
+            : Math.min(-45, Number(live.score) || 0),
         bond: String(canon.bond || canon.type || live.bond || ""),
-        hidden: String(canon.hidden || live.hidden || ""),
-        mood: String(canon.mood || ""),
+        mood: "",
         why: "",
         __canonCorrectedForBehavior: true,
       };
@@ -6501,63 +6027,6 @@ function effectiveRelationshipForBehavior(w, a, b) {
   }
 
   return live;
-}
-
-function relationshipBaselineMeaningKey(row) {
-  if (!row) return "";
-  return [
-    Math.round(Number(row.score) || 0),
-    String(row.bond || row.type || ""),
-    String(row.hidden || ""),
-    row.fixed ? "1" : "0",
-    String(row.source || ""),
-  ].join("\u001f");
-}
-
-/*
- * When a profile/alias/Connections edit arrives from another device, apply
- * only the automatic connection edges whose canon actually changed. This
- * keeps the update immediate without resetting every unrelated friendship.
- */
-function applyChangedConnectionCanonNow(w, beforeStore = {}) {
-  if (!w) return 0;
-  const store = ensureRelationshipBaselineStore(w);
-  let changed = 0;
-
-  Object.keys(store).forEach((key) => {
-    const baseline = store[key];
-    if (!baseline) return;
-    if (!/^connections(?:-|$)/i.test(String(baseline.source || ""))) return;
-    if (relationshipBaselineIsManual(baseline)) return;
-    if (relationshipBaselineMeaningKey(beforeStore[key]) === relationshipBaselineMeaningKey(baseline)) return;
-
-    const parts = String(key).split(">");
-    if (parts.length !== 2 || parts[0] === parts[1]) return;
-    const [a, b] = parts;
-
-    setRel(w, a, b, {
-      score: clampRelationshipScore(baseline.score),
-      bond: String(baseline.bond || baseline.type || ""),
-      hidden: String(baseline.hidden || ""),
-      fixed: !!baseline.fixed,
-      mood: String(baseline.mood || ""),
-      why: "",
-    });
-
-    const mem = ensureCharMemory(w, a);
-    if (mem && mem.relationshipHistory) mem.relationshipHistory[relKey(a, b)] = [];
-
-    const continuity = ensureRelationshipContinuity(w, a, b);
-    if (continuity) {
-      continuity.lastBond = String(baseline.bond || baseline.type || "");
-      continuity.lastScore = clampRelationshipScore(baseline.score);
-      continuity.updatedAt = now();
-    }
-
-    changed += 1;
-  });
-
-  return changed;
 }
 
 function reconcileLiveRelationshipsWithStrongCanon(w, force = false) {
@@ -7844,7 +7313,7 @@ function AlbumEditor({ value, onChange, owner }) {
    * overwritten and may provide identity/context the vision model cannot infer.
    */
   useEffect(() => {
-    if (visionScanRef.current || busy || autoVisionId || visionCircuitOpen()) return;
+    if (visionScanRef.current || busy || autoVisionId) return;
 
     const pending = list.find(
       (item) =>
@@ -7977,20 +7446,27 @@ function AlbumEditor({ value, onChange, owner }) {
           );
         }
 
-        /*
-         * PERFORMANCE v26:
-         * Upload completion must not wait on /ai/vision. Store the image
-         * immediately; the existing lazy album backfill can enrich `vision`
-         * later when the endpoint is healthy.
-         */
+        let vision = "";
+
+        try {
+          vision = await analyzeImageDataUrl(
+            data,
+            tt(
+              `Írd le röviden, mi látható ezen a ${owner && owner.name ? owner.name + " karakterhez" : "karakterhez"} tartozó képen. Ne azonosíts valódi személyt név szerint. Arra figyelj, mit csinál a képen látható személy, milyen ruhában van, milyen a helyszín és a hangulat. Csak azt állítsd, ami ténylegesen látható.`,
+              `Briefly describe what is visibly shown in this image belonging to ${owner && owner.name ? owner.name : "the character"}. Do not identify a real person by name. Focus on what the visible person is doing, clothing, location and mood. State only what is actually visible.`
+            )
+          );
+        } catch (visionErr) {
+          console.warn("Album vision analysis failed:", visionErr);
+        }
+
         added.push({
           id: uid(),
           imageId: imageIdOf(ref2),
           who: "",
           note: "",
-          vision: "",
-          analyzedAt: 0,
-          analysisAttemptedAt: 0,
+          vision,
+          analyzedAt: vision ? now() : 0,
         });
       } catch (e2) {
         setErr(
@@ -8327,7 +7803,7 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * VITE_WORLD_GROUP_MULTIPLIER=1.15
  * VITE_WORLD_ROLEPLAY_MULTIPLIER=1.00
  * VITE_WORLD_NOTE_MULTIPLIER=1.10
- * VITE_WORLD_CONTENT_INTERVAL_MS=9000
+ * VITE_WORLD_CONTENT_INTERVAL_MS=15000
  * VITE_WORLD_POPUP_CADENCE_MULTIPLIER=1.00
  * VITE_WORLD_CANCEL_SENSITIVITY=1.55
  * VITE_AI_BACKGROUND_GAP_MS=8000
@@ -8339,7 +7815,7 @@ const LIVE_WORLD_DM_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.met
 const LIVE_WORLD_GROUP_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_GROUP_MULTIPLIER) || 1.15));
 const LIVE_WORLD_ROLEPLAY_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_ROLEPLAY_MULTIPLIER) || 1.25));
 const LIVE_WORLD_NOTE_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_NOTE_MULTIPLIER) || 1.10));
-const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(7000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 7500));
+const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(12000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 15000));
 const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.60, Math.min(2.80, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 1.00));
 const LIVE_WORLD_CANCEL_SENSITIVITY = Math.max(0.60, Math.min(2.20, Number(import.meta.env.VITE_WORLD_CANCEL_SENSITIVITY) || 1.32));
 const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(import.meta.env.VITE_WORLD_MAX_POPUP_REROLLS) || 5)));
@@ -8350,36 +7826,35 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * genuinely fresh posts, then popup events, private contact and AI invitations.
  * These are safe public Vite build-time tuning values (no secrets).
  */
-/* v66 — autonomous social activity is deliberately lively. Feed posts remain paced,
- * while comments/replies/DMs/groups can keep the world moving between posts. */
+/* v65 — autonomous feed posts are intentionally sparse. Other world activity
+ * (comments, replies, DMs, groups, follows, gossip reactions) may continue between
+ * posts, but a normal new AI feed post gets a hard ~10 minute floor. */
 const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  90 * 1000,
+  3 * 60 * 1000,
   Math.min(
-    10 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 2 * 60 * 1000
+    15 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 4 * 60 * 1000
   )
 );
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
-const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1000, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 5000));
-const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(3, Math.min(8, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 4)));
+const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
+const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(10 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 20 * 1000));
-const LIVE_WORLD_EVENT_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 60 * 1000));
-const LIVE_WORLD_POPUP_RETRY_MS = Math.max(3000, Math.min(60000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 10000));
-const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(10000, Math.min(3 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 20000));
-const AI_BACKGROUND_GAP_MS = Math.max(0, Math.min(5000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 0));
-const AI_INITIATIVE_GAP_MS = Math.max(0, Math.min(3000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 0));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(60 * 1000, Math.min(10 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 2.5 * 60 * 1000));
+const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 5 * 60 * 1000));
+const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
+const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
+const AI_BACKGROUND_GAP_MS = Math.max(800, Math.min(12000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 1600));
+const AI_INITIATIVE_GAP_MS = Math.max(350, Math.min(8000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 700));
 
 const AI = {
   chain: Promise.resolve(),  // kompatibilitás miatt marad
   last: 0,                   // mikor futott le az utolsó AI-hívás
   gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
-  interactiveGap: 0,          // nincs mesterséges játékosi várakozás
+  interactiveGap: 350,       // gyors játékosi DM/group/RP lane
   initiativeGap: AI_INITIATIVE_GAP_MS, // gyors autonóm DM / event / group lane
-  maxConcurrent: 2, // Két párhuzamos request alapból; provider-busy esetén ideiglenesen 1 workerre váltunk, majd automatikusan visszaállunk
+  maxConcurrent: Math.max(1, Math.min(2, Number(import.meta.env.VITE_AI_MAX_CONCURRENT) || 2)),
   activeWorkers: 0,
-  providerBusyUntil: 0,
-  providerBusyStreak: 0,
 
   /*
    * Token-aware throttling.
@@ -8389,7 +7864,7 @@ const AI = {
    * ritmusban a szolgáltatóra.
    */
   lastCostGap: 0,
-  targetTokensPerMinute: Math.max(60000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 100000),
+  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 60000),
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
@@ -8456,8 +7931,8 @@ function aiCostGapFor(system, prompt, maxTokens) {
    * prompt után legyen ideje fellélegezni a token/minute keretnek.
    */
   return Math.max(
-    0,
-    Math.min(3000, raw)
+    350,
+    Math.min(18000, raw)
   );
 }
 
@@ -8471,8 +7946,8 @@ function aiCostGapFor(system, prompt, maxTokens) {
  * the end (current task + JSON schema + TAIL), which are the two most useful
  * regions if an emergency trim is needed.
  */
-const AI_MAX_SYSTEM_CHARS = Math.max(10000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 18000);
-const AI_MAX_PROMPT_CHARS = Math.max(14000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 26000);
+const AI_MAX_SYSTEM_CHARS = Math.max(18000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 42000);
+const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 82000);
 
 function preserveEdges(value, maxChars, label = "context") {
   const text = String(value || "");
@@ -8518,6 +7993,12 @@ async function runAiQueueWorker() {
       if (!task) break;
 
       try {
+        for (let guard = 0; guard < 40; guard++) {
+          const left = cooldownLeft();
+          if (left <= 0) break;
+          await wait(Math.min(left, 2500) + 50);
+        }
+
         const since = now() - AI.last;
         const baseGap =
           task.priority >= 50
@@ -8555,7 +8036,7 @@ async function runAiQueueWorker() {
 function pumpAiQueue() {
   while (
     AI.queue.length &&
-    AI.activeWorkers < (now() < AI.providerBusyUntil ? 1 : AI.maxConcurrent)
+    AI.activeWorkers < AI.maxConcurrent
   ) {
     AI.activeWorkers++;
     AI.queueRunning = true;
@@ -8703,8 +8184,10 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   } catch (e) {
     if (e && e.name === "AbortError") throw new Error("Az AI nem válaszolt időben.");
     if (e && e.message) {
-      /* Never impose a client-side global cooldown for a provider/network error.
-         A failed request must not freeze every other bot or the player. */
+      if (e && e.retryable === false) {
+        AI.strikes = Math.min(AI.strikes + 1, 3);
+        setCooldown(15000 * AI.strikes, !!requestMeta.interactive);
+      }
       throw e;
     }
     throw new Error("Nem sikerült elérni az AI-t (hálózati hiba). A helyi proxy futása és az API kulcsok ellenőrzése szükséges.");
@@ -8732,22 +8215,49 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       throw err;
     }
     if (busy) {
-      /* No global cooldown. This rejection is isolated to this request. */
+      // ismétlődő elutasításnál egyre hosszabb pihenő, hogy kimásszunk a gödörből
       AI.strikes = Math.min(AI.strikes + 1, 3);
-      const retryAfterRaw = res.headers && res.headers.get
-        ? res.headers.get("retry-after")
-        : "";
+      const retryAfterRaw =
+        res.headers && res.headers.get
+          ? res.headers.get("retry-after")
+          : "";
+
       let retryAfterMs = 0;
       const retryAfterSeconds = Number(retryAfterRaw);
-      if (retryAfterSeconds > 0) retryAfterMs = retryAfterSeconds * 1000;
-      else if (retryAfterRaw) {
+
+      if (retryAfterSeconds > 0) {
+        retryAfterMs = retryAfterSeconds * 1000;
+      } else if (retryAfterRaw) {
         const retryDate = Date.parse(retryAfterRaw);
-        if (Number.isFinite(retryDate)) retryAfterMs = Math.max(0, retryDate - Date.now());
+        if (Number.isFinite(retryDate)) {
+          retryAfterMs = Math.max(0, retryDate - Date.now());
+        }
       }
-      const err = new Error("AI request temporarily unavailable");
+
+      /*
+       * Exponenciálisabb backoff kevesebb újraütéssel. A rövid provider
+       * retry-after értéket is tiszteletben tartjuk, de 429 esetén legalább
+       * 12 mp pihenőt adunk, hogy ne essünk vissza azonnal ugyanabba a limitbe.
+       */
+      const msgLower = String((data && data.error && data.error.message) || data?.error || "").toLowerCase();
+      const tokenMinuteLimit =
+        code === 429 &&
+        (msgLower.includes("tokens per min") || msgLower.includes("tokens per minute") || msgLower.includes("tpm"));
+      const base = tokenMinuteLimit ? 30000 : (code === 429 ? 12000 : 8000);
+      const adaptive = Math.min(60000, base * Math.pow(1.8, Math.max(0, AI.strikes - 1)));
+      const restMs = Math.max(retryAfterMs, adaptive);
+
+      /*
+       * A rate-limitet a queue belül kezeli és ugyanazt a játékosi kérést
+       * újrapróbálja. Ezt nem mutatjuk globális "AI can't keep up" bannerként,
+       * mert DM/group chat közben csak félrevezető és zajos.
+       */
+      setCooldown(
+        restMs,
+        false
+      );
+      const err = new Error(`Az AI most nem győzi — ${Math.ceil(restMs / 1000)} másodperc pihenő.`);
       err.busy = true;
-      err.retryable = true;
-      err.retryAfterMs = Math.min(5000, Math.max(0, retryAfterMs));
       throw err;
     }
     AI.strikes = 0;
@@ -8756,11 +8266,6 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   }
 
   AI.strikes = 0;   // sikeres hívás: tiszta lap
-  AI.providerBusyStreak = 0;
-  if (now() >= AI.providerBusyUntil) {
-    AI.providerBusyUntil = 0;
-    AI.maxConcurrent = 2;
-  }
   if (!data || !data.content) throw new Error("Az AI üres választ adott.");
   const txt = data.content.map((b) => (b.type === "text" ? b.text : "")).join("");
   if (!txt.trim()) throw new Error("Az AI üres választ adott.");
@@ -8820,11 +8325,21 @@ async function askJSON(system, prompt, options = {}) {
     return await queued(async () => {
       let last = null, tries = 0, busyWaits = 0;
 
-      /* Provider-busy: a konkrét request röviden újrapróbálkozik. Nincs globális
-         app cooldown, nincs UI-várakoztató banner, és a többi queue-feladat mehet. */
-      const maxBusyWaits = priority >= 50 ? 4 : 3;
+      /*
+       * A háttérvilág ne kalapálja négyszer egymás után a már throttlingoló
+       * providert. Egy háttérkérés egyetlen kivárt busy-retry-t kap; a játékos
+       * közvetlen akciója kettőt. Ha még mindig limit van, a későbbi engine
+       * kör újra megpróbálhatja anélkül, hogy request-storm alakulna ki.
+       */
+      const maxBusyWaits =
+        priority >= 50
+          ? 4   // játékosi DM/group chat: több belső retry, látható banner nélkül
+          : 2;  // első busy + legfeljebb 1 újrapróbálás
 
-      while (tries < maxTries) {
+      while (
+        tries < maxTries &&
+        busyWaits < maxBusyWaits
+      ) {
         try {
           const langRule = languageInstruction(lang, strictMode);
           const jsonRule = lang === "en"
@@ -8839,7 +8354,7 @@ async function askJSON(system, prompt, options = {}) {
           const raw = await callClaude(
             sys,
             prompt + hint,
-            Math.min(900, Math.max(300, Number(options.maxTokens || 900))),
+            Number(options.maxTokens || 1200),
             {
               interactive: priority >= 50,
               timeoutMs: Number(options.timeoutMs) || undefined,
@@ -8864,16 +8379,38 @@ async function askJSON(system, prompt, options = {}) {
           }
           if (err && err.busy) {
             busyWaits++;
-            const retryMs = Math.min(4000, Math.max(300, Number(err.retryAfterMs) || (350 * Math.pow(2, busyWaits - 1))));
-            AI.providerBusyUntil = Math.max(AI.providerBusyUntil, now() + retryMs);
-            AI.providerBusyStreak = Math.min(6, AI.providerBusyStreak + 1);
-            AI.maxConcurrent = 1;
-            if (busyWaits <= maxBusyWaits) {
-              await wait(retryMs);
-              continue;
+            /*
+             * Player-triggered DM/group chat/RP really DOES restart itself now.
+             * Previously we threw as soon as the cooldown exceeded 3 seconds,
+             * while the UI incorrectly promised an automatic restart.
+             *
+             * For interactive work we wait through a short provider cooldown and
+             * retry the SAME queued request. Very long cooldowns are capped so a
+             * broken provider cannot freeze the UI forever.
+             */
+            const left = cooldownLeft();
+            const interactiveWaitCap = 30000;
+
+            if (priority >= 50 && left > interactiveWaitCap) {
+              const tooLong = new Error(
+                lang === "en"
+                  ? `The AI provider asked for a ${Math.ceil(left / 1000)}s cooldown. Please retry after the cooldown.`
+                  : `Az AI szolgáltató ${Math.ceil(left / 1000)} másodperces pihenőt kért. A pihenő után próbáld újra.`
+              );
+              tooLong.busy = true;
+              tooLong.retryable = false;
+              throw tooLong;
             }
-            err.retryable = true;
-            throw err;
+
+            await wait(
+              Math.min(
+                left + 250,
+                priority >= 50
+                  ? interactiveWaitCap
+                  : 20000
+              )
+            );
+            continue;
           }
           tries++;
 
@@ -9910,166 +9447,32 @@ function enqueueGuaranteedPostCommentCoverage(w, postId, source = "post-created"
   return action ? simEnqueue(w, action) : false;
 }
 
-const GUARANTEED_COVERAGE_READ_CACHE = new Map();
-const GUARANTEED_COVERAGE_SCAN_LIMIT = 80;
-
 function guaranteedCommentCoverageCandidate(w) {
   if (!w) return null;
-
-  const posts =
-    Array.isArray(w.posts)
-      ? w.posts
-      : [];
-
-  if (!posts.length) return null;
-
   const ts = now();
-  const cacheKey =
-    String(w.code || "world");
 
-  const firstId =
-    posts[0] && posts[0].id
-      ? String(posts[0].id)
-      : "";
-
-  const bucket =
-    Math.floor(ts / 30000);
-
-  const cached =
-    GUARANTEED_COVERAGE_READ_CACHE.get(
-      cacheKey
-    );
-
-  /*
-   * A cached candidate is rechecked cheaply. A like, DM, relationship change
-   * or unrelated world.rev no longer invalidates an 80-post coverage scan.
-   */
-  if (
-    cached &&
-    cached.length === posts.length &&
-    cached.firstId === firstId &&
-    cached.bucket === bucket
-  ) {
-    if (!cached.postId) {
-      return null;
-    }
-
-    const candidate =
-      posts
-        .slice(0, GUARANTEED_COVERAGE_SCAN_LIMIT)
-        .find(
-          (post) =>
-            post &&
-            String(post.id) ===
-              String(cached.postId)
-        );
-
-    if (candidate) {
-      const coverage =
-        postCommentCoverageState(
-          w,
-          candidate
-        );
-
-      const attemptedAt =
-        Number(
-          candidate.commentCoverageAttemptAt
-        ) || 0;
-
-      if (
-        !coverage.complete &&
-        coverage.missing > 0 &&
-        (
-          !attemptedAt ||
-          ts - attemptedAt >=
-            GUARANTEED_POST_COMMENT_RETRY_MS
-        )
-      ) {
-        return candidate;
-      }
-    }
-    /* Candidate was completed/removed: fall through to one bounded rescan. */
-  }
-
-  let bestPost = null;
-  let bestScore = -Infinity;
-
-  const limit =
-    Math.min(
-      posts.length,
-      GUARANTEED_COVERAGE_SCAN_LIMIT
-    );
-
-  for (let i = 0; i < limit; i += 1) {
-    const post = posts[i];
-
-    if (
-      !post ||
-      !post.id ||
-      !post.authorId
-    ) {
-      continue;
-    }
-
-    const coverage =
-      postCommentCoverageState(
-        w,
-        post
-      );
-
-    if (
-      coverage.complete ||
-      coverage.missing <= 0
-    ) {
-      continue;
-    }
-
-    const attemptedAt =
-      Number(
-        post.commentCoverageAttemptAt
-      ) || 0;
-
-    if (
-      attemptedAt &&
-      ts - attemptedAt <
-        GUARANTEED_POST_COMMENT_RETRY_MS
-    ) {
-      continue;
-    }
-
-    const score =
-      (coverage.current === 0
-        ? 100000
-        : 0) +
-      coverage.missing * 1000 +
-      Math.max(
-        0,
-        Number(post.ts) || 0
-      ) /
-        1e12;
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestPost = post;
-    }
-  }
-
-  GUARANTEED_COVERAGE_READ_CACHE.set(
-    cacheKey,
-    {
-      length: posts.length,
-      firstId,
-      bucket,
-      postId:
-        bestPost && bestPost.id
-          ? String(bestPost.id)
-          : "",
-    }
+  return (
+    (w.posts || [])
+      .filter((post) => {
+        if (!post || !post.id || !post.authorId) return false;
+        const coverage = postCommentCoverageState(w, post);
+        if (coverage.complete || coverage.missing <= 0) return false;
+        const attemptedAt = Number(post.commentCoverageAttemptAt) || 0;
+        return !attemptedAt || ts - attemptedAt >= GUARANTEED_POST_COMMENT_RETRY_MS;
+      })
+      .map((post) => {
+        const coverage = postCommentCoverageState(w, post);
+        return {
+          post,
+          score:
+            (coverage.current === 0 ? 100000 : 0) +
+            coverage.missing * 1000 +
+            Math.max(0, Number(post.ts) || 0) / 1e12,
+        };
+      })
+      .sort((a, b) => b.score - a.score)[0]?.post || null
   );
-
-  return bestPost;
 }
-
 
 function visualPostRelationshipPriority(w, actorId, targetId, post) {
   const visual = visualPostReactionProfile(w, post);
@@ -11441,18 +10844,8 @@ function characterLoreCorpus(c) {
  * Nem egy rövid personality kivonatból kell "kitalálni" őt:
  * minden róla szóló mező aktív önismeret / karaktervezetési adat.
  */
-const FULL_SELF_CANON_CACHE = new WeakMap();
-
 function fullSelfCanon(c) {
   if (!c) return "";
-
-  if (
-    c &&
-    typeof c === "object" &&
-    FULL_SELF_CANON_CACHE.has(c)
-  ) {
-    return FULL_SELF_CANON_CACHE.get(c);
-  }
 
   const rows = [
     ["Name", c.name],
@@ -11486,13 +10879,7 @@ function fullSelfCanon(c) {
     .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
     .map(([label, value]) => `${label}: ${String(value).trim()}`);
 
-  const result = rows.join("\n");
-
-  if (c && typeof c === "object") {
-    FULL_SELF_CANON_CACHE.set(c, result);
-  }
-
-  return result;
+  return rows.join("\n");
 }
 
 
@@ -11672,33 +11059,11 @@ function primaryKarateFaction(c) {
   return scored[0].key;
 }
 
-const FACTION_FLAGS_CACHE = new WeakMap();
-
 function factionFlags(c) {
-  if (!c) {
-    return {
-      cobraKai:false,
-      miyagiFang:false,
-      ironDragons:false,
-      wasabi:false,
-      pogue:false,
-      kook:false,
-      hydra:false,
-      shield:false,
-    };
-  }
-
-  if (
-    typeof c === "object" &&
-    FACTION_FLAGS_CACHE.has(c)
-  ) {
-    return FACTION_FLAGS_CACHE.get(c);
-  }
-
   const karate = primaryKarateFaction(c);
   const strong = `${selfAffiliationStrongCorpus(c)}\n${selfAffiliationSecondaryCorpus(c)}`;
 
-  const result = {
+  return {
     cobraKai: karate === "cobraKai",
     miyagiFang: karate === "miyagiFang",
     ironDragons: karate === "ironDragons",
@@ -11720,12 +11085,6 @@ function factionFlags(c) {
       /s\.h\.i\.e\.l\.d\.?|\bshield agent\b|\bshield operative\b|strategic homeland intervention/.test(strong) &&
       !/enemy s\.h\.i\.e\.l\.d|against s\.h\.i\.e\.l\.d/.test(strong),
   };
-
-  if (typeof c === "object") {
-    FACTION_FLAGS_CACHE.set(c, result);
-  }
-
-  return result;
 }
 
 function karateFactionKey(flags) {
@@ -12263,6 +11622,46 @@ function regexEscapeLiteral(value) {
    nickname+surnames and @handles all resolve back to one canonical entity.
    Ambiguous loose matches intentionally resolve to null instead of guessing.
    ------------------------------------------------------------------------- */
+const CHARACTER_IDENTITY_ALIAS_ROWS_CACHE = new WeakMap();
+const CHARACTER_IDENTITY_RESOLUTION_CACHE = new WeakMap();
+const CONNECTION_RELATIONSHIP_ENTRIES_CACHE = new WeakMap();
+
+function invalidateCharacterIdentityResolutionCache(w) {
+  if (w && typeof w === "object") {
+    CHARACTER_IDENTITY_RESOLUTION_CACHE.delete(w);
+    CONNECTION_RELATIONSHIP_ENTRIES_CACHE.delete(w);
+  }
+}
+
+function characterIdentityResolutionCache(w) {
+  if (!w || typeof w !== "object") return null;
+  const rev = Number(w.rev) || 0;
+  let cached = CHARACTER_IDENTITY_RESOLUTION_CACHE.get(w);
+  if (!cached || cached.rev !== rev) {
+    cached = { rev, values: new Map() };
+    CHARACTER_IDENTITY_RESOLUTION_CACHE.set(w, cached);
+  }
+  return cached.values;
+}
+
+function characterIdentityAliasSignature(person) {
+  if (!person) return "";
+  const flat = (value) =>
+    Array.isArray(value)
+      ? value.map((x) => String(x || "")).join("|")
+      : String(value || "");
+  return [
+    person.name,
+    person.nick,
+    person.nickname,
+    flat(person.aliases),
+    person.alias,
+    person.aka,
+    person.alsoKnownAs,
+    person.username,
+  ].map((x) => String(x || "")).join("\u001f");
+}
+
 function normalizeCharacterIdentityText(value) {
   return String(value || "")
     .normalize("NFKD")
@@ -12285,9 +11684,6 @@ function characterIdentityNicknameParts(person) {
     person.alias,
     person.aka,
     person.alsoKnownAs,
-    person.callsign,
-    person.codeName,
-    person.codename,
   ];
 
   const out = [];
@@ -12297,14 +11693,8 @@ function characterIdentityNicknameParts(person) {
       .map((part) => part.replace(/\s+/g, " ").trim())
       .filter(Boolean)
       .forEach((part) => {
-        /* Strip wrapping quotes/brackets, but keep spaces inside multi-word aliases. */
-        const clean = part
-          .replace(/^[\s"'“”‘’()[\]{}]+|[\s"'“”‘’()[\]{}]+$/g, "")
-          .replace(/\s+/g, " ")
-          .trim();
-        if (!clean) return;
-        if (!out.some((old) => normalizeCharacterIdentityText(old) === normalizeCharacterIdentityText(clean))) {
-          out.push(clean);
+        if (!out.some((old) => normalizeCharacterIdentityText(old) === normalizeCharacterIdentityText(part))) {
+          out.push(part);
         }
       });
   };
@@ -12314,53 +11704,17 @@ function characterIdentityNicknameParts(person) {
     else push(value);
   });
 
-  /*
-   * Backward-compatible self-alias discovery.
-   * Older/imported sheets often stored a nickname inside a free-text field
-   * instead of the dedicated `nick` property:
-   *   Nickname: Wolf
-   *   Alias — The Wolf
-   *   AKA: Wolf
-   *   Becenév: Wolf
-   *   Known as: Wolf
-   * Only explicit SELF-identity labels are read here; arbitrary names from
-   * backstory/Connections are deliberately ignored to avoid false merges.
-   */
-  const selfIdentityText = [
-    person.bio,
-    person.extra,
-    person.backstory,
-    person.personality,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const labelledAliasRe =
-    /(?:^|\n)\s*(?:nickname|nick|alias(?:es)?|aka|a\.k\.a\.|also\s+known\s+as|known\s+as|called|callsign|code\s*name|codename|becen[eé]v|ragadv[aá]nyn[eé]v)\s*(?::|=|[-–—])\s*([^\n]{1,80})/giu;
-
-  let match;
-  while ((match = labelledAliasRe.exec(selfIdentityText))) {
-    const value = String(match[1] || "")
-      .split(/\s+(?:\||•|·)\s+/)[0]
-      .replace(/[.!?]+$/g, "")
-      .trim();
-    if (value) push(value);
-    if (labelledAliasRe.lastIndex === match.index) labelledAliasRe.lastIndex += 1;
-  }
-
-  /* Common name spellings: Feng "Wolf" Xiao / Feng 'Wolf' Xiao / Feng (Wolf) Xiao */
-  const displayName = String(person.name || "");
-  const quoted = displayName.match(/[“"'‘’]([^“”"'‘’]{2,40})[”"'‘’]/g) || [];
-  quoted.forEach((chunk) => push(chunk.slice(1, -1)));
-
-  const paren = displayName.match(/\(([^()]{2,40})\)/g) || [];
-  paren.forEach((chunk) => push(chunk.slice(1, -1)));
-
   return out;
 }
 
 function characterIdentityAliasRows(person) {
   if (!person) return [];
+
+  const signature = characterIdentityAliasSignature(person);
+  const cached = CHARACTER_IDENTITY_ALIAS_ROWS_CACHE.get(person);
+  if (cached && cached.signature === signature) {
+    return cached.rows;
+  }
 
   const full = String(person.name || "").replace(/\s+/g, " ").trim();
   const words = full.split(/\s+/).filter(Boolean);
@@ -12396,6 +11750,7 @@ function characterIdentityAliasRows(person) {
   push("first", first, 650);
   push("surname", surname, 300);
 
+  CHARACTER_IDENTITY_ALIAS_ROWS_CACHE.set(person, { signature, rows });
   return rows;
 }
 
@@ -12423,12 +11778,18 @@ function characterIdentityCandidates(w, options = {}) {
   const base = relationshipOnly
     ? allSubjects(w)
     : socialProfiles(w);
+  const seen = new Set();
+  const out = [];
 
-  return (base || [])
-    .filter((person) => person && person.id)
-    .filter((person, index, arr) =>
-      arr.findIndex((other) => other && String(other.id) === String(person.id)) === index
-    );
+  (base || []).forEach((person) => {
+    if (!person || !person.id) return;
+    const id = String(person.id);
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(person);
+  });
+
+  return out;
 }
 
 function identityFirstNameCompatible(rawFirst, canonicalFirst) {
@@ -12465,6 +11826,18 @@ function resolveCharacterIdentity(w, rawName, options = {}) {
 
   const norm = normalizeCharacterIdentityText(raw);
   if (!norm) return null;
+
+  const resolutionCache = characterIdentityResolutionCache(w);
+  const cacheKey = `${options.relationshipOnly === true ? "r" : "s"}|${options.returnAmbiguous === true ? "a" : "n"}|${norm}`;
+  if (resolutionCache && resolutionCache.has(cacheKey)) {
+    return resolutionCache.get(cacheKey);
+  }
+
+  const finish = (value) => {
+    if (resolutionCache) resolutionCache.set(cacheKey, value);
+    return value;
+  };
+
   const rawWords = norm.replace(/^@/, "").split(/\s+/).filter(Boolean);
   const matches = [];
 
@@ -12528,27 +11901,29 @@ function resolveCharacterIdentity(w, rawName, options = {}) {
     if (best) matches.push(best);
   });
 
-  if (!matches.length) return null;
+  if (!matches.length) return finish(null);
   matches.sort((a, b) => b.score - a.score);
   const topScore = matches[0].score;
   const winners = matches.filter((match) => match.score === topScore);
   const uniqueIds = [...new Set(winners.map((match) => String(match.id)))];
 
   if (uniqueIds.length !== 1) {
-    return options.returnAmbiguous
-      ? {
-          id: "",
-          person: null,
-          score: topScore,
-          reason: "ambiguous",
-          alias: raw,
-          ambiguous: true,
-          candidateIds: uniqueIds,
-        }
-      : null;
+    return finish(
+      options.returnAmbiguous
+        ? {
+            id: "",
+            person: null,
+            score: topScore,
+            reason: "ambiguous",
+            alias: raw,
+            ambiguous: true,
+            candidateIds: uniqueIds,
+          }
+        : null
+    );
   }
 
-  return winners[0];
+  return finish(winners[0]);
 }
 
 function textExplicitlyMentionsCharacter(w, text, target, options = {}) {
@@ -12605,39 +11980,8 @@ function canonTargetAliases(target) {
   });
 }
 
-const CANON_TARGET_EVIDENCE_CACHE = new WeakMap();
-
 function canonTargetEvidence(actor, target, maxSnippets = 3) {
   if (!actor || !target) return [];
-
-  if (
-    typeof actor === "object" &&
-    typeof target === "object"
-  ) {
-    let actorCache =
-      CANON_TARGET_EVIDENCE_CACHE.get(actor);
-
-    if (!actorCache) {
-      actorCache = new WeakMap();
-      CANON_TARGET_EVIDENCE_CACHE.set(
-        actor,
-        actorCache
-      );
-    }
-
-    const cached =
-      actorCache.get(target);
-
-    if (
-      cached &&
-      cached.maxSnippets >= maxSnippets
-    ) {
-      return cached.rows.slice(
-        0,
-        maxSnippets
-      );
-    }
-  }
 
   /*
    * IMPORTANT: hierarchy / shared-history facts can live anywhere on a sheet,
@@ -12684,30 +12028,6 @@ function canonTargetEvidence(actor, target, maxSnippets = 3) {
 
     snippets.push(snippet);
     if (snippets.length >= maxSnippets) break;
-  }
-
-  if (
-    typeof actor === "object" &&
-    typeof target === "object"
-  ) {
-    let actorCache =
-      CANON_TARGET_EVIDENCE_CACHE.get(actor);
-
-    if (!actorCache) {
-      actorCache = new WeakMap();
-      CANON_TARGET_EVIDENCE_CACHE.set(
-        actor,
-        actorCache
-      );
-    }
-
-    actorCache.set(
-      target,
-      {
-        maxSnippets,
-        rows: snippets.slice(),
-      }
-    );
   }
 
   return snippets;
@@ -12782,6 +12102,22 @@ function connectionRelationshipEntriesAbout(w, actor, target) {
     .trim();
 
   if (!source) return [];
+
+  const cacheKey = `${String(actor.id || "")}>${String(target.id || "")}`;
+  const cacheSignature = [
+    actor.updatedAt || "",
+    source,
+    characterIdentityAliasSignature(target),
+  ].join("\u001f");
+  let worldCache = CONNECTION_RELATIONSHIP_ENTRIES_CACHE.get(w);
+  if (!worldCache) {
+    worldCache = new Map();
+    CONNECTION_RELATIONSHIP_ENTRIES_CACHE.set(w, worldCache);
+  }
+  const cachedEntry = worldCache.get(cacheKey);
+  if (cachedEntry && cachedEntry.signature === cacheSignature) {
+    return cachedEntry.entries;
+  }
 
   const aliases = strictConnectionTargetAliases(target);
   if (!aliases.length) return [];
@@ -13035,7 +12371,9 @@ function connectionRelationshipEntriesAbout(w, actor, target) {
     }
   });
 
-  return found.slice(0, 8);
+  const entries = found.slice(0, 8);
+  worldCache.set(cacheKey, { signature: cacheSignature, entries });
+  return entries;
 }
 
 function exactConnectionBondLabel(w, actor, target) {
@@ -13961,10 +13299,10 @@ function detailedCharacterCanonPacket(c, surface = "unknown") {
 }
 
 /*
- * RUNTIME FIX v20:
- * exactPairCanonCard() has long referenced sameCoreFaction(), but the helper
- * was never defined. Reuse the existing canonical faction/team comparison
- * instead of duplicating faction rules.
+ * RECOVERY HOTFIX ONLY:
+ * The original pre-patch frontend calls sameCoreFaction() but never defines it.
+ * Reuse the already-existing sameFollowTeamOrFaction() helper.
+ * No other behavior is changed.
  */
 function sameCoreFaction(actor, target) {
   return sameFollowTeamOrFaction(actor, target);
@@ -14856,8 +14194,6 @@ PUBLIC COMMENT AUTHORSHIP LOCK:
 `;
 }
 
-const REL_OBSESSION_READ_CACHE = new WeakMap();
-
 function relationshipObsessionLevel(
   w,
   actorId,
@@ -14870,36 +14206,6 @@ function relationshipObsessionLevel(
     actorId === targetId
   ) {
     return 0;
-  }
-
-  const relStore =
-    w.rels &&
-    typeof w.rels === "object"
-      ? w.rels
-      : w;
-
-  let cache =
-    REL_OBSESSION_READ_CACHE.get(relStore);
-
-  const rev =
-    Number(w.rev || 0);
-
-  if (!cache || cache.rev !== rev) {
-    cache = {
-      rev,
-      values: new Map(),
-    };
-    REL_OBSESSION_READ_CACHE.set(
-      relStore,
-      cache
-    );
-  }
-
-  const pairKey =
-    `${actorId}>${targetId}`;
-
-  if (cache.values.has(pairKey)) {
-    return cache.values.get(pairKey);
   }
 
   const actor =
@@ -14950,7 +14256,6 @@ function relationshipObsessionLevel(
     );
 
   if (strong) {
-    cache.values.set(pairKey, 3);
     return 3;
   }
 
@@ -14960,11 +14265,9 @@ function relationshipObsessionLevel(
     );
 
   if (possessive) {
-    cache.values.set(pairKey, 2);
     return 2;
   }
 
-  cache.values.set(pairKey, 0);
   return 0;
 }
 
@@ -17016,30 +16319,7 @@ async function serverMigrate(world, username, password) {
 }
 
 async function serverSession() {
-  return apiJson("/auth/session?lite=1", {
-    method: "GET",
-  });
-}
-
-/* PERFORMANCE v16: session restore itself is metadata-only. The large world
-   payload is fetched exactly once, only after authentication succeeds. */
-async function serverLoadWorld() {
-  const data = await apiJson("/world/load", {
-    method: "GET",
-  });
-  return data && data.world ? data.world : null;
-}
-
-/* PERFORMANCE v15: polling/focus checks fetch only tiny revision scalars.
-   The multi-MB world/media payload is requested only when the revision changed. */
-async function serverWorldVersion() {
-  return apiJson("/world/version", {
-    method: "GET",
-  });
-}
-
-async function serverMediaVersion() {
-  return apiJson("/media/version", {
+  return apiJson("/auth/session", {
     method: "GET",
   });
 }
@@ -17083,67 +16363,11 @@ async function serverCreateProfileWorld(
   });
 }
 
-const VISION_RUNTIME = {
-  disabledUntil: 0,
-  failures: 0,
-  lastWarnAt: 0,
-};
-
-function visionCircuitOpen() {
-  return now() < Number(VISION_RUNTIME.disabledUntil || 0);
-}
-
-function pauseVisionAfterFailure(err) {
-  const status = Number(err && err.status) || 0;
-
-  VISION_RUNTIME.failures =
-    Math.min(
-      8,
-      Math.max(0, Number(VISION_RUNTIME.failures) || 0) + 1
-    );
-
-  const basePause =
-    status === 429
-      ? 2 * 60 * 1000
-      : status >= 500 || status === 0
-        ? 5 * 60 * 1000
-        : 60 * 1000;
-
-  const pauseMs =
-    Math.min(
-      15 * 60 * 1000,
-      basePause *
-        Math.max(
-          1,
-          Math.min(3, VISION_RUNTIME.failures)
-        )
-    );
-
-  VISION_RUNTIME.disabledUntil =
-    Math.max(
-      Number(VISION_RUNTIME.disabledUntil) || 0,
-      now() + pauseMs
-    );
-
-  if (
-    now() - Number(VISION_RUNTIME.lastWarnAt || 0) >
-    30000
-  ) {
-    VISION_RUNTIME.lastWarnAt = now();
-
-    console.warn(
-      `[vision] temporarily paused for ${Math.ceil(pauseMs / 1000)}s after failure`,
-      err
-    );
-  }
-}
-
 async function analyzeImageDataUrl(
   dataUrl,
   prompt = ""
 ) {
   const imageInput = String(dataUrl || "").trim();
-
   if (
     !imageInput ||
     (!isInlineImageData(imageInput) && !/^https:\/\//i.test(imageInput))
@@ -17151,70 +16375,24 @@ async function analyzeImageDataUrl(
     return "";
   }
 
-  /*
-   * Vision is enrichment, not a blocking dependency. If the endpoint/provider
-   * is unhealthy (e.g. the observed /ai/vision 502), temporarily stop sending
-   * more requests instead of making every upload/editor/feed action wait.
-   */
-  if (visionCircuitOpen()) {
-    return "";
-  }
+  const result = await apiJson("/ai/vision", {
+    method: "POST",
+    body: JSON.stringify({
+      provider: DEFAULT_AI_PROVIDER,
+      model: DEFAULT_AI_MODEL,
+      image: imageInput,
+      prompt:
+        prompt ||
+        "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when visible. Do not identify real people by name.",
+    }),
+  });
 
-  const controller =
-    typeof AbortController !== "undefined"
-      ? new AbortController()
-      : null;
-
-  const timeout =
-    setTimeout(
-      () => {
-        try {
-          controller && controller.abort();
-        } catch (e) {}
-      },
-      9000
-    );
-
-  try {
-    const result = await apiJson("/ai/vision", {
-      method: "POST",
-      signal:
-        controller
-          ? controller.signal
-          : undefined,
-      body: JSON.stringify({
-        provider:
-          String(
-            import.meta.env.VITE_VISION_PROVIDER ||
-            DEFAULT_AI_PROVIDER
-          ).trim(),
-        model:
-          String(
-            import.meta.env.VITE_VISION_MODEL ||
-            ""
-          ).trim(),
-        image: imageInput,
-        prompt:
-          prompt ||
-          "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when visible. Do not identify real people by name.",
-      }),
-    });
-
-    VISION_RUNTIME.failures = 0;
-    VISION_RUNTIME.disabledUntil = 0;
-
-    return String(
-      (result && result.text) || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 700);
-  } catch (err) {
-    pauseVisionAfterFailure(err);
-    return "";
-  } finally {
-    clearTimeout(timeout);
-  }
+  return String(
+    (result && result.text) || ""
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 700);
 }
 
 async function requestAiImageProxy(payload) {
@@ -17652,14 +16830,6 @@ function migrate(w) {
   ensureStorySettings(w);
 
   /*
-   * PERFORMANCE v12.1: expensive legacy normalization is one-time. Current
-   * clients already write the normalized schema, so cloud save responses do
-   * not need to re-walk every historical post/scene/relation/image forever.
-   */
-  const needsLegacyDataRepair =
-    Number(w.clientDataRepairVersion || 0) < CLIENT_DATA_REPAIR_VERSION;
-
-  /*
    * PERSISTENT FEATURE MIGRATION
    * These settings are stored on the world, so old saves receive the same
    * behavior as newly created worlds the next time they are loaded.
@@ -17699,11 +16869,7 @@ function migrate(w) {
    * Régi/félbemaradt syncből maradó null/undefined post így nem juthat el
    * egyetlen `post.comments` olvasásig sem.
    */
-  if (needsLegacyDataRepair) {
-    sanitizeWorldPosts(w);
-  } else if (!Array.isArray(w.posts)) {
-    w.posts = [];
-  }
+  sanitizeWorldPosts(w);
 
   if (!w.universe.at) w.universe.at = 0;
 
@@ -17776,17 +16942,15 @@ function migrate(w) {
     }
   });
 
-  // régi memóriák felhúzása az új, karakterenkénti tudás-tárba — egyszer
-  if (needsLegacyDataRepair) {
-    Object.keys(w.mems || {}).forEach((id) => {
-      const mem = ensureCharMemory(w, id);
-      const items = (w.mems[id] || []).map((text) => ({ text, source: "legacy_memory", confidence: 0.85, timestamp: now() }));
-      mem.knownFacts = mergeKnowledgeItems(mem.knownFacts, items, "fact", 32);
-    });
-  }
+  // régi memóriák felhúzása az új, karakterenkénti tudás-tárba
+  Object.keys(w.mems || {}).forEach((id) => {
+    const mem = ensureCharMemory(w, id);
+    const items = (w.mems[id] || []).map((text) => ({ text, source: "legacy_memory", confidence: 0.85, timestamp: now() }));
+    mem.knownFacts = mergeKnowledgeItems(mem.knownFacts, items, "fact", 32);
+  });
 
-  /* Régi roleplay jeleneteket is felhúzzuk az új Event-sémára — egyszer. */
-  if (needsLegacyDataRepair) {
+  /* Régi roleplay jeleneteket is felhúzzuk az új Event-sémára. */
+  {
     const fallbackPlayerId =
       (w.owner && w.players && w.players[w.owner] ? w.owner : "") ||
       Object.keys(w.players || {})[0] ||
@@ -17836,8 +17000,8 @@ function migrate(w) {
     });
   }
 
-  /* Idempotens második védőháló csak a valódi legacy repair körben. */
-  if (needsLegacyDataRepair) sanitizeWorldPosts(w);
+  /* Idempotens második védőháló régi migrációs ágak után. */
+  sanitizeWorldPosts(w);
   // a lejárt jegyzetek nem cipelődnek tovább; szerzőnként egy marad
   {
     const byAuthor = {};
@@ -17848,10 +17012,9 @@ function migrate(w) {
     });
     w.notes = Object.keys(byAuthor).map((k) => byAuthor[k]).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   }
-  // A régi, kétirányban közös kapcsolatokat csak akkor bontjuk szét,
-  // ha ténylegesen maradt legacy "a|b" kulcs. A normál "a>b" gráfot nem
-  // klónozzuk újra minden cloud save után.
-  if (Object.keys(w.rels || {}).some((key) => key.includes("|") && !key.includes(">"))) {
+  // A régi, kétirányban közös kapcsolatokat szétbontjuk: mindkét fél
+  // ugyanazt az értéket kapja kiindulásnak, onnantól külön alakulnak.
+  {
     const split = {};
     Object.keys(w.rels || {}).forEach((k) => {
       const r = w.rels[k];
@@ -17867,70 +17030,51 @@ function migrate(w) {
     w.rels = split;
   }
 
-  if (needsLegacyDataRepair) {
-    Object.keys(w.rels).forEach((k) => {
-      const r = w.rels[k];
-      if (!r) return;
-      if (r.bond === undefined) r.bond = "";
-      if (r.fixed === undefined) r.fixed = false;
-      if (r.mood === undefined) r.mood = "";
-      if (r.why === undefined) r.why = "";
-      if (!r.bond && r.type) { r.bond = r.type; r.fixed = FIXED_BONDS.indexOf(r.type) >= 0; r.type = ""; }
-    });
-  }
+  Object.keys(w.rels).forEach((k) => {
+    const r = w.rels[k];
+    if (!r) return;
+    if (r.bond === undefined) r.bond = "";
+    if (r.fixed === undefined) r.fixed = false;
+    if (r.mood === undefined) r.mood = "";
+    if (r.why === undefined) r.why = "";
+    if (!r.bond && r.type) { r.bond = r.type; r.fixed = FIXED_BONDS.indexOf(r.type) >= 0; r.type = ""; }
+  });
 
   /*
-   * v10 relationship migration:
-   * 1) release accidental old CharacterForm "manual" locks when Connections
-   *    explicitly names that target;
-   * 2) rebuild ALL canonical baselines using the current identity resolver;
-   * 3) force the repaired canon into old live state once.
-   *
-   * This runs for old worlds, and new worlds naturally start on the same code.
+   * v99 PERFORMANCE: migrate() runs on login, saves, conflict responses and
+   * periodic server sync. Re-parsing every Connections field for every
+   * actor->target pair each time caused major UI stalls on large casts.
+   * Rebuild only when relationship-relevant character canon changed.
    */
-  const previousRelationshipCanonVersion =
-    Number(w.relationshipCanonVersion || 0);
+  const currentRelationshipCanonFingerprint =
+    relationshipCanonFingerprint(w);
+  const relationshipCanonNeedsRefresh =
+    Number(w.relationshipCanonVersion || 0) < RELATIONSHIP_CANON_VERSION ||
+    !w.relationshipBaselines ||
+    typeof w.relationshipBaselines !== "object" ||
+    String(w.relationshipCanonFingerprint || "") !==
+      currentRelationshipCanonFingerprint;
 
-  const relationshipFingerprintBefore =
-    String(w.relationshipCanonFingerprint || "");
-  const relationshipFingerprintNow =
-    relationshipCanonInputFingerprint(w);
-  const relationshipCanonInputsChanged =
-    relationshipFingerprintBefore !== relationshipFingerprintNow;
-
-  if (previousRelationshipCanonVersion < RELATIONSHIP_CANON_VERSION) {
-    releaseLegacyAccidentalRelationshipManualLocks(w);
-  }
-
-  /*
-   * PERFORMANCE v12:
-   * Do NOT rebuild the full character×character canon after every post,
-   * chat message, notification, cloud save or poll. Rebuild only when an
-   * identity / alias / Connections / faction input really changed.
-   */
-  if (
-    previousRelationshipCanonVersion < RELATIONSHIP_CANON_VERSION ||
-    relationshipCanonInputsChanged
-  ) {
-    const beforeBaselines = {
-      ...ensureRelationshipBaselineStore(w),
-    };
-
+  if (relationshipCanonNeedsRefresh) {
     refreshCanonicalRelationshipBaselines(w);
-
-    if (previousRelationshipCanonVersion < RELATIONSHIP_CANON_VERSION) {
-      reconcileLiveRelationshipsWithStrongCanon(w, true);
-      w.relationshipCanonVersion = RELATIONSHIP_CANON_VERSION;
-    } else if (relationshipCanonInputsChanged) {
-      /* Remote/current-world profile edits become live immediately too. */
-      applyChangedConnectionCanonNow(w, beforeBaselines);
-    }
   }
 
-  // Képhivatkozás-migráció: régi worldnél egyszer. Az aktuális upload/post
-  // útvonalak már eleve registerImageMeta()-t használnak.
-  if (needsLegacyDataRepair) {
-    const noteImage = (ref, patch) => {
+  /*
+   * v94 one-time canon repair for stale impossible relationship states.
+   * Example: both character sheets say Best Friend but old runtime says Hate.
+   */
+  if (Number(w.relationshipCanonVersion || 0) < RELATIONSHIP_CANON_VERSION) {
+    /*
+     * v96 uses canonical ID resolution for full names, omitted middle names,
+     * explicit nicknames/handles and safe unique familiar-name+surname forms.
+     * Reconcile old live edges so Tory/Angel-style stale states are repaired.
+     */
+    reconcileLiveRelationshipsWithStrongCanon(w, true);
+    w.relationshipCanonVersion = RELATIONSHIP_CANON_VERSION;
+  }
+
+  // képhivatkozások migrációja: a tényleges fájl marad külön tárolva, itt csak a stabil metaél marad.
+  const noteImage = (ref, patch) => {
     const id = imageIdOf(ref);
     if (id) registerImageMeta(w, id, patch);
   };
@@ -17946,55 +17090,10 @@ function migrate(w) {
       noteImage(ref, { category: "album", ownerCharacterId: c && c.id });
     });
   });
-    (w.posts || []).forEach((p) => {
-      if (p && !p.imageId) p.imageId = imageIdOf(p.image);
-      noteImage(p && (p.imageId ? imageRef(p.imageId) : p.image), { category: "post", ownerCharacterId: p && p.authorId });
-    });
-  }
-
-  if (needsLegacyDataRepair) {
-    w.clientDataRepairVersion = CLIENT_DATA_REPAIR_VERSION;
-  }
-
-  return w;
-}
-
-/*
- * PERFORMANCE v16 — FAST BOOT PREPARATION
- *
- * Current saves have already gone through the expensive one-time migrations.
- * Re-running the full historical migration before the first paint only burns
- * the browser main thread. If all persisted migration markers are current,
- * boot only normalizes the tiny top-level shape. Older worlds still fall back
- * to the exact existing migrate() path, so no migration behavior is removed.
- */
-function prepareWorldForBoot(w) {
-  if (!w || !w.universe) return w;
-
-  const currentSchema =
-    Number(w.masvilagSchemaVersion || 0) >= WORLD_SCHEMA_VERSION &&
-    Number(w.clientDataRepairVersion || 0) >= CLIENT_DATA_REPAIR_VERSION &&
-    Number(w.relationshipCanonVersion || 0) >= RELATIONSHIP_CANON_VERSION &&
-    Boolean(String(w.relationshipCanonFingerprint || ""));
-
-  if (!currentSchema) {
-    return migrate(w);
-  }
-
-  w.syncRev = worldSyncRev(w);
-  if (!w.universe.year) w.universe.year = String(new Date().getFullYear());
-  if (w.universe.date === undefined) w.universe.date = "";
-  if (!w.universe.at) w.universe.at = 0;
-  ensureStorySettings(w);
-
-  ["rels", "chats", "mems", "accounts", "players", "deleted", "notify", "charMemory", "userSettings", "images"].forEach((k) => {
-    if (!w[k] || typeof w[k] !== "object") w[k] = {};
+  (w.posts || []).forEach((p) => {
+    if (p && !p.imageId) p.imageId = imageIdOf(p.image);
+    noteImage(p && (p.imageId ? imageRef(p.imageId) : p.image), { category: "post", ownerCharacterId: p && p.authorId });
   });
-  ["posts", "log", "scenes", "groups", "notes", "inventory", "diary"].forEach((k) => {
-    if (!Array.isArray(w[k])) w[k] = [];
-  });
-  if (!Array.isArray(w.chars)) w.chars = [];
-
   return w;
 }
 
@@ -19210,9 +18309,8 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v32-binary-safe-render-no-clones";
+const BUILD_VERSION = "v99-performance-canon-cache-feed-tree";
 const WORLD_SCHEMA_VERSION = 97;
-const CLIENT_DATA_REPAIR_VERSION = 1;
 
 /* Fast, safe clone for the large world state. */
 function cloneWorldState(value) {
@@ -19222,415 +18320,49 @@ function cloneWorldState(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-/* ---------- PERFORMANCE v14: COALESCED NON-BLOCKING WORLD AUTOSAVE ---------- */
-let WORLD_SAVE_SERIALIZER = null;
-let WORLD_SAVE_SERIALIZER_SEQ = 0;
-const WORLD_SAVE_SERIALIZER_WAITERS = new Map();
-
-function ensureWorldSaveSerializer() {
-  if (WORLD_SAVE_SERIALIZER) return WORLD_SAVE_SERIALIZER;
-
-  if (
-    typeof Worker === "undefined" ||
-    typeof Blob === "undefined" ||
-    typeof URL === "undefined" ||
-    typeof URL.createObjectURL !== "function"
-  ) {
-    return null;
-  }
-
-  try {
-    const source = `
-self.onmessage = function(event) {
-  const msg = event && event.data ? event.data : {};
-  try {
-    const world = msg.world || null;
-    const worldJson = JSON.stringify(world);
-
-    let contentJson = "";
-    if (world && typeof world === "object") {
-      const copy = Object.assign({}, world);
-      delete copy.rev;
-      delete copy.syncRev;
-      if (copy.universe && typeof copy.universe === "object") {
-        copy.universe = Object.assign({}, copy.universe);
-        delete copy.universe.at;
-      }
-      contentJson = JSON.stringify(copy);
-    }
-
-    self.postMessage({
-      id: msg.id,
-      ok: true,
-      worldJson: worldJson,
-      contentJson: contentJson
-    });
-  } catch (error) {
-    self.postMessage({
-      id: msg.id,
-      ok: false,
-      error: error && error.message ? error.message : String(error || "serialize failed")
-    });
-  }
-};`;
-
-    const url = URL.createObjectURL(
-      new Blob([source], { type: "text/javascript" })
-    );
-
-    WORLD_SAVE_SERIALIZER = new Worker(url);
-
-    WORLD_SAVE_SERIALIZER.onmessage = (event) => {
-      const msg = event && event.data ? event.data : {};
-      const waiter = WORLD_SAVE_SERIALIZER_WAITERS.get(msg.id);
-      if (!waiter) return;
-
-      WORLD_SAVE_SERIALIZER_WAITERS.delete(msg.id);
-
-      if (msg.ok) {
-        waiter.resolve({
-          worldJson: String(msg.worldJson || ""),
-          contentJson: String(msg.contentJson || ""),
-        });
-      } else {
-        waiter.reject(
-          new Error(msg.error || "World serialization failed.")
-        );
-      }
-    };
-
-    WORLD_SAVE_SERIALIZER.onerror = () => {
-      for (const waiter of WORLD_SAVE_SERIALIZER_WAITERS.values()) {
-        waiter.reject(
-          new Error("World serialization worker failed.")
-        );
-      }
-
-      WORLD_SAVE_SERIALIZER_WAITERS.clear();
-
-      try {
-        WORLD_SAVE_SERIALIZER.terminate();
-      } catch (e) {}
-
-      WORLD_SAVE_SERIALIZER = null;
-    };
-
-    return WORLD_SAVE_SERIALIZER;
-  } catch (e) {
-    WORLD_SAVE_SERIALIZER = null;
-    return null;
-  }
-}
-
-function serializeWorldForSave(world) {
-  const worker = ensureWorldSaveSerializer();
-
-  if (!worker) {
-    return Promise.resolve().then(() => {
-      const worldJson = JSON.stringify(world);
-      const copy = { ...world };
-      delete copy.rev;
-      delete copy.syncRev;
-
-      if (copy.universe && typeof copy.universe === "object") {
-        copy.universe = { ...copy.universe };
-        delete copy.universe.at;
-      }
-
-      return {
-        worldJson,
-        contentJson: JSON.stringify(copy),
-      };
-    });
-  }
-
-  const id = ++WORLD_SAVE_SERIALIZER_SEQ;
-
-  return new Promise((resolve, reject) => {
-    WORLD_SAVE_SERIALIZER_WAITERS.set(id, { resolve, reject });
-
-    try {
-      worker.postMessage({ id, world });
-    } catch (e) {
-      WORLD_SAVE_SERIALIZER_WAITERS.delete(id);
-      reject(e);
-    }
-  });
-}
-
-async function writeWorldSnapshotSerialized(code, worldMeta, worldJson, shared) {
-  if (!code || !worldJson) return false;
-
-  const id = `${now()}-${uid()}`;
-  const entry = {
-    id,
-    code,
-    rev: Number((worldMeta && worldMeta.rev) || 0),
-    syncRev: worldSyncRev(worldMeta),
-    savedAt: now(),
-    updatedAt: Number(
-      (worldMeta && worldMeta.universe && worldMeta.universe.at) || 0
-    ),
-  };
-
-  const entryJson = JSON.stringify(entry);
-  const payload =
-    entryJson.slice(0, -1) +
-    `,"gameState":${worldJson}}`;
-
-  if (
-    !(await writeBigScoped(
-      SNAP_DATA_KEY(code, shared, id),
-      payload,
-      shared
-    ))
-  ) {
-    return false;
-  }
-
-  const existing = await loadSaveIndex(code, shared);
-  const next = [entry]
-    .concat(existing.filter((x) => x && x.id !== id))
-    .sort((a, b) => {
-      if ((b.rev || 0) !== (a.rev || 0)) {
-        return (b.rev || 0) - (a.rev || 0);
-      }
-
-      return (b.savedAt || 0) - (a.savedAt || 0);
-    });
-
-  const keep = next.slice(0, SAVE_HISTORY_LIMIT);
-  const stale = next.slice(SAVE_HISTORY_LIMIT);
-
-  await writeSaveIndex(code, shared, keep);
-
-  for (let i = 0; i < stale.length; i++) {
-    await dropBigScoped(
-      SNAP_DATA_KEY(code, shared, stale[i].id),
-      shared
-    );
-  }
-
-  return true;
-}
-
-async function saveWorldMergedSerialized(worldMeta, worldJson) {
-  if (!worldMeta || !worldMeta.code || !worldJson) {
-    return { mode: "memory" };
-  }
-
-  let snapshotOk = false;
-  let primaryOk = false;
-
-  try {
-    snapshotOk =
-      await writeWorldSnapshotSerialized(
-        worldMeta.code,
-        worldMeta,
-        worldJson,
-        false
-      );
-  } catch (e) {
-    snapshotOk = false;
-  }
-
-  try {
-    primaryOk =
-      await writeBigScoped(
-        KEY(worldMeta.code),
-        worldJson,
-        false
-      );
-  } catch (e) {
-    primaryOk = false;
-  }
-
-  return {
-    mode:
-      snapshotOk || primaryOk
-        ? "local"
-        : "memory",
-  };
-}
-
-async function serverSaveWorldSerialized(worldJson, expectedSyncRev) {
-  const cleanSyncRev =
-    Math.max(
-      0,
-      Math.floor(
-        Number(expectedSyncRev) || 0
-      )
-    );
-
-  const res =
-    await fetch(
-      backendUrl("/world/save"),
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include",
-        body:
-          `{"world":${worldJson},"syncRev":${cleanSyncRev}}`,
-      }
-    );
-
-  if (res.ok) {
-    /*
-     * The server echoes the complete multi-MB world. On success the body is
-     * redundant: the endpoint increments syncRev by exactly one. Not parsing
-     * that huge echo removes another long main-thread stall.
-     */
-    if (
-      res.body &&
-      typeof res.body.cancel === "function"
-    ) {
-      try {
-        await res.body.cancel();
-      } catch (e) {}
-    }
-
-    return {
-      ok: true,
-      syncRev: cleanSyncRev + 1,
-    };
-  }
-
-  let data = null;
-
-  try {
-    data = await res.json();
-  } catch (e) {
-    data = null;
-  }
-
-  const err =
-    new Error(
-      (data && data.error) ||
-      `HTTP ${res.status}`
-    );
-
-  err.status = res.status;
-  err.data = data;
-
-  throw err;
-}
-/* ---------- END PERFORMANCE v13 AUTOSAVE ---------- */
-
-const AUTO = "masvilag:auto:v31";
-
+const AUTO = "masvilag:auto";
 /*
- * v30 SAFE BOOT
+ * LIVE WORLD FIXED MODE
  *
- * Previous builds hard-wired the live world ON:
- * - loadAuto() always returned on:true
- * - saveAuto() always wrote on:true
- * - changeAuto() ignored the requested value
- * - the scheduler itself did not check auto.on
- *
- * That made it impossible to stop a heavy/stale background queue.
- *
- * New sessions therefore start with autonomous background simulation ON, with a paced scheduler and per-lane cooldowns.
- * Manual AI actions still work. The player can enable the live world once the
- * UI is stable, and the preference is then persisted under this new key.
+ * Mindig be van kapcsolva, gyors "live" ütemet használ.
+ * Régi eszközön mentett "off" / ritkább érték sem írhatja ezt felül.
  */
 const AUTO_DEFAULT = {
   on: true,
-  every: Math.max(
-    0.25,
-    LIVE_WORLD_CONTENT_INTERVAL_MS / 60000
-  ),
+
+  /*
+   * Valóban élő háttérvilág:
+   * 0.25 perc = kb. 15 mp két AUTONÓM tartalmi kör között.
+   *
+   * Az AI queue saját token/rate-limit throttlingja ettől külön működik,
+   * tehát ha a providernek több pihenő kell, továbbra is biztonságosan vár.
+   */
+  every: Math.max(0.12, LIVE_WORLD_CONTENT_INTERVAL_MS / 60000),
 };
 
-const LIVE_WORLD_MIN_ACTION_GAP_MS = 0;
+const LIVE_WORLD_MIN_ACTION_GAP_MS = 9000;
 
 async function loadAuto() {
-  try {
-    if (!hasStore) {
-      const raw = mem[AUTO];
-
-      if (raw && typeof raw === "object") {
-        return {
-          ...AUTO_DEFAULT,
-          on: raw.on === true,
-          every:
-            Number.isFinite(Number(raw.every))
-              ? Math.max(0.25, Number(raw.every))
-              : AUTO_DEFAULT.every,
-        };
-      }
-
-      return {
-        ...AUTO_DEFAULT,
-      };
-    }
-
-    const row =
-      await window.storage.get(
-        AUTO,
-        false
-      );
-
-    if (!row || !row.value) {
-      return {
-        ...AUTO_DEFAULT,
-      };
-    }
-
-    const parsed =
-      JSON.parse(row.value);
-
-    return {
-      ...AUTO_DEFAULT,
-      on:
-        parsed &&
-        parsed.on === true,
-      every:
-        parsed &&
-        Number.isFinite(Number(parsed.every))
-          ? Math.max(
-              0.25,
-              Number(parsed.every)
-            )
-          : AUTO_DEFAULT.every,
-    };
-  } catch (e) {
-    return {
-      ...AUTO_DEFAULT,
-    };
-  }
+  return {
+    ...AUTO_DEFAULT,
+  };
 }
 
-async function saveAuto(value) {
-  const next = {
-    ...AUTO_DEFAULT,
-    ...(value &&
-    typeof value === "object"
-      ? value
-      : {}),
-  };
-
-  next.on =
-    next.on === true;
-
-  next.every =
-    Number.isFinite(Number(next.every))
-      ? Math.max(
-          0.25,
-          Number(next.every)
-        )
-      : AUTO_DEFAULT.every;
-
+async function saveAuto() {
   if (!hasStore) {
-    mem[AUTO] = next;
+    mem[AUTO] = {
+      ...AUTO_DEFAULT,
+    };
+
     return true;
   }
 
   try {
     await window.storage.set(
       AUTO,
-      JSON.stringify(next),
+      JSON.stringify(
+        AUTO_DEFAULT
+      ),
       false
     );
 
@@ -20696,46 +19428,25 @@ function repostRows(w) {
   return w.reposts;
 }
 
-const REPOST_READ_INDEX = new WeakMap();
-
-function repostReadIndex(w) {
-  const rows = repostRows(w);
-  let cached = REPOST_READ_INDEX.get(rows);
-
-  if (!cached || cached.length !== rows.length) {
-    const countByPost = new Map();
-    const actorPost = new Set();
-
-    for (const row of rows) {
-      if (!row || !row.postId) continue;
-      countByPost.set(
-        row.postId,
-        (countByPost.get(row.postId) || 0) + 1
-      );
-      if (row.actorId) {
-        actorPost.add(`${row.actorId}>${row.postId}`);
-      }
-    }
-
-    cached = {
-      length: rows.length,
-      countByPost,
-      actorPost,
-    };
-    REPOST_READ_INDEX.set(rows, cached);
-  }
-
-  return cached;
-}
-
 function hasReposted(w, actorId, postId) {
   if (!w || !actorId || !postId) return false;
-  return repostReadIndex(w).actorPost.has(`${actorId}>${postId}`);
+
+  return repostRows(w).some(
+    (r) =>
+      r &&
+      r.actorId === actorId &&
+      r.postId === postId
+  );
 }
 
 function repostCount(w, postId) {
   if (!w || !postId) return 0;
-  return repostReadIndex(w).countByPost.get(postId) || 0;
+
+  return repostRows(w).filter(
+    (r) =>
+      r &&
+      r.postId === postId
+  ).length;
 }
 
 function createRepost(
@@ -21087,33 +19798,19 @@ function socialProfiles(w) {
       w
     );
 
-  const source =
-    humanChars(w)
-      .concat(w.chars || [])
-      .concat(
-        activeMedia
-          ? [activeMedia]
-          : []
-      );
-
-  /*
-   * PERFORMANCE v29:
-   * The old dedupe used arr.findIndex() for every profile (O(n²)).
-   * This function sits underneath follow/social hot paths, so keep it linear.
-   */
-  const seen = new Set();
   const out = [];
-
-  for (const c of source) {
-    if (!c || !c.id) continue;
-
-    const id = String(c.id);
-
-    if (seen.has(id)) continue;
-
+  const seen = new Set();
+  const push = (person) => {
+    if (!person || !person.id) return;
+    const id = String(person.id);
+    if (seen.has(id)) return;
     seen.add(id);
-    out.push(c);
-  }
+    out.push(person);
+  };
+
+  humanChars(w).forEach(push);
+  (w.chars || []).forEach(push);
+  if (activeMedia) push(activeMedia);
 
   return out;
 }
@@ -21169,20 +19866,10 @@ function ensureSocialProfileRow(c) {
 
 const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 2;
 
-function ensureFollowerSystem(w, options = {}) {
+function ensureFollowerSystem(w) {
   if (!w || typeof w !== "object") {
     return w;
   }
-
-  /*
-   * v29:
-   * Existing follow graph repair is linear in profiles + edges.
-   * Relationship-derived NEW follow discovery is actor × target and must
-   * never run from a click/event hot path. It is opt-in only.
-   */
-  const seedRelationshipAutoFollows =
-    options &&
-    options.seedRelationshipAutoFollows === true;
 
   const profiles =
     socialProfiles(w);
@@ -21265,95 +19952,86 @@ function ensureFollowerSystem(w, options = {}) {
    */
 
   /*
-   * Relationship-derived automatic follow SEEDING is intentionally disabled
-   * during ordinary normalization. The autonomous follow planner already has
-   * aiFollowEligibility()/followInterestScore() and can discover these edges
-   * while the UI is idle.
+   * Csak tényleges social kötelékből legyen automatikus follow:
+   * család, barát/partner/crush, csapattárs/szervezeti társ stb.
+   *
+   * Enemy/rival secret-crush eset NEM kerül ide automatikusan;
+   * azt az autonóm döntés ritkán külön kezelheti.
    */
-  if (seedRelationshipAutoFollows) {
+  profiles.forEach((actor) => {
+    if (
+      !actor ||
+      isHuman(w, actor.id) ||
+      isMediaAccount(w, actor.id)
+    ) {
+      return;
+    }
+
+    profiles.forEach((target) => {
+      if (
+        !target ||
+        target.id === actor.id ||
+        isMediaAccount(w, target.id)
+      ) {
+        return;
+      }
+
+      const eligibility =
+        aiFollowEligibility(
+          w,
+          actor.id,
+          target.id
+        );
+
+      if (
+        !eligibility.allowed ||
+        eligibility.mode ===
+          "enemy-secret-crush"
+      ) {
+        return;
+      }
+
       /*
-       * Csak tényleges social kötelékből legyen automatikus follow:
-       * család, barát/partner/crush, csapattárs/szervezeti társ stb.
-       *
-       * Enemy/rival secret-crush eset NEM kerül ide automatikusan;
-       * azt az autonóm döntés ritkán külön kezelheti.
+       * v64 FOLLOW NOTIFICATION FIX:
+       * Never create a brand-new AI follow by silently mutating the two arrays.
+       * Silent creation was the reason a character could later "unfollow" the
+       * player even though the player had never received the original follow
+       * notification. Queue the real social action instead; the actual state
+       * transition will go through setFollowState(), which records the event and
+       * notifies the human target exactly once.
        */
-      profiles.forEach((actor) => {
-        if (
-          !actor ||
-          isHuman(w, actor.id) ||
-          isMediaAccount(w, actor.id)
-        ) {
-          return;
-        }
+      const alreadyFollowing =
+        actor.following.includes(
+          target.id
+        ) &&
+        target.followers.includes(
+          actor.id
+        );
 
-        profiles.forEach((target) => {
-          if (
-            !target ||
-            target.id === actor.id ||
-            isMediaAccount(w, target.id)
-          ) {
-            return;
-          }
+      if (
+        !alreadyFollowing &&
+        pendingRelationshipAutoFollows < RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
+      ) {
+        const queuedFollow = simEnqueue(
+          w,
+          mkAction(
+            "follow",
+            `relationship-auto-follow:${actor.id}:${target.id}:${Math.floor(
+              now() / 3600000
+            )}`,
+            {
+              actorId: actor.id,
+              targetId: target.id,
+              trigger: "relationship",
+            },
+            "event"
+          )
+        );
 
-          const eligibility =
-            aiFollowEligibility(
-              w,
-              actor.id,
-              target.id
-            );
-
-          if (
-            !eligibility.allowed ||
-            eligibility.mode ===
-              "enemy-secret-crush"
-          ) {
-            return;
-          }
-
-          /*
-           * v64 FOLLOW NOTIFICATION FIX:
-           * Never create a brand-new AI follow by silently mutating the two arrays.
-           * Silent creation was the reason a character could later "unfollow" the
-           * player even though the player had never received the original follow
-           * notification. Queue the real social action instead; the actual state
-           * transition will go through setFollowState(), which records the event and
-           * notifies the human target exactly once.
-           */
-          const alreadyFollowing =
-            actor.following.includes(
-              target.id
-            ) &&
-            target.followers.includes(
-              actor.id
-            );
-
-          if (
-            !alreadyFollowing &&
-            pendingRelationshipAutoFollows < RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
-          ) {
-            const queuedFollow = simEnqueue(
-              w,
-              mkAction(
-                "follow",
-                `relationship-auto-follow:${actor.id}:${target.id}:${Math.floor(
-                  now() / 3600000
-                )}`,
-                {
-                  actorId: actor.id,
-                  targetId: target.id,
-                  trigger: "relationship",
-                },
-                "event"
-              )
-            );
-
-            if (queuedFollow) pendingRelationshipAutoFollows += 1;
-          }
-        });
-      });
-
-  }
+        if (queuedFollow) pendingRelationshipAutoFollows += 1;
+      }
+    });
+  });
 
   return w;
 }
@@ -21371,10 +20049,6 @@ function socialProfileById(w, id) {
   return c;
 }
 
-function socialIdListForRead(value) {
-  return Array.isArray(value) ? value : [];
-}
-
 function isFollowing(
   w,
   followerId,
@@ -21388,13 +20062,11 @@ function isFollowing(
 
   if (!follower) return false;
 
-  /*
-   * PERFORMANCE v21:
-   * render-time reads must be pure. ensureSocialProfileRow() rebuilds arrays
-   * and was therefore allocating/mutating on every Post/Profile render.
-   * Migration/write paths still normalize the graph exactly as before.
-   */
-  return socialIdListForRead(follower.following).includes(
+  ensureSocialProfileRow(
+    follower
+  );
+
+  return follower.following.includes(
     String(targetId)
   );
 }
@@ -21405,7 +20077,9 @@ function knownFollowerCount(w, id) {
 
   if (!c) return 0;
 
-  return socialIdListForRead(c.followers).length;
+  ensureSocialProfileRow(c);
+
+  return c.followers.length;
 }
 
 function displayFollowerCount(w, id) {
@@ -21414,11 +20088,13 @@ function displayFollowerCount(w, id) {
 
   if (!c) return 0;
 
+  ensureSocialProfileRow(c);
+
   return Math.max(
     0,
-    (Number(c.baseFollowers) || 0) +
-      (Number(c.followerDelta) || 0) +
-      socialIdListForRead(c.followers).length
+    c.baseFollowers +
+      c.followerDelta +
+      c.followers.length
   );
 }
 
@@ -21575,7 +20251,9 @@ function displayFollowingCount(w, id) {
 
   if (!c) return 0;
 
-  return socialIdListForRead(c.following).length;
+  ensureSocialProfileRow(c);
+
+  return c.following.length;
 }
 
 function formatSocialCount(value) {
@@ -21952,8 +20630,6 @@ function aiLikesTargetEnoughForFollowBack(
   return false;
 }
 
-const CHARACTER_ACTIVITY_PROFILE_CACHE = new WeakMap();
-
 function characterOnlineActivityProfile(w, c) {
   if (!c || (w && isHuman(w, c.id))) {
     return {
@@ -21965,13 +20641,6 @@ function characterOnlineActivityProfile(w, c) {
       note: 0,
       roleplay: 0,
     };
-  }
-
-  if (
-    typeof c === "object" &&
-    CHARACTER_ACTIVITY_PROFILE_CACHE.has(c)
-  ) {
-    return CHARACTER_ACTIVITY_PROFILE_CACHE.get(c);
   }
 
   const lore = [
@@ -22037,7 +20706,7 @@ function characterOnlineActivityProfile(w, c) {
 
   const clamp = (value) => Math.max(0.18, Math.min(2.75, value));
 
-  const result = {
+  return {
     overall: clamp(overall),
     post: clamp((overall + postBias - quietPenalty * 0.4) * LIVE_WORLD_POST_MULTIPLIER),
     comment: clamp((overall + groupBias * 0.22 - quietPenalty * 0.45) * LIVE_WORLD_COMMENT_MULTIPLIER),
@@ -22046,15 +20715,6 @@ function characterOnlineActivityProfile(w, c) {
     note: clamp((overall + noteBias - quietPenalty * 0.5) * LIVE_WORLD_NOTE_MULTIPLIER),
     roleplay: clamp((overall + roleplayBias - quietPenalty * 0.8) * LIVE_WORLD_ROLEPLAY_MULTIPLIER),
   };
-
-  if (typeof c === "object") {
-    CHARACTER_ACTIVITY_PROFILE_CACHE.set(
-      c,
-      result
-    );
-  }
-
-  return result;
 }
 
 function characterSocialFollowModifier(c) {
@@ -22927,7 +21587,7 @@ function aiShouldUnfollow(
 function pickAutonomousUnfollowAction(
   w
 ) {
-  ensureFollowerSystem(w, { seedRelationshipAutoFollows: false });
+  ensureFollowerSystem(w);
 
   const actors =
     (w.chars || [])
@@ -23034,7 +21694,7 @@ function pickAutonomousUnfollowAction(
 }
 
 function pickAutonomousFollowAction(w) {
-  ensureFollowerSystem(w, { seedRelationshipAutoFollows: false });
+  ensureFollowerSystem(w);
 
   const actors =
     (w.chars || []).filter(
@@ -23227,6 +21887,8 @@ function setFollowState(
     return false;
   }
 
+  ensureFollowerSystem(w);
+
   const follower =
     socialProfileById(
       w,
@@ -23245,20 +21907,6 @@ function setFollowState(
   ) {
     return false;
   }
-
-  /*
-   * v29 HOT PATH:
-   * One follow click must only touch these two profile rows.
-   * ensureFollowerSystem() used to walk the entire cast and then inspect
-   * every actor × target relationship before the click could complete.
-   */
-  ensureSocialProfileRow(
-    follower
-  );
-
-  ensureSocialProfileRow(
-    target
-  );
 
   const already =
     follower.following.includes(
@@ -25128,19 +23776,18 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
 /* ============================================================
    Feed — szálas kommentekkel
    ============================================================ */
-function CommentNode({ w, c, commentById, repliesByParent, onReply, depth, onOpenProfile }) {
+function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
   const [txt, setTxt] = useState("");
   const [showAllReplies, setShowAllReplies] = useState(false);
   const a = charById(w, c.authorId);
-  const replies = repliesByParent.get(c.id) || [];
+  const replies =
+    (commentModel && commentModel.children.get(c.id)) || [];
   const visibleReplies =
-    showAllReplies || replies.length <= 4
+    showAllReplies || replies.length <= 5
       ? replies
-      : replies.slice(-4);
-  const hiddenReplyCount =
-    Math.max(0, replies.length - visibleReplies.length);
+      : replies.slice(-5);
 
   if (!a) return null;
 
@@ -25173,7 +23820,8 @@ function CommentNode({ w, c, commentById, repliesByParent, onReply, depth, onOpe
 
         <div style={{ minWidth: 0, flex: 1 }}>
           {depth ? (() => {
-            const parentComment = commentById.get(c.parent);
+            const parentComment =
+              commentModel && commentModel.byId.get(c.parent);
             const parentAuthor = parentComment ? charById(w, parentComment.authorId) : null;
             return parentAuthor ? (
               <div className="social-comment-reply-target">
@@ -25199,14 +23847,20 @@ function CommentNode({ w, c, commentById, repliesByParent, onReply, depth, onOpe
 
           <div className="cmt-body">{c.text}</div>
 
-          <button className="social-comment-action" onClick={() => setOpen(!open)}>
+          <button
+            className="social-comment-action"
+            onClick={() => setOpen(!open)}
+          >
             {tt("Válasz", "Reply")}
           </button>
         </div>
       </div>
 
       {open && (
-        <div className="row" style={{ gap: 8, marginTop: 8, marginLeft: depth ? 0 : 36, alignItems: "center" }}>
+        <div
+          className="row"
+          style={{ gap: 8, marginTop: 8, marginLeft: depth ? 0 : 36, alignItems: "center" }}
+        >
           <div style={{ flex: 1, minWidth: 0 }}>
             <input
               className="i"
@@ -25225,37 +23879,38 @@ function CommentNode({ w, c, commentById, repliesByParent, onReply, depth, onOpe
         </div>
       )}
 
-      {hiddenReplyCount > 0 ? (
+      {!showAllReplies && replies.length > visibleReplies.length ? (
         <button
+          type="button"
           className="social-comment-action"
-          style={{ marginLeft: depth ? 18 : 36, marginBottom: 4 }}
+          style={{ marginLeft: depth ? 18 : 36, marginTop: 5 }}
           onClick={() => setShowAllReplies(true)}
         >
           {tt(
-            `Korábbi válaszok (${hiddenReplyCount})`,
-            `Earlier replies (${hiddenReplyCount})`
+            `Korábbi válaszok (${replies.length - visibleReplies.length})`,
+            `Earlier replies (${replies.length - visibleReplies.length})`
           )}
         </button>
       ) : null}
 
-      {visibleReplies.map((r) => (
-        <CommentNode
-          key={r.id}
-          w={w}
-          c={r}
-          commentById={commentById}
-          repliesByParent={repliesByParent}
-          depth={(depth || 0) + 1}
-          onReply={onReply}
-          onOpenProfile={onOpenProfile}
-        />
-      ))}
+      {(depth || 0) < 12
+        ? visibleReplies.map((r) => (
+            <CommentNode
+              key={r.id}
+              w={w}
+              c={r}
+              commentModel={commentModel}
+              depth={(depth || 0) + 1}
+              onReply={onReply}
+              onOpenProfile={onOpenProfile}
+            />
+          ))
+        : null}
     </div>
   );
 }
 
 function Post({
-  renderVersion,
   w,
   post,
   onLike,
@@ -25269,8 +23924,45 @@ function Post({
   const { tt } = useLang();
   const { media } = useMedia();
   const [cmt, setCmt] = useState("");
-  const [showAllComments, setShowAllComments] = useState(false);
+  const [visibleCommentRoots, setVisibleCommentRoots] = useState(6);
   const commentInput = useRef(null);
+
+  const commentModel = React.useMemo(() => {
+    const comments =
+      post && Array.isArray(post.comments)
+        ? post.comments.filter((c) => c && typeof c === "object")
+        : [];
+    const byId = new Map();
+    const children = new Map();
+    const roots = [];
+    const orphans = [];
+
+    comments.forEach((comment) => {
+      if (comment && comment.id) byId.set(comment.id, comment);
+    });
+
+    comments.forEach((comment) => {
+      if (!comment) return;
+      if (!comment.parent) {
+        roots.push(comment);
+        return;
+      }
+      if (!byId.has(comment.parent)) {
+        orphans.push(comment);
+        return;
+      }
+      const list = children.get(comment.parent) || [];
+      list.push(comment);
+      children.set(comment.parent, list);
+    });
+
+    return {
+      comments,
+      byId,
+      children,
+      roots: roots.concat(orphans),
+    };
+  }, [post && post.comments]);
 
   /* Egy sérült/stale feed-hivatkozás ne dönthesse le az egész React fát. */
   if (!post || typeof post !== "object") return null;
@@ -25279,43 +23971,12 @@ function Post({
 
   if (!author) return null;
 
-  const comments = safePostComments(post);
-
-  /* PERFORMANCE v19: build the comment graph once per post revision instead
-     of scanning the complete comment list inside every recursive node. */
-  const commentTree = React.useMemo(() => {
-    const commentById = new Map();
-    const repliesByParent = new Map();
-    const roots = [];
-
-    comments.forEach((comment) => {
-      if (comment && comment.id) commentById.set(comment.id, comment);
-    });
-
-    comments.forEach((comment) => {
-      if (!comment) return;
-      if (comment.parent && commentById.has(comment.parent)) {
-        if (!repliesByParent.has(comment.parent)) repliesByParent.set(comment.parent, []);
-        repliesByParent.get(comment.parent).push(comment);
-      } else {
-        roots.push(comment);
-      }
-    });
-
-    return { commentById, repliesByParent, roots };
-  }, [post.id, comments.length, renderVersion]);
-
-  const visibleCommentRoots =
-    showAllComments || commentTree.roots.length <= 6
-      ? commentTree.roots
-      : commentTree.roots.slice(-6);
-
-  const hiddenCommentRootCount =
-    Math.max(
-      0,
-      commentTree.roots.length -
-        visibleCommentRoots.length
-    );
+  const comments = commentModel.comments;
+  const rootComments = commentModel.roots;
+  const shownRootComments =
+    rootComments.length <= visibleCommentRoots
+      ? rootComments
+      : rootComments.slice(-visibleCommentRoots);
 
   const liked =
     Array.isArray(post.likedBy) &&
@@ -25501,8 +24162,6 @@ function Post({
           className="social-post-media"
           src={resolveImg(post.imageId ? imageRef(post.imageId) : post.image, media)}
           alt=""
-          loading="lazy"
-          decoding="async"
         />
       ) : null}
 
@@ -25565,26 +24224,30 @@ function Post({
 
       {comments.length > 0 ? (
         <div className="social-comments">
-          {hiddenCommentRootCount > 0 ? (
+          {rootComments.length > shownRootComments.length ? (
             <button
+              type="button"
               className="social-comment-action"
-              style={{ marginBottom: 6 }}
-              onClick={() => setShowAllComments(true)}
+              style={{ marginBottom: 8 }}
+              onClick={() =>
+                setVisibleCommentRoots((value) =>
+                  Math.min(rootComments.length, value + 8)
+                )
+              }
             >
               {tt(
-                `Korábbi hozzászólások (${hiddenCommentRootCount})`,
-                `Earlier comments (${hiddenCommentRootCount})`
+                `Korábbi kommentek (${rootComments.length - shownRootComments.length})`,
+                `Earlier comments (${rootComments.length - shownRootComments.length})`
               )}
             </button>
           ) : null}
 
-          {visibleCommentRoots.map((c) => (
+          {shownRootComments.map((c) => (
             <CommentNode
               key={c.id}
               w={w}
               c={c}
-              commentById={commentTree.commentById}
-              repliesByParent={commentTree.repliesByParent}
+              commentModel={commentModel}
               depth={0}
               onReply={(parentId, replyText) =>
                 onComment(post.id, replyText, parentId)
@@ -26469,27 +25132,10 @@ HARD CAPSULE BOUNDARY:
 }
 
 async function genComments(w, post, options = {}) {
-  const maxHint =
-    Math.max(
-      2,
-      Math.min(
-        8,
-        Math.round(
-          Number(options && options.maxComments) || 6
-        )
-      )
-    );
-
-  /*
-   * PERFORMANCE v26:
-   * The model can emit at most 8 comments in this lane, so feeding it 19-22
-   * full actor capsules wastes prompt construction, tokens and latency.
-   */
   const cast = fairCommentCast(
     w,
     post.authorId,
-    post,
-    Math.min(10, Math.max(6, maxHint + 2))
+    post
   );
 
   const requestedMinComments = Math.max(
@@ -26498,7 +25144,7 @@ async function genComments(w, post, options = {}) {
   );
   const requestedMaxComments = Math.max(
     requestedMinComments || 1,
-    Math.min(8, cast.length || 1, Math.round(Number(options && options.maxComments) || 6))
+    Math.min(cast.length || 1, Math.round(Number(options && options.maxComments) || cast.length || 1))
   );
 
   const author = charById(
@@ -26511,26 +25157,8 @@ async function genComments(w, post, options = {}) {
     post
   );
 
-  /*
-   * v26 FAST SEMANTIC ANCHOR:
-   * Comment generation already receives the exact caption/image/thread.
-   * Avoid a separate AI request before every comment wave. If a richer anchor
-   * was previously stored, keep using it; otherwise use the deterministic
-   * grounded fallback and let the single comment model call do the language
-   * understanding.
-   */
-  const postMeaning =
-    post.socialMeaning &&
-    typeof post.socialMeaning === "object"
-      ? normalizeSocialPostMeaning(
-          w,
-          post,
-          post.socialMeaning
-        )
-      : fallbackSocialPostMeaning(
-          w,
-          post
-        );
+  /* v71: understand the post once before any character applies a subjective lens. */
+  const postMeaning = await analyzeSocialPostMeaning(w, post);
 
   const out = await askWorldJSON(
     w,
@@ -26538,7 +25166,7 @@ async function genComments(w, post, options = {}) {
     `${worldContext(
       w,
       cast.map((c) => c.id),
-      false,
+      true,
       null,
       {
         includePlayer: publicSocialPlayerRelevant(w, post),
@@ -26860,15 +25488,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    {
-      maxTokens: 1800,
-      priority:
-        Math.max(
-          0,
-          Number(options && options.priority) || 0
-        ),
-      maxTries: 2,
-    }
+    { maxTokens: 2400 }
   );
 
   /*
@@ -26897,26 +25517,15 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
   const minWanted = Math.max(0, Math.round(Number(minComments) || 0));
   if (!minWanted || !w || !post) return baseOut;
 
-  /* PERFORMANCE: never deep-clone the entire world just to count accepted comments. */
   const beforeActors = topLevelAiCommenterIds(w, post);
-  const baseActors = new Set(
-    safeAiComments(baseOut)
-      .map((row) => aiVoice(w, row && (row.id !== undefined ? row.id : row.name)))
-      .filter(Boolean)
-  );
-  const acceptedActors = [...baseActors].filter((id) => !beforeActors.has(id));
+  const probe = JSON.parse(JSON.stringify(w));
+  applyComments(probe, post.id, baseOut, label);
+  const probePost = (probe.posts || []).find((row) => row && row.id === post.id);
+  const acceptedActors = probePost
+    ? [...topLevelAiCommenterIds(probe, probePost)].filter((id) => !beforeActors.has(id))
+    : [];
 
   if (acceptedActors.length >= minWanted) return baseOut;
-
-  /*
-   * If we already got at least one valid new commenter, let the guaranteed
-   * coverage follow-up round finish the quota later. Only a ZERO-comment wave
-   * gets an immediate lightweight repair so the player's post cannot stay
-   * completely silent.
-   */
-  if (acceptedActors.length > 0) {
-    return baseOut;
-  }
 
   const missing = minWanted - acceptedActors.length;
   const rawActors = new Set(
@@ -26926,33 +25535,20 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
   );
   const unavailable = new Set([...beforeActors, ...acceptedActors, ...rawActors]);
 
-  const candidates = fairCommentCast(
-    w,
-    post.authorId,
-    post,
-    Math.min(5, Math.max(3, missing + 1))
-  )
-    .filter(
-      (c) =>
-        c &&
-        !unavailable.has(c.id) &&
-        c.id !== post.authorId
-    )
-    .slice(
-      0,
-      Math.min(5, Math.max(2, missing))
-    );
+  const candidates = fairCommentCast(w, post.authorId, post)
+    .filter((c) => c && !unavailable.has(c.id) && c.id !== post.authorId)
+    .slice(0, Math.max(missing, Math.min(missing + 3, 8)));
 
   if (!candidates.length) return baseOut;
 
   try {
-    const repairOut = await askWorldJSON(
+    const repairOut = await askWorldJSONInteractive(
       w,
       engineFor(w),
       `${worldContext(
         w,
         candidates.map((c) => c.id),
-        false,
+        true,
         null,
         {
           includePlayer: publicSocialPlayerRelevant(w, post),
@@ -26993,22 +25589,7 @@ HARD RULES:
 
 JSON ONLY:
 {"comments":[{"id":"exact eligible id","text":"short natural comment","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
-      {
-        maxTokens:
-          Math.max(
-            420,
-            Math.min(
-              900,
-              160 *
-                Math.min(
-                  candidates.length,
-                  missing + 1
-                )
-            )
-          ),
-        maxTries: 2,
-        priority: 35,
-      }
+      { maxTokens: Math.max(500, Math.min(1500, 220 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
     );
 
     const combined = [...safeAiComments(baseOut), ...safeAiComments(repairOut)]
@@ -28247,8 +26828,6 @@ recordSocialEvent(
   /* Raw AI "events" are not a second reality. Concrete social objects above are the source of truth. */
   return createdVisible;
 }
-const SOCIAL_INTEREST_READ_CACHE = new WeakMap();
-
 function socialInteractionInterest(
   w,
   actorId,
@@ -28260,41 +26839,6 @@ function socialInteractionInterest(
     actorId === targetId
   ) {
     return 0;
-  }
-
-  const relStore =
-    w &&
-    w.rels &&
-    typeof w.rels === "object"
-      ? w.rels
-      : w;
-
-  let cache =
-    relStore &&
-    SOCIAL_INTEREST_READ_CACHE.get(relStore);
-
-  const rev =
-    Number(w && w.rev || 0);
-
-  if (!cache || cache.rev !== rev) {
-    cache = {
-      rev,
-      values: new Map(),
-    };
-
-    if (relStore) {
-      SOCIAL_INTEREST_READ_CACHE.set(
-        relStore,
-        cache
-      );
-    }
-  }
-
-  const pairKey =
-    `${actorId}>${targetId}`;
-
-  if (cache.values.has(pairKey)) {
-    return cache.values.get(pairKey);
   }
 
   const actor =
@@ -28313,7 +26857,6 @@ function socialInteractionInterest(
     !actor ||
     !target
   ) {
-    cache.values.set(pairKey, 0);
     return 0;
   }
 
@@ -28406,11 +26949,6 @@ function socialInteractionInterest(
       obsessionLevel * 30;
   }
 
-  cache.values.set(
-    pairKey,
-    interest
-  );
-
   return interest;
 }
 
@@ -28421,96 +26959,12 @@ function socialInteractionInterest(
  * beszédes karakterek több kommentet bírnak el; a quiet/private karakterek
  * ritkábban jelennek meg. A kapcsolat és relevancia továbbra is elsődleges.
  */
-const COMMENT_ACTIVITY_READ_CACHE = new WeakMap();
-
-function commentActivityIndex(w) {
-  const posts =
-    w && Array.isArray(w.posts)
-      ? w.posts
-      : [];
-
-  const rev =
-    Math.max(
-      0,
-      Number(w && w.rev) || 0
-    );
-
-  const minuteBucket =
-    Math.floor(now() / 60000);
-
-  let cached =
-    COMMENT_ACTIVITY_READ_CACHE.get(posts);
-
-  if (
-    cached &&
-    cached.rev === rev &&
-    cached.minuteBucket === minuteBucket
-  ) {
-    return cached;
-  }
-
+function fairCommentCast(w, targetId, post = null) {
   const cutoff =
     now() - 48 * 3600e3;
 
-  const byAuthor =
-    new Map();
-
-  for (const p of posts) {
-    for (const comment of safePostComments(p)) {
-      if (!comment || !comment.authorId) continue;
-
-      let row =
-        byAuthor.get(comment.authorId);
-
-      if (!row) {
-        row = {
-          recentComments: 0,
-          lastCommentAt: 0,
-        };
-        byAuthor.set(
-          comment.authorId,
-          row
-        );
-      }
-
-      const ts =
-        Number(comment.ts) || 0;
-
-      if (ts >= cutoff) {
-        row.recentComments += 1;
-      }
-
-      if (ts > row.lastCommentAt) {
-        row.lastCommentAt = ts;
-      }
-    }
-  }
-
-  cached = {
-    rev,
-    minuteBucket,
-    byAuthor,
-  };
-
-  COMMENT_ACTIVITY_READ_CACHE.set(
-    posts,
-    cached
-  );
-
-  return cached;
-}
-
-function fairCommentCast(
-  w,
-  targetId,
-  post = null,
-  hardLimit = 0
-) {
   const target =
     charById(w, targetId);
-
-  const activityIndex =
-    commentActivityIndex(w);
 
   const chars = (w.chars || [])
     .filter(
@@ -28520,37 +26974,46 @@ function fairCommentCast(
         c.id !== targetId
     )
     .map((c) => {
-      const stats =
-        activityIndex.byAuthor.get(c.id) ||
-        {
-          recentComments: 0,
-          lastCommentAt: 0,
-        };
+      let recentComments = 0;
+      let lastCommentAt = 0;
 
-      const recentComments =
-        Number(stats.recentComments) || 0;
+      (w.posts || []).forEach((p) => {
+        safePostComments(p).forEach(
+          (comment) => {
+            if (
+              !comment ||
+              comment.authorId !== c.id
+            ) {
+              return;
+            }
 
-      const lastCommentAt =
-        Number(stats.lastCommentAt) || 0;
+            const ts =
+              Number(comment.ts) || 0;
+
+            if (ts >= cutoff) {
+              recentComments += 1;
+            }
+
+            lastCommentAt = Math.max(
+              lastCommentAt,
+              ts
+            );
+          }
+        );
+      });
 
       const rel =
         getRel(w, c.id, targetId);
-
       const score =
         Number(rel && rel.score) || 0;
-
       const bond =
-        String(
-          (rel && (rel.bond || rel.type)) || ""
-        );
-
+        String((rel && (rel.bond || rel.type)) || "");
       const interest =
         socialInteractionInterest(
           w,
           c.id,
           targetId
         );
-
       const visualPriority =
         visualPostRelationshipPriority(
           w,
@@ -28558,23 +27021,24 @@ function fairCommentCast(
           targetId,
           post
         );
-
       const following =
         isFollowing(
           w,
           c.id,
           targetId
         );
-
       const storyLinked =
         Boolean(
           target &&
-          ownStorySnippetAbout(
-            c,
-            target
-          )
+          ownStorySnippetAbout(c, target)
         );
 
+      /*
+       * Feed realism: a follower or someone with a real personal/story reason
+       * naturally sees the post. A totally unrelated non-follower can still
+       * discover it occasionally, but should not behave like a guaranteed
+       * member of every comment section.
+       */
       const naturallyLinked =
         following ||
         Math.abs(score) >= 10 ||
@@ -28583,17 +27047,12 @@ function fairCommentCast(
         interest >= 14 ||
         visualPriority >= 20;
 
-      const activity =
-        characterOnlineActivityProfile(
-          w,
-          c
-        ).comment;
+      const activity = characterOnlineActivityProfile(w, c).comment;
 
       const discoveryChance =
         Math.min(
           0.72,
-          (0.18 + interest / 320) *
-            Math.max(0.55, activity)
+          (0.18 + interest / 320) * Math.max(0.55, activity)
         );
 
       const discovered =
@@ -28609,8 +27068,7 @@ function fairCommentCast(
               : discovered
                 ? 4
                 : 0
-        ) +
-        visualPriority;
+        ) + visualPriority;
 
       return {
         c,
@@ -28619,8 +27077,7 @@ function fairCommentCast(
         interest,
         following,
         eligible:
-          naturallyLinked ||
-          discovered,
+          naturallyLinked || discovered,
         visibilityBonus,
         activity,
         visualPriority,
@@ -28629,16 +27086,19 @@ function fairCommentCast(
     });
 
   chars.sort((a, b) => {
+    /*
+     * Relevance + believable feed visibility + PERSONAL activity rhythm.
+     * A highly-online character may comment repeatedly; a private character
+     * pays a larger recent-activity penalty and therefore appears less often.
+     */
     const ap =
-      a.recentComments *
-        (20 / Math.max(0.35, a.activity)) -
+      a.recentComments * (20 / Math.max(0.35, a.activity)) -
       a.interest -
       a.visibilityBonus -
       (a.activity - 1) * 24;
 
     const bp =
-      b.recentComments *
-        (20 / Math.max(0.35, b.activity)) -
+      b.recentComments * (20 / Math.max(0.35, b.activity)) -
       b.interest -
       b.visibilityBonus -
       (b.activity - 1) * 24;
@@ -28661,11 +27121,12 @@ function fairCommentCast(
   });
 
   const eligible =
-    chars.filter(
-      (x) =>
-        x.eligible
-    );
+    chars.filter((x) => x.eligible);
 
+  /*
+   * Keep enough candidates for an active world, but do not pretend every
+   * unrelated NPC saw every post. The AI still decides comment / like / ignore.
+   */
   const pool =
     eligible.length >= 5
       ? eligible
@@ -28674,69 +27135,26 @@ function fairCommentCast(
           Math.min(8, chars.length)
         );
 
-  const visual =
-    visualPostReactionProfile(
-      w,
-      post
-    );
+  const visual = visualPostReactionProfile(w, post);
+  const castLimit = visual.hasImage
+    ? (visual.appearanceForward ? 22 : 20)
+    : 19;
 
-  const naturalCastLimit =
-    visual.hasImage
-      ? (
-          visual.appearanceForward
-            ? 22
-            : 20
-        )
-      : 19;
+  /*
+   * Prefer NEW voices on a post before recycling somebody who has already left
+   * a top-level comment there. They can still re-enter naturally through the
+   * separate reply/thread system.
+   */
+  const alreadyTopLevel = new Set(
+    safePostComments(post)
+      .filter((comment) => comment && !comment.parent && comment.authorId)
+      .map((comment) => comment.authorId)
+  );
 
-  const castLimit =
-    hardLimit > 0
-      ? Math.min(
-          naturalCastLimit,
-          Math.max(
-            1,
-            Math.round(
-              Number(hardLimit) || 1
-            )
-          )
-        )
-      : naturalCastLimit;
-
-  const alreadyTopLevel =
-    new Set(
-      safePostComments(post)
-        .filter(
-          (comment) =>
-            comment &&
-            !comment.parent &&
-            comment.authorId
-        )
-        .map(
-          (comment) =>
-            comment.authorId
-        )
-    );
-
-  const freshVoices =
-    pool.filter(
-      (row) =>
-        !alreadyTopLevel.has(
-          row.c.id
-        )
-    );
-
-  const orderedPool =
-    freshVoices.length >=
-    Math.min(4, pool.length)
-      ? freshVoices.concat(
-          pool.filter(
-            (row) =>
-              alreadyTopLevel.has(
-                row.c.id
-              )
-          )
-        )
-      : pool;
+  const freshVoices = pool.filter((row) => !alreadyTopLevel.has(row.c.id));
+  const orderedPool = freshVoices.length >= Math.min(4, pool.length)
+    ? freshVoices.concat(pool.filter((row) => alreadyTopLevel.has(row.c.id)))
+    : pool;
 
   return orderedPool
     .map((x) => x.c)
@@ -29067,21 +27485,6 @@ Formátum:
 }${TAIL}`,
     { maxTokens: 900 }
   );
-
-  /* FAST PLAYER-REPLY PATH: direct player replies need one direct AI answer,
-   * not the optional background repair/bystander chain. */
-  if (isHuman(w, comment.authorId)) {
-    const responder = forcedResponder || directResponder;
-    if (responder && !isHuman(w, responder.id)) {
-      return {
-        ...(out || {}),
-        comments: safeAiComments(out).filter((row) => {
-          const who = aiVoice(w, row && (row.id !== undefined ? row.id : row.name));
-          return who === responder.id;
-        }).slice(0, 1),
-      };
-    }
-  }
 
   /*
    * v40 FRIENDLY SOCIAL REPAIR
@@ -29701,140 +28104,17 @@ function autonomousGameDayKey(w) {
   return `${year}|${date}|${autonomousGameDayIndex(w)}`;
 }
 
-const POST_ACTIVITY_INDEX_CACHE = new WeakMap();
-
-function postActivityIndex(w) {
-  const posts =
-    w && Array.isArray(w.posts)
-      ? w.posts
-      : [];
-
-  const gameDayKey =
-    autonomousGameDayKey(w);
-
-  /*
-   * The 24h/48h windows only drift with wall-clock time. One-minute buckets
-   * preserve the existing timing semantics while avoiding repeated full-feed
-   * scans every 9-second planner beat.
-   */
-  const minuteBucket =
-    Math.floor(now() / 60000);
-
-  let cached =
-    POST_ACTIVITY_INDEX_CACHE.get(posts);
-
-  const firstId =
-    posts.length && posts[0]
-      ? String(posts[0].id || "")
-      : "";
-
-  const lastId =
-    posts.length && posts[posts.length - 1]
-      ? String(posts[posts.length - 1].id || "")
-      : "";
-
-  if (
-    cached &&
-    cached.length === posts.length &&
-    cached.firstId === firstId &&
-    cached.lastId === lastId &&
-    cached.gameDayKey === gameDayKey &&
-    cached.minuteBucket === minuteBucket
-  ) {
-    return cached;
-  }
-
-  const cutoff24h = now() - 24 * 3600e3;
-  const cutoff48h = now() - 48 * 3600e3;
-
-  const aiDayPosts = [];
-  const charDayPosts = new Map();
-  const char24 = new Map();
-  const char48Count = new Map();
-  const lastPostByAuthor = new Map();
-
-  let aiDayImageCount = 0;
-  let latestAiPost = null;
-  let latestAiTs = 0;
-
-  for (const post of posts) {
-    if (!post || !post.authorId) continue;
-
-    const authorId = post.authorId;
-    const ts = Number(post.ts) || 0;
-
-    const previousLast =
-      lastPostByAuthor.get(authorId) || 0;
-    if (ts > previousLast) {
-      lastPostByAuthor.set(authorId, ts);
-    }
-
-    if (ts >= cutoff48h) {
-      char48Count.set(
-        authorId,
-        (char48Count.get(authorId) || 0) + 1
-      );
-    }
-
-    let stats24 =
-      char24.get(authorId);
-    if (!stats24) {
-      stats24 = { count: 0, lastPostAt: 0 };
-      char24.set(authorId, stats24);
-    }
-    if (ts >= cutoff24h) {
-      stats24.count += 1;
-    }
-    if (ts > stats24.lastPostAt) {
-      stats24.lastPostAt = ts;
-    }
-
-    if (!isHuman(w, authorId)) {
-      if (ts > latestAiTs) {
-        latestAiTs = ts;
-        latestAiPost = post;
-      }
-
-      if (String(post.gameDayKey || "") === gameDayKey) {
-        aiDayPosts.push(post);
-        if (post.imageId || post.image) {
-          aiDayImageCount += 1;
-        }
-
-        if (!charDayPosts.has(authorId)) {
-          charDayPosts.set(authorId, []);
-        }
-        charDayPosts.get(authorId).push(post);
-      }
-    }
-  }
-
-  cached = {
-    length: posts.length,
-    firstId,
-    lastId,
-    gameDayKey,
-    minuteBucket,
-    aiDayPosts,
-    aiDayImageCount,
-    charDayPosts,
-    char24,
-    char48Count,
-    lastPostByAuthor,
-    latestAiPost,
-    latestAiTs,
-  };
-
-  POST_ACTIVITY_INDEX_CACHE.set(
-    posts,
-    cached
-  );
-
-  return cached;
-}
-
 function autonomousAiPostsThisGameDay(w) {
-  return postActivityIndex(w).aiDayPosts;
+  const key = autonomousGameDayKey(w);
+  return (w && Array.isArray(w.posts) ? w.posts : [])
+    .filter((p) =>
+      p &&
+      p.authorId &&
+      !isHuman(w, p.authorId) &&
+      (
+        String(p.gameDayKey || "") === key
+      )
+    );
 }
 
 function autonomousAiPostCountThisGameDay(w) {
@@ -29842,15 +28122,26 @@ function autonomousAiPostCountThisGameDay(w) {
 }
 
 function autonomousAiImagePostsThisGameDay(w) {
-  return postActivityIndex(w).aiDayImageCount;
+  return autonomousAiPostsThisGameDay(w)
+    .filter((p) => Boolean(p && (p.imageId || p.image)))
+    .length;
 }
 
 function autonomousLatestAiFeedPost(w) {
-  return postActivityIndex(w).latestAiPost || null;
+  return (w && Array.isArray(w.posts) ? w.posts : [])
+    .filter((p) => p && p.authorId && !isHuman(w, p.authorId))
+    .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))[0] || null;
 }
 
 function autonomousCharacterPostsThisGameDay(w, characterId) {
-  return postActivityIndex(w).charDayPosts.get(characterId) || [];
+  const key = autonomousGameDayKey(w);
+  return (w && Array.isArray(w.posts) ? w.posts : [])
+    .filter((p) =>
+      p &&
+      p.authorId === characterId &&
+      !isHuman(w, p.authorId) &&
+      String(p.gameDayKey || "") === key
+    );
 }
 
 function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
@@ -29882,7 +28173,7 @@ function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
   if (todayCount < AUTONOMOUS_IMAGE_START_TEXT_POSTS) return false;
 
   if (
-    autonomousAiImagePostsThisGameDay(w) >=
+    autonomousAiImagePostsThisGameDay(w).length >=
     AUTONOMOUS_DAILY_IMAGE_HARD_MAX
   ) {
     return false;
@@ -29942,11 +28233,18 @@ const AUTONOMOUS_THIRD_POST_MIN_IDLE_MS = 2.5 * 3600e3;
 const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.15;
 
 function characterAutonomousPostStats24h(w, characterId) {
-  const index = postActivityIndex(w);
-  const row = index.char24.get(characterId);
-  return row
-    ? { count: row.count, lastPostAt: row.lastPostAt }
-    : { count: 0, lastPostAt: index.lastPostByAuthor.get(characterId) || 0 };
+  const cutoff24h = now() - 24 * 3600e3;
+  let count = 0;
+  let lastPostAt = 0;
+
+  (w && Array.isArray(w.posts) ? w.posts : []).forEach((p) => {
+    if (!p || p.authorId !== characterId) return;
+    const ts = Number(p.ts) || 0;
+    if (ts >= cutoff24h) count += 1;
+    lastPostAt = Math.max(lastPostAt, ts);
+  });
+
+  return { count, lastPostAt };
 }
 
 function characterCanAutonomouslyPost(w, c) {
@@ -30005,13 +28303,18 @@ function fairPostCast(w) {
 
   if (!chars.length) return [];
 
-  const postIndex = postActivityIndex(w);
+  const cutoff48h = now() - 48 * 3600e3;
 
   const ranked = chars.map((c) => {
-    const recentPosts48h =
-      postIndex.char48Count.get(c.id) || 0;
-    const lastPostAt =
-      postIndex.lastPostByAuthor.get(c.id) || 0;
+    let recentPosts48h = 0;
+    let lastPostAt = 0;
+
+    (w.posts || []).forEach((p) => {
+      if (!p || p.authorId !== c.id) return;
+      const ts = Number(p.ts) || 0;
+      if (ts >= cutoff48h) recentPosts48h += 1;
+      lastPostAt = Math.max(lastPostAt, ts);
+    });
 
     const dailyPosts = characterAutonomousPostStats24h(w, c.id).count;
     const activity = characterOnlineActivityProfile(w, c).post;
@@ -31125,522 +29428,19 @@ function AlbumPick({ items, value, onPick }) {
   );
 }
 
-
-/* ============================================================
-   PERFORMANCE v31 — REACT RENDER ISOLATION
-
-   The world store is intentionally mutation-oriented. A root publication
-   therefore creates a new `view` object even when only one tiny domain changed.
-   Default React.memo sees the new object and rerenders the entire active tab.
-
-   These keys summarize ONLY the visible domain. They are deliberately cheap:
-   a Feed update scans at most the visible/recent feed window, Cast scans the
-   cast list, Chat scans room/message counts, etc. No JSON.stringify.
-   ============================================================ */
-
-function uiHashStart() {
-  return 2166136261 >>> 0;
-}
-
-function uiHashPush(hash, value) {
-  const raw = String(value == null ? "" : value);
-
-  /*
-   * PERFORMANCE v32 — BINARY-SAFE HASHING
-   *
-   * Legacy worlds may still contain data:image/... base64 strings directly in
-   * avatar/post/image fields. Iterating every character of a multi-megabyte
-   * image merely to build a React render key can freeze the browser.
-   *
-   * Long values are represented by a constant-size fingerprint. String.length
-   * is O(1); only tiny head/tail slices are examined.
-   */
-  const s =
-    raw.length > 512
-      ? `${raw.slice(0, 96)}|#len:${raw.length}|${raw.slice(-64)}`
-      : raw;
-
-  let h = hash >>> 0;
-
-  for (let i = 0; i < s.length; i += 1) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-
-  h ^= 31;
-  return Math.imul(h, 16777619) >>> 0;
-}
-
-function uiImageRenderKey(value) {
-  if (!value) return "";
-
-  const id = imageIdOf(value);
-  if (id) return `img:${id}`;
-
-  const raw = String(value);
-
-  if (isInlineImageData(raw)) {
-    const semi = raw.indexOf(";");
-    return `inline:${semi > 5 ? raw.slice(5, semi) : "image"}:${raw.length}`;
-  }
-
-  return raw.length > 240
-    ? `${raw.slice(0, 120)}|#len:${raw.length}`
-    : raw;
-}
-
-function noteUiRenderKey(w) {
-  if (!w) return "notes:0";
-
-  let h = uiHashStart();
-  const notes = liveNotes(w);
-
-  h = uiHashPush(h, notes.length);
-  h = uiHashPush(h, w.meId);
-
-  for (let i = 0; i < notes.length && i < 32; i += 1) {
-    const n = notes[i];
-    if (!n) continue;
-
-    h = uiHashPush(h, n.id);
-    h = uiHashPush(h, n.authorId);
-    h = uiHashPush(h, n.text);
-    h = uiHashPush(h, n.ts);
-    h = uiHashPush(h, (n.reacts || []).length);
-
-    if (n.music) {
-      h = uiHashPush(h, n.music.title);
-      h = uiHashPush(h, n.music.artist);
-    }
-
-    const author = charById(w, n.authorId);
-    if (author) {
-      h = uiHashPush(h, author.updatedAt);
-      h = uiHashPush(h, author.name);
-      h = uiHashPush(
-      h,
-      uiImageRenderKey(author.avatar)
-    );
-    }
-  }
-
-  return `notes:${notes.length}:${h.toString(36)}`;
-}
-
-function postUiRenderKey(w, post) {
-  if (!w || !post) return "post:0";
-
-  let h = uiHashStart();
-
-  h = uiHashPush(h, post.id);
-  h = uiHashPush(h, post.likes);
-  h = uiHashPush(h, post.text ? post.text.length : 0);
-  h = uiHashPush(
-    h,
-    uiImageRenderKey(
-      post.imageId || post.image || ""
-    )
-  );
-  h = uiHashPush(h, post.virality && post.virality.status);
-  h = uiHashPush(h, post.virality && post.virality.score);
-
-  const likedBy =
-    Array.isArray(post.likedBy)
-      ? post.likedBy
-      : [];
-
-  h = uiHashPush(h, likedBy.length);
-  h = uiHashPush(
-    h,
-    likedBy.includes(w.meId)
-      ? 1
-      : 0
-  );
-
-  const comments = safePostComments(post);
-
-  h = uiHashPush(h, comments.length);
-
-  /*
-   * Comments are append-only in normal play. The last few rows are enough to
-   * distinguish every visible thread update without hashing a giant history.
-   */
-  for (
-    let i = Math.max(0, comments.length - 6);
-    i < comments.length;
-    i += 1
-  ) {
-    const c = comments[i];
-    if (!c) continue;
-
-    h = uiHashPush(h, c.id);
-    h = uiHashPush(h, c.parent);
-    h = uiHashPush(h, c.authorId);
-    h = uiHashPush(h, c.ts);
-    h = uiHashPush(h, c.text ? c.text.length : 0);
-  }
-
-  h = uiHashPush(
-    h,
-    repostCount(w, post.id)
-  );
-
-  const author =
-    charById(w, post.authorId);
-
-  if (author) {
-    h = uiHashPush(h, author.id);
-    h = uiHashPush(h, author.name);
-    h = uiHashPush(h, author.username);
-    h = uiHashPush(
-      h,
-      uiImageRenderKey(author.avatar)
-    );
-    h = uiHashPush(h, author.updatedAt);
-    h = uiHashPush(h, author.baseFollowers);
-    h = uiHashPush(h, author.followerDelta);
-    h = uiHashPush(
-      h,
-      Array.isArray(author.followers)
-        ? author.followers.length
-        : 0
-    );
-
-    h = uiHashPush(
-      h,
-      author.id !== w.meId &&
-      isFollowing(
-        w,
-        w.meId,
-        author.id
-      )
-        ? 1
-        : 0
-    );
-  }
-
-  return `post:${h.toString(36)}`;
-}
-
-function feedUiRenderKey(w) {
-  if (!w) return "feed:0";
-
-  let h = uiHashStart();
-
-  h = uiHashPush(h, w.meId);
-  h = uiHashPush(
-    h,
-    w.player && w.player.username
-  );
-  h = uiHashPush(
-    h,
-    uiImageRenderKey(
-      w.player && w.player.avatar
-    )
-  );
-
-  const posts =
-    Array.isArray(w.posts)
-      ? w.posts
-      : [];
-
-  h = uiHashPush(h, posts.length);
-
-  /*
-   * Feed itself only exposes the recent window. Hash exactly that same order,
-   * not an unlimited history.
-   */
-  for (
-    let i = 0;
-    i < posts.length && i < 40;
-    i += 1
-  ) {
-    const p = posts[i];
-    if (!p) continue;
-
-    h = uiHashPush(
-      h,
-      postUiRenderKey(w, p)
-    );
-  }
-
-  const reposts =
-    Array.isArray(w.reposts)
-      ? w.reposts
-      : [];
-
-  h = uiHashPush(h, reposts.length);
-
-  for (
-    let i = 0;
-    i < reposts.length && i < 40;
-    i += 1
-  ) {
-    const r = reposts[i];
-    if (!r) continue;
-
-    h = uiHashPush(h, r.id);
-    h = uiHashPush(h, r.postId);
-    h = uiHashPush(h, r.actorId);
-    h = uiHashPush(h, r.ts);
-  }
-
-  const meProfile =
-    socialProfileById(
-      w,
-      w.meId
-    );
-
-  const following =
-    meProfile &&
-    Array.isArray(meProfile.following)
-      ? meProfile.following
-      : [];
-
-  h = uiHashPush(h, following.length);
-
-  for (
-    let i = 0;
-    i < following.length;
-    i += 1
-  ) {
-    h = uiHashPush(h, following[i]);
-  }
-
-  const trends =
-    Array.isArray(w.trends)
-      ? w.trends
-      : [];
-
-  for (
-    let i = 0;
-    i < trends.length && i < 8;
-    i += 1
-  ) {
-    const trend = trends[i];
-    if (!trend) continue;
-
-    h = uiHashPush(
-      h,
-      trend.id ||
-      trend.tag ||
-      trend.text ||
-      ""
-    );
-    h = uiHashPush(
-      h,
-      trend.score ||
-      trend.count ||
-      ""
-    );
-  }
-
-  h = uiHashPush(
-    h,
-    noteUiRenderKey(w)
-  );
-
-  const media =
-    activeGossipMediaAccount(w);
-
-  if (media) {
-    h = uiHashPush(h, media.id);
-    h = uiHashPush(h, media.name);
-    h = uiHashPush(
-      h,
-      uiImageRenderKey(media.avatar)
-    );
-    h = uiHashPush(h, media.updatedAt);
-  }
-
-  return `feed:${h.toString(36)}`;
-}
-
-function castUiRenderKey(w) {
-  if (!w) return "cast:0";
-
-  let h = uiHashStart();
-
-  const people =
-    humanChars(w)
-      .concat(w.chars || []);
-
-  h = uiHashPush(h, people.length);
-
-  for (const c of people) {
-    if (!c || !c.id) continue;
-
-    h = uiHashPush(h, c.id);
-    h = uiHashPush(h, c.name);
-    h = uiHashPush(h, c.username);
-    h = uiHashPush(
-      h,
-      uiImageRenderKey(c.avatar)
-    );
-    h = uiHashPush(h, c.updatedAt);
-  }
-
-  return `cast:${h.toString(36)}`;
-}
-
-function bondsUiRenderKey(w) {
-  if (!w) return "bonds:0";
-
-  let h = uiHashStart();
-
-  const people =
-    allSubjects(w);
-
-  h = uiHashPush(h, people.length);
-
-  for (const c of people) {
-    if (!c || !c.id) continue;
-
-    h = uiHashPush(h, c.id);
-    h = uiHashPush(h, c.name);
-    h = uiHashPush(
-      h,
-      uiImageRenderKey(c.avatar)
-    );
-    h = uiHashPush(h, c.updatedAt);
-  }
-
-  const rels =
-    w.rels &&
-    typeof w.rels === "object"
-      ? w.rels
-      : {};
-
-  const keys =
-    Object.keys(rels)
-      .sort();
-
-  h = uiHashPush(h, keys.length);
-
-  for (const key of keys) {
-    const r = rels[key];
-    if (!r) continue;
-
-    h = uiHashPush(h, key);
-    h = uiHashPush(h, r.score);
-    h = uiHashPush(h, r.type || r.bond);
-    h = uiHashPush(h, r.mood);
-    h = uiHashPush(h, r.updatedAt);
-  }
-
-  return `bonds:${h.toString(36)}`;
-}
-
-function scenesUiRenderKey(w) {
-  if (!w) return "scenes:0";
-
-  let h = uiHashStart();
-
-  const scenes =
-    Array.isArray(w.scenes)
-      ? w.scenes
-      : [];
-
-  h = uiHashPush(h, scenes.length);
-
-  for (
-    let i = 0;
-    i < scenes.length && i < 60;
-    i += 1
-  ) {
-    const s = scenes[i];
-    if (!s) continue;
-
-    h = uiHashPush(h, s.id);
-    h = uiHashPush(h, s.open);
-    h = uiHashPush(h, s.updatedAt);
-    h = uiHashPush(h, s.endedAt);
-    h = uiHashPush(
-      h,
-      Array.isArray(s.turns)
-        ? s.turns.length
-        : 0
-    );
-    h = uiHashPush(
-      h,
-      Array.isArray(s.messages)
-        ? s.messages.length
-        : 0
-    );
-  }
-
-  return `scenes:${h.toString(36)}`;
-}
-
-function chatUiRenderKey(w) {
-  if (!w) return "chat:0";
-
-  let h = uiHashStart();
-
-  const chats =
-    w.chats &&
-    typeof w.chats === "object"
-      ? w.chats
-      : {};
-
-  const ids =
-    Object.keys(chats)
-      .sort();
-
-  h = uiHashPush(h, ids.length);
-
-  for (const id of ids) {
-    const room = chats[id];
-    if (!room) continue;
-
-    h = uiHashPush(h, id);
-    h = uiHashPush(h, room.updatedAt);
-    h = uiHashPush(h, room.name);
-    h = uiHashPush(
-      h,
-      Array.isArray(room.messages)
-        ? room.messages.length
-        : Array.isArray(room.msgs)
-          ? room.msgs.length
-          : 0
-    );
-  }
-
-  return `chat:${h.toString(36)}`;
-}
-
-const MemoNotesStrip = React.memo(
-  NotesStrip,
-  (prev, next) =>
-    prev.renderKey === next.renderKey &&
-    prev.jump === next.jump
-);
-
-/*
- * Local Feed UI state (typing, media toggle, profile modal) must not rerender
- * every heavy post card. A world revision change still rerenders posts exactly
- * as before, so comments/likes/reposts remain immediate.
- */
-const MemoPost = React.memo(
-  Post,
-  (prev, next) =>
-    prev.renderVersion === next.renderVersion &&
-    prev.highlight === next.highlight
-);
-
-function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal, renderKey }) {
+function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal }) {
   const { tt } = useLang();
   const { media } = useMedia();
   const [text, setText] = useState("");
   const [img, setImg] = useState("");
   const [busy, setBusy] = useState("");
-  const [resting, setResting] = useState(false);
+  const [resting, setResting] = useState(cooldownLeft() > 0);
   const [hl, setHl] = useState("");
   const [feedMode, setFeedMode] = useState("all");
   const [showMedia, setShowMedia] = useState(false);
   const [profileId, setProfileId] = useState("");
-  const [visibleFeedCount, setVisibleFeedCount] = useState(3);
-  const feedSentinelRef = useRef(null);
+  /* All posts stay in world state. Only mounted feed DOM is windowed. */
+  const [visiblePostLimit, setVisiblePostLimit] = useState(60);
 
   const activeMedia =
     activeGossipMediaAccount(
@@ -31653,8 +29453,14 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   const refs = useRef({});
 
   useEffect(() => {
-    setResting(false);
+    const off = onCooldown((ms) => setResting(ms > 0));
+    const i = setInterval(() => setResting(cooldownLeft() > 0), 1000);
+    return () => { off(); clearInterval(i); };
   }, []);
+
+  useEffect(() => {
+    setVisiblePostLimit(60);
+  }, [feedMode, w.code]);
 
   useEffect(() => {
     if (!jump || jump.type !== "post") return;
@@ -31712,23 +29518,22 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
 
     const imageId = imageIdOf(img);
     let imageDescription = "";
-    let deferredVisionInput = "";
 
-    if (img && !visionCircuitOpen()) {
+    if (img) {
       try {
         const data = resolveImg(img, media);
 
-        if (
-          data &&
-          (
-            isInlineImageData(data) ||
-            /^https:\/\//i.test(String(data))
-          )
-        ) {
-          deferredVisionInput = data;
+        if (data && String(data).startsWith("data:image/")) {
+          imageDescription = await analyzeImageDataUrl(
+            data,
+            tt(
+              "Írd le 1-3 rövid mondatban, mi látható ezen a social media képen. Csak látható részleteket említs: személyek száma, tevékenység, ruha, helyszín, hangulat. Ne azonosíts valódi személyt név szerint.",
+              "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
+            )
+          );
         }
       } catch (e) {
-        deferredVisionInput = "";
+        console.warn("Player post image analysis failed:", e);
       }
     }
 
@@ -31819,44 +29624,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       });
     }
 
-    /*
-     * Non-blocking image enrichment. The post and its guaranteed comment
-     * action already exist before this request starts.
-     */
-    if (deferredVisionInput) {
-      void analyzeImageDataUrl(
-        deferredVisionInput,
-        tt(
-          "Írd le 1-3 rövid mondatban, mi látható ezen a social media képen. Csak látható részleteket említs: személyek száma, tevékenység, ruha, helyszín, hangulat. Ne azonosíts valódi személyt név szerint.",
-          "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
-        )
-      ).then((vision) => {
-        if (!vision) return;
-
-        update((n) => {
-          const livePost =
-            (n.posts || []).find(
-              (row) =>
-                row &&
-                row.id === p.id
-            );
-
-          if (
-            !livePost ||
-            String(livePost.imageDescription || "").trim()
-          ) {
-            return;
-          }
-
-          livePost.imageDescription =
-            String(vision)
-              .replace(/\s+/g, " ")
-              .trim()
-              .slice(0, 700);
-        });
-      });
-    }
-
     setText("");
     setImg("");
     setBusy("");
@@ -31868,162 +29635,74 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     if (!ok) setErr(tt("A világ már feldolgoz egy lépéskérést.", "The world is already processing a step request."));
   };
 
-  const postById = React.useMemo(() => {
+  const postById = useMemo(() => {
     const map = new Map();
     (w.posts || []).forEach((post) => {
       if (post && post.id) map.set(post.id, post);
     });
     return map;
-  }, [w.posts, renderKey]);
+  }, [w.posts]);
 
-  const followingIds = React.useMemo(() => {
+  const followingIds = useMemo(() => {
     const set = new Set();
     const meProfile = socialProfileById(w, w.meId);
     ((meProfile && meProfile.following) || []).forEach((id) => set.add(id));
     return set;
   }, [w, w.meId]);
 
-  /*
-   * PERFORMANCE v13:
-   * Composer/local UI state used to rebuild the complete feed candidate list
-   * on every keystroke. Recompute only when the actual world revision or feed
-   * mode changes.
-   */
+  const basePosts =
+    feedMode === "following"
+      ? (w.posts || []).filter((p) =>
+          p && (p.authorId === w.meId || followingIds.has(p.authorId))
+        )
+      : (w.posts || []);
+
+  const baseItems = basePosts.map((post) => ({
+    kind: "post",
+    id: "post:" + post.id,
+    ts: Number(post.ts) || 0,
+    post,
+    repost: null,
+  }));
+
+  const repostItems = repostRows(w)
+    .map((repost) => {
+      const post = postById.get(repost.postId);
+      const reposter = socialProfileById(w, repost.actorId);
+
+      if (!post || !reposter) {
+        return null;
+      }
+
+      if (
+        feedMode === "following" &&
+        reposter.id !== w.meId &&
+        !isFollowing(w, w.meId, reposter.id)
+      ) {
+        return null;
+      }
+
+      return {
+        kind: "repost",
+        id: "repost:" + repost.id,
+        ts: Number(repost.ts) || 0,
+        post,
+        repost,
+      };
+    })
+    .filter(Boolean);
+
   const timelineItems =
-    React.useMemo(
-      () => {
-        const baseItems = [];
-        const baseSource = w.posts || [];
-
-        for (
-          let i = 0;
-          i < baseSource.length &&
-          baseItems.length < 80;
-          i++
-        ) {
-          const post =
-            baseSource[i];
-
-          if (!post) continue;
-
-          if (
-            feedMode === "following" &&
-            post.authorId !== w.meId &&
-            !followingIds.has(
-              post.authorId
-            )
-          ) {
-            continue;
-          }
-
-          baseItems.push({
-            kind: "post",
-            id: "post:" + post.id,
-            ts: Number(post.ts) || 0,
-            post,
-            repost: null,
-          });
-        }
-
-        const repostItems = [];
-        const repostSource =
-          repostRows(w);
-
-        for (
-          let i = 0;
-          i < repostSource.length &&
-          repostItems.length < 80;
-          i++
-        ) {
-          const repost =
-            repostSource[i];
-
-          if (!repost) continue;
-
-          if (
-            feedMode === "following" &&
-            repost.actorId !== w.meId &&
-            !followingIds.has(
-              repost.actorId
-            )
-          ) {
-            continue;
-          }
-
-          const post =
-            postById.get(
-              repost.postId
-            );
-
-          const reposter =
-            socialProfileById(
-              w,
-              repost.actorId
-            );
-
-          if (
-            !post ||
-            !reposter
-          ) {
-            continue;
-          }
-
-          repostItems.push({
-            kind: "repost",
-            id: "repost:" + repost.id,
-            ts: Number(repost.ts) || 0,
-            post,
-            repost,
-          });
-        }
-
-        return baseItems
-          .concat(repostItems)
-          .sort(
-            (a, b) =>
-              b.ts - a.ts
-          )
-          .slice(0, 40);
-      },
-      [
-        renderKey,
-        feedMode,
-        w.meId,
-        followingIds,
-        postById,
-      ]
-    );
+    baseItems
+      .concat(repostItems)
+      .sort(
+        (a, b) =>
+          b.ts - a.ts
+      )
+      .slice(0, 40);
 
   const visibleTimelineItems =
-    timelineItems.slice(0, visibleFeedCount);
-
-  useEffect(() => {
-    setVisibleFeedCount(3);
-  }, [feedMode]);
-
-  useEffect(() => {
-    const node = feedSentinelRef.current;
-    if (!node || visibleFeedCount >= timelineItems.length) return undefined;
-
-    if (typeof IntersectionObserver === "undefined") {
-      const t = setTimeout(() => {
-        setVisibleFeedCount((count) => Math.min(timelineItems.length, count + 3));
-      }, 300);
-      return () => clearTimeout(t);
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setVisibleFeedCount((count) => Math.min(timelineItems.length, count + 3));
-        }
-      },
-      { rootMargin: "420px 0px" }
-    );
-
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [visibleFeedCount, timelineItems.length]);
+    timelineItems.slice(0, visiblePostLimit);
 
   return (
     <>
@@ -32036,25 +29715,15 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
             <div className="handle mono">@{w.player.username}</div>
           </div>
 
-          <span className="chip">
-            {autoOn ? (
-              <>
-                <span
-                  className="dot"
-                  style={{
-                    display: "inline-block",
-                    marginRight: 5,
-                  }}
-                />
-                {tt("élő", "live")}
-              </>
-            ) : (
-              tt(
-                "SAFE · háttér-AI off",
-                "SAFE · background AI off"
-              )
-            )}
-          </span>
+          {autoOn ? (
+            <span className="chip">
+              <span
+                className="dot"
+                style={{ display: "inline-block", marginRight: 5 }}
+              />
+              {tt("élő", "live")}
+            </span>
+          ) : null}
         </div>
 
         <div className="social-feed-tabs">
@@ -32080,8 +29749,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         </div>
       </div>
 
-      <MemoNotesStrip
-        renderKey={noteUiRenderKey(w)}
+      <NotesStrip
         w={w}
         update={update}
         setErr={setErr}
@@ -32370,8 +30038,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               </div>
             ) : null}
 
-            <MemoPost
-          renderVersion={postUiRenderKey(w, p)}
+            <Post
           w={w}
           post={p}
           highlight={hl === p.id}
@@ -32603,10 +30270,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 postId: id,
                 commentId: madeId,
                 parentId: parent || "",
-                targetId: primaryTargetId || "",
-                isDirectReplyToAi: Boolean(
-                  parent && currentParent && !isHuman(w, currentParent.authorId)
-                ),
               });
             }
           }}
@@ -32687,10 +30350,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
           </div>
         );
       })}
-      {visibleFeedCount < timelineItems.length ? (
-        <div ref={feedSentinelRef} aria-hidden="true" style={{ height: 1 }} />
-      ) : null}
-
       {profileId && charById(w, profileId) ? (
         <SocialProfileModal
           w={w}
@@ -32708,6 +30367,19 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               : null
           }
         />
+      ) : null}
+      {timelineItems.length > visibleTimelineItems.length ? (
+        <div style={{ display:"flex", justifyContent:"center", padding:"12px 0 22px" }}>
+          <button
+            className="btn tiny ghost"
+            onClick={() => setVisiblePostLimit((n) => Math.min(n + 60, timelineItems.length))}
+          >
+            {tt(
+              `További ${Math.min(60, timelineItems.length - visibleTimelineItems.length)} poszt`,
+              `Load ${Math.min(60, timelineItems.length - visibleTimelineItems.length)} more posts`
+            )}
+          </button>
+        </div>
       ) : null}
 
     </>
@@ -33001,25 +30673,8 @@ function CharForm({ initial, onSave, onClose, onDelete, setErr, w, isNew }) {
     });
     return out;
   });
-  /* Only relationship controls that the user actually changes become manual
-     overrides. Merely opening/saving a character sheet must never freeze every
-     current live relation as "manual". */
-  const [relDirtyIds, setRelDirtyIds] = useState(() => new Set());
   const set = (k, v) => setC((p) => ({ ...p, [k]: v }));
-  const setRelDraft = (otherId, patch) => {
-    setRelDirtyIds((prev) => {
-      const next = new Set(prev);
-      next.add(String(otherId));
-      return next;
-    });
-    setRelsState((p) => ({
-      ...p,
-      [otherId]: {
-        ...(p[otherId] || { score: 0, hidden: "", bond: "", fixed: false }),
-        ...patch,
-      },
-    }));
-  };
+  const setRelDraft = (otherId, patch) => setRelsState((p) => ({ ...p, [otherId]: { ...(p[otherId] || { score: 0, hidden: "", bond: "", fixed: false }), ...patch } }));
   const wy = worldYear(w);
   // Csak tényleges játékbeli karakterek kapnak dinamikus relationship score/bond állapotot.
   const others = w
@@ -33238,8 +30893,7 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
             .toLowerCase()
             .replace(/[^a-z0-9._]/g, "")
         },
-        rels,
-        Array.from(relDirtyIds)
+        rels
       );
     }}
   >
@@ -33811,30 +31465,21 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
 
 /* Az űrlapon szerkesztett dinamikus kapcsolatok mentése.
    Itt kizárólag valódi játékbeli karakter-ID-k szerepelhetnek. */
-function commitForm(n, subjectId, relDrafts, relDirtyIds = []) {
+function commitForm(n, subjectId, relDrafts) {
   if (!relDrafts) return;
-
-  const dirty = new Set(
-    (Array.isArray(relDirtyIds) ? relDirtyIds : [])
-      .map((id) => String(id))
-  );
-  if (!dirty.size) return;
-
   const activeIds = new Set(allSubjects(n).map((x) => String(x.id)));
-
-  dirty.forEach((otherId) => {
+  Object.keys(relDrafts).forEach((otherId) => {
     const d = relDrafts[otherId];
-    if (!d || String(otherId) === String(subjectId) || !activeIds.has(String(otherId))) return;
-
+    if (!d || otherId === subjectId || !activeIds.has(String(otherId))) return;
     const savedBond = String(d.bond || "");
     const familyFixed = FIXED_BONDS.includes(savedBond);
 
     setConfiguredRel(n, subjectId, otherId, {
-      score: Number(d.score) || 0,
+      score: d.score || 0,
       hidden: d.hidden || "",
       bond: savedBond,
       fixed: familyFixed,
-    }, "manual-user");
+    }, "manual");
   });
 }
 
@@ -33969,39 +31614,11 @@ function Cast({ w, update, setErr, goChat, jump }) {
 
       {editMe && (
         <CharForm initial={w.player} isNew={false} setErr={setErr} w={w} onClose={() => setEditMe(false)} onDelete={() => {}}
-          onSave={(c, relDrafts, relDirtyIds) => {
+          onSave={(c, relDrafts) => {
             update((n) => {
-              const beforeProfile =
-                n.players[w.meId] || null;
-
-              const nextProfile = {
-                ...c,
-                id: w.meId,
-                username: uniqueHandle(
-                  n,
-                  c.username,
-                  w.meId
-                ),
-                updatedAt: now(),
-              };
-
-              n.players[w.meId] =
-                nextProfile;
-
-              commitForm(
-                n,
-                w.meId,
-                relDrafts,
-                relDirtyIds
-              );
-
-              resyncRelationshipsAfterCharacterProfileEdit(
-                n,
-                w.meId,
-                beforeProfile,
-                nextProfile,
-                false
-              );
+              n.players[w.meId] = { ...c, id: w.meId, username: uniqueHandle(n, c.username, w.meId), updatedAt: now() };
+              commitForm(n, w.meId, relDrafts);
+              refreshCanonicalRelationshipBaselines(n);
             });
             setEditMe(false);
           }} />
@@ -34017,7 +31634,7 @@ function Cast({ w, update, setErr, goChat, jump }) {
             });
             setForm(null);
           }}
-          onSave={(c, relDrafts, relDirtyIds) => {
+          onSave={(c, relDrafts) => {
             update((n) => {
               const stamped = {
                 ...c,
@@ -34038,11 +31655,6 @@ function Cast({ w, update, setErr, goChat, jump }) {
               const reallyNew =
                 i < 0;
 
-              const beforeProfile =
-                i >= 0
-                  ? n.chars[i]
-                  : null;
-
               if (i >= 0) {
                 n.chars[i] = stamped;
               } else {
@@ -34052,23 +31664,14 @@ function Cast({ w, update, setErr, goChat, jump }) {
               commitForm(
                 n,
                 stamped.id,
-                relDrafts,
-                relDirtyIds
+                relDrafts
               );
 
-              /*
-               * v25 fast path:
-               * harmless sheet edits skip relationship canon work;
-               * Connections/faction changes are O(n);
-               * identity/alias changes still use the conservative full pass.
-               */
-              resyncRelationshipsAfterCharacterProfileEdit(
-                n,
-                stamped.id,
-                beforeProfile,
-                stamped,
-                reallyNew
-              );
+              /* One full pass is both more correct and much cheaper than the old
+               * new-character path that re-ran a partial O(cast²) refresh once
+               * for every existing person. It also catches reverse Connections
+               * whose target is this newly created/renamed character. */
+              refreshCanonicalRelationshipBaselines(n);
 
               /*
                * Minden valóban újonnan behozott AI karakter
@@ -35723,7 +33326,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [visibleTurns.length]);
   useEffect(() => {
     if (!scene.open || scene.limitMode !== "minutes") return undefined;
-    const i = setInterval(() => setClockNow(now()), 15000);
+    const i = setInterval(() => setClockNow(now()), 30000);
     return () => clearInterval(i);
   }, [scene.open, scene.limitMode, scene.id]);
 
@@ -38094,21 +35697,19 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
    * Az AI már AZ ELSŐ elküldött üzenetet is
    * a világ tényleges részeként kapja meg.
    */
-  /*
-   * PERFORMANCE v32:
-   * Never deep-clone the whole world just to let the AI see one outgoing DM.
-   * Create a read-only overlay that copies only the chats branch we modify.
-   */
-  const requestWorld = {
-    ...w,
-    chats: {
-      ...(w.chats || {}),
-      [ck]: [
-        ...((w.chats && w.chats[ck]) || []),
-        outgoingMessage,
-      ],
-    },
-  };
+  const requestWorld =
+    JSON.parse(
+      JSON.stringify(w)
+    );
+
+  if (!requestWorld.chats) {
+    requestWorld.chats = {};
+  }
+
+  requestWorld.chats[ck] = [
+    ...(requestWorld.chats[ck] || []),
+    outgoingMessage,
+  ];
 
   /*
    * A képernyőn is azonnal megjelenik
@@ -39865,49 +37466,10 @@ function freshSimulationRuntime(at = now()) {
 
 
 function restorePostedAlbumImagesForFreshRun(w) {
-  if (!w || !Array.isArray(w.posts) || !w.posts.length) return 0;
-
-  /*
-   * PERFORMANCE v22:
-   * The old restart path called character.album.some(...) for every historical
-   * image post. With many old posts/albums that becomes posts × album-size.
-   * Build the existing image-id Sets once and keep exactly the same restore
-   * behavior in linear time.
-   */
-  const charactersById = new Map();
-  const albumIdsByCharacter = new Map();
-
-  for (const character of (w.chars || [])) {
-    if (!character || !character.id) continue;
-
-    charactersById.set(character.id, character);
-
-    if (!Array.isArray(character.album)) {
-      character.album = [];
-    }
-
-    const ids = new Set();
-
-    for (const item of character.album) {
-      if (!item) continue;
-      const existingId =
-        imageIdOf(
-          item.imageId
-            ? imageRef(item.imageId)
-            : item.src
-        );
-      if (existingId) ids.add(existingId);
-    }
-
-    albumIdsByCharacter.set(
-      character.id,
-      ids
-    );
-  }
-
+  if (!w || !Array.isArray(w.posts)) return 0;
   let restored = 0;
 
-  for (const post of w.posts) {
+  w.posts.forEach((post) => {
     if (
       !post ||
       !post.authorId ||
@@ -39915,105 +37477,44 @@ function restorePostedAlbumImagesForFreshRun(w) {
       isMediaAccount(w, post.authorId) ||
       !(post.imageId || post.image)
     ) {
-      continue;
+      return;
     }
 
-    const character =
-      charactersById.get(post.authorId) ||
-      charById(w, post.authorId);
+    const character = charById(w, post.authorId);
+    if (!character) return;
+    if (!Array.isArray(character.album)) character.album = [];
 
-    if (!character) continue;
+    const imageRefValue = post.imageId ? imageRef(post.imageId) : post.image;
+    const imageId = imageIdOf(imageRefValue);
+    const alreadyThere = character.album.some((item) => {
+      if (!item) return false;
+      const existingId = imageIdOf(item.imageId ? imageRef(item.imageId) : item.src);
+      return Boolean(imageId && existingId === imageId);
+    });
 
-    if (!Array.isArray(character.album)) {
-      character.album = [];
-    }
+    if (alreadyThere) return;
 
-    let knownIds =
-      albumIdsByCharacter.get(post.authorId);
-
-    if (!knownIds) {
-      knownIds = new Set();
-      for (const item of character.album) {
-        if (!item) continue;
-        const existingId =
-          imageIdOf(
-            item.imageId
-              ? imageRef(item.imageId)
-              : item.src
-          );
-        if (existingId) knownIds.add(existingId);
-      }
-      albumIdsByCharacter.set(
-        post.authorId,
-        knownIds
-      );
-    }
-
-    const imageRefValue =
-      post.imageId
-        ? imageRef(post.imageId)
-        : post.image;
-
-    const imageId =
-      imageIdOf(imageRefValue);
-
-    if (
-      imageId &&
-      knownIds.has(imageId)
-    ) {
-      continue;
-    }
-
-    const people =
-      String(
-        post.imagePeopleNote || ""
-      ).trim();
-
-    const manual =
-      String(
-        post.imageManualNote || ""
-      ).trim();
-
-    const vision =
-      String(
-        post.imageVision ||
-        (!manual && !people
-          ? post.imageDescription
-          : "") ||
-        ""
-      ).trim();
+    const people = String(post.imagePeopleNote || "").trim();
+    const manual = String(post.imageManualNote || "").trim();
+    const vision = String(
+      post.imageVision ||
+      (!manual && !people ? post.imageDescription : "") ||
+      ""
+    ).trim();
 
     character.album.push({
-      id:
-        post.sourceAlbumItemId ||
-        uid(),
+      id: post.sourceAlbumItemId || uid(),
       imageId: imageId || "",
-      src:
-        imageId
-          ? ""
-          : String(post.image || ""),
+      src: imageId ? "" : String(post.image || ""),
       who: people,
       note: manual,
       vision,
-      analyzedAt:
-        Number(
-          post.imageAnalyzedAt || 0
-        ) ||
-        (
-          vision
-            ? Number(post.ts || now())
-            : 0
-        ),
-      restoredFromPostId:
-        post.id,
+      analyzedAt: Number(post.imageAnalyzedAt || 0) || (vision ? Number(post.ts || now()) : 0),
+      restoredFromPostId: post.id,
     });
 
-    if (imageId) {
-      knownIds.add(imageId);
-    }
-
     restored += 1;
-  }
+  });
 
   return restored;
 }
@@ -40047,20 +37548,10 @@ function freshRunPersistentImageIds(w) {
     if (!profile || typeof profile !== "object") return;
     add(profile.avatar);
     add(profile.cover);
-
-    const album =
-      Array.isArray(profile.album)
-        ? profile.album
-        : albumOf(profile);
-
-    for (const item of album) {
-      if (!item) continue;
-      add(
-        item.imageId
-          ? imageRef(item.imageId)
-          : item.src
-      );
-    }
+    albumOf(profile).forEach((item) => {
+      if (!item) return;
+      add(item.imageId ? imageRef(item.imageId) : item.src);
+    });
   };
 
   scanProfile(w && w.player);
@@ -40993,39 +38484,10 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
 
       {editPlayer && (
         <CharForm initial={w.player} setErr={setErr} w={w} onClose={() => setEditPlayer(false)} onDelete={() => {}}
-          onSave={(c, relDrafts, relDirtyIds) => {
+          onSave={(c, relDrafts) => {
             update((n) => {
-              const beforeProfile =
-                n.players[w.meId] || null;
-
-              const nextProfile = {
-                ...c,
-                id: w.meId,
-                username: uniqueHandle(
-                  n,
-                  c.username,
-                  w.meId
-                ),
-                updatedAt: now(),
-              };
-
-              n.players[w.meId] =
-                nextProfile;
-
-              commitForm(
-                n,
-                w.meId,
-                relDrafts,
-                relDirtyIds
-              );
-
-              resyncRelationshipsAfterCharacterProfileEdit(
-                n,
-                w.meId,
-                beforeProfile,
-                nextProfile,
-                false
-              );
+              n.players[w.meId] = { ...c, id: w.meId, username: uniqueHandle(n, c.username, w.meId), updatedAt: now() };
+              commitForm(n, w.meId, relDrafts);
             });
             setEditPlayer(false);
           }} />
@@ -41617,24 +39079,18 @@ function characterNoteActivityScore(w, c) {
   return score;
 }
 
-function pickNoteReactionCast(w, authorId, processedBy, limit = 6) {
+function pickNoteReactionCast(w, authorId, processedBy) {
   const done = processedBy instanceof Set ? processedBy : new Set(processedBy || []);
-  const maxCast = Math.max(1, Math.min(8, Number(limit) || 6));
-
   return (w.chars || [])
     .filter((c) => c && !isHuman(w, c.id) && c.id !== authorId && !done.has(c.id))
     .map((c) => {
-      /*
-       * socialInteractionInterest() already includes obsession weighting.
-       * Do not run relationshipObsessionLevel() a second time for the same
-       * actor→author pair merely to rank this one Note batch.
-       */
       const relInterest = socialInteractionInterest(w, c.id, authorId);
       const follows = isFollowing(w, c.id, authorId) ? 16 : 0;
-      return { c, score: relInterest + follows + Math.random() * 14 };
+      const obsession = relationshipObsessionLevel(w, c.id, authorId) * 10;
+      return { c, score: relInterest + follows + obsession + Math.random() * 14 };
     })
     .sort((a, b) => b.score - a.score)
-    .slice(0, maxCast)
+    .slice(0, 8)
     .map((row) => row.c);
 }
 
@@ -41746,7 +39202,7 @@ Ha ír:
 }
 
 /* Reakciók a játékos jegyzetére. */
-async function genNoteReact(w, note, options = {}) {
+async function genNoteReact(w, note) {
   const reactedBy = new Set(
     note.reactedBy || []
   );
@@ -41760,8 +39216,7 @@ async function genNoteReact(w, note, options = {}) {
   const cast = pickNoteReactionCast(
     w,
     note.authorId,
-    processedBy,
-    options.castLimit || 6
+    processedBy
   );
 
   // Ha a kiválasztott körben már nincs
@@ -41789,28 +39244,13 @@ async function genNoteReact(w, note, options = {}) {
     .filter(Boolean)
     .join(", ");
 
-  /*
-   * PERFORMANCE v23 — REQUEST REACTIONS
-   *
-   * voiceCard(c) + characterMemoryCard(w,c) below already supplies each
-   * reacting character's full private canon and memory. Passing deep=true to
-   * worldContext duplicated most of those sheets a second time and made a
-   * manual Note reaction one of the largest synchronous prompt builds in the
-   * app. Keep the shared world/relationship context, but use the shallow
-   * version here.
-   */
-  const requestNoteReactionJSON =
-    options.interactive
-      ? askWorldJSONInteractive
-      : askWorldJSON;
-
-  return requestNoteReactionJSON(
+  return askWorldJSON(
     w,
     engineFor(w),
     `${worldContext(
       w,
       cast.map((c) => c.id),
-      false,
+      true,
       null
     )}
 
@@ -42143,8 +39583,6 @@ const canRunLocalSimulationAction = (w) => {
 const SIM_DONE_TTL = 20 * 60000;
 const SIM_QUEUE_LIMIT = 40;
 
-const SIM_RUNTIME_MAINTENANCE = new WeakMap();
-
 function ensureSimState(w) {
   if (!w.sim) {
     w.sim = {
@@ -42166,186 +39604,73 @@ function ensureSimState(w) {
       lastNoteReactionAt: 0,
       liveWorldStartedAt: now(),
       lastError: "",
-      schedulerVersion: 71,
     };
   }
 
-  const sim = w.sim;
+  if (!Array.isArray(w.sim.queue)) w.sim.queue = [];
 
-  if (!Array.isArray(sim.queue)) sim.queue = [];
-  if (!sim.done || typeof sim.done !== "object") sim.done = {};
-  if (typeof sim.running !== "string") sim.running = "";
-
-  const numericFields = [
-    "at",
-    "contentAt",
-    "localAt",
-    "lastSuccessAt",
-    "lastAttemptAt",
-    "roleplayAttemptAt",
-    "dmAttemptAt",
-    "groupAttemptAt",
-    "popupAttemptAt",
-    "lastAutonomousDmAt",
-    "lastPopupSuccessAt",
-    "lastRoleplayInviteAt",
-    "lastNoteReactionAt",
-    "liveWorldStartedAt",
-  ];
-
-  for (const key of numericFields) {
-    if (!Number.isFinite(Number(sim[key]))) {
-      sim[key] =
-        key === "liveWorldStartedAt"
-          ? now()
-          : 0;
-    }
-  }
-
-  if (typeof sim.lastError !== "string") {
-    sim.lastError = "";
-  }
-
-  /*
-   * v30 SAFE-QUEUE MIGRATION:
-   * Discard ALL stale automatic/event/coverage work from previous builds.
-   * Only an explicit manual request survives a deploy.
-   *
-   * This is deliberate: a persisted 40-item background queue can otherwise
-   * make the browser appear permanently frozen while it drains old work.
-   */
-  if (Number(sim.schedulerVersion || 0) !== 71) {
-    sim.queue =
-      sim.queue.filter(
-        (action) =>
-          action &&
-          action.source === "manual"
-      );
-
-    sim.running = "";
-    sim.dmAttemptAt = 0;
-    sim.roleplayAttemptAt = 0;
-    sim.popupAttemptAt = 0;
-    sim.groupAttemptAt = 0;
-    sim.liveWorldStartedAt = now();
-    sim.schedulerVersion = 71;
-  }
-
-  /*
-   * Expensive stale-comment validation / done cleanup used to run inside
-   * EVERY simPeek(), simEnqueue(), simDropQueued() and simMarkDone().
-   * Run it at most once every 30 seconds per sim object.
-   */
-  let maintenance =
-    SIM_RUNTIME_MAINTENANCE.get(sim);
-
-  const ts = now();
-
-  if (
-    !maintenance ||
-    ts -
-      Number(
-        maintenance.lastAt || 0
-      ) >=
-      30000
-  ) {
-    const postById = new Map();
-
-    for (const post of (w.posts || [])) {
-      if (post && post.id) {
-        postById.set(
-          String(post.id),
-          post
-        );
-      }
-    }
-
-    sim.queue =
-      sim.queue
-        .filter(Boolean)
-        .slice(-SIM_QUEUE_LIMIT)
-        .filter((action) => {
-          if (action.type !== "comments") {
-            return true;
-          }
-
-          const postId =
-            action.payload &&
-            action.payload.postId;
-
-          const post =
-            postId
-              ? postById.get(
-                  String(postId)
-                )
-              : null;
-
-          if (!post) {
-            return false;
-          }
-
-          if (
-            action.payload &&
-            action.payload.trigger ===
-              "guaranteed-coverage"
-          ) {
-            return !postCommentCoverageState(
-              w,
-              post
-            ).complete;
-          }
-
-          return (
-            ts -
-              (Number(post.ts) || 0) <=
-            LIVE_WORLD_FRESH_COMMENT_WINDOW_MS
-          );
-        });
-
-    const cutoff =
-      ts - SIM_DONE_TTL;
-
-    for (const key of Object.keys(sim.done)) {
-      if (
-        Number(sim.done[key] || 0) <
-        cutoff
-      ) {
-        delete sim.done[key];
-      }
-    }
-
-    /*
-     * Cadence backfill is also one-time; don't rescan popup/scene history on
-     * every queue operation when no previous event exists.
-     */
+  /* v51 migration/runtime guard: a régi buildből bent maradt automatikus
+   * comment queue ne élesszen fel régi posztokat az új feed-first ritmusban. */
+  w.sim.queue = w.sim.queue.filter((action) => {
+    if (!action || action.type !== "comments") return true;
+    const postId = action.payload && action.payload.postId;
+    const post = (w.posts || []).find((p) => p && p.id === postId);
+    if (!post) return false;
     if (
-      Number(sim.cadenceBackfillVersion || 0) <
-      1
+      action.payload &&
+      action.payload.trigger === "guaranteed-coverage"
     ) {
-      if (!sim.lastPopupSuccessAt) {
-        sim.lastPopupSuccessAt =
-          popupLastGeneratedAt(w) || 0;
-      }
-
-      if (!sim.lastRoleplayInviteAt) {
-        sim.lastRoleplayInviteAt =
-          lastAiInitiatedRoleplayAt(w) || 0;
-      }
-
-      sim.cadenceBackfillVersion = 1;
+      return !postCommentCoverageState(w, post).complete;
     }
+    return now() - (Number(post.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS;
+  });
 
-    maintenance = {
-      lastAt: ts,
-    };
+  if (!w.sim.done || typeof w.sim.done !== "object") w.sim.done = {};
+  if (typeof w.sim.running !== "string") w.sim.running = "";
+  if (!Number.isFinite(Number(w.sim.at))) w.sim.at = 0;
+  if (!Number.isFinite(Number(w.sim.contentAt))) w.sim.contentAt = 0;
+  if (!Number.isFinite(Number(w.sim.localAt))) w.sim.localAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastSuccessAt))) w.sim.lastSuccessAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastAttemptAt))) w.sim.lastAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.roleplayAttemptAt))) w.sim.roleplayAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.dmAttemptAt))) w.sim.dmAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.groupAttemptAt))) w.sim.groupAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.popupAttemptAt))) w.sim.popupAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastAutonomousDmAt))) w.sim.lastAutonomousDmAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastPopupSuccessAt))) w.sim.lastPopupSuccessAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastRoleplayInviteAt))) w.sim.lastRoleplayInviteAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastNoteReactionAt))) w.sim.lastNoteReactionAt = 0;
+  if (!Number.isFinite(Number(w.sim.liveWorldStartedAt))) w.sim.liveWorldStartedAt = now();
+  /* Backfill only objective successes; autonomous DM intentionally starts hungry
+     on old saves because old DM rows did not distinguish replies from initiations. */
+  if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
+  if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
 
-    SIM_RUNTIME_MAINTENANCE.set(
-      sim,
-      maintenance
-    );
+  /* v95 migration: clear stale background queue state from older schedulers.
+     Manual requests survive; comments/follows/replies are rebuilt from the
+     current world state without restart-created queue storms. */
+  if (Number(w.sim.schedulerVersion) !== 70) {
+    w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
+    w.sim.running = "";
+    w.sim.dmAttemptAt = 0;
+    w.sim.roleplayAttemptAt = 0;
+    w.sim.popupAttemptAt = 0;
+    w.sim.groupAttemptAt = 0;
+    /* Start the new independent lanes slightly hungry. The old implementation
+       used a constant synthetic elapsed value when there had never been a
+       successful DM/Event, which meant their hard deadline could never be
+       reached for the FIRST occurrence. */
+    w.sim.liveWorldStartedAt = now();
+    w.sim.schedulerVersion = 70;
   }
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 70;
+  if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
-  return sim;
+  const cutoff = now() - SIM_DONE_TTL;
+  Object.keys(w.sim.done).forEach((k) => {
+    if (Number(w.sim.done[k] || 0) < cutoff) delete w.sim.done[k];
+  });
+  return w.sim;
 }
 
 /*
@@ -42428,21 +39753,30 @@ function ensureSocialSimulationState(w) {
   }
 
   /*
-   * v29 — SOCIAL EVENT HOT PATH
-   *
-   * IMPORTANT:
-   * This function is called by recordSocialEvent(), so it MUST stay cheap.
-   * It may initialize missing containers, but it must never:
-   * - scan actor × target relationship pairs,
-   * - recompute every character's historical social stats,
-   * - re-normalize hundreds of rumors/popups on every click.
+   * A Notes ténylegesen csak 24 óráig él.
+   * Nem csak a UI rejti el: a lejárt elemeket
+   * a világ állapotából is kiszedjük.
    */
-
   pruneExpiredNotes(w);
 
-  if (!Array.isArray(w.socialEvents)) w.socialEvents = [];
-  if (!Array.isArray(w.reposts)) w.reposts = [];
+  /*
+   * Strukturált társadalmi események.
+   */
+  if (!Array.isArray(w.socialEvents)) {
+    w.socialEvents = [];
+  }
 
+  /*
+   * Újraosztások / repostok.
+   * Külön tároljuk őket az eredeti posztoktól.
+   */
+  if (!Array.isArray(w.reposts)) {
+    w.reposts = [];
+  }
+
+  /*
+   * Aura / popularity / reputation / hype stb.
+   */
   if (
     !w.socialStats ||
     typeof w.socialStats !== "object" ||
@@ -42452,62 +39786,65 @@ function ensureSocialSimulationState(w) {
   }
 
   /*
-   * Gossip media settings are tiny object guards; safe on the hot path.
+   * Gossip media profilok / mód migrációja.
    */
   ensureGossipMediaState(w);
 
   /*
-   * DO NOT call ensureFollowerSystem() here.
-   * DO NOT call refreshAllSocialStats() here.
-   *
-   * Follow graph normalization belongs to follow/planner boundaries, and
-   * individual social stats are refreshed only for the actually affected
-   * profile when a feature needs them.
+   * Követőháló migráció / javítás.
    */
+  ensureFollowerSystem(w);
 
+  /*
+   * Social Stats migráció.
+   *
+   * A popularity/followers/following már a jelenlegi
+   * social profiladatokból is újraszámolható,
+   * ezért a régi világok sem nulláról indulnak.
+   */
+  refreshAllSocialStats(w);
+
+  /*
+   * Aktuális trendek.
+   */
   if (!Array.isArray(w.trends)) {
     w.trends = [];
   }
 
   /*
-   * One-time old-world discovery migrations. Existing worlds already carry
-   * these flags; if not, each block runs once and persists the flag.
+   * V2 migration:
+   * a Trending patch ELŐTT frissen felvett karaktereket
+   * egyszer visszamenőleg felismerjük.
    */
   if (!w.characterArrivalTrendMigratedV2) {
-    ensureRecentCharacterArrivalTrends(w);
+    ensureRecentCharacterArrivalTrends(
+      w
+    );
+
     refreshTrends(w);
-    w.characterArrivalTrendMigratedV2 = true;
+
+    w.characterArrivalTrendMigratedV2 =
+      true;
   }
 
   if (!w.socialDiscoveryMigratedV1) {
-    /*
-     * Avoid the old refreshAllSocialStats() migration here; each profile row
-     * is lazily created/refreshed as actually used.
-     */
     refreshTrends(w);
-
-    /*
-     * Old reach migration can itself be large. Only seed recent posts, which
-     * are the only posts shown in normal discovery surfaces.
-     */
-    const recentPosts =
-      (w.posts || []).slice(0, 80);
-
-    recentPosts.forEach((post) => {
-      if (post && post.id) {
-        refreshPostReach(w, post.id);
-      }
-    });
-
+    refreshAllPostReach(w);
     w.socialDiscoveryMigratedV1 = true;
   }
 
+  /*
+   * Karakterek között terjedő pletykák.
+   */
   if (!Array.isArray(w.rumors)) {
     w.rumors = [];
   }
 
   ensureGossipPropagationState(w);
 
+  /*
+   * The Whisper Wire memória.
+   */
   if (
     !w.whisperWire ||
     typeof w.whisperWire !== "object" ||
@@ -42516,9 +39853,17 @@ function ensureSocialSimulationState(w) {
     w.whisperWire = {};
   }
 
-  if (!Array.isArray(w.whisperWire.stories)) w.whisperWire.stories = [];
-  if (!Array.isArray(w.whisperWire.usedEventIds)) w.whisperWire.usedEventIds = [];
-  if (!Array.isArray(w.whisperWire.history)) w.whisperWire.history = [];
+  if (!Array.isArray(w.whisperWire.stories)) {
+    w.whisperWire.stories = [];
+  }
+
+  if (!Array.isArray(w.whisperWire.usedEventIds)) {
+    w.whisperWire.usedEventIds = [];
+  }
+
+  if (!Array.isArray(w.whisperWire.history)) {
+    w.whisperWire.history = [];
+  }
 
   if (
     !Object.prototype.hasOwnProperty.call(
@@ -42529,10 +39874,22 @@ function ensureSocialSimulationState(w) {
     w.whisperWire.lastCandidate = null;
   }
 
-  if (!Number.isFinite(Number(w.whisperWire.lastPublishedAt))) {
+  if (
+    !Number.isFinite(
+      Number(
+        w.whisperWire.lastPublishedAt
+      )
+    )
+  ) {
     w.whisperWire.lastPublishedAt = 0;
   }
 
+  /*
+   * Gossip & Media settings.
+   *
+   * Meglévő értéket SOHA nem írunk felül,
+   * csak a hiányzó mezőket pótoljuk.
+   */
   if (
     !w.gossipSettings ||
     typeof w.gossipSettings !== "object" ||
@@ -42541,74 +39898,120 @@ function ensureSocialSimulationState(w) {
     w.gossipSettings = {};
   }
 
-  if (!["off", "local", "global"].includes(w.gossipSettings.mediaMode)) {
-    w.gossipSettings.mediaMode = "off";
+  if (
+    ![
+      "off",
+      "local",
+      "global",
+    ].includes(
+      w.gossipSettings.mediaMode
+    )
+  ) {
+    w.gossipSettings.mediaMode =
+      "off";
   }
 
-  if (typeof w.gossipSettings.whisperWire !== "boolean") {
+  if (
+    typeof w.gossipSettings.whisperWire !==
+    "boolean"
+  ) {
     w.gossipSettings.whisperWire = true;
   }
 
-  if (!["low", "normal", "high", "chaotic"].includes(w.gossipSettings.frequency)) {
-    w.gossipSettings.frequency = "normal";
+  if (
+    ![
+      "low",
+      "normal",
+      "high",
+      "chaotic",
+    ].includes(
+      w.gossipSettings.frequency
+    )
+  ) {
+    w.gossipSettings.frequency =
+      "normal";
   }
 
-  if (!["dynamic", "short", "detailed"].includes(w.gossipSettings.articleLength)) {
-    w.gossipSettings.articleLength = "dynamic";
+  if (
+    ![
+      "dynamic",
+      "short",
+      "detailed",
+    ].includes(
+      w.gossipSettings.articleLength
+    )
+  ) {
+    w.gossipSettings.articleLength =
+      "dynamic";
   }
 
-  if (typeof w.gossipSettings.characterGossip !== "boolean") {
-    w.gossipSettings.characterGossip = true;
+  if (
+    typeof w.gossipSettings
+      .characterGossip !== "boolean"
+  ) {
+    w.gossipSettings.characterGossip =
+      true;
   }
 
-  if (!["minimal", "normal", "strong"].includes(w.gossipSettings.relationshipImpact)) {
-    w.gossipSettings.relationshipImpact = "normal";
+  if (
+    ![
+      "minimal",
+      "normal",
+      "strong",
+    ].includes(
+      w.gossipSettings
+        .relationshipImpact
+    )
+  ) {
+    w.gossipSettings
+      .relationshipImpact =
+      "normal";
   }
 
+  /*
+   * Választható Pop-up Events.
+   */
   if (!Array.isArray(w.popupEvents)) {
     w.popupEvents = [];
   }
 
-  /*
-   * Popup legacy rows used to be repaired on every social event.
-   * Repair them once, then persist the version marker.
-   */
-  if (Number(w.popupRowRepairVersion || 0) < 56) {
-    w.popupEvents.forEach((event) => {
-      if (!event || typeof event !== "object") return;
+  /* Existing saves: enrich old popup rows without breaking them. */
+  w.popupEvents.forEach((event) => {
+    if (!event || typeof event !== "object") return;
+    if (!Number.isFinite(Number(event.rerollsUsed))) event.rerollsUsed = 0;
+    if (!Number.isFinite(Number(event.maxRerolls))) event.maxRerolls = LIVE_WORLD_MAX_POPUP_REROLLS;
+    if (!Array.isArray(event.variantHistory)) event.variantHistory = [];
+    if (!Array.isArray(event.witnessIds)) event.witnessIds = [];
+    if (!Array.isArray(event.involvedIds)) event.involvedIds = [];
+    if (!["public","limited","private"].includes(event.visibility)) event.visibility = "limited";
+    if (!Number.isFinite(Number(event.gossipPotential))) event.gossipPotential = event.visibility === "public" ? 55 : 30;
+    if (typeof event.location !== "string") event.location = "";
+    if (typeof event.eventKind !== "string") event.eventKind = "social";
 
-      if (!Number.isFinite(Number(event.rerollsUsed))) event.rerollsUsed = 0;
-      if (!Number.isFinite(Number(event.maxRerolls))) event.maxRerolls = LIVE_WORLD_MAX_POPUP_REROLLS;
-      if (!Array.isArray(event.variantHistory)) event.variantHistory = [];
-      if (!Array.isArray(event.witnessIds)) event.witnessIds = [];
-      if (!Array.isArray(event.involvedIds)) event.involvedIds = [];
-      if (!["public","limited","private"].includes(event.visibility)) event.visibility = "limited";
-      if (!Number.isFinite(Number(event.gossipPotential))) event.gossipPotential = event.visibility === "public" ? 55 : 30;
-      if (typeof event.location !== "string") event.location = "";
-      if (typeof event.eventKind !== "string") event.eventKind = "social";
-
-      if (!event.resolved) {
-        const titleOk = Boolean(String(event.title || "").trim());
-        const textOk = Boolean(String(event.text || "").trim());
-        const choiceCount = Array.isArray(event.choices)
-          ? event.choices.filter(
-              (choice) =>
-                choice &&
-                String(choice.label || "").trim()
-            ).length
-          : 0;
-
-        if (!titleOk || !textOk || choiceCount < 2) {
-          event.resolved = true;
-          event.invalidatedAt = now();
-          event.invalidReason = "malformed-popup-v55";
-        }
+    /* v55 repair: an old malformed unresolved row must never become an invisible
+       permanent mutex that prevents every later popup. */
+    if (!event.resolved) {
+      const titleOk = Boolean(String(event.title || "").trim());
+      const textOk = Boolean(String(event.text || "").trim());
+      const choiceCount = Array.isArray(event.choices)
+        ? event.choices.filter((choice) => choice && String(choice.label || "").trim()).length
+        : 0;
+      if (!titleOk || !textOk || choiceCount < 2) {
+        event.resolved = true;
+        event.invalidatedAt = now();
+        event.invalidReason = "malformed-popup-v55";
       }
-    });
+    }
+  });
 
-    w.popupRowRepairVersion = 56;
-  }
-
+  /*
+   * v50 POPUP WATCHDOG
+   *
+   * A régi popup-rendszer kizárólag friss, magas pontszámú socialEvents
+   * eseményekből tudott seedet választani. Ha ilyen épp nem volt, a
+   * "random" felvillanó helyzetek teljesen eltűntek. Külön runtime-óra
+   * tartja életben az ambient / váratlan eseményeket is.
+   */
   if (
     !w.popupRuntime ||
     typeof w.popupRuntime !== "object" ||
@@ -42622,27 +40025,13 @@ function ensureSocialSimulationState(w) {
   }
 
   if (!Number.isFinite(Number(w.popupRuntime.lastGeneratedAt))) {
-    let latestPopupAt = 0;
-
-    for (const event of w.popupEvents) {
-      if (!event) continue;
-
-      latestPopupAt =
-        Math.max(
-          latestPopupAt,
-          Number(
-            event.ts ||
-            event.resolvedAt ||
-            event.snoozedAt
-          ) || 0
-        );
-    }
-
-    w.popupRuntime.lastGeneratedAt =
-      latestPopupAt;
+    w.popupRuntime.lastGeneratedAt = Math.max(
+      0,
+      ...(w.popupEvents || []).map((event) =>
+        Number(event && (event.ts || event.resolvedAt || event.snoozedAt)) || 0
+      )
+    );
   }
-
-  w.socialRuntimeHotPathVersion = 29;
 
   return w;
 }
@@ -42661,66 +40050,61 @@ function ensureSocialSimulationState(w) {
 
 function ensureGossipPropagationState(w) {
   if (!w || typeof w !== "object") return null;
-
-  if (
-    !w.gossipPropagation ||
-    typeof w.gossipPropagation !== "object" ||
-    Array.isArray(w.gossipPropagation)
-  ) {
+  if (!w.gossipPropagation || typeof w.gossipPropagation !== "object" || Array.isArray(w.gossipPropagation)) {
     w.gossipPropagation = {};
   }
-
   const state = w.gossipPropagation;
-
   if (!Array.isArray(state.rumors)) state.rumors = [];
   if (!Array.isArray(state.exchanges)) state.exchanges = [];
   if (!Array.isArray(state.echoes)) state.echoes = [];
   if (!Number.isFinite(Number(state.lastRoundAt))) state.lastRoundAt = 0;
   if (!Number.isFinite(Number(state.lastEchoAt))) state.lastEchoAt = 0;
+  state.version = 2;
 
-  /*
-   * PERFORMANCE v29:
-   * The previous helper filter/map-normalized up to 220 rumor objects every
-   * time recordSocialEvent() ran. Do the legacy repair once per persisted
-   * world schema instead.
-   */
-  if (Number(state.version || 0) < 3) {
-    state.rumors =
-      state.rumors
-        .filter(Boolean)
-        .map((rumor) => {
-          if (!rumor || typeof rumor !== "object") return rumor;
-
-          if (
-            !rumor.holders ||
-            typeof rumor.holders !== "object" ||
-            Array.isArray(rumor.holders)
-          ) {
-            rumor.holders = {};
-          }
-
-          if (!Array.isArray(rumor.subjectIds)) rumor.subjectIds = [];
-          if (!Array.isArray(rumor.tags)) rumor.tags = [];
-          if (!Array.isArray(rumor.communitiesReached)) rumor.communitiesReached = [];
-
-          if (!Number.isFinite(Number(rumor.spreadCount))) {
-            rumor.spreadCount =
-              Math.max(
-                0,
-                Object.keys(rumor.holders).length - 1
-              );
-          }
-
-          if (!Number.isFinite(Number(rumor.createdAt))) rumor.createdAt = now();
-          if (!Number.isFinite(Number(rumor.updatedAt))) rumor.updatedAt = rumor.createdAt;
-
-          return rumor;
-        });
-
-    state.version = 3;
-  }
-
+  state.rumors = state.rumors.filter(Boolean).map((rumor) => {
+    if (!rumor || typeof rumor !== "object") return rumor;
+    if (!rumor.holders || typeof rumor.holders !== "object" || Array.isArray(rumor.holders)) rumor.holders = {};
+    if (!Array.isArray(rumor.subjectIds)) rumor.subjectIds = [];
+    if (!Array.isArray(rumor.tags)) rumor.tags = [];
+    if (!Array.isArray(rumor.communitiesReached)) rumor.communitiesReached = [];
+    if (!Number.isFinite(Number(rumor.spreadCount))) rumor.spreadCount = Math.max(0, Object.keys(rumor.holders).length - 1);
+    if (!Number.isFinite(Number(rumor.createdAt))) rumor.createdAt = now();
+    if (!Number.isFinite(Number(rumor.updatedAt))) rumor.updatedAt = rumor.createdAt;
+    if (!Number.isFinite(Number(rumor.lastSpreadAt))) rumor.lastSpreadAt = 0;
+    if (!rumor.echoedBy || typeof rumor.echoedBy !== "object" || Array.isArray(rumor.echoedBy)) rumor.echoedBy = {};
+    if (!Number.isFinite(Number(rumor.publicEchoCount))) rumor.publicEchoCount = Object.keys(rumor.echoedBy).length;
+    if (!Number.isFinite(Number(rumor.lastEchoAt))) rumor.lastEchoAt = 0;
+    Object.keys(rumor.holders || {}).forEach((holderId) => {
+      const holder = rumor.holders[holderId] || {};
+      if (!holder.stance) holder.stance = "uncertain";
+      if (!holder.heardText) holder.heardText = rumor.text || "";
+      if (!Number.isFinite(Number(holder.shareCount))) holder.shareCount = 0;
+      if (!Number.isFinite(Number(holder.sourceTrust))) holder.sourceTrust = 0;
+      rumor.holders[holderId] = holder;
+    });
+    return rumor;
+  }).slice(-220);
+  state.exchanges = state.exchanges.filter(Boolean).slice(-500);
+  state.echoes = state.echoes.filter(Boolean).slice(-320);
   return state;
+}
+
+function socialPlayerId(w) {
+  return String(
+    (w && w.meId) ||
+    (w && w.owner && w.players && w.players[w.owner] ? w.owner : "") ||
+    Object.keys((w && w.players) || {})[0] ||
+    ""
+  );
+}
+
+function gossipCommunityToken(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9áéíóöőúüű -]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
 }
 
 function gossipCommunityKeys(c) {
@@ -44138,50 +41522,29 @@ function selectGossipStoryCandidate(w) {
     return null;
   }
 
-  /*
-   * PERFORMANCE v24:
-   * Array.sort used to call gossipEventBaseScore repeatedly for the same
-   * events (O(n log n) expensive scoring). Compute each score exactly once,
-   * preserve original order as the tie-breaker, then pass the same ordered
-   * event list to the candidate builder.
-   */
-  const rankedEligible = [];
-
-  (w.socialEvents || []).forEach(
-    (event, index) => {
-      if (
-        !gossipEventEligibleForMedia(
-          w,
-          event,
-          mode
-        )
-      ) {
-        return;
-      }
-
-      rankedEligible.push({
-        event,
-        index,
-        score:
-          gossipEventBaseScore(
+  const eligible =
+    (w.socialEvents || [])
+      .filter(
+        (event) =>
+          gossipEventEligibleForMedia(
             w,
             event,
             mode
-          ),
-      });
-    }
-  );
-
-  rankedEligible.sort(
-    (a, b) =>
-      b.score - a.score ||
-      a.index - b.index
-  );
-
-  const eligible =
-    rankedEligible.map(
-      (row) => row.event
-    );
+          )
+      )
+      .sort(
+        (a, b) =>
+          gossipEventBaseScore(
+            w,
+            b,
+            mode
+          ) -
+          gossipEventBaseScore(
+            w,
+            a,
+            mode
+          )
+      );
 
   const primary =
     eligible[0];
@@ -46813,21 +44176,23 @@ async function genPopupPrivateReply(
       targetId
     );
 
-  /* v32: same shallow overlay rule as normal DMs — no whole-world clone. */
-  const requestWorld={
-    ...w,
-    chats:{
-      ...(w.chats||{}),
-      [ck]:[
-        ...((w.chats&&w.chats[ck])||[]),
-        {
-          from:"me",
-          text:playerText,
-          ts:now(),
-        },
-      ],
+  const requestWorld=
+    JSON.parse(
+      JSON.stringify(w)
+    );
+
+  if(!requestWorld.chats){
+    requestWorld.chats={};
+  }
+
+  requestWorld.chats[ck]=[
+    ...(requestWorld.chats[ck]||[]),
+    {
+      from:"me",
+      text:playerText,
+      ts:now(),
     },
-  };
+  ];
 
   const history=
     (requestWorld.chats[ck]||[])
@@ -48993,31 +46358,10 @@ function refreshPostVirality(
     }
   }
 
-  /*
-   * PERFORMANCE v29:
-   * The old code recalculated the author's complete historical social stats
-   * after EVERY like/comment/repost because all of those refresh virality.
-   * That walks posts + comments + socialEvents repeatedly.
-   *
-   * Refresh the expensive derived profile only when the virality STATE changes
-   * or when the post actually crosses the viral threshold. Normal +1 likes
-   * update the visible post immediately without a full history scan.
-   */
-  const previousStatus =
-    String(previous.status || "normal");
-
-  if (
-    previousStatus !== status ||
-    (
-      score >= 60 &&
-      !wasViral
-    )
-  ) {
-    refreshSocialStatsFor(
-      w,
-      post.authorId
-    );
-  }
+  refreshSocialStatsFor(
+    w,
+    post.authorId
+  );
 
   return post.virality;
 }
@@ -49401,10 +46745,8 @@ function hasRecentSeverePublicCancel(w) {
 }
 
 function pickSocialWaveAction(w) {
-  /*
-   * v28: socialStats are maintained at migration/significant-event boundaries.
-   * Never do a full all-character history rebuild inside the  live planner.
-   */
+  refreshAllSocialStats(w);
+
   const candidates = [];
   const cancelThreshold = Math.max(14, 24 / LIVE_WORLD_CANCEL_SENSITIVITY);
   const gossipCancelThreshold = Math.max(9, 16 / LIVE_WORLD_CANCEL_SENSITIVITY);
@@ -50329,12 +47671,6 @@ function recordSocialEvent(
     return null;
   }
 
-  const socialPerfStart =
-    typeof performance !== "undefined" &&
-    typeof performance.now === "function"
-      ? performance.now()
-      : 0;
-
   ensureSocialSimulationState(w);
 
   const type =
@@ -50533,48 +47869,22 @@ function recordSocialEvent(
    * popularity/hype számításban, de nem fut végig fölöslegesen
    * az egész karaktergárdán.
    */
-  const targetOnlyStatTypes =
-    entry.type === "like" ||
-    entry.type === "comment" ||
-    entry.type === "reply" ||
-    entry.type === "repost";
-
   const touchedIds = [
-    ...(
-      targetOnlyStatTypes
-        ? []
-        : [entry.actorId]
-    ),
+    entry.actorId,
     ...(entry.targetIds || []),
   ]
     .filter(Boolean);
 
-  /*
-   * PERFORMANCE v28:
-   * A like/comment/reply/repost is a hot UI path. Recomputing the target's
-   * complete historical social profile inside that same click scans posts,
-   * comments and up to hundreds of social events. The visible interaction
-   * itself is already authoritative; derived socialStats may catch up on a
-   * later significant event / maintenance pass.
-   */
-  const lightweightEngagement =
-    entry.type === "like" ||
-    entry.type === "comment" ||
-    entry.type === "reply" ||
-    entry.type === "repost";
-
-  if (!lightweightEngagement) {
-    [
-      ...new Set(
-        touchedIds
-      ),
-    ].forEach((id) => {
-      refreshSocialStatsFor(
-        w,
-        id
-      );
-    });
-  }
+  [
+    ...new Set(
+      touchedIds
+    ),
+  ].forEach((id) => {
+    refreshSocialStatsFor(
+      w,
+      id
+    );
+  });
 
   /*
    * Későbbi rendszerek küldhetnek például:
@@ -50653,50 +47963,25 @@ function recordSocialEvent(
    */
   seedGossipPropagationFromEvent(w, entry);
 
-  /*
-   * PERFORMANCE v28:
-   * Trends are derived UI. A single like/comment does not need to rescan up to
-   * 600 social events before the click can finish. Significant public events
-   * still refresh trends immediately.
-   */
-  const trendSignificant =
-    [
-      "post",
-      "character-arrival",
-      "viral",
-      "gossip-story",
-      "rumor-evolution",
-      "cancel-wave",
-      "stan-wave",
-      "popup-public-action",
-      "roleplay-summary",
-      "roleplay-event",
-    ].includes(entry.type);
-
-  if (trendSignificant) {
-    refreshTrends(w);
-  }
+  refreshTrends(w);
 
   if (entry.meta && entry.meta.postId) {
     refreshPostReach(w, entry.meta.postId);
   }
 
   /*
-   * Do NOT build/sort the complete Whisper Wire candidate list on every
-   * social click. gossipAutoCandidate() and explicit popup gossip already call
-   * selectGossipStoryCandidate() exactly when a candidate is actually needed.
+   * Aktív pletykamédiánál frissítjük a következő
+   * valós alapú sztori-jelöltet.
+   * EZ MÉG NEM PUBLIKÁL POSZTOT.
    */
-
-  if (socialPerfStart) {
-    const socialPerfMs =
-      performance.now() -
-      socialPerfStart;
-
-    if (socialPerfMs >= 50) {
-      console.warn(
-        `[mv-perf] social event ${entry.type}: ${Math.round(socialPerfMs)}ms`
-      );
-    }
+  if (
+    w.gossipSettings &&
+    (
+      w.gossipSettings.mediaMode === "local" ||
+      w.gossipSettings.mediaMode === "global"
+    )
+  ) {
+    selectGossipStoryCandidate(w);
   }
 
   return entry;
@@ -51857,7 +49142,21 @@ function applySocialWave(
 }
 
 function lastAiFeedPostAt(w) {
-  return postActivityIndex(w).latestAiTs || 0;
+  return (w && Array.isArray(w.posts) ? w.posts : [])
+    .filter(
+      (p) =>
+        p &&
+        p.authorId &&
+        !isHuman(w, p.authorId)
+    )
+    .reduce(
+      (latest, p) =>
+        Math.max(
+          latest,
+          Number(p.ts) || 0
+        ),
+      0
+    );
 }
 
 function feedNeedsFreshPost(w) {
@@ -51975,7 +49274,7 @@ function canAiInitiateRoleplay(w) {
   const last = Math.max(simLast, historyLast);
   const rpPeak = Math.max(0.55, channelActivityPeak(w, "roleplay"));
   const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-  const target = Math.max(30 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   return !last || ts - last >= target;
 }
 
@@ -52516,9 +49815,9 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   const dmLast = Number(sim.lastAutonomousDmAt) || 0;
   const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
-  const dmTarget = Math.max(10 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
+  const dmTarget = Math.max(2.5 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const dmElapsed = dmLast ? ts - dmLast : Math.max(0, ts - laneStartedAt);
-  const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 5000;
+  const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 22 * 1000;
 
   if (permits("dm") && dmElapsed >= dmTarget && dmRetryReady) {
     const bot = pickInitiator(view);
@@ -52583,9 +49882,9 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
     const rpLast = Math.max(Number(sim.lastRoleplayInviteAt) || 0, rpHistoryLast);
     const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
     const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-    const rpTarget = Math.max(30 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+    const rpTarget = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
     const rpElapsed = rpLast ? ts - rpLast : Math.max(0, ts - laneStartedAt);
-    const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 10000;
+    const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 35 * 1000;
 
     if (rpElapsed >= rpTarget && rpRetryReady) {
       const initiator = pickRoleplayInitiator(view);
@@ -52637,7 +49936,7 @@ function autonomousDmOverdueByMs(w) {
   if (!w) return -Infinity;
   const dmPeak = Math.max(0.25, channelActivityPeak(w, "dm"));
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
-  const target = Math.max(10 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
+  const target = Math.max(2.5 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const last = Number(w.sim && w.sim.lastAutonomousDmAt) || 0;
   const startedAt = Number(w.sim && w.sim.liveWorldStartedAt) || now();
   const elapsed = last ? now() - last : Math.max(0, now() - startedAt);
@@ -52648,7 +49947,7 @@ function roleplayInviteOverdueByMs(w) {
   if (!w || !canAiInitiateRoleplay(w)) return -Infinity;
   const rpPeak = Math.max(0.25, channelActivityPeak(w, "roleplay"));
   const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-  const target = Math.max(30 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   const last = Math.max(
     Number(w.sim && w.sim.lastRoleplayInviteAt) || 0,
     lastAiInitiatedRoleplayAt(w)
@@ -53813,7 +51112,10 @@ async function runSimulationAction(view, update, action, addImage) {
     const out = await genWorldStep(view, false, hours);
     if (!out || !Array.isArray(out.posts)) return null;
 
-    /* PERFORMANCE: apply once. Full-world cloning here blocked the UI. */
+    const probe = JSON.parse(JSON.stringify(view));
+    const visible = applyWorldStep(probe, out);
+    if (!visible && !(Array.isArray(out.events) && out.events.length)) return null;
+
     update((n) => {
       applyWorldStep(n, out);
       advanceWorldClock(n, hours);
@@ -53913,7 +51215,11 @@ async function runSimulationAction(view, update, action, addImage) {
     }
     if (!out || !String(out.text || "").trim()) return null;
 
-    /* PERFORMANCE: publish once; the publisher has its own validity guards. */
+    const gossipProbe = JSON.parse(JSON.stringify(view));
+    const probeCandidate = forcedRoleplayGossipCandidate(gossipProbe, sceneId) || candidate;
+    const probePost = publishGossipMediaStory(gossipProbe, probeCandidate, out);
+    if (!probePost) return null;
+
     update((n) => {
       const liveCandidate = forcedRoleplayGossipCandidate(n, sceneId) || candidate;
       publishGossipMediaStory(n, liveCandidate, out);
@@ -54121,9 +51427,9 @@ async function runSimulationAction(view, update, action, addImage) {
 
   if (action.type === "gossip-spread") {
     const payload = action.payload || {};
-    let changed = false;
-    update((n) => { changed = Boolean(applyGossipPropagationRound(n, payload)); });
-    if (!changed) return null;
+    const probe = JSON.parse(JSON.stringify(view));
+    if (!applyGossipPropagationRound(probe, payload)) return null;
+    update((n) => { applyGossipPropagationRound(n, payload); });
     return "gossip-spread";
   }
 
@@ -54133,9 +51439,9 @@ async function runSimulationAction(view, update, action, addImage) {
     const rumor = state && state.rumors.find((r) => r && r.id === payload.rumorId);
     if (!rumor) return null;
     const out = await genGossipNetworkEcho(view, payload);
-    let changed = false;
-    update((n) => { changed = Boolean(applyGossipNetworkEcho(n, payload, out)); });
-    if (!changed) return null;
+    const probe = JSON.parse(JSON.stringify(view));
+    if (!applyGossipNetworkEcho(probe, payload, out)) return null;
+    update((n) => { applyGossipNetworkEcho(n, payload, out); });
     return "gossip-echo";
   }
 
@@ -54186,7 +51492,14 @@ async function runSimulationAction(view, update, action, addImage) {
         candidate
       );
 
-    /* PERFORMANCE: no validation clone. publishGossipMediaStory validates during commit. */
+    const gossipProbe = JSON.parse(JSON.stringify(view));
+    const probePost = publishGossipMediaStory(
+      gossipProbe,
+      candidate,
+      out
+    );
+    if (!probePost) return null;
+
     update((n) => {
       publishGossipMediaStory(
         n,
@@ -54225,9 +51538,10 @@ async function runSimulationAction(view, update, action, addImage) {
     const post = (view.posts || []).find((p) => p && p.id === postId);
     if (!post || !post.gossipStory || post.gossipStory.rumorEvolvedAt) return null;
     const out = await genRumorEvolution(view, post);
-    let changed = false;
-    update((n) => { changed = Boolean(publishRumorEvolution(n, post.id, out)); });
-    if (!changed) return null;
+    const rumorProbe = JSON.parse(JSON.stringify(view));
+    const probePost = publishRumorEvolution(rumorProbe, post.id, out);
+    if (!probePost) return null;
+    update((n) => { publishRumorEvolution(n, post.id, out); });
     return "rumor-evolution";
   }
 
@@ -54250,14 +51564,25 @@ async function runSimulationAction(view, update, action, addImage) {
        JSON, use a small canon-safe fallback rather than silently losing the turn. */
     if (!out || out.skip === true) out = fallbackPopupEventResponse(view, seed);
 
-    /* PERFORMANCE: addPopupEvent performs the authoritative guards during commit.
-       Do not JSON-clone the complete world just to validate a popup. */
-    let committed = false;
+    /* React state-updater is async, ezért előbb egy másolaton validáljuk. */
+    let probe = JSON.parse(JSON.stringify(view));
+    let probeEvent = addPopupEvent(probe, seed, out);
+    if (!probeEvent) {
+      out = fallbackPopupEventResponse(view, seed);
+      probe = JSON.parse(JSON.stringify(view));
+      probeEvent = out ? addPopupEvent(probe, seed, out) : null;
+    }
+    if (!probeEvent) return null;
+
+    /* We already re-checked the live Event lock immediately after generation.
+       Commit the validated popup deterministically now. If the player opens an
+       Event in the tiny interval after this check, currentPopupEvent() hides the
+       row until the Event is over instead of falsely marking a non-commit as a
+       successful popup. */
     update((n) => {
-      committed = Boolean(addPopupEvent(n, seed, out));
+      addPopupEvent(n, seed, out);
       ensureSimState(n).popupAttemptAt = now();
     });
-    if (!committed) return null;
     return "popup-event";
   }
 
@@ -54588,10 +51913,12 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : rawOut;
 
-    /* PERFORMANCE: commit once. The old full-world JSON clone froze the main thread. */
-    let replyCount = 0;
+    const replyProbe = JSON.parse(JSON.stringify(view));
+    const replyCount = applyReplies(replyProbe, post.id, comment.id, out);
+    if (!replyCount) return null;
+
     update((n) => {
-      replyCount = applyReplies(
+      applyReplies(
         n,
         post.id,
         /* mindig közvetlenül arra a kommentre válaszoljon, ami kiváltotta */
@@ -54600,7 +51927,7 @@ async function runSimulationAction(view, update, action, addImage) {
       );
     });
 
-    return replyCount ? "reply" : null;
+    return "reply";
   }
 
   if (action.type === "comments") {
@@ -54630,7 +51957,7 @@ async function runSimulationAction(view, update, action, addImage) {
       return null;
     }
 
-    const maxComments = Math.max(2, Math.min(8, Number(action.payload && action.payload.maxComments) || 6));
+    const maxComments = Math.max(2, Math.min(20, Number(action.payload && action.payload.maxComments) || 14));
     const minComments = Math.max(
       0,
       Math.min(maxComments, Number(action.payload && action.payload.minComments) || 0)
@@ -54643,14 +51970,6 @@ async function runSimulationAction(view, update, action, addImage) {
         {
           minComments: quotaEnforced ? minComments : 0,
           maxComments,
-          priority:
-            isGuaranteedCoverage
-              ? (
-                  post.authorId === view.meId
-                    ? 45
-                    : 28
-                )
-              : 12,
         }
       );
 
@@ -54666,138 +51985,60 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : quotaOut;
 
-    /*
-     * PERFORMANCE + CORRECTNESS v26:
-     * Apply comments, update coverage metadata and enqueue thread follow-up in
-     * ONE world mutation. The previous two-update version rerendered the whole
-     * app twice and computed `beforeIds` only AFTER comments already existed,
-     * so newCommentIds was always empty.
-     */
-    let visibleReactionCount = 0;
+    const commentsProbe = JSON.parse(JSON.stringify(view));
+    const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
+
+    if (!visibleReactionCount) {
+      if (isGuaranteedCoverage) {
+        update((n) => {
+          const failedPost = (n.posts || []).find((row) => row && row.id === post.id);
+          if (!failedPost) return;
+          failedPost.commentCoverageAttemptAt = now();
+          failedPost.commentCoverageAttempts =
+            Math.max(0, Math.round(Number(failedPost.commentCoverageAttempts) || 0)) + 1;
+        });
+      }
+      return null;
+    }
 
     update((n) => {
-      const livePost =
-        (n.posts || []).find(
-          (row) =>
-            row &&
-            row.id === post.id
-        );
+      const livePost = (n.posts || []).find((p) => p && p.id === post.id);
+      const beforeIds = new Set(safePostComments(livePost).map((c) => c.id));
+      const beforeTopLevelCount = livePost ? topLevelAiCommentCount(n, livePost) : 0;
 
-      if (!livePost) return;
+      applyComments(n, post.id, out, label);
 
-      const beforeIds =
-        new Set(
-          safePostComments(livePost)
-            .map(
-              (comment) =>
-                comment && comment.id
-            )
-            .filter(Boolean)
-        );
-
-      const beforeTopLevelCount =
-        topLevelAiCommentCount(
-          n,
-          livePost
-        );
-
-      visibleReactionCount =
-        applyComments(
-          n,
-          post.id,
-          out,
-          label
-        );
-
-      const refreshedPost =
-        (n.posts || []).find(
-          (row) =>
-            row &&
-            row.id === post.id
-        );
-
-      if (!refreshedPost) return;
-
-      if (isGuaranteedCoverage) {
+      const refreshedPost = (n.posts || []).find((p) => p && p.id === post.id);
+      if (refreshedPost && isGuaranteedCoverage) {
         refreshedPost.commentCoverageAttemptAt = now();
+        refreshedPost.commentCoverageLastSuccessAt = now();
         refreshedPost.commentCoverageAttempts =
-          Math.max(
-            0,
-            Math.round(
-              Number(
-                refreshedPost.commentCoverageAttempts
-              ) || 0
-            )
-          ) + 1;
-
-        if (visibleReactionCount) {
-          refreshedPost.commentCoverageLastSuccessAt = now();
-        }
+          Math.max(0, Math.round(Number(refreshedPost.commentCoverageAttempts) || 0)) + 1;
       }
 
       if (
+        refreshedPost &&
         action.payload &&
         action.payload.trigger === "fresh-post"
       ) {
-        const afterTopLevelCount =
-          topLevelAiCommentCount(
-            n,
-            refreshedPost
-          );
-
+        const afterTopLevelCount = topLevelAiCommentCount(n, refreshedPost);
         refreshedPost.autoCommentedAt = now();
-        refreshedPost.autoCommentAttempts =
-          Math.max(
+        refreshedPost.autoCommentAttempts = Math.max(
+          0,
+          Math.round(Number(refreshedPost.autoCommentAttempts) || 0)
+        ) + 1;
+        if (afterTopLevelCount > beforeTopLevelCount) {
+          refreshedPost.autoCommentRounds = Math.max(
             0,
-            Math.round(
-              Number(
-                refreshedPost.autoCommentAttempts
-              ) || 0
-            )
+            Math.round(Number(refreshedPost.autoCommentRounds) || 0)
           ) + 1;
-
-        if (
-          afterTopLevelCount >
-          beforeTopLevelCount
-        ) {
-          refreshedPost.autoCommentRounds =
-            Math.max(
-              0,
-              Math.round(
-                Number(
-                  refreshedPost.autoCommentRounds
-                ) || 0
-              )
-            ) + 1;
         }
       }
+      const newCommentIds = safePostComments(refreshedPost)
+        .filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId))
+        .map((c) => c.id);
 
-      const newCommentIds =
-        safePostComments(
-          refreshedPost
-        )
-          .filter(
-            (comment) =>
-              comment &&
-              comment.id &&
-              !beforeIds.has(comment.id) &&
-              !isHuman(
-                n,
-                comment.authorId
-              )
-          )
-          .map(
-            (comment) =>
-              comment.id
-          );
-
-      if (
-        isGuaranteedCoverage &&
-        postCommentCoverageState(
-          n,
-          refreshedPost
-        ).missing > 0
-      ) {
+      if (refreshedPost && isGuaranteedCoverage) {
         enqueueGuaranteedPostCommentCoverage(
           n,
           refreshedPost.id,
@@ -54807,47 +52048,21 @@ async function runSimulationAction(view, update, action, addImage) {
 
       if (
         newCommentIds.length &&
-        (
-          !action.payload ||
-          action.payload.allowThreadFollowup !== false
-        )
+        (!action.payload || action.payload.allowThreadFollowup !== false)
       ) {
-        const queuedVisualFriction =
-          enqueueVisualCrushThreadFriction(
-            n,
-            post.id,
-            newCommentIds
-          );
+        const queuedVisualFriction = enqueueVisualCrushThreadFriction(
+          n,
+          post.id,
+          newCommentIds
+        );
 
         if (!queuedVisualFriction) {
-          enqueueNaturalThreadReply(
-            n,
-            post.id,
-            newCommentIds
-          );
+          enqueueNaturalThreadReply(n, post.id, newCommentIds);
         }
       }
     });
 
-    if (!visibleReactionCount) {
-      console.warn(
-        "[comments] AI wave produced no visible comments",
-        {
-          postId: post.id,
-          trigger: commentTrigger,
-          rawComments:
-            safeAiComments(out).length,
-          requestedMin:
-            minComments,
-          requestedMax:
-            maxComments,
-        }
-      );
-    }
-
-    return visibleReactionCount
-      ? "comments"
-      : null;
+    return "comments";
   }
 
   if (action.type === "note-react") {
@@ -54886,24 +52101,8 @@ async function runSimulationAction(view, update, action, addImage) {
     return null;
   }
 
-  /*
-   * A manual Request Reactions click must paint its loading state before any
-   * prompt construction starts, and it must jump ahead of background AI work.
-   */
-  if (action.source === "manual") {
-    await wait(0);
-  }
-
   const out =
-    await genNoteReact(
-      view,
-      note,
-      {
-        interactive:
-          action.source === "manual",
-        castLimit: 6,
-      }
-    );
+    await genNoteReact(view, note);
 
   update((n) => {
     
@@ -56036,8 +53235,16 @@ if (targetNote) {
     return null;
   }
 
-  /* PERFORMANCE: commit the world step once. A full-world JSON clone here was
-   * one of the largest synchronous stalls in large worlds. */
+  const worldProbe = JSON.parse(JSON.stringify(view));
+  const visiblePostsCreated = applyWorldStep(
+    worldProbe,
+    out
+  );
+
+  if (!visiblePostsCreated) {
+    return null;
+  }
+
   update((n) => {
     const beforePostIds = new Set((n.posts || []).map((p) => p && p.id).filter(Boolean));
     applyWorldStep(n, out);
@@ -56062,82 +53269,27 @@ if (targetNote) {
 /* ============================================================
    Váz
    ============================================================ */
-/*
- * PERFORMANCE v12 — large tabs should not re-render merely because the header
- * save label / spinner / flash state changed. Their `w` prop is stabilized in
- * App below, so React.memo can cheaply skip those parent-only renders.
- */
-const MemoFeed = React.memo(
-  Feed,
-  (prev, next) =>
-    prev.renderKey === next.renderKey &&
-    prev.autoOn === next.autoOn &&
-    prev.jump === next.jump
-);
-
-const MemoCast = React.memo(
-  Cast,
-  (prev, next) =>
-    prev.renderKey === next.renderKey &&
-    prev.jump === next.jump
-);
-
-const MemoBonds = React.memo(
-  Bonds,
-  (prev, next) =>
-    prev.renderKey === next.renderKey
-);
-
-const MemoScenes = React.memo(
-  Scenes,
-  (prev, next) =>
-    prev.renderKey === next.renderKey &&
-    prev.jump === next.jump &&
-    prev.openId === next.openId
-);
-
-const MemoChat = React.memo(
-  Chat,
-  (prev, next) =>
-    prev.renderKey === next.renderKey &&
-    prev.openId === next.openId &&
-    prev.jump === next.jump
-);
-
-const MemoWorld = React.memo(
-  World,
-  (prev, next) =>
-    prev.renderKey === next.renderKey &&
-    prev.auto === next.auto &&
-    prev.detail === next.detail
-);
-
 export default function App() {
   const [world, setWorld] = useState(null);
   const [meId, setMeId] = useState(null);
   const [tab, setTab] = useState("feed");
-  const [bootReady, setBootReady] = useState(true);
+  const [bootReady, setBootReady] = useState(false);
   const [chatId, setChatId] = useState(null);
   const [sceneId, setSceneId] = useState(null);
   const [err, setErr] = useState("");
   const [media, setMedia] = useState({});
-  const [mediaLoadEpoch, setMediaLoadEpoch] = useState(0);
   const wRef = useRef(null);
   const timer = useRef(null);
   const mediaRef = useRef({});
   const mediaTimer = useRef(null);
   const mediaReady = useRef(false);
   const lastSavedContent = useRef("");
-  /* PERFORMANCE v16: cheap dirty gate. Avoid serializing a multi-MB world
-     merely to discover that nothing changed since load/save. */
-  const lastSavedRev = useRef(-1);
   const [showRooms, setShowRooms] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [auto, setAutoCfg] = useState(AUTO_DEFAULT);
   const [autoBusy, setAutoBusy] = useState(false);
   const autoRunning = useRef(false);
   const autoRunningSince = useRef(0);
-  const simulationWakeRef = useRef(null);
   const viewRef = useRef(null);
   const [flash, setFlash] = useState(null);
   const [jump, setJump] = useState(null);
@@ -56149,16 +53301,6 @@ export default function App() {
   const [langReady, setLangReady] = useState(false);
   const [saveState, setSaveState] = useState("saved");
   const [saveAt, setSaveAt] = useState(0);
-
-  /*
-   * v27 — MANUAL SAVE ONLY
-   * World/media persistence starts only when the player explicitly presses
-   * the Save button. Runtime mutations remain in memory until then.
-   */
-  const [manualSaveRequest, setManualSaveRequest] = useState(0);
-  const manualWorldSaveHandled = useRef(0);
-  const manualMediaSaveHandled = useRef(0);
-
   const lastSavedMedia = useRef("");
   /* Reactive mirror of the global editor lock so an already-visible popup is
      removed immediately when CharForm opens, not only on the next world tick. */
@@ -56167,25 +53309,6 @@ export default function App() {
   /* Authoritative multi-device sync state. */
   const mediaSyncRev = useRef(0);
   const worldSaveBusy = useRef(false);
-
-  /* PERFORMANCE v14: one full-world autosave pipeline at a time.
-     A large world can take long enough to serialize/write that a second
-     React update arrives before the first save finishes. Those saves are
-     coalesced instead of cloning the same multi-MB world concurrently. */
-  const autosavePipelineBusy = useRef(false);
-  const autosavePending = useRef(false);
-  const lastEmergencyBackupAt = useRef(0);
-
-  /*
-   * PERFORMANCE v24:
-   * postMessage({ world }) must structured-clone the whole JSON-compatible
-   * world before the Worker can stringify it. That clone happens on the main
-   * browser thread. Never begin it while the user is actively clicking,
-   * typing or scrolling.
-   */
-  const lastUiInteractionAt = useRef(now());
-
-  const idleSaveHandle = useRef(null);
   const mediaSaveBusy = useRef(false);
   const syncRefreshBusy = useRef(false);
   const lastServerCheckAt = useRef(0);
@@ -56197,62 +53320,6 @@ export default function App() {
 
   wRef.current = world;
   mediaRef.current = media;
-
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-
-    const warnUnsavedBeforeLeave = (event) => {
-      const current = wRef.current;
-
-      if (
-        !current ||
-        Number(current.rev || 0) ===
-          Number(lastSavedRev.current)
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      event.returnValue = "";
-    };
-
-    window.addEventListener(
-      "beforeunload",
-      warnUnsavedBeforeLeave
-    );
-
-    return () => {
-      window.removeEventListener(
-        "beforeunload",
-        warnUnsavedBeforeLeave
-      );
-    };
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-
-    const markUiActivity = () => {
-      lastUiInteractionAt.current = now();
-    };
-
-    const passiveCapture = {
-      passive: true,
-      capture: true,
-    };
-
-    window.addEventListener("pointerdown", markUiActivity, passiveCapture);
-    window.addEventListener("touchstart", markUiActivity, passiveCapture);
-    window.addEventListener("wheel", markUiActivity, passiveCapture);
-    window.addEventListener("keydown", markUiActivity, true);
-
-    return () => {
-      window.removeEventListener("pointerdown", markUiActivity, true);
-      window.removeEventListener("touchstart", markUiActivity, true);
-      window.removeEventListener("wheel", markUiActivity, true);
-      window.removeEventListener("keydown", markUiActivity, true);
-    };
-  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -56278,36 +53345,6 @@ export default function App() {
     });
   }, [meId]);
   const tt = useCallback((hu, en) => (lang === "en" ? en : hu), [lang]);
-
-  const requestManualSave = useCallback(() => {
-    const currentWorld = wRef.current;
-
-    if (!currentWorld || !currentWorld.code) {
-      return;
-    }
-
-    /*
-     * The expensive media fingerprint is evaluated ONLY on an explicit Save
-     * click, never during normal play/render.
-     */
-    const worldDirty =
-      Number(currentWorld.rev || 0) !==
-      Number(lastSavedRev.current);
-
-    const mediaDirty =
-      mediaFingerprint(mediaRef.current || {}) !==
-      String(lastSavedMedia.current || "");
-
-    if (!worldDirty && !mediaDirty) {
-      setSaveState("saved");
-      setSaveAt(now());
-      return;
-    }
-
-    setSaveState("saving");
-    setErr("");
-    setManualSaveRequest((n) => n + 1);
-  }, []);
 
   const installAuthoritativeWorld = useCallback((serverWorld, serverMeId, reason = "sync") => {
     if (!serverWorld) return false;
@@ -56351,52 +53388,92 @@ export default function App() {
     const current =
       wRef.current;
 
-    /*
-     * v27 MANUAL-SAVE MULTI-DEVICE RULE
-     *
-     * Never JSON.stringify/compare/merge a multi-MB local world in the
-     * background. `rev` is already a cheap dirty marker.
-     *
-     * If this device has unsaved work and another device saved a newer server
-     * revision, preserve the local state exactly as-is. The next explicit Save
-     * will receive the normal 409 conflict path and can reconcile safely.
-     */
+    let nextWorld =
+      authoritative;
+
     if (
       current &&
       current.code === authoritative.code
     ) {
+      const currentContent =
+        contentOf(current);
+
+      const serverContent =
+        contentOf(authoritative);
+
       const localDirty =
-        Number(current.rev || 0) !==
-        Number(lastSavedRev.current);
-
-      if (localDirty) {
-        pendingServerWorld.current = null;
-
-        setSaveState("conflict");
-        setErr(
-          tt(
-            "A másik eszköz közben mentette a világot. A te mentetlen változtatásaid megmaradtak. Nyomj Mentés-t, amikor össze szeretnéd egyeztetni őket.",
-            "Another device saved this world. Your unsaved local changes are preserved. Press Save when you want to reconcile them."
-          )
+        Boolean(
+          lastSavedContent.current &&
+          currentContent !==
+            lastSavedContent.current
         );
 
-        return false;
+      if (localDirty) {
+        /*
+         * FONTOS: a szerver-poll nem törölhet ki egy még el nem mentett
+         * helyi karaktert. Ez korábban úgy tudott kinézni, mintha 8 AI
+         * karakter után hard limit lenne: a 9. létrejött, majd egy régebbi
+         * szerver snapshot rögtön visszaírta a világot.
+         *
+         * Dirty lokális state esetén ID alapján összeolvasztjuk a kettőt.
+         * A szerver syncRev-je marad az authoritative konkurencia-verzió,
+         * de a helyi új karakterek / friss módosítások nem vesznek el.
+         */
+        nextWorld =
+          mergeWorlds(
+            authoritative,
+            current
+          );
+
+        nextWorld.syncRev =
+          worldSyncRev(
+            authoritative
+          );
+
+        void saveWorldMerged(
+          nextWorld
+        ).catch(() => {});
+
+        setSaveState("retry");
+      } else if (
+        currentContent !==
+        serverContent
+      ) {
+        /*
+         * Nincs lokális dirty módosítás: a szerver az igazság forrása,
+         * de az előző helyi verzió emergency backupként megmaradhat.
+         */
+        void saveWorldMerged(
+          current
+        ).catch(() => {});
       }
     }
 
     pendingServerWorld.current = null;
 
-    lastSavedContent.current = "";
-    lastSavedRev.current =
-      Number(authoritative.rev || 0);
+    /*
+     * Ha dirty lokális state-et olvasztottunk össze, NEM jelöljük azonnal
+     * elmentettnek az összevont világot. Így az autosave visszaküldi a
+     * szervernek, és a 9., 10., 20. stb. karakter is tartósan megmarad.
+     */
+    const mergedDirty =
+      nextWorld !== authoritative;
 
-    setWorld(authoritative);
+    if (!mergedDirty) {
+      lastSavedContent.current =
+        contentOf(authoritative);
+    }
+
+    setWorld(nextWorld);
     setMeId(id);
-    setSaveState("saved");
-    setSaveAt(now());
+
+    if (!mergedDirty) {
+      setSaveState("saved");
+      setSaveAt(now());
+    }
 
     return true;
-  }, [meId, tt]);
+  }, [meId]);
 
   /*
    * A relation/zodiac/bond helper-ek egy része globális CURRENT_LANG-et
@@ -56422,35 +53499,26 @@ export default function App() {
 
   useEffect(() => { loadAuto().then(setAutoCfg); }, []);
 
+  useEffect(() => {
+    const t = setTimeout(() => setBootReady(true), 120);
+    return () => clearTimeout(t);
+  }, []);
+
   const [detail, setDetailState] = useState(DETAIL);
   useEffect(() => { loadDetail().then((v) => { DETAIL = v; setDetailState(v); }); }, []);
   const changeDetail = useCallback((v) => { saveDetail(v); setDetailState(v); }, []);
-  const changeAuto = useCallback((patch = {}) => {
-    setAutoCfg((prev) => {
-      const next = {
-        ...AUTO_DEFAULT,
-        ...(prev || {}),
-        ...(patch &&
-        typeof patch === "object"
-          ? patch
-          : {}),
-      };
+  const changeAuto = useCallback(() => {
+    const fixed = {
+      ...AUTO_DEFAULT,
+    };
 
-      next.on =
-        next.on === true;
+    setAutoCfg(
+      fixed
+    );
 
-      next.every =
-        Number.isFinite(Number(next.every))
-          ? Math.max(
-              0.25,
-              Number(next.every)
-            )
-          : AUTO_DEFAULT.every;
-
-      void saveAuto(next);
-
-      return next;
-    });
+    saveAuto(
+      fixed
+    );
   }, []);
 
   const SESSION = "masvilag:session";
@@ -56473,13 +53541,10 @@ useEffect(() => {
         alive &&
         session &&
         session.authenticated &&
+        session.world &&
         session.meId
       ) {
-        /* Let the Boot UI paint, then fetch the large world exactly once. */
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        const loadedWorld = await serverLoadWorld();
-        if (!alive || !loadedWorld) return;
-        const wld = prepareWorldForBoot(loadedWorld);
+        const wld = migrate(session.world);
         const id = session.meId;
 
         if (
@@ -56508,10 +53573,7 @@ useEffect(() => {
           setWorld(wld);
           setMeId(id);
 
-          /* The just-loaded server revision is already saved. Do not perform
-             a full JSON.stringify on the main thread merely to seed dirty state. */
-          lastSavedContent.current = "";
-          lastSavedRev.current = Number(wld.rev || 0);
+          lastSavedContent.current = contentOf(wld);
           setSaveState("saved");
           setSaveAt(now());
 
@@ -56556,7 +53618,6 @@ useEffect(() => {
       ) return;
 
       const wld = await loadWorld(sess.code);
-      await new Promise((resolve) => setTimeout(resolve, 0));
 
       if (
         !alive ||
@@ -56584,8 +53645,8 @@ useEffect(() => {
 
       setWorld(wld);
       setMeId(sess.meId);
-      lastSavedContent.current = "";
-      lastSavedRev.current = Number(wld.rev || 0);
+      lastSavedContent.current =
+        contentOf(wld);
       setSaveState("local");
     } catch (e) {
       /* nincs helyi munkamenet sem */
@@ -56610,8 +53671,7 @@ useEffect(() => {
     setShowRooms(false); setMakeWorld(false); setShowNotes(false); setJump(null);
     const mine0 = (wld.notify && wld.notify[id]) || [];
     seenNote.current = mine0.length ? mine0[0].id : "";
-    lastSavedContent.current = "";
-    lastSavedRev.current = Number(wld.rev || 0);
+    lastSavedContent.current = contentOf(wld);
     lastSavedMedia.current = "";
     mediaSyncRev.current = 0;
     pendingServerWorld.current = null;
@@ -56842,10 +53902,16 @@ const signOut = useCallback(async () => {
     mediaRef.current = nextMedia;
 
     /*
-     * v32 MANUAL SAVE:
-     * Do not serialize the full media map on every image selection. Fresh
-     * uploads remain in mediaRef/state until the explicit Save button is used.
+     * A friss feltöltést AZONNAL tegyük helyi emergency cache-be.
+     * Így még egy közben érkező focus/poll/cloud refresh sem tudja
+     * eltüntetni a játékos frissen posztolt képét.
      */
+    if (code) {
+      void cacheMediaLocally(
+        code,
+        nextMedia
+      );
+    }
 
     setWorld((prev) => {
       if (!prev) return prev;
@@ -56868,84 +53934,80 @@ const signOut = useCallback(async () => {
     let alive = true;
     mediaReady.current = false;
 
-    const offline =
-      typeof navigator !== "undefined" &&
-      navigator.onLine === false;
-
     /*
-     * PERFORMANCE v17 — LAZY CLOUD MEDIA BOOT
-     *
-     * ONLINE:
-     * Do NOT read/parse the old local full-media cache and do NOT download the
-     * complete PostgreSQL media JSON. Only fetch its tiny revision number.
-     * Persisted images are served individually by /media/file/:id through
-     * resolveImg(). This removes the multi-copy base64 memory spike that could
-     * freeze the browser before DevTools could even open.
-     *
-     * OFFLINE:
-     * Keep the existing full local emergency-media behavior unchanged.
+     * FONTOS: a cloud media betöltése közben a játékos már tölthet fel képet.
+     * Megjegyezzük, milyen media-state-ről indult a load, hogy a közben
+     * létrejött friss lokális image ID-kat a később beérkező régebbi
+     * szerverválasz ne tudja eltüntetni.
      */
-    const bootMedia = async () => {
-      if (!offline) {
-        try {
-          const version = await serverMediaVersion();
-          if (!alive) return;
+    const mediaAtLoadStart =
+      mediaFingerprint(
+        mediaRef.current || {}
+      );
 
-          mediaSyncRev.current = Math.max(
-            0,
-            Math.floor(Number(version && version.syncRev) || 0)
-          );
+    loadMedia(
+      code,
+      wRef.current
+    ).then((result) => {
+      if (!alive) return;
 
-          /* Keep only transient local uploads in RAM. On a normal online boot
-             there are none; persisted images stream lazily from the backend. */
-          const transient = mediaRef.current || {};
-          mediaRef.current = transient;
-          setMedia(transient);
-          lastSavedMedia.current = mediaFingerprint(transient);
+      const loaded =
+        result &&
+        result.media
+          ? result.media
+          : {};
 
-          mediaReady.current = true;
-          setMediaLoadEpoch((n) => n + 1);
-          return;
-        } catch (e) {
-          console.warn("Lightweight media initialization failed:", e);
-          /* Do not fall back to a giant cloud media download online. Images can
-             still request /media/file/:id independently once connectivity
-             recovers. */
-          if (!alive) return;
-          mediaReady.current = true;
-          setMediaLoadEpoch((n) => n + 1);
-          return;
-        }
-      }
+      const localNow =
+        mediaRef.current || {};
 
-      try {
-        const result = await loadMedia(code, wRef.current);
-        if (!alive) return;
+      const localChangedDuringLoad =
+        mediaFingerprint(
+          localNow
+        ) !== mediaAtLoadStart;
 
-        const loaded =
-          result && result.media
-            ? result.media
-            : {};
+      const installedMedia =
+        localChangedDuringLoad
+          ? mergeIncomingMediaPreservingUnsavedLocal(
+              loaded,
+              localNow,
+              mediaAtLoadStart
+            )
+          : loaded;
 
-        mediaSyncRev.current = Math.max(
+      mediaSyncRev.current =
+        Math.max(
           0,
-          Math.floor(Number(result && result.syncRev) || 0)
+          Math.floor(
+            Number(
+              result &&
+              result.syncRev
+            ) || 0
+          )
         );
 
-        mediaRef.current = loaded;
-        setMedia(loaded);
-        lastSavedMedia.current = mediaFingerprint(loaded);
-        mediaReady.current = true;
-        setMediaLoadEpoch((n) => n + 1);
-      } catch (e) {
-        if (!alive) return;
-        console.warn("Offline media initialization failed:", e);
-        mediaReady.current = true;
-        setMediaLoadEpoch((n) => n + 1);
-      }
-    };
+      setMedia(installedMedia);
+      mediaRef.current = installedMedia;
 
-    void bootMedia();
+      /*
+       * A lastSaved fingerprint továbbra is a valóban cloudból érkezett
+       * állapot legyen. Ha közben új lokális kép született, így az autosave
+       * dirtynek látja és fel is tölti a szerverre.
+       */
+      lastSavedMedia.current =
+        mediaFingerprint(
+          loaded
+        );
+      mediaReady.current = true;
+    }).catch((e) => {
+      if (!alive) return;
+
+      console.warn(
+        "Media initialization failed:",
+        e
+      );
+
+      mediaReady.current = true;
+    });
 
     return () => {
       alive = false;
@@ -56954,20 +54016,6 @@ const signOut = useCallback(async () => {
 
   useEffect(() => {
     if (!world || !code || !mediaReady.current) return;
-
-    /*
-     * PERFORMANCE v17:
-     * Current worlds were already image-normalized by the one-time migration.
-     * normalizeWorldImages() starts with JSON.stringify/JSON.parse of the
-     * ENTIRE world, so running it again after every boot defeats lazy media.
-     */
-    if (
-      Number(world.clientDataRepairVersion || 0) >=
-      CLIENT_DATA_REPAIR_VERSION
-    ) {
-      return;
-    }
-
     const normalized = normalizeWorldImages(world, mediaRef.current || {});
     if (!normalized.changed) return;
     mediaRef.current = normalized.media;
@@ -56977,7 +54025,7 @@ const signOut = useCallback(async () => {
         normalized.media
       );
     setWorld(normalized.world);
-  }, [code, mediaLoadEpoch]);
+  }, [world ? world.code : null, world ? world.rev : 0, code, media]);
 
 
   /*
@@ -56995,10 +54043,8 @@ const signOut = useCallback(async () => {
     if (
       !world ||
       !code ||
-      !auto.on ||
       !mediaReady.current ||
-      albumVisionBusy.current ||
-      visionCircuitOpen()
+      albumVisionBusy.current
     ) {
       return;
     }
@@ -57113,28 +54159,18 @@ const signOut = useCallback(async () => {
       });
   }, [
     world ? world.code : null,
+    world ? world.rev : 0,
     code,
-    mediaLoadEpoch,
-    auto.on,
+    media,
   ]);
 
   useEffect(() => {
     let alive = true;
 
-    /*
-     * PERFORMANCE v15 — LIGHTWEIGHT MULTI-DEVICE SYNC
-     *
-     * Old behavior downloaded + migrated + JSON.stringify-compared the entire
-     * world on every poll/focus/visibility check, and also reloaded the full
-     * media library. For a multi-MB save this can freeze the browser main
-     * thread even when nothing changed.
-     *
-     * New behavior asks PostgreSQL for tiny syncRev scalars first. Full world
-     * or media data is fetched only when that particular revision changed.
-     */
     const refreshFromServer =
       async (reason = "focus") => {
-        const current = wRef.current;
+        const current =
+          wRef.current;
 
         if (
           !alive ||
@@ -57163,23 +54199,7 @@ const signOut = useCallback(async () => {
 
         if (
           syncRefreshBusy.current ||
-          worldSaveBusy.current ||
-          autosavePipelineBusy.current
-        ) {
-          return;
-        }
-
-        /*
-         * v30: background sync must never start while the player is actively
-         * using the UI. Focus/visibility/poll can wait until a quiet window.
-         */
-        if (
-          reason !== "online" &&
-          ts -
-            Number(
-              lastUiInteractionAt.current || 0
-            ) <
-            6000
+          worldSaveBusy.current
         ) {
           return;
         }
@@ -57188,74 +54208,411 @@ const signOut = useCallback(async () => {
         lastServerCheckAt.current = ts;
 
         try {
-          const version = await serverWorldVersion();
+          const session =
+            await serverSession();
 
           if (
             !alive ||
-            !version ||
-            !version.authenticated ||
-            version.meId !== meId ||
-            String(version.code || "") !== String(current.code || "")
+            !session ||
+            !session.authenticated ||
+            !session.world ||
+            !session.meId
           ) {
             return;
           }
 
-          const localRev = worldSyncRev(wRef.current);
-          const serverRev = Math.max(
-            0,
-            Math.floor(Number(version.syncRev) || 0)
-          );
+          const serverWorld =
+            migrate(
+              session.world
+            );
 
-          /* Only a genuine server revision change justifies downloading the
-             complete world and running the expensive reconciliation path. */
-          if (serverRev !== localRev) {
-            const session = await serverSession();
+          const latestLocal =
+            wRef.current;
+
+          if (
+            !latestLocal ||
+            latestLocal.code !==
+              serverWorld.code ||
+            session.meId !== meId
+          ) {
+            return;
+          }
+
+          const serverRev =
+            worldSyncRev(
+              serverWorld
+            );
+
+          const localRev =
+            worldSyncRev(
+              latestLocal
+            );
+
+          const sameContent =
+            contentOf(
+              latestLocal
+            ) ===
+            contentOf(
+              serverWorld
+            );
+
+          if (
+            serverRev === localRev &&
+            !sameContent
+          ) {
+            /*
+             * Tipikus offline-edit eset:
+             * a szerver azóta nem változott, ezért a lokális
+             * változás biztonságosan felküldhető ugyanarról syncRev-ről.
+             */
+            if (!worldSaveBusy.current) {
+              worldSaveBusy.current = true;
+
+              try {
+                const saved =
+                  await serverSaveWorld(
+                    latestLocal
+                  );
+
+                if (
+                  saved &&
+                  saved.world
+                ) {
+                  const accepted =
+                    migrate(
+                      saved.world
+                    );
+
+                  const acceptedRev =
+                    worldSyncRev(
+                      accepted
+                    );
+
+                  lastSavedContent.current =
+                    contentOf(
+                      accepted
+                    );
+
+                  setWorld((cur) => {
+                    if (!cur) return cur;
+
+                    if (
+                      contentOf(cur) ===
+                      contentOf(latestLocal)
+                    ) {
+                      return accepted;
+                    }
+
+                    if (
+                      worldSyncRev(cur) ===
+                      localRev
+                    ) {
+                      const next =
+                        JSON.parse(
+                          JSON.stringify(
+                            cur
+                          )
+                        );
+
+                      next.syncRev =
+                        acceptedRev;
+
+                      return next;
+                    }
+
+                    return cur;
+                  });
+
+                  setSaveState("saved");
+                  setSaveAt(now());
+                }
+              } catch (e) {
+                if (
+                  e &&
+                  e.status === 409 &&
+                  e.data &&
+                  e.data.world
+                ) {
+                  const conflictWorld =
+                    migrate(
+                      e.data.world
+                    );
+
+                  const conflictContent =
+                    contentOf(
+                      conflictWorld
+                    );
+
+                  const localContent =
+                    contentOf(
+                      latestLocal
+                    );
+
+                  /*
+                   * SAME-CLIENT DUPLICATE SAVE:
+                   * ha a szerver pontosan ugyanazt a snapshotot tartalmazza,
+                   * akkor nem "másik eszköz" frissített. Egy párhuzamos saját
+                   * autosave ért célba előbb. Csendben elfogadjuk.
+                   */
+                  if (
+                    conflictContent ===
+                    localContent
+                  ) {
+                    lastSavedContent.current =
+                      conflictContent;
+
+                    setWorld((cur) => {
+                      if (!cur) return cur;
+
+                      if (
+                        contentOf(cur) ===
+                        localContent
+                      ) {
+                        return conflictWorld;
+                      }
+
+                      if (
+                        worldSyncRev(cur) ===
+                        localRev
+                      ) {
+                        const next =
+                          JSON.parse(
+                            JSON.stringify(
+                              cur
+                            )
+                          );
+
+                        next.syncRev =
+                          worldSyncRev(
+                            conflictWorld
+                          );
+
+                        return next;
+                      }
+
+                      return cur;
+                    });
+
+                    setSaveState("saved");
+                    setSaveAt(now());
+                  } else if (
+                    conflictContent ===
+                    lastSavedContent.current &&
+                    worldSyncRev(conflictWorld) ===
+                      localRev + 1
+                  ) {
+                    /*
+                     * A saját előző mentésünk ért célba, miközben már van
+                     * újabb lokális tartalom. Csak átvezetjük az új syncRev-et,
+                     * és a következő autosave felküldi a frissebb lokális állapotot.
+                     */
+                    setWorld((cur) => {
+                      if (!cur) return cur;
+
+                      const next =
+                        JSON.parse(
+                          JSON.stringify(
+                            cur
+                          )
+                        );
+
+                      next.syncRev =
+                        worldSyncRev(
+                          conflictWorld
+                        );
+
+                      return next;
+                    });
+
+                    setSaveState("retry");
+                  } else {
+                    /*
+                     * v40: eltérő reconnect snapshotnál se dobjuk el egyik
+                     * oldalt sem. Összeolvasztjuk, átvesszük a szerver revjét,
+                     * majd az autosave visszaküldi az egységes állapotot.
+                     */
+                    const reconciled = migrate(
+                      mergeWorlds(
+                        conflictWorld,
+                        wRef.current || latestLocal
+                      )
+                    );
+                    reconciled.syncRev =
+                      worldSyncRev(conflictWorld);
+                    setWorld(reconciled);
+                    setSaveState("retry");
+                  }
+                }
+              } finally {
+                worldSaveBusy.current = false;
+              }
+            }
+          } else if (
+            serverRev !== localRev
+          ) {
+            const serverContent =
+              contentOf(
+                serverWorld
+              );
+
+            const localContent =
+              contentOf(
+                latestLocal
+              );
+
+            /*
+             * Ha a tartalom azonos, csak a szerver syncRev-je
+             * van előrébb (tipikusan saját mentés ért célba).
+             */
+            if (
+              serverContent ===
+              localContent
+            ) {
+              lastSavedContent.current =
+                serverContent;
+
+              setWorld((cur) => {
+                if (!cur) return cur;
+
+                if (
+                  contentOf(cur) ===
+                  serverContent
+                ) {
+                  return serverWorld;
+                }
+
+                return cur;
+              });
+
+              setSaveState("saved");
+            } else if (
+              serverContent ===
+              lastSavedContent.current &&
+              serverRev ===
+                localRev + 1
+            ) {
+              /*
+               * A szerver a saját előző elfogadott állapotunk,
+               * a lokális world viszont már frissebb.
+               * Ne dobjuk el a lokális változást; csak vigyük át
+               * rá az új syncRev-et, aztán autosave újrapróbálja.
+               */
+              setWorld((cur) => {
+                if (!cur) return cur;
+
+                const next =
+                  JSON.parse(
+                    JSON.stringify(
+                      cur
+                    )
+                  );
+
+                next.syncRev =
+                  serverRev;
+
+                return next;
+              });
+
+              setSaveState("retry");
+            } else {
+              /*
+               * v40 multi-device reconciliation: a szerver revje marad az
+               * authority, de az eltérő lokális és szerver tartalom ID-alapon
+               * összeolvad ahelyett, hogy az egyik teljes snapshot törölné a
+               * másikat. A következő autosave az egyesített state-et küldi fel.
+               */
+              const reconciled = migrate(
+                mergeWorlds(
+                  serverWorld,
+                  latestLocal
+                )
+              );
+              reconciled.syncRev =
+                serverRev;
+              setWorld(reconciled);
+              setSaveState("retry");
+            }
+          } else if (
+            sameContent
+          ) {
+            lastSavedContent.current =
+              contentOf(
+                serverWorld
+              );
+          }
+
+          /*
+           * Média külön revisionnel szinkronizálódik.
+           * A cloud az authority, hiányzó új lokális image ID
+           * konfliktus esetén append-only módon visszakerülhet.
+           */
+          try {
+            if (mediaSaveBusy.current) {
+              return;
+            }
+
+            const mediaResult =
+              await loadMedia(
+                current.code,
+                serverRev !== localRev
+                  ? serverWorld
+                  : wRef.current
+              );
 
             if (
               alive &&
-              session &&
-              session.authenticated &&
-              session.world &&
-              session.meId === meId
+              mediaResult &&
+              mediaResult.mode === "cloud"
             ) {
-              installAuthoritativeWorld(
-                session.world,
-                session.meId,
-                reason || "revision-change"
-              );
-            }
-          }
+              const incomingMedia =
+                mergeIncomingMediaPreservingUnsavedLocal(
+                  mediaResult.media || {},
+                  mediaRef.current || {},
+                  lastSavedMedia.current
+                );
 
-          /* Media has its own revision. The full image map is fetched only
-             when that revision changed; ordinary world polls stay tiny. */
-          try {
-            if (!mediaSaveBusy.current) {
-              const mediaVersion = await serverMediaVersion();
-              const remoteMediaRev = Math.max(
-                0,
-                Math.floor(Number(mediaVersion && mediaVersion.syncRev) || 0)
-              );
+              const incomingJson =
+                mediaFingerprint(
+                  incomingMedia
+                );
+
+              mediaSyncRev.current =
+                Math.max(
+                  0,
+                  Math.floor(
+                    Number(
+                      mediaResult.syncRev
+                    ) || 0
+                  )
+                );
 
               if (
-                alive &&
-                remoteMediaRev !== mediaSyncRev.current
+                incomingJson !==
+                mediaFingerprint(
+                  mediaRef.current || {}
+                )
               ) {
-                /*
-                 * PERFORMANCE v17:
-                 * Persisted media is lazy. A remote revision change therefore
-                 * only updates the revision scalar; individual image URLs load
-                 * their own authoritative bytes when rendered. Never hydrate
-                 * the entire image library just because another device changed
-                 * one image.
-                 */
-                mediaSyncRev.current = remoteMediaRev;
+                mediaRef.current =
+                  incomingMedia;
+                setMedia(
+                  incomingMedia
+                );
               }
+
+              lastSavedMedia.current =
+                incomingJson;
             }
           } catch (e) {
-            console.warn("Media revision refresh failed:", e);
+            console.warn(
+              "Media refresh failed:",
+              e
+            );
           }
         } catch (e) {
-          if (e && e.status === 401) {
+          if (
+            e &&
+            e.status === 401
+          ) {
             setSaveState("error");
             setErr(
               tt(
@@ -57304,12 +54661,12 @@ const signOut = useCallback(async () => {
         return;
       }
 
-      /*
-       * v28 manual-save means NO persistence work on pagehide. Even a media
-       * emergency cache may serialize large base64 payloads on the main thread.
-       * Explicit Save is the only full persistence boundary.
-       */
-      return;
+      void saveWorldMerged(w);
+
+      void cacheMediaLocally(
+        w.code,
+        mediaRef.current || {}
+      );
     };
 
     if (
@@ -57414,7 +54771,7 @@ const signOut = useCallback(async () => {
           pending.reason ||
             "deferred-conflict"
         );
-      }, 2000);
+      }, 3000);
 
     return () =>
       clearInterval(i);
@@ -57427,26 +54784,6 @@ const signOut = useCallback(async () => {
     ) {
       return;
     }
-
-    const requestId =
-      Math.max(
-        0,
-        Number(manualSaveRequest) || 0
-      );
-
-    /*
-     * v27: media persistence is manual. Media changes do not start a timer or
-     * fingerprint scan. Only a new explicit Save request enters this path.
-     */
-    if (
-      !requestId ||
-      manualMediaSaveHandled.current === requestId
-    ) {
-      return;
-    }
-
-    manualMediaSaveHandled.current =
-      requestId;
 
     if (mediaTimer.current) {
       clearTimeout(
@@ -57562,48 +54899,25 @@ const signOut = useCallback(async () => {
               mediaRef.current || {}
             );
 
-          if (result.mode === "cloud" && currentJson === mediaJson) {
-            /*
-             * PERFORMANCE v17:
-             * The upload is now durable on the backend. Release its potentially
-             * huge base64 string from React/RAM; resolveImg() immediately
-             * switches the same imageRef to /media/file/:id.
-             */
-            mediaRef.current = {};
-            setMedia({});
-            lastSavedMedia.current = "";
-          } else {
-            if (
-              currentJson === mediaJson &&
-              acceptedJson !== currentJson
-            ) {
-              mediaRef.current =
-                acceptedMedia;
+          if (
+            currentJson === mediaJson &&
+            acceptedJson !== currentJson
+          ) {
+            mediaRef.current =
+              acceptedMedia;
 
-              setMedia(
-                acceptedMedia
-              );
-            }
-
-            lastSavedMedia.current =
-              acceptedJson;
+            setMedia(
+              acceptedMedia
+            );
           }
 
-          const worldStillDirty =
-            Boolean(
-              wRef.current &&
-              Number(wRef.current.rev || 0) !==
-                Number(lastSavedRev.current)
-            );
+          lastSavedMedia.current =
+            acceptedJson;
 
           setSaveState(
-            worldStillDirty
-              ? "dirty"
-              : (
-                  result.mode === "cloud"
-                    ? "saved"
-                    : "local"
-                )
+            result.mode === "cloud"
+              ? "saved"
+              : "local"
           );
 
           setSaveAt(now());
@@ -57643,7 +54957,7 @@ const signOut = useCallback(async () => {
     mediaTimer.current =
       setTimeout(
         runMediaSave,
-        0
+        1500
       );
 
     return () => {
@@ -57653,12 +54967,7 @@ const signOut = useCallback(async () => {
         );
       }
     };
-  }, [
-    media,
-    code,
-    tt,
-    manualSaveRequest,
-  ]);
+  }, [media, code, tt]);
 
   const update = useCallback((fn) => {
     /*
@@ -57669,34 +54978,18 @@ const signOut = useCallback(async () => {
      */
     const current = wRef.current;
     if (!current) return false;
+    invalidateWorldEntityIndex(current);
+    invalidateCharacterIdentityResolutionCache(current);
     if (!current.sim || typeof current.sim !== "object" || Array.isArray(current.sim)) current.sim = {};
     if (!Array.isArray(current.sim.queue)) current.sim.queue = [];
     if (!current.notify || typeof current.notify !== "object" || Array.isArray(current.notify)) current.notify = {};
     if (!current.chats || typeof current.chats !== "object" || Array.isArray(current.chats)) current.chats = {};
     if (!Array.isArray(current.posts)) current.posts = [];
     if (!Array.isArray(current.socialEvents)) current.socialEvents = [];
-
-    const perfStart =
-      typeof performance !== "undefined" &&
-      typeof performance.now === "function"
-        ? performance.now()
-        : 0;
-
     fn(current);
-
-    if (perfStart) {
-      const elapsed =
-        performance.now() -
-        perfStart;
-
-      if (elapsed >= 80) {
-        console.warn(
-          `[mv-perf] slow world mutation: ${Math.round(elapsed)}ms`
-        );
-      }
-    }
-
     current.rev = (current.rev || 0) + 1;
+    invalidateWorldEntityIndex(current);
+    invalidateCharacterIdentityResolutionCache(current);
     setWorld({ ...current });
     return true;
   }, []);
@@ -57719,68 +55012,10 @@ const signOut = useCallback(async () => {
     return () => clearInterval(timer);
   }, [world ? world.code : null, meId]);
 
-  useEffect(() => {
-    if (!world || auto.on) return;
-
-    const current =
-      wRef.current;
-
-    if (
-      !current ||
-      !current.sim ||
-      !Array.isArray(current.sim.queue)
-    ) {
-      return;
-    }
-
-    current.sim.queue =
-      current.sim.queue.filter(
-        (action) =>
-          action &&
-          action.source === "manual"
-      );
-
-    current.sim.running = "";
-    autoRunning.current = false;
-    autoRunningSince.current = 0;
-    setAutoBusy(false);
-  }, [
-    auto.on,
-    world ? world.code : null,
-  ]);
-
   const requestSimulationAction = useCallback((action) => {
     if (!action) return false;
-
-    let queued = false;
-
-    update((n) => {
-      queued = simEnqueue(n, action);
-    });
-
-    if (queued) {
-      /*
-       * Manual/event work should not wait for the slow background interval.
-       * Event reactions get a short paint window; manual requests start ASAP.
-       */
-      const delay =
-        action.source === "manual"
-          ? 0
-          : 650;
-
-      setTimeout(() => {
-        const wake =
-          simulationWakeRef.current;
-
-        if (
-          typeof wake === "function"
-        ) {
-          void wake();
-        }
-      }, delay);
-    }
-
-    return queued;
+    update((n) => { simEnqueue(n, action); });
+    return true;
   }, [update]);
 
   const requestWorldStep = useCallback(() => {
@@ -57795,15 +55030,6 @@ const signOut = useCallback(async () => {
 
   const signalSimulation = useCallback((event) => {
     if (!event || !event.type) return false;
-
-    /*
-     * v30: player actions do not manufacture autonomous background queue work
-     * while Live World is OFF. Explicit Request reactions / manual world-step
-     * use requestSimulationAction directly and remain available.
-     */
-    if (!auto.on) {
-      return false;
-    }
 
     if (event.type === "player-post" && event.postId) {
       /*
@@ -57897,15 +55123,10 @@ const signOut = useCallback(async () => {
       const live = viewRef.current;
       const livePost = live && (live.posts || []).find((p) => p && p.id === event.postId);
       const liveComment = livePost && safePostComments(livePost).find((c) => c && c.id === event.commentId);
-      const explicitTarget =
-        event.isDirectReplyToAi && event.targetId && live &&
-        !isHuman(live, event.targetId) && charById(live, event.targetId)
-          ? { id: event.targetId, reason: "parent", score: 100 }
-          : null;
-      const naturalTarget = explicitTarget || (livePost && liveComment
+      const naturalTarget = livePost && liveComment
         ? naturalCommentReplyTargets(live, livePost, liveComment)
             .find((row) => commentWarrantsAiReply(live, livePost, liveComment, row.id))
-        : null);
+        : null;
 
       const openReplyCue = liveComment
         ? commentReplyCueScore(liveComment.text)
@@ -57928,10 +55149,10 @@ const signOut = useCallback(async () => {
             postId: event.postId,
             commentId: event.commentId,
             rootId: event.commentId,
-            targetId: naturalTarget ? naturalTarget.id : (event.targetId || ""),
-            trigger: event.isDirectReplyToAi ? "player-direct-reply" : "player-comment",
+            targetId: naturalTarget ? naturalTarget.id : "",
+            trigger: "player-comment",
           },
-          event.isDirectReplyToAi ? "manual" : "event"
+          "event"
         )
       );
     }
@@ -57948,7 +55169,7 @@ const signOut = useCallback(async () => {
     }
 
     return false;
-  }, [requestSimulationAction, auto.on]);
+  }, [requestSimulationAction]);
 
   const enactPopupChoice = useCallback(
     async (event, choice) => {
@@ -58399,504 +55620,384 @@ const signOut = useCallback(async () => {
   }, [world ? world.code : null, meId, tab, chatId]);
 
   useEffect(() => {
-    if (!world || !meId) return;
-
-    const requestId =
-      Math.max(
-        0,
-        Number(manualSaveRequest) || 0
-      );
-
-    /*
-     * v27 — NO WORLD AUTOSAVE.
-     * Ordinary world mutations only mark the UI dirty. They never serialize,
-     * structured-clone or upload the world in the background.
-     */
-    if (
-      !requestId ||
-      manualWorldSaveHandled.current === requestId
-    ) {
-      if (
-        Number(world.rev || 0) !==
-        Number(lastSavedRev.current)
-      ) {
-        setSaveState((prev) => {
-          if (
-            prev === "saving" ||
-            prev === "conflict"
-          ) {
-            return prev;
-          }
-
-          return prev === "dirty"
-            ? prev
-            : "dirty";
-        });
-      }
-
-      return;
-    }
-
-    manualWorldSaveHandled.current =
-      requestId;
+    if (!world) return;
 
     if (timer.current) {
       clearTimeout(timer.current);
     }
 
     /*
-     * Explicit Save only. The expensive snapshot operation may still take a
-     * moment for a huge world, but it can now happen only when the player asks
-     * for it — never randomly during Feed/buttons/gameplay.
+     * Do the expensive content serialization/cloning only once, after the
+     * state has been quiet for a moment. Rapid live-world updates therefore
+     * collapse into one save snapshot instead of repeatedly freezing the main
+     * thread.
      */
-    const runSaveOnce = async () => {
+    timer.current = setTimeout(async () => {
       const latest = wRef.current || world;
       if (!latest) return;
 
-      /* PERFORMANCE v16: startup and parent-only renders must never clone/
-         serialize the world when the persisted content revision is unchanged. */
-      if (Number(latest.rev || 0) === Number(lastSavedRev.current)) {
-        return;
-      }
+      const json = contentOf(latest);
+      if (json === lastSavedContent.current) return;
 
-      /*
-       * PERFORMANCE v13:
-       * no structuredClone + JSON.stringify chain on the React thread.
-       * The worker captures one immutable snapshot and serializes it off-thread.
-       */
-      const snapMeta = {
-        code: latest.code,
-        rev: Number(latest.rev || 0),
-        syncRev: worldSyncRev(latest),
-        universe: {
-          at: Number(
-            (latest.universe && latest.universe.at) || 0
-          ),
-        },
-      };
-
-      let serialized = null;
-
-      try {
-        serialized =
-          await serializeWorldForSave(
-            latest
-          );
-      } catch (e) {
-        serialized = null;
-      }
-
-      if (
-        !serialized ||
-        !serialized.worldJson
-      ) {
-        setSaveState("error");
-        return;
-      }
-
-      const worldJson =
-        serialized.worldJson;
-
-      const json =
-        serialized.contentJson;
-
-      if (
-        json ===
-        lastSavedContent.current
-      ) {
-        return;
-      }
-
-      const snapSyncRev =
-        snapMeta.syncRev;
+      const snap = cloneWorldState(latest);
+      const snapSyncRev = worldSyncRev(snap);
 
       const offline =
         typeof navigator !== "undefined" &&
         navigator.onLine === false;
 
-      setSaveState(
-        offline
-          ? "local"
-          : "saving"
-      );
-
-      /*
-       * 1. Emergency local backup.
-       *
-       * PERFORMANCE v14:
-       * PostgreSQL remains the authoritative online autosave. Rewriting a
-       * complete local history snapshot for every tiny AI/runtime mutation
-       * caused enormous browser I/O and memory pressure. While ONLINE we keep
-       * the same emergency backup, but at most once per minute. OFFLINE still
-       * writes every changed snapshot so no offline work is lost.
-       */
-      const shouldWriteEmergencyBackup =
-        offline ||
-        now() - Number(lastEmergencyBackupAt.current || 0) >= 60000;
-
-      if (shouldWriteEmergencyBackup) {
-        try {
-          await saveWorldMergedSerialized(
-            snapMeta,
-            worldJson
-          );
-          lastEmergencyBackupAt.current = now();
-        } catch (e) {}
-      }
-
-      if (
-        typeof navigator !== "undefined" &&
-        navigator.onLine === false
-      ) {
-        lastSavedContent.current = json;
-        lastSavedRev.current = Number(snapMeta.rev || 0);
-
-        setSaveState("local");
-        setSaveAt(now());
-        return;
-      }
-
-      /*
-       * 2. Revision-aware PostgreSQL save.
-       */
-      if (
-        worldSaveBusy.current
-      ) {
+      setSaveState(offline ? "local" : "saving");
         /*
-         * PERFORMANCE v24:
-         * A save already owns the network lane. Publishing a fake root copy
-         * here used to rerender the entire active tab solely to retry saving.
-         * The coalescing pipeline already knows how to run the latest snapshot.
+         * 1. MINDIG emergency local backup.
+         * Ez soha nem merge-el vissza automatikusan online worldbe.
          */
-        autosavePending.current = true;
-        setSaveState("retry");
-        return;
-      }
+        let localResult = null;
 
-      worldSaveBusy.current = true;
-
-      let serverResult = null;
-      let lastError = null;
-
-      for (
-        let i = 0;
-        i < 3 &&
-        !serverResult;
-        i++
-      ) {
         try {
-          serverResult =
-            await serverSaveWorldSerialized(
-              worldJson,
-              snapSyncRev
+          localResult =
+            await saveWorldMerged(
+              snap
             );
         } catch (e) {
-          lastError = e;
-
-          if (
-            e &&
-            (
-              e.status === 409 ||
-              e.status === 401
-            )
-          ) {
-            break;
-          }
-
-          await wait(
-            1000 * (i + 1)
-          );
+          localResult = null;
         }
-      }
-
-      worldSaveBusy.current = false;
-
-      if (!serverResult) {
-        setSaveAt(now());
 
         if (
-          lastError &&
-          lastError.status === 409 &&
-          lastError.data &&
-          lastError.data.world
+          typeof navigator !== "undefined" &&
+          navigator.onLine === false
         ) {
-          /*
-           * Conflict is rare. Only here do we pay the cost of inspecting the
-           * authoritative server world on the main thread.
-           */
-          const conflictWorld =
-            migrate(
-              lastError.data.world
-            );
+          lastSavedContent.current =
+            json;
 
-          const conflictContent =
-            contentOf(
-              conflictWorld
-            );
-
-          const conflictSyncRev =
-            worldSyncRev(
-              conflictWorld
-            );
-
-          /*
-           * Same snapshot already reached the server from this client.
-           */
-          if (
-            conflictContent ===
-            json
-          ) {
-            lastSavedContent.current = conflictContent;
-            lastSavedRev.current = Number(conflictWorld.rev || 0);
-
-            const live =
-              wRef.current;
-
-            if (live) {
-              live.syncRev =
-                Math.max(
-                  worldSyncRev(live),
-                  conflictSyncRev
-                );
-            }
-
-            const liveStillDirty =
-              Boolean(
-                wRef.current &&
-                Number(wRef.current.rev || 0) !==
-                  Number(lastSavedRev.current)
-              );
-
-            setSaveState(
-              liveStillDirty
-                ? "dirty"
-                : "saved"
-            );
-            setSaveAt(now());
-            setErr("");
-            return;
-          }
-
-          /*
-           * Our previous accepted save is on the server while a newer local
-           * state already exists. Carry the new server syncRev forward and
-           * allow the already-scheduled autosave to send the latest content.
-           */
-          if (
-            conflictContent ===
-              lastSavedContent.current &&
-            conflictSyncRev ===
-              snapSyncRev + 1
-          ) {
-            const live =
-              wRef.current;
-
-            if (live) {
-              live.syncRev =
-                Math.max(
-                  worldSyncRev(live),
-                  conflictSyncRev
-                );
-            }
-
-            setSaveState("dirty");
-            return;
-          }
-
-          /*
-           * Genuine divergent state: preserve the existing safe reconciliation
-           * behavior. Snapshot parsing happens only on this conflict path.
-           */
-          let snapshotWorld = null;
-
-          try {
-            snapshotWorld =
-              JSON.parse(
-                worldJson
-              );
-          } catch (e) {
-            snapshotWorld = null;
-          }
-
-          const latestLocal =
-            wRef.current &&
-            wRef.current.code ===
-              conflictWorld.code
-              ? wRef.current
-              : snapshotWorld;
-
-          const reconciled =
-            migrate(
-              mergeWorlds(
-                conflictWorld,
-                latestLocal ||
-                  conflictWorld
-              )
-            );
-
-          reconciled.syncRev =
-            conflictSyncRev;
-
-          void saveWorldMerged(
-            reconciled
-          ).catch(() => {});
-
-          setWorld(
-            reconciled
-          );
-
-          setSaveState("dirty");
+          setSaveState("local");
           setSaveAt(now());
-          setErr(
-            tt(
-              "A szerver és a helyi világ össze lett egyeztetve. A végleges felhőmentéshez nyomj Mentés-t még egyszer.",
-              "The server and local world were reconciled. Press Save once more to persist the merged result."
-            )
-          );
           return;
         }
 
-        setSaveState("error");
-
-        if (
-          lastError &&
-          lastError.status === 401
-        ) {
-          setErr(
-            tt(
-              "A szerveres munkameneted lejárt. Jelentkezz be újra; a helyi emergency mentésed megmaradt.",
-              "Your server session expired. Log in again; your local emergency save is safe."
-            )
-          );
-        } else {
-          setErr(
-            tt(
-              "A felhőmentés most nem sikerült. A helyi emergency mentésed megmaradt, és később újrapróbáljuk.",
-              "Cloud saving failed for now. Your local emergency save is safe and we'll retry later."
-            )
-          );
-        }
-
-        return;
-      }
-
-      /*
-       * 3. Successful server save.
-       *
-       * /world/save increments syncRev by exactly one. Do NOT parse the huge
-       * echoed world response. Keep the current live world (including any edit
-       * made while the request was in flight) and only advance its syncRev.
-       */
-      const savedSyncRev =
-        Math.max(
-          snapSyncRev + 1,
-          Number(
-            serverResult.syncRev || 0
-          )
-        );
-
-      lastSavedContent.current = json;
-      /* The server's accepted snapshot corresponds to snapMeta.rev; its own
-         bookkeeping advances rev by exactly one. Any newer local mutation has
-         a higher rev and therefore still schedules the required follow-up save. */
-      lastSavedRev.current = Number(snapMeta.rev || 0) + 1;
-
-      const live =
-        wRef.current;
-
-      if (live) {
-        live.syncRev =
-          Math.max(
-            worldSyncRev(live),
-            savedSyncRev
-          );
-
         /*
-         * The backend advances rev on accepted saves. Mirroring that scalar
-         * in place keeps recovery ordering aligned without causing another
-         * React render/autosave cycle.
+         * 2. Revision-aware PostgreSQL save.
          */
-        live.rev =
-          Math.max(
-            Number(live.rev || 0),
-            Number(snapMeta.rev || 0) + 1
-          );
-      }
+        let serverResult = null;
+        let lastError = null;
 
-      const liveStillDirty =
-        Boolean(
-          wRef.current &&
-          Number(wRef.current.rev || 0) !==
-            Number(lastSavedRev.current)
-        );
-
-      setSaveState(
-        liveStillDirty
-          ? "dirty"
-          : "saved"
-      );
-      setSaveAt(now());
-      setErr("");
-    };
-
-    /*
-     * PERFORMANCE v14 — LATEST-WINS AUTOSAVE COALESCING
-     *
-     * Do not allow multiple huge world snapshots to be structured-cloned,
-     * serialized and written at the same time. If more mutations happen while
-     * one save is running, remember only that a newer snapshot is needed and
-     * run exactly one follow-up save using wRef.current.
-     */
-    const runSave = async () => {
-      if (autosavePipelineBusy.current) {
-        autosavePending.current = true;
-        return;
-      }
-
-      autosavePipelineBusy.current = true;
-
-      try {
-        await runSaveOnce();
-      } finally {
-        autosavePipelineBusy.current = false;
-
-        if (autosavePending.current) {
-          autosavePending.current = false;
+        if (worldSaveBusy.current) {
+          setSaveState("retry");
 
           setTimeout(() => {
-            if (wRef.current) {
-              void runSave();
-            }
-          }, 300);
-        }
-      }
-    };
+            setWorld((cur) => {
+              if (!cur) return cur;
 
-    /*
-     * v27 MANUAL SAVE:
-     * Give React one paint so the user sees "Mentés…" before the deliberately
-     * requested full-world snapshot starts.
-     */
-    timer.current =
-      setTimeout(
-        () => {
-          void runSave();
-        },
-        0
-      );
+              /*
+               * New object identity retriggers the debounced autosave,
+               * while content/rev stay untouched.
+               */
+              return {
+                ...cur,
+              };
+            });
+          }, 700);
+
+          return;
+        }
+
+        worldSaveBusy.current = true;
+
+        for (
+          let i = 0;
+          i < 3 &&
+          !serverResult;
+          i++
+        ) {
+          try {
+            const saved =
+              await serverSaveWorld(
+                snap
+              );
+
+            if (
+              saved &&
+              saved.world
+            ) {
+              serverResult =
+                saved;
+              break;
+            }
+          } catch (e) {
+            lastError = e;
+
+            /*
+             * 409 = másik kliens már mentett.
+             * NEM próbáljuk újra a stale snapshotot.
+             */
+            if (
+              e &&
+              e.status === 409
+            ) {
+              break;
+            }
+
+            if (
+              e &&
+              e.status === 401
+            ) {
+              break;
+            }
+
+            await wait(
+              1000 * (i + 1)
+            );
+          }
+        }
+
+        worldSaveBusy.current = false;
+
+        if (!serverResult) {
+          setSaveAt(now());
+
+          if (
+            lastError &&
+            lastError.status === 409 &&
+            lastError.data &&
+            lastError.data.world
+          ) {
+            const conflictWorld =
+              migrate(
+                lastError.data.world
+              );
+
+            const conflictContent =
+              contentOf(
+                conflictWorld
+              );
+
+            const conflictSyncRev =
+              worldSyncRev(
+                conflictWorld
+              );
+
+            /*
+             * 1) UGYANAZ A SNAPSHOT VAN A SZERVEREN.
+             * Egy saját, párhuzamos mentés ért oda előbb.
+             * Ez NEM másik eszköz.
+             */
+            if (
+              conflictContent ===
+              json
+            ) {
+              lastSavedContent.current =
+                conflictContent;
+
+              setWorld((current) => {
+                if (!current) {
+                  return current;
+                }
+
+                if (
+                  contentOf(current) ===
+                  json
+                ) {
+                  return conflictWorld;
+                }
+
+                if (
+                  worldSyncRev(current) ===
+                  snapSyncRev
+                ) {
+                  const next =
+                    JSON.parse(
+                      JSON.stringify(
+                        current
+                      )
+                    );
+
+                  next.syncRev =
+                    conflictSyncRev;
+
+                  return next;
+                }
+
+                return current;
+              });
+
+              setSaveState("saved");
+              setSaveAt(now());
+              setErr("");
+              return;
+            }
+
+            /*
+             * 2) A SZERVER A SAJÁT ELŐZŐ ELFOGADOTT ÁLLAPOTUNKAT TARTJA,
+             * miközben ebben a tabban már újabb lokális módosítás van.
+             *
+             * Csak syncRev-et emelünk, nem dobjuk el az új lokális tartalmat.
+             */
+            if (
+              conflictContent ===
+              lastSavedContent.current &&
+              conflictSyncRev ===
+                snapSyncRev + 1
+            ) {
+              setWorld((current) => {
+                if (!current) {
+                  return current;
+                }
+
+                const next =
+                  JSON.parse(
+                    JSON.stringify(
+                      current
+                    )
+                  );
+
+                next.syncRev =
+                  conflictSyncRev;
+
+                return next;
+              });
+
+              setSaveState("retry");
+              return;
+            }
+
+            /*
+             * 3) ELTÉRŐ SZERVERÁLLAPOT — v40 SAFE RECONCILIATION.
+             *
+             * A háttér-AI, polling és autosave ugyanabban a tabban is tud olyan
+             * sorrendet létrehozni, amely kívülről "másik eszköznek" látszik.
+             * Régen ilyenkor a kliens ledobta a saját frissebb állapotát és
+             * ijesztő conflict üzenetet mutatott. Most az ID/timestamp-alapú
+             * mergeWorlds összeolvasztja a szerver és a pillanatnyi lokális
+             * világot, a szerver syncRev-jét veszi át, majd csendben újramenti.
+             * Ez valódi másik eszköz esetén is sokkal kevésbé destruktív.
+             */
+            const latestLocal =
+              wRef.current &&
+              wRef.current.code === conflictWorld.code
+                ? wRef.current
+                : snap;
+
+            const reconciled =
+              migrate(
+                mergeWorlds(
+                  conflictWorld,
+                  latestLocal
+                )
+              );
+
+            reconciled.syncRev =
+              conflictSyncRev;
+
+            void saveWorldMerged(
+              reconciled
+            ).catch(() => {});
+
+            setWorld(
+              reconciled
+            );
+
+            setSaveState("retry");
+            setSaveAt(now());
+            setErr("");
+
+            return;
+          }
+
+          setSaveState("error");
+
+          if (
+            lastError &&
+            lastError.status === 401
+          ) {
+            setErr(
+              tt(
+                "A szerveres munkameneted lejárt. Jelentkezz be újra; a helyi emergency mentésed megmaradt.",
+                "Your server session expired. Log in again; your local emergency save is safe."
+              )
+            );
+          } else {
+            setErr(
+              tt(
+                "A felhőmentés most nem sikerült. A helyi emergency mentésed megmaradt, és később újrapróbáljuk.",
+                "Cloud saving failed for now. Your local emergency save is safe and we'll retry later."
+              )
+            );
+          }
+
+          return;
+        }
+
+        /*
+         * 3. Sikeres szerver save.
+         */
+        const savedWorld =
+          migrate(
+            serverResult.world
+          );
+
+        const savedSyncRev =
+          worldSyncRev(
+            savedWorld
+          );
+
+        lastSavedContent.current =
+          contentOf(
+            savedWorld
+          );
+
+        setSaveState("saved");
+        setSaveAt(now());
+        setErr("");
+
+        setWorld((current) => {
+          if (!current) {
+            return current;
+          }
+
+          const currentContent =
+            contentOf(current);
+
+          /*
+           * Ha a save request alatt új lokális változás történt,
+           * az új tartalmat megtartjuk, DE átvezetjük rá a szerver
+           * frissen kiosztott syncRev-jét. Így a következő autosave
+           * nem ütközik a saját előző mentésünkkel.
+           */
+          if (
+            currentContent !== json
+          ) {
+            if (
+              worldSyncRev(
+                current
+              ) === snapSyncRev
+            ) {
+              const next =
+                JSON.parse(
+                  JSON.stringify(
+                    current
+                  )
+                );
+
+              next.syncRev =
+                savedSyncRev;
+
+              return next;
+            }
+
+            return current;
+          }
+
+          return savedWorld;
+        });
+      }, 2800);
 
     return () => {
       if (timer.current) {
-        clearTimeout(timer.current);
+        clearTimeout(
+          timer.current
+        );
       }
     };
-  }, [
-    world,
-    meId,
-    installAuthoritativeWorld,
-    tt,
-    manualSaveRequest,
-  ]);
+  }, [world, meId, installAuthoritativeWorld, tt]);
   const myNotes = (world && meId && world.notify && world.notify[meId]) || [];
   const unread = myNotes.filter((x) => !x.read).length;
   const topNoteId = myNotes.length ? myNotes[0].id : "";
@@ -58904,24 +56005,16 @@ const signOut = useCallback(async () => {
     ? tt("Mentés…", "Saving…")
     : saveState === "saved"
       ? tt("Minden változtatás elmentve", "All changes saved")
-      : saveState === "dirty"
-        ? tt(
-            "Mentetlen változások",
-            "Unsaved changes"
-          )
-        : saveState === "local"
-          ? tt("Offline – helyi mentés készült", "Offline – saved locally")
-          : saveState === "retry"
+      : saveState === "local"
+        ? tt("Offline – helyi mentés készült", "Offline – saved locally")
+        : saveState === "retry"
+          ? tt("Újrapróbálkozás…", "Retrying…")
+          : saveState === "conflict"
             ? tt(
-                "Mentés szükséges",
-                "Save required"
+                "Másik eszköz frissített – szerververzió betöltése…",
+                "Another device updated this world – loading server version…"
               )
-            : saveState === "conflict"
-              ? tt(
-                  "Másik eszköz is mentett · a helyi változások megmaradtak",
-                  "Another device also saved · local changes preserved"
-                )
-              : tt("A mentés sikertelen", "Save failed");
+            : tt("A mentés sikertelen", "Save failed");
 
   useEffect(() => {
     if (!world || !meId || !topNoteId) return;
@@ -58958,75 +56051,17 @@ const signOut = useCallback(async () => {
   if (!view2 || !(view2.chars || []).length) return;
 
   const queued = simPeek(view2);
-  const manualQueued =
-    !!(
-      queued &&
-      queued.source === "manual"
-    );
+  const manualQueued = !!(queued && queued.source === "manual");
 
-  /*
-   * v30 REAL LIVE-WORLD SWITCH:
-   * Background/event/coverage work is impossible while OFF.
-   * Explicit manual requests still pass through the same engine.
-   */
-  if (!auto.on && !manualQueued) {
-    return;
-  }
-
-  /*
-   * v28 HOT-PATH RULE:
-   * A concrete queued action already tells us what to do. Do not scan the feed
-   * for a coverage candidate before handling it.
-   */
   let coverageOverride = null;
-
-  if (auto.on && !queued) {
-    const uncoveredPostNow =
-      guaranteedCommentCoverageCandidate(
-        view2
-      );
-
+  if (!manualQueued) {
+    const uncoveredPostNow = guaranteedCommentCoverageCandidate(view2);
     if (uncoveredPostNow) {
-      coverageOverride =
-        guaranteedPostCommentAction(
-          view2,
-          uncoveredPostNow,
-          "queue-preempt-coverage"
-        );
-    }
-  }
-
-  /*
-   * Background planning is CPU work on the browser's main thread. Never start
-   * a broad planner scan while the player is actively clicking, typing or
-   * scrolling. Concrete queued/manual/event actions are allowed through.
-   */
-  if (!queued && !coverageOverride) {
-    const idleFor =
-      now() -
-      Number(
-        lastUiInteractionAt.current || 0
+      coverageOverride = guaranteedPostCommentAction(
+        view2,
+        uncoveredPostNow,
+        "queue-preempt-coverage"
       );
-
-    let inputPending = false;
-
-    try {
-      inputPending =
-        Boolean(
-          typeof navigator !== "undefined" &&
-          navigator.scheduling &&
-          typeof navigator.scheduling.isInputPending === "function" &&
-          navigator.scheduling.isInputPending({
-            includeContinuous: true,
-          })
-        );
-    } catch (e) {}
-
-    if (
-      idleFor < 500 ||
-      inputPending
-    ) {
-      return;
     }
   }
 
@@ -59057,6 +56092,8 @@ const signOut = useCallback(async () => {
     return;
   }
 
+  if (!manualQueued && cooldownLeft() > 0) return;
+
   if (
     !manualQueued &&
     view2.sim &&
@@ -59075,7 +56112,7 @@ const signOut = useCallback(async () => {
     !queued &&
     view2.sim &&
     Number(view2.sim.at || 0) > 0 &&
-    now() - Number(view2.sim.at || 0) < 1000
+    now() - Number(view2.sim.at || 0) < 8000
   ) {
     return;
   }
@@ -59084,56 +56121,22 @@ const signOut = useCallback(async () => {
 
   let action = coverageOverride || queued;
       if (!action) {
-        if (!auto.on) {
-          return;
-        }
-
         /*
-         * If the upstream just said busy, do not immediately manufacture another
-         * background request. This is an invisible provider retry guard, not an
-         * application cooldown, and it never blocks an explicit player action.
-         */
-        if (now() < Number(AI.providerBusyUntil || 0)) {
-          return;
-        }
-
-        /*
-         * The planner tick is deliberately independent from the FEED cadence.
-         * The old code used AUTO_DEFAULT.every here (~7.5 min), which meant the
-         * scheduler itself could wake up but never even ASK what a bot should do.
-         * Feed posting has its own longer clock in feedNeedsFreshPost().
+         * Live world hard-on: régi mentett state sem állíthatja le.
          */
         if (
           !canTick(
             view2,
-            0.125
+            AUTO_DEFAULT.every
           )
         ) {
           return;
         }
 
-        const planStarted =
-          typeof performance !== "undefined" &&
-          typeof performance.now === "function"
-            ? performance.now()
-            : 0;
-
         action =
           planAutoAction(
             view2
           );
-
-        if (planStarted) {
-          const planMs =
-            performance.now() -
-            planStarted;
-
-          if (planMs >= 60) {
-            console.warn(
-              `[mv-perf] background planner: ${Math.round(planMs)}ms`
-            );
-          }
-        }
       }
       if (!action) return;
 
@@ -59161,14 +56164,7 @@ const signOut = useCallback(async () => {
          * is cooling down. Let the normal planner choose a genuinely due
          * non-local lane; otherwise wait.
          */
-        const plannedWhileLocalWaits =
-          (
-            now() -
-              Number(lastUiInteractionAt.current || 0) >=
-            8000
-          )
-            ? planAutoAction(view2)
-            : null;
+        const plannedWhileLocalWaits = planAutoAction(view2);
 
         if (
           !plannedWhileLocalWaits ||
@@ -59183,32 +56179,26 @@ const signOut = useCallback(async () => {
       autoRunning.current = true;
       autoRunningSince.current = now();
       setAutoBusy(true);
-
-      /*
-       * PERFORMANCE v14:
-       * This is only a transient scheduler lock before the real action runs.
-       * Mutating the in-memory world is sufficient because autoRunning already
-       * prevents concurrent execution. Publishing a React update here used to
-       * trigger a multi-MB autosave before every AI request.
-       */
-      {
-        const n = wRef.current;
-        if (n) {
-          simMarkRunning(n, action);
-          if (action && action.type === "roleplay-initiate") {
-            ensureSimState(n).roleplayAttemptAt = now();
-          }
-          if (action && action.type === "dm") {
-            ensureSimState(n).dmAttemptAt = now();
-          }
-          if (action && (action.type === "group" || action.type === "group-turn")) {
-            ensureSimState(n).groupAttemptAt = now();
-          }
-          if (action && action.type === "popup-event") {
-            ensureSimState(n).popupAttemptAt = now();
-          }
+      update((n) => {
+        /*
+         * Itt CSAK lefoglaljuk a futó actiont. A content cadence-et kizárólag
+         * SIKERES futás után jelöljük, különben egy timeout/429/üres output
+         * úgy nézne ki, mintha történt volna valami, és a világ újra várna.
+         */
+        simMarkRunning(n, action);
+        if (action && action.type === "roleplay-initiate") {
+          ensureSimState(n).roleplayAttemptAt = now();
         }
-      }
+        if (action && action.type === "dm") {
+          ensureSimState(n).dmAttemptAt = now();
+        }
+        if (action && (action.type === "group" || action.type === "group-turn")) {
+          ensureSimState(n).groupAttemptAt = now();
+        }
+        if (action && action.type === "popup-event") {
+          ensureSimState(n).popupAttemptAt = now();
+        }
+      });
       let ok = false;
       let result = null;
       const actionHistoryEpoch = Math.max(
@@ -59233,205 +56223,64 @@ const signOut = useCallback(async () => {
 );
         }
       }
-      /*
-       * PERFORMANCE v24:
-       * runSimulationAction() publishes the visible content mutation itself.
-       * The block below is scheduler bookkeeping only (queue/done/cadence).
-       * Mutating the authoritative live world is enough; publishing another
-       * root snapshot here made every AI action render the Feed twice.
-       *
-       * The already-scheduled autosave reads wRef.current, so successful action
-       * metadata is still included in the persisted snapshot.
-       */
-      {
-        const n = wRef.current;
+      update((n) => {
+        const liveHistoryEpoch = Math.max(
+          0,
+          Math.floor(Number(n && n.historyEpoch) || 0)
+        );
 
-        if (n) {
-          const liveHistoryEpoch = Math.max(
-            0,
-            Math.floor(Number(n && n.historyEpoch) || 0)
-          );
-
-          if (liveHistoryEpoch !== actionHistoryEpoch) {
-            const sim = ensureSimState(n);
-            sim.running = "";
-          } else {
-            if (
-              queued &&
-              action &&
-              queued.id === action.id
-            ) {
-              simDropQueued(n, queued.id);
-            }
-
-            if (ok) {
-              markSimulationCadence(
-                n,
-                action
-              );
-              simMarkDone(n, action);
-
-              const sim = ensureSimState(n);
-              sim.lastSuccessAt = now();
-              sim.lastError = "";
-            } else {
-              const sim = ensureSimState(n);
-              sim.running = "";
-              sim.lastAttemptAt = now();
-            }
-          }
+        /* A pre-restart action may finish later. Do not let it alter the fresh
+         * scheduler clocks/done-state after its content commit was rejected. */
+        if (liveHistoryEpoch !== actionHistoryEpoch) {
+          const sim = ensureSimState(n);
+          sim.running = "";
+          return;
         }
-      }
+
+        if (
+          queued &&
+          action &&
+          queued.id === action.id
+        ) {
+          simDropQueued(n, queued.id);
+        }
+
+        if (ok) {
+          /*
+           * Sikeres action után frissül a megfelelő óra. A local/reactive
+           * actionök nem érintik sim.contentAt-ot, tehát nem éheztetik a feedet.
+           */
+          markSimulationCadence(
+            n,
+            action
+          );
+          simMarkDone(n, action);
+
+          const sim = ensureSimState(n);
+          sim.lastSuccessAt = now();
+          sim.lastError = "";
+        } else {
+          const sim = ensureSimState(n);
+          sim.running = "";
+          sim.lastAttemptAt = now();
+        }
+      });
       autoRunning.current = false;
       autoRunningSince.current = 0;
       if (alive) setAutoBusy(false);
-
-      /*
-       * Drain a concrete queue without waiting for the background interval.
-       * Cooldown / interactive guards inside beat still apply.
-       */
-      const nextQueued =
-        alive
-          ? simPeek(wRef.current)
-          : null;
-
-      if (
-        alive &&
-        nextQueued &&
-        (
-          auto.on ||
-          nextQueued.source === "manual"
-        )
-      ) {
-        setTimeout(() => {
-          const wake =
-            simulationWakeRef.current;
-
-          if (
-            alive &&
-            typeof wake === "function"
-          ) {
-            void wake();
-          }
-        },
-        nextQueued.source === "manual"
-          ? 100
-          : 200);
-      }
     };
-
-    simulationWakeRef.current = beat;
-
     /*
-     * 8 másodpercenként nézzük meg, van-e teendő.
-     * Ez NEM jelent 8 másodpercenként AI-hívást: a külön feed/DM/event
-     * cadence-ek, a 7 mp-es action gap és az AI queue/token throttling
-     * továbbra is korlátozza a tényleges generatív kérések sűrűségét.
+     * 9 másodpercenként nézzük meg, van-e sürgős queue-teendő.
+     * Ez NEM jelent 9 másodpercenként AI-hívást:
+     * a contentAt + AI queue/token throttling továbbra is korlátozza
+     * a generatív kérések tényleges sűrűségét.
      */
-    const i =
-      auto.on
-        ? setInterval(beat, 2000)
-        : null;
-
-    /* Az első autonóm ellenőrzés röviddel a világ betöltése után indul. */
-    const first =
-      auto.on
-        ? setTimeout(beat, 500)
-        : null;
-
-    return () => {
-      alive = false;
-
-      if (
-        simulationWakeRef.current ===
-        beat
-      ) {
-        simulationWakeRef.current = null;
-      }
-
-      if (i) clearInterval(i);
-      if (first) clearTimeout(first);
-    };
+    const i = setInterval(beat, 9000);
+    const first = setTimeout(beat, 150);
+    return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
 
   useEffect(() => { if (err) { const t = setTimeout(() => setErr(""), 9000); return () => clearTimeout(t); } }, [err]);
-
-  useEffect(() => {
-    const activeId = tab === "scene" && sceneId ? sceneId : "";
-    setLiveUiActiveSceneId(activeId);
-  }, [tab, sceneId]);
-
-  /* Stable render inputs: header-only state changes must not rebuild a whole tab. */
-  const view = React.useMemo(() => {
-    if (!world || !meId) return null;
-    const player =
-      (world.players && world.players[meId]) ||
-      blankPlayer(meId, "Névtelen", "jatekos");
-    const next = { ...world, meId, player };
-    next.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
-    return next;
-  }, [world, meId, tab, sceneId]);
-
-  const activeTabRenderKey =
-    React.useMemo(() => {
-      if (!world || !meId) {
-        return "none";
-      }
-
-      /*
-       * Only summarize the tab that is actually mounted. Unmounted domains do
-       * zero render-key work.
-       */
-      switch (tab) {
-        case "feed":
-          return feedUiRenderKey(view);
-
-        case "cast":
-          return castUiRenderKey(view);
-
-        case "bonds":
-          return bondsUiRenderKey(view);
-
-        case "scene":
-          return scenesUiRenderKey(view);
-
-        case "chat":
-          return chatUiRenderKey(view);
-
-        case "world":
-        default:
-          /*
-           * The World/settings tab intentionally follows the global revision;
-           * it is not a high-frequency gameplay surface.
-           */
-          return `world:${Number(world.rev || 0)}`;
-      }
-    }, [
-      world,
-      meId,
-      tab,
-      view,
-    ]);
-
-  const mediaCtxValue = React.useMemo(
-    () => ({ media, addImage }),
-    [media, addImage]
-  );
-
-  const openChatTab = useCallback((id) => {
-    setChatId(id);
-    setTab("chat");
-  }, []);
-
-  const openRoomsPanel = useCallback(() => {
-    setShowRooms(true);
-  }, []);
-
-  const openSceneFromChat = useCallback((nextSceneId) => {
-    setSceneId(nextSceneId);
-    setJump({ type: "scene", id: nextSceneId, at: now() });
-    setTab("scene");
-  }, []);
 
   if (!bootReady) {
     return (
@@ -59460,7 +56309,10 @@ const signOut = useCallback(async () => {
     );
   }
 
-  const me = view.player;
+  const me = (world.players && world.players[meId]) || blankPlayer(meId, "Névtelen", "jatekos");
+  const view = { ...world, meId, player: me };
+  view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
+  setLiveUiActiveSceneId(view.activeSceneId);
   viewRef.current = view;
   const activePopup = editLocked ? null : currentPopupEvent(view);
 
@@ -59492,7 +56344,7 @@ const signOut = useCallback(async () => {
 
   return (
     <LangCtx.Provider value={langCtxValue}>
-    <MediaCtx.Provider value={mediaCtxValue}>
+    <MediaCtx.Provider value={{ media, addImage }}>
     <div className="mv">
       <style>{CSS}</style>
       <div className="mv-wrap">
@@ -59503,76 +56355,11 @@ const signOut = useCallback(async () => {
               <div className="hdr-meta">{world.universe.name} · <span className="mono">{world.code}</span> · <span className="mono">@{me.username}</span> · <span className="mono">{BUILD_VERSION}</span></div>
               <div className="hint" style={{ marginTop: 4 }}>{saveLabel}{saveAt ? ` · ${timeAgo(saveAt)}` : ""}</div>
             </div>
-            <button
-              className="btn tiny"
-              onClick={requestManualSave}
-              disabled={saveState === "saving"}
-              title={tt(
-                "Az aktuális világ és a friss képek kézi mentése",
-                "Manually save the current world and new images"
-              )}
-              style={{
-                borderColor:
-                  saveState === "dirty" ||
-                  saveState === "conflict" ||
-                  saveState === "error"
-                    ? "var(--rose)"
-                    : undefined,
-              }}
-            >
-              {saveState === "saving"
-                ? <Loader2 size={13} className="spin" />
-                : <Check size={13} />}
-              {tt("Mentés", "Save")}
-            </button>
-
-            <button
-              className="btn tiny ghost"
-              onClick={() =>
-                changeAuto({
-                  on: !auto.on,
-                })
-              }
-              title={
-                auto.on
-                  ? tt(
-                      "Élő világ BE — kattints a háttér-AI leállításához",
-                      "Live World ON — click to stop background AI"
-                    )
-                  : tt(
-                      "SAFE mód — háttér-AI kikapcsolva. Kattints az Élő világ indításához.",
-                      "SAFE mode — background AI is off. Click to start Live World."
-                    )
-              }
-              style={{
-                color:
-                  auto.on
-                    ? "var(--rose)"
-                    : "var(--muted)",
-              }}
-            >
-              {autoBusy
-                ? <Loader2 size={13} className="spin" />
-                : (
-                  <span
-                    className="dot"
-                    style={{
-                      background:
-                        auto.on
-                          ? "var(--rose)"
-                          : "var(--muted)",
-                      animation:
-                        auto.on
-                          ? undefined
-                          : "none",
-                    }}
-                  />
-                )}
-              <span>
-                {auto.on
-                  ? tt("Élő", "Live")
-                  : tt("SAFE", "SAFE")}
-              </span>
+            <button className="btn tiny ghost" onClick={() => changeAuto({ on: !auto.on })}
+              title={auto.on ? tt("Élő világ: magától történnek dolgok", "Live world: things happen on their own") : tt("Élő világ kikapcsolva", "Live world off")}
+              style={{ color: auto.on ? "var(--rose)" : "var(--muted)" }}>
+              {autoBusy ? <Loader2 size={13} className="spin" />
+                        : <span className="dot" style={{ background: auto.on ? "var(--rose)" : "var(--muted)", animation: auto.on ? undefined : "none" }} />}
             </button>
             <button className="btn tiny ghost" style={{ position: "relative" }} onClick={() => setShowNotes(true)} title={tt("Értesítések", "Notifications")}>
               <Bell size={15} color={unread ? "var(--rose)" : undefined} />
@@ -59588,25 +56375,24 @@ const signOut = useCallback(async () => {
         </div>
 
         <div className="mv-main">
-          {tab === "feed" && <MemoFeed renderKey={activeTabRenderKey} w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
-            onOpenChat={openChatTab}
-            onOpenWorlds={openRoomsPanel}
+          {tab === "feed" && <Feed w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
+            onOpenChat={(id) => { setChatId(id); setTab("chat"); }}
+            onOpenWorlds={() => setShowRooms(true)}
             onRequestWorldStep={requestWorldStep}
             onRequestNoteReactions={requestNoteReactions}
             onSignal={signalSimulation} />}
-          {tab === "cast" && <MemoCast renderKey={activeTabRenderKey} w={view} update={update} setErr={setErr} jump={jump} goChat={openChatTab} />}
-          {tab === "bonds" && <MemoBonds renderKey={activeTabRenderKey} w={view} update={update} setErr={setErr} />}
-          {tab === "scene" && <MemoScenes renderKey={activeTabRenderKey} w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />}
-          {tab === "chat" && <MemoChat renderKey={activeTabRenderKey} w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={openSceneFromChat} />}
-          {tab === "world" && <MemoWorld
-  renderKey={activeTabRenderKey}
+          {tab === "cast" && <Cast w={view} update={update} setErr={setErr} jump={jump} goChat={(id) => { setChatId(id); setTab("chat"); }} />}
+          {tab === "bonds" && <Bonds w={view} update={update} setErr={setErr} />}
+          {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />}
+          {tab === "chat" && <Chat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={(nextSceneId) => { setSceneId(nextSceneId); setJump({ type: "scene", id: nextSceneId, at: now() }); setTab("scene"); }} />}
+          {tab === "world" && <World
   w={view}
   update={update}
   setErr={setErr}
  
   onLeave={signOut}
   onDeleteAccount={deleteOwnAccount}
-            onRooms={openRoomsPanel} auto={auto} onAuto={changeAuto}
+            onRooms={() => setShowRooms(true)} auto={auto} onAuto={changeAuto}
             detail={detail} onDetail={changeDetail} onLang={changeLang} />}
         </div>
       </div>
