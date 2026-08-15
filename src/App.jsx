@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v24 — INTERACTION FREEZE FIX — 20260815_2132 */
+/* MÁSVILÁG BUILD v25 — CHARACTER SAVE FAST PATH — 20260815_2145 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -4320,15 +4320,168 @@ function applyConnectionCanonTouchingCharacterNow(w, changedId) {
   });
 }
 
+function relationshipProfileIdentitySignature(person) {
+  if (!person) return "";
+
+  return characterIdentityAliasRows(person)
+    .map(
+      (row) =>
+        `${row.kind}:${row.norm}`
+    )
+    .sort()
+    .join("|");
+}
+
+function relationshipProfileFactionSignature(person) {
+  if (!person) return "";
+
+  const flags =
+    factionFlags(person);
+
+  return [
+    flags.cobraKai ? "cobraKai" : "",
+    flags.miyagiFang ? "miyagiFang" : "",
+    flags.ironDragons ? "ironDragons" : "",
+    flags.wasabi ? "wasabi" : "",
+    flags.pogue ? "pogue" : "",
+    flags.kook ? "kook" : "",
+    flags.hydra ? "hydra" : "",
+    flags.shield ? "shield" : "",
+  ]
+    .filter(Boolean)
+    .join("|");
+}
+
+function relationshipProfileConnectionsSignature(person) {
+  return String(
+    (person && person.connections) ||
+    ""
+  )
+    .replace(/\r\n/g, "\n")
+    .trim();
+}
+
 /*
- * One entry point used by every profile editor route.
- * Full refresh is required because changing Angela's aliases can change how
- * TORY'S Connections resolves even though Tory herself was not edited.
+ * CHARACTER SAVE FAST PATH — v25
+ *
+ * A normal profile save used to rebuild every actor × target baseline even
+ * when the user only edited appearance/personality/bio/etc. That is correct
+ * only for identity ambiguity changes. Most edits need either no mechanical
+ * relationship work or a single O(n) directed refresh.
+ *
+ * `beforeProfile` and `afterProfile` are the profile snapshots surrounding
+ * this save. Older callers without them retain the conservative full refresh.
  */
-function resyncRelationshipsAfterCharacterProfileEdit(w, changedId) {
+function resyncRelationshipsAfterCharacterProfileEdit(
+  w,
+  changedId,
+  beforeProfile = null,
+  afterProfile = null,
+  reallyNew = false
+) {
   if (!w || !changedId) return;
-  refreshCanonicalRelationshipBaselines(w);
-  applyConnectionCanonTouchingCharacterNow(w, changedId);
+
+  if (
+    !beforeProfile ||
+    !afterProfile ||
+    reallyNew
+  ) {
+    refreshCanonicalRelationshipBaselines(w);
+    applyConnectionCanonTouchingCharacterNow(
+      w,
+      changedId
+    );
+    return;
+  }
+
+  const identityChanged =
+    relationshipProfileIdentitySignature(
+      beforeProfile
+    ) !==
+    relationshipProfileIdentitySignature(
+      afterProfile
+    );
+
+  const connectionsChanged =
+    relationshipProfileConnectionsSignature(
+      beforeProfile
+    ) !==
+    relationshipProfileConnectionsSignature(
+      afterProfile
+    );
+
+  const factionChanged =
+    relationshipProfileFactionSignature(
+      beforeProfile
+    ) !==
+    relationshipProfileFactionSignature(
+      afterProfile
+    );
+
+  /*
+   * Name/nickname/alias changes can create or remove ambiguity for somebody
+   * else's old Connections row, so this one case intentionally keeps the
+   * conservative full resolver pass.
+   */
+  if (identityChanged) {
+    refreshCanonicalRelationshipBaselines(w);
+    applyConnectionCanonTouchingCharacterNow(
+      w,
+      changedId
+    );
+    return;
+  }
+
+  /*
+   * Connections are strictly actor -> target, therefore editing this
+   * character's Connections only requires their outgoing edges.
+   *
+   * Faction rivalry is symmetric in membership facts, therefore a faction
+   * change refreshes both outgoing edges and all incoming edges to this one
+   * character — still O(n), not O(n²).
+   */
+  if (
+    connectionsChanged ||
+    factionChanged
+  ) {
+    refreshCanonicalRelationshipBaselines(
+      w,
+      changedId,
+      {
+        persistFingerprint:
+          !factionChanged,
+      }
+    );
+
+    if (factionChanged) {
+      refreshCanonicalRelationshipBaselinesForTarget(
+        w,
+        changedId,
+        {
+          persistFingerprint: true,
+        }
+      );
+    }
+
+    if (connectionsChanged) {
+      applyConnectionCanonTouchingCharacterNow(
+        w,
+        changedId
+      );
+    }
+
+    return;
+  }
+
+  /*
+   * Personality, appearance, bio text without an explicit alias label,
+   * goals, fears, secrets, speech, images, albums, follower count, etc. do
+   * not mechanically alter relationship baselines. Keep the persisted legacy
+   * fingerprint current so migrate() will not misinterpret this harmless
+   * profile edit as a reason for a later full rebuild.
+   */
+  w.relationshipCanonFingerprint =
+    relationshipCanonInputFingerprint(w);
 }
 
 
@@ -4558,78 +4711,220 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   return null;
 }
 
-function refreshCanonicalRelationshipBaselines(w, focusId = "") {
+function refreshCanonicalRelationshipBaselineEdge(
+  w,
+  store,
+  actor,
+  target
+) {
+  if (
+    !w ||
+    !store ||
+    !actor ||
+    !target ||
+    actor.id === target.id
+  ) {
+    return;
+  }
+
+  const key =
+    relKey(actor.id, target.id);
+
+  const existingBaseline =
+    store[key];
+
+  if (
+    relationshipBaselineIsManual(
+      existingBaseline
+    )
+  ) {
+    return;
+  }
+
+  const inferred =
+    inferCanonicalRelationshipBaseline(
+      w,
+      actor,
+      target
+    );
+
+  if (inferred) {
+    store[key] = {
+      ...relationshipBaselineSnapshot(
+        inferred,
+        inferred.source || "sheet"
+      ),
+      ...inferred,
+      updatedAt: now(),
+    };
+    return;
+  }
+
+  /*
+   * If an earlier automatically inferred relation no longer exists in the
+   * edited sheet, remove it. Manual baselines never get deleted here.
+   */
+  if (
+    existingBaseline &&
+    /^(?:sheet|connections|faction)$/i.test(
+      String(
+        existingBaseline.source || ""
+      )
+    )
+  ) {
+    delete store[key];
+    return;
+  }
+
+  /*
+   * Migration fallback for old worlds that predate baselines. This is used
+   * only once when no stronger sheet/faction inference exists.
+   */
+  if (!existingBaseline) {
+    const current =
+      getRel(
+        w,
+        actor.id,
+        target.id
+      );
+
+    if (
+      relationshipLooksMeaningfulForBaseline(
+        current
+      )
+    ) {
+      store[key] =
+        relationshipBaselineSnapshot(
+          current,
+          "legacy",
+          {
+            mood: "",
+            why: "",
+          }
+        );
+    }
+  }
+}
+
+function refreshCanonicalRelationshipBaselines(
+  w,
+  focusId = "",
+  options = {}
+) {
   if (!w) return;
-  const store = ensureRelationshipBaselineStore(w);
-  const people = allSubjects(w).filter((person) => person && person.id);
-  const activeIds = new Set(people.map((person) => String(person.id)));
+
+  const store =
+    ensureRelationshipBaselineStore(w);
+
+  const people =
+    allSubjects(w)
+      .filter(
+        (person) =>
+          person &&
+          person.id
+      );
+
+  const activeIds =
+    new Set(
+      people.map(
+        (person) =>
+          String(person.id)
+      )
+    );
 
   /* Drop baseline edges that point at a deleted character. */
-  Object.keys(store).forEach((key) => {
-    const parts = String(key).split(">");
-    if (
-      parts.length !== 2 ||
-      !activeIds.has(parts[0]) ||
-      !activeIds.has(parts[1])
-    ) {
-      delete store[key];
-    }
-  });
+  Object.keys(store).forEach(
+    (key) => {
+      const parts =
+        String(key).split(">");
 
-  people.forEach((actor) => {
-    if (focusId && actor.id !== focusId) return;
-
-    people.forEach((target) => {
-      if (!target || actor.id === target.id) return;
-      const key = relKey(actor.id, target.id);
-      const existingBaseline = store[key];
-
-      if (relationshipBaselineIsManual(existingBaseline)) {
-        return;
-      }
-
-      const inferred = inferCanonicalRelationshipBaseline(w, actor, target);
-
-      if (inferred) {
-        store[key] = {
-          ...relationshipBaselineSnapshot(inferred, inferred.source || "sheet"),
-          ...inferred,
-          updatedAt: now(),
-        };
-        return;
-      }
-
-      /*
-       * If an earlier automatically inferred relation no longer exists in the
-       * edited sheet, remove it. Manual baselines never get deleted here.
-       */
       if (
-        existingBaseline &&
-        /^(?:sheet|connections|faction)$/i.test(String(existingBaseline.source || ""))
+        parts.length !== 2 ||
+        !activeIds.has(parts[0]) ||
+        !activeIds.has(parts[1])
       ) {
         delete store[key];
-        return;
       }
+    }
+  );
 
-      /*
-       * Migration fallback for old worlds that predate baselines. This is used
-       * only once when no stronger sheet/faction inference exists.
-       */
-      if (!existingBaseline) {
-        const current = getRel(w, actor.id, target.id);
-        if (relationshipLooksMeaningfulForBaseline(current)) {
-          store[key] =
-            relationshipBaselineSnapshot(current, "legacy", {
-              mood: "",
-              why: "",
-            });
-        }
-      }
+  people.forEach((actor) => {
+    if (
+      focusId &&
+      actor.id !== focusId
+    ) {
+      return;
+    }
+
+    people.forEach((target) => {
+      refreshCanonicalRelationshipBaselineEdge(
+        w,
+        store,
+        actor,
+        target
+      );
     });
   });
 
-  /* Persist only a tiny signature, never a runtime cache object. */
-  w.relationshipCanonFingerprint = relationshipCanonInputFingerprint(w);
+  if (
+    !options ||
+    options.persistFingerprint !== false
+  ) {
+    /* Persist only a tiny signature, never a runtime cache object. */
+    w.relationshipCanonFingerprint =
+      relationshipCanonInputFingerprint(w);
+  }
+}
+
+/*
+ * Incoming-only canon refresh used by the character editor fast path.
+ * This is O(character-count), not O(character-count²).
+ */
+function refreshCanonicalRelationshipBaselinesForTarget(
+  w,
+  targetId,
+  options = {}
+) {
+  if (!w || !targetId) return;
+
+  const wanted =
+    String(targetId);
+
+  const store =
+    ensureRelationshipBaselineStore(w);
+
+  const people =
+    allSubjects(w)
+      .filter(
+        (person) =>
+          person &&
+          person.id
+      );
+
+  const target =
+    people.find(
+      (person) =>
+        String(person.id) === wanted
+    );
+
+  if (!target) return;
+
+  people.forEach((actor) => {
+    refreshCanonicalRelationshipBaselineEdge(
+      w,
+      store,
+      actor,
+      target
+    );
+  });
+
+  if (
+    !options ||
+    options.persistFingerprint !== false
+  ) {
+    w.relationshipCanonFingerprint =
+      relationshipCanonInputFingerprint(w);
+  }
 }
 
 function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
@@ -18672,7 +18967,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v24-interaction-freeze-fix";
+const BUILD_VERSION = "v25-character-save-fast-path";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -32501,9 +32796,37 @@ function Cast({ w, update, setErr, goChat, jump }) {
         <CharForm initial={w.player} isNew={false} setErr={setErr} w={w} onClose={() => setEditMe(false)} onDelete={() => {}}
           onSave={(c, relDrafts, relDirtyIds) => {
             update((n) => {
-              n.players[w.meId] = { ...c, id: w.meId, username: uniqueHandle(n, c.username, w.meId), updatedAt: now() };
-              commitForm(n, w.meId, relDrafts, relDirtyIds);
-              resyncRelationshipsAfterCharacterProfileEdit(n, w.meId);
+              const beforeProfile =
+                n.players[w.meId] || null;
+
+              const nextProfile = {
+                ...c,
+                id: w.meId,
+                username: uniqueHandle(
+                  n,
+                  c.username,
+                  w.meId
+                ),
+                updatedAt: now(),
+              };
+
+              n.players[w.meId] =
+                nextProfile;
+
+              commitForm(
+                n,
+                w.meId,
+                relDrafts,
+                relDirtyIds
+              );
+
+              resyncRelationshipsAfterCharacterProfileEdit(
+                n,
+                w.meId,
+                beforeProfile,
+                nextProfile,
+                false
+              );
             });
             setEditMe(false);
           }} />
@@ -32540,6 +32863,11 @@ function Cast({ w, update, setErr, goChat, jump }) {
               const reallyNew =
                 i < 0;
 
+              const beforeProfile =
+                i >= 0
+                  ? n.chars[i]
+                  : null;
+
               if (i >= 0) {
                 n.chars[i] = stamped;
               } else {
@@ -32554,13 +32882,17 @@ function Cast({ w, update, setErr, goChat, jump }) {
               );
 
               /*
-               * Full identity-aware resync: editing Angela can change how Tory's
-               * old "Angel" row resolves, so both outgoing and incoming canon
-               * touching this character are recalculated and applied NOW.
+               * v25 fast path:
+               * harmless sheet edits skip relationship canon work;
+               * Connections/faction changes are O(n);
+               * identity/alias changes still use the conservative full pass.
                */
               resyncRelationshipsAfterCharacterProfileEdit(
                 n,
-                stamped.id
+                stamped.id,
+                beforeProfile,
+                stamped,
+                reallyNew
               );
 
               /*
@@ -39486,9 +39818,37 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
         <CharForm initial={w.player} setErr={setErr} w={w} onClose={() => setEditPlayer(false)} onDelete={() => {}}
           onSave={(c, relDrafts, relDirtyIds) => {
             update((n) => {
-              n.players[w.meId] = { ...c, id: w.meId, username: uniqueHandle(n, c.username, w.meId), updatedAt: now() };
-              commitForm(n, w.meId, relDrafts, relDirtyIds);
-              resyncRelationshipsAfterCharacterProfileEdit(n, w.meId);
+              const beforeProfile =
+                n.players[w.meId] || null;
+
+              const nextProfile = {
+                ...c,
+                id: w.meId,
+                username: uniqueHandle(
+                  n,
+                  c.username,
+                  w.meId
+                ),
+                updatedAt: now(),
+              };
+
+              n.players[w.meId] =
+                nextProfile;
+
+              commitForm(
+                n,
+                w.meId,
+                relDrafts,
+                relDirtyIds
+              );
+
+              resyncRelationshipsAfterCharacterProfileEdit(
+                n,
+                w.meId,
+                beforeProfile,
+                nextProfile,
+                false
+              );
             });
             setEditPlayer(false);
           }} />
