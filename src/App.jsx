@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v13 — PERFORMANCE ONLY — 20260815_1942 */
+/* MÁSVILÁG BUILD v14 — PERFORMANCE PIPELINE ONLY — 20260815_2008 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -18513,7 +18513,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v12.1-deep-performance-relationship";
+const BUILD_VERSION = "v14-performance-pipeline";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -18525,7 +18525,7 @@ function cloneWorldState(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-/* ---------- PERFORMANCE v13: NON-BLOCKING WORLD AUTOSAVE ---------- */
+/* ---------- PERFORMANCE v14: COALESCED NON-BLOCKING WORLD AUTOSAVE ---------- */
 let WORLD_SAVE_SERIALIZER = null;
 let WORLD_SAVE_SERIALIZER_SEQ = 0;
 const WORLD_SAVE_SERIALIZER_WAITERS = new Map();
@@ -53836,6 +53836,15 @@ export default function App() {
   /* Authoritative multi-device sync state. */
   const mediaSyncRev = useRef(0);
   const worldSaveBusy = useRef(false);
+
+  /* PERFORMANCE v14: one full-world autosave pipeline at a time.
+     A large world can take long enough to serialize/write that a second
+     React update arrives before the first save finishes. Those saves are
+     coalesced instead of cloning the same multi-MB world concurrently. */
+  const autosavePipelineBusy = useRef(false);
+  const autosavePending = useRef(false);
+  const lastEmergencyBackupAt = useRef(0);
+
   const idleSaveHandle = useRef(null);
   const mediaSaveBusy = useRef(false);
   const syncRefreshBusy = useRef(false);
@@ -54726,7 +54735,8 @@ const signOut = useCallback(async () => {
 
         if (
           syncRefreshBusy.current ||
-          worldSaveBusy.current
+          worldSaveBusy.current ||
+          autosavePipelineBusy.current
         ) {
           return;
         }
@@ -56155,7 +56165,7 @@ const signOut = useCallback(async () => {
      * collapse into one save snapshot instead of repeatedly freezing the main
      * thread.
      */
-    const runSave = async () => {
+    const runSaveOnce = async () => {
       const latest = wRef.current || world;
       if (!latest) return;
 
@@ -56222,15 +56232,27 @@ const signOut = useCallback(async () => {
 
       /*
        * 1. Emergency local backup.
-       * The already-serialized snapshot is reused for both history + primary
-       * backup, so the main thread does not clone/stringify the world again.
+       *
+       * PERFORMANCE v14:
+       * PostgreSQL remains the authoritative online autosave. Rewriting a
+       * complete local history snapshot for every tiny AI/runtime mutation
+       * caused enormous browser I/O and memory pressure. While ONLINE we keep
+       * the same emergency backup, but at most once per minute. OFFLINE still
+       * writes every changed snapshot so no offline work is lost.
        */
-      try {
-        await saveWorldMergedSerialized(
-          snapMeta,
-          worldJson
-        );
-      } catch (e) {}
+      const shouldWriteEmergencyBackup =
+        offline ||
+        now() - Number(lastEmergencyBackupAt.current || 0) >= 60000;
+
+      if (shouldWriteEmergencyBackup) {
+        try {
+          await saveWorldMergedSerialized(
+            snapMeta,
+            worldJson
+          );
+          lastEmergencyBackupAt.current = now();
+        } catch (e) {}
+      }
 
       if (
         typeof navigator !== "undefined" &&
@@ -56498,6 +56520,39 @@ const signOut = useCallback(async () => {
       setErr("");
     };
 
+    /*
+     * PERFORMANCE v14 — LATEST-WINS AUTOSAVE COALESCING
+     *
+     * Do not allow multiple huge world snapshots to be structured-cloned,
+     * serialized and written at the same time. If more mutations happen while
+     * one save is running, remember only that a newer snapshot is needed and
+     * run exactly one follow-up save using wRef.current.
+     */
+    const runSave = async () => {
+      if (autosavePipelineBusy.current) {
+        autosavePending.current = true;
+        return;
+      }
+
+      autosavePipelineBusy.current = true;
+
+      try {
+        await runSaveOnce();
+      } finally {
+        autosavePipelineBusy.current = false;
+
+        if (autosavePending.current) {
+          autosavePending.current = false;
+
+          setTimeout(() => {
+            if (wRef.current) {
+              void runSave();
+            }
+          }, 300);
+        }
+      }
+    };
+
     /* Serialization/cloning is the heaviest synchronous operation in this
      * component. Do it only during an idle slice so typing, scrolling and
      * opening tabs never have to wait for a multi-MB world snapshot. */
@@ -56510,7 +56565,7 @@ const signOut = useCallback(async () => {
       } else {
         void runSave();
       }
-    }, 2200);
+    }, 4500);
 
     return () => {
       if (timer.current) clearTimeout(timer.current);
@@ -56701,26 +56756,32 @@ const signOut = useCallback(async () => {
       autoRunning.current = true;
       autoRunningSince.current = now();
       setAutoBusy(true);
-      update((n) => {
-        /*
-         * Itt CSAK lefoglaljuk a futó actiont. A content cadence-et kizárólag
-         * SIKERES futás után jelöljük, különben egy timeout/429/üres output
-         * úgy nézne ki, mintha történt volna valami, és a világ újra várna.
-         */
-        simMarkRunning(n, action);
-        if (action && action.type === "roleplay-initiate") {
-          ensureSimState(n).roleplayAttemptAt = now();
+
+      /*
+       * PERFORMANCE v14:
+       * This is only a transient scheduler lock before the real action runs.
+       * Mutating the in-memory world is sufficient because autoRunning already
+       * prevents concurrent execution. Publishing a React update here used to
+       * trigger a multi-MB autosave before every AI request.
+       */
+      {
+        const n = wRef.current;
+        if (n) {
+          simMarkRunning(n, action);
+          if (action && action.type === "roleplay-initiate") {
+            ensureSimState(n).roleplayAttemptAt = now();
+          }
+          if (action && action.type === "dm") {
+            ensureSimState(n).dmAttemptAt = now();
+          }
+          if (action && (action.type === "group" || action.type === "group-turn")) {
+            ensureSimState(n).groupAttemptAt = now();
+          }
+          if (action && action.type === "popup-event") {
+            ensureSimState(n).popupAttemptAt = now();
+          }
         }
-        if (action && action.type === "dm") {
-          ensureSimState(n).dmAttemptAt = now();
-        }
-        if (action && (action.type === "group" || action.type === "group-turn")) {
-          ensureSimState(n).groupAttemptAt = now();
-        }
-        if (action && action.type === "popup-event") {
-          ensureSimState(n).popupAttemptAt = now();
-        }
-      });
+      }
       let ok = false;
       let result = null;
       const actionHistoryEpoch = Math.max(
