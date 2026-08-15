@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v30 — SAFE BOOT + REAL LIVE WORLD TOGGLE — 20260815_2245 */
+/* MÁSVILÁG BUILD v31 — REACT RENDER ISOLATION — 20260815_2310 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -1496,6 +1496,8 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   /* ---------- KARAKTERLISTA + KARAKTERLAP MOBIL ---------- */
 
   .character-list-card {
+  content-visibility:auto;
+  contain-intrinsic-size:82px;
     position: relative;
     min-height: 74px;
     padding: 12px !important;
@@ -4115,7 +4117,7 @@ function relationshipCanonInputFingerprint(w) {
 /* v10 invariant marker: if this exact string is visible in deployed source,
    the stable runtime + relationship identity patch is the file being used. */
 const MASVILAG_RELATIONSHIP_PATCH = "v10-live-identity-20260815-1911";
-if (typeof console !== "undefined") console.info("[Másvilág] v30 SAFE BOOT + real Live World toggle loaded");
+if (typeof console !== "undefined") console.info("[Másvilág] v31 React render isolation loaded");
 
 
 function ensureRelationshipBaselineStore(w) {
@@ -19261,7 +19263,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v30-safe-boot-live-toggle";
+const BUILD_VERSION = "v31-react-render-isolation";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -25552,6 +25554,8 @@ function Post({
           className="social-post-media"
           src={resolveImg(post.imageId ? imageRef(post.imageId) : post.image, media)}
           alt=""
+          loading="lazy"
+          decoding="async"
         />
       ) : null}
 
@@ -31174,7 +31178,440 @@ function AlbumPick({ items, value, onPick }) {
   );
 }
 
-const MemoNotesStrip = React.memo(NotesStrip);
+
+/* ============================================================
+   PERFORMANCE v31 — REACT RENDER ISOLATION
+
+   The world store is intentionally mutation-oriented. A root publication
+   therefore creates a new `view` object even when only one tiny domain changed.
+   Default React.memo sees the new object and rerenders the entire active tab.
+
+   These keys summarize ONLY the visible domain. They are deliberately cheap:
+   a Feed update scans at most the visible/recent feed window, Cast scans the
+   cast list, Chat scans room/message counts, etc. No JSON.stringify.
+   ============================================================ */
+
+function uiHashStart() {
+  return 2166136261 >>> 0;
+}
+
+function uiHashPush(hash, value) {
+  const s = String(value == null ? "" : value);
+  let h = hash >>> 0;
+
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+
+  h ^= 31;
+  return Math.imul(h, 16777619) >>> 0;
+}
+
+function noteUiRenderKey(w) {
+  if (!w) return "notes:0";
+
+  let h = uiHashStart();
+  const notes = liveNotes(w);
+
+  h = uiHashPush(h, notes.length);
+  h = uiHashPush(h, w.meId);
+
+  for (let i = 0; i < notes.length && i < 32; i += 1) {
+    const n = notes[i];
+    if (!n) continue;
+
+    h = uiHashPush(h, n.id);
+    h = uiHashPush(h, n.authorId);
+    h = uiHashPush(h, n.text);
+    h = uiHashPush(h, n.ts);
+    h = uiHashPush(h, (n.reacts || []).length);
+
+    if (n.music) {
+      h = uiHashPush(h, n.music.title);
+      h = uiHashPush(h, n.music.artist);
+    }
+
+    const author = charById(w, n.authorId);
+    if (author) {
+      h = uiHashPush(h, author.updatedAt);
+      h = uiHashPush(h, author.name);
+      h = uiHashPush(h, author.avatar);
+    }
+  }
+
+  return `notes:${notes.length}:${h.toString(36)}`;
+}
+
+function postUiRenderKey(w, post) {
+  if (!w || !post) return "post:0";
+
+  let h = uiHashStart();
+
+  h = uiHashPush(h, post.id);
+  h = uiHashPush(h, post.likes);
+  h = uiHashPush(h, post.text ? post.text.length : 0);
+  h = uiHashPush(h, post.imageId || post.image || "");
+  h = uiHashPush(h, post.virality && post.virality.status);
+  h = uiHashPush(h, post.virality && post.virality.score);
+
+  const likedBy =
+    Array.isArray(post.likedBy)
+      ? post.likedBy
+      : [];
+
+  h = uiHashPush(h, likedBy.length);
+  h = uiHashPush(
+    h,
+    likedBy.includes(w.meId)
+      ? 1
+      : 0
+  );
+
+  const comments = safePostComments(post);
+
+  h = uiHashPush(h, comments.length);
+
+  /*
+   * Comments are append-only in normal play. The last few rows are enough to
+   * distinguish every visible thread update without hashing a giant history.
+   */
+  for (
+    let i = Math.max(0, comments.length - 6);
+    i < comments.length;
+    i += 1
+  ) {
+    const c = comments[i];
+    if (!c) continue;
+
+    h = uiHashPush(h, c.id);
+    h = uiHashPush(h, c.parent);
+    h = uiHashPush(h, c.authorId);
+    h = uiHashPush(h, c.ts);
+    h = uiHashPush(h, c.text ? c.text.length : 0);
+  }
+
+  h = uiHashPush(
+    h,
+    repostCount(w, post.id)
+  );
+
+  const author =
+    charById(w, post.authorId);
+
+  if (author) {
+    h = uiHashPush(h, author.id);
+    h = uiHashPush(h, author.name);
+    h = uiHashPush(h, author.username);
+    h = uiHashPush(h, author.avatar);
+    h = uiHashPush(h, author.updatedAt);
+    h = uiHashPush(h, author.baseFollowers);
+    h = uiHashPush(h, author.followerDelta);
+    h = uiHashPush(
+      h,
+      Array.isArray(author.followers)
+        ? author.followers.length
+        : 0
+    );
+
+    h = uiHashPush(
+      h,
+      author.id !== w.meId &&
+      isFollowing(
+        w,
+        w.meId,
+        author.id
+      )
+        ? 1
+        : 0
+    );
+  }
+
+  return `post:${h.toString(36)}`;
+}
+
+function feedUiRenderKey(w) {
+  if (!w) return "feed:0";
+
+  let h = uiHashStart();
+
+  h = uiHashPush(h, w.meId);
+  h = uiHashPush(
+    h,
+    w.player && w.player.username
+  );
+  h = uiHashPush(
+    h,
+    w.player && w.player.avatar
+  );
+
+  const posts =
+    Array.isArray(w.posts)
+      ? w.posts
+      : [];
+
+  h = uiHashPush(h, posts.length);
+
+  /*
+   * Feed itself only exposes the recent window. Hash exactly that same order,
+   * not an unlimited history.
+   */
+  for (
+    let i = 0;
+    i < posts.length && i < 40;
+    i += 1
+  ) {
+    const p = posts[i];
+    if (!p) continue;
+
+    h = uiHashPush(
+      h,
+      postUiRenderKey(w, p)
+    );
+  }
+
+  const reposts =
+    Array.isArray(w.reposts)
+      ? w.reposts
+      : [];
+
+  h = uiHashPush(h, reposts.length);
+
+  for (
+    let i = 0;
+    i < reposts.length && i < 40;
+    i += 1
+  ) {
+    const r = reposts[i];
+    if (!r) continue;
+
+    h = uiHashPush(h, r.id);
+    h = uiHashPush(h, r.postId);
+    h = uiHashPush(h, r.actorId);
+    h = uiHashPush(h, r.ts);
+  }
+
+  const meProfile =
+    socialProfileById(
+      w,
+      w.meId
+    );
+
+  const following =
+    meProfile &&
+    Array.isArray(meProfile.following)
+      ? meProfile.following
+      : [];
+
+  h = uiHashPush(h, following.length);
+
+  for (
+    let i = 0;
+    i < following.length;
+    i += 1
+  ) {
+    h = uiHashPush(h, following[i]);
+  }
+
+  const trends =
+    Array.isArray(w.trends)
+      ? w.trends
+      : [];
+
+  for (
+    let i = 0;
+    i < trends.length && i < 8;
+    i += 1
+  ) {
+    const trend = trends[i];
+    if (!trend) continue;
+
+    h = uiHashPush(
+      h,
+      trend.id ||
+      trend.tag ||
+      trend.text ||
+      ""
+    );
+    h = uiHashPush(
+      h,
+      trend.score ||
+      trend.count ||
+      ""
+    );
+  }
+
+  h = uiHashPush(
+    h,
+    noteUiRenderKey(w)
+  );
+
+  const media =
+    activeGossipMediaAccount(w);
+
+  if (media) {
+    h = uiHashPush(h, media.id);
+    h = uiHashPush(h, media.name);
+    h = uiHashPush(h, media.avatar);
+    h = uiHashPush(h, media.updatedAt);
+  }
+
+  return `feed:${h.toString(36)}`;
+}
+
+function castUiRenderKey(w) {
+  if (!w) return "cast:0";
+
+  let h = uiHashStart();
+
+  const people =
+    humanChars(w)
+      .concat(w.chars || []);
+
+  h = uiHashPush(h, people.length);
+
+  for (const c of people) {
+    if (!c || !c.id) continue;
+
+    h = uiHashPush(h, c.id);
+    h = uiHashPush(h, c.name);
+    h = uiHashPush(h, c.username);
+    h = uiHashPush(h, c.avatar);
+    h = uiHashPush(h, c.updatedAt);
+  }
+
+  return `cast:${h.toString(36)}`;
+}
+
+function bondsUiRenderKey(w) {
+  if (!w) return "bonds:0";
+
+  let h = uiHashStart();
+
+  const people =
+    allSubjects(w);
+
+  h = uiHashPush(h, people.length);
+
+  for (const c of people) {
+    if (!c || !c.id) continue;
+
+    h = uiHashPush(h, c.id);
+    h = uiHashPush(h, c.name);
+    h = uiHashPush(h, c.avatar);
+    h = uiHashPush(h, c.updatedAt);
+  }
+
+  const rels =
+    w.rels &&
+    typeof w.rels === "object"
+      ? w.rels
+      : {};
+
+  const keys =
+    Object.keys(rels)
+      .sort();
+
+  h = uiHashPush(h, keys.length);
+
+  for (const key of keys) {
+    const r = rels[key];
+    if (!r) continue;
+
+    h = uiHashPush(h, key);
+    h = uiHashPush(h, r.score);
+    h = uiHashPush(h, r.type || r.bond);
+    h = uiHashPush(h, r.mood);
+    h = uiHashPush(h, r.updatedAt);
+  }
+
+  return `bonds:${h.toString(36)}`;
+}
+
+function scenesUiRenderKey(w) {
+  if (!w) return "scenes:0";
+
+  let h = uiHashStart();
+
+  const scenes =
+    Array.isArray(w.scenes)
+      ? w.scenes
+      : [];
+
+  h = uiHashPush(h, scenes.length);
+
+  for (
+    let i = 0;
+    i < scenes.length && i < 60;
+    i += 1
+  ) {
+    const s = scenes[i];
+    if (!s) continue;
+
+    h = uiHashPush(h, s.id);
+    h = uiHashPush(h, s.open);
+    h = uiHashPush(h, s.updatedAt);
+    h = uiHashPush(h, s.endedAt);
+    h = uiHashPush(
+      h,
+      Array.isArray(s.turns)
+        ? s.turns.length
+        : 0
+    );
+    h = uiHashPush(
+      h,
+      Array.isArray(s.messages)
+        ? s.messages.length
+        : 0
+    );
+  }
+
+  return `scenes:${h.toString(36)}`;
+}
+
+function chatUiRenderKey(w) {
+  if (!w) return "chat:0";
+
+  let h = uiHashStart();
+
+  const chats =
+    w.chats &&
+    typeof w.chats === "object"
+      ? w.chats
+      : {};
+
+  const ids =
+    Object.keys(chats)
+      .sort();
+
+  h = uiHashPush(h, ids.length);
+
+  for (const id of ids) {
+    const room = chats[id];
+    if (!room) continue;
+
+    h = uiHashPush(h, id);
+    h = uiHashPush(h, room.updatedAt);
+    h = uiHashPush(h, room.name);
+    h = uiHashPush(
+      h,
+      Array.isArray(room.messages)
+        ? room.messages.length
+        : Array.isArray(room.msgs)
+          ? room.msgs.length
+          : 0
+    );
+  }
+
+  return `chat:${h.toString(36)}`;
+}
+
+const MemoNotesStrip = React.memo(
+  NotesStrip,
+  (prev, next) =>
+    prev.renderKey === next.renderKey &&
+    prev.jump === next.jump
+);
 
 /*
  * Local Feed UI state (typing, media toggle, profile modal) must not rerender
@@ -31185,12 +31622,10 @@ const MemoPost = React.memo(
   Post,
   (prev, next) =>
     prev.renderVersion === next.renderVersion &&
-    prev.post === next.post &&
-    prev.highlight === next.highlight &&
-    prev.w === next.w
+    prev.highlight === next.highlight
 );
 
-function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal }) {
+function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal, renderKey }) {
   const { tt } = useLang();
   const { media } = useMedia();
   const [text, setText] = useState("");
@@ -31438,7 +31873,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       if (post && post.id) map.set(post.id, post);
     });
     return map;
-  }, [w.posts, w.rev]);
+  }, [w.posts, renderKey]);
 
   const followingIds = React.useMemo(() => {
     const set = new Set();
@@ -31550,7 +31985,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
           .slice(0, 40);
       },
       [
-        Number(w.rev || 0),
+        renderKey,
         feedMode,
         w.meId,
         followingIds,
@@ -31645,6 +32080,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       </div>
 
       <MemoNotesStrip
+        renderKey={noteUiRenderKey(w)}
         w={w}
         update={update}
         setErr={setErr}
@@ -31934,7 +32370,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
             ) : null}
 
             <MemoPost
-          renderVersion={Number(w.rev || 0)}
+          renderVersion={postUiRenderKey(w, p)}
           w={w}
           post={p}
           highlight={hl === p.id}
@@ -55630,12 +56066,50 @@ if (targetNote) {
  * save label / spinner / flash state changed. Their `w` prop is stabilized in
  * App below, so React.memo can cheaply skip those parent-only renders.
  */
-const MemoFeed = React.memo(Feed);
-const MemoCast = React.memo(Cast);
-const MemoBonds = React.memo(Bonds);
-const MemoScenes = React.memo(Scenes);
-const MemoChat = React.memo(Chat);
-const MemoWorld = React.memo(World);
+const MemoFeed = React.memo(
+  Feed,
+  (prev, next) =>
+    prev.renderKey === next.renderKey &&
+    prev.autoOn === next.autoOn &&
+    prev.jump === next.jump
+);
+
+const MemoCast = React.memo(
+  Cast,
+  (prev, next) =>
+    prev.renderKey === next.renderKey &&
+    prev.jump === next.jump
+);
+
+const MemoBonds = React.memo(
+  Bonds,
+  (prev, next) =>
+    prev.renderKey === next.renderKey
+);
+
+const MemoScenes = React.memo(
+  Scenes,
+  (prev, next) =>
+    prev.renderKey === next.renderKey &&
+    prev.jump === next.jump &&
+    prev.openId === next.openId
+);
+
+const MemoChat = React.memo(
+  Chat,
+  (prev, next) =>
+    prev.renderKey === next.renderKey &&
+    prev.openId === next.openId &&
+    prev.jump === next.jump
+);
+
+const MemoWorld = React.memo(
+  World,
+  (prev, next) =>
+    prev.renderKey === next.renderKey &&
+    prev.auto === next.auto &&
+    prev.detail === next.detail
+);
 
 export default function App() {
   const [world, setWorld] = useState(null);
@@ -58897,6 +59371,47 @@ const signOut = useCallback(async () => {
     return next;
   }, [world, meId, tab, sceneId]);
 
+  const activeTabRenderKey =
+    React.useMemo(() => {
+      if (!world || !meId) {
+        return "none";
+      }
+
+      /*
+       * Only summarize the tab that is actually mounted. Unmounted domains do
+       * zero render-key work.
+       */
+      switch (tab) {
+        case "feed":
+          return feedUiRenderKey(view);
+
+        case "cast":
+          return castUiRenderKey(view);
+
+        case "bonds":
+          return bondsUiRenderKey(view);
+
+        case "scene":
+          return scenesUiRenderKey(view);
+
+        case "chat":
+          return chatUiRenderKey(view);
+
+        case "world":
+        default:
+          /*
+           * The World/settings tab intentionally follows the global revision;
+           * it is not a high-frequency gameplay surface.
+           */
+          return `world:${Number(world.rev || 0)}`;
+      }
+    }, [
+      world,
+      meId,
+      tab,
+      view,
+    ]);
+
   const mediaCtxValue = React.useMemo(
     () => ({ media, addImage }),
     [media, addImage]
@@ -59072,17 +59587,18 @@ const signOut = useCallback(async () => {
         </div>
 
         <div className="mv-main">
-          {tab === "feed" && <MemoFeed w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
+          {tab === "feed" && <MemoFeed renderKey={activeTabRenderKey} w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
             onOpenChat={openChatTab}
             onOpenWorlds={openRoomsPanel}
             onRequestWorldStep={requestWorldStep}
             onRequestNoteReactions={requestNoteReactions}
             onSignal={signalSimulation} />}
-          {tab === "cast" && <MemoCast w={view} update={update} setErr={setErr} jump={jump} goChat={openChatTab} />}
-          {tab === "bonds" && <MemoBonds w={view} update={update} setErr={setErr} />}
-          {tab === "scene" && <MemoScenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />}
-          {tab === "chat" && <MemoChat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={openSceneFromChat} />}
+          {tab === "cast" && <MemoCast renderKey={activeTabRenderKey} w={view} update={update} setErr={setErr} jump={jump} goChat={openChatTab} />}
+          {tab === "bonds" && <MemoBonds renderKey={activeTabRenderKey} w={view} update={update} setErr={setErr} />}
+          {tab === "scene" && <MemoScenes renderKey={activeTabRenderKey} w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />}
+          {tab === "chat" && <MemoChat renderKey={activeTabRenderKey} w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={openSceneFromChat} />}
           {tab === "world" && <MemoWorld
+  renderKey={activeTabRenderKey}
   w={view}
   update={update}
   setErr={setErr}
