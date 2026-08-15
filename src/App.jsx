@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v15 — LIGHTWEIGHT SYNC PERFORMANCE ONLY — 20260815_2025 */
+/* MÁSVILÁG BUILD v16 — STARTUP/FREEZE PERFORMANCE ONLY — 20260815_2042 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -16483,9 +16483,18 @@ async function serverMigrate(world, username, password) {
 }
 
 async function serverSession() {
-  return apiJson("/auth/session", {
+  return apiJson("/auth/session?lite=1", {
     method: "GET",
   });
+}
+
+/* PERFORMANCE v16: session restore itself is metadata-only. The large world
+   payload is fetched exactly once, only after authentication succeeds. */
+async function serverLoadWorld() {
+  const data = await apiJson("/world/load", {
+    method: "GET",
+  });
+  return data && data.world ? data.world : null;
 }
 
 /* PERFORMANCE v15: polling/focus checks fetch only tiny revision scalars.
@@ -17311,6 +17320,45 @@ function migrate(w) {
   if (needsLegacyDataRepair) {
     w.clientDataRepairVersion = CLIENT_DATA_REPAIR_VERSION;
   }
+
+  return w;
+}
+
+/*
+ * PERFORMANCE v16 — FAST BOOT PREPARATION
+ *
+ * Current saves have already gone through the expensive one-time migrations.
+ * Re-running the full historical migration before the first paint only burns
+ * the browser main thread. If all persisted migration markers are current,
+ * boot only normalizes the tiny top-level shape. Older worlds still fall back
+ * to the exact existing migrate() path, so no migration behavior is removed.
+ */
+function prepareWorldForBoot(w) {
+  if (!w || !w.universe) return w;
+
+  const currentSchema =
+    Number(w.masvilagSchemaVersion || 0) >= WORLD_SCHEMA_VERSION &&
+    Number(w.clientDataRepairVersion || 0) >= CLIENT_DATA_REPAIR_VERSION &&
+    Number(w.relationshipCanonVersion || 0) >= RELATIONSHIP_CANON_VERSION &&
+    Boolean(String(w.relationshipCanonFingerprint || ""));
+
+  if (!currentSchema) {
+    return migrate(w);
+  }
+
+  w.syncRev = worldSyncRev(w);
+  if (!w.universe.year) w.universe.year = String(new Date().getFullYear());
+  if (w.universe.date === undefined) w.universe.date = "";
+  if (!w.universe.at) w.universe.at = 0;
+  ensureStorySettings(w);
+
+  ["rels", "chats", "mems", "accounts", "players", "deleted", "notify", "charMemory", "userSettings", "images"].forEach((k) => {
+    if (!w[k] || typeof w[k] !== "object") w[k] = {};
+  });
+  ["posts", "log", "scenes", "groups", "notes", "inventory", "diary"].forEach((k) => {
+    if (!Array.isArray(w[k])) w[k] = [];
+  });
+  if (!Array.isArray(w.chars)) w.chars = [];
 
   return w;
 }
@@ -53825,6 +53873,9 @@ export default function App() {
   const mediaTimer = useRef(null);
   const mediaReady = useRef(false);
   const lastSavedContent = useRef("");
+  /* PERFORMANCE v16: cheap dirty gate. Avoid serializing a multi-MB world
+     merely to discover that nothing changed since load/save. */
+  const lastSavedRev = useRef(-1);
   const [showRooms, setShowRooms] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [auto, setAutoCfg] = useState(AUTO_DEFAULT);
@@ -54011,8 +54062,8 @@ export default function App() {
       nextWorld !== authoritative;
 
     if (!mergedDirty) {
-      lastSavedContent.current =
-        contentOf(authoritative);
+      lastSavedContent.current = "";
+      lastSavedRev.current = Number(authoritative.rev || 0);
     }
 
     setWorld(nextWorld);
@@ -54087,12 +54138,13 @@ useEffect(() => {
         alive &&
         session &&
         session.authenticated &&
-        session.world &&
         session.meId
       ) {
-        /* Let the Boot UI paint before migrating a large saved world. */
+        /* Let the Boot UI paint, then fetch the large world exactly once. */
         await new Promise((resolve) => setTimeout(resolve, 0));
-        const wld = migrate(session.world);
+        const loadedWorld = await serverLoadWorld();
+        if (!alive || !loadedWorld) return;
+        const wld = prepareWorldForBoot(loadedWorld);
         const id = session.meId;
 
         if (
@@ -54121,7 +54173,10 @@ useEffect(() => {
           setWorld(wld);
           setMeId(id);
 
-          lastSavedContent.current = contentOf(wld);
+          /* The just-loaded server revision is already saved. Do not perform
+             a full JSON.stringify on the main thread merely to seed dirty state. */
+          lastSavedContent.current = "";
+          lastSavedRev.current = Number(wld.rev || 0);
           setSaveState("saved");
           setSaveAt(now());
 
@@ -54194,8 +54249,8 @@ useEffect(() => {
 
       setWorld(wld);
       setMeId(sess.meId);
-      lastSavedContent.current =
-        contentOf(wld);
+      lastSavedContent.current = "";
+      lastSavedRev.current = Number(wld.rev || 0);
       setSaveState("local");
     } catch (e) {
       /* nincs helyi munkamenet sem */
@@ -54220,7 +54275,8 @@ useEffect(() => {
     setShowRooms(false); setMakeWorld(false); setShowNotes(false); setJump(null);
     const mine0 = (wld.notify && wld.notify[id]) || [];
     seenNote.current = mine0.length ? mine0[0].id : "";
-    lastSavedContent.current = contentOf(wld);
+    lastSavedContent.current = "";
+    lastSavedRev.current = Number(wld.rev || 0);
     lastSavedMedia.current = "";
     mediaSyncRev.current = 0;
     pendingServerWorld.current = null;
@@ -55881,6 +55937,12 @@ const signOut = useCallback(async () => {
       const latest = wRef.current || world;
       if (!latest) return;
 
+      /* PERFORMANCE v16: startup and parent-only renders must never clone/
+         serialize the world when the persisted content revision is unchanged. */
+      if (Number(latest.rev || 0) === Number(lastSavedRev.current)) {
+        return;
+      }
+
       /*
        * PERFORMANCE v13:
        * no structuredClone + JSON.stringify chain on the React thread.
@@ -55970,8 +56032,8 @@ const signOut = useCallback(async () => {
         typeof navigator !== "undefined" &&
         navigator.onLine === false
       ) {
-        lastSavedContent.current =
-          json;
+        lastSavedContent.current = json;
+        lastSavedRev.current = Number(snapMeta.rev || 0);
 
         setSaveState("local");
         setSaveAt(now());
@@ -56069,8 +56131,8 @@ const signOut = useCallback(async () => {
             conflictContent ===
             json
           ) {
-            lastSavedContent.current =
-              conflictContent;
+            lastSavedContent.current = conflictContent;
+            lastSavedRev.current = Number(conflictWorld.rev || 0);
 
             const live =
               wRef.current;
@@ -56202,8 +56264,11 @@ const signOut = useCallback(async () => {
           )
         );
 
-      lastSavedContent.current =
-        json;
+      lastSavedContent.current = json;
+      /* The server's accepted snapshot corresponds to snapMeta.rev; its own
+         bookkeeping advances rev by exactly one. Any newer local mutation has
+         a higher rev and therefore still schedules the required follow-up save. */
+      lastSavedRev.current = Number(snapMeta.rev || 0) + 1;
 
       const live =
         wRef.current;
@@ -56571,7 +56636,9 @@ const signOut = useCallback(async () => {
      * a generatív kérések tényleges sűrűségét.
      */
     const i = setInterval(beat, 9000);
-    const first = setTimeout(beat, 150);
+    /* PERFORMANCE v16: give the freshly restored world one paint/interaction
+       window before the autonomous planner scans history and possibly calls AI. */
+    const first = setTimeout(beat, 5000);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
 

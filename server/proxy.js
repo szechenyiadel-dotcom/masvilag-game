@@ -314,6 +314,38 @@ async function getSessionIdentity(req) {
     accountId: result.rows[0].account_id,
   };
 }
+
+async function getSessionMeta(req) {
+  const token = readCookie(req, SESSION_COOKIE);
+  if (!token || !pool) return null;
+
+  const result = await pool.query(
+    `
+    SELECT
+      s.world_code,
+      s.account_id,
+      w.data->'accounts'->s.account_id AS account,
+      COALESCE((w.data->>'syncRev')::bigint, 0) AS sync_rev
+    FROM sessions s
+    JOIN worlds w ON w.code = s.world_code
+    WHERE s.token_hash = $1
+      AND s.expires_at > NOW()
+    LIMIT 1
+    `,
+    [sessionTokenHash(token)]
+  );
+
+  if (!result.rows.length) return null;
+  const row = result.rows[0];
+  return {
+    token,
+    worldCode: row.world_code,
+    accountId: row.account_id,
+    account: row.account || null,
+    syncRev: Math.max(0, Math.floor(Number(row.sync_rev) || 0)),
+  };
+}
+
 function legacyPasswordHash(password, salt) {
   const txt = String(salt) + "::" + String(password);
   let h1 = 0x811c9dc5;
@@ -475,27 +507,29 @@ function worldSyncRevServer(world) {
 }
 
 function safeWorldForClient(world) {
-  const clean =
-    JSON.parse(
-      JSON.stringify(
-        world || {}
-      )
-    );
+  /* PERFORMANCE v16: never deep-clone the entire multi-MB world just to hide
+     three account-secret fields. Clone only the objects we actually redact;
+     every other branch is read-only while Express serializes the response. */
+  const source = world && typeof world === "object" ? world : {};
+  const clean = { ...source };
+  clean.syncRev = worldSyncRevServer(source);
 
-  clean.syncRev =
-    worldSyncRevServer(clean);
+  const sourceAccounts = source.accounts && typeof source.accounts === "object"
+    ? source.accounts
+    : {};
+  clean.accounts = {};
 
-  for (
-    const account of
-    Object.values(
-      clean.accounts || {}
-    )
-  ) {
-    if (!account) continue;
+  for (const [accountId, account] of Object.entries(sourceAccounts)) {
+    if (!account || typeof account !== "object") {
+      clean.accounts[accountId] = account;
+      continue;
+    }
 
-    delete account.hash;
-    delete account.salt;
-    delete account.password;
+    const safeAccount = { ...account };
+    delete safeAccount.hash;
+    delete safeAccount.salt;
+    delete safeAccount.password;
+    clean.accounts[accountId] = safeAccount;
   }
 
   return clean;
@@ -993,69 +1027,86 @@ app.get("/auth/session", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
 
-    const session =
-      await getSession(req);
+    const lite = String(req.query?.lite || "") === "1";
 
-    if (!session) {
-      clearSessionCookie(res);
+    if (lite) {
+      const session = await getSessionMeta(req);
+      if (!session || !session.account) {
+        clearSessionCookie(res);
+        return res.status(401).json({ authenticated: false });
+      }
 
-      return res.status(401).json({
-        authenticated: false,
+      return res.json({
+        authenticated: true,
+        meId: session.accountId,
+        profileUsername: cleanUsername(session.account.username),
+        syncRev: session.syncRev,
+        code: session.worldCode,
       });
     }
 
-    const account =
-      session.world?.accounts?.[
-        session.accountId
-      ];
+    const session = await getSession(req);
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({ authenticated: false });
+    }
 
+    const account = session.world?.accounts?.[session.accountId];
     if (!account) {
       if (session.token) {
         await pool.query(
-          `
-          DELETE FROM sessions
-          WHERE token_hash = $1
-          `,
-          [
-            sessionTokenHash(
-              session.token
-            ),
-          ]
+          `DELETE FROM sessions WHERE token_hash = $1`,
+          [sessionTokenHash(session.token)]
         );
       }
-
       clearSessionCookie(res);
-
-      return res.status(401).json({
-        authenticated: false,
-      });
+      return res.status(401).json({ authenticated: false });
     }
 
     return res.json({
       authenticated: true,
-      meId:
-        session.accountId,
-      profileUsername:
-        cleanUsername(account.username),
-      syncRev:
-        worldSyncRevServer(
-          session.world
-        ),
-      world:
-        safeWorldForClient(
-          session.world
-        ),
+      meId: session.accountId,
+      profileUsername: cleanUsername(account.username),
+      syncRev: worldSyncRevServer(session.world),
+      world: safeWorldForClient(session.world),
     });
   } catch (err) {
-    console.error(
-      "Session restore error:",
-      err
+    console.error("Session restore error:", err);
+    return res.status(500).json({ error: "Session restore failed." });
+  }
+});
+
+/* PERFORMANCE v16: authenticated full-world load is separate from the tiny
+   session check. This prevents the browser from receiving/parsing the large
+   world until authentication has already succeeded. */
+app.get("/world/load", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSessionMeta(req);
+    if (!session || !session.account) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
+
+    const result = await pool.query(
+      `SELECT data FROM worlds WHERE code = $1 LIMIT 1`,
+      [session.worldCode]
     );
 
-    return res.status(500).json({
-      error:
-        "Session restore failed.",
+    if (!result.rows.length) {
+      return res.status(404).json({ error: "World not found." });
+    }
+
+    return res.json({
+      ok: true,
+      meId: session.accountId,
+      syncRev: worldSyncRevServer(result.rows[0].data),
+      world: safeWorldForClient(result.rows[0].data),
     });
+  } catch (err) {
+    console.error("World load error:", err);
+    return res.status(500).json({ error: "World load failed." });
   }
 });
 
