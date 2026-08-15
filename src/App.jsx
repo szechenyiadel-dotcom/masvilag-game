@@ -15627,7 +15627,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v83-comment-reply-world-reset";
+const BUILD_VERSION = "v84-post-image-daily-caps";
 
 const AUTO = "masvilag:auto";
 /*
@@ -25040,14 +25040,17 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
   return createdReplyIds.length;
 }
 /*
- * CHARACTER-DRIVEN POST ACTIVITY
+ * CHARACTER-DRIVEN POST ACTIVITY — v84
  *
- * Normál karaktereknél a napi social ritmus szándékosan visszafogott:
- * 1-2 saját poszt / gördülő 24 óra az alap, 3 a kemény felső plafon.
- * A pletykamédia NEM ide tartozik: az csak valódi publishable történésből
- * posztol, és külön gossip-cadence vezérli.
+ * NORMAL AI CHARACTER rolling-24h hard limits:
+ * - maximum 5 total feed posts
+ * - maximum 1 image-bearing feed post
+ *
+ * The player is manually controlled and is not limited by this autonomous-AI
+ * budget. Gossip/media accounts use their separate publication cadence.
  */
 const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 5;
+const AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H = 1;
 const AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H = 4;
 const AUTONOMOUS_THIRD_POST_MIN_IDLE_MS = 2.5 * 3600e3;
 const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.15;
@@ -25055,16 +25058,61 @@ const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.15;
 function characterAutonomousPostStats24h(w, characterId) {
   const cutoff24h = now() - 24 * 3600e3;
   let count = 0;
+  let imageCount = 0;
   let lastPostAt = 0;
+  let lastImagePostAt = 0;
 
   (w && Array.isArray(w.posts) ? w.posts : []).forEach((p) => {
     if (!p || p.authorId !== characterId) return;
     const ts = Number(p.ts) || 0;
-    if (ts >= cutoff24h) count += 1;
+
+    if (ts >= cutoff24h) {
+      count += 1;
+
+      if (p.imageId || p.image) {
+        imageCount += 1;
+        lastImagePostAt = Math.max(lastImagePostAt, ts);
+      }
+    }
+
     lastPostAt = Math.max(lastPostAt, ts);
   });
 
-  return { count, lastPostAt };
+  return { count, imageCount, lastPostAt, lastImagePostAt };
+}
+
+function characterCanAutonomouslyUsePostImage(w, characterId) {
+  if (!w || !characterId || isHuman(w, characterId) || isMediaAccount(w, characterId)) {
+    return false;
+  }
+
+  return (
+    characterAutonomousPostStats24h(w, characterId).imageCount <
+    AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H
+  );
+}
+
+function autonomousPostingQuotaCard(w, characters) {
+  const rows = (characters || [])
+    .filter((c) => c && c.id && !isHuman(w, c.id) && !isMediaAccount(w, c.id))
+    .map((c) => {
+      const stats = characterAutonomousPostStats24h(w, c.id);
+      const imageAllowed =
+        stats.imageCount < AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H;
+
+      return `- ${c.name} [${c.id}]: ${stats.count}/${AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H} posts, ${stats.imageCount}/${AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H} image posts in rolling 24h; image=${imageAllowed ? "ALLOWED" : "BLOCKED"}`;
+    });
+
+  if (!rows.length) return "";
+
+  return `
+ROLLING 24H POST QUOTAS — HARD SYSTEM GROUND TRUTH:
+${rows.join("\n")}
+- No normal AI character may exceed ${AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H} total posts in ANY rolling 24-hour window.
+- No normal AI character may publish more than ${AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H} image-bearing post in ANY rolling 24-hour window.
+- If image=BLOCKED for a character, their "image" field MUST be empty. They may still make a text-only post if their total post budget allows it.
+- Do not "save up" or compensate by putting multiple album images into one post. A feed post is either text-only or uses at most one album image.
+`;
 }
 
 function characterCanAutonomouslyPost(w, c) {
@@ -25079,8 +25127,8 @@ function characterCanAutonomouslyPost(w, c) {
   if (stats.count < AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H) return true;
 
   /*
-   * A 3. poszt kivételes: csak tényleg erősen online karakter kaphatja,
-   * és akkor sem közvetlenül a második után. Így a világ alapból 1-2-nél marad.
+   * Az 5. poszt már kivételes: csak tényleg erősen online karakter kaphatja,
+   * és akkor sem közvetlenül az előző után. Az 5 továbbra is abszolút hard cap.
    */
   const activity = characterOnlineActivityProfile(w, c).post;
   const idleMs = stats.lastPostAt ? now() - stats.lastPostAt : Infinity;
@@ -25114,8 +25162,8 @@ function fairPostCast(w) {
       : 72;
 
     /*
-     * Aki ma még nem posztolt, erős prioritást kap. Egy poszt után már kisebb,
-     * kettő után pedig nagyon nagy büntetés jön: a harmadik csak ritka kivétel.
+     * Aki az elmúlt 24 órában kevesebbet posztolt, prioritást kap.
+     * A 4-5. poszt már erősen büntetett; 5 fölé a commit guard sem enged.
      */
     const dailyPenalty = dailyPosts <= 0 ? 0 : dailyPosts === 1 ? 48 : 150;
     const pressure =
@@ -25187,6 +25235,8 @@ ${characterAgentRuntimeCard(
 ${cast
   .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
   .join("")}
+
+${autonomousPostingQuotaCard(w, cast)}
 
 KARAKTERHŰ POSZTOLÁS:
 - Minden kiválasztott karakter teljes saját kánonja és saját emlékezete aktív.
@@ -25337,7 +25387,9 @@ KOMMENT EMOJI:
 
 KÉPEK:
 
-- Akinek van Fotóalbuma, néha képet is posztolhat belőle.
+- HARD LIMIT: normál AI-karakterenként gördülő 24 órában LEGFELJEBB 1 képes feed-poszt lehet. Ezt a fenti ROLLING 24H POST QUOTAS sorai mutatják karakterenként.
+- Ha egy karakter image=BLOCKED állapotban van, nála az "image" mező kötelezően üres; attól még szöveges posztot írhat, ha az 5-posztos teljes kerete nem telt be.
+- Akinek van Fotóalbuma és image=ALLOWED, néha képet is posztolhat belőle.
 - Az albumlistában minden kép mellett ott lehet az AI által felismert látható tartalom is. Ezt KÖTELEZŐ figyelembe venni a megfelelő kép kiválasztásakor és a caption megírásakor.
 - A poszt szerzője is "tudja", mi van a saját feltöltött fotóján. A captionnek és a későbbi kommentválaszainak is ehhez kell igazodniuk.
 - Előbb döntsd el, MELYIK konkrét kép illik a jelenethez, és csak UTÁNA írd meg a captiont. A caption ne legyen felcserélhető egy teljesen másik képpel.
@@ -25410,6 +25462,9 @@ async function genFocusedWorldStep(w) {
   const author = fairPostCast(w)[0];
   if (!author) return null;
 
+  const authorPostStats24h = characterAutonomousPostStats24h(w, author.id);
+  const authorImageAllowed24h = characterCanAutonomouslyUsePostImage(w, author.id);
+
   const recentOwn = (w.posts || [])
     .filter((p) => p && p.authorId === author.id)
     .slice(0, 5)
@@ -25447,19 +25502,26 @@ ${recentOwn || "-"}
 LEGUTÓBBI FEED:
 ${recentWorld || "-"}
 
+GÖRDÜLŐ 24 ÓRÁS SAJÁT KVÓTÁD:
+- feed-poszt: ${authorPostStats24h.count}/${AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H}
+- képes feed-poszt: ${authorPostStats24h.imageCount}/${AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H}
+- most képet használhatsz: ${authorImageAllowed24h ? "IGEN" : "NEM"}
+
 SAJÁT FOTÓALBUMOD:
-${albumList(author) || "nincs használható albumkép"}
+${authorImageAllowed24h ? (albumList(author) || "nincs használható albumkép") : "KÉPKVÓTA ELÉRVE — ebben a gördülő 24 órában csak szöveges poszt engedélyezett"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
-- A normál karakterek napi ritmusa 2-4 saját poszt / gördülő 24 óra; 5 a kemény felső plafon. Ne posztolj csak azért, hogy kitöltsd a feedet.
+- HARD LIMIT: gördülő 24 órában legfeljebb 5 saját feed-poszt lehet. A rendszer mentéskor is ellenőrzi.
+- HARD IMAGE LIMIT: gördülő 24 órában legfeljebb 1 képes feed-poszt lehet. Ha fent "most képet használhatsz: NEM", az "image" mező legyen ÜRES.
+- Ne posztolj csak azért, hogy kitöltsd a feedet.
 - A poszt kizárólag ${author.name} saját életéből, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
 - Ha a karakternek kölcsönös baráti kapcsolatai vannak, ezek legyenek aktív részei a social életének: természetesen posztolhat közös programról, megemlítheti vagy barátilag ugrasshatja a barátját, reagálhat annak életére, megvédheti, megkérdezheti, merre van, vagy szervezhet vele valamit. Ne kezeld a barátokat véletlenszerű idegenként.
 - Ne legyen rendszer-poszt vagy mesterséges filler.
 - Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
 - Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
-- Ha albumképet választasz, ELŐBB a visible image content alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra a képre illik.
-- Kép nélkül is teljesen jó poszt.
+- Ha ${authorImageAllowed24h ? "engedélyezett albumképet" : "a kvóta miatt most semmilyen képet"} választasz, ${authorImageAllowed24h ? "ELŐBB a visible image content alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra a képre illik." : "az hibás lenne: az image mezőt hagyd üresen."}
+- Kép nélkül is teljesen jó poszt; a napi 1 képes poszt limit után a további posztoknak szövegesnek kell lenniük.
 - Ne generálj kommenteket ebben a hívásban; a többi AI külön fog reagálni rá a saját karakteréből.
 - A játékos helyett soha ne írj.
 
@@ -25531,7 +25593,16 @@ function applyWorldStep(n, out) {
         text: sysLangText(n, cid, `Kommenteltem: ${cut(body, 110)}`, `I commented: ${cut(body, 110)}`),
       });
     });
-    const pic = p.image ? albumFind(authorChar, p.image) : null;
+    /*
+     * v84 HARD IMAGE COMMIT GUARD:
+     * Prompt compliance is not trusted. Re-check the live world while applying
+     * each generated post. Because n.posts is mutated inside this same loop,
+     * a second image request by the same author in one provider batch is also
+     * blocked immediately.
+     */
+    const imageQuotaOpen = characterCanAutonomouslyUsePostImage(n, author);
+    const requestedPic = p.image ? albumFind(authorChar, p.image) : null;
+    const pic = imageQuotaOpen ? requestedPic : null;
     const picRef = pic ? (pic.imageId ? imageRef(pic.imageId) : pic.src) : "";
     const picId = imageIdOf(picRef);
     const fresh = {
@@ -34047,7 +34118,7 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 60,
+    schedulerVersion: 61,
     lastError: "",
   };
 }
@@ -36142,7 +36213,7 @@ function ensureSimState(w) {
   /* v53 migration: do not let a backlog created by the old comment/feed scheduler
      delay the new fairness lanes for minutes. Manual requests survive; stale
      background actions are rebuilt by the new planner from current state. */
-  if (Number(w.sim.schedulerVersion) !== 60) {
+  if (Number(w.sim.schedulerVersion) !== 61) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -36154,9 +36225,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 60;
+    w.sim.schedulerVersion = 61;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 60;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 61;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
