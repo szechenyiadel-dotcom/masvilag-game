@@ -8163,6 +8163,151 @@ function topLevelAiCommenterIds(w, post) {
   );
 }
 
+
+/* ============================================================
+   GUARANTEED COMMENTS ON EVERY FEED POST — v86
+
+   "More likely to comment" is not enough. Every feed post gets a hard
+   comment-coverage obligation. This applies equally to:
+   - player posts
+   - normal AI posts
+   - AI -> AI posts
+   - gossip/media posts
+   - popup/public response posts
+   - rumor/statement posts
+
+   The only impossible case is when no other AI character exists who could
+   legally comment (for example a world with one AI and that AI authored it).
+   ============================================================ */
+
+const GUARANTEED_POST_COMMENT_RETRY_MS = 12000;
+
+function availableAiCommenterCountForPost(w, post) {
+  if (!w || !post) return 0;
+  return (w.chars || []).filter(
+    (c) =>
+      c &&
+      c.id &&
+      !isHuman(w, c.id) &&
+      c.id !== post.authorId
+  ).length;
+}
+
+function guaranteedPostCommentTarget(w, post) {
+  if (!w || !post) return 0;
+  const available = availableAiCommenterCountForPost(w, post);
+  if (!available) return 0;
+
+  const visual = visualPostReactionProfile(w, post);
+  const target = Math.max(
+    1,
+    Math.round(Number(visual && visual.targetMin) || 6)
+  );
+
+  return Math.min(available, target);
+}
+
+function postCommentCoverageState(w, post) {
+  const current = topLevelAiCommentCount(w, post);
+  const target = guaranteedPostCommentTarget(w, post);
+  return {
+    current,
+    target,
+    missing: Math.max(0, target - current),
+    complete: target <= 0 || current >= target,
+  };
+}
+
+function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
+  if (!w || !post || !post.id) return null;
+
+  const coverage = postCommentCoverageState(w, post);
+  if (coverage.complete || coverage.missing <= 0) return null;
+
+  const visual = visualPostReactionProfile(w, post);
+  const available = availableAiCommenterCountForPost(w, post);
+
+  const maxNew = Math.max(
+    coverage.missing,
+    Math.min(
+      available - coverage.current,
+      Math.max(
+        coverage.missing,
+        Math.round(Number(visual && visual.targetMax) || coverage.target)
+          - coverage.current
+      )
+    )
+  );
+
+  return mkAction(
+    "comments",
+    `comment-coverage:${post.id}:${coverage.current}:${coverage.target}`,
+    {
+      postId: post.id,
+      trigger: "guaranteed-coverage",
+      minComments: coverage.missing,
+      maxComments: Math.max(coverage.missing, Math.min(20, maxNew)),
+      allowThreadFollowup: true,
+      coverageTarget: coverage.target,
+      coverageSource: source,
+    },
+    "coverage"
+  );
+}
+
+function enqueueGuaranteedPostCommentCoverage(w, postId, source = "post-created") {
+  if (!w || !postId) return false;
+  const post = (w.posts || []).find((row) => row && row.id === postId);
+  if (!post) return false;
+
+  const action = guaranteedPostCommentAction(w, post, source);
+  if (!action) return false;
+
+  return simEnqueue(w, action);
+}
+
+function guaranteedCommentCoverageCandidate(w) {
+  if (!w) return null;
+
+  const ts = now();
+
+  const rows = (w.posts || [])
+    .filter((post) => {
+      if (!post || !post.id || !post.authorId) return false;
+
+      const coverage = postCommentCoverageState(w, post);
+      if (coverage.complete || coverage.missing <= 0) return false;
+
+      const lastAttempt = Number(post.commentCoverageAttemptAt) || 0;
+      if (
+        lastAttempt &&
+        ts - lastAttempt < GUARANTEED_POST_COMMENT_RETRY_MS
+      ) {
+        return false;
+      }
+
+      return true;
+    })
+    .map((post) => {
+      const coverage = postCommentCoverageState(w, post);
+
+      /*
+       * Zero-comment posts are absolute priority. After that, larger deficits
+       * win. Newer posts win ties, so a new upload gets visible engagement
+       * quickly while old uncovered posts are still eventually backfilled.
+       */
+      const score =
+        (coverage.current === 0 ? 100000 : 0) +
+        coverage.missing * 1000 +
+        Math.max(0, Number(post.ts) || 0) / 1e12;
+
+      return { post, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return rows.length ? rows[0].post : null;
+}
+
 function visualPostRelationshipPriority(w, actorId, targetId, post) {
   const visual = visualPostReactionProfile(w, post);
   if (!visual.hasImage || !actorId || !targetId || actorId === targetId) return 0;
@@ -15627,7 +15772,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v85-chat-busy-scope-fix";
+const BUILD_VERSION = "v86-guaranteed-comments-every-post";
 
 const AUTO = "masvilag:auto";
 /*
@@ -22381,8 +22526,9 @@ ${repetitionGuard(
 KOMMENT SZABÁLYOK:
 
 ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD MINIMUM:
-- EBBEN a generálásban legalább ${requestedMinComments}, legfeljebb ${requestedMaxComments} KÜLÖNBÖZŐ AI-karakter írjon valódi, látható kommentet, ha a castban ennyi szereplő van.
-- A LIKE NEM HELYETTESÍTI a kommentminimumot.
+- EBBEN a generálásban legalább ${requestedMinComments}, legfeljebb ${requestedMaxComments} KÜLÖNBÖZŐ AI-karakter írjon valódi, látható TOP-LEVEL kommentet, ha a castban ennyi szereplő van.
+- EZ NEM OPCIONÁLIS engagement-ajánlás, hanem a poszt látható kommentminimuma.
+- A LIKE, REPOST vagy IGNORE NEM HELYETTESÍTI a kommentminimumot.
 - Elsősorban TOP-LEVEL kommenteket adj; a külön reply-engine utána továbbviszi a threadet.
 - AI-karakterek EGYMÁS posztjai alatt is ugyanilyen aktívan reagáljanak. A játékos posztja nem kap különleges komment-prioritást.
 ` : ""}
@@ -25624,6 +25770,7 @@ function applyWorldStep(n, out) {
       consumeAlbumItem(authorChar, pic);
     }
     n.posts.unshift(fresh);
+    enqueueGuaranteedPostCommentCoverage(n, fresh.id, "ai-post-created");
     createdPosts += 1;
 
     mentionedPostTargets.forEach((targetId) => {
@@ -26261,6 +26408,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       }
 
       n.posts.unshift(p);
+      enqueueGuaranteedPostCommentCoverage(n, p.id, "player-post-created");
 
       const mentions = noteMentions(
         n,
@@ -34127,7 +34275,7 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 61,
+    schedulerVersion: 62,
     lastError: "",
   };
 }
@@ -36195,6 +36343,15 @@ function ensureSimState(w) {
     const postId = action.payload && action.payload.postId;
     const post = (w.posts || []).find((p) => p && p.id === postId);
     if (!post) return false;
+
+    /* v86: hard comment coverage may rescue an older uncommented post. */
+    if (
+      action.payload &&
+      action.payload.trigger === "guaranteed-coverage"
+    ) {
+      return !postCommentCoverageState(w, post).complete;
+    }
+
     return now() - (Number(post.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS;
   });
 
@@ -36222,7 +36379,7 @@ function ensureSimState(w) {
   /* v53 migration: do not let a backlog created by the old comment/feed scheduler
      delay the new fairness lanes for minutes. Manual requests survive; stale
      background actions are rebuilt by the new planner from current state. */
-  if (Number(w.sim.schedulerVersion) !== 61) {
+  if (Number(w.sim.schedulerVersion) !== 62) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -36234,9 +36391,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 61;
+    w.sim.schedulerVersion = 62;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 61;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 62;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -37400,6 +37557,7 @@ function applyGossipNetworkEcho(w, payload, out) {
           language: worldLanguage(w, w.meId),
         };
         w.posts = [post, ...(w.posts || [])].slice(0, 500);
+        enqueueGuaranteedPostCommentCoverage(w, post.id, "rumor-echo-post-created");
         rumor.echoedBy[who] = ts;
         madeCount++;
 
@@ -38961,6 +39119,7 @@ function publishGossipMediaStory(
   ].slice(-800);
 
   w.posts.unshift(post);
+  enqueueGuaranteedPostCommentCoverage(w, post.id, "gossip-media-post-created");
 
   const storyRow = {
     id:
@@ -39758,7 +39917,9 @@ function applyGossipReactions(n,postId,cast,out){
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
     const body=cleanGeneratedUtterance(n,who,item.text,1200);if(!body)return;
     const statement={id:uid(),authorId:who,ts:now(),likes:0,likedBy:[],text:body,imageId:"",image:"",comments:[],language:worldLanguage(n,n.meId),responseToGossipId:post.gossipStory.id||""};
-    n.posts.unshift(statement);visibleActors.add(who);
+    n.posts.unshift(statement);
+    enqueueGuaranteedPostCommentCoverage(n, statement.id, "gossip-statement-created");
+    visibleActors.add(who);
     recordSocialEvent(n,{type:"post",refId:statement.id,ts:statement.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:42,drama:30,romance:0,embarrassment:0,source:"gossip-response",text:body,tags:["social","gossip-response","statement"],meta:{postId:statement.id,gossipPostId:post.id,storyId:post.gossipStory.id||""}});
   });
   (reactionOut&&Array.isArray(reactionOut.dms)?reactionOut.dms:[]).slice(0,3).forEach((item)=>{
@@ -39829,6 +39990,7 @@ function publishRumorEvolution(w,parentPostId,raw){
     parentStoryId:parent.gossipStory.id||"",rumorEvolution:true,distortionLevel,reactedBy:[],reactionRounds:0,rumorEvolvedAt:0,
   }};
   parent.gossipStory.rumorEvolvedAt=now();w.posts.unshift(post);
+  enqueueGuaranteedPostCommentCoverage(w, post.id, "rumor-evolution-created");
   if(!Array.isArray(w.rumors))w.rumors=[];
   w.rumors.unshift({id:"rum_"+uid(),storyId:post.gossipStory.id,parentStoryId:parent.gossipStory.id||"",postId:post.id,text:post.text,factLevel:"speculation",distortionLevel,ts:post.ts,mentionedIds:post.gossipStory.mentionedIds});w.rumors=w.rumors.slice(0,160);
   recordSocialEvent(w,{type:"rumor-evolution",refId:post.gossipStory.id,ts:post.ts,actorId:media.id,targetIds:post.gossipStory.mentionedIds,visibility:"public",factLevel:"speculation",importance:52,drama:30+distortionLevel*0.35,romance:0,embarrassment:0,source:"gossip-media",text:post.gossipStory.headline?`${post.gossipStory.headline} — ${cut(post.text,220)}`:cut(post.text,260),tags:["social","gossip-media","rumor","speculation","rumor-evolution"],meta:{postId:post.id,storyId:post.gossipStory.id,parentStoryId:parent.gossipStory.id||"",distortionLevel}});
@@ -41039,6 +41201,7 @@ function appendPopupPublicPost(
   };
 
   w.posts.unshift(post);
+  enqueueGuaranteedPostCommentCoverage(w, post.id, "popup-public-post-created");
 
   recordSocialEvent(
     w,
@@ -44570,7 +44733,8 @@ function simEnqueue(w, action) {
   const doneAt = Number(sim.done[action.key] || 0);
   if (doneAt && now() - doneAt < SIM_DONE_TTL) return false;
   if (sim.queue.some((x) => x && x.key === action.key)) return false;
-  if (action.source === "manual") {
+  if (action.source === "manual" || action.source === "coverage") {
+    /* Guaranteed comment coverage is reactive, not ordinary background work. */
     sim.queue.unshift(action);
     sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
   } else {
@@ -46556,6 +46720,22 @@ function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
   /*
+   * v86 ABSOLUTE FEED COMMENT COVERAGE.
+   * Before ordinary autonomous world activity, rescue any post that still has
+   * fewer than its guaranteed minimum top-level AI comments. This also
+   * backfills uncommented posts from older saves.
+   */
+  const uncoveredPost = guaranteedCommentCoverageCandidate(view);
+  if (uncoveredPost) {
+    const coverageAction = guaranteedPostCommentAction(
+      view,
+      uncoveredPost,
+      "coverage-watchdog"
+    );
+    if (coverageAction) return coverageAction;
+  }
+
+  /*
    * v54 HARD FAIRNESS WATCHDOG
    *
    * A normál sorrend feed-first, DE a lejárt kemény határidő megelőzi még a friss kommentthreadet is, így egy csatorna sem maradhat örökre
@@ -46645,10 +46825,9 @@ function planAutoAction(view) {
   }
 
   /*
-   * 2) FRISS POSZT KOMMENTJEI.
-   * Csak a friss feedből választunk. Egy poszt maximum egy automatikus
-   * komment-kört kap; utána csak valódi reply/mention tarthatja életben.
-   * Így a kommentek sűrűek a friss posztokon, de nem eszik meg a világot.
+   * 2) FRISS POSZT TOVÁBBI KOMMENTJEI.
+   * A v86 coverage lane már garantálja az alap-kommentmennyiséget MINDEN
+   * poszton. Ez a friss-feed kör csak további természetes sűrűséget ad.
    */
   const freshCommentPost = freshFeedPostCommentCandidate(view);
   if (freshCommentPost) {
@@ -48500,9 +48679,20 @@ async function runSimulationAction(view, update, action, addImage) {
 
     if (!post) return null;
 
-    /* Automatikus kommentelés csak friss feedre. A játékos kézi
-     * "reakciók kérése" funkciója nem ezen a sim-action útvonalon fut. */
-    if (now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) {
+    const commentTrigger =
+      String(action.payload && action.payload.trigger || "");
+    const isGuaranteedCoverage =
+      commentTrigger === "guaranteed-coverage";
+    const quotaEnforced =
+      commentTrigger === "fresh-post" ||
+      isGuaranteedCoverage;
+
+    /* Ordinary automatic comment waves are fresh-feed only. Guaranteed
+       coverage is allowed to rescue older posts too. */
+    if (
+      !isGuaranteedCoverage &&
+      now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS
+    ) {
       return null;
     }
 
@@ -48517,17 +48707,17 @@ async function runSimulationAction(view, update, action, addImage) {
         view,
         post,
         {
-          minComments: action.payload && action.payload.trigger === "fresh-post" ? minComments : 0,
+          minComments: quotaEnforced ? minComments : 0,
           maxComments,
         }
       );
 
     const quotaOut =
-      action.payload && action.payload.trigger === "fresh-post"
+      quotaEnforced
         ? await ensureAutomaticCommentQuota(view, post, generatedOut, label, minComments, maxComments)
         : generatedOut;
 
-    const out = action.payload && action.payload.trigger === "fresh-post"
+    const out = quotaEnforced
       ? {
           ...(quotaOut || {}),
           comments: safeAiComments(quotaOut).slice(0, maxComments),
@@ -48536,7 +48726,19 @@ async function runSimulationAction(view, update, action, addImage) {
 
     const commentsProbe = JSON.parse(JSON.stringify(view));
     const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
-    if (!visibleReactionCount) return null;
+
+    if (!visibleReactionCount) {
+      if (isGuaranteedCoverage) {
+        update((n) => {
+          const failedPost = (n.posts || []).find((p) => p && p.id === post.id);
+          if (!failedPost) return;
+          failedPost.commentCoverageAttemptAt = now();
+          failedPost.commentCoverageAttempts =
+            Math.max(0, Math.round(Number(failedPost.commentCoverageAttempts) || 0)) + 1;
+        });
+      }
+      return null;
+    }
 
     update((n) => {
       const livePost = (n.posts || []).find((p) => p && p.id === post.id);
@@ -48546,6 +48748,14 @@ async function runSimulationAction(view, update, action, addImage) {
       applyComments(n, post.id, out, label);
 
       const refreshedPost = (n.posts || []).find((p) => p && p.id === post.id);
+
+      if (refreshedPost && isGuaranteedCoverage) {
+        refreshedPost.commentCoverageAttemptAt = now();
+        refreshedPost.commentCoverageLastSuccessAt = now();
+        refreshedPost.commentCoverageAttempts =
+          Math.max(0, Math.round(Number(refreshedPost.commentCoverageAttempts) || 0)) + 1;
+      }
+
       if (
         refreshedPost &&
         action.payload &&
@@ -48567,6 +48777,17 @@ async function runSimulationAction(view, update, action, addImage) {
       const newCommentIds = safePostComments(refreshedPost)
         .filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId))
         .map((c) => c.id);
+
+      /* If sanitation/provider output created fewer comments than the hard
+         target, queue another coverage pass. The new key includes the updated
+         comment count, so it cannot be swallowed by the just-finished action. */
+      if (refreshedPost && isGuaranteedCoverage) {
+        enqueueGuaranteedPostCommentCoverage(
+          n,
+          refreshedPost.id,
+          "coverage-followup"
+        );
+      }
 
       if (
         newCommentIds.length &&
