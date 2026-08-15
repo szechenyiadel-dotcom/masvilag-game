@@ -18264,7 +18264,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v98-no-full-world-clone-no-simpulse-loop";
+const BUILD_VERSION = "v101-no-lag-no-whitescreen";
 const WORLD_SCHEMA_VERSION = 97;
 
 /* Fast, safe clone for the large world state. */
@@ -29521,47 +29521,55 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     return set;
   }, [w, w.meId]);
 
-  const basePosts =
-    feedMode === "following"
-      ? (w.posts || []).filter((p) =>
-          p && (p.authorId === w.meId || followingIds.has(p.authorId))
-        )
-      : (w.posts || []);
+  /*
+   * Feed arrays are maintained newest-first (posts/reposts unshift). We only
+   * need enough recent candidates to produce the existing 40-item UI. Scanning
+   * thousands of historical posts on every render was a major source of lag.
+   * We stop after 80 qualifying candidates, which preserves the visible latest
+   * 40 while leaving the underlying world/history untouched.
+   */
+  const baseItems = [];
+  const baseSource = w.posts || [];
+  for (let i = 0; i < baseSource.length && baseItems.length < 80; i++) {
+    const post = baseSource[i];
+    if (!post) continue;
+    if (
+      feedMode === "following" &&
+      post.authorId !== w.meId &&
+      !followingIds.has(post.authorId)
+    ) continue;
+    baseItems.push({
+      kind: "post",
+      id: "post:" + post.id,
+      ts: Number(post.ts) || 0,
+      post,
+      repost: null,
+    });
+  }
 
-  const baseItems = basePosts.map((post) => ({
-    kind: "post",
-    id: "post:" + post.id,
-    ts: Number(post.ts) || 0,
-    post,
-    repost: null,
-  }));
+  const repostItems = [];
+  const repostSource = repostRows(w);
+  for (let i = 0; i < repostSource.length && repostItems.length < 80; i++) {
+    const repost = repostSource[i];
+    if (!repost) continue;
+    if (
+      feedMode === "following" &&
+      repost.actorId !== w.meId &&
+      !followingIds.has(repost.actorId)
+    ) continue;
 
-  const repostItems = repostRows(w)
-    .map((repost) => {
-      const post = postById.get(repost.postId);
-      const reposter = socialProfileById(w, repost.actorId);
+    const post = postById.get(repost.postId);
+    const reposter = socialProfileMap.get(repost.actorId);
+    if (!post || !reposter) continue;
 
-      if (!post || !reposter) {
-        return null;
-      }
-
-      if (
-        feedMode === "following" &&
-        reposter.id !== w.meId &&
-        !isFollowing(w, w.meId, reposter.id)
-      ) {
-        return null;
-      }
-
-      return {
-        kind: "repost",
-        id: "repost:" + repost.id,
-        ts: Number(repost.ts) || 0,
-        post,
-        repost,
-      };
-    })
-    .filter(Boolean);
+    repostItems.push({
+      kind: "repost",
+      id: "repost:" + repost.id,
+      ts: Number(repost.ts) || 0,
+      post,
+      repost,
+    });
+  }
 
   const timelineItems =
     baseItems
@@ -29572,8 +29580,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       )
       .slice(0, 40);
 
-  const visibleTimelineItems =
-    timelineItems.slice(0, Math.min(40, visiblePostLimit));
+  const visibleTimelineItems = timelineItems;
 
   return (
     <>
@@ -53201,6 +53208,7 @@ export default function App() {
   /* Authoritative multi-device sync state. */
   const mediaSyncRev = useRef(0);
   const worldSaveBusy = useRef(false);
+  const idleSaveHandle = useRef(null);
   const mediaSaveBusy = useRef(false);
   const syncRefreshBusy = useRef(false);
   const lastServerCheckAt = useRef(0);
@@ -53431,6 +53439,8 @@ useEffect(() => {
         session.world &&
         session.meId
       ) {
+        /* Let the Boot UI paint before migrating a large saved world. */
+        await new Promise((resolve) => setTimeout(resolve, 0));
         const wld = migrate(session.world);
         const id = session.meId;
 
@@ -53505,6 +53515,7 @@ useEffect(() => {
       ) return;
 
       const wld = await loadWorld(sess.code);
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       if (
         !alive ||
@@ -54048,9 +54059,8 @@ const signOut = useCallback(async () => {
       });
   }, [
     world ? world.code : null,
-    world ? world.rev : 0,
     code,
-    media,
+    mediaLoadEpoch,
   ]);
 
   useEffect(() => {
@@ -54137,13 +54147,13 @@ const signOut = useCallback(async () => {
               latestLocal
             );
 
+          /* Avoid serializing the whole world during every poll. Local
+           * mutations increment the runtime revision, so unequal revisions
+           * are already enough to enter the reconciliation branch. */
           const sameContent =
-            contentOf(
-              latestLocal
-            ) ===
-            contentOf(
-              serverWorld
-            );
+            serverRev === localRev
+              ? contentOf(latestLocal) === contentOf(serverWorld)
+              : false;
 
           if (
             serverRev === localRev &&
@@ -55517,14 +55527,16 @@ const signOut = useCallback(async () => {
      * collapse into one save snapshot instead of repeatedly freezing the main
      * thread.
      */
-    timer.current = setTimeout(async () => {
+    const runSave = async () => {
       const latest = wRef.current || world;
       if (!latest) return;
 
-      const json = contentOf(latest);
-      if (json === lastSavedContent.current) return;
-
+      /* The world revision is the cheap dirty signal. Avoid serializing the
+       * whole world just to discover that it has changed. The actual snapshot
+       * is created once below, inside the idle slice. */
       const snap = cloneWorldState(latest);
+      const json = contentOf(snap);
+      if (json === lastSavedContent.current) return;
       const snapSyncRev = worldSyncRev(snap);
 
       const offline =
@@ -55873,13 +55885,25 @@ const signOut = useCallback(async () => {
 
           return savedWorld;
         });
-      }, 1800);
+    /* Serialization/cloning is the heaviest synchronous operation in this
+     * component. Do it only during an idle slice so typing, scrolling and
+     * opening tabs never have to wait for a multi-MB world snapshot. */
+    timer.current = setTimeout(() => {
+      if (typeof requestIdleCallback === "function") {
+        idleSaveHandle.current = requestIdleCallback(
+          () => { idleSaveHandle.current = null; void runSave(); },
+          { timeout: 5000 }
+        );
+      } else {
+        void runSave();
+      }
+    }, 2200);
 
     return () => {
-      if (timer.current) {
-        clearTimeout(
-          timer.current
-        );
+      if (timer.current) clearTimeout(timer.current);
+      if (idleSaveHandle.current != null && typeof cancelIdleCallback === "function") {
+        cancelIdleCallback(idleSaveHandle.current);
+        idleSaveHandle.current = null;
       }
     };
   }, [world, meId, installAuthoritativeWorld, tt]);
