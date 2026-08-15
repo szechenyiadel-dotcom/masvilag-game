@@ -15772,7 +15772,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v86-guaranteed-comments-every-post";
+const BUILD_VERSION = "v87-beaconfalls-scheduler-repair";
 
 const AUTO = "masvilag:auto";
 /*
@@ -17318,6 +17318,8 @@ function ensureSocialProfileRow(c) {
   return c;
 }
 
+const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 2;
+
 function ensureFollowerSystem(w) {
   if (!w || typeof w !== "object") {
     return w;
@@ -17325,6 +17327,26 @@ function ensureFollowerSystem(w) {
 
   const profiles =
     socialProfiles(w);
+
+  /*
+   * v87 — RESTART FOLLOW-STORM GUARD
+   *
+   * Fresh-world restart deliberately clears followers/following while keeping
+   * the relationship graph. The old implementation immediately tried to
+   * rebuild EVERY relationship-based follow edge in one normalization pass,
+   * filling the 40-slot sim queue almost entirely with follow actions.
+   *
+   * Keep only a tiny rolling backlog. As each follow completes, later
+   * normalization passes may add another one. This preserves realistic gradual
+   * rebuilding without starving comments, replies, DMs, RP or normal feed work.
+   */
+  const followSim = ensureSimState(w);
+  let pendingRelationshipAutoFollows = (followSim.queue || []).filter(
+    (action) =>
+      action &&
+      action.type === "follow" &&
+      String(action.key || "").startsWith("relationship-auto-follow:")
+  ).length;
 
   const byId = {};
 
@@ -17448,8 +17470,11 @@ function ensureFollowerSystem(w) {
           actor.id
         );
 
-      if (!alreadyFollowing) {
-        simEnqueue(
+      if (
+        !alreadyFollowing &&
+        pendingRelationshipAutoFollows < RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
+      ) {
+        const queued = simEnqueue(
           w,
           mkAction(
             "follow",
@@ -17464,6 +17489,10 @@ function ensureFollowerSystem(w) {
             "event"
           )
         );
+
+        if (queued) {
+          pendingRelationshipAutoFollows += 1;
+        }
       }
     });
   });
@@ -34275,7 +34304,7 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 62,
+    schedulerVersion: 63,
     lastError: "",
   };
 }
@@ -36376,10 +36405,12 @@ function ensureSimState(w) {
   if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
   if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
 
-  /* v53 migration: do not let a backlog created by the old comment/feed scheduler
-     delay the new fairness lanes for minutes. Manual requests survive; stale
-     background actions are rebuilt by the new planner from current state. */
-  if (Number(w.sim.schedulerVersion) !== 62) {
+  /* v87 migration: do not let a backlog created by the old comment/feed/follow
+     scheduler delay the world for minutes. This specifically repairs worlds
+     restarted while relationship-based follow rebuilding could saturate the
+     whole queue. Manual requests survive; background work is reconstructed
+     gradually from current state. */
+  if (Number(w.sim.schedulerVersion) !== 63) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -36391,9 +36422,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 62;
+    w.sim.schedulerVersion = 63;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 62;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 63;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -52678,6 +52709,28 @@ const signOut = useCallback(async () => {
   const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
 
+  /*
+   * v87 — COMMENT COVERAGE MAY PREEMPT BACKGROUND QUEUE.
+   *
+   * Previously planAutoAction() was consulted ONLY when sim.queue was empty.
+   * A restart-created follow backlog therefore prevented the v86 "comments on
+   * every post" watchdog from even being considered.
+   *
+   * Manual actions still win. Otherwise an uncovered post can temporarily
+   * preempt a queued background follow without deleting that follow.
+   */
+  let coverageOverride = null;
+  if (!manualQueued) {
+    const uncoveredPostNow = guaranteedCommentCoverageCandidate(view2);
+    if (uncoveredPostNow) {
+      coverageOverride = guaranteedPostCommentAction(
+        view2,
+        uncoveredPostNow,
+        "queue-preempt-coverage"
+      );
+    }
+  }
+
   /* A popup queued just before entering an Event must not fire on top of it. */
   if (
     !manualQueued &&
@@ -52723,7 +52776,7 @@ const signOut = useCallback(async () => {
 
   /* Background tabs may be browser-throttled, but we do not intentionally stop the world. */
 
-  let action = queued;
+  let action = coverageOverride || queued;
       if (!action) {
         /*
          * Live world hard-on: régi mentett state sem állíthatja le.
@@ -52764,16 +52817,26 @@ const signOut = useCallback(async () => {
         !canRunLocalSimulationAction(view2)
       ) {
         /*
-         * Ne dobjuk el az egész beatet csak azért, mert egy follow/repost
-         * még local cooldownon van. Ha a generatív content már esedékes,
-         * használjuk ezt a beatet feed-posztra.
+         * v87 CRITICAL FIX:
+         * The old fallback blindly replaced a cooldown-blocked FOLLOW with a
+         * WORLD action. After restart, a large follow backlog therefore caused
+         * a new feed generation roughly every cooldown cycle, bypassing the
+         * normal feed cadence and simultaneously preventing comment coverage.
+         *
+         * Instead, ask the normal planner whether some NON-local work is truly
+         * due (comments/replies/DM/RP/feed according to its own cadence). If
+         * nothing is due, simply wait; never manufacture an extra feed post.
          */
-        action = mkAction(
-          "world",
-          `local-cooldown-feed:${Math.floor(
-            now() / 60000
-          )}`
-        );
+        const plannedWhileLocalWaits = planAutoAction(view2);
+
+        if (
+          !plannedWhileLocalWaits ||
+          FAST_LOCAL_SIM_ACTIONS.has(plannedWhileLocalWaits.type)
+        ) {
+          return;
+        }
+
+        action = plannedWhileLocalWaits;
       }
 
       autoRunning.current = true;
@@ -52837,7 +52900,13 @@ const signOut = useCallback(async () => {
           return;
         }
 
-        if (queued) simDropQueued(n, action.id);
+        if (
+          queued &&
+          action &&
+          queued.id === action.id
+        ) {
+          simDropQueued(n, queued.id);
+        }
 
         if (ok) {
           /*
