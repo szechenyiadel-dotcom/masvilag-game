@@ -1,4 +1,4 @@
-/* MÁSVILÁG RECOVERY v99.6 — PRIORITY PLAYER SOCIAL REACTIONS — 20260816_0150 */
+/* MÁSVILÁG RECOVERY v99.7 — RESILIENT AI JSON + REACTION RETRY — 20260816_0200 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -8328,6 +8328,176 @@ function validateGeneratedLanguage(result, expectedLanguage) {
   return enMarks > 0 || huMarks === 0;
 }
 
+/*
+ * RECOVERY v99.7 — RESILIENT AI JSON
+ *
+ * Providers occasionally return JSON that is semantically correct but contains
+ * a harmless formatting defect (most commonly a trailing comma). A strict
+ * JSON.parse() made every AI surface fail together: DM, comments and posts all
+ * share askJSON().
+ *
+ * This repair is intentionally output-only and bounded to the provider response.
+ * It never scans the world and therefore has no meaningful render/perf cost.
+ */
+function normalizeAiJsonQuotes(value) {
+  return String(value || "")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'");
+}
+
+function escapeRawControlsInsideJsonStrings(value) {
+  const src = String(value || "");
+  let out = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      out += ch;
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      out += ch;
+      continue;
+    }
+
+    if (inString) {
+      if (ch === "\n") {
+        out += "\\n";
+        continue;
+      }
+      if (ch === "\r") {
+        out += "\\r";
+        continue;
+      }
+      if (ch === "\t") {
+        out += "\\t";
+        continue;
+      }
+      if (ch.charCodeAt(0) < 0x20) {
+        out += " ";
+        continue;
+      }
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
+function removeTrailingJsonCommas(value) {
+  const src = String(value || "");
+  let out = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      out += ch;
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      out += ch;
+      continue;
+    }
+
+    if (!inString && ch === ",") {
+      let j = i + 1;
+      while (j < src.length && /\s/.test(src[j])) j++;
+
+      if (src[j] === "}" || src[j] === "]") {
+        continue;
+      }
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
+function quoteBareJsonKeys(value) {
+  return String(value || "").replace(
+    /([,{]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)/g,
+    '$1"$2"$3'
+  );
+}
+
+function parseAiJson(raw) {
+  const text = String(raw || "");
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+
+  if (first === -1 || last === -1 || last < first) {
+    throw new Error(
+      "Az AI válasza nem tartalmazott feldolgozható JSON-t."
+    );
+  }
+
+  const original =
+    text.slice(first, last + 1);
+
+  const attempts = [
+    original,
+    normalizeAiJsonQuotes(original),
+  ];
+
+  const normalized =
+    escapeRawControlsInsideJsonStrings(
+      normalizeAiJsonQuotes(original)
+    );
+
+  attempts.push(
+    normalized,
+    removeTrailingJsonCommas(normalized),
+    quoteBareJsonKeys(
+      removeTrailingJsonCommas(normalized)
+    )
+  );
+
+  let lastError = null;
+  const seen = new Set();
+
+  for (const candidate of attempts) {
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+
+    try {
+      return JSON.parse(candidate);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error("Az AI hibás JSON-választ adott.")
+  );
+}
+
 /* Kitartó kérés: ha a szolgáltató visszafog minket, nem adjuk fel, hanem
    kivárjuk a pihenőt és újrapróbáljuk. A kérés csak akkor hiúsul meg, ha
    percekig egyszer sem enged át — így a játékosnak nem kell hibát látnia. */
@@ -8394,9 +8564,8 @@ async function askJSON(system, prompt, options = {}) {
               timeoutMs: Number(options.timeoutMs) || undefined,
             }
           );
-          const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
-          if (a === -1 || b === -1) throw new Error("Az AI válasza nem tartalmazott feldolgozható JSON-t.");
-          const parsed = JSON.parse(raw.slice(a, b + 1));
+          const parsed =
+            parseAiJson(raw);
           if (!validateGeneratedLanguage(parsed, lang)) {
             if (!strictMode) {
               strictMode = true;
@@ -36203,6 +36372,12 @@ Formátum:
         });
     }
   } catch (e) {
+    console.warn(
+      "[dm-ai-failed]",
+      c && c.name,
+      (e && e.message) || e
+    );
+
     /*
      * A játékos üzenete már biztosan bent marad.
      * A közvetlen chat-hívás rövid, korlátozott próbálkozást kapott,
@@ -56340,6 +56515,13 @@ const signOut = useCallback(async () => {
         result = await runSimulationAction(viewRef.current, update, action, addImage);
         ok = Boolean(result);
       } catch (e) {
+        console.warn(
+          "[ai-action-failed]",
+          action && action.type,
+          action && action.key,
+          (e && e.message) || e
+        );
+
         if (action && action.source === "manual" && alive) {
           setErr(
   "SIM: " +
@@ -56374,6 +56556,41 @@ const signOut = useCallback(async () => {
           queued.id === action.id
         ) {
           simDropQueued(n, queued.id);
+        }
+
+        /*
+         * RECOVERY v99.7:
+         * A player comment/reply is conversationally time-sensitive. If its
+         * first provider/JSON attempt failed, retry exactly ONCE with a new key.
+         * This is bounded and cannot create a retry storm.
+         */
+        if (
+          !ok &&
+          action &&
+          isPriorityPlayerSocialReaction(action) &&
+          Math.max(
+            0,
+            Number(
+              action.payload &&
+              action.payload._reactionRetry
+            ) || 0
+          ) < 1
+        ) {
+          simEnqueue(
+            n,
+            {
+              ...action,
+              id: uid(),
+              key:
+                String(action.key || "player-reaction") +
+                ":retry1",
+              ts: now(),
+              payload: {
+                ...(action.payload || {}),
+                _reactionRetry: 1,
+              },
+            }
+          );
         }
 
         if (ok) {
