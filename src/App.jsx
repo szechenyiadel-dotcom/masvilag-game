@@ -4163,25 +4163,76 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
     return { score: 45, bond: exactBond || "Unokatestvér", fixed: true, hidden: "", mood: "", why: "", source: "connections" };
   }
 
+  /*
+   * Explicit friendship is a stronger social baseline than generic rivalry
+   * keywords elsewhere. This prevents "both sheets say best friend" from
+   * becoming hate because some unrelated dojo rivalry was also mentioned.
+   */
+  if (explicitBest || cue.close) {
+    return {
+      score: 92,
+      bond: "Legjobb barát",
+      fixed: false,
+      hidden:
+        (explicitCrush || cue.romantic)
+          ? (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
+          : "",
+      mood: "",
+      why: "",
+      source: "connections",
+    };
+  }
+  if (explicitClose) {
+    return {
+      score: 78,
+      bond: "Közeli barát",
+      fixed: false,
+      hidden:
+        (explicitCrush || cue.romantic)
+          ? (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
+          : "",
+      mood: "",
+      why: "",
+      source: "connections",
+    };
+  }
+  if (
+    (explicitFriend || cue.friendly) &&
+    !(explicitEnemy || cue.hostile)
+  ) {
+    return {
+      score: 60,
+      bond: "Barát",
+      fixed: false,
+      hidden:
+        (explicitCrush || cue.romantic)
+          ? (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
+          : "",
+      mood: "",
+      why: "",
+      source: "connections",
+    };
+  }
+
   if (explicitSpouse) {
-    return { score: 90, bond: exactBond || "Házastárs", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+    return { score: 90, bond: "Házastárs", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitEngaged) {
-    return { score: 85, bond: exactBond || "Jegyesek", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+    return { score: 85, bond: "Jegyesek", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitDating) {
-    return { score: 75, bond: exactBond || "Járnak", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+    return { score: 75, bond: "Járnak", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitEx) {
-    return { score: 0, bond: exactBond || "Exek", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+    return { score: 0, bond: "Exek", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitMutualCrush) {
-    return { score: 70, bond: exactBond || "Kölcsönös crush", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+    return { score: 70, bond: "Kölcsönös crush", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitCrush || cue.romantic) {
     return {
       score: 52,
-      bond: exactBond || "Crush",
+      bond: "Crush",
       fixed: false,
       hidden: explicitSecret || cue.secret ? "Secret crush" : "",
       mood: "",
@@ -4190,20 +4241,10 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
     };
   }
 
-  if (explicitBest || cue.close) {
-    return { score: 92, bond: exactBond || "Legjobb barát", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
-  }
-  if (explicitClose) {
-    return { score: 76, bond: exactBond || "Közeli barát", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
-  }
-  if ((explicitFriend || cue.friendly) && !(explicitEnemy || explicitRival || cue.hostile || cue.rival)) {
-    return { score: 55, bond: exactBond || "Barát", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
-  }
-
   if (explicitEnemy || cue.hostile) {
     return {
       score: -90,
-      bond: exactBond || "Ellenség",
+      bond: "Ellenség",
       fixed: false,
       hidden: "",
       mood: "hostile",
@@ -4215,7 +4256,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   if (explicitRival || cue.rival) {
     return {
       score: -68,
-      bond: exactBond || "Rivális",
+      bond: "Rivális",
       fixed: false,
       hidden: "",
       mood: "competitive and distrustful",
@@ -4237,7 +4278,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   if (factionRivalry) {
     return {
       score: -72,
-      bond: exactBond || "Rivális",
+      bond: "Rivális",
       fixed: false,
       hidden: "",
       mood: "hostile and distrustful",
@@ -5316,13 +5357,13 @@ function normalizedRelationshipChanges(
     const echo =
       sign *
       Math.min(
-        14,
+        4,
         Math.max(
-          4,
+          2,
           Math.round(
             Math.abs(
               ch.delta
-            ) * 0.42
+            ) * 0.22
           )
         )
       );
@@ -5502,6 +5543,236 @@ function evolvedBondForChange(
   };
 }
 
+function relationshipBondPolarity(value) {
+  const text = String(value || "").toLowerCase();
+  if (
+    /best friend|close friend|friend|ally|bar[aá]t|sz[oö]vets[eé]ges|dating|spouse|engaged|crush|partner|teammate|mentor|student|tan[ií]tv[aá]ny/.test(
+      text
+    )
+  ) {
+    return 1;
+  }
+  if (
+    /enemy|rival|hate|ellens[eé]g|riv[aá]lis|gy[uű]l[oö]l|frenemy/.test(
+      text
+    )
+  ) {
+    return -1;
+  }
+  return 0;
+}
+
+function strongRelationshipCanonBaseline(w, a, b) {
+  if (!w || !a || !b) return null;
+  const store = ensureRelationshipBaselineStore(w);
+  const baseline = store[relKey(a, b)];
+  if (!baseline) return null;
+
+  const source = String(baseline.source || "");
+  if (!/^(?:manual|connections)(?:-|$)/i.test(source)) return null;
+
+  const polarity =
+    relationshipBondPolarity(baseline.bond || baseline.type) ||
+    (Number(baseline.score) >= 45 ? 1 : Number(baseline.score) <= -45 ? -1 : 0);
+
+  if (!polarity) return null;
+
+  return {
+    ...baseline,
+    polarity,
+    score: clampRelationshipScore(baseline.score),
+  };
+}
+
+function opposingRelationshipHistoryCount(w, a, b, canonPolarity) {
+  if (!w || !a || !b || !canonPolarity) return 0;
+  const mem = ensureCharMemory(w, a);
+  const rows =
+    mem &&
+    mem.relationshipHistory &&
+    Array.isArray(mem.relationshipHistory[relKey(a, b)])
+      ? mem.relationshipHistory[relKey(a, b)]
+      : [];
+
+  return rows
+    .slice(-14)
+    .filter((row) => {
+      if (!row || row.autoEcho) return false;
+      const delta = Number(row.delta) || 0;
+      return (
+        Math.abs(delta) >= 4 &&
+        Math.sign(delta) === -canonPolarity
+      );
+    })
+    .length;
+}
+
+function stabilizedRelationshipDelta(w, a, b, proposed, autoEcho = false) {
+  let delta = Math.round(Number(proposed) || 0);
+  if (!delta) return 0;
+
+  /* No single interaction should rewrite a whole relationship. */
+  delta = Math.max(-14, Math.min(14, delta));
+
+  if (autoEcho) {
+    return Math.max(-3, Math.min(3, delta));
+  }
+
+  const canon = strongRelationshipCanonBaseline(w, a, b);
+  if (!canon) return delta;
+
+  const opposite = Math.sign(delta) === -canon.polarity;
+  if (!opposite) {
+    return Math.max(-10, Math.min(10, delta));
+  }
+
+  const opposingCount =
+    opposingRelationshipHistoryCount(
+      w,
+      a,
+      b,
+      canon.polarity
+    );
+
+  const cap =
+    opposingCount < 2
+      ? 5
+      : opposingCount < 4
+        ? 8
+        : 12;
+
+  return Math.sign(delta) * Math.min(Math.abs(delta), cap);
+}
+
+function relationshipBondTransitionAllowedByCanon(
+  w,
+  a,
+  b,
+  currentRel,
+  proposedBond,
+  nextScore
+) {
+  const proposed = String(proposedBond || "").trim();
+  if (!proposed) return true;
+
+  const canon = strongRelationshipCanonBaseline(w, a, b);
+  if (!canon) return true;
+
+  const proposedPolarity = relationshipBondPolarity(proposed);
+  if (!proposedPolarity || proposedPolarity === canon.polarity) return true;
+
+  const opposingCount =
+    opposingRelationshipHistoryCount(
+      w,
+      a,
+      b,
+      canon.polarity
+    );
+
+  if (opposingCount < 4) return false;
+  if (canon.polarity > 0 && Number(nextScore) > 20) return false;
+  if (canon.polarity < 0 && Number(nextScore) < -20) return false;
+
+  return true;
+}
+
+function effectiveRelationshipForBehavior(w, a, b) {
+  const live = {
+    ...EMPTY_REL,
+    ...(getRel(w, a, b) || {}),
+  };
+
+  const canon = strongRelationshipCanonBaseline(w, a, b);
+  if (!canon) return live;
+
+  const opposingCount =
+    opposingRelationshipHistoryCount(
+      w,
+      a,
+      b,
+      canon.polarity
+    );
+
+  if (opposingCount < 4) {
+    const livePolarity =
+      relationshipBondPolarity(live.bond || live.type) ||
+      (Number(live.score) >= 25 ? 1 : Number(live.score) <= -25 ? -1 : 0);
+
+    if (livePolarity && livePolarity !== canon.polarity) {
+      return {
+        ...live,
+        score:
+          canon.polarity > 0
+            ? Math.max(60, Number(live.score) || 0)
+            : Math.min(-45, Number(live.score) || 0),
+        bond: String(canon.bond || canon.type || live.bond || ""),
+        mood: "",
+        why: "",
+        __canonCorrectedForBehavior: true,
+      };
+    }
+  }
+
+  return live;
+}
+
+function reconcileLiveRelationshipsWithStrongCanon(w, force = false) {
+  if (!w) return;
+  const store = ensureRelationshipBaselineStore(w);
+
+  Object.keys(store).forEach((key) => {
+    const parts = String(key).split(">");
+    if (parts.length !== 2) return;
+    const [a, b] = parts;
+    const canon = strongRelationshipCanonBaseline(w, a, b);
+    if (!canon) return;
+
+    const live = getRel(w, a, b) || EMPTY_REL;
+    const livePolarity =
+      relationshipBondPolarity(live.bond || live.type) ||
+      (Number(live.score) >= 25 ? 1 : Number(live.score) <= -25 ? -1 : 0);
+
+    const contradiction =
+      livePolarity &&
+      livePolarity !== canon.polarity;
+
+    const empty =
+      !String(live.bond || live.type || "").trim() &&
+      Math.abs(Number(live.score) || 0) < 5;
+
+    if (!force && !contradiction && !empty) return;
+
+    if (force || contradiction || empty) {
+      setRel(w, a, b, {
+        score: clampRelationshipScore(canon.score),
+        bond: String(canon.bond || canon.type || ""),
+        hidden: String(canon.hidden || ""),
+        fixed: !!canon.fixed,
+        mood: "",
+        why: "",
+      });
+
+      const mem = ensureCharMemory(w, a);
+      if (mem && mem.relationshipHistory) {
+        mem.relationshipHistory[relKey(a, b)] = [];
+      }
+
+      const continuity =
+        ensureRelationshipContinuity(w, a, b);
+      if (continuity) {
+        continuity.unresolved = [];
+        continuity.promises = [];
+        continuity.plans = [];
+        continuity.currentFeeling = "";
+        continuity.currentIntent = "";
+        continuity.lastTone = "";
+        continuity.perceivedTargetMood = "";
+        continuity.updatedAt = now();
+      }
+    }
+  });
+}
+
 function applyChanges(
   n,
   changes
@@ -5532,9 +5803,13 @@ function applyChanges(
       );
 
     const delta =
-      Number(
-        ch.delta
-      ) || 0;
+      stabilizedRelationshipDelta(
+        n,
+        a,
+        b,
+        Number(ch.delta) || 0,
+        Boolean(ch.__autoEcho)
+      );
 
     const nextScore =
       clamp(
@@ -5548,6 +5823,30 @@ function applyChanges(
         ch,
         nextScore
       );
+
+    if (
+      bondEvolution.bond &&
+      !relationshipBondTransitionAllowedByCanon(
+        n,
+        a,
+        b,
+        r,
+        bondEvolution.bond,
+        nextScore
+      )
+    ) {
+      bondEvolution = {
+        bond:
+          String(
+            r.bond ||
+            r.type ||
+            (strongRelationshipCanonBaseline(n, a, b) || {}).bond ||
+            ""
+          ),
+        changed:false,
+        source:"canon-stability-guard",
+      };
+    }
 
     const oldBond =
       String(
@@ -10499,6 +10798,11 @@ function characterFactionIdentityCard(c) {
     flags.kook ? "socialSide=Kook" : "",
     flags.hydra ? "organization=HYDRA" : "",
     flags.shield ? "organization=S.H.I.E.L.D." : "",
+    c.job ? `occupation=${cut(String(c.job), 220)}` : "",
+    c.role ? `role=${cut(String(c.role), 180)}` : "",
+    c.rank ? `rank=${cut(String(c.rank), 140)}` : "",
+    c.affiliation ? `explicitAffiliation=${cut(String(c.affiliation), 260)}` : "",
+    c.organization ? `explicitOrganization=${cut(String(c.organization), 220)}` : "",
   ].filter(Boolean);
 
   return groups.join(" | ");
@@ -11187,6 +11491,64 @@ function connectionRelationshipEntriesAbout(actor, target) {
   });
 
   /*
+   * v94 CATEGORY/LIST CONNECTIONS.
+   *
+   * Accepts "Best Friends: Angel, Megara" and heading + following-name rows.
+   * The category applies only when THIS target is explicitly named.
+   */
+  const categoryRelation = (value) => {
+    const label = String(value || "").toLowerCase().trim();
+    if (/^best friends?$|^legjobb bar[aá]tok?$/.test(label)) return "Best friend";
+    if (/^close friends?$|^k[oö]zeli bar[aá]tok?$/.test(label)) return "Close friend";
+    if (/^friends?$|^bar[aá]tok?$/.test(label)) return "Friend";
+    if (/^allies?$|^sz[oö]vets[eé]gesek?$/.test(label)) return "Ally";
+    if (/^enemies?$|^ellens[eé]gek?$/.test(label)) return "Enemy";
+    if (/^rivals?$|^riv[aá]lisok?$/.test(label)) return "Rival";
+    if (/^crush(?:es)?$|^vonzalmak?$/.test(label)) return "Crush";
+    if (/^mentors?$|^senseis?$|^mesterek?$/.test(label)) return "Mentor";
+    if (/^students?$|^tan[ií]tv[aá]nyok?$/.test(label)) return "Student";
+    if (/^family$|^csal[aá]d$/.test(label)) return "Family";
+    if (/^teammates?$|^csapatt[aá]rsak?$/.test(label)) return "Teammate";
+    return "";
+  };
+
+  let activeCategory = "";
+  rows.forEach((line) => {
+    const combined = line.match(
+      /^\s*(best friends?|close friends?|friends?|allies?|enemies?|rivals?|crush(?:es)?|mentors?|senseis?|students?|family|teammates?|legjobb bar[aá]tok?|k[oö]zeli bar[aá]tok?|bar[aá]tok?|sz[oö]vets[eé]gesek?|ellens[eé]gek?|riv[aá]lisok?|mesterek?|tan[ií]tv[aá]nyok?|csal[aá]d|csapatt[aá]rsak?)\s*[:—–-]\s*(.*)$/i
+    );
+
+    if (combined) {
+      activeCategory = categoryRelation(combined[1]);
+      const namesPart = String(combined[2] || "").trim();
+      if (
+        activeCategory &&
+        namesPart &&
+        connectionSubjectIsExactTarget(namesPart, target)
+      ) {
+        add(target.name, activeCategory, line);
+      }
+      return;
+    }
+
+    const headingOnly = line.match(
+      /^\s*(best friends?|close friends?|friends?|allies?|enemies?|rivals?|crush(?:es)?|mentors?|senseis?|students?|family|teammates?|legjobb bar[aá]tok?|k[oö]zeli bar[aá]tok?|bar[aá]tok?|sz[oö]vets[eé]gesek?|ellens[eé]gek?|riv[aá]lisok?|mesterek?|tan[ií]tv[aá]nyok?|csal[aá]d|csapatt[aá]rsak?)\s*:?\s*$/i
+    );
+
+    if (headingOnly) {
+      activeCategory = categoryRelation(headingOnly[1]);
+      return;
+    }
+
+    if (
+      activeCategory &&
+      connectionSubjectIsExactTarget(line, target)
+    ) {
+      add(target.name, activeCategory, line);
+    }
+  });
+
+  /*
    * v93 NARRATIVE/GROUPED CONNECTIONS FALLBACK.
    *
    * Supports real character sheets such as:
@@ -11205,6 +11567,8 @@ function connectionRelationshipEntriesAbout(actor, target) {
     const heading = String(headingRaw || "").toLowerCase().trim();
     if (/^enemies?$|ellens[eé]gek?$/.test(heading)) return "Enemy";
     if (/^rivals?$|riv[aá]lisok?$/.test(heading)) return "Rival";
+    if (/^best friends?$|legjobb bar[aá]tok?$/.test(heading)) return "Best friend";
+    if (/^close friends?$|k[oö]zeli bar[aá]tok?$/.test(heading)) return "Close friend";
     if (/^friends?$|bar[aá]tok?$/.test(heading)) return "Friend";
     if (/^allies?$|sz[oö]vets[eé]gesek?$/.test(heading)) return "Ally";
     if (/^mentors?$|senseis?$|mesterek?$/.test(heading)) return "Mentor";
@@ -12046,7 +12410,7 @@ function characterAgentRuntimeState(w, actorId) {
 
 function compactCharacterAgentRelationship(w, actorId, targetId) {
   if (!w || !actorId || !targetId || actorId === targetId) return null;
-  const rel = getRel(w, actorId, targetId) || {};
+  const rel = effectiveRelationshipForBehavior(w, actorId, targetId) || {};
   const target = charById(w, targetId);
   const targetName = target ? String(target.name || "") : String(targetId);
   const targetWords = targetName.trim().split(/\s+/).filter(Boolean);
@@ -12143,6 +12507,136 @@ function compactAgentMemoryForPacket(w, actorId, targetId = "") {
   };
 }
 
+function characterOccupationCanon(c) {
+  if (!c) return {
+    occupation: "",
+    role: "",
+    rank: "",
+    organization: "",
+    affiliation: "",
+    city: "",
+  };
+
+  return {
+    occupation: cut(String(c.job || c.occupation || c.profession || ""), 700),
+    role: cut(String(c.role || ""), 420),
+    rank: cut(String(c.rank || c.title || ""), 320),
+    organization: cut(String(c.organization || ""), 420),
+    affiliation: cut(String(c.affiliation || ""), 520),
+    city: cut(String(c.city || ""), 220),
+  };
+}
+
+function detailedCharacterCanonPacket(c, surface = "unknown") {
+  if (!c) return null;
+
+  const deep =
+    /roleplay|dm|group|scene|event/i.test(
+      String(surface || "")
+    );
+
+  const cap = (value, n) =>
+    cut(
+      String(value || ""),
+      n
+    );
+
+  return {
+    identity:{
+      name: String(c.name || ""),
+      nickname: cap(c.nick || c.nickname, 240),
+      birth: cap(c.birth, 160),
+      gender: cap(c.gender, 100),
+      orientation: cap(c.orientation, 140),
+      height: cap(c.height, 100),
+      city: cap(c.city, 180),
+    },
+
+    occupation: characterOccupationCanon(c),
+
+    factionAndSide:{
+      primaryDojo: karateFactionDisplayName(factionFlags(c)),
+      classification: characterFactionIdentityCard(c),
+      explicitAffiliation: cap(c.affiliation, 520),
+      organization: cap(c.organization, 420),
+      role: cap(c.role, 420),
+      rank: cap(c.rank || c.title, 260),
+    },
+
+    publicIdentity:{
+      bio: cap(c.bio, deep ? 900 : 520),
+      looks: cap(c.looks, deep ? 700 : 360),
+    },
+
+    behavior:{
+      personality: cap(c.personality, deep ? 2600 : 1200),
+      traits: cap(c.traits, deep ? 900 : 520),
+      speechStyle: cap(c.speech, deep ? 900 : 480),
+      voiceExamples: cap(c.voice, deep ? 1100 : 420),
+    },
+
+    motives:{
+      goals: cap(c.goals, deep ? 700 : 380),
+      fears: cap(c.fears, deep ? 650 : 320),
+      likes: cap(c.likes, deep ? 520 : 260),
+    },
+
+    history:{
+      backstory: cap(c.backstory, deep ? 3000 : 1250),
+      extra: cap(c.extra, deep ? 1200 : 520),
+    },
+
+    abilities:{
+      combat: cap(c.combat, deep ? 900 : 420),
+      skills: cap(c.skills, deep ? 900 : 420),
+      abilities: cap(c.abilities, deep ? 900 : 420),
+    },
+
+    privateCanon:{
+      connections: cap(c.connections, deep ? 3000 : 1500),
+      secrets: cap(c.secrets, deep ? 1200 : 500),
+    },
+  };
+}
+
+function exactPairCanonCard(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || actorId === targetId) return null;
+
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target) return null;
+
+  const baseline =
+    strongRelationshipCanonBaseline(
+      w,
+      actorId,
+      targetId
+    );
+
+  return {
+    directedFrom: actorId,
+    directedTo: targetId,
+    connectionsEntry:
+      connectionCanonSnippetAbout(
+        actor,
+        target,
+        1800
+      ),
+    baseline: baseline
+      ? {
+          score: baseline.score,
+          bond: String(baseline.bond || baseline.type || ""),
+          hidden: String(baseline.hidden || ""),
+          source: String(baseline.source || ""),
+        }
+      : null,
+    sameDojo: sameCoreFaction(actor, target),
+    factionRivalry: factionRivalryActiveBetween(actor, target),
+    actorSide: characterFactionIdentityCard(actor),
+    targetSide: characterFactionIdentityCard(target),
+  };
+}
+
 function characterAgentRuntimePacket(w, actorId, options = {}) {
   const actor = charById(w, actorId);
   if (!w || !actor) return null;
@@ -12181,8 +12675,11 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
       organization: cut(String(actor.organization || actor.affiliation || ""), 260),
       classification: characterFactionIdentityCard(actor),
       primaryDojo: karateFactionDisplayName(factionFlags(actor)),
+      occupation: characterOccupationCanon(actor),
+      fullCanon: detailedCharacterCanonPacket(actor, surface),
     },
     relationshipToTarget: compactCharacterAgentRelationship(w, actorId, targetId),
+    exactPairCanon: exactPairCanonCard(w, actorId, targetId),
     memory: compactAgentMemoryForPacket(w, actorId, targetId),
     perception: {
       input: inputText ? {
@@ -12240,6 +12737,8 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
       "Player controls only the player character; never invent the player's unspoken dialogue, actions or thoughts.",
       "Canon + relationship + memory + current context outrank generic drama or generic personality stereotypes.",
       "SELF CLASSIFICATION IS HARD CANON: self.primaryDojo / self.classification describe SELF's own side. Do not infer SELF's dojo from rival/enemy names mentioned inside Connections or backstory. A character mentioning Iron Dragons as rivals does NOT make that character Iron Dragons.",
+      "READ THE FULL SHEET, NOT JUST PERSONALITY: self.fullCanon.occupation, factionAndSide, history, abilities, motives, speech and private Connections all constrain behavior. Occupation/job, rank, dojo, organization and side are factual character canon and must affect what they know, do, post about and how they speak.",
+      "PAIR CANON IS DIRECTED: exactPairCanon is SELF -> TARGET only. If it says Best friend, do not write hatred or enemy behavior because another unrelated rivalry exists. If it says Enemy/Rival, do not write generic buddy behavior. A single ordinary interaction may change mood/score a little, but it must not instantly rewrite a deeply established relationship.",
       ...(targetId
         ? [flirtIdentityInstruction(w, actorId, targetId)]
         : []),
@@ -14421,6 +14920,8 @@ ANGOL NÉVMÁSOK ÉS REFERENCIÁK — KÖTELEZŐ MEGÉRTÉS:
 
 KARAKTERKÁNON — NEM OPCIONÁLIS
 - A karakter SAJÁT adatlapján szereplő minden információ aktív kánon: személyiség, tulajdonságok, teljes háttértörténet, titkok, félelmek, célok, kedvencek, beszédstílus, példamondatok mint stílusminta, képességek, harci tudás, rang, szerep, szervezet, affiliation, Kapcsolódások és egyéb információ.
+- A TELJES releváns karakterlap kötelező kánon: identity, occupation/munka/iskola, szerep, rang/cím, dojo, szervezet/affiliation/oldal, személyiség, traits, beszédstílus, teljes történet, titkok, félelmek, célok, kedvencek, képességek/harci tudás, célpont-specifikus Connections, dinamikus kapcsolatok és aktuális emlékek együtt határozzák meg a karaktert.
+- A munka és a besorolás NEM dekoráció. Egy pincérnő, diák, orvos, sensei, harcos, bűnöző, CEO, katona stb. a saját életének megfelelő dolgokat tudja, posztolja, időzíti és csinálja. A Cobra Kai / Iron Dragons / Miyagi-oldal / Wasabi karakter pontosan tudja, melyik a SAJÁT oldala, és nem keveri össze a történetében említett riválisokkal.
 - A KAPCSOLÓDÁSOK mező privát saját-kánon: az ott szövegként megnevezett szülő, testvér, ex, mentor, régi barát, rivális vagy más személy valóban része ennek a karakternek a múltjának/életének, ezért a karakter emlékezhet rá, beszélhet róla és a viszony befolyásolhatja a reakcióit. Ezek a személyek azonban NEM világ-entitások: nincs ID-jük, profiljuk, relationship score-juk, chatjük vagy AI-agentjük.
 - PRIVÁT TUDÁSHATÁR: egy karakter Kapcsolódások mezőjének tartalma nem válik automatikusan más karakter tudásává. Más szereplő csak akkor tudhat róla, ha a saját kánonja is tartalmazza, vagy a játék során ténylegesen megtudta/emlékként megszerezte.
 - Ne csak 2-3 feltűnő tulajdonságot emelj ki. A teljes személyiséget és történetet egyetlen koherens emberként add vissza.
@@ -14535,10 +15036,11 @@ A KAPCSOLAT EGYIRÁNYÚ — EZ FONTOS
 - A rokoni kötelék a kivétel: az tény, és mindkét irányban érvényes — de az érzések ilyenkor is külön alakulnak.
 - ÁLLANDÓ KÖTELÉK (rokonság, pl. anya, apa, testvér, unokatestvér): megmásíthatatlan tény. Sosem írhatod felül.
 - Egy rokoni kapcsolat lehet mélyen rossz: a kötelék ténye marad, miközben a score és a mood lehet nagyon negatív.
-- VÁLTOZÓ VISZONY (barát, ellenség, crush, exek stb.): ez NEM rögzített címke. A karakterlapon kézzel kiválasztott bond csak a KIINDULÓ állapot.
-- MINDEN valódi relationship change-nél gondold újra, hogy a jelenlegi bond még igaz-e. Ha már nem írja le hitelesen a kapcsolatot, KÖTELEZŐ új "bond" értéket adnod a "changes" elemben.
-- Példák: Ismerős → Barát → Közeli barát → Legjobb barát; Barát → Rivális/Ellenség; Crush → Kölcsönös crush/Járnak; Járnak → Exek; Rivális → Barát stb. Csak akkor válts, ha az események tényleg alátámasztják.
-- Ne ragaszkodj egy kézzel kiválasztott nem-rokoni bondhoz csak azért, mert korábban azt állította be a játékos.
+- VÁLTOZÓ VISZONY (barát, ellenség, crush, exek stb.) fejlődhet, de a KIINDULÓ kapcsolat ERŐS ANCHOR, nem eldobható címke.
+- Egy komment, like, kínos vicc, féltékeny pillanat vagy egyetlen vita NEM változtathat Legjobb barátokat Riválissá/Ellenséggé, és egy ellenséget sem tehet azonnal baráttá.
+- Nagy bond-váltáshoz több külön jelentős esemény, felhalmozódó score-változás és egyértelmű történeti ív kell. A mood gyorsan változhat, a bond sokkal lassabban.
+- Ha a SAJÁT Connections mező pontosan erre a célpontra Best friend / Close friend / Friend kapcsolatot ír, az erősebb, mint az általános dojo-rivalizálás vagy más emberek kapcsolati szövege.
+- Példák: Ismerős → Barát → Közeli barát → Legjobb barát; Barát → Rivális/Ellenség; Rivális → Barát. Csak akkor válts, ha a történet ezt ténylegesen kiérdemelte.
 - KIVÉTEL: rokoni/családi bond SOHA nem változik más bonddá. Anya, apa, testvér, unokatestvér stb. mindig ugyanaz a családi tény marad; csak a score, mood és why változik.
 
 ÉRZELMI ÁLLAPOT ÉS DELTA — EZ A LEGFONTOSABB
@@ -14546,6 +15048,12 @@ A KAPCSOLAT EGYIRÁNYÚ — EZ FONTOS
 - Legyen konkrét, éles és a helyzethez szabott. Saját, karakterhű megfogalmazást használj.
 - Adj "why" mezőt is: egyetlen rövid mondat arról, mi váltotta ki a változást.
 - A + és a - EGYFORMÁN valós lehetőség. Ne torzíts automatikusan pozitív irányba.
+- A kapcsolat MOZGÁSA LEGYEN FOKOZATOS; a pillanatnyi mood sokkal gyorsabban változhat, mint a tartós score/bond.
+- hétköznapi apró hatás: gyakran 0–3
+- kisebb, de valódi hatás: kb. ±3–6
+- egyértelmű érzelmi hatás: kb. ±6–10
+- komoly konfliktus / áttörés: kb. ±10–14
+- Mély, bejáratott kapcsolatot ne próbálj egyetlen ±30/±40 változással átírni.
 - Támogatás, védelem, közelség, őszinteség, lojalitás, flört vagy közös siker adhat PLUSZT.
 - Sértegetés, megalázás, árulás, hazugság, fenyegetés, féltékenység, elutasítás, konfliktus vagy csalódás adhat MÍNUSZT.
 - Ne adj 1-2 pontos alibi-változásokat. Ha tényleg történt valami, a változás legyen érezhető.
@@ -14648,7 +15156,8 @@ CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - CROSS-REFERENCE CANON ACROSS FIELDS: the same relationship, rank or role may appear in history, extra info, organizations, relationships, rank or other fields. Repeated/consistent evidence is strong canon. Do not lose a fact just because it is not stored in one preferred field.
 - HIERARCHY AND ADDRESS ARE RELATIONSHIP-SPECIFIC: if someone is THIS character's own sensei, default direct address is "Sensei + surname" (for example, Sensei Silver), not the sensei's casual first name, unless explicit canon establishes another private address. Do NOT automatically call somebody else's sensei "Sensei". A dangerous/high-authority sensei should not receive casual consequence-free disrespect from non-sensei characters without strong canon/current cause; another sensei is a peer authority and may challenge or disrespect them if canon supports it.
 - NAME / NICKNAME OWNERSHIP IS ABSOLUTE: every SELF identifier belongs to THAT character — full name, first name, surname, nickname and @handle. Never address a different person using SELF's own name, surname, nickname, handle, or an invented shortening/pet-form derived from SELF's identity. Resolve the addressee exclusively from TARGET identity fields. If TARGET has no established nickname, use TARGET's real first name / valid title or omit the vocative instead of inventing one.
-- Reconcile every response with personality, traits, speech style, full history, secrets, fears, goals, likes, abilities, organization, rank, Connections, dynamic relationships and current memories.
+- Reconcile every response with the ENTIRE relevant character sheet: identity, occupation/job/school, role, rank/title, dojo, organization/affiliation/side, personality, traits, speech style, full history, secrets, fears, goals, likes, abilities/combat skills, target-specific Connections, dynamic relationships and current memories.
+- Occupation and faction are NOT decoration. A waitress, student, doctor, sensei, fighter, criminal, CEO, soldier etc. should know, post about, schedule around and behave according to that life. A Cobra Kai / Iron Dragons / Miyagi-side / Wasabi character must know which side THEY personally belong to and distinguish that from rivals merely mentioned in their history.
 - HUMAN CONVERSATIONAL CONTINUITY: identify what the other person just did socially — compliment, question, joke, invitation, apology, provocation, flirting, support — and respond to THAT act. A dark, dominant, sarcastic or rude character may react smugly, awkwardly, teasingly, suspiciously or tersely to praise, but must not manufacture a random "stop texting / leave me alone" boundary with no current reason.
 - "Cold", "rude", "sarcastic", "dominant" or "dangerous" is not a universal license for hostility in every exchange. The reaction must come from personality + relationship + current context together.
 - If a line could be moved unchanged to several other characters, it is not character-specific enough.
@@ -14784,10 +15293,11 @@ THE RELATIONSHIP IS ONE-DIRECTIONAL — THIS MATTERS
 - Never project a secret feeling onto the other person and never make it mutual on your own.
 - If a change is explicitly a one-sided internal feeling (for example a secret crush), you may mark it with "oneSided":true.
 - Family bonds are factual and permanent, but the directional score and mood may still become strongly positive or negative.
-- Every NON-FAMILY bond selected in the character editor is only a STARTING STATE, never a permanent lock.
-- On every meaningful relationship change, reconsider whether the current bond still describes the relationship. If it no longer does, you MUST include the new "bond" in that "changes" entry.
-- Examples: Acquaintance → Friend → Close friend → Best friend; Friend → Rival/Enemy; Crush → Mutual crush/Dating; Dating → Exes; Rival → Friend, etc. Only change it when the actual story supports it.
-- Do not preserve a manually selected non-family bond merely because the player originally chose it.
+- A NON-FAMILY starting bond may evolve, but it is an ESTABLISHED RELATIONSHIP ANCHOR, not a disposable label.
+- One comment, one like, one awkward joke, one jealous moment or one argument must NOT turn Best Friends into Rivals/Enemies or an Enemy into a Friend.
+- A major bond reversal requires a sustained pattern: several meaningful interactions, accumulated score movement and clear story evidence. Mood can change immediately; the bond should change much more slowly.
+- If SELF's exact Connections entry explicitly says Best friend / Close friend / Friend, that target-specific canon outranks generic dojo rivalry and unrelated relationship text.
+- On a genuinely established turning point, reconsider the bond. Examples: Acquaintance → Friend → Close friend → Best friend; Friend → Rival/Enemy; Rival → Friend. Do it only after the story has earned the change.
 - EXCEPTION: family/kinship bonds never transform into another bond. Mother, father, sibling, cousin, etc. remain factual family labels; only score, mood and why can change.
 
 EMOTIONAL STATE AND DELTA — THIS IS THE MOST IMPORTANT PART
@@ -14797,11 +15307,12 @@ EMOTIONAL STATE AND DELTA — THIS IS THE MOST IMPORTANT PART
 - Positive and negative changes are EQUALLY valid. Do not bias relationship movement toward positive.
 - Support, protection, closeness, honesty, loyalty, flirting or shared success can cause PLUS changes.
 - Insults, humiliation, betrayal, lying, threats, jealousy, rejection, conflict or disappointment can cause MINUS changes.
-- Do not use meaningless 1–2 point token changes. If something matters, the delta should be noticeable.
-- small but real impact: about ±6–10
-- clear emotional impact: about ±11–20
-- major conflict / breakthrough: about ±21–35
-- severe turning point, betrayal, rescue, etc.: up to about ±36–45
+- Relationship movement is GRADUAL. Mood can swing faster than the long-term score.
+- tiny/ordinary social impact: usually 0–3
+- small but real impact: about ±3–6
+- clear emotional impact: about ±6–10
+- major conflict / breakthrough: about ±10–14
+- Only a sustained multi-event arc should eventually reverse a deeply established bond; do NOT try to force a ±30/±40 one-event rewrite.
 - Only add a change when something actually happened that affects the relationship.
 - Never create a romantic or sexual thread between family members.
 - A character doesn't confess secrets on their own: they hide, deflect, or lie about them. You decide when something slips out.
@@ -15736,6 +16247,15 @@ function migrate(w) {
    * Connections over broad faction defaults, then current legacy relations.
    */
   refreshCanonicalRelationshipBaselines(w);
+
+  /*
+   * v94 one-time canon repair for stale impossible relationship states.
+   * Example: both character sheets say Best Friend but old runtime says Hate.
+   */
+  if (Number(w.relationshipCanonVersion || 0) < 4) {
+    reconcileLiveRelationshipsWithStrongCanon(w, true);
+    w.relationshipCanonVersion = 4;
+  }
 
   // képhivatkozások migrációja: a tényleges fájl marad külön tárolva, itt csak a stabil metaél marad.
   const noteImage = (ref, patch) => {
@@ -16973,7 +17493,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v93-faction-connections-image-context";
+const BUILD_VERSION = "v94-deep-character-canon-relationship-stability";
 
 const AUTO = "masvilag:auto";
 /*
@@ -23591,6 +24111,10 @@ function commentTargetRelationshipMatrix(w, cast, post) {
         `tier=${tier}`,
         `score=${Number(rel.score) || 0}`,
         `bond=${String(rel.bond || rel.type || "none")}`,
+        `commenterSide=${characterFactionIdentityCard(actor) || "unknown"}`,
+        `postAuthorSide=${characterFactionIdentityCard(target) || "unknown"}`,
+        `commenterOccupation=${String(actor.job || actor.role || actor.occupation || "unknown").slice(0, 220)}`,
+        `postAuthorOccupation=${String(target.job || target.role || target.occupation || "unknown").slice(0, 220)}`,
         String(rel.hidden || "").trim()
           ? `privateFeeling=${cut(String(rel.hidden), 120)}`
           : "",
@@ -35781,7 +36305,7 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 68,
+    schedulerVersion: 69,
     lastError: "",
   };
 }
@@ -37968,10 +38492,10 @@ function ensureSimState(w) {
   if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
   if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
 
-  /* v93 migration: clear stale background queue state from older schedulers.
+  /* v94 migration: clear stale background queue state from older schedulers.
      Manual requests survive; comments/follows/replies are rebuilt from the
      current world state without restart-created queue storms. */
-  if (Number(w.sim.schedulerVersion) !== 68) {
+  if (Number(w.sim.schedulerVersion) !== 69) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -37983,9 +38507,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 68;
+    w.sim.schedulerVersion = 69;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 68;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 69;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
