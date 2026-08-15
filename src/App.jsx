@@ -2920,6 +2920,66 @@ const MOOD_EXAMPLES = [
   "Nem tudja hova tenni", "Testvérként véd", "Haragszik, de nem mondja",
 ];
 
+const MOOD_EXAMPLE_EN = {
+  "AZ ENYÉM. AZ ENYÉM.": "MINE. MINE.",
+  "Ride or die": "Ride or die",
+  "Bármit megtenne érted": "Would do anything for you",
+  "Megszállott": "Obsessed",
+  "Túlságosan védelmező": "Overprotective",
+  "Titkos vonzalom": "Secret attraction",
+  "Kimondatlan feszültség": "Unspoken tension",
+  "Féltékeny": "Jealous",
+  "Nem bízik benned": "Doesn't trust you",
+  "Csak kihasznál": "Only using you",
+  "Tisztel": "Respects you",
+  "Retteg tőled": "Terrified of you",
+  "Egy hajszál választja el attól, hogy megöljön": "One step away from killing you",
+  "Bűntudata van miattad": "Feels guilty about you",
+  "Bosszút forral": "Planning revenge",
+  "Hiányzol neki": "Misses you",
+  "Kerül téged": "Avoiding you",
+  "Próbál lenyűgözni": "Trying to impress you",
+  "Kiábrándult belőled": "Disappointed in you",
+  "Nem tudja hova tenni": "Doesn't know what to make of you",
+  "Testvérként véd": "Protects you like a sibling",
+  "Haragszik, de nem mondja": "Angry but won't say it",
+};
+
+function localizedMoodExample(value, lang = CURRENT_LANG) {
+  if (asLang(lang) === "en") return MOOD_EXAMPLE_EN[value] || value;
+  return value;
+}
+
+function localizedRelationshipDisplayText(value, lang = CURRENT_LANG) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  if (asLang(lang) === "en") {
+    if (MOOD_EXAMPLE_EN[raw]) return MOOD_EXAMPLE_EN[raw];
+
+    const automaticHuToEn = {
+      "ellenséges": "hostile",
+      "gyűlölik egymást": "they hate each other",
+      "feszült": "tense",
+      "hűvös": "cool toward them",
+      "jóban vannak": "on good terms",
+      "közeli": "close",
+      "elválaszthatatlanok": "inseparable",
+      "féltékeny": "jealous",
+      "birtokló": "possessive",
+      "megszállott": "obsessed",
+      "bizalmatlan": "distrustful",
+      "védelmező": "protective",
+    };
+
+    if (automaticHuToEn[raw.toLowerCase()]) {
+      return automaticHuToEn[raw.toLowerCase()];
+    }
+  }
+
+  return localizedBond(raw, lang);
+}
+
 // Amit a felületen mutatunk: elsősorban az, hogy MOST mit érez.
 function relLabel(r) {
   const bond =
@@ -2930,7 +2990,7 @@ function relLabel(r) {
 
   const shownMood =
     mood
-      ? localizedBond(
+      ? localizedRelationshipDisplayText(
           mood,
           CURRENT_LANG
         )
@@ -6781,6 +6841,7 @@ function AlbumEditor({ value, onChange, owner }) {
         added.push({
           id: uid(),
           imageId: imageIdOf(ref2),
+          who: "",
           note: "",
           vision,
           analyzedAt: vision ? now() : 0,
@@ -6812,8 +6873,8 @@ function AlbumEditor({ value, onChange, owner }) {
 
       <p className="hint">
         {tt(
-          "A feltöltött képet az AI automatikusan elemzi. A saját megjegyzésedben add meg azt is, amit a képből nem lehet biztosan felismerni — például: „Angel és Tory a partin”, „Brad mellett áll”, „Miyagi-Fang csapatedzés”. Ezt a rendszer megerősített képkontextusként kezeli, így ha a kép kikerül posztba, a posztoló és a többi AI is tudja, kik vannak rajta és mi a releváns helyzet. A képet posztolás után kiveszi az aktuális albumból, de világ-újraindításkor visszakerül.",
-          "The AI automatically analyzes every uploaded image. Use your manual note for context that cannot be safely inferred from pixels — for example: “Angel and Tory at the party”, “standing beside Brad”, or “Miyagi-Fang team training”. The system treats that as confirmed image context, so when the image is posted, both the poster and the other AIs know who is shown and what the relevant situation is. The image leaves the active album after posting, but returns to the album when the world is restarted."
+          "A feltöltött képet az AI automatikusan elemzi. Külön add meg pontosan, kik vannak a képen (pl. „Angel, Tory, Brad”), és külön írhatsz plusz megjegyzést is a helyzetről („afterparty”, „Brad mellett áll”, „Miyagi-Fang csapatedzés”). A 'ki van a képen' mező biztos kánon: ha a kép kikerül posztba, a posztoló és a többi AI is úgy kezeli, hogy ezek a játékbeli karakterek ténylegesen rajta vannak a képen. A képet posztolás után kiveszi az aktuális albumból, de világ-újraindításkor visszakerül.",
+          "The AI automatically analyzes every uploaded image. Separately specify exactly who is in the image (for example “Angel, Tory, Brad”), and you can also add an extra contextual note (“afterparty”, “standing beside Brad”, “Miyagi-Fang team training”). The 'who is shown' field is treated as confirmed canon: when the image is posted, both the poster and the other AIs treat those in-game characters as actually being in the image. The image leaves the active album after posting, but returns to the album when the world is restarted."
         )}
       </p>
 
@@ -6868,8 +6929,24 @@ function AlbumEditor({ value, onChange, owner }) {
             <input
               className="i"
               style={{ marginTop: 5, padding: "5px 8px", fontSize: 11.5 }}
+              value={x.who || ""}
+              placeholder={tt("ki van pontosan a képen? pl. Angel, Tory, Brad", "who is exactly in the image? e.g. Angel, Tory, Brad")}
+              onChange={(e) =>
+                onChange(
+                  list.map((y) =>
+                    y.id === x.id
+                      ? { ...y, who: e.target.value }
+                      : y
+                  )
+                )
+              }
+            />
+
+            <input
+              className="i"
+              style={{ marginTop: 5, padding: "5px 8px", fontSize: 11.5 }}
               value={x.note || ""}
-              placeholder={tt("pl. Angel + Tory a bulin / ki van a képen?", "e.g. Angel + Tory at the party / who is shown?")}
+              placeholder={tt("plusz kontextus: pld afterparty / Brad mellett áll", "extra context: e.g. afterparty / standing beside Brad")}
               onChange={(e) =>
                 onChange(
                   list.map((y) =>
@@ -6951,7 +7028,9 @@ function MoodPicker({ value, onChange, style }) {
         <div className="row" style={{ flexWrap: "wrap", gap: 5, marginTop: 6 }}>
           {MOOD_EXAMPLES.map((m) => (
             <button key={m} className="btn tiny ghost" style={{ fontSize: 10.5 }}
-              onClick={() => { onChange(m); setOpen(false); }}>{m}</button>
+              onClick={() => { onChange(m); setOpen(false); }}>
+              {localizedMoodExample(m, CURRENT_LANG)}
+            </button>
           ))}
           <button className="btn tiny ghost" style={{ fontSize: 10.5, color: "var(--steel)" }}
             onClick={() => { onChange(""); setOpen(false); }}>{tt("törlés", "clear")}</button>
@@ -6996,6 +7075,14 @@ function BondPicker({ value, fixed, onChange, style }) {
    ki lehet posztolni — és az AI is választhat belőle, ha az adott karakter posztol. */
 const albumOf = (c) => (c && Array.isArray(c.album) ? c.album : []);
 
+function normalizeAlbumItemsInPlace(c) {
+  if (!c || !Array.isArray(c.album)) return;
+  c.album.forEach((item) => {
+    if (!item || typeof item !== "object") return;
+    if (item.who === undefined) item.who = "";
+  });
+}
+
 function albumList(c) {
   const a = albumOf(c);
   if (!a.length) return "";
@@ -7011,9 +7098,11 @@ function albumList(c) {
 
 function albumItemContext(item, maxChars = 1200) {
   if (!item) return "";
+  const who = String(item.who || "").replace(/\s+/g, " ").trim();
   const manual = String(item.note || "").replace(/\s+/g, " ").trim();
   const visible = String(item.vision || "").replace(/\s+/g, " ").trim();
   return [
+    who ? `USER-CONFIRMED PEOPLE IN IMAGE: ${who}` : "",
     manual ? `USER-CONFIRMED IMAGE CONTEXT: ${manual}` : "",
     visible ? `VISIBLE IMAGE CONTENT: ${visible}` : "",
   ]
@@ -9405,10 +9494,7 @@ function factionRivalryActiveBetween(actor, target) {
   const tf = factionFlags(target);
 
   return Boolean(
-    (af.cobraKai && tf.miyagiFang) ||
-    (af.miyagiFang && tf.cobraKai) ||
-    (af.ironDragons && (tf.cobraKai || tf.miyagiFang)) ||
-    (tf.ironDragons && (af.cobraKai || af.miyagiFang)) ||
+    karateFactionRivalryFlags(af, tf) ||
     (af.pogue && tf.kook) ||
     (af.kook && tf.pogue) ||
     (af.hydra && tf.shield) ||
@@ -10238,34 +10324,184 @@ function loreHas(c, words) {
   );
 }
 
+function selfAffiliationStrongCorpus(c) {
+  if (!c) return "";
+  return [
+    c.affiliation,
+    c.organization,
+    c.role,
+    c.rank,
+    c.job,
+    c.bio,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+}
+
+function selfAffiliationSecondaryCorpus(c) {
+  if (!c) return "";
+  return [
+    c.extra,
+    c.backstory,
+    c.combat,
+    c.skills,
+    c.abilities,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+}
+
+function factionMembershipScore(c, aliases) {
+  if (!c) return 0;
+  const strong = selfAffiliationStrongCorpus(c);
+  const secondary = selfAffiliationSecondaryCorpus(c);
+  let score = 0;
+
+  (aliases || []).forEach((aliasRaw) => {
+    const alias = String(aliasRaw || "").toLowerCase();
+    if (!alias) return;
+
+    if (strong.includes(alias)) {
+      score += 8;
+      const strongAt = strong.indexOf(alias);
+      const context = strong.slice(
+        Math.max(0, strongAt - 90),
+        Math.min(strong.length, strongAt + alias.length + 120)
+      );
+      if (
+        /captain|member|student|sensei|fighter|karate|dojo|team|leader|head|represents|representing|belongs|part of|joined|trains? (?:at|with)|style/.test(
+          context
+        )
+      ) {
+        score += 8;
+      }
+    }
+
+    let from = 0;
+    while (from < secondary.length) {
+      const at = secondary.indexOf(alias, from);
+      if (at < 0) break;
+
+      const context = secondary.slice(
+        Math.max(0, at - 110),
+        Math.min(secondary.length, at + alias.length + 150)
+      );
+
+      const negativeContext =
+        /rival|enemy|enemies|against|versus|vs\.?|opponent|competition|standing conflicts?|threat|hate|fighting against/.test(
+          context
+        );
+
+      const positiveContext =
+        /captain|member|student|sensei|fighter|karate|dojo|team|leader|head|trained by|training under|represents|representing|belongs|part of|joined|trains? (?:at|with)|style/.test(
+          context
+        );
+
+      if (negativeContext && !positiveContext) score -= 5;
+      else if (positiveContext) score += 4;
+      else score += 1;
+
+      from = at + alias.length;
+    }
+  });
+
+  return score;
+}
+
+function primaryKarateFaction(c) {
+  const candidates = [
+    ["cobraKai", ["cobra kai", "cobra-kai"]],
+    ["miyagiFang", ["miyagi-fang", "miyagi fang", "miyagi-do", "miyagi do", "eagle fang", "eagle-fang"]],
+    ["ironDragons", ["iron dragons", "iron dragon"]],
+    ["wasabi", ["wasabi dojo", "wasabi"]],
+  ];
+
+  const scored = candidates
+    .map(([key, aliases]) => ({
+      key,
+      score: factionMembershipScore(c, aliases),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  if (!scored.length || scored[0].score <= 0) return "";
+  if (scored.length > 1 && scored[0].score === scored[1].score) {
+    /*
+     * Ambiguous history should not make the character simultaneously belong
+     * to rival dojos. Prefer no automatic dojo over a wrong one.
+     */
+    return "";
+  }
+
+  return scored[0].key;
+}
+
 function factionFlags(c) {
+  const karate = primaryKarateFaction(c);
+  const strong = `${selfAffiliationStrongCorpus(c)}\n${selfAffiliationSecondaryCorpus(c)}`;
+
   return {
-    cobraKai: loreHas(c, ["cobra kai", "cobra-kai"]),
+    cobraKai: karate === "cobraKai",
+    miyagiFang: karate === "miyagiFang",
+    ironDragons: karate === "ironDragons",
+    wasabi: karate === "wasabi",
 
-    miyagiFang: loreHas(c, [
-      "miyagi-fang", "miyagi fang", "miyagi-do", "miyagi do",
-      "eagle fang", "eagle-fang"
-    ]),
+    pogue:
+      /\bpogues?\b|pogue life/.test(strong) &&
+      !/rival pogues?|enemy pogues?|against the pogues?/.test(strong),
 
-    ironDragons: loreHas(c, ["iron dragons", "iron dragon"]),
+    kook:
+      /\bkooks?\b/.test(strong) &&
+      !/rival kooks?|enemy kooks?|against the kooks?/.test(strong),
 
-    pogue: loreHas(c, [
-      "pogue", "pogues", "the pogues", "pogue life"
-    ]),
+    hydra:
+      /\bhydra\b/.test(strong) &&
+      !/enemy hydra|against hydra|fighting hydra/.test(strong),
 
-    kook: loreHas(c, [
-      "kook", "kooks", "the kooks"
-    ]),
-
-    hydra: loreHas(c, [
-      "hydra", "hydra agent", "hydra operative"
-    ]),
-
-    shield: loreHas(c, [
-      "s.h.i.e.l.d", "s.h.i.e.l.d.", "shield", "shield agent", "shield operative",
-      "strategic homeland intervention"
-    ]),
+    shield:
+      /s\.h\.i\.e\.l\.d\.?|\bshield agent\b|\bshield operative\b|strategic homeland intervention/.test(strong) &&
+      !/enemy s\.h\.i\.e\.l\.d|against s\.h\.i\.e\.l\.d/.test(strong),
   };
+}
+
+function karateFactionKey(flags) {
+  if (!flags) return "";
+  if (flags.cobraKai) return "cobraKai";
+  if (flags.miyagiFang) return "miyagiFang";
+  if (flags.ironDragons) return "ironDragons";
+  if (flags.wasabi) return "wasabi";
+  return "";
+}
+
+function karateFactionDisplayName(flags) {
+  const key = karateFactionKey(flags);
+  if (key === "cobraKai") return "Cobra Kai";
+  if (key === "miyagiFang") return "Miyagi-Do / Miyagi-Fang / Eagle Fang";
+  if (key === "ironDragons") return "Iron Dragons";
+  if (key === "wasabi") return "Wasabi";
+  return "";
+}
+
+function karateFactionRivalryFlags(af, tf) {
+  const a = karateFactionKey(af);
+  const b = karateFactionKey(tf);
+  return Boolean(a && b && a !== b);
+}
+
+function characterFactionIdentityCard(c) {
+  if (!c) return "";
+  const flags = factionFlags(c);
+  const dojo = karateFactionDisplayName(flags);
+  const groups = [
+    dojo ? `dojo=${dojo}` : "",
+    flags.pogue ? "socialSide=Pogue" : "",
+    flags.kook ? "socialSide=Kook" : "",
+    flags.hydra ? "organization=HYDRA" : "",
+    flags.shield ? "organization=S.H.I.E.L.D." : "",
+  ].filter(Boolean);
+
+  return groups.join(" | ");
 }
 
 function franchiseFactionRivalryCard(actor, target, en) {
@@ -10289,20 +10525,12 @@ function franchiseFactionRivalryCard(actor, target, en) {
     );
   }
 
-  if ((af.cobraKai && tf.miyagiFang) || (af.miyagiFang && tf.cobraKai)) {
+  if (karateFactionRivalryFlags(af, tf)) {
+    const actorDojo = karateFactionDisplayName(af) || "the actor's dojo";
+    const targetDojo = karateFactionDisplayName(tf) || "the target's dojo";
     push(
-      "Cobra Kai–Miyagi-Do/Miyagi-Fang/Eagle Fang dojo-rivalizálás aktív: versengés, dojo-büszkeség, régi sérelmek és bizalmatlanság természetesen jelenjen meg.",
-      "Cobra Kai–Miyagi-Do/Miyagi-Fang/Eagle Fang dojo rivalry is active: competition, dojo pride, old grudges and distrust should naturally color the interaction."
-    );
-  }
-
-  if (
-    (af.ironDragons && (tf.cobraKai || tf.miyagiFang)) ||
-    (tf.ironDragons && (af.cobraKai || af.miyagiFang))
-  ) {
-    push(
-      "Iron Dragons-rivalizálás: az Iron Dragons természetes versenytársként/ellenfélként kezeli mind a Cobra Kait, mind a Miyagi-Do/Miyagi-Fang/Eagle Fang oldalt; ezt ne nullázd le semleges udvariassággá.",
-      "Iron Dragons rivalry is active: Iron Dragons naturally treats both Cobra Kai and the Miyagi-Do/Miyagi-Fang/Eagle Fang side as competitors/opponents; do not flatten this into neutral friendliness."
+      `${actorDojo} ↔ ${targetDojo} dojo-rivalizálás aktív: versengés, dojo-büszkeség, régi sérelmek, trash talk és bizalmatlanság természetesen jelenhet meg. Személyes barátság/crush ezt felülírhatja, de riválisokat ne lapíts semleges haverokká.`,
+      `${actorDojo} ↔ ${targetDojo} dojo rivalry is active: competition, dojo pride, old grudges, trash talk and distrust may naturally show. An explicit personal friendship/crush can override it, but do not flatten rivals into neutral buddies.`
     );
   }
 
@@ -10958,11 +11186,136 @@ function connectionRelationshipEntriesAbout(actor, target) {
     }
   });
 
+  /*
+   * v93 NARRATIVE/GROUPED CONNECTIONS FALLBACK.
+   *
+   * Supports real character sheets such as:
+   *   "Angel Silverman & Megara Barnes. The sisters she chose..."
+   *   "Enemies. Samantha LaRusso... Feng Xiao."
+   *   "Dojo. Robby Keene, Nate Kreese... Terry Silver ... trained her"
+   *
+   * The target still has to be explicitly named inside THIS block.
+   */
+  const blocks = source
+    .split(/\n{2,}/)
+    .map((block) => block.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  const headingRelationship = (headingRaw) => {
+    const heading = String(headingRaw || "").toLowerCase().trim();
+    if (/^enemies?$|ellens[eé]gek?$/.test(heading)) return "Enemy";
+    if (/^rivals?$|riv[aá]lisok?$/.test(heading)) return "Rival";
+    if (/^friends?$|bar[aá]tok?$/.test(heading)) return "Friend";
+    if (/^allies?$|sz[oö]vets[eé]gesek?$/.test(heading)) return "Ally";
+    if (/^mentors?$|senseis?$|mesterek?$/.test(heading)) return "Mentor";
+    if (/^family$|csal[aá]d$/.test(heading)) return "Family";
+    if (/^dojo$|team$|csapat$/.test(heading)) return "Dojo / teammate";
+    return "";
+  };
+
+  blocks.forEach((rawBlock) => {
+    let block = rawBlock;
+    let heading = "";
+
+    const headMatch = block.match(/^([^.!?]{2,45})\.\s+(.+)$/);
+    if (headMatch && headingRelationship(headMatch[1])) {
+      heading = headMatch[1].trim();
+      block = headMatch[2].trim();
+    }
+
+    const lowerBlock = block.toLowerCase();
+    const hasExactTargetName = aliases.some((alias) =>
+      lowerBlock.includes(String(alias || "").toLowerCase())
+    );
+    if (!hasExactTargetName) return;
+
+    /*
+     * Entire paragraph starts with one or more explicitly named subjects,
+     * followed by a period. The remainder belongs to those subjects.
+     */
+    const subjectLead = block.match(/^(.{2,220}?)\.\s+(.+)$/);
+    if (
+      subjectLead &&
+      connectionSubjectIsExactTarget(subjectLead[1], target)
+    ) {
+      add(
+        subjectLead[1],
+        `${heading ? `${heading}. ` : ""}${subjectLead[2]}`,
+        rawBlock
+      );
+      return;
+    }
+
+    /*
+     * A target named in an explicit "X — relation" subject group.
+     */
+    const dash = block.match(/^(.+?)\s*[—–-]\s*(.+)$/);
+    if (
+      dash &&
+      connectionSubjectIsExactTarget(dash[1], target)
+    ) {
+      add(
+        dash[1],
+        `${heading ? `${heading}. ` : ""}${dash[2]}`,
+        rawBlock
+      );
+      return;
+    }
+
+    /*
+     * Section headings themselves carry relationship meaning.
+     * "Enemies. ... Feng Xiao." is enough to seed Tory -> Feng as Enemy,
+     * while still requiring Feng to be explicitly named in THIS block.
+     */
+    const headingRel = headingRelationship(heading);
+    if (headingRel) {
+      let targetContext = headingRel;
+
+      const targetPattern = aliases
+        .map((alias) => regexEscapeLiteral(alias))
+        .join("|");
+
+      if (targetPattern) {
+        const contextMatch = block.match(
+          new RegExp(
+            `(?:^|[.;])\\s*([^.;]{0,120}(?:${targetPattern})[^.;]{0,220})(?:[.;]|$)`,
+            "i"
+          )
+        );
+        if (contextMatch && contextMatch[1]) {
+          targetContext += `. ${contextMatch[1].trim()}`;
+        }
+      }
+
+      /*
+       * If this exact target appears next to "trained her/him/me", this is a
+       * real actor->target mentor relation, not merely "that person is a
+       * sensei at another dojo".
+       */
+      const escapedAliases = aliases
+        .map((alias) => regexEscapeLiteral(alias))
+        .join("|");
+
+      if (
+        escapedAliases &&
+        new RegExp(
+          `(?:${escapedAliases})[^.;]{0,120}\\btrained\\s+(?:her|him|me|them)\\b`,
+          "i"
+        ).test(block)
+      ) {
+        targetContext += " | Mentor / trained them";
+      }
+
+      add(target.name, targetContext, rawBlock);
+    }
+  });
+
   return found.slice(0, 8);
 }
 
 function exactConnectionBondLabel(actor, target) {
-  const text = connectionRelationshipEntriesAbout(actor, target)
+  const entries = connectionRelationshipEntriesAbout(actor, target);
+  const text = entries
     .map((entry) => entry.relation)
     .join(" | ")
     .toLowerCase();
@@ -10974,10 +11327,15 @@ function exactConnectionBondLabel(actor, target) {
     if (label && !labels.includes(label)) labels.push(label);
   };
 
+  const chosenSibling =
+    /sisters? she chose|brothers? she chose|chosen sister|chosen brother|like (?:a )?(?:sister|brother|sibling)|testv[eé]rk[eé]nt/.test(text);
+
   if (/mother|\bmom\b|\bmum\b|anya|édesany/.test(text)) push("Anya");
   if (/father|\bdad\b|apa|édesap/.test(text)) push("Apa");
-  if (/sister|brother|sibling|testv[eé]r/.test(text)) push("Testvér");
+  if (!chosenSibling && /sister|brother|sibling|testv[eé]r/.test(text)) push("Testvér");
   if (/cousin|unokatestv[eé]r/.test(text)) push("Unokatestvér");
+
+  if (chosenSibling) push("Legjobb barát");
 
   if (/best friend|ride\s*or\s*die|legjobb bar[aá]t/.test(text)) push("Legjobb barát");
   else if (/close friend|k[oö]zeli bar[aá]t/.test(text)) push("Közeli barát");
@@ -10986,7 +11344,35 @@ function exactConnectionBondLabel(actor, target) {
   if (/enemy|ellens[eé]g|archenemy|hate|gy[uű]l[oö]l|despise/.test(text)) push("Ellenség");
   else if (/rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(text)) push("Rivális");
 
-  if (/head sensei|\bsensei\b|mentor|teacher|coach|mester|tan[aá]r|edz[oő]/.test(text)) push("Mentor");
+  const mentorRelationshipText = entries
+    .filter((entry) => {
+      const raw = String(entry.raw || "");
+      const rel = String(entry.relation || "").toLowerCase();
+
+      const explicitlyLabeledRelationship =
+        /(?:relationship|kapcsolat)\s*:/i.test(raw);
+
+      const possessiveSensei =
+        /\b(?:her|his|my|their|your)\s+sensei\b|\bsensei\s+(?:to|for)\b/.test(rel);
+
+      const trainedActor =
+        /\btrained\s+(?:her|him|me|them)\b|\btraining\s+(?:her|him|me|them)\b/.test(rel);
+
+      const explicitMentor =
+        /\bmentor\b|\bteacher\b|\bcoach\b|\bmester\b|\btan[aá]r\b|\bedz[oő]\b/.test(rel);
+
+      return (
+        explicitMentor ||
+        possessiveSensei ||
+        trainedActor ||
+        (explicitlyLabeledRelationship && /\bsensei\b/.test(rel))
+      );
+    })
+    .map((entry) => entry.relation)
+    .join(" ")
+    .toLowerCase();
+
+  if (mentorRelationshipText) push("Mentor");
   if (/head student|\bstudent\b|prot[eé]g[eé]|tan[ií]tv[aá]ny/.test(text)) push("Tanítvány");
   if (/teammate|team mate|team-mate|csapatt[aá]rs|dojo mate|doj[oó]t[aá]rs/.test(text)) push("Teammate");
   if (/frenemy/.test(text)) push("Frenemy");
@@ -11793,6 +12179,8 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
       isSensei: characterIsSensei(actor),
       role: cut(String(actor.role || actor.job || ""), 260),
       organization: cut(String(actor.organization || actor.affiliation || ""), 260),
+      classification: characterFactionIdentityCard(actor),
+      primaryDojo: karateFactionDisplayName(factionFlags(actor)),
     },
     relationshipToTarget: compactCharacterAgentRelationship(w, actorId, targetId),
     memory: compactAgentMemoryForPacket(w, actorId, targetId),
@@ -11851,6 +12239,7 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
       "IDENTITY OWNERSHIP: SELF.name / SELF.first-name / SELF.surname / SELF.nickname / SELF.username all belong to SELF. Never use ANY of SELF's own name variants, nickname or handle as the addressee name for TARGET unless TARGET explicitly has that same alias too. If addressing TARGET by name, use TARGET identity from relationshipToTarget. A speaker must never call the listener by the speaker's own first name, surname, nickname or handle.",
       "Player controls only the player character; never invent the player's unspoken dialogue, actions or thoughts.",
       "Canon + relationship + memory + current context outrank generic drama or generic personality stereotypes.",
+      "SELF CLASSIFICATION IS HARD CANON: self.primaryDojo / self.classification describe SELF's own side. Do not infer SELF's dojo from rival/enemy names mentioned inside Connections or backstory. A character mentioning Iron Dragons as rivals does NOT make that character Iron Dragons.",
       ...(targetId
         ? [flirtIdentityInstruction(w, actorId, targetId)]
         : []),
@@ -15356,10 +15745,12 @@ function migrate(w) {
   Object.keys(w.players || {}).forEach((id) => noteImage(w.players[id] && w.players[id].avatar, { category: "profile", ownerUserId: id }));
   (w.chars || []).forEach((c) => {
     noteImage(c && c.avatar, { category: "profile", ownerCharacterId: c && c.id });
+    normalizeAlbumItemsInPlace(c);
     (albumOf(c) || []).forEach((item) => {
       const ref = item && (item.imageId ? imageRef(item.imageId) : item.src);
       const iid = imageIdOf(ref);
       if (iid && item && !item.imageId) item.imageId = iid;
+      if (item && item.who === undefined) item.who = "";
       noteImage(ref, { category: "album", ownerCharacterId: c && c.id });
     });
   });
@@ -16045,6 +16436,7 @@ const TERM_TEXT = {
       "Exek": "Exek", "Titkos viszony": "Titkos viszony", "Osztálytárs": "Osztálytárs", "Szomszéd": "Szomszéd",
       "Munkatárs": "Munkatárs", "Crush": "Crush", "Kölcsönös crush": "Kölcsönös crush", "Főnök": "Főnök",
       "Beosztott": "Beosztott", "Mentor": "Mentor", "Tanítvány": "Tanítvány", "Tanár": "Tanár", "Edző": "Edző",
+      "Teammate": "Csapattárs", "Frenemy": "Barát-ellenség", "Obsession": "Megszállottság", "Hate": "Gyűlölet",
     },
   },
   en: {
@@ -16085,6 +16477,7 @@ const TERM_TEXT = {
       "Exek": "Exes", "Titkos viszony": "Secret affair", "Osztálytárs": "Classmate", "Szomszéd": "Neighbor",
       "Munkatárs": "Coworker", "Crush": "Crush", "Kölcsönös crush": "Mutual crush", "Főnök": "Boss",
       "Beosztott": "Subordinate", "Mentor": "Mentor", "Tanítvány": "Student", "Tanár": "Teacher", "Edző": "Coach",
+      "Teammate": "Teammate", "Frenemy": "Frenemy", "Obsession": "Obsession", "Hate": "Hate",
     },
   },
 };
@@ -16097,33 +16490,88 @@ function termText(key, lang = CURRENT_LANG) {
 function localizedBond(value, lang = CURRENT_LANG) {
   if (!value) return "";
 
+  const targetLang = asLang(lang);
   const root =
-    TERM_TEXT[asLang(lang)] ||
+    TERM_TEXT[targetLang] ||
     TERM_TEXT.hu;
 
-  const bonds =
-    root.bonds || {};
+  const bonds = root.bonds || {};
+  const relTypes = root.relTypes || {};
+  const relMoods = root.relMoods || {};
 
-  const relTypes =
-    root.relTypes || {};
+  const canonicalAlias = {
+    "Mother": "Anya",
+    "Father": "Apa",
+    "Parent": "Szülő",
+    "Child": "Gyerek",
+    "Sibling": "Testvér",
+    "Cousin": "Unokatestvér",
+    "Enemy": "Ellenség",
+    "Rival": "Rivális",
+    "Acquaintance": "Ismerős",
+    "Friend": "Barát",
+    "Close friend": "Közeli barát",
+    "Best friend": "Legjobb barát",
+    "Mutual crush": "Kölcsönös crush",
+    "Dating": "Járnak",
+    "Engaged": "Jegyesek",
+    "Spouse": "Házastárs",
+    "Exes": "Exek",
+    "Secret affair": "Titkos viszony",
+    "Classmate": "Osztálytárs",
+    "Neighbor": "Szomszéd",
+    "Coworker": "Munkatárs",
+    "Boss": "Főnök",
+    "Subordinate": "Beosztott",
+    "Student": "Tanítvány",
+    "Teacher": "Tanár",
+    "Coach": "Edző",
+    "Teammate": "Teammate",
+    "Frenemy": "Frenemy",
+    "Obsession": "Obsession",
+    "Hate": "Hate",
+  };
 
-  const relMoods =
-    root.relMoods || {};
+  const translateToken = (rawToken) => {
+    const token = String(rawToken || "").trim();
+    if (!token) return "";
+    const canonical = canonicalAlias[token] || token;
+    return (
+      bonds[canonical] ||
+      relTypes[canonical] ||
+      relMoods[canonical] ||
+      token
+    );
+  };
+
+  const direct = translateToken(value);
+  if (direct !== value) return direct;
 
   /*
-   * A változó relation label-ek közül több
-   * (Barát, Legjobb barát, Ellenség, Rivális...)
-   * relTypes alatt van, miközben a BondPicker
-   * localizedBond()-ot használ.
-   *
-   * Ezért eddig angol módban bent maradhattak magyarul.
+   * Automatic Connections parsing can intentionally create a composite such
+   * as "Mentor / Crush". Localize EACH component instead of leaving the
+   * Hungarian canonical labels visible in English mode.
    */
-  return (
-    bonds[value] ||
-    relTypes[value] ||
-    relMoods[value] ||
-    value
-  );
+  if (/[\/|·]/.test(String(value))) {
+    return String(value)
+      .split(/(\s*[\/|·]\s*)/)
+      .map((part) =>
+        /^[\s\/|·]+$/.test(part)
+          ? part
+          : translateToken(part)
+      )
+      .join("");
+  }
+
+  const freeMoodMap = {
+    "hostile": targetLang === "en" ? "hostile" : "ellenséges",
+    "hostile and distrustful": targetLang === "en" ? "hostile and distrustful" : "ellenséges és bizalmatlan",
+    "competitive and distrustful": targetLang === "en" ? "competitive and distrustful" : "versengő és bizalmatlan",
+    "amused": targetLang === "en" ? "amused" : "szórakozott",
+    "fond": targetLang === "en" ? "fond" : "kedveli",
+  };
+
+  return freeMoodMap[String(value).toLowerCase()] || value;
 }
 
 function localizedRelType(value, lang = CURRENT_LANG) {
@@ -16525,7 +16973,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v91-exact-directed-connections";
+const BUILD_VERSION = "v93-faction-connections-image-context";
 
 const AUTO = "masvilag:auto";
 /*
@@ -18659,7 +19107,8 @@ function sameFollowTeamOrFaction(
     (af.shield && tf.shield) ||
     (af.cobraKai && tf.cobraKai) ||
     (af.miyagiFang && tf.miyagiFang) ||
-    (af.ironDragons && tf.ironDragons)
+    (af.ironDragons && tf.ironDragons) ||
+    (af.wasabi && tf.wasabi)
   );
 }
 
@@ -18682,22 +19131,7 @@ function opposingFollowFaction(
     (af.kook && tf.pogue) ||
     (af.hydra && tf.shield) ||
     (af.shield && tf.hydra) ||
-    (af.cobraKai && tf.miyagiFang) ||
-    (af.miyagiFang && tf.cobraKai) ||
-    (
-      af.ironDragons &&
-      (
-        tf.cobraKai ||
-        tf.miyagiFang
-      )
-    ) ||
-    (
-      tf.ironDragons &&
-      (
-        af.cobraKai ||
-        af.miyagiFang
-      )
-    )
+    karateFactionRivalryFlags(af, tf)
   );
 }
 
@@ -23242,7 +23676,7 @@ ${
     ? `KÉP A POSZTBAN:
 ${post.imageDescription ? `A kép megerősített kontextusa + AI által felismert látható tartalma: ${post.imageDescription}
 ` : ""}A szereplők látják a poszthoz tartozó képet is.
-Ha a képleírásban USER-CONFIRMED IMAGE CONTEXT szerepel, az felhasználó által megadott biztos kánon: az ott név szerint megadott játékbeli karakterek ténylegesen a képen vannak. Ezt a többi AI is tudja a poszt megtekintésekor.
+Ha a képleírásban USER-CONFIRMED PEOPLE IN IMAGE szerepel, az felhasználó által megadott biztos kánon: az ott név szerint megadott játékbeli karakterek ténylegesen a képen vannak. A USER-CONFIRMED IMAGE CONTEXT pedig a biztos helyzeti kontextus. Ezt a posztoló és a többi AI is tudja a poszt megtekintésekor.
 Ha természetes, reagáljanak arra, ami ténylegesen látható rajta: személyekre, outfitre, helyszínre, hangulatra vagy más fontos részletre.
 A kép ugyanúgy része a kontextusnak, mint a poszt szövege.
 A kommentek legyenek képföldeltek: ne írjanak olyan részletről, ami nincs a poszt szövegében vagy a látható képleírásban.
@@ -24933,10 +25367,7 @@ function socialInteractionInterest(
     (af.kook && tf.pogue) ||
     (af.hydra && tf.shield) ||
     (af.shield && tf.hydra) ||
-    (af.cobraKai && tf.miyagiFang) ||
-    (af.miyagiFang && tf.cobraKai) ||
-    (af.ironDragons && (tf.cobraKai || tf.miyagiFang)) ||
-    (tf.ironDragons && (af.cobraKai || af.miyagiFang))
+    karateFactionRivalryFlags(af, tf)
   ) {
     /*
      * Franchise/faction rivals pay attention to each other socially too:
@@ -26130,6 +26561,7 @@ function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
    */
   if (
     !String(albumItem.vision || "").trim() &&
+    !String(albumItem.who || "").trim() &&
     !String(albumItem.note || "").trim()
   ) {
     return false;
@@ -26458,6 +26890,9 @@ POSZT-TÍPUSOK VÁLTOZATOSSÁGA — KÖTELEZŐ:
 - Ugyanaz a karakter két egymást követő posztban lehetőleg ne ugyanazt az archetipust használja.
 - Néha legyen teljesen hétköznapi poszt is. Ettől élő a világ.
 - Ha a karakter saját történetében konkrét hobbi, munka, dojo, szervezet, baráti kör, család, rivális vagy cél szerepel, abból természetesen szülessenek posztok is.
+- DOJO/FRAKCIÓ BESOROLÁS HARD RULE: először a karakter SAJÁT besorolását használd. Az, hogy a Connections/backstory rivális dojókat név szerint említ, NEM jelenti azt, hogy a karakter azok tagja.
+- Ha a poszt rivális/ellenséges dojo vagy konkrét rivális karakter körül forog, a rivalry legyen látható a hangban: dojo-büszkeség, trash talk, gúny, versengés, distrust, callout vagy visszafogott feszültség. Ne írj belőlük random haverkodó/hype-posztot.
+- Explicit személyes barátság, crush, családi vagy más pozitív célpont-specifikus Connections/relationship felülírhatja a csoportos rivalizálást, de ezt tényleg a két konkrét ember kapcsolata igazolja.
 
 POSZT EMOJI:
 
@@ -26529,8 +26964,10 @@ KOMMENT EMOJI:
 KÉPEK:
 
 - Akinek van Fotóalbuma, néha képet is posztolhat belőle.
-- Az albumlistában minden kép mellett ott lehet az AI által felismert látható tartalom is. Ezt KÖTELEZŐ figyelembe venni a megfelelő kép kiválasztásakor és a caption megírásakor.
-- A poszt szerzője is "tudja", mi van a saját feltöltött fotóján. A captionnek és a későbbi kommentválaszainak is ehhez kell igazodniuk.
+- Az albumlistában három külön képkontextus lehet: USER-CONFIRMED PEOPLE IN IMAGE = a felhasználó által biztosan megadott szereplők; USER-CONFIRMED IMAGE CONTEXT = a felhasználó plusz helyzeti megjegyzése; VISIBLE IMAGE CONTENT = az AI képelemzése. Mindhármat KÖTELEZŐ figyelembe venni.
+- A USER-CONFIRMED PEOPLE IN IMAGE névlistát biztos kánonnak kezeld. Ne vitasd felül a vision alapján, és ne találj ki helyette másik játékbeli identitást.
+- A poszt szerzője is "tudja", mi van a saját feltöltött fotóján: kik vannak rajta a biztos mező szerint, és mit látott rajta a vision. A captionnek és a későbbi kommentválaszainak is ehhez kell igazodniuk.
+- A többi AI a poszt megtekintésekor ugyanezt a nyilvános képkontextust kapja, tehát felismerheti a felhasználó által megnevezett játékbeli szereplőket és reagálhat a ténylegesen látható részletekre.
 - Előbb döntsd el, MELYIK konkrét kép illik a jelenethez, és csak UTÁNA írd meg a captiont. A caption ne legyen felcserélhető egy teljesen másik képpel.
 - Ilyenkor az "image" mezőbe a kép jele kerüljön, például "kep2".
 - SOHA ne találj ki olyan képet, ami nincs az adott karakter albumában.
@@ -26653,6 +27090,8 @@ ${albumList(author) || "nincs használható albumkép"}
 - A poszt kizárólag ${author.name} saját életéből, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
 - Ha a karakternek kölcsönös baráti kapcsolatai vannak, ezek legyenek aktív részei a social életének: természetesen posztolhat közös programról, megemlítheti vagy barátilag ugrasshatja a barátját, reagálhat annak életére, megvédheti, megkérdezheti, merre van, vagy szervezhet vele valamit. Ne kezeld a barátokat véletlenszerű idegenként.
+- SAJÁT BESOROLÁSOD: ${characterFactionIdentityCard(author) || "nincs biztosan azonosított frakció/dojo"}. Ezt tekintsd saját oldaladnak; a riválisok említése a karakterlapodon nem változtatja meg a saját besorolásodat.
+- Ha rivális dojo/frakció vagy konkrét negatív relationship-célpont kerül a posztba, a caption hangja ezt tükrözze. Ne dicsérd/hype-old őket haverként, kivéve ha a köztetek lévő explicit személyes kapcsolat ezt tényleg felülírja.
 - Ne legyen rendszer-poszt vagy mesterséges filler.
 - Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
 - Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
@@ -26697,6 +27136,19 @@ function applyWorldStep(n, out) {
     if (
       mentionedPostTargets.some((targetId) =>
         friendshipHostilityMismatch(
+          n,
+          author,
+          targetId,
+          postText,
+          postText
+        ) ||
+        factionCommentToneMismatch(
+          n,
+          author,
+          targetId,
+          postText
+        ) ||
+        connectionsCommentToneMismatch(
           n,
           author,
           targetId,
@@ -26760,11 +27212,16 @@ function applyWorldStep(n, out) {
 
     const picRef = pic ? (pic.imageId ? imageRef(pic.imageId) : pic.src) : "";
     const picId = imageIdOf(picRef);
+    const picPeople = pic ? String(pic.who || "").replace(/\s+/g, " ").trim() : "";
     const picManualNote = pic ? String(pic.note || "").replace(/\s+/g, " ").trim() : "";
     const picVision = pic ? String(pic.vision || "").replace(/\s+/g, " ").trim() : "";
     const picContext = pic ? albumItemContext(pic, 1200) : "";
     const picCharacterIds = pic
-      ? namedCharacterIdsInImageContext(n, picManualNote, author)
+      ? namedCharacterIdsInImageContext(
+          n,
+          [picPeople, picManualNote].filter(Boolean).join(" | "),
+          author
+        )
       : [];
 
     const fresh = {
@@ -26774,6 +27231,7 @@ function applyWorldStep(n, out) {
       imageId: picId || "",
       image: picId ? "" : picRef,
       imageDescription: picContext,
+      imagePeopleNote: picPeople,
       imageManualNote: picManualNote,
       imageVision: picVision,
       imageCharacterIds: picCharacterIds,
@@ -28312,7 +28770,9 @@ function RelPair({ w, aId, bId, aName, bName, update }) {
           <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score}</span>
         </div>
         <div style={{ fontFamily: "Fraunces, Georgia, serif", fontSize: 15, color: r.mood ? "var(--rose)" : "var(--muted)", marginBottom: 6 }}>
-          {r.mood || relLabel(r)}
+          {r.mood
+            ? localizedRelationshipDisplayText(r.mood, CURRENT_LANG)
+            : relLabel(r)}
         </div>
         {r.why ? <p className="hint" style={{ marginBottom: 6 }}>{r.why}</p> : null}
         <RelBar score={r.score} />
@@ -35321,7 +35781,7 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 66,
+    schedulerVersion: 68,
     lastError: "",
   };
 }
@@ -35356,10 +35816,11 @@ function restorePostedAlbumImagesForFreshRun(w) {
 
     if (alreadyThere) return;
 
+    const people = String(post.imagePeopleNote || "").trim();
     const manual = String(post.imageManualNote || "").trim();
     const vision = String(
       post.imageVision ||
-      (!manual ? post.imageDescription : "") ||
+      (!manual && !people ? post.imageDescription : "") ||
       ""
     ).trim();
 
@@ -35367,6 +35828,7 @@ function restorePostedAlbumImagesForFreshRun(w) {
       id: post.sourceAlbumItemId || uid(),
       imageId: imageId || "",
       src: imageId ? "" : String(post.image || ""),
+      who: people,
       note: manual,
       vision,
       analyzedAt: Number(post.imageAnalyzedAt || 0) || (vision ? Number(post.ts || now()) : 0),
@@ -37506,10 +37968,10 @@ function ensureSimState(w) {
   if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
   if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
 
-  /* v91 migration: clear stale background queue state from older schedulers.
+  /* v93 migration: clear stale background queue state from older schedulers.
      Manual requests survive; comments/follows/replies are rebuilt from the
      current world state without restart-created queue storms. */
-  if (Number(w.sim.schedulerVersion) !== 66) {
+  if (Number(w.sim.schedulerVersion) !== 68) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -37521,9 +37983,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 66;
+    w.sim.schedulerVersion = 68;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 66;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 68;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -51957,7 +52419,7 @@ const signOut = useCallback(async () => {
 
     analyzeImageDataUrl(
       imageInput,
-      `Describe what is visibly shown in this ${owner.name || "character"} album image in 1-3 concise sentences. Mention visible people without inventing names, clothing, activity, setting, objects and mood. Do not identify a real person by name. Do not infer off-camera relationships.`
+      `Analyze what is visibly shown in this ${owner.name || "character"} album image in 1-3 concise sentences. Mention the number of visible people, pose/activity, clothing, setting, important objects and overall mood. Do not invent fictional character names from pixels and do not identify a real person by name. Do not infer off-camera relationships. A separate user-confirmed field supplies exact in-game identities when needed.`
     )
       .then((vision) => {
         if (!vision) return;
