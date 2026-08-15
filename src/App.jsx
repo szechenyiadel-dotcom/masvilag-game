@@ -1,4 +1,4 @@
-/* MÁSVILÁG RECOVERY — ORIGINAL PRE-PATCH APP + sameCoreFaction ONLY — 20260815_2338 */
+/* MÁSVILÁG RECOVERY v99.2 — LIGHTWEIGHT AUTONOMOUS POSTS + POPUPS — 20260815_2352 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -7830,10 +7830,10 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * (comments, replies, DMs, groups, follows, gossip reactions) may continue between
  * posts, but a normal new AI feed post gets a hard ~10 minute floor. */
 const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  3 * 60 * 1000,
+  2 * 60 * 1000,
   Math.min(
-    15 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 4 * 60 * 1000
+    12 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 3 * 60 * 1000
   )
 );
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
@@ -28084,7 +28084,7 @@ const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 5;
  * - két képes poszt között mindig legyen legalább egy szöveges poszt;
  * - a feltöltött album ne fogyjon el egyetlen induló hullámban.
  */
-const AUTONOMOUS_DAILY_POST_HARD_MAX = 5;
+const AUTONOMOUS_DAILY_POST_HARD_MAX = 12;
 const AUTONOMOUS_DAILY_IMAGE_HARD_MAX = 1;
 const AUTONOMOUS_IMAGE_START_TEXT_POSTS = 2;
 const AUTONOMOUS_CHARACTER_DAILY_SOFT_MAX = 2;
@@ -28173,7 +28173,7 @@ function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
   if (todayCount < AUTONOMOUS_IMAGE_START_TEXT_POSTS) return false;
 
   if (
-    autonomousAiImagePostsThisGameDay(w).length >=
+    autonomousAiImagePostsThisGameDay(w) >=
     AUTONOMOUS_DAILY_IMAGE_HARD_MAX
   ) {
     return false;
@@ -43334,7 +43334,7 @@ function currentPopupEvent(w) {
   );
 }
 
-const POPUP_DAILY_HARD_MAX = 3;
+const POPUP_DAILY_HARD_MAX = 8;
 
 function popupLocalDayKey(ts = now()) {
   const d = new Date(Number(ts) || now());
@@ -43374,19 +43374,28 @@ function popupGenerationBlocked(w) {
 
 function popupCadenceMs(w) {
   const level = storySettingsOf(w).dramaLevel;
-  /* v66: popup is an occasional story interruption, not a parallel feed.
-     Posts/comments/DMs keep the world alive between popups. Even chaotic mode
-     gets real breathing room instead of throwing a decision modal every few minutes. */
+
+  /*
+   * RECOVERY v99.2:
+   * Popups stay occasional, but the old 8-24 minute floor plus a hard
+   * three-per-day cap could make a healthy world look completely silent.
+   */
   const base =
     level === "low"
-      ? 24 * 60 * 1000
+      ? 12 * 60 * 1000
       : level === "high"
-        ? 12 * 60 * 1000
+        ? 6 * 60 * 1000
         : level === "chaotic"
-          ? 9 * 60 * 1000
-          : 16 * 60 * 1000;
+          ? 5 * 60 * 1000
+          : 8 * 60 * 1000;
 
-  return Math.max(8 * 60 * 1000, Math.round(base * LIVE_WORLD_POPUP_CADENCE_MULTIPLIER));
+  return Math.max(
+    5 * 60 * 1000,
+    Math.round(
+      base *
+      LIVE_WORLD_POPUP_CADENCE_MULTIPLIER
+    )
+  );
 }
 
 function popupLastGeneratedAt(w) {
@@ -49983,19 +49992,11 @@ function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
   /*
-   * v89 ABSOLUTE COMMENT COVERAGE.
-   * Every visible feed post must receive real top-level AI comments. This lane
-   * also repairs older posts that survived from a previous save.
+   * RECOVERY v99.2:
+   * Historical comment coverage must not pre-empt autonomous life.
+   * Direct player-triggered comment actions and the recent-feed comment lane
+   * below still work, but old posts are not scanned before every world turn.
    */
-  const uncoveredPost = guaranteedCommentCoverageCandidate(view);
-  if (uncoveredPost) {
-    const coverageAction = guaranteedPostCommentAction(
-      view,
-      uncoveredPost,
-      "coverage-watchdog"
-    );
-    if (coverageAction) return coverageAction;
-  }
 
   /*
    * v54 HARD FAIRNESS WATCHDOG
@@ -50010,6 +50011,20 @@ function planAutoAction(view) {
   if (popupLate >= 0) {
     const forcedPopup = popupPriorityAction(view, "popup-starvation");
     if (forcedPopup) return forcedPopup;
+  }
+
+  /*
+   * RECOVERY v99.2 ESSENTIAL FEED PULSE:
+   * Once due, one autonomous feed post gets priority over private maintenance
+   * lanes. Recent comment coverage is NOT allowed to block the next post.
+   */
+  if (feedNeedsFreshPost(view)) {
+    return mkAction(
+      "world",
+      `recovery-feed:${Math.floor(now() / 30000)}`,
+      { trigger: "recovery-feed" },
+      "event"
+    );
   }
 
   const dmLate = autonomousDmOverdueByMs(view);
@@ -51564,26 +51579,54 @@ async function runSimulationAction(view, update, action, addImage) {
        JSON, use a small canon-safe fallback rather than silently losing the turn. */
     if (!out || out.skip === true) out = fallbackPopupEventResponse(view, seed);
 
-    /* React state-updater is async, ezért előbb egy másolaton validáljuk. */
-    let probe = JSON.parse(JSON.stringify(view));
-    let probeEvent = addPopupEvent(probe, seed, out);
-    if (!probeEvent) {
-      out = fallbackPopupEventResponse(view, seed);
-      probe = JSON.parse(JSON.stringify(view));
-      probeEvent = out ? addPopupEvent(probe, seed, out) : null;
-    }
-    if (!probeEvent) return null;
+    /*
+     * RECOVERY v99.2:
+     * Validate the popup payload itself; do not clone the entire multi-MB world.
+     */
+    let normalizedPopup =
+      normalizePopupEvent(
+        view,
+        seed,
+        out
+      );
 
-    /* We already re-checked the live Event lock immediately after generation.
-       Commit the validated popup deterministically now. If the player opens an
-       Event in the tiny interval after this check, currentPopupEvent() hides the
-       row until the Event is over instead of falsely marking a non-commit as a
-       successful popup. */
+    if (!normalizedPopup) {
+      out =
+        fallbackPopupEventResponse(
+          view,
+          seed
+        );
+
+      normalizedPopup =
+        out
+          ? normalizePopupEvent(
+              view,
+              seed,
+              out
+            )
+          : null;
+    }
+
+    if (!normalizedPopup) return null;
+
+    let committed = false;
+
     update((n) => {
-      addPopupEvent(n, seed, out);
+      committed =
+        Boolean(
+          addPopupEvent(
+            n,
+            seed,
+            out
+          )
+        );
+
       ensureSimState(n).popupAttemptAt = now();
     });
-    return "popup-event";
+
+    return committed
+      ? "popup-event"
+      : null;
   }
 
   if (action.type === "unfollow") {
@@ -53235,36 +53278,54 @@ if (targetNote) {
     return null;
   }
 
-  const worldProbe = JSON.parse(JSON.stringify(view));
-  const visiblePostsCreated = applyWorldStep(
-    worldProbe,
-    out
-  );
-
-  if (!visiblePostsCreated) {
+  if (!out.posts.length) {
     return null;
   }
 
+  let visiblePostsCreated = 0;
+
+  /*
+   * RECOVERY v99.2:
+   * Apply the generated feed step once. The previous probe cloned the entire
+   * world before every autonomous post.
+   */
   update((n) => {
-    const beforePostIds = new Set((n.posts || []).map((p) => p && p.id).filter(Boolean));
-    applyWorldStep(n, out);
+    const beforePostIds =
+      new Set(
+        (n.posts || [])
+          .map((p) => p && p.id)
+          .filter(Boolean)
+      );
 
-    const freshPosts = (n.posts || []).filter(
-      (p) => p && !beforePostIds.has(p.id) && !isHuman(n, p.authorId)
-    );
+    visiblePostsCreated =
+      applyWorldStep(
+        n,
+        out
+      );
 
-    /*
-     * v51: NINCS többé kötelező azonnali comments queue minden poszt után.
-     * A scheduler a következő körökben csak a ténylegesen FRISS feedből
-     * választ kommentelhető posztot. Ettől a poszt marad az elsődleges
-     * világpulzus, és megszűnik a kommentlavina.
-     */
+    if (!visiblePostsCreated) {
+      return;
+    }
+
+    const freshPosts =
+      (n.posts || []).filter(
+        (p) =>
+          p &&
+          !beforePostIds.has(p.id) &&
+          !isHuman(n, p.authorId)
+      );
+
     freshPosts.forEach((freshPost) => {
-      freshPost.autoCommentedAt = Number(freshPost.autoCommentedAt) || 0;
+      freshPost.autoCommentedAt =
+        Number(
+          freshPost.autoCommentedAt
+        ) || 0;
     });
   });
 
-  return "world";
+  return visiblePostsCreated
+    ? "world"
+    : null;
 }
 /* ============================================================
    Váz
@@ -56053,17 +56114,12 @@ const signOut = useCallback(async () => {
   const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
 
-  let coverageOverride = null;
-  if (!manualQueued) {
-    const uncoveredPostNow = guaranteedCommentCoverageCandidate(view2);
-    if (uncoveredPostNow) {
-      coverageOverride = guaranteedPostCommentAction(
-        view2,
-        uncoveredPostNow,
-        "queue-preempt-coverage"
-      );
-    }
-  }
+  /*
+   * RECOVERY v99.2:
+   * Do not scan historical comment coverage before the scheduler can reach
+   * autonomous posts/popups. Explicit queued reactions still run normally.
+   */
+  const coverageOverride = null;
 
   /* A popup queued just before entering an Event must not fire on top of it. */
   if (
@@ -56139,6 +56195,17 @@ const signOut = useCallback(async () => {
           );
       }
       if (!action) return;
+
+      if (
+        action.type === "world" ||
+        action.type === "popup-event"
+      ) {
+        console.info(
+          "[recovery-activity] selected",
+          action.type,
+          action.key || ""
+        );
+      }
 
       if (["popup-event", "dm", "roleplay-initiate", "note-react"].includes(action.type)) {
         console.info("[live-world] selected", action.type, action.key || "", {
