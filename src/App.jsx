@@ -15627,7 +15627,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v84-post-image-daily-caps";
+const BUILD_VERSION = "v85-chat-busy-scope-fix";
 
 const AUTO = "masvilag:auto";
 /*
@@ -32268,6 +32268,15 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   const c = openId ? w.chars.find((x) => x.id === openId) : null;
   const msgs = (openId && w.chats[chatKey(w.meId, openId)]) || [];
 
+  /*
+   * v85 — CURRENT CHAT BUSY FLAG
+   * `busy` used to be a single boolean, but DM generation now supports
+   * per-conversation concurrency through `busyChats`. The composer still had
+   * two legacy references to the removed scalar `busy`, which caused a render-
+   * time ReferenceError and crashed the entire app as soon as a DM opened.
+   */
+  const currentChatBusy = Boolean(c && busyChats[c.id]);
+
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [msgs.length, openId]);
 
   useEffect(() => {
@@ -33848,7 +33857,7 @@ if (group) {
               e.preventDefault();
 
               if (
-                !busy &&
+                !currentChatBusy &&
                 (
                   text.trim() ||
                   chatImg
@@ -33867,7 +33876,7 @@ if (group) {
             send()
           }
           disabled={
-            busy ||
+            currentChatBusy ||
             (
               !text.trim() &&
               !chatImg
