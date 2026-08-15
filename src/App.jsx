@@ -5800,6 +5800,57 @@ function stabilizedRelationshipDelta(w, a, b, proposed, autoEcho = false) {
   return Math.sign(delta) * Math.min(Math.abs(delta), cap);
 }
 
+function meaningfulRelationshipHistoryCount(w, a, b, direction = 1) {
+  if (!w || !a || !b) return 0;
+  const mem = ensureCharMemory(w, a);
+  const rows = mem && mem.relationshipHistory &&
+    Array.isArray(mem.relationshipHistory[relKey(a, b)])
+      ? mem.relationshipHistory[relKey(a, b)]
+      : [];
+  return rows.slice(-18).filter((row) => {
+    if (!row || row.autoEcho) return false;
+    const delta = Number(row.delta) || 0;
+    return Math.sign(delta) === direction && Math.abs(delta) >= 4;
+  }).length;
+}
+
+function relationshipBondTransitionPaceAllowed(w, a, b, currentRel, proposedBond, nextScore) {
+  const current = String(currentRel && (currentRel.bond || currentRel.type) || "").trim();
+  const proposed = String(proposedBond || "").trim();
+  if (!proposed || proposed === current) return true;
+  if (isPermanentFamilyBond(currentRel)) return true;
+
+  const currentPolarity = relationshipBondPolarity(current);
+  const proposedPolarity = relationshipBondPolarity(proposed);
+
+  if (currentPolarity === 1 && proposedPolarity === 1) {
+    if (/^Legjobb barát$|^Best Friend$/i.test(proposed)) {
+      return Number(nextScore) >= 82 &&
+        meaningfulRelationshipHistoryCount(w, a, b, 1) >= 4;
+    }
+    if (/^Közeli barát$|^Close Friend$/i.test(proposed)) {
+      return Number(nextScore) >= 58 &&
+        meaningfulRelationshipHistoryCount(w, a, b, 1) >= 3;
+    }
+    if (/^Barát$|^Friend$/i.test(proposed)) {
+      return Number(nextScore) >= 28 &&
+        meaningfulRelationshipHistoryCount(w, a, b, 1) >= 2;
+    }
+  }
+
+  if (currentPolarity === 1 && proposedPolarity === -1) {
+    return meaningfulRelationshipHistoryCount(w, a, b, -1) >= 4 &&
+      Number(nextScore) <= -30;
+  }
+
+  if (currentPolarity === -1 && proposedPolarity === 1) {
+    return meaningfulRelationshipHistoryCount(w, a, b, 1) >= 4 &&
+      Number(nextScore) >= 30;
+  }
+
+  return true;
+}
+
 function relationshipBondTransitionAllowedByCanon(
   w,
   a,
@@ -5982,13 +6033,23 @@ function applyChanges(
 
     if (
       bondEvolution.bond &&
-      !relationshipBondTransitionAllowedByCanon(
-        n,
-        a,
-        b,
-        r,
-        bondEvolution.bond,
-        nextScore
+      (
+        !relationshipBondTransitionPaceAllowed(
+          n,
+          a,
+          b,
+          r,
+          bondEvolution.bond,
+          nextScore
+        ) ||
+        !relationshipBondTransitionAllowedByCanon(
+          n,
+          a,
+          b,
+          r,
+          bondEvolution.bond,
+          nextScore
+        )
       )
     ) {
       bondEvolution = {
@@ -16566,6 +16627,29 @@ function migrate(w) {
   if (!w.universe.year) w.universe.year = String(new Date().getFullYear());
   if (w.universe.date === undefined) w.universe.date = "";
   ensureStorySettings(w);
+
+  /*
+   * PERSISTENT FEATURE MIGRATION
+   * These settings are stored on the world, so old saves receive the same
+   * behavior as newly created worlds the next time they are loaded.
+   */
+  if (Number(w.masvilagSchemaVersion || 0) < WORLD_SCHEMA_VERSION) {
+    if (!w.autonomousFeedSettings || typeof w.autonomousFeedSettings !== "object") {
+      w.autonomousFeedSettings = {};
+    }
+    w.autonomousFeedSettings.dailyPostHardMax = 5;
+    w.autonomousFeedSettings.dailyImageHardMax = 1;
+    w.autonomousFeedSettings.imageStartAfterPosts = 2;
+    w.autonomousFeedSettings.characterSoftMax = 2;
+    w.autonomousFeedSettings.version = 2;
+    (w.posts || []).forEach((post) => {
+      if (!post || typeof post !== "object") return;
+      if (post.gameDayKey === undefined) post.gameDayKey = "";
+      if (post.imageId === undefined && post.image) post.imageId = imageIdOf(post.image);
+    });
+    w.masvilagSchemaVersion = WORLD_SCHEMA_VERSION;
+  }
+
   const y = worldYear(w);
   const fix = (c) => {
     if (c && !c.birth && c.age && y) {
@@ -18012,7 +18096,16 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v95-strict-social-identity-scope";
+const BUILD_VERSION = "v97-persistent-social-pacing-performance";
+const WORLD_SCHEMA_VERSION = 97;
+
+/* Fast, safe clone for the large world state. */
+function cloneWorldState(value) {
+  if (typeof structuredClone === "function") {
+    try { return structuredClone(value); } catch (e) {}
+  }
+  return JSON.parse(JSON.stringify(value));
+}
 
 const AUTO = "masvilag:auto";
 /*
@@ -18033,6 +18126,8 @@ const AUTO_DEFAULT = {
    */
   every: Math.max(0.12, LIVE_WORLD_CONTENT_INTERVAL_MS / 60000),
 };
+
+const LIVE_WORLD_MIN_ACTION_GAP_MS = 9000;
 
 async function loadAuto() {
   return {
@@ -21568,6 +21663,10 @@ function setFollowState(
   shouldFollow,
   source = "world"
 ) {
+  /*
+   * FOLLOW ≠ FRIENDSHIP. This function changes only the social follow graph.
+   * It must never directly modify relationship score, mood or bond.
+   */
   if (
     !w ||
     !followerId ||
@@ -36634,24 +36733,49 @@ if (group) {
             }}
           >
             {(m.imageId || m.image) ? (
-              <img
-                src={resolveImg(
-                  m.imageId
-                    ? imageRef(m.imageId)
-                    : m.image,
-                  media
-                )}
-                alt=""
-                style={{
-                  display:"block",
-                  width:"min(260px, 70vw)",
-                  maxWidth:"100%",
-                  maxHeight:340,
-                  objectFit:"cover",
-                  borderRadius:12,
-                  marginBottom:m.text ? 7 : 0,
-                }}
-              />
+              <>
+                <img
+                  src={resolveImg(
+                    m.imageId
+                      ? imageRef(m.imageId)
+                      : m.image,
+                    media
+                  )}
+                  alt=""
+                  style={{
+                    display:"block",
+                    width:"min(260px, 70vw)",
+                    maxWidth:"100%",
+                    maxHeight:340,
+                    objectFit:"cover",
+                    borderRadius:12,
+                    marginBottom:7,
+                  }}
+                />
+                {(() => {
+                  const imageUrl = resolveImg(
+                    m.imageId
+                      ? imageRef(m.imageId)
+                      : m.image,
+                    media
+                  );
+                  const mediaRow = m.imageId ? media[m.imageId] : null;
+                  const fileName =
+                    (mediaRow && mediaRow.originalFileName) ||
+                    `dm-image-${String(m.id || "image").replace(/[^a-z0-9_-]/gi, "") || "image"}.jpg`;
+                  return imageUrl ? (
+                    <a
+                      href={imageUrl}
+                      download={fileName}
+                      className="btn tiny ghost"
+                      style={{ textDecoration:"none", marginBottom:m.text ? 7 : 0 }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      ↓ {tt("Kép mentése", "Save image")}
+                    </a>
+                  ) : null;
+                })()}
+              </>
             ) : null}
             {m.text ? (
               <div style={{ whiteSpace:"pre-wrap" }}>
@@ -52934,7 +53058,7 @@ export default function App() {
     setLangState(next);
     setWorld((prev) => {
       if (!prev || !meId) return prev;
-      const n = JSON.parse(JSON.stringify(prev));
+      const n = cloneWorldState(prev);
       if (!n.userSettings) n.userSettings = {};
       n.userSettings[meId] = { ...(n.userSettings[meId] || {}), language: next };
       n.aiLang = next;
@@ -54375,7 +54499,7 @@ const signOut = useCallback(async () => {
           pending.reason ||
             "deferred-conflict"
         );
-      }, 500);
+      }, 1000);
 
     return () =>
       clearInterval(i);
@@ -54577,25 +54701,21 @@ const signOut = useCallback(async () => {
   setWorld((prev) => {
     if (!prev) return prev;
 
-    const n =
-      JSON.parse(
-        JSON.stringify(prev)
-      );
-
     /*
-     * Régi világok automatikus
-     * Social Simulation migrációja.
-     *
-     * Csak a hiányzó mezőket hozza létre,
-     * meglévő adatot nem ír felül.
+     * The full ensureSocialSimulationState() runs during migration/load.
+     * It intentionally does NOT run on every hot state update because it
+     * recalculates social stats, trends and gossip state and can freeze the UI.
      */
-    ensureSocialSimulationState(n);
+    const n = cloneWorldState(prev);
+    if (!n.sim || typeof n.sim !== "object" || Array.isArray(n.sim)) n.sim = {};
+    if (!Array.isArray(n.sim.queue)) n.sim.queue = [];
+    if (!n.notify || typeof n.notify !== "object" || Array.isArray(n.notify)) n.notify = {};
+    if (!n.chats || typeof n.chats !== "object" || Array.isArray(n.chats)) n.chats = {};
+    if (!Array.isArray(n.posts)) n.posts = [];
+    if (!Array.isArray(n.socialEvents)) n.socialEvents = [];
 
     fn(n);
-
-    n.rev =
-      (n.rev || 0) + 1;
-
+    n.rev = (n.rev || 0) + 1;
     return n;
   });
 }, []);
@@ -54609,7 +54729,7 @@ const signOut = useCallback(async () => {
     const sweep = () => {
       setWorld((prev) => {
         if (!prev) return prev;
-        const n = JSON.parse(JSON.stringify(prev));
+        const n = cloneWorldState(prev);
         if (!maintainRoleplaySceneLifecycle(n, meId)) return prev;
         n.rev = (n.rev || 0) + 1;
         return n;
@@ -55236,46 +55356,31 @@ const signOut = useCallback(async () => {
   useEffect(() => {
     if (!world) return;
 
-    const json =
-      contentOf(world);
-
-    if (
-      json ===
-      lastSavedContent.current
-    ) {
-      return;
-    }
-
     if (timer.current) {
-      clearTimeout(
-        timer.current
-      );
+      clearTimeout(timer.current);
     }
 
-    const snap =
-      JSON.parse(
-        JSON.stringify(
-          world
-        )
-      );
+    /*
+     * Do the expensive content serialization/cloning only once, after the
+     * state has been quiet for a moment. Rapid live-world updates therefore
+     * collapse into one save snapshot instead of repeatedly freezing the main
+     * thread.
+     */
+    timer.current = setTimeout(async () => {
+      const latest = wRef.current || world;
+      if (!latest) return;
 
-    const snapSyncRev =
-      worldSyncRev(
-        snap
-      );
+      const json = contentOf(latest);
+      if (json === lastSavedContent.current) return;
 
-    const offline =
-      typeof navigator !== "undefined" &&
-      navigator.onLine === false;
+      const snap = cloneWorldState(latest);
+      const snapSyncRev = worldSyncRev(snap);
 
-    setSaveState(
-      offline
-        ? "local"
-        : "saving"
-    );
+      const offline =
+        typeof navigator !== "undefined" &&
+        navigator.onLine === false;
 
-    timer.current =
-      setTimeout(async () => {
+      setSaveState(offline ? "local" : "saving");
         /*
          * 1. MINDIG emergency local backup.
          * Ez soha nem merge-el vissza automatikusan online worldbe.
@@ -55617,7 +55722,7 @@ const signOut = useCallback(async () => {
 
           return savedWorld;
         });
-      }, 800);
+      }, 1100);
 
     return () => {
       if (timer.current) {
@@ -55723,8 +55828,17 @@ const signOut = useCallback(async () => {
 
   if (!manualQueued && cooldownLeft() > 0) return;
 
+  if (
+    !manualQueued &&
+    view2.sim &&
+    Number(view2.sim.lastAttemptAt || 0) > 0 &&
+    now() - Number(view2.sim.lastAttemptAt || 0) < LIVE_WORLD_MIN_ACTION_GAP_MS
+  ) {
+    return;
+  }
+
   /*
-   * Ne indítsunk egymás után 5 másodpercenként új generatív háttérhívást
+   * Ne indítsunk egymás után túl sűrűn új generatív háttérhívást
    * csak azért, mert a feed contentAt órája már esedékes. A queue-s reakciók
    * (komment/reply/forced gossip) továbbra is azonnal futhatnak.
    */
@@ -55895,10 +56009,10 @@ const signOut = useCallback(async () => {
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 5000);
-    const first = setTimeout(beat, 100);
+    const i = setInterval(beat, 9000);
+    const first = setTimeout(beat, 150);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
-  }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update, simPulse, addImage]);
+  }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
 
   useEffect(() => { if (err) { const t = setTimeout(() => setErr(""), 9000); return () => clearTimeout(t); } }, [err]);
 
