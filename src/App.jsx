@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v22 — RESTART PERFORMANCE ONLY — 20260815_2102 */
+/* MÁSVILÁG BUILD v23 — REQUEST REACTIONS PERFORMANCE ONLY — 20260815_2118 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -18672,7 +18672,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v22-restart-performance";
+const BUILD_VERSION = "v23-request-reactions-performance";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -40080,18 +40080,24 @@ function characterNoteActivityScore(w, c) {
   return score;
 }
 
-function pickNoteReactionCast(w, authorId, processedBy) {
+function pickNoteReactionCast(w, authorId, processedBy, limit = 6) {
   const done = processedBy instanceof Set ? processedBy : new Set(processedBy || []);
+  const maxCast = Math.max(1, Math.min(8, Number(limit) || 6));
+
   return (w.chars || [])
     .filter((c) => c && !isHuman(w, c.id) && c.id !== authorId && !done.has(c.id))
     .map((c) => {
+      /*
+       * socialInteractionInterest() already includes obsession weighting.
+       * Do not run relationshipObsessionLevel() a second time for the same
+       * actor→author pair merely to rank this one Note batch.
+       */
       const relInterest = socialInteractionInterest(w, c.id, authorId);
       const follows = isFollowing(w, c.id, authorId) ? 16 : 0;
-      const obsession = relationshipObsessionLevel(w, c.id, authorId) * 10;
-      return { c, score: relInterest + follows + obsession + Math.random() * 14 };
+      return { c, score: relInterest + follows + Math.random() * 14 };
     })
     .sort((a, b) => b.score - a.score)
-    .slice(0, 8)
+    .slice(0, maxCast)
     .map((row) => row.c);
 }
 
@@ -40203,7 +40209,7 @@ Ha ír:
 }
 
 /* Reakciók a játékos jegyzetére. */
-async function genNoteReact(w, note) {
+async function genNoteReact(w, note, options = {}) {
   const reactedBy = new Set(
     note.reactedBy || []
   );
@@ -40217,7 +40223,8 @@ async function genNoteReact(w, note) {
   const cast = pickNoteReactionCast(
     w,
     note.authorId,
-    processedBy
+    processedBy,
+    options.castLimit || 6
   );
 
   // Ha a kiválasztott körben már nincs
@@ -40245,13 +40252,28 @@ async function genNoteReact(w, note) {
     .filter(Boolean)
     .join(", ");
 
-  return askWorldJSON(
+  /*
+   * PERFORMANCE v23 — REQUEST REACTIONS
+   *
+   * voiceCard(c) + characterMemoryCard(w,c) below already supplies each
+   * reacting character's full private canon and memory. Passing deep=true to
+   * worldContext duplicated most of those sheets a second time and made a
+   * manual Note reaction one of the largest synchronous prompt builds in the
+   * app. Keep the shared world/relationship context, but use the shallow
+   * version here.
+   */
+  const requestNoteReactionJSON =
+    options.interactive
+      ? askWorldJSONInteractive
+      : askWorldJSON;
+
+  return requestNoteReactionJSON(
     w,
     engineFor(w),
     `${worldContext(
       w,
       cast.map((c) => c.id),
-      true,
+      false,
       null
     )}
 
@@ -53088,8 +53110,24 @@ async function runSimulationAction(view, update, action, addImage) {
     return null;
   }
 
+  /*
+   * A manual Request Reactions click must paint its loading state before any
+   * prompt construction starts, and it must jump ahead of background AI work.
+   */
+  if (action.source === "manual") {
+    await wait(0);
+  }
+
   const out =
-    await genNoteReact(view, note);
+    await genNoteReact(
+      view,
+      note,
+      {
+        interactive:
+          action.source === "manual",
+        castLimit: 6,
+      }
+    );
 
   update((n) => {
     
