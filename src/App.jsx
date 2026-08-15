@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v11 — BUILD FIX + WHITE SCREEN + LAG + RELATIONSHIP — 20260815_1932 */
+/* MÁSVILÁG BUILD v12.1 — DEEP PERFORMANCE + WHITE SCREEN + RELATIONSHIP — 20260815_1954 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -3976,6 +3976,76 @@ function setRel(w, a, b, patch) {
    ============================================================ */
 
 const RELATIONSHIP_CANON_VERSION = 10;
+
+/*
+ * PERFORMANCE v12 — RELATIONSHIP CANON INPUT FINGERPRINT
+ *
+ * The identity/Connections resolver is intentionally powerful, but a full
+ * actor × target rebuild is expensive in a large world. `migrate()` is called
+ * after cloud loads/saves too, so rebuilding the exact same relationship graph
+ * there caused repeated UI stalls.
+ *
+ * This compact FNV-style fingerprint watches every character field that can
+ * change identity matching, Connections canon or faction rivalry. Feed posts,
+ * chats, notifications and ordinary relationship score changes do NOT change
+ * it, so those updates never trigger an O(n²) canon rebuild.
+ */
+function relationshipCanonInputFingerprint(w) {
+  if (!w) return "0:0";
+
+  const people = allSubjects(w)
+    .filter((person) => person && person.id)
+    .slice()
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+
+  let hash = 2166136261 >>> 0;
+  const push = (value) => {
+    const text = Array.isArray(value)
+      ? value.map((x) => String(x || "")).join("\u001f")
+      : String(value == null ? "" : value);
+
+    for (let i = 0; i < text.length; i += 1) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    hash ^= 31;
+    hash = Math.imul(hash, 16777619) >>> 0;
+  };
+
+  people.forEach((person) => {
+    [
+      person.id,
+      person.name,
+      person.nick,
+      person.nickname,
+      person.aliases,
+      person.alias,
+      person.aka,
+      person.alsoKnownAs,
+      person.callsign,
+      person.codeName,
+      person.codename,
+      person.username,
+      person.connections,
+      /* labelled legacy aliases may live in these */
+      person.bio,
+      person.extra,
+      person.backstory,
+      person.personality,
+      /* faction/dojo inference inputs */
+      person.affiliation,
+      person.organization,
+      person.role,
+      person.rank,
+      person.job,
+      person.combat,
+      person.skills,
+      person.abilities,
+    ].forEach(push);
+  });
+
+  return `${people.length}:${hash.toString(36)}`;
+}
 /* v10 invariant marker: if this exact string is visible in deployed source,
    the stable runtime + relationship identity patch is the file being used. */
 const MASVILAG_RELATIONSHIP_PATCH = "v10-live-identity-20260815-1911";
@@ -4476,6 +4546,9 @@ function refreshCanonicalRelationshipBaselines(w, focusId = "") {
       }
     });
   });
+
+  /* Persist only a tiny signature, never a runtime cache object. */
+  w.relationshipCanonFingerprint = relationshipCanonInputFingerprint(w);
 }
 
 function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
@@ -6036,6 +6109,63 @@ function effectiveRelationshipForBehavior(w, a, b) {
   }
 
   return live;
+}
+
+function relationshipBaselineMeaningKey(row) {
+  if (!row) return "";
+  return [
+    Math.round(Number(row.score) || 0),
+    String(row.bond || row.type || ""),
+    String(row.hidden || ""),
+    row.fixed ? "1" : "0",
+    String(row.source || ""),
+  ].join("\u001f");
+}
+
+/*
+ * When a profile/alias/Connections edit arrives from another device, apply
+ * only the automatic connection edges whose canon actually changed. This
+ * keeps the update immediate without resetting every unrelated friendship.
+ */
+function applyChangedConnectionCanonNow(w, beforeStore = {}) {
+  if (!w) return 0;
+  const store = ensureRelationshipBaselineStore(w);
+  let changed = 0;
+
+  Object.keys(store).forEach((key) => {
+    const baseline = store[key];
+    if (!baseline) return;
+    if (!/^connections(?:-|$)/i.test(String(baseline.source || ""))) return;
+    if (relationshipBaselineIsManual(baseline)) return;
+    if (relationshipBaselineMeaningKey(beforeStore[key]) === relationshipBaselineMeaningKey(baseline)) return;
+
+    const parts = String(key).split(">");
+    if (parts.length !== 2 || parts[0] === parts[1]) return;
+    const [a, b] = parts;
+
+    setRel(w, a, b, {
+      score: clampRelationshipScore(baseline.score),
+      bond: String(baseline.bond || baseline.type || ""),
+      hidden: String(baseline.hidden || ""),
+      fixed: !!baseline.fixed,
+      mood: String(baseline.mood || ""),
+      why: "",
+    });
+
+    const mem = ensureCharMemory(w, a);
+    if (mem && mem.relationshipHistory) mem.relationshipHistory[relKey(a, b)] = [];
+
+    const continuity = ensureRelationshipContinuity(w, a, b);
+    if (continuity) {
+      continuity.lastBond = String(baseline.bond || baseline.type || "");
+      continuity.lastScore = clampRelationshipScore(baseline.score);
+      continuity.updatedAt = now();
+    }
+
+    changed += 1;
+  });
+
+  return changed;
 }
 
 function reconcileLiveRelationshipsWithStrongCanon(w, force = false) {
@@ -16795,6 +16925,14 @@ function migrate(w) {
   ensureStorySettings(w);
 
   /*
+   * PERFORMANCE v12.1: expensive legacy normalization is one-time. Current
+   * clients already write the normalized schema, so cloud save responses do
+   * not need to re-walk every historical post/scene/relation/image forever.
+   */
+  const needsLegacyDataRepair =
+    Number(w.clientDataRepairVersion || 0) < CLIENT_DATA_REPAIR_VERSION;
+
+  /*
    * PERSISTENT FEATURE MIGRATION
    * These settings are stored on the world, so old saves receive the same
    * behavior as newly created worlds the next time they are loaded.
@@ -16834,7 +16972,11 @@ function migrate(w) {
    * Régi/félbemaradt syncből maradó null/undefined post így nem juthat el
    * egyetlen `post.comments` olvasásig sem.
    */
-  sanitizeWorldPosts(w);
+  if (needsLegacyDataRepair) {
+    sanitizeWorldPosts(w);
+  } else if (!Array.isArray(w.posts)) {
+    w.posts = [];
+  }
 
   if (!w.universe.at) w.universe.at = 0;
 
@@ -16907,15 +17049,17 @@ function migrate(w) {
     }
   });
 
-  // régi memóriák felhúzása az új, karakterenkénti tudás-tárba
-  Object.keys(w.mems || {}).forEach((id) => {
-    const mem = ensureCharMemory(w, id);
-    const items = (w.mems[id] || []).map((text) => ({ text, source: "legacy_memory", confidence: 0.85, timestamp: now() }));
-    mem.knownFacts = mergeKnowledgeItems(mem.knownFacts, items, "fact", 32);
-  });
+  // régi memóriák felhúzása az új, karakterenkénti tudás-tárba — egyszer
+  if (needsLegacyDataRepair) {
+    Object.keys(w.mems || {}).forEach((id) => {
+      const mem = ensureCharMemory(w, id);
+      const items = (w.mems[id] || []).map((text) => ({ text, source: "legacy_memory", confidence: 0.85, timestamp: now() }));
+      mem.knownFacts = mergeKnowledgeItems(mem.knownFacts, items, "fact", 32);
+    });
+  }
 
-  /* Régi roleplay jeleneteket is felhúzzuk az új Event-sémára. */
-  {
+  /* Régi roleplay jeleneteket is felhúzzuk az új Event-sémára — egyszer. */
+  if (needsLegacyDataRepair) {
     const fallbackPlayerId =
       (w.owner && w.players && w.players[w.owner] ? w.owner : "") ||
       Object.keys(w.players || {})[0] ||
@@ -16965,8 +17109,8 @@ function migrate(w) {
     });
   }
 
-  /* Idempotens második védőháló régi migrációs ágak után. */
-  sanitizeWorldPosts(w);
+  /* Idempotens második védőháló csak a valódi legacy repair körben. */
+  if (needsLegacyDataRepair) sanitizeWorldPosts(w);
   // a lejárt jegyzetek nem cipelődnek tovább; szerzőnként egy marad
   {
     const byAuthor = {};
@@ -16977,9 +17121,10 @@ function migrate(w) {
     });
     w.notes = Object.keys(byAuthor).map((k) => byAuthor[k]).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   }
-  // A régi, kétirányban közös kapcsolatokat szétbontjuk: mindkét fél
-  // ugyanazt az értéket kapja kiindulásnak, onnantól külön alakulnak.
-  {
+  // A régi, kétirányban közös kapcsolatokat csak akkor bontjuk szét,
+  // ha ténylegesen maradt legacy "a|b" kulcs. A normál "a>b" gráfot nem
+  // klónozzuk újra minden cloud save után.
+  if (Object.keys(w.rels || {}).some((key) => key.includes("|") && !key.includes(">"))) {
     const split = {};
     Object.keys(w.rels || {}).forEach((k) => {
       const r = w.rels[k];
@@ -16995,15 +17140,17 @@ function migrate(w) {
     w.rels = split;
   }
 
-  Object.keys(w.rels).forEach((k) => {
-    const r = w.rels[k];
-    if (!r) return;
-    if (r.bond === undefined) r.bond = "";
-    if (r.fixed === undefined) r.fixed = false;
-    if (r.mood === undefined) r.mood = "";
-    if (r.why === undefined) r.why = "";
-    if (!r.bond && r.type) { r.bond = r.type; r.fixed = FIXED_BONDS.indexOf(r.type) >= 0; r.type = ""; }
-  });
+  if (needsLegacyDataRepair) {
+    Object.keys(w.rels).forEach((k) => {
+      const r = w.rels[k];
+      if (!r) return;
+      if (r.bond === undefined) r.bond = "";
+      if (r.fixed === undefined) r.fixed = false;
+      if (r.mood === undefined) r.mood = "";
+      if (r.why === undefined) r.why = "";
+      if (!r.bond && r.type) { r.bond = r.type; r.fixed = FIXED_BONDS.indexOf(r.type) >= 0; r.type = ""; }
+    });
+  }
 
   /*
    * v10 relationship migration:
@@ -17017,19 +17164,46 @@ function migrate(w) {
   const previousRelationshipCanonVersion =
     Number(w.relationshipCanonVersion || 0);
 
+  const relationshipFingerprintBefore =
+    String(w.relationshipCanonFingerprint || "");
+  const relationshipFingerprintNow =
+    relationshipCanonInputFingerprint(w);
+  const relationshipCanonInputsChanged =
+    relationshipFingerprintBefore !== relationshipFingerprintNow;
+
   if (previousRelationshipCanonVersion < RELATIONSHIP_CANON_VERSION) {
     releaseLegacyAccidentalRelationshipManualLocks(w);
   }
 
-  refreshCanonicalRelationshipBaselines(w);
+  /*
+   * PERFORMANCE v12:
+   * Do NOT rebuild the full character×character canon after every post,
+   * chat message, notification, cloud save or poll. Rebuild only when an
+   * identity / alias / Connections / faction input really changed.
+   */
+  if (
+    previousRelationshipCanonVersion < RELATIONSHIP_CANON_VERSION ||
+    relationshipCanonInputsChanged
+  ) {
+    const beforeBaselines = {
+      ...ensureRelationshipBaselineStore(w),
+    };
 
-  if (previousRelationshipCanonVersion < RELATIONSHIP_CANON_VERSION) {
-    reconcileLiveRelationshipsWithStrongCanon(w, true);
-    w.relationshipCanonVersion = RELATIONSHIP_CANON_VERSION;
+    refreshCanonicalRelationshipBaselines(w);
+
+    if (previousRelationshipCanonVersion < RELATIONSHIP_CANON_VERSION) {
+      reconcileLiveRelationshipsWithStrongCanon(w, true);
+      w.relationshipCanonVersion = RELATIONSHIP_CANON_VERSION;
+    } else if (relationshipCanonInputsChanged) {
+      /* Remote/current-world profile edits become live immediately too. */
+      applyChangedConnectionCanonNow(w, beforeBaselines);
+    }
   }
 
-  // képhivatkozások migrációja: a tényleges fájl marad külön tárolva, itt csak a stabil metaél marad.
-  const noteImage = (ref, patch) => {
+  // Képhivatkozás-migráció: régi worldnél egyszer. Az aktuális upload/post
+  // útvonalak már eleve registerImageMeta()-t használnak.
+  if (needsLegacyDataRepair) {
+    const noteImage = (ref, patch) => {
     const id = imageIdOf(ref);
     if (id) registerImageMeta(w, id, patch);
   };
@@ -17045,10 +17219,16 @@ function migrate(w) {
       noteImage(ref, { category: "album", ownerCharacterId: c && c.id });
     });
   });
-  (w.posts || []).forEach((p) => {
-    if (p && !p.imageId) p.imageId = imageIdOf(p.image);
-    noteImage(p && (p.imageId ? imageRef(p.imageId) : p.image), { category: "post", ownerCharacterId: p && p.authorId });
-  });
+    (w.posts || []).forEach((p) => {
+      if (p && !p.imageId) p.imageId = imageIdOf(p.image);
+      noteImage(p && (p.imageId ? imageRef(p.imageId) : p.image), { category: "post", ownerCharacterId: p && p.authorId });
+    });
+  }
+
+  if (needsLegacyDataRepair) {
+    w.clientDataRepairVersion = CLIENT_DATA_REPAIR_VERSION;
+  }
+
   return w;
 }
 
@@ -18264,8 +18444,9 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v101-no-lag-no-whitescreen";
+const BUILD_VERSION = "v12.1-deep-performance-relationship";
 const WORLD_SCHEMA_VERSION = 97;
+const CLIENT_DATA_REPAIR_VERSION = 1;
 
 /* Fast, safe clone for the large world state. */
 function cloneWorldState(value) {
@@ -53167,6 +53348,18 @@ if (targetNote) {
 /* ============================================================
    Váz
    ============================================================ */
+/*
+ * PERFORMANCE v12 — large tabs should not re-render merely because the header
+ * save label / spinner / flash state changed. Their `w` prop is stabilized in
+ * App below, so React.memo can cheaply skip those parent-only renders.
+ */
+const MemoFeed = React.memo(Feed);
+const MemoCast = React.memo(Cast);
+const MemoBonds = React.memo(Bonds);
+const MemoScenes = React.memo(Scenes);
+const MemoChat = React.memo(Chat);
+const MemoWorld = React.memo(World);
+
 export default function App() {
   const [world, setWorld] = useState(null);
   const [meId, setMeId] = useState(null);
@@ -54609,7 +54802,7 @@ const signOut = useCallback(async () => {
               "poll"
             );
           }
-        }, 20000);
+        }, 60000);
 
       return () => {
         alive = false;
@@ -54670,7 +54863,7 @@ const signOut = useCallback(async () => {
           pending.reason ||
             "deferred-conflict"
         );
-      }, 1000);
+      }, 2000);
 
     return () =>
       clearInterval(i);
@@ -54903,7 +55096,7 @@ const signOut = useCallback(async () => {
       setWorld({ ...current });
     };
     sweep();
-    const timer = setInterval(sweep, 15000);
+    const timer = setInterval(sweep, 60000);
     return () => clearInterval(timer);
   }, [world ? world.code : null, meId]);
 
@@ -56198,6 +56391,37 @@ const signOut = useCallback(async () => {
     setLiveUiActiveSceneId(activeId);
   }, [tab, sceneId]);
 
+  /* Stable render inputs: header-only state changes must not rebuild a whole tab. */
+  const view = React.useMemo(() => {
+    if (!world || !meId) return null;
+    const player =
+      (world.players && world.players[meId]) ||
+      blankPlayer(meId, "Névtelen", "jatekos");
+    const next = { ...world, meId, player };
+    next.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
+    return next;
+  }, [world, meId, tab, sceneId]);
+
+  const mediaCtxValue = React.useMemo(
+    () => ({ media, addImage }),
+    [media, addImage]
+  );
+
+  const openChatTab = useCallback((id) => {
+    setChatId(id);
+    setTab("chat");
+  }, []);
+
+  const openRoomsPanel = useCallback(() => {
+    setShowRooms(true);
+  }, []);
+
+  const openSceneFromChat = useCallback((nextSceneId) => {
+    setSceneId(nextSceneId);
+    setJump({ type: "scene", id: nextSceneId, at: now() });
+    setTab("scene");
+  }, []);
+
   if (!bootReady) {
     return (
       <LangCtx.Provider value={langCtxValue}>
@@ -56225,9 +56449,7 @@ const signOut = useCallback(async () => {
     );
   }
 
-  const me = (world.players && world.players[meId]) || blankPlayer(meId, "Névtelen", "jatekos");
-  const view = { ...world, meId, player: me };
-  view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
+  const me = view.player;
   viewRef.current = view;
   const activePopup = editLocked ? null : currentPopupEvent(view);
 
@@ -56259,7 +56481,7 @@ const signOut = useCallback(async () => {
 
   return (
     <LangCtx.Provider value={langCtxValue}>
-    <MediaCtx.Provider value={{ media, addImage }}>
+    <MediaCtx.Provider value={mediaCtxValue}>
     <div className="mv">
       <style>{CSS}</style>
       <div className="mv-wrap">
@@ -56290,24 +56512,24 @@ const signOut = useCallback(async () => {
         </div>
 
         <div className="mv-main">
-          {tab === "feed" && <Feed w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
-            onOpenChat={(id) => { setChatId(id); setTab("chat"); }}
-            onOpenWorlds={() => setShowRooms(true)}
+          {tab === "feed" && <MemoFeed w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
+            onOpenChat={openChatTab}
+            onOpenWorlds={openRoomsPanel}
             onRequestWorldStep={requestWorldStep}
             onRequestNoteReactions={requestNoteReactions}
             onSignal={signalSimulation} />}
-          {tab === "cast" && <Cast w={view} update={update} setErr={setErr} jump={jump} goChat={(id) => { setChatId(id); setTab("chat"); }} />}
-          {tab === "bonds" && <Bonds w={view} update={update} setErr={setErr} />}
-          {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />}
-          {tab === "chat" && <Chat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={(nextSceneId) => { setSceneId(nextSceneId); setJump({ type: "scene", id: nextSceneId, at: now() }); setTab("scene"); }} />}
-          {tab === "world" && <World
+          {tab === "cast" && <MemoCast w={view} update={update} setErr={setErr} jump={jump} goChat={openChatTab} />}
+          {tab === "bonds" && <MemoBonds w={view} update={update} setErr={setErr} />}
+          {tab === "scene" && <MemoScenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />}
+          {tab === "chat" && <MemoChat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={openSceneFromChat} />}
+          {tab === "world" && <MemoWorld
   w={view}
   update={update}
   setErr={setErr}
  
   onLeave={signOut}
   onDeleteAccount={deleteOwnAccount}
-            onRooms={() => setShowRooms(true)} auto={auto} onAuto={changeAuto}
+            onRooms={openRoomsPanel} auto={auto} onAuto={changeAuto}
             detail={detail} onDetail={changeDetail} onLang={changeLang} />}
         </div>
       </div>
