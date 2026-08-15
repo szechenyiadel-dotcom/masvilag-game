@@ -14874,7 +14874,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v78-stronger-mature-roleplay";
+const BUILD_VERSION = "v79-restart-world-scope-fix";
 
 const AUTO = "masvilag:auto";
 /*
@@ -16347,20 +16347,6 @@ function pickAutonomousRepostAction(w) {
  * szöveges személyei nem világ-entitások, ezért nincs profiljuk.
  */
 function socialProfiles(w) {
-  const restartWorldHistory = () => {
-    update((n) => {
-      restartWorldHistoryInPlace(n);
-    });
-    setRestartConfirm(false);
-    setRestartMsg(
-      tt(
-        "A világ története újraindult. A karakterek és beállítások megmaradtak.",
-        "World history restarted. Characters and settings were kept."
-      )
-    );
-    setTimeout(() => setRestartMsg(""), 4500);
-  };
-
   const activeMedia =
     activeGossipMediaAccount(
       w
@@ -32719,6 +32705,24 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
   const [pwNew, setPwNew] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState("");
+
+  /* v79: this handler belongs to the World settings component.
+   * v76 accidentally inserted it inside socialProfiles(), where React state
+   * setters/update/tt do not exist; the settings button therefore crashed with
+   * `ReferenceError: restartWorldHistory is not defined`. */
+  const restartWorldHistory = () => {
+    update((n) => {
+      restartWorldHistoryInPlace(n);
+    });
+    setRestartConfirm(false);
+    setRestartMsg(
+      tt(
+        "A világ története újraindult. A karakterek és beállítások megmaradtak.",
+        "World history restarted. Characters and settings were kept."
+      )
+    );
+    setTimeout(() => setRestartMsg(""), 4500);
+  };
   
   
   const acc = (w.accounts || {})[w.meId] || null;
