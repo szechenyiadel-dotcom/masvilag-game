@@ -4303,7 +4303,7 @@ function naturalCommentReplyTargets(w, post, comment) {
   mentionedIdsInText(w, comment.text, comment.authorId).forEach((id) => push(id, "mention", 82));
   const parent = comment.parent ? comments.find((c) => c && c.id === comment.parent) : null;
   if (parent && parent.authorId) push(parent.authorId, "parent", 74);
-  if (!comment.parent && post.authorId) push(post.authorId, "post-author", 54);
+  if (!comment.parent && post.authorId) push(post.authorId, "post-author", 70);
 
   const cue = commentReplyCueScore(comment.text);
   const juice = publicSocialJuiceSignals(comment.text);
@@ -4362,10 +4362,11 @@ function commentWarrantsAiReply(w, post, comment, targetId) {
   /* Ne induljon végtelen AI↔AI pingpong. Emberi megszólalás újra megnyitja a láncot. */
   const aiTurns = consecutiveAiThreadTurns(w, post, comment);
   const juice = publicSocialJuiceSignals(comment.text);
-  if (!isHuman(w, comment.authorId) && aiTurns >= (juice.juicy ? 6 : 4)) return false;
-  if (row.reason.includes("mention") || row.reason.includes("parent")) return row.score >= 64;
-  if (row.reason.includes("bystander")) return row.score >= (juice.juicy ? 64 : 76);
-  return row.score >= 80;
+  if (!isHuman(w, comment.authorId) && aiTurns >= (juice.juicy ? 10 : 7)) return false;
+  if (row.reason.includes("mention") || row.reason.includes("parent")) return row.score >= 48;
+  if (row.reason.includes("post-author")) return row.score >= 58;
+  if (row.reason.includes("bystander")) return row.score >= (juice.juicy ? 56 : 66);
+  return row.score >= 62;
 }
 
 function findNaturalThreadReply(w, onlyPostId = "") {
@@ -6602,9 +6603,9 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
     Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 10 * 60 * 1000
   )
 );
-const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(10 * 60000, Math.min(3 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 35 * 60000));
-const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(10000, Math.min(120000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 18000));
-const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(4, Math.min(18, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 10)));
+const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
+const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
+const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
 const LIVE_WORLD_DM_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(20 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 6 * 60 * 1000));
 const LIVE_WORLD_EVENT_TARGET_MS = Math.max(6 * 60 * 1000, Math.min(30 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 12 * 60 * 1000));
@@ -8112,16 +8113,16 @@ function visualPostReactionProfile(w, post) {
    * additional ceiling rather than making every ordinary status go viral.
    */
   const baseTargetMin =
-    adultHighAttention ? 10 :
-    appearanceForward ? 8 :
-    hasImage ? 6 :
-    4;
+    adultHighAttention ? 12 :
+    appearanceForward ? 10 :
+    hasImage ? 8 :
+    6;
 
   const baseTargetMax =
-    adultHighAttention ? 14 :
-    appearanceForward ? 12 :
-    hasImage ? 10 :
-    8;
+    adultHighAttention ? 16 :
+    appearanceForward ? 14 :
+    hasImage ? 12 :
+    10;
 
   return {
     hasImage,
@@ -8135,6 +8136,31 @@ function visualPostReactionProfile(w, post) {
     targetMin: Math.min(16, baseTargetMin + (imageJuice.juicy ? 1 : 0)),
     targetMax: Math.min(18, baseTargetMax + (imageJuice.juicy ? 2 : 0)),
   };
+}
+
+
+function topLevelAiCommentsOnPost(w, post) {
+  if (!w || !post) return [];
+  return safePostComments(post).filter(
+    (comment) =>
+      comment &&
+      !comment.parent &&
+      comment.authorId &&
+      !isHuman(w, comment.authorId) &&
+      comment.authorId !== post.authorId
+  );
+}
+
+function topLevelAiCommentCount(w, post) {
+  return topLevelAiCommentsOnPost(w, post).length;
+}
+
+function topLevelAiCommenterIds(w, post) {
+  return new Set(
+    topLevelAiCommentsOnPost(w, post)
+      .map((comment) => comment.authorId)
+      .filter(Boolean)
+  );
 }
 
 function visualPostRelationshipPriority(w, actorId, targetId, post) {
@@ -15575,7 +15601,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v80-identity-flirt-rules";
+const BUILD_VERSION = "v83-comment-reply-world-reset";
 
 const AUTO = "masvilag:auto";
 /*
@@ -22169,11 +22195,20 @@ COMPREHENSION LOCK:
 `;
 }
 
-async function genComments(w, post) {
+async function genComments(w, post, options = {}) {
   const cast = fairCommentCast(
     w,
     post.authorId,
     post
+  );
+
+  const requestedMinComments = Math.max(
+    0,
+    Math.min(cast.length, Math.round(Number(options && options.minComments) || 0))
+  );
+  const requestedMaxComments = Math.max(
+    requestedMinComments || 1,
+    Math.min(cast.length || 1, Math.round(Number(options && options.maxComments) || cast.length || 1))
   );
 
   const author = charById(
@@ -22317,6 +22352,13 @@ ${repetitionGuard(
 )}
 
 KOMMENT SZABÁLYOK:
+
+${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD MINIMUM:
+- EBBEN a generálásban legalább ${requestedMinComments}, legfeljebb ${requestedMaxComments} KÜLÖNBÖZŐ AI-karakter írjon valódi, látható kommentet, ha a castban ennyi szereplő van.
+- A LIKE NEM HELYETTESÍTI a kommentminimumot.
+- Elsősorban TOP-LEVEL kommenteket adj; a külön reply-engine utána továbbviszi a threadet.
+- AI-karakterek EGYMÁS posztjai alatt is ugyanilyen aktívan reagáljanak. A játékos posztja nem kap különleges komment-prioritást.
+` : ""}
 
 - A feed legyen LÁTHATÓAN AKTÍVABB: ha több releváns karakter látja a posztot és van rá természetes reakciója, inkább jelenjen meg több különböző kommentelő, ne álljon meg a rendszer 2-3 kommentnél.
 - Szöveges átlagposztnál gyakran 4-8 valódi karakter kommentel; egy kifejezetten csendes/személyes szövegposztnál is reális 2-4; egy drámai/felkapott szövegposztnál 6-10.
@@ -22503,6 +22545,90 @@ Formátum:
     out: normalizedOut,
     label: th.label,
   };
+}
+
+
+async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments = 0, maxComments = 14) {
+  const minWanted = Math.max(0, Math.round(Number(minComments) || 0));
+  if (!minWanted || !w || !post) return baseOut;
+
+  const beforeActors = topLevelAiCommenterIds(w, post);
+  const probe = JSON.parse(JSON.stringify(w));
+  applyComments(probe, post.id, baseOut, label);
+  const probePost = (probe.posts || []).find((row) => row && row.id === post.id);
+  const acceptedActors = probePost
+    ? [...topLevelAiCommenterIds(probe, probePost)].filter((id) => !beforeActors.has(id))
+    : [];
+
+  if (acceptedActors.length >= minWanted) return baseOut;
+
+  const missing = minWanted - acceptedActors.length;
+  const rawActors = new Set(
+    safeAiComments(baseOut)
+      .map((row) => aiVoice(w, row && (row.id !== undefined ? row.id : row.name)))
+      .filter(Boolean)
+  );
+  const unavailable = new Set([...beforeActors, ...acceptedActors, ...rawActors]);
+
+  const candidates = fairCommentCast(w, post.authorId, post)
+    .filter((c) => c && !unavailable.has(c.id) && c.id !== post.authorId)
+    .slice(0, Math.max(missing, Math.min(missing + 3, 8)));
+
+  if (!candidates.length) return baseOut;
+
+  try {
+    const repairOut = await askWorldJSONInteractive(
+      w,
+      engineFor(w),
+      `${worldContext(w, candidates.map((c) => c.id), true, null)}
+
+COMMENT DENSITY REPAIR — ADD MISSING TOP-LEVEL COMMENTS ONLY.
+
+POST AUTHOR: ${nameOfIn(w, post.authorId)} [${post.authorId}]
+POST: "${String(post.text || "").slice(0, 900)}"
+${post.imageDescription ? `VISIBLE IMAGE CONTENT: ${String(post.imageDescription).slice(0, 700)}` : ""}
+
+WE NEED ${missing} MORE REAL COMMENTS.
+ELIGIBLE CHARACTERS:
+${candidates.map((c) => `- ${c.name} [${c.id}]
+${relationshipBehaviorCard(w, c.id, post.authorId)}`).join("\n")}
+
+${candidates.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
+
+HARD RULES:
+- Return ${Math.min(missing, candidates.length)} DIFFERENT character IDs if possible.
+- One fresh TOP-LEVEL comment per character. reply_to MUST be empty.
+- Likes do not count.
+- AI → AI posts count exactly the same as AI → player posts.
+- Friends must sound like friends unless a concrete current conflict exists.
+- Respect orientation/flirt/crush and all relationship canon.
+- Usually 1-12 words. Natural public social-media language.
+- Do not invent facts beyond the post/image/grounded memory.
+- Never use the post author as commenter.
+
+JSON ONLY:
+{"comments":[{"id":"exact eligible id","text":"short natural comment","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
+      { maxTokens: Math.max(500, Math.min(1500, 220 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
+    );
+
+    const combined = [...safeAiComments(baseOut), ...safeAiComments(repairOut)]
+      .filter((row, index, arr) => {
+        const id = aiVoice(w, row && (row.id !== undefined ? row.id : row.name));
+        if (!id || id === post.authorId) return false;
+        return arr.findIndex((other) => {
+          const oid = aiVoice(w, other && (other.id !== undefined ? other.id : other.name));
+          return oid === id;
+        }) === index;
+      });
+
+    return {
+      ...(baseOut || {}),
+      comments: combined.slice(0, Math.max(minWanted, Math.min(24, Number(maxComments) || 14))),
+    };
+  } catch (err) {
+    console.warn("Automatic comment density repair failed:", err);
+    return baseOut;
+  }
 }
 
 function normalizePerceptionConfidence(value) {
@@ -23909,18 +24035,18 @@ function fairCommentCast(w, targetId, post = null) {
        */
       const naturallyLinked =
         following ||
-        Math.abs(score) >= 18 ||
+        Math.abs(score) >= 10 ||
         Boolean(bond) ||
         storyLinked ||
-        interest >= 24 ||
-        visualPriority >= 30;
+        interest >= 14 ||
+        visualPriority >= 20;
 
       const activity = characterOnlineActivityProfile(w, c).comment;
 
       const discoveryChance =
         Math.min(
-          0.34,
-          (0.05 + interest / 420) * Math.max(0.45, activity)
+          0.72,
+          (0.18 + interest / 320) * Math.max(0.55, activity)
         );
 
       const discovered =
@@ -23996,17 +24122,17 @@ function fairCommentCast(w, targetId, post = null) {
    * unrelated NPC saw every post. The AI still decides comment / like / ignore.
    */
   const pool =
-    eligible.length >= 4
+    eligible.length >= 5
       ? eligible
       : chars.slice(
           0,
-          Math.min(5, chars.length)
+          Math.min(8, chars.length)
         );
 
   const visual = visualPostReactionProfile(w, post);
   const castLimit = visual.hasImage
-    ? (visual.appearanceForward ? 15 : 13)
-    : 12;
+    ? (visual.appearanceForward ? 18 : 16)
+    : 15;
 
   /*
    * Prefer NEW voices on a post before recycling somebody who has already left
@@ -33872,9 +33998,43 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 59,
+    schedulerVersion: 60,
     lastError: "",
   };
+}
+
+
+function freshRunPersistentImageIds(w) {
+  const keep = new Set();
+  const add = (value) => {
+    const id = imageIdOf(value);
+    if (id) keep.add(id);
+  };
+  const scanProfile = (profile) => {
+    if (!profile || typeof profile !== "object") return;
+    add(profile.avatar);
+    add(profile.cover);
+    albumOf(profile).forEach((item) => {
+      if (!item) return;
+      add(item.imageId ? imageRef(item.imageId) : item.src);
+    });
+  };
+
+  scanProfile(w && w.player);
+  Object.values((w && w.players) || {}).forEach(scanProfile);
+  ((w && w.chars) || []).forEach(scanProfile);
+  Object.values((w && w.mediaAccounts) || {}).forEach(scanProfile);
+  return keep;
+}
+
+function trimWorldImagesToFreshPeople(w) {
+  if (!w || !w.images || typeof w.images !== "object") return;
+  const keep = freshRunPersistentImageIds(w);
+  const next = {};
+  keep.forEach((id) => {
+    if (w.images[id]) next[id] = w.images[id];
+  });
+  w.images = next;
 }
 
 function resetSocialProfileForFreshRun(profile) {
@@ -33896,13 +34056,14 @@ function restartWorldHistoryInPlace(w) {
   /* Epoch invalidates any autonomous AI request that started before restart. */
   w.historyEpoch = Math.max(0, Math.floor(Number(w.historyEpoch) || 0)) + 1;
 
-  /* Public/social history. */
+  /* Public/social history — absolutely nothing generated from the old run survives. */
   w.posts = [];
   w.reposts = [];
   w.notes = [];
   w.socialEvents = [];
   w.socialStats = {};
   w.trends = [];
+  w.starter = [];
 
   /* Private conversations + all learned/observed memory. */
   w.chats = {};
@@ -33958,7 +34119,10 @@ function restartWorldHistoryInPlace(w) {
     });
   }
 
-  /* Keep scenario/drama choice, but restart elapsed story-time bookkeeping. */
+  /* Keep only profile/cover/album media belonging to retained people. */
+  trimWorldImagesToFreshPeople(w);
+
+  /* Keep manually chosen story CONFIGURATION, but restart all runtime clocks. */
   const story = ensureStorySettings(w);
   story.elapsedHours = 0;
   story.lastTimeSkipAt = 0;
@@ -34002,8 +34166,8 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
     setRestartConfirm(false);
     setRestartMsg(
       tt(
-        "A világ története újraindult. A karakterek és beállítások megmaradtak.",
-        "World history restarted. Characters and settings were kept."
+        "A világ teljes játékmenete újraindult. A karakterek és a kapcsolatok megmaradtak; minden korábbi generált történés törlődött.",
+        "The entire gameplay run restarted. Characters and relationships were kept; all previously generated history was cleared."
       )
     );
     setTimeout(() => setRestartMsg(""), 4500);
@@ -34694,8 +34858,8 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
           <>
             <p className="hint">
               {tt(
-                "Ez NEM törli a karaktereket, a saját profilodat, a karakterlapokat, profil-/albumképeket, a világ leírását, a beállításokat vagy a jelenlegi kapcsolati beállításokat. Viszont végleg kiüríti ennek a futásnak a történetét: posztok és kommentek, repostok, Note-ok, DM-ek, group chatek, AI-emlékek, Roleplay/Eventek, napló, jutalmak, pletykák, trendek, értesítések, popupok és a követési előzmények törlődnek. Ez nem vonható vissza.",
-                "This does NOT delete the characters, your profile, character sheets, profile/album images, world description, settings, or the currently configured relationship graph. It permanently clears this run's history: posts and comments, reposts, Notes, DMs, group chats, AI memories, Roleplay/Events, diary, rewards, gossip, trends, notifications, popups, and follow history. This cannot be undone."
+                "A karakterek, a saját profilod, a karakterlapok, profil-/albumképek és a jelenlegi kapcsolatok megmaradnak. MINDEN játékmenetből létrejött állapot friss lesz: posztok, kommentek, reply-k, like/repost előzmények, követések, Note-ok, DM-ek, csoportok, AI-emlékek és runtime-állapotok, Roleplay/Eventek, popupok, pletykák, trendek, social statok, napló, jutalmak, értesítések és háttérben váró AI-akciók törlődnek. A nyelv és a kézzel beállított világ/story/gossip konfiguráció csak beállításként marad meg. Ez nem vonható vissza.",
+                "Characters, your profile, character sheets, profile/album images, and the current relationship graph are kept. EVERYTHING created by gameplay becomes fresh: posts, comments, replies, like/repost history, follows, Notes, DMs, groups, AI memories and runtime state, Roleplay/Events, popups, gossip, trends, social stats, diary, rewards, notifications, and queued AI actions are cleared. Language and manually chosen world/story/gossip configuration remain only as configuration. This cannot be undone."
               )}
             </p>
             <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}>
@@ -35929,7 +36093,7 @@ function ensureSimState(w) {
   /* v53 migration: do not let a backlog created by the old comment/feed scheduler
      delay the new fairness lanes for minutes. Manual requests survive; stale
      background actions are rebuilt by the new planner from current state. */
-  if (Number(w.sim.schedulerVersion) !== 59) {
+  if (Number(w.sim.schedulerVersion) !== 60) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -35941,9 +36105,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 59;
+    w.sim.schedulerVersion = 60;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 59;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 60;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -45467,18 +45631,18 @@ function freshFeedPostCommentCandidate(w) {
 
       const comments = safePostComments(post);
       const visual = visualPostReactionProfile(w, post);
-      const freshCommentCap = visual.hasImage
-        ? Math.max(LIVE_WORLD_FRESH_COMMENT_MAX, visual.targetMax)
-        : Math.max(LIVE_WORLD_FRESH_COMMENT_MAX, visual.targetMax);
+      const freshCommentCap = Math.max(LIVE_WORLD_FRESH_COMMENT_MAX, visual.targetMax);
+      const topLevelCount = topLevelAiCommentCount(w, post);
 
-      const roundsDone = Math.max(
-        0,
-        Math.round(Number(post.autoCommentRounds) || (Number(post.autoCommentedAt) > 0 ? 1 : 0))
+      const roundsDone = Math.max(0, Math.round(Number(post.autoCommentRounds) || 0));
+      const attemptsDone = Math.max(
+        roundsDone,
+        Math.round(Number(post.autoCommentAttempts) || (Number(post.autoCommentedAt) > 0 ? 1 : 0))
       );
-      const maxRounds = visual.appearanceForward ? 3 : 2;
+      const maxRounds = visual.appearanceForward ? 5 : 4;
 
-      if (comments.length >= freshCommentCap) return false;
-      if (roundsDone >= maxRounds) return false;
+      if (topLevelCount >= freshCommentCap) return false;
+      if (roundsDone >= maxRounds || attemptsDone >= 6) return false;
 
       const lastCommentAt = comments.reduce(
         (latest, c) => Math.max(latest, Number(c && c.ts) || 0),
@@ -45491,13 +45655,12 @@ function freshFeedPostCommentCandidate(w) {
       const age = Math.max(0, ts - (Number(post.ts) || 0));
       const comments = safePostComments(post);
       const visual = visualPostReactionProfile(w, post);
-      const freshCommentCap = visual.hasImage
-        ? Math.max(LIVE_WORLD_FRESH_COMMENT_MAX, visual.targetMax)
-        : LIVE_WORLD_FRESH_COMMENT_MAX;
+      const freshCommentCap = Math.max(LIVE_WORLD_FRESH_COMMENT_MAX, visual.targetMax);
+      const topLevelCount = topLevelAiCommentCount(w, post);
       const ageRatio = Math.min(1, age / LIVE_WORLD_FRESH_COMMENT_WINDOW_MS);
       const freshness = (1 - ageRatio) * 100;
-      const underCommented = Math.max(0, freshCommentCap - comments.length) * 9;
-      const authorIsPlayer = isHuman(w, post.authorId) ? 18 : 0;
+      const underCommented = Math.max(0, freshCommentCap - topLevelCount) * 12;
+      const authorPriority = 16;
       const visualBoost = visual.adultHighAttention ? 22 : visual.appearanceForward ? 14 : visual.hasImage ? 7 : 0;
       const juicy = publicSocialJuiceSignals(post.text || post.imageDescription || "").juicy ? 10 : 0;
       const roundsDone = Math.max(
@@ -45507,7 +45670,7 @@ function freshFeedPostCommentCandidate(w) {
       const laterWavePenalty = roundsDone * 12;
       return {
         post,
-        score: freshness + underCommented + authorIsPlayer + visualBoost + juicy - laterWavePenalty + Math.random() * 8,
+        score: freshness + underCommented + authorPriority + visualBoost + juicy - laterWavePenalty + Math.random() * 8,
       };
     })
     .sort((a, b) => b.score - a.score);
@@ -46343,7 +46506,7 @@ function planAutoAction(view) {
    * v65 FEED CADENCE
    * 1) ÚJ POSZT — legkorábban kb. 10 percenként egy új autonóm feed-poszt.
    */
-  if (feedNeedsFreshPost(view)) {
+  if (feedNeedsFreshPost(view) && !freshFeedPostCommentCandidate(view)) {
     return mkAction(
       "world",
       `feed-primary:${Math.floor(now() / 30000)}`,
@@ -46361,13 +46524,10 @@ function planAutoAction(view) {
   const freshCommentPost = freshFeedPostCommentCandidate(view);
   if (freshCommentPost) {
     const visual = visualPostReactionProfile(view, freshCommentPost);
-    const existingCount = safePostComments(freshCommentPost).length;
+    const existingCount = topLevelAiCommentCount(view, freshCommentPost);
     const roundsDone = Math.max(
       0,
-      Math.round(
-        Number(freshCommentPost.autoCommentRounds) ||
-        (Number(freshCommentPost.autoCommentedAt) > 0 ? 1 : 0)
-      )
+      Math.round(Number(freshCommentPost.autoCommentRounds) || 0)
     );
 
     const visualMax = visual.adultHighAttention
@@ -46385,8 +46545,15 @@ function planAutoAction(view) {
         postId: freshCommentPost.id,
         trigger: "fresh-post",
         commentRound: roundsDone + 1,
-        maxComments: Math.max(1, Math.min(visualMax, visual.targetMax - existingCount)),
-        allowThreadFollowup: Boolean(visual.hasImage || visual.juicy),
+        minComments: Math.max(
+          2,
+          Math.min(
+            visualMax,
+            Math.max(0, visual.targetMin - existingCount) || (roundsDone === 0 ? 4 : 2)
+          )
+        ),
+        maxComments: Math.max(2, Math.min(visualMax, Math.max(2, visual.targetMax - existingCount))),
+        allowThreadFollowup: true,
       },
       "event"
     );
@@ -46394,7 +46561,7 @@ function planAutoAction(view) {
 
   /* Friss AI→AI thread csak akkor él tovább, ha valóban reply-ra hív. */
   const naturalThread = findNaturalThreadReply(view);
-  if (naturalThread && Math.random() < 0.38) {
+  if (naturalThread && Math.random() < 0.90) {
     return mkAction(
       "reply",
       `auto-thread:${naturalThread.post.id}:${naturalThread.comment.id}:${naturalThread.targetId}`,
@@ -48210,16 +48377,33 @@ async function runSimulationAction(view, update, action, addImage) {
       return null;
     }
 
-    const { out: rawOut, label } =
-      await genComments(view, post);
+    const maxComments = Math.max(2, Math.min(20, Number(action.payload && action.payload.maxComments) || 14));
+    const minComments = Math.max(
+      0,
+      Math.min(maxComments, Number(action.payload && action.payload.minComments) || 0)
+    );
 
-    const maxComments = Math.max(1, Math.min(16, Number(action.payload && action.payload.maxComments) || 12));
+    const { out: generatedOut, label } =
+      await genComments(
+        view,
+        post,
+        {
+          minComments: action.payload && action.payload.trigger === "fresh-post" ? minComments : 0,
+          maxComments,
+        }
+      );
+
+    const quotaOut =
+      action.payload && action.payload.trigger === "fresh-post"
+        ? await ensureAutomaticCommentQuota(view, post, generatedOut, label, minComments, maxComments)
+        : generatedOut;
+
     const out = action.payload && action.payload.trigger === "fresh-post"
       ? {
-          ...(rawOut || {}),
-          comments: safeAiComments(rawOut).slice(0, maxComments),
+          ...(quotaOut || {}),
+          comments: safeAiComments(quotaOut).slice(0, maxComments),
         }
-      : rawOut;
+      : quotaOut;
 
     const commentsProbe = JSON.parse(JSON.stringify(view));
     const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
@@ -48228,6 +48412,7 @@ async function runSimulationAction(view, update, action, addImage) {
     update((n) => {
       const livePost = (n.posts || []).find((p) => p && p.id === post.id);
       const beforeIds = new Set(safePostComments(livePost).map((c) => c.id));
+      const beforeTopLevelCount = livePost ? topLevelAiCommentCount(n, livePost) : 0;
 
       applyComments(n, post.id, out, label);
 
@@ -48237,11 +48422,18 @@ async function runSimulationAction(view, update, action, addImage) {
         action.payload &&
         action.payload.trigger === "fresh-post"
       ) {
+        const afterTopLevelCount = topLevelAiCommentCount(n, refreshedPost);
         refreshedPost.autoCommentedAt = now();
-        refreshedPost.autoCommentRounds = Math.max(
+        refreshedPost.autoCommentAttempts = Math.max(
           0,
-          Math.round(Number(refreshedPost.autoCommentRounds) || 0)
+          Math.round(Number(refreshedPost.autoCommentAttempts) || 0)
         ) + 1;
+        if (afterTopLevelCount > beforeTopLevelCount) {
+          refreshedPost.autoCommentRounds = Math.max(
+            0,
+            Math.round(Number(refreshedPost.autoCommentRounds) || 0)
+          ) + 1;
+        }
       }
       const newCommentIds = safePostComments(refreshedPost)
         .filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId))
