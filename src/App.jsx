@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v28 — MAIN THREAD FREEZE FIX — 20260815_2208 */
+/* MÁSVILÁG BUILD v29 — SOCIAL HOT PATH ARCHITECTURE FIX — 20260815_2230 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -4115,7 +4115,7 @@ function relationshipCanonInputFingerprint(w) {
 /* v10 invariant marker: if this exact string is visible in deployed source,
    the stable runtime + relationship identity patch is the file being used. */
 const MASVILAG_RELATIONSHIP_PATCH = "v10-live-identity-20260815-1911";
-if (typeof console !== "undefined") console.info("[Másvilág] v28 main-thread freeze fix loaded");
+if (typeof console !== "undefined") console.info("[Másvilág] v29 social hot-path architecture fix loaded");
 
 
 function ensureRelationshipBaselineStore(w) {
@@ -19261,7 +19261,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v28-main-thread-freeze-fix";
+const BUILD_VERSION = "v29-social-hot-path-fix";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -21068,23 +21068,35 @@ function socialProfiles(w) {
       w
     );
 
-  return humanChars(w)
-    .concat(w.chars || [])
-    .concat(
-      activeMedia
-        ? [activeMedia]
-        : []
-    )
-    .filter(
-      (c, i, arr) =>
-        c &&
-        c.id &&
-        arr.findIndex(
-          (x) =>
-            x &&
-            x.id === c.id
-        ) === i
-    );
+  const source =
+    humanChars(w)
+      .concat(w.chars || [])
+      .concat(
+        activeMedia
+          ? [activeMedia]
+          : []
+      );
+
+  /*
+   * PERFORMANCE v29:
+   * The old dedupe used arr.findIndex() for every profile (O(n²)).
+   * This function sits underneath follow/social hot paths, so keep it linear.
+   */
+  const seen = new Set();
+  const out = [];
+
+  for (const c of source) {
+    if (!c || !c.id) continue;
+
+    const id = String(c.id);
+
+    if (seen.has(id)) continue;
+
+    seen.add(id);
+    out.push(c);
+  }
+
+  return out;
 }
 
 function ensureSocialProfileRow(c) {
@@ -21138,10 +21150,20 @@ function ensureSocialProfileRow(c) {
 
 const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 2;
 
-function ensureFollowerSystem(w) {
+function ensureFollowerSystem(w, options = {}) {
   if (!w || typeof w !== "object") {
     return w;
   }
+
+  /*
+   * v29:
+   * Existing follow graph repair is linear in profiles + edges.
+   * Relationship-derived NEW follow discovery is actor × target and must
+   * never run from a click/event hot path. It is opt-in only.
+   */
+  const seedRelationshipAutoFollows =
+    options &&
+    options.seedRelationshipAutoFollows === true;
 
   const profiles =
     socialProfiles(w);
@@ -21224,86 +21246,95 @@ function ensureFollowerSystem(w) {
    */
 
   /*
-   * Csak tényleges social kötelékből legyen automatikus follow:
-   * család, barát/partner/crush, csapattárs/szervezeti társ stb.
-   *
-   * Enemy/rival secret-crush eset NEM kerül ide automatikusan;
-   * azt az autonóm döntés ritkán külön kezelheti.
+   * Relationship-derived automatic follow SEEDING is intentionally disabled
+   * during ordinary normalization. The autonomous follow planner already has
+   * aiFollowEligibility()/followInterestScore() and can discover these edges
+   * while the UI is idle.
    */
-  profiles.forEach((actor) => {
-    if (
-      !actor ||
-      isHuman(w, actor.id) ||
-      isMediaAccount(w, actor.id)
-    ) {
-      return;
-    }
-
-    profiles.forEach((target) => {
-      if (
-        !target ||
-        target.id === actor.id ||
-        isMediaAccount(w, target.id)
-      ) {
-        return;
-      }
-
-      const eligibility =
-        aiFollowEligibility(
-          w,
-          actor.id,
-          target.id
-        );
-
-      if (
-        !eligibility.allowed ||
-        eligibility.mode ===
-          "enemy-secret-crush"
-      ) {
-        return;
-      }
-
+  if (seedRelationshipAutoFollows) {
       /*
-       * v64 FOLLOW NOTIFICATION FIX:
-       * Never create a brand-new AI follow by silently mutating the two arrays.
-       * Silent creation was the reason a character could later "unfollow" the
-       * player even though the player had never received the original follow
-       * notification. Queue the real social action instead; the actual state
-       * transition will go through setFollowState(), which records the event and
-       * notifies the human target exactly once.
+       * Csak tényleges social kötelékből legyen automatikus follow:
+       * család, barát/partner/crush, csapattárs/szervezeti társ stb.
+       *
+       * Enemy/rival secret-crush eset NEM kerül ide automatikusan;
+       * azt az autonóm döntés ritkán külön kezelheti.
        */
-      const alreadyFollowing =
-        actor.following.includes(
-          target.id
-        ) &&
-        target.followers.includes(
-          actor.id
-        );
+      profiles.forEach((actor) => {
+        if (
+          !actor ||
+          isHuman(w, actor.id) ||
+          isMediaAccount(w, actor.id)
+        ) {
+          return;
+        }
 
-      if (
-        !alreadyFollowing &&
-        pendingRelationshipAutoFollows < RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
-      ) {
-        const queuedFollow = simEnqueue(
-          w,
-          mkAction(
-            "follow",
-            `relationship-auto-follow:${actor.id}:${target.id}:${Math.floor(
-              now() / 3600000
-            )}`,
-            {
-              actorId: actor.id,
-              targetId: target.id,
-              trigger: "relationship",
-            },
-            "event"
-          )
-        );
+        profiles.forEach((target) => {
+          if (
+            !target ||
+            target.id === actor.id ||
+            isMediaAccount(w, target.id)
+          ) {
+            return;
+          }
 
-        if (queuedFollow) pendingRelationshipAutoFollows += 1;
-      }
-    });
-  });
+          const eligibility =
+            aiFollowEligibility(
+              w,
+              actor.id,
+              target.id
+            );
+
+          if (
+            !eligibility.allowed ||
+            eligibility.mode ===
+              "enemy-secret-crush"
+          ) {
+            return;
+          }
+
+          /*
+           * v64 FOLLOW NOTIFICATION FIX:
+           * Never create a brand-new AI follow by silently mutating the two arrays.
+           * Silent creation was the reason a character could later "unfollow" the
+           * player even though the player had never received the original follow
+           * notification. Queue the real social action instead; the actual state
+           * transition will go through setFollowState(), which records the event and
+           * notifies the human target exactly once.
+           */
+          const alreadyFollowing =
+            actor.following.includes(
+              target.id
+            ) &&
+            target.followers.includes(
+              actor.id
+            );
+
+          if (
+            !alreadyFollowing &&
+            pendingRelationshipAutoFollows < RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
+          ) {
+            const queuedFollow = simEnqueue(
+              w,
+              mkAction(
+                "follow",
+                `relationship-auto-follow:${actor.id}:${target.id}:${Math.floor(
+                  now() / 3600000
+                )}`,
+                {
+                  actorId: actor.id,
+                  targetId: target.id,
+                  trigger: "relationship",
+                },
+                "event"
+              )
+            );
+
+            if (queuedFollow) pendingRelationshipAutoFollows += 1;
+          }
+        });
+      });
+
+  }
 
   return w;
 }
@@ -22877,7 +22908,7 @@ function aiShouldUnfollow(
 function pickAutonomousUnfollowAction(
   w
 ) {
-  ensureFollowerSystem(w);
+  ensureFollowerSystem(w, { seedRelationshipAutoFollows: false });
 
   const actors =
     (w.chars || [])
@@ -22984,7 +23015,7 @@ function pickAutonomousUnfollowAction(
 }
 
 function pickAutonomousFollowAction(w) {
-  ensureFollowerSystem(w);
+  ensureFollowerSystem(w, { seedRelationshipAutoFollows: false });
 
   const actors =
     (w.chars || []).filter(
@@ -23177,8 +23208,6 @@ function setFollowState(
     return false;
   }
 
-  ensureFollowerSystem(w);
-
   const follower =
     socialProfileById(
       w,
@@ -23197,6 +23226,20 @@ function setFollowState(
   ) {
     return false;
   }
+
+  /*
+   * v29 HOT PATH:
+   * One follow click must only touch these two profile rows.
+   * ensureFollowerSystem() used to walk the entire cast and then inspect
+   * every actor × target relationship before the click could complete.
+   */
+  ensureSocialProfileRow(
+    follower
+  );
+
+  ensureSocialProfileRow(
+    target
+  );
 
   const already =
     follower.following.includes(
@@ -41751,30 +41794,21 @@ function ensureSocialSimulationState(w) {
   }
 
   /*
-   * A Notes ténylegesen csak 24 óráig él.
-   * Nem csak a UI rejti el: a lejárt elemeket
-   * a világ állapotából is kiszedjük.
+   * v29 — SOCIAL EVENT HOT PATH
+   *
+   * IMPORTANT:
+   * This function is called by recordSocialEvent(), so it MUST stay cheap.
+   * It may initialize missing containers, but it must never:
+   * - scan actor × target relationship pairs,
+   * - recompute every character's historical social stats,
+   * - re-normalize hundreds of rumors/popups on every click.
    */
+
   pruneExpiredNotes(w);
 
-  /*
-   * Strukturált társadalmi események.
-   */
-  if (!Array.isArray(w.socialEvents)) {
-    w.socialEvents = [];
-  }
+  if (!Array.isArray(w.socialEvents)) w.socialEvents = [];
+  if (!Array.isArray(w.reposts)) w.reposts = [];
 
-  /*
-   * Újraosztások / repostok.
-   * Külön tároljuk őket az eredeti posztoktól.
-   */
-  if (!Array.isArray(w.reposts)) {
-    w.reposts = [];
-  }
-
-  /*
-   * Aura / popularity / reputation / hype stb.
-   */
   if (
     !w.socialStats ||
     typeof w.socialStats !== "object" ||
@@ -41784,65 +41818,62 @@ function ensureSocialSimulationState(w) {
   }
 
   /*
-   * Gossip media profilok / mód migrációja.
+   * Gossip media settings are tiny object guards; safe on the hot path.
    */
   ensureGossipMediaState(w);
 
   /*
-   * Követőháló migráció / javítás.
-   */
-  ensureFollowerSystem(w);
-
-  /*
-   * Social Stats migráció.
+   * DO NOT call ensureFollowerSystem() here.
+   * DO NOT call refreshAllSocialStats() here.
    *
-   * A popularity/followers/following már a jelenlegi
-   * social profiladatokból is újraszámolható,
-   * ezért a régi világok sem nulláról indulnak.
+   * Follow graph normalization belongs to follow/planner boundaries, and
+   * individual social stats are refreshed only for the actually affected
+   * profile when a feature needs them.
    */
-  refreshAllSocialStats(w);
 
-  /*
-   * Aktuális trendek.
-   */
   if (!Array.isArray(w.trends)) {
     w.trends = [];
   }
 
   /*
-   * V2 migration:
-   * a Trending patch ELŐTT frissen felvett karaktereket
-   * egyszer visszamenőleg felismerjük.
+   * One-time old-world discovery migrations. Existing worlds already carry
+   * these flags; if not, each block runs once and persists the flag.
    */
   if (!w.characterArrivalTrendMigratedV2) {
-    ensureRecentCharacterArrivalTrends(
-      w
-    );
-
+    ensureRecentCharacterArrivalTrends(w);
     refreshTrends(w);
-
-    w.characterArrivalTrendMigratedV2 =
-      true;
+    w.characterArrivalTrendMigratedV2 = true;
   }
 
   if (!w.socialDiscoveryMigratedV1) {
+    /*
+     * Avoid the old refreshAllSocialStats() migration here; each profile row
+     * is lazily created/refreshed as actually used.
+     */
     refreshTrends(w);
-    refreshAllPostReach(w);
+
+    /*
+     * Old reach migration can itself be large. Only seed recent posts, which
+     * are the only posts shown in normal discovery surfaces.
+     */
+    const recentPosts =
+      (w.posts || []).slice(0, 80);
+
+    recentPosts.forEach((post) => {
+      if (post && post.id) {
+        refreshPostReach(w, post.id);
+      }
+    });
+
     w.socialDiscoveryMigratedV1 = true;
   }
 
-  /*
-   * Karakterek között terjedő pletykák.
-   */
   if (!Array.isArray(w.rumors)) {
     w.rumors = [];
   }
 
   ensureGossipPropagationState(w);
 
-  /*
-   * The Whisper Wire memória.
-   */
   if (
     !w.whisperWire ||
     typeof w.whisperWire !== "object" ||
@@ -41851,17 +41882,9 @@ function ensureSocialSimulationState(w) {
     w.whisperWire = {};
   }
 
-  if (!Array.isArray(w.whisperWire.stories)) {
-    w.whisperWire.stories = [];
-  }
-
-  if (!Array.isArray(w.whisperWire.usedEventIds)) {
-    w.whisperWire.usedEventIds = [];
-  }
-
-  if (!Array.isArray(w.whisperWire.history)) {
-    w.whisperWire.history = [];
-  }
+  if (!Array.isArray(w.whisperWire.stories)) w.whisperWire.stories = [];
+  if (!Array.isArray(w.whisperWire.usedEventIds)) w.whisperWire.usedEventIds = [];
+  if (!Array.isArray(w.whisperWire.history)) w.whisperWire.history = [];
 
   if (
     !Object.prototype.hasOwnProperty.call(
@@ -41872,22 +41895,10 @@ function ensureSocialSimulationState(w) {
     w.whisperWire.lastCandidate = null;
   }
 
-  if (
-    !Number.isFinite(
-      Number(
-        w.whisperWire.lastPublishedAt
-      )
-    )
-  ) {
+  if (!Number.isFinite(Number(w.whisperWire.lastPublishedAt))) {
     w.whisperWire.lastPublishedAt = 0;
   }
 
-  /*
-   * Gossip & Media settings.
-   *
-   * Meglévő értéket SOHA nem írunk felül,
-   * csak a hiányzó mezőket pótoljuk.
-   */
   if (
     !w.gossipSettings ||
     typeof w.gossipSettings !== "object" ||
@@ -41896,120 +41907,74 @@ function ensureSocialSimulationState(w) {
     w.gossipSettings = {};
   }
 
-  if (
-    ![
-      "off",
-      "local",
-      "global",
-    ].includes(
-      w.gossipSettings.mediaMode
-    )
-  ) {
-    w.gossipSettings.mediaMode =
-      "off";
+  if (!["off", "local", "global"].includes(w.gossipSettings.mediaMode)) {
+    w.gossipSettings.mediaMode = "off";
   }
 
-  if (
-    typeof w.gossipSettings.whisperWire !==
-    "boolean"
-  ) {
+  if (typeof w.gossipSettings.whisperWire !== "boolean") {
     w.gossipSettings.whisperWire = true;
   }
 
-  if (
-    ![
-      "low",
-      "normal",
-      "high",
-      "chaotic",
-    ].includes(
-      w.gossipSettings.frequency
-    )
-  ) {
-    w.gossipSettings.frequency =
-      "normal";
+  if (!["low", "normal", "high", "chaotic"].includes(w.gossipSettings.frequency)) {
+    w.gossipSettings.frequency = "normal";
   }
 
-  if (
-    ![
-      "dynamic",
-      "short",
-      "detailed",
-    ].includes(
-      w.gossipSettings.articleLength
-    )
-  ) {
-    w.gossipSettings.articleLength =
-      "dynamic";
+  if (!["dynamic", "short", "detailed"].includes(w.gossipSettings.articleLength)) {
+    w.gossipSettings.articleLength = "dynamic";
   }
 
-  if (
-    typeof w.gossipSettings
-      .characterGossip !== "boolean"
-  ) {
-    w.gossipSettings.characterGossip =
-      true;
+  if (typeof w.gossipSettings.characterGossip !== "boolean") {
+    w.gossipSettings.characterGossip = true;
   }
 
-  if (
-    ![
-      "minimal",
-      "normal",
-      "strong",
-    ].includes(
-      w.gossipSettings
-        .relationshipImpact
-    )
-  ) {
-    w.gossipSettings
-      .relationshipImpact =
-      "normal";
+  if (!["minimal", "normal", "strong"].includes(w.gossipSettings.relationshipImpact)) {
+    w.gossipSettings.relationshipImpact = "normal";
   }
 
-  /*
-   * Választható Pop-up Events.
-   */
   if (!Array.isArray(w.popupEvents)) {
     w.popupEvents = [];
   }
 
-  /* Existing saves: enrich old popup rows without breaking them. */
-  w.popupEvents.forEach((event) => {
-    if (!event || typeof event !== "object") return;
-    if (!Number.isFinite(Number(event.rerollsUsed))) event.rerollsUsed = 0;
-    if (!Number.isFinite(Number(event.maxRerolls))) event.maxRerolls = LIVE_WORLD_MAX_POPUP_REROLLS;
-    if (!Array.isArray(event.variantHistory)) event.variantHistory = [];
-    if (!Array.isArray(event.witnessIds)) event.witnessIds = [];
-    if (!Array.isArray(event.involvedIds)) event.involvedIds = [];
-    if (!["public","limited","private"].includes(event.visibility)) event.visibility = "limited";
-    if (!Number.isFinite(Number(event.gossipPotential))) event.gossipPotential = event.visibility === "public" ? 55 : 30;
-    if (typeof event.location !== "string") event.location = "";
-    if (typeof event.eventKind !== "string") event.eventKind = "social";
-
-    /* v55 repair: an old malformed unresolved row must never become an invisible
-       permanent mutex that prevents every later popup. */
-    if (!event.resolved) {
-      const titleOk = Boolean(String(event.title || "").trim());
-      const textOk = Boolean(String(event.text || "").trim());
-      const choiceCount = Array.isArray(event.choices)
-        ? event.choices.filter((choice) => choice && String(choice.label || "").trim()).length
-        : 0;
-      if (!titleOk || !textOk || choiceCount < 2) {
-        event.resolved = true;
-        event.invalidatedAt = now();
-        event.invalidReason = "malformed-popup-v55";
-      }
-    }
-  });
-
   /*
-   * v50 POPUP WATCHDOG
-   *
-   * A régi popup-rendszer kizárólag friss, magas pontszámú socialEvents
-   * eseményekből tudott seedet választani. Ha ilyen épp nem volt, a
-   * "random" felvillanó helyzetek teljesen eltűntek. Külön runtime-óra
-   * tartja életben az ambient / váratlan eseményeket is.
+   * Popup legacy rows used to be repaired on every social event.
+   * Repair them once, then persist the version marker.
    */
+  if (Number(w.popupRowRepairVersion || 0) < 56) {
+    w.popupEvents.forEach((event) => {
+      if (!event || typeof event !== "object") return;
+
+      if (!Number.isFinite(Number(event.rerollsUsed))) event.rerollsUsed = 0;
+      if (!Number.isFinite(Number(event.maxRerolls))) event.maxRerolls = LIVE_WORLD_MAX_POPUP_REROLLS;
+      if (!Array.isArray(event.variantHistory)) event.variantHistory = [];
+      if (!Array.isArray(event.witnessIds)) event.witnessIds = [];
+      if (!Array.isArray(event.involvedIds)) event.involvedIds = [];
+      if (!["public","limited","private"].includes(event.visibility)) event.visibility = "limited";
+      if (!Number.isFinite(Number(event.gossipPotential))) event.gossipPotential = event.visibility === "public" ? 55 : 30;
+      if (typeof event.location !== "string") event.location = "";
+      if (typeof event.eventKind !== "string") event.eventKind = "social";
+
+      if (!event.resolved) {
+        const titleOk = Boolean(String(event.title || "").trim());
+        const textOk = Boolean(String(event.text || "").trim());
+        const choiceCount = Array.isArray(event.choices)
+          ? event.choices.filter(
+              (choice) =>
+                choice &&
+                String(choice.label || "").trim()
+            ).length
+          : 0;
+
+        if (!titleOk || !textOk || choiceCount < 2) {
+          event.resolved = true;
+          event.invalidatedAt = now();
+          event.invalidReason = "malformed-popup-v55";
+        }
+      }
+    });
+
+    w.popupRowRepairVersion = 56;
+  }
+
   if (
     !w.popupRuntime ||
     typeof w.popupRuntime !== "object" ||
@@ -42023,13 +41988,27 @@ function ensureSocialSimulationState(w) {
   }
 
   if (!Number.isFinite(Number(w.popupRuntime.lastGeneratedAt))) {
-    w.popupRuntime.lastGeneratedAt = Math.max(
-      0,
-      ...(w.popupEvents || []).map((event) =>
-        Number(event && (event.ts || event.resolvedAt || event.snoozedAt)) || 0
-      )
-    );
+    let latestPopupAt = 0;
+
+    for (const event of w.popupEvents) {
+      if (!event) continue;
+
+      latestPopupAt =
+        Math.max(
+          latestPopupAt,
+          Number(
+            event.ts ||
+            event.resolvedAt ||
+            event.snoozedAt
+          ) || 0
+        );
+    }
+
+    w.popupRuntime.lastGeneratedAt =
+      latestPopupAt;
   }
+
+  w.socialRuntimeHotPathVersion = 29;
 
   return w;
 }
@@ -42048,61 +42027,66 @@ function ensureSocialSimulationState(w) {
 
 function ensureGossipPropagationState(w) {
   if (!w || typeof w !== "object") return null;
-  if (!w.gossipPropagation || typeof w.gossipPropagation !== "object" || Array.isArray(w.gossipPropagation)) {
+
+  if (
+    !w.gossipPropagation ||
+    typeof w.gossipPropagation !== "object" ||
+    Array.isArray(w.gossipPropagation)
+  ) {
     w.gossipPropagation = {};
   }
+
   const state = w.gossipPropagation;
+
   if (!Array.isArray(state.rumors)) state.rumors = [];
   if (!Array.isArray(state.exchanges)) state.exchanges = [];
   if (!Array.isArray(state.echoes)) state.echoes = [];
   if (!Number.isFinite(Number(state.lastRoundAt))) state.lastRoundAt = 0;
   if (!Number.isFinite(Number(state.lastEchoAt))) state.lastEchoAt = 0;
-  state.version = 2;
 
-  state.rumors = state.rumors.filter(Boolean).map((rumor) => {
-    if (!rumor || typeof rumor !== "object") return rumor;
-    if (!rumor.holders || typeof rumor.holders !== "object" || Array.isArray(rumor.holders)) rumor.holders = {};
-    if (!Array.isArray(rumor.subjectIds)) rumor.subjectIds = [];
-    if (!Array.isArray(rumor.tags)) rumor.tags = [];
-    if (!Array.isArray(rumor.communitiesReached)) rumor.communitiesReached = [];
-    if (!Number.isFinite(Number(rumor.spreadCount))) rumor.spreadCount = Math.max(0, Object.keys(rumor.holders).length - 1);
-    if (!Number.isFinite(Number(rumor.createdAt))) rumor.createdAt = now();
-    if (!Number.isFinite(Number(rumor.updatedAt))) rumor.updatedAt = rumor.createdAt;
-    if (!Number.isFinite(Number(rumor.lastSpreadAt))) rumor.lastSpreadAt = 0;
-    if (!rumor.echoedBy || typeof rumor.echoedBy !== "object" || Array.isArray(rumor.echoedBy)) rumor.echoedBy = {};
-    if (!Number.isFinite(Number(rumor.publicEchoCount))) rumor.publicEchoCount = Object.keys(rumor.echoedBy).length;
-    if (!Number.isFinite(Number(rumor.lastEchoAt))) rumor.lastEchoAt = 0;
-    Object.keys(rumor.holders || {}).forEach((holderId) => {
-      const holder = rumor.holders[holderId] || {};
-      if (!holder.stance) holder.stance = "uncertain";
-      if (!holder.heardText) holder.heardText = rumor.text || "";
-      if (!Number.isFinite(Number(holder.shareCount))) holder.shareCount = 0;
-      if (!Number.isFinite(Number(holder.sourceTrust))) holder.sourceTrust = 0;
-      rumor.holders[holderId] = holder;
-    });
-    return rumor;
-  }).slice(-220);
-  state.exchanges = state.exchanges.filter(Boolean).slice(-500);
-  state.echoes = state.echoes.filter(Boolean).slice(-320);
+  /*
+   * PERFORMANCE v29:
+   * The previous helper filter/map-normalized up to 220 rumor objects every
+   * time recordSocialEvent() ran. Do the legacy repair once per persisted
+   * world schema instead.
+   */
+  if (Number(state.version || 0) < 3) {
+    state.rumors =
+      state.rumors
+        .filter(Boolean)
+        .map((rumor) => {
+          if (!rumor || typeof rumor !== "object") return rumor;
+
+          if (
+            !rumor.holders ||
+            typeof rumor.holders !== "object" ||
+            Array.isArray(rumor.holders)
+          ) {
+            rumor.holders = {};
+          }
+
+          if (!Array.isArray(rumor.subjectIds)) rumor.subjectIds = [];
+          if (!Array.isArray(rumor.tags)) rumor.tags = [];
+          if (!Array.isArray(rumor.communitiesReached)) rumor.communitiesReached = [];
+
+          if (!Number.isFinite(Number(rumor.spreadCount))) {
+            rumor.spreadCount =
+              Math.max(
+                0,
+                Object.keys(rumor.holders).length - 1
+              );
+          }
+
+          if (!Number.isFinite(Number(rumor.createdAt))) rumor.createdAt = now();
+          if (!Number.isFinite(Number(rumor.updatedAt))) rumor.updatedAt = rumor.createdAt;
+
+          return rumor;
+        });
+
+    state.version = 3;
+  }
+
   return state;
-}
-
-function socialPlayerId(w) {
-  return String(
-    (w && w.meId) ||
-    (w && w.owner && w.players && w.players[w.owner] ? w.owner : "") ||
-    Object.keys((w && w.players) || {})[0] ||
-    ""
-  );
-}
-
-function gossipCommunityToken(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9áéíóöőúüű -]+/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 60);
 }
 
 function gossipCommunityKeys(c) {
@@ -48377,10 +48361,31 @@ function refreshPostVirality(
     }
   }
 
-  refreshSocialStatsFor(
-    w,
-    post.authorId
-  );
+  /*
+   * PERFORMANCE v29:
+   * The old code recalculated the author's complete historical social stats
+   * after EVERY like/comment/repost because all of those refresh virality.
+   * That walks posts + comments + socialEvents repeatedly.
+   *
+   * Refresh the expensive derived profile only when the virality STATE changes
+   * or when the post actually crosses the viral threshold. Normal +1 likes
+   * update the visible post immediately without a full history scan.
+   */
+  const previousStatus =
+    String(previous.status || "normal");
+
+  if (
+    previousStatus !== status ||
+    (
+      score >= 60 &&
+      !wasViral
+    )
+  ) {
+    refreshSocialStatsFor(
+      w,
+      post.authorId
+    );
+  }
 
   return post.virality;
 }
@@ -49692,6 +49697,12 @@ function recordSocialEvent(
     return null;
   }
 
+  const socialPerfStart =
+    typeof performance !== "undefined" &&
+    typeof performance.now === "function"
+      ? performance.now()
+      : 0;
+
   ensureSocialSimulationState(w);
 
   const type =
@@ -50043,6 +50054,18 @@ function recordSocialEvent(
    * social click. gossipAutoCandidate() and explicit popup gossip already call
    * selectGossipStoryCandidate() exactly when a candidate is actually needed.
    */
+
+  if (socialPerfStart) {
+    const socialPerfMs =
+      performance.now() -
+      socialPerfStart;
+
+    if (socialPerfMs >= 50) {
+      console.warn(
+        `[mv-perf] social event ${entry.type}: ${Math.round(socialPerfMs)}ms`
+      );
+    }
+  }
 
   return entry;
 }
