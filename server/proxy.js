@@ -1,4 +1,4 @@
-/* MÁSVILÁG SERVER v17 — LAZY MEDIA PERFORMANCE ONLY — 20260815_2038 */
+/* MÁSVILÁG SERVER v18 — POSTGRES UNICODE SURROGATE REPAIR — 20260815_2048 */
 /*
  * MÁSVILÁG — server/proxy.js
  * Full drop-in backend with authoritative multi-device world + media sync.
@@ -141,11 +141,94 @@ function cleanCode(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+
 function cleanUsername(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9._-]/g, "");
+}
+
+/* -------------------------------------------------------------------------
+   POSTGRES JSONB UNICODE SAFETY — v18
+
+   JavaScript strings can contain lone UTF-16 surrogate code units. Modern
+   JSON.stringify preserves those as e.g. "\\ud83e", but PostgreSQL jsonb
+   rejects malformed surrogate pairs with SQLSTATE 22P02.
+
+   Repair ONLY invalid/unpaired surrogate code units. Valid emoji pairs are
+   preserved byte-for-byte. The replacement character U+FFFD prevents one
+   malformed AI/user string from blocking the entire authoritative world save.
+   ------------------------------------------------------------------------- */
+function repairUnpairedUnicodeSurrogates(value) {
+  const input = String(value ?? "");
+  let output = "";
+  let changed = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const code = input.charCodeAt(i);
+
+    // High surrogate: must be followed by a low surrogate.
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next =
+        i + 1 < input.length
+          ? input.charCodeAt(i + 1)
+          : -1;
+
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        output += input[i] + input[i + 1];
+        i += 1;
+      } else {
+        output += "\uFFFD";
+        changed = true;
+      }
+
+      continue;
+    }
+
+    // Lone low surrogate is invalid too.
+    if (code >= 0xDC00 && code <= 0xDFFF) {
+      output += "\uFFFD";
+      changed = true;
+      continue;
+    }
+
+    output += input[i];
+  }
+
+  return changed ? output : input;
+}
+
+function stringifyJsonbSafe(value, context = "jsonb") {
+  let repairedStrings = 0;
+
+  const json = JSON.stringify(
+    value,
+    (_key, current) => {
+      if (typeof current !== "string") {
+        return current;
+      }
+
+      const repaired =
+        repairUnpairedUnicodeSurrogates(
+          current
+        );
+
+      if (repaired !== current) {
+        repairedStrings += 1;
+      }
+
+      return repaired;
+    }
+  );
+
+  if (repairedStrings > 0) {
+    console.warn(
+      `[unicode-repair] ${context}: repaired ${repairedStrings} malformed string(s)`
+    );
+  }
+
+  return json;
 }
 
 function sha256(value) {
@@ -903,7 +986,7 @@ app.post("/auth/login", async (req, res) => {
         `,
         [
           code,
-          JSON.stringify(world),
+          stringifyJsonbSafe(world, "login-world"),
         ]
       );
     } else if (
@@ -970,7 +1053,7 @@ app.post("/auth/login", async (req, res) => {
           updated_at = NOW()
       WHERE code = $1
       `,
-      [code, JSON.stringify(world)]
+      [code, stringifyJsonbSafe(world, "login-world-align")]
     );
 
     await client.query("COMMIT");
@@ -1450,7 +1533,7 @@ app.post("/auth/migrate", async (req, res) => {
         )
         VALUES ($1, $2::jsonb, NOW())
         `,
-        [code, JSON.stringify(world)]
+        [code, stringifyJsonbSafe(world, "world-create")]
       );
 
     try {
@@ -1846,7 +1929,7 @@ app.post("/profile/worlds/create", async (req, res) => {
       `,
       [
         code,
-        JSON.stringify(world),
+        stringifyJsonbSafe(world, "profile-world-create"),
       ]
     );
 
@@ -2027,7 +2110,7 @@ app.post("/world/save", async (req, res) => {
 
     if (nextWorld.universe) nextWorld.universe.at = Date.now();
 
-    const nextWorldJson = JSON.stringify(nextWorld);
+    const nextWorldJson = stringifyJsonbSafe(nextWorld, "world-save");
 
     await client.query(
       `
@@ -2857,7 +2940,7 @@ app.post("/media/save", async (req, res) => {
       `,
       [
         session.worldCode,
-        JSON.stringify(envelope),
+        stringifyJsonbSafe(envelope, "media-save"),
       ]
     );
 
