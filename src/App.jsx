@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v31 — REACT RENDER ISOLATION — 20260815_2310 */
+/* MÁSVILÁG BUILD v32 — BINARY-SAFE RENDER + NO WORLD CLONES — 20260815_2240 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -1940,7 +1940,15 @@ function imageRefForValue(value) {
 
 function normalizeWorldImages(world, media) {
   if (!world) return { world, media, changed: false };
-  const w = JSON.parse(JSON.stringify(world));
+
+  /*
+   * PERFORMANCE v32:
+   * This app's world store is mutation-oriented already. Deep-cloning the
+   * entire multi-MB world before a one-time image-reference migration doubled
+   * memory and blocked the main thread. Mutate the just-loaded runtime world
+   * directly and publish it once at the end.
+   */
+  const w = world;
   const nextMedia = { ...(media || {}) };
   let changed = false;
   const attach = (raw, patch) => {
@@ -2441,7 +2449,7 @@ function Av({ src, name = "?", size = 38, radius = 12 }) {
   const url = resolveImg(src, media);
   return (
     <div className="av" style={{ ...avStyle(name), width: size, height: size, borderRadius: radius, fontSize: Math.round(size * 0.42) }}>
-      {url && !bad ? <img src={url} alt="" onError={() => setBad(true)} /> : (name || "?")[0]}
+      {url && !bad ? <img src={url} alt="" loading="lazy" decoding="async" onError={() => setBad(true)} /> : (name || "?")[0]}
     </div>
   );
 }
@@ -19263,7 +19271,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v31-react-render-isolation";
+const BUILD_VERSION = "v32-binary-safe-render-no-clones";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -31196,7 +31204,23 @@ function uiHashStart() {
 }
 
 function uiHashPush(hash, value) {
-  const s = String(value == null ? "" : value);
+  const raw = String(value == null ? "" : value);
+
+  /*
+   * PERFORMANCE v32 — BINARY-SAFE HASHING
+   *
+   * Legacy worlds may still contain data:image/... base64 strings directly in
+   * avatar/post/image fields. Iterating every character of a multi-megabyte
+   * image merely to build a React render key can freeze the browser.
+   *
+   * Long values are represented by a constant-size fingerprint. String.length
+   * is O(1); only tiny head/tail slices are examined.
+   */
+  const s =
+    raw.length > 512
+      ? `${raw.slice(0, 96)}|#len:${raw.length}|${raw.slice(-64)}`
+      : raw;
+
   let h = hash >>> 0;
 
   for (let i = 0; i < s.length; i += 1) {
@@ -31206,6 +31230,24 @@ function uiHashPush(hash, value) {
 
   h ^= 31;
   return Math.imul(h, 16777619) >>> 0;
+}
+
+function uiImageRenderKey(value) {
+  if (!value) return "";
+
+  const id = imageIdOf(value);
+  if (id) return `img:${id}`;
+
+  const raw = String(value);
+
+  if (isInlineImageData(raw)) {
+    const semi = raw.indexOf(";");
+    return `inline:${semi > 5 ? raw.slice(5, semi) : "image"}:${raw.length}`;
+  }
+
+  return raw.length > 240
+    ? `${raw.slice(0, 120)}|#len:${raw.length}`
+    : raw;
 }
 
 function noteUiRenderKey(w) {
@@ -31236,7 +31278,10 @@ function noteUiRenderKey(w) {
     if (author) {
       h = uiHashPush(h, author.updatedAt);
       h = uiHashPush(h, author.name);
-      h = uiHashPush(h, author.avatar);
+      h = uiHashPush(
+      h,
+      uiImageRenderKey(author.avatar)
+    );
     }
   }
 
@@ -31251,7 +31296,12 @@ function postUiRenderKey(w, post) {
   h = uiHashPush(h, post.id);
   h = uiHashPush(h, post.likes);
   h = uiHashPush(h, post.text ? post.text.length : 0);
-  h = uiHashPush(h, post.imageId || post.image || "");
+  h = uiHashPush(
+    h,
+    uiImageRenderKey(
+      post.imageId || post.image || ""
+    )
+  );
   h = uiHashPush(h, post.virality && post.virality.status);
   h = uiHashPush(h, post.virality && post.virality.score);
 
@@ -31303,7 +31353,10 @@ function postUiRenderKey(w, post) {
     h = uiHashPush(h, author.id);
     h = uiHashPush(h, author.name);
     h = uiHashPush(h, author.username);
-    h = uiHashPush(h, author.avatar);
+    h = uiHashPush(
+      h,
+      uiImageRenderKey(author.avatar)
+    );
     h = uiHashPush(h, author.updatedAt);
     h = uiHashPush(h, author.baseFollowers);
     h = uiHashPush(h, author.followerDelta);
@@ -31342,7 +31395,9 @@ function feedUiRenderKey(w) {
   );
   h = uiHashPush(
     h,
-    w.player && w.player.avatar
+    uiImageRenderKey(
+      w.player && w.player.avatar
+    )
   );
 
   const posts =
@@ -31452,7 +31507,10 @@ function feedUiRenderKey(w) {
   if (media) {
     h = uiHashPush(h, media.id);
     h = uiHashPush(h, media.name);
-    h = uiHashPush(h, media.avatar);
+    h = uiHashPush(
+      h,
+      uiImageRenderKey(media.avatar)
+    );
     h = uiHashPush(h, media.updatedAt);
   }
 
@@ -31476,7 +31534,10 @@ function castUiRenderKey(w) {
     h = uiHashPush(h, c.id);
     h = uiHashPush(h, c.name);
     h = uiHashPush(h, c.username);
-    h = uiHashPush(h, c.avatar);
+    h = uiHashPush(
+      h,
+      uiImageRenderKey(c.avatar)
+    );
     h = uiHashPush(h, c.updatedAt);
   }
 
@@ -31498,7 +31559,10 @@ function bondsUiRenderKey(w) {
 
     h = uiHashPush(h, c.id);
     h = uiHashPush(h, c.name);
-    h = uiHashPush(h, c.avatar);
+    h = uiHashPush(
+      h,
+      uiImageRenderKey(c.avatar)
+    );
     h = uiHashPush(h, c.updatedAt);
   }
 
@@ -38093,19 +38157,21 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
    * Az AI már AZ ELSŐ elküldött üzenetet is
    * a világ tényleges részeként kapja meg.
    */
-  const requestWorld =
-    JSON.parse(
-      JSON.stringify(w)
-    );
-
-  if (!requestWorld.chats) {
-    requestWorld.chats = {};
-  }
-
-  requestWorld.chats[ck] = [
-    ...(requestWorld.chats[ck] || []),
-    outgoingMessage,
-  ];
+  /*
+   * PERFORMANCE v32:
+   * Never deep-clone the whole world just to let the AI see one outgoing DM.
+   * Create a read-only overlay that copies only the chats branch we modify.
+   */
+  const requestWorld = {
+    ...w,
+    chats: {
+      ...(w.chats || {}),
+      [ck]: [
+        ...((w.chats && w.chats[ck]) || []),
+        outgoingMessage,
+      ],
+    },
+  };
 
   /*
    * A képernyőn is azonnal megjelenik
@@ -46810,23 +46876,21 @@ async function genPopupPrivateReply(
       targetId
     );
 
-  const requestWorld=
-    JSON.parse(
-      JSON.stringify(w)
-    );
-
-  if(!requestWorld.chats){
-    requestWorld.chats={};
-  }
-
-  requestWorld.chats[ck]=[
-    ...(requestWorld.chats[ck]||[]),
-    {
-      from:"me",
-      text:playerText,
-      ts:now(),
+  /* v32: same shallow overlay rule as normal DMs — no whole-world clone. */
+  const requestWorld={
+    ...w,
+    chats:{
+      ...(w.chats||{}),
+      [ck]:[
+        ...((w.chats&&w.chats[ck])||[]),
+        {
+          from:"me",
+          text:playerText,
+          ts:now(),
+        },
+      ],
     },
-  ];
+  };
 
   const history=
     (requestWorld.chats[ck]||[])
@@ -56841,16 +56905,10 @@ const signOut = useCallback(async () => {
     mediaRef.current = nextMedia;
 
     /*
-     * A friss feltöltést AZONNAL tegyük helyi emergency cache-be.
-     * Így még egy közben érkező focus/poll/cloud refresh sem tudja
-     * eltüntetni a játékos frissen posztolt képét.
+     * v32 MANUAL SAVE:
+     * Do not serialize the full media map on every image selection. Fresh
+     * uploads remain in mediaRef/state until the explicit Save button is used.
      */
-    if (code) {
-      void cacheMediaLocally(
-        code,
-        nextMedia
-      );
-    }
 
     setWorld((prev) => {
       if (!prev) return prev;
