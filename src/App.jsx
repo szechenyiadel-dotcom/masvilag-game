@@ -26532,11 +26532,24 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
 
 
   return (
-    <div className="scrim char-edit-scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="sheet char-edit-sheet">
+    <div
+      className="scrim char-edit-scrim"
+      onClick={(e) => {
+        // A karakter szerkesztőből KIZÁRÓLAG a Mentés vagy a Vissza gombbal
+        // lehessen kilépni. A háttérre / oldalra kattintás nem zárja be.
+        e.stopPropagation();
+      }}
+    >
+      <div
+        className="sheet char-edit-sheet"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="between char-edit-header">
           <h2 style={{ fontSize: 20 }}>{initial.id ? tt("Karakter szerkesztése", "Edit character") : tt("Új karakter", "New character")}</h2>
-          <button className="btn tiny ghost" onClick={onClose}><X size={14} /></button>
+          <button className="btn tiny ghost" onClick={onClose}>
+            <ChevronLeft size={14} />
+            {tt("Vissza", "Back")}
+          </button>
         </div>
 
         <div className="card" style={{ background: "var(--raised)" }}>
