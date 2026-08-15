@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v17 — LAZY MEDIA STARTUP PERFORMANCE ONLY — 20260815_2038 */
+/* MÁSVILÁG BUILD v19 — FEED/COMMENT RENDER PERFORMANCE ONLY — 20260815_2055 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -24353,12 +24353,12 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
 /* ============================================================
    Feed — szálas kommentekkel
    ============================================================ */
-function CommentNode({ w, c, allComments, onReply, depth, onOpenProfile }) {
+function CommentNode({ w, c, commentById, repliesByParent, onReply, depth, onOpenProfile }) {
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
   const [txt, setTxt] = useState("");
   const a = charById(w, c.authorId);
-  const replies = (allComments || []).filter((x) => x.parent === c.id);
+  const replies = repliesByParent.get(c.id) || [];
 
   if (!a) return null;
 
@@ -24391,7 +24391,7 @@ function CommentNode({ w, c, allComments, onReply, depth, onOpenProfile }) {
 
         <div style={{ minWidth: 0, flex: 1 }}>
           {depth ? (() => {
-            const parentComment = (allComments || []).find((x) => x && x.id === c.parent);
+            const parentComment = commentById.get(c.parent);
             const parentAuthor = parentComment ? charById(w, parentComment.authorId) : null;
             return parentAuthor ? (
               <div className="social-comment-reply-target">
@@ -24417,20 +24417,14 @@ function CommentNode({ w, c, allComments, onReply, depth, onOpenProfile }) {
 
           <div className="cmt-body">{c.text}</div>
 
-          <button
-            className="social-comment-action"
-            onClick={() => setOpen(!open)}
-          >
+          <button className="social-comment-action" onClick={() => setOpen(!open)}>
             {tt("Válasz", "Reply")}
           </button>
         </div>
       </div>
 
       {open && (
-        <div
-          className="row"
-          style={{ gap: 8, marginTop: 8, marginLeft: depth ? 0 : 36, alignItems: "center" }}
-        >
+        <div className="row" style={{ gap: 8, marginTop: 8, marginLeft: depth ? 0 : 36, alignItems: "center" }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <input
               className="i"
@@ -24454,7 +24448,8 @@ function CommentNode({ w, c, allComments, onReply, depth, onOpenProfile }) {
           key={r.id}
           w={w}
           c={r}
-          allComments={allComments}
+          commentById={commentById}
+          repliesByParent={repliesByParent}
           depth={(depth || 0) + 1}
           onReply={onReply}
           onOpenProfile={onOpenProfile}
@@ -24465,6 +24460,7 @@ function CommentNode({ w, c, allComments, onReply, depth, onOpenProfile }) {
 }
 
 function Post({
+  renderVersion,
   w,
   post,
   onLike,
@@ -24488,10 +24484,30 @@ function Post({
   if (!author) return null;
 
   const comments = safePostComments(post);
-  const tops = comments.filter((c) => !c.parent);
-  const orphans = comments.filter(
-    (c) => c.parent && !comments.some((x) => x.id === c.parent)
-  );
+
+  /* PERFORMANCE v19: build the comment graph once per post revision instead
+     of scanning the complete comment list inside every recursive node. */
+  const commentTree = React.useMemo(() => {
+    const commentById = new Map();
+    const repliesByParent = new Map();
+    const roots = [];
+
+    comments.forEach((comment) => {
+      if (comment && comment.id) commentById.set(comment.id, comment);
+    });
+
+    comments.forEach((comment) => {
+      if (!comment) return;
+      if (comment.parent && commentById.has(comment.parent)) {
+        if (!repliesByParent.has(comment.parent)) repliesByParent.set(comment.parent, []);
+        repliesByParent.get(comment.parent).push(comment);
+      } else {
+        roots.push(comment);
+      }
+    });
+
+    return { commentById, repliesByParent, roots };
+  }, [post.id, comments.length, renderVersion]);
 
   const liked =
     Array.isArray(post.likedBy) &&
@@ -24739,12 +24755,13 @@ function Post({
 
       {comments.length > 0 ? (
         <div className="social-comments">
-          {tops.concat(orphans).map((c) => (
+          {commentTree.roots.map((c) => (
             <CommentNode
               key={c.id}
               w={w}
               c={c}
-              allComments={comments}
+              commentById={commentTree.commentById}
+              repliesByParent={commentTree.repliesByParent}
               depth={0}
               onReply={(parentId, replyText) =>
                 onComment(post.id, replyText, parentId)
@@ -29952,6 +29969,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   const [feedMode, setFeedMode] = useState("all");
   const [showMedia, setShowMedia] = useState(false);
   const [profileId, setProfileId] = useState("");
+  const [visibleFeedCount, setVisibleFeedCount] = useState(6);
+  const feedSentinelRef = useRef(null);
 
   const activeMedia =
     activeGossipMediaAccount(
@@ -30269,7 +30288,35 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     );
 
   const visibleTimelineItems =
-    timelineItems;
+    timelineItems.slice(0, visibleFeedCount);
+
+  useEffect(() => {
+    setVisibleFeedCount(6);
+  }, [feedMode]);
+
+  useEffect(() => {
+    const node = feedSentinelRef.current;
+    if (!node || visibleFeedCount >= timelineItems.length) return undefined;
+
+    if (typeof IntersectionObserver === "undefined") {
+      const t = setTimeout(() => {
+        setVisibleFeedCount((count) => Math.min(timelineItems.length, count + 6));
+      }, 300);
+      return () => clearTimeout(t);
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleFeedCount((count) => Math.min(timelineItems.length, count + 6));
+        }
+      },
+      { rootMargin: "700px 0px" }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [visibleFeedCount, timelineItems.length]);
 
   return (
     <>
@@ -30918,6 +30965,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
           </div>
         );
       })}
+      {visibleFeedCount < timelineItems.length ? (
+        <div ref={feedSentinelRef} aria-hidden="true" style={{ height: 1 }} />
+      ) : null}
+
       {profileId && charById(w, profileId) ? (
         <SocialProfileModal
           w={w}
