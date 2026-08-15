@@ -1,4 +1,4 @@
-/* MÁSVILÁG RECOVERY v99.5 — SCALABLE LAZY MEDIA STORAGE — 20260816_0045 */
+/* MÁSVILÁG RECOVERY v99.6 — PRIORITY PLAYER SOCIAL REACTIONS — 20260816_0150 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -39520,6 +39520,49 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.queueRepairVersion))) w.sim.queueRepairVersion = 1;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
+  /*
+   * RECOVERY v99.6 — ONE-TIME REACTIVE QUEUE ORDER REPAIR
+   *
+   * Old v99.5 worlds may already have event-reply/event-post reactions sitting
+   * behind unrelated autonomous work. The queue is capped at 40, so this is a
+   * tiny bounded pass performed once per saved world.
+   */
+  if (
+    Math.max(
+      0,
+      Math.floor(
+        Number(
+          w.sim.playerReactionQueueVersion
+        ) || 0
+      )
+    ) < 1
+  ) {
+    const urgent = [];
+    const normal = [];
+
+    w.sim.queue.forEach(
+      (action) => {
+        (
+          isPriorityPlayerSocialReaction(
+            action
+          )
+            ? urgent
+            : normal
+        ).push(action);
+      }
+    );
+
+    w.sim.queue =
+      urgent
+        .concat(normal)
+        .slice(
+          0,
+          SIM_QUEUE_LIMIT
+        );
+
+    w.sim.playerReactionQueueVersion = 1;
+  }
+
   const cutoff = now() - SIM_DONE_TTL;
   Object.keys(w.sim.done).forEach((k) => {
     if (Number(w.sim.done[k] || 0) < cutoff) delete w.sim.done[k];
@@ -47854,6 +47897,48 @@ function mkAction(type, key, payload = {}, source = "auto") {
   return { id: uid(), type, key, payload, source, ts: now() };
 }
 
+/*
+ * RECOVERY v99.6 — PLAYER SOCIAL REACTION PRIORITY
+ *
+ * These actions exist because the player has JUST spoken/posted publicly.
+ * They must not sit behind unrelated autonomous queue work.
+ *
+ * This helper is intentionally tiny and O(1): no world/history scan.
+ */
+function isPriorityPlayerSocialReaction(action) {
+  if (
+    !action ||
+    action.source !== "event"
+  ) {
+    return false;
+  }
+
+  const trigger =
+    String(
+      action.payload &&
+      action.payload.trigger ||
+      ""
+    );
+
+  if (
+    action.type === "reply" &&
+    trigger === "player-comment"
+  ) {
+    return true;
+  }
+
+  if (
+    action.type === "comments" &&
+    String(action.key || "").startsWith(
+      "event-post:"
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function simEnqueue(w, action) {
   if (!action || !action.key) return false;
   const sim = ensureSimState(w);
@@ -47897,12 +47982,33 @@ function simEnqueue(w, action) {
   const doneAt = Number(sim.done[action.key] || 0);
   if (doneAt && now() - doneAt < SIM_DONE_TTL) return false;
   if (sim.queue.some((x) => x && x.key === action.key)) return false;
-  if (action.source === "manual" || action.source === "coverage") {
+
+  const priorityPlayerReaction =
+    isPriorityPlayerSocialReaction(
+      action
+    );
+
+  if (
+    action.source === "manual" ||
+    action.source === "coverage" ||
+    priorityPlayerReaction
+  ) {
+    /*
+     * Player comment/post reactions are conversationally time-sensitive.
+     * Keep them ahead of autonomous follows, gossip, DMs, etc.
+     */
     sim.queue.unshift(action);
-    sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
+    sim.queue =
+      sim.queue.slice(
+        0,
+        SIM_QUEUE_LIMIT
+      );
   } else {
     sim.queue.push(action);
-    sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
+    sim.queue =
+      sim.queue.slice(
+        -SIM_QUEUE_LIMIT
+      );
   }
   sim.at = now();
   return true;
@@ -56010,6 +56116,10 @@ const signOut = useCallback(async () => {
 
   const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
+  const priorityPlayerReactionQueued =
+    isPriorityPlayerSocialReaction(
+      queued
+    );
 
   /*
    * RECOVERY v99.2:
@@ -56089,6 +56199,7 @@ const signOut = useCallback(async () => {
 
   if (
     !manualQueued &&
+    !priorityPlayerReactionQueued &&
     view2.sim &&
     Number(view2.sim.lastAttemptAt || 0) > 0 &&
     now() - Number(view2.sim.lastAttemptAt || 0) < LIVE_WORLD_MIN_ACTION_GAP_MS
@@ -56136,6 +56247,18 @@ const signOut = useCallback(async () => {
           );
       }
       if (!action) return;
+
+      if (
+        isPriorityPlayerSocialReaction(
+          action
+        )
+      ) {
+        console.info(
+          "[social-react] priority",
+          action.type,
+          action.key || ""
+        );
+      }
 
       if (
         action.type === "world" ||
