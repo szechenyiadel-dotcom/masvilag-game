@@ -3974,6 +3974,8 @@ function setRel(w, a, b, patch) {
    dynamic score happened to exist at the end of the previous run.
    ============================================================ */
 
+const RELATIONSHIP_CANON_VERSION = 6;
+
 function ensureRelationshipBaselineStore(w) {
   if (!w.relationshipBaselines || typeof w.relationshipBaselines !== "object") {
     w.relationshipBaselines = {};
@@ -4073,7 +4075,7 @@ function setConfiguredRel(w, a, b, patch, source = "manual") {
   }
 }
 
-function canonicalRelationshipEvidence(actor, target) {
+function canonicalRelationshipEvidence(w, actor, target) {
   if (!actor || !target) return "";
 
   /*
@@ -4093,17 +4095,17 @@ function canonicalRelationshipEvidence(actor, target) {
    * Backstory/extra remain character-writing canon for the AI, but are NOT
    * allowed to mechanically assign a relationship to another target.
    */
-  return connectionCanonSnippetAbout(actor, target, 2200);
+  return connectionCanonSnippetAbout(w, actor, target, 2200);
 }
 
 function inferCanonicalRelationshipBaseline(w, actor, target) {
   if (!w || !actor || !target || actor.id === target.id) return null;
 
-  const evidence = canonicalRelationshipEvidence(actor, target);
+  const evidence = canonicalRelationshipEvidence(w, actor, target);
   const low = evidence.toLowerCase();
-  const cue = connectionRelationshipCue(actor, target);
+  const cue = connectionRelationshipCue(w, actor, target);
   const factionRivalry = factionRivalryActiveBetween(actor, target);
-  const exactBond = exactConnectionBondLabel(actor, target);
+  const exactBond = exactConnectionBondLabel(w, actor, target);
   const exactBondLow = String(exactBond || "").toLowerCase();
   const exactBest = /legjobb bar[aá]t|best friend/.test(exactBondLow);
   const exactClose = /közeli bar[aá]t|close friend/.test(exactBondLow);
@@ -4644,26 +4646,15 @@ function explicitNamedCharacterIdsInText(w, txt, authorId = "") {
   socialProfiles(w).forEach((person) => {
     if (!person || !person.id || person.id === authorId) return;
 
-    const aliases = strictConnectionTargetAliases(person)
-      .map((alias) => String(alias || "").trim())
-      .filter((alias) => alias.length >= 4);
-
-    const username = String(person.username || "").trim();
-    if (username) {
-      aliases.push(`@${username}`);
-    }
-
-    for (const alias of [...new Set(aliases)]) {
-      const escaped = regexEscapeLiteral(alias);
-      const re = new RegExp(
-        `(^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`,
-        "iu"
-      );
-
-      if (re.test(source)) {
-        ids.add(person.id);
-        break;
-      }
+    if (
+      textExplicitlyMentionsCharacter(
+        w,
+        source,
+        person,
+        { relationshipOnly: false }
+      )
+    ) {
+      ids.add(person.id);
     }
   });
 
@@ -9972,7 +9963,7 @@ function explicitPositivePersonalOverride(w, actorId, targetId) {
   const target = charById(w, targetId);
   const rel = effectiveRelationshipForBehavior(w, actorId, targetId) || {};
   const tier = relationshipFilterTier(rel);
-  const cue = actor && target ? connectionRelationshipCue(actor, target) : {};
+  const cue = actor && target ? connectionRelationshipCue(w, actor, target) : {};
 
   return Boolean(
     tier === "good" ||
@@ -10011,7 +10002,7 @@ function connectionsCommentToneMismatch(
   const target = charById(w, targetId);
   if (!actor || !target) return false;
 
-  const cue = connectionRelationshipCue(actor, target);
+  const cue = connectionRelationshipCue(w, actor, target);
   if (!cue || !cue.snippet) return false;
 
   const rel = effectiveRelationshipForBehavior(w, actorId, targetId) || {};
@@ -11456,38 +11447,303 @@ function regexEscapeLiteral(value) {
     .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function canonTargetAliases(target) {
-  if (!target) return [];
+/* -------------------------------------------------------------------------
+   CANONICAL CHARACTER IDENTITY RESOLUTION — v96
 
+   Character identity is ID-based, never raw-string based. Full names,
+   first+last forms with omitted middle names, explicit nicknames/aliases,
+   nickname+surnames and @handles all resolve back to one canonical entity.
+   Ambiguous loose matches intentionally resolve to null instead of guessing.
+   ------------------------------------------------------------------------- */
+function normalizeCharacterIdentityText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[’`]/g, "'")
+    .replace(/[‐‑‒–—]/g, "-")
+    .replace(/^[\s"'“”‘’]+|[\s"'“”‘’.,:;!?]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function characterIdentityNicknameParts(person) {
+  if (!person) return [];
+
+  const rawValues = [
+    person.nick,
+    person.nickname,
+    person.aliases,
+    person.alias,
+    person.aka,
+    person.alsoKnownAs,
+  ];
+
+  const out = [];
+  const push = (value) => {
+    String(value || "")
+      .split(/[,/|;]/)
+      .map((part) => part.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .forEach((part) => {
+        if (!out.some((old) => normalizeCharacterIdentityText(old) === normalizeCharacterIdentityText(part))) {
+          out.push(part);
+        }
+      });
+  };
+
+  rawValues.forEach((value) => {
+    if (Array.isArray(value)) value.forEach(push);
+    else push(value);
+  });
+
+  return out;
+}
+
+function characterIdentityAliasRows(person) {
+  if (!person) return [];
+
+  const full = String(person.name || "").replace(/\s+/g, " ").trim();
+  const words = full.split(/\s+/).filter(Boolean);
+  const first = words[0] || "";
+  const surname = words.length >= 2 ? words[words.length - 1] : "";
+  const firstLast = first && surname ? `${first} ${surname}` : "";
+  const username = String(person.username || "").trim();
+  const nickParts = characterIdentityNicknameParts(person);
+  const rows = [];
+
+  const push = (kind, value, score) => {
+    const clean = String(value || "").replace(/\s+/g, " ").trim();
+    const norm = normalizeCharacterIdentityText(clean);
+    if (!clean || !norm) return;
+    if (rows.some((row) => row.kind === kind && row.norm === norm)) return;
+    rows.push({ kind, value: clean, norm, score });
+  };
+
+  push("full", full, 900);
+  push("firstLast", firstLast, 860);
+  if (username) {
+    push("username", username.replace(/^@+/, ""), 950);
+    push("handle", `@${username.replace(/^@+/, "")}`, 960);
+  }
+
+  nickParts.forEach((nick) => {
+    push("nickname", nick, 820);
+    if (surname && !normalizeCharacterIdentityText(nick).includes(normalizeCharacterIdentityText(surname))) {
+      push("nicknameSurname", `${nick} ${surname}`, 880);
+    }
+  });
+
+  push("first", first, 650);
+  push("surname", surname, 300);
+
+  return rows;
+}
+
+function characterIdentityAliases(person, options = {}) {
+  const includeFirst = options.includeFirst !== false;
+  const includeSurname = options.includeSurname === true;
+  const strongOnly = options.strongOnly === true;
+
+  return characterIdentityAliasRows(person)
+    .filter((row) => {
+      if (!includeFirst && row.kind === "first") return false;
+      if (!includeSurname && row.kind === "surname") return false;
+      if (strongOnly && (row.kind === "first" || row.kind === "surname")) return false;
+      return true;
+    })
+    .map((row) => row.value)
+    .filter((value, index, arr) =>
+      arr.findIndex((other) => normalizeCharacterIdentityText(other) === normalizeCharacterIdentityText(value)) === index
+    );
+}
+
+function characterIdentityCandidates(w, options = {}) {
+  if (!w) return [];
+  const relationshipOnly = options.relationshipOnly === true;
+  const base = relationshipOnly
+    ? allSubjects(w)
+    : socialProfiles(w);
+
+  return (base || [])
+    .filter((person) => person && person.id)
+    .filter((person, index, arr) =>
+      arr.findIndex((other) => other && String(other.id) === String(person.id)) === index
+    );
+}
+
+function identityFirstNameCompatible(rawFirst, canonicalFirst) {
+  const a = normalizeCharacterIdentityText(rawFirst);
+  const b = normalizeCharacterIdentityText(canonicalFirst);
+  if (!a || !b) return false;
+  if (a === b) return true;
+
+  /* Safe familiar-name fallback: Angel <-> Angela, Alex <-> Alexa, etc.
+     It is accepted only after surname matching (or as a globally unique
+     one-word fallback below), and never when several characters tie. */
+  if (
+    Math.min(a.length, b.length) >= 4 &&
+    Math.abs(a.length - b.length) <= 2 &&
+    (a.startsWith(b) || b.startsWith(a))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function resolveCharacterIdentity(w, rawName, options = {}) {
+  const raw = String(rawName || "").replace(/\s+/g, " ").trim();
+  if (!w || !raw) return null;
+
+  const people = characterIdentityCandidates(w, options);
+  if (!people.length) return null;
+
+  const exactId = people.find((person) => String(person.id) === raw);
+  if (exactId) {
+    return { id: exactId.id, person: exactId, score: 1000, reason: "exact-id", alias: raw };
+  }
+
+  const norm = normalizeCharacterIdentityText(raw);
+  if (!norm) return null;
+  const rawWords = norm.replace(/^@/, "").split(/\s+/).filter(Boolean);
+  const matches = [];
+
+  people.forEach((person) => {
+    const rows = characterIdentityAliasRows(person);
+    let best = null;
+
+    rows.forEach((row) => {
+      if (row.norm !== norm) return;
+      if (!best || row.score > best.score) {
+        best = { id: person.id, person, score: row.score, reason: `exact-${row.kind}`, alias: row.value };
+      }
+    });
+
+    const full = String(person.name || "").replace(/\s+/g, " ").trim();
+    const words = full.split(/\s+/).filter(Boolean);
+    const canonicalFirst = words[0] || "";
+    const canonicalSurname = words.length >= 2 ? words[words.length - 1] : "";
+
+    /* Middle-name omission + safe familiar first-name variation.
+       Example: "Angel Silverman" -> "Angela Mallory Silverman". */
+    if (rawWords.length >= 2 && canonicalSurname) {
+      const rawFirst = rawWords[0];
+      const rawSurname = rawWords[rawWords.length - 1];
+      if (
+        normalizeCharacterIdentityText(rawSurname) === normalizeCharacterIdentityText(canonicalSurname) &&
+        identityFirstNameCompatible(rawFirst, canonicalFirst)
+      ) {
+        const score = normalizeCharacterIdentityText(rawFirst) === normalizeCharacterIdentityText(canonicalFirst)
+          ? 855
+          : 780;
+        if (!best || score > best.score) {
+          best = {
+            id: person.id,
+            person,
+            score,
+            reason: score === 855 ? "first-last-middle-omitted" : "familiar-first-plus-surname",
+            alias: raw,
+          };
+        }
+      }
+    }
+
+    /* One-word first-name/nickname matching is deliberately weaker and is
+       returned only if exactly one active entity wins at the top score. */
+    if (rawWords.length === 1 && canonicalFirst && identityFirstNameCompatible(rawWords[0], canonicalFirst)) {
+      const score = normalizeCharacterIdentityText(rawWords[0]) === normalizeCharacterIdentityText(canonicalFirst)
+        ? 640
+        : 520;
+      if (!best || score > best.score) {
+        best = {
+          id: person.id,
+          person,
+          score,
+          reason: score === 640 ? "unique-first-name" : "unique-familiar-first-name",
+          alias: raw,
+        };
+      }
+    }
+
+    if (best) matches.push(best);
+  });
+
+  if (!matches.length) return null;
+  matches.sort((a, b) => b.score - a.score);
+  const topScore = matches[0].score;
+  const winners = matches.filter((match) => match.score === topScore);
+  const uniqueIds = [...new Set(winners.map((match) => String(match.id)))];
+
+  if (uniqueIds.length !== 1) {
+    return options.returnAmbiguous
+      ? {
+          id: "",
+          person: null,
+          score: topScore,
+          reason: "ambiguous",
+          alias: raw,
+          ambiguous: true,
+          candidateIds: uniqueIds,
+        }
+      : null;
+  }
+
+  return winners[0];
+}
+
+function textExplicitlyMentionsCharacter(w, text, target, options = {}) {
+  if (!w || !target || !target.id || !text) return false;
+  const source = String(text || "");
+
+  const aliases = characterIdentityAliases(target, {
+    includeFirst: true,
+    includeSurname: false,
+    strongOnly: false,
+  })
+    .map((alias) => String(alias || "").trim())
+    .filter((alias) => alias.length >= 3);
+
+  for (const alias of aliases) {
+    const escaped = regexEscapeLiteral(alias);
+    const re = new RegExp(
+      `(^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`,
+      "iu"
+    );
+    if (!re.test(source)) continue;
+    const resolved = resolveCharacterIdentity(w, alias, options);
+    if (resolved && String(resolved.id) === String(target.id)) return true;
+  }
+
+  /* Detect safe first-name variants with the correct surname even if that
+     shortening was not explicitly stored as a nickname. */
   const full = String(target.name || "").replace(/\s+/g, " ").trim();
   const words = full.split(/\s+/).filter(Boolean);
-  const surname = words.length > 1 ? words[words.length - 1] : "";
-  const firstLast = words.length > 1 ? `${words[0]} ${surname}` : "";
-
-  const nickParts = String(target.nick || target.nickname || "")
-    .split(/[,/|;]/)
-    .map((part) => part.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-
-  const nicknameSurname = nickParts
-    .filter((nick) => surname && !nick.toLowerCase().includes(surname.toLowerCase()))
-    .map((nick) => `${nick} ${surname}`);
-
-  return [
-    full,
-    firstLast,
-    target.username,
-    target.username ? `@${target.username}` : "",
-    ...nickParts,
-    ...nicknameSurname,
-    words[0],
-    surname,
-  ]
-    .map((value) => String(value || "").replace(/\s+/g, " ").trim())
-    .filter((value) => value.length >= 3)
-    .filter((value, index, arr) =>
-      arr.findIndex((other) => other.toLowerCase() === value.toLowerCase()) === index
+  const surname = words.length >= 2 ? words[words.length - 1] : "";
+  if (surname) {
+    const escapedSurname = regexEscapeLiteral(surname);
+    const re = new RegExp(
+      `(?:^|[^\\p{L}\\p{N}_])([\\p{L}][\\p{L}'’\\-]{2,})\\s+${escapedSurname}(?=$|[^\\p{L}\\p{N}_])`,
+      "giu"
     );
+    let match;
+    while ((match = re.exec(source))) {
+      const candidateText = `${match[1]} ${surname}`;
+      const resolved = resolveCharacterIdentity(w, candidateText, options);
+      if (resolved && String(resolved.id) === String(target.id)) return true;
+      if (re.lastIndex === match.index) re.lastIndex += 1;
+    }
+  }
+
+  return false;
+}
+
+function canonTargetAliases(target) {
+  return characterIdentityAliases(target, {
+    includeFirst: true,
+    includeSurname: true,
+    strongOnly: false,
+  });
 }
 
 function canonTargetEvidence(actor, target, maxSnippets = 3) {
@@ -11558,41 +11814,11 @@ function ownStorySnippetAbout(actor, target) {
    fear, loyalty, etc. Other characters still do not magically know it.
    ------------------------------------------------------------------------- */
 function strictConnectionTargetAliases(target) {
-  if (!target) return [];
-
-  const full = String(target.name || "").replace(/\s+/g, " ").trim();
-  const words = full.split(/\s+/).filter(Boolean);
-  const surname = words.length >= 2 ? words[words.length - 1] : "";
-  const firstLast =
-    words.length >= 2
-      ? `${words[0]} ${surname}`
-      : "";
-
-  const nickParts = String(target.nick || target.nickname || "")
-    .split(/[,/|;]/)
-    .map((part) => part.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-
-  const nicknameSurname = nickParts
-    .filter((nick) => surname && !nick.toLowerCase().includes(surname.toLowerCase()))
-    .map((nick) => `${nick} ${surname}`);
-
-  return [
-    full,
-    firstLast,
-    target.username,
-    target.username ? `@${target.username}` : "",
-    ...nickParts,
-    ...nicknameSurname,
-  ]
-    .map((value) => String(value || "").replace(/\s+/g, " ").trim())
-    .filter((value) => value.length >= 3)
-    .filter(
-      (value, index, arr) =>
-        arr.findIndex(
-          (other) => other.toLowerCase() === value.toLowerCase()
-        ) === index
-    );
+  return characterIdentityAliases(target, {
+    includeFirst: false,
+    includeSurname: false,
+    strongOnly: true,
+  });
 }
 
 function normalizeConnectionSubject(value) {
@@ -11604,17 +11830,13 @@ function normalizeConnectionSubject(value) {
     .toLowerCase();
 }
 
-function connectionSubjectIsExactTarget(subject, target) {
+function connectionSubjectIsExactTarget(w, subject, target) {
   if (!subject || !target) return false;
 
   const raw = normalizeConnectionSubject(subject);
   if (!raw) return false;
 
-  /*
-   * These are group/generic subjects, NOT the named target:
-   * "Anyone who is close to Angela Silverman — Enemy"
-   * must not become Feng -> Angela = Enemy.
-   */
+  /* Generic/group subjects are NOT the named target. */
   if (
     /\b(?:anyone|anybody|everyone|everybody|people|person|friends?\s+of|close\s+to|anyone\s+who|those\s+who|students?\s*&?\s*senseis?|dojo\s+students?|dojo\s+senseis?|members?|mafia|team|club|organization)\b/i.test(
       raw
@@ -11623,26 +11845,22 @@ function connectionSubjectIsExactTarget(subject, target) {
     return false;
   }
 
-  const aliases = strictConnectionTargetAliases(target).map((alias) =>
-    normalizeConnectionSubject(alias)
-  );
+  const direct = resolveCharacterIdentity(w, subject, { relationshipOnly: true });
+  if (direct && String(direct.id) === String(target.id)) return true;
 
-  if (aliases.includes(raw)) return true;
-
-  /*
-   * Explicit multi-name subject:
-   * "Johnny Lawrence, and Daniel LaRusso — senseis"
-   * Relation applies to both named people.
-   */
-  const parts = raw
+  /* Explicit multi-name subject: each name resolves independently to ID. */
+  const parts = String(subject || "")
     .split(/\s*(?:,|&|\band\b|\bés\b|\+)\s*/i)
-    .map((part) => normalizeConnectionSubject(part))
+    .map((part) => part.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
-  return parts.some((part) => aliases.includes(part));
+  return parts.some((part) => {
+    const resolved = resolveCharacterIdentity(w, part, { relationshipOnly: true });
+    return resolved && String(resolved.id) === String(target.id);
+  });
 }
 
-function connectionRelationshipEntriesAbout(actor, target) {
+function connectionRelationshipEntriesAbout(w, actor, target) {
   if (!actor || !target) return [];
 
   const source = String(actor.connections || "")
@@ -11662,7 +11880,7 @@ function connectionRelationshipEntriesAbout(actor, target) {
   const found = [];
 
   const add = (subject, relation, raw) => {
-    if (!connectionSubjectIsExactTarget(subject, target)) return;
+    if (!connectionSubjectIsExactTarget(w, subject, target)) return;
 
     const cleanRelation = String(relation || "")
       .replace(/^\s*(?:relationship|kapcsolat)\s*:\s*/i, "")
@@ -11701,29 +11919,19 @@ function connectionRelationshipEntriesAbout(actor, target) {
      * "Terry Silver: Head Sensei / Mentor"
      */
     const colon = line.match(/^([^:]{2,160})\s*:\s*(.+)$/);
-    if (colon && connectionSubjectIsExactTarget(colon[1], target)) {
+    if (colon && connectionSubjectIsExactTarget(w, colon[1], target)) {
       add(colon[1], colon[2], line);
       return;
     }
 
     /*
      * Narrative target-led entry:
-     * "Tory Nichols. The obsession. He still calls her his..."
-     * Only accepted when the ROW itself starts with this exact target alias.
+     * "Tory Nichols. The obsession..." / "Angel Silverman. Ride or die."
+     * Resolve the leading subject to the canonical character ID.
      */
-    for (const alias of aliases) {
-      const escaped = regexEscapeLiteral(alias);
-      const lead = line.match(
-        new RegExp(
-          `^\\s*${escaped}\\s*[.:-]\\s*(.+)$`,
-          "i"
-        )
-      );
-
-      if (lead) {
-        add(alias, lead[1], line);
-        break;
-      }
+    const lead = line.match(/^(.{2,180}?)\s*[.:-]\s*(.+)$/);
+    if (lead && connectionSubjectIsExactTarget(w, lead[1], target)) {
+      add(lead[1], lead[2], line);
     }
   });
 
@@ -11761,7 +11969,7 @@ function connectionRelationshipEntriesAbout(actor, target) {
       if (
         activeCategory &&
         namesPart &&
-        connectionSubjectIsExactTarget(namesPart, target)
+        connectionSubjectIsExactTarget(w, namesPart, target)
       ) {
         add(target.name, activeCategory, line);
       }
@@ -11779,7 +11987,7 @@ function connectionRelationshipEntriesAbout(actor, target) {
 
     if (
       activeCategory &&
-      connectionSubjectIsExactTarget(line, target)
+      connectionSubjectIsExactTarget(w, line, target)
     ) {
       add(target.name, activeCategory, line);
     }
@@ -11824,9 +12032,11 @@ function connectionRelationshipEntriesAbout(actor, target) {
       block = headMatch[2].trim();
     }
 
-    const lowerBlock = block.toLowerCase();
-    const hasExactTargetName = aliases.some((alias) =>
-      lowerBlock.includes(String(alias || "").toLowerCase())
+    const hasExactTargetName = textExplicitlyMentionsCharacter(
+      w,
+      block,
+      target,
+      { relationshipOnly: true }
     );
     if (!hasExactTargetName) return;
 
@@ -11837,7 +12047,7 @@ function connectionRelationshipEntriesAbout(actor, target) {
     const subjectLead = block.match(/^(.{2,220}?)\.\s+(.+)$/);
     if (
       subjectLead &&
-      connectionSubjectIsExactTarget(subjectLead[1], target)
+      connectionSubjectIsExactTarget(w, subjectLead[1], target)
     ) {
       add(
         subjectLead[1],
@@ -11853,7 +12063,7 @@ function connectionRelationshipEntriesAbout(actor, target) {
     const dash = block.match(/^(.+?)\s*[—–-]\s*(.+)$/);
     if (
       dash &&
-      connectionSubjectIsExactTarget(dash[1], target)
+      connectionSubjectIsExactTarget(w, dash[1], target)
     ) {
       add(
         dash[1],
@@ -11914,8 +12124,8 @@ function connectionRelationshipEntriesAbout(actor, target) {
   return found.slice(0, 8);
 }
 
-function exactConnectionBondLabel(actor, target) {
-  const entries = connectionRelationshipEntriesAbout(actor, target);
+function exactConnectionBondLabel(w, actor, target) {
+  const entries = connectionRelationshipEntriesAbout(w, actor, target);
   const text = entries
     .map((entry) => entry.relation)
     .join(" | ")
@@ -11990,8 +12200,8 @@ function exactConnectionBondLabel(actor, target) {
   return labels.slice(0, 3).join(" / ");
 }
 
-function connectionCanonSnippetAbout(actor, target, maxChars = 1800) {
-  const entries = connectionRelationshipEntriesAbout(actor, target);
+function connectionCanonSnippetAbout(w, actor, target, maxChars = 1800) {
+  const entries = connectionRelationshipEntriesAbout(w, actor, target);
   if (!entries.length) return "";
 
   /*
@@ -12008,8 +12218,8 @@ function connectionCanonSnippetAbout(actor, target, maxChars = 1800) {
     .slice(0, Math.max(200, Number(maxChars) || 1800));
 }
 
-function connectionRelationshipCue(actor, target) {
-  const snippet = connectionCanonSnippetAbout(actor, target, 1800);
+function connectionRelationshipCue(w, actor, target) {
+  const snippet = connectionCanonSnippetAbout(w, actor, target, 1800);
   const low = snippet.toLowerCase();
 
   return {
@@ -12106,7 +12316,7 @@ function romanceOrientationState(w, actorId, targetId) {
   const targetGender = characterGenderAttractionClass(target);
   const orientation = characterOrientationAttractionClass(actor);
   const explicitTargetException = Boolean(
-    connectionRelationshipCue(actor, target).romantic
+    connectionRelationshipCue(w, actor, target).romantic
   );
 
   /* v80 HARD IDENTITY RULE:
@@ -12209,7 +12419,7 @@ function relationshipRomanceActive(w, actorId, targetId, rel = null) {
 
   return Boolean(
     bondLooksRomantic(rel || getRel(w, actorId, targetId)) ||
-    (actor && target && connectionRelationshipCue(actor, target).romantic)
+    (actor && target && connectionRelationshipCue(w, actor, target).romantic)
   );
 }
 
@@ -12221,7 +12431,7 @@ function relationshipCrushActive(w, actorId, targetId, rel = null) {
   if (!actor || !target) return false;
 
   const r = rel || getRel(w, actorId, targetId) || {};
-  const cue = connectionRelationshipCue(actor, target);
+  const cue = connectionRelationshipCue(w, actor, target);
   const text = [
     r.bond,
     r.type,
@@ -12245,7 +12455,7 @@ function relationshipSecretCrushActive(w, actorId, targetId, rel = null) {
   const target = charById(w, targetId);
   if (!actor || !target) return false;
   const r = rel || getRel(w, actorId, targetId) || {};
-  const cue = connectionRelationshipCue(actor, target);
+  const cue = connectionRelationshipCue(w, actor, target);
   const text = [r.bond, r.type, r.hidden, r.mood, cue && cue.snippet]
     .filter(Boolean)
     .join(" ")
@@ -12269,7 +12479,7 @@ function flirtPermissionState(w, actorId, targetId, rel = null) {
   const naturallyFlirty = Boolean(actor && characterIsFlirty(actor));
   const crushActive = Boolean(actor && target && relationshipCrushActive(w, actorId, targetId, r));
   const secretCrush = crushActive && relationshipSecretCrushActive(w, actorId, targetId, r);
-  const cue = actor && target ? connectionRelationshipCue(actor, target) : {};
+  const cue = actor && target ? connectionRelationshipCue(w, actor, target) : {};
   const bondText = String(r.bond || r.type || "").toLowerCase();
   const family = Boolean(
     cue && cue.family ||
@@ -12855,6 +13065,7 @@ function exactPairCanonCard(w, actorId, targetId) {
     directedTo: targetId,
     connectionsEntry:
       connectionCanonSnippetAbout(
+        w,
         actor,
         target,
         1800
@@ -13925,7 +14136,7 @@ function relationshipBehaviorCard(
     "";
 
   const parts = [];
-  const connectionCue = connectionRelationshipCue(actor, target);
+  const connectionCue = connectionRelationshipCue(w, actor, target);
   const romanceState = romanceOrientationState(w, actorId, targetId);
   const romanceAllowed = !romanceState.blocked;
   const flirtState = flirtPermissionState(w, actorId, targetId, rel);
@@ -16555,14 +16766,14 @@ function migrate(w) {
    * v94 one-time canon repair for stale impossible relationship states.
    * Example: both character sheets say Best Friend but old runtime says Hate.
    */
-  if (Number(w.relationshipCanonVersion || 0) < 5) {
+  if (Number(w.relationshipCanonVersion || 0) < RELATIONSHIP_CANON_VERSION) {
     /*
-     * v95 reparses target aliases (e.g. Angela Mallory Silverman nick "Angel"
-     * correctly matches "Angel Silverman" in Tory's Connections) and repairs
-     * stale contradictory live relationships once.
+     * v96 uses canonical ID resolution for full names, omitted middle names,
+     * explicit nicknames/handles and safe unique familiar-name+surname forms.
+     * Reconcile old live edges so Tory/Angel-style stale states are repaired.
      */
     reconcileLiveRelationshipsWithStrongCanon(w, true);
-    w.relationshipCanonVersion = 5;
+    w.relationshipCanonVersion = RELATIONSHIP_CANON_VERSION;
   }
 
   // képhivatkozások migrációja: a tényleges fájl marad külön tárolva, itt csak a stabil metaél marad.
@@ -24443,7 +24654,7 @@ function commentTargetRelationshipMatrix(w, cast, post) {
     .slice(0, 24)
     .map((actor) => {
       const rel = effectiveRelationshipForBehavior(w, actor.id, post.authorId) || {};
-      const cue = connectionCanonSnippetAbout(actor, target, 460);
+      const cue = connectionCanonSnippetAbout(w, actor, target, 460);
       const rivalry = factionRivalryActiveBetween(actor, target);
       const tier = relationshipFilterTier(rel);
 
@@ -40045,7 +40256,7 @@ function compactGossipActorContext(w, rumor, actorId) {
   const subjectLines = (rumor.subjectIds || []).slice(0, 4).map((sid) => {
     const subject = charById(w, sid);
     const rel = getRel(w, actorId, sid) || {};
-    const connectionCanon = subject ? connectionCanonSnippetAbout(actor, subject, 520) : "";
+    const connectionCanon = subject ? connectionCanonSnippetAbout(w, actor, subject, 520) : "";
     return `${subject ? subject.name : sid}: relationship=${Number(rel.score) || 0}${rel.bond ? `, bond=${rel.bond}` : ""}${connectionCanon ? ` | PRIVATE CONNECTIONS CANON: ${connectionCanon}` : ""}`;
   });
   return [
