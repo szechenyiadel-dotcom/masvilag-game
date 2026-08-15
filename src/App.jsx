@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v21 — RUNTIME PERFORMANCE ONLY — 20260815_2110 */
+/* MÁSVILÁG BUILD v22 — RESTART PERFORMANCE ONLY — 20260815_2102 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -4636,14 +4636,35 @@ function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
   if (!w) return;
 
   /*
-   * Re-read the character sheets at restart so edits to identity/Connections
-   * immediately affect the next run. Legacy accidental manual locks are also
-   * released here for worlds that reach restart before a normal migration save.
+   * PERFORMANCE v22 — RESTART CANON FAST PATH
+   *
+   * Restart used to rebuild EVERY actor × target canonical relationship even
+   * when no character name, alias, Connections or faction field had changed.
+   * The identity resolver is intentionally rich, so that O(n²) rebuild can be
+   * extremely expensive in a large cast.
+   *
+   * Character/profile edits already refresh and persist this fingerprint.
+   * At restart we only pay the full rebuild when those canonical inputs really
+   * changed (or an old world still needs the migration repair).
    */
-  if (Number(w.relationshipCanonVersion || 0) < RELATIONSHIP_CANON_VERSION) {
+  const canonVersion =
+    Number(w.relationshipCanonVersion || 0);
+
+  if (canonVersion < RELATIONSHIP_CANON_VERSION) {
     releaseLegacyAccidentalRelationshipManualLocks(w);
   }
-  refreshCanonicalRelationshipBaselines(w);
+
+  const currentCanonFingerprint =
+    relationshipCanonInputFingerprint(w);
+
+  const canonInputsChanged =
+    !w.relationshipCanonFingerprint ||
+    w.relationshipCanonFingerprint !== currentCanonFingerprint ||
+    canonVersion < RELATIONSHIP_CANON_VERSION;
+
+  if (canonInputsChanged) {
+    refreshCanonicalRelationshipBaselines(w);
+  }
 
   const store = ensureRelationshipBaselineStore(w);
   const activeIds = new Set(allSubjects(w).map((person) => String(person.id)));
@@ -18651,7 +18672,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v15-lightweight-sync";
+const BUILD_VERSION = "v22-restart-performance";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -38335,10 +38356,49 @@ function freshSimulationRuntime(at = now()) {
 
 
 function restorePostedAlbumImagesForFreshRun(w) {
-  if (!w || !Array.isArray(w.posts)) return 0;
+  if (!w || !Array.isArray(w.posts) || !w.posts.length) return 0;
+
+  /*
+   * PERFORMANCE v22:
+   * The old restart path called character.album.some(...) for every historical
+   * image post. With many old posts/albums that becomes posts × album-size.
+   * Build the existing image-id Sets once and keep exactly the same restore
+   * behavior in linear time.
+   */
+  const charactersById = new Map();
+  const albumIdsByCharacter = new Map();
+
+  for (const character of (w.chars || [])) {
+    if (!character || !character.id) continue;
+
+    charactersById.set(character.id, character);
+
+    if (!Array.isArray(character.album)) {
+      character.album = [];
+    }
+
+    const ids = new Set();
+
+    for (const item of character.album) {
+      if (!item) continue;
+      const existingId =
+        imageIdOf(
+          item.imageId
+            ? imageRef(item.imageId)
+            : item.src
+        );
+      if (existingId) ids.add(existingId);
+    }
+
+    albumIdsByCharacter.set(
+      character.id,
+      ids
+    );
+  }
+
   let restored = 0;
 
-  w.posts.forEach((post) => {
+  for (const post of w.posts) {
     if (
       !post ||
       !post.authorId ||
@@ -38346,44 +38406,105 @@ function restorePostedAlbumImagesForFreshRun(w) {
       isMediaAccount(w, post.authorId) ||
       !(post.imageId || post.image)
     ) {
-      return;
+      continue;
     }
 
-    const character = charById(w, post.authorId);
-    if (!character) return;
-    if (!Array.isArray(character.album)) character.album = [];
+    const character =
+      charactersById.get(post.authorId) ||
+      charById(w, post.authorId);
 
-    const imageRefValue = post.imageId ? imageRef(post.imageId) : post.image;
-    const imageId = imageIdOf(imageRefValue);
-    const alreadyThere = character.album.some((item) => {
-      if (!item) return false;
-      const existingId = imageIdOf(item.imageId ? imageRef(item.imageId) : item.src);
-      return Boolean(imageId && existingId === imageId);
-    });
+    if (!character) continue;
 
-    if (alreadyThere) return;
+    if (!Array.isArray(character.album)) {
+      character.album = [];
+    }
 
-    const people = String(post.imagePeopleNote || "").trim();
-    const manual = String(post.imageManualNote || "").trim();
-    const vision = String(
-      post.imageVision ||
-      (!manual && !people ? post.imageDescription : "") ||
-      ""
-    ).trim();
+    let knownIds =
+      albumIdsByCharacter.get(post.authorId);
+
+    if (!knownIds) {
+      knownIds = new Set();
+      for (const item of character.album) {
+        if (!item) continue;
+        const existingId =
+          imageIdOf(
+            item.imageId
+              ? imageRef(item.imageId)
+              : item.src
+          );
+        if (existingId) knownIds.add(existingId);
+      }
+      albumIdsByCharacter.set(
+        post.authorId,
+        knownIds
+      );
+    }
+
+    const imageRefValue =
+      post.imageId
+        ? imageRef(post.imageId)
+        : post.image;
+
+    const imageId =
+      imageIdOf(imageRefValue);
+
+    if (
+      imageId &&
+      knownIds.has(imageId)
+    ) {
+      continue;
+    }
+
+    const people =
+      String(
+        post.imagePeopleNote || ""
+      ).trim();
+
+    const manual =
+      String(
+        post.imageManualNote || ""
+      ).trim();
+
+    const vision =
+      String(
+        post.imageVision ||
+        (!manual && !people
+          ? post.imageDescription
+          : "") ||
+        ""
+      ).trim();
 
     character.album.push({
-      id: post.sourceAlbumItemId || uid(),
+      id:
+        post.sourceAlbumItemId ||
+        uid(),
       imageId: imageId || "",
-      src: imageId ? "" : String(post.image || ""),
+      src:
+        imageId
+          ? ""
+          : String(post.image || ""),
       who: people,
       note: manual,
       vision,
-      analyzedAt: Number(post.imageAnalyzedAt || 0) || (vision ? Number(post.ts || now()) : 0),
-      restoredFromPostId: post.id,
+      analyzedAt:
+        Number(
+          post.imageAnalyzedAt || 0
+        ) ||
+        (
+          vision
+            ? Number(post.ts || now())
+            : 0
+        ),
+      restoredFromPostId:
+        post.id,
     });
 
+    if (imageId) {
+      knownIds.add(imageId);
+    }
+
     restored += 1;
-  });
+  }
 
   return restored;
 }
@@ -38417,10 +38538,20 @@ function freshRunPersistentImageIds(w) {
     if (!profile || typeof profile !== "object") return;
     add(profile.avatar);
     add(profile.cover);
-    albumOf(profile).forEach((item) => {
-      if (!item) return;
-      add(item.imageId ? imageRef(item.imageId) : item.src);
-    });
+
+    const album =
+      Array.isArray(profile.album)
+        ? profile.album
+        : albumOf(profile);
+
+    for (const item of album) {
+      if (!item) continue;
+      add(
+        item.imageId
+          ? imageRef(item.imageId)
+          : item.src
+      );
+    }
   };
 
   scanProfile(w && w.player);
