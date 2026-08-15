@@ -53164,11 +53164,12 @@ export default function App() {
   const [world, setWorld] = useState(null);
   const [meId, setMeId] = useState(null);
   const [tab, setTab] = useState("feed");
-  const [bootReady, setBootReady] = useState(false);
+  const [bootReady, setBootReady] = useState(true);
   const [chatId, setChatId] = useState(null);
   const [sceneId, setSceneId] = useState(null);
   const [err, setErr] = useState("");
   const [media, setMedia] = useState({});
+  const [mediaLoadEpoch, setMediaLoadEpoch] = useState(0);
   const wRef = useRef(null);
   const timer = useRef(null);
   const mediaRef = useRef({});
@@ -53389,11 +53390,6 @@ export default function App() {
     );
 
   useEffect(() => { loadAuto().then(setAutoCfg); }, []);
-
-  useEffect(() => {
-    const t = setTimeout(() => setBootReady(true), 120);
-    return () => clearTimeout(t);
-  }, []);
 
   const [detail, setDetailState] = useState(DETAIL);
   useEffect(() => { loadDetail().then((v) => { DETAIL = v; setDetailState(v); }); }, []);
@@ -53889,6 +53885,7 @@ const signOut = useCallback(async () => {
           loaded
         );
       mediaReady.current = true;
+      setMediaLoadEpoch((n) => n + 1);
     }).catch((e) => {
       if (!alive) return;
 
@@ -53898,6 +53895,7 @@ const signOut = useCallback(async () => {
       );
 
       mediaReady.current = true;
+      setMediaLoadEpoch((n) => n + 1);
     });
 
     return () => {
@@ -53916,7 +53914,7 @@ const signOut = useCallback(async () => {
         normalized.media
       );
     setWorld(normalized.world);
-  }, [world ? world.code : null, world ? world.rev : 0, code, media]);
+  }, [code, mediaLoadEpoch]);
 
 
   /*
@@ -56169,6 +56167,11 @@ const signOut = useCallback(async () => {
 
   useEffect(() => { if (err) { const t = setTimeout(() => setErr(""), 9000); return () => clearTimeout(t); } }, [err]);
 
+  useEffect(() => {
+    const activeId = tab === "scene" && sceneId ? sceneId : "";
+    setLiveUiActiveSceneId(activeId);
+  }, [tab, sceneId]);
+
   if (!bootReady) {
     return (
       <LangCtx.Provider value={langCtxValue}>
@@ -56199,7 +56202,6 @@ const signOut = useCallback(async () => {
   const me = (world.players && world.players[meId]) || blankPlayer(meId, "Névtelen", "jatekos");
   const view = { ...world, meId, player: me };
   view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
-  setLiveUiActiveSceneId(view.activeSceneId);
   viewRef.current = view;
   const activePopup = editLocked ? null : currentPopupEvent(view);
 
