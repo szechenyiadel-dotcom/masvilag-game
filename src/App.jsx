@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v29 — SOCIAL HOT PATH ARCHITECTURE FIX — 20260815_2230 */
+/* MÁSVILÁG BUILD v30 — SAFE BOOT + REAL LIVE WORLD TOGGLE — 20260815_2245 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -4115,7 +4115,7 @@ function relationshipCanonInputFingerprint(w) {
 /* v10 invariant marker: if this exact string is visible in deployed source,
    the stable runtime + relationship identity patch is the file being used. */
 const MASVILAG_RELATIONSHIP_PATCH = "v10-live-identity-20260815-1911";
-if (typeof console !== "undefined") console.info("[Másvilág] v29 social hot-path architecture fix loaded");
+if (typeof console !== "undefined") console.info("[Másvilág] v30 SAFE BOOT + real Live World toggle loaded");
 
 
 function ensureRelationshipBaselineStore(w) {
@@ -19261,7 +19261,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v29-social-hot-path-fix";
+const BUILD_VERSION = "v30-safe-boot-live-toggle";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -19569,49 +19569,119 @@ async function serverSaveWorldSerialized(worldJson, expectedSyncRev) {
 }
 /* ---------- END PERFORMANCE v13 AUTOSAVE ---------- */
 
-const AUTO = "masvilag:auto";
+const AUTO = "masvilag:auto:v30";
+
 /*
- * LIVE WORLD FIXED MODE
+ * v30 SAFE BOOT
  *
- * Mindig be van kapcsolva, gyors "live" ütemet használ.
- * Régi eszközön mentett "off" / ritkább érték sem írhatja ezt felül.
+ * Previous builds hard-wired the live world ON:
+ * - loadAuto() always returned on:true
+ * - saveAuto() always wrote on:true
+ * - changeAuto() ignored the requested value
+ * - the scheduler itself did not check auto.on
+ *
+ * That made it impossible to stop a heavy/stale background queue.
+ *
+ * New sessions therefore start with autonomous background simulation OFF.
+ * Manual AI actions still work. The player can enable the live world once the
+ * UI is stable, and the preference is then persisted under this new key.
  */
 const AUTO_DEFAULT = {
-  on: true,
-
-  /*
-   * Valóban élő háttérvilág:
-   * 0.25 perc = kb. 15 mp két AUTONÓM tartalmi kör között.
-   *
-   * Az AI queue saját token/rate-limit throttlingja ettől külön működik,
-   * tehát ha a providernek több pihenő kell, továbbra is biztonságosan vár.
-   */
-  every: Math.max(0.12, LIVE_WORLD_CONTENT_INTERVAL_MS / 60000),
+  on: false,
+  every: Math.max(
+    0.25,
+    LIVE_WORLD_CONTENT_INTERVAL_MS / 60000
+  ),
 };
 
-const LIVE_WORLD_MIN_ACTION_GAP_MS = 9000;
+const LIVE_WORLD_MIN_ACTION_GAP_MS = 12000;
 
 async function loadAuto() {
-  return {
-    ...AUTO_DEFAULT,
-  };
-}
+  try {
+    if (!hasStore) {
+      const raw = mem[AUTO];
 
-async function saveAuto() {
-  if (!hasStore) {
-    mem[AUTO] = {
+      if (raw && typeof raw === "object") {
+        return {
+          ...AUTO_DEFAULT,
+          on: raw.on === true,
+          every:
+            Number.isFinite(Number(raw.every))
+              ? Math.max(0.25, Number(raw.every))
+              : AUTO_DEFAULT.every,
+        };
+      }
+
+      return {
+        ...AUTO_DEFAULT,
+      };
+    }
+
+    const row =
+      await window.storage.get(
+        AUTO,
+        false
+      );
+
+    if (!row || !row.value) {
+      return {
+        ...AUTO_DEFAULT,
+      };
+    }
+
+    const parsed =
+      JSON.parse(row.value);
+
+    return {
+      ...AUTO_DEFAULT,
+      on:
+        parsed &&
+        parsed.on === true,
+      every:
+        parsed &&
+        Number.isFinite(Number(parsed.every))
+          ? Math.max(
+              0.25,
+              Number(parsed.every)
+            )
+          : AUTO_DEFAULT.every,
+    };
+  } catch (e) {
+    return {
       ...AUTO_DEFAULT,
     };
+  }
+}
 
+async function saveAuto(value) {
+  const next = {
+    ...AUTO_DEFAULT,
+    ...(value &&
+    typeof value === "object"
+      ? value
+      : {}),
+  };
+
+  next.on =
+    next.on === true;
+
+  next.every =
+    Number.isFinite(Number(next.every))
+      ? Math.max(
+          0.25,
+          Number(next.every)
+        )
+      : AUTO_DEFAULT.every;
+
+  if (!hasStore) {
+    mem[AUTO] = next;
     return true;
   }
 
   try {
     await window.storage.set(
       AUTO,
-      JSON.stringify(
-        AUTO_DEFAULT
-      ),
+      JSON.stringify(next),
       false
     );
 
@@ -31530,15 +31600,25 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
             <div className="handle mono">@{w.player.username}</div>
           </div>
 
-          {autoOn ? (
-            <span className="chip">
-              <span
-                className="dot"
-                style={{ display: "inline-block", marginRight: 5 }}
-              />
-              {tt("élő", "live")}
-            </span>
-          ) : null}
+          <span className="chip">
+            {autoOn ? (
+              <>
+                <span
+                  className="dot"
+                  style={{
+                    display: "inline-block",
+                    marginRight: 5,
+                  }}
+                />
+                {tt("élő", "live")}
+              </>
+            ) : (
+              tt(
+                "SAFE · háttér-AI off",
+                "SAFE · background AI off"
+              )
+            )}
+          </span>
         </div>
 
         <div className="social-feed-tabs">
@@ -41624,6 +41704,8 @@ const canRunLocalSimulationAction = (w) => {
 const SIM_DONE_TTL = 20 * 60000;
 const SIM_QUEUE_LIMIT = 40;
 
+const SIM_RUNTIME_MAINTENANCE = new WeakMap();
+
 function ensureSimState(w) {
   if (!w.sim) {
     w.sim = {
@@ -41645,73 +41727,186 @@ function ensureSimState(w) {
       lastNoteReactionAt: 0,
       liveWorldStartedAt: now(),
       lastError: "",
+      schedulerVersion: 71,
     };
   }
 
-  if (!Array.isArray(w.sim.queue)) w.sim.queue = [];
+  const sim = w.sim;
 
-  /* v51 migration/runtime guard: a régi buildből bent maradt automatikus
-   * comment queue ne élesszen fel régi posztokat az új feed-first ritmusban. */
-  w.sim.queue = w.sim.queue.filter((action) => {
-    if (!action || action.type !== "comments") return true;
-    const postId = action.payload && action.payload.postId;
-    const post = (w.posts || []).find((p) => p && p.id === postId);
-    if (!post) return false;
-    if (
-      action.payload &&
-      action.payload.trigger === "guaranteed-coverage"
-    ) {
-      return !postCommentCoverageState(w, post).complete;
+  if (!Array.isArray(sim.queue)) sim.queue = [];
+  if (!sim.done || typeof sim.done !== "object") sim.done = {};
+  if (typeof sim.running !== "string") sim.running = "";
+
+  const numericFields = [
+    "at",
+    "contentAt",
+    "localAt",
+    "lastSuccessAt",
+    "lastAttemptAt",
+    "roleplayAttemptAt",
+    "dmAttemptAt",
+    "groupAttemptAt",
+    "popupAttemptAt",
+    "lastAutonomousDmAt",
+    "lastPopupSuccessAt",
+    "lastRoleplayInviteAt",
+    "lastNoteReactionAt",
+    "liveWorldStartedAt",
+  ];
+
+  for (const key of numericFields) {
+    if (!Number.isFinite(Number(sim[key]))) {
+      sim[key] =
+        key === "liveWorldStartedAt"
+          ? now()
+          : 0;
     }
-    return now() - (Number(post.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS;
-  });
-
-  if (!w.sim.done || typeof w.sim.done !== "object") w.sim.done = {};
-  if (typeof w.sim.running !== "string") w.sim.running = "";
-  if (!Number.isFinite(Number(w.sim.at))) w.sim.at = 0;
-  if (!Number.isFinite(Number(w.sim.contentAt))) w.sim.contentAt = 0;
-  if (!Number.isFinite(Number(w.sim.localAt))) w.sim.localAt = 0;
-  if (!Number.isFinite(Number(w.sim.lastSuccessAt))) w.sim.lastSuccessAt = 0;
-  if (!Number.isFinite(Number(w.sim.lastAttemptAt))) w.sim.lastAttemptAt = 0;
-  if (!Number.isFinite(Number(w.sim.roleplayAttemptAt))) w.sim.roleplayAttemptAt = 0;
-  if (!Number.isFinite(Number(w.sim.dmAttemptAt))) w.sim.dmAttemptAt = 0;
-  if (!Number.isFinite(Number(w.sim.groupAttemptAt))) w.sim.groupAttemptAt = 0;
-  if (!Number.isFinite(Number(w.sim.popupAttemptAt))) w.sim.popupAttemptAt = 0;
-  if (!Number.isFinite(Number(w.sim.lastAutonomousDmAt))) w.sim.lastAutonomousDmAt = 0;
-  if (!Number.isFinite(Number(w.sim.lastPopupSuccessAt))) w.sim.lastPopupSuccessAt = 0;
-  if (!Number.isFinite(Number(w.sim.lastRoleplayInviteAt))) w.sim.lastRoleplayInviteAt = 0;
-  if (!Number.isFinite(Number(w.sim.lastNoteReactionAt))) w.sim.lastNoteReactionAt = 0;
-  if (!Number.isFinite(Number(w.sim.liveWorldStartedAt))) w.sim.liveWorldStartedAt = now();
-  /* Backfill only objective successes; autonomous DM intentionally starts hungry
-     on old saves because old DM rows did not distinguish replies from initiations. */
-  if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
-  if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
-
-  /* v95 migration: clear stale background queue state from older schedulers.
-     Manual requests survive; comments/follows/replies are rebuilt from the
-     current world state without restart-created queue storms. */
-  if (Number(w.sim.schedulerVersion) !== 70) {
-    w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
-    w.sim.running = "";
-    w.sim.dmAttemptAt = 0;
-    w.sim.roleplayAttemptAt = 0;
-    w.sim.popupAttemptAt = 0;
-    w.sim.groupAttemptAt = 0;
-    /* Start the new independent lanes slightly hungry. The old implementation
-       used a constant synthetic elapsed value when there had never been a
-       successful DM/Event, which meant their hard deadline could never be
-       reached for the FIRST occurrence. */
-    w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 70;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 70;
-  if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
-  const cutoff = now() - SIM_DONE_TTL;
-  Object.keys(w.sim.done).forEach((k) => {
-    if (Number(w.sim.done[k] || 0) < cutoff) delete w.sim.done[k];
-  });
-  return w.sim;
+  if (typeof sim.lastError !== "string") {
+    sim.lastError = "";
+  }
+
+  /*
+   * v30 SAFE-QUEUE MIGRATION:
+   * Discard ALL stale automatic/event/coverage work from previous builds.
+   * Only an explicit manual request survives a deploy.
+   *
+   * This is deliberate: a persisted 40-item background queue can otherwise
+   * make the browser appear permanently frozen while it drains old work.
+   */
+  if (Number(sim.schedulerVersion || 0) !== 71) {
+    sim.queue =
+      sim.queue.filter(
+        (action) =>
+          action &&
+          action.source === "manual"
+      );
+
+    sim.running = "";
+    sim.dmAttemptAt = 0;
+    sim.roleplayAttemptAt = 0;
+    sim.popupAttemptAt = 0;
+    sim.groupAttemptAt = 0;
+    sim.liveWorldStartedAt = now();
+    sim.schedulerVersion = 71;
+  }
+
+  /*
+   * Expensive stale-comment validation / done cleanup used to run inside
+   * EVERY simPeek(), simEnqueue(), simDropQueued() and simMarkDone().
+   * Run it at most once every 30 seconds per sim object.
+   */
+  let maintenance =
+    SIM_RUNTIME_MAINTENANCE.get(sim);
+
+  const ts = now();
+
+  if (
+    !maintenance ||
+    ts -
+      Number(
+        maintenance.lastAt || 0
+      ) >=
+      30000
+  ) {
+    const postById = new Map();
+
+    for (const post of (w.posts || [])) {
+      if (post && post.id) {
+        postById.set(
+          String(post.id),
+          post
+        );
+      }
+    }
+
+    sim.queue =
+      sim.queue
+        .filter(Boolean)
+        .slice(-SIM_QUEUE_LIMIT)
+        .filter((action) => {
+          if (action.type !== "comments") {
+            return true;
+          }
+
+          const postId =
+            action.payload &&
+            action.payload.postId;
+
+          const post =
+            postId
+              ? postById.get(
+                  String(postId)
+                )
+              : null;
+
+          if (!post) {
+            return false;
+          }
+
+          if (
+            action.payload &&
+            action.payload.trigger ===
+              "guaranteed-coverage"
+          ) {
+            return !postCommentCoverageState(
+              w,
+              post
+            ).complete;
+          }
+
+          return (
+            ts -
+              (Number(post.ts) || 0) <=
+            LIVE_WORLD_FRESH_COMMENT_WINDOW_MS
+          );
+        });
+
+    const cutoff =
+      ts - SIM_DONE_TTL;
+
+    for (const key of Object.keys(sim.done)) {
+      if (
+        Number(sim.done[key] || 0) <
+        cutoff
+      ) {
+        delete sim.done[key];
+      }
+    }
+
+    /*
+     * Cadence backfill is also one-time; don't rescan popup/scene history on
+     * every queue operation when no previous event exists.
+     */
+    if (
+      Number(sim.cadenceBackfillVersion || 0) <
+      1
+    ) {
+      if (!sim.lastPopupSuccessAt) {
+        sim.lastPopupSuccessAt =
+          popupLastGeneratedAt(w) || 0;
+      }
+
+      if (!sim.lastRoleplayInviteAt) {
+        sim.lastRoleplayInviteAt =
+          lastAiInitiatedRoleplayAt(w) || 0;
+      }
+
+      sim.cadenceBackfillVersion = 1;
+    }
+
+    maintenance = {
+      lastAt: ts,
+    };
+
+    SIM_RUNTIME_MAINTENANCE.set(
+      sim,
+      maintenance
+    );
+  }
+
+  return sim;
 }
 
 /*
@@ -55755,18 +55950,32 @@ export default function App() {
   const [detail, setDetailState] = useState(DETAIL);
   useEffect(() => { loadDetail().then((v) => { DETAIL = v; setDetailState(v); }); }, []);
   const changeDetail = useCallback((v) => { saveDetail(v); setDetailState(v); }, []);
-  const changeAuto = useCallback(() => {
-    const fixed = {
-      ...AUTO_DEFAULT,
-    };
+  const changeAuto = useCallback((patch = {}) => {
+    setAutoCfg((prev) => {
+      const next = {
+        ...AUTO_DEFAULT,
+        ...(prev || {}),
+        ...(patch &&
+        typeof patch === "object"
+          ? patch
+          : {}),
+      };
 
-    setAutoCfg(
-      fixed
-    );
+      next.on =
+        next.on === true;
 
-    saveAuto(
-      fixed
-    );
+      next.every =
+        Number.isFinite(Number(next.every))
+          ? Math.max(
+              0.25,
+              Number(next.every)
+            )
+          : AUTO_DEFAULT.every;
+
+      void saveAuto(next);
+
+      return next;
+    });
   }, []);
 
   const SESSION = "masvilag:session";
@@ -56317,6 +56526,7 @@ const signOut = useCallback(async () => {
     if (
       !world ||
       !code ||
+      !auto.on ||
       !mediaReady.current ||
       albumVisionBusy.current ||
       visionCircuitOpen()
@@ -56436,6 +56646,7 @@ const signOut = useCallback(async () => {
     world ? world.code : null,
     code,
     mediaLoadEpoch,
+    auto.on,
   ]);
 
   useEffect(() => {
@@ -56485,6 +56696,21 @@ const signOut = useCallback(async () => {
           syncRefreshBusy.current ||
           worldSaveBusy.current ||
           autosavePipelineBusy.current
+        ) {
+          return;
+        }
+
+        /*
+         * v30: background sync must never start while the player is actively
+         * using the UI. Focus/visibility/poll can wait until a quiet window.
+         */
+        if (
+          reason !== "online" &&
+          ts -
+            Number(
+              lastUiInteractionAt.current || 0
+            ) <
+            6000
         ) {
           return;
         }
@@ -57024,6 +57250,36 @@ const signOut = useCallback(async () => {
     return () => clearInterval(timer);
   }, [world ? world.code : null, meId]);
 
+  useEffect(() => {
+    if (!world || auto.on) return;
+
+    const current =
+      wRef.current;
+
+    if (
+      !current ||
+      !current.sim ||
+      !Array.isArray(current.sim.queue)
+    ) {
+      return;
+    }
+
+    current.sim.queue =
+      current.sim.queue.filter(
+        (action) =>
+          action &&
+          action.source === "manual"
+      );
+
+    current.sim.running = "";
+    autoRunning.current = false;
+    autoRunningSince.current = 0;
+    setAutoBusy(false);
+  }, [
+    auto.on,
+    world ? world.code : null,
+  ]);
+
   const requestSimulationAction = useCallback((action) => {
     if (!action) return false;
 
@@ -57070,6 +57326,15 @@ const signOut = useCallback(async () => {
 
   const signalSimulation = useCallback((event) => {
     if (!event || !event.type) return false;
+
+    /*
+     * v30: player actions do not manufacture autonomous background queue work
+     * while Live World is OFF. Explicit Request reactions / manual world-step
+     * use requestSimulationAction directly and remain available.
+     */
+    if (!auto.on) {
+      return false;
+    }
 
     if (event.type === "player-post" && event.postId) {
       /*
@@ -57214,7 +57479,7 @@ const signOut = useCallback(async () => {
     }
 
     return false;
-  }, [requestSimulationAction]);
+  }, [requestSimulationAction, auto.on]);
 
   const enactPopupChoice = useCallback(
     async (event, choice) => {
@@ -58231,13 +58496,22 @@ const signOut = useCallback(async () => {
     );
 
   /*
+   * v30 REAL LIVE-WORLD SWITCH:
+   * Background/event/coverage work is impossible while OFF.
+   * Explicit manual requests still pass through the same engine.
+   */
+  if (!auto.on && !manualQueued) {
+    return;
+  }
+
+  /*
    * v28 HOT-PATH RULE:
    * A concrete queued action already tells us what to do. Do not scan the feed
    * for a coverage candidate before handling it.
    */
   let coverageOverride = null;
 
-  if (!queued) {
+  if (auto.on && !queued) {
     const uncoveredPostNow =
       guaranteedCommentCoverageCandidate(
         view2
@@ -58280,7 +58554,7 @@ const signOut = useCallback(async () => {
     } catch (e) {}
 
     if (
-      idleFor < 2800 ||
+      idleFor < 8000 ||
       inputPending
     ) {
       return;
@@ -58343,8 +58617,12 @@ const signOut = useCallback(async () => {
 
   let action = coverageOverride || queued;
       if (!action) {
+        if (!auto.on) {
+          return;
+        }
+
         /*
-         * Live world hard-on: régi mentett state sem állíthatja le.
+         * Autonomous background planning only when Live World is explicitly ON.
          */
         if (
           !canTick(
@@ -58408,7 +58686,7 @@ const signOut = useCallback(async () => {
           (
             now() -
               Number(lastUiInteractionAt.current || 0) >=
-            2800
+            8000
           )
             ? planAutoAction(view2)
             : null;
@@ -58533,9 +58811,18 @@ const signOut = useCallback(async () => {
        * Drain a concrete queue without waiting for the background interval.
        * Cooldown / interactive guards inside beat still apply.
        */
+      const nextQueued =
+        alive
+          ? simPeek(wRef.current)
+          : null;
+
       if (
         alive &&
-        simPeek(wRef.current)
+        nextQueued &&
+        (
+          auto.on ||
+          nextQueued.source === "manual"
+        )
       ) {
         setTimeout(() => {
           const wake =
@@ -58547,7 +58834,10 @@ const signOut = useCallback(async () => {
           ) {
             void wake();
           }
-        }, 800);
+        },
+        nextQueued.source === "manual"
+          ? 700
+          : 2500);
       }
     };
 
@@ -58559,14 +58849,20 @@ const signOut = useCallback(async () => {
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 20000);
+    const i =
+      auto.on
+        ? setInterval(beat, 30000)
+        : null;
 
     /*
      * Broad autonomous planning is intentionally slower than direct queued
      * reactions. This keeps the world alive without taking the main thread
      * every nine seconds while the player is using the UI.
      */
-    const first = setTimeout(beat, 9000);
+    const first =
+      auto.on
+        ? setTimeout(beat, 12000)
+        : null;
 
     return () => {
       alive = false;
@@ -58578,8 +58874,8 @@ const signOut = useCallback(async () => {
         simulationWakeRef.current = null;
       }
 
-      clearInterval(i);
-      clearTimeout(first);
+      if (i) clearInterval(i);
+      if (first) clearTimeout(first);
     };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
 
@@ -58714,11 +59010,53 @@ const signOut = useCallback(async () => {
               {tt("Mentés", "Save")}
             </button>
 
-            <button className="btn tiny ghost" onClick={() => changeAuto({ on: !auto.on })}
-              title={auto.on ? tt("Élő világ: magától történnek dolgok", "Live world: things happen on their own") : tt("Élő világ kikapcsolva", "Live world off")}
-              style={{ color: auto.on ? "var(--rose)" : "var(--muted)" }}>
-              {autoBusy ? <Loader2 size={13} className="spin" />
-                        : <span className="dot" style={{ background: auto.on ? "var(--rose)" : "var(--muted)", animation: auto.on ? undefined : "none" }} />}
+            <button
+              className="btn tiny ghost"
+              onClick={() =>
+                changeAuto({
+                  on: !auto.on,
+                })
+              }
+              title={
+                auto.on
+                  ? tt(
+                      "Élő világ BE — kattints a háttér-AI leállításához",
+                      "Live World ON — click to stop background AI"
+                    )
+                  : tt(
+                      "SAFE mód — háttér-AI kikapcsolva. Kattints az Élő világ indításához.",
+                      "SAFE mode — background AI is off. Click to start Live World."
+                    )
+              }
+              style={{
+                color:
+                  auto.on
+                    ? "var(--rose)"
+                    : "var(--muted)",
+              }}
+            >
+              {autoBusy
+                ? <Loader2 size={13} className="spin" />
+                : (
+                  <span
+                    className="dot"
+                    style={{
+                      background:
+                        auto.on
+                          ? "var(--rose)"
+                          : "var(--muted)",
+                      animation:
+                        auto.on
+                          ? undefined
+                          : "none",
+                    }}
+                  />
+                )}
+              <span>
+                {auto.on
+                  ? tt("Élő", "Live")
+                  : tt("SAFE", "SAFE")}
+              </span>
             </button>
             <button className="btn tiny ghost" style={{ position: "relative" }} onClick={() => setShowNotes(true)} title={tt("Értesítések", "Notifications")}>
               <Bell size={15} color={unread ? "var(--rose)" : undefined} />
