@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v20 — SAME CORE FACTION RUNTIME FIX — 20260815_2050 */
+/* MÁSVILÁG BUILD v21 — RUNTIME PERFORMANCE ONLY — 20260815_2110 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -9667,31 +9667,85 @@ function enqueueGuaranteedPostCommentCoverage(w, postId, source = "post-created"
   return action ? simEnqueue(w, action) : false;
 }
 
+const GUARANTEED_COVERAGE_READ_CACHE = new Map();
+
 function guaranteedCommentCoverageCandidate(w) {
   if (!w) return null;
-  const ts = now();
 
-  return (
-    (w.posts || [])
-      .filter((post) => {
-        if (!post || !post.id || !post.authorId) return false;
-        const coverage = postCommentCoverageState(w, post);
-        if (coverage.complete || coverage.missing <= 0) return false;
-        const attemptedAt = Number(post.commentCoverageAttemptAt) || 0;
-        return !attemptedAt || ts - attemptedAt >= GUARANTEED_POST_COMMENT_RETRY_MS;
-      })
-      .map((post) => {
-        const coverage = postCommentCoverageState(w, post);
-        return {
-          post,
-          score:
-            (coverage.current === 0 ? 100000 : 0) +
-            coverage.missing * 1000 +
-            Math.max(0, Number(post.ts) || 0) / 1e12,
-        };
-      })
-      .sort((a, b) => b.score - a.score)[0]?.post || null
+  const ts = now();
+  const bucket =
+    Math.floor(
+      ts /
+      GUARANTEED_POST_COMMENT_RETRY_MS
+    );
+
+  const cacheKey =
+    String(w.code || "world");
+
+  const cached =
+    GUARANTEED_COVERAGE_READ_CACHE.get(cacheKey);
+
+  if (
+    cached &&
+    cached.rev === Number(w.rev || 0) &&
+    cached.bucket === bucket
+  ) {
+    return cached.post;
+  }
+
+  let bestPost = null;
+  let bestScore = -Infinity;
+
+  for (const post of (w.posts || [])) {
+    if (!post || !post.id || !post.authorId) continue;
+
+    const coverage =
+      postCommentCoverageState(
+        w,
+        post
+      );
+
+    if (
+      coverage.complete ||
+      coverage.missing <= 0
+    ) {
+      continue;
+    }
+
+    const attemptedAt =
+      Number(
+        post.commentCoverageAttemptAt
+      ) || 0;
+
+    if (
+      attemptedAt &&
+      ts - attemptedAt <
+        GUARANTEED_POST_COMMENT_RETRY_MS
+    ) {
+      continue;
+    }
+
+    const score =
+      (coverage.current === 0 ? 100000 : 0) +
+      coverage.missing * 1000 +
+      Math.max(0, Number(post.ts) || 0) / 1e12;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestPost = post;
+    }
+  }
+
+  GUARANTEED_COVERAGE_READ_CACHE.set(
+    cacheKey,
+    {
+      rev: Number(w.rev || 0),
+      bucket,
+      post: bestPost,
+    }
   );
+
+  return bestPost;
 }
 
 function visualPostRelationshipPriority(w, actorId, targetId, post) {
@@ -20013,25 +20067,46 @@ function repostRows(w) {
   return w.reposts;
 }
 
+const REPOST_READ_INDEX = new WeakMap();
+
+function repostReadIndex(w) {
+  const rows = repostRows(w);
+  let cached = REPOST_READ_INDEX.get(rows);
+
+  if (!cached || cached.length !== rows.length) {
+    const countByPost = new Map();
+    const actorPost = new Set();
+
+    for (const row of rows) {
+      if (!row || !row.postId) continue;
+      countByPost.set(
+        row.postId,
+        (countByPost.get(row.postId) || 0) + 1
+      );
+      if (row.actorId) {
+        actorPost.add(`${row.actorId}>${row.postId}`);
+      }
+    }
+
+    cached = {
+      length: rows.length,
+      countByPost,
+      actorPost,
+    };
+    REPOST_READ_INDEX.set(rows, cached);
+  }
+
+  return cached;
+}
+
 function hasReposted(w, actorId, postId) {
   if (!w || !actorId || !postId) return false;
-
-  return repostRows(w).some(
-    (r) =>
-      r &&
-      r.actorId === actorId &&
-      r.postId === postId
-  );
+  return repostReadIndex(w).actorPost.has(`${actorId}>${postId}`);
 }
 
 function repostCount(w, postId) {
   if (!w || !postId) return 0;
-
-  return repostRows(w).filter(
-    (r) =>
-      r &&
-      r.postId === postId
-  ).length;
+  return repostReadIndex(w).countByPost.get(postId) || 0;
 }
 
 function createRepost(
@@ -20636,6 +20711,10 @@ function socialProfileById(w, id) {
   return c;
 }
 
+function socialIdListForRead(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 function isFollowing(
   w,
   followerId,
@@ -20649,11 +20728,13 @@ function isFollowing(
 
   if (!follower) return false;
 
-  ensureSocialProfileRow(
-    follower
-  );
-
-  return follower.following.includes(
+  /*
+   * PERFORMANCE v21:
+   * render-time reads must be pure. ensureSocialProfileRow() rebuilds arrays
+   * and was therefore allocating/mutating on every Post/Profile render.
+   * Migration/write paths still normalize the graph exactly as before.
+   */
+  return socialIdListForRead(follower.following).includes(
     String(targetId)
   );
 }
@@ -20664,9 +20745,7 @@ function knownFollowerCount(w, id) {
 
   if (!c) return 0;
 
-  ensureSocialProfileRow(c);
-
-  return c.followers.length;
+  return socialIdListForRead(c.followers).length;
 }
 
 function displayFollowerCount(w, id) {
@@ -20675,13 +20754,11 @@ function displayFollowerCount(w, id) {
 
   if (!c) return 0;
 
-  ensureSocialProfileRow(c);
-
   return Math.max(
     0,
-    c.baseFollowers +
-      c.followerDelta +
-      c.followers.length
+    (Number(c.baseFollowers) || 0) +
+      (Number(c.followerDelta) || 0) +
+      socialIdListForRead(c.followers).length
   );
 }
 
@@ -20838,9 +20915,7 @@ function displayFollowingCount(w, id) {
 
   if (!c) return 0;
 
-  ensureSocialProfileRow(c);
-
-  return c.following.length;
+  return socialIdListForRead(c.following).length;
 }
 
 function formatSocialCount(value) {
@@ -24367,8 +24442,15 @@ function CommentNode({ w, c, commentById, repliesByParent, onReply, depth, onOpe
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
   const [txt, setTxt] = useState("");
+  const [showAllReplies, setShowAllReplies] = useState(false);
   const a = charById(w, c.authorId);
   const replies = repliesByParent.get(c.id) || [];
+  const visibleReplies =
+    showAllReplies || replies.length <= 4
+      ? replies
+      : replies.slice(-4);
+  const hiddenReplyCount =
+    Math.max(0, replies.length - visibleReplies.length);
 
   if (!a) return null;
 
@@ -24453,7 +24535,20 @@ function CommentNode({ w, c, commentById, repliesByParent, onReply, depth, onOpe
         </div>
       )}
 
-      {replies.map((r) => (
+      {hiddenReplyCount > 0 ? (
+        <button
+          className="social-comment-action"
+          style={{ marginLeft: depth ? 18 : 36, marginBottom: 4 }}
+          onClick={() => setShowAllReplies(true)}
+        >
+          {tt(
+            `Korábbi válaszok (${hiddenReplyCount})`,
+            `Earlier replies (${hiddenReplyCount})`
+          )}
+        </button>
+      ) : null}
+
+      {visibleReplies.map((r) => (
         <CommentNode
           key={r.id}
           w={w}
@@ -24484,6 +24579,7 @@ function Post({
   const { tt } = useLang();
   const { media } = useMedia();
   const [cmt, setCmt] = useState("");
+  const [showAllComments, setShowAllComments] = useState(false);
   const commentInput = useRef(null);
 
   /* Egy sérült/stale feed-hivatkozás ne dönthesse le az egész React fát. */
@@ -24518,6 +24614,18 @@ function Post({
 
     return { commentById, repliesByParent, roots };
   }, [post.id, comments.length, renderVersion]);
+
+  const visibleCommentRoots =
+    showAllComments || commentTree.roots.length <= 6
+      ? commentTree.roots
+      : commentTree.roots.slice(-6);
+
+  const hiddenCommentRootCount =
+    Math.max(
+      0,
+      commentTree.roots.length -
+        visibleCommentRoots.length
+    );
 
   const liked =
     Array.isArray(post.likedBy) &&
@@ -24765,7 +24873,20 @@ function Post({
 
       {comments.length > 0 ? (
         <div className="social-comments">
-          {commentTree.roots.map((c) => (
+          {hiddenCommentRootCount > 0 ? (
+            <button
+              className="social-comment-action"
+              style={{ marginBottom: 6 }}
+              onClick={() => setShowAllComments(true)}
+            >
+              {tt(
+                `Korábbi hozzászólások (${hiddenCommentRootCount})`,
+                `Earlier comments (${hiddenCommentRootCount})`
+              )}
+            </button>
+          ) : null}
+
+          {visibleCommentRoots.map((c) => (
             <CommentNode
               key={c.id}
               w={w}
@@ -28628,17 +28749,140 @@ function autonomousGameDayKey(w) {
   return `${year}|${date}|${autonomousGameDayIndex(w)}`;
 }
 
+const POST_ACTIVITY_INDEX_CACHE = new WeakMap();
+
+function postActivityIndex(w) {
+  const posts =
+    w && Array.isArray(w.posts)
+      ? w.posts
+      : [];
+
+  const gameDayKey =
+    autonomousGameDayKey(w);
+
+  /*
+   * The 24h/48h windows only drift with wall-clock time. One-minute buckets
+   * preserve the existing timing semantics while avoiding repeated full-feed
+   * scans every 9-second planner beat.
+   */
+  const minuteBucket =
+    Math.floor(now() / 60000);
+
+  let cached =
+    POST_ACTIVITY_INDEX_CACHE.get(posts);
+
+  const firstId =
+    posts.length && posts[0]
+      ? String(posts[0].id || "")
+      : "";
+
+  const lastId =
+    posts.length && posts[posts.length - 1]
+      ? String(posts[posts.length - 1].id || "")
+      : "";
+
+  if (
+    cached &&
+    cached.length === posts.length &&
+    cached.firstId === firstId &&
+    cached.lastId === lastId &&
+    cached.gameDayKey === gameDayKey &&
+    cached.minuteBucket === minuteBucket
+  ) {
+    return cached;
+  }
+
+  const cutoff24h = now() - 24 * 3600e3;
+  const cutoff48h = now() - 48 * 3600e3;
+
+  const aiDayPosts = [];
+  const charDayPosts = new Map();
+  const char24 = new Map();
+  const char48Count = new Map();
+  const lastPostByAuthor = new Map();
+
+  let aiDayImageCount = 0;
+  let latestAiPost = null;
+  let latestAiTs = 0;
+
+  for (const post of posts) {
+    if (!post || !post.authorId) continue;
+
+    const authorId = post.authorId;
+    const ts = Number(post.ts) || 0;
+
+    const previousLast =
+      lastPostByAuthor.get(authorId) || 0;
+    if (ts > previousLast) {
+      lastPostByAuthor.set(authorId, ts);
+    }
+
+    if (ts >= cutoff48h) {
+      char48Count.set(
+        authorId,
+        (char48Count.get(authorId) || 0) + 1
+      );
+    }
+
+    let stats24 =
+      char24.get(authorId);
+    if (!stats24) {
+      stats24 = { count: 0, lastPostAt: 0 };
+      char24.set(authorId, stats24);
+    }
+    if (ts >= cutoff24h) {
+      stats24.count += 1;
+    }
+    if (ts > stats24.lastPostAt) {
+      stats24.lastPostAt = ts;
+    }
+
+    if (!isHuman(w, authorId)) {
+      if (ts > latestAiTs) {
+        latestAiTs = ts;
+        latestAiPost = post;
+      }
+
+      if (String(post.gameDayKey || "") === gameDayKey) {
+        aiDayPosts.push(post);
+        if (post.imageId || post.image) {
+          aiDayImageCount += 1;
+        }
+
+        if (!charDayPosts.has(authorId)) {
+          charDayPosts.set(authorId, []);
+        }
+        charDayPosts.get(authorId).push(post);
+      }
+    }
+  }
+
+  cached = {
+    length: posts.length,
+    firstId,
+    lastId,
+    gameDayKey,
+    minuteBucket,
+    aiDayPosts,
+    aiDayImageCount,
+    charDayPosts,
+    char24,
+    char48Count,
+    lastPostByAuthor,
+    latestAiPost,
+    latestAiTs,
+  };
+
+  POST_ACTIVITY_INDEX_CACHE.set(
+    posts,
+    cached
+  );
+
+  return cached;
+}
+
 function autonomousAiPostsThisGameDay(w) {
-  const key = autonomousGameDayKey(w);
-  return (w && Array.isArray(w.posts) ? w.posts : [])
-    .filter((p) =>
-      p &&
-      p.authorId &&
-      !isHuman(w, p.authorId) &&
-      (
-        String(p.gameDayKey || "") === key
-      )
-    );
+  return postActivityIndex(w).aiDayPosts;
 }
 
 function autonomousAiPostCountThisGameDay(w) {
@@ -28646,26 +28890,15 @@ function autonomousAiPostCountThisGameDay(w) {
 }
 
 function autonomousAiImagePostsThisGameDay(w) {
-  return autonomousAiPostsThisGameDay(w)
-    .filter((p) => Boolean(p && (p.imageId || p.image)))
-    .length;
+  return postActivityIndex(w).aiDayImageCount;
 }
 
 function autonomousLatestAiFeedPost(w) {
-  return (w && Array.isArray(w.posts) ? w.posts : [])
-    .filter((p) => p && p.authorId && !isHuman(w, p.authorId))
-    .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))[0] || null;
+  return postActivityIndex(w).latestAiPost || null;
 }
 
 function autonomousCharacterPostsThisGameDay(w, characterId) {
-  const key = autonomousGameDayKey(w);
-  return (w && Array.isArray(w.posts) ? w.posts : [])
-    .filter((p) =>
-      p &&
-      p.authorId === characterId &&
-      !isHuman(w, p.authorId) &&
-      String(p.gameDayKey || "") === key
-    );
+  return postActivityIndex(w).charDayPosts.get(characterId) || [];
 }
 
 function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
@@ -28757,18 +28990,11 @@ const AUTONOMOUS_THIRD_POST_MIN_IDLE_MS = 2.5 * 3600e3;
 const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.15;
 
 function characterAutonomousPostStats24h(w, characterId) {
-  const cutoff24h = now() - 24 * 3600e3;
-  let count = 0;
-  let lastPostAt = 0;
-
-  (w && Array.isArray(w.posts) ? w.posts : []).forEach((p) => {
-    if (!p || p.authorId !== characterId) return;
-    const ts = Number(p.ts) || 0;
-    if (ts >= cutoff24h) count += 1;
-    lastPostAt = Math.max(lastPostAt, ts);
-  });
-
-  return { count, lastPostAt };
+  const index = postActivityIndex(w);
+  const row = index.char24.get(characterId);
+  return row
+    ? { count: row.count, lastPostAt: row.lastPostAt }
+    : { count: 0, lastPostAt: index.lastPostByAuthor.get(characterId) || 0 };
 }
 
 function characterCanAutonomouslyPost(w, c) {
@@ -28827,18 +29053,13 @@ function fairPostCast(w) {
 
   if (!chars.length) return [];
 
-  const cutoff48h = now() - 48 * 3600e3;
+  const postIndex = postActivityIndex(w);
 
   const ranked = chars.map((c) => {
-    let recentPosts48h = 0;
-    let lastPostAt = 0;
-
-    (w.posts || []).forEach((p) => {
-      if (!p || p.authorId !== c.id) return;
-      const ts = Number(p.ts) || 0;
-      if (ts >= cutoff48h) recentPosts48h += 1;
-      lastPostAt = Math.max(lastPostAt, ts);
-    });
+    const recentPosts48h =
+      postIndex.char48Count.get(c.id) || 0;
+    const lastPostAt =
+      postIndex.lastPostByAuthor.get(c.id) || 0;
 
     const dailyPosts = characterAutonomousPostStats24h(w, c.id).count;
     const activity = characterOnlineActivityProfile(w, c).post;
@@ -29979,7 +30200,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   const [feedMode, setFeedMode] = useState("all");
   const [showMedia, setShowMedia] = useState(false);
   const [profileId, setProfileId] = useState("");
-  const [visibleFeedCount, setVisibleFeedCount] = useState(6);
+  const [visibleFeedCount, setVisibleFeedCount] = useState(3);
   const feedSentinelRef = useRef(null);
 
   const activeMedia =
@@ -30301,7 +30522,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     timelineItems.slice(0, visibleFeedCount);
 
   useEffect(() => {
-    setVisibleFeedCount(6);
+    setVisibleFeedCount(3);
   }, [feedMode]);
 
   useEffect(() => {
@@ -30310,7 +30531,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
 
     if (typeof IntersectionObserver === "undefined") {
       const t = setTimeout(() => {
-        setVisibleFeedCount((count) => Math.min(timelineItems.length, count + 6));
+        setVisibleFeedCount((count) => Math.min(timelineItems.length, count + 3));
       }, 300);
       return () => clearTimeout(t);
     }
@@ -30318,10 +30539,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
-          setVisibleFeedCount((count) => Math.min(timelineItems.length, count + 6));
+          setVisibleFeedCount((count) => Math.min(timelineItems.length, count + 3));
         }
       },
-      { rootMargin: "700px 0px" }
+      { rootMargin: "420px 0px" }
     );
 
     observer.observe(node);
@@ -49791,21 +50012,7 @@ function applySocialWave(
 }
 
 function lastAiFeedPostAt(w) {
-  return (w && Array.isArray(w.posts) ? w.posts : [])
-    .filter(
-      (p) =>
-        p &&
-        p.authorId &&
-        !isHuman(w, p.authorId)
-    )
-    .reduce(
-      (latest, p) =>
-        Math.max(
-          latest,
-          Number(p.ts) || 0
-        ),
-      0
-    );
+  return postActivityIndex(w).latestAiTs || 0;
 }
 
 function feedNeedsFreshPost(w) {
