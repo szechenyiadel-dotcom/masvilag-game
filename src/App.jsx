@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v27 — MANUAL SAVE ONLY — 20260815_2218 */
+/* MÁSVILÁG BUILD v28 — MAIN THREAD FREEZE FIX — 20260815_2208 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -4115,7 +4115,7 @@ function relationshipCanonInputFingerprint(w) {
 /* v10 invariant marker: if this exact string is visible in deployed source,
    the stable runtime + relationship identity patch is the file being used. */
 const MASVILAG_RELATIONSHIP_PATCH = "v10-live-identity-20260815-1911";
-if (typeof console !== "undefined") console.info("[Másvilág] v27 manual-save + relationship/identity + performance patch loaded");
+if (typeof console !== "undefined") console.info("[Másvilág] v28 main-thread freeze fix loaded");
 
 
 function ensureRelationshipBaselineStore(w) {
@@ -5608,7 +5608,7 @@ function findNaturalThreadReply(w, onlyPostId = "") {
   for (let i = 0; i < posts.length; i++) {
     const post = posts[i];
     const comments = safePostComments(post)
-      .slice()
+      .slice(-80)
       .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
 
     for (let j = 0; j < comments.length; j++) {
@@ -9962,36 +9962,105 @@ function enqueueGuaranteedPostCommentCoverage(w, postId, source = "post-created"
 }
 
 const GUARANTEED_COVERAGE_READ_CACHE = new Map();
+const GUARANTEED_COVERAGE_SCAN_LIMIT = 80;
 
 function guaranteedCommentCoverageCandidate(w) {
   if (!w) return null;
 
-  const ts = now();
-  const bucket =
-    Math.floor(
-      ts /
-      GUARANTEED_POST_COMMENT_RETRY_MS
-    );
+  const posts =
+    Array.isArray(w.posts)
+      ? w.posts
+      : [];
 
+  if (!posts.length) return null;
+
+  const ts = now();
   const cacheKey =
     String(w.code || "world");
 
-  const cached =
-    GUARANTEED_COVERAGE_READ_CACHE.get(cacheKey);
+  const firstId =
+    posts[0] && posts[0].id
+      ? String(posts[0].id)
+      : "";
 
+  const bucket =
+    Math.floor(ts / 30000);
+
+  const cached =
+    GUARANTEED_COVERAGE_READ_CACHE.get(
+      cacheKey
+    );
+
+  /*
+   * A cached candidate is rechecked cheaply. A like, DM, relationship change
+   * or unrelated world.rev no longer invalidates an 80-post coverage scan.
+   */
   if (
     cached &&
-    cached.rev === Number(w.rev || 0) &&
+    cached.length === posts.length &&
+    cached.firstId === firstId &&
     cached.bucket === bucket
   ) {
-    return cached.post;
+    if (!cached.postId) {
+      return null;
+    }
+
+    const candidate =
+      posts
+        .slice(0, GUARANTEED_COVERAGE_SCAN_LIMIT)
+        .find(
+          (post) =>
+            post &&
+            String(post.id) ===
+              String(cached.postId)
+        );
+
+    if (candidate) {
+      const coverage =
+        postCommentCoverageState(
+          w,
+          candidate
+        );
+
+      const attemptedAt =
+        Number(
+          candidate.commentCoverageAttemptAt
+        ) || 0;
+
+      if (
+        !coverage.complete &&
+        coverage.missing > 0 &&
+        (
+          !attemptedAt ||
+          ts - attemptedAt >=
+            GUARANTEED_POST_COMMENT_RETRY_MS
+        )
+      ) {
+        return candidate;
+      }
+    }
+    /* Candidate was completed/removed: fall through to one bounded rescan. */
   }
 
   let bestPost = null;
   let bestScore = -Infinity;
 
-  for (const post of (w.posts || [])) {
-    if (!post || !post.id || !post.authorId) continue;
+  const limit =
+    Math.min(
+      posts.length,
+      GUARANTEED_COVERAGE_SCAN_LIMIT
+    );
+
+  for (let i = 0; i < limit; i += 1) {
+    const post = posts[i];
+
+    if (
+      !post ||
+      !post.id ||
+      !post.authorId
+    ) {
+      continue;
+    }
 
     const coverage =
       postCommentCoverageState(
@@ -10020,9 +10089,15 @@ function guaranteedCommentCoverageCandidate(w) {
     }
 
     const score =
-      (coverage.current === 0 ? 100000 : 0) +
+      (coverage.current === 0
+        ? 100000
+        : 0) +
       coverage.missing * 1000 +
-      Math.max(0, Number(post.ts) || 0) / 1e12;
+      Math.max(
+        0,
+        Number(post.ts) || 0
+      ) /
+        1e12;
 
     if (score > bestScore) {
       bestScore = score;
@@ -10033,14 +10108,19 @@ function guaranteedCommentCoverageCandidate(w) {
   GUARANTEED_COVERAGE_READ_CACHE.set(
     cacheKey,
     {
-      rev: Number(w.rev || 0),
+      length: posts.length,
+      firstId,
       bucket,
-      post: bestPost,
+      postId:
+        bestPost && bestPost.id
+          ? String(bestPost.id)
+          : "",
     }
   );
 
   return bestPost;
 }
+
 
 function visualPostRelationshipPriority(w, actorId, targetId, post) {
   const visual = visualPostReactionProfile(w, post);
@@ -11412,8 +11492,18 @@ function characterLoreCorpus(c) {
  * Nem egy rövid personality kivonatból kell "kitalálni" őt:
  * minden róla szóló mező aktív önismeret / karaktervezetési adat.
  */
+const FULL_SELF_CANON_CACHE = new WeakMap();
+
 function fullSelfCanon(c) {
   if (!c) return "";
+
+  if (
+    c &&
+    typeof c === "object" &&
+    FULL_SELF_CANON_CACHE.has(c)
+  ) {
+    return FULL_SELF_CANON_CACHE.get(c);
+  }
 
   const rows = [
     ["Name", c.name],
@@ -11447,7 +11537,13 @@ function fullSelfCanon(c) {
     .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
     .map(([label, value]) => `${label}: ${String(value).trim()}`);
 
-  return rows.join("\n");
+  const result = rows.join("\n");
+
+  if (c && typeof c === "object") {
+    FULL_SELF_CANON_CACHE.set(c, result);
+  }
+
+  return result;
 }
 
 
@@ -11627,11 +11723,33 @@ function primaryKarateFaction(c) {
   return scored[0].key;
 }
 
+const FACTION_FLAGS_CACHE = new WeakMap();
+
 function factionFlags(c) {
+  if (!c) {
+    return {
+      cobraKai:false,
+      miyagiFang:false,
+      ironDragons:false,
+      wasabi:false,
+      pogue:false,
+      kook:false,
+      hydra:false,
+      shield:false,
+    };
+  }
+
+  if (
+    typeof c === "object" &&
+    FACTION_FLAGS_CACHE.has(c)
+  ) {
+    return FACTION_FLAGS_CACHE.get(c);
+  }
+
   const karate = primaryKarateFaction(c);
   const strong = `${selfAffiliationStrongCorpus(c)}\n${selfAffiliationSecondaryCorpus(c)}`;
 
-  return {
+  const result = {
     cobraKai: karate === "cobraKai",
     miyagiFang: karate === "miyagiFang",
     ironDragons: karate === "ironDragons",
@@ -11653,6 +11771,12 @@ function factionFlags(c) {
       /s\.h\.i\.e\.l\.d\.?|\bshield agent\b|\bshield operative\b|strategic homeland intervention/.test(strong) &&
       !/enemy s\.h\.i\.e\.l\.d|against s\.h\.i\.e\.l\.d/.test(strong),
   };
+
+  if (typeof c === "object") {
+    FACTION_FLAGS_CACHE.set(c, result);
+  }
+
+  return result;
 }
 
 function karateFactionKey(flags) {
@@ -12532,8 +12656,39 @@ function canonTargetAliases(target) {
   });
 }
 
+const CANON_TARGET_EVIDENCE_CACHE = new WeakMap();
+
 function canonTargetEvidence(actor, target, maxSnippets = 3) {
   if (!actor || !target) return [];
+
+  if (
+    typeof actor === "object" &&
+    typeof target === "object"
+  ) {
+    let actorCache =
+      CANON_TARGET_EVIDENCE_CACHE.get(actor);
+
+    if (!actorCache) {
+      actorCache = new WeakMap();
+      CANON_TARGET_EVIDENCE_CACHE.set(
+        actor,
+        actorCache
+      );
+    }
+
+    const cached =
+      actorCache.get(target);
+
+    if (
+      cached &&
+      cached.maxSnippets >= maxSnippets
+    ) {
+      return cached.rows.slice(
+        0,
+        maxSnippets
+      );
+    }
+  }
 
   /*
    * IMPORTANT: hierarchy / shared-history facts can live anywhere on a sheet,
@@ -12580,6 +12735,30 @@ function canonTargetEvidence(actor, target, maxSnippets = 3) {
 
     snippets.push(snippet);
     if (snippets.length >= maxSnippets) break;
+  }
+
+  if (
+    typeof actor === "object" &&
+    typeof target === "object"
+  ) {
+    let actorCache =
+      CANON_TARGET_EVIDENCE_CACHE.get(actor);
+
+    if (!actorCache) {
+      actorCache = new WeakMap();
+      CANON_TARGET_EVIDENCE_CACHE.set(
+        actor,
+        actorCache
+      );
+    }
+
+    actorCache.set(
+      target,
+      {
+        maxSnippets,
+        rows: snippets.slice(),
+      }
+    );
   }
 
   return snippets;
@@ -14728,6 +14907,8 @@ PUBLIC COMMENT AUTHORSHIP LOCK:
 `;
 }
 
+const REL_OBSESSION_READ_CACHE = new WeakMap();
+
 function relationshipObsessionLevel(
   w,
   actorId,
@@ -14740,6 +14921,36 @@ function relationshipObsessionLevel(
     actorId === targetId
   ) {
     return 0;
+  }
+
+  const relStore =
+    w.rels &&
+    typeof w.rels === "object"
+      ? w.rels
+      : w;
+
+  let cache =
+    REL_OBSESSION_READ_CACHE.get(relStore);
+
+  const rev =
+    Number(w.rev || 0);
+
+  if (!cache || cache.rev !== rev) {
+    cache = {
+      rev,
+      values: new Map(),
+    };
+    REL_OBSESSION_READ_CACHE.set(
+      relStore,
+      cache
+    );
+  }
+
+  const pairKey =
+    `${actorId}>${targetId}`;
+
+  if (cache.values.has(pairKey)) {
+    return cache.values.get(pairKey);
   }
 
   const actor =
@@ -14790,6 +15001,7 @@ function relationshipObsessionLevel(
     );
 
   if (strong) {
+    cache.values.set(pairKey, 3);
     return 3;
   }
 
@@ -14799,9 +15011,11 @@ function relationshipObsessionLevel(
     );
 
   if (possessive) {
+    cache.values.set(pairKey, 2);
     return 2;
   }
 
+  cache.values.set(pairKey, 0);
   return 0;
 }
 
@@ -19047,7 +19261,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v27-manual-save-only";
+const BUILD_VERSION = "v28-main-thread-freeze-fix";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -21688,6 +21902,8 @@ function aiLikesTargetEnoughForFollowBack(
   return false;
 }
 
+const CHARACTER_ACTIVITY_PROFILE_CACHE = new WeakMap();
+
 function characterOnlineActivityProfile(w, c) {
   if (!c || (w && isHuman(w, c.id))) {
     return {
@@ -21699,6 +21915,13 @@ function characterOnlineActivityProfile(w, c) {
       note: 0,
       roleplay: 0,
     };
+  }
+
+  if (
+    typeof c === "object" &&
+    CHARACTER_ACTIVITY_PROFILE_CACHE.has(c)
+  ) {
+    return CHARACTER_ACTIVITY_PROFILE_CACHE.get(c);
   }
 
   const lore = [
@@ -21764,7 +21987,7 @@ function characterOnlineActivityProfile(w, c) {
 
   const clamp = (value) => Math.max(0.18, Math.min(2.75, value));
 
-  return {
+  const result = {
     overall: clamp(overall),
     post: clamp((overall + postBias - quietPenalty * 0.4) * LIVE_WORLD_POST_MULTIPLIER),
     comment: clamp((overall + groupBias * 0.22 - quietPenalty * 0.45) * LIVE_WORLD_COMMENT_MULTIPLIER),
@@ -21773,6 +21996,15 @@ function characterOnlineActivityProfile(w, c) {
     note: clamp((overall + noteBias - quietPenalty * 0.5) * LIVE_WORLD_NOTE_MULTIPLIER),
     roleplay: clamp((overall + roleplayBias - quietPenalty * 0.8) * LIVE_WORLD_ROLEPLAY_MULTIPLIER),
   };
+
+  if (typeof c === "object") {
+    CHARACTER_ACTIVITY_PROFILE_CACHE.set(
+      c,
+      result
+    );
+  }
+
+  return result;
 }
 
 function characterSocialFollowModifier(c) {
@@ -27951,6 +28183,8 @@ recordSocialEvent(
   /* Raw AI "events" are not a second reality. Concrete social objects above are the source of truth. */
   return createdVisible;
 }
+const SOCIAL_INTEREST_READ_CACHE = new WeakMap();
+
 function socialInteractionInterest(
   w,
   actorId,
@@ -27962,6 +28196,41 @@ function socialInteractionInterest(
     actorId === targetId
   ) {
     return 0;
+  }
+
+  const relStore =
+    w &&
+    w.rels &&
+    typeof w.rels === "object"
+      ? w.rels
+      : w;
+
+  let cache =
+    relStore &&
+    SOCIAL_INTEREST_READ_CACHE.get(relStore);
+
+  const rev =
+    Number(w && w.rev || 0);
+
+  if (!cache || cache.rev !== rev) {
+    cache = {
+      rev,
+      values: new Map(),
+    };
+
+    if (relStore) {
+      SOCIAL_INTEREST_READ_CACHE.set(
+        relStore,
+        cache
+      );
+    }
+  }
+
+  const pairKey =
+    `${actorId}>${targetId}`;
+
+  if (cache.values.has(pairKey)) {
+    return cache.values.get(pairKey);
   }
 
   const actor =
@@ -27980,6 +28249,7 @@ function socialInteractionInterest(
     !actor ||
     !target
   ) {
+    cache.values.set(pairKey, 0);
     return 0;
   }
 
@@ -28071,6 +28341,11 @@ function socialInteractionInterest(
     interest +=
       obsessionLevel * 30;
   }
+
+  cache.values.set(
+    pairKey,
+    interest
+  );
 
   return interest;
 }
@@ -48489,8 +48764,10 @@ function hasRecentSeverePublicCancel(w) {
 }
 
 function pickSocialWaveAction(w) {
-  refreshAllSocialStats(w);
-
+  /*
+   * v28: socialStats are maintained at migration/significant-event boundaries.
+   * Never do a full all-character history rebuild inside the  live planner.
+   */
   const candidates = [];
   const cancelThreshold = Math.max(14, 24 / LIVE_WORLD_CANCEL_SENSITIVITY);
   const gossipCancelThreshold = Math.max(9, 16 / LIVE_WORLD_CANCEL_SENSITIVITY);
@@ -49629,16 +49906,32 @@ function recordSocialEvent(
   ]
     .filter(Boolean);
 
-  [
-    ...new Set(
-      touchedIds
-    ),
-  ].forEach((id) => {
-    refreshSocialStatsFor(
-      w,
-      id
-    );
-  });
+  /*
+   * PERFORMANCE v28:
+   * A like/comment/reply/repost is a hot UI path. Recomputing the target's
+   * complete historical social profile inside that same click scans posts,
+   * comments and up to hundreds of social events. The visible interaction
+   * itself is already authoritative; derived socialStats may catch up on a
+   * later significant event / maintenance pass.
+   */
+  const lightweightEngagement =
+    entry.type === "like" ||
+    entry.type === "comment" ||
+    entry.type === "reply" ||
+    entry.type === "repost";
+
+  if (!lightweightEngagement) {
+    [
+      ...new Set(
+        touchedIds
+      ),
+    ].forEach((id) => {
+      refreshSocialStatsFor(
+        w,
+        id
+      );
+    });
+  }
 
   /*
    * Későbbi rendszerek küldhetnek például:
@@ -49717,26 +50010,39 @@ function recordSocialEvent(
    */
   seedGossipPropagationFromEvent(w, entry);
 
-  refreshTrends(w);
+  /*
+   * PERFORMANCE v28:
+   * Trends are derived UI. A single like/comment does not need to rescan up to
+   * 600 social events before the click can finish. Significant public events
+   * still refresh trends immediately.
+   */
+  const trendSignificant =
+    [
+      "post",
+      "character-arrival",
+      "viral",
+      "gossip-story",
+      "rumor-evolution",
+      "cancel-wave",
+      "stan-wave",
+      "popup-public-action",
+      "roleplay-summary",
+      "roleplay-event",
+    ].includes(entry.type);
+
+  if (trendSignificant) {
+    refreshTrends(w);
+  }
 
   if (entry.meta && entry.meta.postId) {
     refreshPostReach(w, entry.meta.postId);
   }
 
   /*
-   * Aktív pletykamédiánál frissítjük a következő
-   * valós alapú sztori-jelöltet.
-   * EZ MÉG NEM PUBLIKÁL POSZTOT.
+   * Do NOT build/sort the complete Whisper Wire candidate list on every
+   * social click. gossipAutoCandidate() and explicit popup gossip already call
+   * selectGossipStoryCandidate() exactly when a candidate is actually needed.
    */
-  if (
-    w.gossipSettings &&
-    (
-      w.gossipSettings.mediaMode === "local" ||
-      w.gossipSettings.mediaMode === "global"
-    )
-  ) {
-    selectGossipStoryCandidate(w);
-  }
 
   return entry;
 }
@@ -55138,6 +55444,7 @@ export default function App() {
   const [autoBusy, setAutoBusy] = useState(false);
   const autoRunning = useRef(false);
   const autoRunningSince = useRef(0);
+  const simulationWakeRef = useRef(null);
   const viewRef = useRef(null);
   const [flash, setFlash] = useState(null);
   const [jump, setJump] = useState(null);
@@ -56280,14 +56587,11 @@ const signOut = useCallback(async () => {
       }
 
       /*
-       * v27: no full-world autosave on pagehide. A multi-MB emergency
-       * serialization here can freeze navigation/closing. Images are already
-       * cached locally when added; cloud persistence is explicit Save.
+       * v28 manual-save means NO persistence work on pagehide. Even a media
+       * emergency cache may serialize large base64 payloads on the main thread.
+       * Explicit Save is the only full persistence boundary.
        */
-      void cacheMediaLocally(
-        w.code,
-        mediaRef.current || {}
-      );
+      return;
     };
 
     if (
@@ -56699,8 +57003,36 @@ const signOut = useCallback(async () => {
 
   const requestSimulationAction = useCallback((action) => {
     if (!action) return false;
-    update((n) => { simEnqueue(n, action); });
-    return true;
+
+    let queued = false;
+
+    update((n) => {
+      queued = simEnqueue(n, action);
+    });
+
+    if (queued) {
+      /*
+       * Manual/event work should not wait for the slow background interval.
+       * Event reactions get a short paint window; manual requests start ASAP.
+       */
+      const delay =
+        action.source === "manual"
+          ? 0
+          : 650;
+
+      setTimeout(() => {
+        const wake =
+          simulationWakeRef.current;
+
+        if (
+          typeof wake === "function"
+        ) {
+          void wake();
+        }
+      }, delay);
+    }
+
+    return queued;
   }, [update]);
 
   const requestWorldStep = useCallback(() => {
@@ -57869,17 +58201,66 @@ const signOut = useCallback(async () => {
   if (!view2 || !(view2.chars || []).length) return;
 
   const queued = simPeek(view2);
-  const manualQueued = !!(queued && queued.source === "manual");
+  const manualQueued =
+    !!(
+      queued &&
+      queued.source === "manual"
+    );
 
+  /*
+   * v28 HOT-PATH RULE:
+   * A concrete queued action already tells us what to do. Do not scan the feed
+   * for a coverage candidate before handling it.
+   */
   let coverageOverride = null;
-  if (!manualQueued) {
-    const uncoveredPostNow = guaranteedCommentCoverageCandidate(view2);
-    if (uncoveredPostNow) {
-      coverageOverride = guaranteedPostCommentAction(
-        view2,
-        uncoveredPostNow,
-        "queue-preempt-coverage"
+
+  if (!queued) {
+    const uncoveredPostNow =
+      guaranteedCommentCoverageCandidate(
+        view2
       );
+
+    if (uncoveredPostNow) {
+      coverageOverride =
+        guaranteedPostCommentAction(
+          view2,
+          uncoveredPostNow,
+          "queue-preempt-coverage"
+        );
+    }
+  }
+
+  /*
+   * Background planning is CPU work on the browser's main thread. Never start
+   * a broad planner scan while the player is actively clicking, typing or
+   * scrolling. Concrete queued/manual/event actions are allowed through.
+   */
+  if (!queued && !coverageOverride) {
+    const idleFor =
+      now() -
+      Number(
+        lastUiInteractionAt.current || 0
+      );
+
+    let inputPending = false;
+
+    try {
+      inputPending =
+        Boolean(
+          typeof navigator !== "undefined" &&
+          navigator.scheduling &&
+          typeof navigator.scheduling.isInputPending === "function" &&
+          navigator.scheduling.isInputPending({
+            includeContinuous: true,
+          })
+        );
+    } catch (e) {}
+
+    if (
+      idleFor < 2800 ||
+      inputPending
+    ) {
+      return;
     }
   }
 
@@ -57951,10 +58332,28 @@ const signOut = useCallback(async () => {
           return;
         }
 
+        const planStarted =
+          typeof performance !== "undefined" &&
+          typeof performance.now === "function"
+            ? performance.now()
+            : 0;
+
         action =
           planAutoAction(
             view2
           );
+
+        if (planStarted) {
+          const planMs =
+            performance.now() -
+            planStarted;
+
+          if (planMs >= 60) {
+            console.warn(
+              `[mv-perf] background planner: ${Math.round(planMs)}ms`
+            );
+          }
+        }
       }
       if (!action) return;
 
@@ -57982,7 +58381,14 @@ const signOut = useCallback(async () => {
          * is cooling down. Let the normal planner choose a genuinely due
          * non-local lane; otherwise wait.
          */
-        const plannedWhileLocalWaits = planAutoAction(view2);
+        const plannedWhileLocalWaits =
+          (
+            now() -
+              Number(lastUiInteractionAt.current || 0) >=
+            2800
+          )
+            ? planAutoAction(view2)
+            : null;
 
         if (
           !plannedWhileLocalWaits ||
@@ -58099,18 +58505,59 @@ const signOut = useCallback(async () => {
       autoRunning.current = false;
       autoRunningSince.current = 0;
       if (alive) setAutoBusy(false);
+
+      /*
+       * Drain a concrete queue without waiting for the background interval.
+       * Cooldown / interactive guards inside beat still apply.
+       */
+      if (
+        alive &&
+        simPeek(wRef.current)
+      ) {
+        setTimeout(() => {
+          const wake =
+            simulationWakeRef.current;
+
+          if (
+            alive &&
+            typeof wake === "function"
+          ) {
+            void wake();
+          }
+        }, 800);
+      }
     };
+
+    simulationWakeRef.current = beat;
+
     /*
      * 5 másodpercenként nézzük meg, van-e teendő.
      * Ez NEM jelent 5 másodpercenként AI-hívást:
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 9000);
-    /* PERFORMANCE v16: give the freshly restored world one paint/interaction
-       window before the autonomous planner scans history and possibly calls AI. */
-    const first = setTimeout(beat, 5000);
-    return () => { alive = false; clearInterval(i); clearTimeout(first); };
+    const i = setInterval(beat, 20000);
+
+    /*
+     * Broad autonomous planning is intentionally slower than direct queued
+     * reactions. This keeps the world alive without taking the main thread
+     * every nine seconds while the player is using the UI.
+     */
+    const first = setTimeout(beat, 9000);
+
+    return () => {
+      alive = false;
+
+      if (
+        simulationWakeRef.current ===
+        beat
+      ) {
+        simulationWakeRef.current = null;
+      }
+
+      clearInterval(i);
+      clearTimeout(first);
+    };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
 
   useEffect(() => { if (err) { const t = setTimeout(() => setErr(""), 9000); return () => clearTimeout(t); } }, [err]);
