@@ -3898,6 +3898,450 @@ function setRel(w, a, b, patch) {
   }
 }
 
+
+/* ============================================================
+   RELATIONSHIP BASELINES — v90
+
+   w.rels is the LIVE, story-changing relationship graph.
+   w.relationshipBaselines is the FRESH-RUN starting graph.
+
+   Manual edits in the relationship UI update the baseline.
+   Character-sheet / Connections canon can seed a baseline automatically.
+   Dojo/faction rivalry can seed a default negative baseline when no explicit
+   personal relationship overrides it.
+
+   A world restart restores these baselines instead of preserving whatever
+   dynamic score happened to exist at the end of the previous run.
+   ============================================================ */
+
+function ensureRelationshipBaselineStore(w) {
+  if (!w.relationshipBaselines || typeof w.relationshipBaselines !== "object") {
+    w.relationshipBaselines = {};
+  }
+  return w.relationshipBaselines;
+}
+
+function clampRelationshipScore(value) {
+  return Math.max(-100, Math.min(100, Math.round(Number(value) || 0)));
+}
+
+function relationshipBaselineSnapshot(rel, source = "legacy", extras = {}) {
+  const row = rel && typeof rel === "object" ? rel : {};
+  return {
+    score: clampRelationshipScore(row.score),
+    hidden: String(row.hidden || "").slice(0, 500),
+    type: String(row.type || "").slice(0, 160),
+    bond: String(row.bond || row.type || "").slice(0, 160),
+    fixed: !!row.fixed,
+    mood: String(row.mood || "").slice(0, 500),
+    why: String(row.why || row.reason || "").slice(0, 700),
+    source: String(source || "legacy"),
+    updatedAt: now(),
+    ...extras,
+  };
+}
+
+function relationshipBaselineIsManual(row) {
+  return Boolean(
+    row &&
+    /^manual(?:-|$)/i.test(String(row.source || ""))
+  );
+}
+
+function relationshipLooksMeaningfulForBaseline(rel) {
+  if (!rel || typeof rel !== "object") return false;
+  return Boolean(
+    Math.abs(Number(rel.score) || 0) >= 1 ||
+    String(rel.bond || rel.type || "").trim() ||
+    String(rel.hidden || "").trim() ||
+    !!rel.fixed
+  );
+}
+
+function recordRelationshipBaseline(w, a, b, source = "manual") {
+  if (!w || !a || !b || a === b) return;
+  const rel = getRel(w, a, b);
+  if (!relationshipLooksMeaningfulForBaseline(rel)) {
+    const store = ensureRelationshipBaselineStore(w);
+    if (relationshipBaselineIsManual(store[relKey(a, b)])) {
+      delete store[relKey(a, b)];
+    }
+    return;
+  }
+
+  ensureRelationshipBaselineStore(w)[relKey(a, b)] =
+    relationshipBaselineSnapshot(rel, source, {
+      mood:
+        source === "manual"
+          ? String(rel.mood || "").slice(0, 500)
+          : "",
+      why: "",
+    });
+}
+
+function setConfiguredRel(w, a, b, patch, source = "manual") {
+  if (!w || !a || !b || a === b) return;
+
+  const beforeBack = getRel(w, b, a);
+  const beforeBackBond = String(beforeBack && (beforeBack.bond || beforeBack.type) || "");
+
+  setRel(w, a, b, patch);
+  recordRelationshipBaseline(w, a, b, source);
+
+  /*
+   * setRel() may create the factual reciprocal pair for family/mentor/etc.
+   * Capture that paired starting fact too unless the reverse direction already
+   * has an explicit manual baseline.
+   */
+  const afterBack = getRel(w, b, a);
+  const pairedCreated =
+    patch &&
+    patch.bond !== undefined &&
+    String(afterBack && (afterBack.bond || afterBack.type) || "") &&
+    String(afterBack && (afterBack.bond || afterBack.type) || "") !== beforeBackBond;
+
+  if (pairedCreated) {
+    const store = ensureRelationshipBaselineStore(w);
+    const reverseKey = relKey(b, a);
+    if (!relationshipBaselineIsManual(store[reverseKey])) {
+      store[reverseKey] =
+        relationshipBaselineSnapshot(afterBack, `${source}-paired`, {
+          mood: "",
+          why: "",
+        });
+    }
+  }
+}
+
+function canonicalRelationshipEvidence(actor, target) {
+  if (!actor || !target) return "";
+
+  /*
+   * Prefer the smallest target-specific clauses instead of a huge surrounding
+   * paragraph. Character sheets often contain compact lists such as:
+   * "Friends: A, B. Rivals: C, D." A wide snippet around C could otherwise
+   * accidentally see the word "Friends" from the previous list and seed the
+   * wrong relationship.
+   */
+  const aliases = canonTargetAliases(target)
+    .map((value) => String(value || "").toLowerCase())
+    .filter(Boolean);
+
+  const rawSources = [
+    actor.connections,
+    actor.backstory,
+    actor.extra,
+    actor.secrets,
+    actor.goals,
+    actor.bio,
+    actor.job,
+    actor.role,
+    actor.organization,
+    actor.affiliation,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value));
+
+  const clauses = [];
+
+  rawSources.forEach((source) => {
+    source
+      .split(/\n+|(?<=[.!?])\s+|;\s*/g)
+      .map((part) => part.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .forEach((part) => {
+        const low = part.toLowerCase();
+        if (!aliases.some((alias) => low.includes(alias))) return;
+        if (!clauses.includes(part)) clauses.push(part);
+      });
+  });
+
+  if (clauses.length) {
+    return clauses
+      .slice(0, 6)
+      .join(" | ")
+      .slice(0, 2600);
+  }
+
+  const directConnections =
+    connectionCanonSnippetAbout(actor, target, 1100);
+
+  const ownStory =
+    ownStorySnippetAbout(actor, target);
+
+  return [directConnections, ownStory]
+    .filter(Boolean)
+    .join(" | ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 2200);
+}
+
+function inferCanonicalRelationshipBaseline(w, actor, target) {
+  if (!w || !actor || !target || actor.id === target.id) return null;
+
+  const evidence = canonicalRelationshipEvidence(actor, target);
+  const low = evidence.toLowerCase();
+  const cue = connectionRelationshipCue(actor, target);
+  const factionRivalry = factionRivalryActiveBetween(actor, target);
+
+  const explicitBest =
+    /best friend|ride\s*or\s*die|legjobb bar[aá]t|legjobb bar[aá]tn[oő]|legjobb bar[aá]tja/.test(low);
+  const explicitClose =
+    /close friend|k[oö]zeli bar[aá]t|like a sibling|testv[eé]rk[eé]nt/.test(low);
+  const explicitFriend =
+    /\bfriend\b|bar[aá]t|ally|sz[oö]vets[eé]ges|trusted ally|loyal friend/.test(low);
+  const explicitEnemy =
+    /archenemy|sworn enemy|enemy|ellens[eé]g|hate(?:s|d)?\b|hates\b|gy[uű]l[oö]l|despise|f[oő]ellens[eé]g/.test(low);
+  const explicitRival =
+    /rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(low);
+
+  const explicitDating =
+    /\bdating\b|boyfriend|girlfriend|j[aá]rnak|p[aá]rja|relationship with/.test(low);
+  const explicitEngaged =
+    /engaged|fianc[eé]|jegyes/.test(low);
+  const explicitSpouse =
+    /husband|wife|spouse|h[aá]zast[aá]rs|f[eé]rje|feles[eé]ge/.test(low);
+  const explicitEx =
+    /\bex\b|ex-boyfriend|ex-girlfriend|exes|volt bar[aá]t|volt bar[aá]tn[oő]|volt p[aá]r/.test(low);
+  const explicitMutualCrush =
+    /mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction|k[oö]lcs[oö]n[oö]s vonzalom/.test(low);
+  const explicitCrush =
+    /crush|has a crush|vonz[oó]d|vonzalom|attraction|attracted|in love|szerelmes|love interest/.test(low);
+  const explicitSecret =
+    /secret crush|hidden crush|secret attraction|titkos crush|titkos vonzalom|rejtett vonzalom|senki nem tud|doesn['’]?t know/.test(low);
+
+  const explicitMother =
+    /\bmother\b|\bmom\b|\bmum\b|\banya\b|édesany/.test(low);
+  const explicitFather =
+    /\bfather\b|\bdad\b|\bapa\b|édesap/.test(low);
+  const explicitSibling =
+    /\bsister\b|\bbrother\b|sibling|testv[eé]r/.test(low);
+  const explicitCousin =
+    /cousin|unokatestv[eé]r/.test(low);
+  const explicitMentor =
+    /\bmentor\b|\bsensei\b|\bteacher\b|\bcoach\b|mester|tan[aá]r|edz[oő]/.test(low);
+  const explicitStudent =
+    /\bstudent\b|prot[eé]g[eé]|tan[ií]tv[aá]ny/.test(low);
+  const explicitTeammate =
+    /teammate|team mate|team-mate|csapatt[aá]rs|dojo mate|doj[oó]t[aá]rs|clubmate|klubt[aá]rs/.test(low);
+
+  /*
+   * Personal canon is stronger than broad faction assumptions.
+   * If the sheet explicitly says they are friends/lovers/family, keep that.
+   */
+  if (explicitMother) {
+    return { score: 55, bond: "Anya", fixed: true, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitFather) {
+    return { score: 55, bond: "Apa", fixed: true, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitSibling) {
+    return { score: 55, bond: "Testvér", fixed: true, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitCousin) {
+    return { score: 45, bond: "Unokatestvér", fixed: true, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+
+  if (explicitSpouse) {
+    return { score: 90, bond: "Házastárs", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitEngaged) {
+    return { score: 85, bond: "Jegyesek", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitDating) {
+    return { score: 75, bond: "Járnak", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitEx) {
+    return { score: 0, bond: "Exek", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitMutualCrush) {
+    return { score: 70, bond: "Kölcsönös crush", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitCrush || cue.romantic) {
+    return {
+      score: 52,
+      bond: "Crush",
+      fixed: false,
+      hidden: explicitSecret || cue.secret ? "Secret crush" : "",
+      mood: "",
+      why: "",
+      source: "sheet",
+    };
+  }
+
+  if (explicitBest || cue.close) {
+    return { score: 92, bond: "Legjobb barát", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitClose) {
+    return { score: 76, bond: "Közeli barát", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if ((explicitFriend || cue.friendly) && !(explicitEnemy || explicitRival || cue.hostile || cue.rival)) {
+    return { score: 55, bond: "Barát", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+
+  if (explicitEnemy || cue.hostile) {
+    return {
+      score: -90,
+      bond: "Ellenség",
+      fixed: false,
+      hidden: "",
+      mood: "hostile",
+      why: "",
+      source: "sheet",
+    };
+  }
+
+  if (explicitRival || cue.rival) {
+    return {
+      score: -68,
+      bond: "Rivális",
+      fixed: false,
+      hidden: "",
+      mood: "competitive and distrustful",
+      why: "",
+      source: "sheet",
+    };
+  }
+
+  if (explicitMentor && !explicitStudent) {
+    return { score: 25, bond: "Mentor", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitStudent && !explicitMentor) {
+    return { score: 20, bond: "Tanítvány", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+  if (explicitTeammate) {
+    return { score: 28, bond: "Teammate", fixed: false, hidden: "", mood: "", why: "", source: "sheet" };
+  }
+
+  if (factionRivalry) {
+    return {
+      score: -72,
+      bond: "Rivális",
+      fixed: false,
+      hidden: "",
+      mood: "hostile and distrustful",
+      why: "",
+      source: "faction",
+    };
+  }
+
+  return null;
+}
+
+function refreshCanonicalRelationshipBaselines(w, focusId = "") {
+  if (!w) return;
+  const store = ensureRelationshipBaselineStore(w);
+  const people = allSubjects(w).filter((person) => person && person.id);
+  const activeIds = new Set(people.map((person) => String(person.id)));
+
+  /* Drop baseline edges that point at a deleted character. */
+  Object.keys(store).forEach((key) => {
+    const parts = String(key).split(">");
+    if (
+      parts.length !== 2 ||
+      !activeIds.has(parts[0]) ||
+      !activeIds.has(parts[1])
+    ) {
+      delete store[key];
+    }
+  });
+
+  people.forEach((actor) => {
+    if (focusId && actor.id !== focusId) return;
+
+    people.forEach((target) => {
+      if (!target || actor.id === target.id) return;
+      const key = relKey(actor.id, target.id);
+      const existingBaseline = store[key];
+
+      if (relationshipBaselineIsManual(existingBaseline)) {
+        return;
+      }
+
+      const inferred = inferCanonicalRelationshipBaseline(w, actor, target);
+
+      if (inferred) {
+        store[key] = {
+          ...relationshipBaselineSnapshot(inferred, inferred.source || "sheet"),
+          ...inferred,
+          updatedAt: now(),
+        };
+        return;
+      }
+
+      /*
+       * If an earlier automatically inferred relation no longer exists in the
+       * edited sheet, remove it. Manual baselines never get deleted here.
+       */
+      if (
+        existingBaseline &&
+        /^(?:sheet|faction)$/i.test(String(existingBaseline.source || ""))
+      ) {
+        delete store[key];
+        return;
+      }
+
+      /*
+       * Migration fallback for old worlds that predate baselines. This is used
+       * only once when no stronger sheet/faction inference exists.
+       */
+      if (!existingBaseline) {
+        const current = getRel(w, actor.id, target.id);
+        if (relationshipLooksMeaningfulForBaseline(current)) {
+          store[key] =
+            relationshipBaselineSnapshot(current, "legacy", {
+              mood: "",
+              why: "",
+            });
+        }
+      }
+    });
+  });
+}
+
+function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
+  if (!w) return;
+
+  /*
+   * Re-read the character sheets at restart so edits to Connections/backstory
+   * immediately affect the next run.
+   */
+  refreshCanonicalRelationshipBaselines(w);
+
+  const store = ensureRelationshipBaselineStore(w);
+  const activeIds = new Set(allSubjects(w).map((person) => String(person.id)));
+  const next = {};
+
+  Object.keys(store).forEach((key) => {
+    const parts = String(key).split(">");
+    if (
+      parts.length !== 2 ||
+      !activeIds.has(parts[0]) ||
+      !activeIds.has(parts[1]) ||
+      parts[0] === parts[1]
+    ) {
+      return;
+    }
+
+    const baseline = store[key] || {};
+    next[key] = {
+      ...EMPTY_REL,
+      score: clampRelationshipScore(baseline.score),
+      hidden: String(baseline.hidden || "").slice(0, 500),
+      type: "",
+      bond: String(baseline.bond || baseline.type || "").slice(0, 160),
+      fixed: !!baseline.fixed,
+      mood: String(baseline.mood || "").slice(0, 500),
+      why: "",
+      at,
+    };
+  });
+
+  w.rels = next;
+}
+
+
 /* ---------- jegyzetek (mint az Instagram Notes) ----------
    Mindenkinek egy aktív jegyzete lehet, ami egy nap után magától lejár. */
 const NOTE_LIFE = 24 * 3600e3;
@@ -14751,6 +15195,13 @@ function migrate(w) {
     if (!r.bond && r.type) { r.bond = r.type; r.fixed = FIXED_BONDS.indexOf(r.type) >= 0; r.type = ""; }
   });
 
+  /*
+   * v90: old worlds had only the live relationship graph. Build a persistent
+   * fresh-run baseline once, prioritizing target-specific character canon and
+   * Connections over broad faction defaults, then current legacy relations.
+   */
+  refreshCanonicalRelationshipBaselines(w);
+
   // képhivatkozások migrációja: a tényleges fájl marad külön tárolva, itt csak a stabil metaél marad.
   const noteImage = (ref, patch) => {
     const id = imageIdOf(ref);
@@ -15928,7 +16379,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v89-restart-social-image-canon";
+const BUILD_VERSION = "v90-relationship-baseline-image-vision";
 
 const AUTO = "masvilag:auto";
 /*
@@ -22541,6 +22992,48 @@ COMPREHENSION LOCK:
 `;
 }
 
+function commentTargetRelationshipMatrix(w, cast, post) {
+  if (!w || !post) return "";
+  const target = charById(w, post.authorId);
+  if (!target) return "";
+
+  const rows = (cast || [])
+    .filter((actor) => actor && actor.id && actor.id !== post.authorId)
+    .slice(0, 24)
+    .map((actor) => {
+      const rel = getRel(w, actor.id, post.authorId) || {};
+      const cue = connectionCanonSnippetAbout(actor, target, 460);
+      const rivalry = factionRivalryActiveBetween(actor, target);
+      const tier = relationshipFilterTier(rel);
+
+      return [
+        `- COMMENTER ${actor.name} [${actor.id}] -> POST AUTHOR ${target.name} [${post.authorId}]`,
+        `tier=${tier}`,
+        `score=${Number(rel.score) || 0}`,
+        `bond=${String(rel.bond || rel.type || "none")}`,
+        String(rel.hidden || "").trim()
+          ? `privateFeeling=${cut(String(rel.hidden), 120)}`
+          : "",
+        rivalry ? "factionRivalry=YES" : "factionRivalry=NO",
+        cue ? `ownConnections=${cut(cue, 460)}` : "",
+      ]
+        .filter(Boolean)
+        .join(" | ");
+    });
+
+  if (!rows.length) return "";
+
+  return `
+COMMENT TARGET RELATIONSHIP MATRIX — HARD DIRECTED LOOKUP:
+${rows.join("\n")}
+
+RULE:
+- Each row is COMMENTER → THIS EXACT POST AUTHOR. Use that row for top-level tone.
+- Do not accidentally use POST AUTHOR → COMMENTER or another character's relationship.
+- For a reply, re-evaluate COMMENTER → PARENT COMMENT AUTHOR before writing the reply.
+`;
+}
+
 async function genComments(w, post, options = {}) {
   const cast = fairCommentCast(
     w,
@@ -22627,6 +23120,8 @@ ${characterAgentRuntimeCard(
     post,
   }
 )}
+
+${commentTargetRelationshipMatrix(w, cast, post)}
 
 ${cast
   .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
@@ -25480,6 +25975,18 @@ function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
   const albumItem = albumFind(character, requestedImage);
   if (!albumItem) return false;
 
+  /*
+   * Never publish a blind album image. Either the vision model has analyzed it
+   * or the user supplied confirmed context. This guarantees that the poster and
+   * observers receive meaningful image context when it enters the feed.
+   */
+  if (
+    !String(albumItem.vision || "").trim() &&
+    !String(albumItem.note || "").trim()
+  ) {
+    return false;
+  }
+
   const todayPosts = autonomousAiPostsThisGameDay(w);
   const todayCount = todayPosts.length;
 
@@ -27662,14 +28169,14 @@ function RelPair({ w, aId, bId, aName, bName, update }) {
         {r.why ? <p className="hint" style={{ marginBottom: 6 }}>{r.why}</p> : null}
         <RelBar score={r.score} />
         <input className="i mono" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} type="range" min="-100" max="100"
-          value={r.score} onChange={(e) => update((n) => setRel(n, from, to, { score: Number(e.target.value) }))} />
+          value={r.score} onChange={(e) => update((n) => setConfiguredRel(n, from, to, { score: Number(e.target.value) }, "manual"))} />
         <MoodPicker value={r.mood} style={{ padding: "6px 10px", fontSize: 12 }}
-          onChange={(v) => update((n) => setRel(n, from, to, { mood: v }))} />
+          onChange={(v) => update((n) => setConfiguredRel(n, from, to, { mood: v }, "manual"))} />
         <BondPicker value={r.bond || r.type || ""} fixed={!!r.fixed} style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }}
-          onChange={(pp) => update((n) => setRel(n, from, to, { ...pp, type: "" }))} />
+          onChange={(pp) => update((n) => setConfiguredRel(n, from, to, { ...pp, type: "" }, "manual"))} />
         <input className="i" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} value={r.hidden || ""}
           placeholder={tt("titkos érzés — csak az AI látja, ő nem mondja ki", "hidden feeling — only the AI sees it, they won't say it out loud")}
-          onChange={(e) => update((n) => setRel(n, from, to, { hidden: e.target.value }))} />
+          onChange={(e) => update((n) => setConfiguredRel(n, from, to, { hidden: e.target.value }, "manual"))} />
       </div>
     );
   };
@@ -27912,7 +28419,7 @@ ${worldLanguage(w, w && w.meId) === "en"
   ? "All user-visible generated profile fields must be in English."
   : "Minden generált, felhasználónak látható profilmező magyar legyen."}
 Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók):
-{"name":"","nick":"","username":"","birth":"","gender":"","orientation":"","height":"","job":"","city":"","bio":"","looks":"","personality":"","traits":"","speech":"","voice":"két-három tipikus mondat tőle, idézőjelben","goals":"","fears":"","likes":"","secrets":"","backstory":"","connections":"fontos, játékban nem feltétlenül létező személyek és a karakter viszonya hozzájuk; max. 4000 karakter"}`);
+{"name":"","nick":"","username":"","birth":"","gender":"","orientation":"","height":"","job":"","city":"","bio":"","looks":"","personality":"","traits":"","speech":"","voice":"két-három tipikus mondat tőle, idézőjelben","goals":"","fears":"","likes":"","secrets":"","backstory":"","connections":"fontos személyek és a karakter pontos viszonya hozzájuk; aktív játékbeli karaktert is név szerint megadhatsz (best friend, rival, enemy, crush, mentor stb.), ebből a rendszer automatikusan kiinduló relationship baseline-t épít; max. 4000 karakter"}`);
       setC((p) => ({ ...p, ...out }));
     } catch (e) { setErr((e && e.message) || tt("A generálás nem sikerült. Próbáld újra.", "Generation failed. Try again.")); }
     setBusy(false);
@@ -28030,8 +28537,8 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
             {k === "connections" && (
               <p className="hint" style={{ marginTop: 6 }}>
                 {tt(
-                  "Ide írd szabad szövegként azokat a fontos embereket és kapcsolatokat, akik a karakter múltjához vagy életéhez tartoznak, de nem akarsz nekik külön AI-karaktert létrehozni — például szülő, testvér, ex, mentor, régi barát vagy rivális. Legfeljebb 4000 karakter. Ez privát karakterkánon: a karakter emlékszik rájuk és reagálhat rájuk, de ezek a személyek nem kapnak profilt, ID-t, chatet, relationship score-t vagy AI-agentet, és más karakterek nem tudnak róluk automatikusan.",
-                  "Write important people and relationships here as free text when they belong to the character's history or life but should not become separate AI characters — for example a parent, sibling, ex, mentor, old friend, or rival. Maximum 4000 characters. This is private character canon: the character remembers and can react to them, but these people get no profile, ID, chat, relationship score, or AI agent, and other characters do not automatically know about them."
+                  "Ide írd a karakter fontos kapcsolatait szabad szövegként. AKTÍV játékbeli karaktert is megadhatsz név szerint — például „Tory — best friend”, „Brad — rival”, „Angel — secret crush”. Ha a név létező karakterre illeszkedik, a rendszer ezt privát, célpont-specifikus kánonként használja ÉS automatikus kiinduló relationship baseline-t építhet belőle. A játékban nem létező szülő/ex/mentor stb. továbbra is csak privát háttérkánon marad. Legfeljebb 4000 karakter.",
+                  "Write the character's important relationships here as free text. You MAY name an ACTIVE in-game character — for example “Tory — best friend”, “Brad — rival”, or “Angel — secret crush”. When the name matches an existing character, the system uses it as private target-specific canon AND can automatically build the starting relationship baseline from it. Parents/exes/mentors who are not active characters remain private background canon only. Maximum 4000 characters."
                 )}
               </p>
             )}
@@ -28061,8 +28568,8 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
             <label className="f" style={{ marginTop: 0 }}>{tt("Kapcsolatok — aktív karakterek között", "Bonds — between active characters")}</label>
             <p className="hint">
               {tt(
-                "Itt csak a játékban ténylegesen létező játékos- és AI-karakterek közötti dinamikus viszonyt állítod. A játékban nem szereplő szülőket, testvéreket, exeket, mentorokat vagy más fontos embereket a fenti Kapcsolódások mezőbe írd szövegként.",
-                "This section only controls dynamic relationships between player and AI characters that actually exist in the game. Put parents, siblings, exes, mentors, or other important people who are not in the game into the Connections field above as text."
+                "Itt kézzel felülírhatod a játékban létező karakterek KIINDULÓ kapcsolatát. Ez a beállítás restartkor visszaáll. Ha nem állítod kézzel, a karakterlap és a Connections név szerinti kánonja automatikusan seedelhet barátságot, rivalizálást, ellenséget, crush-t stb.; rivális dojo/frakciók explicit személyes kivétel nélkül negatív baseline-t kapnak.",
+                "Here you can manually override the STARTING relationship between active characters. This setting is restored on restart. If you do not set it manually, the character sheet and name-specific Connections canon may automatically seed friendship, rivalry, enemy, crush, etc.; rival dojos/factions receive a negative baseline unless explicit personal canon overrides it."
               )}
             </p>
 
@@ -28694,12 +29201,12 @@ function commitForm(n, subjectId, relDrafts) {
     const savedBond = String(d.bond || "");
     const familyFixed = FIXED_BONDS.includes(savedBond);
 
-    setRel(n, subjectId, otherId, {
+    setConfiguredRel(n, subjectId, otherId, {
       score: d.score || 0,
       hidden: d.hidden || "",
       bond: savedBond,
       fixed: familyFixed,
-    });
+    }, "manual");
   });
 }
 
@@ -28838,6 +29345,7 @@ function Cast({ w, update, setErr, goChat, jump }) {
             update((n) => {
               n.players[w.meId] = { ...c, id: w.meId, username: uniqueHandle(n, c.username, w.meId), updatedAt: now() };
               commitForm(n, w.meId, relDrafts);
+              refreshCanonicalRelationshipBaselines(n, w.meId);
             });
             setEditMe(false);
           }} />
@@ -28885,6 +29393,24 @@ function Cast({ w, update, setErr, goChat, jump }) {
                 stamped.id,
                 relDrafts
               );
+
+              refreshCanonicalRelationshipBaselines(
+                n,
+                stamped.id
+              );
+
+              /*
+               * Existing characters may mention the newly created person in
+               * their own Connections/backstory too, so seed reverse directed
+               * edges as soon as the new ID exists.
+               */
+              if (reallyNew) {
+                (allSubjects(n) || []).forEach((person) => {
+                  if (person && person.id && person.id !== stamped.id) {
+                    refreshCanonicalRelationshipBaselines(n, person.id);
+                  }
+                });
+              }
 
               /*
                * Minden valóban újonnan behozott AI karakter
@@ -34647,7 +35173,7 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 64,
+    schedulerVersion: 65,
     lastError: "",
   };
 }
@@ -34799,11 +35325,13 @@ function restartWorldHistoryInPlace(w) {
   w.charMemory = {};
 
   /*
-   * Relationship progression starts from the configured baseline again:
-   * keep score/bond/type/fixed/hidden + character Connections, clear only the
-   * old run's transient mood/reason residue.
+   * Restore the actual fresh-run relationship graph:
+   * - manual relationship-editor starting values return;
+   * - active character names in Connections/backstory seed relationships;
+   * - rival factions/dojos default negative unless personal canon overrides;
+   * - live score/bond drift from the previous run does NOT become the new start.
    */
-  resetRelationshipRuntimeForFreshRun(w, at);
+  restoreRelationshipBaselinesForFreshRun(w, at);
 
   /* RP/Event, rewards, diary and visible world-history surfaces. */
   w.scenes = [];
@@ -34900,8 +35428,8 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
     setRestartConfirm(false);
     setRestartMsg(
       tt(
-        "A világ új játékmenetet kezdett. A karakterek, a beállított kapcsolati alapok és a Connections-kánon megmaradt; a régi pillanatnyi mood/why, napi poszt- és popup-kvóták, runtime és történéslista lenullázódott. A korábban kiposztolt AI-albumképek visszakerültek az albumokba.",
-        "The world started a fresh run. Characters, configured relationship baselines and Connections canon were kept; old transient mood/reason state, daily post/popup quotas, runtime and generated history were reset. Previously posted AI album images were returned to their albums."
+        "A világ új játékmenetet kezdett. A karakterek megmaradtak, a kapcsolatok pedig a kézzel beállított + karakterlap/Connections alapján felépített kiinduló baseline-ra álltak vissza. A rivális dojo/frakciók explicit személyes kivétel nélkül negatív viszonnyal indulnak. A napi poszt-, képesposzt- és popup-kvóták újraindultak, a korábban kiposztolt AI-albumképek visszakerültek az albumokba.",
+        "The world started a fresh run. Characters were kept, while relationships were restored to the starting baseline built from manual settings plus character-sheet/Connections canon. Rival dojos/factions start negative unless explicit personal canon overrides that. Daily post, image-post and popup quotas restarted, and previously posted AI album images returned to their albums."
       )
     );
     setTimeout(() => setRestartMsg(""), 4500);
@@ -36830,10 +37358,10 @@ function ensureSimState(w) {
   if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
   if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
 
-  /* v89 migration: clear stale background queue state from older schedulers.
+  /* v90 migration: clear stale background queue state from older schedulers.
      Manual requests survive; comments/follows/replies are rebuilt from the
      current world state without restart-created queue storms. */
-  if (Number(w.sim.schedulerVersion) !== 64) {
+  if (Number(w.sim.schedulerVersion) !== 65) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -36845,9 +37373,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 64;
+    w.sim.schedulerVersion = 65;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 64;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 65;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -50499,6 +51027,10 @@ export default function App() {
   const lastServerCheckAt = useRef(0);
   const pendingServerWorld = useRef(null);
 
+  /* v90: background album vision worker — one image at a time. */
+  const albumVisionBusy = useRef(false);
+  const albumVisionAttempted = useRef(new Set());
+
   wRef.current = world;
   mediaRef.current = media;
 
@@ -51207,6 +51739,149 @@ const signOut = useCallback(async () => {
       );
     setWorld(normalized.world);
   }, [world ? world.code : null, world ? world.rev : 0, code, media]);
+
+
+  /*
+   * v90 — GLOBAL ALBUM VISION BACKFILL
+   *
+   * Upload-time analysis already exists, but older albums can contain images
+   * with no `vision`. Analyze them lazily even if the user never opens the
+   * character editor. Only one request runs at once.
+   *
+   * The vision model describes visible pixels only. Names/relationship context
+   * come from the user's manual album note, so we never pretend image pixels
+   * reveal a fictional identity by themselves.
+   */
+  useEffect(() => {
+    if (
+      !world ||
+      !code ||
+      !mediaReady.current ||
+      albumVisionBusy.current
+    ) {
+      return;
+    }
+
+    let owner = null;
+    let item = null;
+    let imageInput = "";
+
+    const people = allSubjects(world)
+      .filter((person) => person && Array.isArray(person.album));
+
+    outer:
+    for (const person of people) {
+      for (const row of albumOf(person)) {
+        if (!row || String(row.vision || "").trim()) continue;
+
+        const key = `${person.id}:${row.id || row.imageId || row.src || ""}`;
+        if (albumVisionAttempted.current.has(key)) continue;
+
+        const srcValue =
+          row.imageId
+            ? imageRef(row.imageId)
+            : row.src;
+
+        const resolved =
+          resolveImg(
+            srcValue,
+            mediaRef.current || {}
+          );
+
+        if (
+          !resolved ||
+          (!isInlineImageData(resolved) && !/^https:\/\//i.test(resolved))
+        ) {
+          continue;
+        }
+
+        owner = person;
+        item = row;
+        imageInput = resolved;
+        albumVisionAttempted.current.add(key);
+        break outer;
+      }
+    }
+
+    if (!owner || !item || !imageInput) return;
+
+    albumVisionBusy.current = true;
+
+    analyzeImageDataUrl(
+      imageInput,
+      `Describe what is visibly shown in this ${owner.name || "character"} album image in 1-3 concise sentences. Mention visible people without inventing names, clothing, activity, setting, objects and mood. Do not identify a real person by name. Do not infer off-camera relationships.`
+    )
+      .then((vision) => {
+        if (!vision) return;
+
+        setWorld((prev) => {
+          if (!prev) return prev;
+
+          const n =
+            JSON.parse(
+              JSON.stringify(prev)
+            );
+
+          const person =
+            charById(n, owner.id);
+
+          if (
+            !person ||
+            !Array.isArray(person.album)
+          ) {
+            return prev;
+          }
+
+          const found =
+            person.album.find(
+              (row) =>
+                row &&
+                (
+                  String(row.id || "") === String(item.id || "") ||
+                  (
+                    item.imageId &&
+                    row.imageId === item.imageId
+                  )
+                )
+            );
+
+          if (!found || String(found.vision || "").trim()) {
+            return prev;
+          }
+
+          found.vision =
+            String(vision)
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 700);
+
+          found.analyzedAt = now();
+          n.rev = (n.rev || 0) + 1;
+          return n;
+        });
+      })
+      .catch((visionErr) => {
+        console.warn(
+          "Background album vision analysis failed:",
+          visionErr
+        );
+      })
+      .finally(() => {
+        albumVisionBusy.current = false;
+
+        /*
+         * If the previous image failed without mutating world.rev, nudge the
+         * existing pulse so the worker can continue to the next album item.
+         */
+        setSimPulse((value) => value + 1);
+      });
+  }, [
+    world ? world.code : null,
+    world ? world.rev : 0,
+    code,
+    media,
+    simPulse,
+  ]);
 
   useEffect(() => {
     let alive = true;
