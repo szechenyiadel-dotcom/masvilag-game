@@ -167,6 +167,74 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 .turn-name { font-size:11.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--gold); margin-bottom:2px; }
 .turn-act { font-style:italic; color:#C4BCD2; }
 
+/* ---------- ROLEPLAY CAST PRESENCE + FAIR PARTICIPATION — v81 ---------- */
+.scene-header-cast {
+  display:flex;
+  align-items:center;
+  gap:4px;
+  max-width:min(60vw,360px);
+  overflow-x:auto;
+  overflow-y:hidden;
+  padding:1px 2px;
+  scrollbar-width:none;
+  -webkit-overflow-scrolling:touch;
+}
+.scene-header-cast::-webkit-scrollbar { display:none; }
+
+.scene-attendance-card {
+  padding:12px !important;
+}
+.scene-attendance-list {
+  display:flex;
+  flex-wrap:wrap;
+  gap:7px;
+  margin-top:9px;
+}
+.scene-attendee-chip {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  min-width:0;
+  max-width:100%;
+  padding:5px 8px 5px 5px;
+  border:1px solid var(--line);
+  border-radius:999px;
+  background:var(--raised);
+}
+.scene-attendee-chip.player {
+  border-color:var(--oxblood);
+  background:rgba(138,29,59,.12);
+}
+.scene-attendee-name {
+  max-width:150px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:11.5px;
+  color:var(--bone);
+}
+.scene-attendee-beats {
+  flex:none;
+  min-width:19px;
+  padding:1px 5px;
+  border-radius:999px;
+  background:var(--ink);
+  color:var(--muted);
+  font-family:'JetBrains Mono',ui-monospace,monospace;
+  font-size:9px;
+  text-align:center;
+}
+.scene-list-attendees {
+  margin-top:7px;
+  line-height:1.45;
+  white-space:normal;
+  word-break:break-word;
+}
+@media (max-width:480px) {
+  .scene-header-cast { max-width:58vw; }
+  .scene-attendee-name { max-width:118px; }
+}
+
 /* modal */
 .scrim { position:absolute; inset:0; background:rgba(5,4,9,.72); backdrop-filter:blur(3px); z-index:40; display:flex; align-items:flex-end; }
 .sheet { width:100%; max-width:560px; margin:0 auto; max-height:92%; overflow-y:auto; background:var(--surface);
@@ -29089,6 +29157,14 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
               {tt("Előbb hozz létre karaktereket.", "First create some characters.")}
             </p>
           ) : null}
+          {ids.length ? (
+            <p className="hint" style={{ marginTop: 8 }}>
+              {tt(
+                "Minden kiválasztott karakter ténylegesen jelen lesz az Eventben. Nagy társaságnál a rendszer körönként rotálja a fókuszt, hogy ugyanaz a 2-3 karakter ne nyomja el a többieket.",
+                "Every selected character will actually be present in the Event. With a large cast, focus rotates between rounds so the same 2-3 characters do not crowd everyone else out."
+              )}
+            </p>
+          ) : null}
         </section>
 
         <button type="button" className="btn full scene-idea-btn" onClick={idea} disabled={busy}>
@@ -29219,6 +29295,232 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
 );
 }
 
+
+/* ============================================================
+   ROLEPLAY / EVENT CAST FAIRNESS — v81
+   ============================================================
+
+   The selected Event cast is a hard attendance list. Large scenes should not
+   collapse into the same 2-3 loud characters while invited characters become
+   invisible. Participation is derived from ACTUAL stored turns, so it survives
+   refreshes/syncs and needs no fragile model-written counter.
+*/
+function sceneAiCast(w, scene) {
+  const seen = new Set();
+  return ((scene && scene.cast) || [])
+    .map((id) => charById(w, id))
+    .filter((c) => {
+      if (!c || !c.id || isHuman(w, c.id) || seen.has(c.id)) return false;
+      seen.add(c.id);
+      return true;
+    });
+}
+
+function sceneParticipationRows(w, scene, turnsOverride = null) {
+  const cast = sceneAiCast(w, scene);
+  const turns = Array.isArray(turnsOverride)
+    ? turnsOverride
+    : mergeRoleplayTurnStreams(
+        (scene && scene.turns) || [],
+        (scene && scene.playerTurnJournal) || []
+      );
+
+  const rows = cast.map((c, castIndex) => {
+    let count = 0;
+    let speech = 0;
+    let actions = 0;
+    let lastIndex = -1;
+
+    turns.forEach((turn, index) => {
+      if (!turn || turn.authorId !== c.id) return;
+      count += 1;
+      if (turn.kind === "action") actions += 1;
+      else speech += 1;
+      lastIndex = index;
+    });
+
+    const recentCount = turns
+      .slice(-14)
+      .filter((turn) => turn && turn.authorId === c.id)
+      .length;
+
+    return {
+      id: c.id,
+      name: c.name || c.id,
+      character: c,
+      castIndex,
+      count,
+      speech,
+      actions,
+      recentCount,
+      lastIndex,
+      turnsSince:
+        lastIndex < 0
+          ? Number.MAX_SAFE_INTEGER
+          : Math.max(0, turns.length - 1 - lastIndex),
+    };
+  });
+
+  return rows;
+}
+
+function sceneFairParticipationPlan(
+  w,
+  scene,
+  turnsOverride = null,
+  directTargetId = ""
+) {
+  const rows = sceneParticipationRows(w, scene, turnsOverride);
+  const aiCount = rows.length;
+
+  if (!aiCount) {
+    return {
+      rows: [],
+      mandatoryIds: [],
+      beatMin: 1,
+      beatMax: 2,
+      desiredDistinct: 0,
+    };
+  }
+
+  const validDirectTarget =
+    directTargetId &&
+    rows.some((row) => row.id === directTargetId)
+      ? directTargetId
+      : "";
+
+  /*
+   * Lowest lifetime participation wins first; ties go to whoever has waited
+   * longest. This creates a rolling rotation without forcing equal personality
+   * volume: a quiet character can contribute one short action, while a talkative
+   * character may still get extra lines naturally.
+   */
+  const fairnessOrder = [...rows].sort((a, b) => {
+    if (a.count !== b.count) return a.count - b.count;
+    if (a.recentCount !== b.recentCount) return a.recentCount - b.recentCount;
+    if (a.lastIndex !== b.lastIndex) return a.lastIndex - b.lastIndex;
+    return a.castIndex - b.castIndex;
+  });
+
+  const desiredDistinct = validDirectTarget
+    ? Math.min(
+        aiCount,
+        aiCount <= 3
+          ? 1
+          : aiCount <= 6
+            ? 2
+            : 3
+      )
+    : Math.min(
+        aiCount,
+        aiCount <= 2
+          ? aiCount
+          : aiCount <= 5
+            ? 2
+            : aiCount <= 8
+              ? 3
+              : 4
+      );
+
+  const mandatoryIds = [];
+  const add = (id) => {
+    if (
+      id &&
+      rows.some((row) => row.id === id) &&
+      !mandatoryIds.includes(id)
+    ) {
+      mandatoryIds.push(id);
+    }
+  };
+
+  /*
+   * A directly addressed character must not lose their reply to fairness
+   * rotation. The remaining slots go to the most under-used attendees.
+   */
+  add(validDirectTarget);
+  fairnessOrder.forEach((row) => {
+    if (mandatoryIds.length < desiredDistinct) add(row.id);
+  });
+
+  const beatMin =
+    aiCount <= 2
+      ? 1
+      : aiCount <= 5
+        ? 3
+        : aiCount <= 8
+          ? 4
+          : 5;
+
+  const beatMax =
+    aiCount <= 2
+      ? 4
+      : aiCount <= 5
+        ? 5
+        : aiCount <= 8
+          ? 6
+          : 7;
+
+  return {
+    rows,
+    mandatoryIds,
+    beatMin,
+    beatMax,
+    desiredDistinct,
+  };
+}
+
+function roleplayParticipationCard(
+  w,
+  scene,
+  turnsOverride = null,
+  directTargetId = ""
+) {
+  const plan = sceneFairParticipationPlan(
+    w,
+    scene,
+    turnsOverride,
+    directTargetId
+  );
+
+  if (!plan.rows.length) return "";
+
+  const ledger = plan.rows
+    .map((row) => {
+      const waiting =
+        row.lastIndex < 0
+          ? "NEVER PARTICIPATED YET"
+          : `${row.count} stored beat(s), ${row.recentCount} in recent window`;
+      return `- ${row.name} [${row.id}]: ${waiting}`;
+    })
+    .join("\n");
+
+  const mandatory = plan.mandatoryIds
+    .map((id) => {
+      const c = charById(w, id);
+      return c ? `${c.name} [${id}]` : id;
+    })
+    .join(", ");
+
+  return `
+EVENT ATTENDANCE + FAIR PARTICIPATION — HARD GROUND TRUTH:
+- EVERY character in the Event cast is physically present in the scene unless an EXACT STORED turn explicitly established that they left. Never silently erase an invited character, pretend they never arrived, or move them offscreen merely because the cast is large.
+- Presence is NOT the same as speaking every round, but no invited AI may remain indefinitely invisible while the same 2-3 characters monopolize the scene.
+- Fairness means OPPORTUNITY, not identical personality volume. A shy/quiet/private character may contribute a brief glance, movement, reaction, one sentence or a deliberate silence/action instead of a long speech. A talkative character may still speak more overall.
+- Direct addressee priority still wins: if the player clearly addressed one person, that person answers/reacts first or unmistakably in this round. Fairness characters must not steal that answer.
+- Large social scenes must also contain AI-to-AI interaction; do not orbit every beat around the player.
+
+ACTUAL PARTICIPATION LEDGER:
+${ledger}
+
+MANDATORY FAIRNESS SPEAKERS/ACTORS THIS ROUND:
+${mandatory || "-"}
+- Each ID listed above MUST receive at least one visible speech OR action beat in this generated round unless an exact current physical impossibility is already established in stored turns.
+- Aim for ${plan.beatMin}-${plan.beatMax} natural beats total this round, using at least ${plan.desiredDistinct} distinct invited AI character(s) when available.
+- Prefer currently under-used attendees before giving another extra beat to someone already dominating the scene.
+- Do NOT solve fairness by making everyone deliver a mini-monologue. Short overlapping reactions, side conversations and small actions are valid.
+`;
+}
+
 function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const { tt } = useLang();
   const playerId = w.meId;
@@ -29234,7 +29536,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const endRef = useRef(null);
   const sendLockRef = useRef(false);
   const [optimisticTurns, setOptimisticTurns] = useState([]);
-  const cast = (w.chars || []).filter((c) => (scene.cast || []).indexOf(c.id) >= 0);
+  const cast = sceneAiCast(w, scene);
   const who = (id) => charById(w, id);
   const eventProgress = sceneEventProgress(scene, clockNow);
   const eventLang = worldLanguage(w, w.meId);
@@ -29267,6 +29569,10 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
     repairedSceneTurns,
     repairedPlayerJournal,
     optimisticTurns
+  );
+  const participationRows = sceneParticipationRows(w, scene, visibleTurns);
+  const participationById = new Map(
+    participationRows.map((row) => [row.id, row])
   );
 
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [visibleTurns.length]);
@@ -29369,6 +29675,18 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
           optimisticPlayerTurn ? [optimisticPlayerTurn] : []
         ),
       };
+      const participationPlan = sceneFairParticipationPlan(
+        w,
+        promptScene,
+        promptTurns,
+        playerTarget.id || ""
+      );
+      const participationCard = roleplayParticipationCard(
+        w,
+        promptScene,
+        promptTurns,
+        playerTarget.id || ""
+      );
       const log = promptTurns.slice(-24).map((t) => {        if (t.authorId === "narrator") return `(${t.text})`;
         const a = who(t.authorId);
         const target =
@@ -29417,6 +29735,8 @@ ${playerText
     )
   : ""}
 JELEN VANNAK: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ")}, valamint ${w.player.name} [${w.meId}] — őt a felhasználó játssza.
+
+${participationCard}
 
 EDDIG TÖRTÉNT:
 ${log || "a jelenet most kezdődik"}
@@ -29487,12 +29807,14 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - EMOJI ABSZOLÚT TILOS A ROLEPLAYBEN: sem beszédben, sem actionben, sem narrációban, sem sceneMemory/events/status mezőben ne használj emojit, emoji-piktogramot vagy dekoratív emoji jelet. Az érzelmet kizárólag szavakkal, ritmussal, testbeszéddel és cselekvéssel fejezd ki.
 - Ha fent AKTUÁLIS CÍMZETT van megadva a játékos mostani megszólalásához, a közvetlen "te/you" és a kérdés elsősorban ANNAK a karakternek szól. Más jelenlévő ne reagáljon úgy, mintha hozzá beszélt volna, hacsak természetesen közbe nem szól.
 - A játékos korábban egyértelműen feloldott beszélgetési fókuszát őrizd meg több körön át; ne felejtsd el csak azért, mert közben más karakter is megszólalt.
-- Írd meg a folytatást 3-5 természetes mozzanatban. Egy mozzanat lehet beszéd, cselekvés vagy rövid narrátori átvezetés.
-- Ne kötelezően minden jelenlévő szereplő kapjon sort minden körben. Az szólaljon meg vagy cselekedjen, akinek ebben a pillanatban természetes oka van rá.
+- A fenti FAIR PARTICIPATION terv szerinti ${participationPlan.beatMin}-${participationPlan.beatMax} természetes mozzanatban írd meg a folytatást. Egy mozzanat lehet beszéd, cselekvés vagy rövid narrátori átvezetés.
+- Nem kell minden jelenlévő szereplőnek minden körben sort kapnia, DE a MANDATORY FAIRNESS SPEAKERS/ACTORS listán szereplő AI-k közül mindegyik kapjon legalább egy látható beszédet vagy actiont ebben a körben.
+- Aki eddig alig vagy egyáltalán nem vett részt, kapjon elsőbbséget az extra megszólalásoknál. Ne ugyanaz a 2-3 hangos karakter vigye végig az egész nagy Eventet.
 - NE SIESS A LEZÁRÁSSAL. Ne írj végső búcsút, végleges kimenetelt, „mindenki hazament” montázst vagy jelenetzáró epilógust azért, mert a kör hosszú lett vagy a minimum teljesült. Egy részkonfliktus vagy beszélgetés lezárulhat, de maga az Event nyitva marad, amíg a játékos le nem zárja.
 - Nagyobb társas jelenetben/buliban a karakterek EGYMÁSSAL is beszéljenek és reagáljanak egymásra; ne mindenki a játékos körül forogjon.
-- Tartsd fejben, hogy minden felsorolt szereplő jelen van akkor is, ha ebben a körben nem kerül fókuszba.
-- A korábbi történések térbeli és időbeli folytonossága maradjon meg. Ne teleportáljon senki, ne találj ki hirtelen új érkezést/távozást, ha azt a jelenet nem alapozta meg.
+- Tartsd fejben, hogy MINDEN felsorolt/meghívott szereplő jelen van akkor is, ha ebben a körben nem kerül fókuszba. Egy nagy cast nem jogosít fel arra, hogy valakit csendben kivegyél a jelenetből.
+- Meghívott karakter ne váljon láthatatlan háttérstatisztává több egymást követő körre: a fair rotation idővel adjon neki saját reakciót, actiont vagy megszólalást.
+- A korábbi történések térbeli és időbeli folytonossága maradjon meg. Ne teleportáljon senki, ne találj ki hirtelen új érkezést/távozást, és ne állítsd, hogy valaki nincs ott, ha azt pontos korábbi turn nem alapozta meg.
 - Ne reseteld a kapcsolatokat minden kör elején. A jó viszony legyen ténylegesen közvetlenebb/melegebb; a rossz viszony legyen feszültebb/élesebb; crush/vonzalom színezze a figyelmet, zavart, féltékenységet vagy flörtöt; a flörtölős karakter ténylegesen flörtölhet, ha természetes.
 - A karakterlap TÖRTÉNETÉBŐL eredő lojalitás, ellenségeskedés, dojo- vagy szervezeti rivalizálás aktív marad. Például Cobra Kai ↔ Miyagi-Fang/Miyagi-Do/Eagle Fang ellentét ne tűnjön el semleges viselkedésbe, hacsak a személyes kapcsolat ezt hitelesen felül nem írja.
 - ERŐVISZONY/FÉLELEM: a veszélyesség, harci tapasztalat, rang, tekintély és kiszámíthatatlanság ténylegesen hasson arra, ki mer kinek nekimenni. Egy jóval gyengébb vagy kevésbé bátor karakter ne provokáljon lazán egy hírhedten veszélyes senseit/vezetőt/harcost csak a dráma kedvéért. Lehet, hogy fél, kerül, enged, segítséget keres, visszafogja magát vagy csak közvetetten áll ellen. Egy vakmerő karakter szembeszállhat vele, de a kockázatot akkor is érzékelje.
@@ -29663,10 +29985,13 @@ ${repetitionGuard(w, cast.map((c) => c.id), "jelenetfolytatás")}
 
 ${matureContentInstruction(w, scene.cast || [], "roleplay")}
 ${roleplayRomanticInitiativeCard(w, promptScene, cast)}
+${participationCard}
 
 SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
 - EMOJI TILOS minden roleplay beszédben, actionben, narrációban és minden visszaadott szövegmezőben.
-- Adj 2-4 TELJESEN FRISS mozzanatot.
+- Adj ${participationPlan.beatMin}-${participationPlan.beatMax} TELJESEN FRISS mozzanatot.
+- A MANDATORY FAIRNESS SPEAKERS/ACTORS listán szereplő minden AI-nak legyen legalább egy látható speech vagy action mozzanata.
+- A kiválasztott cast MIND jelen van; senkit ne tüntess el csak azért, mert sokan vannak.
 - Egyetlen korábbi mondatot, akciót, poént, fenyegetést, flörtformulát vagy közeli parafrázist se használj újra.
 - CSAK a fent megadott [ID]-kat vagy a "narrator" értéket használd.
 - A szereplők karakterhűek legyenek; ne váljanak semleges AI-hanggá.
@@ -29692,6 +30017,100 @@ VÁLASZ CSAK JSON:
         if (retryResolved.length) {
           out = retryOut;
           resolved = retryResolved;
+        }
+      }
+
+      /*
+       * v81 HARD FAIRNESS REPAIR.
+       * Prompt instructions are not enough for a large cast: if an under-used
+       * mandatory attendee was still omitted (or their line was removed by a
+       * sanitizer), request one compact batched repair for the missing IDs.
+       */
+      if (resolved.length && participationPlan.mandatoryIds.length) {
+        const usedIds = new Set(
+          resolved
+            .filter((turn) => turn && turn.authorId !== "narrator")
+            .map((turn) => turn.authorId)
+        );
+        const missingFairIds = participationPlan.mandatoryIds
+          .filter((id) => id && !usedIds.has(id));
+
+        if (missingFairIds.length) {
+          try {
+            const missingChars = missingFairIds
+              .map((id) => charById(w, id))
+              .filter(Boolean);
+
+            const alreadyGenerated = resolved
+              .map((turn) => {
+                if (!turn || turn.authorId === "narrator") return turn ? `(narrator: ${turn.text})` : "";
+                return `${nameOfIn(w, turn.authorId)}: ${turn.text}`;
+              })
+              .filter(Boolean)
+              .join("\n");
+
+            const fairnessRepair = sanitizeRoleplayAiOutput(
+              await askWorldJSONInteractive(
+                w,
+                engineFor(w),
+                `${worldContext(w, missingFairIds, true, null)}
+
+ROLEPLAY FAIR-PARTICIPATION REPAIR — DO NOT REWRITE THE ROUND.
+
+EVENT: ${scene.title}
+SETTING: ${scene.setting || "-"}
+ALL INVITED AI PRESENT: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ")}
+PLAYER: ${w.player.name} [${w.meId}]
+
+EXACT RECENT SCENE:
+${log || "the scene is beginning"}
+
+BEATS ALREADY GENERATED FOR THIS ROUND:
+${alreadyGenerated || "-"}
+
+THESE INVITED CHARACTERS WERE REQUIRED BY THE FAIR ROTATION BUT ARE STILL MISSING:
+${missingChars.map((c) => `- ${c.name} [${c.id}]`).join("\n")}
+
+${missingChars.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
+
+${matureContentInstruction(w, missingFairIds, "roleplay")}
+
+HARD TASK:
+- Return EXACTLY ONE short, natural speech OR action beat for EACH missing character above.
+- Use each missing [ID] exactly once.
+- They are already physically present in the Event. Do not invent arrival, departure, absence, phone-checking or an excuse for why they were not involved.
+- Their beat must react to the ACTUAL current scene or to another character currently present. It may be very brief if they are quiet/shy.
+- Do not steal a direct answer owed to another character; side reaction / AI-to-AI interaction is valid.
+- Do not create a new major plot event merely to give them a line.
+- Do not write for the player.
+- No emoji anywhere in roleplay.
+- Keep all gender/orientation/flirt/crush rules and character canon intact.
+
+JSON ONLY:
+{"turns":[{"id":"one of the missing exact IDs","to":"present target ID or empty","kind":"speech or action","text":"one fresh natural beat"}]}${TAIL}`,
+                {
+                  maxTokens: Math.max(420, Math.min(1100, 260 * missingChars.length)),
+                  maxTries: 2,
+                  timeoutMs: 26000,
+                }
+              )
+            );
+
+            const missingSet = new Set(missingFairIds);
+            const addedIds = new Set();
+            const repairedFairTurns = resolveSceneTurns(fairnessRepair)
+              .filter((turn) => {
+                if (!turn || !missingSet.has(turn.authorId) || addedIds.has(turn.authorId)) return false;
+                addedIds.add(turn.authorId);
+                return true;
+              });
+
+            if (repairedFairTurns.length) {
+              resolved = resolved.concat(repairedFairTurns);
+            }
+          } catch (_) {
+            /* Keep the usable main round if the small fairness repair provider call fails. */
+          }
         }
       }
 
@@ -30226,7 +30645,9 @@ Formátum:
       <div className="scene-hd between">
         <button className="btn tiny ghost" onClick={onBack}><ChevronLeft size={14} /> {tt("Eventek", "Events")}</button>
         <div className="row" style={{ gap: 4, alignItems: "center" }}>
-          {cast.slice(0, 5).map((c) => <Av key={c.id} src={c.avatar} name={c.name} size={24} radius={8} />)}
+          <div className="scene-header-cast" title={tt("Minden jelenlévő AI", "All present AI characters")}>
+            {cast.map((c) => <Av key={c.id} src={c.avatar} name={c.name} size={24} radius={8} />)}
+          </div>
           {scene.open ? (
             <button className="btn tiny ghost" onClick={() => setMenuOpen((v) => !v)} title={tt("Event menü", "Event menu")}>•••</button>
           ) : null}
@@ -30261,6 +30682,53 @@ Formátum:
           ) : null}
         </h2>
         {scene.setting && <p className="hint" style={{ marginTop: 6 }}>{scene.setting}</p>}
+      </div>
+
+      <div className="card scene-attendance-card" style={{ marginTop: 10 }}>
+        <div className="between">
+          <label className="f" style={{ margin: 0 }}>
+            {tt("JELEN VANNAK", "PRESENT")}
+          </label>
+          <span className="chip">
+            {tt(`${cast.length + 1} fő`, `${cast.length + 1} people`)}
+          </span>
+        </div>
+
+        <div className="scene-attendance-list">
+          <div className="scene-attendee-chip player" title={tt("A te karaktered", "Your character")}>
+            <Av src={w.player.avatar} name={w.player.name} size={24} radius={8} />
+            <span className="scene-attendee-name">{w.player.name}</span>
+            <span className="scene-attendee-beats">
+              {visibleTurns.filter((turn) => turn && turn.authorId === w.meId).length}
+            </span>
+          </div>
+
+          {cast.map((c) => {
+            const row = participationById.get(c.id);
+            const beats = row ? row.count : 0;
+            return (
+              <div
+                className="scene-attendee-chip"
+                key={c.id}
+                title={tt(
+                  `${c.name}: ${beats} saját mozzanat eddig`,
+                  `${c.name}: ${beats} own beats so far`
+                )}
+              >
+                <Av src={c.avatar} name={c.name} size={24} radius={8} />
+                <span className="scene-attendee-name">{c.name}</span>
+                <span className="scene-attendee-beats">{beats}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <p className="hint" style={{ marginTop: 8 }}>
+          {tt(
+            "Minden kiválasztott karakter ténylegesen jelen van. A szám azt mutatja, hány saját speech/action mozzanata volt eddig; a rendszer a kevesebbet szereplőket előre veszi a következő körökben.",
+            "Every selected character is actually present. The number shows how many of their own speech/action beats they have had; the system prioritizes under-used attendees in upcoming rounds."
+          )}
+        </p>
       </div>
 
       <div className="card" style={{ marginTop: 10, borderColor: eventProgress.complete ? "var(--gold)" : "var(--line)" }}>
@@ -30398,7 +30866,7 @@ function Scenes({ w, update, setErr, jump, onSignal, openId, setOpenId }) {
       {scenes.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 24 }}>{tt("Nincs aktív Event vagy függő meghívás. A lezárt Eventek emlékei és eredményei a háttérben/Diary-ban megmaradnak.", "There is no active Event or pending invitation. Memories and outcomes from finished Events remain in the background/Diary.")}</p>}
 
       {scenes.map((s) => {
-        const cast = w.chars.filter((c) => (s.cast || []).indexOf(c.id) >= 0);
+        const cast = sceneAiCast(w, s);
         return (
           <div className="card" key={s.id} onClick={() => { if (!roleplayInviteIsPending(s)) setOpenId(s.id); }} style={{ cursor: roleplayInviteIsPending(s) ? "default" : "pointer" }}>
             <div className="between">
@@ -30407,9 +30875,20 @@ function Scenes({ w, update, setErr, jump, onSignal, openId, setOpenId }) {
             </div>
             {s.setting && <p className="hint" style={{ marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{s.setting}</p>}
             {s.goal ? <p className="hint" style={{ marginTop: 6 }}><b>{tt("Cél: ", "Goal: ")}</b>{s.goal}</p> : null}
-            <div className="row" style={{ marginTop: 10, gap: 4, alignItems: "center" }}>
-              {cast.slice(0, 6).map((c) => <Av key={c.id} src={c.avatar} name={c.name} size={22} radius={7} />)}
-              <span className="handle mono" style={{ marginLeft: "auto" }}>{roleplayInviteIsPending(s) ? tt("Válaszra vár", "Awaiting your response") : (() => { const count = mergeRoleplayTurnStreams(s.turns || [], s.playerTurnJournal || []).length; return tt(`${count} mozzanat`, `${count} beats`); })()}</span>
+            <p className="hint scene-list-attendees">
+              <b>{tt("Jelen: ", "Present: ")}</b>
+              {[w.player.name, ...cast.map((c) => c.name)].join(", ")}
+            </p>
+            <div className="row" style={{ marginTop: 10, gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+              {cast.map((c) => <Av key={c.id} src={c.avatar} name={c.name} size={22} radius={7} />)}
+              <span className="handle mono" style={{ marginLeft: "auto" }}>
+                {roleplayInviteIsPending(s)
+                  ? tt(`${cast.length + 1} résztvevő · válaszra vár`, `${cast.length + 1} participants · awaiting your response`)
+                  : (() => {
+                      const count = mergeRoleplayTurnStreams(s.turns || [], s.playerTurnJournal || []).length;
+                      return tt(`${cast.length + 1} résztvevő · ${count} mozzanat`, `${cast.length + 1} participants · ${count} beats`);
+                    })()}
+              </span>
             </div>
             {roleplayInviteIsPending(s) ? (
               <div className="row" style={{ marginTop: 10, gap: 8 }} onClick={(e) => e.stopPropagation()}>
