@@ -37361,10 +37361,14 @@ function restartWorldHistoryInPlace(w) {
 
   /*
    * Before deleting the old feed, return every AI album image that had been
-   * consumed by posting. This also makes those image IDs persistent again
-   * before trimWorldImagesToFreshPeople() runs.
+   * consumed by posting. This is best-effort only: a malformed legacy post
+   * must never prevent the actual restart from completing.
    */
-  restorePostedAlbumImagesForFreshRun(w);
+  try {
+    restorePostedAlbumImagesForFreshRun(w);
+  } catch (e) {
+    console.warn("[restart-world] album restoration skipped:", e);
+  }
 
   /* Epoch invalidates any autonomous AI request that started before restart. */
   w.historyEpoch = Math.max(0, Math.floor(Number(w.historyEpoch) || 0)) + 1;
@@ -37390,8 +37394,17 @@ function restartWorldHistoryInPlace(w) {
    * - active character names in Connections/backstory seed relationships;
    * - rival factions/dojos default negative unless personal canon overrides;
    * - live score/bond drift from the previous run does NOT become the new start.
+   *
+   * If an old/malformed relationship entry is encountered, fall back to a
+   * clean relationship container instead of aborting the entire restart.
    */
-  restoreRelationshipBaselinesForFreshRun(w, at);
+  try {
+    restoreRelationshipBaselinesForFreshRun(w, at);
+  } catch (e) {
+    console.warn("[restart-world] relationship baseline rebuild failed:", e);
+    w.rels = {};
+    w.relationshipCanonFingerprint = "";
+  }
 
   /* RP/Event, rewards, diary and visible world-history surfaces. */
   w.scenes = [];
@@ -37453,9 +37466,17 @@ function restartWorldHistoryInPlace(w) {
   w.characterArrivalTrendMigratedV2 = true;
   w.socialDiscoveryMigratedV1 = true;
 
-  /* New autonomous runtime starts cleanly instead of replaying queued old work. */
+  /* New autonomous runtime starts cleanly instead of replaying queued old work.
+   * Keep this assignment last so no stale queue/running action can survive restart.
+   */
   w.autoAt = 0;
   w.sim = freshSimulationRuntime(at);
+  if (!w.sim || typeof w.sim !== "object" || Array.isArray(w.sim)) {
+    w.sim = {};
+  }
+  if (!Array.isArray(w.sim.queue)) w.sim.queue = [];
+  w.sim.running = "";
+  w.sim.at = at;
   w.activeSceneId = "";
 
   if (w.universe && typeof w.universe === "object") {
@@ -37477,14 +37498,33 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState("");
 
-  /* v79: this handler belongs to the World settings component.
-   * v76 accidentally inserted it inside socialProfiles(), where React state
-   * setters/update/tt do not exist; the settings button therefore crashed with
-   * `ReferenceError: restartWorldHistory is not defined`. */
-  const restartWorldHistory = () => {
-    update((n) => {
-      restartWorldHistoryInPlace(n);
-    });
+  /* v100.0 — crash-safe restart handler.
+   * Keep this handler inside World, where update()/state setters/tt are in scope.
+   * The restart itself is committed through the same authoritative update path
+   * as every other world mutation, so the existing autosave/sync system persists it.
+   */
+  const restartWorldHistory = useCallback(() => {
+    let restarted = false;
+
+    try {
+      restarted = update((n) => {
+        restarted = restartWorldHistoryInPlace(n) === true;
+      });
+    } catch (e) {
+      console.error("[restart-world] restart failed:", e);
+      restarted = false;
+    }
+
+    if (!restarted) {
+      setRestartMsg(
+        tt(
+          "A világ újrakezdése nem sikerült. A meglévő játékállapotot nem módosítottam.",
+          "The world could not be restarted. The existing game state was left unchanged."
+        )
+      );
+      return;
+    }
+
     setRestartConfirm(false);
     setRestartMsg(
       tt(
@@ -37492,8 +37532,9 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
         "The world started a fresh run. Characters were kept, while relationships were restored to the starting baseline built from manual settings plus character-sheet/Connections canon. Rival dojos/factions start negative unless explicit personal canon overrides that. Daily post, image-post and popup quotas restarted, and previously posted AI album images returned to their albums."
       )
     );
-    setTimeout(() => setRestartMsg(""), 4500);
-  };
+
+    window.setTimeout(() => setRestartMsg(""), 4500);
+  }, [update, tt]);
   
   
   const acc = (w.accounts || {})[w.meId] || null;
