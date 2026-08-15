@@ -18096,7 +18096,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v97-persistent-social-pacing-performance";
+const BUILD_VERSION = "v98-no-full-world-clone-no-simpulse-loop";
 const WORLD_SCHEMA_VERSION = 97;
 
 /* Fast, safe clone for the large world state. */
@@ -24416,7 +24416,7 @@ function SocialProfileModal({
 
             {tab === "posts" ? (
               <div className="social-profile-feed">
-                {posts.length ? posts.map((p) => (
+                {posts.length ? posts.slice(0, 40).map((p) => (
                   <div className="social-profile-post" key={p.id}>
                     <div className="handle mono">
                       {timeAgo(p.ts)} · {p.likes || 0} {tt("kedvelés", "likes")} · {safePostComments(p).length} {tt("hozzászólás", "comments")}
@@ -29148,6 +29148,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   const [feedMode, setFeedMode] = useState("all");
   const [showMedia, setShowMedia] = useState(false);
   const [profileId, setProfileId] = useState("");
+  /* All posts stay in world state. Only mounted feed DOM is windowed. */
+  const [visiblePostLimit, setVisiblePostLimit] = useState(60);
 
   const activeMedia =
     activeGossipMediaAccount(
@@ -29164,6 +29166,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     const i = setInterval(() => setResting(cooldownLeft() > 0), 1000);
     return () => { off(); clearInterval(i); };
   }, []);
+
+  useEffect(() => {
+    setVisiblePostLimit(60);
+  }, [feedMode, w.code]);
 
   useEffect(() => {
     if (!jump || jump.type !== "post") return;
@@ -29338,94 +29344,49 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     if (!ok) setErr(tt("A világ már feldolgoz egy lépéskérést.", "The world is already processing a step request."));
   };
 
+  const postById = useMemo(() => {
+    const map = new Map();
+    (w.posts || []).forEach((post) => {
+      if (post && post.id) map.set(post.id, post);
+    });
+    return map;
+  }, [w.posts]);
+
+  const followingIds = useMemo(() => {
+    const set = new Set();
+    const meProfile = socialProfileById(w, w.meId);
+    ((meProfile && meProfile.following) || []).forEach((id) => set.add(id));
+    return set;
+  }, [w, w.meId]);
+
   const basePosts =
     feedMode === "following"
-      ? (w.posts || []).filter(
-          (p) =>
-            p &&
-            (
-              p.authorId === w.meId ||
-              isFollowing(
-                w,
-                w.meId,
-                p.authorId
-              )
-            )
+      ? (w.posts || []).filter((p) =>
+          p && (p.authorId === w.meId || followingIds.has(p.authorId))
         )
       : (w.posts || []);
 
-  const baseItems =
-    basePosts.map(
-      (post) => ({
-        kind: "post",
-        id: "post:" + post.id,
-        ts:
-          Number(post.ts) || 0,
-        post,
-        repost: null,
-      })
-    );
+  const baseItems = basePosts.map((post) => ({
+    kind: "post",
+    id: "post:" + post.id,
+    ts: Number(post.ts) || 0,
+    post,
+    repost: null,
+  }));
 
-  const repostItems =
-    repostRows(w)
-      .map((repost) => {
-        const post =
-          (w.posts || []).find(
-            (p) =>
-              p &&
-              p.id ===
-                repost.postId
-          );
-
-        const reposter =
-          socialProfileById(
-            w,
-            repost.actorId
-          );
-
-        if (
-          !post ||
-          !reposter
-        ) {
-          return null;
-        }
-
-        if (
-          feedMode ===
-            "following" &&
-          reposter.id !==
-            w.meId &&
-          !isFollowing(
-            w,
-            w.meId,
-            reposter.id
-          )
-        ) {
-          return null;
-        }
-
-        return {
-          kind: "repost",
-          id:
-            "repost:" +
-            repost.id,
-          ts:
-            Number(
-              repost.ts
-            ) || 0,
-          post,
-          repost,
-        };
-      })
-      .filter(Boolean);
-
+  const repostItems = repostRows(w).map((repost) => {
+    const post = postById.get(repost.postId);
   const timelineItems =
     baseItems
       .concat(repostItems)
       .sort(
         (a, b) =>
           b.ts - a.ts
-      );
+      )
+      .slice(0, 40);
+
+  const visibleTimelineItems =
+    timelineItems.slice(0, visiblePostLimit);
 
   return (
     <>
@@ -29721,7 +29682,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         </div>
       ) : null}
 
-      {timelineItems.map((item) => {
+      {visibleTimelineItems.map((item) => {
         const p = item.post;
 
         const reposter =
@@ -30091,6 +30052,20 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
           }
         />
       ) : null}
+      {timelineItems.length > visibleTimelineItems.length ? (
+        <div style={{ display:"flex", justifyContent:"center", padding:"12px 0 22px" }}>
+          <button
+            className="btn tiny ghost"
+            onClick={() => setVisiblePostLimit((n) => Math.min(n + 60, timelineItems.length))}
+          >
+            {tt(
+              `További ${Math.min(60, timelineItems.length - visibleTimelineItems.length)} poszt`,
+              `Load ${Math.min(60, timelineItems.length - visibleTimelineItems.length)} more posts`
+            )}
+          </button>
+        </div>
+      ) : null}
+
     </>
   );
 }
@@ -53012,7 +52987,6 @@ export default function App() {
   const autoRunning = useRef(false);
   const autoRunningSince = useRef(0);
   const viewRef = useRef(null);
-  const [simPulse, setSimPulse] = useState(0);
   const [flash, setFlash] = useState(null);
   const [jump, setJump] = useState(null);
   const [popupNav, setPopupNav] = useState(null);
@@ -53637,9 +53611,9 @@ const signOut = useCallback(async () => {
 
     setWorld((prev) => {
       if (!prev) return prev;
-      const n = JSON.parse(JSON.stringify(prev));
+      const n = { ...prev };
       registerImageMeta(n, id, nextMedia[id]);
-      n.rev = (n.rev || 0) + 1;
+      n.rev = (prev.rev || 0) + 1;
       return n;
     });
     /*
@@ -53826,11 +53800,7 @@ const signOut = useCallback(async () => {
         setWorld((prev) => {
           if (!prev) return prev;
 
-          const n =
-            JSON.parse(
-              JSON.stringify(prev)
-            );
-
+          const n = { ...prev };
           const person =
             charById(n, owner.id);
 
@@ -53882,14 +53852,12 @@ const signOut = useCallback(async () => {
          * If the previous image failed without mutating world.rev, nudge the
          * existing pulse so the worker can continue to the next album item.
          */
-        setSimPulse((value) => value + 1);
       });
   }, [
     world ? world.code : null,
     world ? world.rev : 0,
     code,
     media,
-    simPulse,
   ]);
 
   useEffect(() => {
@@ -54698,27 +54666,25 @@ const signOut = useCallback(async () => {
   }, [media, code, tt]);
 
   const update = useCallback((fn) => {
-  setWorld((prev) => {
-    if (!prev) return prev;
-
     /*
-     * The full ensureSocialSimulationState() runs during migration/load.
-     * It intentionally does NOT run on every hot state update because it
-     * recalculates social stats, trends and gossip state and can freeze the UI.
+     * PERFORMANCE v4: ordinary mutations no longer deep-clone the entire
+     * world. The app's existing helpers are mutation-oriented, so mutate the
+     * authoritative in-memory store and publish a shallow root snapshot.
+     * Real persistence still snapshots before writing.
      */
-    const n = cloneWorldState(prev);
-    if (!n.sim || typeof n.sim !== "object" || Array.isArray(n.sim)) n.sim = {};
-    if (!Array.isArray(n.sim.queue)) n.sim.queue = [];
-    if (!n.notify || typeof n.notify !== "object" || Array.isArray(n.notify)) n.notify = {};
-    if (!n.chats || typeof n.chats !== "object" || Array.isArray(n.chats)) n.chats = {};
-    if (!Array.isArray(n.posts)) n.posts = [];
-    if (!Array.isArray(n.socialEvents)) n.socialEvents = [];
-
-    fn(n);
-    n.rev = (n.rev || 0) + 1;
-    return n;
-  });
-}, []);
+    const current = wRef.current;
+    if (!current) return false;
+    if (!current.sim || typeof current.sim !== "object" || Array.isArray(current.sim)) current.sim = {};
+    if (!Array.isArray(current.sim.queue)) current.sim.queue = [];
+    if (!current.notify || typeof current.notify !== "object" || Array.isArray(current.notify)) current.notify = {};
+    if (!current.chats || typeof current.chats !== "object" || Array.isArray(current.chats)) current.chats = {};
+    if (!Array.isArray(current.posts)) current.posts = [];
+    if (!Array.isArray(current.socialEvents)) current.socialEvents = [];
+    fn(current);
+    current.rev = (current.rev || 0) + 1;
+    setWorld({ ...current });
+    return true;
+  }, []);
 
 
   /* Pending AI invitations expire on their own even if the player never opens
@@ -54727,13 +54693,11 @@ const signOut = useCallback(async () => {
   useEffect(() => {
     if (!world || !meId) return undefined;
     const sweep = () => {
-      setWorld((prev) => {
-        if (!prev) return prev;
-        const n = cloneWorldState(prev);
-        if (!maintainRoleplaySceneLifecycle(n, meId)) return prev;
-        n.rev = (n.rev || 0) + 1;
-        return n;
-      });
+      const current = wRef.current;
+      if (!current) return;
+      if (!maintainRoleplaySceneLifecycle(current, meId)) return;
+      current.rev = (current.rev || 0) + 1;
+      setWorld({ ...current });
     };
     sweep();
     const timer = setInterval(sweep, 15000);
@@ -54743,7 +54707,6 @@ const signOut = useCallback(async () => {
   const requestSimulationAction = useCallback((action) => {
     if (!action) return false;
     update((n) => { simEnqueue(n, action); });
-    setSimPulse((x) => x + 1);
     return true;
   }, [update]);
 
@@ -55086,10 +55049,6 @@ const signOut = useCallback(async () => {
             }
           });
 
-          setSimPulse(
-            (x) => x + 1
-          );
-
           setPopupNav({
             type:"post",
             id:postId,
@@ -55221,8 +55180,7 @@ const signOut = useCallback(async () => {
           }
         });
 
-        setSimPulse((x) => x + 1);
-        return true;
+            return true;
       } catch (e) {
         console.error("Popup custom response failed:", e);
         setErr((e && e.message) || tt("A saját reakció következményeit most nem sikerült feldolgozni.", "Couldn't process the consequences of your custom response."));
@@ -55345,10 +55303,10 @@ const signOut = useCallback(async () => {
       const nextTab = tab || "feed";
       const nextChat = chatId || "";
       if ((cur.lastTab || "feed") === nextTab && (cur.lastChatId || "") === nextChat) return prev;
-      const n = JSON.parse(JSON.stringify(prev));
-      if (!n.userSettings) n.userSettings = {};
-      n.userSettings[meId] = { ...(n.userSettings[meId] || {}), lastTab: nextTab, lastChatId: nextChat };
-      n.rev = (n.rev || 0) + 1;
+      const n = { ...prev };
+      n.userSettings = { ...(prev.userSettings || {}) };
+      n.userSettings[meId] = { ...(prev.userSettings?.[meId] || {}), lastTab: nextTab, lastChatId: nextChat };
+      n.rev = (prev.rev || 0) + 1;
       return n;
     });
   }, [world ? world.code : null, meId, tab, chatId]);
@@ -55722,7 +55680,7 @@ const signOut = useCallback(async () => {
 
           return savedWorld;
         });
-      }, 1100);
+      }, 1800);
 
     return () => {
       if (timer.current) {
