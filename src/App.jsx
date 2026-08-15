@@ -25057,6 +25057,152 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
  * posztol, és külön gossip-cadence vezérli.
  */
 const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 5;
+/*
+ * AUTONOMOUS FEED POST PACING
+ *
+ * A játékbeli naphoz kötjük a feed-kvótát, nem a valós 24 órás gördülő ablakhoz.
+ * A storySettings.elapsedHours a time-skipekkel előrehaladó játékidő, ezért
+ * stabilan megadja, melyik játékbeli napban vagyunk.
+ *
+ * Cél:
+ * - összesen legfeljebb 5 AI/bot feed-poszt egy játékbeli napon;
+ * - az első 2 AI-poszt az adott napon mindig szöveges;
+ * - legfeljebb 1 albumkép kerüljön ki egy játékbeli napon;
+ * - egy bot első posztja az adott napon mindig szöveges;
+ * - két képes poszt között mindig legyen legalább egy szöveges poszt;
+ * - a feltöltött album ne fogyjon el egyetlen induló hullámban.
+ */
+const AUTONOMOUS_DAILY_POST_HARD_MAX = 5;
+const AUTONOMOUS_DAILY_IMAGE_HARD_MAX = 1;
+const AUTONOMOUS_IMAGE_START_TEXT_POSTS = 2;
+const AUTONOMOUS_CHARACTER_DAILY_SOFT_MAX = 2;
+
+function autonomousGameDayIndex(w) {
+  const elapsed = Math.max(
+    0,
+    Number(storySettingsOf(w).elapsedHours) || 0
+  );
+  return Math.floor(elapsed / 24);
+}
+
+function autonomousGameDayKey(w) {
+  const story = storySettingsOf(w);
+  const date = String((w && w.universe && w.universe.date) || "").trim();
+  const year = worldYear(w) || "";
+  return `${year}|${date}|${autonomousGameDayIndex(w)}`;
+}
+
+function autonomousAiPostsThisGameDay(w) {
+  const key = autonomousGameDayKey(w);
+  return (w && Array.isArray(w.posts) ? w.posts : [])
+    .filter((p) =>
+      p &&
+      p.authorId &&
+      !isHuman(w, p.authorId) &&
+      (
+        String(p.gameDayKey || "") === key
+      )
+    );
+}
+
+function autonomousAiPostCountThisGameDay(w) {
+  return autonomousAiPostsThisGameDay(w).length;
+}
+
+function autonomousAiImagePostsThisGameDay(w) {
+  return autonomousAiPostsThisGameDay(w)
+    .filter((p) => Boolean(p && (p.imageId || p.image)))
+    .length;
+}
+
+function autonomousLatestAiFeedPost(w) {
+  return (w && Array.isArray(w.posts) ? w.posts : [])
+    .filter((p) => p && p.authorId && !isHuman(w, p.authorId))
+    .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))[0] || null;
+}
+
+function autonomousCharacterPostsThisGameDay(w, characterId) {
+  const key = autonomousGameDayKey(w);
+  return (w && Array.isArray(w.posts) ? w.posts : [])
+    .filter((p) =>
+      p &&
+      p.authorId === characterId &&
+      !isHuman(w, p.authorId) &&
+      String(p.gameDayKey || "") === key
+    );
+}
+
+function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
+  if (!w || !character || !requestedImage) return false;
+
+  const albumItem = albumFind(character, requestedImage);
+  if (!albumItem) return false;
+
+  const todayPosts = autonomousAiPostsThisGameDay(w);
+  const todayCount = todayPosts.length;
+
+  /*
+   * Ne legyen kép az első két bot-posztban. Ez nem csak prompt-szabály:
+   * az alkalmazási réteg is kikényszeríti.
+   */
+  if (todayCount < AUTONOMOUS_IMAGE_START_TEXT_POSTS) return false;
+
+  if (
+    autonomousAiImagePostsThisGameDay(w).length >=
+    AUTONOMOUS_DAILY_IMAGE_HARD_MAX
+  ) {
+    return false;
+  }
+
+  /*
+   * Egy karakter első posztja az adott játéknapon mindig szöveges.
+   * Ettől nem lesz minden bot első megszólalása egy albumfotó.
+   */
+  if (!autonomousCharacterPostsThisGameDay(w, character.id).length) {
+    return false;
+  }
+
+  /*
+   * Két képes poszt ne legyen közvetlenül egymás után.
+   */
+  const latest = autonomousLatestAiFeedPost(w);
+  if (latest && (latest.imageId || latest.image)) return false;
+
+  return true;
+}
+
+function autonomousPostTypeInstruction(w, cast) {
+  const todayCount = autonomousAiPostCountThisGameDay(w);
+  const imageCount = autonomousAiImagePostsThisGameDay(w);
+  const remaining = Math.max(
+    0,
+    AUTONOMOUS_DAILY_POST_HARD_MAX - todayCount
+  );
+
+  if (!remaining) {
+    return "MA MÁR ELÉRTÜK AZ 5 AI FEED-POSZTOS JÁTÉKBELI NAPI LIMITET. NE GENERÁLJ ÚJ POSZTOT.";
+  }
+
+  const eligibleImageChars = (cast || [])
+    .filter((c) => c && albumOf(c).length > 0)
+    .map((c) => c.name)
+    .slice(0, 8);
+
+  return [
+    `MA EDDIG ${todayCount}/${AUTONOMOUS_DAILY_POST_HARD_MAX} AI FEED-POSZT KERÜLT KI; MÉG ${remaining} FÉR BE.`,
+    `MA EDDIG ${imageCount}/${AUTONOMOUS_DAILY_IMAGE_HARD_MAX} ALBUMKÉPES POSZT KERÜLT KI.`,
+    `Az első ${AUTONOMOUS_IMAGE_START_TEXT_POSTS} AI-poszt ezen a játéknapon KÖTELEZŐEN SZÖVEGES.`,
+    "A posztokat normálisan oszd el különböző karakterek között; ne ugyanaz a bot dominálja a teljes feedet.",
+    "A legtöbb új poszt legyen szöveges. Albumképet csak néha használj, amikor valóban illik a karakter aktuális életéhez.",
+    "Ha albumképet használsz, az ténylegesen fogyjon el az albumból, ezért NE használd az album összes képét rövid időn belül.",
+    "Ne használj képet csak azért, mert van album. Kép nélkül teljesen természetes posztot is írj.",
+    "Képes és szöveges posztok váltakozzanak természetesen. Két képes poszt ne kövesse közvetlenül egymást.",
+    eligibleImageChars.length
+      ? `Jelenleg albumképpel rendelkező karakterek: ${eligibleImageChars.join(", ")}.`
+      : "Jelenleg nincs használható albumkép."
+  ].join("\n");
+}
+
 const AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H = 4;
 const AUTONOMOUS_THIRD_POST_MIN_IDLE_MS = 2.5 * 3600e3;
 const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.15;
@@ -25081,6 +25227,23 @@ function characterCanAutonomouslyPost(w, c) {
     return false;
   }
 
+  /*
+   * A globális napi 5-ös limit mellett egy karakter normál esetben legfeljebb
+   * 2 posztot kapjon ugyanazon a játéknapon. Így a feed valóban több szereplő
+   * között oszlik el. Ha csak egyetlen AI-karakter van a világban, a globális
+   * 5-ös plafon marad az egyetlen felső korlát.
+   */
+  const dayPosts = autonomousCharacterPostsThisGameDay(w, c.id).length;
+  const aiCastSize = (w.chars || [])
+    .filter((x) => x && !isHuman(w, x.id) && !isMediaAccount(w, x.id))
+    .length;
+  if (
+    aiCastSize > 1 &&
+    dayPosts >= AUTONOMOUS_CHARACTER_DAILY_SOFT_MAX
+  ) {
+    return false;
+  }
+
   const stats = characterAutonomousPostStats24h(w, c.id);
   if (stats.count >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) return false;
 
@@ -25097,6 +25260,18 @@ function characterCanAutonomouslyPost(w, c) {
 }
 
 function fairPostCast(w) {
+  /*
+   * HARD RULE: egy játékbeli napon összesen legfeljebb 5 AI/bot feed-poszt.
+   * Ez a scheduler előtt is blokkol, így az AI nem tudja kikerülni a limitet
+   * azzal, hogy egyetlen generálási körben több posztot kér.
+   */
+  if (
+    autonomousAiPostCountThisGameDay(w) >=
+    AUTONOMOUS_DAILY_POST_HARD_MAX
+  ) {
+    return [];
+  }
+
   const chars = (w.chars || []).filter(
     (c) => c && characterCanAutonomouslyPost(w, c)
   );
@@ -25202,7 +25377,17 @@ KARAKTERHŰ POSZTOLÁS:
 - A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa és az is, hogy egyáltalán posztolna-e valamiről, a karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
-- NAPI POSZTRITMUS: normál karakter célja 2-4 saját poszt / gördülő 24 óra; 5 a kemény felső plafon. A karakter aktivitása ezt személyiség szerint módosíthatja. Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
+- NAPI POSZTRITMUS: a játékbeli nap teljes AI feedje legfeljebb 5 új poszt lehet ÖSSZESEN. Ne kezeld ezt karakterenkénti 5-ös limitként.
+- A botok posztjai legyenek elosztva több szereplő között. Ugyanaz a karakter normál esetben ne kapjon 2-nél több új feed-posztot ugyanazon a játéknapon, ha több AI-karakter is aktív.
+- Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
+- A feed ne legyen folyamatosan aktív: ha nincs valódi élethelyzet, inkább ne szülessen új poszt.
+- A kép NEM alapértelmezett. A legtöbb poszt szöveges legyen.
+- Az első 2 AI-poszt az adott játéknapon kötelezően szöveges.
+- Legfeljebb 1 albumkép kerüljön ki egy játékbeli napon.
+- Képes poszt csak akkor legyen, ha a karakternek ténylegesen van még használható albumképe és az alkalmazási szabályok szerint már engedélyezett a kép.
+- Két képes poszt ne kövesse egymást, és egy karakter első aznapi posztja mindig szöveges.
+- A feltöltött albumot takarékosan használd. Ne posztold ki rögtön az album képeit, és ne fogyaszd el az egész készletet egyetlen nap alatt.
+${autonomousPostTypeInstruction(w, cast)}
 
 ${repetitionGuard(
   w,
@@ -25216,8 +25401,8 @@ ${
   Number(timeSkipHours) > 0
     ? `IDŐUGRÁS / TIME SKIP: a játékos kifejezetten azt kérte, hogy körülbelül ${Math.round(Number(timeSkipHours))} órával ugorjunk előre. A köztes időben a karakterek a saját életüket élték; generálj 4-7 olyan posztot / reakciót / megfigyelhető eseményt, amelyek természetesen összefoglalják, mi változott. Ne írd le a játékos döntéseit vagy cselekedeteit helyette. Nyitott konfliktusok, kapcsolatok, célok, gossip és saját karakterügyek haladhatnak tovább. Az időugrás ne resetelje az emlékeket vagy kapcsolatokat.`
     : single
-      ? "A világ közben ténylegesen ment tovább. Adj 2-3 valódi, természetes új posztot különböző szereplőktől. Ne válaszolj üres posts tömbbel. A posztok mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Adj posztonként 4-9 releváns reakciót/kommentet másoktól, és különösen keresd azokat a barátokat, akiknek a kapcsolatuk miatt természetes lenne reagálni. Ha valaki kifejezetten passzív/ritkán online, ne erőltesd."
-      : "Léptesd a világot néhány órával. Adj 4-5 természetes új posztot különböző szereplőktől, és posztonként 5-10 különböző, releváns reakciót/kommentet másoktól. A karakterek barátai és közeli kapcsolatai kapjanak valódi elsőbbséget a reakcióknál, mert egy élő közösségben az emberek nem úgy működnek, mint névtelen statiszták."
+      ? "A világ közben ténylegesen ment tovább. Adj 1-2 valódi, természetes új posztot különböző szereplőktől. Ne válaszolj üres posts tömbbel. A posztok mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Adj posztonként 4-9 releváns reakciót/kommentet másoktól, és különösen keresd azokat a barátokat, akiknek a kapcsolatuk miatt természetes lenne reagálni. Ha valaki kifejezetten passzív/ritkán online, ne erőltesd."
+      : "Léptesd a világot néhány órával. Adj 1-2 természetes új posztot különböző szereplőktől, és posztonként 5-10 különböző, releváns reakciót/kommentet másoktól. A karakterek barátai és közeli kapcsolatai kapjanak valódi elsőbbséget a reakcióknál, mert egy élő közösségben az emberek nem úgy működnek, mint névtelen statiszták."
 }
 
 ÁLTALÁNOS SZABÁLYOK:
@@ -25461,7 +25646,13 @@ SAJÁT FOTÓALBUMOD:
 ${albumList(author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
-- A normál karakterek napi ritmusa 2-4 saját poszt / gördülő 24 óra; 5 a kemény felső plafon. Ne posztolj csak azért, hogy kitöltsd a feedet.
+- A játékbeli nap teljes AI feedje legfeljebb 5 új poszt lehet ÖSSZESEN. Ne kezeld ezt karakterenkénti 5-ös limitként.
+- Ne posztolj csak azért, hogy kitöltsd a feedet.
+- Az első 2 AI-poszt az adott játéknapon kötelezően szöveges.
+- Legfeljebb 1 albumkép kerülhet ki egy játékbeli napon, és két képes poszt nem követheti egymást.
+- ${author.name} első aznapi posztja kötelezően szöveges.
+- A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
+- A legtöbb poszt legyen szöveges; albumképet csak néha használj, amikor a konkrét kép ténylegesen illik az aktuális élethelyzethez.
 - A poszt kizárólag ${author.name} saját életéből, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
 - Ha a karakternek kölcsönös baráti kapcsolatai vannak, ezek legyenek aktív részei a social életének: természetesen posztolhat közös programról, megemlítheti vagy barátilag ugrasshatja a barátját, reagálhat annak életére, megvédheti, megkérdezheti, merre van, vagy szervezhet vele valamit. Ne kezeld a barátokat véletlenszerű idegenként.
@@ -25487,6 +25678,17 @@ function applyWorldStep(n, out) {
   const causalPairs = new Set();
 
   safeAiArray(out, "posts").forEach((p) => {
+    /*
+     * HARD APPLY-SIDE QUOTA: a prompt önmagában nem biztonsági határ.
+     * Ha az AI többet ad vissza, a fölös posztokat egyszerűen nem publikáljuk.
+     */
+    if (
+      autonomousAiPostCountThisGameDay(n) >=
+      AUTONOMOUS_DAILY_POST_HARD_MAX
+    ) {
+      return;
+    }
+
     const author = aiVoice(n, p && (p.id !== undefined ? p.id : p.name));
     if (!author || !p.text) return;
     const authorChar = charById(n, author);
@@ -25542,11 +25744,28 @@ function applyWorldStep(n, out) {
         text: sysLangText(n, cid, `Kommenteltem: ${cut(body, 110)}`, `I commented: ${cut(body, 110)}`),
       });
     });
-    const pic = p.image ? albumFind(authorChar, p.image) : null;
+    /*
+     * A generált "image" mezőt csak akkor fogadjuk el, ha az aktuális
+     * játékbeli napi képkeret, az első-poszt szabály, a karakter napi
+     * elosztása és a képes-posztok közötti távolság mind engedi.
+     *
+     * Ha az AI túl korán kér képet, attól még a szöveges poszt létrejöhet,
+     * csak a kép kerül elhagyásra.
+     */
+    const requestedPic = p.image ? albumFind(authorChar, p.image) : null;
+    const pic = requestedPic && autonomousCanUseAlbumImageToday(
+      n,
+      authorChar,
+      p.image
+    )
+      ? requestedPic
+      : null;
+
     const picRef = pic ? (pic.imageId ? imageRef(pic.imageId) : pic.src) : "";
     const picId = imageIdOf(picRef);
     const fresh = {
       id: uid(), authorId: author, ts: now(), likes: 0, likedBy: [],
+      gameDayKey: autonomousGameDayKey(n),
       text: postText,
       imageId: picId || "",
       image: picId ? "" : picRef,
@@ -25556,8 +25775,8 @@ function applyWorldStep(n, out) {
     };
 
     /*
-     * Fotóalbum = felhasználható AI-képkészlet.
-     * Ha a karakter kiposztolta, kikerül az albumából,
+     * Fotóalbum = felhasználható, de takarékosan kezelt AI-képkészlet.
+     * Ha a karakter ténylegesen kiposztolja, a kép kikerül az albumából,
      * de a media fájl természetesen megmarad a kész poszthoz.
      */
     if (pic && authorChar) {
