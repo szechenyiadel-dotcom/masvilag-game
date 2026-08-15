@@ -173,6 +173,103 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   border:1px solid var(--line); border-bottom:none; border-radius:18px 18px 0 0; padding:16px 16px 28px; }
 .sheet::-webkit-scrollbar { width:6px } .sheet::-webkit-scrollbar-thumb { background:var(--line); border-radius:99px }
 
+/* ---------- KÉPKIVÁGÓ / PROFILKÉP CROP ---------- */
+.image-crop-scrim {
+  z-index: 120 !important;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+}
+.image-crop-sheet {
+  width: min(520px, calc(100vw - 28px));
+  max-height: min(92vh, 760px);
+  border-bottom: 1px solid var(--line);
+  border-radius: 18px;
+  overflow-y: auto;
+}
+.image-crop-header {
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+.image-crop-header h3 {
+  font-size: 20px;
+}
+.image-crop-frame {
+  position: relative;
+  width: min(100%, 420px);
+  margin: 0 auto;
+  overflow: hidden;
+  background: #08070c;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.image-crop-frame.dragging {
+  cursor: grabbing;
+}
+.image-crop-frame > img {
+  position: absolute;
+  max-width: none;
+  max-height: none;
+  display: block;
+  user-select: none;
+  pointer-events: none;
+}
+.image-crop-mask {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 9999px rgba(5,4,9,.22);
+}
+.image-crop-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent 33.2%, rgba(236,228,218,.22) 33.3%, rgba(236,228,218,.22) 33.5%, transparent 33.6%, transparent 66.5%, rgba(236,228,218,.22) 66.6%, rgba(236,228,218,.22) 66.8%, transparent 66.9%),
+    linear-gradient(0deg, transparent 33.2%, rgba(236,228,218,.22) 33.3%, rgba(236,228,218,.22) 33.5%, transparent 33.6%, transparent 66.5%, rgba(236,228,218,.22) 66.6%, rgba(236,228,218,.22) 66.8%, transparent 66.9%);
+}
+.image-crop-controls {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--raised);
+}
+.image-crop-controls input[type="range"] {
+  width: 100%;
+  margin-top: 8px;
+  accent-color: var(--rose);
+}
+.image-crop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+@media (max-width: 480px) {
+  .image-crop-scrim {
+    padding: 0;
+  }
+  .image-crop-sheet {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+    border: 0;
+  }
+  .image-crop-frame {
+    width: min(100%, 360px);
+  }
+  .image-crop-actions .btn {
+    flex: 1;
+    min-height: 46px;
+  }
+}
+
 .toast { position:fixed; left:50%; transform:translateX(-50%); top:14px; z-index:60; width:calc(100% - 28px); max-width:520px;
   border:1px solid var(--oxblood); background:#2B1020; border-radius:12px; padding:11px 14px; font-size:13.5px;
   box-shadow:0 12px 34px rgba(0,0,0,.55); display:flex; gap:10px; align-items:flex-start; }
@@ -2249,57 +2346,183 @@ function ImagePicker({ value, onChange, label, max = 512, preview = 80, previewW
   const { media, addImage } = useMedia();
   const { tt } = useLang();
   const ref = useRef(null);
+  const imgRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [cropOpen, setCropOpen] = useState(false);
+  const [cropSrc, setCropSrc] = useState("");
+  const [cropImage, setCropImage] = useState(null);
+  const [cropZoom, setCropZoom] = useState(1);
+  const [cropPos, setCropPos] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef(null);
+
   const url = resolveImg(value, media);
+  const cropAspect = Math.max(0.25, Number(previewWidth) / Math.max(1, Number(previewHeight)));
+
+  const closeCrop = () => {
+    if (cropSrc && cropSrc.startsWith("blob:")) URL.revokeObjectURL(cropSrc);
+    setCropOpen(false);
+    setCropSrc("");
+    setCropImage(null);
+    setCropZoom(1);
+    setCropPos({ x: 0, y: 0 });
+    setDragging(false);
+    dragStart.current = null;
+  };
+
+  const openCropForFile = (file) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      setCropSrc(String(reader.result || ""));
+      setCropOpen(true);
+      setCropZoom(1);
+      setCropPos({ x: 0, y: 0 });
+      setErr("");
+    };
+    reader.onerror = () => setErr(tt("Nem sikerült beolvasni a képet.", "Could not read the image."));
+    reader.readAsDataURL(file);
+  };
+
+  const handleCropImageLoad = (e) => {
+    setCropImage(e.currentTarget);
+    setCropZoom(1);
+    setCropPos({ x: 0, y: 0 });
+  };
+
+  const getCropGeometry = () => {
+    const image = cropImage;
+    if (!image || !image.naturalWidth || !image.naturalHeight) return null;
+
+    const frameW = 320;
+    const frameH = frameW / cropAspect;
+    const baseScale = Math.max(frameW / image.naturalWidth, frameH / image.naturalHeight);
+    const scale = baseScale * cropZoom;
+    const drawW = image.naturalWidth * scale;
+    const drawH = image.naturalHeight * scale;
+
+    const maxX = Math.max(0, (drawW - frameW) / 2);
+    const maxY = Math.max(0, (drawH - frameH) / 2);
+    const x = Math.max(-maxX, Math.min(maxX, cropPos.x));
+    const y = Math.max(-maxY, Math.min(maxY, cropPos.y));
+
+    return { frameW, frameH, scale, drawW, drawH, x, y };
+  };
+
+  const clampCropPos = (nextX, nextY, zoom = cropZoom) => {
+    if (!cropImage) return { x: nextX, y: nextY };
+    const frameW = 320;
+    const frameH = frameW / cropAspect;
+    const baseScale = Math.max(frameW / cropImage.naturalWidth, frameH / cropImage.naturalHeight);
+    const drawW = cropImage.naturalWidth * baseScale * zoom;
+    const drawH = cropImage.naturalHeight * baseScale * zoom;
+    const maxX = Math.max(0, (drawW - frameW) / 2);
+    const maxY = Math.max(0, (drawH - frameH) / 2);
+    return {
+      x: Math.max(-maxX, Math.min(maxX, nextX)),
+      y: Math.max(-maxY, Math.min(maxY, nextY)),
+    };
+  };
+
+  const setZoomAndKeepCenter = (nextZoom) => {
+    const z = Math.max(1, Math.min(3, Number(nextZoom) || 1));
+    setCropZoom(z);
+    setCropPos((p) => clampCropPos(p.x, p.y, z));
+  };
+
+  const startDrag = (e) => {
+    if (!cropImage) return;
+    e.preventDefault();
+    const point = e.touches ? e.touches[0] : e;
+    dragStart.current = { x: point.clientX, y: point.clientY, px: cropPos.x, py: cropPos.y };
+    setDragging(true);
+  };
+
+  const moveDrag = (e) => {
+    if (!dragStart.current) return;
+    const point = e.touches ? e.touches[0] : e;
+    const dx = point.clientX - dragStart.current.x;
+    const dy = point.clientY - dragStart.current.y;
+    const next = clampCropPos(dragStart.current.px + dx, dragStart.current.py + dy);
+    setCropPos(next);
+  };
+
+  const endDrag = () => {
+    dragStart.current = null;
+    setDragging(false);
+  };
+
+  const saveCroppedImage = async () => {
+    const geometry = getCropGeometry();
+    if (!geometry || !cropImage) return;
+
+    setBusy(true);
+    setErr("");
+
+    try {
+      const outputW = Math.min(1400, Math.max(320, Number(max) || 512));
+      const outputH = Math.max(1, Math.round(outputW / cropAspect));
+      const canvas = document.createElement("canvas");
+      canvas.width = outputW;
+      canvas.height = outputH;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error(tt("Nem sikerült létrehozni a képet.", "Could not create the image."));
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+
+      const scaleToOutput = outputW / geometry.frameW;
+      ctx.drawImage(
+        cropImage,
+        (geometry.frameW / 2 - geometry.drawW / 2 + geometry.x) * scaleToOutput,
+        (geometry.frameH / 2 - geometry.drawH / 2 + geometry.y) * scaleToOutput,
+        geometry.drawW * scaleToOutput,
+        geometry.drawH * scaleToOutput
+      );
+
+      const data = canvas.toDataURL("image/jpeg", 0.92);
+      const ref2 = addImage(data, {
+        category,
+        originalFileName: "cropped-image.jpg",
+        mimeType: "image/jpeg",
+        size: dataUrlPayloadLength(data),
+      });
+
+      if (!ref2) {
+        throw new Error(
+          tt(
+            "Megtelt a világ képtára — törölj pár képet, hogy férjen újabb.",
+            "The world's media storage is full — delete a few images to make room for more."
+          )
+        );
+      }
+
+      onChange(ref2);
+      closeCrop();
+    } catch (e2) {
+      setErr(e2.message || tt("Nem sikerült.", "Failed."));
+    }
+    setBusy(false);
+  };
 
   const pick = async (e) => {
     const f = e.target.files && e.target.files[0];
     e.target.value = "";
     if (!f) return;
-    setBusy(true); setErr("");
+
+    setErr("");
+
     try {
-      if (
-        f.size >
-        12 * 1024 * 1024
-      ) {
-        throw new Error(
-          tt(
-            "Túl nagy fájl (max 12 MB).",
-            "File too large (max 12 MB)."
-          )
-        );
+      if (!f.type || !f.type.startsWith("image/")) {
+        throw new Error(tt("Csak képfájl tölthető fel.", "Only image files can be uploaded."));
       }
-
-      const data =
-        await shrink(
-          f,
-          max
-        );
-
-      const ref2 =
-        addImage(
-          data,
-          {
-            category,
-            originalFileName:
-              f.name,
-            mimeType:
-              dataUrlMimeType(
-                data
-              ) ||
-              f.type ||
-              "image/jpeg",
-            size:
-              dataUrlPayloadLength(
-                data
-              ),
-          }
-        );
-      if (!ref2) throw new Error(tt("Megtelt a világ képtára — törölj pár képet, hogy férjen újabb.", "The world's media storage is full — delete a few images to make room for more."));
-      onChange(ref2);
-    } catch (e2) { setErr(e2.message || tt("Nem sikerült.", "Failed.")); }
-    setBusy(false);
+      if (f.size > 12 * 1024 * 1024) {
+        throw new Error(tt("Túl nagy fájl (max 12 MB).", "File too large (max 12 MB)."));
+      }
+      openCropForFile(f);
+    } catch (e2) {
+      setErr(e2.message || tt("Nem sikerült.", "Failed."));
+    }
   };
 
   return (
@@ -2307,21 +2530,158 @@ function ImagePicker({ value, onChange, label, max = 512, preview = 80, previewW
       <label className="f">{label || tt("Kép", "Image")}</label>
       <div className="row" style={{ alignItems: "center" }}>
         {url ? (
-          <img src={url} alt="" style={{ width: previewWidth, height: previewHeight, objectFit: "cover", borderRadius: 12, border: "1px solid var(--line)" }} />
+          <img
+            src={url}
+            alt=""
+            style={{
+              width: previewWidth,
+              height: previewHeight,
+              objectFit: "cover",
+              borderRadius: 12,
+              border: "1px solid var(--line)",
+            }}
+          />
         ) : (
-          <div style={{ width: previewWidth, height: previewHeight, borderRadius: 12, border: "1px dashed var(--line)", display: "grid", placeItems: "center", color: "var(--muted)", fontSize: 11 }}>{tt("nincs kép", "no image")}</div>
+          <div
+            style={{
+              width: previewWidth,
+              height: previewHeight,
+              borderRadius: 12,
+              border: "1px dashed var(--line)",
+              display: "grid",
+              placeItems: "center",
+              color: "var(--muted)",
+              fontSize: 11,
+            }}
+          >
+            {tt("nincs kép", "no image")}
+          </div>
         )}
         <div style={{ flex: 1 }}>
-          <button type="button" className="btn full" onClick={() => ref.current && ref.current.click()} disabled={busy}>
-            {busy ? <Loader2 size={14} className="spin" /> : <ImageIcon size={14} />} {tt("Feltöltés", "Upload")}
+          <button
+            type="button"
+            className="btn full"
+            onClick={() => ref.current && ref.current.click()}
+            disabled={busy}
+          >
+            {busy ? <Loader2 size={14} className="spin" /> : <ImageIcon size={14} />}
+            {tt("Feltöltés", "Upload")}
           </button>
-          {value ? <button type="button" className="btn ghost full tiny" style={{ marginTop: 6 }} onClick={() => onChange("")}>{tt("Törlés", "Delete")}</button> : null}
+          {value ? (
+            <button
+              type="button"
+              className="btn ghost full tiny"
+              style={{ marginTop: 6 }}
+              onClick={() => onChange("")}
+            >
+              {tt("Törlés", "Delete")}
+            </button>
+          ) : null}
         </div>
       </div>
-      <input ref={ref} type="file" accept="image/*" style={{ display: "none" }} onChange={pick} />
-      <input className="i" style={{ marginTop: 8, fontSize: 12 }} value={value && value.startsWith("img:") ? "" : value || ""}
-        placeholder={tt("vagy illessz be egy kép-URL-t", "or paste an image URL")} onChange={(e) => onChange(e.target.value)} />
-      {err && <div className="err">{err}</div>}
+
+      {err ? <div className="err">{err}</div> : null}
+
+      <input
+        ref={ref}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={pick}
+      />
+      <input
+        className="i"
+        style={{ marginTop: 8, fontSize: 12 }}
+        value={value && value.startsWith("img:") ? "" : value || ""}
+        placeholder={tt("vagy illessz be egy kép-URL-t", "or paste an image URL")}
+        onChange={(e) => onChange(e.target.value)}
+      />
+
+      {cropOpen ? (
+        <div
+          className="scrim image-crop-scrim"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeCrop();
+          }}
+        >
+          <div className="sheet image-crop-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="between image-crop-header">
+              <div>
+                <h3>{tt("Profilkép beállítása", "Adjust profile picture")}</h3>
+                <p className="hint">
+                  {tt(
+                    "Húzd a képet a keretben, majd állítsd a nagyítást. Mentés előtt pontosan ezt a kivágást használjuk.",
+                    "Drag the image inside the frame, then adjust the zoom. The exact crop is used when you save."
+                  )}
+                </p>
+              </div>
+              <button type="button" className="btn tiny ghost" onClick={closeCrop} disabled={busy}>
+                <X size={14} />
+              </button>
+            </div>
+
+            <div
+              className={`image-crop-frame ${dragging ? "dragging" : ""}`}
+              style={{ aspectRatio: `${cropAspect}` }}
+              onMouseDown={startDrag}
+              onMouseMove={moveDrag}
+              onMouseUp={endDrag}
+              onMouseLeave={endDrag}
+              onTouchStart={startDrag}
+              onTouchMove={moveDrag}
+              onTouchEnd={endDrag}
+            >
+              {cropSrc ? (
+                <img
+                  ref={imgRef}
+                  src={cropSrc}
+                  alt=""
+                  onLoad={handleCropImageLoad}
+                  draggable={false}
+                  style={(() => {
+                    const g = getCropGeometry();
+                    if (!g) return { visibility: "hidden" };
+                    return {
+                      width: g.drawW,
+                      height: g.drawH,
+                      left: `calc(50% - ${g.drawW / 2}px + ${g.x}px)`,
+                      top: `calc(50% - ${g.drawH / 2}px + ${g.y}px)`,
+                    };
+                  })()}
+                />
+              ) : null}
+              <div className="image-crop-mask" />
+              <div className="image-crop-grid" />
+            </div>
+
+            <div className="image-crop-controls">
+              <div className="between">
+                <span className="hint">{tt("Nagyítás", "Zoom")}</span>
+                <span className="mono hint">{Math.round(cropZoom * 100)}%</span>
+              </div>
+              <input
+                aria-label={tt("Nagyítás", "Zoom")}
+                type="range"
+                min="1"
+                max="3"
+                step="0.01"
+                value={cropZoom}
+                onChange={(e) => setZoomAndKeepCenter(e.target.value)}
+              />
+            </div>
+
+            <div className="image-crop-actions">
+              <button type="button" className="btn ghost" onClick={closeCrop} disabled={busy}>
+                {tt("Mégse", "Cancel")}
+              </button>
+              <button type="button" className="btn primary" onClick={saveCroppedImage} disabled={busy || !cropImage}>
+                {busy ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
+                {tt("Kivágás mentése", "Save crop")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
