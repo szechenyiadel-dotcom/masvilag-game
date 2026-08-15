@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v26 — VISION ISOLATION + GUARANTEED COMMENTS + SAVE PERF — 20260815_2205 */
+/* MÁSVILÁG BUILD v27 — MANUAL SAVE ONLY — 20260815_2218 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -4115,7 +4115,7 @@ function relationshipCanonInputFingerprint(w) {
 /* v10 invariant marker: if this exact string is visible in deployed source,
    the stable runtime + relationship identity patch is the file being used. */
 const MASVILAG_RELATIONSHIP_PATCH = "v10-live-identity-20260815-1911";
-if (typeof console !== "undefined") console.info("[Másvilág] v26 relationship/identity + performance patch loaded");
+if (typeof console !== "undefined") console.info("[Másvilág] v27 manual-save + relationship/identity + performance patch loaded");
 
 
 function ensureRelationshipBaselineStore(w) {
@@ -19047,7 +19047,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v26-vision-comments-save-perf";
+const BUILD_VERSION = "v27-manual-save-only";
 const WORLD_SCHEMA_VERSION = 97;
 const CLIENT_DATA_REPAIR_VERSION = 1;
 
@@ -55149,6 +55149,16 @@ export default function App() {
   const [langReady, setLangReady] = useState(false);
   const [saveState, setSaveState] = useState("saved");
   const [saveAt, setSaveAt] = useState(0);
+
+  /*
+   * v27 — MANUAL SAVE ONLY
+   * World/media persistence starts only when the player explicitly presses
+   * the Save button. Runtime mutations remain in memory until then.
+   */
+  const [manualSaveRequest, setManualSaveRequest] = useState(0);
+  const manualWorldSaveHandled = useRef(0);
+  const manualMediaSaveHandled = useRef(0);
+
   const lastSavedMedia = useRef("");
   /* Reactive mirror of the global editor lock so an already-visible popup is
      removed immediately when CharForm opens, not only on the next world tick. */
@@ -55187,6 +55197,37 @@ export default function App() {
 
   wRef.current = world;
   mediaRef.current = media;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const warnUnsavedBeforeLeave = (event) => {
+      const current = wRef.current;
+
+      if (
+        !current ||
+        Number(current.rev || 0) ===
+          Number(lastSavedRev.current)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener(
+      "beforeunload",
+      warnUnsavedBeforeLeave
+    );
+
+    return () => {
+      window.removeEventListener(
+        "beforeunload",
+        warnUnsavedBeforeLeave
+      );
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -55238,6 +55279,36 @@ export default function App() {
   }, [meId]);
   const tt = useCallback((hu, en) => (lang === "en" ? en : hu), [lang]);
 
+  const requestManualSave = useCallback(() => {
+    const currentWorld = wRef.current;
+
+    if (!currentWorld || !currentWorld.code) {
+      return;
+    }
+
+    /*
+     * The expensive media fingerprint is evaluated ONLY on an explicit Save
+     * click, never during normal play/render.
+     */
+    const worldDirty =
+      Number(currentWorld.rev || 0) !==
+      Number(lastSavedRev.current);
+
+    const mediaDirty =
+      mediaFingerprint(mediaRef.current || {}) !==
+      String(lastSavedMedia.current || "");
+
+    if (!worldDirty && !mediaDirty) {
+      setSaveState("saved");
+      setSaveAt(now());
+      return;
+    }
+
+    setSaveState("saving");
+    setErr("");
+    setManualSaveRequest((n) => n + 1);
+  }, []);
+
   const installAuthoritativeWorld = useCallback((serverWorld, serverMeId, reason = "sync") => {
     if (!serverWorld) return false;
 
@@ -55280,92 +55351,52 @@ export default function App() {
     const current =
       wRef.current;
 
-    let nextWorld =
-      authoritative;
-
+    /*
+     * v27 MANUAL-SAVE MULTI-DEVICE RULE
+     *
+     * Never JSON.stringify/compare/merge a multi-MB local world in the
+     * background. `rev` is already a cheap dirty marker.
+     *
+     * If this device has unsaved work and another device saved a newer server
+     * revision, preserve the local state exactly as-is. The next explicit Save
+     * will receive the normal 409 conflict path and can reconcile safely.
+     */
     if (
       current &&
       current.code === authoritative.code
     ) {
-      const currentContent =
-        contentOf(current);
-
-      const serverContent =
-        contentOf(authoritative);
-
       const localDirty =
-        Boolean(
-          lastSavedContent.current &&
-          currentContent !==
-            lastSavedContent.current
-        );
+        Number(current.rev || 0) !==
+        Number(lastSavedRev.current);
 
       if (localDirty) {
-        /*
-         * FONTOS: a szerver-poll nem törölhet ki egy még el nem mentett
-         * helyi karaktert. Ez korábban úgy tudott kinézni, mintha 8 AI
-         * karakter után hard limit lenne: a 9. létrejött, majd egy régebbi
-         * szerver snapshot rögtön visszaírta a világot.
-         *
-         * Dirty lokális state esetén ID alapján összeolvasztjuk a kettőt.
-         * A szerver syncRev-je marad az authoritative konkurencia-verzió,
-         * de a helyi új karakterek / friss módosítások nem vesznek el.
-         */
-        nextWorld =
-          mergeWorlds(
-            authoritative,
-            current
-          );
+        pendingServerWorld.current = null;
 
-        nextWorld.syncRev =
-          worldSyncRev(
-            authoritative
-          );
+        setSaveState("conflict");
+        setErr(
+          tt(
+            "A másik eszköz közben mentette a világot. A te mentetlen változtatásaid megmaradtak. Nyomj Mentés-t, amikor össze szeretnéd egyeztetni őket.",
+            "Another device saved this world. Your unsaved local changes are preserved. Press Save when you want to reconcile them."
+          )
+        );
 
-        void saveWorldMerged(
-          nextWorld
-        ).catch(() => {});
-
-        setSaveState("retry");
-      } else if (
-        currentContent !==
-        serverContent
-      ) {
-        /*
-         * Nincs lokális dirty módosítás: a szerver az igazság forrása,
-         * de az előző helyi verzió emergency backupként megmaradhat.
-         */
-        void saveWorldMerged(
-          current
-        ).catch(() => {});
+        return false;
       }
     }
 
     pendingServerWorld.current = null;
 
-    /*
-     * Ha dirty lokális state-et olvasztottunk össze, NEM jelöljük azonnal
-     * elmentettnek az összevont világot. Így az autosave visszaküldi a
-     * szervernek, és a 9., 10., 20. stb. karakter is tartósan megmarad.
-     */
-    const mergedDirty =
-      nextWorld !== authoritative;
+    lastSavedContent.current = "";
+    lastSavedRev.current =
+      Number(authoritative.rev || 0);
 
-    if (!mergedDirty) {
-      lastSavedContent.current = "";
-      lastSavedRev.current = Number(authoritative.rev || 0);
-    }
-
-    setWorld(nextWorld);
+    setWorld(authoritative);
     setMeId(id);
-
-    if (!mergedDirty) {
-      setSaveState("saved");
-      setSaveAt(now());
-    }
+    setSaveState("saved");
+    setSaveAt(now());
 
     return true;
-  }, [meId]);
+  }, [meId, tt]);
 
   /*
    * A relation/zodiac/bond helper-ek egy része globális CURRENT_LANG-et
@@ -56248,8 +56279,11 @@ const signOut = useCallback(async () => {
         return;
       }
 
-      void saveWorldMerged(w);
-
+      /*
+       * v27: no full-world autosave on pagehide. A multi-MB emergency
+       * serialization here can freeze navigation/closing. Images are already
+       * cached locally when added; cloud persistence is explicit Save.
+       */
       void cacheMediaLocally(
         w.code,
         mediaRef.current || {}
@@ -56371,6 +56405,26 @@ const signOut = useCallback(async () => {
     ) {
       return;
     }
+
+    const requestId =
+      Math.max(
+        0,
+        Number(manualSaveRequest) || 0
+      );
+
+    /*
+     * v27: media persistence is manual. Media changes do not start a timer or
+     * fingerprint scan. Only a new explicit Save request enters this path.
+     */
+    if (
+      !requestId ||
+      manualMediaSaveHandled.current === requestId
+    ) {
+      return;
+    }
+
+    manualMediaSaveHandled.current =
+      requestId;
 
     if (mediaTimer.current) {
       clearTimeout(
@@ -56513,10 +56567,21 @@ const signOut = useCallback(async () => {
               acceptedJson;
           }
 
+          const worldStillDirty =
+            Boolean(
+              wRef.current &&
+              Number(wRef.current.rev || 0) !==
+                Number(lastSavedRev.current)
+            );
+
           setSaveState(
-            result.mode === "cloud"
-              ? "saved"
-              : "local"
+            worldStillDirty
+              ? "dirty"
+              : (
+                  result.mode === "cloud"
+                    ? "saved"
+                    : "local"
+                )
           );
 
           setSaveAt(now());
@@ -56556,7 +56621,7 @@ const signOut = useCallback(async () => {
     mediaTimer.current =
       setTimeout(
         runMediaSave,
-        1500
+        0
       );
 
     return () => {
@@ -56566,7 +56631,12 @@ const signOut = useCallback(async () => {
         );
       }
     };
-  }, [media, code, tt]);
+  }, [
+    media,
+    code,
+    tt,
+    manualSaveRequest,
+  ]);
 
   const update = useCallback((fn) => {
     /*
@@ -57240,17 +57310,55 @@ const signOut = useCallback(async () => {
   }, [world ? world.code : null, meId, tab, chatId]);
 
   useEffect(() => {
-    if (!world) return;
+    if (!world || !meId) return;
+
+    const requestId =
+      Math.max(
+        0,
+        Number(manualSaveRequest) || 0
+      );
+
+    /*
+     * v27 — NO WORLD AUTOSAVE.
+     * Ordinary world mutations only mark the UI dirty. They never serialize,
+     * structured-clone or upload the world in the background.
+     */
+    if (
+      !requestId ||
+      manualWorldSaveHandled.current === requestId
+    ) {
+      if (
+        Number(world.rev || 0) !==
+        Number(lastSavedRev.current)
+      ) {
+        setSaveState((prev) => {
+          if (
+            prev === "saving" ||
+            prev === "conflict"
+          ) {
+            return prev;
+          }
+
+          return prev === "dirty"
+            ? prev
+            : "dirty";
+        });
+      }
+
+      return;
+    }
+
+    manualWorldSaveHandled.current =
+      requestId;
 
     if (timer.current) {
       clearTimeout(timer.current);
     }
 
     /*
-     * Do the expensive content serialization/cloning only once, after the
-     * state has been quiet for a moment. Rapid live-world updates therefore
-     * collapse into one save snapshot instead of repeatedly freezing the main
-     * thread.
+     * Explicit Save only. The expensive snapshot operation may still take a
+     * moment for a huge world, but it can now happen only when the player asks
+     * for it — never randomly during Feed/buttons/gameplay.
      */
     const runSaveOnce = async () => {
       const latest = wRef.current || world;
@@ -57463,7 +57571,18 @@ const signOut = useCallback(async () => {
                 );
             }
 
-            setSaveState("saved");
+            const liveStillDirty =
+              Boolean(
+                wRef.current &&
+                Number(wRef.current.rev || 0) !==
+                  Number(lastSavedRev.current)
+              );
+
+            setSaveState(
+              liveStillDirty
+                ? "dirty"
+                : "saved"
+            );
             setSaveAt(now());
             setErr("");
             return;
@@ -57491,7 +57610,7 @@ const signOut = useCallback(async () => {
                 );
             }
 
-            setSaveState("retry");
+            setSaveState("dirty");
             return;
           }
 
@@ -57537,9 +57656,14 @@ const signOut = useCallback(async () => {
             reconciled
           );
 
-          setSaveState("retry");
+          setSaveState("dirty");
           setSaveAt(now());
-          setErr("");
+          setErr(
+            tt(
+              "A szerver és a helyi világ össze lett egyeztetve. A végleges felhőmentéshez nyomj Mentés-t még egyszer.",
+              "The server and local world were reconciled. Press Save once more to persist the merged result."
+            )
+          );
           return;
         }
 
@@ -57610,7 +57734,18 @@ const signOut = useCallback(async () => {
           );
       }
 
-      setSaveState("saved");
+      const liveStillDirty =
+        Boolean(
+          wRef.current &&
+          Number(wRef.current.rev || 0) !==
+            Number(lastSavedRev.current)
+        );
+
+      setSaveState(
+        liveStillDirty
+          ? "dirty"
+          : "saved"
+      );
       setSaveAt(now());
       setErr("");
     };
@@ -57649,117 +57784,30 @@ const signOut = useCallback(async () => {
     };
 
     /*
-     * PERFORMANCE v24 — TRUE INTERACTION-SAFE AUTOSAVE
-     *
-     * The Worker does the JSON.stringify off-thread, but sending the world to
-     * it still requires a synchronous structured clone on the browser thread.
-     * requestIdleCallback({timeout:5000}) could FORCE that clone while the
-     * player was scrolling/clicking, which produced the "random" freezes.
-     *
-     * Keep autosave, but only begin the full snapshot after a real quiet
-     * window. Continuous play simply postpones the snapshot until the player
-     * stops interacting for a moment.
+     * v27 MANUAL SAVE:
+     * Give React one paint so the user sees "Mentés…" before the deliberately
+     * requested full-world snapshot starts.
      */
-    const UI_QUIET_MS = 2200;
-
-    const uiInputPending = () => {
-      try {
-        return Boolean(
-          typeof navigator !== "undefined" &&
-          navigator.scheduling &&
-          typeof navigator.scheduling.isInputPending === "function" &&
-          navigator.scheduling.isInputPending({
-            includeContinuous: true,
-          })
-        );
-      } catch (e) {
-        return false;
-      }
-    };
-
-    const scheduleQuietSave = () => {
-      const quietFor =
-        now() -
-        Number(lastUiInteractionAt.current || 0);
-
-      if (
-        quietFor < UI_QUIET_MS ||
-        uiInputPending()
-      ) {
-        const waitMs =
-          Math.max(
-            350,
-            UI_QUIET_MS - quietFor + 120
-          );
-
-        timer.current =
-          setTimeout(
-            scheduleQuietSave,
-            waitMs
-          );
-
-        return;
-      }
-
-      const executeIfStillQuiet = () => {
-        idleSaveHandle.current = null;
-
-        const stillQuietFor =
-          now() -
-          Number(lastUiInteractionAt.current || 0);
-
-        if (
-          stillQuietFor < UI_QUIET_MS ||
-          uiInputPending()
-        ) {
-          timer.current =
-            setTimeout(
-              scheduleQuietSave,
-              450
-            );
-          return;
-        }
-
-        void runSave();
-      };
-
-      if (
-        typeof requestIdleCallback ===
-        "function"
-      ) {
-        /*
-         * No short forcing timeout: the quiet gate above is the authority.
-         * A long timeout prevents pathological starvation, but the callback
-         * rechecks UI activity before it is allowed to snapshot.
-         */
-        idleSaveHandle.current =
-          requestIdleCallback(
-            executeIfStillQuiet,
-            { timeout: 30000 }
-          );
-      } else {
-        timer.current =
-          setTimeout(
-            executeIfStillQuiet,
-            250
-          );
-      }
-    };
-
     timer.current =
       setTimeout(
-        scheduleQuietSave,
-        4500
+        () => {
+          void runSave();
+        },
+        0
       );
 
     return () => {
-      if (timer.current) clearTimeout(timer.current);
-      if (idleSaveHandle.current != null && typeof cancelIdleCallback === "function") {
-        cancelIdleCallback(idleSaveHandle.current);
-        idleSaveHandle.current = null;
+      if (timer.current) {
+        clearTimeout(timer.current);
       }
     };
-  }, [world, meId, installAuthoritativeWorld, tt]);
+  }, [
+    world,
+    meId,
+    installAuthoritativeWorld,
+    tt,
+    manualSaveRequest,
+  ]);
   const myNotes = (world && meId && world.notify && world.notify[meId]) || [];
   const unread = myNotes.filter((x) => !x.read).length;
   const topNoteId = myNotes.length ? myNotes[0].id : "";
@@ -57767,16 +57815,24 @@ const signOut = useCallback(async () => {
     ? tt("Mentés…", "Saving…")
     : saveState === "saved"
       ? tt("Minden változtatás elmentve", "All changes saved")
-      : saveState === "local"
-        ? tt("Offline – helyi mentés készült", "Offline – saved locally")
-        : saveState === "retry"
-          ? tt("Újrapróbálkozás…", "Retrying…")
-          : saveState === "conflict"
+      : saveState === "dirty"
+        ? tt(
+            "Mentetlen változások",
+            "Unsaved changes"
+          )
+        : saveState === "local"
+          ? tt("Offline – helyi mentés készült", "Offline – saved locally")
+          : saveState === "retry"
             ? tt(
-                "Másik eszköz frissített – szerververzió betöltése…",
-                "Another device updated this world – loading server version…"
+                "Mentés szükséges",
+                "Save required"
               )
-            : tt("A mentés sikertelen", "Save failed");
+            : saveState === "conflict"
+              ? tt(
+                  "Másik eszköz is mentett · a helyi változások megmaradtak",
+                  "Another device also saved · local changes preserved"
+                )
+              : tt("A mentés sikertelen", "Save failed");
 
   useEffect(() => {
     if (!world || !meId || !topNoteId) return;
@@ -58165,6 +58221,29 @@ const signOut = useCallback(async () => {
               <div className="hdr-meta">{world.universe.name} · <span className="mono">{world.code}</span> · <span className="mono">@{me.username}</span> · <span className="mono">{BUILD_VERSION}</span></div>
               <div className="hint" style={{ marginTop: 4 }}>{saveLabel}{saveAt ? ` · ${timeAgo(saveAt)}` : ""}</div>
             </div>
+            <button
+              className="btn tiny"
+              onClick={requestManualSave}
+              disabled={saveState === "saving"}
+              title={tt(
+                "Az aktuális világ és a friss képek kézi mentése",
+                "Manually save the current world and new images"
+              )}
+              style={{
+                borderColor:
+                  saveState === "dirty" ||
+                  saveState === "conflict" ||
+                  saveState === "error"
+                    ? "var(--rose)"
+                    : undefined,
+              }}
+            >
+              {saveState === "saving"
+                ? <Loader2 size={13} className="spin" />
+                : <Check size={13} />}
+              {tt("Mentés", "Save")}
+            </button>
+
             <button className="btn tiny ghost" onClick={() => changeAuto({ on: !auto.on })}
               title={auto.on ? tt("Élő világ: magától történnek dolgok", "Live world: things happen on their own") : tt("Élő világ kikapcsolva", "Live world off")}
               style={{ color: auto.on ? "var(--rose)" : "var(--muted)" }}>
