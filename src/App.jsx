@@ -4104,6 +4104,15 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   const cue = connectionRelationshipCue(actor, target);
   const factionRivalry = factionRivalryActiveBetween(actor, target);
   const exactBond = exactConnectionBondLabel(actor, target);
+  const exactBondLow = String(exactBond || "").toLowerCase();
+  const exactBest = /legjobb bar[aá]t|best friend/.test(exactBondLow);
+  const exactClose = /közeli bar[aá]t|close friend/.test(exactBondLow);
+  const exactFriend = /(?:^|\s|\/)bar[aá]t(?:\s|\/|$)|(?:^|\s|\/)friend(?:\s|\/|$)/.test(exactBondLow);
+  const exactEnemy = /ellens[eé]g|enemy/.test(exactBondLow);
+  const exactRival = /riv[aá]lis|rival/.test(exactBondLow);
+  const exactCrush = /crush|vonzalom|attraction|obsession/.test(exactBondLow);
+  const exactMentor = /mentor|sensei|tan[aá]r|teacher|coach/.test(exactBondLow);
+  const exactStudent = /tan[ií]tv[aá]ny|student/.test(exactBondLow);
 
   const explicitBest =
     /best friend|ride\s*or\s*die|legjobb bar[aá]t|legjobb bar[aá]tn[oő]|legjobb bar[aá]tja/.test(low);
@@ -4168,7 +4177,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
    * keywords elsewhere. This prevents "both sheets say best friend" from
    * becoming hate because some unrelated dojo rivalry was also mentioned.
    */
-  if (explicitBest || cue.close) {
+  if (explicitBest || exactBest || cue.close) {
     return {
       score: 92,
       bond: "Legjobb barát",
@@ -4182,7 +4191,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
       source: "connections",
     };
   }
-  if (explicitClose) {
+  if (explicitClose || exactClose) {
     return {
       score: 78,
       bond: "Közeli barát",
@@ -4197,7 +4206,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
     };
   }
   if (
-    (explicitFriend || cue.friendly) &&
+    (explicitFriend || exactFriend || cue.friendly) &&
     !(explicitEnemy || cue.hostile)
   ) {
     return {
@@ -4229,7 +4238,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   if (explicitMutualCrush) {
     return { score: 70, bond: "Kölcsönös crush", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
-  if (explicitCrush || cue.romantic) {
+  if (explicitCrush || exactCrush || cue.romantic) {
     return {
       score: 52,
       bond: "Crush",
@@ -4241,7 +4250,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
     };
   }
 
-  if (explicitEnemy || cue.hostile) {
+  if (explicitEnemy || exactEnemy || cue.hostile) {
     return {
       score: -90,
       bond: "Ellenség",
@@ -4253,7 +4262,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
     };
   }
 
-  if (explicitRival || cue.rival) {
+  if (explicitRival || exactRival || cue.rival) {
     return {
       score: -68,
       bond: "Rivális",
@@ -4265,10 +4274,10 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
     };
   }
 
-  if (explicitMentor && !explicitStudent) {
+  if ((explicitMentor || exactMentor) && !(explicitStudent || exactStudent)) {
     return { score: 25, bond: exactBond || "Mentor", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
-  if (explicitStudent && !explicitMentor) {
+  if ((explicitStudent || exactStudent) && !(explicitMentor || exactMentor)) {
     return { score: 20, bond: exactBond || "Tanítvány", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
   if (explicitTeammate) {
@@ -4613,6 +4622,162 @@ function mentionedIdsInText(w, txt, authorId = "") {
   });
 
   return [...new Set(ids)];
+}
+
+
+/*
+ * v95 — PUBLIC SOCIAL ENTITY RESOLUTION
+ *
+ * `mentionedIdsInText` historically resolved @handles only. That is useful for
+ * notifications but insufficient as an identity/scope guard: generated text can
+ * say "Angel", "Tory Nichols" or "Angel Silverman" without an @handle.
+ *
+ * This resolver is deliberately used for PUBLIC POST/COMMENT ownership only.
+ * It does not turn private character-sheet names into public knowledge.
+ */
+function explicitNamedCharacterIdsInText(w, txt, authorId = "") {
+  if (!w || !txt) return [];
+
+  const source = String(txt || "");
+  const ids = new Set(mentionedIdsInText(w, source, authorId));
+
+  socialProfiles(w).forEach((person) => {
+    if (!person || !person.id || person.id === authorId) return;
+
+    const aliases = strictConnectionTargetAliases(person)
+      .map((alias) => String(alias || "").trim())
+      .filter((alias) => alias.length >= 4);
+
+    const username = String(person.username || "").trim();
+    if (username) {
+      aliases.push(`@${username}`);
+    }
+
+    for (const alias of [...new Set(aliases)]) {
+      const escaped = regexEscapeLiteral(alias);
+      const re = new RegExp(
+        `(^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`,
+        "iu"
+      );
+
+      if (re.test(source)) {
+        ids.add(person.id);
+        break;
+      }
+    }
+  });
+
+  return [...ids];
+}
+
+function publicSocialExplicitTargetIds(w, post) {
+  if (!w || !post) return [];
+
+  const ids = new Set(
+    explicitNamedCharacterIdsInText(
+      w,
+      String(post.text || ""),
+      post.authorId || ""
+    )
+  );
+
+  (Array.isArray(post.imageCharacterIds) ? post.imageCharacterIds : [])
+    .forEach((id) => {
+      if (id && id !== post.authorId && charById(w, id)) ids.add(id);
+    });
+
+  return [...ids].filter((id) => id && id !== post.authorId);
+}
+
+function publicSocialAllowedCharacterIds(w, post, directComment = null, actorId = "") {
+  const allowed = new Set();
+
+  if (actorId) allowed.add(actorId);
+  if (post && post.authorId) allowed.add(post.authorId);
+
+  publicSocialExplicitTargetIds(w, post)
+    .forEach((id) => allowed.add(id));
+
+  if (directComment) {
+    if (directComment.authorId) allowed.add(directComment.authorId);
+
+    explicitNamedCharacterIdsInText(
+      w,
+      String(directComment.text || ""),
+      directComment.authorId || ""
+    ).forEach((id) => allowed.add(id));
+  }
+
+  return allowed;
+}
+
+function publicSocialPlayerRelevant(w, post, directComment = null) {
+  if (!w || !w.meId || !post) return false;
+  if (post.authorId === w.meId) return true;
+
+  const allowed = publicSocialAllowedCharacterIds(w, post, directComment);
+  return allowed.has(w.meId);
+}
+
+function socialTextHasOutOfScopeCharacterReference(
+  w,
+  post,
+  directComment,
+  actorId,
+  text
+) {
+  if (!w || !post || !text) return false;
+
+  const allowed =
+    publicSocialAllowedCharacterIds(
+      w,
+      post,
+      directComment,
+      actorId
+    );
+
+  const mentioned =
+    explicitNamedCharacterIdsInText(
+      w,
+      text,
+      actorId
+    );
+
+  return mentioned.some((id) => !allowed.has(id));
+}
+
+function socialScopeInstruction(w, post, directComment = null) {
+  if (!w || !post) return "";
+
+  const allowed =
+    publicSocialAllowedCharacterIds(
+      w,
+      post,
+      directComment
+    );
+
+  const names = [...allowed]
+    .filter((id) => id && id !== post.authorId)
+    .map((id) => `${nameOfIn(w, id)} [${id}]`)
+    .join(", ");
+
+  const playerRelevant =
+    publicSocialPlayerRelevant(
+      w,
+      post,
+      directComment
+    );
+
+  return `
+PUBLIC SOCIAL RELEVANCE SCOPE — HARD:
+- POST AUTHOR is exactly ${nameOfIn(w, post.authorId)} [${post.authorId}].
+- Only people explicitly present in THIS post/image/direct parent comment may become a third-person topic without a new visible reason.
+- Explicit local third-person subjects: ${names || "none"}.
+- The human player ${w.player && w.player.name ? w.player.name : "player"} [${w.meId}] is ${playerRelevant ? "LOCALLY RELEVANT because this exact post/thread explicitly includes them" : "OUT OF SCOPE for this post/thread"}.
+- If the player is OUT OF SCOPE, DO NOT mention, @tag, compare to, gossip about, become jealous about, defend, attack, or otherwise insert them into this comment/reply.
+- Do not import a random third person from memories, trends, another post, another character sheet, a crush list, or general world drama.
+- Self facts belong only to the character whose ID owns that character sheet. Never transfer occupation, dojo, rank, mentor, enemy, crush or backstory from another character.
+`;
 }
 
 
@@ -9720,8 +9885,8 @@ function relationshipDeclaresFriendship(rel) {
 
 function areMutualFriends(w, aId, bId) {
   if (!w || !aId || !bId || aId === bId) return false;
-  const ab = getRel(w, aId, bId) || {};
-  const ba = getRel(w, bId, aId) || {};
+  const ab = effectiveRelationshipForBehavior(w, aId, bId) || {};
+  const ba = effectiveRelationshipForBehavior(w, bId, aId) || {};
   const friendAB =
     relationshipDeclaresFriendship(ab) ||
     relationshipFilterTier(ab) === "good" ||
@@ -9742,7 +9907,7 @@ function friendshipHostilityMismatch(
 ) {
   if (!w || !actorId || !targetId || actorId === targetId) return false;
 
-  const rel = getRel(w, actorId, targetId) || {};
+  const rel = effectiveRelationshipForBehavior(w, actorId, targetId) || {};
   const tier = relationshipFilterTier(rel);
   const declaredFriend = relationshipDeclaresFriendship(rel);
   const mutualFriends = areMutualFriends(w, actorId, targetId);
@@ -9805,7 +9970,7 @@ function explicitPositivePersonalOverride(w, actorId, targetId) {
   if (!w || !actorId || !targetId) return false;
   const actor = charById(w, actorId);
   const target = charById(w, targetId);
-  const rel = getRel(w, actorId, targetId) || {};
+  const rel = effectiveRelationshipForBehavior(w, actorId, targetId) || {};
   const tier = relationshipFilterTier(rel);
   const cue = actor && target ? connectionRelationshipCue(actor, target) : {};
 
@@ -9849,7 +10014,7 @@ function connectionsCommentToneMismatch(
   const cue = connectionRelationshipCue(actor, target);
   if (!cue || !cue.snippet) return false;
 
-  const rel = getRel(w, actorId, targetId) || {};
+  const rel = effectiveRelationshipForBehavior(w, actorId, targetId) || {};
   const tier = relationshipFilterTier(rel);
   const positiveDynamic = tier === "good" || tier === "close" || relationshipDeclaresFriendship(rel);
 
@@ -9882,7 +10047,7 @@ function socialCommentContradictsRelationship(
   contextText = ""
 ) {
   if (!w || !actorId || !targetId || actorId === targetId) return false;
-  const rel = getRel(w, actorId, targetId) || {};
+  const rel = effectiveRelationshipForBehavior(w, actorId, targetId) || {};
   const tier = relationshipFilterTier(rel);
   if (
     (tier === "negative" || tier === "hostile") &&
@@ -9905,9 +10070,9 @@ function socialCommentContradictsRelationship(
 
 function socialThreadAllyHostilityMismatch(w, responderId, commenterId, postAuthorId, text) {
   if (!w || !responderId || !commenterId || !postAuthorId) return false;
-  const toCommenter = relationshipFilterTier(getRel(w, responderId, commenterId));
-  const toPoster = relationshipFilterTier(getRel(w, responderId, postAuthorId));
-  const commenterToPoster = relationshipFilterTier(getRel(w, commenterId, postAuthorId));
+  const toCommenter = relationshipFilterTier(effectiveRelationshipForBehavior(w, responderId, commenterId));
+  const toPoster = relationshipFilterTier(effectiveRelationshipForBehavior(w, responderId, postAuthorId));
+  const commenterToPoster = relationshipFilterTier(effectiveRelationshipForBehavior(w, commenterId, postAuthorId));
   return (
     (toCommenter === "good" || toCommenter === "close") &&
     (toPoster === "negative" || toPoster === "hostile") &&
@@ -9918,9 +10083,9 @@ function socialThreadAllyHostilityMismatch(w, responderId, commenterId, postAuth
 
 function commentThreadRelationshipTriangleCard(w, responderId, commenterId, postAuthorId) {
   if (!w || !responderId || !commenterId || !postAuthorId) return "";
-  const responderToCommenter = relationshipFilterTier(getRel(w, responderId, commenterId));
-  const responderToPoster = relationshipFilterTier(getRel(w, responderId, postAuthorId));
-  const commenterToPoster = relationshipFilterTier(getRel(w, commenterId, postAuthorId));
+  const responderToCommenter = relationshipFilterTier(effectiveRelationshipForBehavior(w, responderId, commenterId));
+  const responderToPoster = relationshipFilterTier(effectiveRelationshipForBehavior(w, responderId, postAuthorId));
+  const commenterToPoster = relationshipFilterTier(effectiveRelationshipForBehavior(w, commenterId, postAuthorId));
   const responder = nameOfIn(w, responderId);
   const commenter = nameOfIn(w, commenterId);
   const poster = nameOfIn(w, postAuthorId);
@@ -10808,6 +10973,58 @@ function characterFactionIdentityCard(c) {
   return groups.join(" | ");
 }
 
+
+function selfClaimedKarateFactionKeys(text) {
+  const source = String(text || "");
+  if (!source) return [];
+
+  const patterns = [
+    ["cobraKai", "cobra\\s*kai"],
+    ["miyagiFang", "(?:miyagi[- ]?(?:do|fang)|eagle\\s*fang)"],
+    ["ironDragons", "iron\\s*dragons?"],
+    ["wasabi", "wasabi(?:\\s*dojo)?"],
+  ];
+
+  const claims = [];
+
+  patterns.forEach(([key, token]) => {
+    const tests = [
+      new RegExp(`\\b(?:my|our)\\s+(?:dojo|team|side)\\s+(?:is\\s+)?(?:the\\s+)?${token}\\b`, "i"),
+      new RegExp(`\\b(?:i(?:'m|\\s+am)|we(?:'re|\\s+are))\\s+(?:with|from|in|on|representing|a\\s+member\\s+of)\\s+(?:the\\s+)?${token}\\b`, "i"),
+      new RegExp(`\\b(?:representing|repping)\\s+(?:the\\s+)?${token}\\b`, "i"),
+      new RegExp(`\\b${token}\\s+(?:is|are)\\s+(?:my|our)\\s+(?:dojo|team|side)\\b`, "i"),
+    ];
+
+    if (tests.some((re) => re.test(source))) claims.push(key);
+  });
+
+  return [...new Set(claims)];
+}
+
+function socialSelfClassificationContradiction(w, actorId, text) {
+  if (!w || !actorId || !text) return false;
+  const actor = charById(w, actorId);
+  if (!actor) return false;
+
+  const actual = karateFactionKey(factionFlags(actor));
+  const claimed = selfClaimedKarateFactionKeys(text);
+
+  if (claimed.length && actual && claimed.some((key) => key !== actual)) {
+    return true;
+  }
+
+  if (
+    !characterIsSensei(actor) &&
+    /\b(?:i(?:'m| am)|as|me as)\s+(?:a |the )?sensei\b|\bmy\s+students?\b/i.test(
+      String(text)
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function franchiseFactionRivalryCard(actor, target, en) {
   const af = factionFlags(actor);
   const tf = factionFlags(target);
@@ -11242,17 +11459,31 @@ function regexEscapeLiteral(value) {
 function canonTargetAliases(target) {
   if (!target) return [];
 
-  const full = String(target.name || "").trim();
+  const full = String(target.name || "").replace(/\s+/g, " ").trim();
   const words = full.split(/\s+/).filter(Boolean);
+  const surname = words.length > 1 ? words[words.length - 1] : "";
+  const firstLast = words.length > 1 ? `${words[0]} ${surname}` : "";
+
+  const nickParts = String(target.nick || target.nickname || "")
+    .split(/[,/|;]/)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  const nicknameSurname = nickParts
+    .filter((nick) => surname && !nick.toLowerCase().includes(surname.toLowerCase()))
+    .map((nick) => `${nick} ${surname}`);
 
   return [
     full,
+    firstLast,
     target.username,
-    target.nick,
+    target.username ? `@${target.username}` : "",
+    ...nickParts,
+    ...nicknameSurname,
     words[0],
-    words.length > 1 ? words[words.length - 1] : "",
+    surname,
   ]
-    .map((value) => String(value || "").trim())
+    .map((value) => String(value || "").replace(/\s+/g, " ").trim())
     .filter((value) => value.length >= 3)
     .filter((value, index, arr) =>
       arr.findIndex((other) => other.toLowerCase() === value.toLowerCase()) === index
@@ -11331,15 +11562,20 @@ function strictConnectionTargetAliases(target) {
 
   const full = String(target.name || "").replace(/\s+/g, " ").trim();
   const words = full.split(/\s+/).filter(Boolean);
+  const surname = words.length >= 2 ? words[words.length - 1] : "";
   const firstLast =
     words.length >= 2
-      ? `${words[0]} ${words[words.length - 1]}`
+      ? `${words[0]} ${surname}`
       : "";
 
-  const nickParts = String(target.nick || "")
+  const nickParts = String(target.nick || target.nickname || "")
     .split(/[,/|;]/)
     .map((part) => part.replace(/\s+/g, " ").trim())
     .filter(Boolean);
+
+  const nicknameSurname = nickParts
+    .filter((nick) => surname && !nick.toLowerCase().includes(surname.toLowerCase()))
+    .map((nick) => `${nick} ${surname}`);
 
   return [
     full,
@@ -11347,6 +11583,7 @@ function strictConnectionTargetAliases(target) {
     target.username,
     target.username ? `@${target.username}` : "",
     ...nickParts,
+    ...nicknameSurname,
   ]
     .map((value) => String(value || "").replace(/\s+/g, " ").trim())
     .filter((value) => value.length >= 3)
@@ -11778,7 +12015,7 @@ function connectionRelationshipCue(actor, target) {
   return {
     snippet,
     romantic: /crush|has a crush|secret crush|vonz[oó]d|vonzalom|szerelmes|szerelem|in love|love interest|romantic|romantikus|fl[oö]rt|flirt|attraction|attracted|obsess|megsz[aá]ll|r[aá] van kattanva/.test(low),
-    close: /best friend|close friend|ride or die|legjobb bar[aá]t|közeli bar[aá]t|testv[eé]rk[eé]nt|like a sibling/.test(low),
+    close: /best friend|close friend|ride or die|legjobb bar[aá]t|közeli bar[aá]t|testv[eé]rk[eé]nt|like a sibling|sisters? she chose|brothers? she chose|chosen sister|chosen brother|chosen family/.test(low),
     friendly: /friend|bar[aá]t|ally|sz[oö]vets[eé]ges|loyal|loj[aá]lis/.test(low),
     hostile: /enemy|ellens[eé]g|hate|gy[uű]l[oö]l|nem b[ií]rja|despise|archenemy|f[oő]ellens[eé]g/.test(low),
     rival: /rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(low),
@@ -13445,25 +13682,43 @@ A JÁTÉKOS MOSTANI INPUTJA: "${exact.slice(0, 900)}"
 
 function commentOwnershipInstruction(w, post, comment) {
   if (!post || !comment) return "";
-  const comments = safePostComments(post);
-  const byId = new Map(comments.filter(Boolean).map((row) => [row.id, row]));
-  const chain = [];
-  let cur = comment;
-  let guard = 0;
 
-  while (cur && guard < 6) {
-    chain.unshift(cur);
-    cur = cur.parent ? (byId.get(cur.parent) || null) : null;
-    guard += 1;
+  const author = charById(w, comment.authorId);
+  const authorName = author ? author.name : nameOfIn(w, comment.authorId);
+  const isPlayerComment = isHuman(w, comment.authorId);
+
+  if (isPlayerComment) {
+    const comments = safePostComments(post);
+    const byId = new Map(comments.filter(Boolean).map((row) => [row.id, row]));
+    const chain = [];
+    let cur = comment;
+    let guard = 0;
+
+    while (cur && guard < 6) {
+      chain.unshift(cur);
+      cur = cur.parent ? (byId.get(cur.parent) || null) : null;
+      guard += 1;
+    }
+
+    return conversationOwnershipInstruction(
+      w,
+      comment.text,
+      chain,
+      "public comment thread",
+      w && w.meId
+    );
   }
 
-  return conversationOwnershipInstruction(
-    w,
-    comment.text,
-    chain,
-    "public comment thread",
-    w && w.meId
-  );
+  return `
+PUBLIC COMMENT AUTHORSHIP LOCK:
+- CURRENT COMMENT ID: ${comment.id}
+- CURRENT COMMENT AUTHOR: ${authorName} [${comment.authorId}] — this is an AI character, NOT the human player.
+- CURRENT COMMENT TEXT: "${String(comment.text || "").slice(0, 900)}"
+- Every I / me / my in that comment belongs to ${authorName}, not to the player.
+- Every claim/action/opinion in that comment belongs to ${authorName} unless the sentence explicitly names another person.
+- Do NOT reinterpret this AI-authored comment through player pronoun rules.
+- The reply target is the author of THIS exact comment unless a deterministic app contract says otherwise.
+`;
 }
 
 function relationshipObsessionLevel(
@@ -13644,7 +13899,7 @@ function relationshipBehaviorCard(
   }
 
   const rel =
-    getRel(
+    effectiveRelationshipForBehavior(
       w,
       actorId,
       targetId
@@ -14758,33 +15013,49 @@ function recentStructuredWorldLines(w, limit = 6) {
   return rows;
 }
 
-function worldContext(w, ids, deep, observerId) {
+function worldContext(w, ids, deep, observerId, contextOptions = {}) {
   const focus = ids && ids.length ? ids : null;
   let cast = (w.chars || []).filter((c) => !focus || focus.indexOf(c.id) >= 0);
   if (!focus) cast = cast.slice(0, detailInfo().cast);
-  const knownCtx = observerId
-    ? buildKnownCharacterContext(observerId, [w.player].concat(cast), w)
-    : [];
-  const selfMem = observerId ? ensureCharMemory(w, observerId) : null;
+
+  const includePlayer = contextOptions.includePlayer !== false;
+  const includeRecentWorld = contextOptions.includeRecentWorld !== false;
+  const socialScope = Boolean(contextOptions.socialScope);
+
+  const knownPeople = [
+    ...(includePlayer && w.player ? [w.player] : []),
+    ...cast,
+  ];
+
+  const knownCtx =
+    observerId && !socialScope
+      ? buildKnownCharacterContext(observerId, knownPeople, w)
+      : [];
+  const selfMem =
+    observerId && !socialScope
+      ? ensureCharMemory(w, observerId)
+      : null;
 
   // csak azok a kapcsolatok, amik a jelenlévőket érintik
   const inPlay = {};
   cast.forEach((c) => { inPlay[c.id] = 1; });
-  inPlay[w.meId] = 1;
+  if (includePlayer && w.meId) inPlay[w.meId] = 1;
   const rels = [];
-  Object.keys(w.rels || {}).forEach((k) => {
-    if (rels.length >= 14) return;
-    const [x, y] = k.split(">");
-    if (!inPlay[x] && !inPlay[y]) return;
-    const r = w.rels[k];
-    if (!r || (!r.score && !r.mood && !r.bond)) return;
-    const A = charById(w, x), B = charById(w, y);
-    if (!A || !B) return;
-    const bond = r.bond || r.type || "";
-    rels.push(`${A.name} → ${B.name}: ${observerId ? r.score : relType(r.score)}` +
-      (observerId && r.mood ? ` — ${cut(r.mood, 40)}` : "") +
-      (bond ? (r.fixed ? ` | ${localizedBond(bond, worldLanguage(w, observerId || w.meId))} (${worldLanguage(w, observerId || w.meId) === "en" ? "fact" : "tény"})` : ` | ${localizedBond(bond, worldLanguage(w, observerId || w.meId))}`) : ""));
-  });
+  if (!socialScope) {
+    Object.keys(w.rels || {}).forEach((k) => {
+      if (rels.length >= 14) return;
+      const [x, y] = k.split(">");
+      if (!inPlay[x] && !inPlay[y]) return;
+      const r = w.rels[k];
+      if (!r || (!r.score && !r.mood && !r.bond)) return;
+      const A = charById(w, x), B = charById(w, y);
+      if (!A || !B) return;
+      const bond = r.bond || r.type || "";
+      rels.push(`${A.name} → ${B.name}: ${observerId ? r.score : relType(r.score)}` +
+        (observerId && r.mood ? ` — ${cut(r.mood, 40)}` : "") +
+        (bond ? (r.fixed ? ` | ${localizedBond(bond, worldLanguage(w, observerId || w.meId))} (${worldLanguage(w, observerId || w.meId) === "en" ? "fact" : "tény"})` : ` | ${localizedBond(bond, worldLanguage(w, observerId || w.meId))}`) : ""));
+    });
+  }
 
   const notes = notesForAI(w);
   const knownTimeline = observerId
@@ -14794,7 +15065,42 @@ function worldContext(w, ids, deep, observerId) {
   const outLang = worldLanguage(w, observerId || w.meId);
   const tt = (hu, en) => (outLang === "en" ? en : hu);
 
-  const roster = rosterLine(w);
+  const roster =
+    includePlayer
+      ? rosterLine(w)
+      : (w.chars || [])
+          .filter(Boolean)
+          .map((c) => `${c.name} (@${c.username || ""})`)
+          .join("\n");
+
+  const playerContextBlock = includePlayer
+    ? `${tt(
+        "A JÁTÉKOS KARAKTERE — ŐT KIZÁRÓLAG A FELHASZNÁLÓ IRÁNYÍTJA.",
+        "THE PLAYER CHARACTER — ONLY THE USER CONTROLS THEM."
+      )}
+${tt(
+        "Soha ne adj a szájába szöveget, ne írj helyette posztot, kommentet, üzenetet vagy jegyzetet,\nne lájkoltass vele, és ne írd le, mit tesz vagy mit érez. Csak REAGÁLJ rá.",
+        "Never put words in their mouth. Do not write posts, comments, messages, or notes for them,\ndo not make them like anything, and do not describe what they do or feel. Only REACT to them."
+      )}
+${tt(
+        "Ha egy jelenet úgy folytatódna, hogy neki kellene lépnie, állj meg ott, és hagyd rá a döntést.",
+        "If the scene would require the player's move next, stop there and leave the decision to them."
+      )}
+${deep
+        ? deepBrief(w, w.player, true, observerId)
+        : sheet(
+            w.player,
+            w,
+            false,
+            true,
+            observerId && observerId !== w.player.id
+              ? "private_no_connections"
+              : "private"
+          )}`
+    : tt(
+        "JÁTÉKOS-KONTEXTUS: ebben a lokális social feladatban a játékos nincs benne a poszt/thread releváns szereplői között. A profilját és privát kánonját szándékosan nem kapod meg. NE hozd be őt témának.",
+        "PLAYER CONTEXT: the player is not part of this local social post/thread scope. Their profile and private canon are intentionally omitted. DO NOT introduce them as a topic."
+      );
 
   return `${tt(
     "KIMENETI NYELV: magyar. Minden felhasználónak látható mező magyar legyen; ne írj angol felhasználói szöveget.",
@@ -14814,23 +15120,18 @@ ${tt(
   "18+ GAME BASELINE: there is no Standard/Mature toggle. The world may use adult themes, profanity, darker relationships, violence, alcohol/drugs as story elements, and non-graphic adult romantic tension when character-accurate. Across every social surface, interpret the player's adult slang, thirst jokes, sexual innuendo, double entendres, suggestive euphemisms and provocative wordplay by their intended meaning rather than sanitizing them into an innocent literal reading. Known adults may react to that meaning in a character-appropriate, non-graphic way. Never sexualize a minor or a person whose age is not confirmed 18+, and never generate explicit pornographic detail."
 )}
 
-${tt("A JÁTÉKOS KARAKTERE — ŐT KIZÁRÓLAG A FELHASZNÁLÓ IRÁNYÍTJA.", "THE PLAYER CHARACTER — ONLY THE USER CONTROLS THEM.")}
-${tt(
-    "Soha ne adj a szájába szöveget, ne írj helyette posztot, kommentet, üzenetet vagy jegyzetet,\nne lájkoltass vele, és ne írd le, mit tesz vagy mit érez. Csak REAGÁLJ rá.",
-    "Never put words in their mouth. Do not write posts, comments, messages, or notes for them,\ndo not make them like anything, and do not describe what they do or feel. Only REACT to them."
-  )}
-${tt(
-    "Ha egy jelenet úgy folytatódna, hogy neki kellene lépnie, állj meg ott, és hagyd rá a döntést.",
-    "If the scene would require the player's move next, stop there and leave the decision to them."
-  )}
-${deep ? deepBrief(w, w.player, true, observerId) : sheet(w.player, w, false, true, observerId && observerId !== w.player.id ? "private_no_connections" : "private")}
+${playerContextBlock}
 
 ${tt("A VILÁG TELJES NÉVSORA — RAJTUK KÍVÜL SENKI NEM LÉTEZIK", "FULL WORLD ROSTER — NO ONE ELSE EXISTS")}: 
 ${roster || "-"}
 
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
-${cast.map((c) => (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId && observerId !== c.id ? "private_no_connections" : "private"))).join("\n") || "-"}
-${!observerId && deep ? multiActorPerformanceContext(w, cast.map((c) => c.id)) : ""}
+${cast.map((c) => (
+  socialScope
+    ? `${c.name} [${c.id}] — ${characterFactionIdentityCard(c) || "classification unknown"}`
+    : (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId && observerId !== c.id ? "private_no_connections" : "private"))
+)).join("\n") || "-"}
+${!observerId && deep && !socialScope ? multiActorPerformanceContext(w, cast.map((c) => c.id)) : ""}
 ${knownCtx.length ? `
 
 ${tt("AMIT MÁSOKRÓL KÜLÖN TUDSZ (saját emlék, pletyka, következtetés)", "WHAT YOU SPECIFICALLY KNOW ABOUT OTHERS (memory, rumor, inference)")}: 
@@ -14842,11 +15143,17 @@ ${knownCtx.map((x) => {
 }).join("\n")}` : ""}
 
 ${tt("KAPCSOLATOK (irányítottak: \"A → B\" azt jelenti, A mit érez B iránt)", "RELATIONSHIPS (directional: \"A -> B\" means what A feels toward B)")}: 
-${rels.join("\n") || tt("még nincs rögzítve", "nothing recorded yet")}
+${socialScope
+  ? tt("lokális social módban az unrelated relationship graph szándékosan ki van hagyva; az exact pair canon capsule-ok az irányadók", "unrelated relationship graph intentionally omitted in local social mode; exact pair canon capsules are authoritative")
+  : (rels.join("\n") || tt("még nincs rögzítve", "nothing recorded yet"))}
 ${notes ? `\n${tt("MOSTANI JEGYZETEK", "CURRENT NOTES")}:\n${cut(notes, 260)}` : ""}
 
 ${tt("MOSTANÁBAN TÖRTÉNT", "RECENT EVENTS")}: 
-${(observerId ? knownTimeline : recentStructuredWorldLines(w, 4)).join("\n") || "-"}`;
+${(
+  includeRecentWorld
+    ? (observerId ? knownTimeline : recentStructuredWorldLines(w, 4))
+    : []
+).join("\n") || (socialScope ? tt("kihagyva: nem releváns ehhez a lokális social threadhez", "omitted: unrelated to this local social thread") : "-")}`;
 }
 
 const ENGINE = `Te egy élő, AI-vezérelt közösségi média világ motorja vagy egy szerepjátékhoz.
@@ -15056,11 +15363,7 @@ A KAPCSOLAT EGYIRÁNYÚ — EZ FONTOS
 - Mély, bejáratott kapcsolatot ne próbálj egyetlen ±30/±40 változással átírni.
 - Támogatás, védelem, közelség, őszinteség, lojalitás, flört vagy közös siker adhat PLUSZT.
 - Sértegetés, megalázás, árulás, hazugság, fenyegetés, féltékenység, elutasítás, konfliktus vagy csalódás adhat MÍNUSZT.
-- Ne adj 1-2 pontos alibi-változásokat. Ha tényleg történt valami, a változás legyen érezhető.
-- kisebb, de valódi hatás: kb. ±6–10
-- egyértelmű érzelmi hatás: kb. ±11–20
-- nagy konfliktus / nagy áttörés: kb. ±21–35
-- nagyon súlyos fordulat, árulás, megmentés stb.: akár ±36–45
+- Ha nincs érdemi érzelmi hatás, inkább ne adj delta-változást. Ne használj mesterséges alibi-deltát.
 - Csak akkor tegyél be változást, ha tényleg történt valami, ami hat a viszonyra.
 - Két rokon között soha ne szőj romantikus vagy szexuális szálat.
 - A titkokat magától nem vallja be: elhallgatja, elterelí, vagy hazudik róla. Te döntöd el, mikor csúszik ki valami.
@@ -16252,9 +16555,14 @@ function migrate(w) {
    * v94 one-time canon repair for stale impossible relationship states.
    * Example: both character sheets say Best Friend but old runtime says Hate.
    */
-  if (Number(w.relationshipCanonVersion || 0) < 4) {
+  if (Number(w.relationshipCanonVersion || 0) < 5) {
+    /*
+     * v95 reparses target aliases (e.g. Angela Mallory Silverman nick "Angel"
+     * correctly matches "Angel Silverman" in Tory's Connections) and repairs
+     * stale contradictory live relationships once.
+     */
     reconcileLiveRelationshipsWithStrongCanon(w, true);
-    w.relationshipCanonVersion = 4;
+    w.relationshipCanonVersion = 5;
   }
 
   // képhivatkozások migrációja: a tényleges fájl marad külön tárolva, itt csak a stabil metaél marad.
@@ -17493,7 +17801,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v94-deep-character-canon-relationship-stability";
+const BUILD_VERSION = "v95-strict-social-identity-scope";
 
 const AUTO = "masvilag:auto";
 /*
@@ -23944,16 +24252,30 @@ function normalizeSocialPostMeaning(w, post, raw) {
   const exactText = short(post && post.text, 1200);
   const imageDescription = short(post && post.imageDescription, 900);
   const explicitFromText = post
-    ? mentionedIdsInText(w, exactText, post.authorId).filter((id) => id && id !== post.authorId)
+    ? explicitNamedCharacterIdsInText(w, exactText, post.authorId)
+        .filter((id) => id && id !== post.authorId)
     : [];
-  const addressedToIds = [...new Set([...explicitFromText, ...resolveIds(source.addressedToIds || source.addressedTo || source.targets)])].slice(0, 10);
+  const explicitFromImage = post && Array.isArray(post.imageCharacterIds)
+    ? post.imageCharacterIds
+        .filter((id) => id && id !== post.authorId && charById(w, id))
+    : [];
+
+  /*
+   * HARD TARGET OWNERSHIP:
+   * model-suggested IDs are NOT allowed to create a target that the visible
+   * post/image did not explicitly establish.
+   */
+  const addressedToIds = [...new Set([
+    ...explicitFromText,
+    ...explicitFromImage,
+  ])].slice(0, 10);
   const uncertainPoints = (Array.isArray(source.uncertainPoints) ? source.uncertainPoints : [])
     .map((x) => short(x, 180))
     .filter(Boolean)
     .slice(0, 6);
 
   return {
-    version: 1,
+    version: 2,
     literalMeaning: short(source.literalMeaning || source.literal || exactText || imageDescription || "", 900),
     likelyIntent: short(source.likelyIntent || source.intent || "", 500),
     impliedMeaning: short(source.impliedMeaning || source.implication || "", 650),
@@ -23961,7 +24283,15 @@ function normalizeSocialPostMeaning(w, post, raw) {
     imageRelation: short(source.imageRelation || source.imageMeaning || "", 500),
     addressedToIds,
     ambiguity,
-    personalProjectionAllowed: Boolean(source.personalProjectionAllowed || source.allowsPersonalProjection || source.openEndedPersonalTarget),
+    personalProjectionAllowed: Boolean(
+      (
+        source.personalProjectionAllowed ||
+        source.allowsPersonalProjection ||
+        source.openEndedPersonalTarget
+      ) &&
+      !addressedToIds.length &&
+      /\b(?:someone|somebody|certain someone|you know who|guess who|iykyk|if you know you know|my crush|my ex|whoever|one of you)\b|\byou\b/i.test(exactText)
+    ),
     uncertainPoints,
     confidence: Math.max(0, Math.min(1, Number(source.confidence) || 0.72)),
   };
@@ -23971,7 +24301,7 @@ function fallbackSocialPostMeaning(w, post) {
   const text = String(post && post.text || "").replace(/\s+/g, " ").trim();
   const imageDescription = String(post && post.imageDescription || "").replace(/\s+/g, " ").trim();
   const addressedToIds = post
-    ? mentionedIdsInText(w, text, post.authorId).filter((id) => id && id !== post.authorId)
+    ? publicSocialExplicitTargetIds(w, post)
     : [];
   return normalizeSocialPostMeaning(w, post, {
     literalMeaning: text || imageDescription || "Image post",
@@ -23990,14 +24320,14 @@ function fallbackSocialPostMeaning(w, post) {
 async function analyzeSocialPostMeaning(w, post) {
   if (!w || !post) return fallbackSocialPostMeaning(w, post);
 
-  if (post.socialMeaning && typeof post.socialMeaning === "object" && Number(post.socialMeaning.version) >= 1) {
+  if (post.socialMeaning && typeof post.socialMeaning === "object" && Number(post.socialMeaning.version) >= 2) {
     return normalizeSocialPostMeaning(w, post, post.socialMeaning);
   }
 
   const author = charById(w, post.authorId);
   const exactText = String(post.text || "").trim();
   const imageDescription = String(post.imageDescription || "").trim();
-  const explicitMentionIds = mentionedIdsInText(w, exactText, post.authorId)
+  const explicitMentionIds = publicSocialExplicitTargetIds(w, post)
     .filter((id) => id && id !== post.authorId);
   const explicitMentions = explicitMentionIds
     .map((id) => `${nameOfIn(w, id)} [${id}]`)
@@ -24009,14 +24339,24 @@ async function analyzeSocialPostMeaning(w, post) {
     .map((p) => `- ${cut(String(p.text || p.imageDescription || ""), 220)}`)
     .join("\n") || "- none";
 
-  const recentWorld = recentStructuredWorldLines(w, 5).join("\n") || "- none";
   const isPlayerPost = post.authorId === w.meId || isHuman(w, post.authorId);
+
+  const authorMeaningCard =
+    author && !isPlayerPost
+      ? `AUTHOR SELF FACTS FOR STYLE/SEMANTICS ONLY:
+- name=${author.name} [${author.id}]
+- occupation=${cut(String(author.job || author.occupation || author.role || ""), 360)}
+- own side=${characterFactionIdentityCard(author) || "unknown"}
+- bio=${cut(String(author.bio || ""), 500)}
+- speech/personality=${cut(`${String(author.speech || "")} ${String(author.personality || "")}`, 700)}
+IMPORTANT: these facts belong ONLY to the POST AUTHOR. Do not import another character's Connections, memories, occupation, dojo, crushes or private story into the meaning of this post.`
+      : "";
 
   try {
     const raw = await askWorldJSON(
       w,
       engineFor(w),
-      `${author && !isPlayerPost ? `${voiceCard(author)}\n${characterMemoryCard(w, author)}` : ""}
+      `${authorMeaningCard}
 
 SOCIAL POST MEANING PARSER — SHARED SEMANTIC ANCHOR
 
@@ -24034,8 +24374,8 @@ ${explicitMentions}
 AUTHOR'S RECENT OWN FEED CONTEXT:
 ${recentOwn}
 
-RECENT OBSERVED WORLD CONTEXT:
-${recentWorld}
+UNRELATED WORLD EVENTS / OTHER CHARACTER MEMORIES:
+INTENTIONALLY OMITTED. They are not evidence for this post's target or meaning.
 
 TASK:
 Create ONE concise objective semantic anchor that every later commenter will receive before applying their own personality/relationship lens.
@@ -24045,7 +24385,8 @@ HARD COMPREHENSION RULES:
 - Resolve slang, typos, code-switching, sarcasm, irony, teasing, rhetorical questions, memes, fandom phrasing, adult-coded innuendo and indirect phrasing when the intended reading is strongly supported.
 - Keep literal meaning separate from implication. Do not turn an implication into an objective fact.
 - Pronouns and "you" must attach to the most natural explicit/contextual referent. Do not swap speaker and target.
-- Explicit names/@mentions are HARD anchors. Never silently replace them with another character.
+- Explicit names/@mentions and USER-CONFIRMED PEOPLE IN IMAGE are HARD anchors. Never silently replace them with another character.
+- addressedToIds may contain ONLY IDs already resolved by the app in EXPLICIT @MENTIONS / NAMED WORLD TARGETS. Do not add a crush, rival, player, friend, trend subject or remembered person merely because they feel narratively relevant.
 - If the post says "someone", "he", "she", "they", "my crush", "my ex", "my brother" etc. but the identity is not actually established by the visible post/context, MARK IT UNKNOWN. Do not assign a random cast member.
 - A relationship/crush/enemy status can affect HOW a commenter feels about the post, but it cannot rewrite the post's base semantic content.
 - If caption and image interact (joke, contrast, outfit caption, location reference, thirst joke, sarcasm), explain that relation briefly. Never invent unseen image details.
@@ -24101,7 +24442,7 @@ function commentTargetRelationshipMatrix(w, cast, post) {
     .filter((actor) => actor && actor.id && actor.id !== post.authorId)
     .slice(0, 24)
     .map((actor) => {
-      const rel = getRel(w, actor.id, post.authorId) || {};
+      const rel = effectiveRelationshipForBehavior(w, actor.id, post.authorId) || {};
       const cue = connectionCanonSnippetAbout(actor, target, 460);
       const rivalry = factionRivalryActiveBetween(actor, target);
       const tier = relationshipFilterTier(rel);
@@ -24140,6 +24481,55 @@ RULE:
 `;
 }
 
+function strictSocialActorCapsules(w, cast, post, directComment = null) {
+  if (!w || !post) return "";
+
+  const postAuthor = charById(w, post.authorId);
+  const targetPublic = postAuthor
+    ? [
+        `name=${postAuthor.name} [${postAuthor.id}]`,
+        `occupation=${cut(String(postAuthor.job || postAuthor.occupation || postAuthor.role || ""), 360) || "unknown"}`,
+        `side=${characterFactionIdentityCard(postAuthor) || "unknown"}`,
+        `public bio=${cut(String(postAuthor.bio || ""), 420) || "-"}`,
+      ].join(" | ")
+    : `${post.authorId}`;
+
+  return (cast || [])
+    .filter((actor) => actor && actor.id && actor.id !== post.authorId)
+    .map((actor) => {
+      const targetId =
+        directComment && directComment.authorId
+          ? directComment.authorId
+          : post.authorId;
+
+      return `
+========== SEALED ACTOR CAPSULE: ${actor.name} [${actor.id}] ==========
+OUTPUT OWNERSHIP: only an output row with id="${actor.id}" may use facts from this capsule.
+SELF = ${actor.name} [${actor.id}]. Every "I/my/me", own job, own dojo, own rank, own history, own personality and own Connections fact in this capsule belongs ONLY to ${actor.name}.
+POST AUTHOR PUBLIC FACTS: ${targetPublic}
+DIRECT TARGET FOR THIS REACTION: ${nameOfIn(w, targetId)} [${targetId}]
+
+${voiceCard(actor)}
+
+EXACT DIRECTED PAIR CANON:
+${JSON.stringify(exactPairCanonCard(w, actor.id, targetId) || {})}
+
+TARGET-SPECIFIC BEHAVIOR FILTER:
+${relationshipBehaviorCard(w, actor.id, targetId)}
+
+TARGET-SPECIFIC MEMORY ONLY:
+${commentTargetMemoryCard(w, actor, targetId) || "-"}
+
+HARD CAPSULE BOUNDARY:
+- Do NOT copy any fact from this capsule into another actor's output.
+- ${actor.name}'s occupation/dojo/rank/mentor/crush/enemy/history belong to ${actor.name}, never to another commenter.
+- Other named people inside ${actor.name}'s full sheet are private/background context and are NOT automatically relevant to this post.
+- Do not mention any third person merely because their name appears in this capsule.
+========== END CAPSULE ${actor.id} ==========`;
+    })
+    .join("\n");
+}
+
 async function genComments(w, post, options = {}) {
   const cast = fairCommentCast(
     w,
@@ -24176,8 +24566,15 @@ async function genComments(w, post, options = {}) {
       w,
       cast.map((c) => c.id),
       true,
-      null
+      null,
+      {
+        includePlayer: publicSocialPlayerRelevant(w, post),
+        includeRecentWorld: false,
+        socialScope: true,
+      }
     )}
+
+${socialScopeInstruction(w, post)}
 
 POST CONTEXT LOCK — EZ A KOMMENTGENERÁLÁS EGYETLEN CÉLPOSZTJA:
 - POST ID: ${post.id}
@@ -24229,12 +24626,12 @@ ${characterAgentRuntimeCard(
 
 ${commentTargetRelationshipMatrix(w, cast, post)}
 
-${cast
-  .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
-  .join("")}
+${strictSocialActorCapsules(w, cast, post)}
 
 KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
-- Minden kommentelő teljes karakterlapját és saját emlékeit használd, nem csak a nyilvános bioját.
+- A fenti SEALED ACTOR CAPSULES blokkok szigorúan ID-hoz kötöttek. Egy output sor id-je CSAK a saját capsule-jából olvashat "én / saját" tényt.
+- Minden kommentelő a SAJÁT teljes karakterlapját használja, nem másik kommentelőét. Más karakter jobja, dojoja, rangja, mentorai, crushai, Connections-sorai és backstory-ja TILOS saját tényként.
+- A kommentelő saját emlékei közül ebben a social feladatban csak a POSZT SZERZŐJÉHEZ / közvetlen célponthoz releváns memória használható; unrelated player/world memory nem.
 - KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT, kapcsolat-specifikus explicit kánonja. Az, hogy valaki általában szarkasztikus/bunkó/domináns, NEM elég ok arra, hogy a barátját megalázza vagy ellenségként kezelje.
 - KÖLCSÖNÖS BARÁTSÁG: ha a kommentelő és a poszt szerzője mindkét irányban barátok, ezt a komment konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
@@ -24261,6 +24658,7 @@ KONKRÉT POSZTHOZ KÖTÉS:
 - A komment szövegének konkrétan erre a posztra kell reagálnia: annak captionjére, képére, hangulatára vagy a már ebben a threadben elhangzott kommentre.
 - Ha egy komment másik posztra is ugyanúgy illene, ellenőrizd újra a jelenlegi poszt konkrét részleteit, és csak akkor fogadd el, ha van egyértelmű kapcsolat EZHEZ a poszthoz.
 - A poszt szerzőjének személye nem cserélhető fel egy másik karakterrel. Ha ${author ? author.name : "?"} [${post.authorId}] posztolt, a reakciókat az ő karaktere, a vele való kapcsolat és az ő konkrét posztja szűri.
+- THIRD-PARTY SCOPE: olyan ember, aki nincs név/@mention/image-confirmation formájában EBBEN a posztban vagy a közvetlen parent kommentben, NE kerüljön be a kommentbe pusztán emlékből, trendből, crushból vagy világdrámából. Különösen ne hozd be automatikusan a játékost egy AI→AI poszt alá.
 - Minden új kommentnek legyen konkrét kiváltó oka EBBEN a posztban: egy szó, kép-részlet, a shared anchorban rögzített implikáció, korábbi thread-sor vagy ténylegesen releváns közös emlék.
 - A "trigger" mező ne új történetet találjon ki: röviden nevezze meg azt a VALÓDI szöveg/kép/értelmi elemet, amire a komment épül.
 - Ha egy reakció csak úgy működne, hogy előbb félre kell érteni a posztot, NE írd meg azt a kommentet.
@@ -24546,7 +24944,19 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
     const repairOut = await askWorldJSONInteractive(
       w,
       engineFor(w),
-      `${worldContext(w, candidates.map((c) => c.id), true, null)}
+      `${worldContext(
+        w,
+        candidates.map((c) => c.id),
+        true,
+        null,
+        {
+          includePlayer: publicSocialPlayerRelevant(w, post),
+          includeRecentWorld: false,
+          socialScope: true,
+        }
+      )}
+
+${socialScopeInstruction(w, post)}
 
 COMMENT DENSITY REPAIR — ADD MISSING TOP-LEVEL COMMENTS ONLY.
 
@@ -24559,7 +24969,7 @@ ELIGIBLE CHARACTERS:
 ${candidates.map((c) => `- ${c.name} [${c.id}]
 ${relationshipBehaviorCard(w, c.id, post.authorId)}`).join("\n")}
 
-${candidates.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
+${strictSocialActorCapsules(w, candidates, post)}
 
 HARD RULES:
 - Return ${Math.min(missing, candidates.length)} DIFFERENT character IDs if possible.
@@ -24568,7 +24978,9 @@ HARD RULES:
 - AI → AI posts count exactly the same as AI → player posts.
 - Friends must sound like friends unless a concrete current conflict exists.
 - Dojo/faction rivals must NOT sound like buddies unless an explicit positive personal relationship or target-specific Connections canon overrides the rivalry.
-- Read the candidate's relationshipBehaviorCard for THIS post author; do not transfer a dynamic from some other character.
+- Read ONLY the candidate's own sealed actor capsule for that candidate's self facts. Do not transfer occupation, dojo, mentor, relationship, crush, memory or history from another candidate.
+- Read the candidate's relationshipBehaviorCard for THIS exact post author; do not transfer a dynamic from some other character.
+- Do not introduce the player or any unrelated third character unless the exact post/image explicitly contains them.
 - Respect orientation/flirt/crush and all relationship canon.
 - Usually 1-12 words. Natural public social-media language.
 - Do not invent facts beyond the post/image/grounded memory.
@@ -25429,6 +25841,7 @@ function applyComments(n, postId, out, label) {
 
       let body = cleanGeneratedComment(n, who, c.text, 240);
       if (!body) return;
+      if (socialSelfClassificationContradiction(n, who, body)) return;
 
       /* A csomagon belül se legyen két karakternek ugyanaz a generikus reakciója. */
       if (
@@ -25495,6 +25908,22 @@ const targetId =
   pc && pc.authorId
     ? pc.authorId
     : p.authorId || "";
+
+/*
+ * v95 HARD LOCAL-SCOPE GUARD:
+ * unrelated player/third-party leakage cannot be persisted into the feed.
+ */
+if (
+  socialTextHasOutOfScopeCharacterReference(
+    n,
+    p,
+    pc || null,
+    who,
+    body
+  )
+) {
+  return;
+}
 
 if (targetId) {
   body = sanitizeGeneratedDirectAddress(n, who, targetId, body);
@@ -26226,8 +26655,15 @@ async function genReply(w, post, comment, forcedResponderId = "") {
       w,
       cast.map((c) => c.id),
       true,
-      null
+      null,
+      {
+        includePlayer: publicSocialPlayerRelevant(w, post, comment),
+        includeRecentWorld: false,
+        socialScope: true,
+      }
     )}
+
+${socialScopeInstruction(w, post, comment)}
 
 POSZT — ${nameOfIn(w, post.authorId)}:
 "${post.text}"
@@ -26246,7 +26682,7 @@ ${th.text}
 
 ${commentOwnershipInstruction(w, post, comment)}
 
-${playerInputUnderstandingInstruction(w, comment.text, "comment")}
+${isHuman(w, comment.authorId) ? playerInputUnderstandingInstruction(w, comment.text, "comment") : ""}
 
 ${characterAgentRuntimeCard(
   w,
@@ -26279,14 +26715,13 @@ REPLY TARGET CONTRACT — EZ FONTOSABB MINDEN STÍLUS-SZABÁLYNÁL:
 - Ha néven vagy @handle-lel szólítasz meg valakit, az csak ${target ? target.name : "a komment szerzője"} lehet, hacsak a mondat egyértelműen harmadik személyben BESZÉL valaki másról.
 - A válasz szövegének jelentése legyen ténylegesen összhangban ezzel a kommenttel. Ha a kommentelő bókol, kérdez, vitatkozik vagy poénkodik, a reply ugyanarra a konkrét gesztusra reagáljon. TILOS úgy válaszolni, mintha egy másik kommentet vagy a poszt egy másik szereplőjét címeznéd.
 - A replyTo + targetId páros determinisztikus: ${comment.id} = parent, ${comment.authorId} = közvetlen címzett. Ezt sem a személyiség, sem a scheduler, sem a poszt szerzője nem írhatja felül.
+- THIRD-PARTY SCOPE: ne hozd be a játékost vagy más harmadik karaktert csak azért, mert szerepel valamelyik válaszoló emlékeiben/Connectionsében. Harmadik személy csak akkor lehet téma, ha a jelenlegi poszt, kép vagy EZ a közvetlen komment explicit módon tartalmazza.
 
 MOST KIFEJEZETTEN ERRE A KOMMENTRE VÁLASZOLNAK:
 
 ${target ? target.name : "?"} [${comment.authorId}]: "${comment.text}"
 
-${cast
-  .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
-  .join("")}
+${strictSocialActorCapsules(w, cast, post, comment)}
 
 KOMMENTVÁLASZ-KARAKTERHŰSÉG:
 - A válaszoló teljes karakterlapja és saját emlékezete aktív.
@@ -26436,7 +26871,7 @@ A reply első pillantásra úgy hasson, mint egy valódi komment alatti gyors v�
 Formátum:
 
 {"comments":[
-  {"id":"VÁLASZOLÓ szereplő azonosítója","targetId":"${comment.authorId}","replyTo":"${comment.id}","text":"természetes rövid kommentválasz KIFEJEZETTEN ${target ? target.name : "a komment szerzője"} felé","trigger":"max 8 szó: mire reagál konkrétan"}
+  {"id":"VÁLASZOLÓ szereplő azonosítója","post_id":"${post.id}","post_author_id":"${post.authorId}","targetId":"${comment.authorId}","replyTo":"${comment.id}","text":"természetes rövid kommentválasz KIFEJEZETTEN ${target ? target.name : "a komment szerzője"} felé","trigger":"max 8 szó: mire reagál konkrétan"}
 ],
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}
@@ -26742,10 +27177,21 @@ JSON: {"reply":"short friendship-consistent reply"}${TAIL}`,
         const repairedBystander = await askWorldJSONInteractive(
           w,
           engineFor(w),
-          `${worldContext(w, [forcedResponder.id], true, forcedResponder.id)}
+          `${worldContext(
+            w,
+            [forcedResponder.id],
+            true,
+            forcedResponder.id,
+            {
+              includePlayer: publicSocialPlayerRelevant(w, post, comment),
+              includeRecentWorld: false,
+              socialScope: true,
+            }
+          )}
 
-${voiceCard(forcedResponder)}
-${characterMemoryCard(w, forcedResponder)}
+${socialScopeInstruction(w, post, comment)}
+
+${strictSocialActorCapsules(w, [forcedResponder], post, comment)}
 ${relationshipBehaviorCard(w, forcedResponder.id, comment.authorId)}
 ${post.authorId && post.authorId !== comment.authorId ? relationshipBehaviorCard(w, forcedResponder.id, post.authorId) : ""}
 ${commentThreadRelationshipTriangleCard(w, forcedResponder.id, comment.authorId, post.authorId)}
@@ -26759,7 +27205,7 @@ ${th.text}
 The latest comment is:
 ${nameOfIn(w, comment.authorId)}: "${String(comment.text || "").slice(0, 500)}"
 
-${playerInputUnderstandingInstruction(w, comment.text, "comment")}
+${isHuman(w, comment.authorId) ? playerInputUnderstandingInstruction(w, comment.text, "comment") : ""}
 
 ${forcedResponder.name} has already been selected by the social scheduler because their relationship/history/personality gives them a REAL reason to jump into this public thread.
 - IMPORTANT: the latest comment is NOT automatically addressed to ${forcedResponder.name}. They are a BYSTANDER joining a public thread. React to what the commenter said about the post/poster; do not pretend the commenter attacked or addressed ${forcedResponder.name} unless the thread actually says so.
@@ -26812,10 +27258,22 @@ function applyReplies(n, postId, rootId, out) {
   safeAiComments(out).forEach((c) => {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
+
+    const declaredPostId = String(
+      c && (c.post_id !== undefined ? c.post_id : c.postId !== undefined ? c.postId : "") || ""
+    ).trim();
+    const declaredPostAuthorId = String(
+      c && (c.post_author_id !== undefined ? c.post_author_id : c.postAuthorId !== undefined ? c.postAuthorId : "") || ""
+    ).trim();
+
+    if (declaredPostId && declaredPostId !== String(p.id)) return;
+    if (declaredPostAuthorId && declaredPostAuthorId !== String(p.authorId)) return;
+
     if (createdReplyActors.has(who)) return;
     if (isUncharacteristicGenericComment(n, who, c.text)) return;
     let body = cleanGeneratedComment(n, who, c.text, 240);
     if (!body) return;
+    if (socialSelfClassificationContradiction(n, who, body)) return;
     const rootForAddress = safePostComments(p).find((x) => x && x.id === rootId);
     const addressTargetId = rootForAddress && rootForAddress.authorId ? rootForAddress.authorId : p.authorId;
 
@@ -26837,6 +27295,19 @@ function applyReplies(n, postId, rootId, out) {
 
     /* HARD GUARD: AI never answers its own comment / itself as target. */
     if (!isHuman(n, who) && addressTargetId === who) return;
+
+    if (
+      socialTextHasOutOfScopeCharacterReference(
+        n,
+        p,
+        rootForAddress || null,
+        who,
+        body
+      )
+    ) {
+      return;
+    }
+
     if (addressTargetId) {
       body = sanitizeGeneratedDirectAddress(n, who, addressTargetId, body);
     }
@@ -27281,6 +27752,28 @@ function fairPostCast(w) {
 
   return ranked.map((x) => x.c).slice(0, 5);
 }
+function strictAutonomyActorCapsules(w, cast) {
+  return (cast || [])
+    .filter((actor) => actor && actor.id && !isHuman(w, actor.id))
+    .map((actor) => `
+========== AUTONOMY SELF CAPSULE: ${actor.name} [${actor.id}] ==========
+OUTPUT OWNERSHIP: a posts/selfUpdates row with id="${actor.id}" is the ONLY row allowed to use these as SELF facts.
+SELF occupation/job: ${String(actor.job || actor.occupation || actor.role || "unknown")}
+SELF side/dojo/organization: ${characterFactionIdentityCard(actor) || "unknown"}
+
+${voiceCard(actor)}
+
+OWN MEMORY:
+${characterMemoryCard(w, actor)}
+
+HARD SELF BOUNDARY:
+- "I / my / our" in ${actor.name}'s output must come from ${actor.name}'s own capsule.
+- Never borrow another capsule's occupation, dojo, rank, mentor, family, crush, enemy, trauma, history or goal.
+- A person appearing inside Connections/memory is NOT automatically the topic of a new post.
+========== END AUTONOMY CAPSULE ${actor.id} ==========`)
+    .join("\n");
+}
+
 async function genWorldStep(w, single, timeSkipHours = 0) {
   const cast = fairPostCast(w);
   if (!cast.length) return null;
@@ -27303,8 +27796,18 @@ async function genWorldStep(w, single, timeSkipHours = 0) {
       w,
       cast.map((c) => c.id),
       true,
-      null
+      null,
+      {
+        includePlayer: false,
+        includeRecentWorld: false,
+        socialScope: true,
+      }
     )}
+
+AUTONOMOUS AUTHORSHIP CONTRACT:
+- Each generated post's id selects EXACTLY ONE author.
+- That author may use only their OWN AUTONOMY SELF CAPSULE for self facts.
+- The player profile/private canon is intentionally omitted. Public recent feed/events may still be reacted to when actually relevant, but the player is not the default subject.
 
 LEGUTÓBBI POSZTOK:
 ${recent || "még nincs poszt"}
@@ -27321,13 +27824,12 @@ ${characterAgentRuntimeCard(
   { surface: "autonomy" }
 )}
 
-${cast
-  .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
-  .join("")}
+${strictAutonomyActorCapsules(w, cast)}
 
 KARAKTERHŰ POSZTOLÁS:
-- Minden kiválasztott karakter teljes saját kánonja és saját emlékezete aktív.
-- A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa és az is, hogy egyáltalán posztolna-e valamiről, a karakterlapjából következzen.
+- Minden kiválasztott karakter teljes SAJÁT kánonja és saját emlékezete aktív, de csak a saját output sorában.
+- ID OWNERSHIP HARD RULE: a posts elem "id" mezője határozza meg a szerzőt; minden self fact kizárólag annak az ID-nak a capsule-jából jöhet.
+- A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa, occupation/job-ja, dojo/organization oldala és az is, hogy egyáltalán posztolna-e valamiről, a SAJÁT karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
 - NAPI POSZTRITMUS: a játékbeli nap teljes AI feedje legfeljebb 5 új poszt lehet ÖSSZESEN. Ne kezeld ezt karakterenkénti 5-ös limitként.
@@ -27579,10 +28081,27 @@ async function genFocusedWorldStep(w) {
   return askWorldJSON(
     w,
     engineFor(w),
-    `${worldContext(w, [author.id], false, author.id)}
+    `${worldContext(
+      w,
+      [author.id],
+      false,
+      author.id,
+      {
+        includePlayer: false,
+        includeRecentWorld: false,
+        socialScope: true,
+      }
+    )}
 
 ${voiceCard(author)}
-${characterMemoryCard(w, author)}
+
+AUTHORSHIP / SELF-CANON LOCK:
+- SELF is exactly ${author.name} [${author.id}].
+- SELF occupation/job: ${String(author.job || author.occupation || author.role || "unknown")}.
+- SELF side/dojo/organization: ${characterFactionIdentityCard(author) || "unknown"}.
+- Only ${author.name}'s own character sheet defines "my job", "my dojo", "my mentor", "my history", "my goals", "my family", "my crushes" and "my enemies".
+- Do not borrow any self fact from a recent feed author, another character, the player or a rival mentioned in backstory.
+- The player is NOT an automatic subject of this post. Mention them only if a visible recent feed/current explicit event genuinely makes them the topic; never because a generic relationship-to-player block was injected.
 
 TE MOST ${String(author.name || "").toUpperCase()} VAGY, ÉS SAJÁT MAGADTÓL POSZTOLSZ.
 
@@ -27591,8 +28110,8 @@ AKTUÁLIS SAJÁT ÁLLAPOTOD:
 - intent: ${selfState.intent || "-"}
 - open loops: ${(selfState.openLoops || []).slice(-4).join(" | ") || "-"}
 
-KAPCSOLATOD A JÁTÉKOSSAL:
-${relationshipBehaviorCard(w, author.id, w.meId) || "-"}
+JÁTÉKOS-ALAPÉRTELMEZÉS:
+A játékos NEM automatikus poszttéma. A saját életedből indulj ki.
 
 SAJÁT LEGUTÓBBI POSZTJAID — NE ISMÉTELD ŐKET:
 ${recentOwn || "-"}
@@ -27611,7 +28130,8 @@ ${albumList(author) || "nincs használható albumkép"}
 - ${author.name} első aznapi posztja kötelezően szöveges.
 - A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
 - A legtöbb poszt legyen szöveges; albumképet csak néha használj, amikor a konkrét kép ténylegesen illik az aktuális élethelyzethez.
-- A poszt kizárólag ${author.name} saját életéből, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
+- A poszt kizárólag ${author.name} SAJÁT karakterlapjából, életéből, occupation/job-jából, dojo/organization oldalából, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
+- OWNERSHIP HARD RULE: amit ${author.name} "én / my / our" formában állít magáról, annak ${author.name} saját lapján kell igaznak lennie. Más karakter foglalkozását, dojóját, rangját, senseijét, családját, crushát vagy történetét ne vedd át.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
 - Ha a karakternek kölcsönös baráti kapcsolatai vannak, ezek legyenek aktív részei a social életének: természetesen posztolhat közös programról, megemlítheti vagy barátilag ugrasshatja a barátját, reagálhat annak életére, megvédheti, megkérdezheti, merre van, vagy szervezhet vele valamit. Ne kezeld a barátokat véletlenszerű idegenként.
 - SAJÁT BESOROLÁSOD: ${characterFactionIdentityCard(author) || "nincs biztosan azonosított frakció/dojo"}. Ezt tekintsd saját oldaladnak; a riválisok említése a karakterlapodon nem változtatja meg a saját besorolásodat.
@@ -27655,8 +28175,9 @@ function applyWorldStep(n, out) {
     if (!authorChar || !characterCanAutonomouslyPost(n, authorChar)) return;
     const postText = cleanGeneratedUtterance(n, author, p.text, 700);
     if (!postText) return;
+    if (socialSelfClassificationContradiction(n, author, postText)) return;
 
-    const mentionedPostTargets = mentionedIdsInText(n, postText, author);
+    const mentionedPostTargets = explicitNamedCharacterIdsInText(n, postText, author);
     if (
       mentionedPostTargets.some((targetId) =>
         friendshipHostilityMismatch(
@@ -27690,6 +28211,25 @@ function applyWorldStep(n, out) {
       if (!cid || !c.text) return;
       const body = cleanGeneratedUtterance(n, cid, c.text, 240);
       if (!body) return;
+      if (socialSelfClassificationContradiction(n, cid, body)) return;
+
+      const scopePost = {
+        authorId: author,
+        text: postText,
+        imageCharacterIds: [],
+      };
+
+      if (
+        socialTextHasOutOfScopeCharacterReference(
+          n,
+          scopePost,
+          null,
+          cid,
+          body
+        )
+      ) {
+        return;
+      }
       const rt = Number(String((c.reply_to !== undefined ? c.reply_to : c.replyTo) || "").replace(/\D/g, ""));
       let parent = null;
       if (rt > 0 && made[rt - 1] && rt - 1 !== idx) parent = made[rt - 1].parent || made[rt - 1].id;
@@ -36305,7 +36845,7 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 69,
+    schedulerVersion: 70,
     lastError: "",
   };
 }
@@ -38492,10 +39032,10 @@ function ensureSimState(w) {
   if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
   if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
 
-  /* v94 migration: clear stale background queue state from older schedulers.
+  /* v95 migration: clear stale background queue state from older schedulers.
      Manual requests survive; comments/follows/replies are rebuilt from the
      current world state without restart-created queue storms. */
-  if (Number(w.sim.schedulerVersion) !== 69) {
+  if (Number(w.sim.schedulerVersion) !== 70) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -38507,9 +39047,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 69;
+    w.sim.schedulerVersion = 70;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 69;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 70;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
