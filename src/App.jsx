@@ -6210,7 +6210,90 @@ function AlbumEditor({ value, onChange, owner }) {
   const ref = useRef(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [autoVisionId, setAutoVisionId] = useState("");
+  const visionScanRef = useRef(false);
   const list = Array.isArray(value) ? value : [];
+  const listRef = useRef(list);
+
+  useEffect(() => {
+    listRef.current = list;
+  }, [list]);
+
+  /*
+   * v89 — OLD ALBUM BACKFILL
+   * Newly uploaded album images were already analyzed, but older images could
+   * still have an empty `vision` field. Analyze them lazily, one at a time,
+   * when the character editor is open. The user's manual note is never
+   * overwritten and may provide identity/context the vision model cannot infer.
+   */
+  useEffect(() => {
+    if (visionScanRef.current || busy || autoVisionId) return;
+
+    const pending = list.find(
+      (item) =>
+        item &&
+        !(String(item.vision || "").trim()) &&
+        !Number(item.analysisAttemptedAt || 0)
+    );
+
+    if (!pending) return;
+
+    const source = resolveImg(
+      pending.imageId ? imageRef(pending.imageId) : pending.src,
+      media
+    );
+
+    if (!source) return;
+
+    visionScanRef.current = true;
+    setAutoVisionId(pending.id);
+
+    const marked = listRef.current.map((item) =>
+      item && item.id === pending.id
+        ? { ...item, analysisAttemptedAt: now() }
+        : item
+    );
+    listRef.current = marked;
+    onChange(marked);
+
+    analyzeImageDataUrl(
+      source,
+      tt(
+        `Írd le röviden, mi látható ezen a ${owner && owner.name ? owner.name + " karakterhez" : "karakterhez"} tartozó képen. Ne találj ki neveket és ne azonosíts valódi személyt név szerint. Írd le a látható személyeket, ruhát, tevékenységet, helyszínt, tárgyakat és hangulatot. A felhasználó külön megjegyzésben adhat meg neveket/kapcsolati kontextust.`,
+        `Briefly describe what is visibly shown in this image belonging to ${owner && owner.name ? owner.name : "the character"}. Do not invent names or identify real people by name. Describe visible people, clothing, activity, setting, objects and mood. The user may separately provide names/relationship context in the manual note.`
+      )
+    )
+      .then((vision) => {
+        const latest = listRef.current.map((item) =>
+          item && item.id === pending.id
+            ? {
+                ...item,
+                vision: String(vision || "").trim(),
+                analyzedAt: vision ? now() : Number(item.analyzedAt || 0),
+                analysisAttemptedAt: now(),
+              }
+            : item
+        );
+        listRef.current = latest;
+        onChange(latest);
+      })
+      .catch((visionErr) => {
+        console.warn("Automatic album vision backfill failed:", visionErr);
+      })
+      .finally(() => {
+        visionScanRef.current = false;
+        setAutoVisionId("");
+      });
+  }, [
+    list,
+    media,
+    busy,
+    autoVisionId,
+    owner && owner.id,
+    owner && owner.name,
+    onChange,
+    tt,
+  ]);
 
   const pick = async (e) => {
     const files = Array.from((e.target && e.target.files) || []);
@@ -6325,8 +6408,8 @@ function AlbumEditor({ value, onChange, owner }) {
 
       <p className="hint">
         {tt(
-          "A feltöltött képet az AI automatikusan megnézi, és megjegyzi, nagyjából mi látható rajta: mit csinál a karakter, miben van, hol lehet és milyen a hangulat. Írhatsz hozzá saját megjegyzést is. Ha egy képet posztként felhasznál, az kikerül az albumból, így nem posztolja újra.",
-          "The AI automatically inspects each uploaded image and remembers roughly what is visible: what the character is doing, what they're wearing, the setting and mood. You can add your own note too. Once an image is used in a post, it leaves the album so it cannot be posted again."
+          "A feltöltött képet az AI automatikusan elemzi. A saját megjegyzésedben add meg azt is, amit a képből nem lehet biztosan felismerni — például: „Angel és Tory a partin”, „Brad mellett áll”, „Miyagi-Fang csapatedzés”. Ezt a rendszer megerősített képkontextusként kezeli, így ha a kép kikerül posztba, a posztoló és a többi AI is tudja, kik vannak rajta és mi a releváns helyzet. A képet posztolás után kiveszi az aktuális albumból, de világ-újraindításkor visszakerül.",
+          "The AI automatically analyzes every uploaded image. Use your manual note for context that cannot be safely inferred from pixels — for example: “Angel and Tory at the party”, “standing beside Brad”, or “Miyagi-Fang team training”. The system treats that as confirmed image context, so when the image is posted, both the poster and the other AIs know who is shown and what the relevant situation is. The image leaves the active album after posting, but returns to the album when the world is restarted."
         )}
       </p>
 
@@ -6382,7 +6465,7 @@ function AlbumEditor({ value, onChange, owner }) {
               className="i"
               style={{ marginTop: 5, padding: "5px 8px", fontSize: 11.5 }}
               value={x.note || ""}
-              placeholder={tt("saját megjegyzés", "your note")}
+              placeholder={tt("pl. Angel + Tory a bulin / ki van a képen?", "e.g. Angel + Tory at the party / who is shown?")}
               onChange={(e) =>
                 onChange(
                   list.map((y) =>
@@ -6515,16 +6598,51 @@ function albumList(c) {
 
   return a
     .map((x, i) => {
-      const details = [
-        x.note ? `manual note: ${x.note}` : "",
-        x.vision ? `visible image content: ${x.vision}` : "",
-      ]
-        .filter(Boolean)
-        .join(" | ");
+      const details = albumItemContext(x, 1400);
 
       return `[kep${i + 1}] ${details || "image without description"}`;
     })
     .join(" ; ");
+}
+
+function albumItemContext(item, maxChars = 1200) {
+  if (!item) return "";
+  const manual = String(item.note || "").replace(/\s+/g, " ").trim();
+  const visible = String(item.vision || "").replace(/\s+/g, " ").trim();
+  return [
+    manual ? `USER-CONFIRMED IMAGE CONTEXT: ${manual}` : "",
+    visible ? `VISIBLE IMAGE CONTENT: ${visible}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ")
+    .slice(0, Math.max(200, Number(maxChars) || 1200));
+}
+
+function namedCharacterIdsInImageContext(w, value, authorId = "") {
+  if (!w || !value) return [];
+  const low = String(value).toLowerCase();
+  const out = [];
+
+  socialProfiles(w).forEach((person) => {
+    if (!person || !person.id || person.id === authorId) return;
+
+    const aliases = [
+      person.name,
+      person.username ? `@${person.username}` : "",
+      person.username,
+      ...String(person.nick || "")
+        .split(/[,/|;]/)
+        .map((part) => part.trim()),
+    ]
+      .map((part) => String(part || "").trim().toLowerCase())
+      .filter((part) => part.length >= 3);
+
+    if (aliases.some((alias) => low.includes(alias))) {
+      out.push(person.id);
+    }
+  });
+
+  return [...new Set(out)];
 }
 
 /* Az AI "kep2" alakban hivatkozik, de a képaláírást is elfogadjuk. */
@@ -8151,6 +8269,96 @@ function topLevelAiCommenterIds(w, post) {
   );
 }
 
+const GUARANTEED_POST_COMMENT_RETRY_MS = 12000;
+
+function availableAiCommenterCountForPost(w, post) {
+  if (!w || !post) return 0;
+  return (w.chars || []).filter(
+    (c) =>
+      c &&
+      c.id &&
+      !isHuman(w, c.id) &&
+      c.id !== post.authorId
+  ).length;
+}
+
+function guaranteedPostCommentTarget(w, post) {
+  if (!w || !post) return 0;
+  const available = availableAiCommenterCountForPost(w, post);
+  if (!available) return 0;
+
+  const visual = visualPostReactionProfile(w, post);
+  const requested = Math.max(1, Math.round(Number(visual.targetMin) || 4));
+  return Math.min(available, requested);
+}
+
+function postCommentCoverageState(w, post) {
+  const current = topLevelAiCommentCount(w, post);
+  const target = guaranteedPostCommentTarget(w, post);
+  return {
+    current,
+    target,
+    missing: Math.max(0, target - current),
+    complete: target <= 0 || current >= target,
+  };
+}
+
+function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
+  if (!w || !post || !post.id) return null;
+  const coverage = postCommentCoverageState(w, post);
+  if (coverage.complete || coverage.missing <= 0) return null;
+
+  return mkAction(
+    "comments",
+    `comment-coverage:${post.id}:${coverage.current}:${coverage.target}`,
+    {
+      postId: post.id,
+      trigger: "guaranteed-coverage",
+      minComments: coverage.missing,
+      maxComments: Math.max(coverage.missing, Math.min(20, coverage.missing + 4)),
+      allowThreadFollowup: true,
+      coverageTarget: coverage.target,
+      coverageSource: source,
+    },
+    "coverage"
+  );
+}
+
+function enqueueGuaranteedPostCommentCoverage(w, postId, source = "post-created") {
+  if (!w || !postId) return false;
+  const post = (w.posts || []).find((row) => row && row.id === postId);
+  if (!post) return false;
+  const action = guaranteedPostCommentAction(w, post, source);
+  return action ? simEnqueue(w, action) : false;
+}
+
+function guaranteedCommentCoverageCandidate(w) {
+  if (!w) return null;
+  const ts = now();
+
+  return (
+    (w.posts || [])
+      .filter((post) => {
+        if (!post || !post.id || !post.authorId) return false;
+        const coverage = postCommentCoverageState(w, post);
+        if (coverage.complete || coverage.missing <= 0) return false;
+        const attemptedAt = Number(post.commentCoverageAttemptAt) || 0;
+        return !attemptedAt || ts - attemptedAt >= GUARANTEED_POST_COMMENT_RETRY_MS;
+      })
+      .map((post) => {
+        const coverage = postCommentCoverageState(w, post);
+        return {
+          post,
+          score:
+            (coverage.current === 0 ? 100000 : 0) +
+            coverage.missing * 1000 +
+            Math.max(0, Number(post.ts) || 0) / 1e12,
+        };
+      })
+      .sort((a, b) => b.score - a.score)[0]?.post || null
+  );
+}
+
 function visualPostRelationshipPriority(w, actorId, targetId, post) {
   const visual = visualPostReactionProfile(w, post);
   if (!visual.hasImage || !actorId || !targetId || actorId === targetId) return 0;
@@ -8778,6 +8986,105 @@ function friendshipHostilityMismatch(
   return true;
 }
 
+function socialCommentLooksBuddyFriendly(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  return (
+    socialCommentLooksWarmPraise(text) ||
+    /\b(?:bestie|babe|babes|my\s+girl|my\s+guy|love\s+you|luv\s+you|ily|miss\s+you|proud\s+of\s+you|queen|king|you\s+ate|ate\s+that|slay|iconic|cutie|pretty\s+girl|handsome|gorgeous)\b/i.test(text)
+  );
+}
+
+function factionRivalryActiveBetween(actor, target) {
+  if (!actor || !target) return false;
+  const af = factionFlags(actor);
+  const tf = factionFlags(target);
+
+  return Boolean(
+    (af.cobraKai && tf.miyagiFang) ||
+    (af.miyagiFang && tf.cobraKai) ||
+    (af.ironDragons && (tf.cobraKai || tf.miyagiFang)) ||
+    (tf.ironDragons && (af.cobraKai || af.miyagiFang)) ||
+    (af.pogue && tf.kook) ||
+    (af.kook && tf.pogue) ||
+    (af.hydra && tf.shield) ||
+    (af.shield && tf.hydra)
+  );
+}
+
+function explicitPositivePersonalOverride(w, actorId, targetId) {
+  if (!w || !actorId || !targetId) return false;
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  const rel = getRel(w, actorId, targetId) || {};
+  const tier = relationshipFilterTier(rel);
+  const cue = actor && target ? connectionRelationshipCue(actor, target) : {};
+
+  return Boolean(
+    tier === "good" ||
+    tier === "close" ||
+    relationshipDeclaresFriendship(rel) ||
+    areMutualFriends(w, actorId, targetId) ||
+    cue.close ||
+    cue.friendly ||
+    cue.romantic
+  );
+}
+
+function factionCommentToneMismatch(w, actorId, targetId, text) {
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target || !factionRivalryActiveBetween(actor, target)) return false;
+
+  /*
+   * Dojo/faction enemies may still have an explicitly written friendship,
+   * romance or close personal bond. Only THAT is allowed to override the
+   * rivalry. Generic "nice social-media variation" is not.
+   */
+  if (explicitPositivePersonalOverride(w, actorId, targetId)) return false;
+
+  return socialCommentLooksBuddyFriendly(text);
+}
+
+function connectionsCommentToneMismatch(
+  w,
+  actorId,
+  targetId,
+  text,
+  contextText = ""
+) {
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target) return false;
+
+  const cue = connectionRelationshipCue(actor, target);
+  if (!cue || !cue.snippet) return false;
+
+  const rel = getRel(w, actorId, targetId) || {};
+  const tier = relationshipFilterTier(rel);
+  const positiveDynamic = tier === "good" || tier === "close" || relationshipDeclaresFriendship(rel);
+
+  if (
+    (cue.hostile || cue.rival) &&
+    !positiveDynamic &&
+    socialCommentLooksBuddyFriendly(text)
+  ) {
+    return true;
+  }
+
+  if (
+    (cue.close || cue.friendly) &&
+    tier !== "hostile" &&
+    tier !== "negative" &&
+    socialCommentLooksDirectlyHostile(text) &&
+    friendshipConflictEvidenceLevel(w, actorId, targetId, contextText) < 1
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function socialCommentContradictsRelationship(
   w,
   actorId,
@@ -8796,6 +9103,12 @@ function socialCommentContradictsRelationship(
     return true;
   }
   if (friendshipHostilityMismatch(w, actorId, targetId, text, contextText)) {
+    return true;
+  }
+  if (connectionsCommentToneMismatch(w, actorId, targetId, text, contextText)) {
+    return true;
+  }
+  if (factionCommentToneMismatch(w, actorId, targetId, text)) {
     return true;
   }
   return false;
@@ -15615,7 +15928,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v83-comment-reply-world-reset";
+const BUILD_VERSION = "v89-restart-social-image-canon";
 
 const AUTO = "masvilag:auto";
 /*
@@ -17161,6 +17474,8 @@ function ensureSocialProfileRow(c) {
   return c;
 }
 
+const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 2;
+
 function ensureFollowerSystem(w) {
   if (!w || typeof w !== "object") {
     return w;
@@ -17168,6 +17483,18 @@ function ensureFollowerSystem(w) {
 
   const profiles =
     socialProfiles(w);
+
+  /*
+   * Restart clears the social follow graph while relationships remain. Rebuild
+   * that graph gradually instead of filling the entire simulation queue.
+   */
+  const followSim = ensureSimState(w);
+  let pendingRelationshipAutoFollows = (followSim.queue || []).filter(
+    (action) =>
+      action &&
+      action.type === "follow" &&
+      String(action.key || "").startsWith("relationship-auto-follow:")
+  ).length;
 
   const byId = {};
 
@@ -17291,8 +17618,11 @@ function ensureFollowerSystem(w) {
           actor.id
         );
 
-      if (!alreadyFollowing) {
-        simEnqueue(
+      if (
+        !alreadyFollowing &&
+        pendingRelationshipAutoFollows < RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
+      ) {
+        const queuedFollow = simEnqueue(
           w,
           mkAction(
             "follow",
@@ -17307,6 +17637,8 @@ function ensureFollowerSystem(w) {
             "event"
           )
         );
+
+        if (queuedFollow) pendingRelationshipAutoFollows += 1;
       }
     });
   });
@@ -22267,8 +22599,9 @@ ${socialPostMeaningCard(w, post, postMeaning)}
 ${
   (post.imageId || post.image)
     ? `KÉP A POSZTBAN:
-${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post.imageDescription}
+${post.imageDescription ? `A kép megerősített kontextusa + AI által felismert látható tartalma: ${post.imageDescription}
 ` : ""}A szereplők látják a poszthoz tartozó képet is.
+Ha a képleírásban USER-CONFIRMED IMAGE CONTEXT szerepel, az felhasználó által megadott biztos kánon: az ott név szerint megadott játékbeli karakterek ténylegesen a képen vannak. Ezt a többi AI is tudja a poszt megtekintésekor.
 Ha természetes, reagáljanak arra, ami ténylegesen látható rajta: személyekre, outfitre, helyszínre, hangulatra vagy más fontos részletre.
 A kép ugyanúgy része a kontextusnak, mint a poszt szövege.
 A kommentek legyenek képföldeltek: ne írjanak olyan részletről, ami nincs a poszt szövegében vagy a látható képleírásban.
@@ -22452,6 +22785,10 @@ TERMÉSZETES SOCIAL MEDIA STÍLUS:
 
 KAPCSOLAT + TÖRTÉNET KÖTELEZŐEN HAT A KOMMENTRE:
 
+- MINDEN top-level komment előtt azonosítsd újra: a kommentelő = saját karakter ID; a célpont = a POST SZERZŐJE ${author ? author.name : "?"} [${post.authorId}]. Reply esetén a közvetlen parent komment szerzője is célpont, és mindkét kapcsolat számít.
+- A dinamikus relationship rekord ÉS a kommentelő SAJÁT Connections mezőjének pont erre a személyre vonatkozó sora elsődleges célpont-specifikus kánon. Ne cseréld össze másik karakter kapcsolataival.
+- FRAKCIÓ/DOJO HARD RULE: Iron Dragons ↔ Cobra Kai, Iron Dragons ↔ Miyagi-Fang/Miyagi-Do/Eagle Fang, Cobra Kai ↔ Miyagi oldal, Pogue ↔ Kook és HYDRA ↔ SHIELD alapból rivalizáló/ellenséges háttér. Ilyen páros NE haverkodjon, NE hype-olja egymást és NE írjon bestie-szerű kommentet pusztán social változatosság kedvéért. Csak explicit pozitív személyes relationship vagy célpont-specifikus Connections-kánon írhatja ezt felül.
+- Ha a Connections szerint konkrétan barátok/közeli barátok/szövetségesek, az aktívan látszódjon. Ha ellenségek/riválisok, ne váljanak random rajongóvá. A Connections privát motiváció: a másik fél nem tudja automatikusan, de a kommentelő VISELKEDÉSÉT meghatározza.
 - A fenti PRIVÁT KARAKTERJÁTÉK-KONTEXTUST ténylegesen használd minden kommentelőnél.
 - Ha valaki jóban van a poszt szerzőjével, ne legyen indokolatlanul távolságtartó: természetesen jöhet támogatás, belsős hang, védelem, ugratás vagy közvetlenség.
 - Ha rosszban vannak, ne váljon hirtelen semleges rajongóvá: a feszültség, gúny, rivalizálás, szkepticizmus vagy ellenszenv jelenjen meg, ha a poszt ad rá alkalmat.
@@ -22629,6 +22966,8 @@ HARD RULES:
 - Likes do not count.
 - AI → AI posts count exactly the same as AI → player posts.
 - Friends must sound like friends unless a concrete current conflict exists.
+- Dojo/faction rivals must NOT sound like buddies unless an explicit positive personal relationship or target-specific Connections canon overrides the rivalry.
+- Read the candidate's relationshipBehaviorCard for THIS post author; do not transfer a dynamic from some other character.
 - Respect orientation/flirt/crush and all relationship canon.
 - Usually 1-12 words. Natural public social-media language.
 - Do not invent facts beyond the post/image/grounded memory.
@@ -23669,7 +24008,10 @@ recordSocialEvent(
         surface: tag ? "reply" : "comment",
         targetId: targetId || p.authorId || "",
         refId: p.id,
-        text: `Post by ${nameOfIn(n, p.authorId)}: ${cut(p.text || p.imageDescription || "", 260)}`,
+        text: `Post by ${nameOfIn(n, p.authorId)}: ${cut(
+          [p.text, p.imageDescription].filter(Boolean).join(" | "),
+          320
+        )}`,
         ts: made.ts,
       });
       recordCharacterAgentAction(n, who, {
@@ -25763,13 +26105,25 @@ function applyWorldStep(n, out) {
 
     const picRef = pic ? (pic.imageId ? imageRef(pic.imageId) : pic.src) : "";
     const picId = imageIdOf(picRef);
+    const picManualNote = pic ? String(pic.note || "").replace(/\s+/g, " ").trim() : "";
+    const picVision = pic ? String(pic.vision || "").replace(/\s+/g, " ").trim() : "";
+    const picContext = pic ? albumItemContext(pic, 1200) : "";
+    const picCharacterIds = pic
+      ? namedCharacterIdsInImageContext(n, picManualNote, author)
+      : [];
+
     const fresh = {
       id: uid(), authorId: author, ts: now(), likes: 0, likedBy: [],
       gameDayKey: autonomousGameDayKey(n),
       text: postText,
       imageId: picId || "",
       image: picId ? "" : picRef,
-      imageDescription: pic ? String(pic.vision || pic.note || "").slice(0, 700) : "",
+      imageDescription: picContext,
+      imageManualNote: picManualNote,
+      imageVision: picVision,
+      imageCharacterIds: picCharacterIds,
+      sourceAlbumItemId: pic ? String(pic.id || "") : "",
+      imageAnalyzedAt: pic ? Number(pic.analyzedAt || 0) : 0,
       comments: made,
       language: worldLanguage(n, n.meId),
     };
@@ -25783,6 +26137,7 @@ function applyWorldStep(n, out) {
       consumeAlbumItem(authorChar, pic);
     }
     n.posts.unshift(fresh);
+    enqueueGuaranteedPostCommentCoverage(n, fresh.id, "ai-post-created");
     createdPosts += 1;
 
     mentionedPostTargets.forEach((targetId) => {
@@ -25806,7 +26161,12 @@ function applyWorldStep(n, out) {
     ts: fresh.ts,
 
     actorId: author,
-    targetIds: mentionedIdsInText(n, fresh.text, author),
+    targetIds: [
+      ...new Set([
+        ...mentionedIdsInText(n, fresh.text, author),
+        ...(fresh.imageCharacterIds || []),
+      ]),
+    ],
 
     visibility: "public",
     factLevel: "observed",
@@ -25843,6 +26203,10 @@ function applyWorldStep(n, out) {
           fresh.imageId ||
           fresh.image
         ),
+      imageDescription: String(fresh.imageDescription || "").slice(0, 900),
+      imageCharacterIds: Array.isArray(fresh.imageCharacterIds)
+        ? fresh.imageCharacterIds.slice(0, 12)
+        : [],
     },
   }
 );
@@ -25951,7 +26315,12 @@ recordCharacterAgentAction(n, author, {
       kind: "event",
       source: "self_action",
       confidence: 1,
-      text: sysLangText(n, author, `Posztoltam: ${cut(fresh.text, 120)}`, `I posted: ${cut(fresh.text, 120)}`),
+      text: sysLangText(
+        n,
+        author,
+        `Posztoltam: ${cut(fresh.text, 120)}${fresh.imageDescription ? ` | Kép: ${cut(fresh.imageDescription, 220)}` : ""}`,
+        `I posted: ${cut(fresh.text, 120)}${fresh.imageDescription ? ` | Image: ${cut(fresh.imageDescription, 220)}` : ""}`
+      ),
     });
     noteMentions(n, fresh.text, author, { type: "post", id: fresh.id });
     made.forEach((mc) => noteMentions(n, mc.text, mc.authorId, { type: "post", id: fresh.id }));
@@ -26420,6 +26789,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       }
 
       n.posts.unshift(p);
+      enqueueGuaranteedPostCommentCoverage(n, p.id, "player-post-created");
 
       const mentions = noteMentions(
         n,
@@ -34264,8 +34634,8 @@ function freshSimulationRuntime(at = now()) {
     done: {},
     running: "",
     at: 0,
-    contentAt: at,
-    localAt: at,
+    contentAt: 0,
+    localAt: 0,
     lastSuccessAt: 0,
     lastAttemptAt: 0,
     roleplayAttemptAt: 0,
@@ -34277,11 +34647,82 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 60,
+    schedulerVersion: 64,
     lastError: "",
   };
 }
 
+
+function restorePostedAlbumImagesForFreshRun(w) {
+  if (!w || !Array.isArray(w.posts)) return 0;
+  let restored = 0;
+
+  w.posts.forEach((post) => {
+    if (
+      !post ||
+      !post.authorId ||
+      isHuman(w, post.authorId) ||
+      isMediaAccount(w, post.authorId) ||
+      !(post.imageId || post.image)
+    ) {
+      return;
+    }
+
+    const character = charById(w, post.authorId);
+    if (!character) return;
+    if (!Array.isArray(character.album)) character.album = [];
+
+    const imageRefValue = post.imageId ? imageRef(post.imageId) : post.image;
+    const imageId = imageIdOf(imageRefValue);
+    const alreadyThere = character.album.some((item) => {
+      if (!item) return false;
+      const existingId = imageIdOf(item.imageId ? imageRef(item.imageId) : item.src);
+      return Boolean(imageId && existingId === imageId);
+    });
+
+    if (alreadyThere) return;
+
+    const manual = String(post.imageManualNote || "").trim();
+    const vision = String(
+      post.imageVision ||
+      (!manual ? post.imageDescription : "") ||
+      ""
+    ).trim();
+
+    character.album.push({
+      id: post.sourceAlbumItemId || uid(),
+      imageId: imageId || "",
+      src: imageId ? "" : String(post.image || ""),
+      note: manual,
+      vision,
+      analyzedAt: Number(post.imageAnalyzedAt || 0) || (vision ? Number(post.ts || now()) : 0),
+      restoredFromPostId: post.id,
+    });
+
+    restored += 1;
+  });
+
+  return restored;
+}
+
+function resetRelationshipRuntimeForFreshRun(w, at = now()) {
+  if (!w || !w.rels || typeof w.rels !== "object") return;
+
+  Object.keys(w.rels).forEach((key) => {
+    const rel = w.rels[key];
+    if (!rel || typeof rel !== "object") return;
+
+    /*
+     * Keep the configured/deliberate baseline: score, bond/type, fixed and
+     * hidden relationship canon. Remove only temporary emotional residue from
+     * the previous run. Connections on the character sheets remain untouched.
+     */
+    rel.at = at;
+    rel.why = "";
+    rel.mood = "";
+    if (Object.prototype.hasOwnProperty.call(rel, "reason")) rel.reason = "";
+  });
+}
 
 function freshRunPersistentImageIds(w) {
   const keep = new Set();
@@ -34332,6 +34773,13 @@ function restartWorldHistoryInPlace(w) {
 
   const at = now();
 
+  /*
+   * Before deleting the old feed, return every AI album image that had been
+   * consumed by posting. This also makes those image IDs persistent again
+   * before trimWorldImagesToFreshPeople() runs.
+   */
+  restorePostedAlbumImagesForFreshRun(w);
+
   /* Epoch invalidates any autonomous AI request that started before restart. */
   w.historyEpoch = Math.max(0, Math.floor(Number(w.historyEpoch) || 0)) + 1;
 
@@ -34349,6 +34797,13 @@ function restartWorldHistoryInPlace(w) {
   w.groups = [];
   w.mems = {};
   w.charMemory = {};
+
+  /*
+   * Relationship progression starts from the configured baseline again:
+   * keep score/bond/type/fixed/hidden + character Connections, clear only the
+   * old run's transient mood/reason residue.
+   */
+  resetRelationshipRuntimeForFreshRun(w, at);
 
   /* RP/Event, rewards, diary and visible world-history surfaces. */
   w.scenes = [];
@@ -34411,7 +34866,7 @@ function restartWorldHistoryInPlace(w) {
   w.socialDiscoveryMigratedV1 = true;
 
   /* New autonomous runtime starts cleanly instead of replaying queued old work. */
-  w.autoAt = at;
+  w.autoAt = 0;
   w.sim = freshSimulationRuntime(at);
   w.activeSceneId = "";
 
@@ -34445,8 +34900,8 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
     setRestartConfirm(false);
     setRestartMsg(
       tt(
-        "A világ teljes játékmenete újraindult. A karakterek és a kapcsolatok megmaradtak; minden korábbi generált történés törlődött.",
-        "The entire gameplay run restarted. Characters and relationships were kept; all previously generated history was cleared."
+        "A világ új játékmenetet kezdett. A karakterek, a beállított kapcsolati alapok és a Connections-kánon megmaradt; a régi pillanatnyi mood/why, napi poszt- és popup-kvóták, runtime és történéslista lenullázódott. A korábban kiposztolt AI-albumképek visszakerültek az albumokba.",
+        "The world started a fresh run. Characters, configured relationship baselines and Connections canon were kept; old transient mood/reason state, daily post/popup quotas, runtime and generated history were reset. Previously posted AI album images were returned to their albums."
       )
     );
     setTimeout(() => setRestartMsg(""), 4500);
@@ -36345,6 +36800,12 @@ function ensureSimState(w) {
     const postId = action.payload && action.payload.postId;
     const post = (w.posts || []).find((p) => p && p.id === postId);
     if (!post) return false;
+    if (
+      action.payload &&
+      action.payload.trigger === "guaranteed-coverage"
+    ) {
+      return !postCommentCoverageState(w, post).complete;
+    }
     return now() - (Number(post.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS;
   });
 
@@ -36369,10 +36830,10 @@ function ensureSimState(w) {
   if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
   if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
 
-  /* v53 migration: do not let a backlog created by the old comment/feed scheduler
-     delay the new fairness lanes for minutes. Manual requests survive; stale
-     background actions are rebuilt by the new planner from current state. */
-  if (Number(w.sim.schedulerVersion) !== 60) {
+  /* v89 migration: clear stale background queue state from older schedulers.
+     Manual requests survive; comments/follows/replies are rebuilt from the
+     current world state without restart-created queue storms. */
+  if (Number(w.sim.schedulerVersion) !== 64) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -36384,9 +36845,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 60;
+    w.sim.schedulerVersion = 64;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 60;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 64;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -44720,7 +45181,7 @@ function simEnqueue(w, action) {
   const doneAt = Number(sim.done[action.key] || 0);
   if (doneAt && now() - doneAt < SIM_DONE_TTL) return false;
   if (sim.queue.some((x) => x && x.key === action.key)) return false;
-  if (action.source === "manual") {
+  if (action.source === "manual" || action.source === "coverage") {
     sim.queue.unshift(action);
     sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
   } else {
@@ -46706,6 +47167,21 @@ function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
   /*
+   * v89 ABSOLUTE COMMENT COVERAGE.
+   * Every visible feed post must receive real top-level AI comments. This lane
+   * also repairs older posts that survived from a previous save.
+   */
+  const uncoveredPost = guaranteedCommentCoverageCandidate(view);
+  if (uncoveredPost) {
+    const coverageAction = guaranteedPostCommentAction(
+      view,
+      uncoveredPost,
+      "coverage-watchdog"
+    );
+    if (coverageAction) return coverageAction;
+  }
+
+  /*
    * v54 HARD FAIRNESS WATCHDOG
    *
    * A normál sorrend feed-first, DE a lejárt kemény határidő megelőzi még a friss kommentthreadet is, így egy csatorna sem maradhat örökre
@@ -48650,9 +49126,18 @@ async function runSimulationAction(view, update, action, addImage) {
 
     if (!post) return null;
 
-    /* Automatikus kommentelés csak friss feedre. A játékos kézi
-     * "reakciók kérése" funkciója nem ezen a sim-action útvonalon fut. */
-    if (now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) {
+    const commentTrigger = String(action.payload && action.payload.trigger || "");
+    const isGuaranteedCoverage = commentTrigger === "guaranteed-coverage";
+    const quotaEnforced =
+      commentTrigger === "fresh-post" ||
+      isGuaranteedCoverage;
+
+    /* Ordinary automatic waves are fresh-feed only. Hard coverage can rescue
+       any still-visible older post too. */
+    if (
+      !isGuaranteedCoverage &&
+      now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS
+    ) {
       return null;
     }
 
@@ -48667,17 +49152,17 @@ async function runSimulationAction(view, update, action, addImage) {
         view,
         post,
         {
-          minComments: action.payload && action.payload.trigger === "fresh-post" ? minComments : 0,
+          minComments: quotaEnforced ? minComments : 0,
           maxComments,
         }
       );
 
     const quotaOut =
-      action.payload && action.payload.trigger === "fresh-post"
+      quotaEnforced
         ? await ensureAutomaticCommentQuota(view, post, generatedOut, label, minComments, maxComments)
         : generatedOut;
 
-    const out = action.payload && action.payload.trigger === "fresh-post"
+    const out = quotaEnforced
       ? {
           ...(quotaOut || {}),
           comments: safeAiComments(quotaOut).slice(0, maxComments),
@@ -48686,7 +49171,19 @@ async function runSimulationAction(view, update, action, addImage) {
 
     const commentsProbe = JSON.parse(JSON.stringify(view));
     const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
-    if (!visibleReactionCount) return null;
+
+    if (!visibleReactionCount) {
+      if (isGuaranteedCoverage) {
+        update((n) => {
+          const failedPost = (n.posts || []).find((row) => row && row.id === post.id);
+          if (!failedPost) return;
+          failedPost.commentCoverageAttemptAt = now();
+          failedPost.commentCoverageAttempts =
+            Math.max(0, Math.round(Number(failedPost.commentCoverageAttempts) || 0)) + 1;
+        });
+      }
+      return null;
+    }
 
     update((n) => {
       const livePost = (n.posts || []).find((p) => p && p.id === post.id);
@@ -48696,6 +49193,13 @@ async function runSimulationAction(view, update, action, addImage) {
       applyComments(n, post.id, out, label);
 
       const refreshedPost = (n.posts || []).find((p) => p && p.id === post.id);
+      if (refreshedPost && isGuaranteedCoverage) {
+        refreshedPost.commentCoverageAttemptAt = now();
+        refreshedPost.commentCoverageLastSuccessAt = now();
+        refreshedPost.commentCoverageAttempts =
+          Math.max(0, Math.round(Number(refreshedPost.commentCoverageAttempts) || 0)) + 1;
+      }
+
       if (
         refreshedPost &&
         action.payload &&
@@ -48717,6 +49221,14 @@ async function runSimulationAction(view, update, action, addImage) {
       const newCommentIds = safePostComments(refreshedPost)
         .filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId))
         .map((c) => c.id);
+
+      if (refreshedPost && isGuaranteedCoverage) {
+        enqueueGuaranteedPostCommentCoverage(
+          n,
+          refreshedPost.id,
+          "coverage-followup"
+        );
+      }
 
       if (
         newCommentIds.length &&
@@ -52378,6 +52890,7 @@ const signOut = useCallback(async () => {
 
               setSaveState("saved");
               setSaveAt(now());
+              setErr("");
               return;
             }
 
@@ -52453,6 +52966,7 @@ const signOut = useCallback(async () => {
 
             setSaveState("retry");
             setSaveAt(now());
+            setErr("");
 
             return;
           }
@@ -52501,6 +53015,7 @@ const signOut = useCallback(async () => {
 
         setSaveState("saved");
         setSaveAt(now());
+        setErr("");
 
         setWorld((current) => {
           if (!current) {
@@ -52607,6 +53122,18 @@ const signOut = useCallback(async () => {
   const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
 
+  let coverageOverride = null;
+  if (!manualQueued) {
+    const uncoveredPostNow = guaranteedCommentCoverageCandidate(view2);
+    if (uncoveredPostNow) {
+      coverageOverride = guaranteedPostCommentAction(
+        view2,
+        uncoveredPostNow,
+        "queue-preempt-coverage"
+      );
+    }
+  }
+
   /* A popup queued just before entering an Event must not fire on top of it. */
   if (
     !manualQueued &&
@@ -52652,7 +53179,7 @@ const signOut = useCallback(async () => {
 
   /* Background tabs may be browser-throttled, but we do not intentionally stop the world. */
 
-  let action = queued;
+  let action = coverageOverride || queued;
       if (!action) {
         /*
          * Live world hard-on: régi mentett state sem állíthatja le.
@@ -52693,16 +53220,20 @@ const signOut = useCallback(async () => {
         !canRunLocalSimulationAction(view2)
       ) {
         /*
-         * Ne dobjuk el az egész beatet csak azért, mert egy follow/repost
-         * még local cooldownon van. Ha a generatív content már esedékes,
-         * használjuk ezt a beatet feed-posztra.
+         * Never manufacture a feed post merely because a queued follow/repost
+         * is cooling down. Let the normal planner choose a genuinely due
+         * non-local lane; otherwise wait.
          */
-        action = mkAction(
-          "world",
-          `local-cooldown-feed:${Math.floor(
-            now() / 60000
-          )}`
-        );
+        const plannedWhileLocalWaits = planAutoAction(view2);
+
+        if (
+          !plannedWhileLocalWaits ||
+          FAST_LOCAL_SIM_ACTIONS.has(plannedWhileLocalWaits.type)
+        ) {
+          return;
+        }
+
+        action = plannedWhileLocalWaits;
       }
 
       autoRunning.current = true;
@@ -52766,7 +53297,13 @@ const signOut = useCallback(async () => {
           return;
         }
 
-        if (queued) simDropQueued(n, action.id);
+        if (
+          queued &&
+          action &&
+          queued.id === action.id
+        ) {
+          simDropQueued(n, queued.id);
+        }
 
         if (ok) {
           /*
