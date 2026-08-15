@@ -29316,8 +29316,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   const [feedMode, setFeedMode] = useState("all");
   const [showMedia, setShowMedia] = useState(false);
   const [profileId, setProfileId] = useState("");
-  /* All posts stay in world state. Only mounted feed DOM is windowed. */
-  const [visiblePostLimit, setVisiblePostLimit] = useState(60);
 
   const activeMedia =
     activeGossipMediaAccount(
@@ -29334,10 +29332,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     const i = setInterval(() => setResting(cooldownLeft() > 0), 1000);
     return () => { off(); clearInterval(i); };
   }, []);
-
-  useEffect(() => {
-    setVisiblePostLimit(60);
-  }, [feedMode, w.code]);
 
   useEffect(() => {
     if (!jump || jump.type !== "post") return;
@@ -29512,7 +29506,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     if (!ok) setErr(tt("A világ már feldolgoz egy lépéskérést.", "The world is already processing a step request."));
   };
 
-  const postById = useMemo(() => {
+  const postById = React.useMemo(() => {
     const map = new Map();
     (w.posts || []).forEach((post) => {
       if (post && post.id) map.set(post.id, post);
@@ -29520,7 +29514,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     return map;
   }, [w.posts]);
 
-  const followingIds = useMemo(() => {
+  const followingIds = React.useMemo(() => {
     const set = new Set();
     const meProfile = socialProfileById(w, w.meId);
     ((meProfile && meProfile.following) || []).forEach((id) => set.add(id));
@@ -29579,7 +29573,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       .slice(0, 40);
 
   const visibleTimelineItems =
-    timelineItems.slice(0, visiblePostLimit);
+    timelineItems.slice(0, Math.min(40, visiblePostLimit));
 
   return (
     <>
@@ -30244,19 +30238,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               : null
           }
         />
-      ) : null}
-      {timelineItems.length > visibleTimelineItems.length ? (
-        <div style={{ display:"flex", justifyContent:"center", padding:"12px 0 22px" }}>
-          <button
-            className="btn tiny ghost"
-            onClick={() => setVisiblePostLimit((n) => Math.min(n + 60, timelineItems.length))}
-          >
-            {tt(
-              `További ${Math.min(60, timelineItems.length - visibleTimelineItems.length)} poszt`,
-              `Load ${Math.min(60, timelineItems.length - visibleTimelineItems.length)} more posts`
-            )}
-          </button>
-        </div>
       ) : null}
 
     </>
