@@ -1,4 +1,4 @@
-/* MÁSVILÁG RECOVERY v99.2 — LIGHTWEIGHT AUTONOMOUS POSTS + POPUPS — 20260815_2352 */
+/* MÁSVILÁG RECOVERY v99.3 — PER-AI 3–5 POSTS / 24H + MAX 1 IMAGE — 20260815_2359 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -28069,52 +28069,32 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
  * posztol, és külön gossip-cadence vezérli.
  */
 const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 5;
-/*
- * AUTONOMOUS FEED POST PACING
- *
- * A játékbeli naphoz kötjük a feed-kvótát, nem a valós 24 órás gördülő ablakhoz.
- * A storySettings.elapsedHours a time-skipekkel előrehaladó játékidő, ezért
- * stabilan megadja, melyik játékbeli napban vagyunk.
- *
- * Cél:
- * - összesen legfeljebb 5 AI/bot feed-poszt egy játékbeli napon;
- * - az első 2 AI-poszt az adott napon mindig szöveges;
- * - legfeljebb 1 albumkép kerüljön ki egy játékbeli napon;
- * - egy bot első posztja az adott napon mindig szöveges;
- * - két képes poszt között mindig legyen legalább egy szöveges poszt;
- * - a feltöltött album ne fogyjon el egyetlen induló hullámban.
- */
-const AUTONOMOUS_DAILY_POST_HARD_MAX = 12;
-const AUTONOMOUS_DAILY_IMAGE_HARD_MAX = 1;
-const AUTONOMOUS_IMAGE_START_TEXT_POSTS = 2;
-const AUTONOMOUS_CHARACTER_DAILY_SOFT_MAX = 2;
+const AUTONOMOUS_CHARACTER_POST_MIN_24H = 3;
+const AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H = 1;
 
+/*
+ * RECOVERY v99.3 — PER-CHARACTER SOCIAL RHYTHM
+ * Every normal AI owns its own rolling 24-hour quota:
+ * quieter = 3 posts, normal = 4, highly online = 5.
+ * Five is a hard ceiling. Image quota is max one per character / rolling 24h.
+ */
 function autonomousGameDayIndex(w) {
-  const elapsed = Math.max(
-    0,
-    Number(storySettingsOf(w).elapsedHours) || 0
-  );
+  const elapsed = Math.max(0, Number(storySettingsOf(w).elapsedHours) || 0);
   return Math.floor(elapsed / 24);
 }
 
 function autonomousGameDayKey(w) {
-  const story = storySettingsOf(w);
   const date = String((w && w.universe && w.universe.date) || "").trim();
   const year = worldYear(w) || "";
   return `${year}|${date}|${autonomousGameDayIndex(w)}`;
 }
 
+/* Legacy metadata helpers; they no longer enforce posting quotas. */
 function autonomousAiPostsThisGameDay(w) {
   const key = autonomousGameDayKey(w);
-  return (w && Array.isArray(w.posts) ? w.posts : [])
-    .filter((p) =>
-      p &&
-      p.authorId &&
-      !isHuman(w, p.authorId) &&
-      (
-        String(p.gameDayKey || "") === key
-      )
-    );
+  return (w && Array.isArray(w.posts) ? w.posts : []).filter((p) =>
+    p && p.authorId && !isHuman(w, p.authorId) && String(p.gameDayKey || "") === key
+  );
 }
 
 function autonomousAiPostCountThisGameDay(w) {
@@ -28122,39 +28102,91 @@ function autonomousAiPostCountThisGameDay(w) {
 }
 
 function autonomousAiImagePostsThisGameDay(w) {
-  return autonomousAiPostsThisGameDay(w)
-    .filter((p) => Boolean(p && (p.imageId || p.image)))
-    .length;
+  return autonomousAiPostsThisGameDay(w).filter((p) => Boolean(p && (p.imageId || p.image))).length;
 }
 
 function autonomousLatestAiFeedPost(w) {
-  return (w && Array.isArray(w.posts) ? w.posts : [])
-    .filter((p) => p && p.authorId && !isHuman(w, p.authorId))
-    .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))[0] || null;
+  let latest = null;
+  let latestTs = 0;
+  for (const p of (w && Array.isArray(w.posts) ? w.posts : [])) {
+    if (!p || !p.authorId || isHuman(w, p.authorId)) continue;
+    const ts = Number(p.ts) || 0;
+    if (ts > latestTs) {
+      latestTs = ts;
+      latest = p;
+    }
+  }
+  return latest;
 }
 
 function autonomousCharacterPostsThisGameDay(w, characterId) {
   const key = autonomousGameDayKey(w);
-  return (w && Array.isArray(w.posts) ? w.posts : [])
-    .filter((p) =>
-      p &&
-      p.authorId === characterId &&
-      !isHuman(w, p.authorId) &&
-      String(p.gameDayKey || "") === key
-    );
+  return (w && Array.isArray(w.posts) ? w.posts : []).filter((p) =>
+    p && p.authorId === characterId && !isHuman(w, p.authorId) && String(p.gameDayKey || "") === key
+  );
+}
+
+function characterAutonomousPostStats24h(w, characterId) {
+  const cutoff24h = now() - 24 * 3600e3;
+  let count = 0;
+  let imageCount = 0;
+  let lastPostAt = 0;
+
+  for (const p of (w && Array.isArray(w.posts) ? w.posts : [])) {
+    if (!p || p.authorId !== characterId) continue;
+    const ts = Number(p.ts) || 0;
+    if (ts >= cutoff24h) {
+      count += 1;
+      if (p.imageId || p.image) imageCount += 1;
+    }
+    if (ts > lastPostAt) lastPostAt = ts;
+  }
+
+  return { count, imageCount, lastPostAt };
+}
+
+/* One feed scan per planner pass, instead of character × feed-history scans. */
+function autonomousPostStatsSnapshot(w) {
+  const at = now();
+  const cutoff24h = at - 24 * 3600e3;
+  const cutoff48h = at - 48 * 3600e3;
+  const map = new Map();
+
+  for (const p of (w && Array.isArray(w.posts) ? w.posts : [])) {
+    if (!p || !p.authorId || isHuman(w, p.authorId)) continue;
+    const id = String(p.authorId);
+    let row = map.get(id);
+    if (!row) {
+      row = { count:0, imageCount:0, recentPosts48h:0, lastPostAt:0 };
+      map.set(id, row);
+    }
+    const ts = Number(p.ts) || 0;
+    if (ts >= cutoff24h) {
+      row.count += 1;
+      if (p.imageId || p.image) row.imageCount += 1;
+    }
+    if (ts >= cutoff48h) row.recentPosts48h += 1;
+    if (ts > row.lastPostAt) row.lastPostAt = ts;
+  }
+
+  return map;
+}
+
+function autonomousCharacterPostTarget24h(w, c, activityOverride = null) {
+  if (!c) return 3;
+  const activity = Number.isFinite(Number(activityOverride))
+    ? Number(activityOverride)
+    : Number(characterOnlineActivityProfile(w, c).post) || 0;
+  if (activity >= 1.15) return 5;
+  if (activity >= 0.82) return 4;
+  return 3;
 }
 
 function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
   if (!w || !character || !requestedImage) return false;
-
   const albumItem = albumFind(character, requestedImage);
   if (!albumItem) return false;
 
-  /*
-   * Never publish a blind album image. Either the vision model has analyzed it
-   * or the user supplied confirmed context. This guarantees that the poster and
-   * observers receive meaningful image context when it enters the feed.
-   */
   if (
     !String(albumItem.vision || "").trim() &&
     !String(albumItem.who || "").trim() &&
@@ -28163,195 +28195,78 @@ function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
     return false;
   }
 
-  const todayPosts = autonomousAiPostsThisGameDay(w);
-  const todayCount = todayPosts.length;
-
-  /*
-   * Ne legyen kép az első két bot-posztban. Ez nem csak prompt-szabály:
-   * az alkalmazási réteg is kikényszeríti.
-   */
-  if (todayCount < AUTONOMOUS_IMAGE_START_TEXT_POSTS) return false;
-
-  if (
-    autonomousAiImagePostsThisGameDay(w) >=
-    AUTONOMOUS_DAILY_IMAGE_HARD_MAX
-  ) {
-    return false;
-  }
-
-  /*
-   * Egy karakter első posztja az adott játéknapon mindig szöveges.
-   * Ettől nem lesz minden bot első megszólalása egy albumfotó.
-   */
-  if (!autonomousCharacterPostsThisGameDay(w, character.id).length) {
-    return false;
-  }
-
-  /*
-   * Két képes poszt ne legyen közvetlenül egymás után.
-   */
-  const latest = autonomousLatestAiFeedPost(w);
-  if (latest && (latest.imageId || latest.image)) return false;
-
-  return true;
+  const stats = characterAutonomousPostStats24h(w, character.id);
+  return stats.imageCount < AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H;
 }
 
 function autonomousPostTypeInstruction(w, cast) {
-  const todayCount = autonomousAiPostCountThisGameDay(w);
-  const imageCount = autonomousAiImagePostsThisGameDay(w);
-  const remaining = Math.max(
-    0,
-    AUTONOMOUS_DAILY_POST_HARD_MAX - todayCount
-  );
-
-  if (!remaining) {
-    return "MA MÁR ELÉRTÜK AZ 5 AI FEED-POSZTOS JÁTÉKBELI NAPI LIMITET. NE GENERÁLJ ÚJ POSZTOT.";
-  }
-
-  const eligibleImageChars = (cast || [])
-    .filter((c) => c && albumOf(c).length > 0)
-    .map((c) => c.name)
-    .slice(0, 8);
-
-  return [
-    `MA EDDIG ${todayCount}/${AUTONOMOUS_DAILY_POST_HARD_MAX} AI FEED-POSZT KERÜLT KI; MÉG ${remaining} FÉR BE.`,
-    `MA EDDIG ${imageCount}/${AUTONOMOUS_DAILY_IMAGE_HARD_MAX} ALBUMKÉPES POSZT KERÜLT KI.`,
-    `Az első ${AUTONOMOUS_IMAGE_START_TEXT_POSTS} AI-poszt ezen a játéknapon KÖTELEZŐEN SZÖVEGES.`,
-    "A posztokat normálisan oszd el különböző karakterek között; ne ugyanaz a bot dominálja a teljes feedet.",
-    "A legtöbb új poszt legyen szöveges. Albumképet csak néha használj, amikor valóban illik a karakter aktuális életéhez.",
-    "Ha albumképet használsz, az ténylegesen fogyjon el az albumból, ezért NE használd az album összes képét rövid időn belül.",
-    "Ne használj képet csak azért, mert van album. Kép nélkül teljesen természetes posztot is írj.",
-    "Képes és szöveges posztok váltakozzanak természetesen. Két képes poszt ne kövesse közvetlenül egymást.",
-    eligibleImageChars.length
-      ? `Jelenleg albumképpel rendelkező karakterek: ${eligibleImageChars.join(", ")}.`
-      : "Jelenleg nincs használható albumkép."
-  ].join("\n");
-}
-
-const AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H = 4;
-const AUTONOMOUS_THIRD_POST_MIN_IDLE_MS = 2.5 * 3600e3;
-const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.15;
-
-function characterAutonomousPostStats24h(w, characterId) {
-  const cutoff24h = now() - 24 * 3600e3;
-  let count = 0;
-  let lastPostAt = 0;
-
-  (w && Array.isArray(w.posts) ? w.posts : []).forEach((p) => {
-    if (!p || p.authorId !== characterId) return;
-    const ts = Number(p.ts) || 0;
-    if (ts >= cutoff24h) count += 1;
-    lastPostAt = Math.max(lastPostAt, ts);
+  const snapshot = autonomousPostStatsSnapshot(w);
+  const rows = (cast || []).filter((c) => c && c.id).slice(0, 5).map((c) => {
+    const stats = snapshot.get(String(c.id)) || { count:0, imageCount:0 };
+    const activity = Number(characterOnlineActivityProfile(w, c).post) || 0;
+    const target = autonomousCharacterPostTarget24h(w, c, activity);
+    return `${c.name}: ${stats.count}/${target} posts in rolling 24h; image ${stats.imageCount}/1.`;
   });
 
-  return { count, lastPostAt };
+  return [
+    "PER-AI RULE: every normal AI has its OWN rolling 24-hour quota of 3–5 posts.",
+    "Hard maximum is 5 posts per character in any rolling 24-hour window.",
+    "Characters below 3 posts in rolling 24h have priority until they reach the minimum naturally.",
+    "IMAGE HARD MAX: each character may have at most 1 image post in rolling 24h. This is per character, not global.",
+    "All remaining posts should be text posts; image is optional, never required.",
+    rows.length ? `CURRENT PER-AI QUOTAS:
+${rows.join("\n")}` : ""
+  ].filter(Boolean).join("\n");
 }
 
-function characterCanAutonomouslyPost(w, c) {
-  if (!w || !c || !c.id || isHuman(w, c.id) || isMediaAccount(w, c.id)) {
-    return false;
-  }
+function characterCanAutonomouslyPost(w, c, snapshot = null) {
+  if (!w || !c || !c.id || isHuman(w, c.id) || isMediaAccount(w, c.id)) return false;
 
-  /*
-   * A globális napi 5-ös limit mellett egy karakter normál esetben legfeljebb
-   * 2 posztot kapjon ugyanazon a játéknapon. Így a feed valóban több szereplő
-   * között oszlik el. Ha csak egyetlen AI-karakter van a világban, a globális
-   * 5-ös plafon marad az egyetlen felső korlát.
-   */
-  const dayPosts = autonomousCharacterPostsThisGameDay(w, c.id).length;
-  const aiCastSize = (w.chars || [])
-    .filter((x) => x && !isHuman(w, x.id) && !isMediaAccount(w, x.id))
-    .length;
-  if (
-    aiCastSize > 1 &&
-    dayPosts >= AUTONOMOUS_CHARACTER_DAILY_SOFT_MAX
-  ) {
-    return false;
-  }
+  const activity = Number(characterOnlineActivityProfile(w, c).post) || 0;
+  const target = autonomousCharacterPostTarget24h(w, c, activity);
+  const stats = snapshot && snapshot.get(String(c.id))
+    ? snapshot.get(String(c.id))
+    : characterAutonomousPostStats24h(w, c.id);
 
-  const stats = characterAutonomousPostStats24h(w, c.id);
-  if (stats.count >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) return false;
-
-  /* 0-1 korábbi posztnál természetesen jöhet a következő. */
-  if (stats.count < AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H) return true;
-
-  /*
-   * A 3. poszt kivételes: csak tényleg erősen online karakter kaphatja,
-   * és akkor sem közvetlenül a második után. Így a világ alapból 1-2-nél marad.
-   */
-  const activity = characterOnlineActivityProfile(w, c).post;
-  const idleMs = stats.lastPostAt ? now() - stats.lastPostAt : Infinity;
-  return activity >= AUTONOMOUS_THIRD_POST_MIN_ACTIVITY && idleMs >= AUTONOMOUS_THIRD_POST_MIN_IDLE_MS;
+  return Number(stats.count || 0) < Math.min(5, target);
 }
 
 function fairPostCast(w) {
-  /*
-   * HARD RULE: egy játékbeli napon összesen legfeljebb 5 AI/bot feed-poszt.
-   * Ez a scheduler előtt is blokkol, így az AI nem tudja kikerülni a limitet
-   * azzal, hogy egyetlen generálási körben több posztot kér.
-   */
-  if (
-    autonomousAiPostCountThisGameDay(w) >=
-    AUTONOMOUS_DAILY_POST_HARD_MAX
-  ) {
-    return [];
-  }
-
-  const chars = (w.chars || []).filter(
-    (c) => c && characterCanAutonomouslyPost(w, c)
-  );
-
+  const snapshot = autonomousPostStatsSnapshot(w);
+  const chars = (w.chars || []).filter((c) => c && characterCanAutonomouslyPost(w, c, snapshot));
   if (!chars.length) return [];
 
-  const cutoff48h = now() - 48 * 3600e3;
-
+  const at = now();
   const ranked = chars.map((c) => {
-    let recentPosts48h = 0;
-    let lastPostAt = 0;
-
-    (w.posts || []).forEach((p) => {
-      if (!p || p.authorId !== c.id) return;
-      const ts = Number(p.ts) || 0;
-      if (ts >= cutoff48h) recentPosts48h += 1;
-      lastPostAt = Math.max(lastPostAt, ts);
-    });
-
-    const dailyPosts = characterAutonomousPostStats24h(w, c.id).count;
-    const activity = characterOnlineActivityProfile(w, c).post;
-    const idleHours = lastPostAt
-      ? Math.min(72, Math.max(0, (now() - lastPostAt) / 3600e3))
+    const stats = snapshot.get(String(c.id)) || { count:0, imageCount:0, recentPosts48h:0, lastPostAt:0 };
+    const activity = Number(characterOnlineActivityProfile(w, c).post) || 0;
+    const target = autonomousCharacterPostTarget24h(w, c, activity);
+    const count = Number(stats.count || 0);
+    const deficit = Math.max(0, target - count);
+    const belowMinimum = count < AUTONOMOUS_CHARACTER_POST_MIN_24H;
+    const idleHours = stats.lastPostAt
+      ? Math.min(72, Math.max(0, (at - stats.lastPostAt) / 3600e3))
       : 72;
 
-    /*
-     * Aki ma még nem posztolt, erős prioritást kap. Egy poszt után már kisebb,
-     * kettő után pedig nagyon nagy büntetés jön: a harmadik csak ritka kivétel.
-     */
-    const dailyPenalty = dailyPosts <= 0 ? 0 : dailyPosts === 1 ? 48 : 150;
     const pressure =
-      idleHours * (0.22 + activity * 0.62) +
-      activity * 42 -
-      recentPosts48h * (5 / Math.max(0.30, activity * activity)) -
-      dailyPenalty +
-      Math.random() * 9;
+      (belowMinimum ? 1000 : 0) +
+      deficit * 180 +
+      idleHours * 4 +
+      activity * 30 -
+      Number(stats.recentPosts48h || 0) * 3 +
+      Math.random() * 5;
 
-    return {
-      c,
-      activity,
-      dailyPosts,
-      recentPosts48h,
-      lastPostAt,
-      pressure,
-    };
+    return { c, activity, count, lastPostAt:Number(stats.lastPostAt || 0), pressure };
   });
 
-  ranked.sort((a, b) =>
-    (b.pressure - a.pressure) ||
-    (a.dailyPosts - b.dailyPosts) ||
-    (b.activity - a.activity) ||
-    (a.lastPostAt - b.lastPostAt)
+  ranked.sort((a,b) =>
+    (b.pressure-a.pressure) ||
+    (a.count-b.count) ||
+    (a.lastPostAt-b.lastPostAt) ||
+    (b.activity-a.activity)
   );
 
-  return ranked.map((x) => x.c).slice(0, 5);
+  return ranked.map((x) => x.c).slice(0,5);
 }
 function strictAutonomyActorCapsules(w, cast) {
   return (cast || [])
@@ -28433,15 +28348,15 @@ KARAKTERHŰ POSZTOLÁS:
 - A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa, occupation/job-ja, dojo/organization oldala és az is, hogy egyáltalán posztolna-e valamiről, a SAJÁT karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
-- NAPI POSZTRITMUS: a játékbeli nap teljes AI feedje legfeljebb 5 új poszt lehet ÖSSZESEN. Ne kezeld ezt karakterenkénti 5-ös limitként.
-- A botok posztjai legyenek elosztva több szereplő között. Ugyanaz a karakter normál esetben ne kapjon 2-nél több új feed-posztot ugyanazon a játéknapon, ha több AI-karakter is aktív.
+- NAPI POSZTRITMUS: minden normál AI saját gördülő 24 órás kvótája 3–5 poszt; nincs közös globális feedlimit.
+- A 24 órán belül 3 poszt alatt álló AI-k kapjanak elsőbbséget; ugyanaz a karakter 5 fölé soha nem mehet.
 - Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
 - A feed ne legyen folyamatosan aktív: ha nincs valódi élethelyzet, inkább ne szülessen új poszt.
 - A kép NEM alapértelmezett. A legtöbb poszt szöveges legyen.
-- Az első 2 AI-poszt az adott játéknapon kötelezően szöveges.
-- Legfeljebb 1 albumkép kerüljön ki egy játékbeli napon.
+- Karakterenként maximum 1 képes poszt lehet bármely gördülő 24 órában; a többi legyen szöveges.
+- A képlimit karakterenként értendő, nem az egész világra.
 - Képes poszt csak akkor legyen, ha a karakternek ténylegesen van még használható albumképe és az alkalmazási szabályok szerint már engedélyezett a kép.
-- Két képes poszt ne kövesse egymást, és egy karakter első aznapi posztja mindig szöveges.
+- Ugyanaz a karakter nem kaphat második képes posztot, amíg az előző képe ki nem esik a gördülő 24 órás ablakból.
 - A feltöltött albumot takarékosan használd. Ne posztold ki rögtön az album képeit, és ne fogyaszd el az egész készletet egyetlen nap alatt.
 ${autonomousPostTypeInstruction(w, cast)}
 
@@ -28666,6 +28581,9 @@ async function genFocusedWorldStep(w) {
   const author = fairPostCast(w)[0];
   if (!author) return null;
 
+  const authorPostStats24h = characterAutonomousPostStats24h(w, author.id);
+  const authorPostTarget24h = autonomousCharacterPostTarget24h(w, author);
+
   const recentOwn = (w.posts || [])
     .filter((p) => p && p.authorId === author.id)
     .slice(0, 5)
@@ -28710,6 +28628,8 @@ AKTUÁLIS SAJÁT ÁLLAPOTOD:
 - mood: ${selfState.mood || "-"}
 - intent: ${selfState.intent || "-"}
 - open loops: ${(selfState.openLoops || []).slice(-4).join(" | ") || "-"}
+- rolling 24h posts: ${authorPostStats24h.count}/${authorPostTarget24h}
+- rolling 24h image posts: ${authorPostStats24h.imageCount}/${AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H}
 
 JÁTÉKOS-ALAPÉRTELMEZÉS:
 A játékos NEM automatikus poszttéma. A saját életedből indulj ki.
@@ -28724,11 +28644,11 @@ SAJÁT FOTÓALBUMOD:
 ${albumList(author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
-- A játékbeli nap teljes AI feedje legfeljebb 5 új poszt lehet ÖSSZESEN. Ne kezeld ezt karakterenkénti 5-ös limitként.
+- ${author.name} saját gördülő 24 órás célja 3–5 poszt aktivitásától függően; 5 a kemény maximum.
 - Ne posztolj csak azért, hogy kitöltsd a feedet.
-- Az első 2 AI-poszt az adott játéknapon kötelezően szöveges.
-- Legfeljebb 1 albumkép kerülhet ki egy játékbeli napon, és két képes poszt nem követheti egymást.
-- ${author.name} első aznapi posztja kötelezően szöveges.
+- ${author.name} 24 órán belül maximum 1 képes posztot tehet ki; a többi legyen szöveges.
+- A képlimit karakterenként értendő, nem az egész feedre.
+- Ha ${author.name} még 3 poszt alatt áll az elmúlt 24 órában, ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó.
 - A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
 - A legtöbb poszt legyen szöveges; albumképet csak néha használj, amikor a konkrét kép ténylegesen illik az aktuális élethelyzethez.
 - A poszt kizárólag ${author.name} SAJÁT karakterlapjából, életéből, occupation/job-jából, dojo/organization oldalából, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
@@ -28759,17 +28679,7 @@ function applyWorldStep(n, out) {
   const causalPairs = new Set();
 
   safeAiArray(out, "posts").forEach((p) => {
-    /*
-     * HARD APPLY-SIDE QUOTA: a prompt önmagában nem biztonsági határ.
-     * Ha az AI többet ad vissza, a fölös posztokat egyszerűen nem publikáljuk.
-     */
-    if (
-      autonomousAiPostCountThisGameDay(n) >=
-      AUTONOMOUS_DAILY_POST_HARD_MAX
-    ) {
-      return;
-    }
-
+    /* v99.3: hard quota is per author / rolling 24h below. */
     const author = aiVoice(n, p && (p.id !== undefined ? p.id : p.name));
     if (!author || !p.text) return;
     const authorChar = charById(n, author);
@@ -49170,17 +49080,20 @@ function lastAiFeedPostAt(w) {
 
 function feedNeedsFreshPost(w) {
   const last = lastAiFeedPostAt(w);
+  const cast = fairPostCast(w);
+  if (!cast.length) return false;
 
-  /* Ha minden normál AI elérte a napi limitjét, ne pörgessünk üres feed-actionöket. */
-  if (!fairPostCast(w).length) return false;
+  const snapshot = autonomousPostStatsSnapshot(w);
+  const belowMinimum = cast.some((c) => {
+    const stats = snapshot.get(String(c.id));
+    return Number((stats && stats.count) || 0) < AUTONOMOUS_CHARACTER_POST_MIN_24H;
+  });
 
-  /*
-   * v65 — posts are a slower feed pulse. The world can stay active through
-   * comments/replies/DMs/groups between posts without flooding the feed.
-   */
-  /* Character activity decides WHO posts, not whether the whole feed spams.
-   * New autonomous feed posts may not bypass the global 10-minute floor. */
-  const target = LIVE_WORLD_POST_TARGET_MS;
+  /* Catch up under-three bots visibly, then return to the normal slower pulse. */
+  const target = belowMinimum
+    ? Math.min(LIVE_WORLD_POST_TARGET_MS, 90 * 1000)
+    : LIVE_WORLD_POST_TARGET_MS;
+
   return !last || now() - last >= target;
 }
 
