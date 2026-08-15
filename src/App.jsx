@@ -6597,29 +6597,31 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * (comments, replies, DMs, groups, follows, gossip reactions) may continue between
  * posts, but a normal new AI feed post gets a hard ~10 minute floor. */
 const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  10 * 60 * 1000,
+  3 * 60 * 1000,
   Math.min(
-    30 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 10 * 60 * 1000
+    15 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 4 * 60 * 1000
   )
 );
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(20 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 6 * 60 * 1000));
-const LIVE_WORLD_EVENT_TARGET_MS = Math.max(6 * 60 * 1000, Math.min(30 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 12 * 60 * 1000));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(60 * 1000, Math.min(10 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 2.5 * 60 * 1000));
+const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 5 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
 const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
-const AI_BACKGROUND_GAP_MS = Math.max(3500, Math.min(30000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 8000));
-const AI_INITIATIVE_GAP_MS = Math.max(1800, Math.min(15000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 3000));
+const AI_BACKGROUND_GAP_MS = Math.max(800, Math.min(12000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 1600));
+const AI_INITIATIVE_GAP_MS = Math.max(350, Math.min(8000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 700));
 
 const AI = {
   chain: Promise.resolve(),  // kompatibilitás miatt marad
   last: 0,                   // mikor futott le az utolsó AI-hívás
   gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
-  interactiveGap: 2200,      // játékos által kiváltott chat/RP gyorsabb prioritása
-  initiativeGap: AI_INITIATIVE_GAP_MS, // autonóm DM / group / RP ne éhezzen a nagy feed promptok mögött
+  interactiveGap: 350,       // gyors játékosi DM/group/RP lane
+  initiativeGap: AI_INITIATIVE_GAP_MS, // gyors autonóm DM / event / group lane
+  maxConcurrent: Math.max(1, Math.min(2, Number(import.meta.env.VITE_AI_MAX_CONCURRENT) || 2)),
+  activeWorkers: 0,
 
   /*
    * Token-aware throttling.
@@ -6629,7 +6631,7 @@ const AI = {
    * ritmusban a szolgáltatóra.
    */
   lastCostGap: 0,
-  targetTokensPerMinute: Math.max(12000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 36000),
+  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 60000),
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
@@ -6696,8 +6698,8 @@ function aiCostGapFor(system, prompt, maxTokens) {
    * prompt után legyen ideje fellélegezni a token/minute keretnek.
    */
   return Math.max(
-    1800,
-    Math.min(45000, raw)
+    350,
+    Math.min(18000, raw)
   );
 }
 
@@ -6746,37 +6748,25 @@ function budgetAiRequest(system, prompt) {
    A már futó kérés természetesen nem szakítható félbe, de amint véget ér,
    a játékos kérése ugrik a következő helyre.
    ------------------------------------------------------------------------- */
-async function pumpAiQueue() {
-  if (AI.queueRunning) return;
-
-  AI.queueRunning = true;
-
+async function runAiQueueWorker() {
   try {
     while (AI.queue.length) {
       AI.queue.sort((a, b) => {
-        if (b.priority !== a.priority) {
-          return b.priority - a.priority;
-        }
-
+        if (b.priority !== a.priority) return b.priority - a.priority;
         return a.seq - b.seq;
       });
 
       const task = AI.queue.shift();
+      if (!task) break;
 
       try {
         for (let guard = 0; guard < 40; guard++) {
           const left = cooldownLeft();
-
           if (left <= 0) break;
-
-          await wait(
-            Math.min(left, 5000) + 150
-          );
+          await wait(Math.min(left, 2500) + 50);
         }
 
-        const since =
-          now() - AI.last;
-
+        const since = now() - AI.last;
         const baseGap =
           task.priority >= 50
             ? AI.interactiveGap
@@ -6784,47 +6774,45 @@ async function pumpAiQueue() {
               ? AI.initiativeGap
               : AI.gap;
 
-        const gap =
+        const costGap =
           task.priority >= 50
-            ? Math.max(
-                baseGap,
-                Math.min(
-                  15000,
-                  Number(AI.lastCostGap) || 0
-                )
-              )
+            ? Math.min(5000, Number(AI.lastCostGap) || 0)
             : task.priority >= 15
-              ? Math.max(
-                  baseGap,
-                  Math.min(
-                    12000,
-                    Number(AI.lastCostGap) || 0
-                  )
-                )
-              : Math.max(
-                  baseGap,
-                  Number(AI.lastCostGap) || 0
-                );
+              ? Math.min(7000, Number(AI.lastCostGap) || 0)
+              : Math.min(10000, Number(AI.lastCostGap) || 0);
 
-        if (since < gap) {
-          await wait(
-            gap - since
-          );
-        }
+        const gap = Math.max(baseGap, costGap);
+        if (since < gap) await wait(gap - since);
 
-        const value =
-          await task.fn();
-
+        // Reserve the start slot before awaiting the provider. This keeps
+        // two fast-lane requests from starting at exactly the same instant.
         AI.last = now();
-
+        const value = await task.fn();
         task.resolve(value);
       } catch (err) {
-        AI.last = now();
         task.reject(err);
       }
     }
   } finally {
-    AI.queueRunning = false;
+    AI.activeWorkers = Math.max(0, AI.activeWorkers - 1);
+    AI.queueRunning = AI.activeWorkers > 0;
+    if (AI.queue.length) pumpAiQueue();
+  }
+}
+
+function pumpAiQueue() {
+  while (
+    AI.queue.length &&
+    AI.activeWorkers < AI.maxConcurrent
+  ) {
+    AI.activeWorkers++;
+    AI.queueRunning = true;
+    runAiQueueWorker().catch((err) => {
+      console.error("AI queue worker failed:", err);
+      AI.activeWorkers = Math.max(0, AI.activeWorkers - 1);
+      AI.queueRunning = AI.activeWorkers > 0;
+      if (AI.queue.length) pumpAiQueue();
+    });
   }
 }
 
@@ -6944,7 +6932,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   );
 
   const ctrl = new AbortController();
-  const timeoutMs = Math.max(8000, Number(requestMeta.timeoutMs) || (requestMeta.interactive ? 28000 : 60000));
+  const timeoutMs = Math.max(7000, Number(requestMeta.timeoutMs) || (requestMeta.interactive ? 18000 : 32000));
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
   try {
@@ -7124,7 +7112,7 @@ async function askJSON(system, prompt, options = {}) {
           const jsonRule = lang === "en"
             ? "Return valid JSON only. Add a top-level \"language\" field with value \"en\"."
             : "KIZÁRÓLAG érvényes JSON-t adj vissza. Adj meg egy legfelső \"language\" mezőt \"hu\" értékkel.";
-          const sys = `${langRule}\n\n${jsonRule}\nNo markdown fences.\n\n${system}`;
+          const sys = `${langRule}\n\n${jsonRule}\nNo markdown fences.\n\nPERFORMANCE: Be concise. Do not add explanations outside the requested JSON. Return the smallest complete valid JSON that satisfies the schema.\n\n${system}`;
           const hint = tries === 0
             ? ""
             : (lang === "en"
@@ -8161,151 +8149,6 @@ function topLevelAiCommenterIds(w, post) {
       .map((comment) => comment.authorId)
       .filter(Boolean)
   );
-}
-
-
-/* ============================================================
-   GUARANTEED COMMENTS ON EVERY FEED POST — v86
-
-   "More likely to comment" is not enough. Every feed post gets a hard
-   comment-coverage obligation. This applies equally to:
-   - player posts
-   - normal AI posts
-   - AI -> AI posts
-   - gossip/media posts
-   - popup/public response posts
-   - rumor/statement posts
-
-   The only impossible case is when no other AI character exists who could
-   legally comment (for example a world with one AI and that AI authored it).
-   ============================================================ */
-
-const GUARANTEED_POST_COMMENT_RETRY_MS = 12000;
-
-function availableAiCommenterCountForPost(w, post) {
-  if (!w || !post) return 0;
-  return (w.chars || []).filter(
-    (c) =>
-      c &&
-      c.id &&
-      !isHuman(w, c.id) &&
-      c.id !== post.authorId
-  ).length;
-}
-
-function guaranteedPostCommentTarget(w, post) {
-  if (!w || !post) return 0;
-  const available = availableAiCommenterCountForPost(w, post);
-  if (!available) return 0;
-
-  const visual = visualPostReactionProfile(w, post);
-  const target = Math.max(
-    1,
-    Math.round(Number(visual && visual.targetMin) || 6)
-  );
-
-  return Math.min(available, target);
-}
-
-function postCommentCoverageState(w, post) {
-  const current = topLevelAiCommentCount(w, post);
-  const target = guaranteedPostCommentTarget(w, post);
-  return {
-    current,
-    target,
-    missing: Math.max(0, target - current),
-    complete: target <= 0 || current >= target,
-  };
-}
-
-function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
-  if (!w || !post || !post.id) return null;
-
-  const coverage = postCommentCoverageState(w, post);
-  if (coverage.complete || coverage.missing <= 0) return null;
-
-  const visual = visualPostReactionProfile(w, post);
-  const available = availableAiCommenterCountForPost(w, post);
-
-  const maxNew = Math.max(
-    coverage.missing,
-    Math.min(
-      available - coverage.current,
-      Math.max(
-        coverage.missing,
-        Math.round(Number(visual && visual.targetMax) || coverage.target)
-          - coverage.current
-      )
-    )
-  );
-
-  return mkAction(
-    "comments",
-    `comment-coverage:${post.id}:${coverage.current}:${coverage.target}`,
-    {
-      postId: post.id,
-      trigger: "guaranteed-coverage",
-      minComments: coverage.missing,
-      maxComments: Math.max(coverage.missing, Math.min(20, maxNew)),
-      allowThreadFollowup: true,
-      coverageTarget: coverage.target,
-      coverageSource: source,
-    },
-    "coverage"
-  );
-}
-
-function enqueueGuaranteedPostCommentCoverage(w, postId, source = "post-created") {
-  if (!w || !postId) return false;
-  const post = (w.posts || []).find((row) => row && row.id === postId);
-  if (!post) return false;
-
-  const action = guaranteedPostCommentAction(w, post, source);
-  if (!action) return false;
-
-  return simEnqueue(w, action);
-}
-
-function guaranteedCommentCoverageCandidate(w) {
-  if (!w) return null;
-
-  const ts = now();
-
-  const rows = (w.posts || [])
-    .filter((post) => {
-      if (!post || !post.id || !post.authorId) return false;
-
-      const coverage = postCommentCoverageState(w, post);
-      if (coverage.complete || coverage.missing <= 0) return false;
-
-      const lastAttempt = Number(post.commentCoverageAttemptAt) || 0;
-      if (
-        lastAttempt &&
-        ts - lastAttempt < GUARANTEED_POST_COMMENT_RETRY_MS
-      ) {
-        return false;
-      }
-
-      return true;
-    })
-    .map((post) => {
-      const coverage = postCommentCoverageState(w, post);
-
-      /*
-       * Zero-comment posts are absolute priority. After that, larger deficits
-       * win. Newer posts win ties, so a new upload gets visible engagement
-       * quickly while old uncovered posts are still eventually backfilled.
-       */
-      const score =
-        (coverage.current === 0 ? 100000 : 0) +
-        coverage.missing * 1000 +
-        Math.max(0, Number(post.ts) || 0) / 1e12;
-
-      return { post, score };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  return rows.length ? rows[0].post : null;
 }
 
 function visualPostRelationshipPriority(w, actorId, targetId, post) {
@@ -15772,7 +15615,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v87-beaconfalls-scheduler-repair";
+const BUILD_VERSION = "v83-comment-reply-world-reset";
 
 const AUTO = "masvilag:auto";
 /*
@@ -17318,8 +17161,6 @@ function ensureSocialProfileRow(c) {
   return c;
 }
 
-const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 2;
-
 function ensureFollowerSystem(w) {
   if (!w || typeof w !== "object") {
     return w;
@@ -17327,26 +17168,6 @@ function ensureFollowerSystem(w) {
 
   const profiles =
     socialProfiles(w);
-
-  /*
-   * v87 — RESTART FOLLOW-STORM GUARD
-   *
-   * Fresh-world restart deliberately clears followers/following while keeping
-   * the relationship graph. The old implementation immediately tried to
-   * rebuild EVERY relationship-based follow edge in one normalization pass,
-   * filling the 40-slot sim queue almost entirely with follow actions.
-   *
-   * Keep only a tiny rolling backlog. As each follow completes, later
-   * normalization passes may add another one. This preserves realistic gradual
-   * rebuilding without starving comments, replies, DMs, RP or normal feed work.
-   */
-  const followSim = ensureSimState(w);
-  let pendingRelationshipAutoFollows = (followSim.queue || []).filter(
-    (action) =>
-      action &&
-      action.type === "follow" &&
-      String(action.key || "").startsWith("relationship-auto-follow:")
-  ).length;
 
   const byId = {};
 
@@ -17470,11 +17291,8 @@ function ensureFollowerSystem(w) {
           actor.id
         );
 
-      if (
-        !alreadyFollowing &&
-        pendingRelationshipAutoFollows < RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
-      ) {
-        const queued = simEnqueue(
+      if (!alreadyFollowing) {
+        simEnqueue(
           w,
           mkAction(
             "follow",
@@ -17489,10 +17307,6 @@ function ensureFollowerSystem(w) {
             "event"
           )
         );
-
-        if (queued) {
-          pendingRelationshipAutoFollows += 1;
-        }
       }
     });
   });
@@ -22434,7 +22248,16 @@ async function genComments(w, post, options = {}) {
       null
     )}
 
-POSZT — ${author ? author.name : "?"}:
+POST CONTEXT LOCK — EZ A KOMMENTGENERÁLÁS EGYETLEN CÉLPOSZTJA:
+- POST ID: ${post.id}
+- POST AUTHOR ID: ${post.authorId}
+- POST AUTHOR NAME: ${author ? author.name : "?"}
+- A kommentek KIZÁRÓLAG ehhez az egy konkrét POST ID-hoz tartoznak.
+- A kommentelő nem választhat másik posztot, másik botot vagy egy korábbi feed-posztot.
+- A poszt szerzője ${author ? author.name : "?"} [${post.authorId}]. Minden top-level komment ennek a személynek a posztjára reagál, hacsak a válasz kifejezetten egy már létező kommenthez van kötve.
+- Ha ugyanaz a téma több posztban is előfordult, mindig EZT a posztot és annak aktuális kommentfolyamát használd. Ne keverd össze másik poszttal.
+
+POSZT — ${author ? author.name : "?"} [${post.authorId}]:
 "${post.text}"
 
 ${post.authorId === w.meId && post.text ? playerInputUnderstandingInstruction(w, post.text, "post") : ""}
@@ -22500,6 +22323,10 @@ NYILVÁNOS VS. PRIVÁT REALIZMUS:
 
 KONKRÉT POSZTHOZ KÖTÉS:
 - Minden komment ELŐTT alkalmazd a SHARED POST COMPREHENSION jelentést; ne kezdj karakterreakciót addig, amíg a poszt alapjelentése nincs rögzítve.
+- POSZT-AZONOSÍTÁS HARD RULE: a jelenlegi célposzt mindig ${post.id}, szerzője mindig ${post.authorId} (${author ? author.name : "?"}). A kommentelőnek ezt nem szabad elveszítenie a generálás során.
+- A komment szövegének konkrétan erre a posztra kell reagálnia: annak captionjére, képére, hangulatára vagy a már ebben a threadben elhangzott kommentre.
+- Ha egy komment másik posztra is ugyanúgy illene, ellenőrizd újra a jelenlegi poszt konkrét részleteit, és csak akkor fogadd el, ha van egyértelmű kapcsolat EZHEZ a poszthoz.
+- A poszt szerzőjének személye nem cserélhető fel egy másik karakterrel. Ha ${author ? author.name : "?"} [${post.authorId}] posztolt, a reakciókat az ő karaktere, a vele való kapcsolat és az ő konkrét posztja szűri.
 - Minden új kommentnek legyen konkrét kiváltó oka EBBEN a posztban: egy szó, kép-részlet, a shared anchorban rögzített implikáció, korábbi thread-sor vagy ténylegesen releváns közös emlék.
 - A "trigger" mező ne új történetet találjon ki: röviden nevezze meg azt a VALÓDI szöveg/kép/értelmi elemet, amire a komment épül.
 - Ha egy reakció csak úgy működne, hogy előbb félre kell érteni a posztot, NE írd meg azt a kommentet.
@@ -22555,9 +22382,8 @@ ${repetitionGuard(
 KOMMENT SZABÁLYOK:
 
 ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD MINIMUM:
-- EBBEN a generálásban legalább ${requestedMinComments}, legfeljebb ${requestedMaxComments} KÜLÖNBÖZŐ AI-karakter írjon valódi, látható TOP-LEVEL kommentet, ha a castban ennyi szereplő van.
-- EZ NEM OPCIONÁLIS engagement-ajánlás, hanem a poszt látható kommentminimuma.
-- A LIKE, REPOST vagy IGNORE NEM HELYETTESÍTI a kommentminimumot.
+- EBBEN a generálásban legalább ${requestedMinComments}, legfeljebb ${requestedMaxComments} KÜLÖNBÖZŐ AI-karakter írjon valódi, látható kommentet, ha a castban ennyi szereplő van.
+- A LIKE NEM HELYETTESÍTI a kommentminimumot.
 - Elsősorban TOP-LEVEL kommenteket adj; a külön reply-engine utána továbbviszi a threadet.
 - AI-karakterek EGYMÁS posztjai alatt is ugyanilyen aktívan reagáljanak. A játékos posztja nem kap különleges komment-prioritást.
 ` : ""}
@@ -22708,7 +22534,7 @@ KAPCSOLATI FOLYTONOSSÁG FRISSÍTÉSE:
 Formátum:
 
 {"comments":[
-{"id":"szereplő azonosítója","text":"természetes social media komment","reply_to":"k2 vagy üres","trigger":"max 8 szó: mi konkrétan váltotta ki ezt a reakciót"}
+{"id":"szereplő azonosítója","post_id":"${post.id}","post_author_id":"${post.authorId}","text":"természetes social media komment","reply_to":"k2 vagy üres","trigger":"max 8 szó: mi konkrétan váltotta ki ezt a reakciót"}
 ],
 "likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
 "perceptions":[
@@ -23644,6 +23470,14 @@ function applyComments(n, postId, out, label) {
     safeAiComments(out).forEach((c) => {
       const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!who || !c.text) return;
+
+      /* POST OWNERSHIP GUARD: generated comments belong to the exact post
+       * passed into this apply call. If the model supplied explicit context,
+       * reject any mismatch instead of silently attaching the line elsewhere. */
+      const declaredPostId = String(c && (c.post_id !== undefined ? c.post_id : c.postId !== undefined ? c.postId : "") || "").trim();
+      const declaredPostAuthorId = String(c && (c.post_author_id !== undefined ? c.post_author_id : c.postAuthorId !== undefined ? c.postAuthorId : "") || "").trim();
+      if (declaredPostId && declaredPostId !== String(p.id)) return;
+      if (declaredPostAuthorId && declaredPostAuthorId !== String(p.authorId)) return;
 
       /* HARD GUARD: AI never comments on its own post. */
       if (!isHuman(n, who) && who === p.authorId) return;
@@ -25215,17 +25049,14 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
   return createdReplyIds.length;
 }
 /*
- * CHARACTER-DRIVEN POST ACTIVITY — v84
+ * CHARACTER-DRIVEN POST ACTIVITY
  *
- * NORMAL AI CHARACTER rolling-24h hard limits:
- * - maximum 5 total feed posts
- * - maximum 1 image-bearing feed post
- *
- * The player is manually controlled and is not limited by this autonomous-AI
- * budget. Gossip/media accounts use their separate publication cadence.
+ * Normál karaktereknél a napi social ritmus szándékosan visszafogott:
+ * 1-2 saját poszt / gördülő 24 óra az alap, 3 a kemény felső plafon.
+ * A pletykamédia NEM ide tartozik: az csak valódi publishable történésből
+ * posztol, és külön gossip-cadence vezérli.
  */
 const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 5;
-const AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H = 1;
 const AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H = 4;
 const AUTONOMOUS_THIRD_POST_MIN_IDLE_MS = 2.5 * 3600e3;
 const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.15;
@@ -25233,61 +25064,16 @@ const AUTONOMOUS_THIRD_POST_MIN_ACTIVITY = 1.15;
 function characterAutonomousPostStats24h(w, characterId) {
   const cutoff24h = now() - 24 * 3600e3;
   let count = 0;
-  let imageCount = 0;
   let lastPostAt = 0;
-  let lastImagePostAt = 0;
 
   (w && Array.isArray(w.posts) ? w.posts : []).forEach((p) => {
     if (!p || p.authorId !== characterId) return;
     const ts = Number(p.ts) || 0;
-
-    if (ts >= cutoff24h) {
-      count += 1;
-
-      if (p.imageId || p.image) {
-        imageCount += 1;
-        lastImagePostAt = Math.max(lastImagePostAt, ts);
-      }
-    }
-
+    if (ts >= cutoff24h) count += 1;
     lastPostAt = Math.max(lastPostAt, ts);
   });
 
-  return { count, imageCount, lastPostAt, lastImagePostAt };
-}
-
-function characterCanAutonomouslyUsePostImage(w, characterId) {
-  if (!w || !characterId || isHuman(w, characterId) || isMediaAccount(w, characterId)) {
-    return false;
-  }
-
-  return (
-    characterAutonomousPostStats24h(w, characterId).imageCount <
-    AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H
-  );
-}
-
-function autonomousPostingQuotaCard(w, characters) {
-  const rows = (characters || [])
-    .filter((c) => c && c.id && !isHuman(w, c.id) && !isMediaAccount(w, c.id))
-    .map((c) => {
-      const stats = characterAutonomousPostStats24h(w, c.id);
-      const imageAllowed =
-        stats.imageCount < AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H;
-
-      return `- ${c.name} [${c.id}]: ${stats.count}/${AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H} posts, ${stats.imageCount}/${AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H} image posts in rolling 24h; image=${imageAllowed ? "ALLOWED" : "BLOCKED"}`;
-    });
-
-  if (!rows.length) return "";
-
-  return `
-ROLLING 24H POST QUOTAS — HARD SYSTEM GROUND TRUTH:
-${rows.join("\n")}
-- No normal AI character may exceed ${AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H} total posts in ANY rolling 24-hour window.
-- No normal AI character may publish more than ${AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H} image-bearing post in ANY rolling 24-hour window.
-- If image=BLOCKED for a character, their "image" field MUST be empty. They may still make a text-only post if their total post budget allows it.
-- Do not "save up" or compensate by putting multiple album images into one post. A feed post is either text-only or uses at most one album image.
-`;
+  return { count, lastPostAt };
 }
 
 function characterCanAutonomouslyPost(w, c) {
@@ -25302,8 +25088,8 @@ function characterCanAutonomouslyPost(w, c) {
   if (stats.count < AUTONOMOUS_CHARACTER_POST_SOFT_MAX_24H) return true;
 
   /*
-   * Az 5. poszt már kivételes: csak tényleg erősen online karakter kaphatja,
-   * és akkor sem közvetlenül az előző után. Az 5 továbbra is abszolút hard cap.
+   * A 3. poszt kivételes: csak tényleg erősen online karakter kaphatja,
+   * és akkor sem közvetlenül a második után. Így a világ alapból 1-2-nél marad.
    */
   const activity = characterOnlineActivityProfile(w, c).post;
   const idleMs = stats.lastPostAt ? now() - stats.lastPostAt : Infinity;
@@ -25337,8 +25123,8 @@ function fairPostCast(w) {
       : 72;
 
     /*
-     * Aki az elmúlt 24 órában kevesebbet posztolt, prioritást kap.
-     * A 4-5. poszt már erősen büntetett; 5 fölé a commit guard sem enged.
+     * Aki ma még nem posztolt, erős prioritást kap. Egy poszt után már kisebb,
+     * kettő után pedig nagyon nagy büntetés jön: a harmadik csak ritka kivétel.
      */
     const dailyPenalty = dailyPosts <= 0 ? 0 : dailyPosts === 1 ? 48 : 150;
     const pressure =
@@ -25410,8 +25196,6 @@ ${characterAgentRuntimeCard(
 ${cast
   .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
   .join("")}
-
-${autonomousPostingQuotaCard(w, cast)}
 
 KARAKTERHŰ POSZTOLÁS:
 - Minden kiválasztott karakter teljes saját kánonja és saját emlékezete aktív.
@@ -25562,9 +25346,7 @@ KOMMENT EMOJI:
 
 KÉPEK:
 
-- HARD LIMIT: normál AI-karakterenként gördülő 24 órában LEGFELJEBB 1 képes feed-poszt lehet. Ezt a fenti ROLLING 24H POST QUOTAS sorai mutatják karakterenként.
-- Ha egy karakter image=BLOCKED állapotban van, nála az "image" mező kötelezően üres; attól még szöveges posztot írhat, ha az 5-posztos teljes kerete nem telt be.
-- Akinek van Fotóalbuma és image=ALLOWED, néha képet is posztolhat belőle.
+- Akinek van Fotóalbuma, néha képet is posztolhat belőle.
 - Az albumlistában minden kép mellett ott lehet az AI által felismert látható tartalom is. Ezt KÖTELEZŐ figyelembe venni a megfelelő kép kiválasztásakor és a caption megírásakor.
 - A poszt szerzője is "tudja", mi van a saját feltöltött fotóján. A captionnek és a későbbi kommentválaszainak is ehhez kell igazodniuk.
 - Előbb döntsd el, MELYIK konkrét kép illik a jelenethez, és csak UTÁNA írd meg a captiont. A caption ne legyen felcserélhető egy teljesen másik képpel.
@@ -25599,6 +25381,7 @@ Formátum:
     "comments":[
       {
         "id":"szereplő azonosítója",
+        "post_author_id":"A posts elem id-ja, vagyis annak a karakternek az azonosítója, aki ezt a konkrét posztot írta",
         "text":"rövid komment",
         "reply_to":"1 vagy üres"
       }
@@ -25637,9 +25420,6 @@ async function genFocusedWorldStep(w) {
   const author = fairPostCast(w)[0];
   if (!author) return null;
 
-  const authorPostStats24h = characterAutonomousPostStats24h(w, author.id);
-  const authorImageAllowed24h = characterCanAutonomouslyUsePostImage(w, author.id);
-
   const recentOwn = (w.posts || [])
     .filter((p) => p && p.authorId === author.id)
     .slice(0, 5)
@@ -25677,26 +25457,20 @@ ${recentOwn || "-"}
 LEGUTÓBBI FEED:
 ${recentWorld || "-"}
 
-GÖRDÜLŐ 24 ÓRÁS SAJÁT KVÓTÁD:
-- feed-poszt: ${authorPostStats24h.count}/${AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H}
-- képes feed-poszt: ${authorPostStats24h.imageCount}/${AUTONOMOUS_CHARACTER_IMAGE_POST_HARD_MAX_24H}
-- most képet használhatsz: ${authorImageAllowed24h ? "IGEN" : "NEM"}
-
 SAJÁT FOTÓALBUMOD:
-${authorImageAllowed24h ? (albumList(author) || "nincs használható albumkép") : "KÉPKVÓTA ELÉRVE — ebben a gördülő 24 órában csak szöveges poszt engedélyezett"}
+${albumList(author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
-- HARD LIMIT: gördülő 24 órában legfeljebb 5 saját feed-poszt lehet. A rendszer mentéskor is ellenőrzi.
-- HARD IMAGE LIMIT: gördülő 24 órában legfeljebb 1 képes feed-poszt lehet. Ha fent "most képet használhatsz: NEM", az "image" mező legyen ÜRES.
-- Ne posztolj csak azért, hogy kitöltsd a feedet.
+- A normál karakterek napi ritmusa 2-4 saját poszt / gördülő 24 óra; 5 a kemény felső plafon. Ne posztolj csak azért, hogy kitöltsd a feedet.
 - A poszt kizárólag ${author.name} saját életéből, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
 - Ha a karakternek kölcsönös baráti kapcsolatai vannak, ezek legyenek aktív részei a social életének: természetesen posztolhat közös programról, megemlítheti vagy barátilag ugrasshatja a barátját, reagálhat annak életére, megvédheti, megkérdezheti, merre van, vagy szervezhet vele valamit. Ne kezeld a barátokat véletlenszerű idegenként.
 - Ne legyen rendszer-poszt vagy mesterséges filler.
 - Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
 - Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
-- Ha ${authorImageAllowed24h ? "engedélyezett albumképet" : "a kvóta miatt most semmilyen képet"} választasz, ${authorImageAllowed24h ? "ELŐBB a visible image content alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra a képre illik." : "az hibás lenne: az image mezőt hagyd üresen."}
-- Kép nélkül is teljesen jó poszt; a napi 1 képes poszt limit után a további posztoknak szövegesnek kell lenniük.
+- Ha albumképet választasz, ELŐBB a visible image content alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra a képre illik.
+- Kép nélkül is teljesen jó poszt.
+- Ha ebben a válaszban mégis comments tömböt adsz vissza egy poszt mellett, az a comments tömb KIZÁRÓLAG AZ ADOTT posts elemhez tartozik. A kommentelőnek tudnia kell, melyik karakter posztolta azt a konkrét posztot, és a kommentnek arra a konkrét captionre/képre kell reagálnia. Soha ne keverd össze egy másik, ugyanebben a válaszban létrehozott poszttal.
 - Ne generálj kommenteket ebben a hívásban; a többi AI külön fog reagálni rá a saját karakteréből.
 - A játékos helyett soha ne írj.
 
@@ -25768,16 +25542,7 @@ function applyWorldStep(n, out) {
         text: sysLangText(n, cid, `Kommenteltem: ${cut(body, 110)}`, `I commented: ${cut(body, 110)}`),
       });
     });
-    /*
-     * v84 HARD IMAGE COMMIT GUARD:
-     * Prompt compliance is not trusted. Re-check the live world while applying
-     * each generated post. Because n.posts is mutated inside this same loop,
-     * a second image request by the same author in one provider batch is also
-     * blocked immediately.
-     */
-    const imageQuotaOpen = characterCanAutonomouslyUsePostImage(n, author);
-    const requestedPic = p.image ? albumFind(authorChar, p.image) : null;
-    const pic = imageQuotaOpen ? requestedPic : null;
+    const pic = p.image ? albumFind(authorChar, p.image) : null;
     const picRef = pic ? (pic.imageId ? imageRef(pic.imageId) : pic.src) : "";
     const picId = imageIdOf(picRef);
     const fresh = {
@@ -25799,7 +25564,6 @@ function applyWorldStep(n, out) {
       consumeAlbumItem(authorChar, pic);
     }
     n.posts.unshift(fresh);
-    enqueueGuaranteedPostCommentCoverage(n, fresh.id, "ai-post-created");
     createdPosts += 1;
 
     mentionedPostTargets.forEach((targetId) => {
@@ -26437,7 +26201,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       }
 
       n.posts.unshift(p);
-      enqueueGuaranteedPostCommentCoverage(n, p.id, "player-post-created");
 
       const mentions = noteMentions(
         n,
@@ -32445,15 +32208,6 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   const c = openId ? w.chars.find((x) => x.id === openId) : null;
   const msgs = (openId && w.chats[chatKey(w.meId, openId)]) || [];
 
-  /*
-   * v85 — CURRENT CHAT BUSY FLAG
-   * `busy` used to be a single boolean, but DM generation now supports
-   * per-conversation concurrency through `busyChats`. The composer still had
-   * two legacy references to the removed scalar `busy`, which caused a render-
-   * time ReferenceError and crashed the entire app as soon as a DM opened.
-   */
-  const currentChatBusy = Boolean(c && busyChats[c.id]);
-
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ block: "end" }); }, [msgs.length, openId]);
 
   useEffect(() => {
@@ -34034,7 +33788,7 @@ if (group) {
               e.preventDefault();
 
               if (
-                !currentChatBusy &&
+                !busyChats[openId] &&
                 (
                   text.trim() ||
                   chatImg
@@ -34053,7 +33807,7 @@ if (group) {
             send()
           }
           disabled={
-            currentChatBusy ||
+            Boolean(openId && busyChats[openId]) ||
             (
               !text.trim() &&
               !chatImg
@@ -34304,7 +34058,7 @@ function freshSimulationRuntime(at = now()) {
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 63,
+    schedulerVersion: 60,
     lastError: "",
   };
 }
@@ -36372,15 +36126,6 @@ function ensureSimState(w) {
     const postId = action.payload && action.payload.postId;
     const post = (w.posts || []).find((p) => p && p.id === postId);
     if (!post) return false;
-
-    /* v86: hard comment coverage may rescue an older uncommented post. */
-    if (
-      action.payload &&
-      action.payload.trigger === "guaranteed-coverage"
-    ) {
-      return !postCommentCoverageState(w, post).complete;
-    }
-
     return now() - (Number(post.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS;
   });
 
@@ -36405,12 +36150,10 @@ function ensureSimState(w) {
   if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
   if (!w.sim.lastRoleplayInviteAt) w.sim.lastRoleplayInviteAt = lastAiInitiatedRoleplayAt(w) || 0;
 
-  /* v87 migration: do not let a backlog created by the old comment/feed/follow
-     scheduler delay the world for minutes. This specifically repairs worlds
-     restarted while relationship-based follow rebuilding could saturate the
-     whole queue. Manual requests survive; background work is reconstructed
-     gradually from current state. */
-  if (Number(w.sim.schedulerVersion) !== 63) {
+  /* v53 migration: do not let a backlog created by the old comment/feed scheduler
+     delay the new fairness lanes for minutes. Manual requests survive; stale
+     background actions are rebuilt by the new planner from current state. */
+  if (Number(w.sim.schedulerVersion) !== 60) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -36422,9 +36165,9 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 63;
+    w.sim.schedulerVersion = 60;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 63;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 60;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -37588,7 +37331,6 @@ function applyGossipNetworkEcho(w, payload, out) {
           language: worldLanguage(w, w.meId),
         };
         w.posts = [post, ...(w.posts || [])].slice(0, 500);
-        enqueueGuaranteedPostCommentCoverage(w, post.id, "rumor-echo-post-created");
         rumor.echoedBy[who] = ts;
         madeCount++;
 
@@ -39150,7 +38892,6 @@ function publishGossipMediaStory(
   ].slice(-800);
 
   w.posts.unshift(post);
-  enqueueGuaranteedPostCommentCoverage(w, post.id, "gossip-media-post-created");
 
   const storyRow = {
     id:
@@ -39948,9 +39689,7 @@ function applyGossipReactions(n,postId,cast,out){
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
     const body=cleanGeneratedUtterance(n,who,item.text,1200);if(!body)return;
     const statement={id:uid(),authorId:who,ts:now(),likes:0,likedBy:[],text:body,imageId:"",image:"",comments:[],language:worldLanguage(n,n.meId),responseToGossipId:post.gossipStory.id||""};
-    n.posts.unshift(statement);
-    enqueueGuaranteedPostCommentCoverage(n, statement.id, "gossip-statement-created");
-    visibleActors.add(who);
+    n.posts.unshift(statement);visibleActors.add(who);
     recordSocialEvent(n,{type:"post",refId:statement.id,ts:statement.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:42,drama:30,romance:0,embarrassment:0,source:"gossip-response",text:body,tags:["social","gossip-response","statement"],meta:{postId:statement.id,gossipPostId:post.id,storyId:post.gossipStory.id||""}});
   });
   (reactionOut&&Array.isArray(reactionOut.dms)?reactionOut.dms:[]).slice(0,3).forEach((item)=>{
@@ -40021,7 +39760,6 @@ function publishRumorEvolution(w,parentPostId,raw){
     parentStoryId:parent.gossipStory.id||"",rumorEvolution:true,distortionLevel,reactedBy:[],reactionRounds:0,rumorEvolvedAt:0,
   }};
   parent.gossipStory.rumorEvolvedAt=now();w.posts.unshift(post);
-  enqueueGuaranteedPostCommentCoverage(w, post.id, "rumor-evolution-created");
   if(!Array.isArray(w.rumors))w.rumors=[];
   w.rumors.unshift({id:"rum_"+uid(),storyId:post.gossipStory.id,parentStoryId:parent.gossipStory.id||"",postId:post.id,text:post.text,factLevel:"speculation",distortionLevel,ts:post.ts,mentionedIds:post.gossipStory.mentionedIds});w.rumors=w.rumors.slice(0,160);
   recordSocialEvent(w,{type:"rumor-evolution",refId:post.gossipStory.id,ts:post.ts,actorId:media.id,targetIds:post.gossipStory.mentionedIds,visibility:"public",factLevel:"speculation",importance:52,drama:30+distortionLevel*0.35,romance:0,embarrassment:0,source:"gossip-media",text:post.gossipStory.headline?`${post.gossipStory.headline} — ${cut(post.text,220)}`:cut(post.text,260),tags:["social","gossip-media","rumor","speculation","rumor-evolution"],meta:{postId:post.id,storyId:post.gossipStory.id,parentStoryId:parent.gossipStory.id||"",distortionLevel}});
@@ -41232,7 +40970,6 @@ function appendPopupPublicPost(
   };
 
   w.posts.unshift(post);
-  enqueueGuaranteedPostCommentCoverage(w, post.id, "popup-public-post-created");
 
   recordSocialEvent(
     w,
@@ -44764,8 +44501,7 @@ function simEnqueue(w, action) {
   const doneAt = Number(sim.done[action.key] || 0);
   if (doneAt && now() - doneAt < SIM_DONE_TTL) return false;
   if (sim.queue.some((x) => x && x.key === action.key)) return false;
-  if (action.source === "manual" || action.source === "coverage") {
-    /* Guaranteed comment coverage is reactive, not ordinary background work. */
+  if (action.source === "manual") {
     sim.queue.unshift(action);
     sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
   } else {
@@ -46751,22 +46487,6 @@ function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
   /*
-   * v86 ABSOLUTE FEED COMMENT COVERAGE.
-   * Before ordinary autonomous world activity, rescue any post that still has
-   * fewer than its guaranteed minimum top-level AI comments. This also
-   * backfills uncommented posts from older saves.
-   */
-  const uncoveredPost = guaranteedCommentCoverageCandidate(view);
-  if (uncoveredPost) {
-    const coverageAction = guaranteedPostCommentAction(
-      view,
-      uncoveredPost,
-      "coverage-watchdog"
-    );
-    if (coverageAction) return coverageAction;
-  }
-
-  /*
    * v54 HARD FAIRNESS WATCHDOG
    *
    * A normál sorrend feed-first, DE a lejárt kemény határidő megelőzi még a friss kommentthreadet is, így egy csatorna sem maradhat örökre
@@ -46856,9 +46576,10 @@ function planAutoAction(view) {
   }
 
   /*
-   * 2) FRISS POSZT TOVÁBBI KOMMENTJEI.
-   * A v86 coverage lane már garantálja az alap-kommentmennyiséget MINDEN
-   * poszton. Ez a friss-feed kör csak további természetes sűrűséget ad.
+   * 2) FRISS POSZT KOMMENTJEI.
+   * Csak a friss feedből választunk. Egy poszt maximum egy automatikus
+   * komment-kört kap; utána csak valódi reply/mention tarthatja életben.
+   * Így a kommentek sűrűek a friss posztokon, de nem eszik meg a világot.
    */
   const freshCommentPost = freshFeedPostCommentCandidate(view);
   if (freshCommentPost) {
@@ -48710,20 +48431,9 @@ async function runSimulationAction(view, update, action, addImage) {
 
     if (!post) return null;
 
-    const commentTrigger =
-      String(action.payload && action.payload.trigger || "");
-    const isGuaranteedCoverage =
-      commentTrigger === "guaranteed-coverage";
-    const quotaEnforced =
-      commentTrigger === "fresh-post" ||
-      isGuaranteedCoverage;
-
-    /* Ordinary automatic comment waves are fresh-feed only. Guaranteed
-       coverage is allowed to rescue older posts too. */
-    if (
-      !isGuaranteedCoverage &&
-      now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS
-    ) {
+    /* Automatikus kommentelés csak friss feedre. A játékos kézi
+     * "reakciók kérése" funkciója nem ezen a sim-action útvonalon fut. */
+    if (now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) {
       return null;
     }
 
@@ -48738,17 +48448,17 @@ async function runSimulationAction(view, update, action, addImage) {
         view,
         post,
         {
-          minComments: quotaEnforced ? minComments : 0,
+          minComments: action.payload && action.payload.trigger === "fresh-post" ? minComments : 0,
           maxComments,
         }
       );
 
     const quotaOut =
-      quotaEnforced
+      action.payload && action.payload.trigger === "fresh-post"
         ? await ensureAutomaticCommentQuota(view, post, generatedOut, label, minComments, maxComments)
         : generatedOut;
 
-    const out = quotaEnforced
+    const out = action.payload && action.payload.trigger === "fresh-post"
       ? {
           ...(quotaOut || {}),
           comments: safeAiComments(quotaOut).slice(0, maxComments),
@@ -48757,19 +48467,7 @@ async function runSimulationAction(view, update, action, addImage) {
 
     const commentsProbe = JSON.parse(JSON.stringify(view));
     const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
-
-    if (!visibleReactionCount) {
-      if (isGuaranteedCoverage) {
-        update((n) => {
-          const failedPost = (n.posts || []).find((p) => p && p.id === post.id);
-          if (!failedPost) return;
-          failedPost.commentCoverageAttemptAt = now();
-          failedPost.commentCoverageAttempts =
-            Math.max(0, Math.round(Number(failedPost.commentCoverageAttempts) || 0)) + 1;
-        });
-      }
-      return null;
-    }
+    if (!visibleReactionCount) return null;
 
     update((n) => {
       const livePost = (n.posts || []).find((p) => p && p.id === post.id);
@@ -48779,14 +48477,6 @@ async function runSimulationAction(view, update, action, addImage) {
       applyComments(n, post.id, out, label);
 
       const refreshedPost = (n.posts || []).find((p) => p && p.id === post.id);
-
-      if (refreshedPost && isGuaranteedCoverage) {
-        refreshedPost.commentCoverageAttemptAt = now();
-        refreshedPost.commentCoverageLastSuccessAt = now();
-        refreshedPost.commentCoverageAttempts =
-          Math.max(0, Math.round(Number(refreshedPost.commentCoverageAttempts) || 0)) + 1;
-      }
-
       if (
         refreshedPost &&
         action.payload &&
@@ -48808,17 +48498,6 @@ async function runSimulationAction(view, update, action, addImage) {
       const newCommentIds = safePostComments(refreshedPost)
         .filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId))
         .map((c) => c.id);
-
-      /* If sanitation/provider output created fewer comments than the hard
-         target, queue another coverage pass. The new key includes the updated
-         comment count, so it cannot be swallowed by the just-finished action. */
-      if (refreshedPost && isGuaranteedCoverage) {
-        enqueueGuaranteedPostCommentCoverage(
-          n,
-          refreshedPost.id,
-          "coverage-followup"
-        );
-      }
 
       if (
         newCommentIds.length &&
@@ -52709,28 +52388,6 @@ const signOut = useCallback(async () => {
   const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
 
-  /*
-   * v87 — COMMENT COVERAGE MAY PREEMPT BACKGROUND QUEUE.
-   *
-   * Previously planAutoAction() was consulted ONLY when sim.queue was empty.
-   * A restart-created follow backlog therefore prevented the v86 "comments on
-   * every post" watchdog from even being considered.
-   *
-   * Manual actions still win. Otherwise an uncovered post can temporarily
-   * preempt a queued background follow without deleting that follow.
-   */
-  let coverageOverride = null;
-  if (!manualQueued) {
-    const uncoveredPostNow = guaranteedCommentCoverageCandidate(view2);
-    if (uncoveredPostNow) {
-      coverageOverride = guaranteedPostCommentAction(
-        view2,
-        uncoveredPostNow,
-        "queue-preempt-coverage"
-      );
-    }
-  }
-
   /* A popup queued just before entering an Event must not fire on top of it. */
   if (
     !manualQueued &&
@@ -52776,7 +52433,7 @@ const signOut = useCallback(async () => {
 
   /* Background tabs may be browser-throttled, but we do not intentionally stop the world. */
 
-  let action = coverageOverride || queued;
+  let action = queued;
       if (!action) {
         /*
          * Live world hard-on: régi mentett state sem állíthatja le.
@@ -52817,26 +52474,16 @@ const signOut = useCallback(async () => {
         !canRunLocalSimulationAction(view2)
       ) {
         /*
-         * v87 CRITICAL FIX:
-         * The old fallback blindly replaced a cooldown-blocked FOLLOW with a
-         * WORLD action. After restart, a large follow backlog therefore caused
-         * a new feed generation roughly every cooldown cycle, bypassing the
-         * normal feed cadence and simultaneously preventing comment coverage.
-         *
-         * Instead, ask the normal planner whether some NON-local work is truly
-         * due (comments/replies/DM/RP/feed according to its own cadence). If
-         * nothing is due, simply wait; never manufacture an extra feed post.
+         * Ne dobjuk el az egész beatet csak azért, mert egy follow/repost
+         * még local cooldownon van. Ha a generatív content már esedékes,
+         * használjuk ezt a beatet feed-posztra.
          */
-        const plannedWhileLocalWaits = planAutoAction(view2);
-
-        if (
-          !plannedWhileLocalWaits ||
-          FAST_LOCAL_SIM_ACTIONS.has(plannedWhileLocalWaits.type)
-        ) {
-          return;
-        }
-
-        action = plannedWhileLocalWaits;
+        action = mkAction(
+          "world",
+          `local-cooldown-feed:${Math.floor(
+            now() / 60000
+          )}`
+        );
       }
 
       autoRunning.current = true;
@@ -52900,13 +52547,7 @@ const signOut = useCallback(async () => {
           return;
         }
 
-        if (
-          queued &&
-          action &&
-          queued.id === action.id
-        ) {
-          simDropQueued(n, queued.id);
-        }
+        if (queued) simDropQueued(n, action.id);
 
         if (ok) {
           /*
