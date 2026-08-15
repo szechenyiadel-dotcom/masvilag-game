@@ -29374,8 +29374,33 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     repost: null,
   }));
 
-  const repostItems = repostRows(w).map((repost) => {
-    const post = postById.get(repost.postId);
+  const repostItems = repostRows(w)
+    .map((repost) => {
+      const post = postById.get(repost.postId);
+      const reposter = socialProfileById(w, repost.actorId);
+
+      if (!post || !reposter) {
+        return null;
+      }
+
+      if (
+        feedMode === "following" &&
+        reposter.id !== w.meId &&
+        !isFollowing(w, w.meId, reposter.id)
+      ) {
+        return null;
+      }
+
+      return {
+        kind: "repost",
+        id: "repost:" + repost.id,
+        ts: Number(repost.ts) || 0,
+        post,
+        repost,
+      };
+    })
+    .filter(Boolean);
+
   const timelineItems =
     baseItems
       .concat(repostItems)
