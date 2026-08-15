@@ -1,4 +1,4 @@
-/* MÁSVILÁG RECOVERY v99.3 — PER-AI 3–5 POSTS / 24H + MAX 1 IMAGE — 20260815_2359 */
+/* MÁSVILÁG RECOVERY v99.4 — BEACON FALLS QUEUE REPAIR — 20260816_0008 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -19960,6 +19960,13 @@ function ensureFollowerSystem(w) {
    */
   profiles.forEach((actor) => {
     if (
+      pendingRelationshipAutoFollows >=
+      RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
+    ) {
+      return;
+    }
+
+    if (
       !actor ||
       isHuman(w, actor.id) ||
       isMediaAccount(w, actor.id)
@@ -19968,6 +19975,13 @@ function ensureFollowerSystem(w) {
     }
 
     profiles.forEach((target) => {
+      if (
+        pendingRelationshipAutoFollows >=
+        RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
+      ) {
+        return;
+      }
+
       if (
         !target ||
         target.id === actor.id ||
@@ -39519,6 +39533,46 @@ function ensureSimState(w) {
 
   if (!Array.isArray(w.sim.queue)) w.sim.queue = [];
 
+  /*
+   * RECOVERY v99.4 — ONE-TIME SAVED-WORLD QUEUE REPAIR
+   *
+   * Some older worlds (including Beacon Falls) persisted dozens of
+   * relationship-auto-follow actions. Because the scheduler reads the queue
+   * before planning fresh world activity, that backlog can starve autonomous
+   * posts and popups for a very long time.
+   *
+   * This migration removes ONLY that obsolete generated backlog. Manual
+   * actions, comments, replies, DMs, popups and other queued work are preserved.
+   * Characters, posts, relationships, memories and history are untouched.
+   */
+  if (
+    Math.max(
+      0,
+      Math.floor(
+        Number(w.sim.queueRepairVersion) || 0
+      )
+    ) < 1
+  ) {
+    w.sim.queue =
+      w.sim.queue.filter(
+        (action) =>
+          !(
+            action &&
+            action.type === "follow" &&
+            String(action.key || "").startsWith(
+              "relationship-auto-follow:"
+            )
+          )
+      );
+
+    w.sim.running = "";
+    w.sim.queueRepairVersion = 1;
+
+    console.info(
+      "[recovery-queue] relationship auto-follow backlog repaired"
+    );
+  }
+
   /* v51 migration/runtime guard: a régi buildből bent maradt automatikus
    * comment queue ne élesszen fel régi posztokat az új feed-first ritmusban. */
   w.sim.queue = w.sim.queue.filter((action) => {
@@ -39574,6 +39628,7 @@ function ensureSimState(w) {
     w.sim.schedulerVersion = 70;
   }
   if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 70;
+  if (!Number.isFinite(Number(w.sim.queueRepairVersion))) w.sim.queueRepairVersion = 1;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -47913,6 +47968,43 @@ function mkAction(type, key, payload = {}, source = "auto") {
 function simEnqueue(w, action) {
   if (!action || !action.key) return false;
   const sim = ensureSimState(w);
+
+  /*
+   * RECOVERY v99.4:
+   * Enforce the relationship-follow queue cap centrally, not only in the
+   * producer. This protects old/new code paths from ever recreating a backlog.
+   */
+  const relationshipAutoFollow =
+    action.type === "follow" &&
+    String(action.key || "").startsWith(
+      "relationship-auto-follow:"
+    );
+
+  if (relationshipAutoFollow) {
+    const pendingRelationshipAutoFollows =
+      sim.queue.reduce(
+        (count, queued) =>
+          count +
+          (
+            queued &&
+            queued.type === "follow" &&
+            String(queued.key || "").startsWith(
+              "relationship-auto-follow:"
+            )
+              ? 1
+              : 0
+          ),
+        0
+      );
+
+    if (
+      pendingRelationshipAutoFollows >=
+      RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
+    ) {
+      return false;
+    }
+  }
+
   const doneAt = Number(sim.done[action.key] || 0);
   if (doneAt && now() - doneAt < SIM_DONE_TTL) return false;
   if (sim.queue.some((x) => x && x.key === action.key)) return false;
@@ -56034,6 +56126,46 @@ const signOut = useCallback(async () => {
    */
   const coverageOverride = null;
 
+  /*
+   * RECOVERY v99.4 — ESSENTIAL ACTIVITY PREEMPTION
+   *
+   * A tiny local follow/repost queue may remain, but it must never delay an
+   * already-due popup or autonomous feed post. Manual actions still stay first.
+   */
+  let essentialActivityOverride = null;
+
+  if (
+    !manualQueued &&
+    queued &&
+    FAST_LOCAL_SIM_ACTIONS.has(queued.type)
+  ) {
+    if (popupEventOverdue(view2)) {
+      essentialActivityOverride =
+        popupPriorityAction(
+          view2,
+          "queue-preempt-popup"
+        );
+    }
+
+    if (
+      !essentialActivityOverride &&
+      feedNeedsFreshPost(view2)
+    ) {
+      essentialActivityOverride =
+        mkAction(
+          "world",
+          `queue-preempt-feed:${Math.floor(
+            now() / 30000
+          )}`,
+          {
+            trigger:
+              "queue-preempt-feed",
+          },
+          "event"
+        );
+    }
+  }
+
   /* A popup queued just before entering an Event must not fire on top of it. */
   if (
     !manualQueued &&
@@ -56088,7 +56220,11 @@ const signOut = useCallback(async () => {
 
   /* Background tabs may be browser-throttled, but we do not intentionally stop the world. */
 
-  let action = coverageOverride || queued;
+  let action =
+    coverageOverride ||
+    essentialActivityOverride ||
+    queued;
+
       if (!action) {
         /*
          * Live world hard-on: régi mentett state sem állíthatja le.
