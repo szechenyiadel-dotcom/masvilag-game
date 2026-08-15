@@ -8482,8 +8482,10 @@ function aiCostGapFor(system, prompt, maxTokens) {
  * the end (current task + JSON schema + TAIL), which are the two most useful
  * regions if an emergency trim is needed.
  */
-const AI_MAX_SYSTEM_CHARS = Math.max(18000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 42000);
-const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 82000);
+/* PERFORMANCE v26: keep the rich canon, but stop shipping pathological 80k+ prompts.
+ * The budgeter preserves both prompt edges, where the hard rules/canon locks live. */
+const AI_MAX_SYSTEM_CHARS = Math.max(18000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 36000);
+const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 60000);
 
 function preserveEdges(value, maxChars, label = "context") {
   const text = String(value || "");
@@ -17221,16 +17223,20 @@ Rules:
 - no watermark, no text overlay, no collage
 - the sender must be recognizably the SAME fictional character/person as in the supplied profile + album reference images
 - treat the FIRST reference as the primary face/identity anchor and the remaining album references as secondary identity evidence
-- preserve facial structure, eye shape, eyebrows, nose, lips, skin tone, hair identity, age vibe and stable distinguishing features
+- preserve facial structure, face proportions, eye shape/color, eyebrows, nose, lips, jawline, skin tone, hairline/hair identity, age vibe and stable distinguishing features
+- IDENTITY HAS PRIORITY OVER AESTHETICS: do not beautify into a different person, average the face, change ethnicity, age, facial proportions or distinctive features
+- when reference images are supplied, match the SAME identity across them; the first reference is authoritative if secondary references differ in styling
 - create a NEW photograph: do not copy the exact pose, background, composition or outfit from a reference unless the chat request specifically asks for it
 - only one version of the character; no collage, no reference-image montage, no duplicate person
 - keep the person and scene consistent with the requested character and moment
 - if the prompt implies a party, coffee, mirror selfie, street, room, gym or similar, show that naturally.`;
 
+  /* v26 IDENTITY LOCK: primary avatar + several album references give the
+   * image model more stable evidence for the same face across generations. */
   const referenceImages = characterSnapReferenceImages(
     character,
     media,
-    3
+    4
   );
 
   const payload = {
@@ -17241,7 +17247,7 @@ Rules:
     text: basePrompt,
     size: "1024x1024",
     image_size: "1024x1024",
-    quality: "medium",
+    quality: "high",
     output_format: "jpeg",
     response_format: "b64_json",
     background: "auto",
@@ -26197,6 +26203,8 @@ KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT, kapcsolat-specifikus explicit kánonja. Az, hogy valaki általában szarkasztikus/bunkó/domináns, NEM elég ok arra, hogy a barátját megalázza vagy ellenségként kezelje.
 - KÖLCSÖNÖS BARÁTSÁG: ha a kommentelő és a poszt szerzője mindkét irányban barátok, ezt a komment konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
+- SZEMÉLYISÉG HARD RULE: a PERSONALITY, TRAITS, SPEECH STYLE, VOICE EXAMPLES, GOALS, FEARS és BACKSTORY mezők nem díszítő háttéradatok, hanem viselkedési szerződés. A reakció döntése, intenzitása, szóhasználata és az is, hogy egyáltalán megszólal-e, ezekből következzen. Ne simítsd a karaktereket ugyanabba a kedves/generikus social-media hangba.
+- RIVÁLIS OLDAL HARD RULE: ha két szereplő rivális frakcióhoz/dojohoz tartozik (pl. eltérő ellenséges karate dojo), és nincs KIFEJEZETT személyes barátság/románc felülírás, közöttük NINCS cukiskodás, bestie-hang, őszinte hype vagy indokolatlan kedvesség. A nyilvános dinamika legyen karakterhű rivalizálás: beszólás, versengés, száraz szkepszis, backhanded megjegyzés, provokáció vagy tudatos ignore. A beszólás stílusát mindig a konkrét karakter személyisége határozza meg, ne legyen minden rivális ugyanúgy bunkó.
 - A korábbi emlékei és a poszt szerzőjével való konkrét kapcsolata ténylegesen módosítsa a reakcióját. Ha van releváns közös múlt, belső poén, korábbi vita, ígéret, flört vagy kínos esemény, UTALHAT rá — de ne ugyanarra minden alkalommal.
 - Ne csak a komment TARTALMA, hanem a mikrostílusa is karakterfüggő legyen: mondathossz, kis-/nagybetű, írásjel, szleng, emoji, kérdezés, közvetlenség, szárazság, káromkodás, flört és humor ritmusa is.
 - Ha ugyanaz a komment több karakter szájából is hiteles lenne, nem elég specifikus: írd újra.
@@ -27447,6 +27455,16 @@ if (!parent && tag) {
   }
 }
 
+/* v26 COMMENT ANTI-SPAM HARD GUARD: model/queue retries cannot give the same
+ * AI multiple top-level comments on one post. Replies remain allowed. */
+if (
+  !parent &&
+  !isHuman(n, who) &&
+  p.comments.some((x) => x && !x.parent && x.authorId === who)
+) {
+  return;
+}
+
 const pc =
   parent &&
   p.comments.find(
@@ -28112,12 +28130,12 @@ function fairCommentCast(w, targetId, post = null) {
       .map((comment) => comment.authorId)
   );
 
+  /* v26 COMMENT ANTI-SPAM: once an AI has left a top-level comment on this
+   * post, do not cast it for another top-level round. It may still participate
+   * through genReply/applyReplies, so conversations can continue naturally. */
   const freshVoices = pool.filter((row) => !alreadyTopLevel.has(row.c.id));
-  const orderedPool = freshVoices.length >= Math.min(4, pool.length)
-    ? freshVoices.concat(pool.filter((row) => alreadyTopLevel.has(row.c.id)))
-    : pool;
 
-  return orderedPool
+  return freshVoices
     .map((x) => x.c)
     .slice(0, castLimit);
 }
