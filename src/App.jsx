@@ -7727,13 +7727,24 @@ function visualPostReactionRole(w, c, post) {
   const score = Number(rel && rel.score) || 0;
   const bond = String(rel && (rel.bond || rel.type) || "").toLowerCase();
   const visual = visualPostReactionProfile(w, post);
+  const flirtState = flirtPermissionState(w, c.id, post.authorId, rel);
 
   if (
     visual.adultAuthor &&
     isKnownAdultCharacter(w, c.id) &&
-    relationshipRomanceActive(w, c.id, post.authorId, rel)
+    flirtState.crushActive
   ) {
-    return "crush/romantic interest — stronger visual attention, attraction, flustered/flirty/jealous subtext if character-faithful";
+    return flirtState.secretCrush
+      ? "secret crush — visibly more attentive/flustered than a normal friend, but public reaction stays restrained, indirect and deniable; no sudden open hitting-on or confession"
+      : "crush/romantic interest — stronger visual attention, attraction, flustered/flirty/jealous subtext if character-faithful";
+  }
+
+  if (
+    visual.adultAuthor &&
+    isKnownAdultCharacter(w, c.id) &&
+    flirtState.mode === "casual-flirty"
+  ) {
+    return "naturally flirty + orientation-compatible — light casual flirting is possible even without a crush, but no invented jealousy/possessiveness/love";
   }
 
   if (
@@ -7776,8 +7787,10 @@ VISUAL POST REACTION ENGINE — THIS IMAGE MATTERS:
 - ${adultSafety}
 - Friends and best friends should usually look recognizably supportive on a strong selfie/outfit/photo: specific praise, hype, affectionate teasing, nicknames or familiar shorthand are all natural when that is how they communicate.
 - Enemies/rivals who choose to comment should NOT randomly become fans. They can be dismissive, sarcastic, backhanded, competitive, provocative or intentionally unimpressed. Ignoring/like-refusal is also valid.
-- Crushes/romantic interests should receive noticeably stronger visual attention than neutral people. Their reaction may be flirty, flustered, too attentive, jealous, possessive or trying to play it cool depending on personality and public mask.
-- ORIENTATION IS A HARD GATE: a straight/gay/etc. character whose orientation does not support attraction to the poster must stay platonic even if they are naturally flirty. Friend hype, "you look good/hot", affectionate teasing or emojis can remain friendly without becoming romantic interest.
+- Crushes/romantic interests should receive noticeably stronger visual attention than neutral people. SECRET crushes must usually hide it: restrained/indirect/deniable reaction, extra attention or fluster rather than an abrupt public confession.
+- FLIRT PERMISSION IS TARGET-SPECIFIC: if a character is NOT explicitly naturally flirty, they may flirt only with someone they genuinely crush/date/love. A high friendship score, playful personality, teasing, compliments or visual attraction do NOT create permission by themselves.
+- A character who IS explicitly naturally flirty may casually flirt with orientation-compatible targets even without a crush, but that casual flirt must not invent jealousy, possessiveness, love or relationship claims.
+- ORIENTATION IS A HARD GATE: a straight/gay/etc. character whose orientation does not support attraction to the poster must stay platonic. Friend hype, "you look good/hot", affectionate teasing or emojis can remain friendly without becoming romantic interest.
 - MULTIPLE CRUSHES: if two or more adult characters have genuine romantic/crush interest in the author, they are allowed to notice EACH OTHER'S comments. They may compete, tease, get territorial, snipe, defend their claim, challenge each other or start a short public argument when their personalities/relationships support it. Do not force a fight if they would realistically stay quiet or friendly.
 - Do not make the whole section one-note. A visually attention-grabbing post can naturally get praise + flirting + jealousy + a rival jab + jokes at the same time, but each reaction must come from a real relationship.
 - For this image, if enough relevant characters exist, aim for roughly ${visual.targetMin}-${visual.targetMax} visible comments/replies over the fresh thread rather than treating it like a quiet text-only post.
@@ -7804,8 +7817,8 @@ function visualCrushThreadFrictionInstruction(w, post, commenterId, responderId)
   const bRel = getRel(w, responderId, post.authorId);
 
   if (
-    !relationshipRomanceActive(w, commenterId, post.authorId, aRel) ||
-    !relationshipRomanceActive(w, responderId, post.authorId, bRel)
+    !relationshipCrushActive(w, commenterId, post.authorId, aRel) ||
+    !relationshipCrushActive(w, responderId, post.authorId, bRel)
   ) return "";
 
   return `
@@ -7825,6 +7838,7 @@ function commentReactionLenses(w, c, targetId, post) {
     (rel && (rel.bond || rel.type)) || ""
   ).toLowerCase();
   const lore = commentPersonalityText(c);
+  const flirtState = flirtPermissionState(w, c.id, targetId, rel);
   const lanes = [];
 
   const push = (...items) => {
@@ -7834,16 +7848,30 @@ function commentReactionLenses(w, c, targetId, post) {
   };
 
   /* Relationship gives the emotional lane; personality decides its delivery. */
-  if (
-    relationshipRomanceActive(w, c.id, targetId, rel)
-  ) {
-    push(
-      "subtle flirt or charged attention without a generic compliment",
-      "jealous/possessive subtext only if this exact post gives a reason",
-      "private-feeling callback or teasing familiarity",
-      "a short question that reveals unusually close attention",
-      "understated protectiveness or territorial humor"
-    );
+  if (flirtState.crushActive) {
+    if (!flirtState.allowed) {
+      push(
+        "unrequited crush constrained by the target's known orientation: no hitting on them",
+        "private awkwardness, disappointment, distance or restrained extra attention",
+        "keep friendly praise/banter platonic and do not fish for romantic reciprocation"
+      );
+    } else if (flirtState.secretCrush) {
+      push(
+        "secret-crush restraint: extra attention or fluster that can still be denied",
+        "indirect compliment or teasing that can pass as platonic",
+        "brief awkwardness, hesitation, quick retreat or subject change",
+        "quiet protectiveness or jealousy only if this exact post gives a reason",
+        "like-only or a very short comment can be more in-character than open flirting"
+      );
+    } else {
+      push(
+        "character-specific flirt or charged attention without a generic compliment",
+        "jealous/possessive subtext only if this exact post gives a reason",
+        "private-feeling callback or teasing familiarity",
+        "a short question that reveals unusually close attention",
+        "understated protectiveness or territorial humor"
+      );
+    }
   } else if (
     score >= 65 ||
     /best friend|close friend|legjobb barát|közeli barát|ride or die/.test(bond)
@@ -7896,15 +7924,20 @@ function commentReactionLenses(w, c, targetId, post) {
   if (/reserved|private|introvert|zárkózott|visszafogott|quiet|csendes|stoic/.test(lore)) {
     push("very short understated reaction", "quietly specific question", "like-only instead of forced chatter");
   }
-  if (/flirt|flört|csábít|seductive|tease/.test(lore)) {
-    if (romanceTargetAllowed(w, c.id, targetId)) {
+  if (characterIsFlirty(c)) {
+    if (flirtState.mode === "casual-flirty" || flirtState.mode === "flirty-crush") {
       push("character-specific flirt, not a stock compliment", "playful double meaning if the post supports it");
-    } else {
+    } else if (!flirtState.allowed) {
       push("playful/charming but explicitly platonic banter", "warm teasing with NO romantic or sexual subtext");
     }
   }
-  if (/jealous|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(lore)) {
-    push("territorial or jealous subtext only when there is a visible trigger", "too-attentive detail that reveals fixation");
+  if (/jealous|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(lore) && flirtState.crushActive) {
+    push(
+      flirtState.secretCrush
+        ? "hidden jealousy that is quickly covered or redirected rather than an open claim"
+        : "territorial or jealous subtext only when there is a visible trigger",
+      "too-attentive detail that reveals fixation"
+    );
   }
   if (/protect|védelmez|loyal|lojális|ride or die/.test(lore)) {
     push("protective shorthand", "public backing that sounds like them, not a motivational quote");
@@ -8040,6 +8073,7 @@ function commentPublicBehaviorCard(w, c, targetId) {
   const mood = String((rel && rel.mood) || "");
   const lore = commentPersonalityText(c);
   const follows = isFollowing(w, c.id, targetId);
+  const flirtState = flirtPermissionState(w, c.id, targetId, rel);
   const bits = [];
 
   bits.push(
@@ -8060,16 +8094,26 @@ function commentPublicBehaviorCard(w, c, targetId) {
     bits.push("Figyel arra, hogyan néz ki mások előtt: a nyilvános reakció lehet tudatosan hűvösebb, elegánsabb vagy státuszvédőbb a belső érzésénél.");
   }
 
-  if (/jealous|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(lore)) {
-    bits.push("A féltékenységet/birtoklást ne vallja be automatikusan nyilvánosan. Ha a poszt tényleg triggereli, inkább kiszivároghat túl pontos figyelemben, célzásban, kérdésben, feszültebb humorban vagy rövid területjelzésben.");
+  if (/jealous|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(lore) && flirtState.crushActive) {
+    bits.push(
+      flirtState.secretCrush
+        ? "Titkos crushnál a féltékenységet különösen leplezze: inkább túl pontos figyelem, rövid kérdés, hirtelen csend, témaváltás vagy visszafogott feszültség legyen, ne nyílt területjelzés."
+        : "A féltékenységet/birtoklást ne vallja be automatikusan nyilvánosan. Ha a poszt tényleg triggereli, inkább kiszivároghat túl pontos figyelemben, célzásban, kérdésben, feszültebb humorban vagy rövid területjelzésben."
+    );
   }
 
-  if (/flirt|flört|seduct|csábít|tease/.test(lore)) {
-    if (romanceTargetAllowed(w, c.id, targetId)) {
-      bits.push("Flört csak akkor jelenjen meg, ha a helyzet + kapcsolat tényleg támogatja; a nyilvános flört intenzitása illeszkedjen ahhoz, mennyire vállalja fel ezt mások előtt.");
-    } else {
-      bits.push("ORIENTÁCIÓ-ZÁR: ennél a célpontnál a flörtölős/charming személyiség kizárólag PLATONIKUS játékosságként, baráti ugratásként vagy karizmatikus melegségként jelenhet meg. Ne hajtson rá és ne adjon romantikus/szexuális felhangot.");
-    }
+  if (flirtState.mode === "unrequited-orientation-crush") {
+    bits.push("VISZONZATLAN ORIENTÁCIÓS CRUSH: a célpont ismert szexualitása kizárja a romantikus viszonzást. Ne hajtson rá nyilvánosan; a crush legfeljebb visszafogott zavarban, távolságtartásban vagy extra figyelemben látszódhat.");
+  } else if (flirtState.secretCrush) {
+    bits.push("TITKOS CRUSH NYILVÁNOSAN: ne legyen hirtelen direkt ráhajtás vagy vallomás. A vonzalom maradjon visszahúzódó, indirekt és letagadható; akár a like-only is hitelesebb lehet.");
+  } else if (flirtState.allowed) {
+    bits.push(
+      flirtState.mode === "casual-flirty"
+        ? "Eleve flörtölős karakter + kompatibilis célpont: könnyed nyilvános flört lehet, de crush nélkül ne gyártson romantikus féltékenységet vagy kapcsolat-igényt."
+        : "Valódi crush/romantikus kötelék van: a nyilvános flört intenzitása illeszkedjen ahhoz, mennyire vállalja fel ezt mások előtt és milyen a saját személyisége."
+    );
+  } else {
+    bits.push("FLÖRT-TILALOM ENNÉL A PÁROSNÁL: minden bók, ugratás, becézés vagy baráti hype maradjon platonikus; ne hajtson rá és ne adjon romantikus/szexuális felhangot.");
   }
 
   if (/aggress|agress|violent|erőszak|dominant|domináns|danger|veszély|ruthless|könyörtelen|intimidat|megféleml/.test(lore)) {
@@ -9419,23 +9463,21 @@ function bondLooksRomantic(rel) {
 }
 
 function characterIsFlirty(c) {
-  return loreHas(
-    c,
-    [
-      "flört",
-      "flirt",
-      "flirty",
-      "csábító",
-      "csábít",
-      "seductive",
-      "teasing",
-      "tease",
-      "provokatív",
-      "provocative",
-      "playful",
-      "játékos",
-    ]
-  );
+  /* v80: broad flirting must come from explicit PERSONALITY/TRAIT canon.
+     Generic playful/teasing/provocative behavior is not the same thing, and a
+     target-specific backstory does not turn the character into a global flirt. */
+  if (!c) return false;
+  const hay = [c.personality, c.traits, c.speech, c.extra]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (!hay.trim()) return false;
+
+  if (/(?:not\s+flirty|isn['’]?t\s+flirty|never\s+flirts?|doesn['’]?t\s+flirt|nem\s+fl[oö]rt[oö]l[oő]s|nem\s+fl[oö]rt[oö]l|soha\s+nem\s+fl[oö]rt[oö]l)/i.test(hay)) {
+    return false;
+  }
+
+  return /(?:fl[oö]rt[oö]l[oő]s|fl[oö]rt[oö]l|\bfl[oö]rt\b|flirtatious|\bflirty\b|\bflirts?\b|cs[aá]b[ií]t[oó]|cs[aá]b[ií]t|seductive|seducer|coquettish|shameless\s+flirt|serial\s+flirt|womanizer|ladies['’]?\s*man)/i.test(hay);
 }
 
 function regexEscapeLiteral(value) {
@@ -9665,29 +9707,18 @@ function romanceOrientationState(w, actorId, targetId) {
     };
   }
 
-  /*
-   * Only target-specific PRIVATE SELF-canon can deliberately override a broad
-   * orientation label. A generated rel.bond/mood/hidden value cannot.
-   */
-  const explicitTargetException =
-    Boolean(connectionRelationshipCue(actor, target).romantic);
-
-  if (explicitTargetException) {
-    return {
-      blocked: false,
-      known: true,
-      actorGender: characterGenderAttractionClass(actor),
-      targetGender: characterGenderAttractionClass(target),
-      orientation: characterOrientationAttractionClass(actor),
-      explicitTargetException: true,
-      reason: "explicit-target-self-canon",
-    };
-  }
-
   const actorGender = characterGenderAttractionClass(actor);
   const targetGender = characterGenderAttractionClass(target);
   const orientation = characterOrientationAttractionClass(actor);
+  const explicitTargetException = Boolean(
+    connectionRelationshipCue(actor, target).romantic
+  );
 
+  /* v80 HARD IDENTITY RULE:
+     an explicit, known straight/gay/lesbian orientation wins over contradictory
+     generated relationship metadata AND over Connections text. Target-specific
+     canon can only resolve an otherwise unknown/non-binary mapping; it cannot
+     make a known incompatible binary target compatible. */
   if (orientation === "none") {
     return {
       blocked: true,
@@ -9695,7 +9726,7 @@ function romanceOrientationState(w, actorId, targetId) {
       actorGender,
       targetGender,
       orientation,
-      explicitTargetException: false,
+      explicitTargetException,
       reason: "aromantic",
     };
   }
@@ -9707,7 +9738,7 @@ function romanceOrientationState(w, actorId, targetId) {
       actorGender,
       targetGender,
       orientation,
-      explicitTargetException: false,
+      explicitTargetException,
       reason: "multi-gender-attraction",
     };
   }
@@ -9716,45 +9747,47 @@ function romanceOrientationState(w, actorId, targetId) {
     (actorGender === "male" || actorGender === "female") &&
     (targetGender === "male" || targetGender === "female");
 
-  /*
-   * Unknown/nonbinary cases stay open instead of guessing how a broad label
-   * maps to a specific nonbinary person.
-   */
-  if (!binaryPair || orientation === "unknown") {
-    return {
-      blocked: false,
-      known: false,
-      actorGender,
-      targetGender,
-      orientation,
-      explicitTargetException: false,
-      reason: "insufficient-orientation-data",
-    };
-  }
-
-  const sameGender = actorGender === targetGender;
-
-  if (orientation === "opposite") {
+  if (binaryPair && orientation === "opposite") {
+    const sameGender = actorGender === targetGender;
     return {
       blocked: sameGender,
       known: true,
       actorGender,
       targetGender,
       orientation,
-      explicitTargetException: false,
-      reason: sameGender ? "straight-same-gender-target" : "straight-compatible-target",
+      explicitTargetException,
+      reason: sameGender
+        ? "straight-same-gender-target"
+        : "straight-compatible-target",
     };
   }
 
-  if (orientation === "same") {
+  if (binaryPair && orientation === "same") {
+    const sameGender = actorGender === targetGender;
     return {
       blocked: !sameGender,
       known: true,
       actorGender,
       targetGender,
       orientation,
-      explicitTargetException: false,
-      reason: !sameGender ? "same-gender-orientation-opposite-target" : "same-gender-compatible-target",
+      explicitTargetException,
+      reason: !sameGender
+        ? "same-gender-orientation-opposite-target"
+        : "same-gender-compatible-target",
+    };
+  }
+
+  /* A target-specific written attraction/crush may resolve ambiguity only when
+     the broad orientation/gender mapping itself is not deterministically known. */
+  if (explicitTargetException) {
+    return {
+      blocked: false,
+      known: true,
+      actorGender,
+      targetGender,
+      orientation,
+      explicitTargetException: true,
+      reason: "explicit-target-canon-resolves-unknown",
     };
   }
 
@@ -9765,7 +9798,7 @@ function romanceOrientationState(w, actorId, targetId) {
     targetGender,
     orientation,
     explicitTargetException: false,
-    reason: "unknown",
+    reason: "insufficient-orientation-data",
   };
 }
 
@@ -9785,6 +9818,160 @@ function relationshipRomanceActive(w, actorId, targetId, rel = null) {
   );
 }
 
+
+function relationshipCrushActive(w, actorId, targetId, rel = null) {
+  if (!romanceTargetAllowed(w, actorId, targetId)) return false;
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target) return false;
+
+  const r = rel || getRel(w, actorId, targetId) || {};
+  const cue = connectionRelationshipCue(actor, target);
+  const text = [
+    r.bond,
+    r.type,
+    r.hidden,
+    r.mood,
+    r.why,
+    cue && cue.snippet,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  /* Strict target-specific attraction. Generic flirting, playfulness, jealousy,
+     high friendship score or obsession alone do NOT count as a crush. */
+  return /(?:\bcrush\b|mutual\s+crush|secret\s+crush|has\s+a\s+crush|crush\s+on|love\s+interest|in\s+love|secretly\s+in\s+love|attraction|attracted\s+to|vonzalom|vonz[oó]d|szerelmes|szerelem|titokban\s+szerelmes|dating|járnak|randi(?:zik)?|girlfriend|boyfriend|partner|spouse|wife|husband|lover|engaged|fianc[eé]|jegyes)/i.test(text);
+}
+
+function relationshipSecretCrushActive(w, actorId, targetId, rel = null) {
+  if (!relationshipCrushActive(w, actorId, targetId, rel)) return false;
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target) return false;
+  const r = rel || getRel(w, actorId, targetId) || {};
+  const cue = connectionRelationshipCue(actor, target);
+  const text = [r.bond, r.type, r.hidden, r.mood, cue && cue.snippet]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  /* Once the relationship is explicitly mutual/dating/partnered, it is not
+     treated as a hidden crush merely because an old hidden field still exists. */
+  if (/(?:mutual\s+crush|kölcsönös\s+crush|dating|járnak|girlfriend|boyfriend|partner|spouse|wife|husband|lover|engaged|jegyes)/i.test(String(r.bond || r.type || ""))) {
+    return false;
+  }
+
+  return /(?:secret\s+crush|hidden\s+crush|secret\s+attraction|secretly\s+in\s+love|keeps?\s+(?:his|her|their)\s+crush\s+secret|titkos\s+crush|titkos\s+vonzalom|rejtett\s+vonzalom|titokban\s+szerelmes|senki\s+nem\s+tud|doesn['’]?t\s+know)/i.test(text) || Boolean(cue && cue.secret && relationshipCrushActive(w, actorId, targetId, r));
+}
+
+function flirtPermissionState(w, actorId, targetId, rel = null) {
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  const orientation = romanceOrientationState(w, actorId, targetId);
+  const targetOrientationTowardActor = romanceOrientationState(w, targetId, actorId);
+  const r = rel || getRel(w, actorId, targetId) || {};
+  const naturallyFlirty = Boolean(actor && characterIsFlirty(actor));
+  const crushActive = Boolean(actor && target && relationshipCrushActive(w, actorId, targetId, r));
+  const secretCrush = crushActive && relationshipSecretCrushActive(w, actorId, targetId, r);
+  const cue = actor && target ? connectionRelationshipCue(actor, target) : {};
+  const bondText = String(r.bond || r.type || "").toLowerCase();
+  const family = Boolean(
+    cue && cue.family ||
+    /(?:mother|father|mom|dad|sister|brother|sibling|cousin|aunt|uncle|parent|child|daughter|son|anya|apa|testv[eé]r|unokatestv[eé]r|nagyn[eé]ni|nagyb[aá]csi|sz[uü]l[oő]|gyerek|l[aá]nya|fia)/i.test(bondText)
+  );
+
+  /* The actor's orientation decides who they can desire. The TARGET's known
+     orientation is also remembered: if it explicitly rules the actor out, the
+     AI must not knowingly hit on them as if reciprocation were plausible. */
+  const targetKnownIncompatible = Boolean(targetOrientationTowardActor.blocked);
+  const casualCompatibilityKnown = Boolean(
+    !orientation.blocked &&
+    orientation.known &&
+    !targetKnownIncompatible
+  );
+
+  const allowed = Boolean(
+    actor &&
+    target &&
+    !family &&
+    !orientation.blocked &&
+    !targetKnownIncompatible &&
+    (crushActive || (naturallyFlirty && casualCompatibilityKnown))
+  );
+
+  let mode = "platonic";
+  if (crushActive && targetKnownIncompatible) mode = "unrequited-orientation-crush";
+  else if (allowed && secretCrush) mode = "secret-crush";
+  else if (allowed && crushActive && naturallyFlirty) mode = "flirty-crush";
+  else if (allowed && crushActive) mode = "crush-only";
+  else if (allowed && naturallyFlirty) mode = "casual-flirty";
+
+  return {
+    allowed,
+    mode,
+    naturallyFlirty,
+    crushActive,
+    secretCrush,
+    family,
+    orientation,
+    targetOrientationTowardActor,
+    targetKnownIncompatible,
+  };
+}
+
+function flirtIdentityInstruction(w, actorId, targetId, rel = null) {
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target || actorId === targetId) return "";
+  const state = flirtPermissionState(w, actorId, targetId, rel);
+  const en = worldLanguage(w, w.meId) === "en";
+  const actorGender = String(actor.gender || "").trim() || "unknown";
+  const targetGender = String(target.gender || "").trim() || "unknown";
+  const actorOrientation = String(actor.orientation || "").trim() || "unknown";
+  const targetOrientation = String(target.orientation || "").trim() || "unknown";
+
+  if (en) {
+    const behavior = state.mode === "unrequited-orientation-crush"
+      ? "UNREQUITED ORIENTATION MISMATCH: SELF may have a crush, but TARGET's known orientation rules SELF out. Remember that fact. Do not knowingly hit on TARGET, ask for a kiss/date, act entitled to a chance, or interpret friendliness as possible reciprocation. The feeling may exist privately as awkwardness, disappointment, distance or restrained attention."
+      : state.mode === "secret-crush"
+        ? "SECRET CRUSH: attraction is real, but keep it guarded and deniable. Prefer extra attention, awkward softness, quick retreats, indirect compliments, restrained jealousy, looking away/changing subject, or a flirt that can pass as a joke. Do not suddenly act like an openly seductive dater or blurt out a confession unless the story has actually exposed the secret."
+      : state.mode === "crush-only"
+        ? "CRUSH-ONLY FLIRTING: this character is NOT broadly flirty. They may flirt with THIS person because a real crush/romantic bond exists, but it must still sound like their normal personality rather than turning them into a serial flirt."
+        : state.mode === "flirty-crush"
+          ? "FLIRTY + CRUSH: this target is genuinely desired and the character is naturally flirtatious, so direct flirting can be stronger when context supports it."
+          : state.mode === "casual-flirty"
+            ? "CASUAL FLIRT PERMITTED: this character is explicitly naturally flirty and this target is orientation-compatible. Light flirting is allowed even without a crush, but do not invent jealousy, possessiveness, love or relationship claims without a real crush."
+            : "NO FLIRT: keep warmth, compliments, jokes, teasing and affection platonic. This character is either not broadly flirty and has no crush on this target, or this target is not a valid romantic target.";
+    return `IDENTITY / FLIRT GROUND TRUTH — NEVER FORGET: ${actor.name}: gender=${actorGender}, orientation=${actorOrientation}. ${target.name}: gender=${targetGender}, orientation=${targetOrientation}. Target orientation means only possible compatibility, NEVER automatic reciprocal attraction or consent. ${behavior}`;
+  }
+
+  const behavior = state.mode === "unrequited-orientation-crush"
+    ? "VISZONZATLAN / ORIENTÁCIÓS INKOMPATIBILITÁS: lehet crush, de a CÉLPONT ismert szexualitása kizárja ezt a párost. Ezt jegyezze meg. Ne hajtson rá tudatosan, ne kérjen csókot/randit, ne viselkedjen úgy, mintha lenne romantikus esélye, és ne értelmezze a baráti kedvességet viszonzásnak. Az érzés maradhat privát zavar, csalódottság, távolságtartás vagy visszafogott figyelem."
+    : state.mode === "secret-crush"
+      ? "TITKOS CRUSH: a vonzalom valódi, de maradjon visszahúzódóbb, kontrollált és letagadható. Inkább extra figyelem, zavar, gyors visszakozás, indirekt bók, visszafogott féltékenység, témaváltás vagy viccnek álcázható flört szivárogjon ki. Ne váljon hirtelen nyíltan csábítóvá és ne vallja be váratlanul, amíg a történet ténylegesen fel nem fedi a titkot."
+    : state.mode === "crush-only"
+      ? "CRUSH-ALAPÚ FLÖRT: ez a karakter NEM általánosan flörtölős. EZZEL az emberrel azért flörtölhet, mert valódi crush/romantikus kötelék van, de a flört továbbra is a saját normál személyiségéből nőjön ki, ne váljon hirtelen sorozatflörtölővé."
+      : state.mode === "flirty-crush"
+        ? "FLÖRTÖLŐS + CRUSH: a célpont iránt valódi vonzalom van és a karakter eleve flörtölős, ezért helyzetfüggően direktebb flört is természetes."
+        : state.mode === "casual-flirty"
+          ? "ALKALMI FLÖRT ENGEDÉLYEZETT: a karakter explicit módon eleve flörtölős, a célpont pedig orientáció-kompatibilis. Könnyed flört crush nélkül is lehet, de ne találj ki féltékenységet, birtoklást, szerelmet vagy kapcsolatot valódi crush nélkül."
+          : "NINCS FLÖRT: a kedvesség, bók, poén, ugratás és szeretet maradjon platonikus. A karakter vagy nem általánosan flörtölős és nincs crush-a erre a célpontra, vagy a célpont nem érvényes romantikus célpont.";
+  return `IDENTITÁS / FLÖRT GROUND TRUTH — SOHA NE FELEJTSD EL: ${actor.name}: nem=${actorGender}, szexualitás=${actorOrientation}. ${target.name}: nem=${targetGender}, szexualitás=${targetOrientation}. A célpont orientációja csak lehetséges kompatibilitást jelent, SOHA nem automatikus viszonzást vagy beleegyezést. ${behavior}`;
+}
+
+function sanitizeDisallowedFlirtText(w, actorId, targetId, value) {
+  const text = String(value || "");
+  if (!text) return text;
+  const state = flirtPermissionState(w, actorId, targetId);
+  if (state.allowed) return text;
+
+  /* Preserve friendly hype/affection. Drop only unmistakable hitting-on language;
+     the prompt-level contract handles subtler semantic cases. */
+  const directHitOn = /\b(?:kiss\s+me|let\s+me\s+kiss\s+you|i\s+(?:really\s+)?(?:want|wanna)\s+(?:to\s+)?kiss\s+you|i(?:'m|\s+am)\s+(?:really\s+)?into\s+you|i\s+have\s+a\s+crush\s+on\s+you|i(?:'m|\s+am)\s+attracted\s+to\s+you|you(?:'re|\s+are)\s+my\s+type|date\s+me|go\s+out\s+with\s+me|be\s+mine|be\s+my\s+(?:girlfriend|boyfriend|partner)|hook\s+up\s+with\s+me|sleep\s+with\s+me|i\s+want\s+you|can['’]?t\s+stop\s+thinking\s+about\s+you|meg\s+akarlak\s+cs[oó]kolni|megcs[oó]koln[aá]lak|cs[oó]kolj\s+meg|randizz\s+velem|j[aá]rj\s+velem|legy[eé]l\s+a\s+(?:bar[aá]tn[oő]m|bar[aá]tom|p[aá]rom)|szerelmes\s+vagyok\s+bel[eé]d|vonz[oó]dom\s+hozz[aá]d|az\s+esetem\s+vagy|akarlak)\b/i.test(text);
+  return directHitOn ? "" : text;
+}
+
 function romanticRelationshipText(value) {
   return /(?:\bcrush\b|mutual\s+crush|secret\s+crush|dating|girlfriend|boyfriend|wife|husband|spouse|lover|romantic|romance|in\s+love|love\s+interest|attraction|attracted|flirt|fl[oö]rt|vonzalom|vonz[oó]d|szerelmes|szerelem|járnak|randi)/i.test(
     String(value || "")
@@ -9802,8 +9989,8 @@ function orientationBlockedRomanceInstruction(w, actorId, targetId) {
   const en = worldLanguage(w, w.meId) === "en";
 
   return en
-    ? `ORIENTATION HARD LOCK: ${actor.name}'s explicit orientation does NOT support romantic/sexual attraction toward ${target.name}. Keep warmth, praise, teasing, loyalty and affection PLATONIC. Do NOT flirt, hit on them, imply sexual/romantic desire, create romantic jealousy/territoriality, propose kissing/dating/hooking up, or turn friendship closeness into a crush. A generic "flirty/playful/charming" personality NEVER overrides orientation. Dynamic AI-generated crush/mood/bond metadata cannot override it.`
-    : `ORIENTÁCIÓ — KEMÉNY ZÁR: ${actor.name} explicit orientációja NEM támogat romantikus/szexuális vonzalmat ${target.name} iránt. A kedvesség, bók, ugratás, lojalitás és szeretet maradjon PLATONIKUS. NE flörtöljön vele, NE hajtson rá, NE sugalljon romantikus/szexuális vágyat, NE gyártson romantikus féltékenységet/territorialitást, NE kezdeményezzen csókot/randit/hookupot, és NE alakítsa a baráti közelséget crush-sá. Az általánosan "flörtölős/játékos/charming" személyiség SOHA nem írja felül az orientációt. AI által generált crush/mood/bond metaadat sem írhatja felül.`;
+    ? `ORIENTATION HARD LOCK: ${actor.name}'s explicit orientation does NOT support romantic/sexual attraction toward ${target.name}. Keep warmth, praise, teasing, loyalty and affection PLATONIC. Do NOT flirt, hit on them, imply sexual/romantic desire, create romantic jealousy/territoriality, propose kissing/dating/hooking up, or turn friendship closeness into a crush. A generic "flirty/playful/charming" personality NEVER overrides orientation. Dynamic AI-generated crush/mood/bond metadata and contradictory Connections text cannot override a known incompatible orientation.`
+    : `ORIENTÁCIÓ — KEMÉNY ZÁR: ${actor.name} explicit orientációja NEM támogat romantikus/szexuális vonzalmat ${target.name} iránt. A kedvesség, bók, ugratás, lojalitás és szeretet maradjon PLATONIKUS. NE flörtöljön vele, NE hajtson rá, NE sugalljon romantikus/szexuális vágyat, NE gyártson romantikus féltékenységet/territorialitást, NE kezdeményezzen csókot/randit/hookupot, és NE alakítsa a baráti közelséget crush-sá. Az általánosan "flörtölős/játékos/charming" személyiség SOHA nem írja felül az orientációt. AI által generált crush/mood/bond metaadat és ellentmondó Connections-szöveg sem írhatja felül.`;
 }
 
 function sanitizeOrientationIncompatibleRomanceText(w, actorId, targetId, value) {
@@ -10244,8 +10431,11 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
       } : null,
     },
     availableActions: characterAgentSurfaceActions(surface).filter((action) => {
-      if (!targetId || romanceTargetAllowed(w, actorId, targetId)) return true;
-      return action !== "FLIRT" && action !== "INITIATE_ROMANCE";
+      if (!targetId) return true;
+      const flirtState = flirtPermissionState(w, actorId, targetId);
+      if (action === "FLIRT") return flirtState.allowed;
+      if (action === "INITIATE_ROMANCE") return flirtState.crushActive && flirtState.allowed;
+      return true;
     }),
     invariants: [
       "Treat author IDs and reply-target IDs as ground truth; never reassign who said or did something.",
@@ -10253,8 +10443,8 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
       "IDENTITY OWNERSHIP: SELF.name / SELF.first-name / SELF.surname / SELF.nickname / SELF.username all belong to SELF. Never use ANY of SELF's own name variants, nickname or handle as the addressee name for TARGET unless TARGET explicitly has that same alias too. If addressing TARGET by name, use TARGET identity from relationshipToTarget. A speaker must never call the listener by the speaker's own first name, surname, nickname or handle.",
       "Player controls only the player character; never invent the player's unspoken dialogue, actions or thoughts.",
       "Canon + relationship + memory + current context outrank generic drama or generic personality stereotypes.",
-      ...(targetId && !romanceTargetAllowed(w, actorId, targetId)
-        ? ["ORIENTATION HARD LOCK: this target is not a compatible romantic/sexual target for SELF. Keep affection/playfulness platonic; FLIRT and INITIATE_ROMANCE are forbidden unless explicit target-specific SELF Connections canon says otherwise."]
+      ...(targetId
+        ? [flirtIdentityInstruction(w, actorId, targetId)]
         : []),
       "Only act on information this character could actually perceive or remember.",
       "Choose only actions supported by this surface and execute them through the requested JSON schema, not by narrating UI clicks.",
@@ -11187,6 +11377,9 @@ function relationshipBehaviorCard(
   const connectionCue = connectionRelationshipCue(actor, target);
   const romanceState = romanceOrientationState(w, actorId, targetId);
   const romanceAllowed = !romanceState.blocked;
+  const flirtState = flirtPermissionState(w, actorId, targetId, rel);
+  const crushActive = flirtState.crushActive;
+  const secretCrush = flirtState.secretCrush;
   let filterTier =
     relationshipFilterTier(
       rel
@@ -11213,6 +11406,9 @@ function relationshipBehaviorCard(
       ? "RELATIONSHIP FILTER, NOT A PERSONALITY REWRITE: keep your own personality/backstory/voice fully intact; this layer only changes how that same personality is expressed toward this specific person"
       : "KAPCSOLATI SZŰRŐ, NEM SZEMÉLYISÉGCSERE: a saját személyiséged/történeted/hangod maradjon teljesen aktív; ez a réteg csak azt módosítja, hogyan fejezed ki ugyanazt a személyiséget ezzel a konkrét emberrel"
   );
+
+
+  parts.push(flirtIdentityInstruction(w, actorId, targetId, rel));
 
   if (filterTier === "hostile") {
     parts.push(
@@ -11319,25 +11515,52 @@ function relationshipBehaviorCard(
 
   if (
     adultRomanceAllowed &&
-    romanceAllowed &&
-    relationshipRomanceActive(w, actorId, targetId, rel)
+    crushActive &&
+    !flirtState.allowed
   ) {
     parts.push(
       en
-        ? `attraction/crush is active${connectionCue.romantic ? " because your own Connections canon explicitly says so" : ""}: let it consistently affect attention, softness/awkwardness, jealousy, protectiveness, flirting, avoidance or fixation in the form your personality supports. If Connections explains WHY you like them, use that reason as a recurring lens. Do not automatically confess it.`
-        : `aktív vonzalom/crush${connectionCue.romantic ? " — ezt a saját Connections kánonod explicit rögzíti" : ""}: következetesen hasson a figyelmedre, lágyságodra/zavarodra, féltékenységedre, védelmezésedre, flörtödre, kerülésedre vagy fixációdra a személyiségedhez illő módon. Ha a Connections azt is leírja, MIÉRT tetszik neked, ez az ok visszatérő szűrőként hasson rád. Ne vallja be automatikusan.`
+        ? "UNREQUITED ORIENTATION MISMATCH: a crush may exist internally, but the target's known orientation rules this pairing out. Do not hit on them, seek a kiss/date, act possessive as if they could be yours, or reinterpret friendship as reciprocal attraction. Keep any lingering feeling private/restrained."
+        : "VISZONZATLAN / ORIENTÁCIÓS INKOMPATIBILITÁS: a crush belül létezhet, de a célpont ismert szexualitása kizárja ezt a párost. Ne hajtson rá, ne kezdeményezzen csókot/randit, ne legyen úgy birtokló, mintha a másik lehetne az övé, és ne értelmezze a barátságot viszonzott vonzalomnak. A megmaradó érzés legyen privát/visszafogott."
     );
+  } else if (
+    adultRomanceAllowed &&
+    romanceAllowed &&
+    crushActive &&
+    flirtState.allowed
+  ) {
+    if (secretCrush) {
+      parts.push(
+        en
+          ? "SECRET CRUSH BEHAVIOR: attraction is active but intentionally hidden. Let it leak through restrained attention, awkwardness, deniable teasing, indirect compliments, hesitation, looking away/changing subject, quieter protectiveness or jealousy that is quickly covered. Do NOT make them suddenly openly hit on the target, confess, claim them, or behave like an established partner unless the secret has actually been exposed in the story."
+          : "TITKOS CRUSH VISELKEDÉS: a vonzalom aktív, de szándékosan rejtett. Visszafogott figyelemben, zavarban, letagadható ugratásban, indirekt bókban, habozásban, témaváltásban, csendesebb védelmezésben vagy gyorsan leplezett féltékenységben szivárogjon ki. NE hajtson rá hirtelen nyíltan, NE valljon automatikusan, NE kezelje sajátjaként és NE viselkedjen úgy, mint egy már létező partner, amíg a történet ténylegesen fel nem fedte a titkot."
+      );
+    } else {
+      parts.push(
+        en
+          ? `real target-specific crush/romantic attraction is active${connectionCue.romantic ? " and the actor's own Connections canon supports it" : ""}: it may affect attention, softness/awkwardness, jealousy, protectiveness, flirting, avoidance or fixation in the form THIS personality supports. A non-flirty personality may flirt here specifically because the crush exists, but should not suddenly sound like a naturally flirtatious person.`
+          : `valódi, célpont-specifikus crush/romantikus vonzalom aktív${connectionCue.romantic ? " és ezt a saját Connections-kánon is támogatja" : ""}: hasson a figyelemre, lágyságra/zavarra, féltékenységre, védelmezésre, flörtre, kerülésre vagy fixációra a SAJÁT személyiségéhez illően. Egy alapból nem flörtölős karakter EZZEL az emberrel flörtölhet a crush miatt, de ne kezdjen úgy beszélni, mint aki általában mindenkire ráhajt.`
+      );
+    }
   }
 
   if (
     adultRomanceAllowed &&
-    romanceAllowed &&
-    characterIsFlirty(actor)
+    flirtState.mode === "casual-flirty"
   ) {
     parts.push(
       en
-        ? "this character is naturally flirty: when the situation and target make sense, let them actually flirt instead of flattening them into neutral friendliness"
-        : "ez a karakter természetesen flörtölős: ha a helyzet és a célpont indokolja, ténylegesen flörtöljön, ne laposodjon semleges kedvességgé"
+        ? "NATURALLY FLIRTY PERSONALITY: casual/light flirting with this orientation-compatible target is allowed even without a crush. Keep it casual; do not invent love, jealousy, possessiveness or relationship claims unless a real crush develops."
+        : "ELEVE FLÖRTÖLŐS SZEMÉLYISÉG: ezzel az orientáció-kompatibilis célponttal crush nélkül is lehet könnyed/alkalmi flört. Maradjon alkalmi: ne találj ki szerelmet, féltékenységet, birtoklást vagy kapcsolatot addig, amíg valódi crush nem alakul ki."
+    );
+  } else if (
+    adultRomanceAllowed &&
+    !flirtState.allowed
+  ) {
+    parts.push(
+      en
+        ? "FLIRT HARD LOCK FOR THIS PAIR: do not hit on this person. Friendly warmth, compliments, banter and affection are allowed, but they must remain platonic."
+        : "FLÖRT — KEMÉNY ZÁR ENNÉL A PÁROSNÁL: ne hajtson rá erre az emberre. Baráti melegség, bók, ugratás és szeretet lehet, de maradjon platonikus."
     );
   }
 
@@ -11893,6 +12116,7 @@ function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
   text = sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, text);
   text = sanitizeWrongCharacterVocative(w, actorId, targetId, text);
   text = sanitizeOrientationIncompatibleRomanceText(w, actorId, targetId, text);
+  text = sanitizeDisallowedFlirtText(w, actorId, targetId, text);
   return text;
 }
 
@@ -11985,21 +12209,23 @@ function positiveDmContinuityInstruction(w, botId, playerText) {
   const rel = getRel(w, botId, w.meId);
   const tier = relationshipFilterTier(rel);
   const en = worldLanguage(w, w.meId) === "en";
+  const flirtState = flirtPermissionState(w, botId, w.meId, rel);
 
   if (tier === "hostile" || tier === "negative" || messageLooksLikeCurrentHostility(playerText)) {
     return "";
   }
 
   return en
-    ? `CURRENT SPEECH ACT = POSITIVE REACTION / COMPLIMENT. Respond like a person who actually heard the compliment. You may be smug, shy, teasing, suspicious, flirty, reserved or briefly appreciative according to your canon, but DO NOT invent a new boundary such as "stop texting", "don't message me", "leave me alone" or equivalent without a concrete current reason.`
-    : `A JELENLEGI BESZÉDAKTUS = POZITÍV REAKCIÓ / DICSÉRET. Úgy reagálj, mint aki tényleg hallotta a dicséretet. Lehetsz pökhendi, zavarban lévő, ugrató, gyanakvó, flörtös, zárkózott vagy röviden hálás a kánonod szerint, de NE találj ki új határhúzást („ne írj”, „hagyj békén”, „stop texting” stb.) konkrét jelenlegi ok nélkül.`;
+    ? `CURRENT SPEECH ACT = POSITIVE REACTION / COMPLIMENT. Respond like a person who actually heard the compliment. You may be smug, shy, teasing, suspicious, reserved or briefly appreciative according to canon.${flirtState.allowed ? (flirtState.secretCrush ? " A secret crush may leak through only subtly/guardedly." : " Flirting is allowed for this exact pair.") : " Flirting is NOT allowed for this exact pair; keep the response platonic."} Do NOT invent a new boundary such as "stop texting", "don't message me", "leave me alone" or equivalent without a concrete current reason.`
+    : `A JELENLEGI BESZÉDAKTUS = POZITÍV REAKCIÓ / DICSÉRET. Úgy reagálj, mint aki tényleg hallotta a dicséretet. Lehetsz pökhendi, zavarban lévő, ugrató, gyanakvó, zárkózott vagy röviden hálás a kánonod szerint.${flirtState.allowed ? (flirtState.secretCrush ? " Titkos crush esetén a vonzalom csak finoman/visszahúzódóan szivárogjon ki." : " Ennél a konkrét párosnál a flört engedélyezett.") : " Ennél a konkrét párosnál a flört NEM engedélyezett; maradjon platonikus."} De NE találj ki új határhúzást („ne írj”, „hagyj békén”, „stop texting” stb.) konkrét jelenlegi ok nélkül.`;
 }
 
 function emergencyPositiveDmReply(w, botId) {
   const c = charById(w, botId);
   const en = worldLanguage(w, w.meId) === "en";
 
-  if (c && characterIsFlirty(c)) {
+  const flirtState = flirtPermissionState(w, botId, w.meId);
+  if (c && characterIsFlirty(c) && flirtState.allowed && !flirtState.secretCrush) {
     return en ? "Yeah? You liked it?" : "Ja? Tetszett?";
   }
 
@@ -12021,7 +12247,8 @@ function emergencyFriendlyDmReply(w, botId, contextText = "") {
 
   const en = worldLanguage(w, w.meId) === "en";
   const c = charById(w, botId);
-  if (c && characterIsFlirty(c)) return en ? "yeah?" : "igen?";
+  const flirtState = flirtPermissionState(w, botId, w.meId);
+  if (c && characterIsFlirty(c) && flirtState.allowed && !flirtState.secretCrush) return en ? "yeah?" : "igen?";
   if (c && loreHas(c, ["sarcastic", "dry", "szarkasztikus", "száraz"])) {
     return en ? "okay, tell me." : "oké, mondd.";
   }
@@ -14874,7 +15101,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v79-restart-world-scope-fix";
+const BUILD_VERSION = "v80-identity-flirt-rules";
 
 const AUTO = "masvilag:auto";
 /*
@@ -33791,9 +34018,9 @@ PRIVÁT ÜZENET SZABÁLYOK:
 - Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz, tervhez vagy egyszerűen valamihez, amit most akarsz tőle.
 - Az ok lehet egészen hétköznapi is.
 - Nem kell minden spontán DM mögé nagy történés, konfliktus vagy dráma.
-- Lehet, hogy csak eszedbe jutott valami, láttál valamit, kérdeznél valamit, átküldenél egy reakciót, piszkálnád vagy akarsz tőle valamit. Flört CSAK akkor opció, ha az orientációd + ez a konkrét célpont kompatibilis, vagy a saját Connections kánonod explicit target-specifikus kivételt ír.
+- Lehet, hogy csak eszedbe jutott valami, láttál valamit, kérdeznél valamit, átküldenél egy reakciót, piszkálnád vagy akarsz tőle valamit. Flört CSAK akkor opció, ha (1) ez a célpont a nemed + szexualitásod alapján kompatibilis ÉS (2) VAGY eleve explicit flörtölős a személyiséged, VAGY valódi crush/dating/romantikus vonzalmad van PONT iránta. A játékos/playful/teasing személyiség önmagában NEM flirty.
 - Ha az orientációd szerint ${w.player.name} nem romantikus/szexuális célpont számodra, a közeli barátság maradjon PLATONIKUS: ne hajts rá, ne célozgass csókra/randira/intimitásra, és ne alakíts baráti hype-ot romantikus érdeklődéssé.
-- Ha köztetek tényleges, orientáció-kompatibilis vonzalom/intim feszültség van, te is KEZDEMÉNYEZHETSZ: írhatsz direkt flörtöt, utalhatsz arra, hogy meg akarod csókolni, találkozót javasolhatsz, vagy Mature 18+ módban felnőtt szereplőként nem explicit módon jelezheted, hogy intimebb találkozást akarsz. Ne várj mindig arra, hogy a játékos hozza fel először.
+- Ha köztetek tényleges, orientáció-kompatibilis crush/dating/romantikus vonzalom van, te is KEZDEMÉNYEZHETSZ: írhatsz direkt flörtöt, utalhatsz arra, hogy meg akarod csókolni, találkozót javasolhatsz, vagy Mature 18+ módban felnőtt szereplőként nem explicit módon jelezheted, hogy intimebb találkozást akarsz. Ne várj mindig arra, hogy a játékos hozza fel először.
 - A chat azonban továbbra is távoli chat: ne írd úgy, mintha fizikailag már megcsókoltad volna vagy hozzáértél volna, hacsak a jelenet szerint ténylegesen egy helyen vagytok.
 - Ne találj ki mesterséges drámát csak azért, hogy legyen üzenet.
 - Ne generálj üzenetet pusztán azért, mert eltelt valamennyi idő.
@@ -33879,9 +34106,10 @@ TERMÉSZETES CHATSTÍLUS:
 - A konkrét szándék mindig abból következzen, aki vagy és ami a világban éppen történik.
 - A kapcsolat pontszáma, bondja, moodja, rejtett érzése és a történeted ténylegesen irányítsa a viselkedést.
 - Jó viszonynál természetesebb lehet a közvetlenség, bizalom, védelem vagy ugratás; rossz viszonynál a feszültség, gúny, türelmetlenség vagy rivalizálás.
-- Crush/vonzalom esetén a plusz figyelem, flört, zavar, féltékenység vagy birtoklás megjelenhet, ha karakterhű, anélkül hogy mindent kimondanál.
+- Crush/vonzalom esetén a plusz figyelem, flört, zavar, féltékenység vagy birtoklás megjelenhet, ha karakterhű, anélkül hogy mindent kimondanál. TITKOS crushnál ez legyen jóval visszahúzódóbb és letagadhatóbb: indirekt bók, zavar, gyors visszakozás, halkabb figyelem, leplezett féltékenység; ne hirtelen nyílt ráhajtás vagy vallomás.
+- Ha NEM vagy explicit módon flörtölős személyiség, crush nélkül SENKIVEL ne flörtölj. A baráti ugratás, hype és közvetlenség maradjon platoni.
 - Ha a kapcsolatod / hidden moodod / történeted szerint OBSESSED vagy megszállott vagy vele, ennek ne csak egyetlen féltékeny mondat legyen a jele. Idővel változatosan látszódhat: gyorsabb ráírás, több figyelem, apró részletek megjegyzése, annak észrevétele, kivel beszél, birtokló elszólás, fokozott reagálás a posztjaira/Note-jaira vagy intenzívebb féltékenység. Ne mindet használd egyszerre, és ne találj ki nem létező offline követést.
-- Ha alapból flörtölős vagy, megfelelő helyzetben ténylegesen flörtölj.
+- Ha alapból EXPLICIT módon flörtölős vagy, orientáció-kompatibilis célponttal megfelelő helyzetben crush nélkül is lehet könnyed flört. Ettől még ne találj ki szerelmet/féltékenységet/birtoklást crush nélkül.
 - A történetedből származó lojalitásokat és rivalizálásokat ne felejtsd el; dojo/szervezeti ellenféllel ne viselkedj automatikusan semleges idegenként.
 
 - Használhatsz kisbetűt, NAGYBETŰT, szlenget, rövidítéseket, internetes nyelvet, elnyújtott szavakat, több kérdőjelet vagy felkiáltójelet, ha ez a karaktered természetes chatstílusa.
@@ -34007,7 +34235,7 @@ ${characterAgentRuntimeCard(w,[bot.id],{surface:"dm",targetId:w.meId,messages:w.
 
 AUTONOMOUS DM RETRY — DO NOT SKIP:
 You are ${bot.name}. Send ${w.player.name} ONE natural spontaneous private message now.
-This is not a dramatic scene. A tiny human reason is enough: unfinished conversation, question, joke, practical thing, gossip, plan, invitation, checking in, teasing or a simple thought. Flirting is allowed ONLY if this target is compatible with your orientation or explicit target-specific Connections canon.
+This is not a dramatic scene. A tiny human reason is enough: unfinished conversation, question, joke, practical thing, gossip, plan, invitation, checking in, teasing or a simple thought. Flirting is allowed ONLY if this target is compatible with your gender/orientation AND either you are explicitly naturally flirty OR you have a real target-specific crush/romantic bond. If the crush is secret, keep it guarded/indirect rather than openly hitting on them.
 ${orientationBlockedRomanceInstruction(w, bot.id, w.meId)}
 Do not invent off-screen facts. Respect relationship=${Number(rel.score)||0}${rel.bond?`, bond=${rel.bond}`:""}.
 Use only text you would actually send in chat. Usually 1 short line, maximum 2 short sentences. No narration, no *actions*, no assistant voice. Do not write for the player.
@@ -34024,15 +34252,20 @@ function fallbackAutonomousDmResponse(w, bot) {
   const rel = getRel(w, bot.id, w.meId) || {};
   const bond = String(rel.bond || "").toLowerCase();
   const tier = relationshipFilterTier(rel);
-  const romantic = relationshipRomanceActive(w, bot.id, w.meId, rel);
+  const romantic = relationshipCrushActive(w, bot.id, w.meId, rel);
+  const secretCrush = relationshipSecretCrushActive(w, bot.id, w.meId, rel);
   const friendly = tier === "good" || tier === "close" || relationshipDeclaresFriendship(rel);
   const negative = Number(rel.score) <= -25 || /enemy|rival|ellens|riv[aá]l/.test(bond);
   let text;
 
   if (romantic && !negative) {
-    const options = en
-      ? ["you free later?", "what are you doing rn?", "come talk to me for a sec", "kinda wanted to hear from you"]
-      : ["ráérsz később?", "mit csinálsz most?", "gyere beszélj velem egy kicsit", "most valamiért rád akartam írni"];
+    const options = secretCrush
+      ? (en
+          ? ["what are you up to?", "you around?", "random but hi", "you busy?"]
+          : ["mit csinálsz?", "ráérsz?", "random, de szia", "elfoglalt vagy?"])
+      : (en
+          ? ["you free later?", "what are you doing rn?", "come talk to me for a sec", "kinda wanted to hear from you"]
+          : ["ráérsz később?", "mit csinálsz most?", "gyere beszélj velem egy kicsit", "most valamiért rád akartam írni"]);
     text = options[Math.floor(Math.random() * options.length)];
   } else if (friendly && !negative) {
     const options = en
@@ -44578,18 +44811,24 @@ function roleplayRomanticInitiativeCard(w, scene, cast) {
           .join(" ")
           .toLowerCase();
 
-      let initiative = score;
+      const flirtState = flirtPermissionState(w, actor.id, target.id, rel);
 
-      const orientationRomanceAllowed = romanceTargetAllowed(w, actor.id, target.id);
-      if (relationshipRomanceActive(w, actor.id, target.id, rel)) initiative += 46;
-      if (orientationRomanceAllowed && /crush|dating|partner|girlfriend|boyfriend|lover|wife|husband|romance|attract|vonz|szerelm|intim/.test(bond)) initiative += 36;
-      if (orientationRomanceAllowed && /flirt|bold|merész|dominant|domináns|impulsive|impulzív|passionate|szenvedély|possess|birtokl|obsess|megszáll|confident|magabiztos/.test(lore)) initiative += 18;
+      /* A high friendship score or a broadly flirtatious personality is NOT a
+         license for kissing/romantic escalation. RP romantic initiative requires
+         a real target-specific crush/dating/love bond. */
+      if (!flirtState.crushActive || !flirtState.allowed) return;
+
+      let initiative = score + 46;
+      if (/crush|dating|partner|girlfriend|boyfriend|lover|wife|husband|romance|attract|vonz|szerelm|intim/.test(bond)) initiative += 28;
+      if (characterIsFlirty(actor)) initiative += 12;
+      if (/bold|merész|dominant|domináns|impulsive|impulzív|passionate|szenvedély|confident|magabiztos/.test(lore)) initiative += 12;
       if (/shy|félénk|reserved|visszafogott|avoidant|bizalmatlan/.test(lore)) initiative -= 12;
-      if (orientationRomanceAllowed && /kiss|csók|making out|make out|csókolóz|desire|vágy|attraction|vonzalom|chemistry|kémia|flirt|flört/.test(recentText)) initiative += 18;
+      if (flirtState.secretCrush) initiative -= 22;
+      if (/kiss|csók|making out|make out|csókolóz|desire|vágy|attraction|vonzalom|chemistry|kémia|flirt|flört/.test(recentText)) initiative += 18;
       const intimacyStage = roleplayAdultIntimacyStage(w, scene);
-      if (orientationRomanceAllowed && intimacyStage === "kiss-touch") initiative += 10;
-      if (orientationRomanceAllowed && intimacyStage === "mutual-kissing") initiative += 22;
-      if (orientationRomanceAllowed && intimacyStage === "private-intimacy") initiative += 28;
+      if (intimacyStage === "kiss-touch") initiative += 10;
+      if (intimacyStage === "mutual-kissing") initiative += 22;
+      if (intimacyStage === "private-intimacy" || intimacyStage === "post-intimacy") initiative += 28;
 
       if (initiative >= 62) {
         rows.push({
@@ -44598,6 +44837,7 @@ function roleplayRomanticInitiativeCard(w, scene, cast) {
           initiative,
           score,
           bond,
+          secretCrush: flirtState.secretCrush,
         });
       }
     });
@@ -44617,10 +44857,11 @@ function roleplayRomanticInitiativeCard(w, scene, cast) {
   const sustained =
     (scene.turns || []).length >= 4 &&
     !hasConcreteEscalation &&
+    !top[0].secretCrush &&
     top[0].initiative >= 74;
   const intimacyStage = roleplayAdultIntimacyStage(w, scene);
 
-  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}`).join("\n")}\n- Current non-graphic intimacy stage inferred from ACTUAL recent turns: ${intimacyStage}.\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- If the scene is already at kiss-touch / mutual-kissing / private-intimacy / post-intimacy and there is no recent explicit player boundary, DO NOT reset it back to coy small talk or another almost-kiss. Continue from the actual established physical/emotional state.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating/continuing a non-graphic transition toward adult intimacy.\n- If the player has already clearly reciprocated in an actual stored turn, the AI may respond to that reciprocity; still never invent the player's NEXT reaction.\n- Non-graphic adult intimacy may continue as a scene through suggestive adult dialogue, closeness, kissing/making out, concrete but non-anatomical touch, movement to a private place, atmosphere, implied time progression and post-intimacy aftermath; fade-to-black is optional, not mandatory. Never add graphic anatomical/pornographic detail.\n- If the target is the PLAYER, write only the AI's own next action/dialogue and stop before deciding the player's next choice.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
+  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}${row.secretCrush ? ", SECRET CRUSH — keep initiative guarded/indirect unless mutual escalation is already visible" : ""}`).join("\n")}\n- Current non-graphic intimacy stage inferred from ACTUAL recent turns: ${intimacyStage}.\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- SECRET CRUSH rows are NOT a reason for an abrupt confession or kiss. Unless exact recent turns already show mutual exposure/escalation, keep their initiative guarded, indirect and easier to retreat from.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- If the scene is already at kiss-touch / mutual-kissing / private-intimacy / post-intimacy and there is no recent explicit player boundary, DO NOT reset it back to coy small talk or another almost-kiss. Continue from the actual established physical/emotional state.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating/continuing a non-graphic transition toward adult intimacy.\n- If the player has already clearly reciprocated in an actual stored turn, the AI may respond to that reciprocity; still never invent the player's NEXT reaction.\n- Non-graphic adult intimacy may continue as a scene through suggestive adult dialogue, closeness, kissing/making out, concrete but non-anatomical touch, movement to a private place, atmosphere, implied time progression and post-intimacy aftermath; fade-to-black is optional, not mandatory. Never add graphic anatomical/pornographic detail.\n- If the target is the PLAYER, write only the AI's own next action/dialogue and stop before deciding the player's next choice.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
 }
 
 async function genRoleplayInitiation(w, bot) {
