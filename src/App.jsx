@@ -1,3 +1,4 @@
+/* MÁSVILÁG BUILD v9 — RELATIONSHIP/IDENTITY FIX — 20260815_1908 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -56447,4 +56448,4 @@ const signOut = useCallback(async () => {
     </MediaCtx.Provider>
     </LangCtx.Provider>
   );
-} 
+}
