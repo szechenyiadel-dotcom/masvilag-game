@@ -1,3 +1,4 @@
+/* MÁSVILÁG SERVER v17 — LAZY MEDIA PERFORMANCE ONLY — 20260815_2038 */
 /*
  * MÁSVILÁG — server/proxy.js
  * Full drop-in backend with authoritative multi-device world + media sync.
@@ -2544,6 +2545,99 @@ app.get("/media/version", async (req, res) => {
   }
 });
 
+/*
+ * PERFORMANCE v17 — LAZY SINGLE-IMAGE DELIVERY
+ *
+ * Avoid returning the entire base64 media library during application boot.
+ * Image IDs are immutable, so the browser can request only the exact image it
+ * needs and cache it aggressively.
+ */
+app.get("/media/file/:id", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSessionIdentity(req);
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).end();
+    }
+
+    const imageId = String(req.params?.id || "").trim();
+    if (!imageId || imageId.length > 180) {
+      return res.status(400).end();
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+        CASE
+          WHEN data->>'__masvilagMediaEnvelope' = $3
+            THEN jsonb_extract_path(data->'media', $2::text)
+          ELSE jsonb_extract_path(data, $2::text)
+        END AS item
+      FROM world_media
+      WHERE world_code = $1
+      LIMIT 1
+      `,
+      [
+        session.worldCode,
+        imageId,
+        String(MEDIA_ENVELOPE_VERSION),
+      ]
+    );
+
+    if (!result.rows.length || result.rows[0].item == null) {
+      return res.status(404).end();
+    }
+
+    const raw = result.rows[0].item;
+    const entry =
+      typeof raw === "string"
+        ? { dataUrl: raw, status: "active" }
+        : raw && typeof raw === "object"
+          ? raw
+          : null;
+
+    if (!entry || String(entry.status || "active") === "deleted") {
+      return res.status(404).end();
+    }
+
+    const dataUrl = String(entry.dataUrl || entry.url || "");
+
+    if (/^https:\/\//i.test(dataUrl)) {
+      return res.redirect(302, dataUrl);
+    }
+
+    const match = dataUrl.match(
+      /^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,([\s\S]+)$/i
+    );
+
+    if (!match) {
+      return res.status(404).end();
+    }
+
+    const mimeType =
+      String(match[1] || entry.mimeType || "image/jpeg")
+        .replace(/[\r\n]/g, "")
+        .slice(0, 100);
+
+    let bytes;
+    try {
+      bytes = Buffer.from(match[2], "base64");
+    } catch (e) {
+      return res.status(422).end();
+    }
+
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Length", String(bytes.length));
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    return res.send(bytes);
+  } catch (err) {
+    console.error("Media file load error:", err);
+    return res.status(500).end();
+  }
+});
+
 app.get("/media/load", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
@@ -2710,17 +2804,40 @@ app.post("/media/save", async (req, res) => {
         expectedSyncRev,
         serverSyncRev:
           current.syncRev,
-        media:
-          current.media,
       });
     }
 
     const nextSyncRev =
       current.syncRev + 1;
 
+    /*
+     * PERFORMANCE v17:
+     * The browser sends only transient/newly changed image entries. Merge them
+     * into the authoritative library instead of requiring the browser to
+     * download and resend every historical base64 image.
+     */
+    const mergedMedia = {
+      ...(current.media || {}),
+      ...(media || {}),
+    };
+
+    const mergedMediaJson = JSON.stringify(mergedMedia);
+
+    if (
+      mergedMediaJson.length >
+      45 * 1024 * 1024
+    ) {
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
+      return res.status(413).json({
+        error: "Media library is too large.",
+      });
+    }
+
     const envelope =
       makeMediaEnvelope(
-        media,
+        mergedMedia,
         nextSyncRev
       );
 

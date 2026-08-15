@@ -1,4 +1,4 @@
-/* MÁSVILÁG BUILD v16 — STARTUP/FREEZE PERFORMANCE ONLY — 20260815_2042 */
+/* MÁSVILÁG BUILD v17 — LAZY MEDIA STARTUP PERFORMANCE ONLY — 20260815_2038 */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -1890,7 +1890,19 @@ const mediaDataUrl = (media, id) => {
 const resolveImg = (src, media) => {
   if (!src) return "";
   const id = imageIdOf(src);
-  if (id) return mediaDataUrl(media, id);
+  if (id) {
+    const local = mediaDataUrl(media, id);
+    if (local) return local;
+
+    /*
+     * PERFORMANCE v17:
+     * Persisted cloud images are no longer hydrated into one giant base64
+     * object at startup. The browser requests the exact image only when an
+     * <img> actually needs it. Fresh unsaved uploads still use the local
+     * dataURL above until their cloud save succeeds.
+     */
+    return backendUrl(`/media/file/${encodeURIComponent(id)}`);
+  }
   return src;
 };
 
@@ -54539,82 +54551,84 @@ const signOut = useCallback(async () => {
     let alive = true;
     mediaReady.current = false;
 
+    const offline =
+      typeof navigator !== "undefined" &&
+      navigator.onLine === false;
+
     /*
-     * FONTOS: a cloud media betöltése közben a játékos már tölthet fel képet.
-     * Megjegyezzük, milyen media-state-ről indult a load, hogy a közben
-     * létrejött friss lokális image ID-kat a később beérkező régebbi
-     * szerverválasz ne tudja eltüntetni.
+     * PERFORMANCE v17 — LAZY CLOUD MEDIA BOOT
+     *
+     * ONLINE:
+     * Do NOT read/parse the old local full-media cache and do NOT download the
+     * complete PostgreSQL media JSON. Only fetch its tiny revision number.
+     * Persisted images are served individually by /media/file/:id through
+     * resolveImg(). This removes the multi-copy base64 memory spike that could
+     * freeze the browser before DevTools could even open.
+     *
+     * OFFLINE:
+     * Keep the existing full local emergency-media behavior unchanged.
      */
-    const mediaAtLoadStart =
-      mediaFingerprint(
-        mediaRef.current || {}
-      );
+    const bootMedia = async () => {
+      if (!offline) {
+        try {
+          const version = await serverMediaVersion();
+          if (!alive) return;
 
-    loadMedia(
-      code,
-      wRef.current
-    ).then((result) => {
-      if (!alive) return;
+          mediaSyncRev.current = Math.max(
+            0,
+            Math.floor(Number(version && version.syncRev) || 0)
+          );
 
-      const loaded =
-        result &&
-        result.media
-          ? result.media
-          : {};
+          /* Keep only transient local uploads in RAM. On a normal online boot
+             there are none; persisted images stream lazily from the backend. */
+          const transient = mediaRef.current || {};
+          mediaRef.current = transient;
+          setMedia(transient);
+          lastSavedMedia.current = mediaFingerprint(transient);
 
-      const localNow =
-        mediaRef.current || {};
+          mediaReady.current = true;
+          setMediaLoadEpoch((n) => n + 1);
+          return;
+        } catch (e) {
+          console.warn("Lightweight media initialization failed:", e);
+          /* Do not fall back to a giant cloud media download online. Images can
+             still request /media/file/:id independently once connectivity
+             recovers. */
+          if (!alive) return;
+          mediaReady.current = true;
+          setMediaLoadEpoch((n) => n + 1);
+          return;
+        }
+      }
 
-      const localChangedDuringLoad =
-        mediaFingerprint(
-          localNow
-        ) !== mediaAtLoadStart;
+      try {
+        const result = await loadMedia(code, wRef.current);
+        if (!alive) return;
 
-      const installedMedia =
-        localChangedDuringLoad
-          ? mergeIncomingMediaPreservingUnsavedLocal(
-              loaded,
-              localNow,
-              mediaAtLoadStart
-            )
-          : loaded;
+        const loaded =
+          result && result.media
+            ? result.media
+            : {};
 
-      mediaSyncRev.current =
-        Math.max(
+        mediaSyncRev.current = Math.max(
           0,
-          Math.floor(
-            Number(
-              result &&
-              result.syncRev
-            ) || 0
-          )
+          Math.floor(Number(result && result.syncRev) || 0)
         );
 
-      setMedia(installedMedia);
-      mediaRef.current = installedMedia;
+        mediaRef.current = loaded;
+        setMedia(loaded);
+        lastSavedMedia.current = mediaFingerprint(loaded);
+        mediaReady.current = true;
+        setMediaLoadEpoch((n) => n + 1);
+      } catch (e) {
+        if (!alive) return;
+        console.warn("Offline media initialization failed:", e);
+        mediaReady.current = true;
+        setMediaLoadEpoch((n) => n + 1);
+      }
+    };
 
-      /*
-       * A lastSaved fingerprint továbbra is a valóban cloudból érkezett
-       * állapot legyen. Ha közben új lokális kép született, így az autosave
-       * dirtynek látja és fel is tölti a szerverre.
-       */
-      lastSavedMedia.current =
-        mediaFingerprint(
-          loaded
-        );
-      mediaReady.current = true;
-      setMediaLoadEpoch((n) => n + 1);
-    }).catch((e) => {
-      if (!alive) return;
-
-      console.warn(
-        "Media initialization failed:",
-        e
-      );
-
-      mediaReady.current = true;
-      setMediaLoadEpoch((n) => n + 1);
-    });
+    void bootMedia();
 
     return () => {
       alive = false;
@@ -54623,6 +54637,20 @@ const signOut = useCallback(async () => {
 
   useEffect(() => {
     if (!world || !code || !mediaReady.current) return;
+
+    /*
+     * PERFORMANCE v17:
+     * Current worlds were already image-normalized by the one-time migration.
+     * normalizeWorldImages() starts with JSON.stringify/JSON.parse of the
+     * ENTIRE world, so running it again after every boot defeats lazy media.
+     */
+    if (
+      Number(world.clientDataRepairVersion || 0) >=
+      CLIENT_DATA_REPAIR_VERSION
+    ) {
+      return;
+    }
+
     const normalized = normalizeWorldImages(world, mediaRef.current || {});
     if (!normalized.changed) return;
     mediaRef.current = normalized.media;
@@ -54877,40 +54905,15 @@ const signOut = useCallback(async () => {
                 alive &&
                 remoteMediaRev !== mediaSyncRev.current
               ) {
-                const mediaResult = await loadMedia(
-                  current.code,
-                  wRef.current
-                );
-
-                if (
-                  alive &&
-                  mediaResult &&
-                  mediaResult.mode === "cloud"
-                ) {
-                  const incomingMedia =
-                    mergeIncomingMediaPreservingUnsavedLocal(
-                      mediaResult.media || {},
-                      mediaRef.current || {},
-                      lastSavedMedia.current
-                    );
-
-                  const incomingJson = mediaFingerprint(incomingMedia);
-
-                  mediaSyncRev.current = Math.max(
-                    0,
-                    Math.floor(Number(mediaResult.syncRev) || 0)
-                  );
-
-                  if (
-                    incomingJson !==
-                    mediaFingerprint(mediaRef.current || {})
-                  ) {
-                    mediaRef.current = incomingMedia;
-                    setMedia(incomingMedia);
-                  }
-
-                  lastSavedMedia.current = incomingJson;
-                }
+                /*
+                 * PERFORMANCE v17:
+                 * Persisted media is lazy. A remote revision change therefore
+                 * only updates the revision scalar; individual image URLs load
+                 * their own authoritative bytes when rendered. Never hydrate
+                 * the entire image library just because another device changed
+                 * one image.
+                 */
+                mediaSyncRev.current = remoteMediaRev;
               }
             }
           } catch (e) {
@@ -55204,20 +55207,32 @@ const signOut = useCallback(async () => {
               mediaRef.current || {}
             );
 
-          if (
-            currentJson === mediaJson &&
-            acceptedJson !== currentJson
-          ) {
-            mediaRef.current =
-              acceptedMedia;
+          if (result.mode === "cloud" && currentJson === mediaJson) {
+            /*
+             * PERFORMANCE v17:
+             * The upload is now durable on the backend. Release its potentially
+             * huge base64 string from React/RAM; resolveImg() immediately
+             * switches the same imageRef to /media/file/:id.
+             */
+            mediaRef.current = {};
+            setMedia({});
+            lastSavedMedia.current = "";
+          } else {
+            if (
+              currentJson === mediaJson &&
+              acceptedJson !== currentJson
+            ) {
+              mediaRef.current =
+                acceptedMedia;
 
-            setMedia(
-              acceptedMedia
-            );
+              setMedia(
+                acceptedMedia
+              );
+            }
+
+            lastSavedMedia.current =
+              acceptedJson;
           }
-
-          lastSavedMedia.current =
-            acceptedJson;
 
           setSaveState(
             result.mode === "cloud"
