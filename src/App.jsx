@@ -8360,23 +8360,23 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
   )
 );
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
-const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
-const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(4, Math.min(10, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 6)));
+const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(15000, Math.min(120000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 30000));
+const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(3, Math.min(8, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 4)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
 const LIVE_WORLD_DM_TARGET_MS = Math.max(45 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 75 * 1000));
 const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2 * 60 * 1000, Math.min(12 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 3 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
 const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
-const AI_BACKGROUND_GAP_MS = Math.max(800, Math.min(12000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 1600));
-const AI_INITIATIVE_GAP_MS = Math.max(350, Math.min(8000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 700));
+const AI_BACKGROUND_GAP_MS = Math.max(2500, Math.min(15000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 5000));
+const AI_INITIATIVE_GAP_MS = Math.max(1200, Math.min(10000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 2500));
 
 const AI = {
   chain: Promise.resolve(),  // kompatibilitás miatt marad
   last: 0,                   // mikor futott le az utolsó AI-hívás
   gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
-  interactiveGap: 350,       // gyors játékosi DM/group/RP lane
+  interactiveGap: 1200,       // gyors játékosi DM/group/RP lane
   initiativeGap: AI_INITIATIVE_GAP_MS, // gyors autonóm DM / event / group lane
-  maxConcurrent: Math.max(1, Math.min(2, Number(import.meta.env.VITE_AI_MAX_CONCURRENT) || 2)),
+  maxConcurrent: 1, // Provider cooldown/rate-limit safety: never overlap provider requests
   activeWorkers: 0,
 
   /*
@@ -8387,7 +8387,7 @@ const AI = {
    * ritmusban a szolgáltatóra.
    */
   lastCostGap: 0,
-  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 60000),
+  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 32000),
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
@@ -8856,8 +8856,8 @@ async function askJSON(system, prompt, options = {}) {
        */
       const maxBusyWaits =
         priority >= 50
-          ? 4   // játékosi DM/group chat: több belső retry, látható banner nélkül
-          : 2;  // első busy + legfeljebb 1 újrapróbálás
+          ? 1   // player action: one provider-guided retry, then return to queue
+          : 0;  // background: NEVER retry a 429/529/503 in the same request cycle
 
       while (
         tries < maxTries &&
@@ -8925,12 +8925,15 @@ async function askJSON(system, prompt, options = {}) {
               throw tooLong;
             }
 
+            if (priority < 50) {
+              err.retryable = false;
+              throw err;
+            }
+
             await wait(
               Math.min(
                 left + 250,
-                priority >= 50
-                  ? interactiveWaitCap
-                  : 20000
+                interactiveWaitCap
               )
             );
             continue;
@@ -19603,7 +19606,7 @@ const AUTO_DEFAULT = {
   ),
 };
 
-const LIVE_WORLD_MIN_ACTION_GAP_MS = 7000;
+const LIVE_WORLD_MIN_ACTION_GAP_MS = 12000;
 
 async function loadAuto() {
   try {
