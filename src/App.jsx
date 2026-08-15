@@ -1124,6 +1124,14 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   -webkit-backdrop-filter:blur(14px);
 }
 
+.scene-create-action-hint {
+  margin:0 0 7px;
+  color:var(--muted);
+  font-size:11px;
+  line-height:1.3;
+  text-align:center;
+}
+
 .scene-create-actions .btn {
   min-height:50px;
 }
@@ -1433,13 +1441,20 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     min-height: 42px;
   }
 
-/* ---------- ROLEPLAY / EVENT CREATOR MOBILE ---------- */
+/* ---------- ROLEPLAY / EVENT CREATOR MOBILE — v75 HARD FIX ---------- */
   .scene-create-scrim {
+    /*
+     * iOS/Safari: a régi bottom:72px + height:auto kombináció a vizuális
+     * viewport és a billentyűzet között rossz magasságot tudott adni, ezért a
+     * Start Event footer egyes telefonokon a képernyőn kívül / a nav mögött
+     * maradt. A modal most ténylegesen a VISUAL viewport teljes magasságát kapja.
+     */
     position:fixed !important;
-    inset:0 0 72px 0 !important;
+    inset:0 !important;
     width:100% !important;
-    height:auto !important;
-    z-index:150 !important;
+    height:var(--scene-create-vh, 100svh) !important;
+    max-height:var(--scene-create-vh, 100svh) !important;
+    z-index:220 !important;
     display:block !important;
     padding:0 !important;
     margin:0 !important;
@@ -1449,21 +1464,36 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     -webkit-backdrop-filter:none !important;
   }
 
+  @supports (height: 100dvh) {
+    .scene-create-scrim {
+      height:var(--scene-create-vh, 100dvh) !important;
+      max-height:var(--scene-create-vh, 100dvh) !important;
+    }
+  }
+
   .scene-create-sheet {
     position:relative !important;
+    display:flex !important;
+    flex-direction:column !important;
     width:100% !important;
     max-width:none !important;
     height:100% !important;
-    max-height:none !important;
+    max-height:100% !important;
+    min-height:0 !important;
     margin:0 !important;
     padding:0 !important;
     border:0 !important;
     border-radius:0 !important;
     background:var(--ink) !important;
+    overflow:hidden !important;
   }
 
   .scene-create-header {
+    flex:0 0 auto !important;
+    position:relative;
+    z-index:8;
     padding:calc(10px + env(safe-area-inset-top)) 14px 10px !important;
+    background:rgba(10,9,16,.99) !important;
   }
 
   .scene-create-header h2 {
@@ -1473,10 +1503,18 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   .scene-create-close {
     min-width:42px !important;
     min-height:42px !important;
+    touch-action:manipulation;
   }
 
   .scene-create-scroll {
-    padding:2px 14px 18px !important;
+    flex:1 1 auto !important;
+    min-height:0 !important;
+    overflow-y:auto !important;
+    overflow-x:hidden !important;
+    padding:2px 14px 22px !important;
+    -webkit-overflow-scrolling:touch;
+    overscroll-behavior-y:contain;
+    touch-action:pan-y;
   }
 
   .scene-create-section {
@@ -1500,30 +1538,31 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     max-height:150px;
   }
 
+  /* Mobilon ne egy keskeny vízszintes carouselből kelljen szereplőt vadászni. */
   .scene-cast-picker {
-    flex-wrap:nowrap !important;
-    overflow-x:auto !important;
-    overflow-y:hidden !important;
-    margin-left:-14px;
-    margin-right:-14px;
-    padding:1px 14px 8px;
-    scroll-padding-left:14px;
+    display:grid !important;
+    grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+    gap:8px !important;
+    max-height:190px;
+    overflow-y:auto !important;
+    overflow-x:hidden !important;
+    margin:8px 0 0 !important;
+    padding:1px 1px 7px !important;
     -webkit-overflow-scrolling:touch;
-    scrollbar-width:none;
-  }
-
-  .scene-cast-picker::-webkit-scrollbar {
-    display:none;
   }
 
   .scene-cast-chip {
-    flex:0 0 auto;
-    min-height:42px;
-    max-width:210px;
+    width:100%;
+    min-width:0;
+    min-height:44px;
+    max-width:none;
+    justify-content:flex-start;
+    touch-action:manipulation;
   }
 
   .scene-idea-btn {
     min-height:48px !important;
+    touch-action:manipulation;
   }
 
   .scene-create-pair {
@@ -1534,16 +1573,26 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   .scene-create-advanced-toggle {
     min-height:48px;
     text-align:left;
+    touch-action:manipulation;
   }
 
   .scene-create-actions {
+    /* Mindig látható a scroll és az iOS billentyűzet fölött. */
+    flex:0 0 auto !important;
+    position:relative !important;
+    z-index:12 !important;
     padding:9px 14px !important;
     padding-bottom:calc(9px + env(safe-area-inset-bottom)) !important;
+    background:rgba(10,9,16,.995) !important;
+    border-top:1px solid var(--line) !important;
+    box-shadow:0 -10px 24px rgba(0,0,0,.28);
   }
 
   .scene-create-actions .btn {
-    min-height:52px !important;
-    font-size:14px;
+    min-height:54px !important;
+    font-size:15px;
+    touch-action:manipulation;
+    -webkit-tap-highlight-color:transparent;
   }
 
 }
@@ -3982,7 +4031,7 @@ function visualCrushThreadConflictCandidate(w, postId, preferredCommentIds = [])
 
   const romanticComment = recentComments.find((row) => {
     if (isHuman(w, row.authorId) || !isKnownAdultCharacter(w, row.authorId)) return false;
-    return bondLooksRomantic(getRel(w, row.authorId, post.authorId));
+    return relationshipRomanceActive(w, row.authorId, post.authorId, getRel(w, row.authorId, post.authorId));
   });
 
   if (!romanticComment) return null;
@@ -3991,7 +4040,7 @@ function visualCrushThreadConflictCandidate(w, postId, preferredCommentIds = [])
     .filter((c) => c && !isHuman(w, c.id))
     .filter((c) => c.id !== romanticComment.authorId && c.id !== post.authorId)
     .filter((c) => isKnownAdultCharacter(w, c.id))
-    .filter((c) => bondLooksRomantic(getRel(w, c.id, post.authorId)))
+    .filter((c) => relationshipRomanceActive(w, c.id, post.authorId, getRel(w, c.id, post.authorId)))
     .map((c) => {
       const lore = commentPersonalityText(c);
       const toPoster = getRel(w, c.id, post.authorId);
@@ -4586,7 +4635,7 @@ function applyChanges(
         delta
       );
 
-    const bondEvolution =
+    let bondEvolution =
       evolvedBondForChange(
         r,
         ch,
@@ -4599,6 +4648,34 @@ function applyChanges(
         r.type ||
         ""
       );
+
+    const romanceState =
+      romanceOrientationState(
+        n,
+        a,
+        b
+      );
+
+    /*
+     * AI may not create a brand-new orientation-incompatible romantic bond.
+     * Existing specialized metadata is not destructively deleted here, but
+     * relationshipRomanceActive() will no longer treat it as active attraction.
+     */
+    if (
+      romanceState.blocked &&
+      romanticRelationshipText(bondEvolution.bond) &&
+      !romanticRelationshipText(oldBond)
+    ) {
+      const safeBond =
+        oldBond ||
+        canonicalSocialBondFromScore(nextScore);
+
+      bondEvolution = {
+        bond: safeBond,
+        changed: safeBond !== oldBond,
+        source: "orientation-guard",
+      };
+    }
 
     const patch = {
       score:
@@ -4622,7 +4699,8 @@ function applyChanges(
     }
 
     if (
-      ch.mood
+      ch.mood &&
+      !(romanceState.blocked && romanticRelationshipText(ch.mood))
     ) {
       patch.mood =
         String(
@@ -5030,7 +5108,10 @@ function applyPlayerLikeRelationshipSignal(
     );
 
   const romantic =
-    bondLooksRomantic(
+    relationshipRomanceActive(
+      n,
+      authorId,
+      playerId,
       rel
     );
 
@@ -7166,7 +7247,7 @@ function characterIntensityDirective(c) {
     rows.push("VISSZAFOGOTTSÁG MAGVONÁS: az erős érzelem nem változtathatja automatikusan beszédessé vagy vallomásossá. A feszültség inkább kerülésben, rövidségben, testbeszédben, késleltetett válaszban vagy apró gesztusban szivárogjon ki.");
   }
   if (/flirt|flört|charming|elbűvölő|seduct|csábít/.test(lore)) {
-    rows.push("FLÖRT / CHARM MAGVONÁS: megfelelő célpontnál és helyzetben ténylegesen használja. Ne lapítsd általános kedvességgé; a saját stílusában kezdeményezhet, tesztelhet, ugratással közeledhet vagy direkt lehet.");
+    rows.push("FLÖRT / CHARM MAGVONÁS: csak ORIENTÁCIÓVAL KOMPATIBILIS, ténylegesen romantikusan releváns célpontnál és helyzetben használja romantikusan. Inkompatibilis baráttal ugyanez a charm maradjon platonikus játékosság/karizma; ne hajtson rá. Megfelelő célpontnál ne lapítsd általános kedvességgé: a saját stílusában kezdeményezhet, tesztelhet, ugratással közeledhet vagy direkt lehet.");
   }
   if (!rows.length) return "";
   return `KARAKTERINTENZITÁS — KÖTELEZŐ FOLYTONOSSÁG:
@@ -7608,7 +7689,7 @@ function visualPostRelationshipPriority(w, actorId, targetId, post) {
   if (
     visual.adultAuthor &&
     isKnownAdultCharacter(w, actorId) &&
-    bondLooksRomantic(rel)
+    relationshipRomanceActive(w, actorId, targetId, rel)
   ) {
     priority += visual.adultHighAttention ? 78 : visual.appearanceForward ? 62 : 46;
   }
@@ -7650,7 +7731,7 @@ function visualPostReactionRole(w, c, post) {
   if (
     visual.adultAuthor &&
     isKnownAdultCharacter(w, c.id) &&
-    bondLooksRomantic(rel)
+    relationshipRomanceActive(w, c.id, post.authorId, rel)
   ) {
     return "crush/romantic interest — stronger visual attention, attraction, flustered/flirty/jealous subtext if character-faithful";
   }
@@ -7696,6 +7777,7 @@ VISUAL POST REACTION ENGINE — THIS IMAGE MATTERS:
 - Friends and best friends should usually look recognizably supportive on a strong selfie/outfit/photo: specific praise, hype, affectionate teasing, nicknames or familiar shorthand are all natural when that is how they communicate.
 - Enemies/rivals who choose to comment should NOT randomly become fans. They can be dismissive, sarcastic, backhanded, competitive, provocative or intentionally unimpressed. Ignoring/like-refusal is also valid.
 - Crushes/romantic interests should receive noticeably stronger visual attention than neutral people. Their reaction may be flirty, flustered, too attentive, jealous, possessive or trying to play it cool depending on personality and public mask.
+- ORIENTATION IS A HARD GATE: a straight/gay/etc. character whose orientation does not support attraction to the poster must stay platonic even if they are naturally flirty. Friend hype, "you look good/hot", affectionate teasing or emojis can remain friendly without becoming romantic interest.
 - MULTIPLE CRUSHES: if two or more adult characters have genuine romantic/crush interest in the author, they are allowed to notice EACH OTHER'S comments. They may compete, tease, get territorial, snipe, defend their claim, challenge each other or start a short public argument when their personalities/relationships support it. Do not force a fight if they would realistically stay quiet or friendly.
 - Do not make the whole section one-note. A visually attention-grabbing post can naturally get praise + flirting + jealousy + a rival jab + jokes at the same time, but each reaction must come from a real relationship.
 - For this image, if enough relevant characters exist, aim for roughly ${visual.targetMin}-${visual.targetMax} visible comments/replies over the fresh thread rather than treating it like a quiet text-only post.
@@ -7721,7 +7803,10 @@ function visualCrushThreadFrictionInstruction(w, post, commenterId, responderId)
   const aRel = getRel(w, commenterId, post.authorId);
   const bRel = getRel(w, responderId, post.authorId);
 
-  if (!bondLooksRomantic(aRel) || !bondLooksRomantic(bRel)) return "";
+  if (
+    !relationshipRomanceActive(w, commenterId, post.authorId, aRel) ||
+    !relationshipRomanceActive(w, responderId, post.authorId, bRel)
+  ) return "";
 
   return `
 MULTI-CRUSH VISUAL THREAD:
@@ -7750,8 +7835,7 @@ function commentReactionLenses(w, c, targetId, post) {
 
   /* Relationship gives the emotional lane; personality decides its delivery. */
   if (
-    bondLooksRomantic(rel) ||
-    /crush|dating|partner|spouse|szerel|vonzalom/.test(bond)
+    relationshipRomanceActive(w, c.id, targetId, rel)
   ) {
     push(
       "subtle flirt or charged attention without a generic compliment",
@@ -7813,7 +7897,11 @@ function commentReactionLenses(w, c, targetId, post) {
     push("very short understated reaction", "quietly specific question", "like-only instead of forced chatter");
   }
   if (/flirt|flört|csábít|seductive|tease/.test(lore)) {
-    push("character-specific flirt, not a stock compliment", "playful double meaning if the post supports it");
+    if (romanceTargetAllowed(w, c.id, targetId)) {
+      push("character-specific flirt, not a stock compliment", "playful double meaning if the post supports it");
+    } else {
+      push("playful/charming but explicitly platonic banter", "warm teasing with NO romantic or sexual subtext");
+    }
   }
   if (/jealous|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(lore)) {
     push("territorial or jealous subtext only when there is a visible trigger", "too-attentive detail that reveals fixation");
@@ -7977,7 +8065,11 @@ function commentPublicBehaviorCard(w, c, targetId) {
   }
 
   if (/flirt|flört|seduct|csábít|tease/.test(lore)) {
-    bits.push("Flört csak akkor jelenjen meg, ha a helyzet + kapcsolat tényleg támogatja; a nyilvános flört intenzitása illeszkedjen ahhoz, mennyire vállalja fel ezt mások előtt.");
+    if (romanceTargetAllowed(w, c.id, targetId)) {
+      bits.push("Flört csak akkor jelenjen meg, ha a helyzet + kapcsolat tényleg támogatja; a nyilvános flört intenzitása illeszkedjen ahhoz, mennyire vállalja fel ezt mások előtt.");
+    } else {
+      bits.push("ORIENTÁCIÓ-ZÁR: ennél a célpontnál a flörtölős/charming személyiség kizárólag PLATONIKUS játékosságként, baráti ugratásként vagy karizmatikus melegségként jelenhet meg. Ne hajtson rá és ne adjon romantikus/szexuális felhangot.");
+    }
   }
 
   if (/aggress|agress|violent|erőszak|dominant|domináns|danger|veszély|ruthless|könyörtelen|intimidat|megféleml/.test(lore)) {
@@ -8676,6 +8768,33 @@ function sanitizeSocialUiMetaText(value) {
     .filter((part) => !SOCIAL_UI_PHONE_NAG_RE.test(part));
 
   return parts.join(" ").trim();
+}
+
+/* v77: ROLEPLAY / EVENT CONTENT NEVER USES EMOJI.
+   This is a deterministic output guard, not only a prompt preference. It is
+   deliberately applied to AI-generated scene text while preserving the
+   player's own typed roleplay text exactly as entered. */
+function stripRoleplayEmoji(value) {
+  return String(value == null ? "" : value)
+    .replace(/[#*0-9]\uFE0F?\u20E3/gu, "")
+    .replace(/[\u{1F1E6}-\u{1F1FF}]{2}/gu, "")
+    .replace(/\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?)*/gu, "")
+    .replace(/[\uFE0E\uFE0F\u200D]/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .replace(/^[ \t]+|[ \t]+$/gm, "")
+    .trim();
+}
+
+function sanitizeRoleplayAiOutput(value) {
+  if (typeof value === "string") return stripRoleplayEmoji(value);
+  if (Array.isArray(value)) return value.map((item) => sanitizeRoleplayAiOutput(item));
+  if (!value || typeof value !== "object") return value;
+  const out = {};
+  Object.keys(value).forEach((key) => {
+    out[key] = sanitizeRoleplayAiOutput(value[key]);
+  });
+  return out;
 }
 
 function cleanGeneratedUtterance(
@@ -9470,6 +9589,242 @@ function connectionRelationshipCue(actor, target) {
   };
 }
 
+
+/* -------------------------------------------------------------------------
+   ORIENTATION / ROMANCE TARGET GUARD — v74
+
+   Orientation is identity canon, not flavor text. A generally flirty, warm,
+   affectionate or chaotic personality must NOT turn a platonic friend into a
+   romantic target when the actor's explicit orientation rules that target out.
+
+   Deliberate target-specific self-canon in Connections can override the broad
+   orientation label (e.g. an intentionally written exception/identity-conflict
+   storyline). Dynamic relationship metadata alone cannot create that exception.
+   ------------------------------------------------------------------------- */
+function characterGenderAttractionClass(character) {
+  const raw = String(character && character.gender || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!raw) return "unknown";
+
+  if (/\b(?:trans\s*woman|transwoman|woman|female|girl|nő|no|lány|lany)\b/i.test(raw)) {
+    return "female";
+  }
+
+  if (/\b(?:trans\s*man|transman|man|male|boy|férfi|ferfi|fiú|fiu)\b/i.test(raw)) {
+    return "male";
+  }
+
+  if (/\b(?:non[- ]?binary|nonbinary|enby|genderfluid|gender[- ]?fluid|agender|nb|nem[- ]?bináris|nembináris)\b/i.test(raw)) {
+    return "nonbinary";
+  }
+
+  return "unknown";
+}
+
+function characterOrientationAttractionClass(character) {
+  const raw = String(character && character.orientation || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!raw) return "unknown";
+
+  if (/\b(?:aroace|aromantic|aromantikus)\b/i.test(raw)) return "none";
+
+  if (/\b(?:bisexual|biszexu[aá]lis|biszex|pansexual|p[aá]nszexu[aá]lis|omnisexual|omniszexu[aá]lis|queer|fluid)\b/i.test(raw)) {
+    return "multi";
+  }
+
+  if (/\b(?:lesbian|leszbikus|homosexual|homoszexu[aá]lis|gay|meleg)\b/i.test(raw)) {
+    return "same";
+  }
+
+  if (/\b(?:straight|heterosexual|heteroszexu[aá]lis|hetero)\b/i.test(raw)) {
+    return "opposite";
+  }
+
+  return "unknown";
+}
+
+function romanceOrientationState(w, actorId, targetId) {
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+
+  if (!actor || !target || actorId === targetId) {
+    return {
+      blocked: false,
+      known: false,
+      actorGender: "unknown",
+      targetGender: "unknown",
+      orientation: "unknown",
+      explicitTargetException: false,
+      reason: "unknown",
+    };
+  }
+
+  /*
+   * Only target-specific PRIVATE SELF-canon can deliberately override a broad
+   * orientation label. A generated rel.bond/mood/hidden value cannot.
+   */
+  const explicitTargetException =
+    Boolean(connectionRelationshipCue(actor, target).romantic);
+
+  if (explicitTargetException) {
+    return {
+      blocked: false,
+      known: true,
+      actorGender: characterGenderAttractionClass(actor),
+      targetGender: characterGenderAttractionClass(target),
+      orientation: characterOrientationAttractionClass(actor),
+      explicitTargetException: true,
+      reason: "explicit-target-self-canon",
+    };
+  }
+
+  const actorGender = characterGenderAttractionClass(actor);
+  const targetGender = characterGenderAttractionClass(target);
+  const orientation = characterOrientationAttractionClass(actor);
+
+  if (orientation === "none") {
+    return {
+      blocked: true,
+      known: true,
+      actorGender,
+      targetGender,
+      orientation,
+      explicitTargetException: false,
+      reason: "aromantic",
+    };
+  }
+
+  if (orientation === "multi") {
+    return {
+      blocked: false,
+      known: true,
+      actorGender,
+      targetGender,
+      orientation,
+      explicitTargetException: false,
+      reason: "multi-gender-attraction",
+    };
+  }
+
+  const binaryPair =
+    (actorGender === "male" || actorGender === "female") &&
+    (targetGender === "male" || targetGender === "female");
+
+  /*
+   * Unknown/nonbinary cases stay open instead of guessing how a broad label
+   * maps to a specific nonbinary person.
+   */
+  if (!binaryPair || orientation === "unknown") {
+    return {
+      blocked: false,
+      known: false,
+      actorGender,
+      targetGender,
+      orientation,
+      explicitTargetException: false,
+      reason: "insufficient-orientation-data",
+    };
+  }
+
+  const sameGender = actorGender === targetGender;
+
+  if (orientation === "opposite") {
+    return {
+      blocked: sameGender,
+      known: true,
+      actorGender,
+      targetGender,
+      orientation,
+      explicitTargetException: false,
+      reason: sameGender ? "straight-same-gender-target" : "straight-compatible-target",
+    };
+  }
+
+  if (orientation === "same") {
+    return {
+      blocked: !sameGender,
+      known: true,
+      actorGender,
+      targetGender,
+      orientation,
+      explicitTargetException: false,
+      reason: !sameGender ? "same-gender-orientation-opposite-target" : "same-gender-compatible-target",
+    };
+  }
+
+  return {
+    blocked: false,
+    known: false,
+    actorGender,
+    targetGender,
+    orientation,
+    explicitTargetException: false,
+    reason: "unknown",
+  };
+}
+
+function romanceTargetAllowed(w, actorId, targetId) {
+  return !romanceOrientationState(w, actorId, targetId).blocked;
+}
+
+function relationshipRomanceActive(w, actorId, targetId, rel = null) {
+  if (!romanceTargetAllowed(w, actorId, targetId)) return false;
+
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+
+  return Boolean(
+    bondLooksRomantic(rel || getRel(w, actorId, targetId)) ||
+    (actor && target && connectionRelationshipCue(actor, target).romantic)
+  );
+}
+
+function romanticRelationshipText(value) {
+  return /(?:\bcrush\b|mutual\s+crush|secret\s+crush|dating|girlfriend|boyfriend|wife|husband|spouse|lover|romantic|romance|in\s+love|love\s+interest|attraction|attracted|flirt|fl[oö]rt|vonzalom|vonz[oó]d|szerelmes|szerelem|járnak|randi)/i.test(
+    String(value || "")
+  );
+}
+
+function orientationBlockedRomanceInstruction(w, actorId, targetId) {
+  const state = romanceOrientationState(w, actorId, targetId);
+  if (!state.blocked) return "";
+
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target) return "";
+
+  const en = worldLanguage(w, w.meId) === "en";
+
+  return en
+    ? `ORIENTATION HARD LOCK: ${actor.name}'s explicit orientation does NOT support romantic/sexual attraction toward ${target.name}. Keep warmth, praise, teasing, loyalty and affection PLATONIC. Do NOT flirt, hit on them, imply sexual/romantic desire, create romantic jealousy/territoriality, propose kissing/dating/hooking up, or turn friendship closeness into a crush. A generic "flirty/playful/charming" personality NEVER overrides orientation. Dynamic AI-generated crush/mood/bond metadata cannot override it.`
+    : `ORIENTÁCIÓ — KEMÉNY ZÁR: ${actor.name} explicit orientációja NEM támogat romantikus/szexuális vonzalmat ${target.name} iránt. A kedvesség, bók, ugratás, lojalitás és szeretet maradjon PLATONIKUS. NE flörtöljön vele, NE hajtson rá, NE sugalljon romantikus/szexuális vágyat, NE gyártson romantikus féltékenységet/territorialitást, NE kezdeményezzen csókot/randit/hookupot, és NE alakítsa a baráti közelséget crush-sá. Az általánosan "flörtölős/játékos/charming" személyiség SOHA nem írja felül az orientációt. AI által generált crush/mood/bond metaadat sem írhatja felül.`;
+}
+
+function sanitizeOrientationIncompatibleRomanceText(w, actorId, targetId, value) {
+  const text = String(value || "");
+
+  if (!text || romanceTargetAllowed(w, actorId, targetId)) return text;
+
+  /*
+   * Conservative deterministic backstop. Friendly hype such as "you look hot"
+   * is not deleted; only unmistakable romantic/sexual propositions are blocked.
+   */
+  const unmistakableProposal =
+    /\b(?:kiss\s+me|let\s+me\s+kiss\s+you|i\s+(?:really\s+)?(?:want|wanna)\s+(?:to\s+)?kiss\s+you|i(?:'m|\s+am)\s+(?:really\s+)?into\s+you|i\s+have\s+a\s+crush\s+on\s+you|i(?:'m|\s+am)\s+attracted\s+to\s+you|date\s+me|go\s+out\s+with\s+me|be\s+mine|be\s+my\s+(?:girlfriend|boyfriend|partner)|hook\s+up\s+with\s+me|sleep\s+with\s+me|meg\s+akarlak\s+cs[oó]kolni|megcs[oó]koln[aá]lak|cs[oó]kolj\s+meg|randizz\s+velem|j[aá]rj\s+velem|legy[eé]l\s+a\s+(?:bar[aá]tn[oő]m|bar[aá]tom|p[aá]rom)|szerelmes\s+vagyok\s+bel[eé]d|vonz[oó]dom\s+hozz[aá]d)\b/i.test(text);
+
+  return unmistakableProposal ? "" : text;
+}
+
+function bondLooksRomanticFor(w, actorId, targetId, rel) {
+  return relationshipRomanceActive(w, actorId, targetId, rel);
+}
+
 function preferredTitleSurname(character) {
   const name = String(character && character.name || "").trim();
   if (!name) return "";
@@ -9646,7 +10001,13 @@ function playerInputUnderstandingInstruction(w, rawText, surface = "chat") {
   const text = String(rawText || "").trim();
   if (!text) return "";
   const en = worldLanguage(w, w.meId) === "en";
-  const surfaceName = surface === "roleplay" ? "roleplay turn" : surface === "comment" ? "public comment/reply" : "private message";
+  const surfaceName = surface === "roleplay"
+    ? "roleplay turn"
+    : surface === "post"
+      ? "social media post"
+      : surface === "comment"
+        ? "public comment/reply"
+        : "private message";
   return en
     ? `PLAYER INPUT COMPREHENSION — ${surfaceName.toUpperCase()}:
 - Read the player's exact text for MEANING before deciding tone. Casual English, slang, contractions, lowercase, abbreviations, typos, missing punctuation and non-native phrasing are still meaningful language.
@@ -9882,13 +10243,19 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
         open: scene.open !== false,
       } : null,
     },
-    availableActions: characterAgentSurfaceActions(surface),
+    availableActions: characterAgentSurfaceActions(surface).filter((action) => {
+      if (!targetId || romanceTargetAllowed(w, actorId, targetId)) return true;
+      return action !== "FLIRT" && action !== "INITIATE_ROMANCE";
+    }),
     invariants: [
       "Treat author IDs and reply-target IDs as ground truth; never reassign who said or did something.",
       "[SELF] means this character. A line authored by SELF is this character's own previous statement/action, not the player's.",
       "IDENTITY OWNERSHIP: SELF.name / SELF.first-name / SELF.surname / SELF.nickname / SELF.username all belong to SELF. Never use ANY of SELF's own name variants, nickname or handle as the addressee name for TARGET unless TARGET explicitly has that same alias too. If addressing TARGET by name, use TARGET identity from relationshipToTarget. A speaker must never call the listener by the speaker's own first name, surname, nickname or handle.",
       "Player controls only the player character; never invent the player's unspoken dialogue, actions or thoughts.",
       "Canon + relationship + memory + current context outrank generic drama or generic personality stereotypes.",
+      ...(targetId && !romanceTargetAllowed(w, actorId, targetId)
+        ? ["ORIENTATION HARD LOCK: this target is not a compatible romantic/sexual target for SELF. Keep affection/playfulness platonic; FLIRT and INITIATE_ROMANCE are forbidden unless explicit target-specific SELF Connections canon says otherwise."]
+        : []),
       "Only act on information this character could actually perceive or remember.",
       "Choose only actions supported by this surface and execute them through the requested JSON schema, not by narrating UI clicks.",
     ],
@@ -10818,6 +11185,8 @@ function relationshipBehaviorCard(
 
   const parts = [];
   const connectionCue = connectionRelationshipCue(actor, target);
+  const romanceState = romanceOrientationState(w, actorId, targetId);
+  const romanceAllowed = !romanceState.blocked;
   let filterTier =
     relationshipFilterTier(
       rel
@@ -10883,6 +11252,17 @@ function relationshipBehaviorCard(
       : "RÖVID TÁVÚ FOLYTONOSSÁG: az aktuális promptban szereplő legutóbbi 10-20 közvetlen üzenet/válasz/thread-sor a legerősebb bizonyíték a közvetlen beszélgetési hangulatra. Ha a friss váltás baráti volt, maradjon abban a baráti mederben. Ha MOST valódi konfliktus zajlik, átmenetileg élesedhet a hang. Ne találj ki olyan hangulatváltást, ami nincs benne a friss kontextusban."
   );
 
+  const orientationLock =
+    orientationBlockedRomanceInstruction(
+      w,
+      actorId,
+      targetId
+    );
+
+  if (orientationLock) {
+    parts.push(orientationLock);
+  }
+
   if (connectionCue.snippet) {
     parts.push(
       en
@@ -10939,7 +11319,8 @@ function relationshipBehaviorCard(
 
   if (
     adultRomanceAllowed &&
-    (bondLooksRomantic(rel) || connectionCue.romantic)
+    romanceAllowed &&
+    relationshipRomanceActive(w, actorId, targetId, rel)
   ) {
     parts.push(
       en
@@ -10950,6 +11331,7 @@ function relationshipBehaviorCard(
 
   if (
     adultRomanceAllowed &&
+    romanceAllowed &&
     characterIsFlirty(actor)
   ) {
     parts.push(
@@ -11030,7 +11412,10 @@ function relationshipBehaviorCard(
     );
   }
 
-  if (rel.mood) {
+  if (
+    rel.mood &&
+    !(romanceState.blocked && romanticRelationshipText(rel.mood))
+  ) {
     parts.push(
       en
         ? `current feeling: ${rel.mood}`
@@ -11049,7 +11434,10 @@ function relationshipBehaviorCard(
     }
   }
 
-  if (rel.hidden) {
+  if (
+    rel.hidden &&
+    !(romanceState.blocked && romanticRelationshipText(rel.hidden))
+  ) {
     parts.push(
       en
         ? `hidden feeling (do not state it outright unless it realistically slips): ${rel.hidden}`
@@ -11423,9 +11811,88 @@ function sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, value) {
     .trim();
 }
 
+function directAddressAliasesForCharacter(c) {
+  if (!c) return [];
+  const full = String(c.name || "").replace(/\s+/g, " ").trim();
+  const words = full.split(/\s+/).filter(Boolean);
+  return [
+    full,
+    words[0] || "",
+    words.length > 1 ? words[words.length - 1] : "",
+    preferredTitleSurname(c) || "",
+    c.nick,
+    c.nickname,
+    c.username,
+    c.username ? `@${c.username}` : "",
+  ]
+    .map((x) => String(x || "").replace(/\s+/g, " ").trim())
+    .filter((x) => x.length >= 2)
+    .filter((x, i, arr) => arr.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i);
+}
+
+/*
+ * REPLY TARGET VOCATIVE LOCK — v70
+ *
+ * The model may still generate a perfectly fluent reply while putting the wrong
+ * character's name in direct-address position. That makes a nested thread look
+ * as though the AI is replying to somebody else even when parentId is correct.
+ * We only repair VOCATIVES (opening/trailing direct address), never ordinary
+ * third-person mentions in the middle of a sentence.
+ */
+function sanitizeWrongCharacterVocative(w, actorId, targetId, value) {
+  let text = String(value || "");
+  if (!text || !w || !actorId || !targetId || actorId === targetId) return text;
+
+  const target = charById(w, targetId);
+  if (!target) return text;
+
+  const replacement = preferredDirectAddressForCharacter(w, actorId, targetId) || "";
+  const targetAliases = new Set(directAddressAliasesForCharacter(target).map((x) => x.toLowerCase()));
+  const actor = charById(w, actorId);
+  const actorAliases = new Set(directAddressAliasesForCharacter(actor).map((x) => x.toLowerCase()));
+
+  const people = [
+    w.player,
+    ...((w.chars || []).filter(Boolean)),
+    ...(typeof allGossipMediaAccounts === "function" ? allGossipMediaAccounts(w) : []),
+  ].filter(Boolean);
+
+  const wrongAliases = [];
+  people.forEach((person) => {
+    if (!person || person.id === targetId || person.id === actorId) return;
+    directAddressAliasesForCharacter(person).forEach((alias) => {
+      const low = alias.toLowerCase();
+      if (!low || targetAliases.has(low) || actorAliases.has(low)) return;
+      if (!wrongAliases.some((x) => x.toLowerCase() === low)) wrongAliases.push(alias);
+    });
+  });
+
+  wrongAliases
+    .sort((a, b) => b.length - a.length)
+    .forEach((alias) => {
+      const escaped = regexEscapeLiteral(alias);
+      text = text.replace(
+        new RegExp(`(^|[.!?]\\s+)([\"'“”‘’(]*)(?:${escaped})(\\s*[,!:;—-]\\s*)`, "gi"),
+        (_m, lead, quote, punct) => replacement ? `${lead}${quote}${replacement}${punct}` : `${lead}${quote}`
+      );
+      text = text.replace(
+        new RegExp(`([,;:—-]\\s*)(?:${escaped})(?=\\s*[,;:!?.”’\"']*(?:$|\\n))`, "gi"),
+        (_m, lead) => replacement ? `${lead}${replacement}` : ""
+      );
+    });
+
+  return text
+    .replace(/^[\s,;:—-]+/, "")
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .replace(/ {2,}/g, " ")
+    .trim();
+}
+
 function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
   let text = sanitizeIncorrectSenseiAddress(w, actorId, targetId, value);
   text = sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, text);
+  text = sanitizeWrongCharacterVocative(w, actorId, targetId, text);
+  text = sanitizeOrientationIncompatibleRomanceText(w, actorId, targetId, text);
   return text;
 }
 
@@ -13176,7 +13643,17 @@ function migrate(w) {
       scene.turns = mergeRoleplayTurnStreams(
         scene.turns,
         scene.playerTurnJournal
-      );
+      ).map((turn) => {
+        if (!turn || typeof turn !== "object") return turn;
+        const aiOwned = turn.authorId === "narrator" || (turn.authorId && !isHuman(w, turn.authorId));
+        return aiOwned ? { ...turn, text: stripRoleplayEmoji(turn.text) } : turn;
+      });
+      if (scene.pendingOpening && typeof scene.pendingOpening === "object") {
+        scene.pendingOpening = {
+          ...scene.pendingOpening,
+          text: stripRoleplayEmoji(scene.pendingOpening.text),
+        };
+      }
     });
   }
 
@@ -14254,6 +14731,32 @@ function matureParticipantsAreAdults(
   );
 }
 
+function matureRoleplayToneBoostInstruction(en, allAdults) {
+  if (!allAdults) return "";
+
+  return en
+    ? `
+ROLEPLAY 18+ TONE BOOST — ADULTS ONLY:
+- This scene should read like adult drama/romance, not YA or sanitized PG flirting. When the canon supports it, allow sharper profanity, heavier attraction, adult jealousy, messy desire, morally gray choices, late-night energy, intoxication as an established story element, charged silence and blunt relationship conflict.
+- Be CONCRETE about observable non-graphic intimacy. Instead of vague lines like “the tension rises” or “they share a moment,” an adult character may close the distance, pull the other closer, hold a waist/face/hand, kiss, make out, kiss a neck/shoulder, sit close/on a lap, pin someone against a wall only when consensual and character-accurate, or ask them to move somewhere private. Do not describe anatomy or explicit sex acts.
+- Adult characters may use unmistakably suggestive dialogue, innuendo, dirty-minded jokes, possessive/jealous remarks, daring invitations and direct admissions of wanting someone when that fits their personality and relationship. Do not sterilize obvious adult subtext into innocent friendship.
+- If mutual adult intimacy has already been established, do not trap the scene in endless almost-kisses. It may progress from tension → kissing → making out → private implied intimacy → aftermath, while staying non-graphic and respecting every explicit boundary.
+- Fade-to-black is a TOOL, not an automatic scene ending. After implied intimacy, the roleplay may continue with the observable aftermath: changed physical distance, rumpled appearance, catching breath, silence, humor, awkwardness, tenderness, regret, jealousy, possessiveness, conversation, consequences or a shift in the relationship. Never invent the PLAYER's participation or feelings.
+- Mature does not mean romance-only. Adult scenes may also be harsher, more profane, psychologically tense, violent, manipulative or socially messy when the character canon actually supports it.
+- Do not make every adult interaction sexual. The stronger 18+ tone activates from real attraction, established intimacy, adult humor, conflict or other mature context — not from age alone.
+`
+    : `
+ROLEPLAY 18+ HANGVÉTEL-ERŐSÍTÉS — CSAK FELNŐTTEK KÖZÖTT:
+- A jelenet hasson felnőtt drámának/romantikának, ne YA-s vagy steril PG-flörtnek. Ha a kánon indokolja, lehet erősebb káromkodás, nyersebb vonzalom, felnőtt féltékenység, kusza vágy, morálisan szürkébb döntés, késő esti/afterparty hangulat, történetileg megalapozott alkoholos állapot, feszült csend és direkt kapcsolati konfliktus.
+- A nem grafikus intimitást KONKRÉT, megfigyelhető cselekvésekkel írd. Ne csak azt mondd, hogy „nő a feszültség” vagy „van köztük egy pillanat”: egy felnőtt karakter karakterhűen közelebb léphet, magához húzhatja a másikat, megfoghatja a derekát/arcát/kezét, megcsókolhatja, csókolózást kezdeményezhet, nyakra/vállra adhat csókot, ölbe húzhatja/ölbe ülhet, vagy beleegyezés mellett a falhoz szoríthatja, illetve privátabb helyre hívhatja. Anatómiai vagy explicit szexuális részletezés ne legyen.
+- A felnőtt karakterek használhatnak egyértelműen kétértelmű/szuggesztív párbeszédet, felnőtt célzásokat, pajzán humort, féltékeny/birtokló megjegyzést, merész meghívást vagy direkt vágykifejezést, ha ez tényleg illik hozzájuk és a kapcsolatukhoz. Az egyértelmű felnőtt subtextet ne sterilizáld baráti ártatlansággá.
+- Ha a kölcsönös felnőtt intimitás már ténylegesen kialakult, ne ragadj bele végtelen „majdnem csók” körökbe. A jelenet haladhat feszültség → csók → csókolózás → privát, utalásos intimitás → utóhatás irányban, nem grafikusan és minden explicit határt tiszteletben tartva.
+- A fade-to-black ESZKÖZ, nem automatikus jelenetzárás. Utalásos intimitás után a roleplay tovább mehet a megfigyelhető utóhatással: megváltozott közelség, ziláltabb megjelenés, kifújt levegő, csend, humor, kínosság, gyengédség, megbánás, féltékenység, birtoklás, beszélgetés, következmények vagy kapcsolati fordulat. A JÁTÉKOS részvételét/érzését soha ne találd ki.
+- A Mature nem csak romantikát jelent. A jelenet lehet nyersebb, káromkodósabb, pszichológiailag feszültebb, erőszakosabb, manipulatívabb vagy társadalmilag kuszább is, ha ezt a karakterkánon ténylegesen támogatja.
+- Ne legyen minden felnőtt interakció szexuális. Az erősebb 18+ hang a valós vonzalomból, kialakult intimitásból, felnőtt humorból, konfliktusból vagy más mature kontextusból jöjjön — ne pusztán az életkorból.
+`;
+}
+
 function matureContentInstruction(
   w,
   participantIds = [],
@@ -14289,10 +14792,15 @@ function matureContentInstruction(
           ? "PRIVATE CHAT"
           : "PRIVÁT CHAT";
 
+  const roleplayBoost =
+    channel === "roleplay"
+      ? matureRoleplayToneBoostInstruction(en, allAdults)
+      : "";
+
   if (en) {
     return `
 MATURE 18+ CONTENT MODE — ${channelLabel}:
-
+${roleplayBoost}
 - The tone may be clearly adult, rougher, darker and less sanitized when that fits the characters and situation.
 - Strong profanity, adult humor, alcohol/drug references, threats, toxic dynamics, manipulation, jealousy, obsession, possessiveness, violence, fear and other mature story themes are allowed when character-accurate.
 - Violence may be concrete rather than merely implied: intimidation, shoving, punches, kicks, grappling, takedowns, brawls, restraint, property damage and established combat techniques can occur when the characters and situation support it.
@@ -14301,6 +14809,7 @@ MATURE 18+ CONTENT MODE — ${channelLabel}:
 - Violence must have consequences and memory. A serious confrontation can change fear, respect, hatred, loyalty, obsession, rivalry or revenge motivation.
 - Do not make every scene violent. Escalation must still come from character, motive and current conflict.
 - Romance and attraction may be more intense, direct, suggestive, sensual or sexually charged when it naturally follows from the relationship.
+- ORIENTATION IS HARD IDENTITY CANON: Mature mode never makes a straight/gay/lesbian/etc. character attracted to an orientation-incompatible target. Friendship, a high relationship score, jealousy-prone personality, "flirty/charming" traits or generic adult tension do NOT create attraction. Only an explicit target-specific romantic exception written in that character's own Connections canon may override the broad label.
 - ADULT LANGUAGE COMPREHENSION: recognize sexual innuendo, thirst jokes, double meanings, suggestive slang/euphemisms and provocative captions as adult-coded language when context supports it. Do not automatically reinterpret them as innocent/literal. Known adults may answer that subtext with non-graphic flirting, teasing, embarrassment, jealousy, amusement, attraction, disapproval or other character-specific reactions.
 - IMPORTANT: adult AI characters are allowed to TAKE ROMANTIC INITIATIVE. They do not have to wait for the player to make every first move.
 - When character-accurate and mutually welcome, an AI may be the one who moves closer, initiates a kiss, kisses back more intensely, starts making out, asks the other person to come somewhere private, openly admits desire, or initiates a non-graphic transition toward adult intimacy.
@@ -14323,7 +14832,7 @@ MATURE 18+ CONTENT MODE — ${channelLabel}:
 
   return `
 MATURE 18+ TARTALMI MÓD — ${channelLabel}:
-
+${roleplayBoost}
 - A hangvétel lehet egyértelműen felnőttesebb, nyersebb, sötétebb és kevésbé steril, ha ez illik a karakterekhez és a helyzethez.
 - Erősebb káromkodás, felnőtt humor, alkohol/drog mint történeti elem, fenyegetés, toxikus dinamika, manipuláció, féltékenység, megszállottság, birtoklás, erőszak, félelem és más mature témák megjelenhetnek, ha karakterhűek.
 - Az erőszak lehet konkrét, nem csak utalás: megfélemlítés, lökés, ütés, rúgás, lefogás, földre vitel, dulakodás, teljes verekedés, tárgyak összetörése és a karakter adatlapján szereplő harci technikák is megjelenhetnek, ha a helyzet indokolja.
@@ -14332,6 +14841,7 @@ MATURE 18+ TARTALMI MÓD — ${channelLabel}:
 - Az erőszaknak legyen következménye és emlékezete. Egy komoly összecsapás változtathat félelmen, tiszteleten, gyűlöleten, lojalitáson, megszállottságon, rivalizáláson vagy bosszúvágyon.
 - Ne váljon minden jelenet verekedéssé. Az eszkaláció továbbra is a karakterből, motivációból és aktuális konfliktusból következzen.
 - A romantika és vonzalom lehet intenzívebb, direktebb, kétértelműbb, érzékibb vagy szexuálisan feszültebb, ha természetesen következik a kapcsolatból.
+- AZ ORIENTÁCIÓ KEMÉNY IDENTITÁSKÁNON: a Mature mód SOHA nem tesz egy straight/gay/lesbian/stb. karaktert orientációval inkompatibilis célponthoz vonzódóvá. A barátság, magas relationship score, féltékeny személyiség, "flirty/charming" tulajdonság vagy általános felnőtt feszültség NEM hoz létre vonzalmat. Csak a karakter saját Connections kánonjába explicit, pont erre a célpontra írt romantikus kivétel írhatja felül az általános orientációcímkét.
 - FELNŐTT NYELVI ÉRTELMEZÉS: a szexuális célzást, thirst joke-ot, kettős jelentést, kétértelmű felnőtt szlenget/eufemizmust és provokatív captiont a kontextus szerinti felnőtt jelentésével értsd; ne fordítsd automatikusan ártatlan, szó szerinti olvasatra. Ismert felnőttek erre nem grafikus flörttel, ugratással, zavarral, féltékenységgel, humorral, vonzalommal, rosszallással vagy más karakterhű reakcióval válaszolhatnak.
 - FONTOS: a felnőtt AI-karakterek KEZDEMÉNYEZHETNEK romantikusan. Nem kell mindig arra várniuk, hogy a játékos tegye meg az első lépést.
 - Ha karakterhű és kölcsönösen kívánatos a helyzet, az AI lehet az, aki közelebb lép, megpróbál megcsókolni valakit, intenzívebben visszacsókol, csókolózást/making outot kezdeményez, félrevonulást javasol, nyíltabban kimutatja a vágyát, vagy nem részletező módon felnőtt intimitás felé viszi a helyzetet.
@@ -14364,7 +14874,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v69-character-editor-popup-lock";
+const BUILD_VERSION = "v78-stronger-mature-roleplay";
 
 const AUTO = "masvilag:auto";
 /*
@@ -15837,6 +16347,20 @@ function pickAutonomousRepostAction(w) {
  * szöveges személyei nem világ-entitások, ezért nincs profiljuk.
  */
 function socialProfiles(w) {
+  const restartWorldHistory = () => {
+    update((n) => {
+      restartWorldHistoryInPlace(n);
+    });
+    setRestartConfirm(false);
+    setRestartMsg(
+      tt(
+        "A világ története újraindult. A karakterek és beállítások megmaradtak.",
+        "World history restarted. Characters and settings were kept."
+      )
+    );
+    setTimeout(() => setRestartMsg(""), 4500);
+  };
+
   const activeMedia =
     activeGossipMediaAccount(
       w
@@ -20781,6 +21305,171 @@ function threadOf(w, post) {
   };
 }
 
+function normalizeSocialPostMeaning(w, post, raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const resolveIds = (value) => {
+    const rows = Array.isArray(value) ? value : [];
+    return [...new Set(rows.map((item) => {
+      if (item && typeof item === "object") {
+        return findChar(w, item.id !== undefined ? item.id : item.name !== undefined ? item.name : item.targetId);
+      }
+      return findChar(w, item);
+    }).filter(Boolean))].filter((id) => id !== (post && post.authorId)).slice(0, 10);
+  };
+  const short = (value, max) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+  const ambiguityRaw = String(source.ambiguity || source.ambiguityLevel || "").toLowerCase();
+  const ambiguity = ["low", "medium", "high"].includes(ambiguityRaw) ? ambiguityRaw : "medium";
+  const exactText = short(post && post.text, 1200);
+  const imageDescription = short(post && post.imageDescription, 900);
+  const explicitFromText = post
+    ? mentionedIdsInText(w, exactText, post.authorId).filter((id) => id && id !== post.authorId)
+    : [];
+  const addressedToIds = [...new Set([...explicitFromText, ...resolveIds(source.addressedToIds || source.addressedTo || source.targets)])].slice(0, 10);
+  const uncertainPoints = (Array.isArray(source.uncertainPoints) ? source.uncertainPoints : [])
+    .map((x) => short(x, 180))
+    .filter(Boolean)
+    .slice(0, 6);
+
+  return {
+    version: 1,
+    literalMeaning: short(source.literalMeaning || source.literal || exactText || imageDescription || "", 900),
+    likelyIntent: short(source.likelyIntent || source.intent || "", 500),
+    impliedMeaning: short(source.impliedMeaning || source.implication || "", 650),
+    tone: short(source.tone || "", 220),
+    imageRelation: short(source.imageRelation || source.imageMeaning || "", 500),
+    addressedToIds,
+    ambiguity,
+    personalProjectionAllowed: Boolean(source.personalProjectionAllowed || source.allowsPersonalProjection || source.openEndedPersonalTarget),
+    uncertainPoints,
+    confidence: Math.max(0, Math.min(1, Number(source.confidence) || 0.72)),
+  };
+}
+
+function fallbackSocialPostMeaning(w, post) {
+  const text = String(post && post.text || "").replace(/\s+/g, " ").trim();
+  const imageDescription = String(post && post.imageDescription || "").replace(/\s+/g, " ").trim();
+  const addressedToIds = post
+    ? mentionedIdsInText(w, text, post.authorId).filter((id) => id && id !== post.authorId)
+    : [];
+  return normalizeSocialPostMeaning(w, post, {
+    literalMeaning: text || imageDescription || "Image post",
+    likelyIntent: "",
+    impliedMeaning: "",
+    tone: "",
+    imageRelation: imageDescription ? "The visible image is part of the post context." : "",
+    addressedToIds,
+    ambiguity: addressedToIds.length ? "low" : "medium",
+    personalProjectionAllowed: false,
+    uncertainPoints: [],
+    confidence: 0.55,
+  });
+}
+
+async function analyzeSocialPostMeaning(w, post) {
+  if (!w || !post) return fallbackSocialPostMeaning(w, post);
+
+  if (post.socialMeaning && typeof post.socialMeaning === "object" && Number(post.socialMeaning.version) >= 1) {
+    return normalizeSocialPostMeaning(w, post, post.socialMeaning);
+  }
+
+  const author = charById(w, post.authorId);
+  const exactText = String(post.text || "").trim();
+  const imageDescription = String(post.imageDescription || "").trim();
+  const explicitMentionIds = mentionedIdsInText(w, exactText, post.authorId)
+    .filter((id) => id && id !== post.authorId);
+  const explicitMentions = explicitMentionIds
+    .map((id) => `${nameOfIn(w, id)} [${id}]`)
+    .join(", ") || "none";
+
+  const recentOwn = (w.posts || [])
+    .filter((p) => p && p.id !== post.id && p.authorId === post.authorId)
+    .slice(0, 4)
+    .map((p) => `- ${cut(String(p.text || p.imageDescription || ""), 220)}`)
+    .join("\n") || "- none";
+
+  const recentWorld = recentStructuredWorldLines(w, 5).join("\n") || "- none";
+  const isPlayerPost = post.authorId === w.meId || isHuman(w, post.authorId);
+
+  try {
+    const raw = await askWorldJSON(
+      w,
+      engineFor(w),
+      `${author && !isPlayerPost ? `${voiceCard(author)}\n${characterMemoryCard(w, author)}` : ""}
+
+SOCIAL POST MEANING PARSER — SHARED SEMANTIC ANCHOR
+
+AUTHOR: ${author ? `${author.name} [${author.id}]` : post.authorId}
+AUTHOR TYPE: ${isPlayerPost ? "human player" : "AI character"}
+EXACT CAPTION/TEXT:
+"${exactText.slice(0, 1400)}"
+
+VISIBLE IMAGE DESCRIPTION:
+${imageDescription ? imageDescription.slice(0, 1200) : "none"}
+
+EXPLICIT @MENTIONS / NAMED WORLD TARGETS RESOLVED BY THE APP:
+${explicitMentions}
+
+AUTHOR'S RECENT OWN FEED CONTEXT:
+${recentOwn}
+
+RECENT OBSERVED WORLD CONTEXT:
+${recentWorld}
+
+TASK:
+Create ONE concise objective semantic anchor that every later commenter will receive before applying their own personality/relationship lens.
+
+HARD COMPREHENSION RULES:
+- First understand what the post actually SAYS/SHOWS. Do not react yet and do not write comments.
+- Resolve slang, typos, code-switching, sarcasm, irony, teasing, rhetorical questions, memes, fandom phrasing, adult-coded innuendo and indirect phrasing when the intended reading is strongly supported.
+- Keep literal meaning separate from implication. Do not turn an implication into an objective fact.
+- Pronouns and "you" must attach to the most natural explicit/contextual referent. Do not swap speaker and target.
+- Explicit names/@mentions are HARD anchors. Never silently replace them with another character.
+- If the post says "someone", "he", "she", "they", "my crush", "my ex", "my brother" etc. but the identity is not actually established by the visible post/context, MARK IT UNKNOWN. Do not assign a random cast member.
+- A relationship/crush/enemy status can affect HOW a commenter feels about the post, but it cannot rewrite the post's base semantic content.
+- If caption and image interact (joke, contrast, outfit caption, location reference, thirst joke, sarcasm), explain that relation briefly. Never invent unseen image details.
+- If the post is a human-player post, NEVER invent hidden player thoughts, secret motives or offscreen actions. "likelyIntent" may describe only the communicative intent reasonably visible in the post.
+- personalProjectionAllowed=true ONLY when the post is genuinely open-ended/coded enough that multiple people could plausibly wonder whether it refers to them. It is false for a normal explicit statement, clear selfie caption, clear named target, ordinary joke, factual update, etc.
+- ambiguity=low when the central meaning is clear; medium when one limited piece is unresolved; high only when materially different readings remain plausible.
+- uncertainPoints must list unresolved referents/meaning instead of guessing.
+
+Return JSON only:
+{"literalMeaning":"what it explicitly means","likelyIntent":"visible communicative intent, not hidden mind-reading","impliedMeaning":"strongly supported subtext or empty","tone":"brief tone","imageRelation":"how caption and image relate or empty","addressedToIds":["only explicit/resolved world character IDs"],"ambiguity":"low|medium|high","personalProjectionAllowed":false,"uncertainPoints":["unresolved point"],"confidence":0.0}${TAIL}`,
+      { maxTokens: 520, maxTries: 1 }
+    );
+
+    return normalizeSocialPostMeaning(w, post, raw);
+  } catch (err) {
+    console.warn("Post meaning analysis failed; using grounded fallback:", err);
+    return fallbackSocialPostMeaning(w, post);
+  }
+}
+
+function socialPostMeaningCard(w, post, meaning) {
+  const m = normalizeSocialPostMeaning(w, post, meaning);
+  const targets = m.addressedToIds.map((id) => `${nameOfIn(w, id)} [${id}]`).join(", ") || "none";
+  const uncertain = m.uncertainPoints.length ? m.uncertainPoints.join(" | ") : "none";
+  return `
+SHARED POST COMPREHENSION — HARD SEMANTIC ANCHOR:
+- literal meaning: ${m.literalMeaning || "unknown"}
+- likely visible intent: ${m.likelyIntent || "not safely inferable"}
+- strongly supported implication: ${m.impliedMeaning || "none"}
+- tone: ${m.tone || "not safely inferable"}
+- caption/image relation: ${m.imageRelation || "none"}
+- explicit/resolved addressee(s): ${targets}
+- ambiguity: ${m.ambiguity}
+- open-ended personal projection allowed: ${m.personalProjectionAllowed ? "YES" : "NO"}
+- unresolved/unknown points: ${uncertain}
+
+COMPREHENSION LOCK:
+- This block defines the post's BASE MEANING. Personality, crushes, jealousy, rivalry and memories may change a character's EMOTIONAL REACTION, but may NOT invert or rewrite this base meaning.
+- Do not confuse the author with the person being discussed. Do not confuse the commenter with the addressee. Do not transfer an action/quote from one person to another.
+- If a referent is listed as unknown, KEEP IT UNKNOWN. A bot may be curious/suspicious, but may not silently decide it is a random world character.
+- If personal projection is NO, do not decide "this is about me" merely because the commenter has a crush, obsession or rivalry with the author.
+- If personal projection is YES, a character may SUSPECT it is about them only when their own relationship/history gives a real reason; still keep it explicitly subjective.
+- Every comment's trigger must be compatible with this anchor and with the exact visible text/image. If it is not, choose LIKE/IGNORE instead of hallucinating a reaction.
+`;
+}
+
 async function genComments(w, post) {
   const cast = fairCommentCast(
     w,
@@ -20798,6 +21487,9 @@ async function genComments(w, post) {
     post
   );
 
+  /* v71: understand the post once before any character applies a subjective lens. */
+  const postMeaning = await analyzeSocialPostMeaning(w, post);
+
   const out = await askWorldJSON(
     w,
     engineFor(w),
@@ -20811,7 +21503,9 @@ async function genComments(w, post) {
 POSZT — ${author ? author.name : "?"}:
 "${post.text}"
 
-${post.authorId === w.meId && post.text ? playerInputUnderstandingInstruction(w, post.text, "comment") : ""}
+${post.authorId === w.meId && post.text ? playerInputUnderstandingInstruction(w, post.text, "post") : ""}
+
+${socialPostMeaningCard(w, post, postMeaning)}
 
 ${
   (post.imageId || post.image)
@@ -20870,9 +21564,17 @@ NYILVÁNOS VS. PRIVÁT REALIZMUS:
 - Ha a poszt kifejezetten jó hír, szelfi, outfit, siker vagy sebezhető pillanat, a valódi barátok gyakran röviden támogatnak/hype-olnak. Ne legyen minden pozitív kapcsolat indokolatlanul hűvös csak azért, hogy “edgy” maradjon.
 
 KONKRÉT POSZTHOZ KÖTÉS:
-- Minden új kommentnek legyen konkrét kiváltó oka EBBEN a posztban: egy szó, kép-részlet, implikáció, korábbi thread-sor vagy ténylegesen releváns közös emlék.
+- Minden komment ELŐTT alkalmazd a SHARED POST COMPREHENSION jelentést; ne kezdj karakterreakciót addig, amíg a poszt alapjelentése nincs rögzítve.
+- Minden új kommentnek legyen konkrét kiváltó oka EBBEN a posztban: egy szó, kép-részlet, a shared anchorban rögzített implikáció, korábbi thread-sor vagy ténylegesen releváns közös emlék.
+- A "trigger" mező ne új történetet találjon ki: röviden nevezze meg azt a VALÓDI szöveg/kép/értelmi elemet, amire a komment épül.
+- Ha egy reakció csak úgy működne, hogy előbb félre kell érteni a posztot, NE írd meg azt a kommentet.
 - Ha a komment csak egy általános bók/reakció lenne, ami száz másik poszt alatt is ugyanúgy állhatna, inkább írd újra vagy legyen like/ignore.
 - Ne erőltesd a backstory-t: a mély közös múlt csak akkor bukkanjon fel, ha a poszt tényleg megnyomja azt a gombot.
+
+ORIENTÁCIÓ / ROMANTIKUS CÉLPONT:
+- A barátság és a magas relationship score NEM jelent automatikusan vonzalmat.
+- Straight/gay/lesbian/stb. orientációt célpontspecifikusan tartsd be. Ha az orientáció nem kompatibilis a poszt szerzőjével, minden hype, bók, szeretetteljes ugratás és közelség PLATONIKUS maradjon; ne legyen flört vagy romantikus féltékenység.
+- A "flirty/charming/playful" személyiség önmagában NEM jogosít fel inkompatibilis célpontra való ráhajtásra.
 
 KÖZVETLEN KAPCSOLATI DINAMIKA A POSZT SZERZŐJÉHEZ:
 ${cast
@@ -20887,11 +21589,14 @@ ${cast
   .filter(Boolean)
   .join("\n") || "-"}
 
-SZUBJEKTÍV POSZTÉRTELMEZÉS — EZ KAPCSOLATOT IS VÁLTOZTATHAT:
-- A karakterek nem mindent objektíven értelmeznek. Ugyanazt a posztot a saját kapcsolatuk, emlékeik, féltékenységük, crushuk, konfliktusuk, bűntudatuk vagy megszállottságuk alapján másképp olvashatják.
-- Ha a poszt homályos, célzós, romantikus, dühös, féltékeny, "valakinek szóló", belsős vagy provokatív, döntsd el KARAKTERENKÉNT, hogy ő azt hiheti-e: neki/róla szól.
-- Ez NEM objektív tény. Ha valaki csak azt HISZI, hogy róla szól, az a saját feltételezése legyen.
-- Az obsessed / possessive / nagyon féltékeny karakter könnyebben veheti magára vagy kötheti saját magához/riválishoz a posztot, de ne automatikusan.
+SZUBJEKTÍV REAKCIÓ — CSAK A FENTI KÖZÖS JELENTÉS UTÁN:
+- ELŐSZÖR minden karakter ugyanazt a SHARED POST COMPREHENSION blokkot érti meg. Csak EZUTÁN jön a személyes kapcsolat, emlék, féltékenység, crush, konfliktus, bűntudat vagy megszállottság.
+- A szubjektív lens megváltoztathatja, hogy MIT ÉREZ vagy MIRE FIGYEL FEL, de nem változtathatja meg azt, hogy a poszt ténylegesen mit mondott.
+- Ha a shared anchor szerint a központi jelentés egyértelmű, TILOS pusztán féltékenységből/crushból más történetet kitalálni mögé.
+- Csak akkor mérlegeld karakterenként, hogy "nekem/rólam szólhat-e", ha a shared anchor szerint personalProjectionAllowed=YES, VAGY az adott karakter explicit címzettként szerepel.
+- Ha personalProjectionAllowed=NO és nincs explicit címzés, aboutMe legyen false. Ne gyárts önkényes személyes célzást.
+- Ez NEM objektív tény. Ha valaki megengedetten csak azt HISZI, hogy róla szól, az a saját feltételezése legyen.
+- Az obsessed / possessive / nagyon féltékeny karakter erősebben reagálhat ugyanarra a VALÓDI jelentésre, de nem kap engedélyt a jelentés átírására.
 - Ha egy karakter azt hiszi, hogy a poszt neki/róla szól, annak lehet pozitív vagy negatív kapcsolatváltozás a következménye: öröm, remény, féltékenység, sértettség, düh, birtoklás, bizalmatlanság stb.
 - Ha azt hiszi, hogy a poszt VALAKI MÁSRÓL szól, az is befolyásolhatja a poszt szerzőjéhez való érzéseit, például féltékenység vagy csalódás miatt.
 - Kis social jelhez kis delta illik. A perception "delta" mező általában -8 és +8 között legyen.
@@ -21089,6 +21794,7 @@ Formátum:
     cast.map(
       (c) => c.id
     );
+  normalizedOut.__postMeaning = postMeaning;
 
   return {
     out: normalizedOut,
@@ -21260,6 +21966,12 @@ function applyPostPerceptionImpact(
 
   const directChanges = [];
   const otherChanges = [];
+  const semanticAnchor = normalizeSocialPostMeaning(
+    n,
+    post,
+    (post && post.socialMeaning) || (out && out.__postMeaning) || {}
+  );
+  const explicitSemanticTargets = new Set(semanticAnchor.addressedToIds || []);
 
   /*
    * 1) Mit HISZ a karakter a posztról?
@@ -21330,6 +22042,12 @@ function applyPostPerceptionImpact(
           )
           .trim();
 
+      const requestedAboutMe = Boolean(row && row.aboutMe);
+      const aboutMeAllowed = Boolean(
+        explicitSemanticTargets.has(actorId) || semanticAnchor.personalProjectionAllowed
+      );
+      const safeAboutMe = requestedAboutMe && aboutMeAllowed;
+
       if (
         interpretation &&
         !perceived.has(
@@ -21342,10 +22060,7 @@ function applyPostPerceptionImpact(
           post.authorId,
           "post_interpretation",
           interpretation,
-          Boolean(
-            row &&
-            row.aboutMe
-          ),
+          safeAboutMe,
           confidence
         );
       }
@@ -21354,11 +22069,16 @@ function applyPostPerceptionImpact(
         actorId
       );
 
-      const delta =
-        clampSocialPerceptionDelta(
-          row &&
-          row.delta
-        );
+      /* If the model tried to manufacture a personal target where the shared
+       * semantic anchor explicitly disallows one, do not let that hallucination
+       * move relationship points. The general interpretation may still be kept
+       * as a low-stakes assumption, just not as "this is about me" evidence. */
+      const delta = requestedAboutMe && !aboutMeAllowed
+        ? 0
+        : clampSocialPerceptionDelta(
+            row &&
+            row.delta
+          );
 
       if (
         delta &&
@@ -21874,6 +22594,15 @@ function applyComments(n, postId, out, label) {
   const p = (n.posts || []).find((x) => x && x.id === postId);
   if (!p) return 0;
 
+  /* v71: cache the one-time shared semantic parse on the actual post so every
+   * later comment/reply round starts from the same meaning instead of re-reading
+   * the caption differently on every model call. */
+  if (out && out.__postMeaning) {
+    p.socialMeaning = normalizeSocialPostMeaning(n, p, out.__postMeaning);
+  } else if (p.socialMeaning) {
+    p.socialMeaning = normalizeSocialPostMeaning(n, p, p.socialMeaning);
+  }
+
   let createdVisible = 0;
   p.comments = safePostComments(p);
   {
@@ -22350,7 +23079,7 @@ function socialInteractionInterest(
 
   if (
     characterIsFlirty(actor) &&
-    bondLooksRomantic(rel)
+    relationshipRomanceActive(w, actorId, targetId, rel)
   ) {
     interest += 12;
   }
@@ -22598,12 +23327,11 @@ async function genReply(w, post, comment, forcedResponderId = "") {
       : null;
 
   /*
-   * IMPORTANT THREAD TARGETING:
-   * `forcedResponder` is a scheduler-selected BYSTANDER, not automatically
-   * the person the latest comment was addressed to. Treating it as the
-   * direct addressee made friends answer innocent third-party comments as if
-   * they had personally been attacked. The direct responder is derived only
-   * from reply-parent / explicit @mention / top-level post ownership.
+   * IMPORTANT THREAD TARGETING — v70:
+   * `forcedResponderId` means "the scheduler chose this CHARACTER TO SPEAK".
+   * It does NOT tell us who the reply is addressed TO. Sometimes the chosen
+   * speaker is also the natural direct responder (parent author / mentioned
+   * person / post author); only otherwise are they a true bystander.
    */
   const directResponder =
     explicitMentionTarget
@@ -22620,6 +23348,16 @@ async function genReply(w, post, comment, forcedResponderId = "") {
                   : null
               )
         );
+
+  const forcedResponderIsDirect = Boolean(
+    forcedResponder &&
+    directResponder &&
+    forcedResponder.id === directResponder.id
+  );
+  const forcedResponderIsBystander = Boolean(
+    forcedResponder &&
+    !forcedResponderIsDirect
+  );
 
   const fairCast = fairCommentCast(
     w,
@@ -22655,6 +23393,8 @@ async function genReply(w, post, comment, forcedResponderId = "") {
 POSZT — ${nameOfIn(w, post.authorId)}:
 "${post.text}"
 
+${socialPostMeaningCard(w, post, post.socialMeaning || fallbackSocialPostMeaning(w, post))}
+
 ${
   (post.imageId || post.image)
     ? `KÉP A POSZTBAN:
@@ -22689,11 +23429,19 @@ PUBLIKUS THREAD REALIZMUS:
 - BÁRMELYIK itt megadott AI beszállhat, ha hitelesen látja a threadet és van személyes oka: barátság, rivalizálás, védelem, féltékenység, érintettség, kíváncsiság, pletyka, konfliktus vagy a poszt témája.
 - Ne kényszeríts második vagy harmadik karaktert a threadbe, ha nincs oka, de ne is zárd le mesterségesen két emberre.
 - Egy szaftos nyilvános beszólásból könnyen lehet többemberes pile-on, védelem, flört, vita vagy későbbi gossip-forrás.
-${forcedResponder ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott hiteles beszálló; az ő reply-ja kötelező, második természetes válaszoló opcionális.` : ""}
+${forcedResponderIsDirect ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott KÖZVETLEN VÁLASZOLÓ; a legutóbbi komment neki szólt, ezért az ő reply-ja az elsődleges.` : forcedResponderIsBystander ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott HARMADIK FÉL / BYSTANDER; beszállhat a threadbe, de a legutóbbi komment NEM neki szólt.` : ""}
+
+REPLY TARGET CONTRACT — EZ FONTOSABB MINDEN STÍLUS-SZABÁLYNÁL:
+- A MOST MEGVÁLASZOLANDÓ komment ID-ja: ${comment.id}.
+- A komment SZERZŐJE és minden most létrejövő reply KÖZVETLEN CÉLPONTJA: ${target ? target.name : "?"} [${comment.authorId}].
+- A JSON-ban az "id" a VÁLASZOLÓ karakter ID-ja, NEM a címzetté.
+- Minden most generált reply parentje KIZÁRÓLAG ${comment.id}; ne válaszolj helyette a parent kommentre vagy a poszt szerzőjére.
+- Ha a poszt szerzője / parent komment szerzője / egy harmadik karakter nem ugyanaz, mint ${target ? target.name : "a komment szerzője"}, ne úgy írj, mintha hozzá beszélnél.
+- Ha néven vagy @handle-lel szólítasz meg valakit, az csak ${target ? target.name : "a komment szerzője"} lehet, hacsak a mondat egyértelműen harmadik személyben BESZÉL valaki másról.
 
 MOST KIFEJEZETTEN ERRE A KOMMENTRE VÁLASZOLNAK:
 
-${target ? target.name : "?"}: "${comment.text}"
+${target ? target.name : "?"} [${comment.authorId}]: "${comment.text}"
 
 ${cast
   .map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`)
@@ -22724,7 +23472,7 @@ ${cast
 THREAD KAPCSOLATI HÁROMSZÖG — KOMMENTELŐ + POSZTOLÓ + VÁLASZOLÓ:
 ${cast.map((c) => c ? commentThreadRelationshipTriangleCard(w, c.id, comment.authorId, post.authorId) : "").filter(Boolean).join("\n") || "-"}
 
-${forcedResponder ? visualCrushThreadFrictionInstruction(w, post, comment.authorId, forcedResponder.id) : ""}
+${forcedResponderIsBystander ? visualCrushThreadFrictionInstruction(w, post, comment.authorId, forcedResponder.id) : ""}
 
 NYILVÁNOS REPLY-SZŰRŐ KARAKTERENKÉNT:
 ${cast.map((c) => c ? `[${c.id}] ${c.name}: ${spread(commentPublicBehaviorCard(w, c, comment.authorId), 650)} | releváns célzott memória: ${spread(commentTargetMemoryCard(w, c, comment.authorId), 480)}` : "").filter(Boolean).join("\n") || "-"}
@@ -22743,9 +23491,10 @@ ${repetitionGuard(
 
 KOMMENTVÁLASZ SZABÁLYOK:
 
-${directResponder ? `KÖZVETLEN CÍMZETT: ${directResponder.name} [${directResponder.id}]
-- Ez a komment/reply közvetlenül ${directResponder.name} felé irányul (reply-parent, @mention vagy a saját posztjára érkező direkt reakció).
-- ${directResponder.name} az elsődleges válaszoló, és ha a konkrét szöveg természetesen választ kíván, reagáljon rá.
+${directResponder ? `A LEGFONTOSABB NATURAL RESPONDER: ${directResponder.name} [${directResponder.id}]
+- A LEGFUTÓBBI komment ${directResponder.name} felé irányult (reply-parent, @mention vagy a saját posztjára érkező direkt reakció), ezért Ő az elsődleges VÁLASZOLÓ.
+- A mostani reply-jában viszont ${target ? target.name : "a komment szerzője"} [${comment.authorId}] felé beszél, mert Ő írta a megválaszolandó kommentet.
+- ${directResponder.name} csak akkor maradhat csendben, ha a konkrét szöveg természetesen nem kíván választ.
 - Kérdés, direkt megszólítás, provokáció, vita, flört, féltékenység, személyes odaszúrás vagy egyértelmű challenge erősen növeli a válasz valószínűségét.
 - Nem kell válaszolnia egy lezáró, semleges vagy csak like-szerű reakcióra.
 - Más AI beszállhat mellé csak akkor, ha neki is valódi oka van; ne lopja el a közvetlen címzett válaszát.` : ""}
@@ -22845,7 +23594,7 @@ A reply első pillantásra úgy hasson, mint egy valódi komment alatti gyors v�
 Formátum:
 
 {"comments":[
-  {"id":"szereplő azonosítója","text":"természetes rövid kommentválasz","trigger":"max 8 szó: mire reagál konkrétan"}
+  {"id":"VÁLASZOLÓ szereplő azonosítója","targetId":"${comment.authorId}","replyTo":"${comment.id}","text":"természetes rövid kommentválasz KIFEJEZETTEN ${target ? target.name : "a komment szerzője"} felé","trigger":"max 8 szó: mire reagál konkrétan"}
 ],
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}
@@ -23033,7 +23782,7 @@ JSON: {"reply":"short natural reply"}${TAIL}`,
    * két emberre; ilyenkor egy apró repair-pass csak a kiválasztott harmadik fél
    * természetes reply-ját kéri, nem random karaktert.
    */
-  if (forcedResponder) {
+  if (forcedResponderIsBystander && forcedResponder) {
     const alreadyPresent = safeAiComments(out).some((row) =>
       findChar(w, row && (row.id !== undefined ? row.id : row.name)) === forcedResponder.id
     );
@@ -23119,6 +23868,22 @@ function applyReplies(n, postId, rootId, out) {
     if (!body) return;
     const rootForAddress = safePostComments(p).find((x) => x && x.id === rootId);
     const addressTargetId = rootForAddress && rootForAddress.authorId ? rootForAddress.authorId : p.authorId;
+
+    /*
+     * v70 HARD REPLY-TARGET CONTRACT:
+     * If the model explicitly declares a different target/parent than the exact
+     * comment this action is committing under, drop the row instead of saving a
+     * fluent reply to the wrong person. Omitted metadata is fine because the
+     * deterministic parentId below remains authoritative.
+     */
+    const declaredTargetRaw = c && (c.targetId !== undefined ? c.targetId : c.target_id);
+    const declaredTargetId = declaredTargetRaw !== undefined && declaredTargetRaw !== null && String(declaredTargetRaw).trim()
+      ? findChar(n, declaredTargetRaw)
+      : "";
+    if (declaredTargetId && addressTargetId && declaredTargetId !== addressTargetId) return;
+
+    const declaredReplyTo = String(c && (c.replyTo !== undefined ? c.replyTo : c.reply_to_id !== undefined ? c.reply_to_id : "") || "").trim();
+    if (declaredReplyTo && declaredReplyTo !== rootId) return;
 
     /* HARD GUARD: AI never answers its own comment / itself as target. */
     if (!isHuman(n, who) && addressTargetId === who) return;
@@ -24350,7 +25115,11 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     setBusy("c:" + comment.id);
     try {
       const out = await genReply(w, post, comment);
-      update((n) => applyReplies(n, post.id, comment.parent || comment.id, out));
+      /* v70: the clicked comment is ALWAYS the reply target. Using
+         comment.parent here made generated text for a nested reply get saved
+         under the previous speaker instead, which is exactly the "who are you
+         replying to?" bug. */
+      update((n) => applyReplies(n, post.id, comment.id, out));
     } catch (e) { setErr((e && e.message) || tt("Az AI most nem válaszolt. Próbáld újra.", "The AI didn't respond. Try again.")); }
     setBusy("");
   };
@@ -26924,6 +27693,7 @@ function acceptRoleplayInvitation(w, sceneId, playerId) {
     const opening = {
       ...scene.pendingOpening,
       id: scene.pendingOpening.id || "turn_" + uid(),
+      text: stripRoleplayEmoji(scene.pendingOpening.text),
       ts,
     };
     if (!scene.turns.some((turn) => turn && turn.id === opening.id)) scene.turns.push(opening);
@@ -27206,6 +27976,7 @@ function roleplayAdultIntimacyStage(w, scene) {
     .join(" ")
     .toLowerCase();
   if (!text.trim()) return "none";
+  if (/(?:morning\s+after|afterward(?:s)?|after\s+they\s+were\s+alone|later\s+in\s+bed|woke\s+up\s+(?:beside|next\s+to)|másnap\s+reggel|utána\s+(?:csendben|egymás\s+mellett)|később\s+az\s+ágyban|egymás\s+mellett\s+ébred)/i.test(text)) return "post-intimacy";
   if (/(?:bedroom|bed\b|somewhere\s+private|private\s+room|fade\s*to\s*black|intimacy|intimate|szobába|ágy\b|kettesben|félrevonul|intim)/i.test(text)) return "private-intimacy";
   if (/(?:making\s*out|make\s*out|deep(?:er)?\s+kiss|kiss(?:ed|ing)?\s+back|pulled\s+(?:him|her|them)\s+closer|csókolóz|visszacsókol|magához\s+húz)/i.test(text)) return "mutual-kissing";
   if (/(?:kiss(?:ed|ing|es)?|csók|csókol|touch(?:ed|ing)?\s+(?:his|her|their|your)\s+(?:face|waist)|megérint(?:ette|i)?.*(?:arc|derek))/i.test(text)) return "kiss-touch";
@@ -27503,7 +28274,7 @@ function applySceneChangesWithStatus(n, scene, changes) {
 function applySceneAiStatusUpdates(n, scene, out) {
   safeAiArray(out, "statusUpdates").slice(0, 8).forEach((row) => {
     if (!row) return;
-    const text = typeof row === "string" ? row : row.text;
+    const text = stripRoleplayEmoji(typeof row === "string" ? row : row.text);
     if (!text) return;
     addSceneStatusUpdate(
       n,
@@ -27532,6 +28303,61 @@ function SceneNew({ w, onClose, onCreate, setErr }) {
   const [advancedOpen, setAdvancedOpen] = useState(() =>
     typeof window === "undefined" ? true : window.innerWidth > 768
   );
+  const [sceneVisualViewportHeight, setSceneVisualViewportHeight] = useState(null);
+
+  /*
+   * v75 MOBILE EVENT CREATOR:
+   * iOS Safari / in-app webview alatt a layout viewport sokszor NEM zsugorodik
+   * ugyanúgy, mint a látható terület a billentyűzet megnyitásakor. Emiatt a
+   * footerben lévő Start Event gomb fizikailag a billentyűzet/nav mögé kerülhet.
+   * A VisualViewport a ténylegesen látható magasságot adja; CSS custom propertyn
+   * keresztül ehhez igazítjuk a teljes SceneNew modalt.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const vv = window.visualViewport;
+    const isMobile = () =>
+      window.matchMedia
+        ? window.matchMedia("(max-width: 768px)").matches
+        : window.innerWidth <= 768;
+
+    const syncSceneViewport = () => {
+      if (!isMobile()) {
+        setSceneVisualViewportHeight(null);
+        return;
+      }
+
+      const measured = Math.round(
+        (vv && Number(vv.height)) ||
+        Number(window.innerHeight) ||
+        0
+      );
+
+      setSceneVisualViewportHeight(
+        measured > 0
+          ? Math.max(320, measured)
+          : null
+      );
+    };
+
+    syncSceneViewport();
+    if (vv) {
+      vv.addEventListener("resize", syncSceneViewport);
+      vv.addEventListener("scroll", syncSceneViewport);
+    }
+    window.addEventListener("resize", syncSceneViewport);
+    window.addEventListener("orientationchange", syncSceneViewport);
+
+    return () => {
+      if (vv) {
+        vv.removeEventListener("resize", syncSceneViewport);
+        vv.removeEventListener("scroll", syncSceneViewport);
+      }
+      window.removeEventListener("resize", syncSceneViewport);
+      window.removeEventListener("orientationchange", syncSceneViewport);
+    };
+  }, []);
   const toggle = (id) => setIds((p) => (p.indexOf(id) >= 0 ? p.filter((x) => x !== id) : p.concat(id)));
   const visibleChars = (w.chars || []).filter((c) => {
     const q = castQuery.trim().toLowerCase();
@@ -27543,7 +28369,7 @@ function SceneNew({ w, onClose, onCreate, setErr }) {
     setBusy(true);
     try {
       const cast = w.chars.filter((c) => ids.indexOf(c.id) >= 0);
-      const out = await askWorldJSON(w, engineFor(w), `${worldContext(w, ids.length ? ids : null, false, null)}
+      const out = sanitizeRoleplayAiOutput(await askWorldJSON(w, engineFor(w), `${worldContext(w, ids.length ? ids : null, false, null)}
 
 Találj ki egy jelenetet ${ids.length ? "ezekkel a szereplőkkel: " + cast.map((c) => c.name).join(", ") : "a világ szereplőivel"}.
 Legyen benne feszültség vagy tét, és kapcsolódjon ahhoz, ami mostanában történt.
@@ -27561,7 +28387,9 @@ ${matureContentInstruction(
 
 Az ötlet legyen valódi EVENT: adj hozzá egy konkrét, teljesíthető célt, egy ésszerű üzenetlimitet vagy időlimitet, valamint egy egyedi jutalomtárgyat. A jutalomtárgy illeszkedjen a jelenethez, ne legyen generikus pénz vagy pont.
 
-Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyzet, mi a tét","goal":"egy konkrét teljesítési cél","limitMode":"turns vagy minutes","targetTurns":16,"targetMinutes":20,"rewardAffection":12,"rewardItem":"egyedi jutalomtárgy neve","cast":["szereplők azonosítói"]}${TAIL}`);
+- EMOJI TILOS: az Event címe, helyzete, célja és jutalomtárgya se tartalmazzon emojit vagy pictogramot.
+
+Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyzet, mi a tét","goal":"egy konkrét teljesítési cél","limitMode":"turns vagy minutes","targetTurns":16,"targetMinutes":20,"rewardAffection":12,"rewardItem":"egyedi jutalomtárgy neve","cast":["szereplők azonosítói"]}${TAIL}`));
       if (out.title) setTitle(out.title);
       if (out.setting) setSetting(out.setting);
       if (out.goal) setGoal(String(out.goal));
@@ -27579,6 +28407,7 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
  return (
   <div
     className="scrim scene-create-scrim"
+    style={sceneVisualViewportHeight ? { "--scene-create-vh": `${sceneVisualViewportHeight}px` } : undefined}
     onClick={(e) => {
       if (e.target === e.currentTarget) onClose();
     }}
@@ -27589,7 +28418,7 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
           <div className="scene-create-kicker">{tt("ROLEPLAY / EVENT", "ROLEPLAY / EVENT")}</div>
           <h2>{tt("Új Event", "New Event")}</h2>
         </div>
-        <button className="btn tiny ghost scene-create-close" onClick={onClose} aria-label={tt("Bezárás", "Close")}>
+        <button type="button" className="btn tiny ghost scene-create-close" onClick={onClose} aria-label={tt("Bezárás", "Close")}>
           <X size={16} />
         </button>
       </div>
@@ -27676,7 +28505,7 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
           ) : null}
         </section>
 
-        <button className="btn full scene-idea-btn" onClick={idea} disabled={busy}>
+        <button type="button" className="btn full scene-idea-btn" onClick={idea} disabled={busy}>
           {busy ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} color="var(--gold)" />}
           {tt("AI Event-ötlet", "AI Event idea")}
         </button>
@@ -27751,7 +28580,15 @@ Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyze
       </div>
 
       <div className="scene-create-actions">
+        {(!ids.length || !goal.trim()) ? (
+          <div className="scene-create-action-hint">
+            {!ids.length
+              ? tt("Válassz legalább egy jelenlévő karaktert.", "Choose at least one present character.")
+              : tt("Adj meg egy Event-célt.", "Set an Event goal.")}
+          </div>
+        ) : null}
         <button
+          type="button"
           className="btn primary full"
           disabled={!ids.length || !goal.trim()}
           onClick={() => {
@@ -27959,7 +28796,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
         }: ${t.text}`;
       }).join("\n");
 
-      let out = await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
+      let out = sanitizeRoleplayAiOutput(await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
 
 EVENT / JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
@@ -28061,6 +28898,7 @@ ${roleplayRomanticInitiativeCard(
 
 ROLEPLAY FOLYTATÁS — FONTOS:
 
+- EMOJI ABSZOLÚT TILOS A ROLEPLAYBEN: sem beszédben, sem actionben, sem narrációban, sem sceneMemory/events/status mezőben ne használj emojit, emoji-piktogramot vagy dekoratív emoji jelet. Az érzelmet kizárólag szavakkal, ritmussal, testbeszéddel és cselekvéssel fejezd ki.
 - Ha fent AKTUÁLIS CÍMZETT van megadva a játékos mostani megszólalásához, a közvetlen "te/you" és a kérdés elsősorban ANNAK a karakternek szól. Más jelenlévő ne reagáljon úgy, mintha hozzá beszélt volna, hacsak természetesen közbe nem szól.
 - A játékos korábban egyértelműen feloldott beszélgetési fókuszát őrizd meg több körön át; ne felejtsd el csak azért, mert közben más karakter is megszólalt.
 - Írd meg a folytatást 3-5 természetes mozzanatban. Egy mozzanat lehet beszéd, cselekvés vagy rövid narrátori átvezetés.
@@ -28085,7 +28923,10 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - A romantikus kezdeményezés NEM kötelező minden vonzalomnál és ne legyen random. A merészebb/flörtölősebb/dominánsabb/impulzívabb karakterek könnyebben teszik meg az első lépést; a félénkebb, bizalmatlanabb vagy visszafogottabb karakterekhez lassabb kezdeményezés illik.
 - Ha az AI a JÁTÉKOS karakterével kezdeményez csókot vagy intimebb lépést, csak a saját karakter mozdulatát írd le. A játékos válaszát soha ne döntsd el helyette; hagyj neki valódi lehetőséget reagálni.
 - MATURE 18+ FOLYTONOSSÁG: ha minden érintett ismerten felnőtt, nincs friss explicit határ, és a játékos/karakterek már egyértelműen kölcsönösen elindítottak egy intim helyzetet, NE reseteld vissza small talkra vagy végtelen "majdnem csók" körre. Reagálj közvetlenül a megtörtént közeledésre, és a jelenet karakterhűen továbbhaladhat felnőtt intimitás felé nem-grafikus szinten.
-- A "nem-grafikus" NEM azt jelenti, hogy azonnal zárd le vagy fade-to-blackold a jelenetet. Maradhat felnőtt, intim, érzéki és konkrét a közelség, csók, ölelés, párbeszéd, hangulat, helyváltoztatás és az idő előrehaladása; csak anatómiai/pornográf részletekbe ne menj bele.
+- FELNŐTT, NEM YA-HANG: ha a helyzet eleve mature, ne puhítsd automatikusan aranyos/tinédzseres zavarba, udvarias small talkba vagy ködös "kémia" narrációba. A karakter lehet direkt, káromkodós, szuggesztív, féltékeny, birtokló, csípős, merész vagy érzelmileg nyers a saját kánonja szerint.
+- KONKRÉT NEM-GRAFIKUS INTIMITÁS: ismert felnőtteknél, valós kölcsönösségnél használhatsz konkrét csókot, csókolózást, magához húzást, derekán/arcán/kezén tartott kezet, nyakra/vállra adott csókot, ölbe húzást/ölbe ülést, privátabb helyre mozdulást és egyértelmű felnőtt célzást. Ne menj anatómiai vagy explicit szexuális részletekbe.
+- A "nem-grafikus" NEM azt jelenti, hogy azonnal zárd le vagy fade-to-blackold a jelenetet. Maradhat felnőtt, intim, érzéki és konkrét a közelség, csók, csókolózás, párbeszéd, hangulat, helyváltoztatás és az idő előrehaladása; csak anatómiai/pornográf részletekbe ne menj bele.
+- Ha a jelenet utalásosan privát intimitásig jut, utána se resetelj: az utóhatás (közelség, csend, humor, kínosság, gyengédség, megbánás, féltékenység, vitás következmény, kapcsolati változás) ugyanúgy része lehet a roleplaynek.
 - Ha a játékos legutóbbi saját akciója egyértelműen kezdeményez vagy viszonoz egy felnőtt intim lépést, ne moralizálj, ne válts témát, ne tegyél úgy, mintha nem értetted volna. A jelenlévő felnőtt AI a személyisége és kapcsolat alapján reagáljon rá, miközben a játékos következő döntését továbbra sem írhatod meg helyette.
 - Obsessed/possessive karakter lehet intenzívebb, féltékenyebb és kezdeményezőbb, de a megszállottság nem írja felül a beleegyezést.
 - A "narrator" csak a jelenet érzékelhető leírása: mit látni, hallani, milyen a tér és a hangulat. Legfeljebb egy narrator-turn legyen ebben a körben.
@@ -28103,7 +28944,7 @@ Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","to":"annak a jelenlévő karakternek/játékosnak az id-ja, akinek a speech közvetlenül szól, vagy üres","kind":"speech vagy action","text":"..."}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":16,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],
  "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
- "sceneMemory":{"summary":"3-6 mondatos tömör, tényszerű összefoglaló arról, ami a teljes nyitott jelenet folytonosságához kell","continuity":["ÚJ vagy továbbra is igaz hely/pozíció/sérülés/tárgy/fizikai vagy intim folytonosság"],"resolvedContinuity":["csak ami ebben a körben ténylegesen már nem igaz/lezárult"],"openThreads":["ÚJ vagy továbbra is nyitott kérdés, vita, ígéret, fenyegetés, terv, döntés"],"resolvedOpenThreads":["csak ami ebben a körben ténylegesen lezárult"],"participantStates":[{"id":"jelenlévő pontos id-ja","state":"rövid aktuális, jelenetben releváns állapot; ne titkos gondolat"}],"sceneState":{"location":"aktuális hely, ha ismert","currentBeat":"mi történik éppen most","intimacyStage":"none / tension / kiss-touch / mutual-kissing / private-intimacy vagy üres","boundaries":["csak explicit, jelenleg aktív határ"]}},
+ "sceneMemory":{"summary":"3-6 mondatos tömör, tényszerű összefoglaló arról, ami a teljes nyitott jelenet folytonosságához kell","continuity":["ÚJ vagy továbbra is igaz hely/pozíció/sérülés/tárgy/fizikai vagy intim folytonosság"],"resolvedContinuity":["csak ami ebben a körben ténylegesen már nem igaz/lezárult"],"openThreads":["ÚJ vagy továbbra is nyitott kérdés, vita, ígéret, fenyegetés, terv, döntés"],"resolvedOpenThreads":["csak ami ebben a körben ténylegesen lezárult"],"participantStates":[{"id":"jelenlévő pontos id-ja","state":"rövid aktuális, jelenetben releváns állapot; ne titkos gondolat"}],"sceneState":{"location":"aktuális hely, ha ismert","currentBeat":"mi történik éppen most","intimacyStage":"none / sexual-tension / kiss-touch / mutual-kissing / private-intimacy / post-intimacy vagy üres","boundaries":["csak explicit, jelenleg aktív határ"]}},
  "longTermMemories":[{"id":"annak az AI-nak az id-ja, aki ezt valóban tudja/átélte","targetId":"ha konkrét személyhez kötődik, annak id-ja, különben üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":80,"text":"csak tartósan fontos, később is releváns karakter-POV emlék"}],
  "events":["egy rövid, tényszerű mondat minden világ-szinten fontos, ténylegesen megtörtént és megfigyelhető eseményről; ne belső gondolatot vagy következtetést írj"],
  "statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"csak akkor adj ilyet, ha az Event során tényleges állapotváltozás történt: megváltozott valaki hangulata, vagy egy korábban elindított folyamat/ígéret/fenyegetés/terv lezárult"}],
@@ -28111,7 +28952,7 @@ Formátum:
  "relationshipUpdates":[
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
-}${TAIL}`);
+}${TAIL}`));
 
       const resolveSceneTurns = (candidateOut) =>
         (candidateOut && Array.isArray(candidateOut.turns)
@@ -28171,13 +29012,14 @@ Formátum:
               !isNarr && allowedTo && resolvedId
                 ? sanitizeGeneratedDirectAddress(w, resolvedId, allowedTo, freshText)
                 : freshText;
+            const roleplayText = stripRoleplayEmoji(addressedText);
 
             return {
               authorId: allowed ? resolvedId : null,
               to:
                 allowedTo,
               kind: t && t.kind === "action" ? "action" : "speech",
-              text: addressedText,
+              text: roleplayText,
             };
           })
           .filter((t) => t.authorId && t.text);
@@ -28203,7 +29045,7 @@ EMLÉKEZET: ${spread(memory, 900)}`;
           })
           .join("\n\n");
 
-        const retryOut = await askWorldJSONInteractive(
+        const retryOut = sanitizeRoleplayAiOutput(await askWorldJSONInteractive(
           w,
           engineFor(w),
           `ROLEPLAY ÚJRAGENERÁLÁS — az előző kimenet nem volt használható, mert minden sora túl közel állt korábbi megszólalásokhoz vagy hibás szereplő-ID-t használt.
@@ -28237,13 +29079,15 @@ ${matureContentInstruction(w, scene.cast || [], "roleplay")}
 ${roleplayRomanticInitiativeCard(w, promptScene, cast)}
 
 SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
+- EMOJI TILOS minden roleplay beszédben, actionben, narrációban és minden visszaadott szövegmezőben.
 - Adj 2-4 TELJESEN FRISS mozzanatot.
 - Egyetlen korábbi mondatot, akciót, poént, fenyegetést, flörtformulát vagy közeli parafrázist se használj újra.
 - CSAK a fent megadott [ID]-kat vagy a "narrator" értéket használd.
 - A szereplők karakterhűek legyenek; ne váljanak semleges AI-hanggá.
 - A játékos helyett ne beszélj és ne cselekedj.
 - A jelenetet ne zárd le automatikusan.
-- Ha a fenti mature/relationship kontextus szerint erős felnőtt romantikus kezdeményezési lehetőség van, ne reseteld semleges small talkra: az AI tehet konkrét első lépést (érintés/csókkezdeményezés/privátabb folytatás), de a játékos reakcióját ne írd meg.
+- Ha a fenti mature/relationship kontextus szerint erős felnőtt romantikus kezdeményezési lehetőség van, ne reseteld semleges small talkra: az AI tehet konkrét első lépést (közeledés/érintés/csók/csókolózás/privátabb utalásos folytatás), de a játékos reakcióját ne írd meg.
+- A retry se sterilizálja YA/PG hangra a már kialakult felnőtt jelenetet. Ha minden érintett ismerten felnőtt és a kölcsönösség ténylegesen megvan, maradjon direkt, érzéki, szuggesztív és karakterhű, de továbbra is nem grafikus.
 - Ne magyarázd, hogy újragenerálsz.
 
 RÖVID TÁVÚ JELENETMEMÓRIA:
@@ -28255,7 +29099,7 @@ VÁLASZ CSAK JSON:
             maxTokens: 1500,
             maxTries: 3,
           }
-        );
+        ));
 
         const retryResolved = resolveSceneTurns(retryOut);
 
@@ -28513,7 +29357,7 @@ VÁLASZ CSAK JSON:
         return t.authorId === "narrator" ? `(${t.text})` : `${a ? a.name : "?"}: ${t.text}`;
       }).join("\n");
 
-      const out = await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, false, null)}
+      const out = sanitizeRoleplayAiOutput(await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, false, null)}
 
 EVENT / JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
@@ -28541,7 +29385,10 @@ ${worldLanguage(w, w.meId) === "en"
   : "- a summary, diary, goalResult, statusUpdates, memories, mood és why mezők mind magyarul legyenek."}
 
 Formátum:
-{"summary":"","diary":"","success":true,"outcome":"success vagy partial vagy failed","goalResult":"egy rövid konkrét értékelés","memories":[{"id":"szereplő azonosítója","text":""}],"longTermMemories":[{"id":"AI id","targetId":"konkrét másik szereplő id-ja vagy üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":85,"text":"tartós karakter-POV emlék"}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],"statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"mi változott / mi zárult le"}]}${TAIL}`);
+- EMOJI TILOS a summary, diary, goalResult, memories, statusUpdates, mood, why és minden más Event-szövegmezőben.
+
+Formátum:
+{"summary":"","diary":"","success":true,"outcome":"success vagy partial vagy failed","goalResult":"egy rövid konkrét értékelés","memories":[{"id":"szereplő azonosítója","text":""}],"longTermMemories":[{"id":"AI id","targetId":"konkrét másik szereplő id-ja vagy üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":85,"text":"tartós karakter-POV emlék"}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],"statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"mi változott / mi zárult le"}]}${TAIL}`));
 
       const safeOut = out && typeof out === "object" ? out : {};
 
@@ -28955,7 +29802,7 @@ function Scenes({ w, update, setErr, jump, onSignal, openId, setOpenId }) {
 
   return (
     <>
-      <button className="btn primary full" style={{ marginTop: 12 }} onClick={() => setCreating(true)}>
+      <button type="button" className="btn primary full" style={{ marginTop: 12 }} onClick={() => setCreating(true)}>
         <Plus size={15} /> {tt("Új Event", "New Event")}
       </button>
       <p className="hint" style={{ textAlign: "center", marginTop: 8 }}>
@@ -30537,8 +31384,8 @@ Formátum:
       if (bridgePlan && !existingBridgeScene) {
         const scene = {
           id: bridgeSceneId,
-          title: bridgePlan.title,
-          setting: bridgePlan.setting,
+          title: stripRoleplayEmoji(bridgePlan.title),
+          setting: stripRoleplayEmoji(bridgePlan.setting),
           cast: bridgePlan.cast,
           playerTurnJournal: [],
           turns: [],
@@ -30547,12 +31394,12 @@ Formátum:
             authorId: c.id,
             to: n.meId,
             kind: bridgePlan.openingKind,
-            text: bridgePlan.opening,
+            text: stripRoleplayEmoji(bridgePlan.opening),
             ts: now(),
             language: worldLanguage(n, n.meId),
           },
           open: false,
-          goal: bridgePlan.goal,
+          goal: stripRoleplayEmoji(bridgePlan.goal),
           limitMode: "turns",
           targetTurns: 20,
           targetMinutes: 30,
@@ -31724,11 +32571,150 @@ function PopupEventModal({ w, event, update, onChoose, onReroll, onCustom }) {
 /* ============================================================
    Szoba
    ============================================================ */
+
+/* ============================================================
+   WORLD HISTORY RESTART — KEEP CHARACTERS / SETTINGS
+   ============================================================
+
+   This is deliberately NOT account/world deletion. It keeps the player's
+   profile, AI character sheets, albums/profile images, world description,
+   scenario/media settings and the currently configured relationship graph.
+   It only removes play-generated history/runtime so the same cast can start
+   a fresh run without carrying old conversations, memories or social events.
+*/
+function freshSimulationRuntime(at = now()) {
+  return {
+    queue: [],
+    done: {},
+    running: "",
+    at: 0,
+    contentAt: at,
+    localAt: at,
+    lastSuccessAt: 0,
+    lastAttemptAt: 0,
+    roleplayAttemptAt: 0,
+    dmAttemptAt: 0,
+    groupAttemptAt: 0,
+    popupAttemptAt: 0,
+    lastAutonomousDmAt: 0,
+    lastPopupSuccessAt: 0,
+    lastRoleplayInviteAt: 0,
+    lastNoteReactionAt: 0,
+    liveWorldStartedAt: at,
+    schedulerVersion: 59,
+    lastError: "",
+  };
+}
+
+function resetSocialProfileForFreshRun(profile) {
+  if (!profile || typeof profile !== "object") return profile;
+  return {
+    ...profile,
+    /* baseFollowers is profile/canon setup; earned/lost social history is not. */
+    followerDelta: 0,
+    followers: [],
+    following: [],
+  };
+}
+
+function restartWorldHistoryInPlace(w) {
+  if (!w || typeof w !== "object") return false;
+
+  const at = now();
+
+  /* Epoch invalidates any autonomous AI request that started before restart. */
+  w.historyEpoch = Math.max(0, Math.floor(Number(w.historyEpoch) || 0)) + 1;
+
+  /* Public/social history. */
+  w.posts = [];
+  w.reposts = [];
+  w.notes = [];
+  w.socialEvents = [];
+  w.socialStats = {};
+  w.trends = [];
+
+  /* Private conversations + all learned/observed memory. */
+  w.chats = {};
+  w.groups = [];
+  w.mems = {};
+  w.charMemory = {};
+
+  /* RP/Event, rewards, diary and visible world-history surfaces. */
+  w.scenes = [];
+  w.inventory = [];
+  w.diary = [];
+  w.log = [];
+
+  /* Gossip has no old source material after a fresh start. */
+  w.rumors = [];
+  w.gossipPropagation = {
+    rumors: [],
+    exchanges: [],
+    echoes: [],
+    lastRoundAt: 0,
+    lastEchoAt: 0,
+    version: 2,
+  };
+  w.whisperWire = {
+    stories: [],
+    usedEventIds: [],
+    history: [],
+    lastCandidate: null,
+    lastPublishedAt: 0,
+  };
+
+  /* Popups + notifications must not leak a previous run into the new one. */
+  w.popupEvents = [];
+  w.popupRuntime = {
+    startedAt: at,
+    lastGeneratedAt: 0,
+  };
+  w.notify = {};
+  w.seen = {};
+
+  /* Keep character sheets, but restart the social follow graph they built. */
+  w.chars = (w.chars || []).map(resetSocialProfileForFreshRun);
+  Object.keys(w.players || {}).forEach((id) => {
+    w.players[id] = resetSocialProfileForFreshRun(w.players[id]);
+  });
+  if (w.player && typeof w.player === "object") {
+    w.player = resetSocialProfileForFreshRun(w.player);
+  }
+
+  if (w.mediaAccounts && typeof w.mediaAccounts === "object") {
+    Object.keys(w.mediaAccounts).forEach((key) => {
+      w.mediaAccounts[key] = resetSocialProfileForFreshRun(w.mediaAccounts[key]);
+    });
+  }
+
+  /* Keep scenario/drama choice, but restart elapsed story-time bookkeeping. */
+  const story = ensureStorySettings(w);
+  story.elapsedHours = 0;
+  story.lastTimeSkipAt = 0;
+
+  /* Do not re-create fake "new character joined" trends for old retained cast. */
+  w.characterArrivalTrendMigratedV2 = true;
+  w.socialDiscoveryMigratedV1 = true;
+
+  /* New autonomous runtime starts cleanly instead of replaying queued old work. */
+  w.autoAt = at;
+  w.sim = freshSimulationRuntime(at);
+  w.activeSceneId = "";
+
+  if (w.universe && typeof w.universe === "object") {
+    w.universe.at = at;
+  }
+
+  return true;
+}
+
 function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onAuto, detail, onDetail, onLang }) {
   const { tt, lang } = useLang();
   const [editPlayer, setEditPlayer] = useState(false);
   const [copied, setCopied] = useState(false);
   const [delAcc, setDelAcc] = useState(false);
+  const [restartConfirm, setRestartConfirm] = useState(false);
+  const [restartMsg, setRestartMsg] = useState("");
   const [pwOld, setPwOld] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
@@ -32410,6 +33396,59 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
 
       
 
+      <div className="card" style={{ borderColor: "var(--gold)" }}>
+        <label className="f" style={{ marginTop: 0, color: "var(--gold)" }}>
+          {tt("Világ újrakezdése", "Restart world")}
+        </label>
+
+        {restartConfirm ? (
+          <>
+            <p className="hint">
+              {tt(
+                "Ez NEM törli a karaktereket, a saját profilodat, a karakterlapokat, profil-/albumképeket, a világ leírását, a beállításokat vagy a jelenlegi kapcsolati beállításokat. Viszont végleg kiüríti ennek a futásnak a történetét: posztok és kommentek, repostok, Note-ok, DM-ek, group chatek, AI-emlékek, Roleplay/Eventek, napló, jutalmak, pletykák, trendek, értesítések, popupok és a követési előzmények törlődnek. Ez nem vonható vissza.",
+                "This does NOT delete the characters, your profile, character sheets, profile/album images, world description, settings, or the currently configured relationship graph. It permanently clears this run's history: posts and comments, reposts, Notes, DMs, group chats, AI memories, Roleplay/Events, diary, rewards, gossip, trends, notifications, popups, and follow history. This cannot be undone."
+              )}
+            </p>
+            <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="btn primary full tiny"
+                onClick={restartWorldHistory}
+              >
+                <RefreshCcw size={14} /> {tt("Igen, kezdd újra a világot", "Yes, restart the world")}
+              </button>
+              <button
+                type="button"
+                className="btn full tiny ghost"
+                onClick={() => setRestartConfirm(false)}
+              >
+                {tt("Mégse", "Cancel")}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="hint">
+              {tt(
+                "Ugyanazokkal a karakterekkel indíthatsz teljesen friss történetet. A karakterlapok és a világ beállításai megmaradnak, a korábbi játék során keletkezett tartalom és emlékezet viszont eltűnik.",
+                "Start a completely fresh story with the same characters. Character sheets and world settings stay, while content and memory created during the previous run are cleared."
+              )}
+            </p>
+            <button
+              type="button"
+              className="btn full"
+              style={{ marginTop: 10, borderColor: "var(--gold)" }}
+              onClick={() => setRestartConfirm(true)}
+            >
+              <RefreshCcw size={14} /> {tt("Világ újrakezdése — karakterek megtartása", "Restart world — keep characters")}
+            </button>
+          </>
+        )}
+        {restartMsg ? (
+          <p className="hint" style={{ marginTop: 8, color: "var(--gold)" }}>{restartMsg}</p>
+        ) : null}
+      </div>
+
       <button className="btn full" style={{ marginTop: 12 }} onClick={onRooms}><Globe2 size={14} /> {tt("Világaim — váltás, új világ", "My worlds — switch, new world")}</button>
       <button className="btn ghost full" style={{ marginTop: 8, color: "var(--muted)" }} onClick={onLeave}>{tt("Kijelentkezés", "Log out")}</button>
       <p className="hint" style={{ textAlign: "center", marginTop: 8, marginBottom: 4 }}>
@@ -32677,6 +33716,8 @@ ${relationshipBehaviorCard(
   w.meId
 )}
 
+${orientationBlockedRomanceInstruction(w, bot.id, w.meId)}
+
 AMIRE EMLÉKSZEL:
 ${selfMemoryForPrompt(
   w,
@@ -32746,8 +33787,9 @@ PRIVÁT ÜZENET SZABÁLYOK:
 - Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz, tervhez vagy egyszerűen valamihez, amit most akarsz tőle.
 - Az ok lehet egészen hétköznapi is.
 - Nem kell minden spontán DM mögé nagy történés, konfliktus vagy dráma.
-- Lehet, hogy csak eszedbe jutott valami, láttál valamit, kérdeznél valamit, átküldenél egy reakciót, piszkálnád, flörtölnél vele vagy akarsz tőle valamit.
-- Ha köztetek tényleges vonzalom/intim feszültség van, te is KEZDEMÉNYEZHETSZ: írhatsz direkt flörtöt, utalhatsz arra, hogy meg akarod csókolni, találkozót javasolhatsz, vagy Mature 18+ módban felnőtt szereplőként nem explicit módon jelezheted, hogy intimebb találkozást akarsz. Ne várj mindig arra, hogy a játékos hozza fel először.
+- Lehet, hogy csak eszedbe jutott valami, láttál valamit, kérdeznél valamit, átküldenél egy reakciót, piszkálnád vagy akarsz tőle valamit. Flört CSAK akkor opció, ha az orientációd + ez a konkrét célpont kompatibilis, vagy a saját Connections kánonod explicit target-specifikus kivételt ír.
+- Ha az orientációd szerint ${w.player.name} nem romantikus/szexuális célpont számodra, a közeli barátság maradjon PLATONIKUS: ne hajts rá, ne célozgass csókra/randira/intimitásra, és ne alakíts baráti hype-ot romantikus érdeklődéssé.
+- Ha köztetek tényleges, orientáció-kompatibilis vonzalom/intim feszültség van, te is KEZDEMÉNYEZHETSZ: írhatsz direkt flörtöt, utalhatsz arra, hogy meg akarod csókolni, találkozót javasolhatsz, vagy Mature 18+ módban felnőtt szereplőként nem explicit módon jelezheted, hogy intimebb találkozást akarsz. Ne várj mindig arra, hogy a játékos hozza fel először.
 - A chat azonban továbbra is távoli chat: ne írd úgy, mintha fizikailag már megcsókoltad volna vagy hozzáértél volna, hacsak a jelenet szerint ténylegesen egy helyen vagytok.
 - Ne találj ki mesterséges drámát csak azért, hogy legyen üzenet.
 - Ne generálj üzenetet pusztán azért, mert eltelt valamennyi idő.
@@ -32961,7 +34003,8 @@ ${characterAgentRuntimeCard(w,[bot.id],{surface:"dm",targetId:w.meId,messages:w.
 
 AUTONOMOUS DM RETRY — DO NOT SKIP:
 You are ${bot.name}. Send ${w.player.name} ONE natural spontaneous private message now.
-This is not a dramatic scene. A tiny human reason is enough: unfinished conversation, question, joke, practical thing, gossip, plan, invitation, checking in, teasing, flirting or a simple thought.
+This is not a dramatic scene. A tiny human reason is enough: unfinished conversation, question, joke, practical thing, gossip, plan, invitation, checking in, teasing or a simple thought. Flirting is allowed ONLY if this target is compatible with your orientation or explicit target-specific Connections canon.
+${orientationBlockedRomanceInstruction(w, bot.id, w.meId)}
 Do not invent off-screen facts. Respect relationship=${Number(rel.score)||0}${rel.bond?`, bond=${rel.bond}`:""}.
 Use only text you would actually send in chat. Usually 1 short line, maximum 2 short sentences. No narration, no *actions*, no assistant voice. Do not write for the player.
 ${matureContentInstruction(w,[bot.id],"chat")}
@@ -32977,7 +34020,7 @@ function fallbackAutonomousDmResponse(w, bot) {
   const rel = getRel(w, bot.id, w.meId) || {};
   const bond = String(rel.bond || "").toLowerCase();
   const tier = relationshipFilterTier(rel);
-  const romantic = bondLooksRomantic(rel) || /crush|dating|partner|lover|boyfriend|girlfriend|romance|szerelm|fl[oö]rt/.test(bond);
+  const romantic = relationshipRomanceActive(w, bot.id, w.meId, rel);
   const friendly = tier === "good" || tier === "close" || relationshipDeclaresFriendship(rel);
   const negative = Number(rel.score) <= -25 || /enemy|rival|ellens|riv[aá]l/.test(bond);
   let text;
@@ -36988,7 +38031,7 @@ function gossipStoryReactionCandidates(w,post){
 
     const lore=characterLoreCorpus(c).toLowerCase();
     const strongTargetRel=strongestTarget?getRel(w,c.id,strongestTarget):null;
-    const romanticTie=strongTargetRel && (bondLooksRomantic(strongTargetRel) || Number(strongTargetRel.score)>=60);
+    const romanticTie=strongTargetRel && strongestTarget && relationshipRomanceActive(w,c.id,strongestTarget,strongTargetRel);
     if(juice.romance>=20 && romanticTie && /jealous|jealousy|féltéken|possess|birtokl|obsess|megszáll/.test(lore)){
       score+=48;
       if(role!=="mentioned"&&role!=="witness")role="jealous";
@@ -37276,11 +38319,39 @@ function currentPopupEvent(w) {
   );
 }
 
+const POPUP_DAILY_HARD_MAX = 3;
+
+function popupLocalDayKey(ts = now()) {
+  const d = new Date(Number(ts) || now());
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function popupGeneratedCountToday(w, at = now()) {
+  if (!w) return 0;
+  const today = popupLocalDayKey(at);
+  if (!today) return 0;
+  return (Array.isArray(w.popupEvents) ? w.popupEvents : []).filter((event) => {
+    if (!event || typeof event !== "object") return false;
+    const ts = Number(event.ts) || 0;
+    return ts > 0 && popupLocalDayKey(ts) === today;
+  }).length;
+}
+
+function popupDailyCapReached(w, at = now()) {
+  return popupGeneratedCountToday(w, at) >= POPUP_DAILY_HARD_MAX;
+}
+
 function popupGenerationBlocked(w) {
   /* Active Event + editor are HARD locks, not just modal visibility rules.
      No popup AI request should be scheduled or committed while the player is
      editing/creating a character (or another EditLock-protected form). */
   if (EditLock.n > 0 || playerInsideActiveEvent(w) || !popupUiResumeReady()) return true;
+
+  /* v72 HARD DAILY CAP: at most three popup situations may be CREATED on the
+     player's local calendar day. Resolved/snoozed popups still count because
+     the user already experienced that interruption. */
+  if (popupDailyCapReached(w)) return true;
 
   /* "Later" hides only that popup; another future situation may still happen. */
   return Boolean(currentPopupEvent(w));
@@ -37564,14 +38635,14 @@ KÖTELEZŐ REALIZMUS:
 - location: rövid valódi helyszín a jelenlegi univerzum alapján (pl. iskola folyosó, parkoló, edzőterem, buli, kávézó). Ha nincs biztos helyszín, maradjon általános, ne találj ki kánonellenes konkrétumot.
 - visibility csak: public | limited | private. public = sokan láthatják; limited = néhány valós szereplő/tanú jelen van; private = csak a közvetlen résztvevők.
 - witnessIds: csak LÉTEZŐ AI-karakter ID-k, akik reálisan jelen lehetnek és tényleges tanúk. Ne adj tanút privát helyzethez. 0-4 ID.
-- gossipPotential: 0-100. Magasabb, ha nyilvános, kínos, romantikus, konfliktusos, botrányos vagy több tanú van. Ez NEM jelenti azt, hogy automatikusan pletyka lesz belőle.
+- gossipPotential: 0-100. Magasabb, ha nyilvános, kínos, romantikus, konfliktusos, botrányos vagy több tanú van. Ha public/limited és tényleges tanúk vannak, egy elég szaftos popup VALÓS pletykaforrás lehet; private vagy tanú nélküli helyzetből ne csinálj mágikus köztudott pletykát.
 - eventKind: rövid kategória, pl. encounter | invitation | confrontation | opportunity | awkward | romance | rivalry | social.
 - Nem írhatsz a játékos helyett konkrét mondatot, cselekvést, gondolatot vagy reakciót.
 - A választások STRATÉGIÁK legyenek, a játékos majd eldönti mit tesz.
 - A popup valódi történeti elágazás legyen: a három opció érezhetően más társas következményt indíthasson el.
 - tone csak: ignore | clarify | defend | joke | apologize | doubleDown | private | noComment
 - Ha tone="private", csak akkor használd, ha van a helyzetben létező AI karakter, akinek reálisan lehet írni, és adj meg targetId-t.
-- reactions: 0-4 létező AI várható EGYIRÁNYÚ kapcsolatreakciója; delta azt jelenti, AZ AI mit érez a játékos iránt, -20..+20.
+- reactions: a KÖZVETLENÜL ÉRINTETT létező AI-karakter(ek)nél kötelező kapcsolatreakciót adni, ha a választás érzékelhetően érinti őket; összesen 1-4 reakció, ha van érintett AI. delta azt jelenti, AZ AI mit érez a játékos iránt, -20..+20. Ne hagyd mindhárom választás reactions tömbjét üresen egy olyan popupnál, ahol valaki ténylegesen a játékossal interakcióban van.
 - socialImpact: opcionális, kicsi közvetlen stat-hatás. aura -8..8, reputation -12..12, hype -12..16, humor -8..8, followerRate -0.01..0.01. Ne jutalmazz/büntess mindent; csak ha valóban van társas következmény.
 - publicSentiment: support/dislike/controversy/cancel 0..100. Cancel ne legyen automatikus: csak akkor legyen jelentős, ha az adott stratégia nyilvánosan kínos, agresszív, hazug, érzéketlen, botrányos vagy "double down" jellegű.
 
@@ -37755,7 +38826,7 @@ Ugyanazokat a szabályokat tartsd, mint egy normál popupnál:
 - gossipPotential 0-100;
 - eventKind;
 - tone csak ignore | clarify | defend | joke | apologize | doubleDown | private | noComment;
-- reactions 0-4, delta -20..20;
+- reactions 1-4, ha a választás bármely jelenlévő/érintett AI-t ténylegesen érint; delta -20..20. Ne legyen minden opció kapcsolat-következmény nélküli.
 - socialImpact és publicSentiment opcionális, reális és arányos;
 - a játékos helyett soha ne dönts/cselekedj.
 
@@ -37812,7 +38883,7 @@ NE írd át a játékos cselekvését más cselekvéssé. A feladatod kizáróla
 - visibility: public | limited | private az esemény és a reakció után.
 - witnessIds: csak létező AI-karakter ID-k, akik ténylegesen láthatták/hallhatták; 0-4.
 - gossipPotential 0-100; ne legyen mindenből pletyka.
-- reactions: 0-4 AI egyirányú kapcsolatváltozása a játékos felé, delta -20..20.
+- reactions: 1-4 AI egyirányú kapcsolatváltozása a játékos felé, HA van közvetlenül érintett AI; delta -20..20. A tényleges résztvevő ne maradjon automatikusan kapcsolat-következmény nélkül csak azért, mert a modell kihagyná a mezőt.
 - socialImpact: aura -10..10, reputation -15..15, hype -15..20, humor -10..10, followerRate -0.015..0.015.
 - publicSentiment: support/dislike/controversy/cancel 0..100. Cancel csak akkor legyen magas, ha a játékos reakciója nyilvánosan botrányos, hazug, agresszív, megalázó, érzéketlen vagy visszaütő.
 - drama/romance/embarrassment 0..100 a tényleges eseményhez.
@@ -37859,8 +38930,12 @@ function normalizePopupCustomOutcome(w,event,customText,raw){
 }
 
 function addPopupEvent(w,seed,raw){
+  /* Commit-time guard too: a popup action can already be queued/generating when
+     another popup becomes the third one of the day. Never let that race create #4. */
+  if(!w || popupDailyCapReached(w))return null;
   const row=normalizePopupEvent(w,seed,raw);
   if(!row)return null;
+  if(popupDailyCapReached(w,row.ts||now()))return null;
   w.popupEvents=[row,...(w.popupEvents||[])].slice(0,40);
   if(!w.popupRuntime||typeof w.popupRuntime!=="object")w.popupRuntime={};
   if(!Number.isFinite(Number(w.popupRuntime.startedAt)))w.popupRuntime.startedAt=now();
@@ -38458,6 +39533,153 @@ function popupCombinedImpact(w,choice){
   };
 }
 
+/* ============================================================
+   POPUP CONSEQUENCE LOCK — v73
+
+   A popup is a real story event, not a decorative modal. The model may supply
+   nuanced per-choice reactions, but a malformed/empty `reactions` array must
+   not make a direct interaction socially consequence-free. Likewise, a
+   witnessed/public popup that is genuinely gossip-worthy should enter the
+   existing grounded gossip pipeline instead of waiting for a lucky scheduler
+   roll.
+   ============================================================ */
+function popupFallbackRelationshipReaction(w, event, choice, actorId) {
+  if (!w || !event || !choice || !actorId || isHuman(w, actorId) || !charById(w, actorId)) return null;
+
+  const rel = getRel(w, actorId, w.meId) || {};
+  const score = Number(rel.score) || 0;
+  const tone = String(choice.tone || "clarify");
+  const romantic = String(event.eventKind || "").toLowerCase() === "romance";
+  let delta = 0;
+  let moodHu = "figyelmesebb";
+  let moodEn = "more attentive";
+
+  if (tone === "apologize") {
+    delta = 5;
+    moodHu = "enyhültebb";
+    moodEn = "softened";
+  } else if (tone === "clarify") {
+    delta = score < -35 ? 2 : 4;
+    moodHu = "tisztábban látja a helyzetet";
+    moodEn = "clearer about the situation";
+  } else if (tone === "joke") {
+    delta = score >= 15 ? 4 : score <= -30 ? -2 : 2;
+    moodHu = delta > 0 ? "oldottabb" : "ingerültebb";
+    moodEn = delta > 0 ? "more at ease" : "more irritated";
+  } else if (tone === "private") {
+    delta = score <= -45 ? 1 : 4;
+    moodHu = "személyesebben bevonódott";
+    moodEn = "more personally engaged";
+  } else if (tone === "defend") {
+    delta = score < -15 ? -4 : 3;
+    moodHu = delta > 0 ? "elismerőbb" : "védekezőbb";
+    moodEn = delta > 0 ? "more respectful" : "more defensive";
+  } else if (tone === "doubleDown") {
+    delta = score >= 45 ? -4 : -6;
+    moodHu = "feszültebb";
+    moodEn = "more tense";
+  } else if (tone === "ignore") {
+    delta = score >= 30 ? -5 : -3;
+    moodHu = "elhanyagoltabbnak érzi magát";
+    moodEn = "feels brushed off";
+  } else if (tone === "noComment") {
+    delta = score >= 30 ? -3 : -2;
+    moodHu = "bizonytalanabb";
+    moodEn = "more uncertain";
+  }
+
+  if (romantic && delta > 0) delta += 1;
+  delta = Math.max(-8, Math.min(8, delta || (score >= 0 ? 3 : -3)));
+
+  return {
+    id: actorId,
+    delta,
+    mood: sysLangText(w, actorId, moodHu, moodEn),
+    why: sysLangText(
+      w,
+      actorId,
+      `A popupban választott reakció közvetlenül érintette ${nameOfIn(w, actorId)} karaktert.`,
+      `The choice in the popup directly affected ${nameOfIn(w, actorId)}.`
+    ),
+  };
+}
+
+function popupResolvedRelationshipReactions(w, event, choice) {
+  if (!w || !event || !choice) return [];
+  const validAi = (id) => Boolean(id && charById(w, id) && !isHuman(w, id) && !isMediaAccount(w, id));
+  const merged = new Map();
+
+  (Array.isArray(choice.reactions) ? choice.reactions : []).slice(0, 6).forEach((raw) => {
+    const id = String(raw && raw.id || "");
+    if (!validAi(id)) return;
+    merged.set(id, {
+      id,
+      delta: Math.max(-20, Math.min(20, Number(raw && raw.delta) || 0)),
+      mood: cut(String(raw && raw.mood || ""), 60),
+      why: cut(String(raw && raw.why || ""), 180),
+    });
+  });
+
+  const directIds = [
+    choice.targetId,
+    event.seedActorId,
+    ...(Array.isArray(event.involvedIds) ? event.involvedIds : []),
+  ]
+    .map((id) => String(id || ""))
+    .filter((id, index, arr) => validAi(id) && arr.indexOf(id) === index)
+    .slice(0, 4);
+
+  directIds.forEach((id) => {
+    const existing = merged.get(id);
+    /* Zero-delta placeholder from the provider is not a meaningful consequence
+       for the direct participant. Give it a small deterministic, tone-aware
+       fallback while preserving any model-written mood/why when useful. */
+    if (!existing || Number(existing.delta) === 0) {
+      const fallback = popupFallbackRelationshipReaction(w, event, choice, id);
+      if (!fallback) return;
+      merged.set(id, existing ? {
+        ...fallback,
+        mood: existing.mood || fallback.mood,
+        why: existing.why || fallback.why,
+      } : fallback);
+    }
+  });
+
+  return [...merged.values()].slice(0, 6);
+}
+
+function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
+  if (!w || !event || !socialEntry || !socialEntry.meta) return false;
+  if (socialEntry.visibility === "private" || socialEntry.meta.gossipEligible !== true) return false;
+
+  const potential = Number(socialEntry.meta.gossipPotential) || 0;
+  const witnesses = Number(socialEntry.meta.witnessCount) || 0;
+  const worthSurfacing = socialEntry.visibility === "public"
+    ? potential >= 30
+    : (socialEntry.visibility === "limited" && witnesses >= 1 && potential >= 35);
+  if (!worthSurfacing) return false;
+
+  /* recordSocialEvent already seeds the grounded rumor graph. We call the
+     selector again here only to surface a candidate that includes THIS popup;
+     private/unwitnessed events can never pass this gate. */
+  const candidate = selectGossipStoryCandidate(w);
+  if (!candidate) return false;
+  const sourceEventId = String(socialEntry.id || "");
+  const coversPopup = candidate.primaryEventId === sourceEventId ||
+    (Array.isArray(candidate.eventIds) && candidate.eventIds.includes(sourceEventId));
+  if (!coversPopup) return false;
+
+  return simEnqueue(
+    w,
+    mkAction(
+      "gossip-story",
+      `popup-gossip:${event.id}:${String(choiceKey || "choice")}:${sourceEventId}`,
+      { candidate },
+      "event"
+    )
+  );
+}
+
 function popupEventGossipEligible(event,visibility,witnessIds,gossipPotential){
   if(!event)return false;
   if(visibility==="public")return gossipPotential>=18;
@@ -38470,9 +39692,10 @@ function resolvePopupEvent(w,eventId,choiceId){
   const choice=(event.choices||[]).find((c)=>c&&c.id===choiceId);if(!choice)return false;
   const impact=popupCombinedImpact(w,choice);
   applyExplicitSocialImpact(w,w.meId,{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers});
+  const resolvedRelationshipReactions = popupResolvedRelationshipReactions(w, event, choice);
   applyChanges(
     w,
-    (choice.reactions || []).map((r) => ({
+    resolvedRelationshipReactions.map((r) => ({
       a:r&&r.id?r.id:"",b:w.meId,delta:Number(r&&r.delta)||0,mood:r&&r.mood,why:r&&r.why,
     }))
   );
@@ -38492,8 +39715,9 @@ function resolvePopupEvent(w,eventId,choiceId){
   event.socialImpact={aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers};
   event.publicSentiment={...ps};
   event.gossipEligible=gossipEligible;
+  event.relationshipReactions=resolvedRelationshipReactions.map((r)=>({ ...r }));
 
-  recordSocialEvent(w,{
+  const popupSocialEvent = recordSocialEvent(w,{
     type:"popup-choice",
     refId:`${event.id}:${choice.id}`,
     ts:event.resolvedAt,
@@ -38510,7 +39734,7 @@ function resolvePopupEvent(w,eventId,choiceId){
     text:`${event.title}: ${event.text} → ${choice.label}`,
     tags:[
       "popup-event","choice",choice.tone,event.eventKind||"social",
-      ...(gossipEligible&&gossipPotential>=45?["gossip-worthy-thread"]:[]),
+      ...(gossipEligible&&gossipPotential>=35?["gossip-worthy-thread"]:[]),
       ...(cancelRisk?["controversy","backlash-risk"]:[]),
     ],
     meta:{
@@ -38519,6 +39743,7 @@ function resolvePopupEvent(w,eventId,choiceId){
       sentimentTargetIds:[w.meId],choiceImpact:{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers},
     }
   });
+  queuePopupGossipAfterResolution(w, event, choice.id, popupSocialEvent);
   return true;
 }
 
@@ -38530,7 +39755,12 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
   applyExplicitSocialImpact(w,w.meId,{
     aura:outcome.socialImpact.aura,reputation:outcome.socialImpact.reputation,hype:outcome.socialImpact.hype,humor:outcome.socialImpact.humor,followers:followerDelta,
   });
-  applyChanges(w,(outcome.reactions||[]).map((r)=>({a:r.id,b:w.meId,delta:r.delta,mood:r.mood,why:r.why})));
+  const resolvedRelationshipReactions = popupResolvedRelationshipReactions(w, event, {
+    tone: outcome.tone,
+    targetId: "",
+    reactions: outcome.reactions || [],
+  });
+  applyChanges(w,resolvedRelationshipReactions.map((r)=>({a:r.id,b:w.meId,delta:r.delta,mood:r.mood,why:r.why})));
 
   const visibility=outcome.visibility;
   const witnessIds=outcome.witnessIds||[];
@@ -38557,8 +39787,9 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
   event.gossipEligible=gossipEligible;
   event.socialImpact={...outcome.socialImpact,followers:followerDelta};
   event.publicSentiment=publicSentiment;
+  event.relationshipReactions=resolvedRelationshipReactions.map((r)=>({ ...r }));
 
-  recordSocialEvent(w,{
+  const popupSocialEvent = recordSocialEvent(w,{
     type:"popup-choice",
     refId:`${event.id}:custom`,
     ts:event.resolvedAt,
@@ -38575,7 +39806,7 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
     text:`${event.title}: ${outcome.summary||outcome.customText}`,
     tags:[
       "popup-event","custom-response",outcome.tone,event.eventKind||"social",...outcome.tags,...risk.tags,
-      ...(gossipEligible&&outcome.gossipPotential>=45?["gossip-worthy-thread"]:[]),
+      ...(gossipEligible&&outcome.gossipPotential>=35?["gossip-worthy-thread"]:[]),
       ...(cancelRisk?["controversy","backlash-risk"]:[]),
     ],
     meta:{
@@ -38584,6 +39815,7 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
       socialImpact:{aura:outcome.socialImpact.aura,reputation:outcome.socialImpact.reputation,hype:outcome.socialImpact.hype,humor:outcome.socialImpact.humor,followers:followerDelta},
     }
   });
+  queuePopupGossipAfterResolution(w, event, "custom", popupSocialEvent);
   return true;
 }
 
@@ -41136,6 +42368,7 @@ function romanticStakeForObserver(w, observerId, subjectId) {
   if (!observer || !subject || isHuman(w, observerId)) return null;
 
   const rel = getRel(w, observerId, subjectId) || {};
+  if (!romanceTargetAllowed(w, observerId, subjectId)) return null;
   const relText = [rel.bond, rel.type, rel.hidden, rel.mood, rel.why]
     .filter(Boolean).join(" ").toLowerCase();
   const story = String(ownStorySnippetAbout(observer, subject) || "").toLowerCase();
@@ -41149,7 +42382,10 @@ function romanticStakeForObserver(w, observerId, subjectId) {
     stake = 4; label = "partner";
   } else if (/\b(?:situationship|hooking\s*up|hookup|friends?\s+with\s+benefits|fwb|secret\s+affair|affair|titkos\s+viszony|kavar|kavarnak|összejár)\b/i.test(corpus)) {
     stake = 3; label = "involved";
-  } else if (/\b(?:mutual\s+crush|crush|secret\s+crush|in\s+love|love\s+with|attraction|attracted|vonzalom|vonzód|szerelmes|titkos\s+vonzalom)\b/i.test(corpus) || bondLooksRomantic(rel)) {
+  } else if (
+    /\b(?:mutual\s+crush|crush|secret\s+crush|in\s+love|love\s+with|attraction|attracted|vonzalom|vonzód|szerelmes|titkos\s+vonzalom)\b/i.test(corpus) ||
+    relationshipRomanceActive(w, observerId, subjectId, rel)
+  ) {
     stake = 2; label = "crush";
   }
 
@@ -41161,7 +42397,7 @@ function romanticStakeForObserver(w, observerId, subjectId) {
   if (/obsess|fixat|megszáll|máni/.test(`${corpus} ${lore}`)) jealousy += 2;
   jealousy += obsession;
 
-  if (!stake && jealousy >= 3 && bondLooksRomantic(rel)) {
+  if (!stake && jealousy >= 3 && relationshipRomanceActive(w, observerId, subjectId, rel)) {
     stake = 2; label = "romantic-fixation";
   }
   if (!stake) return null;
@@ -43340,15 +44576,16 @@ function roleplayRomanticInitiativeCard(w, scene, cast) {
 
       let initiative = score;
 
-      if (bondLooksRomantic(rel)) initiative += 46;
-      if (/crush|dating|partner|girlfriend|boyfriend|lover|wife|husband|romance|attract|vonz|szerelm|intim/.test(bond)) initiative += 36;
-      if (/flirt|bold|merész|dominant|domináns|impulsive|impulzív|passionate|szenvedély|possess|birtokl|obsess|megszáll|confident|magabiztos/.test(lore)) initiative += 18;
+      const orientationRomanceAllowed = romanceTargetAllowed(w, actor.id, target.id);
+      if (relationshipRomanceActive(w, actor.id, target.id, rel)) initiative += 46;
+      if (orientationRomanceAllowed && /crush|dating|partner|girlfriend|boyfriend|lover|wife|husband|romance|attract|vonz|szerelm|intim/.test(bond)) initiative += 36;
+      if (orientationRomanceAllowed && /flirt|bold|merész|dominant|domináns|impulsive|impulzív|passionate|szenvedély|possess|birtokl|obsess|megszáll|confident|magabiztos/.test(lore)) initiative += 18;
       if (/shy|félénk|reserved|visszafogott|avoidant|bizalmatlan/.test(lore)) initiative -= 12;
-      if (/kiss|csók|making out|make out|csókolóz|desire|vágy|attraction|vonzalom|chemistry|kémia|flirt|flört/.test(recentText)) initiative += 18;
+      if (orientationRomanceAllowed && /kiss|csók|making out|make out|csókolóz|desire|vágy|attraction|vonzalom|chemistry|kémia|flirt|flört/.test(recentText)) initiative += 18;
       const intimacyStage = roleplayAdultIntimacyStage(w, scene);
-      if (intimacyStage === "kiss-touch") initiative += 10;
-      if (intimacyStage === "mutual-kissing") initiative += 22;
-      if (intimacyStage === "private-intimacy") initiative += 28;
+      if (orientationRomanceAllowed && intimacyStage === "kiss-touch") initiative += 10;
+      if (orientationRomanceAllowed && intimacyStage === "mutual-kissing") initiative += 22;
+      if (orientationRomanceAllowed && intimacyStage === "private-intimacy") initiative += 28;
 
       if (initiative >= 62) {
         rows.push({
@@ -43376,10 +44613,10 @@ function roleplayRomanticInitiativeCard(w, scene, cast) {
   const sustained =
     (scene.turns || []).length >= 4 &&
     !hasConcreteEscalation &&
-    top[0].initiative >= 78;
+    top[0].initiative >= 74;
   const intimacyStage = roleplayAdultIntimacyStage(w, scene);
 
-  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}`).join("\n")}\n- Current non-graphic intimacy stage inferred from ACTUAL recent turns: ${intimacyStage}.\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- If the scene is already at kiss-touch / mutual-kissing / private-intimacy and there is no recent explicit player boundary, DO NOT reset it back to coy small talk or another almost-kiss. Continue from the actual established physical/emotional state.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating/continuing a non-graphic transition toward adult intimacy.\n- If the player has already clearly reciprocated in an actual stored turn, the AI may respond to that reciprocity; still never invent the player's NEXT reaction.\n- Non-graphic adult intimacy may continue as a scene through dialogue, closeness, kissing, atmosphere and time progression; fade-to-black is optional, not mandatory. Never add graphic anatomical/pornographic detail.\n- If the target is the PLAYER, write only the AI's own next action/dialogue and stop before deciding the player's next choice.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
+  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}`).join("\n")}\n- Current non-graphic intimacy stage inferred from ACTUAL recent turns: ${intimacyStage}.\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- If the scene is already at kiss-touch / mutual-kissing / private-intimacy / post-intimacy and there is no recent explicit player boundary, DO NOT reset it back to coy small talk or another almost-kiss. Continue from the actual established physical/emotional state.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating/continuing a non-graphic transition toward adult intimacy.\n- If the player has already clearly reciprocated in an actual stored turn, the AI may respond to that reciprocity; still never invent the player's NEXT reaction.\n- Non-graphic adult intimacy may continue as a scene through suggestive adult dialogue, closeness, kissing/making out, concrete but non-anatomical touch, movement to a private place, atmosphere, implied time progression and post-intimacy aftermath; fade-to-black is optional, not mandatory. Never add graphic anatomical/pornographic detail.\n- If the target is the PLAYER, write only the AI's own next action/dialogue and stop before deciding the player's next choice.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
 }
 
 async function genRoleplayInitiation(w, bot) {
@@ -44797,6 +46034,17 @@ Ha van természetes folytatás:
 async function runSimulationAction(view, update, action, addImage) {
   if (!view || !action) return null;
 
+  /* v76 RESET EPOCH GUARD:
+   * If the player restarts the world while an autonomous provider request is
+   * already in flight, its old output must never repopulate the fresh history. */
+  const actionHistoryEpoch = Math.max(0, Math.floor(Number(view.historyEpoch) || 0));
+  const rawUpdate = update;
+  update = (fn) => rawUpdate((n) => {
+    const liveEpoch = Math.max(0, Math.floor(Number(n && n.historyEpoch) || 0));
+    if (liveEpoch !== actionHistoryEpoch) return;
+    fn(n);
+  });
+
   if (action.type === "time-skip") {
     const hours = Math.max(1, Math.min(24 * 30, Math.round(Number(action.payload && action.payload.hours) || 6)));
     const out = await genWorldStep(view, false, hours);
@@ -44956,6 +46204,8 @@ async function runSimulationAction(view, update, action, addImage) {
       };
     }
 
+    out = sanitizeRoleplayAiOutput(out);
+
     const validModes = new Set(["dm_invite", "arrival", "encounter"]);
     const mode = validModes.has(String(out.mode || "")) ? String(out.mode) : "dm_invite";
     const eventDescriptor = [out.title, out.setting, out.goal].filter(Boolean).join(" ");
@@ -44986,7 +46236,7 @@ async function runSimulationAction(view, update, action, addImage) {
     );
     if (!castIds.includes(bot.id)) castIds.unshift(bot.id);
 
-    const opening = cleanGeneratedUtterance(view, bot.id, String(out.opening || out.dmText || ""), 1800);
+    const opening = stripRoleplayEmoji(cleanGeneratedUtterance(view, bot.id, String(out.opening || out.dmText || ""), 1800));
     const dmText = cleanGeneratedUtterance(view, bot.id, String(out.dmText || ""), 360);
     const title = String(out.title || "").trim().slice(0, 120) || sysLangText(view, view.meId, `${bot.name} kezdeményezése`, `${bot.name}'s invitation`);
     const setting = String(out.setting || "").trim().slice(0, 1400);
@@ -44997,7 +46247,7 @@ async function runSimulationAction(view, update, action, addImage) {
     update((n) => {
       const liveBot = charById(n, bot.id);
       if (!liveBot) return;
-      const firstText = opening || dmText;
+      const firstText = stripRoleplayEmoji(opening || dmText);
       const scene = {
         id: sceneId,
         title,
@@ -45096,7 +46346,7 @@ async function runSimulationAction(view, update, action, addImage) {
         type: "roleplay-initiated", refId: sceneId, ts: now(), actorId: bot.id,
         targetIds: [n.meId, ...castIds.filter((id) => id !== bot.id)],
         visibility: "limited", factLevel: "observed", importance: 42, drama: 18,
-        romance: bondLooksRomantic(getRel(n, bot.id, n.meId)) ? 18 : 0,
+        romance: relationshipRomanceActive(n, bot.id, n.meId, getRel(n, bot.id, n.meId)) ? 18 : 0,
         embarrassment: 0, source: "ai-roleplay-initiation",
         text: `${bot.name}: ${title}`,
         tags: ["roleplay", "ai-initiated", mode],
@@ -49681,6 +50931,10 @@ const signOut = useCallback(async () => {
       });
       let ok = false;
       let result = null;
+      const actionHistoryEpoch = Math.max(
+        0,
+        Math.floor(Number(viewRef.current && viewRef.current.historyEpoch) || 0)
+      );
       try {
         result = await runSimulationAction(viewRef.current, update, action, addImage);
         ok = Boolean(result);
@@ -49700,6 +50954,19 @@ const signOut = useCallback(async () => {
         }
       }
       update((n) => {
+        const liveHistoryEpoch = Math.max(
+          0,
+          Math.floor(Number(n && n.historyEpoch) || 0)
+        );
+
+        /* A pre-restart action may finish later. Do not let it alter the fresh
+         * scheduler clocks/done-state after its content commit was rejected. */
+        if (liveHistoryEpoch !== actionHistoryEpoch) {
+          const sim = ensureSimState(n);
+          sim.running = "";
+          return;
+        }
+
         if (queued) simDropQueued(n, action.id);
 
         if (ok) {
