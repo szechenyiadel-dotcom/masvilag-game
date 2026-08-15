@@ -32189,8 +32189,8 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   const [text, setText] = useState("");
   const [chatImg, setChatImg] = useState("");
   const [showChatMedia, setShowChatMedia] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const sendLockRef = useRef(false);
+  const [busyChats, setBusyChats] = useState({});
+  const sendLockRef = useRef(new Set());
   const [gid, setGid] = useState(null);
   const [creating, setCreating] = useState(false);
   const endRef = useRef(null);
@@ -32213,6 +32213,15 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
     update((n) => { if (!n.seen) n.seen = {}; n.seen[ck] = last.ts; });
   }, [openId, msgs.length]);
 
+  /*
+   * MULTI-DM CONCURRENCY:
+   * Each private conversation has its own pending state and send lock.
+   * Starting a reply from one bot must NEVER disable the composer or sending
+   * controls for another bot. The user may switch chats and send messages
+   * freely while another character is still generating a reply.
+   * Replies remain attached to their own chat key, so they can arrive later
+   * without stealing the active conversation.
+   */
   const send = async (override) => {
   const t = String(
     override !== undefined
@@ -32226,14 +32235,13 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   if (
     (!t && !selectedImg) ||
     !c ||
-    busy ||
-    sendLockRef.current
+    sendLockRef.current.has(c.id)
   ) {
     return;
   }
 
-  sendLockRef.current = true;
-  setBusy(true);
+  sendLockRef.current.add(c.id);
+  setBusyChats((prev) => ({ ...prev, [c.id]: true }));
   setText("");
   setChatImg("");
   setShowChatMedia(false);
@@ -32574,6 +32582,8 @@ Ha természetes része a válaszodnak, küldhetsz EGY ÚJONNAN GENERÁLT képet.
 
 PRIVÁT CHAT SZABÁLYOK:
 
+- EZ A DM ÖNÁLLÓ BESZÉLGETÉS. A játékos közben más karakterekkel is beszélhet és nekik is küldhet üzenetet. Ne feltételezd, hogy a játékos csak veled beszél, és ne várj másik DM válaszára.
+- Egy másik karakter folyamatban lévő válasza semmilyen módon nem blokkolhatja ezt a beszélgetést. A saját válaszodat kizárólag a saját chat előzménye, a saját kapcsolatotok és a saját karaktered alapján generáld.
 - Most KÖZVETLENÜL a játékos legutóbbi üzenetére válaszolj.
 - Már egyetlen játékosi üzenet is elegendő ahhoz, hogy válaszolj.
 - Soha ne várj arra, hogy a játékos még egy üzenetet küldjön.
@@ -33050,8 +33060,12 @@ Formátum:
       )
     );
   } finally {
-  sendLockRef.current = false;
-  setBusy(false);
+  sendLockRef.current.delete(c.id);
+  setBusyChats((prev) => {
+    const next = { ...prev };
+    delete next[c.id];
+    return next;
+  });
 }
 };
 
@@ -33549,6 +33563,12 @@ if (group) {
                       {rel.mood}
                     </div>
                   ) : null}
+                  {busyChats[x.id] ? (
+                    <div style={{ fontSize:10.5, color:"var(--rose)", marginTop:3, display:"flex", alignItems:"center", gap:5 }}>
+                      <span className="typing-dot" style={{ width:5, height:5, animationDuration:"1s" }} />
+                      {tt("éppen ír…", "typing…")}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -33678,7 +33698,7 @@ if (group) {
             })() : null}
           </div>
         ))}
-        {busy && (
+        {Boolean(openId && busyChats[openId]) && (
   <div className="typing-row">
     <div className="bub them typing-bub">
       <span className="typing-dot" />
@@ -33729,7 +33749,7 @@ if (group) {
               (v) => !v
             )
           }
-          disabled={busy}
+          disabled={Boolean(c && busyChats[c.id])}
           title={tt(
             "Kép küldése",
             "Send a photo"
