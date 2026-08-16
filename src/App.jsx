@@ -22176,6 +22176,76 @@ async function saveNewAccount(code, username, pw, charName) {
   return { world: fresh, meId: id };
 }
 
+function isolateFreshCreatedWorld(baseWorld, serverWorld, serverMeId, previousWorld) {
+  const base = migrate(cloneWorldState(baseWorld || emptyWorld((serverWorld && serverWorld.code) || "new-world")));
+  const server = serverWorld ? migrate(cloneWorldState(serverWorld)) : null;
+  const me = String(serverMeId || "").trim();
+  const oldEpoch = Math.max(0, Math.floor(Number(previousWorld && previousWorld.historyEpoch) || 0));
+
+  /*
+   * A NEW WORLD is a hard data boundary. Never merge it with the currently
+   * open world. The old mergeWorlds reconciliation is correct for concurrent
+   * saves of the SAME world, but it is exactly the wrong operation here.
+   */
+  const fresh = base;
+  fresh.historyEpoch = oldEpoch + 1;
+  fresh.syncRev = server ? worldSyncRev(server) : 0;
+  fresh.rev = Math.max(1, Number(server && server.rev) || 1);
+  fresh.owner = me || fresh.owner || "";
+
+  const preserve = [
+    "code", "universe", "storySettings", "gossipSettings", "mediaAccounts",
+    "aiLang", "autonomousFeedSettings", "trends", "whisperWire",
+  ];
+  preserve.forEach((key) => {
+    if (server && server[key] !== undefined && ["code", "universe", "storySettings", "gossipSettings", "mediaAccounts", "aiLang", "autonomousFeedSettings"].includes(key)) {
+      /* User-entered base settings win over any stale server snapshot. */
+      return;
+    }
+  });
+
+  /* Keep ONLY the newly created account/player identity from the server. */
+  fresh.accounts = {};
+  fresh.players = {};
+  fresh.userSettings = {};
+  if (server && me) {
+    if (server.accounts && server.accounts[me]) fresh.accounts[me] = cloneWorldState(server.accounts[me]);
+    if (server.players && server.players[me]) fresh.players[me] = cloneWorldState(server.players[me]);
+    if (server.userSettings && server.userSettings[me]) fresh.userSettings[me] = cloneWorldState(server.userSettings[me]);
+  }
+  if (me && !fresh.accounts[me]) {
+    fresh.accounts[me] = base.accounts && base.accounts[me] ? cloneWorldState(base.accounts[me]) : { id: me, username: "jatekos", salt: "", hash: "", created: now() };
+  }
+  if (me && !fresh.players[me]) {
+    fresh.players[me] = base.players && base.players[me] ? cloneWorldState(base.players[me]) : blankPlayer(me, "Névtelen", "jatekos");
+  }
+  fresh.meId = undefined;
+
+  /* Explicitly reset every history-bearing structure. */
+  fresh.chars = Array.isArray(base.chars) ? base.chars : [];
+  fresh.rels = {};
+  fresh.posts = [];
+  fresh.reposts = [];
+  fresh.chats = {};
+  fresh.mems = {};
+  fresh.charMemory = {};
+  fresh.log = Array.isArray(base.log) ? base.log : [];
+  fresh.scenes = [];
+  fresh.groups = [];
+  fresh.notes = [];
+  fresh.inventory = [];
+  fresh.diary = [];
+  fresh.socialEvents = [];
+  fresh.rumors = [];
+  fresh.gossipPropagation = { rumors: [], exchanges: [], echoes: [], lastRoundAt: 0, lastEchoAt: 0, version: 2 };
+  fresh.popupEvents = [];
+  fresh.popupRuntime = { startedAt: now(), lastGeneratedAt: 0 };
+  fresh.sim = { queue: [], done: {}, running: "", at: 0, contentAt: 0, localAt: 0, lastSuccessAt: 0, lastAttemptAt: 0, popupAttemptAt: 0, dmAttemptAt: 0, roleplayAttemptAt: 0, groupAttemptAt: 0, liveWorldStartedAt: now(), lastPopupSuccessAt: 0 };
+  fresh.whisperWire = { stories: [], usedEventIds: [], history: [], lastCandidate: null, lastPublishedAt: 0 };
+
+  return migrate(fresh);
+}
+
 function NewWorld({ w, onReady, onClose, setErr }) {
   useEditLock();
 
@@ -22374,16 +22444,26 @@ function NewWorld({ w, onReady, onClose, setErr }) {
         );
 
       /*
-       * Emergency helyi backup az új worldről.
+       * v99.9 NEW-WORLD HARD ISOLATION:
+       * never reconcile a newly created world with the world that happened to
+       * be open before the modal. Only the new account identity is accepted
+       * from the server snapshot; all history-bearing collections start empty.
        */
+      const isolatedWorld = isolateFreshCreatedWorld(
+        nw,
+        serverWorld,
+        created.meId,
+        w
+      );
+
       try {
         await saveWorldMerged(
-          serverWorld
+          isolatedWorld
         );
       } catch (e) {}
 
       onReady(
-        serverWorld,
+        isolatedWorld,
         created.meId
       );
     } catch (e) {
@@ -28520,18 +28600,43 @@ function deterministicAutonomousFallbackPost(w, authorId) {
   const author = charById(w, authorId);
   if (!author || !characterCanAutonomouslyPost(w, author)) return null;
 
+  /*
+   * HARD LOCAL POST FALLBACK v99.9
+   *
+   * This path is deliberately independent from the provider. A provider can
+   * return empty JSON, time out, hit a temporary busy state, or produce a
+   * post that a canon guard rejects. None of those conditions are allowed to
+   * turn an otherwise living social feed into a cemetery.
+   *
+   * The fallback is still built from the character's OWN sheet only.
+   */
   const faction = characterFactionIdentityCard(author);
-  const job = String(author.job || author.role || "").trim();
+  const job = String(author.job || author.occupation || author.role || "").trim();
   const goals = String(author.goals || "").trim();
   const likes = String(author.likes || "").trim();
-  const recent = (w.posts || []).filter((p) => p && p.authorId === author.id).slice(0, 8).map((p) => String(p.text || "").toLowerCase());
+  const personality = String(author.personality || author.traits || "").trim();
+  const city = String(author.city || "").trim();
+  const speech = String(author.speech || "").trim();
+  const dojo = (faction.match(/dojo=([^|]+)/i) || [])[1]?.trim() || "";
+  const recent = (w.posts || [])
+    .filter((p) => p && p.authorId === author.id)
+    .slice(0, 10)
+    .map((p) => String(p.text || "").toLowerCase());
+
   const candidates = [
-    job ? `Another day of ${job}.` : "Just another day.",
-    faction && /dojo=/i.test(faction) ? `${faction.replace(/^.*dojo=/i, "").split(" | ")[0]} training never gets old.` : "Keeping busy.",
-    goals ? `Still working on the things that actually matter.` : "Need a quieter day for once.",
-    likes ? `Honestly, I could do with a little more of the things I actually enjoy.` : "My schedule is getting ridiculous.",
-  ];
-  const chosen = candidates.find((x) => x && !recent.some((r) => r.includes(x.toLowerCase().slice(0, Math.min(28, x.length))))) || candidates[0];
+    job ? `${job}. somehow still alive.` : "still alive. somehow.",
+    dojo ? `${dojo} training done. my arms disagree.` : "today has been unnecessarily long.",
+    goals ? `still working on what I actually want.` : "my schedule is getting ridiculous.",
+    likes ? `could use more time for the things I actually like.` : "need a quieter day for once.",
+    personality ? `${personality.split(/[,.;]/)[0].trim() || "busy"} as usual.` : "busy as usual.",
+    city ? `${city} days really know how to drain you.` : "some days are just a lot.",
+  ].filter(Boolean);
+
+  const chosen = candidates.find((x) => {
+    const key = x.toLowerCase().slice(0, Math.min(32, x.length));
+    return !recent.some((r) => r.includes(key));
+  }) || candidates[0] || "still here.";
+
   return {
     posts: [{ id: author.id, text: chosen, image: "", comments: [] }],
     changes: [],
@@ -51146,6 +51251,47 @@ Ha van természetes folytatás:
   );
 }
 /* Egy központi szimulációs akció futtatása. Mindig pontosan egy AI-hívás. */
+/*
+ * v99.9 AUTONOMOUS FEED HEARTBEAT
+ *
+ * The normal AI scheduler remains the primary content engine. This tiny local
+ * watchdog is a last-resort safety net: if an AI character is below its own
+ * rolling 24h quota and the feed has gone silent, create one canon-safe post
+ * locally. It never calls the provider, so provider busy/cooldown cannot starve
+ * the social feed.
+ */
+function runAutonomousFeedHeartbeat(w, update) {
+  if (!w || !update || !Array.isArray(w.chars) || !w.chars.length) return false;
+  const cast = fairPostCast(w);
+  if (!cast.length) return false;
+
+  const latest = lastAiFeedPostAt(w);
+  const silence = latest ? now() - latest : Infinity;
+  const due = silence >= 12000;
+  if (!due) return false;
+
+  const candidate = cast[0];
+  const stats = characterAutonomousPostStats24h(w, candidate.id);
+  if (Number(stats.count || 0) >= Math.min(5, autonomousCharacterPostTarget24h(w, candidate))) return false;
+
+  let created = false;
+  update((n) => {
+    const live = charById(n, candidate.id);
+    if (!live || !characterCanAutonomouslyPost(n, live)) return;
+    const liveLatest = lastAiFeedPostAt(n);
+    if (liveLatest && now() - liveLatest < 12000) return;
+    const fallback = deterministicAutonomousFallbackPost(n, live.id);
+    if (!fallback) return;
+    created = Boolean(applyWorldStep(n, fallback));
+    if (created) {
+      const sim = ensureSimState(n);
+      sim.lastSuccessAt = now();
+      sim.lastAttemptAt = now();
+    }
+  });
+  return created;
+}
+
 async function runSimulationAction(view, update, action, addImage) {
   if (!view || !action) return null;
 
@@ -53786,6 +53932,22 @@ useEffect(() => {
   const [prefill, setPrefill] = useState("");
 
   const signIn = useCallback((wld, id) => {
+    const previousCode = wRef.current && wRef.current.code ? String(wRef.current.code) : "";
+    const nextCode = wld && wld.code ? String(wld.code) : "";
+    if (previousCode && nextCode && previousCode !== nextCode) {
+      /* Hard world boundary: stale popup/flash/jump/queue UI must not survive
+         into the newly opened world. In-flight AI work is rejected by epoch. */
+      setFlash(null);
+      setPopupNav(null);
+      setJump(null);
+      setShowNotes(false);
+      setChatId(null);
+      setSceneId(null);
+      wld.historyEpoch = Math.max(0, Math.floor(Number(wld.historyEpoch) || 0)) + 1;
+      wld.popupEvents = [];
+      wld.popupRuntime = { startedAt: now(), lastGeneratedAt: 0 };
+      wld.sim = { queue: [], done: {}, running: "", at: 0, contentAt: 0, localAt: 0, lastSuccessAt: 0, lastAttemptAt: 0, popupAttemptAt: 0, dmAttemptAt: 0, roleplayAttemptAt: 0, groupAttemptAt: 0, liveWorldStartedAt: now(), lastPopupSuccessAt: 0 };
+    }
     const preferred = asLang((wld.userSettings && wld.userSettings[id] && wld.userSettings[id].language) || (wld.aiLang || lang));
     saveLang(preferred);
     setLangState(preferred);
@@ -55335,54 +55497,48 @@ const signOut = useCallback(async () => {
             return false;
           }
 
-          const playerText =
-            await genPopupPlayerActionText(
-              view,
-              event,
-              choice,
-              "private",
-              targetId
-            );
+          /*
+           * v99.9 POPUP RESOLVE-FIRST
+           *
+           * The relationship/social consequence must never depend on an AI
+           * generation request succeeding. Resolve the actual choice first,
+           * which closes the popup immediately and applies relationship +
+           * gossip consequences. Text generation is secondary.
+           */
+          update((n) => {
+            resolvePopupEvent(n, event.id, choice.id);
+          });
 
+          let playerText = "";
+          try {
+            playerText = String(
+              await genPopupPlayerActionText(
+                view,
+                event,
+                choice,
+                "private",
+                targetId
+              ) || ""
+            ).trim();
+          } catch (textErr) {
+            console.warn("Popup private text generation failed:", textErr);
+          }
           if (!playerText) {
-            throw new Error(
-              tt(
-                "Nem sikerült létrehozni a privát üzenetet.",
-                "Couldn't create the private message."
-              )
-            );
+            playerText = worldLanguage(view, view.meId) === "en"
+              ? "Can we talk about this privately?"
+              : "Beszéljünk erről négyszemközt.";
           }
 
           let replyText = "";
-
           try {
-            replyText =
-              await genPopupPrivateReply(
-                view,
-                targetId,
-                playerText
-              );
+            replyText = String(
+              await genPopupPrivateReply(view, targetId, playerText) || ""
+            ).trim();
           } catch (replyErr) {
-            /*
-             * A játékos DM-je ettől még megtörténik.
-             * A karakter később is reagálhat.
-             */
-            console.warn(
-              "Popup private reply generation failed:",
-              replyErr
-            );
+            console.warn("Popup private reply generation failed:", replyErr);
           }
 
           update((n) => {
-            const ok =
-              resolvePopupEvent(
-                n,
-                event.id,
-                choice.id
-              );
-
-            if (!ok) return;
-
             appendPopupPrivateConversation(
               n,
               targetId,
@@ -55424,21 +55580,29 @@ const signOut = useCallback(async () => {
             choice.tone
           )
         ) {
-          const postText =
-            await genPopupPlayerActionText(
-              view,
-              event,
-              choice,
-              "public"
-            );
+          /* Resolve immediately. AI text is an enhancement, not the gatekeeper
+           * for the actual popup outcome. */
+          update((n) => {
+            resolvePopupEvent(n, event.id, choice.id);
+          });
 
+          let postText = "";
+          try {
+            postText = String(
+              await genPopupPlayerActionText(
+                view,
+                event,
+                choice,
+                "public"
+              ) || ""
+            ).trim();
+          } catch (textErr) {
+            console.warn("Popup public text generation failed:", textErr);
+          }
           if (!postText) {
-            throw new Error(
-              tt(
-                "Nem sikerült létrehozni a nyilvános reakciót.",
-                "Couldn't create the public response."
-              )
-            );
+            postText = worldLanguage(view, view.meId) === "en"
+              ? String(choice.label || "I chose not to ignore this.").trim()
+              : String(choice.label || "Nem hagyom figyelmen kívül ezt.").trim();
           }
 
           const postId =
@@ -55446,15 +55610,6 @@ const signOut = useCallback(async () => {
             uid();
 
           update((n) => {
-            const ok =
-              resolvePopupEvent(
-                n,
-                event.id,
-                choice.id
-              );
-
-            if (!ok) return;
-
             const p =
               appendPopupPublicPost(
                 n,
@@ -56290,6 +56445,18 @@ const signOut = useCallback(async () => {
     queued;
 
       if (!action) {
+        /*
+         * v99.9 LOCAL FEED SAFETY NET
+         *
+         * Try the provider-independent heartbeat before the generative
+         * scheduler. If it creates a post, this beat is complete. This makes
+         * autonomous posting resilient to provider busy/cooldown/empty-output
+         * states while preserving the normal AI scheduler for richer posts.
+         */
+        if (runAutonomousFeedHeartbeat(view2, update)) {
+          return;
+        }
+
         /*
          * Live world hard-on: régi mentett state sem állíthatja le.
          */
