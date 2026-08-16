@@ -4056,6 +4056,18 @@ function sanitizeWorldPosts(w) {
         targetId,
         comment.text
       );
+
+      /*
+       * LEGACY COMMENT LOOP REPAIR:
+       * Older/provider-degenerated rows may already be saved in the world.
+       * Collapse only pathological within-comment repetition; normal wording,
+       * thread structure, author, target and relationship state stay untouched.
+       */
+      comment.text =
+        sanitizeDegenerateGeneratedCommentText(
+          comment.text,
+          280
+        );
     });
 
     post.comments = post.comments.filter((comment) => {
@@ -10160,18 +10172,386 @@ function socialEmojiFallback(w, id, text) {
   return `${raw} ${emoji}`.trim();
 }
 
+function generatedCommentLoopUnit(value) {
+  return normUtterance(
+    String(value || "")
+      .replace(/^[@#]+/, "")
+      .replace(/[.,!?;:()[\]{}"'“”‘’]+$/g, "")
+  );
+}
+
+function collapseDegenerateCommaTail(value) {
+  const raw =
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return "";
+
+  const parts =
+    raw
+      .split(/\s*,\s*/)
+      .map((part) => part.trim());
+
+  if (parts.length < 7) {
+    return raw;
+  }
+
+  const units =
+    parts.map(
+      generatedCommentLoopUnit
+    );
+
+  /*
+   * Find a long suffix made almost entirely from one/two repeated chunks.
+   * Example:
+   *   "THAT SOUNDS LIKE A SKILL ISSUE, Sensei Silver,
+   *    Silver, Terry, Silver, Terry, Silver, Terry..."
+   *
+   * The repeated suffix begins at "Silver", so the useful opening +
+   * "Sensei Silver" are preserved and the broken loop disappears.
+   */
+  for (
+    let start = 1;
+    start <= parts.length - 6;
+    start++
+  ) {
+    const suffix =
+      units
+        .slice(start)
+        .filter(Boolean);
+
+    if (suffix.length < 6) continue;
+
+    const counts =
+      new Map();
+
+    suffix.forEach((unit) => {
+      counts.set(
+        unit,
+        (counts.get(unit) || 0) + 1
+      );
+    });
+
+    const ranked =
+      [...counts.values()]
+        .sort((a, b) => b - a);
+
+    const topTwo =
+      (ranked[0] || 0) +
+      (ranked[1] || 0);
+
+    const repeatedEnough =
+      (
+        counts.size === 1 &&
+        (ranked[0] || 0) >= 6
+      ) ||
+      (
+        counts.size <= 2 &&
+        suffix.length >= 7 &&
+        topTwo >= suffix.length * 0.92 &&
+        (ranked[0] || 0) >= 3 &&
+        (ranked[1] || 0) >= 2
+      );
+
+    if (!repeatedEnough) continue;
+
+    const kept =
+      parts
+        .slice(0, start)
+        .filter(Boolean)
+        .join(", ")
+        .replace(/[\s,;:—-]+$/g, "")
+        .trim();
+
+    if (!kept) {
+      return parts[0] || raw;
+    }
+
+    const terminal =
+      /[.!?]$/.test(raw)
+        ? raw.slice(-1)
+        : "";
+
+    return (
+      terminal &&
+      !/[.!?]$/.test(kept)
+        ? `${kept}${terminal}`
+        : kept
+    );
+  }
+
+  return raw;
+}
+
+function collapseDegenerateWordCycles(value) {
+  let words =
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .split(" ")
+      .filter(Boolean);
+
+  if (words.length < 10) {
+    return words.join(" ");
+  }
+
+  /*
+   * Catch whitespace-separated loops too:
+   *   "Silver Terry Silver Terry Silver Terry ..."
+   * Periods of 1-4 words must repeat at least four times and cover >=8 words.
+   * Normal expressive repetition like "no no no" is deliberately left alone.
+   */
+  let changed = true;
+  let passes = 0;
+
+  while (
+    changed &&
+    passes < 4
+  ) {
+    changed = false;
+    passes += 1;
+
+    outer:
+    for (
+      let start = 0;
+      start < words.length;
+      start++
+    ) {
+      for (
+        let period = 1;
+        period <= 4;
+        period++
+      ) {
+        if (
+          start +
+          period * 4 >
+          words.length
+        ) {
+          continue;
+        }
+
+        const base =
+          words
+            .slice(
+              start,
+              start + period
+            )
+            .map(
+              generatedCommentLoopUnit
+            );
+
+        if (
+          base.some(
+            (unit) => !unit
+          )
+        ) {
+          continue;
+        }
+
+        let repeats = 1;
+
+        while (
+          start +
+          period * (repeats + 1) <=
+          words.length
+        ) {
+          const next =
+            words
+              .slice(
+                start + period * repeats,
+                start + period * (repeats + 1)
+              )
+              .map(
+                generatedCommentLoopUnit
+              );
+
+          if (
+            next.length !== base.length ||
+            next.some(
+              (unit, index) =>
+                unit !== base[index]
+            )
+          ) {
+            break;
+          }
+
+          repeats += 1;
+        }
+
+        if (
+          repeats >= 4 &&
+          repeats * period >= 8
+        ) {
+          /*
+           * Keep ONE cycle only. The point is to preserve the intended address
+           * or phrase without retaining the model's runaway repetition.
+           */
+          words = [
+            ...words.slice(0, start),
+            ...words.slice(
+              start,
+              start + period
+            ),
+            ...words.slice(
+              start + period * repeats
+            ),
+          ];
+
+          changed = true;
+          break outer;
+        }
+      }
+    }
+  }
+
+  return words.join(" ");
+}
+
+function generatedCommentStillDegenerate(value) {
+  const words =
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .split(" ")
+      .map(
+        generatedCommentLoopUnit
+      )
+      .filter(Boolean);
+
+  if (words.length < 16) {
+    return false;
+  }
+
+  const counts =
+    new Map();
+
+  words.forEach((word) => {
+    counts.set(
+      word,
+      (counts.get(word) || 0) + 1
+    );
+  });
+
+  const ranked =
+    [...counts.values()]
+      .sort((a, b) => b - a);
+
+  const first =
+    ranked[0] || 0;
+
+  const topTwo =
+    first +
+    (ranked[1] || 0);
+
+  /*
+   * Extremely high repetition inside ONE generated comment is a provider
+   * degeneration signal, not character voice.
+   */
+  return (
+    first >= 8 ||
+    (
+      words.length >= 20 &&
+      topTwo >= words.length * 0.68 &&
+      first >= 5
+    )
+  );
+}
+
+function sanitizeDegenerateGeneratedCommentText(
+  value,
+  maxLen = 240
+) {
+  let text =
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!text) return "";
+
+  text =
+    collapseDegenerateCommaTail(
+      text
+    );
+
+  text =
+    collapseDegenerateWordCycles(
+      text
+    )
+      .replace(/\s+([,.!?;:])/g, "$1")
+      .replace(/([,;:])(?:\s*\1)+/g, "$1")
+      .replace(/ {2,}/g, " ")
+      .trim();
+
+  if (!text) return "";
+
+  /*
+   * Never cut a generated comment in the middle of a runaway name/token.
+   * Prefer the last complete word/punctuation boundary.
+   */
+  const cap =
+    Math.max(
+      40,
+      Math.round(
+        Number(maxLen) || 240
+      )
+    );
+
+  if (text.length > cap) {
+    let clipped =
+      text
+        .slice(0, cap)
+        .replace(/\s+\S*$/u, "")
+        .replace(/[\s,;:—-]+$/g, "")
+        .trim();
+
+    if (!clipped) {
+      clipped =
+        text
+          .slice(0, cap)
+          .trim();
+    }
+
+    text = clipped;
+  }
+
+  return text;
+}
+
 function cleanGeneratedComment(w, id, text, maxLen = 240) {
-  let t = String(text || "").replace(/\s+/g, " ").trim();
+  let t =
+    sanitizeDegenerateGeneratedCommentText(
+      text,
+      maxLen
+    );
+
   if (!t) return "";
-  t = socialEmojiFallback(w, id, t);
+
+  /*
+   * If a malformed provider output is STILL dominated by one/two repeated
+   * tokens after deterministic repair, drop that one comment rather than
+   * persisting a broken loop into the feed.
+   */
+  if (
+    generatedCommentStillDegenerate(
+      t
+    )
+  ) {
+    return "";
+  }
+
+  t =
+    socialEmojiFallback(
+      w,
+      id,
+      t
+    );
 
   /* Dedicated feed history first, then the universal cross-surface guard. */
   if (isRepetitiveComment(w, id, t)) return "";
   if (isRepetitiveUtterance(w, id, t)) return "";
 
-  return t.length > maxLen
-    ? t.slice(0, maxLen)
-    : t;
+  return t;
 }
 
 function commentSeedNumber(value) {
