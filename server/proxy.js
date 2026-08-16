@@ -1,12 +1,9 @@
-/* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 /
-/
-
-MÁSVILÁG — server/proxy.js
-
-Full drop-in backend with authoritative multi-device world + media sync.
-
-PostgreSQL is the online source of truth; stale snapshots are rejected with 409.
-*/
+/* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
+/*
+ * MÁSVILÁG — server/proxy.js
+ * Full drop-in backend with authoritative multi-device world + media sync.
+ * PostgreSQL is the online source of truth; stale snapshots are rejected with 409.
+ */
 import "dotenv/config";
 import express from "express";
 import fetch from "node-fetch";
@@ -29,134 +26,129 @@ app.use(bodyParser.json({ limit: "60mb" }));
 /* ---------- PostgreSQL ---------- */
 
 const pool = process.env.DATABASE_URL
-? new Pool({
-connectionString: process.env.DATABASE_URL,
-max: 5,
-})
-: null;
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      max: 5,
+    })
+  : null;
 
 const dbReady = pool
-? pool.query(`
-CREATE TABLE IF NOT EXISTS worlds (
-code TEXT PRIMARY KEY,
-data JSONB NOT NULL,
-updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+  ? pool.query(`
+      CREATE TABLE IF NOT EXISTS worlds (
+        code TEXT PRIMARY KEY,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
 
-  CREATE TABLE IF NOT EXISTS sessions (
-    token_hash TEXT PRIMARY KEY,
-    world_code TEXT NOT NULL,
-    account_id TEXT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL
-  );
-
+      CREATE TABLE IF NOT EXISTS sessions (
+        token_hash TEXT PRIMARY KEY,
+        world_code TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL
+      );
 CREATE TABLE IF NOT EXISTS world_media (
-world_code TEXT PRIMARY KEY
-REFERENCES worlds(code)
-ON DELETE CASCADE,
-data JSONB NOT NULL DEFAULT '{}'::jsonb,
-updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  world_code TEXT PRIMARY KEY
+    REFERENCES worlds(code)
+    ON DELETE CASCADE,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 /*
-
-v19 — scalable image storage.
-
-New images are independent rows instead of one ever-growing JSONB library.
-
-The old world_media row remains readable for backwards compatibility.
-*/
+ * v19 — scalable image storage.
+ * New images are independent rows instead of one ever-growing JSONB library.
+ * The old world_media row remains readable for backwards compatibility.
+ */
 CREATE TABLE IF NOT EXISTS world_media_files (
-world_code TEXT NOT NULL
-REFERENCES worlds(code)
-ON DELETE CASCADE,
-image_id TEXT NOT NULL,
-data JSONB NOT NULL,
-updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-PRIMARY KEY (world_code, image_id)
+  world_code TEXT NOT NULL
+    REFERENCES worlds(code)
+    ON DELETE CASCADE,
+  image_id TEXT NOT NULL,
+  data JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (world_code, image_id)
 );
 
 CREATE INDEX IF NOT EXISTS world_media_files_world_updated_idx
-ON world_media_files (world_code, updated_at DESC);
+  ON world_media_files (world_code, updated_at DESC);
 
-  /*
-   * One global login profile can own/join several worlds.
-   * The character @username remains inside each world's players row
-   * and is deliberately separate from this login username.
-   */
-  CREATE TABLE IF NOT EXISTS profiles (
-    username TEXT PRIMARY KEY,
-    salt TEXT NOT NULL,
-    hash TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
+      /*
+       * One global login profile can own/join several worlds.
+       * The character @username remains inside each world's players row
+       * and is deliberately separate from this login username.
+       */
+      CREATE TABLE IF NOT EXISTS profiles (
+        username TEXT PRIMARY KEY,
+        salt TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
 
-  CREATE TABLE IF NOT EXISTS profile_worlds (
-    profile_username TEXT NOT NULL
-      REFERENCES profiles(username)
-      ON DELETE CASCADE,
-    world_code TEXT NOT NULL
-      REFERENCES worlds(code)
-      ON DELETE CASCADE,
-    account_id TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (profile_username, world_code)
-  );
+      CREATE TABLE IF NOT EXISTS profile_worlds (
+        profile_username TEXT NOT NULL
+          REFERENCES profiles(username)
+          ON DELETE CASCADE,
+        world_code TEXT NOT NULL
+          REFERENCES worlds(code)
+          ON DELETE CASCADE,
+        account_id TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (profile_username, world_code)
+      );
 
-  CREATE TABLE IF NOT EXISTS character_memories (
-    id SERIAL PRIMARY KEY,
-    world_code TEXT NOT NULL,
-    character_id TEXT NOT NULL,
-    subject_ids JSONB NOT NULL,
-    memory_type TEXT NOT NULL,
-    source TEXT,
-    memory_text TEXT NOT NULL,
-    importance INTEGER NOT NULL DEFAULT 50,
-    confidence DOUBLE PRECISION NOT NULL DEFAULT 1,
-    knowledge_type TEXT NOT NULL,
-    visibility TEXT NOT NULL,
-    metadata JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    embedding JSONB,
-    embedding_model TEXT
-  );
+      CREATE TABLE IF NOT EXISTS character_memories (
+        id SERIAL PRIMARY KEY,
+        world_code TEXT NOT NULL,
+        character_id TEXT NOT NULL,
+        subject_ids JSONB NOT NULL,
+        memory_type TEXT NOT NULL,
+        source TEXT,
+        memory_text TEXT NOT NULL,
+        importance INTEGER NOT NULL DEFAULT 50,
+        confidence DOUBLE PRECISION NOT NULL DEFAULT 1,
+        knowledge_type TEXT NOT NULL,
+        visibility TEXT NOT NULL,
+        metadata JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        embedding JSONB,
+        embedding_model TEXT
+      );
 
-  ALTER TABLE character_memories
-  ADD COLUMN IF NOT EXISTS embedding JSONB;
+      ALTER TABLE character_memories
+      ADD COLUMN IF NOT EXISTS embedding JSONB;
 
-  ALTER TABLE character_memories
-  ADD COLUMN IF NOT EXISTS embedding_model TEXT;
+      ALTER TABLE character_memories
+      ADD COLUMN IF NOT EXISTS embedding_model TEXT;
 
-  CREATE INDEX IF NOT EXISTS character_memories_world_char_created_idx
-  ON character_memories (world_code, character_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS character_memories_world_char_created_idx
+      ON character_memories (world_code, character_id, created_at DESC);
 
-  CREATE INDEX IF NOT EXISTS character_memories_world_type_idx
-  ON character_memories (world_code, memory_type);
+      CREATE INDEX IF NOT EXISTS character_memories_world_type_idx
+      ON character_memories (world_code, memory_type);
 
-  CREATE INDEX IF NOT EXISTS character_memories_subject_ids_gin_idx
-  ON character_memories USING GIN (subject_ids);
+      CREATE INDEX IF NOT EXISTS character_memories_subject_ids_gin_idx
+      ON character_memories USING GIN (subject_ids);
 
-  CREATE INDEX IF NOT EXISTS profile_worlds_world_idx
-  ON profile_worlds (world_code);
+      CREATE INDEX IF NOT EXISTS profile_worlds_world_idx
+      ON profile_worlds (world_code);
 
-  CREATE INDEX IF NOT EXISTS sessions_expires_idx
-  ON sessions (expires_at);
-`).then(() => {
-  console.log("PostgreSQL ready");
-}).catch((err) => {
-  console.error("PostgreSQL init error:", err);
-})
-
-: Promise.resolve();
+      CREATE INDEX IF NOT EXISTS sessions_expires_idx
+      ON sessions (expires_at);
+    `).then(() => {
+      console.log("PostgreSQL ready");
+    }).catch((err) => {
+      console.error("PostgreSQL init error:", err);
+    })
+  : Promise.resolve();
 
 async function requireDb(res) {
-if (!pool) {
-res.status(503).json({ error: "Database not configured" });
-return false;
-}
+  if (!pool) {
+    res.status(503).json({ error: "Database not configured" });
+    return false;
+  }
 
-await dbReady;
-return true;
+  await dbReady;
+  return true;
 }
 /* ---------- biztonságos account + session segédek ---------- */
 
@@ -164,174 +156,173 @@ const SESSION_COOKIE = "mv_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function cleanCode(value) {
-return String(value || "").trim().toLowerCase();
+  return String(value || "").trim().toLowerCase();
 }
 
+
 function cleanUsername(value) {
-return String(value || "")
-.trim()
-.toLowerCase()
-.replace(/[^a-z0-9._-]/g, "");
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "");
 }
 
 /* -------------------------------------------------------------------------
-POSTGRES JSONB UNICODE SAFETY — v18
+   POSTGRES JSONB UNICODE SAFETY — v18
 
-JavaScript strings can contain lone UTF-16 surrogate code units. Modern
-JSON.stringify preserves those as e.g. "\ud83e", but PostgreSQL jsonb
-rejects malformed surrogate pairs with SQLSTATE 22P02.
+   JavaScript strings can contain lone UTF-16 surrogate code units. Modern
+   JSON.stringify preserves those as e.g. "\\ud83e", but PostgreSQL jsonb
+   rejects malformed surrogate pairs with SQLSTATE 22P02.
 
-Repair ONLY invalid/unpaired surrogate code units. Valid emoji pairs are
-preserved byte-for-byte. The replacement character U+FFFD prevents one
-malformed AI/user string from blocking the entire authoritative world save.
-------------------------------------------------------------------------- */
+   Repair ONLY invalid/unpaired surrogate code units. Valid emoji pairs are
+   preserved byte-for-byte. The replacement character U+FFFD prevents one
+   malformed AI/user string from blocking the entire authoritative world save.
+   ------------------------------------------------------------------------- */
 function repairUnpairedUnicodeSurrogates(value) {
-const input = String(value ?? "");
-let output = "";
-let changed = false;
+  const input = String(value ?? "");
+  let output = "";
+  let changed = false;
 
-for (let i = 0; i < input.length; i += 1) {
-const code = input.charCodeAt(i);
+  for (let i = 0; i < input.length; i += 1) {
+    const code = input.charCodeAt(i);
 
-// High surrogate: must be followed by a low surrogate.
-if (code >= 0xD800 && code <= 0xDBFF) {
-  const next =
-    i + 1 < input.length
-      ? input.charCodeAt(i + 1)
-      : -1;
+    // High surrogate: must be followed by a low surrogate.
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next =
+        i + 1 < input.length
+          ? input.charCodeAt(i + 1)
+          : -1;
 
-  if (next >= 0xDC00 && next <= 0xDFFF) {
-    output += input[i] + input[i + 1];
-    i += 1;
-  } else {
-    output += "\uFFFD";
-    changed = true;
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        output += input[i] + input[i + 1];
+        i += 1;
+      } else {
+        output += "\uFFFD";
+        changed = true;
+      }
+
+      continue;
+    }
+
+    // Lone low surrogate is invalid too.
+    if (code >= 0xDC00 && code <= 0xDFFF) {
+      output += "\uFFFD";
+      changed = true;
+      continue;
+    }
+
+    output += input[i];
   }
 
-  continue;
-}
-
-// Lone low surrogate is invalid too.
-if (code >= 0xDC00 && code <= 0xDFFF) {
-  output += "\uFFFD";
-  changed = true;
-  continue;
-}
-
-output += input[i];
-
-}
-
-return changed ? output : input;
+  return changed ? output : input;
 }
 
 function stringifyJsonbSafe(value, context = "jsonb") {
-let repairedStrings = 0;
+  let repairedStrings = 0;
 
-const json = JSON.stringify(
-value,
-(_key, current) => {
-if (typeof current !== "string") {
-return current;
-}
+  const json = JSON.stringify(
+    value,
+    (_key, current) => {
+      if (typeof current !== "string") {
+        return current;
+      }
 
-  const repaired =
-    repairUnpairedUnicodeSurrogates(
-      current
+      const repaired =
+        repairUnpairedUnicodeSurrogates(
+          current
+        );
+
+      if (repaired !== current) {
+        repairedStrings += 1;
+      }
+
+      return repaired;
+    }
+  );
+
+  if (repairedStrings > 0) {
+    console.warn(
+      `[unicode-repair] ${context}: repaired ${repairedStrings} malformed string(s)`
     );
-
-  if (repaired !== current) {
-    repairedStrings += 1;
   }
 
-  return repaired;
-}
-
-);
-
-if (repairedStrings > 0) {
-console.warn(
-[unicode-repair] ${context}: repaired ${repairedStrings} malformed string(s)
-);
-}
-
-return json;
+  return json;
 }
 
 function sha256(value) {
-return crypto
-.createHash("sha256")
-.update(String(value))
-.digest("hex");
+  return crypto
+    .createHash("sha256")
+    .update(String(value))
+    .digest("hex");
 }
 
 function passwordHash(password, salt) {
-return "s2:" + sha256(${String(salt)}::${String(password)});
+  return "s2:" + sha256(`${String(salt)}::${String(password)}`);
 }
 
 function safeEqual(a, b) {
-const x = Buffer.from(String(a || ""));
-const y = Buffer.from(String(b || ""));
+  const x = Buffer.from(String(a || ""));
+  const y = Buffer.from(String(b || ""));
 
-if (x.length !== y.length) return false;
+  if (x.length !== y.length) return false;
 
-return crypto.timingSafeEqual(x, y);
+  return crypto.timingSafeEqual(x, y);
 }
 
 function findAccountByUsername(world, username) {
-const wanted = cleanUsername(username);
+  const wanted = cleanUsername(username);
 
-for (const id of Object.keys(world?.accounts || {})) {
-const account = world.accounts[id];
+  for (const id of Object.keys(world?.accounts || {})) {
+    const account = world.accounts[id];
 
-if (
-  account &&
-  cleanUsername(account.username) === wanted
-) {
-  return { id, account };
-}
+    if (
+      account &&
+      cleanUsername(account.username) === wanted
+    ) {
+      return { id, account };
+    }
+  }
 
-}
-
-return null;
+  return null;
 }
 
 function readCookie(req, name) {
-const raw = String(req.headers.cookie || "");
+  const raw = String(req.headers.cookie || "");
 
-for (const part of raw.split(";")) {
-const i = part.indexOf("=");
+  for (const part of raw.split(";")) {
+    const i = part.indexOf("=");
 
-if (i < 0) continue;
+    if (i < 0) continue;
 
-const key = part.slice(0, i).trim();
-const value = part.slice(i + 1).trim();
+    const key = part.slice(0, i).trim();
+    const value = part.slice(i + 1).trim();
 
-if (key === name) {
-  return decodeURIComponent(value);
-}
+    if (key === name) {
+      return decodeURIComponent(value);
+    }
+  }
 
-}
-
-return "";
+  return "";
 }
 
 function sessionTokenHash(token) {
-return sha256(token);
+  return sha256(token);
 }
 
 async function createSession(worldCode, accountId) {
-const token = crypto.randomBytes(32).toString("hex");
-const tokenHash = sessionTokenHash(token);
-const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  const token = crypto.randomBytes(32).toString("hex");
+  const tokenHash = sessionTokenHash(token);
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
 
-await pool.query(
+  await pool.query(
+    `
     DELETE FROM sessions
     WHERE expires_at <= NOW()
-   
-);
+    `
+  );
 
-await pool.query(
+  await pool.query(
+    `
     INSERT INTO sessions (
       token_hash,
       world_code,
@@ -339,38 +330,39 @@ await pool.query(
       expires_at
     )
     VALUES ($1, $2, $3, $4)
-   ,
-[tokenHash, worldCode, accountId, expiresAt]
-);
+    `,
+    [tokenHash, worldCode, accountId, expiresAt]
+  );
 
-return token;
+  return token;
 }
 
 function setSessionCookie(res, token) {
-res.cookie(SESSION_COOKIE, token, {
-httpOnly: true,
-secure: true,
-sameSite: "lax",
-path: "/",
-maxAge: SESSION_TTL_MS,
-});
+  res.cookie(SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: SESSION_TTL_MS,
+  });
 }
 
 function clearSessionCookie(res) {
-res.clearCookie(SESSION_COOKIE, {
-httpOnly: true,
-secure: true,
-sameSite: "lax",
-path: "/",
-});
+  res.clearCookie(SESSION_COOKIE, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+  });
 }
 
 async function getSession(req) {
-const token = readCookie(req, SESSION_COOKIE);
+  const token = readCookie(req, SESSION_COOKIE);
 
-if (!token || !pool) return null;
+  if (!token || !pool) return null;
 
-const result = await pool.query(
+  const result = await pool.query(
+    `
     SELECT
       s.world_code,
       s.account_id,
@@ -382,28 +374,29 @@ const result = await pool.query(
       s.token_hash = $1
       AND s.expires_at > NOW()
     LIMIT 1
-   ,
-[sessionTokenHash(token)]
-);
+    `,
+    [sessionTokenHash(token)]
+  );
 
-if (!result.rows.length) return null;
+  if (!result.rows.length) return null;
 
-return {
-token,
-worldCode: result.rows[0].world_code,
-accountId: result.rows[0].account_id,
-world: result.rows[0].data,
-};
+  return {
+    token,
+    worldCode: result.rows[0].world_code,
+    accountId: result.rows[0].account_id,
+    world: result.rows[0].data,
+  };
 }
 
 /* PERFORMANCE v15: auth-only hot paths must not deserialize the entire world.
-Saves, media sync and AI requests usually need only the session identity. */
+   Saves, media sync and AI requests usually need only the session identity. */
 async function getSessionIdentity(req) {
-const token = readCookie(req, SESSION_COOKIE);
+  const token = readCookie(req, SESSION_COOKIE);
 
-if (!token || !pool) return null;
+  if (!token || !pool) return null;
 
-const result = await pool.query(
+  const result = await pool.query(
+    `
     SELECT
       world_code,
       account_id
@@ -411,24 +404,25 @@ const result = await pool.query(
     WHERE token_hash = $1
       AND expires_at > NOW()
     LIMIT 1
-   ,
-[sessionTokenHash(token)]
-);
+    `,
+    [sessionTokenHash(token)]
+  );
 
-if (!result.rows.length) return null;
+  if (!result.rows.length) return null;
 
-return {
-token,
-worldCode: result.rows[0].world_code,
-accountId: result.rows[0].account_id,
-};
+  return {
+    token,
+    worldCode: result.rows[0].world_code,
+    accountId: result.rows[0].account_id,
+  };
 }
 
 async function getSessionMeta(req) {
-const token = readCookie(req, SESSION_COOKIE);
-if (!token || !pool) return null;
+  const token = readCookie(req, SESSION_COOKIE);
+  if (!token || !pool) return null;
 
-const result = await pool.query(
+  const result = await pool.query(
+    `
     SELECT
       s.world_code,
       s.account_id,
@@ -439,139 +433,141 @@ const result = await pool.query(
     WHERE s.token_hash = $1
       AND s.expires_at > NOW()
     LIMIT 1
-   ,
-[sessionTokenHash(token)]
-);
+    `,
+    [sessionTokenHash(token)]
+  );
 
-if (!result.rows.length) return null;
-const row = result.rows[0];
-return {
-token,
-worldCode: row.world_code,
-accountId: row.account_id,
-account: row.account || null,
-syncRev: Math.max(0, Math.floor(Number(row.sync_rev) || 0)),
-};
+  if (!result.rows.length) return null;
+  const row = result.rows[0];
+  return {
+    token,
+    worldCode: row.world_code,
+    accountId: row.account_id,
+    account: row.account || null,
+    syncRev: Math.max(0, Math.floor(Number(row.sync_rev) || 0)),
+  };
 }
 
 function legacyPasswordHash(password, salt) {
-const txt = String(salt) + "::" + String(password);
-let h1 = 0x811c9dc5;
-let h2 = 0x1000193;
+  const txt = String(salt) + "::" + String(password);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x1000193;
 
-for (let i = 0; i < txt.length; i++) {
-h1 = ((h1 ^ txt.charCodeAt(i)) * 16777619) >>> 0;
-h2 = ((h2 + txt.charCodeAt(i) * (i + 7)) * 2654435761) >>> 0;
-}
+  for (let i = 0; i < txt.length; i++) {
+    h1 = ((h1 ^ txt.charCodeAt(i)) * 16777619) >>> 0;
+    h2 = ((h2 + txt.charCodeAt(i) * (i + 7)) * 2654435761) >>> 0;
+  }
 
-return "f1:" + h1.toString(16) + h2.toString(16);
+  return "f1:" + h1.toString(16) + h2.toString(16);
 }
 
 function verifyPassword(password, account) {
-if (!account || !account.hash) return false;
+  if (!account || !account.hash) return false;
 
-let calculated = "";
+  let calculated = "";
 
-if (String(account.hash).startsWith("s2:")) {
-calculated = passwordHash(password, account.salt);
-} else if (String(account.hash).startsWith("f1:")) {
-calculated = legacyPasswordHash(password, account.salt);
-} else {
-return false;
-}
+  if (String(account.hash).startsWith("s2:")) {
+    calculated = passwordHash(password, account.salt);
+  } else if (String(account.hash).startsWith("f1:")) {
+    calculated = legacyPasswordHash(password, account.salt);
+  } else {
+    return false;
+  }
 
-return safeEqual(calculated, account.hash);
+  return safeEqual(calculated, account.hash);
 }
 
 function loginProfileUsernameFromWorld(world, accountId) {
-return cleanUsername(
-world &&
-world.accounts &&
-world.accounts[accountId] &&
-world.accounts[accountId].username
-);
+  return cleanUsername(
+    world &&
+    world.accounts &&
+    world.accounts[accountId] &&
+    world.accounts[accountId].username
+  );
 }
 
 async function getProfileRow(db, username, forUpdate = false) {
-const u = cleanUsername(username);
-if (!u) return null;
+  const u = cleanUsername(username);
+  if (!u) return null;
 
-const result = await db.query(
+  const result = await db.query(
+    `
     SELECT username, salt, hash, created_at
     FROM profiles
     WHERE username = $1
     ${forUpdate ? "FOR UPDATE" : ""}
     LIMIT 1
-   ,
-[u]
-);
+    `,
+    [u]
+  );
 
-return result.rows.length ? result.rows[0] : null;
+  return result.rows.length ? result.rows[0] : null;
 }
 
 async function ensureGlobalProfileCredential(db, username, password) {
-const u = cleanUsername(username);
-const pw = String(password || "");
+  const u = cleanUsername(username);
+  const pw = String(password || "");
 
-if (!u || !pw) {
-const err = new Error("Missing global profile credentials.");
-err.status = 400;
-throw err;
-}
+  if (!u || !pw) {
+    const err = new Error("Missing global profile credentials.");
+    err.status = 400;
+    throw err;
+  }
 
-let row = await getProfileRow(db, u, true);
+  let row = await getProfileRow(db, u, true);
 
-if (row) {
-if (!verifyPassword(pw, row)) {
-const err = new Error(
-"This username belongs to a profile with a different password."
-);
-err.status = 401;
-err.code = "PROFILE_PASSWORD_MISMATCH";
-throw err;
-}
+  if (row) {
+    if (!verifyPassword(pw, row)) {
+      const err = new Error(
+        "This username belongs to a profile with a different password."
+      );
+      err.status = 401;
+      err.code = "PROFILE_PASSWORD_MISMATCH";
+      throw err;
+    }
 
-return row;
+    return row;
+  }
 
-}
+  const salt = crypto.randomBytes(18).toString("hex");
+  const hash = passwordHash(pw, salt);
 
-const salt = crypto.randomBytes(18).toString("hex");
-const hash = passwordHash(pw, salt);
-
-const inserted = await db.query(
+  const inserted = await db.query(
+    `
     INSERT INTO profiles (username, salt, hash)
     VALUES ($1, $2, $3)
     ON CONFLICT (username) DO NOTHING
     RETURNING username, salt, hash, created_at
-   ,
-[u, salt, hash]
-);
+    `,
+    [u, salt, hash]
+  );
 
-if (inserted.rows.length) {
-return inserted.rows[0];
-}
+  if (inserted.rows.length) {
+    return inserted.rows[0];
+  }
 
-row = await getProfileRow(db, u, true);
+  row = await getProfileRow(db, u, true);
 
-if (!row || !verifyPassword(pw, row)) {
-const err = new Error(
-"This username belongs to a profile with a different password."
-);
-err.status = 401;
-err.code = "PROFILE_PASSWORD_MISMATCH";
-throw err;
-}
+  if (!row || !verifyPassword(pw, row)) {
+    const err = new Error(
+      "This username belongs to a profile with a different password."
+    );
+    err.status = 401;
+    err.code = "PROFILE_PASSWORD_MISMATCH";
+    throw err;
+  }
 
-return row;
+  return row;
 }
 
 async function linkProfileWorld(db, username, worldCode, accountId) {
-const u = cleanUsername(username);
-const code = cleanCode(worldCode);
+  const u = cleanUsername(username);
+  const code = cleanCode(worldCode);
 
-if (!u || !code || !accountId) return;
+  if (!u || !code || !accountId) return;
 
-await db.query(
+  await db.query(
+    `
     INSERT INTO profile_worlds (
       profile_username,
       world_code,
@@ -580,3380 +576,3334 @@ await db.query(
     VALUES ($1, $2, $3)
     ON CONFLICT (profile_username, world_code)
     DO UPDATE SET account_id = EXCLUDED.account_id
-   ,
-[u, code, String(accountId)]
-);
+    `,
+    [u, code, String(accountId)]
+  );
 }
 
 async function currentProfileForSession(session) {
-if (!session) return null;
+  if (!session) return null;
 
-const username = loginProfileUsernameFromWorld(
-session.world,
-session.accountId
-);
+  const username = loginProfileUsernameFromWorld(
+    session.world,
+    session.accountId
+  );
 
-if (!username) return null;
+  if (!username) return null;
 
-const profile = await getProfileRow(pool, username, false);
+  const profile = await getProfileRow(pool, username, false);
 
-return profile
-? { ...profile, username }
-: null;
+  return profile
+    ? { ...profile, username }
+    : null;
 }
 function worldSyncRevServer(world) {
-return Math.max(
-0,
-Math.floor(
-Number(
-world && world.syncRev
-) || 0
-)
-);
+  return Math.max(
+    0,
+    Math.floor(
+      Number(
+        world && world.syncRev
+      ) || 0
+    )
+  );
 }
 
 function safeWorldForClient(world) {
-/* PERFORMANCE v16: never deep-clone the entire multi-MB world just to hide
-three account-secret fields. Clone only the objects we actually redact;
-every other branch is read-only while Express serializes the response. */
-const source = world && typeof world === "object" ? world : {};
-const clean = { ...source };
-clean.syncRev = worldSyncRevServer(source);
+  /* PERFORMANCE v16: never deep-clone the entire multi-MB world just to hide
+     three account-secret fields. Clone only the objects we actually redact;
+     every other branch is read-only while Express serializes the response. */
+  const source = world && typeof world === "object" ? world : {};
+  const clean = { ...source };
+  clean.syncRev = worldSyncRevServer(source);
 
-const sourceAccounts = source.accounts && typeof source.accounts === "object"
-? source.accounts
-: {};
-clean.accounts = {};
+  const sourceAccounts = source.accounts && typeof source.accounts === "object"
+    ? source.accounts
+    : {};
+  clean.accounts = {};
 
-for (const [accountId, account] of Object.entries(sourceAccounts)) {
-if (!account || typeof account !== "object") {
-clean.accounts[accountId] = account;
-continue;
-}
+  for (const [accountId, account] of Object.entries(sourceAccounts)) {
+    if (!account || typeof account !== "object") {
+      clean.accounts[accountId] = account;
+      continue;
+    }
 
-const safeAccount = { ...account };
-delete safeAccount.hash;
-delete safeAccount.salt;
-delete safeAccount.password;
-clean.accounts[accountId] = safeAccount;
+    const safeAccount = { ...account };
+    delete safeAccount.hash;
+    delete safeAccount.salt;
+    delete safeAccount.password;
+    clean.accounts[accountId] = safeAccount;
+  }
 
-}
-
-return clean;
+  return clean;
 }
 
 const MEDIA_ENVELOPE_VERSION = 2;
 
 function mediaEnvelopeFromRow(raw) {
-if (
-raw &&
-typeof raw === "object" &&
-!Array.isArray(raw) &&
-raw.__masvilagMediaEnvelope ===
-MEDIA_ENVELOPE_VERSION &&
-raw.media &&
-typeof raw.media === "object" &&
-!Array.isArray(raw.media)
-) {
-return {
-syncRev:
-Math.max(
-0,
-Math.floor(
-Number(
-raw.syncRev
-) || 0
-)
-),
-media: raw.media,
-};
-}
+  if (
+    raw &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    raw.__masvilagMediaEnvelope ===
+      MEDIA_ENVELOPE_VERSION &&
+    raw.media &&
+    typeof raw.media === "object" &&
+    !Array.isArray(raw.media)
+  ) {
+    return {
+      syncRev:
+        Math.max(
+          0,
+          Math.floor(
+            Number(
+              raw.syncRev
+            ) || 0
+          )
+        ),
+      media: raw.media,
+    };
+  }
 
-/*
-
-Backward compatibility:
-
-the old world_media.data row was the raw image map itself.
-*/
-return {
-syncRev: 0,
-media:
-raw &&
-typeof raw === "object" &&
-!Array.isArray(raw)
-? raw
-: {},
-};
+  /*
+   * Backward compatibility:
+   * the old world_media.data row was the raw image map itself.
+   */
+  return {
+    syncRev: 0,
+    media:
+      raw &&
+      typeof raw === "object" &&
+      !Array.isArray(raw)
+        ? raw
+        : {},
+  };
 }
 
 function makeMediaEnvelope(
-media,
-syncRev
+  media,
+  syncRev
 ) {
-return {
-__masvilagMediaEnvelope:
-MEDIA_ENVELOPE_VERSION,
-syncRev:
-Math.max(
-0,
-Math.floor(
-Number(syncRev) || 0
-)
-),
-media:
-media &&
-typeof media === "object" &&
-!Array.isArray(media)
-? media
-: {},
-};
+  return {
+    __masvilagMediaEnvelope:
+      MEDIA_ENVELOPE_VERSION,
+    syncRev:
+      Math.max(
+        0,
+        Math.floor(
+          Number(syncRev) || 0
+        )
+      ),
+    media:
+      media &&
+      typeof media === "object" &&
+      !Array.isArray(media)
+        ? media
+        : {},
+  };
 }
 
 /* -------------------------------------------------------------------------
-WORLD DELETION / ORPHAN CLEANUP
-A Másvilág world has exactly one human account. If that account is deleted,
-the world itself must cease to exist and its code must become reusable.
-------------------------------------------------------------------------- */
+   WORLD DELETION / ORPHAN CLEANUP
+   A Másvilág world has exactly one human account. If that account is deleted,
+   the world itself must cease to exist and its code must become reusable.
+   ------------------------------------------------------------------------- */
 function worldHasHumanAccount(world) {
-return Boolean(
-world &&
-world.accounts &&
-Object.keys(world.accounts).length
-);
+  return Boolean(
+    world &&
+    world.accounts &&
+    Object.keys(world.accounts).length
+  );
 }
 
 async function deleteWorldGraph(db, worldCode) {
-const code = cleanCode(worldCode);
-if (!code) return false;
+  const code = cleanCode(worldCode);
+  if (!code) return false;
 
-/* Tables without a world FK/cascade are removed explicitly. */
-await db.query(
-DELETE FROM sessions WHERE world_code = $1,
-[code]
-);
+  /* Tables without a world FK/cascade are removed explicitly. */
+  await db.query(
+    `DELETE FROM sessions WHERE world_code = $1`,
+    [code]
+  );
 
-await db.query(
-DELETE FROM character_memories WHERE world_code = $1,
-[code]
-);
+  await db.query(
+    `DELETE FROM character_memories WHERE world_code = $1`,
+    [code]
+  );
 
-/* profile_worlds + world_media also cascade from worlds, but explicit
-cleanup keeps this safe with older database schemas. */
-await db.query(
-DELETE FROM profile_worlds WHERE world_code = $1,
-[code]
-);
+  /* profile_worlds + world_media also cascade from worlds, but explicit
+     cleanup keeps this safe with older database schemas. */
+  await db.query(
+    `DELETE FROM profile_worlds WHERE world_code = $1`,
+    [code]
+  );
 
-await db.query(
-DELETE FROM world_media WHERE world_code = $1,
-[code]
-);
+  await db.query(
+    `DELETE FROM world_media WHERE world_code = $1`,
+    [code]
+  );
 
-const gone = await db.query(
-DELETE FROM worlds WHERE code = $1 RETURNING code,
-[code]
-);
+  const gone = await db.query(
+    `DELETE FROM worlds WHERE code = $1 RETURNING code`,
+    [code]
+  );
 
-return Boolean(gone.rows.length);
+  return Boolean(gone.rows.length);
 }
 
 async function deleteUnusedProfile(db, profileUsername) {
-const username = cleanUsername(profileUsername);
-if (!username) return false;
+  const username = cleanUsername(profileUsername);
+  if (!username) return false;
 
-const remaining = await db.query(
-SELECT 1 FROM profile_worlds WHERE profile_username = $1 LIMIT 1,
-[username]
-);
+  const remaining = await db.query(
+    `SELECT 1 FROM profile_worlds WHERE profile_username = $1 LIMIT 1`,
+    [username]
+  );
 
-if (remaining.rows.length) return false;
+  if (remaining.rows.length) return false;
 
-await db.query(
-DELETE FROM profiles WHERE username = $1,
-[username]
-);
+  await db.query(
+    `DELETE FROM profiles WHERE username = $1`,
+    [username]
+  );
 
-return true;
+  return true;
 }
 
 async function deleteAllUnusedProfiles(db) {
-await db.query(    DELETE FROM profiles p
+  await db.query(`
+    DELETE FROM profiles p
     WHERE NOT EXISTS (
       SELECT 1
       FROM profile_worlds pw
       WHERE pw.profile_username = p.username
     )
- );
+  `);
 }
 
 /* -------------------------------------------------------------------------
-WORLD CODE PEEK
-Public, intentionally returns NO usernames/account data.
-------------------------------------------------------------------------- */
+   WORLD CODE PEEK
+   Public, intentionally returns NO usernames/account data.
+   ------------------------------------------------------------------------- */
 app.get("/world/peek", async (req, res) => {
-let client = null;
+  let client = null;
 
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const code = cleanCode(req.query?.code);
+    const code = cleanCode(req.query?.code);
 
-if (!code) {
-  return res.status(400).json({
-    error: "World code is required.",
-  });
-}
+    if (!code) {
+      return res.status(400).json({
+        error: "World code is required.",
+      });
+    }
 
-client = await pool.connect();
-await client.query("BEGIN");
+    client = await pool.connect();
+    await client.query("BEGIN");
 
-const result = await client.query(
-  `
-  SELECT code, data,
-         data->'universe'->>'name' AS name
-  FROM worlds
-  WHERE code = $1
-  LIMIT 1
-  FOR UPDATE
-  `,
-  [code]
-);
-
-if (!result.rows.length) {
-  await client.query("COMMIT");
-  client.release();
-  client = null;
-
-  return res.json({
-    ok: true,
-    found: false,
-    code,
-  });
-}
-
-const row = result.rows[0];
-
-/*
- * v60 orphan repair: older /account/delete versions left the worlds row
- * behind with zero human accounts. Clean it the first time anybody peeks
- * that code so an already-deleted account does not reserve it forever.
- */
-if (!worldHasHumanAccount(row.data)) {
-  await deleteWorldGraph(client, code);
-  await deleteAllUnusedProfiles(client);
-  await client.query("COMMIT");
-  client.release();
-  client = null;
-
-  return res.json({
-    ok: true,
-    found: false,
-    code,
-    cleanedOrphan: true,
-  });
-}
-
-await client.query("COMMIT");
-client.release();
-client = null;
-
-return res.json({
-  ok: true,
-  found: true,
-  code,
-  name: row.name || code,
-});
-
-} catch (err) {
-if (client) {
-try { await client.query("ROLLBACK"); } catch (e) {}
-client.release();
-client = null;
-}
-
-console.error("World peek error:", err);
-
-return res.status(500).json({
-  error: "World lookup failed.",
-});
-
-}
-});
-
-/* -------------------------------------------------------------------------
-LOGIN
-Password initialization is also serialized with SELECT ... FOR UPDATE.
-------------------------------------------------------------------------- */
-app.post("/auth/login", async (req, res) => {
-let client = null;
-
-try {
-if (!(await requireDb(res))) return;
-
-const code =
-  cleanCode(req.body?.code);
-
-const username =
-  cleanUsername(
-    req.body?.username
-  );
-
-const password =
-  String(
-    req.body?.password || ""
-  );
-
-if (
-  !code ||
-  !username ||
-  !password
-) {
-  return res.status(400).json({
-    error:
-      "World code, username and password are required.",
-  });
-}
-
-client =
-  await pool.connect();
-
-await client.query("BEGIN");
-
-const result =
-  await client.query(
-    `
-    SELECT data
-    FROM worlds
-    WHERE code = $1
-    LIMIT 1
-    FOR UPDATE
-    `,
-    [code]
-  );
-
-if (!result.rows.length) {
-  await client.query(
-    "ROLLBACK"
-  );
-
-  client.release();
-  client = null;
-
-  return res.status(404).json({
-    error: "World not found.",
-  });
-}
-
-const world =
-  result.rows[0].data;
-
-world.syncRev =
-  worldSyncRevServer(world);
-
-const found =
-  findAccountByUsername(
-    world,
-    username
-  );
-
-if (!found) {
-  await client.query(
-    "ROLLBACK"
-  );
-
-  client.release();
-  client = null;
-
-  return res.status(401).json({
-    error:
-      "Wrong username or password.",
-  });
-}
-
-const accountId =
-  found.id;
-
-const account =
-  found.account;
-
-if (!account.hash) {
-  account.salt =
-    crypto
-      .randomBytes(18)
-      .toString("hex");
-
-  account.hash =
-    passwordHash(
-      password,
-      account.salt
+    const result = await client.query(
+      `
+      SELECT code, data,
+             data->'universe'->>'name' AS name
+      FROM worlds
+      WHERE code = $1
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [code]
     );
 
-  world.rev =
-    Number(
-      world.rev || 0
-    ) + 1;
+    if (!result.rows.length) {
+      await client.query("COMMIT");
+      client.release();
+      client = null;
 
-  world.syncRev =
-    worldSyncRevServer(
-      world
-    ) + 1;
+      return res.json({
+        ok: true,
+        found: false,
+        code,
+      });
+    }
 
-  if (world.universe) {
-    world.universe.at =
-      Date.now();
-  }
+    const row = result.rows[0];
 
-  await client.query(
-    `
-    UPDATE worlds
-    SET data = $2::jsonb,
-        updated_at = NOW()
-    WHERE code = $1
-    `,
-    [
+    /*
+     * v60 orphan repair: older /account/delete versions left the worlds row
+     * behind with zero human accounts. Clean it the first time anybody peeks
+     * that code so an already-deleted account does not reserve it forever.
+     */
+    if (!worldHasHumanAccount(row.data)) {
+      await deleteWorldGraph(client, code);
+      await deleteAllUnusedProfiles(client);
+      await client.query("COMMIT");
+      client.release();
+      client = null;
+
+      return res.json({
+        ok: true,
+        found: false,
+        code,
+        cleanedOrphan: true,
+      });
+    }
+
+    await client.query("COMMIT");
+    client.release();
+    client = null;
+
+    return res.json({
+      ok: true,
+      found: true,
       code,
-      stringifyJsonbSafe(world, "login-world"),
-    ]
-  );
-} else if (
-  !verifyPassword(
-    password,
-    account
-  )
-) {
-  await client.query(
-    "ROLLBACK"
-  );
+      name: row.name || code,
+    });
+  } catch (err) {
+    if (client) {
+      try { await client.query("ROLLBACK"); } catch (e) {}
+      client.release();
+      client = null;
+    }
 
-  client.release();
-  client = null;
+    console.error("World peek error:", err);
 
-  return res.status(401).json({
-    error:
-      "Wrong username or password.",
-  });
-}
+    return res.status(500).json({
+      error: "World lookup failed.",
+    });
+  }
+});
 
-/*
- * Global profile credential. The first successfully authenticated
- * world creates it; every later world must use the same password.
- */
-let globalProfile;
+/* -------------------------------------------------------------------------
+   LOGIN
+   Password initialization is also serialized with SELECT ... FOR UPDATE.
+   ------------------------------------------------------------------------- */
+app.post("/auth/login", async (req, res) => {
+  let client = null;
 
-try {
-  globalProfile =
-    await ensureGlobalProfileCredential(
+  try {
+    if (!(await requireDb(res))) return;
+
+    const code =
+      cleanCode(req.body?.code);
+
+    const username =
+      cleanUsername(
+        req.body?.username
+      );
+
+    const password =
+      String(
+        req.body?.password || ""
+      );
+
+    if (
+      !code ||
+      !username ||
+      !password
+    ) {
+      return res.status(400).json({
+        error:
+          "World code, username and password are required.",
+      });
+    }
+
+    client =
+      await pool.connect();
+
+    await client.query("BEGIN");
+
+    const result =
+      await client.query(
+        `
+        SELECT data
+        FROM worlds
+        WHERE code = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [code]
+      );
+
+    if (!result.rows.length) {
+      await client.query(
+        "ROLLBACK"
+      );
+
+      client.release();
+      client = null;
+
+      return res.status(404).json({
+        error: "World not found.",
+      });
+    }
+
+    const world =
+      result.rows[0].data;
+
+    world.syncRev =
+      worldSyncRevServer(world);
+
+    const found =
+      findAccountByUsername(
+        world,
+        username
+      );
+
+    if (!found) {
+      await client.query(
+        "ROLLBACK"
+      );
+
+      client.release();
+      client = null;
+
+      return res.status(401).json({
+        error:
+          "Wrong username or password.",
+      });
+    }
+
+    const accountId =
+      found.id;
+
+    const account =
+      found.account;
+
+    if (!account.hash) {
+      account.salt =
+        crypto
+          .randomBytes(18)
+          .toString("hex");
+
+      account.hash =
+        passwordHash(
+          password,
+          account.salt
+        );
+
+      world.rev =
+        Number(
+          world.rev || 0
+        ) + 1;
+
+      world.syncRev =
+        worldSyncRevServer(
+          world
+        ) + 1;
+
+      if (world.universe) {
+        world.universe.at =
+          Date.now();
+      }
+
+      await client.query(
+        `
+        UPDATE worlds
+        SET data = $2::jsonb,
+            updated_at = NOW()
+        WHERE code = $1
+        `,
+        [
+          code,
+          stringifyJsonbSafe(world, "login-world"),
+        ]
+      );
+    } else if (
+      !verifyPassword(
+        password,
+        account
+      )
+    ) {
+      await client.query(
+        "ROLLBACK"
+      );
+
+      client.release();
+      client = null;
+
+      return res.status(401).json({
+        error:
+          "Wrong username or password.",
+      });
+    }
+
+    /*
+     * Global profile credential. The first successfully authenticated
+     * world creates it; every later world must use the same password.
+     */
+    let globalProfile;
+
+    try {
+      globalProfile =
+        await ensureGlobalProfileCredential(
+          client,
+          username,
+          password
+        );
+    } catch (profileErr) {
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
+
+      return res.status(profileErr.status || 401).json({
+        code: profileErr.code || "PROFILE_LOGIN_FAILED",
+        error: profileErr.message || "Profile login failed.",
+      });
+    }
+
+    /* Keep the per-world account credential aligned with the global profile. */
+    if (globalProfile) {
+      account.salt = globalProfile.salt;
+      account.hash = globalProfile.hash;
+    }
+
+    await linkProfileWorld(
       client,
       username,
-      password
+      code,
+      accountId
     );
-} catch (profileErr) {
-  await client.query("ROLLBACK");
-  client.release();
-  client = null;
 
-  return res.status(profileErr.status || 401).json({
-    code: profileErr.code || "PROFILE_LOGIN_FAILED",
-    error: profileErr.message || "Profile login failed.",
-  });
-}
+    /* Persist a possible credential alignment too. */
+    await client.query(
+      `
+      UPDATE worlds
+      SET data = $2::jsonb,
+          updated_at = NOW()
+      WHERE code = $1
+      `,
+      [code, stringifyJsonbSafe(world, "login-world-align")]
+    );
 
-/* Keep the per-world account credential aligned with the global profile. */
-if (globalProfile) {
-  account.salt = globalProfile.salt;
-  account.hash = globalProfile.hash;
-}
+    await client.query("COMMIT");
+    client.release();
+    client = null;
 
-await linkProfileWorld(
-  client,
-  username,
-  code,
-  accountId
-);
+    const token =
+      await createSession(
+        code,
+        accountId
+      );
 
-/* Persist a possible credential alignment too. */
-await client.query(
-  `
-  UPDATE worlds
-  SET data = $2::jsonb,
-      updated_at = NOW()
-  WHERE code = $1
-  `,
-  [code, stringifyJsonbSafe(world, "login-world-align")]
-);
+    setSessionCookie(
+      res,
+      token
+    );
 
-await client.query("COMMIT");
-client.release();
-client = null;
+    return res.json({
+      ok: true,
+      meId: accountId,
+      profileUsername: username,
+      syncRev:
+        worldSyncRevServer(world),
+      world:
+        safeWorldForClient(world),
+    });
+  } catch (err) {
+    if (client) {
+      try {
+        await client.query(
+          "ROLLBACK"
+        );
+      } catch (e) {}
 
-const token =
-  await createSession(
-    code,
-    accountId
-  );
+      client.release();
+      client = null;
+    }
 
-setSessionCookie(
-  res,
-  token
-);
+    console.error(
+      "Login error:",
+      err
+    );
 
-return res.json({
-  ok: true,
-  meId: accountId,
-  profileUsername: username,
-  syncRev:
-    worldSyncRevServer(world),
-  world:
-    safeWorldForClient(world),
-});
-
-} catch (err) {
-if (client) {
-try {
-await client.query(
-"ROLLBACK"
-);
-} catch (e) {}
-
-  client.release();
-  client = null;
-}
-
-console.error(
-  "Login error:",
-  err
-);
-
-return res.status(500).json({
-  error: "Login failed.",
-});
-
-}
+    return res.status(500).json({
+      error: "Login failed.",
+    });
+  }
 });
 
 /* -------------------------------------------------------------------------
-SESSION RESTORE
-Always returns the CURRENT PostgreSQL world through getSession().
-------------------------------------------------------------------------- */
+   SESSION RESTORE
+   Always returns the CURRENT PostgreSQL world through getSession().
+   ------------------------------------------------------------------------- */
 app.get("/auth/session", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const lite = String(req.query?.lite || "") === "1";
+    const lite = String(req.query?.lite || "") === "1";
 
-if (lite) {
-  const session = await getSessionMeta(req);
-  if (!session || !session.account) {
-    clearSessionCookie(res);
-    return res.status(401).json({ authenticated: false });
+    if (lite) {
+      const session = await getSessionMeta(req);
+      if (!session || !session.account) {
+        clearSessionCookie(res);
+        return res.status(401).json({ authenticated: false });
+      }
+
+      return res.json({
+        authenticated: true,
+        meId: session.accountId,
+        profileUsername: cleanUsername(session.account.username),
+        syncRev: session.syncRev,
+        code: session.worldCode,
+      });
+    }
+
+    const session = await getSession(req);
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({ authenticated: false });
+    }
+
+    const account = session.world?.accounts?.[session.accountId];
+    if (!account) {
+      if (session.token) {
+        await pool.query(
+          `DELETE FROM sessions WHERE token_hash = $1`,
+          [sessionTokenHash(session.token)]
+        );
+      }
+      clearSessionCookie(res);
+      return res.status(401).json({ authenticated: false });
+    }
+
+    return res.json({
+      authenticated: true,
+      meId: session.accountId,
+      profileUsername: cleanUsername(account.username),
+      syncRev: worldSyncRevServer(session.world),
+      world: safeWorldForClient(session.world),
+    });
+  } catch (err) {
+    console.error("Session restore error:", err);
+    return res.status(500).json({ error: "Session restore failed." });
   }
-
-  return res.json({
-    authenticated: true,
-    meId: session.accountId,
-    profileUsername: cleanUsername(session.account.username),
-    syncRev: session.syncRev,
-    code: session.worldCode,
-  });
-}
-
-const session = await getSession(req);
-if (!session) {
-  clearSessionCookie(res);
-  return res.status(401).json({ authenticated: false });
-}
-
-const account = session.world?.accounts?.[session.accountId];
-if (!account) {
-  if (session.token) {
-    await pool.query(
-      `DELETE FROM sessions WHERE token_hash = $1`,
-      [sessionTokenHash(session.token)]
-    );
-  }
-  clearSessionCookie(res);
-  return res.status(401).json({ authenticated: false });
-}
-
-return res.json({
-  authenticated: true,
-  meId: session.accountId,
-  profileUsername: cleanUsername(account.username),
-  syncRev: worldSyncRevServer(session.world),
-  world: safeWorldForClient(session.world),
-});
-
-} catch (err) {
-console.error("Session restore error:", err);
-return res.status(500).json({ error: "Session restore failed." });
-}
 });
 
 /* PERFORMANCE v16: authenticated full-world load is separate from the tiny
-session check. This prevents the browser from receiving/parsing the large
-world until authentication has already succeeded. */
+   session check. This prevents the browser from receiving/parsing the large
+   world until authentication has already succeeded. */
 app.get("/world/load", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const session = await getSessionMeta(req);
-if (!session || !session.account) {
-  clearSessionCookie(res);
-  return res.status(401).json({ error: "Not authenticated." });
-}
+    const session = await getSessionMeta(req);
+    if (!session || !session.account) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
 
-const result = await pool.query(
-  `SELECT data FROM worlds WHERE code = $1 LIMIT 1`,
-  [session.worldCode]
-);
+    const result = await pool.query(
+      `SELECT data FROM worlds WHERE code = $1 LIMIT 1`,
+      [session.worldCode]
+    );
 
-if (!result.rows.length) {
-  return res.status(404).json({ error: "World not found." });
-}
+    if (!result.rows.length) {
+      return res.status(404).json({ error: "World not found." });
+    }
 
-return res.json({
-  ok: true,
-  meId: session.accountId,
-  syncRev: worldSyncRevServer(result.rows[0].data),
-  world: safeWorldForClient(result.rows[0].data),
-});
-
-} catch (err) {
-console.error("World load error:", err);
-return res.status(500).json({ error: "World load failed." });
-}
+    return res.json({
+      ok: true,
+      meId: session.accountId,
+      syncRev: worldSyncRevServer(result.rows[0].data),
+      world: safeWorldForClient(result.rows[0].data),
+    });
+  } catch (err) {
+    console.error("World load error:", err);
+    return res.status(500).json({ error: "World load failed." });
+  }
 });
 
 /* -------------------------------------------------------------------------
-LIGHTWEIGHT WORLD REVISION CHECK — performance v15
-Returns no world JSON. Poll/focus checks use this before downloading state.
-------------------------------------------------------------------------- */
+   LIGHTWEIGHT WORLD REVISION CHECK — performance v15
+   Returns no world JSON. Poll/focus checks use this before downloading state.
+   ------------------------------------------------------------------------- */
 app.get("/world/version", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const session = await getSessionIdentity(req);
+    const session = await getSessionIdentity(req);
 
-if (!session) {
-  clearSessionCookie(res);
-  return res.status(401).json({
-    authenticated: false,
-    error: "Not authenticated.",
-  });
-}
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({
+        authenticated: false,
+        error: "Not authenticated.",
+      });
+    }
 
-const result = await pool.query(
-  `
-  SELECT
-    COALESCE(NULLIF(data->>'syncRev', '')::BIGINT, 0) AS sync_rev,
-    COALESCE(NULLIF(data->>'rev', '')::BIGINT, 0) AS rev
-  FROM worlds
-  WHERE code = $1
-  LIMIT 1
-  `,
-  [session.worldCode]
-);
+    const result = await pool.query(
+      `
+      SELECT
+        COALESCE(NULLIF(data->>'syncRev', '')::BIGINT, 0) AS sync_rev,
+        COALESCE(NULLIF(data->>'rev', '')::BIGINT, 0) AS rev
+      FROM worlds
+      WHERE code = $1
+      LIMIT 1
+      `,
+      [session.worldCode]
+    );
 
-if (!result.rows.length) {
-  return res.status(404).json({ error: "World not found." });
-}
+    if (!result.rows.length) {
+      return res.status(404).json({ error: "World not found." });
+    }
 
-return res.json({
-  authenticated: true,
-  code: session.worldCode,
-  meId: session.accountId,
-  syncRev: Number(result.rows[0].sync_rev) || 0,
-  rev: Number(result.rows[0].rev) || 0,
-});
-
-} catch (err) {
-console.error("World version error:", err);
-return res.status(500).json({ error: "World version check failed." });
-}
+    return res.json({
+      authenticated: true,
+      code: session.worldCode,
+      meId: session.accountId,
+      syncRev: Number(result.rows[0].sync_rev) || 0,
+      rev: Number(result.rows[0].rev) || 0,
+    });
+  } catch (err) {
+    console.error("World version error:", err);
+    return res.status(500).json({ error: "World version check failed." });
+  }
 });
 
 /* ---------- LOGOUT ---------- */
 
 app.post("/auth/logout", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const token = readCookie(req, SESSION_COOKIE);
+    const token = readCookie(req, SESSION_COOKIE);
 
-if (token) {
-  await pool.query(
-    `
-    DELETE FROM sessions
-    WHERE token_hash = $1
-    `,
-    [sessionTokenHash(token)]
-  );
-}
+    if (token) {
+      await pool.query(
+        `
+        DELETE FROM sessions
+        WHERE token_hash = $1
+        `,
+        [sessionTokenHash(token)]
+      );
+    }
 
-clearSessionCookie(res);
+    clearSessionCookie(res);
 
-return res.json({ ok: true });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Logout error:", err);
 
-} catch (err) {
-console.error("Logout error:", err);
+    clearSessionCookie(res);
 
-clearSessionCookie(res);
-
-return res.json({
-  ok: true,
-});
-
-}
+    return res.json({
+      ok: true,
+    });
+  }
 });
 /* -------------------------------------------------------------------------
-ACCOUNT DELETE
-Serialized against world saves. Deletion increments syncRev.
-------------------------------------------------------------------------- */
+   ACCOUNT DELETE
+   Serialized against world saves. Deletion increments syncRev.
+   ------------------------------------------------------------------------- */
 app.post("/account/delete", async (req, res) => {
-let client = null;
+  let client = null;
 
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const session = await getSession(req);
+    const session = await getSession(req);
 
-if (!session) {
-  clearSessionCookie(res);
-  return res.status(401).json({
-    error: "Not authenticated.",
-  });
-}
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
 
-const worldCode = cleanCode(session.worldCode);
-const accountId = session.accountId;
+    const worldCode = cleanCode(session.worldCode);
+    const accountId = session.accountId;
 
-client = await pool.connect();
-await client.query("BEGIN");
+    client = await pool.connect();
+    await client.query("BEGIN");
 
-const result = await client.query(
-  `
-  SELECT data
-  FROM worlds
-  WHERE code = $1
-  LIMIT 1
-  FOR UPDATE
-  `,
-  [worldCode]
-);
+    const result = await client.query(
+      `
+      SELECT data
+      FROM worlds
+      WHERE code = $1
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [worldCode]
+    );
 
-if (!result.rows.length) {
-  await client.query(
-    `DELETE FROM sessions WHERE world_code = $1`,
-    [worldCode]
-  );
+    if (!result.rows.length) {
+      await client.query(
+        `DELETE FROM sessions WHERE world_code = $1`,
+        [worldCode]
+      );
 
-  await client.query("COMMIT");
-  client.release();
-  client = null;
-  clearSessionCookie(res);
+      await client.query("COMMIT");
+      client.release();
+      client = null;
+      clearSessionCookie(res);
 
-  return res.json({
-    ok: true,
-    alreadyDeleted: true,
-    worldDeleted: true,
-    code: worldCode,
-  });
-}
+      return res.json({
+        ok: true,
+        alreadyDeleted: true,
+        worldDeleted: true,
+        code: worldCode,
+      });
+    }
 
-const world = result.rows[0].data || {};
-const account = world.accounts && world.accounts[accountId];
+    const world = result.rows[0].data || {};
+    const account = world.accounts && world.accounts[accountId];
 
-const profileUsername = cleanUsername(
-  (account && account.username) ||
-  (
-    session.world &&
-    session.world.accounts &&
-    session.world.accounts[accountId] &&
-    session.world.accounts[accountId].username
-  )
-);
+    const profileUsername = cleanUsername(
+      (account && account.username) ||
+      (
+        session.world &&
+        session.world.accounts &&
+        session.world.accounts[accountId] &&
+        session.world.accounts[accountId].username
+      )
+    );
 
-/*
- * SINGLE-PLAYER WORLD CONTRACT:
- * deleting the human account deletes the WHOLE world. This prevents an
- * ownerless worlds row from continuing to reserve the world code.
- */
-await deleteWorldGraph(client, worldCode);
+    /*
+     * SINGLE-PLAYER WORLD CONTRACT:
+     * deleting the human account deletes the WHOLE world. This prevents an
+     * ownerless worlds row from continuing to reserve the world code.
+     */
+    await deleteWorldGraph(client, worldCode);
 
-if (profileUsername) {
-  await deleteUnusedProfile(client, profileUsername);
-}
+    if (profileUsername) {
+      await deleteUnusedProfile(client, profileUsername);
+    }
 
-await client.query("COMMIT");
-client.release();
-client = null;
+    await client.query("COMMIT");
+    client.release();
+    client = null;
 
-clearSessionCookie(res);
+    clearSessionCookie(res);
 
-console.log(
-  `Deleted account ${accountId} and world ${worldCode}`
-);
+    console.log(
+      `Deleted account ${accountId} and world ${worldCode}`
+    );
 
-return res.json({
-  ok: true,
-  deleted: true,
-  worldDeleted: true,
-  code: worldCode,
-});
+    return res.json({
+      ok: true,
+      deleted: true,
+      worldDeleted: true,
+      code: worldCode,
+    });
+  } catch (err) {
+    if (client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (e) {}
 
-} catch (err) {
-if (client) {
-try {
-await client.query("ROLLBACK");
-} catch (e) {}
+      client.release();
+      client = null;
+    }
 
-  client.release();
-  client = null;
-}
+    console.error("Account/world delete error:", err);
 
-console.error("Account/world delete error:", err);
-
-return res.status(500).json({
-  error: "Account and world deletion failed.",
-});
-
-}
+    return res.status(500).json({
+      error: "Account and world deletion failed.",
+    });
+  }
 });
 
 /* -------------------------------------------------------------------------
-ONE-TIME LOCAL -> POSTGRES MIGRATION / NEW WORLD CREATION
-PostgreSQL unique constraint is authoritative for the world code.
-------------------------------------------------------------------------- */
+   ONE-TIME LOCAL -> POSTGRES MIGRATION / NEW WORLD CREATION
+   PostgreSQL unique constraint is authoritative for the world code.
+   ------------------------------------------------------------------------- */
 app.post("/auth/migrate", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const incomingWorld =
-  req.body?.world;
+    const incomingWorld =
+      req.body?.world;
 
-const username =
-  cleanUsername(
-    req.body?.username
-  );
+    const username =
+      cleanUsername(
+        req.body?.username
+      );
 
-const password =
-  String(
-    req.body?.password || ""
-  );
-
-if (
-  !incomingWorld ||
-  typeof incomingWorld !==
-    "object" ||
-  !incomingWorld.code
-) {
-  return res.status(400).json({
-    error: "Missing world data.",
-  });
-}
-
-const code =
-  cleanCode(
-    incomingWorld.code
-  );
-
-if (
-  !code ||
-  !username ||
-  !password
-) {
-  return res.status(400).json({
-    error:
-      "World code, username and password are required.",
-  });
-}
-
-const world =
-  JSON.parse(
-    JSON.stringify(
-      incomingWorld
-    )
-  );
-
-world.code = code;
-
-const found =
-  findAccountByUsername(
-    world,
-    username
-  );
-
-if (!found) {
-  return res.status(401).json({
-    error:
-      "Wrong username or password.",
-  });
-}
-
-const accountId =
-  found.id;
-
-const account =
-  found.account;
-
-if (!account.hash) {
-  account.salt =
-    crypto
-      .randomBytes(18)
-      .toString("hex");
-
-  account.hash =
-    passwordHash(
-      password,
-      account.salt
-    );
-} else if (
-  !verifyPassword(
-    password,
-    account
-  )
-) {
-  return res.status(401).json({
-    error:
-      "Wrong username or password.",
-  });
-}
-
-world.rev =
-  Number(
-    world.rev || 0
-  ) + 1;
-
-/*
- * Create/verify the global profile before this new world is inserted.
- * The per-world account keeps the login username, while the player
- * character can use a completely different social @username.
- */
-let globalProfile;
-
-try {
-  globalProfile =
-    await ensureGlobalProfileCredential(
-      pool,
-      username,
-      password
-    );
-} catch (profileErr) {
-  return res.status(profileErr.status || 401).json({
-    code: profileErr.code || "PROFILE_LOGIN_FAILED",
-    error: profileErr.message || "Profile login failed.",
-  });
-}
-
-if (globalProfile) {
-  account.salt = globalProfile.salt;
-  account.hash = globalProfile.hash;
-}
-
-/* Server owns this value; never trust the imported/local value. */
-world.syncRev = 1;
-
-if (world.universe) {
-  world.universe.at =
-    Date.now();
-}
-
-const insertWorld = () =>
-  pool.query(
-    `
-    INSERT INTO worlds (
-      code,
-      data,
-      updated_at
-    )
-    VALUES ($1, $2::jsonb, NOW())
-    `,
-    [code, stringifyJsonbSafe(world, "world-create")]
-  );
-
-try {
-  await insertWorld();
-} catch (err) {
-  if (err && err.code === "23505") {
-    /* Old account-delete versions can leave a zero-account orphan. */
-    const stale = await pool.query(
-      `SELECT data FROM worlds WHERE code = $1 LIMIT 1`,
-      [code]
-    );
+    const password =
+      String(
+        req.body?.password || ""
+      );
 
     if (
-      stale.rows.length &&
-      !worldHasHumanAccount(stale.rows[0].data)
+      !incomingWorld ||
+      typeof incomingWorld !==
+        "object" ||
+      !incomingWorld.code
     ) {
-      await deleteWorldGraph(pool, code);
+      return res.status(400).json({
+        error: "Missing world data.",
+      });
+    }
 
-      try {
-        await insertWorld();
-      } catch (retryErr) {
-        if (retryErr && retryErr.code === "23505") {
+    const code =
+      cleanCode(
+        incomingWorld.code
+      );
+
+    if (
+      !code ||
+      !username ||
+      !password
+    ) {
+      return res.status(400).json({
+        error:
+          "World code, username and password are required.",
+      });
+    }
+
+    const world =
+      JSON.parse(
+        JSON.stringify(
+          incomingWorld
+        )
+      );
+
+    world.code = code;
+
+    const found =
+      findAccountByUsername(
+        world,
+        username
+      );
+
+    if (!found) {
+      return res.status(401).json({
+        error:
+          "Wrong username or password.",
+      });
+    }
+
+    const accountId =
+      found.id;
+
+    const account =
+      found.account;
+
+    if (!account.hash) {
+      account.salt =
+        crypto
+          .randomBytes(18)
+          .toString("hex");
+
+      account.hash =
+        passwordHash(
+          password,
+          account.salt
+        );
+    } else if (
+      !verifyPassword(
+        password,
+        account
+      )
+    ) {
+      return res.status(401).json({
+        error:
+          "Wrong username or password.",
+      });
+    }
+
+    world.rev =
+      Number(
+        world.rev || 0
+      ) + 1;
+
+    /*
+     * Create/verify the global profile before this new world is inserted.
+     * The per-world account keeps the login username, while the player
+     * character can use a completely different social @username.
+     */
+    let globalProfile;
+
+    try {
+      globalProfile =
+        await ensureGlobalProfileCredential(
+          pool,
+          username,
+          password
+        );
+    } catch (profileErr) {
+      return res.status(profileErr.status || 401).json({
+        code: profileErr.code || "PROFILE_LOGIN_FAILED",
+        error: profileErr.message || "Profile login failed.",
+      });
+    }
+
+    if (globalProfile) {
+      account.salt = globalProfile.salt;
+      account.hash = globalProfile.hash;
+    }
+
+    /* Server owns this value; never trust the imported/local value. */
+    world.syncRev = 1;
+
+    if (world.universe) {
+      world.universe.at =
+        Date.now();
+    }
+
+    const insertWorld = () =>
+      pool.query(
+        `
+        INSERT INTO worlds (
+          code,
+          data,
+          updated_at
+        )
+        VALUES ($1, $2::jsonb, NOW())
+        `,
+        [code, stringifyJsonbSafe(world, "world-create")]
+      );
+
+    try {
+      await insertWorld();
+    } catch (err) {
+      if (err && err.code === "23505") {
+        /* Old account-delete versions can leave a zero-account orphan. */
+        const stale = await pool.query(
+          `SELECT data FROM worlds WHERE code = $1 LIMIT 1`,
+          [code]
+        );
+
+        if (
+          stale.rows.length &&
+          !worldHasHumanAccount(stale.rows[0].data)
+        ) {
+          await deleteWorldGraph(pool, code);
+
+          try {
+            await insertWorld();
+          } catch (retryErr) {
+            if (retryErr && retryErr.code === "23505") {
+              return res.status(409).json({
+                code: "WORLD_ALREADY_EXISTS",
+                error: "World already exists on the server.",
+              });
+            }
+
+            throw retryErr;
+          }
+        } else {
           return res.status(409).json({
             code: "WORLD_ALREADY_EXISTS",
             error: "World already exists on the server.",
           });
         }
-
-        throw retryErr;
+      } else {
+        throw err;
       }
-    } else {
+    }
+
+    await linkProfileWorld(
+      pool,
+      username,
+      code,
+      accountId
+    );
+
+    const token =
+      await createSession(
+        code,
+        accountId
+      );
+
+    setSessionCookie(
+      res,
+      token
+    );
+
+    console.log(
+      `Migrated world ${code}`
+    );
+
+    return res.json({
+      ok: true,
+      migrated: true,
+      meId: accountId,
+      profileUsername: username,
+      syncRev: 1,
+      world:
+        safeWorldForClient(world),
+    });
+  } catch (err) {
+    console.error(
+      "World migration error:",
+      err
+    );
+
+    return res.status(500).json({
+      error:
+        "World migration failed.",
+    });
+  }
+});
+
+/* -------------------------------------------------------------------------
+   GLOBAL PROFILE -> WORLDS
+   ------------------------------------------------------------------------- */
+app.get("/profile/worlds", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
+
+    const profile = await currentProfileForSession(session);
+
+    if (!profile) {
+      return res.status(404).json({
+        error: "Global profile not found.",
+      });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+        pw.world_code AS code,
+        pw.account_id,
+        w.data->'universe'->>'name' AS name,
+        w.data #>> ARRAY['players', pw.account_id, 'name'] AS character_name,
+        w.data #>> ARRAY['players', pw.account_id, 'username'] AS character_username,
+        w.updated_at
+      FROM profile_worlds pw
+      JOIN worlds w ON w.code = pw.world_code
+      WHERE pw.profile_username = $1
+      ORDER BY w.updated_at DESC, pw.world_code ASC
+      `,
+      [profile.username]
+    );
+
+    return res.json({
+      ok: true,
+      profileUsername: profile.username,
+      currentWorldCode: session.worldCode,
+      worlds: result.rows.map((row) => ({
+        code: row.code,
+        name: row.name || row.code,
+        meId: row.account_id,
+        characterName: row.character_name || "",
+        characterUsername: row.character_username || "",
+        updatedAt: row.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error("Profile worlds error:", err);
+
+    return res.status(500).json({
+      error: "Failed to load profile worlds.",
+    });
+  }
+});
+
+app.post("/profile/worlds/switch", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
+
+    const profile = await currentProfileForSession(session);
+    const code = cleanCode(req.body?.code);
+
+    if (!profile || !code) {
+      return res.status(400).json({
+        error: "Missing profile or world code.",
+      });
+    }
+
+    const link = await pool.query(
+      `
+      SELECT pw.account_id, w.data
+      FROM profile_worlds pw
+      JOIN worlds w ON w.code = pw.world_code
+      WHERE pw.profile_username = $1
+        AND pw.world_code = $2
+      LIMIT 1
+      `,
+      [profile.username, code]
+    );
+
+    if (!link.rows.length) {
+      return res.status(404).json({
+        error: "This world is not linked to your profile.",
+      });
+    }
+
+    const accountId = link.rows[0].account_id;
+    const world = link.rows[0].data;
+
+    if (!world?.accounts?.[accountId]) {
+      return res.status(409).json({
+        error: "The linked world profile no longer exists.",
+      });
+    }
+
+    const token = await createSession(code, accountId);
+    setSessionCookie(res, token);
+
+    return res.json({
+      ok: true,
+      meId: accountId,
+      profileUsername: profile.username,
+      syncRev: worldSyncRevServer(world),
+      world: safeWorldForClient(world),
+    });
+  } catch (err) {
+    console.error("World switch error:", err);
+
+    return res.status(500).json({
+      error: "World switch failed.",
+    });
+  }
+});
+
+app.post("/profile/worlds/create", async (req, res) => {
+  let client = null;
+
+  try {
+    if (!(await requireDb(res))) return;
+
+    const session = await getSession(req);
+
+    if (!session) {
+      clearSessionCookie(res);
+
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
+
+    const profile = await currentProfileForSession(session);
+    const incomingWorld = req.body?.world;
+
+    if (
+      !profile ||
+      !incomingWorld ||
+      typeof incomingWorld !== "object"
+    ) {
+      return res.status(400).json({
+        error: "Missing world data.",
+      });
+    }
+
+    const world = JSON.parse(JSON.stringify(incomingWorld));
+    const code = cleanCode(world.code);
+
+    if (!code) {
+      return res.status(400).json({
+        error: "World code is required.",
+      });
+    }
+
+    world.code = code;
+
+    const candidateIds = Object.keys(world.accounts || {});
+
+    let accountId =
+      world.owner &&
+      world.accounts?.[world.owner]
+        ? String(world.owner)
+        : candidateIds.find(
+            (id) =>
+              cleanUsername(
+                world.accounts?.[id]?.username
+              ) === profile.username
+          );
+
+    if (!accountId) {
+      accountId =
+        `u${crypto.randomBytes(10).toString("hex")}`;
+
+      if (!world.accounts) world.accounts = {};
+      if (!world.players) world.players = {};
+
+      world.accounts[accountId] = {
+        id: accountId,
+        username: profile.username,
+        created: Date.now(),
+      };
+
+      world.players[accountId] = {
+        id: accountId,
+        name:
+          String(
+            req.body?.characterName ||
+            profile.username
+          ).slice(0, 120),
+        username:
+          cleanUsername(
+            req.body?.characterUsername
+          ) || profile.username,
+      };
+    }
+
+    if (!world.accounts) world.accounts = {};
+    if (!world.players) world.players = {};
+
+    const account =
+      world.accounts[accountId] || {};
+
+    account.id = accountId;
+    account.username = profile.username;
+    account.salt = profile.salt;
+    account.hash = profile.hash;
+    account.created =
+      Number(account.created) || Date.now();
+
+    world.accounts[accountId] = account;
+
+    const player =
+      world.players[accountId] ||
+      { id: accountId };
+
+    player.id = accountId;
+
+    if (req.body?.characterName) {
+      player.name =
+        String(
+          req.body.characterName
+        )
+          .trim()
+          .slice(0, 120);
+    }
+
+    const requestedHandle =
+      cleanUsername(
+        req.body?.characterUsername
+      );
+
+    if (requestedHandle) {
+      player.username =
+        requestedHandle;
+    } else if (!player.username) {
+      player.username =
+        profile.username;
+    }
+
+    world.players[accountId] =
+      player;
+
+    world.owner = accountId;
+
+    world.rev =
+      Number(world.rev || 0) + 1;
+
+    world.syncRev = 1;
+
+    if (world.universe) {
+      world.universe.at =
+        Date.now();
+    }
+
+    client =
+      await pool.connect();
+
+    await client.query("BEGIN");
+
+    const exists =
+      await client.query(
+        `
+        SELECT 1
+        FROM worlds
+        WHERE code = $1
+        LIMIT 1
+        `,
+        [code]
+      );
+
+    if (exists.rows.length) {
+      await client.query("ROLLBACK");
+
+      client.release();
+      client = null;
+
       return res.status(409).json({
         code: "WORLD_ALREADY_EXISTS",
         error: "World already exists on the server.",
       });
     }
-  } else {
-    throw err;
-  }
-}
 
-await linkProfileWorld(
-  pool,
-  username,
-  code,
-  accountId
-);
+    await client.query(
+      `
+      INSERT INTO worlds (
+        code,
+        data,
+        updated_at
+      )
+      VALUES ($1, $2::jsonb, NOW())
+      `,
+      [
+        code,
+        stringifyJsonbSafe(world, "profile-world-create"),
+      ]
+    );
 
-const token =
-  await createSession(
-    code,
-    accountId
-  );
+    await linkProfileWorld(
+      client,
+      profile.username,
+      code,
+      accountId
+    );
 
-setSessionCookie(
-  res,
-  token
-);
+    await client.query("COMMIT");
 
-console.log(
-  `Migrated world ${code}`
-);
+    client.release();
+    client = null;
 
-return res.json({
-  ok: true,
-  migrated: true,
-  meId: accountId,
-  profileUsername: username,
-  syncRev: 1,
-  world:
-    safeWorldForClient(world),
-});
-
-} catch (err) {
-console.error(
-"World migration error:",
-err
-);
-
-return res.status(500).json({
-  error:
-    "World migration failed.",
-});
-
-}
-});
-
-/* -------------------------------------------------------------------------
-GLOBAL PROFILE -> WORLDS
-------------------------------------------------------------------------- */
-app.get("/profile/worlds", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
-
-const session = await getSession(req);
-
-if (!session) {
-  clearSessionCookie(res);
-
-  return res.status(401).json({
-    error: "Not authenticated.",
-  });
-}
-
-const profile = await currentProfileForSession(session);
-
-if (!profile) {
-  return res.status(404).json({
-    error: "Global profile not found.",
-  });
-}
-
-const result = await pool.query(
-  `
-  SELECT
-    pw.world_code AS code,
-    pw.account_id,
-    w.data->'universe'->>'name' AS name,
-    w.data #>> ARRAY['players', pw.account_id, 'name'] AS character_name,
-    w.data #>> ARRAY['players', pw.account_id, 'username'] AS character_username,
-    w.updated_at
-  FROM profile_worlds pw
-  JOIN worlds w ON w.code = pw.world_code
-  WHERE pw.profile_username = $1
-  ORDER BY w.updated_at DESC, pw.world_code ASC
-  `,
-  [profile.username]
-);
-
-return res.json({
-  ok: true,
-  profileUsername: profile.username,
-  currentWorldCode: session.worldCode,
-  worlds: result.rows.map((row) => ({
-    code: row.code,
-    name: row.name || row.code,
-    meId: row.account_id,
-    characterName: row.character_name || "",
-    characterUsername: row.character_username || "",
-    updatedAt: row.updated_at,
-  })),
-});
-
-} catch (err) {
-console.error("Profile worlds error:", err);
-
-return res.status(500).json({
-  error: "Failed to load profile worlds.",
-});
-
-}
-});
-
-app.post("/profile/worlds/switch", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
-
-const session = await getSession(req);
-
-if (!session) {
-  clearSessionCookie(res);
-
-  return res.status(401).json({
-    error: "Not authenticated.",
-  });
-}
-
-const profile = await currentProfileForSession(session);
-const code = cleanCode(req.body?.code);
-
-if (!profile || !code) {
-  return res.status(400).json({
-    error: "Missing profile or world code.",
-  });
-}
-
-const link = await pool.query(
-  `
-  SELECT pw.account_id, w.data
-  FROM profile_worlds pw
-  JOIN worlds w ON w.code = pw.world_code
-  WHERE pw.profile_username = $1
-    AND pw.world_code = $2
-  LIMIT 1
-  `,
-  [profile.username, code]
-);
-
-if (!link.rows.length) {
-  return res.status(404).json({
-    error: "This world is not linked to your profile.",
-  });
-}
-
-const accountId = link.rows[0].account_id;
-const world = link.rows[0].data;
-
-if (!world?.accounts?.[accountId]) {
-  return res.status(409).json({
-    error: "The linked world profile no longer exists.",
-  });
-}
-
-const token = await createSession(code, accountId);
-setSessionCookie(res, token);
-
-return res.json({
-  ok: true,
-  meId: accountId,
-  profileUsername: profile.username,
-  syncRev: worldSyncRevServer(world),
-  world: safeWorldForClient(world),
-});
-
-} catch (err) {
-console.error("World switch error:", err);
-
-return res.status(500).json({
-  error: "World switch failed.",
-});
-
-}
-});
-
-app.post("/profile/worlds/create", async (req, res) => {
-let client = null;
-
-try {
-if (!(await requireDb(res))) return;
-
-const session = await getSession(req);
-
-if (!session) {
-  clearSessionCookie(res);
-
-  return res.status(401).json({
-    error: "Not authenticated.",
-  });
-}
-
-const profile = await currentProfileForSession(session);
-const incomingWorld = req.body?.world;
-
-if (
-  !profile ||
-  !incomingWorld ||
-  typeof incomingWorld !== "object"
-) {
-  return res.status(400).json({
-    error: "Missing world data.",
-  });
-}
-
-const world = JSON.parse(JSON.stringify(incomingWorld));
-const code = cleanCode(world.code);
-
-if (!code) {
-  return res.status(400).json({
-    error: "World code is required.",
-  });
-}
-
-world.code = code;
-
-const candidateIds = Object.keys(world.accounts || {});
-
-let accountId =
-  world.owner &&
-  world.accounts?.[world.owner]
-    ? String(world.owner)
-    : candidateIds.find(
-        (id) =>
-          cleanUsername(
-            world.accounts?.[id]?.username
-          ) === profile.username
+    const token =
+      await createSession(
+        code,
+        accountId
       );
 
-if (!accountId) {
-  accountId =
-    `u${crypto.randomBytes(10).toString("hex")}`;
+    setSessionCookie(
+      res,
+      token
+    );
 
-  if (!world.accounts) world.accounts = {};
-  if (!world.players) world.players = {};
+    return res.json({
+      ok: true,
+      created: true,
+      meId: accountId,
+      profileUsername:
+        profile.username,
+      syncRev: 1,
+      world:
+        safeWorldForClient(
+          world
+        ),
+    });
+  } catch (err) {
+    if (client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (e) {}
 
-  world.accounts[accountId] = {
-    id: accountId,
-    username: profile.username,
-    created: Date.now(),
-  };
+      client.release();
+      client = null;
+    }
 
-  world.players[accountId] = {
-    id: accountId,
-    name:
-      String(
-        req.body?.characterName ||
-        profile.username
-      ).slice(0, 120),
-    username:
-      cleanUsername(
-        req.body?.characterUsername
-      ) || profile.username,
-  };
-}
+    console.error(
+      "Profile world create error:",
+      err
+    );
 
-if (!world.accounts) world.accounts = {};
-if (!world.players) world.players = {};
-
-const account =
-  world.accounts[accountId] || {};
-
-account.id = accountId;
-account.username = profile.username;
-account.salt = profile.salt;
-account.hash = profile.hash;
-account.created =
-  Number(account.created) || Date.now();
-
-world.accounts[accountId] = account;
-
-const player =
-  world.players[accountId] ||
-  { id: accountId };
-
-player.id = accountId;
-
-if (req.body?.characterName) {
-  player.name =
-    String(
-      req.body.characterName
-    )
-      .trim()
-      .slice(0, 120);
-}
-
-const requestedHandle =
-  cleanUsername(
-    req.body?.characterUsername
-  );
-
-if (requestedHandle) {
-  player.username =
-    requestedHandle;
-} else if (!player.username) {
-  player.username =
-    profile.username;
-}
-
-world.players[accountId] =
-  player;
-
-world.owner = accountId;
-
-world.rev =
-  Number(world.rev || 0) + 1;
-
-world.syncRev = 1;
-
-if (world.universe) {
-  world.universe.at =
-    Date.now();
-}
-
-client =
-  await pool.connect();
-
-await client.query("BEGIN");
-
-const exists =
-  await client.query(
-    `
-    SELECT 1
-    FROM worlds
-    WHERE code = $1
-    LIMIT 1
-    `,
-    [code]
-  );
-
-if (exists.rows.length) {
-  await client.query("ROLLBACK");
-
-  client.release();
-  client = null;
-
-  return res.status(409).json({
-    code: "WORLD_ALREADY_EXISTS",
-    error: "World already exists on the server.",
-  });
-}
-
-await client.query(
-  `
-  INSERT INTO worlds (
-    code,
-    data,
-    updated_at
-  )
-  VALUES ($1, $2::jsonb, NOW())
-  `,
-  [
-    code,
-    stringifyJsonbSafe(world, "profile-world-create"),
-  ]
-);
-
-await linkProfileWorld(
-  client,
-  profile.username,
-  code,
-  accountId
-);
-
-await client.query("COMMIT");
-
-client.release();
-client = null;
-
-const token =
-  await createSession(
-    code,
-    accountId
-  );
-
-setSessionCookie(
-  res,
-  token
-);
-
-return res.json({
-  ok: true,
-  created: true,
-  meId: accountId,
-  profileUsername:
-    profile.username,
-  syncRev: 1,
-  world:
-    safeWorldForClient(
-      world
-    ),
-});
-
-} catch (err) {
-if (client) {
-try {
-await client.query("ROLLBACK");
-} catch (e) {}
-
-  client.release();
-  client = null;
-}
-
-console.error(
-  "Profile world create error:",
-  err
-);
-
-return res.status(500).json({
-  error: "World creation failed.",
-});
-
-}
+    return res.status(500).json({
+      error: "World creation failed.",
+    });
+  }
 });
 /* -------------------------------------------------------------------------
-AUTHORITATIVE WORLD AUTOSAVE
+   AUTHORITATIVE WORLD AUTOSAVE
 
-If expectedSyncRev != current server syncRev:
-
-reject stale client with HTTP 409
-
-return the authoritative server world
-
-NEVER overwrite it with the stale snapshot
-------------------------------------------------------------------------- */
+   If expectedSyncRev != current server syncRev:
+   - reject stale client with HTTP 409
+   - return the authoritative server world
+   - NEVER overwrite it with the stale snapshot
+   ------------------------------------------------------------------------- */
 app.post("/world/save", async (req, res) => {
-let client = null;
+  let client = null;
 
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-/* Hot save path: do not JOIN/deserialise the full world merely to auth. */
-const session = await getSessionIdentity(req);
+    /* Hot save path: do not JOIN/deserialise the full world merely to auth. */
+    const session = await getSessionIdentity(req);
 
-if (!session) {
-  clearSessionCookie(res);
-  return res.status(401).json({ error: "Not authenticated." });
-}
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
 
-const incomingWorld = req.body?.world;
+    const incomingWorld = req.body?.world;
 
-if (
-  !incomingWorld ||
-  typeof incomingWorld !== "object" ||
-  !incomingWorld.code
-) {
-  return res.status(400).json({ error: "Missing world data." });
-}
+    if (
+      !incomingWorld ||
+      typeof incomingWorld !== "object" ||
+      !incomingWorld.code
+    ) {
+      return res.status(400).json({ error: "Missing world data." });
+    }
 
-const incomingCode = cleanCode(incomingWorld.code);
+    const incomingCode = cleanCode(incomingWorld.code);
 
-if (incomingCode !== session.worldCode) {
-  return res.status(403).json({ error: "You cannot save another world." });
-}
+    if (incomingCode !== session.worldCode) {
+      return res.status(403).json({ error: "You cannot save another world." });
+    }
 
-const expectedSyncRev = Math.max(
-  0,
-  Math.floor(Number(req.body?.syncRev ?? incomingWorld.syncRev) || 0)
-);
+    const expectedSyncRev = Math.max(
+      0,
+      Math.floor(Number(req.body?.syncRev ?? incomingWorld.syncRev) || 0)
+    );
 
-client = await pool.connect();
-await client.query("BEGIN");
+    client = await pool.connect();
+    await client.query("BEGIN");
 
-/* Normal saves fetch only tiny scalars + account secrets, not the full JSONB
-   document. A full world is selected only on the rare conflict path. */
-const existingResult = await client.query(
-  `
-  SELECT
-    COALESCE(NULLIF(data->>'syncRev', '')::BIGINT, 0) AS sync_rev,
-    COALESCE(NULLIF(data->>'rev', '')::BIGINT, 0) AS rev,
-    COALESCE(data->'accounts', '{}'::jsonb) AS accounts
-  FROM worlds
-  WHERE code = $1
-  LIMIT 1
-  FOR UPDATE
-  `,
-  [session.worldCode]
-);
+    /* Normal saves fetch only tiny scalars + account secrets, not the full JSONB
+       document. A full world is selected only on the rare conflict path. */
+    const existingResult = await client.query(
+      `
+      SELECT
+        COALESCE(NULLIF(data->>'syncRev', '')::BIGINT, 0) AS sync_rev,
+        COALESCE(NULLIF(data->>'rev', '')::BIGINT, 0) AS rev,
+        COALESCE(data->'accounts', '{}'::jsonb) AS accounts
+      FROM worlds
+      WHERE code = $1
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [session.worldCode]
+    );
 
-if (!existingResult.rows.length) {
-  await client.query("ROLLBACK");
-  client.release();
-  client = null;
-  return res.status(404).json({ error: "World not found." });
-}
+    if (!existingResult.rows.length) {
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
+      return res.status(404).json({ error: "World not found." });
+    }
 
-const serverSyncRev = Number(existingResult.rows[0].sync_rev) || 0;
-const existingRev = Number(existingResult.rows[0].rev) || 0;
-const existingAccounts = existingResult.rows[0].accounts || {};
+    const serverSyncRev = Number(existingResult.rows[0].sync_rev) || 0;
+    const existingRev = Number(existingResult.rows[0].rev) || 0;
+    const existingAccounts = existingResult.rows[0].accounts || {};
 
-if (expectedSyncRev !== serverSyncRev) {
-  const conflictResult = await client.query(
-    `SELECT data FROM worlds WHERE code = $1 LIMIT 1`,
-    [session.worldCode]
-  );
+    if (expectedSyncRev !== serverSyncRev) {
+      const conflictResult = await client.query(
+        `SELECT data FROM worlds WHERE code = $1 LIMIT 1`,
+        [session.worldCode]
+      );
 
-  const existingWorld = conflictResult.rows.length
-    ? conflictResult.rows[0].data
-    : null;
+      const existingWorld = conflictResult.rows.length
+        ? conflictResult.rows[0].data
+        : null;
 
-  await client.query("ROLLBACK");
-  client.release();
-  client = null;
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
 
-  return res.status(409).json({
-    code: "WORLD_CONFLICT",
-    error: "The world changed on another client.",
-    meId: session.accountId,
-    expectedSyncRev,
-    serverSyncRev,
-    world: existingWorld ? safeWorldForClient(existingWorld) : null,
-  });
-}
+      return res.status(409).json({
+        code: "WORLD_CONFLICT",
+        error: "The world changed on another client.",
+        meId: session.accountId,
+        expectedSyncRev,
+        serverSyncRev,
+        world: existingWorld ? safeWorldForClient(existingWorld) : null,
+      });
+    }
 
-/* Express already parsed a private request-body object. Reusing it avoids
-   another multi-MB JSON.stringify -> JSON.parse deep clone on every save. */
-const nextWorld = incomingWorld;
+    /* Express already parsed a private request-body object. Reusing it avoids
+       another multi-MB JSON.stringify -> JSON.parse deep clone on every save. */
+    const nextWorld = incomingWorld;
 
-if (!nextWorld.accounts) nextWorld.accounts = {};
+    if (!nextWorld.accounts) nextWorld.accounts = {};
 
-for (const [accountId, oldAccount] of Object.entries(existingAccounts)) {
-  const wasDeleted = Boolean(nextWorld.deleted && nextWorld.deleted[accountId]);
+    for (const [accountId, oldAccount] of Object.entries(existingAccounts)) {
+      const wasDeleted = Boolean(nextWorld.deleted && nextWorld.deleted[accountId]);
 
-  if (wasDeleted && !nextWorld.accounts[accountId]) continue;
+      if (wasDeleted && !nextWorld.accounts[accountId]) continue;
 
-  if (!nextWorld.accounts[accountId]) {
-    nextWorld.accounts[accountId] = { ...(oldAccount || {}) };
+      if (!nextWorld.accounts[accountId]) {
+        nextWorld.accounts[accountId] = { ...(oldAccount || {}) };
+      }
+
+      if (oldAccount?.hash) nextWorld.accounts[accountId].hash = oldAccount.hash;
+      if (oldAccount?.salt) nextWorld.accounts[accountId].salt = oldAccount.salt;
+    }
+
+    nextWorld.code = session.worldCode;
+    nextWorld.rev = Math.max(Number(nextWorld.rev || 0), existingRev) + 1;
+    nextWorld.syncRev = serverSyncRev + 1;
+
+    if (nextWorld.universe) nextWorld.universe.at = Date.now();
+
+    const nextWorldJson = stringifyJsonbSafe(nextWorld, "world-save");
+
+    await client.query(
+      `
+      UPDATE worlds
+      SET data = $2::jsonb,
+          updated_at = NOW()
+      WHERE code = $1
+      `,
+      [session.worldCode, nextWorldJson]
+    );
+
+    await client.query("COMMIT");
+    client.release();
+    client = null;
+
+    /* PERFORMANCE v15: successful saves return only tiny metadata. The client
+       already owns the accepted snapshot; echoing several MB back was wasteful. */
+    return res.json({
+      ok: true,
+      meId: session.accountId,
+      syncRev: nextWorld.syncRev,
+      rev: nextWorld.rev,
+    });
+  } catch (err) {
+    if (client) {
+      try { await client.query("ROLLBACK"); } catch (e) {}
+      client.release();
+      client = null;
+    }
+
+    console.error("World save error:", err);
+    return res.status(500).json({ error: "World save failed." });
   }
-
-  if (oldAccount?.hash) nextWorld.accounts[accountId].hash = oldAccount.hash;
-  if (oldAccount?.salt) nextWorld.accounts[accountId].salt = oldAccount.salt;
-}
-
-nextWorld.code = session.worldCode;
-nextWorld.rev = Math.max(Number(nextWorld.rev || 0), existingRev) + 1;
-nextWorld.syncRev = serverSyncRev + 1;
-
-if (nextWorld.universe) nextWorld.universe.at = Date.now();
-
-const nextWorldJson = stringifyJsonbSafe(nextWorld, "world-save");
-
-await client.query(
-  `
-  UPDATE worlds
-  SET data = $2::jsonb,
-      updated_at = NOW()
-  WHERE code = $1
-  `,
-  [session.worldCode, nextWorldJson]
-);
-
-await client.query("COMMIT");
-client.release();
-client = null;
-
-/* PERFORMANCE v15: successful saves return only tiny metadata. The client
-   already owns the accepted snapshot; echoing several MB back was wasteful. */
-return res.json({
-  ok: true,
-  meId: session.accountId,
-  syncRev: nextWorld.syncRev,
-  rev: nextWorld.rev,
-});
-
-} catch (err) {
-if (client) {
-try { await client.query("ROLLBACK"); } catch (e) {}
-client.release();
-client = null;
-}
-
-console.error("World save error:", err);
-return res.status(500).json({ error: "World save failed." });
-
-}
 });
 
 function extractText(content) {
-if (typeof content === "string") return content;
+  if (typeof content === "string") return content;
 
-if (Array.isArray(content)) {
-return content
-.map((part) =>
-typeof part === "string"
-? part
-: part.text || ""
-)
-.join("");
-}
+  if (Array.isArray(content)) {
+    return content
+      .map((part) =>
+        typeof part === "string"
+          ? part
+          : part.text || ""
+      )
+      .join("");
+  }
 
-if (
-content &&
-typeof content === "object"
-) {
-if (
-typeof content.text ===
-"string"
-) {
-return content.text;
-}
+  if (
+    content &&
+    typeof content === "object"
+  ) {
+    if (
+      typeof content.text ===
+      "string"
+    ) {
+      return content.text;
+    }
 
-if (
-  Array.isArray(
-    content.parts
-  )
-) {
-  return content.parts
-    .map((part) =>
-      typeof part === "string"
-        ? part
-        : part.text || ""
-    )
-    .join("");
-}
+    if (
+      Array.isArray(
+        content.parts
+      )
+    ) {
+      return content.parts
+        .map((part) =>
+          typeof part === "string"
+            ? part
+            : part.text || ""
+        )
+        .join("");
+    }
+  }
 
-}
-
-return "";
+  return "";
 }
 
 function getProvider(body = {}) {
-const provider =
-String(
-body?.provider || ""
-).toLowerCase();
+  const provider =
+    String(
+      body?.provider || ""
+    ).toLowerCase();
 
-if (provider === "gemini") {
-return "gemini";
-}
+  if (provider === "gemini") {
+    return "gemini";
+  }
 
-if (provider === "openai") {
-return "openai";
-}
+  if (provider === "openai") {
+    return "openai";
+  }
 
-if (
-provider === "anthropic"
-) {
-return "anthropic";
-}
+  if (
+    provider === "anthropic"
+  ) {
+    return "anthropic";
+  }
 
-const model =
-String(
-body?.model || ""
-).toLowerCase();
+  const model =
+    String(
+      body?.model || ""
+    ).toLowerCase();
 
-if (
-model.startsWith(
-"gemini"
-)
-) {
-return "gemini";
-}
+  if (
+    model.startsWith(
+      "gemini"
+    )
+  ) {
+    return "gemini";
+  }
 
-if (
-model.startsWith("gpt") ||
-model.startsWith("o1") ||
-model.startsWith("o3")
-) {
-return "openai";
-}
+  if (
+    model.startsWith("gpt") ||
+    model.startsWith("o1") ||
+    model.startsWith("o3")
+  ) {
+    return "openai";
+  }
 
-return DEFAULT_PROVIDER;
+  return DEFAULT_PROVIDER;
 }
 
 function buildGeminiPayload(
-body = {}
+  body = {}
 ) {
-const messages =
-Array.isArray(
-body.messages
-)
-? body.messages
-: [];
+  const messages =
+    Array.isArray(
+      body.messages
+    )
+      ? body.messages
+      : [];
 
-const parts = [];
+  const parts = [];
 
-if (body.system) {
-parts.push({
-text: body.system,
-});
-}
+  if (body.system) {
+    parts.push({
+      text: body.system,
+    });
+  }
 
-for (const item of messages) {
-const text =
-extractText(
-item?.content || ""
-);
+  for (const item of messages) {
+    const text =
+      extractText(
+        item?.content || ""
+      );
 
-if (!text) continue;
+    if (!text) continue;
 
-parts.push({
-  text,
-});
+    parts.push({
+      text,
+    });
+  }
 
-}
+  const payload = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text:
+              parts
+                .map(
+                  (part) =>
+                    part.text
+                )
+                .join("\n\n"),
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      maxOutputTokens:
+        body.max_tokens ?? 700,
+    },
+  };
 
-const payload = {
-contents: [
-{
-role: "user",
-parts: [
-{
-text:
-parts
-.map(
-(part) =>
-part.text
-)
-.join("\n\n"),
-},
-],
-},
-],
-generationConfig: {
-maxOutputTokens:
-body.max_tokens ?? 700,
-},
-};
+  if (body.system) {
+    payload.systemInstruction = {
+      role: "system",
+      parts: [
+        {
+          text:
+            body.system,
+        },
+      ],
+    };
+  }
 
-if (body.system) {
-payload.systemInstruction = {
-role: "system",
-parts: [
-{
-text:
-body.system,
-},
-],
-};
-}
-
-return payload;
+  return payload;
 }
 
 function normalizeGeminiResponse(
-data
+  data
 ) {
-const candidate =
-data?.candidates?.[0];
+  const candidate =
+    data?.candidates?.[0];
 
-const text =
-candidate?.content?.parts
-?.map(
-(p) =>
-p.text || ""
-)
-.join("") || "";
+  const text =
+    candidate?.content?.parts
+      ?.map(
+        (p) =>
+          p.text || ""
+      )
+      .join("") || "";
 
-return {
-model:
-data?.model ||
-"gemini",
-id:
-candidate?.finishReason
-? gemini-${Date.now()}
-: undefined,
-type: "message",
-role: "assistant",
-content: [
-{
-type: "text",
-text,
-},
-],
-usage: {
-input_tokens:
-data?.usageMetadata
-?.promptTokenCount ||
-0,
-output_tokens:
-data?.usageMetadata
-?.candidatesTokenCount ||
-0,
-},
-};
+  return {
+    model:
+      data?.model ||
+      "gemini",
+    id:
+      candidate?.finishReason
+        ? `gemini-${Date.now()}`
+        : undefined,
+    type: "message",
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text,
+      },
+    ],
+    usage: {
+      input_tokens:
+        data?.usageMetadata
+          ?.promptTokenCount ||
+        0,
+      output_tokens:
+        data?.usageMetadata
+          ?.candidatesTokenCount ||
+        0,
+    },
+  };
 }
 
 function openAIChatModel(
-requested
+  requested
 ) {
-const value =
-String(
-requested || ""
-).trim();
+  const value =
+    String(
+      requested || ""
+    ).trim();
 
-if (
-/^(gpt|o1|o3|o4)/i.test(
-value
-)
-) {
-return value;
-}
+  if (
+    /^(gpt|o1|o3|o4)/i.test(
+      value
+    )
+  ) {
+    return value;
+  }
 
-return String(
-process.env
-.OPENAI_CHAT_MODEL ||
-"gpt-4o-mini"
-).trim();
+  return String(
+    process.env
+      .OPENAI_CHAT_MODEL ||
+      "gpt-4o-mini"
+  ).trim();
 }
 
 function geminiChatModel(
-requested
+  requested
 ) {
-const value =
-String(
-requested || ""
-).trim();
+  const value =
+    String(
+      requested || ""
+    ).trim();
 
-if (
-value.startsWith(
-"gemini"
-)
-) {
-return value;
-}
+  if (
+    value.startsWith(
+      "gemini"
+    )
+  ) {
+    return value;
+  }
 
-return String(
-process.env.GEMINI_MODEL ||
-"gemini-3.6-flash"
-).trim();
+  return String(
+    process.env.GEMINI_MODEL ||
+      "gemini-3.6-flash"
+  ).trim();
 }
 
 function anthropicChatModel(
-requested
+  requested
 ) {
-const value =
-String(
-requested || ""
-).trim();
+  const value =
+    String(
+      requested || ""
+    ).trim();
 
-if (
-value.startsWith(
-"claude"
-)
-) {
-return value;
-}
+  if (
+    value.startsWith(
+      "claude"
+    )
+  ) {
+    return value;
+  }
 
-return String(
-process.env
-.ANTHROPIC_MODEL ||
-"claude-sonnet-4-6"
-).trim();
+  return String(
+    process.env
+      .ANTHROPIC_MODEL ||
+      "claude-sonnet-4-6"
+  ).trim();
 }
 
 function buildOpenAIPayload(
-body = {}
+  body = {}
 ) {
-const messages =
-Array.isArray(
-body.messages
-)
-? body.messages
-: [];
+  const messages =
+    Array.isArray(
+      body.messages
+    )
+      ? body.messages
+      : [];
 
-const out = [];
+  const out = [];
 
-if (body.system) {
-out.push({
-role: "system",
-content:
-body.system,
-});
-}
+  if (body.system) {
+    out.push({
+      role: "system",
+      content:
+        body.system,
+    });
+  }
 
-for (const item of messages) {
-const text =
-extractText(
-item?.content || ""
-);
+  for (const item of messages) {
+    const text =
+      extractText(
+        item?.content || ""
+      );
 
-if (!text) continue;
+    if (!text) continue;
 
-out.push({
-  role:
-    item?.role ===
-    "assistant"
-      ? "assistant"
-      : "user",
-  content: text,
-});
+    out.push({
+      role:
+        item?.role ===
+        "assistant"
+          ? "assistant"
+          : "user",
+      content: text,
+    });
+  }
 
-}
+  const payload = {
+    model:
+      openAIChatModel(
+        body.model
+      ),
+    messages: out,
+    max_tokens:
+      body.max_tokens ??
+      1024,
+  };
 
-const payload = {
-model:
-openAIChatModel(
-body.model
-),
-messages: out,
-max_tokens:
-body.max_tokens ??
-1024,
-};
+  if (
+    Number.isFinite(
+      Number(
+        body.temperature
+      )
+    )
+  ) {
+    payload.temperature =
+      Number(
+        body.temperature
+      );
+  }
 
-if (
-Number.isFinite(
-Number(
-body.temperature
-)
-)
-) {
-payload.temperature =
-Number(
-body.temperature
-);
-}
-
-return payload;
+  return payload;
 }
 
 function normalizeOpenAIResponse(
-data
+  data
 ) {
-const choice =
-data?.choices?.[0];
+  const choice =
+    data?.choices?.[0];
 
-const text =
-choice?.message
-?.content || "";
+  const text =
+    choice?.message
+      ?.content || "";
 
-return {
-model:
-data?.model || "gpt",
-id:
-data?.id,
-type: "message",
-role: "assistant",
-content: [
-{
-type: "text",
-text,
-},
-],
-usage: {
-input_tokens:
-data?.usage
-?.prompt_tokens ||
-0,
-output_tokens:
-data?.usage
-?.completion_tokens ||
-0,
-},
-};
+  return {
+    model:
+      data?.model || "gpt",
+    id:
+      data?.id,
+    type: "message",
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text,
+      },
+    ],
+    usage: {
+      input_tokens:
+        data?.usage
+          ?.prompt_tokens ||
+        0,
+      output_tokens:
+        data?.usage
+          ?.completion_tokens ||
+        0,
+    },
+  };
 }
 
 if (
-!ANTHROPIC_API_KEY &&
-!GEMINI_API_KEY &&
-!OPENAI_API_KEY
+  !ANTHROPIC_API_KEY &&
+  !GEMINI_API_KEY &&
+  !OPENAI_API_KEY
 ) {
-console.warn(
-"No AI API key configured. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY before starting the proxy."
-);
+  console.warn(
+    "No AI API key configured. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY before starting the proxy."
+  );
 } else if (
-!ANTHROPIC_API_KEY
+  !ANTHROPIC_API_KEY
 ) {
-console.info(
-"Anthropic API key not configured; using other providers if requested."
-);
+  console.info(
+    "Anthropic API key not configured; using other providers if requested."
+  );
 }
 
 /* CORS */
 app.use((req, res, next) => {
-const origin =
-String(
-req.headers.origin || ""
-).trim();
+  const origin =
+    String(
+      req.headers.origin || ""
+    ).trim();
 
-const configured =
-String(
-process.env.CORS_ORIGINS ||
-""
-)
-.split(",")
-.map(
-(x) =>
-x.trim()
-)
-.filter(Boolean);
+  const configured =
+    String(
+      process.env.CORS_ORIGINS ||
+      ""
+    )
+      .split(",")
+      .map(
+        (x) =>
+          x.trim()
+      )
+      .filter(Boolean);
 
-const allowOrigin =
-origin &&
-(
-!configured.length ||
-configured.includes(
-origin
-)
-);
+  const allowOrigin =
+    origin &&
+    (
+      !configured.length ||
+      configured.includes(
+        origin
+      )
+    );
 
-if (allowOrigin) {
-res.setHeader(
-"Access-Control-Allow-Origin",
-origin
-);
+  if (allowOrigin) {
+    res.setHeader(
+      "Access-Control-Allow-Origin",
+      origin
+    );
 
-res.setHeader(
-  "Vary",
-  "Origin"
-);
+    res.setHeader(
+      "Vary",
+      "Origin"
+    );
 
-res.setHeader(
-  "Access-Control-Allow-Credentials",
-  "true"
-);
+    res.setHeader(
+      "Access-Control-Allow-Credentials",
+      "true"
+    );
+  }
 
-}
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,OPTIONS"
+  );
 
-res.setHeader(
-"Access-Control-Allow-Methods",
-"GET,POST,OPTIONS"
-);
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type,Authorization"
+  );
 
-res.setHeader(
-"Access-Control-Allow-Headers",
-"Content-Type,Authorization"
-);
+  if (
+    req.method ===
+    "OPTIONS"
+  ) {
+    return res.sendStatus(204);
+  }
 
-if (
-req.method ===
-"OPTIONS"
-) {
-return res.sendStatus(204);
-}
-
-next();
+  next();
 });
 /* -------------------------------------------------------------------------
-CLOUD MEDIA LOAD
-Backward-compatible with old raw world_media.data rows.
-------------------------------------------------------------------------- */
+   CLOUD MEDIA LOAD
+   Backward-compatible with old raw world_media.data rows.
+   ------------------------------------------------------------------------- */
 app.get("/media/version", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const session = await getSessionIdentity(req);
+    const session = await getSessionIdentity(req);
 
-if (!session) {
-  clearSessionCookie(res);
-  return res.status(401).json({ error: "Not authenticated." });
-}
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
 
-const result = await pool.query(
-  `
-  SELECT COALESCE(NULLIF(data->>'syncRev', '')::BIGINT, 0) AS sync_rev
-  FROM world_media
-  WHERE world_code = $1
-  LIMIT 1
-  `,
-  [session.worldCode]
-);
+    const result = await pool.query(
+      `
+      SELECT COALESCE(NULLIF(data->>'syncRev', '')::BIGINT, 0) AS sync_rev
+      FROM world_media
+      WHERE world_code = $1
+      LIMIT 1
+      `,
+      [session.worldCode]
+    );
 
-return res.json({
-  ok: true,
-  syncRev: result.rows.length ? Number(result.rows[0].sync_rev) || 0 : 0,
-});
-
-} catch (err) {
-console.error("Media version error:", err);
-return res.status(500).json({ error: "Media version check failed." });
-}
-});
-
-/*
-
-PERFORMANCE v17 — LAZY SINGLE-IMAGE DELIVERY
-
-
-
-Avoid returning the entire base64 media library during application boot.
-
-Image IDs are immutable, so the browser can request only the exact image it
-
-needs and cache it aggressively.
-*/
-app.get("/media/file/", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
-
-const session = await getSessionIdentity(req);
-if (!session) {
-clearSessionCookie(res);
-return res.status(401).end();
-}
-
-const imageId = String(req.params?.id || "").trim();
-if (!imageId || imageId.length > 180) {
-return res.status(400).end();
-}
-
-/* v19: new scalable table first. */
-const fileResult = await pool.query(
-   SELECT data AS item
-   FROM world_media_files
-   WHERE world_code = $1
-     AND image_id = $2
-   LIMIT 1
-  ,
-[session.worldCode, imageId]
-);
-
-let raw =
-fileResult.rows.length
-? fileResult.rows[0].item
-: null;
-
-/* Backwards-compatible fallback for every historical image. */
-if (raw == null) {
-const legacyResult = await pool.query(
-     SELECT
-       CASE
-         WHEN data->>'__masvilagMediaEnvelope' = $3
-           THEN jsonb_extract_path(data->'media', $2::text)
-         ELSE jsonb_extract_path(data, $2::text)
-       END AS item
-     FROM world_media
-     WHERE world_code = $1
-     LIMIT 1
-    ,
-[
-session.worldCode,
-imageId,
-String(MEDIA_ENVELOPE_VERSION),
-]
-);
-
-raw =
-legacyResult.rows.length
-? legacyResult.rows[0].item
-: null;
-}
-
-if (raw == null) {
-return res.status(404).end();
-}
-
-const entry =
-typeof raw === "string"
-? { dataUrl: raw, status: "active" }
-: raw && typeof raw === "object"
-? raw
-: null;
-
-if (!entry || String(entry.status || "active") === "deleted") {
-return res.status(404).end();
-}
-
-const dataUrl = String(entry.dataUrl || entry.url || "");
-
-if (/^https:///i.test(dataUrl)) {
-return res.redirect(302, dataUrl);
-}
-
-const match = dataUrl.match(
-/^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,([\s\S]+)$/i
-);
-
-if (!match) {
-return res.status(404).end();
-}
-
-const mimeType =
-String(match[1] || entry.mimeType || "image/jpeg")
-.replace(/[\r\n]/g, "")
-.slice(0, 100);
-
-let bytes;
-try {
-bytes = Buffer.from(match[2], "base64");
-} catch (e) {
-return res.status(422).end();
-}
-
-res.setHeader("Content-Type", mimeType);
-res.setHeader("Content-Length", String(bytes.length));
-res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
-return res.send(bytes);
-} catch (err) {
-console.error("Media file load error:", err);
-return res.status(500).end();
-}
+    return res.json({
+      ok: true,
+      syncRev: result.rows.length ? Number(result.rows[0].sync_rev) || 0 : 0,
+    });
+  } catch (err) {
+    console.error("Media version error:", err);
+    return res.status(500).json({ error: "Media version check failed." });
+  }
 });
 
 /*
+ * PERFORMANCE v17 — LAZY SINGLE-IMAGE DELIVERY
+ *
+ * Avoid returning the entire base64 media library during application boot.
+ * Image IDs are immutable, so the browser can request only the exact image it
+ * needs and cache it aggressively.
+ */
+app.get("/media/file/:id", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
 
-v19 — save exactly ONE image.
+    const session = await getSessionIdentity(req);
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).end();
+    }
 
-This endpoint is intentionally append/update-per-file and never reads or
+    const imageId = String(req.params?.id || "").trim();
+    if (!imageId || imageId.length > 180) {
+      return res.status(400).end();
+    }
 
-rewrites the historical world_media JSONB blob.
-*/
-app.post("/media/file/", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
+    /* v19: new scalable table first. */
+    const fileResult = await pool.query(
+      `
+      SELECT data AS item
+      FROM world_media_files
+      WHERE world_code = $1
+        AND image_id = $2
+      LIMIT 1
+      `,
+      [session.worldCode, imageId]
+    );
 
-const session = await getSessionIdentity(req);
-if (!session) {
-clearSessionCookie(res);
-return res.status(401).json({
-error: "Not authenticated.",
+    let raw =
+      fileResult.rows.length
+        ? fileResult.rows[0].item
+        : null;
+
+    /* Backwards-compatible fallback for every historical image. */
+    if (raw == null) {
+      const legacyResult = await pool.query(
+        `
+        SELECT
+          CASE
+            WHEN data->>'__masvilagMediaEnvelope' = $3
+              THEN jsonb_extract_path(data->'media', $2::text)
+            ELSE jsonb_extract_path(data, $2::text)
+          END AS item
+        FROM world_media
+        WHERE world_code = $1
+        LIMIT 1
+        `,
+        [
+          session.worldCode,
+          imageId,
+          String(MEDIA_ENVELOPE_VERSION),
+        ]
+      );
+
+      raw =
+        legacyResult.rows.length
+          ? legacyResult.rows[0].item
+          : null;
+    }
+
+    if (raw == null) {
+      return res.status(404).end();
+    }
+
+    const entry =
+      typeof raw === "string"
+        ? { dataUrl: raw, status: "active" }
+        : raw && typeof raw === "object"
+          ? raw
+          : null;
+
+    if (!entry || String(entry.status || "active") === "deleted") {
+      return res.status(404).end();
+    }
+
+    const dataUrl = String(entry.dataUrl || entry.url || "");
+
+    if (/^https:\/\//i.test(dataUrl)) {
+      return res.redirect(302, dataUrl);
+    }
+
+    const match = dataUrl.match(
+      /^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,([\s\S]+)$/i
+    );
+
+    if (!match) {
+      return res.status(404).end();
+    }
+
+    const mimeType =
+      String(match[1] || entry.mimeType || "image/jpeg")
+        .replace(/[\r\n]/g, "")
+        .slice(0, 100);
+
+    let bytes;
+    try {
+      bytes = Buffer.from(match[2], "base64");
+    } catch (e) {
+      return res.status(422).end();
+    }
+
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Length", String(bytes.length));
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    return res.send(bytes);
+  } catch (err) {
+    console.error("Media file load error:", err);
+    return res.status(500).end();
+  }
 });
-}
 
-const imageId = String(req.params?.id || "").trim();
-if (!imageId || imageId.length > 180) {
-return res.status(400).json({
-error: "Invalid image id.",
-});
-}
+/*
+ * v19 — save exactly ONE image.
+ * This endpoint is intentionally append/update-per-file and never reads or
+ * rewrites the historical world_media JSONB blob.
+ */
+app.post("/media/file/:id", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
 
-const rawEntry =
-req.body &&
-req.body.entry &&
-typeof req.body.entry === "object" &&
-!Array.isArray(req.body.entry)
-? req.body.entry
-: null;
+    const session = await getSessionIdentity(req);
+    if (!session) {
+      clearSessionCookie(res);
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
 
-if (!rawEntry) {
-return res.status(400).json({
-error: "Missing media entry.",
-});
-}
+    const imageId = String(req.params?.id || "").trim();
+    if (!imageId || imageId.length > 180) {
+      return res.status(400).json({
+        error: "Invalid image id.",
+      });
+    }
 
-const dataUrl =
-String(
-rawEntry.dataUrl ||
-rawEntry.url ||
-""
-);
+    const rawEntry =
+      req.body &&
+      req.body.entry &&
+      typeof req.body.entry === "object" &&
+      !Array.isArray(req.body.entry)
+        ? req.body.entry
+        : null;
 
-if (
-!/^data//i.test(dataUrl) &&
-!/^https:///i.test(dataUrl)
-) {
-return res.status(422).json({
-error: "Invalid image payload.",
-});
-}
+    if (!rawEntry) {
+      return res.status(400).json({
+        error: "Missing media entry.",
+      });
+    }
 
-const entry = {
-...rawEntry,
-id: imageId,
-updatedAt: Date.now(),
-};
+    const dataUrl =
+      String(
+        rawEntry.dataUrl ||
+        rawEntry.url ||
+        ""
+      );
 
-const entryJson =
-stringifyJsonbSafe(
-entry,
-"media-file-save"
-);
+    if (
+      !/^data:image\//i.test(dataUrl) &&
+      !/^https:\/\//i.test(dataUrl)
+    ) {
+      return res.status(422).json({
+        error: "Invalid image payload.",
+      });
+    }
 
-/* Hard cap is per image, not per world. */
-if (entryJson.length > 10 * 1024 * 1024) {
-return res.status(413).json({
-error: "Image payload is too large.",
-});
-}
+    const entry = {
+      ...rawEntry,
+      id: imageId,
+      updatedAt: Date.now(),
+    };
 
-await pool.query(
-`
-INSERT INTO world_media_files (
-world_code,
-image_id,
-data,
-updated_at
-)
-VALUES ($1, $2, $3::jsonb, NOW())
+    const entryJson =
+      stringifyJsonbSafe(
+        entry,
+        "media-file-save"
+      );
 
-ON CONFLICT (world_code, image_id)
-DO UPDATE SET
-data = EXCLUDED.data,
-updated_at = NOW()
-`,
-[
-session.worldCode,
-imageId,
-entryJson,
-]
-);
+    /* Hard cap is per image, not per world. */
+    if (entryJson.length > 10 * 1024 * 1024) {
+      return res.status(413).json({
+        error: "Image payload is too large.",
+      });
+    }
 
-return res.json({
-ok: true,
-id: imageId,
-});
-} catch (err) {
-console.error("Media file save error:", err);
-return res.status(500).json({
-error: "Media file save failed.",
-});
-}
+    await pool.query(
+      `
+      INSERT INTO world_media_files (
+        world_code,
+        image_id,
+        data,
+        updated_at
+      )
+      VALUES ($1, $2, $3::jsonb, NOW())
+
+      ON CONFLICT (world_code, image_id)
+      DO UPDATE SET
+        data = EXCLUDED.data,
+        updated_at = NOW()
+      `,
+      [
+        session.worldCode,
+        imageId,
+        entryJson,
+      ]
+    );
+
+    return res.json({
+      ok: true,
+      id: imageId,
+    });
+  } catch (err) {
+    console.error("Media file save error:", err);
+    return res.status(500).json({
+      error: "Media file save failed.",
+    });
+  }
 });
 
 app.get("/media/load", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const session =
-  await getSessionIdentity(req);
+    const session =
+      await getSessionIdentity(req);
 
-if (!session) {
-  clearSessionCookie(res);
+    if (!session) {
+      clearSessionCookie(res);
 
-  return res.status(401).json({
-    error: "Not authenticated.",
-  });
-}
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
 
-const result =
-  await pool.query(
-    `
-    SELECT data
-    FROM world_media
-    WHERE world_code = $1
-    LIMIT 1
-    `,
-    [session.worldCode]
-  );
+    const result =
+      await pool.query(
+        `
+        SELECT data
+        FROM world_media
+        WHERE world_code = $1
+        LIMIT 1
+        `,
+        [session.worldCode]
+      );
 
-const envelope =
-  mediaEnvelopeFromRow(
-    result.rows.length
-      ? result.rows[0].data
-      : {}
-  );
+    const envelope =
+      mediaEnvelopeFromRow(
+        result.rows.length
+          ? result.rows[0].data
+          : {}
+      );
 
-return res.json({
-  ok: true,
-  syncRev:
-    envelope.syncRev,
-  media:
-    envelope.media,
-});
+    return res.json({
+      ok: true,
+      syncRev:
+        envelope.syncRev,
+      media:
+        envelope.media,
+    });
+  } catch (err) {
+    console.error(
+      "Media load error:",
+      err
+    );
 
-} catch (err) {
-console.error(
-"Media load error:",
-err
-);
-
-return res.status(500).json({
-  error: "Media load failed.",
-});
-
-}
+    return res.status(500).json({
+      error: "Media load failed.",
+    });
+  }
 });
 
 /* -------------------------------------------------------------------------
-CLOUD MEDIA SAVE
+   CLOUD MEDIA SAVE
 
-Uses a JSON envelope in the EXISTING JSONB column, so no DB schema change
-is required. An advisory transaction lock also protects the "row absent"
-first-save case where SELECT ... FOR UPDATE alone cannot lock a missing row.
-------------------------------------------------------------------------- */
+   Uses a JSON envelope in the EXISTING JSONB column, so no DB schema change
+   is required. An advisory transaction lock also protects the "row absent"
+   first-save case where SELECT ... FOR UPDATE alone cannot lock a missing row.
+   ------------------------------------------------------------------------- */
 app.post("/media/save", async (req, res) => {
-let client = null;
+  let client = null;
 
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const session =
-  await getSessionIdentity(req);
+    const session =
+      await getSessionIdentity(req);
 
-if (!session) {
-  clearSessionCookie(res);
+    if (!session) {
+      clearSessionCookie(res);
 
-  return res.status(401).json({
-    error: "Not authenticated.",
-  });
-}
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
 
-const media =
-  req.body &&
-  req.body.media &&
-  typeof req.body.media ===
-    "object" &&
-  !Array.isArray(
-    req.body.media
-  )
-    ? req.body.media
-    : {};
+    const media =
+      req.body &&
+      req.body.media &&
+      typeof req.body.media ===
+        "object" &&
+      !Array.isArray(
+        req.body.media
+      )
+        ? req.body.media
+        : {};
 
-const expectedSyncRev =
-  Math.max(
-    0,
-    Math.floor(
-      Number(
-        req.body?.syncRev
-      ) || 0
-    )
-  );
+    const expectedSyncRev =
+      Math.max(
+        0,
+        Math.floor(
+          Number(
+            req.body?.syncRev
+          ) || 0
+        )
+      );
 
-const mediaJson =
-  JSON.stringify(media);
+    const mediaJson =
+      JSON.stringify(media);
 
-if (
-  mediaJson.length >
-  45 * 1024 * 1024
-) {
-  return res.status(413).json({
-    error:
-      "Media library is too large.",
-  });
-}
+    if (
+      mediaJson.length >
+      45 * 1024 * 1024
+    ) {
+      return res.status(413).json({
+        error:
+          "Media library is too large.",
+      });
+    }
 
-client =
-  await pool.connect();
+    client =
+      await pool.connect();
 
-await client.query("BEGIN");
+    await client.query("BEGIN");
 
-/*
- * Stable per-world transaction lock, including when the row doesn't exist.
- */
-await client.query(
-  `
-  SELECT pg_advisory_xact_lock(
-    hashtext($1)
-  )
-  `,
-  [
-    `masvilag-media:${session.worldCode}`,
-  ]
-);
+    /*
+     * Stable per-world transaction lock, including when the row doesn't exist.
+     */
+    await client.query(
+      `
+      SELECT pg_advisory_xact_lock(
+        hashtext($1)
+      )
+      `,
+      [
+        `masvilag-media:${session.worldCode}`,
+      ]
+    );
 
-const currentResult =
-  await client.query(
-    `
-    SELECT data
-    FROM world_media
-    WHERE world_code = $1
-    LIMIT 1
-    FOR UPDATE
-    `,
-    [session.worldCode]
-  );
+    const currentResult =
+      await client.query(
+        `
+        SELECT data
+        FROM world_media
+        WHERE world_code = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [session.worldCode]
+      );
 
-const current =
-  mediaEnvelopeFromRow(
-    currentResult.rows.length
-      ? currentResult.rows[0].data
-      : {}
-  );
+    const current =
+      mediaEnvelopeFromRow(
+        currentResult.rows.length
+          ? currentResult.rows[0].data
+          : {}
+      );
 
-if (
-  expectedSyncRev !==
-  current.syncRev
-) {
-  await client.query(
-    "ROLLBACK"
-  );
+    if (
+      expectedSyncRev !==
+      current.syncRev
+    ) {
+      await client.query(
+        "ROLLBACK"
+      );
 
-  client.release();
-  client = null;
+      client.release();
+      client = null;
 
-  return res.status(409).json({
-    code: "MEDIA_CONFLICT",
-    error:
-      "The media library changed on another client.",
-    expectedSyncRev,
-    serverSyncRev:
-      current.syncRev,
-  });
-}
+      return res.status(409).json({
+        code: "MEDIA_CONFLICT",
+        error:
+          "The media library changed on another client.",
+        expectedSyncRev,
+        serverSyncRev:
+          current.syncRev,
+      });
+    }
 
-const nextSyncRev =
-  current.syncRev + 1;
+    const nextSyncRev =
+      current.syncRev + 1;
 
-/*
- * PERFORMANCE v17:
- * The browser sends only transient/newly changed image entries. Merge them
- * into the authoritative library instead of requiring the browser to
- * download and resend every historical base64 image.
- */
-const mergedMedia = {
-  ...(current.media || {}),
-  ...(media || {}),
-};
+    /*
+     * PERFORMANCE v17:
+     * The browser sends only transient/newly changed image entries. Merge them
+     * into the authoritative library instead of requiring the browser to
+     * download and resend every historical base64 image.
+     */
+    const mergedMedia = {
+      ...(current.media || {}),
+      ...(media || {}),
+    };
 
-const mergedMediaJson = JSON.stringify(mergedMedia);
+    const mergedMediaJson = JSON.stringify(mergedMedia);
 
-if (
-  mergedMediaJson.length >
-  45 * 1024 * 1024
-) {
-  await client.query("ROLLBACK");
-  client.release();
-  client = null;
-  return res.status(413).json({
-    error: "Media library is too large.",
-  });
-}
+    if (
+      mergedMediaJson.length >
+      45 * 1024 * 1024
+    ) {
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
+      return res.status(413).json({
+        error: "Media library is too large.",
+      });
+    }
 
-const envelope =
-  makeMediaEnvelope(
-    mergedMedia,
-    nextSyncRev
-  );
+    const envelope =
+      makeMediaEnvelope(
+        mergedMedia,
+        nextSyncRev
+      );
 
-await client.query(
-  `
-  INSERT INTO world_media (
-    world_code,
-    data,
-    updated_at
-  )
-  VALUES ($1, $2::jsonb, NOW())
+    await client.query(
+      `
+      INSERT INTO world_media (
+        world_code,
+        data,
+        updated_at
+      )
+      VALUES ($1, $2::jsonb, NOW())
 
-  ON CONFLICT (world_code)
-  DO UPDATE SET
-    data = EXCLUDED.data,
-    updated_at = NOW()
-  `,
-  [
-    session.worldCode,
-    stringifyJsonbSafe(envelope, "media-save"),
-  ]
-);
+      ON CONFLICT (world_code)
+      DO UPDATE SET
+        data = EXCLUDED.data,
+        updated_at = NOW()
+      `,
+      [
+        session.worldCode,
+        stringifyJsonbSafe(envelope, "media-save"),
+      ]
+    );
 
-await client.query("COMMIT");
-client.release();
-client = null;
+    await client.query("COMMIT");
+    client.release();
+    client = null;
 
-return res.json({
-  ok: true,
-  syncRev:
-    nextSyncRev,
-});
+    return res.json({
+      ok: true,
+      syncRev:
+        nextSyncRev,
+    });
+  } catch (err) {
+    if (client) {
+      try {
+        await client.query(
+          "ROLLBACK"
+        );
+      } catch (e) {}
 
-} catch (err) {
-if (client) {
-try {
-await client.query(
-"ROLLBACK"
-);
-} catch (e) {}
+      client.release();
+      client = null;
+    }
 
-  client.release();
-  client = null;
-}
+    console.error(
+      "Media save error:",
+      err
+    );
 
-console.error(
-  "Media save error:",
-  err
-);
-
-return res.status(500).json({
-  error: "Media save failed.",
-});
-
-}
+    return res.status(500).json({
+      error: "Media save failed.",
+    });
+  }
 });
 
 function parseImageDataUrl(value) {
-const raw = String(value || "");
+  const raw = String(value || "");
 
-const match =
-raw.match(
-/^data:(image/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/
-);
+  const match =
+    raw.match(
+      /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/
+    );
 
-if (!match) return null;
+  if (!match) return null;
 
-return {
-mimeType:
-match[1].toLowerCase(),
-base64:
-match[2].replace(
-/\s+/g,
-""
-),
-dataUrl: raw,
-};
+  return {
+    mimeType:
+      match[1].toLowerCase(),
+    base64:
+      match[2].replace(
+        /\s+/g,
+        ""
+      ),
+    dataUrl: raw,
+  };
 }
 
 function visionTextFromAnthropic(data) {
-return Array.isArray(
-data?.content
-)
-? data.content
-.map(
-(x) =>
-x?.type === "text"
-? x.text || ""
-: ""
-)
-.join("")
-: "";
+  return Array.isArray(
+    data?.content
+  )
+    ? data.content
+        .map(
+          (x) =>
+            x?.type === "text"
+              ? x.text || ""
+              : ""
+        )
+        .join("")
+    : "";
 }
 
 app.post("/ai/vision", async (req, res) => {
-try {
-if (!(await requireDb(res))) return;
+  try {
+    if (!(await requireDb(res))) return;
 
-const session =
-  await getSessionIdentity(req);
+    const session =
+      await getSessionIdentity(req);
 
-if (!session) {
-  clearSessionCookie(res);
+    if (!session) {
+      clearSessionCookie(res);
 
-  return res.status(401).json({
-    error: "Not authenticated.",
-  });
-}
+      return res.status(401).json({
+        error: "Not authenticated.",
+      });
+    }
 
-const image =
-  await resolveInputImage(
-    req.body?.image
-  );
-
-const prompt =
-  String(
-    req.body?.prompt ||
-    "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when actually visible. Do not identify real people by name."
-  ).slice(
-    0,
-    5000
-  );
-
-if (!image) {
-  return res.status(400).json({
-    error:
-      "A valid base64 data URL or public HTTPS image URL is required.",
-  });
-}
-
-if (
-  image.base64.length >
-  12 * 1024 * 1024
-) {
-  return res.status(413).json({
-    error:
-      "Image is too large for vision analysis.",
-  });
-}
-
-const provider =
-  getProvider(
-    req.body || {}
-  );
-
-if (
-  provider === "openai"
-) {
-  if (!OPENAI_API_KEY) {
-    return res.status(500).json({
-      error:
-        "Missing OPENAI_API_KEY.",
-    });
-  }
-
-  const requested =
-    String(
-      req.body?.model ||
-      ""
-    );
-
-  const model =
-    /^(gpt|o1|o3)/i.test(
-      requested
-    )
-      ? requested
-      : (
-          process.env
-            .OPENAI_VISION_MODEL ||
-          "gpt-4o-mini"
-        );
-
-  const r =
-    await fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type":
-            "application/json",
-          "Authorization":
-            `Bearer ${OPENAI_API_KEY}`,
-        },
-        body:
-          JSON.stringify({
-            model,
-            max_tokens: 350,
-            messages: [
-              {
-                role: "user",
-                content: [
-                  {
-                    type:
-                      "text",
-                    text:
-                      prompt,
-                  },
-                  {
-                    type:
-                      "image_url",
-                    image_url: {
-                      url:
-                        image.dataUrl,
-                    },
-                  },
-                ],
-              },
-            ],
-          }),
-      }
-    );
-
-  const payload =
-    await r
-      .json()
-      .catch(
-        () => ({})
+    const image =
+      await resolveInputImage(
+        req.body?.image
       );
 
-  if (!r.ok) {
-    return res
-      .status(r.status)
-      .json(payload);
-  }
+    const prompt =
+      String(
+        req.body?.prompt ||
+        "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when actually visible. Do not identify real people by name."
+      ).slice(
+        0,
+        5000
+      );
 
-  return res.json({
-    ok: true,
-    text:
-      payload
-        ?.choices?.[0]
-        ?.message
-        ?.content || "",
-    provider:
-      "openai",
-  });
-}
+    if (!image) {
+      return res.status(400).json({
+        error:
+          "A valid base64 data URL or public HTTPS image URL is required.",
+      });
+    }
 
-if (
-  provider === "gemini"
-) {
-  if (!GEMINI_API_KEY) {
-    return res.status(500).json({
-      error:
-        "Missing GEMINI_API_KEY.",
-    });
-  }
+    if (
+      image.base64.length >
+      12 * 1024 * 1024
+    ) {
+      return res.status(413).json({
+        error:
+          "Image is too large for vision analysis.",
+      });
+    }
 
-  const requested =
-    String(
-      req.body?.model ||
-      ""
-    );
+    const provider =
+      getProvider(
+        req.body || {}
+      );
 
-  const model =
-    requested.startsWith(
-      "gemini"
-    )
-      ? requested
-      : (
-          process.env
-            .GEMINI_VISION_MODEL ||
-          "gemini-3.5-flash"
+    if (
+      provider === "openai"
+    ) {
+      if (!OPENAI_API_KEY) {
+        return res.status(500).json({
+          error:
+            "Missing OPENAI_API_KEY.",
+        });
+      }
+
+      const requested =
+        String(
+          req.body?.model ||
+          ""
         );
 
-  const url =
-    new URL(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
-    );
+      const model =
+        /^(gpt|o1|o3)/i.test(
+          requested
+        )
+          ? requested
+          : (
+              process.env
+                .OPENAI_VISION_MODEL ||
+              "gpt-4o-mini"
+            );
 
-  url.searchParams.set(
-    "key",
-    GEMINI_API_KEY
-  );
-
-  const r =
-    await fetch(
-      url,
-      {
-        method:
-          "POST",
-        headers: {
-          "Content-Type":
-            "application/json",
-        },
-        body:
-          JSON.stringify({
-            contents: [
-              {
-                role:
-                  "user",
-                parts: [
-                  {
-                    text:
-                      prompt,
-                  },
-                  {
-                    inlineData: {
-                      mimeType:
-                        image.mimeType,
-                      data:
-                        image.base64,
-                    },
-                  },
-                ],
-              },
-            ],
-            generationConfig: {
-              maxOutputTokens:
-                350,
+      const r =
+        await fetch(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+              "Authorization":
+                `Bearer ${OPENAI_API_KEY}`,
             },
-          }),
-      }
-    );
-
-  const payload =
-    await r
-      .json()
-      .catch(
-        () => ({})
-      );
-
-  if (!r.ok) {
-    return res
-      .status(r.status)
-      .json(payload);
-  }
-
-  const text =
-    payload
-      ?.candidates?.[0]
-      ?.content?.parts
-      ?.map(
-        (p) =>
-          p?.text || ""
-      )
-      .join("") ||
-    "";
-
-  return res.json({
-    ok: true,
-    text,
-    provider:
-      "gemini",
-  });
-}
-
-if (
-  !ANTHROPIC_API_KEY
-) {
-  return res.status(500).json({
-    error:
-      "Missing ANTHROPIC_API_KEY.",
-  });
-}
-
-const requested =
-  String(
-    req.body?.model ||
-    ""
-  );
-
-const model =
-  requested.startsWith(
-    "claude"
-  )
-    ? requested
-    : (
-        process.env
-          .ANTHROPIC_VISION_MODEL ||
-        "claude-sonnet-4-6"
-      );
-
-const r =
-  await fetch(
-    "https://api.anthropic.com/v1/messages",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type":
-          "application/json",
-        "x-api-key":
-          ANTHROPIC_API_KEY,
-        "anthropic-version":
-          process.env
-            .ANTHROPIC_VERSION ||
-          "2023-06-01",
-      },
-      body:
-        JSON.stringify({
-          model,
-          max_tokens:
-            350,
-          messages: [
-            {
-              role:
-                "user",
-              content: [
-                {
-                  type:
-                    "image",
-                  source: {
-                    type:
-                      "base64",
-                    media_type:
-                      image.mimeType,
-                    data:
-                      image.base64,
+            body:
+              JSON.stringify({
+                model,
+                max_tokens: 350,
+                messages: [
+                  {
+                    role: "user",
+                    content: [
+                      {
+                        type:
+                          "text",
+                        text:
+                          prompt,
+                      },
+                      {
+                        type:
+                          "image_url",
+                        image_url: {
+                          url:
+                            image.dataUrl,
+                        },
+                      },
+                    ],
                   },
+                ],
+              }),
+          }
+        );
+
+      const payload =
+        await r
+          .json()
+          .catch(
+            () => ({})
+          );
+
+      if (!r.ok) {
+        return res
+          .status(r.status)
+          .json(payload);
+      }
+
+      return res.json({
+        ok: true,
+        text:
+          payload
+            ?.choices?.[0]
+            ?.message
+            ?.content || "",
+        provider:
+          "openai",
+      });
+    }
+
+    if (
+      provider === "gemini"
+    ) {
+      if (!GEMINI_API_KEY) {
+        return res.status(500).json({
+          error:
+            "Missing GEMINI_API_KEY.",
+        });
+      }
+
+      const requested =
+        String(
+          req.body?.model ||
+          ""
+        );
+
+      const model =
+        requested.startsWith(
+          "gemini"
+        )
+          ? requested
+          : (
+              process.env
+                .GEMINI_VISION_MODEL ||
+              "gemini-3.5-flash"
+            );
+
+      const url =
+        new URL(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+        );
+
+      url.searchParams.set(
+        "key",
+        GEMINI_API_KEY
+      );
+
+      const r =
+        await fetch(
+          url,
+          {
+            method:
+              "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body:
+              JSON.stringify({
+                contents: [
+                  {
+                    role:
+                      "user",
+                    parts: [
+                      {
+                        text:
+                          prompt,
+                      },
+                      {
+                        inlineData: {
+                          mimeType:
+                            image.mimeType,
+                          data:
+                            image.base64,
+                        },
+                      },
+                    ],
+                  },
+                ],
+                generationConfig: {
+                  maxOutputTokens:
+                    350,
                 },
+              }),
+          }
+        );
+
+      const payload =
+        await r
+          .json()
+          .catch(
+            () => ({})
+          );
+
+      if (!r.ok) {
+        return res
+          .status(r.status)
+          .json(payload);
+      }
+
+      const text =
+        payload
+          ?.candidates?.[0]
+          ?.content?.parts
+          ?.map(
+            (p) =>
+              p?.text || ""
+          )
+          .join("") ||
+        "";
+
+      return res.json({
+        ok: true,
+        text,
+        provider:
+          "gemini",
+      });
+    }
+
+    if (
+      !ANTHROPIC_API_KEY
+    ) {
+      return res.status(500).json({
+        error:
+          "Missing ANTHROPIC_API_KEY.",
+      });
+    }
+
+    const requested =
+      String(
+        req.body?.model ||
+        ""
+      );
+
+    const model =
+      requested.startsWith(
+        "claude"
+      )
+        ? requested
+        : (
+            process.env
+              .ANTHROPIC_VISION_MODEL ||
+            "claude-sonnet-4-6"
+          );
+
+    const r =
+      await fetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+            "x-api-key":
+              ANTHROPIC_API_KEY,
+            "anthropic-version":
+              process.env
+                .ANTHROPIC_VERSION ||
+              "2023-06-01",
+          },
+          body:
+            JSON.stringify({
+              model,
+              max_tokens:
+                350,
+              messages: [
                 {
-                  type:
-                    "text",
-                  text:
-                    prompt,
+                  role:
+                    "user",
+                  content: [
+                    {
+                      type:
+                        "image",
+                      source: {
+                        type:
+                          "base64",
+                        media_type:
+                          image.mimeType,
+                        data:
+                          image.base64,
+                      },
+                    },
+                    {
+                      type:
+                        "text",
+                      text:
+                        prompt,
+                    },
+                  ],
                 },
               ],
-            },
-          ],
-        }),
-    }
-  );
+            }),
+        }
+      );
 
-const payload =
-  await r
-    .json()
-    .catch(
-      () => ({})
+    const payload =
+      await r
+        .json()
+        .catch(
+          () => ({})
+        );
+
+    if (!r.ok) {
+      return res
+        .status(r.status)
+        .json(payload);
+    }
+
+    return res.json({
+      ok: true,
+      text:
+        visionTextFromAnthropic(
+          payload
+        ),
+      provider:
+        "anthropic",
+    });
+  } catch (err) {
+    console.error(
+      "Vision proxy error:",
+      err
     );
 
-if (!r.ok) {
-  return res
-    .status(r.status)
-    .json(payload);
-}
-
-return res.json({
-  ok: true,
-  text:
-    visionTextFromAnthropic(
-      payload
-    ),
-  provider:
-    "anthropic",
-});
-
-} catch (err) {
-console.error(
-"Vision proxy error:",
-err
-);
-
-return res.status(502).json({
-  error:
-    "Vision analysis failed.",
-});
-
-}
+    return res.status(502).json({
+      error:
+        "Vision analysis failed.",
+    });
+  }
 });
 /* -------------------------------------------------------------------------
-STABLE AI PROXY HELPERS + IMAGE GENERATION
-------------------------------------------------------------------------- */
+   STABLE AI PROXY HELPERS + IMAGE GENERATION
+   ------------------------------------------------------------------------- */
 const AI_UPSTREAM_TIMEOUT_MS = Math.max(
-12000,
-Number(process.env.AI_UPSTREAM_TIMEOUT_MS) || 45000
+  12000,
+  Number(process.env.AI_UPSTREAM_TIMEOUT_MS) || 45000
 );
 
 async function fetchWithTimeout(
-url,
-options = {},
-timeoutMs = AI_UPSTREAM_TIMEOUT_MS
+  url,
+  options = {},
+  timeoutMs = AI_UPSTREAM_TIMEOUT_MS
 ) {
-const ctrl = new AbortController();
-const timer = setTimeout(
-() => ctrl.abort(),
-timeoutMs
-);
+  const ctrl = new AbortController();
+  const timer = setTimeout(
+    () => ctrl.abort(),
+    timeoutMs
+  );
 
-try {
-return await fetch(
-url,
-{
-...options,
-signal: ctrl.signal,
-}
-);
-} finally {
-clearTimeout(timer);
-}
+  try {
+    return await fetch(
+      url,
+      {
+        ...options,
+        signal: ctrl.signal,
+      }
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function responseJsonSafe(r) {
-const raw = await r.text();
+  const raw = await r.text();
 
-if (!raw) return {};
+  if (!raw) return {};
 
-try {
-return JSON.parse(raw);
-} catch {
-return {
-error: {
-message: raw,
-},
-};
-}
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {
+      error: {
+        message: raw,
+      },
+    };
+  }
 }
 
 function proxyErrorMessage(
-payload,
-fallback = "AI provider error"
+  payload,
+  fallback = "AI provider error"
 ) {
-return String(
-payload?.error?.message ||
-payload?.error ||
-payload?.message ||
-fallback
-);
+  return String(
+    payload?.error?.message ||
+    payload?.error ||
+    payload?.message ||
+    fallback
+  );
 }
 
 function retryableProviderStatus(status) {
-return [
-408,
-409,
-425,
-429,
-500,
-502,
-503,
-504,
-529,
-].includes(
-Number(status)
-);
+  return [
+    408,
+    409,
+    425,
+    429,
+    500,
+    502,
+    503,
+    504,
+    529,
+  ].includes(
+    Number(status)
+  );
 }
 
 function imagePromptFromBody(body = {}) {
-return String(
-body.prompt ||
-body.input ||
-body.text ||
-""
-)
-.trim()
-.slice(
-0,
-12000
-);
+  return String(
+    body.prompt ||
+    body.input ||
+    body.text ||
+    ""
+  )
+    .trim()
+    .slice(
+      0,
+      12000
+    );
 }
 
 function isPrivateAddress(address) {
-const value =
-String(
-address || ""
-).toLowerCase();
+  const value =
+    String(
+      address || ""
+    ).toLowerCase();
 
-if (!value) return true;
+  if (!value) return true;
 
-if (
-net.isIP(value) === 4
-) {
-const p =
-value
-.split(".")
-.map(Number);
+  if (
+    net.isIP(value) === 4
+  ) {
+    const p =
+      value
+        .split(".")
+        .map(Number);
 
-if (
-  p[0] === 10 ||
-  p[0] === 127 ||
-  p[0] === 0
-) {
-  return true;
-}
+    if (
+      p[0] === 10 ||
+      p[0] === 127 ||
+      p[0] === 0
+    ) {
+      return true;
+    }
 
-if (
-  p[0] === 169 &&
-  p[1] === 254
-) {
-  return true;
-}
+    if (
+      p[0] === 169 &&
+      p[1] === 254
+    ) {
+      return true;
+    }
 
-if (
-  p[0] === 172 &&
-  p[1] >= 16 &&
-  p[1] <= 31
-) {
-  return true;
-}
+    if (
+      p[0] === 172 &&
+      p[1] >= 16 &&
+      p[1] <= 31
+    ) {
+      return true;
+    }
 
-if (
-  p[0] === 192 &&
-  p[1] === 168
-) {
-  return true;
-}
+    if (
+      p[0] === 192 &&
+      p[1] === 168
+    ) {
+      return true;
+    }
 
-if (
-  p[0] >= 224
-) {
-  return true;
-}
+    if (
+      p[0] >= 224
+    ) {
+      return true;
+    }
 
-return false;
+    return false;
+  }
 
-}
+  if (
+    net.isIP(value) === 6
+  ) {
+    return (
+      value === "::1" ||
+      value === "::" ||
+      value.startsWith("fc") ||
+      value.startsWith("fd") ||
+      value.startsWith("fe8") ||
+      value.startsWith("fe9") ||
+      value.startsWith("fea") ||
+      value.startsWith("feb")
+    );
+  }
 
-if (
-net.isIP(value) === 6
-) {
-return (
-value === "::1" ||
-value === "::" ||
-value.startsWith("fc") ||
-value.startsWith("fd") ||
-value.startsWith("fe8") ||
-value.startsWith("fe9") ||
-value.startsWith("fea") ||
-value.startsWith("feb")
-);
-}
-
-return false;
+  return false;
 }
 
 async function assertPublicHttpsUrl(
-rawUrl
+  rawUrl
 ) {
-const url =
-new URL(
-String(
-rawUrl || ""
-).trim()
-);
+  const url =
+    new URL(
+      String(
+        rawUrl || ""
+      ).trim()
+    );
 
-if (
-url.protocol !==
-"https:"
-) {
-throw new Error(
-"Only HTTPS image references are allowed."
-);
-}
+  if (
+    url.protocol !==
+    "https:"
+  ) {
+    throw new Error(
+      "Only HTTPS image references are allowed."
+    );
+  }
 
-const host =
-String(
-url.hostname || ""
-).toLowerCase();
+  const host =
+    String(
+      url.hostname || ""
+    ).toLowerCase();
 
-if (
-!host ||
-host ===
-"localhost" ||
-host.endsWith(
-".localhost"
-)
-) {
-throw new Error(
-"Local image reference is not allowed."
-);
-}
+  if (
+    !host ||
+    host ===
+      "localhost" ||
+    host.endsWith(
+      ".localhost"
+    )
+  ) {
+    throw new Error(
+      "Local image reference is not allowed."
+    );
+  }
 
-if (
-net.isIP(host)
-) {
-if (
-isPrivateAddress(host)
-) {
-throw new Error(
-"Private-network image reference is not allowed."
-);
-}
-} else {
-const resolved =
-await dns.lookup(
-host,
-{
-all: true,
-}
-);
+  if (
+    net.isIP(host)
+  ) {
+    if (
+      isPrivateAddress(host)
+    ) {
+      throw new Error(
+        "Private-network image reference is not allowed."
+      );
+    }
+  } else {
+    const resolved =
+      await dns.lookup(
+        host,
+        {
+          all: true,
+        }
+      );
 
-if (
-  !resolved.length ||
-  resolved.some(
-    (row) =>
-      isPrivateAddress(
-        row.address
+    if (
+      !resolved.length ||
+      resolved.some(
+        (row) =>
+          isPrivateAddress(
+            row.address
+          )
       )
-  )
-) {
-  throw new Error(
-    "Image reference resolved to a private network."
-  );
-}
+    ) {
+      throw new Error(
+        "Image reference resolved to a private network."
+      );
+    }
+  }
 
-}
-
-return url;
+  return url;
 }
 
 async function fetchRemoteImageReference(
-rawUrl,
-redirectsLeft = 3
+  rawUrl,
+  redirectsLeft = 3
 ) {
-const url =
-await assertPublicHttpsUrl(
-rawUrl
-);
+  const url =
+    await assertPublicHttpsUrl(
+      rawUrl
+    );
 
-const r =
-await fetchWithTimeout(
-url,
-{
-method: "GET",
-redirect:
-"manual",
-headers: {
-"Accept":
-"image/avif,image/webp,image/png,image/jpeg,/;q=0.7",
-"User-Agent":
-"MasvilagImageReference/1.0",
-},
-},
-20000
-);
+  const r =
+    await fetchWithTimeout(
+      url,
+      {
+        method: "GET",
+        redirect:
+          "manual",
+        headers: {
+          "Accept":
+            "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.7",
+          "User-Agent":
+            "MasvilagImageReference/1.0",
+        },
+      },
+      20000
+    );
 
-if (
-[
-301,
-302,
-303,
-307,
-308,
-].includes(
-r.status
-)
-) {
-if (
-redirectsLeft <= 0
-) {
-throw new Error(
-"Too many image-reference redirects."
-);
-}
+  if (
+    [
+      301,
+      302,
+      303,
+      307,
+      308,
+    ].includes(
+      r.status
+    )
+  ) {
+    if (
+      redirectsLeft <= 0
+    ) {
+      throw new Error(
+        "Too many image-reference redirects."
+      );
+    }
 
-const location =
-  r.headers.get(
-    "location"
-  );
+    const location =
+      r.headers.get(
+        "location"
+      );
 
-if (!location) {
-  throw new Error(
-    "Image-reference redirect has no location."
-  );
-}
+    if (!location) {
+      throw new Error(
+        "Image-reference redirect has no location."
+      );
+    }
 
-const next =
-  new URL(
-    location,
-    url
-  );
+    const next =
+      new URL(
+        location,
+        url
+      );
 
-return fetchRemoteImageReference(
-  next.toString(),
-  redirectsLeft - 1
-);
+    return fetchRemoteImageReference(
+      next.toString(),
+      redirectsLeft - 1
+    );
+  }
 
-}
+  if (!r.ok) {
+    throw new Error(
+      `Reference image fetch failed with HTTP ${r.status}.`
+    );
+  }
 
-if (!r.ok) {
-throw new Error(
-Reference image fetch failed with HTTP ${r.status}.
-);
-}
+  const mimeType =
+    String(
+      r.headers.get(
+        "content-type"
+      ) || ""
+    )
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
 
-const mimeType =
-String(
-r.headers.get(
-"content-type"
-) || ""
-)
-.split(";")[0]
-.trim()
-.toLowerCase();
+  if (
+    ![
+      "image/jpeg",
+      "image/jpg",
+      "image/png",
+      "image/webp",
+    ].includes(
+      mimeType
+    )
+  ) {
+    throw new Error(
+      `Unsupported reference image type: ${mimeType || "unknown"}.`
+    );
+  }
 
-if (
-![
-"image/jpeg",
-"image/jpg",
-"image/png",
-"image/webp",
-].includes(
-mimeType
-)
-) {
-throw new Error(
-Unsupported reference image type: ${mimeType || "unknown"}.
-);
-}
+  const announced =
+    Number(
+      r.headers.get(
+        "content-length"
+      ) || 0
+    );
 
-const announced =
-Number(
-r.headers.get(
-"content-length"
-) || 0
-);
+  if (
+    announced &&
+    announced >
+      12 * 1024 * 1024
+  ) {
+    throw new Error(
+      "Reference image is too large."
+    );
+  }
 
-if (
-announced &&
-announced >
-12 * 1024 * 1024
-) {
-throw new Error(
-"Reference image is too large."
-);
-}
+  const buffer =
+    Buffer.from(
+      await r.arrayBuffer()
+    );
 
-const buffer =
-Buffer.from(
-await r.arrayBuffer()
-);
+  if (
+    !buffer.length ||
+    buffer.length >
+      12 * 1024 * 1024
+  ) {
+    throw new Error(
+      "Reference image is empty or too large."
+    );
+  }
 
-if (
-!buffer.length ||
-buffer.length >
-12 * 1024 * 1024
-) {
-throw new Error(
-"Reference image is empty or too large."
-);
-}
-
-return {
-mimeType:
-mimeType ===
-"image/jpg"
-? "image/jpeg"
-: mimeType,
-base64:
-buffer.toString(
-"base64"
-),
-dataUrl:
-data:${
+  return {
+    mimeType:
+      mimeType ===
+      "image/jpg"
+        ? "image/jpeg"
+        : mimeType,
+    base64:
+      buffer.toString(
+        "base64"
+      ),
+    dataUrl:
+      `data:${
         mimeType ===
         "image/jpg"
           ? "image/jpeg"
@@ -3962,483 +3912,663 @@ data:${
         buffer.toString(
           "base64"
         )
-      },
-source:
-"remote",
-};
+      }`,
+    source:
+      "remote",
+  };
 }
 
 async function resolveInputImage(
-value
+  value
 ) {
-const raw =
-String(
-value || ""
-).trim();
+  const raw =
+    String(
+      value || ""
+    ).trim();
 
-if (!raw) {
-return null;
-}
+  if (!raw) {
+    return null;
+  }
 
-const inline =
-parseImageDataUrl(
-raw
-);
+  const inline =
+    parseImageDataUrl(
+      raw
+    );
 
-if (inline) {
-return {
-...inline,
-source:
-"inline",
-};
-}
+  if (inline) {
+    return {
+      ...inline,
+      source:
+        "inline",
+    };
+  }
 
-if (
-/^https:///i.test(
-raw
-)
-) {
-return fetchRemoteImageReference(
-raw
-);
-}
+  if (
+    /^https:\/\//i.test(
+      raw
+    )
+  ) {
+    return fetchRemoteImageReference(
+      raw
+    );
+  }
 
-return null;
+  return null;
 }
 
 async function imageReferencesFromBody(
-body = {},
-limit = 3
+  body = {},
+  limit = 3
 ) {
-const raw =
-Array.isArray(
-body.referenceImages
-)
-? body.referenceImages
-: (
-Array.isArray(
-body.reference_images
-)
-? body.reference_images
-: []
-);
+  const raw =
+    Array.isArray(
+      body.referenceImages
+    )
+      ? body.referenceImages
+      : (
+          Array.isArray(
+            body.reference_images
+          )
+            ? body.reference_images
+            : []
+        );
 
-const refs = [];
-const seen =
-new Set();
+  const refs = [];
+  const seen =
+    new Set();
 
-for (
-const value of raw
-) {
-if (
-refs.length >= limit
-) {
-break;
-}
-
-const key =
-  String(
-    value || ""
-  ).trim();
-
-if (
-  !key ||
-  seen.has(key)
-) {
-  continue;
-}
-
-seen.add(key);
-
-try {
-  const parsed =
-    await resolveInputImage(
-      key
-    );
-
-  if (!parsed) {
-    continue;
-  }
-
-  if (
-    parsed.base64.length >
-    16 * 1024 * 1024
+  for (
+    const value of raw
   ) {
-    continue;
+    if (
+      refs.length >= limit
+    ) {
+      break;
+    }
+
+    const key =
+      String(
+        value || ""
+      ).trim();
+
+    if (
+      !key ||
+      seen.has(key)
+    ) {
+      continue;
+    }
+
+    seen.add(key);
+
+    try {
+      const parsed =
+        await resolveInputImage(
+          key
+        );
+
+      if (!parsed) {
+        continue;
+      }
+
+      if (
+        parsed.base64.length >
+        16 * 1024 * 1024
+      ) {
+        continue;
+      }
+
+      refs.push(
+        parsed
+      );
+    } catch (err) {
+      console.warn(
+        "Skipping unusable image reference:",
+        key.slice(
+          0,
+          120
+        ),
+        err?.message ||
+        err
+      );
+    }
   }
 
-  refs.push(
-    parsed
-  );
-} catch (err) {
-  console.warn(
-    "Skipping unusable image reference:",
-    key.slice(
-      0,
-      120
-    ),
-    err?.message ||
-    err
-  );
-}
-
-}
-
-return refs;
+  return refs;
 }
 
 function multipartTextPart(
-boundary,
-name,
-value
+  boundary,
+  name,
+  value
 ) {
-return Buffer.from(
---${boundary}\r\n +
-Content-Disposition: form-data; name="${name}"\r\n\r\n +
-${String(value)}\r\n,
-"utf8"
-);
+  return Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+    `${String(value)}\r\n`,
+    "utf8"
+  );
 }
 
 function multipartImagePart(
-boundary,
-name,
-image,
-index
+  boundary,
+  name,
+  image,
+  index
 ) {
-const ext =
-image.mimeType ===
-"image/png"
-? "png"
-: image.mimeType ===
-"image/webp"
-? "webp"
-: "jpg";
+  const ext =
+    image.mimeType ===
+    "image/png"
+      ? "png"
+      : image.mimeType ===
+          "image/webp"
+        ? "webp"
+        : "jpg";
 
-const head =
-Buffer.from(
---${boundary}\r\n +
-Content-Disposition: form-data; name="${name}"; filename="reference-${index + 1}.${ext}"\r\n +
-Content-Type: ${image.mimeType}\r\n\r\n,
-"utf8"
-);
+  const head =
+    Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${name}"; filename="reference-${index + 1}.${ext}"\r\n` +
+      `Content-Type: ${image.mimeType}\r\n\r\n`,
+      "utf8"
+    );
 
-const data =
-Buffer.from(
-image.base64,
-"base64"
-);
+  const data =
+    Buffer.from(
+      image.base64,
+      "base64"
+    );
 
-return Buffer.concat(
-[
-head,
-data,
-Buffer.from(
-"\r\n",
-"utf8"
-),
-]
-);
+  return Buffer.concat(
+    [
+      head,
+      data,
+      Buffer.from(
+        "\r\n",
+        "utf8"
+      ),
+    ]
+  );
 }
 
 function buildImageEditMultipart({
-model,
-prompt,
-size,
-quality,
-outputFormat,
-background,
-moderation,
-references,
+  model,
+  prompt,
+  size,
+  quality,
+  outputFormat,
+  background,
+  moderation,
+  references,
 }) {
-const boundary =
-----masvilag-${
+  const boundary =
+    `----masvilag-${
       crypto
         .randomBytes(18)
         .toString("hex")
-    };
+    }`;
 
-const chunks = [
-multipartTextPart(
-boundary,
-"model",
-model
-),
-multipartTextPart(
-boundary,
-"prompt",
-prompt
-),
-multipartTextPart(
-boundary,
-"size",
-size
-),
-multipartTextPart(
-boundary,
-"quality",
-quality
-),
-multipartTextPart(
-boundary,
-"output_format",
-outputFormat
-),
-multipartTextPart(
-boundary,
-"background",
-background
-),
-multipartTextPart(
-boundary,
-"moderation",
-moderation
-),
-];
+  const chunks = [
+    multipartTextPart(
+      boundary,
+      "model",
+      model
+    ),
+    multipartTextPart(
+      boundary,
+      "prompt",
+      prompt
+    ),
+    multipartTextPart(
+      boundary,
+      "size",
+      size
+    ),
+    multipartTextPart(
+      boundary,
+      "quality",
+      quality
+    ),
+    multipartTextPart(
+      boundary,
+      "output_format",
+      outputFormat
+    ),
+    multipartTextPart(
+      boundary,
+      "background",
+      background
+    ),
+    multipartTextPart(
+      boundary,
+      "moderation",
+      moderation
+    ),
+  ];
 
-/*
+  /*
+   * OpenAI Image Edit accepts multiple input images as image[].
+   * For GPT Image 2 these references act as high-fidelity identity inputs.
+   */
+  references.forEach(
+    (
+      image,
+      index
+    ) => {
+      chunks.push(
+        multipartImagePart(
+          boundary,
+          "image[]",
+          image,
+          index
+        )
+      );
+    }
+  );
 
-OpenAI Image Edit accepts multiple input images as image[].
+  chunks.push(
+    Buffer.from(
+      `--${boundary}--\r\n`,
+      "utf8"
+    )
+  );
 
-For GPT Image 2 these references act as high-fidelity identity inputs.
-*/
-references.forEach(
-(
-image,
-index
-) => {
-chunks.push(
-multipartImagePart(
-boundary,
-"image[]",
-image,
-index
-)
-);
-}
-);
-
-chunks.push(
-Buffer.from(
---${boundary}--\r\n,
-"utf8"
-)
-);
-
-return {
-boundary,
-body:
-Buffer.concat(
-chunks
-),
-};
+  return {
+    boundary,
+    body:
+      Buffer.concat(
+        chunks
+      ),
+  };
 }
 
 app.post(
-[
-"/ai/image",
-"/ai/images",
-"/ai/generate-image",
-],
-async (req, res) => {
-try {
-if (
-!(await requireDb(res))
-) {
-return;
-}
+  [
+    "/ai/image",
+    "/ai/images",
+    "/ai/generate-image",
+  ],
+  async (req, res) => {
+    try {
+      if (
+        !(await requireDb(res))
+      ) {
+        return;
+      }
 
-  const session =
-    await getSessionIdentity(req);
+      const session =
+        await getSessionIdentity(req);
 
-  if (!session) {
-    clearSessionCookie(
-      res
-    );
+      if (!session) {
+        clearSessionCookie(
+          res
+        );
 
-    return res
-      .status(401)
-      .json({
-        error:
-          "Not authenticated.",
+        return res
+          .status(401)
+          .json({
+            error:
+              "Not authenticated.",
+          });
+      }
+
+      if (
+        !OPENAI_API_KEY
+      ) {
+        return res
+          .status(500)
+          .json({
+            error:
+              "Missing OPENAI_API_KEY.",
+          });
+      }
+
+      const prompt =
+        imagePromptFromBody(
+          req.body || {}
+        );
+
+      if (!prompt) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Missing image prompt.",
+          });
+      }
+
+      const model =
+        String(
+          req.body?.model ||
+          process.env
+            .OPENAI_IMAGE_MODEL ||
+          "gpt-image-2"
+        );
+
+      const size =
+        String(
+          req.body?.size ||
+          req.body
+            ?.image_size ||
+          process.env
+            .OPENAI_IMAGE_SIZE ||
+          "1024x1024"
+        );
+
+      const quality =
+        String(
+          req.body
+            ?.quality ||
+          process.env
+            .OPENAI_IMAGE_QUALITY ||
+          "medium"
+        );
+
+      const outputFormat =
+        String(
+          req.body
+            ?.output_format ||
+          process.env
+            .OPENAI_IMAGE_FORMAT ||
+          "jpeg"
+        );
+
+      const background =
+        String(
+          req.body
+            ?.background ||
+          "auto"
+        );
+
+      const moderation =
+        String(
+          req.body
+            ?.moderation ||
+          "auto"
+        );
+
+      const references =
+        await imageReferencesFromBody(
+          req.body || {},
+          3
+        );
+
+      if (
+        req.body
+          ?.require_reference &&
+        !references.length
+      ) {
+        return res
+          .status(422)
+          .json({
+            error:
+              "Character reference images were supplied, but none could be loaded. Refusing prompt-only generation because identity would be unreliable.",
+          });
+      }
+
+      let endpoint =
+        "https://api.openai.com/v1/images/generations";
+
+      let options;
+
+      if (
+        references.length
+      ) {
+        /*
+         * CRITICAL IDENTITY FIX:
+         * Generations cannot actually consume our profile/album reference images.
+         * When references exist, use the Image Edit endpoint and send them as
+         * multipart image[] inputs so the model can preserve the character face.
+         */
+        endpoint =
+          "https://api.openai.com/v1/images/edits";
+
+        const multipart =
+          buildImageEditMultipart({
+            model,
+            prompt,
+            size,
+            quality,
+            outputFormat,
+            background,
+            moderation,
+            references,
+          });
+
+        options = {
+          method:
+            "POST",
+          headers: {
+            "Content-Type":
+              `multipart/form-data; boundary=${multipart.boundary}`,
+            "Content-Length":
+              String(
+                multipart
+                  .body
+                  .length
+              ),
+            "Authorization":
+              `Bearer ${OPENAI_API_KEY}`,
+          },
+          body:
+            multipart.body,
+        };
+      } else {
+        options = {
+          method:
+            "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+            "Authorization":
+              `Bearer ${OPENAI_API_KEY}`,
+          },
+          body:
+            JSON.stringify({
+              model,
+              prompt,
+              size,
+              quality,
+              output_format:
+                outputFormat,
+              background,
+              moderation,
+            }),
+        };
+      }
+
+      const r =
+        await fetchWithTimeout(
+          endpoint,
+          options,
+          Math.max(
+            AI_UPSTREAM_TIMEOUT_MS,
+            references.length
+              ? 120000
+              : 90000
+          )
+        );
+
+      const payload =
+        await responseJsonSafe(
+          r
+        );
+
+      if (!r.ok) {
+        if (
+          r.headers.get(
+            "retry-after"
+          )
+        ) {
+          res.setHeader(
+            "retry-after",
+            r.headers.get(
+              "retry-after"
+            )
+          );
+        }
+
+        console.error(
+          "OpenAI image upstream error:",
+          r.status,
+          references.length
+            ? "edit-reference"
+            : "generation",
+          proxyErrorMessage(
+            payload,
+            "Image request failed"
+          )
+        );
+
+        return res
+          .status(r.status)
+          .json(payload);
+      }
+
+      const first =
+        Array.isArray(
+          payload?.data
+        )
+          ? payload.data[0]
+          : null;
+
+      const b64 =
+        String(
+          first?.b64_json ||
+          payload?.b64_json ||
+          ""
+        ).trim();
+
+      const url =
+        String(
+          first?.url ||
+          first?.image_url ||
+          payload?.url ||
+          ""
+        ).trim();
+
+      if (
+        !b64 &&
+        !url
+      ) {
+        return res
+          .status(502)
+          .json({
+            error:
+              "OpenAI image generation returned no image payload.",
+          });
+      }
+
+      const mime =
+        outputFormat ===
+        "png"
+          ? "image/png"
+          : outputFormat ===
+              "webp"
+            ? "image/webp"
+            : "image/jpeg";
+
+      const dataUrl =
+        b64
+          ? `data:${mime};base64,${b64}`
+          : "";
+
+      return res.json({
+        ok: true,
+        provider:
+          "openai",
+        model,
+        mode:
+          references.length
+            ? "edit-reference"
+            : "generation",
+        referenceCount:
+          references.length,
+        data:
+          b64
+            ? [
+                {
+                  b64_json:
+                    b64,
+                  revised_prompt:
+                    first
+                      ?.revised_prompt ||
+                    "",
+                },
+              ]
+            : [],
+        b64_json:
+          b64,
+        dataUrl,
+        image:
+          dataUrl ||
+          url,
+        url,
+        revised_prompt:
+          first
+            ?.revised_prompt ||
+          "",
       });
-  }
+    } catch (err) {
+      console.error(
+        "Image generation proxy error:",
+        err
+      );
 
+      const timeout =
+        err?.name ===
+        "AbortError";
+
+      return res
+        .status(
+          timeout
+            ? 504
+            : 502
+        )
+        .json({
+          error:
+            timeout
+              ? "Image generation timed out."
+              : (
+                  err?.message ||
+                  "Image generation failed."
+                ),
+        });
+    }
+  }
+);
+
+async function proxyOpenAIMessage(
+  body
+) {
   if (
     !OPENAI_API_KEY
   ) {
-    return res
-      .status(500)
-      .json({
-        error:
-          "Missing OPENAI_API_KEY.",
-      });
-  }
-
-  const prompt =
-    imagePromptFromBody(
-      req.body || {}
-    );
-
-  if (!prompt) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "Missing image prompt.",
-      });
-  }
-
-  const model =
-    String(
-      req.body?.model ||
-      process.env
-        .OPENAI_IMAGE_MODEL ||
-      "gpt-image-2"
-    );
-
-  const size =
-    String(
-      req.body?.size ||
-      req.body
-        ?.image_size ||
-      process.env
-        .OPENAI_IMAGE_SIZE ||
-      "1024x1024"
-    );
-
-  const quality =
-    String(
-      req.body
-        ?.quality ||
-      process.env
-        .OPENAI_IMAGE_QUALITY ||
-      "medium"
-    );
-
-  const outputFormat =
-    String(
-      req.body
-        ?.output_format ||
-      process.env
-        .OPENAI_IMAGE_FORMAT ||
-      "jpeg"
-    );
-
-  const background =
-    String(
-      req.body
-        ?.background ||
-      "auto"
-    );
-
-  const moderation =
-    String(
-      req.body
-        ?.moderation ||
-      "auto"
-    );
-
-  const references =
-    await imageReferencesFromBody(
-      req.body || {},
-      3
-    );
-
-  if (
-    req.body
-      ?.require_reference &&
-    !references.length
-  ) {
-    return res
-      .status(422)
-      .json({
-        error:
-          "Character reference images were supplied, but none could be loaded. Refusing prompt-only generation because identity would be unreliable.",
-      });
-  }
-
-  let endpoint =
-    "https://api.openai.com/v1/images/generations";
-
-  let options;
-
-  if (
-    references.length
-  ) {
-    /*
-     * CRITICAL IDENTITY FIX:
-     * Generations cannot actually consume our profile/album reference images.
-     * When references exist, use the Image Edit endpoint and send them as
-     * multipart image[] inputs so the model can preserve the character face.
-     */
-    endpoint =
-      "https://api.openai.com/v1/images/edits";
-
-    const multipart =
-      buildImageEditMultipart({
-        model,
-        prompt,
-        size,
-        quality,
-        outputFormat,
-        background,
-        moderation,
-        references,
-      });
-
-    options = {
-      method:
-        "POST",
-      headers: {
-        "Content-Type":
-          `multipart/form-data; boundary=${multipart.boundary}`,
-        "Content-Length":
-          String(
-            multipart
-              .body
-              .length
-          ),
-        "Authorization":
-          `Bearer ${OPENAI_API_KEY}`,
-      },
-      body:
-        multipart.body,
-    };
-  } else {
-    options = {
-      method:
-        "POST",
-      headers: {
-        "Content-Type":
-          "application/json",
-        "Authorization":
-          `Bearer ${OPENAI_API_KEY}`,
-      },
-      body:
-        JSON.stringify({
-          model,
-          prompt,
-          size,
-          quality,
-          output_format:
-            outputFormat,
-          background,
-          moderation,
-        }),
+    return {
+      unavailable: true,
+      provider:
+        "openai",
     };
   }
 
   const r =
     await fetchWithTimeout(
-      endpoint,
-      options,
-      Math.max(
-        AI_UPSTREAM_TIMEOUT_MS,
-        references.length
-          ? 120000
-          : 90000
-      )
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method:
+          "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+          "Authorization":
+            `Bearer ${OPENAI_API_KEY}`,
+        },
+        body:
+          JSON.stringify(
+            buildOpenAIPayload(
+              body
+            )
+          ),
+      }
     );
 
   const payload =
@@ -4447,513 +4577,659 @@ return;
     );
 
   if (!r.ok) {
-    if (
-      r.headers.get(
-        "retry-after"
-      )
-    ) {
-      res.setHeader(
-        "retry-after",
+    return {
+      ok: false,
+      status:
+        r.status,
+      payload,
+      retryAfter:
         r.headers.get(
           "retry-after"
-        )
-      );
-    }
-
-    console.error(
-      "OpenAI image upstream error:",
-      r.status,
-      references.length
-        ? "edit-reference"
-        : "generation",
-      proxyErrorMessage(
-        payload,
-        "Image request failed"
-      )
-    );
-
-    return res
-      .status(r.status)
-      .json(payload);
+        ),
+      provider:
+        "openai",
+    };
   }
 
-  const first =
+  const normalized =
+    normalizeOpenAIResponse(
+      payload
+    );
+
+  const hasText =
     Array.isArray(
-      payload?.data
-    )
-      ? payload.data[0]
-      : null;
-
-  const b64 =
-    String(
-      first?.b64_json ||
-      payload?.b64_json ||
-      ""
-    ).trim();
-
-  const url =
-    String(
-      first?.url ||
-      first?.image_url ||
-      payload?.url ||
-      ""
-    ).trim();
-
-  if (
-    !b64 &&
-    !url
-  ) {
-    return res
-      .status(502)
-      .json({
-        error:
-          "OpenAI image generation returned no image payload.",
-      });
-  }
-
-  const mime =
-    outputFormat ===
-    "png"
-      ? "image/png"
-      : outputFormat ===
-          "webp"
-        ? "image/webp"
-        : "image/jpeg";
-
-  const dataUrl =
-    b64
-      ? `data:${mime};base64,${b64}`
-      : "";
-
-  return res.json({
-    ok: true,
-    provider:
-      "openai",
-    model,
-    mode:
-      references.length
-        ? "edit-reference"
-        : "generation",
-    referenceCount:
-      references.length,
-    data:
-      b64
-        ? [
-            {
-              b64_json:
-                b64,
-              revised_prompt:
-                first
-                  ?.revised_prompt ||
-                "",
-            },
-          ]
-        : [],
-    b64_json:
-      b64,
-    dataUrl,
-    image:
-      dataUrl ||
-      url,
-    url,
-    revised_prompt:
-      first
-        ?.revised_prompt ||
-      "",
-  });
-} catch (err) {
-  console.error(
-    "Image generation proxy error:",
-    err
-  );
-
-  const timeout =
-    err?.name ===
-    "AbortError";
-
-  return res
-    .status(
-      timeout
-        ? 504
-        : 502
-    )
-    .json({
-      error:
-        timeout
-          ? "Image generation timed out."
-          : (
-              err?.message ||
-              "Image generation failed."
-            ),
-    });
-}
-
-}
-);
-
-async function proxyOpenAIMessage(
-body
-) {
-if (
-!OPENAI_API_KEY
-) {
-return {
-unavailable: true,
-provider:
-"openai",
-};
-}
-
-const r =
-await fetchWithTimeout(
-"https://api.openai.com/v1/chat/completions",
-{
-method:
-"POST",
-headers: {
-"Content-Type":
-"application/json",
-"Authorization":
-Bearer ${OPENAI_API_KEY},
-},
-body:
-JSON.stringify(
-buildOpenAIPayload(
-body
-)
-),
-}
-);
-
-const payload =
-await responseJsonSafe(
-r
-);
-
-if (!r.ok) {
-return {
-ok: false,
-status:
-r.status,
-payload,
-retryAfter:
-r.headers.get(
-"retry-after"
-),
-provider:
-"openai",
-};
-}
-
-const normalized =
-normalizeOpenAIResponse(
-payload
-);
-
-const hasText =
-Array.isArray(
-normalized?.content
-) &&
-normalized.content.some(
-(x) =>
-String(
-x?.text || ""
-).trim()
-);
-
-return hasText
-? {
-ok: true,
-payload:
-normalized,
-provider:
-"openai",
-}
-: {
-ok: false,
-status: 502,
-payload: {
-error: {
-message:
-"OpenAI returned empty content.",
-},
-},
-provider:
-"openai",
-};
-}
-
-async function proxyGeminiMessage(
-body
-) {
-if (
-!GEMINI_API_KEY
-) {
-return {
-unavailable: true,
-provider:
-"gemini",
-};
-}
-
-const requested =
-String(
-body?.model || ""
-);
-
-const modelsToTry =
-[
-...new Set(
-[
-requested.startsWith(
-"gemini"
-)
-? requested
-: "",
-process.env
-.GEMINI_MODEL ||
-"",
-process.env
-.GEMINI_FALLBACK_MODEL ||
-"gemini-3.5-flash",
-].filter(
-Boolean
-)
-),
-];
-
-let last = null;
-
-for (
-const model of
-modelsToTry
-) {
-const url =
-new URL(
-https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent
-);
-
-url.searchParams.set(
-  "key",
-  GEMINI_API_KEY
-);
-
-for (
-  let attempt = 1;
-  attempt <= 2;
-  attempt++
-) {
-  const r =
-    await fetchWithTimeout(
-      url,
-      {
-        method:
-          "POST",
-        headers: {
-          "Content-Type":
-            "application/json",
-        },
-        body:
-          JSON.stringify(
-            buildGeminiPayload({
-              ...body,
-              model,
-            })
-          ),
-      }
+      normalized?.content
+    ) &&
+    normalized.content.some(
+      (x) =>
+        String(
+          x?.text || ""
+        ).trim()
     );
 
-  const payload =
-    await responseJsonSafe(
-      r
-    );
-
-  if (r.ok) {
-    const normalized =
-      normalizeGeminiResponse(
-        payload
-      );
-
-    const hasText =
-      Array.isArray(
-        normalized?.content
-      ) &&
-      normalized.content.some(
-        (x) =>
-          String(
-            x?.text ||
-            ""
-          ).trim()
-      );
-
-    if (hasText) {
-      return {
+  return hasText
+    ? {
         ok: true,
         payload:
           normalized,
         provider:
-          "gemini",
-      };
-    }
-
-    last = {
-      ok: false,
-      status: 502,
-      payload: {
-        error: {
-          message:
-            "Gemini returned empty content.",
+          "openai",
+      }
+    : {
+        ok: false,
+        status: 502,
+        payload: {
+          error: {
+            message:
+              "OpenAI returned empty content.",
+          },
         },
-      },
+        provider:
+          "openai",
+      };
+}
+
+async function proxyGeminiMessage(
+  body
+) {
+  if (
+    !GEMINI_API_KEY
+  ) {
+    return {
+      unavailable: true,
       provider:
         "gemini",
     };
-
-    break;
   }
 
-  last = {
-    ok: false,
-    status:
-      r.status,
-    payload,
-    retryAfter:
-      r.headers.get(
-        "retry-after"
+  const requested =
+    String(
+      body?.model || ""
+    );
+
+  const modelsToTry =
+    [
+      ...new Set(
+        [
+          requested.startsWith(
+            "gemini"
+          )
+            ? requested
+            : "",
+          process.env
+            .GEMINI_MODEL ||
+            "",
+          process.env
+            .GEMINI_FALLBACK_MODEL ||
+            "gemini-3.5-flash",
+        ].filter(
+          Boolean
+        )
       ),
-    provider:
-      "gemini",
-  };
+    ];
 
-  if (
-    !retryableProviderStatus(
-      r.status
-    ) ||
-    attempt >= 2
+  let last = null;
+
+  for (
+    const model of
+    modelsToTry
   ) {
-    break;
+    const url =
+      new URL(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+      );
+
+    url.searchParams.set(
+      "key",
+      GEMINI_API_KEY
+    );
+
+    for (
+      let attempt = 1;
+      attempt <= 2;
+      attempt++
+    ) {
+      const r =
+        await fetchWithTimeout(
+          url,
+          {
+            method:
+              "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body:
+              JSON.stringify(
+                buildGeminiPayload({
+                  ...body,
+                  model,
+                })
+              ),
+          }
+        );
+
+      const payload =
+        await responseJsonSafe(
+          r
+        );
+
+      if (r.ok) {
+        const normalized =
+          normalizeGeminiResponse(
+            payload
+          );
+
+        const hasText =
+          Array.isArray(
+            normalized?.content
+          ) &&
+          normalized.content.some(
+            (x) =>
+              String(
+                x?.text ||
+                ""
+              ).trim()
+          );
+
+        if (hasText) {
+          return {
+            ok: true,
+            payload:
+              normalized,
+            provider:
+              "gemini",
+          };
+        }
+
+        last = {
+          ok: false,
+          status: 502,
+          payload: {
+            error: {
+              message:
+                "Gemini returned empty content.",
+            },
+          },
+          provider:
+            "gemini",
+        };
+
+        break;
+      }
+
+      last = {
+        ok: false,
+        status:
+          r.status,
+        payload,
+        retryAfter:
+          r.headers.get(
+            "retry-after"
+          ),
+        provider:
+          "gemini",
+      };
+
+      if (
+        !retryableProviderStatus(
+          r.status
+        ) ||
+        attempt >= 2
+      ) {
+        break;
+      }
+
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            700 *
+            attempt
+          )
+      );
+    }
   }
 
-  await new Promise(
-    (resolve) =>
-      setTimeout(
-        resolve,
-        700 *
-        attempt
-      )
+  return (
+    last ||
+    {
+      unavailable:
+        true,
+      provider:
+        "gemini",
+    }
   );
 }
 
-}
-
-return (
-last ||
-{
-unavailable:
-true,
-provider:
-"gemini",
-}
-);
-}
-
 async function proxyAnthropicMessage(
-body
+  body
 ) {
-if (
-!ANTHROPIC_API_KEY
-) {
-return {
-unavailable: true,
-provider:
-"anthropic",
-};
+  if (
+    !ANTHROPIC_API_KEY
+  ) {
+    return {
+      unavailable: true,
+      provider:
+        "anthropic",
+    };
+  }
+
+  const requestedModel =
+    String(
+      body?.model ||
+      ""
+    );
+
+  const modelsToTry =
+    [
+      ...new Set(
+        [
+          requestedModel.startsWith(
+            "claude"
+          )
+            ? requestedModel
+            : "",
+          process.env
+            .ANTHROPIC_MODEL ||
+            "",
+          process.env
+            .ANTHROPIC_FALLBACK_MODEL ||
+            "",
+        ].filter(
+          Boolean
+        )
+      ),
+    ];
+
+  if (
+    !modelsToTry.length
+  ) {
+    modelsToTry.push(
+      requestedModel ||
+      "claude-sonnet-4-6"
+    );
+  }
+
+  let last = null;
+
+  for (
+    const model of
+    modelsToTry
+  ) {
+    const {
+      provider,
+      ...rest
+    } =
+      body || {};
+
+    const outboundBody = {
+      ...rest,
+      model,
+      max_tokens:
+        body?.max_tokens ??
+        1024,
+    };
+
+    for (
+      let attempt = 1;
+      attempt <= 2;
+      attempt++
+    ) {
+      const r =
+        await fetchWithTimeout(
+          "https://api.anthropic.com/v1/messages",
+          {
+            method:
+              "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+              "x-api-key":
+                ANTHROPIC_API_KEY,
+              "anthropic-version":
+                process.env
+                  .ANTHROPIC_VERSION ||
+                "2023-06-01",
+              "Accept":
+                "application/json",
+            },
+            body:
+              JSON.stringify(
+                outboundBody
+              ),
+          }
+        );
+
+      const payload =
+        await responseJsonSafe(
+          r
+        );
+
+      if (r.ok) {
+        const hasText =
+          Array.isArray(
+            payload?.content
+          ) &&
+          payload.content.some(
+            (x) =>
+              x?.type ===
+                "text" &&
+              String(
+                x?.text ||
+                ""
+              ).trim()
+          );
+
+        if (hasText) {
+          return {
+            ok: true,
+            payload,
+            provider:
+              "anthropic",
+          };
+        }
+
+        last = {
+          ok: false,
+          status: 502,
+          payload: {
+            error: {
+              message:
+                "Anthropic returned empty content.",
+            },
+          },
+          provider:
+            "anthropic",
+        };
+
+        break;
+      }
+
+      last = {
+        ok: false,
+        status:
+          r.status,
+        payload,
+        retryAfter:
+          r.headers.get(
+            "retry-after"
+          ),
+        provider:
+          "anthropic",
+      };
+
+      if (
+        !retryableProviderStatus(
+          r.status
+        ) ||
+        attempt >= 2
+      ) {
+        break;
+      }
+
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            700 *
+            attempt
+          )
+      );
+    }
+  }
+
+  return (
+    last ||
+    {
+      unavailable:
+        true,
+      provider:
+        "anthropic",
+    }
+  );
 }
 
-const requestedModel =
-String(
-body?.model ||
-""
-);
-
-const modelsToTry =
-[
-...new Set(
-[
-requestedModel.startsWith(
-"claude"
-)
-? requestedModel
-: "",
-process.env
-.ANTHROPIC_MODEL ||
-"",
-process.env
-.ANTHROPIC_FALLBACK_MODEL ||
-"",
-].filter(
-Boolean
-)
-),
-];
-
-if (
-!modelsToTry.length
+async function callMessageProvider(
+  provider,
+  body
 ) {
-modelsToTry.push(
-requestedModel ||
-"claude-sonnet-4-6"
-);
+  if (
+    provider === "openai"
+  ) {
+    return proxyOpenAIMessage(
+      body
+    );
+  }
+
+  if (
+    provider === "gemini"
+  ) {
+    return proxyGeminiMessage(
+      body
+    );
+  }
+
+  return proxyAnthropicMessage(
+    body
+  );
+}
+/* -------------------------------------------------------------------------
+   SEMANTIC CHARACTER MEMORY — v37
+
+   Storage stays in PostgreSQL. Embeddings are generated with Gemini and are
+   intentionally stored as JSONB for compatibility with the current Railway
+   PostgreSQL image. Retrieval is performed server-side with cosine similarity.
+   ------------------------------------------------------------------------- */
+function memoryText(value, max = 7000) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
-let last = null;
+function memoryString(value, max = 160) {
+  return String(value || "").trim().slice(0, max);
+}
 
-for (
-const model of
-modelsToTry
+function memorySubjects(value) {
+  const rows = Array.isArray(value) ? value : [];
+
+  return [
+    ...new Set(
+      rows
+        .map((x) => memoryString(x, 120))
+        .filter(Boolean)
+    ),
+  ].slice(0, 20);
+}
+
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n)) {
+    return fallback;
+  }
+
+  return Math.min(
+    max,
+    Math.max(min, n)
+  );
+}
+
+function normalizeEmbedding(values) {
+  const vector =
+    Array.isArray(values)
+      ? values
+          .map(Number)
+          .filter(
+            (x) =>
+              Number.isFinite(x)
+          )
+      : [];
+
+  if (!vector.length) {
+    return [];
+  }
+
+  // gemini-embedding-001 needs manual normalization when dimensions < 3072.
+  if (
+    GEMINI_EMBEDDING_MODEL ===
+      "gemini-embedding-001" &&
+    vector.length !== 3072
+  ) {
+    const norm =
+      Math.sqrt(
+        vector.reduce(
+          (sum, x) =>
+            sum + x * x,
+          0
+        )
+      );
+
+    if (norm > 0) {
+      return vector.map(
+        (x) =>
+          x / norm
+      );
+    }
+  }
+
+  return vector;
+}
+
+function cosineSimilarity(a, b) {
+  if (
+    !Array.isArray(a) ||
+    !Array.isArray(b) ||
+    !a.length ||
+    a.length !== b.length
+  ) {
+    return -1;
+  }
+
+  let dot = 0;
+  let aa = 0;
+  let bb = 0;
+
+  for (
+    let i = 0;
+    i < a.length;
+    i++
+  ) {
+    const x =
+      Number(a[i]);
+
+    const y =
+      Number(b[i]);
+
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y)
+    ) {
+      return -1;
+    }
+
+    dot += x * y;
+    aa += x * x;
+    bb += y * y;
+  }
+
+  if (!aa || !bb) {
+    return -1;
+  }
+
+  return (
+    dot /
+    (
+      Math.sqrt(aa) *
+      Math.sqrt(bb)
+    )
+  );
+}
+
+async function geminiEmbedMemory(
+  text,
+  taskType = "RETRIEVAL_DOCUMENT",
+  title = ""
 ) {
-const {
-provider,
-...rest
-} =
-body || {};
+  if (!GEMINI_API_KEY) {
+    const err =
+      new Error(
+        "Missing GEMINI_API_KEY for semantic memory embeddings."
+      );
 
-const outboundBody = {
-  ...rest,
-  model,
-  max_tokens:
-    body?.max_tokens ??
-    1024,
-};
+    err.status = 503;
+    throw err;
+  }
 
-for (
-  let attempt = 1;
-  attempt <= 2;
-  attempt++
-) {
+  const clean =
+    memoryText(
+      text,
+      7000
+    );
+
+  if (!clean) {
+    const err =
+      new Error(
+        "Memory embedding text is empty."
+      );
+
+    err.status = 400;
+    throw err;
+  }
+
+  const model =
+    GEMINI_EMBEDDING_MODEL;
+
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:embedContent`;
+
+  const embedContentConfig = {
+    taskType,
+    outputDimensionality:
+      GEMINI_EMBEDDING_DIM,
+    autoTruncate:
+      true,
+  };
+
+  if (
+    taskType ===
+      "RETRIEVAL_DOCUMENT" &&
+    title
+  ) {
+    embedContentConfig.title =
+      memoryText(
+        title,
+        220
+      );
+  }
+
   const r =
     await fetchWithTimeout(
-      "https://api.anthropic.com/v1/messages",
+      url,
       {
         method:
           "POST",
         headers: {
           "Content-Type":
             "application/json",
-          "x-api-key":
-            ANTHROPIC_API_KEY,
-          "anthropic-version":
-            process.env
-              .ANTHROPIC_VERSION ||
-            "2023-06-01",
-          "Accept":
-            "application/json",
+          "x-goog-api-key":
+            GEMINI_API_KEY,
         },
         body:
-          JSON.stringify(
-            outboundBody
-          ),
-      }
+          JSON.stringify({
+            model:
+              `models/${model}`,
+            content: {
+              parts: [
+                {
+                  text:
+                    clean,
+                },
+              ],
+            },
+            embedContentConfig,
+          }),
+      },
+      30000
     );
 
   const payload =
@@ -4961,1304 +5237,960 @@ for (
       r
     );
 
-  if (r.ok) {
-    const hasText =
-      Array.isArray(
-        payload?.content
-      ) &&
-      payload.content.some(
-        (x) =>
-          x?.type ===
-            "text" &&
-          String(
-            x?.text ||
-            ""
-          ).trim()
+  if (!r.ok) {
+    const err =
+      new Error(
+        proxyErrorMessage(
+          payload,
+          `Gemini embedding failed with HTTP ${r.status}.`
+        )
       );
 
-    if (hasText) {
-      return {
-        ok: true,
-        payload,
-        provider:
-          "anthropic",
-      };
-    }
+    err.status =
+      r.status;
 
-    last = {
-      ok: false,
-      status: 502,
-      payload: {
-        error: {
-          message:
-            "Anthropic returned empty content.",
-        },
-      },
-      provider:
-        "anthropic",
-    };
+    err.payload =
+      payload;
 
-    break;
+    throw err;
   }
 
-  last = {
-    ok: false,
-    status:
-      r.status,
-    payload,
-    retryAfter:
-      r.headers.get(
-        "retry-after"
-      ),
-    provider:
-      "anthropic",
-  };
+  const values =
+    normalizeEmbedding(
+      payload
+        ?.embedding
+        ?.values ||
+      []
+    );
 
-  if (
-    !retryableProviderStatus(
-      r.status
-    ) ||
-    attempt >= 2
-  ) {
-    break;
+  if (!values.length) {
+    const err =
+      new Error(
+        "Gemini embedding returned no vector values."
+      );
+
+    err.status = 502;
+    throw err;
   }
 
-  await new Promise(
-    (resolve) =>
-      setTimeout(
-        resolve,
-        700 *
-        attempt
-      )
-  );
-}
-
-}
-
-return (
-last ||
-{
-unavailable:
-true,
-provider:
-"anthropic",
-}
-);
-}
-
-async function callMessageProvider(
-provider,
-body
-) {
-if (
-provider === "openai"
-) {
-return proxyOpenAIMessage(
-body
-);
-}
-
-if (
-provider === "gemini"
-) {
-return proxyGeminiMessage(
-body
-);
-}
-
-return proxyAnthropicMessage(
-body
-);
-}
-/* -------------------------------------------------------------------------
-SEMANTIC CHARACTER MEMORY — v37
-
-Storage stays in PostgreSQL. Embeddings are generated with Gemini and are
-intentionally stored as JSONB for compatibility with the current Railway
-PostgreSQL image. Retrieval is performed server-side with cosine similarity.
-------------------------------------------------------------------------- */
-function memoryText(value, max = 7000) {
-return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
-}
-
-function memoryString(value, max = 160) {
-return String(value || "").trim().slice(0, max);
-}
-
-function memorySubjects(value) {
-const rows = Array.isArray(value) ? value : [];
-
-return [
-...new Set(
-rows
-.map((x) => memoryString(x, 120))
-.filter(Boolean)
-),
-].slice(0, 20);
-}
-
-function clampNumber(value, min, max, fallback) {
-const n = Number(value);
-
-if (!Number.isFinite(n)) {
-return fallback;
-}
-
-return Math.min(
-max,
-Math.max(min, n)
-);
-}
-
-function normalizeEmbedding(values) {
-const vector =
-Array.isArray(values)
-? values
-.map(Number)
-.filter(
-(x) =>
-Number.isFinite(x)
-)
-: [];
-
-if (!vector.length) {
-return [];
-}
-
-// gemini-embedding-001 needs manual normalization when dimensions < 3072.
-if (
-GEMINI_EMBEDDING_MODEL ===
-"gemini-embedding-001" &&
-vector.length !== 3072
-) {
-const norm =
-Math.sqrt(
-vector.reduce(
-(sum, x) =>
-sum + x * x,
-0
-)
-);
-
-if (norm > 0) {
-  return vector.map(
-    (x) =>
-      x / norm
-  );
-}
-
-}
-
-return vector;
-}
-
-function cosineSimilarity(a, b) {
-if (
-!Array.isArray(a) ||
-!Array.isArray(b) ||
-!a.length ||
-a.length !== b.length
-) {
-return -1;
-}
-
-let dot = 0;
-let aa = 0;
-let bb = 0;
-
-for (
-let i = 0;
-i < a.length;
-i++
-) {
-const x =
-Number(a[i]);
-
-const y =
-  Number(b[i]);
-
-if (
-  !Number.isFinite(x) ||
-  !Number.isFinite(y)
-) {
-  return -1;
-}
-
-dot += x * y;
-aa += x * x;
-bb += y * y;
-
-}
-
-if (!aa || !bb) {
-return -1;
-}
-
-return (
-dot /
-(
-Math.sqrt(aa) *
-Math.sqrt(bb)
-)
-);
-}
-
-async function geminiEmbedMemory(
-text,
-taskType = "RETRIEVAL_DOCUMENT",
-title = ""
-) {
-if (!GEMINI_API_KEY) {
-const err =
-new Error(
-"Missing GEMINI_API_KEY for semantic memory embeddings."
-);
-
-err.status = 503;
-throw err;
-
-}
-
-const clean =
-memoryText(
-text,
-7000
-);
-
-if (!clean) {
-const err =
-new Error(
-"Memory embedding text is empty."
-);
-
-err.status = 400;
-throw err;
-
-}
-
-const model =
-GEMINI_EMBEDDING_MODEL;
-
-const url =
-https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:embedContent;
-
-const embedContentConfig = {
-taskType,
-outputDimensionality:
-GEMINI_EMBEDDING_DIM,
-autoTruncate:
-true,
-};
-
-if (
-taskType ===
-"RETRIEVAL_DOCUMENT" &&
-title
-) {
-embedContentConfig.title =
-memoryText(
-title,
-220
-);
-}
-
-const r =
-await fetchWithTimeout(
-url,
-{
-method:
-"POST",
-headers: {
-"Content-Type":
-"application/json",
-"x-goog-api-key":
-GEMINI_API_KEY,
-},
-body:
-JSON.stringify({
-model:
-models/${model},
-content: {
-parts: [
-{
-text:
-clean,
-},
-],
-},
-embedContentConfig,
-}),
-},
-30000
-);
-
-const payload =
-await responseJsonSafe(
-r
-);
-
-if (!r.ok) {
-const err =
-new Error(
-proxyErrorMessage(
-payload,
-Gemini embedding failed with HTTP ${r.status}.
-)
-);
-
-err.status =
-  r.status;
-
-err.payload =
-  payload;
-
-throw err;
-
-}
-
-const values =
-normalizeEmbedding(
-payload
-?.embedding
-?.values ||
-[]
-);
-
-if (!values.length) {
-const err =
-new Error(
-"Gemini embedding returned no vector values."
-);
-
-err.status = 502;
-throw err;
-
-}
-
-return values;
+  return values;
 }
 
 function memoryRowForClient(
-row,
-score = null
+  row,
+  score = null
 ) {
-return {
-id:
-Number(
-row.id
-),
-characterId:
-row.character_id,
-subjectIds:
-Array.isArray(
-row.subject_ids
-)
-? row.subject_ids
-: [],
-memoryType:
-row.memory_type,
-source:
-row.source ||
-"",
-text:
-row.memory_text,
-importance:
-Number(
-row.importance
-) || 0,
-confidence:
-Number(
-row.confidence
-) || 0,
-knowledgeType:
-row.knowledge_type,
-visibility:
-row.visibility,
-metadata:
-row.metadata &&
-typeof row.metadata ===
-"object"
-? row.metadata
-: {},
-createdAt:
-row.created_at,
-embeddingModel:
-row.embedding_model ||
-"",
-...(
-score === null
-? {}
-: {
-score,
-}
-),
-};
+  return {
+    id:
+      Number(
+        row.id
+      ),
+    characterId:
+      row.character_id,
+    subjectIds:
+      Array.isArray(
+        row.subject_ids
+      )
+        ? row.subject_ids
+        : [],
+    memoryType:
+      row.memory_type,
+    source:
+      row.source ||
+      "",
+    text:
+      row.memory_text,
+    importance:
+      Number(
+        row.importance
+      ) || 0,
+    confidence:
+      Number(
+        row.confidence
+      ) || 0,
+    knowledgeType:
+      row.knowledge_type,
+    visibility:
+      row.visibility,
+    metadata:
+      row.metadata &&
+      typeof row.metadata ===
+        "object"
+        ? row.metadata
+        : {},
+    createdAt:
+      row.created_at,
+    embeddingModel:
+      row.embedding_model ||
+      "",
+    ...(
+      score === null
+        ? {}
+        : {
+            score,
+          }
+    ),
+  };
 }
 
 app.get(
-"/memory/health",
-async (req, res) => {
-try {
-if (
-!(await requireDb(res))
-) {
-return;
-}
+  "/memory/health",
+  async (req, res) => {
+    try {
+      if (
+        !(await requireDb(res))
+      ) {
+        return;
+      }
 
-  const countResult =
-    await pool.query(
-      `
-      SELECT COUNT(*)::int AS count
-      FROM character_memories
-      `
-    );
+      const countResult =
+        await pool.query(
+          `
+          SELECT COUNT(*)::int AS count
+          FROM character_memories
+          `
+        );
 
-  const result = {
-    ok: true,
-    version:
-      "v37-semantic-memory-backend",
-    database:
-      true,
-    table:
-      "character_memories",
-    rows:
-      Number(
-        countResult
-          .rows?.[0]
-          ?.count
-      ) || 0,
-    geminiConfigured:
-      Boolean(
-        GEMINI_API_KEY
-      ),
-    embeddingModel:
-      GEMINI_EMBEDDING_MODEL,
-    embeddingDimensions:
-      GEMINI_EMBEDDING_DIM,
-  };
+      const result = {
+        ok: true,
+        version:
+          "v37-semantic-memory-backend",
+        database:
+          true,
+        table:
+          "character_memories",
+        rows:
+          Number(
+            countResult
+              .rows?.[0]
+              ?.count
+          ) || 0,
+        geminiConfigured:
+          Boolean(
+            GEMINI_API_KEY
+          ),
+        embeddingModel:
+          GEMINI_EMBEDDING_MODEL,
+        embeddingDimensions:
+          GEMINI_EMBEDDING_DIM,
+      };
 
-  if (
-    String(
-      req.query?.probe ||
-      ""
-    ) === "1"
-  ) {
-    const vector =
-      await geminiEmbedMemory(
-        "Masvilag semantic memory health probe.",
-        "RETRIEVAL_DOCUMENT",
-        "Masvilag memory probe"
-      );
+      if (
+        String(
+          req.query?.probe ||
+          ""
+        ) === "1"
+      ) {
+        const vector =
+          await geminiEmbedMemory(
+            "Masvilag semantic memory health probe.",
+            "RETRIEVAL_DOCUMENT",
+            "Masvilag memory probe"
+          );
 
-    result.embeddingProbe = {
-      ok: true,
-      dimensions:
-        vector.length,
-      norm:
-        Number(
-          Math.sqrt(
-            vector.reduce(
-              (
-                sum,
-                x
-              ) =>
-                sum +
-                x * x,
-              0
-            )
-          ).toFixed(
-            6
-          )
-        ),
-    };
-  }
-
-  return res.json(
-    result
-  );
-} catch (err) {
-  console.error(
-    "Memory health error:",
-    err
-  );
-
-  return res
-    .status(
-      Number(
-        err?.status
-      ) || 500
-    )
-    .json({
-      ok: false,
-      error:
-        err?.message ||
-        "Memory health check failed.",
-    });
-}
-
-}
-);
-
-app.post(
-"/memory/remember",
-async (req, res) => {
-try {
-if (
-!(await requireDb(res))
-) {
-return;
-}
-
-  const session =
-    await getSession(
-      req
-    );
-
-  if (!session) {
-    clearSessionCookie(
-      res
-    );
-
-    return res
-      .status(401)
-      .json({
-        error:
-          "Not authenticated.",
-      });
-  }
-
-  const characterId =
-    memoryString(
-      req.body
-        ?.characterId ||
-      req.body
-        ?.character_id,
-      120
-    );
-
-  const text =
-    memoryText(
-      req.body?.text ||
-      req.body
-        ?.memoryText ||
-      req.body
-        ?.memory_text,
-      7000
-    );
-
-  const memoryType =
-    memoryString(
-      req.body
-        ?.memoryType ||
-      req.body
-        ?.memory_type ||
-      "event",
-      80
-    );
-
-  const source =
-    memoryString(
-      req.body
-        ?.source ||
-      "world",
-      120
-    );
-
-  const knowledgeType =
-    memoryString(
-      req.body
-        ?.knowledgeType ||
-      req.body
-        ?.knowledge_type ||
-      "witnessed",
-      80
-    );
-
-  const visibility =
-    memoryString(
-      req.body
-        ?.visibility ||
-      "private",
-      80
-    );
-
-  const subjectIds =
-    memorySubjects(
-      req.body
-        ?.subjectIds ||
-      req.body
-        ?.subject_ids
-    );
-
-  const importance =
-    Math.round(
-      clampNumber(
-        req.body
-          ?.importance,
-        0,
-        100,
-        50
-      )
-    );
-
-  const confidence =
-    clampNumber(
-      req.body
-        ?.confidence,
-      0,
-      1,
-      1
-    );
-
-  const metadata =
-    req.body
-      ?.metadata &&
-    typeof req.body
-      .metadata ===
-      "object" &&
-    !Array.isArray(
-      req.body
-        .metadata
-    )
-      ? req.body
-          .metadata
-      : {};
-
-  if (
-    !characterId ||
-    !text
-  ) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "characterId and text are required.",
-      });
-  }
-
-  const title =
-    `${memoryType} memory for ${characterId}`;
-
-  const embedding =
-    await geminiEmbedMemory(
-      text,
-      "RETRIEVAL_DOCUMENT",
-      title
-    );
-
-  const inserted =
-    await pool.query(
-      `
-      INSERT INTO character_memories (
-        world_code,
-        character_id,
-        subject_ids,
-        memory_type,
-        source,
-        memory_text,
-        importance,
-        confidence,
-        knowledge_type,
-        visibility,
-        metadata,
-        embedding,
-        embedding_model
-      )
-      VALUES (
-        $1,$2,$3::jsonb,$4,$5,$6,$7,
-        $8,$9,$10,$11::jsonb,$12::jsonb,$13
-      )
-      RETURNING *
-      `,
-      [
-        session.worldCode,
-        characterId,
-        JSON.stringify(
-          subjectIds
-        ),
-        memoryType,
-        source,
-        text,
-        importance,
-        confidence,
-        knowledgeType,
-        visibility,
-        JSON.stringify(
-          metadata
-        ),
-        JSON.stringify(
-          embedding
-        ),
-        GEMINI_EMBEDDING_MODEL,
-      ]
-    );
-
-  return res.json({
-    ok: true,
-    memory:
-      memoryRowForClient(
-        inserted
-          .rows[0]
-      ),
-    embeddingDimensions:
-      embedding.length,
-  });
-} catch (err) {
-  console.error(
-    "Memory remember error:",
-    err
-  );
-
-  return res
-    .status(
-      Number(
-        err?.status
-      ) || 500
-    )
-    .json({
-      error:
-        err?.message ||
-        "Failed to store semantic memory.",
-    });
-}
-
-}
-);
-
-app.post(
-"/memory/search",
-async (req, res) => {
-try {
-if (
-!(await requireDb(res))
-) {
-return;
-}
-
-  const session =
-    await getSession(
-      req
-    );
-
-  if (!session) {
-    clearSessionCookie(
-      res
-    );
-
-    return res
-      .status(401)
-      .json({
-        error:
-          "Not authenticated.",
-      });
-  }
-
-  const characterId =
-    memoryString(
-      req.body
-        ?.characterId ||
-      req.body
-        ?.character_id,
-      120
-    );
-
-  const query =
-    memoryText(
-      req.body
-        ?.query ||
-      req.body
-        ?.text,
-      5000
-    );
-
-  const topK =
-    Math.round(
-      clampNumber(
-        req.body?.topK ||
-        req.body?.top_k,
-        1,
-        12,
-        6
-      )
-    );
-
-  if (
-    !characterId ||
-    !query
-  ) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "characterId and query are required.",
-      });
-  }
-
-  const queryEmbedding =
-    await geminiEmbedMemory(
-      query,
-      "RETRIEVAL_QUERY"
-    );
-
-  const candidates =
-    await pool.query(
-      `
-      SELECT *
-      FROM character_memories
-      WHERE world_code = $1
-        AND character_id = $2
-        AND embedding IS NOT NULL
-        AND embedding_model = $3
-      ORDER BY
-        importance DESC,
-        created_at DESC
-      LIMIT 600
-      `,
-      [
-        session.worldCode,
-        characterId,
-        GEMINI_EMBEDDING_MODEL,
-      ]
-    );
-
-  const now =
-    Date.now();
-
-  const scored = [];
-
-  for (
-    const row of
-    candidates.rows
-  ) {
-    const vector =
-      Array.isArray(
-        row.embedding
-      )
-        ? row.embedding
-        : [];
-
-    if (
-      vector.length !==
-      queryEmbedding.length
-    ) {
-      continue;
-    }
-
-    const semantic =
-      cosineSimilarity(
-        queryEmbedding,
-        vector
-      );
-
-    if (
-      !Number.isFinite(
-        semantic
-      ) ||
-      semantic < -0.5
-    ) {
-      continue;
-    }
-
-    const importance =
-      clampNumber(
-        row.importance,
-        0,
-        100,
-        50
-      ) / 100;
-
-    const confidence =
-      clampNumber(
-        row.confidence,
-        0,
-        1,
-        1
-      );
-
-    const ageDays =
-      Math.max(
-        0,
-        (
-          now -
-          new Date(
-            row.created_at
-          ).getTime()
-        ) /
-        86400000
-      );
-
-    const recency =
-      Math.exp(
-        -ageDays /
-        90
-      );
-
-    const finalScore =
-      semantic *
-        0.72 +
-      importance *
-        0.16 +
-      confidence *
-        0.07 +
-      recency *
-        0.05;
-
-    scored.push({
-      row,
-      finalScore,
-      semantic,
-    });
-  }
-
-  scored.sort(
-    (
-      a,
-      b
-    ) =>
-      b.finalScore -
-      a.finalScore
-  );
-
-  return res.json({
-    ok: true,
-    characterId,
-    query,
-    embeddingModel:
-      GEMINI_EMBEDDING_MODEL,
-    results:
-      scored
-        .slice(
-          0,
-          topK
-        )
-        .map(
-          ({
-            row,
-            finalScore,
-            semantic,
-          }) => ({
-            ...memoryRowForClient(
-              row,
-              Number(
-                finalScore.toFixed(
-                  6
+        result.embeddingProbe = {
+          ok: true,
+          dimensions:
+            vector.length,
+          norm:
+            Number(
+              Math.sqrt(
+                vector.reduce(
+                  (
+                    sum,
+                    x
+                  ) =>
+                    sum +
+                    x * x,
+                  0
                 )
+              ).toFixed(
+                6
               )
             ),
-            semanticScore:
-              Number(
-                semantic.toFixed(
-                  6
-                )
-              ),
-          })
-        ),
-  });
-} catch (err) {
-  console.error(
-    "Memory search error:",
-    err
-  );
+        };
+      }
 
-  return res
-    .status(
-      Number(
-        err?.status
-      ) || 500
-    )
-    .json({
-      error:
-        err?.message ||
-        "Semantic memory search failed.",
-    });
-}
+      return res.json(
+        result
+      );
+    } catch (err) {
+      console.error(
+        "Memory health error:",
+        err
+      );
 
-}
-);
-
-app.get(
-"/ai/health",
-(req, res) => {
-return res.json({
-ok: true,
-version:
-"v37-semantic-memory-backend",
-routes: {
-messages:
-true,
-image:
-true,
-vision:
-true,
-memory:
-true,
-},
-providers: {
-anthropic:
-Boolean(
-ANTHROPIC_API_KEY
-),
-gemini:
-Boolean(
-GEMINI_API_KEY
-),
-openai:
-Boolean(
-OPENAI_API_KEY
-),
-},
-});
-}
+      return res
+        .status(
+          Number(
+            err?.status
+          ) || 500
+        )
+        .json({
+          ok: false,
+          error:
+            err?.message ||
+            "Memory health check failed.",
+        });
+    }
+  }
 );
 
 app.post(
-[
-"/ai/messages",
-"/ai/chat",
-"/ai/respond",
-],
-async (req, res) => {
-const requestedProvider =
-getProvider(
-req.body || {}
+  "/memory/remember",
+  async (req, res) => {
+    try {
+      if (
+        !(await requireDb(res))
+      ) {
+        return;
+      }
+
+      const session =
+        await getSession(
+          req
+        );
+
+      if (!session) {
+        clearSessionCookie(
+          res
+        );
+
+        return res
+          .status(401)
+          .json({
+            error:
+              "Not authenticated.",
+          });
+      }
+
+      const characterId =
+        memoryString(
+          req.body
+            ?.characterId ||
+          req.body
+            ?.character_id,
+          120
+        );
+
+      const text =
+        memoryText(
+          req.body?.text ||
+          req.body
+            ?.memoryText ||
+          req.body
+            ?.memory_text,
+          7000
+        );
+
+      const memoryType =
+        memoryString(
+          req.body
+            ?.memoryType ||
+          req.body
+            ?.memory_type ||
+          "event",
+          80
+        );
+
+      const source =
+        memoryString(
+          req.body
+            ?.source ||
+          "world",
+          120
+        );
+
+      const knowledgeType =
+        memoryString(
+          req.body
+            ?.knowledgeType ||
+          req.body
+            ?.knowledge_type ||
+          "witnessed",
+          80
+        );
+
+      const visibility =
+        memoryString(
+          req.body
+            ?.visibility ||
+          "private",
+          80
+        );
+
+      const subjectIds =
+        memorySubjects(
+          req.body
+            ?.subjectIds ||
+          req.body
+            ?.subject_ids
+        );
+
+      const importance =
+        Math.round(
+          clampNumber(
+            req.body
+              ?.importance,
+            0,
+            100,
+            50
+          )
+        );
+
+      const confidence =
+        clampNumber(
+          req.body
+            ?.confidence,
+          0,
+          1,
+          1
+        );
+
+      const metadata =
+        req.body
+          ?.metadata &&
+        typeof req.body
+          .metadata ===
+          "object" &&
+        !Array.isArray(
+          req.body
+            .metadata
+        )
+          ? req.body
+              .metadata
+          : {};
+
+      if (
+        !characterId ||
+        !text
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "characterId and text are required.",
+          });
+      }
+
+      const title =
+        `${memoryType} memory for ${characterId}`;
+
+      const embedding =
+        await geminiEmbedMemory(
+          text,
+          "RETRIEVAL_DOCUMENT",
+          title
+        );
+
+      const inserted =
+        await pool.query(
+          `
+          INSERT INTO character_memories (
+            world_code,
+            character_id,
+            subject_ids,
+            memory_type,
+            source,
+            memory_text,
+            importance,
+            confidence,
+            knowledge_type,
+            visibility,
+            metadata,
+            embedding,
+            embedding_model
+          )
+          VALUES (
+            $1,$2,$3::jsonb,$4,$5,$6,$7,
+            $8,$9,$10,$11::jsonb,$12::jsonb,$13
+          )
+          RETURNING *
+          `,
+          [
+            session.worldCode,
+            characterId,
+            JSON.stringify(
+              subjectIds
+            ),
+            memoryType,
+            source,
+            text,
+            importance,
+            confidence,
+            knowledgeType,
+            visibility,
+            JSON.stringify(
+              metadata
+            ),
+            JSON.stringify(
+              embedding
+            ),
+            GEMINI_EMBEDDING_MODEL,
+          ]
+        );
+
+      return res.json({
+        ok: true,
+        memory:
+          memoryRowForClient(
+            inserted
+              .rows[0]
+          ),
+        embeddingDimensions:
+          embedding.length,
+      });
+    } catch (err) {
+      console.error(
+        "Memory remember error:",
+        err
+      );
+
+      return res
+        .status(
+          Number(
+            err?.status
+          ) || 500
+        )
+        .json({
+          error:
+            err?.message ||
+            "Failed to store semantic memory.",
+        });
+    }
+  }
 );
 
-const configuredFallbacks =
+app.post(
+  "/memory/search",
+  async (req, res) => {
+    try {
+      if (
+        !(await requireDb(res))
+      ) {
+        return;
+      }
+
+      const session =
+        await getSession(
+          req
+        );
+
+      if (!session) {
+        clearSessionCookie(
+          res
+        );
+
+        return res
+          .status(401)
+          .json({
+            error:
+              "Not authenticated.",
+          });
+      }
+
+      const characterId =
+        memoryString(
+          req.body
+            ?.characterId ||
+          req.body
+            ?.character_id,
+          120
+        );
+
+      const query =
+        memoryText(
+          req.body
+            ?.query ||
+          req.body
+            ?.text,
+          5000
+        );
+
+      const topK =
+        Math.round(
+          clampNumber(
+            req.body?.topK ||
+            req.body?.top_k,
+            1,
+            12,
+            6
+          )
+        );
+
+      if (
+        !characterId ||
+        !query
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "characterId and query are required.",
+          });
+      }
+
+      const queryEmbedding =
+        await geminiEmbedMemory(
+          query,
+          "RETRIEVAL_QUERY"
+        );
+
+      const candidates =
+        await pool.query(
+          `
+          SELECT *
+          FROM character_memories
+          WHERE world_code = $1
+            AND character_id = $2
+            AND embedding IS NOT NULL
+            AND embedding_model = $3
+          ORDER BY
+            importance DESC,
+            created_at DESC
+          LIMIT 600
+          `,
+          [
+            session.worldCode,
+            characterId,
+            GEMINI_EMBEDDING_MODEL,
+          ]
+        );
+
+      const now =
+        Date.now();
+
+      const scored = [];
+
+      for (
+        const row of
+        candidates.rows
+      ) {
+        const vector =
+          Array.isArray(
+            row.embedding
+          )
+            ? row.embedding
+            : [];
+
+        if (
+          vector.length !==
+          queryEmbedding.length
+        ) {
+          continue;
+        }
+
+        const semantic =
+          cosineSimilarity(
+            queryEmbedding,
+            vector
+          );
+
+        if (
+          !Number.isFinite(
+            semantic
+          ) ||
+          semantic < -0.5
+        ) {
+          continue;
+        }
+
+        const importance =
+          clampNumber(
+            row.importance,
+            0,
+            100,
+            50
+          ) / 100;
+
+        const confidence =
+          clampNumber(
+            row.confidence,
+            0,
+            1,
+            1
+          );
+
+        const ageDays =
+          Math.max(
+            0,
+            (
+              now -
+              new Date(
+                row.created_at
+              ).getTime()
+            ) /
+            86400000
+          );
+
+        const recency =
+          Math.exp(
+            -ageDays /
+            90
+          );
+
+        const finalScore =
+          semantic *
+            0.72 +
+          importance *
+            0.16 +
+          confidence *
+            0.07 +
+          recency *
+            0.05;
+
+        scored.push({
+          row,
+          finalScore,
+          semantic,
+        });
+      }
+
+      scored.sort(
+        (
+          a,
+          b
+        ) =>
+          b.finalScore -
+          a.finalScore
+      );
+
+      return res.json({
+        ok: true,
+        characterId,
+        query,
+        embeddingModel:
+          GEMINI_EMBEDDING_MODEL,
+        results:
+          scored
+            .slice(
+              0,
+              topK
+            )
+            .map(
+              ({
+                row,
+                finalScore,
+                semantic,
+              }) => ({
+                ...memoryRowForClient(
+                  row,
+                  Number(
+                    finalScore.toFixed(
+                      6
+                    )
+                  )
+                ),
+                semanticScore:
+                  Number(
+                    semantic.toFixed(
+                      6
+                    )
+                  ),
+              })
+            ),
+      });
+    } catch (err) {
+      console.error(
+        "Memory search error:",
+        err
+      );
+
+      return res
+        .status(
+          Number(
+            err?.status
+          ) || 500
+        )
+        .json({
+          error:
+            err?.message ||
+            "Semantic memory search failed.",
+        });
+    }
+  }
+);
+
+app.get(
+  "/ai/health",
+  (req, res) => {
+    return res.json({
+      ok: true,
+      version:
+        "v37-semantic-memory-backend",
+      routes: {
+        messages:
+          true,
+        image:
+          true,
+        vision:
+          true,
+        memory:
+          true,
+      },
+      providers: {
+        anthropic:
+          Boolean(
+            ANTHROPIC_API_KEY
+          ),
+        gemini:
+          Boolean(
+            GEMINI_API_KEY
+          ),
+        openai:
+          Boolean(
+            OPENAI_API_KEY
+          ),
+      },
+    });
+  }
+);
+
+app.post(
   [
-    "anthropic",
-    "openai",
-    "gemini",
-  ]
-    .filter(
-      (p) =>
-        p !==
-        requestedProvider
-    )
-    .filter(
-      (p) =>
-        p === "anthropic"
-          ? ANTHROPIC_API_KEY
-          : p === "openai"
-            ? OPENAI_API_KEY
-            : GEMINI_API_KEY
-    );
-
-const providers = [
-  requestedProvider,
-  ...configuredFallbacks,
-];
-
-let last = null;
-
-for (
-  const provider of
-  providers
-) {
-  try {
-    const result =
-      await callMessageProvider(
-        provider,
+    "/ai/messages",
+    "/ai/chat",
+    "/ai/respond",
+  ],
+  async (req, res) => {
+    const requestedProvider =
+      getProvider(
         req.body || {}
       );
 
-    if (
-      result?.ok
-    ) {
-      res.setHeader(
-        "x-masvilag-ai-provider",
-        result.provider ||
-        provider
-      );
-
-      return res.json(
-        result.payload
-      );
-    }
-
-    if (
-      result?.unavailable
-    ) {
-      continue;
-    }
-
-    last =
-      result;
-
-    /*
-     * Only fail over for transient/upstream/model availability problems.
-     */
-    if (
-      !retryableProviderStatus(
-        result?.status
-      ) &&
-      ![
-        400,
-        404,
-      ].includes(
-        Number(
-          result?.status
+    const configuredFallbacks =
+      [
+        "anthropic",
+        "openai",
+        "gemini",
+      ]
+        .filter(
+          (p) =>
+            p !==
+            requestedProvider
         )
-      )
+        .filter(
+          (p) =>
+            p === "anthropic"
+              ? ANTHROPIC_API_KEY
+              : p === "openai"
+                ? OPENAI_API_KEY
+                : GEMINI_API_KEY
+        );
+
+    const providers = [
+      requestedProvider,
+      ...configuredFallbacks,
+    ];
+
+    let last = null;
+
+    for (
+      const provider of
+      providers
     ) {
-      break;
-    }
-  } catch (err) {
-    last = {
-      status:
-        err?.name ===
-        "AbortError"
-          ? 504
-          : 502,
-      payload: {
-        error: {
-          message:
+      try {
+        const result =
+          await callMessageProvider(
+            provider,
+            req.body || {}
+          );
+
+        if (
+          result?.ok
+        ) {
+          res.setHeader(
+            "x-masvilag-ai-provider",
+            result.provider ||
+            provider
+          );
+
+          return res.json(
+            result.payload
+          );
+        }
+
+        if (
+          result?.unavailable
+        ) {
+          continue;
+        }
+
+        last =
+          result;
+
+        /*
+         * Only fail over for transient/upstream/model availability problems.
+         */
+        if (
+          !retryableProviderStatus(
+            result?.status
+          ) &&
+          ![
+            400,
+            404,
+          ].includes(
+            Number(
+              result?.status
+            )
+          )
+        ) {
+          break;
+        }
+      } catch (err) {
+        last = {
+          status:
             err?.name ===
             "AbortError"
-              ? `${provider} timed out.`
-              : (
-                  err?.message ||
-                  `${provider} proxy error`
-                ),
-        },
-      },
-      provider,
-    };
-  }
-}
-
-const upstreamStatus =
-  Number(
-    last?.status
-  ) || 503;
-
-const status =
-  upstreamStatus === 404
-    ? 502
-    : upstreamStatus;
-
-if (
-  last?.retryAfter
-) {
-  res.setHeader(
-    "retry-after",
-    last.retryAfter
-  );
-}
-
-res.setHeader(
-  "x-masvilag-ai-provider",
-  last?.provider ||
-  requestedProvider
-);
-
-res.setHeader(
-  "x-masvilag-ai-upstream-status",
-  String(
-    upstreamStatus
-  )
-);
-
-console.error(
-  "AI message providers exhausted:",
-  requestedProvider,
-  `upstream=${upstreamStatus}`,
-  proxyErrorMessage(
-    last?.payload,
-    "No provider returned a usable response."
-  )
-);
-
-return res
-  .status(status)
-  .json(
-    last?.payload || {
-      error: {
-        message:
-          "No configured AI provider returned a usable response.",
-      },
+              ? 504
+              : 502,
+          payload: {
+            error: {
+              message:
+                err?.name ===
+                "AbortError"
+                  ? `${provider} timed out.`
+                  : (
+                      err?.message ||
+                      `${provider} proxy error`
+                    ),
+            },
+          },
+          provider,
+        };
+      }
     }
-  );
 
-}
+    const upstreamStatus =
+      Number(
+        last?.status
+      ) || 503;
+
+    const status =
+      upstreamStatus === 404
+        ? 502
+        : upstreamStatus;
+
+    if (
+      last?.retryAfter
+    ) {
+      res.setHeader(
+        "retry-after",
+        last.retryAfter
+      );
+    }
+
+    res.setHeader(
+      "x-masvilag-ai-provider",
+      last?.provider ||
+      requestedProvider
+    );
+
+    res.setHeader(
+      "x-masvilag-ai-upstream-status",
+      String(
+        upstreamStatus
+      )
+    );
+
+    console.error(
+      "AI message providers exhausted:",
+      requestedProvider,
+      `upstream=${upstreamStatus}`,
+      proxyErrorMessage(
+        last?.payload,
+        "No provider returned a usable response."
+      )
+    );
+
+    return res
+      .status(status)
+      .json(
+        last?.payload || {
+          error: {
+            message:
+              "No configured AI provider returned a usable response.",
+          },
+        }
+      );
+  }
 );
 
 // Serve the built React/Vite app in production.
 // v31: never let an old frontend bundle survive a deploy in browser/proxy cache.
 app.use(
-(req, res, next) => {
-if (
-req.method ===
-"GET"
-) {
-res.setHeader(
-"Cache-Control",
-"no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
-);
+  (req, res, next) => {
+    if (
+      req.method ===
+      "GET"
+    ) {
+      res.setHeader(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+      );
 
-  res.setHeader(
-    "Pragma",
-    "no-cache"
-  );
+      res.setHeader(
+        "Pragma",
+        "no-cache"
+      );
 
-  res.setHeader(
-    "Expires",
-    "0"
-  );
+      res.setHeader(
+        "Expires",
+        "0"
+      );
 
-  res.setHeader(
-    "Surrogate-Control",
-    "no-store"
-  );
-}
+      res.setHeader(
+        "Surrogate-Control",
+        "no-store"
+      );
+    }
 
-next();
-
-}
-);
-
-app.use(
-express.static(
-"dist",
-{
-etag: false,
-maxAge: 0,
-setHeaders(res) {
-res.setHeader(
-"Cache-Control",
-"no-store, no-cache, must-revalidate, max-age=0"
-);
-},
-}
-)
+    next();
+  }
 );
 
 app.use(
-(req, res, next) => {
-if (
-req.method ===
-"GET" &&
-!req.path.startsWith(
-"/ai/"
-)
-) {
-return res.sendFile(
-"index.html",
-{
-root:
-"dist",
-}
+  express.static(
+    "dist",
+    {
+      etag: false,
+      maxAge: 0,
+      setHeaders(res) {
+        res.setHeader(
+          "Cache-Control",
+          "no-store, no-cache, must-revalidate, max-age=0"
+        );
+      },
+    }
+  )
 );
-}
 
-next();
+app.use(
+  (req, res, next) => {
+    if (
+      req.method ===
+        "GET" &&
+      !req.path.startsWith(
+        "/ai/"
+      )
+    ) {
+      return res.sendFile(
+        "index.html",
+        {
+          root:
+            "dist",
+        }
+      );
+    }
 
-}
+    next();
+  }
 );
 
 app.listen(
-PORT,
-() =>
-console.log(
-App + AI proxy listening on port ${PORT}
-)
+  PORT,
+  () =>
+    console.log(
+      `App + AI proxy listening on port ${PORT}`
+    )
 );
