@@ -27885,6 +27885,8 @@ ${characterAgentRuntimeCard(
 
 ${commentTargetRelationshipMatrix(w, cast, post)}
 
+${relationshipCommentAttentionCard(w, cast, post.authorId)}
+
 ${strictSocialActorCapsules(w, cast, post)}
 
 KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
@@ -28197,12 +28199,49 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
     ? [...topLevelAiCommenterIds(probe, probePost)].filter((id) => !beforeActors.has(id))
     : [];
 
-  if (acceptedActors.length >= minWanted) return baseOut;
+  const relationshipPriorityActors =
+    fairCommentCast(
+      w,
+      post.authorId,
+      post
+    )
+      .filter(
+        (c) =>
+          c &&
+          !beforeActors.has(c.id) &&
+          relationshipSocialGravityProfile(
+            w,
+            c.id,
+            post.authorId
+          ).mustCommentFreshPost
+      )
+      .map(
+        (c) => c.id
+      );
 
-  /* If the requested visible minimum was not met, repair it. A social feed with zero/one
-   * AI reactions looks dead, so coverage is more important than saving one provider call. */
+  const missingRelationshipPriority =
+    relationshipPriorityActors.filter(
+      (id) =>
+        !acceptedActors.includes(id)
+    );
 
-  const missing = minWanted - acceptedActors.length;
+  if (
+    acceptedActors.length >= minWanted &&
+    !missingRelationshipPriority.length
+  ) {
+    return baseOut;
+  }
+
+  /* If density OR a very-high relationship-attention character was missed,
+   * repair that exact social absence. */
+
+  const missing = Math.max(
+    Math.max(
+      0,
+      minWanted - acceptedActors.length
+    ),
+    missingRelationshipPriority.length
+  );
   const rawActors = new Set(
     safeAiComments(baseOut)
       .map((row) => aiVoice(w, row && (row.id !== undefined ? row.id : row.name)))
@@ -28210,9 +28249,46 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
   );
   const unavailable = new Set([...beforeActors, ...acceptedActors, ...rawActors]);
 
-  const candidates = fairCommentCast(w, post.authorId, post)
-    .filter((c) => c && !unavailable.has(c.id) && c.id !== post.authorId)
-    .slice(0, Math.max(missing, Math.min(missing + 3, 8)));
+  const priorityCandidateRows =
+    missingRelationshipPriority
+      .map(
+        (id) =>
+          charById(
+            w,
+            id
+          )
+      )
+      .filter(Boolean);
+
+  const candidates = [
+    ...priorityCandidateRows,
+    ...fairCommentCast(
+      w,
+      post.authorId,
+      post
+    ),
+  ]
+    .filter(
+      (c, index, arr) =>
+        c &&
+        !unavailable.has(c.id) &&
+        c.id !== post.authorId &&
+        arr.findIndex(
+          (other) =>
+            other &&
+            other.id === c.id
+        ) === index
+    )
+    .slice(
+      0,
+      Math.max(
+        missing,
+        Math.min(
+          missing + 3,
+          8
+        )
+      )
+    );
 
   if (!candidates.length) return baseOut;
 
@@ -28249,6 +28325,8 @@ ${relationshipBehaviorCard(w, c.id, post.authorId)}`).join("\n")}
 ${strictSocialActorCapsules(w, candidates, post)}
 
 HARD RULES:
+- VERY HIGH RELATIONSHIP ATTENTION IDs THAT WERE MISSED: ${missingRelationshipPriority.join(", ") || "none"}.
+- If one of those IDs is in ELIGIBLE CHARACTERS, include that character's top-level comment in this repair unless the exact post makes a public reaction genuinely impossible for their established character. Hidden obsession is NOT a reason to disappear; it is a reason to keep the wording deniable.
 - Return ${Math.min(missing, candidates.length)} DIFFERENT character IDs if possible.
 - One fresh TOP-LEVEL comment per character. reply_to MUST be empty.
 - Likes do not count.
@@ -29505,6 +29583,486 @@ recordSocialEvent(
   /* Raw AI "events" are not a second reality. Concrete social objects above are the source of truth. */
   return createdVisible;
 }
+function relationshipSocialGravityProfile(
+  w,
+  actorId,
+  targetId
+) {
+  if (
+    !w ||
+    !actorId ||
+    !targetId ||
+    actorId === targetId
+  ) {
+    return {
+      level: 0,
+      mode: "none",
+      commentPriority: 0,
+      repeatPenaltyScale: 1,
+      postPriority: 0,
+      mustCommentFreshPost: false,
+      hidden: false,
+    };
+  }
+
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (!actor || !target) {
+    return {
+      level: 0,
+      mode: "none",
+      commentPriority: 0,
+      repeatPenaltyScale: 1,
+      postPriority: 0,
+      mustCommentFreshPost: false,
+      hidden: false,
+    };
+  }
+
+  const rel =
+    effectiveRelationshipForBehavior(
+      w,
+      actorId,
+      targetId
+    ) || {};
+
+  const bond =
+    String(
+      rel.bond ||
+      rel.type ||
+      ""
+    ).toLowerCase();
+
+  const hiddenText =
+    String(
+      rel.hidden ||
+      ""
+    ).toLowerCase();
+
+  const obsession =
+    relationshipObsessionLevel(
+      w,
+      actorId,
+      targetId
+    );
+
+  const crush =
+    relationshipCrushActive(
+      w,
+      actorId,
+      targetId,
+      rel
+    );
+
+  const mutualFriend =
+    areMutualFriends(
+      w,
+      actorId,
+      targetId
+    );
+
+  const enemyOrRival =
+    hasEnemyOrRivalBond(
+      rel
+    );
+
+  const tier =
+    relationshipFilterTier(
+      rel
+    );
+
+  const hidden =
+    /secret|hidden|would never admit|wouldn['’]?t admit|won['’]?t admit|titkos|rejtett|nem vallan[aá] be/.test(
+      hiddenText
+    );
+
+  if (obsession >= 3) {
+    return {
+      level: 5,
+      mode: "obsession",
+      commentPriority: 260,
+      repeatPenaltyScale: 0.18,
+      postPriority: 150,
+      mustCommentFreshPost: true,
+      hidden,
+    };
+  }
+
+  if (obsession === 2) {
+    return {
+      level: 4,
+      mode: "possessive",
+      commentPriority: 180,
+      repeatPenaltyScale: 0.35,
+      postPriority: 105,
+      mustCommentFreshPost: false,
+      hidden,
+    };
+  }
+
+  if (crush) {
+    return {
+      level: 4,
+      mode: "crush",
+      commentPriority: 150,
+      repeatPenaltyScale: 0.42,
+      postPriority: 90,
+      mustCommentFreshPost: false,
+      hidden:
+        hidden ||
+        relationshipSecretCrushActive(
+          w,
+          actorId,
+          targetId,
+          rel
+        ),
+    };
+  }
+
+  if (
+    mutualFriend ||
+    tier === "close"
+  ) {
+    return {
+      level: 3,
+      mode: "close",
+      commentPriority: 105,
+      repeatPenaltyScale: 0.58,
+      postPriority: 64,
+      mustCommentFreshPost: false,
+      hidden: false,
+    };
+  }
+
+  if (enemyOrRival) {
+    return {
+      level: 3,
+      mode: "rival",
+      commentPriority: 82,
+      repeatPenaltyScale: 0.72,
+      postPriority: 58,
+      mustCommentFreshPost: false,
+      hidden: false,
+    };
+  }
+
+  if (tier === "good") {
+    return {
+      level: 2,
+      mode: "friend",
+      commentPriority: 58,
+      repeatPenaltyScale: 0.82,
+      postPriority: 36,
+      mustCommentFreshPost: false,
+      hidden: false,
+    };
+  }
+
+  return {
+    level: 0,
+    mode: "none",
+    commentPriority: 0,
+    repeatPenaltyScale: 1,
+    postPriority: 0,
+    mustCommentFreshPost: false,
+    hidden: false,
+  };
+}
+
+function recentRelationshipPostMentions(
+  w,
+  actorId,
+  targetId,
+  limit = 3
+) {
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (!target) return 0;
+
+  const aliases =
+    characterIdentityAliases(
+      target,
+      {
+        includeFirst: true,
+        includeSurname: true,
+        strongOnly: false,
+      }
+    )
+      .map((x) =>
+        String(x || "")
+          .toLowerCase()
+          .trim()
+      )
+      .filter((x) => x.length >= 3);
+
+  return (w.posts || [])
+    .filter(
+      (post) =>
+        post &&
+        post.authorId === actorId
+    )
+    .slice(0, Math.max(1, limit))
+    .filter((post) => {
+      if (
+        Array.isArray(post.imageCharacterIds) &&
+        post.imageCharacterIds.includes(
+          targetId
+        )
+      ) {
+        return true;
+      }
+
+      const body =
+        String(
+          post.text || ""
+        ).toLowerCase();
+
+      return aliases.some(
+        (alias) =>
+          body.includes(
+            alias
+          )
+      );
+    })
+    .length;
+}
+
+function relationshipAutonomySpotlightRows(
+  w,
+  actorId,
+  limit = 4
+) {
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  if (!actor) return [];
+
+  return (w.chars || [])
+    .filter(
+      (target) =>
+        target &&
+        target.id &&
+        target.id !== actorId &&
+        !isMediaAccount(
+          w,
+          target.id
+        )
+    )
+    .map((target) => {
+      const gravity =
+        relationshipSocialGravityProfile(
+          w,
+          actorId,
+          target.id
+        );
+
+      if (
+        !gravity.level ||
+        !gravity.postPriority
+      ) {
+        return null;
+      }
+
+      const rel =
+        effectiveRelationshipForBehavior(
+          w,
+          actorId,
+          target.id
+        ) || {};
+
+      const recentMentions =
+        recentRelationshipPostMentions(
+          w,
+          actorId,
+          target.id,
+          gravity.mode === "obsession"
+            ? 3
+            : 5
+        );
+
+      const due =
+        gravity.mode === "obsession"
+          ? recentMentions === 0
+          : false;
+
+      return {
+        target,
+        gravity,
+        rel,
+        recentMentions,
+        due,
+        weight:
+          gravity.postPriority +
+          (due ? 80 : 0),
+      };
+    })
+    .filter(Boolean)
+    .sort(
+      (a, b) =>
+        b.weight - a.weight
+    )
+    .slice(
+      0,
+      Math.max(
+        1,
+        limit
+      )
+    );
+}
+
+function relationshipAutonomySpotlightCard(
+  w,
+  actorId
+) {
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const rows =
+    relationshipAutonomySpotlightRows(
+      w,
+      actorId,
+      4
+    );
+
+  if (
+    !actor ||
+    !rows.length
+  ) {
+    return "";
+  }
+
+  const lines =
+    rows.map((row) => {
+      const rel =
+        row.rel || {};
+
+      const bond =
+        String(
+          rel.bond ||
+          rel.type ||
+          ""
+        ).trim();
+
+      const hidden =
+        String(
+          rel.hidden ||
+          ""
+        ).trim();
+
+      const mood =
+        String(
+          rel.mood ||
+          ""
+        ).trim();
+
+      return [
+        `${row.target.name} [${row.target.id}]`,
+        `mode=${row.gravity.mode}`,
+        `socialGravity=${row.gravity.level}/5`,
+        bond ? `bond=${bond}` : "",
+        mood ? `currentFeeling=${cut(mood, 120)}` : "",
+        hidden ? `privateFeeling=${cut(hidden, 120)}` : "",
+        `recentOwnPostMentions=${row.recentMentions}`,
+        row.due ? "RECURRENT_FOCUS_DUE=YES" : "",
+      ]
+        .filter(Boolean)
+        .join(" | ");
+    });
+
+  return `
+RELATIONSHIP-DRIVEN SOCIAL GRAVITY — ${actor.name}'S OWN DIRECTED RELATIONSHIPS:
+${lines.join("\n")}
+
+BEHAVIOR RULE:
+- Relationships are ACTIVE social behavior, not passive labels.
+- OBSESSION = this person naturally occupies much more of SELF's attention. SELF should notice their posts, react to them unusually often, track their visible social activity, and let them recur in SELF's own feed more than a normal person would.
+- If RECURRENT_FOCUS_DUE=YES and there is no stronger current event/topic, the next text post should naturally connect to that person: direct mention, subtweet, complaint, praise, possessive thought, inside reference, callout, question, shared-life reference or another form that fits SELF.
+- Hidden obsession/crush must affect FREQUENCY and attention without forcing a public confession. It may leak through indirect posts, over-attention, quick comments, coded references, irritation, protectiveness or deniable subtweets.
+- Close friends should appear naturally in each other's online lives: comments, support, jokes, shared plans and occasional posts about/with each other.
+- Rivals/enemies should notice each other more than strangers, but engagement must stay conflict-/competition-shaped rather than friendly.
+- Do NOT make every post about the same relationship. Strong social gravity means recurring presence across the feed, not mechanical repetition.
+- Every concrete post/comment must still be fresh and character-specific.
+`;
+}
+
+function relationshipCommentAttentionCard(
+  w,
+  cast,
+  targetId
+) {
+  const rows =
+    (cast || [])
+      .map((actor) => {
+        if (
+          !actor ||
+          !actor.id ||
+          actor.id === targetId
+        ) {
+          return null;
+        }
+
+        const gravity =
+          relationshipSocialGravityProfile(
+            w,
+            actor.id,
+            targetId
+          );
+
+        if (!gravity.level) {
+          return null;
+        }
+
+        return {
+          actor,
+          gravity,
+        };
+      })
+      .filter(Boolean)
+      .sort(
+        (a, b) =>
+          b.gravity.commentPriority -
+          a.gravity.commentPriority
+      );
+
+  if (!rows.length) {
+    return "";
+  }
+
+  return `
+RELATIONSHIP ATTENTION PRIORITY FOR THIS POST:
+${rows.map(({ actor, gravity }) =>
+  `- ${actor.name} [${actor.id}]: ${gravity.mode}, socialGravity=${gravity.level}/5${gravity.mustCommentFreshPost ? ", FRESH-POST COMMENT PRIORITY=VERY HIGH" : ""}${gravity.hidden ? ", PUBLIC EXPRESSION MUST STAY DENIABLE/CHARACTER-FAITHFUL" : ""}`
+).join("\n")}
+
+HARD SOCIAL BEHAVIOR:
+- These are frequency/attention weights, not instructions to repeat the relationship label in the comment.
+- An OBSESSED character should usually be visibly present on this person's fresh posts. COMMENT is preferred over silently ignoring them; if the feeling is hidden, the comment can look normal, coded, over-attentive, teasing, sharp or otherwise deniable instead of confessing.
+- Crushes/close friends should appear more often than neutral characters.
+- Rivals/enemies may engage unusually often when the actual post gives them something to challenge, mock or compete over.
+- Repeated PRESENCE is allowed and expected for high social gravity; repeated WORDING is not.
+`;
+}
+
 function socialInteractionInterest(
   w,
   actorId,
@@ -29626,6 +30184,20 @@ function socialInteractionInterest(
       obsessionLevel * 30;
   }
 
+  /*
+   * Existing relationship state should change HOW MUCH social attention this
+   * exact person receives, not only the tone once they happen to be selected.
+   */
+  const gravity =
+    relationshipSocialGravityProfile(
+      w,
+      actorId,
+      targetId
+    );
+
+  interest +=
+    gravity.commentPriority;
+
   return interest;
 }
 
@@ -29698,6 +30270,12 @@ function fairCommentCast(w, targetId, post = null) {
           targetId,
           post
         );
+      const relationshipGravity =
+        relationshipSocialGravityProfile(
+          w,
+          c.id,
+          targetId
+        );
       const following =
         isFollowing(
           w,
@@ -29722,7 +30300,8 @@ function fairCommentCast(w, targetId, post = null) {
         Boolean(bond) ||
         storyLinked ||
         interest >= 14 ||
-        visualPriority >= 20;
+        visualPriority >= 20 ||
+        relationshipGravity.level >= 2;
 
       const activity = characterOnlineActivityProfile(w, c).comment;
 
@@ -29745,7 +30324,9 @@ function fairCommentCast(w, targetId, post = null) {
               : discovered
                 ? 4
                 : 0
-        ) + visualPriority;
+        ) +
+        visualPriority +
+        relationshipGravity.commentPriority;
 
       return {
         c,
@@ -29758,6 +30339,7 @@ function fairCommentCast(w, targetId, post = null) {
         visibilityBonus,
         activity,
         visualPriority,
+        relationshipGravity,
         tie: Math.random(),
       };
     });
@@ -29769,13 +30351,29 @@ function fairCommentCast(w, targetId, post = null) {
      * pays a larger recent-activity penalty and therefore appears less often.
      */
     const ap =
-      a.recentComments * (20 / Math.max(0.35, a.activity)) -
+      a.recentComments *
+        (20 / Math.max(0.35, a.activity)) *
+        Math.max(
+          0.12,
+          Number(
+            a.relationshipGravity &&
+            a.relationshipGravity.repeatPenaltyScale
+          ) || 1
+        ) -
       a.interest -
       a.visibilityBonus -
       (a.activity - 1) * 24;
 
     const bp =
-      b.recentComments * (20 / Math.max(0.35, b.activity)) -
+      b.recentComments *
+        (20 / Math.max(0.35, b.activity)) *
+        Math.max(
+          0.12,
+          Number(
+            b.relationshipGravity &&
+            b.relationshipGravity.repeatPenaltyScale
+          ) || 1
+        ) -
       b.interest -
       b.visibilityBonus -
       (b.activity - 1) * 24;
@@ -29833,7 +30431,44 @@ function fairCommentCast(w, targetId, post = null) {
     ? freshVoices.concat(pool.filter((row) => alreadyTopLevel.has(row.c.id)))
     : pool;
 
-  return orderedPool
+  /*
+   * VERY HIGH relationship gravity (e.g. obsession) is intentionally allowed
+   * to recur across this person's different posts. It should not be crowded
+   * out by generic fairness rotation.
+   */
+  const mustSeeRows =
+    chars
+      .filter(
+        (row) =>
+          row.eligible &&
+          row.relationshipGravity &&
+          row.relationshipGravity.mustCommentFreshPost &&
+          !alreadyTopLevel.has(
+            row.c.id
+          )
+      )
+      .sort(
+        (a, b) =>
+          b.relationshipGravity.commentPriority -
+          a.relationshipGravity.commentPriority
+      );
+
+  const finalRows = [
+    ...mustSeeRows,
+    ...orderedPool,
+  ].filter(
+    (row, index, arr) =>
+      row &&
+      row.c &&
+      arr.findIndex(
+        (other) =>
+          other &&
+          other.c &&
+          other.c.id === row.c.id
+      ) === index
+  );
+
+  return finalRows
     .map((x) => x.c)
     .slice(0, castLimit);
 }
@@ -30972,6 +31607,8 @@ ${fullSelfCharacterSheetForSocial(w, actor)}
 OWN MEMORY:
 ${characterMemoryCard(w, actor)}
 
+${relationshipAutonomySpotlightCard(w, actor.id)}
+
 HARD SELF BOUNDARY:
 - SELF may use EVERY field from ${actor.name}'s complete sheet above.
 - Other characters are NOT transparent character sheets. About them use only public/basic profile facts, SELF's own directed Relations/Connections toward them, and genuinely learned in-world facts.
@@ -31081,6 +31718,7 @@ ${
 - A harci tudás és veszélyesség itt is számít: ne írj irreális eredményt csak a dráma kedvéért.
 - A kifejezetten pszichopatikus/szadista/manipulatív/könyörtelen karakterek sötét oldala az autonóm világban is aktív maradjon; ne csak akkor jelenjen meg, amikor a játékos közvetlenül beszél velük.
 - A kifejezetten féltékeny/possessive/obsessed karakter társas radarja legyen érzékenyebb: ha valós trigger van a világban, ne reagáljon úgy, mint egy átlagosan nyugodt karakter. A reakció legyen erős, de a saját stílusában és a tényleges információhatárokon belül.
+- AZ ERŐS KAPCSOLATOK A GYAKORISÁGOT IS MÓDOSÍTJÁK: obsession/crush/close friendship/rivalry ne csak a hangnemben létezzen. Az ilyen karakterek természetesen gyakrabban kommentelnek egymásnak, figyelik egymás publikus történéseit, említik egymást, subtweetelnek/calloutolnak, közös dolgokról posztolnak vagy reagálnak egymás életére. Obsession esetén ez különösen erős visszatérő fókusz, de nem jelent mechanikusan minden posztban ugyanazt a személyt vagy nyílt vallomást.
 - A karakterek ne csak reagáljanak: kezdeményezzenek terveket, találkozókat, bulikat, vitákat, békülést, pletykát, kihívást, edzést, közös programot vagy konfliktust, ha a személyiségük/céljuk ezt indokolja.
 - Az érzelmekből legyen következő lépés: aki dühös lehet, hogy számon kér; aki féltékeny lehet, hogy ráír vagy megjelenik egy társas helyzetben; aki fél, kerülhet; aki lelkes, szervezhet valamit. Ne maradjon minden érzés puszta mood-szöveg.
 - Ne hozz létre eseményt csak azért, hogy történjen valami.
@@ -31299,7 +31937,26 @@ function deterministicAutonomousFallbackPost(w, authorId) {
     .slice(0, 10)
     .map((p) => String(p.text || "").toLowerCase());
 
+  const relationshipFocus =
+    relationshipAutonomySpotlightRows(
+      w,
+      author.id,
+      1
+    )[0] || null;
+
+  const relationshipFallback =
+    relationshipFocus &&
+    relationshipFocus.gravity.mode === "obsession" &&
+    relationshipFocus.due
+      ? (
+          relationshipFocus.gravity.hidden
+            ? "someone is getting ridiculously hard to ignore."
+            : `${String(relationshipFocus.target.nick || relationshipFocus.target.nickname || relationshipFocus.target.name || "someone").split(" ")[0]} is becoming a full-time distraction.`
+        )
+      : "";
+
   const candidates = [
+    relationshipFallback,
     job ? "work has been a lot lately." : "still alive. somehow.",
     dojo ? "training done. my arms disagree." : "today has been unnecessarily long.",
     goals ? `still working on what I actually want.` : "my schedule is getting ridiculous.",
@@ -31373,6 +32030,8 @@ AUTHORSHIP / SELF-CANON LOCK:
 
 TE MOST ${String(author.name || "").toUpperCase()} VAGY, ÉS SAJÁT MAGADTÓL POSZTOLSZ.
 
+${relationshipAutonomySpotlightCard(w, author.id)}
+
 AKTUÁLIS SAJÁT ÁLLAPOTOD:
 - mood: ${selfState.mood || "-"}
 - intent: ${selfState.intent || "-"}
@@ -31405,6 +32064,7 @@ ${albumList(author) || "nincs használható albumkép"}
 - OWNERSHIP HARD RULE: amit ${author.name} "én / my / our" formában állít magáról, annak ${author.name} saját lapján kell igaznak lennie. Más karakter foglalkozását, dojóját, rangját, senseijét, családját, crushát vagy történetét ne vedd át.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
 - Ha a karakternek kölcsönös baráti kapcsolatai vannak, ezek legyenek aktív részei a social életének: természetesen posztolhat közös programról, megemlítheti vagy barátilag ugrasshatja a barátját, reagálhat annak életére, megvédheti, megkérdezheti, merre van, vagy szervezhet vele valamit. Ne kezeld a barátokat véletlenszerű idegenként.
+- A nagyon erős egyirányú kapcsolat is legyen LÁTHATÓ a social viselkedés gyakoriságában. Ha ${author.name} valakivel megszállott/crush/erősen possessive viszonyban van, az illető feltűnően gyakrabban kerüljön a figyelmébe és időnként a saját posztjaiba is, a relationship spotlight szerint. Ez nem kötelező vallomás: titkolt érzésnél lehet indirect/subtweet/callout/kódolt utalás vagy feltűnően sok figyelem. Ne legyen viszont minden egyes poszt ugyanarról az emberről.
 - SAJÁT BESOROLÁSOD: ${characterFactionIdentityCard(author) || "nincs biztosan azonosított frakció/dojo"}. Ezt tekintsd saját oldaladnak; a riválisok említése a karakterlapodon nem változtatja meg a saját besorolásodat.
 - Ha rivális dojo/frakció vagy konkrét negatív relationship-célpont kerül a posztba, a caption hangja ezt tükrözze. Ne dicsérd/hype-old őket haverként, kivéve ha a köztetek lévő explicit személyes kapcsolat ezt tényleg felülírja.
 - Ne legyen rendszer-poszt vagy mesterséges filler.
