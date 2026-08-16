@@ -11510,6 +11510,13 @@ function cleanGeneratedComment(w, id, text, maxLen = 240) {
       t
     );
 
+  t =
+    applySocialOwnedSpeechStyle(
+      w,
+      id,
+      t
+    );
+
   /* Dedicated feed history first, then the universal cross-surface guard. */
   if (isRepetitiveComment(w, id, t)) return "";
   if (isRepetitiveUtterance(w, id, t)) return "";
@@ -13477,15 +13484,17 @@ function publicBasicCharacterProfileForAgent(w, c) {
   if (!c) return null;
 
   /*
-   * WHAT ANOTHER CHARACTER MAY GET DIRECTLY FROM THE CHARACTER SHEET.
+   * WHAT ANOTHER CHARACTER MAY KNOW AS REFERENCE FACTS.
    *
-   * Deliberately excluded:
-   * personality, traits, speech, voice examples, goals, fears, likes,
-   * secrets, backstory, extra, connections, skills/abilities/combat, brief,
-   * album and all other private/internal sheet fields.
+   * These fields are KNOWLEDGE ABOUT THE OTHER PERSON, never a style/personality
+   * source for SELF.
    *
-   * A character may still know more through ACTUAL memories/interactions,
-   * but those facts must come from memory/event state, not direct sheet access.
+   * Allowed factual/reference knowledge includes identity, appearance, public
+   * bio, occupation/role/dojo, history/backstory and "extra / other info".
+   *
+   * Deliberately excluded from direct cross-character access:
+   * personality, traits, speech style, voice examples, goals, fears, likes,
+   * secrets, private Connections, brief, album and internal behavior fields.
    */
   return {
     id: String(c.id || ""),
@@ -13505,9 +13514,128 @@ function publicBasicCharacterProfileForAgent(w, c) {
     affiliation: String(c.affiliation || ""),
     bio: String(c.bio || ""),
     appearance: String(c.looks || ""),
+    history: String(c.backstory || ""),
+    otherInformation: String(c.extra || ""),
     primaryDojo: karateFactionDisplayName(factionFlags(c)),
     classification: characterFactionIdentityCard(c) || "",
   };
+}
+
+function socialSpeechStyleRequiresAllCaps(c) {
+  if (!c) return false;
+
+  const explicit =
+    `${String(c.speech || "")} ${String(c.voice || "")}`
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (
+    /(?:caps\s*lock|capslock|all\s*caps|write(?:s|ing)?\s+in\s+caps|type(?:s|ing)?\s+in\s+caps|always\s+uppercase|uppercase\s+(?:writing|text|messages?)|csupa\s+nagybet[uű]|nagybet[uű]kkel\s+[ií]r|mindig\s+nagybet[uű]|csak\s+nagybet[uű])/i.test(
+      explicit
+    )
+  ) {
+    return true;
+  }
+
+  /*
+   * If the own VOICE examples themselves are overwhelmingly uppercase, treat
+   * that as an explicit style signal too.
+   */
+  const voice =
+    String(
+      c.voice || ""
+    );
+
+  const letters =
+    [...voice]
+      .filter(
+        (ch) =>
+          /\p{L}/u.test(ch)
+      );
+
+  if (letters.length < 20) {
+    return false;
+  }
+
+  const upper =
+    letters.filter(
+      (ch) =>
+        ch === ch.toLocaleUpperCase() &&
+        ch !== ch.toLocaleLowerCase()
+    ).length;
+
+  const lower =
+    letters.filter(
+      (ch) =>
+        ch === ch.toLocaleLowerCase() &&
+        ch !== ch.toLocaleUpperCase()
+    ).length;
+
+  return (
+    upper / letters.length >= 0.82 &&
+    lower / letters.length <= 0.12
+  );
+}
+
+function socialSelfStyleOwnershipCard(c) {
+  if (!c) return "";
+
+  const capsLock =
+    socialSpeechStyleRequiresAllCaps(
+      c
+    );
+
+  return `
+SELF STYLE OWNERSHIP — ABSOLUTE:
+- SELF's Personality, Traits, Speech Style and Voice/Example Sentences belong ONLY to SELF and are the ONLY character-sheet fields allowed to define SELF's manner of speaking, vocabulary, casing, punctuation, humor, emotional delivery and behavioral personality.
+- Facts about OTHER people — even their history, Extra/Other Information, occupation, appearance or bio — are reference KNOWLEDGE only. Never absorb those facts as SELF's personality, trauma, habits, speaking style, preferences, fears, temperament or identity.
+- Another character's Personality / Traits / Speech / Voice / Goals / Fears / Likes / Secrets are NEVER style input for SELF.
+- If another character is described as sarcastic, violent, shy, CAPS-LOCK, flirty, formal, etc., that description belongs to THEM. SELF does not become that way unless SELF's own sheet independently says so.
+- Before output, mentally ask: "Could this exact wording/style have come from another character's sheet?" If yes, rewrite it from SELF's own sheet.
+${capsLock
+  ? `- HARD CASING CANON: SELF's own Speech/Voice explicitly requires CAPS LOCK / ALL CAPS. SELF's social text MUST be written in uppercase. This is not optional and is enforced after generation too.`
+  : `- Do not invent CAPS LOCK or another character's casing habit unless SELF's own Speech/Voice establishes it.`}
+`;
+}
+
+function applySocialOwnedSpeechStyle(
+  w,
+  id,
+  value
+) {
+  const raw =
+    String(
+      value || ""
+    );
+
+  if (!raw) return "";
+
+  const c =
+    charById(
+      w,
+      id
+    );
+
+  if (
+    !c ||
+    !socialSpeechStyleRequiresAllCaps(
+      c
+    )
+  ) {
+    return raw;
+  }
+
+  const locale =
+    worldLanguage(
+      w,
+      w && w.meId
+    ) === "hu"
+      ? "hu-HU"
+      : "en-US";
+
+  return raw.toLocaleUpperCase(
+    locale
+  );
 }
 
 function compactSelfCanonForPrompt(c, maxChars = 6200) {
@@ -16639,7 +16767,8 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
       "Player controls only the player character; never invent the player's unspoken dialogue, actions or thoughts.",
       "Canon + relationship + memory + current context outrank generic drama or generic personality stereotypes.",
       "SELF CLASSIFICATION IS HARD CANON: self.primaryDojo / self.classification describe SELF's own side. Do not infer SELF's dojo from rival/enemy names mentioned inside Connections or backstory. A character mentioning Iron Dragons as rivals does NOT make that character Iron Dragons.",
-      "READ THE FULL SHEET, NOT JUST PERSONALITY: self.fullCanon.occupation, factionAndSide, history, abilities, motives, speech and private Connections all constrain behavior. Occupation/job, rank, dojo, organization and side are factual character canon and must affect what they know, do, post about and how they speak.",
+      "READ THE FULL SELF SHEET, NOT JUST PERSONALITY: self.fullCanon.occupation, factionAndSide, history, abilities, motives, speech and private Connections all constrain SELF behavior.",
+      "SELF STYLE OWNERSHIP IS ID-LOCKED: only THIS packet's self.fullCanon.behavior (personality, traits, speechStyle, voiceExamples) may define THIS actor's wording, casing, punctuation, humor, temperament and behavioral personality. Never borrow those properties from another actor packet or another character profile.",
       "PAIR CANON IS DIRECTED: exactPairCanon is SELF -> TARGET only. If it says Best friend, do not write hatred or enemy behavior because another unrelated rivalry exists. If it says Enemy/Rival, do not write generic buddy behavior. A single ordinary interaction may change mood/score a little, but it must not instantly rewrite a deeply established relationship.",
       ...(targetId
         ? [flirtIdentityInstruction(w, actorId, targetId)]
@@ -18409,7 +18538,11 @@ function sanitizePhoneDm(
         .trim();
   }
 
-  return text;
+  return applySocialOwnedSpeechStyle(
+    w,
+    botId,
+    text
+  );
 }
 
 
@@ -18823,8 +18956,8 @@ ${tt(
       )}
 ${agentPrivacyScope
         ? `${tt(
-            "MÁSIK KARAKTER PROFILJA — CSAK PUBLIKUS/ALAP ADATOK. A privát karakterlap nincs megosztva.",
-            "OTHER CHARACTER PROFILE — PUBLIC/BASIC DATA ONLY. Their private character sheet is not shared."
+            "MÁSIK KARAKTER REFERENCIA-PROFILJA — TÉNYEK RÓLA, NEM STÍLUSFORRÁS SELF SZÁMÁRA.",
+            "OTHER CHARACTER REFERENCE PROFILE — FACTS ABOUT THEM, NEVER A STYLE SOURCE FOR SELF."
           )}
 ${JSON.stringify(publicBasicCharacterProfileForAgent(w, w.player))}`
         : (
@@ -18873,7 +19006,7 @@ ${worldIdentityCanon(w)}
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
 ${cast.map((c) => (
   agentPrivacyScope
-    ? `${c.name} [${c.id}] — PUBLIC/BASIC PROFILE ONLY: ${JSON.stringify(publicBasicCharacterProfileForAgent(w, c))}`
+    ? `${c.name} [${c.id}] — REFERENCE FACTS ABOUT THIS OTHER PERSON; NEVER COPY THEIR STYLE/PERSONALITY INTO SELF: ${JSON.stringify(publicBasicCharacterProfileForAgent(w, c))}`
     : (
         socialScope
           ? `${c.name} [${c.id}] — ${characterFactionIdentityCard(c) || "classification unknown"}`
@@ -18927,9 +19060,11 @@ VÉGREHAJTÁSI ELSŐBBSÉG — HA KÉT SZABÁLY LÁTSZÓLAG ÜTKÖZIK:
 PÉLDA A FILTERRE: egy szarkasztikus karakter a legjobb barátjával lehet csípős, de a csípősség bizalmas/szeretetteljes marad; egy zárkózott karakter lehet nagyon lojális anélkül, hogy nyálas lenne; egy nyers karakter lehet őszinte anélkül, hogy ok nélkül megalázó lenne.
 
 KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
-- A rendszer-motor a promptban szereplő karakterek TELJES adatlapját látja. Ez azért van, hogy mindegyikük 100%-osan karakterhű legyen.
-- FONTOS TUDÁSHATÁR: attól, hogy TE mint engine látod minden karakter teljes adatlapját, az egyik SZEREPLŐ nem tudhat automatikusan a másik titkairól, félelmeiről, belső céljairól vagy rejtett múltjáról. Egy karakter csak azt használhatja tudásként másokról, amit nyilvánosan láthatott, személyesen megtudott, átélt, neki elmondtak, vagy saját emléke/feltételezése alátámaszt.
-- Saját magáról viszont minden karakter teljes adatlapja aktív kánon.
+- A rendszer-motor több karakter külön, lezárt SELF-adatlapját is láthatja ugyanabban a kérésben. EZ NEM KÖZÖS SZEMÉLYISÉGPOOL: minden Personality/Traits/Speech/Voice mező kizárólag annak az ID-nak a stílusát és viselkedését formálhatja, akihez tartozik.
+- CROSS-CHARACTER STYLE CONTAMINATION TILOS: A karakter soha ne vegye át B karakter szarkazmusát, CAPS LOCKját, szlengjét, félelmét, kedvencét, traumáját, agresszióját, formalitását vagy más személyiség-/beszédvonását csak azért, mert B lapja ugyanabban a promptban szerepel.
+- Másokról kapott név, becenév, születés/kor, foglalkozás, szerep/dojo, kinézet, bio, történet/backstory és Extra/Other Information TUDÁS RÓLUK. Ezekre reagálhat, hivatkozhat, emlékezhet — de SOHA nem alkalmazhatja őket saját magára.
+- FONTOS TUDÁSHATÁR: más karakter Personality/Traits/Speech/Voice/Goals/Fears/Likes/Secrets/private Connections mezője nem válik automatikusan más szereplő tudásává vagy stílusává.
+- Saját magáról viszont minden karakter teljes adatlapja aktív kánon, és a SAJÁT Speech/Voice formai szabályait ténylegesen követni kell.
 - A karakterlap TELJES tartalma viselkedési specifikáció, nem háttérdísz.
 - EMLÉK-GROUNDING HARD RULE: konkrét múltbeli epizódot csak akkor állíthatsz megtörténtnek, ha azt a saját karakterlap explicit leírja VAGY a tárolt, tényleges social/chat/RP előzmény bizonyítja. Kapcsolatcímkéből, hangulatból, crushból, best-friend státuszból vagy „közös múlt” általános tényéből ne gyárts új anekdotát. Ha nincs bizonyíték, maradj általános („régóta ismerlek”), vagy ne hivatkozz múltra.
 - KÁNON-KERESZTHIVATKOZÁS: ugyanaz a kapcsolat/rang/szerep több mezőben is szerepelhet. Ha a történet, extra infó, rang, szervezet, kapcsolat vagy más adatlapmező ugyanazt a tényt erősíti (pl. valaki a karakter SAJÁT senseie), azt erős kánonként kezeld, ne hagyd elveszni egyetlen mezőben.
@@ -28386,6 +28521,8 @@ DIRECT TARGET FOR THIS REACTION: ${nameOfIn(w, targetId)} [${targetId}]
 
 ${voiceCard(actor)}
 
+${socialSelfStyleOwnershipCard(actor)}
+
 ${commentGenerationStyleCard(w, actor)}
 
 FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
@@ -28402,8 +28539,10 @@ ${commentTargetMemoryCard(w, actor, targetId) || "-"}
 
 HARD CAPSULE BOUNDARY:
 - SELF may use EVERY field from SELF's full sheet above, including private personality, fears, favorites, secrets, history, Relations/Connections and speech canon.
-- About OTHER characters, use only their PUBLIC/BASIC PROFILE supplied by the app, the directed relationship state SELF has toward them, and facts SELF genuinely learned through visible events/memory.
-- NEVER read another character's private sheet fields as omniscient knowledge: no other person's personality, traits, fears, likes/favorites, secrets, goals, speech style, voice examples, backstory, Extra or private Connections unless SELF actually learned that fact in-world.
+- OTHER character reference profiles may supply factual knowledge such as identity, nickname, birth/age, occupation/role/dojo, appearance, bio, history/backstory and Extra/Other Information.
+- KNOWLEDGE IS NOT IDENTITY: those OTHER-person facts may be known, remembered or reacted to, but they NEVER redefine SELF's personality, speech, casing, humor, temperament, trauma, preferences or behavior.
+- NEVER use another person's Personality, Traits, Speech Style, Voice examples, Goals, Fears, Likes/Favorites, Secrets or private Connections as SELF's writing/behavior instructions.
+- SELF's wording and behavior must be traceable to SELF's own capsule only.
 - Do NOT copy any fact from this capsule into another actor's output.
 - ${actor.name}'s occupation/dojo/rank/mentor/crush/enemy/history belong to ${actor.name}, never to another commenter.
 - Other named people inside ${actor.name}'s full sheet are private/background context and are NOT automatically relevant to this post.
@@ -32234,6 +32373,8 @@ SELF side/dojo/organization: ${characterFactionIdentityCard(actor) || "unknown"}
 
 ${voiceCard(actor)}
 
+${socialSelfStyleOwnershipCard(actor)}
+
 FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
 ${fullSelfCharacterSheetForSocial(w, actor)}
 
@@ -32244,8 +32385,9 @@ ${relationshipAutonomySpotlightCard(w, actor.id)}
 
 HARD SELF BOUNDARY:
 - SELF may use EVERY field from ${actor.name}'s complete sheet above.
-- Other characters are NOT transparent character sheets. About them use only public/basic profile facts, SELF's own directed Relations/Connections toward them, and genuinely learned in-world facts.
-- Never import another character's personality, fears, favorites, secrets, goals, speech examples, backstory or private Connections into ${actor.name}'s knowledge just because that character exists in the database.
+- Other characters' reference profiles may be KNOWN FACTS: identity, nickname, birth/age, occupation/role/dojo, appearance, bio, history/backstory and Extra/Other Information.
+- Those OTHER-person facts are NEVER personality/style instructions for ${actor.name}. Knowledge about somebody is not permission to imitate them.
+- Never import another character's personality, traits, fears, favorites, secrets, goals, speech style, voice examples or private Connections into ${actor.name}'s behavior or writing voice.
 - "I / my / our" in ${actor.name}'s output must come from ${actor.name}'s own capsule.
 - Never borrow another capsule's occupation, dojo, rank, mentor, family, crush, enemy, trauma, history or goal.
 - A person appearing inside Connections/memory is NOT automatically the topic of a new post.
@@ -32650,6 +32792,8 @@ async function genFocusedWorldStep(w) {
 
 ${voiceCard(author)}
 
+${socialSelfStyleOwnershipCard(author)}
+
 FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
 ${fullSelfCharacterSheetForSocial(w, author)}
 
@@ -32727,7 +32871,17 @@ function applyWorldStep(n, out) {
     if (!author || !p.text) return;
     const authorChar = charById(n, author);
     if (!authorChar || !characterCanAutonomouslyPost(n, authorChar)) return;
-    const postText = cleanGeneratedUtterance(n, author, p.text, 700);
+    const postText =
+      applySocialOwnedSpeechStyle(
+        n,
+        author,
+        cleanGeneratedUtterance(
+          n,
+          author,
+          p.text,
+          700
+        )
+      );
     if (!postText) return;
     if (socialSelfClassificationContradiction(n, author, postText)) return;
 
@@ -32763,7 +32917,17 @@ function applyWorldStep(n, out) {
     safePostComments(p).forEach((c, idx) => {
       const cid = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!cid || !c.text) return;
-      const body = cleanGeneratedUtterance(n, cid, c.text, 240);
+      const body =
+        applySocialOwnedSpeechStyle(
+          n,
+          cid,
+          cleanGeneratedUtterance(
+            n,
+            cid,
+            c.text,
+            240
+          )
+        );
       if (!body) return;
       if (socialSelfClassificationContradiction(n, cid, body)) return;
 
@@ -42723,10 +42887,13 @@ TE MOST ${String(
 FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
 ${fullSelfCharacterSheetForSocial(w, bot)}
 
+${socialSelfStyleOwnershipCard(bot)}
+
 KNOWLEDGE BOUNDARY:
 - A SAJÁT teljes lapodat látod és használod: personality, Relations/Connections, history, goals, fears, likes, secrets, speech, occupation — mindent.
-- ${w.player.name} és más karakterek privát karakterlapját NEM látod. Róluk csak a PUBLIC/BASIC profiladatokat, a SAJÁT kapcsolatodat velük, a beszélgetéseiteket és azt tudod, amit ténylegesen megtudtál/láttál/hallottál a világban.
-- Más karakter personality/fears/likes/secrets/goals/speech/backstory/private Connections mezőjét ne használd omniscient háttértudásként.
+- ${w.player.name} és más karakterekről ismerheted a referencia-tényeket: név/becenév, születés/kor, foglalkozás/role/dojo, kinézet, bio, történet/backstory és Extra/Other Information, plusz amit ténylegesen megtudtál/láttál/hallottál a világban.
+- EZEK CSAK TUDÁSOK RÓLUK. Semmit ne vegyél át belőlük saját személyiségként, beszédstílusként, szokásként, traumaként vagy identitásként.
+- Más karakter Personality/Traits/Speech/Voice/Goals/Fears/Likes/Secrets/private Connections mezője SOHA nem írhatja felül vagy formálhatja a TE hangodat.
 
 Magadtól írsz privát üzenetet ${w.player.name} karakternek.
 NEM ő kezdeményezett. Neked kell valódi, karakterhű okod legyen arra, hogy most ráírj.
