@@ -5086,7 +5086,7 @@ function naturalCommentReplyTargets(w, post, comment) {
     candidates.push({ id, reason, base });
   };
 
-  mentionedIdsInText(w, comment.text, comment.authorId).forEach((id) => push(id, "mention", 82));
+  explicitNamedCharacterIdsInText(w, comment.text, comment.authorId).forEach((id) => push(id, "mention", 86));
   const parent = comment.parent ? comments.find((c) => c && c.id === comment.parent) : null;
   if (parent && parent.authorId) push(parent.authorId, "parent", 74);
   if (!comment.parent && post.authorId) push(post.authorId, "post-author", 70);
@@ -7837,10 +7837,10 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * VITE_WORLD_GROUP_MULTIPLIER=1.15
  * VITE_WORLD_ROLEPLAY_MULTIPLIER=1.00
  * VITE_WORLD_NOTE_MULTIPLIER=1.10
- * VITE_WORLD_CONTENT_INTERVAL_MS=15000
+ * VITE_WORLD_CONTENT_INTERVAL_MS=5000
  * VITE_WORLD_POPUP_CADENCE_MULTIPLIER=1.00
  * VITE_WORLD_CANCEL_SENSITIVITY=1.55
- * VITE_AI_BACKGROUND_GAP_MS=8000
+ * VITE_AI_BACKGROUND_GAP_MS=450
  */
 const LIVE_WORLD_ACTIVITY_MULTIPLIER = Math.max(0.55, Math.min(2.40, Number(import.meta.env.VITE_WORLD_ACTIVITY_MULTIPLIER) || 1.45));
 const LIVE_WORLD_POST_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_POST_MULTIPLIER) || 1.35));
@@ -7849,7 +7849,7 @@ const LIVE_WORLD_DM_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.met
 const LIVE_WORLD_GROUP_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_GROUP_MULTIPLIER) || 1.15));
 const LIVE_WORLD_ROLEPLAY_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_ROLEPLAY_MULTIPLIER) || 1.25));
 const LIVE_WORLD_NOTE_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_NOTE_MULTIPLIER) || 1.10));
-const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(12000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 15000));
+const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(4000, Math.min(30000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 5000));
 const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.60, Math.min(2.80, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 1.00));
 const LIVE_WORLD_CANCEL_SENSITIVITY = Math.max(0.60, Math.min(2.20, Number(import.meta.env.VITE_WORLD_CANCEL_SENSITIVITY) || 1.32));
 const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(import.meta.env.VITE_WORLD_MAX_POPUP_REROLLS) || 5)));
@@ -7864,28 +7864,28 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * (comments, replies, DMs, groups, follows, gossip reactions) may continue between
  * posts, but a normal new AI feed post gets a hard ~10 minute floor. */
 const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  2 * 60 * 1000,
+  45 * 1000,
   Math.min(
-    12 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 3 * 60 * 1000
+    8 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 60 * 1000
   )
 );
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
-const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
+const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1500, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 2500));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(60 * 1000, Math.min(10 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 2.5 * 60 * 1000));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 45 * 1000));
 const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 5 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
 const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
-const AI_BACKGROUND_GAP_MS = Math.max(800, Math.min(12000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 1600));
-const AI_INITIATIVE_GAP_MS = Math.max(350, Math.min(8000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 700));
+const AI_BACKGROUND_GAP_MS = Math.max(250, Math.min(6000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 450));
+const AI_INITIATIVE_GAP_MS = Math.max(200, Math.min(5000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 300));
 
 const AI = {
   chain: Promise.resolve(),  // kompatibilitás miatt marad
   last: 0,                   // mikor futott le az utolsó AI-hívás
   gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
-  interactiveGap: 350,       // gyors játékosi DM/group/RP lane
+  interactiveGap: 120,       // gyors játékosi DM/group/RP lane
   initiativeGap: AI_INITIATIVE_GAP_MS, // gyors autonóm DM / event / group lane
   maxConcurrent: Math.max(1, Math.min(2, Number(import.meta.env.VITE_AI_MAX_CONCURRENT) || 2)),
   activeWorkers: 0,
@@ -7898,7 +7898,7 @@ const AI = {
    * ritmusban a szolgáltatóra.
    */
   lastCostGap: 0,
-  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 60000),
+  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 45000),
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
@@ -8220,7 +8220,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     if (e && e.message) {
       if (e && e.retryable === false) {
         AI.strikes = Math.min(AI.strikes + 1, 3);
-        setCooldown(15000 * AI.strikes, !!requestMeta.interactive);
+        setCooldown(15000 * AI.strikes, false);
       }
       throw e;
     }
@@ -8286,10 +8286,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
        * újrapróbálja. Ezt nem mutatjuk globális "AI can't keep up" bannerként,
        * mert DM/group chat közben csak félrevezető és zajos.
        */
-      setCooldown(
-        restMs,
-        false
-      );
+      setCooldown(restMs, false);
       const err = new Error(`Az AI most nem győzi — ${Math.ceil(restMs / 1000)} másodperc pihenő.`);
       err.busy = true;
       throw err;
@@ -8367,8 +8364,8 @@ async function askJSON(system, prompt, options = {}) {
        */
       const maxBusyWaits =
         priority >= 50
-          ? 4   // játékosi DM/group chat: több belső retry, látható banner nélkül
-          : 2;  // első busy + legfeljebb 1 újrapróbálás
+          ? 6   // interactive requests keep retrying internally
+          : 4;  // background requests retry without surfacing a cooldown
 
       while (
         tries < maxTries &&
@@ -8423,27 +8420,8 @@ async function askJSON(system, prompt, options = {}) {
              * broken provider cannot freeze the UI forever.
              */
             const left = cooldownLeft();
-            const interactiveWaitCap = 30000;
-
-            if (priority >= 50 && left > interactiveWaitCap) {
-              const tooLong = new Error(
-                lang === "en"
-                  ? `The AI provider asked for a ${Math.ceil(left / 1000)}s cooldown. Please retry after the cooldown.`
-                  : `Az AI szolgáltató ${Math.ceil(left / 1000)} másodperces pihenőt kért. A pihenő után próbáld újra.`
-              );
-              tooLong.busy = true;
-              tooLong.retryable = false;
-              throw tooLong;
-            }
-
-            await wait(
-              Math.min(
-                left + 250,
-                priority >= 50
-                  ? interactiveWaitCap
-                  : 20000
-              )
-            );
+            const retryCap = priority >= 50 ? 15000 : 12000;
+            await wait(Math.min(left + 120, retryCap));
             continue;
           }
           tries++;
@@ -18374,7 +18352,7 @@ const AUTO_DEFAULT = {
   every: Math.max(0.12, LIVE_WORLD_CONTENT_INTERVAL_MS / 60000),
 };
 
-const LIVE_WORLD_MIN_ACTION_GAP_MS = 9000;
+const LIVE_WORLD_MIN_ACTION_GAP_MS = 650;
 
 async function loadAuto() {
   return {
@@ -25019,8 +24997,12 @@ async function genComments(w, post, options = {}) {
     post
   );
 
-  /* v71: understand the post once before any character applies a subjective lens. */
-  const postMeaning = await analyzeSocialPostMeaning(w, post);
+  /* v99.6: never spend a second provider call just to re-parse a post.
+   * The post generator already stores socialMeaning when available; otherwise
+   * the deterministic fallback keeps comments grounded without adding latency. */
+  const postMeaning = (post.socialMeaning && typeof post.socialMeaning === "object")
+    ? normalizeSocialPostMeaning(w, post, post.socialMeaning)
+    : fallbackSocialPostMeaning(w, post);
 
   const out = await askWorldJSON(
     w,
@@ -25350,7 +25332,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 2400 }
+    { maxTokens: 1700 }
   );
 
   /*
@@ -25388,6 +25370,10 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
     : [];
 
   if (acceptedActors.length >= minWanted) return baseOut;
+
+  /* v99.6: do not fire a second provider request for a nearly complete wave.
+   * One clean generation is preferable to a repair storm that can trigger 429s. */
+  if (acceptedActors.length >= Math.max(1, minWanted - 1)) return baseOut;
 
   const missing = minWanted - acceptedActors.length;
   const rawActors = new Set(
@@ -49867,6 +49853,25 @@ function planAutoAction(view) {
   }
 
   /*
+   * v99.6 PLAYER RESPONSE FIRST:
+   * A fresh human comment/mention is always handled before autonomous content.
+   * This keeps replies feeling immediate without creating a second global tick.
+   */
+  const immediateThread = findUnanswered(view);
+  if (immediateThread && immediateThread.comment) {
+    return mkAction(
+      "reply",
+      `reply:${immediateThread.post.id}:${immediateThread.comment.id}`,
+      {
+        postId: immediateThread.post.id,
+        commentId: immediateThread.comment.id,
+        rootId: immediateThread.comment.id,
+        targetId: immediateThread.targetId || ""
+      }
+    );
+  }
+
+  /*
    * RECOVERY v99.2 ESSENTIAL FEED PULSE:
    * Once due, one autonomous feed post gets priority over private maintenance
    * lanes. Recent comment coverage is NOT allowed to block the next post.
@@ -51853,10 +51858,10 @@ async function runSimulationAction(view, update, action, addImage) {
       return null;
     }
 
-    const maxComments = Math.max(2, Math.min(20, Number(action.payload && action.payload.maxComments) || 14));
+    const maxComments = Math.max(2, Math.min(10, Number(action.payload && action.payload.maxComments) || 6));
     const minComments = Math.max(
       0,
-      Math.min(maxComments, Number(action.payload && action.payload.minComments) || 0)
+      Math.min(maxComments, Number(action.payload && action.payload.minComments) || 2)
     );
 
     const { out: generatedOut, label } =
@@ -56044,7 +56049,8 @@ const signOut = useCallback(async () => {
     return;
   }
 
-  if (!manualQueued && cooldownLeft() > 0) return;
+  /* Provider backoff is handled inside the AI queue. Never block the simulation
+   * loop or show a user-facing cooldown just because the provider throttled. */
 
   if (
     !manualQueued &&
