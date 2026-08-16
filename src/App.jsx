@@ -28340,6 +28340,7 @@ function autonomousPostTypeInstruction(w, cast) {
     "Characters below 3 posts in rolling 24h have priority until they reach the minimum naturally.",
     "IMAGE HARD MAX: each character may have at most 1 image post in rolling 24h. This is per character, not global.",
     "All remaining posts should be text posts; image is optional, never required.",
+    "OCCUPATION / ROLE / DOJO / ORGANIZATION ARE CONTEXT, NOT REQUIRED CAPTION TEXT: let them shape what the character plausibly does, notices, knows and sometimes posts about, but do NOT recite or list their job, responsibilities, club, faction, rank or affiliations in every post. Never write a profile/bio/resume-style string such as 'role · organization · supporter' merely to prove the canon. Mention these explicitly only when that specific post naturally calls for it.",
     rows.length ? `CURRENT PER-AI QUOTAS:
 ${rows.join("\n")}` : ""
   ].filter(Boolean).join("\n");
@@ -28735,8 +28736,8 @@ function deterministicAutonomousFallbackPost(w, authorId) {
     .map((p) => String(p.text || "").toLowerCase());
 
   const candidates = [
-    job ? `${job}. somehow still alive.` : "still alive. somehow.",
-    dojo ? `${dojo} training done. my arms disagree.` : "today has been unnecessarily long.",
+    job ? "work has been a lot lately." : "still alive. somehow.",
+    dojo ? "training done. my arms disagree." : "today has been unnecessarily long.",
     goals ? `still working on what I actually want.` : "my schedule is getting ridiculous.",
     likes ? `could use more time for the things I actually like.` : "need a quieter day for once.",
     personality ? `${personality.split(/[,.;]/)[0].trim() || "busy"} as usual.` : "busy as usual.",
@@ -28835,6 +28836,7 @@ ${albumList(author) || "nincs használható albumkép"}
 - A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
 - A legtöbb poszt legyen szöveges; albumképet csak néha használj, amikor a konkrét kép ténylegesen illik az aktuális élethelyzethez.
 - A poszt kizárólag ${author.name} SAJÁT karakterlapjából, életéből, occupation/job-jából, dojo/organization oldalából, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
+- FONTOS: az occupation/job, szerep, dojo, organization, rank és affiliation HÁTTÉRKONTEXTUS, nem kötelező caption-szöveg. Határozza meg természetesen, mit csinál, mit tud, milyen napja van és miről lehet oka posztolni, DE ne sorolja fel ezeket minden posztban, ne ismételje a karakterlap megfogalmazását, és ne írjon mini bio/CV-szerű „szerep · szervezet · supporter” felsorolást csak azért, hogy jelezze a kánont. Csak akkor nevezze meg konkrétan a munkát/szervezetet/oldalt, ha az adott poszt témájához ténylegesen releváns.
 - OWNERSHIP HARD RULE: amit ${author.name} "én / my / our" formában állít magáról, annak ${author.name} saját lapján kell igaznak lennie. Más karakter foglalkozását, dojóját, rangját, senseijét, családját, crushát vagy történetét ne vedd át.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
 - Ha a karakternek kölcsönös baráti kapcsolatai vannak, ezek legyenek aktív részei a social életének: természetesen posztolhat közös programról, megemlítheti vagy barátilag ugrasshatja a barátját, reagálhat annak életére, megvédheti, megkérdezheti, merre van, vagy szervezhet vele valamit. Ne kezeld a barátokat véletlenszerű idegenként.
