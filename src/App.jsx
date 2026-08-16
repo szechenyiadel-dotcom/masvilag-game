@@ -16824,6 +16824,17 @@ function worldSyncRev(w) {
   );
 }
 
+function worldHistoryEpoch(w) {
+  return Math.max(
+    0,
+    Math.floor(
+      Number(
+        w && w.historyEpoch
+      ) || 0
+    )
+  );
+}
+
 async function serverWorldPeek(code) {
   const c = encodeURIComponent(
     String(code || "")
@@ -17348,33 +17359,14 @@ function mergeWorlds(remote, local) {
   }
 
   /*
-   * v99.5 RESTART FIX — HISTORY EPOCH IS AUTHORITATIVE
-   *
-   * Restart intentionally deletes gameplay history. Normal mergeWorlds()
-   * is union/append-oriented, so a stale pre-restart server snapshot could
-   * otherwise resurrect old posts, comments, chats, memories, scenes,
-   * gossip and runtime state during a 409/sync reconciliation.
-   *
-   * historyEpoch already invalidates AI work started before restart.
-   * During reconciliation the HIGHER epoch therefore owns the complete
-   * gameplay-history snapshot. Equal epochs use the original v99.5 merge
-   * logic below completely unchanged.
+   * v99.5 RESTART-SAFE MERGE
+   * A restart is a destructive history boundary. Never union a stale
+   * pre-restart snapshot back into a higher historyEpoch.
    */
   const remoteHistoryEpoch =
-    Math.max(
-      0,
-      Math.floor(
-        Number(remote.historyEpoch) || 0
-      )
-    );
-
+    worldHistoryEpoch(remote);
   const localHistoryEpoch =
-    Math.max(
-      0,
-      Math.floor(
-        Number(local && local.historyEpoch) || 0
-      )
-    );
+    worldHistoryEpoch(local);
 
   if (
     remoteHistoryEpoch !==
@@ -17387,33 +17379,23 @@ function mergeWorlds(remote, local) {
         : remote;
 
     const out =
-      JSON.parse(
-        JSON.stringify(
-          winner || {}
-        )
+      cloneWorldState(
+        winner || {}
       );
 
     delete out.extras;
-
-    /*
-     * `remote` is the current PostgreSQL/server snapshot in all reconciliation
-     * call sites, so adopt its concurrency revision for the next save retry.
-     */
     out.syncRev =
       worldSyncRev(remote);
-
     out.rev =
       Math.max(
         Number(remote.rev) || 0,
         Number(local && local.rev) || 0
       ) + 1;
-
     out.historyEpoch =
       Math.max(
         remoteHistoryEpoch,
         localHistoryEpoch
       );
-
     return out;
   }
 
@@ -37536,12 +37518,13 @@ function restartWorldHistoryInPlace(w) {
   return true;
 }
 
-function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onAuto, detail, onDetail, onLang }) {
+function World({ w, update, onRestartWorld, onLeave, onDeleteAccount, setErr, onRooms, auto, onAuto, detail, onDetail, onLang }) {
   const { tt, lang } = useLang();
   const [editPlayer, setEditPlayer] = useState(false);
   const [copied, setCopied] = useState(false);
   const [delAcc, setDelAcc] = useState(false);
   const [restartConfirm, setRestartConfirm] = useState(false);
+  const [restartBusy, setRestartBusy] = useState(false);
   const [restartMsg, setRestartMsg] = useState("");
   const [pwOld, setPwOld] = useState("");
   const [pwNew, setPwNew] = useState("");
@@ -37552,19 +37535,61 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
    * v76 accidentally inserted it inside socialProfiles(), where React state
    * setters/update/tt do not exist; the settings button therefore crashed with
    * `ReferenceError: restartWorldHistory is not defined`. */
-  const restartWorldHistory = () => {
-    update((n) => {
-      restartWorldHistoryInPlace(n);
-    });
-    setRestartConfirm(false);
-    setRestartMsg(
-      tt(
-        "A világ új játékmenetet kezdett. A karakterek megmaradtak, a kapcsolatok pedig a kézzel beállított + karakterlap/Connections alapján felépített kiinduló baseline-ra álltak vissza. A rivális dojo/frakciók explicit személyes kivétel nélkül negatív viszonnyal indulnak. A napi poszt-, képesposzt- és popup-kvóták újraindultak, a korábban kiposztolt AI-albumképek visszakerültek az albumokba.",
-        "The world started a fresh run. Characters were kept, while relationships were restored to the starting baseline built from manual settings plus character-sheet/Connections canon. Rival dojos/factions start negative unless explicit personal canon overrides that. Daily post, image-post and popup quotas restarted, and previously posted AI album images returned to their albums."
-      )
-    );
-    setTimeout(() => setRestartMsg(""), 4500);
-  };
+  const restartWorldHistory =
+    async () => {
+      if (restartBusy) return;
+
+      setRestartBusy(true);
+      setRestartMsg("");
+      setErr("");
+
+      try {
+        const ok =
+          typeof onRestartWorld ===
+          "function"
+            ? await onRestartWorld()
+            : update((n) => {
+                restartWorldHistoryInPlace(
+                  n
+                );
+              });
+
+        if (!ok) {
+          throw new Error(
+            tt(
+              "A világ újraindítása nem fejeződött be.",
+              "World restart did not complete."
+            )
+          );
+        }
+
+        setRestartConfirm(false);
+        setRestartMsg(
+          tt(
+            "A világ teljesen friss játékmenettel újraindult és el lett mentve. A karakterek, karakterlapok, profil-/albumképek és kiinduló kapcsolatok megmaradtak.",
+            "The world restarted with completely fresh gameplay and was saved. Characters, character sheets, profile/album images and starting relationships were kept."
+          )
+        );
+        setTimeout(
+          () => setRestartMsg(""),
+          5500
+        );
+      } catch (e) {
+        setErr(
+          "RESTART: " +
+          (
+            e && e.message
+              ? e.message
+              : tt(
+                  "A világ újraindítása nem sikerült.",
+                  "World restart failed."
+                )
+          )
+        );
+      } finally {
+        setRestartBusy(false);
+      }
+    };
   
   
   const acc = (w.accounts || {})[w.meId] || null;
@@ -38260,8 +38285,16 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
                 type="button"
                 className="btn primary full tiny"
                 onClick={restartWorldHistory}
+                disabled={restartBusy}
               >
-                <RefreshCcw size={14} /> {tt("Igen, kezdd újra a világot", "Yes, restart the world")}
+                {restartBusy ? (
+                  <Loader2 size={14} className="spin" />
+                ) : (
+                  <RefreshCcw size={14} />
+                )}{" "}
+                {restartBusy
+                  ? tt("Újraindítás és mentés…", "Restarting and saving…")
+                  : tt("Igen, kezdd újra a világot", "Yes, restart the world")}
               </button>
               <button
                 type="button"
@@ -53296,6 +53329,7 @@ export default function App() {
   const worldSaveBusy = useRef(false);
   const mediaSaveBusy = useRef(false);
   const syncRefreshBusy = useRef(false);
+  const restartSaveBusy = useRef(false);
   const lastServerCheckAt = useRef(0);
   const pendingServerWorld = useRef(null);
 
@@ -54169,6 +54203,11 @@ const signOut = useCallback(async () => {
           return;
         }
 
+        const refreshHistoryEpoch =
+          worldHistoryEpoch(
+            current
+          );
+
         if (
           typeof navigator !== "undefined" &&
           navigator.onLine === false
@@ -54205,6 +54244,18 @@ const signOut = useCallback(async () => {
             !session.authenticated ||
             !session.world ||
             !session.meId
+          ) {
+            return;
+          }
+
+          const liveAfterRefresh =
+            wRef.current;
+
+          if (
+            !liveAfterRefresh ||
+            worldHistoryEpoch(
+              liveAfterRefresh
+            ) !== refreshHistoryEpoch
           ) {
             return;
           }
@@ -54261,6 +54312,14 @@ const signOut = useCallback(async () => {
                   await serverSaveWorld(
                     latestLocal
                   );
+
+                if (
+                  worldHistoryEpoch(
+                    wRef.current
+                  ) !== refreshHistoryEpoch
+                ) {
+                  return;
+                }
 
                 if (
                   saved &&
@@ -54982,6 +55041,255 @@ const signOut = useCallback(async () => {
     return true;
   }, []);
 
+  /*
+   * v99.5 RESTART WORLD — ATOMIC + IMMEDIATE POSTGRES COMMIT
+   */
+  const restartWorldNow =
+    useCallback(
+      async () => {
+        if (restartSaveBusy.current) {
+          return false;
+        }
+
+        const current =
+          wRef.current;
+
+        if (!current || !current.code) {
+          return false;
+        }
+
+        restartSaveBusy.current = true;
+
+        if (timer.current) {
+          clearTimeout(timer.current);
+          timer.current = null;
+        }
+
+        pendingServerWorld.current = null;
+        setErr("");
+
+        try {
+          /*
+           * Reset a clone first. If any restart helper throws, the live world
+           * stays untouched instead of becoming half-reset.
+           */
+          const fresh =
+            cloneWorldState(current);
+
+          const startingSyncRev =
+            worldSyncRev(current);
+
+          if (
+            !restartWorldHistoryInPlace(
+              fresh
+            )
+          ) {
+            throw new Error(
+              tt(
+                "A világ újraindítása nem tudta létrehozni a friss állapotot.",
+                "Restart could not create a fresh world state."
+              )
+            );
+          }
+
+          fresh.syncRev =
+            startingSyncRev;
+
+          fresh.rev =
+            Math.max(
+              Number(fresh.rev) || 0,
+              Number(current.rev) || 0
+            ) + 1;
+
+          const restartEpoch =
+            worldHistoryEpoch(fresh);
+
+          invalidateWorldEntityIndex(fresh);
+          invalidateCharacterIdentityResolutionCache(fresh);
+
+          /*
+           * One atomic publish.
+           */
+          wRef.current = fresh;
+          lastSavedContent.current = "";
+          setWorld(fresh);
+
+          setChatId(null);
+          setSceneId(null);
+          setJump(null);
+          setPopupNav(null);
+          setFlash(null);
+
+          setSaveState(
+            typeof navigator !== "undefined" &&
+            navigator.onLine === false
+              ? "local"
+              : "saving"
+          );
+
+          try {
+            await saveWorldMerged(fresh);
+          } catch (e) {}
+
+          if (
+            typeof navigator !== "undefined" &&
+            navigator.onLine === false
+          ) {
+            lastSavedContent.current =
+              contentOf(fresh);
+            setSaveAt(now());
+            return true;
+          }
+
+          let candidate =
+            cloneWorldState(fresh);
+          let lastRestartError = null;
+
+          /*
+           * A pre-restart save can win the revision race. In that case we take
+           * only its new syncRev and retry the SAME fresh history epoch.
+           */
+          for (
+            let attempt = 0;
+            attempt < 5;
+            attempt++
+          ) {
+            const live =
+              wRef.current;
+
+            if (
+              !live ||
+              live.code !== fresh.code ||
+              worldHistoryEpoch(live) !==
+                restartEpoch
+            ) {
+              return false;
+            }
+
+            try {
+              const saved =
+                await serverSaveWorld(
+                  candidate
+                );
+
+              if (
+                !saved ||
+                !saved.world
+              ) {
+                throw new Error(
+                  "Restart save returned no world."
+                );
+              }
+
+              const accepted =
+                migrate(saved.world);
+              const acceptedSyncRev =
+                worldSyncRev(accepted);
+
+              setWorld((liveWorld) => {
+                if (
+                  !liveWorld ||
+                  worldHistoryEpoch(
+                    liveWorld
+                  ) !== restartEpoch
+                ) {
+                  return liveWorld;
+                }
+
+                if (
+                  contentOf(liveWorld) ===
+                  contentOf(candidate)
+                ) {
+                  wRef.current =
+                    accepted;
+                  return accepted;
+                }
+
+                const next =
+                  cloneWorldState(
+                    liveWorld
+                  );
+                next.syncRev =
+                  acceptedSyncRev;
+                wRef.current = next;
+                return next;
+              });
+
+              lastSavedContent.current =
+                contentOf(accepted);
+              setSaveState("saved");
+              setSaveAt(now());
+              lastServerCheckAt.current =
+                now();
+
+              return true;
+            } catch (e) {
+              lastRestartError = e;
+
+              if (
+                e &&
+                e.status === 409 &&
+                e.data &&
+                e.data.world
+              ) {
+                const conflictWorld =
+                  migrate(e.data.world);
+                const live =
+                  wRef.current;
+
+                if (
+                  !live ||
+                  worldHistoryEpoch(live) !==
+                    restartEpoch
+                ) {
+                  return false;
+                }
+
+                candidate =
+                  cloneWorldState(live);
+                candidate.syncRev =
+                  worldSyncRev(
+                    conflictWorld
+                  );
+
+                await wait(
+                  120 * (attempt + 1)
+                );
+                continue;
+              }
+
+              if (
+                e &&
+                e.status === 401
+              ) {
+                break;
+              }
+
+              await wait(
+                500 * (attempt + 1)
+              );
+            }
+          }
+
+          setSaveState("error");
+
+          throw (
+            lastRestartError ||
+            new Error(
+              tt(
+                "A friss világ PostgreSQL-mentése nem sikerült.",
+                "The fresh world could not be saved to PostgreSQL."
+              )
+            )
+          );
+        } finally {
+          restartSaveBusy.current =
+            false;
+        }
+      },
+      [tt]
+    );
+
 
   /* Pending AI invitations expire on their own even if the player never opens
      the Events tab. Closed/expired scenes stay in storage/Diary but disappear
@@ -55629,6 +55937,8 @@ const signOut = useCallback(async () => {
 
       const snap = cloneWorldState(latest);
       const snapSyncRev = worldSyncRev(snap);
+      const snapHistoryEpoch =
+        worldHistoryEpoch(snap);
 
       const offline =
         typeof navigator !== "undefined" &&
@@ -55738,6 +56048,19 @@ const signOut = useCallback(async () => {
         }
 
         worldSaveBusy.current = false;
+
+        /*
+         * An ordinary save that started before Restart World is stale.
+         * Never let its result touch the fresh history epoch.
+         */
+        if (
+          worldHistoryEpoch(
+            wRef.current
+          ) !== snapHistoryEpoch
+        ) {
+          setSaveState("retry");
+          return;
+        }
 
         if (!serverResult) {
           setSaveAt(now());
@@ -56426,6 +56749,7 @@ const signOut = useCallback(async () => {
           {tab === "world" && <World
   w={view}
   update={update}
+  onRestartWorld={restartWorldNow}
   setErr={setErr}
  
   onLeave={signOut}
