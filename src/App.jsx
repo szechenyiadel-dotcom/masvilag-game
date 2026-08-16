@@ -1,4 +1,4 @@
-/* MÁSVILÁG RECOVERY v99.4 — BEACON FALLS QUEUE REPAIR — 20260816_0008 */
+/* MÁSVILÁG RECOVERY v99.5 — SCALABLE LAZY MEDIA STORAGE — 20260816_0045 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -1880,10 +1880,44 @@ const mediaDataUrl = (media, id) => {
   const entry = normalizeMediaEntry(id, raw);
   return entry && entry.status !== "deleted" ? entry.dataUrl || "" : "";
 };
+const mediaFileUrl = (id) => {
+  const safeId = encodeURIComponent(
+    String(id || "").trim()
+  );
+
+  if (!safeId) return "";
+
+  const path = `/media/file/${safeId}`;
+
+  if (
+    typeof window !== "undefined" &&
+    window.location &&
+    window.location.origin
+  ) {
+    return `${window.location.origin}${path}`;
+  }
+
+  return path;
+};
+
 const resolveImg = (src, media) => {
   if (!src) return "";
+
   const id = imageIdOf(src);
-  if (id) return mediaDataUrl(media, id);
+
+  if (id) {
+    /*
+     * v99.5 LAZY MEDIA:
+     * A freshly uploaded / offline-pending image may still live in RAM.
+     * Historical cloud images are fetched one-by-one from PostgreSQL only
+     * when an <img> actually needs them.
+     */
+    return (
+      mediaDataUrl(media, id) ||
+      mediaFileUrl(id)
+    );
+  }
+
   return src;
 };
 
@@ -2574,8 +2608,8 @@ function ImagePicker({ value, onChange, label, max = 512, preview = 80, previewW
       if (!ref2) {
         throw new Error(
           tt(
-            "Megtelt a világ képtára — törölj pár képet, hogy férjen újabb.",
-            "The world's media storage is full — delete a few images to make room for more."
+            "A kép tömörítés után is túl nagy. Próbálj kisebb képet.",
+            "The image is still too large after compression. Try a smaller image."
           )
         );
       }
@@ -17312,6 +17346,80 @@ function mergeWorlds(remote, local) {
     delete only.extras;
     return only;
   }
+
+  /*
+   * RECOVERY v99.5.1 — RESTART EPOCH IS AUTHORITATIVE
+   *
+   * A world restart deliberately deletes gameplay history. Normal conflict
+   * reconciliation is append/union-oriented, so without this guard a stale
+   * pre-restart PostgreSQL snapshot can resurrect deleted posts, chats,
+   * memories, scenes, gossip and runtime state.
+   *
+   * historyEpoch already exists specifically to invalidate pre-restart AI
+   * output. Give it the same authority during world reconciliation:
+   * the HIGHER epoch wins as a complete world snapshot. The server syncRev is
+   * still adopted so the winner can be saved on the next retry.
+   *
+   * When epochs are equal, the original v99.5 merge logic below runs
+   * completely unchanged.
+   */
+  const remoteHistoryEpoch =
+    Math.max(
+      0,
+      Math.floor(
+        Number(remote.historyEpoch) || 0
+      )
+    );
+
+  const localHistoryEpoch =
+    Math.max(
+      0,
+      Math.floor(
+        Number(local && local.historyEpoch) || 0
+      )
+    );
+
+  if (
+    remoteHistoryEpoch !==
+    localHistoryEpoch
+  ) {
+    const winner =
+      localHistoryEpoch >
+      remoteHistoryEpoch
+        ? local
+        : remote;
+
+    const out =
+      JSON.parse(
+        JSON.stringify(
+          winner || {}
+        )
+      );
+
+    delete out.extras;
+
+    /*
+     * mergeWorlds(remote, local) is called with the PostgreSQL/server world as
+     * `remote`, so retry against that exact concurrency revision.
+     */
+    out.syncRev =
+      worldSyncRev(remote);
+
+    out.rev =
+      Math.max(
+        Number(remote.rev) || 0,
+        Number(local && local.rev) || 0
+      ) + 1;
+
+    out.historyEpoch =
+      Math.max(
+        remoteHistoryEpoch,
+        localHistoryEpoch
+      );
+
+    return out;
+  }
+
   const out = { ...local };
   delete out.extras;
   out.rev = Math.max(remote.rev || 0, local.rev || 0) + 1;
@@ -18508,12 +18616,12 @@ const mediaBytes = (m) =>
   );
 
 /*
- * A backend 45 MB körüli teljes JSON payloadot enged.
- * 32 MB base64 képanyag mellett marad tartalék a metaadatoknak
- * és kisebb a mobil böngésző memória-csúcsa.
+ * v99.5 — nincs több teljes-világ 32 MB-os media cap.
+ * Az új képek külön PostgreSQL sorokba kerülnek. Csak egyetlen kép méretét
+ * korlátozzuk, hogy egy hibás/óriási payload ne terhelje meg a böngészőt.
  */
-const MEDIA_CAP =
-  32 * 1048576;
+const SINGLE_MEDIA_CAP =
+  8 * 1048576;
 
 function mediaFingerprint(
   media
@@ -18678,6 +18786,34 @@ async function serverSaveMedia(
   );
 }
 
+/*
+ * v99.5 — egyetlen kép külön mentése.
+ * Nem küldjük újra a teljes történelmi media libraryt minden új képnél.
+ */
+async function serverSaveMediaFile(
+  imageId,
+  entry
+) {
+  const id =
+    String(imageId || "").trim();
+
+  if (!id || !entry) {
+    throw new Error(
+      "Invalid media file payload."
+    );
+  }
+
+  return apiJson(
+    `/media/file/${encodeURIComponent(id)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        entry,
+      }),
+    }
+  );
+}
+
 function parseStoredMedia(txt) {
   if (!txt) return {};
 
@@ -18747,6 +18883,28 @@ async function loadMedia(
   code,
   world
 ) {
+  const offline =
+    typeof navigator !== "undefined" &&
+    navigator.onLine === false;
+
+  /*
+   * v99.5 ONLINE LAZY MODE
+   *
+   * Do not download the world's entire historical base64 image library at
+   * application boot. The world already stores image IDs, and resolveImg()
+   * serves those IDs through /media/file/:id on demand.
+   *
+   * This removes both the startup memory spike and the old 32 MB client cap.
+   */
+  if (!offline) {
+    return {
+      media: {},
+      syncRev: 0,
+      mode: "cloud-lazy",
+    };
+  }
+
+  /* Offline emergency fallback keeps the previous local cache behavior. */
   const localTxt =
     await readBigScoped(
       MKEY(code),
@@ -18759,217 +18917,20 @@ async function loadMedia(
     );
 
   const localMedia =
-    parseStoredMedia(
-      localTxt
-    );
+    parseStoredMedia(localTxt);
 
   const legacyMedia =
-    parseStoredMedia(
-      legacyTxt
-    );
+    parseStoredMedia(legacyTxt);
 
-  const offline =
-    typeof navigator !== "undefined" &&
-    navigator.onLine === false;
-
-  if (offline) {
-    const fallback = {
-      ...legacyMedia,
-      ...localMedia,
-    };
-
-    await cacheMediaLocally(
-      code,
-      fallback
-    );
-
-    return {
-      media: fallback,
-      syncRev: 0,
-      mode: "local",
-    };
-  }
-
-  let cloud;
-
-  try {
-    cloud =
-      await serverLoadMedia();
-  } catch (e) {
-    console.warn(
-      "Cloud media load failed:",
-      e
-    );
-
-    const fallback = {
-      ...legacyMedia,
-      ...localMedia,
-    };
-
-    await cacheMediaLocally(
-      code,
-      fallback
-    );
-
-    return {
-      media: fallback,
-      syncRev: 0,
-      mode: "local",
-      error: e,
-    };
-  }
-
-  let cloudMedia = {
-    ...(
-      cloud &&
-      cloud.media
-        ? cloud.media
-        : {}
-    ),
-  };
-
-  let cloudSyncRev =
-    Math.max(
-      0,
-      Math.floor(
-        Number(
-          cloud &&
-          cloud.syncRev
-        ) || 0
-      )
-    );
-
-  /*
-   * Egyszeri, biztonságos legacy media migráció.
-   */
-  const referenced =
-    referencedMediaIds(world);
-
-  const legacyPool = {
+  const fallback = {
     ...legacyMedia,
     ...localMedia,
   };
 
-  const missingReferenced = {};
-
-  Object.keys(
-    legacyPool
-  ).forEach((id) => {
-    if (
-      referenced.has(id) &&
-      !cloudMedia[id]
-    ) {
-      missingReferenced[id] =
-        legacyPool[id];
-    }
-  });
-
-  if (
-    Object.keys(
-      missingReferenced
-    ).length
-  ) {
-    const candidate = {
-      ...cloudMedia,
-      ...missingReferenced,
-    };
-
-    try {
-      const saved =
-        await serverSaveMedia(
-          candidate,
-          cloudSyncRev
-        );
-
-      if (
-        saved &&
-        saved.media
-      ) {
-        cloudMedia =
-          saved.media;
-
-        cloudSyncRev =
-          Math.max(
-            0,
-            Math.floor(
-              Number(
-                saved.syncRev
-              ) || 0
-            )
-          );
-      }
-    } catch (e) {
-      if (
-        e &&
-        e.status === 409 &&
-        e.data
-      ) {
-        const serverMedia =
-          e.data.media &&
-          typeof e.data.media === "object"
-            ? e.data.media
-            : {};
-
-        const merged = {
-          ...candidate,
-          ...serverMedia,
-        };
-
-        try {
-          const retry =
-            await serverSaveMedia(
-              merged,
-              Number(
-                e.data.serverSyncRev
-              ) || 0
-            );
-
-          cloudMedia =
-            retry &&
-            retry.media
-              ? retry.media
-              : merged;
-
-          cloudSyncRev =
-            Math.max(
-              0,
-              Math.floor(
-                Number(
-                  retry &&
-                  retry.syncRev
-                ) ||
-                Number(
-                  e.data.serverSyncRev
-                ) || 0
-              )
-            );
-        } catch (retryError) {
-          console.warn(
-            "Legacy media migration conflict retry failed:",
-            retryError
-          );
-        }
-      } else {
-        console.warn(
-          "Legacy media migration failed:",
-          e
-        );
-      }
-    }
-  }
-
-  await cacheMediaLocally(
-    code,
-    cloudMedia
-  );
-
   return {
-    media:
-      cloudMedia,
-    syncRev:
-      cloudSyncRev,
-    mode:
-      "cloud",
+    media: fallback,
+    syncRev: 0,
+    mode: "local",
   };
 }
 
@@ -18991,140 +18952,101 @@ async function saveMedia(
       ? media
       : {};
 
-  await cacheMediaLocally(
-    code,
-    safeMedia
-  );
-
   const offline =
     typeof navigator !== "undefined" &&
     navigator.onLine === false;
 
   if (offline) {
+    await cacheMediaLocally(
+      code,
+      safeMedia
+    );
+
     return {
       ok: true,
       mode: "local",
-      media:
-        safeMedia,
+      media: safeMedia,
       syncRev:
         Math.max(
           0,
           Math.floor(
-            Number(
-              expectedSyncRev
-            ) || 0
+            Number(expectedSyncRev) || 0
           )
         ),
     };
   }
 
   try {
-    const saved =
-      await serverSaveMedia(
-        safeMedia,
-        expectedSyncRev
+    const rows =
+      Object.entries(safeMedia)
+        .filter(
+          ([id, raw]) => {
+            if (!id || !raw) return false;
+
+            const entry =
+              normalizeMediaEntry(
+                id,
+                raw
+              );
+
+            return Boolean(
+              entry &&
+              entry.status !== "deleted" &&
+              entry.dataUrl
+            );
+          }
+        );
+
+    /*
+     * Upload sequentially. This deliberately avoids a burst of large POSTs
+     * and keeps memory/network pressure predictable on mobile browsers.
+     */
+    for (const [id, raw] of rows) {
+      const entry =
+        normalizeMediaEntry(
+          id,
+          raw
+        );
+
+      await serverSaveMediaFile(
+        id,
+        entry
       );
+    }
+
+    /*
+     * Once cloud accepted the files, do not retain their base64 strings in
+     * React state/local cache. Rendering falls back to /media/file/:id.
+     */
+    await cacheMediaLocally(
+      code,
+      {}
+    );
 
     return {
       ok: true,
       mode: "cloud",
-      media:
-        saved &&
-        saved.media
-          ? saved.media
-          : safeMedia,
+      media: {},
       syncRev:
         Math.max(
           0,
           Math.floor(
-            Number(
-              saved &&
-              saved.syncRev
-            ) || 0
+            Number(expectedSyncRev) || 0
           )
         ),
     };
   } catch (e) {
-    if (
-      e &&
-      e.status === 409 &&
-      e.data
-    ) {
-      const serverMedia =
-        e.data.media &&
-        typeof e.data.media === "object"
-          ? e.data.media
-          : {};
-
-      /*
-       * Server wins on an existing ID; unique local uploads survive.
-       */
-      const reconciled = {
-        ...safeMedia,
-        ...serverMedia,
-      };
-
-      try {
-        const retry =
-          await serverSaveMedia(
-            reconciled,
-            Number(
-              e.data.serverSyncRev
-            ) || 0
-          );
-
-        const finalMedia =
-          retry &&
-          retry.media
-            ? retry.media
-            : reconciled;
-
-        await cacheMediaLocally(
-          code,
-          finalMedia
-        );
-
-        return {
-          ok: true,
-          mode: "cloud",
-          media:
-            finalMedia,
-          syncRev:
-            Math.max(
-              0,
-              Math.floor(
-                Number(
-                  retry &&
-                  retry.syncRev
-                ) ||
-                Number(
-                  e.data.serverSyncRev
-                ) || 0
-              )
-            ),
-          reconciled: true,
-        };
-      } catch (retryError) {
-        return {
-          ok: false,
-          mode: "local",
-          media:
-            safeMedia,
-          syncRev:
-            expectedSyncRev,
-          error:
-            retryError,
-        };
-      }
-    }
+    /* Keep the small pending set in emergency cache for retry. */
+    await cacheMediaLocally(
+      code,
+      safeMedia
+    );
 
     return {
       ok: false,
       mode: "local",
-      media:
-        safeMedia,
-      syncRev:
-        expectedSyncRev,
+      media: safeMedia,
+      syncRev: expectedSyncRev,
       error: e,
     };
   }
@@ -53936,12 +53858,15 @@ const signOut = useCallback(async () => {
       {};
 
     if (
-      mediaBytes(cur) +
-        safeDataUrl.length >
-      MEDIA_CAP
+      safeDataUrl.length >
+      SINGLE_MEDIA_CAP
     ) {
+      console.warn(
+        "Rejected oversized compressed image payload."
+      );
       return null;
     }
+
     const id = uid();
     const nowTs = now();
     const ext = String((meta.mimeType || "image/jpeg").split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg";
