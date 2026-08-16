@@ -42785,6 +42785,8 @@ function publishGossipMediaStory(
       eventRecap: Boolean(candidate.eventRecap),
       eventTitle: candidate.eventTitle || "",
       attendeeIds: Array.isArray(candidate.attendeeIds) ? candidate.attendeeIds : [],
+      popupBased: Boolean(candidate.popupBased),
+      popupEventId: candidate.popupEventId || "",
       reactedBy: [],
       reactionRounds: 0,
       rumorEvolvedAt: 0,
@@ -42846,6 +42848,14 @@ function publishGossipMediaStory(
       Boolean(
         candidate.roleplayBased
       ),
+
+    popupBased:
+      Boolean(
+        candidate.popupBased
+      ),
+
+    popupEventId:
+      candidate.popupEventId || "",
   };
 
   w.whisperWire.stories = [
@@ -42985,6 +42995,14 @@ function publishGossipMediaStory(
           Boolean(
             candidate.roleplayBased
           ),
+
+        popupBased:
+          Boolean(
+            candidate.popupBased
+          ),
+
+        popupEventId:
+          candidate.popupEventId || "",
       },
     }
   );
@@ -43548,9 +43566,13 @@ A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saj
 - Follow/unfollow csak az engedélyezett célpontokra mehet.
 - A DM kizárólag a játékosnak szól.
 - Relationship change: a reagáló AI érzése változik egy érintett iránt; delta -35..+35. Lehet erősen pozitív VAGY erősen negatív, és AI → AI célpont is teljesen érvényes. A jealousy / disbelief / defense / betrayal érzéseket a mood és why mezőben konkrétan nevezd meg, ha tényleg ezek mozgatják a változást.
+- A bond opcionális: csak akkor add meg, ha a gossip utóélete ténylegesen kapcsolati STÁTUSZVÁLTÁST okoz (pl. Barát → Rivális, Ismerős → Barát, kialakuló Crush). Ne változtass státuszt pusztán azért, mert van pletyka. oneSided:true, ha az adott változás csak A → B irányú.
+${story.popupBased
+  ? "- EZ A GOSSIP EGY POPUP KIMENETELÉBŐL SZÜLETETT: a direkt popup-résztvevő kapcsolata már a popup kimenetelénél változhatott. ITT a későbbi NYILVÁNOS UTÓÉLETET modellezd: barátok védhetnek, riválisok rátehetnek egy lapáttal, féltékeny/crush/obsessive karakterek reagálhatnak, és emiatt a játékos ↔ más AI-k, illetve AI ↔ AI kapcsolatok is tovább változhatnak, de csak karakterhű és ténylegesen indokolt módon."
+  : ""}
 
 VÁLASZ CSAK JSON:
-{"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","why":""}]}${TAIL}`,{maxTokens:1500});
+{"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","bond":"","oneSided":false,"why":""}]}${TAIL}`,{maxTokens:1500});
 }
 
 
@@ -44086,11 +44108,12 @@ KÖTELEZŐ REALIZMUS:
 - tone csak: ignore | clarify | defend | joke | apologize | doubleDown | private | noComment
 - Ha tone="private", csak akkor használd, ha van a helyzetben létező AI karakter, akinek reálisan lehet írni, és adj meg targetId-t.
 - reactions: a KÖZVETLENÜL ÉRINTETT létező AI-karakter(ek)nél kötelező kapcsolatreakciót adni, ha a választás érzékelhetően érinti őket; összesen 1-4 reakció, ha van érintett AI. delta azt jelenti, AZ AI mit érez a játékos iránt, -20..+20. Ne hagyd mindhárom választás reactions tömbjét üresen egy olyan popupnál, ahol valaki ténylegesen a játékossal interakcióban van.
+- A reaction bond mezője opcionális KAPCSOLATI STÁTUSZVÁLTÁS. Csak akkor töltsd ki, ha a konkrét kimenetel ténylegesen átírja a kapcsolat jellegét (pl. Ismerős → Barát, Barát → Közeli barát, Barát → Rivális, kialakuló Crush stb.). Egy apró reakcióból ne találj ki nagy státuszváltást. oneSided:true, ha a változás kifejezetten csak az adott AI → játékos irány érzése.
 - socialImpact: opcionális, kicsi közvetlen stat-hatás. aura -8..8, reputation -12..12, hype -12..16, humor -8..8, followerRate -0.01..0.01. Ne jutalmazz/büntess mindent; csak ha valóban van társas következmény.
 - publicSentiment: support/dislike/controversy/cancel 0..100. Cancel ne legyen automatikus: csak akkor legyen jelentős, ha az adott stratégia nyilvánosan kínos, agresszív, hazug, érzéketlen, botrányos vagy "double down" jellegű.
 
 VÁLASZ CSAK JSON:
-{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat konkrét helyzet","location":"","visibility":"limited","witnessIds":[],"gossipPotential":45,"eventKind":"encounter","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":1,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1150,priority:18});
+{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat konkrét helyzet","location":"","visibility":"limited","witnessIds":[],"gossipPotential":45,"eventKind":"encounter","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","bond":"","oneSided":false,"why":""}],"socialImpact":{"aura":0,"reputation":1,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1150,priority:18});
 }
 
 function fallbackPopupEventResponse(w, seed) {
@@ -44158,6 +44181,8 @@ function normalizePopupEvent(w,seed,raw){
       id:r&&r.id?String(r.id):"",
       delta:Math.max(-20,Math.min(20,Number(r&&r.delta)||0)),
       mood:cut(String(r&&r.mood||""),60),
+      bond:cut(String(r&&r.bond||""),40),
+      oneSided:Boolean(r&&r.oneSided===true),
       why:cut(String(r&&r.why||""),160)
     })).filter((r)=>validAiIds.has(r.id));
     const targetId = choice&&choice.targetId&&validAiIds.has(String(choice.targetId))?String(choice.targetId):"";
@@ -44327,13 +44352,14 @@ NE írd át a játékos cselekvését más cselekvéssé. A feladatod kizáróla
 - witnessIds: csak létező AI-karakter ID-k, akik ténylegesen láthatták/hallhatták; 0-4.
 - gossipPotential 0-100; ne legyen mindenből pletyka.
 - reactions: 1-4 AI egyirányú kapcsolatváltozása a játékos felé, HA van közvetlenül érintett AI; delta -20..20. A tényleges résztvevő ne maradjon automatikusan kapcsolat-következmény nélkül csak azért, mert a modell kihagyná a mezőt.
+- bond csak akkor legyen kitöltve, ha a szabad reakció ténylegesen új kapcsolati státuszt hoz létre vagy egy meglévőt átír; oneSided:true, ha ez kifejezetten csak az AI → játékos irányra igaz.
 - socialImpact: aura -10..10, reputation -15..15, hype -15..20, humor -10..10, followerRate -0.015..0.015.
 - publicSentiment: support/dislike/controversy/cancel 0..100. Cancel csak akkor legyen magas, ha a játékos reakciója nyilvánosan botrányos, hazug, agresszív, megalázó, érzéketlen vagy visszaütő.
 - drama/romance/embarrassment 0..100 a tényleges eseményhez.
 - gossipTags: legfeljebb 5 rövid tag, pl. confrontation, awkward, romance, fight, public-drama, scandal, receipts, cringe, backlash.
 
 JSON:
-{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{maxTokens:800,priority:65});
+{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","bond":"","oneSided":false,"why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{maxTokens:800,priority:65});
 }
 
 function normalizePopupCustomOutcome(w,event,customText,raw){
@@ -44347,7 +44373,12 @@ function normalizePopupCustomOutcome(w,event,customText,raw){
   const visibility=allowedVisibility.has(String(raw.visibility||""))?String(raw.visibility):(event.visibility||"limited");
   const witnessIds=visibility==="private"?[]:(Array.isArray(raw.witnessIds)?raw.witnessIds:[]).map((id)=>String(id||"")).filter((id,index,arr)=>validAiIds.has(id)&&arr.indexOf(id)===index).slice(0,4);
   const reactions=(Array.isArray(raw.reactions)?raw.reactions:[]).slice(0,4).map((r)=>({
-    id:String(r&&r.id||""),delta:Math.max(-20,Math.min(20,Number(r&&r.delta)||0)),mood:cut(String(r&&r.mood||""),60),why:cut(String(r&&r.why||""),160)
+    id:String(r&&r.id||""),
+    delta:Math.max(-20,Math.min(20,Number(r&&r.delta)||0)),
+    mood:cut(String(r&&r.mood||""),60),
+    bond:cut(String(r&&r.bond||""),40),
+    oneSided:Boolean(r&&r.oneSided===true),
+    why:cut(String(r&&r.why||""),160)
   })).filter((r)=>validAiIds.has(r.id));
   const si=raw.socialImpact&&typeof raw.socialImpact==="object"?raw.socialImpact:{};
   const ps=raw.publicSentiment&&typeof raw.publicSentiment==="object"?raw.publicSentiment:{};
@@ -45059,6 +45090,8 @@ function popupResolvedRelationshipReactions(w, event, choice) {
       id,
       delta: Math.max(-20, Math.min(20, Number(raw && raw.delta) || 0)),
       mood: cut(String(raw && raw.mood || ""), 60),
+      bond: cut(String(raw && raw.bond || ""), 40),
+      oneSided: Boolean(raw && raw.oneSided === true),
       why: cut(String(raw && raw.why || ""), 180),
     });
   });
@@ -45083,6 +45116,8 @@ function popupResolvedRelationshipReactions(w, event, choice) {
       merged.set(id, existing ? {
         ...fallback,
         mood: existing.mood || fallback.mood,
+        bond: existing.bond || fallback.bond || "",
+        oneSided: Boolean(existing.oneSided === true || fallback.oneSided === true),
         why: existing.why || fallback.why,
       } : fallback);
     }
@@ -45095,6 +45130,17 @@ function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
   if (!w || !event || !socialEntry || !socialEntry.meta) return false;
   if (socialEntry.visibility === "private" || socialEntry.meta.gossipEligible !== true) return false;
 
+  const mode =
+    w.gossipSettings &&
+    (
+      w.gossipSettings.mediaMode === "local" ||
+      w.gossipSettings.mediaMode === "global"
+    )
+      ? w.gossipSettings.mediaMode
+      : "";
+
+  if (!mode || !activeGossipMediaAccount(w)) return false;
+
   const potential = Number(socialEntry.meta.gossipPotential) || 0;
   const witnesses = Number(socialEntry.meta.witnessCount) || 0;
   const worthSurfacing = socialEntry.visibility === "public"
@@ -45102,25 +45148,44 @@ function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
     : (socialEntry.visibility === "limited" && witnesses >= 1 && potential >= 35);
   if (!worthSurfacing) return false;
 
-  /* recordSocialEvent already seeds the grounded rumor graph. We call the
-     selector again here only to surface a candidate that includes THIS popup;
-     private/unwitnessed events can never pass this gate. */
-  let candidate = selectGossipStoryCandidate(w);
   const sourceEventId = String(socialEntry.id || "");
-  const coversPopup = candidate && (candidate.primaryEventId === sourceEventId ||
-    (Array.isArray(candidate.eventIds) && candidate.eventIds.includes(sourceEventId)));
+  const juicy = potential >= 45;
 
-  /* Do not let a different, higher-scoring story swallow the popup. If the
-     selector picked another event, build a candidate directly from THIS
-     resolved popup so the consequence is guaranteed to have a publication
-     path. */
+  /*
+   * A genuinely juicy popup gets a direct candidate built only from THIS
+   * resolved event, so another unrelated gossip story cannot swallow it.
+   */
+  let candidate =
+    juicy
+      ? buildGossipStoryCandidate(w, socialEntry, [socialEntry], mode)
+      : selectGossipStoryCandidate(w);
+
+  const coversPopup = candidate && (
+    candidate.primaryEventId === sourceEventId ||
+    (
+      Array.isArray(candidate.eventIds) &&
+      candidate.eventIds.includes(sourceEventId)
+    )
+  );
+
   if (!coversPopup) {
-    const mode = w.gossipSettings && (w.gossipSettings.mediaMode === "local" || w.gossipSettings.mediaMode === "global")
-      ? w.gossipSettings.mediaMode
-      : "local";
     candidate = buildGossipStoryCandidate(w, socialEntry, [socialEntry], mode);
   }
+
   if (!candidate) return false;
+
+  candidate.popupBased = true;
+  candidate.popupEventId = String(event.id || "");
+  candidate.popupChoiceKey = String(choiceKey || "choice");
+
+  if (juicy) {
+    candidate.forcePublish = true;
+    candidate.forceReason = "juicy-popup-outcome";
+    candidate.score = Math.max(
+      Number(candidate.score) || 0,
+      75 + Math.round(potential * 0.35)
+    );
+  }
 
   return simEnqueue(
     w,
@@ -45131,6 +45196,121 @@ function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
       "event"
     )
   );
+}
+
+function popupOutcomeGossipPotential(
+  event,
+  visibility,
+  witnessIds,
+  basePotential,
+  publicSentiment = {},
+  extra = {}
+) {
+  if (visibility === "private") return 0;
+
+  const clamp100 = (value) =>
+    Math.max(0, Math.min(100, Number(value) || 0));
+
+  const controversy = clamp100(publicSentiment && publicSentiment.controversy);
+  const cancel = clamp100(publicSentiment && publicSentiment.cancel);
+  const dislike = clamp100(publicSentiment && publicSentiment.dislike);
+  const drama = clamp100(extra && extra.drama);
+  const romance = clamp100(extra && extra.romance);
+  const embarrassment = clamp100(extra && extra.embarrassment);
+
+  const socialJuice =
+    controversy * 0.62 +
+    cancel * 0.48 +
+    dislike * 0.12;
+
+  const storyJuice =
+    Math.max(
+      drama * 0.55,
+      romance * 0.60,
+      embarrassment * 0.58
+    );
+
+  const kind =
+    String(event && event.eventKind || "").toLowerCase();
+
+  const kindBoost =
+    /romance|confront|rival|awkward|fight|scandal/.test(kind)
+      ? 6
+      : 0;
+
+  const witnessBoost =
+    Math.min(
+      visibility === "public" ? 10 : 6,
+      Math.max(
+        0,
+        (Array.isArray(witnessIds) ? witnessIds.length : 0) * 2
+      )
+    );
+
+  return Math.round(
+    Math.min(
+      100,
+      Math.max(
+        Number(basePotential) || 0,
+        socialJuice,
+        storyJuice
+      ) +
+      kindBoost +
+      witnessBoost
+    )
+  );
+}
+
+function fallbackForcedPopupGossipStory(w, candidate) {
+  if (!w || !candidate || !candidate.popupBased) return null;
+
+  const facts =
+    (Array.isArray(candidate.events) ? candidate.events : [])
+      .map((event) =>
+        event && event.text
+          ? cut(String(event.text), 900)
+          : ""
+      )
+      .filter(Boolean)
+      .slice(-4);
+
+  if (!facts.length) return null;
+
+  const en = worldLanguage(w, w.meId) === "en";
+  const names =
+    (candidate.subjectIds || [])
+      .map((id) => charById(w, id))
+      .filter(Boolean)
+      .map((c) => c.name)
+      .filter(Boolean)
+      .slice(0, 4);
+
+  const headline =
+    names.length
+      ? (
+          en
+            ? `👀 ${names.join(" × ")}: the aftermath`
+            : `👀 ${names.join(" × ")}: az utóélet`
+        )
+      : (
+          en
+            ? "👀 That choice had an aftermath"
+            : "👀 Ennek a döntésnek lett utóélete"
+        );
+
+  const intro =
+    en
+      ? "Here is the part that is actually grounded in what happened:"
+      : "Ami ebből ténylegesen biztosan megtörtént:";
+
+  return {
+    skip:false,
+    format:facts.length > 1 ? "recap" : "short",
+    headline,
+    text:`${intro}\n\n${facts.join("\n\n")}`.slice(0,6000),
+    usedEventIds:(candidate.eventIds || []).slice(-8),
+    mentionedIds:(candidate.subjectIds || []).slice(0,12),
+  };
 }
 
 function popupEventGossipEligible(event,visibility,witnessIds,gossipPotential){
@@ -45152,15 +45332,32 @@ function resolvePopupEvent(w,eventId,choiceId){
   applyChanges(
     w,
     resolvedRelationshipReactions.map((r) => ({
-      a:r&&r.id?r.id:"",b:w.meId,delta:Number(r&&r.delta)||0,mood:r&&r.mood,why:r&&r.why,
+      a:r&&r.id?r.id:"",
+      b:w.meId,
+      delta:Number(r&&r.delta)||0,
+      mood:r&&r.mood,
+      bond:r&&r.bond,
+      oneSided:Boolean(r&&r.oneSided===true),
+      why:r&&r.why,
     }))
   );
 
   const visibility=["public","limited","private"].includes(event.visibility)?event.visibility:"limited";
   const witnessIds=visibility==="private"?[]:(event.witnessIds||[]).filter(Boolean).slice(0,4);
-  const gossipPotential=Math.max(0,Math.min(100,Number(event.gossipPotential)||0));
-  const gossipEligible=popupEventGossipEligible(event,visibility,witnessIds,gossipPotential);
   const ps=choice.publicSentiment&&typeof choice.publicSentiment==="object"?choice.publicSentiment:{};
+  const gossipPotential=popupOutcomeGossipPotential(
+    event,
+    visibility,
+    witnessIds,
+    event.gossipPotential,
+    ps,
+    {
+      drama:Math.min(100,Math.max(0,impact.hype*4)),
+      romance:event.eventKind==="romance"?55:0,
+      embarrassment:Number(ps.dislike)||0,
+    }
+  );
+  const gossipEligible=popupEventGossipEligible(event,visibility,witnessIds,gossipPotential);
   const cancelRisk=(Number(ps.cancel)||0)>=12||(Number(ps.controversy)||0)>=28;
   const participantIds=[...(event.involvedIds||[]),w.meId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
 
@@ -45170,6 +45367,7 @@ function resolvePopupEvent(w,eventId,choiceId){
   event.choiceTone=choice.tone;
   event.socialImpact={aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers};
   event.publicSentiment={...ps};
+  event.gossipPotential=gossipPotential;
   event.gossipEligible=gossipEligible;
   event.relationshipReactions=resolvedRelationshipReactions.map((r)=>({ ...r }));
 
@@ -45216,11 +45414,18 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
     targetId: "",
     reactions: outcome.reactions || [],
   });
-  applyChanges(w,resolvedRelationshipReactions.map((r)=>({a:r.id,b:w.meId,delta:r.delta,mood:r.mood,why:r.why})));
+  applyChanges(w,resolvedRelationshipReactions.map((r)=>({
+    a:r.id,
+    b:w.meId,
+    delta:r.delta,
+    mood:r.mood,
+    bond:r.bond,
+    oneSided:Boolean(r&&r.oneSided===true),
+    why:r.why
+  })));
 
   const visibility=outcome.visibility;
   const witnessIds=outcome.witnessIds||[];
-  const gossipEligible=popupEventGossipEligible(event,visibility,witnessIds,outcome.gossipPotential);
   const participantIds=[...(event.involvedIds||[]),w.meId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
   const risk=publicCancelRiskSignals(outcome.customText);
   const publicSentiment={
@@ -45229,6 +45434,19 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
     controversy:Math.max(Number(outcome.publicSentiment.controversy)||0,Number(risk.publicSentiment.controversy)||0),
     cancel:Math.max(Number(outcome.publicSentiment.cancel)||0,Number(risk.publicSentiment.cancel)||0),
   };
+  const gossipPotential=popupOutcomeGossipPotential(
+    event,
+    visibility,
+    witnessIds,
+    outcome.gossipPotential,
+    publicSentiment,
+    {
+      drama:outcome.drama,
+      romance:outcome.romance,
+      embarrassment:Math.max(outcome.embarrassment,risk.embarrassment),
+    }
+  );
+  const gossipEligible=popupEventGossipEligible(event,visibility,witnessIds,gossipPotential);
   const cancelRisk=publicSentiment.cancel>=12||publicSentiment.controversy>=28;
 
   event.resolved=true;
@@ -45239,7 +45457,7 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
   event.customOutcome=outcome.summary;
   event.visibility=visibility;
   event.witnessIds=witnessIds;
-  event.gossipPotential=outcome.gossipPotential;
+  event.gossipPotential=gossipPotential;
   event.gossipEligible=gossipEligible;
   event.socialImpact={...outcome.socialImpact,followers:followerDelta};
   event.publicSentiment=publicSentiment;
@@ -45254,7 +45472,7 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
     witnessIds,
     visibility,
     factLevel:"observed",
-    importance:Math.min(100,42+Math.round(outcome.gossipPotential*0.35)),
+    importance:Math.min(100,42+Math.round(gossipPotential*0.35)),
     drama:Math.max(outcome.drama,Math.round(publicSentiment.controversy*0.7)),
     romance:outcome.romance,
     embarrassment:Math.max(outcome.embarrassment,risk.embarrassment),
@@ -45262,11 +45480,11 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
     text:`${event.title}: ${outcome.summary||outcome.customText}`,
     tags:[
       "popup-event","custom-response",outcome.tone,event.eventKind||"social",...outcome.tags,...risk.tags,
-      ...(gossipEligible&&outcome.gossipPotential>=35?["gossip-worthy-thread"]:[]),
+      ...(gossipEligible&&gossipPotential>=35?["gossip-worthy-thread"]:[]),
       ...(cancelRisk?["controversy","backlash-risk"]:[]),
     ],
     meta:{
-      popupEventId:event.id,choiceId:"custom",location:event.location||"",gossipEligible,witnessCount:witnessIds.length,participantIds,gossipPotential:outcome.gossipPotential,
+      popupEventId:event.id,choiceId:"custom",location:event.location||"",gossipEligible,witnessCount:witnessIds.length,participantIds,gossipPotential,
       publicSentiment,sentimentTargetIds:[w.meId],customResponse:outcome.customText,
       socialImpact:{aura:outcome.socialImpact.aura,reputation:outcome.socialImpact.reputation,hype:outcome.socialImpact.hype,humor:outcome.socialImpact.humor,followers:followerDelta},
     }
@@ -52073,18 +52291,35 @@ async function runSimulationAction(view, update, action, addImage) {
       return null;
     }
 
-    const out =
+    let out =
       await genGossipMediaStory(
         view,
         candidate
       );
 
-    const gossipProbe = JSON.parse(JSON.stringify(view));
-    const probePost = publishGossipMediaStory(
+    let gossipProbe = JSON.parse(JSON.stringify(view));
+    let probePost = publishGossipMediaStory(
       gossipProbe,
       candidate,
       out
     );
+
+    if (
+      !probePost &&
+      candidate.popupBased &&
+      candidate.forcePublish
+    ) {
+      out = fallbackForcedPopupGossipStory(view, candidate);
+      if (!out) return null;
+
+      gossipProbe = JSON.parse(JSON.stringify(view));
+      probePost = publishGossipMediaStory(
+        gossipProbe,
+        candidate,
+        out
+      );
+    }
+
     if (!probePost) return null;
 
     update((n) => {
