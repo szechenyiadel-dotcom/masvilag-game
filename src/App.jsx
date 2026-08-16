@@ -7035,6 +7035,254 @@ function reconcileLiveRelationshipsWithStrongCanon(w, force = false) {
   }
 }
 
+function dynamicRelationshipMoodSeed(value) {
+  const raw = String(value || "");
+  let h = 2166136261;
+
+  for (let i = 0; i < raw.length; i++) {
+    h ^= raw.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+
+  return Math.abs(h >>> 0);
+}
+
+function dynamicRelationshipMoodVariant(
+  w,
+  actorId,
+  targetId,
+  rawMood,
+  why = "",
+  delta = 0
+) {
+  const raw =
+    String(rawMood || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return "";
+
+  const normalized =
+    raw
+      .toLowerCase()
+      .replace(/[.!?]+$/g, "")
+      .trim();
+
+  const genericMood =
+    /^(?:very |really |intensely |deeply )?(?:jealous|jealous and hurt|hurt|angry|annoyed|upset|sad|happy|pleased|grateful|protective|possessive|obsessed|worried|anxious|confused|betrayed|disappointed|embarrassed|flustered|attracted|interested|tense|hostile|competitive|distrustful|cold|warm|affectionate|féltékeny|féltékeny és sértett|sértett|dühös|mérges|ideges|szomorú|boldog|hálás|védelmező|birtokló|megszállott|aggódó|szorongó|összezavarodott|elárult|csalódott|zavarban van|vonzódó|feszült|ellenséges|versengő|bizalmatlan)$/i.test(
+      normalized
+    ) ||
+    raw.split(/\s+/).filter(Boolean).length <= 2;
+
+  /*
+   * Keep nuanced AI-written moods. Only label-like generic moods are expanded.
+   */
+  if (!genericMood) {
+    return raw.slice(0, 180);
+  }
+
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (!actor) {
+    return raw.slice(0, 180);
+  }
+
+  const lore =
+    characterLoreCorpus(
+      actor
+    ).toLowerCase();
+
+  const signal =
+    `${raw} ${why}`
+      .toLowerCase();
+
+  const targetName =
+    target && target.name
+      ? target.name.split(" ")[0]
+      : "";
+
+  let core = "mixed";
+
+  if (
+    /jealous|féltéken|possess|birtokl|territorial|rival attention|flirt|flört/.test(
+      signal
+    )
+  ) {
+    core = "jealous";
+  } else if (
+    /betray|árul|lied|hazud|trust|bizalom/.test(
+      signal
+    )
+  ) {
+    core = "betrayed";
+  } else if (
+    /hurt|sért|humiliat|megaláz|reject|elutas|disappoint|csalód/.test(
+      signal
+    ) ||
+    Number(delta) < -8
+  ) {
+    core = "hurt";
+  } else if (
+    /angry|düh|mérges|annoy|ideges|irritat|frustrat/.test(
+      signal
+    )
+  ) {
+    core = "angry";
+  } else if (
+    /attract|crush|vonz|fluster|zavarban|romantic|romant/.test(
+      signal
+    )
+  ) {
+    core = "attracted";
+  } else if (
+    /grateful|hálás|support|támogat|relief|megkönnyebb/.test(
+      signal
+    ) ||
+    Number(delta) >= 8
+  ) {
+    core = "softened";
+  }
+
+  let style = "default";
+
+  if (/obsess|fixat|megszáll|possess|birtokl|territorial/.test(lore)) {
+    style = "possessive";
+  } else if (/sarcast|szark|dry humor|deadpan|mock|gúny/.test(lore)) {
+    style = "sarcastic";
+  } else if (/proud|büszke|dominant|domináns|competitive|verseng|arrogant|fölény/.test(lore)) {
+    style = "proud";
+  } else if (/reserved|zárkózott|stoic|sztoikus|cold|rideg|quiet|csendes|guarded|visszafogott/.test(lore)) {
+    style = "reserved";
+  } else if (/anxious|szorong|insecure|bizonytalan|overthink|túlgondol|sensitive|érzékeny/.test(lore)) {
+    style = "anxious";
+  } else if (/loyal|lojális|protective|védelmez|devoted|odaadó/.test(lore)) {
+    style = "loyal";
+  } else if (/playful|játékos|chaotic|kaotikus|impulsive|impulzív|flirty|flörtölős/.test(lore)) {
+    style = "playful";
+  }
+
+  const en =
+    worldLanguage(
+      w,
+      w.meId
+    ) === "en";
+
+  const jealousRows = {
+    possessive: [
+      ["féltékeny és territoriális, túl sok jelentést tulajdonít annak, kire figyeltél", "jealous and territorial, reading far too much into who got your attention"],
+      ["csendesen birtokló és felhúzott, nehezen engedi el, hogy más kapta meg a figyelmed", "quietly possessive and wound up, struggling to let go of someone else getting your attention"],
+      ["megsértett birtoklási ösztönnel figyel, mintha valaki belépett volna az ő területére", "watchful with a bruised possessive streak, like someone stepped into territory they consider theirs"],
+    ],
+    sarcastic: [
+      ["féltékeny, de inkább élesebb humor mögé rejti, mintsem bevallja, hogy betalált", "jealous, but hiding it behind sharper humor rather than admitting it got to them"],
+      ["megcsípte a féltékenység, ezért lazának tetteti magát és közben sokkal csípősebb", "stung by jealousy, pretending to be casual while becoming noticeably sharper"],
+      ["bosszantóan sokat foglalkoztatja, de ezt inkább egy odaszúrással leplezné", "far more bothered than they want to be, more likely to cover it with a jab than admit why"],
+    ],
+    proud: [
+      ["féltékeny és személyesen kihívva érzi magát, inkább versenyezne a figyelmedért, mintsem sértettséget mutasson", "jealous and personally challenged, more likely to compete for your attention than show hurt"],
+      ["büszkeségében sértett és versengő, mintha valaki elvette volna tőle a helyet melletted", "pride-bruised and competitive, as if someone else took a place beside you they expected to hold"],
+      ["féltékenysége inkább makacs versenyszellemként jön ki, mint nyílt sebezhetőségként", "their jealousy is coming out as stubborn competitiveness rather than open vulnerability"],
+    ],
+    reserved: [
+      ["csendesen féltékeny és zártabb lett, inkább visszahúzódik, mintsem megmutassa, hogy fájt", "quietly jealous and more closed off, withdrawing rather than showing that it hurt"],
+      ["láthatóan hidegebb és óvatosabb, miközben magában újra lejátssza, mit jelenthetett az egész", "noticeably colder and more guarded, privately replaying what the interaction might have meant"],
+      ["féltékenysége visszafogott, de ott ül a távolságtartásban és a megváltozott figyelmében", "their jealousy is restrained, but visible in the extra distance and changed attention"],
+    ],
+    anxious: [
+      ["féltékeny és bizonytalan, túlgondolja, mit jelent ez kettőtök kapcsolatára nézve", "jealous and insecure, overthinking what this means for the bond between you"],
+      ["nyugtalanul féltékeny, fejben már több rossz forgatókönyvet gyárt, mint amennyit a helyzet indokol", "anxiously jealous, already imagining more bad outcomes than the situation actually proves"],
+      ["megütötte a bizonytalanság, és most túl sokat figyel minden apró jelre köztetek", "hit by insecurity and now paying far too much attention to every small signal between you"],
+    ],
+    loyal: [
+      ["féltékeny és sértett, de főleg attól tart, hogy megbillen valami, amit fontosnak hitt köztetek", "jealous and hurt, mostly afraid that something they valued between you may be shifting"],
+      ["védelmezi a köztetek lévő köteléket, ezért a féltékenysége óvatossá és gyanakvóvá teszi", "protective of the bond between you, which turns the jealousy into wariness and suspicion"],
+      ["rosszul esett neki, és most sokkal jobban őrzi azt, amit kettőtök között értékesnek érez", "it stung, and now they are guarding what they value between you much more closely"],
+    ],
+    playful: [
+      ["féltékeny, de félig elviccelné, félig tesztelné, mennyire fontos még neked", "jealous, half tempted to joke it off and half tempted to test how much they still matter to you"],
+      ["felpiszkálta a féltékenység; egyszerre akar ugratni róla és visszahúzni magára a figyelmed", "jealousy has them restless, torn between teasing you about it and pulling your attention back"],
+      ["játékosan próbálná leplezni, mennyire zavarta, közben feltűnően jobban figyel rád", "trying to play off how much it bothered them while paying noticeably more attention to you"],
+    ],
+    default: [
+      ["féltékeny és nyugtalan, most sokkal éberebben figyeli, mit jelentett az a helyzet", "jealous and unsettled, watching much more closely for what that interaction actually meant"],
+      ["megütötte a féltékenység, és most óvatosabban méri fel, hol áll melletted", "stung by jealousy and reassessing more carefully where they stand with you"],
+      ["sértette a látvány, és most nehezebben tud úgy tenni, mintha teljesen mindegy lenne neki", "bothered by what they saw and finding it harder to pretend it means nothing to them"],
+    ],
+  };
+
+  const genericRows = {
+    hurt: [
+      ["sértett és óvatosabb lett, most kevésbé érzi biztonságosnak, hogy ugyanúgy megnyíljon neked", "hurt and more guarded, less sure that opening up to you feels as safe as it did"],
+      ["rosszul érintette, és most visszafogottabban közelít hozzád, amíg eldönti, mennyire volt ez komoly", "it landed badly, and they are approaching you more cautiously while deciding how serious it was"],
+      ["megbántva érzi magát, de még nem döntötte el, hogy távolodjon vagy várjon magyarázatot", "hurt, but not yet sure whether to pull away or wait for an explanation"],
+    ],
+    betrayed: [
+      ["megingott a bizalma, és most sokkal nehezebben veszi készpénznek, amit mondasz neki", "their trust has been shaken, and they are much less willing to take your words at face value"],
+      ["elárulva érzi magát, és a csalódás most erősebb benne, mint a nyílt düh", "feeling betrayed, with disappointment running deeper than the anger they are showing"],
+      ["bizalmatlanabb és érzelmileg hátrébb lépett, mert ezt nem egyszerű félreértésként élte meg", "more distrustful and emotionally withdrawn because they did not experience this as a simple misunderstanding"],
+    ],
+    angry: [
+      ["ingerült és feszült, most sokkal kisebb a türelme veled szemben", "irritated and tense, with much less patience for you right now"],
+      ["dühös, de a valódi feszültség abból jön, hogy személyesnek vette, ami történt", "angry, with the real tension coming from how personally they took what happened"],
+      ["felhúzta magát rajtad, és most könnyebben olvas rossz szándékot a következő lépéseidbe is", "worked up with you and more likely to read bad intent into your next move as well"],
+    ],
+    attracted: [
+      ["feltűnően jobban vonzódik hozzád, de még figyeli, mennyit mer ebből megmutatni", "noticeably more attracted to you, while still judging how much of it they are willing to show"],
+      ["felkavarta a vonzalom, és most a szokásosnál jobban észrevesz minden apró reakciódat", "stirred by the attraction and paying more attention than usual to every small reaction from you"],
+      ["vonzódó és kissé kibillent, mintha hirtelen nehezebb lenne teljesen neutrálisan kezelnie téged", "attracted and slightly thrown off, as if treating you completely neutrally just became harder"],
+    ],
+    softened: [
+      ["melegebben és bizalommal fordul feléd, mert most tényleg azt érzi, hogy számíthat rád", "warmer and more trusting toward you because, right now, they genuinely feel they can rely on you"],
+      ["láthatóan meglágyult veled szemben, és könnyebben enged közelebb érzelmileg", "noticeably softened toward you and more willing to let you closer emotionally"],
+      ["értékeli, amit tettél, és most természetesebben keresi veled a közelséget és az együttműködést", "appreciative of what you did and more naturally drawn toward closeness and cooperation with you"],
+    ],
+    mixed: [
+      ["érzelmileg megmozdította a helyzet, és most más szemmel figyel rád, mint közvetlenül előtte", "emotionally affected by what happened and looking at you differently than they did just before"],
+      ["nem közömbös neki, ami történt; most óvatosabban és személyesebben értelmezi a következő jelzéseidet", "not indifferent to what happened, and reading your next signals more personally and carefully"],
+      ["kibillent a korábbi egyensúlyból, és még rendezi magában, pontosan mit változtatott ez benne", "knocked out of their previous emotional balance and still working out exactly what changed for them"],
+    ],
+  };
+
+  let rows;
+
+  if (core === "jealous") {
+    rows =
+      jealousRows[style] ||
+      jealousRows.default;
+  } else {
+    rows =
+      genericRows[core] ||
+      genericRows.mixed;
+  }
+
+  const seed =
+    dynamicRelationshipMoodSeed(
+      `${actorId}|${targetId}|${raw}|${why}|${targetName}|${Number(delta) || 0}`
+    );
+
+  const pair =
+    rows[
+      seed %
+      rows.length
+    ];
+
+  return (
+    en
+      ? pair[1]
+      : pair[0]
+  ).slice(0, 180);
+}
+
 function applyChanges(
   n,
   changes
@@ -7181,11 +7429,13 @@ function applyChanges(
       !(romanceState.blocked && romanticRelationshipText(ch.mood))
     ) {
       patch.mood =
-        String(
-          ch.mood
-        ).slice(
-          0,
-          60
+        dynamicRelationshipMoodVariant(
+          n,
+          a,
+          b,
+          ch.mood,
+          ch.why || "",
+          Number(ch.delta) || 0
         );
     }
 
@@ -7837,6 +8087,81 @@ function playerSocialImpactFallbackChanges(
     .filter(Boolean);
 }
 
+function explicitPlayerSocialFlirtSignal(value) {
+  const text =
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!text) return false;
+
+  /*
+   * Strong romantic/flirt intent only.
+   * Friendly praise, hype, hearts, teasing and "you look good" alone are NOT
+   * enough to classify a player action as flirting.
+   */
+  return /(?:\bflirt(?:ing|ed)?\b|\bfl[oö]rt(?:öl|ölt|ölök|ölsz|öltem)?\b|\bdate\s+me\b|\bgo\s+out\s+with\s+me\b|\bwant\s+you\b|\bi['’]?m\s+into\s+you\b|\bi\s+have\s+a\s+crush\s+on\s+you\b|\bi\s+like\s+you\s+as\s+more\s+than\s+a\s+friend\b|\bkiss\s+me\b|\bcan\s+i\s+kiss\s+you\b|\bi\s+want\s+to\s+kiss\s+you\b|\bbe\s+my\s+(?:girlfriend|boyfriend|partner)\b|\brandizz\s+velem\b|\bj[aá]rj\s+velem\b|\bmeg\s+akarlak\s+cs[oó]kolni\b|\bmegcs[oó]koln[aá]lak\b|\bcs[oó]kolj\s+meg\b|\bvonz[oó]dom\s+hozz[aá]d\b|\btetszel\s+nekem\s+nem\s+csak\s+bar[aá]tk[eé]nt\b)/i.test(
+    text
+  );
+}
+
+function playerFlirtRealityCard(
+  w,
+  playerId,
+  targetId,
+  currentText
+) {
+  const player =
+    charById(
+      w,
+      playerId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (!player || !target) {
+    return "FLIRT FACT: unknown — do not assume flirt without explicit evidence.";
+  }
+
+  const orientation =
+    romanceOrientationState(
+      w,
+      playerId,
+      targetId
+    );
+
+  const explicit =
+    explicitPlayerSocialFlirtSignal(
+      currentText
+    );
+
+  const en =
+    worldLanguage(
+      w,
+      w.meId
+    ) === "en";
+
+  if (orientation.blocked) {
+    return en
+      ? `FLIRT FACT — HARD PLATONIC LOCK: ${player.name}'s known orientation is incompatible with romantic attraction toward ${target.name}. Do NOT interpret compliments, friendly affection, teasing, emojis, attention, closeness or a reply as flirting with ${target.name}.`
+      : `FLÖRT TÉNY — KEMÉNY PLATONIKUS ZÁR: ${player.name} ismert orientációja nem kompatibilis romantikus vonzalommal ${target.name} felé. Bókot, baráti szeretetet, ugratást, emojit, figyelmet, közelséget vagy reply-t NE értelmezz ${target.name} felé flörtnek.`;
+  }
+
+  if (explicit) {
+    return en
+      ? `FLIRT FACT — EXPLICIT IN THIS MESSAGE: the player's actual wording contains a direct romantic/flirt signal toward ${target.name}. Treat only THIS concrete interaction as flirting.`
+      : `FLÖRT TÉNY — EBBEN AZ ÜZENETBEN EXPLICIT: a játékos tényleges szövege direkt romantikus/flörtjelet tartalmaz ${target.name} felé. Csak EZT a konkrét interakciót kezeld flörtnek.`;
+  }
+
+  return en
+    ? `FLIRT FACT — NOT ESTABLISHED: there is no explicit flirt signal in the player's current wording toward ${target.name}. Friendly compliments, praise, banter, hearts/emojis, joking, defending someone, replying quickly or being close are PLATONIC unless the wording clearly crosses into romance.`
+    : `FLÖRT TÉNY — NINCS ALÁTÁMASZTVA: a játékos mostani szövegében nincs explicit flörtjel ${target.name} felé. Baráti bók, hype, ugratás, szív/emoji, poén, védelem, gyors reply vagy közelség PLATONIKUS, amíg a konkrét szöveg egyértelműen át nem lép romantikába.`;
+}
+
 async function assessPlayerSocialRelationshipImpact(
   w,
   post,
@@ -7947,6 +8272,12 @@ ${relationshipBehaviorCard(
         w,
         c.id,
         actorId
+      )}
+${playerFlirtRealityCard(
+        w,
+        actorId,
+        c.id,
+        comment.text
       )}`
   )
   .join("\n")}
@@ -7957,7 +8288,10 @@ Csak azt döntsd el, hogyan változik AZ ÉRINTETT AI-K → JÁTÉKOS kapcsolati
 SZABÁLYOK:
 - A pontos szöveget és a thread-kontextust értelmezd, ne kulcsszavakat.
 - A negatív beszólás, sértés, gúny, nyilvános megalázás, lekezelés, elutasítás vagy támadás adjon MÍNUSZT annak, akinek szól.
-- Kedves válasz, támogatás, bók, védelem, flört vagy őszinte bocsánatkérés adhat PLUSZT.
+- Kedves válasz, támogatás, bók, védelem, TÉNYLEGES flört vagy őszinte bocsánatkérés adhat PLUSZT.
+- FLÖRTÖT NEM TALÁLHATSZ KI. A fenti FLÖRT TÉNY kártya kemény ground truth. Ha PLATONIKUS ZÁR vagy NINCS ALÁTÁMASZTVA szerepel, ne írd a mood/why mezőbe, hogy a játékos flörtölt vele.
+- Baráti bók, "you look good", hype, szív/emoji, játékos ugratás, közelség vagy kedves reply önmagában NEM flört.
+- A játékos ismert orientációja kemény kapu: orientáció-inkompatibilis célponttal ne gyárts romantikus/flört értelmezést.
 - Semleges kérdés, tárgyilagos válasz vagy jelentéktelen reakció legyen 0.
 - A DIREKT REPLY önmagában SOHA nem jelent automatikus pozitív pontot.
 - Szarkazmust és baráti ugratást KONTEXTUSBAN értelmezz. Egy közeli barátnál a "bitch 😭" lehet játékos; ellenségnél ugyanaz lehet sértés.
@@ -7969,7 +8303,10 @@ SZABÁLYOK:
 - Csak az itt felsorolt AI-k szerepelhetnek.
 - "a" mindig az AI id-ja legyen; "b" mindig a játékos id-ja.
 - A mood azt írja le, MIT ÉREZ most az AI a játékos iránt.
-- A why röviden nevezze meg a konkrét okot.
+- A mood NE sabloncímke legyen ("jealous", "hurt", "annoyed", "protective"). Írj rövid, 5–18 szavas, KARAKTERSPECIFIKUS aktuális érzelmi állapotot, amit az adott AI saját personality/traits/history/kapcsolata formál. Lehet összetett vagy ellentmondásos is.
+- Egy büszke karakter féltékenysége lehet versengő és személyesen kihívott; egy zárkózotté hidegebb visszahúzódás; egy szarkasztikusé csípősebb humor mögé rejtett sértettség. Ezek elvek, ne másold ugyanazt a mondatot.
+- A mood és why nyelve KÖTELEZŐEN: ${worldLanguage(w, w.meId) === "en" ? "ENGLISH" : "MAGYAR"}.
+- A why röviden nevezze meg a konkrét, TÉNYLEG megtörtént okot; ne találjon ki flörtöt vagy más eseményt.
 - Ha a bond még ugyanaz, ne találj ki újat. Ha tényleg fordulópont történt, adhatsz bondot.
 - Ne generálj kommentválaszt, csak kapcsolatértékelést.
 
@@ -8054,7 +8391,7 @@ Formátum:
               row &&
               row.mood
             ) || ""
-          ).slice(0, 60),
+          ).slice(0, 180),
         why:
           String(
             (
@@ -38427,6 +38764,8 @@ KAPCSOLATVÁLTOZÁS:
 - Jelentős interakciónál ne adj alibi ±1/±2 értéket.
 - Ha nincs valódi érzelmi hatás, a changes lehet üres.
 - Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
+- Ha changes-ben moodot adsz, az NE általános címke legyen. Rövid, karakter-specifikus aktuális érzés legyen, amit a SAJÁT personality/traits/history és a konkrét kapcsolat alakít; ne csak "jealous/hurt/annoyed". A túl generikus moodot a rendszer személyiséghez igazítva finomítja.
+- A mood és why nyelve a világ nyelve legyen.
 
 Formátum:
 {"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event vagy group_social","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
@@ -50232,6 +50571,220 @@ function romanticEventParticipantIds(w, event) {
   return fallback.length === 2 ? fallback : [];
 }
 
+function observedRomanticPairGrounded(
+  w,
+  event,
+  firstId,
+  secondId,
+  signal
+) {
+  if (
+    !w ||
+    !event ||
+    !firstId ||
+    !secondId ||
+    firstId === secondId
+  ) {
+    return false;
+  }
+
+  const tags =
+    new Set(
+      (event.tags || [])
+        .map(
+          (x) =>
+            String(x || "")
+              .toLowerCase()
+        )
+    );
+
+  const raw =
+    String(
+      event.text || ""
+    );
+
+  /*
+   * Concrete observed acts are factual. They do not rely on an inferred
+   * "maybe flirt" label.
+   */
+  const explicitPhysical =
+    tags.has("kiss") ||
+    tags.has("hookup") ||
+    tags.has("cheating") ||
+    tags.has("affair") ||
+    /\b(?:kiss(?:ed|ing|es)?|making\s*out|made\s*out|hook(?:ed)?\s*up|cheat(?:ed|ing)?|affair|cs[oó]kol|cs[oó]k|kavar|megcsal)\b/i.test(
+      raw
+    );
+
+  if (explicitPhysical) {
+    return true;
+  }
+
+  /*
+   * A weak romance/flirt tag alone is NEVER enough.
+   * At least one directed orientation must actually support the pairing.
+   */
+  const forwardAllowed =
+    romanceTargetAllowed(
+      w,
+      firstId,
+      secondId
+    );
+
+  const reverseAllowed =
+    romanceTargetAllowed(
+      w,
+      secondId,
+      firstId
+    );
+
+  if (
+    !forwardAllowed &&
+    !reverseAllowed
+  ) {
+    return false;
+  }
+
+  const explicitFlirt =
+    explicitPlayerSocialFlirtSignal(
+      raw
+    ) ||
+    /\b(?:flirt(?:ed|ing|s)?|fl[oö]rt(?:ölt|öl|öltek)?|hit\s+on|hitting\s+on|made\s+a\s+pass|asked\s+(?:him|her|them)\s+out|date\s+me|go\s+out\s+with\s+me|i['’]?m\s+into\s+you|want\s+you|can\s+i\s+kiss\s+you|i\s+want\s+to\s+kiss\s+you)\b/i.test(
+      raw
+    );
+
+  if (explicitFlirt) {
+    return true;
+  }
+
+  const establishedRomance =
+    relationshipRomanceActive(
+      w,
+      firstId,
+      secondId
+    ) ||
+    relationshipRomanceActive(
+      w,
+      secondId,
+      firstId
+    );
+
+  /*
+   * Existing real romance + strongly charged wording may count.
+   * Friendly compliments alone still do not.
+   */
+  const chargedInteraction =
+    /\b(?:you['’]?re\s+(?:so\s+)?(?:hot|sexy)|i\s+miss\s+your\s+kiss|come\s+over\s+tonight|just\s+you\s+and\s+me|my\s+(?:girl|boy)|babe\s*[😉😏]|baby\s*[😉😏])\b/i.test(
+      raw
+    );
+
+  return Boolean(
+    establishedRomance &&
+    chargedInteraction &&
+    Number(
+      signal &&
+      signal.strength
+    ) >= 20
+  );
+}
+
+function personalityAwareRomanticObserverFeeling(
+  w,
+  observer,
+  subject,
+  other,
+  stakeInfo,
+  event
+) {
+  const lore =
+    characterLoreCorpus(
+      observer
+    ).toLowerCase();
+
+  let style = "default";
+
+  if (/obsess|fixat|megszáll|possess|birtokl|territorial/.test(lore)) {
+    style = "possessive";
+  } else if (/sarcast|szark|deadpan|dry humor|mock|gúny/.test(lore)) {
+    style = "sarcastic";
+  } else if (/proud|büszke|dominant|domináns|competitive|verseng|arrogant|fölény/.test(lore)) {
+    style = "proud";
+  } else if (/reserved|zárkózott|stoic|sztoikus|quiet|csendes|guarded|visszafogott|cold|rideg/.test(lore)) {
+    style = "reserved";
+  } else if (/anxious|szorong|insecure|bizonytalan|overthink|túlgondol|sensitive|érzékeny/.test(lore)) {
+    style = "anxious";
+  } else if (/loyal|lojális|protective|védelmez|devoted|odaadó/.test(lore)) {
+    style = "loyal";
+  } else if (/playful|játékos|chaotic|kaotikus|impulsive|impulzív|flirty|flörtölős/.test(lore)) {
+    style = "playful";
+  }
+
+  const rows = {
+    possessive: [
+      ["féltékeny és territoriális, nehezen viseli, hogy valaki más kapott ilyen figyelmet", "jealous and territorial, struggling with someone else getting that kind of attention"],
+      ["birtoklóan sértett és túlzottan éber, fejben újra és újra visszatér a jelenetre", "possessively stung and hyper-alert, replaying the interaction over and over"],
+      ["csendesen dühös és birtokló, mintha valaki belépett volna arra a helyre, amit magáénak érez", "quietly furious and possessive, like someone stepped into a place they consider theirs"],
+    ],
+    sarcastic: [
+      ["féltékeny és megcsípett, de ezt inkább csípősebb humor mögé rejtené", "jealous and stung, more likely to hide it behind sharper humor"],
+      ["rosszul esett neki, ezért lazábbnak tetteti magát, miközben minden poénja egy fokkal élesebb", "it got to them, so they act casual while every joke comes out a little sharper"],
+      ["féltékeny, de túl büszke a nyílt sértettséghez; inkább odaszúrással leplezné", "jealous but too proud to show the hurt directly, masking it with a jab instead"],
+    ],
+    proud: [
+      ["féltékeny és személyesen kihívva érzi magát, versenyhelyzetként kezeli a figyelmedet", "jealous and personally challenged, treating your attention like a competition"],
+      ["büszkeségében sértett és makacsul versengő, nem akarja átengedni a helyét melletted", "pride-bruised and stubbornly competitive, unwilling to give up their place beside you"],
+      ["nemcsak féltékeny, hanem sértve érzi a státuszát is kettőtök között", "not just jealous, but feeling their place in your relationship has been challenged"],
+    ],
+    reserved: [
+      ["csendesen féltékeny és zártabb lett, inkább távolodik, mintsem bevallja, hogy fájt", "quietly jealous and more closed off, pulling back rather than admitting it hurt"],
+      ["hidegebb és óvatosabb lett veled, miközben magában újra lejátssza a történteket", "colder and more guarded with you while privately replaying what happened"],
+      ["nem mutat sokat belőle, de a féltékenység ott van a hirtelen távolságtartásában", "not showing much, but the jealousy is sitting underneath the sudden distance"],
+    ],
+    anxious: [
+      ["féltékeny és bizonytalan, túlgondolja, mit jelenthet ez kettőtök kapcsolatára", "jealous and insecure, overthinking what this could mean for your relationship"],
+      ["nyugtalan és fenyegetve érzi magát, több rossz forgatókönyvet lát bele, mint amennyit tud", "uneasy and threatened, imagining more bad outcomes than they actually know"],
+      ["megütötte a bizonytalanság, ezért most minden apró jelre túlérzékenyen figyel", "hit by insecurity and now reading far too much into every small signal"],
+    ],
+    loyal: [
+      ["féltékeny és sértett, főleg mert félti azt a köteléket, amit fontosnak hitt köztetek", "jealous and hurt mainly because they are protective of the bond they thought mattered between you"],
+      ["rosszul esett neki, és most ösztönösen védi azt, amit kettőtök között értékesnek érez", "it stung, and they are instinctively guarding what they value between you"],
+      ["féltékenysége inkább a kapcsolat elvesztésétől való félelemből jön, mint puszta birtoklásból", "their jealousy is coming more from fear of losing the bond than simple possessiveness"],
+    ],
+    playful: [
+      ["féltékeny, de egyszerre akarja elviccelni és letesztelni, mennyire számít még neked", "jealous, torn between joking it off and testing how much they still matter to you"],
+      ["felpiszkálta a féltékenység; játékosan húzna vissza magára több figyelmet", "jealousy has them restless and playfully trying to pull more of your attention back"],
+      ["zavarja a helyzet, de inkább provokatív ugratással próbálná visszaszerezni az egyensúlyt", "bothered by it, more likely to regain balance through provocative teasing"],
+    ],
+    default: [
+      ["féltékeny és nyugtalan, most sokkal jobban figyeli, mit jelentett ez valójában", "jealous and unsettled, watching much more closely for what this actually meant"],
+      ["megütötte a féltékenység, és most óvatosabban méri fel, hol áll melletted", "stung by jealousy and reassessing more carefully where they stand with you"],
+      ["sértette a látvány, és nehezebben tud úgy tenni, mintha teljesen mindegy lenne neki", "bothered by what they saw and finding it harder to pretend it means nothing"],
+    ],
+  };
+
+  const candidates =
+    rows[style] ||
+    rows.default;
+
+  const seed =
+    dynamicRelationshipMoodSeed(
+      `${observer.id}|${subject.id}|${other.id}|${event.id || event.refId || event.ts}`
+    );
+
+  const pair =
+    candidates[
+      seed %
+      candidates.length
+    ];
+
+  return sysLangText(
+    w,
+    observer.id,
+    pair[0],
+    pair[1]
+  );
+}
+
 function applyObservedRomanticThirdPartyConsequences(w, event) {
   if (!w || !event || event.factLevel !== "observed") return 0;
   if (event.meta && event.meta.skipRomanticObserverConsequences) return 0;
@@ -50260,13 +50813,31 @@ function applyObservedRomanticThirdPartyConsequences(w, event) {
       const others = participantIds.filter((id) => id && id !== subjectId && id !== observer.id);
       if (!others.length) return;
 
+      const otherId = others[0];
+
+      /*
+       * HARD REALITY CHECK:
+       * ordinary friendship/compliments may not become a fake flirt trigger.
+       */
+      if (
+        !observedRomanticPairGrounded(
+          w,
+          event,
+          subjectId,
+          otherId,
+          signal
+        )
+      ) {
+        return;
+      }
+
       const delta = romanticObserverDelta(stake, event, signal.strength);
       if (!delta) return;
 
       candidates.push({
         observerId: observer.id,
         subjectId,
-        otherId: others[0],
+        otherId,
         delta,
         stake,
         severity: Math.abs(delta) + stake.stake * 3 + stake.jealousy,
@@ -50288,14 +50859,20 @@ function applyObservedRomanticThirdPartyConsequences(w, event) {
     if (!observer || !subject || !other) return;
 
     const isPublic = event.visibility === "public";
-    const feeling = row.stake.jealousy >= 5
-      ? sysLangText(w, observer.id, "erősen féltékeny, sértett és birtokló", "intensely jealous, hurt and possessive")
-      : sysLangText(w, observer.id, "féltékeny és sértett", "jealous and hurt");
+    const feeling =
+      personalityAwareRomanticObserverFeeling(
+        w,
+        observer,
+        subject,
+        other,
+        row.stake,
+        event
+      );
     const why = sysLangText(
       w,
       observer.id,
-      `${observer.name} látta, hogy ${subject.name} ${isPublic ? "nyilvánosan " : "mások előtt "}romantikusan/flörtölve viselkedett ${other.name} felé.`,
-      `${observer.name} saw ${subject.name} act romantically/flirtatiously with ${other.name} ${isPublic ? "in public" : "in front of others"}.`
+      `${observer.name} észlelte ${subject.name} és ${other.name} tényleges romantikus/flörtös interakcióját${isPublic ? " nyilvánosan" : " mások előtt"}.`,
+      `${observer.name} witnessed an actually grounded romantic/flirty interaction between ${subject.name} and ${other.name}${isPublic ? " in public" : " in front of others"}.`
     );
 
     applyChanges(w, [{
