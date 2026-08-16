@@ -8423,7 +8423,17 @@ async function askJSON(system, prompt, options = {}) {
              * broken provider cannot freeze the UI forever.
              */
             const left = cooldownLeft();
-            const interactiveWaitCap = 30000;
+
+            /*
+             * v99.5 provider-cooldown fix:
+             * A 30s ceiling was too short for normal provider backoff values
+             * such as 35–60 seconds. Interactive player actions (DM/group/RP)
+             * may wait asynchronously up to 90 seconds, then retry the SAME
+             * request automatically. `await wait()` does not block React/UI.
+             *
+             * Background world work keeps its existing 20s cap below.
+             */
+            const interactiveWaitCap = 90000;
 
             if (priority >= 50 && left > interactiveWaitCap) {
               const tooLong = new Error(
