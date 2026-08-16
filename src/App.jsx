@@ -9430,6 +9430,14 @@ const AI = {
   strikes: 0,
   pending: 0,
   interactivePending: 0,
+
+  /*
+   * PLAYER DIRECT-DM RESERVATION.
+   * Nonzero only while the human player's private message is waiting for its
+   * AI reply. It does not alter autonomous DM cadence or any social logic.
+   */
+  directDmPending: 0,
+
   listeners: [],
 
   /*
@@ -9593,9 +9601,14 @@ async function runAiQueueWorker() {
 }
 
 function pumpAiQueue() {
+  const effectiveMaxConcurrent =
+    AI.directDmPending > 0
+      ? 1
+      : AI.maxConcurrent;
+
   while (
     AI.queue.length &&
-    AI.activeWorkers < AI.maxConcurrent
+    AI.activeWorkers < effectiveMaxConcurrent
   ) {
     AI.activeWorkers++;
     AI.queueRunning = true;
@@ -40354,6 +40367,62 @@ function recentDmBridgeScene(w, botId, chatKeyValue) {
     .sort((a, b) => (Number(b.startedAt || b.ts) || 0) - (Number(a.startedAt || a.ts) || 0))[0] || null;
 }
 
+function directPlayerDmContextCard(
+  w,
+  actor
+) {
+  if (!w || !actor) return "";
+
+  const playerProfile =
+    publicBasicCharacterProfileForAgent(
+      w,
+      w.player
+    );
+
+  const lang =
+    worldLanguage(
+      w,
+      w.meId
+    );
+
+  const en =
+    lang === "en";
+
+  return `
+${en ? "DIRECT DM CONTEXT — PLAYER-INITIATED PRIVATE MESSAGE" : "KÖZVETLEN DM KONTEXTUS — JÁTÉKOS ÁLTAL INDÍTOTT PRIVÁT ÜZENET"}
+
+${en ? "WORLD / UNIVERSE" : "VILÁG / UNIVERZUM"}:
+${cut(
+  String(
+    w.name ||
+    w.title ||
+    w.universe ||
+    ""
+  ),
+  1200
+)}
+
+${en ? "FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY" : "TELJES SAJÁT KARAKTERLAP — VÁGATLAN, LEGMAGASABB PRIORITÁS"}:
+${fullSelfCharacterSheetForSocial(
+  w,
+  actor
+)}
+
+${socialSelfStyleOwnershipCard(
+  actor
+)}
+
+${en ? "OTHER PERSON REFERENCE FACTS — KNOWLEDGE ONLY, NEVER SELF STYLE" : "A MÁSIK FÉL REFERENCIA-TÉNYEI — CSAK TUDÁS, SOHA NEM SAJÁT STÍLUS"}:
+${JSON.stringify(
+  playerProfile
+)}
+
+${en
+  ? `HARD OWNERSHIP: You are ${actor.name} [${actor.id}]. The player is ${w.player.name} [${w.meId}]. Never swap speaker ownership.`
+  : `KEMÉNY TULAJDONJOG: Te ${actor.name} [${actor.id}] vagy. A játékos ${w.player.name} [${w.meId}]. Soha ne cseréld fel, ki beszél.`}
+`;
+}
+
 function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply, onOpenScene }) {
   const { tt } = useLang();
   const { media, addImage } = useMedia();
@@ -40417,6 +40486,20 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   }
 
   sendLockRef.current.add(c.id);
+
+  /*
+   * Reserve provider capacity immediately when the human presses Send.
+   * This blocks a new autonomous feed/world AI request from starting while
+   * this exact private message is waiting for its answer.
+   */
+  AI.directDmPending =
+    Math.max(
+      0,
+      Number(
+        AI.directDmPending
+      ) || 0
+    ) + 1;
+
   setBusyChats((prev) => ({ ...prev, [c.id]: true }));
   setText("");
   setChatImg("");
@@ -40579,11 +40662,9 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
     const out = await askWorldJSONInteractive(
       requestWorld,
       engineFor(requestWorld),
-      `${worldContext(
+      `${directPlayerDmContextCard(
         requestWorld,
-        [c.id],
-        false,
-        c.id
+        c
       )}
 
 TE MOST ${c.name.toUpperCase()} VAGY egy privát beszélgetésben ${requestWorld.player.name} karakterrel.
@@ -40646,17 +40727,12 @@ ${selfMemoryForPrompt(
 BESZÉLGETÉS:
 ${hist}
 
-${characterAgentRuntimeCard(
-  requestWorld,
-  [c.id],
-  {
-    surface: "dm",
-    targetId: requestWorld.meId,
-    playerText: t,
-    inputAuthorId: requestWorld.meId,
-    messages: requestWorld.chats[ck] || [],
-  }
-)}
+DIRECT DM RUNTIME FACTS:
+- SELF ID: ${c.id}
+- PLAYER ID: ${requestWorld.meId}
+- CURRENT SURFACE: private DM
+- CURRENT TARGET: ${requestWorld.player.name}
+- The latest player message in BESZÉLGETÉS is the exact input to answer now.
 
 ${conversationOwnershipInstruction(
   requestWorld,
@@ -41238,6 +41314,22 @@ Formátum:
       )
     );
   } finally {
+  AI.directDmPending =
+    Math.max(
+      0,
+      (
+        Number(
+          AI.directDmPending
+        ) || 0
+      ) - 1
+    );
+
+  /*
+   * If a queued direct DM was waiting behind one already-running provider
+   * request, resume the priority queue now that the reservation count changed.
+   */
+  pumpAiQueue();
+
   sendLockRef.current.delete(c.id);
   setBusyChats((prev) => {
     const next = { ...prev };
@@ -62019,7 +62111,10 @@ const signOut = useCallback(async () => {
    */
   if (
     !manualQueued &&
-    AI.interactivePending > 0
+    (
+      AI.interactivePending > 0 ||
+      AI.directDmPending > 0
+    )
   ) {
     return;
   }
