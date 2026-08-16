@@ -51267,7 +51267,16 @@ function runAutonomousFeedHeartbeat(w, update) {
 
   const latest = lastAiFeedPostAt(w);
   const silence = latest ? now() - latest : Infinity;
-  const due = silence >= 12000;
+
+  /*
+   * LIGHTWEIGHT QUOTA HEARTBEAT:
+   * The normal scheduler already enforces the 3–5 posts / rolling 24h rule.
+   * This provider-free fallback only needs to rescue a stalled feed, not write
+   * every 12 seconds. Matching the existing 90s under-minimum catch-up pulse
+   * avoids unnecessary React/world-save churn while still reaching quota
+   * comfortably within 24 hours.
+   */
+  const due = silence >= 90 * 1000;
   if (!due) return false;
 
   const candidate = cast[0];
@@ -51279,7 +51288,7 @@ function runAutonomousFeedHeartbeat(w, update) {
     const live = charById(n, candidate.id);
     if (!live || !characterCanAutonomouslyPost(n, live)) return;
     const liveLatest = lastAiFeedPostAt(n);
-    if (liveLatest && now() - liveLatest < 12000) return;
+    if (liveLatest && now() - liveLatest < 90 * 1000) return;
     const fallback = deterministicAutonomousFallbackPost(n, live.id);
     if (!fallback) return;
     created = Boolean(applyWorldStep(n, fallback));
