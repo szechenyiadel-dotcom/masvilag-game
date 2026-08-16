@@ -3070,6 +3070,187 @@ function relLabel(r) {
     r ? r.score : 0
   );
 }
+
+/*
+ * RELATIONSHIP DISPLAY DETAIL — DIRECTIONAL ONLY.
+ *
+ * The relationship graph is already directional (A -> B and B -> A).
+ * These helpers only make that asymmetry visible: bond, current feeling and
+ * hidden feeling are shown separately, and the pair UI can explicitly call
+ * out one-sided crushes / obsession.
+ */
+function relationshipDirectionDetails(
+  r,
+  lang = CURRENT_LANG
+) {
+  if (!r) return [];
+
+  const en = asLang(lang) === "en";
+  const parts = [];
+  const bond = String(
+    r.bond || r.type || ""
+  ).trim();
+  const mood = String(
+    r.mood || ""
+  ).trim();
+  const hidden = String(
+    r.hidden || ""
+  ).trim();
+
+  if (bond) {
+    parts.push(
+      `${en ? "Bond" : "Kötelék"}: ${localizedBond(
+        bond,
+        lang
+      )}`
+    );
+  }
+
+  if (mood) {
+    parts.push(
+      `${en ? "Current feeling" : "Aktuális érzés"}: ${localizedRelationshipDisplayText(
+        mood,
+        lang
+      )}`
+    );
+  }
+
+  if (hidden) {
+    parts.push(
+      `${en ? "Hidden feeling" : "Rejtett érzés"}: ${localizedRelationshipDisplayText(
+        hidden,
+        lang
+      )}`
+    );
+  }
+
+  return parts;
+}
+
+function relationshipRomanceDirectionSignal(r) {
+  const text = [
+    r && r.bond,
+    r && r.type,
+    r && r.mood,
+    r && r.hidden,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const obsession =
+    /obsess|fixat|megsz[aá]ll|m[aá]ni[aá]s|mine\.?\s*mine|az eny[eé]m|possess|birtokl|territorial/.test(
+      text
+    );
+
+  const crush =
+    /crush|attraction|attracted|vonz|szerelmes|in love|love interest/.test(
+      text
+    );
+
+  const romantic =
+    obsession ||
+    crush ||
+    /j[aá]rnak|dating|partner|jegyes|engaged|h[aá]zast[aá]rs|spouse|husband|wife|titkos viszony|affair/.test(
+      text
+    );
+
+  const secret =
+    /secret|hidden|titkos|rejtett|senki nem tud|doesn['’]?t know/.test(
+      text
+    );
+
+  return {
+    obsession,
+    crush,
+    romantic,
+    secret,
+  };
+}
+
+function relationshipPairAsymmetryText(
+  aRel,
+  bRel,
+  aName,
+  bName,
+  lang = CURRENT_LANG
+) {
+  const en = asLang(lang) === "en";
+  const a = relationshipRomanceDirectionSignal(
+    aRel
+  );
+  const b = relationshipRomanceDirectionSignal(
+    bRel
+  );
+
+  if (
+    a.obsession &&
+    b.obsession
+  ) {
+    return en
+      ? `Mutual obsession: ${aName} and ${bName} are both intensely fixated on each other.`
+      : `Kölcsönös megszállottság: ${aName} és ${bName} is intenzíven megszállott a másik iránt.`;
+  }
+
+  if (a.obsession) {
+    if (b.romantic) {
+      return en
+        ? `Asymmetric romantic dynamic: ${aName} is obsessed with ${bName}, while ${bName} also has romantic feelings, but not the same intensity.`
+        : `Aszimmetrikus romantikus dinamika: ${aName} megszállott ${bName} iránt, miközben ${bName} is romantikusan érez, de nem ugyanazzal az intenzitással.`;
+    }
+
+    return en
+      ? `One-sided obsession: ${aName} → ${bName}. ${bName} does not currently reciprocate it romantically.`
+      : `Egyoldalú megszállottság: ${aName} → ${bName}. ${bName} jelenleg nem viszonozza romantikusan.`;
+  }
+
+  if (b.obsession) {
+    if (a.romantic) {
+      return en
+        ? `Asymmetric romantic dynamic: ${bName} is obsessed with ${aName}, while ${aName} also has romantic feelings, but not the same intensity.`
+        : `Aszimmetrikus romantikus dinamika: ${bName} megszállott ${aName} iránt, miközben ${aName} is romantikusan érez, de nem ugyanazzal az intenzitással.`;
+    }
+
+    return en
+      ? `One-sided obsession: ${bName} → ${aName}. ${aName} does not currently reciprocate it romantically.`
+      : `Egyoldalú megszállottság: ${bName} → ${aName}. ${aName} jelenleg nem viszonozza romantikusan.`;
+  }
+
+  if (
+    a.crush &&
+    b.crush
+  ) {
+    return en
+      ? `Mutual crush: ${aName} ↔ ${bName}. Both directions contain romantic attraction.`
+      : `Kölcsönös crush: ${aName} ↔ ${bName}. Mindkét irányban van romantikus vonzalom.`;
+  }
+
+  if (a.crush) {
+    if (b.romantic) {
+      return en
+        ? `Romantic feelings are asymmetric: ${aName} has a crush on ${bName}; ${bName}'s side is romantic too, but defined differently.`
+        : `A romantikus érzések nem teljesen egyformák: ${aName} crusholja ${bName}-t; ${bName} oldalán is van romantikus érzés, de másképp meghatározva.`;
+    }
+
+    return en
+      ? `${a.secret ? "Secret, one-sided crush" : "One-sided crush"}: ${aName} → ${bName}.`
+      : `${a.secret ? "Titkos, egyoldalú crush" : "Egyoldalú crush"}: ${aName} → ${bName}.`;
+  }
+
+  if (b.crush) {
+    if (a.romantic) {
+      return en
+        ? `Romantic feelings are asymmetric: ${bName} has a crush on ${aName}; ${aName}'s side is romantic too, but defined differently.`
+        : `A romantikus érzések nem teljesen egyformák: ${bName} crusholja ${aName}-t; ${aName} oldalán is van romantikus érzés, de másképp meghatározva.`;
+    }
+
+    return en
+      ? `${b.secret ? "Secret, one-sided crush" : "One-sided crush"}: ${bName} → ${aName}.`
+      : `${b.secret ? "Titkos, egyoldalú crush" : "Egyoldalú crush"}: ${bName} → ${aName}.`;
+  }
+
+  return "";
+}
 const moodEmoji = (d) => (d >= 10 ? "🔥" : d > 0 ? "❤️" : d <= -10 ? "🖤" : d < 0 ? "💔" : "✨");
 function relColor(score) {
   if (score < -20) return "var(--steel)";
@@ -4249,8 +4430,10 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
     /\bex\b|ex-boyfriend|ex-girlfriend|exes|volt bar[aá]t|volt bar[aá]tn[oő]|volt p[aá]r/.test(low);
   const explicitMutualCrush =
     /mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction|k[oö]lcs[oö]n[oö]s vonzalom/.test(low);
+  const explicitObsession =
+    /obsess|fixation|fixated|megsz[aá]llott|megsz[aá]llotts[aá]g|m[aá]ni[aá]san|can['’]?t stop thinking|cannot stop thinking/.test(low);
   const explicitCrush =
-    /crush|has a crush|vonz[oó]d|vonzalom|attraction|attracted|in love|szerelmes|love interest|fixation|obsess/.test(low);
+    /crush|has a crush|vonz[oó]d|vonzalom|attraction|attracted|in love|szerelmes|love interest/.test(low);
   const explicitSecret =
     /secret crush|hidden crush|secret attraction|titkos crush|titkos vonzalom|rejtett vonzalom|senki nem tud|doesn['’]?t know/.test(low);
 
@@ -4352,6 +4535,25 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   if (explicitMutualCrush) {
     return { score: 70, bond: "Kölcsönös crush", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
   }
+
+  /*
+   * Preserve intensity from Connections instead of flattening "obsessed with X"
+   * into an ordinary Crush. It remains directional: this says only what ACTOR
+   * feels toward TARGET. The reverse direction is inferred independently from
+   * the other character's own sheet.
+   */
+  if (explicitObsession) {
+    return {
+      score: 72,
+      bond: "Crush",
+      fixed: false,
+      hidden: explicitSecret || cue.secret ? "Secret obsession" : "Obsessed",
+      mood: "Megszállott",
+      why: "",
+      source: "connections",
+    };
+  }
+
   if (explicitCrush || exactCrush || cue.romantic) {
     return {
       score: 52,
@@ -30520,43 +30722,107 @@ function RelBar({ score }) {
 /* Kétirányú kapcsolat-szerkesztő: külön az egyik és külön a másik irány.
    Az érzés lehet egyoldalú — ez a lényeg. */
 function RelPair({ w, aId, bId, aName, bName, update }) {
-  const { tt } = useLang();
-  const side = (from, to, label) => {
-    const r = getRel(w, from, to);
+  const { tt, lang } = useLang();
+
+  const aRel = getRel(
+    w,
+    aId,
+    bId
+  );
+
+  const bRel = getRel(
+    w,
+    bId,
+    aId
+  );
+
+  const pairAsymmetry =
+    relationshipPairAsymmetryText(
+      aRel,
+      bRel,
+      aName,
+      bName,
+      lang
+    );
+
+  const side = (from, to, label, r) => {
+    const detailParts =
+      relationshipDirectionDetails(
+        r,
+        lang
+      );
+
     return (
       <div>
         <div className="between" style={{ marginBottom: 4 }}>
           <span style={{ fontSize: 12.5, color: "var(--bone)" }}>{label}</span>
           <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score}</span>
         </div>
-        <div style={{ fontFamily: "Fraunces, Georgia, serif", fontSize: 15, color: r.mood ? "var(--rose)" : "var(--muted)", marginBottom: 6 }}>
-          {r.mood
-            ? localizedRelationshipDisplayText(r.mood, CURRENT_LANG)
-            : relLabel(r)}
+
+        <div style={{ fontFamily: "Fraunces, Georgia, serif", fontSize: 15, color: r.mood ? "var(--rose)" : "var(--muted)", marginBottom: 5 }}>
+          {relLabel(r)}
         </div>
+
+        {detailParts.length ? (
+          <p
+            className="hint"
+            style={{
+              marginBottom: 7,
+              lineHeight: 1.55,
+            }}
+          >
+            {detailParts.join(" · ")}
+          </p>
+        ) : null}
+
         {r.why ? <p className="hint" style={{ marginBottom: 6 }}>{r.why}</p> : null}
+
         <RelBar score={r.score} />
+
         <input className="i mono" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} type="range" min="-100" max="100"
           value={r.score} onChange={(e) => update((n) => setConfiguredRel(n, from, to, { score: Number(e.target.value) }, "manual"))} />
+
         <MoodPicker value={r.mood} style={{ padding: "6px 10px", fontSize: 12 }}
           onChange={(v) => update((n) => setConfiguredRel(n, from, to, { mood: v }, "manual"))} />
+
         <BondPicker value={r.bond || r.type || ""} fixed={!!r.fixed} style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }}
           onChange={(pp) => update((n) => setConfiguredRel(n, from, to, { ...pp, type: "" }, "manual"))} />
+
         <input className="i" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} value={r.hidden || ""}
           placeholder={tt("titkos érzés — csak az AI látja, ő nem mondja ki", "hidden feeling — only the AI sees it, they won't say it out loud")}
           onChange={(e) => update((n) => setConfiguredRel(n, from, to, { hidden: e.target.value }, "manual"))} />
       </div>
     );
   };
+
   return (
     <>
-      {side(aId, bId, `${aName} → ${bName}`)}
+      {side(aId, bId, `${aName} → ${bName}`, aRel)}
+
       <div className="sep" style={{ margin: "14px 0" }} />
-      {side(bId, aId, `${bName} → ${aName}`)}
+
+      {side(bId, aId, `${bName} → ${aName}`, bRel)}
+
+      {pairAsymmetry ? (
+        <div
+          className="hint"
+          style={{
+            marginTop: 10,
+            padding: "9px 10px",
+            border: "1px solid var(--line)",
+            borderRadius: 10,
+            color: "var(--gold)",
+            lineHeight: 1.5,
+          }}
+        >
+          {pairAsymmetry}
+        </div>
+      ) : null}
+
       <p className="hint" style={{ marginTop: 8 }}>
         {tt(
-          "A két irány külön él: attól, hogy az egyik rajong a másikért, a másik még érezhet mást.",
-          "The two directions are separate: even if one person adores the other, the other may feel something completely different."
+          "A két irány külön él: crush, titkos vonzalom, megszállottság, féltékenység vagy gyűlölet is lehet teljesen egyoldalú. A fenti összegzés mindig külön hasonlítja össze A → B és B → A állapotát.",
+          "The two directions are independent: a crush, secret attraction, obsession, jealousy, or hatred can be completely one-sided. The summary above always compares A → B and B → A separately."
         )}
       </p>
     </>
