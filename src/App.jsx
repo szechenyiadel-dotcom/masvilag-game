@@ -13070,6 +13070,34 @@ function hierarchyBehaviorCard(w, actorId, targetId) {
     : `CÍMHATÁR: ${target.name} sensei, de NEM ${actor.name} saját senseie. Ne hívd automatikusan „Sensei ${surname}”-nek. Ez a megszólítás alapból a saját tanítványaihoz tartozik, hacsak explicit kánon nem rögzít más udvariassági viszonyt.`;
 }
 
+function parseRoleplayPlayerInput(rawText) {
+  const original = String(rawText || "").trim();
+  if (!original) return { text: "", kind: "speech", isAction: false };
+
+  /*
+   * ROLEPLAY INPUT CONTRACT:
+   * A leading/trailing pair of * is an explicit player ACTION, not dialogue.
+   * Examples: *felállok* / *I grab his hand*.
+   * Keep the asterisks out of the stored turn text, but preserve the exact
+   * action wording so the AI and memory layer see what actually happened.
+   * If the player writes normal prose without stars, it remains speech.
+   */
+  const actionMatch = original.match(/^\*\s*([\s\S]*?)\s*\*$/);
+  if (actionMatch && actionMatch[1].trim()) {
+    return {
+      text: actionMatch[1].trim(),
+      kind: "action",
+      isAction: true,
+    };
+  }
+
+  return {
+    text: original,
+    kind: "speech",
+    isAction: false,
+  };
+}
+
 function playerInputUnderstandingInstruction(w, rawText, surface = "chat") {
   const text = String(rawText || "").trim();
   if (!text) return "";
@@ -33138,7 +33166,10 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
     }
   });
 
-  const advance = async (playerText) => {
+  const advance = async (rawPlayerText) => {
+    const parsedPlayerInput = parseRoleplayPlayerInput(rawPlayerText);
+    const playerText = parsedPlayerInput.text;
+    const playerInputKind = parsedPlayerInput.kind;
     if (sendLockRef.current) return;
     sendLockRef.current = true;
     setBusy("turn");
@@ -33163,7 +33194,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
           id: "turn_" + uid(),
           authorId: w.meId,
           to: playerTarget.id || "",
-          kind: "action",
+          kind: playerInputKind,
           text: playerText,
           ts: now(),
           language: worldLanguage(w, w.meId),
@@ -33301,6 +33332,10 @@ ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` :
 
 ${playerText ? playerInputUnderstandingInstruction(w, playerText, "roleplay") : ""}
 
+${playerText ? (playerInputKind === "action"
+  ? `PLAYER INPUT TYPE — ACTION: A játékos a teljes inputot *...* jelek közé tette. Ez DETERMINISZTIKUSAN cselekvés. A játékos karaktere ezt a konkrét cselekvést hajtotta végre; ne kezeld kimondott párbeszédként, ne tedd idézőjelbe, és ne írj helyette további cselekvést. A jelenlévő AI-karakterek erre reagáljanak karakterhűen.`
+  : `PLAYER INPUT TYPE — SPEECH: A játékos inputja nem *...* akcióformátumú, ezért alapértelmezésben kimondott párbeszédként kezeld.`) : ""}
+
 ${characterAgentRuntimeCard(
   w,
   cast.map((c) => c.id),
@@ -33395,6 +33430,12 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 ${worldLanguage(w, w.meId) === "en"
   ? "- Every user-visible turn, narration, memory, mood, reason and event summary in the JSON must be natural English."
   : "- Minden felhasználónak látható turn, narráció, memória, mood, indok és event-összefoglaló természetes, hibátlan magyar legyen."}
+
+ROLEPLAY INPUT PARSING — KÖTELEZŐ:
+- Ha a játékos inputja pontosan *...* formában érkezik, az teljes egészében CSELEKVÉS. A csillagok csak jelölők, a tárolt turn textből elhagyhatók, de a jelentés és a cselekvés megmaradjon.
+- *felállok* = action, NEM speech. *megfogom a kezét* = action, NEM speech.
+- Normál, csillag nélküli játékosi szöveg alapértelmezésben speech.
+- A játékos cselekvését soha ne fordítsd át olyan mondattá, mintha azt hangosan kimondta volna.
 
 Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","to":"annak a jelenlévő karakternek/játékosnak az id-ja, akinek a speech közvetlenül szól, vagy üres","kind":"speech vagy action","text":"..."}],
@@ -33525,6 +33566,10 @@ ${playerText ? `${w.player.name} most ezt teszi vagy mondja:
 "${playerText}"` : "A játékos most nem lép közbe."}
 
 ${playerText ? playerInputUnderstandingInstruction(w, playerText, "roleplay") : ""}
+
+${playerText ? (playerInputKind === "action"
+  ? `PLAYER INPUT TYPE — ACTION: A játékos a teljes inputot *...* jelek közé tette. Ez DETERMINISZTIKUSAN cselekvés. A játékos karaktere ezt a konkrét cselekvést hajtotta végre; ne kezeld kimondott párbeszédként, ne tedd idézőjelbe, és ne írj helyette további cselekvést. A jelenlévő AI-karakterek erre reagáljanak karakterhűen.`
+  : `PLAYER INPUT TYPE — SPEECH: A játékos inputja nem *...* akcióformátumú, ezért alapértelmezésben kimondott párbeszédként kezeld.`) : ""}
 
 KARAKTEREK — TÖMÖR, DE KÖTELEZŐ KÁNON + EMLÉKEZET:
 ${retryCast}
@@ -44527,12 +44572,22 @@ function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
   /* recordSocialEvent already seeds the grounded rumor graph. We call the
      selector again here only to surface a candidate that includes THIS popup;
      private/unwitnessed events can never pass this gate. */
-  const candidate = selectGossipStoryCandidate(w);
-  if (!candidate) return false;
+  let candidate = selectGossipStoryCandidate(w);
   const sourceEventId = String(socialEntry.id || "");
-  const coversPopup = candidate.primaryEventId === sourceEventId ||
-    (Array.isArray(candidate.eventIds) && candidate.eventIds.includes(sourceEventId));
-  if (!coversPopup) return false;
+  const coversPopup = candidate && (candidate.primaryEventId === sourceEventId ||
+    (Array.isArray(candidate.eventIds) && candidate.eventIds.includes(sourceEventId)));
+
+  /* Do not let a different, higher-scoring story swallow the popup. If the
+     selector picked another event, build a candidate directly from THIS
+     resolved popup so the consequence is guaranteed to have a publication
+     path. */
+  if (!coversPopup) {
+    const mode = w.gossipSettings && (w.gossipSettings.mediaMode === "local" || w.gossipSettings.mediaMode === "global")
+      ? w.gossipSettings.mediaMode
+      : "local";
+    candidate = buildGossipStoryCandidate(w, socialEntry, [socialEntry], mode);
+  }
+  if (!candidate) return false;
 
   return simEnqueue(
     w,
@@ -44547,8 +44602,11 @@ function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
 
 function popupEventGossipEligible(event,visibility,witnessIds,gossipPotential){
   if(!event)return false;
-  if(visibility==="public")return gossipPotential>=18;
-  if(visibility==="limited")return (witnessIds||[]).length>=1&&gossipPotential>=28;
+  /* A resolved public popup is a real world event. Its outcome must be able
+     to enter the gossip pipeline even when the model underestimates its
+     gossipPotential. Limited events need at least one real witness. */
+  if(visibility==="public")return true;
+  if(visibility==="limited")return (witnessIds||[]).length>=1;
   return false;
 }
 
@@ -49911,6 +49969,17 @@ function planAutoAction(view) {
         targetId: immediateThread.targetId || ""
       }
     );
+  }
+
+  /*
+   * AUTONOMOUS COMMENT PULSE:
+   * A fresh AI post with missing comment coverage gets a guaranteed comment
+   * generation slot before another world post is allowed. This makes the feed
+   * behave like a social network instead of a graveyard with excellent CSS.
+   */
+  const commentCoveragePost = guaranteedCommentCoverageCandidate(view);
+  if (commentCoveragePost) {
+    return guaranteedPostCommentAction(view, commentCoveragePost, "scheduler-comment-pulse");
   }
 
   /*
