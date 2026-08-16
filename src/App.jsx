@@ -4248,7 +4248,7 @@ function setRel(w, a, b, patch) {
    dynamic score happened to exist at the end of the previous run.
    ============================================================ */
 
-const RELATIONSHIP_CANON_VERSION = 8;
+const RELATIONSHIP_CANON_VERSION = 9;
 
 function ensureRelationshipBaselineStore(w) {
   if (!w.relationshipBaselines || typeof w.relationshipBaselines !== "object") {
@@ -4287,24 +4287,29 @@ function relationshipCanonFingerprint(w) {
     add(person.nick);
     add(person.nickname);
     add(person.username);
+
+    /* Mechanical relationship canon itself. */
     add(person.connections);
-    add(person.personality);
-    add(person.traits);
-    add(person.goals);
-    add(person.fears);
-    add(person.likes);
-    add(person.secrets);
-    add(person.backstory);
-    add(person.extra);
-    add(person.brief);
+
+    /* Identity/pronouns used only to resolve direction correctly. */
+    add(person.gender);
+    add(person.orientation);
+
+    /*
+     * Background fields are relationship-relevant ONLY for objective
+     * organization/dojo/faction membership. They do not create personal bonds.
+     */
     add(person.affiliation);
     add(person.organization);
     add(person.role);
     add(person.rank);
     add(person.job);
     add(person.bio);
-    add(person.gender);
-    add(person.orientation);
+    add(person.extra);
+    add(person.backstory);
+    add(person.combat);
+    add(person.skills);
+    add(person.abilities);
   });
 
   return `${people.length}:${hash >>> 0}`;
@@ -4424,411 +4429,429 @@ function canonicalRelationshipEvidence(w, actor, target) {
     .slice(0, 4200);
 }
 
-function inferCanonicalRelationshipBaseline(w, actor, target) {
+function connectionOwnedSocialBaseline(w, actor, target) {
   if (!w || !actor || !target || actor.id === target.id) return null;
 
-  const evidence =
-    canonicalRelationshipEvidence(
+  const entries =
+    connectionRelationshipEntriesAbout(
       w,
       actor,
       target
     );
 
-  const low =
-    evidence.toLowerCase();
+  if (!entries.length) return null;
 
-  const cue =
-    connectionRelationshipCue(
-      w,
-      actor,
-      target
+  const text =
+    entries
+      .map((entry) =>
+        String(
+          entry &&
+          entry.relation ||
+          ""
+        )
+      )
+      .join(" | ")
+      .toLowerCase();
+
+  if (!text) return null;
+
+  const chosenSibling =
+    /sisters? she chose|brothers? she chose|chosen sister|chosen brother|like (?:a )?(?:sister|brother|sibling)|testv[eé]rk[eé]nt/.test(
+      text
     );
 
-  const directedRomance =
+  const row = (
+    score,
+    bond,
+    fixed = false,
+    mood = ""
+  ) => ({
+    score,
+    bond,
+    fixed,
+    hidden: "",
+    mood,
+    why: "",
+    source: "connections",
+  });
+
+  /*
+   * FACTUAL / FAMILY.
+   */
+  if (/\bmother\b|\bmom\b|\bmum\b|\banya\b|édesany/.test(text)) {
+    return row(55, "Anya", true);
+  }
+
+  if (/\bfather\b|\bdad\b|\bapa\b|édesap/.test(text)) {
+    return row(55, "Apa", true);
+  }
+
+  if (
+    !chosenSibling &&
+    /\bsister\b|\bbrother\b|sibling|testv[eé]r/.test(text)
+  ) {
+    return row(55, "Testvér", true);
+  }
+
+  if (/cousin|unokatestv[eé]r/.test(text)) {
+    return row(45, "Unokatestvér", true);
+  }
+
+  /*
+   * EXPLICIT PARTNER STATUS.
+   */
+  if (/husband|wife|spouse|h[aá]zast[aá]rs|f[eé]rje|feles[eé]ge/.test(text)) {
+    return row(90, "Házastárs");
+  }
+
+  if (/engaged|fianc[eé]|jegyes/.test(text)) {
+    return row(85, "Jegyesek");
+  }
+
+  if (/\bdating\b|boyfriend|girlfriend|j[aá]rnak|p[aá]rja|relationship with/.test(text)) {
+    return row(75, "Járnak");
+  }
+
+  if (/\bex\b|ex-boyfriend|ex-girlfriend|exes|volt bar[aá]t|volt bar[aá]tn[oő]|volt p[aá]r/.test(text)) {
+    return row(0, "Exek");
+  }
+
+  /*
+   * NAMED PERSONAL SOCIAL BOND.
+   * A named friendship beats a generic dojo rivalry.
+   */
+  if (
+    chosenSibling ||
+    /best friend|ride\s*or\s*die|legjobb bar[aá]t/.test(text)
+  ) {
+    return row(92, "Legjobb barát");
+  }
+
+  if (/close friend|k[oö]zeli bar[aá]t/.test(text)) {
+    return row(78, "Közeli barát");
+  }
+
+  const formerFriend =
+    /former friend|ex[- ]friend|used to be friends?|volt bar[aá]t/.test(
+      text
+    );
+
+  if (
+    !formerFriend &&
+    /\bfriend\b|bar[aá]t|ally|sz[oö]vets[eé]ges|trusted ally|loyal friend/.test(
+      text
+    )
+  ) {
+    return row(60, "Barát");
+  }
+
+  if (/archenemy|sworn enemy|\benemy\b|ellens[eé]g|gy[uű]l[oö]l|despise|f[oő]ellens[eé]g/.test(text)) {
+    return row(-90, "Ellenség", false, "hostile");
+  }
+
+  if (/\brival\b|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(text)) {
+    return row(-68, "Rivális", false, "competitive and distrustful");
+  }
+
+  /*
+   * ROLE-SPECIFIC RELATIONSHIPS.
+   */
+  if (/\bmentor\b|\bsensei\b|\bteacher\b|\bcoach\b|mester|tan[aá]r|edz[oő]/.test(text)) {
+    return row(25, "Mentor");
+  }
+
+  if (/\bstudent\b|prot[eé]g[eé]|tan[ií]tv[aá]ny/.test(text)) {
+    return row(20, "Tanítvány");
+  }
+
+  if (/teammate|team mate|team-mate|csapatt[aá]rs|dojo mate|doj[oó]t[aá]rs|clubmate|klubt[aá]rs/.test(text)) {
+    return row(28, "Teammate");
+  }
+
+  if (/acquaintance|ismer[oő]s/.test(text)) {
+    return row(0, "Ismerős");
+  }
+
+  return null;
+}
+
+function reciprocalConnectionSocialBaseline(w, actor, target) {
+  if (!w || !actor || !target || actor.id === target.id) return null;
+
+  /*
+   * Read the OTHER character's Relations/Connections too.
+   *
+   * This is only a fallback when ACTOR has no own named social bond for TARGET.
+   * Romantic feelings are NOT mirrored here — crush/obsession stay directional
+   * and are handled by canonicalDirectedRomanceState().
+   */
+  const reverse =
+    connectionOwnedSocialBaseline(
+      w,
+      target,
+      actor
+    );
+
+  if (!reverse) return null;
+
+  const reverseBond =
+    String(
+      reverse.bond ||
+      reverse.type ||
+      ""
+    );
+
+  const symmetric = new Set([
+    "Testvér",
+    "Unokatestvér",
+    "Járnak",
+    "Jegyesek",
+    "Házastárs",
+    "Exek",
+    "Legjobb barát",
+    "Közeli barát",
+    "Barát",
+    "Ellenség",
+    "Rivális",
+    "Teammate",
+    "Ismerős",
+  ]);
+
+  const paired =
+    BOND_PAIR[reverseBond] ||
+    (
+      symmetric.has(reverseBond)
+        ? reverseBond
+        : ""
+    );
+
+  if (!paired) return null;
+
+  const scoreForBond = {
+    "Gyerek": 55,
+    "Szülő": 55,
+    "Testvér": 55,
+    "Unokatestvér": 45,
+    "Járnak": 75,
+    "Jegyesek": 85,
+    "Házastárs": 90,
+    "Exek": 0,
+    "Legjobb barát": 92,
+    "Közeli barát": 78,
+    "Barát": 60,
+    "Ellenség": -90,
+    "Rivális": -68,
+    "Mentor": 25,
+    "Tanítvány": 20,
+    "Teammate": 28,
+    "Ismerős": 0,
+  };
+
+  return {
+    score:
+      Object.prototype.hasOwnProperty.call(
+        scoreForBond,
+        paired
+      )
+        ? scoreForBond[paired]
+        : clampRelationshipScore(
+            reverse.score
+          ),
+
+    bond: paired,
+    fixed:
+      FIXED_BONDS.includes(
+        paired
+      ),
+
+    hidden: "",
+
+    mood:
+      paired === "Ellenség"
+        ? "hostile"
+        : paired === "Rivális"
+          ? "competitive and distrustful"
+          : "",
+
+    why: "",
+    source: "connections-reciprocal",
+  };
+}
+
+function relationshipRomanceLayer(w, actor, target) {
+  const directed =
     canonicalDirectedRomanceState(
       w,
       actor,
       target
     );
 
-  const exactBond =
-    exactConnectionBondLabel(
+  const concealedObsession =
+    Boolean(
+      directed.outboundObsession &&
+      (
+        directed.concealed ||
+        directed.wouldNeverAdmit
+      )
+    );
+
+  const concealedCrush =
+    Boolean(
+      directed.outboundCrush &&
+      !directed.outboundObsession &&
+      directed.concealed
+    );
+
+  return {
+    ...directed,
+
+    hidden:
+      concealedObsession
+        ? (
+            directed.wouldNeverAdmit
+              ? "Obsession — would never admit it"
+              : "Obsession"
+          )
+        : concealedCrush
+          ? (
+              directed.wouldNeverAdmit
+                ? "Crush — would never admit it"
+                : "Secret crush"
+            )
+          : "",
+
+    visibleMood:
+      concealedObsession ||
+      concealedCrush
+        ? ""
+        : directed.outboundObsession
+          ? "Obsessed"
+          : (
+              directed.outboundCrush
+                ? "Crush"
+                : ""
+            ),
+  };
+}
+
+function inferCanonicalRelationshipBaseline(w, actor, target) {
+  if (!w || !actor || !target || actor.id === target.id) return null;
+
+  /*
+   * RELATIONSHIP CANON v9 — SIMPLE SOURCE PRIORITY
+   *
+   * 1. ACTOR's exact Relations/Connections row about TARGET.
+   * 2. TARGET's exact Relations/Connections row about ACTOR, but only as a
+   *    reciprocal fallback for factual/social bonds.
+   * 3. Directional crush/obsession facts from BOTH Connections sections.
+   * 4. Group rule written in ACTOR's Connections (e.g. Iron Dragons — Rival).
+   * 5. Objective dojo/faction membership from background/profile fields.
+   *
+   * Nothing else can manufacture a personal relationship baseline.
+   */
+  const ownSocial =
+    connectionOwnedSocialBaseline(
       w,
       actor,
       target
     );
 
-  const exactBondLow =
-    String(exactBond || "")
-      .toLowerCase();
+  const reciprocalSocial =
+    ownSocial
+      ? null
+      : reciprocalConnectionSocialBaseline(
+          w,
+          actor,
+          target
+        );
 
-  const groupRelationship =
-    connectionGroupRelationshipBaseline(
+  const groupSocial =
+    ownSocial || reciprocalSocial
+      ? null
+      : connectionGroupRelationshipBaseline(
+          actor,
+          target
+        );
+
+  const factionSocial =
+    ownSocial ||
+    reciprocalSocial ||
+    groupSocial ||
+    !factionRivalryActiveBetween(
       actor,
       target
-    );
+    )
+      ? null
+      : {
+          score: -72,
+          bond: "Rivális",
+          fixed: false,
+          hidden: "",
+          mood: "hostile and distrustful",
+          why: "",
+          source: "faction",
+        };
 
-  const factionRivalry =
-    factionRivalryActiveBetween(
+  const social =
+    ownSocial ||
+    reciprocalSocial ||
+    groupSocial ||
+    factionSocial ||
+    null;
+
+  const romance =
+    relationshipRomanceLayer(
+      w,
       actor,
       target
-    );
-
-  const exactBest =
-    /legjobb bar[aá]t|best friend/.test(
-      exactBondLow
-    );
-
-  const exactClose =
-    /közeli bar[aá]t|close friend/.test(
-      exactBondLow
-    );
-
-  const exactFriend =
-    /(?:^|\s|\/)bar[aá]t(?:\s|\/|$)|(?:^|\s|\/)friend(?:\s|\/|$)/.test(
-      exactBondLow
-    );
-
-  const exactEnemy =
-    /ellens[eé]g|enemy/.test(
-      exactBondLow
-    );
-
-  const exactRival =
-    /riv[aá]lis|rival/.test(
-      exactBondLow
-    );
-
-  const exactAcquaintance =
-    /ismer[oő]s|acquaintance/.test(
-      exactBondLow
-    );
-
-  const exactCrush =
-    Boolean(
-      directedRomance.outboundCrush
-    );
-
-  const exactMentor =
-    /mentor|sensei|tan[aá]r|teacher|coach/.test(
-      exactBondLow
-    );
-
-  const exactStudent =
-    /tan[ií]tv[aá]ny|student/.test(
-      exactBondLow
-    );
-
-  const explicitBest =
-    /best friend|ride\s*or\s*die|legjobb bar[aá]t|legjobb bar[aá]tn[oő]|legjobb bar[aá]tja/.test(
-      low
-    );
-
-  const explicitClose =
-    /close friend|k[oö]zeli bar[aá]t|like a sibling|testv[eé]rk[eé]nt/.test(
-      low
-    );
-
-  const explicitFriend =
-    /\bfriend\b|bar[aá]t|ally|sz[oö]vets[eé]ges|trusted ally|loyal friend/.test(
-      low
-    );
-
-  const explicitEnemy =
-    /archenemy|sworn enemy|enemy|ellens[eé]g|hate(?:s|d)?\b|hates\b|gy[uű]l[oö]l|despise|f[oő]ellens[eé]g/.test(
-      low
-    );
-
-  const explicitRival =
-    /rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(
-      low
-    );
-
-  const explicitAcquaintance =
-    /acquaintance|ismer[oő]s/.test(
-      low
-    );
-
-  const explicitDating =
-    /\bdating\b|boyfriend|girlfriend|j[aá]rnak|p[aá]rja|relationship with/.test(
-      low
-    );
-
-  const explicitEngaged =
-    /engaged|fianc[eé]|jegyes/.test(
-      low
-    );
-
-  const explicitSpouse =
-    /husband|wife|spouse|h[aá]zast[aá]rs|f[eé]rje|feles[eé]ge/.test(
-      low
-    );
-
-  const explicitEx =
-    /\bex\b|ex-boyfriend|ex-girlfriend|exes|volt bar[aá]t|volt bar[aá]tn[oő]|volt p[aá]r/.test(
-      low
-    );
-
-  const explicitMutualCrush =
-    Boolean(
-      directedRomance.mutualCrush ||
-      /mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction|k[oö]lcs[oö]n[oö]s vonzalom/.test(
-        low
-      )
-    );
-
-  const explicitObsession =
-    Boolean(
-      directedRomance.outboundObsession
-    );
-
-  const explicitCrush =
-    Boolean(
-      directedRomance.outboundCrush
-    );
-
-  const explicitSecret =
-    Boolean(
-      directedRomance.concealed
-    );
-
-  const explicitMother =
-    /\bmother\b|\bmom\b|\bmum\b|\banya\b|édesany/.test(
-      low
-    );
-
-  const explicitFather =
-    /\bfather\b|\bdad\b|\bapa\b|édesap/.test(
-      low
-    );
-
-  const explicitSibling =
-    /\bsister\b|\bbrother\b|sibling|testv[eé]r/.test(
-      low
-    );
-
-  const explicitCousin =
-    /cousin|unokatestv[eé]r/.test(
-      low
-    );
-
-  const explicitMentor =
-    /\bmentor\b|\bsensei\b|\bteacher\b|\bcoach\b|mester|tan[aá]r|edz[oő]/.test(
-      low
-    );
-
-  const explicitStudent =
-    /\bstudent\b|prot[eé]g[eé]|tan[ií]tv[aá]ny/.test(
-      low
-    );
-
-  const explicitTeammate =
-    /teammate|team mate|team-mate|csapatt[aá]rs|dojo mate|doj[oó]t[aá]rs|clubmate|klubt[aá]rs/.test(
-      low
     );
 
   /*
-   * Obsession is an emotional layer, NOT automatically the public/social bond.
-   *
-   * Daniel-style canon:
-   *   "obsessed with Angel, would never admit it"
-   * becomes:
-   *   bond = whatever their actual social relationship is (or blank)
-   *   hidden = "Obsession — would never admit it"
-   *   mood = blank
+   * A real social bond stays the bond.
+   * Crush/obsession is layered on top as current or hidden feeling.
    */
-  const hiddenRomance = (() => {
-    if (explicitObsession) {
-      if (
-        explicitSecret ||
-        directedRomance.wouldNeverAdmit
-      ) {
-        return directedRomance.wouldNeverAdmit
-          ? "Obsession — would never admit it"
-          : "Obsession";
-      }
-
-      return "";
-    }
-
-    if (
-      explicitCrush &&
-      explicitSecret
-    ) {
-      return directedRomance.wouldNeverAdmit
-        ? "Crush — would never admit it"
-        : "Secret crush";
-    }
-
-    return "";
-  })();
-
-  const concealedObsession =
-    Boolean(
-      explicitObsession &&
-      (
-        explicitSecret ||
-        directedRomance.wouldNeverAdmit
-      )
-    );
-
-  const openObsession =
-    Boolean(
-      explicitObsession &&
-      !concealedObsession
-    );
-
-  const withPrivateRomance = (row) => {
-    if (!row) return row;
-
+  if (social) {
     return {
-      ...row,
+      ...social,
+
       hidden:
-        hiddenRomance ||
-        String(row.hidden || ""),
+        romance.hidden ||
+        String(
+          social.hidden ||
+          ""
+        ),
+
+      mood:
+        romance.visibleMood ||
+        String(
+          social.mood ||
+          ""
+        ),
     };
-  };
+  }
 
   /*
-   * Strong named personal canon always beats a generic faction/group rule.
+   * Daniel-style concealed obsession:
+   * hidden feeling ONLY. No Obsession bond, no visible Obsessed mood.
    */
-  if (explicitMother) {
-    return withPrivateRomance({
-      score: 55,
-      bond: exactBond || "Anya",
-      fixed: true,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitFather) {
-    return withPrivateRomance({
-      score: 55,
-      bond: exactBond || "Apa",
-      fixed: true,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitSibling) {
-    return withPrivateRomance({
-      score: 55,
-      bond: exactBond || "Testvér",
-      fixed: true,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitCousin) {
-    return withPrivateRomance({
-      score: 45,
-      bond: exactBond || "Unokatestvér",
-      fixed: true,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitBest || exactBest || cue.close) {
-    return withPrivateRomance({
-      score: 92,
-      bond: "Legjobb barát",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitClose || exactClose) {
-    return withPrivateRomance({
-      score: 78,
-      bond: "Közeli barát",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (
-    (explicitFriend || exactFriend || cue.friendly) &&
-    !(explicitEnemy || cue.hostile)
-  ) {
-    return withPrivateRomance({
-      score: 60,
-      bond: "Barát",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitSpouse) {
-    return withPrivateRomance({
-      score: 90,
-      bond: "Házastárs",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitEngaged) {
-    return withPrivateRomance({
-      score: 85,
-      bond: "Jegyesek",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitDating) {
-    return withPrivateRomance({
-      score: 75,
-      bond: "Járnak",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitEx) {
-    return withPrivateRomance({
+  if (romance.hidden) {
+    return {
       score: 0,
-      bond: "Exek",
+      bond: "",
       fixed: false,
-      hidden: "",
+      hidden: romance.hidden,
       mood: "",
       why: "",
       source: "connections",
-    });
+    };
   }
 
-  if (explicitMutualCrush) {
-    return withPrivateRomance({
+  /*
+   * If both directed Connections sides establish attraction, both directed
+   * baselines resolve as mutual rather than one-sided.
+   */
+  if (romance.mutualCrush) {
+    return {
       score: 70,
       bond: "Kölcsönös crush",
       fixed: false,
@@ -4836,160 +4859,22 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
       mood: "",
       why: "",
       source: "connections",
-    });
+    };
   }
 
-  /*
-   * Rival/enemy is the social bond; a crush/obsession can coexist underneath.
-   * This prevents a character written as "rival, secretly obsessed" from being
-   * flattened into only "Obsession".
-   */
-  if (explicitEnemy || exactEnemy || cue.hostile) {
-    return withPrivateRomance({
-      score: -90,
-      bond: "Ellenség",
-      fixed: false,
-      hidden:
-        explicitCrush && !hiddenRomance
-          ? "Crush"
-          : "",
-      mood: "hostile",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitRival || exactRival || cue.rival) {
-    return withPrivateRomance({
-      score: -68,
-      bond: "Rivális",
-      fixed: false,
-      hidden:
-        explicitCrush && !hiddenRomance
-          ? "Crush"
-          : "",
-      mood: "competitive and distrustful",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if ((explicitMentor || exactMentor) && !(explicitStudent || exactStudent)) {
-    return withPrivateRomance({
-      score: 25,
-      bond: exactBond || "Mentor",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if ((explicitStudent || exactStudent) && !(explicitMentor || exactMentor)) {
-    return withPrivateRomance({
-      score: 20,
-      bond: exactBond || "Tanítvány",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitTeammate) {
-    return withPrivateRomance({
-      score: 28,
-      bond: exactBond || "Teammate",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  if (explicitAcquaintance || exactAcquaintance) {
-    return withPrivateRomance({
-      score: 0,
-      bond: "Ismerős",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    });
-  }
-
-  /*
-   * Explicit group rule from Connections, e.g.
-   *   "Iron Dragons — Rival"
-   * applies to every real member only when no stronger named relationship
-   * above has already resolved this pair.
-   */
-  if (groupRelationship) {
-    return withPrivateRomance(
-      groupRelationship
-    );
-  }
-
-  if (factionRivalry) {
-    return withPrivateRomance({
-      score: -72,
-      bond: "Rivális",
-      fixed: false,
-      hidden:
-        explicitCrush && !hiddenRomance
-          ? "Crush"
-          : "",
-      mood: "hostile and distrustful",
-      why: "",
-      source: "faction",
-    });
-  }
-
-  /*
-   * A normal crush is a social/romantic bond only when there is no stronger
-   * social bond above. Cross-sheet evidence is valid here, so Ryan -> Angel
-   * can be recovered even if Ryan's feeling was written on Angel's sheet.
-   */
-  if (explicitCrush || exactCrush) {
+  if (romance.outboundCrush) {
     return {
       score: 52,
       bond: "Crush",
       fixed: false,
-      hidden:
-        hiddenRomance,
+      hidden: "",
       mood: "",
       why: "",
       source: "connections",
     };
   }
 
-  /*
-   * Concealed obsession by itself is ONLY hidden feeling.
-   * No synthetic Obsession bond and no public/current "Obsessed" mood.
-   */
-  if (concealedObsession) {
-    return {
-      score: 0,
-      bond: "",
-      fixed: false,
-      hidden:
-        hiddenRomance ||
-        "Obsession",
-      mood: "",
-      why: "",
-      source: "connections",
-    };
-  }
-
-  /*
-   * Openly stated obsession can remain visible if the sheet truly presents it
-   * as open rather than hidden.
-   */
-  if (openObsession) {
+  if (romance.outboundObsession) {
     return {
       score: 72,
       bond: "Obsession",
@@ -6690,6 +6575,52 @@ function reconcileLiveRelationshipsWithStrongCanon(w, force = false) {
     if (parts.length !== 2) return;
     const [a, b] = parts;
     const baseline = store[key] || {};
+
+    /*
+     * v9 parser migration:
+     * If this baseline was generated from Relations/Connections/faction canon,
+     * apply the freshly parsed baseline exactly once. Manual configured
+     * baselines are deliberately excluded.
+     */
+    if (
+      force &&
+      !relationshipBaselineIsManual(baseline) &&
+      /^(?:connections(?:-|$)|faction)$/i.test(
+        String(
+          baseline.source ||
+          ""
+        )
+      )
+    ) {
+      setRel(w, a, b, {
+        score:
+          clampRelationshipScore(
+            baseline.score
+          ),
+        bond:
+          String(
+            baseline.bond ||
+            baseline.type ||
+            ""
+          ),
+        hidden:
+          String(
+            baseline.hidden ||
+            ""
+          ),
+        fixed:
+          !!baseline.fixed,
+        mood:
+          String(
+            baseline.mood ||
+            ""
+          ),
+        why: "",
+      });
+
+      return;
+    }
+
     const canon = strongRelationshipCanonBaseline(w, a, b);
 
     /*
