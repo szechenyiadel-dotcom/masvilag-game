@@ -24935,8 +24935,11 @@ function strictSocialActorCapsules(w, cast, post, directComment = null) {
       ].join(" | ")
     : `${post.authorId}`;
 
+  /* PERFORMANCE: keep the expensive sealed personality capsules focused on the
+     most relevant actors. Candidate selection and actual social behavior stay intact. */
   return (cast || [])
     .filter((actor) => actor && actor.id && actor.id !== post.authorId)
+    .slice(0, 8)
     .map((actor) => {
       const targetId =
         directComment && directComment.authorId
@@ -25156,6 +25159,15 @@ ${repetitionGuard(
   "kommentek"
 )}
 
+KARAKTERHANG — EZ A GENERÁLÁS EGYIK LEGFONTOSABB CÉLJA:
+- Ne egy általános social-media kommentet írj, majd csak utólag nevezd el a karakterrel. Először döntsd el, MIT MONDANA EZ A KONKRÉT KARAKTER, és csak utána fogalmazd meg.
+- A personality mezőből viselkedési döntést hozz: temperamentum, humor, értékrend, impulzivitás, arrogancia/szerénység, félelmek és kötődések ténylegesen változtassák meg a reakciót.
+- A speech/voice mezőből a megfogalmazás módja következzen: ritmus, mondathossz, szleng, szóhasználat, káromkodás, emoji, írásjelek, kis-/nagybetű, becenevek, szárazság vagy túláradás.
+- A backstory és Connections csak akkor jelenjen meg konkrét utalásként, ha a jelenlegi poszt vagy thread valóban megnyomja azt a pontot.
+- KÉT KARAKTER UGYANARRA A POSZTRA NE UGYANAZT ÉREZZE ÉS NE UGYANAZT MONDJA.
+- Ha a karakter természetéből következik, hogy kérdez, provokál, mesél, védekezik, rájátszik, túlreagál, kinevet, flörtöl vagy részletesebben kifejti a véleményét, TEDD MEG. Ne lapítsd mindegyiket egy száraz egysoros reakcióvá.
+- A cél nem a hosszú szöveg, hanem a felismerhető karakterhang.
+
 KOMMENT SZABÁLYOK:
 
 ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD MINIMUM:
@@ -25176,8 +25188,10 @@ ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD MINIMUM:
 - Minden komment előtt nézd meg az adott karakter fenti KORÁBBI FEED-KOMMENTJEIT. A feed-komment memória fontosabb ismétlésvédelmi forrás, mint az, hogy közben DM-ben vagy RP-ben mást mondott.
 - Ezek VALÓDI közösségi médiás kommentek, nem roleplay-jelenetek és nem mini novellák.
 - Úgy írjanak, mintha telefonról, gyorsan reagálnának egy Instagram/TikTok/X jellegű posztra.
-- A kommentek TÖBBSÉGE 1-12 szó legyen.
-- 13-20 szó csak ritkábban, ha a reakció tényleg igényli.
+- A kommentek TÖBBSÉGE 2-16 szó legyen, de ne rövidítsd le erőszakkal a karaktert.
+- 17-28 szó teljesen rendben van, ha a karakter személyisége, kapcsolata vagy a konkrét poszt ezt kívánja.
+- Ritkán 29-40 szó is megengedett, ha ettől lesz igazán karakterhű és természetes.
+- A rövidség nem cél önmagában: a karakter saját hangja fontosabb.
 - Egy 1-3 szavas reakció teljesen jó komment.
 - Egyetlen szó is lehet természetes komment.
 - Emoji + néhány szó is lehet teljes komment.
@@ -25194,7 +25208,8 @@ ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD MINIMUM:
 - Ne foglalják össze a kapcsolatukat a poszt szerzőjével.
 - Ne tegyenek minden reakció végére tanulságot vagy érzelmi lezárást.
 - Ne legyen minden komment udvariasan és szépen felépítve.
-- Ha egy rövid reakció természetesebb, MINDIG azt válaszd a hosszabb megfogalmazás helyett.
+- Ha egy rövid reakció természetesebb, válaszd azt, DE ne vágd le a mondatot csak azért, hogy dry legyen.
+- Ha a karakter alapból beszédes, csípős, kaotikus, lelkes vagy flörtölős, ezt a válasz tényleges ritmusa és hossza is mutassa.
 
 TERMÉSZETES SOCIAL MEDIA STÍLUS:
 
@@ -25332,7 +25347,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 1700 }
+    { maxTokens: 2400 }
   );
 
   /*
@@ -27215,6 +27230,12 @@ ${repetitionGuard(
   "kommentválaszok"
 )}
 
+REPLY KARAKTERHANG — NE LEGYEN GENERIKUS:
+- Először döntsd el, hogyan reagálna erre a konkrét karakter, és csak utána írd meg a mondatot.
+- A személyiség legyen látható a reakció döntésében és ritmusában, ne csak egy-egy jelzőben.
+- A reply lehet meleg, csípős, kaotikus, flörtölős, sértett, játékos, domináns, zavart vagy kifejtősebb, ha a karakterlap + kapcsolat + jelenlegi trigger ezt indokolja.
+- Ne rövidítsd le automatikusan a választ 1-2 száraz szóra csak azért, mert social media. A valódi karakterhang fontosabb a mesterséges tömörségnél.
+
 KOMMENTVÁLASZ SZABÁLYOK:
 
 ${directResponder ? `A LEGFONTOSABB NATURAL RESPONDER: ${directResponder.name} [${directResponder.id}]
@@ -27229,13 +27250,14 @@ ${directResponder ? `A LEGFONTOSABB NATURAL RESPONDER: ${directResponder.name} [
 - Általában EGY közvetlen válasz a legreálisabb. Legfeljebb 2 AI válaszoljon ugyanarra a kommentre, és a második csak akkor, ha neki is külön, konkrét oka van beszállni.
 - Ezek VALÓDI social media reply-k, nem roleplay-jelenetek és nem mini dialógusok egy regényből.
 - Úgy írjanak, mintha telefonról gyorsan válaszolnának egy kommentre.
-- A válaszok TÖBBSÉGE 1-12 szó legyen.
-- 13-20 szó csak ritkán, ha tényleg szükséges.
+- A válaszok TÖBBSÉGE 2-16 szó legyen, de a karakter saját beszédhossza érvényesüljön.
+- 17-28 szó is természetes lehet, ha a helyzet vagy a személyiség indokolja.
+- Ritkán 29-40 szó is lehet, ha ez a karakter hangjához tartozik.
 - Egyetlen szó is lehet teljes válasz.
 - 1-3 szavas beszólás vagy reakció teljesen természetes.
 - Emoji + néhány szó is lehet teljes válasz.
 - Ritkán akár csak emoji is lehet válasz, ha az adott karakter ezt tényleg megtenné.
-- Ha rövidebben természetesebb, MINDIG a rövidebb verziót válaszd.
+- Ha rövidebben természetesebb, válaszd a rövidebbet, de ne tömörítsd a karaktert automatikusan két száraz szóra.
 - Ne legyen minden válasz teljes, szépen lezárt mondat.
 - Lehet töredékes, félbehagyott, száraz, impulzív vagy minimális.
 - Ne írjanak hosszú bekezdést.
@@ -51858,7 +51880,7 @@ async function runSimulationAction(view, update, action, addImage) {
       return null;
     }
 
-    const maxComments = Math.max(2, Math.min(10, Number(action.payload && action.payload.maxComments) || 6));
+    const maxComments = Math.max(2, Math.min(20, Number(action.payload && action.payload.maxComments) || 14));
     const minComments = Math.max(
       0,
       Math.min(maxComments, Number(action.payload && action.payload.minComments) || 2)
@@ -56248,7 +56270,7 @@ const signOut = useCallback(async () => {
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 9000);
+    const i = setInterval(beat, 11000);
     const first = setTimeout(beat, 150);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
