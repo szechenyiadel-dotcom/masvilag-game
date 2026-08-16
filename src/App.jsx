@@ -7919,6 +7919,7 @@ const AI = {
   pending: 0,
   interactivePending: 0,
   listeners: [],
+  backgroundControllers: new Set(),
 
   /*
    * Valódi prioritásos queue.
@@ -8043,6 +8044,39 @@ function budgetAiRequest(system, prompt) {
       compactSystem.length !== String(system || "").length ||
       compactPrompt.length !== String(prompt || "").length,
   };
+}
+
+/*
+ * PLAYER FAST LANE:
+ * Player DM/comment/RP preempts autonomous provider work.
+ */
+function preemptBackgroundAiForInteractive() {
+  if (Array.isArray(AI.queue) && AI.queue.length) {
+    const keep = [];
+
+    AI.queue.forEach((task) => {
+      if (task && Number(task.priority) >= 50) {
+        keep.push(task);
+        return;
+      }
+
+      if (task && typeof task.reject === "function") {
+        const err = new Error(
+          "Background AI request superseded by player interaction."
+        );
+        err.supersededByInteractive = true;
+        err.retryable = false;
+        try { task.reject(err); } catch (e) {}
+      }
+    });
+
+    AI.queue = keep;
+  }
+
+  AI.backgroundControllers.forEach((ctrl) => {
+    try { ctrl.abort(); } catch (e) {}
+  });
+  AI.backgroundControllers.clear();
 }
 
 /* -------------------------------------------------------------------------
@@ -8253,6 +8287,11 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   );
 
   const ctrl = new AbortController();
+
+  if (!requestMeta.interactive) {
+    AI.backgroundControllers.add(ctrl);
+  }
+
   const timeoutMs = Math.max(7000, Number(requestMeta.timeoutMs) || (requestMeta.interactive ? 18000 : 32000));
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
@@ -8264,6 +8303,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     res = await requestAiProxy({
   provider: DEFAULT_AI_PROVIDER,
   model: DEFAULT_AI_MODEL,
+  interactive: Boolean(requestMeta.interactive),
   max_tokens: maxTokens,
   temperature: 0.9,
   system,
@@ -8281,6 +8321,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     throw new Error("Nem sikerült elérni az AI-t (hálózati hiba). A helyi proxy futása és az API kulcsok ellenőrzése szükséges.");
   } finally {
     clearTimeout(to);
+    AI.backgroundControllers.delete(ctrl);
   }
 
   let data;
@@ -8598,6 +8639,7 @@ async function askWorldJSONInteractive(
   prompt,
   options = {}
 ) {
+  preemptBackgroundAiForInteractive();
   AI.interactivePending++;
 
   try {
