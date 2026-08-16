@@ -17348,20 +17348,17 @@ function mergeWorlds(remote, local) {
   }
 
   /*
-   * RECOVERY v99.5.1 — RESTART EPOCH IS AUTHORITATIVE
+   * v99.5 RESTART FIX — HISTORY EPOCH IS AUTHORITATIVE
    *
-   * A world restart deliberately deletes gameplay history. Normal conflict
-   * reconciliation is append/union-oriented, so without this guard a stale
-   * pre-restart PostgreSQL snapshot can resurrect deleted posts, chats,
-   * memories, scenes, gossip and runtime state.
+   * Restart intentionally deletes gameplay history. Normal mergeWorlds()
+   * is union/append-oriented, so a stale pre-restart server snapshot could
+   * otherwise resurrect old posts, comments, chats, memories, scenes,
+   * gossip and runtime state during a 409/sync reconciliation.
    *
-   * historyEpoch already exists specifically to invalidate pre-restart AI
-   * output. Give it the same authority during world reconciliation:
-   * the HIGHER epoch wins as a complete world snapshot. The server syncRev is
-   * still adopted so the winner can be saved on the next retry.
-   *
-   * When epochs are equal, the original v99.5 merge logic below runs
-   * completely unchanged.
+   * historyEpoch already invalidates AI work started before restart.
+   * During reconciliation the HIGHER epoch therefore owns the complete
+   * gameplay-history snapshot. Equal epochs use the original v99.5 merge
+   * logic below completely unchanged.
    */
   const remoteHistoryEpoch =
     Math.max(
@@ -17399,8 +17396,8 @@ function mergeWorlds(remote, local) {
     delete out.extras;
 
     /*
-     * mergeWorlds(remote, local) is called with the PostgreSQL/server world as
-     * `remote`, so retry against that exact concurrency revision.
+     * `remote` is the current PostgreSQL/server snapshot in all reconciliation
+     * call sites, so adopt its concurrency revision for the next save retry.
      */
     out.syncRev =
       worldSyncRev(remote);
