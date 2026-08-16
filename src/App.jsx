@@ -12442,6 +12442,111 @@ function fullSelfCanon(c) {
  * representation keeps every IMPORTANT category present without repeating
  * tens of thousands of raw characters on every social/RP turn.
  */
+function fullSelfCharacterSheetForSocial(w, c) {
+  if (!c) return "";
+
+  /*
+   * SOCIAL SELF-CANON — UNABRIDGED.
+   *
+   * Used only when THIS character is the acting AI on a post/comment/reply/DM.
+   * No per-field or total character cap is applied. The point is that the
+   * acting AI sees its OWN complete character sheet, including private canon.
+   */
+  const rows = [
+    ["Name", c.name],
+    ["Nickname", c.nick || c.nickname],
+    ["Username", c.username],
+    ["Birth", c.birth],
+    ["Age", ageOf(c, w) || ""],
+    ["Gender", c.gender],
+    ["Orientation", c.orientation],
+    ["Height", c.height],
+    ["City", c.city],
+
+    ["Occupation / Job", c.job || c.occupation || c.profession],
+    ["Role", c.role],
+    ["Rank / Title", c.rank || c.title],
+    ["Organization", c.organization],
+    ["Affiliation", c.affiliation],
+
+    ["Public Bio", c.bio],
+    ["Appearance", c.looks],
+
+    ["Personality", c.personality],
+    ["Traits", c.traits],
+    ["Speech Style", c.speech],
+    ["Voice / Example Sentences — STYLE ONLY", c.voice],
+
+    ["Goals", c.goals],
+    ["Fears", c.fears],
+    ["Likes / Favorite Things", c.likes],
+    ["Secrets", c.secrets],
+
+    ["Relations / Connections — PRIVATE SELF-CANON", c.connections],
+
+    ["Backstory / History", c.backstory],
+    ["Other Important Canon", c.extra],
+    ["Brief / Additional Sheet Canon", c.brief],
+
+    ["Skills", c.skills],
+    ["Abilities", c.abilities],
+    ["Combat", c.combat],
+
+    ["Photo Album Context", albumList(c)],
+  ];
+
+  return rows
+    .map(([label, value]) => {
+      const raw =
+        String(value || "")
+          .replace(/\r/g, "")
+          .trim();
+
+      return raw
+        ? `${label}: ${raw}`
+        : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function publicBasicCharacterProfileForAgent(w, c) {
+  if (!c) return null;
+
+  /*
+   * WHAT ANOTHER CHARACTER MAY GET DIRECTLY FROM THE CHARACTER SHEET.
+   *
+   * Deliberately excluded:
+   * personality, traits, speech, voice examples, goals, fears, likes,
+   * secrets, backstory, extra, connections, skills/abilities/combat, brief,
+   * album and all other private/internal sheet fields.
+   *
+   * A character may still know more through ACTUAL memories/interactions,
+   * but those facts must come from memory/event state, not direct sheet access.
+   */
+  return {
+    id: String(c.id || ""),
+    name: String(c.name || ""),
+    nickname: String(c.nick || c.nickname || ""),
+    username: String(c.username || ""),
+    birth: String(c.birth || ""),
+    age: ageOf(c, w) || "",
+    gender: String(c.gender || ""),
+    orientation: String(c.orientation || ""),
+    height: String(c.height || ""),
+    city: String(c.city || ""),
+    occupation: String(c.job || c.occupation || c.profession || ""),
+    role: String(c.role || ""),
+    rank: String(c.rank || c.title || ""),
+    organization: String(c.organization || ""),
+    affiliation: String(c.affiliation || ""),
+    bio: String(c.bio || ""),
+    appearance: String(c.looks || ""),
+    primaryDojo: karateFactionDisplayName(factionFlags(c)),
+    classification: characterFactionIdentityCard(c) || "",
+  };
+}
+
 function compactSelfCanonForPrompt(c, maxChars = 6200) {
   if (!c) return "";
 
@@ -17667,6 +17772,7 @@ function worldContext(w, ids, deep, observerId, contextOptions = {}) {
   const includePlayer = contextOptions.includePlayer !== false;
   const includeRecentWorld = contextOptions.includeRecentWorld !== false;
   const socialScope = Boolean(contextOptions.socialScope);
+  const agentPrivacyScope = Boolean(contextOptions.agentPrivacyScope);
 
   const knownPeople = [
     ...(includePlayer && w.player ? [w.player] : []),
@@ -17752,16 +17858,24 @@ ${tt(
         "Ha egy jelenet úgy folytatódna, hogy neki kellene lépnie, állj meg ott, és hagyd rá a döntést.",
         "If the scene would require the player's move next, stop there and leave the decision to them."
       )}
-${deep
-        ? deepBrief(w, w.player, true, observerId)
-        : sheet(
-            w.player,
-            w,
-            false,
-            true,
-            observerId && observerId !== w.player.id
-              ? "private_no_connections"
-              : "private"
+${agentPrivacyScope
+        ? `${tt(
+            "MÁSIK KARAKTER PROFILJA — CSAK PUBLIKUS/ALAP ADATOK. A privát karakterlap nincs megosztva.",
+            "OTHER CHARACTER PROFILE — PUBLIC/BASIC DATA ONLY. Their private character sheet is not shared."
+          )}
+${JSON.stringify(publicBasicCharacterProfileForAgent(w, w.player))}`
+        : (
+            deep
+              ? deepBrief(w, w.player, true, observerId)
+              : sheet(
+                  w.player,
+                  w,
+                  false,
+                  true,
+                  observerId && observerId !== w.player.id
+                    ? "private_no_connections"
+                    : "private"
+                )
           )}`
     : tt(
         "JÁTÉKOS-KONTEXTUS: ebben a lokális social feladatban a játékos nincs benne a poszt/thread releváns szereplői között. A profilját és privát kánonját szándékosan nem kapod meg. NE hozd be őt témának.",
@@ -17795,9 +17909,13 @@ ${worldIdentityCanon(w)}
 
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
 ${cast.map((c) => (
-  socialScope
-    ? `${c.name} [${c.id}] — ${characterFactionIdentityCard(c) || "classification unknown"}`
-    : (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId && observerId !== c.id ? "private_no_connections" : "private"))
+  agentPrivacyScope
+    ? `${c.name} [${c.id}] — PUBLIC/BASIC PROFILE ONLY: ${JSON.stringify(publicBasicCharacterProfileForAgent(w, c))}`
+    : (
+        socialScope
+          ? `${c.name} [${c.id}] — ${characterFactionIdentityCard(c) || "classification unknown"}`
+          : (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId && observerId !== c.id ? "private_no_connections" : "private"))
+      )
 )).join("\n") || "-"}
 ${!observerId && deep && !socialScope ? multiActorPerformanceContext(w, cast.map((c) => c.id)) : ""}
 ${knownCtx.length ? `
@@ -27274,19 +27392,21 @@ function strictSocialActorCapsules(w, cast, post, directComment = null) {
 
   const postAuthor = charById(w, post.authorId);
   const targetPublic = postAuthor
-    ? [
-        `name=${postAuthor.name} [${postAuthor.id}]`,
-        `occupation=${cut(String(postAuthor.job || postAuthor.occupation || postAuthor.role || ""), 360) || "unknown"}`,
-        `side=${characterFactionIdentityCard(postAuthor) || "unknown"}`,
-        `public bio=${cut(String(postAuthor.bio || ""), 420) || "-"}`,
-      ].join(" | ")
+    ? JSON.stringify(
+        publicBasicCharacterProfileForAgent(
+          w,
+          postAuthor
+        )
+      )
     : `${post.authorId}`;
 
-  /* PERFORMANCE: keep the expensive sealed personality capsules focused on the
-     most relevant actors. Candidate selection and actual social behavior stay intact. */
+  /*
+   * SOCIAL SELF-CANON:
+   * every candidate who may actually speak gets their OWN full sheet.
+   * Other characters' private sheets are never included in that capsule.
+   */
   return (cast || [])
     .filter((actor) => actor && actor.id && actor.id !== post.authorId)
-    .slice(0, 6)
     .map((actor) => {
       const targetId =
         directComment && directComment.authorId
@@ -27302,8 +27422,8 @@ DIRECT TARGET FOR THIS REACTION: ${nameOfIn(w, targetId)} [${targetId}]
 
 ${voiceCard(actor)}
 
-FULL SELF CHARACTER CANON — HIGHEST PRIORITY:
-${compactSelfCanonForPrompt(actor, 9000)}
+FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
+${fullSelfCharacterSheetForSocial(w, actor)}
 
 EXACT DIRECTED PAIR CANON:
 ${JSON.stringify(exactPairCanonCard(w, actor.id, targetId) || {})}
@@ -27315,6 +27435,9 @@ TARGET-SPECIFIC MEMORY ONLY:
 ${commentTargetMemoryCard(w, actor, targetId) || "-"}
 
 HARD CAPSULE BOUNDARY:
+- SELF may use EVERY field from SELF's full sheet above, including private personality, fears, favorites, secrets, history, Relations/Connections and speech canon.
+- About OTHER characters, use only their PUBLIC/BASIC PROFILE supplied by the app, the directed relationship state SELF has toward them, and facts SELF genuinely learned through visible events/memory.
+- NEVER read another character's private sheet fields as omniscient knowledge: no other person's personality, traits, fears, likes/favorites, secrets, goals, speech style, voice examples, backstory, Extra or private Connections unless SELF actually learned that fact in-world.
 - Do NOT copy any fact from this capsule into another actor's output.
 - ${actor.name}'s occupation/dojo/rank/mentor/crush/enemy/history belong to ${actor.name}, never to another commenter.
 - Other named people inside ${actor.name}'s full sheet are private/background context and are NOT automatically relevant to this post.
@@ -27369,6 +27492,7 @@ async function genComments(w, post, options = {}) {
         includePlayer: publicSocialPlayerRelevant(w, post),
         includeRecentWorld: false,
         socialScope: true,
+        agentPrivacyScope: true,
       }
     )}
 
@@ -27768,6 +27892,7 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
           includePlayer: publicSocialPlayerRelevant(w, post),
           includeRecentWorld: false,
           socialScope: true,
+        agentPrivacyScope: true,
         }
       )}
 
@@ -29476,6 +29601,7 @@ async function genReply(w, post, comment, forcedResponderId = "") {
         includePlayer: publicSocialPlayerRelevant(w, post, comment),
         includeRecentWorld: false,
         socialScope: true,
+        agentPrivacyScope: true,
       }
     )}
 
@@ -30009,6 +30135,7 @@ JSON: {"reply":"short friendship-consistent reply"}${TAIL}`,
               includePlayer: publicSocialPlayerRelevant(w, post, comment),
               includeRecentWorld: false,
               socialScope: true,
+        agentPrivacyScope: true,
             }
           )}
 
@@ -30502,13 +30629,16 @@ SELF side/dojo/organization: ${characterFactionIdentityCard(actor) || "unknown"}
 
 ${voiceCard(actor)}
 
-FULL SELF CHARACTER CANON — HIGHEST PRIORITY:
-${compactSelfCanonForPrompt(actor, 9000)}
+FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
+${fullSelfCharacterSheetForSocial(w, actor)}
 
 OWN MEMORY:
 ${characterMemoryCard(w, actor)}
 
 HARD SELF BOUNDARY:
+- SELF may use EVERY field from ${actor.name}'s complete sheet above.
+- Other characters are NOT transparent character sheets. About them use only public/basic profile facts, SELF's own directed Relations/Connections toward them, and genuinely learned in-world facts.
+- Never import another character's personality, fears, favorites, secrets, goals, speech examples, backstory or private Connections into ${actor.name}'s knowledge just because that character exists in the database.
 - "I / my / our" in ${actor.name}'s output must come from ${actor.name}'s own capsule.
 - Never borrow another capsule's occupation, dojo, rank, mentor, family, crush, enemy, trauma, history or goal.
 - A person appearing inside Connections/memory is NOT automatically the topic of a new post.
@@ -30543,6 +30673,7 @@ async function genWorldStep(w, single, timeSkipHours = 0) {
         includePlayer: false,
         includeRecentWorld: false,
         socialScope: true,
+        agentPrivacyScope: true,
       }
     )}
 
@@ -30886,13 +31017,14 @@ async function genFocusedWorldStep(w) {
         includePlayer: false,
         includeRecentWorld: false,
         socialScope: true,
+        agentPrivacyScope: true,
       }
     )}
 
 ${voiceCard(author)}
 
-FULL SELF CHARACTER CANON — HIGHEST PRIORITY:
-${compactSelfCanonForPrompt(author, 10000)}
+FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
+${fullSelfCharacterSheetForSocial(w, author)}
 
 AUTHORSHIP / SELF-CANON LOCK:
 - SELF is exactly ${author.name} [${author.id}].
@@ -40946,12 +41078,23 @@ async function genDM(w, bot) {
       w,
       [bot.id],
       false,
-      bot.id
+      bot.id,
+      {
+        agentPrivacyScope: true,
+      }
     )}
 
 TE MOST ${String(
       bot.name
     ).toUpperCase()} VAGY.
+
+FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
+${fullSelfCharacterSheetForSocial(w, bot)}
+
+KNOWLEDGE BOUNDARY:
+- A SAJÁT teljes lapodat látod és használod: personality, Relations/Connections, history, goals, fears, likes, secrets, speech, occupation — mindent.
+- ${w.player.name} és más karakterek privát karakterlapját NEM látod. Róluk csak a PUBLIC/BASIC profiladatokat, a SAJÁT kapcsolatodat velük, a beszélgetéseiteket és azt tudod, amit ténylegesen megtudtál/láttál/hallottál a világban.
+- Más karakter personality/fears/likes/secrets/goals/speech/backstory/private Connections mezőjét ne használd omniscient háttértudásként.
 
 Magadtól írsz privát üzenetet ${w.player.name} karakternek.
 NEM ő kezdeményezett. Neked kell valódi, karakterhű okod legyen arra, hogy most ráírj.
