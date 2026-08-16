@@ -7887,12 +7887,7 @@ const AI = {
   gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
   interactiveGap: 350,       // gyors játékosi DM/group/RP lane
   initiativeGap: AI_INITIATIVE_GAP_MS, // gyors autonóm DM / event / group lane
-  /*
-   * PROVIDER STABILITY:
-   * One provider request at a time. Player actions still jump ahead in the
-   * priority queue; they simply cannot overlap a huge background world call.
-   */
-  maxConcurrent: 1,
+  maxConcurrent: Math.max(1, Math.min(2, Number(import.meta.env.VITE_AI_MAX_CONCURRENT) || 2)),
   activeWorkers: 0,
 
   /*
@@ -7903,15 +7898,7 @@ const AI = {
    * ritmusban a szolgáltatóra.
    */
   lastCostGap: 0,
-  /*
-   * Keep a safety margin below typical provider TPM ceilings. This is only a
-   * pacing target; it does not reduce output quality or stored world data.
-   */
-  /*
-   * Conservative rolling target for a shared live-world provider lane.
-   * This spaces heavy world calls without slowing ordinary rendering.
-   */
-  targetTokensPerMinute: Math.max(16000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 30000),
+  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 60000),
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
@@ -7919,7 +7906,6 @@ const AI = {
   pending: 0,
   interactivePending: 0,
   listeners: [],
-  backgroundControllers: new Set(),
 
   /*
    * Valódi prioritásos queue.
@@ -7979,11 +7965,8 @@ function aiCostGapFor(system, prompt, maxTokens) {
    * prompt után legyen ideje fellélegezni a token/minute keretnek.
    */
   return Math.max(
-    600,
-    Math.min(
-      45000,
-      raw
-    )
+    350,
+    Math.min(18000, raw)
   );
 }
 
@@ -7997,31 +7980,8 @@ function aiCostGapFor(system, prompt, maxTokens) {
  * the end (current task + JSON schema + TAIL), which are the two most useful
  * regions if an emergency trim is needed.
  */
-/*
- * PROVIDER-SAFE FINAL BUDGET
- *
- * The world keeps full canon/memory. This only limits the final request sent
- * to the provider after the semantic context builders have already selected
- * relevant material.
- *
- * Old defaults (42k + 82k chars) could exceed ~40k estimated input tokens in a
- * single request and repeatedly hit TPM 429s.
- */
-const AI_MAX_SYSTEM_CHARS =
-  Math.max(
-    12000,
-    Number(
-      import.meta.env.VITE_AI_MAX_SYSTEM_CHARS
-    ) || 18000
-  );
-
-const AI_MAX_PROMPT_CHARS =
-  Math.max(
-    18000,
-    Number(
-      import.meta.env.VITE_AI_MAX_PROMPT_CHARS
-    ) || 28000
-  );
+const AI_MAX_SYSTEM_CHARS = Math.max(18000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 42000);
+const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 82000);
 
 function preserveEdges(value, maxChars, label = "context") {
   const text = String(value || "");
@@ -8044,39 +8004,6 @@ function budgetAiRequest(system, prompt) {
       compactSystem.length !== String(system || "").length ||
       compactPrompt.length !== String(prompt || "").length,
   };
-}
-
-/*
- * PLAYER FAST LANE:
- * Player DM/comment/RP preempts autonomous provider work.
- */
-function preemptBackgroundAiForInteractive() {
-  if (Array.isArray(AI.queue) && AI.queue.length) {
-    const keep = [];
-
-    AI.queue.forEach((task) => {
-      if (task && Number(task.priority) >= 50) {
-        keep.push(task);
-        return;
-      }
-
-      if (task && typeof task.reject === "function") {
-        const err = new Error(
-          "Background AI request superseded by player interaction."
-        );
-        err.supersededByInteractive = true;
-        err.retryable = false;
-        try { task.reject(err); } catch (e) {}
-      }
-    });
-
-    AI.queue = keep;
-  }
-
-  AI.backgroundControllers.forEach((ctrl) => {
-    try { ctrl.abort(); } catch (e) {}
-  });
-  AI.backgroundControllers.clear();
 }
 
 /* -------------------------------------------------------------------------
@@ -8114,27 +8041,12 @@ async function runAiQueueWorker() {
               ? AI.initiativeGap
               : AI.gap;
 
-        /*
-         * Respect the previous request's estimated token cost. Priority still
-         * controls ORDER, not unsafe provider overlap. A player DM therefore
-         * jumps ahead of background work but waits long enough after a huge
-         * world request to avoid immediately causing another TPM 429.
-         */
         const costGap =
           task.priority >= 50
-            ? Math.min(
-                30000,
-                Number(AI.lastCostGap) || 0
-              )
+            ? Math.min(5000, Number(AI.lastCostGap) || 0)
             : task.priority >= 15
-              ? Math.min(
-                  36000,
-                  Number(AI.lastCostGap) || 0
-                )
-              : Math.min(
-                  45000,
-                  Number(AI.lastCostGap) || 0
-                );
+              ? Math.min(7000, Number(AI.lastCostGap) || 0)
+              : Math.min(10000, Number(AI.lastCostGap) || 0);
 
         const gap = Math.max(baseGap, costGap);
         if (since < gap) await wait(gap - since);
@@ -8287,11 +8199,6 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   );
 
   const ctrl = new AbortController();
-
-  if (!requestMeta.interactive) {
-    AI.backgroundControllers.add(ctrl);
-  }
-
   const timeoutMs = Math.max(7000, Number(requestMeta.timeoutMs) || (requestMeta.interactive ? 18000 : 32000));
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
@@ -8303,7 +8210,6 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     res = await requestAiProxy({
   provider: DEFAULT_AI_PROVIDER,
   model: DEFAULT_AI_MODEL,
-  interactive: Boolean(requestMeta.interactive),
   max_tokens: maxTokens,
   temperature: 0.9,
   system,
@@ -8321,7 +8227,6 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     throw new Error("Nem sikerült elérni az AI-t (hálózati hiba). A helyi proxy futása és az API kulcsok ellenőrzése szükséges.");
   } finally {
     clearTimeout(to);
-    AI.backgroundControllers.delete(ctrl);
   }
 
   let data;
@@ -8375,39 +8280,6 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       const base = tokenMinuteLimit ? 30000 : (code === 429 ? 12000 : 8000);
       const adaptive = Math.min(60000, base * Math.pow(1.8, Math.max(0, AI.strikes - 1)));
       const restMs = Math.max(retryAfterMs, adaptive);
-
-      /*
-       * Safe diagnostics for the exact upstream limiter. No API key or
-       * sensitive request content is printed.
-       */
-      const rateProvider =
-        res.headers && res.headers.get
-          ? (
-              res.headers.get(
-                "x-masvilag-ai-provider"
-              ) || DEFAULT_AI_PROVIDER
-            )
-          : DEFAULT_AI_PROVIDER;
-
-      const upstreamStatus =
-        res.headers && res.headers.get
-          ? (
-              res.headers.get(
-                "x-masvilag-ai-upstream-status"
-              ) || String(code)
-            )
-          : String(code);
-
-      console.warn(
-        "[ai-rate-limit]",
-        `provider=${rateProvider}`,
-        `status=${upstreamStatus}`,
-        `retryAfter=${retryAfterRaw || "-"}`,
-        `rest=${Math.ceil(restMs / 1000)}s`,
-        (data && data.error && data.error.message) ||
-          data?.error ||
-          ""
-      );
 
       /*
        * A rate-limitet a queue belül kezeli és ugyanazt a játékosi kérést
@@ -8551,36 +8423,7 @@ async function askJSON(system, prompt, options = {}) {
              * broken provider cannot freeze the UI forever.
              */
             const left = cooldownLeft();
-
-            /*
-             * CRITICAL 429 LOOP FIX:
-             *
-             * Background live-world work must never sleep only part of the
-             * provider cooldown and then retry from INSIDE the same queued
-             * request. That bypasses the queue's cooldown gate and can create:
-             *
-             * 429 -> wait 20s -> retry while 19s remain -> 429 -> longer
-             * cooldown -> repeat.
-             *
-             * Let the background action fail quietly for this tick. The world
-             * scheduler already refuses another non-manual AI action while
-             * cooldownLeft() > 0, so it will naturally try again only after the
-             * provider is ready.
-             */
-            if (priority < 50) {
-              throw err;
-            }
-
-            /*
-             * v99.5 provider-cooldown fix:
-             * A 30s ceiling was too short for normal provider backoff values
-             * such as 35–60 seconds. Interactive player actions (DM/group/RP)
-             * may wait asynchronously up to 90 seconds, then retry the SAME
-             * request automatically. `await wait()` does not block React/UI.
-             *
-             * Background world work keeps its existing 20s cap below.
-             */
-            const interactiveWaitCap = 90000;
+            const interactiveWaitCap = 30000;
 
             if (priority >= 50 && left > interactiveWaitCap) {
               const tooLong = new Error(
@@ -8596,7 +8439,9 @@ async function askJSON(system, prompt, options = {}) {
             await wait(
               Math.min(
                 left + 250,
-                interactiveWaitCap
+                priority >= 50
+                  ? interactiveWaitCap
+                  : 20000
               )
             );
             continue;
@@ -8639,7 +8484,6 @@ async function askWorldJSONInteractive(
   prompt,
   options = {}
 ) {
-  preemptBackgroundAiForInteractive();
   AI.interactivePending++;
 
   try {
@@ -16996,60 +16840,14 @@ async function serverWorldPeek(code) {
 }
 
 async function serverSaveWorld(world) {
-  const result =
-    await apiJson("/world/save", {
-      method: "POST",
-      body: JSON.stringify({
-        world,
-        syncRev:
-          worldSyncRev(world),
-      }),
-    });
-
-  /*
-   * v99.5 <-> backend v19 compatibility
-   *
-   * Backend v19 intentionally stopped echoing the full multi-MB world after a
-   * successful save. It now returns only:
-   *   { ok, meId, syncRev, rev }
-   *
-   * The original v99.5 client still expects `saved.world` in several existing
-   * autosave/sync paths. Reconstruct the accepted snapshot locally from the
-   * exact world we just sent, then apply the authoritative server revisions.
-   *
-   * This restores the original v99.5 contract without making the backend send
-   * several MB back on every save.
-   */
-  if (
-    result &&
-    result.ok &&
-    !result.world
-  ) {
-    const accepted =
-      cloneWorldState(
-        world
-      );
-
-    accepted.syncRev =
-      Math.max(
-        0,
-        Math.floor(
-          Number(result.syncRev) ||
-          worldSyncRev(world)
-        )
-      );
-
-    accepted.rev =
-      Math.max(
-        Number(accepted.rev) || 0,
-        Number(result.rev) || 0
-      );
-
-    result.world =
-      accepted;
-  }
-
-  return result;
+  return apiJson("/world/save", {
+    method: "POST",
+    body: JSON.stringify({
+      world,
+      syncRev:
+        worldSyncRev(world),
+    }),
+  });
 }
 function migrate(w) {
   if (!w || !w.universe) return w;
@@ -17548,80 +17346,6 @@ function mergeWorlds(remote, local) {
     delete only.extras;
     return only;
   }
-
-  /*
-   * v99.5 restart-safe reconciliation
-   *
-   * Normal mergeWorlds() is intentionally union/append oriented. Restart World
-   * is intentionally destructive. If one side has a higher historyEpoch, that
-   * side is the newer gameplay generation and its cleared history must not be
-   * repopulated from the older generation.
-   *
-   * Equal epochs use the ORIGINAL v99.5 merge logic below unchanged.
-   */
-  const remoteHistoryEpoch =
-    Math.max(
-      0,
-      Math.floor(
-        Number(
-          remote &&
-          remote.historyEpoch
-        ) || 0
-      )
-    );
-
-  const localHistoryEpoch =
-    Math.max(
-      0,
-      Math.floor(
-        Number(
-          local &&
-          local.historyEpoch
-        ) || 0
-      )
-    );
-
-  if (
-    remoteHistoryEpoch !==
-    localHistoryEpoch
-  ) {
-    const winner =
-      localHistoryEpoch >
-      remoteHistoryEpoch
-        ? local
-        : remote;
-
-    const out =
-      cloneWorldState(
-        winner
-      );
-
-    delete out.extras;
-
-    /*
-     * `remote` is the server snapshot in reconciliation call sites.
-     * Carry its concurrency revision so the winning fresh generation can save.
-     */
-    out.syncRev =
-      worldSyncRev(
-        remote
-      );
-
-    out.rev =
-      Math.max(
-        Number(remote.rev) || 0,
-        Number(local && local.rev) || 0
-      ) + 1;
-
-    out.historyEpoch =
-      Math.max(
-        remoteHistoryEpoch,
-        localHistoryEpoch
-      );
-
-    return out;
-  }
-
   const out = { ...local };
   delete out.extras;
   out.rev = Math.max(remote.rev || 0, local.rev || 0) + 1;

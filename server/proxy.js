@@ -1,4 +1,4 @@
-/* MÁSVILÁG SERVER v20 — PLAYER FAST FAILOVER + SPLIT MEDIA — 20260816_0308 */
+/* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
 /*
  * MÁSVILÁG — server/proxy.js
  * Full drop-in backend with authoritative multi-device world + media sync.
@@ -19,70 +19,6 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || process.env.AI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-const ANTHROPIC_API_KEYS = [
-  ANTHROPIC_API_KEY,
-  process.env.ANTHROPIC_API_KEY_2,
-  process.env.ANTHROPIC_API_KEY_SECONDARY,
-].filter(Boolean);
-
-const OPENAI_API_KEYS = [
-  OPENAI_API_KEY,
-  process.env.OPENAI_API_KEY_2,
-  process.env.OPENAI_API_KEY_SECONDARY,
-].filter(Boolean);
-
-const GEMINI_API_KEYS = [
-  GEMINI_API_KEY,
-  process.env.GEMINI_API_KEY_2,
-  process.env.GEMINI_API_KEY_SECONDARY,
-].filter(Boolean);
-
-const AI_KEY_COOLDOWN_UNTIL = new Map();
-
-function aiKeySlot(provider, index) {
-  return `${provider}:${index}`;
-}
-
-function retryAfterMs(headers, fallbackMs = 12000) {
-  const raw =
-    headers && headers.get
-      ? headers.get("retry-after")
-      : "";
-
-  const seconds = Number(raw);
-  if (Number.isFinite(seconds) && seconds > 0) {
-    return Math.ceil(seconds * 1000);
-  }
-
-  if (raw) {
-    const at = Date.parse(raw);
-    if (Number.isFinite(at)) {
-      return Math.max(0, at - Date.now());
-    }
-  }
-
-  return fallbackMs;
-}
-
-function aiKeyCooling(provider, index) {
-  return (
-    Number(
-      AI_KEY_COOLDOWN_UNTIL.get(
-        aiKeySlot(provider, index)
-      )
-    ) || 0
-  ) > Date.now();
-}
-
-function markAiKeyCooldown(provider, index, headers) {
-  const ms = retryAfterMs(headers, 12000);
-  AI_KEY_COOLDOWN_UNTIL.set(
-    aiKeySlot(provider, index),
-    Date.now() + ms
-  );
-  return ms;
-}
 const GEMINI_EMBEDDING_MODEL = String(process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001").trim();
 const GEMINI_EMBEDDING_DIM = Math.min(3072, Math.max(128, Number(process.env.GEMINI_EMBEDDING_DIM) || 768));
 const DEFAULT_PROVIDER = process.env.AI_PROVIDER || "anthropic";
@@ -4601,243 +4537,457 @@ app.post(
   }
 );
 
-async function proxyOpenAIMessage(body) {
-  if (!OPENAI_API_KEYS.length) {
-    return { unavailable: true, provider: "openai" };
-  }
-
-  let last = null;
-
-  for (let keyIndex = 0; keyIndex < OPENAI_API_KEYS.length; keyIndex++) {
-    if (aiKeyCooling("openai", keyIndex)) continue;
-
-    const r = await fetchWithTimeout(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENAI_API_KEYS[keyIndex]}`,
-        },
-        body: JSON.stringify(buildOpenAIPayload(body)),
-      }
-    );
-
-    const payload = await responseJsonSafe(r);
-
-    if (!r.ok) {
-      last = {
-        ok: false,
-        status: r.status,
-        payload,
-        retryAfter: r.headers.get("retry-after"),
-        provider: "openai",
-      };
-
-      if (retryableProviderStatus(r.status)) {
-        markAiKeyCooldown("openai", keyIndex, r.headers);
-        continue;
-      }
-
-      return last;
-    }
-
-    const normalized = normalizeOpenAIResponse(payload);
-    const hasText =
-      Array.isArray(normalized?.content) &&
-      normalized.content.some((x) => String(x?.text || "").trim());
-
-    if (hasText) {
-      return { ok: true, payload: normalized, provider: "openai" };
-    }
-
-    last = {
-      ok: false,
-      status: 502,
-      payload: { error: { message: "OpenAI returned empty content." } },
-      provider: "openai",
+async function proxyOpenAIMessage(
+  body
+) {
+  if (
+    !OPENAI_API_KEY
+  ) {
+    return {
+      unavailable: true,
+      provider:
+        "openai",
     };
   }
 
-  return last || {
-    ok: false,
-    status: 429,
-    payload: { error: { message: "All configured OpenAI key slots are cooling down." } },
-    provider: "openai",
-  };
-}
+  const r =
+    await fetchWithTimeout(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method:
+          "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+          "Authorization":
+            `Bearer ${OPENAI_API_KEY}`,
+        },
+        body:
+          JSON.stringify(
+            buildOpenAIPayload(
+              body
+            )
+          ),
+      }
+    );
 
-async function proxyGeminiMessage(body) {
-  if (!GEMINI_API_KEYS.length) {
-    return { unavailable: true, provider: "gemini" };
+  const payload =
+    await responseJsonSafe(
+      r
+    );
+
+  if (!r.ok) {
+    return {
+      ok: false,
+      status:
+        r.status,
+      payload,
+      retryAfter:
+        r.headers.get(
+          "retry-after"
+        ),
+      provider:
+        "openai",
+    };
   }
 
-  const requested = String(body?.model || "");
-  const modelsToTry = [
-    ...new Set([
-      requested.startsWith("gemini") ? requested : "",
-      process.env.GEMINI_MODEL || "",
-      process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash",
-    ].filter(Boolean)),
-  ];
+  const normalized =
+    normalizeOpenAIResponse(
+      payload
+    );
+
+  const hasText =
+    Array.isArray(
+      normalized?.content
+    ) &&
+    normalized.content.some(
+      (x) =>
+        String(
+          x?.text || ""
+        ).trim()
+    );
+
+  return hasText
+    ? {
+        ok: true,
+        payload:
+          normalized,
+        provider:
+          "openai",
+      }
+    : {
+        ok: false,
+        status: 502,
+        payload: {
+          error: {
+            message:
+              "OpenAI returned empty content.",
+          },
+        },
+        provider:
+          "openai",
+      };
+}
+
+async function proxyGeminiMessage(
+  body
+) {
+  if (
+    !GEMINI_API_KEY
+  ) {
+    return {
+      unavailable: true,
+      provider:
+        "gemini",
+    };
+  }
+
+  const requested =
+    String(
+      body?.model || ""
+    );
+
+  const modelsToTry =
+    [
+      ...new Set(
+        [
+          requested.startsWith(
+            "gemini"
+          )
+            ? requested
+            : "",
+          process.env
+            .GEMINI_MODEL ||
+            "",
+          process.env
+            .GEMINI_FALLBACK_MODEL ||
+            "gemini-3.5-flash",
+        ].filter(
+          Boolean
+        )
+      ),
+    ];
 
   let last = null;
 
-  for (let keyIndex = 0; keyIndex < GEMINI_API_KEYS.length; keyIndex++) {
-    if (aiKeyCooling("gemini", keyIndex)) continue;
-
-    for (const model of modelsToTry) {
-      const url = new URL(
+  for (
+    const model of
+    modelsToTry
+  ) {
+    const url =
+      new URL(
         `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
       );
-      url.searchParams.set("key", GEMINI_API_KEYS[keyIndex]);
 
-      const r = await fetchWithTimeout(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildGeminiPayload({ ...body, model })),
-      });
+    url.searchParams.set(
+      "key",
+      GEMINI_API_KEY
+    );
 
-      const payload = await responseJsonSafe(r);
+    for (
+      let attempt = 1;
+      attempt <= 2;
+      attempt++
+    ) {
+      const r =
+        await fetchWithTimeout(
+          url,
+          {
+            method:
+              "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body:
+              JSON.stringify(
+                buildGeminiPayload({
+                  ...body,
+                  model,
+                })
+              ),
+          }
+        );
 
-      if (r.ok) {
-        const normalized = normalizeGeminiResponse(payload);
-        const hasText =
-          Array.isArray(normalized?.content) &&
-          normalized.content.some((x) => String(x?.text || "").trim());
-
-        if (hasText) {
-          return { ok: true, payload: normalized, provider: "gemini" };
-        }
-
-        last = {
-          ok: false,
-          status: 502,
-          payload: { error: { message: "Gemini returned empty content." } },
-          provider: "gemini",
-        };
-        continue;
-      }
-
-      last = {
-        ok: false,
-        status: r.status,
-        payload,
-        retryAfter: r.headers.get("retry-after"),
-        provider: "gemini",
-      };
-
-      if (retryableProviderStatus(r.status)) {
-        markAiKeyCooldown("gemini", keyIndex, r.headers);
-        break;
-      }
-
-      if (![400, 404].includes(Number(r.status))) {
-        return last;
-      }
-    }
-  }
-
-  return last || {
-    ok: false,
-    status: 429,
-    payload: { error: { message: "All configured Gemini key slots are cooling down." } },
-    provider: "gemini",
-  };
-}
-
-async function proxyAnthropicMessage(body) {
-  if (!ANTHROPIC_API_KEYS.length) {
-    return { unavailable: true, provider: "anthropic" };
-  }
-
-  const requestedModel = String(body?.model || "");
-  const modelsToTry = [
-    ...new Set([
-      requestedModel.startsWith("claude") ? requestedModel : "",
-      process.env.ANTHROPIC_MODEL || "",
-      process.env.ANTHROPIC_FALLBACK_MODEL || "",
-    ].filter(Boolean)),
-  ];
-
-  if (!modelsToTry.length) {
-    modelsToTry.push(requestedModel || "claude-sonnet-4-6");
-  }
-
-  let last = null;
-
-  for (let keyIndex = 0; keyIndex < ANTHROPIC_API_KEYS.length; keyIndex++) {
-    if (aiKeyCooling("anthropic", keyIndex)) continue;
-
-    for (const model of modelsToTry) {
-      const { provider, interactive, ...rest } = body || {};
-      const outboundBody = {
-        ...rest,
-        model,
-        max_tokens: body?.max_tokens ?? 1024,
-      };
-
-      const r = await fetchWithTimeout(
-        "https://api.anthropic.com/v1/messages",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": ANTHROPIC_API_KEYS[keyIndex],
-            "anthropic-version": process.env.ANTHROPIC_VERSION || "2023-06-01",
-            "Accept": "application/json",
-          },
-          body: JSON.stringify(outboundBody),
-        }
-      );
-
-      const payload = await responseJsonSafe(r);
+      const payload =
+        await responseJsonSafe(
+          r
+        );
 
       if (r.ok) {
+        const normalized =
+          normalizeGeminiResponse(
+            payload
+          );
+
         const hasText =
-          Array.isArray(payload?.content) &&
-          payload.content.some(
-            (x) => x?.type === "text" && String(x?.text || "").trim()
+          Array.isArray(
+            normalized?.content
+          ) &&
+          normalized.content.some(
+            (x) =>
+              String(
+                x?.text ||
+                ""
+              ).trim()
           );
 
         if (hasText) {
-          return { ok: true, payload, provider: "anthropic" };
+          return {
+            ok: true,
+            payload:
+              normalized,
+            provider:
+              "gemini",
+          };
         }
 
         last = {
           ok: false,
           status: 502,
-          payload: { error: { message: "Anthropic returned empty content." } },
-          provider: "anthropic",
+          payload: {
+            error: {
+              message:
+                "Gemini returned empty content.",
+            },
+          },
+          provider:
+            "gemini",
         };
-        continue;
+
+        break;
       }
 
       last = {
         ok: false,
-        status: r.status,
+        status:
+          r.status,
         payload,
-        retryAfter: r.headers.get("retry-after"),
-        provider: "anthropic",
+        retryAfter:
+          r.headers.get(
+            "retry-after"
+          ),
+        provider:
+          "gemini",
       };
 
-      if (retryableProviderStatus(r.status)) {
-        markAiKeyCooldown("anthropic", keyIndex, r.headers);
+      if (
+        !retryableProviderStatus(
+          r.status
+        ) ||
+        attempt >= 2
+      ) {
         break;
       }
 
-      if (![400, 404].includes(Number(r.status))) {
-        return last;
-      }
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            700 *
+            attempt
+          )
+      );
     }
   }
 
-  return last || {
-    ok: false,
-    status: 429,
-    payload: { error: { message: "All configured Anthropic key slots are cooling down." } },
-    provider: "anthropic",
-  };
+  return (
+    last ||
+    {
+      unavailable:
+        true,
+      provider:
+        "gemini",
+    }
+  );
+}
+
+async function proxyAnthropicMessage(
+  body
+) {
+  if (
+    !ANTHROPIC_API_KEY
+  ) {
+    return {
+      unavailable: true,
+      provider:
+        "anthropic",
+    };
+  }
+
+  const requestedModel =
+    String(
+      body?.model ||
+      ""
+    );
+
+  const modelsToTry =
+    [
+      ...new Set(
+        [
+          requestedModel.startsWith(
+            "claude"
+          )
+            ? requestedModel
+            : "",
+          process.env
+            .ANTHROPIC_MODEL ||
+            "",
+          process.env
+            .ANTHROPIC_FALLBACK_MODEL ||
+            "",
+        ].filter(
+          Boolean
+        )
+      ),
+    ];
+
+  if (
+    !modelsToTry.length
+  ) {
+    modelsToTry.push(
+      requestedModel ||
+      "claude-sonnet-4-6"
+    );
+  }
+
+  let last = null;
+
+  for (
+    const model of
+    modelsToTry
+  ) {
+    const {
+      provider,
+      ...rest
+    } =
+      body || {};
+
+    const outboundBody = {
+      ...rest,
+      model,
+      max_tokens:
+        body?.max_tokens ??
+        1024,
+    };
+
+    for (
+      let attempt = 1;
+      attempt <= 2;
+      attempt++
+    ) {
+      const r =
+        await fetchWithTimeout(
+          "https://api.anthropic.com/v1/messages",
+          {
+            method:
+              "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+              "x-api-key":
+                ANTHROPIC_API_KEY,
+              "anthropic-version":
+                process.env
+                  .ANTHROPIC_VERSION ||
+                "2023-06-01",
+              "Accept":
+                "application/json",
+            },
+            body:
+              JSON.stringify(
+                outboundBody
+              ),
+          }
+        );
+
+      const payload =
+        await responseJsonSafe(
+          r
+        );
+
+      if (r.ok) {
+        const hasText =
+          Array.isArray(
+            payload?.content
+          ) &&
+          payload.content.some(
+            (x) =>
+              x?.type ===
+                "text" &&
+              String(
+                x?.text ||
+                ""
+              ).trim()
+          );
+
+        if (hasText) {
+          return {
+            ok: true,
+            payload,
+            provider:
+              "anthropic",
+          };
+        }
+
+        last = {
+          ok: false,
+          status: 502,
+          payload: {
+            error: {
+              message:
+                "Anthropic returned empty content.",
+            },
+          },
+          provider:
+            "anthropic",
+        };
+
+        break;
+      }
+
+      last = {
+        ok: false,
+        status:
+          r.status,
+        payload,
+        retryAfter:
+          r.headers.get(
+            "retry-after"
+          ),
+        provider:
+          "anthropic",
+      };
+
+      if (
+        !retryableProviderStatus(
+          r.status
+        ) ||
+        attempt >= 2
+      ) {
+        break;
+      }
+
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            700 *
+            attempt
+          )
+      );
+    }
+  }
+
+  return (
+    last ||
+    {
+      unavailable:
+        true,
+      provider:
+        "anthropic",
+    }
+  );
 }
 
 async function callMessageProvider(
@@ -5781,15 +5931,15 @@ app.get(
       providers: {
         anthropic:
           Boolean(
-            ANTHROPIC_API_KEYS.length
+            ANTHROPIC_API_KEY
           ),
         gemini:
           Boolean(
-            GEMINI_API_KEYS.length
+            GEMINI_API_KEY
           ),
         openai:
           Boolean(
-            OPENAI_API_KEYS.length
+            OPENAI_API_KEY
           ),
       },
     });
@@ -5808,13 +5958,6 @@ app.post(
         req.body || {}
       );
 
-    res.setHeader(
-      "x-masvilag-ai-lane",
-      req.body?.interactive
-        ? "player-fast"
-        : "background"
-    );
-
     const configuredFallbacks =
       [
         "anthropic",
@@ -5829,10 +5972,10 @@ app.post(
         .filter(
           (p) =>
             p === "anthropic"
-              ? ANTHROPIC_API_KEYS.length
+              ? ANTHROPIC_API_KEY
               : p === "openai"
-                ? OPENAI_API_KEYS.length
-                : GEMINI_API_KEYS.length
+                ? OPENAI_API_KEY
+                : GEMINI_API_KEY
         );
 
     const providers = [
