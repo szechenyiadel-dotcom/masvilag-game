@@ -17384,6 +17384,80 @@ function mergeWorlds(remote, local) {
     delete only.extras;
     return only;
   }
+
+  /*
+   * FRESH-RUN HARD BOUNDARY:
+   *
+   * A Restart World / newly isolated world increments historyEpoch. Normal
+   * same-run reconciliation is intentionally union-based, but history from an
+   * older run must NEVER be unioned back into the fresh run.
+   *
+   * The higher epoch wins as a complete gameplay snapshot. Equal epochs keep
+   * the original merge behavior below completely unchanged.
+   */
+  const remoteHistoryEpoch =
+    Math.max(
+      0,
+      Math.floor(
+        Number(
+          remote &&
+          remote.historyEpoch
+        ) || 0
+      )
+    );
+
+  const localHistoryEpoch =
+    Math.max(
+      0,
+      Math.floor(
+        Number(
+          local &&
+          local.historyEpoch
+        ) || 0
+      )
+    );
+
+  if (
+    remoteHistoryEpoch !==
+    localHistoryEpoch
+  ) {
+    const winner =
+      localHistoryEpoch >
+      remoteHistoryEpoch
+        ? local
+        : remote;
+
+    const out =
+      cloneWorldState(
+        winner
+      );
+
+    delete out.extras;
+
+    /*
+     * `remote` is the authoritative server snapshot in reconciliation paths.
+     * Carry only its sync revision so the fresh winner can be saved cleanly.
+     */
+    out.syncRev =
+      worldSyncRev(
+        remote
+      );
+
+    out.rev =
+      Math.max(
+        Number(remote.rev) || 0,
+        Number(local && local.rev) || 0
+      ) + 1;
+
+    out.historyEpoch =
+      Math.max(
+        remoteHistoryEpoch,
+        localHistoryEpoch
+      );
+
+    return out;
+  }
+
   const out = { ...local };
   delete out.extras;
   out.rev = Math.max(remote.rev || 0, local.rev || 0) + 1;
@@ -22238,9 +22312,19 @@ function isolateFreshCreatedWorld(baseWorld, serverWorld, serverMeId, previousWo
   fresh.socialEvents = [];
   fresh.rumors = [];
   fresh.gossipPropagation = { rumors: [], exchanges: [], echoes: [], lastRoundAt: 0, lastEchoAt: 0, version: 2 };
+  const freshAt = now();
   fresh.popupEvents = [];
-  fresh.popupRuntime = { startedAt: now(), lastGeneratedAt: 0 };
-  fresh.sim = { queue: [], done: {}, running: "", at: 0, contentAt: 0, localAt: 0, lastSuccessAt: 0, lastAttemptAt: 0, popupAttemptAt: 0, dmAttemptAt: 0, roleplayAttemptAt: 0, groupAttemptAt: 0, liveWorldStartedAt: now(), lastPopupSuccessAt: 0 };
+  fresh.popupRuntime = { startedAt: freshAt, lastGeneratedAt: 0 };
+
+  /*
+   * New worlds must start with the SAME complete autonomous runtime as a clean
+   * Restart World. This keeps posting, comments, Notes, DMs, group activity,
+   * popup and Roleplay/Event lanes available from the first run.
+   */
+  fresh.autoAt = 0;
+  fresh.sim = freshSimulationRuntime(freshAt);
+  fresh.activeSceneId = "";
+
   fresh.whisperWire = { stories: [], usedEventIds: [], history: [], lastCandidate: null, lastPublishedAt: 0 };
 
   return migrate(fresh);
@@ -53952,10 +54036,18 @@ useEffect(() => {
       setShowNotes(false);
       setChatId(null);
       setSceneId(null);
+      const freshAt = now();
       wld.historyEpoch = Math.max(0, Math.floor(Number(wld.historyEpoch) || 0)) + 1;
       wld.popupEvents = [];
-      wld.popupRuntime = { startedAt: now(), lastGeneratedAt: 0 };
-      wld.sim = { queue: [], done: {}, running: "", at: 0, contentAt: 0, localAt: 0, lastSuccessAt: 0, lastAttemptAt: 0, popupAttemptAt: 0, dmAttemptAt: 0, roleplayAttemptAt: 0, groupAttemptAt: 0, liveWorldStartedAt: now(), lastPopupSuccessAt: 0 };
+      wld.popupRuntime = { startedAt: freshAt, lastGeneratedAt: 0 };
+
+      /*
+       * Crossing into another world resets only runtime/UI carry-over, while
+       * booting the complete autonomous feature set for that world.
+       */
+      wld.autoAt = 0;
+      wld.sim = freshSimulationRuntime(freshAt);
+      wld.activeSceneId = "";
     }
     const preferred = asLang((wld.userSettings && wld.userSettings[id] && wld.userSettings[id].language) || (wld.aiLang || lang));
     saveLang(preferred);
