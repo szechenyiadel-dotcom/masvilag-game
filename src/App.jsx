@@ -4248,7 +4248,7 @@ function setRel(w, a, b, patch) {
    dynamic score happened to exist at the end of the previous run.
    ============================================================ */
 
-const RELATIONSHIP_CANON_VERSION = 7;
+const RELATIONSHIP_CANON_VERSION = 8;
 
 function ensureRelationshipBaselineStore(w) {
   if (!w.relationshipBaselines || typeof w.relationshipBaselines !== "object") {
@@ -4406,11 +4406,11 @@ function canonicalRelationshipEvidence(w, actor, target) {
   if (!actor || !target) return "";
 
   /*
-   * RELATIONSHIP CANON v7:
-   * Connections remains the strongest source, but a relationship fact is not
-   * ignored merely because the user placed it in Secrets, Backstory, Goals,
-   * Likes, Personality or Extra. Only target-specific snippets that explicitly
-   * resolve to THIS active character are admitted.
+   * RELATIONSHIP CANON v8:
+   * Mechanical relationship baseline comes from exact target-specific
+   * Connections evidence only. The rest of the character sheet remains fully
+   * available to the AI for characterization, knowledge and behavior, but does
+   * not manufacture bond/score state.
    */
   return relationshipSheetEvidenceEntriesAbout(
     w,
@@ -4663,11 +4663,19 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
     return "";
   })();
 
+  const concealedObsession =
+    Boolean(
+      explicitObsession &&
+      (
+        explicitSecret ||
+        directedRomance.wouldNeverAdmit
+      )
+    );
+
   const openObsession =
     Boolean(
       explicitObsession &&
-      !explicitSecret &&
-      !directedRomance.wouldNeverAdmit
+      !concealedObsession
     );
 
   const withPrivateRomance = (row) => {
@@ -4963,13 +4971,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
    * Concealed obsession by itself is ONLY hidden feeling.
    * No synthetic Obsession bond and no public/current "Obsessed" mood.
    */
-  if (
-    explicitObsession &&
-    (
-      explicitSecret ||
-      directedRomance.wouldNeverAdmit
-    )
-  ) {
+  if (concealedObsession) {
     return {
       score: 0,
       bond: "",
@@ -13356,126 +13358,26 @@ const RELATIONSHIP_SHEET_EVIDENCE_CACHE = new WeakMap();
 function relationshipSheetEvidenceEntriesAbout(w, actor, target) {
   if (!w || !actor || !target) return [];
 
-  const fields = [
-    ["connections", actor.connections],
-    ["secrets", actor.secrets],
-    ["backstory", actor.backstory],
-    ["extra", actor.extra],
-    ["goals", actor.goals],
-    ["likes", actor.likes],
-    ["fears", actor.fears],
-    ["personality", actor.personality],
-    ["traits", actor.traits],
-    ["brief", actor.brief],
-    ["bio", actor.bio],
-  ];
-
-  const signature = [
-    actor.updatedAt || "",
-    characterIdentityAliasSignature(target),
-    ...fields.map(([key, value]) => `${key}:${String(value || "")}`),
-  ].join("\u001f");
-
-  let worldCache = RELATIONSHIP_SHEET_EVIDENCE_CACHE.get(w);
-  if (!worldCache) {
-    worldCache = new Map();
-    RELATIONSHIP_SHEET_EVIDENCE_CACHE.set(w, worldCache);
-  }
-
-  const cacheKey = `${String(actor.id || "")}>${String(target.id || "")}`;
-  const cached = worldCache.get(cacheKey);
-  if (cached && cached.signature === signature) {
-    return cached.entries;
-  }
-
-  const found = [];
-  const seen = new Set();
-
-  const add = (source, relation, raw = "") => {
-    const clean = String(relation || "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!clean) return;
-
-    const key = `${String(source || "sheet")}|${clean.toLowerCase()}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-
-    found.push({
-      source: String(source || "sheet"),
-      subject: target.name || target.id,
-      relation: clean,
-      raw: String(raw || relation || "").trim(),
-    });
-  };
-
   /*
-   * Connections has its own strict target parser and therefore keeps every
-   * target-specific shorthand, including pronoun-only relation text such as
-   * "obsessed with her".
+   * STRICT MECHANICAL RELATIONSHIP SOURCE — v8
+   *
+   * The AI still reads the COMPLETE character sheet for personality, secrets,
+   * backstory, goals, behavior and dialogue.
+   *
+   * But automatic relationship SCORE / BOND / HIDDEN FEELING is built only
+   * from the exact target-specific Connections parser. This prevents a name
+   * mentioned in Secrets/Backstory/Personality from accidentally becoming a
+   * relationship status.
+   *
+   * Cross-sheet direction still works separately:
+   * if Angel's Connections says "Ryan has a crush on Angel", Ryan -> Angel is
+   * recovered through canonicalDirectedRomanceState().
    */
-  connectionRelationshipEntriesAbout(
+  return connectionRelationshipEntriesAbout(
     w,
     actor,
     target
-  ).forEach((entry) => {
-    add(
-      "connections",
-      entry.relation,
-      entry.raw
-    );
-  });
-
-  /*
-   * The rest of the sheet is read conservatively: the chunk itself must name
-   * and resolve THIS target. This prevents a secret about Ryan from becoming a
-   * fact about Daniel merely because both names exist elsewhere on the sheet.
-   */
-  fields
-    .filter(([key]) => key !== "connections")
-    .forEach(([field, rawValue]) => {
-      const raw = String(rawValue || "")
-        .replace(/\r/g, "")
-        .trim();
-
-      if (!raw) return;
-
-      const chunks = raw
-        .split(
-          /\n+|(?<=[.!?])\s+(?=[A-ZÁÉÍÓÖŐÚÜŰ@])|[•]\s*/u
-        )
-        .map((chunk) =>
-          chunk
-            .replace(/\s+/g, " ")
-            .trim()
-        )
-        .filter(Boolean)
-        .slice(0, 180);
-
-      chunks.forEach((chunk) => {
-        if (
-          !textExplicitlyMentionsCharacter(
-            w,
-            chunk,
-            target,
-            { relationshipOnly: true }
-          )
-        ) {
-          return;
-        }
-
-        add(
-          field,
-          chunk,
-          chunk
-        );
-      });
-    });
-
-  const entries = found.slice(0, 24);
-  worldCache.set(cacheKey, { signature, entries });
-  return entries;
+  );
 }
 
 function exactConnectionBondLabel(w, actor, target) {
@@ -13543,7 +13445,7 @@ function exactConnectionBondLabel(w, actor, target) {
   if (/frenemy/.test(text)) push("Frenemy");
 
   const directedRomance =
-    directedConnectionRomanceState(
+    canonicalDirectedRomanceState(
       w,
       actor,
       target
