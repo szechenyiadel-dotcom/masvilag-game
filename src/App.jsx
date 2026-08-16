@@ -7907,7 +7907,11 @@ const AI = {
    * Keep a safety margin below typical provider TPM ceilings. This is only a
    * pacing target; it does not reduce output quality or stored world data.
    */
-  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 45000),
+  /*
+   * Conservative rolling target for a shared live-world provider lane.
+   * This spaces heavy world calls without slowing ordinary rendering.
+   */
+  targetTokensPerMinute: Math.max(16000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 30000),
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
@@ -8004,18 +8008,18 @@ function aiCostGapFor(system, prompt, maxTokens) {
  */
 const AI_MAX_SYSTEM_CHARS =
   Math.max(
-    18000,
+    12000,
     Number(
       import.meta.env.VITE_AI_MAX_SYSTEM_CHARS
-    ) || 24000
+    ) || 18000
   );
 
 const AI_MAX_PROMPT_CHARS =
   Math.max(
-    28000,
+    18000,
     Number(
       import.meta.env.VITE_AI_MAX_PROMPT_CHARS
-    ) || 36000
+    ) || 28000
   );
 
 function preserveEdges(value, maxChars, label = "context") {
@@ -8332,6 +8336,39 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       const restMs = Math.max(retryAfterMs, adaptive);
 
       /*
+       * Safe diagnostics for the exact upstream limiter. No API key or
+       * sensitive request content is printed.
+       */
+      const rateProvider =
+        res.headers && res.headers.get
+          ? (
+              res.headers.get(
+                "x-masvilag-ai-provider"
+              ) || DEFAULT_AI_PROVIDER
+            )
+          : DEFAULT_AI_PROVIDER;
+
+      const upstreamStatus =
+        res.headers && res.headers.get
+          ? (
+              res.headers.get(
+                "x-masvilag-ai-upstream-status"
+              ) || String(code)
+            )
+          : String(code);
+
+      console.warn(
+        "[ai-rate-limit]",
+        `provider=${rateProvider}`,
+        `status=${upstreamStatus}`,
+        `retryAfter=${retryAfterRaw || "-"}`,
+        `rest=${Math.ceil(restMs / 1000)}s`,
+        (data && data.error && data.error.message) ||
+          data?.error ||
+          ""
+      );
+
+      /*
        * A rate-limitet a queue belül kezeli és ugyanazt a játékosi kérést
        * újrapróbálja. Ezt nem mutatjuk globális "AI can't keep up" bannerként,
        * mert DM/group chat közben csak félrevezető és zajos.
@@ -8475,6 +8512,25 @@ async function askJSON(system, prompt, options = {}) {
             const left = cooldownLeft();
 
             /*
+             * CRITICAL 429 LOOP FIX:
+             *
+             * Background live-world work must never sleep only part of the
+             * provider cooldown and then retry from INSIDE the same queued
+             * request. That bypasses the queue's cooldown gate and can create:
+             *
+             * 429 -> wait 20s -> retry while 19s remain -> 429 -> longer
+             * cooldown -> repeat.
+             *
+             * Let the background action fail quietly for this tick. The world
+             * scheduler already refuses another non-manual AI action while
+             * cooldownLeft() > 0, so it will naturally try again only after the
+             * provider is ready.
+             */
+            if (priority < 50) {
+              throw err;
+            }
+
+            /*
              * v99.5 provider-cooldown fix:
              * A 30s ceiling was too short for normal provider backoff values
              * such as 35–60 seconds. Interactive player actions (DM/group/RP)
@@ -8499,9 +8555,7 @@ async function askJSON(system, prompt, options = {}) {
             await wait(
               Math.min(
                 left + 250,
-                priority >= 50
-                  ? interactiveWaitCap
-                  : 20000
+                interactiveWaitCap
               )
             );
             continue;
