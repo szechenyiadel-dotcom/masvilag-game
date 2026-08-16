@@ -2989,7 +2989,9 @@ function localizedRelationshipDisplayText(value, lang = CURRENT_LANG) {
   const raw = String(value || "").trim();
   if (!raw) return "";
 
-  if (asLang(lang) === "en") {
+  const targetLang = asLang(lang);
+
+  if (targetLang === "en") {
     if (MOOD_EXAMPLE_EN[raw]) return MOOD_EXAMPLE_EN[raw];
 
     const automaticHuToEn = {
@@ -3005,10 +3007,31 @@ function localizedRelationshipDisplayText(value, lang = CURRENT_LANG) {
       "megszállott": "obsessed",
       "bizalmatlan": "distrustful",
       "védelmező": "protective",
+      "titkos megszállottság": "secret obsession",
+      "nem vallaná be": "would never admit it",
+      "sosem vallaná be": "would never admit it",
     };
 
     if (automaticHuToEn[raw.toLowerCase()]) {
       return automaticHuToEn[raw.toLowerCase()];
+    }
+  } else {
+    const automaticEnToHu = {
+      "hostile": "ellenséges",
+      "tense": "feszült",
+      "jealous": "féltékeny",
+      "possessive": "birtokló",
+      "obsessed": "megszállott",
+      "distrustful": "bizalmatlan",
+      "protective": "védelmező",
+      "secret obsession": "titkos megszállottság",
+      "would never admit it": "nem vallaná be",
+      "secret obsession — would never admit it": "titkos megszállottság — nem vallaná be",
+      "secret crush — would never admit it": "titkos crush — nem vallaná be",
+    };
+
+    if (automaticEnToHu[raw.toLowerCase()]) {
+      return automaticEnToHu[raw.toLowerCase()];
     }
   }
 
@@ -4405,7 +4428,17 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   const exactFriend = /(?:^|\s|\/)bar[aá]t(?:\s|\/|$)|(?:^|\s|\/)friend(?:\s|\/|$)/.test(exactBondLow);
   const exactEnemy = /ellens[eé]g|enemy/.test(exactBondLow);
   const exactRival = /riv[aá]lis|rival/.test(exactBondLow);
-  const exactCrush = /crush|vonzalom|attraction|obsession/.test(exactBondLow);
+  const directedRomance =
+    directedConnectionRomanceState(
+      w,
+      actor,
+      target
+    );
+
+  const exactCrush =
+    directedRomance.outboundCrush ||
+    directedRomance.outboundObsession;
+
   const exactMentor = /mentor|sensei|tan[aá]r|teacher|coach/.test(exactBondLow);
   const exactStudent = /tan[ií]tv[aá]ny|student/.test(exactBondLow);
 
@@ -4430,12 +4463,15 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
     /\bex\b|ex-boyfriend|ex-girlfriend|exes|volt bar[aá]t|volt bar[aá]tn[oő]|volt p[aá]r/.test(low);
   const explicitMutualCrush =
     /mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction|k[oö]lcs[oö]n[oö]s vonzalom/.test(low);
+
   const explicitObsession =
-    /obsess|fixation|fixated|megsz[aá]llott|megsz[aá]llotts[aá]g|m[aá]ni[aá]san|can['’]?t stop thinking|cannot stop thinking/.test(low);
+    directedRomance.outboundObsession;
+
   const explicitCrush =
-    /crush|has a crush|vonz[oó]d|vonzalom|attraction|attracted|in love|szerelmes|love interest/.test(low);
+    directedRomance.outboundCrush;
+
   const explicitSecret =
-    /secret crush|hidden crush|secret attraction|titkos crush|titkos vonzalom|rejtett vonzalom|senki nem tud|doesn['’]?t know/.test(low);
+    directedRomance.concealed;
 
   const explicitMother =
     /\bmother\b|\bmom\b|\bmum\b|\banya\b|édesany/.test(low);
@@ -4480,10 +4516,22 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
       bond: "Legjobb barát",
       fixed: false,
       hidden:
-        (explicitCrush || cue.romantic)
-          ? (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
-          : "",
-      mood: "",
+        explicitObsession
+          ? (
+              directedRomance.wouldNeverAdmit
+                ? "Secret obsession — would never admit it"
+                : (explicitSecret || cue.secret ? "Secret obsession" : "Obsession")
+            )
+          : (
+              (explicitCrush || cue.romantic)
+                ? (
+                    directedRomance.wouldNeverAdmit
+                      ? "Secret crush — would never admit it"
+                      : (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
+                  )
+                : ""
+            ),
+      mood: explicitObsession ? "Obsessed" : "",
       why: "",
       source: "connections",
     };
@@ -4494,10 +4542,22 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
       bond: "Közeli barát",
       fixed: false,
       hidden:
-        (explicitCrush || cue.romantic)
-          ? (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
-          : "",
-      mood: "",
+        explicitObsession
+          ? (
+              directedRomance.wouldNeverAdmit
+                ? "Secret obsession — would never admit it"
+                : (explicitSecret || cue.secret ? "Secret obsession" : "Obsession")
+            )
+          : (
+              (explicitCrush || cue.romantic)
+                ? (
+                    directedRomance.wouldNeverAdmit
+                      ? "Secret crush — would never admit it"
+                      : (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
+                  )
+                : ""
+            ),
+      mood: explicitObsession ? "Obsessed" : "",
       why: "",
       source: "connections",
     };
@@ -4511,10 +4571,22 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
       bond: "Barát",
       fixed: false,
       hidden:
-        (explicitCrush || cue.romantic)
-          ? (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
-          : "",
-      mood: "",
+        explicitObsession
+          ? (
+              directedRomance.wouldNeverAdmit
+                ? "Secret obsession — would never admit it"
+                : (explicitSecret || cue.secret ? "Secret obsession" : "Obsession")
+            )
+          : (
+              (explicitCrush || cue.romantic)
+                ? (
+                    directedRomance.wouldNeverAdmit
+                      ? "Secret crush — would never admit it"
+                      : (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
+                  )
+                : ""
+            ),
+      mood: explicitObsession ? "Obsessed" : "",
       why: "",
       source: "connections",
     };
@@ -4545,10 +4617,13 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   if (explicitObsession) {
     return {
       score: 72,
-      bond: "Crush",
+      bond: "Obsession",
       fixed: false,
-      hidden: explicitSecret || cue.secret ? "Secret obsession" : "Obsessed",
-      mood: "Megszállott",
+      hidden:
+        directedRomance.wouldNeverAdmit
+          ? "Secret obsession — would never admit it"
+          : (explicitSecret || cue.secret ? "Secret obsession" : "Obsession"),
+      mood: "Obsessed",
       why: "",
       source: "connections",
     };
@@ -4559,7 +4634,10 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
       score: 52,
       bond: "Crush",
       fixed: false,
-      hidden: explicitSecret || cue.secret ? "Secret crush" : "",
+      hidden:
+        directedRomance.wouldNeverAdmit
+          ? "Secret crush — would never admit it"
+          : (explicitSecret || cue.secret ? "Secret crush" : ""),
       mood: "",
       why: "",
       source: "connections",
@@ -12698,9 +12776,20 @@ function exactConnectionBondLabel(w, actor, target) {
   if (/teammate|team mate|team-mate|csapatt[aá]rs|dojo mate|doj[oó]t[aá]rs/.test(text)) push("Teammate");
   if (/frenemy/.test(text)) push("Frenemy");
 
-  if (/mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction/.test(text)) push("Kölcsönös crush");
-  else if (/obsess|fixation|megsz[aá]ll/.test(text)) push("Obsession");
-  else if (/crush|attraction|attracted|vonzalom|vonz[oó]d|in love|szerelmes|romantic/.test(text)) push("Crush");
+  const directedRomance =
+    directedConnectionRomanceState(
+      w,
+      actor,
+      target
+    );
+
+  if (/mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction/.test(text)) {
+    push("Kölcsönös crush");
+  } else if (directedRomance.outboundObsession) {
+    push("Obsession");
+  } else if (directedRomance.outboundCrush) {
+    push("Crush");
+  }
 
   if (/dating|boyfriend|girlfriend|j[aá]rnak|p[aá]rja/.test(text)) push("Járnak");
   if (/engaged|fianc[eé]|jegyes/.test(text)) push("Jegyesek");
@@ -12728,13 +12817,271 @@ function connectionCanonSnippetAbout(w, actor, target, maxChars = 1800) {
     .slice(0, Math.max(200, Number(maxChars) || 1800));
 }
 
+function relationshipPronounProfile(person) {
+  const gender = characterGenderAttractionClass(person);
+
+  if (gender === "female") {
+    return {
+      subject: ["she"],
+      object: ["her"],
+    };
+  }
+
+  if (gender === "male") {
+    return {
+      subject: ["he"],
+      object: ["him"],
+    };
+  }
+
+  if (gender === "nonbinary") {
+    return {
+      subject: ["they"],
+      object: ["them"],
+    };
+  }
+
+  return {
+    subject: [],
+    object: [],
+  };
+}
+
+function relationshipIdentityRegex(person) {
+  const aliases =
+    characterIdentityAliases(
+      person,
+      {
+        includeFirst: true,
+        includeSurname: false,
+        strongOnly: false,
+      }
+    )
+      .map((alias) => String(alias || "").trim())
+      .filter((alias) => alias.length >= 3)
+      .sort((a, b) => b.length - a.length)
+      .map((alias) => regexEscapeLiteral(alias));
+
+  return aliases.length
+    ? `(?:${aliases.join("|")})`
+    : "";
+}
+
+function relationshipPronounRegex(values) {
+  const rows =
+    (values || [])
+      .map((value) => regexEscapeLiteral(value))
+      .filter(Boolean);
+
+  return rows.length
+    ? `(?:${rows.join("|")})`
+    : "";
+}
+
+function directedConnectionRomanceState(w, actor, target) {
+  const entries =
+    connectionRelationshipEntriesAbout(
+      w,
+      actor,
+      target
+    );
+
+  const out = {
+    outboundCrush: false,
+    outboundObsession: false,
+    inboundCrush: false,
+    inboundObsession: false,
+    concealed: false,
+    wouldNeverAdmit: false,
+  };
+
+  if (!entries.length) return out;
+
+  const actorName = relationshipIdentityRegex(actor);
+  const targetName = relationshipIdentityRegex(target);
+
+  const actorPronouns = relationshipPronounProfile(actor);
+  const targetPronouns = relationshipPronounProfile(target);
+
+  const actorSubjectPron = relationshipPronounRegex(actorPronouns.subject);
+  const targetSubjectPron = relationshipPronounRegex(targetPronouns.subject);
+  const actorObjectPron = relationshipPronounRegex(actorPronouns.object);
+  const targetObjectPron = relationshipPronounRegex(targetPronouns.object);
+
+  const actorSubject =
+    [actorName, actorSubjectPron]
+      .filter(Boolean)
+      .join("|");
+
+  const targetSubject =
+    [targetName, targetSubjectPron]
+      .filter(Boolean)
+      .join("|");
+
+  const actorObject =
+    [actorName, actorObjectPron]
+      .filter(Boolean)
+      .join("|");
+
+  const targetObject =
+    [targetName, targetObjectPron]
+      .filter(Boolean)
+      .join("|");
+
+  const obsessionWord =
+    String.raw`(?:obsess(?:ed|ion|ive)?|fixat(?:ed|ion)|megsz[aá]ll(?:ott|otts[aá]g)?|m[aá]ni[aá]san|can['’]?t\s+stop\s+thinking|cannot\s+stop\s+thinking)`;
+
+  const crushWord =
+    String.raw`(?:crush(?:es|ing)?|attract(?:ed|ion)?|in\s+love|love\s+interest|vonz[oó]d|vonzalom|szerelmes|romantic(?:ally)?)`;
+
+  const emotionWord =
+    `(?:${obsessionWord}|${crushWord})`;
+
+  const concealmentRe =
+    /secret|hidden|titkos|rejtett|senki nem tud|doesn['’]?t know|would never admit|wouldn['’]?t admit|won['’]?t admit|never admit|never confess|would deny|denies it|refuses? to admit|nem vallan[aá] be|sosem vallan[aá] be|nem ismern[eé] be|nem mondan[aá] ki|letagadn[aá]|titkolja/i;
+
+  const neverAdmitRe =
+    /would never admit|wouldn['’]?t admit|won['’]?t admit|never admit|never confess|would deny|denies it|refuses? to admit|nem vallan[aá] be|sosem vallan[aá] be|nem ismern[eé] be|nem mondan[aá] ki|letagadn[aá]/i;
+
+  entries.forEach((entry) => {
+    const relation =
+      String(
+        entry &&
+        entry.relation ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (!relation) return;
+
+    const hasObsession =
+      new RegExp(
+        obsessionWord,
+        "i"
+      ).test(relation);
+
+    const hasCrush =
+      new RegExp(
+        crushWord,
+        "i"
+      ).test(relation);
+
+    if (!hasObsession && !hasCrush) {
+      return;
+    }
+
+    const inboundByNamedSubject =
+      Boolean(
+        targetSubject &&
+        actorObject &&
+        new RegExp(
+          `(?:^|[^\\p{L}\\p{N}_])(?:${targetSubject})(?=$|[^\\p{L}\\p{N}_])[\\s\\S]{0,90}${emotionWord}[\\s\\S]{0,90}(?:with|on|to|toward|towards|for)?\\s*(?:${actorObject})(?=$|[^\\p{L}\\p{N}_])`,
+          "iu"
+        ).test(relation)
+      );
+
+    const outboundByNamedSubject =
+      Boolean(
+        actorSubject &&
+        targetObject &&
+        new RegExp(
+          `(?:^|[^\\p{L}\\p{N}_])(?:${actorSubject})(?=$|[^\\p{L}\\p{N}_])[\\s\\S]{0,90}${emotionWord}[\\s\\S]{0,90}(?:with|on|to|toward|towards|for)?\\s*(?:${targetObject})(?=$|[^\\p{L}\\p{N}_])`,
+          "iu"
+        ).test(relation)
+      );
+
+    /*
+     * Short relation prose often omits the grammatical subject:
+     *   Angel's row for Wolf: "obsessed with her" -> target feels it toward actor.
+     *   Daniel's row for Angel: "obsessed with her" -> actor feels it toward target.
+     *
+     * Object pronouns disambiguate this whenever actor/target genders differ.
+     */
+    const inboundByObject =
+      Boolean(
+        actorObjectPron &&
+        (!targetObjectPron || actorObjectPron !== targetObjectPron) &&
+        new RegExp(
+          `${emotionWord}[\\s\\S]{0,55}(?:with|on|to|toward|towards|for)\\s+(?:${actorObjectPron})(?=$|[^\\p{L}\\p{N}_])`,
+          "iu"
+        ).test(relation)
+      );
+
+    const outboundByObject =
+      Boolean(
+        targetObjectPron &&
+        (!actorObjectPron || actorObjectPron !== targetObjectPron) &&
+        new RegExp(
+          `${emotionWord}[\\s\\S]{0,55}(?:with|on|to|toward|towards|for)\\s+(?:${targetObjectPron})(?=$|[^\\p{L}\\p{N}_])`,
+          "iu"
+        ).test(relation)
+      );
+
+    let inbound =
+      inboundByNamedSubject ||
+      inboundByObject;
+
+    let outbound =
+      outboundByNamedSubject ||
+      outboundByObject;
+
+    /*
+     * Connections normally describes ACTOR -> TARGET. Only flip direction
+     * when the sentence itself gives positive grammatical evidence that the
+     * TARGET is the one feeling it.
+     */
+    if (!inbound && !outbound) {
+      outbound = true;
+    } else if (inbound && outbound) {
+      /*
+       * Explicit actor/target names are stronger than pronoun coincidence.
+       * If both are still plausible, preserve Connections' actor->target rule.
+       */
+      if (inboundByNamedSubject && !outboundByNamedSubject) {
+        outbound = false;
+      } else {
+        inbound = false;
+      }
+    }
+
+    if (inbound) {
+      if (hasObsession) out.inboundObsession = true;
+      if (hasCrush) out.inboundCrush = true;
+      return;
+    }
+
+    if (hasObsession) out.outboundObsession = true;
+    if (hasCrush) out.outboundCrush = true;
+
+    if (concealmentRe.test(relation)) {
+      out.concealed = true;
+    }
+
+    if (neverAdmitRe.test(relation)) {
+      out.wouldNeverAdmit = true;
+      out.concealed = true;
+    }
+  });
+
+  return out;
+}
+
 function connectionRelationshipCue(w, actor, target) {
   const snippet = connectionCanonSnippetAbout(w, actor, target, 1800);
   const low = snippet.toLowerCase();
+  const directedRomance =
+    directedConnectionRomanceState(
+      w,
+      actor,
+      target
+    );
 
   return {
     snippet,
-    romantic: /crush|has a crush|secret crush|vonz[oó]d|vonzalom|szerelmes|szerelem|in love|love interest|romantic|romantikus|fl[oö]rt|flirt|attraction|attracted|obsess|megsz[aá]ll|r[aá] van kattanva/.test(low),
+    romantic:
+      directedRomance.outboundCrush ||
+      directedRomance.outboundObsession,
     close: /best friend|close friend|ride or die|legjobb bar[aá]t|közeli bar[aá]t|testv[eé]rk[eé]nt|like a sibling|sisters? she chose|brothers? she chose|chosen sister|chosen brother|chosen family/.test(low),
     friendly: /friend|bar[aá]t|ally|sz[oö]vets[eé]ges|loyal|loj[aá]lis/.test(low),
     hostile: /enemy|ellens[eé]g|hate|gy[uű]l[oö]l|nem b[ií]rja|despise|archenemy|f[oő]ellens[eé]g/.test(low),
@@ -12742,7 +13089,9 @@ function connectionRelationshipCue(w, actor, target) {
     family: /mother|father|mom|dad|sister|brother|cousin|family|anya|apa|testv[eé]r|unokatestv[eé]r|csal[aá]d/.test(low),
     mentor: /sensei|mentor|teacher|coach|mester|tan[aá]r|edz[oő]/.test(low),
     jealous: /jealous|f[eé]lt[eé]ken|possessive|birtokl[oó]|territorial/.test(low),
-    secret: /secret|hidden|titkos|rejtett|senki nem tud|doesn['’]?t know/.test(low),
+    secret:
+      directedRomance.concealed ||
+      /secret|hidden|titkos|rejtett|senki nem tud|doesn['’]?t know/.test(low),
   };
 }
 
@@ -15700,17 +16049,53 @@ TELEFONOS CHAT VALÓSÁGELLENŐRZÉS:
    amit iránta éreznek. Ettől lehet egyoldalú a vonzalom. */
 function bondLines(w, id, includeHidden) {
   const out = [];
+  const relationLang = worldLanguage(w);
+
   allSubjects(w).forEach((o) => {
     if (o.id === id || !linked(w, id, o.id)) return;
+
     const mine = getRel(w, id, o.id);
     const theirs = getRel(w, o.id, id);
     const bond = mine.bond || mine.type || "";
-    let line = `${o.name}${bond ? ` (${localizedBond(bond, worldLanguage(w))}${mine.fixed ? (worldLanguage(w) === "en" ? ", fact" : ", tény") : ""})` : ""}: ${mine.score}`;
-    if (mine.mood) line += ` — ${cut(mine.mood, 40)}`;
-    if (includeHidden && mine.hidden) line += ` | ${worldLanguage(w) === "en" ? "hidden" : "titkon"}: ${cut(mine.hidden, 70)}`;
-    if (includeHidden && theirs.mood) line += ` | ${worldLanguage(w) === "en" ? "they feel" : "ő viszont"}: ${cut(theirs.mood, 40)}`;
+
+    let line =
+      `${o.name}${bond
+        ? ` (${localizedBond(bond, relationLang)}${mine.fixed ? (relationLang === "en" ? ", fact" : ", tény") : ""})`
+        : ""}: ${mine.score}`;
+
+    if (mine.mood) {
+      line += ` — ${cut(
+        localizedRelationshipDisplayText(
+          mine.mood,
+          relationLang
+        ),
+        40
+      )}`;
+    }
+
+    if (includeHidden && mine.hidden) {
+      line += ` | ${relationLang === "en" ? "hidden" : "titkon"}: ${cut(
+        localizedRelationshipDisplayText(
+          mine.hidden,
+          relationLang
+        ),
+        90
+      )}`;
+    }
+
+    if (includeHidden && theirs.mood) {
+      line += ` | ${relationLang === "en" ? "they feel" : "ő viszont"}: ${cut(
+        localizedRelationshipDisplayText(
+          theirs.mood,
+          relationLang
+        ),
+        40
+      )}`;
+    }
+
     out.push(line);
   });
+
   return out.slice(0, 8);
 }
 
@@ -15823,9 +16208,29 @@ function worldContext(w, ids, deep, observerId, contextOptions = {}) {
       const A = charById(w, x), B = charById(w, y);
       if (!A || !B) return;
       const bond = r.bond || r.type || "";
+      const relationLang =
+        worldLanguage(
+          w,
+          observerId || w.meId
+        );
+
       rels.push(`${A.name} → ${B.name}: ${observerId ? r.score : relType(r.score)}` +
-        (observerId && r.mood ? ` — ${cut(r.mood, 40)}` : "") +
-        (bond ? (r.fixed ? ` | ${localizedBond(bond, worldLanguage(w, observerId || w.meId))} (${worldLanguage(w, observerId || w.meId) === "en" ? "fact" : "tény"})` : ` | ${localizedBond(bond, worldLanguage(w, observerId || w.meId))}`) : ""));
+        (observerId && r.mood
+          ? ` — ${cut(
+              localizedRelationshipDisplayText(
+                r.mood,
+                relationLang
+              ),
+              40
+            )}`
+          : "") +
+        (bond
+          ? (
+              r.fixed
+                ? ` | ${localizedBond(bond, relationLang)} (${relationLang === "en" ? "fact" : "tény"})`
+                : ` | ${localizedBond(bond, relationLang)}`
+            )
+          : ""));
     });
   }
 
@@ -33024,8 +33429,8 @@ function applySceneChangesWithStatus(n, scene, changes) {
         sysLangText(
           n,
           n.meId,
-          `${actor ? actor.name : "Valaki"} hangulata megváltozott ${target ? target.name : "veled"} kapcsolatban: ${newMood}`,
-          `${actor ? actor.name : "Someone"}'s mood toward ${target ? target.name : "you"} changed: ${newMood}`
+          `${actor ? actor.name : "Valaki"} hangulata megváltozott ${target ? target.name : "veled"} kapcsolatban: ${localizedRelationshipDisplayText(newMood, "hu")}`,
+          `${actor ? actor.name : "Someone"}'s mood toward ${target ? target.name : "you"} changed: ${localizedRelationshipDisplayText(newMood, "en")}`
         ),
         "mood",
         ch.a
