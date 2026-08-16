@@ -7887,7 +7887,12 @@ const AI = {
   gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
   interactiveGap: 350,       // gyors játékosi DM/group/RP lane
   initiativeGap: AI_INITIATIVE_GAP_MS, // gyors autonóm DM / event / group lane
-  maxConcurrent: Math.max(1, Math.min(2, Number(import.meta.env.VITE_AI_MAX_CONCURRENT) || 2)),
+  /*
+   * PROVIDER STABILITY:
+   * One provider request at a time. Player actions still jump ahead in the
+   * priority queue; they simply cannot overlap a huge background world call.
+   */
+  maxConcurrent: 1,
   activeWorkers: 0,
 
   /*
@@ -7898,7 +7903,11 @@ const AI = {
    * ritmusban a szolgáltatóra.
    */
   lastCostGap: 0,
-  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 60000),
+  /*
+   * Keep a safety margin below typical provider TPM ceilings. This is only a
+   * pacing target; it does not reduce output quality or stored world data.
+   */
+  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 45000),
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
@@ -7965,8 +7974,11 @@ function aiCostGapFor(system, prompt, maxTokens) {
    * prompt után legyen ideje fellélegezni a token/minute keretnek.
    */
   return Math.max(
-    350,
-    Math.min(18000, raw)
+    600,
+    Math.min(
+      45000,
+      raw
+    )
   );
 }
 
@@ -7980,8 +7992,31 @@ function aiCostGapFor(system, prompt, maxTokens) {
  * the end (current task + JSON schema + TAIL), which are the two most useful
  * regions if an emergency trim is needed.
  */
-const AI_MAX_SYSTEM_CHARS = Math.max(18000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 42000);
-const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 82000);
+/*
+ * PROVIDER-SAFE FINAL BUDGET
+ *
+ * The world keeps full canon/memory. This only limits the final request sent
+ * to the provider after the semantic context builders have already selected
+ * relevant material.
+ *
+ * Old defaults (42k + 82k chars) could exceed ~40k estimated input tokens in a
+ * single request and repeatedly hit TPM 429s.
+ */
+const AI_MAX_SYSTEM_CHARS =
+  Math.max(
+    18000,
+    Number(
+      import.meta.env.VITE_AI_MAX_SYSTEM_CHARS
+    ) || 24000
+  );
+
+const AI_MAX_PROMPT_CHARS =
+  Math.max(
+    28000,
+    Number(
+      import.meta.env.VITE_AI_MAX_PROMPT_CHARS
+    ) || 36000
+  );
 
 function preserveEdges(value, maxChars, label = "context") {
   const text = String(value || "");
@@ -8041,12 +8076,27 @@ async function runAiQueueWorker() {
               ? AI.initiativeGap
               : AI.gap;
 
+        /*
+         * Respect the previous request's estimated token cost. Priority still
+         * controls ORDER, not unsafe provider overlap. A player DM therefore
+         * jumps ahead of background work but waits long enough after a huge
+         * world request to avoid immediately causing another TPM 429.
+         */
         const costGap =
           task.priority >= 50
-            ? Math.min(5000, Number(AI.lastCostGap) || 0)
+            ? Math.min(
+                30000,
+                Number(AI.lastCostGap) || 0
+              )
             : task.priority >= 15
-              ? Math.min(7000, Number(AI.lastCostGap) || 0)
-              : Math.min(10000, Number(AI.lastCostGap) || 0);
+              ? Math.min(
+                  36000,
+                  Number(AI.lastCostGap) || 0
+                )
+              : Math.min(
+                  45000,
+                  Number(AI.lastCostGap) || 0
+                );
 
         const gap = Math.max(baseGap, costGap);
         if (since < gap) await wait(gap - since);
