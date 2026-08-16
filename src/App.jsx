@@ -12721,6 +12721,337 @@ function connectionsCommentToneMismatch(
   return false;
 }
 
+function socialPostHasVisibleImage(post) {
+  return Boolean(
+    post &&
+    (
+      post.imageId ||
+      post.image ||
+      String(
+        post.imageDescription ||
+        ""
+      ).trim()
+    )
+  );
+}
+
+function socialCommentHasUnsupportedVisualClaim(
+  post,
+  value
+) {
+  if (
+    !post ||
+    socialPostHasVisibleImage(
+      post
+    )
+  ) {
+    return false;
+  }
+
+  const raw =
+    String(
+      value || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return false;
+
+  /*
+   * Text-only posts cannot suddenly acquire a photo, outfit, pose, mugshot,
+   * photographer or visible facial/body detail in the comment section.
+   */
+  return /\b(?:photo|photograph|picture|pic|selfie|mugshot|camera|photographer|photoshoot|photo\s*shoot|frame(?:d|ing)?|pose|posing|outfit|dress|shirt|top|skirt|makeup|hair|face\s+in\s+that|you\s+look|looks?\s+like|looking\s+(?:like|less|more)|look\s+less\s+like|look\s+more\s+like)\b/i.test(
+    raw
+  );
+}
+
+function socialPostLooksConfrontational(post) {
+  const raw =
+    String(
+      post &&
+      post.text ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return false;
+
+  return /\b(?:fight\s+me|come\s+at\s+me|say\s+it\s+to\s+my\s+face|try\s+me|you\s+won['’]?t|you\s+can['’]?t|coward|loser|idiot|stupid|pathetic|shut\s+up|fuck\s+you|screw\s+you|hate\s+you|prove\s+me\s+wrong|dare\s+you|scared|afraid)\b/i.test(
+    raw
+  );
+}
+
+function socialCommentLooksContextlessConfrontational(
+  value
+) {
+  const raw =
+    String(
+      value || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return false;
+
+  return /\b(?:keep\s+telling\s+yourself\s+that|say\s+(?:that|it)\s+to\s+my\s+face|try\s+saying\s+(?:that|it)\s+to\s+my\s+face|come\s+say\s+(?:that|it)|fight\s+me|come\s+at\s+me|you\s+wouldn['’]?t\s+dare|all\s+bark|talk\s+big|you\s+wish)\b/i.test(
+    raw
+  );
+}
+
+function socialPostQuestionMode(post) {
+  const raw =
+    String(
+      post &&
+      post.text ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return "none";
+
+  const words =
+    raw
+      .replace(/[?!.,;:]+/g, " ")
+      .split(/\s+/)
+      .filter(Boolean);
+
+  const short =
+    words.length <= 7;
+
+  if (
+    short &&
+    /^(?:party|party\s+tonight|party\s+later|party\s+tomorrow)\s*\?*$/i.test(
+      raw
+    )
+  ) {
+    return "party-question";
+  }
+
+  if (
+    short &&
+    (
+      /\?$/.test(
+        raw
+      ) ||
+      /^(?:who|what|where|when|why|how|anyone|somebody|drinks?|dinner|lunch|coffee|movie|movies|club|beach|shopping|training|workout|game|trip|road\s+trip|hang\s*out)\b/i.test(
+        raw
+      )
+    )
+  ) {
+    return "short-question";
+  }
+
+  return "none";
+}
+
+function socialCommentAnswersShortQuestion(
+  post,
+  value
+) {
+  const raw =
+    String(
+      value || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return false;
+
+  const mode =
+    socialPostQuestionMode(
+      post
+    );
+
+  if (mode === "none") {
+    return true;
+  }
+
+  /*
+   * A real short-question reply normally answers, asks for a missing detail,
+   * or directly references the proposed activity/topic.
+   */
+  const answerShape =
+    /^(?:yes|yeah|yep|yup|sure|maybe|possibly|probably|absolutely|obviously|definitely|nah|nope|no|never|depends|why|where|when|who|whose|what|which|how|again|bet|fine|okay|ok|i['’]?m\s+in|im\s+in|i['’]?m\s+out|im\s+out|i['’]?m\s+down|im\s+down|count\s+me\s+in|hell\s+yes|hell\s+no|only\s+if|not\s+if|not\s+with|without\s+me)\b/i.test(
+      raw
+    );
+
+  if (answerShape) {
+    return true;
+  }
+
+  if (/\?/.test(raw)) {
+    return true;
+  }
+
+  if (mode === "party-question") {
+    return /\b(?:party|invite|invited|invitation|host|hosting|where|when|what\s+time|who['’]?s|whose|coming|going|there|bring|drinks?|address|dress\s*code|tonight|tomorrow|afterparty|after-party|pregame|pre-game|plus\s*one)\b/i.test(
+      raw
+    );
+  }
+
+  const postTokens =
+    String(
+      post &&
+      post.text ||
+      ""
+    )
+      .toLowerCase()
+      .replace(/[^a-z0-9\u00c0-\u024f]+/gi, " ")
+      .split(/\s+/)
+      .filter(
+        (token) =>
+          token.length >= 4 &&
+          ![
+            "what",
+            "where",
+            "when",
+            "which",
+            "who",
+            "whose",
+            "anyone",
+            "somebody",
+          ].includes(token)
+      );
+
+  const body =
+    raw.toLowerCase();
+
+  return postTokens.some(
+    (token) =>
+      body.includes(
+        token
+      )
+  );
+}
+
+function socialCommentGroundedInExactPost(
+  w,
+  post,
+  parentComment,
+  actorId,
+  value,
+  trigger = ""
+) {
+  if (
+    !w ||
+    !post ||
+    !actorId
+  ) {
+    return false;
+  }
+
+  const raw =
+    String(
+      value || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return false;
+
+  /*
+   * This is hard factual grounding, independent of personality/relationship.
+   */
+  if (
+    socialCommentHasUnsupportedVisualClaim(
+      post,
+      raw
+    )
+  ) {
+    return false;
+  }
+
+  /*
+   * Replies are grounded primarily in the parent comment. The prompt handles
+   * semantic reply fit; here we only keep the hard no-hallucinated-image rule.
+   */
+  if (parentComment) {
+    return true;
+  }
+
+  const mode =
+    socialPostQuestionMode(
+      post
+    );
+
+  if (
+    mode !== "none" &&
+    !socialPostLooksConfrontational(
+      post
+    ) &&
+    socialCommentLooksContextlessConfrontational(
+      raw
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    mode !== "none" &&
+    !socialCommentAnswersShortQuestion(
+      post,
+      raw
+    )
+  ) {
+    return false;
+  }
+
+  /*
+   * A model-supplied trigger never rescues an unrelated sentence. It is kept
+   * only as metadata once the visible sentence itself passes.
+   */
+  void trigger;
+
+  return true;
+}
+
+function socialCommentExactPostGroundingCard(
+  w,
+  post
+) {
+  if (!w || !post) return "";
+
+  const hasImage =
+    socialPostHasVisibleImage(
+      post
+    );
+
+  const mode =
+    socialPostQuestionMode(
+      post
+    );
+
+  const special =
+    mode === "party-question"
+      ? `
+- THIS IS A SHORT PARTY QUESTION/INVITATION. A valid comment must answer the party idea, ask a party detail, react to attending/not attending, hosting, timing, location, invite, drinks, who is coming, etc.
+- Relationship may make that answer warm, sarcastic, flirty, hostile, possessive or dry — but it may NOT replace the party topic with an unrelated insult/challenge.
+`
+      : mode === "short-question"
+        ? `
+- THIS IS A SHORT DIRECT QUESTION. A valid top-level comment must answer it, ask a relevant clarification, or directly react to the question's actual topic.
+- An unrelated roast, threat, challenge or cryptic comeback is NOT a response merely because the commenter dislikes the author.
+`
+        : "";
+
+  return `
+EXACT-POST COMMENT GROUNDING — HIGHEST CONTENT PRIORITY:
+- POST HAS VISIBLE IMAGE: ${hasImage ? "YES" : "NO"}
+- POST RESPONSE MODE: ${mode}
+- CONTENT ORDER IS STRICT: (1) exact visible post/thread meaning, (2) relationship, (3) personality/speech style.
+- Relationship is a TONE FILTER, not a substitute topic. A rival still has to react to something the post actually gives them.
+- If SELF has no concrete post-grounded sentence to say, choose LIKE or IGNORE. Never manufacture an unrelated insult just to create engagement.
+- Every returned comment must pass this test: "What exact word, question, visible image detail, or parent-comment statement makes THIS sentence a sensible response?" If there is no clear answer, do not return that comment.
+${hasImage
+  ? `- Visual reactions may use ONLY details in the supplied image description.`
+  : `- TEXT-ONLY HARD LOCK: there is NO visible photo. Never mention/invent a photo, picture, selfie, mugshot, photographer, pose, outfit, facial look, "you look like...", or any other visible appearance detail.`}
+${special}
+`;
+}
+
 function socialCommentContradictsRelationship(
   w,
   actorId,
@@ -28619,6 +28950,8 @@ ${post.authorId === w.meId && post.text ? playerInputUnderstandingInstruction(w,
 
 ${socialPostMeaningCard(w, post, postMeaning)}
 
+${socialCommentExactPostGroundingCard(w, post)}
+
 ${
   (post.imageId || post.image)
     ? `KÉP A POSZTBAN:
@@ -28661,6 +28994,7 @@ KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - A fenti SEALED ACTOR CAPSULES blokkok szigorúan ID-hoz kötöttek. Egy output sor id-je CSAK a saját capsule-jából olvashat "én / saját" tényt.
 - Minden kommentelő a SAJÁT teljes karakterlapját használja, nem másik kommentelőét. Más karakter jobja, dojoja, rangja, mentorai, crushai, Connections-sorai és backstory-ja TILOS saját tényként.
 - A kommentelő saját emlékei közül ebben a social feladatban csak a POSZT SZERZŐJÉHEZ / közvetlen célponthoz releváns memória használható; unrelated player/world memory nem.
+- POST-TARTALOM ELSŐ: előbb legyen értelmes válasz a KONKRÉT posztra, csak utána színezze a relationship és a személyiség. A rossz kapcsolat NEM jogosít fel egy teljesen oda nem illő beszólásra. Ha a poszt nem ad fogást egy ellenséges kommenthez, az ellenség inkább LIKE/IGNORE vagy rövid, de témába vágó reakció.
 - KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT, kapcsolat-specifikus explicit kánonja. Az, hogy valaki általában szarkasztikus/bunkó/domináns, NEM elég ok arra, hogy a barátját megalázza vagy ellenségként kezelje.
 - KÖLCSÖNÖS BARÁTSÁG: ha a kommentelő és a poszt szerzője mindkét irányban barátok, ezt a komment konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
@@ -28754,13 +29088,14 @@ KARAKTERHANG — EZ A GENERÁLÁS EGYIK LEGFONTOSABB CÉLJA:
 KOMMENT SZABÁLYOK:
 
 ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD MINIMUM:
-- EBBEN a generálásban legalább ${requestedMinComments}, legfeljebb ${requestedMaxComments} KÜLÖNBÖZŐ AI-karakter írjon valódi, látható kommentet, ha a castban ennyi szereplő van.
-- A LIKE NEM HELYETTESÍTI a kommentminimumot.
+- CÉL: ebben a generálásban lehetőleg ${requestedMinComments}–${requestedMaxComments} KÜLÖNBÖZŐ AI-karakter írjon valódi, látható kommentet, HA ennyi karakternek van KONKRÉT, értelmes mondanivalója erről a posztról.
+- A kommentminimum SOHA nem írhatja felül az EXACT-POST GROUNDING szabályt. Inkább legyen kevesebb komment, mint egyetlen oda nem illő mondat.
+- A LIKE nem számít kommentnek, de LIKE/IGNORE helyesebb, mint egy kitalált reakció.
 - Elsősorban TOP-LEVEL kommenteket adj; a külön reply-engine utána továbbviszi a threadet.
 - AI-karakterek EGYMÁS posztjai alatt is ugyanilyen aktívan reagáljanak. A játékos posztja nem kap különleges komment-prioritást.
 ` : ""}
 
-- A feed legyen LÁTHATÓAN AKTÍVABB: ha több releváns karakter látja a posztot és van rá természetes reakciója, inkább jelenjen meg több különböző kommentelő, ne álljon meg a rendszer 2-3 kommentnél.
+- A feed lehet aktív, de a mennyiség soha ne rontsa a jelentést: csak az kommenteljen, akinek a KONKRÉT posztra ténylegesen van értelmes reakciója.
 - Szöveges átlagposztnál gyakran 4-8 valódi karakter kommentel; egy kifejezetten csendes/személyes szövegposztnál is reális 2-4; egy drámai/felkapott szövegposztnál 6-10.
 - KÉPES POSZTNÁL a kép ténylegesen növeli a reakciósűrűséget: normál fotónál kb. 6-10, erős selfie/outfit/appearance fókusznál 8-12, ismert felnőtt vizuálisan feltűnőbb beachwear/bikini/thirst-trap jellegű képnél kb. 10-14 természetes komment is reális, HA van ennyi kapcsolat/releváns szereplő.
 - A több komment NEM jelent több generikus bókot: barát hype-olhat, ellenség szurkálhat, crush olvadozhat vagy féltékenykedhet, rivális provokálhat, más poénkodhat, kérdezhet, belsős utalást tehet vagy egy másik kommentre reagálhat.
@@ -29087,7 +29422,9 @@ POST AUTHOR: ${nameOfIn(w, post.authorId)} [${post.authorId}]
 POST: "${String(post.text || "").slice(0, 900)}"
 ${post.imageDescription ? `VISIBLE IMAGE CONTENT: ${String(post.imageDescription).slice(0, 700)}` : ""}
 
-WE NEED ${missing} MORE REAL COMMENTS.
+${socialCommentExactPostGroundingCard(w, post)}
+
+TRY TO ADD UP TO ${missing} MORE REAL COMMENTS, BUT ONLY IF THEY ARE SEMANTICALLY GROUNDED IN THIS EXACT POST.
 ELIGIBLE CHARACTERS:
 ${candidates.map((c) => `- ${c.name} [${c.id}]
 ${relationshipBehaviorCard(w, c.id, post.authorId)}`).join("\n")}
@@ -29096,8 +29433,8 @@ ${strictSocialActorCapsules(w, candidates, post)}
 
 HARD RULES:
 - VERY HIGH RELATIONSHIP ATTENTION IDs THAT WERE MISSED: ${missingRelationshipPriority.join(", ") || "none"}.
-- If one of those IDs is in ELIGIBLE CHARACTERS, include that character's top-level comment in this repair unless the exact post makes a public reaction genuinely impossible for their established character. Hidden obsession is NOT a reason to disappear; it is a reason to keep the wording deniable.
-- Return ${Math.min(missing, candidates.length)} DIFFERENT character IDs if possible.
+- If one of those IDs is in ELIGIBLE CHARACTERS, prioritize them ONLY when they have a concrete sentence that actually responds to this post. Hidden obsession increases attention; it does not create an unrelated topic.
+- Return up to ${Math.min(missing, candidates.length)} DIFFERENT character IDs. Fewer is correct if the alternatives would be semantically nonsensical.
 - One fresh TOP-LEVEL comment per character. reply_to MUST be empty.
 - Likes do not count.
 - AI → AI posts count exactly the same as AI → player posts.
@@ -29968,6 +30305,19 @@ function applyComments(n, postId, out, label) {
       let body = cleanGeneratedComment(n, who, c.text, 240);
       if (!body) return;
       if (socialSelfClassificationContradiction(n, who, body)) return;
+
+      if (
+        !socialCommentGroundedInExactPost(
+          n,
+          p,
+          null,
+          who,
+          body,
+          c && c.trigger
+        )
+      ) {
+        return;
+      }
 
       /* A csomagon belül se legyen két karakternek ugyanaz a generikus reakciója. */
       if (
@@ -31401,8 +31751,14 @@ REPLY TARGET CONTRACT — EZ FONTOSABB MINDEN STÍLUS-SZABÁLYNÁL:
 - A replyTo + targetId páros determinisztikus: ${comment.id} = parent, ${comment.authorId} = közvetlen címzett. Ezt sem a személyiség, sem a scheduler, sem a poszt szerzője nem írhatja felül.
 - THIRD-PARTY SCOPE: ne hozd be a játékost vagy más harmadik karaktert csak azért, mert szerepel valamelyik válaszoló emlékeiben/Connectionsében. Harmadik személy csak akkor lehet téma, ha a jelenlegi poszt, kép vagy EZ a közvetlen komment explicit módon tartalmazza.
 
-MOST KIFEJEZETTEN ERRE A KOMMENTRE VÁLASZOLNAK:
+${socialCommentExactPostGroundingCard(w, post)}
 
+REPLY SEMANTIC LOCK:
+- A reply elsődleges értelme a KÖZVETLEN PARENT KOMMENTRE adott válasz. Relationship/personality csak ennek hangját formálja.
+- Ha a parent komment egyszerű kérdés/állítás, ne válaszolj egy teljesen más konfliktusból kiragadott mondattal.
+- Kép nélküli posztnál a reply sem találhat ki fotót vagy kinézeti részletet.
+
+M
 ${target ? target.name : "?"} [${comment.authorId}]: "${comment.text}"
 
 ${strictSocialActorCapsules(w, cast, post, comment)}
@@ -31970,6 +32326,19 @@ function applyReplies(n, postId, rootId, out) {
     if (socialSelfClassificationContradiction(n, who, body)) return;
     const rootForAddress = safePostComments(p).find((x) => x && x.id === rootId);
     const addressTargetId = rootForAddress && rootForAddress.authorId ? rootForAddress.authorId : p.authorId;
+
+    if (
+      !socialCommentGroundedInExactPost(
+        n,
+        p,
+        rootForAddress || null,
+        who,
+        body,
+        c && c.trigger
+      )
+    ) {
+      return;
+    }
 
     /*
      * v70 HARD REPLY-TARGET CONTRACT:
