@@ -7867,19 +7867,19 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
   45 * 1000,
   Math.min(
     8 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 60 * 1000
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 25 * 1000
   )
 );
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
-const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1500, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 2500));
+const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1500, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 900));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
 const LIVE_WORLD_DM_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 45 * 1000));
 const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 5 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
 const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
-const AI_BACKGROUND_GAP_MS = Math.max(250, Math.min(6000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 450));
-const AI_INITIATIVE_GAP_MS = Math.max(200, Math.min(5000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 300));
+const AI_BACKGROUND_GAP_MS = Math.max(250, Math.min(6000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 220));
+const AI_INITIATIVE_GAP_MS = Math.max(200, Math.min(5000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 180));
 
 const AI = {
   chain: Promise.resolve(),  // kompatibilitás miatt marad
@@ -7898,7 +7898,7 @@ const AI = {
    * ritmusban a szolgáltatóra.
    */
   lastCostGap: 0,
-  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 45000),
+  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 65000),
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
@@ -9241,9 +9241,26 @@ function isRepetitiveComment(w, id, text) {
   return false;
 }
 
+function socialEmojiFallback(w, id, text) {
+  const raw = String(text || "").trim();
+  if (!raw || emojiTokens(raw).length) return raw;
+  const c = charById(w, id);
+  if (!c) return raw;
+  const style = normUtterance([c.personality, c.speech, c.voice, c.traits, c.bio].filter(Boolean).join(" "));
+  const expressive = /(online|social|chaotic|playful|flirt|flirty|funny|humor|gossip|dramatic|impulsive|energetic|enthusiastic|emotional|outgoing|extrovert|gen z|young|sassy|sarcastic|excited|romantic|bold)/.test(style);
+  if (!expressive) return raw;
+  if (commentSeedNumber(`${id}|${raw}`) % 100 >= 58) return raw;
+  const pool = ["😭", "😂", "💀", "😏", "🫠", "🙄", "👀", "🤨", "❤️", "😭😂", "💀😭"];
+  const recent = new Set(recentOverusedEmojis(w, id, 8).map(emojiKey));
+  const available = pool.filter((x) => !recent.has(emojiKey(x)));
+  const emoji = (available.length ? available : pool)[commentSeedNumber(`${raw}|${id}|emoji`) % (available.length || pool.length)];
+  return `${raw} ${emoji}`.trim();
+}
+
 function cleanGeneratedComment(w, id, text, maxLen = 240) {
-  const t = String(text || "").replace(/\s+/g, " ").trim();
+  let t = String(text || "").replace(/\s+/g, " ").trim();
   if (!t) return "";
+  t = socialEmojiFallback(w, id, t);
 
   /* Dedicated feed history first, then the universal cross-surface guard. */
   if (isRepetitiveComment(w, id, t)) return "";
@@ -24939,7 +24956,7 @@ function strictSocialActorCapsules(w, cast, post, directComment = null) {
      most relevant actors. Candidate selection and actual social behavior stay intact. */
   return (cast || [])
     .filter((actor) => actor && actor.id && actor.id !== post.authorId)
-    .slice(0, 8)
+    .slice(0, 6)
     .map((actor) => {
       const targetId =
         directComment && directComment.authorId
@@ -25188,10 +25205,12 @@ ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD MINIMUM:
 - Minden komment előtt nézd meg az adott karakter fenti KORÁBBI FEED-KOMMENTJEIT. A feed-komment memória fontosabb ismétlésvédelmi forrás, mint az, hogy közben DM-ben vagy RP-ben mást mondott.
 - Ezek VALÓDI közösségi médiás kommentek, nem roleplay-jelenetek és nem mini novellák.
 - Úgy írjanak, mintha telefonról, gyorsan reagálnának egy Instagram/TikTok/X jellegű posztra.
-- A kommentek TÖBBSÉGE 2-16 szó legyen, de ne rövidítsd le erőszakkal a karaktert.
-- 17-28 szó teljesen rendben van, ha a karakter személyisége, kapcsolata vagy a konkrét poszt ezt kívánja.
-- Ritkán 29-40 szó is megengedett, ha ettől lesz igazán karakterhű és természetes.
-- A rövidség nem cél önmagában: a karakter saját hangja fontosabb.
+- A kommentek TÖBBSÉGE 4-18 szó legyen. A 1-2 szavas válasz NE legyen alapértelmezett.
+- 18-30 szó teljesen rendben van, ha a karakter személyisége, kapcsolata vagy a konkrét poszt ezt kívánja.
+- Ritkán 31-45 szó is megengedett, ha ettől lesz igazán karakterhű és természetes.
+- A rövidség NEM cél. Ha a karakter beszédes, lelkes, kaotikus, flörtölős, pletykás, agresszív vagy érzelmes, ezt ténylegesen mondd ki a kommentben.
+- Különösen TILOS egymás után több 1-2 szavas kommentet gyártani csak azért, mert az social-media formátum.
+- EMOJI AKTÍV HASZNÁLAT: az online/fiatalos/érzelmes/kaotikus/flörtölős karakterek kommentjeinek jelentős részében használj 1-2 karakterhez illő emojit. Ne hagyd ki automatikusan az emojit. Az emoji lehet a mondat elején, közepén vagy végén. A visszafogott karaktereknél lehet nulla, de a teljes kommentcsomag ne legyen emoji nélküli.
 - Egy 1-3 szavas reakció teljesen jó komment.
 - Egyetlen szó is lehet természetes komment.
 - Emoji + néhány szó is lehet teljes komment.
@@ -25347,7 +25366,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 2400 }
+    { maxTokens: 3000 }
   );
 
   /*
@@ -25386,9 +25405,8 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
 
   if (acceptedActors.length >= minWanted) return baseOut;
 
-  /* v99.6: do not fire a second provider request for a nearly complete wave.
-   * One clean generation is preferable to a repair storm that can trigger 429s. */
-  if (acceptedActors.length >= Math.max(1, minWanted - 1)) return baseOut;
+  /* If the requested visible minimum was not met, repair it. A social feed with zero/one
+   * AI reactions looks dead, so coverage is more important than saving one provider call. */
 
   const missing = minWanted - acceptedActors.length;
   const rawActors = new Set(
@@ -25446,13 +25464,14 @@ HARD RULES:
 - Read the candidate's relationshipBehaviorCard for THIS exact post author; do not transfer a dynamic from some other character.
 - Do not introduce the player or any unrelated third character unless the exact post/image explicitly contains them.
 - Respect orientation/flirt/crush and all relationship canon.
-- Usually 1-12 words. Natural public social-media language.
+- Usually 4-18 words. Do NOT default to 1-2 word replies.
+- If the character is naturally online, expressive, playful, emotional or flirty, include 1-2 fitting emojis in many comments.
 - Do not invent facts beyond the post/image/grounded memory.
 - Never use the post author as commenter.
 
 JSON ONLY:
 {"comments":[{"id":"exact eligible id","text":"short natural comment","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
-      { maxTokens: Math.max(500, Math.min(1500, 220 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
+      { maxTokens: Math.max(800, Math.min(1800, 260 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
     );
 
     const combined = [...safeAiComments(baseOut), ...safeAiComments(repairOut)]
@@ -28221,7 +28240,8 @@ KARAKTERHŰ POSZTOLÁS:
 - NAPI POSZTRITMUS: minden normál AI saját gördülő 24 órás kvótája 3–5 poszt; nincs közös globális feedlimit.
 - A 24 órán belül 3 poszt alatt álló AI-k kapjanak elsőbbséget; ugyanaz a karakter 5 fölé soha nem mehet.
 - Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
-- A feed ne legyen folyamatosan aktív: ha nincs valódi élethelyzet, inkább ne szülessen új poszt.
+- A FEED AKTÍV: ha a karakternek nincs különleges eseménye, akkor is posztoljon egy rövid, hétköznapi, személyiségből következő gondolatot, státuszt, kérdést, poént vagy élethelyzetet. Üres posts tömböt NE adj vissza, amikor a karakter jogosult posztolni.
+- A karaktereknek nem kell megvárniuk a játékost vagy egy drámai eseményt ahhoz, hogy posztoljanak. A saját életükből kezdeményezzenek.
 - A kép NEM alapértelmezett. A legtöbb poszt szöveges legyen.
 - Karakterenként maximum 1 képes poszt lehet bármely gördülő 24 órában; a többi legyen szöveges.
 - A képlimit karakterenként értendő, nem az egész világra.
@@ -28242,7 +28262,7 @@ ${
   Number(timeSkipHours) > 0
     ? `IDŐUGRÁS / TIME SKIP: a játékos kifejezetten azt kérte, hogy körülbelül ${Math.round(Number(timeSkipHours))} órával ugorjunk előre. A köztes időben a karakterek a saját életüket élték; generálj 4-7 olyan posztot / reakciót / megfigyelhető eseményt, amelyek természetesen összefoglalják, mi változott. Ne írd le a játékos döntéseit vagy cselekedeteit helyette. Nyitott konfliktusok, kapcsolatok, célok, gossip és saját karakterügyek haladhatnak tovább. Az időugrás ne resetelje az emlékeket vagy kapcsolatokat.`
     : single
-      ? "A világ közben ténylegesen ment tovább. Adj 1-2 valódi, természetes új posztot különböző szereplőktől. Ne válaszolj üres posts tömbbel. A posztok mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Adj posztonként 4-9 releváns reakciót/kommentet másoktól, és különösen keresd azokat a barátokat, akiknek a kapcsolatuk miatt természetes lenne reagálni. Ha valaki kifejezetten passzív/ritkán online, ne erőltesd."
+      ? "A világ közben ténylegesen ment tovább. Adj 1-2 valódi, természetes új posztot különböző szereplőktől. LEGALÁBB EGY poszt KÖTELEZŐ, ha van jogosult AI-karakter. Ne válaszolj üres posts tömbbel. A posztok mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Adj posztonként 4-9 releváns reakciót/kommentet másoktól, és különösen keresd azokat a barátokat, akiknek a kapcsolatuk miatt természetes lenne reagálni. Ha valaki kifejezetten passzív/ritkán online, ne erőltesd."
       : "Léptesd a világot néhány órával. Adj 1-2 természetes új posztot különböző szereplőktől, és posztonként 5-10 különböző, releváns reakciót/kommentet másoktól. A karakterek barátai és közeli kapcsolatai kapjanak valódi elsőbbséget a reakcióknál, mert egy élő közösségben az emberek nem úgy működnek, mint névtelen statiszták."
 }
 
@@ -56270,8 +56290,8 @@ const signOut = useCallback(async () => {
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 11000);
-    const first = setTimeout(beat, 150);
+    const i = setInterval(beat, 4000);
+    const first = setTimeout(beat, 100);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
 
