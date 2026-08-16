@@ -9527,9 +9527,43 @@ function preserveEdges(value, maxChars, label = "context") {
   return text.slice(0, head) + marker + text.slice(text.length - tail);
 }
 
-function budgetAiRequest(system, prompt) {
-  const compactSystem = preserveEdges(system, AI_MAX_SYSTEM_CHARS, "system");
-  const compactPrompt = preserveEdges(prompt, AI_MAX_PROMPT_CHARS, "prompt");
+function budgetAiRequest(
+  system,
+  prompt,
+  limits = {}
+) {
+  const systemLimit =
+    Math.max(
+      4000,
+      Number(
+        limits &&
+        limits.maxSystemChars
+      ) || AI_MAX_SYSTEM_CHARS
+    );
+
+  const promptLimit =
+    Math.max(
+      12000,
+      Number(
+        limits &&
+        limits.maxPromptChars
+      ) || AI_MAX_PROMPT_CHARS
+    );
+
+  const compactSystem =
+    preserveEdges(
+      system,
+      systemLimit,
+      "system"
+    );
+
+  const compactPrompt =
+    preserveEdges(
+      prompt,
+      promptLimit,
+      "prompt"
+    );
+
   return {
     system: compactSystem,
     prompt: compactPrompt,
@@ -9713,7 +9747,20 @@ async function requestAiProxy(payload, signal) {
 }
 
 async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
-  const budgeted = budgetAiRequest(system, prompt);
+  const budgeted =
+    budgetAiRequest(
+      system,
+      prompt,
+      {
+        maxSystemChars:
+          requestMeta &&
+          requestMeta.maxSystemChars,
+
+        maxPromptChars:
+          requestMeta &&
+          requestMeta.maxPromptChars,
+      }
+    );
   system = budgeted.system;
   prompt = budgeted.prompt;
 
@@ -9900,10 +9947,31 @@ async function askJSON(system, prompt, options = {}) {
        * közvetlen akciója kettőt. Ha még mindig limit van, a későbbi engine
        * kör újra megpróbálhatja anélkül, hogy request-storm alakulna ki.
        */
+      const requestedMaxBusyWaits =
+        Number(
+          options &&
+          options.maxBusyWaits
+        );
+
       const maxBusyWaits =
-        priority >= 50
-          ? 6   // interactive requests keep retrying internally
-          : 4;  // background requests retry without surfacing a cooldown
+        Number.isFinite(
+          requestedMaxBusyWaits
+        ) &&
+        requestedMaxBusyWaits > 0
+          ? Math.max(
+              1,
+              Math.min(
+                8,
+                Math.round(
+                  requestedMaxBusyWaits
+                )
+              )
+            )
+          : (
+              priority >= 50
+                ? 6   // unchanged default for interactive requests
+                : 4   // unchanged default for background requests
+            );
 
       while (
         tries < maxTries &&
@@ -9927,6 +9995,16 @@ async function askJSON(system, prompt, options = {}) {
             {
               interactive: priority >= 50,
               timeoutMs: Number(options.timeoutMs) || undefined,
+
+              maxSystemChars:
+                Number(
+                  options.maxSystemChars
+                ) || undefined,
+
+              maxPromptChars:
+                Number(
+                  options.maxPromptChars
+                ) || undefined,
             }
           );
           const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
@@ -9958,8 +10036,37 @@ async function askJSON(system, prompt, options = {}) {
              * broken provider cannot freeze the UI forever.
              */
             const left = cooldownLeft();
-            const retryCap = priority >= 50 ? 15000 : 12000;
-            await wait(Math.min(left + 120, retryCap));
+
+            const requestedBusyRetryCapMs =
+              Number(
+                options &&
+                options.busyRetryCapMs
+              );
+
+            const retryCap =
+              Number.isFinite(
+                requestedBusyRetryCapMs
+              ) &&
+              requestedBusyRetryCapMs > 0
+                ? Math.max(
+                    1000,
+                    Math.min(
+                      70000,
+                      requestedBusyRetryCapMs
+                    )
+                  )
+                : (
+                    priority >= 50
+                      ? 15000
+                      : 12000
+                  );
+
+            await wait(
+              Math.min(
+                left + 120,
+                retryCap
+              )
+            );
             continue;
           }
           tries++;
@@ -20569,6 +20676,74 @@ async function serverSaveWorld(world) {
         worldSyncRev(world),
     }),
   });
+}
+
+function acceptedWorldFromServerSave(
+  snapshot,
+  saved
+) {
+  if (!snapshot || !saved) {
+    return null;
+  }
+
+  if (
+    saved.world &&
+    typeof saved.world === "object"
+  ) {
+    return saved.world;
+  }
+
+  /*
+   * Successful hot saves intentionally return only:
+   *   { ok, meId, syncRev, rev }
+   * The client already owns the accepted snapshot; apply the server-owned
+   * revision numbers to that exact snapshot instead of waiting for a world echo.
+   */
+  if (
+    saved.ok === true &&
+    Number.isFinite(
+      Number(
+        saved.syncRev
+      )
+    )
+  ) {
+    const accepted =
+      cloneWorldState(
+        snapshot
+      );
+
+    accepted.syncRev =
+      Math.max(
+        0,
+        Math.floor(
+          Number(
+            saved.syncRev
+          ) || 0
+        )
+      );
+
+    if (
+      Number.isFinite(
+        Number(
+          saved.rev
+        )
+      )
+    ) {
+      accepted.rev =
+        Math.max(
+          0,
+          Math.floor(
+            Number(
+              saved.rev
+            ) || 0
+          )
+        );
+    }
+
+    return accepted;
+  }
+
+  return null;
 }
 function migrate(w) {
   if (!w || !w.universe) return w;
@@ -40367,17 +40542,125 @@ function recentDmBridgeScene(w, botId, chatKeyValue) {
     .sort((a, b) => (Number(b.startedAt || b.ts) || 0) - (Number(a.startedAt || a.ts) || 0))[0] || null;
 }
 
+function fullSelfCharacterSheetForDirectDm(
+  w,
+  c
+) {
+  if (!c) return "";
+
+  /*
+   * DIRECT DM SELF SHEET:
+   * every actual character-sheet field remains complete and unabridged.
+   * Album metadata is handled by the image pipeline instead of being pasted
+   * into every text DM request.
+   */
+  const rows = [
+    ["Name", c.name],
+    ["Nickname", c.nick || c.nickname],
+    ["Username", c.username],
+    ["Birth", c.birth],
+    ["Age", ageOf(c, w) || ""],
+    ["Gender", c.gender],
+    ["Orientation", c.orientation],
+    ["Height", c.height],
+    ["City", c.city],
+
+    ["Occupation / Job", c.job || c.occupation || c.profession],
+    ["Role", c.role],
+    ["Rank / Title", c.rank || c.title],
+    ["Organization", c.organization],
+    ["Affiliation", c.affiliation],
+
+    ["Public Bio", c.bio],
+    ["Appearance", c.looks],
+
+    ["Personality", c.personality],
+    ["Traits", c.traits],
+    ["Speech Style", c.speech],
+    ["Voice / Example Sentences — STYLE ONLY", c.voice],
+
+    ["Goals", c.goals],
+    ["Fears", c.fears],
+    ["Likes / Favorite Things", c.likes],
+    ["Secrets", c.secrets],
+
+    ["Relations / Connections — PRIVATE SELF-CANON", c.connections],
+
+    ["Backstory / History", c.backstory],
+    ["Other Important Canon", c.extra],
+    ["Brief / Additional Sheet Canon", c.brief],
+
+    ["Skills", c.skills],
+    ["Abilities", c.abilities],
+    ["Combat", c.combat],
+  ];
+
+  return rows
+    .map(([label, value]) => {
+      const raw =
+        String(value || "")
+          .replace(/\r/g, "")
+          .trim();
+
+      return raw
+        ? `${label}: ${raw}`
+        : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function directDmOtherReferenceProfile(
+  w,
+  c
+) {
+  if (!c) return null;
+
+  return {
+    id: String(c.id || ""),
+    name: String(c.name || ""),
+    nickname: String(c.nick || c.nickname || ""),
+    username: String(c.username || ""),
+    birth: String(c.birth || ""),
+    age: ageOf(c, w) || "",
+    gender: String(c.gender || ""),
+    orientation: String(c.orientation || ""),
+    height: String(c.height || ""),
+    city: String(c.city || ""),
+    occupation: String(c.job || c.occupation || c.profession || ""),
+    role: String(c.role || ""),
+    rank: String(c.rank || c.title || ""),
+    organization: String(c.organization || ""),
+    affiliation: String(c.affiliation || ""),
+    bio: cut(String(c.bio || ""), 1200),
+    appearance: cut(String(c.looks || ""), 1200),
+    history: spread(String(c.backstory || ""), 9000),
+    otherInformation: spread(String(c.extra || ""), 2200),
+    primaryDojo: karateFactionDisplayName(factionFlags(c)),
+    classification: characterFactionIdentityCard(c) || "",
+  };
+}
+
+function directDmSystemPrompt(
+  w,
+  actor
+) {
+  const en =
+    worldLanguage(
+      w,
+      w.meId
+    ) === "en";
+
+  return en
+    ? `You are the private-DM character engine for MÁSVILÁG. Write only as ${actor.name}. The user prompt contains ${actor.name}'s complete self character sheet, exact relationship state, grounded memory and current private chat. SELF's own Personality/Traits/Speech/Voice define SELF's style. Other-person reference facts are knowledge only and must never alter SELF's personality or voice. Answer the latest player message directly and naturally. Do not narrate actions or write for the player. Follow the requested JSON schema exactly.`
+    : `Te a MÁSVILÁG privát-DM karakterengine-je vagy. Kizárólag ${actor.name} karaktereként írj. A user prompt tartalmazza ${actor.name} teljes saját karakterlapját, pontos kapcsolatállapotát, földelt emlékezetét és az aktuális privát chatet. SELF saját Personality/Traits/Speech/Voice mezői határozzák meg SELF hangját. Más karakter referencia-tényei csak tudások, soha nem írhatják át SELF személyiségét vagy hangját. Közvetlenül a játékos legutóbbi üzenetére válaszolj. Ne narrálj cselekvést és ne írj a játékos helyett. A kért JSON sémát pontosan kövesd.`;
+}
+
 function directPlayerDmContextCard(
   w,
   actor
 ) {
   if (!w || !actor) return "";
-
-  const playerProfile =
-    publicBasicCharacterProfileForAgent(
-      w,
-      w.player
-    );
 
   const lang =
     worldLanguage(
@@ -40403,7 +40686,7 @@ ${cut(
 )}
 
 ${en ? "FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY" : "TELJES SAJÁT KARAKTERLAP — VÁGATLAN, LEGMAGASABB PRIORITÁS"}:
-${fullSelfCharacterSheetForSocial(
+${fullSelfCharacterSheetForDirectDm(
   w,
   actor
 )}
@@ -40414,7 +40697,10 @@ ${socialSelfStyleOwnershipCard(
 
 ${en ? "OTHER PERSON REFERENCE FACTS — KNOWLEDGE ONLY, NEVER SELF STYLE" : "A MÁSIK FÉL REFERENCIA-TÉNYEI — CSAK TUDÁS, SOHA NEM SAJÁT STÍLUS"}:
 ${JSON.stringify(
-  playerProfile
+  directDmOtherReferenceProfile(
+    w,
+    w.player
+  )
 )}
 
 ${en
@@ -40661,7 +40947,10 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
 
     const out = await askWorldJSONInteractive(
       requestWorld,
-      engineFor(requestWorld),
+      directDmSystemPrompt(
+        requestWorld,
+        c
+      ),
       `${directPlayerDmContextCard(
         requestWorld,
         c
@@ -40719,10 +41008,10 @@ ${relationshipBehaviorCard(
 )}
 
 Amire emlékszel:
-${selfMemoryForPrompt(
+${characterMemoryCard(
   requestWorld,
-  c.id
-)}
+  c
+) || "semmi különös"}
 
 BESZÉLGETÉS:
 ${hist}
@@ -40771,8 +41060,6 @@ ${positiveDmContinuityInstruction(
   t
 )}
 
-${voiceCard(c)}
-
 ${repetitionGuard(
   requestWorld,
   [c.id],
@@ -40819,9 +41106,6 @@ ${chatExplicitlyRequestsImage(t) ? `A JÁTÉKOS KIFEJEZETTEN KÉPET KÉRT.
 - Albumképet SOHA nem küldesz el közvetlenül DM-ben.
 - Ha a kérés konkrét (pl. selfie, outfit, kávé, buli, hol vagy most), a generált kép pontosan ahhoz igazodjon.
 - A szöveges reply lehet mellette, de a generált kép nem maradhat el.` : ""}
-
-VIZUÁLIS REFERENCIA A GENERÁLT SNAPHEZ — EZEKET NEM KÜLDHETED EL KÖZVETLENÜL:
-${albumList(c) || "nincs albumkép; a profilkép/looks marad referencia"}
 
 Ha természetes része a válaszodnak, küldhetsz EGY ÚJONNAN GENERÁLT képet.
 - DM-ben az album képei CSAK arc/kinézet/referencia céljára szolgálnak.
@@ -40893,7 +41177,24 @@ KAPCSOLATVÁLTOZÁS:
 
 Formátum:
 {"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event vagy group_social","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
-    , { maxTries: 1, maxTokens: 650, timeoutMs: 28000 }
+    , {
+        maxTries: 2,
+        maxTokens: 650,
+        timeoutMs: 28000,
+
+        /*
+         * DIRECT DM ONLY — other AI surfaces keep their existing budgets.
+         */
+        maxSystemChars: 7000,
+        maxPromptChars: 68000,
+
+        /*
+         * Wait through the provider's real TPM cooldown instead of retrying
+         * the same request halfway through a 30–60 second rate-limit window.
+         */
+        maxBusyWaits: 2,
+        busyRetryCapMs: 65000,
+      }
     );
 
     const requestedReplyText = String(
@@ -60270,13 +60571,18 @@ const signOut = useCallback(async () => {
                     latestLocal
                   );
 
+                const acceptedSnapshot =
+                  acceptedWorldFromServerSave(
+                    latestLocal,
+                    saved
+                  );
+
                 if (
-                  saved &&
-                  saved.world
+                  acceptedSnapshot
                 ) {
                   const accepted =
                     migrate(
-                      saved.world
+                      acceptedSnapshot
                     );
 
                   const acceptedRev =
@@ -61704,8 +62010,10 @@ const signOut = useCallback(async () => {
               );
 
             if (
-              saved &&
-              saved.world
+              acceptedWorldFromServerSave(
+                snap,
+                saved
+              )
             ) {
               serverResult =
                 saved;
@@ -61918,9 +62226,16 @@ const signOut = useCallback(async () => {
         /*
          * 3. Sikeres szerver save.
          */
+        const acceptedSnapshot =
+          acceptedWorldFromServerSave(
+            snap,
+            serverResult
+          );
+
         const savedWorld =
           migrate(
-            serverResult.world
+            acceptedSnapshot ||
+            snap
           );
 
         const savedSyncRev =
