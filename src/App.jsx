@@ -6698,24 +6698,295 @@ function meaningfulRelationshipHistoryCount(w, a, b, direction = 1) {
   }).length;
 }
 
+function romanticRelationshipMilestoneStage(value) {
+  const text =
+    String(value || "")
+      .trim()
+      .toLowerCase();
+
+  if (!text) return 0;
+
+  /*
+   * Dynamic romantic progression is deliberately staged.
+   * Existing character-sheet baselines are created elsewhere and are NOT
+   * affected by this runtime progression guard.
+   */
+  if (
+    /^(?:házastárs|spouse|wife|husband|married)$/i.test(
+      text
+    )
+  ) {
+    return 5;
+  }
+
+  if (
+    /^(?:jegyesek|engaged|fianc[eé]s?)$/i.test(
+      text
+    )
+  ) {
+    return 4;
+  }
+
+  if (
+    /^(?:járnak|dating|couple|partners?|boyfriend|girlfriend|titkos viszony|secret affair)$/i.test(
+      text
+    )
+  ) {
+    return 3;
+  }
+
+  if (
+    /^(?:kölcsönös crush|mutual crush|mutual attraction)$/i.test(
+      text
+    )
+  ) {
+    return 2;
+  }
+
+  if (
+    /^(?:crush|obsession|secret crush|secret attraction)$/i.test(
+      text
+    )
+  ) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function romanticRelationshipMilestoneName(stage) {
+  return (
+    {
+      1: "crush",
+      2: "mutual-crush",
+      3: "dating",
+      4: "engaged",
+      5: "spouse",
+    }[Number(stage) || 0] ||
+    "non-romantic"
+  );
+}
+
 function relationshipBondTransitionPaceAllowed(w, a, b, currentRel, proposedBond, nextScore) {
-  const current = String(currentRel && (currentRel.bond || currentRel.type) || "").trim();
-  const proposed = String(proposedBond || "").trim();
+  const current =
+    String(
+      currentRel &&
+      (
+        currentRel.bond ||
+        currentRel.type
+      ) ||
+      ""
+    ).trim();
+
+  const proposed =
+    String(
+      proposedBond ||
+      ""
+    ).trim();
+
   if (!proposed || proposed === current) return true;
   if (isPermanentFamilyBond(currentRel)) return true;
 
-  const currentPolarity = relationshipBondPolarity(current);
-  const proposedPolarity = relationshipBondPolarity(proposed);
+  const currentPolarity =
+    relationshipBondPolarity(
+      current
+    );
 
+  const proposedPolarity =
+    relationshipBondPolarity(
+      proposed
+    );
+
+  /*
+   * HARD ROMANTIC MILESTONE PACING
+   *
+   * Mood may change in one interaction.
+   * A formal romantic BOND may not.
+   *
+   * In particular:
+   *   Crush -> Dating in one comment/reply is impossible.
+   *   Crush -> Mutual crush -> Dating is the normal route.
+   *   Dating -> Engaged -> Spouse must also happen step by step.
+   *
+   * This is a deterministic guard; provider output cannot bypass it.
+   */
+  const currentRomanticStage =
+    romanticRelationshipMilestoneStage(
+      current
+    );
+
+  const proposedRomanticStage =
+    romanticRelationshipMilestoneStage(
+      proposed
+    );
+
+  if (proposedRomanticStage > 0) {
+    const reverseRel =
+      getRel(
+        w,
+        b,
+        a
+      ) || EMPTY_REL;
+
+    const reverseStage =
+      romanticRelationshipMilestoneStage(
+        reverseRel.bond ||
+        reverseRel.type ||
+        ""
+      );
+
+    const positiveA =
+      meaningfulRelationshipHistoryCount(
+        w,
+        a,
+        b,
+        1
+      );
+
+    const positiveB =
+      meaningfulRelationshipHistoryCount(
+        w,
+        b,
+        a,
+        1
+      );
+
+    const reverseScore =
+      Number(
+        reverseRel.score
+      ) || 0;
+
+    /*
+     * Do not dynamically skip romantic stages.
+     * A non-romantic relationship may first become Crush.
+     * A Crush must become Mutual Crush before it can become Dating.
+     */
+    if (
+      proposedRomanticStage >
+      currentRomanticStage + 1
+    ) {
+      return false;
+    }
+
+    /*
+     * Becoming a basic crush may happen organically, but not if the
+     * relationship is deeply negative.
+     */
+    if (proposedRomanticStage === 1) {
+      return (
+        Number(nextScore) >= 20 &&
+        currentPolarity !== -1
+      );
+    }
+
+    /*
+     * MUTUAL CRUSH:
+     * requires an existing one-sided crush/attraction stage, several distinct
+     * positive relationship changes, and actual attraction/romantic readiness
+     * from the reverse direction.
+     */
+    if (proposedRomanticStage === 2) {
+      const reverseAttraction =
+        reverseStage >= 1 ||
+        relationshipCrushActive(
+          w,
+          b,
+          a,
+          reverseRel
+        );
+
+      return (
+        currentRomanticStage >= 1 &&
+        reverseAttraction &&
+        Number(nextScore) >= 58 &&
+        reverseScore >= 35 &&
+        positiveA >= 3 &&
+        positiveB >= 2
+      );
+    }
+
+    /*
+     * DATING:
+     * cannot be created straight from Crush.
+     * The pair needs a mutual-crush stage first plus an accumulated history
+     * on BOTH sides. A single comment exchange can never satisfy this.
+     *
+     * If the reverse side is already Dating because of an older legitimate
+     * transition, allow this side to catch up once the history threshold exists.
+     */
+    if (proposedRomanticStage === 3) {
+      const mutuallyReady =
+        currentRomanticStage >= 2 &&
+        (
+          reverseStage >= 2 ||
+          relationshipCrushActive(
+            w,
+            b,
+            a,
+            reverseRel
+          )
+        );
+
+      const reverseAlreadyDating =
+        reverseStage >= 3;
+
+      return (
+        (
+          mutuallyReady ||
+          reverseAlreadyDating
+        ) &&
+        Number(nextScore) >= 72 &&
+        reverseScore >= 55 &&
+        positiveA >= 6 &&
+        positiveB >= 4
+      );
+    }
+
+    /*
+     * ENGAGED:
+     * only an established Dating relationship can progress here.
+     */
+    if (proposedRomanticStage === 4) {
+      return (
+        currentRomanticStage === 3 &&
+        reverseStage >= 3 &&
+        Number(nextScore) >= 88 &&
+        reverseScore >= 78 &&
+        positiveA >= 10 &&
+        positiveB >= 8
+      );
+    }
+
+    /*
+     * SPOUSE:
+     * only an established engagement can progress here.
+     */
+    if (proposedRomanticStage === 5) {
+      return (
+        currentRomanticStage === 4 &&
+        reverseStage >= 4 &&
+        Number(nextScore) >= 94 &&
+        reverseScore >= 88 &&
+        positiveA >= 14 &&
+        positiveB >= 12
+      );
+    }
+  }
+
+  /*
+   * Existing friendship pacing stays exactly as before.
+   */
   if (currentPolarity === 1 && proposedPolarity === 1) {
     if (/^Legjobb barát$|^Best Friend$/i.test(proposed)) {
       return Number(nextScore) >= 82 &&
         meaningfulRelationshipHistoryCount(w, a, b, 1) >= 4;
     }
+
     if (/^Közeli barát$|^Close Friend$/i.test(proposed)) {
       return Number(nextScore) >= 58 &&
         meaningfulRelationshipHistoryCount(w, a, b, 1) >= 3;
     }
+
     if (/^Barát$|^Friend$/i.test(proposed)) {
       return Number(nextScore) >= 28 &&
         meaningfulRelationshipHistoryCount(w, a, b, 1) >= 2;
@@ -8308,6 +8579,8 @@ SZABÁLYOK:
 - A mood és why nyelve KÖTELEZŐEN: ${worldLanguage(w, w.meId) === "en" ? "ENGLISH" : "MAGYAR"}.
 - A why röviden nevezze meg a konkrét, TÉNYLEG megtörtént okot; ne találjon ki flörtöt vagy más eseményt.
 - Ha a bond még ugyanaz, ne találj ki újat. Ha tényleg fordulópont történt, adhatsz bondot.
+- EGYETLEN KOMMENT/REPLY VÁLTÁS NEM TEHET Crush-ból Dating/Járnak státuszt, Datingből Engaged/Jegyesek státuszt vagy Engagedből Spouse/Házastárs státuszt. Ezek tartós romantikus mérföldkövek, amelyekhez több külön kapcsolatépítő esemény és felhalmozódott kölcsönösség kell. Egy komment legfeljebb score-t/moodot mozdítson, vagy fokozatosan kialakuló Crush/Mutual crush irányába lépjen, ha az valóban indokolt.
+- A mood gyorsan változhat; a romantikus bond státusz szándékosan SOKKAL lassabban.
 - Ne generálj kommentválaszt, csak kapcsolatértékelést.
 
 Formátum:
@@ -10493,11 +10766,294 @@ function isRepetitiveComment(w, id, text) {
   return false;
 }
 
+function commentCharacterDigitalStyleText(c) {
+  return [
+    c && c.personality,
+    c && c.traits,
+    c && c.speech,
+    c && c.voice,
+    c && c.bio,
+    c && c.extra,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function commentCharacterExplicitEmojiStyle(c) {
+  if (!c) return false;
+
+  const raw =
+    [
+      c.personality,
+      c.traits,
+      c.speech,
+      c.voice,
+      c.bio,
+      c.extra,
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+  /*
+   * Explicit emoji examples in the character's own writing are the strongest
+   * evidence that emoji use is actually part of THEIR voice.
+   */
+  if (
+    emojiTokens(
+      raw
+    ).length
+  ) {
+    return true;
+  }
+
+  const style =
+    raw.toLowerCase();
+
+  return /(?:uses?\s+emojis?|emoji[- ]?(?:heavy|user|style)|text(?:s|ing)?\s+with\s+emojis?|chronically\s+online|very\s+online|internet[- ]native|meme[- ]?(?:heavy|lover|brain)|social[- ]media[- ]?(?:obsessed|native)|online\s+personality|playful\s+texter|expressive\s+texter|chaotic\s+texter|flirty\s+texter)/i.test(
+    style
+  );
+}
+
+function commentEmojiPolicy(
+  w,
+  c
+) {
+  const age =
+    Number(
+      ageOf(
+        c,
+        w
+      )
+    );
+
+  const gender =
+    characterGenderAttractionClass(
+      c
+    );
+
+  const explicitlyEmoji =
+    commentCharacterExplicitEmojiStyle(
+      c
+    );
+
+  /*
+   * User-requested realism rule:
+   * 35+ men do NOT casually use emoji by default. Their own sheet can override
+   * this only when emoji/online/texting behavior is genuinely part of canon.
+   */
+  const hardOlderMaleDefault =
+    Number.isFinite(age) &&
+    age >= 35 &&
+    gender === "male";
+
+  return {
+    age:
+      Number.isFinite(age)
+        ? age
+        : null,
+
+    gender,
+
+    explicitlyEmoji,
+
+    allowEmoji:
+      !hardOlderMaleDefault ||
+      explicitlyEmoji,
+
+    hardOlderMaleDefault,
+  };
+}
+
+function stripCommentEmojiWhenOutOfCharacter(
+  w,
+  id,
+  value
+) {
+  const raw =
+    String(
+      value || ""
+    ).trim();
+
+  if (!raw) return "";
+
+  const c =
+    charById(
+      w,
+      id
+    );
+
+  if (!c) return raw;
+
+  const policy =
+    commentEmojiPolicy(
+      w,
+      c
+    );
+
+  if (policy.allowEmoji) {
+    return raw;
+  }
+
+  return emojiGraphemes(
+    raw
+  )
+    .filter(
+      (part) =>
+        !/\p{Extended_Pictographic}/u.test(
+          part
+        )
+    )
+    .join("")
+    .replace(
+      /\s+([,.!?;:])/g,
+      "$1"
+    )
+    .replace(
+      /[ \t]{2,}/g,
+      " "
+    )
+    .trim();
+}
+
+function commentGenerationLabel(c) {
+  const birth =
+    parseDate(
+      c &&
+      c.birth
+    );
+
+  const year =
+    birth &&
+    Number(
+      birth.year
+    );
+
+  if (!year) return "unknown";
+
+  if (year >= 2013) return "Gen Alpha";
+  if (year >= 1997) return "Gen Z";
+  if (year >= 1981) return "Millennial";
+  if (year >= 1965) return "Gen X";
+  if (year >= 1946) return "Baby Boomer";
+  return "pre-Boomer";
+}
+
+function commentGenerationStyleCard(
+  w,
+  c
+) {
+  if (!w || !c) return "";
+
+  const generation =
+    commentGenerationLabel(
+      c
+    );
+
+  const policy =
+    commentEmojiPolicy(
+      w,
+      c
+    );
+
+  const age =
+    policy.age === null
+      ? "unknown"
+      : String(
+          policy.age
+        );
+
+  const worldEra =
+    worldYear(
+      w
+    ) || "?";
+
+  const style =
+    commentCharacterDigitalStyleText(
+      c
+    );
+
+  const explicitModernSlang =
+    /(?:gen\s*z|gen-z|tiktok|chronically\s+online|very\s+online|internet[- ]native|meme|slang|rizz|delulu|no\s+cap|fr\s*fr|slay|ate\b|it['’]?s\s+giving)/i.test(
+      style
+    );
+
+  const generationalGuidance = {
+    "Gen Alpha":
+      "Very young internet-native cadence may be natural if age/context allows it, but never turn the character into a parody or dump trend slang into every sentence.",
+
+    "Gen Z":
+      "Internet-native rhythm can be natural: shorter/reactive phrasing, lowercase, dry understatement, current slang or meme-awareness WHEN it matches SELF's personality/speech. Do not force 'slay/rizz/delulu/no cap/ate' into every comment.",
+
+    "Millennial":
+      "Comfortable online, but default language should feel like an adult of this cohort rather than copied TikTok Gen-Z slang. Casual humor, lol/lmao or older internet phrasing can fit if SELF's sheet supports it.",
+
+    "Gen X":
+      "Default to more direct, sentence-like adult commenting. Trend slang and meme phrasing should be sparse unless SELF's own sheet explicitly makes them very online. Emojis should be occasional rather than automatic.",
+
+    "Baby Boomer":
+      "Default to conventional adult wording and punctuation. Current Gen-Z/TikTok slang should NOT appear unless SELF's own sheet explicitly establishes that voice. Emojis are rare and personality-dependent.",
+
+    "pre-Boomer":
+      "Use conventional, age-appropriate adult wording. Do not import youth internet slang or emoji habits unless SELF's own sheet explicitly establishes them.",
+
+    "unknown":
+      "Infer digital/comment style from SELF's own personality, speech and voice examples; do not default every character to the same young social-media slang.",
+  }[generation] || "";
+
+  return `
+COMMENT AGE / GENERATION / DIGITAL VOICE — HARD REALISM FILTER:
+- SELF: ${c.name}
+- current age in this world: ${age}
+- birth cohort: ${generation}
+- world era/year: ${worldEra}
+- character-sheet explicit modern-online/slang signal: ${explicitModernSlang ? "YES" : "NO"}
+- emoji canon signal in SELF's sheet: ${policy.explicitlyEmoji ? "YES" : "NO"}
+- emoji policy for public comments: ${policy.allowEmoji ? "ALLOWED WHEN NATURAL" : "DEFAULT NO EMOJI"}
+
+GENERATIONAL MICROSTYLE:
+${generationalGuidance}
+
+HARD RULES:
+- AGE/GENERATION shapes vocabulary, punctuation, meme knowledge, slang density and emoji habits, but SELF's explicit Personality + Speech Style + Voice examples override stereotypes.
+- Do NOT write every commenter as a 20-year-old TikTok user.
+- Do NOT make older characters suddenly say 'rizz', 'delulu', 'no cap', 'fr fr', 'it's giving', 'slay', 'you ate', etc. unless SELF's own sheet actually supports that online voice.
+- Gen Z characters may sound Gen Z when their own personality permits it, but still keep each individual character distinct.
+- 35+ MALE DEFAULT: no emoji in public comments unless SELF's own character sheet explicitly establishes emoji/online-texting behavior. This is enforced after generation too.
+- Emoji is never mandatory for any age.
+- Keep the comment natural for the relationship and exact post; generation affects HOW SELF says it, not WHAT happened.
+`;
+}
+
 function socialEmojiFallback(w, id, text) {
-  const raw = String(text || "").trim();
-  if (!raw || emojiTokens(raw).length) return raw;
+  let raw =
+    stripCommentEmojiWhenOutOfCharacter(
+      w,
+      id,
+      text
+    );
+
+  if (!raw) return "";
+
   const c = charById(w, id);
   if (!c) return raw;
+
+  const emojiPolicy =
+    commentEmojiPolicy(
+      w,
+      c
+    );
+
+  /*
+   * Existing provider emoji survives only if it is age/personality-appropriate.
+   */
+  if (emojiTokens(raw).length) return raw;
+
+  /*
+   * Never ADD an emoji when the character's age/personality policy says no.
+   */
+  if (!emojiPolicy.allowEmoji) return raw;
+
   const style = normUtterance([c.personality, c.speech, c.voice, c.traits, c.bio].filter(Boolean).join(" "));
   const expressive = /(online|social|chaotic|playful|flirt|flirty|funny|humor|gossip|dramatic|impulsive|energetic|enthusiastic|emotional|outgoing|extrovert|gen z|young|sassy|sarcastic|excited|romantic|bold)/.test(style);
   if (!expressive) return raw;
@@ -18469,6 +19025,7 @@ A KAPCSOLAT EGYIRÁNYÚ — EZ FONTOS
 - VÁLTOZÓ VISZONY (barát, ellenség, crush, exek stb.) fejlődhet, de a KIINDULÓ kapcsolat ERŐS ANCHOR, nem eldobható címke.
 - Egy komment, like, kínos vicc, féltékeny pillanat vagy egyetlen vita NEM változtathat Legjobb barátokat Riválissá/Ellenséggé, és egy ellenséget sem tehet azonnal baráttá.
 - Nagy bond-váltáshoz több külön jelentős esemény, felhalmozódó score-változás és egyértelmű történeti ív kell. A mood gyorsan változhat, a bond sokkal lassabban.
+- ROMANTIKUS MÉRFÖLDKŐ NEM UGORHAT ÁT FOKOZATOT: kialakuló Crush → kölcsönössé váló Crush → Dating/Járnak → Engaged/Jegyesek → Spouse/Házastárs. Egyetlen komment, DM, bók, flört vagy jó jelenet önmagában nem léptethet át több ilyen státuszt; a hard relationship engine ezt akkor is blokkolja, ha te tévesen javasolnád.
 - Ha a SAJÁT Connections mező pontosan erre a célpontra Best friend / Close friend / Friend kapcsolatot ír, az erősebb, mint az általános dojo-rivalizálás vagy más emberek kapcsolati szövege.
 - Példák: Ismerős → Barát → Közeli barát → Legjobb barát; Barát → Rivális/Ellenség; Rivális → Barát. Csak akkor válts, ha a történet ezt ténylegesen kiérdemelte.
 - KIVÉTEL: rokoni/családi bond SOHA nem változik más bonddá. Anya, apa, testvér, unokatestvér stb. mindig ugyanaz a családi tény marad; csak a score, mood és why változik.
@@ -27759,6 +28316,8 @@ DIRECT TARGET FOR THIS REACTION: ${nameOfIn(w, targetId)} [${targetId}]
 
 ${voiceCard(actor)}
 
+${commentGenerationStyleCard(w, actor)}
+
 FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
 ${fullSelfCharacterSheetForSocial(w, actor)}
 
@@ -27898,6 +28457,8 @@ KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
 - A korábbi emlékei és a poszt szerzőjével való konkrét kapcsolata ténylegesen módosítsa a reakcióját. Ha van releváns közös múlt, belső poén, korábbi vita, ígéret, flört vagy kínos esemény, UTALHAT rá — de ne ugyanarra minden alkalommal.
 - Ne csak a komment TARTALMA, hanem a mikrostílusa is karakterfüggő legyen: mondathossz, kis-/nagybetű, írásjel, szleng, emoji, kérdezés, közvetlenség, szárazság, káromkodás, flört és humor ritmusa is.
+- KOR + GENERÁCIÓ IS AKTÍV STÍLUSSZŰRŐ: a SEALED ACTOR CAPSULE-ban lévő COMMENT AGE / GENERATION / DIGITAL VOICE szabályt minden kommentelőnél külön kövesd. Egy Gen Z karakter természetesen kommentálhat Gen Z-s ritmusban, de egy idősebb karaktert ne fiatalíts le automatikusan social-media szlenggel.
+- 35+ FÉRFI: alapból NE használjon emojit kommentben. Csak akkor fér bele, ha a SAJÁT karakterlap Personality/Speech/Voice része ténylegesen online-os/emojizó/expresszív texting stílust mutat; a rendszer ezt mentés előtt is ellenőrzi.
 - Ha ugyanaz a komment több karakter szájából is hiteles lenne, nem elég specifikus: írd újra.
 - TILOS generikus AI-social formulákkal kitölteni a csomagot (pl. ugyanaz a "girl...", "damn", "real", "obsessed", "okayyy", "iconic", "you ate" jellegű reakció újra meg újra), hacsak az adott karakter saját online hangja ÉS a friss kommentmemóriája tényleg indokolja.
 
@@ -30642,6 +31203,8 @@ KOMMENTVÁLASZ-KARAKTERHŰSÉG:
 - KAPCSOLATI PRIORITÁS: a jó/közeli kapcsolat nem válhat random bunkósággá csak a változatosság kedvéért. Sértegetés, lenézés, hideg lepattintás vagy rosszindulatú gúny csak konkrét jelenlegi triggerből vagy a karakter SAJÁT explicit kánonjából jöhet.
 - KÖLCSÖNÖS BARÁTSÁG: ha a válaszoló és a kommentelő mindkét irányban barátok, ezt a reply konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A reply legyen felismerhetően az adott karakteré, ne generikus social reakció.
+- A reply mikrostílusánál KÖTELEZŐ a saját COMMENT AGE / GENERATION / DIGITAL VOICE kártya: korhoz/generációhoz illő szleng, írásjel, mondathossz és emoji-használat. Gen Z lehet természetesen Gen Z; idősebb karakter ne kapjon automatikusan Gen Z/TikTok hangot.
+- 35+ férfi alapból ne használjon emojit replyban sem, kivéve ha a SAJÁT character sheet valóban emojizó/online texting személyiséget ír le.
 - A korábbi saját kommentjeinek/DM-jeinek/posztjainak fordulatait se használja újra.
 - Ha a komment vagy a válasz ténylegesen közelebb hozza, felidegesíti, féltékennyé teszi, megsérti, megnevetteti vagy másképp érzelmileg megmozdítja a karaktert, ezt a "changes" tömbben IS jelezd. Ne csak a reply szövegében jelenjen meg.
 - Kis social reakcióhoz kis változás illik (általában 1-6 pont); nagyobb változás csak erős, konkrét érzelmi okból legyen.
