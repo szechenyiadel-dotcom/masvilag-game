@@ -10837,19 +10837,53 @@ function commentEmojiPolicy(
       c
     );
 
+  const knownAge =
+    Number.isFinite(
+      age
+    );
+
   /*
-   * User-requested realism rule:
-   * 35+ men do NOT casually use emoji by default. Their own sheet can override
-   * this only when emoji/online/texting behavior is genuinely part of canon.
+   * COMMENT / REPLY EMOJI REALISM — HARD LIMIT
+   *
+   * 45+ characters:
+   *   - default ZERO emoji;
+   *   - if their OWN character sheet explicitly establishes an emoji-heavy /
+   *     online texting voice, they may still use MAXIMUM ONE emoji token.
+   *
+   * 35+ men keep the earlier default-no-emoji rule and, even with a sheet
+   * override, may use MAXIMUM ONE emoji token.
+   *
+   * This prevents provider degeneration such as pages of 😂😭💀 while keeping
+   * a genuinely emoji-using older character possible in a restrained way.
    */
+  const hardFortyFivePlusDefault =
+    knownAge &&
+    age >= 45;
+
   const hardOlderMaleDefault =
-    Number.isFinite(age) &&
+    knownAge &&
     age >= 35 &&
     gender === "male";
 
+  const restrictedOlder =
+    hardFortyFivePlusDefault ||
+    hardOlderMaleDefault;
+
+  const allowEmoji =
+    restrictedOlder
+      ? explicitlyEmoji
+      : true;
+
+  const maxEmojiTokens =
+    !allowEmoji
+      ? 0
+      : restrictedOlder
+        ? 1
+        : 999;
+
   return {
     age:
-      Number.isFinite(age)
+      knownAge
         ? age
         : null,
 
@@ -10857,9 +10891,11 @@ function commentEmojiPolicy(
 
     explicitlyEmoji,
 
-    allowEmoji:
-      !hardOlderMaleDefault ||
-      explicitlyEmoji,
+    allowEmoji,
+
+    maxEmojiTokens,
+
+    hardFortyFivePlusDefault,
 
     hardOlderMaleDefault,
   };
@@ -10891,18 +10927,47 @@ function stripCommentEmojiWhenOutOfCharacter(
       c
     );
 
-  if (policy.allowEmoji) {
-    return raw;
-  }
+  const maxEmojiTokens =
+    Math.max(
+      0,
+      Number(
+        policy.maxEmojiTokens
+      ) || 0
+    );
+
+  let keptEmoji = 0;
 
   return emojiGraphemes(
     raw
   )
     .filter(
-      (part) =>
-        !/\p{Extended_Pictographic}/u.test(
-          part
-        )
+      (part) => {
+        const isEmoji =
+          /\p{Extended_Pictographic}/u.test(
+            part
+          );
+
+        if (!isEmoji) {
+          return true;
+        }
+
+        if (
+          !policy.allowEmoji ||
+          maxEmojiTokens <= 0
+        ) {
+          return false;
+        }
+
+        if (
+          keptEmoji >=
+          maxEmojiTokens
+        ) {
+          return false;
+        }
+
+        keptEmoji += 1;
+        return true;
+      }
     )
     .join("")
     .replace(
@@ -11019,7 +11084,8 @@ HARD RULES:
 - Do NOT write every commenter as a 20-year-old TikTok user.
 - Do NOT make older characters suddenly say 'rizz', 'delulu', 'no cap', 'fr fr', 'it's giving', 'slay', 'you ate', etc. unless SELF's own sheet actually supports that online voice.
 - Gen Z characters may sound Gen Z when their own personality permits it, but still keep each individual character distinct.
-- 35+ MALE DEFAULT: no emoji in public comments unless SELF's own character sheet explicitly establishes emoji/online-texting behavior. This is enforced after generation too.
+- 45+ DEFAULT: ZERO emoji in public comments/replies. If SELF's own sheet explicitly establishes emoji/online-texting behavior, MAXIMUM ONE emoji is allowed — never an emoji chain, row or emoji-only wall.
+- 35+ MALE DEFAULT: ZERO emoji unless SELF's own character sheet explicitly establishes emoji/online-texting behavior; even then MAXIMUM ONE emoji. This is enforced after generation too.
 - Emoji is never mandatory for any age.
 - Keep the comment natural for the relationship and exact post; generation affects HOW SELF says it, not WHAT happened.
 `;
@@ -11062,7 +11128,11 @@ function socialEmojiFallback(w, id, text) {
   const recent = new Set(recentOverusedEmojis(w, id, 8).map(emojiKey));
   const available = pool.filter((x) => !recent.has(emojiKey(x)));
   const emoji = (available.length ? available : pool)[commentSeedNumber(`${raw}|${id}|emoji`) % (available.length || pool.length)];
-  return `${raw} ${emoji}`.trim();
+  return stripCommentEmojiWhenOutOfCharacter(
+    w,
+    id,
+    `${raw} ${emoji}`.trim()
+  );
 }
 
 function generatedCommentLoopUnit(value) {
