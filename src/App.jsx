@@ -12989,19 +12989,18 @@ function socialCommentGroundedInExactPost(
     return false;
   }
 
-  if (
-    mode !== "none" &&
-    !socialCommentAnswersShortQuestion(
-      post,
-      raw
-    )
-  ) {
-    return false;
-  }
-
   /*
-   * A model-supplied trigger never rescues an unrelated sentence. It is kept
-   * only as metadata once the visible sentence itself passes.
+   * IMPORTANT:
+   * Do NOT use a tiny lexical whitelist as a hard semantic gate here.
+   * Real social answers to "Party?" can be "finally", "thought you'd never ask",
+   * "only if Sam isn't DJing", etc. Those are semantically valid even though
+   * they do not begin with yes/no/where/when.
+   *
+   * Hard rejection is reserved for PROVABLE contradictions above:
+   * - hallucinated visual content on a text-only post;
+   * - an obviously contextless confrontation under a neutral short question.
+   *
+   * Finer semantic fit is enforced in the generation + repair prompts.
    */
   void trigger;
 
@@ -13043,7 +13042,7 @@ EXACT-POST COMMENT GROUNDING — HIGHEST CONTENT PRIORITY:
 - POST RESPONSE MODE: ${mode}
 - CONTENT ORDER IS STRICT: (1) exact visible post/thread meaning, (2) relationship, (3) personality/speech style.
 - Relationship is a TONE FILTER, not a substitute topic. A rival still has to react to something the post actually gives them.
-- If SELF has no concrete post-grounded sentence to say, choose LIKE or IGNORE. Never manufacture an unrelated insult just to create engagement.
+- Never manufacture an unrelated insult just to create engagement. In a scheduled comment wave, if the first idea is not grounded, simplify it into a real response to the exact post/question rather than defaulting to silence.
 - Every returned comment must pass this test: "What exact word, question, visible image detail, or parent-comment statement makes THIS sentence a sensible response?" If there is no clear answer, do not return that comment.
 ${hasImage
   ? `- Visual reactions may use ONLY details in the supplied image description.`
@@ -28994,7 +28993,7 @@ KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - A fenti SEALED ACTOR CAPSULES blokkok szigorúan ID-hoz kötöttek. Egy output sor id-je CSAK a saját capsule-jából olvashat "én / saját" tényt.
 - Minden kommentelő a SAJÁT teljes karakterlapját használja, nem másik kommentelőét. Más karakter jobja, dojoja, rangja, mentorai, crushai, Connections-sorai és backstory-ja TILOS saját tényként.
 - A kommentelő saját emlékei közül ebben a social feladatban csak a POSZT SZERZŐJÉHEZ / közvetlen célponthoz releváns memória használható; unrelated player/world memory nem.
-- POST-TARTALOM ELSŐ: előbb legyen értelmes válasz a KONKRÉT posztra, csak utána színezze a relationship és a személyiség. A rossz kapcsolat NEM jogosít fel egy teljesen oda nem illő beszólásra. Ha a poszt nem ad fogást egy ellenséges kommenthez, az ellenség inkább LIKE/IGNORE vagy rövid, de témába vágó reakció.
+- POST-TARTALOM ELSŐ: előbb legyen értelmes válasz a KONKRÉT posztra, csak utána színezze a relationship és a személyiség. A rossz kapcsolat NEM jogosít fel egy teljesen oda nem illő beszólásra. Ha nincs értelmes roast/fenyegetés, válassz rövid, de témába vágó reakciót; ne helyettesítsd automatikusan IGNORE-ral a scheduled kommenthullám szükséges kommentjeit.
 - KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT, kapcsolat-specifikus explicit kánonja. Az, hogy valaki általában szarkasztikus/bunkó/domináns, NEM elég ok arra, hogy a barátját megalázza vagy ellenségként kezelje.
 - KÖLCSÖNÖS BARÁTSÁG: ha a kommentelő és a poszt szerzője mindkét irányban barátok, ezt a komment konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
@@ -29087,10 +29086,10 @@ KARAKTERHANG — EZ A GENERÁLÁS EGYIK LEGFONTOSABB CÉLJA:
 
 KOMMENT SZABÁLYOK:
 
-${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD MINIMUM:
-- CÉL: ebben a generálásban lehetőleg ${requestedMinComments}–${requestedMaxComments} KÜLÖNBÖZŐ AI-karakter írjon valódi, látható kommentet, HA ennyi karakternek van KONKRÉT, értelmes mondanivalója erről a posztról.
-- A kommentminimum SOHA nem írhatja felül az EXACT-POST GROUNDING szabályt. Inkább legyen kevesebb komment, mint egyetlen oda nem illő mondat.
-- A LIKE nem számít kommentnek, de LIKE/IGNORE helyesebb, mint egy kitalált reakció.
+${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD GROUNDED MINIMUM:
+- Ha legalább ${requestedMinComments} jogosult karakter van a castban, adj legalább ${requestedMinComments}, legfeljebb ${requestedMaxComments} KÜLÖNBÖZŐ AI-karaktertől valódi top-level kommentet.
+- A minimum NEM jogosít fel nonszenszre. Ha egy első ötlet nem illik a poszthoz, NE hallgass el automatikusan: keress ugyanennek a karakternek egy egyszerűbb, ténylegesen post-grounded reakciót (válasz a kérdésre, releváns visszakérdezés, konkrét poén, rövid vélemény, részvétel/elutasítás, stb.).
+- LIKE/IGNORE továbbra is létezhet a cast többi szereplőjénél, de a kért minimumot valódi, értelmes kommentek töltsék ki.
 - Elsősorban TOP-LEVEL kommenteket adj; a külön reply-engine utána továbbviszi a threadet.
 - AI-karakterek EGYMÁS posztjai alatt is ugyanilyen aktívan reagáljanak. A játékos posztja nem kap különleges komment-prioritást.
 ` : ""}
@@ -29424,7 +29423,7 @@ ${post.imageDescription ? `VISIBLE IMAGE CONTENT: ${String(post.imageDescription
 
 ${socialCommentExactPostGroundingCard(w, post)}
 
-TRY TO ADD UP TO ${missing} MORE REAL COMMENTS, BUT ONLY IF THEY ARE SEMANTICALLY GROUNDED IN THIS EXACT POST.
+ADD ${Math.min(missing, candidates.length)} MORE REAL TOP-LEVEL COMMENTS, EACH SEMANTICALLY GROUNDED IN THIS EXACT POST.
 ELIGIBLE CHARACTERS:
 ${candidates.map((c) => `- ${c.name} [${c.id}]
 ${relationshipBehaviorCard(w, c.id, post.authorId)}`).join("\n")}
@@ -29433,8 +29432,9 @@ ${strictSocialActorCapsules(w, candidates, post)}
 
 HARD RULES:
 - VERY HIGH RELATIONSHIP ATTENTION IDs THAT WERE MISSED: ${missingRelationshipPriority.join(", ") || "none"}.
-- If one of those IDs is in ELIGIBLE CHARACTERS, prioritize them ONLY when they have a concrete sentence that actually responds to this post. Hidden obsession increases attention; it does not create an unrelated topic.
-- Return up to ${Math.min(missing, candidates.length)} DIFFERENT character IDs. Fewer is correct if the alternatives would be semantically nonsensical.
+- If one of those IDs is in ELIGIBLE CHARACTERS, prioritize them when they can respond naturally to the exact post. Hidden obsession increases attention; it does not create an unrelated topic.
+- Return EXACTLY ${Math.min(missing, candidates.length)} DIFFERENT character IDs when that many candidates are listed.
+- If a candidate's first dramatic/sarcastic idea is not grounded, rewrite it into a simpler grounded reaction instead of omitting the character.
 - One fresh TOP-LEVEL comment per character. reply_to MUST be empty.
 - Likes do not count.
 - AI → AI posts count exactly the same as AI → player posts.
@@ -29445,7 +29445,7 @@ HARD RULES:
 - Do not introduce the player or any unrelated third character unless the exact post/image explicitly contains them.
 - Respect orientation/flirt/crush and all relationship canon.
 - Usually 4-18 words. Do NOT default to 1-2 word replies.
-- If the character is naturally online, expressive, playful, emotional or flirty, include 1-2 fitting emojis in many comments.
+- Emoji use must obey each candidate's own COMMENT AGE / GENERATION / DIGITAL VOICE card and the existing hard age/personality emoji cap. Zero emoji is normal.
 - Do not invent facts beyond the post/image/grounded memory.
 - Never use the post author as commenter.
 
@@ -29469,7 +29469,10 @@ JSON ONLY:
       comments: combined.slice(0, Math.max(minWanted, Math.min(24, Number(maxComments) || 14))),
     };
   } catch (err) {
-    console.warn("Automatic comment density repair failed:", err);
+    console.warn(
+      "Automatic grounded comment density repair failed; coverage remains incomplete and will retry:",
+      err
+    );
     return baseOut;
   }
 }
@@ -31933,6 +31936,225 @@ Formátum:
 }${TAIL}`,
     { maxTokens: 900 }
   );
+
+  /*
+   * DIRECT REPLY PRESENCE REPAIR
+   *
+   * The scheduler already decided this thread deserves a reply. The large
+   * multi-actor pass may still return zero rows or only bystanders. When there
+   * is a concrete direct responder, do one tiny targeted repair so the thread
+   * does not silently die.
+   *
+   * This does NOT force every random comment to receive a reply: genReply is
+   * called only after the scheduler/thread logic has already selected one.
+   */
+  if (
+    directResponder &&
+    directResponder.id !== comment.authorId
+  ) {
+    const directAlreadyPresent =
+      safeAiComments(
+        out
+      ).some(
+        (row) =>
+          findChar(
+            w,
+            row &&
+            (
+              row.id !== undefined
+                ? row.id
+                : row.name
+            )
+          ) ===
+          directResponder.id
+      );
+
+    if (!directAlreadyPresent) {
+      try {
+        const directRepair =
+          await askWorldJSONInteractive(
+            w,
+            engineFor(
+              w
+            ),
+            `${worldContext(
+              w,
+              [directResponder.id],
+              true,
+              directResponder.id,
+              {
+                includePlayer:
+                  publicSocialPlayerRelevant(
+                    w,
+                    post,
+                    comment
+                  ),
+                includeRecentWorld: false,
+                socialScope: true,
+                agentPrivacyScope: true,
+              }
+            )}
+
+${socialScopeInstruction(w, post, comment)}
+
+${socialCommentExactPostGroundingCard(w, post)}
+
+${strictSocialActorCapsules(
+  w,
+  [directResponder],
+  post,
+  comment
+)}
+
+DIRECT REPLY REPAIR — ONE CHARACTER ONLY.
+
+POST:
+${nameOfIn(w, post.authorId)}: "${String(post.text || "").slice(0, 600)}"
+
+EXACT COMMENT BEING ANSWERED:
+${nameOfIn(w, comment.authorId)} [${comment.authorId}]: "${String(comment.text || "").slice(0, 600)}"
+
+RESPONDER:
+${directResponder.name} [${directResponder.id}]
+
+HARD RULES:
+- Write exactly ONE natural public social-media reply from ${directResponder.name} to the exact comment above.
+- React to what the comment ACTUALLY says. Relationship/personality only changes HOW ${directResponder.name} answers.
+- Do not import a different conflict, post, image or conversation.
+- If the post is text-only, invent no photo/appearance detail.
+- Keep SELF's own Speech/Voice/personality/casing exactly.
+- Usually 1–18 words; longer only if SELF's own voice genuinely needs it.
+- No narration, no assistant language, no roleplay actions.
+- Do not return empty/skip: the scheduler already selected this direct reply action.
+
+JSON ONLY:
+{"reply":"one grounded direct reply"}${TAIL}`,
+            {
+              maxTokens: 220,
+              maxTries: 2,
+            }
+          );
+
+        let directText =
+          String(
+            directRepair &&
+            directRepair.reply ||
+            ""
+          )
+            .replace(
+              /\s+/g,
+              " "
+            )
+            .trim();
+
+        if (directText) {
+          directText =
+            cleanGeneratedComment(
+              w,
+              directResponder.id,
+              directText,
+              240
+            );
+
+          if (
+            directText &&
+            socialCommentGroundedInExactPost(
+              w,
+              post,
+              comment,
+              directResponder.id,
+              directText,
+              "direct-reply-repair"
+            ) &&
+            !socialTextHasOutOfScopeCharacterReference(
+              w,
+              post,
+              comment,
+              directResponder.id,
+              directText
+            )
+          ) {
+            const current =
+              safeAiComments(
+                out
+              );
+
+            out = {
+              ...(out || {}),
+              comments: [
+                {
+                  id:
+                    directResponder.id,
+
+                  post_id:
+                    post.id,
+
+                  post_author_id:
+                    post.authorId,
+
+                  targetId:
+                    comment.authorId,
+
+                  replyTo:
+                    comment.id,
+
+                  text:
+                    directText,
+
+                  trigger:
+                    "direct reply repair",
+                },
+                ...current,
+              ]
+                .filter(
+                  (
+                    row,
+                    index,
+                    arr
+                  ) => {
+                    const id =
+                      findChar(
+                        w,
+                        row &&
+                        (
+                          row.id !== undefined
+                            ? row.id
+                            : row.name
+                        )
+                      );
+
+                    return (
+                      id &&
+                      arr.findIndex(
+                        (other) =>
+                          findChar(
+                            w,
+                            other &&
+                            (
+                              other.id !== undefined
+                                ? other.id
+                                : other.name
+                            )
+                          ) === id
+                      ) === index
+                    );
+                  }
+                )
+                .slice(
+                  0,
+                  2
+                ),
+            };
+          }
+        }
+      } catch (directReplyRepairErr) {
+        console.warn(
+          "Direct social reply repair failed:",
+          directReplyRepairErr
+        );
+      }
+    }
+  }
 
   /*
    * v40 FRIENDLY SOCIAL REPAIR
