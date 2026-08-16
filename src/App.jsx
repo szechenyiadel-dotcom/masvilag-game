@@ -4501,40 +4501,67 @@ function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
   if (!w) return;
 
   /*
-   * Re-read the character sheets at restart so edits to Connections/backstory
-   * immediately affect the next run.
+   * RESTART = TRUE CHARACTER-SHEET BASELINE.
+   *
+   * Do NOT reuse w.relationshipBaselines here: that store may contain an old
+   * manual/legacy baseline from a previous run. Restart must derive the fresh
+   * relationship graph again from the CURRENT character sheets.
+   *
+   * Mechanical relationship inference intentionally uses each actor's own
+   * target-specific Connections canon (plus the existing faction fallback),
+   * exactly like the normal canonical relationship reader. If the current
+   * sheet no longer defines a relationship, the fresh run starts neutral.
    */
-  refreshCanonicalRelationshipBaselines(w);
+  invalidateCharacterIdentityResolutionCache(w);
 
-  const store = ensureRelationshipBaselineStore(w);
-  const activeIds = new Set(allSubjects(w).map((person) => String(person.id)));
+  const people = allSubjects(w).filter((person) => person && person.id);
   const next = {};
+  const freshStore = {};
 
-  Object.keys(store).forEach((key) => {
-    const parts = String(key).split(">");
-    if (
-      parts.length !== 2 ||
-      !activeIds.has(parts[0]) ||
-      !activeIds.has(parts[1]) ||
-      parts[0] === parts[1]
-    ) {
-      return;
-    }
+  people.forEach((actor) => {
+    people.forEach((target) => {
+      if (!target || actor.id === target.id) return;
 
-    const baseline = store[key] || {};
-    next[key] = {
-      ...EMPTY_REL,
-      score: clampRelationshipScore(baseline.score),
-      hidden: String(baseline.hidden || "").slice(0, 500),
-      type: "",
-      bond: String(baseline.bond || baseline.type || "").slice(0, 160),
-      fixed: !!baseline.fixed,
-      mood: String(baseline.mood || "").slice(0, 500),
-      why: "",
-      at,
-    };
+      const inferred = inferCanonicalRelationshipBaseline(
+        w,
+        actor,
+        target
+      );
+
+      if (!inferred) return;
+
+      const key = relKey(actor.id, target.id);
+      const baseline = {
+        ...relationshipBaselineSnapshot(
+          inferred,
+          inferred.source || "sheet"
+        ),
+        ...inferred,
+        updatedAt: at,
+      };
+
+      freshStore[key] = baseline;
+
+      next[key] = {
+        ...EMPTY_REL,
+        score: clampRelationshipScore(baseline.score),
+        hidden: String(baseline.hidden || "").slice(0, 500),
+        type: "",
+        bond: String(baseline.bond || baseline.type || "").slice(0, 160),
+        fixed: !!baseline.fixed,
+        mood: String(baseline.mood || "").slice(0, 500),
+        why: "",
+        at,
+      };
+    });
   });
 
+  /*
+   * Replace both the saved fresh-run baseline and the live relationship graph.
+   * Nothing from the previous gameplay relationship drift survives Restart.
+   */
+  w.relationshipBaselines = freshStore;
+  w.relationshipCanonFingerprint = relationshipCanonFingerprint(w);
   w.rels = next;
 }
 
