@@ -46623,6 +46623,8 @@ function publishGossipMediaStory(
       attendeeIds: Array.isArray(candidate.attendeeIds) ? candidate.attendeeIds : [],
       popupBased: Boolean(candidate.popupBased),
       popupEventId: candidate.popupEventId || "",
+      popupChoiceKey: candidate.popupChoiceKey || "",
+      forceReason: candidate.forceReason || "",
       reactedBy: [],
       reactionRounds: 0,
       rumorEvolvedAt: 0,
@@ -46857,7 +46859,9 @@ function publishGossipMediaStory(
         "gossip-reaction",
         `gossip-reaction-required:${post.id}:0`,
         { postId: post.id, cast: requiredReactionCast },
-        "event"
+        post.gossipStory.popupBased
+          ? "coverage"
+          : "event"
       )
     );
   }
@@ -47425,7 +47429,75 @@ function fallbackGossipReactionOutput(w, post, cast) {
   else if (role === "critic") text = en ? "called it." : "mondtam.";
   else if (role === "jealous") text = en ? "oh. cute." : "ó. de cuki.";
   else if (role === "mentioned") text = en ? "excuse me??" : "elnézést??";
-  return { comments: [{ id: c.id, text }], reposts: [], follows: [], dms: [], statements: [], changes: [] };
+
+  const changes = [];
+
+  if (
+    post.gossipStory.popupBased &&
+    row.strongestTargetId &&
+    row.strongestTargetId !== c.id &&
+    charById(
+      w,
+      row.strongestTargetId
+    )
+  ) {
+    let delta = 0;
+    let mood = "";
+    let why = "";
+
+    if (role === "supporter") {
+      delta = 3;
+      mood =
+        en
+          ? "more protective and loyal after seeing the fallout"
+          : "védelmezőbb és lojálisabb lett a pletyka utóélete miatt";
+      why =
+        en
+          ? "The popup gossip made them want to stand by this person."
+          : "A popupból lett pletyka miatt inkább ki akar állni mellette.";
+    } else if (role === "critic") {
+      delta = -3;
+      mood =
+        en
+          ? "more critical and less trusting after the public fallout"
+          : "kritikusabb és bizalmatlanabb lett a nyilvános utóélet miatt";
+      why =
+        en
+          ? "The popup gossip reinforced their negative view of this person."
+          : "A popupból lett pletyka megerősítette a negatív véleményét róla.";
+    } else if (role === "jealous") {
+      delta = -5;
+      mood =
+        en
+          ? "jealous and unsettled by what the gossip implies"
+          : "féltékeny és nyugtalan attól, amit a pletyka sugall";
+      why =
+        en
+          ? "The popup gossip hit an existing romantic or possessive nerve."
+          : "A popupból lett pletyka egy meglévő romantikus vagy birtokló érzékeny pontra talált.";
+    }
+
+    if (delta) {
+      changes.push({
+        a:c.id,
+        b:row.strongestTargetId,
+        delta,
+        mood,
+        bond:"",
+        oneSided:true,
+        why,
+      });
+    }
+  }
+
+  return {
+    comments: [{ id: c.id, text }],
+    reposts: [],
+    follows: [],
+    dms: [],
+    statements: [],
+    changes,
+  };
 }
 
 function applyGossipReactions(n,postId,cast,out){
@@ -47471,8 +47543,15 @@ function applyGossipReactions(n,postId,cast,out){
     const ck=chatKey(n.meId,who);n.chats[ck]=[...(n.chats[ck]||[]),{from:"them",text:body,ts:now(),language:worldLanguage(n,n.meId)}];visibleActors.add(who);
     const a=charById(n,who);pushNote(n,n.meId,{icon:"✉️",text:sysLangText(n,n.meId,`${a?a.name:"Valaki"} írt neked a pletyka után.`,`${a?a.name:"Someone"} messaged you after the gossip post.`),link:{type:"dm",id:who}});
   });
+  const popupFallout =
+    Boolean(
+      post.gossipStory &&
+      post.gossipStory.popupBased
+    );
+
   const safeChanges=(reactionOut&&Array.isArray(safeAiChanges(reactionOut))?safeAiChanges(reactionOut):[]).filter((ch)=>{
-    const a=findChar(n,ch&&ch.a), b=findChar(n,ch&&ch.b);return a&&b&&castSet.has(a)&&visibleActors.has(a)&&allowedTargets.has(b)&&a!==b;
+    const a=findChar(n,ch&&ch.a), b=findChar(n,ch&&ch.b);
+    return a&&b&&castSet.has(a)&&(visibleActors.has(a)||popupFallout)&&allowedTargets.has(b)&&a!==b;
   }).map((ch)=>({...ch,delta:Math.max(-35,Math.min(35,Number(ch.delta)||0))}));
   if(visibleActors.size){
     post.gossipStory.reactedBy=[...new Set([...(post.gossipStory.reactedBy||[]),...visibleActors])];
@@ -48079,8 +48158,16 @@ function normalizePopupEvent(w,seed,raw){
     seedActorId:seed.actorId||"",
     seedTargetIds:Array.isArray(seed.targetIds)?seed.targetIds.slice(0,6):[],
     seedText:cut(String(seed.text||""),900),
-    involvedIds:gossipEventSubjectIds(seed)
-      .filter((id)=>id!==w.meId&&!isMediaAccount(w,id)),
+    involvedIds:[
+      ...new Set([
+        ...gossipEventSubjectIds(seed),
+        ...mentionedIdsInText(w,`${title}
+${body}`,w.meId),
+        ...choices.map((c)=>c&&c.targetId).filter(Boolean),
+        ...choices.flatMap((c)=>Array.isArray(c&&c.reactions)?c.reactions.map((r)=>r&&r.id):[]).filter(Boolean),
+      ])
+    ]
+      .filter((id)=>id&&id!==w.meId&&!isMediaAccount(w,id)&&charById(w,id)),
     choices
   };
 }
@@ -48914,6 +49001,130 @@ function popupFallbackRelationshipReaction(w, event, choice, actorId) {
   };
 }
 
+function popupDirectParticipantIds(
+  w,
+  event,
+  choice = null
+) {
+  if (!w || !event) return [];
+
+  const validAi = (id) =>
+    Boolean(
+      id &&
+      charById(
+        w,
+        id
+      ) &&
+      !isHuman(
+        w,
+        id
+      ) &&
+      !isMediaAccount(
+        w,
+        id
+      )
+    );
+
+  const ids = [];
+
+  const add = (value) => {
+    const id =
+      String(
+        value || ""
+      );
+
+    if (
+      validAi(id) &&
+      !ids.includes(id)
+    ) {
+      ids.push(id);
+    }
+  };
+
+  /*
+   * Most concrete evidence first:
+   * choice target/reaction IDs describe who the selected outcome affects.
+   */
+  if (choice) {
+    add(
+      choice.targetId
+    );
+
+    (
+      Array.isArray(
+        choice.reactions
+      )
+        ? choice.reactions
+        : []
+    ).forEach(
+      (row) =>
+        add(
+          row &&
+          row.id
+        )
+    );
+  }
+
+  /*
+   * The popup's ACTUAL displayed text is ground truth too. This catches a
+   * generated ambient/rerolled popup where the provider used a real character
+   * different from the original seed but forgot to return targetId/reactions.
+   */
+  const visiblePopupText =
+    [
+      event.title,
+      event.text,
+      choice && choice.label,
+      choice && choice.description,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+  mentionedIdsInText(
+    w,
+    visiblePopupText,
+    w.meId
+  ).forEach(
+    add
+  );
+
+  /*
+   * Then fall back to stored/seed participants.
+   */
+  (
+    Array.isArray(
+      event.involvedIds
+    )
+      ? event.involvedIds
+      : []
+  ).forEach(
+    add
+  );
+
+  add(
+    event.seedActorId
+  );
+
+  const seed =
+    popupSourceEvent(
+      w,
+      event
+    );
+
+  if (seed) {
+    gossipEventSubjectIds(
+      seed
+    ).forEach(
+      add
+    );
+  }
+
+  return ids.slice(
+    0,
+    6
+  );
+}
+
 function popupResolvedRelationshipReactions(w, event, choice) {
   if (!w || !event || !choice) return [];
   const validAi = (id) => Boolean(id && charById(w, id) && !isHuman(w, id) && !isMediaAccount(w, id));
@@ -48932,14 +49143,19 @@ function popupResolvedRelationshipReactions(w, event, choice) {
     });
   });
 
-  const directIds = [
-    choice.targetId,
-    event.seedActorId,
-    ...(Array.isArray(event.involvedIds) ? event.involvedIds : []),
-  ]
-    .map((id) => String(id || ""))
-    .filter((id, index, arr) => validAi(id) && arr.indexOf(id) === index)
-    .slice(0, 4);
+  const directIds =
+    popupDirectParticipantIds(
+      w,
+      event,
+      choice
+    )
+      .filter(
+        validAi
+      )
+      .slice(
+        0,
+        6
+      );
 
   directIds.forEach((id) => {
     const existing = merged.get(id);
@@ -48960,6 +49176,69 @@ function popupResolvedRelationshipReactions(w, event, choice) {
   });
 
   return [...merged.values()].slice(0, 6);
+}
+
+function applyPopupRelationshipConsequences(
+  w,
+  event,
+  choice
+) {
+  if (!w || !event || !choice) {
+    return [];
+  }
+
+  const reactions =
+    popupResolvedRelationshipReactions(
+      w,
+      event,
+      choice
+    );
+
+  if (!reactions.length) {
+    return [];
+  }
+
+  applyChanges(
+    w,
+    reactions.map(
+      (r) => ({
+        a:
+          r &&
+          r.id
+            ? r.id
+            : "",
+
+        b:
+          w.meId,
+
+        delta:
+          Number(
+            r &&
+            r.delta
+          ) || 0,
+
+        mood:
+          r &&
+          r.mood,
+
+        bond:
+          r &&
+          r.bond,
+
+        oneSided:
+          Boolean(
+            r &&
+            r.oneSided === true
+          ),
+
+        why:
+          r &&
+          r.why,
+      })
+    )
+  );
+
+  return reactions;
 }
 
 function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
@@ -48984,29 +49263,23 @@ function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
     : (socialEntry.visibility === "limited" && witnesses >= 1 && potential >= 35);
   if (!worthSurfacing) return false;
 
-  const sourceEventId = String(socialEntry.id || "");
-  const juicy = potential >= 45;
+  const sourceEventId =
+    String(
+      socialEntry.id || ""
+    );
 
   /*
-   * A genuinely juicy popup gets a direct candidate built only from THIS
-   * resolved event, so another unrelated gossip story cannot swallow it.
+   * Once the resolved popup has already passed the existing factual
+   * visibility/witness + gossipPotential gate, THIS exact popup becomes the
+   * candidate. Do not let an unrelated global selector swallow it.
    */
-  let candidate =
-    juicy
-      ? buildGossipStoryCandidate(w, socialEntry, [socialEntry], mode)
-      : selectGossipStoryCandidate(w);
-
-  const coversPopup = candidate && (
-    candidate.primaryEventId === sourceEventId ||
-    (
-      Array.isArray(candidate.eventIds) &&
-      candidate.eventIds.includes(sourceEventId)
-    )
-  );
-
-  if (!coversPopup) {
-    candidate = buildGossipStoryCandidate(w, socialEntry, [socialEntry], mode);
-  }
+  const candidate =
+    buildGossipStoryCandidate(
+      w,
+      socialEntry,
+      [socialEntry],
+      mode
+    );
 
   if (!candidate) return false;
 
@@ -49014,22 +49287,33 @@ function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
   candidate.popupEventId = String(event.id || "");
   candidate.popupChoiceKey = String(choiceKey || "choice");
 
-  if (juicy) {
-    candidate.forcePublish = true;
-    candidate.forceReason = "juicy-popup-outcome";
-    candidate.score = Math.max(
-      Number(candidate.score) || 0,
-      75 + Math.round(potential * 0.35)
-    );
-  }
+  /*
+   * Popup coverage is guaranteed after the gate above. Force mode bypasses
+   * unrelated gossip cooldown/repetition collisions, while the source facts
+   * remain exactly the resolved popup social event.
+   */
+  candidate.forcePublish = true;
+  candidate.forceReason =
+    potential >= 45
+      ? "juicy-popup-outcome"
+      : "grounded-popup-outcome";
 
+  candidate.score = Math.max(
+    Number(candidate.score) || 0,
+    68 + Math.round(potential * 0.35)
+  );
+
+  /*
+   * `coverage` actions are unshifted by simEnqueue. The gossip page should
+   * cover a resolved juicy popup before unrelated background maintenance.
+   */
   return simEnqueue(
     w,
     mkAction(
       "gossip-story",
       `popup-gossip:${event.id}:${String(choiceKey || "choice")}:${sourceEventId}`,
       { candidate },
-      "event"
+      "coverage"
     )
   );
 }
@@ -49164,19 +49448,12 @@ function resolvePopupEvent(w,eventId,choiceId){
   const choice=(event.choices||[]).find((c)=>c&&c.id===choiceId);if(!choice)return false;
   const impact=popupCombinedImpact(w,choice);
   applyExplicitSocialImpact(w,w.meId,{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers});
-  const resolvedRelationshipReactions = popupResolvedRelationshipReactions(w, event, choice);
-  applyChanges(
-    w,
-    resolvedRelationshipReactions.map((r) => ({
-      a:r&&r.id?r.id:"",
-      b:w.meId,
-      delta:Number(r&&r.delta)||0,
-      mood:r&&r.mood,
-      bond:r&&r.bond,
-      oneSided:Boolean(r&&r.oneSided===true),
-      why:r&&r.why,
-    }))
-  );
+  const resolvedRelationshipReactions =
+    applyPopupRelationshipConsequences(
+      w,
+      event,
+      choice
+    );
 
   const visibility=["public","limited","private"].includes(event.visibility)?event.visibility:"limited";
   const witnessIds=visibility==="private"?[]:(event.witnessIds||[]).filter(Boolean).slice(0,4);
@@ -49245,20 +49522,16 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
   applyExplicitSocialImpact(w,w.meId,{
     aura:outcome.socialImpact.aura,reputation:outcome.socialImpact.reputation,hype:outcome.socialImpact.hype,humor:outcome.socialImpact.humor,followers:followerDelta,
   });
-  const resolvedRelationshipReactions = popupResolvedRelationshipReactions(w, event, {
-    tone: outcome.tone,
-    targetId: "",
-    reactions: outcome.reactions || [],
-  });
-  applyChanges(w,resolvedRelationshipReactions.map((r)=>({
-    a:r.id,
-    b:w.meId,
-    delta:r.delta,
-    mood:r.mood,
-    bond:r.bond,
-    oneSided:Boolean(r&&r.oneSided===true),
-    why:r.why
-  })));
+  const resolvedRelationshipReactions =
+    applyPopupRelationshipConsequences(
+      w,
+      event,
+      {
+        tone: outcome.tone,
+        targetId: "",
+        reactions: outcome.reactions || [],
+      }
+    );
 
   const visibility=outcome.visibility;
   const witnessIds=outcome.witnessIds||[];
@@ -56365,11 +56638,55 @@ async function runSimulationAction(view, update, action, addImage) {
       return null;
     }
 
-    let out =
-      await genGossipMediaStory(
-        view,
-        candidate
+    let out = null;
+
+    try {
+      out =
+        await genGossipMediaStory(
+          view,
+          candidate
+        );
+    } catch (gossipStoryErr) {
+      if (
+        !(
+          candidate.popupBased &&
+          candidate.forcePublish
+        )
+      ) {
+        throw gossipStoryErr;
+      }
+
+      console.warn(
+        "Forced popup gossip generation failed; using grounded fallback:",
+        gossipStoryErr
       );
+
+      out =
+        fallbackForcedPopupGossipStory(
+          view,
+          candidate
+        );
+    }
+
+    if (
+      (
+        !out ||
+        out.skip === true ||
+        !String(
+          out.text || ""
+        ).trim()
+      ) &&
+      candidate.popupBased &&
+      candidate.forcePublish
+    ) {
+      out =
+        fallbackForcedPopupGossipStory(
+          view,
+          candidate
+        );
+    }
+
+    if (!out) return null;
 
     let gossipProbe = JSON.parse(JSON.stringify(view));
     let probePost = publishGossipMediaStory(
