@@ -1,4 +1,4 @@
-/* MÁSVILÁG RECOVERY v99.5 — SCALABLE LAZY MEDIA STORAGE — 20260816_0045 */
+/* MÁSVILÁG RECOVERY v99.8 — SOCIAL POST + FULL CANON LOCK — 20260816_1030 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -15543,6 +15543,19 @@ function recentStructuredWorldLines(w, limit = 6) {
   return rows;
 }
 
+function worldIdentityCanon(w) {
+  if (!w) return "";
+  const rows = [
+    ...(w.chars || []).filter(Boolean).map((c) => {
+      const faction = characterFactionIdentityCard(c) || "classification unknown";
+      return `${c.name} [${c.id}] — ${faction}`;
+    }),
+  ];
+  return rows.length
+    ? `\nWORLD IDENTITY / AFFILIATION CANON — HARD FACTS:\n${rows.join("\n")}\n- These affiliation/dojo identities are authoritative. Mentioning a rival dojo in backstory does NOT change a character's own dojo.\n- Characters recognize the established dojo/organization of other named world characters from this canon.\n`
+    : "";
+}
+
 function worldContext(w, ids, deep, observerId, contextOptions = {}) {
   const focus = ids && ids.length ? ids : null;
   let cast = (w.chars || []).filter((c) => !focus || focus.indexOf(c.id) >= 0);
@@ -15654,6 +15667,8 @@ ${playerContextBlock}
 
 ${tt("A VILÁG TELJES NÉVSORA — RAJTUK KÍVÜL SENKI NEM LÉTEZIK", "FULL WORLD ROSTER — NO ONE ELSE EXISTS")}: 
 ${roster || "-"}
+
+${worldIdentityCanon(w)}
 
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
 ${cast.map((c) => (
@@ -18366,7 +18381,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "v99-performance-canon-cache-feed-tree";
+const BUILD_VERSION = "99.8";
 const WORLD_SCHEMA_VERSION = 97;
 
 /* Fast, safe clone for the large world state. */
@@ -25000,6 +25015,9 @@ DIRECT TARGET FOR THIS REACTION: ${nameOfIn(w, targetId)} [${targetId}]
 
 ${voiceCard(actor)}
 
+FULL SELF CHARACTER CANON — HIGHEST PRIORITY:
+${compactSelfCanonForPrompt(actor, 9000)}
+
 EXACT DIRECTED PAIR CANON:
 ${JSON.stringify(exactPairCanonCard(w, actor.id, targetId) || {})}
 
@@ -28196,6 +28214,9 @@ SELF side/dojo/organization: ${characterFactionIdentityCard(actor) || "unknown"}
 
 ${voiceCard(actor)}
 
+FULL SELF CHARACTER CANON — HIGHEST PRIORITY:
+${compactSelfCanonForPrompt(actor, 9000)}
+
 OWN MEMORY:
 ${characterMemoryCard(w, actor)}
 
@@ -28495,6 +28516,31 @@ Formátum:
 }
 
 
+function deterministicAutonomousFallbackPost(w, authorId) {
+  const author = charById(w, authorId);
+  if (!author || !characterCanAutonomouslyPost(w, author)) return null;
+
+  const faction = characterFactionIdentityCard(author);
+  const job = String(author.job || author.role || "").trim();
+  const goals = String(author.goals || "").trim();
+  const likes = String(author.likes || "").trim();
+  const recent = (w.posts || []).filter((p) => p && p.authorId === author.id).slice(0, 8).map((p) => String(p.text || "").toLowerCase());
+  const candidates = [
+    job ? `Another day of ${job}.` : "Just another day.",
+    faction && /dojo=/i.test(faction) ? `${faction.replace(/^.*dojo=/i, "").split(" | ")[0]} training never gets old.` : "Keeping busy.",
+    goals ? `Still working on the things that actually matter.` : "Need a quieter day for once.",
+    likes ? `Honestly, I could do with a little more of the things I actually enjoy.` : "My schedule is getting ridiculous.",
+  ];
+  const chosen = candidates.find((x) => x && !recent.some((r) => r.includes(x.toLowerCase().slice(0, Math.min(28, x.length))))) || candidates[0];
+  return {
+    posts: [{ id: author.id, text: chosen, image: "", comments: [] }],
+    changes: [],
+    events: [],
+    selfUpdates: [],
+    relationshipUpdates: [],
+  };
+}
+
 async function genFocusedWorldStep(w) {
   const author = fairPostCast(w)[0];
   if (!author) return null;
@@ -28531,6 +28577,9 @@ async function genFocusedWorldStep(w) {
     )}
 
 ${voiceCard(author)}
+
+FULL SELF CHARACTER CANON — HIGHEST PRIORITY:
+${compactSelfCanonForPrompt(author, 10000)}
 
 AUTHORSHIP / SELF-CANON LOCK:
 - SELF is exactly ${author.name} [${author.id}].
@@ -49972,6 +50021,26 @@ function planAutoAction(view) {
   }
 
   /*
+   * v99.8 FEED HARD PRIORITY:
+   * If any normal AI is below its minimum rolling-24h post quota, feed creation
+   * is a mandatory next lane after direct player replies. DM/RP/gossip maintenance
+   * must not starve autonomous posting.
+   */
+  const feedDeficitCast = fairPostCast(view);
+  const feedDeficit = feedDeficitCast.some((c) => {
+    const stats = characterAutonomousPostStats24h(view, c.id);
+    return Number(stats.count || 0) < AUTONOMOUS_CHARACTER_POST_MIN_24H;
+  });
+  if (feedDeficit && feedNeedsFreshPost(view)) {
+    return mkAction(
+      "world",
+      `mandatory-feed:${feedDeficitCast[0].id}:${Math.floor(now() / 15000)}`,
+      { trigger: "mandatory-feed", authorId: feedDeficitCast[0].id },
+      "event"
+    );
+  }
+
+  /*
    * AUTONOMOUS COMMENT PULSE:
    * A fresh AI post with missing comment coverage gets a guaranteed comment
    * generation slot before another world post is allowed. This makes the feed
@@ -53244,11 +53313,31 @@ if (targetNote) {
     !out ||
     !Array.isArray(out.posts)
   ) {
-    return null;
+    const fallbackAuthor = (action && action.payload && action.payload.authorId)
+      || fairPostCast(view)[0]?.id
+      || "";
+    const fallback = deterministicAutonomousFallbackPost(view, fallbackAuthor);
+    if (!fallback) return null;
+    out = fallback;
   }
 
   if (!out.posts.length) {
-    return null;
+    /* v99.8 POST GUARANTEE: a provider may return an empty social result.
+       Do not let that silently consume the feed lane. Create a deterministic,
+       canon-safe fallback from the selected character's own sheet instead. */
+    const fallbackAuthor = (action && action.payload && action.payload.authorId)
+      || fairPostCast(view)[0]?.id
+      || "";
+    const fallback = deterministicAutonomousFallbackPost(view, fallbackAuthor);
+    if (fallback) {
+      out.posts = fallback.posts;
+      out.changes = fallback.changes;
+      out.events = fallback.events;
+      out.selfUpdates = fallback.selfUpdates;
+      out.relationshipUpdates = fallback.relationshipUpdates;
+    } else {
+      return null;
+    }
   }
 
   let visiblePostsCreated = 0;
@@ -53273,7 +53362,14 @@ if (targetNote) {
       );
 
     if (!visiblePostsCreated) {
-      return;
+      const fallbackAuthor = (action && action.payload && action.payload.authorId)
+        || fairPostCast(n)[0]?.id
+        || "";
+      const fallback = deterministicAutonomousFallbackPost(n, fallbackAuthor);
+      if (fallback) {
+        visiblePostsCreated = applyWorldStep(n, fallback);
+      }
+      if (!visiblePostsCreated) return;
     }
 
     const freshPosts =
