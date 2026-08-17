@@ -34241,9 +34241,158 @@ function deterministicAutonomousFallbackPost(w, authorId) {
   };
 }
 
+async function hydrateAuthorAlbumForSocialPosting(
+  w,
+  author
+) {
+  if (
+    !w ||
+    !author ||
+    !Array.isArray(author.album) ||
+    !author.album.length
+  ) {
+    return author;
+  }
+
+  const mediaMap =
+    mediaRef.current || {};
+
+  let changed = false;
+  const hydratedAlbum = [];
+
+  for (const row of author.album) {
+    if (!row || typeof row !== "object") {
+      hydratedAlbum.push(row);
+      continue;
+    }
+
+    const existingVision =
+      String(
+        row.vision || ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (existingVision) {
+      hydratedAlbum.push(row);
+      continue;
+    }
+
+    const srcValue =
+      row.imageId
+        ? imageRef(
+            row.imageId
+          )
+        : row.src;
+
+    const resolved =
+      resolveImg(
+        srcValue,
+        mediaMap
+      );
+
+    if (
+      !resolved ||
+      (
+        !isInlineImageData(
+          resolved
+        ) &&
+        !/^https:\/\//i.test(
+          resolved
+        )
+      )
+    ) {
+      hydratedAlbum.push(row);
+      continue;
+    }
+
+    let vision = "";
+
+    try {
+      vision =
+        await analyzeSocialPostImageInput(
+          resolved
+        );
+    } catch (visionErr) {
+      console.warn(
+        "Author album posting vision analysis failed:",
+        visionErr
+      );
+    }
+
+    if (!vision) {
+      hydratedAlbum.push(row);
+      continue;
+    }
+
+    changed = true;
+
+    hydratedAlbum.push({
+      ...row,
+      vision:
+        String(
+          vision
+        )
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(
+            0,
+            700
+          ),
+      analyzedAt:
+        now(),
+    });
+  }
+
+  if (!changed) {
+    return author;
+  }
+
+  const nextAuthor = {
+    ...author,
+    album: hydratedAlbum,
+  };
+
+  setWorld((prev) => {
+    if (!prev) return prev;
+
+    const n = { ...prev };
+    const found =
+      charById(
+        n,
+        author.id
+      );
+
+    if (!found) {
+      return prev;
+    }
+
+    found.album =
+      hydratedAlbum.map(
+        (row) =>
+          row && typeof row === "object"
+            ? { ...row }
+            : row
+      );
+
+    n.rev =
+      (n.rev || 0) + 1;
+
+    return n;
+  });
+
+  return nextAuthor;
+}
+
 async function genFocusedWorldStep(w) {
   const author = fairPostCast(w)[0];
   if (!author) return null;
+
+  const promptAuthor =
+    await hydrateAuthorAlbumForSocialPosting(
+      w,
+      author
+    );
 
   const authorPostStats24h = characterAutonomousPostStats24h(w, author.id);
   const authorPostTarget24h = autonomousCharacterPostTarget24h(w, author);
@@ -34313,7 +34462,7 @@ LEGUTÓBBI FEED:
 ${recentWorld || "-"}
 
 SAJÁT FOTÓALBUMOD:
-${albumList(author) || "nincs használható albumkép"}
+${albumList(promptAuthor || author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
 - ${author.name} saját gördülő 24 órás célja 3–5 poszt aktivitásától függően; 5 a kemény maximum.
