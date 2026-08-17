@@ -48639,6 +48639,40 @@ function publishGossipMediaStory(
       candidate
     );
 
+  const effectiveMentionedIds =
+    [
+      ...new Set([
+        ...(
+          Array.isArray(
+            out.mentionedIds
+          )
+            ? out.mentionedIds
+            : []
+        ),
+
+        ...(
+          candidate.popupBased &&
+          Array.isArray(
+            candidate.subjectIds
+          )
+            ? candidate.subjectIds
+            : []
+        ),
+      ]),
+    ]
+      .filter(
+        (id) =>
+          id &&
+          socialProfileById(
+            w,
+            id
+          ) &&
+          !isMediaAccount(
+            w,
+            id
+          )
+      );
+
   const post = {
     id: uid(),
 
@@ -48687,7 +48721,7 @@ function publishGossipMediaStory(
         liveUsedEventIds,
 
       mentionedIds:
-        out.mentionedIds,
+        effectiveMentionedIds,
 
       roleplayBased:
         Boolean(
@@ -48761,7 +48795,7 @@ function publishGossipMediaStory(
       liveUsedEventIds,
 
     mentionedIds:
-      out.mentionedIds,
+      effectiveMentionedIds,
 
     roleplayBased:
       Boolean(
@@ -48806,8 +48840,8 @@ function publishGossipMediaStory(
     null;
 
   const mentionedIds =
-    out.mentionedIds.length
-      ? out.mentionedIds
+    effectiveMentionedIds.length
+      ? effectiveMentionedIds
       : (
           candidate.subjectIds ||
           []
@@ -49444,6 +49478,280 @@ function gossipReactionKnowledgeContext(w,post,cast){
   }).filter(Boolean).join("\n\n");
 }
 
+function normalizeGossipReactionBasis(value) {
+  return String(
+    value || ""
+  )
+    .toLowerCase()
+    .replace(/[“”‘’"'`]/g, "")
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function gossipReactionBasisSupported(
+  post,
+  basis
+) {
+  if (!post) return false;
+
+  const normalizedBasis =
+    normalizeGossipReactionBasis(
+      basis
+    );
+
+  const basisWords =
+    normalizedBasis
+      .split(/\s+/)
+      .filter(Boolean);
+
+  if (
+    basisWords.length < 2 ||
+    basisWords.length > 18
+  ) {
+    return false;
+  }
+
+  const source =
+    normalizeGossipReactionBasis(
+      `${post.gossipStory && post.gossipStory.headline
+        ? post.gossipStory.headline
+        : ""} ${post.text || ""}`
+    );
+
+  return Boolean(
+    source &&
+    source.includes(
+      normalizedBasis
+    )
+  );
+}
+
+function gossipFallbackReactionBasis(post) {
+  const headline =
+    String(
+      post &&
+      post.gossipStory &&
+      post.gossipStory.headline ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (headline) {
+    return headline
+      .split(/\s+/)
+      .slice(0, 12)
+      .join(" ");
+  }
+
+  return String(
+    post &&
+    post.text ||
+    ""
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .slice(0, 12)
+    .join(" ");
+}
+
+function validGossipReactionRelationshipChanges(
+  w,
+  post,
+  cast,
+  out
+) {
+  if (
+    !w ||
+    !post ||
+    !post.gossipStory
+  ) {
+    return [];
+  }
+
+  const castSet =
+    new Set(
+      (cast || [])
+        .map(
+          (row) =>
+            row &&
+            row.id
+        )
+        .filter(Boolean)
+    );
+
+  const allowedTargets =
+    new Set(
+      [
+        ...(post.gossipStory.mentionedIds || []),
+      ]
+        .filter(Boolean)
+    );
+
+  return (
+    out &&
+    Array.isArray(
+      safeAiChanges(
+        out
+      )
+    )
+      ? safeAiChanges(
+          out
+        )
+      : []
+  )
+    .filter(
+      (ch) => {
+        const a =
+          findChar(
+            w,
+            ch &&
+            ch.a
+          );
+
+        const b =
+          findChar(
+            w,
+            ch &&
+            ch.b
+          );
+
+        return Boolean(
+          a &&
+          b &&
+          a !== b &&
+          castSet.has(a) &&
+          allowedTargets.has(b)
+        );
+      }
+    );
+}
+
+async function genPopupGossipRelationshipRipple(
+  w,
+  post,
+  cast
+) {
+  if (
+    !w ||
+    !post ||
+    !post.gossipStory ||
+    !post.gossipStory.popupBased ||
+    !(cast || []).length
+  ) {
+    return [];
+  }
+
+  const subjects =
+    (post.gossipStory.mentionedIds || [])
+      .filter(
+        (id) =>
+          id &&
+          !isMediaAccount(
+            w,
+            id
+          )
+      );
+
+  if (!subjects.length) {
+    return [];
+  }
+
+  const actors =
+    (cast || [])
+      .map(
+        (row) =>
+          charById(
+            w,
+            row.id
+          )
+      )
+      .filter(Boolean);
+
+  if (!actors.length) {
+    return [];
+  }
+
+  const relationRows =
+    actors
+      .map(
+        (actor) => {
+          const pairs =
+            subjects
+              .filter(
+                (targetId) =>
+                  targetId !==
+                  actor.id
+              )
+              .map(
+                (targetId) =>
+                  `${actor.name} [${actor.id}] → ${nameOfIn(w, targetId)} [${targetId}]: ${relationshipBehaviorCard(w, actor.id, targetId)}`
+              )
+              .join("\n");
+
+          return pairs;
+        }
+      )
+      .filter(Boolean)
+      .join("\n");
+
+  const raw =
+    await askWorldJSON(
+      w,
+      engineFor(
+        w
+      ),
+      `${worldContext(
+        w,
+        [
+          ...actors.map((c) => c.id),
+          ...subjects.filter((id) => !isHuman(w, id)),
+        ].filter((id,index,arr)=>id&&arr.indexOf(id)===index),
+        true,
+        null
+      )}
+
+POPUP-GOSSIP RELATIONSHIP RIPPLE — RELATIONSHIP ONLY.
+
+THIS EXACT PUBLISHED GOSSIP POST:
+${post.gossipStory.headline ? `HEADLINE: ${post.gossipStory.headline}` : ""}
+${post.text}
+
+REACTING AI CHARACTERS — FULL SELF CAPSULES:
+${strictSocialActorCapsules(w, actors, post)}
+
+CURRENT DIRECTED RELATIONSHIPS TO ARTICLE SUBJECTS:
+${relationRows || "-"}
+
+HARD:
+- This is NOT a new story. Evaluate only how reading THIS PUBLISHED GOSSIP POST changes the reacting AI's feelings toward a person actually named/represented in the article.
+- Because this is the public aftermath of a gossip-worthy popup, choose the MOST emotionally affected valid reacting AI and return at least ONE small relationship movement when any plausible emotional effect exists.
+- Allowed direction: reacting AI → article subject. AI → AI and AI → player are both valid.
+- Do NOT change the gossip media account relationship.
+- Use a small realistic delta, usually -6..-2 or +2..+6. Do not jump relationship stages.
+- mood/why must state the reaction to THIS article: belief, disbelief, defense, jealousy, embarrassment, distrust, sympathy, irritation, loyalty, etc.
+- Relationship/personality must come from the reacting AI's OWN capsule only.
+- No invented event, quote, DM, source or off-page fact.
+- oneSided:true unless there is a separate explicit reason to change the reverse direction.
+- bond should normally be empty; score/mood can move without changing status.
+
+JSON ONLY:
+{"changes":[{"a":"reacting AI id","b":"article subject id","delta":-3,"mood":"","bond":"","oneSided":true,"why":""}]}${TAIL}`,
+      {
+        maxTokens:700,
+      }
+    );
+
+  return validGossipReactionRelationshipChanges(
+    w,
+    post,
+    cast,
+    raw
+  );
+}
+
 async function genGossipReactions(w,post,cast){
   const story=post&&post.gossipStory;if(!post||!story||!(cast||[]).length)return{comments:[],reposts:[],follows:[],dms:[],statements:[],changes:[]};
   const castIds=cast.map((x)=>x.id);
@@ -49463,8 +49771,12 @@ ${currentComments||"-"}
 REAKCIÓRA JELÖLT KARAKTEREK ÉS A SAJÁT TUDÁSUK:
 ${gossipReactionKnowledgeContext(w,post,cast)}
 
-A REAGÁLÓ KARAKTEREK TELJES SAJÁT KÁNONJA ÉS EMLÉKEZETE:
-${cast.map((row) => charById(w, row.id)).filter(Boolean).map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
+A REAGÁLÓ KARAKTEREK TELJES SAJÁT, LEZÁRT SOCIAL CAPSULE-JAI:
+${strictSocialActorCapsules(
+  w,
+  cast.map((row) => charById(w, row.id)).filter(Boolean),
+  post
+)}
 
 ${repetitionGuard(w, castIds, "gossip reakciók")}
 
@@ -49473,6 +49785,10 @@ ${allowedTargets.join(", ")}
 
 A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saját nyilvános statement, DM a játékosnak, kapcsolatváltozás.
 - EZ KÖTELEZŐ REAKCIÓKÖR: legalább EGY jelölt karakternek legyen tényleges, látható reakciója (komment / repost / statement / DM). Ne adj teljesen üres választ.
+- GOSSIP-KOMMENT HARD GROUNDING: a comments minden eleme KIZÁRÓLAG EHHEZ A FENTI, MÁR PUBLIKÁLT GOSSIP-POSZTHOZ szóló top-level komment. Ne úgy kommentelj, mintha közvetlenül a popup jelenetben lennél.
+- Minden comment kapjon egy "basis" mezőt: 2–18 EGYMÁST KÖVETŐ szót másolj ki szó szerint a HEADLINE-ból vagy a publikált gossip-poszt szövegéből, amelyre az adott komment reagál. A basis nem jelenik meg a felhasználónak; grounding-bizonyíték.
+- Ha a karakter személyes tanú és ki akarja javítani a sztorit, akkor is a PUBLIKÁLT CIKK egyik konkrét állítását tedd a basis mezőbe, és arra válaszoljon ("ez nem így történt", stb.).
+- A háttéresemény személyes tudása csak azt befolyásolhatja, hogy hisz-e a cikknek / hogyan reagál rá. A komment témáját nem cserélheti le egy másik, nem publikált beszélgetésre vagy konfliktusra.
 - Nem kell mindenkinek reagálnia, és ne csináljon mindenki mindent egyszerre.
 - Az érintett tagadhat, megerősíthet, gúnyolódhat, dühös lehet vagy ignorálhat.
 - Pletyka esetén a HITETLENSÉG ugyanolyan valós reakció, mint az elhívés: kételkedő, bizalmatlan vagy személyes tanú karakter mondhatja, hogy nem hiszi el / nem így történt.
@@ -49493,7 +49809,7 @@ ${story.popupBased
   : ""}
 
 VÁLASZ CSAK JSON:
-{"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","bond":"","oneSided":false,"why":""}]}${TAIL}`,{maxTokens:1500});
+{"comments":[{"id":"AI id","text":"komment","basis":"2-18 consecutive words copied from this gossip post"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","bond":"","oneSided":false,"why":""}]}${TAIL}`,{maxTokens:1500});
 }
 
 
@@ -49503,13 +49819,18 @@ function fallbackGossipReactionOutput(w, post, cast) {
   if (!c) return { comments: [], reposts: [], follows: [], dms: [], statements: [], changes: [] };
   const en = worldLanguage(w, w.meId) === "en";
   const role = String(row.role || "observer");
-  let text = en ? "wait WHAT" : "várj MI";
-  if (role === "witness") text = en ? "that's not even what happened." : "ez nem is így történt.";
-  else if (role === "skeptic") text = en ? "yeah… I don't buy this." : "aha… ezt nem veszem be.";
-  else if (role === "supporter") text = en ? "nah. I'm not buying that about them." : "na ezt róla nem veszem be.";
-  else if (role === "critic") text = en ? "called it." : "mondtam.";
-  else if (role === "jealous") text = en ? "oh. cute." : "ó. de cuki.";
-  else if (role === "mentioned") text = en ? "excuse me??" : "elnézést??";
+  let text = en ? "this story is wild." : "ez a sztori azért erős.";
+  if (role === "witness") text = en ? "this post is leaving out what actually happened." : "ez a poszt kihagyja, mi történt valójában.";
+  else if (role === "skeptic") text = en ? "I'm not buying this story." : "ezt a sztorit nem veszem be.";
+  else if (role === "supporter") text = en ? "this post is reaching." : "ez a poszt nagyon nyújtózkodik.";
+  else if (role === "critic") text = en ? "this story tracks." : "ez a sztori sajnos teljesen hihető.";
+  else if (role === "jealous") text = en ? "so this is what we're posting now." : "szóval most már ezt posztoljuk.";
+  else if (role === "mentioned") text = en ? "you're seriously posting this about me?" : "ezt most komolyan kiposztoltátok rólam?";
+
+  const basis =
+    gossipFallbackReactionBasis(
+      post
+    );
 
   const changes = [];
 
@@ -49572,7 +49893,11 @@ function fallbackGossipReactionOutput(w, post, cast) {
   }
 
   return {
-    comments: [{ id: c.id, text }],
+    comments: [{
+      id:c.id,
+      text,
+      basis,
+    }],
     reposts: [],
     follows: [],
     dms: [],
@@ -49585,11 +49910,35 @@ function applyGossipReactions(n,postId,cast,out){
   const post=(n.posts||[]).find((p)=>p&&p.id===postId);if(!post||!post.gossipStory)return;
   const castSet=new Set((cast||[]).map((r)=>r&&r.id).filter(Boolean));
   const visibleActors=new Set();
-  const allowedTargets=new Set([post.authorId,...(post.gossipStory.mentionedIds||[])].filter(Boolean));
+  const allowedTargets=new Set([...(post.gossipStory.mentionedIds||[])].filter(Boolean));
   if(!Array.isArray(post.gossipStory.reactedBy))post.gossipStory.reactedBy=[];
   let reactionOut=out&&typeof out==="object"?out:null;
+
+  const groundedComments =
+    reactionOut &&
+    Array.isArray(
+      reactionOut.comments
+    )
+      ? reactionOut.comments.filter(
+          (item) =>
+            item &&
+            item.text &&
+            gossipReactionBasisSupported(
+              post,
+              item.basis
+            )
+        )
+      : [];
+
+  if (reactionOut) {
+    reactionOut = {
+      ...reactionOut,
+      comments: groundedComments,
+    };
+  }
+
   const hasVisible=Boolean(reactionOut&&(
-    (Array.isArray(reactionOut.comments)&&reactionOut.comments.length)||
+    groundedComments.length||
     (Array.isArray(reactionOut.reposts)&&reactionOut.reposts.length)||
     (Array.isArray(reactionOut.statements)&&reactionOut.statements.length)||
     (Array.isArray(reactionOut.dms)&&reactionOut.dms.length)
@@ -49630,10 +49979,18 @@ function applyGossipReactions(n,postId,cast,out){
       post.gossipStory.popupBased
     );
 
-  const safeChanges=(reactionOut&&Array.isArray(safeAiChanges(reactionOut))?safeAiChanges(reactionOut):[]).filter((ch)=>{
-    const a=findChar(n,ch&&ch.a), b=findChar(n,ch&&ch.b);
-    return a&&b&&castSet.has(a)&&(visibleActors.has(a)||popupFallout)&&allowedTargets.has(b)&&a!==b;
-  }).map((ch)=>({...ch,delta:Math.max(-35,Math.min(35,Number(ch.delta)||0))}));
+  const safeChanges=
+    validGossipReactionRelationshipChanges(
+      n,
+      post,
+      cast,
+      reactionOut
+    )
+      .filter((ch)=>{
+        const a=findChar(n,ch&&ch.a);
+        return a&&(visibleActors.has(a)||popupFallout);
+      })
+      .map((ch)=>({...ch,delta:Math.max(-35,Math.min(35,Number(ch.delta)||0))}));
   if(visibleActors.size){
     post.gossipStory.reactedBy=[...new Set([...(post.gossipStory.reactedBy||[]),...visibleActors])];
     post.gossipStory.reactionRounds=Math.max(0,Number(post.gossipStory.reactionRounds)||0)+1;
@@ -51024,7 +51381,14 @@ function popupCombinedImpact(w,choice){
 function popupFallbackRelationshipReaction(w, event, choice, actorId) {
   if (!w || !event || !choice || !actorId || isHuman(w, actorId) || !charById(w, actorId)) return null;
 
-  const rel = getRel(w, actorId, w.meId) || {};
+  const playerId =
+    socialPlayerId(
+      w
+    );
+
+  if (!playerId) return null;
+
+  const rel = getRel(w, actorId, playerId) || {};
   const score = Number(rel.score) || 0;
   const tone = String(choice.tone || "clarify");
   const romantic = String(event.eventKind || "").toLowerCase() === "romance";
@@ -51088,6 +51452,11 @@ function popupDirectParticipantIds(
   choice = null
 ) {
   if (!w || !event) return [];
+
+  const playerId =
+    socialPlayerId(
+      w
+    );
 
   const validAi = (id) =>
     Boolean(
@@ -51164,7 +51533,7 @@ function popupDirectParticipantIds(
   mentionedIdsInText(
     w,
     visiblePopupText,
-    w.meId
+    playerId
   ).forEach(
     add
   );
@@ -51268,6 +51637,15 @@ function applyPopupRelationshipConsequences(
     return [];
   }
 
+  const playerId =
+    socialPlayerId(
+      w
+    );
+
+  if (!playerId) {
+    return [];
+  }
+
   const reactions =
     popupResolvedRelationshipReactions(
       w,
@@ -51279,8 +51657,41 @@ function applyPopupRelationshipConsequences(
     return [];
   }
 
-  applyChanges(
-    w,
+  const before =
+    new Map(
+      reactions.map(
+        (r) => {
+          const rel =
+            getRel(
+              w,
+              r.id,
+              playerId
+            ) || EMPTY_REL;
+
+          return [
+            r.id,
+            {
+              score:
+                Number(
+                  rel.score
+                ) || 0,
+
+              mood:
+                String(
+                  rel.mood || ""
+                ),
+
+              why:
+                String(
+                  rel.why || ""
+                ),
+            },
+          ];
+        }
+      )
+    );
+
+  const toChanges = (targetValue) =>
     reactions.map(
       (r) => ({
         a:
@@ -51290,7 +51701,7 @@ function applyPopupRelationshipConsequences(
             : "",
 
         b:
-          w.meId,
+          targetValue,
 
         delta:
           Number(
@@ -51316,8 +51727,89 @@ function applyPopupRelationshipConsequences(
           r &&
           r.why,
       })
+    );
+
+  applyChanges(
+    w,
+    toChanges(
+      playerId
     )
   );
+
+  /*
+   * Existing-world compatibility:
+   * if an older world can resolve the player by profile/name but not by the
+   * stored ID shape, retry ONLY the unchanged popup pair using the player's
+   * canonical profile name. This does not double-apply successful changes.
+   */
+  const unchanged =
+    reactions.filter(
+      (r) => {
+        if (
+          !r ||
+          !r.id ||
+          !Number(
+            r.delta
+          )
+        ) {
+          return false;
+        }
+
+        const old =
+          before.get(
+            r.id
+          ) || {};
+
+        const live =
+          getRel(
+            w,
+            r.id,
+            playerId
+          ) || EMPTY_REL;
+
+        return (
+          Number(
+            live.score
+          ) ===
+            Number(
+              old.score
+            ) &&
+          String(
+            live.mood || ""
+          ) ===
+            String(
+              old.mood || ""
+            ) &&
+          String(
+            live.why || ""
+          ) ===
+            String(
+              old.why || ""
+            )
+        );
+      }
+    );
+
+  if (
+    unchanged.length &&
+    w.player &&
+    w.player.name
+  ) {
+    applyChanges(
+      w,
+      unchanged.map(
+        (r) => ({
+          a:r.id,
+          b:w.player.name,
+          delta:Number(r.delta) || 0,
+          mood:r.mood || "",
+          bond:r.bond || "",
+          oneSided:Boolean(r.oneSided === true),
+          why:r.why || "",
+        })
+      )
+    );
+  }
 
   return reactions;
 }
@@ -51526,6 +52018,7 @@ function popupEventGossipEligible(event,visibility,witnessIds,gossipPotential){
 
 function resolvePopupEvent(w,eventId,choiceId){
   const event=(w.popupEvents||[]).find((e)=>e&&e.id===eventId);if(!event||event.resolved)return false;
+  const playerId=socialPlayerId(w);if(!playerId)return false;
   const choice=(event.choices||[]).find((c)=>c&&c.id===choiceId);if(!choice)return false;
   const impact=popupCombinedImpact(w,choice);
   applyExplicitSocialImpact(w,w.meId,{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers});
@@ -51553,7 +52046,7 @@ function resolvePopupEvent(w,eventId,choiceId){
   );
   const gossipEligible=popupEventGossipEligible(event,visibility,witnessIds,gossipPotential);
   const cancelRisk=(Number(ps.cancel)||0)>=12||(Number(ps.controversy)||0)>=28;
-  const participantIds=[...(event.involvedIds||[]),w.meId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
+  const participantIds=[...(event.involvedIds||[]),playerId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
 
   event.resolved=true;
   event.resolvedAt=now();
@@ -51569,7 +52062,7 @@ function resolvePopupEvent(w,eventId,choiceId){
     type:"popup-choice",
     refId:`${event.id}:${choice.id}`,
     ts:event.resolvedAt,
-    actorId:w.meId,
+    actorId:playerId,
     targetIds:(event.involvedIds||[]).filter(Boolean),
     witnessIds,
     visibility,
@@ -51588,7 +52081,7 @@ function resolvePopupEvent(w,eventId,choiceId){
     meta:{
       popupEventId:event.id,choiceId:choice.id,location:event.location||"",gossipEligible,witnessCount:witnessIds.length,participantIds,
       gossipPotential,publicSentiment:{support:Number(ps.support)||0,dislike:Number(ps.dislike)||0,controversy:Number(ps.controversy)||0,cancel:Number(ps.cancel)||0},
-      sentimentTargetIds:[w.meId],choiceImpact:{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers},
+      sentimentTargetIds:[playerId],choiceImpact:{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers},
     }
   });
   queuePopupGossipAfterResolution(w, event, choice.id, popupSocialEvent);
@@ -51597,6 +52090,7 @@ function resolvePopupEvent(w,eventId,choiceId){
 
 function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
   const event=(w.popupEvents||[]).find((e)=>e&&e.id===eventId);if(!event||event.resolved)return false;
+  const playerId=socialPlayerId(w);if(!playerId)return false;
   const outcome=normalizePopupCustomOutcome(w,event,customText,outcomeRaw);if(!outcome)return false;
   const audience=Math.max(1,displayFollowerCount(w,w.meId));
   const followerDelta=Math.round(audience*(Number(outcome.socialImpact.followerRate)||0));
@@ -51616,7 +52110,7 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
 
   const visibility=outcome.visibility;
   const witnessIds=outcome.witnessIds||[];
-  const participantIds=[...(event.involvedIds||[]),w.meId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
+  const participantIds=[...(event.involvedIds||[]),playerId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
   const risk=publicCancelRiskSignals(outcome.customText);
   const publicSentiment={
     support:Math.max(Number(outcome.publicSentiment.support)||0,Number(risk.publicSentiment.support)||0),
@@ -51657,7 +52151,7 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
     type:"popup-choice",
     refId:`${event.id}:custom`,
     ts:event.resolvedAt,
-    actorId:w.meId,
+    actorId:playerId,
     targetIds:(event.involvedIds||[]).filter(Boolean),
     witnessIds,
     visibility,
@@ -51675,7 +52169,7 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
     ],
     meta:{
       popupEventId:event.id,choiceId:"custom",location:event.location||"",gossipEligible,witnessCount:witnessIds.length,participantIds,gossipPotential,
-      publicSentiment,sentimentTargetIds:[w.meId],customResponse:outcome.customText,
+      publicSentiment,sentimentTargetIds:[playerId],customResponse:outcome.customText,
       socialImpact:{aura:outcome.socialImpact.aura,reputation:outcome.socialImpact.reputation,hype:outcome.socialImpact.hype,humor:outcome.socialImpact.humor,followers:followerDelta},
     }
   });
@@ -58866,6 +59360,38 @@ async function runSimulationAction(view, update, action, addImage) {
       (Array.isArray(out.dms) && out.dms.length)
     ));
     if (!hasVisibleReaction) out = fallbackGossipReactionOutput(view, post, cast);
+
+    if (
+      post.gossipStory.popupBased &&
+      !validGossipReactionRelationshipChanges(
+        view,
+        post,
+        cast,
+        out
+      ).length
+    ) {
+      try {
+        const repairedChanges =
+          await genPopupGossipRelationshipRipple(
+            view,
+            post,
+            cast
+          );
+
+        if (repairedChanges.length) {
+          out = {
+            ...(out || {}),
+            changes: repairedChanges,
+          };
+        }
+      } catch (gossipRelationshipErr) {
+        console.warn(
+          "Popup gossip relationship ripple repair failed:",
+          gossipRelationshipErr
+        );
+      }
+    }
+
     update((n) => { applyGossipReactions(n, post.id, cast, out); });
     return "gossip-reaction";
   }
