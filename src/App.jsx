@@ -13346,7 +13346,7 @@ function socialCommentHasPartyQuestionTopicDrift(value) {
    * Strong signals of a completely different conversation under a bare
    * "party?" post. These are not banned globally, only for this exact mode.
    */
-  return /\b(?:playing\s+games?\s+online|games?\s+online|posturing|discipline\s+as\s+you|pretend\s+this\s+isn['’]?t\s+mutual|isn['’]?t\s+mutual|keeping\s+up\s+appearances|what\s+they\s+post|rules\s+don['’]?t\s+apply|cobra\s+kai\s+performance)\b/i.test(
+  return /\b(?:playing\s+games?\s+online|games?\s+online|posturing|focus\s+on\s+(?:your\s+)?training|discipline|pretend\s+this\s+isn['’]?t\s+mutual|isn['’]?t\s+mutual|keeping\s+up\s+appearances|what\s+they\s+post|unhinged\s+with\s+what\s+they\s+post|rules\s+don['’]?t\s+apply|cobra\s+kai\s+performance|needs?\s+better\s+lighting|you\s+might\s+actually\s+be\s+dangerous)\b/i.test(
     raw
   );
 }
@@ -13494,17 +13494,32 @@ function socialCommentGroundedInExactPost(
   }
 
   if (
-    mode === "party-question" &&
-    (
-      socialCommentHasPartyQuestionTopicDrift(
+    mode === "party-question"
+  ) {
+    /*
+     * A finite keyword whitelist must NOT become a "no comments allowed" gate.
+     * Natural replies such as "knew this was coming", "you're actually doing
+     * this?", or "of course you are" are valid social responses to "party?"
+     * even without literally repeating party/where/when.
+     *
+     * Hard rejection is therefore reserved for CLEAR topic drift.
+     */
+    const directPartyAnchor =
+      /^(?:yes|yeah|yep|yup|sure|maybe|probably|absolutely|definitely|nah|nope|no|never|depends|where|when|who|whose|what\s+time|why|bet|fine|okay|ok|i['’]?m\s+in|im\s+in|i['’]?m\s+out|im\s+out|i['’]?m\s+down|im\s+down|count\s+me\s+in|hell\s+yes|hell\s+no|only\s+if|not\s+if|not\s+with|without\s+me|finally\b|about\s+time\b|thought\s+you['’]?d\s+never\s+ask\b|say\s+less\b|i['’]?ll\s+be\s+there\b|i['’]?m\s+there\b)/i.test(
         raw
       ) ||
-      !socialCommentMatchesPartyQuestionTopic(
+      /\b(?:party|invite|invited|invitation|host|hosting|what\s+time|who['’]?s|whose|coming|going|bring|drinks?|address|dress\s*code|afterparty|after-party|pregame|pre-game|plus\s*one|guest\s*list|music|dj|your\s+place|my\s+place|pickup|pick\s+me\s+up)\b/i.test(
+        raw
+      );
+
+    if (
+      !directPartyAnchor &&
+      socialCommentHasPartyQuestionTopicDrift(
         raw
       )
-    )
-  ) {
-    return false;
+    ) {
+      return false;
+    }
   }
 
   /*
@@ -29943,7 +29958,42 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
       .map((row) => aiVoice(w, row && (row.id !== undefined ? row.id : row.name)))
       .filter(Boolean)
   );
-  const unavailable = new Set([...beforeActors, ...acceptedActors, ...rawActors]);
+
+  /*
+   * A raw row is NOT "used" if applyComments rejected it.
+   * Previously every raw actor became unavailable, so a bad first sentence
+   * could never be regenerated for the same character.
+   */
+  const acceptedActorSet =
+    new Set(
+      acceptedActors
+    );
+
+  const rejectedRawActorIds =
+    [...rawActors]
+      .filter(
+        (id) =>
+          id &&
+          !acceptedActorSet.has(id) &&
+          !beforeActors.has(id)
+      );
+
+  const rejectedRawCandidateRows =
+    rejectedRawActorIds
+      .map(
+        (id) =>
+          charById(
+            w,
+            id
+          )
+      )
+      .filter(Boolean);
+
+  const unavailable =
+    new Set([
+      ...beforeActors,
+      ...acceptedActors,
+    ]);
 
   const priorityCandidateRows =
     missingRelationshipPriority
@@ -29958,6 +30008,7 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
 
   const candidates = [
     ...priorityCandidateRows,
+    ...rejectedRawCandidateRows,
     ...fairCommentCast(
       w,
       post.authorId,
@@ -30011,7 +30062,7 @@ COMMENT DENSITY REPAIR — ADD MISSING TOP-LEVEL COMMENTS ONLY.
 
 POST AUTHOR: ${nameOfIn(w, post.authorId)} [${post.authorId}]
 POST: "${String(post.text || "").slice(0, 900)}"
-${post.imageDescription ? `VISIBLE IMAGE CONTENT: ${String(post.imageDescription).slice(0, 700)}` : ""}
+${socialPostHasVisibleImage(post) && post.imageDescription ? `VISIBLE IMAGE CONTENT: ${String(post.imageDescription).slice(0, 700)}` : ""}
 
 ${socialCommentExactPostGroundingCard(w, post)}
 
@@ -30024,7 +30075,9 @@ ${strictSocialActorCapsules(w, candidates, post)}
 
 HARD RULES:
 - VERY HIGH RELATIONSHIP ATTENTION IDs THAT WERE MISSED: ${missingRelationshipPriority.join(", ") || "none"}.
-- If one of those IDs is in ELIGIBLE CHARACTERS, prioritize them when they can respond naturally to the exact post. Hidden obsession increases attention; it does not create an unrelated topic.
+- PREVIOUS RAW COMMENT IDs THAT FAILED THE APP'S HARD GROUNDING FILTER AND MUST BE REWRITTEN IF ELIGIBLE: ${rejectedRawActorIds.join(", ") || "none"}.
+- A failed raw row is NOT a reason to drop that character. Rewrite the sentence from scratch so it actually answers this exact post while keeping SELF's own voice.
+- If one of the very-high relationship IDs is in ELIGIBLE CHARACTERS, prioritize them when they can respond naturally to the exact post. Hidden obsession increases attention; it does not create an unrelated topic.
 - Return EXACTLY ${Math.min(missing, candidates.length)} DIFFERENT character IDs when that many candidates are listed.
 - If a candidate's first dramatic/sarcastic idea is not grounded, rewrite it into a simpler grounded reaction instead of omitting the character.
 - For a SHORT STATUS TOPIC LOCK, the repaired comment MUST stay inside that exact status topic family. Rivalry/obsession/friendship modifies tone only; it cannot supply a different subject.
@@ -30048,7 +30101,42 @@ JSON ONLY:
       { maxTokens: Math.max(800, Math.min(1800, 260 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
     );
 
-    const combined = [...safeAiComments(baseOut), ...safeAiComments(repairOut)]
+    /*
+     * Keep only base comments that ALREADY PASSED the same applyComments probe.
+     * Rejected base rows are removed before repaired rows are merged.
+     *
+     * Old behavior merged [badBase, repaired] and deduped by first actor ID,
+     * so the rejected sentence silently shadowed its good replacement.
+     */
+    const acceptedBaseComments =
+      safeAiComments(
+        baseOut
+      )
+        .filter((row) => {
+          const id =
+            aiVoice(
+              w,
+              row &&
+              (
+                row.id !== undefined
+                  ? row.id
+                  : row.name
+              )
+            );
+
+          return (
+            id &&
+            id !== post.authorId &&
+            acceptedActorSet.has(id)
+          );
+        });
+
+    const combined = [
+      ...acceptedBaseComments,
+      ...safeAiComments(
+        repairOut
+      ),
+    ]
       .filter((row, index, arr) => {
         const id = aiVoice(w, row && (row.id !== undefined ? row.id : row.name));
         if (!id || id === post.authorId) return false;
