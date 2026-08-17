@@ -20673,6 +20673,154 @@ async function analyzeImageDataUrl(
     .slice(0, 700);
 }
 
+async function analyzeSocialPostImageInput(
+  imageInput
+) {
+  const raw =
+    String(
+      imageInput || ""
+    ).trim();
+
+  if (
+    !raw ||
+    (
+      !isInlineImageData(
+        raw
+      ) &&
+      !/^https:\/\//i.test(
+        raw
+      )
+    )
+  ) {
+    return "";
+  }
+
+  const vision =
+    await analyzeImageDataUrl(
+      raw,
+      `Analyze this social-media image for later in-world post captions and comments.
+
+Describe ONLY what is visibly supported by the pixels, in 2-4 concise sentences.
+
+Prioritize useful social details:
+- how many people are visible;
+- selfie / mirror selfie / group photo / candid / posed photo / scenery / object photo;
+- pose, activity and camera framing;
+- visible clothing/outfit, accessories, hairstyle and makeup when clearly visible;
+- setting/location type and important background details;
+- lighting/time-of-day cues;
+- important visible objects;
+- the overall visible vibe or occasion cue (for example party-ready, training, beach day, formal event) ONLY when visually supported.
+
+Be specific enough that different fictional characters could react to different concrete details.
+Do NOT identify a real person by name.
+Do NOT infer fictional identities from pixels.
+Do NOT invent relationships, hidden events, off-camera people, motives or unseen actions.`
+    );
+
+  return String(
+    vision || ""
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(
+      0,
+      1000
+    );
+}
+
+function composePostImageDescriptionFromVision(
+  post,
+  vision
+) {
+  const visible =
+    String(
+      vision || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!visible) {
+    return String(
+      post &&
+      post.imageDescription ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  const people =
+    String(
+      post &&
+      post.imagePeopleNote ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const manual =
+    String(
+      post &&
+      post.imageManualNote ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (
+    people ||
+    manual
+  ) {
+    return [
+      people
+        ? `USER-CONFIRMED PEOPLE IN IMAGE: ${people}`
+        : "",
+      manual
+        ? `USER-CONFIRMED IMAGE CONTEXT: ${manual}`
+        : "",
+      `VISIBLE IMAGE CONTENT: ${visible}`,
+    ]
+      .filter(Boolean)
+      .join(" | ")
+      .slice(
+        0,
+        1500
+      );
+  }
+
+  const existing =
+    String(
+      post &&
+      post.imageDescription ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (
+    /USER-CONFIRMED (?:PEOPLE IN IMAGE|IMAGE CONTEXT):/i.test(
+      existing
+    )
+  ) {
+    const withoutOldVisible =
+      existing
+        .replace(
+          /\s*\|\s*VISIBLE IMAGE CONTENT:.*$/i,
+          ""
+        )
+        .trim();
+
+    return `${withoutOldVisible}${withoutOldVisible ? " | " : ""}VISIBLE IMAGE CONTENT: ${visible}`
+      .slice(
+        0,
+        1500
+      );
+  }
+
+  return visible;
+}
+
 async function requestAiImageProxy(payload) {
   const paths = ["/ai/image", "/ai/images", "/ai/generate-image"];
   const urls = paths.map(backendUrl);
@@ -29372,6 +29520,62 @@ COMPREHENSION LOCK:
 `;
 }
 
+function socialImageReactionFidelityCard(
+  w,
+  post,
+  cast
+) {
+  if (
+    !w ||
+    !post ||
+    !socialPostHasVisibleImage(
+      post
+    )
+  ) {
+    return "";
+  }
+
+  const visible =
+    String(
+      post.imageDescription ||
+      post.imageVision ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!visible) {
+    return `
+IMAGE REACTION FIDELITY:
+- A real image is attached, but grounded visual analysis is not available yet.
+- Do NOT invent outfit, appearance, pose, location or objects. React only to the caption until visual facts exist.
+`;
+  }
+
+  const castSize =
+    Array.isArray(cast)
+      ? cast.length
+      : 0;
+
+  return `
+IMAGE REACTION FIDELITY — CHARACTER-SPECIFIC VISUAL ATTENTION:
+VISIBLE FACTS:
+${visible.slice(0, 1400)}
+
+- The image is PRIMARY evidence, not decoration.
+- Each commenter first decides what SELF would realistically NOTICE from these visible facts, using ONLY SELF's own Personality / Traits / Speech / Voice / age / relationship to the post author.
+- Different characters should naturally notice DIFFERENT things. One may react to outfit, another the setting, another the pose/vibe, another the occasion; somebody else may focus on the caption.
+- Do not turn every relationship into the same generic "you look good" reaction.
+- Close friends may hype, tease or reference a concrete visible detail in their own normal voice.
+- Rivals/enemies may make a backhanded or sarcastic observation ONLY about something actually visible; no invented flaw and no unrelated feud.
+- Crush/obsession may make SELF more attentive to the image, but public wording must still fit SELF's personality and how openly SELF would show it.
+- Older/formal/reserved characters must remain older/formal/reserved. A glam photo must NOT make everyone speak like Gen Z.
+- Never copy the photographed person's apparent vibe into the commenter's personality.
+- ${castSize >= 4 ? "With four or more commenters, use more than one distinct visible detail when natural; do not make everyone react to the exact same thing." : "Do not mechanically repeat the same visible detail between commenters."}
+- Every visual claim in the final comment must be supported by VISIBLE FACTS above.
+`;
+}
+
 function commentTargetRelationshipMatrix(w, cast, post) {
   if (!w || !post) return "";
   const target = charById(w, post.authorId);
@@ -29554,6 +29758,8 @@ ${post.authorId === w.meId && post.text ? playerInputUnderstandingInstruction(w,
 ${socialPostMeaningCard(w, post, postMeaning)}
 
 ${socialCommentExactPostGroundingCard(w, post)}
+
+${socialImageReactionFidelityCard(w, post, cast)}
 
 ${
   (post.imageId || post.image)
@@ -30065,6 +30271,8 @@ POST: "${String(post.text || "").slice(0, 900)}"
 ${socialPostHasVisibleImage(post) && post.imageDescription ? `VISIBLE IMAGE CONTENT: ${String(post.imageDescription).slice(0, 700)}` : ""}
 
 ${socialCommentExactPostGroundingCard(w, post)}
+
+${socialImageReactionFidelityCard(w, post, candidates)}
 
 ADD ${Math.min(missing, candidates.length)} MORE REAL TOP-LEVEL COMMENTS, EACH SEMANTICALLY GROUNDED IN THIS EXACT POST.
 ELIGIBLE CHARACTERS:
@@ -33896,6 +34104,8 @@ KÉPEK:
 - A poszt szerzője is "tudja", mi van a saját feltöltött fotóján: kik vannak rajta a biztos mező szerint, és mit látott rajta a vision. A captionnek és a későbbi kommentválaszainak is ehhez kell igazodniuk.
 - A többi AI a poszt megtekintésekor ugyanezt a nyilvános képkontextust kapja, tehát felismerheti a felhasználó által megnevezett játékbeli szereplőket és reagálhat a ténylegesen látható részletekre.
 - Előbb döntsd el, MELYIK konkrét kép illik a jelenethez, és csak UTÁNA írd meg a captiont. A caption ne legyen felcserélhető egy teljesen másik képpel.
+- IMAGE SELF-VOICE LOCK: a VISIBLE IMAGE CONTENT csak vizuális tényforrás. A caption stílusát kizárólag a posts sor "id" szerinti szerző SAJÁT Personality / Traits / Speech / Voice / kor / online szokásai adják. A fotó hangulata nem változtatja minden szerzőt ugyanarra az influencer/Gen-Z hangra.
+- Kerüld a generikus képcaptionöket ("party ready", "good vibes", "felt cute", "another night"), hacsak az adott szerző saját stílusa tényleg ilyen. A captionből akkor is legyen felismerhető a szerző, ha a képet nem látjuk.
 - Ilyenkor az "image" mezőbe a kép jele kerüljön, például "kep2".
 - SOHA ne találj ki olyan képet, ami nincs az adott karakter albumában.
 - Ha kép van a posztban, a kommentelők azt is látják.
@@ -34124,7 +34334,11 @@ ${albumList(author) || "nincs használható albumkép"}
 - Ne legyen rendszer-poszt vagy mesterséges filler.
 - Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
 - Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
-- Ha albumképet választasz, ELŐBB a visible image content alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra a képre illik.
+- Ha albumképet választasz, ELŐBB a VISIBLE IMAGE CONTENT alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra az EGY képre illik.
+- KÉP + SELF HANG HARD RULE: a kép megmondja, MI látható; kizárólag ${author.name} saját Personality / Traits / Speech / Voice / kor / online szokásai mondják meg, HOGYAN captioneli. A fotó vibe-ja nem írhatja át ${author.name} személyiségét.
+- Ne használj automatikusan generikus influencer-captiont ("party ready", "good vibes", "felt cute", "another night") csak azért, mert szelfi/outfit kép van. Csak akkor ilyen a caption, ha ${author.name} saját hangjában tényleg természetes.
+- A caption legyen felcserélhetetlen: ha ugyanazt a mondatot bármely másik karakter ugyanilyen hitelesen kitehetné ugyanarra a képre, írd újra ${author.name} saját ritmusára/szókincsére.
+- Ne írd le katalógusszerűen a teljes képet. Egy valódi ember azt a részletet / alkalmat / hangulatot emeli ki, ami NEKI számít.
 - Kép nélkül is teljesen jó poszt.
 - Ha ebben a válaszban mégis comments tömböt adsz vissza egy poszt mellett, az a comments tömb KIZÁRÓLAG AZ ADOTT posts elemhez tartozik. A kommentelőnek tudnia kell, melyik karakter posztolta azt a konkrét posztot, és a kommentnek arra a konkrét captionre/képre kell reagálnia. Soha ne keverd össze egy másik, ugyanebben a válaszban létrehozott poszttal.
 - Ne generálj kommenteket ebben a hívásban; a többi AI külön fog reagálni rá a saját karakteréből.
@@ -34917,14 +35131,21 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       try {
         const data = resolveImg(img, media);
 
-        if (data && String(data).startsWith("data:image/")) {
-          imageDescription = await analyzeImageDataUrl(
-            data,
-            tt(
-              "Írd le 1-3 rövid mondatban, mi látható ezen a social media képen. Csak látható részleteket említs: személyek száma, tevékenység, ruha, helyszín, hangulat. Ne azonosíts valódi személyt név szerint.",
-              "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
+        if (
+          data &&
+          (
+            isInlineImageData(
+              String(data)
+            ) ||
+            /^https:\/\//i.test(
+              String(data)
             )
-          );
+          )
+        ) {
+          imageDescription =
+            await analyzeSocialPostImageInput(
+              data
+            );
         }
       } catch (e) {
         console.warn("Player post image analysis failed:", e);
@@ -34941,6 +35162,16 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       imageId: imageId || "",
       image: imageId ? "" : (img || ""),
       imageDescription,
+      imageVision:
+        String(
+          imageDescription || ""
+        )
+          .replace(/\s+/g, " ")
+          .trim(),
+      imageAnalyzedAt:
+        imageDescription
+          ? now()
+          : 0,
       comments: [],
       language: worldLanguage(w, w.meId),
     };
@@ -60276,6 +60507,10 @@ export default function App() {
   const albumVisionBusy = useRef(false);
   const albumVisionAttempted = useRef(new Set());
 
+  /* Existing image-post vision backfill — one post at a time. */
+  const postVisionBusy = useRef(false);
+  const postVisionAttempted = useRef(new Set());
+
   wRef.current = world;
   mediaRef.current = media;
 
@@ -61141,6 +61376,177 @@ const signOut = useCallback(async () => {
          * If the previous image failed without mutating world.rev, nudge the
          * existing pulse so the worker can continue to the next album item.
          */
+      });
+  }, [
+    world ? world.code : null,
+    world ? world.rev : 0,
+    code,
+    media,
+  ]);
+
+  /*
+   * EXISTING-WORLD POST IMAGE VISION BACKFILL
+   * Analyze one real image-post at a time when its dedicated imageVision is
+   * missing. Only visual metadata changes.
+   */
+  useEffect(() => {
+    if (
+      !world ||
+      !code ||
+      !mediaReady.current ||
+      postVisionBusy.current
+    ) {
+      return;
+    }
+
+    let targetPost = null;
+    let imageInput = "";
+
+    for (const row of (world.posts || [])) {
+      if (
+        !row ||
+        !(
+          row.imageId ||
+          row.image
+        ) ||
+        String(
+          row.imageVision || ""
+        ).trim()
+      ) {
+        continue;
+      }
+
+      const key =
+        String(
+          row.id ||
+          row.imageId ||
+          row.image ||
+          ""
+        );
+
+      if (
+        !key ||
+        postVisionAttempted.current.has(
+          key
+        )
+      ) {
+        continue;
+      }
+
+      const srcValue =
+        row.imageId
+          ? imageRef(
+              row.imageId
+            )
+          : row.image;
+
+      const resolved =
+        resolveImg(
+          srcValue,
+          mediaRef.current || {}
+        );
+
+      if (
+        !resolved ||
+        (
+          !isInlineImageData(
+            resolved
+          ) &&
+          !/^https:\/\//i.test(
+            resolved
+          )
+        )
+      ) {
+        continue;
+      }
+
+      targetPost = row;
+      imageInput = resolved;
+      postVisionAttempted.current.add(
+        key
+      );
+      break;
+    }
+
+    if (
+      !targetPost ||
+      !imageInput
+    ) {
+      return;
+    }
+
+    postVisionBusy.current = true;
+
+    analyzeSocialPostImageInput(
+      imageInput
+    )
+      .then((vision) => {
+        if (!vision) return;
+
+        setWorld((prev) => {
+          if (!prev) return prev;
+
+          const n =
+            cloneWorldState(
+              prev
+            );
+
+          const found =
+            (n.posts || [])
+              .find(
+                (row) =>
+                  row &&
+                  String(
+                    row.id || ""
+                  ) ===
+                  String(
+                    targetPost.id || ""
+                  )
+              );
+
+          if (
+            !found ||
+            String(
+              found.imageVision || ""
+            ).trim()
+          ) {
+            return prev;
+          }
+
+          found.imageVision =
+            String(
+              vision
+            )
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(
+                0,
+                1000
+              );
+
+          found.imageDescription =
+            composePostImageDescriptionFromVision(
+              found,
+              found.imageVision
+            );
+
+          found.imageAnalyzedAt =
+            now();
+
+          n.rev =
+            (n.rev || 0) + 1;
+
+          return n;
+        });
+      })
+      .catch((visionErr) => {
+        console.warn(
+          "Background post image vision analysis failed:",
+          visionErr
+        );
+      })
+      .finally(() => {
+        postVisionBusy.current = false;
       });
   }, [
     world ? world.code : null,
