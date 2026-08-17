@@ -18708,6 +18708,19 @@ function relationshipBehaviorCard(
     parts.push(orientationLock);
   }
 
+  const addressOwnership =
+    relationshipSpecificAddressOwnershipCard(
+      w,
+      actorId,
+      targetId
+    );
+
+  if (addressOwnership) {
+    parts.push(
+      addressOwnership
+    );
+  }
+
   if (connectionCue.snippet) {
     parts.push(
       en
@@ -19136,6 +19149,715 @@ function sanitizeIncorrectSenseiAddress(
   return text;
 }
 
+function relationshipSpecificAddressAliasVariants(value) {
+  const raw =
+    String(
+      value || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return [];
+
+  const out = [];
+
+  const add = (v) => {
+    const clean =
+      String(
+        v || ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (
+      clean &&
+      !out.some(
+        (x) =>
+          normalizeCharacterIdentityText(
+            x
+          ) ===
+          normalizeCharacterIdentityText(
+            clean
+          )
+      )
+    ) {
+      out.push(
+        clean
+      );
+    }
+  };
+
+  add(
+    raw
+  );
+
+  const withoutArticle =
+    raw.replace(
+      /^(?:la|el|le|the)\s+/i,
+      ""
+    );
+
+  add(
+    withoutArticle
+  );
+
+  /*
+   * Narrow cross-language ownership variants for an explicitly stored title.
+   * This catches the exact kind of provider translation leak that turned
+   * Hawk's "La Marquesa" for Carla into "Marquise" for somebody else.
+   */
+  const normalized =
+    normalizeCharacterIdentityText(
+      withoutArticle
+    );
+
+  if (
+    normalized === "marquesa"
+  ) {
+    add(
+      "Marquise"
+    );
+
+    add(
+      "La Marquise"
+    );
+  }
+
+  if (
+    normalized === "marques"
+  ) {
+    add(
+      "Marquis"
+    );
+
+    add(
+      "Le Marquis"
+    );
+  }
+
+  return out;
+}
+
+function relationshipSpecificAddressRows(actor) {
+  if (!actor) return [];
+
+  const raw =
+    String(
+      actor.connections || ""
+    )
+      .replace(/\r/g, "");
+
+  if (!raw.trim()) {
+    return [];
+  }
+
+  const out = [];
+
+  raw
+    .split(/\n+/)
+    .map(
+      (line) =>
+        String(
+          line || ""
+        )
+          .replace(/\s+/g, " ")
+          .trim()
+    )
+    .filter(Boolean)
+    .forEach(
+      (line) => {
+        const row =
+          line.match(
+            /^(.{2,140}?)\s*[—–-]\s*Relationship\s*:\s*(.+)$/i
+          );
+
+        if (!row) return;
+
+        const ownerLabel =
+          String(
+            row[1] || ""
+          )
+            .replace(/\s+/g, " ")
+            .trim();
+
+        const detail =
+          String(
+            row[2] || ""
+          );
+
+        if (
+          !ownerLabel ||
+          !detail
+        ) {
+          return;
+        }
+
+        const found = [];
+
+        const capture = (regex) => {
+          let m;
+
+          while (
+            (
+              m =
+                regex.exec(
+                  detail
+                )
+            )
+          ) {
+            const alias =
+              String(
+                m[1] || ""
+              )
+                .replace(/\s+/g, " ")
+                .trim();
+
+            if (
+              alias &&
+              alias.length >= 2 &&
+              alias.length <= 60
+            ) {
+              found.push(
+                alias
+              );
+            }
+
+            if (
+              !regex.global
+            ) {
+              break;
+            }
+          }
+        };
+
+        /*
+         * Target-specific speech canon:
+         *   He also calls her "La Marquesa"
+         *   She calls him "..."
+         *   I call them "..."
+         */
+        capture(
+          /\b(?:i|he|she|they)\s+(?:also\s+)?calls?\s+(?:him|her|them)\s*["“'‘]([^"”'’]{2,60})["”'’]/gi
+        );
+
+        /*
+         * Slightly shorter variants in a Connections row.
+         */
+        capture(
+          /\bcalls?\s+(?:him|her|them)\s*["“'‘]([^"”'’]{2,60})["”'’]/gi
+        );
+
+        capture(
+          /\b(?:nickname|pet\s*name)\s*(?:for\s+)?(?:him|her|them)?\s*[:=]?\s*["“'‘]([^"”'’]{2,60})["”'’]/gi
+        );
+
+        found
+          .filter(
+            (alias, index, arr) =>
+              arr.findIndex(
+                (other) =>
+                  normalizeCharacterIdentityText(
+                    other
+                  ) ===
+                  normalizeCharacterIdentityText(
+                    alias
+                  )
+              ) === index
+          )
+          .forEach(
+            (alias) => {
+              out.push({
+                ownerLabel,
+                alias,
+                variants:
+                  relationshipSpecificAddressAliasVariants(
+                    alias
+                  ),
+                sourceLine:
+                  line,
+              });
+            }
+          );
+      }
+    );
+
+  return out;
+}
+
+function relationshipAddressOwnerMatchesTarget(
+  w,
+  ownerLabel,
+  target
+) {
+  if (
+    !w ||
+    !ownerLabel ||
+    !target
+  ) {
+    return false;
+  }
+
+  const resolved =
+    resolveCharacterIdentity(
+      w,
+      ownerLabel,
+      {
+        relationshipOnly:false,
+      }
+    );
+
+  if (
+    resolved &&
+    resolved.id
+  ) {
+    return (
+      String(
+        resolved.id
+      ) ===
+      String(
+        target.id
+      )
+    );
+  }
+
+  const ownerNorm =
+    normalizeCharacterIdentityText(
+      ownerLabel
+    );
+
+  const targetAliases =
+    [
+      target.name,
+      target.nick,
+      target.nickname,
+      target.username,
+      ...(characterIdentityAliases(
+        target,
+        {
+          includeFirst:true,
+          includeSurname:true,
+          strongOnly:false,
+        }
+      ) || []),
+    ]
+      .map(
+        (alias) =>
+          normalizeCharacterIdentityText(
+            alias
+          )
+      )
+      .filter(Boolean);
+
+  return targetAliases.includes(
+    ownerNorm
+  );
+}
+
+function relationshipSpecificAddressesForTarget(
+  w,
+  actorId,
+  targetId
+) {
+  if (
+    !w ||
+    !actorId ||
+    !targetId
+  ) {
+    return [];
+  }
+
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target
+  ) {
+    return [];
+  }
+
+  return relationshipSpecificAddressRows(
+    actor
+  )
+    .filter(
+      (row) =>
+        relationshipAddressOwnerMatchesTarget(
+          w,
+          row.ownerLabel,
+          target
+        )
+    );
+}
+
+function preferredRelationshipSpecificAddressForTarget(
+  w,
+  actorId,
+  targetId
+) {
+  const row =
+    relationshipSpecificAddressesForTarget(
+      w,
+      actorId,
+      targetId
+    )[0];
+
+  return row
+    ? String(
+        row.alias || ""
+      ).trim()
+    : "";
+}
+
+function relationshipSpecificAddressOwnershipCard(
+  w,
+  actorId,
+  targetId
+) {
+  if (
+    !w ||
+    !actorId ||
+    !targetId
+  ) {
+    return "";
+  }
+
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target
+  ) {
+    return "";
+  }
+
+  const rows =
+    relationshipSpecificAddressRows(
+      actor
+    );
+
+  if (!rows.length) {
+    return "";
+  }
+
+  const ownedByTarget =
+    rows.filter(
+      (row) =>
+        relationshipAddressOwnerMatchesTarget(
+          w,
+          row.ownerLabel,
+          target
+        )
+    );
+
+  const ownedByOthers =
+    rows.filter(
+      (row) =>
+        !relationshipAddressOwnerMatchesTarget(
+          w,
+          row.ownerLabel,
+          target
+        )
+    );
+
+  const targetText =
+    ownedByTarget.length
+      ? ownedByTarget
+          .map(
+            (row) =>
+              `"${row.alias}"`
+          )
+          .join(", ")
+      : "none";
+
+  const forbiddenText =
+    ownedByOthers.length
+      ? ownedByOthers
+          .slice(
+            0,
+            12
+          )
+          .map(
+            (row) => {
+              const variants =
+                row.variants
+                  .filter(
+                    (v) =>
+                      normalizeCharacterIdentityText(
+                        v
+                      ) !==
+                      normalizeCharacterIdentityText(
+                        row.alias
+                      )
+                  )
+                  .join(" / ");
+
+              return `"${row.alias}"${variants ? ` (including ${variants})` : ""} → ${row.ownerLabel}`;
+            }
+          )
+          .join("; ")
+      : "none";
+
+  return `
+RELATIONSHIP-SPECIFIC NAME / PET-NAME OWNERSHIP — HARD:
+- CURRENT DIRECT TARGET: ${target.name} [${target.id}].
+- SELF's Connections may contain a private nickname/pet-name that SELF uses for ONE PARTICULAR person. That form of address belongs ONLY to the person named in that SAME Connections row.
+- Relationship-specific addresses that belong to CURRENT TARGET: ${targetText}.
+- Relationship-specific addresses in SELF's sheet that belong to OTHER people and are FORBIDDEN as a vocative for ${target.name}: ${forbiddenText}.
+- NEVER translate, anglicize, shorten, reinterpret or semantically imitate another person's pet-name and attach it to CURRENT TARGET.
+- Example principle: if SELF's Connections says SELF calls Person A "X", SELF may not call Person B "X", a translation of X, or a title-equivalent of X.
+`;
+}
+
+function sanitizeRelationshipSpecificAddressLeak(
+  w,
+  actorId,
+  targetId,
+  value
+) {
+  let text =
+    String(
+      value || ""
+    );
+
+  if (
+    !text ||
+    !w ||
+    !actorId ||
+    !targetId ||
+    actorId === targetId
+  ) {
+    return text;
+  }
+
+  const actor =
+    charById(
+      w,
+      actorId
+    );
+
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (
+    !actor ||
+    !target
+  ) {
+    return text;
+  }
+
+  const rows =
+    relationshipSpecificAddressRows(
+      actor
+    );
+
+  if (!rows.length) {
+    return text;
+  }
+
+  const targetRelationshipAliases =
+    new Set(
+      relationshipSpecificAddressesForTarget(
+        w,
+        actorId,
+        targetId
+      )
+        .flatMap(
+          (row) =>
+            row.variants || []
+        )
+        .map(
+          (alias) =>
+            normalizeCharacterIdentityText(
+              alias
+            )
+        )
+        .filter(Boolean)
+    );
+
+  const targetIdentityAliases =
+    new Set(
+      directAddressAliasesForCharacter(
+        target
+      )
+        .map(
+          (alias) =>
+            normalizeCharacterIdentityText(
+              alias
+            )
+        )
+        .filter(Boolean)
+    );
+
+  const forbidden = [];
+
+  rows
+    .filter(
+      (row) =>
+        !relationshipAddressOwnerMatchesTarget(
+          w,
+          row.ownerLabel,
+          target
+        )
+    )
+    .forEach(
+      (row) => {
+        (
+          row.variants || []
+        )
+          .forEach(
+            (alias) => {
+              const normalized =
+                normalizeCharacterIdentityText(
+                  alias
+                );
+
+              if (
+                !normalized ||
+                targetRelationshipAliases.has(
+                  normalized
+                ) ||
+                targetIdentityAliases.has(
+                  normalized
+                )
+              ) {
+                return;
+              }
+
+              if (
+                !forbidden.some(
+                  (existing) =>
+                    normalizeCharacterIdentityText(
+                      existing
+                    ) ===
+                    normalized
+                )
+              ) {
+                forbidden.push(
+                  alias
+                );
+              }
+            }
+          );
+      }
+    );
+
+  if (!forbidden.length) {
+    return text;
+  }
+
+  const replacement =
+    preferredRelationshipSpecificAddressForTarget(
+      w,
+      actorId,
+      targetId
+    ) ||
+    preferredDirectAddressForCharacter(
+      w,
+      actorId,
+      targetId
+    ) ||
+    "";
+
+  forbidden
+    .sort(
+      (a, b) =>
+        b.length -
+        a.length
+    )
+    .forEach(
+      (alias) => {
+        const escaped =
+          regexEscapeLiteral(
+            alias
+          );
+
+        /*
+         * Opening / sentence-initial vocative.
+         */
+        text =
+          text.replace(
+            new RegExp(
+              `(^|[.!?]\\s+)(["'“”‘’(]*)(?:${escaped})(\\s*[,!:;—-]\\s*)`,
+              "gi"
+            ),
+            (_m, lead, quote, punct) =>
+              replacement
+                ? `${lead}${quote}${replacement}${punct}`
+                : `${lead}${quote}`
+          );
+
+        /*
+         * Mid-sentence comma-delimited vocative:
+         * "Come on, Marquise, you know better."
+         */
+        text =
+          text.replace(
+            new RegExp(
+              `([,;:—-]\\s*)(?:${escaped})(\\s*[,;:—-]\\s*)`,
+              "gi"
+            ),
+            (_m, lead, tail) =>
+              replacement
+                ? `${lead}${replacement}${tail}`
+                : `${lead}`
+          );
+
+        /*
+         * Trailing vocative:
+         * "... over to your turf, Marquise."
+         */
+        text =
+          text.replace(
+            new RegExp(
+              `([,;:—-]\\s*)(?:${escaped})(?=\\s*[,;:!?.”’"']*(?:$|\\n))`,
+              "gi"
+            ),
+            (_m, lead) =>
+              replacement
+                ? `${lead}${replacement}`
+                : ""
+          );
+      }
+    );
+
+  return text
+    .replace(
+      /^[\s,;:—-]+/,
+      ""
+    )
+    .replace(
+      /\s+([,.!?;:])/g,
+      "$1"
+    )
+    .replace(
+      / {2,}/g,
+      " "
+    )
+    .trim();
+}
+
 function preferredDirectAddressForCharacter(w, actorId, targetId) {
   const target = charById(w, targetId);
   if (!target) return "";
@@ -19363,6 +20085,19 @@ function sanitizeWrongCharacterVocative(w, actorId, targetId, value) {
 function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
   let text = sanitizeIncorrectSenseiAddress(w, actorId, targetId, value);
   text = sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, text);
+
+  /*
+   * Connections-owned pet names are person-specific too.
+   * This runs before generic wrong-character nickname cleanup because these
+   * aliases may exist only inside SELF's relationship row, not in Nickname.
+   */
+  text = sanitizeRelationshipSpecificAddressLeak(
+    w,
+    actorId,
+    targetId,
+    text
+  );
+
   text = sanitizeWrongCharacterVocative(w, actorId, targetId, text);
   text = sanitizeOrientationIncompatibleRomanceText(w, actorId, targetId, text);
   text = sanitizeDisallowedFlirtText(w, actorId, targetId, text);
@@ -20238,7 +20973,7 @@ CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - PRIVATE KNOWLEDGE BOUNDARY: one character's Connections field never becomes another character's knowledge automatically. Another character may know that person/fact only if it also exists in their own canon or they actually learned it during play and retained it in memory.
 - CROSS-REFERENCE CANON ACROSS FIELDS: the same relationship, rank or role may appear in history, extra info, organizations, relationships, rank or other fields. Repeated/consistent evidence is strong canon. Do not lose a fact just because it is not stored in one preferred field.
 - HIERARCHY AND ADDRESS ARE RELATIONSHIP-SPECIFIC: if someone is THIS character's own sensei, default direct address is "Sensei + surname" (for example, Sensei Silver), not the sensei's casual first name, unless explicit canon establishes another private address. Do NOT automatically call somebody else's sensei "Sensei". A dangerous/high-authority sensei should not receive casual consequence-free disrespect from non-sensei characters without strong canon/current cause; another sensei is a peer authority and may challenge or disrespect them if canon supports it.
-- NAME / NICKNAME OWNERSHIP IS ABSOLUTE: every SELF identifier belongs to THAT character — full name, first name, surname, nickname and @handle. Never address a different person using SELF's own name, surname, nickname, handle, or an invented shortening/pet-form derived from SELF's identity. Resolve the addressee exclusively from TARGET identity fields. If TARGET has no established nickname, use TARGET's real first name / valid title or omit the vocative instead of inventing one.
+- NAME / NICKNAME OWNERSHIP IS ABSOLUTE: every identifier belongs to the exact person whose character-sheet field or Connections row owns it — full name, first name, surname, Nickname, @handle AND relationship-specific pet names/forms of address. Never address a different person using somebody else's identifier. A pet name written inside SELF's Connections row belongs ONLY to the person named in that SAME row; never translate, anglicize, shorten or reinterpret it and attach it to another target. Resolve the addressee exclusively from CURRENT TARGET identity + SELF's Connections row about THAT SAME target. If CURRENT TARGET has no established form of address, use their real first name / valid title or omit the vocative instead of borrowing one from another relationship.
 - Reconcile every response with the ENTIRE relevant character sheet: identity, occupation/job/school, role, rank/title, dojo, organization/affiliation/side, personality, traits, speech style, full history, secrets, fears, goals, likes, abilities/combat skills, target-specific Connections, dynamic relationships and current memories.
 - Occupation and faction are NOT decoration. A waitress, student, doctor, sensei, fighter, criminal, CEO, soldier etc. should know, post about, schedule around and behave according to that life. A Cobra Kai / Iron Dragons / Miyagi-side / Wasabi character must know which side THEY personally belong to and distinguish that from rivals merely mentioned in their history.
 - HUMAN CONVERSATIONAL CONTINUITY: identify what the other person just did socially — compliment, question, joke, invitation, apology, provocation, flirting, support — and respond to THAT act. A dark, dominant, sarcastic or rude character may react smugly, awkwardly, teasingly, suspiciously or tersely to praise, but must not manufacture a random "stop texting / leave me alone" boundary with no current reason.
