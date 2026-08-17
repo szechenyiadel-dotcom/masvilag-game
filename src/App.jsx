@@ -10969,32 +10969,42 @@ function commentCharacterDigitalStyleText(c) {
 function commentCharacterExplicitEmojiStyle(c) {
   if (!c) return false;
 
-  const raw =
+  /*
+   * Emoji HABIT is a writing-style fact.
+   * Only SELF's Speech/Voice may prove it by example. A random emoji in Bio,
+   * Extra, Personality prose or another descriptive field is NOT evidence that
+   * the character personally comments with emojis.
+   */
+  const writingExamples =
     [
-      c.personality,
-      c.traits,
       c.speech,
       c.voice,
-      c.bio,
-      c.extra,
     ]
       .filter(Boolean)
       .join(" ");
 
-  /*
-   * Explicit emoji examples in the character's own writing are the strongest
-   * evidence that emoji use is actually part of THEIR voice.
-   */
   if (
     emojiTokens(
-      raw
+      writingExamples
     ).length
   ) {
     return true;
   }
 
+  /*
+   * Explicit textual instructions may also establish an emoji/texting habit,
+   * but still only from SELF's style-relevant fields.
+   */
   const style =
-    raw.toLowerCase();
+    [
+      c.speech,
+      c.voice,
+      c.traits,
+      c.personality,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
 
   return /(?:uses?\s+emojis?|emoji[- ]?(?:heavy|user|style)|text(?:s|ing)?\s+with\s+emojis?|chronically\s+online|very\s+online|internet[- ]native|meme[- ]?(?:heavy|lover|brain)|social[- ]media[- ]?(?:obsessed|native)|online\s+personality|playful\s+texter|expressive\s+texter|chaotic\s+texter|flirty\s+texter)/i.test(
     style
@@ -11042,6 +11052,16 @@ function commentEmojiPolicy(
    * This prevents provider degeneration such as pages of 😂😭💀 while keeping
    * a genuinely emoji-using older character possible in a restrained way.
    */
+  /*
+   * 60+ HARD RULE:
+   * public comment/reply emoji = ZERO, regardless of any generic "online" or
+   * expressive trait. This keeps older adults/senseis from sounding like a
+   * Gen-Z reaction account.
+   */
+  const hardSixtyPlusNoEmoji =
+    knownAge &&
+    age >= 60;
+
   const hardFortyFivePlusDefault =
     knownAge &&
     age >= 45;
@@ -11056,16 +11076,24 @@ function commentEmojiPolicy(
     hardOlderMaleDefault;
 
   const allowEmoji =
-    restrictedOlder
-      ? explicitlyEmoji
-      : true;
+    hardSixtyPlusNoEmoji
+      ? false
+      : (
+          restrictedOlder
+            ? explicitlyEmoji
+            : true
+        );
 
   const maxEmojiTokens =
-    !allowEmoji
+    hardSixtyPlusNoEmoji
       ? 0
-      : restrictedOlder
-        ? 1
-        : 999;
+      : (
+          !allowEmoji
+            ? 0
+            : restrictedOlder
+              ? 1
+              : 999
+        );
 
   return {
     age:
@@ -11080,6 +11108,8 @@ function commentEmojiPolicy(
     allowEmoji,
 
     maxEmojiTokens,
+
+    hardSixtyPlusNoEmoji,
 
     hardFortyFivePlusDefault,
 
@@ -11270,9 +11300,10 @@ HARD RULES:
 - Do NOT write every commenter as a 20-year-old TikTok user.
 - Do NOT make older characters suddenly say 'rizz', 'delulu', 'no cap', 'fr fr', 'it's giving', 'slay', 'you ate', etc. unless SELF's own sheet actually supports that online voice.
 - Gen Z characters may sound Gen Z when their own personality permits it, but still keep each individual character distinct.
-- 45+ DEFAULT: ZERO emoji in public comments/replies. If SELF's own sheet explicitly establishes emoji/online-texting behavior, MAXIMUM ONE emoji is allowed — never an emoji chain, row or emoji-only wall.
-- 35+ MALE DEFAULT: ZERO emoji unless SELF's own character sheet explicitly establishes emoji/online-texting behavior; even then MAXIMUM ONE emoji. This is enforced after generation too.
-- Emoji is never mandatory for any age.
+- 60+ HARD RULE: ZERO emoji in public comments/replies, with NO override. Do not use hearts, skulls, crying faces, eye emojis, smileys or any other emoji.
+- 45–59 DEFAULT: ZERO emoji. Only an explicit SELF Speech/Voice texting habit may allow MAXIMUM ONE emoji — never an emoji chain, row or emoji-only wall.
+- 35+ MALE DEFAULT: ZERO emoji unless SELF's own Speech/Voice clearly establishes emoji/texting behavior; even then MAXIMUM ONE emoji.
+- Emoji is NEVER mandatory for any age. Character fidelity is more important than making the comment section look visually "social".
 - Keep the comment natural for the relationship and exact post; generation affects HOW SELF says it, not WHAT happened.
 `;
 }
@@ -13253,6 +13284,73 @@ SHORT STATUS TOPIC LOCK:
 `;
 }
 
+function socialCommentMatchesPartyQuestionTopic(value) {
+  const raw =
+    String(
+      value || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return false;
+
+  /*
+   * Natural direct answers / refusals / clarifications.
+   */
+  if (
+    /^(?:yes|yeah|yep|yup|sure|maybe|probably|absolutely|definitely|nah|nope|no|never|depends|where|when|who|whose|what\s+time|why|bet|fine|okay|ok|i['’]?m\s+in|im\s+in|i['’]?m\s+out|im\s+out|i['’]?m\s+down|im\s+down|count\s+me\s+in|hell\s+yes|hell\s+no|only\s+if|not\s+if|not\s+with|without\s+me|finally\b|about\s+time\b|thought\s+you['’]?d\s+never\s+ask\b|say\s+less\b|i['’]?ll\s+be\s+there\b|i['’]?m\s+there\b)/i.test(
+      raw
+    )
+  ) {
+    return true;
+  }
+
+  /*
+   * Direct party/invitation logistics or social participation.
+   */
+  if (
+    /\b(?:party|invite|invited|invitation|host|hosting|where|when|what\s+time|who['’]?s|whose|coming|going|there|bring|drinks?|address|dress\s*code|tonight|tomorrow|afterparty|after-party|pregame|pre-game|plus\s*one|guest\s*list|music|dj|place|your\s+place|my\s+place|ours|ride|pickup|pick\s+me\s+up)\b/i.test(
+      raw
+    )
+  ) {
+    return true;
+  }
+
+  /*
+   * Character-faithful adult/mentor refusal can reference a REAL competing
+   * obligation, but it must clearly function as an answer to the party.
+   * "Training at six tomorrow." is valid; a random dojo lecture is not.
+   */
+  if (
+    /(?:\b(?:training|practice|work|shift|class|school|meeting|dojo)\b.{0,35}\b(?:tomorrow|tonight|morning|early|at\s+\d|instead|first)\b|\b(?:tomorrow|tonight|morning|early)\b.{0,35}\b(?:training|practice|work|shift|class|school|meeting|dojo)\b)/i.test(
+      raw
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function socialCommentHasPartyQuestionTopicDrift(value) {
+  const raw =
+    String(
+      value || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return false;
+
+  /*
+   * Strong signals of a completely different conversation under a bare
+   * "party?" post. These are not banned globally, only for this exact mode.
+   */
+  return /\b(?:playing\s+games?\s+online|games?\s+online|posturing|discipline\s+as\s+you|pretend\s+this\s+isn['’]?t\s+mutual|isn['’]?t\s+mutual|keeping\s+up\s+appearances|what\s+they\s+post|rules\s+don['’]?t\s+apply|cobra\s+kai\s+performance)\b/i.test(
+    raw
+  );
+}
+
 function socialCommentAnswersShortQuestion(
   post,
   value
@@ -13395,6 +13493,20 @@ function socialCommentGroundedInExactPost(
     return false;
   }
 
+  if (
+    mode === "party-question" &&
+    (
+      socialCommentHasPartyQuestionTopicDrift(
+        raw
+      ) ||
+      !socialCommentMatchesPartyQuestionTopic(
+        raw
+      )
+    )
+  ) {
+    return false;
+  }
+
   /*
    * For recognized SHORT MUNDANE STATUS posts only, enforce the obvious topic
    * family as a deterministic guard. This catches "work has been a lot" ->
@@ -13433,8 +13545,9 @@ function socialCommentExactPostGroundingCard(
   const special =
     mode === "party-question"
       ? `
-- THIS IS A SHORT PARTY QUESTION/INVITATION. A valid comment must answer the party idea, ask a party detail, react to attending/not attending, hosting, timing, location, invite, drinks, who is coming, etc.
-- Relationship may make that answer warm, sarcastic, flirty, hostile, possessive or dry — but it may NOT replace the party topic with an unrelated insult/challenge.
+- THIS IS A SHORT PARTY QUESTION/INVITATION. Every top-level comment must ACTUALLY answer/react to the party: yes/no/maybe, attendance, hosting, timing, location, invite, drinks, guest list, transport, music, or a directly competing obligation.
+- CHARACTER FIDELITY STILL APPLIES: a strict older sensei may answer "No.", "Training at six tomorrow.", or another terse age-/Speech-/Voice-appropriate refusal. A rival may be sarcastic about THE PARTY. A friend may ask where/when. A crush may ask who is going.
+- Relationship/personality changes HOW the party answer is phrased; it may NOT replace PARTY with an unrelated dojo lecture, romance accusation, old argument, random post critique or generic insult.
 `
       : mode === "short-question"
         ? `
@@ -29587,11 +29700,13 @@ ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD GROUNDED MINIM
 - Ritkán 31-45 szó is megengedett, ha ettől lesz igazán karakterhű és természetes.
 - A rövidség NEM cél. Ha a karakter beszédes, lelkes, kaotikus, flörtölős, pletykás, agresszív vagy érzelmes, ezt ténylegesen mondd ki a kommentben.
 - Különösen TILOS egymás után több 1-2 szavas kommentet gyártani csak azért, mert az social-media formátum.
-- EMOJI AKTÍV HASZNÁLAT: az online/fiatalos/érzelmes/kaotikus/flörtölős karakterek kommentjeinek jelentős részében használj 1-2 karakterhez illő emojit. Ne hagyd ki automatikusan az emojit. Az emoji lehet a mondat elején, közepén vagy végén. A visszafogott karaktereknél lehet nulla, de a teljes kommentcsomag ne legyen emoji nélküli.
+- EMOJI NEM KÖTELEZŐ ÉS NEM CSOMAGSZINTŰ DÍSZÍTÉS. Minden karakter külön a SAJÁT COMMENT AGE / GENERATION / DIGITAL VOICE kártyáját kövesse.
+- 60+ karakternek kommentben/replyban ZERO emoji. Ezt sem relationship, sem "expressive", "sarcastic", "online" vagy más általános personality-jel nem írhatja felül.
+- Fiatalabb karakter is csak akkor emojizzon, ha az a SAJÁT Speech/Voice/personality alapján természetes. A teljes kommentcsomag nyugodtan lehet emoji nélküli.
 - Egy 1-3 szavas reakció teljesen jó komment.
 - Egyetlen szó is lehet természetes komment.
-- Emoji + néhány szó is lehet teljes komment.
-- Ritkán akár csak emoji is lehet teljes komment, ha az adott karakter stílusába illik.
+- Emoji + néhány szó csak annál lehet teljes komment, akinek a saját kor-/stíluskártyája ezt engedi.
+- Emoji-only komment csak akkor megengedett, ha az adott karakter saját stílusa és kor-szabálya ténylegesen engedi; 60+ esetén soha.
 - Ne próbálj minden kommentből teljes, nyelvtanilag tökéletes mondatot csinálni.
 - A töredékes mondatok, félbehagyott reakciók, rövid kérdések és spontán beszólások természetesek.
 - Ne írjanak hosszú bekezdéseket.
@@ -29913,6 +30028,7 @@ HARD RULES:
 - Return EXACTLY ${Math.min(missing, candidates.length)} DIFFERENT character IDs when that many candidates are listed.
 - If a candidate's first dramatic/sarcastic idea is not grounded, rewrite it into a simpler grounded reaction instead of omitting the character.
 - For a SHORT STATUS TOPIC LOCK, the repaired comment MUST stay inside that exact status topic family. Rivalry/obsession/friendship modifies tone only; it cannot supply a different subject.
+- For POST RESPONSE MODE=party-question, every repaired comment MUST answer/react to the party itself. If a dramatic line drifts into dojo/romance/old-conflict material, rewrite it as a character-faithful PARTY response instead of keeping the unrelated drama.
 - One fresh TOP-LEVEL comment per character. reply_to MUST be empty.
 - Likes do not count.
 - AI → AI posts count exactly the same as AI → player posts.
