@@ -12908,15 +12908,16 @@ function connectionsCommentToneMismatch(
 }
 
 function socialPostHasVisibleImage(post) {
+  /*
+   * Comment grounding follows what is ACTUALLY visible in the feed.
+   * imageDescription is metadata and by itself must never turn a text-only
+   * post into an image post.
+   */
   return Boolean(
     post &&
     (
       post.imageId ||
-      post.image ||
-      String(
-        post.imageDescription ||
-        ""
-      ).trim()
+      post.image
     )
   );
 }
@@ -13031,6 +13032,225 @@ function socialPostQuestionMode(post) {
   }
 
   return "none";
+}
+
+function socialShortStatusTopicProfile(post) {
+  if (
+    !post ||
+    socialPostHasVisibleImage(
+      post
+    )
+  ) {
+    return null;
+  }
+
+  const raw =
+    String(
+      post.text || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return null;
+
+  const words =
+    raw
+      .replace(/[?!.,;:()[\]{}"'“”‘’]+/g, " ")
+      .split(/\s+/)
+      .filter(Boolean);
+
+  /*
+   * Deliberately narrow: only short text statuses get this deterministic topic
+   * guard. Long/complex posts stay model-grounded.
+   */
+  if (
+    words.length > 15 ||
+    /\?$/.test(raw)
+  ) {
+    return null;
+  }
+
+  const lower =
+    raw.toLowerCase();
+
+  const families = [
+    {
+      id: "work",
+      post:
+        /\b(?:work|job|shift|office|meeting|meetings|deadline|deadlines|client|clients|boss|coworker|coworkers|working|worked|overworked|munka|mel[oó]|m[uű]szak|iroda|hat[aá]rid[oő]|[uü]gyf[eé]l|f[oő]n[oö]k|dolgoz(?:om|ok|ni|tam|ott|ik)?)\b/i,
+
+      comment:
+        /\b(?:work|worked|working|job|shift|office|meeting|meetings|deadline|deadlines|client|clients|boss|coworker|coworkers|overworked|busy|stress|stressed|stressful|tired|exhausted|burned?\s*out|burnout|rough|break|rest|day\s*off|time\s*off|sleep|hours|schedule|survive|surviving|munka|mel[oó]|m[uű]szak|iroda|hat[aá]rid[oő]|[uü]gyf[eé]l|f[oő]n[oö]k|dolgoz|f[aá]radt|kimer[uü]lt|stressz|pihen|szabadnap|sz[uü]net)\b/i,
+
+      label:
+        "work / workload / being busy or drained",
+    },
+
+    {
+      id: "training",
+      post:
+        /\b(?:training|practice|gym|workout|sparring|spar|dojo|karate|training\s+camp|edz[eé]s|edzeni|edzettem|gyakorl[aá]s|kondi|terem|sparring|karate|dojo)\b/i,
+
+      comment:
+        /\b(?:training|practice|gym|workout|sparring|spar|dojo|karate|coach|sensei|sore|hurt|rest|recovery|round|rounds|session|edz[eé]s|edzeni|gyakorl[aá]s|kondi|terem|sparring|karate|dojo|sensei|izoml[aá]z|pihen|regener[aá]l)\b/i,
+
+      label:
+        "training / workout / dojo activity",
+    },
+
+    {
+      id: "sleep",
+      post:
+        /\b(?:tired|exhausted|sleep|sleepy|awake|insomnia|bed|nap|can['’]?t\s+sleep|f[aá]radt|kimer[uü]lt|alv[aá]s|aludni|[aá]lmos|[eé]bren|nem\s+tudok\s+aludni)\b/i,
+
+      comment:
+        /\b(?:tired|exhausted|sleep|sleepy|awake|insomnia|bed|nap|rest|coffee|caffeine|f[aá]radt|kimer[uü]lt|alv[aá]s|aludni|[aá]lmos|[eé]bren|pihen|k[aá]v[eé])\b/i,
+
+      label:
+        "tiredness / sleep / rest",
+    },
+
+    {
+      id: "food",
+      post:
+        /\b(?:food|hungry|dinner|lunch|breakfast|eat|eating|restaurant|coffee|drink|drinks|pizza|burger|sushi|kaja|[eé]hes|vacsora|eb[eé]d|reggeli|enni|[eé]tterem|k[aá]v[eé]|ital)\b/i,
+
+      comment:
+        /\b(?:food|hungry|dinner|lunch|breakfast|eat|eating|restaurant|coffee|drink|drinks|pizza|burger|sushi|order|bring|share|kaja|[eé]hes|vacsora|eb[eé]d|reggeli|enni|[eé]tterem|k[aá]v[eé]|ital|rendel|hozz)\b/i,
+
+      label:
+        "food / meal / drink",
+    },
+
+    {
+      id: "travel",
+      post:
+        /\b(?:trip|travel|flight|airport|vacation|holiday|hotel|beach|road\s*trip|packing|utaz[aá]s|utazom|rep[uü]l|rep[uü]l[oő]|rept[eé]r|nyaral[aá]s|hotel|tengerpart|pakol)\b/i,
+
+      comment:
+        /\b(?:trip|travel|flight|airport|vacation|holiday|hotel|beach|road\s*trip|packing|safe\s+flight|have\s+fun|when|where|utaz[aá]s|utazom|rep[uü]l|rept[eé]r|nyaral[aá]s|hotel|tengerpart|pakol|j[oó]\s+utat|merre|mikor)\b/i,
+
+      label:
+        "travel / trip / vacation",
+    },
+  ];
+
+  const matched =
+    families.find(
+      (family) =>
+        family.post.test(
+          lower
+        )
+    );
+
+  if (!matched) {
+    return null;
+  }
+
+  return {
+    id:
+      matched.id,
+
+    label:
+      matched.label,
+
+    commentRegex:
+      matched.comment,
+
+    postText:
+      raw,
+  };
+}
+
+function socialCommentIsNaturalShortStatusResponse(value) {
+  const raw =
+    String(
+      value || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return false;
+
+  return /^(?:same\b|literally\s+same\b|felt\b|real\b|mood\b|again\??$|already\??$|still\??$|you\s+good\??$|u\s+good\??$|you\s+okay\??$|are\s+you\s+okay\??$|that\s+sucks\b|sounds\s+rough\b|rough\s+day\??$|rough\s+week\??$|hang\s+in\s+there\b|take\s+care\b|you['’]?ve\s+got\s+this\b|you\s+got\s+this\b|same\s+here\b|ismer[oő]s\b|[aá]t[eé]rzem\b|te\s+j[oó]l\s+vagy\??$|minden\s+ok[eé]\??$|kitart[aá]s\b|ez\s+sz[ií]v[aá]s\b)/i.test(
+    raw
+  );
+}
+
+function socialCommentMatchesShortStatusTopic(
+  post,
+  value
+) {
+  const profile =
+    socialShortStatusTopicProfile(
+      post
+    );
+
+  if (!profile) {
+    return true;
+  }
+
+  const raw =
+    String(
+      value || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw) return false;
+
+  if (
+    profile.commentRegex.test(
+      raw
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    socialCommentIsNaturalShortStatusResponse(
+      raw
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function socialShortStatusGroundingCard(post) {
+  const profile =
+    socialShortStatusTopicProfile(
+      post
+    );
+
+  if (!profile) return "";
+
+  const familyExamples = {
+    work:
+      `Required semantic direction: work stress, workload, shifts, deadlines, being busy/tired, needing rest/time off, or a direct question about how work is going.`,
+
+    training:
+      `Required semantic direction: training, practice, soreness, recovery, dojo/gym, sparring, or asking how the session went.`,
+
+    sleep:
+      `Required semantic direction: tiredness, sleep, rest, insomnia, coffee/caffeine, or checking if the author is okay.`,
+
+    food:
+      `Required semantic direction: the meal/drink, being hungry, ordering/bringing/sharing food, or asking where/what they are eating.`,
+
+    travel:
+      `Required semantic direction: the trip, flight, airport, destination, packing, hotel/vacation, or asking where/when they are going.`,
+  };
+
+  return `
+SHORT STATUS TOPIC LOCK:
+- This is a short mundane status about: ${profile.label}.
+- A top-level comment MUST stay in that semantic family or be a direct natural response to the author's state.
+- Relationship/personality may change TONE only. It may NOT replace "${profile.label}" with an unrelated dojo feud, old argument, appearance critique, random accusation or different world event.
+- ${familyExamples[profile.id] || ""}
+- If a rival wants to be sarcastic, sarcasm still has to attach to THIS topic. Principle: "shocking, you actually worked" is grounded; a random Cobra Kai accusation is not.
+`;
 }
 
 function socialCommentAnswersShortQuestion(
@@ -13176,18 +13396,19 @@ function socialCommentGroundedInExactPost(
   }
 
   /*
-   * IMPORTANT:
-   * Do NOT use a tiny lexical whitelist as a hard semantic gate here.
-   * Real social answers to "Party?" can be "finally", "thought you'd never ask",
-   * "only if Sam isn't DJing", etc. Those are semantically valid even though
-   * they do not begin with yes/no/where/when.
-   *
-   * Hard rejection is reserved for PROVABLE contradictions above:
-   * - hallucinated visual content on a text-only post;
-   * - an obviously contextless confrontation under a neutral short question.
-   *
-   * Finer semantic fit is enforced in the generation + repair prompts.
+   * For recognized SHORT MUNDANE STATUS posts only, enforce the obvious topic
+   * family as a deterministic guard. This catches "work has been a lot" ->
+   * random dojo accusation without reviving the old Party?-whitelist bug.
    */
+  if (
+    !socialCommentMatchesShortStatusTopic(
+      post,
+      raw
+    )
+  ) {
+    return false;
+  }
+
   void trigger;
 
   return true;
@@ -13234,6 +13455,7 @@ ${hasImage
   ? `- Visual reactions may use ONLY details in the supplied image description.`
   : `- TEXT-ONLY HARD LOCK: there is NO visible photo. Never mention/invent a photo, picture, selfie, mugshot, photographer, pose, outfit, facial look, "you look like...", or any other visible appearance detail.`}
 ${special}
+${socialShortStatusGroundingCard(post)}
 `;
 }
 
@@ -29274,6 +29496,7 @@ KONKRÉT POSZTHOZ KÖTÉS:
 - Minden komment ELŐTT alkalmazd a SHARED POST COMPREHENSION jelentést; ne kezdj karakterreakciót addig, amíg a poszt alapjelentése nincs rögzítve.
 - POSZT-AZONOSÍTÁS HARD RULE: a jelenlegi célposzt mindig ${post.id}, szerzője mindig ${post.authorId} (${author ? author.name : "?"}). A kommentelőnek ezt nem szabad elveszítenie a generálás során.
 - A komment szövegének konkrétan erre a posztra kell reagálnia: annak captionjére, képére, hangulatára vagy a már ebben a threadben elhangzott kommentre.
+- RÖVID HÉTKÖZNAPI STÁTUSZNÁL ("work has been a lot lately", "I'm exhausted", "training killed me today" stb.) ne gyárts mögé rejtett drámát csak azért, mert a kommentelő rival/crush/obsessed. Előbb a hétköznapi témára reagáljon; a kapcsolat csak azt dönti el, HOGYAN.
 - Ha egy komment másik posztra is ugyanúgy illene, ellenőrizd újra a jelenlegi poszt konkrét részleteit, és csak akkor fogadd el, ha van egyértelmű kapcsolat EZHEZ a poszthoz.
 - A poszt szerzőjének személye nem cserélhető fel egy másik karakterrel. Ha ${author ? author.name : "?"} [${post.authorId}] posztolt, a reakciókat az ő karaktere, a vele való kapcsolat és az ő konkrét posztja szűri.
 - THIRD-PARTY SCOPE: olyan ember, aki nincs név/@mention/image-confirmation formájában EBBEN a posztban vagy a közvetlen parent kommentben, NE kerüljön be a kommentbe pusztán emlékből, trendből, crushból vagy világdrámából. Különösen ne hozd be automatikusan a játékost egy AI→AI poszt alá.
@@ -29689,6 +29912,7 @@ HARD RULES:
 - If one of those IDs is in ELIGIBLE CHARACTERS, prioritize them when they can respond naturally to the exact post. Hidden obsession increases attention; it does not create an unrelated topic.
 - Return EXACTLY ${Math.min(missing, candidates.length)} DIFFERENT character IDs when that many candidates are listed.
 - If a candidate's first dramatic/sarcastic idea is not grounded, rewrite it into a simpler grounded reaction instead of omitting the character.
+- For a SHORT STATUS TOPIC LOCK, the repaired comment MUST stay inside that exact status topic family. Rivalry/obsession/friendship modifies tone only; it cannot supply a different subject.
 - One fresh TOP-LEVEL comment per character. reply_to MUST be empty.
 - Likes do not count.
 - AI → AI posts count exactly the same as AI → player posts.
@@ -30573,6 +30797,10 @@ function applyComments(n, postId, out, label) {
           c && c.trigger
         )
       ) {
+        /*
+         * Includes hard rejection of invented visual details and unrelated
+         * drama under a recognized short mundane status.
+         */
         return;
       }
 
