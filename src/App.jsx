@@ -9585,6 +9585,37 @@ function budgetAiRequest(
 async function runAiQueueWorker() {
   try {
     while (AI.queue.length) {
+      /*
+       * DIRECT PLAYER DM — TRUE PROVIDER EXCLUSIVITY.
+       *
+       * A previous patch limited NEW workers to one, but two workers that were
+       * already alive could both continue pulling background tasks. That meant
+       * a player's DM could still collide with queue-preempt-feed/provider TPM.
+       *
+       * Once a direct DM is pending, every extra worker retires after its
+       * current request, and the remaining worker may pull ONLY an interactive
+       * task. Background tasks stay queued until the DM attempt finishes.
+       */
+      if (
+        AI.directDmPending > 0 &&
+        AI.activeWorkers > 1
+      ) {
+        return;
+      }
+
+      if (
+        AI.directDmPending > 0 &&
+        !AI.queue.some(
+          (queuedTask) =>
+            queuedTask &&
+            Number(
+              queuedTask.priority
+            ) >= 50
+        )
+      ) {
+        return;
+      }
+
       AI.queue.sort((a, b) => {
         if (b.priority !== a.priority) return b.priority - a.priority;
         return a.seq - b.seq;
@@ -9592,6 +9623,22 @@ async function runAiQueueWorker() {
 
       const task = AI.queue.shift();
       if (!task) break;
+
+      if (
+        AI.directDmPending > 0 &&
+        Number(
+          task.priority
+        ) < 50
+      ) {
+        /*
+         * Defensive race guard: put a background task back untouched rather
+         * than starting it beside a player's private-message reply.
+         */
+        AI.queue.unshift(
+          task
+        );
+        return;
+      }
 
       try {
         for (let guard = 0; guard < 40; guard++) {
@@ -9639,6 +9686,25 @@ function pumpAiQueue() {
     AI.directDmPending > 0
       ? 1
       : AI.maxConcurrent;
+
+  /*
+   * The user may press Send before the direct-DM AI task itself is queued
+   * (for example while an attached image is being analysed). During that tiny
+   * window do NOT restart a worker merely because background work is waiting.
+   * The interactive `queued(...)` call will pump the lane as soon as ready.
+   */
+  if (
+    AI.directDmPending > 0 &&
+    !AI.queue.some(
+      (task) =>
+        task &&
+        Number(
+          task.priority
+        ) >= 50
+    )
+  ) {
+    return;
+  }
 
   while (
     AI.queue.length &&
@@ -40709,6 +40775,125 @@ ${en
 `;
 }
 
+async function repairDirectPlayerDmReply(
+  w,
+  actor,
+  playerText,
+  historyText,
+  outgoingImageDescription = ""
+) {
+  if (!w || !actor) return "";
+
+  const rel =
+    getRel(
+      w,
+      actor.id,
+      w.meId
+    );
+
+  const raw =
+    await askWorldJSONInteractive(
+      w,
+      directDmSystemPrompt(
+        w,
+        actor
+      ),
+      `${directPlayerDmContextCard(
+        w,
+        actor
+      )}
+
+DIRECT REPLY REPAIR — TEXT RESPONSE ONLY.
+
+CURRENT RELATIONSHIP:
+${relationshipBehaviorCard(
+  w,
+  actor.id,
+  w.meId
+)}
+
+CURRENT GROUNDED MEMORY:
+${characterMemoryCard(
+  w,
+  actor
+) || "none"}
+
+RECENT PRIVATE CHAT:
+${String(
+  historyText || ""
+).slice(-12000)}
+
+LATEST PLAYER MESSAGE — ANSWER THIS NOW:
+"${String(
+  playerText || ""
+).slice(0, 4000)}"
+
+${outgoingImageDescription
+  ? `THE PLAYER ALSO SENT AN IMAGE. VISIBLE CONTENT ONLY:\n${String(outgoingImageDescription).slice(0, 1800)}`
+  : ""}
+
+HARD:
+- Return ONE actual private-message reply from ${actor.name}.
+- Use ${actor.name}'s COMPLETE SELF sheet above for personality, Speech Style, Voice, casing and behavior.
+- Other-person facts are knowledge only; never absorb them as SELF style.
+- Answer the latest message directly.
+- No narration, no roleplay actions, no assistant language.
+- Do not return empty/skip.
+- Do not invent a photo unless an image description is supplied above.
+- Keep it natural for an actual DM; usually concise.
+
+JSON ONLY:
+{"reply":"actual DM reply"}${TAIL}`,
+      {
+        maxTries: 2,
+        maxTokens: 320,
+        timeoutMs: 30000,
+        maxSystemChars: 7000,
+        maxPromptChars: 56000,
+        maxBusyWaits: 2,
+        busyRetryCapMs: 65000,
+      }
+    );
+
+  let reply =
+    String(
+      raw &&
+      raw.reply ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!reply) return "";
+
+  reply =
+    enforceChatEmojiVariety(
+      w,
+      actor.id,
+      reply
+    );
+
+  reply =
+    sanitizePhoneDm(
+      w,
+      actor.id,
+      reply,
+      historyText
+    );
+
+  reply =
+    sanitizeUnjustifiedColdDm(
+      w,
+      actor.id,
+      playerText,
+      reply
+    );
+
+  return String(
+    reply || ""
+  ).trim();
+}
+
 function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply, onOpenScene }) {
   const { tt } = useLang();
   const { media, addImage } = useMedia();
@@ -40945,12 +41130,16 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
       requestWorld.meId
     );
 
-    const out = await askWorldJSONInteractive(
-      requestWorld,
-      directDmSystemPrompt(
+    let out = null;
+    let primaryDmError = null;
+
+    try {
+      out = await askWorldJSONInteractive(
         requestWorld,
-        c
-      ),
+        directDmSystemPrompt(
+          requestWorld,
+          c
+        ),
       `${directPlayerDmContextCard(
         requestWorld,
         c
@@ -41195,9 +41384,18 @@ Formátum:
         maxBusyWaits: 2,
         busyRetryCapMs: 65000,
       }
-    );
+      );
+    } catch (primaryDmErr) {
+      primaryDmError =
+        primaryDmErr;
 
-    const requestedReplyText = String(
+      console.warn(
+        "Primary direct DM generation failed; trying focused reply repair:",
+        primaryDmErr
+      );
+    }
+
+    let requestedReplyText = String(
       out && out.reply !== undefined
         ? out.reply
         : ""
@@ -41297,6 +41495,52 @@ Formátum:
         reply
       );
 
+    /*
+     * If the full DM call failed, returned no text, or a safety/continuity
+     * sanitizer legitimately removed the whole sentence, do one focused AI
+     * repair WHILE the chat still shows typing. This is still an actual model
+     * reply using the character's complete SELF sheet — not a canned fallback.
+     */
+    if (
+      !String(
+        reply || ""
+      ).trim() &&
+      !explicitImageRequest
+    ) {
+      try {
+        const repairedReply =
+          await repairDirectPlayerDmReply(
+            requestWorld,
+            c,
+            t,
+            hist,
+            outgoingImageDescription
+          );
+
+        if (
+          String(
+            repairedReply || ""
+          ).trim()
+        ) {
+          reply =
+            repairedReply;
+
+          requestedReplyText =
+            repairedReply;
+        }
+      } catch (repairDmErr) {
+        console.warn(
+          "Focused direct DM reply repair failed:",
+          repairDmErr
+        );
+
+        if (!primaryDmError) {
+          primaryDmError =
+            repairDmErr;
+        }
+      }
+    }
+
     if (
       explicitImageRequest &&
       !aiImageRef
@@ -41310,6 +41554,12 @@ Formátum:
     }
 
     if (!reply && !aiImageRef) {
+      if (
+        primaryDmError
+      ) {
+        throw primaryDmError;
+      }
+
       throw new Error(
         explicitImageRequest
           ? tt(
@@ -41549,6 +41799,12 @@ Formátum:
        * player message and the AI's actual sent reply are already stored through
        * deterministic chat/event memory paths above. */
     });
+
+    /*
+     * A reply is now committed to the local chat state. Clear a stale CHAT
+     * provider error only after that commit actually succeeded.
+     */
+    setErr("");
 
     /*
      * Text + fresh Snap esetén a chatválasz AZONNAL megjelenik.
