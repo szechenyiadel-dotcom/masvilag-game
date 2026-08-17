@@ -9395,6 +9395,35 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
     Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 25 * 1000
   )
 );
+
+/*
+ * ACTIVE SESSION FEED PULSE
+ *
+ * While the player is actually inside the visible app, aim for roughly one
+ * NEW AI feed post every five minutes. This is only a cadence target:
+ * per-character rolling-24h quotas remain authoritative, so nobody can exceed
+ * their own 3–5 posts / 24h or 1 image post / 24h.
+ */
+const LIVE_WORLD_ACTIVE_POST_TARGET_MS = Math.max(
+  3 * 60 * 1000,
+  Math.min(
+    8 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_ACTIVE_POST_INTERVAL_MS) ||
+      5 * 60 * 1000
+  )
+);
+
+function playerIsActivelyViewingWorld() {
+  if (
+    typeof document === "undefined"
+  ) {
+    return false;
+  }
+
+  return (
+    document.visibilityState !== "hidden"
+  );
+}
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1500, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 900));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
@@ -56265,7 +56294,26 @@ function feedNeedsFreshPost(w) {
     return Number((stats && stats.count) || 0) < AUTONOMOUS_CHARACTER_POST_MIN_24H;
   });
 
-  /* Catch up under-three bots visibly, then return to the normal slower pulse. */
+  /*
+   * When the player is actively inside the app, spread available daily posts
+   * across the session at roughly one new feed post every five minutes.
+   *
+   * IMPORTANT: fairPostCast() already excludes characters that reached their
+   * personal rolling-24h target, so this does NOT increase the 3–5 daily quota.
+   */
+  if (
+    playerIsActivelyViewingWorld()
+  ) {
+    return (
+      !last ||
+      now() - last >=
+        LIVE_WORLD_ACTIVE_POST_TARGET_MS
+    );
+  }
+
+  /*
+   * Background / non-visible behavior remains exactly as before.
+   */
   const target = belowMinimum
     ? Math.min(LIVE_WORLD_POST_TARGET_MS, 90 * 1000)
     : LIVE_WORLD_POST_TARGET_MS;
@@ -57228,8 +57276,9 @@ function planAutoAction(view) {
   }
 
   /*
-   * v65 FEED CADENCE
-   * 1) ÚJ POSZT — legkorábban kb. 10 percenként egy új autonóm feed-poszt.
+   * ACTIVE FEED CADENCE
+   * 1) ÚJ POSZT — amikor a játékos bent van, kb. 5 percenként egy új
+   * autonóm feed-poszt, amíg valamelyik AI saját 3–5/24h kerete engedi.
    */
   if (feedNeedsFreshPost(view) && !freshFeedPostCommentCandidate(view)) {
     return mkAction(
@@ -58266,13 +58315,22 @@ function runAutonomousFeedHeartbeat(w, update) {
 
   /*
    * LIGHTWEIGHT QUOTA HEARTBEAT:
-   * The normal scheduler already enforces the 3–5 posts / rolling 24h rule.
-   * This provider-free fallback only needs to rescue a stalled feed, not write
-   * every 12 seconds. Matching the existing 90s under-minimum catch-up pulse
-   * avoids unnecessary React/world-save churn while still reaching quota
-   * comfortably within 24 hours.
+   * During an active visible session the NORMAL AI post gets first chance at
+   * the five-minute mark. This provider-free fallback waits another ~75s and
+   * only rescues the feed if that richer post never materialized.
+   *
+   * Outside the visible app, preserve the old 90s fallback behavior exactly.
    */
-  const due = silence >= 90 * 1000;
+  const heartbeatTarget =
+    playerIsActivelyViewingWorld()
+      ? LIVE_WORLD_ACTIVE_POST_TARGET_MS +
+        75 * 1000
+      : 90 * 1000;
+
+  const due =
+    silence >=
+    heartbeatTarget;
+
   if (!due) return false;
 
   const candidate = cast[0];
@@ -58284,7 +58342,21 @@ function runAutonomousFeedHeartbeat(w, update) {
     const live = charById(n, candidate.id);
     if (!live || !characterCanAutonomouslyPost(n, live)) return;
     const liveLatest = lastAiFeedPostAt(n);
-    if (liveLatest && now() - liveLatest < 90 * 1000) return;
+
+    const liveHeartbeatTarget =
+      playerIsActivelyViewingWorld()
+        ? LIVE_WORLD_ACTIVE_POST_TARGET_MS +
+          75 * 1000
+        : 90 * 1000;
+
+    if (
+      liveLatest &&
+      now() - liveLatest <
+        liveHeartbeatTarget
+    ) {
+      return;
+    }
+
     const fallback = deterministicAutonomousFallbackPost(n, live.id);
     if (!fallback) return;
     created = Boolean(applyWorldStep(n, fallback));
