@@ -9385,31 +9385,34 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * genuinely fresh posts, then popup events, private contact and AI invitations.
  * These are safe public Vite build-time tuning values (no secrets).
  */
-/* v65 — autonomous feed posts are intentionally sparse. Other world activity
- * (comments, replies, DMs, groups, follows, gossip reactions) may continue between
- * posts, but a normal new AI feed post gets a hard ~10 minute floor. */
+/*
+ * AUTONOMOUS FEED CADENCE — REGULAR PER-CHARACTER POSTING
+ *
+ * The feed itself is allowed to pulse often, but an individual character has
+ * their own cooldown further below. That prevents one loud AI from flooding
+ * the timeline while still letting a larger cast keep the world visibly alive.
+ */
 const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  45 * 1000,
+  25 * 1000,
   Math.min(
-    8 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 25 * 1000
+    3 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 45 * 1000
   )
 );
 
 /*
  * ACTIVE SESSION FEED PULSE
  *
- * While the player is actually inside the visible app, aim for roughly one
- * NEW AI feed post every three minutes. This is only a cadence target:
- * per-character rolling-24h quotas remain authoritative, so nobody can exceed
- * their own 3–5 posts / 24h or 1 image post / 24h.
+ * While the player is actually inside the visible app, check for the next DUE
+ * AI roughly every 30 seconds. This does NOT mean the same AI posts every 30s:
+ * each character has an independent 7–16 minute cooldown and a rolling-24h cap.
  */
 const LIVE_WORLD_ACTIVE_POST_TARGET_MS = Math.max(
-  3 * 60 * 1000,
+  20 * 1000,
   Math.min(
-    8 * 60 * 1000,
+    90 * 1000,
     Number(import.meta.env.VITE_WORLD_ACTIVE_POST_INTERVAL_MS) ||
-      3 * 60 * 1000
+      30 * 1000
   )
 );
 
@@ -34471,22 +34474,21 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
   return createdReplyIds.length;
 }
 /*
- * CHARACTER-DRIVEN POST ACTIVITY
+ * CHARACTER-DRIVEN POST ACTIVITY — REGULARITY FIX
  *
- * Normál karaktereknél a napi social ritmus szándékosan visszafogott:
- * 1-2 saját poszt / gördülő 24 óra az alap, 3 a kemény felső plafon.
- * A pletykamédia NEM ide tartozik: az csak valódi publishable történésből
- * posztol, és külön gossip-cadence vezérli.
+ * Every normal AI has an independent social rhythm. The rolling-24h numbers are
+ * safety ceilings, NOT a reason to dump all posts into the first few minutes.
+ * A per-character cooldown below spreads posts across the whole active session.
+ * Gossip-media accounts remain outside this system and keep their own cadence.
  */
-const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 5;
-const AUTONOMOUS_CHARACTER_POST_MIN_24H = 3;
+const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 32;
+const AUTONOMOUS_CHARACTER_POST_MIN_24H = 8;
 const AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H = 1;
 
 /*
- * RECOVERY v99.3 — PER-CHARACTER SOCIAL RHYTHM
- * Every normal AI owns its own rolling 24-hour quota:
- * quieter = 3 posts, normal = 4, highly online = 5.
- * Five is a hard ceiling. Image quota is max one per character / rolling 24h.
+ * PER-CHARACTER SOCIAL RHYTHM
+ * quieter = target 12 posts / rolling 24h, normal = 16, highly online = 20.
+ * The 32-post hard ceiling is only a failsafe. One image / rolling 24h stays hard.
  */
 function autonomousGameDayIndex(w) {
   const elapsed = Math.max(0, Number(storySettingsOf(w).elapsedHours) || 0);
@@ -34583,13 +34585,29 @@ function autonomousPostStatsSnapshot(w) {
 }
 
 function autonomousCharacterPostTarget24h(w, c, activityOverride = null) {
-  if (!c) return 3;
+  if (!c) return 12;
   const activity = Number.isFinite(Number(activityOverride))
     ? Number(activityOverride)
     : Number(characterOnlineActivityProfile(w, c).post) || 0;
-  if (activity >= 1.15) return 5;
-  if (activity >= 0.82) return 4;
-  return 3;
+  if (activity >= 1.15) return 20;
+  if (activity >= 0.82) return 16;
+  return 12;
+}
+
+function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
+  if (!c) return 16 * 60 * 1000;
+  const activity = Number.isFinite(Number(activityOverride))
+    ? Number(activityOverride)
+    : Number(characterOnlineActivityProfile(w, c).post) || 0;
+
+  /*
+   * This is the actual per-character regularity clock. A very-online character
+   * can become due again after ~7 min, a normal one after ~11 min, and a quiet
+   * one after ~16 min. Different characters are staggered by fairPostCast().
+   */
+  if (activity >= 1.15) return 7 * 60 * 1000;
+  if (activity >= 0.82) return 11 * 60 * 1000;
+  return 16 * 60 * 1000;
 }
 
 function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
@@ -34619,9 +34637,10 @@ function autonomousPostTypeInstruction(w, cast) {
   });
 
   return [
-    "PER-AI RULE: every normal AI has its OWN rolling 24-hour quota of 3–5 posts.",
-    "Hard maximum is 5 posts per character in any rolling 24-hour window.",
-    "Characters below 3 posts in rolling 24h have priority until they reach the minimum naturally.",
+    "PER-AI RULE: every normal AI has its OWN independent posting rhythm and rolling-24h target of 12–20 posts depending on online activity.",
+    "Hard safety maximum is 32 posts per character in any rolling 24-hour window.",
+    "Characters below 8 posts in rolling 24h have priority, but their own cooldown still prevents burst-spam.",
+    "A character becomes eligible again only after their personal posting cooldown has elapsed: highly online ~7 min, normal ~11 min, quieter ~16 min.",
     "IMAGE HARD MAX: each character may have at most 1 image post in rolling 24h. This is per character, not global.",
     "All remaining posts should be text posts; image is optional, never required.",
     "OCCUPATION / ROLE / DOJO / ORGANIZATION ARE CONTEXT, NOT REQUIRED CAPTION TEXT: let them shape what the character plausibly does, notices, knows and sometimes posts about, but do NOT recite or list their job, responsibilities, club, faction, rank or affiliations in every post. Never write a profile/bio/resume-style string such as 'role · organization · supporter' merely to prove the canon. Mention these explicitly only when that specific post naturally calls for it.",
@@ -34635,11 +34654,17 @@ function characterCanAutonomouslyPost(w, c, snapshot = null) {
 
   const activity = Number(characterOnlineActivityProfile(w, c).post) || 0;
   const target = autonomousCharacterPostTarget24h(w, c, activity);
+  const gapMs = autonomousCharacterPostGapMs(w, c, activity);
   const stats = snapshot && snapshot.get(String(c.id))
     ? snapshot.get(String(c.id))
     : characterAutonomousPostStats24h(w, c.id);
 
-  return Number(stats.count || 0) < Math.min(5, target);
+  if (Number(stats.count || 0) >= Math.min(AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H, target)) {
+    return false;
+  }
+
+  const lastPostAt = Number(stats.lastPostAt || 0);
+  return !lastPostAt || now() - lastPostAt >= gapMs;
 }
 
 function fairPostCast(w) {
@@ -34655,13 +34680,17 @@ function fairPostCast(w) {
     const count = Number(stats.count || 0);
     const deficit = Math.max(0, target - count);
     const belowMinimum = count < AUTONOMOUS_CHARACTER_POST_MIN_24H;
-    const idleHours = stats.lastPostAt
-      ? Math.min(72, Math.max(0, (at - stats.lastPostAt) / 3600e3))
-      : 72;
+    const gapMs = autonomousCharacterPostGapMs(w, c, activity);
+    const idleMs = stats.lastPostAt
+      ? Math.max(0, at - stats.lastPostAt)
+      : gapMs * 4;
+    const overdueRatio = Math.max(1, idleMs / Math.max(1, gapMs));
+    const idleHours = Math.min(72, idleMs / 3600e3);
 
     const pressure =
       (belowMinimum ? 1000 : 0) +
       deficit * 180 +
+      overdueRatio * 120 +
       idleHours * 4 +
       activity * 30 -
       Number(stats.recentPosts48h || 0) * 3 +
@@ -34771,8 +34800,8 @@ KARAKTERHŰ POSZTOLÁS:
 - A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa, occupation/job-ja, dojo/organization oldala és az is, hogy egyáltalán posztolna-e valamiről, a SAJÁT karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
-- NAPI POSZTRITMUS: minden normál AI saját gördülő 24 órás kvótája 3–5 poszt; nincs közös globális feedlimit.
-- A 24 órán belül 3 poszt alatt álló AI-k kapjanak elsőbbséget; ugyanaz a karakter 5 fölé soha nem mehet.
+- POSZTRITMUS: minden normál AI saját, független ritmusban posztol. Online aktivitástól függő gördülő 24 órás célja 12–20 poszt, a 32-es plafon csak biztonsági hard limit; nincs közös globális feedlimit.
+- A 24 órán belül 8 poszt alatt álló AI-k kapjanak elsőbbséget, DE ugyanaz a karakter csak a saját 7–16 perces cooldownja lejárta után posztolhat újra.
 - Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
 - A FEED AKTÍV: ha a karakternek nincs különleges eseménye, akkor is posztoljon egy rövid, hétköznapi, személyiségből következő gondolatot, státuszt, kérdést, poént vagy élethelyzetet. Üres posts tömböt NE adj vissza, amikor a karakter jogosult posztolni.
 - A karaktereknek nem kell megvárniuk a játékost vagy egy drámai eseményt ahhoz, hogy posztoljanak. A saját életükből kezdeményezzenek.
@@ -35297,11 +35326,11 @@ SAJÁT FOTÓALBUMOD:
 ${albumList(promptAuthor || author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
-- ${author.name} saját gördülő 24 órás célja 3–5 poszt aktivitásától függően; 5 a kemény maximum.
-- Ne posztolj csak azért, hogy kitöltsd a feedet.
+- ${author.name} saját gördülő 24 órás célja 12–20 poszt aktivitásától függően; 32 a biztonsági kemény maximum.
+- A scheduler csak akkor választ ki, amikor a saját poszt-cooldownod már lejárt, ezért ha ide kerültél, ÍRJ egy természetes posztot; ne skipelj pusztán azért, mert nincs dráma.
 - ${author.name} 24 órán belül maximum 1 képes posztot tehet ki; a többi legyen szöveges.
 - A képlimit karakterenként értendő, nem az egész feedre.
-- Ha ${author.name} még 3 poszt alatt áll az elmúlt 24 órában, ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó.
+- Ha ${author.name} még 8 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó.
 - A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
 - A legtöbb poszt legyen szöveges; albumképet csak néha használj, amikor a konkrét kép ténylegesen illik az aktuális élethelyzethez.
 - A poszt kizárólag ${author.name} SAJÁT karakterlapjából, életéből, occupation/job-jából, dojo/organization oldalából, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
@@ -57592,11 +57621,9 @@ function feedNeedsFreshPost(w) {
   });
 
   /*
-   * When the player is actively inside the app, spread available daily posts
-   * across the session at roughly one new feed post every three minutes.
-   *
-   * IMPORTANT: fairPostCast() already excludes characters that reached their
-   * personal rolling-24h target, so this does NOT increase the 3–5 daily quota.
+   * When the player is actively inside the app, check the feed frequently.
+   * fairPostCast() only returns characters whose OWN cooldown has elapsed, so
+   * the global ~30s pulse cannot make one character spam repeatedly.
    */
   if (
     playerIsActivelyViewingWorld()
@@ -58574,8 +58601,9 @@ function planAutoAction(view) {
 
   /*
    * ACTIVE FEED CADENCE
-   * 1) ÚJ POSZT — amikor a játékos bent van, kb. 5 percenként egy új
-   * autonóm feed-poszt, amíg valamelyik AI saját 3–5/24h kerete engedi.
+   * 1) ÚJ POSZT — amikor a játékos bent van, kb. 30 másodpercenként nézzük,
+   * van-e SAJÁT cooldownja alapján esedékes AI. Ugyanaz a karakter nem tud
+   * 7–16 percnél sűrűbben posztolni, ezért a feed aktív, de nem spam jellegű.
    */
   if (feedNeedsFreshPost(view) && !freshFeedPostCommentCandidate(view)) {
     return mkAction(
@@ -59597,8 +59625,8 @@ Ha van természetes folytatás:
  * v99.9 AUTONOMOUS FEED HEARTBEAT
  *
  * The normal AI scheduler remains the primary content engine. This tiny local
- * watchdog is a last-resort safety net: if an AI character is below its own
- * rolling 24h quota and the feed has gone silent, create one canon-safe post
+ * watchdog is a last-resort safety net: if an AI character is currently due
+ * by its own posting rhythm and the feed has gone silent, create one canon-safe post
  * locally. It never calls the provider, so provider busy/cooldown cannot starve
  * the social feed.
  */
@@ -59611,17 +59639,18 @@ function runAutonomousFeedHeartbeat(w, update) {
   const silence = latest ? now() - latest : Infinity;
 
   /*
-   * LIGHTWEIGHT QUOTA HEARTBEAT:
-   * During an active visible session the NORMAL AI post gets first chance at
-   * the three-minute mark. This provider-free fallback waits another ~75s and
-   * only rescues the feed if that richer post never materialized.
+   * LIGHTWEIGHT REGULARITY HEARTBEAT:
+   * During an active visible session the generative scheduler gets first chance
+   * at the normal feed target. This provider-free fallback waits only ~20s more
+   * and rescues the feed if that richer post never materialized. fairPostCast()
+   * still enforces the selected character's own cooldown and daily safety cap.
    *
-   * Outside the visible app, preserve the old 90s fallback behavior exactly.
+   * Outside the visible app, keep a slower 90s rescue pulse.
    */
   const heartbeatTarget =
     playerIsActivelyViewingWorld()
       ? LIVE_WORLD_ACTIVE_POST_TARGET_MS +
-        75 * 1000
+        20 * 1000
       : 90 * 1000;
 
   const due =
@@ -59632,7 +59661,7 @@ function runAutonomousFeedHeartbeat(w, update) {
 
   const candidate = cast[0];
   const stats = characterAutonomousPostStats24h(w, candidate.id);
-  if (Number(stats.count || 0) >= Math.min(5, autonomousCharacterPostTarget24h(w, candidate))) return false;
+  if (Number(stats.count || 0) >= Math.min(AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H, autonomousCharacterPostTarget24h(w, candidate))) return false;
 
   let created = false;
   update((n) => {
@@ -59643,7 +59672,7 @@ function runAutonomousFeedHeartbeat(w, update) {
     const liveHeartbeatTarget =
       playerIsActivelyViewingWorld()
         ? LIVE_WORLD_ACTIVE_POST_TARGET_MS +
-          75 * 1000
+          20 * 1000
         : 90 * 1000;
 
     if (
