@@ -5286,8 +5286,15 @@ function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
 /* ---------- jegyzetek (mint az Instagram Notes) ----------
    Mindenkinek egy aktív jegyzete lehet, ami egy nap után magától lejár. */
 const NOTE_LIFE = 24 * 3600e3;
-const NOTE_REFRESH = NOTE_LIFE; // 24 óra: egy karakter Note-ja legfeljebb naponta egyszer frissül
+const NOTE_REFRESH = NOTE_LIFE; // player/UI compatibility; AI uses its own shorter refresh rhythm below
 const NOTE_MAX = 80;
+
+function autonomousAiNoteRefreshMs(w, c) {
+  const activity = Number(c && characterOnlineActivityProfile(w, c).note) || 0;
+  if (activity >= 1.15) return 2 * 3600e3;
+  if (activity >= 0.82) return 3.5 * 3600e3;
+  return 6 * 3600e3;
+}
 
 function pruneExpiredNotes(w) {
   if (!w || !Array.isArray(w.notes)) {
@@ -9400,7 +9407,7 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
   25 * 1000,
   Math.min(
     3 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 45 * 1000
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 35 * 1000
   )
 );
 
@@ -9416,7 +9423,7 @@ const LIVE_WORLD_ACTIVE_POST_TARGET_MS = Math.max(
   Math.min(
     90 * 1000,
     Number(import.meta.env.VITE_WORLD_ACTIVE_POST_INTERVAL_MS) ||
-      30 * 1000
+      22 * 1000
   )
 );
 
@@ -30727,6 +30734,16 @@ ${strictSocialActorCapsules(w, cast, post)}
 ${socialShortStatusCharacterFidelityCard(w, post)}
 
 KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
+
+RELATIONSHIP × PERSONALITY × POST — HARD DECISION ORDER:
+1. A KONKRÉT POSZT dönti el, mire lehet egyáltalán értelmesen reagálni.
+2. A kommentelő és a posztoló KAPCSOLATA dönti el a baseline érzelmi irányt és azt is, mennyire valószínű, hogy kommentel / like-ol / ignorál.
+3. A kommentelő SAJÁT PERSONALITY + SPEECH/VOICE + kor/online stílus dönti el, HOGYAN fejezi ki ugyanazt az érzelmi irányt.
+4. A friss közös emlék/currentFeeling csak finomítja ezt; nem írhatja át a konkrét poszt jelentését.
+- Egyik réteg sem helyettesítheti a másikat. „Barát” nem jelent generikus kedvességet: egy nyers barát lehet csípős, de szeretetteljes; egy reserved barát lehet rövid, de meleg. „Rivális” nem jelent automatikus random sértegetést: a konkrét poszthoz illő versengő/gúnyos/szkeptikus reakció kell.
+- Crush/obsession esetén a kapcsolat növeli a FIGYELMET és színezi a reakciót, a personality pedig eldönti, hogy ez direkt flört, zavar, kontroll, száraz megjegyzés, féltékenység vagy rejtett over-attention formájában látszik.
+- Minden elkészült kommentnél tedd fel: „ez a mondat egyszerre illik a kapcsolathoz ÉS ehhez az egy karakterhez?” Ha csak az egyikhez, írd újra.
+
 - A fenti SEALED ACTOR CAPSULES blokkok szigorúan ID-hoz kötöttek. Egy output sor id-je CSAK a saját capsule-jából olvashat "én / saját" tényt.
 - Minden kommentelő a SAJÁT teljes karakterlapját használja, nem másik kommentelőét. Más karakter jobja, dojoja, rangja, mentorai, crushai, Connections-sorai és backstory-ja TILOS saját tényként.
 - A kommentelő saját emlékei közül ebben a social feladatban csak a POSZT SZERZŐJÉHEZ / közvetlen célponthoz releváns memória használható; unrelated player/world memory nem.
@@ -34579,11 +34596,14 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
 const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 32;
 const AUTONOMOUS_CHARACTER_POST_MIN_24H = 8;
 const AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H = 1;
+const AUTONOMOUS_TRIGGER_BURST_MIN_GAP_MS = 45 * 1000;
 
 /*
  * PER-CHARACTER SOCIAL RHYTHM
  * quieter = target 12 posts / rolling 24h, normal = 16, highly online = 20.
- * The 32-post hard ceiling is only a failsafe. One image / rolling 24h stays hard.
+ * IMPORTANT: 12–20 is a PRIORITY TARGET, not a stop condition. Characters may
+ * continue posting naturally after reaching it until the separate 32/24h hard cap.
+ * One image / rolling 24h stays hard.
  */
 function autonomousGameDayIndex(w) {
   const elapsed = Math.max(0, Number(storySettingsOf(w).elapsedHours) || 0);
@@ -34690,19 +34710,20 @@ function autonomousCharacterPostTarget24h(w, c, activityOverride = null) {
 }
 
 function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
-  if (!c) return 16 * 60 * 1000;
+  if (!c) return 9 * 60 * 1000;
   const activity = Number.isFinite(Number(activityOverride))
     ? Number(activityOverride)
     : Number(characterOnlineActivityProfile(w, c).post) || 0;
 
   /*
-   * This is the actual per-character regularity clock. A very-online character
-   * can become due again after ~7 min, a normal one after ~11 min, and a quiet
-   * one after ~16 min. Different characters are staggered by fairPostCast().
+   * Real per-character posting clock. The old 7–16 minute gap plus the target
+   * acting as a hidden cap made the feed go quiet. The target is now only a
+   * fairness goal, while independent characters can post on a 4–9 minute
+   * rhythm. A separate 32/24h hard ceiling still prevents runaway spam.
    */
-  if (activity >= 1.15) return 7 * 60 * 1000;
-  if (activity >= 0.82) return 11 * 60 * 1000;
-  return 16 * 60 * 1000;
+  if (activity >= 1.15) return 4 * 60 * 1000;
+  if (activity >= 0.82) return 6 * 60 * 1000;
+  return 9 * 60 * 1000;
 }
 
 function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
@@ -34722,51 +34743,163 @@ function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
   return stats.imageCount < AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H;
 }
 
+function autonomousTriggerBurstUsedAuthorIds(w, burstKey) {
+  const key = String(burstKey || "").trim();
+  if (!key) return new Set();
+  return new Set(
+    (w && Array.isArray(w.posts) ? w.posts : [])
+      .filter((p) => p && String(p.triggerBurstKey || "") === key && p.authorId)
+      .map((p) => String(p.authorId))
+  );
+}
+
+function autonomousTriggeredFeedContext(w, payload = {}, authorId = "") {
+  const trigger = String(payload && payload.trigger || "").trim();
+  const preferredIds = [];
+  const lines = [];
+  let visibility = "public";
+
+  const addPreferred = (ids) => {
+    (Array.isArray(ids) ? ids : []).forEach((id) => {
+      if (!id || isHuman(w, id) || !charById(w, id) || preferredIds.includes(id)) return;
+      preferredIds.push(id);
+    });
+  };
+
+  if (trigger === "player-post" && payload.postId) {
+    const post = (w.posts || []).find((p) => p && p.id === payload.postId);
+    if (post) {
+      lines.push(`TRIGGER = PLAYER POST [${post.id}]`);
+      lines.push(`VISIBLE POST: ${cut(String(post.text || post.imageDescription || ""), 900) || "image post"}`);
+      lines.push("AFTERMATH RULE: the feed should visibly wake up after the player's post. Some AI posts may directly react/subtweet/reference it when that character would genuinely care; other burst posts may be independent character-life posts. Do not make every AI obsess over the player.");
+      addPreferred(
+        (w.chars || [])
+          .filter((c) => c && !isHuman(w, c.id))
+          .map((c) => ({ id:c.id, score:socialInteractionInterest(w, c.id, w.meId) + (isFollowing(w, c.id, w.meId) ? 30 : 0) }))
+          .sort((a,b) => b.score-a.score)
+          .slice(0, 5)
+          .map((row) => row.id)
+      );
+    }
+  }
+
+  if ((trigger === "popup-choice" || trigger === "popup-custom-response") && payload.popupEventId) {
+    const event = (w.popupEvents || []).find((e) => e && e.id === payload.popupEventId);
+    if (event) {
+      const choiceId = String(payload.choiceId || event.choiceId || "");
+      const choice = (event.choices || []).find((c) => c && String(c.id) === choiceId);
+      visibility = ["public","limited","private"].includes(event.visibility) ? event.visibility : "limited";
+      const involved = (event.involvedIds || []).filter(Boolean);
+      const witnesses = visibility === "private" ? [] : (event.witnessIds || []).filter(Boolean);
+      addPreferred([...involved, ...witnesses]);
+      const authorCanKnowPrivate =
+        visibility !== "private" ||
+        !authorId ||
+        involved.map(String).includes(String(authorId));
+
+      lines.push(`TRIGGER = RESOLVED POPUP [${event.id}]`);
+      lines.push(`VISIBILITY: ${visibility}`);
+
+      if (!authorCanKnowPrivate) {
+        lines.push("PRIVATE INFORMATION BOUNDARY: this author was NOT a direct participant and does not know the popup details or the player's choice. Do not mention, hint at, infer or leak them. This burst slot should instead be an independent in-character life post, so the feed still becomes active without impossible knowledge.");
+      } else {
+        lines.push(`POPUP: ${cut(`${event.title || "Popup"}: ${event.text || ""}`, 1100)}`);
+        lines.push(`PLAYER CHOICE / OUTCOME: ${cut(String((choice && choice.label) || event.choiceLabel || event.choiceId || "resolved choice"), 500)}`);
+        lines.push(`DIRECT AI PARTICIPANTS/WITNESSES: ${[...new Set([...involved, ...witnesses])].map((id) => nameOfIn(w,id)).filter(Boolean).join(", ") || "none"}`);
+        if (visibility === "private") {
+          lines.push("POPUP AFTERMATH HARD RULE: as a direct private participant, you may react or vaguepost in-character, but must not expose private facts to the public feed unless the character would intentionally reveal information they actually know.");
+        } else {
+          lines.push("POPUP AFTERMATH HARD RULE: this burst exists because the popup just happened. At least some immediate posts MUST talk about, reference, joke about, defend, criticize, subtweet or otherwise process the CONCRETE popup outcome from the author's own personality + relationship POV. Do not replace the popup with unrelated filler.");
+        }
+      }
+    }
+  }
+
+  if (trigger === "roleplay-ended" && payload.sceneId) {
+    const scene = (w.scenes || []).find((s) => s && s.id === payload.sceneId);
+    if (scene) {
+      const aiIds = (scene.cast || []).filter((id) => id && !isHuman(w,id) && charById(w,id));
+      addPreferred(aiIds);
+      lines.push(`TRIGGER = FINISHED MULTI-AI EVENT [${scene.id}]`);
+      lines.push(`EVENT: ${cut(String(scene.title || "Event"), 300)}`);
+      lines.push(`WHAT ACTUALLY HAPPENED: ${cut(String(scene.summary || scene.diaryEntry || scene.goalResult || scene.setting || ""), 1400)}`);
+      lines.push(`AI PARTICIPANTS: ${aiIds.map((id) => nameOfIn(w,id)).filter(Boolean).join(", ") || "none"}`);
+      lines.push("EVENT AFTERMATH HARD RULE: because the player + at least two AI characters were present, the event must visibly spill into the social world. Participants may recap, joke, vaguepost, celebrate, complain, call someone out, post an inside reference, process tension, or mention a concrete memorable beat. Keep every claim grounded in the stored event summary/turns; do not invent a scene that did not happen.");
+    }
+  }
+
+  const burstIndex = Math.max(0, Math.round(Number(payload && payload.burstIndex) || 0));
+  const burstTotal = Math.max(0, Math.round(Number(payload && payload.burstTotal) || 0));
+  if (payload && payload.allowBurst && burstTotal > 0) {
+    lines.push(`AFTERMATH FEED BURST: post ${burstIndex + 1}/${burstTotal}. Use a DIFFERENT AI author from earlier posts in this same burst whenever possible.`);
+  }
+
+  return {
+    text: lines.length ? `\nIMMEDIATE SOCIAL TRIGGER CONTEXT — USE THIS BEFORE GENERIC FILLER:\n${lines.join("\n")}\n` : "",
+    preferredIds,
+    visibility,
+  };
+}
+
 function autonomousPostTypeInstruction(w, cast) {
   const snapshot = autonomousPostStatsSnapshot(w);
   const rows = (cast || []).filter((c) => c && c.id).slice(0, 5).map((c) => {
     const stats = snapshot.get(String(c.id)) || { count:0, imageCount:0 };
     const activity = Number(characterOnlineActivityProfile(w, c).post) || 0;
     const target = autonomousCharacterPostTarget24h(w, c, activity);
-    return `${c.name}: ${stats.count}/${target} posts in rolling 24h; image ${stats.imageCount}/1.`;
+    const usableAlbum = albumOf(c).filter((item) => item && (String(item.vision || "").trim() || String(item.who || "").trim() || String(item.note || "").trim())).length;
+    const imageSlotOpen = Number(stats.imageCount || 0) < AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H && usableAlbum > 0;
+    return `${c.name}: ${stats.count}/${target} target posts in rolling 24h (target is NOT a cap); image ${stats.imageCount}/1; usable album=${usableAlbum}; imageSlot=${imageSlotOpen ? "OPEN" : "CLOSED"}.`;
   });
 
   return [
-    "PER-AI RULE: every normal AI has its OWN independent posting rhythm and rolling-24h target of 12–20 posts depending on online activity.",
+    "PER-AI RULE: every normal AI has its OWN independent posting rhythm and rolling-24h activity target of 12–20 posts depending on online activity.",
+    "CRITICAL: 12–20 is a PRIORITY TARGET, NOT A STOP LIMIT. Reaching the target never silences the character; only the separate hard safety maximum can do that.",
     "Hard safety maximum is 32 posts per character in any rolling 24-hour window.",
-    "Characters below 8 posts in rolling 24h have priority, but their own cooldown still prevents burst-spam.",
-    "A character becomes eligible again only after their personal posting cooldown has elapsed: highly online ~7 min, normal ~11 min, quieter ~16 min.",
+    "Characters below 8 posts in rolling 24h have extra priority, but their own cooldown still prevents ordinary burst-spam.",
+    "Regular personal cooldown: highly online ~4 min, normal ~6 min, quieter ~9 min. Triggered aftermath bursts may temporarily use different characters sooner, but never the same character repeatedly inside one burst.",
     "IMAGE HARD MAX: each character may have at most 1 image post in rolling 24h. This is per character, not global.",
-    "All remaining posts should be text posts; image is optional, never required.",
-    "OCCUPATION / ROLE / DOJO / ORGANIZATION ARE CONTEXT, NOT REQUIRED CAPTION TEXT: let them shape what the character plausibly does, notices, knows and sometimes posts about, but do NOT recite or list their job, responsibilities, club, faction, rank or affiliations in every post. Never write a profile/bio/resume-style string such as 'role · organization · supporter' merely to prove the canon. Mention these explicitly only when that specific post naturally calls for it.",
-    rows.length ? `CURRENT PER-AI QUOTAS:
+    "IMAGE BEHAVIOR: the 1/24h rule is a maximum, NOT a reason to avoid images. If imageSlot=OPEN, the character should genuinely use an album image sometimes. After several text posts with an unused image slot, strongly prefer a fitting image unless every remaining album image clashes with the current context.",
+    "Never invent an image outside the author's own album; the caption must match the selected image's confirmed/visible context and the author's own voice.",
+    "OCCUPATION / ROLE / DOJO / ORGANIZATION ARE CONTEXT, NOT REQUIRED CAPTION TEXT: let them shape what the character plausibly does, notices, knows and sometimes posts about, but do NOT recite or list their job, responsibilities, club, faction, rank or affiliations in every post. Never write a profile/bio/resume-style string merely to prove canon. Mention these explicitly only when that specific post naturally calls for it.",
+    rows.length ? `CURRENT PER-AI ACTIVITY:
 ${rows.join("\n")}` : ""
   ].filter(Boolean).join("\n");
 }
 
-function characterCanAutonomouslyPost(w, c, snapshot = null) {
+function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
   if (!w || !c || !c.id || isHuman(w, c.id) || isMediaAccount(w, c.id)) return false;
 
   const activity = Number(characterOnlineActivityProfile(w, c).post) || 0;
-  const target = autonomousCharacterPostTarget24h(w, c, activity);
   const gapMs = autonomousCharacterPostGapMs(w, c, activity);
   const stats = snapshot && snapshot.get(String(c.id))
     ? snapshot.get(String(c.id))
     : characterAutonomousPostStats24h(w, c.id);
 
-  if (Number(stats.count || 0) >= Math.min(AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H, target)) {
+  /* 12–20 is deliberately NOT checked here anymore. It is a desired activity
+     target used by fairPostCast(), not a silence switch. */
+  if (Number(stats.count || 0) >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) {
     return false;
+  }
+
+  const burstKey = String(options && options.burstKey || "").trim();
+  const allowBurst = Boolean(options && options.allowBurst && burstKey);
+  if (allowBurst) {
+    if (autonomousTriggerBurstUsedAuthorIds(w, burstKey).has(String(c.id))) return false;
+    const lastPostAt = Number(stats.lastPostAt || 0);
+    return !lastPostAt || now() - lastPostAt >= AUTONOMOUS_TRIGGER_BURST_MIN_GAP_MS;
   }
 
   const lastPostAt = Number(stats.lastPostAt || 0);
   return !lastPostAt || now() - lastPostAt >= gapMs;
 }
 
-function fairPostCast(w) {
+function fairPostCast(w, options = {}) {
   const snapshot = autonomousPostStatsSnapshot(w);
-  const chars = (w.chars || []).filter((c) => c && characterCanAutonomouslyPost(w, c, snapshot));
+  const chars = (w.chars || []).filter((c) => c && characterCanAutonomouslyPost(w, c, snapshot, options));
   if (!chars.length) return [];
 
+  const preferred = new Set((options && Array.isArray(options.preferredIds) ? options.preferredIds : []).map(String));
   const at = now();
   const ranked = chars.map((c) => {
     const stats = snapshot.get(String(c.id)) || { count:0, imageCount:0, recentPosts48h:0, lastPostAt:0 };
@@ -34776,18 +34909,20 @@ function fairPostCast(w) {
     const deficit = Math.max(0, target - count);
     const belowMinimum = count < AUTONOMOUS_CHARACTER_POST_MIN_24H;
     const gapMs = autonomousCharacterPostGapMs(w, c, activity);
-    const idleMs = stats.lastPostAt
-      ? Math.max(0, at - stats.lastPostAt)
-      : gapMs * 4;
+    const idleMs = stats.lastPostAt ? Math.max(0, at - stats.lastPostAt) : gapMs * 4;
     const overdueRatio = Math.max(1, idleMs / Math.max(1, gapMs));
     const idleHours = Math.min(72, idleMs / 3600e3);
+    const afterTargetPenalty = Math.max(0, count - target) * 38;
 
     const pressure =
       (belowMinimum ? 1000 : 0) +
       deficit * 180 +
+      (preferred.has(String(c.id)) ? 720 : 0) +
+      (options && options.allowBurst ? 180 : 0) +
       overdueRatio * 120 +
       idleHours * 4 +
       activity * 30 -
+      afterTargetPenalty -
       Number(stats.recentPosts48h || 0) * 3 +
       Math.random() * 5;
 
@@ -35128,9 +35263,9 @@ Formátum:
 }
 
 
-function deterministicAutonomousFallbackPost(w, authorId) {
+function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
   const author = charById(w, authorId);
-  if (!author || !characterCanAutonomouslyPost(w, author)) return null;
+  if (!author || !characterCanAutonomouslyPost(w, author, null, options)) return null;
 
   /*
    * HARD LOCAL POST FALLBACK v99.9
@@ -35183,13 +35318,36 @@ function deterministicAutonomousFallbackPost(w, authorId) {
     city ? `${city} days really know how to drain you.` : "some days are just a lot.",
   ].filter(Boolean);
 
-  const chosen = candidates.find((x) => {
+  let chosen = candidates.find((x) => {
     const key = x.toLowerCase().slice(0, Math.min(32, x.length));
     return !recent.some((r) => r.includes(key));
   }) || candidates[0] || "still here.";
 
+  /* Even the provider-independent rescue path may use ONE real album image.
+     The hard 1/24h guard is still re-checked by applyWorldStep(). We only do
+     this after the character has already made some text posts, and only when
+     the album item has real user/vision context. */
+  const fallbackStats = characterAutonomousPostStats24h(w, author.id);
+  const fallbackAlbum = albumOf(author);
+  const fallbackImageIndex = fallbackAlbum.findIndex((item) =>
+    item && (String(item.vision || "").trim() || String(item.who || "").trim() || String(item.note || "").trim())
+  );
+  const fallbackImageDue =
+    fallbackStats.imageCount < AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H &&
+    fallbackStats.count >= 3 &&
+    fallbackImageIndex >= 0 &&
+    (fallbackStats.count % 4 === 3);
+
+  let fallbackImage = "";
+  if (fallbackImageDue) {
+    fallbackImage = `kep${fallbackImageIndex + 1}`;
+    const item = fallbackAlbum[fallbackImageIndex];
+    const manualCue = String(item && item.note || "").replace(/\s+/g, " ").trim();
+    if (manualCue) chosen = cut(manualCue, 150);
+  }
+
   return {
-    posts: [{ id: author.id, text: chosen, image: "", comments: [] }],
+    posts: [{ id: author.id, text: chosen, image: fallbackImage, comments: [] }],
     changes: [],
     events: [],
     selfUpdates: [],
@@ -35340,9 +35498,16 @@ async function hydrateAuthorAlbumForSocialPosting(
   return nextAuthor;
 }
 
-async function genFocusedWorldStep(w) {
-  const author = fairPostCast(w)[0];
+async function genFocusedWorldStep(w, triggerPayload = {}) {
+  const triggerSelectionContext = autonomousTriggeredFeedContext(w, triggerPayload);
+  const author = fairPostCast(w, {
+    allowBurst: Boolean(triggerPayload && triggerPayload.allowBurst),
+    burstKey: String(triggerPayload && triggerPayload.burstKey || ""),
+    preferredIds: triggerSelectionContext.preferredIds,
+  })[0];
   if (!author) return null;
+
+  const triggerContext = autonomousTriggeredFeedContext(w, triggerPayload, author.id);
 
   const promptAuthor =
     await hydrateAuthorAlbumForSocialPosting(
@@ -35352,6 +35517,11 @@ async function genFocusedWorldStep(w) {
 
   const authorPostStats24h = characterAutonomousPostStats24h(w, author.id);
   const authorPostTarget24h = autonomousCharacterPostTarget24h(w, author);
+  const usableAlbumItems = albumOf(promptAuthor || author).filter((item) =>
+    item && (String(item.vision || "").trim() || String(item.who || "").trim() || String(item.note || "").trim())
+  );
+  const imageSlotOpen = authorPostStats24h.imageCount < AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H && usableAlbumItems.length > 0;
+  const imageOpportunityDue = imageSlotOpen && authorPostStats24h.count >= 2;
 
   const recentOwn = (w.posts || [])
     .filter((p) => p && p.authorId === author.id)
@@ -35399,6 +35569,8 @@ AUTHORSHIP / SELF-CANON LOCK:
 
 TE MOST ${String(author.name || "").toUpperCase()} VAGY, ÉS SAJÁT MAGADTÓL POSZTOLSZ.
 
+${triggerContext.text}
+
 ${relationshipAutonomySpotlightCard(w, author.id)}
 
 AKTUÁLIS SAJÁT ÁLLAPOTOD:
@@ -35407,6 +35579,9 @@ AKTUÁLIS SAJÁT ÁLLAPOTOD:
 - open loops: ${(selfState.openLoops || []).slice(-4).join(" | ") || "-"}
 - rolling 24h posts: ${authorPostStats24h.count}/${authorPostTarget24h}
 - rolling 24h image posts: ${authorPostStats24h.imageCount}/${AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H}
+- usable album images right now: ${usableAlbumItems.length}
+- image slot: ${imageSlotOpen ? "OPEN" : "CLOSED"}
+- image opportunity: ${imageOpportunityDue ? "DUE — strongly prefer one fitting album image now" : "optional"}
 
 JÁTÉKOS-ALAPÉRTELMEZÉS:
 A játékos NEM automatikus poszttéma. A saját életedből indulj ki.
@@ -35421,13 +35596,16 @@ SAJÁT FOTÓALBUMOD:
 ${albumList(promptAuthor || author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
-- ${author.name} saját gördülő 24 órás célja 12–20 poszt aktivitásától függően; 32 a biztonsági kemény maximum.
-- A scheduler csak akkor választ ki, amikor a saját poszt-cooldownod már lejárt, ezért ha ide kerültél, ÍRJ egy természetes posztot; ne skipelj pusztán azért, mert nincs dráma.
+- ${author.name} saját gördülő 24 órás célja 12–20 poszt aktivitásától függően, DE EZ CSAK AKTIVITÁSI CÉL/PRIORITÁS, NEM PLAFON; 32 a valódi biztonsági kemény maximum.
+- Normál körben a scheduler csak a saját cooldown lejárta után választ ki. Triggerelt aftermath burstben több KÜLÖNBÖZŐ AI gyorsabban is sorra kerülhet, de ugyanaz az AI egy burston belül nem ismétlődhet.
+- Ha ide kerültél, ÍRJ egy természetes posztot; ne skipelj pusztán azért, mert nincs dráma.
 - ${author.name} 24 órán belül maximum 1 képes posztot tehet ki; a többi legyen szöveges.
 - A képlimit karakterenként értendő, nem az egész feedre.
 - Ha ${author.name} még 8 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó.
 - A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
-- A legtöbb poszt legyen szöveges; albumképet csak néha használj, amikor a konkrét kép ténylegesen illik az aktuális élethelyzethez.
+- A szöveges poszt továbbra is gyakori, DE az 1 kép/24h maximumot NE értelmezd úgy, hogy kerülnöd kell a képeket. Ha az image slot OPEN, valóban használj néha albumképet.
+- Ha fent IMAGE OPPORTUNITY = DUE, akkor HATÁROZOTTAN részesíts előnyben EGY konkrét, jelenlegi kontextushoz illő albumképet; csak akkor maradjon szöveges, ha egyik megmaradt kép sem illik hitelesen.
+- Albumképet csak akkor válassz, ha a konkrét kép ténylegesen illik az aktuális élethelyzethez.
 - A poszt kizárólag ${author.name} SAJÁT karakterlapjából, életéből, occupation/job-jából, dojo/organization oldalából, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
 - FONTOS: az occupation/job, szerep, dojo, organization, rank és affiliation HÁTTÉRKONTEXTUS, nem kötelező caption-szöveg. Határozza meg természetesen, mit csinál, mit tud, milyen napja van és miről lehet oka posztolni, DE ne sorolja fel ezeket minden posztban, ne ismételje a karakterlap megfogalmazását, és ne írjon mini bio/CV-szerű „szerep · szervezet · supporter” felsorolást csak azért, hogy jelezze a kánont. Csak akkor nevezze meg konkrétan a munkát/szervezetet/oldalt, ha az adott poszt témájához ténylegesen releváns.
 - OWNERSHIP HARD RULE: amit ${author.name} "én / my / our" formában állít magáról, annak ${author.name} saját lapján kell igaznak lennie. Más karakter foglalkozását, dojóját, rangját, senseijét, családját, crushát vagy történetét ne vedd át.
@@ -35449,6 +35627,13 @@ ${albumList(promptAuthor || author) || "nincs használható albumkép"}
 - Ne generálj kommenteket ebben a hívásban; a többi AI külön fog reagálni rá a saját karakteréből.
 - A játékos helyett soha ne írj.
 
+KREATÍV KARAKTERPOSZT — HARD RULE:
+- Ne gyárts generikus „still alive / long day / good vibes / training done” fillert, ha a karakterlapból vagy a friss triggerből konkrétabb, egyedibb poszt születhet.
+- Válassz egy olyan apró részletet, véleményt, konfliktust, inside joke-ot, szokást, célt, kapcsolatot, helyzetet vagy konkrét eseményrészletet, amely ettől a karaktertől felismerhetővé teszi a posztot.
+- A karakter personality + speech/voice + aktuális kapcsolat + jelenlegi világhelyzet EGYÜTT határozza meg a témát és a megfogalmazást. Egyik se írhatja felül a másikat.
+- Ha triggerelt aftermath poszt készül, előbb dolgozd fel a trigger konkrét tényét a karakter saját nézőpontjából, csak utána adj hozzá kreatív stílust.
+- Ha ugyanaz a caption könnyen odaadható lenne három másik karakternek is, nem elég karakterhű: írd újra.
+
 ${repetitionGuard(w, [author.id], "autonóm posztok és kommentek")}
 
 JSON:
@@ -35457,7 +35642,7 @@ JSON:
   );
 }
 
-function applyWorldStep(n, out) {
+function applyWorldStep(n, out, postingOptions = {}) {
   let createdPosts = 0;
   const causalPairs = new Set();
 
@@ -35466,7 +35651,7 @@ function applyWorldStep(n, out) {
     const author = aiVoice(n, p && (p.id !== undefined ? p.id : p.name));
     if (!author || !p.text) return;
     const authorChar = charById(n, author);
-    if (!authorChar || !characterCanAutonomouslyPost(n, authorChar)) return;
+    if (!authorChar || !characterCanAutonomouslyPost(n, authorChar, null, postingOptions)) return;
     const postText =
       applySocialOwnedSpeechStyle(
         n,
@@ -35617,6 +35802,9 @@ function applyWorldStep(n, out) {
       imageAnalyzedAt: pic ? Number(pic.analyzedAt || 0) : 0,
       comments: made,
       language: worldLanguage(n, n.meId),
+      triggerBurstKey: String(postingOptions && postingOptions.burstKey || ""),
+      triggerSource: String(postingOptions && postingOptions.trigger || ""),
+      triggerRefId: String(postingOptions && (postingOptions.triggerRefId || postingOptions.postId || postingOptions.popupEventId || postingOptions.sceneId) || ""),
     };
 
     /*
@@ -46343,8 +46531,9 @@ ${repetitionGuard(
 
 INSTAGRAM NOTES SZABÁLYOK:
 
-- Először döntsd el, ${bot.name} MOST tényleg kiírna-e Note-ot. Ha a személyisége, aktuális hangulata és online szokásai alapján nem, legyen "skip": true.
-- Ha igen, írj egy valódi közösségi médiás Note-ot ${bot.name} nevében.
+- A scheduler azért választotta most ${bot.name} karaktert, mert a saját Note-ritmusa alapján esedékes. A Note funkciót ténylegesen HASZNÁLD: ne skipelj automatikusan csak azért, mert nincs nagy dráma.
+- "skip": true csak akkor legyen, ha ${bot.name} kifejezetten zárkózott/private online karakter ÉS a friss saját állapotából/eseményeiből tényleg semmi természetes rövid Note nem következik.
+- Egyébként írj egy valódi közösségi médiás Note-ot ${bot.name} nevében.
 - Ez NEM poszt, NEM naplóbejegyzés és NEM roleplay jelenet.
 - Legfeljebb ${NOTE_MAX} karakter lehet.
 - Törekedj rövidségre: gyakran csak néhány szó vagy egy rövid félmondat természetes.
@@ -59191,7 +59380,7 @@ function planAutoAction(view) {
       return (
         !active ||
         now() - (active.ts || 0) >=
-          NOTE_REFRESH
+          autonomousAiNoteRefreshMs(view, c)
       );
     })
     .map((c) => {
@@ -59236,10 +59425,10 @@ function planAutoAction(view) {
    * Ritka saját Note a maradék körökből.
    */
   if (
-    roll < 0.07 &&
-    noteless.some((row) => row.noteScore >= 8)
+    roll < 0.24 &&
+    noteless.some((row) => row.noteScore >= 4)
   ) {
-    const eligibleNotes = noteless.filter((row) => row.noteScore >= 8).slice(0, 4);
+    const eligibleNotes = noteless.filter((row) => row.noteScore >= 4).slice(0, 6);
     eligibleNotes.sort((a, b) => (b.noteScore - a.noteScore) || (a.lastNoteAt - b.lastNoteAt) || (a.tie - b.tie));
     const bot = eligibleNotes[Math.floor(Math.random() * Math.min(2, eligibleNotes.length))].c;
 
@@ -59745,7 +59934,7 @@ function runAutonomousFeedHeartbeat(w, update) {
   const heartbeatTarget =
     playerIsActivelyViewingWorld()
       ? LIVE_WORLD_ACTIVE_POST_TARGET_MS +
-        20 * 1000
+        12 * 1000
       : 90 * 1000;
 
   const due =
@@ -59756,7 +59945,7 @@ function runAutonomousFeedHeartbeat(w, update) {
 
   const candidate = cast[0];
   const stats = characterAutonomousPostStats24h(w, candidate.id);
-  if (Number(stats.count || 0) >= Math.min(AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H, autonomousCharacterPostTarget24h(w, candidate))) return false;
+  if (Number(stats.count || 0) >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) return false;
 
   let created = false;
   update((n) => {
@@ -59767,7 +59956,7 @@ function runAutonomousFeedHeartbeat(w, update) {
     const liveHeartbeatTarget =
       playerIsActivelyViewingWorld()
         ? LIVE_WORLD_ACTIVE_POST_TARGET_MS +
-          20 * 1000
+          12 * 1000
         : 90 * 1000;
 
     if (
@@ -61159,7 +61348,7 @@ if (targetNote) {
       (
         activeNote &&
         now() - (activeNote.ts || 0) <
-          NOTE_REFRESH
+          autonomousAiNoteRefreshMs(view, bot)
       )
     ) {
       return null;
@@ -62034,9 +62223,9 @@ if (targetNote) {
     return "dm";
   }
 
-  const out =
+  let out =
     action.type === "world"
-      ? await genFocusedWorldStep(view)
+      ? await genFocusedWorldStep(view, action.payload || {})
       : await genWorldStep(
           view,
           false
@@ -62050,10 +62239,16 @@ if (targetNote) {
     !out ||
     !Array.isArray(out.posts)
   ) {
-    const fallbackAuthor = (action && action.payload && action.payload.authorId)
-      || fairPostCast(view)[0]?.id
+    const fallbackPayload = action && action.payload || {};
+    const fallbackTriggerContext = autonomousTriggeredFeedContext(view, fallbackPayload);
+    const fallbackAuthor = fallbackPayload.authorId
+      || fairPostCast(view, {
+        allowBurst:Boolean(fallbackPayload.allowBurst),
+        burstKey:String(fallbackPayload.burstKey || ""),
+        preferredIds:fallbackTriggerContext.preferredIds,
+      })[0]?.id
       || "";
-    const fallback = deterministicAutonomousFallbackPost(view, fallbackAuthor);
+    const fallback = deterministicAutonomousFallbackPost(view, fallbackAuthor, fallbackPayload);
     if (!fallback) return null;
     out = fallback;
   }
@@ -62062,10 +62257,16 @@ if (targetNote) {
     /* v99.8 POST GUARANTEE: a provider may return an empty social result.
        Do not let that silently consume the feed lane. Create a deterministic,
        canon-safe fallback from the selected character's own sheet instead. */
-    const fallbackAuthor = (action && action.payload && action.payload.authorId)
-      || fairPostCast(view)[0]?.id
+    const fallbackPayload = action && action.payload || {};
+    const fallbackTriggerContext = autonomousTriggeredFeedContext(view, fallbackPayload);
+    const fallbackAuthor = fallbackPayload.authorId
+      || fairPostCast(view, {
+        allowBurst:Boolean(fallbackPayload.allowBurst),
+        burstKey:String(fallbackPayload.burstKey || ""),
+        preferredIds:fallbackTriggerContext.preferredIds,
+      })[0]?.id
       || "";
-    const fallback = deterministicAutonomousFallbackPost(view, fallbackAuthor);
+    const fallback = deterministicAutonomousFallbackPost(view, fallbackAuthor, fallbackPayload);
     if (fallback) {
       out.posts = fallback.posts;
       out.changes = fallback.changes;
@@ -62095,16 +62296,23 @@ if (targetNote) {
     visiblePostsCreated =
       applyWorldStep(
         n,
-        out
+        out,
+        action.payload || {}
       );
 
     if (!visiblePostsCreated) {
-      const fallbackAuthor = (action && action.payload && action.payload.authorId)
-        || fairPostCast(n)[0]?.id
+      const fallbackPayload = action && action.payload || {};
+      const fallbackTriggerContext = autonomousTriggeredFeedContext(n, fallbackPayload);
+      const fallbackAuthor = fallbackPayload.authorId
+        || fairPostCast(n, {
+          allowBurst:Boolean(fallbackPayload.allowBurst),
+          burstKey:String(fallbackPayload.burstKey || ""),
+          preferredIds:fallbackTriggerContext.preferredIds,
+        })[0]?.id
         || "";
-      const fallback = deterministicAutonomousFallbackPost(n, fallbackAuthor);
+      const fallback = deterministicAutonomousFallbackPost(n, fallbackAuthor, fallbackPayload);
       if (fallback) {
-        visiblePostsCreated = applyWorldStep(n, fallback);
+        visiblePostsCreated = applyWorldStep(n, fallback, action.payload || {});
       }
       if (!visiblePostsCreated) return;
     }
@@ -64088,6 +64296,39 @@ const signOut = useCallback(async () => {
     return true;
   }, [update]);
 
+  const requestTriggeredFeedBurst = useCallback((trigger, refId, payload = {}, count = 3) => {
+    const total = Math.max(2, Math.min(5, Math.round(Number(count) || 3)));
+    const burstKey = `${String(trigger || "social-trigger")}:${String(refId || "event")}:${now()}:${uid()}`;
+    let queued = false;
+
+    update((n) => {
+      /* coverage is intentional: a user/popup/multi-AI-event aftermath should
+         be visible before unrelated stale maintenance. Reverse insertion keeps
+         burstIndex 0 at the front even though coverage uses unshift(). */
+      for (let i = total - 1; i >= 0; i -= 1) {
+        queued = simEnqueue(
+          n,
+          mkAction(
+            "world",
+            `triggered-feed-burst:${burstKey}:${i}`,
+            {
+              ...(payload || {}),
+              trigger: String(trigger || "social-trigger"),
+              triggerRefId: String(refId || ""),
+              allowBurst: true,
+              burstKey,
+              burstIndex: i,
+              burstTotal: total,
+            },
+            "coverage"
+          )
+        ) || queued;
+      }
+    });
+
+    return queued;
+  }, [update]);
+
   const requestWorldStep = useCallback(() => {
     const key = `manual-world:${now()}:${uid()}`;
     return requestSimulationAction(mkAction("world-full", key, {}, "manual"));
@@ -64123,16 +64364,11 @@ const signOut = useCallback(async () => {
         )
       ) || queuedAny;
 
-      queuedAny = requestSimulationAction(
-        mkAction(
-          "world-full",
-          `event-world-after-post:${event.postId}`,
-          {
-            trigger: "player-post",
-            postId: event.postId,
-          },
-          "event"
-        )
+      queuedAny = requestTriggeredFeedBurst(
+        "player-post",
+        event.postId,
+        { postId: event.postId },
+        3
       ) || queuedAny;
 
       return queuedAny;
@@ -64164,17 +64400,23 @@ const signOut = useCallback(async () => {
         ) || queuedAny;
       }
 
-      queuedAny = requestSimulationAction(
-        mkAction(
-          "world-full",
-          `event-world-after-rp:${event.sceneId}:${event.finishedAt || now()}`,
-          {
-            trigger: "roleplay-ended",
-            sceneId: event.sceneId,
-          },
-          "event"
-        )
-      ) || queuedAny;
+      if (aiCount >= 2) {
+        queuedAny = requestTriggeredFeedBurst(
+          "roleplay-ended",
+          event.sceneId,
+          { sceneId: event.sceneId, finishedAt: event.finishedAt || now() },
+          3
+        ) || queuedAny;
+      } else {
+        queuedAny = requestSimulationAction(
+          mkAction(
+            "world-full",
+            `event-world-after-rp:${event.sceneId}:${event.finishedAt || now()}`,
+            { trigger: "roleplay-ended", sceneId: event.sceneId },
+            "event"
+          )
+        ) || queuedAny;
+      }
 
       return queuedAny;
     }
@@ -64335,13 +64577,11 @@ const signOut = useCallback(async () => {
             at:now(),
           });
 
-          requestSimulationAction(
-            mkAction(
-              "world-full",
-              `popup-followup:${event.id}:${choice.id}`,
-              { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id },
-              "event"
-            )
+          requestTriggeredFeedBurst(
+            "popup-choice",
+            event.id,
+            { popupEventId:event.id, choiceId:choice.id },
+            3
           );
 
           return true;
@@ -64427,13 +64667,11 @@ const signOut = useCallback(async () => {
             at:now(),
           });
 
-          requestSimulationAction(
-            mkAction(
-              "world-full",
-              `popup-followup:${event.id}:${choice.id}`,
-              { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id, postId },
-              "event"
-            )
+          requestTriggeredFeedBurst(
+            "popup-choice",
+            event.id,
+            { popupEventId:event.id, choiceId:choice.id, postId },
+            3
           );
 
           return true;
@@ -64453,13 +64691,11 @@ const signOut = useCallback(async () => {
           )
         );
 
-        requestSimulationAction(
-          mkAction(
-            "world-full",
-            `popup-followup:${event.id}:${choice.id}`,
-            { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id },
-            "event"
-          )
+        requestTriggeredFeedBurst(
+          "popup-choice",
+          event.id,
+          { popupEventId:event.id, choiceId:choice.id },
+          3
         );
 
         return true;
@@ -64489,6 +64725,7 @@ const signOut = useCallback(async () => {
       update,
       tt,
       requestSimulationAction,
+      requestTriggeredFeedBurst,
     ]
   );
 
@@ -64536,29 +64773,28 @@ const signOut = useCallback(async () => {
           return false;
         }
 
+        let resolved = false;
         update((n) => {
-          const ok = resolvePopupCustomResponse(n, event.id, text, raw) === true;
-          if (ok) {
-            simEnqueue(
-              n,
-              mkAction(
-                "world-full",
-                `popup-custom-followup:${event.id}`,
-                { trigger:"popup-custom-response", popupEventId:event.id },
-                "event"
-              )
-            );
-          }
+          resolved = resolvePopupCustomResponse(n, event.id, text, raw) === true;
         });
 
-            return true;
+        if (resolved) {
+          requestTriggeredFeedBurst(
+            "popup-custom-response",
+            event.id,
+            { popupEventId:event.id, choiceId:"custom" },
+            3
+          );
+        }
+
+        return resolved;
       } catch (e) {
         console.error("Popup custom response failed:", e);
         setErr((e && e.message) || tt("A saját reakció következményeit most nem sikerült feldolgozni.", "Couldn't process the consequences of your custom response."));
         return false;
       }
     },
-    [update, tt]
+    [update, tt, requestTriggeredFeedBurst]
   );
 
   /*
