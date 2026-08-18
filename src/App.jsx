@@ -35409,27 +35409,141 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
   if (!author || !characterCanAutonomouslyPost(w, author, null, options)) return null;
 
   /*
-   * HARD LOCAL POST FALLBACK v99.9
+   * HARD LOCAL POST FALLBACK v100.0 — CHARACTER VARIETY LOCK
    *
-   * This path is deliberately independent from the provider. A provider can
-   * return empty JSON, time out, hit a temporary busy state, or produce a
-   * post that a canon guard rejects. None of those conditions are allowed to
-   * turn an otherwise living social feed into a cemetery.
+   * This path runs only when the provider cannot supply a usable post. It must
+   * keep the feed alive WITHOUT turning different characters into copies of the
+   * same emergency template. The old fallback checked repetition only against
+   * the SAME author's recent posts, so three different AI characters could all
+   * publish "X is becoming a full-time distraction." in the same burst.
    *
-   * The fallback is still built from the character's OWN sheet only.
+   * Rules here are intentionally local to fallback posting:
+   * - choose from several voice/personality/context families;
+   * - rotate selection deterministically per author/burst;
+   * - reject wording that is structurally the same as recent WORLD posts after
+   *   character names are normalized away;
+   * - obsession/crush context is one possible topic, never the automatic first
+   *   topic for every character;
+   * - never copy raw long personality sheets into a caption.
    */
+  const en = worldLanguage(w, w.meId) === "en";
   const faction = characterFactionIdentityCard(author);
-  const job = String(author.job || author.occupation || author.role || "").trim();
-  const goals = String(author.goals || "").trim();
-  const likes = String(author.likes || "").trim();
-  const personality = String(author.personality || author.traits || "").trim();
-  const city = String(author.city || "").trim();
-  const speech = String(author.speech || "").trim();
+  const job = String(author.job || author.occupation || author.role || "").replace(/\s+/g, " ").trim();
+  const goals = String(author.goals || "").replace(/\s+/g, " ").trim();
+  const likes = String(author.likes || author.favorites || "").replace(/\s+/g, " ").trim();
+  const personality = String(author.personality || author.traits || "").replace(/\s+/g, " ").trim();
+  const speech = String(author.speech || author.voice || "").replace(/\s+/g, " ").trim();
+  const city = String(author.city || "").replace(/\s+/g, " ").trim();
   const dojo = (faction.match(/dojo=([^|]+)/i) || [])[1]?.trim() || "";
-  const recent = (w.posts || [])
-    .filter((p) => p && p.authorId === author.id)
-    .slice(0, 10)
-    .map((p) => String(p.text || "").toLowerCase());
+  const lore = [personality, speech, author.traits, author.bio, author.extra]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const fallbackStats = characterAutonomousPostStats24h(w, author.id);
+  const trigger = String(options && options.trigger || "").trim();
+  const burstKey = String(options && options.burstKey || "").trim();
+  const seed = commentSeedNumber(
+    `${author.id}|${burstKey}|${trigger}|${fallbackStats.count}|${Math.floor(now() / 60000)}`
+  );
+
+  const recentWorld = (w.posts || [])
+    .filter((p) => p && p.text && !isHuman(w, p.authorId))
+    .slice(0, 40)
+    .map((p) => String(p.text || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  const identityTokens = [];
+  socialProfiles(w).forEach((c) => {
+    if (!c) return;
+    [c.name, c.nick, c.nickname, c.username]
+      .filter(Boolean)
+      .forEach((raw) => {
+        const value = String(raw).replace(/^@/, "").trim();
+        if (!value) return;
+        identityTokens.push(value);
+        const first = value.split(/\s+/)[0];
+        if (first && first.length >= 3) identityTokens.push(first);
+      });
+  });
+
+  const escapeRe = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const normalizeFallbackShape = (value) => {
+    let text = String(value || "").toLowerCase();
+    [...new Set(identityTokens)]
+      .sort((a, b) => b.length - a.length)
+      .forEach((name) => {
+        if (!name || name.length < 3) return;
+        text = text.replace(new RegExp(`\\b${escapeRe(name.toLowerCase())}\\b`, "gi"), "<person>");
+      });
+    return text
+      .replace(/@[a-z0-9_.-]+/gi, "<person>")
+      .replace(/\b\d+\b/g, "#")
+      .replace(/[^a-z0-9áéíóöőúüű<>]+/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const recentShapes = recentWorld
+    .map(normalizeFallbackShape)
+    .filter(Boolean);
+
+  const looksRecentlyDuplicated = (value) => {
+    const shape = normalizeFallbackShape(value);
+    if (!shape) return true;
+    return recentShapes.some((recentShape) => {
+      if (!recentShape) return false;
+      if (recentShape === shape) return true;
+      if (shape.length >= 34 && recentShape.length >= 34) {
+        const a = shape.slice(0, 34);
+        const b = recentShape.slice(0, 34);
+        if (a === b) return true;
+      }
+      return false;
+    });
+  };
+
+  const candidates = [];
+  const addCandidate = (text, family = "general") => {
+    const clean = String(text || "").replace(/\s+/g, " ").trim();
+    if (!clean || clean.length < 3) return;
+    if (!candidates.some((row) => row.text.toLowerCase() === clean.toLowerCase())) {
+      candidates.push({ text: clean, family });
+    }
+  };
+
+  /* Trigger aftermath first, but only when THIS author could actually know it. */
+  if ((trigger === "popup-choice" || trigger === "popup-custom-response") && options.popupEventId) {
+    const event = (w.popupEvents || []).find((e) => e && e.id === options.popupEventId);
+    if (event) {
+      const visibility = ["public", "limited", "private"].includes(event.visibility)
+        ? event.visibility
+        : "limited";
+      const involved = (event.involvedIds || []).map(String);
+      const witnesses = (event.witnessIds || []).map(String);
+      const canKnow =
+        visibility !== "private" ||
+        involved.includes(String(author.id));
+      const wasThere = involved.includes(String(author.id)) || witnesses.includes(String(author.id));
+      const title = cut(String(event.title || "").replace(/\s+/g, " ").trim(), 72);
+      if (canKnow && wasThere && title) {
+        addCandidate(en ? `Still processing ${title}.` : `Még mindig a(z) ${title} jár a fejemben.`, "popup");
+        addCandidate(en ? `${title}. Yeah, that actually happened.` : `${title}. Igen, ez tényleg megtörtént.`, "popup");
+        addCandidate(en ? `I have opinions about ${title}. Keeping most of them to myself.` : `Van véleményem a(z) ${title} után. A nagy részét inkább megtartom magamnak.`, "popup");
+      }
+    }
+  }
+
+  if (trigger === "roleplay-ended" && options.sceneId) {
+    const scene = (w.scenes || []).find((s) => s && s.id === options.sceneId);
+    const cast = scene && Array.isArray(scene.cast) ? scene.cast.map(String) : [];
+    if (scene && cast.includes(String(author.id))) {
+      const title = cut(String(scene.title || "").replace(/\s+/g, " ").trim(), 72);
+      if (title) {
+        addCandidate(en ? `Still thinking about ${title}.` : `Még mindig a(z) ${title} jár a fejemben.`, "event");
+        addCandidate(en ? `${title} definitely left an impression.` : `A(z) ${title} azért hagyott maga után valamit.`, "event");
+      }
+    }
+  }
 
   const relationshipFocus =
     relationshipAutonomySpotlightRows(
@@ -35438,37 +35552,141 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
       1
     )[0] || null;
 
-  const relationshipFallback =
+  if (
     relationshipFocus &&
+    relationshipFocus.gravity &&
     relationshipFocus.gravity.mode === "obsession" &&
     relationshipFocus.due
-      ? (
-          relationshipFocus.gravity.hidden
-            ? "someone is getting ridiculously hard to ignore."
-            : `${String(relationshipFocus.target.nick || relationshipFocus.target.nickname || relationshipFocus.target.name || "someone").split(" ")[0]} is becoming a full-time distraction.`
-        )
-      : "";
+  ) {
+    const hidden = Boolean(relationshipFocus.gravity.hidden);
+    const targetName = String(
+      relationshipFocus.target &&
+      (relationshipFocus.target.nick || relationshipFocus.target.nickname || relationshipFocus.target.name) ||
+      "someone"
+    ).split(" ")[0];
 
-  const candidates = [
-    relationshipFallback,
-    job ? "work has been a lot lately." : "still alive. somehow.",
-    dojo ? "training done. my arms disagree." : "today has been unnecessarily long.",
-    goals ? `still working on what I actually want.` : "my schedule is getting ridiculous.",
-    likes ? `could use more time for the things I actually like.` : "need a quieter day for once.",
-    personality ? `${personality.split(/[,.;]/)[0].trim() || "busy"} as usual.` : "busy as usual.",
-    city ? `${city} days really know how to drain you.` : "some days are just a lot.",
-  ].filter(Boolean);
+    if (hidden) {
+      addCandidate(en ? "Not naming names. I am trying to focus." : "Nem mondok nevet. Próbálok koncentrálni.", "relationship");
+      addCandidate(en ? "Some distractions are getting way too persistent." : "Van, ami mostanában feltűnően nehezen hagy koncentrálni.", "relationship");
+      addCandidate(en ? "No comment. Especially about that one person." : "Nincs komment. Főleg arról az egy emberről.", "relationship");
+      addCandidate(en ? "I should probably stop checking whether they're around." : "Valószínűleg abba kéne hagynom, hogy mindig megnézzem, ott van-e.", "relationship");
+    } else if (targetName) {
+      addCandidate(en ? `${targetName} is seriously testing my ability to focus.` : `${targetName} komolyan próbára teszi a koncentrációmat.`, "relationship");
+      addCandidate(en ? `I had a plan. Then ${targetName} happened.` : `Volt egy tervem. Aztán jött ${targetName}.`, "relationship");
+      addCandidate(en ? `Not blaming ${targetName}. Yet.` : `Nem ${targetName} a hibás. Még.`, "relationship");
+      addCandidate(en ? `${targetName}, stay out of my head for five minutes.` : `${targetName}, öt percre költözz ki a fejemből.`, "relationship");
+    }
+  }
 
-  let chosen = candidates.find((x) => {
-    const key = x.toLowerCase().slice(0, Math.min(32, x.length));
-    return !recent.some((r) => r.includes(key));
-  }) || candidates[0] || "still here.";
+  /* Voice/personality families. These use traits only to choose HOW to speak. */
+  if (/sarcast|mock|dry|snark|szarkaszt|g[uú]nyos|cinikus|csipkel/.test(lore)) {
+    addCandidate(en ? "Brilliant. Exactly the kind of nonsense I needed today." : "Remek. Pont erre a hülyeségre volt még szükségem ma.", "sarcastic");
+    addCandidate(en ? "I have notes. None of them are polite." : "Lenne pár megjegyzésem. Egyik sem túl udvarias.", "sarcastic");
+    addCandidate(en ? "Somebody really woke up and chose nonsense." : "Valaki ma tényleg úgy kelt fel, hogy a káoszt választja.", "sarcastic");
+  }
 
-  /* Even the provider-independent rescue path may use ONE real album image.
-     The hard 1/24h guard is still re-checked by applyWorldStep(). We only do
-     this after the character has already made some text posts, and only when
-     the album item has real user/vision context. */
-  const fallbackStats = characterAutonomousPostStats24h(w, author.id);
+  if (/competitive|ambitious|driven|dominant|winner|champion|verseng|ambici|c[eé]ltudatos|domin[aá]ns/.test(lore)) {
+    addCandidate(en ? "Almost is still not enough." : "A majdnem még mindig nem elég.", "competitive");
+    addCandidate(en ? "Second place still sounds like losing." : "A második hely még mindig vereségnek hangzik.", "competitive");
+    addCandidate(en ? "Not interested in being close. I want it done right." : "Nem az érdekel, hogy majdnem jó legyen. Legyen rendesen megcsinálva.", "competitive");
+  }
+
+  if (/disciplin|stoic|controlled|rational|cold|reserved|fegyelmez|kim[eé]rt|racion[aá]lis|rideg/.test(lore)) {
+    addCandidate(en ? "Done is not the same as good enough." : "A kész nem ugyanaz, mint az elég jó.", "disciplined");
+    addCandidate(en ? "Quiet day. Productive day." : "Csendes nap. Hasznos nap.", "disciplined");
+    addCandidate(en ? "No excuses. Just finish it." : "Nincs kifogás. Be kell fejezni.", "disciplined");
+  }
+
+  if (/chaotic|impulsive|reckless|wild|k[aá]osz|impulz[ií]v|vakmer/.test(lore)) {
+    addCandidate(en ? "No context. It was funnier that way." : "Kontextus nélkül viccesebb.", "chaotic");
+    addCandidate(en ? "Today got weird. I approve." : "A mai nap furcsa lett. Támogatom.", "chaotic");
+    addCandidate(en ? "I regret nothing. Yet." : "Semmit sem bánok. Még.", "chaotic");
+  }
+
+  if (/flirt|teas|playful|charm|fl[oö]rt|j[aá]t[eé]kos|cs[aá]b[ií]t/.test(lore)) {
+    addCandidate(en ? "I was behaving. Briefly." : "Jól viselkedtem. Rövid ideig.", "flirty");
+    addCandidate(en ? "Bad influence? Depends who you ask." : "Rossz hatás? Attól függ, kit kérdezel.", "flirty");
+    addCandidate(en ? "Somebody is making it difficult to behave." : "Valaki nagyon megnehezíti, hogy jól viselkedjek.", "flirty");
+  }
+
+  if (/quiet|private|introvert|shy|reserved|csendes|z[aá]rk[oó]zott|visszah[uú]z[oó]d|f[eé]l[eé]nk/.test(lore)) {
+    addCandidate(en ? "Not everything needs an explanation." : "Nem kell mindent megmagyarázni.", "quiet");
+    addCandidate(en ? "Keeping the rest of this one to myself." : "A többit most megtartom magamnak.", "quiet");
+    addCandidate(en ? "Quiet is underrated." : "A csend alulértékelt.", "quiet");
+  }
+
+  if (/arrogant|cocky|conceited|superior|arrog[aá]ns|f[oö]l[eé]nyes|[oö]ntelt/.test(lore)) {
+    addCandidate(en ? "I was right. Again." : "Megint igazam volt.", "cocky");
+    addCandidate(en ? "Could pretend I'm surprised." : "Tegyek úgy, mintha meglepődtem volna?", "cocky");
+    addCandidate(en ? "Standards remain high." : "A mérce továbbra is magasan van.", "cocky");
+  }
+
+  if (/protect|loyal|ride or die|v[eé]delmez|h[uű]s[eé]ges|loj[aá]lis/.test(lore)) {
+    addCandidate(en ? "I notice more than I say." : "Többet észreveszek, mint amennyit kimondok.", "loyal");
+    addCandidate(en ? "Some people make choosing a side very easy." : "Van, aki nagyon megkönnyíti, hogy oldalt válasszak.", "loyal");
+    addCandidate(en ? "Loyalty gets simple once people show you who they are." : "A hűség egyszerűbb lesz, amikor az emberek megmutatják, kik valójában.", "loyal");
+  }
+
+  /* Public-life anchors are safer fallback topics than copying private sheets. */
+  if (dojo) {
+    addCandidate(en ? "Training clears my head better than most conversations do." : "Az edzés jobban kitisztítja a fejem, mint a legtöbb beszélgetés.", "dojo");
+    addCandidate(en ? "Technique does not fix itself." : "A technika nem javul meg magától.", "dojo");
+    addCandidate(en ? `Back to ${dojo}. Still work to do.` : `Vissza a(z) ${dojo} edzésére. Van még min dolgozni.`, "dojo");
+  }
+
+  if (job) {
+    addCandidate(en ? "Work can keep tomorrow's problems until tomorrow." : "A munka holnapi problémái maradjanak holnapra.", "work");
+    addCandidate(en ? "Officially done thinking about work for the next ten minutes." : "A következő tíz percre hivatalosan nem gondolok a munkára.", "work");
+  }
+
+  if (goals) {
+    addCandidate(en ? "One thing on my list is taking longer than it should." : "Egy dolog a listámon sokkal tovább tart, mint kellene.", "goal");
+    addCandidate(en ? "Not there yet. Still moving." : "Még nem tartok ott. De haladok.", "goal");
+  }
+
+  if (likes) {
+    addCandidate(en ? "I need more time for the things I actually enjoy." : "Több idő kéne arra, amit tényleg élvezek.", "likes");
+  }
+
+  if (city) {
+    addCandidate(en ? `Need five quiet minutes away from ${city}.` : `Kérek öt nyugodt percet ${city} nélkül.`, "city");
+  }
+
+  /* Last-resort neutral lines: varied, short, and never relationship templates. */
+  [
+    en ? "One thing at a time." : "Egyszerre egy dolog.",
+    en ? "Keeping this one brief." : "Ezt most rövidre fogom.",
+    en ? "No dramatic update. Just moving." : "Nincs nagy dráma. Csak haladok.",
+    en ? "Enough for today." : "Mára elég.",
+    en ? "Still working on it." : "Még dolgozom rajta.",
+    en ? "Some thoughts can wait." : "Van, amit ráér később kimondani.",
+  ].forEach((text) => addCandidate(text, "neutral"));
+
+  const rotated = candidates.length
+    ? candidates.slice(seed % candidates.length).concat(candidates.slice(0, seed % candidates.length))
+    : [];
+
+  let chosenRow = rotated.find((row) => row && !looksRecentlyDuplicated(row.text));
+
+  if (!chosenRow) {
+    /* If every normal candidate recently appeared, pick the least recent SHAPE
+       rather than blindly repeating candidates[0]. */
+    const scored = rotated.map((row, index) => {
+      const shape = normalizeFallbackShape(row.text);
+      let lastSeen = -1;
+      recentShapes.forEach((recentShape, recentIndex) => {
+        if (shape && recentShape === shape && lastSeen < 0) lastSeen = recentIndex;
+      });
+      return { row, lastSeen, index };
+    });
+    scored.sort((a, b) => (b.lastSeen - a.lastSeen) || (a.index - b.index));
+    chosenRow = scored[0] && scored[0].row;
+  }
+
+  let chosen = chosenRow ? chosenRow.text : (en ? "Keeping this one to myself." : "Ezt most megtartom magamnak.");
+
+  /* Emergency fallback stays text-first. A normal provider-generated post still
+     owns regular album-image behavior and the hard 1-image/24h rule. */
   const fallbackAlbum = albumOf(author);
   const fallbackImageIndex = fallbackAlbum.findIndex((item) =>
     item && (String(item.vision || "").trim() || String(item.who || "").trim() || String(item.note || "").trim())
@@ -35484,7 +35702,7 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
     fallbackImage = `kep${fallbackImageIndex + 1}`;
     const item = fallbackAlbum[fallbackImageIndex];
     const manualCue = String(item && item.note || "").replace(/\s+/g, " ").trim();
-    if (manualCue) chosen = cut(manualCue, 150);
+    if (manualCue && !looksRecentlyDuplicated(manualCue)) chosen = cut(manualCue, 150);
   }
 
   return {
