@@ -25274,13 +25274,11 @@ function ensureFollowerSystem(w) {
       );
 
   profiles.forEach((actor) => {
-    if (
-      pendingRelationshipAutoFollows >=
-      RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
-    ) {
-      return;
-    }
-
+    /*
+     * FOLLOW RELIABILITY: the pending queue cap may limit only queued/weak
+     * follow actions. It must never stop us from evaluating deterministic
+     * strong relationship follows, especially AI -> player.
+     */
     if (
       !actor ||
       isHuman(w, actor.id) ||
@@ -25290,13 +25288,11 @@ function ensureFollowerSystem(w) {
     }
 
     relationshipFollowTargets.forEach((target) => {
-      if (
-        pendingRelationshipAutoFollows >=
-        RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
-      ) {
-        return;
-      }
-
+      /*
+       * Do not return early just because the background follow queue is full.
+       * Strong follows are repaired immediately below and do not consume that
+       * queue at all.
+       */
       if (
         !target ||
         target.id === actor.id ||
@@ -25346,8 +25342,7 @@ function ensureFollowerSystem(w) {
           ) || {}
         );
 
-      const strongAiToAiRelationship =
-        !isHuman(w, target.id) &&
+      const strongImmediateRelationship =
         !isMediaAccount(w, target.id) &&
         !["negative", "hostile"].includes(followBehaviorTier) &&
         ["family", "bond", "relationship-score", "team"].includes(
@@ -25355,17 +25350,21 @@ function ensureFollowerSystem(w) {
         );
 
       /*
-       * FOLLOW RELIABILITY FIX:
-       * Strong AI -> AI social ties must exist in the graph immediately.
-       * Queueing these edges made friends/dojo mates appear not to follow each
-       * other for long periods while unrelated generative actions ran first.
-       * This direct repair changes ONLY the follow graph; relationship state is
-       * untouched. AI -> player still uses the real queued action so the human
-       * notification/event behavior remains unchanged.
+       * PLAYER FOLLOW RELIABILITY FIX:
+       * A strong social tie must exist in the follow graph immediately whether
+       * the target is another AI OR the human player. Previously AI -> AI was
+       * repaired immediately but AI -> player still waited in the background
+       * queue, so the player could remain unfollowed indefinitely while friends
+       * and dojo/team mates followed each other correctly.
+       *
+       * This changes only the follow graph. For AI -> player we also preserve
+       * the same visible follow notification + minimal follow ledger row that
+       * setFollowState() would create, without calling recordSocialEvent() here
+       * (that function re-enters ensureFollowerSystem).
        */
       if (
         !alreadyFollowing &&
-        strongAiToAiRelationship
+        strongImmediateRelationship
       ) {
         actor.following = [
           ...new Set([
@@ -25380,6 +25379,59 @@ function ensureFollowerSystem(w) {
             actor.id,
           ]),
         ];
+
+        if (isHuman(w, target.id)) {
+          const followTs = now();
+
+          if (!Array.isArray(w.socialEvents)) {
+            w.socialEvents = [];
+          }
+
+          w.socialEvents.unshift({
+            id: "se_" + uid(),
+            refId: `${actor.id}:${target.id}:follow:${followTs}`,
+            ts: followTs,
+            type: "follow",
+            actorId: actor.id,
+            targetIds: [target.id],
+            witnessIds: [],
+            visibility: "public",
+            factLevel: "observed",
+            importance: 10,
+            drama: 0,
+            romance: 0,
+            embarrassment: 0,
+            source: "relationship-auto-follow-immediate",
+            text: "Followed a profile.",
+            tags: ["social", "follow"],
+            meta: {
+              followerId: actor.id,
+              targetId: target.id,
+            },
+          });
+          w.socialEvents = w.socialEvents.slice(0, 600);
+
+          pushNote(
+            w,
+            target.id,
+            {
+              icon: "👤",
+              text: sysLangText(
+                w,
+                target.id,
+                `${actor.name} követni kezdett.`,
+                `${actor.name} started following you.`
+              ),
+              link: {
+                type: "char",
+                id: actor.id,
+              },
+            }
+          );
+
+          refreshSocialStatsFor(w, actor.id);
+          refreshSocialStatsFor(w, target.id);
+        }
 
         return;
       }
@@ -27626,26 +27678,35 @@ function setFollowState(
     isHuman(w, follower.id) &&
     !isHuman(w, target.id)
   ) {
-    simEnqueue(
-      w,
-      mkAction(
-        "follow",
-        `follow-back:${target.id}:${follower.id}:${Math.floor(
-          now() / 1200000
-        )}`,
-        {
-          actorId:
-            target.id,
+    /*
+     * The player's follow may itself push an already-positive relationship over
+     * the deterministic follow threshold. Re-evaluate the FOLLOW graph now so
+     * a genuine friend/crush/family/teammate can become mutual immediately.
+     */
+    ensureFollowerSystem(w);
 
-          targetId:
-            follower.id,
+    if (!isFollowing(w, target.id, follower.id)) {
+      simEnqueue(
+        w,
+        mkAction(
+          "follow",
+          `follow-back:${target.id}:${follower.id}:${Math.floor(
+            now() / 1200000
+          )}`,
+          {
+            actorId:
+              target.id,
 
-          trigger:
-            "follow-back",
-        },
-        "event"
-      )
-    );
+            targetId:
+              follower.id,
+
+            trigger:
+              "follow-back",
+          },
+          "event"
+        )
+      );
+    }
   }
 
   return true;
