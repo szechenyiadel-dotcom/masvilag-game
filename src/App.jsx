@@ -13537,13 +13537,73 @@ function socialCommentAnswersShortQuestion(
   );
 }
 
+function normalizeExactCommentGroundingText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\u00c0-\u024f]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function socialCommentBasisMatchesExactPost(post, basis) {
+  if (!post) return false;
+
+  const rawBasis =
+    String(basis || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!rawBasis) return false;
+
+  const normalizedBasis =
+    normalizeExactCommentGroundingText(
+      rawBasis
+    );
+
+  const basisWords =
+    normalizedBasis
+      .split(/\s+/)
+      .filter(Boolean);
+
+  if (
+    !normalizedBasis ||
+    basisWords.length < 1 ||
+    basisWords.length > 18 ||
+    normalizedBasis.replace(/\s+/g, "").length < 3
+  ) {
+    return false;
+  }
+
+  const exactVisibleSource =
+    normalizeExactCommentGroundingText(
+      [
+        post.text,
+        socialPostHasVisibleImage(post)
+          ? post.imageDescription
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+
+  if (!exactVisibleSource) return false;
+
+  return (
+    ` ${exactVisibleSource} `
+      .includes(
+        ` ${normalizedBasis} `
+      )
+  );
+}
+
 function socialCommentGroundedInExactPost(
   w,
   post,
   parentComment,
   actorId,
   value,
-  trigger = ""
+  trigger = "",
+  basis = ""
 ) {
   if (
     !w ||
@@ -13580,6 +13640,23 @@ function socialCommentGroundedInExactPost(
    */
   if (parentComment) {
     return true;
+  }
+
+  /*
+   * PLAYER-POST EXACT ANCHOR:
+   * Every top-level AI comment under the human player's post must carry a
+   * hidden literal basis copied from THIS post text or its confirmed visible
+   * image description. Relationship/personality can shape the response, but
+   * cannot swap in an unrelated subject from memory or another thread.
+   */
+  if (
+    isHuman(w, post.authorId) &&
+    !socialCommentBasisMatchesExactPost(
+      post,
+      basis
+    )
+  ) {
+    return false;
   }
 
   const mode =
@@ -13685,6 +13762,7 @@ EXACT-POST COMMENT GROUNDING — HIGHEST CONTENT PRIORITY:
 - Relationship is a TONE FILTER, not a substitute topic. A rival still has to react to something the post actually gives them.
 - Never manufacture an unrelated insult just to create engagement. In a scheduled comment wave, if the first idea is not grounded, simplify it into a real response to the exact post/question rather than defaulting to silence.
 - Every returned comment must pass this test: "What exact word, question, visible image detail, or parent-comment statement makes THIS sentence a sensible response?" If there is no clear answer, do not return that comment.
+- PLAYER POST GROUNDING PROOF: for every TOP-LEVEL comment under the human player's post, return a hidden basis field containing 1–18 CONSECUTIVE words copied literally from THIS exact post text or its confirmed visible image description. The comment text must directly react to that basis. Do not copy basis from another post, memory, relationship card or world event.
 ${hasImage
   ? `- Visual reactions may use ONLY details in the supplied image description.`
   : `- TEXT-ONLY HARD LOCK: there is NO visible photo. Never mention/invent a photo, picture, selfie, mugshot, photographer, pose, outfit, facial look, "you look like...", or any other visible appearance detail.`}
@@ -25259,6 +25337,53 @@ function ensureFollowerSystem(w) {
           actor.id
         );
 
+      const followBehaviorTier =
+        relationshipFilterTier(
+          effectiveRelationshipForBehavior(
+            w,
+            actor.id,
+            target.id
+          ) || {}
+        );
+
+      const strongAiToAiRelationship =
+        !isHuman(w, target.id) &&
+        !isMediaAccount(w, target.id) &&
+        !["negative", "hostile"].includes(followBehaviorTier) &&
+        ["family", "bond", "relationship-score", "team"].includes(
+          eligibility.mode
+        );
+
+      /*
+       * FOLLOW RELIABILITY FIX:
+       * Strong AI -> AI social ties must exist in the graph immediately.
+       * Queueing these edges made friends/dojo mates appear not to follow each
+       * other for long periods while unrelated generative actions ran first.
+       * This direct repair changes ONLY the follow graph; relationship state is
+       * untouched. AI -> player still uses the real queued action so the human
+       * notification/event behavior remains unchanged.
+       */
+      if (
+        !alreadyFollowing &&
+        strongAiToAiRelationship
+      ) {
+        actor.following = [
+          ...new Set([
+            ...(actor.following || []),
+            target.id,
+          ]),
+        ];
+
+        target.followers = [
+          ...new Set([
+            ...(target.followers || []),
+            actor.id,
+          ]),
+        ];
+
+        return;
+      }
+
       if (
         !alreadyFollowing &&
         pendingRelationshipAutoFollows < RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
@@ -25810,6 +25935,7 @@ function aiFollowEligibility(
   const rel = getRel(w, actor.id, target.id);
   const reverse = getRel(w, target.id, actor.id);
   const relScore = Number(rel && rel.score) || 0;
+  const reverseScore = Number(reverse && reverse.score) || 0;
   const secretCrush = hasSecretCrushSignal(rel, actor, target);
   const interactionScore = recentFollowInteractionScore(w, actor.id, target.id);
 
@@ -25825,11 +25951,17 @@ function aiFollowEligibility(
     return { allowed:false, mode:"blocked", reason:"explicit-enemy-or-rival" };
   }
 
-  if (hasPositiveFollowBond(rel)) {
+  if (
+    hasPositiveFollowBond(rel) ||
+    (
+      !hasEnemyOrRivalBond(rel) &&
+      hasPositiveFollowBond(reverse)
+    )
+  ) {
     return { allowed:true, mode:"bond", reason:"positive-personal-bond" };
   }
 
-  if (relScore >= 25) {
+  if (Math.max(relScore, reverseScore) >= 25) {
     return { allowed:true, mode:"relationship-score", reason:"positive-relationship-score" };
   }
 
@@ -30772,6 +30904,8 @@ NYILVÁNOS VS. PRIVÁT REALIZMUS:
 
 KONKRÉT POSZTHOZ KÖTÉS:
 - Minden komment ELŐTT alkalmazd a SHARED POST COMPREHENSION jelentést; ne kezdj karakterreakciót addig, amíg a poszt alapjelentése nincs rögzítve.
+- A basis nem dísz: először válaszd ki a konkrét, szó szerinti post/image részletet, amely kiváltja a reakciót, és CSAK UTÁNA írd meg a kommentet relationship + personality + Speech/Voice szerint. Ha a kész komment valójában nem reagál a basisre, írd újra.
+- TILOS egy másik feed-poszt témáját, korábbi vitát vagy relationship-memory témát becsempészni csak azért, mert karakterhűen hangzik. Az csak akkor jelenhet meg, ha a jelenlegi basishez ténylegesen kapcsolódó reakció.
 - POSZT-AZONOSÍTÁS HARD RULE: a jelenlegi célposzt mindig ${post.id}, szerzője mindig ${post.authorId} (${author ? author.name : "?"}). A kommentelőnek ezt nem szabad elveszítenie a generálás során.
 - A komment szövegének konkrétan erre a posztra kell reagálnia: annak captionjére, képére, hangulatára vagy a már ebben a threadben elhangzott kommentre.
 - RÖVID HÉTKÖZNAPI STÁTUSZNÁL ("work has been a lot lately", "I'm exhausted", "I'm bored", "training killed me today" stb.) ne gyárts mögé rejtett drámát csak azért, mert a kommentelő rival/crush/obsessed. Előbb a PONTOS aktuális állapotra reagáljon; a SAJÁT karakterlapja döntse el, MIT TENNE/MONDANA erre, a kapcsolat pedig azt, mennyire közeli/intenzív. A relationship NEM változtathatja át az "I'm bored" posztot titkos célzássá, kihívássá vagy konfliktussá.
@@ -31006,7 +31140,7 @@ KAPCSOLATI FOLYTONOSSÁG FRISSÍTÉSE:
 Formátum:
 
 {"comments":[
-{"id":"szereplő azonosítója","post_id":"${post.id}","post_author_id":"${post.authorId}","text":"természetes social media komment","reply_to":"k2 vagy üres","trigger":"max 8 szó: mi konkrétan váltotta ki ezt a reakciót"}
+{"id":"szereplő azonosítója","post_id":"${post.id}","post_author_id":"${post.authorId}","text":"természetes social media komment","basis":"1-18 egymást követő szó szó szerint EBBŐL a posztból/képleírásból","reply_to":"k2 vagy üres","trigger":"max 8 szó: mi konkrétan váltotta ki ezt a reakciót"}
 ],
 "likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
 "perceptions":[
@@ -31231,6 +31365,7 @@ HARD RULES:
 - VERY HIGH RELATIONSHIP ATTENTION IDs THAT WERE MISSED: ${missingRelationshipPriority.join(", ") || "none"}.
 - PREVIOUS RAW COMMENT IDs THAT FAILED THE APP'S HARD GROUNDING FILTER AND MUST BE REWRITTEN IF ELIGIBLE: ${rejectedRawActorIds.join(", ") || "none"}.
 - A failed raw row is NOT a reason to drop that character. Rewrite the sentence from scratch so it actually answers this exact post while keeping SELF's own voice.
+- PLAYER POST BASIS HARD RULE: every repaired TOP-LEVEL comment under the human player's post must include basis: 1–18 consecutive words copied literally from THIS exact post text or confirmed visible image description, and the repaired text must directly respond to that basis.
 - If one of the very-high relationship IDs is in ELIGIBLE CHARACTERS, prioritize them when they can respond naturally to the exact post. Hidden obsession increases attention; it does not create an unrelated topic.
 - Return EXACTLY ${Math.min(missing, candidates.length)} DIFFERENT character IDs when that many candidates are listed.
 - If a candidate's first dramatic/sarcastic idea is not grounded, rewrite it into a simpler grounded reaction instead of omitting the character.
@@ -31252,7 +31387,7 @@ HARD RULES:
 - Never use the post author as commenter.
 
 JSON ONLY:
-{"comments":[{"id":"exact eligible id","text":"short natural comment","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
+{"comments":[{"id":"exact eligible id","text":"short natural comment","basis":"1-18 consecutive words copied literally from this exact post/image description","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
       { maxTokens: Math.max(800, Math.min(1800, 260 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
     );
 
@@ -32153,7 +32288,8 @@ function applyComments(n, postId, out, label) {
           null,
           who,
           body,
-          c && c.trigger
+          c && c.trigger,
+          c && c.basis
         )
       ) {
         /*
@@ -34885,9 +35021,14 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
   const burstKey = String(options && options.burstKey || "").trim();
   const allowBurst = Boolean(options && options.allowBurst && burstKey);
   if (allowBurst) {
+    /*
+     * A triggered aftermath burst already forbids reusing the same author by
+     * burstKey. Requiring an additional 45-second personal gap could eliminate
+     * every candidate and was the reason a player post sometimes produced no
+     * follow-up posts at all. Distinct-author + rolling hard cap is sufficient.
+     */
     if (autonomousTriggerBurstUsedAuthorIds(w, burstKey).has(String(c.id))) return false;
-    const lastPostAt = Number(stats.lastPostAt || 0);
-    return !lastPostAt || now() - lastPostAt >= AUTONOMOUS_TRIGGER_BURST_MIN_GAP_MS;
+    return true;
   }
 
   const lastPostAt = Number(stats.lastPostAt || 0);
@@ -35500,11 +35641,31 @@ async function hydrateAuthorAlbumForSocialPosting(
 
 async function genFocusedWorldStep(w, triggerPayload = {}) {
   const triggerSelectionContext = autonomousTriggeredFeedContext(w, triggerPayload);
-  const author = fairPostCast(w, {
+  const postingSelectionOptions = {
     allowBurst: Boolean(triggerPayload && triggerPayload.allowBurst),
     burstKey: String(triggerPayload && triggerPayload.burstKey || ""),
     preferredIds: triggerSelectionContext.preferredIds,
-  })[0];
+  };
+
+  const requestedAuthor =
+    triggerPayload && triggerPayload.authorId
+      ? charById(w, triggerPayload.authorId)
+      : null;
+
+  const author =
+    requestedAuthor &&
+    characterCanAutonomouslyPost(
+      w,
+      requestedAuthor,
+      null,
+      postingSelectionOptions
+    )
+      ? requestedAuthor
+      : fairPostCast(
+          w,
+          postingSelectionOptions
+        )[0];
+
   if (!author) return null;
 
   const triggerContext = autonomousTriggeredFeedContext(w, triggerPayload, author.id);
@@ -56731,9 +56892,42 @@ function simEnqueue(w, action) {
   const doneAt = Number(sim.done[action.key] || 0);
   if (doneAt && now() - doneAt < SIM_DONE_TTL) return false;
   if (sim.queue.some((x) => x && x.key === action.key)) return false;
-  if (action.source === "manual" || action.source === "coverage") {
+  const triggeredFeedBurst =
+    action.type === "world" &&
+    String(action.key || "").startsWith("triggered-feed-burst:");
+
+  if (action.source === "manual" || triggeredFeedBurst) {
     sim.queue.unshift(action);
     sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
+  } else if (action.source === "coverage") {
+    /*
+     * Coverage generated by burst post #1 must not jump in front of already
+     * queued burst posts #2/#3. Keep the leading burst block intact, then place
+     * comment coverage immediately after it.
+     */
+    let burstPrefix = 0;
+    while (
+      burstPrefix < sim.queue.length &&
+      sim.queue[burstPrefix] &&
+      sim.queue[burstPrefix].type === "world" &&
+      String(sim.queue[burstPrefix].key || "").startsWith(
+        "triggered-feed-burst:"
+      )
+    ) {
+      burstPrefix += 1;
+    }
+
+    if (burstPrefix > 0) {
+      sim.queue.splice(
+        burstPrefix,
+        0,
+        action
+      );
+      sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
+    } else {
+      sim.queue.unshift(action);
+      sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
+    }
   } else {
     sim.queue.push(action);
     sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
@@ -64302,23 +64496,55 @@ const signOut = useCallback(async () => {
     let queued = false;
 
     update((n) => {
+      /*
+       * Pick the burst authors NOW, while the triggering post/event is already
+       * present in the authoritative world. This prevents three queued slots
+       * from repeatedly resolving to the same/temporarily unavailable author.
+       */
+      const triggerPayload = {
+        ...(payload || {}),
+        trigger: String(trigger || "social-trigger"),
+        triggerRefId: String(refId || ""),
+        allowBurst: true,
+        burstKey,
+      };
+
+      const triggerContext =
+        autonomousTriggeredFeedContext(
+          n,
+          triggerPayload
+        );
+
+      const burstAuthors =
+        fairPostCast(
+          n,
+          {
+            allowBurst: true,
+            burstKey,
+            preferredIds: triggerContext.preferredIds,
+          }
+        )
+          .filter((c) => c && c.id)
+          .slice(0, total);
+
+      const actualTotal = burstAuthors.length;
+
       /* coverage is intentional: a user/popup/multi-AI-event aftermath should
          be visible before unrelated stale maintenance. Reverse insertion keeps
          burstIndex 0 at the front even though coverage uses unshift(). */
-      for (let i = total - 1; i >= 0; i -= 1) {
+      for (let i = actualTotal - 1; i >= 0; i -= 1) {
+        const burstAuthor = burstAuthors[i];
+
         queued = simEnqueue(
           n,
           mkAction(
             "world",
-            `triggered-feed-burst:${burstKey}:${i}`,
+            `triggered-feed-burst:${burstKey}:${i}:${burstAuthor.id}`,
             {
-              ...(payload || {}),
-              trigger: String(trigger || "social-trigger"),
-              triggerRefId: String(refId || ""),
-              allowBurst: true,
-              burstKey,
+              ...triggerPayload,
+              authorId: burstAuthor.id,
               burstIndex: i,
-              burstTotal: total,
+              burstTotal: actualTotal,
             },
             "coverage"
           )
