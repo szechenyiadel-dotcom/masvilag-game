@@ -35488,7 +35488,13 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
   }
 
   return {
-    posts: [{ id: author.id, text: chosen, image: fallbackImage, comments: [] }],
+    posts: [{
+      id: author.id,
+      text: chosen,
+      image: fallbackImage,
+      comments: [],
+      __localEmergencyFallback: true,
+    }],
     changes: [],
     events: [],
     selfUpdates: [],
@@ -35811,6 +35817,12 @@ function applyWorldStep(n, out, postingOptions = {}) {
     /* v99.3: hard quota is per author / rolling 24h below. */
     const author = aiVoice(n, p && (p.id !== undefined ? p.id : p.name));
     if (!author || !p.text) return;
+    const localEmergencyFallback = Boolean(
+      p &&
+      p.__localEmergencyFallback === true &&
+      postingOptions &&
+      postingOptions.allowBurst
+    );
     const authorChar = charById(n, author);
     if (!authorChar || !characterCanAutonomouslyPost(n, authorChar, null, postingOptions)) return;
     const postText =
@@ -35825,10 +35837,21 @@ function applyWorldStep(n, out, postingOptions = {}) {
         )
       );
     if (!postText) return;
-    if (socialSelfClassificationContradiction(n, author, postText)) return;
+    /*
+     * The local emergency fallback is built exclusively from the selected
+     * author's own sheet. During a triggered burst it must not be rejected by
+     * a secondary stylistic/self-classification heuristic after the provider
+     * has already failed, otherwise the "guaranteed" slot can still vanish.
+     * Normal generated posts keep every existing guard.
+     */
+    if (
+      !localEmergencyFallback &&
+      socialSelfClassificationContradiction(n, author, postText)
+    ) return;
 
     const mentionedPostTargets = explicitNamedCharacterIdsInText(n, postText, author);
     if (
+      !localEmergencyFallback &&
       mentionedPostTargets.some((targetId) =>
         friendshipHostilityMismatch(
           n,
@@ -35925,7 +35948,10 @@ function applyWorldStep(n, out, postingOptions = {}) {
      * Ha az AI túl korán kér képet, attól még a szöveges poszt létrejöhet,
      * csak a kép kerül elhagyásra.
      */
-    const requestedPic = p.image ? albumFind(authorChar, p.image) : null;
+    const requestedPic =
+      localEmergencyFallback
+        ? null
+        : (p.image ? albumFind(authorChar, p.image) : null);
     const pic = requestedPic && autonomousCanUseAlbumImageToday(
       n,
       authorChar,
@@ -62417,13 +62443,41 @@ if (targetNote) {
     return "dm";
   }
 
-  let out =
-    action.type === "world"
-      ? await genFocusedWorldStep(view, action.payload || {})
-      : await genWorldStep(
-          view,
-          false
-        );
+  let out = null;
+
+  if (action.type === "world") {
+    /*
+     * BURST EXECUTION RELIABILITY FIX:
+     * A provider failure used to escape runSimulationAction() before the local
+     * post fallback below could run. The outer scheduler caught the exception
+     * silently for background actions, so the console showed "selected world"
+     * while no post was ever committed.
+     *
+     * World/feed generation is now best-effort: provider failure becomes an
+     * empty result and immediately falls through to the existing deterministic
+     * local fallback. No other simulation lane is changed here.
+     */
+    try {
+      out = await genFocusedWorldStep(
+        view,
+        action.payload || {}
+      );
+    } catch (worldPostErr) {
+      console.warn(
+        "[autonomous-feed] provider generation failed; using local fallback",
+        action && action.key || "",
+        worldPostErr && worldPostErr.message
+          ? worldPostErr.message
+          : worldPostErr
+      );
+      out = null;
+    }
+  } else {
+    out = await genWorldStep(
+      view,
+      false
+    );
+  }
 
   /*
    * Üres/stale AI-result nem számít sikeres világkörnek. Így nem indítjuk
@@ -65837,12 +65891,55 @@ const signOut = useCallback(async () => {
           return;
         }
 
+        const retryableTriggeredFeed = Boolean(
+          action &&
+          action.type === "world" &&
+          String(action.key || "").startsWith("triggered-feed-burst:")
+        );
+
+        const burstRetryCount = Math.max(
+          0,
+          Math.floor(
+            Number(
+              action &&
+              action.payload &&
+              action.payload.__burstRetryCount
+            ) || 0
+          )
+        );
+
         if (
           queued &&
           action &&
           queued.id === action.id
         ) {
-          simDropQueued(n, queued.id);
+          if (
+            ok ||
+            !retryableTriggeredFeed ||
+            burstRetryCount >= 2
+          ) {
+            simDropQueued(n, queued.id);
+          } else {
+            /*
+             * A selected triggered-feed slot may fail because of a transient
+             * provider/network problem. Keep the SAME slot at the front for up
+             * to two retries instead of silently consuming it. This touches
+             * only triggered feed burst actions.
+             */
+            action.payload = {
+              ...(action.payload || {}),
+              __burstRetryCount: burstRetryCount + 1,
+            };
+
+            const sim = ensureSimState(n);
+            const idx = sim.queue.findIndex(
+              (row) => row && row.id === action.id
+            );
+            if (idx > 0) {
+              const [row] = sim.queue.splice(idx, 1);
+              sim.queue.unshift(row);
+            }
+          }
         }
 
         if (ok) {
