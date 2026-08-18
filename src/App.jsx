@@ -7762,7 +7762,11 @@ function applyChanges(
           eligibility.mode !==
             "enemy-secret-crush"
         ) &&
-        followScore >= 34
+        (
+          followScore >= 34 ||
+          eligibility.mode === "bond" ||
+          eligibility.mode === "team"
+        )
       ) {
         simEnqueue(
           n,
@@ -25076,7 +25080,7 @@ function ensureSocialProfileRow(c) {
   return c;
 }
 
-const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 2;
+const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 8;
 
 function ensureFollowerSystem(w) {
   if (!w || typeof w !== "object") {
@@ -25170,6 +25174,20 @@ function ensureFollowerSystem(w) {
    * Enemy/rival secret-crush eset NEM kerül ide automatikusan;
    * azt az autonóm döntés ritkán külön kezelheti.
    */
+  /*
+   * AI -> AI edges are evaluated before AI -> player edges. socialProfiles()
+   * intentionally starts with the human profile, which previously meant the
+   * small pending-follow queue could be filled by player follows before
+   * friends / dojo mates / teammates ever reached the scheduler.
+   */
+  const relationshipFollowTargets =
+    profiles
+      .slice()
+      .sort((a, b) =>
+        Number(isHuman(w, a && a.id)) -
+        Number(isHuman(w, b && b.id))
+      );
+
   profiles.forEach((actor) => {
     if (
       pendingRelationshipAutoFollows >=
@@ -25186,7 +25204,7 @@ function ensureFollowerSystem(w) {
       return;
     }
 
-    profiles.forEach((target) => {
+    relationshipFollowTargets.forEach((target) => {
       if (
         pendingRelationshipAutoFollows >=
         RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
@@ -25555,6 +25573,10 @@ function followBondWeight(rel) {
     return 34;
   }
 
+  if (/szövetséges|ally|allies/.test(bond)) {
+    return 30;
+  }
+
   if (/osztálytárs|classmate|munkatárs|coworker|szomszéd|neighbor|főnök|boss|beosztott|mentor|tanítvány|student|edző|coach|tanár|teacher/.test(bond)) {
     return 16;
   }
@@ -25637,7 +25659,7 @@ function hasPositiveFollowBond(rel) {
   const bond =
     followBondText(rel);
 
-  return /barát|friend|best friend|close friend|közeli barát|crush|mutual crush|kölcsönös crush|járnak|dating|jegyes|engaged|házastárs|spouse|partner|osztálytárs|classmate|munkatárs|coworker|colleague|szomszéd|neighbor|főnök|boss|beosztott|mentor|tanítvány|student|edző|coach|tanár|teacher|csapattárs|teammate|team mate|team-mate|klubtárs|clubmate|dojo mate|dojótárs|squadmate|squad mate|bandmate|band mate/.test(
+  return /barát|friend|best friend|close friend|közeli barát|szövetséges|ally|allies|crush|mutual crush|kölcsönös crush|járnak|dating|jegyes|engaged|házastárs|spouse|partner|osztálytárs|classmate|munkatárs|coworker|colleague|szomszéd|neighbor|főnök|boss|beosztott|mentor|tanítvány|student|edző|coach|tanár|teacher|csapattárs|teammate|team mate|team-mate|klubtárs|clubmate|dojo mate|dojótárs|squadmate|squad mate|bandmate|band mate/.test(
     bond
   );
 }
@@ -25657,6 +25679,48 @@ function hasFamilyFollowBond(rel) {
   );
 }
 
+function followCommunityToken(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9áéíóöőúüű -]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function followCommunityKeys(character) {
+  if (!character) return [];
+
+  const keys = [];
+  const add = (kind, value) => {
+    if (!value) return;
+
+    String(value)
+      .split(/[|,;/]+/)
+      .map(followCommunityToken)
+      .filter((token) =>
+        token.length >= 3 &&
+        !/^(?:none|unknown|n\/?a|nincs|ismeretlen)$/.test(token)
+      )
+      .slice(0, 6)
+      .forEach((token) =>
+        keys.push(`${kind}:${token}`)
+      );
+  };
+
+  add("dojo", character.dojo);
+  add("team", character.team);
+  add("club", character.club);
+  add("school", character.school);
+  add("house", character.house);
+  add("gang", character.gang);
+  add("crew", character.crew);
+  add("organization", character.organization);
+  add("affiliation", character.affiliation);
+  add("faction", character.faction);
+
+  return [...new Set(keys)];
+}
+
 function sameFollowTeamOrFaction(
   actor,
   target
@@ -25671,7 +25735,7 @@ function sameFollowTeamOrFaction(
   const tf =
     factionFlags(target);
 
-  return Boolean(
+  const knownFactionMatch = Boolean(
     (af.pogue && tf.pogue) ||
     (af.kook && tf.kook) ||
     (af.hydra && tf.hydra) ||
@@ -25681,6 +25745,20 @@ function sameFollowTeamOrFaction(
     (af.ironDragons && tf.ironDragons) ||
     (af.wasabi && tf.wasabi)
   );
+
+  if (knownFactionMatch) {
+    return true;
+  }
+
+  const actorCommunities =
+    new Set(
+      followCommunityKeys(actor)
+    );
+
+  return followCommunityKeys(target)
+    .some((key) =>
+      actorCommunities.has(key)
+    );
 }
 
 function opposingFollowFaction(
@@ -26447,6 +26525,8 @@ function aiShouldFollow(
     (
       eligibility.mode === "family" ||
       eligibility.mode === "secret-crush" ||
+      (trigger === "relationship" && eligibility.mode === "bond") ||
+      (trigger === "relationship" && eligibility.mode === "team") ||
       strongBond ||
       relScore >= 25 ||
       (trigger === "relationship" && score >= 34)
@@ -26948,6 +27028,16 @@ function pickAutonomousFollowAction(w) {
         return;
       }
 
+      const eligibility = aiFollowEligibility(
+        w,
+        actor.id,
+        target.id
+      );
+
+      if (!eligibility.allowed) {
+        return;
+      }
+
       const score =
         followInterestScore(
           w,
@@ -26955,15 +27045,14 @@ function pickAutonomousFollowAction(w) {
           target.id
         );
 
-      if (score < 34) {
+      if (
+        score < 34 &&
+        !["family", "bond", "relationship-score", "team"].includes(
+          eligibility.mode
+        )
+      ) {
         return;
       }
-
-      const eligibility = aiFollowEligibility(
-        w,
-        actor.id,
-        target.id
-      );
 
       const rel = getRel(
         w,
@@ -26973,10 +27062,16 @@ function pickAutonomousFollowAction(w) {
 
       const strongRelationship = Boolean(
         eligibility.allowed &&
-        ["family", "bond", "relationship-score", "secret-crush"].includes(eligibility.mode) &&
         (
-          followBondWeight(rel) >= 34 ||
-          (Number(rel && rel.score) || 0) >= 25
+          eligibility.mode === "team" ||
+          (
+            ["family", "bond", "relationship-score", "secret-crush"].includes(eligibility.mode) &&
+            (
+              eligibility.mode === "bond" ||
+              followBondWeight(rel) >= 34 ||
+              (Number(rel && rel.score) || 0) >= 25
+            )
+          )
         )
       );
 
