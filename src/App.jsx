@@ -9400,7 +9400,7 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
  * ACTIVE SESSION FEED PULSE
  *
  * While the player is actually inside the visible app, aim for roughly one
- * NEW AI feed post every five minutes. This is only a cadence target:
+ * NEW AI feed post every three minutes. This is only a cadence target:
  * per-character rolling-24h quotas remain authoritative, so nobody can exceed
  * their own 3–5 posts / 24h or 1 image post / 24h.
  */
@@ -9409,7 +9409,7 @@ const LIVE_WORLD_ACTIVE_POST_TARGET_MS = Math.max(
   Math.min(
     8 * 60 * 1000,
     Number(import.meta.env.VITE_WORLD_ACTIVE_POST_INTERVAL_MS) ||
-      5 * 60 * 1000
+      3 * 60 * 1000
   )
 );
 
@@ -13193,6 +13193,21 @@ function socialShortStatusTopicProfile(post) {
       label:
         "travel / trip / vacation",
     },
+
+    {
+      id: "boredom",
+      post:
+        /\b(?:i['’]?m\s+bored|im\s+bored|so\s+bored|bored\s+af|boredom|nothing\s+to\s+do|nothing\s+going\s+on|boring\s+(?:day|night|evening)|unatkozom|unatkozok|unatkozunk|unalom|nincs\s+mit\s+csin[aá]lni|kurv[aá]ra\s+unatkozom)\b/i,
+
+      /*
+       * Broad but still topical real-social reactions to boredom.
+       */
+      comment:
+        /\b(?:bored|boredom|boring|nothing\s+to\s+do|something\s+to\s+do|do\s+something|find\s+something|keep\s+(?:you|yourself)\s+busy|entertain|fix\s+that|solve\s+that|get\s+in\s+the\s+car|come\s+(?:over|with\s+me|train|spar|out|by)|go\s+(?:out|do\s+something|train|somewhere|outside)|hang\s*out|call\s+me|text\s+me|movie|movies|game|gaming|train|training|spar|drive|shopping|food|drinks?|plans?|free\s+(?:tonight|today|now)|stop\s+scrolling|put\s+your\s+phone\s+down|touch\s+grass|skill\s+issue|your\s+problem|you\s+problem|i\s+can\s+(?:fix|solve)\s+that|i\s+know\s+(?:how|what)\s+to\s+do|i\s+can\s+think\s+of\s+(?:something|a\s+few\s+things)|unatkoz|unalom|nincs\s+mit\s+csin[aá]lni|csin[aá]lj\s+valamit|gyere\s+(?:[aá]t|velem|edzeni)|menj[uü]nk|h[ií]vj\s+fel|[ií]rj\s+r[aá]m|lefoglal|program)\b/i,
+
+      label:
+        "boredom / having nothing to do",
+    },
   ];
 
   const matched =
@@ -13301,6 +13316,9 @@ function socialShortStatusGroundingCard(post) {
 
     travel:
       `Required semantic direction: the trip, flight, airport, destination, packing, hotel/vacation, or asking where/when they are going.`,
+
+    boredom:
+      `Required semantic direction: the author's boredom / lack of something to do. A valid response may acknowledge it, tease THE BOREDOM, suggest/order a concrete activity, invite the author somewhere, offer attention/company, challenge them to an activity, or dryly dismiss the boredom. It may NOT invent a hidden message, accusation, argument or unrelated conflict.`,
   };
 
   return `
@@ -13310,6 +13328,51 @@ SHORT STATUS TOPIC LOCK:
 - Relationship/personality may change TONE only. It may NOT replace "${profile.label}" with an unrelated dojo feud, old argument, appearance critique, random accusation or different world event.
 - ${familyExamples[profile.id] || ""}
 - If a rival wants to be sarcastic, sarcasm still has to attach to THIS topic. Principle: "shocking, you actually worked" is grounded; a random Cobra Kai accusation is not.
+${profile.id === "boredom" ? `
+BOREDOM MEANING LOCK:
+- The visible post means the author is BORED / HAS NOTHING TO DO.
+- It does NOT by itself mean they are hiding something, testing someone, baiting someone, being mysterious, talking about a relationship, issuing a challenge, or referring to an earlier argument.
+- Do not invent an invisible previous sentence such as "predictable", "keep up with me", "prove it", "stop hiding", "make people guess", etc.
+- Relationship/personality may make the answer warm, harsh, flirty, possessive, dry or dismissive, but it must still be an answer to the BOREDOM.
+` : ""}
+`;
+}
+
+function socialShortStatusCharacterFidelityCard(
+  w,
+  post
+) {
+  const profile =
+    socialShortStatusTopicProfile(
+      post
+    );
+
+  if (!profile) return "";
+
+  return `
+SHORT-STATUS CHARACTER FIDELITY — HARD DECISION ORDER:
+1. FIRST accept the post's current-state meaning exactly: ${profile.label}.
+2. THEN, for EACH commenter separately, use ONLY that commenter's SEALED ACTOR CAPSULE + exact directed relationship to the post author.
+3. SELF Personality / Traits decide WHAT KIND OF RESPONSE ACT this person chooses. SELF Speech / Voice decide HOW they phrase it. The directed relationship decides closeness, openness and intensity.
+4. Do NOT write a generic social comment first and decorate it with the character afterward.
+
+${profile.id === "boredom" ? `
+BOREDOM → CHARACTER TRANSLATION:
+- action-oriented / practical SELF: a concrete thing to do, practical offer, command, ride, plan or invitation is natural;
+- dry / sarcastic SELF: tease the boredom itself, not a made-up motive;
+- close friend SELF: familiar shorthand, practical offer or comfortable teasing should still visibly read as friendship;
+- rival SELF: may mock inactivity or challenge the author to DO something, but may not continue a nonexistent argument;
+- controlling / dominant / possessive / obsessive SELF: may make the solution more direct, commanding, personal or "come with me" in style, but it still has to solve/react to boredom;
+- reserved SELF: may give one terse suggestion/question or ignore it;
+- SELF's occupation/dojo/history may inspire an activity suggestion only if it is natural for SELF. It cannot turn "I'm bored" into an unrelated dojo/work conflict.
+- No hidden accusation merely to sound intense.
+` : ""}
+
+FINAL CHECK FOR EVERY COMMENT:
+A) What exact state/topic did the author post?
+B) What RESPONSE ACT follows from THIS commenter's OWN character sheet?
+C) Does the wording follow THIS commenter's OWN Speech/Voice?
+If A, B or C is unclear, rewrite the comment before returning it.
 `;
 }
 
@@ -30563,6 +30626,8 @@ ${relationshipCommentAttentionCard(w, cast, post.authorId)}
 
 ${strictSocialActorCapsules(w, cast, post)}
 
+${socialShortStatusCharacterFidelityCard(w, post)}
+
 KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 - A fenti SEALED ACTOR CAPSULES blokkok szigorúan ID-hoz kötöttek. Egy output sor id-je CSAK a saját capsule-jából olvashat "én / saját" tényt.
 - Minden kommentelő a SAJÁT teljes karakterlapját használja, nem másik kommentelőét. Más karakter jobja, dojoja, rangja, mentorai, crushai, Connections-sorai és backstory-ja TILOS saját tényként.
@@ -30594,7 +30659,7 @@ KONKRÉT POSZTHOZ KÖTÉS:
 - Minden komment ELŐTT alkalmazd a SHARED POST COMPREHENSION jelentést; ne kezdj karakterreakciót addig, amíg a poszt alapjelentése nincs rögzítve.
 - POSZT-AZONOSÍTÁS HARD RULE: a jelenlegi célposzt mindig ${post.id}, szerzője mindig ${post.authorId} (${author ? author.name : "?"}). A kommentelőnek ezt nem szabad elveszítenie a generálás során.
 - A komment szövegének konkrétan erre a posztra kell reagálnia: annak captionjére, képére, hangulatára vagy a már ebben a threadben elhangzott kommentre.
-- RÖVID HÉTKÖZNAPI STÁTUSZNÁL ("work has been a lot lately", "I'm exhausted", "training killed me today" stb.) ne gyárts mögé rejtett drámát csak azért, mert a kommentelő rival/crush/obsessed. Előbb a hétköznapi témára reagáljon; a kapcsolat csak azt dönti el, HOGYAN.
+- RÖVID HÉTKÖZNAPI STÁTUSZNÁL ("work has been a lot lately", "I'm exhausted", "I'm bored", "training killed me today" stb.) ne gyárts mögé rejtett drámát csak azért, mert a kommentelő rival/crush/obsessed. Előbb a PONTOS aktuális állapotra reagáljon; a SAJÁT karakterlapja döntse el, MIT TENNE/MONDANA erre, a kapcsolat pedig azt, mennyire közeli/intenzív. A relationship NEM változtathatja át az "I'm bored" posztot titkos célzássá, kihívássá vagy konfliktussá.
 - Ha egy komment másik posztra is ugyanúgy illene, ellenőrizd újra a jelenlegi poszt konkrét részleteit, és csak akkor fogadd el, ha van egyértelmű kapcsolat EZHEZ a poszthoz.
 - A poszt szerzőjének személye nem cserélhető fel egy másik karakterrel. Ha ${author ? author.name : "?"} [${post.authorId}] posztolt, a reakciókat az ő karaktere, a vele való kapcsolat és az ő konkrét posztja szűri.
 - THIRD-PARTY SCOPE: olyan ember, aki nincs név/@mention/image-confirmation formájában EBBEN a posztban vagy a közvetlen parent kommentben, NE kerüljön be a kommentbe pusztán emlékből, trendből, crushból vagy világdrámából. Különösen ne hozd be automatikusan a játékost egy AI→AI poszt alá.
@@ -31045,6 +31110,8 @@ ${relationshipBehaviorCard(w, c.id, post.authorId)}`).join("\n")}
 
 ${strictSocialActorCapsules(w, candidates, post)}
 
+${socialShortStatusCharacterFidelityCard(w, post)}
+
 HARD RULES:
 - VERY HIGH RELATIONSHIP ATTENTION IDs THAT WERE MISSED: ${missingRelationshipPriority.join(", ") || "none"}.
 - PREVIOUS RAW COMMENT IDs THAT FAILED THE APP'S HARD GROUNDING FILTER AND MUST BE REWRITTEN IF ELIGIBLE: ${rejectedRawActorIds.join(", ") || "none"}.
@@ -31053,6 +31120,7 @@ HARD RULES:
 - Return EXACTLY ${Math.min(missing, candidates.length)} DIFFERENT character IDs when that many candidates are listed.
 - If a candidate's first dramatic/sarcastic idea is not grounded, rewrite it into a simpler grounded reaction instead of omitting the character.
 - For a SHORT STATUS TOPIC LOCK, the repaired comment MUST stay inside that exact status topic family. Rivalry/obsession/friendship modifies tone only; it cannot supply a different subject.
+- If the status is BOREDOM, regenerate that same character from their OWN capsule into a real boredom-response act (practical suggestion/invitation/tease/challenge/company/dismissal as canon permits). Do not preserve an off-topic threat, accusation or invented hidden meaning merely because it sounded dramatic.
 - For POST RESPONSE MODE=party-question, every repaired comment MUST answer/react to the party itself. If a dramatic line drifts into dojo/romance/old-conflict material, rewrite it as a character-faithful PARTY response instead of keeping the unrelated drama.
 - One fresh TOP-LEVEL comment per character. reply_to MUST be empty.
 - Likes do not count.
@@ -57525,7 +57593,7 @@ function feedNeedsFreshPost(w) {
 
   /*
    * When the player is actively inside the app, spread available daily posts
-   * across the session at roughly one new feed post every five minutes.
+   * across the session at roughly one new feed post every three minutes.
    *
    * IMPORTANT: fairPostCast() already excludes characters that reached their
    * personal rolling-24h target, so this does NOT increase the 3–5 daily quota.
@@ -59545,7 +59613,7 @@ function runAutonomousFeedHeartbeat(w, update) {
   /*
    * LIGHTWEIGHT QUOTA HEARTBEAT:
    * During an active visible session the NORMAL AI post gets first chance at
-   * the five-minute mark. This provider-free fallback waits another ~75s and
+   * the three-minute mark. This provider-free fallback waits another ~75s and
    * only rescues the feed if that richer post never materialized.
    *
    * Outside the visible app, preserve the old 90s fallback behavior exactly.
