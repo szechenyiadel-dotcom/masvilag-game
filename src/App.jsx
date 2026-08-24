@@ -25839,6 +25839,24 @@ const AUTO_DEFAULT = {
 
 const LIVE_WORLD_MIN_ACTION_GAP_MS = 650;
 
+/*
+ * LIVE WORLD LIVENESS WATCHDOG
+ *
+ * These thresholds do not change character voice/content rules. They only
+ * prevent a healthy loaded world from sitting visually silent because an old
+ * scheduler timestamp, a long normal per-character cooldown or an empty
+ * background generation left every lane waiting at the same time.
+ */
+const LIVE_WORLD_ACTIVE_SILENCE_RECOVERY_MS = Math.max(
+  22000,
+  Math.min(60000, Number(import.meta.env.VITE_WORLD_ACTIVE_SILENCE_RECOVERY_MS) || 32000)
+);
+const LIVE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS = Math.max(
+  60000,
+  Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS) || 105000)
+);
+const LIVE_WORLD_CLOCK_FUTURE_TOLERANCE_MS = 90 * 1000;
+
 async function loadAuto() {
   return {
     ...AUTO_DEFAULT,
@@ -37701,11 +37719,26 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
     return true;
   }
 
-  const lastPostAt = Number(stats.lastPostAt || 0);
+  const rawLastPostAt = Number(stats.lastPostAt || 0);
+  /* A device/server clock mismatch must not make this character permanently ineligible. */
+  const lastPostAt =
+    rawLastPostAt > now() + LIVE_WORLD_CLOCK_FUTURE_TOLERANCE_MS
+      ? 0
+      : rawLastPostAt;
   if (!lastPostAt) return true;
 
   const signal = autonomousPlayerActivityPostingSignal(w, c);
   let requiredGap = gapMs;
+
+  if (options && options.livenessRecovery) {
+    /* Recovery is deliberately narrower than an aftermath burst: it only
+       shortens a normal personal cooldown after the whole visible world has
+       gone quiet, while keeping the rolling hard cap intact. */
+    requiredGap = Math.min(
+      requiredGap,
+      Math.max(55 * 1000, Math.round(gapMs * 0.34))
+    );
+  }
 
   /* A direct recent player interaction (DM/comment/reply targeted at this AI)
      may wake that character substantially sooner without turning private facts
@@ -38643,6 +38676,7 @@ async function genFocusedWorldStep(w, triggerPayload = {}) {
   const postingSelectionOptions = {
     allowBurst: Boolean(triggerPayload && triggerPayload.allowBurst),
     burstKey: String(triggerPayload && triggerPayload.burstKey || ""),
+    livenessRecovery: Boolean(triggerPayload && triggerPayload.livenessRecovery),
     preferredIds: triggerSelectionContext.preferredIds,
   };
 
@@ -38852,7 +38886,13 @@ ${repetitionGuard(w, [author.id], "autonóm posztok és kommentek")}
 
 JSON:
 {"posts":[{"id":"${author.id}","social_contract":"v1","decision":"POST","postReason":"1 rövid konkrét ok, amiért MOST posztol","postType":"egy engedélyezett post type","anchorType":"egy engedélyezett anchor type","anchorId":"valódi forrás ID vagy üres","anchorBasis":"2-18 szavas rejtett konkrét valóság-anchor, NEM karakterlap-másolat","audienceIntent":"pl. vent / share / tease / inform / invite / ask / react","targetIds":["csak valóban érintett karakter ID-k"],"publicKnowledgeOnly":true,"engagementIntent":"none|question|invite|challenge|opinion_request","text":"a LÁTHATÓ természetes poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}],"relationshipUpdates":[]}${TAIL}`,
-    { maxTokens: 900 }
+    {
+      maxTokens: 900,
+      maxTries: 2,
+      maxBusyWaits: 1,
+      busyRetryCapMs: 7000,
+      timeoutMs: 22000,
+    }
   );
 }
 
@@ -51787,6 +51827,54 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.lastRoleplayInviteAt))) w.sim.lastRoleplayInviteAt = 0;
   if (!Number.isFinite(Number(w.sim.lastNoteReactionAt))) w.sim.lastNoteReactionAt = 0;
   if (!Number.isFinite(Number(w.sim.liveWorldStartedAt))) w.sim.liveWorldStartedAt = now();
+
+  /* LIVE WORLD CLOCK SANITY:
+   * Multi-device/server snapshots can contain a timestamp from a clock that was
+   * ahead of the current device. The old comparisons treated that as a cooldown
+   * that had not expired yet, which could silence every autonomous lane
+   * indefinitely. Repair only scheduler clocks; gameplay/history timestamps are
+   * left untouched. */
+  {
+    const at = now();
+    const futureLimit = at + LIVE_WORLD_CLOCK_FUTURE_TOLERANCE_MS;
+    const clockFields = [
+      "at",
+      "contentAt",
+      "localAt",
+      "lastSuccessAt",
+      "lastAttemptAt",
+      "roleplayAttemptAt",
+      "dmAttemptAt",
+      "groupAttemptAt",
+      "popupAttemptAt",
+      "lastAutonomousDmAt",
+      "lastPopupSuccessAt",
+      "lastRoleplayInviteAt",
+      "lastNoteReactionAt",
+    ];
+
+    clockFields.forEach((field) => {
+      const value = Number(w.sim[field]) || 0;
+      if (value < 0 || value > futureLimit) w.sim[field] = 0;
+    });
+
+    if (Number(w.sim.liveWorldStartedAt) > futureLimit || Number(w.sim.liveWorldStartedAt) < 0) {
+      w.sim.liveWorldStartedAt = at;
+    }
+
+    Object.keys(w.sim.done || {}).forEach((key) => {
+      const value = Number(w.sim.done[key]) || 0;
+      if (value > futureLimit || value < 0) delete w.sim.done[key];
+    });
+
+    if (
+      w.sim.running &&
+      !(w.sim.queue || []).some((action) => action && action.id === w.sim.running)
+    ) {
+      w.sim.running = "";
+    }
+  }
+
   /* Backfill only objective successes; autonomous DM intentionally starts hungry
      on old saves because old DM rows did not distinguish replies from initiations. */
   if (!w.sim.lastPopupSuccessAt) w.sim.lastPopupSuccessAt = popupLastGeneratedAt(w) || 0;
@@ -63001,6 +63089,7 @@ function applySocialWave(
 }
 
 function lastAiFeedPostAt(w) {
+  const at = now();
   return (w && Array.isArray(w.posts) ? w.posts : [])
     .filter(
       (p) =>
@@ -63009,13 +63098,70 @@ function lastAiFeedPostAt(w) {
         !isHuman(w, p.authorId)
     )
     .reduce(
-      (latest, p) =>
-        Math.max(
-          latest,
-          Number(p.ts) || 0
-        ),
+      (latest, p) => {
+        const raw = Number(p.ts) || 0;
+        /* A future-dated synced post must not freeze the feed cadence forever. */
+        const stamp = raw > at + LIVE_WORLD_CLOCK_FUTURE_TOLERANCE_MS ? at : raw;
+        return Math.max(latest, stamp);
+      },
       0
     );
+}
+
+function latestVisibleAiWorldActivityAt(w) {
+  if (!w) return 0;
+  const at = now();
+  const sane = (value) => {
+    const n = Number(value) || 0;
+    return n > at + LIVE_WORLD_CLOCK_FUTURE_TOLERANCE_MS ? at : n;
+  };
+
+  let latest = sane(lastAiFeedPostAt(w));
+
+  (w.posts || []).forEach((post) => {
+    safePostComments(post).forEach((comment) => {
+      if (!comment || !comment.authorId || isHuman(w, comment.authorId)) return;
+      latest = Math.max(latest, sane(comment.ts));
+    });
+  });
+
+  Object.values((w.chats || {})).forEach((messages) => {
+    (Array.isArray(messages) ? messages : []).forEach((message) => {
+      if (!message || message.from !== "them") return;
+      latest = Math.max(latest, sane(message.ts));
+    });
+  });
+
+  (w.groups || []).forEach((group) => {
+    ((group && group.msgs) || []).forEach((message) => {
+      if (!message || !message.from || isHuman(w, message.from)) return;
+      latest = Math.max(latest, sane(message.ts));
+    });
+  });
+
+  const sim = w.sim || {};
+  latest = Math.max(
+    latest,
+    sane(sim.lastPopupSuccessAt),
+    sane(sim.lastRoleplayInviteAt),
+    sane(sim.lastNoteReactionAt)
+  );
+
+  return latest;
+}
+
+function liveWorldSilenceMs(w) {
+  if (!w) return 0;
+  const latest = latestVisibleAiWorldActivityAt(w);
+  const started = Number(w.sim && w.sim.liveWorldStartedAt) || now();
+  const anchor = latest || Math.min(started, now());
+  return Math.max(0, now() - anchor);
+}
+
+function liveWorldSilenceRecoveryThresholdMs() {
+  return playerIsActivelyViewingWorld()
+    ? LIVE_WORLD_ACTIVE_SILENCE_RECOVERY_MS
+    : LIVE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS;
 }
 
 function feedNeedsFreshPost(w) {
@@ -63859,6 +64005,84 @@ function popupPriorityAction(view, keyPrefix = "popup-priority") {
     { seedEventId: popupSeed.id, seed: popupSeed.type === "ambient-popup" ? popupSeed : null },
     "event"
   );
+}
+
+function planLiveWorldRecoveryAction(view) {
+  if (!view || !(view.chars || []).length) return null;
+  if (liveWorldSilenceMs(view) < liveWorldSilenceRecoveryThresholdMs()) return null;
+
+  /* First rescue the player's newest visible post if it is still socially dead. */
+  const recentPlayerPost = (view.posts || [])
+    .filter((post) =>
+      post &&
+      post.authorId === view.meId &&
+      now() - (Number(post.ts) || 0) <= 2 * 3600e3
+    )
+    .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))
+    .find((post) => {
+      const coverage = postCommentCoverageState(view, post);
+      return coverage && !coverage.complete;
+    });
+
+  if (recentPlayerPost) {
+    return guaranteedPostCommentAction(
+      view,
+      recentPlayerPost,
+      "liveness-player-post"
+    );
+  }
+
+  /* Then wake a fresh existing feed item before manufacturing another post. */
+  const freshCommentPost = freshFeedPostCommentCandidate(view);
+  if (freshCommentPost) {
+    return mkAction(
+      "comments",
+      `liveness-comments:${freshCommentPost.id}:${Math.floor(now() / 30000)}`,
+      {
+        postId: freshCommentPost.id,
+        trigger: "fresh-post",
+        minComments: 2,
+        maxComments: 5,
+        allowThreadFollowup: true,
+      },
+      "event"
+    );
+  }
+
+  /* If the feed itself is the silent part, shorten only the selected author's
+     cooldown enough to recover visible life. This is not a burst and cannot
+     bypass the rolling 24h hard cap. */
+  const recoveryCast = fairPostCast(view, { livenessRecovery: true });
+  if (recoveryCast.length) {
+    const author = recoveryCast[0];
+    return mkAction(
+      "world",
+      `liveness-feed:${author.id}:${Math.floor(now() / 30000)}`,
+      {
+        trigger: "liveness-recovery",
+        authorId: author.id,
+        livenessRecovery: true,
+      },
+      "event"
+    );
+  }
+
+  /* A grounded private reason is preferable to inventing filler. */
+  const groundedDmBot = (view.chars || [])
+    .filter((bot) => bot && !isHuman(view, bot.id))
+    .map((bot) => ({ bot, ctx: autonomousDmReasonContext(view, bot) }))
+    .find((row) => row.ctx && row.ctx.primary);
+
+  if (groundedDmBot) {
+    return mkAction(
+      "dm",
+      `liveness-dm:${groundedDmBot.bot.id}:${Math.floor(now() / 30000)}`,
+      { botId: groundedDmBot.bot.id, trigger: "liveness-recovery" },
+      "event"
+    );
+  }
+
+  return null;
 }
 
 function planAutoAction(view) {
@@ -70796,10 +71020,16 @@ const signOut = useCallback(async () => {
 
   /* Background tabs may be browser-throttled, but we do not intentionally stop the world. */
 
+  const livenessRecoveryAction =
+    !queued && !manualQueued
+      ? planLiveWorldRecoveryAction(view2)
+      : null;
+
   let action =
     coverageOverride ||
     essentialActivityOverride ||
-    queued;
+    queued ||
+    livenessRecoveryAction;
 
       if (!action) {
         /*
