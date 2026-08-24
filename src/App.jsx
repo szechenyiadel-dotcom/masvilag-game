@@ -14824,6 +14824,112 @@ function normalizeExactCommentGroundingText(value) {
     .trim();
 }
 
+
+const SOCIAL_COMMENT_REACTION_ACTS = new Set([
+  "answer",
+  "agree",
+  "disagree",
+  "tease",
+  "roast",
+  "support",
+  "compliment",
+  "question",
+  "challenge",
+  "defend",
+  "correct",
+  "flirt",
+  "jealous_reaction",
+  "inside_joke",
+  "concern",
+  "sarcasm",
+  "shock",
+  "laugh",
+  "gossip_probe",
+  "callout",
+  "invite",
+  "dismiss",
+]);
+
+function normalizeSocialCommentReactionAct(value) {
+  const raw = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return SOCIAL_COMMENT_REACTION_ACTS.has(raw) ? raw : "";
+}
+
+function socialCommentMeaningMatchesExactPost(post, basis, meaning) {
+  if (!post || !socialCommentBasisMatchesExactPost(post, basis)) return false;
+  const rawMeaning = String(meaning || "").replace(/\s+/g, " ").trim();
+  if (!rawMeaning || rawMeaning.length > 360) return false;
+
+  const basisTokens = socialCommentGroundingContentTokens(basis);
+  const meaningTokens = socialCommentGroundingContentTokens(rawMeaning);
+  if (!meaningTokens.length) return false;
+
+  const tokenOverlap = (a, b) =>
+    a.some((left) => b.some((right) => {
+      if (left === right) return true;
+      if (left.length >= 5 && right.length >= 5) {
+        const prefixLen = Math.min(6, left.length, right.length);
+        return left.slice(0, prefixLen) === right.slice(0, prefixLen);
+      }
+      return false;
+    }));
+
+  if (basisTokens.length && tokenOverlap(basisTokens, meaningTokens)) return true;
+
+  const semanticAnchor = post.socialMeaning && typeof post.socialMeaning === "object"
+    ? [
+        post.socialMeaning.literalMeaning,
+        post.socialMeaning.likelyIntent,
+        post.socialMeaning.impliedMeaning,
+        post.socialMeaning.imageRelation,
+      ].filter(Boolean).join(" ")
+    : "";
+  const semanticTokens = socialCommentGroundingContentTokens(semanticAnchor);
+  return semanticTokens.length ? tokenOverlap(semanticTokens, meaningTokens) : basisTokens.length === 0;
+}
+
+function socialReplyBasisMatchesParent(parentComment, basis) {
+  if (!parentComment) return false;
+  const normalizedBasis = normalizeExactCommentGroundingText(basis);
+  const words = normalizedBasis.split(/\s+/).filter(Boolean);
+  if (!normalizedBasis || words.length < 1 || words.length > 18) return false;
+  const parentSource = normalizeExactCommentGroundingText(parentComment.text || "");
+  if (!parentSource) return false;
+  return (` ${parentSource} `).includes(` ${normalizedBasis} `);
+}
+
+function socialReplyMeaningMatchesParent(parentComment, basis, meaning) {
+  if (!socialReplyBasisMatchesParent(parentComment, basis)) return false;
+  const rawMeaning = String(meaning || "").replace(/\s+/g, " ").trim();
+  if (!rawMeaning || rawMeaning.length > 360) return false;
+  const basisTokens = socialCommentGroundingContentTokens(basis);
+  const meaningTokens = socialCommentGroundingContentTokens(rawMeaning);
+  if (!meaningTokens.length) return false;
+  if (!basisTokens.length) return true;
+  return basisTokens.some((left) =>
+    meaningTokens.some((right) => {
+      if (left === right) return true;
+      if (left.length >= 5 && right.length >= 5) {
+        const prefixLen = Math.min(6, left.length, right.length);
+        return left.slice(0, prefixLen) === right.slice(0, prefixLen);
+      }
+      return false;
+    })
+  );
+}
+
+function socialDecisionActionMap(w, out) {
+  const map = new Map();
+  const rows = out && Array.isArray(out.socialDecisions) ? out.socialDecisions : [];
+  rows.forEach((row) => {
+    const id = aiVoice(w, row && (row.id !== undefined ? row.id : row.name));
+    const action = String(row && row.action || "").trim().toUpperCase();
+    if (!id || !["COMMENT", "LIKE", "IGNORE"].includes(action)) return;
+    if (!map.has(id)) map.set(id, action);
+  });
+  return map;
+}
+
 function socialCommentBasisMatchesExactPost(post, basis) {
   if (!post) return false;
 
@@ -32565,6 +32671,23 @@ ${strictSocialActorCapsules(w, cast, post)}
 
 ${socialShortStatusCharacterFidelityCard(w, post)}
 
+SOCIAL REACTION DECISION FIRST — COMMENT / LIKE / IGNORE:
+MINDEN cast-szereplőnél ugyanebben a sorrendben dolgozz:
+1. WHAT HAPPENED — értsd meg a SHARED POST COMPREHENSION alapján, mit mond/mutat EZ az egy poszt.
+2. WHY CARE — van-e ennek a karakternek természetes oka reagálni rá? Csak a konkrét poszt + valódi kapcsolat/relevancia számít.
+3. ACTION — válassz COMMENT / LIKE / IGNORE. Ne gyárts kommentet csak azért, hogy mindenki megszólaljon. A guaranteed minimum szabály csak a ténylegesen releváns karakterek közül kér kommentet.
+4. REACTION ACT — COMMENT esetén válassz pontosan egy funkciót: answer | agree | disagree | tease | roast | support | compliment | question | challenge | defend | correct | flirt | jealous_reaction | inside_joke | concern | sarcasm | shock | laugh | gossip_probe | callout | invite | dismiss.
+5. BASIS — másolj ki 1–18 egymást követő szót szó szerint EBBŐL a posztból vagy a megerősített látható képleírásból. Ez a reakció konkrét kiváltó oka.
+6. MEANING — egy rövid rejtett mondatban írd le, mit jelent az a basis EBBEN a posztban. Ne relationship-magyarázat legyen, hanem a látható tartalom értelme.
+7. CHARACTER FILTER — csak ezután alkalmazd a relationship + Personality + Speech/Voice + kor + public/private viselkedést a megfogalmazásra.
+
+HARD COMMENT ARCHITECTURE:
+- A relationship a reakció HANGJÁT/INTENZITÁSÁT változtatja, nem helyettesíti a poszt témáját.
+- A personality a reakció módját szabja meg, nem szolgálhat önmagában témaként.
+- NINCS kötelező SAVE/LinkedIn-formula: nem kell dicséret + hozzáadott érték + kérdés + emoji minden kommentbe. Egy rivális, barát, idősebb sensei vagy kaotikus Gen Z karakter teljesen máshogy kommentel.
+- Kérdést csak akkor tegyen fel, ha az adott reactionAct és a karakter valóban indokolja. Emoji csak akkor legyen, ha a karakter saját social hangja használja.
+- socialDecisions tömbben minden cast-szereplőhöz legfeljebb egy ACTION legyen. COMMENT sor csak COMMENT döntéshez, likes csak LIKE döntéshez tartozhat; IGNORE-nál ne hozz létre látható reakciót.
+
 KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 
 RELATIONSHIP × PERSONALITY × POST — HARD DECISION ORDER:
@@ -32842,10 +32965,13 @@ KAPCSOLATI FOLYTONOSSÁG FRISSÍTÉSE:
 
 Formátum:
 
-{"comments":[
-{"id":"szereplő azonosítója","post_id":"${post.id}","post_author_id":"${post.authorId}","text":"természetes social media komment","basis":"1-18 egymást követő szó szó szerint EBBŐL a posztból/képleírásból","reply_to":"k2 vagy üres","trigger":"max 8 szó: mi konkrétan váltotta ki ezt a reakciót"}
+{"socialDecisions":[
+{"id":"cast szereplő azonosítója","action":"COMMENT|LIKE|IGNORE","reason":"max 12 szó: konkrét social ok, nem personality-címke"}
 ],
-"likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
+"comments":[
+{"id":"szereplő azonosítója","social_contract":"v1","decision":"COMMENT","post_id":"${post.id}","post_author_id":"${post.authorId}","reactionAct":"answer|agree|disagree|tease|roast|support|compliment|question|challenge|defend|correct|flirt|jealous_reaction|inside_joke|concern|sarcasm|shock|laugh|gossip_probe|callout|invite|dismiss","basis":"1-18 egymást követő szó szó szerint EBBŐL a posztból/képleírásból","meaning":"egy rövid rejtett mondat: mit jelent EZ a basis ebben a posztban","text":"természetes social media komment, ami ténylegesen erre reagál","reply_to":"k2 vagy üres","trigger":"max 8 szó: mi konkrétan váltotta ki ezt a reakciót"}
+],
+"likes":["csak annak a szereplőnek az azonosítója, akinek socialDecisions action=LIKE"],
 "perceptions":[
 {"id":"AI id","aboutMe":true,"confidence":0.78,"interpretation":"mit HISZ, mire/kire utal a poszt","delta":-4,"mood":"mit érez emiatt","why":"miért változik ettől az érzése"}
 ],
@@ -33069,6 +33195,8 @@ HARD RULES:
 - PREVIOUS RAW COMMENT IDs THAT FAILED THE APP'S HARD GROUNDING FILTER AND MUST BE REWRITTEN IF ELIGIBLE: ${rejectedRawActorIds.join(", ") || "none"}.
 - A failed raw row is NOT a reason to drop that character. Rewrite the sentence from scratch so it actually answers this exact post while keeping SELF's own voice.
 - TOP-LEVEL BASIS HARD RULE: every repaired TOP-LEVEL AI comment under ANY post must include basis: 1–18 consecutive words copied literally from THIS exact post text or confirmed visible image description, and the repaired text must directly respond to that basis.
+- Every repaired row also needs social_contract="v1", decision="COMMENT", one valid reactionAct, and a short hidden meaning that explains what that basis means in THIS post.
+- Choose reactionAct BEFORE wording; relationship/personality changes HOW the act sounds, not what topic it reacts to.
 - For any non-trivial post, the repaired visible comment must also echo at least one concrete content word/detail from that basis (or an obvious inflected form). Do not return a valid basis beside an unrelated relationship/personality line.
 - If one of the very-high relationship IDs is in ELIGIBLE CHARACTERS, prioritize them when they can respond naturally to the exact post. Hidden obsession increases attention; it does not create an unrelated topic.
 - Return EXACTLY ${Math.min(missing, candidates.length)} DIFFERENT character IDs when that many candidates are listed.
@@ -33091,7 +33219,7 @@ HARD RULES:
 - Never use the post author as commenter.
 
 JSON ONLY:
-{"comments":[{"id":"exact eligible id","text":"short natural comment","basis":"1-18 consecutive words copied literally from this exact post/image description","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
+{"comments":[{"id":"exact eligible id","social_contract":"v1","decision":"COMMENT","reactionAct":"one valid reaction act","basis":"1-18 consecutive words copied literally from this exact post/image description","meaning":"short hidden meaning of that basis in this exact post","text":"short natural comment that genuinely responds to the basis","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
       { maxTokens: Math.max(800, Math.min(1800, 260 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
     );
 
@@ -33140,9 +33268,29 @@ JSON ONLY:
         }) === index;
       });
 
+    const finalComments = combined.slice(0, Math.max(minWanted, Math.min(24, Number(maxComments) || 14)));
+    const finalCommentIds = new Set(
+      finalComments
+        .map((row) => aiVoice(w, row && (row.id !== undefined ? row.id : row.name)))
+        .filter(Boolean)
+    );
+    const mergedSocialDecisions = [
+      ...(baseOut && Array.isArray(baseOut.socialDecisions) ? baseOut.socialDecisions : [])
+        .filter((row) => {
+          const id = aiVoice(w, row && (row.id !== undefined ? row.id : row.name));
+          return !id || !finalCommentIds.has(id);
+        }),
+      ...[...finalCommentIds].map((id) => ({
+        id,
+        action: "COMMENT",
+        reason: "grounded comment selected for this exact post",
+      })),
+    ];
+
     return {
       ...(baseOut || {}),
-      comments: combined.slice(0, Math.max(minWanted, Math.min(24, Number(maxComments) || 14))),
+      socialDecisions: mergedSocialDecisions,
+      comments: finalComments,
     };
   } catch (err) {
     console.warn(
@@ -33957,6 +34105,7 @@ function applyComments(n, postId, out, label) {
   let createdVisible = 0;
   p.comments = safePostComments(p);
   {
+    const decisionMap = socialDecisionActionMap(n, out);
     const byLabel = {};
     const acceptedBodies = [];
     const commentedThisBatch = new Set();
@@ -33964,6 +34113,18 @@ function applyComments(n, postId, out, label) {
     safeAiComments(out).forEach((c) => {
       const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!who || !c.text) return;
+
+      const structuredComment =
+        String(c && (c.social_contract || c.socialContract) || "").trim().toLowerCase() === "v1";
+      const reactionAct = normalizeSocialCommentReactionAct(c && (c.reactionAct || c.reaction_act));
+      const declaredDecision = String(c && c.decision || "").trim().toUpperCase();
+
+      if (decisionMap.size && decisionMap.get(who) && decisionMap.get(who) !== "COMMENT") return;
+      if (structuredComment) {
+        if (declaredDecision !== "COMMENT") return;
+        if (!reactionAct) return;
+        if (!socialCommentMeaningMatchesExactPost(p, c && c.basis, c && c.meaning)) return;
+      }
 
       /* POST OWNERSHIP GUARD: generated comments belong to the exact post
        * passed into this apply call. If the model supplied explicit context,
@@ -34126,6 +34287,10 @@ const made = {
     n,
     n.meId
   ),
+  socialContractVersion: structuredComment ? 1 : 0,
+  reactionAct: reactionAct || "",
+  groundingBasis: structuredComment ? String(c && c.basis || "").replace(/\s+/g, " ").trim().slice(0, 260) : "",
+  groundingMeaning: structuredComment ? String(c && c.meaning || "").replace(/\s+/g, " ").trim().slice(0, 360) : "",
 };
 
 p.comments.push(made);
@@ -34180,6 +34345,7 @@ recordSocialEvent(
         : "comment",
       ...socialJuice.tags,
       ...(socialJuice.juicy ? ["gossip-worthy-thread"] : []),
+      ...(made.reactionAct ? [`reaction:${made.reactionAct}`] : []),
     ],
 
     meta: {
@@ -34191,6 +34357,8 @@ recordSocialEvent(
         p.authorId || "",
       targetId:
         targetId || "",
+      reactionAct: made.reactionAct || "",
+      groundingBasis: made.groundingBasis || "",
     },
   }
 );
@@ -34237,6 +34405,10 @@ recordSocialEvent(
     n,
     lid
   );
+
+  if (decisionMap.size && who && decisionMap.get(who) && decisionMap.get(who) !== "LIKE") {
+    return;
+  }
 
   if (
     !who ||
@@ -35498,6 +35670,19 @@ PUBLIKUS THREAD REALIZMUS:
 - Egy szaftos nyilvános beszólásból könnyen lehet többemberes pile-on, védelem, flört, vita vagy későbbi gossip-forrás.
 ${forcedResponderIsDirect ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott KÖZVETLEN VÁLASZOLÓ; a legutóbbi komment neki szólt, ezért az ő reply-ja az elsődleges.` : forcedResponderIsBystander ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott HARMADIK FÉL / BYSTANDER; beszállhat a threadbe, de a legutóbbi komment NEM neki szólt.` : ""}
 
+REPLY DECISION FIRST — THREAD ARCHITEKTÚRA:
+Mielőtt látható reply-t írsz, minden lehetséges válaszolónál ezt a sorrendet kövesd:
+1. THREAD CONTEXT — olvasd végig a ROOT → CURRENT ágat; a legutóbbi komment csak ennek a láncnak a részeként értelmezhető.
+2. WHY ENTER — közvetlen címzettnél: valóban kíván-e választ? Harmadik félnél: van-e külön, látható social oka beszállni (védelem, rivalizálás, egyetértés, vita, érintettség stb.)?
+3. REACTION ACT — válassz egyet: answer | agree | disagree | tease | roast | support | compliment | question | challenge | defend | correct | flirt | jealous_reaction | inside_joke | concern | sarcasm | shock | laugh | gossip_probe | callout | invite | dismiss.
+4. PARENT BASIS — másolj 1–18 egymást követő szót szó szerint a MOST megválaszolandó ${comment.id} kommentből.
+5. PARENT MEANING — egy rövid rejtett mondatban írd le, mit jelent ez a parentBasis a jelenlegi threadben.
+6. CHARACTER FILTER — relationship + Personality + Speech/Voice csak ezután formálja a válasz hangját. Nem választhat másik témát.
+
+- A reply nem mini új poszt: elsődlegesen a közvetlen parent kommentre reagál.
+- A harmadik AI csak akkor szálljon be, ha a thread nyilvános kontextusából + saját valódi kapcsolatából érthető, miért szólal meg.
+- Nincs kötelező kérdés, emoji, dicséret vagy konfliktus. A reactionAct és a karakter dönti el.
+
 REPLY TARGET CONTRACT — EZ FONTOSABB MINDEN STÍLUS-SZABÁLYNÁL:
 - A MOST MEGVÁLASZOLANDÓ komment ID-ja: ${comment.id}.
 - A komment SZERZŐJE és minden most létrejövő reply KÖZVETLEN CÉLPONTJA: ${target ? target.name : "?"} [${comment.authorId}].
@@ -35678,7 +35863,7 @@ A reply első pillantásra úgy hasson, mint egy valódi komment alatti gyors v�
 Formátum:
 
 {"comments":[
-  {"id":"VÁLASZOLÓ szereplő azonosítója","post_id":"${post.id}","post_author_id":"${post.authorId}","targetId":"${comment.authorId}","replyTo":"${comment.id}","text":"természetes rövid kommentválasz KIFEJEZETTEN ${target ? target.name : "a komment szerzője"} felé","trigger":"max 8 szó: mire reagál konkrétan"}
+  {"id":"VÁLASZOLÓ szereplő azonosítója","social_contract":"v1","decision":"REPLY","post_id":"${post.id}","post_author_id":"${post.authorId}","targetId":"${comment.authorId}","replyTo":"${comment.id}","reactionAct":"answer|agree|disagree|tease|roast|support|compliment|question|challenge|defend|correct|flirt|jealous_reaction|inside_joke|concern|sarcasm|shock|laugh|gossip_probe|callout|invite|dismiss","parentBasis":"1-18 egymást követő szó szó szerint a ${comment.id} parent kommentből","meaning":"rövid rejtett mondat: mit jelent a parentBasis ebben a threadben","text":"természetes rövid kommentválasz KIFEJEZETTEN ${target ? target.name : "a komment szerzője"} felé","trigger":"max 8 szó: mire reagál konkrétan"}
 ],
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}
@@ -35787,7 +35972,7 @@ HARD RULES:
 - Do not return empty/skip: the scheduler already selected this direct reply action.
 
 JSON ONLY:
-{"reply":"one grounded direct reply"}${TAIL}`,
+{"reply":"one grounded direct reply","reactionAct":"one valid reaction act","parentBasis":"1-18 consecutive words copied literally from the exact comment being answered","meaning":"short hidden meaning of that parentBasis in this thread"}${TAIL}`,
             {
               maxTokens: 220,
               maxTries: 2,
@@ -35805,6 +35990,14 @@ JSON ONLY:
               " "
             )
             .trim();
+
+        const directReactionAct = normalizeSocialCommentReactionAct(directRepair && directRepair.reactionAct);
+        const directParentBasis = String(directRepair && directRepair.parentBasis || "").replace(/\s+/g, " ").trim();
+        const directMeaning = String(directRepair && directRepair.meaning || "").replace(/\s+/g, " ").trim();
+        const directContractValid = Boolean(
+          directReactionAct &&
+          socialReplyMeaningMatchesParent(comment, directParentBasis, directMeaning)
+        );
 
         if (directText) {
           directText =
@@ -35844,6 +36037,14 @@ JSON ONLY:
                 {
                   id:
                     directResponder.id,
+
+                  ...(directContractValid ? {
+                    social_contract: "v1",
+                    decision: "REPLY",
+                    reactionAct: directReactionAct,
+                    parentBasis: directParentBasis,
+                    meaning: directMeaning,
+                  } : {}),
 
                   post_id:
                     post.id,
@@ -36258,7 +36459,7 @@ ${forcedResponder.name} has already been selected by the social scheduler becaus
 - Do not invent a reason that is not supported by the visible thread/character context.
 - No narration. No assistant language.
 
-JSON: {"reply":"short public reply"}${TAIL}`,
+JSON: {"reply":"short public reply","reactionAct":"one valid reaction act","parentBasis":"1-18 consecutive words copied literally from the latest comment","meaning":"short hidden meaning of that parentBasis in this exact branch"}${TAIL}`,
           { maxTokens: 180, maxTries: 2 }
         );
 
@@ -36271,7 +36472,29 @@ JSON: {"reply":"short public reply"}${TAIL}`,
           out = {
             ...(out || {}),
             comments: [
-              { id: forcedResponder.id, text: repairedText, trigger: "relevant bystander" },
+              {
+                id: forcedResponder.id,
+                ...(normalizeSocialCommentReactionAct(repairedBystander && repairedBystander.reactionAct) &&
+                  socialReplyMeaningMatchesParent(
+                    comment,
+                    repairedBystander && repairedBystander.parentBasis,
+                    repairedBystander && repairedBystander.meaning
+                  )
+                  ? {
+                      social_contract: "v1",
+                      decision: "REPLY",
+                      reactionAct: normalizeSocialCommentReactionAct(repairedBystander.reactionAct),
+                      parentBasis: String(repairedBystander.parentBasis || "").replace(/\s+/g, " ").trim(),
+                      meaning: String(repairedBystander.meaning || "").replace(/\s+/g, " ").trim(),
+                    }
+                  : {}),
+                post_id: post.id,
+                post_author_id: post.authorId,
+                targetId: comment.authorId,
+                replyTo: comment.id,
+                text: repairedText,
+                trigger: "relevant bystander",
+              },
               ...current,
             ].filter((row, index, arr) => {
               const id = findChar(w, row && (row.id !== undefined ? row.id : row.name));
@@ -36300,6 +36523,11 @@ function applyReplies(n, postId, rootId, out) {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
 
+    const structuredReply =
+      String(c && (c.social_contract || c.socialContract) || "").trim().toLowerCase() === "v1";
+    const reactionAct = normalizeSocialCommentReactionAct(c && (c.reactionAct || c.reaction_act));
+    const declaredDecision = String(c && c.decision || "").trim().toUpperCase();
+
     const declaredPostId = String(
       c && (c.post_id !== undefined ? c.post_id : c.postId !== undefined ? c.postId : "") || ""
     ).trim();
@@ -36317,6 +36545,17 @@ function applyReplies(n, postId, rootId, out) {
     if (socialSelfClassificationContradiction(n, who, body)) return;
     const rootForAddress = safePostComments(p).find((x) => x && x.id === rootId);
     const addressTargetId = rootForAddress && rootForAddress.authorId ? rootForAddress.authorId : p.authorId;
+
+    if (structuredReply) {
+      if (declaredDecision !== "REPLY") return;
+      if (!reactionAct) return;
+      if (!rootForAddress) return;
+      if (!socialReplyMeaningMatchesParent(
+        rootForAddress,
+        c && (c.parentBasis || c.parent_basis),
+        c && c.meaning
+      )) return;
+    }
 
     if (
       !socialCommentGroundedInExactPost(
@@ -36393,7 +36632,22 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
     ) {
       return;
     }
-    const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
+    const made = {
+      id: uid(),
+      authorId: who,
+      text: body,
+      ts: now(),
+      parent: rootId,
+      language: worldLanguage(n, n.meId),
+      socialContractVersion: structuredReply ? 1 : 0,
+      reactionAct: reactionAct || "",
+      groundingBasis: structuredReply
+        ? String(c && (c.parentBasis || c.parent_basis) || "").replace(/\s+/g, " ").trim().slice(0, 260)
+        : "",
+      groundingMeaning: structuredReply
+        ? String(c && c.meaning || "").replace(/\s+/g, " ").trim().slice(0, 360)
+        : "",
+    };
     p.comments.push(made);
     createdReplyIds.push(made.id);
     createdReplyActors.add(who);
@@ -36431,13 +36685,15 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
       embarrassment: replyJuice.embarrassment,
       source: "ai",
       text: made.text,
-      tags: ["social", "ai-comment", "reply", "thread", ...replyJuice.tags, ...(replyJuice.juicy ? ["gossip-worthy-thread"] : [])],
+      tags: ["social", "ai-comment", "reply", "thread", ...replyJuice.tags, ...(replyJuice.juicy ? ["gossip-worthy-thread"] : []), ...(made.reactionAct ? [`reaction:${made.reactionAct}`] : [])],
       meta: {
         postId: p.id,
         commentId: made.id,
         parentId: made.parent || "",
         postAuthorId: p.authorId || "",
         targetId: replyTargetId || "",
+        reactionAct: made.reactionAct || "",
+        groundingBasis: made.groundingBasis || "",
       },
     });
 
@@ -37338,6 +37594,138 @@ function socialAutonomousPostTextMakesSense(w, authorId, value) {
   return true;
 }
 
+
+const SOCIAL_AUTONOMOUS_POST_TYPES = new Set([
+  "casual_status",
+  "short_observation",
+  "question",
+  "direct_callout",
+  "subtweet",
+  "mini_story",
+  "photo_caption",
+  "event_reaction",
+  "opinion",
+  "complaint",
+  "joke",
+  "inside_joke",
+  "invitation",
+  "achievement",
+  "late_night_thought",
+  "gossip_reaction",
+  "relationship_hint",
+  "training_update",
+  "location_update",
+]);
+
+const SOCIAL_AUTONOMOUS_ANCHOR_TYPES = new Set([
+  "event",
+  "activity",
+  "plan",
+  "person",
+  "place",
+  "object",
+  "image",
+  "public_post",
+  "gossip",
+  "relationship",
+  "achievement",
+  "opinion",
+  "self_life",
+]);
+
+const SOCIAL_AUTONOMOUS_ENGAGEMENT_INTENTS = new Set([
+  "none",
+  "question",
+  "invite",
+  "challenge",
+  "opinion_request",
+]);
+
+function socialAutonomousPostHasGenericCreatorCTA(value) {
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  if (!raw) return false;
+  return /\b(?:like\s+(?:this|if)|comment\s+(?:below|if)|drop\s+(?:a|your)\s+comment|follow\s+(?:me\s+)?for\s+more|share\s+(?:this|if)|save\s+this\s+post|link\s+in\s+(?:my\s+)?bio|lájkold\s+ha|írd\s+meg\s+kommentben|kommenteld\s+le|kövess\s+(?:be\s+)?további|oszd\s+meg|link\s+a\s+bioban)\b/i.test(raw);
+}
+
+function normalizeSocialAutonomousPostContract(w, authorId, row, visibleText) {
+  if (!row || String(row.social_contract || row.socialContract || "").trim().toLowerCase() !== "v1") {
+    return null;
+  }
+
+  const decision = String(row.decision || "").trim().toUpperCase();
+  const postType = String(row.postType || row.post_type || "").trim().toLowerCase();
+  const anchorType = String(row.anchorType || row.anchor_type || "").trim().toLowerCase();
+  const anchorId = String(row.anchorId || row.anchor_id || "").trim().slice(0, 180);
+  const anchorBasis = String(row.anchorBasis || row.anchor_basis || row.anchor || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260);
+  const postReason = String(row.postReason || row.post_reason || row.reason || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260);
+  const audienceIntent = String(row.audienceIntent || row.audience_intent || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100);
+  const engagementIntentRaw = String(row.engagementIntent || row.engagement_intent || "none")
+    .trim()
+    .toLowerCase();
+  const engagementIntent = SOCIAL_AUTONOMOUS_ENGAGEMENT_INTENTS.has(engagementIntentRaw)
+    ? engagementIntentRaw
+    : "none";
+  const targetIds = [...new Set(
+    (Array.isArray(row.targetIds) ? row.targetIds : Array.isArray(row.target_ids) ? row.target_ids : [])
+      .map((id) => findChar(w, id))
+      .filter((id) => id && id !== authorId)
+  )].slice(0, 8);
+
+  return {
+    version: 1,
+    decision,
+    postType,
+    anchorType,
+    anchorId,
+    anchorBasis,
+    postReason,
+    audienceIntent,
+    engagementIntent,
+    targetIds,
+    publicKnowledgeOnly: row.publicKnowledgeOnly !== false && row.public_knowledge_only !== false,
+    text: String(visibleText || "").replace(/\s+/g, " ").trim(),
+  };
+}
+
+function socialAutonomousPostContractIsValid(w, authorId, row, visibleText) {
+  const meta = normalizeSocialAutonomousPostContract(w, authorId, row, visibleText);
+  if (!meta) return null;
+  if (meta.decision !== "POST") return null;
+  if (!SOCIAL_AUTONOMOUS_POST_TYPES.has(meta.postType)) return null;
+  if (!SOCIAL_AUTONOMOUS_ANCHOR_TYPES.has(meta.anchorType)) return null;
+  if (meta.anchorBasis.length < 3 || meta.postReason.length < 3) return null;
+
+  /* The hidden anchor is evidence/reasoning metadata, not another place to dump
+     a private character-sheet sentence. */
+  if (socialPostCopiesPrivateCharacterSheetPhrase(w, authorId, meta.anchorBasis)) return null;
+
+  /* Callouts/subtweets need an actual situation, not merely a person's name. */
+  if (
+    ["direct_callout", "subtweet", "relationship_hint"].includes(meta.postType) &&
+    socialCommentGroundingContentTokens(meta.anchorBasis).length < 2
+  ) {
+    return null;
+  }
+
+  /* Fictional characters are not forced engagement-farming creators. A generic
+     marketing CTA is allowed only when the model explicitly chose a real social
+     interaction intent for this specific post. */
+  if (meta.engagementIntent === "none" && socialAutonomousPostHasGenericCreatorCTA(visibleText)) {
+    return null;
+  }
+
+  return meta;
+}
+
 function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
   const author = charById(w, authorId);
   if (!author || !characterCanAutonomouslyPost(w, author, null, options)) return null;
@@ -37375,6 +37763,8 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
   };
 
   let fact = "";
+  let anchorId = "";
+  let targetIds = [];
 
   if ((trigger === "popup-choice" || trigger === "popup-custom-response") && options.popupEventId) {
     const event = (w.popupEvents || []).find((e) => e && e.id === options.popupEventId);
@@ -37385,6 +37775,8 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
       const wasThere = involved.includes(String(author.id)) || witnesses.includes(String(author.id));
       if (canKnow && wasThere) {
         fact = compactEventTitle(event.title || "");
+        anchorId = String(event.id || options.popupEventId || "");
+        targetIds = involved.filter((id) => id && id !== String(author.id)).slice(0, 8);
       }
     }
   }
@@ -37394,6 +37786,8 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
     const cast = scene && Array.isArray(scene.cast) ? scene.cast.map(String) : [];
     if (scene && cast.includes(String(author.id))) {
       fact = compactEventTitle(scene.title || "");
+      anchorId = String(scene.id || options.sceneId || "");
+      targetIds = cast.filter((id) => id && id !== String(author.id)).slice(0, 8);
     }
   }
 
@@ -37431,6 +37825,17 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
       text: chosen,
       image: "",
       comments: [],
+      social_contract: "v1",
+      decision: "POST",
+      postReason: "reacting to a concrete event the character personally experienced",
+      postType: "event_reaction",
+      anchorType: "event",
+      anchorId,
+      anchorBasis: fact,
+      audienceIntent: "react",
+      targetIds,
+      publicKnowledgeOnly: true,
+      engagementIntent: "none",
       __localEmergencyFallback: true,
     }],
     changes: [],
@@ -37631,7 +38036,7 @@ async function genFocusedWorldStep(w, triggerPayload = {}) {
   const recentOwn = (w.posts || [])
     .filter((p) => p && p.authorId === author.id)
     .slice(0, 5)
-    .map((p) => `${p.text || ""}${p.imageDescription ? ` [image: ${p.imageDescription}]` : ""}`)
+    .map((p) => `[type:${p.postType || "legacy"}] ${p.text || ""}${p.imageDescription ? ` [image: ${p.imageDescription}]` : ""}`)
     .join("\n");
 
   const recentWorld = (w.posts || [])
@@ -37715,6 +38120,26 @@ ${recentWorld || "-"}
 SAJÁT FOTÓALBUMOD:
 ${albumPostingList(promptAuthor || author) || "nincs használható albumkép"}
 
+SOCIAL DECISION FIRST — REJTETT TERVEZÉSI SZERZŐDÉS:
+Mielőtt megfogalmazod a látható mondatot, hozd meg ezt a döntést EBBEN A SORRENDBEN:
+1. POST REASON — miért posztol ${author.name} MOST? Válassz egyetlen konkrét okot a saját aktuális életéből vagy egy számára ténylegesen ismert történésből. A personality önmagában NEM ok.
+2. POST TYPE — válassz pontosan egyet: casual_status | short_observation | question | direct_callout | subtweet | mini_story | photo_caption | event_reaction | opinion | complaint | joke | inside_joke | invitation | achievement | late_night_thought | gossip_reaction | relationship_hint | training_update | location_update. A típuseloszlás legyen KARAKTERFÜGGŐ: a személyiség, életkor, occupation/életmód és saját online hang döntse el, mely formák gyakoriak nála. Ne adj minden karakternek ugyanazt az eloszlást, és a SAJÁT LEGUTÓBBI POSZTOK type-jait se ismételd mechanikusan.
+3. REALITY ANCHOR — válassz pontosan egy konkrét tényt/helyzetet, amely nélkül ez a poszt nem születne meg. anchorType: event | activity | plan | person | place | object | image | public_post | gossip | relationship | achievement | opinion | self_life.
+4. PUBLIC EXPRESSION — döntsd el, ebből mennyit mondana ki nyilvánosan ${author.name}. A belső érzés NEM automatikusan publikus vallomás. Büszke/titkolózó karakter célozhat, rövidíthet vagy hallgathat részletekről.
+5. ENGAGEMENT INTENT — none | question | invite | challenge | opinion_request. A default NONE. Ne gyárts marketinges CTA-t csak engagement kedvéért.
+6. CHARACTER VOICE — csak EZUTÁN fogalmazd meg a captiont a saját personality + Speech/Voice + kor + social szokások szerint.
+
+HARD ARCHITECTURE RULES:
+- REALITY → CHARACTER INTERPRETATION → PUBLIC EXPRESSION → WORDING. Ebben a sorrendben dolgozz.
+- A karakter NEM tartalomgyártó bot. Ő egy emberként működő fiktív személy, aki történetesen használ közösségi médiát. Először legyen oka posztolni, csak utána legyen szöveg.
+- Hook NEM kötelező. CTA NEM kötelező. Hashtag NEM kötelező. Emoji NEM kötelező. Ezek csak akkor jelenjenek meg, ha a konkrét karakter saját online stílusa ÉS az adott poszt típusa indokolja.
+- TILOS minden posztot marketinges Hook→Value→CTA formulává alakítani.
+- targetIds csak olyan konkrét játékbeli személy lehet, aki ténylegesen része a választott anchornek vagy akire a publikus szöveg/kép valósan céloz.
+- anchorBasis REJTETT bizonyíték: 2–18 szavas, konkrét leírás arról, MI a poszt valódi alapja. Ne másolj bele hosszú karakterlap-mondatot.
+- anchorId csak akkor legyen kitöltve, ha van valódi azonosítható forrás (event/post/scene/popup stb.); különben üres.
+- publicKnowledgeOnly=true: ne használj olyan külső történést, amit ${author.name} nem láthatott/tudhatott.
+- Ha nincs emberileg posztolható ok, a normál generátor ne találjon ki mesterséges konfliktust vagy profilmezőből gyártott témát.
+
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
 - FIKTÍV SOCIAL NETWORK HARD RULE: úgy viselkedj, mintha ez a konkrét univerzum saját Instagram/X/Threads-szerű hálózata lenne. ${author.name} nem chatbot-választ ad, hanem a saját életét éli online, önállóan posztol, és csak olyan friss történést használhat, amit a fenti LIVE SOCIAL NETWORK CONTEXT szerint reálisan ismer.
 - A follow/kapcsolat/frakció/barátság/rivalizálás a figyelmet és a témaválasztást is alakítja. Nyilvános esemény sem válik automatikusan minden karakter fejében ismertté; private/group/limited információ soha ne szivárogjon át jogosulatlanul.
@@ -37774,7 +38199,7 @@ KREATÍV KARAKTERPOSZT — HARD RULE:
 ${repetitionGuard(w, [author.id], "autonóm posztok és kommentek")}
 
 JSON:
-{"posts":[{"id":"${author.id}","text":"a poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}],"relationshipUpdates":[]}${TAIL}`,
+{"posts":[{"id":"${author.id}","social_contract":"v1","decision":"POST","postReason":"1 rövid konkrét ok, amiért MOST posztol","postType":"egy engedélyezett post type","anchorType":"egy engedélyezett anchor type","anchorId":"valódi forrás ID vagy üres","anchorBasis":"2-18 szavas rejtett konkrét valóság-anchor, NEM karakterlap-másolat","audienceIntent":"pl. vent / share / tease / inform / invite / ask / react","targetIds":["csak valóban érintett karakter ID-k"],"publicKnowledgeOnly":true,"engagementIntent":"none|question|invite|challenge|opinion_request","text":"a LÁTHATÓ természetes poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}],"relationshipUpdates":[]}${TAIL}`,
     { maxTokens: 900 }
   );
 }
@@ -37808,6 +38233,18 @@ function applyWorldStep(n, out, postingOptions = {}) {
       );
     if (!postText) return;
     if (!socialAutonomousPostTextMakesSense(n, author, postText)) return;
+
+    const hasStructuredSocialContract =
+      String(p && (p.social_contract || p.socialContract) || "").trim().toLowerCase() === "v1";
+    const socialContractMeta = hasStructuredSocialContract
+      ? socialAutonomousPostContractIsValid(n, author, p, postText)
+      : null;
+
+    /* Focused autonomous social generation now publishes only if its hidden
+       reason/type/anchor contract is coherent. Legacy/time-skip world outputs
+       without the v1 marker keep their existing behavior. */
+    if (hasStructuredSocialContract && !socialContractMeta) return;
+
     /*
      * The local emergency fallback is built exclusively from the selected
      * author's own sheet. During a triggered burst it must not be rejected by
@@ -37931,6 +38368,16 @@ function applyWorldStep(n, out, postingOptions = {}) {
       ? requestedPic
       : null;
 
+    /* A structured photo/image anchor is not allowed to survive as a text-only
+       orphan if the requested image was unavailable or rejected by limits. */
+    if (
+      socialContractMeta &&
+      (socialContractMeta.postType === "photo_caption" || socialContractMeta.anchorType === "image") &&
+      !pic
+    ) {
+      return;
+    }
+
     /* The user's album note is recognition metadata only. If the provider leaks
        it into the visible caption (including a near-copy), reject this row and
        let the normal retry/fallback path produce a fresh caption instead. */
@@ -37970,6 +38417,16 @@ function applyWorldStep(n, out, postingOptions = {}) {
       triggerBurstKey: String(postingOptions && postingOptions.burstKey || ""),
       triggerSource: String(postingOptions && postingOptions.trigger || ""),
       triggerRefId: String(postingOptions && (postingOptions.triggerRefId || postingOptions.postId || postingOptions.popupEventId || postingOptions.sceneId) || ""),
+      socialContractVersion: socialContractMeta ? 1 : 0,
+      postReason: socialContractMeta ? socialContractMeta.postReason : "",
+      postType: socialContractMeta ? socialContractMeta.postType : "",
+      anchorType: socialContractMeta ? socialContractMeta.anchorType : "",
+      anchorId: socialContractMeta ? socialContractMeta.anchorId : "",
+      anchorBasis: socialContractMeta ? socialContractMeta.anchorBasis : "",
+      audienceIntent: socialContractMeta ? socialContractMeta.audienceIntent : "",
+      engagementIntent: socialContractMeta ? socialContractMeta.engagementIntent : "",
+      socialTargetIds: socialContractMeta ? socialContractMeta.targetIds : [],
+      publicKnowledgeOnly: socialContractMeta ? socialContractMeta.publicKnowledgeOnly : true,
     };
 
     /*
@@ -38009,6 +38466,7 @@ function applyWorldStep(n, out, postingOptions = {}) {
       ...new Set([
         ...mentionedIdsInText(n, fresh.text, author),
         ...(fresh.imageCharacterIds || []),
+        ...(fresh.socialTargetIds || []),
       ]),
     ],
 
@@ -38037,6 +38495,7 @@ function applyWorldStep(n, out, postingOptions = {}) {
       (fresh.imageId || fresh.image)
         ? "image-post"
         : "text-post",
+      ...(fresh.postType ? [`post-type:${fresh.postType}`] : []),
     ],
 
     meta: {
@@ -38051,6 +38510,11 @@ function applyWorldStep(n, out, postingOptions = {}) {
       imageCharacterIds: Array.isArray(fresh.imageCharacterIds)
         ? fresh.imageCharacterIds.slice(0, 12)
         : [],
+      postType: fresh.postType || "",
+      anchorType: fresh.anchorType || "",
+      anchorId: fresh.anchorId || "",
+      audienceIntent: fresh.audienceIntent || "",
+      engagementIntent: fresh.engagementIntent || "",
     },
   }
 );
