@@ -2228,6 +2228,15 @@ label.f { color:#958da6; font-weight:600; }
 @media (prefers-reduced-motion:reduce) {
   .btn,.social-action,.nav button,.social-feed-tab,input.i,textarea.i,select.i { transition:none !important; }
 }
+/* PERFORMANCE-ONLY: let the browser defer layout/paint for off-screen feed cards.
+   This does not change feed data, order, interactions or visual styling. */
+@supports (content-visibility: auto) {
+  .social-post {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 430px;
+  }
+}
+
 `;
 
 
@@ -2403,9 +2412,45 @@ function imageRefForValue(value) {
   return id ? imageRef(id) : value || "";
 }
 
+function worldNeedsImageNormalization(world) {
+  if (!world) return false;
+
+  for (const player of Object.values(world.players || {})) {
+    if (!player) continue;
+    if (isInlineImageData(player.avatar) || isInlineImageData(player.cover)) return true;
+  }
+
+  for (const c of (world.chars || [])) {
+    if (!c) continue;
+    if (isInlineImageData(c.avatar) || isInlineImageData(c.cover)) return true;
+    for (const item of albumOf(c)) {
+      if (item && !item.imageId && isInlineImageData(item.src)) return true;
+    }
+  }
+
+  for (const m of allGossipMediaAccounts(world)) {
+    if (!m) continue;
+    if (isInlineImageData(m.avatar) || isInlineImageData(m.cover)) return true;
+  }
+
+  for (const p of (world.posts || [])) {
+    if (!p) continue;
+    if ((!p.imageId && isInlineImageData(p.image)) || (p.imageId && p.image)) return true;
+  }
+
+  return false;
+}
+
 function normalizeWorldImages(world, media) {
   if (!world) return { world, media, changed: false };
-  const w = JSON.parse(JSON.stringify(world));
+  /* PERFORMANCE: the old implementation deep-cloned the complete world on
+     every world.rev even when there was nothing to migrate. The cheap scan
+     above preserves exactly the same migration behavior while making the
+     overwhelmingly common no-op path allocation-free. */
+  if (!worldNeedsImageNormalization(world)) {
+    return { world, media, changed: false };
+  }
+  const w = cloneWorldState(world);
   const nextMedia = { ...(media || {}) };
   let changed = false;
   const attach = (raw, patch) => {
@@ -2906,7 +2951,7 @@ function Av({ src, name = "?", size = 38, radius = 12 }) {
   const url = resolveImg(src, media);
   return (
     <div className="av" style={{ ...avStyle(name), width: size, height: size, borderRadius: radius, fontSize: Math.round(size * 0.42) }}>
-      {url && !bad ? <img src={url} alt="" onError={() => setBad(true)} /> : (name || "?")[0]}
+      {url && !bad ? <img src={url} alt="" loading="lazy" decoding="async" onError={() => setBad(true)} /> : (name || "?")[0]}
     </div>
   );
 }
@@ -24350,7 +24395,7 @@ function mergeWorlds(remote, local) {
   [...(remoteGp.rumors || []), ...(localGp.rumors || [])].forEach((r) => {
     if (!r || !r.id) return;
     const cur = gpById[r.id];
-    if (!cur) { gpById[r.id] = JSON.parse(JSON.stringify(r)); return; }
+    if (!cur) { gpById[r.id] = cloneWorldState(r); return; }
     const holders = { ...(cur.holders || {}), ...(r.holders || {}) };
     const echoedBy = { ...(cur.echoedBy || {}), ...(r.echoedBy || {}) };
     gpById[r.id] = { ...(Number(r.updatedAt || 0) >= Number(cur.updatedAt || 0) ? cur : r), ...(Number(r.updatedAt || 0) >= Number(cur.updatedAt || 0) ? r : cur), holders, echoedBy,
@@ -24400,7 +24445,7 @@ async function saveWorld(w) {
  * semmilyen régi böngészős világot az online állapotba.
  * PostgreSQL az egyetlen authoritative world online.
  */
-async function saveWorldMerged(local) {
+async function saveWorldMerged(local, alreadyDetached = false) {
   if (!local || !local.code) {
     return {
       world: local,
@@ -24408,10 +24453,13 @@ async function saveWorldMerged(local) {
     };
   }
 
+  /* Autosave already creates a detached snapshot. Re-cloning that ~MB-sized
+     object before the local backup only burns main-thread time; other callers
+     keep the original defensive clone. */
   const snapshot =
-    JSON.parse(
-      JSON.stringify(local)
-    );
+    alreadyDetached
+      ? local
+      : cloneWorldState(local);
 
   let snapshotOk = false;
   let primaryOk = false;
@@ -31261,6 +31309,8 @@ function Post({
           className="social-post-media"
           src={resolveImg(post.imageId ? imageRef(post.imageId) : post.image, media)}
           alt=""
+          loading="lazy"
+          decoding="async"
         />
       ) : null}
 
@@ -31388,6 +31438,14 @@ function Post({
     </article>
   );
 }
+
+const MemoPost = React.memo(
+  Post,
+  (prev, next) =>
+    prev.w === next.w &&
+    prev.post === next.post &&
+    prev.highlight === next.highlight
+);
 
 function SocialProfileModal({
   w,
@@ -32832,7 +32890,7 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
   if (!minWanted || !w || !post) return baseOut;
 
   const beforeActors = topLevelAiCommenterIds(w, post);
-  const probe = JSON.parse(JSON.stringify(w));
+  const probe = cloneWorldState(w);
   applyComments(probe, post.id, baseOut, label);
   const probePost = (probe.posts || []).find((row) => row && row.id === post.id);
   const acceptedActors = probePost
@@ -38402,6 +38460,8 @@ function NotesStrip({ w, update, setErr, onOpenChat, jump, onRequestNoteReaction
   );
 }
 
+const MemoNotesStrip = React.memo(NotesStrip);
+
 /* Választó a saját albumodból: egy koppintás, és a kép a poszthoz kerül. */
 function AlbumPick({ items, value, onPick }) {
   const { media } = useMedia();
@@ -38450,13 +38510,15 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   /* All posts stay in world state. Only mounted feed DOM is windowed. */
   const [visiblePostLimit, setVisiblePostLimit] = useState(60);
 
-  const activeMedia =
-    activeGossipMediaAccount(
-      w
-    );
+  const activeMedia = useMemo(
+    () => activeGossipMediaAccount(w),
+    [w]
+  );
 
-  const activeTrends =
-    (w.trends || []).slice(0, 8);
+  const activeTrends = useMemo(
+    () => (w.trends || []).slice(0, 8),
+    [w]
+  );
 
   const refs = useRef({});
 
@@ -38660,71 +38722,64 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     if (!ok) setErr(tt("A világ már feldolgoz egy lépéskérést.", "The world is already processing a step request."));
   };
 
-  const postById = useMemo(() => {
-    const map = new Map();
-    (w.posts || []).forEach((post) => {
-      if (post && post.id) map.set(post.id, post);
-    });
-    return map;
-  }, [w.posts]);
-
   const followingIds = useMemo(() => {
     const set = new Set();
     const meProfile = socialProfileById(w, w.meId);
     ((meProfile && meProfile.following) || []).forEach((id) => set.add(id));
     return set;
-  }, [w, w.meId]);
+  }, [w]);
 
-  const basePosts =
-    feedMode === "following"
-      ? (w.posts || []).filter((p) =>
-          p && (p.authorId === w.meId || followingIds.has(p.authorId))
-        )
-      : (w.posts || []);
+  const timelineItems = useMemo(() => {
+    const postById = new Map();
+    (w.posts || []).forEach((post) => {
+      if (post && post.id) postById.set(post.id, post);
+    });
 
-  const baseItems = basePosts.map((post) => ({
-    kind: "post",
-    id: "post:" + post.id,
-    ts: Number(post.ts) || 0,
-    post,
-    repost: null,
-  }));
+    const basePosts =
+      feedMode === "following"
+        ? (w.posts || []).filter((p) =>
+            p && (p.authorId === w.meId || followingIds.has(p.authorId))
+          )
+        : (w.posts || []);
 
-  const repostItems = repostRows(w)
-    .map((repost) => {
-      const post = postById.get(repost.postId);
-      const reposter = socialProfileById(w, repost.actorId);
+    const baseItems = basePosts.map((post) => ({
+      kind: "post",
+      id: "post:" + post.id,
+      ts: Number(post.ts) || 0,
+      post,
+      repost: null,
+    }));
 
-      if (!post || !reposter) {
-        return null;
-      }
+    const repostItems = repostRows(w)
+      .map((repost) => {
+        const post = postById.get(repost.postId);
+        const reposter = socialProfileById(w, repost.actorId);
 
-      if (
-        feedMode === "following" &&
-        reposter.id !== w.meId &&
-        !isFollowing(w, w.meId, reposter.id)
-      ) {
-        return null;
-      }
+        if (!post || !reposter) return null;
 
-      return {
-        kind: "repost",
-        id: "repost:" + repost.id,
-        ts: Number(repost.ts) || 0,
-        post,
-        repost,
-      };
-    })
-    .filter(Boolean);
+        if (
+          feedMode === "following" &&
+          reposter.id !== w.meId &&
+          !isFollowing(w, w.meId, reposter.id)
+        ) {
+          return null;
+        }
 
-  const timelineItems =
-    baseItems
+        return {
+          kind: "repost",
+          id: "repost:" + repost.id,
+          ts: Number(repost.ts) || 0,
+          post,
+          repost,
+        };
+      })
+      .filter(Boolean);
+
+    return baseItems
       .concat(repostItems)
-      .sort(
-        (a, b) =>
-          b.ts - a.ts
-      )
+      .sort((a, b) => b.ts - a.ts)
       .slice(0, 40);
+  }, [w, feedMode, followingIds]);
 
   const visibleTimelineItems =
     timelineItems.slice(0, visiblePostLimit);
@@ -38774,7 +38829,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         </div>
       </div>
 
-      <NotesStrip
+      <MemoNotesStrip
         w={w}
         update={update}
         setErr={setErr}
@@ -39063,7 +39118,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               </div>
             ) : null}
 
-            <Post
+            <MemoPost
           w={w}
           post={p}
           highlight={hl === p.id}
@@ -45135,9 +45190,7 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
    * a világ tényleges részeként kapja meg.
    */
   const requestWorld =
-    JSON.parse(
-      JSON.stringify(w)
-    );
+    cloneWorldState(w);
 
   if (!requestWorld.chats) {
     requestWorld.chats = {};
@@ -54659,9 +54712,7 @@ async function genPopupPrivateReply(
     );
 
   const requestWorld=
-    JSON.parse(
-      JSON.stringify(w)
-    );
+    cloneWorldState(w);
 
   if(!requestWorld.chats){
     requestWorld.chats={};
@@ -62591,7 +62642,7 @@ async function runSimulationAction(view, update, action, addImage) {
     const out = await genWorldStep(view, false, hours);
     if (!out || !Array.isArray(out.posts)) return null;
 
-    const probe = JSON.parse(JSON.stringify(view));
+    const probe = cloneWorldState(view);
     const visible = applyWorldStep(probe, out);
     if (!visible && !(Array.isArray(out.events) && out.events.length)) return null;
 
@@ -62694,7 +62745,7 @@ async function runSimulationAction(view, update, action, addImage) {
     }
     if (!out || !String(out.text || "").trim()) return null;
 
-    const gossipProbe = JSON.parse(JSON.stringify(view));
+    const gossipProbe = cloneWorldState(view);
     const probeCandidate = forcedRoleplayGossipCandidate(gossipProbe, sceneId) || candidate;
     const probePost = publishGossipMediaStory(gossipProbe, probeCandidate, out);
     if (!probePost) return null;
@@ -62906,7 +62957,7 @@ async function runSimulationAction(view, update, action, addImage) {
 
   if (action.type === "gossip-spread") {
     const payload = action.payload || {};
-    const probe = JSON.parse(JSON.stringify(view));
+    const probe = cloneWorldState(view);
     if (!applyGossipPropagationRound(probe, payload)) return null;
     update((n) => { applyGossipPropagationRound(n, payload); });
     return "gossip-spread";
@@ -62918,7 +62969,7 @@ async function runSimulationAction(view, update, action, addImage) {
     const rumor = state && state.rumors.find((r) => r && r.id === payload.rumorId);
     if (!rumor) return null;
     const out = await genGossipNetworkEcho(view, payload);
-    const probe = JSON.parse(JSON.stringify(view));
+    const probe = cloneWorldState(view);
     if (!applyGossipNetworkEcho(probe, payload, out)) return null;
     update((n) => { applyGossipNetworkEcho(n, payload, out); });
     return "gossip-echo";
@@ -63015,7 +63066,7 @@ async function runSimulationAction(view, update, action, addImage) {
 
     if (!out) return null;
 
-    let gossipProbe = JSON.parse(JSON.stringify(view));
+    let gossipProbe = cloneWorldState(view);
     let probePost = publishGossipMediaStory(
       gossipProbe,
       candidate,
@@ -63030,7 +63081,7 @@ async function runSimulationAction(view, update, action, addImage) {
       out = fallbackForcedPopupGossipStory(view, candidate);
       if (!out) return null;
 
-      gossipProbe = JSON.parse(JSON.stringify(view));
+      gossipProbe = cloneWorldState(view);
       probePost = publishGossipMediaStory(
         gossipProbe,
         candidate,
@@ -63110,7 +63161,7 @@ async function runSimulationAction(view, update, action, addImage) {
     const post = (view.posts || []).find((p) => p && p.id === postId);
     if (!post || !post.gossipStory || post.gossipStory.rumorEvolvedAt) return null;
     const out = await genRumorEvolution(view, post);
-    const rumorProbe = JSON.parse(JSON.stringify(view));
+    const rumorProbe = cloneWorldState(view);
     const probePost = publishRumorEvolution(rumorProbe, post.id, out);
     if (!probePost) return null;
     update((n) => { publishRumorEvolution(n, post.id, out); });
@@ -63513,7 +63564,7 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : rawOut;
 
-    const replyProbe = JSON.parse(JSON.stringify(view));
+    const replyProbe = cloneWorldState(view);
     const replyCount = applyReplies(replyProbe, post.id, comment.id, out);
     if (!replyCount) return null;
 
@@ -63585,7 +63636,7 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : quotaOut;
 
-    const commentsProbe = JSON.parse(JSON.stringify(view));
+    const commentsProbe = cloneWorldState(view);
     const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
 
     if (!visibleReactionCount) {
@@ -65069,11 +65120,7 @@ export default function App() {
 
     const authoritative =
       migrate(
-        JSON.parse(
-          JSON.stringify(
-            serverWorld
-          )
-        )
+        cloneWorldState(serverWorld)
       );
 
     if (!authoritative) {
@@ -66229,11 +66276,7 @@ const signOut = useCallback(async () => {
                       localRev
                     ) {
                       const next =
-                        JSON.parse(
-                          JSON.stringify(
-                            cur
-                          )
-                        );
+                        cloneWorldState(cur);
 
                       next.syncRev =
                         acceptedRev;
@@ -66297,11 +66340,7 @@ const signOut = useCallback(async () => {
                         localRev
                       ) {
                         const next =
-                          JSON.parse(
-                            JSON.stringify(
-                              cur
-                            )
-                          );
+                          cloneWorldState(cur);
 
                         next.syncRev =
                           worldSyncRev(
@@ -66331,11 +66370,7 @@ const signOut = useCallback(async () => {
                       if (!cur) return cur;
 
                       const next =
-                        JSON.parse(
-                          JSON.stringify(
-                            cur
-                          )
-                        );
+                        cloneWorldState(cur);
 
                       next.syncRev =
                         worldSyncRev(
@@ -66422,11 +66457,7 @@ const signOut = useCallback(async () => {
                 if (!cur) return cur;
 
                 const next =
-                  JSON.parse(
-                    JSON.stringify(
-                      cur
-                    )
-                  );
+                  cloneWorldState(cur);
 
                 next.syncRev =
                   serverRev;
@@ -67630,7 +67661,8 @@ const signOut = useCallback(async () => {
         try {
           localResult =
             await saveWorldMerged(
-              snap
+              snap,
+              true
             );
         } catch (e) {
           localResult = null;
@@ -67780,11 +67812,7 @@ const signOut = useCallback(async () => {
                   snapSyncRev
                 ) {
                   const next =
-                    JSON.parse(
-                      JSON.stringify(
-                        current
-                      )
-                    );
+                    cloneWorldState(current);
 
                   next.syncRev =
                     conflictSyncRev;
@@ -67819,11 +67847,7 @@ const signOut = useCallback(async () => {
                 }
 
                 const next =
-                  JSON.parse(
-                    JSON.stringify(
-                      current
-                    )
-                  );
+                  cloneWorldState(current);
 
                 next.syncRev =
                   conflictSyncRev;
@@ -67954,11 +67978,7 @@ const signOut = useCallback(async () => {
               ) === snapSyncRev
             ) {
               const next =
-                JSON.parse(
-                  JSON.stringify(
-                    current
-                  )
-                );
+                cloneWorldState(current);
 
               next.syncRev =
                 savedSyncRev;
@@ -68374,6 +68394,130 @@ const signOut = useCallback(async () => {
 
   useEffect(() => { if (err) { const t = setTimeout(() => setErr(""), 9000); return () => clearTimeout(t); } }, [err]);
 
+  const openChatTab = useCallback((id) => {
+    setChatId(id);
+    setTab("chat");
+  }, []);
+
+  const openRoomsPanel = useCallback(() => {
+    setShowRooms(true);
+  }, []);
+
+  const openSceneFromChat = useCallback((nextSceneId) => {
+    setSceneId(nextSceneId);
+    setJump({ type: "scene", id: nextSceneId, at: now() });
+    setTab("scene");
+  }, []);
+
+  const mediaCtxValue = useMemo(
+    () => ({ media, addImage }),
+    [media, addImage]
+  );
+
+  const memoView = useMemo(() => {
+    if (!world || !meId) return null;
+    const player =
+      (world.players && world.players[meId]) ||
+      blankPlayer(meId, "Névtelen", "jatekos");
+    const next = { ...world, meId, player };
+    next.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
+    return next;
+  }, [world, meId, tab, sceneId]);
+
+  const memoActivePopup = useMemo(
+    () => (editLocked || !memoView ? null : currentPopupEvent(memoView)),
+    [editLocked, memoView]
+  );
+
+  const memoTabs = useMemo(
+    () => [
+      ["feed", tt("Feed", "Feed"), Home],
+      ["cast", tt("Karakterek", "Characters"), Users],
+      ["bonds", tt("Kapcsolat", "Bonds"), Network],
+      ["scene", tt("Jelenet", "Scene"), Film],
+      ["chat", tt("Üzenetek", "Messages"), MessageCircle],
+      ["world", tt("Világ", "World"), Globe2],
+    ],
+    [tt]
+  );
+
+  const memoMainContent = useMemo(() => {
+    if (!memoView) return null;
+
+    if (tab === "feed") {
+      return (
+        <Feed
+          w={memoView}
+          update={update}
+          setErr={setErr}
+          jump={jump}
+          autoOn={auto.on}
+          onOpenChat={openChatTab}
+          onOpenWorlds={openRoomsPanel}
+          onRequestWorldStep={requestWorldStep}
+          onRequestNoteReactions={requestNoteReactions}
+          onSignal={signalSimulation}
+        />
+      );
+    }
+
+    if (tab === "cast") {
+      return <Cast w={memoView} update={update} setErr={setErr} jump={jump} goChat={openChatTab} />;
+    }
+
+    if (tab === "bonds") {
+      return <Bonds w={memoView} update={update} setErr={setErr} />;
+    }
+
+    if (tab === "scene") {
+      return <Scenes w={memoView} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />;
+    }
+
+    if (tab === "chat") {
+      return <Chat w={memoView} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={openSceneFromChat} />;
+    }
+
+    if (tab === "world") {
+      return (
+        <World
+          w={memoView}
+          update={update}
+          setErr={setErr}
+          onLeave={signOut}
+          onDeleteAccount={deleteOwnAccount}
+          onRooms={openRoomsPanel}
+          auto={auto}
+          onAuto={changeAuto}
+          detail={detail}
+          onDetail={changeDetail}
+          onLang={changeLang}
+        />
+      );
+    }
+
+    return null;
+  }, [
+    memoView,
+    tab,
+    update,
+    jump,
+    auto,
+    openChatTab,
+    openRoomsPanel,
+    requestWorldStep,
+    requestNoteReactions,
+    signalSimulation,
+    sceneId,
+    chatId,
+    openSceneFromChat,
+    signOut,
+    deleteOwnAccount,
+    changeAuto,
+    detail,
+    changeDetail,
+    changeLang,
+  ]);
+
   if (!bootReady) {
     return (
       <LangCtx.Provider value={langCtxValue}>
@@ -68401,15 +68545,12 @@ const signOut = useCallback(async () => {
     );
   }
 
-  const me = (world.players && world.players[meId]) || blankPlayer(meId, "Névtelen", "jatekos");
-  const view = { ...world, meId, player: me };
-  view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
+  const view = memoView;
+  const me = view.player;
   setLiveUiActiveSceneId(view.activeSceneId);
   viewRef.current = view;
-  const activePopup = editLocked ? null : currentPopupEvent(view);
-
-  const TABS = [["feed", tt("Feed", "Feed"), Home], ["cast", tt("Karakterek", "Characters"), Users], ["bonds", tt("Kapcsolat", "Bonds"), Network],
-    ["scene", tt("Jelenet", "Scene"), Film], ["chat", tt("Üzenetek", "Messages"), MessageCircle], ["world", tt("Világ", "World"), Globe2]];
+  const activePopup = memoActivePopup;
+  const TABS = memoTabs;
 
   const markRead = (id) => update((n) => {
     const list = (n.notify && n.notify[meId]) || [];
@@ -68436,7 +68577,7 @@ const signOut = useCallback(async () => {
 
   return (
     <LangCtx.Provider value={langCtxValue}>
-    <MediaCtx.Provider value={{ media, addImage }}>
+    <MediaCtx.Provider value={mediaCtxValue}>
     <div className="mv">
       <style>{CSS}</style>
       <div className="mv-wrap">
@@ -68467,25 +68608,7 @@ const signOut = useCallback(async () => {
         </div>
 
         <div className="mv-main">
-          {tab === "feed" && <Feed w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
-            onOpenChat={(id) => { setChatId(id); setTab("chat"); }}
-            onOpenWorlds={() => setShowRooms(true)}
-            onRequestWorldStep={requestWorldStep}
-            onRequestNoteReactions={requestNoteReactions}
-            onSignal={signalSimulation} />}
-          {tab === "cast" && <Cast w={view} update={update} setErr={setErr} jump={jump} goChat={(id) => { setChatId(id); setTab("chat"); }} />}
-          {tab === "bonds" && <Bonds w={view} update={update} setErr={setErr} />}
-          {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />}
-          {tab === "chat" && <Chat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={(nextSceneId) => { setSceneId(nextSceneId); setJump({ type: "scene", id: nextSceneId, at: now() }); setTab("scene"); }} />}
-          {tab === "world" && <World
-  w={view}
-  update={update}
-  setErr={setErr}
- 
-  onLeave={signOut}
-  onDeleteAccount={deleteOwnAccount}
-            onRooms={() => setShowRooms(true)} auto={auto} onAuto={changeAuto}
-            detail={detail} onDetail={changeDetail} onLang={changeLang} />}
+          {memoMainContent}
         </div>
       </div>
 
