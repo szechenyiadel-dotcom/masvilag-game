@@ -3683,6 +3683,17 @@ function defaultCharacterMemory() {
     relationshipContinuity: {},
 
     /*
+     * OBSERVED ADAPTATION / CHARACTER DEVELOPMENT
+     *
+     * Target-specific learned behavior built ONLY from events the character
+     * actually observed. It never reads the human player's private personality,
+     * traits, goals, fears, likes, secrets or speech fields. Canon personality
+     * stays authoritative; this layer only changes how the AI learns to approach
+     * a specific person over time.
+     */
+    adaptiveProfiles: {},
+
+    /*
      * CHARACTER AGENT RUNTIME
      *
      * This is the cross-surface executive state shared by feed, comments,
@@ -3752,6 +3763,9 @@ function ensureCharMemory(w, observerId) {
   if (!mem.relationshipContinuity || typeof mem.relationshipContinuity !== "object" || Array.isArray(mem.relationshipContinuity)) {
     mem.relationshipContinuity = {};
   }
+  if (!mem.adaptiveProfiles || typeof mem.adaptiveProfiles !== "object" || Array.isArray(mem.adaptiveProfiles)) {
+    mem.adaptiveProfiles = {};
+  }
   if (!Array.isArray(mem.roleplayRecent)) mem.roleplayRecent = [];
   if (!Array.isArray(mem.roleplayLongTerm)) mem.roleplayLongTerm = [];
   if (!mem.roleplayShared || typeof mem.roleplayShared !== "object" || Array.isArray(mem.roleplayShared)) mem.roleplayShared = {};
@@ -3777,6 +3791,600 @@ function ensureCharMemory(w, observerId) {
     if (!Array.isArray(mem.roleplayShared[targetId])) mem.roleplayShared[targetId] = [];
   });
   return mem;
+}
+
+
+/* ============================================================
+   ADVANCED AI ADAPTATION + PLAYER SOCIAL PROGRESSION
+   ============================================================ */
+
+const PLAYER_SOCIAL_PROGRESSION_VERSION = 1;
+
+function defaultAdaptiveProfile() {
+  return {
+    evidenceCount: 0,
+    familiarity: 0,
+    observedWarmth: 50,
+    observedPlayfulness: 50,
+    observedDirectness: 50,
+    observedPrivacyPreference: 50,
+    observedConflictTolerance: 50,
+    meaningfulInteractions: 0,
+    sharedEvents: 0,
+    positiveMoments: 0,
+    conflicts: 0,
+    developmentStage: 1,
+    decisionHistory: [],
+    lastUpdatedAt: 0,
+  };
+}
+
+function clampAdaptiveScore(value) {
+  return Math.max(0, Math.min(100, Number(value) || 0));
+}
+
+function ensureAdaptiveProfile(w, observerId, targetId) {
+  if (!w || !observerId || !targetId || observerId === targetId || isHuman(w, observerId)) return null;
+  const observer = charById(w, observerId);
+  const target = charById(w, targetId);
+  if (!observer || !target) return null;
+  const mem = ensureCharMemory(w, observerId);
+  if (!mem.adaptiveProfiles[targetId] || typeof mem.adaptiveProfiles[targetId] !== "object" || Array.isArray(mem.adaptiveProfiles[targetId])) {
+    mem.adaptiveProfiles[targetId] = defaultAdaptiveProfile();
+  }
+  const base = defaultAdaptiveProfile();
+  const row = { ...base, ...mem.adaptiveProfiles[targetId] };
+  row.evidenceCount = Math.max(0, Math.round(Number(row.evidenceCount) || 0));
+  row.familiarity = clampAdaptiveScore(row.familiarity);
+  row.observedWarmth = clampAdaptiveScore(row.observedWarmth);
+  row.observedPlayfulness = clampAdaptiveScore(row.observedPlayfulness);
+  row.observedDirectness = clampAdaptiveScore(row.observedDirectness);
+  row.observedPrivacyPreference = clampAdaptiveScore(row.observedPrivacyPreference);
+  row.observedConflictTolerance = clampAdaptiveScore(row.observedConflictTolerance);
+  row.meaningfulInteractions = Math.max(0, Math.round(Number(row.meaningfulInteractions) || 0));
+  row.sharedEvents = Math.max(0, Math.round(Number(row.sharedEvents) || 0));
+  row.positiveMoments = Math.max(0, Math.round(Number(row.positiveMoments) || 0));
+  row.conflicts = Math.max(0, Math.round(Number(row.conflicts) || 0));
+  row.developmentStage = Math.max(1, Math.min(5, Math.round(Number(row.developmentStage) || 1)));
+  row.decisionHistory = (Array.isArray(row.decisionHistory) ? row.decisionHistory : []).filter(Boolean).slice(-24);
+  row.lastUpdatedAt = Math.max(0, Number(row.lastUpdatedAt) || 0);
+  mem.adaptiveProfiles[targetId] = row;
+  return row;
+}
+
+function adaptiveDecisionSummary(w, entry, playerId) {
+  if (!entry || !playerId) return "";
+  const type = String(entry.type || "event");
+  const text = cut(String(entry.text || "").replace(/\s+/g, " ").trim(), 240);
+  const targets = (entry.targetIds || []).map((id) => nameOfIn(w, id)).filter(Boolean).join(", ");
+  const en = worldLanguage(w, playerId) === "en";
+  const labels = en
+    ? {
+        post: "posted",
+        comment: "commented",
+        reply: "replied",
+        like: "liked something",
+        repost: "reposted something",
+        follow: "followed someone",
+        "dm-message": "sent a private message",
+        "popup-choice": "made a popup decision",
+        "roleplay-event": "made a meaningful Event choice/action",
+        "roleplay-summary": "participated in an Event",
+        "roleplay-initiated": "was invited into an Event",
+        "note": "posted a Note",
+        "note-react": "reacted to a Note",
+        "group-message": "wrote in a group chat",
+      }
+    : {
+        post: "posztolt",
+        comment: "kommentelt",
+        reply: "válaszolt egy kommentre",
+        like: "lájkolt valamit",
+        repost: "újraosztott valamit",
+        follow: "bekövetett valakit",
+        "dm-message": "privát üzenetet küldött",
+        "popup-choice": "döntést hozott egy popup helyzetben",
+        "roleplay-event": "jelentős döntést/cselekvést tett egy Eventben",
+        "roleplay-summary": "részt vett egy Eventben",
+        "roleplay-initiated": "Event-meghívást kapott",
+        "note": "Note-ot írt",
+        "note-react": "reagált egy Note-ra",
+        "group-message": "írt egy csoportos chatben",
+      };
+  const action = labels[type] || (en ? `acted in ${type}` : `ezt tette: ${type}`);
+  const who = nameOfIn(w, playerId) || (en ? "The player" : "A játékos");
+  const targetPart = targets ? (en ? ` involving ${targets}` : ` (${targets})`) : "";
+  return `${who} ${action}${targetPart}${text ? `: ${text}` : "."}`;
+}
+
+function adaptiveSignalsFromEvent(entry) {
+  const text = String(entry && entry.text || "").toLowerCase();
+  const warmth = /\b(?:thank|thanks|love|ily|appreciat|care|proud|sweet|kind|köszön|köszi|szeret|büszke|kedves|aranyos|hiányzol)\b|❤|♥|<3/.test(text);
+  const playful = /(?:😂|😭|🤣|💀|lol\b|lmao\b|haha|hehe|xd\b|vicc|poén|joke|tease|ugrat)/.test(text);
+  const conflict = Number(entry && entry.drama || 0) >= 35 || /\b(?:hate|angry|mad|fight|leave me|shut up|idiot|stupid|fuck off|gyűlöl|haragsz|dühös|veszeked|hagyj békén|fogd be|idióta)\b/.test(text);
+  const direct = /\?|\b(?:need|want|come|tell me|answer|now|kell|akar|gyere|mondd|válaszolj|most)\b/.test(text);
+  const visibility = String(entry && entry.visibility || "public");
+  return {
+    warmth,
+    playful,
+    conflict,
+    direct,
+    privateAction: visibility === "private",
+    publicAction: visibility === "public",
+  };
+}
+
+function adaptiveObserversForPlayerEvent(w, entry, playerId) {
+  if (!w || !entry || !playerId) return [];
+  const ids = new Set();
+  const add = (id) => {
+    const c = id ? charById(w, id) : null;
+    if (c && !isHuman(w, c.id) && !isMediaAccount(w, c.id)) ids.add(c.id);
+  };
+
+  if (entry.actorId === playerId) {
+    (entry.targetIds || []).forEach(add);
+    (entry.witnessIds || []).forEach(add);
+
+    if (entry.visibility === "public" && ["post", "comment", "reply", "repost", "follow", "popup-choice", "note"].includes(entry.type)) {
+      (w.chars || [])
+        .filter((c) => c && !isHuman(w, c.id) && (isFollowing(w, c.id, playerId) || linked(w, c.id, playerId)))
+        .map((c) => ({ c, score: socialInteractionInterest(w, c.id, playerId) + (isFollowing(w, c.id, playerId) ? 20 : 0) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8)
+        .forEach((row) => add(row.c.id));
+    }
+  }
+
+  if ((entry.targetIds || []).includes(playerId) || (entry.witnessIds || []).includes(playerId)) {
+    add(entry.actorId);
+  }
+
+  return [...ids].slice(0, 10);
+}
+
+function adaptiveDevelopmentStage(w, row) {
+  const elapsedHours = Math.max(0, Number(storySettingsOf(w).elapsedHours) || 0);
+  const score =
+    Number(row.meaningfulInteractions || 0) +
+    Number(row.sharedEvents || 0) * 2 +
+    Number(row.positiveMoments || 0) * 0.45 +
+    Math.min(12, elapsedHours / 36);
+  if (score >= 40) return 5;
+  if (score >= 22) return 4;
+  if (score >= 10) return 3;
+  if (score >= 4) return 2;
+  return 1;
+}
+
+function updateAdaptiveCharacterFromPlayerEvent(w, observerId, playerId, entry) {
+  const row = ensureAdaptiveProfile(w, observerId, playerId);
+  if (!row) return null;
+  const signals = adaptiveSignalsFromEvent(entry);
+  const summary = adaptiveDecisionSummary(w, entry, playerId);
+  const ref = String(entry.id || entry.refId || "");
+  if (ref && row.decisionHistory.some((x) => x && String(x.id || "") === ref)) return row;
+
+  const move = (key, delta) => {
+    row[key] = clampAdaptiveScore(Number(row[key]) + Number(delta || 0));
+  };
+  move("familiarity", 2.5 + Math.min(3, Number(entry.importance || 0) / 35));
+  if (signals.warmth) move("observedWarmth", 4.5);
+  if (signals.conflict) move("observedWarmth", -3.5);
+  if (signals.playful) move("observedPlayfulness", 4);
+  if (signals.direct) move("observedDirectness", 3.5);
+  if (signals.privateAction) move("observedPrivacyPreference", 3.5);
+  if (signals.publicAction) move("observedPrivacyPreference", -1.25);
+  if (signals.conflict) move("observedConflictTolerance", 4);
+
+  row.evidenceCount += 1;
+  row.meaningfulInteractions += 1;
+  if (/roleplay|popup/.test(String(entry.type || ""))) row.sharedEvents += 1;
+  if (signals.warmth) row.positiveMoments += 1;
+  if (signals.conflict) row.conflicts += 1;
+  row.developmentStage = adaptiveDevelopmentStage(w, row);
+  row.lastUpdatedAt = Number(entry.ts) || now();
+  if (summary) {
+    row.decisionHistory = [
+      ...(row.decisionHistory || []).filter((x) => !ref || String(x && x.id || "") !== ref),
+      { id: ref || uid(), ts: Number(entry.ts) || now(), type: String(entry.type || "event"), summary },
+    ].slice(-24);
+
+    rememberKnowledge(w, observerId, {
+      kind: "event",
+      source: `player_decision:${String(entry.type || "event")}`,
+      confidence: 1,
+      timestamp: Number(entry.ts) || now(),
+      text: summary,
+    });
+    rememberAboutTarget(w, observerId, playerId, {
+      kind: "event",
+      source: `player_decision:${String(entry.type || "event")}`,
+      confidence: 1,
+      timestamp: Number(entry.ts) || now(),
+      text: summary,
+    });
+  }
+  return row;
+}
+
+function applyAdaptiveCharacterLearningFromSocialEvent(w, entry) {
+  if (!w || !entry) return;
+  Object.keys(w.players || {}).forEach((playerId) => {
+    const involved =
+      entry.actorId === playerId ||
+      (entry.targetIds || []).includes(playerId) ||
+      (entry.witnessIds || []).includes(playerId);
+    if (!involved) return;
+    adaptiveObserversForPlayerEvent(w, entry, playerId).forEach((observerId) => {
+      updateAdaptiveCharacterFromPlayerEvent(w, observerId, playerId, entry);
+    });
+  });
+}
+
+function compactAdaptiveProfileForPrompt(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || isHuman(w, actorId)) return null;
+  const mem = ensureCharMemory(w, actorId);
+  const raw = mem.adaptiveProfiles && mem.adaptiveProfiles[targetId];
+  if (!raw || !Number(raw.evidenceCount || 0)) return null;
+  const row = ensureAdaptiveProfile(w, actorId, targetId);
+  if (!row) return null;
+  return {
+    evidenceCount: row.evidenceCount,
+    familiarity: Math.round(row.familiarity),
+    developmentStage: row.developmentStage,
+    observedBehaviorOnly: {
+      warmth: Math.round(row.observedWarmth),
+      playfulness: Math.round(row.observedPlayfulness),
+      directness: Math.round(row.observedDirectness),
+      privacyPreference: Math.round(row.observedPrivacyPreference),
+      conflictTolerance: Math.round(row.observedConflictTolerance),
+    },
+    history: {
+      meaningfulInteractions: row.meaningfulInteractions,
+      sharedEvents: row.sharedEvents,
+      positiveMoments: row.positiveMoments,
+      conflicts: row.conflicts,
+    },
+    recentObservedDecisions: (row.decisionHistory || []).slice(-5).map((x) => x && x.summary).filter(Boolean),
+    rule: "Adapt HOW you approach this target from observed behavior and shared history only. Never infer or read the human player's private Personality/Traits/Speech/Goals/Fears/Likes/Secrets fields, and never replace your own canon personality.",
+  };
+}
+
+function mergeAdaptiveProfiles(baseProfiles, mineProfiles) {
+  const out = {};
+  const ids = new Set([...Object.keys(baseProfiles || {}), ...Object.keys(mineProfiles || {})]);
+  ids.forEach((targetId) => {
+    const a = (baseProfiles || {})[targetId] || defaultAdaptiveProfile();
+    const b = (mineProfiles || {})[targetId] || defaultAdaptiveProfile();
+    const newer = Number(b.lastUpdatedAt || 0) >= Number(a.lastUpdatedAt || 0) ? b : a;
+    const decisions = [];
+    const seen = new Set();
+    [...(a.decisionHistory || []), ...(b.decisionHistory || [])]
+      .filter(Boolean)
+      .sort((x, y) => Number(x.ts || 0) - Number(y.ts || 0))
+      .forEach((row) => {
+        const key = String(row.id || `${row.type || ""}|${row.ts || 0}|${row.summary || ""}`);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        decisions.push(row);
+      });
+    out[targetId] = {
+      ...defaultAdaptiveProfile(),
+      ...newer,
+      evidenceCount: Math.max(Number(a.evidenceCount || 0), Number(b.evidenceCount || 0)),
+      familiarity: Math.max(Number(a.familiarity || 0), Number(b.familiarity || 0)),
+      meaningfulInteractions: Math.max(Number(a.meaningfulInteractions || 0), Number(b.meaningfulInteractions || 0)),
+      sharedEvents: Math.max(Number(a.sharedEvents || 0), Number(b.sharedEvents || 0)),
+      positiveMoments: Math.max(Number(a.positiveMoments || 0), Number(b.positiveMoments || 0)),
+      conflicts: Math.max(Number(a.conflicts || 0), Number(b.conflicts || 0)),
+      developmentStage: Math.max(Number(a.developmentStage || 1), Number(b.developmentStage || 1)),
+      decisionHistory: decisions.slice(-24),
+      lastUpdatedAt: Math.max(Number(a.lastUpdatedAt || 0), Number(b.lastUpdatedAt || 0)),
+    };
+  });
+  return out;
+}
+
+const PLAYER_ACCESS_TIERS = [
+  { key: "inner-circle", minLevel: 3, minScore: 25, hu: "Belső kör", en: "Inner Circle", huDesc: "meghívásos kisebb programok és privátabb, kánonhoz illő helyszínrészek", enDesc: "invite-only smaller events and more private canon-consistent areas" },
+  { key: "invite-only", minLevel: 5, minScore: 40, hu: "Meghívásos hozzáférés", en: "Invite-only Access", huDesc: "zártabb társas események, after-hours vagy tagoknak szóló alkalmak", enDesc: "closed social events, after-hours or members-only opportunities" },
+  { key: "vip-access", minLevel: 7, minScore: 58, hu: "VIP hozzáférés", en: "VIP Access", huDesc: "VIP/private area, backstage vagy exkluzív esemény, ha a világ kánonja támogatja", enDesc: "VIP/private areas, backstage or exclusive events when the world canon supports them" },
+  { key: "elite-network", minLevel: 10, minScore: 74, hu: "Elit hálózat", en: "Elite Network", huDesc: "befolyásos körökhöz kötődő ritkább, magas státuszú meghívások", enDesc: "rarer high-status invitations tied to influential circles" },
+  { key: "top-tier", minLevel: 14, minScore: 88, hu: "Top tier", en: "Top Tier", huDesc: "a világ legzártabb, kánon szerint létező társas hozzáférései és eseményei", enDesc: "the world's most restricted canon-supported social access and events" },
+];
+
+function defaultPlayerProgression() {
+  return {
+    version: PLAYER_SOCIAL_PROGRESSION_VERSION,
+    xp: 0,
+    level: 1,
+    globalScore: 0,
+    globalRank: "new-face",
+    globalRankTier: 0,
+    influenceScore: 0,
+    activityScore: 0,
+    interactionCounts: {},
+    processedEventIds: [],
+    unlockedAccess: [],
+    historyImported: false,
+    lastXpAt: 0,
+    updatedAt: 0,
+  };
+}
+
+function ensurePlayerProgression(w, playerId) {
+  if (!w || !playerId || !isHuman(w, playerId)) return null;
+  if (!w.playerProgression || typeof w.playerProgression !== "object" || Array.isArray(w.playerProgression)) w.playerProgression = {};
+  const current = w.playerProgression[playerId] && typeof w.playerProgression[playerId] === "object"
+    ? w.playerProgression[playerId]
+    : {};
+  const row = { ...defaultPlayerProgression(), ...current };
+  row.version = PLAYER_SOCIAL_PROGRESSION_VERSION;
+  row.xp = Math.max(0, Math.round(Number(row.xp) || 0));
+  row.level = Math.max(1, Math.round(Number(row.level) || 1));
+  row.globalScore = Math.max(0, Math.min(100, Number(row.globalScore) || 0));
+  row.globalRankTier = Math.max(0, Math.round(Number(row.globalRankTier) || 0));
+  row.influenceScore = Math.max(0, Math.min(100, Number(row.influenceScore) || 0));
+  row.activityScore = Math.max(0, Math.min(100, Number(row.activityScore) || 0));
+  row.interactionCounts = row.interactionCounts && typeof row.interactionCounts === "object" && !Array.isArray(row.interactionCounts) ? row.interactionCounts : {};
+  row.processedEventIds = [...new Set((Array.isArray(row.processedEventIds) ? row.processedEventIds : []).filter(Boolean).map(String))].slice(-1600);
+  row.unlockedAccess = [...new Set((Array.isArray(row.unlockedAccess) ? row.unlockedAccess : []).filter(Boolean).map(String))];
+  row.historyImported = Boolean(row.historyImported);
+  row.lastXpAt = Math.max(0, Number(row.lastXpAt) || 0);
+  row.updatedAt = Math.max(0, Number(row.updatedAt) || 0);
+  w.playerProgression[playerId] = row;
+  return row;
+}
+
+function progressionXpFloorForLevel(level) {
+  const n = Math.max(1, Math.round(Number(level) || 1)) - 1;
+  return Math.round(n * 80 + n * n * 20);
+}
+
+function progressionLevelFromXp(xp) {
+  const points = Math.max(0, Number(xp) || 0);
+  let level = 1;
+  while (level < 50 && points >= progressionXpFloorForLevel(level + 1)) level += 1;
+  return level;
+}
+
+function progressionXpForSocialEvent(entry, playerId) {
+  if (!entry || !playerId) return 0;
+  const actor = String(entry.actorId || "") === String(playerId);
+  const target = (entry.targetIds || []).map(String).includes(String(playerId));
+  const witness = (entry.witnessIds || []).map(String).includes(String(playerId));
+  if (!actor && !target && !witness) return 0;
+  const map = {
+    post: 14,
+    comment: 9,
+    reply: 8,
+    like: 2,
+    repost: 6,
+    follow: 4,
+    "dm-message": 9,
+    "group-message": 8,
+    note: 5,
+    "note-react": 3,
+    "popup-choice": 18,
+    "roleplay-initiated": 10,
+    "roleplay-event": 18,
+    "roleplay-summary": 20,
+    "scenario-start": 4,
+  };
+  const base = Number(map[String(entry.type || "")]) || 0;
+  if (!base) return 0;
+  let xp = actor ? base : Math.max(1, Math.round(base * (target ? 0.45 : 0.25)));
+  if (actor) xp += Math.min(5, Math.floor((Number(entry.importance) || 0) / 22));
+  if (String(entry.type || "") === "popup-choice" || /roleplay/.test(String(entry.type || ""))) xp += 2;
+  return Math.max(0, Math.min(30, Math.round(xp)));
+}
+
+function progressionInfluenceFromAiRelationships(w, playerId) {
+  if (!w || !playerId) return 0;
+  const rows = (w.chars || []).filter((c) => c && !isHuman(w, c.id)).map((c) => {
+    const outRel = getRel(w, playerId, c.id) || {};
+    const inRel = getRel(w, c.id, playerId) || {};
+    const positive = Math.max(0, (Math.max(0, Number(outRel.score) || 0) + Math.max(0, Number(inRel.score) || 0)) / 2);
+    const bondBoost = hasPositiveFollowBond(outRel) || hasPositiveFollowBond(inRel) || hasFamilyFollowBond(outRel) || hasFamilyFollowBond(inRel) ? 14 : 0;
+    const closeness = Math.max(0, Math.min(1, (positive + bondBoost) / 100));
+    const stat = w.socialStats && w.socialStats[c.id] ? w.socialStats[c.id] : null;
+    const followerPower = followerSocialPower(displayFollowerCount(w, c.id));
+    const power = Math.max(followerPower, Number(stat && stat.clout) || 0, Number(stat && stat.popularity) || 0);
+    return power * closeness;
+  }).sort((a, b) => b - a).slice(0, 6);
+  return Math.max(0, Math.min(100, rows.reduce((sum, n) => sum + n, 0) * 0.24));
+}
+
+function progressionRankForScore(score) {
+  const n = Math.max(0, Math.min(100, Number(score) || 0));
+  if (n >= 90) return { key: "power-player", tier: 5, hu: "Hatalmi játékos", en: "Power Player" };
+  if (n >= 76) return { key: "inner-circle", tier: 4, hu: "Belső kör", en: "Inner Circle" };
+  if (n >= 60) return { key: "influential", tier: 3, hu: "Befolyásos", en: "Influential" };
+  if (n >= 42) return { key: "connected", tier: 2, hu: "Jól kapcsolt", en: "Connected" };
+  if (n >= 22) return { key: "known", tier: 1, hu: "Ismert arc", en: "Known Face" };
+  return { key: "new-face", tier: 0, hu: "Új arc", en: "New Face" };
+}
+
+function progressionAccessFor(level, globalScore) {
+  return PLAYER_ACCESS_TIERS
+    .filter((tier) => Number(level) >= tier.minLevel && Number(globalScore) >= tier.minScore)
+    .map((tier) => tier.key);
+}
+
+function progressionAccessLabel(key, lang = "hu") {
+  const row = PLAYER_ACCESS_TIERS.find((x) => x.key === key);
+  return row ? (lang === "en" ? row.en : row.hu) : key;
+}
+
+function refreshPlayerProgressionSummary(w, playerId, notify = false) {
+  const row = ensurePlayerProgression(w, playerId);
+  if (!row) return null;
+  const oldLevel = row.level;
+  const oldTier = row.globalRankTier;
+  const oldAccess = new Set(row.unlockedAccess || []);
+
+  const level = progressionLevelFromXp(row.xp);
+  const playerStats = w.socialStats && w.socialStats[playerId] ? w.socialStats[playerId] : null;
+  const ownClout = Math.max(
+    followerSocialPower(displayFollowerCount(w, playerId)),
+    Number(playerStats && playerStats.clout) || 0,
+    Number(playerStats && playerStats.popularity) || 0
+  );
+  const uniqueTypes = Object.keys(row.interactionCounts || {}).filter((k) => Number(row.interactionCounts[k]) > 0).length;
+  const activityScore = Math.max(0, Math.min(100, level * 6 + Math.log2(row.xp + 2) * 4 + Math.min(20, uniqueTypes * 2)));
+  const influenceScore = progressionInfluenceFromAiRelationships(w, playerId);
+  const globalScore = Math.max(0, Math.min(100, ownClout * 0.42 + influenceScore * 0.36 + activityScore * 0.22));
+  const rank = progressionRankForScore(globalScore);
+  const access = progressionAccessFor(level, globalScore);
+
+  row.level = level;
+  row.activityScore = activityScore;
+  row.influenceScore = influenceScore;
+  row.globalScore = globalScore;
+  row.globalRank = rank.key;
+  row.globalRankTier = rank.tier;
+  /* Access is a real unlock: once earned it stays available even if the
+     live global score later dips because a relationship or trend changes. */
+  row.unlockedAccess = [...new Set([...(row.unlockedAccess || []), ...access])];
+  row.updatedAt = now();
+
+  if (notify) {
+    const lang = worldLanguage(w, playerId);
+    if (level > oldLevel) {
+      pushNote(w, playerId, {
+        icon: "⬆️",
+        text: lang === "en" ? `You reached Level ${level}.` : `Szintet léptél: ${level}. szint.`,
+        link: { type: "char", id: playerId },
+      });
+    }
+    if (rank.tier > oldTier) {
+      pushNote(w, playerId, {
+        icon: "⚡",
+        text: lang === "en" ? `Your global social rank is now ${rank.en}.` : `A globális közösségi rangod mostantól: ${rank.hu}.`,
+        link: { type: "char", id: playerId },
+      });
+    }
+    const newlyUnlocked = access.filter((key) => !oldAccess.has(key));
+    if (newlyUnlocked.length) {
+      pushNote(w, playerId, {
+        icon: "🔓",
+        text: lang === "en"
+          ? `New social access unlocked: ${newlyUnlocked.map((key) => progressionAccessLabel(key, lang)).join(", ")}.`
+          : `Új társas hozzáférés nyílt meg: ${newlyUnlocked.map((key) => progressionAccessLabel(key, lang)).join(", ")}.`,
+        link: { type: "char", id: playerId },
+      });
+    }
+  }
+  return row;
+}
+
+function awardPlayerProgressionForEvent(w, playerId, entry, notify = false) {
+  const row = ensurePlayerProgression(w, playerId);
+  if (!row || !entry) return 0;
+  const eventId = String(entry.id || entry.refId || "");
+  if (eventId && row.processedEventIds.includes(eventId)) return 0;
+  const xp = progressionXpForSocialEvent(entry, playerId);
+  /* Only events that actually involve this player consume their progression
+     de-duplication ledger. Unrelated world activity must not evict useful
+     player-history IDs from the bounded processed list. */
+  if (xp <= 0) return 0;
+  if (eventId) row.processedEventIds = [...row.processedEventIds, eventId].slice(-1600);
+  row.xp += xp;
+  const type = String(entry.type || "event");
+  row.interactionCounts[type] = Math.max(0, Number(row.interactionCounts[type]) || 0) + 1;
+  row.lastXpAt = Number(entry.ts) || now();
+  refreshPlayerProgressionSummary(w, playerId, notify);
+  return xp;
+}
+
+function applyPlayerProgressionFromSocialEvent(w, entry) {
+  if (!w || !entry) return;
+  Object.keys(w.players || {}).forEach((playerId) => {
+    awardPlayerProgressionForEvent(w, playerId, entry, true);
+  });
+}
+
+function initializePlayerProgressionFromHistory(w, playerId) {
+  const row = ensurePlayerProgression(w, playerId);
+  if (!row || row.historyImported) {
+    if (row) refreshPlayerProgressionSummary(w, playerId, false);
+    return row;
+  }
+  (w.socialEvents || [])
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0))
+    .forEach((entry) => awardPlayerProgressionForEvent(w, playerId, entry, false));
+  row.historyImported = true;
+  row.updatedAt = now();
+  refreshPlayerProgressionSummary(w, playerId, false);
+  return row;
+}
+
+function playerProgressionView(w, playerId) {
+  const row = w && w.playerProgression && w.playerProgression[playerId]
+    ? w.playerProgression[playerId]
+    : defaultPlayerProgression();
+  const rank = progressionRankForScore(row.globalScore || 0);
+  const level = Math.max(1, Number(row.level) || progressionLevelFromXp(row.xp || 0));
+  const currentFloor = progressionXpFloorForLevel(level);
+  const nextFloor = progressionXpFloorForLevel(level + 1);
+  return {
+    ...row,
+    level,
+    rankLabel: worldLanguage(w, playerId) === "en" ? rank.en : rank.hu,
+    xpIntoLevel: Math.max(0, Number(row.xp || 0) - currentFloor),
+    xpNeededThisLevel: Math.max(1, nextFloor - currentFloor),
+    highestAccess: (row.unlockedAccess || []).slice(-1)[0] || "",
+  };
+}
+
+function playerProgressionAccessCard(w, playerId) {
+  if (!w || !playerId) return "";
+  const view = playerProgressionView(w, playerId);
+  const lang = worldLanguage(w, playerId);
+  const unlocked = (view.unlockedAccess || []).map((key) => {
+    const tier = PLAYER_ACCESS_TIERS.find((x) => x.key === key);
+    if (!tier) return key;
+    return `${lang === "en" ? tier.en : tier.hu}: ${lang === "en" ? tier.enDesc : tier.huDesc}`;
+  });
+  return `${lang === "en" ? "PLAYER SOCIAL PROGRESSION / ACCESS" : "JÁTÉKOS KÖZÖSSÉGI FEJLŐDÉS / HOZZÁFÉRÉS"}:
+- level=${view.level}, globalRank=${view.rankLabel}, globalScore=${Math.round(Number(view.globalScore) || 0)}, influentialConnections=${Math.round(Number(view.influenceScore) || 0)}
+- ${lang === "en" ? "UNLOCKED ACCESS" : "FELOLDOTT HOZZÁFÉRÉS"}: ${unlocked.length ? unlocked.join(" | ") : (lang === "en" ? "standard public/social access only" : "csak normál nyilvános/társas hozzáférés")}
+- ${lang === "en" ? "HARD RULE: unlocked access is permission, not a guaranteed event. Use it only when the current universe can plausibly support it. Never invent a named venue, institution, club or organization absent from canon; an unlocked location may instead be a private/VIP/backstage/after-hours section of an already plausible canon venue. Never use a locked tier." : "HARD RULE: a feloldott hozzáférés lehetőség, nem kötelező esemény. Csak akkor használd, ha a jelenlegi univerzum hihetően támogatja. Ne találj ki kánonban nem létező névvel ellátott helyet, intézményt, klubot vagy szervezetet; újonnan elérhető hely lehet egy már hihető/kánon szerinti hely privát/VIP/backstage/after-hours része. Lezárt szintet soha ne használj."}`;
+}
+
+function mergePlayerProgressionMaps(remoteMap, localMap) {
+  const out = {};
+  const ids = new Set([...Object.keys(remoteMap || {}), ...Object.keys(localMap || {})]);
+  ids.forEach((playerId) => {
+    const a = { ...defaultPlayerProgression(), ...((remoteMap || {})[playerId] || {}) };
+    const b = { ...defaultPlayerProgression(), ...((localMap || {})[playerId] || {}) };
+    const newer = Number(b.updatedAt || 0) >= Number(a.updatedAt || 0) ? b : a;
+    const counts = { ...(a.interactionCounts || {}) };
+    Object.keys(b.interactionCounts || {}).forEach((key) => {
+      counts[key] = Math.max(Number(counts[key]) || 0, Number(b.interactionCounts[key]) || 0);
+    });
+    out[playerId] = {
+      ...defaultPlayerProgression(),
+      ...newer,
+      xp: Math.max(Number(a.xp) || 0, Number(b.xp) || 0),
+      level: Math.max(Number(a.level) || 1, Number(b.level) || 1),
+      globalScore: Math.max(Number(a.globalScore) || 0, Number(b.globalScore) || 0),
+      globalRankTier: Math.max(Number(a.globalRankTier) || 0, Number(b.globalRankTier) || 0),
+      influenceScore: Math.max(Number(a.influenceScore) || 0, Number(b.influenceScore) || 0),
+      activityScore: Math.max(Number(a.activityScore) || 0, Number(b.activityScore) || 0),
+      interactionCounts: counts,
+      processedEventIds: [...new Set([...(a.processedEventIds || []), ...(b.processedEventIds || [])].map(String).filter(Boolean))].slice(-1600),
+      unlockedAccess: [...new Set([...(a.unlockedAccess || []), ...(b.unlockedAccess || [])].filter(Boolean))],
+      historyImported: Boolean(a.historyImported || b.historyImported),
+      lastXpAt: Math.max(Number(a.lastXpAt || 0), Number(b.lastXpAt || 0)),
+      updatedAt: Math.max(Number(a.updatedAt || 0), Number(b.updatedAt || 0)),
+      version: PLAYER_SOCIAL_PROGRESSION_VERSION,
+    };
+  });
+  return out;
 }
 
 function ensureKnownCharacter(mem, targetId, publicProfile) {
@@ -17735,6 +18343,7 @@ function compactAgentMemoryForPacket(w, actorId, targetId = "") {
       openLoops: (mem.selfState && Array.isArray(mem.selfState.openLoops) ? mem.selfState.openLoops : []).slice(-6),
     },
     relationshipContinuity: targetId ? compactRelationshipContinuity(w, actorId, targetId) : null,
+    adaptiveToTarget: targetId ? compactAdaptiveProfileForPrompt(w, actorId, targetId) : null,
     recentConversations: (mem.conversations || []).slice(-3).map(memoryToLine),
     recentEvents: (mem.witnessedEvents || []).slice(-3).map(memoryToLine),
     heardRumors: (mem.rumors || []).slice(-4).map(memoryToLine),
@@ -22452,7 +23061,7 @@ function migrate(w) {
       if (a > 0 && a < 120) c.birth = String(y - a);
     }
   };
-  ["rels", "chats", "mems", "accounts", "players", "deleted", "notify", "charMemory", "userSettings", "images"].forEach((k) => { if (!w[k]) w[k] = {}; });
+  ["rels", "chats", "mems", "accounts", "players", "deleted", "notify", "charMemory", "userSettings", "images", "playerProgression"].forEach((k) => { if (!w[k]) w[k] = {}; });
   ["posts", "log", "scenes", "groups", "notes", "inventory", "diary"].forEach((k) => { if (!w[k]) w[k] = []; });
 
 
@@ -22688,6 +23297,13 @@ function migrate(w) {
     if (p && !p.imageId) p.imageId = imageIdOf(p.image);
     noteImage(p && (p.imageId ? imageRef(p.imageId) : p.image), { category: "post", ownerCharacterId: p && p.authorId });
   });
+
+  /* New progression is persistent and old saves inherit XP from their existing
+     structured social history exactly once. This does not create new events. */
+  Object.keys(w.players || {}).forEach((playerId) => {
+    initializePlayerProgressionFromHistory(w, playerId);
+  });
+
   return w;
 }
 
@@ -22988,11 +23604,12 @@ function mergeWorlds(remote, local) {
   out.accounts = { ...(remote.accounts || {}), ...(local.accounts || {}) };
   out.players = mergeMapById(remote.players, local.players);
   out.userSettings = { ...(remote.userSettings || {}), ...(local.userSettings || {}) };
+  out.playerProgression = mergePlayerProgressionMaps(remote.playerProgression || {}, local.playerProgression || {});
   out.images = { ...(remote.images || {}), ...(local.images || {}) };
 
   // Az összevont vagy törölt profilok nem jöhetnek vissza a másik gépről.
   Object.keys(out.deleted).forEach((id) => { delete out.players[id]; delete out.accounts[id]; });
-  Object.keys(out.deleted).forEach((id) => { delete out.userSettings[id]; });
+  Object.keys(out.deleted).forEach((id) => { delete out.userSettings[id]; delete out.playerProgression[id]; });
 
   out.chars = mergeById(remote.chars, local.chars, out.deleted);
   out.universe = newer(local.universe, remote.universe);
@@ -23181,6 +23798,7 @@ function mergeWorlds(remote, local) {
       roleplayRecent: mergeKnowledgeItems(base.roleplayRecent, mine.roleplayRecent, "roleplay_recent", 40),
       roleplayLongTerm: mergeKnowledgeItems(base.roleplayLongTerm, mine.roleplayLongTerm, "roleplay_long", 70),
       roleplayShared: shared,
+      adaptiveProfiles: mergeAdaptiveProfiles(base.adaptiveProfiles || {}, mine.adaptiveProfiles || {}),
       selfState: {
         mood: String(newerState.mood || ""),
         intent: String(newerState.intent || ""),
@@ -24677,6 +25295,7 @@ reposts: [],
 chats: {},
 mems: {},
 charMemory: {},
+playerProgression: {},
 userSettings: {},
 log: [],
 scenes: [],
@@ -30153,6 +30772,10 @@ function SocialProfileModal({
     socialStats.sentiment ||
     defaultSocialStatsRow().sentiment;
 
+  const progression = mine
+    ? playerProgressionView(w, c.id)
+    : null;
+
   const toggleFollow = () => {
     if (mine) return;
 
@@ -30322,6 +30945,29 @@ function SocialProfileModal({
             ) : null}
 
             <div className="social-sentiment-strip">
+              {mine && progression ? (
+                <span className="social-sentiment-chip">
+                  LVL
+                  <strong>{progression.level}</strong>
+                  {tt("szint", "level")}
+                </span>
+              ) : null}
+
+              {mine && progression ? (
+                <span className="social-sentiment-chip">
+                  ◈
+                  <strong>{Math.round(Number(progression.globalScore) || 0)}</strong>
+                  {progression.rankLabel}
+                </span>
+              ) : null}
+
+              {mine && progression && progression.highestAccess ? (
+                <span className="social-sentiment-chip">
+                  🔓
+                  <strong>{progressionAccessLabel(progression.highestAccess, worldLanguage(w, c.id))}</strong>
+                </span>
+              ) : null}
+
               {Number(socialStats.clout) > 0 ? (
                 <span className="social-sentiment-chip">
                   ⚡
@@ -52579,6 +53225,8 @@ ${triggerRule}
 ÉLETKOR / ÉLETHELYZET — GROUND TRUTH:
 ${popupRealityRoster(w, seed)}
 
+${playerProgressionAccessCard(w, w.meId)}
+
 Készíts rövid, telefonon is egy pillantással érthető, KONKRÉT popup helyzetet 3 eltérő választási stratégiával.
 
 KÖTELEZŐ REALIZMUS:
@@ -57702,6 +58350,12 @@ function recordSocialEvent(
     selectGossipStoryCandidate(w);
   }
 
+  /* Advanced AI memory + player progression consume only the already-committed
+     structured event. They do not alter the event itself or trigger new social
+     actions, so existing feed/DM/popup scheduling remains untouched. */
+  applyAdaptiveCharacterLearningFromSocialEvent(w, entry);
+  applyPlayerProgressionFromSocialEvent(w, entry);
+
   return entry;
 }
 
@@ -59477,6 +60131,8 @@ ${voiceCard(bot)}
 ${characterMemoryCard(w, bot)}
 ${relCard}
 
+${playerProgressionAccessCard(w, w.meId)}
+
 ${characterAgentRuntimeCard(
   w,
   [bot.id],
@@ -59549,6 +60205,7 @@ async function genForcedEverydayRoleplayInvitation(w, bot) {
 ${voiceCard(bot)}
 ${characterMemoryCard(w,bot)}
 ${relationshipBehaviorCard(w,bot.id,w.meId)}
+${playerProgressionAccessCard(w, w.meId)}
 ${characterAgentRuntimeCard(w,[bot.id],{surface:"roleplay",targetId:w.meId,messages:w.chats[chatKey(w.meId,bot.id)]||[]})}
 
 AI EVENT INVITATION RETRY — DO NOT SKIP:
