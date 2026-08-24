@@ -43287,13 +43287,15 @@ function sceneFairParticipationPlan(
           : 5;
 
   const beatMax =
-    aiCount <= 2
-      ? 4
-      : aiCount <= 5
-        ? 5
-        : aiCount <= 8
-          ? 6
-          : 7;
+    aiCount === 1
+      ? 2
+      : aiCount <= 2
+        ? 4
+        : aiCount <= 5
+          ? 5
+          : aiCount <= 8
+            ? 6
+            : 7;
 
   return {
     rows,
@@ -43358,6 +43360,131 @@ ${mandatory || "-"}
 
 
 /* ============================================================
+   ROLEPLAY IMMEDIATE REFERENT + TURN-TAKING LOCK
+
+   RP-only helpers. A follow-up like “and what is that?” must resolve the
+   immediately preceding AI statement instead of starting a new challenge.
+   In a one-AI scene, one player turn also must not produce a chain of separate
+   speeches from the same AI before control returns to the player.
+   ============================================================ */
+function roleplayFollowupQuestionKind(value) {
+  const raw = String(value || "")
+    .replace(/[“”"']/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!raw) return "";
+
+  if (/^(?:and\s+)?what(?:\s+exactly)?\s+(?:is|was)\s+(?:that|it)\s*[?.!]*$/.test(raw) ||
+      /^(?:so\s+)?what\s+do\s+you\s+mean(?:\s+by\s+(?:that|it))?\s*[?.!]*$/.test(raw) ||
+      /^(?:and\s+)?what\s+(?:comes|happens)\s+next\s*[?.!]*$/.test(raw) ||
+      /^(?:and\s+)?then(?:\s+what)?\s*[?.!]*$/.test(raw) ||
+      /^(?:és\s+)?(?:az\s+)?mi\s+(?:az|lenne)\s*[?.!]*$/.test(raw) ||
+      /^(?:és\s+)?mi\s+jön\s+(?:ezután|utána)\s*[?.!]*$/.test(raw) ||
+      /^(?:és\s+)?utána\s+mi\s*[?.!]*$/.test(raw) ||
+      /^(?:ezt|azt)\s+hogy\s+érted\s*[?.!]*$/.test(raw) ||
+      /^mire\s+gondolsz\s*[?.!]*$/.test(raw)) {
+    return "referent";
+  }
+
+  if (/^(?:why|how\s+so|since\s+when|who|where|when)\s*[?.!]*$/.test(raw) ||
+      /^(?:miért|hogyan|mióta|ki|hol|mikor)\s*[?.!]*$/.test(raw)) {
+    return "followup";
+  }
+
+  return "";
+}
+
+function roleplayPreviousActorTurn(recentTurns = [], actorId = "") {
+  if (!actorId) return null;
+  const rows = Array.isArray(recentTurns) ? recentTurns : [];
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i];
+    if (!row || row.authorId !== actorId || !String(row.text || "").trim()) continue;
+    return row;
+  }
+  return null;
+}
+
+function roleplayLatestPhysicalCue(value) {
+  const raw = String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!raw) return false;
+  return /\b(?:leans?\s+(?:in|closer)|moves?\s+closer|steps?\s+closer|closes?\s+the\s+distance|gaze\s+(?:drops?|falls?)\s+to\s+(?:his|her|their)\s+lips|looks?\s+(?:at|to)\s+(?:his|her|their)\s+lips|eyes?\s+(?:drop|fall)\s+to\s+(?:his|her|their)\s+lips|touch(?:es|ing)?\s+(?:his|her|their)|reaches?\s+for|kisses?|kiss(?:es|ing)?|hajol\s+közelebb|közelebb\s+(?:hajol|lép)|ajk(?:ára|aira|ait)\s+néz|tekintete\s+.*ajk|megérinti|megfogja|megcsókol)\b/i.test(raw);
+}
+
+function roleplayImmediateContinuityCard(
+  w,
+  recentTurns = [],
+  playerText = "",
+  playerTargetId = "",
+  playerInputKind = "speech"
+) {
+  if (!w || !String(playerText || "").trim()) return "";
+  const rows = Array.isArray(recentTurns) ? recentTurns : [];
+  const followupKind = roleplayFollowupQuestionKind(playerText);
+
+  let targetId = playerTargetId && charById(w, playerTargetId)
+    ? playerTargetId
+    : "";
+  if (!targetId) {
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const row = rows[i];
+      if (!row || row.authorId === "narrator" || isHuman(w, row.authorId)) continue;
+      targetId = row.authorId;
+      break;
+    }
+  }
+
+  const previous = targetId ? roleplayPreviousActorTurn(rows, targetId) : null;
+  const actorName = targetId ? (nameOfIn(w, targetId) || targetId) : "the addressed AI";
+
+  if (followupKind && previous) {
+    return `
+DIRECT FOLLOW-UP REFERENT LOCK — HIGHEST PRIORITY:
+- PLAYER'S CURRENT QUESTION: "${String(playerText).slice(0, 500)}"
+- IT REFERS BACK TO ${actorName.toUpperCase()}'S IMMEDIATELY PRECEDING LINE/ACTION:
+  "${String(previous.text || "").slice(0, 700)}"
+- ${actorName} must resolve THAT exact referent now. If the player asks “what is that / what do you mean / what comes next?”, give the actual meaning/answer in the first speech or concrete action beat.
+- Do NOT answer only with a new challenge or dodge such as “prove it”, “show me”, “you tell me”, “guess”, “you know”, “figure it out”, or another vague question.
+- Teasing/flirting/challenging may come AFTER the referent is made clear, not instead of answering it.
+- Do not invent a new topic, metaphor, accusation or relationship thesis.`;
+  }
+
+  if (playerInputKind === "action" && roleplayLatestPhysicalCue(playerText)) {
+    return `
+LATEST PHYSICAL-ACTION LOCK — HIGHEST PRIORITY:
+- PLAYER'S CURRENT ACTION: "${String(playerText).slice(0, 500)}"
+- This is a concrete visible physical/intimacy cue. The next relevant AI beat must react to that cue itself.
+- Do NOT transform this one action into an unsupported abstract accusation about “games”, “technicalities”, “winning/losing”, “testing”, “proving”, “crossing lines”, or a repeated personality pattern unless those exact ideas were already established in the stored scene.
+- A direct look, pause, movement, touch, short line, or other concrete response is preferable to invented pseudo-profound analysis.`;
+  }
+
+  return "";
+}
+
+function normalizeOneToOneRoleplayRound(w, scene, turns, playerText = "") {
+  if (!w || !scene || !Array.isArray(turns) || !String(playerText || "").trim()) return turns;
+  const aiCast = sceneAiCast(w, scene);
+  if (aiCast.length !== 1) return turns;
+
+  const onlyId = aiCast[0].id;
+  let speechSeen = false;
+  let actionSeen = false;
+
+  return turns.filter((turn) => {
+    if (!turn || turn.authorId !== onlyId) return true;
+    if (turn.kind === "action") {
+      if (actionSeen) return false;
+      actionSeen = true;
+      return true;
+    }
+    if (speechSeen) return false;
+    speechSeen = true;
+    return true;
+  });
+}
+
+/* ============================================================
    ROLEPLAY SEMANTIC CONTINUITY GUARD
 
    Narrow RP-only protection against a common model failure: a concrete latest
@@ -43402,6 +43529,40 @@ function roleplaySemanticDriftRisk(turn, playerText = "", playerInputKind = "spe
      lines. Catch the strongest stock formulations, not ordinary teasing. */
   if (playerInputKind === "action" && latest.length <= 180) {
     if (/\b(?:you just want someone to notice|you want someone to notice|you(?:'re| are) just trying to get a reaction|you(?:'re| are) testing me|you keep testing me|stop pretending this is about)\b/i.test(lower)) {
+      return true;
+    }
+
+    /* A concrete physical/intimacy cue must not be converted into an invented
+       “game / technicality / prove it” thesis that the stored scene never set up. */
+    if (roleplayLatestPhysicalCue(latest)) {
+      const newGameThesis = /\b(?:technicalit(?:y|ies)|win\s+or\s+lose|treat(?:ing)?\s+(?:everything|this)\s+like\s+a\s+game|mind\s+game|power\s+play)\b/i.test(text);
+      const gameThesisEstablished = /\b(?:technicalit(?:y|ies)|win\s+or\s+lose|game|mind\s+game|power\s+play)\b/i.test(recent);
+      if (newGameThesis && !gameThesisEstablished) return true;
+
+      const newProofTest = /\b(?:prove\s+it|testing\s+me|test\s+me)\b/i.test(text);
+      const proofTestEstablished = /\b(?:prove\s+it|testing\s+me|test\s+me)\b/i.test(recent);
+      if (newProofTest && !proofTestEstablished) return true;
+
+      const newPretend = /\bstop\s+pretending\b/i.test(text);
+      const pretendEstablished = /\bpretend(?:ing)?\b/i.test(recent);
+      if (newPretend && !pretendEstablished) return true;
+
+      const newLineThesis = /\bcross(?:ing)?\s+the\s+line\b/i.test(text);
+      const lineThesisEstablished = /\b(?:cross(?:ing)?\s+the\s+line|the\s+line)\b/i.test(recent);
+      if (newLineThesis && !lineThesisEstablished) return true;
+    }
+  }
+
+  /* An anaphoric follow-up question (“and what is that?”, “what do you mean?”)
+     must resolve the actor's own immediately preceding statement. A fresh
+     challenge is not an answer. */
+  const followupKind = roleplayFollowupQuestionKind(latest);
+  const previousActorTurn = roleplayPreviousActorTurn(recentTurns, turn.authorId);
+  if (followupKind && previousActorTurn) {
+    const evasive = /^(?:then\s+)?(?:prove\s+it|show\s+me|you\s+tell\s+me|guess|figure\s+it\s+out|find\s+out|make\s+me|try\s+me|you\s+know(?:\s+exactly)?|don['’]?t\s+play\s+dumb|say\s+it\s+yourself|bizonyítsd|mutasd\s+meg|mondd\s+meg\s+te|találd\s+ki|tudod\s+te|ne\s+játszd\s+az\s+ártatlant)\b/i.test(text);
+    if (evasive) return true;
+
+    if (followupKind === "referent" && text.length <= 160 && /^[^.!]*\?\s*$/.test(text)) {
       return true;
     }
   }
@@ -43459,7 +43620,8 @@ async function repairRoleplaySemanticDriftTurns(
 
   const requested = risky.map(({ turn, index }, slot) => {
     const actor = charById(w, turn.authorId);
-    return `REPAIR SLOT ${slot} (original turn index ${index})\nACTOR: ${actor ? actor.name : turn.authorId} [${turn.authorId}]\nKIND: ${turn.kind || "speech"}\nTO: ${turn.to || ""}\nBAD/DRIFT-RISK DRAFT: ${turn.text}`;
+    const previousActorTurn = roleplayPreviousActorTurn(recentTurns, turn.authorId);
+    return `REPAIR SLOT ${slot} (original turn index ${index})\nACTOR: ${actor ? actor.name : turn.authorId} [${turn.authorId}]\nKIND: ${turn.kind || "speech"}\nTO: ${turn.to || ""}\nIMMEDIATELY PREVIOUS LINE BY THIS ACTOR: ${previousActorTurn ? previousActorTurn.text : "-"}\nBAD/DRIFT-RISK DRAFT: ${turn.text}`;
   }).join("\n\n");
 
   try {
@@ -43474,6 +43636,14 @@ PLAYER: ${w.player.name} [${w.meId}]
 LATEST PLAYER INPUT TYPE: ${playerInputKind === "action" ? "ACTION" : "SPEECH"}
 LATEST PLAYER INPUT — GROUND TRUTH:
 ${playerText}
+
+${roleplayImmediateContinuityCard(
+  w,
+  recentTurns,
+  playerText,
+  playerTargetId,
+  playerInputKind
+)}
 
 EXACT RECENT SCENE:
 ${recentLog || "-"}
@@ -43490,6 +43660,7 @@ HARD RULES:
 - Preserve each flagged actor, kind, addressee and underlying immediate intent. Rewrite only the TEXT.
 - The new line must be immediately understandable as the NEXT beat after the latest player input and exact recent scene.
 - If the latest player input is an ACTION, respond to what physically/visibly just happened before adding interpretation.
+- If the latest player input is a follow-up such as “and what is that?”, resolve the immediately preceding actor statement in the FIRST speech/action. Do not replace the answer with “prove it”, “show me”, “you tell me”, “guess”, “you know”, another challenge, or another vague question.
 - Do NOT invent a repeated behavioral pattern (“you always…”, “every time…”, “this is what you do…”) unless the exact recent turns actually demonstrate repetition.
 - Do NOT invent a new metaphor, vague symbolic accusation, therapy-speak or psychological diagnosis to manufacture depth.
 - Do NOT introduce new off-screen facts, motives, history, conflict or relationship milestones.
@@ -43740,6 +43911,13 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
             : ""
         }: ${t.text}`;
       }).join("\n");
+      const immediateContinuityCard = roleplayImmediateContinuityCard(
+        w,
+        promptTurns,
+        playerText,
+        playerTarget.id || "",
+        playerInputKind
+      );
 
       let out = sanitizeRoleplayAiOutput(await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
 
@@ -43798,6 +43976,8 @@ ${playerText ? (playerInputKind === "action"
   ? `PLAYER INPUT TYPE — ACTION: A játékos a teljes inputot *...* jelek közé tette. Ez DETERMINISZTIKUSAN cselekvés. A játékos karaktere ezt a konkrét cselekvést hajtotta végre; ne kezeld kimondott párbeszédként, ne tedd idézőjelbe, és ne írj helyette további cselekvést. A jelenlévő AI-karakterek erre reagáljanak karakterhűen.`
   : `PLAYER INPUT TYPE — SPEECH: A játékos inputja nem *...* akcióformátumú, ezért alapértelmezésben kimondott párbeszédként kezeld.`) : ""}
 
+${immediateContinuityCard}
+
 ${characterAgentRuntimeCard(
   w,
   cast.map((c) => c.id),
@@ -43851,6 +44031,7 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 
 - SZEMANTIKAI FOLYTONOSSÁG — LEGMAGASABB PRIORITÁS: a következő beatnek közvetlenül és érthetően abból kell következnie, ami az EXACT recent turnökben és különösen a játékos LEGUTÓBBI inputjában ténylegesen megtörtént. Ne írj „mélynek hangzó”, de nem megalapozott mondatot.
 - Ha a játékos legutóbbi inputja ACTION, az első releváns válasz először arra a konkrét látható mozdulatra/helyzetváltozásra reagáljon. Ne ugorj át rögtön egy új pszichológiai tézisre a karakteréről.
+- KÖZVETLEN FOLLOW-UP KÉRDÉS: ha a játékos olyan visszakérdezést ír, mint „and what is that?”, „what do you mean?”, „what comes next?”, „és az mi?”, akkor az megszólított AI SAJÁT közvetlenül előző állítására kérdez rá. Az első speech/action konkrétan oldja fel ezt a referenciát. „Then prove it”, „show me”, „you tell me”, „guess”, újabb homályos kérdés vagy új metafora önmagában NEM válasz.
 - TILOS egyetlen aktuális mozdulatból olyan ismétlődő mintát kitalálni, mint „you always…”, „every time…”, „this is what you do…”, „you keep doing this…”, ha a pontos korábbi turnök ezt nem bizonyítják.
 - Ne vezess be új, homályos metaforát csak azért, hogy drámaibbnak hangozzon a válasz. Metafora csak akkor folytatható, ha az exact jelenetben már ténylegesen felépült és a jelentése egyértelmű.
 - Egy flörtös vagy feszült válasz lehet rövid és direkt. A világos „közelebb jöttél → erre reagálok” jobb, mint egy költői, de logikailag nem következő monológ.
@@ -44038,6 +44219,8 @@ ${playerText ? (playerInputKind === "action"
   ? `PLAYER INPUT TYPE — ACTION: A játékos a teljes inputot *...* jelek közé tette. Ez DETERMINISZTIKUSAN cselekvés. A játékos karaktere ezt a konkrét cselekvést hajtotta végre; ne kezeld kimondott párbeszédként, ne tedd idézőjelbe, és ne írj helyette további cselekvést. A jelenlévő AI-karakterek erre reagáljanak karakterhűen.`
   : `PLAYER INPUT TYPE — SPEECH: A játékos inputja nem *...* akcióformátumú, ezért alapértelmezésben kimondott párbeszédként kezeld.`) : ""}
 
+${immediateContinuityCard}
+
 KARAKTEREK — TÖMÖR, DE KÖTELEZŐ KÁNON + EMLÉKEZET:
 ${retryCast}
 
@@ -44049,6 +44232,7 @@ ${participationCard}
 
 SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
 - SZEMANTIKAI FOLYTONOSSÁG: a retry ne csak „új” legyen, hanem LOGIKAILAG a játékos legutóbbi konkrét speech/actionjának következő beatje. Rövid actionből ne találj ki „te mindig / minden alkalommal” viselkedésmintát, új homályos metaforát vagy nem megalapozott pszichoanalízist. Ha a játékos actiont írt, reagálj először arra, amit ténylegesen tett.
+- FOLLOW-UP REFERENCIA: „and what is that / what do you mean / what comes next” esetén válaszold meg az előző AI-mondat tényleges referenciáját; ne dodge-old „prove it / show me / you tell me / guess” típusú új kihívással.
 - EMOJI TILOS minden roleplay beszédben, actionben, narrációban és minden visszaadott szövegmezőben.
 - Adj ${participationPlan.beatMin}-${participationPlan.beatMax} TELJESEN FRISS mozzanatot.
 - A MANDATORY FAIRNESS SPEAKERS/ACTORS listán szereplő minden AI-nak legyen legalább egy látható speech vagy action mozzanata.
@@ -44092,6 +44276,16 @@ VÁLASZ CSAK JSON:
           playerText,
           playerInputKind,
           playerTarget.id || ""
+        );
+
+        /* In a true 1:1 RP, one player turn cannot trigger multiple separate
+           speeches from the same AI before control returns to the player.
+           One action + one speech is still allowed. */
+        resolved = normalizeOneToOneRoleplayRound(
+          w,
+          promptScene,
+          resolved,
+          playerText
         );
       }
 
