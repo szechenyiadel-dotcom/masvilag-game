@@ -50157,6 +50157,81 @@ function autonomousDmReasonContext(w, bot) {
   };
 }
 
+/*
+ * PLAYER-POST -> DM REACTION LOCK
+ *
+ * A player-post-triggered DM must stay about THAT exact post. The normal
+ * autonomous DM selector may have several valid reasons at once; without this
+ * lock a queued post reaction could wake up later and talk about an unrelated
+ * older plan/rumor instead. This helper only reorders already-valid, already-
+ * visible DM reasons; it does not reveal any new/private information.
+ */
+function autonomousDmReasonContextForPlayerPost(w, bot, postId) {
+  if (!w || !bot || !postId) return null;
+  const base = autonomousDmReasonContext(w, bot);
+  const candidates = Array.isArray(base && base.candidates) ? base.candidates : [];
+  const chosen = candidates.find((row) =>
+    row &&
+    row.kind === "player-post" &&
+    String(row.refId || "") === String(postId) &&
+    Number(row.rank || 0) >= 20
+  );
+  if (!chosen) return null;
+  return {
+    candidates: [chosen, ...candidates.filter((row) => row && row.id !== chosen.id)],
+    primary: chosen,
+    forcedBy: "player-post",
+  };
+}
+
+function playerPostReactiveDmCandidate(w, postId) {
+  if (!w || !postId || !w.meId) return null;
+  const post = (w.posts || []).find((row) => row && row.id === postId && row.authorId === w.meId);
+  if (!post) return null;
+
+  const mentioned = new Set(
+    explicitNamedCharacterIdsInText(w, String(post.text || ""), w.meId).map(String)
+  );
+
+  const rows = (w.chars || [])
+    .filter((c) => c && c.id && !isHuman(w, c.id) && !isMediaAccount(w, c.id))
+    .map((c) => {
+      const reasonContext = autonomousDmReasonContextForPlayerPost(w, c, postId);
+      if (!reasonContext || !reasonContext.primary) return null;
+
+      const rel = getRel(w, c.id, w.meId) || {};
+      const activity = Number(characterOnlineActivityProfile(w, c).dm) || 0;
+      const interest = Math.max(0, Number(socialInteractionInterest(w, c.id, w.meId)) || 0);
+      const relationshipWeight = Math.min(70, Math.abs(Number(rel.score) || 0) * 0.55);
+      const mentionBoost = mentioned.has(String(c.id)) ? 90 : 0;
+      const followBoost = isFollowing(w, c.id, w.meId) ? 28 : 0;
+      const linkBoost = linked(w, c.id, w.meId) ? 24 : 0;
+
+      const chat = (w.chats && w.chats[chatKey(w.meId, c.id)]) || [];
+      const lastOwn = [...chat].reverse().find((m) => m && m.from === "them");
+      const recentPenalty = lastOwn && now() - (Number(lastOwn.ts) || 0) < 90 * 1000 ? 75 : 0;
+
+      return {
+        c,
+        reasonContext,
+        score:
+          (Number(reasonContext.primary.rank) || 0) +
+          interest * 1.15 +
+          relationshipWeight +
+          mentionBoost +
+          followBoost +
+          linkBoost +
+          activity * 18 -
+          recentPenalty +
+          Math.random() * 8,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
+
+  return rows.length ? rows[0].c : null;
+}
+
 function autonomousDmReasonCard(reasonContext) {
   const rows = reasonContext && Array.isArray(reasonContext.candidates)
     ? reasonContext.candidates
@@ -61307,7 +61382,14 @@ function simEnqueue(w, action) {
     action.type === "world" &&
     String(action.key || "").startsWith("triggered-feed-burst:");
 
-  if (action.source === "manual" || triggeredFeedBurst) {
+  const playerReactive = action.source === "player-reactive";
+
+  if (action.source === "manual" || triggeredFeedBurst || playerReactive) {
+    /* Direct reactions to a fresh player post are latency-sensitive. They are
+       deliberately front-queued just like a manual action, but they remain
+       background actions for error/UI purposes. signalSimulation enqueues the
+       player-post bundle in reverse priority so the final order is:
+       comments -> relevant DM -> reaction feed burst. */
     sim.queue.unshift(action);
     sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
   } else if (action.source === "coverage") {
@@ -66657,7 +66739,28 @@ if (targetNote) {
       return null;
     }
 
-    const autonomousReasonContext = autonomousDmReasonContext(view, bot);
+    const playerPostTriggerId =
+      action.payload &&
+      action.payload.trigger === "player-post"
+        ? String(action.payload.postId || "")
+        : "";
+
+    const playerPostReasonContext =
+      playerPostTriggerId
+        ? autonomousDmReasonContextForPlayerPost(view, bot, playerPostTriggerId)
+        : null;
+
+    /* A DM explicitly queued as a player-post reaction may NEVER silently
+       switch to an older unrelated autonomous reason if the post reason has
+       disappeared. Ordinary autonomous DMs keep their existing selector. */
+    if (playerPostTriggerId && !playerPostReasonContext) {
+      return null;
+    }
+
+    const autonomousReasonContext =
+      playerPostReasonContext ||
+      autonomousDmReasonContext(view, bot);
+
     if (!autonomousReasonContext.primary) {
       return null;
     }
@@ -69157,31 +69260,72 @@ const signOut = useCallback(async () => {
 
     if (event.type === "player-post" && event.postId) {
       /*
-       * A játékos saját posztja nem csak komment-esemény:
-       * a világ is azonnal kapjon egy teljes autonóm lépést.
-       * Így a poszt után más AI-k posztolhatnak, Note-ot írhatnak,
-       * követhetnek/kikövethetnek, DM-et/groupot indíthatnak vagy
-       * a publikus eseményből további social következmény születhet.
+       * PLAYER POST REACTION CHAIN — IMMEDIATE + ORDERED
        *
-       * A két action külön queue-elemként fut, ezért az AI throttle/priority
-       * továbbra is megakadályozza a párhuzamos API-spamet.
+       * The old order placed the 4 generated feed posts in front of the
+       * player's comment reaction. A slow/retried burst could therefore make
+       * a fresh human post look completely ignored for minutes. It also never
+       * queued a direct DM reaction at all.
+       *
+       * Enqueue in reverse priority because player-reactive/triggered actions
+       * are front-inserted: FINAL queue order becomes
+       *   1) comments, 2) one relevant DM (when a real post reason exists),
+       *   3) distinct-author reaction posts.
+       * Nothing outside the player-post reaction lane is changed.
        */
       let queuedAny = false;
+      const live = viewRef.current;
+      const livePost = live && (live.posts || []).find((p) => p && p.id === event.postId);
+      const coverage = livePost
+        ? postCommentCoverageState(live, livePost)
+        : { missing: 2, target: 2 };
 
-      queuedAny = requestSimulationAction(
-        mkAction(
-          "comments",
-          `event-post:${event.postId}`,
-          { postId: event.postId },
-          "event"
-        )
-      ) || queuedAny;
-
+      /* Lowest of the three immediate priorities: feed aftermath. */
       queuedAny = requestTriggeredFeedBurst(
         "player-post",
         event.postId,
         { postId: event.postId },
         4
+      ) || queuedAny;
+
+      /* Middle priority: a character who genuinely has this exact post as a
+         valid DM reason may privately react. No unrelated DM is manufactured. */
+      const dmBot = live
+        ? playerPostReactiveDmCandidate(live, event.postId)
+        : null;
+
+      if (dmBot) {
+        queuedAny = requestSimulationAction(
+          mkAction(
+            "dm",
+            `player-post-dm:${event.postId}:${dmBot.id}`,
+            {
+              botId: dmBot.id,
+              trigger: "player-post",
+              postId: event.postId,
+            },
+            "player-reactive"
+          )
+        ) || queuedAny;
+      }
+
+      /* Highest priority: the player's own post must visibly receive its
+         comment reaction before expensive feed-burst generations can delay it. */
+      queuedAny = requestSimulationAction(
+        mkAction(
+          "comments",
+          `player-post-comments:${event.postId}`,
+          {
+            postId: event.postId,
+            trigger: "guaranteed-coverage",
+            minComments: Math.max(1, Math.min(20, Number(coverage.missing) || 2)),
+            maxComments: Math.max(3, Math.min(20, Math.max(Number(coverage.target) || 2, (Number(coverage.missing) || 2) + 4))),
+            allowThreadFollowup: true,
+            coverageTarget: Math.max(1, Number(coverage.target) || 2),
+            coverageSource: "player-post-immediate",
+          },
+          "player-reactive"
+        )
       ) || queuedAny;
 
       return queuedAny;
@@ -70419,6 +70563,12 @@ const signOut = useCallback(async () => {
           String(action.key || "").startsWith("triggered-feed-burst:")
         );
 
+        const retryablePlayerReaction = Boolean(
+          action &&
+          action.source === "player-reactive" &&
+          (action.type === "comments" || action.type === "dm")
+        );
+
         const burstRetryCount = Math.max(
           0,
           Math.floor(
@@ -70430,6 +70580,25 @@ const signOut = useCallback(async () => {
           )
         );
 
+        const playerReactionRetryCount = Math.max(
+          0,
+          Math.floor(
+            Number(
+              action &&
+              action.payload &&
+              action.payload.__playerReactionRetryCount
+            ) || 0
+          )
+        );
+
+        const retryableImmediateReaction =
+          retryableTriggeredFeed ||
+          retryablePlayerReaction;
+
+        const immediateRetryCount = retryablePlayerReaction
+          ? playerReactionRetryCount
+          : burstRetryCount;
+
         if (
           queued &&
           action &&
@@ -70437,20 +70606,22 @@ const signOut = useCallback(async () => {
         ) {
           if (
             ok ||
-            !retryableTriggeredFeed ||
-            burstRetryCount >= 2
+            !retryableImmediateReaction ||
+            immediateRetryCount >= 2
           ) {
             simDropQueued(n, queued.id);
           } else {
             /*
-             * A selected triggered-feed slot may fail because of a transient
-             * provider/network problem. Keep the SAME slot at the front for up
-             * to two retries instead of silently consuming it. This touches
-             * only triggered feed burst actions.
+             * Fresh player-post reactions are user-visible latency-sensitive
+             * work. A transient provider/empty-output failure must not consume
+             * the comment/DM/burst slot after one attempt. Keep the exact same
+             * action at the front for up to two retries.
              */
             action.payload = {
               ...(action.payload || {}),
-              __burstRetryCount: burstRetryCount + 1,
+              ...(retryablePlayerReaction
+                ? { __playerReactionRetryCount: playerReactionRetryCount + 1 }
+                : { __burstRetryCount: burstRetryCount + 1 }),
             };
 
             const sim = ensureSimState(n);
