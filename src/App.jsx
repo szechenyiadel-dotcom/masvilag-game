@@ -43356,6 +43356,209 @@ ${mandatory || "-"}
 `;
 }
 
+
+/* ============================================================
+   ROLEPLAY SEMANTIC CONTINUITY GUARD
+
+   Narrow RP-only protection against a common model failure: a concrete latest
+   action/speech gets answered with an unsupported habitual accusation, vague
+   psychoanalysis or a brand-new metaphor that is not established by the exact
+   recent turns. Other surfaces are intentionally untouched.
+   ============================================================ */
+function roleplaySemanticDriftRisk(turn, playerText = "", playerInputKind = "speech", recentTurns = []) {
+  if (!turn || turn.authorId === "narrator") return false;
+  const text = String(turn.text || "").replace(/\s+/g, " ").trim();
+  const latest = String(playerText || "").replace(/\s+/g, " ").trim();
+  if (!text || !latest) return false;
+
+  const lower = text.toLowerCase();
+  const recent = (Array.isArray(recentTurns) ? recentTurns : [])
+    .slice(-8)
+    .map((row) => String(row && row.text || "").toLowerCase())
+    .join(" ");
+
+  /* A single current action does not justify inventing a repeated personality
+     pattern such as “every single time you want someone to notice...”. */
+  const unsupportedHabit = /\b(?:you\s+always|you\s+never|every\s+(?:single\s+)?time|you\s+keep\s+(?:doing|pulling|running|pushing|trying)|this\s+is\s+what\s+you\s+(?:always\s+)?do|you\s+do\s+this\s+every\s+time|constantly)\b/i.test(text);
+  const recentActuallyShowsHabit = /\b(?:always|never|every\s+(?:single\s+)?time|again\s+and\s+again|keep\s+doing|keeps\s+doing|constantly)\b/i.test(recent);
+  if (unsupportedHabit && !recentActuallyShowsHabit) return true;
+
+  /* New stock metaphors are a frequent source of RP non sequiturs. Only flag
+     them when the exact recent scene has not used that motif at all. */
+  const motifs = [
+    ["line", /\b(?:cross(?:ing)?|walk(?:ing)?|run(?:ning)?|right up to|toe(?:ing)?)\s+(?:the\s+)?line\b/i],
+    ["edge", /\b(?:walk(?:ing)?|dance|live|push(?:ing)?)\s+(?:on|at|over)?\s*(?:the\s+)?edge\b/i],
+    ["mask", /\b(?:drop|wear|hide behind|take off)\s+(?:the\s+)?mask\b/i],
+    ["walls", /\b(?:put|build|hide behind|tear down)\s+(?:your\s+|the\s+)?walls?\b/i],
+    ["game", /\b(?:play(?:ing)?|stop playing)\s+(?:this\s+|that\s+|the\s+)?game\b/i],
+    ["chess", /\bchess\b/i],
+    ["cards", /\b(?:show|play|hold)\s+(?:your\s+|the\s+)?cards\b/i],
+  ];
+  for (const [word, re] of motifs) {
+    if (re.test(text) && !recent.includes(word)) return true;
+  }
+
+  /* Action replies are especially vulnerable to abstract “relationship thesis”
+     lines. Catch the strongest stock formulations, not ordinary teasing. */
+  if (playerInputKind === "action" && latest.length <= 180) {
+    if (/\b(?:you just want someone to notice|you want someone to notice|you(?:'re| are) just trying to get a reaction|you(?:'re| are) testing me|you keep testing me|stop pretending this is about)\b/i.test(lower)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+
+function roleplayConservativeDriftFallback(turn, playerText = "", playerInputKind = "speech", recentTurns = []) {
+  if (!turn || !String(turn.text || "").trim()) return turn;
+  const original = String(turn.text || "").replace(/\s+/g, " ").trim();
+  const sentences = original.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+  for (const sentence of sentences) {
+    const clean = String(sentence || "").trim();
+    if (clean.length < 2) continue;
+    if (!roleplaySemanticDriftRisk({ ...turn, text: clean }, playerText, playerInputKind, recentTurns)) {
+      return { ...turn, text: stripRoleplayEmoji(clean) };
+    }
+  }
+  return turn;
+}
+
+async function repairRoleplaySemanticDriftTurns(
+  w,
+  scene,
+  cast,
+  turns,
+  playerText,
+  playerInputKind,
+  playerTargetId = ""
+) {
+  if (!w || !scene || !Array.isArray(turns) || !turns.length || !String(playerText || "").trim()) {
+    return turns;
+  }
+
+  const recentTurns = mergeRoleplayTurnStreams(scene.turns || [], scene.playerTurnJournal || []).slice(-10);
+  const risky = turns
+    .map((turn, index) => ({ turn, index }))
+    .filter(({ turn }) => {
+      if (!roleplaySemanticDriftRisk(turn, playerText, playerInputKind, recentTurns)) return false;
+      /* Prefer repairing the person the player is actually addressing. If the
+         target is unknown, repair any clearly risky AI line. */
+      return !playerTargetId || turn.authorId === playerTargetId || turn.to === w.meId;
+    })
+    .slice(0, 2);
+
+  if (!risky.length) return turns;
+
+  const actorIds = [...new Set(risky.map(({ turn }) => turn.authorId).filter(Boolean))];
+  const recentLog = recentTurns.map((t) => {
+    if (!t) return "";
+    if (t.authorId === "narrator") return `(narrator: ${t.text})`;
+    return `${nameOfIn(w, t.authorId) || "?"}${t.to ? ` -> ${nameOfIn(w, t.to) || t.to}` : ""}: ${t.text}`;
+  }).filter(Boolean).join("\n");
+
+  const requested = risky.map(({ turn, index }, slot) => {
+    const actor = charById(w, turn.authorId);
+    return `REPAIR SLOT ${slot} (original turn index ${index})\nACTOR: ${actor ? actor.name : turn.authorId} [${turn.authorId}]\nKIND: ${turn.kind || "speech"}\nTO: ${turn.to || ""}\nBAD/DRIFT-RISK DRAFT: ${turn.text}`;
+  }).join("\n\n");
+
+  try {
+    const repairOut = await askWorldJSONInteractive(
+      w,
+      engineFor(w),
+      `ROLEPLAY SEMANTIC CONTINUITY REPAIR — REWRITE ONLY THE FLAGGED LINES.
+
+EVENT: ${scene.title}
+SETTING: ${scene.setting || "-"}
+PLAYER: ${w.player.name} [${w.meId}]
+LATEST PLAYER INPUT TYPE: ${playerInputKind === "action" ? "ACTION" : "SPEECH"}
+LATEST PLAYER INPUT — GROUND TRUTH:
+${playerText}
+
+EXACT RECENT SCENE:
+${recentLog || "-"}
+
+${actorIds.map((id) => {
+  const c = charById(w, id);
+  return c ? `${voiceCard(c)}${characterMemoryCard(w, c)}` : "";
+}).join("\n")}
+
+LINES TO REPAIR:
+${requested}
+
+HARD RULES:
+- Preserve each flagged actor, kind, addressee and underlying immediate intent. Rewrite only the TEXT.
+- The new line must be immediately understandable as the NEXT beat after the latest player input and exact recent scene.
+- If the latest player input is an ACTION, respond to what physically/visibly just happened before adding interpretation.
+- Do NOT invent a repeated behavioral pattern (“you always…”, “every time…”, “this is what you do…”) unless the exact recent turns actually demonstrate repetition.
+- Do NOT invent a new metaphor, vague symbolic accusation, therapy-speak or psychological diagnosis to manufacture depth.
+- Do NOT introduce new off-screen facts, motives, history, conflict or relationship milestones.
+- Flirting may remain flirting, anger may remain anger, teasing may remain teasing; make it CONCRETE and conversational rather than cryptic.
+- Prefer one clear sentence or one short action over a clever but ambiguous monologue.
+- Do not write for the player. No emoji.
+
+JSON ONLY:
+{"repairs":[{"slot":0,"text":"clear replacement text"}]}${TAIL}`,
+      {
+        maxTokens: 420,
+        maxTries: 2,
+        timeoutMs: 22000,
+      }
+    );
+
+    const rows = repairOut && Array.isArray(repairOut.repairs) ? repairOut.repairs : [];
+    const next = turns.slice();
+    if (!rows.length) {
+      risky.forEach((target) => {
+        next[target.index] = roleplayConservativeDriftFallback(
+          target.turn,
+          playerText,
+          playerInputKind,
+          recentTurns
+        );
+      });
+      return next;
+    }
+    rows.forEach((row) => {
+      const slot = Math.round(Number(row && row.slot));
+      const target = risky[slot];
+      if (!target) return;
+      const original = target.turn;
+      const cleaned = cleanGeneratedUtterance(
+        w,
+        original.authorId,
+        String(row && row.text || ""),
+        2600,
+        true
+      );
+      if (!cleaned) {
+        next[target.index] = roleplayConservativeDriftFallback(original, playerText, playerInputKind, recentTurns);
+        return;
+      }
+      /* Never replace a risky line with another line that triggers the same
+         narrow continuity guard. */
+      if (roleplaySemanticDriftRisk({ ...original, text: cleaned }, playerText, playerInputKind, recentTurns)) {
+        next[target.index] = roleplayConservativeDriftFallback(original, playerText, playerInputKind, recentTurns);
+        return;
+      }
+      next[target.index] = { ...original, text: stripRoleplayEmoji(cleaned) };
+    });
+    return next;
+  } catch (err) {
+    console.warn("Roleplay semantic continuity repair failed; applying conservative RP-only fallback:", err);
+    const next = turns.slice();
+    risky.forEach((target) => {
+      next[target.index] = roleplayConservativeDriftFallback(
+        target.turn,
+        playerText,
+        playerInputKind,
+        recentTurns
+      );
+    });
+    return next;
+  }
+}
+
 function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const { tt } = useLang();
   const playerId = w.meId;
@@ -43646,6 +43849,11 @@ ${roleplayRomanticInitiativeCard(
 
 ROLEPLAY FOLYTATÁS — FONTOS:
 
+- SZEMANTIKAI FOLYTONOSSÁG — LEGMAGASABB PRIORITÁS: a következő beatnek közvetlenül és érthetően abból kell következnie, ami az EXACT recent turnökben és különösen a játékos LEGUTÓBBI inputjában ténylegesen megtörtént. Ne írj „mélynek hangzó”, de nem megalapozott mondatot.
+- Ha a játékos legutóbbi inputja ACTION, az első releváns válasz először arra a konkrét látható mozdulatra/helyzetváltozásra reagáljon. Ne ugorj át rögtön egy új pszichológiai tézisre a karakteréről.
+- TILOS egyetlen aktuális mozdulatból olyan ismétlődő mintát kitalálni, mint „you always…”, „every time…”, „this is what you do…”, „you keep doing this…”, ha a pontos korábbi turnök ezt nem bizonyítják.
+- Ne vezess be új, homályos metaforát csak azért, hogy drámaibbnak hangozzon a válasz. Metafora csak akkor folytatható, ha az exact jelenetben már ténylegesen felépült és a jelentése egyértelmű.
+- Egy flörtös vagy feszült válasz lehet rövid és direkt. A világos „közelebb jöttél → erre reagálok” jobb, mint egy költői, de logikailag nem következő monológ.
 - EMOJI ABSZOLÚT TILOS A ROLEPLAYBEN: sem beszédben, sem actionben, sem narrációban, sem sceneMemory/events/status mezőben ne használj emojit, emoji-piktogramot vagy dekoratív emoji jelet. Az érzelmet kizárólag szavakkal, ritmussal, testbeszéddel és cselekvéssel fejezd ki.
 - Ha fent AKTUÁLIS CÍMZETT van megadva a játékos mostani megszólalásához, a közvetlen "te/you" és a kérdés elsősorban ANNAK a karakternek szól. Más jelenlévő ne reagáljon úgy, mintha hozzá beszélt volna, hacsak természetesen közbe nem szól.
 - A játékos korábban egyértelműen feloldott beszélgetési fókuszát őrizd meg több körön át; ne felejtsd el csak azért, mert közben más karakter is megszólalt.
@@ -43840,6 +44048,7 @@ ${roleplayRomanticInitiativeCard(w, promptScene, cast)}
 ${participationCard}
 
 SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
+- SZEMANTIKAI FOLYTONOSSÁG: a retry ne csak „új” legyen, hanem LOGIKAILAG a játékos legutóbbi konkrét speech/actionjának következő beatje. Rövid actionből ne találj ki „te mindig / minden alkalommal” viselkedésmintát, új homályos metaforát vagy nem megalapozott pszichoanalízist. Ha a játékos actiont írt, reagálj először arra, amit ténylegesen tett.
 - EMOJI TILOS minden roleplay beszédben, actionben, narrációban és minden visszaadott szövegmezőben.
 - Adj ${participationPlan.beatMin}-${participationPlan.beatMax} TELJESEN FRISS mozzanatot.
 - A MANDATORY FAIRNESS SPEAKERS/ACTORS listán szereplő minden AI-nak legyen legalább egy látható speech vagy action mozzanata.
@@ -43870,6 +44079,20 @@ VÁLASZ CSAK JSON:
           out = retryOut;
           resolved = retryResolved;
         }
+      }
+
+      /* RP-ONLY semantic coherence repair. Most turns pass without any extra
+         provider call; only narrow drift patterns are repaired. */
+      if (resolved.length && playerText) {
+        resolved = await repairRoleplaySemanticDriftTurns(
+          w,
+          promptScene,
+          cast,
+          resolved,
+          playerText,
+          playerInputKind,
+          playerTarget.id || ""
+        );
       }
 
       /*
