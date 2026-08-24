@@ -51616,11 +51616,154 @@ function gossipBackchannelLine(w, rumor, fromId, toId, mode) {
   return `${from ? from.name : fromId} ${prefix} ${to ? to.name : toId}${subjectNames ? ` about ${subjectNames}` : ""}: ${cut(String(rumor && rumor.text || ""), 260)}`;
 }
 
+/* ============================================================
+   GOSSIP CONTEXT + TEXT-DATABASE VISIBILITY v118
+
+   Scope: gossip/event interpretation only. Public/community textual world data
+   may inform gossip and fallout. Direct DMs and genuinely two-person private
+   rooms remain hard-private and can never become gossip merely because their
+   text exists in the saved world object.
+   ============================================================ */
+function gossipTextContextSignals(value) {
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  const low = raw.toLowerCase();
+  let drama = 0, romance = 0, embarrassment = 0, relationship = 0, conflict = 0;
+  const tags = [];
+  const hit = (re, add, tag) => {
+    if (!re.test(low)) return false;
+    Object.keys(add || {}).forEach((key) => {
+      if (key === "drama") drama += Number(add[key]) || 0;
+      if (key === "romance") romance += Number(add[key]) || 0;
+      if (key === "embarrassment") embarrassment += Number(add[key]) || 0;
+      if (key === "relationship") relationship += Number(add[key]) || 0;
+      if (key === "conflict") conflict += Number(add[key]) || 0;
+    });
+    if (tag) tags.push(tag);
+    return true;
+  };
+
+  hit(/\b(?:break\s*up|broke\s*up|dumped|dumping|split\s*up|divorc|szakít|szakított|dobta|különment|válás)\b/i,
+    { drama:24, relationship:34, embarrassment:8 }, "breakup");
+  hit(/\b(?:secret(?:ly)?\s+(?:met|meeting|date|dating|seeing)|sneak(?:ing|ed)?\s+(?:out|around)|caught\s+together|seen\s+together|titokban\s+(?:találkoz|randiz|összejár)|lebuktak\s+együtt|együtt\s+látták)\b/i,
+    { drama:24, romance:24, relationship:24, embarrassment:16 }, "secret-meeting");
+  hit(/\b(?:kiss|kissed|making\s*out|made\s*out|hook(?:ed)?\s*up|dating|date|crush|chemistry|flirt|csók|csókol|kavar|randi|randiz|vonzalom|flört)\b/i,
+    { romance:28, relationship:18, drama:8 }, "romance");
+  hit(/\b(?:cheat|cheated|cheating|affair|betray|betrayed|backstab|megcsal|félrelép|árul|elárul|hűtlen)\b/i,
+    { drama:38, relationship:30, embarrassment:24, conflict:22 }, "betrayal");
+  hit(/\b(?:argu(?:e|ed|ing)|fight|fighting|brawl|confront|threat|yell(?:ed|ing)?|scream(?:ed|ing)?|veszeked|vereked|konfront|fenyeget|ordít)\b/i,
+    { drama:32, conflict:34, embarrassment:10 }, "conflict");
+  hit(/\b(?:blocked|unfollowed|removed|cut\s+off|ghosted|letilt|kikövet|törölt|ghostolt|megszakította\s+a\s+kapcsolatot)\b/i,
+    { drama:16, relationship:26, embarrassment:8 }, "social-break");
+  hit(/\b(?:exposed|receipts?|screenshots?|leaked|caught|called\s+out|kiszivárg|lebuk|bizonyíték|screenshot|kitálalt|leleplez)\b/i,
+    { drama:34, embarrassment:34, conflict:16 }, "receipts");
+  hit(/\b(?:jealous|possessive|obsessed|féltéken|birtokl|megszállott)\b/i,
+    { drama:18, romance:14, relationship:18 }, "jealousy");
+
+  return {
+    drama: Math.min(100, drama),
+    romance: Math.min(100, romance),
+    embarrassment: Math.min(100, embarrassment),
+    relationship: Math.min(100, relationship),
+    conflict: Math.min(100, conflict),
+    tags: [...new Set(tags)],
+    juicy: drama >= 22 || romance >= 20 || embarrassment >= 20 || relationship >= 26 || conflict >= 24,
+  };
+}
+
+function gossipEventIsPrivateDirectChat(event) {
+  if (!event) return false;
+  const type = String(event.type || "");
+  const source = String(event.source || "");
+  const sourceType = String(event.meta && event.meta.sourceType || "");
+  return Boolean(
+    (type === "dm-message" || source === "direct-chat" || sourceType === "dm") &&
+    String(event.visibility || "") === "private"
+  );
+}
+
+function gossipEventIsStrictPrivateRoom(event) {
+  if (!event) return false;
+  const meta = event.meta && typeof event.meta === "object" ? event.meta : {};
+  const tags = Array.isArray(event.tags) ? event.tags.map(String) : [];
+  const participants = Array.isArray(meta.participantIds) ? meta.participantIds.filter(Boolean) : [];
+  const sceneKind = String(meta.sceneKind || meta.eventKind || "").toLowerCase();
+  const roleplayLike = String(meta.sourceType || event.source || "").toLowerCase().includes("roleplay") || Boolean(meta.sceneId);
+  const explicitlyPrivate = meta.private === true || tags.includes("private-scene") || String(event.visibility || "") === "private";
+  const twoPersonPrivateKind = roleplayLike && ["private_meet", "arrival"].includes(sceneKind) && participants.length > 0 && participants.length <= 2;
+  return Boolean(explicitlyPrivate && roleplayLike || twoPersonPrivateKind || (roleplayLike && tags.includes("private-scene") && participants.length <= 2));
+}
+
+function gossipTextDatabaseVisibleEvent(w, event) {
+  if (!event) return false;
+  if (gossipEventIsPrivateDirectChat(event) || gossipEventIsStrictPrivateRoom(event)) return false;
+  if (String(event.visibility || "") === "system") return false;
+  if (event.actorId && String(event.actorId).startsWith("media_")) return false;
+  if (event.source === "gossip-propagation") return false;
+  /* Public posts/comments and non-private multi-person world events live in the
+     shared textual world database. Limited means "not necessarily on the feed",
+     not magically unknowable to the simulation, unless it is a private room. */
+  return ["public", "limited", "group", "world", ""].includes(String(event.visibility || ""));
+}
+
+function gossipGoalTopicTags(value) {
+  const low = String(value || "").toLowerCase();
+  const tags = [];
+  const add = (re, tag) => { if (re.test(low)) tags.push(tag); };
+  add(/break\s*up|leave\s+(?:him|her|them)|end\s+(?:it|the\s+relationship)|szakít|elhagyni|véget\s+vetni/, "breakup");
+  add(/date|dating|kiss|crush|flirt|romance|relationship|randi|randiz|csók|flört|kapcsolat|összejönni/, "romance");
+  add(/revenge|ruin|expose|destroy|beat|fight|bosszú|tönkre|leleplez|megver|harc|legyőz/, "conflict");
+  add(/friend|befriend|protect|support|barát|megvéd|támogat/, "loyalty");
+  add(/win|captain|champion|famous|popular|prove|győz|kapitány|bajnok|hírnév|népszerű|bizonyít/, "status");
+  add(/secret|hide|keep\s+quiet|titok|eltitkol|rejteget/, "secrecy");
+  return [...new Set(tags)];
+}
+
+function gossipGoalSignalsForEvents(w, events, subjectIds) {
+  if (!w) return [];
+  const eventText = (events || []).map((event) => String(event && event.text || "")).join(" \n ");
+  const eventTopics = new Set(gossipGoalTopicTags(eventText));
+  const eventNames = new Set((subjectIds || []).map(String));
+  const rows = [];
+
+  (subjectIds || []).forEach((ownerId) => {
+    const owner = charById(w, ownerId);
+    if (!owner || !String(owner.goals || "").trim()) return;
+    const goalText = String(owner.goals || "").replace(/\s+/g, " ").trim();
+    const goalTopics = gossipGoalTopicTags(goalText);
+    const targetIds = typeof explicitNamedCharacterIdsInText === "function"
+      ? explicitNamedCharacterIdsInText(w, goalText, ownerId).filter((id) => id && id !== ownerId)
+      : [];
+    const topicOverlap = goalTopics.filter((tag) => eventTopics.has(tag));
+    const targetOverlap = targetIds.filter((id) => eventNames.has(String(id)));
+    if (!topicOverlap.length && !targetOverlap.length) return;
+    rows.push({
+      ownerId,
+      ownerName: owner.name,
+      targetIds: targetOverlap.slice(0, 3),
+      topics: topicOverlap.slice(0, 4),
+    });
+  });
+
+  return rows.slice(0, 4);
+}
+
+function gossipGoalDirectionCard(candidate) {
+  const rows = candidate && Array.isArray(candidate.goalSignals) ? candidate.goalSignals : [];
+  if (!rows.length) return "";
+  return `\nHIDDEN STORY-DIRECTION SIGNALS — NEVER PUBLISH THESE AS PRIVATE FACTS:\n${rows.map((row) => {
+    const targets = (row.targetIds || []).length ? ` | linked subject IDs: ${(row.targetIds || []).join(", ")}` : "";
+    return `- ${row.ownerName} has an active goal direction overlapping the PUBLIC events in topic(s): ${(row.topics || []).join(", ") || "relationship"}${targets}.`;
+  }).join("\n")}\n- Use these only to NOTICE and CONNECT already-observed public/community facts into a coherent tension arc.\n- Never quote, paraphrase, expose or claim knowledge of the private Goals field itself.\n- A goal alone can NEVER create a gossip story, accusation, meeting, breakup, affair, fight or other event. Public/community evidence is still mandatory.\n`;
+}
+
 function gossipSeedHeat(event) {
   if (!event || !event.text) return -999;
   const tags = Array.isArray(event.tags) ? event.tags : [];
+  const contextSignals = gossipTextContextSignals(event.text);
   let heat = (Number(event.importance) || 0) * 0.52 + (Number(event.drama) || 0) * 0.55 +
     (Number(event.romance) || 0) * 0.42 + (Number(event.embarrassment) || 0) * 0.46;
+  heat += contextSignals.drama * 0.28 + contextSignals.romance * 0.22 +
+    contextSignals.embarrassment * 0.22 + contextSignals.relationship * 0.16 + contextSignals.conflict * 0.16;
   if (tags.includes("gossip-worthy-thread")) heat += 22;
   if (tags.some((tag) => ["scandal","fight","threat","kiss","hookup","cheating","betrayal","party-drama","receipts","viral"].includes(String(tag)))) heat += 18;
   if (event.type === "roleplay-summary" || event.type === "roleplay-event") heat += 12;
@@ -51634,12 +51777,20 @@ function gossipSeedHeat(event) {
 
 function gossipSeedExcluded(w, event) {
   if (!event) return true;
-  const privateAiToHuman = event.type === "dm-message" && event.visibility === "private" && event.actorId &&
-    !isHuman(w, event.actorId) && Array.isArray(event.targetIds) && event.targetIds.length > 0 && event.targetIds.every((id) => isHuman(w, id));
-  return privateAiToHuman ||
+
+  /* PRIVATE MEANS PRIVATE. Neither direction of a 1:1 DM may seed the rumor
+     network, and a genuinely private two-person room/Event cannot leak simply
+     because its transcript/summary exists in the persisted database. */
+  if (gossipEventIsPrivateDirectChat(event) || gossipEventIsStrictPrivateRoom(event)) {
+    return true;
+  }
+
+  return (
     ["like","follow","repost","gossip-story","gossip-exchange","gossip-circulation","gossip-network-echo","rumor-evolution","scenario-start"].includes(String(event.type || "")) ||
     event.source === "gossip-propagation" ||
-    event.visibility === "system" || (event.actorId && String(event.actorId).startsWith("media_"));
+    event.visibility === "system" ||
+    (event.actorId && String(event.actorId).startsWith("media_"))
+  );
 }
 
 function gossipPublicObservers(w, event, subjectIds, limit = 3) {
@@ -51663,7 +51814,13 @@ function gossipInitialHolderIds(w, event, subjectIds) {
   const ids = [event.actorId, ...(event.targetIds || []), ...(event.witnessIds || []),
     ...((event.meta && event.meta.participantIds) || [])]
     .filter((id) => id && charById(w, id) && !isHuman(w, id));
-  if (event.visibility === "public") ids.push(...gossipPublicObservers(w, event, subjectIds, 3));
+  if (event.visibility === "public") {
+    ids.push(...gossipPublicObservers(w, event, subjectIds, 3));
+  } else if (gossipTextDatabaseVisibleEvent(w, event)) {
+    /* Non-private community/world text can be discovered by relevant NPCs even
+       when it was not a feed post. Private DMs/rooms were hard-excluded above. */
+    ids.push(...gossipPublicObservers(w, event, subjectIds, 2));
+  }
   return [...new Set(ids)];
 }
 
@@ -52060,7 +52217,7 @@ RULES:
 - A close friend of the subject may defend, doubt, check the facts, joke protectively or stay quiet instead of attacking.
 - An enemy/rival may amplify or mock it. A neutral character may be curious or skeptical.
 - Lower confidence/deeper-hop knowledge must sound less certain: "apparently", "heard", "is it true", vague side-eye, etc. Do not present hearsay as witnessed fact.
-- Do not expose a private DM verbatim. Preserve only the already-saved rumor summary above.
+- Direct private DMs and genuinely two-person private rooms are not valid rumor sources at all. Do not expose or reconstruct them. If this rumor exists, use only the already-authorized non-private rumor summary above.
 - Do not invent new facts, receipts, witnesses, cheating, sex, violence or confessions that are not in the rumor.
 - Real social-media style: short, casual, slang allowed, character-specific. No narration, no essays, no assistant voice.
 - Only use the supplied actor IDs.
@@ -52336,30 +52493,24 @@ function roleplayGossipEligible(event) {
 function gossipPrivacyEligible(event) {
   if (!event) return false;
 
-  if (event.visibility === "public") {
-    return true;
+  /* Absolute privacy boundary: direct private chat and a genuine 1:1 private
+     room/Event are never media material unless a future system creates a NEW,
+     explicit public leak event instead of reusing the private transcript. */
+  if (gossipEventIsPrivateDirectChat(event) || gossipEventIsStrictPrivateRoom(event)) {
+    return false;
   }
 
-  /*
-   * Később más rendszerek explicit leaket is jelölhetnek.
-   */
-  if (
-    event.meta &&
-    event.meta.leaked === true
-  ) {
-    return true;
-  }
+  if (event.visibility === "public") return true;
 
-  if (roleplayGossipEligible(event)) {
-    return true;
-  }
+  if (event.meta && event.meta.leaked === true) return true;
 
-  /*
-   * Popup / in-world event: limited visibility mellett csak akkor válhat
-   * pletykává, ha a feloldott esemény explicit gossipEligible és valódi
-   * witness-listát hordoz. Ettől egy sulis folyosói jelenet kiszivároghat,
-   * egy négyszemközti pillanat viszont nem válik mágikusan köztudottá.
-   */
+  /* The simulation's shared textual database is visible for public/community
+     world information. A multi-person limited Event can therefore become known
+     without magical access to any private 1:1 transcript. */
+  if (gossipTextDatabaseVisibleEvent(null, event)) return true;
+
+  if (roleplayGossipEligible(event)) return true;
+
   if (
     event.source === "popup-event" &&
     event.meta &&
@@ -52370,10 +52521,6 @@ function gossipPrivacyEligible(event) {
     return true;
   }
 
-  /*
-   * Private DM, zárt group és 1-AI roleplay
-   * nem válik automatikusan média-információvá.
-   */
   return false;
 }
 
@@ -52426,6 +52573,14 @@ function gossipEventBaseScore(
 
   let score =
     Number(event.importance) || 0;
+
+  const textSignals = gossipTextContextSignals(event.text);
+  score +=
+    textSignals.drama * 0.24 +
+    textSignals.romance * 0.2 +
+    textSignals.embarrassment * 0.2 +
+    textSignals.relationship * 0.18 +
+    textSignals.conflict * 0.18;
 
   score +=
     (Number(event.drama) || 0) * 0.42;
@@ -52571,6 +52726,7 @@ function spillAndChillJuicyEnough(event, score) {
   const drama = Number(event.drama) || 0;
   const romance = Number(event.romance) || 0;
   const embarrassment = Number(event.embarrassment) || 0;
+  const textSignals = gossipTextContextSignals(event.text);
 
   const inherentlyJuicy = [
     "viral", "cancel-wave", "rumor-evolution", "gossip-story", "gossip-circulation"
@@ -52587,6 +52743,7 @@ function spillAndChillJuicyEnough(event, score) {
     drama >= 18 ||
     romance >= 20 ||
     embarrassment >= 20 ||
+    textSignals.juicy ||
     (roleplayGossipEligible(event) && (drama + romance + embarrassment) >= 30)
   );
 }
@@ -52822,6 +52979,8 @@ function buildGossipStoryCandidate(w, primary, pool, mode) {
   const roleplayBased = events.some((event) => event && event.meta && event.meta.sourceType === "roleplay");
   const witnessCount = events.reduce((max,event) => Math.max(max,Number(event && event.meta && event.meta.witnessCount)||0),0);
   const scene = sceneId ? (w.scenes || []).find((row) => row && row.id === sceneId) : null;
+  const goalSignals = gossipGoalSignalsForEvents(w, events, subjectIds);
+  const goalBoost = Math.min(34, goalSignals.length * 14);
   const spreadStats = gossipSpreadStatsForEvents(w, events);
   const spreadBonus = spreadStats
     ? Math.min(
@@ -52833,7 +52992,7 @@ function buildGossipStoryCandidate(w, primary, pool, mode) {
         (Number(spreadStats.publicEchoes) || 0) * 8
       )
     : 0;
-  const score = Math.round(baseScore + spreadBonus);
+  const score = Math.round(baseScore + spreadBonus + goalBoost);
   return {
     id:"gc_"+uid(), mode,
     mediaId:(activeGossipMediaAccount(w)||{}).id || "",
@@ -52846,6 +53005,7 @@ function buildGossipStoryCandidate(w, primary, pool, mode) {
     eventKind:(primary && primary.meta && primary.meta.sceneKind) || (scene && scene.eventKind) || "",
     eventTitle:(primary && primary.meta && primary.meta.sceneTitle) || (scene && scene.title) || "",
     attendeeIds:eventRecap ? subjectIds : [],
+    goalSignals, goalBoost,
     sourceTraceRequired:false,
     events:events.map((event)=>({
       id:event.id||"", type:event.type||"", text:event.text||"", ts:Number(event.ts)||0,
@@ -53357,6 +53517,13 @@ ${gossipCandidateSubjectContext(
   w,
   candidate
 ) || "-"}
+
+${gossipGoalDirectionCard(candidate)}
+
+TEXTUAL WORLD-DATABASE VISIBILITY — HARD PRIVACY RULE:
+- Public posts/comments/Notes and non-private community/multi-person world events may be connected because they exist in the shared textual world database.
+- Direct private chats and genuinely two-person private rooms/Events are EXCLUDED. Never infer, quote, summarize or reveal their contents unless a separate later PUBLIC event independently establishes the same fact.
+- Database visibility is context, not permission to invent a fact. The story still needs the concrete EVENT evidence listed below.
 
 FONTOS:
 A fenti listában lehetnek TANÚK is.
@@ -54461,7 +54628,23 @@ function gossipStoryReactionCandidates(w,post){
     const lore=characterLoreCorpus(c).toLowerCase();
     const strongTargetRel=strongestTarget?getRel(w,c.id,strongestTarget):null;
     const romanticTie=strongTargetRel && strongestTarget && relationshipRomanceActive(w,c.id,strongestTarget,strongTargetRel);
-    if(juice.romance>=20 && romanticTie && /jealous|jealousy|féltéken|possess|birtokl|obsess|megszáll/.test(lore)){
+    const storyRelationshipSignals = gossipTextContextSignals(`${story.headline || ""} ${post.text || ""}`);
+    const romanticSubjectTies = (story.mentionedIds || []).filter((targetId) => {
+      if (!targetId || targetId === c.id) return false;
+      const rel = getRel(w, c.id, targetId);
+      return relationshipRomanceActive(w, c.id, targetId, rel);
+    });
+    if (romanticSubjectTies.length && (juice.romance >= 14 || storyRelationshipSignals.romance >= 18 || storyRelationshipSignals.relationship >= 24)) {
+      const romanticTarget = romanticSubjectTies[0];
+      if (!strongestTarget || Math.abs(Number(getRel(w,c.id,romanticTarget).score)||0) >= Math.abs(strongestRel)) {
+        strongestTarget = romanticTarget;
+        strongestRel = Number(getRel(w,c.id,romanticTarget).score) || strongestRel;
+      }
+      score += 66;
+      if (role !== "mentioned" && role !== "witness") {
+        role = /jealous|jealousy|féltéken|possess|birtokl|obsess|megszáll/.test(lore) ? "jealous" : "partner";
+      }
+    } else if(juice.romance>=20 && romanticTie && /jealous|jealousy|féltéken|possess|birtokl|obsess|megszáll/.test(lore)){
       score+=48;
       if(role!=="mentioned"&&role!=="witness")role="jealous";
     }
@@ -54815,6 +54998,7 @@ A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saj
 - Az érintett tagadhat, megerősíthet, gúnyolódhat, dühös lehet vagy ignorálhat.
 - Pletyka esetén a HITETLENSÉG ugyanolyan valós reakció, mint az elhívés: kételkedő, bizalmatlan vagy személyes tanú karakter mondhatja, hogy nem hiszi el / nem így történt.
 - Romantikus vagy szexuális pletyka valódi FÉLTÉKENYSÉGET válthat ki abból, akinek a személyisége + kapcsolata ezt támogatja. Ne adj féltékenységet random karakternek.
+- Ha egy jelölt AI jelenlegi romantikus partnere/crusha egy megnevezett szereplőnek, és a CIKK titkos találkozást, randit, csókot, megcsalást, szakítást vagy más kapcsolati fenyegetést sugall/állít, a karakter ezt NE kezelje neutrális háttérzajként. Karakterhűen reagáljon: komment, saját statement vagy — ha a játékos az érintett — számonkérő/aggódó/féltékeny DM is természetes lehet. A bizonyossági szintet továbbra is tartsa meg.
 - Barát megvédheti, ellenség rátehet egy lapáttal.
 - A pletyka JAVÍTHAT és RONTHAT is kapcsolatot: lojalitás, védelem, közös oldal, hitetlenkedés pozitív irányba vihet; féltékenység, csalódás, árulásérzet, káröröm vagy elhitt negatív pletyka negatív irányba. Csak valódi karakterhű okból változtass pontot.
 - A játékos helyett SOHA ne írj.
@@ -54847,6 +55031,7 @@ function fallbackGossipReactionOutput(w, post, cast) {
   else if (role === "supporter") text = en ? "this post is reaching." : "ez a poszt nagyon nyújtózkodik.";
   else if (role === "critic") text = en ? "this story tracks." : "ez a sztori sajnos teljesen hihető.";
   else if (role === "jealous") text = en ? "so this is what we're posting now." : "szóval most már ezt posztoljuk.";
+  else if (role === "partner") text = en ? "yeah, I have questions about this." : "igen, erről azért lenne pár kérdésem.";
   else if (role === "mentioned") text = en ? "you're seriously posting this about me?" : "ezt most komolyan kiposztoltátok rólam?";
 
   const basis =
