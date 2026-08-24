@@ -13596,6 +13596,60 @@ function socialCommentBasisMatchesExactPost(post, basis) {
   );
 }
 
+const SOCIAL_COMMENT_GROUNDING_STOPWORDS = new Set([
+  "the","a","an","and","or","but","if","then","than","that","this","these","those","it","its","i","im","i'm","me","my","mine","you","your","yours","we","our","ours","they","their","them","he","his","him","she","her","hers","is","are","was","were","be","been","being","do","does","did","have","has","had","to","of","in","on","at","for","from","with","about","as","so","just","really","very","still","now","today","tonight","here","there","what","when","where","who","why","how",
+  "az","a","egy","és","vagy","de","ha","akkor","hogy","ez","ezt","ennek","azt","annak","ő","én","te","mi","ti","ők","nekem","neked","velem","veled","is","volt","van","vagyok","vagy","lesz","lenne","már","még","most","ma","itt","ott","csak","nagyon","tényleg","ami","amit","aki","ahogy","mert","mint","valami","valaki"
+]);
+
+function socialCommentGroundingContentTokens(value) {
+  return normalizeExactCommentGroundingText(value)
+    .split(/\s+/)
+    .filter((token) =>
+      token &&
+      token.length >= 3 &&
+      !SOCIAL_COMMENT_GROUNDING_STOPWORDS.has(token)
+    );
+}
+
+function socialCommentTextEchoesBasis(post, basis, value) {
+  if (!post) return false;
+
+  const rawBasis = String(basis || "").replace(/\s+/g, " ").trim();
+  const rawComment = String(value || "").replace(/\s+/g, " ").trim();
+  if (!rawBasis || !rawComment) return false;
+
+  const mode = socialPostQuestionMode(post);
+  const textWordCount = normalizeExactCommentGroundingText(post.text || "")
+    .split(/\s+/)
+    .filter(Boolean).length;
+
+  /* Short direct questions/statuses have their own deterministic response-act
+     guards below. Requiring literal vocabulary echo there would wrongly reject
+     natural answers such as “I’m in” to “party?” or “come over” to “bored.” */
+  if (mode !== "none" || (!socialPostHasVisibleImage(post) && textWordCount <= 6)) {
+    return true;
+  }
+
+  const basisTokens = socialCommentGroundingContentTokens(rawBasis);
+  if (!basisTokens.length) return true;
+
+  const commentTokens = socialCommentGroundingContentTokens(rawComment);
+  if (!commentTokens.length) return false;
+
+  return basisTokens.some((basisToken) =>
+    commentTokens.some((commentToken) => {
+      if (basisToken === commentToken) return true;
+      /* Small morphology bridge for Hungarian/English inflection without doing
+         fuzzy semantic guessing: “edzés”↔“edzésre”, “training”↔“trained”, etc. */
+      if (basisToken.length >= 5 && commentToken.length >= 5) {
+        const prefixLen = Math.min(6, basisToken.length, commentToken.length);
+        return basisToken.slice(0, prefixLen) === commentToken.slice(0, prefixLen);
+      }
+      return false;
+    })
+  );
+}
+
 function socialCommentGroundedInExactPost(
   w,
   post,
@@ -13655,6 +13709,18 @@ function socialCommentGroundedInExactPost(
       post,
       basis
     )
+  ) {
+    return false;
+  }
+
+  /* A literal basis field is not enough: the visible sentence itself must stay
+     attached to that selected post/image detail. This catches fluent but
+     off-topic relationship/personality lines that previously passed because
+     the model copied a valid basis while writing about something else. */
+  if (
+    basis &&
+    socialCommentBasisMatchesExactPost(post, basis) &&
+    !socialCommentTextEchoesBasis(post, basis, raw)
   ) {
     return false;
   }
@@ -13763,6 +13829,8 @@ EXACT-POST COMMENT GROUNDING — HIGHEST CONTENT PRIORITY:
 - Never manufacture an unrelated insult just to create engagement. In a scheduled comment wave, if the first idea is not grounded, simplify it into a real response to the exact post/question rather than defaulting to silence.
 - Every returned comment must pass this test: "What exact word, question, visible image detail, or parent-comment statement makes THIS sentence a sensible response?" If there is no clear answer, do not return that comment.
 - PLAYER POST GROUNDING PROOF: for every TOP-LEVEL comment under the human player's post, return a hidden basis field containing 1–18 CONSECUTIVE words copied literally from THIS exact post text or its confirmed visible image description. The comment text must directly react to that basis. Do not copy basis from another post, memory, relationship card or world event.
+- BASIS→VISIBLE COMMENT LOCK: except for very short direct questions/statuses, the visible comment must explicitly echo at least ONE concrete content word/detail from its own basis (same word or obvious inflected form). A valid copied basis paired with an unrelated sentence is INVALID and will be rejected.
+- Do not hide the real topic behind a generic reaction such as “real”, “damn”, “iconic”, “you ate”, “wild”, a random insult, or relationship drama. Name/react to the actual concrete thing in the basis first; personality/relationship only changes tone.
 ${hasImage
   ? `- Visual reactions may use ONLY details in the supplied image description.`
   : `- TEXT-ONLY HARD LOCK: there is NO visible photo. Never mention/invent a photo, picture, selfie, mugshot, photographer, pose, outfit, facial look, "you look like...", or any other visible appearance detail.`}
@@ -30966,6 +31034,8 @@ NYILVÁNOS VS. PRIVÁT REALIZMUS:
 KONKRÉT POSZTHOZ KÖTÉS:
 - Minden komment ELŐTT alkalmazd a SHARED POST COMPREHENSION jelentést; ne kezdj karakterreakciót addig, amíg a poszt alapjelentése nincs rögzítve.
 - A basis nem dísz: először válaszd ki a konkrét, szó szerinti post/image részletet, amely kiváltja a reakciót, és CSAK UTÁNA írd meg a kommentet relationship + personality + Speech/Voice szerint. Ha a kész komment valójában nem reagál a basisre, írd újra.
+- BASIS-LÁTHATÓ KAPCSOLAT: hosszabb/nem triviális posztnál a kész kommentben legyen legalább egy konkrét tartalmi szó vagy egyértelmű ragozott alak abból a basisből, amit kiválasztottál. Ne add vissza ugyanazt a basis-t egy teljesen más témájú komment mellé.
+- Ha nem tudsz egyetlen konkrét szót/részletet sem természetesen visszakötni a jelenlegi poszthoz, inkább írj egyszerűbb, pontosabb reakciót; a relationship-drámát ne használd póttémának.
 - TILOS egy másik feed-poszt témáját, korábbi vitát vagy relationship-memory témát becsempészni csak azért, mert karakterhűen hangzik. Az csak akkor jelenhet meg, ha a jelenlegi basishez ténylegesen kapcsolódó reakció.
 - POSZT-AZONOSÍTÁS HARD RULE: a jelenlegi célposzt mindig ${post.id}, szerzője mindig ${post.authorId} (${author ? author.name : "?"}). A kommentelőnek ezt nem szabad elveszítenie a generálás során.
 - A komment szövegének konkrétan erre a posztra kell reagálnia: annak captionjére, képére, hangulatára vagy a már ebben a threadben elhangzott kommentre.
@@ -31427,6 +31497,7 @@ HARD RULES:
 - PREVIOUS RAW COMMENT IDs THAT FAILED THE APP'S HARD GROUNDING FILTER AND MUST BE REWRITTEN IF ELIGIBLE: ${rejectedRawActorIds.join(", ") || "none"}.
 - A failed raw row is NOT a reason to drop that character. Rewrite the sentence from scratch so it actually answers this exact post while keeping SELF's own voice.
 - PLAYER POST BASIS HARD RULE: every repaired TOP-LEVEL comment under the human player's post must include basis: 1–18 consecutive words copied literally from THIS exact post text or confirmed visible image description, and the repaired text must directly respond to that basis.
+- For any non-trivial post, the repaired visible comment must also echo at least one concrete content word/detail from that basis (or an obvious inflected form). Do not return a valid basis beside an unrelated relationship/personality line.
 - If one of the very-high relationship IDs is in ELIGIBLE CHARACTERS, prioritize them when they can respond naturally to the exact post. Hidden obsession increases attention; it does not create an unrelated topic.
 - Return EXACTLY ${Math.min(missing, candidates.length)} DIFFERENT character IDs when that many candidates are listed.
 - If a candidate's first dramatic/sarcastic idea is not grounded, rewrite it into a simpler grounded reaction instead of omitting the character.
@@ -35470,307 +35541,203 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
   if (!author || !characterCanAutonomouslyPost(w, author, null, options)) return null;
 
   /*
-   * HARD LOCAL POST FALLBACK v100.0 — CHARACTER VARIETY LOCK
+   * HARD LOCAL POST FALLBACK v100.1 — CONCRETE-FACT ONLY
    *
-   * This path runs only when the provider cannot supply a usable post. It must
-   * keep the feed alive WITHOUT turning different characters into copies of the
-   * same emergency template. The old fallback checked repetition only against
-   * the SAME author's recent posts, so three different AI characters could all
-   * publish "X is becoming a full-time distraction." in the same burst.
-   *
-   * Rules here are intentionally local to fallback posting:
-   * - choose from several voice/personality/context families;
-   * - rotate selection deterministically per author/burst;
-   * - reject wording that is structurally the same as recent WORLD posts after
-   *   character names are normalized away;
-   * - obsession/crush context is one possible topic, never the automatic first
-   *   topic for every character;
-   * - never copy raw long personality sheets into a caption.
+   * This is an emergency provider-independent rescue, NOT a canned caption bank.
+   * Every visible fallback post must contain a concrete fact/plan/place/person/
+   * activity from THIS character or THIS trigger. If no concrete anchor exists,
+   * return null and let the retry path try again instead of publishing filler.
    */
   const en = worldLanguage(w, w.meId) === "en";
   const faction = characterFactionIdentityCard(author);
+  const dojo = (faction.match(/dojo=([^|]+)/i) || [])[1]?.trim() || "";
   const job = String(author.job || author.occupation || author.role || "").replace(/\s+/g, " ").trim();
   const goals = String(author.goals || "").replace(/\s+/g, " ").trim();
   const likes = String(author.likes || author.favorites || "").replace(/\s+/g, " ").trim();
-  const personality = String(author.personality || author.traits || "").replace(/\s+/g, " ").trim();
-  const speech = String(author.speech || author.voice || "").replace(/\s+/g, " ").trim();
   const city = String(author.city || "").replace(/\s+/g, " ").trim();
-  const dojo = (faction.match(/dojo=([^|]+)/i) || [])[1]?.trim() || "";
-  const lore = [personality, speech, author.traits, author.bio, author.extra]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  const fallbackStats = characterAutonomousPostStats24h(w, author.id);
+  const selfState = (w.charMemory && w.charMemory[author.id] && w.charMemory[author.id].selfState) || {};
   const trigger = String(options && options.trigger || "").trim();
   const burstKey = String(options && options.burstKey || "").trim();
-  const seed = commentSeedNumber(
-    `${author.id}|${burstKey}|${trigger}|${fallbackStats.count}|${Math.floor(now() / 60000)}`
-  );
+  const stats = characterAutonomousPostStats24h(w, author.id);
+  const seed = commentSeedNumber(`${author.id}|${burstKey}|${trigger}|${stats.count}|${Math.floor(now()/60000)}`);
 
-  const recentWorld = (w.posts || [])
-    .filter((p) => p && p.text && !isHuman(w, p.authorId))
-    .slice(0, 40)
-    .map((p) => String(p.text || "").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-
-  const identityTokens = [];
-  socialProfiles(w).forEach((c) => {
-    if (!c) return;
-    [c.name, c.nick, c.nickname, c.username]
-      .filter(Boolean)
-      .forEach((raw) => {
-        const value = String(raw).replace(/^@/, "").trim();
-        if (!value) return;
-        identityTokens.push(value);
-        const first = value.split(/\s+/)[0];
-        if (first && first.length >= 3) identityTokens.push(first);
-      });
-  });
-
-  const escapeRe = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const normalizeFallbackShape = (value) => {
-    let text = String(value || "").toLowerCase();
-    [...new Set(identityTokens)]
-      .sort((a, b) => b.length - a.length)
-      .forEach((name) => {
-        if (!name || name.length < 3) return;
-        text = text.replace(new RegExp(`\\b${escapeRe(name.toLowerCase())}\\b`, "gi"), "<person>");
-      });
-    return text
-      .replace(/@[a-z0-9_.-]+/gi, "<person>")
-      .replace(/\b\d+\b/g, "#")
-      .replace(/[^a-z0-9áéíóöőúüű<>]+/gi, " ")
+  const compactFact = (value, maxLen = 96) => {
+    let text = String(value || "")
+      .replace(/[\r\n]+/g, " ")
+      .replace(/^[-•*\s]+/, "")
       .replace(/\s+/g, " ")
       .trim();
+    if (!text) return "";
+    /* Prefer one concrete clause instead of dumping a whole character-sheet field. */
+    const pieces = text.split(/\s*(?:\||;|•)\s*/).map((x) => x.trim()).filter(Boolean);
+    text = pieces[seed % Math.max(1, pieces.length)] || text;
+    return cut(text, maxLen).replace(/[,:;\-–—\s]+$/g, "").trim();
   };
 
-  const recentShapes = recentWorld
-    .map(normalizeFallbackShape)
-    .filter(Boolean);
-
-  const looksRecentlyDuplicated = (value) => {
-    const shape = normalizeFallbackShape(value);
-    if (!shape) return true;
-    return recentShapes.some((recentShape) => {
-      if (!recentShape) return false;
-      if (recentShape === shape) return true;
-      if (shape.length >= 34 && recentShape.length >= 34) {
-        const a = shape.slice(0, 34);
-        const b = recentShape.slice(0, 34);
-        if (a === b) return true;
-      }
-      return false;
-    });
-  };
-
-  const candidates = [];
-  const addCandidate = (text, family = "general") => {
-    const clean = String(text || "").replace(/\s+/g, " ").trim();
-    if (!clean || clean.length < 3) return;
-    if (!candidates.some((row) => row.text.toLowerCase() === clean.toLowerCase())) {
-      candidates.push({ text: clean, family });
+  const anchors = [];
+  const addAnchor = (kind, value, weight = 1, meta = {}) => {
+    const fact = compactFact(value, kind === "event" ? 120 : 90);
+    if (!fact || fact.length < 3) return;
+    if (!anchors.some((row) => row.kind === kind && row.fact.toLowerCase() === fact.toLowerCase())) {
+      anchors.push({ kind, fact, weight, ...meta });
     }
   };
 
-  /* Trigger aftermath first, but only when THIS author could actually know it. */
+  /* Trigger facts outrank generic biography because aftermath posts should be
+     about what just happened when this author genuinely witnessed it. */
   if ((trigger === "popup-choice" || trigger === "popup-custom-response") && options.popupEventId) {
     const event = (w.popupEvents || []).find((e) => e && e.id === options.popupEventId);
     if (event) {
-      const visibility = ["public", "limited", "private"].includes(event.visibility)
-        ? event.visibility
-        : "limited";
       const involved = (event.involvedIds || []).map(String);
       const witnesses = (event.witnessIds || []).map(String);
-      const canKnow =
-        visibility !== "private" ||
-        involved.includes(String(author.id));
+      const canKnow = String(event.visibility || "limited") !== "private" || involved.includes(String(author.id));
       const wasThere = involved.includes(String(author.id)) || witnesses.includes(String(author.id));
-      const title = cut(String(event.title || "").replace(/\s+/g, " ").trim(), 72);
-      if (canKnow && wasThere && title) {
-        addCandidate(en ? `Still processing ${title}.` : `Még mindig a(z) ${title} jár a fejemben.`, "popup");
-        addCandidate(en ? `${title}. Yeah, that actually happened.` : `${title}. Igen, ez tényleg megtörtént.`, "popup");
-        addCandidate(en ? `I have opinions about ${title}. Keeping most of them to myself.` : `Van véleményem a(z) ${title} után. A nagy részét inkább megtartom magamnak.`, "popup");
+      if (canKnow && wasThere) {
+        addAnchor("event", event.title || event.summary || event.text || event.body, 12);
       }
     }
   }
 
   if (trigger === "roleplay-ended" && options.sceneId) {
-    const scene = (w.scenes || []).find((s) => s && s.id === options.sceneId);
+    const scene = (w.scenes || []).find((row) => row && row.id === options.sceneId);
     const cast = scene && Array.isArray(scene.cast) ? scene.cast.map(String) : [];
     if (scene && cast.includes(String(author.id))) {
-      const title = cut(String(scene.title || "").replace(/\s+/g, " ").trim(), 72);
-      if (title) {
-        addCandidate(en ? `Still thinking about ${title}.` : `Még mindig a(z) ${title} jár a fejemben.`, "event");
-        addCandidate(en ? `${title} definitely left an impression.` : `A(z) ${title} azért hagyott maga után valamit.`, "event");
-      }
+      addAnchor("event", scene.title || scene.summary || scene.diaryEntry || scene.goalResult, 12);
     }
   }
 
-  const relationshipFocus =
-    relationshipAutonomySpotlightRows(
-      w,
-      author.id,
-      1
-    )[0] || null;
+  addAnchor("intent", selfState.intent, 9);
+  (Array.isArray(selfState.openLoops) ? selfState.openLoops : []).slice(-3).forEach((x) => addAnchor("loop", x, 8));
+  addAnchor("mood", selfState.mood, 5);
+  addAnchor("goal", goals, 7);
+  addAnchor("like", likes, 4);
+  addAnchor("work", job, 4);
+  addAnchor("dojo", dojo, 5);
+  addAnchor("city", city, 2);
 
-  if (
-    relationshipFocus &&
-    relationshipFocus.gravity &&
-    relationshipFocus.gravity.mode === "obsession" &&
-    relationshipFocus.due
-  ) {
-    const hidden = Boolean(relationshipFocus.gravity.hidden);
-    const targetName = String(
-      relationshipFocus.target &&
-      (relationshipFocus.target.nick || relationshipFocus.target.nickname || relationshipFocus.target.name) ||
-      "someone"
-    ).split(" ")[0];
+  const relationshipRows = relationshipAutonomySpotlightRows(w, author.id, 3);
+  relationshipRows.forEach((row) => {
+    if (!row || !row.target || !row.gravity) return;
+    /* Relationship becomes a concrete public anchor only when social gravity is
+       genuinely high; hidden feelings are never copied into fallback text. */
+    if (row.gravity.level < 3) return;
+    const targetName = String(row.target.nick || row.target.nickname || row.target.name || "").split(" ")[0];
+    if (!targetName) return;
+    const publicRel = compactFact((row.rel && (row.rel.mood || row.rel.bond || row.rel.type)) || "", 50);
+    addAnchor("person", targetName, row.due ? 10 : 5, { targetName, publicRel, hidden:Boolean(row.gravity.hidden) });
+  });
 
-    if (hidden) {
-      addCandidate(en ? "Not naming names. I am trying to focus." : "Nem mondok nevet. Próbálok koncentrálni.", "relationship");
-      addCandidate(en ? "Some distractions are getting way too persistent." : "Van, ami mostanában feltűnően nehezen hagy koncentrálni.", "relationship");
-      addCandidate(en ? "No comment. Especially about that one person." : "Nincs komment. Főleg arról az egy emberről.", "relationship");
-      addCandidate(en ? "I should probably stop checking whether they're around." : "Valószínűleg abba kéne hagynom, hogy mindig megnézzem, ott van-e.", "relationship");
-    } else if (targetName) {
-      addCandidate(en ? `${targetName} is seriously testing my ability to focus.` : `${targetName} komolyan próbára teszi a koncentrációmat.`, "relationship");
-      addCandidate(en ? `I had a plan. Then ${targetName} happened.` : `Volt egy tervem. Aztán jött ${targetName}.`, "relationship");
-      addCandidate(en ? `Not blaming ${targetName}. Yet.` : `Nem ${targetName} a hibás. Még.`, "relationship");
-      addCandidate(en ? `${targetName}, stay out of my head for five minutes.` : `${targetName}, öt percre költözz ki a fejemből.`, "relationship");
+  if (!anchors.length) return null;
+
+  /* Weighted deterministic choice, but never the same topic family by default. */
+  const expanded = [];
+  anchors.forEach((row) => {
+    const copies = Math.max(1, Math.min(12, Math.round(Number(row.weight) || 1)));
+    for (let i = 0; i < copies; i += 1) expanded.push(row);
+  });
+  const anchor = expanded[seed % expanded.length] || anchors[0];
+  if (!anchor) return null;
+
+  const fact = anchor.fact;
+  const lowerFact = fact.toLowerCase();
+  const hash = commentSeedNumber(`${author.id}|${anchor.kind}|${fact}|${stats.count}|${burstKey}`);
+
+  /* Form rotation deliberately changes discourse shape across characters/turns:
+     fragment, question, two-sentence thought, direct statement, plan, aside. */
+  const forms = {
+    event: [
+      () => en ? `${fact}. Still not over that.` : `${fact}. Ezen még mindig nem vagyok túl.`,
+      () => en ? `About ${fact}: I have thoughts.` : `A(z) ${fact} témáról lenne pár gondolatom.`,
+      () => en ? `Did ${fact} really have to happen like that?` : `A(z) ${fact} tényleg csak így történhetett?`,
+      () => en ? `${fact} happened. The rest can wait.` : `${fact} megtörtént. A többi ráér.`,
+    ],
+    intent: [
+      () => en ? `Next: ${fact}. No detours.` : `Következő: ${fact}. Nincs kerülő.`,
+      () => en ? `I know what I'm doing next — ${fact}.` : `Tudom, mi jön most: ${fact}.`,
+      () => en ? `${fact}. That's the plan.` : `${fact}. Ez a terv.`,
+      () => en ? `Anyone trying to interrupt ${fact} can wait.` : `Aki meg akar szakítani a(z) ${fact} közben, várhat.`,
+    ],
+    loop: [
+      () => en ? `Still unfinished: ${fact}.` : `Még nincs lezárva: ${fact}.`,
+      () => en ? `${fact} is still sitting on my list.` : `${fact} még mindig ott van a listámon.`,
+      () => en ? `I need to settle ${fact}.` : `Le kell rendeznem ezt: ${fact}.`,
+      () => en ? `How is ${fact} still not done?` : `Hogy nincs még mindig lezárva ez: ${fact}?`,
+    ],
+    mood: [
+      () => en ? `${fact}. That's where I'm at.` : `${fact}. Most nagyjából itt tartok.`,
+      () => en ? `Current mood: ${fact}.` : `Aktuális hangulat: ${fact}.`,
+      () => en ? `Apparently today feels like ${fact}.` : `Úgy néz ki, ma ez van: ${fact}.`,
+    ],
+    goal: [
+      () => en ? `Still aiming for ${fact}.` : `Még mindig ez a cél: ${fact}.`,
+      () => en ? `${fact} isn't going to happen by itself.` : `${fact} nem fog magától összejönni.`,
+      () => en ? `One step closer to ${fact}.` : `Egy lépéssel közelebb ehhez: ${fact}.`,
+      () => en ? `Ask me again when I've got ${fact}.` : `Kérdezzetek újra, amikor megvan: ${fact}.`,
+    ],
+    like: [
+      () => en ? `Could absolutely make time for ${fact} today.` : `Erre ma simán szakítanék időt: ${fact}.`,
+      () => en ? `${fact} sounds better than whatever else I was supposed to do.` : `${fact} jobban hangzik, mint bármi, amit ma még csinálnom kéne.`,
+      () => en ? `Someone remind me why I'm not doing ${fact} right now.` : `Valaki emlékeztessen, miért nem ezt csinálom most: ${fact}.`,
+    ],
+    work: [
+      () => en ? `${fact} can have me back tomorrow.` : `${fact} holnap visszakaphat.`,
+      () => en ? `Done with ${fact} for today.` : `Mára végeztem ezzel: ${fact}.`,
+      () => en ? `Apparently ${fact} had other plans for my day.` : `Úgy tűnik, ${fact} mást tervezett a mai napommal.`,
+    ],
+    dojo: [
+      () => en ? `${fact}. Back to work.` : `${fact}. Vissza dolgozni.`,
+      () => en ? `See you at ${fact}.` : `Találkozunk itt: ${fact}.`,
+      () => en ? `${fact} is getting the rest of my energy today.` : `A maradék energiám ma ide megy: ${fact}.`,
+      () => en ? `One more round at ${fact}.` : `Még egy kör itt: ${fact}.`,
+    ],
+    city: [
+      () => en ? `${fact}, give me five quiet minutes.` : `${fact}, adj öt perc nyugalmat.`,
+      () => en ? `Out in ${fact}. That's enough context.` : `${fact}. Ennyi kontextus elég is.`,
+    ],
+    person: [
+      () => anchor.hidden
+        ? (en ? `Not naming names today.` : `Ma nem mondok neveket.`)
+        : (en ? `${anchor.targetName}. We need to talk.` : `${anchor.targetName}. Beszélnünk kell.`),
+      () => anchor.hidden
+        ? (en ? `Somebody is taking up too much space in my head.` : `Valaki túl sok helyet foglal a fejemben.`)
+        : (en ? `I blame ${anchor.targetName} for this one.` : `Ezt most ${anchor.targetName} számlájára írom.`),
+      () => anchor.hidden
+        ? (en ? `No names. They know.` : `Nincs név. Tudja, kire gondolok.`)
+        : (en ? `${anchor.targetName}, explain yourself.` : `${anchor.targetName}, magyarázd meg.`),
+    ],
+  };
+
+  const pool = forms[anchor.kind] || forms.intent;
+  let chosen = String(pool[hash % pool.length]()).replace(/\s+/g, " ").trim();
+
+  /* Concrete specificity hard gate: generic emergency text without the selected
+     anchor is not allowed. Hidden-person forms are the only deliberate exception. */
+  if (anchor.kind !== "person" || !anchor.hidden) {
+    const normalizedChosen = normalizeExactCommentGroundingText(chosen);
+    const normalizedFact = normalizeExactCommentGroundingText(fact);
+    const factTokens = socialCommentGroundingContentTokens(normalizedFact);
+    if (factTokens.length && !factTokens.some((token) => normalizedChosen.includes(token.slice(0, Math.min(6, token.length))))) {
+      chosen = en ? `${fact}.` : `${fact}.`;
     }
   }
 
-  /* Voice/personality families. These use traits only to choose HOW to speak. */
-  if (/sarcast|mock|dry|snark|szarkaszt|g[uú]nyos|cinikus|csipkel/.test(lore)) {
-    addCandidate(en ? "Brilliant. Exactly the kind of nonsense I needed today." : "Remek. Pont erre a hülyeségre volt még szükségem ma.", "sarcastic");
-    addCandidate(en ? "I have notes. None of them are polite." : "Lenne pár megjegyzésem. Egyik sem túl udvarias.", "sarcastic");
-    addCandidate(en ? "Somebody really woke up and chose nonsense." : "Valaki ma tényleg úgy kelt fel, hogy a káoszt választja.", "sarcastic");
-  }
-
-  if (/competitive|ambitious|driven|dominant|winner|champion|verseng|ambici|c[eé]ltudatos|domin[aá]ns/.test(lore)) {
-    addCandidate(en ? "Almost is still not enough." : "A majdnem még mindig nem elég.", "competitive");
-    addCandidate(en ? "Second place still sounds like losing." : "A második hely még mindig vereségnek hangzik.", "competitive");
-    addCandidate(en ? "Not interested in being close. I want it done right." : "Nem az érdekel, hogy majdnem jó legyen. Legyen rendesen megcsinálva.", "competitive");
-  }
-
-  if (/disciplin|stoic|controlled|rational|cold|reserved|fegyelmez|kim[eé]rt|racion[aá]lis|rideg/.test(lore)) {
-    addCandidate(en ? "Done is not the same as good enough." : "A kész nem ugyanaz, mint az elég jó.", "disciplined");
-    addCandidate(en ? "Quiet day. Productive day." : "Csendes nap. Hasznos nap.", "disciplined");
-    addCandidate(en ? "No excuses. Just finish it." : "Nincs kifogás. Be kell fejezni.", "disciplined");
-  }
-
-  if (/chaotic|impulsive|reckless|wild|k[aá]osz|impulz[ií]v|vakmer/.test(lore)) {
-    addCandidate(en ? "No context. It was funnier that way." : "Kontextus nélkül viccesebb.", "chaotic");
-    addCandidate(en ? "Today got weird. I approve." : "A mai nap furcsa lett. Támogatom.", "chaotic");
-    addCandidate(en ? "I regret nothing. Yet." : "Semmit sem bánok. Még.", "chaotic");
-  }
-
-  if (/flirt|teas|playful|charm|fl[oö]rt|j[aá]t[eé]kos|cs[aá]b[ií]t/.test(lore)) {
-    addCandidate(en ? "I was behaving. Briefly." : "Jól viselkedtem. Rövid ideig.", "flirty");
-    addCandidate(en ? "Bad influence? Depends who you ask." : "Rossz hatás? Attól függ, kit kérdezel.", "flirty");
-    addCandidate(en ? "Somebody is making it difficult to behave." : "Valaki nagyon megnehezíti, hogy jól viselkedjek.", "flirty");
-  }
-
-  if (/quiet|private|introvert|shy|reserved|csendes|z[aá]rk[oó]zott|visszah[uú]z[oó]d|f[eé]l[eé]nk/.test(lore)) {
-    addCandidate(en ? "Not everything needs an explanation." : "Nem kell mindent megmagyarázni.", "quiet");
-    addCandidate(en ? "Keeping the rest of this one to myself." : "A többit most megtartom magamnak.", "quiet");
-    addCandidate(en ? "Quiet is underrated." : "A csend alulértékelt.", "quiet");
-  }
-
-  if (/arrogant|cocky|conceited|superior|arrog[aá]ns|f[oö]l[eé]nyes|[oö]ntelt/.test(lore)) {
-    addCandidate(en ? "I was right. Again." : "Megint igazam volt.", "cocky");
-    addCandidate(en ? "Could pretend I'm surprised." : "Tegyek úgy, mintha meglepődtem volna?", "cocky");
-    addCandidate(en ? "Standards remain high." : "A mérce továbbra is magasan van.", "cocky");
-  }
-
-  if (/protect|loyal|ride or die|v[eé]delmez|h[uű]s[eé]ges|loj[aá]lis/.test(lore)) {
-    addCandidate(en ? "I notice more than I say." : "Többet észreveszek, mint amennyit kimondok.", "loyal");
-    addCandidate(en ? "Some people make choosing a side very easy." : "Van, aki nagyon megkönnyíti, hogy oldalt válasszak.", "loyal");
-    addCandidate(en ? "Loyalty gets simple once people show you who they are." : "A hűség egyszerűbb lesz, amikor az emberek megmutatják, kik valójában.", "loyal");
-  }
-
-  /* Public-life anchors are safer fallback topics than copying private sheets. */
-  if (dojo) {
-    addCandidate(en ? "Training clears my head better than most conversations do." : "Az edzés jobban kitisztítja a fejem, mint a legtöbb beszélgetés.", "dojo");
-    addCandidate(en ? "Technique does not fix itself." : "A technika nem javul meg magától.", "dojo");
-    addCandidate(en ? `Back to ${dojo}. Still work to do.` : `Vissza a(z) ${dojo} edzésére. Van még min dolgozni.`, "dojo");
-  }
-
-  if (job) {
-    addCandidate(en ? "Work can keep tomorrow's problems until tomorrow." : "A munka holnapi problémái maradjanak holnapra.", "work");
-    addCandidate(en ? "Officially done thinking about work for the next ten minutes." : "A következő tíz percre hivatalosan nem gondolok a munkára.", "work");
-  }
-
-  if (goals) {
-    addCandidate(en ? "One thing on my list is taking longer than it should." : "Egy dolog a listámon sokkal tovább tart, mint kellene.", "goal");
-    addCandidate(en ? "Not there yet. Still moving." : "Még nem tartok ott. De haladok.", "goal");
-  }
-
-  if (likes) {
-    addCandidate(en ? "I need more time for the things I actually enjoy." : "Több idő kéne arra, amit tényleg élvezek.", "likes");
-  }
-
-  if (city) {
-    addCandidate(en ? `Need five quiet minutes away from ${city}.` : `Kérek öt nyugodt percet ${city} nélkül.`, "city");
-  }
-
-  /* Last-resort neutral lines: varied, short, and never relationship templates. */
-  [
-    en ? "One thing at a time." : "Egyszerre egy dolog.",
-    en ? "Keeping this one brief." : "Ezt most rövidre fogom.",
-    en ? "No dramatic update. Just moving." : "Nincs nagy dráma. Csak haladok.",
-    en ? "Enough for today." : "Mára elég.",
-    en ? "Still working on it." : "Még dolgozom rajta.",
-    en ? "Some thoughts can wait." : "Van, amit ráér később kimondani.",
-  ].forEach((text) => addCandidate(text, "neutral"));
-
-  const rotated = candidates.length
-    ? candidates.slice(seed % candidates.length).concat(candidates.slice(0, seed % candidates.length))
-    : [];
-
-  let chosenRow = rotated.find((row) => row && !looksRecentlyDuplicated(row.text));
-
-  if (!chosenRow) {
-    /* If every normal candidate recently appeared, pick the least recent SHAPE
-       rather than blindly repeating candidates[0]. */
-    const scored = rotated.map((row, index) => {
-      const shape = normalizeFallbackShape(row.text);
-      let lastSeen = -1;
-      recentShapes.forEach((recentShape, recentIndex) => {
-        if (shape && recentShape === shape && lastSeen < 0) lastSeen = recentIndex;
-      });
-      return { row, lastSeen, index };
-    });
-    scored.sort((a, b) => (b.lastSeen - a.lastSeen) || (a.index - b.index));
-    chosenRow = scored[0] && scored[0].row;
-  }
-
-  let chosen = chosenRow ? chosenRow.text : (en ? "Keeping this one to myself." : "Ezt most megtartom magamnak.");
-
-  /* Emergency fallback stays text-first. A normal provider-generated post still
-     owns regular album-image behavior and the hard 1-image/24h rule. */
-  const fallbackAlbum = albumOf(author);
-  const fallbackImageIndex = fallbackAlbum.findIndex((item) =>
-    item && (String(item.vision || "").trim() || String(item.who || "").trim() || String(item.note || "").trim())
-  );
-  const fallbackImageDue =
-    fallbackStats.imageCount < AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H &&
-    fallbackStats.count >= 3 &&
-    fallbackImageIndex >= 0 &&
-    (fallbackStats.count % 4 === 3);
-
-  let fallbackImage = "";
-  if (fallbackImageDue) {
-    fallbackImage = `kep${fallbackImageIndex + 1}`;
-    const item = fallbackAlbum[fallbackImageIndex];
-    const manualCue = String(item && item.note || "").replace(/\s+/g, " ").trim();
-    if (manualCue && !looksRecentlyDuplicated(manualCue)) chosen = cut(manualCue, 150);
+  const recentWorld = (w.posts || [])
+    .filter((p) => p && p.text && !isHuman(w, p.authorId))
+    .slice(0, 50)
+    .map((p) => normalizeExactCommentGroundingText(p.text || ""))
+    .filter(Boolean);
+  const normalizedChosen = normalizeExactCommentGroundingText(chosen);
+  if (recentWorld.includes(normalizedChosen)) {
+    /* Switch form once; if that is also identical, refuse filler and let retry. */
+    chosen = String(pool[(hash + 1) % pool.length]()).replace(/\s+/g, " ").trim();
+    if (recentWorld.includes(normalizeExactCommentGroundingText(chosen))) return null;
   }
 
   return {
     posts: [{
       id: author.id,
       text: chosen,
-      image: fallbackImage,
+      image: "",
       comments: [],
       __localEmergencyFallback: true,
     }],
@@ -35981,6 +35948,17 @@ async function genFocusedWorldStep(w, triggerPayload = {}) {
     .join("\n");
 
   const selfState = (w.charMemory && w.charMemory[author.id] && w.charMemory[author.id].selfState) || {};
+  const postFormModes = [
+    "specific observation or opinion with a concrete noun/detail; no generic mood filler",
+    "one natural question or invitation tied to a concrete current fact",
+    "two-sentence mini anecdote: concrete thing first, reaction second",
+    "short direct statement built around one specific plan/person/place/activity",
+    "casual fragment/caption that only this character could plausibly post right now",
+    "small complaint/brag/joke about one concrete current detail, not an abstract vibe"
+  ];
+  const postFormHint = postFormModes[
+    commentSeedNumber(`${author.id}|post-form|${authorPostStats24h.count}|${String(triggerPayload && triggerPayload.burstKey || "")}`) % postFormModes.length
+  ];
 
   return askWorldJSON(
     w,
@@ -36074,7 +36052,11 @@ ${albumList(promptAuthor || author) || "nincs használható albumkép"}
 - A játékos helyett soha ne írj.
 
 KREATÍV KARAKTERPOSZT — HARD RULE:
+- FORM THIS TURN: ${postFormHint}. Ezt a szerkezetet használd, hogy a feed ne legyen egymás után ugyanolyan egysoros formulákból.
+- KONKRÉT ANCHOR KÖTELEZŐ: kép nélküli posztban legyen legalább egy konkrét jelenlegi személy/hely/tevékenység/terv/cél/esemény/tárgy vagy saját élethelyzet a fenti adatokból. Puszta absztrakt vibe („long day”, „some people”, „still here”, „no comment”, „quiet day”, „I have thoughts”) önmagában NEM poszt.
 - Ne gyárts generikus „still alive / long day / good vibes / training done” fillert, ha a karakterlapból vagy a friss triggerből konkrétabb, egyedibb poszt születhet.
+- TILTOTT SABLONLOGIKA: ne csak egy nevet cserélj ki ugyanabban a mondatvázban több karakter között; ne használd újra a „X is becoming a distraction / I had a plan then X / some people… / no comment… / still thinking about…” típusú scaffoldingot más névvel.
+- Ne minden poszt legyen egymondatos mottó. A kijelölt FORM THIS TURN szerint természetesen váltakozzon kérdés, rövid anekdota, konkrét terv, caption, vélemény, panasz, meghívás vagy megfigyelés.
 - Válassz egy olyan apró részletet, véleményt, konfliktust, inside joke-ot, szokást, célt, kapcsolatot, helyzetet vagy konkrét eseményrészletet, amely ettől a karaktertől felismerhetővé teszi a posztot.
 - A karakter personality + speech/voice + aktuális kapcsolat + jelenlegi világhelyzet EGYÜTT határozza meg a témát és a megfogalmazást. Egyik se írhatja felül a másikat.
 - Ha triggerelt aftermath poszt készül, előbb dolgozd fel a trigger konkrét tényét a karakter saját nézőpontjából, csak utána adj hozzá kreatív stílust.
