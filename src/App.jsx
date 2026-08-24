@@ -7067,10 +7067,29 @@ function commentWarrantsAiReply(w, post, comment, targetId) {
   const aiTurns = consecutiveAiThreadTurns(w, post, comment);
   const juice = publicSocialJuiceSignals(comment.text);
   if (!isHuman(w, comment.authorId) && aiTurns >= (juice.juicy ? 10 : 7)) return false;
-  if (row.reason.includes("mention") || row.reason.includes("parent")) return row.score >= 48;
-  if (row.reason.includes("post-author")) return row.score >= 58;
-  if (row.reason.includes("bystander")) return row.score >= (juice.juicy ? 56 : 66);
-  return row.score >= 62;
+  const climate = socialCommentClimateSnapshot(w, post);
+  const dramaShift =
+    climate.dramaLevel === "chaotic"
+      ? -10
+      : climate.dramaLevel === "high"
+        ? -6
+        : climate.dramaLevel === "low"
+          ? 9
+          : 0;
+  const publicHeat = Math.max(
+    climate.cancelPressure,
+    climate.stanEnergy,
+    climate.controversy
+  );
+  const heatShift = publicHeat >= 55 ? -5 : publicHeat >= 28 ? -2 : 0;
+
+  if (row.reason.includes("mention") || row.reason.includes("parent")) return row.score >= Math.max(38, 48 + Math.round(dramaShift * 0.35));
+  if (row.reason.includes("post-author")) return row.score >= Math.max(44, 58 + Math.round(dramaShift * 0.55));
+  if (row.reason.includes("bystander")) {
+    const base = juice.juicy ? 56 : 66;
+    return row.score >= Math.max(42, base + dramaShift + heatShift);
+  }
+  return row.score >= Math.max(46, 62 + Math.round(dramaShift * 0.7) + heatShift);
 }
 
 function findNaturalThreadReply(w, onlyPostId = "") {
@@ -13224,7 +13243,35 @@ function guaranteedPostCommentTarget(w, post) {
   if (!available) return 0;
 
   const visual = visualPostReactionProfile(w, post);
-  const requested = Math.max(1, Math.round(Number(visual.targetMin) || 4));
+  const climate = socialCommentClimateSnapshot(w, post);
+  const dramaDelta =
+    climate.dramaLevel === "chaotic"
+      ? 2
+      : climate.dramaLevel === "high"
+        ? 1
+        : climate.dramaLevel === "low"
+          ? -1
+          : 0;
+  const attentionDelta =
+    climate.attentionScore >= 150
+      ? 2
+      : climate.attentionScore >= 85
+        ? 1
+        : 0;
+  const waveDelta =
+    Math.max(climate.cancelPressure, climate.stanEnergy, climate.controversy) >= 55
+      ? 2
+      : Math.max(climate.cancelPressure, climate.stanEnergy, climate.controversy) >= 28
+        ? 1
+        : 0;
+
+  /* Dynamic social density: the app guarantees a living comment section, but
+     fame/drama only changes the SIZE of the relevant reaction pool. The model
+     still chooses COMMENT / LIKE / IGNORE character-by-character. */
+  const requested = Math.max(
+    1,
+    Math.round(Number(visual.targetMin) || 4) + dramaDelta + attentionDelta + waveDelta
+  );
   return Math.min(available, requested);
 }
 
@@ -14928,6 +14975,121 @@ function socialDecisionActionMap(w, out) {
     if (!map.has(id)) map.set(id, action);
   });
   return map;
+}
+
+/*
+ * COMMENT / REACTION SOCIAL CLIMATE
+ *
+ * This is deliberately read-only. It does not change reputation, relationships
+ * or story state; it only tells the comment/reply generators how much PUBLIC
+ * attention already exists around the author. Individual personality and the
+ * direct relationship still decide whether a specific AI supports, criticises,
+ * likes, argues or ignores.
+ */
+function socialCommentClimateSnapshot(w, postOrAuthor) {
+  if (!w || !postOrAuthor) {
+    return {
+      authorId: "",
+      dramaLevel: "balanced",
+      followers: 0,
+      popularity: 0,
+      hype: 0,
+      reputation: 0,
+      clout: 0,
+      support: 0,
+      dislike: 0,
+      controversy: 0,
+      stanEnergy: 0,
+      cancelPressure: 0,
+      playerLevel: 0,
+      globalScore: 0,
+      globalRank: "",
+      attentionScore: 0,
+    };
+  }
+
+  const authorId = String(
+    postOrAuthor.authorId !== undefined
+      ? postOrAuthor.authorId
+      : postOrAuthor.id || ""
+  );
+  const row = (w.socialStats && w.socialStats[authorId]) || {};
+  const sentiment = row.sentiment && typeof row.sentiment === "object"
+    ? row.sentiment
+    : (authorId ? publicSentimentFor(w, authorId) : {});
+  const dramaLevel = storySettingsOf(w).dramaLevel;
+  const followers = authorId ? Math.max(0, Number(displayFollowerCount(w, authorId)) || 0) : 0;
+  const popularity = Math.max(0, Number(row.popularity) || 0);
+  const hype = Math.max(0, Number(row.hype) || 0);
+  const reputation = Number(row.reputation) || 0;
+  const clout = Math.max(0, Number(row.clout) || 0);
+  const support = Math.max(0, Number(sentiment.support) || 0);
+  const dislike = Math.max(0, Number(sentiment.dislike) || 0);
+  const controversy = Math.max(0, Number(sentiment.controversy) || 0);
+  const stanEnergy = Math.max(0, Number(sentiment.stanEnergy) || 0);
+  const cancelPressure = Math.max(0, Number(sentiment.cancelPressure) || 0);
+  const progression = isHuman(w, authorId) ? playerProgressionView(w, authorId) : null;
+  const playerLevel = progression ? Math.max(1, Number(progression.level) || 1) : 0;
+  const globalScore = progression ? Math.max(0, Number(progression.globalScore) || 0) : 0;
+  const globalRank = progression ? String(progression.globalRank || "") : "";
+
+  const attentionScore = Math.max(
+    0,
+    Math.min(
+      240,
+      popularity * 0.55 +
+      hype * 0.45 +
+      clout * 0.28 +
+      Math.min(45, Math.log10(followers + 1) * 9) +
+      controversy * 0.45 +
+      Math.max(stanEnergy, cancelPressure) * 0.48 +
+      globalScore * 0.32
+    )
+  );
+
+  return {
+    authorId,
+    dramaLevel,
+    followers,
+    popularity,
+    hype,
+    reputation,
+    clout,
+    support,
+    dislike,
+    controversy,
+    stanEnergy,
+    cancelPressure,
+    playerLevel,
+    globalScore,
+    globalRank,
+    attentionScore,
+  };
+}
+
+function socialCommentClimateCard(w, postOrAuthor) {
+  const climate = socialCommentClimateSnapshot(w, postOrAuthor);
+  if (!climate.authorId) return "";
+
+  return `PUBLIC SOCIAL CLIMATE — ATTENTION, NOT PERSONALITY:
+- world drama setting: ${climate.dramaLevel}
+- public attention: ${Math.round(climate.attentionScore)}/240
+- followers: ${climate.followers}; popularity=${Math.round(climate.popularity)}; hype=${Math.round(climate.hype)}; reputation=${Math.round(climate.reputation)}; clout=${Math.round(climate.clout)}
+- current public sentiment: support=${Math.round(climate.support)}, dislike=${Math.round(climate.dislike)}, controversy=${Math.round(climate.controversy)}, stan=${Math.round(climate.stanEnergy)}, cancel=${Math.round(climate.cancelPressure)}
+${climate.playerLevel ? `- player progression: level=${climate.playerLevel}; globalScore=${Math.round(climate.globalScore)}; globalRank=${climate.globalRank || "new-face"}` : ""}
+- High fame/hype/global social rank means MORE people may notice/react; it does NOT turn enemies into fans or friends into haters.
+- High cancel pressure means criticism/pile-on is socially present, but each AI must still decide from ITS OWN personality, relationship, memory and known public facts. Loyal allies may defend, stay cautious or refuse the mob.
+- High stan/support means visible fan energy is present, but rivals/critics do not become fake supporters.
+- Drama setting changes HOW EASILY public threads escalate; it never grants permission to invent facts or break character.`;
+}
+
+function socialCharacterCustomizationRuleCard() {
+  return `BIO vs DETAILED DESCRIPTION — HARD CHARACTER CUSTOMIZATION RULE:
+- PUBLIC BIO is the short profile self-presentation: image, attitude and what the character chooses to show publicly. It can shape presentation, but it is NOT the whole personality.
+- DETAILED DESCRIPTION is represented by the character's own Personality, Traits, Speech/Voice, Goals, Fears, Likes, Secrets, Backstory, Connections, Extra/Other Information and learned memory. These are the deeper behavior instructions.
+- The character's core personality remains recognizable, while behavior TOWARD a specific person may evolve from remembered choices, previous conversations and the current relationship state.
+- Never quote private Secrets/Goals/Connections as public exposition just because they exist in the detailed description. They influence motive and tone unless the information is actually public/known/relevant.
+- Bio never overrides Detailed Description; Detailed Description never licenses leaking private facts.`;
 }
 
 function socialCommentBasisMatchesExactPost(post, basis) {
@@ -32669,6 +32831,10 @@ ${relationshipCommentAttentionCard(w, cast, post.authorId)}
 
 ${strictSocialActorCapsules(w, cast, post)}
 
+${socialCharacterCustomizationRuleCard()}
+
+${socialCommentClimateCard(w, post)}
+
 ${socialShortStatusCharacterFidelityCard(w, post)}
 
 SOCIAL REACTION DECISION FIRST — COMMENT / LIKE / IGNORE:
@@ -32687,6 +32853,9 @@ HARD COMMENT ARCHITECTURE:
 - NINCS kötelező SAVE/LinkedIn-formula: nem kell dicséret + hozzáadott érték + kérdés + emoji minden kommentbe. Egy rivális, barát, idősebb sensei vagy kaotikus Gen Z karakter teljesen máshogy kommentel.
 - Kérdést csak akkor tegyen fel, ha az adott reactionAct és a karakter valóban indokolja. Emoji csak akkor legyen, ha a karakter saját social hangja használja.
 - socialDecisions tömbben minden cast-szereplőhöz legfeljebb egy ACTION legyen. COMMENT sor csak COMMENT döntéshez, likes csak LIKE döntéshez tartozhat; IGNORE-nál ne hozz létre látható reakciót.
+- TELJES AUTOMATIZÁLÁS: a játékosnak nem kell külön megkérnie a karaktereket, hogy reagáljanak. Ha a social graph, a konkrét poszt, a karakter online aktivitása és a jelenlegi public climate alapján természetes, önállóan kommenteljenek/lájkoljanak/ignoráljanak.
+- NYILVÁNOS VITA: ha két karakternek tényleges nézeteltérése, rivalizálása vagy védelmi oka van, a COMMENT döntés lehet olyan mondat, amely természetesen reply-t vált ki. Ne gyárts mesterséges konfliktust csak a dráma kedvéért.
+- CANCEL / STAN CLIMATE: meglévő backlash vagy rajongói hullám növelheti a reakció valószínűségét és a nyilvános önpozicionálást, de SOHA nem írhatja felül az adott karakter saját kapcsolatát, memóriáját vagy morális/personality reakcióját.
 
 KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 
@@ -35190,6 +35359,7 @@ function fairCommentCast(w, targetId, post = null) {
 
   const target =
     charById(w, targetId);
+  const socialClimate = socialCommentClimateSnapshot(w, post || { authorId: targetId });
 
   const chars = (w.chars || [])
     .filter(
@@ -35304,11 +35474,24 @@ function fairCommentCast(w, targetId, post = null) {
         relationshipGravity.level >= 2;
 
       const activity = characterOnlineActivityProfile(w, c).comment;
+      const dramaDiscoveryMultiplier =
+        socialClimate.dramaLevel === "chaotic"
+          ? 1.42
+          : socialClimate.dramaLevel === "high"
+            ? 1.22
+            : socialClimate.dramaLevel === "low"
+              ? 0.72
+              : 1;
+      const publicAttentionMultiplier =
+        1 + Math.min(0.42, socialClimate.attentionScore / 430);
 
       const discoveryChance =
         Math.min(
-          0.72,
-          (0.18 + interest / 320) * Math.max(0.55, activity)
+          0.86,
+          (0.18 + interest / 320) *
+            Math.max(0.55, activity) *
+            dramaDiscoveryMultiplier *
+            publicAttentionMultiplier
         );
 
       const discovered =
@@ -35328,7 +35511,8 @@ function fairCommentCast(w, targetId, post = null) {
                   : 0
         ) +
         visualPriority +
-        relationshipGravity.commentPriority;
+        relationshipGravity.commentPriority +
+        Math.min(18, socialClimate.attentionScore * 0.075);
 
       return {
         c,
@@ -35668,6 +35852,8 @@ PUBLIKUS THREAD REALIZMUS:
 - BÁRMELYIK itt megadott AI beszállhat, ha hitelesen látja a threadet és van személyes oka: barátság, rivalizálás, védelem, féltékenység, érintettség, kíváncsiság, pletyka, konfliktus vagy a poszt témája.
 - Ne kényszeríts második vagy harmadik karaktert a threadbe, ha nincs oka, de ne is zárd le mesterségesen két emberre.
 - Egy szaftos nyilvános beszólásból könnyen lehet többemberes pile-on, védelem, flört, vita vagy későbbi gossip-forrás.
+- A PUBLIC SOCIAL CLIMATE befolyásolhatja, hogy több megfigyelő mer-e beszállni, DE minden beszálló külön dönt: egy lojális barát megvédhet valakit cancel-hullámban, egy rivális kritizálhat, egy konfliktuskerülő karakter pedig maradhat csendben.
+- A korábbi döntésekből/kommentekből tanult kapcsolat és emlékezet változtathatja a reakció INTENZITÁSÁT és bizalmasságát; a karakter alapvető személyisége és saját Speech/Voice stílusa ettől nem cserélődik le.
 ${forcedResponderIsDirect ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott KÖZVETLEN VÁLASZOLÓ; a legutóbbi komment neki szólt, ezért az ő reply-ja az elsődleges.` : forcedResponderIsBystander ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott HARMADIK FÉL / BYSTANDER; beszállhat a threadbe, de a legutóbbi komment NEM neki szólt.` : ""}
 
 REPLY DECISION FIRST — THREAD ARCHITEKTÚRA:
@@ -35705,6 +35891,10 @@ M
 ${target ? target.name : "?"} [${comment.authorId}]: "${comment.text}"
 
 ${strictSocialActorCapsules(w, cast, post, comment)}
+
+${socialCharacterCustomizationRuleCard()}
+
+${socialCommentClimateCard(w, post)}
 
 KOMMENTVÁLASZ-KARAKTERHŰSÉG:
 - A válaszoló teljes karakterlapja és saját emlékezete aktív.
@@ -58120,6 +58310,42 @@ function strongestSocialPostFor(
   );
 }
 
+function socialWavePersonalityBias(w, actorId, targetId, mode) {
+  const actor = socialProfileById(w, actorId);
+  if (!actor) return 0;
+
+  const corpus = [
+    actor.bio,
+    actor.personality,
+    actor.traits,
+    actor.speech,
+    actor.voice,
+    actor.extra,
+    actor.brief,
+    actor.backstory,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const gravity = relationshipSocialGravityProfile(w, actorId, targetId);
+  let score = 0;
+
+  if (/social|outgoing|extrovert|chatty|talkative|online|gossip|pletyka|dramatic|impulsive|impulzív/.test(corpus)) score += 5;
+  if (/reserved|private|quiet|shy|introvert|zárkózott|csendes|félénk|conflict[- ]?avoid|kerüli a konflikt/.test(corpus)) score -= 5;
+
+  if (mode === "cancel") {
+    if (/argumentative|confrontational|blunt|sarcastic|mocking|critical|judgmental|ruthless|hostile|aggressive|provocative|gúnyos|szarkasztikus|kritikus|konfrontatív|köteked|kíméletlen/.test(corpus)) score += 10;
+    if (/compassionate|forgiving|gentle|peacekeeper|empathetic|supportive|megbocsát|együttérző|békítő|gyengéd/.test(corpus)) score -= 8;
+    if (gravity.mode === "rival") score += 12;
+    if (["close", "friend", "crush", "possessive", "obsession"].includes(gravity.mode)) score -= 16 + gravity.level * 3;
+  } else {
+    if (/loyal|supportive|protective|devoted|ride or die|warm|friendly|compassionate|empathetic|hűséges|támogató|védelmez|odaadó|barátságos|együttérző/.test(corpus)) score += 10;
+    if (/cold|detached|apathetic|selfish|emotionless|rideg|távolságtart|közönyös|önző/.test(corpus)) score -= 5;
+    if (["close", "friend", "crush", "possessive", "obsession"].includes(gravity.mode)) score += 8 + gravity.level * 3;
+    if (gravity.mode === "rival") score -= 10;
+  }
+
+  return Math.round(score);
+}
+
 function socialSupportScore(
   w,
   actorId,
@@ -58165,7 +58391,8 @@ function socialSupportScore(
     0;
 
   let score =
-    relScore;
+    relScore +
+    socialWavePersonalityBias(w, actor.id, target.id, "support");
 
   if (
     isFollowing(
@@ -58280,7 +58507,8 @@ function socialCriticScore(
   }
 
   let score =
-    -relScore;
+    -relScore +
+    socialWavePersonalityBias(w, actor.id, target.id, "cancel");
 
   if (
     isFollowing(
@@ -58359,9 +58587,24 @@ function socialWaveCast(
         );
       });
 
+  const sentiment = publicSentimentFor(w, targetId);
+  const strength =
+    mode === "cancel"
+      ? Number(sentiment.cancelPressure) || 0
+      : Number(sentiment.stanEnergy) || 0;
+  const dramaLevel = storySettingsOf(w).dramaLevel;
+  const dramaExtra = dramaLevel === "chaotic" ? 1 : dramaLevel === "high" ? 1 : 0;
+  const castLimit = Math.max(
+    3,
+    Math.min(
+      6,
+      3 + Math.floor(strength / 30) + dramaExtra
+    )
+  );
+
   return rows.slice(
     0,
-    3
+    castLimit
   );
 }
 
@@ -60373,6 +60616,75 @@ Formátum:
 }
 
 
+function socialWavePublicEvidenceRows(w, targetId, post, limit = 6) {
+  const rows = [];
+  const add = (sourceId, value) => {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (!text) return;
+    if (rows.some((row) => normalizeExactCommentGroundingText(row.text) === normalizeExactCommentGroundingText(text))) return;
+    rows.push({ sourceId: String(sourceId || "public"), text: cut(text, 520) });
+  };
+
+  if (post) {
+    add(`post:${post.id}`, [post.text, post.imageDescription].filter(Boolean).join(" | "));
+  }
+
+  const cutoff = now() - 36 * 3600e3;
+  (w.socialEvents || [])
+    .filter((event) => event && event.visibility === "public" && Number(event.ts || 0) >= cutoff)
+    .filter((event) => {
+      if (event.actorId === targetId) return true;
+      if (Array.isArray(event.targetIds) && event.targetIds.includes(targetId)) return true;
+      const sentimentTargets = event.meta && Array.isArray(event.meta.sentimentTargetIds)
+        ? event.meta.sentimentTargetIds
+        : [];
+      return sentimentTargets.includes(targetId);
+    })
+    .slice(0, 16)
+    .forEach((event) => add(`event:${event.refId || event.id || event.type}`, event.text));
+
+  return rows.slice(0, Math.max(1, Math.min(10, Number(limit) || 6)));
+}
+
+function socialWaveEvidenceCard(w, targetId, post) {
+  const rows = socialWavePublicEvidenceRows(w, targetId, post, 6);
+  return `PUBLIC EVIDENCE — ONLY THESE FACTS MAY BE USED AS THE REASON FOR THE WAVE COMMENTS:
+${
+    rows.length
+      ? rows.map((row) => `- [${row.sourceId}] ${row.text}`).join("\n")
+      : "- no concrete public evidence available"
+  }
+- Backlash/support can react to public evidence and the character's own relationship to the target, but MUST NOT invent a new scandal, confession, receipt or private fact.`;
+}
+
+function socialWaveBasisMatchesPublicEvidence(w, targetId, post, basis) {
+  const normalizedBasis = normalizeExactCommentGroundingText(basis);
+  const words = normalizedBasis.split(/\s+/).filter(Boolean);
+  if (!normalizedBasis || words.length < 1 || words.length > 18) return false;
+  return socialWavePublicEvidenceRows(w, targetId, post, 8).some((row) => {
+    const source = normalizeExactCommentGroundingText(row.text);
+    return source && (` ${source} `).includes(` ${normalizedBasis} `);
+  });
+}
+
+function socialWaveMeaningMatchesPublicEvidence(w, targetId, post, basis, meaning) {
+  if (!socialWaveBasisMatchesPublicEvidence(w, targetId, post, basis)) return false;
+  const rawMeaning = String(meaning || "").replace(/\s+/g, " ").trim();
+  if (!rawMeaning || rawMeaning.length > 360) return false;
+  const basisTokens = socialCommentGroundingContentTokens(basis);
+  const meaningTokens = socialCommentGroundingContentTokens(rawMeaning);
+  if (!meaningTokens.length) return false;
+  if (!basisTokens.length) return true;
+  return basisTokens.some((left) => meaningTokens.some((right) => {
+    if (left === right) return true;
+    if (left.length >= 5 && right.length >= 5) {
+      const prefixLen = Math.min(6, left.length, right.length);
+      return left.slice(0, prefixLen) === right.slice(0, prefixLen);
+    }
+    return false;
+  }));
+}
+
 async function genSocialWave(
   w,
   target,
@@ -60404,6 +60716,17 @@ async function genSocialWave(
     cast.map(
       (c) => c.id
     );
+
+  const climate = socialCommentClimateSnapshot(w, post || target);
+  const desiredVisibleComments = Math.max(
+    1,
+    Math.min(
+      cast.length,
+      mode === "cancel"
+        ? (climate.cancelPressure >= 60 ? 5 : climate.cancelPressure >= 32 ? 4 : 3)
+        : (climate.stanEnergy >= 60 ? 5 : climate.stanEnergy >= 32 ? 4 : 3)
+    )
+  );
 
   const modeText =
     mode === "cancel"
@@ -60453,12 +60776,19 @@ ${target.name}: ${post.text || "[képes poszt]"}`
 
 ${modeText}
 
+${socialCommentClimateCard(w, post || target)}
+
+${socialCharacterCustomizationRuleCard()}
+
+${socialWaveEvidenceCard(w, target.id, post)}
+
 MEGSZÓLALHATÓ KARAKTEREK:
 ${cast
   .map(
     (c) =>
       `${c.name} [${c.id}]
 ${voiceCard(c)}
+${relationshipBehaviorCard(w, c.id, target.id)}
 ${characterMemoryCard(w, c)}`
   )
   .join("\n\n")}
@@ -60472,22 +60802,30 @@ ${repetitionGuard(
 SZABÁLYOK:
 - CSAK a fenti AI-karakterek nevében írj.
 - A játékos helyett SOHA ne írj.
-- Ne szólaljon meg mindenki kötelezően.
-- 1-3 rövid, valódi social-media komment legyen.
-- Legtöbbször 1-15 szó bőven elég.
+- Ne szólaljon meg mindenki kötelezően; a saját personality + Detailed Description + relationship + learned memory dönti el, ki áll be a hullámba.
+- Cél: legfeljebb ${desiredVisibleComments} külön karaktertől rövid, valódi social-media komment; ha kevesebbnek van hiteles oka, legyen kevesebb.
+- Legtöbbször 1-18 szó bőven elég.
 - Ne írj esszét vagy narrációt.
-- A hangnem legyen karakterhű.
+- Minden comment előtt válassz reactionAct-et, utána PUBLIC EVIDENCE basis-t, és csak utána fogalmazz karakterhangon.
+- A basis 1-18 egymást követő szó legyen SZÓ SZERINT a PUBLIC EVIDENCE egyik sorából; meaning röviden rögzítse, mit jelent ez a konkrét nyilvános tény.
 - Ne használj ugyanazt a mondatot vagy emoji-mintát több szereplőnél.
 - Ne találj ki olyan titkos információt, amit a karakter nem tudhat.
+- Cancel hullám NEM kollektív agymosás: barát/partner/lojális karakter kritizálhatja a konkrét tettet, megvédheti a célpontot, megtagadhatja a pile-ont vagy csendben maradhat, ahogy a saját kánonja diktálja.
+- Support hullám NEM kollektív rajongás: rivális/ellenség nem hype-ol automatikusan csak azért, mert a célpont népszerű.
 - ${mode === "cancel"
-  ? "A kritika lehet kemény vagy gúnyos, de ne legyen mindenki ugyanúgy dühös."
-  : "A támogatás lehet védelem, hype, száraz beszólás az ellenzőknek vagy egyszerű kiállás."}
+  ? "A kritika csak a megadott nyilvános tényre épülhet. Lehet kemény, gúnyos, csalódott, szkeptikus vagy távolságtartó, de ne találj ki új vádat/receipteket."
+  : "A támogatás lehet védelem, hype, száraz beszólás az ellenzőknek, konkrét tény helyretétele vagy egyszerű kiállás — az adott karakter saját hangján."}
 
 Formátum:
 {
   "comments":[
     {
       "id":"karakter azonosítója",
+      "social_contract":"v1",
+      "decision":"COMMENT",
+      "reactionAct":"answer|agree|disagree|tease|roast|support|compliment|question|challenge|defend|correct|flirt|jealous_reaction|inside_joke|concern|sarcasm|shock|laugh|gossip_probe|callout|invite|dismiss",
+      "basis":"1-18 szó szó szerint a PUBLIC EVIDENCE egyik sorából",
+      "meaning":"rövid rejtett jelentés erről a konkrét nyilvános tényről",
       "text":"rövid nyilvános komment"
     }
   ]
@@ -60778,6 +61116,18 @@ function applySocialWave(
 
         if (!isHuman(n, who) && who === post.authorId) return;
 
+        const structuredComment =
+          String(comment && (comment.social_contract || comment.socialContract) || "").trim().toLowerCase() === "v1";
+        const reactionAct = normalizeSocialCommentReactionAct(comment && (comment.reactionAct || comment.reaction_act));
+        const declaredDecision = String(comment && comment.decision || "").trim().toUpperCase();
+
+        if (!structuredComment) return;
+        if (structuredComment) {
+          if (declaredDecision !== "COMMENT") return;
+          if (!reactionAct) return;
+          if (!socialWaveMeaningMatchesPublicEvidence(n, targetId, post, comment && comment.basis, comment && comment.meaning)) return;
+        }
+
         let body =
           cleanGeneratedComment(
             n,
@@ -60787,8 +61137,11 @@ function applySocialWave(
           );
 
         if (!body) return;
+        if (isUncharacteristicGenericComment(n, who, body)) return;
+        if (socialSelfClassificationContradiction(n, who, body)) return;
         body = sanitizeGeneratedDirectAddress(n, who, post.authorId, body);
         if (!body) return;
+        if (socialCommentContradictsRelationship(n, who, targetId, body, [post.text, post.imageDescription].filter(Boolean).join(" "))) return;
 
         const made = {
           id: uid(),
@@ -60801,6 +61154,10 @@ function applySocialWave(
               n,
               n.meId
             ),
+          socialContractVersion: structuredComment ? 1 : 0,
+          reactionAct: reactionAct || "",
+          groundingBasis: structuredComment ? String(comment && comment.basis || "").replace(/\s+/g, " ").trim().slice(0, 260) : "",
+          groundingMeaning: structuredComment ? String(comment && comment.meaning || "").replace(/\s+/g, " ").trim().slice(0, 360) : "",
         };
 
         post.comments = safePostComments(post);
@@ -60881,9 +61238,36 @@ function applySocialWave(
                 made.id,
               postAuthorId:
                 targetId,
+              reactionAct:
+                made.reactionAct || "",
+              groundingBasis:
+                made.groundingBasis || "",
             },
           }
         );
+
+        recordCharacterAgentAction(n, who, {
+          surface: "comment",
+          action: mode === "cancel" ? "PUBLIC_CRITICISM" : mode === "counter" ? "PUBLIC_DEFENSE" : "PUBLIC_SUPPORT",
+          targetId,
+          refId: made.id,
+          ts: made.ts,
+        });
+        rememberAboutTarget(n, who, targetId, {
+          kind: "event",
+          source: "social-wave-interaction",
+          confidence: 1,
+          text: sysLangText(
+            n,
+            who,
+            mode === "cancel"
+              ? `${nameOfIn(n, targetId)} körüli nyilvános backlashben kommenteltem.`
+              : `${nameOfIn(n, targetId)} mellett nyilvánosan kiálltam.`,
+            mode === "cancel"
+              ? `I commented during the public backlash around ${nameOfIn(n, targetId)}.`
+              : `I publicly supported ${nameOfIn(n, targetId)}.`
+          ),
+        });
       }
     );
   }
