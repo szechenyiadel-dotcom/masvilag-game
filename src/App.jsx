@@ -14406,11 +14406,16 @@ function socialPostQuestionMode(post) {
       .filter(Boolean);
 
   const short =
-    words.length <= 7;
+    words.length <= 9;
+
+  const endsAsQuestion =
+    /\?(?:[.!…\"'”’\)\]]*)$/.test(
+      raw
+    );
 
   if (
     short &&
-    /^(?:party|party\s+tonight|party\s+later|party\s+tomorrow)\s*\?*$/i.test(
+    /^(?:party|party\s+tonight|party\s+later|party\s+tomorrow)\s*\?*[.!…]*$/i.test(
       raw
     )
   ) {
@@ -14420,10 +14425,8 @@ function socialPostQuestionMode(post) {
   if (
     short &&
     (
-      /\?$/.test(
-        raw
-      ) ||
-      /^(?:who|what|where|when|why|how|anyone|somebody|drinks?|dinner|lunch|coffee|movie|movies|club|beach|shopping|training|workout|game|trip|road\s+trip|hang\s*out)\b/i.test(
+      endsAsQuestion ||
+      /^(?:who|what|where|when|why|how|is|are|am|do|does|did|can|could|would|will|should|anyone|someone|somebody|drinks?|dinner|lunch|coffee|movie|movies|club|beach|shopping|training|workout|game|trip|road\s+trip|hang\s*out)\b/i.test(
         raw
       )
     )
@@ -14911,6 +14914,15 @@ function socialCommentMeaningMatchesExactPost(post, basis, meaning) {
   const meaningTokens = socialCommentGroundingContentTokens(rawMeaning);
   if (!meaningTokens.length) return false;
 
+  /* A short direct question often has a perfectly correct semantic paraphrase
+     with zero literal token overlap (e.g. "up for some fun?" -> "the author
+     is inviting people to do something"). The literal BASIS is already hard-
+     checked above, and the visible reply is checked separately below. Do not
+     reject the whole comment only because hidden MEANING used a synonym. */
+  if (socialPostQuestionMode(post) !== "none") {
+    return true;
+  }
+
   const tokenOverlap = (a, b) =>
     a.some((left) => b.some((right) => {
       if (left === right) return true;
@@ -15197,6 +15209,34 @@ function socialCommentTextEchoesBasis(post, basis, value) {
   );
 }
 
+function socialCommentLooksLikeDirectShortQuestionResponse(post, value) {
+  const mode = socialPostQuestionMode(post);
+  if (mode === "none") return true;
+
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  if (!raw) return false;
+
+  if (mode === "party-question") {
+    return !socialCommentHasPartyQuestionTopicDrift(raw) ||
+      socialCommentMatchesPartyQuestionTopic(raw);
+  }
+
+  const postTokens = socialCommentGroundingContentTokens(post && post.text || "");
+  const replyTokens = socialCommentGroundingContentTokens(raw);
+  const overlaps = postTokens.some((left) =>
+    replyTokens.some((right) =>
+      left === right ||
+      (left.length >= 5 && right.length >= 5 && left.slice(0, 5) === right.slice(0, 5))
+    )
+  );
+  if (overlaps) return true;
+
+  /* Natural answer / clarification / acceptance / refusal / invitation forms.
+     This is intentionally broad: it rejects obvious topic drift, not human
+     conversational shorthand such as "I'm in" or "what did you have in mind?". */
+  return /^(?:yes|yeah|yep|yup|sure|sure\s+thing|maybe|probably|absolutely|definitely|nah|nope|no|never|why\s+not|depends|bet|fine|okay|ok|i['’]?m\s+(?:in|down|out|free|game)|im\s+(?:in|down|out|free|game)|i['’]?d\s+(?:be\s+)?(?:in|down|go|come|join)|id\s+(?:be\s+)?(?:in|down|go|come|join)|you\s+know\s+i['’]?m\s+(?:in|down)|count\s+me\s+in|say\s+less|say\s+when|where\??|when\??|who\??|why\??|how\??|what\??|doing\s+what\??|what\s+(?:did\s+you\s+have\s+in\s+mind|do\s+you\s+have\s+in\s+mind|kind|time|are\s+we\s+doing|is\s+the\s+plan)|where\s+are\s+we\s+going|when\s+and\s+where|tell\s+me\s+more|sounds?\s+(?:good|fun|interesting)|i\s+can\s+be\s+convinced|let['’]?s\b|come\b|send\b|i\s+can\b|i['’]?ll\b|you\s+mean\b|are\s+you\b|do\s+you\b|want\s+to\b)/i.test(raw);
+}
+
 function socialCommentGroundedInExactPost(
   w,
   post,
@@ -15282,6 +15322,16 @@ function socialCommentGroundedInExactPost(
       post
     ) &&
     socialCommentLooksContextlessConfrontational(
+      raw
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    mode === "short-question" &&
+    !socialCommentLooksLikeDirectShortQuestionResponse(
+      post,
       raw
     )
   ) {
@@ -33585,6 +33635,78 @@ JSON ONLY:
   }
 }
 
+async function repairImmediatePlayerPostComments(w, post, minComments = 2, maxComments = 4) {
+  if (!w || !post || post.authorId !== w.meId) return null;
+
+  const already = topLevelAiCommenterIds(w, post);
+  const wanted = Math.max(1, Math.min(4, Math.round(Number(minComments) || 2)));
+  const candidates = fairCommentCast(w, post.authorId, post)
+    .filter((c) => c && !already.has(c.id) && c.id !== post.authorId)
+    .slice(0, Math.max(wanted, Math.min(5, Math.round(Number(maxComments) || 4))));
+
+  if (!candidates.length) return null;
+
+  const meaning = (post.socialMeaning && typeof post.socialMeaning === "object")
+    ? normalizeSocialPostMeaning(w, post, post.socialMeaning)
+    : fallbackSocialPostMeaning(w, post);
+  const th = threadOf(w, post);
+
+  const out = await askWorldJSONInteractive(
+    w,
+    engineFor(w),
+    `${worldContext(w, candidates.map((c) => c.id), true, null, {
+      includePlayer: true,
+      includeRecentWorld: false,
+      socialScope: true,
+      agentPrivacyScope: true,
+    })}
+
+IMMEDIATE PLAYER-POST COMMENT REPAIR — THIS MUST PRODUCE VISIBLE, NATURAL REACTIONS NOW.
+POST ID: ${post.id}
+POST AUTHOR: ${nameOfIn(w, post.authorId)} [${post.authorId}]
+VISIBLE POST: "${String(post.text || "").slice(0, 1000)}"
+${socialPostHasVisibleImage(post) && post.imageDescription ? `VISIBLE IMAGE: ${String(post.imageDescription).slice(0, 900)}` : ""}
+
+${socialPostMeaningCard(w, post, meaning)}
+${socialCommentExactPostGroundingCard(w, post)}
+${socialNsfwContextCard(w, candidates.map((c) => c.id), [post.authorId])}
+
+ELIGIBLE COMMENTERS:
+${candidates.map((c) => `- ${c.name} [${c.id}]
+${relationshipBehaviorCard(w, c.id, post.authorId)}
+${commentGenerationStyleCard(w, c)}`).join("\n")}
+
+${strictSocialActorCapsules(w, candidates, post)}
+
+HARD TASK:
+- Return ${Math.min(wanted, candidates.length)} DIFFERENT top-level COMMENT rows now. Do not return LIKE/IGNORE instead in this emergency first-wave repair.
+- Every row must be a normal social-media comment, usually 1–12 words. No narration, no *actions*, no roleplay prose.
+- Directly answer/react to THIS exact post. If it is a short invitation/question, natural shorthand like "I'm in", "depends — what did you have in mind?", "where?" or a character-specific refusal is valid. Do NOT mechanically repeat the post.
+- basis = 1–18 consecutive words copied literally from THIS post or confirmed visible image.
+- meaning = short hidden semantic paraphrase. It does NOT need to reuse the same vocabulary as basis.
+- reactionAct must be one valid social reaction act.
+- Relationship/personality changes tone, not topic.
+- One comment per character. No reply_to. No unrelated third-person drama.
+
+JSON ONLY:
+{"comments":[{"id":"exact eligible id","social_contract":"v1","decision":"COMMENT","reactionAct":"answer|agree|disagree|tease|roast|support|compliment|question|challenge|defend|correct|flirt|jealous_reaction|inside_joke|concern|sarcasm|shock|laugh|gossip_probe|callout|invite|dismiss","basis":"exact consecutive words from post/image","meaning":"hidden semantic meaning","text":"natural comment","reply_to":"","trigger":"player-post-immediate"}],"likes":[],"socialDecisions":[]}${TAIL}`,
+    {
+      maxTokens: Math.max(700, Math.min(1400, 260 * Math.min(candidates.length, wanted + 1))),
+      maxTries: 2,
+      maxSystemChars: 6500,
+      maxPromptChars: 52000,
+    }
+  );
+
+  const normalized = out && typeof out === "object"
+    ? out
+    : { comments: [], likes: [], socialDecisions: [] };
+  normalized.__castIds = candidates.map((c) => c.id);
+  normalized.__postMeaning = meaning;
+
+  return { out: normalized, label: th.label };
+}
+
 function normalizePerceptionConfidence(value) {
   const n = Number(value);
 
@@ -38676,6 +38798,101 @@ JSON:
 {"posts":[{"id":"${author.id}","social_contract":"v1","decision":"POST","postReason":"1 rövid konkrét ok, amiért MOST posztol","postType":"egy engedélyezett post type","anchorType":"egy engedélyezett anchor type","anchorId":"valódi forrás ID vagy üres","anchorBasis":"2-18 szavas rejtett konkrét valóság-anchor, NEM karakterlap-másolat","audienceIntent":"pl. vent / share / tease / inform / invite / ask / react","targetIds":["csak valóban érintett karakter ID-k"],"publicKnowledgeOnly":true,"engagementIntent":"none|question|invite|challenge|opinion_request","text":"a LÁTHATÓ természetes poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}],"relationshipUpdates":[]}${TAIL}`,
     { maxTokens: 900 }
   );
+}
+
+async function repairImmediatePlayerPostFeedPost(w, triggerPayload = {}) {
+  if (!w || String(triggerPayload && triggerPayload.trigger || "") !== "player-post") return null;
+
+  const postId = String(triggerPayload && triggerPayload.postId || "");
+  const sourcePost = (w.posts || []).find((post) => post && String(post.id) === postId && post.authorId === w.meId);
+  const author = triggerPayload && triggerPayload.authorId
+    ? charById(w, triggerPayload.authorId)
+    : null;
+
+  if (!sourcePost || !author || !characterCanAutonomouslyPost(w, author, null, {
+    allowBurst: Boolean(triggerPayload && triggerPayload.allowBurst),
+    burstKey: String(triggerPayload && triggerPayload.burstKey || ""),
+  })) {
+    return null;
+  }
+
+  const visibleSource = String(sourcePost.text || sourcePost.imageDescription || "").replace(/\s+/g, " ").trim();
+  if (!visibleSource) return null;
+
+  const anchorBasis = visibleSource
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 18)
+    .join(" ")
+    .slice(0, 260);
+
+  const result = await askWorldJSONInteractive(
+    w,
+    engineFor(w),
+    `${worldContext(w, [author.id], false, author.id, {
+      includePlayer: false,
+      includeRecentWorld: false,
+      socialScope: true,
+      agentPrivacyScope: true,
+    })}
+
+PLAYER-POST FEED REACTION REPAIR — ONE PUBLIC POST ONLY.
+SELF: ${author.name} [${author.id}]
+
+${voiceCard(author)}
+${socialSelfStyleOwnershipCard(author)}
+FULL SELF CHARACTER SHEET:
+${fullSelfCharacterSheetForSocial(w, author)}
+
+THE PLAYER JUST PUBLICLY POSTED:
+"${visibleSource.slice(0, 1200)}"
+
+TASK:
+- Write ONE standalone public social post from ${author.name} that makes human sense immediately after seeing that public post.
+- It may directly react, lightly subtweet, answer with a public invitation/joke/opinion, or let the player's post spark a concrete current-life thought of SELF.
+- Do not say "I saw your post", do not quote system metadata, and do not repeat the player's full caption.
+- Do not force obsession with the player; keep ${author.name}'s own personality and public style.
+- No generic filler, no profile-field dump, no "some people...", no "we need to talk", no marketing CTA.
+- If the player's post is a short invitation/question, a natural public answer/parallel plan is better than a cryptic monologue.
+- No invented private knowledge.
+- Text only in this repair; no image.
+
+JSON ONLY:
+{"text":"one natural public post"}${TAIL}`,
+    {
+      maxTokens: 420,
+      maxTries: 2,
+      maxSystemChars: 6500,
+      maxPromptChars: 42000,
+    }
+  );
+
+  const text = String(result && result.text || "").replace(/\s+/g, " ").trim();
+  if (!text || !socialAutonomousPostTextMakesSense(w, author.id, text)) return null;
+
+  return {
+    posts: [{
+      id: author.id,
+      social_contract: "v1",
+      decision: "POST",
+      postReason: "reacting naturally to a fresh public player post",
+      postType: "event_reaction",
+      anchorType: "public_post",
+      anchorId: sourcePost.id,
+      anchorBasis,
+      audienceIntent: "react",
+      targetIds: [],
+      publicKnowledgeOnly: true,
+      engagementIntent: "none",
+      text,
+      image: "",
+      comments: [],
+    }],
+    changes: [],
+    events: [],
+    selfUpdates: [],
+    relationshipUpdates: [],
+  };
 }
 
 function applyWorldStep(n, out, postingOptions = {}) {
@@ -49921,7 +50138,7 @@ function autonomousDmReasonCandidates(w, bot) {
         const visible = [post.text, post.imageDescription].filter(Boolean).join(" | ");
         add(
           "player-post",
-          `${playerName}'s recent post: ${visible || "image post"}`,
+          visible || "image post",
           post.ts,
           142,
           post.id
@@ -50277,6 +50494,18 @@ function autonomousDmOutputMatchesReason(out, reasonContext) {
   if (text && autonomousDmLooksLikeGenericPing(text)) return false;
 
   if (!text) return true;
+
+  if (chosen.kind === "player-post" && chosen.refId) {
+    const sourcePost = (w.posts || []).find((post) => post && String(post.id) === String(chosen.refId));
+    if (sourcePost && socialPostQuestionMode(sourcePost) !== "none") {
+      /* A human reply to a short invitation/question does not need to repeat
+         the caption or say "I saw your post". Accept direct conversational
+         answers such as "depends what you had in mind". */
+      if (socialCommentLooksLikeDirectShortQuestionResponse(sourcePost, text)) {
+        return true;
+      }
+    }
+  }
 
   if (/request$/.test(String(chosen.kind || ""))) {
     if (!dmTextLooksLikeConcreteRequest(text)) return false;
@@ -50790,10 +51019,22 @@ function fallbackAutonomousDmResponse(w, bot, reasonContextOverride = null) {
   let text = "";
   switch (reason.kind) {
     case "player-post":
-      text = en
-        ? `saw your post — ${body}. what happened?`
-        : `láttam a posztod — ${body}. mi történt?`;
-      break;
+      /* If both model passes fail, skipping this optional DM is preferable to
+         exposing the hidden grounding record or sending a canned "saw your
+         post / what happened?" line. Successful model replies are validated
+         above and still arrive normally. */
+      return {
+        skip:true,
+        reasonId:reason.id,
+        reasonBasis:reason.basis,
+        text:"",
+        image:"",
+        imagePrompt:"",
+        relationshipImpact:false,
+        changes:[],
+        selfUpdates:[],
+        relationshipUpdates:[],
+      };
     case "player-note":
       text = en
         ? `your Note about ${body} — you good?`
@@ -65799,30 +66040,94 @@ async function runSimulationAction(view, update, action, addImage) {
       Math.min(maxComments, Number(action.payload && action.payload.minComments) || 2)
     );
 
-    const { out: generatedOut, label } =
-      await genComments(
-        view,
-        post,
-        {
-          minComments: quotaEnforced ? minComments : 0,
-          maxComments,
-        }
+    const isImmediatePlayerPostReaction = Boolean(
+      action.source === "player-reactive" &&
+      post.authorId === view.meId &&
+      action.payload &&
+      action.payload.coverageSource === "player-post-immediate"
+    );
+
+    let generatedOut = null;
+    let label = threadOf(view, post).label;
+
+    try {
+      /*
+       * PLAYER-POST FIRST-WAVE FAST PATH:
+       * Do not make the fresh human post wait behind the large general comment
+       * ensemble prompt. That prompt remains unchanged for every other post.
+       * The focused generator still uses the same exact-post grounding, actor
+       * capsules and relationship rules, but asks only the small first-wave cast.
+       */
+      if (isImmediatePlayerPostReaction) {
+        const focused = await repairImmediatePlayerPostComments(
+          view,
+          post,
+          minComments,
+          maxComments
+        );
+        generatedOut = focused && focused.out;
+        label = focused && focused.label || label;
+      } else {
+        const generated = await genComments(
+          view,
+          post,
+          {
+            minComments: quotaEnforced ? minComments : 0,
+            maxComments,
+          }
+        );
+        generatedOut = generated && generated.out;
+        label = generated && generated.label || label;
+      }
+    } catch (commentErr) {
+      if (!isGuaranteedCoverage) throw commentErr;
+
+      console.warn(
+        isImmediatePlayerPostReaction
+          ? "Immediate player-post focused comment generation failed; retrying through the player reaction queue:"
+          : "Guaranteed comment generation failed; entering coverage backoff:",
+        commentErr
       );
 
+      generatedOut = null;
+    }
+
     const quotaOut =
-      quotaEnforced
+      quotaEnforced && !isImmediatePlayerPostReaction
         ? await ensureAutomaticCommentQuota(view, post, generatedOut, label, minComments, maxComments)
         : generatedOut;
 
-    const out = quotaEnforced
+    let out = quotaEnforced
       ? {
           ...(quotaOut || {}),
           comments: safeAiComments(quotaOut).slice(0, maxComments),
         }
       : quotaOut;
 
-    const commentsProbe = cloneWorldState(view);
-    const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
+    let commentsProbe = cloneWorldState(view);
+    let visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
+
+    if (!visibleReactionCount && isImmediatePlayerPostReaction) {
+      try {
+        const repaired = await repairImmediatePlayerPostComments(view, post, minComments, maxComments);
+        if (repaired && repaired.out) {
+          const repairedOut = {
+            ...repaired.out,
+            comments: safeAiComments(repaired.out).slice(0, maxComments),
+          };
+          const repairedProbe = cloneWorldState(view);
+          const repairedVisible = applyComments(repairedProbe, post.id, repairedOut, repaired.label || label);
+          if (repairedVisible) {
+            out = repairedOut;
+            label = repaired.label || label;
+            commentsProbe = repairedProbe;
+            visibleReactionCount = repairedVisible;
+          }
+        }
+      } catch (repairErr) {
+        console.warn("Focused immediate player-post comment repair failed:", repairErr);
+      }
+    }
 
     if (!visibleReactionCount) {
       if (isGuaranteedCoverage) {
@@ -65874,7 +66179,17 @@ async function runSimulationAction(view, update, action, addImage) {
         .filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId))
         .map((c) => c.id);
 
-      if (refreshedPost && isGuaranteedCoverage) {
+      if (
+        refreshedPost &&
+        isGuaranteedCoverage &&
+        !isImmediatePlayerPostReaction
+      ) {
+        /*
+         * A fresh player post already has DM/feed aftermath waiting directly
+         * behind this first-wave comment action. Do not front-insert another
+         * coverage round here and starve those reactions. The normal coverage
+         * planner may fill any remaining comment target on a later scheduler beat.
+         */
         enqueueGuaranteedPostCommentCoverage(
           n,
           refreshedPost.id,
@@ -67114,10 +67429,25 @@ if (targetNote) {
      * local fallback. No other simulation lane is changed here.
      */
     try {
-      out = await genFocusedWorldStep(
-        view,
-        action.payload || {}
+      const playerPostReactionBurst = Boolean(
+        action.payload &&
+        action.payload.trigger === "player-post" &&
+        action.payload.postId &&
+        action.payload.allowBurst
       );
+
+      /*
+       * Fresh player-post aftermath gets the focused one-author generator from
+       * the FIRST attempt, not only after a failed large world generation. This
+       * keeps the visible reaction burst responsive while every other world/feed
+       * action continues using the existing full generator unchanged.
+       */
+      out = playerPostReactionBurst
+        ? await repairImmediatePlayerPostFeedPost(view, action.payload || {})
+        : await genFocusedWorldStep(
+            view,
+            action.payload || {}
+          );
     } catch (worldPostErr) {
       console.warn(
         "[autonomous-feed] provider generation failed; using local fallback",
@@ -69262,15 +69592,11 @@ const signOut = useCallback(async () => {
       /*
        * PLAYER POST REACTION CHAIN — IMMEDIATE + ORDERED
        *
-       * The old order placed the 4 generated feed posts in front of the
-       * player's comment reaction. A slow/retried burst could therefore make
-       * a fresh human post look completely ignored for minutes. It also never
-       * queued a direct DM reaction at all.
-       *
-       * Enqueue in reverse priority because player-reactive/triggered actions
-       * are front-inserted: FINAL queue order becomes
-       *   1) comments, 2) one relevant DM (when a real post reason exists),
-       *   3) distinct-author reaction posts.
+       * Fresh visible social feedback must not wait behind an optional private
+       * DM. Enqueue in reverse priority because these actions are front-inserted:
+       * FINAL queue order becomes
+       *   1) first-wave comments, 2) distinct-author reaction posts,
+       *   3) one relevant DM when a real post-grounded reason exists.
        * Nothing outside the player-post reaction lane is changed.
        */
       let queuedAny = false;
@@ -69280,16 +69606,7 @@ const signOut = useCallback(async () => {
         ? postCommentCoverageState(live, livePost)
         : { missing: 2, target: 2 };
 
-      /* Lowest of the three immediate priorities: feed aftermath. */
-      queuedAny = requestTriggeredFeedBurst(
-        "player-post",
-        event.postId,
-        { postId: event.postId },
-        4
-      ) || queuedAny;
-
-      /* Middle priority: a character who genuinely has this exact post as a
-         valid DM reason may privately react. No unrelated DM is manufactured. */
+      /* Lowest immediate priority: the optional private reaction. */
       const dmBot = live
         ? playerPostReactiveDmCandidate(live, event.postId)
         : null;
@@ -69309,8 +69626,19 @@ const signOut = useCallback(async () => {
         ) || queuedAny;
       }
 
-      /* Highest priority: the player's own post must visibly receive its
-         comment reaction before expensive feed-burst generations can delay it. */
+      /* Middle priority: visible feed aftermath from distinct AI authors. */
+      queuedAny = requestTriggeredFeedBurst(
+        "player-post",
+        event.postId,
+        { postId: event.postId },
+        4
+      ) || queuedAny;
+
+      /* Highest priority: the player's own post must visibly receive a small,
+         focused comment wave before any other reaction generation. */
+      const immediateCommentMin = Math.max(1, Math.min(3, Number(coverage.missing) || 2));
+      const immediateCommentMax = Math.max(immediateCommentMin, Math.min(5, immediateCommentMin + 2));
+
       queuedAny = requestSimulationAction(
         mkAction(
           "comments",
@@ -69318,8 +69646,8 @@ const signOut = useCallback(async () => {
           {
             postId: event.postId,
             trigger: "guaranteed-coverage",
-            minComments: Math.max(1, Math.min(20, Number(coverage.missing) || 2)),
-            maxComments: Math.max(3, Math.min(20, Math.max(Number(coverage.target) || 2, (Number(coverage.missing) || 2) + 4))),
+            minComments: immediateCommentMin,
+            maxComments: immediateCommentMax,
             allowThreadFollowup: true,
             coverageTarget: Math.max(1, Number(coverage.target) || 2),
             coverageSource: "player-post-immediate",
