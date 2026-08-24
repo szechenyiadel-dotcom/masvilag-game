@@ -9303,6 +9303,74 @@ function albumItemContext(item, maxChars = 1200) {
     .slice(0, Math.max(200, Number(maxChars) || 1200));
 }
 
+/*
+ * ALBUM POSTING METADATA BOUNDARY
+ *
+ * item.note is written by the user only to help the AI recognize/select the
+ * intended photo. It is NOT caption copy, alt text, or public image content.
+ * Keep it available to the posting model as a private recognition hint, while
+ * public feed image context contains only confirmed people + pixel-grounded vision.
+ */
+function albumPostingList(c) {
+  const a = albumOf(c);
+  if (!a.length) return "";
+
+  return a
+    .map((item, i) => {
+      const who = String(item && item.who || "").replace(/\s+/g, " ").trim();
+      const helper = String(item && item.note || "").replace(/\s+/g, " ").trim();
+      const visible = String(item && item.vision || "").replace(/\s+/g, " ").trim();
+      const details = [
+        who ? `USER-CONFIRMED PEOPLE IN IMAGE: ${who}` : "",
+        helper ? `PRIVATE ALBUM RECOGNITION HINT — INTERNAL ONLY, NEVER COPY OR PARAPHRASE AS THE CAPTION: ${helper}` : "",
+        visible ? `VISIBLE IMAGE CONTENT: ${visible}` : "",
+      ].filter(Boolean).join(" | ");
+      return `[kep${i + 1}] ${details || "image without description"}`;
+    })
+    .join(" ; ");
+}
+
+function albumPublicImageContext(item, maxChars = 1200) {
+  if (!item) return "";
+  const who = String(item.who || "").replace(/\s+/g, " ").trim();
+  const visible = String(item.vision || "").replace(/\s+/g, " ").trim();
+  return [
+    who ? `USER-CONFIRMED PEOPLE IN IMAGE: ${who}` : "",
+    visible ? `VISIBLE IMAGE CONTENT: ${visible}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ")
+    .slice(0, Math.max(200, Number(maxChars) || 1200));
+}
+
+function albumCaptionCopiesPrivateHelper(caption, item) {
+  const helper = String(item && item.note || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const text = String(caption || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!helper || !text) return false;
+
+  const normalize = (value) => String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9áéíóöőúüűàèìòùâêîôûäëïöüçñß]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const h = normalize(helper);
+  const t = normalize(text);
+  if (!h || !t) return false;
+  if (h === t) return true;
+  if (h.length >= 18 && (t.includes(h) || (t.length >= 14 && h.includes(t)))) return true;
+
+  const stop = new Set([
+    "the","and","with","from","this","that","into","over","under","near","wearing","looking",
+    "egy","az","és","hogy","van","volt","aki","ami","ahol","mellett","előtt","után","közben"
+  ]);
+  const helperTokens = [...new Set(h.split(" ").filter((x) => x.length >= 3 && !stop.has(x)))];
+  const captionTokens = new Set(t.split(" ").filter((x) => x.length >= 3 && !stop.has(x)));
+  if (helperTokens.length < 4) return false;
+  const overlap = helperTokens.filter((x) => captionTokens.has(x)).length;
+  return overlap >= 4 && overlap / helperTokens.length >= 0.72;
+}
+
 function namedCharacterIdsInImageContext(w, value, authorId = "") {
   if (!w || !value) return [];
   const low = String(value).toLowerCase();
@@ -21755,15 +21823,17 @@ function composePostImageDescriptionFromVision(
       .replace(/\s+/g, " ")
       .trim();
 
-  if (
-    people ||
-    manual
-  ) {
+  /* Album helper text stays private even after a later vision refresh. AI album
+     posts are marked with sourceAlbumItemId; only confirmed people + actual
+     pixel-grounded vision become public imageDescription for those posts. */
+  const privateAlbumHelper = Boolean(post && post.sourceAlbumItemId);
+
+  if (people || (manual && !privateAlbumHelper)) {
     return [
       people
         ? `USER-CONFIRMED PEOPLE IN IMAGE: ${people}`
         : "",
-      manual
+      manual && !privateAlbumHelper
         ? `USER-CONFIRMED IMAGE CONTEXT: ${manual}`
         : "",
       `VISIBLE IMAGE CONTENT: ${visible}`,
@@ -35463,9 +35533,11 @@ KOMMENT EMOJI:
 KÉPEK:
 
 - Akinek van Fotóalbuma, néha képet is posztolhat belőle.
-- Az albumlistában három külön képkontextus lehet: USER-CONFIRMED PEOPLE IN IMAGE = a felhasználó által biztosan megadott szereplők; USER-CONFIRMED IMAGE CONTEXT = a felhasználó plusz helyzeti megjegyzése; VISIBLE IMAGE CONTENT = az AI képelemzése. Mindhármat KÖTELEZŐ figyelembe venni.
+- Az albumlistában három külön képkontextus lehet: USER-CONFIRMED PEOPLE IN IMAGE = a felhasználó által biztosan megadott szereplők; USER-CONFIRMED IMAGE CONTEXT / PRIVATE ALBUM RECOGNITION HINT = kizárólag belső segítség a kép felismeréséhez/kiválasztásához; VISIBLE IMAGE CONTENT = az AI képelemzése.
+- ALBUM-HELPER HARD BOUNDARY: amit a felhasználó az albumképhez segítségként beírt, az NEM caption, NEM nyilvános képleírás és NEM olyan szöveg, amit ki kell írni a kép alá. Soha ne másold ki, ne idézd, ne foglald össze és ne parafrazáld automatikusan captionként.
+- A segítő szöveget csak arra használd, hogy tudd, melyik képről van szó és hogyan értelmezd a biztos kontextust. A kész caption legyen ÚJ, természetes social-media szöveg a POSZTOLÓ SAJÁT hangján arról, amit ő ténylegesen kiírna ehhez a fotóhoz.
 - A USER-CONFIRMED PEOPLE IN IMAGE névlistát biztos kánonnak kezeld. Ne vitasd felül a vision alapján, és ne találj ki helyette másik játékbeli identitást.
-- A poszt szerzője is "tudja", mi van a saját feltöltött fotóján: kik vannak rajta a biztos mező szerint, és mit látott rajta a vision. A captionnek és a későbbi kommentválaszainak is ehhez kell igazodniuk.
+- A poszt szerzője is "tudja", mi van a saját feltöltött fotóján: kik vannak rajta a biztos mező szerint, és mit látott rajta a vision. A captionnek és a későbbi kommentválaszainak a TÉNYLEGES képhez kell igazodniuk, nem az albumhoz írt segítő mondat szövegéhez.
 - A többi AI a poszt megtekintésekor ugyanezt a nyilvános képkontextust kapja, tehát felismerheti a felhasználó által megnevezett játékbeli szereplőket és reagálhat a ténylegesen látható részletekre.
 - Előbb döntsd el, MELYIK konkrét kép illik a jelenethez, és csak UTÁNA írd meg a captiont. A caption ne legyen felcserélhető egy teljesen másik képpel.
 - IMAGE SELF-VOICE LOCK: a VISIBLE IMAGE CONTENT csak vizuális tényforrás. A caption stílusát kizárólag a posts sor "id" szerinti szerző SAJÁT Personality / Traits / Speech / Voice / kor / online szokásai adják. A fotó hangulata nem változtatja minden szerzőt ugyanarra az influencer/Gen-Z hangra.
@@ -36017,7 +36089,7 @@ LEGUTÓBBI FEED:
 ${recentWorld || "-"}
 
 SAJÁT FOTÓALBUMOD:
-${albumList(promptAuthor || author) || "nincs használható albumkép"}
+${albumPostingList(promptAuthor || author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
 - ${author.name} saját gördülő 24 órás célja 12–20 poszt aktivitásától függően, DE EZ CSAK AKTIVITÁSI CÉL/PRIORITÁS, NEM PLAFON; 32 a valódi biztonsági kemény maximum.
@@ -36041,7 +36113,9 @@ ${albumList(promptAuthor || author) || "nincs használható albumkép"}
 - Ne legyen rendszer-poszt vagy mesterséges filler.
 - Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
 - Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
-- Ha albumképet választasz, ELŐBB a VISIBLE IMAGE CONTENT alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra az EGY képre illik.
+- Ha albumképet választasz, ELŐBB a VISIBLE IMAGE CONTENT + biztos szereplők + PRIVATE ALBUM RECOGNITION HINT segítségével azonosítsd a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra az EGY képre illik.
+- PRIVATE ALBUM RECOGNITION HINT HARD RULE: ez a felhasználó belső segítő szövege a kép felismeréséhez. NEM caption. A "text" mezőben TILOS szó szerint visszaadni, közeli parafrázisként újrafogalmazni vagy egyszerűen képleírássá alakítani. A captiont nulláról írd meg ${author.name} saját social hangján.
+- A caption ne az legyen, hogy mi van a képen teljes mondatban felsorolva. Használd a képet kontextusként, de azt írd, amit ${author.name} emberként ténylegesen a kép ALÁ írna.
 - KÉP + SELF HANG HARD RULE: a kép megmondja, MI látható; kizárólag ${author.name} saját Personality / Traits / Speech / Voice / kor / online szokásai mondják meg, HOGYAN captioneli. A fotó vibe-ja nem írhatja át ${author.name} személyiségét.
 - Ne használj automatikusan generikus influencer-captiont ("party ready", "good vibes", "felt cute", "another night") csak azért, mert szelfi/outfit kép van. Csak akkor ilyen a caption, ha ${author.name} saját hangjában tényleg természetes.
 - A caption legyen felcserélhetetlen: ha ugyanazt a mondatot bármely másik karakter ugyanilyen hitelesen kitehetné ugyanarra a képre, írd újra ${author.name} saját ritmusára/szókincsére.
@@ -36221,12 +36295,19 @@ function applyWorldStep(n, out, postingOptions = {}) {
       ? requestedPic
       : null;
 
+    /* The user's album note is recognition metadata only. If the provider leaks
+       it into the visible caption (including a near-copy), reject this row and
+       let the normal retry/fallback path produce a fresh caption instead. */
+    if (pic && albumCaptionCopiesPrivateHelper(postText, pic)) {
+      return;
+    }
+
     const picRef = pic ? (pic.imageId ? imageRef(pic.imageId) : pic.src) : "";
     const picId = imageIdOf(picRef);
     const picPeople = pic ? String(pic.who || "").replace(/\s+/g, " ").trim() : "";
     const picManualNote = pic ? String(pic.note || "").replace(/\s+/g, " ").trim() : "";
     const picVision = pic ? String(pic.vision || "").replace(/\s+/g, " ").trim() : "";
-    const picContext = pic ? albumItemContext(pic, 1200) : "";
+    const picContext = pic ? albumPublicImageContext(pic, 1200) : "";
     const picCharacterIds = pic
       ? namedCharacterIdsInImageContext(
           n,
