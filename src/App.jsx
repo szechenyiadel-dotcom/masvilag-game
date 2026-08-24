@@ -10649,16 +10649,16 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
 /*
  * ACTIVE SESSION FEED PULSE
  *
- * While the player is actually inside the visible app, check for the next DUE
- * AI roughly every 30 seconds. This does NOT mean the same AI posts every 30s:
- * each character has an independent 7–16 minute cooldown and a rolling-24h cap.
+ * This is only the BASE pulse. The real feed target is calculated dynamically
+ * from recent player activity + social heat below, then jittered so the world
+ * never feels like it is posting on a fixed clock.
  */
 const LIVE_WORLD_ACTIVE_POST_TARGET_MS = Math.max(
-  20 * 1000,
+  9 * 1000,
   Math.min(
-    90 * 1000,
+    60 * 1000,
     Number(import.meta.env.VITE_WORLD_ACTIVE_POST_INTERVAL_MS) ||
-      22 * 1000
+      16 * 1000
   )
 );
 
@@ -36777,16 +36777,16 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
  * A per-character cooldown below spreads posts across the whole active session.
  * Gossip-media accounts remain outside this system and keep their own cadence.
  */
-const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 32;
-const AUTONOMOUS_CHARACTER_POST_MIN_24H = 8;
+const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 48;
+const AUTONOMOUS_CHARACTER_POST_MIN_24H = 12;
 const AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H = 1;
 const AUTONOMOUS_TRIGGER_BURST_MIN_GAP_MS = 45 * 1000;
 
 /*
  * PER-CHARACTER SOCIAL RHYTHM
- * quieter = target 12 posts / rolling 24h, normal = 16, highly online = 20.
- * IMPORTANT: 12–20 is a PRIORITY TARGET, not a stop condition. Characters may
- * continue posting naturally after reaching it until the separate 32/24h hard cap.
+ * quieter = target 18 posts / rolling 24h, normal = 24, highly online = 30.
+ * IMPORTANT: 18–30 is a PRIORITY TARGET, not a stop condition. Characters may
+ * continue posting naturally after reaching it until the separate 48/24h hard cap.
  * One image / rolling 24h stays hard.
  */
 function autonomousGameDayIndex(w) {
@@ -36884,30 +36884,163 @@ function autonomousPostStatsSnapshot(w) {
 }
 
 function autonomousCharacterPostTarget24h(w, c, activityOverride = null) {
-  if (!c) return 12;
+  if (!c) return 18;
   const activity = Number.isFinite(Number(activityOverride))
     ? Number(activityOverride)
     : Number(characterOnlineActivityProfile(w, c).post) || 0;
-  if (activity >= 1.15) return 20;
-  if (activity >= 0.82) return 16;
-  return 12;
+  if (activity >= 1.15) return 30;
+  if (activity >= 0.82) return 24;
+  return 18;
+}
+
+/*
+ * REACTION-BASED POSTING HEAT
+ *
+ * This changes FREQUENCY only. It never gives a character knowledge they do
+ * not already have. Private DM activity affects only the directly involved AI;
+ * public player activity can make the wider social world more active.
+ */
+const autonomousPostingSignalCache = new WeakMap();
+
+function autonomousPlayerActivityPostingSignal(w, c = null) {
+  if (!w || !w.meId) {
+    return { heat:0, directHeat:0, lastAt:0, fameHeat:0 };
+  }
+
+  const at = now();
+  const cacheBucket = Math.floor(at / 4000);
+  const cacheKey = `${String(c && c.id || "*")}|${cacheBucket}|${Number(w.rev) || 0}|${Array.isArray(w.socialEvents) ? w.socialEvents.length : 0}`;
+  let worldCache = autonomousPostingSignalCache.get(w);
+  if (!worldCache) {
+    worldCache = new Map();
+    autonomousPostingSignalCache.set(w, worldCache);
+  }
+  if (worldCache.has(cacheKey)) {
+    return worldCache.get(cacheKey);
+  }
+  const windowMs = 30 * 60 * 1000;
+  const cutoff = at - windowMs;
+  const actorId = String(w.meId);
+  const targetCharacterId = c && c.id ? String(c.id) : "";
+  let heat = 0;
+  let directHeat = 0;
+  let lastAt = 0;
+
+  const eventWeight = (event) => {
+    const type = String(event && event.type || "").toLowerCase();
+    const tags = Array.isArray(event && event.tags)
+      ? event.tags.map((x) => String(x || "").toLowerCase())
+      : [];
+
+    if (type === "post" || tags.includes("player-post")) return 1.45;
+    if (type === "reply" || tags.includes("reply")) return 1.12;
+    if (type === "comment" || tags.includes("player-comment")) return 1.00;
+    if (type === "dm-message" || tags.includes("dm")) return 0.92;
+    if (type === "note" || tags.includes("note")) return 0.78;
+    if (type === "like" || tags.includes("player-like")) return 0.28;
+    if (type.includes("roleplay") || type.includes("scene") || type.includes("event")) return 1.08;
+    return 0.38;
+  };
+
+  for (const event of (Array.isArray(w.socialEvents) ? w.socialEvents : []).slice(0, 120)) {
+    if (!event || String(event.actorId || "") !== actorId) continue;
+    const ts = Number(event.ts) || 0;
+    if (!ts || ts < cutoff) continue;
+
+    const ageRatio = Math.max(0, Math.min(1, (at - ts) / windowMs));
+    const freshness = Math.max(0.12, 1 - ageRatio);
+    const targets = Array.isArray(event.targetIds) ? event.targetIds.map(String) : [];
+    const direct = Boolean(targetCharacterId && targets.includes(targetCharacterId));
+    const visibility = String(event.visibility || "public").toLowerCase();
+    const weight = eventWeight(event) * freshness;
+
+    /* Private activity must not create omniscient world heat. */
+    if (visibility === "private" || visibility === "group" || visibility === "limited") {
+      if (!direct) continue;
+      directHeat += weight * 1.35;
+      heat += weight * 0.55;
+    } else {
+      heat += weight;
+      if (direct) directHeat += weight * 1.15;
+    }
+
+    lastAt = Math.max(lastAt, ts);
+  }
+
+  const playerStats = w.socialStats && w.socialStats[w.meId]
+    ? w.socialStats[w.meId]
+    : {};
+  const popularity = Math.max(0, Number(playerStats.popularity) || 0);
+  const hype = Math.max(0, Number(playerStats.hype) || 0);
+  const reputation = Math.abs(Number(playerStats.reputation) || 0);
+  const aura = Math.max(0, Number(playerStats.aura) || 0);
+  const fameHeat = Math.min(1.25, (popularity + hype + reputation * 0.7 + aura * 0.35) / 170);
+
+  if (c && c.id) {
+    const gravity = relationshipSocialGravityProfile(w, c.id, w.meId);
+    const relationshipHeat = Math.min(0.9, Math.max(0, Number(gravity.level) || 0) * 0.14);
+    heat += relationshipHeat;
+    if (directHeat > 0) directHeat += relationshipHeat * 0.7;
+  }
+
+  heat += fameHeat;
+
+  const result = {
+    heat: Math.max(0, Math.min(3.6, heat)),
+    directHeat: Math.max(0, Math.min(3.0, directHeat)),
+    lastAt,
+    fameHeat,
+  };
+
+  worldCache.set(cacheKey, result);
+  if (worldCache.size > 80) {
+    const firstKey = worldCache.keys().next().value;
+    if (firstKey !== undefined) worldCache.delete(firstKey);
+  }
+  return result;
+}
+
+function autonomousDynamicFeedPulseMs(w) {
+  const active = playerIsActivelyViewingWorld();
+  const base = active ? LIVE_WORLD_ACTIVE_POST_TARGET_MS : LIVE_WORLD_POST_TARGET_MS;
+  const signal = autonomousPlayerActivityPostingSignal(w, null);
+  const epoch = Math.floor(now() / (45 * 1000));
+  const seed = commentSeedNumber(`${String(w && w.code || "world")}|feed-pulse|${epoch}`);
+  const jitter = 0.72 + (seed % 67) / 100; /* 0.72 .. 1.38 */
+  const reactionFactor = 1 / (1 + signal.heat * 0.20);
+  const target = Math.round(base * jitter * reactionFactor);
+
+  return active
+    ? Math.max(8 * 1000, Math.min(48 * 1000, target))
+    : Math.max(24 * 1000, Math.min(3 * 60 * 1000, target));
 }
 
 function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
-  if (!c) return 9 * 60 * 1000;
+  if (!c) return 6 * 60 * 1000;
   const activity = Number.isFinite(Number(activityOverride))
     ? Number(activityOverride)
     : Number(characterOnlineActivityProfile(w, c).post) || 0;
 
-  /*
-   * Real per-character posting clock. The old 7–16 minute gap plus the target
-   * acting as a hidden cap made the feed go quiet. The target is now only a
-   * fairness goal, while independent characters can post on a 4–9 minute
-   * rhythm. A separate 32/24h hard ceiling still prevents runaway spam.
-   */
-  if (activity >= 1.15) return 4 * 60 * 1000;
-  if (activity >= 0.82) return 6 * 60 * 1000;
-  return 9 * 60 * 1000;
+  /* Personality creates the base rhythm, but it is deliberately NOT a fixed
+     timer. Recent player activity, relationship gravity and social status can
+     temporarily accelerate it, while a deterministic moving jitter prevents
+     bots from lining up on exact recurring minute marks. */
+  const baseGap = activity >= 1.15
+    ? 150 * 1000
+    : activity >= 0.82
+      ? 240 * 1000
+      : 390 * 1000;
+
+  const signal = autonomousPlayerActivityPostingSignal(w, c);
+  const epoch = Math.floor(now() / (90 * 1000));
+  const seed = commentSeedNumber(`${String(c.id || c.name || "character")}|post-gap|${epoch}`);
+  const jitter = 0.68 + (seed % 73) / 100; /* 0.68 .. 1.40 */
+  const reactionFactor = 1 / (1 + signal.heat * 0.24 + signal.directHeat * 0.18);
+
+  return Math.max(
+    55 * 1000,
+    Math.round(baseGap * jitter * reactionFactor)
+  );
 }
 
 function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
@@ -37037,11 +37170,11 @@ function autonomousPostTypeInstruction(w, cast) {
   });
 
   return [
-    "PER-AI RULE: every normal AI has its OWN independent posting rhythm and rolling-24h activity target of 12–20 posts depending on online activity.",
-    "CRITICAL: 12–20 is a PRIORITY TARGET, NOT A STOP LIMIT. Reaching the target never silences the character; only the separate hard safety maximum can do that.",
-    "Hard safety maximum is 32 posts per character in any rolling 24-hour window.",
-    "Characters below 8 posts in rolling 24h have extra priority, but their own cooldown still prevents ordinary burst-spam.",
-    "Regular personal cooldown: highly online ~4 min, normal ~6 min, quieter ~9 min. Triggered aftermath bursts may temporarily use different characters sooner, but never the same character repeatedly inside one burst.",
+    "PER-AI RULE: every normal AI has its OWN dynamic posting rhythm and rolling-24h activity target of 18–30 posts depending on online activity.",
+    "CRITICAL: 18–30 is a PRIORITY TARGET, NOT A STOP LIMIT. Reaching the target never silences the character; only the separate hard safety maximum can do that.",
+    "Hard safety maximum is 48 posts per character in any rolling 24-hour window.",
+    "Characters below 12 posts in rolling 24h have extra priority.",
+    "NO FIXED POST CLOCK: personality supplies only a base rhythm. Recent player posts/comments/replies, direct DMs, relationship intensity and social status can temporarily accelerate posting, and timing is jittered so characters do not post on predictable recurring minute marks.",
     "IMAGE HARD MAX: each character may have at most 1 image post in rolling 24h. This is per character, not global.",
     "IMAGE BEHAVIOR: the 1/24h rule is a maximum, NOT a reason to avoid images. If imageSlot=OPEN, the character should genuinely use an album image sometimes. After several text posts with an unused image slot, strongly prefer a fitting image unless every remaining album image clashes with the current context.",
     "Never invent an image outside the author's own album; the caption must match the selected image's confirmed/visible context and the author's own voice.",
@@ -37060,7 +37193,7 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
     ? snapshot.get(String(c.id))
     : characterAutonomousPostStats24h(w, c.id);
 
-  /* 12–20 is deliberately NOT checked here anymore. It is a desired activity
+  /* 18–30 is deliberately NOT checked here as a cap. It is a desired activity
      target used by fairPostCast(), not a silence switch. */
   if (Number(stats.count || 0) >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) {
     return false;
@@ -37080,7 +37213,28 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
   }
 
   const lastPostAt = Number(stats.lastPostAt || 0);
-  return !lastPostAt || now() - lastPostAt >= gapMs;
+  if (!lastPostAt) return true;
+
+  const signal = autonomousPlayerActivityPostingSignal(w, c);
+  let requiredGap = gapMs;
+
+  /* A direct recent player interaction (DM/comment/reply targeted at this AI)
+     may wake that character substantially sooner without turning private facts
+     into public knowledge. The post generator's existing knowledge filters still
+     decide WHAT they are allowed to talk about. */
+  if (signal.directHeat >= 0.55 && signal.lastAt && now() - signal.lastAt <= 12 * 60 * 1000) {
+    requiredGap = Math.max(
+      32 * 1000,
+      Math.round(gapMs * Math.max(0.22, 0.52 - signal.directHeat * 0.08))
+    );
+  } else if (signal.heat >= 1.15 && signal.lastAt && now() - signal.lastAt <= 15 * 60 * 1000) {
+    requiredGap = Math.max(
+      48 * 1000,
+      Math.round(gapMs * Math.max(0.38, 0.72 - signal.heat * 0.07))
+    );
+  }
+
+  return now() - lastPostAt >= requiredGap;
 }
 
 function fairPostCast(w, options = {}) {
@@ -37102,6 +37256,8 @@ function fairPostCast(w, options = {}) {
     const overdueRatio = Math.max(1, idleMs / Math.max(1, gapMs));
     const idleHours = Math.min(72, idleMs / 3600e3);
     const afterTargetPenalty = Math.max(0, count - target) * 38;
+    const playerSignal = autonomousPlayerActivityPostingSignal(w, c);
+    const playerGravity = relationshipSocialGravityProfile(w, c.id, w.meId);
 
     const pressure =
       (belowMinimum ? 1000 : 0) +
@@ -37110,10 +37266,13 @@ function fairPostCast(w, options = {}) {
       (options && options.allowBurst ? 180 : 0) +
       overdueRatio * 120 +
       idleHours * 4 +
-      activity * 30 -
+      activity * 30 +
+      playerSignal.heat * 115 +
+      playerSignal.directHeat * 220 +
+      Math.max(0, Number(playerGravity.postPriority) || 0) * 0.55 -
       afterTargetPenalty -
       Number(stats.recentPosts48h || 0) * 3 +
-      Math.random() * 5;
+      Math.random() * 28;
 
     return { c, activity, count, lastPostAt:Number(stats.lastPostAt || 0), pressure };
   });
@@ -37219,8 +37378,8 @@ KARAKTERHŰ POSZTOLÁS:
 - A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa, occupation/job-ja, dojo/organization oldala és az is, hogy egyáltalán posztolna-e valamiről, a SAJÁT karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
-- POSZTRITMUS: minden normál AI saját, független ritmusban posztol. Online aktivitástól függő gördülő 24 órás célja 12–20 poszt, a 32-es plafon csak biztonsági hard limit; nincs közös globális feedlimit.
-- A 24 órán belül 8 poszt alatt álló AI-k kapjanak elsőbbséget, DE ugyanaz a karakter csak a saját 7–16 perces cooldownja lejárta után posztolhat újra.
+- POSZTRITMUS: minden normál AI saját, DINAMIKUS és kiszámíthatatlan ritmusban posztol. Online aktivitástól függő gördülő 24 órás célja 18–30 poszt, a 48-as plafon csak biztonsági hard limit; nincs közös globális feedlimit.
+- A 24 órán belül 12 poszt alatt álló AI-k kapjanak elsőbbséget. NINCS fix személyes percszám: a personality/online aktivitás ad egy alapritmust, amit a friss játékos-aktivitás, közvetlen DM/comment/reply, kapcsolatintenzitás és social státusz ideiglenesen gyorsíthat, a jitter pedig szándékosan kiszámíthatatlanná tesz.
 - Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
 - A FEED AKTÍV: ha a karakternek nincs különleges eseménye, akkor is posztoljon egy rövid, hétköznapi, személyiségből következő gondolatot, státuszt, kérdést, poént vagy élethelyzetet. Üres posts tömböt NE adj vissza, amikor a karakter jogosult posztolni.
 - A karaktereknek nem kell megvárniuk a játékost vagy egy drámai eseményt ahhoz, hogy posztoljanak. A saját életükből kezdeményezzenek.
@@ -38146,12 +38305,12 @@ HARD ARCHITECTURE RULES:
 - AUTONÓM STATUS UPDATE: a témát ${author.name} SAJÁT personality/speech + aktuális mood/intent/open loops + számára ténylegesen ismert friss világ-események + saját kapcsolatai/tettei együtt adják. Ne várj a játékos utasítására, és ne gyárts rendszer-fillert.
 - Ha egy friss, számára ismert történés vagy más karakter tényleges nyilvános tette érdemben érinti, természetesen reagálhat rá saját posztban; ha nem érinti, maradjon a saját életénél.
 - Fotós posztnál ugyanaz az autonóm döntés érvényes: csak olyan, az adott karakterhez és aktuális helyzethez illő saját vizuált válassz, amit a meglévő képrendszer enged. A kép ne írja felül a caption karakterhangját.
-- ${author.name} saját gördülő 24 órás célja 12–20 poszt aktivitásától függően, DE EZ CSAK AKTIVITÁSI CÉL/PRIORITÁS, NEM PLAFON; 32 a valódi biztonsági kemény maximum.
+- ${author.name} saját gördülő 24 órás célja 18–30 poszt aktivitásától függően, DE EZ CSAK AKTIVITÁSI CÉL/PRIORITÁS, NEM PLAFON; 48 a valódi biztonsági kemény maximum.
 - Normál körben a scheduler csak a saját cooldown lejárta után választ ki. Triggerelt aftermath burstben több KÜLÖNBÖZŐ AI gyorsabban is sorra kerülhet, de ugyanaz az AI egy burston belül nem ismétlődhet.
 - Ha ide kerültél, ÍRJ egy természetes posztot; ne skipelj pusztán azért, mert nincs dráma.
 - ${author.name} 24 órán belül maximum 1 képes posztot tehet ki; a többi legyen szöveges.
 - A képlimit karakterenként értendő, nem az egész feedre.
-- Ha ${author.name} még 8 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó.
+- Ha ${author.name} még 12 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó.
 - A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
 - A szöveges poszt továbbra is gyakori, DE az 1 kép/24h maximumot NE értelmezd úgy, hogy kerülnöd kell a képeket. Ha az image slot OPEN, valóban használj néha albumképet.
 - Ha fent IMAGE OPPORTUNITY = DUE, akkor HATÁROZOTTAN részesíts előnyben EGY konkrét, jelenlegi kontextushoz illő albumképet; csak akkor maradjon szöveges, ha egyik megmaradt kép sem illik hitelesen.
@@ -61017,19 +61176,19 @@ function feedNeedsFreshPost(w) {
   if (
     playerIsActivelyViewingWorld()
   ) {
+    const target = autonomousDynamicFeedPulseMs(w);
     return (
       !last ||
-      now() - last >=
-        LIVE_WORLD_ACTIVE_POST_TARGET_MS
+      now() - last >= target
     );
   }
 
-  /*
-   * Background / non-visible behavior remains exactly as before.
-   */
+  /* Background posting is dynamic too, just intentionally slower than the
+     visible-session feed. */
+  const dynamicTarget = autonomousDynamicFeedPulseMs(w);
   const target = belowMinimum
-    ? Math.min(LIVE_WORLD_POST_TARGET_MS, 90 * 1000)
-    : LIVE_WORLD_POST_TARGET_MS;
+    ? Math.min(dynamicTarget, 75 * 1000)
+    : dynamicTarget;
 
   return !last || now() - last >= target;
 }
@@ -61766,7 +61925,7 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
 
   /* A feed ugyanebben a deficit-versenyben vesz részt; nem külön VIP-sáv. */
   const feedLast = lastAiFeedPostAt(view);
-  const feedTarget = LIVE_WORLD_POST_TARGET_MS;
+  const feedTarget = autonomousDynamicFeedPulseMs(view);
   const feedElapsed = feedLast ? ts - feedLast : feedTarget * 2.2;
 
   if (permits("feed") && feedElapsed >= feedTarget) {
@@ -63041,9 +63200,8 @@ function runAutonomousFeedHeartbeat(w, update) {
    */
   const heartbeatTarget =
     playerIsActivelyViewingWorld()
-      ? LIVE_WORLD_ACTIVE_POST_TARGET_MS +
-        12 * 1000
-      : 90 * 1000;
+      ? autonomousDynamicFeedPulseMs(w) + 8 * 1000
+      : Math.max(45 * 1000, autonomousDynamicFeedPulseMs(w) + 18 * 1000);
 
   const due =
     silence >=
@@ -63063,9 +63221,8 @@ function runAutonomousFeedHeartbeat(w, update) {
 
     const liveHeartbeatTarget =
       playerIsActivelyViewingWorld()
-        ? LIVE_WORLD_ACTIVE_POST_TARGET_MS +
-          12 * 1000
-        : 90 * 1000;
+        ? autonomousDynamicFeedPulseMs(n) + 8 * 1000
+        : Math.max(45 * 1000, autonomousDynamicFeedPulseMs(n) + 18 * 1000);
 
     if (
       liveLatest &&
@@ -67538,7 +67695,7 @@ const signOut = useCallback(async () => {
         "player-post",
         event.postId,
         { postId: event.postId },
-        3
+        4
       ) || queuedAny;
 
       return queuedAny;
