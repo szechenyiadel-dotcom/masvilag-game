@@ -23590,26 +23590,77 @@ async function buildCharacterSnapIdentity(character, media) {
   return cut(parts.join("\n"), 1200);
 }
 
-function characterSnapReferenceImages(character, media, limit = 3) {
-  if (!character) return [];
-  const refs = [];
-  const add = (ref) => {
-    if (!ref || refs.length >= limit) return;
-    const resolved = String(resolveImg(ref, media) || "").trim();
-    if (
-      !resolved ||
-      (!isInlineImageData(resolved) && !/^https:\/\//i.test(resolved))
-    ) {
-      return;
-    }
-    if (!refs.includes(resolved)) refs.push(resolved);
-  };
-  add(character.avatar);
-  for (const item of albumOf(character)) {
-    if (refs.length >= limit) break;
-    if (!item) continue;
-    add(item.imageId ? imageRef(item.imageId) : (item.src || item.image || ""));
+async function snapReferenceBlobToDataUrl(blob) {
+  if (!blob || !blob.size || !String(blob.type || "").toLowerCase().startsWith("image/")) {
+    return "";
   }
+
+  if (typeof FileReader === "undefined") return "";
+
+  return await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function loadChatSnapReferenceImage(ref, media) {
+  if (!ref) return "";
+
+  const mediaId = imageIdOf(ref);
+  const cached = mediaId ? String(mediaDataUrl(media, mediaId) || "").trim() : "";
+  if (isInlineImageData(cached)) return cached;
+
+  const resolved = String(resolveImg(ref, media) || "").trim();
+  if (isInlineImageData(resolved)) return resolved;
+  if (!/^https?:\/\//i.test(resolved)) return "";
+
+  /*
+   * CHAT IMAGE REFERENCE LOADING FIX:
+   * Historical character media may resolve to /media/file/:id. The browser can
+   * display that URL with the player's authenticated session, but the image
+   * generation backend cannot reliably fetch the same protected URL itself.
+   * Load the bytes in the authenticated browser first and send a real image
+   * data URL to /ai/image instead of a session-protected media URL.
+   */
+  try {
+    const response = await fetch(resolved, {
+      method: "GET",
+      credentials: "include",
+      headers: { Accept: "image/*" },
+    });
+
+    if (!response.ok) return "";
+    const blob = await response.blob();
+    return await snapReferenceBlobToDataUrl(blob);
+  } catch (referenceErr) {
+    console.warn("Chat character reference image could not be loaded in browser:", referenceErr);
+    return "";
+  }
+}
+
+async function characterSnapReferenceImages(character, media, limit = 3) {
+  if (!character) return [];
+
+  const candidates = [
+    character.avatar,
+    ...albumOf(character).map((item) =>
+      item
+        ? (item.imageId ? imageRef(item.imageId) : (item.src || item.image || ""))
+        : ""
+    ),
+  ].filter(Boolean);
+
+  const refs = [];
+  for (const candidate of candidates) {
+    if (refs.length >= limit) break;
+    const loaded = await loadChatSnapReferenceImage(candidate, media);
+    if (loaded && isInlineImageData(loaded) && !refs.includes(loaded)) {
+      refs.push(loaded);
+    }
+  }
+
   return refs;
 }
 
@@ -23643,6 +23694,14 @@ async function generateAiChatSnap(
     media
   );
 
+  const referenceImages = await characterSnapReferenceImages(
+    character,
+    media,
+    3
+  );
+
+  const hasUsableReference = referenceImages.length > 0;
+
   const basePrompt = `Create a realistic candid smartphone snap that ${actorName} could naturally send in a private chat. ${prompt}
 
 Character identity anchor:
@@ -23652,19 +23711,16 @@ Rules:
 - phone snapshot / snap style
 - believable, grounded, social-media-realistic
 - no watermark, no text overlay, no collage
-- the sender must be recognizably the SAME fictional character/person as in the supplied profile + album reference images
-- treat the FIRST reference as the primary face/identity anchor and the remaining album references as secondary identity evidence
-- preserve facial structure, eye shape, eyebrows, nose, lips, skin tone, hair identity, age vibe and stable distinguishing features
+- ${hasUsableReference
+    ? "the sender must be recognizably the SAME fictional character/person as in the supplied profile + album reference images"
+    : "no usable pixel reference could be loaded for this request; follow the established textual identity anchor closely and do not make unnecessary identity changes"}
+${hasUsableReference
+    ? "- treat the FIRST reference as the primary face/identity anchor and the remaining album references as secondary identity evidence\n- preserve facial structure, eye shape, eyebrows, nose, lips, skin tone, hair identity, age vibe and stable distinguishing features"
+    : "- preserve every established textual appearance detail, age vibe and stable distinguishing feature available in the character identity anchor"}
 - create a NEW photograph: do not copy the exact pose, background, composition or outfit from a reference unless the chat request specifically asks for it
 - only one version of the character; no collage, no reference-image montage, no duplicate person
 - keep the person and scene consistent with the requested character and moment
 - if the prompt implies a party, coffee, mirror selfie, street, room, gym or similar, show that naturally.`;
-
-  const referenceImages = characterSnapReferenceImages(
-    character,
-    media,
-    3
-  );
 
   const payload = {
     provider: DEFAULT_IMAGE_PROVIDER,
