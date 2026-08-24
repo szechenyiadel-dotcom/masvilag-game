@@ -22815,7 +22815,7 @@ async function generateAiChatSnap(
   )
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 500);
+    .slice(0, 1400);
 
   if (!prompt) return null;
 
@@ -23667,10 +23667,6 @@ function mergeWorlds(remote, local) {
   out.players = mergeMapById(remote.players, local.players);
   out.userSettings = { ...(remote.userSettings || {}), ...(local.userSettings || {}) };
   out.playerProgression = mergePlayerProgressionMaps(remote.playerProgression || {}, local.playerProgression || {});
-  out.socialCommentEnergy = mergeSocialCommentEnergyMaps(
-    remote.socialCommentEnergy || {},
-    local.socialCommentEnergy || {}
-  );
   out.images = { ...(remote.images || {}), ...(local.images || {}) };
 
   // Az összevont vagy törölt profilok nem jöhetnek vissza a másik gépről.
@@ -23678,7 +23674,6 @@ function mergeWorlds(remote, local) {
   Object.keys(out.deleted).forEach((id) => {
     delete out.userSettings[id];
     delete out.playerProgression[id];
-    if (out.socialCommentEnergy) delete out.socialCommentEnergy[id];
   });
 
   out.chars = mergeById(remote.chars, local.chars, out.deleted);
@@ -24440,6 +24435,168 @@ function ensureStorySettings(w) {
     ...current,
   };
   return w.storySettings;
+}
+
+const DYNAMIC_STORY_BOOK_VERSION = 1;
+
+function characterCanObserveSocialEvent(w, event, actorId) {
+  if (!w || !event || !actorId || !charById(w, actorId)) return false;
+  const actor = String(actorId);
+  const source = String(event.actorId || "");
+  const targets = Array.isArray(event.targetIds) ? event.targetIds.map(String) : [];
+  const witnesses = Array.isArray(event.witnessIds) ? event.witnessIds.map(String) : [];
+  const directlyInvolved = source === actor || targets.includes(actor) || witnesses.includes(actor);
+  const visibility = String(event.visibility || "public");
+
+  if (visibility === "private" || visibility === "group" || visibility === "limited") {
+    return directlyInvolved;
+  }
+  if (visibility === "system") return false;
+  if (directlyInvolved) return true;
+
+  /* Public does not mean omniscient. Feed relevance is strongest through an
+     actual follow/relationship edge; very high-importance public events can
+     still break out into the wider network like a viral post. */
+  if (source && source !== actor && (isFollowing(w, actor, source) || linked(w, actor, source))) {
+    return true;
+  }
+  if (targets.some((id) => id && id !== actor && (isFollowing(w, actor, id) || linked(w, actor, id)))) {
+    return true;
+  }
+  return Number(event.importance || 0) >= 70;
+}
+
+function liveSocialNetworkContextCard(w, actorId, limit = 12) {
+  if (!w || !actorId) return "";
+  const cutoff = now() - 96 * 3600e3;
+  const rows = (w.socialEvents || [])
+    .filter((event) => event && Number(event.ts || 0) >= cutoff)
+    .filter((event) => characterCanObserveSocialEvent(w, event, actorId))
+    .slice(0, Math.max(1, Math.min(20, Number(limit) || 12)))
+    .map((event) => {
+      const source = event.actorId ? nameOfIn(w, event.actorId) : "world";
+      const targets = (event.targetIds || []).map((id) => nameOfIn(w, id)).filter(Boolean);
+      const targetPart = targets.length ? ` -> ${targets.join(", ")}` : "";
+      const body = cut(String(event.text || "").replace(/\s+/g, " ").trim(), 260);
+      return `- ${String(event.type || "event")}: ${source}${targetPart}${body ? ` — ${body}` : ""}`;
+    });
+
+  return `LIVE SOCIAL NETWORK CONTEXT — ONLY EVENTS THIS CHARACTER CAN REALISTICALLY KNOW:\n${rows.join("\n") || "- no recent relevant public/shared event"}\n- Public feed knowledge follows actual social proximity (follow/relationship/relevance) rather than global omniscience.\n- Private/group/limited information is visible only when this character was actually involved or a witness.`;
+}
+
+function ensureDynamicStoryBook(w) {
+  if (!w) return null;
+  ensureStorySettings(w);
+  const raw = w.storySettings.dynamicStory;
+  const book = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw
+    : { version: DYNAMIC_STORY_BOOK_VERSION, chapters: [], seenEventIds: [], updatedAt: 0 };
+
+  book.version = DYNAMIC_STORY_BOOK_VERSION;
+  book.chapters = Array.isArray(book.chapters) ? book.chapters.filter(Boolean).slice(-24) : [];
+  book.seenEventIds = [...new Set((Array.isArray(book.seenEventIds) ? book.seenEventIds : []).filter(Boolean).map(String))].slice(-1200);
+  book.updatedAt = Math.max(0, Number(book.updatedAt) || 0);
+
+  if (!book.chapters.length) {
+    book.chapters.push({
+      id: `chapter_${uid()}`,
+      number: 1,
+      title: worldLanguage(w, w.meId) === "en" ? "Chapter 1" : "1. fejezet",
+      startedAt: now(),
+      updatedAt: now(),
+      beats: [],
+    });
+  }
+
+  book.chapters.forEach((chapter, index) => {
+    chapter.number = Math.max(1, Number(chapter.number) || index + 1);
+    chapter.title = String(chapter.title || (worldLanguage(w, w.meId) === "en" ? `Chapter ${chapter.number}` : `${chapter.number}. fejezet`));
+    chapter.startedAt = Math.max(0, Number(chapter.startedAt) || 0);
+    chapter.updatedAt = Math.max(chapter.startedAt, Number(chapter.updatedAt) || 0);
+    chapter.beats = Array.isArray(chapter.beats) ? chapter.beats.filter(Boolean).slice(-40) : [];
+  });
+
+  w.storySettings.dynamicStory = book;
+  return book;
+}
+
+function dynamicStoryEventIsMeaningful(entry) {
+  if (!entry || !String(entry.text || "").trim()) return false;
+  return new Set([
+    "post", "comment", "reply", "repost", "follow", "dm-message", "group-message",
+    "note", "note-react", "popup-choice", "roleplay-initiated", "roleplay-event",
+    "roleplay-summary", "gossip-story", "rumor-evolution"
+  ]).has(String(entry.type || ""));
+}
+
+function recordDynamicStoryBeatFromSocialEvent(w, entry) {
+  if (!w || !entry || !dynamicStoryEventIsMeaningful(entry)) return null;
+  const book = ensureDynamicStoryBook(w);
+  if (!book) return null;
+
+  const eventKey = String(entry.id || entry.refId || "");
+  if (eventKey && book.seenEventIds.includes(eventKey)) return null;
+
+  let chapter = book.chapters[book.chapters.length - 1];
+  const beats = Array.isArray(chapter.beats) ? chapter.beats : [];
+  const lastBeat = beats[beats.length - 1] || null;
+  const timeGap = lastBeat ? Math.max(0, Number(entry.ts || 0) - Number(lastBeat.ts || 0)) : 0;
+  const majorTurn =
+    ["popup-choice", "roleplay-summary", "roleplay-event"].includes(String(entry.type || "")) ||
+    Number(entry.importance || 0) >= 65 || Number(entry.drama || 0) >= 70 || Number(entry.romance || 0) >= 75;
+  const shouldOpenNext = beats.length >= 24 || (beats.length >= 9 && (majorTurn || timeGap >= 12 * 3600e3));
+
+  if (shouldOpenNext) {
+    const number = Math.max(1, Number(chapter.number) || book.chapters.length) + 1;
+    chapter = {
+      id: `chapter_${uid()}`,
+      number,
+      title: worldLanguage(w, w.meId) === "en" ? `Chapter ${number}` : `${number}. fejezet`,
+      startedAt: Number(entry.ts) || now(),
+      updatedAt: Number(entry.ts) || now(),
+      beats: [],
+    };
+    book.chapters.push(chapter);
+    book.chapters = book.chapters.slice(-24);
+  }
+
+  const beat = {
+    id: eventKey || `beat_${uid()}`,
+    ts: Number(entry.ts) || now(),
+    type: String(entry.type || "event"),
+    actorId: String(entry.actorId || ""),
+    targetIds: Array.isArray(entry.targetIds) ? entry.targetIds.map(String).slice(0, 10) : [],
+    witnessIds: Array.isArray(entry.witnessIds) ? entry.witnessIds.map(String).slice(0, 12) : [],
+    visibility: String(entry.visibility || "public"),
+    importance: Number(entry.importance || 0),
+    drama: Number(entry.drama || 0),
+    romance: Number(entry.romance || 0),
+    text: cut(String(entry.text || "").replace(/\s+/g, " ").trim(), 360),
+  };
+
+  chapter.beats.push(beat);
+  chapter.beats = chapter.beats.slice(-40);
+  chapter.updatedAt = beat.ts;
+  if (eventKey) book.seenEventIds.push(eventKey);
+  book.seenEventIds = [...new Set(book.seenEventIds)].slice(-1200);
+  book.updatedAt = beat.ts;
+  return beat;
+}
+
+function dynamicStoryChapterCard(w, actorId) {
+  if (!w || !actorId) return "";
+  const book = ensureDynamicStoryBook(w);
+  if (!book || !book.chapters.length) return "";
+  const chapter = book.chapters[book.chapters.length - 1];
+  const visible = (chapter.beats || [])
+    .filter((beat) => characterCanObserveSocialEvent(w, beat, actorId))
+    .slice(-10)
+    .map((beat) => {
+      const source = beat.actorId ? nameOfIn(w, beat.actorId) : "world";
+      return `- ${String(beat.type || "event")}: ${source}${beat.text ? ` — ${beat.text}` : ""}`;
+    });
+  const en = worldLanguage(w, w.meId) === "en";
+  return `${en ? "DYNAMIC STORY CHAPTER" : "DINAMIKUS TÖRTÉNETFEJEZET"}: ${chapter.title}\n${visible.join("\n") || "-"}\n${en ? "These are accumulated consequences/continuity, not a fixed script. Let the next player decision change what happens next; never write the player's choice for them." : "Ezek felhalmozódott következmények és folytonosság, nem előre rögzített forgatókönyv. A következő játékosi döntés ténylegesen változtathassa meg a történetet; soha ne dönts a játékos helyett."}`;
 }
 
 function storyScenarioText(w, lang) {
@@ -25357,6 +25514,7 @@ function seedWorld(code) {
       dramaLevel: "balanced",
       elapsedHours: 0,
       lastTimeSkipAt: 0,
+      dynamicStory: { version: 1, chapters: [], seenEventIds: [], updatedAt: 0 },
     },
     chars,
 rels: {},
@@ -25366,7 +25524,6 @@ chats: {},
 mems: {},
 charMemory: {},
 playerProgression: {},
-socialCommentEnergy: {},
 userSettings: {},
 log: [],
 scenes: [],
@@ -25568,6 +25725,7 @@ function emptyWorld(code) {
     dramaLevel: "balanced",
     elapsedHours: 0,
     lastTimeSkipAt: 0,
+    dynamicStory: { version: 1, chapters: [], seenEventIds: [], updatedAt: 0 },
   };
   if (w.gossipSettings) w.gossipSettings.mediaMode = "local";
   return w;
@@ -30259,123 +30417,6 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
    Feed — szálas kommentekkel
    ============================================================ */
 
-/*
- * PUBLIC COMMENT ENERGY
- *
- * This resource belongs ONLY to player-authored public comments/replies.
- * AI comments, DMs, posts, Notes, Events and every other system are untouched.
- *
- * Energy regenerates lazily from timestamps, so no extra timer/scheduler is
- * introduced. One public comment/reply costs a small fixed amount.
- */
-const SOCIAL_COMMENT_ENERGY_MAX = 100;
-const SOCIAL_COMMENT_ENERGY_COST = 3;
-const SOCIAL_COMMENT_ENERGY_REGEN_MS = 60 * 1000;
-
-function socialCommentEnergySnapshot(w, playerId, at = now()) {
-  const raw =
-    w &&
-    w.socialCommentEnergy &&
-    w.socialCommentEnergy[playerId] &&
-    typeof w.socialCommentEnergy[playerId] === "object"
-      ? w.socialCommentEnergy[playerId]
-      : null;
-
-  if (!raw) {
-    return {
-      energy: SOCIAL_COMMENT_ENERGY_MAX,
-      updatedAt: Number(at) || now(),
-    };
-  }
-
-  const baseEnergy = Math.max(
-    0,
-    Math.min(
-      SOCIAL_COMMENT_ENERGY_MAX,
-      Math.round(Number(raw.energy) || 0)
-    )
-  );
-  const lastAt = Math.max(
-    0,
-    Number(raw.updatedAt) || Number(at) || now()
-  );
-  const ts = Number(at) || now();
-  const elapsed = Math.max(0, ts - lastAt);
-  const regenerated = Math.floor(
-    elapsed / SOCIAL_COMMENT_ENERGY_REGEN_MS
-  );
-
-  return {
-    energy: Math.min(
-      SOCIAL_COMMENT_ENERGY_MAX,
-      baseEnergy + regenerated
-    ),
-    updatedAt:
-      regenerated > 0
-        ? lastAt + regenerated * SOCIAL_COMMENT_ENERGY_REGEN_MS
-        : lastAt,
-  };
-}
-
-function spendSocialCommentEnergy(w, playerId, amount = SOCIAL_COMMENT_ENERGY_COST) {
-  if (!w || !playerId || !isHuman(w, playerId)) return false;
-  const cost = Math.max(1, Math.round(Number(amount) || SOCIAL_COMMENT_ENERGY_COST));
-  const snap = socialCommentEnergySnapshot(w, playerId);
-
-  if (snap.energy < cost) {
-    if (!w.socialCommentEnergy || typeof w.socialCommentEnergy !== "object" || Array.isArray(w.socialCommentEnergy)) {
-      w.socialCommentEnergy = {};
-    }
-    w.socialCommentEnergy[playerId] = {
-      energy: snap.energy,
-      updatedAt: snap.updatedAt,
-    };
-    return false;
-  }
-
-  if (!w.socialCommentEnergy || typeof w.socialCommentEnergy !== "object" || Array.isArray(w.socialCommentEnergy)) {
-    w.socialCommentEnergy = {};
-  }
-
-  w.socialCommentEnergy[playerId] = {
-    energy: snap.energy - cost,
-    updatedAt: now(),
-  };
-  return true;
-}
-
-function mergeSocialCommentEnergyMaps(remoteMap = {}, localMap = {}) {
-  const out = {};
-  const ids = new Set([
-    ...Object.keys(remoteMap || {}),
-    ...Object.keys(localMap || {}),
-  ]);
-
-  ids.forEach((id) => {
-    const a = remoteMap && remoteMap[id] && typeof remoteMap[id] === "object" ? remoteMap[id] : null;
-    const b = localMap && localMap[id] && typeof localMap[id] === "object" ? localMap[id] : null;
-    if (!a && !b) return;
-
-    const newerRow =
-      Number(b && b.updatedAt || 0) >= Number(a && a.updatedAt || 0)
-        ? b
-        : a;
-
-    out[id] = {
-      energy: Math.max(
-        0,
-        Math.min(
-          SOCIAL_COMMENT_ENERGY_MAX,
-          Math.round(Number(newerRow && newerRow.energy) || 0)
-        )
-      ),
-      updatedAt: Math.max(0, Number(newerRow && newerRow.updatedAt) || 0),
-    };
-  });
-
-  return out;
-}
-
 function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
@@ -30390,12 +30431,6 @@ function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
       : replies.slice(-5);
 
   if (!a) return null;
-
-  const commentEnergy =
-    socialCommentEnergySnapshot(
-      w,
-      w.meId
-    ).energy;
 
   const send = async () => {
     const t = txt.trim();
@@ -30480,15 +30515,6 @@ function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
             />
             <MentionBar w={w} value={txt} onChange={setTxt} compact />
           </div>
-          <span
-            className="hint mono"
-            title={tt(
-              `Komment energia: ${commentEnergy}/${SOCIAL_COMMENT_ENERGY_MAX}`,
-              `Comment energy: ${commentEnergy}/${SOCIAL_COMMENT_ENERGY_MAX}`
-            )}
-          >
-            ⚡{commentEnergy}
-          </span>
           <button
             className="btn primary tiny"
             onClick={send}
@@ -30618,12 +30644,6 @@ function Post({
   const following =
     author.id !== w.meId &&
     isFollowing(w, w.meId, author.id);
-
-  const commentEnergy =
-    socialCommentEnergySnapshot(
-      w,
-      w.meId
-    ).energy;
 
   const sendCmt = async () => {
     const t = cmt.trim();
@@ -30905,16 +30925,6 @@ function Post({
           />
           <MentionBar w={w} value={cmt} onChange={setCmt} compact />
         </div>
-
-        <span
-          className="hint mono"
-          title={tt(
-            `Komment energia: ${commentEnergy}/${SOCIAL_COMMENT_ENERGY_MAX}`,
-            `Comment energy: ${commentEnergy}/${SOCIAL_COMMENT_ENERGY_MAX}`
-          )}
-        >
-          ⚡{commentEnergy}
-        </span>
         <button
           className="btn primary tiny"
           onClick={sendCmt}
@@ -31992,6 +32002,7 @@ POST CONTEXT LOCK — EZ A KOMMENTGENERÁLÁS EGYETLEN CÉLPOSZTJA:
 - A kommentelő nem választhat másik posztot, másik botot vagy egy korábbi feed-posztot.
 - A poszt szerzője ${author ? author.name : "?"} [${post.authorId}]. Minden top-level komment ennek a személynek a posztjára reagál, hacsak a válasz kifejezetten egy már létező kommenthez van kötve.
 - Ha ugyanaz a téma több posztban is előfordult, mindig EZT a posztot és annak aktuális kommentfolyamát használd. Ne keverd össze másik poszttal.
+- FIKTÍV SOCIAL NETWORK FIGYELEM: a téged követő / veled valódi kapcsolatban álló / ebben a konkrét posztban érintett karaktereknek természetesen nagyobb oka van reagálni. A kommentcastot ne kezeld véletlen idegenek halmazaként; a social graph + konkrét téma együtt dönti el, ki figyel fel rá.
 
 POSZT — ${author ? author.name : "?"} [${post.authorId}]:
 "${post.text}"
@@ -37190,6 +37201,10 @@ TE MOST ${String(author.name || "").toUpperCase()} VAGY, ÉS SAJÁT MAGADTÓL PO
 
 ${triggerContext.text}
 
+${liveSocialNetworkContextCard(w, author.id, 12)}
+
+${dynamicStoryChapterCard(w, author.id)}
+
 ${relationshipAutonomySpotlightCard(w, author.id)}
 
 AKTUÁLIS SAJÁT ÁLLAPOTOD:
@@ -37215,6 +37230,8 @@ SAJÁT FOTÓALBUMOD:
 ${albumPostingList(promptAuthor || author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
+- FIKTÍV SOCIAL NETWORK HARD RULE: úgy viselkedj, mintha ez a konkrét univerzum saját Instagram/X/Threads-szerű hálózata lenne. ${author.name} nem chatbot-választ ad, hanem a saját életét éli online, önállóan posztol, és csak olyan friss történést használhat, amit a fenti LIVE SOCIAL NETWORK CONTEXT szerint reálisan ismer.
+- A follow/kapcsolat/frakció/barátság/rivalizálás a figyelmet és a témaválasztást is alakítja. Nyilvános esemény sem válik automatikusan minden karakter fejében ismertté; private/group/limited információ soha ne szivárogjon át jogosulatlanul.
 - AUTONÓM STATUS UPDATE: a témát ${author.name} SAJÁT personality/speech + aktuális mood/intent/open loops + számára ténylegesen ismert friss világ-események + saját kapcsolatai/tettei együtt adják. Ne várj a játékos utasítására, és ne gyárts rendszer-fillert.
 - Ha egy friss, számára ismert történés vagy más karakter tényleges nyilvános tette érdemben érinti, természetesen reagálhat rá saját posztban; ha nem érinti, maradjon a saját életénél.
 - Fotós posztnál ugyanaz az autonóm döntés érvényes: csak olyan, az adott karakterhez és aktuális helyzethez illő saját vizuált válassz, amit a meglévő képrendszer enged. A kép ne írja felül a caption karakterhangját.
@@ -38685,8 +38702,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               parent: parent || null,
             };
 
-            let commentAccepted = false;
-
             update((n) => {
               const x = n.posts.find((y) => y.id === id);
               if (!x) return;
@@ -38694,17 +38709,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               const freshActorId =
                 n.meId || actorId;
 
-              if (
-                !spendSocialCommentEnergy(
-                  n,
-                  freshActorId,
-                  SOCIAL_COMMENT_ENERGY_COST
-                )
-              ) {
-                return;
-              }
-
-              commentAccepted = true;
               x.comments = safePostComments(x);
 
               const parentComment = parent
@@ -38777,21 +38781,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   publicSentiment: playerCommentCancelRisk.publicSentiment,
                   sentimentTargetIds: [freshActorId],
                   cancelRiskSeed: playerCommentCancelRisk.risky,
-                  commentEnergyCost:
-                    SOCIAL_COMMENT_ENERGY_COST,
                 },
               });
             });
 
-            if (!commentAccepted) {
-              setErr(
-                tt(
-                  `Nincs elég komment energiád. Egy komment/válasz ${SOCIAL_COMMENT_ENERGY_COST} energiába kerül, az energia idővel visszatöltődik.`,
-                  `Not enough comment energy. Each comment/reply costs ${SOCIAL_COMMENT_ENERGY_COST} energy and energy regenerates over time.`
-                )
-              );
-              return false;
-            }
 
             /*
              * A relationship consequence a komment TARTALMÁBÓL jön.
@@ -44348,6 +44341,32 @@ function directDmOtherReferenceProfile(
   };
 }
 
+function directDmLiveContextCard(w, actor, latestPlayerText = "") {
+  if (!w || !actor) return "";
+  const adaptive = compactAdaptiveProfileForPrompt(w, actor.id, w.meId);
+  const continuity = relationshipContinuityCard(w, actor.id, w.meId);
+  const liveSocial = liveSocialNetworkContextCard(w, actor.id, 10);
+  const chapter = dynamicStoryChapterCard(w, actor.id);
+  const activeScenes = (w.scenes || [])
+    .filter((scene) => scene && !scene.archived && Array.isArray(scene.cast) && scene.cast.includes(actor.id))
+    .sort((a, b) => Number(b.updatedAt || b.ts || 0) - Number(a.updatedAt || a.ts || 0))
+    .slice(0, 3)
+    .map((scene) => `- ${scene.title || "Event"}: ${cut(scene.setting || scene.goal || "", 220)}`)
+    .join("\n");
+
+  return `REAL-TIME CONTEXT FOR THIS PRIVATE CONVERSATION:\n${liveSocial}\n${chapter}\n${continuity || ""}\nOBSERVED PLAYER PATTERN — BEHAVIORAL EVIDENCE ONLY, NEVER PRIVATE PLAYER SHEET:\n${adaptive ? JSON.stringify(adaptive) : "- not enough observed evidence yet"}\nACTIVE/RECENT SHARED EVENT CONTEXT FOR SELF:\n${activeScenes || "-"}\nLATEST PLAYER MESSAGE FOCUS:\n${cut(String(latestPlayerText || ""), 700) || "-"}\nHARD RULE: answer from what SELF actually knows now. Recent public/shared events and prior conversation may inform the reply only when relevant to the latest message; do not dump context or invent knowledge.`;
+}
+
+function contextualizeChatSnapPrompt(w, character, rawPrompt, latestPlayerText = "", historyText = "", explicitRequest = false, reasonBasis = "") {
+  const intent = cut(String(rawPrompt || "").replace(/\s+/g, " ").trim(), 520);
+  if (!intent) return "";
+  const latest = cut(String(latestPlayerText || "").replace(/\s+/g, " ").trim(), 260);
+  const recent = cut(String(historyText || "").replace(/\s+/g, " ").trim(), 700);
+  const reason = cut(String(reasonBasis || "").replace(/\s+/g, " ").trim(), 320);
+  const mode = explicitRequest ? "The player explicitly requested a picture; satisfy that exact request first." : "This is a spontaneous snap; it must have a concrete reason in the current conversation/context.";
+  return `CHAT-GROUNDED SNAP. ${mode}\nVISUAL INTENT: ${intent}\nLATEST CHAT INPUT: ${latest || "-"}\n${reason ? `CURRENT REASON: ${reason}\n` : ""}RECENT CHAT CONTINUITY: ${recent || "-"}\nHARD: depict a NEW present-moment smartphone photo that is plausible NOW. Do not invent off-screen people, events, locations, relationship milestones or activities that the chat/context did not establish. If visual intent conflicts with the current conversation, follow the conversation. Keep SELF's established identity.`;
+}
+
 function directDmSystemPrompt(
   w,
   actor
@@ -44458,6 +44477,8 @@ ${characterMemoryCard(
   w,
   actor
 ) || "none"}
+
+${directDmLiveContextCard(w, actor, playerText)}
 
 RECENT PRIVATE CHAT:
 ${String(
@@ -44738,7 +44759,7 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
     const hist = (
       requestWorld.chats[ck] || []
     )
-      .slice(-14)
+      .slice(-28)
       .map(
         (m) =>
           `${
@@ -44842,6 +44863,8 @@ ${characterMemoryCard(
   requestWorld,
   c
 ) || "semmi különös"}
+
+${directDmLiveContextCard(requestWorld, c, t)}
 
 BESZÉLGETÉS:
 ${hist}
@@ -45069,15 +45092,24 @@ Formátum:
         ? forcedChatSnapPrompt(t, c)
         : "");
 
+    const groundedGeneratedRequestPrompt = contextualizeChatSnapPrompt(
+      requestWorld,
+      c,
+      generatedRequestPrompt,
+      t,
+      hist,
+      explicitImageRequest
+    );
+
     const generatedAiSnap =
-      generatedRequestPrompt &&
+      groundedGeneratedRequestPrompt &&
       (
         !requestedReplyText ||
         explicitImageRequest
       )
         ? await generateAiChatSnap(
             c,
-            generatedRequestPrompt,
+            groundedGeneratedRequestPrompt,
             addImage,
             media
           )
@@ -45454,12 +45486,12 @@ Formátum:
      */
     if (
       requestedReplyText &&
-      generatedRequestPrompt &&
+      groundedGeneratedRequestPrompt &&
       !explicitImageRequest
     ) {
       void generateAiChatSnap(
         c,
-        generatedRequestPrompt,
+        groundedGeneratedRequestPrompt,
         addImage,
         media
       )
@@ -48028,7 +48060,7 @@ async function genDM(w, bot, reasonContextOverride = null) {
       chatKey(w.meId, bot.id)
     ] || []
   )
-    .slice(-14)
+    .slice(-28)
     .map(
       (m) =>
         `${
@@ -48145,6 +48177,8 @@ ${selfMemoryForPrompt(
   w,
   bot.id
 )}
+
+${directDmLiveContextCard(w, bot, "")}
 
 ${characterAgentRuntimeCard(
   w,
@@ -48424,7 +48458,8 @@ async function genForcedEverydayDM(w, bot, reasonContextOverride = null) {
 ${voiceCard(bot)}
 ${characterMemoryCard(w,bot)}
 ${relationshipBehaviorCard(w,bot.id,w.meId)}
-${autonomousDmWarmthInstruction(w,bot.id,(w.chats[chatKey(w.meId,bot.id)]||[]).slice(-14).map((m)=>m&&m.text||"").join("\n"))}
+${directDmLiveContextCard(w, bot, "")}
+${autonomousDmWarmthInstruction(w,bot.id,(w.chats[chatKey(w.meId,bot.id)]||[]).slice(-28).map((m)=>m&&m.text||"").join("\n"))}
 ${characterAgentRuntimeCard(w,[bot.id],{surface:"dm",targetId:w.meId,messages:w.chats[chatKey(w.meId,bot.id)]||[]})}
 
 AUTONOMOUS DM GROUNDED RETRY — NO GENERIC PING:
@@ -58760,6 +58795,11 @@ function recordSocialEvent(
     selectGossipStoryCandidate(w);
   }
 
+  /* Dynamic chapters consume the already-committed event as continuity only.
+     This never creates an action by itself; it simply lets later social/chat
+     generation remember how decisions and conversations changed the story. */
+  recordDynamicStoryBeatFromSocialEvent(w, entry);
+
   /* Advanced AI memory + player progression consume only the already-committed
      structured event. They do not alter the event itself or trigger new social
      actions, so existing feed/DM/popup scheduling remains untouched. */
@@ -64135,11 +64175,25 @@ if (targetNote) {
         ? albumIntentToGeneratedSnapPrompt(bot, legacyAlbumIntent, txt)
         : "");
 
+    const groundedSpontaneousImagePrompt = contextualizeChatSnapPrompt(
+      view,
+      bot,
+      spontaneousImagePrompt,
+      autonomousReasonContext && autonomousReasonContext.primary
+        ? autonomousReasonContext.primary.basis
+        : txt,
+      recentDmContext,
+      false,
+      autonomousReasonContext && autonomousReasonContext.primary
+        ? autonomousReasonContext.primary.basis
+        : ""
+    );
+
     const generatedAiSnap =
-      spontaneousImagePrompt
+      groundedSpontaneousImagePrompt
         ? await generateAiChatSnap(
             bot,
-            spontaneousImagePrompt,
+            groundedSpontaneousImagePrompt,
             addImage,
             media
           )
