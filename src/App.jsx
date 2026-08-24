@@ -11809,6 +11809,46 @@ function sanitizeDegenerateGeneratedCommentText(
   return text;
 }
 
+function socialGeneratedTextHasCharacterNameLoop(w, value) {
+  if (!w || !value) return false;
+
+  const normalized = normalizeExactCommentGroundingText(value);
+  if (!normalized) return false;
+
+  const headTokens = normalized.split(/\s+/).filter(Boolean).slice(0, 22);
+  if (headTokens.length < 4) return false;
+
+  return socialProfiles(w).some((person) => {
+    if (!person || !person.id) return false;
+
+    const aliasTokens = new Set();
+    [
+      person.name,
+      person.nick,
+      person.nickname,
+      person.username,
+    ]
+      .filter(Boolean)
+      .forEach((raw) => {
+        normalizeExactCommentGroundingText(raw)
+          .split(/\s+/)
+          .filter((token) => token && token.length >= 3)
+          .forEach((token) => aliasTokens.add(token));
+      });
+
+    if (!aliasTokens.size) return false;
+
+    const hits = headTokens.filter((token) => aliasTokens.has(token));
+    if (hits.length < 4) return false;
+
+    /* Four or more name/nickname tokens for the SAME person near the start of
+       one short comment is provider degeneration ("Silver, Terry, Silver...")
+       rather than natural address. Reject it and let the normal repair pass
+       regenerate the missing comment. */
+    return true;
+  });
+}
+
 function cleanGeneratedComment(w, id, text, maxLen = 240) {
   let t =
     sanitizeDegenerateGeneratedCommentText(
@@ -11828,6 +11868,10 @@ function cleanGeneratedComment(w, id, text, maxLen = 240) {
       t
     )
   ) {
+    return "";
+  }
+
+  if (socialGeneratedTextHasCharacterNameLoop(w, t)) {
     return "";
   }
 
@@ -13772,7 +13816,6 @@ function socialCommentGroundedInExactPost(
    * cannot swap in an unrelated subject from memory or another thread.
    */
   if (
-    isHuman(w, post.authorId) &&
     !socialCommentBasisMatchesExactPost(
       post,
       basis
@@ -13896,7 +13939,7 @@ EXACT-POST COMMENT GROUNDING — HIGHEST CONTENT PRIORITY:
 - Relationship is a TONE FILTER, not a substitute topic. A rival still has to react to something the post actually gives them.
 - Never manufacture an unrelated insult just to create engagement. In a scheduled comment wave, if the first idea is not grounded, simplify it into a real response to the exact post/question rather than defaulting to silence.
 - Every returned comment must pass this test: "What exact word, question, visible image detail, or parent-comment statement makes THIS sentence a sensible response?" If there is no clear answer, do not return that comment.
-- PLAYER POST GROUNDING PROOF: for every TOP-LEVEL comment under the human player's post, return a hidden basis field containing 1–18 CONSECUTIVE words copied literally from THIS exact post text or its confirmed visible image description. The comment text must directly react to that basis. Do not copy basis from another post, memory, relationship card or world event.
+- TOP-LEVEL COMMENT GROUNDING PROOF: for EVERY top-level AI comment under ANY post (player or AI), return a hidden basis field containing 1–18 CONSECUTIVE words copied literally from THIS exact post text or its confirmed visible image description. The visible comment must directly react to that basis. Do not copy basis from another post, memory, relationship card or world event.
 - BASIS→VISIBLE COMMENT LOCK: except for very short direct questions/statuses, the visible comment must explicitly echo at least ONE concrete content word/detail from its own basis (same word or obvious inflected form). A valid copied basis paired with an unrelated sentence is INVALID and will be rejected.
 - Do not hide the real topic behind a generic reaction such as “real”, “damn”, “iconic”, “you ate”, “wild”, a random insult, or relationship drama. Name/react to the actual concrete thing in the basis first; personality/relationship only changes tone.
 ${hasImage
@@ -31566,7 +31609,7 @@ HARD RULES:
 - VERY HIGH RELATIONSHIP ATTENTION IDs THAT WERE MISSED: ${missingRelationshipPriority.join(", ") || "none"}.
 - PREVIOUS RAW COMMENT IDs THAT FAILED THE APP'S HARD GROUNDING FILTER AND MUST BE REWRITTEN IF ELIGIBLE: ${rejectedRawActorIds.join(", ") || "none"}.
 - A failed raw row is NOT a reason to drop that character. Rewrite the sentence from scratch so it actually answers this exact post while keeping SELF's own voice.
-- PLAYER POST BASIS HARD RULE: every repaired TOP-LEVEL comment under the human player's post must include basis: 1–18 consecutive words copied literally from THIS exact post text or confirmed visible image description, and the repaired text must directly respond to that basis.
+- TOP-LEVEL BASIS HARD RULE: every repaired TOP-LEVEL AI comment under ANY post must include basis: 1–18 consecutive words copied literally from THIS exact post text or confirmed visible image description, and the repaired text must directly respond to that basis.
 - For any non-trivial post, the repaired visible comment must also echo at least one concrete content word/detail from that basis (or an obvious inflected form). Do not return a valid basis beside an unrelated relationship/personality line.
 - If one of the very-high relationship IDs is in ELIGIBLE CHARACTERS, prioritize them when they can respond naturally to the exact post. Hidden obsession increases attention; it does not create an unrelated topic.
 - Return EXACTLY ${Math.min(missing, candidates.length)} DIFFERENT character IDs when that many candidates are listed.
@@ -35608,6 +35651,49 @@ Formátum:
 }
 
 
+function socialPostCopiesPrivateCharacterSheetPhrase(w, authorId, value) {
+  if (!w || !authorId || !value) return false;
+  const c = charById(w, authorId);
+  if (!c) return false;
+
+  const postNorm = normalizeExactCommentGroundingText(value);
+  if (!postNorm) return false;
+  const wrappedPost = ` ${postNorm} `;
+
+  /* These fields are motivation/canon, not ready-made captions. A five-word
+     private-sheet clause copied verbatim into a post is almost always the
+     exact failure mode where Goals/Backstory becomes visible UI prose. */
+  const privateFields = [
+    c.goals,
+    c.fears,
+    c.secrets,
+    c.backstory,
+    c.extra,
+    c.brief,
+    c.personality,
+    c.traits,
+    c.connections,
+  ].filter(Boolean);
+
+  for (const rawField of privateFields) {
+    const tokens = normalizeExactCommentGroundingText(rawField)
+      .split(/\s+/)
+      .filter(Boolean);
+    if (tokens.length < 5) continue;
+
+    for (let i = 0; i <= tokens.length - 5; i += 1) {
+      const phraseTokens = tokens.slice(i, i + 5);
+      const phrase = phraseTokens.join(" ");
+      if (phrase.length < 22) continue;
+      const contentCount = socialCommentGroundingContentTokens(phrase).length;
+      if (contentCount < 3) continue;
+      if (wrappedPost.includes(` ${phrase} `)) return true;
+    }
+  }
+
+  return false;
+}
+
 function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
   const author = charById(w, authorId);
   if (!author || !characterCanAutonomouslyPost(w, author, null, options)) return null;
@@ -35678,10 +35764,21 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
     }
   }
 
-  addAnchor("intent", selfState.intent, 9);
-  (Array.isArray(selfState.openLoops) ? selfState.openLoops : []).slice(-3).forEach((x) => addAnchor("loop", x, 8));
-  addAnchor("mood", selfState.mood, 5);
-  addAnchor("goal", goals, 7);
+  const shortPrivateAnchor = (value, maxWords) => {
+    const fact = compactFact(value, 80);
+    if (!fact) return "";
+    const words = normalizeExactCommentGroundingText(fact).split(/\s+/).filter(Boolean);
+    return words.length <= Math.max(1, Number(maxWords) || 4) ? fact : "";
+  };
+
+  /* Emergency fallback may use a SHORT internal keyword/fragment as a seed,
+     but never dump a full Goals/open-loop sentence into the public feed. */
+  addAnchor("intent", shortPrivateAnchor(selfState.intent, 4), 5);
+  (Array.isArray(selfState.openLoops) ? selfState.openLoops : []).slice(-3).forEach((x) =>
+    addAnchor("loop", shortPrivateAnchor(x, 4), 4)
+  );
+  addAnchor("mood", shortPrivateAnchor(selfState.mood, 3), 3);
+  addAnchor("goal", shortPrivateAnchor(goals, 4), 3);
   addAnchor("like", likes, 4);
   addAnchor("work", job, 4);
   addAnchor("dojo", dojo, 5);
@@ -35724,27 +35821,27 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
       () => en ? `${fact} happened. The rest can wait.` : `${fact} megtörtént. A többi ráér.`,
     ],
     intent: [
-      () => en ? `Next: ${fact}. No detours.` : `Következő: ${fact}. Nincs kerülő.`,
-      () => en ? `I know what I'm doing next — ${fact}.` : `Tudom, mi jön most: ${fact}.`,
-      () => en ? `${fact}. That's the plan.` : `${fact}. Ez a terv.`,
-      () => en ? `Anyone trying to interrupt ${fact} can wait.` : `Aki meg akar szakítani a(z) ${fact} közben, várhat.`,
+      () => en ? `Next up — ${fact}.` : `Következő — ${fact}.`,
+      () => en ? `${fact}. That's next.` : `${fact}. Ez jön most.`,
+      () => en ? `Plan for now: ${fact}.` : `Mostani terv: ${fact}.`,
+      () => en ? `One thing first: ${fact}.` : `Előbb egy dolog: ${fact}.`,
     ],
     loop: [
-      () => en ? `Still unfinished: ${fact}.` : `Még nincs lezárva: ${fact}.`,
-      () => en ? `${fact} is still sitting on my list.` : `${fact} még mindig ott van a listámon.`,
-      () => en ? `I need to settle ${fact}.` : `Le kell rendeznem ezt: ${fact}.`,
-      () => en ? `How is ${fact} still not done?` : `Hogy nincs még mindig lezárva ez: ${fact}?`,
+      () => en ? `Still unfinished — ${fact}.` : `Még nincs lezárva — ${fact}.`,
+      () => en ? `${fact}. Still on the list.` : `${fact}. Még mindig a listán.`,
+      () => en ? `Need to deal with this: ${fact}.` : `Ezzel még dolgom van: ${fact}.`,
+      () => en ? `Not done yet: ${fact}.` : `Még nincs kész: ${fact}.`,
     ],
     mood: [
-      () => en ? `${fact}. That's where I'm at.` : `${fact}. Most nagyjából itt tartok.`,
-      () => en ? `Current mood: ${fact}.` : `Aktuális hangulat: ${fact}.`,
-      () => en ? `Apparently today feels like ${fact}.` : `Úgy néz ki, ma ez van: ${fact}.`,
+      () => en ? `Current mood — ${fact}.` : `Aktuális hangulat — ${fact}.`,
+      () => en ? `${fact}. That's today.` : `${fact}. Ma ez van.`,
+      () => en ? `Mood check: ${fact}.` : `Hangulatjelentés: ${fact}.`,
     ],
     goal: [
-      () => en ? `Still aiming for ${fact}.` : `Még mindig ez a cél: ${fact}.`,
-      () => en ? `${fact} isn't going to happen by itself.` : `${fact} nem fog magától összejönni.`,
-      () => en ? `One step closer to ${fact}.` : `Egy lépéssel közelebb ehhez: ${fact}.`,
-      () => en ? `Ask me again when I've got ${fact}.` : `Kérdezzetek újra, amikor megvan: ${fact}.`,
+      () => en ? `Priority — ${fact}.` : `Prioritás — ${fact}.`,
+      () => en ? `${fact}. That's the target.` : `${fact}. Ez a cél.`,
+      () => en ? `On the list: ${fact}.` : `A listán: ${fact}.`,
+      () => en ? `For now, one target: ${fact}.` : `Most egy cél van: ${fact}.`,
     ],
     like: [
       () => en ? `Could absolutely make time for ${fact} today.` : `Erre ma simán szakítanék időt: ${fact}.`,
@@ -36103,6 +36200,8 @@ ${albumPostingList(promptAuthor || author) || "nincs használható albumkép"}
 - Ha fent IMAGE OPPORTUNITY = DUE, akkor HATÁROZOTTAN részesíts előnyben EGY konkrét, jelenlegi kontextushoz illő albumképet; csak akkor maradjon szöveges, ha egyik megmaradt kép sem illik hitelesen.
 - Albumképet csak akkor válassz, ha a konkrét kép ténylegesen illik az aktuális élethelyzethez.
 - A poszt kizárólag ${author.name} SAJÁT karakterlapjából, életéből, occupation/job-jából, dojo/organization oldalából, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
+- CHARACTER-SHEET → CAPTION FIREWALL: Goals / Fears / Secrets / Backstory / Extra / Personality / Connections belső motiváció és kánon, NEM kész social-media szöveg. SOHA ne másolj ki belőlük teljes mondatot vagy 5+ szavas szó szerinti részletet captionként. Előbb értsd meg a tényt/szándékot, aztán írd meg új, természetes, karakterhű social nyelven.
+- Ha egy Goals-sor nyelvtanilag parancs/infinitív (pl. „prepare X...”, „become...”, „protect...”), TILOS egy sablonmondat közepébe nyersen beilleszteni. A kész poszt önálló, természetes mondat legyen.
 - FONTOS: az occupation/job, szerep, dojo, organization, rank és affiliation HÁTTÉRKONTEXTUS, nem kötelező caption-szöveg. Határozza meg természetesen, mit csinál, mit tud, milyen napja van és miről lehet oka posztolni, DE ne sorolja fel ezeket minden posztban, ne ismételje a karakterlap megfogalmazását, és ne írjon mini bio/CV-szerű „szerep · szervezet · supporter” felsorolást csak azért, hogy jelezze a kánont. Csak akkor nevezze meg konkrétan a munkát/szervezetet/oldalt, ha az adott poszt témájához ténylegesen releváns.
 - OWNERSHIP HARD RULE: amit ${author.name} "én / my / our" formában állít magáról, annak ${author.name} saját lapján kell igaznak lennie. Más karakter foglalkozását, dojóját, rangját, senseijét, családját, crushát vagy történetét ne vedd át.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
@@ -36172,6 +36271,7 @@ function applyWorldStep(n, out, postingOptions = {}) {
         )
       );
     if (!postText) return;
+    if (socialPostCopiesPrivateCharacterSheetPhrase(n, author, postText)) return;
     /*
      * The local emergency fallback is built exclusively from the selected
      * author's own sheet. During a triggered burst it must not be rejected by
