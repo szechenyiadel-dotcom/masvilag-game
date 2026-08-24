@@ -6464,6 +6464,58 @@ function naturalCommentReplyTargets(w, post, comment) {
     const followsCommenter = isFollowing(w, observer.id, comment.authorId);
     const rel = getRel(w, observer.id, comment.authorId) || {};
     const bond = String(rel.bond || rel.type || "").toLowerCase();
+    const postRel = post.authorId
+      ? (getRel(w, observer.id, post.authorId) || {})
+      : {};
+    const postBond = String(postRel.bond || postRel.type || "").toLowerCase();
+
+    const positiveTowardCommenter =
+      Number(rel.score || 0) >= 20 ||
+      hasPositiveFollowBond(rel) ||
+      relationshipDeclaresFriendship(rel) ||
+      /friend|best|close|partner|dating|ally|allied|szövetséges|barát|ride\s*or\s*die/.test(bond);
+
+    const negativeTowardCommenter =
+      Number(rel.score || 0) <= -20 ||
+      /enemy|rival|ellens|riv[aá]l|hate|hostile/.test(bond);
+
+    const positiveTowardPostAuthor =
+      Boolean(
+        post.authorId &&
+        (
+          Number(postRel.score || 0) >= 20 ||
+          hasPositiveFollowBond(postRel) ||
+          relationshipDeclaresFriendship(postRel) ||
+          /friend|best|close|partner|dating|ally|allied|szövetséges|barát|ride\s*or\s*die/.test(postBond)
+        )
+      );
+
+    const negativeTowardPostAuthor =
+      Boolean(
+        post.authorId &&
+        (
+          Number(postRel.score || 0) <= -20 ||
+          /enemy|rival|ellens|riv[aá]l|hate|hostile/.test(postBond)
+        )
+      );
+
+    /*
+     * Public group-drama reason:
+     * a real ally/friend of one side who dislikes/rivals the other side has a
+     * concrete reason to defend, challenge, correct or pile on. This is what
+     * lets a third AI naturally enter a thread instead of keeping every chain
+     * artificially two-person.
+     */
+    const crossSideReason =
+      (
+        positiveTowardPostAuthor &&
+        negativeTowardCommenter
+      ) ||
+      (
+        positiveTowardCommenter &&
+        negativeTowardPostAuthor
+      );
+
     const lore = [observer.personality, observer.traits, observer.bio, observer.extra].filter(Boolean).join(" ").toLowerCase();
     let base = 16;
     base += Math.min(30, Math.max(0, toCommenter) * 0.32);
@@ -6472,10 +6524,20 @@ function naturalCommentReplyTargets(w, post, comment) {
     if (followsPostAuthor) base += 10;
     if (followsCommenter) base += 7;
     if (/friend|best|close|partner|dating|rival|enemy|ellens|ex|crush|ride\s*or\s*die/.test(bond)) base += 15;
+    if (crossSideReason) base += 24;
     if (/gossip|nosy|curious|argumentative|confront|chaotic|dramatic|protective|possess|jealous|flirt|chatty|social|pletyk|kíváncsi|veszeked|konfront|féltéken/.test(lore)) base += 10;
     base += Math.min(18, cue * 0.26);
     if (juice.juicy) base += 16;
-    const hasRealReason = toCommenter >= 18 || toParent >= 22 || toPostAuthor >= 22 || followsPostAuthor || followsCommenter || Boolean(bond) || juice.juicy;
+    const hasRealReason =
+      toCommenter >= 18 ||
+      toParent >= 22 ||
+      toPostAuthor >= 22 ||
+      followsPostAuthor ||
+      followsCommenter ||
+      Boolean(bond) ||
+      Boolean(postBond) ||
+      crossSideReason ||
+      juice.juicy;
     if (hasRealReason && base >= 46) push(observer.id, "bystander", base);
   });
 
@@ -23605,11 +23667,19 @@ function mergeWorlds(remote, local) {
   out.players = mergeMapById(remote.players, local.players);
   out.userSettings = { ...(remote.userSettings || {}), ...(local.userSettings || {}) };
   out.playerProgression = mergePlayerProgressionMaps(remote.playerProgression || {}, local.playerProgression || {});
+  out.socialCommentEnergy = mergeSocialCommentEnergyMaps(
+    remote.socialCommentEnergy || {},
+    local.socialCommentEnergy || {}
+  );
   out.images = { ...(remote.images || {}), ...(local.images || {}) };
 
   // Az összevont vagy törölt profilok nem jöhetnek vissza a másik gépről.
   Object.keys(out.deleted).forEach((id) => { delete out.players[id]; delete out.accounts[id]; });
-  Object.keys(out.deleted).forEach((id) => { delete out.userSettings[id]; delete out.playerProgression[id]; });
+  Object.keys(out.deleted).forEach((id) => {
+    delete out.userSettings[id];
+    delete out.playerProgression[id];
+    if (out.socialCommentEnergy) delete out.socialCommentEnergy[id];
+  });
 
   out.chars = mergeById(remote.chars, local.chars, out.deleted);
   out.universe = newer(local.universe, remote.universe);
@@ -25296,6 +25366,7 @@ chats: {},
 mems: {},
 charMemory: {},
 playerProgression: {},
+socialCommentEnergy: {},
 userSettings: {},
 log: [],
 scenes: [],
@@ -30187,6 +30258,124 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
 /* ============================================================
    Feed — szálas kommentekkel
    ============================================================ */
+
+/*
+ * PUBLIC COMMENT ENERGY
+ *
+ * This resource belongs ONLY to player-authored public comments/replies.
+ * AI comments, DMs, posts, Notes, Events and every other system are untouched.
+ *
+ * Energy regenerates lazily from timestamps, so no extra timer/scheduler is
+ * introduced. One public comment/reply costs a small fixed amount.
+ */
+const SOCIAL_COMMENT_ENERGY_MAX = 100;
+const SOCIAL_COMMENT_ENERGY_COST = 3;
+const SOCIAL_COMMENT_ENERGY_REGEN_MS = 60 * 1000;
+
+function socialCommentEnergySnapshot(w, playerId, at = now()) {
+  const raw =
+    w &&
+    w.socialCommentEnergy &&
+    w.socialCommentEnergy[playerId] &&
+    typeof w.socialCommentEnergy[playerId] === "object"
+      ? w.socialCommentEnergy[playerId]
+      : null;
+
+  if (!raw) {
+    return {
+      energy: SOCIAL_COMMENT_ENERGY_MAX,
+      updatedAt: Number(at) || now(),
+    };
+  }
+
+  const baseEnergy = Math.max(
+    0,
+    Math.min(
+      SOCIAL_COMMENT_ENERGY_MAX,
+      Math.round(Number(raw.energy) || 0)
+    )
+  );
+  const lastAt = Math.max(
+    0,
+    Number(raw.updatedAt) || Number(at) || now()
+  );
+  const ts = Number(at) || now();
+  const elapsed = Math.max(0, ts - lastAt);
+  const regenerated = Math.floor(
+    elapsed / SOCIAL_COMMENT_ENERGY_REGEN_MS
+  );
+
+  return {
+    energy: Math.min(
+      SOCIAL_COMMENT_ENERGY_MAX,
+      baseEnergy + regenerated
+    ),
+    updatedAt:
+      regenerated > 0
+        ? lastAt + regenerated * SOCIAL_COMMENT_ENERGY_REGEN_MS
+        : lastAt,
+  };
+}
+
+function spendSocialCommentEnergy(w, playerId, amount = SOCIAL_COMMENT_ENERGY_COST) {
+  if (!w || !playerId || !isHuman(w, playerId)) return false;
+  const cost = Math.max(1, Math.round(Number(amount) || SOCIAL_COMMENT_ENERGY_COST));
+  const snap = socialCommentEnergySnapshot(w, playerId);
+
+  if (snap.energy < cost) {
+    if (!w.socialCommentEnergy || typeof w.socialCommentEnergy !== "object" || Array.isArray(w.socialCommentEnergy)) {
+      w.socialCommentEnergy = {};
+    }
+    w.socialCommentEnergy[playerId] = {
+      energy: snap.energy,
+      updatedAt: snap.updatedAt,
+    };
+    return false;
+  }
+
+  if (!w.socialCommentEnergy || typeof w.socialCommentEnergy !== "object" || Array.isArray(w.socialCommentEnergy)) {
+    w.socialCommentEnergy = {};
+  }
+
+  w.socialCommentEnergy[playerId] = {
+    energy: snap.energy - cost,
+    updatedAt: now(),
+  };
+  return true;
+}
+
+function mergeSocialCommentEnergyMaps(remoteMap = {}, localMap = {}) {
+  const out = {};
+  const ids = new Set([
+    ...Object.keys(remoteMap || {}),
+    ...Object.keys(localMap || {}),
+  ]);
+
+  ids.forEach((id) => {
+    const a = remoteMap && remoteMap[id] && typeof remoteMap[id] === "object" ? remoteMap[id] : null;
+    const b = localMap && localMap[id] && typeof localMap[id] === "object" ? localMap[id] : null;
+    if (!a && !b) return;
+
+    const newerRow =
+      Number(b && b.updatedAt || 0) >= Number(a && a.updatedAt || 0)
+        ? b
+        : a;
+
+    out[id] = {
+      energy: Math.max(
+        0,
+        Math.min(
+          SOCIAL_COMMENT_ENERGY_MAX,
+          Math.round(Number(newerRow && newerRow.energy) || 0)
+        )
+      ),
+      updatedAt: Math.max(0, Number(newerRow && newerRow.updatedAt) || 0),
+    };
+  });
+
+  return out;
+}
+
 function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
@@ -30202,10 +30391,17 @@ function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
 
   if (!a) return null;
 
-  const send = () => {
+  const commentEnergy =
+    socialCommentEnergySnapshot(
+      w,
+      w.meId
+    ).energy;
+
+  const send = async () => {
     const t = txt.trim();
     if (!t) return;
-    onReply(c.id, t);
+    const ok = await onReply(c.id, t);
+    if (ok === false) return;
     setTxt("");
     setOpen(false);
   };
@@ -30284,7 +30480,20 @@ function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
             />
             <MentionBar w={w} value={txt} onChange={setTxt} compact />
           </div>
-          <button className="btn primary tiny" onClick={send} disabled={!txt.trim()}>
+          <span
+            className="hint mono"
+            title={tt(
+              `Komment energia: ${commentEnergy}/${SOCIAL_COMMENT_ENERGY_MAX}`,
+              `Comment energy: ${commentEnergy}/${SOCIAL_COMMENT_ENERGY_MAX}`
+            )}
+          >
+            ⚡{commentEnergy}
+          </span>
+          <button
+            className="btn primary tiny"
+            onClick={send}
+            disabled={!txt.trim()}
+          >
             <Send size={12} />
           </button>
         </div>
@@ -30410,10 +30619,17 @@ function Post({
     author.id !== w.meId &&
     isFollowing(w, w.meId, author.id);
 
-  const sendCmt = () => {
+  const commentEnergy =
+    socialCommentEnergySnapshot(
+      w,
+      w.meId
+    ).energy;
+
+  const sendCmt = async () => {
     const t = cmt.trim();
     if (!t) return;
-    onComment(post.id, t, null);
+    const ok = await onComment(post.id, t, null);
+    if (ok === false) return;
     setCmt("");
   };
 
@@ -30690,7 +30906,20 @@ function Post({
           <MentionBar w={w} value={cmt} onChange={setCmt} compact />
         </div>
 
-        <button className="btn primary tiny" onClick={sendCmt} disabled={!cmt.trim()}>
+        <span
+          className="hint mono"
+          title={tt(
+            `Komment energia: ${commentEnergy}/${SOCIAL_COMMENT_ENERGY_MAX}`,
+            `Comment energy: ${commentEnergy}/${SOCIAL_COMMENT_ENERGY_MAX}`
+          )}
+        >
+          ⚡{commentEnergy}
+        </span>
+        <button
+          className="btn primary tiny"
+          onClick={sendCmt}
+          disabled={!cmt.trim()}
+        >
           <Send size={13} />
         </button>
       </div>
@@ -31274,6 +31503,68 @@ function threadOf(w, post) {
   };
 }
 
+/*
+ * Exact branch reconstruction for threaded replies.
+ *
+ * `threadOf()` remains the complete public comment section. This helper adds
+ * the one causal path that matters most for the next reply: ROOT → ... →
+ * direct parent. It prevents a model from answering the latest sentence while
+ * forgetting what that sentence itself was responding to.
+ */
+function threadBranchOf(w, post, leafComment, maxDepth = 12) {
+  if (!w || !post || !leafComment) {
+    return {
+      ids: [],
+      rows: [],
+      text: "",
+    };
+  }
+
+  const comments = safePostComments(post);
+  const byId = new Map(
+    comments
+      .filter((row) => row && row.id)
+      .map((row) => [row.id, row])
+  );
+  const chain = [];
+  const seen = new Set();
+  let current = leafComment;
+
+  while (
+    current &&
+    chain.length < Math.max(1, Number(maxDepth) || 12)
+  ) {
+    const key = String(current.id || "");
+    if (key && seen.has(key)) break;
+    if (key) seen.add(key);
+    chain.unshift(current);
+    current =
+      current.parent
+        ? (byId.get(current.parent) || null)
+        : null;
+  }
+
+  return {
+    ids: chain.map((row) => String(row.id || "")).filter(Boolean),
+    rows: chain,
+    text: chain
+      .map((row, index) => {
+        const role =
+          index === 0
+            ? "ROOT"
+            : index === chain.length - 1
+              ? "CURRENT"
+              : `TURN ${index + 1}`;
+        const parent =
+          row.parent
+            ? ` <- replies to ${row.parent}`
+            : "";
+        return `${role} [${row.id || "?"}]${parent} ${nameOfIn(w, row.authorId)}: ${String(row.text || "").trim()}`;
+      })
+      .join("\n"),
+  };
+}
+
 function normalizeSocialPostMeaning(w, post, raw) {
   const source = raw && typeof raw === "object" ? raw : {};
   const resolveIds = (value) => {
@@ -31757,6 +32048,7 @@ KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
 
 RELATIONSHIP × PERSONALITY × POST — HARD DECISION ORDER:
 1. A KONKRÉT POSZT dönti el, mire lehet egyáltalán értelmesen reagálni.
+1A. RESPONSE-ACT MATCH: a reakció funkciója illeszkedjen ahhoz, amit a poszt ténylegesen csinál. Poén/vicc természetesen kaphat poént vagy ugratást; sebezhető/szomorú poszt támogatást, együttérzést, csendes jelenlétet vagy kapcsolatfüggő távolságot; kérdés valódi választ; provokáció releváns visszaszúrást; jó hír gratulációt/hype-ot; segítségkérés konkrét segítséget vagy karakterhű elutasítást. A személyiség és kapcsolat a MEGFOGALMAZÁST és intenzitást változtatja, nem a poszt alapfunkcióját.
 2. A kommentelő és a posztoló KAPCSOLATA dönti el a baseline érzelmi irányt és azt is, mennyire valószínű, hogy kommentel / like-ol / ignorál.
 3. A kommentelő SAJÁT PERSONALITY + SPEECH/VOICE + kor/online stílus dönti el, HOGYAN fejezi ki ugyanazt az érzelmi irányt.
 4. A friss közös emlék/currentFeeling csak finomítja ezt; nem írhatja át a konkrét poszt jelentését.
@@ -34279,6 +34571,29 @@ function fairCommentCast(w, targetId, post = null) {
           ownStorySnippetAbout(c, target)
         );
 
+      const explicitlyInPost =
+        Boolean(
+          post &&
+          publicSocialExplicitTargetIds(
+            w,
+            post
+          ).includes(
+            c.id
+          )
+        );
+
+      const playerConnectedVisibility =
+        Boolean(
+          isHuman(w, targetId) &&
+          (
+            following ||
+            Math.abs(score) >= 10 ||
+            Boolean(bond) ||
+            storyLinked ||
+            explicitlyInPost
+          )
+        );
+
       /*
        * Feed realism: a follower or someone with a real personal/story reason
        * naturally sees the post. A totally unrelated non-follower can still
@@ -34287,6 +34602,7 @@ function fairCommentCast(w, targetId, post = null) {
        */
       const naturallyLinked =
         following ||
+        explicitlyInPost ||
         Math.abs(score) >= 10 ||
         Boolean(bond) ||
         storyLinked ||
@@ -34308,13 +34624,15 @@ function fairCommentCast(w, targetId, post = null) {
 
       const visibilityBonus =
         (
-          following
-            ? 34
-            : naturallyLinked
-              ? 14
-              : discovered
-                ? 4
-                : 0
+          explicitlyInPost
+            ? 48
+            : following
+              ? 34
+              : naturallyLinked
+                ? 14
+                : discovered
+                  ? 4
+                  : 0
         ) +
         visualPriority +
         relationshipGravity.commentPriority;
@@ -34325,6 +34643,8 @@ function fairCommentCast(w, targetId, post = null) {
         lastCommentAt,
         interest,
         following,
+        explicitlyInPost,
+        playerConnectedVisibility,
         eligible:
           naturallyLinked || discovered,
         visibilityBonus,
@@ -34427,6 +34747,34 @@ function fairCommentCast(w, targetId, post = null) {
    * to recur across this person's different posts. It should not be crowded
    * out by generic fairness rotation.
    */
+  const playerPostVisibilityRows =
+    isHuman(w, targetId)
+      ? chars
+          .filter(
+            (row) =>
+              row.eligible &&
+              row.playerConnectedVisibility &&
+              !alreadyTopLevel.has(
+                row.c.id
+              )
+          )
+          .sort(
+            (a, b) =>
+              (
+                Number(b.explicitlyInPost) * 90 +
+                Number(b.following) * 40 +
+                Number(b.interest || 0) +
+                Number(b.visibilityBonus || 0)
+              ) -
+              (
+                Number(a.explicitlyInPost) * 90 +
+                Number(a.following) * 40 +
+                Number(a.interest || 0) +
+                Number(a.visibilityBonus || 0)
+              )
+          )
+      : [];
+
   const mustSeeRows =
     chars
       .filter(
@@ -34445,6 +34793,7 @@ function fairCommentCast(w, targetId, post = null) {
       );
 
   const finalRows = [
+    ...playerPostVisibilityRows,
     ...mustSeeRows,
     ...orderedPool,
   ].filter(
@@ -34551,6 +34900,13 @@ async function genReply(w, post, comment, forcedResponderId = "") {
     post
   );
 
+  const branch = threadBranchOf(
+    w,
+    post,
+    comment,
+    12
+  );
+
   let out =
     await askWorldJSON(
       w,
@@ -34582,8 +34938,18 @@ ${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post
     : ""
 }
 
-KOMMENTSZÁL:
+KOMMENTSZÁL — TELJES NYILVÁNOS THREAD:
 ${th.text}
+
+AKTUÁLIS VÁLASZLÁNC — ROOT → ... → KÖZVETLEN PARENT:
+${branch.text || `${nameOfIn(w, comment.authorId)}: ${comment.text}`}
+
+THREAD CONTINUITY HARD RULE:
+- A MOSTANI kommentet mindig az AKTUÁLIS VÁLASZLÁNC teljes előzménye alapján értelmezd, ne önmagában.
+- Tudd pontosan, ki kinek válaszolt: a parent ID-k strukturális tények, nem hangulati javaslatok.
+- Egy késői reply nem törölheti az előző replikák jelentését. Ha a CURRENT sor csak az előző TURN fényében érthető, azt a kontextust kötelező megtartani.
+- A teljes nyilvános threadből észreveheted, ha egy harmadik karakternek természetes oka van beszállni, de a reply közvetlen parentje továbbra is a kijelölt CURRENT komment.
+- Ne válaszolj véletlenül egy másik ágra csak azért, mert abban drámaibb mondat van.
 
 ${commentOwnershipInstruction(w, post, comment)}
 
@@ -34879,6 +35245,9 @@ DIRECT REPLY REPAIR — ONE CHARACTER ONLY.
 POST:
 ${nameOfIn(w, post.authorId)}: "${String(post.text || "").slice(0, 600)}"
 
+EXACT THREAD BRANCH — ROOT TO CURRENT:
+${branch.text || `${nameOfIn(w, comment.authorId)}: ${comment.text}`}
+
 EXACT COMMENT BEING ANSWERED:
 ${nameOfIn(w, comment.authorId)} [${comment.authorId}]: "${String(comment.text || "").slice(0, 600)}"
 
@@ -34887,7 +35256,8 @@ ${directResponder.name} [${directResponder.id}]
 
 HARD RULES:
 - Write exactly ONE natural public social-media reply from ${directResponder.name} to the exact comment above.
-- React to what the comment ACTUALLY says. Relationship/personality only changes HOW ${directResponder.name} answers.
+- Read the ROOT→CURRENT branch first. Interpret the exact comment as the latest turn of that branch, not as an isolated sentence.
+- React to what the comment ACTUALLY says in that branch. Relationship/personality only changes HOW ${directResponder.name} answers.
 - Do not import a different conflict, post, image or conversation.
 - If the post is text-only, invent no photo/appearance detail.
 - Keep SELF's own Speech/Voice/personality/casing exactly.
@@ -35102,6 +35472,9 @@ ${relationshipBehaviorCard(
 
 SOCIAL MEDIA MICRO-REPLY REPAIR
 
+CURRENT THREAD BRANCH — ROOT TO THIS COMMENT:
+${branch.text || `${nameOfIn(w, comment.authorId)}: ${comment.text}`}
+
 ${nameOfIn(w, comment.authorId)} just wrote this warm/supportive comment to ${directResponder.name}:
 "${String(comment.text || "").slice(0, 500)}"
 
@@ -35245,6 +35618,9 @@ ${relationshipBehaviorCard(w, responderId, comment.authorId)}
 
 HARD FRIENDSHIP TONE REPAIR
 
+CURRENT THREAD BRANCH — ROOT TO THIS COMMENT:
+${branch.text || `${nameOfIn(w, comment.authorId)}: ${comment.text}`}
+
 ${nameOfIn(w, comment.authorId)} wrote this public comment:
 "${String(comment.text || '').slice(0, 500)}"
 
@@ -35339,8 +35715,11 @@ ${visualCrushThreadFrictionInstruction(w, post, comment.authorId, forcedResponde
 
 PUBLIC THREAD BYSTANDER REPLY
 Post by ${nameOfIn(w, post.authorId)}: "${String(post.text || "").slice(0, 500)}"
-Thread:
+Full public thread:
 ${th.text}
+
+Exact branch ending in the latest comment:
+${branch.text || `${nameOfIn(w, comment.authorId)}: ${comment.text}`}
 
 The latest comment is:
 ${nameOfIn(w, comment.authorId)}: "${String(comment.text || "").slice(0, 500)}"
@@ -35348,6 +35727,7 @@ ${nameOfIn(w, comment.authorId)}: "${String(comment.text || "").slice(0, 500)}"
 ${isHuman(w, comment.authorId) ? playerInputUnderstandingInstruction(w, comment.text, "comment") : ""}
 
 ${forcedResponder.name} has already been selected by the social scheduler because their relationship/history/personality gives them a REAL reason to jump into this public thread.
+- FIRST read the Exact branch root-to-latest. The new reply must make sense as the next turn of THAT branch, not merely as a reaction to another interesting comment elsewhere in the full thread.
 - IMPORTANT: the latest comment is NOT automatically addressed to ${forcedResponder.name}. They are a BYSTANDER joining a public thread. React to what the commenter said about the post/poster; do not pretend the commenter attacked or addressed ${forcedResponder.name} unless the thread actually says so.
 - Write only ${forcedResponder.name}'s natural public reply to the latest comment.
 - Respect both relationships: ${forcedResponder.name} → latest commenter AND ${forcedResponder.name} → post author. If the commenter is their friend but the post author is disliked, do not randomly turn on the friend; shared-side banter, playful disagreement or redirecting the jab toward the poster is more natural.
@@ -36835,6 +37215,9 @@ SAJÁT FOTÓALBUMOD:
 ${albumPostingList(promptAuthor || author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
+- AUTONÓM STATUS UPDATE: a témát ${author.name} SAJÁT personality/speech + aktuális mood/intent/open loops + számára ténylegesen ismert friss világ-események + saját kapcsolatai/tettei együtt adják. Ne várj a játékos utasítására, és ne gyárts rendszer-fillert.
+- Ha egy friss, számára ismert történés vagy más karakter tényleges nyilvános tette érdemben érinti, természetesen reagálhat rá saját posztban; ha nem érinti, maradjon a saját életénél.
+- Fotós posztnál ugyanaz az autonóm döntés érvényes: csak olyan, az adott karakterhez és aktuális helyzethez illő saját vizuált válassz, amit a meglévő képrendszer enged. A kép ne írja felül a caption karakterhangját.
 - ${author.name} saját gördülő 24 órás célja 12–20 poszt aktivitásától függően, DE EZ CSAK AKTIVITÁSI CÉL/PRIORITÁS, NEM PLAFON; 32 a valódi biztonsági kemény maximum.
 - Normál körben a scheduler csak a saját cooldown lejárta után választ ki. Triggerelt aftermath burstben több KÜLÖNBÖZŐ AI gyorsabban is sorra kerülhet, de ugyanaz az AI egy burston belül nem ismétlődhet.
 - Ha ide kerültél, ÍRJ egy természetes posztot; ne skipelj pusztán azért, mert nincs dráma.
@@ -38302,6 +38685,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               parent: parent || null,
             };
 
+            let commentAccepted = false;
+
             update((n) => {
               const x = n.posts.find((y) => y.id === id);
               if (!x) return;
@@ -38309,6 +38694,17 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               const freshActorId =
                 n.meId || actorId;
 
+              if (
+                !spendSocialCommentEnergy(
+                  n,
+                  freshActorId,
+                  SOCIAL_COMMENT_ENERGY_COST
+                )
+              ) {
+                return;
+              }
+
+              commentAccepted = true;
               x.comments = safePostComments(x);
 
               const parentComment = parent
@@ -38381,9 +38777,21 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   publicSentiment: playerCommentCancelRisk.publicSentiment,
                   sentimentTargetIds: [freshActorId],
                   cancelRiskSeed: playerCommentCancelRisk.risky,
+                  commentEnergyCost:
+                    SOCIAL_COMMENT_ENERGY_COST,
                 },
               });
             });
+
+            if (!commentAccepted) {
+              setErr(
+                tt(
+                  `Nincs elég komment energiád. Egy komment/válasz ${SOCIAL_COMMENT_ENERGY_COST} energiába kerül, az energia idővel visszatöltődik.`,
+                  `Not enough comment energy. Each comment/reply costs ${SOCIAL_COMMENT_ENERGY_COST} energy and energy regenerates over time.`
+                )
+              );
+              return false;
+            }
 
             /*
              * A relationship consequence a komment TARTALMÁBÓL jön.
@@ -38465,6 +38873,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 parentId: parent || "",
               });
             }
+
+            return true;
           }}
           onRepost={(id) =>
             update((n) => {
