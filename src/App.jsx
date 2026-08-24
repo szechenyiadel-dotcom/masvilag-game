@@ -46465,8 +46465,321 @@ Csak JSON:
     : "";
 }
 
+
+/* ============================================================
+   AUTONOMOUS DM — CONCRETE REASON GROUNDING
+
+   AI -> player DM may start only from something the character can actually
+   point to: a visible player post/Note/comment, a known event, a rumor they
+   genuinely heard, or an unresolved shared plan/promise/thread. This is DM-only
+   logic; it does not alter feed, comments, follow, popup, Event or Notes lanes.
+   ============================================================ */
+function autonomousDmReasonCandidates(w, bot) {
+  if (!w || !bot || !bot.id || isHuman(w, bot.id) || !w.meId) return [];
+
+  const at = now();
+  const rows = [];
+  const seen = new Set();
+  const playerName = String((w.player && w.player.name) || nameOfIn(w, w.meId) || "the player");
+
+  const add = (kind, basis, ts = 0, weight = 50, refId = "") => {
+    const cleanBasis = String(basis || "").replace(/\s+/g, " ").trim();
+    if (!cleanBasis || cleanBasis.length < 3) return;
+    const stamp = Number(ts) || 0;
+    const key = `${kind}|${cleanBasis.toLowerCase().slice(0, 180)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push({
+      id: `dmreason:${kind}:${commentSeedNumber(`${bot.id}|${key}|${refId || stamp}`)}`,
+      kind,
+      basis: cut(cleanBasis, 360),
+      ts: stamp,
+      weight: Number(weight) || 0,
+      refId: String(refId || ""),
+    });
+  };
+
+  /* 1) Explicit shared continuity is always a real reason to reopen chat. */
+  const continuity = compactRelationshipContinuity(w, bot.id, w.meId);
+  if (continuity) {
+    const continuityAt = Number(continuity.lastMeaningfulInteractionAt) || 0;
+    (continuity.plans || []).slice(-3).forEach((item) =>
+      add("shared-plan", `Our still-open plan: ${String(item || "")}`, continuityAt, 138)
+    );
+    (continuity.promises || []).slice(-3).forEach((item) =>
+      add("shared-promise", `An unresolved promise between us: ${String(item || "")}`, continuityAt, 132)
+    );
+    (continuity.unresolved || []).slice(-4).forEach((item) =>
+      add("shared-open-loop", `An unfinished issue/question between us: ${String(item || "")}`, continuityAt, 126)
+    );
+  }
+
+  /* 2) Direct player activity the bot could naturally have seen. */
+  const socialInterest = socialInteractionInterest(w, bot.id, w.meId);
+  const seesPlayerSocial =
+    isFollowing(w, bot.id, w.meId) ||
+    linked(w, bot.id, w.meId) ||
+    socialInterest >= 18;
+
+  if (seesPlayerSocial) {
+    (w.posts || [])
+      .filter((post) =>
+        post &&
+        post.authorId === w.meId &&
+        at - (Number(post.ts) || 0) <= 18 * 3600e3
+      )
+      .slice(0, 4)
+      .forEach((post) => {
+        const visible = [post.text, post.imageDescription].filter(Boolean).join(" | ");
+        add(
+          "player-post",
+          `${playerName}'s recent post: ${visible || "image post"}`,
+          post.ts,
+          142,
+          post.id
+        );
+      });
+
+    const playerNote = noteOf(w, w.meId);
+    if (
+      playerNote &&
+      at - (Number(playerNote.ts) || 0) <= NOTE_LIFE
+    ) {
+      const noteText = [
+        playerNote.text,
+        playerNote.music && (playerNote.music.title || playerNote.music.artist)
+          ? `music: ${playerNote.music.title || ""}${playerNote.music.artist ? ` — ${playerNote.music.artist}` : ""}`
+          : "",
+      ].filter(Boolean).join(" | ");
+      if (noteText) {
+        add("player-note", `${playerName}'s current Note: ${noteText}`, playerNote.ts, 128, playerNote.id);
+      }
+    }
+  }
+
+  /* 3) A fresh player comment directed into this bot's own thread is concrete. */
+  (w.posts || []).slice(0, 24).forEach((post) => {
+    if (!post || at - (Number(post.ts) || 0) > 18 * 3600e3) return;
+    const comments = safePostComments(post);
+    comments.forEach((comment) => {
+      if (
+        !comment ||
+        !isHuman(w, comment.authorId) ||
+        at - (Number(comment.ts) || 0) > 12 * 3600e3
+      ) return;
+
+      const parent = comment.parent
+        ? comments.find((row) => row && row.id === comment.parent)
+        : null;
+      const aimedAtBot =
+        post.authorId === bot.id ||
+        (parent && parent.authorId === bot.id);
+
+      if (aimedAtBot && comment.text) {
+        add(
+          "player-comment",
+          `${playerName} recently wrote in my public thread: ${comment.text}`,
+          comment.ts,
+          148,
+          comment.id
+        );
+      }
+    });
+  });
+
+  /* 4) Use the bot's OWN knowledge ledger, so private facts cannot leak in. */
+  const mem = ensureCharMemory(w, bot.id);
+  const knownTarget =
+    mem && mem.knownCharacters && mem.knownCharacters[w.meId]
+      ? mem.knownCharacters[w.meId]
+      : null;
+
+  (knownTarget && Array.isArray(knownTarget.knownEvents) ? knownTarget.knownEvents : [])
+    .slice(-10)
+    .forEach((entry) => {
+      const ts = Number(entry && entry.timestamp) || 0;
+      if (ts && at - ts > 72 * 3600e3) return;
+      add(
+        "known-player-event",
+        `Something I genuinely know happened involving ${playerName}: ${entry && entry.text || ""}`,
+        ts,
+        136,
+        entry && entry.source
+      );
+    });
+
+  (mem && Array.isArray(mem.rumors) ? mem.rumors : [])
+    .slice(-10)
+    .forEach((entry) => {
+      const ts = Number(entry && entry.timestamp) || 0;
+      if (ts && at - ts > 72 * 3600e3) return;
+      add(
+        "heard-rumor",
+        `A rumor/gossip item I actually heard: ${entry && entry.text || ""}`,
+        ts,
+        118,
+        entry && entry.source
+      );
+    });
+
+  (mem && Array.isArray(mem.witnessedEvents) ? mem.witnessedEvents : [])
+    .slice(-12)
+    .forEach((entry) => {
+      const ts = Number(entry && entry.timestamp) || 0;
+      if (ts && at - ts > 48 * 3600e3) return;
+      const source = String(entry && entry.source || "").toLowerCase();
+      const body = String(entry && entry.text || "");
+      const playerMention =
+        body.toLowerCase().includes(playerName.toLowerCase()) ||
+        body.toLowerCase().includes("player") ||
+        body.toLowerCase().includes("játékos");
+      const sharedSource = /roleplay|scene|popup|interaction|comment|post|event/.test(source);
+      if (!playerMention && !sharedSource) return;
+      add(
+        "known-event",
+        `A recent event I personally know about: ${body}`,
+        ts,
+        104,
+        entry && entry.source
+      );
+    });
+
+  /* 5) Public posts about the player can naturally trigger a private heads-up. */
+  (w.posts || [])
+    .filter((post) =>
+      post &&
+      !isHuman(w, post.authorId) &&
+      at - (Number(post.ts) || 0) <= 18 * 3600e3
+    )
+    .slice(0, 20)
+    .forEach((post) => {
+      const mentioned = new Set([
+        ...explicitNamedCharacterIdsInText(w, String(post.text || ""), post.authorId),
+        ...((post.gossipStory && Array.isArray(post.gossipStory.mentionedIds))
+          ? post.gossipStory.mentionedIds.map(String)
+          : []),
+      ]);
+      if (!mentioned.has(String(w.meId))) return;
+      const visible = [post.text, post.imageDescription].filter(Boolean).join(" | ");
+      add(
+        "public-post-about-player",
+        `${nameOfIn(w, post.authorId) || "Someone"} publicly posted about ${playerName}: ${visible}`,
+        post.ts,
+        124,
+        post.id
+      );
+    });
+
+  /* Do not repeatedly open chat about the exact same reason in a short window. */
+  const recentUsed = new Set(
+    ((w.chats && w.chats[chatKey(w.meId, bot.id)]) || [])
+      .filter((msg) =>
+        msg &&
+        msg.from === "them" &&
+        msg.autonomous === true &&
+        msg.autonomousReasonId &&
+        at - (Number(msg.ts) || 0) <= 6 * 3600e3
+      )
+      .map((msg) => String(msg.autonomousReasonId))
+  );
+
+  return rows
+    .map((row) => {
+      const ageHours = row.ts ? Math.max(0, (at - row.ts) / 3600e3) : 0;
+      const freshness = row.ts ? Math.max(0, 34 - ageHours * 2.4) : 8;
+      const repeatPenalty = recentUsed.has(row.id) ? 160 : 0;
+      return { ...row, rank: row.weight + freshness - repeatPenalty };
+    })
+    .sort((a, b) => b.rank - a.rank)
+    .slice(0, 8);
+}
+
+function autonomousDmReasonContext(w, bot) {
+  const candidates = autonomousDmReasonCandidates(w, bot);
+  return {
+    candidates,
+    primary: candidates[0] || null,
+  };
+}
+
+function autonomousDmReasonCard(reasonContext) {
+  const rows = reasonContext && Array.isArray(reasonContext.candidates)
+    ? reasonContext.candidates
+    : [];
+  if (!rows.length) return "NO GROUNDED DM REASON IS CURRENTLY AVAILABLE.";
+  return rows.map((row, index) =>
+    `${index + 1}. reasonId=${row.id} | type=${row.kind} | EXACT BASIS: ${row.basis}`
+  ).join("\n");
+}
+
+function autonomousDmLooksLikeGenericPing(value) {
+  const raw = String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!raw) return true;
+  return /^(?:hey+|hi+|hello|szia+|hé+|yo+|wyd\??|sup\??|you around\??|you busy\??|what are you doing(?: rn)?\??|what are you up to\??|random but hi|come talk to me(?: for a sec)?|we need to talk\.?|ráérsz\??|ráérsz egy percre\??|elfoglalt vagy\??|mit csinálsz(?: most)?\??|na gyere beszélj velem|beszélnünk kell\.?)$/i.test(raw);
+}
+
+function autonomousDmOutputMatchesReason(out, reasonContext) {
+  if (!out || out.skip === true) return false;
+  const rows = reasonContext && Array.isArray(reasonContext.candidates)
+    ? reasonContext.candidates
+    : [];
+  if (!rows.length) return false;
+
+  const reasonId = String(out.reasonId || "").trim();
+  const chosen = rows.find((row) => row && row.id === reasonId);
+  if (!chosen) return false;
+
+  const reasonBasis = String(out.reasonBasis || "").replace(/\s+/g, " ").trim();
+  if (!reasonBasis) return false;
+  const normalizedBasis = reasonBasis.toLowerCase();
+  const normalizedExpected = String(chosen.basis || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (
+    normalizedBasis !== normalizedExpected &&
+    !normalizedExpected.includes(normalizedBasis) &&
+    !normalizedBasis.includes(normalizedExpected)
+  ) {
+    return false;
+  }
+
+  const text = String(out.text || "").replace(/\s+/g, " ").trim();
+  const imagePrompt = String(out.imagePrompt || "").replace(/\s+/g, " ").trim();
+  if (!text && !imagePrompt) return false;
+  if (text && autonomousDmLooksLikeGenericPing(text)) return false;
+
+  if (!text) return true;
+
+  const normalize = (value) => String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9áéíóöőúüűàèìòùäëïöüâêîôûçñß]+/gi, " ")
+    .trim();
+  const stop = new Set([
+    "about","after","again","also","been","between","could","from","have","into","just","know","like","more","player","recent","something","that","their","them","there","they","this","what","when","where","which","with","would","your",
+    "akkor","amit","arról","azért","ennek","erről","hogy","ilyen","játékos","között","legyen","már","mert","mint","most","neki","olyan","róla","szerint","után","vele","volt"
+  ]);
+  const tokenSet = (value) => new Set(
+    normalize(value)
+      .split(/\s+/)
+      .filter((token) => token.length >= 4 && !stop.has(token))
+  );
+
+  const reasonTokens = tokenSet(chosen.basis);
+  const dmTokens = tokenSet(text);
+  for (const token of dmTokens) {
+    if (reasonTokens.has(token)) return true;
+  }
+
+  const anchoredLanguage = /\b(?:post|posted|caption|note|comment|reply|heard|rumou?r|gossip|saw|seen|about that|about this|after that|what happened|did you hear|still on|still happening|promise|plan|tonight|tomorrow|yesterday|poszt|posztod|jegyzet|note-od|komment|kommented|válaszod|hallott|pletyk|láttam|erről|arról|ami történt|mi történt|utána|még áll|megbeszélt|terv|ígéret|ma este|holnap|tegnap)\b/i.test(text);
+
+  return anchoredLanguage;
+}
+
 /* Egy bot magától ír privátban. */
-async function genDM(w, bot) {
+async function genDM(w, bot, reasonContextOverride = null) {
+  const reasonContext = reasonContextOverride || autonomousDmReasonContext(w, bot);
+  if (!reasonContext.primary) {
+    return { skip:true, text:"", image:"", imagePrompt:"", reasonId:"", reasonBasis:"", relationshipImpact:false, changes:[], selfUpdates:[], relationshipUpdates:[] };
+  }
+
   const rel = getRel(
     w,
     bot.id,
@@ -46541,6 +46854,17 @@ KNOWLEDGE BOUNDARY:
 
 Magadtól írsz privát üzenetet ${w.player.name} karakternek.
 NEM ő kezdeményezett. Neked kell valódi, karakterhű okod legyen arra, hogy most ráírj.
+
+KONKRÉT DM-INDOK — HARD GROUNDING, MINDEN MÁS TÉMASZABÁLY ELŐTT:
+${autonomousDmReasonCard(reasonContext)}
+
+- A fenti listából PONTOSAN EGY reasonId-t válassz.
+- A reasonBasis mezőbe másold vissza a kiválasztott EXACT BASIS szöveget. Ez rejtett ellenőrző mező, a felhasználó nem látja.
+- A látható DM-nek TÉNYLEG ebből a konkrét okból kell következnie. A relationship/personality csak azt szabja meg, HOGYAN írsz róla; nem cserélheti le a témát.
+- Tilos az olyan önmagában álló filler, mint „you around?”, „mit csinálsz?”, „ráérsz?”, „beszélnünk kell”, „random but hi”, ha az üzenetből nem derül ki, MILYEN konkrét poszt/Note/komment/pletyka/esemény/terv/nyitott ügy miatt írsz.
+- Pletykáról csak akkor írj, ha az EXACT BASIS szerint te valóban hallottad. Privát eseményt csak akkor említs, ha a saját knowledge/memory ledgeredben szerepel.
+- Ha a kiválasztott ok egy poszt vagy Note, reagálj annak konkrét tartalmára; ne csak annyit írj, hogy „láttam a posztod”.
+- Ha terv/ígéret/open loop az ok, a DM a konkrét terv/ígéret/ügy következő lépésére kérdezzen vagy reagáljon.
 
 A viszonyod vele:
 ${rel.score}${
@@ -46641,14 +46965,13 @@ ${matureContentInstruction(
 
 PRIVÁT ÜZENET SZABÁLYOK:
 
-- Ezt a kört a rendszer azért adta NEKED, mert a személyiséged, kapcsolatod és online aktivitásod alapján most te vagy az egyik legvalószínűbb spontán kezdeményező.
-- Ne várj feltétlenül nagy eseményre. Egy valódi ember is ráírhat valakire pusztán egy apró kérdés, poén, gondolat, pletyka, meghívás, kép, "hol vagy?", praktikus ügy vagy pillanatnyi késztetés miatt.
-- A skip:true teljesen legitim. Csak akkor írj, ha MOST van természetes okod: nyitott ügy, friss történés, konkrét kérdés/terv, kapcsolati késztetés vagy valóban karakterhű hétköznapi kontaktus. Ne gyárts kötelező DM-et pusztán az idő múlásából.
-- Ha nincs nagy történés, egy KICSI, hétköznapi, karakterhű indok elég, DE ne erőltesd az üzenetet csak azért, mert a scheduler most neked adott kört. Ha a continuity, friss kontextus és személyiséged alapján sem lenne természetes, inkább skip:true.
-- Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz, tervhez vagy egyszerűen valamihez, amit most akarsz tőle.
-- Az ok lehet egészen hétköznapi is.
-- Nem kell minden spontán DM mögé nagy történés, konfliktus vagy dráma.
-- Lehet, hogy csak eszedbe jutott valami, láttál valamit, kérdeznél valamit, átküldenél egy reakciót, piszkálnád vagy akarsz tőle valamit. Flört CSAK akkor opció, ha (1) ez a célpont a nemed + szexualitásod alapján kompatibilis ÉS (2) VAGY eleve explicit flörtölős a személyiséged, VAGY valódi crush/dating/romantikus vonzalmad van PONT iránta. A játékos/playful/teasing személyiség önmagában NEM flirty.
+- Ezt a kört a rendszer azért adta NEKED, mert van legalább egy fent felsorolt, konkrét és számodra ismert DM-indok.
+- Ne találj ki új ürügyet. A DM kizárólag a kiválasztott reasonId / EXACT BASIS tartalmából indulhat.
+- Egy apró hétköznapi ok teljesen elég, HA konkrét: például a játékos tényleges posztjának egy részlete, az általa kiírt Note, egy tényleges kommentje, egy hallott pletyka, egy közösen átélt történés, vagy egy valóban nyitott terv/ígéret.
+- A puszta kapcsolati késztetés („hiányzik”, „crushom”, „barátom”) önmagában NEM elég témának. Az érzés a hangnemet erősítheti, de kell mellé a fenti konkrét kapaszkodó.
+- Ha a modell nem tud a kiválasztott basisből természetes üzenetet írni, inkább skip:true; ne válts generikus small talkra.
+- Nem kell minden spontán DM mögé nagy dráma, de minden elküldött spontán DM mögött legyen azonosítható aktuális tárgy.
+- Lehet poén, flört, számonkérés, meghívás vagy féltés, de mindig A KONKRÉT BASISRA reagálva. Flört CSAK akkor opció, ha (1) ez a célpont a nemed + szexualitásod alapján kompatibilis ÉS (2) VAGY eleve explicit flörtölős a személyiséged, VAGY valódi crush/dating/romantikus vonzalmad van PONT iránta. A játékos/playful/teasing személyiség önmagában NEM flirty.
 - Ha az orientációd szerint ${w.player.name} nem romantikus/szexuális célpont számodra, a közeli barátság maradjon PLATONIKUS: ne hajts rá, ne célozgass csókra/randira/intimitásra, és ne alakíts baráti hype-ot romantikus érdeklődéssé.
 - Ha köztetek tényleges, orientáció-kompatibilis crush/dating/romantikus vonzalom van, te is KEZDEMÉNYEZHETSZ: írhatsz direkt flörtöt, utalhatsz arra, hogy meg akarod csókolni, találkozót javasolhatsz, vagy Mature 18+ módban felnőtt szereplőként nem explicit módon jelezheted, hogy intimebb találkozást akarsz. Ne várj mindig arra, hogy a játékos hozza fel először.
 - A chat azonban továbbra is távoli chat: ne írd úgy, mintha fizikailag már megcsókoltad volna vagy hozzáértél volna, hacsak a jelenet szerint ténylegesen egy helyen vagytok.
@@ -46835,7 +47158,7 @@ A DM első pillantásra úgy hasson, mint egy valódi ember spontán privát üz
 Formátum:
 
 Ha nincs természetes okod írni:
-{"skip":true,"text":"","image":"","changes":[]}
+{"skip":true,"text":"","image":"","reasonId":"","reasonBasis":"","changes":[]}
 
 Ha van:
 - Alapértelmezés: "relationshipImpact": false és changes: [].
@@ -46846,12 +47169,16 @@ Ha van:
 - Plusz és mínusz egyformán lehetséges.
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
-{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"kifejezetten iránta MOST élő érzés vagy üres","currentIntent":"mit akarsz VELE kapcsolatban következőnek vagy üres","lastTone":"a mostani DM tényleges hangneme","perceivedTargetMood":"csak ha a meglévő beszélgetésből van róla benyomásod, különben üres","addOpenLoops":["csak új, ténylegesen nyitva maradó kettőtök közti ügy"],"resolveOpenLoops":["csak most ténylegesen lezárt korábbi ügy"],"addPromises":["csak explicit ígéret"],"resolvePromises":["teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["teljesült/lemondott terv"]}]}${TAIL}`,
+{"skip":false,"reasonId":"a fenti lista egyik EXACT reasonId-ja","reasonBasis":"a kiválasztott EXACT BASIS szó szerinti másolata","text":"a rövid, konkrét okhoz kötött privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"csak a kiválasztott reasonBasis miatt természetes ÚJ snap/selfie rövid leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"kifejezetten iránta MOST élő érzés vagy üres","currentIntent":"mit akarsz VELE kapcsolatban következőnek vagy üres","lastTone":"a mostani DM tényleges hangneme","perceivedTargetMood":"csak ha a meglévő beszélgetésből van róla benyomásod, különben üres","addOpenLoops":["csak új, ténylegesen nyitva maradó kettőtök közti ügy"],"resolveOpenLoops":["csak most ténylegesen lezárt korábbi ügy"],"addPromises":["csak explicit ígéret"],"resolvePromises":["teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["teljesült/lemondott terv"]}]}${TAIL}`,
     { maxTokens: 700, priority: 22 }
   );
 }
-async function genForcedEverydayDM(w, bot) {
+async function genForcedEverydayDM(w, bot, reasonContextOverride = null) {
   if (!w || !bot) return null;
+  const reasonContext = reasonContextOverride || autonomousDmReasonContext(w, bot);
+  if (!reasonContext.primary) {
+    return { skip:true, text:"", image:"", imagePrompt:"", reasonId:"", reasonBasis:"", relationshipImpact:false, changes:[], selfUpdates:[], relationshipUpdates:[] };
+  }
   const rel = getRel(w, bot.id, w.meId);
   return askWorldJSON(
     w,
@@ -46863,52 +47190,112 @@ ${relationshipBehaviorCard(w,bot.id,w.meId)}
 ${autonomousDmWarmthInstruction(w,bot.id,(w.chats[chatKey(w.meId,bot.id)]||[]).slice(-14).map((m)=>m&&m.text||"").join("\n"))}
 ${characterAgentRuntimeCard(w,[bot.id],{surface:"dm",targetId:w.meId,messages:w.chats[chatKey(w.meId,bot.id)]||[]})}
 
-AUTONOMOUS DM RETRY — DO NOT SKIP:
-You are ${bot.name}. Send ${w.player.name} ONE natural spontaneous private message now.
-This is not a dramatic scene. A tiny human reason is enough: unfinished conversation, question, joke, practical thing, gossip, plan, invitation, checking in, teasing or a simple thought. Flirting is allowed ONLY if this target is compatible with your gender/orientation AND either you are explicitly naturally flirty OR you have a real target-specific crush/romantic bond. If the crush is secret, keep it guarded/indirect rather than openly hitting on them.
+AUTONOMOUS DM GROUNDED RETRY — NO GENERIC PING:
+You are ${bot.name}. You may message ${w.player.name} ONLY because one of these concrete reasons currently exists:
+${autonomousDmReasonCard(reasonContext)}
+
+Choose EXACTLY ONE reasonId. Copy its EXACT BASIS verbatim into reasonBasis. The visible DM must clearly make sense as a reaction/follow-up to that basis.
+Do NOT send generic "you around?", "what are you doing?", "we need to talk", "hi", "ráérsz?", "mit csinálsz?" or equivalent without naming/referencing the concrete topic.
+Personality + relationship decide TONE, not TOPIC. Do not invent a new event, rumor, promise, plan or off-screen fact.
+If a post/Note/comment is the reason, react to a concrete detail from it. If gossip/event is the reason, write only from what this character actually knows. If continuity is the reason, ask/follow up on that exact unfinished plan/promise/issue.
 ${orientationBlockedRomanceInstruction(w, bot.id, w.meId)}
-Do not invent off-screen facts. Respect relationship=${Number(rel.score)||0}${rel.bond?`, bond=${rel.bond}`:""}.
-Use only text you would actually send in chat. Usually 1 short line, maximum 2 short sentences. No narration, no *actions*, no assistant voice. Do not write for the player.
+Respect relationship=${Number(rel.score)||0}${rel.bond?`, bond=${rel.bond}`:""}.
+Usually 1 short line, maximum 2 short sentences. No narration, no *actions*, no assistant voice. Do not write for the player.
 ${matureContentInstruction(w,[bot.id],"chat")}
 
 JSON ONLY:
-{"skip":false,"text":"short DM","image":"","imagePrompt":"","relationshipImpact":false,"changes":[],"selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
-    { maxTokens: 260, priority: 25 }
+{"skip":false,"reasonId":"one exact reasonId above","reasonBasis":"the exact basis for that reasonId","text":"short DM grounded in that exact reason","image":"","imagePrompt":"","relationshipImpact":false,"changes":[],"selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
+    { maxTokens: 320, priority: 25 }
   );
 }
 
-function fallbackAutonomousDmResponse(w, bot) {
-  const en = worldLanguage(w, w.meId) === "en";
-  const rel = getRel(w, bot.id, w.meId) || {};
-  const bond = String(rel.bond || "").toLowerCase();
-  const tier = relationshipFilterTier(rel);
-  const romantic = relationshipCrushActive(w, bot.id, w.meId, rel);
-  const secretCrush = relationshipSecretCrushActive(w, bot.id, w.meId, rel);
-  const friendly = tier === "good" || tier === "close" || relationshipDeclaresFriendship(rel);
-  const negative = Number(rel.score) <= -25 || /enemy|rival|ellens|riv[aá]l/.test(bond);
-  let text;
-
-  if (romantic && !negative) {
-    const options = secretCrush
-      ? (en
-          ? ["what are you up to?", "you around?", "random but hi", "you busy?"]
-          : ["mit csinálsz?", "ráérsz?", "random, de szia", "elfoglalt vagy?"])
-      : (en
-          ? ["you free later?", "what are you doing rn?", "come talk to me for a sec", "kinda wanted to hear from you"]
-          : ["ráérsz később?", "mit csinálsz most?", "gyere beszélj velem egy kicsit", "most valamiért rád akartam írni"]);
-    text = options[Math.floor(Math.random() * options.length)];
-  } else if (friendly && !negative) {
-    const options = en
-      ? ["what are you up to?", "you alive? 😭", "okay come talk to me", "random but how are you?"]
-      : ["mit csinálsz?", "élsz még? 😭", "na gyere beszélj velem", "random, de hogy vagy?"];
-    text = options[Math.floor(Math.random() * options.length)];
-  } else if (negative) {
-    text = en ? "we need to talk." : "beszélnünk kell.";
-  } else {
-    text = en ? "you around?" : "ráérsz egy percre?";
+function fallbackAutonomousDmResponse(w, bot, reasonContextOverride = null) {
+  const reasonContext = reasonContextOverride || autonomousDmReasonContext(w, bot);
+  const reason = reasonContext && reasonContext.primary;
+  if (!reason) {
+    return { skip:true, text:"", image:"", imagePrompt:"", reasonId:"", reasonBasis:"", relationshipImpact:false, changes:[], selfUpdates:[], relationshipUpdates:[] };
   }
 
-  return { skip:false, text, image:"", imagePrompt:"", relationshipImpact:false, changes:[], selfUpdates:[], relationshipUpdates:[] };
+  const en = worldLanguage(w, w.meId) === "en";
+  const basis = String(reason.basis || "").replace(/\s+/g, " ").trim();
+  const body = cut(
+    basis
+      .replace(/^Our still-open plan:\s*/i, "")
+      .replace(/^An unresolved promise between us:\s*/i, "")
+      .replace(/^An unfinished issue\/question between us:\s*/i, "")
+      .replace(/^A rumor\/gossip item I actually heard:\s*/i, "")
+      .replace(/^A recent event I personally know about:\s*/i, "")
+      .replace(/^Something I genuinely know happened involving [^:]+:\s*/i, ""),
+    105
+  );
+
+  let text = "";
+  switch (reason.kind) {
+    case "player-post":
+      text = en
+        ? `saw your post — ${body}. what happened?`
+        : `láttam a posztod — ${body}. mi történt?`;
+      break;
+    case "player-note":
+      text = en
+        ? `your Note about ${body} — you good?`
+        : `a Note-od: ${body} — minden oké?`;
+      break;
+    case "player-comment":
+      text = en
+        ? `about what you wrote on my post — ${body}. what did you mean?`
+        : `amit a posztom alá írtál — ${body}. ezt hogy értetted?`;
+      break;
+    case "heard-rumor":
+      text = en
+        ? `I just heard this: ${body}. do you know anything about it?`
+        : `most hallottam ezt: ${body}. te tudsz erről?`;
+      break;
+    case "shared-plan":
+      text = en
+        ? `about ${body} — still on?`
+        : `a tervünkről: ${body} — még áll?`;
+      break;
+    case "shared-promise":
+      text = en
+        ? `about ${body} — are we still doing that?`
+        : `az ígéretünkről: ${body} — ezt még tartjuk?`;
+      break;
+    case "shared-open-loop":
+      text = en
+        ? `we never finished this: ${body}`
+        : `ezt még nem beszéltük végig: ${body}`;
+      break;
+    case "public-post-about-player":
+      text = en
+        ? `did you see what got posted about you? ${body}`
+        : `láttad, mit raktak ki rólad? ${body}`;
+      break;
+    case "known-player-event":
+    case "known-event":
+      text = en
+        ? `about what happened — ${body}. are you okay?`
+        : `ami történt — ${body}. jól vagy?`;
+      break;
+    default:
+      text = en
+        ? `I wanted to ask you about this: ${body}`
+        : `erről akartam írni neked: ${body}`;
+      break;
+  }
+
+  return {
+    skip:false,
+    reasonId:reason.id,
+    reasonBasis:reason.basis,
+    text:cut(text, 280),
+    image:"",
+    imagePrompt:"",
+    relationshipImpact:false,
+    changes:[],
+    selfUpdates:[],
+    relationshipUpdates:[],
+  };
 }
 
 function characterNoteActivityScore(w, c) {
@@ -47246,6 +47633,10 @@ function pickInitiator(w) {
 
     const rel = getRel(w, c.id, w.meId);
     const mem = ensureCharMemory(w, c.id);
+    const dmReasonContext = autonomousDmReasonContext(w, c);
+    if (!dmReasonContext.primary) {
+      return { c, score: -999, dmReasonContext };
+    }
     const lore = [
       c.personality,
       c.traits,
@@ -47268,6 +47659,7 @@ function pickInitiator(w) {
     score += socialInteractionInterest(w, c.id, w.meId) * 0.55;
     score += relationshipObsessionLevel(w, c.id, w.meId) * 18;
     score += (activity - 1) * 28;
+    score += Math.min(54, Math.max(0, Number(dmReasonContext.primary.rank) || Number(dmReasonContext.primary.weight) || 0) * 0.34);
 
     if (/social|társas|outgoing|extrovert|chatty|beszédes|flirt|flört|impulsive|impulzív|gossip|pletyka|possess|birtokl|obsess|megszáll/.test(lore)) score += 14;
     if (/reserved|zárkózott|shy|félénk|quiet|csendes|private|low.?profile|visszahúzód/.test(lore)) score -= 9;
@@ -62391,19 +62783,24 @@ if (targetNote) {
       return null;
     }
 
-    let out =
-      await genDM(view, bot);
+    const autonomousReasonContext = autonomousDmReasonContext(view, bot);
+    if (!autonomousReasonContext.primary) {
+      return null;
+    }
 
-    if (!out || out.skip === true || (!String(out.text || "").trim() && !String(out.imagePrompt || "").trim() && !String(out.image || "").trim())) {
+    let out =
+      await genDM(view, bot, autonomousReasonContext);
+
+    if (!autonomousDmOutputMatchesReason(out, autonomousReasonContext)) {
       try {
-        out = await genForcedEverydayDM(view, bot);
+        out = await genForcedEverydayDM(view, bot, autonomousReasonContext);
       } catch (dmRetryErr) {
-        console.warn("Autonomous DM retry failed:", dmRetryErr);
+        console.warn("Autonomous DM grounded retry failed:", dmRetryErr);
       }
     }
 
-    if (!out || out.skip === true || (!String(out.text || "").trim() && !String(out.imagePrompt || "").trim() && !String(out.image || "").trim())) {
-      out = fallbackAutonomousDmResponse(view, bot);
+    if (!autonomousDmOutputMatchesReason(out, autonomousReasonContext)) {
+      out = fallbackAutonomousDmResponse(view, bot, autonomousReasonContext);
     }
 
     const rawTxt =
@@ -62476,7 +62873,7 @@ if (targetNote) {
       autonomousConflict === 0 &&
       (!txt || socialTextHostilityLevel(txt) > 0 || DM_COLD_DISMISSAL_RE.test(txt))
     ) {
-      txt = fallbackAutonomousDmResponse(view, bot).text;
+      txt = fallbackAutonomousDmResponse(view, bot, autonomousReasonContext).text;
     }
 
     const legacyAlbumIntent =
@@ -62558,6 +62955,9 @@ if (targetNote) {
             ),
           autonomous: true,
           source: "autonomous-dm",
+          autonomousReasonId: String(out && out.reasonId || autonomousReasonContext.primary.id || ""),
+          autonomousReasonType: String(autonomousReasonContext.primary.kind || ""),
+          autonomousReasonBasis: cut(String(out && out.reasonBasis || autonomousReasonContext.primary.basis || ""), 360),
         },
       ];
 
