@@ -36731,55 +36731,141 @@ function socialPostCopiesPrivateCharacterSheetPhrase(w, authorId, value) {
   return false;
 }
 
+function socialPostLooksLikeRawProfileMetadata(w, authorId, value) {
+  if (!w || !authorId || !value) return false;
+  const c = charById(w, authorId);
+  if (!c) return false;
+
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  const normalized = normalizeExactCommentGroundingText(raw);
+  if (!normalized) return false;
+
+  const metadataFields = [
+    c.job,
+    c.occupation,
+    c.role,
+    c.rank,
+    c.affiliation,
+    c.organization,
+    c.organisation,
+    c.team,
+    c.dojo,
+    c.house,
+    c.club,
+    c.gang,
+    c.crew,
+    c.faction,
+  ].filter(Boolean);
+
+  for (const field of metadataFields) {
+    const fieldRaw = String(field || "").replace(/\s+/g, " ").trim();
+    if (!fieldRaw) continue;
+
+    const fieldNorm = normalizeExactCommentGroundingText(fieldRaw);
+    const fragments = fieldRaw
+      .split(/\s*(?:,|\||;|\/|·)\s*/g)
+      .map((part) => normalizeExactCommentGroundingText(part))
+      .filter((part) => part && part.length >= 4);
+
+    /* A profile field such as "Cobra Kai Sensei, Frollo Mafia member" is
+       metadata, not something a real person recites as a caption. */
+    if (fragments.length >= 2) {
+      const matched = fragments.filter((part) =>
+        (` ${normalized} `).includes(` ${part} `)
+      );
+      if (matched.length >= 2) return true;
+    }
+
+    if (
+      /[,|;\/·]/.test(fieldRaw) &&
+      fieldNorm.length >= 18 &&
+      (` ${normalized} `).includes(` ${fieldNorm} `)
+    ) {
+      return true;
+    }
+  }
+
+  const roleWords = raw.match(
+    /\b(?:sensei|member|leader|captain|student|teacher|coach|manager|owner|founder|director|heir|mafia|affiliate|affiliation)\b/gi
+  ) || [];
+
+  return roleWords.length >= 2 && /[,|;\/·]/.test(raw);
+}
+
+function socialPostLooksLikeEmptyAutonomousScaffold(value) {
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  if (!raw) return true;
+
+  const normalized = normalizeExactCommentGroundingText(raw);
+  if (!normalized) return true;
+
+  /* Old emergency scaffolds are never acceptable as visible posts. Even when
+     the tail contains a real noun, these prefixes are exactly what made the
+     feed read like generated placeholders instead of people posting. */
+  if (/^(?:plan for now|current mood|mood check|priority|on the list|for now one target|next up|one thing first|still unfinished|need to deal with this|not done yet)\b/i.test(normalized)) {
+    return true;
+  }
+
+  if (/^(?:not naming names today|somebody is taking up too much space in my head|no names they know|no comment|scroll past|keep scrolling|moving on|whatever|anyway|still here|quiet day|long day|good vibes|training done)$/i.test(normalized)) {
+    return true;
+  }
+
+  /* A bare name + generic confrontation has no public meaning. If there is a
+     real conflict, the post must contain at least one concrete clue about it. */
+  if (/^.{1,42}[,.!]\s*(?:we need to talk|explain yourself|talk to me|call me|answer me|seriously)\s*[.!?]*$/i.test(raw)) {
+    return true;
+  }
+
+  return false;
+}
+
+function socialAutonomousPostTextMakesSense(w, authorId, value) {
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  if (!raw) return false;
+  if (socialPostCopiesPrivateCharacterSheetPhrase(w, authorId, raw)) return false;
+  if (socialPostLooksLikeRawProfileMetadata(w, authorId, raw)) return false;
+  if (socialPostLooksLikeEmptyAutonomousScaffold(raw)) return false;
+  return true;
+}
+
 function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
   const author = charById(w, authorId);
   if (!author || !characterCanAutonomouslyPost(w, author, null, options)) return null;
 
   /*
-   * HARD LOCAL POST FALLBACK v100.1 — CONCRETE-FACT ONLY
+   * HARD LOCAL POST FALLBACK v101 — EVENT-GROUNDED ONLY
    *
-   * This is an emergency provider-independent rescue, NOT a canned caption bank.
-   * Every visible fallback post must contain a concrete fact/plan/place/person/
-   * activity from THIS character or THIS trigger. If no concrete anchor exists,
-   * return null and let the retry path try again instead of publishing filler.
+   * The old fallback tried to manufacture captions from Goals, mood, job, dojo
+   * and relationship labels. That produced technically grounded but humanly
+   * nonsensical posts such as "X, we need to talk", "Plan for now: scroll
+   * past" and raw profile-title chains. A provider-independent fallback is now
+   * allowed ONLY when there is a concrete current trigger event the character
+   * actually experienced. Otherwise we publish nothing and let a later world
+   * tick retry rather than filling the feed with synthetic placeholder prose.
    */
   const en = worldLanguage(w, w.meId) === "en";
-  const faction = characterFactionIdentityCard(author);
-  const dojo = (faction.match(/dojo=([^|]+)/i) || [])[1]?.trim() || "";
-  const job = String(author.job || author.occupation || author.role || "").replace(/\s+/g, " ").trim();
-  const goals = String(author.goals || "").replace(/\s+/g, " ").trim();
-  const likes = String(author.likes || author.favorites || "").replace(/\s+/g, " ").trim();
-  const city = String(author.city || "").replace(/\s+/g, " ").trim();
-  const selfState = (w.charMemory && w.charMemory[author.id] && w.charMemory[author.id].selfState) || {};
   const trigger = String(options && options.trigger || "").trim();
   const burstKey = String(options && options.burstKey || "").trim();
   const stats = characterAutonomousPostStats24h(w, author.id);
   const seed = commentSeedNumber(`${author.id}|${burstKey}|${trigger}|${stats.count}|${Math.floor(now()/60000)}`);
 
-  const compactFact = (value, maxLen = 96) => {
-    let text = String(value || "")
+  const compactEventTitle = (value) => {
+    const text = String(value || "")
       .replace(/[\r\n]+/g, " ")
       .replace(/^[-•*\s]+/, "")
       .replace(/\s+/g, " ")
-      .trim();
+      .trim()
+      .replace(/[,:;\-–—\s]+$/g, "");
     if (!text) return "";
-    /* Prefer one concrete clause instead of dumping a whole character-sheet field. */
-    const pieces = text.split(/\s*(?:\||;|•)\s*/).map((x) => x.trim()).filter(Boolean);
-    text = pieces[seed % Math.max(1, pieces.length)] || text;
-    return cut(text, maxLen).replace(/[,:;\-–—\s]+$/g, "").trim();
+    const words = normalizeExactCommentGroundingText(text).split(/\s+/).filter(Boolean);
+    if (words.length < 2 || words.length > 8) return "";
+    if (socialPostLooksLikeEmptyAutonomousScaffold(text)) return "";
+    if (socialPostLooksLikeRawProfileMetadata(w, author.id, text)) return "";
+    return cut(text, 90);
   };
 
-  const anchors = [];
-  const addAnchor = (kind, value, weight = 1, meta = {}) => {
-    const fact = compactFact(value, kind === "event" ? 120 : 90);
-    if (!fact || fact.length < 3) return;
-    if (!anchors.some((row) => row.kind === kind && row.fact.toLowerCase() === fact.toLowerCase())) {
-      anchors.push({ kind, fact, weight, ...meta });
-    }
-  };
+  let fact = "";
 
-  /* Trigger facts outrank generic biography because aftermath posts should be
-     about what just happened when this author genuinely witnessed it. */
   if ((trigger === "popup-choice" || trigger === "popup-custom-response") && options.popupEventId) {
     const event = (w.popupEvents || []).find((e) => e && e.id === options.popupEventId);
     if (event) {
@@ -36788,155 +36874,45 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
       const canKnow = String(event.visibility || "limited") !== "private" || involved.includes(String(author.id));
       const wasThere = involved.includes(String(author.id)) || witnesses.includes(String(author.id));
       if (canKnow && wasThere) {
-        addAnchor("event", event.title || event.summary || event.text || event.body, 12);
+        fact = compactEventTitle(event.title || "");
       }
     }
   }
 
-  if (trigger === "roleplay-ended" && options.sceneId) {
+  if (!fact && trigger === "roleplay-ended" && options.sceneId) {
     const scene = (w.scenes || []).find((row) => row && row.id === options.sceneId);
     const cast = scene && Array.isArray(scene.cast) ? scene.cast.map(String) : [];
     if (scene && cast.includes(String(author.id))) {
-      addAnchor("event", scene.title || scene.summary || scene.diaryEntry || scene.goalResult, 12);
+      fact = compactEventTitle(scene.title || "");
     }
   }
 
-  const shortPrivateAnchor = (value, maxWords) => {
-    const fact = compactFact(value, 80);
-    if (!fact) return "";
-    const words = normalizeExactCommentGroundingText(fact).split(/\s+/).filter(Boolean);
-    return words.length <= Math.max(1, Number(maxWords) || 4) ? fact : "";
-  };
+  if (!fact) return null;
 
-  /* Emergency fallback may use a SHORT internal keyword/fragment as a seed,
-     but never dump a full Goals/open-loop sentence into the public feed. */
-  addAnchor("intent", shortPrivateAnchor(selfState.intent, 4), 5);
-  (Array.isArray(selfState.openLoops) ? selfState.openLoops : []).slice(-3).forEach((x) =>
-    addAnchor("loop", shortPrivateAnchor(x, 4), 4)
-  );
-  addAnchor("mood", shortPrivateAnchor(selfState.mood, 3), 3);
-  addAnchor("goal", shortPrivateAnchor(goals, 4), 3);
-  addAnchor("like", likes, 4);
-  addAnchor("work", job, 4);
-  addAnchor("dojo", dojo, 5);
-  addAnchor("city", city, 2);
+  const forms = en
+    ? [
+        `Still thinking about ${fact}.`,
+        `${fact}. Yeah, that happened.`,
+        `Not sure I'm done with ${fact} yet.`,
+      ]
+    : [
+        `Még mindig a(z) ${fact} jár a fejemben.`,
+        `${fact}. Igen, ez tényleg megtörtént.`,
+        `Nem hiszem, hogy lezártam magamban a(z) ${fact} dolgot.`,
+      ];
 
-  const relationshipRows = relationshipAutonomySpotlightRows(w, author.id, 3);
-  relationshipRows.forEach((row) => {
-    if (!row || !row.target || !row.gravity) return;
-    /* Relationship becomes a concrete public anchor only when social gravity is
-       genuinely high; hidden feelings are never copied into fallback text. */
-    if (row.gravity.level < 3) return;
-    const targetName = String(row.target.nick || row.target.nickname || row.target.name || "").split(" ")[0];
-    if (!targetName) return;
-    const publicRel = compactFact((row.rel && (row.rel.mood || row.rel.bond || row.rel.type)) || "", 50);
-    addAnchor("person", targetName, row.due ? 10 : 5, { targetName, publicRel, hidden:Boolean(row.gravity.hidden) });
-  });
-
-  if (!anchors.length) return null;
-
-  /* Weighted deterministic choice, but never the same topic family by default. */
-  const expanded = [];
-  anchors.forEach((row) => {
-    const copies = Math.max(1, Math.min(12, Math.round(Number(row.weight) || 1)));
-    for (let i = 0; i < copies; i += 1) expanded.push(row);
-  });
-  const anchor = expanded[seed % expanded.length] || anchors[0];
-  if (!anchor) return null;
-
-  const fact = anchor.fact;
-  const lowerFact = fact.toLowerCase();
-  const hash = commentSeedNumber(`${author.id}|${anchor.kind}|${fact}|${stats.count}|${burstKey}`);
-
-  /* Form rotation deliberately changes discourse shape across characters/turns:
-     fragment, question, two-sentence thought, direct statement, plan, aside. */
-  const forms = {
-    event: [
-      () => en ? `${fact}. Still not over that.` : `${fact}. Ezen még mindig nem vagyok túl.`,
-      () => en ? `About ${fact}: I have thoughts.` : `A(z) ${fact} témáról lenne pár gondolatom.`,
-      () => en ? `Did ${fact} really have to happen like that?` : `A(z) ${fact} tényleg csak így történhetett?`,
-      () => en ? `${fact} happened. The rest can wait.` : `${fact} megtörtént. A többi ráér.`,
-    ],
-    intent: [
-      () => en ? `Next up — ${fact}.` : `Következő — ${fact}.`,
-      () => en ? `${fact}. That's next.` : `${fact}. Ez jön most.`,
-      () => en ? `Plan for now: ${fact}.` : `Mostani terv: ${fact}.`,
-      () => en ? `One thing first: ${fact}.` : `Előbb egy dolog: ${fact}.`,
-    ],
-    loop: [
-      () => en ? `Still unfinished — ${fact}.` : `Még nincs lezárva — ${fact}.`,
-      () => en ? `${fact}. Still on the list.` : `${fact}. Még mindig a listán.`,
-      () => en ? `Need to deal with this: ${fact}.` : `Ezzel még dolgom van: ${fact}.`,
-      () => en ? `Not done yet: ${fact}.` : `Még nincs kész: ${fact}.`,
-    ],
-    mood: [
-      () => en ? `Current mood — ${fact}.` : `Aktuális hangulat — ${fact}.`,
-      () => en ? `${fact}. That's today.` : `${fact}. Ma ez van.`,
-      () => en ? `Mood check: ${fact}.` : `Hangulatjelentés: ${fact}.`,
-    ],
-    goal: [
-      () => en ? `Priority — ${fact}.` : `Prioritás — ${fact}.`,
-      () => en ? `${fact}. That's the target.` : `${fact}. Ez a cél.`,
-      () => en ? `On the list: ${fact}.` : `A listán: ${fact}.`,
-      () => en ? `For now, one target: ${fact}.` : `Most egy cél van: ${fact}.`,
-    ],
-    like: [
-      () => en ? `Could absolutely make time for ${fact} today.` : `Erre ma simán szakítanék időt: ${fact}.`,
-      () => en ? `${fact} sounds better than whatever else I was supposed to do.` : `${fact} jobban hangzik, mint bármi, amit ma még csinálnom kéne.`,
-      () => en ? `Someone remind me why I'm not doing ${fact} right now.` : `Valaki emlékeztessen, miért nem ezt csinálom most: ${fact}.`,
-    ],
-    work: [
-      () => en ? `${fact} can have me back tomorrow.` : `${fact} holnap visszakaphat.`,
-      () => en ? `Done with ${fact} for today.` : `Mára végeztem ezzel: ${fact}.`,
-      () => en ? `Apparently ${fact} had other plans for my day.` : `Úgy tűnik, ${fact} mást tervezett a mai napommal.`,
-    ],
-    dojo: [
-      () => en ? `${fact}. Back to work.` : `${fact}. Vissza dolgozni.`,
-      () => en ? `See you at ${fact}.` : `Találkozunk itt: ${fact}.`,
-      () => en ? `${fact} is getting the rest of my energy today.` : `A maradék energiám ma ide megy: ${fact}.`,
-      () => en ? `One more round at ${fact}.` : `Még egy kör itt: ${fact}.`,
-    ],
-    city: [
-      () => en ? `${fact}, give me five quiet minutes.` : `${fact}, adj öt perc nyugalmat.`,
-      () => en ? `Out in ${fact}. That's enough context.` : `${fact}. Ennyi kontextus elég is.`,
-    ],
-    person: [
-      () => anchor.hidden
-        ? (en ? `Not naming names today.` : `Ma nem mondok neveket.`)
-        : (en ? `${anchor.targetName}. We need to talk.` : `${anchor.targetName}. Beszélnünk kell.`),
-      () => anchor.hidden
-        ? (en ? `Somebody is taking up too much space in my head.` : `Valaki túl sok helyet foglal a fejemben.`)
-        : (en ? `I blame ${anchor.targetName} for this one.` : `Ezt most ${anchor.targetName} számlájára írom.`),
-      () => anchor.hidden
-        ? (en ? `No names. They know.` : `Nincs név. Tudja, kire gondolok.`)
-        : (en ? `${anchor.targetName}, explain yourself.` : `${anchor.targetName}, magyarázd meg.`),
-    ],
-  };
-
-  const pool = forms[anchor.kind] || forms.intent;
-  let chosen = String(pool[hash % pool.length]()).replace(/\s+/g, " ").trim();
-
-  /* Concrete specificity hard gate: generic emergency text without the selected
-     anchor is not allowed. Hidden-person forms are the only deliberate exception. */
-  if (anchor.kind !== "person" || !anchor.hidden) {
-    const normalizedChosen = normalizeExactCommentGroundingText(chosen);
-    const normalizedFact = normalizeExactCommentGroundingText(fact);
-    const factTokens = socialCommentGroundingContentTokens(normalizedFact);
-    if (factTokens.length && !factTokens.some((token) => normalizedChosen.includes(token.slice(0, Math.min(6, token.length))))) {
-      chosen = en ? `${fact}.` : `${fact}.`;
-    }
-  }
+  let chosen = String(forms[seed % forms.length] || "").replace(/\s+/g, " ").trim();
+  if (!socialAutonomousPostTextMakesSense(w, author.id, chosen)) return null;
 
   const recentWorld = (w.posts || [])
     .filter((p) => p && p.text && !isHuman(w, p.authorId))
     .slice(0, 50)
     .map((p) => normalizeExactCommentGroundingText(p.text || ""))
     .filter(Boolean);
-  const normalizedChosen = normalizeExactCommentGroundingText(chosen);
-  if (recentWorld.includes(normalizedChosen)) {
-    /* Switch form once; if that is also identical, refuse filler and let retry. */
-    chosen = String(pool[(hash + 1) % pool.length]()).replace(/\s+/g, " ").trim();
-    if (recentWorld.includes(normalizeExactCommentGroundingText(chosen))) return null;
+
+  if (recentWorld.includes(normalizeExactCommentGroundingText(chosen))) {
+    chosen = String(forms[(seed + 1) % forms.length] || "").replace(/\s+/g, " ").trim();
+    if (!chosen || recentWorld.includes(normalizeExactCommentGroundingText(chosen))) return null;
   }
 
   return {
@@ -37247,7 +37223,11 @@ ${albumPostingList(promptAuthor || author) || "nincs használható albumkép"}
 - Albumképet csak akkor válassz, ha a konkrét kép ténylegesen illik az aktuális élethelyzethez.
 - A poszt kizárólag ${author.name} SAJÁT karakterlapjából, életéből, occupation/job-jából, dojo/organization oldalából, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
 - CHARACTER-SHEET → CAPTION FIREWALL: Goals / Fears / Secrets / Backstory / Extra / Personality / Connections belső motiváció és kánon, NEM kész social-media szöveg. SOHA ne másolj ki belőlük teljes mondatot vagy 5+ szavas szó szerinti részletet captionként. Előbb értsd meg a tényt/szándékot, aztán írd meg új, természetes, karakterhű social nyelven.
+- PROFILE-METADATA FIREWALL: job / occupation / role / rank / dojo / organization / faction / affiliation címkék NEM caption-elemek. TILOS ilyen listát vagy címkeláncot mondatba önteni (pl. „Sensei, X member, Y leader…”). Ezek csak háttérinformációk ahhoz, hogy tudd, milyen életet él a karakter.
 - Ha egy Goals-sor nyelvtanilag parancs/infinitív (pl. „prepare X...”, „become...”, „protect...”), TILOS egy sablonmondat közepébe nyersen beilleszteni. A kész poszt önálló, természetes mondat legyen.
+- KONKRÉT OK NÉLKÜLI CALLOUT TILOS: puszta „X, we need to talk”, „X, explain yourself”, „no names”, „somebody…” jellegű poszt nem elég. Ha valakit megszólítasz vagy subtweetelsz, a posztból legyen legalább egy konkrét, jelenlegi ok/részlet is érthető.
+- PLACEHOLDER/SCAFFOLD TILOS: ne használj „Plan for now: …”, „Current mood: …”, „Priority: …”, „On the list: …”, „Next up: …” jellegű mesterséges keretet. Írd ki közvetlenül azt, amit egy ember ténylegesen posztolna.
+- Ha nincs valódi, aktuális és emberileg posztolható gondolat, inkább NE gyárts üres filler-mondatot. A mennyiségi cél soha nem írhatja felül az értelmet.
 - FONTOS: az occupation/job, szerep, dojo, organization, rank és affiliation HÁTTÉRKONTEXTUS, nem kötelező caption-szöveg. Határozza meg természetesen, mit csinál, mit tud, milyen napja van és miről lehet oka posztolni, DE ne sorolja fel ezeket minden posztban, ne ismételje a karakterlap megfogalmazását, és ne írjon mini bio/CV-szerű „szerep · szervezet · supporter” felsorolást csak azért, hogy jelezze a kánont. Csak akkor nevezze meg konkrétan a munkát/szervezetet/oldalt, ha az adott poszt témájához ténylegesen releváns.
 - OWNERSHIP HARD RULE: amit ${author.name} "én / my / our" formában állít magáról, annak ${author.name} saját lapján kell igaznak lennie. Más karakter foglalkozását, dojóját, rangját, senseijét, családját, crushát vagy történetét ne vedd át.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
@@ -37317,7 +37297,7 @@ function applyWorldStep(n, out, postingOptions = {}) {
         )
       );
     if (!postText) return;
-    if (socialPostCopiesPrivateCharacterSheetPhrase(n, author, postText)) return;
+    if (!socialAutonomousPostTextMakesSense(n, author, postText)) return;
     /*
      * The local emergency fallback is built exclusively from the selected
      * author's own sheet. During a triggered burst it must not be rejected by
