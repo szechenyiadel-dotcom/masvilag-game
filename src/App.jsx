@@ -1,4 +1,4 @@
-/* MÁSVILÁG RECOVERY v99.8 — SOCIAL POST + FULL CANON LOCK — 20260816_1030 */
+/* MÁSVILÁG RECOVERY v99.7 — RESILIENT AI JSON + REACTION RETRY — 20260816_0200 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -1776,467 +1776,6 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   }
 
 }
-
-
-/* ========================================================================
-   UI POLISH v101 — VISUAL ONLY
-   Premium mobile-first refinement. No behavior, state or AI logic changes.
-   ======================================================================== */
-.mv {
-  --ink:#08070d;
-  --surface:#11101a;
-  --surface-2:#151320;
-  --raised:#1b1728;
-  --raised-2:#221d31;
-  --line:#302941;
-  --line-soft:rgba(111,93,145,.24);
-  --oxblood:#8f1f42;
-  --gold:#c9a761;
-  --rose:#df7794;
-  --rose-soft:rgba(223,119,148,.13);
-  --steel:#6f89a2;
-  --bone:#f1ebe4;
-  --muted:#9890aa;
-  --shadow-sm:0 6px 20px rgba(0,0,0,.18);
-  --shadow-md:0 14px 38px rgba(0,0,0,.28);
-  --radius-sm:12px;
-  --radius-md:17px;
-  --radius-lg:22px;
-  background:
-    radial-gradient(100% 48% at 48% -8%, rgba(143,31,66,.19), transparent 64%),
-    radial-gradient(75% 42% at 105% 82%, rgba(91,122,153,.09), transparent 72%),
-    var(--ink);
-  -webkit-font-smoothing:antialiased;
-  text-rendering:optimizeLegibility;
-}
-
-.mv-wrap {
-  isolation:isolate;
-}
-
-.mv-main {
-  padding-left:12px;
-  padding-right:12px;
-  padding-bottom:calc(92px + env(safe-area-inset-bottom));
-  scrollbar-width:thin;
-  scrollbar-color:var(--line) transparent;
-}
-
-.mv-main::-webkit-scrollbar { width:4px; }
-.mv-main::-webkit-scrollbar-track { background:transparent; }
-.mv-main::-webkit-scrollbar-thumb { background:#352d49; }
-
-/* Header: cleaner hierarchy + stronger app-shell feeling. */
-.hdr {
-  position:relative;
-  z-index:20;
-  flex:none;
-  padding:15px 16px 10px;
-  border-bottom:1px solid rgba(88,72,116,.35);
-  background:
-    linear-gradient(180deg,rgba(8,7,13,.98),rgba(8,7,13,.91));
-  backdrop-filter:blur(18px) saturate(125%);
-  -webkit-backdrop-filter:blur(18px) saturate(125%);
-  box-shadow:0 8px 28px rgba(0,0,0,.14);
-}
-
-.mark {
-  font-size:27px;
-  line-height:1;
-  letter-spacing:-.035em;
-  text-shadow:0 1px 20px rgba(217,117,143,.08);
-}
-.mark i { color:#e47e99; }
-.hdr-meta {
-  margin-top:5px;
-  color:#9991aa;
-  font-size:10.5px;
-  letter-spacing:.16em;
-  line-height:1.45;
-}
-
-.ticker {
-  min-height:38px;
-  margin-top:11px;
-  padding:7px 12px;
-  gap:9px;
-  border-color:rgba(93,77,124,.48);
-  background:linear-gradient(180deg,rgba(29,24,43,.82),rgba(20,17,31,.9));
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.02),0 8px 24px rgba(0,0,0,.12);
-}
-.ticker-tag { font-weight:600; }
-.ticker-track > span { color:#a19aac; }
-.dot { box-shadow:0 0 0 4px rgba(223,119,148,.08); }
-
-/* Generic surfaces */
-.card {
-  border-color:rgba(91,75,121,.44);
-  border-radius:var(--radius-md);
-  background:linear-gradient(180deg,rgba(20,18,31,.98),rgba(16,14,25,.98));
-  box-shadow:var(--shadow-sm),inset 0 1px 0 rgba(255,255,255,.018);
-}
-.card.flat { box-shadow:none; }
-
-.av {
-  box-shadow:0 0 0 1px rgba(255,255,255,.035),0 5px 16px rgba(0,0,0,.22);
-}
-.name { font-weight:650; letter-spacing:-.012em; }
-.handle { color:#938ba6; }
-.body { line-height:1.58; }
-
-/* Controls: consistent tap targets and a softer premium geometry. */
-.btn {
-  min-height:40px;
-  padding:9px 14px;
-  border-radius:12px;
-  border-color:#393047;
-  background:linear-gradient(180deg,#211c30,#1b1728);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);
-  transition:border-color .16s ease,background .16s ease,transform .12s ease,color .16s ease;
-}
-.btn:hover:not(:disabled) { border-color:#7f5065; background:#211b30; }
-.btn:active:not(:disabled) { transform:translateY(1px); }
-.btn.primary {
-  background:linear-gradient(180deg,#9d244b,#821c3b);
-  border-color:#a82a50;
-  box-shadow:0 6px 18px rgba(138,29,59,.2),inset 0 1px 0 rgba(255,255,255,.08);
-}
-.btn.primary:hover:not(:disabled) { background:linear-gradient(180deg,#ad2a54,#922046); }
-.btn.ghost { background:rgba(23,19,34,.36); }
-.btn.tiny { min-height:34px; padding:6px 10px; border-radius:10px; }
-
-input.i,textarea.i,select.i {
-  min-height:42px;
-  border-color:#342d46;
-  border-radius:13px;
-  background:#0c0b13;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.015);
-  transition:border-color .16s ease,background .16s ease,box-shadow .16s ease;
-}
-input.i:hover,textarea.i:hover,select.i:hover { border-color:#403653; }
-input.i:focus,textarea.i:focus,select.i:focus {
-  border-color:#74425a;
-  background:#0e0c16;
-  box-shadow:0 0 0 3px rgba(223,119,148,.07);
-}
-input.i::placeholder,textarea.i::placeholder { color:#655e76; }
-label.f { color:#958da6; font-weight:600; }
-
-/* Feed header */
-.social-feed-head {
-  margin:0 -12px;
-  padding:0 12px;
-  border-bottom:1px solid rgba(75,62,100,.55);
-  background:rgba(8,7,13,.91);
-  backdrop-filter:blur(20px) saturate(130%);
-  -webkit-backdrop-filter:blur(20px) saturate(130%);
-  box-shadow:0 8px 26px rgba(0,0,0,.11);
-}
-.social-feed-title { min-height:51px; }
-.social-feed-title h2,
-.social-feed-title h3 {
-  font-size:20px;
-  letter-spacing:-.025em;
-}
-.social-feed-tabs {
-  gap:4px;
-  padding:3px;
-  border:1px solid rgba(70,58,94,.38);
-  border-radius:13px;
-  background:rgba(20,17,30,.58);
-}
-.social-feed-tab {
-  min-height:36px;
-  padding:8px 13px;
-  border-radius:10px;
-  font-size:12px;
-  transition:background .15s ease,color .15s ease;
-}
-.social-feed-tab.on {
-  color:var(--bone);
-  background:#211b30;
-  box-shadow:inset 0 0 0 1px rgba(91,75,121,.42);
-}
-.social-feed-tab.on:after { display:none; }
-
-/* Composer: reads as an intentional creation surface instead of a form row. */
-.social-composer {
-  margin:10px 0 12px;
-  padding:13px;
-  border:1px solid rgba(91,75,121,.46);
-  border-radius:18px;
-  background:linear-gradient(180deg,rgba(20,17,31,.97),rgba(15,13,23,.97));
-  box-shadow:var(--shadow-sm);
-}
-.social-composer-main { gap:11px; }
-.social-composer textarea.i {
-  min-height:64px;
-  padding:6px 2px 8px;
-  font-size:15px;
-  line-height:1.55;
-}
-.social-composer-actions {
-  margin-left:49px;
-  padding-top:10px;
-  border-color:rgba(67,55,90,.7);
-}
-.social-media-panel { margin-left:49px; }
-
-/* Feed cards */
-.social-post {
-  position:relative;
-  margin:10px 0 0;
-  padding:14px 14px 13px;
-  border:1px solid rgba(82,67,110,.43);
-  border-radius:18px;
-  background:linear-gradient(180deg,rgba(17,15,27,.95),rgba(12,11,19,.95));
-  box-shadow:0 9px 30px rgba(0,0,0,.16),inset 0 1px 0 rgba(255,255,255,.018);
-  overflow:hidden;
-}
-.social-post:last-child { margin-bottom:10px; }
-.social-post.highlight {
-  border-color:rgba(223,119,148,.44);
-  background:linear-gradient(180deg,rgba(41,21,34,.72),rgba(17,14,24,.97));
-  box-shadow:0 10px 32px rgba(0,0,0,.18),inset 3px 0 0 var(--rose);
-}
-.social-post-head { gap:11px; }
-.social-post-meta { gap:6px; line-height:1.35; }
-.social-post-meta .name { font-size:15px; }
-.social-post-meta .handle { font-size:11px; }
-.social-post-body {
-  margin:10px 0 0 49px;
-  color:#eee8e2;
-  font-size:14.5px;
-  line-height:1.62;
-  letter-spacing:-.006em;
-}
-.social-post-media {
-  width:calc(100% - 49px);
-  margin:11px 0 0 49px;
-  border-color:#352d46;
-  border-radius:16px;
-  background:#0b0a10;
-  box-shadow:0 8px 26px rgba(0,0,0,.2);
-}
-.social-actions {
-  margin:9px 0 0 41px;
-  gap:4px;
-  padding-top:6px;
-  border-top:1px solid rgba(68,55,91,.42);
-}
-.social-action {
-  min-width:0;
-  min-height:34px;
-  padding:6px 9px;
-  border-radius:10px;
-  font-size:11.5px;
-  transition:background .14s ease,color .14s ease,transform .12s ease;
-}
-.social-action:hover { background:#1b1728; }
-.social-action:active { transform:scale(.97); }
-.social-action.liked { background:rgba(223,119,148,.075); }
-.social-action.reposted { background:rgba(200,164,92,.065); }
-
-.social-comments {
-  margin:5px 0 0 49px;
-  padding-top:4px;
-}
-.social-comment {
-  padding:9px 0;
-}
-.social-comment + .social-comment {
-  border-top:1px solid rgba(65,52,87,.43);
-}
-.social-comment .cmt-body { line-height:1.52; }
-.social-comment-action {
-  min-height:26px;
-  display:inline-flex;
-  align-items:center;
-  border-radius:8px;
-}
-.social-comment-reply-target {
-  margin-top:3px;
-  color:#8f879f;
-}
-.social-comment-box {
-  margin:9px 0 0 49px;
-  gap:7px;
-}
-.social-comment-box input.i {
-  min-height:38px;
-  padding:8px 13px;
-  border:1px solid #342d46;
-  background:#171421;
-}
-.social-comment-box .btn {
-  min-width:40px;
-  width:40px;
-  min-height:40px;
-  justify-content:center;
-  padding:0;
-  border-radius:12px;
-}
-
-.social-repost-note {
-  margin:9px 12px -2px 38px;
-  color:#958da5;
-}
-.social-viral-badge {
-  padding:3px 8px;
-  border-color:rgba(200,164,92,.27);
-  background:rgba(200,164,92,.07);
-}
-
-/* Profile */
-.social-profile-avatar {
-  border-radius:26px;
-  box-shadow:0 10px 30px rgba(0,0,0,.35),0 0 0 1px rgba(255,255,255,.025);
-}
-.social-profile-name h2,
-.social-profile-name h3 { letter-spacing:-.03em; }
-.social-profile-stats {
-  margin-top:16px;
-  border-color:rgba(78,64,104,.55);
-}
-.social-profile-stat { padding:12px 5px; }
-.social-profile-stat strong { font-size:15px; }
-.social-profile-tabs { border-color:rgba(78,64,104,.52); }
-.social-profile-tab { min-height:42px; }
-.social-profile-post { padding:15px 16px; }
-.social-profile-post-media { border-radius:15px; }
-.social-edit-box { border-radius:15px; }
-
-/* Chat */
-.bub {
-  max-width:80%;
-  padding:10px 13px;
-  border-radius:17px;
-  font-size:14px;
-  line-height:1.5;
-  box-shadow:0 5px 16px rgba(0,0,0,.12);
-}
-.bub.me {
-  background:linear-gradient(145deg,#982349,#7f1938);
-  border-bottom-right-radius:5px;
-}
-.bub.them {
-  border-color:#342d46;
-  background:linear-gradient(180deg,#1d1929,#181521);
-  border-bottom-left-radius:5px;
-}
-.typing-bub { box-shadow:none; }
-
-/* Scene / roleplay */
-.scene-hd {
-  background:linear-gradient(180deg,rgba(8,7,13,.98),rgba(8,7,13,.92));
-  backdrop-filter:blur(14px);
-  -webkit-backdrop-filter:blur(14px);
-}
-.narr {
-  color:#aaa1b8;
-  font-size:14px;
-  line-height:1.7;
-}
-.turn { gap:10px; }
-.turn-name { color:#d0ae69; }
-.scene-attendee-chip {
-  border-color:#342d46;
-  background:#181522;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.018);
-}
-
-/* Sheets / overlays */
-.scrim {
-  background:rgba(3,3,7,.76);
-  backdrop-filter:blur(7px);
-  -webkit-backdrop-filter:blur(7px);
-}
-.sheet {
-  border-color:#393048;
-  border-radius:24px 24px 0 0;
-  background:linear-gradient(180deg,#15121e,#100e17);
-  box-shadow:0 -22px 70px rgba(0,0,0,.43);
-}
-
-/* Bottom navigation — stronger hierarchy, safer iOS spacing. */
-.nav {
-  border-top:1px solid rgba(83,68,110,.5);
-  background:rgba(8,7,13,.92);
-  backdrop-filter:blur(22px) saturate(135%);
-  -webkit-backdrop-filter:blur(22px) saturate(135%);
-  box-shadow:0 -12px 34px rgba(0,0,0,.25);
-  padding-bottom:env(safe-area-inset-bottom);
-}
-.nav-in { padding:5px 5px 3px; }
-.nav button {
-  position:relative;
-  min-height:59px;
-  padding:7px 2px 8px;
-  gap:4px;
-  border-radius:14px;
-  font-size:9.5px;
-  letter-spacing:.055em;
-  transition:color .15s ease,background .15s ease,transform .12s ease;
-}
-.nav button:hover { color:#bbb2c7; background:rgba(255,255,255,.018); }
-.nav button.on {
-  color:#e57f9b;
-  background:linear-gradient(180deg,rgba(223,119,148,.095),rgba(223,119,148,.025));
-}
-.nav button.on svg { filter:drop-shadow(0 0 8px rgba(223,119,148,.22)); }
-.nav button:active { transform:translateY(1px); }
-
-/* Lists and separators */
-.social-person-row { border-color:rgba(75,61,99,.46); }
-.social-background-followers {
-  border-color:rgba(86,70,112,.5);
-  background:rgba(21,18,31,.45);
-  border-radius:14px;
-}
-
-/* Desktop: keep the app intentional, not stretched. */
-@media (min-width:700px) {
-  .mv-wrap { max-width:590px; }
-  .nav-in { max-width:590px; }
-  .sheet { max-width:590px; }
-  .social-post { padding:15px 16px 14px; }
-}
-
-/* Mobile compactness without sacrificing tapability. */
-@media (max-width:480px) {
-  .hdr { padding-left:14px; padding-right:14px; }
-  .mark { font-size:26px; }
-  .mv-main { padding-left:10px; padding-right:10px; }
-  .social-feed-head { margin-left:-10px; margin-right:-10px; padding-left:10px; padding-right:10px; }
-  .social-feed-tabs { gap:2px; }
-  .social-feed-tab { padding-left:11px; padding-right:11px; }
-  .social-composer { border-radius:16px; }
-  .social-post { margin-top:8px; border-radius:16px; padding:13px 12px 12px; }
-  .social-post-body,
-  .social-post-media,
-  .social-comments,
-  .social-comment-box,
-  .social-composer-actions,
-  .social-media-panel { margin-left:44px; }
-  .social-post-media { width:calc(100% - 44px); }
-  .social-actions { margin-left:36px; overflow-x:auto; scrollbar-width:none; }
-  .social-actions::-webkit-scrollbar { display:none; }
-  .social-action { flex:none; }
-  .nav-in { padding-left:2px; padding-right:2px; }
-}
-
-@media (prefers-reduced-motion:reduce) {
-  .btn,.social-action,.nav button,.social-feed-tab,input.i,textarea.i,select.i { transition:none !important; }
-}
-/* PERFORMANCE-ONLY: let the browser defer layout/paint for off-screen feed cards.
-   This does not change feed data, order, interactions or visual styling. */
-@supports (content-visibility: auto) {
-  .social-post {
-    content-visibility: auto;
-    contain-intrinsic-size: auto 430px;
-  }
-}
-
 `;
 
 
@@ -2412,45 +1951,9 @@ function imageRefForValue(value) {
   return id ? imageRef(id) : value || "";
 }
 
-function worldNeedsImageNormalization(world) {
-  if (!world) return false;
-
-  for (const player of Object.values(world.players || {})) {
-    if (!player) continue;
-    if (isInlineImageData(player.avatar) || isInlineImageData(player.cover)) return true;
-  }
-
-  for (const c of (world.chars || [])) {
-    if (!c) continue;
-    if (isInlineImageData(c.avatar) || isInlineImageData(c.cover)) return true;
-    for (const item of albumOf(c)) {
-      if (item && !item.imageId && isInlineImageData(item.src)) return true;
-    }
-  }
-
-  for (const m of allGossipMediaAccounts(world)) {
-    if (!m) continue;
-    if (isInlineImageData(m.avatar) || isInlineImageData(m.cover)) return true;
-  }
-
-  for (const p of (world.posts || [])) {
-    if (!p) continue;
-    if ((!p.imageId && isInlineImageData(p.image)) || (p.imageId && p.image)) return true;
-  }
-
-  return false;
-}
-
 function normalizeWorldImages(world, media) {
   if (!world) return { world, media, changed: false };
-  /* PERFORMANCE: the old implementation deep-cloned the complete world on
-     every world.rev even when there was nothing to migrate. The cheap scan
-     above preserves exactly the same migration behavior while making the
-     overwhelmingly common no-op path allocation-free. */
-  if (!worldNeedsImageNormalization(world)) {
-    return { world, media, changed: false };
-  }
-  const w = cloneWorldState(world);
+  const w = JSON.parse(JSON.stringify(world));
   const nextMedia = { ...(media || {}) };
   let changed = false;
   const attach = (raw, patch) => {
@@ -2951,7 +2454,7 @@ function Av({ src, name = "?", size = 38, radius = 12 }) {
   const url = resolveImg(src, media);
   return (
     <div className="av" style={{ ...avStyle(name), width: size, height: size, borderRadius: radius, fontSize: Math.round(size * 0.42) }}>
-      {url && !bad ? <img src={url} alt="" loading="lazy" decoding="async" onError={() => setBad(true)} /> : (name || "?")[0]}
+      {url && !bad ? <img src={url} alt="" onError={() => setBad(true)} /> : (name || "?")[0]}
     </div>
   );
 }
@@ -3486,9 +2989,7 @@ function localizedRelationshipDisplayText(value, lang = CURRENT_LANG) {
   const raw = String(value || "").trim();
   if (!raw) return "";
 
-  const targetLang = asLang(lang);
-
-  if (targetLang === "en") {
+  if (asLang(lang) === "en") {
     if (MOOD_EXAMPLE_EN[raw]) return MOOD_EXAMPLE_EN[raw];
 
     const automaticHuToEn = {
@@ -3504,31 +3005,10 @@ function localizedRelationshipDisplayText(value, lang = CURRENT_LANG) {
       "megszállott": "obsessed",
       "bizalmatlan": "distrustful",
       "védelmező": "protective",
-      "titkos megszállottság": "secret obsession",
-      "nem vallaná be": "would never admit it",
-      "sosem vallaná be": "would never admit it",
     };
 
     if (automaticHuToEn[raw.toLowerCase()]) {
       return automaticHuToEn[raw.toLowerCase()];
-    }
-  } else {
-    const automaticEnToHu = {
-      "hostile": "ellenséges",
-      "tense": "feszült",
-      "jealous": "féltékeny",
-      "possessive": "birtokló",
-      "obsessed": "megszállott",
-      "distrustful": "bizalmatlan",
-      "protective": "védelmező",
-      "secret obsession": "titkos megszállottság",
-      "would never admit it": "nem vallaná be",
-      "secret obsession — would never admit it": "titkos megszállottság — nem vallaná be",
-      "secret crush — would never admit it": "titkos crush — nem vallaná be",
-    };
-
-    if (automaticEnToHu[raw.toLowerCase()]) {
-      return automaticEnToHu[raw.toLowerCase()];
     }
   }
 
@@ -3589,187 +3069,6 @@ function relLabel(r) {
   return relType(
     r ? r.score : 0
   );
-}
-
-/*
- * RELATIONSHIP DISPLAY DETAIL — DIRECTIONAL ONLY.
- *
- * The relationship graph is already directional (A -> B and B -> A).
- * These helpers only make that asymmetry visible: bond, current feeling and
- * hidden feeling are shown separately, and the pair UI can explicitly call
- * out one-sided crushes / obsession.
- */
-function relationshipDirectionDetails(
-  r,
-  lang = CURRENT_LANG
-) {
-  if (!r) return [];
-
-  const en = asLang(lang) === "en";
-  const parts = [];
-  const bond = String(
-    r.bond || r.type || ""
-  ).trim();
-  const mood = String(
-    r.mood || ""
-  ).trim();
-  const hidden = String(
-    r.hidden || ""
-  ).trim();
-
-  if (bond) {
-    parts.push(
-      `${en ? "Bond" : "Kötelék"}: ${localizedBond(
-        bond,
-        lang
-      )}`
-    );
-  }
-
-  if (mood) {
-    parts.push(
-      `${en ? "Current feeling" : "Aktuális érzés"}: ${localizedRelationshipDisplayText(
-        mood,
-        lang
-      )}`
-    );
-  }
-
-  if (hidden) {
-    parts.push(
-      `${en ? "Hidden feeling" : "Rejtett érzés"}: ${localizedRelationshipDisplayText(
-        hidden,
-        lang
-      )}`
-    );
-  }
-
-  return parts;
-}
-
-function relationshipRomanceDirectionSignal(r) {
-  const text = [
-    r && r.bond,
-    r && r.type,
-    r && r.mood,
-    r && r.hidden,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  const obsession =
-    /obsess|fixat|megsz[aá]ll|m[aá]ni[aá]s|mine\.?\s*mine|az eny[eé]m|possess|birtokl|territorial/.test(
-      text
-    );
-
-  const crush =
-    /crush|attraction|attracted|vonz|szerelmes|in love|love interest/.test(
-      text
-    );
-
-  const romantic =
-    obsession ||
-    crush ||
-    /j[aá]rnak|dating|partner|jegyes|engaged|h[aá]zast[aá]rs|spouse|husband|wife|titkos viszony|affair/.test(
-      text
-    );
-
-  const secret =
-    /secret|hidden|titkos|rejtett|senki nem tud|doesn['’]?t know/.test(
-      text
-    );
-
-  return {
-    obsession,
-    crush,
-    romantic,
-    secret,
-  };
-}
-
-function relationshipPairAsymmetryText(
-  aRel,
-  bRel,
-  aName,
-  bName,
-  lang = CURRENT_LANG
-) {
-  const en = asLang(lang) === "en";
-  const a = relationshipRomanceDirectionSignal(
-    aRel
-  );
-  const b = relationshipRomanceDirectionSignal(
-    bRel
-  );
-
-  if (
-    a.obsession &&
-    b.obsession
-  ) {
-    return en
-      ? `Mutual obsession: ${aName} and ${bName} are both intensely fixated on each other.`
-      : `Kölcsönös megszállottság: ${aName} és ${bName} is intenzíven megszállott a másik iránt.`;
-  }
-
-  if (a.obsession) {
-    if (b.romantic) {
-      return en
-        ? `Asymmetric romantic dynamic: ${aName} is obsessed with ${bName}, while ${bName} also has romantic feelings, but not the same intensity.`
-        : `Aszimmetrikus romantikus dinamika: ${aName} megszállott ${bName} iránt, miközben ${bName} is romantikusan érez, de nem ugyanazzal az intenzitással.`;
-    }
-
-    return en
-      ? `One-sided obsession: ${aName} → ${bName}. ${bName} does not currently reciprocate it romantically.`
-      : `Egyoldalú megszállottság: ${aName} → ${bName}. ${bName} jelenleg nem viszonozza romantikusan.`;
-  }
-
-  if (b.obsession) {
-    if (a.romantic) {
-      return en
-        ? `Asymmetric romantic dynamic: ${bName} is obsessed with ${aName}, while ${aName} also has romantic feelings, but not the same intensity.`
-        : `Aszimmetrikus romantikus dinamika: ${bName} megszállott ${aName} iránt, miközben ${aName} is romantikusan érez, de nem ugyanazzal az intenzitással.`;
-    }
-
-    return en
-      ? `One-sided obsession: ${bName} → ${aName}. ${aName} does not currently reciprocate it romantically.`
-      : `Egyoldalú megszállottság: ${bName} → ${aName}. ${aName} jelenleg nem viszonozza romantikusan.`;
-  }
-
-  if (
-    a.crush &&
-    b.crush
-  ) {
-    return en
-      ? `Mutual crush: ${aName} ↔ ${bName}. Both directions contain romantic attraction.`
-      : `Kölcsönös crush: ${aName} ↔ ${bName}. Mindkét irányban van romantikus vonzalom.`;
-  }
-
-  if (a.crush) {
-    if (b.romantic) {
-      return en
-        ? `Romantic feelings are asymmetric: ${aName} has a crush on ${bName}; ${bName}'s side is romantic too, but defined differently.`
-        : `A romantikus érzések nem teljesen egyformák: ${aName} crusholja ${bName}-t; ${bName} oldalán is van romantikus érzés, de másképp meghatározva.`;
-    }
-
-    return en
-      ? `${a.secret ? "Secret, one-sided crush" : "One-sided crush"}: ${aName} → ${bName}.`
-      : `${a.secret ? "Titkos, egyoldalú crush" : "Egyoldalú crush"}: ${aName} → ${bName}.`;
-  }
-
-  if (b.crush) {
-    if (a.romantic) {
-      return en
-        ? `Romantic feelings are asymmetric: ${bName} has a crush on ${aName}; ${aName}'s side is romantic too, but defined differently.`
-        : `A romantikus érzések nem teljesen egyformák: ${bName} crusholja ${aName}-t; ${aName} oldalán is van romantikus érzés, de másképp meghatározva.`;
-    }
-
-    return en
-      ? `${b.secret ? "Secret, one-sided crush" : "One-sided crush"}: ${bName} → ${aName}.`
-      : `${b.secret ? "Titkos, egyoldalú crush" : "Egyoldalú crush"}: ${bName} → ${aName}.`;
-  }
-
-  return "";
 }
 const moodEmoji = (d) => (d >= 10 ? "🔥" : d > 0 ? "❤️" : d <= -10 ? "🖤" : d < 0 ? "💔" : "✨");
 function relColor(score) {
@@ -4180,17 +3479,6 @@ function defaultCharacterMemory() {
     relationshipContinuity: {},
 
     /*
-     * OBSERVED ADAPTATION / CHARACTER DEVELOPMENT
-     *
-     * Target-specific learned behavior built ONLY from events the character
-     * actually observed. It never reads the human player's private personality,
-     * traits, goals, fears, likes, secrets or speech fields. Canon personality
-     * stays authoritative; this layer only changes how the AI learns to approach
-     * a specific person over time.
-     */
-    adaptiveProfiles: {},
-
-    /*
      * CHARACTER AGENT RUNTIME
      *
      * This is the cross-surface executive state shared by feed, comments,
@@ -4260,9 +3548,6 @@ function ensureCharMemory(w, observerId) {
   if (!mem.relationshipContinuity || typeof mem.relationshipContinuity !== "object" || Array.isArray(mem.relationshipContinuity)) {
     mem.relationshipContinuity = {};
   }
-  if (!mem.adaptiveProfiles || typeof mem.adaptiveProfiles !== "object" || Array.isArray(mem.adaptiveProfiles)) {
-    mem.adaptiveProfiles = {};
-  }
   if (!Array.isArray(mem.roleplayRecent)) mem.roleplayRecent = [];
   if (!Array.isArray(mem.roleplayLongTerm)) mem.roleplayLongTerm = [];
   if (!mem.roleplayShared || typeof mem.roleplayShared !== "object" || Array.isArray(mem.roleplayShared)) mem.roleplayShared = {};
@@ -4288,600 +3573,6 @@ function ensureCharMemory(w, observerId) {
     if (!Array.isArray(mem.roleplayShared[targetId])) mem.roleplayShared[targetId] = [];
   });
   return mem;
-}
-
-
-/* ============================================================
-   ADVANCED AI ADAPTATION + PLAYER SOCIAL PROGRESSION
-   ============================================================ */
-
-const PLAYER_SOCIAL_PROGRESSION_VERSION = 1;
-
-function defaultAdaptiveProfile() {
-  return {
-    evidenceCount: 0,
-    familiarity: 0,
-    observedWarmth: 50,
-    observedPlayfulness: 50,
-    observedDirectness: 50,
-    observedPrivacyPreference: 50,
-    observedConflictTolerance: 50,
-    meaningfulInteractions: 0,
-    sharedEvents: 0,
-    positiveMoments: 0,
-    conflicts: 0,
-    developmentStage: 1,
-    decisionHistory: [],
-    lastUpdatedAt: 0,
-  };
-}
-
-function clampAdaptiveScore(value) {
-  return Math.max(0, Math.min(100, Number(value) || 0));
-}
-
-function ensureAdaptiveProfile(w, observerId, targetId) {
-  if (!w || !observerId || !targetId || observerId === targetId || isHuman(w, observerId)) return null;
-  const observer = charById(w, observerId);
-  const target = charById(w, targetId);
-  if (!observer || !target) return null;
-  const mem = ensureCharMemory(w, observerId);
-  if (!mem.adaptiveProfiles[targetId] || typeof mem.adaptiveProfiles[targetId] !== "object" || Array.isArray(mem.adaptiveProfiles[targetId])) {
-    mem.adaptiveProfiles[targetId] = defaultAdaptiveProfile();
-  }
-  const base = defaultAdaptiveProfile();
-  const row = { ...base, ...mem.adaptiveProfiles[targetId] };
-  row.evidenceCount = Math.max(0, Math.round(Number(row.evidenceCount) || 0));
-  row.familiarity = clampAdaptiveScore(row.familiarity);
-  row.observedWarmth = clampAdaptiveScore(row.observedWarmth);
-  row.observedPlayfulness = clampAdaptiveScore(row.observedPlayfulness);
-  row.observedDirectness = clampAdaptiveScore(row.observedDirectness);
-  row.observedPrivacyPreference = clampAdaptiveScore(row.observedPrivacyPreference);
-  row.observedConflictTolerance = clampAdaptiveScore(row.observedConflictTolerance);
-  row.meaningfulInteractions = Math.max(0, Math.round(Number(row.meaningfulInteractions) || 0));
-  row.sharedEvents = Math.max(0, Math.round(Number(row.sharedEvents) || 0));
-  row.positiveMoments = Math.max(0, Math.round(Number(row.positiveMoments) || 0));
-  row.conflicts = Math.max(0, Math.round(Number(row.conflicts) || 0));
-  row.developmentStage = Math.max(1, Math.min(5, Math.round(Number(row.developmentStage) || 1)));
-  row.decisionHistory = (Array.isArray(row.decisionHistory) ? row.decisionHistory : []).filter(Boolean).slice(-24);
-  row.lastUpdatedAt = Math.max(0, Number(row.lastUpdatedAt) || 0);
-  mem.adaptiveProfiles[targetId] = row;
-  return row;
-}
-
-function adaptiveDecisionSummary(w, entry, playerId) {
-  if (!entry || !playerId) return "";
-  const type = String(entry.type || "event");
-  const text = cut(String(entry.text || "").replace(/\s+/g, " ").trim(), 240);
-  const targets = (entry.targetIds || []).map((id) => nameOfIn(w, id)).filter(Boolean).join(", ");
-  const en = worldLanguage(w, playerId) === "en";
-  const labels = en
-    ? {
-        post: "posted",
-        comment: "commented",
-        reply: "replied",
-        like: "liked something",
-        repost: "reposted something",
-        follow: "followed someone",
-        "dm-message": "sent a private message",
-        "popup-choice": "made a popup decision",
-        "roleplay-event": "made a meaningful Event choice/action",
-        "roleplay-summary": "participated in an Event",
-        "roleplay-initiated": "was invited into an Event",
-        "note": "posted a Note",
-        "note-react": "reacted to a Note",
-        "group-message": "wrote in a group chat",
-      }
-    : {
-        post: "posztolt",
-        comment: "kommentelt",
-        reply: "válaszolt egy kommentre",
-        like: "lájkolt valamit",
-        repost: "újraosztott valamit",
-        follow: "bekövetett valakit",
-        "dm-message": "privát üzenetet küldött",
-        "popup-choice": "döntést hozott egy popup helyzetben",
-        "roleplay-event": "jelentős döntést/cselekvést tett egy Eventben",
-        "roleplay-summary": "részt vett egy Eventben",
-        "roleplay-initiated": "Event-meghívást kapott",
-        "note": "Note-ot írt",
-        "note-react": "reagált egy Note-ra",
-        "group-message": "írt egy csoportos chatben",
-      };
-  const action = labels[type] || (en ? `acted in ${type}` : `ezt tette: ${type}`);
-  const who = nameOfIn(w, playerId) || (en ? "The player" : "A játékos");
-  const targetPart = targets ? (en ? ` involving ${targets}` : ` (${targets})`) : "";
-  return `${who} ${action}${targetPart}${text ? `: ${text}` : "."}`;
-}
-
-function adaptiveSignalsFromEvent(entry) {
-  const text = String(entry && entry.text || "").toLowerCase();
-  const warmth = /\b(?:thank|thanks|love|ily|appreciat|care|proud|sweet|kind|köszön|köszi|szeret|büszke|kedves|aranyos|hiányzol)\b|❤|♥|<3/.test(text);
-  const playful = /(?:😂|😭|🤣|💀|lol\b|lmao\b|haha|hehe|xd\b|vicc|poén|joke|tease|ugrat)/.test(text);
-  const conflict = Number(entry && entry.drama || 0) >= 35 || /\b(?:hate|angry|mad|fight|leave me|shut up|idiot|stupid|fuck off|gyűlöl|haragsz|dühös|veszeked|hagyj békén|fogd be|idióta)\b/.test(text);
-  const direct = /\?|\b(?:need|want|come|tell me|answer|now|kell|akar|gyere|mondd|válaszolj|most)\b/.test(text);
-  const visibility = String(entry && entry.visibility || "public");
-  return {
-    warmth,
-    playful,
-    conflict,
-    direct,
-    privateAction: visibility === "private",
-    publicAction: visibility === "public",
-  };
-}
-
-function adaptiveObserversForPlayerEvent(w, entry, playerId) {
-  if (!w || !entry || !playerId) return [];
-  const ids = new Set();
-  const add = (id) => {
-    const c = id ? charById(w, id) : null;
-    if (c && !isHuman(w, c.id) && !isMediaAccount(w, c.id)) ids.add(c.id);
-  };
-
-  if (entry.actorId === playerId) {
-    (entry.targetIds || []).forEach(add);
-    (entry.witnessIds || []).forEach(add);
-
-    if (entry.visibility === "public" && ["post", "comment", "reply", "repost", "follow", "popup-choice", "note"].includes(entry.type)) {
-      (w.chars || [])
-        .filter((c) => c && !isHuman(w, c.id) && (isFollowing(w, c.id, playerId) || linked(w, c.id, playerId)))
-        .map((c) => ({ c, score: socialInteractionInterest(w, c.id, playerId) + (isFollowing(w, c.id, playerId) ? 20 : 0) }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 8)
-        .forEach((row) => add(row.c.id));
-    }
-  }
-
-  if ((entry.targetIds || []).includes(playerId) || (entry.witnessIds || []).includes(playerId)) {
-    add(entry.actorId);
-  }
-
-  return [...ids].slice(0, 10);
-}
-
-function adaptiveDevelopmentStage(w, row) {
-  const elapsedHours = Math.max(0, Number(storySettingsOf(w).elapsedHours) || 0);
-  const score =
-    Number(row.meaningfulInteractions || 0) +
-    Number(row.sharedEvents || 0) * 2 +
-    Number(row.positiveMoments || 0) * 0.45 +
-    Math.min(12, elapsedHours / 36);
-  if (score >= 40) return 5;
-  if (score >= 22) return 4;
-  if (score >= 10) return 3;
-  if (score >= 4) return 2;
-  return 1;
-}
-
-function updateAdaptiveCharacterFromPlayerEvent(w, observerId, playerId, entry) {
-  const row = ensureAdaptiveProfile(w, observerId, playerId);
-  if (!row) return null;
-  const signals = adaptiveSignalsFromEvent(entry);
-  const summary = adaptiveDecisionSummary(w, entry, playerId);
-  const ref = String(entry.id || entry.refId || "");
-  if (ref && row.decisionHistory.some((x) => x && String(x.id || "") === ref)) return row;
-
-  const move = (key, delta) => {
-    row[key] = clampAdaptiveScore(Number(row[key]) + Number(delta || 0));
-  };
-  move("familiarity", 2.5 + Math.min(3, Number(entry.importance || 0) / 35));
-  if (signals.warmth) move("observedWarmth", 4.5);
-  if (signals.conflict) move("observedWarmth", -3.5);
-  if (signals.playful) move("observedPlayfulness", 4);
-  if (signals.direct) move("observedDirectness", 3.5);
-  if (signals.privateAction) move("observedPrivacyPreference", 3.5);
-  if (signals.publicAction) move("observedPrivacyPreference", -1.25);
-  if (signals.conflict) move("observedConflictTolerance", 4);
-
-  row.evidenceCount += 1;
-  row.meaningfulInteractions += 1;
-  if (/roleplay|popup/.test(String(entry.type || ""))) row.sharedEvents += 1;
-  if (signals.warmth) row.positiveMoments += 1;
-  if (signals.conflict) row.conflicts += 1;
-  row.developmentStage = adaptiveDevelopmentStage(w, row);
-  row.lastUpdatedAt = Number(entry.ts) || now();
-  if (summary) {
-    row.decisionHistory = [
-      ...(row.decisionHistory || []).filter((x) => !ref || String(x && x.id || "") !== ref),
-      { id: ref || uid(), ts: Number(entry.ts) || now(), type: String(entry.type || "event"), summary },
-    ].slice(-24);
-
-    rememberKnowledge(w, observerId, {
-      kind: "event",
-      source: `player_decision:${String(entry.type || "event")}`,
-      confidence: 1,
-      timestamp: Number(entry.ts) || now(),
-      text: summary,
-    });
-    rememberAboutTarget(w, observerId, playerId, {
-      kind: "event",
-      source: `player_decision:${String(entry.type || "event")}`,
-      confidence: 1,
-      timestamp: Number(entry.ts) || now(),
-      text: summary,
-    });
-  }
-  return row;
-}
-
-function applyAdaptiveCharacterLearningFromSocialEvent(w, entry) {
-  if (!w || !entry) return;
-  Object.keys(w.players || {}).forEach((playerId) => {
-    const involved =
-      entry.actorId === playerId ||
-      (entry.targetIds || []).includes(playerId) ||
-      (entry.witnessIds || []).includes(playerId);
-    if (!involved) return;
-    adaptiveObserversForPlayerEvent(w, entry, playerId).forEach((observerId) => {
-      updateAdaptiveCharacterFromPlayerEvent(w, observerId, playerId, entry);
-    });
-  });
-}
-
-function compactAdaptiveProfileForPrompt(w, actorId, targetId) {
-  if (!w || !actorId || !targetId || isHuman(w, actorId)) return null;
-  const mem = ensureCharMemory(w, actorId);
-  const raw = mem.adaptiveProfiles && mem.adaptiveProfiles[targetId];
-  if (!raw || !Number(raw.evidenceCount || 0)) return null;
-  const row = ensureAdaptiveProfile(w, actorId, targetId);
-  if (!row) return null;
-  return {
-    evidenceCount: row.evidenceCount,
-    familiarity: Math.round(row.familiarity),
-    developmentStage: row.developmentStage,
-    observedBehaviorOnly: {
-      warmth: Math.round(row.observedWarmth),
-      playfulness: Math.round(row.observedPlayfulness),
-      directness: Math.round(row.observedDirectness),
-      privacyPreference: Math.round(row.observedPrivacyPreference),
-      conflictTolerance: Math.round(row.observedConflictTolerance),
-    },
-    history: {
-      meaningfulInteractions: row.meaningfulInteractions,
-      sharedEvents: row.sharedEvents,
-      positiveMoments: row.positiveMoments,
-      conflicts: row.conflicts,
-    },
-    recentObservedDecisions: (row.decisionHistory || []).slice(-5).map((x) => x && x.summary).filter(Boolean),
-    rule: "Adapt HOW you approach this target from observed behavior and shared history only. Never infer or read the human player's private Personality/Traits/Speech/Goals/Fears/Likes/Secrets fields, and never replace your own canon personality.",
-  };
-}
-
-function mergeAdaptiveProfiles(baseProfiles, mineProfiles) {
-  const out = {};
-  const ids = new Set([...Object.keys(baseProfiles || {}), ...Object.keys(mineProfiles || {})]);
-  ids.forEach((targetId) => {
-    const a = (baseProfiles || {})[targetId] || defaultAdaptiveProfile();
-    const b = (mineProfiles || {})[targetId] || defaultAdaptiveProfile();
-    const newer = Number(b.lastUpdatedAt || 0) >= Number(a.lastUpdatedAt || 0) ? b : a;
-    const decisions = [];
-    const seen = new Set();
-    [...(a.decisionHistory || []), ...(b.decisionHistory || [])]
-      .filter(Boolean)
-      .sort((x, y) => Number(x.ts || 0) - Number(y.ts || 0))
-      .forEach((row) => {
-        const key = String(row.id || `${row.type || ""}|${row.ts || 0}|${row.summary || ""}`);
-        if (!key || seen.has(key)) return;
-        seen.add(key);
-        decisions.push(row);
-      });
-    out[targetId] = {
-      ...defaultAdaptiveProfile(),
-      ...newer,
-      evidenceCount: Math.max(Number(a.evidenceCount || 0), Number(b.evidenceCount || 0)),
-      familiarity: Math.max(Number(a.familiarity || 0), Number(b.familiarity || 0)),
-      meaningfulInteractions: Math.max(Number(a.meaningfulInteractions || 0), Number(b.meaningfulInteractions || 0)),
-      sharedEvents: Math.max(Number(a.sharedEvents || 0), Number(b.sharedEvents || 0)),
-      positiveMoments: Math.max(Number(a.positiveMoments || 0), Number(b.positiveMoments || 0)),
-      conflicts: Math.max(Number(a.conflicts || 0), Number(b.conflicts || 0)),
-      developmentStage: Math.max(Number(a.developmentStage || 1), Number(b.developmentStage || 1)),
-      decisionHistory: decisions.slice(-24),
-      lastUpdatedAt: Math.max(Number(a.lastUpdatedAt || 0), Number(b.lastUpdatedAt || 0)),
-    };
-  });
-  return out;
-}
-
-const PLAYER_ACCESS_TIERS = [
-  { key: "inner-circle", minLevel: 3, minScore: 25, hu: "Belső kör", en: "Inner Circle", huDesc: "meghívásos kisebb programok és privátabb, kánonhoz illő helyszínrészek", enDesc: "invite-only smaller events and more private canon-consistent areas" },
-  { key: "invite-only", minLevel: 5, minScore: 40, hu: "Meghívásos hozzáférés", en: "Invite-only Access", huDesc: "zártabb társas események, after-hours vagy tagoknak szóló alkalmak", enDesc: "closed social events, after-hours or members-only opportunities" },
-  { key: "vip-access", minLevel: 7, minScore: 58, hu: "VIP hozzáférés", en: "VIP Access", huDesc: "VIP/private area, backstage vagy exkluzív esemény, ha a világ kánonja támogatja", enDesc: "VIP/private areas, backstage or exclusive events when the world canon supports them" },
-  { key: "elite-network", minLevel: 10, minScore: 74, hu: "Elit hálózat", en: "Elite Network", huDesc: "befolyásos körökhöz kötődő ritkább, magas státuszú meghívások", enDesc: "rarer high-status invitations tied to influential circles" },
-  { key: "top-tier", minLevel: 14, minScore: 88, hu: "Top tier", en: "Top Tier", huDesc: "a világ legzártabb, kánon szerint létező társas hozzáférései és eseményei", enDesc: "the world's most restricted canon-supported social access and events" },
-];
-
-function defaultPlayerProgression() {
-  return {
-    version: PLAYER_SOCIAL_PROGRESSION_VERSION,
-    xp: 0,
-    level: 1,
-    globalScore: 0,
-    globalRank: "new-face",
-    globalRankTier: 0,
-    influenceScore: 0,
-    activityScore: 0,
-    interactionCounts: {},
-    processedEventIds: [],
-    unlockedAccess: [],
-    historyImported: false,
-    lastXpAt: 0,
-    updatedAt: 0,
-  };
-}
-
-function ensurePlayerProgression(w, playerId) {
-  if (!w || !playerId || !isHuman(w, playerId)) return null;
-  if (!w.playerProgression || typeof w.playerProgression !== "object" || Array.isArray(w.playerProgression)) w.playerProgression = {};
-  const current = w.playerProgression[playerId] && typeof w.playerProgression[playerId] === "object"
-    ? w.playerProgression[playerId]
-    : {};
-  const row = { ...defaultPlayerProgression(), ...current };
-  row.version = PLAYER_SOCIAL_PROGRESSION_VERSION;
-  row.xp = Math.max(0, Math.round(Number(row.xp) || 0));
-  row.level = Math.max(1, Math.round(Number(row.level) || 1));
-  row.globalScore = Math.max(0, Math.min(100, Number(row.globalScore) || 0));
-  row.globalRankTier = Math.max(0, Math.round(Number(row.globalRankTier) || 0));
-  row.influenceScore = Math.max(0, Math.min(100, Number(row.influenceScore) || 0));
-  row.activityScore = Math.max(0, Math.min(100, Number(row.activityScore) || 0));
-  row.interactionCounts = row.interactionCounts && typeof row.interactionCounts === "object" && !Array.isArray(row.interactionCounts) ? row.interactionCounts : {};
-  row.processedEventIds = [...new Set((Array.isArray(row.processedEventIds) ? row.processedEventIds : []).filter(Boolean).map(String))].slice(-1600);
-  row.unlockedAccess = [...new Set((Array.isArray(row.unlockedAccess) ? row.unlockedAccess : []).filter(Boolean).map(String))];
-  row.historyImported = Boolean(row.historyImported);
-  row.lastXpAt = Math.max(0, Number(row.lastXpAt) || 0);
-  row.updatedAt = Math.max(0, Number(row.updatedAt) || 0);
-  w.playerProgression[playerId] = row;
-  return row;
-}
-
-function progressionXpFloorForLevel(level) {
-  const n = Math.max(1, Math.round(Number(level) || 1)) - 1;
-  return Math.round(n * 80 + n * n * 20);
-}
-
-function progressionLevelFromXp(xp) {
-  const points = Math.max(0, Number(xp) || 0);
-  let level = 1;
-  while (level < 50 && points >= progressionXpFloorForLevel(level + 1)) level += 1;
-  return level;
-}
-
-function progressionXpForSocialEvent(entry, playerId) {
-  if (!entry || !playerId) return 0;
-  const actor = String(entry.actorId || "") === String(playerId);
-  const target = (entry.targetIds || []).map(String).includes(String(playerId));
-  const witness = (entry.witnessIds || []).map(String).includes(String(playerId));
-  if (!actor && !target && !witness) return 0;
-  const map = {
-    post: 14,
-    comment: 9,
-    reply: 8,
-    like: 2,
-    repost: 6,
-    follow: 4,
-    "dm-message": 9,
-    "group-message": 8,
-    note: 5,
-    "note-react": 3,
-    "popup-choice": 18,
-    "roleplay-initiated": 10,
-    "roleplay-event": 18,
-    "roleplay-summary": 20,
-    "scenario-start": 4,
-  };
-  const base = Number(map[String(entry.type || "")]) || 0;
-  if (!base) return 0;
-  let xp = actor ? base : Math.max(1, Math.round(base * (target ? 0.45 : 0.25)));
-  if (actor) xp += Math.min(5, Math.floor((Number(entry.importance) || 0) / 22));
-  if (String(entry.type || "") === "popup-choice" || /roleplay/.test(String(entry.type || ""))) xp += 2;
-  return Math.max(0, Math.min(30, Math.round(xp)));
-}
-
-function progressionInfluenceFromAiRelationships(w, playerId) {
-  if (!w || !playerId) return 0;
-  const rows = (w.chars || []).filter((c) => c && !isHuman(w, c.id)).map((c) => {
-    const outRel = getRel(w, playerId, c.id) || {};
-    const inRel = getRel(w, c.id, playerId) || {};
-    const positive = Math.max(0, (Math.max(0, Number(outRel.score) || 0) + Math.max(0, Number(inRel.score) || 0)) / 2);
-    const bondBoost = hasPositiveFollowBond(outRel) || hasPositiveFollowBond(inRel) || hasFamilyFollowBond(outRel) || hasFamilyFollowBond(inRel) ? 14 : 0;
-    const closeness = Math.max(0, Math.min(1, (positive + bondBoost) / 100));
-    const stat = w.socialStats && w.socialStats[c.id] ? w.socialStats[c.id] : null;
-    const followerPower = followerSocialPower(displayFollowerCount(w, c.id));
-    const power = Math.max(followerPower, Number(stat && stat.clout) || 0, Number(stat && stat.popularity) || 0);
-    return power * closeness;
-  }).sort((a, b) => b - a).slice(0, 6);
-  return Math.max(0, Math.min(100, rows.reduce((sum, n) => sum + n, 0) * 0.24));
-}
-
-function progressionRankForScore(score) {
-  const n = Math.max(0, Math.min(100, Number(score) || 0));
-  if (n >= 90) return { key: "power-player", tier: 5, hu: "Hatalmi játékos", en: "Power Player" };
-  if (n >= 76) return { key: "inner-circle", tier: 4, hu: "Belső kör", en: "Inner Circle" };
-  if (n >= 60) return { key: "influential", tier: 3, hu: "Befolyásos", en: "Influential" };
-  if (n >= 42) return { key: "connected", tier: 2, hu: "Jól kapcsolt", en: "Connected" };
-  if (n >= 22) return { key: "known", tier: 1, hu: "Ismert arc", en: "Known Face" };
-  return { key: "new-face", tier: 0, hu: "Új arc", en: "New Face" };
-}
-
-function progressionAccessFor(level, globalScore) {
-  return PLAYER_ACCESS_TIERS
-    .filter((tier) => Number(level) >= tier.minLevel && Number(globalScore) >= tier.minScore)
-    .map((tier) => tier.key);
-}
-
-function progressionAccessLabel(key, lang = "hu") {
-  const row = PLAYER_ACCESS_TIERS.find((x) => x.key === key);
-  return row ? (lang === "en" ? row.en : row.hu) : key;
-}
-
-function refreshPlayerProgressionSummary(w, playerId, notify = false) {
-  const row = ensurePlayerProgression(w, playerId);
-  if (!row) return null;
-  const oldLevel = row.level;
-  const oldTier = row.globalRankTier;
-  const oldAccess = new Set(row.unlockedAccess || []);
-
-  const level = progressionLevelFromXp(row.xp);
-  const playerStats = w.socialStats && w.socialStats[playerId] ? w.socialStats[playerId] : null;
-  const ownClout = Math.max(
-    followerSocialPower(displayFollowerCount(w, playerId)),
-    Number(playerStats && playerStats.clout) || 0,
-    Number(playerStats && playerStats.popularity) || 0
-  );
-  const uniqueTypes = Object.keys(row.interactionCounts || {}).filter((k) => Number(row.interactionCounts[k]) > 0).length;
-  const activityScore = Math.max(0, Math.min(100, level * 6 + Math.log2(row.xp + 2) * 4 + Math.min(20, uniqueTypes * 2)));
-  const influenceScore = progressionInfluenceFromAiRelationships(w, playerId);
-  const globalScore = Math.max(0, Math.min(100, ownClout * 0.42 + influenceScore * 0.36 + activityScore * 0.22));
-  const rank = progressionRankForScore(globalScore);
-  const access = progressionAccessFor(level, globalScore);
-
-  row.level = level;
-  row.activityScore = activityScore;
-  row.influenceScore = influenceScore;
-  row.globalScore = globalScore;
-  row.globalRank = rank.key;
-  row.globalRankTier = rank.tier;
-  /* Access is a real unlock: once earned it stays available even if the
-     live global score later dips because a relationship or trend changes. */
-  row.unlockedAccess = [...new Set([...(row.unlockedAccess || []), ...access])];
-  row.updatedAt = now();
-
-  if (notify) {
-    const lang = worldLanguage(w, playerId);
-    if (level > oldLevel) {
-      pushNote(w, playerId, {
-        icon: "⬆️",
-        text: lang === "en" ? `You reached Level ${level}.` : `Szintet léptél: ${level}. szint.`,
-        link: { type: "char", id: playerId },
-      });
-    }
-    if (rank.tier > oldTier) {
-      pushNote(w, playerId, {
-        icon: "⚡",
-        text: lang === "en" ? `Your global social rank is now ${rank.en}.` : `A globális közösségi rangod mostantól: ${rank.hu}.`,
-        link: { type: "char", id: playerId },
-      });
-    }
-    const newlyUnlocked = access.filter((key) => !oldAccess.has(key));
-    if (newlyUnlocked.length) {
-      pushNote(w, playerId, {
-        icon: "🔓",
-        text: lang === "en"
-          ? `New social access unlocked: ${newlyUnlocked.map((key) => progressionAccessLabel(key, lang)).join(", ")}.`
-          : `Új társas hozzáférés nyílt meg: ${newlyUnlocked.map((key) => progressionAccessLabel(key, lang)).join(", ")}.`,
-        link: { type: "char", id: playerId },
-      });
-    }
-  }
-  return row;
-}
-
-function awardPlayerProgressionForEvent(w, playerId, entry, notify = false) {
-  const row = ensurePlayerProgression(w, playerId);
-  if (!row || !entry) return 0;
-  const eventId = String(entry.id || entry.refId || "");
-  if (eventId && row.processedEventIds.includes(eventId)) return 0;
-  const xp = progressionXpForSocialEvent(entry, playerId);
-  /* Only events that actually involve this player consume their progression
-     de-duplication ledger. Unrelated world activity must not evict useful
-     player-history IDs from the bounded processed list. */
-  if (xp <= 0) return 0;
-  if (eventId) row.processedEventIds = [...row.processedEventIds, eventId].slice(-1600);
-  row.xp += xp;
-  const type = String(entry.type || "event");
-  row.interactionCounts[type] = Math.max(0, Number(row.interactionCounts[type]) || 0) + 1;
-  row.lastXpAt = Number(entry.ts) || now();
-  refreshPlayerProgressionSummary(w, playerId, notify);
-  return xp;
-}
-
-function applyPlayerProgressionFromSocialEvent(w, entry) {
-  if (!w || !entry) return;
-  Object.keys(w.players || {}).forEach((playerId) => {
-    awardPlayerProgressionForEvent(w, playerId, entry, true);
-  });
-}
-
-function initializePlayerProgressionFromHistory(w, playerId) {
-  const row = ensurePlayerProgression(w, playerId);
-  if (!row || row.historyImported) {
-    if (row) refreshPlayerProgressionSummary(w, playerId, false);
-    return row;
-  }
-  (w.socialEvents || [])
-    .filter(Boolean)
-    .slice()
-    .sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0))
-    .forEach((entry) => awardPlayerProgressionForEvent(w, playerId, entry, false));
-  row.historyImported = true;
-  row.updatedAt = now();
-  refreshPlayerProgressionSummary(w, playerId, false);
-  return row;
-}
-
-function playerProgressionView(w, playerId) {
-  const row = w && w.playerProgression && w.playerProgression[playerId]
-    ? w.playerProgression[playerId]
-    : defaultPlayerProgression();
-  const rank = progressionRankForScore(row.globalScore || 0);
-  const level = Math.max(1, Number(row.level) || progressionLevelFromXp(row.xp || 0));
-  const currentFloor = progressionXpFloorForLevel(level);
-  const nextFloor = progressionXpFloorForLevel(level + 1);
-  return {
-    ...row,
-    level,
-    rankLabel: worldLanguage(w, playerId) === "en" ? rank.en : rank.hu,
-    xpIntoLevel: Math.max(0, Number(row.xp || 0) - currentFloor),
-    xpNeededThisLevel: Math.max(1, nextFloor - currentFloor),
-    highestAccess: (row.unlockedAccess || []).slice(-1)[0] || "",
-  };
-}
-
-function playerProgressionAccessCard(w, playerId) {
-  if (!w || !playerId) return "";
-  const view = playerProgressionView(w, playerId);
-  const lang = worldLanguage(w, playerId);
-  const unlocked = (view.unlockedAccess || []).map((key) => {
-    const tier = PLAYER_ACCESS_TIERS.find((x) => x.key === key);
-    if (!tier) return key;
-    return `${lang === "en" ? tier.en : tier.hu}: ${lang === "en" ? tier.enDesc : tier.huDesc}`;
-  });
-  return `${lang === "en" ? "PLAYER SOCIAL PROGRESSION / ACCESS" : "JÁTÉKOS KÖZÖSSÉGI FEJLŐDÉS / HOZZÁFÉRÉS"}:
-- level=${view.level}, globalRank=${view.rankLabel}, globalScore=${Math.round(Number(view.globalScore) || 0)}, influentialConnections=${Math.round(Number(view.influenceScore) || 0)}
-- ${lang === "en" ? "UNLOCKED ACCESS" : "FELOLDOTT HOZZÁFÉRÉS"}: ${unlocked.length ? unlocked.join(" | ") : (lang === "en" ? "standard public/social access only" : "csak normál nyilvános/társas hozzáférés")}
-- ${lang === "en" ? "HARD RULE: unlocked access is permission, not a guaranteed event. Use it only when the current universe can plausibly support it. Never invent a named venue, institution, club or organization absent from canon; an unlocked location may instead be a private/VIP/backstage/after-hours section of an already plausible canon venue. Never use a locked tier." : "HARD RULE: a feloldott hozzáférés lehetőség, nem kötelező esemény. Csak akkor használd, ha a jelenlegi univerzum hihetően támogatja. Ne találj ki kánonban nem létező névvel ellátott helyet, intézményt, klubot vagy szervezetet; újonnan elérhető hely lehet egy már hihető/kánon szerinti hely privát/VIP/backstage/after-hours része. Lezárt szintet soha ne használj."}`;
-}
-
-function mergePlayerProgressionMaps(remoteMap, localMap) {
-  const out = {};
-  const ids = new Set([...Object.keys(remoteMap || {}), ...Object.keys(localMap || {})]);
-  ids.forEach((playerId) => {
-    const a = { ...defaultPlayerProgression(), ...((remoteMap || {})[playerId] || {}) };
-    const b = { ...defaultPlayerProgression(), ...((localMap || {})[playerId] || {}) };
-    const newer = Number(b.updatedAt || 0) >= Number(a.updatedAt || 0) ? b : a;
-    const counts = { ...(a.interactionCounts || {}) };
-    Object.keys(b.interactionCounts || {}).forEach((key) => {
-      counts[key] = Math.max(Number(counts[key]) || 0, Number(b.interactionCounts[key]) || 0);
-    });
-    out[playerId] = {
-      ...defaultPlayerProgression(),
-      ...newer,
-      xp: Math.max(Number(a.xp) || 0, Number(b.xp) || 0),
-      level: Math.max(Number(a.level) || 1, Number(b.level) || 1),
-      globalScore: Math.max(Number(a.globalScore) || 0, Number(b.globalScore) || 0),
-      globalRankTier: Math.max(Number(a.globalRankTier) || 0, Number(b.globalRankTier) || 0),
-      influenceScore: Math.max(Number(a.influenceScore) || 0, Number(b.influenceScore) || 0),
-      activityScore: Math.max(Number(a.activityScore) || 0, Number(b.activityScore) || 0),
-      interactionCounts: counts,
-      processedEventIds: [...new Set([...(a.processedEventIds || []), ...(b.processedEventIds || [])].map(String).filter(Boolean))].slice(-1600),
-      unlockedAccess: [...new Set([...(a.unlockedAccess || []), ...(b.unlockedAccess || [])].filter(Boolean))],
-      historyImported: Boolean(a.historyImported || b.historyImported),
-      lastXpAt: Math.max(Number(a.lastXpAt || 0), Number(b.lastXpAt || 0)),
-      updatedAt: Math.max(Number(a.updatedAt || 0), Number(b.updatedAt || 0)),
-      version: PLAYER_SOCIAL_PROGRESSION_VERSION,
-    };
-  });
-  return out;
 }
 
 function ensureKnownCharacter(mem, targetId, publicProfile) {
@@ -5161,18 +3852,6 @@ function sanitizeWorldPosts(w) {
         targetId,
         comment.text
       );
-
-      /*
-       * LEGACY COMMENT LOOP REPAIR:
-       * Older/provider-degenerated rows may already be saved in the world.
-       * Collapse only pathological within-comment repetition; normal wording,
-       * thread structure, author, target and relationship state stay untouched.
-       */
-      comment.text =
-        sanitizeDegenerateGeneratedCommentText(
-          comment.text,
-          280
-        );
     });
 
     post.comments = post.comments.filter((comment) => {
@@ -5365,7 +4044,7 @@ function setRel(w, a, b, patch) {
    dynamic score happened to exist at the end of the previous run.
    ============================================================ */
 
-const RELATIONSHIP_CANON_VERSION = 10;
+const RELATIONSHIP_CANON_VERSION = 6;
 
 function ensureRelationshipBaselineStore(w) {
   if (!w.relationshipBaselines || typeof w.relationshipBaselines !== "object") {
@@ -5404,29 +4083,13 @@ function relationshipCanonFingerprint(w) {
     add(person.nick);
     add(person.nickname);
     add(person.username);
-
-    /* Mechanical relationship canon itself. */
     add(person.connections);
-
-    /* Identity/pronouns used only to resolve direction correctly. */
-    add(person.gender);
-    add(person.orientation);
-
-    /*
-     * Background fields are relationship-relevant ONLY for objective
-     * organization/dojo/faction membership. They do not create personal bonds.
-     */
     add(person.affiliation);
     add(person.organization);
     add(person.role);
     add(person.rank);
     add(person.job);
     add(person.bio);
-    add(person.extra);
-    add(person.backstory);
-    add(person.combat);
-    add(person.skills);
-    add(person.abilities);
   });
 
   return `${people.length}:${hash >>> 0}`;
@@ -5528,531 +4191,214 @@ function canonicalRelationshipEvidence(w, actor, target) {
   if (!actor || !target) return "";
 
   /*
-   * RELATIONSHIP CANON v8:
-   * Mechanical relationship baseline comes from exact target-specific
-   * Connections evidence only. The rest of the character sheet remains fully
-   * available to the AI for characterization, knowledge and behavior, but does
-   * not manufacture bond/score state.
-   */
-  return relationshipSheetEvidenceEntriesAbout(
-    w,
-    actor,
-    target
-  )
-    .map((entry) =>
-      `${target.name || entry.subject} — ${entry.source || "sheet"}: ${entry.relation}`
-    )
-    .join(" | ")
-    .slice(0, 4200);
-}
-
-function connectionOwnedSocialBaseline(w, actor, target) {
-  if (!w || !actor || !target || actor.id === target.id) return null;
-
-  const entries =
-    connectionRelationshipEntriesAbout(
-      w,
-      actor,
-      target
-    );
-
-  if (!entries.length) return null;
-
-  const text =
-    entries
-      .map((entry) =>
-        String(
-          entry &&
-          entry.relation ||
-          ""
-        )
-      )
-      .join(" | ")
-      .toLowerCase();
-
-  if (!text) return null;
-
-  const chosenSibling =
-    /sisters? she chose|brothers? she chose|chosen sister|chosen brother|like (?:a )?(?:sister|brother|sibling)|testv[eé]rk[eé]nt/.test(
-      text
-    );
-
-  const row = (
-    score,
-    bond,
-    fixed = false,
-    mood = ""
-  ) => ({
-    score,
-    bond,
-    fixed,
-    hidden: "",
-    mood,
-    why: "",
-    source: "connections",
-  });
-
-  /*
-   * FACTUAL / FAMILY.
-   */
-  if (/\bmother\b|\bmom\b|\bmum\b|\banya\b|édesany/.test(text)) {
-    return row(55, "Anya", true);
-  }
-
-  if (/\bfather\b|\bdad\b|\bapa\b|édesap/.test(text)) {
-    return row(55, "Apa", true);
-  }
-
-  if (
-    !chosenSibling &&
-    /\bsister\b|\bbrother\b|sibling|testv[eé]r/.test(text)
-  ) {
-    return row(55, "Testvér", true);
-  }
-
-  if (/cousin|unokatestv[eé]r/.test(text)) {
-    return row(45, "Unokatestvér", true);
-  }
-
-  /*
-   * EXPLICIT PARTNER STATUS.
-   */
-  if (/husband|wife|spouse|h[aá]zast[aá]rs|f[eé]rje|feles[eé]ge/.test(text)) {
-    return row(90, "Házastárs");
-  }
-
-  if (/engaged|fianc[eé]|jegyes/.test(text)) {
-    return row(85, "Jegyesek");
-  }
-
-  if (/\bdating\b|boyfriend|girlfriend|j[aá]rnak|p[aá]rja|relationship with/.test(text)) {
-    return row(75, "Járnak");
-  }
-
-  if (/\bex\b|ex-boyfriend|ex-girlfriend|exes|volt bar[aá]t|volt bar[aá]tn[oő]|volt p[aá]r/.test(text)) {
-    return row(0, "Exek");
-  }
-
-  /*
-   * NAMED PERSONAL SOCIAL BOND.
-   * A named friendship beats a generic dojo rivalry.
-   */
-  if (
-    chosenSibling ||
-    /best friend|ride\s*or\s*die|legjobb bar[aá]t/.test(text)
-  ) {
-    return row(92, "Legjobb barát");
-  }
-
-  if (/close friend|k[oö]zeli bar[aá]t/.test(text)) {
-    return row(78, "Közeli barát");
-  }
-
-  const formerFriend =
-    /former friend|ex[- ]friend|used to be friends?|volt bar[aá]t/.test(
-      text
-    );
-
-  if (
-    !formerFriend &&
-    /\bfriend\b|bar[aá]t|ally|sz[oö]vets[eé]ges|trusted ally|loyal friend/.test(
-      text
-    )
-  ) {
-    return row(60, "Barát");
-  }
-
-  if (/archenemy|sworn enemy|\benemy\b|ellens[eé]g|gy[uű]l[oö]l|despise|f[oő]ellens[eé]g/.test(text)) {
-    return row(-90, "Ellenség", false, "hostile");
-  }
-
-  if (/\brival\b|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(text)) {
-    return row(-68, "Rivális", false, "competitive and distrustful");
-  }
-
-  /*
-   * ROLE-SPECIFIC RELATIONSHIPS.
-   */
-  if (/\bmentor\b|\bsensei\b|\bteacher\b|\bcoach\b|mester|tan[aá]r|edz[oő]/.test(text)) {
-    return row(25, "Mentor");
-  }
-
-  if (/\bstudent\b|prot[eé]g[eé]|tan[ií]tv[aá]ny/.test(text)) {
-    return row(20, "Tanítvány");
-  }
-
-  if (/teammate|team mate|team-mate|csapatt[aá]rs|dojo mate|doj[oó]t[aá]rs|clubmate|klubt[aá]rs/.test(text)) {
-    return row(28, "Teammate");
-  }
-
-  if (/acquaintance|ismer[oő]s/.test(text)) {
-    return row(0, "Ismerős");
-  }
-
-  return null;
-}
-
-function reciprocalConnectionSocialBaseline(w, actor, target) {
-  if (!w || !actor || !target || actor.id === target.id) return null;
-
-  /*
-   * Read the OTHER character's Relations/Connections too.
+   * v91 HARD DIRECTION RULE:
    *
-   * This is only a fallback when ACTOR has no own named social bond for TARGET.
-   * Romantic feelings are NOT mirrored here — crush/obsession stay directional
-   * and are handled by canonicalDirectedRomanceState().
+   * Mechanical relationship state comes ONLY from actor -> THIS exact target
+   * entries in actor.connections.
+   *
+   * Example:
+   *   Angela -> Terry reads Angela's "Terry Silver — Relationship: ..."
+   *   Terry  -> Angela reads Terry's  "Angela Silverman — Relationship: ..."
+   *
+   * A sentence elsewhere saying "Johnny is my sensei" must NEVER make Daniel,
+   * Terry, Feng, etc. the actor's mentor merely because their name appears
+   * nearby in the same character sheet.
+   *
+   * Backstory/extra remain character-writing canon for the AI, but are NOT
+   * allowed to mechanically assign a relationship to another target.
    */
-  const reverse =
-    connectionOwnedSocialBaseline(
-      w,
-      target,
-      actor
-    );
-
-  if (!reverse) return null;
-
-  const reverseBond =
-    String(
-      reverse.bond ||
-      reverse.type ||
-      ""
-    );
-
-  const symmetric = new Set([
-    "Testvér",
-    "Unokatestvér",
-    "Járnak",
-    "Jegyesek",
-    "Házastárs",
-    "Exek",
-    "Legjobb barát",
-    "Közeli barát",
-    "Barát",
-    "Ellenség",
-    "Rivális",
-    "Teammate",
-    "Ismerős",
-  ]);
-
-  const paired =
-    BOND_PAIR[reverseBond] ||
-    (
-      symmetric.has(reverseBond)
-        ? reverseBond
-        : ""
-    );
-
-  if (!paired) return null;
-
-  const scoreForBond = {
-    "Gyerek": 55,
-    "Szülő": 55,
-    "Testvér": 55,
-    "Unokatestvér": 45,
-    "Járnak": 75,
-    "Jegyesek": 85,
-    "Házastárs": 90,
-    "Exek": 0,
-    "Legjobb barát": 92,
-    "Közeli barát": 78,
-    "Barát": 60,
-    "Ellenség": -90,
-    "Rivális": -68,
-    "Mentor": 25,
-    "Tanítvány": 20,
-    "Teammate": 28,
-    "Ismerős": 0,
-  };
-
-  return {
-    score:
-      Object.prototype.hasOwnProperty.call(
-        scoreForBond,
-        paired
-      )
-        ? scoreForBond[paired]
-        : clampRelationshipScore(
-            reverse.score
-          ),
-
-    bond: paired,
-    fixed:
-      FIXED_BONDS.includes(
-        paired
-      ),
-
-    hidden: "",
-
-    mood:
-      paired === "Ellenség"
-        ? "hostile"
-        : paired === "Rivális"
-          ? "competitive and distrustful"
-          : "",
-
-    why: "",
-    source: "connections-reciprocal",
-  };
+  return connectionCanonSnippetAbout(w, actor, target, 2200);
 }
 
-function backgroundRelationshipQualifier(w, actor, target) {
-  if (!w || !actor || !target) {
-    return {
-      concealed: false,
-      wouldNeverAdmit: false,
-    };
-  }
-
-  /*
-   * Background does NOT create attraction.
-   * It can only qualify an attraction/obsession already found in Relations.
-   */
-  const evidence =
-    canonTargetEvidence(
-      actor,
-      target,
-      6
-    )
-      .join(" | ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!evidence) {
-    return {
-      concealed: false,
-      wouldNeverAdmit: false,
-    };
-  }
-
-  const wouldNeverAdmit =
-    /would never admit|wouldn['’]?t admit|won['’]?t admit|never admit|never confess|would deny|denies (?:it|his|her|their) feelings|refuses? to admit|disguis(?:es|ing|ed) (?:his|her|their) feelings|nem vallan[aá] be|sosem vallan[aá] be|nem ismern[eé] be|nem mondan[aá] ki|letagadn[aá]/i.test(
-      evidence
-    );
-
-  const concealed =
-    wouldNeverAdmit ||
-    /secret feelings?|hidden feelings?|keeps? (?:his|her|their) feelings hidden|hides? (?:his|her|their) feelings|titkolt? (?:érzés|vonzalom)|rejtett (?:érzés|vonzalom)/i.test(
-      evidence
-    );
-
-  return {
-    concealed,
-    wouldNeverAdmit,
-  };
-}
-
-function relationshipRomanceLayer(w, actor, target) {
-  const directed =
-    canonicalDirectedRomanceState(
-      w,
-      actor,
-      target
-    );
-
-  const backgroundQualifier =
-    (
-      directed.outboundCrush ||
-      directed.outboundObsession
-    )
-      ? backgroundRelationshipQualifier(
-          w,
-          actor,
-          target
-        )
-      : {
-          concealed: false,
-          wouldNeverAdmit: false,
-        };
-
-  const effectiveConcealed =
-    Boolean(
-      directed.concealed ||
-      backgroundQualifier.concealed
-    );
-
-  const effectiveWouldNeverAdmit =
-    Boolean(
-      directed.wouldNeverAdmit ||
-      backgroundQualifier.wouldNeverAdmit
-    );
-
-  const concealedObsession =
-    Boolean(
-      directed.outboundObsession &&
-      (
-        effectiveConcealed ||
-        effectiveWouldNeverAdmit
-      )
-    );
-
-  const concealedCrush =
-    Boolean(
-      directed.outboundCrush &&
-      !directed.outboundObsession &&
-      effectiveConcealed
-    );
-
-  return {
-    ...directed,
-
-    hidden:
-      concealedObsession
-        ? (
-            effectiveWouldNeverAdmit
-              ? "Obsession — would never admit it"
-              : "Obsession"
-          )
-        : concealedCrush
-          ? (
-              effectiveWouldNeverAdmit
-                ? "Crush — would never admit it"
-                : "Secret crush"
-            )
-          : "",
-
-    visibleMood:
-      concealedObsession ||
-      concealedCrush
-        ? ""
-        : directed.outboundObsession
-          ? "Obsessed"
-          : (
-              directed.outboundCrush
-                ? "Crush"
-                : ""
-            ),
-  };
-}
-
-function backgroundDojoRelationshipBaseline(w, actor, target) {
+function inferCanonicalRelationshipBaseline(w, actor, target) {
   if (!w || !actor || !target || actor.id === target.id) return null;
 
-  const actorFlags =
-    factionFlags(
-      actor
-    );
+  const evidence = canonicalRelationshipEvidence(w, actor, target);
+  const low = evidence.toLowerCase();
+  const cue = connectionRelationshipCue(w, actor, target);
+  const factionRivalry = factionRivalryActiveBetween(actor, target);
+  const exactBond = exactConnectionBondLabel(w, actor, target);
+  const exactBondLow = String(exactBond || "").toLowerCase();
+  const exactBest = /legjobb bar[aá]t|best friend/.test(exactBondLow);
+  const exactClose = /közeli bar[aá]t|close friend/.test(exactBondLow);
+  const exactFriend = /(?:^|\s|\/)bar[aá]t(?:\s|\/|$)|(?:^|\s|\/)friend(?:\s|\/|$)/.test(exactBondLow);
+  const exactEnemy = /ellens[eé]g|enemy/.test(exactBondLow);
+  const exactRival = /riv[aá]lis|rival/.test(exactBondLow);
+  const exactCrush = /crush|vonzalom|attraction|obsession/.test(exactBondLow);
+  const exactMentor = /mentor|sensei|tan[aá]r|teacher|coach/.test(exactBondLow);
+  const exactStudent = /tan[ií]tv[aá]ny|student/.test(exactBondLow);
 
-  const targetFlags =
-    factionFlags(
-      target
-    );
+  const explicitBest =
+    /best friend|ride\s*or\s*die|legjobb bar[aá]t|legjobb bar[aá]tn[oő]|legjobb bar[aá]tja/.test(low);
+  const explicitClose =
+    /close friend|k[oö]zeli bar[aá]t|like a sibling|testv[eé]rk[eé]nt/.test(low);
+  const explicitFriend =
+    /\bfriend\b|bar[aá]t|ally|sz[oö]vets[eé]ges|trusted ally|loyal friend/.test(low);
+  const explicitEnemy =
+    /archenemy|sworn enemy|enemy|ellens[eé]g|hate(?:s|d)?\b|hates\b|gy[uű]l[oö]l|despise|f[oő]ellens[eé]g/.test(low);
+  const explicitRival =
+    /rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(low);
 
-  const actorDojo =
-    karateFactionKey(
-      actorFlags
-    );
+  const explicitDating =
+    /\bdating\b|boyfriend|girlfriend|j[aá]rnak|p[aá]rja|relationship with/.test(low);
+  const explicitEngaged =
+    /engaged|fianc[eé]|jegyes/.test(low);
+  const explicitSpouse =
+    /husband|wife|spouse|h[aá]zast[aá]rs|f[eé]rje|feles[eé]ge/.test(low);
+  const explicitEx =
+    /\bex\b|ex-boyfriend|ex-girlfriend|exes|volt bar[aá]t|volt bar[aá]tn[oő]|volt p[aá]r/.test(low);
+  const explicitMutualCrush =
+    /mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction|k[oö]lcs[oö]n[oö]s vonzalom/.test(low);
+  const explicitCrush =
+    /crush|has a crush|vonz[oó]d|vonzalom|attraction|attracted|in love|szerelmes|love interest|fixation|obsess/.test(low);
+  const explicitSecret =
+    /secret crush|hidden crush|secret attraction|titkos crush|titkos vonzalom|rejtett vonzalom|senki nem tud|doesn['’]?t know/.test(low);
 
-  const targetDojo =
-    karateFactionKey(
-      targetFlags
-    );
-
-  const actorSensei =
-    characterIsSensei(
-      actor
-    );
-
-  const targetSensei =
-    characterIsSensei(
-      target
-    );
+  const explicitMother =
+    /\bmother\b|\bmom\b|\bmum\b|\banya\b|édesany/.test(low);
+  const explicitFather =
+    /\bfather\b|\bdad\b|\bapa\b|édesap/.test(low);
+  const explicitSibling =
+    /\bsister\b|\bbrother\b|sibling|testv[eé]r/.test(low);
+  const explicitCousin =
+    /cousin|unokatestv[eé]r/.test(low);
+  const explicitMentor =
+    /\bmentor\b|\bsensei\b|\bteacher\b|\bcoach\b|mester|tan[aá]r|edz[oő]/.test(low);
+  const explicitStudent =
+    /\bstudent\b|prot[eé]g[eé]|tan[ií]tv[aá]ny/.test(low);
+  const explicitTeammate =
+    /teammate|team mate|team-mate|csapatt[aá]rs|dojo mate|doj[oó]t[aá]rs|clubmate|klubt[aá]rs/.test(low);
 
   /*
-   * Target-specific history can confirm teacher hierarchy after Relations
-   * failed to provide a relation.
+   * Personal canon is stronger than broad faction assumptions.
+   * If the sheet explicitly says they are friends/lovers/family, keep that.
    */
-  if (
-    targetSensei &&
-    canonSaysOwnSensei(
-      actor,
-      target
-    )
-  ) {
-    return {
-      score: 25,
-      bond: "Mentor",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "background-dojo",
-    };
+  if (explicitMother) {
+    return { score: 55, bond: exactBond || "Anya", fixed: true, hidden: "", mood: "", why: "", source: "connections" };
+  }
+  if (explicitFather) {
+    return { score: 55, bond: exactBond || "Apa", fixed: true, hidden: "", mood: "", why: "", source: "connections" };
+  }
+  if (explicitSibling) {
+    return { score: 55, bond: exactBond || "Testvér", fixed: true, hidden: "", mood: "", why: "", source: "connections" };
+  }
+  if (explicitCousin) {
+    return { score: 45, bond: exactBond || "Unokatestvér", fixed: true, hidden: "", mood: "", why: "", source: "connections" };
   }
 
   /*
-   * Same dojo from occupation/history/profile:
-   * sensei -> student, student -> sensei, co-sensei or teammate.
+   * Explicit friendship is a stronger social baseline than generic rivalry
+   * keywords elsewhere. This prevents "both sheets say best friend" from
+   * becoming hate because some unrelated dojo rivalry was also mentioned.
    */
-  if (
-    actorDojo &&
-    targetDojo &&
-    actorDojo === targetDojo
-  ) {
-    if (
-      targetSensei &&
-      !actorSensei
-    ) {
-      return {
-        score: 25,
-        bond: "Mentor",
-        fixed: false,
-        hidden: "",
-        mood: "",
-        why: "",
-        source: "background-dojo",
-      };
-    }
-
-    if (
-      actorSensei &&
-      !targetSensei
-    ) {
-      return {
-        score: 20,
-        bond: "Tanítvány",
-        fixed: false,
-        hidden: "",
-        mood: "",
-        why: "",
-        source: "background-dojo",
-      };
-    }
-
-    if (
-      actorSensei &&
-      targetSensei
-    ) {
-      return {
-        score: 35,
-        bond: "Munkatárs",
-        fixed: false,
-        hidden: "",
-        mood: "",
-        why: "",
-        source: "background-dojo",
-      };
-    }
-
+  if (explicitBest || exactBest || cue.close) {
     return {
-      score: 28,
-      bond: "Teammate",
+      score: 92,
+      bond: "Legjobb barát",
       fixed: false,
-      hidden: "",
+      hidden:
+        (explicitCrush || cue.romantic)
+          ? (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
+          : "",
       mood: "",
       why: "",
-      source: "background-dojo",
+      source: "connections",
+    };
+  }
+  if (explicitClose || exactClose) {
+    return {
+      score: 78,
+      bond: "Közeli barát",
+      fixed: false,
+      hidden:
+        (explicitCrush || cue.romantic)
+          ? (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
+          : "",
+      mood: "",
+      why: "",
+      source: "connections",
+    };
+  }
+  if (
+    (explicitFriend || exactFriend || cue.friendly) &&
+    !(explicitEnemy || cue.hostile)
+  ) {
+    return {
+      score: 60,
+      bond: "Barát",
+      fixed: false,
+      hidden:
+        (explicitCrush || cue.romantic)
+          ? (explicitSecret || cue.secret ? "Secret attraction" : "Attraction")
+          : "",
+      mood: "",
+      why: "",
+      source: "connections",
     };
   }
 
-  /*
-   * Different objectively detected rival factions/dojos.
-   */
-  if (
-    factionRivalryActiveBetween(
-      actor,
-      target
-    )
-  ) {
+  if (explicitSpouse) {
+    return { score: 90, bond: "Házastárs", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+  }
+  if (explicitEngaged) {
+    return { score: 85, bond: "Jegyesek", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+  }
+  if (explicitDating) {
+    return { score: 75, bond: "Járnak", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+  }
+  if (explicitEx) {
+    return { score: 0, bond: "Exek", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+  }
+  if (explicitMutualCrush) {
+    return { score: 70, bond: "Kölcsönös crush", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+  }
+  if (explicitCrush || exactCrush || cue.romantic) {
+    return {
+      score: 52,
+      bond: "Crush",
+      fixed: false,
+      hidden: explicitSecret || cue.secret ? "Secret crush" : "",
+      mood: "",
+      why: "",
+      source: "connections",
+    };
+  }
+
+  if (explicitEnemy || exactEnemy || cue.hostile) {
+    return {
+      score: -90,
+      bond: "Ellenség",
+      fixed: false,
+      hidden: "",
+      mood: "hostile",
+      why: "",
+      source: "connections",
+    };
+  }
+
+  if (explicitRival || exactRival || cue.rival) {
+    return {
+      score: -68,
+      bond: "Rivális",
+      fixed: false,
+      hidden: "",
+      mood: "competitive and distrustful",
+      why: "",
+      source: "connections",
+    };
+  }
+
+  if ((explicitMentor || exactMentor) && !(explicitStudent || exactStudent)) {
+    return { score: 25, bond: exactBond || "Mentor", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+  }
+  if ((explicitStudent || exactStudent) && !(explicitMentor || exactMentor)) {
+    return { score: 20, bond: exactBond || "Tanítvány", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+  }
+  if (explicitTeammate) {
+    return { score: 28, bond: exactBond || "Teammate", fixed: false, hidden: "", mood: "", why: "", source: "connections" };
+  }
+
+  if (factionRivalry) {
     return {
       score: -72,
       bond: "Rivális",
@@ -6060,176 +4406,8 @@ function backgroundDojoRelationshipBaseline(w, actor, target) {
       hidden: "",
       mood: "hostile and distrustful",
       why: "",
-      source: "background-faction",
+      source: "faction",
     };
-  }
-
-  return null;
-}
-
-function inferCanonicalRelationshipBaseline(w, actor, target) {
-  if (!w || !actor || !target || actor.id === target.id) return null;
-
-  /*
-   * RELATIONSHIP CANON v10
-   *
-   * FIRST: read Relations/Connections from BOTH characters very thoroughly.
-   * SECOND: only if Relations gives no usable relation, inspect objective
-   * dojo/faction/sensei background from occupation/history/profile.
-   */
-  const ownSocial =
-    connectionOwnedSocialBaseline(
-      w,
-      actor,
-      target
-    );
-
-  const reverseSocial =
-    ownSocial
-      ? null
-      : reciprocalConnectionSocialBaseline(
-          w,
-          actor,
-          target
-        );
-
-  const ownGroup =
-    ownSocial || reverseSocial
-      ? null
-      : connectionGroupRelationshipBaseline(
-          actor,
-          target
-        );
-
-  const reverseGroup =
-    ownSocial ||
-    reverseSocial ||
-    ownGroup
-      ? null
-      : reciprocalConnectionGroupRelationshipBaseline(
-          actor,
-          target
-        );
-
-  const romance =
-    relationshipRomanceLayer(
-      w,
-      actor,
-      target
-    );
-
-  const relationsFound =
-    Boolean(
-      ownSocial ||
-      reverseSocial ||
-      ownGroup ||
-      reverseGroup ||
-      romance.outboundCrush ||
-      romance.outboundObsession ||
-      romance.hidden
-    );
-
-  const social =
-    ownSocial ||
-    reverseSocial ||
-    ownGroup ||
-    reverseGroup ||
-    null;
-
-  if (social) {
-    return {
-      ...social,
-      hidden:
-        romance.hidden ||
-        String(
-          social.hidden ||
-          ""
-        ),
-      mood:
-        romance.visibleMood ||
-        String(
-          social.mood ||
-          ""
-        ),
-    };
-  }
-
-  /*
-   * Obsession is stronger than ordinary/mutual crush.
-   * Wolf's Relations explicitly call Angel his biggest obsession.
-   */
-  if (
-    romance.outboundObsession &&
-    romance.hidden
-  ) {
-    return {
-      score: 0,
-      bond: "",
-      fixed: false,
-      hidden: romance.hidden,
-      mood: "",
-      why: "",
-      source: "connections",
-    };
-  }
-
-  if (romance.outboundObsession) {
-    return {
-      score: 72,
-      bond: "Obsession",
-      fixed: false,
-      hidden: "",
-      mood: "Obsessed",
-      why: "",
-      source: "connections",
-    };
-  }
-
-  if (romance.mutualCrush) {
-    return {
-      score: 70,
-      bond: "Kölcsönös crush",
-      fixed: false,
-      hidden: romance.hidden || "",
-      mood: "",
-      why: "",
-      source: "connections",
-    };
-  }
-
-  if (romance.outboundCrush) {
-    if (romance.hidden) {
-      return {
-        score: 0,
-        bond: "",
-        fixed: false,
-        hidden: romance.hidden,
-        mood: "",
-        why: "",
-        source: "connections",
-      };
-    }
-
-    return {
-      score: 52,
-      bond: "Crush",
-      fixed: false,
-      hidden: "",
-      mood: "",
-      why: "",
-      source: "connections",
-    };
-  }
-
-  /*
-   * No Relations fact in either direction: NOW use dojo/sensei/faction facts.
-   */
-  if (!relationsFound) {
-    return backgroundDojoRelationshipBaseline(
-      w,
-      actor,
-      target
-    );
   }
 
   return null;
@@ -6287,7 +4465,7 @@ function refreshCanonicalRelationshipBaselines(w, focusId = "") {
        */
       if (
         existingBaseline &&
-        /^(?:sheet|connections(?:-|$)|faction|background(?:-|$))/i.test(String(existingBaseline.source || ""))
+        /^(?:sheet|connections|faction)$/i.test(String(existingBaseline.source || ""))
       ) {
         delete store[key];
         return;
@@ -6323,67 +4501,40 @@ function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
   if (!w) return;
 
   /*
-   * RESTART = TRUE CHARACTER-SHEET BASELINE.
-   *
-   * Do NOT reuse w.relationshipBaselines here: that store may contain an old
-   * manual/legacy baseline from a previous run. Restart must derive the fresh
-   * relationship graph again from the CURRENT character sheets.
-   *
-   * Mechanical relationship inference intentionally uses each actor's own
-   * target-specific Connections canon (plus the existing faction fallback),
-   * exactly like the normal canonical relationship reader. If the current
-   * sheet no longer defines a relationship, the fresh run starts neutral.
+   * Re-read the character sheets at restart so edits to Connections/backstory
+   * immediately affect the next run.
    */
-  invalidateCharacterIdentityResolutionCache(w);
+  refreshCanonicalRelationshipBaselines(w);
 
-  const people = allSubjects(w).filter((person) => person && person.id);
+  const store = ensureRelationshipBaselineStore(w);
+  const activeIds = new Set(allSubjects(w).map((person) => String(person.id)));
   const next = {};
-  const freshStore = {};
 
-  people.forEach((actor) => {
-    people.forEach((target) => {
-      if (!target || actor.id === target.id) return;
+  Object.keys(store).forEach((key) => {
+    const parts = String(key).split(">");
+    if (
+      parts.length !== 2 ||
+      !activeIds.has(parts[0]) ||
+      !activeIds.has(parts[1]) ||
+      parts[0] === parts[1]
+    ) {
+      return;
+    }
 
-      const inferred = inferCanonicalRelationshipBaseline(
-        w,
-        actor,
-        target
-      );
-
-      if (!inferred) return;
-
-      const key = relKey(actor.id, target.id);
-      const baseline = {
-        ...relationshipBaselineSnapshot(
-          inferred,
-          inferred.source || "sheet"
-        ),
-        ...inferred,
-        updatedAt: at,
-      };
-
-      freshStore[key] = baseline;
-
-      next[key] = {
-        ...EMPTY_REL,
-        score: clampRelationshipScore(baseline.score),
-        hidden: String(baseline.hidden || "").slice(0, 500),
-        type: "",
-        bond: String(baseline.bond || baseline.type || "").slice(0, 160),
-        fixed: !!baseline.fixed,
-        mood: String(baseline.mood || "").slice(0, 500),
-        why: "",
-        at,
-      };
-    });
+    const baseline = store[key] || {};
+    next[key] = {
+      ...EMPTY_REL,
+      score: clampRelationshipScore(baseline.score),
+      hidden: String(baseline.hidden || "").slice(0, 500),
+      type: "",
+      bond: String(baseline.bond || baseline.type || "").slice(0, 160),
+      fixed: !!baseline.fixed,
+      mood: String(baseline.mood || "").slice(0, 500),
+      why: "",
+      at,
+    };
   });
 
-  /*
-   * Replace both the saved fresh-run baseline and the live relationship graph.
-   * Nothing from the previous gameplay relationship drift survives Restart.
-   */
-  w.relationshipBaselines = freshStore;
-  w.relationshipCanonFingerprint = relationshipCanonFingerprint(w);
   w.rels = next;
 }
 
@@ -6391,15 +4542,8 @@ function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
 /* ---------- jegyzetek (mint az Instagram Notes) ----------
    Mindenkinek egy aktív jegyzete lehet, ami egy nap után magától lejár. */
 const NOTE_LIFE = 24 * 3600e3;
-const NOTE_REFRESH = NOTE_LIFE; // player/UI compatibility; AI uses its own shorter refresh rhythm below
+const NOTE_REFRESH = NOTE_LIFE; // 24 óra: egy karakter Note-ja legfeljebb naponta egyszer frissül
 const NOTE_MAX = 80;
-
-function autonomousAiNoteRefreshMs(w, c) {
-  const activity = Number(c && characterOnlineActivityProfile(w, c).note) || 0;
-  if (activity >= 1.15) return 2 * 3600e3;
-  if (activity >= 0.82) return 3.5 * 3600e3;
-  return 6 * 3600e3;
-}
 
 function pruneExpiredNotes(w) {
   if (!w || !Array.isArray(w.notes)) {
@@ -6942,7 +5086,7 @@ function naturalCommentReplyTargets(w, post, comment) {
     candidates.push({ id, reason, base });
   };
 
-  explicitNamedCharacterIdsInText(w, comment.text, comment.authorId).forEach((id) => push(id, "mention", 86));
+  mentionedIdsInText(w, comment.text, comment.authorId).forEach((id) => push(id, "mention", 82));
   const parent = comment.parent ? comments.find((c) => c && c.id === comment.parent) : null;
   if (parent && parent.authorId) push(parent.authorId, "parent", 74);
   if (!comment.parent && post.authorId) push(post.authorId, "post-author", 70);
@@ -6961,58 +5105,6 @@ function naturalCommentReplyTargets(w, post, comment) {
     const followsCommenter = isFollowing(w, observer.id, comment.authorId);
     const rel = getRel(w, observer.id, comment.authorId) || {};
     const bond = String(rel.bond || rel.type || "").toLowerCase();
-    const postRel = post.authorId
-      ? (getRel(w, observer.id, post.authorId) || {})
-      : {};
-    const postBond = String(postRel.bond || postRel.type || "").toLowerCase();
-
-    const positiveTowardCommenter =
-      Number(rel.score || 0) >= 20 ||
-      hasPositiveFollowBond(rel) ||
-      relationshipDeclaresFriendship(rel) ||
-      /friend|best|close|partner|dating|ally|allied|szövetséges|barát|ride\s*or\s*die/.test(bond);
-
-    const negativeTowardCommenter =
-      Number(rel.score || 0) <= -20 ||
-      /enemy|rival|ellens|riv[aá]l|hate|hostile/.test(bond);
-
-    const positiveTowardPostAuthor =
-      Boolean(
-        post.authorId &&
-        (
-          Number(postRel.score || 0) >= 20 ||
-          hasPositiveFollowBond(postRel) ||
-          relationshipDeclaresFriendship(postRel) ||
-          /friend|best|close|partner|dating|ally|allied|szövetséges|barát|ride\s*or\s*die/.test(postBond)
-        )
-      );
-
-    const negativeTowardPostAuthor =
-      Boolean(
-        post.authorId &&
-        (
-          Number(postRel.score || 0) <= -20 ||
-          /enemy|rival|ellens|riv[aá]l|hate|hostile/.test(postBond)
-        )
-      );
-
-    /*
-     * Public group-drama reason:
-     * a real ally/friend of one side who dislikes/rivals the other side has a
-     * concrete reason to defend, challenge, correct or pile on. This is what
-     * lets a third AI naturally enter a thread instead of keeping every chain
-     * artificially two-person.
-     */
-    const crossSideReason =
-      (
-        positiveTowardPostAuthor &&
-        negativeTowardCommenter
-      ) ||
-      (
-        positiveTowardCommenter &&
-        negativeTowardPostAuthor
-      );
-
     const lore = [observer.personality, observer.traits, observer.bio, observer.extra].filter(Boolean).join(" ").toLowerCase();
     let base = 16;
     base += Math.min(30, Math.max(0, toCommenter) * 0.32);
@@ -7021,20 +5113,10 @@ function naturalCommentReplyTargets(w, post, comment) {
     if (followsPostAuthor) base += 10;
     if (followsCommenter) base += 7;
     if (/friend|best|close|partner|dating|rival|enemy|ellens|ex|crush|ride\s*or\s*die/.test(bond)) base += 15;
-    if (crossSideReason) base += 24;
     if (/gossip|nosy|curious|argumentative|confront|chaotic|dramatic|protective|possess|jealous|flirt|chatty|social|pletyk|kíváncsi|veszeked|konfront|féltéken/.test(lore)) base += 10;
     base += Math.min(18, cue * 0.26);
     if (juice.juicy) base += 16;
-    const hasRealReason =
-      toCommenter >= 18 ||
-      toParent >= 22 ||
-      toPostAuthor >= 22 ||
-      followsPostAuthor ||
-      followsCommenter ||
-      Boolean(bond) ||
-      Boolean(postBond) ||
-      crossSideReason ||
-      juice.juicy;
+    const hasRealReason = toCommenter >= 18 || toParent >= 22 || toPostAuthor >= 22 || followsPostAuthor || followsCommenter || Boolean(bond) || juice.juicy;
     if (hasRealReason && base >= 46) push(observer.id, "bystander", base);
   });
 
@@ -7067,29 +5149,10 @@ function commentWarrantsAiReply(w, post, comment, targetId) {
   const aiTurns = consecutiveAiThreadTurns(w, post, comment);
   const juice = publicSocialJuiceSignals(comment.text);
   if (!isHuman(w, comment.authorId) && aiTurns >= (juice.juicy ? 10 : 7)) return false;
-  const climate = socialCommentClimateSnapshot(w, post);
-  const dramaShift =
-    climate.dramaLevel === "chaotic"
-      ? -10
-      : climate.dramaLevel === "high"
-        ? -6
-        : climate.dramaLevel === "low"
-          ? 9
-          : 0;
-  const publicHeat = Math.max(
-    climate.cancelPressure,
-    climate.stanEnergy,
-    climate.controversy
-  );
-  const heatShift = publicHeat >= 55 ? -5 : publicHeat >= 28 ? -2 : 0;
-
-  if (row.reason.includes("mention") || row.reason.includes("parent")) return row.score >= Math.max(38, 48 + Math.round(dramaShift * 0.35));
-  if (row.reason.includes("post-author")) return row.score >= Math.max(44, 58 + Math.round(dramaShift * 0.55));
-  if (row.reason.includes("bystander")) {
-    const base = juice.juicy ? 56 : 66;
-    return row.score >= Math.max(42, base + dramaShift + heatShift);
-  }
-  return row.score >= Math.max(46, 62 + Math.round(dramaShift * 0.7) + heatShift);
+  if (row.reason.includes("mention") || row.reason.includes("parent")) return row.score >= 48;
+  if (row.reason.includes("post-author")) return row.score >= 58;
+  if (row.reason.includes("bystander")) return row.score >= (juice.juicy ? 56 : 66);
+  return row.score >= 62;
 }
 
 function findNaturalThreadReply(w, onlyPostId = "") {
@@ -7891,295 +5954,24 @@ function meaningfulRelationshipHistoryCount(w, a, b, direction = 1) {
   }).length;
 }
 
-function romanticRelationshipMilestoneStage(value) {
-  const text =
-    String(value || "")
-      .trim()
-      .toLowerCase();
-
-  if (!text) return 0;
-
-  /*
-   * Dynamic romantic progression is deliberately staged.
-   * Existing character-sheet baselines are created elsewhere and are NOT
-   * affected by this runtime progression guard.
-   */
-  if (
-    /^(?:házastárs|spouse|wife|husband|married)$/i.test(
-      text
-    )
-  ) {
-    return 5;
-  }
-
-  if (
-    /^(?:jegyesek|engaged|fianc[eé]s?)$/i.test(
-      text
-    )
-  ) {
-    return 4;
-  }
-
-  if (
-    /^(?:járnak|dating|couple|partners?|boyfriend|girlfriend|titkos viszony|secret affair)$/i.test(
-      text
-    )
-  ) {
-    return 3;
-  }
-
-  if (
-    /^(?:kölcsönös crush|mutual crush|mutual attraction)$/i.test(
-      text
-    )
-  ) {
-    return 2;
-  }
-
-  if (
-    /^(?:crush|obsession|secret crush|secret attraction)$/i.test(
-      text
-    )
-  ) {
-    return 1;
-  }
-
-  return 0;
-}
-
-function romanticRelationshipMilestoneName(stage) {
-  return (
-    {
-      1: "crush",
-      2: "mutual-crush",
-      3: "dating",
-      4: "engaged",
-      5: "spouse",
-    }[Number(stage) || 0] ||
-    "non-romantic"
-  );
-}
-
 function relationshipBondTransitionPaceAllowed(w, a, b, currentRel, proposedBond, nextScore) {
-  const current =
-    String(
-      currentRel &&
-      (
-        currentRel.bond ||
-        currentRel.type
-      ) ||
-      ""
-    ).trim();
-
-  const proposed =
-    String(
-      proposedBond ||
-      ""
-    ).trim();
-
+  const current = String(currentRel && (currentRel.bond || currentRel.type) || "").trim();
+  const proposed = String(proposedBond || "").trim();
   if (!proposed || proposed === current) return true;
   if (isPermanentFamilyBond(currentRel)) return true;
 
-  const currentPolarity =
-    relationshipBondPolarity(
-      current
-    );
+  const currentPolarity = relationshipBondPolarity(current);
+  const proposedPolarity = relationshipBondPolarity(proposed);
 
-  const proposedPolarity =
-    relationshipBondPolarity(
-      proposed
-    );
-
-  /*
-   * HARD ROMANTIC MILESTONE PACING
-   *
-   * Mood may change in one interaction.
-   * A formal romantic BOND may not.
-   *
-   * In particular:
-   *   Crush -> Dating in one comment/reply is impossible.
-   *   Crush -> Mutual crush -> Dating is the normal route.
-   *   Dating -> Engaged -> Spouse must also happen step by step.
-   *
-   * This is a deterministic guard; provider output cannot bypass it.
-   */
-  const currentRomanticStage =
-    romanticRelationshipMilestoneStage(
-      current
-    );
-
-  const proposedRomanticStage =
-    romanticRelationshipMilestoneStage(
-      proposed
-    );
-
-  if (proposedRomanticStage > 0) {
-    const reverseRel =
-      getRel(
-        w,
-        b,
-        a
-      ) || EMPTY_REL;
-
-    const reverseStage =
-      romanticRelationshipMilestoneStage(
-        reverseRel.bond ||
-        reverseRel.type ||
-        ""
-      );
-
-    const positiveA =
-      meaningfulRelationshipHistoryCount(
-        w,
-        a,
-        b,
-        1
-      );
-
-    const positiveB =
-      meaningfulRelationshipHistoryCount(
-        w,
-        b,
-        a,
-        1
-      );
-
-    const reverseScore =
-      Number(
-        reverseRel.score
-      ) || 0;
-
-    /*
-     * Do not dynamically skip romantic stages.
-     * A non-romantic relationship may first become Crush.
-     * A Crush must become Mutual Crush before it can become Dating.
-     */
-    if (
-      proposedRomanticStage >
-      currentRomanticStage + 1
-    ) {
-      return false;
-    }
-
-    /*
-     * Becoming a basic crush may happen organically, but not if the
-     * relationship is deeply negative.
-     */
-    if (proposedRomanticStage === 1) {
-      return (
-        Number(nextScore) >= 20 &&
-        currentPolarity !== -1
-      );
-    }
-
-    /*
-     * MUTUAL CRUSH:
-     * requires an existing one-sided crush/attraction stage, several distinct
-     * positive relationship changes, and actual attraction/romantic readiness
-     * from the reverse direction.
-     */
-    if (proposedRomanticStage === 2) {
-      const reverseAttraction =
-        reverseStage >= 1 ||
-        relationshipCrushActive(
-          w,
-          b,
-          a,
-          reverseRel
-        );
-
-      return (
-        currentRomanticStage >= 1 &&
-        reverseAttraction &&
-        Number(nextScore) >= 58 &&
-        reverseScore >= 35 &&
-        positiveA >= 3 &&
-        positiveB >= 2
-      );
-    }
-
-    /*
-     * DATING:
-     * cannot be created straight from Crush.
-     * The pair needs a mutual-crush stage first plus an accumulated history
-     * on BOTH sides. A single comment exchange can never satisfy this.
-     *
-     * If the reverse side is already Dating because of an older legitimate
-     * transition, allow this side to catch up once the history threshold exists.
-     */
-    if (proposedRomanticStage === 3) {
-      const mutuallyReady =
-        currentRomanticStage >= 2 &&
-        (
-          reverseStage >= 2 ||
-          relationshipCrushActive(
-            w,
-            b,
-            a,
-            reverseRel
-          )
-        );
-
-      const reverseAlreadyDating =
-        reverseStage >= 3;
-
-      return (
-        (
-          mutuallyReady ||
-          reverseAlreadyDating
-        ) &&
-        Number(nextScore) >= 72 &&
-        reverseScore >= 55 &&
-        positiveA >= 6 &&
-        positiveB >= 4
-      );
-    }
-
-    /*
-     * ENGAGED:
-     * only an established Dating relationship can progress here.
-     */
-    if (proposedRomanticStage === 4) {
-      return (
-        currentRomanticStage === 3 &&
-        reverseStage >= 3 &&
-        Number(nextScore) >= 88 &&
-        reverseScore >= 78 &&
-        positiveA >= 10 &&
-        positiveB >= 8
-      );
-    }
-
-    /*
-     * SPOUSE:
-     * only an established engagement can progress here.
-     */
-    if (proposedRomanticStage === 5) {
-      return (
-        currentRomanticStage === 4 &&
-        reverseStage >= 4 &&
-        Number(nextScore) >= 94 &&
-        reverseScore >= 88 &&
-        positiveA >= 14 &&
-        positiveB >= 12
-      );
-    }
-  }
-
-  /*
-   * Existing friendship pacing stays exactly as before.
-   */
   if (currentPolarity === 1 && proposedPolarity === 1) {
     if (/^Legjobb barát$|^Best Friend$/i.test(proposed)) {
       return Number(nextScore) >= 82 &&
         meaningfulRelationshipHistoryCount(w, a, b, 1) >= 4;
     }
-
     if (/^Közeli barát$|^Close Friend$/i.test(proposed)) {
       return Number(nextScore) >= 58 &&
         meaningfulRelationshipHistoryCount(w, a, b, 1) >= 3;
     }
-
     if (/^Barát$|^Friend$/i.test(proposed)) {
       return Number(nextScore) >= 28 &&
         meaningfulRelationshipHistoryCount(w, a, b, 1) >= 2;
@@ -8279,104 +6071,8 @@ function reconcileLiveRelationshipsWithStrongCanon(w, force = false) {
     const parts = String(key).split(">");
     if (parts.length !== 2) return;
     const [a, b] = parts;
-    const baseline = store[key] || {};
-
-    /*
-     * v10 parser migration:
-     * If this baseline was generated from Relations/Connections/faction canon,
-     * apply the freshly parsed baseline exactly once. Manual configured
-     * baselines are deliberately excluded.
-     */
-    if (
-      force &&
-      !relationshipBaselineIsManual(baseline) &&
-      /^(?:connections(?:-|$)|faction|background(?:-|$))/i.test(
-        String(
-          baseline.source ||
-          ""
-        )
-      )
-    ) {
-      setRel(w, a, b, {
-        score:
-          clampRelationshipScore(
-            baseline.score
-          ),
-        bond:
-          String(
-            baseline.bond ||
-            baseline.type ||
-            ""
-          ),
-        hidden:
-          String(
-            baseline.hidden ||
-            ""
-          ),
-        fixed:
-          !!baseline.fixed,
-        mood:
-          String(
-            baseline.mood ||
-            ""
-          ),
-        why: "",
-      });
-
-      return;
-    }
-
     const canon = strongRelationshipCanonBaseline(w, a, b);
-
-    /*
-     * Hidden-only sheet canon has no positive/negative polarity, so it is not a
-     * "strongRelationshipCanonBaseline". During a forced canon migration it
-     * still must repair the live row — especially Daniel-style concealed
-     * obsession — without inventing a public bond/mood.
-     */
-    if (!canon) {
-      if (
-        force &&
-        /^(?:connections|sheet)(?:-|$)/i.test(
-          String(baseline.source || "")
-        ) &&
-        String(baseline.hidden || "").trim()
-      ) {
-        const live = getRel(w, a, b) || EMPTY_REL;
-
-        const staleVisibleObsession =
-          /obsession|obsessed|megsz[aá]ll/.test(
-            `${String(live.bond || live.type || "")} ${String(live.mood || "")}`
-              .toLowerCase()
-          );
-
-        setRel(w, a, b, {
-          score:
-            staleVisibleObsession
-              ? clampRelationshipScore(baseline.score)
-              : clampRelationshipScore(live.score),
-          bond:
-            staleVisibleObsession
-              ? String(baseline.bond || baseline.type || "")
-              : String(live.bond || live.type || ""),
-          hidden: String(baseline.hidden || ""),
-          fixed:
-            staleVisibleObsession
-              ? !!baseline.fixed
-              : !!live.fixed,
-          mood:
-            staleVisibleObsession
-              ? String(baseline.mood || "")
-              : String(live.mood || ""),
-          why:
-            staleVisibleObsession
-              ? ""
-              : String(live.why || ""),
-        });
-      }
-
-      return;
-    }
+    if (!canon) return;
 
     const live = getRel(w, a, b) || EMPTY_REL;
     const livePolarity =
@@ -8422,329 +6118,6 @@ function reconcileLiveRelationshipsWithStrongCanon(w, force = false) {
       }
     }
   });
-
-  /*
-   * v7 stale-direction repair:
-   * Older romance inference could create the exact synthetic rows
-   *   Crush +52
-   *   Obsession +72 / Obsessed
-   * in the WRONG direction. If the new full-sheet canon finds no baseline for
-   * that directed pair and gameplay history did not actually build the bond,
-   * remove only those old synthetic signatures.
-   */
-  if (force) {
-    Object.keys(w.rels || {}).forEach((key) => {
-      if (store[key]) return;
-
-      const parts = String(key).split(">");
-      if (parts.length !== 2) return;
-
-      const [a, b] = parts;
-      if (!a || !b || a === b) return;
-
-      const live = getRel(w, a, b) || EMPTY_REL;
-      const bond =
-        String(live.bond || live.type || "")
-          .toLowerCase();
-
-      const mood =
-        String(live.mood || "")
-          .toLowerCase();
-
-      const score =
-        Number(live.score) || 0;
-
-      const oldSyntheticRomance =
-        (
-          /obsession|megsz[aá]ll/.test(bond) &&
-          Math.abs(score - 72) <= 1
-        ) ||
-        (
-          /obsessed|megsz[aá]ll/.test(mood) &&
-          Math.abs(score - 72) <= 1
-        ) ||
-        (
-          /(?:^|\s)crush(?:\s|$)/.test(bond) &&
-          Math.abs(score - 52) <= 1
-        );
-
-      if (!oldSyntheticRomance) return;
-
-      const earnedHistory =
-        meaningfulRelationshipHistoryCount(w, a, b, 1) +
-        meaningfulRelationshipHistoryCount(w, a, b, -1);
-
-      if (earnedHistory > 0) return;
-
-      const actor = charById(w, a);
-      const target = charById(w, b);
-
-      if (
-        actor &&
-        target &&
-        inferCanonicalRelationshipBaseline(
-          w,
-          actor,
-          target
-        )
-      ) {
-        return;
-      }
-
-      w.rels[key] = {
-        ...EMPTY_REL,
-        at: now(),
-      };
-    });
-  }
-}
-
-function dynamicRelationshipMoodSeed(value) {
-  const raw = String(value || "");
-  let h = 2166136261;
-
-  for (let i = 0; i < raw.length; i++) {
-    h ^= raw.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-
-  return Math.abs(h >>> 0);
-}
-
-function dynamicRelationshipMoodVariant(
-  w,
-  actorId,
-  targetId,
-  rawMood,
-  why = "",
-  delta = 0
-) {
-  const raw =
-    String(rawMood || "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return "";
-
-  const normalized =
-    raw
-      .toLowerCase()
-      .replace(/[.!?]+$/g, "")
-      .trim();
-
-  const genericMood =
-    /^(?:very |really |intensely |deeply )?(?:jealous|jealous and hurt|hurt|angry|annoyed|upset|sad|happy|pleased|grateful|protective|possessive|obsessed|worried|anxious|confused|betrayed|disappointed|embarrassed|flustered|attracted|interested|tense|hostile|competitive|distrustful|cold|warm|affectionate|féltékeny|féltékeny és sértett|sértett|dühös|mérges|ideges|szomorú|boldog|hálás|védelmező|birtokló|megszállott|aggódó|szorongó|összezavarodott|elárult|csalódott|zavarban van|vonzódó|feszült|ellenséges|versengő|bizalmatlan)$/i.test(
-      normalized
-    ) ||
-    raw.split(/\s+/).filter(Boolean).length <= 2;
-
-  /*
-   * Keep nuanced AI-written moods. Only label-like generic moods are expanded.
-   */
-  if (!genericMood) {
-    return raw.slice(0, 180);
-  }
-
-  const actor =
-    charById(
-      w,
-      actorId
-    );
-
-  const target =
-    charById(
-      w,
-      targetId
-    );
-
-  if (!actor) {
-    return raw.slice(0, 180);
-  }
-
-  const lore =
-    characterLoreCorpus(
-      actor
-    ).toLowerCase();
-
-  const signal =
-    `${raw} ${why}`
-      .toLowerCase();
-
-  const targetName =
-    target && target.name
-      ? target.name.split(" ")[0]
-      : "";
-
-  let core = "mixed";
-
-  if (
-    /jealous|féltéken|possess|birtokl|territorial|rival attention|flirt|flört/.test(
-      signal
-    )
-  ) {
-    core = "jealous";
-  } else if (
-    /betray|árul|lied|hazud|trust|bizalom/.test(
-      signal
-    )
-  ) {
-    core = "betrayed";
-  } else if (
-    /hurt|sért|humiliat|megaláz|reject|elutas|disappoint|csalód/.test(
-      signal
-    ) ||
-    Number(delta) < -8
-  ) {
-    core = "hurt";
-  } else if (
-    /angry|düh|mérges|annoy|ideges|irritat|frustrat/.test(
-      signal
-    )
-  ) {
-    core = "angry";
-  } else if (
-    /attract|crush|vonz|fluster|zavarban|romantic|romant/.test(
-      signal
-    )
-  ) {
-    core = "attracted";
-  } else if (
-    /grateful|hálás|support|támogat|relief|megkönnyebb/.test(
-      signal
-    ) ||
-    Number(delta) >= 8
-  ) {
-    core = "softened";
-  }
-
-  let style = "default";
-
-  if (/obsess|fixat|megszáll|possess|birtokl|territorial/.test(lore)) {
-    style = "possessive";
-  } else if (/sarcast|szark|dry humor|deadpan|mock|gúny/.test(lore)) {
-    style = "sarcastic";
-  } else if (/proud|büszke|dominant|domináns|competitive|verseng|arrogant|fölény/.test(lore)) {
-    style = "proud";
-  } else if (/reserved|zárkózott|stoic|sztoikus|cold|rideg|quiet|csendes|guarded|visszafogott/.test(lore)) {
-    style = "reserved";
-  } else if (/anxious|szorong|insecure|bizonytalan|overthink|túlgondol|sensitive|érzékeny/.test(lore)) {
-    style = "anxious";
-  } else if (/loyal|lojális|protective|védelmez|devoted|odaadó/.test(lore)) {
-    style = "loyal";
-  } else if (/playful|játékos|chaotic|kaotikus|impulsive|impulzív|flirty|flörtölős/.test(lore)) {
-    style = "playful";
-  }
-
-  const en =
-    worldLanguage(
-      w,
-      w.meId
-    ) === "en";
-
-  const jealousRows = {
-    possessive: [
-      ["féltékeny és territoriális, túl sok jelentést tulajdonít annak, kire figyeltél", "jealous and territorial, reading far too much into who got your attention"],
-      ["csendesen birtokló és felhúzott, nehezen engedi el, hogy más kapta meg a figyelmed", "quietly possessive and wound up, struggling to let go of someone else getting your attention"],
-      ["megsértett birtoklási ösztönnel figyel, mintha valaki belépett volna az ő területére", "watchful with a bruised possessive streak, like someone stepped into territory they consider theirs"],
-    ],
-    sarcastic: [
-      ["féltékeny, de inkább élesebb humor mögé rejti, mintsem bevallja, hogy betalált", "jealous, but hiding it behind sharper humor rather than admitting it got to them"],
-      ["megcsípte a féltékenység, ezért lazának tetteti magát és közben sokkal csípősebb", "stung by jealousy, pretending to be casual while becoming noticeably sharper"],
-      ["bosszantóan sokat foglalkoztatja, de ezt inkább egy odaszúrással leplezné", "far more bothered than they want to be, more likely to cover it with a jab than admit why"],
-    ],
-    proud: [
-      ["féltékeny és személyesen kihívva érzi magát, inkább versenyezne a figyelmedért, mintsem sértettséget mutasson", "jealous and personally challenged, more likely to compete for your attention than show hurt"],
-      ["büszkeségében sértett és versengő, mintha valaki elvette volna tőle a helyet melletted", "pride-bruised and competitive, as if someone else took a place beside you they expected to hold"],
-      ["féltékenysége inkább makacs versenyszellemként jön ki, mint nyílt sebezhetőségként", "their jealousy is coming out as stubborn competitiveness rather than open vulnerability"],
-    ],
-    reserved: [
-      ["csendesen féltékeny és zártabb lett, inkább visszahúzódik, mintsem megmutassa, hogy fájt", "quietly jealous and more closed off, withdrawing rather than showing that it hurt"],
-      ["láthatóan hidegebb és óvatosabb, miközben magában újra lejátssza, mit jelenthetett az egész", "noticeably colder and more guarded, privately replaying what the interaction might have meant"],
-      ["féltékenysége visszafogott, de ott ül a távolságtartásban és a megváltozott figyelmében", "their jealousy is restrained, but visible in the extra distance and changed attention"],
-    ],
-    anxious: [
-      ["féltékeny és bizonytalan, túlgondolja, mit jelent ez kettőtök kapcsolatára nézve", "jealous and insecure, overthinking what this means for the bond between you"],
-      ["nyugtalanul féltékeny, fejben már több rossz forgatókönyvet gyárt, mint amennyit a helyzet indokol", "anxiously jealous, already imagining more bad outcomes than the situation actually proves"],
-      ["megütötte a bizonytalanság, és most túl sokat figyel minden apró jelre köztetek", "hit by insecurity and now paying far too much attention to every small signal between you"],
-    ],
-    loyal: [
-      ["féltékeny és sértett, de főleg attól tart, hogy megbillen valami, amit fontosnak hitt köztetek", "jealous and hurt, mostly afraid that something they valued between you may be shifting"],
-      ["védelmezi a köztetek lévő köteléket, ezért a féltékenysége óvatossá és gyanakvóvá teszi", "protective of the bond between you, which turns the jealousy into wariness and suspicion"],
-      ["rosszul esett neki, és most sokkal jobban őrzi azt, amit kettőtök között értékesnek érez", "it stung, and now they are guarding what they value between you much more closely"],
-    ],
-    playful: [
-      ["féltékeny, de félig elviccelné, félig tesztelné, mennyire fontos még neked", "jealous, half tempted to joke it off and half tempted to test how much they still matter to you"],
-      ["felpiszkálta a féltékenység; egyszerre akar ugratni róla és visszahúzni magára a figyelmed", "jealousy has them restless, torn between teasing you about it and pulling your attention back"],
-      ["játékosan próbálná leplezni, mennyire zavarta, közben feltűnően jobban figyel rád", "trying to play off how much it bothered them while paying noticeably more attention to you"],
-    ],
-    default: [
-      ["féltékeny és nyugtalan, most sokkal éberebben figyeli, mit jelentett az a helyzet", "jealous and unsettled, watching much more closely for what that interaction actually meant"],
-      ["megütötte a féltékenység, és most óvatosabban méri fel, hol áll melletted", "stung by jealousy and reassessing more carefully where they stand with you"],
-      ["sértette a látvány, és most nehezebben tud úgy tenni, mintha teljesen mindegy lenne neki", "bothered by what they saw and finding it harder to pretend it means nothing to them"],
-    ],
-  };
-
-  const genericRows = {
-    hurt: [
-      ["sértett és óvatosabb lett, most kevésbé érzi biztonságosnak, hogy ugyanúgy megnyíljon neked", "hurt and more guarded, less sure that opening up to you feels as safe as it did"],
-      ["rosszul érintette, és most visszafogottabban közelít hozzád, amíg eldönti, mennyire volt ez komoly", "it landed badly, and they are approaching you more cautiously while deciding how serious it was"],
-      ["megbántva érzi magát, de még nem döntötte el, hogy távolodjon vagy várjon magyarázatot", "hurt, but not yet sure whether to pull away or wait for an explanation"],
-    ],
-    betrayed: [
-      ["megingott a bizalma, és most sokkal nehezebben veszi készpénznek, amit mondasz neki", "their trust has been shaken, and they are much less willing to take your words at face value"],
-      ["elárulva érzi magát, és a csalódás most erősebb benne, mint a nyílt düh", "feeling betrayed, with disappointment running deeper than the anger they are showing"],
-      ["bizalmatlanabb és érzelmileg hátrébb lépett, mert ezt nem egyszerű félreértésként élte meg", "more distrustful and emotionally withdrawn because they did not experience this as a simple misunderstanding"],
-    ],
-    angry: [
-      ["ingerült és feszült, most sokkal kisebb a türelme veled szemben", "irritated and tense, with much less patience for you right now"],
-      ["dühös, de a valódi feszültség abból jön, hogy személyesnek vette, ami történt", "angry, with the real tension coming from how personally they took what happened"],
-      ["felhúzta magát rajtad, és most könnyebben olvas rossz szándékot a következő lépéseidbe is", "worked up with you and more likely to read bad intent into your next move as well"],
-    ],
-    attracted: [
-      ["feltűnően jobban vonzódik hozzád, de még figyeli, mennyit mer ebből megmutatni", "noticeably more attracted to you, while still judging how much of it they are willing to show"],
-      ["felkavarta a vonzalom, és most a szokásosnál jobban észrevesz minden apró reakciódat", "stirred by the attraction and paying more attention than usual to every small reaction from you"],
-      ["vonzódó és kissé kibillent, mintha hirtelen nehezebb lenne teljesen neutrálisan kezelnie téged", "attracted and slightly thrown off, as if treating you completely neutrally just became harder"],
-    ],
-    softened: [
-      ["melegebben és bizalommal fordul feléd, mert most tényleg azt érzi, hogy számíthat rád", "warmer and more trusting toward you because, right now, they genuinely feel they can rely on you"],
-      ["láthatóan meglágyult veled szemben, és könnyebben enged közelebb érzelmileg", "noticeably softened toward you and more willing to let you closer emotionally"],
-      ["értékeli, amit tettél, és most természetesebben keresi veled a közelséget és az együttműködést", "appreciative of what you did and more naturally drawn toward closeness and cooperation with you"],
-    ],
-    mixed: [
-      ["érzelmileg megmozdította a helyzet, és most más szemmel figyel rád, mint közvetlenül előtte", "emotionally affected by what happened and looking at you differently than they did just before"],
-      ["nem közömbös neki, ami történt; most óvatosabban és személyesebben értelmezi a következő jelzéseidet", "not indifferent to what happened, and reading your next signals more personally and carefully"],
-      ["kibillent a korábbi egyensúlyból, és még rendezi magában, pontosan mit változtatott ez benne", "knocked out of their previous emotional balance and still working out exactly what changed for them"],
-    ],
-  };
-
-  let rows;
-
-  if (core === "jealous") {
-    rows =
-      jealousRows[style] ||
-      jealousRows.default;
-  } else {
-    rows =
-      genericRows[core] ||
-      genericRows.mixed;
-  }
-
-  const seed =
-    dynamicRelationshipMoodSeed(
-      `${actorId}|${targetId}|${raw}|${why}|${targetName}|${Number(delta) || 0}`
-    );
-
-  const pair =
-    rows[
-      seed %
-      rows.length
-    ];
-
-  return (
-    en
-      ? pair[1]
-      : pair[0]
-  ).slice(0, 180);
 }
 
 function applyChanges(
@@ -8893,13 +6266,11 @@ function applyChanges(
       !(romanceState.blocked && romanticRelationshipText(ch.mood))
     ) {
       patch.mood =
-        dynamicRelationshipMoodVariant(
-          n,
-          a,
-          b,
-          ch.mood,
-          ch.why || "",
-          Number(ch.delta) || 0
+        String(
+          ch.mood
+        ).slice(
+          0,
+          60
         );
     }
 
@@ -8955,11 +6326,7 @@ function applyChanges(
           eligibility.mode !==
             "enemy-secret-crush"
         ) &&
-        (
-          followScore >= 34 ||
-          eligibility.mode === "bond" ||
-          eligibility.mode === "team"
-        )
+        followScore >= 34
       ) {
         simEnqueue(
           n,
@@ -9555,81 +6922,6 @@ function playerSocialImpactFallbackChanges(
     .filter(Boolean);
 }
 
-function explicitPlayerSocialFlirtSignal(value) {
-  const text =
-    String(value || "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!text) return false;
-
-  /*
-   * Strong romantic/flirt intent only.
-   * Friendly praise, hype, hearts, teasing and "you look good" alone are NOT
-   * enough to classify a player action as flirting.
-   */
-  return /(?:\bflirt(?:ing|ed)?\b|\bfl[oö]rt(?:öl|ölt|ölök|ölsz|öltem)?\b|\bdate\s+me\b|\bgo\s+out\s+with\s+me\b|\bwant\s+you\b|\bi['’]?m\s+into\s+you\b|\bi\s+have\s+a\s+crush\s+on\s+you\b|\bi\s+like\s+you\s+as\s+more\s+than\s+a\s+friend\b|\bkiss\s+me\b|\bcan\s+i\s+kiss\s+you\b|\bi\s+want\s+to\s+kiss\s+you\b|\bbe\s+my\s+(?:girlfriend|boyfriend|partner)\b|\brandizz\s+velem\b|\bj[aá]rj\s+velem\b|\bmeg\s+akarlak\s+cs[oó]kolni\b|\bmegcs[oó]koln[aá]lak\b|\bcs[oó]kolj\s+meg\b|\bvonz[oó]dom\s+hozz[aá]d\b|\btetszel\s+nekem\s+nem\s+csak\s+bar[aá]tk[eé]nt\b)/i.test(
-    text
-  );
-}
-
-function playerFlirtRealityCard(
-  w,
-  playerId,
-  targetId,
-  currentText
-) {
-  const player =
-    charById(
-      w,
-      playerId
-    );
-
-  const target =
-    charById(
-      w,
-      targetId
-    );
-
-  if (!player || !target) {
-    return "FLIRT FACT: unknown — do not assume flirt without explicit evidence.";
-  }
-
-  const orientation =
-    romanceOrientationState(
-      w,
-      playerId,
-      targetId
-    );
-
-  const explicit =
-    explicitPlayerSocialFlirtSignal(
-      currentText
-    );
-
-  const en =
-    worldLanguage(
-      w,
-      w.meId
-    ) === "en";
-
-  if (orientation.blocked) {
-    return en
-      ? `FLIRT FACT — HARD PLATONIC LOCK: ${player.name}'s known orientation is incompatible with romantic attraction toward ${target.name}. Do NOT interpret compliments, friendly affection, teasing, emojis, attention, closeness or a reply as flirting with ${target.name}.`
-      : `FLÖRT TÉNY — KEMÉNY PLATONIKUS ZÁR: ${player.name} ismert orientációja nem kompatibilis romantikus vonzalommal ${target.name} felé. Bókot, baráti szeretetet, ugratást, emojit, figyelmet, közelséget vagy reply-t NE értelmezz ${target.name} felé flörtnek.`;
-  }
-
-  if (explicit) {
-    return en
-      ? `FLIRT FACT — EXPLICIT IN THIS MESSAGE: the player's actual wording contains a direct romantic/flirt signal toward ${target.name}. Treat only THIS concrete interaction as flirting.`
-      : `FLÖRT TÉNY — EBBEN AZ ÜZENETBEN EXPLICIT: a játékos tényleges szövege direkt romantikus/flörtjelet tartalmaz ${target.name} felé. Csak EZT a konkrét interakciót kezeld flörtnek.`;
-  }
-
-  return en
-    ? `FLIRT FACT — NOT ESTABLISHED: there is no explicit flirt signal in the player's current wording toward ${target.name}. Friendly compliments, praise, banter, hearts/emojis, joking, defending someone, replying quickly or being close are PLATONIC unless the wording clearly crosses into romance.`
-    : `FLÖRT TÉNY — NINCS ALÁTÁMASZTVA: a játékos mostani szövegében nincs explicit flörtjel ${target.name} felé. Baráti bók, hype, ugratás, szív/emoji, poén, védelem, gyors reply vagy közelség PLATONIKUS, amíg a konkrét szöveg egyértelműen át nem lép romantikába.`;
-}
-
 async function assessPlayerSocialRelationshipImpact(
   w,
   post,
@@ -9740,12 +7032,6 @@ ${relationshipBehaviorCard(
         w,
         c.id,
         actorId
-      )}
-${playerFlirtRealityCard(
-        w,
-        actorId,
-        c.id,
-        comment.text
       )}`
   )
   .join("\n")}
@@ -9756,10 +7042,7 @@ Csak azt döntsd el, hogyan változik AZ ÉRINTETT AI-K → JÁTÉKOS kapcsolati
 SZABÁLYOK:
 - A pontos szöveget és a thread-kontextust értelmezd, ne kulcsszavakat.
 - A negatív beszólás, sértés, gúny, nyilvános megalázás, lekezelés, elutasítás vagy támadás adjon MÍNUSZT annak, akinek szól.
-- Kedves válasz, támogatás, bók, védelem, TÉNYLEGES flört vagy őszinte bocsánatkérés adhat PLUSZT.
-- FLÖRTÖT NEM TALÁLHATSZ KI. A fenti FLÖRT TÉNY kártya kemény ground truth. Ha PLATONIKUS ZÁR vagy NINCS ALÁTÁMASZTVA szerepel, ne írd a mood/why mezőbe, hogy a játékos flörtölt vele.
-- Baráti bók, "you look good", hype, szív/emoji, játékos ugratás, közelség vagy kedves reply önmagában NEM flört.
-- A játékos ismert orientációja kemény kapu: orientáció-inkompatibilis célponttal ne gyárts romantikus/flört értelmezést.
+- Kedves válasz, támogatás, bók, védelem, flört vagy őszinte bocsánatkérés adhat PLUSZT.
 - Semleges kérdés, tárgyilagos válasz vagy jelentéktelen reakció legyen 0.
 - A DIREKT REPLY önmagában SOHA nem jelent automatikus pozitív pontot.
 - Szarkazmust és baráti ugratást KONTEXTUSBAN értelmezz. Egy közeli barátnál a "bitch 😭" lehet játékos; ellenségnél ugyanaz lehet sértés.
@@ -9771,13 +7054,8 @@ SZABÁLYOK:
 - Csak az itt felsorolt AI-k szerepelhetnek.
 - "a" mindig az AI id-ja legyen; "b" mindig a játékos id-ja.
 - A mood azt írja le, MIT ÉREZ most az AI a játékos iránt.
-- A mood NE sabloncímke legyen ("jealous", "hurt", "annoyed", "protective"). Írj rövid, 5–18 szavas, KARAKTERSPECIFIKUS aktuális érzelmi állapotot, amit az adott AI saját personality/traits/history/kapcsolata formál. Lehet összetett vagy ellentmondásos is.
-- Egy büszke karakter féltékenysége lehet versengő és személyesen kihívott; egy zárkózotté hidegebb visszahúzódás; egy szarkasztikusé csípősebb humor mögé rejtett sértettség. Ezek elvek, ne másold ugyanazt a mondatot.
-- A mood és why nyelve KÖTELEZŐEN: ${worldLanguage(w, w.meId) === "en" ? "ENGLISH" : "MAGYAR"}.
-- A why röviden nevezze meg a konkrét, TÉNYLEG megtörtént okot; ne találjon ki flörtöt vagy más eseményt.
+- A why röviden nevezze meg a konkrét okot.
 - Ha a bond még ugyanaz, ne találj ki újat. Ha tényleg fordulópont történt, adhatsz bondot.
-- EGYETLEN KOMMENT/REPLY VÁLTÁS NEM TEHET Crush-ból Dating/Járnak státuszt, Datingből Engaged/Jegyesek státuszt vagy Engagedből Spouse/Házastárs státuszt. Ezek tartós romantikus mérföldkövek, amelyekhez több külön kapcsolatépítő esemény és felhalmozódott kölcsönösség kell. Egy komment legfeljebb score-t/moodot mozdítson, vagy fokozatosan kialakuló Crush/Mutual crush irányába lépjen, ha az valóban indokolt.
-- A mood gyorsan változhat; a romantikus bond státusz szándékosan SOKKAL lassabban.
 - Ne generálj kommentválaszt, csak kapcsolatértékelést.
 
 Formátum:
@@ -9861,7 +7139,7 @@ Formátum:
               row &&
               row.mood
             ) || ""
-          ).slice(0, 180),
+          ).slice(0, 60),
         why:
           String(
             (
@@ -10489,74 +7767,6 @@ function albumItemContext(item, maxChars = 1200) {
     .slice(0, Math.max(200, Number(maxChars) || 1200));
 }
 
-/*
- * ALBUM POSTING METADATA BOUNDARY
- *
- * item.note is written by the user only to help the AI recognize/select the
- * intended photo. It is NOT caption copy, alt text, or public image content.
- * Keep it available to the posting model as a private recognition hint, while
- * public feed image context contains only confirmed people + pixel-grounded vision.
- */
-function albumPostingList(c) {
-  const a = albumOf(c);
-  if (!a.length) return "";
-
-  return a
-    .map((item, i) => {
-      const who = String(item && item.who || "").replace(/\s+/g, " ").trim();
-      const helper = String(item && item.note || "").replace(/\s+/g, " ").trim();
-      const visible = String(item && item.vision || "").replace(/\s+/g, " ").trim();
-      const details = [
-        who ? `USER-CONFIRMED PEOPLE IN IMAGE: ${who}` : "",
-        helper ? `PRIVATE ALBUM RECOGNITION HINT — INTERNAL ONLY, NEVER COPY OR PARAPHRASE AS THE CAPTION: ${helper}` : "",
-        visible ? `VISIBLE IMAGE CONTENT: ${visible}` : "",
-      ].filter(Boolean).join(" | ");
-      return `[kep${i + 1}] ${details || "image without description"}`;
-    })
-    .join(" ; ");
-}
-
-function albumPublicImageContext(item, maxChars = 1200) {
-  if (!item) return "";
-  const who = String(item.who || "").replace(/\s+/g, " ").trim();
-  const visible = String(item.vision || "").replace(/\s+/g, " ").trim();
-  return [
-    who ? `USER-CONFIRMED PEOPLE IN IMAGE: ${who}` : "",
-    visible ? `VISIBLE IMAGE CONTENT: ${visible}` : "",
-  ]
-    .filter(Boolean)
-    .join(" | ")
-    .slice(0, Math.max(200, Number(maxChars) || 1200));
-}
-
-function albumCaptionCopiesPrivateHelper(caption, item) {
-  const helper = String(item && item.note || "").replace(/\s+/g, " ").trim().toLowerCase();
-  const text = String(caption || "").replace(/\s+/g, " ").trim().toLowerCase();
-  if (!helper || !text) return false;
-
-  const normalize = (value) => String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9áéíóöőúüűàèìòùâêîôûäëïöüçñß]+/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const h = normalize(helper);
-  const t = normalize(text);
-  if (!h || !t) return false;
-  if (h === t) return true;
-  if (h.length >= 18 && (t.includes(h) || (t.length >= 14 && h.includes(t)))) return true;
-
-  const stop = new Set([
-    "the","and","with","from","this","that","into","over","under","near","wearing","looking",
-    "egy","az","és","hogy","van","volt","aki","ami","ahol","mellett","előtt","után","közben"
-  ]);
-  const helperTokens = [...new Set(h.split(" ").filter((x) => x.length >= 3 && !stop.has(x)))];
-  const captionTokens = new Set(t.split(" ").filter((x) => x.length >= 3 && !stop.has(x)));
-  if (helperTokens.length < 4) return false;
-  const overlap = helperTokens.filter((x) => captionTokens.has(x)).length;
-  return overlap >= 4 && overlap / helperTokens.length >= 0.72;
-}
-
 function namedCharacterIdsInImageContext(w, value, authorId = "") {
   if (!w || !value) return [];
   const low = String(value).toLowerCase();
@@ -10627,10 +7837,10 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * VITE_WORLD_GROUP_MULTIPLIER=1.15
  * VITE_WORLD_ROLEPLAY_MULTIPLIER=1.00
  * VITE_WORLD_NOTE_MULTIPLIER=1.10
- * VITE_WORLD_CONTENT_INTERVAL_MS=5000
+ * VITE_WORLD_CONTENT_INTERVAL_MS=15000
  * VITE_WORLD_POPUP_CADENCE_MULTIPLIER=1.00
  * VITE_WORLD_CANCEL_SENSITIVITY=1.55
- * VITE_AI_BACKGROUND_GAP_MS=450
+ * VITE_AI_BACKGROUND_GAP_MS=8000
  */
 const LIVE_WORLD_ACTIVITY_MULTIPLIER = Math.max(0.55, Math.min(2.40, Number(import.meta.env.VITE_WORLD_ACTIVITY_MULTIPLIER) || 1.45));
 const LIVE_WORLD_POST_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_POST_MULTIPLIER) || 1.35));
@@ -10639,7 +7849,7 @@ const LIVE_WORLD_DM_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.met
 const LIVE_WORLD_GROUP_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_GROUP_MULTIPLIER) || 1.15));
 const LIVE_WORLD_ROLEPLAY_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_ROLEPLAY_MULTIPLIER) || 1.25));
 const LIVE_WORLD_NOTE_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_NOTE_MULTIPLIER) || 1.10));
-const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(4000, Math.min(30000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 5000));
+const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(12000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 15000));
 const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.60, Math.min(2.80, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 1.00));
 const LIVE_WORLD_CANCEL_SENSITIVITY = Math.max(0.60, Math.min(2.20, Number(import.meta.env.VITE_WORLD_CANCEL_SENSITIVITY) || 1.32));
 const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(import.meta.env.VITE_WORLD_MAX_POPUP_REROLLS) || 5)));
@@ -10650,64 +7860,32 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * genuinely fresh posts, then popup events, private contact and AI invitations.
  * These are safe public Vite build-time tuning values (no secrets).
  */
-/*
- * AUTONOMOUS FEED CADENCE — REGULAR PER-CHARACTER POSTING
- *
- * The feed itself is allowed to pulse often, but an individual character has
- * their own cooldown further below. That prevents one loud AI from flooding
- * the timeline while still letting a larger cast keep the world visibly alive.
- */
+/* v65 — autonomous feed posts are intentionally sparse. Other world activity
+ * (comments, replies, DMs, groups, follows, gossip reactions) may continue between
+ * posts, but a normal new AI feed post gets a hard ~10 minute floor. */
 const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  25 * 1000,
+  2 * 60 * 1000,
   Math.min(
-    3 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 35 * 1000
+    12 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 3 * 60 * 1000
   )
 );
-
-/*
- * ACTIVE SESSION FEED PULSE
- *
- * This is only the BASE pulse. The real feed target is calculated dynamically
- * from recent player activity + social heat below, then jittered so the world
- * never feels like it is posting on a fixed clock.
- */
-const LIVE_WORLD_ACTIVE_POST_TARGET_MS = Math.max(
-  9 * 1000,
-  Math.min(
-    60 * 1000,
-    Number(import.meta.env.VITE_WORLD_ACTIVE_POST_INTERVAL_MS) ||
-      16 * 1000
-  )
-);
-
-function playerIsActivelyViewingWorld() {
-  if (
-    typeof document === "undefined"
-  ) {
-    return false;
-  }
-
-  return (
-    document.visibilityState !== "hidden"
-  );
-}
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
-const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1500, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 900));
+const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 45 * 1000));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(60 * 1000, Math.min(10 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 2.5 * 60 * 1000));
 const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 5 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
 const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
-const AI_BACKGROUND_GAP_MS = Math.max(250, Math.min(6000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 220));
-const AI_INITIATIVE_GAP_MS = Math.max(200, Math.min(5000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 180));
+const AI_BACKGROUND_GAP_MS = Math.max(800, Math.min(12000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 1600));
+const AI_INITIATIVE_GAP_MS = Math.max(350, Math.min(8000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 700));
 
 const AI = {
   chain: Promise.resolve(),  // kompatibilitás miatt marad
   last: 0,                   // mikor futott le az utolsó AI-hívás
   gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
-  interactiveGap: 120,       // gyors játékosi DM/group/RP lane
+  interactiveGap: 350,       // gyors játékosi DM/group/RP lane
   initiativeGap: AI_INITIATIVE_GAP_MS, // gyors autonóm DM / event / group lane
   maxConcurrent: Math.max(1, Math.min(2, Number(import.meta.env.VITE_AI_MAX_CONCURRENT) || 2)),
   activeWorkers: 0,
@@ -10720,21 +7898,13 @@ const AI = {
    * ritmusban a szolgáltatóra.
    */
   lastCostGap: 0,
-  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 65000),
+  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 60000),
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
   strikes: 0,
   pending: 0,
   interactivePending: 0,
-
-  /*
-   * PLAYER DIRECT-DM RESERVATION.
-   * Nonzero only while the human player's private message is waiting for its
-   * AI reply. It does not alter autonomous DM cadence or any social logic.
-   */
-  directDmPending: 0,
-
   listeners: [],
 
   /*
@@ -10824,43 +7994,9 @@ function preserveEdges(value, maxChars, label = "context") {
   return text.slice(0, head) + marker + text.slice(text.length - tail);
 }
 
-function budgetAiRequest(
-  system,
-  prompt,
-  limits = {}
-) {
-  const systemLimit =
-    Math.max(
-      4000,
-      Number(
-        limits &&
-        limits.maxSystemChars
-      ) || AI_MAX_SYSTEM_CHARS
-    );
-
-  const promptLimit =
-    Math.max(
-      12000,
-      Number(
-        limits &&
-        limits.maxPromptChars
-      ) || AI_MAX_PROMPT_CHARS
-    );
-
-  const compactSystem =
-    preserveEdges(
-      system,
-      systemLimit,
-      "system"
-    );
-
-  const compactPrompt =
-    preserveEdges(
-      prompt,
-      promptLimit,
-      "prompt"
-    );
-
+function budgetAiRequest(system, prompt) {
+  const compactSystem = preserveEdges(system, AI_MAX_SYSTEM_CHARS, "system");
+  const compactPrompt = preserveEdges(prompt, AI_MAX_PROMPT_CHARS, "prompt");
   return {
     system: compactSystem,
     prompt: compactPrompt,
@@ -10882,37 +8018,6 @@ function budgetAiRequest(
 async function runAiQueueWorker() {
   try {
     while (AI.queue.length) {
-      /*
-       * DIRECT PLAYER DM — TRUE PROVIDER EXCLUSIVITY.
-       *
-       * A previous patch limited NEW workers to one, but two workers that were
-       * already alive could both continue pulling background tasks. That meant
-       * a player's DM could still collide with queue-preempt-feed/provider TPM.
-       *
-       * Once a direct DM is pending, every extra worker retires after its
-       * current request, and the remaining worker may pull ONLY an interactive
-       * task. Background tasks stay queued until the DM attempt finishes.
-       */
-      if (
-        AI.directDmPending > 0 &&
-        AI.activeWorkers > 1
-      ) {
-        return;
-      }
-
-      if (
-        AI.directDmPending > 0 &&
-        !AI.queue.some(
-          (queuedTask) =>
-            queuedTask &&
-            Number(
-              queuedTask.priority
-            ) >= 50
-        )
-      ) {
-        return;
-      }
-
       AI.queue.sort((a, b) => {
         if (b.priority !== a.priority) return b.priority - a.priority;
         return a.seq - b.seq;
@@ -10920,22 +8025,6 @@ async function runAiQueueWorker() {
 
       const task = AI.queue.shift();
       if (!task) break;
-
-      if (
-        AI.directDmPending > 0 &&
-        Number(
-          task.priority
-        ) < 50
-      ) {
-        /*
-         * Defensive race guard: put a background task back untouched rather
-         * than starting it beside a player's private-message reply.
-         */
-        AI.queue.unshift(
-          task
-        );
-        return;
-      }
 
       try {
         for (let guard = 0; guard < 40; guard++) {
@@ -10979,33 +8068,9 @@ async function runAiQueueWorker() {
 }
 
 function pumpAiQueue() {
-  const effectiveMaxConcurrent =
-    AI.directDmPending > 0
-      ? 1
-      : AI.maxConcurrent;
-
-  /*
-   * The user may press Send before the direct-DM AI task itself is queued
-   * (for example while an attached image is being analysed). During that tiny
-   * window do NOT restart a worker merely because background work is waiting.
-   * The interactive `queued(...)` call will pump the lane as soon as ready.
-   */
-  if (
-    AI.directDmPending > 0 &&
-    !AI.queue.some(
-      (task) =>
-        task &&
-        Number(
-          task.priority
-        ) >= 50
-    )
-  ) {
-    return;
-  }
-
   while (
     AI.queue.length &&
-    AI.activeWorkers < effectiveMaxConcurrent
+    AI.activeWorkers < AI.maxConcurrent
   ) {
     AI.activeWorkers++;
     AI.queueRunning = true;
@@ -11110,20 +8175,7 @@ async function requestAiProxy(payload, signal) {
 }
 
 async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
-  const budgeted =
-    budgetAiRequest(
-      system,
-      prompt,
-      {
-        maxSystemChars:
-          requestMeta &&
-          requestMeta.maxSystemChars,
-
-        maxPromptChars:
-          requestMeta &&
-          requestMeta.maxPromptChars,
-      }
-    );
+  const budgeted = budgetAiRequest(system, prompt);
   system = budgeted.system;
   prompt = budgeted.prompt;
 
@@ -11168,7 +8220,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     if (e && e.message) {
       if (e && e.retryable === false) {
         AI.strikes = Math.min(AI.strikes + 1, 3);
-        setCooldown(15000 * AI.strikes, false);
+        setCooldown(15000 * AI.strikes, !!requestMeta.interactive);
       }
       throw e;
     }
@@ -11234,7 +8286,10 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
        * újrapróbálja. Ezt nem mutatjuk globális "AI can't keep up" bannerként,
        * mert DM/group chat közben csak félrevezető és zajos.
        */
-      setCooldown(restMs, false);
+      setCooldown(
+        restMs,
+        false
+      );
       const err = new Error(`Az AI most nem győzi — ${Math.ceil(restMs / 1000)} másodperc pihenő.`);
       err.busy = true;
       throw err;
@@ -11271,6 +8326,176 @@ function validateGeneratedLanguage(result, expectedLanguage) {
   const enMarks = (text.match(/\b(the|and|you|with|from|that|this|is|are|was|were|your|their)\b/gi) || []).length;
   if (expected === "hu") return huMarks > 0 || enMarks === 0;
   return enMarks > 0 || huMarks === 0;
+}
+
+/*
+ * RECOVERY v99.7 — RESILIENT AI JSON
+ *
+ * Providers occasionally return JSON that is semantically correct but contains
+ * a harmless formatting defect (most commonly a trailing comma). A strict
+ * JSON.parse() made every AI surface fail together: DM, comments and posts all
+ * share askJSON().
+ *
+ * This repair is intentionally output-only and bounded to the provider response.
+ * It never scans the world and therefore has no meaningful render/perf cost.
+ */
+function normalizeAiJsonQuotes(value) {
+  return String(value || "")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'");
+}
+
+function escapeRawControlsInsideJsonStrings(value) {
+  const src = String(value || "");
+  let out = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      out += ch;
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      out += ch;
+      continue;
+    }
+
+    if (inString) {
+      if (ch === "\n") {
+        out += "\\n";
+        continue;
+      }
+      if (ch === "\r") {
+        out += "\\r";
+        continue;
+      }
+      if (ch === "\t") {
+        out += "\\t";
+        continue;
+      }
+      if (ch.charCodeAt(0) < 0x20) {
+        out += " ";
+        continue;
+      }
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
+function removeTrailingJsonCommas(value) {
+  const src = String(value || "");
+  let out = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      out += ch;
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      out += ch;
+      continue;
+    }
+
+    if (!inString && ch === ",") {
+      let j = i + 1;
+      while (j < src.length && /\s/.test(src[j])) j++;
+
+      if (src[j] === "}" || src[j] === "]") {
+        continue;
+      }
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
+function quoteBareJsonKeys(value) {
+  return String(value || "").replace(
+    /([,{]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)/g,
+    '$1"$2"$3'
+  );
+}
+
+function parseAiJson(raw) {
+  const text = String(raw || "");
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+
+  if (first === -1 || last === -1 || last < first) {
+    throw new Error(
+      "Az AI válasza nem tartalmazott feldolgozható JSON-t."
+    );
+  }
+
+  const original =
+    text.slice(first, last + 1);
+
+  const attempts = [
+    original,
+    normalizeAiJsonQuotes(original),
+  ];
+
+  const normalized =
+    escapeRawControlsInsideJsonStrings(
+      normalizeAiJsonQuotes(original)
+    );
+
+  attempts.push(
+    normalized,
+    removeTrailingJsonCommas(normalized),
+    quoteBareJsonKeys(
+      removeTrailingJsonCommas(normalized)
+    )
+  );
+
+  let lastError = null;
+  const seen = new Set();
+
+  for (const candidate of attempts) {
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+
+    try {
+      return JSON.parse(candidate);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error("Az AI hibás JSON-választ adott.")
+  );
 }
 
 /* Kitartó kérés: ha a szolgáltató visszafog minket, nem adjuk fel, hanem
@@ -11310,31 +8535,10 @@ async function askJSON(system, prompt, options = {}) {
        * közvetlen akciója kettőt. Ha még mindig limit van, a későbbi engine
        * kör újra megpróbálhatja anélkül, hogy request-storm alakulna ki.
        */
-      const requestedMaxBusyWaits =
-        Number(
-          options &&
-          options.maxBusyWaits
-        );
-
       const maxBusyWaits =
-        Number.isFinite(
-          requestedMaxBusyWaits
-        ) &&
-        requestedMaxBusyWaits > 0
-          ? Math.max(
-              1,
-              Math.min(
-                8,
-                Math.round(
-                  requestedMaxBusyWaits
-                )
-              )
-            )
-          : (
-              priority >= 50
-                ? 6   // unchanged default for interactive requests
-                : 4   // unchanged default for background requests
-            );
+        priority >= 50
+          ? 4   // játékosi DM/group chat: több belső retry, látható banner nélkül
+          : 2;  // első busy + legfeljebb 1 újrapróbálás
 
       while (
         tries < maxTries &&
@@ -11358,21 +8562,10 @@ async function askJSON(system, prompt, options = {}) {
             {
               interactive: priority >= 50,
               timeoutMs: Number(options.timeoutMs) || undefined,
-
-              maxSystemChars:
-                Number(
-                  options.maxSystemChars
-                ) || undefined,
-
-              maxPromptChars:
-                Number(
-                  options.maxPromptChars
-                ) || undefined,
             }
           );
-          const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
-          if (a === -1 || b === -1) throw new Error("Az AI válasza nem tartalmazott feldolgozható JSON-t.");
-          const parsed = JSON.parse(raw.slice(a, b + 1));
+          const parsed =
+            parseAiJson(raw);
           if (!validateGeneratedLanguage(parsed, lang)) {
             if (!strictMode) {
               strictMode = true;
@@ -11399,35 +8592,25 @@ async function askJSON(system, prompt, options = {}) {
              * broken provider cannot freeze the UI forever.
              */
             const left = cooldownLeft();
+            const interactiveWaitCap = 30000;
 
-            const requestedBusyRetryCapMs =
-              Number(
-                options &&
-                options.busyRetryCapMs
+            if (priority >= 50 && left > interactiveWaitCap) {
+              const tooLong = new Error(
+                lang === "en"
+                  ? `The AI provider asked for a ${Math.ceil(left / 1000)}s cooldown. Please retry after the cooldown.`
+                  : `Az AI szolgáltató ${Math.ceil(left / 1000)} másodperces pihenőt kért. A pihenő után próbáld újra.`
               );
-
-            const retryCap =
-              Number.isFinite(
-                requestedBusyRetryCapMs
-              ) &&
-              requestedBusyRetryCapMs > 0
-                ? Math.max(
-                    1000,
-                    Math.min(
-                      70000,
-                      requestedBusyRetryCapMs
-                    )
-                  )
-                : (
-                    priority >= 50
-                      ? 15000
-                      : 12000
-                  );
+              tooLong.busy = true;
+              tooLong.retryable = false;
+              throw tooLong;
+            }
 
             await wait(
               Math.min(
-                left + 120,
-                retryCap
+                left + 250,
+                priority >= 50
+                  ? interactiveWaitCap
+                  : 20000
               )
             );
             continue;
@@ -12249,837 +9432,17 @@ function isRepetitiveComment(w, id, text) {
   return false;
 }
 
-function commentCharacterDigitalStyleText(c) {
-  return [
-    c && c.personality,
-    c && c.traits,
-    c && c.speech,
-    c && c.voice,
-    c && c.bio,
-    c && c.extra,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
-function commentCharacterExplicitEmojiStyle(c) {
-  if (!c) return false;
-
-  /*
-   * Emoji HABIT is a writing-style fact.
-   * Only SELF's Speech/Voice may prove it by example. A random emoji in Bio,
-   * Extra, Personality prose or another descriptive field is NOT evidence that
-   * the character personally comments with emojis.
-   */
-  const writingExamples =
-    [
-      c.speech,
-      c.voice,
-    ]
-      .filter(Boolean)
-      .join(" ");
-
-  if (
-    emojiTokens(
-      writingExamples
-    ).length
-  ) {
-    return true;
-  }
-
-  /*
-   * Explicit textual instructions may also establish an emoji/texting habit,
-   * but still only from SELF's style-relevant fields.
-   */
-  const style =
-    [
-      c.speech,
-      c.voice,
-      c.traits,
-      c.personality,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-
-  return /(?:uses?\s+emojis?|emoji[- ]?(?:heavy|user|style)|text(?:s|ing)?\s+with\s+emojis?|chronically\s+online|very\s+online|internet[- ]native|meme[- ]?(?:heavy|lover|brain)|social[- ]media[- ]?(?:obsessed|native)|online\s+personality|playful\s+texter|expressive\s+texter|chaotic\s+texter|flirty\s+texter)/i.test(
-    style
-  );
-}
-
-function commentEmojiPolicy(
-  w,
-  c
-) {
-  const age =
-    Number(
-      ageOf(
-        c,
-        w
-      )
-    );
-
-  const gender =
-    characterGenderAttractionClass(
-      c
-    );
-
-  const explicitlyEmoji =
-    commentCharacterExplicitEmojiStyle(
-      c
-    );
-
-  const knownAge =
-    Number.isFinite(
-      age
-    );
-
-  /*
-   * COMMENT / REPLY EMOJI REALISM — HARD LIMIT
-   *
-   * 45+ characters:
-   *   - default ZERO emoji;
-   *   - if their OWN character sheet explicitly establishes an emoji-heavy /
-   *     online texting voice, they may still use MAXIMUM ONE emoji token.
-   *
-   * 35+ men keep the earlier default-no-emoji rule and, even with a sheet
-   * override, may use MAXIMUM ONE emoji token.
-   *
-   * This prevents provider degeneration such as pages of 😂😭💀 while keeping
-   * a genuinely emoji-using older character possible in a restrained way.
-   */
-  /*
-   * 60+ HARD RULE:
-   * public comment/reply emoji = ZERO, regardless of any generic "online" or
-   * expressive trait. This keeps older adults/senseis from sounding like a
-   * Gen-Z reaction account.
-   */
-  const hardSixtyPlusNoEmoji =
-    knownAge &&
-    age >= 60;
-
-  const hardFortyFivePlusDefault =
-    knownAge &&
-    age >= 45;
-
-  const hardOlderMaleDefault =
-    knownAge &&
-    age >= 35 &&
-    gender === "male";
-
-  const restrictedOlder =
-    hardFortyFivePlusDefault ||
-    hardOlderMaleDefault;
-
-  const allowEmoji =
-    hardSixtyPlusNoEmoji
-      ? false
-      : (
-          restrictedOlder
-            ? explicitlyEmoji
-            : true
-        );
-
-  const maxEmojiTokens =
-    hardSixtyPlusNoEmoji
-      ? 0
-      : (
-          !allowEmoji
-            ? 0
-            : restrictedOlder
-              ? 1
-              : 999
-        );
-
-  return {
-    age:
-      knownAge
-        ? age
-        : null,
-
-    gender,
-
-    explicitlyEmoji,
-
-    allowEmoji,
-
-    maxEmojiTokens,
-
-    hardSixtyPlusNoEmoji,
-
-    hardFortyFivePlusDefault,
-
-    hardOlderMaleDefault,
-  };
-}
-
-function stripCommentEmojiWhenOutOfCharacter(
-  w,
-  id,
-  value
-) {
-  const raw =
-    String(
-      value || ""
-    ).trim();
-
-  if (!raw) return "";
-
-  const c =
-    charById(
-      w,
-      id
-    );
-
-  if (!c) return raw;
-
-  const policy =
-    commentEmojiPolicy(
-      w,
-      c
-    );
-
-  const maxEmojiTokens =
-    Math.max(
-      0,
-      Number(
-        policy.maxEmojiTokens
-      ) || 0
-    );
-
-  let keptEmoji = 0;
-
-  return emojiGraphemes(
-    raw
-  )
-    .filter(
-      (part) => {
-        const isEmoji =
-          /\p{Extended_Pictographic}/u.test(
-            part
-          );
-
-        if (!isEmoji) {
-          return true;
-        }
-
-        if (
-          !policy.allowEmoji ||
-          maxEmojiTokens <= 0
-        ) {
-          return false;
-        }
-
-        if (
-          keptEmoji >=
-          maxEmojiTokens
-        ) {
-          return false;
-        }
-
-        keptEmoji += 1;
-        return true;
-      }
-    )
-    .join("")
-    .replace(
-      /\s+([,.!?;:])/g,
-      "$1"
-    )
-    .replace(
-      /[ \t]{2,}/g,
-      " "
-    )
-    .trim();
-}
-
-function commentGenerationLabel(c) {
-  const birth =
-    parseDate(
-      c &&
-      c.birth
-    );
-
-  const year =
-    birth &&
-    Number(
-      birth.year
-    );
-
-  if (!year) return "unknown";
-
-  if (year >= 2013) return "Gen Alpha";
-  if (year >= 1997) return "Gen Z";
-  if (year >= 1981) return "Millennial";
-  if (year >= 1965) return "Gen X";
-  if (year >= 1946) return "Baby Boomer";
-  return "pre-Boomer";
-}
-
-function commentGenerationStyleCard(
-  w,
-  c
-) {
-  if (!w || !c) return "";
-
-  const generation =
-    commentGenerationLabel(
-      c
-    );
-
-  const policy =
-    commentEmojiPolicy(
-      w,
-      c
-    );
-
-  const age =
-    policy.age === null
-      ? "unknown"
-      : String(
-          policy.age
-        );
-
-  const worldEra =
-    worldYear(
-      w
-    ) || "?";
-
-  const style =
-    commentCharacterDigitalStyleText(
-      c
-    );
-
-  const explicitModernSlang =
-    /(?:gen\s*z|gen-z|tiktok|chronically\s+online|very\s+online|internet[- ]native|meme|slang|rizz|delulu|no\s+cap|fr\s*fr|slay|ate\b|it['’]?s\s+giving)/i.test(
-      style
-    );
-
-  const generationalGuidance = {
-    "Gen Alpha":
-      "Very young internet-native cadence may be natural if age/context allows it, but never turn the character into a parody or dump trend slang into every sentence.",
-
-    "Gen Z":
-      "Internet-native rhythm can be natural: shorter/reactive phrasing, lowercase, dry understatement, current slang or meme-awareness WHEN it matches SELF's personality/speech. Do not force 'slay/rizz/delulu/no cap/ate' into every comment.",
-
-    "Millennial":
-      "Comfortable online, but default language should feel like an adult of this cohort rather than copied TikTok Gen-Z slang. Casual humor, lol/lmao or older internet phrasing can fit if SELF's sheet supports it.",
-
-    "Gen X":
-      "Default to more direct, sentence-like adult commenting. Trend slang and meme phrasing should be sparse unless SELF's own sheet explicitly makes them very online. Emojis should be occasional rather than automatic.",
-
-    "Baby Boomer":
-      "Default to conventional adult wording and punctuation. Current Gen-Z/TikTok slang should NOT appear unless SELF's own sheet explicitly establishes that voice. Emojis are rare and personality-dependent.",
-
-    "pre-Boomer":
-      "Use conventional, age-appropriate adult wording. Do not import youth internet slang or emoji habits unless SELF's own sheet explicitly establishes them.",
-
-    "unknown":
-      "Infer digital/comment style from SELF's own personality, speech and voice examples; do not default every character to the same young social-media slang.",
-  }[generation] || "";
-
-  return `
-COMMENT AGE / GENERATION / DIGITAL VOICE — HARD REALISM FILTER:
-- SELF: ${c.name}
-- current age in this world: ${age}
-- birth cohort: ${generation}
-- world era/year: ${worldEra}
-- character-sheet explicit modern-online/slang signal: ${explicitModernSlang ? "YES" : "NO"}
-- emoji canon signal in SELF's sheet: ${policy.explicitlyEmoji ? "YES" : "NO"}
-- emoji policy for public comments: ${policy.allowEmoji ? "ALLOWED WHEN NATURAL" : "DEFAULT NO EMOJI"}
-
-GENERATIONAL MICROSTYLE:
-${generationalGuidance}
-
-HARD RULES:
-- AGE/GENERATION shapes vocabulary, punctuation, meme knowledge, slang density and emoji habits, but SELF's explicit Personality + Speech Style + Voice examples override stereotypes.
-- Do NOT write every commenter as a 20-year-old TikTok user.
-- Do NOT make older characters suddenly say 'rizz', 'delulu', 'no cap', 'fr fr', 'it's giving', 'slay', 'you ate', etc. unless SELF's own sheet actually supports that online voice.
-- Gen Z characters may sound Gen Z when their own personality permits it, but still keep each individual character distinct.
-- 60+ HARD RULE: ZERO emoji in public comments/replies, with NO override. Do not use hearts, skulls, crying faces, eye emojis, smileys or any other emoji.
-- 45–59 DEFAULT: ZERO emoji. Only an explicit SELF Speech/Voice texting habit may allow MAXIMUM ONE emoji — never an emoji chain, row or emoji-only wall.
-- 35+ MALE DEFAULT: ZERO emoji unless SELF's own Speech/Voice clearly establishes emoji/texting behavior; even then MAXIMUM ONE emoji.
-- Emoji is NEVER mandatory for any age. Character fidelity is more important than making the comment section look visually "social".
-- Keep the comment natural for the relationship and exact post; generation affects HOW SELF says it, not WHAT happened.
-`;
-}
-
-function socialEmojiFallback(w, id, text) {
-  let raw =
-    stripCommentEmojiWhenOutOfCharacter(
-      w,
-      id,
-      text
-    );
-
-  if (!raw) return "";
-
-  const c = charById(w, id);
-  if (!c) return raw;
-
-  const emojiPolicy =
-    commentEmojiPolicy(
-      w,
-      c
-    );
-
-  /*
-   * Existing provider emoji survives only if it is age/personality-appropriate.
-   */
-  if (emojiTokens(raw).length) return raw;
-
-  /*
-   * Never ADD an emoji when the character's age/personality policy says no.
-   */
-  if (!emojiPolicy.allowEmoji) return raw;
-
-  const style = normUtterance([c.personality, c.speech, c.voice, c.traits, c.bio].filter(Boolean).join(" "));
-  const expressive = /(online|social|chaotic|playful|flirt|flirty|funny|humor|gossip|dramatic|impulsive|energetic|enthusiastic|emotional|outgoing|extrovert|gen z|young|sassy|sarcastic|excited|romantic|bold)/.test(style);
-  if (!expressive) return raw;
-  if (commentSeedNumber(`${id}|${raw}`) % 100 >= 58) return raw;
-  const pool = ["😭", "😂", "💀", "😏", "🫠", "🙄", "👀", "🤨", "❤️", "😭😂", "💀😭"];
-  const recent = new Set(recentOverusedEmojis(w, id, 8).map(emojiKey));
-  const available = pool.filter((x) => !recent.has(emojiKey(x)));
-  const emoji = (available.length ? available : pool)[commentSeedNumber(`${raw}|${id}|emoji`) % (available.length || pool.length)];
-  return stripCommentEmojiWhenOutOfCharacter(
-    w,
-    id,
-    `${raw} ${emoji}`.trim()
-  );
-}
-
-function generatedCommentLoopUnit(value) {
-  return normUtterance(
-    String(value || "")
-      .replace(/^[@#]+/, "")
-      .replace(/[.,!?;:()[\]{}"'“”‘’]+$/g, "")
-  );
-}
-
-function collapseDegenerateCommaTail(value) {
-  const raw =
-    String(value || "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return "";
-
-  const parts =
-    raw
-      .split(/\s*,\s*/)
-      .map((part) => part.trim());
-
-  if (parts.length < 7) {
-    return raw;
-  }
-
-  const units =
-    parts.map(
-      generatedCommentLoopUnit
-    );
-
-  /*
-   * Find a long suffix made almost entirely from one/two repeated chunks.
-   * Example:
-   *   "THAT SOUNDS LIKE A SKILL ISSUE, Sensei Silver,
-   *    Silver, Terry, Silver, Terry, Silver, Terry..."
-   *
-   * The repeated suffix begins at "Silver", so the useful opening +
-   * "Sensei Silver" are preserved and the broken loop disappears.
-   */
-  for (
-    let start = 1;
-    start <= parts.length - 6;
-    start++
-  ) {
-    const suffix =
-      units
-        .slice(start)
-        .filter(Boolean);
-
-    if (suffix.length < 6) continue;
-
-    const counts =
-      new Map();
-
-    suffix.forEach((unit) => {
-      counts.set(
-        unit,
-        (counts.get(unit) || 0) + 1
-      );
-    });
-
-    const ranked =
-      [...counts.values()]
-        .sort((a, b) => b - a);
-
-    const topTwo =
-      (ranked[0] || 0) +
-      (ranked[1] || 0);
-
-    const repeatedEnough =
-      (
-        counts.size === 1 &&
-        (ranked[0] || 0) >= 6
-      ) ||
-      (
-        counts.size <= 2 &&
-        suffix.length >= 7 &&
-        topTwo >= suffix.length * 0.92 &&
-        (ranked[0] || 0) >= 3 &&
-        (ranked[1] || 0) >= 2
-      );
-
-    if (!repeatedEnough) continue;
-
-    const kept =
-      parts
-        .slice(0, start)
-        .filter(Boolean)
-        .join(", ")
-        .replace(/[\s,;:—-]+$/g, "")
-        .trim();
-
-    if (!kept) {
-      return parts[0] || raw;
-    }
-
-    const terminal =
-      /[.!?]$/.test(raw)
-        ? raw.slice(-1)
-        : "";
-
-    return (
-      terminal &&
-      !/[.!?]$/.test(kept)
-        ? `${kept}${terminal}`
-        : kept
-    );
-  }
-
-  return raw;
-}
-
-function collapseDegenerateWordCycles(value) {
-  let words =
-    String(value || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .split(" ")
-      .filter(Boolean);
-
-  if (words.length < 10) {
-    return words.join(" ");
-  }
-
-  /*
-   * Catch whitespace-separated loops too:
-   *   "Silver Terry Silver Terry Silver Terry ..."
-   * Periods of 1-4 words must repeat at least four times and cover >=8 words.
-   * Normal expressive repetition like "no no no" is deliberately left alone.
-   */
-  let changed = true;
-  let passes = 0;
-
-  while (
-    changed &&
-    passes < 4
-  ) {
-    changed = false;
-    passes += 1;
-
-    outer:
-    for (
-      let start = 0;
-      start < words.length;
-      start++
-    ) {
-      for (
-        let period = 1;
-        period <= 4;
-        period++
-      ) {
-        if (
-          start +
-          period * 4 >
-          words.length
-        ) {
-          continue;
-        }
-
-        const base =
-          words
-            .slice(
-              start,
-              start + period
-            )
-            .map(
-              generatedCommentLoopUnit
-            );
-
-        if (
-          base.some(
-            (unit) => !unit
-          )
-        ) {
-          continue;
-        }
-
-        let repeats = 1;
-
-        while (
-          start +
-          period * (repeats + 1) <=
-          words.length
-        ) {
-          const next =
-            words
-              .slice(
-                start + period * repeats,
-                start + period * (repeats + 1)
-              )
-              .map(
-                generatedCommentLoopUnit
-              );
-
-          if (
-            next.length !== base.length ||
-            next.some(
-              (unit, index) =>
-                unit !== base[index]
-            )
-          ) {
-            break;
-          }
-
-          repeats += 1;
-        }
-
-        if (
-          repeats >= 4 &&
-          repeats * period >= 8
-        ) {
-          /*
-           * Keep ONE cycle only. The point is to preserve the intended address
-           * or phrase without retaining the model's runaway repetition.
-           */
-          words = [
-            ...words.slice(0, start),
-            ...words.slice(
-              start,
-              start + period
-            ),
-            ...words.slice(
-              start + period * repeats
-            ),
-          ];
-
-          changed = true;
-          break outer;
-        }
-      }
-    }
-  }
-
-  return words.join(" ");
-}
-
-function generatedCommentStillDegenerate(value) {
-  const words =
-    String(value || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .split(" ")
-      .map(
-        generatedCommentLoopUnit
-      )
-      .filter(Boolean);
-
-  if (words.length < 16) {
-    return false;
-  }
-
-  const counts =
-    new Map();
-
-  words.forEach((word) => {
-    counts.set(
-      word,
-      (counts.get(word) || 0) + 1
-    );
-  });
-
-  const ranked =
-    [...counts.values()]
-      .sort((a, b) => b - a);
-
-  const first =
-    ranked[0] || 0;
-
-  const topTwo =
-    first +
-    (ranked[1] || 0);
-
-  /*
-   * Extremely high repetition inside ONE generated comment is a provider
-   * degeneration signal, not character voice.
-   */
-  return (
-    first >= 8 ||
-    (
-      words.length >= 20 &&
-      topTwo >= words.length * 0.68 &&
-      first >= 5
-    )
-  );
-}
-
-function sanitizeDegenerateGeneratedCommentText(
-  value,
-  maxLen = 240
-) {
-  let text =
-    String(value || "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!text) return "";
-
-  text =
-    collapseDegenerateCommaTail(
-      text
-    );
-
-  text =
-    collapseDegenerateWordCycles(
-      text
-    )
-      .replace(/\s+([,.!?;:])/g, "$1")
-      .replace(/([,;:])(?:\s*\1)+/g, "$1")
-      .replace(/ {2,}/g, " ")
-      .trim();
-
-  if (!text) return "";
-
-  /*
-   * Never cut a generated comment in the middle of a runaway name/token.
-   * Prefer the last complete word/punctuation boundary.
-   */
-  const cap =
-    Math.max(
-      40,
-      Math.round(
-        Number(maxLen) || 240
-      )
-    );
-
-  if (text.length > cap) {
-    let clipped =
-      text
-        .slice(0, cap)
-        .replace(/\s+\S*$/u, "")
-        .replace(/[\s,;:—-]+$/g, "")
-        .trim();
-
-    if (!clipped) {
-      clipped =
-        text
-          .slice(0, cap)
-          .trim();
-    }
-
-    text = clipped;
-  }
-
-  return text;
-}
-
-function socialGeneratedTextHasCharacterNameLoop(w, value) {
-  if (!w || !value) return false;
-
-  const normalized = normalizeExactCommentGroundingText(value);
-  if (!normalized) return false;
-
-  const headTokens = normalized.split(/\s+/).filter(Boolean).slice(0, 22);
-  if (headTokens.length < 4) return false;
-
-  return socialProfiles(w).some((person) => {
-    if (!person || !person.id) return false;
-
-    const aliasTokens = new Set();
-    [
-      person.name,
-      person.nick,
-      person.nickname,
-      person.username,
-    ]
-      .filter(Boolean)
-      .forEach((raw) => {
-        normalizeExactCommentGroundingText(raw)
-          .split(/\s+/)
-          .filter((token) => token && token.length >= 3)
-          .forEach((token) => aliasTokens.add(token));
-      });
-
-    if (!aliasTokens.size) return false;
-
-    const hits = headTokens.filter((token) => aliasTokens.has(token));
-    if (hits.length < 4) return false;
-
-    /* Four or more name/nickname tokens for the SAME person near the start of
-       one short comment is provider degeneration ("Silver, Terry, Silver...")
-       rather than natural address. Reject it and let the normal repair pass
-       regenerate the missing comment. */
-    return true;
-  });
-}
-
 function cleanGeneratedComment(w, id, text, maxLen = 240) {
-  let t =
-    sanitizeDegenerateGeneratedCommentText(
-      text,
-      maxLen
-    );
-
+  const t = String(text || "").replace(/\s+/g, " ").trim();
   if (!t) return "";
-
-  /*
-   * If a malformed provider output is STILL dominated by one/two repeated
-   * tokens after deterministic repair, drop that one comment rather than
-   * persisting a broken loop into the feed.
-   */
-  if (
-    generatedCommentStillDegenerate(
-      t
-    )
-  ) {
-    return "";
-  }
-
-  if (socialGeneratedTextHasCharacterNameLoop(w, t)) {
-    return "";
-  }
-
-  t =
-    socialEmojiFallback(
-      w,
-      id,
-      t
-    );
-
-  t =
-    applySocialOwnedSpeechStyle(
-      w,
-      id,
-      t
-    );
 
   /* Dedicated feed history first, then the universal cross-surface guard. */
   if (isRepetitiveComment(w, id, t)) return "";
   if (isRepetitiveUtterance(w, id, t)) return "";
 
-  return t;
+  return t.length > maxLen
+    ? t.slice(0, maxLen)
+    : t;
 }
 
 function commentSeedNumber(value) {
@@ -13243,35 +9606,7 @@ function guaranteedPostCommentTarget(w, post) {
   if (!available) return 0;
 
   const visual = visualPostReactionProfile(w, post);
-  const climate = socialCommentClimateSnapshot(w, post);
-  const dramaDelta =
-    climate.dramaLevel === "chaotic"
-      ? 2
-      : climate.dramaLevel === "high"
-        ? 1
-        : climate.dramaLevel === "low"
-          ? -1
-          : 0;
-  const attentionDelta =
-    climate.attentionScore >= 150
-      ? 2
-      : climate.attentionScore >= 85
-        ? 1
-        : 0;
-  const waveDelta =
-    Math.max(climate.cancelPressure, climate.stanEnergy, climate.controversy) >= 55
-      ? 2
-      : Math.max(climate.cancelPressure, climate.stanEnergy, climate.controversy) >= 28
-        ? 1
-        : 0;
-
-  /* Dynamic social density: the app guarantees a living comment section, but
-     fame/drama only changes the SIZE of the relevant reaction pool. The model
-     still chooses COMMENT / LIKE / IGNORE character-by-character. */
-  const requested = Math.max(
-    1,
-    Math.round(Number(visual.targetMin) || 4) + dramaDelta + attentionDelta + waveDelta
-  );
+  const requested = Math.max(1, Math.round(Number(visual.targetMin) || 4));
   return Math.min(available, requested);
 }
 
@@ -13992,248 +10327,6 @@ function factionRivalryActiveBetween(actor, target) {
   );
 }
 
-function relationshipGroupMembershipRows(character) {
-  if (!character) return [];
-
-  const flags = factionFlags(character);
-  const rows = [];
-
-  const add = (key, aliases) => {
-    rows.push({
-      key,
-      aliases,
-    });
-  };
-
-  if (flags.ironDragons) {
-    add("ironDragons", ["iron dragons", "iron dragon"]);
-  }
-
-  if (flags.cobraKai) {
-    add("cobraKai", ["cobra kai", "cobra-kai"]);
-  }
-
-  if (flags.miyagiFang) {
-    add(
-      "miyagiFang",
-      [
-        "miyagi-do",
-        "miyagi do",
-        "miyagi-fang",
-        "miyagi fang",
-        "eagle fang",
-        "eagle-fang",
-        "miyagi side",
-      ]
-    );
-  }
-
-  if (flags.wasabi) {
-    add("wasabi", ["wasabi dojo", "wasabi"]);
-  }
-
-  if (flags.pogue) {
-    add("pogue", ["pogues", "pogue"]);
-  }
-
-  if (flags.kook) {
-    add("kook", ["kooks", "kook"]);
-  }
-
-  if (flags.hydra) {
-    add("hydra", ["hydra"]);
-  }
-
-  if (flags.shield) {
-    add(
-      "shield",
-      [
-        "s.h.i.e.l.d.",
-        "s.h.i.e.l.d",
-        "shield",
-      ]
-    );
-  }
-
-  return rows;
-}
-
-function connectionGroupRelationshipBaseline(actor, target) {
-  if (!actor || !target) return null;
-
-  const source =
-    String(actor.connections || "")
-      .replace(/\r/g, "")
-      .toLowerCase()
-      .trim();
-
-  if (!source) return null;
-
-  const memberships =
-    relationshipGroupMembershipRows(
-      target
-    );
-
-  if (!memberships.length) return null;
-
-  const lines =
-    source
-      .split(/\n+|;/)
-      .map((line) =>
-        line
-          .replace(/\s+/g, " ")
-          .trim()
-      )
-      .filter(Boolean);
-
-  const relationFromText = (value) => {
-    const row = String(value || "");
-
-    if (
-      /archenemy|sworn enemy|\benemy\b|\benemies\b|ellens[eé]g|f[oő]ellens[eé]g/.test(
-        row
-      )
-    ) {
-      return {
-        score: -90,
-        bond: "Ellenség",
-        mood: "hostile",
-      };
-    }
-
-    if (
-      /\brival\b|\brivals\b|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(
-        row
-      )
-    ) {
-      return {
-        score: -68,
-        bond: "Rivális",
-        mood: "competitive and distrustful",
-      };
-    }
-
-    if (
-      /\bbest friend\b|legjobb bar[aá]t/.test(
-        row
-      )
-    ) {
-      return {
-        score: 92,
-        bond: "Legjobb barát",
-        mood: "",
-      };
-    }
-
-    if (
-      /\bfriend\b|\bfriends\b|\bally\b|\ballies\b|bar[aá]t|sz[oö]vets[eé]ges/.test(
-        row
-      )
-    ) {
-      return {
-        score: 60,
-        bond: "Barát",
-        mood: "",
-      };
-    }
-
-    if (
-      /teammate|team mate|dojo mate|doj[oó]t[aá]rs|csapatt[aá]rs/.test(
-        row
-      )
-    ) {
-      return {
-        score: 28,
-        bond: "Teammate",
-        mood: "",
-      };
-    }
-
-    return null;
-  };
-
-  for (const membership of memberships) {
-    for (const alias of membership.aliases) {
-      const escaped = regexEscapeLiteral(alias);
-
-      for (const line of lines) {
-        const at = line.search(
-          new RegExp(
-            `(?:^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`,
-            "iu"
-          )
-        );
-
-        if (at < 0) continue;
-
-        const context =
-          line.slice(
-            Math.max(0, at - 90),
-            Math.min(
-              line.length,
-              at + alias.length + 130
-            )
-          );
-
-        const rel =
-          relationFromText(
-            context
-          );
-
-        if (!rel) continue;
-
-        return {
-          ...rel,
-          fixed: false,
-          hidden: "",
-          why: "",
-          source: "connections-group",
-          groupKey: membership.key,
-        };
-      }
-    }
-  }
-
-  return null;
-}
-
-function reciprocalConnectionGroupRelationshipBaseline(actor, target) {
-  if (!actor || !target || actor.id === target.id) return null;
-
-  const reverse =
-    connectionGroupRelationshipBaseline(
-      target,
-      actor
-    );
-
-  if (!reverse) return null;
-
-  const bond =
-    String(
-      reverse.bond ||
-      reverse.type ||
-      ""
-    );
-
-  const symmetric =
-    new Set([
-      "Ellenség",
-      "Rivális",
-      "Barát",
-      "Legjobb barát",
-      "Teammate",
-    ]);
-
-  if (!symmetric.has(bond)) {
-    return null;
-  }
-
-  return {
-    ...reverse,
-    source: "connections-group-reciprocal",
-  };
-}
-
 function explicitPositivePersonalOverride(w, actorId, targetId) {
   if (!w || !actorId || !targetId) return false;
   const actor = charById(w, actorId);
@@ -14305,1084 +10398,6 @@ function connectionsCommentToneMismatch(
   }
 
   return false;
-}
-
-function socialPostHasVisibleImage(post) {
-  /*
-   * Comment grounding follows what is ACTUALLY visible in the feed.
-   * imageDescription is metadata and by itself must never turn a text-only
-   * post into an image post.
-   */
-  return Boolean(
-    post &&
-    (
-      post.imageId ||
-      post.image
-    )
-  );
-}
-
-function socialCommentHasUnsupportedVisualClaim(
-  post,
-  value
-) {
-  if (
-    !post ||
-    socialPostHasVisibleImage(
-      post
-    )
-  ) {
-    return false;
-  }
-
-  const raw =
-    String(
-      value || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return false;
-
-  /*
-   * Text-only posts cannot suddenly acquire a photo, outfit, pose, mugshot,
-   * photographer or visible facial/body detail in the comment section.
-   */
-  return /\b(?:photo|photograph|picture|pic|selfie|mugshot|camera|photographer|photoshoot|photo\s*shoot|frame(?:d|ing)?|pose|posing|outfit|dress|shirt|top|skirt|makeup|hair|face\s+in\s+that|you\s+look|looks?\s+like|looking\s+(?:like|less|more)|look\s+less\s+like|look\s+more\s+like)\b/i.test(
-    raw
-  );
-}
-
-function socialPostLooksConfrontational(post) {
-  const raw =
-    String(
-      post &&
-      post.text ||
-      ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return false;
-
-  return /\b(?:fight\s+me|come\s+at\s+me|say\s+it\s+to\s+my\s+face|try\s+me|you\s+won['’]?t|you\s+can['’]?t|coward|loser|idiot|stupid|pathetic|shut\s+up|fuck\s+you|screw\s+you|hate\s+you|prove\s+me\s+wrong|dare\s+you|scared|afraid)\b/i.test(
-    raw
-  );
-}
-
-function socialCommentLooksContextlessConfrontational(
-  value
-) {
-  const raw =
-    String(
-      value || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return false;
-
-  return /\b(?:keep\s+telling\s+yourself\s+that|say\s+(?:that|it)\s+to\s+my\s+face|try\s+saying\s+(?:that|it)\s+to\s+my\s+face|come\s+say\s+(?:that|it)|fight\s+me|come\s+at\s+me|you\s+wouldn['’]?t\s+dare|all\s+bark|talk\s+big|you\s+wish)\b/i.test(
-    raw
-  );
-}
-
-function socialPostQuestionMode(post) {
-  const raw =
-    String(
-      post &&
-      post.text ||
-      ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return "none";
-
-  const words =
-    raw
-      .replace(/[?!.,;:]+/g, " ")
-      .split(/\s+/)
-      .filter(Boolean);
-
-  const short =
-    words.length <= 7;
-
-  if (
-    short &&
-    /^(?:party|party\s+tonight|party\s+later|party\s+tomorrow)\s*\?*$/i.test(
-      raw
-    )
-  ) {
-    return "party-question";
-  }
-
-  if (
-    short &&
-    (
-      /\?$/.test(
-        raw
-      ) ||
-      /^(?:who|what|where|when|why|how|anyone|somebody|drinks?|dinner|lunch|coffee|movie|movies|club|beach|shopping|training|workout|game|trip|road\s+trip|hang\s*out)\b/i.test(
-        raw
-      )
-    )
-  ) {
-    return "short-question";
-  }
-
-  return "none";
-}
-
-function socialShortStatusTopicProfile(post) {
-  if (
-    !post ||
-    socialPostHasVisibleImage(
-      post
-    )
-  ) {
-    return null;
-  }
-
-  const raw =
-    String(
-      post.text || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return null;
-
-  const words =
-    raw
-      .replace(/[?!.,;:()[\]{}"'“”‘’]+/g, " ")
-      .split(/\s+/)
-      .filter(Boolean);
-
-  /*
-   * Deliberately narrow: only short text statuses get this deterministic topic
-   * guard. Long/complex posts stay model-grounded.
-   */
-  if (
-    words.length > 15 ||
-    /\?$/.test(raw)
-  ) {
-    return null;
-  }
-
-  const lower =
-    raw.toLowerCase();
-
-  const families = [
-    {
-      id: "work",
-      post:
-        /\b(?:work|job|shift|office|meeting|meetings|deadline|deadlines|client|clients|boss|coworker|coworkers|working|worked|overworked|munka|mel[oó]|m[uű]szak|iroda|hat[aá]rid[oő]|[uü]gyf[eé]l|f[oő]n[oö]k|dolgoz(?:om|ok|ni|tam|ott|ik)?)\b/i,
-
-      comment:
-        /\b(?:work|worked|working|job|shift|office|meeting|meetings|deadline|deadlines|client|clients|boss|coworker|coworkers|overworked|busy|stress|stressed|stressful|tired|exhausted|burned?\s*out|burnout|rough|break|rest|day\s*off|time\s*off|sleep|hours|schedule|survive|surviving|munka|mel[oó]|m[uű]szak|iroda|hat[aá]rid[oő]|[uü]gyf[eé]l|f[oő]n[oö]k|dolgoz|f[aá]radt|kimer[uü]lt|stressz|pihen|szabadnap|sz[uü]net)\b/i,
-
-      label:
-        "work / workload / being busy or drained",
-    },
-
-    {
-      id: "training",
-      post:
-        /\b(?:training|practice|gym|workout|sparring|spar|dojo|karate|training\s+camp|edz[eé]s|edzeni|edzettem|gyakorl[aá]s|kondi|terem|sparring|karate|dojo)\b/i,
-
-      comment:
-        /\b(?:training|practice|gym|workout|sparring|spar|dojo|karate|coach|sensei|sore|hurt|rest|recovery|round|rounds|session|edz[eé]s|edzeni|gyakorl[aá]s|kondi|terem|sparring|karate|dojo|sensei|izoml[aá]z|pihen|regener[aá]l)\b/i,
-
-      label:
-        "training / workout / dojo activity",
-    },
-
-    {
-      id: "sleep",
-      post:
-        /\b(?:tired|exhausted|sleep|sleepy|awake|insomnia|bed|nap|can['’]?t\s+sleep|f[aá]radt|kimer[uü]lt|alv[aá]s|aludni|[aá]lmos|[eé]bren|nem\s+tudok\s+aludni)\b/i,
-
-      comment:
-        /\b(?:tired|exhausted|sleep|sleepy|awake|insomnia|bed|nap|rest|coffee|caffeine|f[aá]radt|kimer[uü]lt|alv[aá]s|aludni|[aá]lmos|[eé]bren|pihen|k[aá]v[eé])\b/i,
-
-      label:
-        "tiredness / sleep / rest",
-    },
-
-    {
-      id: "food",
-      post:
-        /\b(?:food|hungry|dinner|lunch|breakfast|eat|eating|restaurant|coffee|drink|drinks|pizza|burger|sushi|kaja|[eé]hes|vacsora|eb[eé]d|reggeli|enni|[eé]tterem|k[aá]v[eé]|ital)\b/i,
-
-      comment:
-        /\b(?:food|hungry|dinner|lunch|breakfast|eat|eating|restaurant|coffee|drink|drinks|pizza|burger|sushi|order|bring|share|kaja|[eé]hes|vacsora|eb[eé]d|reggeli|enni|[eé]tterem|k[aá]v[eé]|ital|rendel|hozz)\b/i,
-
-      label:
-        "food / meal / drink",
-    },
-
-    {
-      id: "travel",
-      post:
-        /\b(?:trip|travel|flight|airport|vacation|holiday|hotel|beach|road\s*trip|packing|utaz[aá]s|utazom|rep[uü]l|rep[uü]l[oő]|rept[eé]r|nyaral[aá]s|hotel|tengerpart|pakol)\b/i,
-
-      comment:
-        /\b(?:trip|travel|flight|airport|vacation|holiday|hotel|beach|road\s*trip|packing|safe\s+flight|have\s+fun|when|where|utaz[aá]s|utazom|rep[uü]l|rept[eé]r|nyaral[aá]s|hotel|tengerpart|pakol|j[oó]\s+utat|merre|mikor)\b/i,
-
-      label:
-        "travel / trip / vacation",
-    },
-
-    {
-      id: "boredom",
-      post:
-        /\b(?:i['’]?m\s+bored|im\s+bored|so\s+bored|bored\s+af|boredom|nothing\s+to\s+do|nothing\s+going\s+on|boring\s+(?:day|night|evening)|unatkozom|unatkozok|unatkozunk|unalom|nincs\s+mit\s+csin[aá]lni|kurv[aá]ra\s+unatkozom)\b/i,
-
-      /*
-       * Broad but still topical real-social reactions to boredom.
-       */
-      comment:
-        /\b(?:bored|boredom|boring|nothing\s+to\s+do|something\s+to\s+do|do\s+something|find\s+something|keep\s+(?:you|yourself)\s+busy|entertain|fix\s+that|solve\s+that|get\s+in\s+the\s+car|come\s+(?:over|with\s+me|train|spar|out|by)|go\s+(?:out|do\s+something|train|somewhere|outside)|hang\s*out|call\s+me|text\s+me|movie|movies|game|gaming|train|training|spar|drive|shopping|food|drinks?|plans?|free\s+(?:tonight|today|now)|stop\s+scrolling|put\s+your\s+phone\s+down|touch\s+grass|skill\s+issue|your\s+problem|you\s+problem|i\s+can\s+(?:fix|solve)\s+that|i\s+know\s+(?:how|what)\s+to\s+do|i\s+can\s+think\s+of\s+(?:something|a\s+few\s+things)|unatkoz|unalom|nincs\s+mit\s+csin[aá]lni|csin[aá]lj\s+valamit|gyere\s+(?:[aá]t|velem|edzeni)|menj[uü]nk|h[ií]vj\s+fel|[ií]rj\s+r[aá]m|lefoglal|program)\b/i,
-
-      label:
-        "boredom / having nothing to do",
-    },
-  ];
-
-  const matched =
-    families.find(
-      (family) =>
-        family.post.test(
-          lower
-        )
-    );
-
-  if (!matched) {
-    return null;
-  }
-
-  return {
-    id:
-      matched.id,
-
-    label:
-      matched.label,
-
-    commentRegex:
-      matched.comment,
-
-    postText:
-      raw,
-  };
-}
-
-function socialCommentIsNaturalShortStatusResponse(value) {
-  const raw =
-    String(
-      value || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return false;
-
-  return /^(?:same\b|literally\s+same\b|felt\b|real\b|mood\b|again\??$|already\??$|still\??$|you\s+good\??$|u\s+good\??$|you\s+okay\??$|are\s+you\s+okay\??$|that\s+sucks\b|sounds\s+rough\b|rough\s+day\??$|rough\s+week\??$|hang\s+in\s+there\b|take\s+care\b|you['’]?ve\s+got\s+this\b|you\s+got\s+this\b|same\s+here\b|ismer[oő]s\b|[aá]t[eé]rzem\b|te\s+j[oó]l\s+vagy\??$|minden\s+ok[eé]\??$|kitart[aá]s\b|ez\s+sz[ií]v[aá]s\b)/i.test(
-    raw
-  );
-}
-
-function socialCommentMatchesShortStatusTopic(
-  post,
-  value
-) {
-  const profile =
-    socialShortStatusTopicProfile(
-      post
-    );
-
-  if (!profile) {
-    return true;
-  }
-
-  const raw =
-    String(
-      value || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return false;
-
-  if (
-    profile.commentRegex.test(
-      raw
-    )
-  ) {
-    return true;
-  }
-
-  if (
-    socialCommentIsNaturalShortStatusResponse(
-      raw
-    )
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-function socialShortStatusGroundingCard(post) {
-  const profile =
-    socialShortStatusTopicProfile(
-      post
-    );
-
-  if (!profile) return "";
-
-  const familyExamples = {
-    work:
-      `Required semantic direction: work stress, workload, shifts, deadlines, being busy/tired, needing rest/time off, or a direct question about how work is going.`,
-
-    training:
-      `Required semantic direction: training, practice, soreness, recovery, dojo/gym, sparring, or asking how the session went.`,
-
-    sleep:
-      `Required semantic direction: tiredness, sleep, rest, insomnia, coffee/caffeine, or checking if the author is okay.`,
-
-    food:
-      `Required semantic direction: the meal/drink, being hungry, ordering/bringing/sharing food, or asking where/what they are eating.`,
-
-    travel:
-      `Required semantic direction: the trip, flight, airport, destination, packing, hotel/vacation, or asking where/when they are going.`,
-
-    boredom:
-      `Required semantic direction: the author's boredom / lack of something to do. A valid response may acknowledge it, tease THE BOREDOM, suggest/order a concrete activity, invite the author somewhere, offer attention/company, challenge them to an activity, or dryly dismiss the boredom. It may NOT invent a hidden message, accusation, argument or unrelated conflict.`,
-  };
-
-  return `
-SHORT STATUS TOPIC LOCK:
-- This is a short mundane status about: ${profile.label}.
-- A top-level comment MUST stay in that semantic family or be a direct natural response to the author's state.
-- Relationship/personality may change TONE only. It may NOT replace "${profile.label}" with an unrelated dojo feud, old argument, appearance critique, random accusation or different world event.
-- ${familyExamples[profile.id] || ""}
-- If a rival wants to be sarcastic, sarcasm still has to attach to THIS topic. Principle: "shocking, you actually worked" is grounded; a random Cobra Kai accusation is not.
-${profile.id === "boredom" ? `
-BOREDOM MEANING LOCK:
-- The visible post means the author is BORED / HAS NOTHING TO DO.
-- It does NOT by itself mean they are hiding something, testing someone, baiting someone, being mysterious, talking about a relationship, issuing a challenge, or referring to an earlier argument.
-- Do not invent an invisible previous sentence such as "predictable", "keep up with me", "prove it", "stop hiding", "make people guess", etc.
-- Relationship/personality may make the answer warm, harsh, flirty, possessive, dry or dismissive, but it must still be an answer to the BOREDOM.
-` : ""}
-`;
-}
-
-function socialShortStatusCharacterFidelityCard(
-  w,
-  post
-) {
-  const profile =
-    socialShortStatusTopicProfile(
-      post
-    );
-
-  if (!profile) return "";
-
-  return `
-SHORT-STATUS CHARACTER FIDELITY — HARD DECISION ORDER:
-1. FIRST accept the post's current-state meaning exactly: ${profile.label}.
-2. THEN, for EACH commenter separately, use ONLY that commenter's SEALED ACTOR CAPSULE + exact directed relationship to the post author.
-3. SELF Personality / Traits decide WHAT KIND OF RESPONSE ACT this person chooses. SELF Speech / Voice decide HOW they phrase it. The directed relationship decides closeness, openness and intensity.
-4. Do NOT write a generic social comment first and decorate it with the character afterward.
-
-${profile.id === "boredom" ? `
-BOREDOM → CHARACTER TRANSLATION:
-- action-oriented / practical SELF: a concrete thing to do, practical offer, command, ride, plan or invitation is natural;
-- dry / sarcastic SELF: tease the boredom itself, not a made-up motive;
-- close friend SELF: familiar shorthand, practical offer or comfortable teasing should still visibly read as friendship;
-- rival SELF: may mock inactivity or challenge the author to DO something, but may not continue a nonexistent argument;
-- controlling / dominant / possessive / obsessive SELF: may make the solution more direct, commanding, personal or "come with me" in style, but it still has to solve/react to boredom;
-- reserved SELF: may give one terse suggestion/question or ignore it;
-- SELF's occupation/dojo/history may inspire an activity suggestion only if it is natural for SELF. It cannot turn "I'm bored" into an unrelated dojo/work conflict.
-- No hidden accusation merely to sound intense.
-` : ""}
-
-FINAL CHECK FOR EVERY COMMENT:
-A) What exact state/topic did the author post?
-B) What RESPONSE ACT follows from THIS commenter's OWN character sheet?
-C) Does the wording follow THIS commenter's OWN Speech/Voice?
-If A, B or C is unclear, rewrite the comment before returning it.
-`;
-}
-
-function socialCommentMatchesPartyQuestionTopic(value) {
-  const raw =
-    String(
-      value || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return false;
-
-  /*
-   * Natural direct answers / refusals / clarifications.
-   */
-  if (
-    /^(?:yes|yeah|yep|yup|sure|maybe|probably|absolutely|definitely|nah|nope|no|never|depends|where|when|who|whose|what\s+time|why|bet|fine|okay|ok|i['’]?m\s+in|im\s+in|i['’]?m\s+out|im\s+out|i['’]?m\s+down|im\s+down|count\s+me\s+in|hell\s+yes|hell\s+no|only\s+if|not\s+if|not\s+with|without\s+me|finally\b|about\s+time\b|thought\s+you['’]?d\s+never\s+ask\b|say\s+less\b|i['’]?ll\s+be\s+there\b|i['’]?m\s+there\b)/i.test(
-      raw
-    )
-  ) {
-    return true;
-  }
-
-  /*
-   * Direct party/invitation logistics or social participation.
-   */
-  if (
-    /\b(?:party|invite|invited|invitation|host|hosting|where|when|what\s+time|who['’]?s|whose|coming|going|there|bring|drinks?|address|dress\s*code|tonight|tomorrow|afterparty|after-party|pregame|pre-game|plus\s*one|guest\s*list|music|dj|place|your\s+place|my\s+place|ours|ride|pickup|pick\s+me\s+up)\b/i.test(
-      raw
-    )
-  ) {
-    return true;
-  }
-
-  /*
-   * Character-faithful adult/mentor refusal can reference a REAL competing
-   * obligation, but it must clearly function as an answer to the party.
-   * "Training at six tomorrow." is valid; a random dojo lecture is not.
-   */
-  if (
-    /(?:\b(?:training|practice|work|shift|class|school|meeting|dojo)\b.{0,35}\b(?:tomorrow|tonight|morning|early|at\s+\d|instead|first)\b|\b(?:tomorrow|tonight|morning|early)\b.{0,35}\b(?:training|practice|work|shift|class|school|meeting|dojo)\b)/i.test(
-      raw
-    )
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-function socialCommentHasPartyQuestionTopicDrift(value) {
-  const raw =
-    String(
-      value || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return false;
-
-  /*
-   * Strong signals of a completely different conversation under a bare
-   * "party?" post. These are not banned globally, only for this exact mode.
-   */
-  return /\b(?:playing\s+games?\s+online|games?\s+online|posturing|focus\s+on\s+(?:your\s+)?training|discipline|pretend\s+this\s+isn['’]?t\s+mutual|isn['’]?t\s+mutual|keeping\s+up\s+appearances|what\s+they\s+post|unhinged\s+with\s+what\s+they\s+post|rules\s+don['’]?t\s+apply|cobra\s+kai\s+performance|needs?\s+better\s+lighting|you\s+might\s+actually\s+be\s+dangerous)\b/i.test(
-    raw
-  );
-}
-
-function socialCommentAnswersShortQuestion(
-  post,
-  value
-) {
-  const raw =
-    String(
-      value || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return false;
-
-  const mode =
-    socialPostQuestionMode(
-      post
-    );
-
-  if (mode === "none") {
-    return true;
-  }
-
-  /*
-   * A real short-question reply normally answers, asks for a missing detail,
-   * or directly references the proposed activity/topic.
-   */
-  const answerShape =
-    /^(?:yes|yeah|yep|yup|sure|maybe|possibly|probably|absolutely|obviously|definitely|nah|nope|no|never|depends|why|where|when|who|whose|what|which|how|again|bet|fine|okay|ok|i['’]?m\s+in|im\s+in|i['’]?m\s+out|im\s+out|i['’]?m\s+down|im\s+down|count\s+me\s+in|hell\s+yes|hell\s+no|only\s+if|not\s+if|not\s+with|without\s+me)\b/i.test(
-      raw
-    );
-
-  if (answerShape) {
-    return true;
-  }
-
-  if (/\?/.test(raw)) {
-    return true;
-  }
-
-  if (mode === "party-question") {
-    return /\b(?:party|invite|invited|invitation|host|hosting|where|when|what\s+time|who['’]?s|whose|coming|going|there|bring|drinks?|address|dress\s*code|tonight|tomorrow|afterparty|after-party|pregame|pre-game|plus\s*one)\b/i.test(
-      raw
-    );
-  }
-
-  const postTokens =
-    String(
-      post &&
-      post.text ||
-      ""
-    )
-      .toLowerCase()
-      .replace(/[^a-z0-9\u00c0-\u024f]+/gi, " ")
-      .split(/\s+/)
-      .filter(
-        (token) =>
-          token.length >= 4 &&
-          ![
-            "what",
-            "where",
-            "when",
-            "which",
-            "who",
-            "whose",
-            "anyone",
-            "somebody",
-          ].includes(token)
-      );
-
-  const body =
-    raw.toLowerCase();
-
-  return postTokens.some(
-    (token) =>
-      body.includes(
-        token
-      )
-  );
-}
-
-function normalizeExactCommentGroundingText(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\u00c0-\u024f]+/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-
-const SOCIAL_COMMENT_REACTION_ACTS = new Set([
-  "answer",
-  "agree",
-  "disagree",
-  "tease",
-  "roast",
-  "support",
-  "compliment",
-  "question",
-  "challenge",
-  "defend",
-  "correct",
-  "flirt",
-  "jealous_reaction",
-  "inside_joke",
-  "concern",
-  "sarcasm",
-  "shock",
-  "laugh",
-  "gossip_probe",
-  "callout",
-  "invite",
-  "dismiss",
-]);
-
-function normalizeSocialCommentReactionAct(value) {
-  const raw = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-  return SOCIAL_COMMENT_REACTION_ACTS.has(raw) ? raw : "";
-}
-
-function socialCommentMeaningMatchesExactPost(post, basis, meaning) {
-  if (!post || !socialCommentBasisMatchesExactPost(post, basis)) return false;
-  const rawMeaning = String(meaning || "").replace(/\s+/g, " ").trim();
-  if (!rawMeaning || rawMeaning.length > 360) return false;
-
-  const basisTokens = socialCommentGroundingContentTokens(basis);
-  const meaningTokens = socialCommentGroundingContentTokens(rawMeaning);
-  if (!meaningTokens.length) return false;
-
-  const tokenOverlap = (a, b) =>
-    a.some((left) => b.some((right) => {
-      if (left === right) return true;
-      if (left.length >= 5 && right.length >= 5) {
-        const prefixLen = Math.min(6, left.length, right.length);
-        return left.slice(0, prefixLen) === right.slice(0, prefixLen);
-      }
-      return false;
-    }));
-
-  if (basisTokens.length && tokenOverlap(basisTokens, meaningTokens)) return true;
-
-  const semanticAnchor = post.socialMeaning && typeof post.socialMeaning === "object"
-    ? [
-        post.socialMeaning.literalMeaning,
-        post.socialMeaning.likelyIntent,
-        post.socialMeaning.impliedMeaning,
-        post.socialMeaning.imageRelation,
-      ].filter(Boolean).join(" ")
-    : "";
-  const semanticTokens = socialCommentGroundingContentTokens(semanticAnchor);
-  return semanticTokens.length ? tokenOverlap(semanticTokens, meaningTokens) : basisTokens.length === 0;
-}
-
-function socialReplyBasisMatchesParent(parentComment, basis) {
-  if (!parentComment) return false;
-  const normalizedBasis = normalizeExactCommentGroundingText(basis);
-  const words = normalizedBasis.split(/\s+/).filter(Boolean);
-  if (!normalizedBasis || words.length < 1 || words.length > 18) return false;
-  const parentSource = normalizeExactCommentGroundingText(parentComment.text || "");
-  if (!parentSource) return false;
-  return (` ${parentSource} `).includes(` ${normalizedBasis} `);
-}
-
-function socialReplyMeaningMatchesParent(parentComment, basis, meaning) {
-  if (!socialReplyBasisMatchesParent(parentComment, basis)) return false;
-  const rawMeaning = String(meaning || "").replace(/\s+/g, " ").trim();
-  if (!rawMeaning || rawMeaning.length > 360) return false;
-  const basisTokens = socialCommentGroundingContentTokens(basis);
-  const meaningTokens = socialCommentGroundingContentTokens(rawMeaning);
-  if (!meaningTokens.length) return false;
-  if (!basisTokens.length) return true;
-  return basisTokens.some((left) =>
-    meaningTokens.some((right) => {
-      if (left === right) return true;
-      if (left.length >= 5 && right.length >= 5) {
-        const prefixLen = Math.min(6, left.length, right.length);
-        return left.slice(0, prefixLen) === right.slice(0, prefixLen);
-      }
-      return false;
-    })
-  );
-}
-
-function socialDecisionActionMap(w, out) {
-  const map = new Map();
-  const rows = out && Array.isArray(out.socialDecisions) ? out.socialDecisions : [];
-  rows.forEach((row) => {
-    const id = aiVoice(w, row && (row.id !== undefined ? row.id : row.name));
-    const action = String(row && row.action || "").trim().toUpperCase();
-    if (!id || !["COMMENT", "LIKE", "IGNORE"].includes(action)) return;
-    if (!map.has(id)) map.set(id, action);
-  });
-  return map;
-}
-
-/*
- * COMMENT / REACTION SOCIAL CLIMATE
- *
- * This is deliberately read-only. It does not change reputation, relationships
- * or story state; it only tells the comment/reply generators how much PUBLIC
- * attention already exists around the author. Individual personality and the
- * direct relationship still decide whether a specific AI supports, criticises,
- * likes, argues or ignores.
- */
-function socialCommentClimateSnapshot(w, postOrAuthor) {
-  if (!w || !postOrAuthor) {
-    return {
-      authorId: "",
-      dramaLevel: "balanced",
-      followers: 0,
-      popularity: 0,
-      hype: 0,
-      reputation: 0,
-      clout: 0,
-      support: 0,
-      dislike: 0,
-      controversy: 0,
-      stanEnergy: 0,
-      cancelPressure: 0,
-      playerLevel: 0,
-      globalScore: 0,
-      globalRank: "",
-      attentionScore: 0,
-    };
-  }
-
-  const authorId = String(
-    postOrAuthor.authorId !== undefined
-      ? postOrAuthor.authorId
-      : postOrAuthor.id || ""
-  );
-  const row = (w.socialStats && w.socialStats[authorId]) || {};
-  const sentiment = row.sentiment && typeof row.sentiment === "object"
-    ? row.sentiment
-    : (authorId ? publicSentimentFor(w, authorId) : {});
-  const dramaLevel = storySettingsOf(w).dramaLevel;
-  const followers = authorId ? Math.max(0, Number(displayFollowerCount(w, authorId)) || 0) : 0;
-  const popularity = Math.max(0, Number(row.popularity) || 0);
-  const hype = Math.max(0, Number(row.hype) || 0);
-  const reputation = Number(row.reputation) || 0;
-  const clout = Math.max(0, Number(row.clout) || 0);
-  const support = Math.max(0, Number(sentiment.support) || 0);
-  const dislike = Math.max(0, Number(sentiment.dislike) || 0);
-  const controversy = Math.max(0, Number(sentiment.controversy) || 0);
-  const stanEnergy = Math.max(0, Number(sentiment.stanEnergy) || 0);
-  const cancelPressure = Math.max(0, Number(sentiment.cancelPressure) || 0);
-  const progression = isHuman(w, authorId) ? playerProgressionView(w, authorId) : null;
-  const playerLevel = progression ? Math.max(1, Number(progression.level) || 1) : 0;
-  const globalScore = progression ? Math.max(0, Number(progression.globalScore) || 0) : 0;
-  const globalRank = progression ? String(progression.globalRank || "") : "";
-
-  const attentionScore = Math.max(
-    0,
-    Math.min(
-      240,
-      popularity * 0.55 +
-      hype * 0.45 +
-      clout * 0.28 +
-      Math.min(45, Math.log10(followers + 1) * 9) +
-      controversy * 0.45 +
-      Math.max(stanEnergy, cancelPressure) * 0.48 +
-      globalScore * 0.32
-    )
-  );
-
-  return {
-    authorId,
-    dramaLevel,
-    followers,
-    popularity,
-    hype,
-    reputation,
-    clout,
-    support,
-    dislike,
-    controversy,
-    stanEnergy,
-    cancelPressure,
-    playerLevel,
-    globalScore,
-    globalRank,
-    attentionScore,
-  };
-}
-
-function socialCommentClimateCard(w, postOrAuthor) {
-  const climate = socialCommentClimateSnapshot(w, postOrAuthor);
-  if (!climate.authorId) return "";
-
-  return `PUBLIC SOCIAL CLIMATE — ATTENTION, NOT PERSONALITY:
-- world drama setting: ${climate.dramaLevel}
-- public attention: ${Math.round(climate.attentionScore)}/240
-- followers: ${climate.followers}; popularity=${Math.round(climate.popularity)}; hype=${Math.round(climate.hype)}; reputation=${Math.round(climate.reputation)}; clout=${Math.round(climate.clout)}
-- current public sentiment: support=${Math.round(climate.support)}, dislike=${Math.round(climate.dislike)}, controversy=${Math.round(climate.controversy)}, stan=${Math.round(climate.stanEnergy)}, cancel=${Math.round(climate.cancelPressure)}
-${climate.playerLevel ? `- player progression: level=${climate.playerLevel}; globalScore=${Math.round(climate.globalScore)}; globalRank=${climate.globalRank || "new-face"}` : ""}
-- High fame/hype/global social rank means MORE people may notice/react; it does NOT turn enemies into fans or friends into haters.
-- High cancel pressure means criticism/pile-on is socially present, but each AI must still decide from ITS OWN personality, relationship, memory and known public facts. Loyal allies may defend, stay cautious or refuse the mob.
-- High stan/support means visible fan energy is present, but rivals/critics do not become fake supporters.
-- Drama setting changes HOW EASILY public threads escalate; it never grants permission to invent facts or break character.`;
-}
-
-function socialCharacterCustomizationRuleCard() {
-  return `BIO vs DETAILED DESCRIPTION — HARD CHARACTER CUSTOMIZATION RULE:
-- PUBLIC BIO is the short profile self-presentation: image, attitude and what the character chooses to show publicly. It can shape presentation, but it is NOT the whole personality.
-- DETAILED DESCRIPTION is represented by the character's own Personality, Traits, Speech/Voice, Goals, Fears, Likes, Secrets, Backstory, Connections, Extra/Other Information and learned memory. These are the deeper behavior instructions.
-- The character's core personality remains recognizable, while behavior TOWARD a specific person may evolve from remembered choices, previous conversations and the current relationship state.
-- Never quote private Secrets/Goals/Connections as public exposition just because they exist in the detailed description. They influence motive and tone unless the information is actually public/known/relevant.
-- Bio never overrides Detailed Description; Detailed Description never licenses leaking private facts.`;
-}
-
-function socialCommentBasisMatchesExactPost(post, basis) {
-  if (!post) return false;
-
-  const rawBasis =
-    String(basis || "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!rawBasis) return false;
-
-  const normalizedBasis =
-    normalizeExactCommentGroundingText(
-      rawBasis
-    );
-
-  const basisWords =
-    normalizedBasis
-      .split(/\s+/)
-      .filter(Boolean);
-
-  if (
-    !normalizedBasis ||
-    basisWords.length < 1 ||
-    basisWords.length > 18 ||
-    normalizedBasis.replace(/\s+/g, "").length < 3
-  ) {
-    return false;
-  }
-
-  const exactVisibleSource =
-    normalizeExactCommentGroundingText(
-      [
-        post.text,
-        socialPostHasVisibleImage(post)
-          ? post.imageDescription
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" ")
-    );
-
-  if (!exactVisibleSource) return false;
-
-  return (
-    ` ${exactVisibleSource} `
-      .includes(
-        ` ${normalizedBasis} `
-      )
-  );
-}
-
-const SOCIAL_COMMENT_GROUNDING_STOPWORDS = new Set([
-  "the","a","an","and","or","but","if","then","than","that","this","these","those","it","its","i","im","i'm","me","my","mine","you","your","yours","we","our","ours","they","their","them","he","his","him","she","her","hers","is","are","was","were","be","been","being","do","does","did","have","has","had","to","of","in","on","at","for","from","with","about","as","so","just","really","very","still","now","today","tonight","here","there","what","when","where","who","why","how",
-  "az","a","egy","és","vagy","de","ha","akkor","hogy","ez","ezt","ennek","azt","annak","ő","én","te","mi","ti","ők","nekem","neked","velem","veled","is","volt","van","vagyok","vagy","lesz","lenne","már","még","most","ma","itt","ott","csak","nagyon","tényleg","ami","amit","aki","ahogy","mert","mint","valami","valaki"
-]);
-
-function socialCommentGroundingContentTokens(value) {
-  return normalizeExactCommentGroundingText(value)
-    .split(/\s+/)
-    .filter((token) =>
-      token &&
-      token.length >= 3 &&
-      !SOCIAL_COMMENT_GROUNDING_STOPWORDS.has(token)
-    );
-}
-
-function socialCommentTextEchoesBasis(post, basis, value) {
-  if (!post) return false;
-
-  const rawBasis = String(basis || "").replace(/\s+/g, " ").trim();
-  const rawComment = String(value || "").replace(/\s+/g, " ").trim();
-  if (!rawBasis || !rawComment) return false;
-
-  const mode = socialPostQuestionMode(post);
-  const textWordCount = normalizeExactCommentGroundingText(post.text || "")
-    .split(/\s+/)
-    .filter(Boolean).length;
-
-  /* Short direct questions/statuses have their own deterministic response-act
-     guards below. Requiring literal vocabulary echo there would wrongly reject
-     natural answers such as “I’m in” to “party?” or “come over” to “bored.” */
-  if (mode !== "none" || (!socialPostHasVisibleImage(post) && textWordCount <= 6)) {
-    return true;
-  }
-
-  const basisTokens = socialCommentGroundingContentTokens(rawBasis);
-  if (!basisTokens.length) return true;
-
-  const commentTokens = socialCommentGroundingContentTokens(rawComment);
-  if (!commentTokens.length) return false;
-
-  return basisTokens.some((basisToken) =>
-    commentTokens.some((commentToken) => {
-      if (basisToken === commentToken) return true;
-      /* Small morphology bridge for Hungarian/English inflection without doing
-         fuzzy semantic guessing: “edzés”↔“edzésre”, “training”↔“trained”, etc. */
-      if (basisToken.length >= 5 && commentToken.length >= 5) {
-        const prefixLen = Math.min(6, basisToken.length, commentToken.length);
-        return basisToken.slice(0, prefixLen) === commentToken.slice(0, prefixLen);
-      }
-      return false;
-    })
-  );
-}
-
-function socialCommentGroundedInExactPost(
-  w,
-  post,
-  parentComment,
-  actorId,
-  value,
-  trigger = "",
-  basis = ""
-) {
-  if (
-    !w ||
-    !post ||
-    !actorId
-  ) {
-    return false;
-  }
-
-  const raw =
-    String(
-      value || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return false;
-
-  /*
-   * This is hard factual grounding, independent of personality/relationship.
-   */
-  if (
-    socialCommentHasUnsupportedVisualClaim(
-      post,
-      raw
-    )
-  ) {
-    return false;
-  }
-
-  /*
-   * Replies are grounded primarily in the parent comment. The prompt handles
-   * semantic reply fit; here we only keep the hard no-hallucinated-image rule.
-   */
-  if (parentComment) {
-    return true;
-  }
-
-  /*
-   * PLAYER-POST EXACT ANCHOR:
-   * Every top-level AI comment under the human player's post must carry a
-   * hidden literal basis copied from THIS post text or its confirmed visible
-   * image description. Relationship/personality can shape the response, but
-   * cannot swap in an unrelated subject from memory or another thread.
-   */
-  if (
-    !socialCommentBasisMatchesExactPost(
-      post,
-      basis
-    )
-  ) {
-    return false;
-  }
-
-  /* A literal basis field is not enough: the visible sentence itself must stay
-     attached to that selected post/image detail. This catches fluent but
-     off-topic relationship/personality lines that previously passed because
-     the model copied a valid basis while writing about something else. */
-  if (
-    basis &&
-    socialCommentBasisMatchesExactPost(post, basis) &&
-    !socialCommentTextEchoesBasis(post, basis, raw)
-  ) {
-    return false;
-  }
-
-  const mode =
-    socialPostQuestionMode(
-      post
-    );
-
-  if (
-    mode !== "none" &&
-    !socialPostLooksConfrontational(
-      post
-    ) &&
-    socialCommentLooksContextlessConfrontational(
-      raw
-    )
-  ) {
-    return false;
-  }
-
-  if (
-    mode === "party-question"
-  ) {
-    /*
-     * A finite keyword whitelist must NOT become a "no comments allowed" gate.
-     * Natural replies such as "knew this was coming", "you're actually doing
-     * this?", or "of course you are" are valid social responses to "party?"
-     * even without literally repeating party/where/when.
-     *
-     * Hard rejection is therefore reserved for CLEAR topic drift.
-     */
-    const directPartyAnchor =
-      /^(?:yes|yeah|yep|yup|sure|maybe|probably|absolutely|definitely|nah|nope|no|never|depends|where|when|who|whose|what\s+time|why|bet|fine|okay|ok|i['’]?m\s+in|im\s+in|i['’]?m\s+out|im\s+out|i['’]?m\s+down|im\s+down|count\s+me\s+in|hell\s+yes|hell\s+no|only\s+if|not\s+if|not\s+with|without\s+me|finally\b|about\s+time\b|thought\s+you['’]?d\s+never\s+ask\b|say\s+less\b|i['’]?ll\s+be\s+there\b|i['’]?m\s+there\b)/i.test(
-        raw
-      ) ||
-      /\b(?:party|invite|invited|invitation|host|hosting|what\s+time|who['’]?s|whose|coming|going|bring|drinks?|address|dress\s*code|afterparty|after-party|pregame|pre-game|plus\s*one|guest\s*list|music|dj|your\s+place|my\s+place|pickup|pick\s+me\s+up)\b/i.test(
-        raw
-      );
-
-    if (
-      !directPartyAnchor &&
-      socialCommentHasPartyQuestionTopicDrift(
-        raw
-      )
-    ) {
-      return false;
-    }
-  }
-
-  /*
-   * For recognized SHORT MUNDANE STATUS posts only, enforce the obvious topic
-   * family as a deterministic guard. This catches "work has been a lot" ->
-   * random dojo accusation without reviving the old Party?-whitelist bug.
-   */
-  if (
-    !socialCommentMatchesShortStatusTopic(
-      post,
-      raw
-    )
-  ) {
-    return false;
-  }
-
-  void trigger;
-
-  return true;
-}
-
-function socialCommentExactPostGroundingCard(
-  w,
-  post
-) {
-  if (!w || !post) return "";
-
-  const hasImage =
-    socialPostHasVisibleImage(
-      post
-    );
-
-  const mode =
-    socialPostQuestionMode(
-      post
-    );
-
-  const special =
-    mode === "party-question"
-      ? `
-- THIS IS A SHORT PARTY QUESTION/INVITATION. Every top-level comment must ACTUALLY answer/react to the party: yes/no/maybe, attendance, hosting, timing, location, invite, drinks, guest list, transport, music, or a directly competing obligation.
-- CHARACTER FIDELITY STILL APPLIES: a strict older sensei may answer "No.", "Training at six tomorrow.", or another terse age-/Speech-/Voice-appropriate refusal. A rival may be sarcastic about THE PARTY. A friend may ask where/when. A crush may ask who is going.
-- Relationship/personality changes HOW the party answer is phrased; it may NOT replace PARTY with an unrelated dojo lecture, romance accusation, old argument, random post critique or generic insult.
-`
-      : mode === "short-question"
-        ? `
-- THIS IS A SHORT DIRECT QUESTION. A valid top-level comment must answer it, ask a relevant clarification, or directly react to the question's actual topic.
-- An unrelated roast, threat, challenge or cryptic comeback is NOT a response merely because the commenter dislikes the author.
-`
-        : "";
-
-  return `
-EXACT-POST COMMENT GROUNDING — HIGHEST CONTENT PRIORITY:
-- POST HAS VISIBLE IMAGE: ${hasImage ? "YES" : "NO"}
-- POST RESPONSE MODE: ${mode}
-- CONTENT ORDER IS STRICT: (1) exact visible post/thread meaning, (2) relationship, (3) personality/speech style.
-- Relationship is a TONE FILTER, not a substitute topic. A rival still has to react to something the post actually gives them.
-- Never manufacture an unrelated insult just to create engagement. In a scheduled comment wave, if the first idea is not grounded, simplify it into a real response to the exact post/question rather than defaulting to silence.
-- Every returned comment must pass this test: "What exact word, question, visible image detail, or parent-comment statement makes THIS sentence a sensible response?" If there is no clear answer, do not return that comment.
-- TOP-LEVEL COMMENT GROUNDING PROOF: for EVERY top-level AI comment under ANY post (player or AI), return a hidden basis field containing 1–18 CONSECUTIVE words copied literally from THIS exact post text or its confirmed visible image description. The visible comment must directly react to that basis. Do not copy basis from another post, memory, relationship card or world event.
-- BASIS→VISIBLE COMMENT LOCK: except for very short direct questions/statuses, the visible comment must explicitly echo at least ONE concrete content word/detail from its own basis (same word or obvious inflected form). A valid copied basis paired with an unrelated sentence is INVALID and will be rejected.
-- Do not hide the real topic behind a generic reaction such as “real”, “damn”, “iconic”, “you ate”, “wild”, a random insult, or relationship drama. Name/react to the actual concrete thing in the basis first; personality/relationship only changes tone.
-${hasImage
-  ? `- Visual reactions may use ONLY details in the supplied image description.`
-  : `- TEXT-ONLY HARD LOCK: there is NO visible photo. Never mention/invent a photo, picture, selfie, mugshot, photographer, pose, outfit, facial look, "you look like...", or any other visible appearance detail.`}
-${special}
-${socialShortStatusGroundingCard(post)}
-`;
 }
 
 function socialCommentContradictsRelationship(
@@ -16076,232 +11091,6 @@ function fullSelfCanon(c) {
  * representation keeps every IMPORTANT category present without repeating
  * tens of thousands of raw characters on every social/RP turn.
  */
-function fullSelfCharacterSheetForSocial(w, c) {
-  if (!c) return "";
-
-  /*
-   * SOCIAL SELF-CANON — UNABRIDGED.
-   *
-   * Used only when THIS character is the acting AI on a post/comment/reply/DM.
-   * No per-field or total character cap is applied. The point is that the
-   * acting AI sees its OWN complete character sheet, including private canon.
-   */
-  const rows = [
-    ["Name", c.name],
-    ["Nickname", c.nick || c.nickname],
-    ["Username", c.username],
-    ["Birth", c.birth],
-    ["Age", ageOf(c, w) || ""],
-    ["Gender", c.gender],
-    ["Orientation", c.orientation],
-    ["Height", c.height],
-    ["City", c.city],
-
-    ["Occupation / Job", c.job || c.occupation || c.profession],
-    ["Role", c.role],
-    ["Rank / Title", c.rank || c.title],
-    ["Organization", c.organization],
-    ["Affiliation", c.affiliation],
-
-    ["Public Bio", c.bio],
-    ["Appearance", c.looks],
-
-    ["Personality", c.personality],
-    ["Traits", c.traits],
-    ["Speech Style", c.speech],
-    ["Voice / Example Sentences — STYLE ONLY", c.voice],
-
-    ["Goals", c.goals],
-    ["Fears", c.fears],
-    ["Likes / Favorite Things", c.likes],
-    ["Secrets", c.secrets],
-
-    ["Relations / Connections — PRIVATE SELF-CANON", c.connections],
-
-    ["Backstory / History", c.backstory],
-    ["Other Important Canon", c.extra],
-    ["Brief / Additional Sheet Canon", c.brief],
-
-    ["Skills", c.skills],
-    ["Abilities", c.abilities],
-    ["Combat", c.combat],
-
-    ["Photo Album Context", albumList(c)],
-  ];
-
-  return rows
-    .map(([label, value]) => {
-      const raw =
-        String(value || "")
-          .replace(/\r/g, "")
-          .trim();
-
-      return raw
-        ? `${label}: ${raw}`
-        : "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function publicBasicCharacterProfileForAgent(w, c) {
-  if (!c) return null;
-
-  /*
-   * WHAT ANOTHER CHARACTER MAY KNOW AS REFERENCE FACTS.
-   *
-   * These fields are KNOWLEDGE ABOUT THE OTHER PERSON, never a style/personality
-   * source for SELF.
-   *
-   * Allowed factual/reference knowledge includes identity, appearance, public
-   * bio, occupation/role/dojo, history/backstory and "extra / other info".
-   *
-   * Deliberately excluded from direct cross-character access:
-   * personality, traits, speech style, voice examples, goals, fears, likes,
-   * secrets, private Connections, brief, album and internal behavior fields.
-   */
-  return {
-    id: String(c.id || ""),
-    name: String(c.name || ""),
-    nickname: String(c.nick || c.nickname || ""),
-    username: String(c.username || ""),
-    birth: String(c.birth || ""),
-    age: ageOf(c, w) || "",
-    gender: String(c.gender || ""),
-    orientation: String(c.orientation || ""),
-    height: String(c.height || ""),
-    city: String(c.city || ""),
-    occupation: String(c.job || c.occupation || c.profession || ""),
-    role: String(c.role || ""),
-    rank: String(c.rank || c.title || ""),
-    organization: String(c.organization || ""),
-    affiliation: String(c.affiliation || ""),
-    bio: String(c.bio || ""),
-    appearance: String(c.looks || ""),
-    history: String(c.backstory || ""),
-    otherInformation: String(c.extra || ""),
-    primaryDojo: karateFactionDisplayName(factionFlags(c)),
-    classification: characterFactionIdentityCard(c) || "",
-  };
-}
-
-function socialSpeechStyleRequiresAllCaps(c) {
-  if (!c) return false;
-
-  const explicit =
-    `${String(c.speech || "")} ${String(c.voice || "")}`
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (
-    /(?:caps\s*lock|capslock|all\s*caps|write(?:s|ing)?\s+in\s+caps|type(?:s|ing)?\s+in\s+caps|always\s+uppercase|uppercase\s+(?:writing|text|messages?)|csupa\s+nagybet[uű]|nagybet[uű]kkel\s+[ií]r|mindig\s+nagybet[uű]|csak\s+nagybet[uű])/i.test(
-      explicit
-    )
-  ) {
-    return true;
-  }
-
-  /*
-   * If the own VOICE examples themselves are overwhelmingly uppercase, treat
-   * that as an explicit style signal too.
-   */
-  const voice =
-    String(
-      c.voice || ""
-    );
-
-  const letters =
-    [...voice]
-      .filter(
-        (ch) =>
-          /\p{L}/u.test(ch)
-      );
-
-  if (letters.length < 20) {
-    return false;
-  }
-
-  const upper =
-    letters.filter(
-      (ch) =>
-        ch === ch.toLocaleUpperCase() &&
-        ch !== ch.toLocaleLowerCase()
-    ).length;
-
-  const lower =
-    letters.filter(
-      (ch) =>
-        ch === ch.toLocaleLowerCase() &&
-        ch !== ch.toLocaleUpperCase()
-    ).length;
-
-  return (
-    upper / letters.length >= 0.82 &&
-    lower / letters.length <= 0.12
-  );
-}
-
-function socialSelfStyleOwnershipCard(c) {
-  if (!c) return "";
-
-  const capsLock =
-    socialSpeechStyleRequiresAllCaps(
-      c
-    );
-
-  return `
-SELF STYLE OWNERSHIP — ABSOLUTE:
-- SELF's Personality, Traits, Speech Style and Voice/Example Sentences belong ONLY to SELF and are the ONLY character-sheet fields allowed to define SELF's manner of speaking, vocabulary, casing, punctuation, humor, emotional delivery and behavioral personality.
-- Facts about OTHER people — even their history, Extra/Other Information, occupation, appearance or bio — are reference KNOWLEDGE only. Never absorb those facts as SELF's personality, trauma, habits, speaking style, preferences, fears, temperament or identity.
-- Another character's Personality / Traits / Speech / Voice / Goals / Fears / Likes / Secrets are NEVER style input for SELF.
-- If another character is described as sarcastic, violent, shy, CAPS-LOCK, flirty, formal, etc., that description belongs to THEM. SELF does not become that way unless SELF's own sheet independently says so.
-- Before output, mentally ask: "Could this exact wording/style have come from another character's sheet?" If yes, rewrite it from SELF's own sheet.
-${capsLock
-  ? `- HARD CASING CANON: SELF's own Speech/Voice explicitly requires CAPS LOCK / ALL CAPS. SELF's social text MUST be written in uppercase. This is not optional and is enforced after generation too.`
-  : `- Do not invent CAPS LOCK or another character's casing habit unless SELF's own Speech/Voice establishes it.`}
-`;
-}
-
-function applySocialOwnedSpeechStyle(
-  w,
-  id,
-  value
-) {
-  const raw =
-    String(
-      value || ""
-    );
-
-  if (!raw) return "";
-
-  const c =
-    charById(
-      w,
-      id
-    );
-
-  if (
-    !c ||
-    !socialSpeechStyleRequiresAllCaps(
-      c
-    )
-  ) {
-    return raw;
-  }
-
-  const locale =
-    worldLanguage(
-      w,
-      w && w.meId
-    ) === "hu"
-      ? "hu-HU"
-      : "en-US";
-
-  return raw.toLocaleUpperCase(
-    locale
-  );
-}
-
 function compactSelfCanonForPrompt(c, maxChars = 6200) {
   if (!c) return "";
 
@@ -17681,7 +12470,6 @@ function connectionRelationshipEntriesAbout(w, actor, target) {
     if (/^friends?$|bar[aá]tok?$/.test(heading)) return "Friend";
     if (/^allies?$|sz[oö]vets[eé]gesek?$/.test(heading)) return "Ally";
     if (/^mentors?$|senseis?$|mesterek?$/.test(heading)) return "Mentor";
-    if (/^students?$|tan[ií]tv[aá]nyok?$/.test(heading)) return "Student";
     if (/^family$|csal[aá]d$/.test(heading)) return "Family";
     if (/^dojo$|team$|csapat$/.test(heading)) return "Dojo / teammate";
     return "";
@@ -17791,33 +12579,6 @@ function connectionRelationshipEntriesAbout(w, actor, target) {
   return entries;
 }
 
-const RELATIONSHIP_SHEET_EVIDENCE_CACHE = new WeakMap();
-
-function relationshipSheetEvidenceEntriesAbout(w, actor, target) {
-  if (!w || !actor || !target) return [];
-
-  /*
-   * STRICT MECHANICAL RELATIONSHIP SOURCE — v8
-   *
-   * The AI still reads the COMPLETE character sheet for personality, secrets,
-   * backstory, goals, behavior and dialogue.
-   *
-   * But automatic relationship SCORE / BOND / HIDDEN FEELING is built only
-   * from the exact target-specific Connections parser. This prevents a name
-   * mentioned in Secrets/Backstory/Personality from accidentally becoming a
-   * relationship status.
-   *
-   * Cross-sheet direction still works separately:
-   * if Angel's Connections says "Ryan has a crush on Angel", Ryan -> Angel is
-   * recovered through canonicalDirectedRomanceState().
-   */
-  return connectionRelationshipEntriesAbout(
-    w,
-    actor,
-    target
-  );
-}
-
 function exactConnectionBondLabel(w, actor, target) {
   const entries = connectionRelationshipEntriesAbout(w, actor, target);
   const text = entries
@@ -17882,20 +12643,9 @@ function exactConnectionBondLabel(w, actor, target) {
   if (/teammate|team mate|team-mate|csapatt[aá]rs|dojo mate|doj[oó]t[aá]rs/.test(text)) push("Teammate");
   if (/frenemy/.test(text)) push("Frenemy");
 
-  const directedRomance =
-    canonicalDirectedRomanceState(
-      w,
-      actor,
-      target
-    );
-
-  if (/mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction/.test(text)) {
-    push("Kölcsönös crush");
-  } else if (directedRomance.outboundObsession) {
-    push("Obsession");
-  } else if (directedRomance.outboundCrush) {
-    push("Crush");
-  }
+  if (/mutual crush|k[oö]lcs[oö]n[oö]s crush|mutual attraction/.test(text)) push("Kölcsönös crush");
+  else if (/obsess|fixation|megsz[aá]ll/.test(text)) push("Obsession");
+  else if (/crush|attraction|attracted|vonzalom|vonz[oó]d|in love|szerelmes|romantic/.test(text)) push("Crush");
 
   if (/dating|boyfriend|girlfriend|j[aá]rnak|p[aá]rja/.test(text)) push("Járnak");
   if (/engaged|fianc[eé]|jegyes/.test(text)) push("Jegyesek");
@@ -17923,514 +12673,13 @@ function connectionCanonSnippetAbout(w, actor, target, maxChars = 1800) {
     .slice(0, Math.max(200, Number(maxChars) || 1800));
 }
 
-function relationshipPronounProfile(person) {
-  const gender = characterGenderAttractionClass(person);
-
-  if (gender === "female") {
-    return {
-      subject: ["she"],
-      object: ["her"],
-    };
-  }
-
-  if (gender === "male") {
-    return {
-      subject: ["he"],
-      object: ["him"],
-    };
-  }
-
-  if (gender === "nonbinary") {
-    return {
-      subject: ["they"],
-      object: ["them"],
-    };
-  }
-
-  return {
-    subject: [],
-    object: [],
-  };
-}
-
-function relationshipIdentityRegex(person) {
-  const aliases =
-    characterIdentityAliases(
-      person,
-      {
-        includeFirst: true,
-        includeSurname: false,
-        strongOnly: false,
-      }
-    )
-      .map((alias) => String(alias || "").trim())
-      .filter((alias) => alias.length >= 3)
-      .sort((a, b) => b.length - a.length)
-      .map((alias) => regexEscapeLiteral(alias));
-
-  return aliases.length
-    ? `(?:${aliases.join("|")})`
-    : "";
-}
-
-function relationshipPronounRegex(values) {
-  const rows =
-    (values || [])
-      .map((value) => regexEscapeLiteral(value))
-      .filter(Boolean);
-
-  return rows.length
-    ? `(?:${rows.join("|")})`
-    : "";
-}
-
-function directedConnectionRomanceState(w, actor, target) {
-  const entries =
-    relationshipSheetEvidenceEntriesAbout(
-      w,
-      actor,
-      target
-    );
-
-  const out = {
-    outboundCrush: false,
-    outboundObsession: false,
-    inboundCrush: false,
-    inboundObsession: false,
-    mutualCrush: false,
-    concealed: false,
-    wouldNeverAdmit: false,
-    inboundConcealed: false,
-    inboundWouldNeverAdmit: false,
-  };
-
-  if (!entries.length) return out;
-
-  const actorName =
-    relationshipIdentityRegex(
-      actor
-    );
-
-  const targetName =
-    relationshipIdentityRegex(
-      target
-    );
-
-  const actorPronouns =
-    relationshipPronounProfile(
-      actor
-    );
-
-  const targetPronouns =
-    relationshipPronounProfile(
-      target
-    );
-
-  const actorSubjectPron =
-    relationshipPronounRegex(
-      actorPronouns.subject
-    );
-
-  const targetSubjectPron =
-    relationshipPronounRegex(
-      targetPronouns.subject
-    );
-
-  const actorObjectPron =
-    relationshipPronounRegex(
-      actorPronouns.object
-    );
-
-  const targetObjectPron =
-    relationshipPronounRegex(
-      targetPronouns.object
-    );
-
-  const actorSubject =
-    [actorName, actorSubjectPron]
-      .filter(Boolean)
-      .join("|");
-
-  const targetSubject =
-    [targetName, targetSubjectPron]
-      .filter(Boolean)
-      .join("|");
-
-  const actorObject =
-    [actorName, actorObjectPron]
-      .filter(Boolean)
-      .join("|");
-
-  const targetObject =
-    [targetName, targetObjectPron]
-      .filter(Boolean)
-      .join("|");
-
-  const obsessionWord =
-    String.raw`(?:obsess(?:ed|ion|ive)?|fixat(?:ed|ion)|megsz[aá]ll(?:ott|otts[aá]g)?|m[aá]ni[aá]san|can['’]?t\s+stop\s+thinking|cannot\s+stop\s+thinking|can['’]?t\s+get\s+(?:her|him|them|[A-ZÁÉÍÓÖŐÚÜŰ][\p{L}'’-]+)\s+out\s+of\s+(?:his|her|their|my)\s+head)`;
-
-  const directCrushWord =
-    String.raw`(?:crush(?:es|ing)?|attract(?:ed|ion)?|in\s+love|love\s+interest|vonz[oó]d|vonzalom|szerelmes|romantic(?:ally)?|into\s+(?:her|him|them))`;
-
-  const appearanceAttractionWord =
-    String.raw`(?:beautiful|handsome|hot|gorgeous|pretty|cute|yummy|good[- ]?looking|attractive)`;
-
-  const concealmentRe =
-    /secret|hidden|titkos|rejtett|senki nem tud|doesn['’]?t know|would never admit|wouldn['’]?t admit|won['’]?t admit|never admit|never confess|would deny|denies it|refuses? to admit|nem vallan[aá] be|sosem vallan[aá] be|nem ismern[eé] be|nem mondan[aá] ki|letagadn[aá]|titkolja/i;
-
-  const neverAdmitRe =
-    /would never admit|wouldn['’]?t admit|won['’]?t admit|never admit|never confess|would deny|denies it|refuses? to admit|nem vallan[aá] be|sosem vallan[aá] be|nem ismern[eé] be|nem mondan[aá] ki|letagadn[aá]/i;
-
-  const hasRef = (pattern, value) =>
-    Boolean(
-      value &&
-      new RegExp(
-        pattern,
-        "iu"
-      ).test(value)
-    );
-
-  entries.forEach((entry) => {
-    const relation =
-      String(
-        entry &&
-        entry.relation ||
-        ""
-      )
-        .replace(/\s+/g, " ")
-        .trim();
-
-    if (!relation) return;
-
-    const low =
-      relation.toLowerCase();
-
-    if (
-      /mutual crush|mutual attraction|crush(?:es|ing)? each other|both (?:have )?(?:a )?crush|k[oö]lcs[oö]n[oö]s crush|k[oö]lcs[oö]n[oö]s vonzalom|egym[aá]sba vannak z[uú]gva/.test(
-        low
-      )
-    ) {
-      out.mutualCrush = true;
-      out.outboundCrush = true;
-      out.inboundCrush = true;
-    }
-
-    const hasObsession =
-      new RegExp(
-        obsessionWord,
-        "iu"
-      ).test(
-        relation
-      );
-
-    const hasDirectCrush =
-      new RegExp(
-        directCrushWord,
-        "iu"
-      ).test(
-        relation
-      );
-
-    /*
-     * Detect obsession direction independently. One Relations row is allowed
-     * to describe both sides of the pair.
-     */
-    let outboundObsession = false;
-    let inboundObsession = false;
-
-    if (hasObsession) {
-      inboundObsession =
-        hasRef(
-          `(?:${targetSubject})[\\s\\S]{0,100}${obsessionWord}[\\s\\S]{0,90}(?:with|on|to|toward|towards|for)?\\s*(?:${actorObject})`,
-          relation
-        ) ||
-        hasRef(
-          `${obsessionWord}[\\s\\S]{0,65}(?:with|on|to|toward|towards|for)\\s+(?:${actorObject})(?=$|[^\\p{L}\\p{N}_])`,
-          relation
-        );
-
-      outboundObsession =
-        hasRef(
-          `(?:${actorSubject})[\\s\\S]{0,100}${obsessionWord}[\\s\\S]{0,90}(?:with|on|to|toward|towards|for)?\\s*(?:${targetObject})`,
-          relation
-        ) ||
-        hasRef(
-          `${obsessionWord}[\\s\\S]{0,65}(?:with|on|to|toward|towards|for)\\s+(?:${targetObject})(?=$|[^\\p{L}\\p{N}_])`,
-          relation
-        );
-
-      /*
-       * Exact target Relations row defaults actor -> target only if it did not
-       * explicitly say TARGET is the one who feels the obsession.
-       */
-      if (
-        !inboundObsession &&
-        !outboundObsession
-      ) {
-        outboundObsession = true;
-      }
-
-      if (inboundObsession) {
-        out.inboundObsession = true;
-      }
-
-      if (outboundObsession) {
-        out.outboundObsession = true;
-      }
-    }
-
-    let outboundCrush = false;
-    let inboundCrush = false;
-
-    if (hasDirectCrush) {
-      inboundCrush =
-        hasRef(
-          `(?:${targetSubject})[\\s\\S]{0,100}${directCrushWord}[\\s\\S]{0,90}(?:with|on|to|toward|towards|for)?\\s*(?:${actorObject})`,
-          relation
-        ) ||
-        hasRef(
-          `${directCrushWord}[\\s\\S]{0,65}(?:with|on|to|toward|towards|for)\\s+(?:${actorObject})(?=$|[^\\p{L}\\p{N}_])`,
-          relation
-        );
-
-      outboundCrush =
-        hasRef(
-          `(?:${actorSubject})[\\s\\S]{0,100}${directCrushWord}[\\s\\S]{0,90}(?:with|on|to|toward|towards|for)?\\s*(?:${targetObject})`,
-          relation
-        ) ||
-        hasRef(
-          `${directCrushWord}[\\s\\S]{0,65}(?:with|on|to|toward|towards|for)\\s+(?:${targetObject})(?=$|[^\\p{L}\\p{N}_])`,
-          relation
-        );
-
-      if (
-        !inboundCrush &&
-        !outboundCrush
-      ) {
-        outboundCrush = true;
-      }
-    }
-
-    /*
-     * Natural attraction wording found in the real Relations sheets.
-     * This NEVER scans personality/history; only the exact target row.
-     */
-    const outboundAppearance =
-      hasRef(
-        `(?:${actorSubject})[\\s\\S]{0,80}(?:thinks?|finds?|considers?)[\\s\\S]{0,45}(?:${targetObject})[\\s\\S]{0,45}(?:is\\s+|to\\s+be\\s+)?(?:very\\s+|really\\s+|extremely\\s+|kind\\s+of\\s+)?${appearanceAttractionWord}`,
-        relation
-      ) ||
-      hasRef(
-        `(?:thinks?|finds?|considers?)[\\s\\S]{0,35}(?:${targetObject})[\\s\\S]{0,40}(?:very\\s+|really\\s+|extremely\\s+|kind\\s+of\\s+)?${appearanceAttractionWord}`,
-        relation
-      ) ||
-      hasRef(
-        `(?:${actorSubject})[\\s\\S]{0,80}loves?\\s+flirting\\s+with\\s+(?:${targetObject})`,
-        relation
-      ) ||
-      hasRef(
-        `loves?\\s+flirting\\s+with\\s+(?:${targetObject})`,
-        relation
-      );
-
-    const inboundAppearance =
-      hasRef(
-        `(?:${targetSubject})[\\s\\S]{0,80}(?:thinks?|finds?|considers?)[\\s\\S]{0,45}(?:${actorObject})[\\s\\S]{0,45}(?:is\\s+|to\\s+be\\s+)?(?:very\\s+|really\\s+|extremely\\s+|kind\\s+of\\s+)?${appearanceAttractionWord}`,
-        relation
-      ) ||
-      hasRef(
-        `(?:${targetSubject})[\\s\\S]{0,80}loves?\\s+flirting\\s+with\\s+(?:${actorObject})`,
-        relation
-      );
-
-    const outboundPronounAppearance =
-      Boolean(
-        actorSubjectPron &&
-        targetSubjectPron &&
-        new RegExp(
-          `(?:${actorSubjectPron})[\\s\\S]{0,65}(?:thinks?|finds?)[\\s\\S]{0,35}(?:${targetSubjectPron})[\\s\\S]{0,35}(?:is\\s+)?(?:very\\s+|really\\s+)?${appearanceAttractionWord}`,
-          "iu"
-        ).test(
-          relation
-        )
-      );
-
-    const inboundPronounAppearance =
-      Boolean(
-        targetSubjectPron &&
-        actorSubjectPron &&
-        new RegExp(
-          `(?:${targetSubjectPron})[\\s\\S]{0,65}(?:thinks?|finds?)[\\s\\S]{0,35}(?:${actorSubjectPron})[\\s\\S]{0,35}(?:is\\s+)?(?:very\\s+|really\\s+)?${appearanceAttractionWord}`,
-          "iu"
-        ).test(
-          relation
-        )
-      );
-
-    if (
-      outboundCrush ||
-      outboundAppearance ||
-      outboundPronounAppearance
-    ) {
-      out.outboundCrush = true;
-    }
-
-    if (
-      inboundCrush ||
-      inboundAppearance ||
-      inboundPronounAppearance
-    ) {
-      out.inboundCrush = true;
-    }
-
-    if (
-      (
-        outboundObsession ||
-        outboundCrush ||
-        outboundAppearance ||
-        outboundPronounAppearance
-      ) &&
-      concealmentRe.test(
-        relation
-      )
-    ) {
-      out.concealed = true;
-    }
-
-    if (
-      (
-        outboundObsession ||
-        outboundCrush ||
-        outboundAppearance ||
-        outboundPronounAppearance
-      ) &&
-      neverAdmitRe.test(
-        relation
-      )
-    ) {
-      out.wouldNeverAdmit = true;
-      out.concealed = true;
-    }
-
-    if (
-      (
-        inboundObsession ||
-        inboundCrush ||
-        inboundAppearance ||
-        inboundPronounAppearance
-      ) &&
-      concealmentRe.test(
-        relation
-      )
-    ) {
-      out.inboundConcealed = true;
-    }
-
-    if (
-      (
-        inboundObsession ||
-        inboundCrush ||
-        inboundAppearance ||
-        inboundPronounAppearance
-      ) &&
-      neverAdmitRe.test(
-        relation
-      )
-    ) {
-      out.inboundWouldNeverAdmit = true;
-      out.inboundConcealed = true;
-    }
-  });
-
-  return out;
-}
-
-function canonicalDirectedRomanceState(w, actor, target) {
-  const own =
-    directedConnectionRomanceState(
-      w,
-      actor,
-      target
-    );
-
-  const reverse =
-    directedConnectionRomanceState(
-      w,
-      target,
-      actor
-    );
-
-  /*
-   * A fact can be written on EITHER sheet.
-   *
-   * Example:
-   *   Angel's sheet: "Ryan — Ryan has a crush on Angel."
-   * That is inbound on Angel's sheet, but it is still valid canon for
-   * Ryan -> Angel when Ryan's baseline is rebuilt.
-   */
-  return {
-    outboundCrush:
-      Boolean(
-        own.outboundCrush ||
-        own.mutualCrush ||
-        reverse.inboundCrush ||
-        reverse.mutualCrush
-      ),
-
-    outboundObsession:
-      Boolean(
-        own.outboundObsession ||
-        reverse.inboundObsession
-      ),
-
-    concealed:
-      Boolean(
-        own.concealed ||
-        reverse.inboundConcealed
-      ),
-
-    wouldNeverAdmit:
-      Boolean(
-        own.wouldNeverAdmit ||
-        reverse.inboundWouldNeverAdmit
-      ),
-
-    mutualCrush:
-      Boolean(
-        own.mutualCrush ||
-        reverse.mutualCrush ||
-        (
-          (
-            own.outboundCrush ||
-            reverse.inboundCrush
-          ) &&
-          (
-            own.inboundCrush ||
-            reverse.outboundCrush
-          )
-        )
-      ),
-
-    own,
-    reverse,
-  };
-}
-
 function connectionRelationshipCue(w, actor, target) {
-  const snippet = canonicalRelationshipEvidence(w, actor, target);
+  const snippet = connectionCanonSnippetAbout(w, actor, target, 1800);
   const low = snippet.toLowerCase();
-  const directedRomance =
-    canonicalDirectedRomanceState(
-      w,
-      actor,
-      target
-    );
 
   return {
     snippet,
-    romantic:
-      directedRomance.outboundCrush ||
-      directedRomance.outboundObsession,
+    romantic: /crush|has a crush|secret crush|vonz[oó]d|vonzalom|szerelmes|szerelem|in love|love interest|romantic|romantikus|fl[oö]rt|flirt|attraction|attracted|obsess|megsz[aá]ll|r[aá] van kattanva/.test(low),
     close: /best friend|close friend|ride or die|legjobb bar[aá]t|közeli bar[aá]t|testv[eé]rk[eé]nt|like a sibling|sisters? she chose|brothers? she chose|chosen sister|chosen brother|chosen family/.test(low),
     friendly: /friend|bar[aá]t|ally|sz[oö]vets[eé]ges|loyal|loj[aá]lis/.test(low),
     hostile: /enemy|ellens[eé]g|hate|gy[uű]l[oö]l|nem b[ií]rja|despise|archenemy|f[oő]ellens[eé]g/.test(low),
@@ -18438,9 +12687,7 @@ function connectionRelationshipCue(w, actor, target) {
     family: /mother|father|mom|dad|sister|brother|cousin|family|anya|apa|testv[eé]r|unokatestv[eé]r|csal[aá]d/.test(low),
     mentor: /sensei|mentor|teacher|coach|mester|tan[aá]r|edz[oő]/.test(low),
     jealous: /jealous|f[eé]lt[eé]ken|possessive|birtokl[oó]|territorial/.test(low),
-    secret:
-      directedRomance.concealed ||
-      /secret|hidden|titkos|rejtett|senki nem tud|doesn['’]?t know/.test(low),
+    secret: /secret|hidden|titkos|rejtett|senki nem tud|doesn['’]?t know/.test(low),
   };
 }
 
@@ -18997,34 +13244,6 @@ function hierarchyBehaviorCard(w, actorId, targetId) {
     : `CÍMHATÁR: ${target.name} sensei, de NEM ${actor.name} saját senseie. Ne hívd automatikusan „Sensei ${surname}”-nek. Ez a megszólítás alapból a saját tanítványaihoz tartozik, hacsak explicit kánon nem rögzít más udvariassági viszonyt.`;
 }
 
-function parseRoleplayPlayerInput(rawText) {
-  const original = String(rawText || "").trim();
-  if (!original) return { text: "", kind: "speech", isAction: false };
-
-  /*
-   * ROLEPLAY INPUT CONTRACT:
-   * A leading/trailing pair of * is an explicit player ACTION, not dialogue.
-   * Examples: *felállok* / *I grab his hand*.
-   * Keep the asterisks out of the stored turn text, but preserve the exact
-   * action wording so the AI and memory layer see what actually happened.
-   * If the player writes normal prose without stars, it remains speech.
-   */
-  const actionMatch = original.match(/^\*\s*([\s\S]*?)\s*\*$/);
-  if (actionMatch && actionMatch[1].trim()) {
-    return {
-      text: actionMatch[1].trim(),
-      kind: "action",
-      isAction: true,
-    };
-  }
-
-  return {
-    text: original,
-    kind: "speech",
-    isAction: false,
-  };
-}
-
 function playerInputUnderstandingInstruction(w, rawText, surface = "chat") {
   const text = String(rawText || "").trim();
   if (!text) return "";
@@ -19170,7 +13389,6 @@ function compactAgentMemoryForPacket(w, actorId, targetId = "") {
       openLoops: (mem.selfState && Array.isArray(mem.selfState.openLoops) ? mem.selfState.openLoops : []).slice(-6),
     },
     relationshipContinuity: targetId ? compactRelationshipContinuity(w, actorId, targetId) : null,
-    adaptiveToTarget: targetId ? compactAdaptiveProfileForPrompt(w, actorId, targetId) : null,
     recentConversations: (mem.conversations || []).slice(-3).map(memoryToLine),
     recentEvents: (mem.witnessedEvents || []).slice(-3).map(memoryToLine),
     heardRumors: (mem.rumors || []).slice(-4).map(memoryToLine),
@@ -19432,8 +13650,7 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
       "Player controls only the player character; never invent the player's unspoken dialogue, actions or thoughts.",
       "Canon + relationship + memory + current context outrank generic drama or generic personality stereotypes.",
       "SELF CLASSIFICATION IS HARD CANON: self.primaryDojo / self.classification describe SELF's own side. Do not infer SELF's dojo from rival/enemy names mentioned inside Connections or backstory. A character mentioning Iron Dragons as rivals does NOT make that character Iron Dragons.",
-      "READ THE FULL SELF SHEET, NOT JUST PERSONALITY: self.fullCanon.occupation, factionAndSide, history, abilities, motives, speech and private Connections all constrain SELF behavior.",
-      "SELF STYLE OWNERSHIP IS ID-LOCKED: only THIS packet's self.fullCanon.behavior (personality, traits, speechStyle, voiceExamples) may define THIS actor's wording, casing, punctuation, humor, temperament and behavioral personality. Never borrow those properties from another actor packet or another character profile.",
+      "READ THE FULL SHEET, NOT JUST PERSONALITY: self.fullCanon.occupation, factionAndSide, history, abilities, motives, speech and private Connections all constrain behavior. Occupation/job, rank, dojo, organization and side are factual character canon and must affect what they know, do, post about and how they speak.",
       "PAIR CANON IS DIRECTED: exactPairCanon is SELF -> TARGET only. If it says Best friend, do not write hatred or enemy behavior because another unrelated rivalry exists. If it says Enemy/Rival, do not write generic buddy behavior. A single ordinary interaction may change mood/score a little, but it must not instantly rewrite a deeply established relationship.",
       ...(targetId
         ? [flirtIdentityInstruction(w, actorId, targetId)]
@@ -20478,19 +14695,6 @@ function relationshipBehaviorCard(
     parts.push(orientationLock);
   }
 
-  const addressOwnership =
-    relationshipSpecificAddressOwnershipCard(
-      w,
-      actorId,
-      targetId
-    );
-
-  if (addressOwnership) {
-    parts.push(
-      addressOwnership
-    );
-  }
-
   if (connectionCue.snippet) {
     parts.push(
       en
@@ -20919,715 +15123,6 @@ function sanitizeIncorrectSenseiAddress(
   return text;
 }
 
-function relationshipSpecificAddressAliasVariants(value) {
-  const raw =
-    String(
-      value || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!raw) return [];
-
-  const out = [];
-
-  const add = (v) => {
-    const clean =
-      String(
-        v || ""
-      )
-        .replace(/\s+/g, " ")
-        .trim();
-
-    if (
-      clean &&
-      !out.some(
-        (x) =>
-          normalizeCharacterIdentityText(
-            x
-          ) ===
-          normalizeCharacterIdentityText(
-            clean
-          )
-      )
-    ) {
-      out.push(
-        clean
-      );
-    }
-  };
-
-  add(
-    raw
-  );
-
-  const withoutArticle =
-    raw.replace(
-      /^(?:la|el|le|the)\s+/i,
-      ""
-    );
-
-  add(
-    withoutArticle
-  );
-
-  /*
-   * Narrow cross-language ownership variants for an explicitly stored title.
-   * This catches the exact kind of provider translation leak that turned
-   * Hawk's "La Marquesa" for Carla into "Marquise" for somebody else.
-   */
-  const normalized =
-    normalizeCharacterIdentityText(
-      withoutArticle
-    );
-
-  if (
-    normalized === "marquesa"
-  ) {
-    add(
-      "Marquise"
-    );
-
-    add(
-      "La Marquise"
-    );
-  }
-
-  if (
-    normalized === "marques"
-  ) {
-    add(
-      "Marquis"
-    );
-
-    add(
-      "Le Marquis"
-    );
-  }
-
-  return out;
-}
-
-function relationshipSpecificAddressRows(actor) {
-  if (!actor) return [];
-
-  const raw =
-    String(
-      actor.connections || ""
-    )
-      .replace(/\r/g, "");
-
-  if (!raw.trim()) {
-    return [];
-  }
-
-  const out = [];
-
-  raw
-    .split(/\n+/)
-    .map(
-      (line) =>
-        String(
-          line || ""
-        )
-          .replace(/\s+/g, " ")
-          .trim()
-    )
-    .filter(Boolean)
-    .forEach(
-      (line) => {
-        const row =
-          line.match(
-            /^(.{2,140}?)\s*[—–-]\s*Relationship\s*:\s*(.+)$/i
-          );
-
-        if (!row) return;
-
-        const ownerLabel =
-          String(
-            row[1] || ""
-          )
-            .replace(/\s+/g, " ")
-            .trim();
-
-        const detail =
-          String(
-            row[2] || ""
-          );
-
-        if (
-          !ownerLabel ||
-          !detail
-        ) {
-          return;
-        }
-
-        const found = [];
-
-        const capture = (regex) => {
-          let m;
-
-          while (
-            (
-              m =
-                regex.exec(
-                  detail
-                )
-            )
-          ) {
-            const alias =
-              String(
-                m[1] || ""
-              )
-                .replace(/\s+/g, " ")
-                .trim();
-
-            if (
-              alias &&
-              alias.length >= 2 &&
-              alias.length <= 60
-            ) {
-              found.push(
-                alias
-              );
-            }
-
-            if (
-              !regex.global
-            ) {
-              break;
-            }
-          }
-        };
-
-        /*
-         * Target-specific speech canon:
-         *   He also calls her "La Marquesa"
-         *   She calls him "..."
-         *   I call them "..."
-         */
-        capture(
-          /\b(?:i|he|she|they)\s+(?:also\s+)?calls?\s+(?:him|her|them)\s*["“'‘]([^"”'’]{2,60})["”'’]/gi
-        );
-
-        /*
-         * Slightly shorter variants in a Connections row.
-         */
-        capture(
-          /\bcalls?\s+(?:him|her|them)\s*["“'‘]([^"”'’]{2,60})["”'’]/gi
-        );
-
-        capture(
-          /\b(?:nickname|pet\s*name)\s*(?:for\s+)?(?:him|her|them)?\s*[:=]?\s*["“'‘]([^"”'’]{2,60})["”'’]/gi
-        );
-
-        found
-          .filter(
-            (alias, index, arr) =>
-              arr.findIndex(
-                (other) =>
-                  normalizeCharacterIdentityText(
-                    other
-                  ) ===
-                  normalizeCharacterIdentityText(
-                    alias
-                  )
-              ) === index
-          )
-          .forEach(
-            (alias) => {
-              out.push({
-                ownerLabel,
-                alias,
-                variants:
-                  relationshipSpecificAddressAliasVariants(
-                    alias
-                  ),
-                sourceLine:
-                  line,
-              });
-            }
-          );
-      }
-    );
-
-  return out;
-}
-
-function relationshipAddressOwnerMatchesTarget(
-  w,
-  ownerLabel,
-  target
-) {
-  if (
-    !w ||
-    !ownerLabel ||
-    !target
-  ) {
-    return false;
-  }
-
-  const resolved =
-    resolveCharacterIdentity(
-      w,
-      ownerLabel,
-      {
-        relationshipOnly:false,
-      }
-    );
-
-  if (
-    resolved &&
-    resolved.id
-  ) {
-    return (
-      String(
-        resolved.id
-      ) ===
-      String(
-        target.id
-      )
-    );
-  }
-
-  const ownerNorm =
-    normalizeCharacterIdentityText(
-      ownerLabel
-    );
-
-  const targetAliases =
-    [
-      target.name,
-      target.nick,
-      target.nickname,
-      target.username,
-      ...(characterIdentityAliases(
-        target,
-        {
-          includeFirst:true,
-          includeSurname:true,
-          strongOnly:false,
-        }
-      ) || []),
-    ]
-      .map(
-        (alias) =>
-          normalizeCharacterIdentityText(
-            alias
-          )
-      )
-      .filter(Boolean);
-
-  return targetAliases.includes(
-    ownerNorm
-  );
-}
-
-function relationshipSpecificAddressesForTarget(
-  w,
-  actorId,
-  targetId
-) {
-  if (
-    !w ||
-    !actorId ||
-    !targetId
-  ) {
-    return [];
-  }
-
-  const actor =
-    charById(
-      w,
-      actorId
-    );
-
-  const target =
-    charById(
-      w,
-      targetId
-    );
-
-  if (
-    !actor ||
-    !target
-  ) {
-    return [];
-  }
-
-  return relationshipSpecificAddressRows(
-    actor
-  )
-    .filter(
-      (row) =>
-        relationshipAddressOwnerMatchesTarget(
-          w,
-          row.ownerLabel,
-          target
-        )
-    );
-}
-
-function preferredRelationshipSpecificAddressForTarget(
-  w,
-  actorId,
-  targetId
-) {
-  const row =
-    relationshipSpecificAddressesForTarget(
-      w,
-      actorId,
-      targetId
-    )[0];
-
-  return row
-    ? String(
-        row.alias || ""
-      ).trim()
-    : "";
-}
-
-function relationshipSpecificAddressOwnershipCard(
-  w,
-  actorId,
-  targetId
-) {
-  if (
-    !w ||
-    !actorId ||
-    !targetId
-  ) {
-    return "";
-  }
-
-  const actor =
-    charById(
-      w,
-      actorId
-    );
-
-  const target =
-    charById(
-      w,
-      targetId
-    );
-
-  if (
-    !actor ||
-    !target
-  ) {
-    return "";
-  }
-
-  const rows =
-    relationshipSpecificAddressRows(
-      actor
-    );
-
-  if (!rows.length) {
-    return "";
-  }
-
-  const ownedByTarget =
-    rows.filter(
-      (row) =>
-        relationshipAddressOwnerMatchesTarget(
-          w,
-          row.ownerLabel,
-          target
-        )
-    );
-
-  const ownedByOthers =
-    rows.filter(
-      (row) =>
-        !relationshipAddressOwnerMatchesTarget(
-          w,
-          row.ownerLabel,
-          target
-        )
-    );
-
-  const targetText =
-    ownedByTarget.length
-      ? ownedByTarget
-          .map(
-            (row) =>
-              `"${row.alias}"`
-          )
-          .join(", ")
-      : "none";
-
-  const forbiddenText =
-    ownedByOthers.length
-      ? ownedByOthers
-          .slice(
-            0,
-            12
-          )
-          .map(
-            (row) => {
-              const variants =
-                row.variants
-                  .filter(
-                    (v) =>
-                      normalizeCharacterIdentityText(
-                        v
-                      ) !==
-                      normalizeCharacterIdentityText(
-                        row.alias
-                      )
-                  )
-                  .join(" / ");
-
-              return `"${row.alias}"${variants ? ` (including ${variants})` : ""} → ${row.ownerLabel}`;
-            }
-          )
-          .join("; ")
-      : "none";
-
-  return `
-RELATIONSHIP-SPECIFIC NAME / PET-NAME OWNERSHIP — HARD:
-- CURRENT DIRECT TARGET: ${target.name} [${target.id}].
-- SELF's Connections may contain a private nickname/pet-name that SELF uses for ONE PARTICULAR person. That form of address belongs ONLY to the person named in that SAME Connections row.
-- Relationship-specific addresses that belong to CURRENT TARGET: ${targetText}.
-- Relationship-specific addresses in SELF's sheet that belong to OTHER people and are FORBIDDEN as a vocative for ${target.name}: ${forbiddenText}.
-- NEVER translate, anglicize, shorten, reinterpret or semantically imitate another person's pet-name and attach it to CURRENT TARGET.
-- Example principle: if SELF's Connections says SELF calls Person A "X", SELF may not call Person B "X", a translation of X, or a title-equivalent of X.
-`;
-}
-
-function sanitizeRelationshipSpecificAddressLeak(
-  w,
-  actorId,
-  targetId,
-  value
-) {
-  let text =
-    String(
-      value || ""
-    );
-
-  if (
-    !text ||
-    !w ||
-    !actorId ||
-    !targetId ||
-    actorId === targetId
-  ) {
-    return text;
-  }
-
-  const actor =
-    charById(
-      w,
-      actorId
-    );
-
-  const target =
-    charById(
-      w,
-      targetId
-    );
-
-  if (
-    !actor ||
-    !target
-  ) {
-    return text;
-  }
-
-  const rows =
-    relationshipSpecificAddressRows(
-      actor
-    );
-
-  if (!rows.length) {
-    return text;
-  }
-
-  const targetRelationshipAliases =
-    new Set(
-      relationshipSpecificAddressesForTarget(
-        w,
-        actorId,
-        targetId
-      )
-        .flatMap(
-          (row) =>
-            row.variants || []
-        )
-        .map(
-          (alias) =>
-            normalizeCharacterIdentityText(
-              alias
-            )
-        )
-        .filter(Boolean)
-    );
-
-  const targetIdentityAliases =
-    new Set(
-      directAddressAliasesForCharacter(
-        target
-      )
-        .map(
-          (alias) =>
-            normalizeCharacterIdentityText(
-              alias
-            )
-        )
-        .filter(Boolean)
-    );
-
-  const forbidden = [];
-
-  rows
-    .filter(
-      (row) =>
-        !relationshipAddressOwnerMatchesTarget(
-          w,
-          row.ownerLabel,
-          target
-        )
-    )
-    .forEach(
-      (row) => {
-        (
-          row.variants || []
-        )
-          .forEach(
-            (alias) => {
-              const normalized =
-                normalizeCharacterIdentityText(
-                  alias
-                );
-
-              if (
-                !normalized ||
-                targetRelationshipAliases.has(
-                  normalized
-                ) ||
-                targetIdentityAliases.has(
-                  normalized
-                )
-              ) {
-                return;
-              }
-
-              if (
-                !forbidden.some(
-                  (existing) =>
-                    normalizeCharacterIdentityText(
-                      existing
-                    ) ===
-                    normalized
-                )
-              ) {
-                forbidden.push(
-                  alias
-                );
-              }
-            }
-          );
-      }
-    );
-
-  if (!forbidden.length) {
-    return text;
-  }
-
-  const replacement =
-    preferredRelationshipSpecificAddressForTarget(
-      w,
-      actorId,
-      targetId
-    ) ||
-    preferredDirectAddressForCharacter(
-      w,
-      actorId,
-      targetId
-    ) ||
-    "";
-
-  forbidden
-    .sort(
-      (a, b) =>
-        b.length -
-        a.length
-    )
-    .forEach(
-      (alias) => {
-        const escaped =
-          regexEscapeLiteral(
-            alias
-          );
-
-        /*
-         * Opening / sentence-initial vocative.
-         */
-        text =
-          text.replace(
-            new RegExp(
-              `(^|[.!?]\\s+)(["'“”‘’(]*)(?:${escaped})(\\s*[,!:;—-]\\s*)`,
-              "gi"
-            ),
-            (_m, lead, quote, punct) =>
-              replacement
-                ? `${lead}${quote}${replacement}${punct}`
-                : `${lead}${quote}`
-          );
-
-        /*
-         * Mid-sentence comma-delimited vocative:
-         * "Come on, Marquise, you know better."
-         */
-        text =
-          text.replace(
-            new RegExp(
-              `([,;:—-]\\s*)(?:${escaped})(\\s*[,;:—-]\\s*)`,
-              "gi"
-            ),
-            (_m, lead, tail) =>
-              replacement
-                ? `${lead}${replacement}${tail}`
-                : `${lead}`
-          );
-
-        /*
-         * Trailing vocative:
-         * "... over to your turf, Marquise."
-         */
-        text =
-          text.replace(
-            new RegExp(
-              `([,;:—-]\\s*)(?:${escaped})(?=\\s*[,;:!?.”’"']*(?:$|\\n))`,
-              "gi"
-            ),
-            (_m, lead) =>
-              replacement
-                ? `${lead}${replacement}`
-                : ""
-          );
-      }
-    );
-
-  return text
-    .replace(
-      /^[\s,;:—-]+/,
-      ""
-    )
-    .replace(
-      /\s+([,.!?;:])/g,
-      "$1"
-    )
-    .replace(
-      / {2,}/g,
-      " "
-    )
-    .trim();
-}
-
 function preferredDirectAddressForCharacter(w, actorId, targetId) {
   const target = charById(w, targetId);
   if (!target) return "";
@@ -21855,19 +15350,6 @@ function sanitizeWrongCharacterVocative(w, actorId, targetId, value) {
 function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
   let text = sanitizeIncorrectSenseiAddress(w, actorId, targetId, value);
   text = sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, text);
-
-  /*
-   * Connections-owned pet names are person-specific too.
-   * This runs before generic wrong-character nickname cleanup because these
-   * aliases may exist only inside SELF's relationship row, not in Nickname.
-   */
-  text = sanitizeRelationshipSpecificAddressLeak(
-    w,
-    actorId,
-    targetId,
-    text
-  );
-
   text = sanitizeWrongCharacterVocative(w, actorId, targetId, text);
   text = sanitizeOrientationIncompatibleRomanceText(w, actorId, targetId, text);
   text = sanitizeDisallowedFlirtText(w, actorId, targetId, text);
@@ -21938,11 +15420,7 @@ function sanitizePhoneDm(
         .trim();
   }
 
-  return applySocialOwnedSpeechStyle(
-    w,
-    botId,
-    text
-  );
+  return text;
 }
 
 
@@ -22139,53 +15617,17 @@ TELEFONOS CHAT VALÓSÁGELLENŐRZÉS:
    amit iránta éreznek. Ettől lehet egyoldalú a vonzalom. */
 function bondLines(w, id, includeHidden) {
   const out = [];
-  const relationLang = worldLanguage(w);
-
   allSubjects(w).forEach((o) => {
     if (o.id === id || !linked(w, id, o.id)) return;
-
     const mine = getRel(w, id, o.id);
     const theirs = getRel(w, o.id, id);
     const bond = mine.bond || mine.type || "";
-
-    let line =
-      `${o.name}${bond
-        ? ` (${localizedBond(bond, relationLang)}${mine.fixed ? (relationLang === "en" ? ", fact" : ", tény") : ""})`
-        : ""}: ${mine.score}`;
-
-    if (mine.mood) {
-      line += ` — ${cut(
-        localizedRelationshipDisplayText(
-          mine.mood,
-          relationLang
-        ),
-        40
-      )}`;
-    }
-
-    if (includeHidden && mine.hidden) {
-      line += ` | ${relationLang === "en" ? "hidden" : "titkon"}: ${cut(
-        localizedRelationshipDisplayText(
-          mine.hidden,
-          relationLang
-        ),
-        90
-      )}`;
-    }
-
-    if (includeHidden && theirs.mood) {
-      line += ` | ${relationLang === "en" ? "they feel" : "ő viszont"}: ${cut(
-        localizedRelationshipDisplayText(
-          theirs.mood,
-          relationLang
-        ),
-        40
-      )}`;
-    }
-
+    let line = `${o.name}${bond ? ` (${localizedBond(bond, worldLanguage(w))}${mine.fixed ? (worldLanguage(w) === "en" ? ", fact" : ", tény") : ""})` : ""}: ${mine.score}`;
+    if (mine.mood) line += ` — ${cut(mine.mood, 40)}`;
+    if (includeHidden && mine.hidden) line += ` | ${worldLanguage(w) === "en" ? "hidden" : "titkon"}: ${cut(mine.hidden, 70)}`;
+    if (includeHidden && theirs.mood) line += ` | ${worldLanguage(w) === "en" ? "they feel" : "ő viszont"}: ${cut(theirs.mood, 40)}`;
     out.push(line);
   });
-
   return out.slice(0, 8);
 }
 
@@ -22247,19 +15689,6 @@ function recentStructuredWorldLines(w, limit = 6) {
   return rows;
 }
 
-function worldIdentityCanon(w) {
-  if (!w) return "";
-  const rows = [
-    ...(w.chars || []).filter(Boolean).map((c) => {
-      const faction = characterFactionIdentityCard(c) || "classification unknown";
-      return `${c.name} [${c.id}] — ${faction}`;
-    }),
-  ];
-  return rows.length
-    ? `\nWORLD IDENTITY / AFFILIATION CANON — HARD FACTS:\n${rows.join("\n")}\n- These affiliation/dojo identities are authoritative. Mentioning a rival dojo in backstory does NOT change a character's own dojo.\n- Characters recognize the established dojo/organization of other named world characters from this canon.\n`
-    : "";
-}
-
 function worldContext(w, ids, deep, observerId, contextOptions = {}) {
   const focus = ids && ids.length ? ids : null;
   let cast = (w.chars || []).filter((c) => !focus || focus.indexOf(c.id) >= 0);
@@ -22268,7 +15697,6 @@ function worldContext(w, ids, deep, observerId, contextOptions = {}) {
   const includePlayer = contextOptions.includePlayer !== false;
   const includeRecentWorld = contextOptions.includeRecentWorld !== false;
   const socialScope = Boolean(contextOptions.socialScope);
-  const agentPrivacyScope = Boolean(contextOptions.agentPrivacyScope);
 
   const knownPeople = [
     ...(includePlayer && w.player ? [w.player] : []),
@@ -22299,29 +15727,9 @@ function worldContext(w, ids, deep, observerId, contextOptions = {}) {
       const A = charById(w, x), B = charById(w, y);
       if (!A || !B) return;
       const bond = r.bond || r.type || "";
-      const relationLang =
-        worldLanguage(
-          w,
-          observerId || w.meId
-        );
-
       rels.push(`${A.name} → ${B.name}: ${observerId ? r.score : relType(r.score)}` +
-        (observerId && r.mood
-          ? ` — ${cut(
-              localizedRelationshipDisplayText(
-                r.mood,
-                relationLang
-              ),
-              40
-            )}`
-          : "") +
-        (bond
-          ? (
-              r.fixed
-                ? ` | ${localizedBond(bond, relationLang)} (${relationLang === "en" ? "fact" : "tény"})`
-                : ` | ${localizedBond(bond, relationLang)}`
-            )
-          : ""));
+        (observerId && r.mood ? ` — ${cut(r.mood, 40)}` : "") +
+        (bond ? (r.fixed ? ` | ${localizedBond(bond, worldLanguage(w, observerId || w.meId))} (${worldLanguage(w, observerId || w.meId) === "en" ? "fact" : "tény"})` : ` | ${localizedBond(bond, worldLanguage(w, observerId || w.meId))}`) : ""));
     });
   }
 
@@ -22354,24 +15762,16 @@ ${tt(
         "Ha egy jelenet úgy folytatódna, hogy neki kellene lépnie, állj meg ott, és hagyd rá a döntést.",
         "If the scene would require the player's move next, stop there and leave the decision to them."
       )}
-${agentPrivacyScope
-        ? `${tt(
-            "MÁSIK KARAKTER REFERENCIA-PROFILJA — TÉNYEK RÓLA, NEM STÍLUSFORRÁS SELF SZÁMÁRA.",
-            "OTHER CHARACTER REFERENCE PROFILE — FACTS ABOUT THEM, NEVER A STYLE SOURCE FOR SELF."
-          )}
-${JSON.stringify(publicBasicCharacterProfileForAgent(w, w.player))}`
-        : (
-            deep
-              ? deepBrief(w, w.player, true, observerId)
-              : sheet(
-                  w.player,
-                  w,
-                  false,
-                  true,
-                  observerId && observerId !== w.player.id
-                    ? "private_no_connections"
-                    : "private"
-                )
+${deep
+        ? deepBrief(w, w.player, true, observerId)
+        : sheet(
+            w.player,
+            w,
+            false,
+            true,
+            observerId && observerId !== w.player.id
+              ? "private_no_connections"
+              : "private"
           )}`
     : tt(
         "JÁTÉKOS-KONTEXTUS: ebben a lokális social feladatban a játékos nincs benne a poszt/thread releváns szereplői között. A profilját és privát kánonját szándékosan nem kapod meg. NE hozd be őt témának.",
@@ -22401,17 +15801,11 @@ ${playerContextBlock}
 ${tt("A VILÁG TELJES NÉVSORA — RAJTUK KÍVÜL SENKI NEM LÉTEZIK", "FULL WORLD ROSTER — NO ONE ELSE EXISTS")}: 
 ${roster || "-"}
 
-${worldIdentityCanon(w)}
-
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
 ${cast.map((c) => (
-  agentPrivacyScope
-    ? `${c.name} [${c.id}] — REFERENCE FACTS ABOUT THIS OTHER PERSON; NEVER COPY THEIR STYLE/PERSONALITY INTO SELF: ${JSON.stringify(publicBasicCharacterProfileForAgent(w, c))}`
-    : (
-        socialScope
-          ? `${c.name} [${c.id}] — ${characterFactionIdentityCard(c) || "classification unknown"}`
-          : (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId && observerId !== c.id ? "private_no_connections" : "private"))
-      )
+  socialScope
+    ? `${c.name} [${c.id}] — ${characterFactionIdentityCard(c) || "classification unknown"}`
+    : (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId && observerId !== c.id ? "private_no_connections" : "private"))
 )).join("\n") || "-"}
 ${!observerId && deep && !socialScope ? multiActorPerformanceContext(w, cast.map((c) => c.id)) : ""}
 ${knownCtx.length ? `
@@ -22460,11 +15854,9 @@ VÉGREHAJTÁSI ELSŐBBSÉG — HA KÉT SZABÁLY LÁTSZÓLAG ÜTKÖZIK:
 PÉLDA A FILTERRE: egy szarkasztikus karakter a legjobb barátjával lehet csípős, de a csípősség bizalmas/szeretetteljes marad; egy zárkózott karakter lehet nagyon lojális anélkül, hogy nyálas lenne; egy nyers karakter lehet őszinte anélkül, hogy ok nélkül megalázó lenne.
 
 KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
-- A rendszer-motor több karakter külön, lezárt SELF-adatlapját is láthatja ugyanabban a kérésben. EZ NEM KÖZÖS SZEMÉLYISÉGPOOL: minden Personality/Traits/Speech/Voice mező kizárólag annak az ID-nak a stílusát és viselkedését formálhatja, akihez tartozik.
-- CROSS-CHARACTER STYLE CONTAMINATION TILOS: A karakter soha ne vegye át B karakter szarkazmusát, CAPS LOCKját, szlengjét, félelmét, kedvencét, traumáját, agresszióját, formalitását vagy más személyiség-/beszédvonását csak azért, mert B lapja ugyanabban a promptban szerepel.
-- Másokról kapott név, becenév, születés/kor, foglalkozás, szerep/dojo, kinézet, bio, történet/backstory és Extra/Other Information TUDÁS RÓLUK. Ezekre reagálhat, hivatkozhat, emlékezhet — de SOHA nem alkalmazhatja őket saját magára.
-- FONTOS TUDÁSHATÁR: más karakter Personality/Traits/Speech/Voice/Goals/Fears/Likes/Secrets/private Connections mezője nem válik automatikusan más szereplő tudásává vagy stílusává.
-- Saját magáról viszont minden karakter teljes adatlapja aktív kánon, és a SAJÁT Speech/Voice formai szabályait ténylegesen követni kell.
+- A rendszer-motor a promptban szereplő karakterek TELJES adatlapját látja. Ez azért van, hogy mindegyikük 100%-osan karakterhű legyen.
+- FONTOS TUDÁSHATÁR: attól, hogy TE mint engine látod minden karakter teljes adatlapját, az egyik SZEREPLŐ nem tudhat automatikusan a másik titkairól, félelmeiről, belső céljairól vagy rejtett múltjáról. Egy karakter csak azt használhatja tudásként másokról, amit nyilvánosan láthatott, személyesen megtudott, átélt, neki elmondtak, vagy saját emléke/feltételezése alátámaszt.
+- Saját magáról viszont minden karakter teljes adatlapja aktív kánon.
 - A karakterlap TELJES tartalma viselkedési specifikáció, nem háttérdísz.
 - EMLÉK-GROUNDING HARD RULE: konkrét múltbeli epizódot csak akkor állíthatsz megtörténtnek, ha azt a saját karakterlap explicit leírja VAGY a tárolt, tényleges social/chat/RP előzmény bizonyítja. Kapcsolatcímkéből, hangulatból, crushból, best-friend státuszból vagy „közös múlt” általános tényéből ne gyárts új anekdotát. Ha nincs bizonyíték, maradj általános („régóta ismerlek”), vagy ne hivatkozz múltra.
 - KÁNON-KERESZTHIVATKOZÁS: ugyanaz a kapcsolat/rang/szerep több mezőben is szerepelhet. Ha a történet, extra infó, rang, szervezet, kapcsolat vagy más adatlapmező ugyanazt a tényt erősíti (pl. valaki a karakter SAJÁT senseie), azt erős kánonként kezeld, ne hagyd elveszni egyetlen mezőben.
@@ -22630,7 +16022,6 @@ A KAPCSOLAT EGYIRÁNYÚ — EZ FONTOS
 - VÁLTOZÓ VISZONY (barát, ellenség, crush, exek stb.) fejlődhet, de a KIINDULÓ kapcsolat ERŐS ANCHOR, nem eldobható címke.
 - Egy komment, like, kínos vicc, féltékeny pillanat vagy egyetlen vita NEM változtathat Legjobb barátokat Riválissá/Ellenséggé, és egy ellenséget sem tehet azonnal baráttá.
 - Nagy bond-váltáshoz több külön jelentős esemény, felhalmozódó score-változás és egyértelmű történeti ív kell. A mood gyorsan változhat, a bond sokkal lassabban.
-- ROMANTIKUS MÉRFÖLDKŐ NEM UGORHAT ÁT FOKOZATOT: kialakuló Crush → kölcsönössé váló Crush → Dating/Járnak → Engaged/Jegyesek → Spouse/Házastárs. Egyetlen komment, DM, bók, flört vagy jó jelenet önmagában nem léptethet át több ilyen státuszt; a hard relationship engine ezt akkor is blokkolja, ha te tévesen javasolnád.
 - Ha a SAJÁT Connections mező pontosan erre a célpontra Best friend / Close friend / Friend kapcsolatot ír, az erősebb, mint az általános dojo-rivalizálás vagy más emberek kapcsolati szövege.
 - Példák: Ismerős → Barát → Közeli barát → Legjobb barát; Barát → Rivális/Ellenség; Rivális → Barát. Csak akkor válts, ha a történet ezt ténylegesen kiérdemelte.
 - KIVÉTEL: rokoni/családi bond SOHA nem változik más bonddá. Anya, apa, testvér, unokatestvér stb. mindig ugyanaz a családi tény marad; csak a score, mood és why változik.
@@ -22743,7 +16134,7 @@ CHARACTER FIDELITY — ABSOLUTE PRIORITY:
 - PRIVATE KNOWLEDGE BOUNDARY: one character's Connections field never becomes another character's knowledge automatically. Another character may know that person/fact only if it also exists in their own canon or they actually learned it during play and retained it in memory.
 - CROSS-REFERENCE CANON ACROSS FIELDS: the same relationship, rank or role may appear in history, extra info, organizations, relationships, rank or other fields. Repeated/consistent evidence is strong canon. Do not lose a fact just because it is not stored in one preferred field.
 - HIERARCHY AND ADDRESS ARE RELATIONSHIP-SPECIFIC: if someone is THIS character's own sensei, default direct address is "Sensei + surname" (for example, Sensei Silver), not the sensei's casual first name, unless explicit canon establishes another private address. Do NOT automatically call somebody else's sensei "Sensei". A dangerous/high-authority sensei should not receive casual consequence-free disrespect from non-sensei characters without strong canon/current cause; another sensei is a peer authority and may challenge or disrespect them if canon supports it.
-- NAME / NICKNAME OWNERSHIP IS ABSOLUTE: every identifier belongs to the exact person whose character-sheet field or Connections row owns it — full name, first name, surname, Nickname, @handle AND relationship-specific pet names/forms of address. Never address a different person using somebody else's identifier. A pet name written inside SELF's Connections row belongs ONLY to the person named in that SAME row; never translate, anglicize, shorten or reinterpret it and attach it to another target. Resolve the addressee exclusively from CURRENT TARGET identity + SELF's Connections row about THAT SAME target. If CURRENT TARGET has no established form of address, use their real first name / valid title or omit the vocative instead of borrowing one from another relationship.
+- NAME / NICKNAME OWNERSHIP IS ABSOLUTE: every SELF identifier belongs to THAT character — full name, first name, surname, nickname and @handle. Never address a different person using SELF's own name, surname, nickname, handle, or an invented shortening/pet-form derived from SELF's identity. Resolve the addressee exclusively from TARGET identity fields. If TARGET has no established nickname, use TARGET's real first name / valid title or omit the vocative instead of inventing one.
 - Reconcile every response with the ENTIRE relevant character sheet: identity, occupation/job/school, role, rank/title, dojo, organization/affiliation/side, personality, traits, speech style, full history, secrets, fears, goals, likes, abilities/combat skills, target-specific Connections, dynamic relationships and current memories.
 - Occupation and faction are NOT decoration. A waitress, student, doctor, sensei, fighter, criminal, CEO, soldier etc. should know, post about, schedule around and behave according to that life. A Cobra Kai / Iron Dragons / Miyagi-side / Wasabi character must know which side THEY personally belong to and distinguish that from rivals merely mentioned in their history.
 - HUMAN CONVERSATIONAL CONTINUITY: identify what the other person just did socially — compliment, question, joke, invitation, apology, provocation, flirting, support — and respond to THAT act. A dark, dominant, sarcastic or rude character may react smugly, awkwardly, teasingly, suspiciously or tersely to praise, but must not manufacture a random "stop texting / leave me alone" boundary with no current reason.
@@ -23207,156 +16598,6 @@ async function analyzeImageDataUrl(
     .slice(0, 700);
 }
 
-async function analyzeSocialPostImageInput(
-  imageInput
-) {
-  const raw =
-    String(
-      imageInput || ""
-    ).trim();
-
-  if (
-    !raw ||
-    (
-      !isInlineImageData(
-        raw
-      ) &&
-      !/^https:\/\//i.test(
-        raw
-      )
-    )
-  ) {
-    return "";
-  }
-
-  const vision =
-    await analyzeImageDataUrl(
-      raw,
-      `Analyze this social-media image for later in-world post captions and comments.
-
-Describe ONLY what is visibly supported by the pixels, in 2-4 concise sentences.
-
-Prioritize useful social details:
-- how many people are visible;
-- selfie / mirror selfie / group photo / candid / posed photo / scenery / object photo;
-- pose, activity and camera framing;
-- visible clothing/outfit, accessories, hairstyle and makeup when clearly visible;
-- setting/location type and important background details;
-- lighting/time-of-day cues;
-- important visible objects;
-- the overall visible vibe or occasion cue (for example party-ready, training, beach day, formal event) ONLY when visually supported.
-
-Be specific enough that different fictional characters could react to different concrete details.
-Do NOT identify a real person by name.
-Do NOT infer fictional identities from pixels.
-Do NOT invent relationships, hidden events, off-camera people, motives or unseen actions.`
-    );
-
-  return String(
-    vision || ""
-  )
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(
-      0,
-      1000
-    );
-}
-
-function composePostImageDescriptionFromVision(
-  post,
-  vision
-) {
-  const visible =
-    String(
-      vision || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!visible) {
-    return String(
-      post &&
-      post.imageDescription ||
-      ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  const people =
-    String(
-      post &&
-      post.imagePeopleNote ||
-      ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  const manual =
-    String(
-      post &&
-      post.imageManualNote ||
-      ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  /* Album helper text stays private even after a later vision refresh. AI album
-     posts are marked with sourceAlbumItemId; only confirmed people + actual
-     pixel-grounded vision become public imageDescription for those posts. */
-  const privateAlbumHelper = Boolean(post && post.sourceAlbumItemId);
-
-  if (people || (manual && !privateAlbumHelper)) {
-    return [
-      people
-        ? `USER-CONFIRMED PEOPLE IN IMAGE: ${people}`
-        : "",
-      manual && !privateAlbumHelper
-        ? `USER-CONFIRMED IMAGE CONTEXT: ${manual}`
-        : "",
-      `VISIBLE IMAGE CONTENT: ${visible}`,
-    ]
-      .filter(Boolean)
-      .join(" | ")
-      .slice(
-        0,
-        1500
-      );
-  }
-
-  const existing =
-    String(
-      post &&
-      post.imageDescription ||
-      ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (
-    /USER-CONFIRMED (?:PEOPLE IN IMAGE|IMAGE CONTEXT):/i.test(
-      existing
-    )
-  ) {
-    const withoutOldVisible =
-      existing
-        .replace(
-          /\s*\|\s*VISIBLE IMAGE CONTENT:.*$/i,
-          ""
-        )
-        .trim();
-
-    return `${withoutOldVisible}${withoutOldVisible ? " | " : ""}VISIBLE IMAGE CONTENT: ${visible}`
-      .slice(
-        0,
-        1500
-      );
-  }
-
-  return visible;
-}
-
 async function requestAiImageProxy(payload) {
   const paths = ["/ai/image", "/ai/images", "/ai/generate-image"];
   const urls = paths.map(backendUrl);
@@ -23580,7 +16821,7 @@ async function generateAiChatSnap(
   )
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 1400);
+    .slice(0, 500);
 
   if (!prompt) return null;
 
@@ -23777,74 +17018,6 @@ async function serverSaveWorld(world) {
     }),
   });
 }
-
-function acceptedWorldFromServerSave(
-  snapshot,
-  saved
-) {
-  if (!snapshot || !saved) {
-    return null;
-  }
-
-  if (
-    saved.world &&
-    typeof saved.world === "object"
-  ) {
-    return saved.world;
-  }
-
-  /*
-   * Successful hot saves intentionally return only:
-   *   { ok, meId, syncRev, rev }
-   * The client already owns the accepted snapshot; apply the server-owned
-   * revision numbers to that exact snapshot instead of waiting for a world echo.
-   */
-  if (
-    saved.ok === true &&
-    Number.isFinite(
-      Number(
-        saved.syncRev
-      )
-    )
-  ) {
-    const accepted =
-      cloneWorldState(
-        snapshot
-      );
-
-    accepted.syncRev =
-      Math.max(
-        0,
-        Math.floor(
-          Number(
-            saved.syncRev
-          ) || 0
-        )
-      );
-
-    if (
-      Number.isFinite(
-        Number(
-          saved.rev
-        )
-      )
-    ) {
-      accepted.rev =
-        Math.max(
-          0,
-          Math.floor(
-            Number(
-              saved.rev
-            ) || 0
-          )
-        );
-    }
-
-    return accepted;
-  }
-
-  return null;
-}
 function migrate(w) {
   if (!w || !w.universe) return w;
 
@@ -23888,7 +17061,7 @@ function migrate(w) {
       if (a > 0 && a < 120) c.birth = String(y - a);
     }
   };
-  ["rels", "chats", "mems", "accounts", "players", "deleted", "notify", "charMemory", "userSettings", "images", "playerProgression"].forEach((k) => { if (!w[k]) w[k] = {}; });
+  ["rels", "chats", "mems", "accounts", "players", "deleted", "notify", "charMemory", "userSettings", "images"].forEach((k) => { if (!w[k]) w[k] = {}; });
   ["posts", "log", "scenes", "groups", "notes", "inventory", "diary"].forEach((k) => { if (!w[k]) w[k] = []; });
 
 
@@ -24124,13 +17297,6 @@ function migrate(w) {
     if (p && !p.imageId) p.imageId = imageIdOf(p.image);
     noteImage(p && (p.imageId ? imageRef(p.imageId) : p.image), { category: "post", ownerCharacterId: p && p.authorId });
   });
-
-  /* New progression is persistent and old saves inherit XP from their existing
-     structured social history exactly once. This does not create new events. */
-  Object.keys(w.players || {}).forEach((playerId) => {
-    initializePlayerProgressionFromHistory(w, playerId);
-  });
-
   return w;
 }
 
@@ -24349,80 +17515,6 @@ function mergeWorlds(remote, local) {
     delete only.extras;
     return only;
   }
-
-  /*
-   * FRESH-RUN HARD BOUNDARY:
-   *
-   * A Restart World / newly isolated world increments historyEpoch. Normal
-   * same-run reconciliation is intentionally union-based, but history from an
-   * older run must NEVER be unioned back into the fresh run.
-   *
-   * The higher epoch wins as a complete gameplay snapshot. Equal epochs keep
-   * the original merge behavior below completely unchanged.
-   */
-  const remoteHistoryEpoch =
-    Math.max(
-      0,
-      Math.floor(
-        Number(
-          remote &&
-          remote.historyEpoch
-        ) || 0
-      )
-    );
-
-  const localHistoryEpoch =
-    Math.max(
-      0,
-      Math.floor(
-        Number(
-          local &&
-          local.historyEpoch
-        ) || 0
-      )
-    );
-
-  if (
-    remoteHistoryEpoch !==
-    localHistoryEpoch
-  ) {
-    const winner =
-      localHistoryEpoch >
-      remoteHistoryEpoch
-        ? local
-        : remote;
-
-    const out =
-      cloneWorldState(
-        winner
-      );
-
-    delete out.extras;
-
-    /*
-     * `remote` is the authoritative server snapshot in reconciliation paths.
-     * Carry only its sync revision so the fresh winner can be saved cleanly.
-     */
-    out.syncRev =
-      worldSyncRev(
-        remote
-      );
-
-    out.rev =
-      Math.max(
-        Number(remote.rev) || 0,
-        Number(local && local.rev) || 0
-      ) + 1;
-
-    out.historyEpoch =
-      Math.max(
-        remoteHistoryEpoch,
-        localHistoryEpoch
-      );
-
-    return out;
-  }
-
   const out = { ...local };
   delete out.extras;
   out.rev = Math.max(remote.rev || 0, local.rev || 0) + 1;
@@ -24431,15 +17523,11 @@ function mergeWorlds(remote, local) {
   out.accounts = { ...(remote.accounts || {}), ...(local.accounts || {}) };
   out.players = mergeMapById(remote.players, local.players);
   out.userSettings = { ...(remote.userSettings || {}), ...(local.userSettings || {}) };
-  out.playerProgression = mergePlayerProgressionMaps(remote.playerProgression || {}, local.playerProgression || {});
   out.images = { ...(remote.images || {}), ...(local.images || {}) };
 
   // Az összevont vagy törölt profilok nem jöhetnek vissza a másik gépről.
   Object.keys(out.deleted).forEach((id) => { delete out.players[id]; delete out.accounts[id]; });
-  Object.keys(out.deleted).forEach((id) => {
-    delete out.userSettings[id];
-    delete out.playerProgression[id];
-  });
+  Object.keys(out.deleted).forEach((id) => { delete out.userSettings[id]; });
 
   out.chars = mergeById(remote.chars, local.chars, out.deleted);
   out.universe = newer(local.universe, remote.universe);
@@ -24628,7 +17716,6 @@ function mergeWorlds(remote, local) {
       roleplayRecent: mergeKnowledgeItems(base.roleplayRecent, mine.roleplayRecent, "roleplay_recent", 40),
       roleplayLongTerm: mergeKnowledgeItems(base.roleplayLongTerm, mine.roleplayLongTerm, "roleplay_long", 70),
       roleplayShared: shared,
-      adaptiveProfiles: mergeAdaptiveProfiles(base.adaptiveProfiles || {}, mine.adaptiveProfiles || {}),
       selfState: {
         mood: String(newerState.mood || ""),
         intent: String(newerState.intent || ""),
@@ -24663,7 +17750,7 @@ function mergeWorlds(remote, local) {
   [...(remoteGp.rumors || []), ...(localGp.rumors || [])].forEach((r) => {
     if (!r || !r.id) return;
     const cur = gpById[r.id];
-    if (!cur) { gpById[r.id] = cloneWorldState(r); return; }
+    if (!cur) { gpById[r.id] = JSON.parse(JSON.stringify(r)); return; }
     const holders = { ...(cur.holders || {}), ...(r.holders || {}) };
     const echoedBy = { ...(cur.echoedBy || {}), ...(r.echoedBy || {}) };
     gpById[r.id] = { ...(Number(r.updatedAt || 0) >= Number(cur.updatedAt || 0) ? cur : r), ...(Number(r.updatedAt || 0) >= Number(cur.updatedAt || 0) ? r : cur), holders, echoedBy,
@@ -24713,7 +17800,7 @@ async function saveWorld(w) {
  * semmilyen régi böngészős világot az online állapotba.
  * PostgreSQL az egyetlen authoritative world online.
  */
-async function saveWorldMerged(local, alreadyDetached = false) {
+async function saveWorldMerged(local) {
   if (!local || !local.code) {
     return {
       world: local,
@@ -24721,13 +17808,10 @@ async function saveWorldMerged(local, alreadyDetached = false) {
     };
   }
 
-  /* Autosave already creates a detached snapshot. Re-cloning that ~MB-sized
-     object before the local backup only burns main-thread time; other callers
-     keep the original defensive clone. */
   const snapshot =
-    alreadyDetached
-      ? local
-      : cloneWorldState(local);
+    JSON.parse(
+      JSON.stringify(local)
+    );
 
   let snapshotOk = false;
   let primaryOk = false;
@@ -25205,168 +18289,6 @@ function ensureStorySettings(w) {
   return w.storySettings;
 }
 
-const DYNAMIC_STORY_BOOK_VERSION = 1;
-
-function characterCanObserveSocialEvent(w, event, actorId) {
-  if (!w || !event || !actorId || !charById(w, actorId)) return false;
-  const actor = String(actorId);
-  const source = String(event.actorId || "");
-  const targets = Array.isArray(event.targetIds) ? event.targetIds.map(String) : [];
-  const witnesses = Array.isArray(event.witnessIds) ? event.witnessIds.map(String) : [];
-  const directlyInvolved = source === actor || targets.includes(actor) || witnesses.includes(actor);
-  const visibility = String(event.visibility || "public");
-
-  if (visibility === "private" || visibility === "group" || visibility === "limited") {
-    return directlyInvolved;
-  }
-  if (visibility === "system") return false;
-  if (directlyInvolved) return true;
-
-  /* Public does not mean omniscient. Feed relevance is strongest through an
-     actual follow/relationship edge; very high-importance public events can
-     still break out into the wider network like a viral post. */
-  if (source && source !== actor && (isFollowing(w, actor, source) || linked(w, actor, source))) {
-    return true;
-  }
-  if (targets.some((id) => id && id !== actor && (isFollowing(w, actor, id) || linked(w, actor, id)))) {
-    return true;
-  }
-  return Number(event.importance || 0) >= 70;
-}
-
-function liveSocialNetworkContextCard(w, actorId, limit = 12) {
-  if (!w || !actorId) return "";
-  const cutoff = now() - 96 * 3600e3;
-  const rows = (w.socialEvents || [])
-    .filter((event) => event && Number(event.ts || 0) >= cutoff)
-    .filter((event) => characterCanObserveSocialEvent(w, event, actorId))
-    .slice(0, Math.max(1, Math.min(20, Number(limit) || 12)))
-    .map((event) => {
-      const source = event.actorId ? nameOfIn(w, event.actorId) : "world";
-      const targets = (event.targetIds || []).map((id) => nameOfIn(w, id)).filter(Boolean);
-      const targetPart = targets.length ? ` -> ${targets.join(", ")}` : "";
-      const body = cut(String(event.text || "").replace(/\s+/g, " ").trim(), 260);
-      return `- ${String(event.type || "event")}: ${source}${targetPart}${body ? ` — ${body}` : ""}`;
-    });
-
-  return `LIVE SOCIAL NETWORK CONTEXT — ONLY EVENTS THIS CHARACTER CAN REALISTICALLY KNOW:\n${rows.join("\n") || "- no recent relevant public/shared event"}\n- Public feed knowledge follows actual social proximity (follow/relationship/relevance) rather than global omniscience.\n- Private/group/limited information is visible only when this character was actually involved or a witness.`;
-}
-
-function ensureDynamicStoryBook(w) {
-  if (!w) return null;
-  ensureStorySettings(w);
-  const raw = w.storySettings.dynamicStory;
-  const book = raw && typeof raw === "object" && !Array.isArray(raw)
-    ? raw
-    : { version: DYNAMIC_STORY_BOOK_VERSION, chapters: [], seenEventIds: [], updatedAt: 0 };
-
-  book.version = DYNAMIC_STORY_BOOK_VERSION;
-  book.chapters = Array.isArray(book.chapters) ? book.chapters.filter(Boolean).slice(-24) : [];
-  book.seenEventIds = [...new Set((Array.isArray(book.seenEventIds) ? book.seenEventIds : []).filter(Boolean).map(String))].slice(-1200);
-  book.updatedAt = Math.max(0, Number(book.updatedAt) || 0);
-
-  if (!book.chapters.length) {
-    book.chapters.push({
-      id: `chapter_${uid()}`,
-      number: 1,
-      title: worldLanguage(w, w.meId) === "en" ? "Chapter 1" : "1. fejezet",
-      startedAt: now(),
-      updatedAt: now(),
-      beats: [],
-    });
-  }
-
-  book.chapters.forEach((chapter, index) => {
-    chapter.number = Math.max(1, Number(chapter.number) || index + 1);
-    chapter.title = String(chapter.title || (worldLanguage(w, w.meId) === "en" ? `Chapter ${chapter.number}` : `${chapter.number}. fejezet`));
-    chapter.startedAt = Math.max(0, Number(chapter.startedAt) || 0);
-    chapter.updatedAt = Math.max(chapter.startedAt, Number(chapter.updatedAt) || 0);
-    chapter.beats = Array.isArray(chapter.beats) ? chapter.beats.filter(Boolean).slice(-40) : [];
-  });
-
-  w.storySettings.dynamicStory = book;
-  return book;
-}
-
-function dynamicStoryEventIsMeaningful(entry) {
-  if (!entry || !String(entry.text || "").trim()) return false;
-  return new Set([
-    "post", "comment", "reply", "repost", "follow", "dm-message", "group-message",
-    "note", "note-react", "popup-choice", "roleplay-initiated", "roleplay-event",
-    "roleplay-summary", "gossip-story", "rumor-evolution"
-  ]).has(String(entry.type || ""));
-}
-
-function recordDynamicStoryBeatFromSocialEvent(w, entry) {
-  if (!w || !entry || !dynamicStoryEventIsMeaningful(entry)) return null;
-  const book = ensureDynamicStoryBook(w);
-  if (!book) return null;
-
-  const eventKey = String(entry.id || entry.refId || "");
-  if (eventKey && book.seenEventIds.includes(eventKey)) return null;
-
-  let chapter = book.chapters[book.chapters.length - 1];
-  const beats = Array.isArray(chapter.beats) ? chapter.beats : [];
-  const lastBeat = beats[beats.length - 1] || null;
-  const timeGap = lastBeat ? Math.max(0, Number(entry.ts || 0) - Number(lastBeat.ts || 0)) : 0;
-  const majorTurn =
-    ["popup-choice", "roleplay-summary", "roleplay-event"].includes(String(entry.type || "")) ||
-    Number(entry.importance || 0) >= 65 || Number(entry.drama || 0) >= 70 || Number(entry.romance || 0) >= 75;
-  const shouldOpenNext = beats.length >= 24 || (beats.length >= 9 && (majorTurn || timeGap >= 12 * 3600e3));
-
-  if (shouldOpenNext) {
-    const number = Math.max(1, Number(chapter.number) || book.chapters.length) + 1;
-    chapter = {
-      id: `chapter_${uid()}`,
-      number,
-      title: worldLanguage(w, w.meId) === "en" ? `Chapter ${number}` : `${number}. fejezet`,
-      startedAt: Number(entry.ts) || now(),
-      updatedAt: Number(entry.ts) || now(),
-      beats: [],
-    };
-    book.chapters.push(chapter);
-    book.chapters = book.chapters.slice(-24);
-  }
-
-  const beat = {
-    id: eventKey || `beat_${uid()}`,
-    ts: Number(entry.ts) || now(),
-    type: String(entry.type || "event"),
-    actorId: String(entry.actorId || ""),
-    targetIds: Array.isArray(entry.targetIds) ? entry.targetIds.map(String).slice(0, 10) : [],
-    witnessIds: Array.isArray(entry.witnessIds) ? entry.witnessIds.map(String).slice(0, 12) : [],
-    visibility: String(entry.visibility || "public"),
-    importance: Number(entry.importance || 0),
-    drama: Number(entry.drama || 0),
-    romance: Number(entry.romance || 0),
-    text: cut(String(entry.text || "").replace(/\s+/g, " ").trim(), 360),
-  };
-
-  chapter.beats.push(beat);
-  chapter.beats = chapter.beats.slice(-40);
-  chapter.updatedAt = beat.ts;
-  if (eventKey) book.seenEventIds.push(eventKey);
-  book.seenEventIds = [...new Set(book.seenEventIds)].slice(-1200);
-  book.updatedAt = beat.ts;
-  return beat;
-}
-
-function dynamicStoryChapterCard(w, actorId) {
-  if (!w || !actorId) return "";
-  const book = ensureDynamicStoryBook(w);
-  if (!book || !book.chapters.length) return "";
-  const chapter = book.chapters[book.chapters.length - 1];
-  const visible = (chapter.beats || [])
-    .filter((beat) => characterCanObserveSocialEvent(w, beat, actorId))
-    .slice(-10)
-    .map((beat) => {
-      const source = beat.actorId ? nameOfIn(w, beat.actorId) : "world";
-      return `- ${String(beat.type || "event")}: ${source}${beat.text ? ` — ${beat.text}` : ""}`;
-    });
-  const en = worldLanguage(w, w.meId) === "en";
-  return `${en ? "DYNAMIC STORY CHAPTER" : "DINAMIKUS TÖRTÉNETFEJEZET"}: ${chapter.title}\n${visible.join("\n") || "-"}\n${en ? "These are accumulated consequences/continuity, not a fixed script. Let the next player decision change what happens next; never write the player's choice for them." : "Ezek felhalmozódott következmények és folytonosság, nem előre rögzített forgatókönyv. A következő játékosi döntés ténylegesen változtathassa meg a történetet; soha ne dönts a játékos helyett."}`;
-}
-
 function storyScenarioText(w, lang) {
   const settings = storySettingsOf(w);
   const preset = storyScenarioById(settings.scenarioId);
@@ -25590,7 +18512,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "99.8";
+const BUILD_VERSION = "v99-performance-canon-cache-feed-tree";
 const WORLD_SCHEMA_VERSION = 97;
 
 /* Fast, safe clone for the large world state. */
@@ -25621,7 +18543,7 @@ const AUTO_DEFAULT = {
   every: Math.max(0.12, LIVE_WORLD_CONTENT_INTERVAL_MS / 60000),
 };
 
-const LIVE_WORLD_MIN_ACTION_GAP_MS = 650;
+const LIVE_WORLD_MIN_ACTION_GAP_MS = 9000;
 
 async function loadAuto() {
   return {
@@ -26282,7 +19204,6 @@ function seedWorld(code) {
       dramaLevel: "balanced",
       elapsedHours: 0,
       lastTimeSkipAt: 0,
-      dynamicStory: { version: 1, chapters: [], seenEventIds: [], updatedAt: 0 },
     },
     chars,
 rels: {},
@@ -26291,7 +19212,6 @@ reposts: [],
 chats: {},
 mems: {},
 charMemory: {},
-playerProgression: {},
 userSettings: {},
 log: [],
 scenes: [],
@@ -26493,7 +19413,6 @@ function emptyWorld(code) {
     dramaLevel: "balanced",
     elapsedHours: 0,
     lastTimeSkipAt: 0,
-    dynamicStory: { version: 1, chapters: [], seenEventIds: [], updatedAt: 0 },
   };
   if (w.gossipSettings) w.gossipSettings.mediaMode = "local";
   return w;
@@ -26962,7 +19881,7 @@ function ensureSocialProfileRow(c) {
   return c;
 }
 
-const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 8;
+const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 2;
 
 function ensureFollowerSystem(w) {
   if (!w || typeof w !== "object") {
@@ -27056,26 +19975,14 @@ function ensureFollowerSystem(w) {
    * Enemy/rival secret-crush eset NEM kerül ide automatikusan;
    * azt az autonóm döntés ritkán külön kezelheti.
    */
-  /*
-   * AI -> AI edges are evaluated before AI -> player edges. socialProfiles()
-   * intentionally starts with the human profile, which previously meant the
-   * small pending-follow queue could be filled by player follows before
-   * friends / dojo mates / teammates ever reached the scheduler.
-   */
-  const relationshipFollowTargets =
-    profiles
-      .slice()
-      .sort((a, b) =>
-        Number(isHuman(w, a && a.id)) -
-        Number(isHuman(w, b && b.id))
-      );
-
   profiles.forEach((actor) => {
-    /*
-     * FOLLOW RELIABILITY: the pending queue cap may limit only queued/weak
-     * follow actions. It must never stop us from evaluating deterministic
-     * strong relationship follows, especially AI -> player.
-     */
+    if (
+      pendingRelationshipAutoFollows >=
+      RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
+    ) {
+      return;
+    }
+
     if (
       !actor ||
       isHuman(w, actor.id) ||
@@ -27084,12 +19991,14 @@ function ensureFollowerSystem(w) {
       return;
     }
 
-    relationshipFollowTargets.forEach((target) => {
-      /*
-       * Do not return early just because the background follow queue is full.
-       * Strong follows are repaired immediately below and do not consume that
-       * queue at all.
-       */
+    profiles.forEach((target) => {
+      if (
+        pendingRelationshipAutoFollows >=
+        RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX
+      ) {
+        return;
+      }
+
       if (
         !target ||
         target.id === actor.id ||
@@ -27129,109 +20038,6 @@ function ensureFollowerSystem(w) {
         target.followers.includes(
           actor.id
         );
-
-      const followBehaviorTier =
-        relationshipFilterTier(
-          effectiveRelationshipForBehavior(
-            w,
-            actor.id,
-            target.id
-          ) || {}
-        );
-
-      const strongImmediateRelationship =
-        !isMediaAccount(w, target.id) &&
-        !["negative", "hostile"].includes(followBehaviorTier) &&
-        ["family", "bond", "relationship-score", "team"].includes(
-          eligibility.mode
-        );
-
-      /*
-       * PLAYER FOLLOW RELIABILITY FIX:
-       * A strong social tie must exist in the follow graph immediately whether
-       * the target is another AI OR the human player. Previously AI -> AI was
-       * repaired immediately but AI -> player still waited in the background
-       * queue, so the player could remain unfollowed indefinitely while friends
-       * and dojo/team mates followed each other correctly.
-       *
-       * This changes only the follow graph. For AI -> player we also preserve
-       * the same visible follow notification + minimal follow ledger row that
-       * setFollowState() would create, without calling recordSocialEvent() here
-       * (that function re-enters ensureFollowerSystem).
-       */
-      if (
-        !alreadyFollowing &&
-        strongImmediateRelationship
-      ) {
-        actor.following = [
-          ...new Set([
-            ...(actor.following || []),
-            target.id,
-          ]),
-        ];
-
-        target.followers = [
-          ...new Set([
-            ...(target.followers || []),
-            actor.id,
-          ]),
-        ];
-
-        if (isHuman(w, target.id)) {
-          const followTs = now();
-
-          if (!Array.isArray(w.socialEvents)) {
-            w.socialEvents = [];
-          }
-
-          w.socialEvents.unshift({
-            id: "se_" + uid(),
-            refId: `${actor.id}:${target.id}:follow:${followTs}`,
-            ts: followTs,
-            type: "follow",
-            actorId: actor.id,
-            targetIds: [target.id],
-            witnessIds: [],
-            visibility: "public",
-            factLevel: "observed",
-            importance: 10,
-            drama: 0,
-            romance: 0,
-            embarrassment: 0,
-            source: "relationship-auto-follow-immediate",
-            text: "Followed a profile.",
-            tags: ["social", "follow"],
-            meta: {
-              followerId: actor.id,
-              targetId: target.id,
-            },
-          });
-          w.socialEvents = w.socialEvents.slice(0, 600);
-
-          pushNote(
-            w,
-            target.id,
-            {
-              icon: "👤",
-              text: sysLangText(
-                w,
-                target.id,
-                `${actor.name} követni kezdett.`,
-                `${actor.name} started following you.`
-              ),
-              link: {
-                type: "char",
-                id: actor.id,
-              },
-            }
-          );
-
-          refreshSocialStatsFor(w, actor.id);
-          refreshSocialStatsFor(w, target.id);
-        }
-
-        return;
-      }
 
       if (
         !alreadyFollowing &&
@@ -27554,10 +20360,6 @@ function followBondWeight(rel) {
     return 34;
   }
 
-  if (/szövetséges|ally|allies/.test(bond)) {
-    return 30;
-  }
-
   if (/osztálytárs|classmate|munkatárs|coworker|szomszéd|neighbor|főnök|boss|beosztott|mentor|tanítvány|student|edző|coach|tanár|teacher/.test(bond)) {
     return 16;
   }
@@ -27640,7 +20442,7 @@ function hasPositiveFollowBond(rel) {
   const bond =
     followBondText(rel);
 
-  return /barát|friend|best friend|close friend|közeli barát|szövetséges|ally|allies|crush|mutual crush|kölcsönös crush|járnak|dating|jegyes|engaged|házastárs|spouse|partner|osztálytárs|classmate|munkatárs|coworker|colleague|szomszéd|neighbor|főnök|boss|beosztott|mentor|tanítvány|student|edző|coach|tanár|teacher|csapattárs|teammate|team mate|team-mate|klubtárs|clubmate|dojo mate|dojótárs|squadmate|squad mate|bandmate|band mate/.test(
+  return /barát|friend|best friend|close friend|közeli barát|crush|mutual crush|kölcsönös crush|járnak|dating|jegyes|engaged|házastárs|spouse|partner|osztálytárs|classmate|munkatárs|coworker|colleague|szomszéd|neighbor|főnök|boss|beosztott|mentor|tanítvány|student|edző|coach|tanár|teacher|csapattárs|teammate|team mate|team-mate|klubtárs|clubmate|dojo mate|dojótárs|squadmate|squad mate|bandmate|band mate/.test(
     bond
   );
 }
@@ -27660,48 +20462,6 @@ function hasFamilyFollowBond(rel) {
   );
 }
 
-function followCommunityToken(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9áéíóöőúüű -]+/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function followCommunityKeys(character) {
-  if (!character) return [];
-
-  const keys = [];
-  const add = (kind, value) => {
-    if (!value) return;
-
-    String(value)
-      .split(/[|,;/]+/)
-      .map(followCommunityToken)
-      .filter((token) =>
-        token.length >= 3 &&
-        !/^(?:none|unknown|n\/?a|nincs|ismeretlen)$/.test(token)
-      )
-      .slice(0, 6)
-      .forEach((token) =>
-        keys.push(`${kind}:${token}`)
-      );
-  };
-
-  add("dojo", character.dojo);
-  add("team", character.team);
-  add("club", character.club);
-  add("school", character.school);
-  add("house", character.house);
-  add("gang", character.gang);
-  add("crew", character.crew);
-  add("organization", character.organization);
-  add("affiliation", character.affiliation);
-  add("faction", character.faction);
-
-  return [...new Set(keys)];
-}
-
 function sameFollowTeamOrFaction(
   actor,
   target
@@ -27716,7 +20476,7 @@ function sameFollowTeamOrFaction(
   const tf =
     factionFlags(target);
 
-  const knownFactionMatch = Boolean(
+  return Boolean(
     (af.pogue && tf.pogue) ||
     (af.kook && tf.kook) ||
     (af.hydra && tf.hydra) ||
@@ -27726,20 +20486,6 @@ function sameFollowTeamOrFaction(
     (af.ironDragons && tf.ironDragons) ||
     (af.wasabi && tf.wasabi)
   );
-
-  if (knownFactionMatch) {
-    return true;
-  }
-
-  const actorCommunities =
-    new Set(
-      followCommunityKeys(actor)
-    );
-
-  return followCommunityKeys(target)
-    .some((key) =>
-      actorCommunities.has(key)
-    );
 }
 
 function opposingFollowFaction(
@@ -27784,7 +20530,6 @@ function aiFollowEligibility(
   const rel = getRel(w, actor.id, target.id);
   const reverse = getRel(w, target.id, actor.id);
   const relScore = Number(rel && rel.score) || 0;
-  const reverseScore = Number(reverse && reverse.score) || 0;
   const secretCrush = hasSecretCrushSignal(rel, actor, target);
   const interactionScore = recentFollowInteractionScore(w, actor.id, target.id);
 
@@ -27800,17 +20545,11 @@ function aiFollowEligibility(
     return { allowed:false, mode:"blocked", reason:"explicit-enemy-or-rival" };
   }
 
-  if (
-    hasPositiveFollowBond(rel) ||
-    (
-      !hasEnemyOrRivalBond(rel) &&
-      hasPositiveFollowBond(reverse)
-    )
-  ) {
+  if (hasPositiveFollowBond(rel)) {
     return { allowed:true, mode:"bond", reason:"positive-personal-bond" };
   }
 
-  if (Math.max(relScore, reverseScore) >= 25) {
+  if (relScore >= 25) {
     return { allowed:true, mode:"relationship-score", reason:"positive-relationship-score" };
   }
 
@@ -28513,8 +21252,6 @@ function aiShouldFollow(
     (
       eligibility.mode === "family" ||
       eligibility.mode === "secret-crush" ||
-      (trigger === "relationship" && eligibility.mode === "bond") ||
-      (trigger === "relationship" && eligibility.mode === "team") ||
       strongBond ||
       relScore >= 25 ||
       (trigger === "relationship" && score >= 34)
@@ -29016,16 +21753,6 @@ function pickAutonomousFollowAction(w) {
         return;
       }
 
-      const eligibility = aiFollowEligibility(
-        w,
-        actor.id,
-        target.id
-      );
-
-      if (!eligibility.allowed) {
-        return;
-      }
-
       const score =
         followInterestScore(
           w,
@@ -29033,14 +21760,15 @@ function pickAutonomousFollowAction(w) {
           target.id
         );
 
-      if (
-        score < 34 &&
-        !["family", "bond", "relationship-score", "team"].includes(
-          eligibility.mode
-        )
-      ) {
+      if (score < 34) {
         return;
       }
+
+      const eligibility = aiFollowEligibility(
+        w,
+        actor.id,
+        target.id
+      );
 
       const rel = getRel(
         w,
@@ -29050,16 +21778,10 @@ function pickAutonomousFollowAction(w) {
 
       const strongRelationship = Boolean(
         eligibility.allowed &&
+        ["family", "bond", "relationship-score", "secret-crush"].includes(eligibility.mode) &&
         (
-          eligibility.mode === "team" ||
-          (
-            ["family", "bond", "relationship-score", "secret-crush"].includes(eligibility.mode) &&
-            (
-              eligibility.mode === "bond" ||
-              followBondWeight(rel) >= 34 ||
-              (Number(rel && rel.score) || 0) >= 25
-            )
-          )
+          followBondWeight(rel) >= 34 ||
+          (Number(rel && rel.score) || 0) >= 25
         )
       );
 
@@ -29475,35 +22197,26 @@ function setFollowState(
     isHuman(w, follower.id) &&
     !isHuman(w, target.id)
   ) {
-    /*
-     * The player's follow may itself push an already-positive relationship over
-     * the deterministic follow threshold. Re-evaluate the FOLLOW graph now so
-     * a genuine friend/crush/family/teammate can become mutual immediately.
-     */
-    ensureFollowerSystem(w);
+    simEnqueue(
+      w,
+      mkAction(
+        "follow",
+        `follow-back:${target.id}:${follower.id}:${Math.floor(
+          now() / 1200000
+        )}`,
+        {
+          actorId:
+            target.id,
 
-    if (!isFollowing(w, target.id, follower.id)) {
-      simEnqueue(
-        w,
-        mkAction(
-          "follow",
-          `follow-back:${target.id}:${follower.id}:${Math.floor(
-            now() / 1200000
-          )}`,
-          {
-            actorId:
-              target.id,
+          targetId:
+            follower.id,
 
-            targetId:
-              follower.id,
-
-            trigger:
-              "follow-back",
-          },
-          "event"
-        )
-      );
-    }
+          trigger:
+            "follow-back",
+        },
+        "event"
+      )
+    );
   }
 
   return true;
@@ -29592,86 +22305,6 @@ async function saveNewAccount(code, username, pw, charName) {
   const ok = await saveWorld(fresh);
   if (!ok) throw new Error("A fiók mentése nem sikerült. Próbáld újra.");
   return { world: fresh, meId: id };
-}
-
-function isolateFreshCreatedWorld(baseWorld, serverWorld, serverMeId, previousWorld) {
-  const base = migrate(cloneWorldState(baseWorld || emptyWorld((serverWorld && serverWorld.code) || "new-world")));
-  const server = serverWorld ? migrate(cloneWorldState(serverWorld)) : null;
-  const me = String(serverMeId || "").trim();
-  const oldEpoch = Math.max(0, Math.floor(Number(previousWorld && previousWorld.historyEpoch) || 0));
-
-  /*
-   * A NEW WORLD is a hard data boundary. Never merge it with the currently
-   * open world. The old mergeWorlds reconciliation is correct for concurrent
-   * saves of the SAME world, but it is exactly the wrong operation here.
-   */
-  const fresh = base;
-  fresh.historyEpoch = oldEpoch + 1;
-  fresh.syncRev = server ? worldSyncRev(server) : 0;
-  fresh.rev = Math.max(1, Number(server && server.rev) || 1);
-  fresh.owner = me || fresh.owner || "";
-
-  const preserve = [
-    "code", "universe", "storySettings", "gossipSettings", "mediaAccounts",
-    "aiLang", "autonomousFeedSettings", "trends", "whisperWire",
-  ];
-  preserve.forEach((key) => {
-    if (server && server[key] !== undefined && ["code", "universe", "storySettings", "gossipSettings", "mediaAccounts", "aiLang", "autonomousFeedSettings"].includes(key)) {
-      /* User-entered base settings win over any stale server snapshot. */
-      return;
-    }
-  });
-
-  /* Keep ONLY the newly created account/player identity from the server. */
-  fresh.accounts = {};
-  fresh.players = {};
-  fresh.userSettings = {};
-  if (server && me) {
-    if (server.accounts && server.accounts[me]) fresh.accounts[me] = cloneWorldState(server.accounts[me]);
-    if (server.players && server.players[me]) fresh.players[me] = cloneWorldState(server.players[me]);
-    if (server.userSettings && server.userSettings[me]) fresh.userSettings[me] = cloneWorldState(server.userSettings[me]);
-  }
-  if (me && !fresh.accounts[me]) {
-    fresh.accounts[me] = base.accounts && base.accounts[me] ? cloneWorldState(base.accounts[me]) : { id: me, username: "jatekos", salt: "", hash: "", created: now() };
-  }
-  if (me && !fresh.players[me]) {
-    fresh.players[me] = base.players && base.players[me] ? cloneWorldState(base.players[me]) : blankPlayer(me, "Névtelen", "jatekos");
-  }
-  fresh.meId = undefined;
-
-  /* Explicitly reset every history-bearing structure. */
-  fresh.chars = Array.isArray(base.chars) ? base.chars : [];
-  fresh.rels = {};
-  fresh.posts = [];
-  fresh.reposts = [];
-  fresh.chats = {};
-  fresh.mems = {};
-  fresh.charMemory = {};
-  fresh.log = Array.isArray(base.log) ? base.log : [];
-  fresh.scenes = [];
-  fresh.groups = [];
-  fresh.notes = [];
-  fresh.inventory = [];
-  fresh.diary = [];
-  fresh.socialEvents = [];
-  fresh.rumors = [];
-  fresh.gossipPropagation = { rumors: [], exchanges: [], echoes: [], lastRoundAt: 0, lastEchoAt: 0, version: 2 };
-  const freshAt = now();
-  fresh.popupEvents = [];
-  fresh.popupRuntime = { startedAt: freshAt, lastGeneratedAt: 0 };
-
-  /*
-   * New worlds must start with the SAME complete autonomous runtime as a clean
-   * Restart World. This keeps posting, comments, Notes, DMs, group activity,
-   * popup and Roleplay/Event lanes available from the first run.
-   */
-  fresh.autoAt = 0;
-  fresh.sim = freshSimulationRuntime(freshAt);
-  fresh.activeSceneId = "";
-
-  fresh.whisperWire = { stories: [], usedEventIds: [], history: [], lastCandidate: null, lastPublishedAt: 0 };
-
-  return migrate(fresh);
 }
 
 function NewWorld({ w, onReady, onClose, setErr }) {
@@ -29872,26 +22505,16 @@ function NewWorld({ w, onReady, onClose, setErr }) {
         );
 
       /*
-       * v99.9 NEW-WORLD HARD ISOLATION:
-       * never reconcile a newly created world with the world that happened to
-       * be open before the modal. Only the new account identity is accepted
-       * from the server snapshot; all history-bearing collections start empty.
+       * Emergency helyi backup az új worldről.
        */
-      const isolatedWorld = isolateFreshCreatedWorld(
-        nw,
-        serverWorld,
-        created.meId,
-        w
-      );
-
       try {
         await saveWorldMerged(
-          isolatedWorld
+          serverWorld
         );
       } catch (e) {}
 
       onReady(
-        isolatedWorld,
+        serverWorld,
         created.meId
       );
     } catch (e) {
@@ -31184,7 +23807,6 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
 /* ============================================================
    Feed — szálas kommentekkel
    ============================================================ */
-
 function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
   const { tt } = useLang();
   const [open, setOpen] = useState(false);
@@ -31200,11 +23822,10 @@ function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
 
   if (!a) return null;
 
-  const send = async () => {
+  const send = () => {
     const t = txt.trim();
     if (!t) return;
-    const ok = await onReply(c.id, t);
-    if (ok === false) return;
+    onReply(c.id, t);
     setTxt("");
     setOpen(false);
   };
@@ -31283,11 +23904,7 @@ function CommentNode({ w, c, commentModel, onReply, depth, onOpenProfile }) {
             />
             <MentionBar w={w} value={txt} onChange={setTxt} compact />
           </div>
-          <button
-            className="btn primary tiny"
-            onClick={send}
-            disabled={!txt.trim()}
-          >
+          <button className="btn primary tiny" onClick={send} disabled={!txt.trim()}>
             <Send size={12} />
           </button>
         </div>
@@ -31413,11 +24030,10 @@ function Post({
     author.id !== w.meId &&
     isFollowing(w, w.meId, author.id);
 
-  const sendCmt = async () => {
+  const sendCmt = () => {
     const t = cmt.trim();
     if (!t) return;
-    const ok = await onComment(post.id, t, null);
-    if (ok === false) return;
+    onComment(post.id, t, null);
     setCmt("");
   };
 
@@ -31577,8 +24193,6 @@ function Post({
           className="social-post-media"
           src={resolveImg(post.imageId ? imageRef(post.imageId) : post.image, media)}
           alt=""
-          loading="lazy"
-          decoding="async"
         />
       ) : null}
 
@@ -31695,25 +24309,14 @@ function Post({
           />
           <MentionBar w={w} value={cmt} onChange={setCmt} compact />
         </div>
-        <button
-          className="btn primary tiny"
-          onClick={sendCmt}
-          disabled={!cmt.trim()}
-        >
+
+        <button className="btn primary tiny" onClick={sendCmt} disabled={!cmt.trim()}>
           <Send size={13} />
         </button>
       </div>
     </article>
   );
 }
-
-const MemoPost = React.memo(
-  Post,
-  (prev, next) =>
-    prev.w === next.w &&
-    prev.post === next.post &&
-    prev.highlight === next.highlight
-);
 
 function SocialProfileModal({
   w,
@@ -31788,10 +24391,6 @@ function SocialProfileModal({
   const sentiment =
     socialStats.sentiment ||
     defaultSocialStatsRow().sentiment;
-
-  const progression = mine
-    ? playerProgressionView(w, c.id)
-    : null;
 
   const toggleFollow = () => {
     if (mine) return;
@@ -31962,29 +24561,6 @@ function SocialProfileModal({
             ) : null}
 
             <div className="social-sentiment-strip">
-              {mine && progression ? (
-                <span className="social-sentiment-chip">
-                  LVL
-                  <strong>{progression.level}</strong>
-                  {tt("szint", "level")}
-                </span>
-              ) : null}
-
-              {mine && progression ? (
-                <span className="social-sentiment-chip">
-                  ◈
-                  <strong>{Math.round(Number(progression.globalScore) || 0)}</strong>
-                  {progression.rankLabel}
-                </span>
-              ) : null}
-
-              {mine && progression && progression.highestAccess ? (
-                <span className="social-sentiment-chip">
-                  🔓
-                  <strong>{progressionAccessLabel(progression.highestAccess, worldLanguage(w, c.id))}</strong>
-                </span>
-              ) : null}
-
               {Number(socialStats.clout) > 0 ? (
                 <span className="social-sentiment-chip">
                   ⚡
@@ -32291,68 +24867,6 @@ function threadOf(w, post) {
   };
 }
 
-/*
- * Exact branch reconstruction for threaded replies.
- *
- * `threadOf()` remains the complete public comment section. This helper adds
- * the one causal path that matters most for the next reply: ROOT → ... →
- * direct parent. It prevents a model from answering the latest sentence while
- * forgetting what that sentence itself was responding to.
- */
-function threadBranchOf(w, post, leafComment, maxDepth = 12) {
-  if (!w || !post || !leafComment) {
-    return {
-      ids: [],
-      rows: [],
-      text: "",
-    };
-  }
-
-  const comments = safePostComments(post);
-  const byId = new Map(
-    comments
-      .filter((row) => row && row.id)
-      .map((row) => [row.id, row])
-  );
-  const chain = [];
-  const seen = new Set();
-  let current = leafComment;
-
-  while (
-    current &&
-    chain.length < Math.max(1, Number(maxDepth) || 12)
-  ) {
-    const key = String(current.id || "");
-    if (key && seen.has(key)) break;
-    if (key) seen.add(key);
-    chain.unshift(current);
-    current =
-      current.parent
-        ? (byId.get(current.parent) || null)
-        : null;
-  }
-
-  return {
-    ids: chain.map((row) => String(row.id || "")).filter(Boolean),
-    rows: chain,
-    text: chain
-      .map((row, index) => {
-        const role =
-          index === 0
-            ? "ROOT"
-            : index === chain.length - 1
-              ? "CURRENT"
-              : `TURN ${index + 1}`;
-        const parent =
-          row.parent
-            ? ` <- replies to ${row.parent}`
-            : "";
-        return `${role} [${row.id || "?"}]${parent} ${nameOfIn(w, row.authorId)}: ${String(row.text || "").trim()}`;
-      })
-      .join("\n"),
-  };
-}
-
 function normalizeSocialPostMeaning(w, post, raw) {
   const source = raw && typeof raw === "object" ? raw : {};
   const resolveIds = (value) => {
@@ -32551,62 +25065,6 @@ COMPREHENSION LOCK:
 `;
 }
 
-function socialImageReactionFidelityCard(
-  w,
-  post,
-  cast
-) {
-  if (
-    !w ||
-    !post ||
-    !socialPostHasVisibleImage(
-      post
-    )
-  ) {
-    return "";
-  }
-
-  const visible =
-    String(
-      post.imageDescription ||
-      post.imageVision ||
-      ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!visible) {
-    return `
-IMAGE REACTION FIDELITY:
-- A real image is attached, but grounded visual analysis is not available yet.
-- Do NOT invent outfit, appearance, pose, location or objects. React only to the caption until visual facts exist.
-`;
-  }
-
-  const castSize =
-    Array.isArray(cast)
-      ? cast.length
-      : 0;
-
-  return `
-IMAGE REACTION FIDELITY — CHARACTER-SPECIFIC VISUAL ATTENTION:
-VISIBLE FACTS:
-${visible.slice(0, 1400)}
-
-- The image is PRIMARY evidence, not decoration.
-- Each commenter first decides what SELF would realistically NOTICE from these visible facts, using ONLY SELF's own Personality / Traits / Speech / Voice / age / relationship to the post author.
-- Different characters should naturally notice DIFFERENT things. One may react to outfit, another the setting, another the pose/vibe, another the occasion; somebody else may focus on the caption.
-- Do not turn every relationship into the same generic "you look good" reaction.
-- Close friends may hype, tease or reference a concrete visible detail in their own normal voice.
-- Rivals/enemies may make a backhanded or sarcastic observation ONLY about something actually visible; no invented flaw and no unrelated feud.
-- Crush/obsession may make SELF more attentive to the image, but public wording must still fit SELF's personality and how openly SELF would show it.
-- Older/formal/reserved characters must remain older/formal/reserved. A glam photo must NOT make everyone speak like Gen Z.
-- Never copy the photographed person's apparent vibe into the commenter's personality.
-- ${castSize >= 4 ? "With four or more commenters, use more than one distinct visible detail when natural; do not make everyone react to the exact same thing." : "Do not mechanically repeat the same visible detail between commenters."}
-- Every visual claim in the final comment must be supported by VISIBLE FACTS above.
-`;
-}
-
 function commentTargetRelationshipMatrix(w, cast, post) {
   if (!w || !post) return "";
   const target = charById(w, post.authorId);
@@ -32660,19 +25118,14 @@ function strictSocialActorCapsules(w, cast, post, directComment = null) {
 
   const postAuthor = charById(w, post.authorId);
   const targetPublic = postAuthor
-    ? JSON.stringify(
-        publicBasicCharacterProfileForAgent(
-          w,
-          postAuthor
-        )
-      )
+    ? [
+        `name=${postAuthor.name} [${postAuthor.id}]`,
+        `occupation=${cut(String(postAuthor.job || postAuthor.occupation || postAuthor.role || ""), 360) || "unknown"}`,
+        `side=${characterFactionIdentityCard(postAuthor) || "unknown"}`,
+        `public bio=${cut(String(postAuthor.bio || ""), 420) || "-"}`,
+      ].join(" | ")
     : `${post.authorId}`;
 
-  /*
-   * SOCIAL SELF-CANON:
-   * every candidate who may actually speak gets their OWN full sheet.
-   * Other characters' private sheets are never included in that capsule.
-   */
   return (cast || [])
     .filter((actor) => actor && actor.id && actor.id !== post.authorId)
     .map((actor) => {
@@ -32690,13 +25143,6 @@ DIRECT TARGET FOR THIS REACTION: ${nameOfIn(w, targetId)} [${targetId}]
 
 ${voiceCard(actor)}
 
-${socialSelfStyleOwnershipCard(actor)}
-
-${commentGenerationStyleCard(w, actor)}
-
-FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
-${fullSelfCharacterSheetForSocial(w, actor)}
-
 EXACT DIRECTED PAIR CANON:
 ${JSON.stringify(exactPairCanonCard(w, actor.id, targetId) || {})}
 
@@ -32707,11 +25153,6 @@ TARGET-SPECIFIC MEMORY ONLY:
 ${commentTargetMemoryCard(w, actor, targetId) || "-"}
 
 HARD CAPSULE BOUNDARY:
-- SELF may use EVERY field from SELF's full sheet above, including private personality, fears, favorites, secrets, history, Relations/Connections and speech canon.
-- OTHER character reference profiles may supply factual knowledge such as identity, nickname, birth/age, occupation/role/dojo, appearance, bio, history/backstory and Extra/Other Information.
-- KNOWLEDGE IS NOT IDENTITY: those OTHER-person facts may be known, remembered or reacted to, but they NEVER redefine SELF's personality, speech, casing, humor, temperament, trauma, preferences or behavior.
-- NEVER use another person's Personality, Traits, Speech Style, Voice examples, Goals, Fears, Likes/Favorites, Secrets or private Connections as SELF's writing/behavior instructions.
-- SELF's wording and behavior must be traceable to SELF's own capsule only.
 - Do NOT copy any fact from this capsule into another actor's output.
 - ${actor.name}'s occupation/dojo/rank/mentor/crush/enemy/history belong to ${actor.name}, never to another commenter.
 - Other named people inside ${actor.name}'s full sheet are private/background context and are NOT automatically relevant to this post.
@@ -32747,12 +25188,8 @@ async function genComments(w, post, options = {}) {
     post
   );
 
-  /* v99.6: never spend a second provider call just to re-parse a post.
-   * The post generator already stores socialMeaning when available; otherwise
-   * the deterministic fallback keeps comments grounded without adding latency. */
-  const postMeaning = (post.socialMeaning && typeof post.socialMeaning === "object")
-    ? normalizeSocialPostMeaning(w, post, post.socialMeaning)
-    : fallbackSocialPostMeaning(w, post);
+  /* v71: understand the post once before any character applies a subjective lens. */
+  const postMeaning = await analyzeSocialPostMeaning(w, post);
 
   const out = await askWorldJSON(
     w,
@@ -32766,7 +25203,6 @@ async function genComments(w, post, options = {}) {
         includePlayer: publicSocialPlayerRelevant(w, post),
         includeRecentWorld: false,
         socialScope: true,
-        agentPrivacyScope: true,
       }
     )}
 
@@ -32780,7 +25216,6 @@ POST CONTEXT LOCK — EZ A KOMMENTGENERÁLÁS EGYETLEN CÉLPOSZTJA:
 - A kommentelő nem választhat másik posztot, másik botot vagy egy korábbi feed-posztot.
 - A poszt szerzője ${author ? author.name : "?"} [${post.authorId}]. Minden top-level komment ennek a személynek a posztjára reagál, hacsak a válasz kifejezetten egy már létező kommenthez van kötve.
 - Ha ugyanaz a téma több posztban is előfordult, mindig EZT a posztot és annak aktuális kommentfolyamát használd. Ne keverd össze másik poszttal.
-- FIKTÍV SOCIAL NETWORK FIGYELEM: a téged követő / veled valódi kapcsolatban álló / ebben a konkrét posztban érintett karaktereknek természetesen nagyobb oka van reagálni. A kommentcastot ne kezeld véletlen idegenek halmazaként; a social graph + konkrét téma együtt dönti el, ki figyel fel rá.
 
 POSZT — ${author ? author.name : "?"} [${post.authorId}]:
 "${post.text}"
@@ -32788,10 +25223,6 @@ POSZT — ${author ? author.name : "?"} [${post.authorId}]:
 ${post.authorId === w.meId && post.text ? playerInputUnderstandingInstruction(w, post.text, "post") : ""}
 
 ${socialPostMeaningCard(w, post, postMeaning)}
-
-${socialCommentExactPostGroundingCard(w, post)}
-
-${socialImageReactionFidelityCard(w, post, cast)}
 
 ${
   (post.imageId || post.image)
@@ -32827,59 +25258,17 @@ ${characterAgentRuntimeCard(
 
 ${commentTargetRelationshipMatrix(w, cast, post)}
 
-${relationshipCommentAttentionCard(w, cast, post.authorId)}
-
 ${strictSocialActorCapsules(w, cast, post)}
 
-${socialCharacterCustomizationRuleCard()}
-
-${socialCommentClimateCard(w, post)}
-
-${socialShortStatusCharacterFidelityCard(w, post)}
-
-SOCIAL REACTION DECISION FIRST — COMMENT / LIKE / IGNORE:
-MINDEN cast-szereplőnél ugyanebben a sorrendben dolgozz:
-1. WHAT HAPPENED — értsd meg a SHARED POST COMPREHENSION alapján, mit mond/mutat EZ az egy poszt.
-2. WHY CARE — van-e ennek a karakternek természetes oka reagálni rá? Csak a konkrét poszt + valódi kapcsolat/relevancia számít.
-3. ACTION — válassz COMMENT / LIKE / IGNORE. Ne gyárts kommentet csak azért, hogy mindenki megszólaljon. A guaranteed minimum szabály csak a ténylegesen releváns karakterek közül kér kommentet.
-4. REACTION ACT — COMMENT esetén válassz pontosan egy funkciót: answer | agree | disagree | tease | roast | support | compliment | question | challenge | defend | correct | flirt | jealous_reaction | inside_joke | concern | sarcasm | shock | laugh | gossip_probe | callout | invite | dismiss.
-5. BASIS — másolj ki 1–18 egymást követő szót szó szerint EBBŐL a posztból vagy a megerősített látható képleírásból. Ez a reakció konkrét kiváltó oka.
-6. MEANING — egy rövid rejtett mondatban írd le, mit jelent az a basis EBBEN a posztban. Ne relationship-magyarázat legyen, hanem a látható tartalom értelme.
-7. CHARACTER FILTER — csak ezután alkalmazd a relationship + Personality + Speech/Voice + kor + public/private viselkedést a megfogalmazásra.
-
-HARD COMMENT ARCHITECTURE:
-- A relationship a reakció HANGJÁT/INTENZITÁSÁT változtatja, nem helyettesíti a poszt témáját.
-- A personality a reakció módját szabja meg, nem szolgálhat önmagában témaként.
-- NINCS kötelező SAVE/LinkedIn-formula: nem kell dicséret + hozzáadott érték + kérdés + emoji minden kommentbe. Egy rivális, barát, idősebb sensei vagy kaotikus Gen Z karakter teljesen máshogy kommentel.
-- Kérdést csak akkor tegyen fel, ha az adott reactionAct és a karakter valóban indokolja. Emoji csak akkor legyen, ha a karakter saját social hangja használja.
-- socialDecisions tömbben minden cast-szereplőhöz legfeljebb egy ACTION legyen. COMMENT sor csak COMMENT döntéshez, likes csak LIKE döntéshez tartozhat; IGNORE-nál ne hozz létre látható reakciót.
-- TELJES AUTOMATIZÁLÁS: a játékosnak nem kell külön megkérnie a karaktereket, hogy reagáljanak. Ha a social graph, a konkrét poszt, a karakter online aktivitása és a jelenlegi public climate alapján természetes, önállóan kommenteljenek/lájkoljanak/ignoráljanak.
-- NYILVÁNOS VITA: ha két karakternek tényleges nézeteltérése, rivalizálása vagy védelmi oka van, a COMMENT döntés lehet olyan mondat, amely természetesen reply-t vált ki. Ne gyárts mesterséges konfliktust csak a dráma kedvéért.
-- CANCEL / STAN CLIMATE: meglévő backlash vagy rajongói hullám növelheti a reakció valószínűségét és a nyilvános önpozicionálást, de SOHA nem írhatja felül az adott karakter saját kapcsolatát, memóriáját vagy morális/personality reakcióját.
-
 KOMMENTELŐK TELJES KARAKTERHŰSÉGE:
-
-RELATIONSHIP × PERSONALITY × POST — HARD DECISION ORDER:
-1. A KONKRÉT POSZT dönti el, mire lehet egyáltalán értelmesen reagálni.
-1A. RESPONSE-ACT MATCH: a reakció funkciója illeszkedjen ahhoz, amit a poszt ténylegesen csinál. Poén/vicc természetesen kaphat poént vagy ugratást; sebezhető/szomorú poszt támogatást, együttérzést, csendes jelenlétet vagy kapcsolatfüggő távolságot; kérdés valódi választ; provokáció releváns visszaszúrást; jó hír gratulációt/hype-ot; segítségkérés konkrét segítséget vagy karakterhű elutasítást. A személyiség és kapcsolat a MEGFOGALMAZÁST és intenzitást változtatja, nem a poszt alapfunkcióját.
-2. A kommentelő és a posztoló KAPCSOLATA dönti el a baseline érzelmi irányt és azt is, mennyire valószínű, hogy kommentel / like-ol / ignorál.
-3. A kommentelő SAJÁT PERSONALITY + SPEECH/VOICE + kor/online stílus dönti el, HOGYAN fejezi ki ugyanazt az érzelmi irányt.
-4. A friss közös emlék/currentFeeling csak finomítja ezt; nem írhatja át a konkrét poszt jelentését.
-- Egyik réteg sem helyettesítheti a másikat. „Barát” nem jelent generikus kedvességet: egy nyers barát lehet csípős, de szeretetteljes; egy reserved barát lehet rövid, de meleg. „Rivális” nem jelent automatikus random sértegetést: a konkrét poszthoz illő versengő/gúnyos/szkeptikus reakció kell.
-- Crush/obsession esetén a kapcsolat növeli a FIGYELMET és színezi a reakciót, a personality pedig eldönti, hogy ez direkt flört, zavar, kontroll, száraz megjegyzés, féltékenység vagy rejtett over-attention formájában látszik.
-- Minden elkészült kommentnél tedd fel: „ez a mondat egyszerre illik a kapcsolathoz ÉS ehhez az egy karakterhez?” Ha csak az egyikhez, írd újra.
-
 - A fenti SEALED ACTOR CAPSULES blokkok szigorúan ID-hoz kötöttek. Egy output sor id-je CSAK a saját capsule-jából olvashat "én / saját" tényt.
 - Minden kommentelő a SAJÁT teljes karakterlapját használja, nem másik kommentelőét. Más karakter jobja, dojoja, rangja, mentorai, crushai, Connections-sorai és backstory-ja TILOS saját tényként.
 - A kommentelő saját emlékei közül ebben a social feladatban csak a POSZT SZERZŐJÉHEZ / közvetlen célponthoz releváns memória használható; unrelated player/world memory nem.
-- POST-TARTALOM ELSŐ: előbb legyen értelmes válasz a KONKRÉT posztra, csak utána színezze a relationship és a személyiség. A rossz kapcsolat NEM jogosít fel egy teljesen oda nem illő beszólásra. Ha nincs értelmes roast/fenyegetés, válassz rövid, de témába vágó reakciót; ne helyettesítsd automatikusan IGNORE-ral a scheduled kommenthullám szükséges kommentjeit.
 - KAPCSOLATI PRIORITÁS: jó/közeli kapcsolatból ne gyárts random bunkóságot a kommentcsomag változatossága kedvéért. Negatív hanghoz kell konkrét jelenlegi trigger vagy a karakter SAJÁT, kapcsolat-specifikus explicit kánonja. Az, hogy valaki általában szarkasztikus/bunkó/domináns, NEM elég ok arra, hogy a barátját megalázza vagy ellenségként kezelje.
 - KÖLCSÖNÖS BARÁTSÁG: ha a kommentelő és a poszt szerzője mindkét irányban barátok, ezt a komment konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A komment hangja, humora, bátorsága, agressziója, flörtje, távolságtartása és szókincse legyen egyértelműen az övé.
 - A korábbi emlékei és a poszt szerzőjével való konkrét kapcsolata ténylegesen módosítsa a reakcióját. Ha van releváns közös múlt, belső poén, korábbi vita, ígéret, flört vagy kínos esemény, UTALHAT rá — de ne ugyanarra minden alkalommal.
 - Ne csak a komment TARTALMA, hanem a mikrostílusa is karakterfüggő legyen: mondathossz, kis-/nagybetű, írásjel, szleng, emoji, kérdezés, közvetlenség, szárazság, káromkodás, flört és humor ritmusa is.
-- KOR + GENERÁCIÓ IS AKTÍV STÍLUSSZŰRŐ: a SEALED ACTOR CAPSULE-ban lévő COMMENT AGE / GENERATION / DIGITAL VOICE szabályt minden kommentelőnél külön kövesd. Egy Gen Z karakter természetesen kommentálhat Gen Z-s ritmusban, de egy idősebb karaktert ne fiatalíts le automatikusan social-media szlenggel.
-- 35+ FÉRFI: alapból NE használjon emojit kommentben. Csak akkor fér bele, ha a SAJÁT karakterlap Personality/Speech/Voice része ténylegesen online-os/emojizó/expresszív texting stílust mutat; a rendszer ezt mentés előtt is ellenőrzi.
 - Ha ugyanaz a komment több karakter szájából is hiteles lenne, nem elég specifikus: írd újra.
 - TILOS generikus AI-social formulákkal kitölteni a csomagot (pl. ugyanaz a "girl...", "damn", "real", "obsessed", "okayyy", "iconic", "you ate" jellegű reakció újra meg újra), hacsak az adott karakter saját online hangja ÉS a friss kommentmemóriája tényleg indokolja.
 
@@ -32897,13 +25286,8 @@ NYILVÁNOS VS. PRIVÁT REALIZMUS:
 
 KONKRÉT POSZTHOZ KÖTÉS:
 - Minden komment ELŐTT alkalmazd a SHARED POST COMPREHENSION jelentést; ne kezdj karakterreakciót addig, amíg a poszt alapjelentése nincs rögzítve.
-- A basis nem dísz: először válaszd ki a konkrét, szó szerinti post/image részletet, amely kiváltja a reakciót, és CSAK UTÁNA írd meg a kommentet relationship + personality + Speech/Voice szerint. Ha a kész komment valójában nem reagál a basisre, írd újra.
-- BASIS-LÁTHATÓ KAPCSOLAT: hosszabb/nem triviális posztnál a kész kommentben legyen legalább egy konkrét tartalmi szó vagy egyértelmű ragozott alak abból a basisből, amit kiválasztottál. Ne add vissza ugyanazt a basis-t egy teljesen más témájú komment mellé.
-- Ha nem tudsz egyetlen konkrét szót/részletet sem természetesen visszakötni a jelenlegi poszthoz, inkább írj egyszerűbb, pontosabb reakciót; a relationship-drámát ne használd póttémának.
-- TILOS egy másik feed-poszt témáját, korábbi vitát vagy relationship-memory témát becsempészni csak azért, mert karakterhűen hangzik. Az csak akkor jelenhet meg, ha a jelenlegi basishez ténylegesen kapcsolódó reakció.
 - POSZT-AZONOSÍTÁS HARD RULE: a jelenlegi célposzt mindig ${post.id}, szerzője mindig ${post.authorId} (${author ? author.name : "?"}). A kommentelőnek ezt nem szabad elveszítenie a generálás során.
 - A komment szövegének konkrétan erre a posztra kell reagálnia: annak captionjére, képére, hangulatára vagy a már ebben a threadben elhangzott kommentre.
-- RÖVID HÉTKÖZNAPI STÁTUSZNÁL ("work has been a lot lately", "I'm exhausted", "I'm bored", "training killed me today" stb.) ne gyárts mögé rejtett drámát csak azért, mert a kommentelő rival/crush/obsessed. Előbb a PONTOS aktuális állapotra reagáljon; a SAJÁT karakterlapja döntse el, MIT TENNE/MONDANA erre, a kapcsolat pedig azt, mennyire közeli/intenzív. A relationship NEM változtathatja át az "I'm bored" posztot titkos célzássá, kihívássá vagy konfliktussá.
 - Ha egy komment másik posztra is ugyanúgy illene, ellenőrizd újra a jelenlegi poszt konkrét részleteit, és csak akkor fogadd el, ha van egyértelmű kapcsolat EZHEZ a poszthoz.
 - A poszt szerzőjének személye nem cserélhető fel egy másik karakterrel. Ha ${author ? author.name : "?"} [${post.authorId}] posztolt, a reakciókat az ő karaktere, a vele való kapcsolat és az ő konkrét posztja szűri.
 - THIRD-PARTY SCOPE: olyan ember, aki nincs név/@mention/image-confirmation formájában EBBEN a posztban vagy a közvetlen parent kommentben, NE kerüljön be a kommentbe pusztán emlékből, trendből, crushból vagy világdrámából. Különösen ne hozd be automatikusan a játékost egy AI→AI poszt alá.
@@ -32959,26 +25343,16 @@ ${repetitionGuard(
   "kommentek"
 )}
 
-KARAKTERHANG — EZ A GENERÁLÁS EGYIK LEGFONTOSABB CÉLJA:
-- Ne egy általános social-media kommentet írj, majd csak utólag nevezd el a karakterrel. Először döntsd el, MIT MONDANA EZ A KONKRÉT KARAKTER, és csak utána fogalmazd meg.
-- A personality mezőből viselkedési döntést hozz: temperamentum, humor, értékrend, impulzivitás, arrogancia/szerénység, félelmek és kötődések ténylegesen változtassák meg a reakciót.
-- A speech/voice mezőből a megfogalmazás módja következzen: ritmus, mondathossz, szleng, szóhasználat, káromkodás, emoji, írásjelek, kis-/nagybetű, becenevek, szárazság vagy túláradás.
-- A backstory és Connections csak akkor jelenjen meg konkrét utalásként, ha a jelenlegi poszt vagy thread valóban megnyomja azt a pontot.
-- KÉT KARAKTER UGYANARRA A POSZTRA NE UGYANAZT ÉREZZE ÉS NE UGYANAZT MONDJA.
-- Ha a karakter természetéből következik, hogy kérdez, provokál, mesél, védekezik, rájátszik, túlreagál, kinevet, flörtöl vagy részletesebben kifejti a véleményét, TEDD MEG. Ne lapítsd mindegyiket egy száraz egysoros reakcióvá.
-- A cél nem a hosszú szöveg, hanem a felismerhető karakterhang.
-
 KOMMENT SZABÁLYOK:
 
-${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD GROUNDED MINIMUM:
-- Ha legalább ${requestedMinComments} jogosult karakter van a castban, adj legalább ${requestedMinComments}, legfeljebb ${requestedMaxComments} KÜLÖNBÖZŐ AI-karaktertől valódi top-level kommentet.
-- A minimum NEM jogosít fel nonszenszre. Ha egy első ötlet nem illik a poszthoz, NE hallgass el automatikusan: keress ugyanennek a karakternek egy egyszerűbb, ténylegesen post-grounded reakciót (válasz a kérdésre, releváns visszakérdezés, konkrét poén, rövid vélemény, részvétel/elutasítás, stb.).
-- LIKE/IGNORE továbbra is létezhet a cast többi szereplőjénél, de a kért minimumot valódi, értelmes kommentek töltsék ki.
+${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD MINIMUM:
+- EBBEN a generálásban legalább ${requestedMinComments}, legfeljebb ${requestedMaxComments} KÜLÖNBÖZŐ AI-karakter írjon valódi, látható kommentet, ha a castban ennyi szereplő van.
+- A LIKE NEM HELYETTESÍTI a kommentminimumot.
 - Elsősorban TOP-LEVEL kommenteket adj; a külön reply-engine utána továbbviszi a threadet.
 - AI-karakterek EGYMÁS posztjai alatt is ugyanilyen aktívan reagáljanak. A játékos posztja nem kap különleges komment-prioritást.
 ` : ""}
 
-- A feed lehet aktív, de a mennyiség soha ne rontsa a jelentést: csak az kommenteljen, akinek a KONKRÉT posztra ténylegesen van értelmes reakciója.
+- A feed legyen LÁTHATÓAN AKTÍVABB: ha több releváns karakter látja a posztot és van rá természetes reakciója, inkább jelenjen meg több különböző kommentelő, ne álljon meg a rendszer 2-3 kommentnél.
 - Szöveges átlagposztnál gyakran 4-8 valódi karakter kommentel; egy kifejezetten csendes/személyes szövegposztnál is reális 2-4; egy drámai/felkapott szövegposztnál 6-10.
 - KÉPES POSZTNÁL a kép ténylegesen növeli a reakciósűrűséget: normál fotónál kb. 6-10, erős selfie/outfit/appearance fókusznál 8-12, ismert felnőtt vizuálisan feltűnőbb beachwear/bikini/thirst-trap jellegű képnél kb. 10-14 természetes komment is reális, HA van ennyi kapcsolat/releváns szereplő.
 - A több komment NEM jelent több generikus bókot: barát hype-olhat, ellenség szurkálhat, crush olvadozhat vagy féltékenykedhet, rivális provokálhat, más poénkodhat, kérdezhet, belsős utalást tehet vagy egy másik kommentre reagálhat.
@@ -32989,18 +25363,12 @@ ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD GROUNDED MINIM
 - Minden komment előtt nézd meg az adott karakter fenti KORÁBBI FEED-KOMMENTJEIT. A feed-komment memória fontosabb ismétlésvédelmi forrás, mint az, hogy közben DM-ben vagy RP-ben mást mondott.
 - Ezek VALÓDI közösségi médiás kommentek, nem roleplay-jelenetek és nem mini novellák.
 - Úgy írjanak, mintha telefonról, gyorsan reagálnának egy Instagram/TikTok/X jellegű posztra.
-- A kommentek TÖBBSÉGE 4-18 szó legyen. A 1-2 szavas válasz NE legyen alapértelmezett.
-- 18-30 szó teljesen rendben van, ha a karakter személyisége, kapcsolata vagy a konkrét poszt ezt kívánja.
-- Ritkán 31-45 szó is megengedett, ha ettől lesz igazán karakterhű és természetes.
-- A rövidség NEM cél. Ha a karakter beszédes, lelkes, kaotikus, flörtölős, pletykás, agresszív vagy érzelmes, ezt ténylegesen mondd ki a kommentben.
-- Különösen TILOS egymás után több 1-2 szavas kommentet gyártani csak azért, mert az social-media formátum.
-- EMOJI NEM KÖTELEZŐ ÉS NEM CSOMAGSZINTŰ DÍSZÍTÉS. Minden karakter külön a SAJÁT COMMENT AGE / GENERATION / DIGITAL VOICE kártyáját kövesse.
-- 60+ karakternek kommentben/replyban ZERO emoji. Ezt sem relationship, sem "expressive", "sarcastic", "online" vagy más általános personality-jel nem írhatja felül.
-- Fiatalabb karakter is csak akkor emojizzon, ha az a SAJÁT Speech/Voice/personality alapján természetes. A teljes kommentcsomag nyugodtan lehet emoji nélküli.
+- A kommentek TÖBBSÉGE 1-12 szó legyen.
+- 13-20 szó csak ritkábban, ha a reakció tényleg igényli.
 - Egy 1-3 szavas reakció teljesen jó komment.
 - Egyetlen szó is lehet természetes komment.
-- Emoji + néhány szó csak annál lehet teljes komment, akinek a saját kor-/stíluskártyája ezt engedi.
-- Emoji-only komment csak akkor megengedett, ha az adott karakter saját stílusa és kor-szabálya ténylegesen engedi; 60+ esetén soha.
+- Emoji + néhány szó is lehet teljes komment.
+- Ritkán akár csak emoji is lehet teljes komment, ha az adott karakter stílusába illik.
 - Ne próbálj minden kommentből teljes, nyelvtanilag tökéletes mondatot csinálni.
 - A töredékes mondatok, félbehagyott reakciók, rövid kérdések és spontán beszólások természetesek.
 - Ne írjanak hosszú bekezdéseket.
@@ -33013,8 +25381,7 @@ ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD GROUNDED MINIM
 - Ne foglalják össze a kapcsolatukat a poszt szerzőjével.
 - Ne tegyenek minden reakció végére tanulságot vagy érzelmi lezárást.
 - Ne legyen minden komment udvariasan és szépen felépítve.
-- Ha egy rövid reakció természetesebb, válaszd azt, DE ne vágd le a mondatot csak azért, hogy dry legyen.
-- Ha a karakter alapból beszédes, csípős, kaotikus, lelkes vagy flörtölős, ezt a válasz tényleges ritmusa és hossza is mutassa.
+- Ha egy rövid reakció természetesebb, MINDIG azt válaszd a hosszabb megfogalmazás helyett.
 
 TERMÉSZETES SOCIAL MEDIA STÍLUS:
 
@@ -33134,13 +25501,10 @@ KAPCSOLATI FOLYTONOSSÁG FRISSÍTÉSE:
 
 Formátum:
 
-{"socialDecisions":[
-{"id":"cast szereplő azonosítója","action":"COMMENT|LIKE|IGNORE","reason":"max 12 szó: konkrét social ok, nem personality-címke"}
+{"comments":[
+{"id":"szereplő azonosítója","post_id":"${post.id}","post_author_id":"${post.authorId}","text":"természetes social media komment","reply_to":"k2 vagy üres","trigger":"max 8 szó: mi konkrétan váltotta ki ezt a reakciót"}
 ],
-"comments":[
-{"id":"szereplő azonosítója","social_contract":"v1","decision":"COMMENT","post_id":"${post.id}","post_author_id":"${post.authorId}","reactionAct":"answer|agree|disagree|tease|roast|support|compliment|question|challenge|defend|correct|flirt|jealous_reaction|inside_joke|concern|sarcasm|shock|laugh|gossip_probe|callout|invite|dismiss","basis":"1-18 egymást követő szó szó szerint EBBŐL a posztból/képleírásból","meaning":"egy rövid rejtett mondat: mit jelent EZ a basis ebben a posztban","text":"természetes social media komment, ami ténylegesen erre reagál","reply_to":"k2 vagy üres","trigger":"max 8 szó: mi konkrétan váltotta ki ezt a reakciót"}
-],
-"likes":["csak annak a szereplőnek az azonosítója, akinek socialDecisions action=LIKE"],
+"likes":["annak a szereplőnek az azonosítója, aki csak lájkolja"],
 "perceptions":[
 {"id":"AI id","aboutMe":true,"confidence":0.78,"interpretation":"mit HISZ, mire/kire utal a poszt","delta":-4,"mood":"mit érez emiatt","why":"miért változik ettől az érzése"}
 ],
@@ -33155,7 +25519,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 3000 }
+    { maxTokens: 2400 }
   );
 
   /*
@@ -33185,139 +25549,26 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
   if (!minWanted || !w || !post) return baseOut;
 
   const beforeActors = topLevelAiCommenterIds(w, post);
-  const probe = cloneWorldState(w);
+  const probe = JSON.parse(JSON.stringify(w));
   applyComments(probe, post.id, baseOut, label);
   const probePost = (probe.posts || []).find((row) => row && row.id === post.id);
   const acceptedActors = probePost
     ? [...topLevelAiCommenterIds(probe, probePost)].filter((id) => !beforeActors.has(id))
     : [];
 
-  const relationshipPriorityActors =
-    fairCommentCast(
-      w,
-      post.authorId,
-      post
-    )
-      .filter(
-        (c) =>
-          c &&
-          !beforeActors.has(c.id) &&
-          relationshipSocialGravityProfile(
-            w,
-            c.id,
-            post.authorId
-          ).mustCommentFreshPost
-      )
-      .map(
-        (c) => c.id
-      );
+  if (acceptedActors.length >= minWanted) return baseOut;
 
-  const missingRelationshipPriority =
-    relationshipPriorityActors.filter(
-      (id) =>
-        !acceptedActors.includes(id)
-    );
-
-  if (
-    acceptedActors.length >= minWanted &&
-    !missingRelationshipPriority.length
-  ) {
-    return baseOut;
-  }
-
-  /* If density OR a very-high relationship-attention character was missed,
-   * repair that exact social absence. */
-
-  const missing = Math.max(
-    Math.max(
-      0,
-      minWanted - acceptedActors.length
-    ),
-    missingRelationshipPriority.length
-  );
+  const missing = minWanted - acceptedActors.length;
   const rawActors = new Set(
     safeAiComments(baseOut)
       .map((row) => aiVoice(w, row && (row.id !== undefined ? row.id : row.name)))
       .filter(Boolean)
   );
+  const unavailable = new Set([...beforeActors, ...acceptedActors, ...rawActors]);
 
-  /*
-   * A raw row is NOT "used" if applyComments rejected it.
-   * Previously every raw actor became unavailable, so a bad first sentence
-   * could never be regenerated for the same character.
-   */
-  const acceptedActorSet =
-    new Set(
-      acceptedActors
-    );
-
-  const rejectedRawActorIds =
-    [...rawActors]
-      .filter(
-        (id) =>
-          id &&
-          !acceptedActorSet.has(id) &&
-          !beforeActors.has(id)
-      );
-
-  const rejectedRawCandidateRows =
-    rejectedRawActorIds
-      .map(
-        (id) =>
-          charById(
-            w,
-            id
-          )
-      )
-      .filter(Boolean);
-
-  const unavailable =
-    new Set([
-      ...beforeActors,
-      ...acceptedActors,
-    ]);
-
-  const priorityCandidateRows =
-    missingRelationshipPriority
-      .map(
-        (id) =>
-          charById(
-            w,
-            id
-          )
-      )
-      .filter(Boolean);
-
-  const candidates = [
-    ...priorityCandidateRows,
-    ...rejectedRawCandidateRows,
-    ...fairCommentCast(
-      w,
-      post.authorId,
-      post
-    ),
-  ]
-    .filter(
-      (c, index, arr) =>
-        c &&
-        !unavailable.has(c.id) &&
-        c.id !== post.authorId &&
-        arr.findIndex(
-          (other) =>
-            other &&
-            other.id === c.id
-        ) === index
-    )
-    .slice(
-      0,
-      Math.max(
-        missing,
-        Math.min(
-          missing + 3,
-          8
-        )
-      )
-    );
+  const candidates = fairCommentCast(w, post.authorId, post)
+    .filter((c) => c && !unavailable.has(c.id) && c.id !== post.authorId)
+    .slice(0, Math.max(missing, Math.min(missing + 3, 8)));
 
   if (!candidates.length) return baseOut;
 
@@ -33334,7 +25585,6 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
           includePlayer: publicSocialPlayerRelevant(w, post),
           includeRecentWorld: false,
           socialScope: true,
-        agentPrivacyScope: true,
         }
       )}
 
@@ -33344,35 +25594,17 @@ COMMENT DENSITY REPAIR — ADD MISSING TOP-LEVEL COMMENTS ONLY.
 
 POST AUTHOR: ${nameOfIn(w, post.authorId)} [${post.authorId}]
 POST: "${String(post.text || "").slice(0, 900)}"
-${socialPostHasVisibleImage(post) && post.imageDescription ? `VISIBLE IMAGE CONTENT: ${String(post.imageDescription).slice(0, 700)}` : ""}
+${post.imageDescription ? `VISIBLE IMAGE CONTENT: ${String(post.imageDescription).slice(0, 700)}` : ""}
 
-${socialCommentExactPostGroundingCard(w, post)}
-
-${socialImageReactionFidelityCard(w, post, candidates)}
-
-ADD ${Math.min(missing, candidates.length)} MORE REAL TOP-LEVEL COMMENTS, EACH SEMANTICALLY GROUNDED IN THIS EXACT POST.
+WE NEED ${missing} MORE REAL COMMENTS.
 ELIGIBLE CHARACTERS:
 ${candidates.map((c) => `- ${c.name} [${c.id}]
 ${relationshipBehaviorCard(w, c.id, post.authorId)}`).join("\n")}
 
 ${strictSocialActorCapsules(w, candidates, post)}
 
-${socialShortStatusCharacterFidelityCard(w, post)}
-
 HARD RULES:
-- VERY HIGH RELATIONSHIP ATTENTION IDs THAT WERE MISSED: ${missingRelationshipPriority.join(", ") || "none"}.
-- PREVIOUS RAW COMMENT IDs THAT FAILED THE APP'S HARD GROUNDING FILTER AND MUST BE REWRITTEN IF ELIGIBLE: ${rejectedRawActorIds.join(", ") || "none"}.
-- A failed raw row is NOT a reason to drop that character. Rewrite the sentence from scratch so it actually answers this exact post while keeping SELF's own voice.
-- TOP-LEVEL BASIS HARD RULE: every repaired TOP-LEVEL AI comment under ANY post must include basis: 1–18 consecutive words copied literally from THIS exact post text or confirmed visible image description, and the repaired text must directly respond to that basis.
-- Every repaired row also needs social_contract="v1", decision="COMMENT", one valid reactionAct, and a short hidden meaning that explains what that basis means in THIS post.
-- Choose reactionAct BEFORE wording; relationship/personality changes HOW the act sounds, not what topic it reacts to.
-- For any non-trivial post, the repaired visible comment must also echo at least one concrete content word/detail from that basis (or an obvious inflected form). Do not return a valid basis beside an unrelated relationship/personality line.
-- If one of the very-high relationship IDs is in ELIGIBLE CHARACTERS, prioritize them when they can respond naturally to the exact post. Hidden obsession increases attention; it does not create an unrelated topic.
-- Return EXACTLY ${Math.min(missing, candidates.length)} DIFFERENT character IDs when that many candidates are listed.
-- If a candidate's first dramatic/sarcastic idea is not grounded, rewrite it into a simpler grounded reaction instead of omitting the character.
-- For a SHORT STATUS TOPIC LOCK, the repaired comment MUST stay inside that exact status topic family. Rivalry/obsession/friendship modifies tone only; it cannot supply a different subject.
-- If the status is BOREDOM, regenerate that same character from their OWN capsule into a real boredom-response act (practical suggestion/invitation/tease/challenge/company/dismissal as canon permits). Do not preserve an off-topic threat, accusation or invented hidden meaning merely because it sounded dramatic.
-- For POST RESPONSE MODE=party-question, every repaired comment MUST answer/react to the party itself. If a dramatic line drifts into dojo/romance/old-conflict material, rewrite it as a character-faithful PARTY response instead of keeping the unrelated drama.
+- Return ${Math.min(missing, candidates.length)} DIFFERENT character IDs if possible.
 - One fresh TOP-LEVEL comment per character. reply_to MUST be empty.
 - Likes do not count.
 - AI → AI posts count exactly the same as AI → player posts.
@@ -33382,52 +25614,16 @@ HARD RULES:
 - Read the candidate's relationshipBehaviorCard for THIS exact post author; do not transfer a dynamic from some other character.
 - Do not introduce the player or any unrelated third character unless the exact post/image explicitly contains them.
 - Respect orientation/flirt/crush and all relationship canon.
-- Usually 4-18 words. Do NOT default to 1-2 word replies.
-- Emoji use must obey each candidate's own COMMENT AGE / GENERATION / DIGITAL VOICE card and the existing hard age/personality emoji cap. Zero emoji is normal.
+- Usually 1-12 words. Natural public social-media language.
 - Do not invent facts beyond the post/image/grounded memory.
 - Never use the post author as commenter.
 
 JSON ONLY:
-{"comments":[{"id":"exact eligible id","social_contract":"v1","decision":"COMMENT","reactionAct":"one valid reaction act","basis":"1-18 consecutive words copied literally from this exact post/image description","meaning":"short hidden meaning of that basis in this exact post","text":"short natural comment that genuinely responds to the basis","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
-      { maxTokens: Math.max(800, Math.min(1800, 260 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
+{"comments":[{"id":"exact eligible id","text":"short natural comment","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
+      { maxTokens: Math.max(500, Math.min(1500, 220 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
     );
 
-    /*
-     * Keep only base comments that ALREADY PASSED the same applyComments probe.
-     * Rejected base rows are removed before repaired rows are merged.
-     *
-     * Old behavior merged [badBase, repaired] and deduped by first actor ID,
-     * so the rejected sentence silently shadowed its good replacement.
-     */
-    const acceptedBaseComments =
-      safeAiComments(
-        baseOut
-      )
-        .filter((row) => {
-          const id =
-            aiVoice(
-              w,
-              row &&
-              (
-                row.id !== undefined
-                  ? row.id
-                  : row.name
-              )
-            );
-
-          return (
-            id &&
-            id !== post.authorId &&
-            acceptedActorSet.has(id)
-          );
-        });
-
-    const combined = [
-      ...acceptedBaseComments,
-      ...safeAiComments(
-        repairOut
-      ),
-    ]
+    const combined = [...safeAiComments(baseOut), ...safeAiComments(repairOut)]
       .filter((row, index, arr) => {
         const id = aiVoice(w, row && (row.id !== undefined ? row.id : row.name));
         if (!id || id === post.authorId) return false;
@@ -33437,35 +25633,12 @@ JSON ONLY:
         }) === index;
       });
 
-    const finalComments = combined.slice(0, Math.max(minWanted, Math.min(24, Number(maxComments) || 14)));
-    const finalCommentIds = new Set(
-      finalComments
-        .map((row) => aiVoice(w, row && (row.id !== undefined ? row.id : row.name)))
-        .filter(Boolean)
-    );
-    const mergedSocialDecisions = [
-      ...(baseOut && Array.isArray(baseOut.socialDecisions) ? baseOut.socialDecisions : [])
-        .filter((row) => {
-          const id = aiVoice(w, row && (row.id !== undefined ? row.id : row.name));
-          return !id || !finalCommentIds.has(id);
-        }),
-      ...[...finalCommentIds].map((id) => ({
-        id,
-        action: "COMMENT",
-        reason: "grounded comment selected for this exact post",
-      })),
-    ];
-
     return {
       ...(baseOut || {}),
-      socialDecisions: mergedSocialDecisions,
-      comments: finalComments,
+      comments: combined.slice(0, Math.max(minWanted, Math.min(24, Number(maxComments) || 14))),
     };
   } catch (err) {
-    console.warn(
-      "Automatic grounded comment density repair failed; coverage remains incomplete and will retry:",
-      err
-    );
+    console.warn("Automatic comment density repair failed:", err);
     return baseOut;
   }
 }
@@ -34274,7 +26447,6 @@ function applyComments(n, postId, out, label) {
   let createdVisible = 0;
   p.comments = safePostComments(p);
   {
-    const decisionMap = socialDecisionActionMap(n, out);
     const byLabel = {};
     const acceptedBodies = [];
     const commentedThisBatch = new Set();
@@ -34282,18 +26454,6 @@ function applyComments(n, postId, out, label) {
     safeAiComments(out).forEach((c) => {
       const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!who || !c.text) return;
-
-      const structuredComment =
-        String(c && (c.social_contract || c.socialContract) || "").trim().toLowerCase() === "v1";
-      const reactionAct = normalizeSocialCommentReactionAct(c && (c.reactionAct || c.reaction_act));
-      const declaredDecision = String(c && c.decision || "").trim().toUpperCase();
-
-      if (decisionMap.size && decisionMap.get(who) && decisionMap.get(who) !== "COMMENT") return;
-      if (structuredComment) {
-        if (declaredDecision !== "COMMENT") return;
-        if (!reactionAct) return;
-        if (!socialCommentMeaningMatchesExactPost(p, c && c.basis, c && c.meaning)) return;
-      }
 
       /* POST OWNERSHIP GUARD: generated comments belong to the exact post
        * passed into this apply call. If the model supplied explicit context,
@@ -34314,24 +26474,6 @@ function applyComments(n, postId, out, label) {
       let body = cleanGeneratedComment(n, who, c.text, 240);
       if (!body) return;
       if (socialSelfClassificationContradiction(n, who, body)) return;
-
-      if (
-        !socialCommentGroundedInExactPost(
-          n,
-          p,
-          null,
-          who,
-          body,
-          c && c.trigger,
-          c && c.basis
-        )
-      ) {
-        /*
-         * Includes hard rejection of invented visual details and unrelated
-         * drama under a recognized short mundane status.
-         */
-        return;
-      }
 
       /* A csomagon belül se legyen két karakternek ugyanaz a generikus reakciója. */
       if (
@@ -34456,10 +26598,6 @@ const made = {
     n,
     n.meId
   ),
-  socialContractVersion: structuredComment ? 1 : 0,
-  reactionAct: reactionAct || "",
-  groundingBasis: structuredComment ? String(c && c.basis || "").replace(/\s+/g, " ").trim().slice(0, 260) : "",
-  groundingMeaning: structuredComment ? String(c && c.meaning || "").replace(/\s+/g, " ").trim().slice(0, 360) : "",
 };
 
 p.comments.push(made);
@@ -34514,7 +26652,6 @@ recordSocialEvent(
         : "comment",
       ...socialJuice.tags,
       ...(socialJuice.juicy ? ["gossip-worthy-thread"] : []),
-      ...(made.reactionAct ? [`reaction:${made.reactionAct}`] : []),
     ],
 
     meta: {
@@ -34526,8 +26663,6 @@ recordSocialEvent(
         p.authorId || "",
       targetId:
         targetId || "",
-      reactionAct: made.reactionAct || "",
-      groundingBasis: made.groundingBasis || "",
     },
   }
 );
@@ -34574,10 +26709,6 @@ recordSocialEvent(
     n,
     lid
   );
-
-  if (decisionMap.size && who && decisionMap.get(who) && decisionMap.get(who) !== "LIKE") {
-    return;
-  }
 
   if (
     !who ||
@@ -34728,486 +26859,6 @@ recordSocialEvent(
   /* Raw AI "events" are not a second reality. Concrete social objects above are the source of truth. */
   return createdVisible;
 }
-function relationshipSocialGravityProfile(
-  w,
-  actorId,
-  targetId
-) {
-  if (
-    !w ||
-    !actorId ||
-    !targetId ||
-    actorId === targetId
-  ) {
-    return {
-      level: 0,
-      mode: "none",
-      commentPriority: 0,
-      repeatPenaltyScale: 1,
-      postPriority: 0,
-      mustCommentFreshPost: false,
-      hidden: false,
-    };
-  }
-
-  const actor =
-    charById(
-      w,
-      actorId
-    );
-
-  const target =
-    charById(
-      w,
-      targetId
-    );
-
-  if (!actor || !target) {
-    return {
-      level: 0,
-      mode: "none",
-      commentPriority: 0,
-      repeatPenaltyScale: 1,
-      postPriority: 0,
-      mustCommentFreshPost: false,
-      hidden: false,
-    };
-  }
-
-  const rel =
-    effectiveRelationshipForBehavior(
-      w,
-      actorId,
-      targetId
-    ) || {};
-
-  const bond =
-    String(
-      rel.bond ||
-      rel.type ||
-      ""
-    ).toLowerCase();
-
-  const hiddenText =
-    String(
-      rel.hidden ||
-      ""
-    ).toLowerCase();
-
-  const obsession =
-    relationshipObsessionLevel(
-      w,
-      actorId,
-      targetId
-    );
-
-  const crush =
-    relationshipCrushActive(
-      w,
-      actorId,
-      targetId,
-      rel
-    );
-
-  const mutualFriend =
-    areMutualFriends(
-      w,
-      actorId,
-      targetId
-    );
-
-  const enemyOrRival =
-    hasEnemyOrRivalBond(
-      rel
-    );
-
-  const tier =
-    relationshipFilterTier(
-      rel
-    );
-
-  const hidden =
-    /secret|hidden|would never admit|wouldn['’]?t admit|won['’]?t admit|titkos|rejtett|nem vallan[aá] be/.test(
-      hiddenText
-    );
-
-  if (obsession >= 3) {
-    return {
-      level: 5,
-      mode: "obsession",
-      commentPriority: 260,
-      repeatPenaltyScale: 0.18,
-      postPriority: 150,
-      mustCommentFreshPost: true,
-      hidden,
-    };
-  }
-
-  if (obsession === 2) {
-    return {
-      level: 4,
-      mode: "possessive",
-      commentPriority: 180,
-      repeatPenaltyScale: 0.35,
-      postPriority: 105,
-      mustCommentFreshPost: false,
-      hidden,
-    };
-  }
-
-  if (crush) {
-    return {
-      level: 4,
-      mode: "crush",
-      commentPriority: 150,
-      repeatPenaltyScale: 0.42,
-      postPriority: 90,
-      mustCommentFreshPost: false,
-      hidden:
-        hidden ||
-        relationshipSecretCrushActive(
-          w,
-          actorId,
-          targetId,
-          rel
-        ),
-    };
-  }
-
-  if (
-    mutualFriend ||
-    tier === "close"
-  ) {
-    return {
-      level: 3,
-      mode: "close",
-      commentPriority: 105,
-      repeatPenaltyScale: 0.58,
-      postPriority: 64,
-      mustCommentFreshPost: false,
-      hidden: false,
-    };
-  }
-
-  if (enemyOrRival) {
-    return {
-      level: 3,
-      mode: "rival",
-      commentPriority: 82,
-      repeatPenaltyScale: 0.72,
-      postPriority: 58,
-      mustCommentFreshPost: false,
-      hidden: false,
-    };
-  }
-
-  if (tier === "good") {
-    return {
-      level: 2,
-      mode: "friend",
-      commentPriority: 58,
-      repeatPenaltyScale: 0.82,
-      postPriority: 36,
-      mustCommentFreshPost: false,
-      hidden: false,
-    };
-  }
-
-  return {
-    level: 0,
-    mode: "none",
-    commentPriority: 0,
-    repeatPenaltyScale: 1,
-    postPriority: 0,
-    mustCommentFreshPost: false,
-    hidden: false,
-  };
-}
-
-function recentRelationshipPostMentions(
-  w,
-  actorId,
-  targetId,
-  limit = 3
-) {
-  const target =
-    charById(
-      w,
-      targetId
-    );
-
-  if (!target) return 0;
-
-  const aliases =
-    characterIdentityAliases(
-      target,
-      {
-        includeFirst: true,
-        includeSurname: true,
-        strongOnly: false,
-      }
-    )
-      .map((x) =>
-        String(x || "")
-          .toLowerCase()
-          .trim()
-      )
-      .filter((x) => x.length >= 3);
-
-  return (w.posts || [])
-    .filter(
-      (post) =>
-        post &&
-        post.authorId === actorId
-    )
-    .slice(0, Math.max(1, limit))
-    .filter((post) => {
-      if (
-        Array.isArray(post.imageCharacterIds) &&
-        post.imageCharacterIds.includes(
-          targetId
-        )
-      ) {
-        return true;
-      }
-
-      const body =
-        String(
-          post.text || ""
-        ).toLowerCase();
-
-      return aliases.some(
-        (alias) =>
-          body.includes(
-            alias
-          )
-      );
-    })
-    .length;
-}
-
-function relationshipAutonomySpotlightRows(
-  w,
-  actorId,
-  limit = 4
-) {
-  const actor =
-    charById(
-      w,
-      actorId
-    );
-
-  if (!actor) return [];
-
-  return (w.chars || [])
-    .filter(
-      (target) =>
-        target &&
-        target.id &&
-        target.id !== actorId &&
-        !isMediaAccount(
-          w,
-          target.id
-        )
-    )
-    .map((target) => {
-      const gravity =
-        relationshipSocialGravityProfile(
-          w,
-          actorId,
-          target.id
-        );
-
-      if (
-        !gravity.level ||
-        !gravity.postPriority
-      ) {
-        return null;
-      }
-
-      const rel =
-        effectiveRelationshipForBehavior(
-          w,
-          actorId,
-          target.id
-        ) || {};
-
-      const recentMentions =
-        recentRelationshipPostMentions(
-          w,
-          actorId,
-          target.id,
-          gravity.mode === "obsession"
-            ? 3
-            : 5
-        );
-
-      const due =
-        gravity.mode === "obsession"
-          ? recentMentions === 0
-          : false;
-
-      return {
-        target,
-        gravity,
-        rel,
-        recentMentions,
-        due,
-        weight:
-          gravity.postPriority +
-          (due ? 80 : 0),
-      };
-    })
-    .filter(Boolean)
-    .sort(
-      (a, b) =>
-        b.weight - a.weight
-    )
-    .slice(
-      0,
-      Math.max(
-        1,
-        limit
-      )
-    );
-}
-
-function relationshipAutonomySpotlightCard(
-  w,
-  actorId
-) {
-  const actor =
-    charById(
-      w,
-      actorId
-    );
-
-  const rows =
-    relationshipAutonomySpotlightRows(
-      w,
-      actorId,
-      4
-    );
-
-  if (
-    !actor ||
-    !rows.length
-  ) {
-    return "";
-  }
-
-  const lines =
-    rows.map((row) => {
-      const rel =
-        row.rel || {};
-
-      const bond =
-        String(
-          rel.bond ||
-          rel.type ||
-          ""
-        ).trim();
-
-      const hidden =
-        String(
-          rel.hidden ||
-          ""
-        ).trim();
-
-      const mood =
-        String(
-          rel.mood ||
-          ""
-        ).trim();
-
-      return [
-        `${row.target.name} [${row.target.id}]`,
-        `mode=${row.gravity.mode}`,
-        `socialGravity=${row.gravity.level}/5`,
-        bond ? `bond=${bond}` : "",
-        mood ? `currentFeeling=${cut(mood, 120)}` : "",
-        hidden ? `privateFeeling=${cut(hidden, 120)}` : "",
-        `recentOwnPostMentions=${row.recentMentions}`,
-        row.due ? "RECURRENT_FOCUS_DUE=YES" : "",
-      ]
-        .filter(Boolean)
-        .join(" | ");
-    });
-
-  return `
-RELATIONSHIP-DRIVEN SOCIAL GRAVITY — ${actor.name}'S OWN DIRECTED RELATIONSHIPS:
-${lines.join("\n")}
-
-BEHAVIOR RULE:
-- Relationships are ACTIVE social behavior, not passive labels.
-- OBSESSION = this person naturally occupies much more of SELF's attention. SELF should notice their posts, react to them unusually often, track their visible social activity, and let them recur in SELF's own feed more than a normal person would.
-- If RECURRENT_FOCUS_DUE=YES and there is no stronger current event/topic, the next text post should naturally connect to that person: direct mention, subtweet, complaint, praise, possessive thought, inside reference, callout, question, shared-life reference or another form that fits SELF.
-- Hidden obsession/crush must affect FREQUENCY and attention without forcing a public confession. It may leak through indirect posts, over-attention, quick comments, coded references, irritation, protectiveness or deniable subtweets.
-- Close friends should appear naturally in each other's online lives: comments, support, jokes, shared plans and occasional posts about/with each other.
-- Rivals/enemies should notice each other more than strangers, but engagement must stay conflict-/competition-shaped rather than friendly.
-- Do NOT make every post about the same relationship. Strong social gravity means recurring presence across the feed, not mechanical repetition.
-- Every concrete post/comment must still be fresh and character-specific.
-`;
-}
-
-function relationshipCommentAttentionCard(
-  w,
-  cast,
-  targetId
-) {
-  const rows =
-    (cast || [])
-      .map((actor) => {
-        if (
-          !actor ||
-          !actor.id ||
-          actor.id === targetId
-        ) {
-          return null;
-        }
-
-        const gravity =
-          relationshipSocialGravityProfile(
-            w,
-            actor.id,
-            targetId
-          );
-
-        if (!gravity.level) {
-          return null;
-        }
-
-        return {
-          actor,
-          gravity,
-        };
-      })
-      .filter(Boolean)
-      .sort(
-        (a, b) =>
-          b.gravity.commentPriority -
-          a.gravity.commentPriority
-      );
-
-  if (!rows.length) {
-    return "";
-  }
-
-  return `
-RELATIONSHIP ATTENTION PRIORITY FOR THIS POST:
-${rows.map(({ actor, gravity }) =>
-  `- ${actor.name} [${actor.id}]: ${gravity.mode}, socialGravity=${gravity.level}/5${gravity.mustCommentFreshPost ? ", FRESH-POST COMMENT PRIORITY=VERY HIGH" : ""}${gravity.hidden ? ", PUBLIC EXPRESSION MUST STAY DENIABLE/CHARACTER-FAITHFUL" : ""}`
-).join("\n")}
-
-HARD SOCIAL BEHAVIOR:
-- These are frequency/attention weights, not instructions to repeat the relationship label in the comment.
-- An OBSESSED character should usually be visibly present on this person's fresh posts. COMMENT is preferred over silently ignoring them; if the feeling is hidden, the comment can look normal, coded, over-attentive, teasing, sharp or otherwise deniable instead of confessing.
-- Crushes/close friends should appear more often than neutral characters.
-- Rivals/enemies may engage unusually often when the actual post gives them something to challenge, mock or compete over.
-- Repeated PRESENCE is allowed and expected for high social gravity; repeated WORDING is not.
-`;
-}
-
 function socialInteractionInterest(
   w,
   actorId,
@@ -35329,20 +26980,6 @@ function socialInteractionInterest(
       obsessionLevel * 30;
   }
 
-  /*
-   * Existing relationship state should change HOW MUCH social attention this
-   * exact person receives, not only the tone once they happen to be selected.
-   */
-  const gravity =
-    relationshipSocialGravityProfile(
-      w,
-      actorId,
-      targetId
-    );
-
-  interest +=
-    gravity.commentPriority;
-
   return interest;
 }
 
@@ -35359,7 +26996,6 @@ function fairCommentCast(w, targetId, post = null) {
 
   const target =
     charById(w, targetId);
-  const socialClimate = socialCommentClimateSnapshot(w, post || { authorId: targetId });
 
   const chars = (w.chars || [])
     .filter(
@@ -35416,12 +27052,6 @@ function fairCommentCast(w, targetId, post = null) {
           targetId,
           post
         );
-      const relationshipGravity =
-        relationshipSocialGravityProfile(
-          w,
-          c.id,
-          targetId
-        );
       const following =
         isFollowing(
           w,
@@ -35434,29 +27064,6 @@ function fairCommentCast(w, targetId, post = null) {
           ownStorySnippetAbout(c, target)
         );
 
-      const explicitlyInPost =
-        Boolean(
-          post &&
-          publicSocialExplicitTargetIds(
-            w,
-            post
-          ).includes(
-            c.id
-          )
-        );
-
-      const playerConnectedVisibility =
-        Boolean(
-          isHuman(w, targetId) &&
-          (
-            following ||
-            Math.abs(score) >= 10 ||
-            Boolean(bond) ||
-            storyLinked ||
-            explicitlyInPost
-          )
-        );
-
       /*
        * Feed realism: a follower or someone with a real personal/story reason
        * naturally sees the post. A totally unrelated non-follower can still
@@ -35465,33 +27072,18 @@ function fairCommentCast(w, targetId, post = null) {
        */
       const naturallyLinked =
         following ||
-        explicitlyInPost ||
         Math.abs(score) >= 10 ||
         Boolean(bond) ||
         storyLinked ||
         interest >= 14 ||
-        visualPriority >= 20 ||
-        relationshipGravity.level >= 2;
+        visualPriority >= 20;
 
       const activity = characterOnlineActivityProfile(w, c).comment;
-      const dramaDiscoveryMultiplier =
-        socialClimate.dramaLevel === "chaotic"
-          ? 1.42
-          : socialClimate.dramaLevel === "high"
-            ? 1.22
-            : socialClimate.dramaLevel === "low"
-              ? 0.72
-              : 1;
-      const publicAttentionMultiplier =
-        1 + Math.min(0.42, socialClimate.attentionScore / 430);
 
       const discoveryChance =
         Math.min(
-          0.86,
-          (0.18 + interest / 320) *
-            Math.max(0.55, activity) *
-            dramaDiscoveryMultiplier *
-            publicAttentionMultiplier
+          0.72,
+          (0.18 + interest / 320) * Math.max(0.55, activity)
         );
 
       const discovered =
@@ -35500,19 +27092,14 @@ function fairCommentCast(w, targetId, post = null) {
 
       const visibilityBonus =
         (
-          explicitlyInPost
-            ? 48
-            : following
-              ? 34
-              : naturallyLinked
-                ? 14
-                : discovered
-                  ? 4
-                  : 0
-        ) +
-        visualPriority +
-        relationshipGravity.commentPriority +
-        Math.min(18, socialClimate.attentionScore * 0.075);
+          following
+            ? 34
+            : naturallyLinked
+              ? 14
+              : discovered
+                ? 4
+                : 0
+        ) + visualPriority;
 
       return {
         c,
@@ -35520,14 +27107,11 @@ function fairCommentCast(w, targetId, post = null) {
         lastCommentAt,
         interest,
         following,
-        explicitlyInPost,
-        playerConnectedVisibility,
         eligible:
           naturallyLinked || discovered,
         visibilityBonus,
         activity,
         visualPriority,
-        relationshipGravity,
         tie: Math.random(),
       };
     });
@@ -35539,29 +27123,13 @@ function fairCommentCast(w, targetId, post = null) {
      * pays a larger recent-activity penalty and therefore appears less often.
      */
     const ap =
-      a.recentComments *
-        (20 / Math.max(0.35, a.activity)) *
-        Math.max(
-          0.12,
-          Number(
-            a.relationshipGravity &&
-            a.relationshipGravity.repeatPenaltyScale
-          ) || 1
-        ) -
+      a.recentComments * (20 / Math.max(0.35, a.activity)) -
       a.interest -
       a.visibilityBonus -
       (a.activity - 1) * 24;
 
     const bp =
-      b.recentComments *
-        (20 / Math.max(0.35, b.activity)) *
-        Math.max(
-          0.12,
-          Number(
-            b.relationshipGravity &&
-            b.relationshipGravity.repeatPenaltyScale
-          ) || 1
-        ) -
+      b.recentComments * (20 / Math.max(0.35, b.activity)) -
       b.interest -
       b.visibilityBonus -
       (b.activity - 1) * 24;
@@ -35619,73 +27187,7 @@ function fairCommentCast(w, targetId, post = null) {
     ? freshVoices.concat(pool.filter((row) => alreadyTopLevel.has(row.c.id)))
     : pool;
 
-  /*
-   * VERY HIGH relationship gravity (e.g. obsession) is intentionally allowed
-   * to recur across this person's different posts. It should not be crowded
-   * out by generic fairness rotation.
-   */
-  const playerPostVisibilityRows =
-    isHuman(w, targetId)
-      ? chars
-          .filter(
-            (row) =>
-              row.eligible &&
-              row.playerConnectedVisibility &&
-              !alreadyTopLevel.has(
-                row.c.id
-              )
-          )
-          .sort(
-            (a, b) =>
-              (
-                Number(b.explicitlyInPost) * 90 +
-                Number(b.following) * 40 +
-                Number(b.interest || 0) +
-                Number(b.visibilityBonus || 0)
-              ) -
-              (
-                Number(a.explicitlyInPost) * 90 +
-                Number(a.following) * 40 +
-                Number(a.interest || 0) +
-                Number(a.visibilityBonus || 0)
-              )
-          )
-      : [];
-
-  const mustSeeRows =
-    chars
-      .filter(
-        (row) =>
-          row.eligible &&
-          row.relationshipGravity &&
-          row.relationshipGravity.mustCommentFreshPost &&
-          !alreadyTopLevel.has(
-            row.c.id
-          )
-      )
-      .sort(
-        (a, b) =>
-          b.relationshipGravity.commentPriority -
-          a.relationshipGravity.commentPriority
-      );
-
-  const finalRows = [
-    ...playerPostVisibilityRows,
-    ...mustSeeRows,
-    ...orderedPool,
-  ].filter(
-    (row, index, arr) =>
-      row &&
-      row.c &&
-      arr.findIndex(
-        (other) =>
-          other &&
-          other.c &&
-          other.c.id === row.c.id
-      ) === index
-  );
-
-  return finalRows
+  return orderedPool
     .map((x) => x.c)
     .slice(0, castLimit);
 }
@@ -35777,13 +27279,6 @@ async function genReply(w, post, comment, forcedResponderId = "") {
     post
   );
 
-  const branch = threadBranchOf(
-    w,
-    post,
-    comment,
-    12
-  );
-
   let out =
     await askWorldJSON(
       w,
@@ -35797,7 +27292,6 @@ async function genReply(w, post, comment, forcedResponderId = "") {
         includePlayer: publicSocialPlayerRelevant(w, post, comment),
         includeRecentWorld: false,
         socialScope: true,
-        agentPrivacyScope: true,
       }
     )}
 
@@ -35815,18 +27309,8 @@ ${post.imageDescription ? `A kép AI által felismert látható tartalma: ${post
     : ""
 }
 
-KOMMENTSZÁL — TELJES NYILVÁNOS THREAD:
+KOMMENTSZÁL:
 ${th.text}
-
-AKTUÁLIS VÁLASZLÁNC — ROOT → ... → KÖZVETLEN PARENT:
-${branch.text || `${nameOfIn(w, comment.authorId)}: ${comment.text}`}
-
-THREAD CONTINUITY HARD RULE:
-- A MOSTANI kommentet mindig az AKTUÁLIS VÁLASZLÁNC teljes előzménye alapján értelmezd, ne önmagában.
-- Tudd pontosan, ki kinek válaszolt: a parent ID-k strukturális tények, nem hangulati javaslatok.
-- Egy késői reply nem törölheti az előző replikák jelentését. Ha a CURRENT sor csak az előző TURN fényében érthető, azt a kontextust kötelező megtartani.
-- A teljes nyilvános threadből észreveheted, ha egy harmadik karakternek természetes oka van beszállni, de a reply közvetlen parentje továbbra is a kijelölt CURRENT komment.
-- Ne válaszolj véletlenül egy másik ágra csak azért, mert abban drámaibb mondat van.
 
 ${commentOwnershipInstruction(w, post, comment)}
 
@@ -35852,22 +27336,7 @@ PUBLIKUS THREAD REALIZMUS:
 - BÁRMELYIK itt megadott AI beszállhat, ha hitelesen látja a threadet és van személyes oka: barátság, rivalizálás, védelem, féltékenység, érintettség, kíváncsiság, pletyka, konfliktus vagy a poszt témája.
 - Ne kényszeríts második vagy harmadik karaktert a threadbe, ha nincs oka, de ne is zárd le mesterségesen két emberre.
 - Egy szaftos nyilvános beszólásból könnyen lehet többemberes pile-on, védelem, flört, vita vagy későbbi gossip-forrás.
-- A PUBLIC SOCIAL CLIMATE befolyásolhatja, hogy több megfigyelő mer-e beszállni, DE minden beszálló külön dönt: egy lojális barát megvédhet valakit cancel-hullámban, egy rivális kritizálhat, egy konfliktuskerülő karakter pedig maradhat csendben.
-- A korábbi döntésekből/kommentekből tanult kapcsolat és emlékezet változtathatja a reakció INTENZITÁSÁT és bizalmasságát; a karakter alapvető személyisége és saját Speech/Voice stílusa ettől nem cserélődik le.
 ${forcedResponderIsDirect ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott KÖZVETLEN VÁLASZOLÓ; a legutóbbi komment neki szólt, ezért az ő reply-ja az elsődleges.` : forcedResponderIsBystander ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott HARMADIK FÉL / BYSTANDER; beszállhat a threadbe, de a legutóbbi komment NEM neki szólt.` : ""}
-
-REPLY DECISION FIRST — THREAD ARCHITEKTÚRA:
-Mielőtt látható reply-t írsz, minden lehetséges válaszolónál ezt a sorrendet kövesd:
-1. THREAD CONTEXT — olvasd végig a ROOT → CURRENT ágat; a legutóbbi komment csak ennek a láncnak a részeként értelmezhető.
-2. WHY ENTER — közvetlen címzettnél: valóban kíván-e választ? Harmadik félnél: van-e külön, látható social oka beszállni (védelem, rivalizálás, egyetértés, vita, érintettség stb.)?
-3. REACTION ACT — válassz egyet: answer | agree | disagree | tease | roast | support | compliment | question | challenge | defend | correct | flirt | jealous_reaction | inside_joke | concern | sarcasm | shock | laugh | gossip_probe | callout | invite | dismiss.
-4. PARENT BASIS — másolj 1–18 egymást követő szót szó szerint a MOST megválaszolandó ${comment.id} kommentből.
-5. PARENT MEANING — egy rövid rejtett mondatban írd le, mit jelent ez a parentBasis a jelenlegi threadben.
-6. CHARACTER FILTER — relationship + Personality + Speech/Voice csak ezután formálja a válasz hangját. Nem választhat másik témát.
-
-- A reply nem mini új poszt: elsődlegesen a közvetlen parent kommentre reagál.
-- A harmadik AI csak akkor szálljon be, ha a thread nyilvános kontextusából + saját valódi kapcsolatából érthető, miért szólal meg.
-- Nincs kötelező kérdés, emoji, dicséret vagy konfliktus. A reactionAct és a karakter dönti el.
 
 REPLY TARGET CONTRACT — EZ FONTOSABB MINDEN STÍLUS-SZABÁLYNÁL:
 - A MOST MEGVÁLASZOLANDÓ komment ID-ja: ${comment.id}.
@@ -35880,29 +27349,17 @@ REPLY TARGET CONTRACT — EZ FONTOSABB MINDEN STÍLUS-SZABÁLYNÁL:
 - A replyTo + targetId páros determinisztikus: ${comment.id} = parent, ${comment.authorId} = közvetlen címzett. Ezt sem a személyiség, sem a scheduler, sem a poszt szerzője nem írhatja felül.
 - THIRD-PARTY SCOPE: ne hozd be a játékost vagy más harmadik karaktert csak azért, mert szerepel valamelyik válaszoló emlékeiben/Connectionsében. Harmadik személy csak akkor lehet téma, ha a jelenlegi poszt, kép vagy EZ a közvetlen komment explicit módon tartalmazza.
 
-${socialCommentExactPostGroundingCard(w, post)}
+MOST KIFEJEZETTEN ERRE A KOMMENTRE VÁLASZOLNAK:
 
-REPLY SEMANTIC LOCK:
-- A reply elsődleges értelme a KÖZVETLEN PARENT KOMMENTRE adott válasz. Relationship/personality csak ennek hangját formálja.
-- Ha a parent komment egyszerű kérdés/állítás, ne válaszolj egy teljesen más konfliktusból kiragadott mondattal.
-- Kép nélküli posztnál a reply sem találhat ki fotót vagy kinézeti részletet.
-
-M
 ${target ? target.name : "?"} [${comment.authorId}]: "${comment.text}"
 
 ${strictSocialActorCapsules(w, cast, post, comment)}
-
-${socialCharacterCustomizationRuleCard()}
-
-${socialCommentClimateCard(w, post)}
 
 KOMMENTVÁLASZ-KARAKTERHŰSÉG:
 - A válaszoló teljes karakterlapja és saját emlékezete aktív.
 - KAPCSOLATI PRIORITÁS: a jó/közeli kapcsolat nem válhat random bunkósággá csak a változatosság kedvéért. Sértegetés, lenézés, hideg lepattintás vagy rosszindulatú gúny csak konkrét jelenlegi triggerből vagy a karakter SAJÁT explicit kánonjából jöhet.
 - KÖLCSÖNÖS BARÁTSÁG: ha a válaszoló és a kommentelő mindkét irányban barátok, ezt a reply konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A reply legyen felismerhetően az adott karakteré, ne generikus social reakció.
-- A reply mikrostílusánál KÖTELEZŐ a saját COMMENT AGE / GENERATION / DIGITAL VOICE kártya: korhoz/generációhoz illő szleng, írásjel, mondathossz és emoji-használat. Gen Z lehet természetesen Gen Z; idősebb karakter ne kapjon automatikusan Gen Z/TikTok hangot.
-- 35+ férfi alapból ne használjon emojit replyban sem, kivéve ha a SAJÁT character sheet valóban emojizó/online texting személyiséget ír le.
 - A korábbi saját kommentjeinek/DM-jeinek/posztjainak fordulatait se használja újra.
 - Ha a komment vagy a válasz ténylegesen közelebb hozza, felidegesíti, féltékennyé teszi, megsérti, megnevetteti vagy másképp érzelmileg megmozdítja a karaktert, ezt a "changes" tömbben IS jelezd. Ne csak a reply szövegében jelenjen meg.
 - Kis social reakcióhoz kis változás illik (általában 1-6 pont); nagyobb változás csak erős, konkrét érzelmi okból legyen.
@@ -35941,12 +27398,6 @@ ${repetitionGuard(
   "kommentválaszok"
 )}
 
-REPLY KARAKTERHANG — NE LEGYEN GENERIKUS:
-- Először döntsd el, hogyan reagálna erre a konkrét karakter, és csak utána írd meg a mondatot.
-- A személyiség legyen látható a reakció döntésében és ritmusában, ne csak egy-egy jelzőben.
-- A reply lehet meleg, csípős, kaotikus, flörtölős, sértett, játékos, domináns, zavart vagy kifejtősebb, ha a karakterlap + kapcsolat + jelenlegi trigger ezt indokolja.
-- Ne rövidítsd le automatikusan a választ 1-2 száraz szóra csak azért, mert social media. A valódi karakterhang fontosabb a mesterséges tömörségnél.
-
 KOMMENTVÁLASZ SZABÁLYOK:
 
 ${directResponder ? `A LEGFONTOSABB NATURAL RESPONDER: ${directResponder.name} [${directResponder.id}]
@@ -35961,14 +27412,13 @@ ${directResponder ? `A LEGFONTOSABB NATURAL RESPONDER: ${directResponder.name} [
 - Általában EGY közvetlen válasz a legreálisabb. Legfeljebb 2 AI válaszoljon ugyanarra a kommentre, és a második csak akkor, ha neki is külön, konkrét oka van beszállni.
 - Ezek VALÓDI social media reply-k, nem roleplay-jelenetek és nem mini dialógusok egy regényből.
 - Úgy írjanak, mintha telefonról gyorsan válaszolnának egy kommentre.
-- A válaszok TÖBBSÉGE 2-16 szó legyen, de a karakter saját beszédhossza érvényesüljön.
-- 17-28 szó is természetes lehet, ha a helyzet vagy a személyiség indokolja.
-- Ritkán 29-40 szó is lehet, ha ez a karakter hangjához tartozik.
+- A válaszok TÖBBSÉGE 1-12 szó legyen.
+- 13-20 szó csak ritkán, ha tényleg szükséges.
 - Egyetlen szó is lehet teljes válasz.
 - 1-3 szavas beszólás vagy reakció teljesen természetes.
 - Emoji + néhány szó is lehet teljes válasz.
 - Ritkán akár csak emoji is lehet válasz, ha az adott karakter ezt tényleg megtenné.
-- Ha rövidebben természetesebb, válaszd a rövidebbet, de ne tömörítsd a karaktert automatikusan két száraz szóra.
+- Ha rövidebben természetesebb, MINDIG a rövidebb verziót válaszd.
 - Ne legyen minden válasz teljes, szépen lezárt mondat.
 - Lehet töredékes, félbehagyott, száraz, impulzív vagy minimális.
 - Ne írjanak hosszú bekezdést.
@@ -36053,7 +27503,7 @@ A reply első pillantásra úgy hasson, mint egy valódi komment alatti gyors v�
 Formátum:
 
 {"comments":[
-  {"id":"VÁLASZOLÓ szereplő azonosítója","social_contract":"v1","decision":"REPLY","post_id":"${post.id}","post_author_id":"${post.authorId}","targetId":"${comment.authorId}","replyTo":"${comment.id}","reactionAct":"answer|agree|disagree|tease|roast|support|compliment|question|challenge|defend|correct|flirt|jealous_reaction|inside_joke|concern|sarcasm|shock|laugh|gossip_probe|callout|invite|dismiss","parentBasis":"1-18 egymást követő szó szó szerint a ${comment.id} parent kommentből","meaning":"rövid rejtett mondat: mit jelent a parentBasis ebben a threadben","text":"természetes rövid kommentválasz KIFEJEZETTEN ${target ? target.name : "a komment szerzője"} felé","trigger":"max 8 szó: mire reagál konkrétan"}
+  {"id":"VÁLASZOLÓ szereplő azonosítója","post_id":"${post.id}","post_author_id":"${post.authorId}","targetId":"${comment.authorId}","replyTo":"${comment.id}","text":"természetes rövid kommentválasz KIFEJEZETTEN ${target ? target.name : "a komment szerzője"} felé","trigger":"max 8 szó: mire reagál konkrétan"}
 ],
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":-10,"mood":"mit érez most iránta","why":"egy rövid mondat"}
@@ -36066,245 +27516,6 @@ Formátum:
 }${TAIL}`,
     { maxTokens: 900 }
   );
-
-  /*
-   * DIRECT REPLY PRESENCE REPAIR
-   *
-   * The scheduler already decided this thread deserves a reply. The large
-   * multi-actor pass may still return zero rows or only bystanders. When there
-   * is a concrete direct responder, do one tiny targeted repair so the thread
-   * does not silently die.
-   *
-   * This does NOT force every random comment to receive a reply: genReply is
-   * called only after the scheduler/thread logic has already selected one.
-   */
-  if (
-    directResponder &&
-    directResponder.id !== comment.authorId
-  ) {
-    const directAlreadyPresent =
-      safeAiComments(
-        out
-      ).some(
-        (row) =>
-          findChar(
-            w,
-            row &&
-            (
-              row.id !== undefined
-                ? row.id
-                : row.name
-            )
-          ) ===
-          directResponder.id
-      );
-
-    if (!directAlreadyPresent) {
-      try {
-        const directRepair =
-          await askWorldJSONInteractive(
-            w,
-            engineFor(
-              w
-            ),
-            `${worldContext(
-              w,
-              [directResponder.id],
-              true,
-              directResponder.id,
-              {
-                includePlayer:
-                  publicSocialPlayerRelevant(
-                    w,
-                    post,
-                    comment
-                  ),
-                includeRecentWorld: false,
-                socialScope: true,
-                agentPrivacyScope: true,
-              }
-            )}
-
-${socialScopeInstruction(w, post, comment)}
-
-${socialCommentExactPostGroundingCard(w, post)}
-
-${strictSocialActorCapsules(
-  w,
-  [directResponder],
-  post,
-  comment
-)}
-
-DIRECT REPLY REPAIR — ONE CHARACTER ONLY.
-
-POST:
-${nameOfIn(w, post.authorId)}: "${String(post.text || "").slice(0, 600)}"
-
-EXACT THREAD BRANCH — ROOT TO CURRENT:
-${branch.text || `${nameOfIn(w, comment.authorId)}: ${comment.text}`}
-
-EXACT COMMENT BEING ANSWERED:
-${nameOfIn(w, comment.authorId)} [${comment.authorId}]: "${String(comment.text || "").slice(0, 600)}"
-
-RESPONDER:
-${directResponder.name} [${directResponder.id}]
-
-HARD RULES:
-- Write exactly ONE natural public social-media reply from ${directResponder.name} to the exact comment above.
-- Read the ROOT→CURRENT branch first. Interpret the exact comment as the latest turn of that branch, not as an isolated sentence.
-- React to what the comment ACTUALLY says in that branch. Relationship/personality only changes HOW ${directResponder.name} answers.
-- Do not import a different conflict, post, image or conversation.
-- If the post is text-only, invent no photo/appearance detail.
-- Keep SELF's own Speech/Voice/personality/casing exactly.
-- Usually 1–18 words; longer only if SELF's own voice genuinely needs it.
-- No narration, no assistant language, no roleplay actions.
-- Do not return empty/skip: the scheduler already selected this direct reply action.
-
-JSON ONLY:
-{"reply":"one grounded direct reply","reactionAct":"one valid reaction act","parentBasis":"1-18 consecutive words copied literally from the exact comment being answered","meaning":"short hidden meaning of that parentBasis in this thread"}${TAIL}`,
-            {
-              maxTokens: 220,
-              maxTries: 2,
-            }
-          );
-
-        let directText =
-          String(
-            directRepair &&
-            directRepair.reply ||
-            ""
-          )
-            .replace(
-              /\s+/g,
-              " "
-            )
-            .trim();
-
-        const directReactionAct = normalizeSocialCommentReactionAct(directRepair && directRepair.reactionAct);
-        const directParentBasis = String(directRepair && directRepair.parentBasis || "").replace(/\s+/g, " ").trim();
-        const directMeaning = String(directRepair && directRepair.meaning || "").replace(/\s+/g, " ").trim();
-        const directContractValid = Boolean(
-          directReactionAct &&
-          socialReplyMeaningMatchesParent(comment, directParentBasis, directMeaning)
-        );
-
-        if (directText) {
-          directText =
-            cleanGeneratedComment(
-              w,
-              directResponder.id,
-              directText,
-              240
-            );
-
-          if (
-            directText &&
-            socialCommentGroundedInExactPost(
-              w,
-              post,
-              comment,
-              directResponder.id,
-              directText,
-              "direct-reply-repair"
-            ) &&
-            !socialTextHasOutOfScopeCharacterReference(
-              w,
-              post,
-              comment,
-              directResponder.id,
-              directText
-            )
-          ) {
-            const current =
-              safeAiComments(
-                out
-              );
-
-            out = {
-              ...(out || {}),
-              comments: [
-                {
-                  id:
-                    directResponder.id,
-
-                  ...(directContractValid ? {
-                    social_contract: "v1",
-                    decision: "REPLY",
-                    reactionAct: directReactionAct,
-                    parentBasis: directParentBasis,
-                    meaning: directMeaning,
-                  } : {}),
-
-                  post_id:
-                    post.id,
-
-                  post_author_id:
-                    post.authorId,
-
-                  targetId:
-                    comment.authorId,
-
-                  replyTo:
-                    comment.id,
-
-                  text:
-                    directText,
-
-                  trigger:
-                    "direct reply repair",
-                },
-                ...current,
-              ]
-                .filter(
-                  (
-                    row,
-                    index,
-                    arr
-                  ) => {
-                    const id =
-                      findChar(
-                        w,
-                        row &&
-                        (
-                          row.id !== undefined
-                            ? row.id
-                            : row.name
-                        )
-                      );
-
-                    return (
-                      id &&
-                      arr.findIndex(
-                        (other) =>
-                          findChar(
-                            w,
-                            other &&
-                            (
-                              other.id !== undefined
-                                ? other.id
-                                : other.name
-                            )
-                          ) === id
-                      ) === index
-                    );
-                  }
-                )
-                .slice(
-                  0,
-                  2
-                ),
-            };
-          }
-        }
-      } catch (directReplyRepairErr) {
-        console.warn(
-          "Direct social reply repair failed:",
-          directReplyRepairErr
-        );
-      }
-    }
-  }
 
   /*
    * v40 FRIENDLY SOCIAL REPAIR
@@ -36383,9 +27594,6 @@ ${relationshipBehaviorCard(
 )}
 
 SOCIAL MEDIA MICRO-REPLY REPAIR
-
-CURRENT THREAD BRANCH — ROOT TO THIS COMMENT:
-${branch.text || `${nameOfIn(w, comment.authorId)}: ${comment.text}`}
 
 ${nameOfIn(w, comment.authorId)} just wrote this warm/supportive comment to ${directResponder.name}:
 "${String(comment.text || "").slice(0, 500)}"
@@ -36530,9 +27738,6 @@ ${relationshipBehaviorCard(w, responderId, comment.authorId)}
 
 HARD FRIENDSHIP TONE REPAIR
 
-CURRENT THREAD BRANCH — ROOT TO THIS COMMENT:
-${branch.text || `${nameOfIn(w, comment.authorId)}: ${comment.text}`}
-
 ${nameOfIn(w, comment.authorId)} wrote this public comment:
 "${String(comment.text || '').slice(0, 500)}"
 
@@ -36613,7 +27818,6 @@ JSON: {"reply":"short friendship-consistent reply"}${TAIL}`,
               includePlayer: publicSocialPlayerRelevant(w, post, comment),
               includeRecentWorld: false,
               socialScope: true,
-        agentPrivacyScope: true,
             }
           )}
 
@@ -36627,11 +27831,8 @@ ${visualCrushThreadFrictionInstruction(w, post, comment.authorId, forcedResponde
 
 PUBLIC THREAD BYSTANDER REPLY
 Post by ${nameOfIn(w, post.authorId)}: "${String(post.text || "").slice(0, 500)}"
-Full public thread:
+Thread:
 ${th.text}
-
-Exact branch ending in the latest comment:
-${branch.text || `${nameOfIn(w, comment.authorId)}: ${comment.text}`}
 
 The latest comment is:
 ${nameOfIn(w, comment.authorId)}: "${String(comment.text || "").slice(0, 500)}"
@@ -36639,7 +27840,6 @@ ${nameOfIn(w, comment.authorId)}: "${String(comment.text || "").slice(0, 500)}"
 ${isHuman(w, comment.authorId) ? playerInputUnderstandingInstruction(w, comment.text, "comment") : ""}
 
 ${forcedResponder.name} has already been selected by the social scheduler because their relationship/history/personality gives them a REAL reason to jump into this public thread.
-- FIRST read the Exact branch root-to-latest. The new reply must make sense as the next turn of THAT branch, not merely as a reaction to another interesting comment elsewhere in the full thread.
 - IMPORTANT: the latest comment is NOT automatically addressed to ${forcedResponder.name}. They are a BYSTANDER joining a public thread. React to what the commenter said about the post/poster; do not pretend the commenter attacked or addressed ${forcedResponder.name} unless the thread actually says so.
 - Write only ${forcedResponder.name}'s natural public reply to the latest comment.
 - Respect both relationships: ${forcedResponder.name} → latest commenter AND ${forcedResponder.name} → post author. If the commenter is their friend but the post author is disliked, do not randomly turn on the friend; shared-side banter, playful disagreement or redirecting the jab toward the poster is more natural.
@@ -36649,7 +27849,7 @@ ${forcedResponder.name} has already been selected by the social scheduler becaus
 - Do not invent a reason that is not supported by the visible thread/character context.
 - No narration. No assistant language.
 
-JSON: {"reply":"short public reply","reactionAct":"one valid reaction act","parentBasis":"1-18 consecutive words copied literally from the latest comment","meaning":"short hidden meaning of that parentBasis in this exact branch"}${TAIL}`,
+JSON: {"reply":"short public reply"}${TAIL}`,
           { maxTokens: 180, maxTries: 2 }
         );
 
@@ -36662,29 +27862,7 @@ JSON: {"reply":"short public reply","reactionAct":"one valid reaction act","pare
           out = {
             ...(out || {}),
             comments: [
-              {
-                id: forcedResponder.id,
-                ...(normalizeSocialCommentReactionAct(repairedBystander && repairedBystander.reactionAct) &&
-                  socialReplyMeaningMatchesParent(
-                    comment,
-                    repairedBystander && repairedBystander.parentBasis,
-                    repairedBystander && repairedBystander.meaning
-                  )
-                  ? {
-                      social_contract: "v1",
-                      decision: "REPLY",
-                      reactionAct: normalizeSocialCommentReactionAct(repairedBystander.reactionAct),
-                      parentBasis: String(repairedBystander.parentBasis || "").replace(/\s+/g, " ").trim(),
-                      meaning: String(repairedBystander.meaning || "").replace(/\s+/g, " ").trim(),
-                    }
-                  : {}),
-                post_id: post.id,
-                post_author_id: post.authorId,
-                targetId: comment.authorId,
-                replyTo: comment.id,
-                text: repairedText,
-                trigger: "relevant bystander",
-              },
+              { id: forcedResponder.id, text: repairedText, trigger: "relevant bystander" },
               ...current,
             ].filter((row, index, arr) => {
               const id = findChar(w, row && (row.id !== undefined ? row.id : row.name));
@@ -36713,11 +27891,6 @@ function applyReplies(n, postId, rootId, out) {
     const who = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
     if (!who || !c.text) return;
 
-    const structuredReply =
-      String(c && (c.social_contract || c.socialContract) || "").trim().toLowerCase() === "v1";
-    const reactionAct = normalizeSocialCommentReactionAct(c && (c.reactionAct || c.reaction_act));
-    const declaredDecision = String(c && c.decision || "").trim().toUpperCase();
-
     const declaredPostId = String(
       c && (c.post_id !== undefined ? c.post_id : c.postId !== undefined ? c.postId : "") || ""
     ).trim();
@@ -36735,30 +27908,6 @@ function applyReplies(n, postId, rootId, out) {
     if (socialSelfClassificationContradiction(n, who, body)) return;
     const rootForAddress = safePostComments(p).find((x) => x && x.id === rootId);
     const addressTargetId = rootForAddress && rootForAddress.authorId ? rootForAddress.authorId : p.authorId;
-
-    if (structuredReply) {
-      if (declaredDecision !== "REPLY") return;
-      if (!reactionAct) return;
-      if (!rootForAddress) return;
-      if (!socialReplyMeaningMatchesParent(
-        rootForAddress,
-        c && (c.parentBasis || c.parent_basis),
-        c && c.meaning
-      )) return;
-    }
-
-    if (
-      !socialCommentGroundedInExactPost(
-        n,
-        p,
-        rootForAddress || null,
-        who,
-        body,
-        c && c.trigger
-      )
-    ) {
-      return;
-    }
 
     /*
      * v70 HARD REPLY-TARGET CONTRACT:
@@ -36822,22 +27971,7 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
     ) {
       return;
     }
-    const made = {
-      id: uid(),
-      authorId: who,
-      text: body,
-      ts: now(),
-      parent: rootId,
-      language: worldLanguage(n, n.meId),
-      socialContractVersion: structuredReply ? 1 : 0,
-      reactionAct: reactionAct || "",
-      groundingBasis: structuredReply
-        ? String(c && (c.parentBasis || c.parent_basis) || "").replace(/\s+/g, " ").trim().slice(0, 260)
-        : "",
-      groundingMeaning: structuredReply
-        ? String(c && c.meaning || "").replace(/\s+/g, " ").trim().slice(0, 360)
-        : "",
-    };
+    const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
     p.comments.push(made);
     createdReplyIds.push(made.id);
     createdReplyActors.add(who);
@@ -36875,15 +28009,13 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
       embarrassment: replyJuice.embarrassment,
       source: "ai",
       text: made.text,
-      tags: ["social", "ai-comment", "reply", "thread", ...replyJuice.tags, ...(replyJuice.juicy ? ["gossip-worthy-thread"] : []), ...(made.reactionAct ? [`reaction:${made.reactionAct}`] : [])],
+      tags: ["social", "ai-comment", "reply", "thread", ...replyJuice.tags, ...(replyJuice.juicy ? ["gossip-worthy-thread"] : [])],
       meta: {
         postId: p.id,
         commentId: made.id,
         parentId: made.parent || "",
         postAuthorId: p.authorId || "",
         targetId: replyTargetId || "",
-        reactionAct: made.reactionAct || "",
-        groundingBasis: made.groundingBasis || "",
       },
     });
 
@@ -36960,24 +28092,22 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
   return createdReplyIds.length;
 }
 /*
- * CHARACTER-DRIVEN POST ACTIVITY — REGULARITY FIX
+ * CHARACTER-DRIVEN POST ACTIVITY
  *
- * Every normal AI has an independent social rhythm. The rolling-24h numbers are
- * safety ceilings, NOT a reason to dump all posts into the first few minutes.
- * A per-character cooldown below spreads posts across the whole active session.
- * Gossip-media accounts remain outside this system and keep their own cadence.
+ * Normál karaktereknél a napi social ritmus szándékosan visszafogott:
+ * 1-2 saját poszt / gördülő 24 óra az alap, 3 a kemény felső plafon.
+ * A pletykamédia NEM ide tartozik: az csak valódi publishable történésből
+ * posztol, és külön gossip-cadence vezérli.
  */
-const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 48;
-const AUTONOMOUS_CHARACTER_POST_MIN_24H = 12;
+const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 5;
+const AUTONOMOUS_CHARACTER_POST_MIN_24H = 3;
 const AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H = 1;
-const AUTONOMOUS_TRIGGER_BURST_MIN_GAP_MS = 45 * 1000;
 
 /*
- * PER-CHARACTER SOCIAL RHYTHM
- * quieter = target 18 posts / rolling 24h, normal = 24, highly online = 30.
- * IMPORTANT: 18–30 is a PRIORITY TARGET, not a stop condition. Characters may
- * continue posting naturally after reaching it until the separate 48/24h hard cap.
- * One image / rolling 24h stays hard.
+ * RECOVERY v99.3 — PER-CHARACTER SOCIAL RHYTHM
+ * Every normal AI owns its own rolling 24-hour quota:
+ * quieter = 3 posts, normal = 4, highly online = 5.
+ * Five is a hard ceiling. Image quota is max one per character / rolling 24h.
  */
 function autonomousGameDayIndex(w) {
   const elapsed = Math.max(0, Number(storySettingsOf(w).elapsedHours) || 0);
@@ -37074,163 +28204,13 @@ function autonomousPostStatsSnapshot(w) {
 }
 
 function autonomousCharacterPostTarget24h(w, c, activityOverride = null) {
-  if (!c) return 18;
+  if (!c) return 3;
   const activity = Number.isFinite(Number(activityOverride))
     ? Number(activityOverride)
     : Number(characterOnlineActivityProfile(w, c).post) || 0;
-  if (activity >= 1.15) return 30;
-  if (activity >= 0.82) return 24;
-  return 18;
-}
-
-/*
- * REACTION-BASED POSTING HEAT
- *
- * This changes FREQUENCY only. It never gives a character knowledge they do
- * not already have. Private DM activity affects only the directly involved AI;
- * public player activity can make the wider social world more active.
- */
-const autonomousPostingSignalCache = new WeakMap();
-
-function autonomousPlayerActivityPostingSignal(w, c = null) {
-  if (!w || !w.meId) {
-    return { heat:0, directHeat:0, lastAt:0, fameHeat:0 };
-  }
-
-  const at = now();
-  const cacheBucket = Math.floor(at / 4000);
-  const cacheKey = `${String(c && c.id || "*")}|${cacheBucket}|${Number(w.rev) || 0}|${Array.isArray(w.socialEvents) ? w.socialEvents.length : 0}`;
-  let worldCache = autonomousPostingSignalCache.get(w);
-  if (!worldCache) {
-    worldCache = new Map();
-    autonomousPostingSignalCache.set(w, worldCache);
-  }
-  if (worldCache.has(cacheKey)) {
-    return worldCache.get(cacheKey);
-  }
-  const windowMs = 30 * 60 * 1000;
-  const cutoff = at - windowMs;
-  const actorId = String(w.meId);
-  const targetCharacterId = c && c.id ? String(c.id) : "";
-  let heat = 0;
-  let directHeat = 0;
-  let lastAt = 0;
-
-  const eventWeight = (event) => {
-    const type = String(event && event.type || "").toLowerCase();
-    const tags = Array.isArray(event && event.tags)
-      ? event.tags.map((x) => String(x || "").toLowerCase())
-      : [];
-
-    if (type === "post" || tags.includes("player-post")) return 1.45;
-    if (type === "reply" || tags.includes("reply")) return 1.12;
-    if (type === "comment" || tags.includes("player-comment")) return 1.00;
-    if (type === "dm-message" || tags.includes("dm")) return 0.92;
-    if (type === "note" || tags.includes("note")) return 0.78;
-    if (type === "like" || tags.includes("player-like")) return 0.28;
-    if (type.includes("roleplay") || type.includes("scene") || type.includes("event")) return 1.08;
-    return 0.38;
-  };
-
-  for (const event of (Array.isArray(w.socialEvents) ? w.socialEvents : []).slice(0, 120)) {
-    if (!event || String(event.actorId || "") !== actorId) continue;
-    const ts = Number(event.ts) || 0;
-    if (!ts || ts < cutoff) continue;
-
-    const ageRatio = Math.max(0, Math.min(1, (at - ts) / windowMs));
-    const freshness = Math.max(0.12, 1 - ageRatio);
-    const targets = Array.isArray(event.targetIds) ? event.targetIds.map(String) : [];
-    const direct = Boolean(targetCharacterId && targets.includes(targetCharacterId));
-    const visibility = String(event.visibility || "public").toLowerCase();
-    const weight = eventWeight(event) * freshness;
-
-    /* Private activity must not create omniscient world heat. */
-    if (visibility === "private" || visibility === "group" || visibility === "limited") {
-      if (!direct) continue;
-      directHeat += weight * 1.35;
-      heat += weight * 0.55;
-    } else {
-      heat += weight;
-      if (direct) directHeat += weight * 1.15;
-    }
-
-    lastAt = Math.max(lastAt, ts);
-  }
-
-  const playerStats = w.socialStats && w.socialStats[w.meId]
-    ? w.socialStats[w.meId]
-    : {};
-  const popularity = Math.max(0, Number(playerStats.popularity) || 0);
-  const hype = Math.max(0, Number(playerStats.hype) || 0);
-  const reputation = Math.abs(Number(playerStats.reputation) || 0);
-  const aura = Math.max(0, Number(playerStats.aura) || 0);
-  const fameHeat = Math.min(1.25, (popularity + hype + reputation * 0.7 + aura * 0.35) / 170);
-
-  if (c && c.id) {
-    const gravity = relationshipSocialGravityProfile(w, c.id, w.meId);
-    const relationshipHeat = Math.min(0.9, Math.max(0, Number(gravity.level) || 0) * 0.14);
-    heat += relationshipHeat;
-    if (directHeat > 0) directHeat += relationshipHeat * 0.7;
-  }
-
-  heat += fameHeat;
-
-  const result = {
-    heat: Math.max(0, Math.min(3.6, heat)),
-    directHeat: Math.max(0, Math.min(3.0, directHeat)),
-    lastAt,
-    fameHeat,
-  };
-
-  worldCache.set(cacheKey, result);
-  if (worldCache.size > 80) {
-    const firstKey = worldCache.keys().next().value;
-    if (firstKey !== undefined) worldCache.delete(firstKey);
-  }
-  return result;
-}
-
-function autonomousDynamicFeedPulseMs(w) {
-  const active = playerIsActivelyViewingWorld();
-  const base = active ? LIVE_WORLD_ACTIVE_POST_TARGET_MS : LIVE_WORLD_POST_TARGET_MS;
-  const signal = autonomousPlayerActivityPostingSignal(w, null);
-  const epoch = Math.floor(now() / (45 * 1000));
-  const seed = commentSeedNumber(`${String(w && w.code || "world")}|feed-pulse|${epoch}`);
-  const jitter = 0.72 + (seed % 67) / 100; /* 0.72 .. 1.38 */
-  const reactionFactor = 1 / (1 + signal.heat * 0.20);
-  const target = Math.round(base * jitter * reactionFactor);
-
-  return active
-    ? Math.max(8 * 1000, Math.min(48 * 1000, target))
-    : Math.max(24 * 1000, Math.min(3 * 60 * 1000, target));
-}
-
-function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
-  if (!c) return 6 * 60 * 1000;
-  const activity = Number.isFinite(Number(activityOverride))
-    ? Number(activityOverride)
-    : Number(characterOnlineActivityProfile(w, c).post) || 0;
-
-  /* Personality creates the base rhythm, but it is deliberately NOT a fixed
-     timer. Recent player activity, relationship gravity and social status can
-     temporarily accelerate it, while a deterministic moving jitter prevents
-     bots from lining up on exact recurring minute marks. */
-  const baseGap = activity >= 1.15
-    ? 150 * 1000
-    : activity >= 0.82
-      ? 240 * 1000
-      : 390 * 1000;
-
-  const signal = autonomousPlayerActivityPostingSignal(w, c);
-  const epoch = Math.floor(now() / (90 * 1000));
-  const seed = commentSeedNumber(`${String(c.id || c.name || "character")}|post-gap|${epoch}`);
-  const jitter = 0.68 + (seed % 73) / 100; /* 0.68 .. 1.40 */
-  const reactionFactor = 1 / (1 + signal.heat * 0.24 + signal.directHeat * 0.18);
-
-  return Math.max(
-    55 * 1000,
-    Math.round(baseGap * jitter * reactionFactor)
-  );
+  if (activity >= 1.15) return 5;
+  if (activity >= 0.82) return 4;
+  return 3;
 }
 
 function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
@@ -37250,189 +28230,43 @@ function autonomousCanUseAlbumImageToday(w, character, requestedImage) {
   return stats.imageCount < AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H;
 }
 
-function autonomousTriggerBurstUsedAuthorIds(w, burstKey) {
-  const key = String(burstKey || "").trim();
-  if (!key) return new Set();
-  return new Set(
-    (w && Array.isArray(w.posts) ? w.posts : [])
-      .filter((p) => p && String(p.triggerBurstKey || "") === key && p.authorId)
-      .map((p) => String(p.authorId))
-  );
-}
-
-function autonomousTriggeredFeedContext(w, payload = {}, authorId = "") {
-  const trigger = String(payload && payload.trigger || "").trim();
-  const preferredIds = [];
-  const lines = [];
-  let visibility = "public";
-
-  const addPreferred = (ids) => {
-    (Array.isArray(ids) ? ids : []).forEach((id) => {
-      if (!id || isHuman(w, id) || !charById(w, id) || preferredIds.includes(id)) return;
-      preferredIds.push(id);
-    });
-  };
-
-  if (trigger === "player-post" && payload.postId) {
-    const post = (w.posts || []).find((p) => p && p.id === payload.postId);
-    if (post) {
-      lines.push(`TRIGGER = PLAYER POST [${post.id}]`);
-      lines.push(`VISIBLE POST: ${cut(String(post.text || post.imageDescription || ""), 900) || "image post"}`);
-      lines.push("AFTERMATH RULE: the feed should visibly wake up after the player's post. Some AI posts may directly react/subtweet/reference it when that character would genuinely care; other burst posts may be independent character-life posts. Do not make every AI obsess over the player.");
-      addPreferred(
-        (w.chars || [])
-          .filter((c) => c && !isHuman(w, c.id))
-          .map((c) => ({ id:c.id, score:socialInteractionInterest(w, c.id, w.meId) + (isFollowing(w, c.id, w.meId) ? 30 : 0) }))
-          .sort((a,b) => b.score-a.score)
-          .slice(0, 5)
-          .map((row) => row.id)
-      );
-    }
-  }
-
-  if ((trigger === "popup-choice" || trigger === "popup-custom-response") && payload.popupEventId) {
-    const event = (w.popupEvents || []).find((e) => e && e.id === payload.popupEventId);
-    if (event) {
-      const choiceId = String(payload.choiceId || event.choiceId || "");
-      const choice = (event.choices || []).find((c) => c && String(c.id) === choiceId);
-      visibility = ["public","limited","private"].includes(event.visibility) ? event.visibility : "limited";
-      const involved = (event.involvedIds || []).filter(Boolean);
-      const witnesses = visibility === "private" ? [] : (event.witnessIds || []).filter(Boolean);
-      addPreferred([...involved, ...witnesses]);
-      const authorCanKnowPrivate =
-        visibility !== "private" ||
-        !authorId ||
-        involved.map(String).includes(String(authorId));
-
-      lines.push(`TRIGGER = RESOLVED POPUP [${event.id}]`);
-      lines.push(`VISIBILITY: ${visibility}`);
-
-      if (!authorCanKnowPrivate) {
-        lines.push("PRIVATE INFORMATION BOUNDARY: this author was NOT a direct participant and does not know the popup details or the player's choice. Do not mention, hint at, infer or leak them. This burst slot should instead be an independent in-character life post, so the feed still becomes active without impossible knowledge.");
-      } else {
-        lines.push(`POPUP: ${cut(`${event.title || "Popup"}: ${event.text || ""}`, 1100)}`);
-        lines.push(`PLAYER CHOICE / OUTCOME: ${cut(String((choice && choice.label) || event.choiceLabel || event.choiceId || "resolved choice"), 500)}`);
-        lines.push(`DIRECT AI PARTICIPANTS/WITNESSES: ${[...new Set([...involved, ...witnesses])].map((id) => nameOfIn(w,id)).filter(Boolean).join(", ") || "none"}`);
-        if (visibility === "private") {
-          lines.push("POPUP AFTERMATH HARD RULE: as a direct private participant, you may react or vaguepost in-character, but must not expose private facts to the public feed unless the character would intentionally reveal information they actually know.");
-        } else {
-          lines.push("POPUP AFTERMATH HARD RULE: this burst exists because the popup just happened. At least some immediate posts MUST talk about, reference, joke about, defend, criticize, subtweet or otherwise process the CONCRETE popup outcome from the author's own personality + relationship POV. Do not replace the popup with unrelated filler.");
-        }
-      }
-    }
-  }
-
-  if (trigger === "roleplay-ended" && payload.sceneId) {
-    const scene = (w.scenes || []).find((s) => s && s.id === payload.sceneId);
-    if (scene) {
-      const aiIds = (scene.cast || []).filter((id) => id && !isHuman(w,id) && charById(w,id));
-      addPreferred(aiIds);
-      lines.push(`TRIGGER = FINISHED MULTI-AI EVENT [${scene.id}]`);
-      lines.push(`EVENT: ${cut(String(scene.title || "Event"), 300)}`);
-      lines.push(`WHAT ACTUALLY HAPPENED: ${cut(String(scene.summary || scene.diaryEntry || scene.goalResult || scene.setting || ""), 1400)}`);
-      lines.push(`AI PARTICIPANTS: ${aiIds.map((id) => nameOfIn(w,id)).filter(Boolean).join(", ") || "none"}`);
-      lines.push("EVENT AFTERMATH HARD RULE: because the player + at least two AI characters were present, the event must visibly spill into the social world. Participants may recap, joke, vaguepost, celebrate, complain, call someone out, post an inside reference, process tension, or mention a concrete memorable beat. Keep every claim grounded in the stored event summary/turns; do not invent a scene that did not happen.");
-    }
-  }
-
-  const burstIndex = Math.max(0, Math.round(Number(payload && payload.burstIndex) || 0));
-  const burstTotal = Math.max(0, Math.round(Number(payload && payload.burstTotal) || 0));
-  if (payload && payload.allowBurst && burstTotal > 0) {
-    lines.push(`AFTERMATH FEED BURST: post ${burstIndex + 1}/${burstTotal}. Use a DIFFERENT AI author from earlier posts in this same burst whenever possible.`);
-  }
-
-  return {
-    text: lines.length ? `\nIMMEDIATE SOCIAL TRIGGER CONTEXT — USE THIS BEFORE GENERIC FILLER:\n${lines.join("\n")}\n` : "",
-    preferredIds,
-    visibility,
-  };
-}
-
 function autonomousPostTypeInstruction(w, cast) {
   const snapshot = autonomousPostStatsSnapshot(w);
   const rows = (cast || []).filter((c) => c && c.id).slice(0, 5).map((c) => {
     const stats = snapshot.get(String(c.id)) || { count:0, imageCount:0 };
     const activity = Number(characterOnlineActivityProfile(w, c).post) || 0;
     const target = autonomousCharacterPostTarget24h(w, c, activity);
-    const usableAlbum = albumOf(c).filter((item) => item && (String(item.vision || "").trim() || String(item.who || "").trim() || String(item.note || "").trim())).length;
-    const imageSlotOpen = Number(stats.imageCount || 0) < AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H && usableAlbum > 0;
-    return `${c.name}: ${stats.count}/${target} target posts in rolling 24h (target is NOT a cap); image ${stats.imageCount}/1; usable album=${usableAlbum}; imageSlot=${imageSlotOpen ? "OPEN" : "CLOSED"}.`;
+    return `${c.name}: ${stats.count}/${target} posts in rolling 24h; image ${stats.imageCount}/1.`;
   });
 
   return [
-    "PER-AI RULE: every normal AI has its OWN dynamic posting rhythm and rolling-24h activity target of 18–30 posts depending on online activity.",
-    "CRITICAL: 18–30 is a PRIORITY TARGET, NOT A STOP LIMIT. Reaching the target never silences the character; only the separate hard safety maximum can do that.",
-    "Hard safety maximum is 48 posts per character in any rolling 24-hour window.",
-    "Characters below 12 posts in rolling 24h have extra priority.",
-    "NO FIXED POST CLOCK: personality supplies only a base rhythm. Recent player posts/comments/replies, direct DMs, relationship intensity and social status can temporarily accelerate posting, and timing is jittered so characters do not post on predictable recurring minute marks.",
+    "PER-AI RULE: every normal AI has its OWN rolling 24-hour quota of 3–5 posts.",
+    "Hard maximum is 5 posts per character in any rolling 24-hour window.",
+    "Characters below 3 posts in rolling 24h have priority until they reach the minimum naturally.",
     "IMAGE HARD MAX: each character may have at most 1 image post in rolling 24h. This is per character, not global.",
-    "IMAGE BEHAVIOR: the 1/24h rule is a maximum, NOT a reason to avoid images. If imageSlot=OPEN, the character should genuinely use an album image sometimes. After several text posts with an unused image slot, strongly prefer a fitting image unless every remaining album image clashes with the current context.",
-    "Never invent an image outside the author's own album; the caption must match the selected image's confirmed/visible context and the author's own voice.",
-    "OCCUPATION / ROLE / DOJO / ORGANIZATION ARE CONTEXT, NOT REQUIRED CAPTION TEXT: let them shape what the character plausibly does, notices, knows and sometimes posts about, but do NOT recite or list their job, responsibilities, club, faction, rank or affiliations in every post. Never write a profile/bio/resume-style string merely to prove canon. Mention these explicitly only when that specific post naturally calls for it.",
-    rows.length ? `CURRENT PER-AI ACTIVITY:
+    "All remaining posts should be text posts; image is optional, never required.",
+    rows.length ? `CURRENT PER-AI QUOTAS:
 ${rows.join("\n")}` : ""
   ].filter(Boolean).join("\n");
 }
 
-function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
+function characterCanAutonomouslyPost(w, c, snapshot = null) {
   if (!w || !c || !c.id || isHuman(w, c.id) || isMediaAccount(w, c.id)) return false;
 
   const activity = Number(characterOnlineActivityProfile(w, c).post) || 0;
-  const gapMs = autonomousCharacterPostGapMs(w, c, activity);
+  const target = autonomousCharacterPostTarget24h(w, c, activity);
   const stats = snapshot && snapshot.get(String(c.id))
     ? snapshot.get(String(c.id))
     : characterAutonomousPostStats24h(w, c.id);
 
-  /* 18–30 is deliberately NOT checked here as a cap. It is a desired activity
-     target used by fairPostCast(), not a silence switch. */
-  if (Number(stats.count || 0) >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) {
-    return false;
-  }
-
-  const burstKey = String(options && options.burstKey || "").trim();
-  const allowBurst = Boolean(options && options.allowBurst && burstKey);
-  if (allowBurst) {
-    /*
-     * A triggered aftermath burst already forbids reusing the same author by
-     * burstKey. Requiring an additional 45-second personal gap could eliminate
-     * every candidate and was the reason a player post sometimes produced no
-     * follow-up posts at all. Distinct-author + rolling hard cap is sufficient.
-     */
-    if (autonomousTriggerBurstUsedAuthorIds(w, burstKey).has(String(c.id))) return false;
-    return true;
-  }
-
-  const lastPostAt = Number(stats.lastPostAt || 0);
-  if (!lastPostAt) return true;
-
-  const signal = autonomousPlayerActivityPostingSignal(w, c);
-  let requiredGap = gapMs;
-
-  /* A direct recent player interaction (DM/comment/reply targeted at this AI)
-     may wake that character substantially sooner without turning private facts
-     into public knowledge. The post generator's existing knowledge filters still
-     decide WHAT they are allowed to talk about. */
-  if (signal.directHeat >= 0.55 && signal.lastAt && now() - signal.lastAt <= 12 * 60 * 1000) {
-    requiredGap = Math.max(
-      32 * 1000,
-      Math.round(gapMs * Math.max(0.22, 0.52 - signal.directHeat * 0.08))
-    );
-  } else if (signal.heat >= 1.15 && signal.lastAt && now() - signal.lastAt <= 15 * 60 * 1000) {
-    requiredGap = Math.max(
-      48 * 1000,
-      Math.round(gapMs * Math.max(0.38, 0.72 - signal.heat * 0.07))
-    );
-  }
-
-  return now() - lastPostAt >= requiredGap;
+  return Number(stats.count || 0) < Math.min(5, target);
 }
 
-function fairPostCast(w, options = {}) {
+function fairPostCast(w) {
   const snapshot = autonomousPostStatsSnapshot(w);
-  const chars = (w.chars || []).filter((c) => c && characterCanAutonomouslyPost(w, c, snapshot, options));
+  const chars = (w.chars || []).filter((c) => c && characterCanAutonomouslyPost(w, c, snapshot));
   if (!chars.length) return [];
 
-  const preferred = new Set((options && Array.isArray(options.preferredIds) ? options.preferredIds : []).map(String));
   const at = now();
   const ranked = chars.map((c) => {
     const stats = snapshot.get(String(c.id)) || { count:0, imageCount:0, recentPosts48h:0, lastPostAt:0 };
@@ -37441,28 +28275,17 @@ function fairPostCast(w, options = {}) {
     const count = Number(stats.count || 0);
     const deficit = Math.max(0, target - count);
     const belowMinimum = count < AUTONOMOUS_CHARACTER_POST_MIN_24H;
-    const gapMs = autonomousCharacterPostGapMs(w, c, activity);
-    const idleMs = stats.lastPostAt ? Math.max(0, at - stats.lastPostAt) : gapMs * 4;
-    const overdueRatio = Math.max(1, idleMs / Math.max(1, gapMs));
-    const idleHours = Math.min(72, idleMs / 3600e3);
-    const afterTargetPenalty = Math.max(0, count - target) * 38;
-    const playerSignal = autonomousPlayerActivityPostingSignal(w, c);
-    const playerGravity = relationshipSocialGravityProfile(w, c.id, w.meId);
+    const idleHours = stats.lastPostAt
+      ? Math.min(72, Math.max(0, (at - stats.lastPostAt) / 3600e3))
+      : 72;
 
     const pressure =
       (belowMinimum ? 1000 : 0) +
       deficit * 180 +
-      (preferred.has(String(c.id)) ? 720 : 0) +
-      (options && options.allowBurst ? 180 : 0) +
-      overdueRatio * 120 +
       idleHours * 4 +
-      activity * 30 +
-      playerSignal.heat * 115 +
-      playerSignal.directHeat * 220 +
-      Math.max(0, Number(playerGravity.postPriority) || 0) * 0.55 -
-      afterTargetPenalty -
+      activity * 30 -
       Number(stats.recentPosts48h || 0) * 3 +
-      Math.random() * 28;
+      Math.random() * 5;
 
     return { c, activity, count, lastPostAt:Number(stats.lastPostAt || 0), pressure };
   });
@@ -37487,21 +28310,10 @@ SELF side/dojo/organization: ${characterFactionIdentityCard(actor) || "unknown"}
 
 ${voiceCard(actor)}
 
-${socialSelfStyleOwnershipCard(actor)}
-
-FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
-${fullSelfCharacterSheetForSocial(w, actor)}
-
 OWN MEMORY:
 ${characterMemoryCard(w, actor)}
 
-${relationshipAutonomySpotlightCard(w, actor.id)}
-
 HARD SELF BOUNDARY:
-- SELF may use EVERY field from ${actor.name}'s complete sheet above.
-- Other characters' reference profiles may be KNOWN FACTS: identity, nickname, birth/age, occupation/role/dojo, appearance, bio, history/backstory and Extra/Other Information.
-- Those OTHER-person facts are NEVER personality/style instructions for ${actor.name}. Knowledge about somebody is not permission to imitate them.
-- Never import another character's personality, traits, fears, favorites, secrets, goals, speech style, voice examples or private Connections into ${actor.name}'s behavior or writing voice.
 - "I / my / our" in ${actor.name}'s output must come from ${actor.name}'s own capsule.
 - Never borrow another capsule's occupation, dojo, rank, mentor, family, crush, enemy, trauma, history or goal.
 - A person appearing inside Connections/memory is NOT automatically the topic of a new post.
@@ -37536,7 +28348,6 @@ async function genWorldStep(w, single, timeSkipHours = 0) {
         includePlayer: false,
         includeRecentWorld: false,
         socialScope: true,
-        agentPrivacyScope: true,
       }
     )}
 
@@ -37568,11 +28379,10 @@ KARAKTERHŰ POSZTOLÁS:
 - A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa, occupation/job-ja, dojo/organization oldala és az is, hogy egyáltalán posztolna-e valamiről, a SAJÁT karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
-- POSZTRITMUS: minden normál AI saját, DINAMIKUS és kiszámíthatatlan ritmusban posztol. Online aktivitástól függő gördülő 24 órás célja 18–30 poszt, a 48-as plafon csak biztonsági hard limit; nincs közös globális feedlimit.
-- A 24 órán belül 12 poszt alatt álló AI-k kapjanak elsőbbséget. NINCS fix személyes percszám: a personality/online aktivitás ad egy alapritmust, amit a friss játékos-aktivitás, közvetlen DM/comment/reply, kapcsolatintenzitás és social státusz ideiglenesen gyorsíthat, a jitter pedig szándékosan kiszámíthatatlanná tesz.
+- NAPI POSZTRITMUS: minden normál AI saját gördülő 24 órás kvótája 3–5 poszt; nincs közös globális feedlimit.
+- A 24 órán belül 3 poszt alatt álló AI-k kapjanak elsőbbséget; ugyanaz a karakter 5 fölé soha nem mehet.
 - Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
-- A FEED AKTÍV: ha a karakternek nincs különleges eseménye, akkor is posztoljon egy rövid, hétköznapi, személyiségből következő gondolatot, státuszt, kérdést, poént vagy élethelyzetet. Üres posts tömböt NE adj vissza, amikor a karakter jogosult posztolni.
-- A karaktereknek nem kell megvárniuk a játékost vagy egy drámai eseményt ahhoz, hogy posztoljanak. A saját életükből kezdeményezzenek.
+- A feed ne legyen folyamatosan aktív: ha nincs valódi élethelyzet, inkább ne szülessen új poszt.
 - A kép NEM alapértelmezett. A legtöbb poszt szöveges legyen.
 - Karakterenként maximum 1 képes poszt lehet bármely gördülő 24 órában; a többi legyen szöveges.
 - A képlimit karakterenként értendő, nem az egész világra.
@@ -37593,7 +28403,7 @@ ${
   Number(timeSkipHours) > 0
     ? `IDŐUGRÁS / TIME SKIP: a játékos kifejezetten azt kérte, hogy körülbelül ${Math.round(Number(timeSkipHours))} órával ugorjunk előre. A köztes időben a karakterek a saját életüket élték; generálj 4-7 olyan posztot / reakciót / megfigyelhető eseményt, amelyek természetesen összefoglalják, mi változott. Ne írd le a játékos döntéseit vagy cselekedeteit helyette. Nyitott konfliktusok, kapcsolatok, célok, gossip és saját karakterügyek haladhatnak tovább. Az időugrás ne resetelje az emlékeket vagy kapcsolatokat.`
     : single
-      ? "A világ közben ténylegesen ment tovább. Adj 1-2 valódi, természetes új posztot különböző szereplőktől. LEGALÁBB EGY poszt KÖTELEZŐ, ha van jogosult AI-karakter. Ne válaszolj üres posts tömbbel. A posztok mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Adj posztonként 4-9 releváns reakciót/kommentet másoktól, és különösen keresd azokat a barátokat, akiknek a kapcsolatuk miatt természetes lenne reagálni. Ha valaki kifejezetten passzív/ritkán online, ne erőltesd."
+      ? "A világ közben ténylegesen ment tovább. Adj 1-2 valódi, természetes új posztot különböző szereplőktől. Ne válaszolj üres posts tömbbel. A posztok mögött legyen konkrét saját élethelyzet/szándék/érzelem, ne puszta content-gyártás. Adj posztonként 4-9 releváns reakciót/kommentet másoktól, és különösen keresd azokat a barátokat, akiknek a kapcsolatuk miatt természetes lenne reagálni. Ha valaki kifejezetten passzív/ritkán online, ne erőltesd."
       : "Léptesd a világot néhány órával. Adj 1-2 természetes új posztot különböző szereplőktől, és posztonként 5-10 különböző, releváns reakciót/kommentet másoktól. A karakterek barátai és közeli kapcsolatai kapjanak valódi elsőbbséget a reakcióknál, mert egy élő közösségben az emberek nem úgy működnek, mint névtelen statiszták."
 }
 
@@ -37607,7 +28417,6 @@ ${
 - A harci tudás és veszélyesség itt is számít: ne írj irreális eredményt csak a dráma kedvéért.
 - A kifejezetten pszichopatikus/szadista/manipulatív/könyörtelen karakterek sötét oldala az autonóm világban is aktív maradjon; ne csak akkor jelenjen meg, amikor a játékos közvetlenül beszél velük.
 - A kifejezetten féltékeny/possessive/obsessed karakter társas radarja legyen érzékenyebb: ha valós trigger van a világban, ne reagáljon úgy, mint egy átlagosan nyugodt karakter. A reakció legyen erős, de a saját stílusában és a tényleges információhatárokon belül.
-- AZ ERŐS KAPCSOLATOK A GYAKORISÁGOT IS MÓDOSÍTJÁK: obsession/crush/close friendship/rivalry ne csak a hangnemben létezzen. Az ilyen karakterek természetesen gyakrabban kommentelnek egymásnak, figyelik egymás publikus történéseit, említik egymást, subtweetelnek/calloutolnak, közös dolgokról posztolnak vagy reagálnak egymás életére. Obsession esetén ez különösen erős visszatérő fókusz, de nem jelent mechanikusan minden posztban ugyanazt a személyt vagy nyílt vallomást.
 - A karakterek ne csak reagáljanak: kezdeményezzenek terveket, találkozókat, bulikat, vitákat, békülést, pletykát, kihívást, edzést, közös programot vagy konfliktust, ha a személyiségük/céljuk ezt indokolja.
 - Az érzelmekből legyen következő lépés: aki dühös lehet, hogy számon kér; aki féltékeny lehet, hogy ráír vagy megjelenik egy társas helyzetben; aki fél, kerülhet; aki lelkes, szervezhet valamit. Ne maradjon minden érzés puszta mood-szöveg.
 - Ne hozz létre eseményt csak azért, hogy történjen valami.
@@ -37728,15 +28537,11 @@ KOMMENT EMOJI:
 KÉPEK:
 
 - Akinek van Fotóalbuma, néha képet is posztolhat belőle.
-- Az albumlistában három külön képkontextus lehet: USER-CONFIRMED PEOPLE IN IMAGE = a felhasználó által biztosan megadott szereplők; USER-CONFIRMED IMAGE CONTEXT / PRIVATE ALBUM RECOGNITION HINT = kizárólag belső segítség a kép felismeréséhez/kiválasztásához; VISIBLE IMAGE CONTENT = az AI képelemzése.
-- ALBUM-HELPER HARD BOUNDARY: amit a felhasználó az albumképhez segítségként beírt, az NEM caption, NEM nyilvános képleírás és NEM olyan szöveg, amit ki kell írni a kép alá. Soha ne másold ki, ne idézd, ne foglald össze és ne parafrazáld automatikusan captionként.
-- A segítő szöveget csak arra használd, hogy tudd, melyik képről van szó és hogyan értelmezd a biztos kontextust. A kész caption legyen ÚJ, természetes social-media szöveg a POSZTOLÓ SAJÁT hangján arról, amit ő ténylegesen kiírna ehhez a fotóhoz.
+- Az albumlistában három külön képkontextus lehet: USER-CONFIRMED PEOPLE IN IMAGE = a felhasználó által biztosan megadott szereplők; USER-CONFIRMED IMAGE CONTEXT = a felhasználó plusz helyzeti megjegyzése; VISIBLE IMAGE CONTENT = az AI képelemzése. Mindhármat KÖTELEZŐ figyelembe venni.
 - A USER-CONFIRMED PEOPLE IN IMAGE névlistát biztos kánonnak kezeld. Ne vitasd felül a vision alapján, és ne találj ki helyette másik játékbeli identitást.
-- A poszt szerzője is "tudja", mi van a saját feltöltött fotóján: kik vannak rajta a biztos mező szerint, és mit látott rajta a vision. A captionnek és a későbbi kommentválaszainak a TÉNYLEGES képhez kell igazodniuk, nem az albumhoz írt segítő mondat szövegéhez.
+- A poszt szerzője is "tudja", mi van a saját feltöltött fotóján: kik vannak rajta a biztos mező szerint, és mit látott rajta a vision. A captionnek és a későbbi kommentválaszainak is ehhez kell igazodniuk.
 - A többi AI a poszt megtekintésekor ugyanezt a nyilvános képkontextust kapja, tehát felismerheti a felhasználó által megnevezett játékbeli szereplőket és reagálhat a ténylegesen látható részletekre.
 - Előbb döntsd el, MELYIK konkrét kép illik a jelenethez, és csak UTÁNA írd meg a captiont. A caption ne legyen felcserélhető egy teljesen másik képpel.
-- IMAGE SELF-VOICE LOCK: a VISIBLE IMAGE CONTENT csak vizuális tényforrás. A caption stílusát kizárólag a posts sor "id" szerinti szerző SAJÁT Personality / Traits / Speech / Voice / kor / online szokásai adják. A fotó hangulata nem változtatja minden szerzőt ugyanarra az influencer/Gen-Z hangra.
-- Kerüld a generikus képcaptionöket ("party ready", "good vibes", "felt cute", "another night"), hacsak az adott szerző saját stílusa tényleg ilyen. A captionből akkor is legyen felismerhető a szerző, ha a képet nem látjuk.
 - Ilyenkor az "image" mezőbe a kép jele kerüljön, például "kep2".
 - SOHA ne találj ki olyan képet, ami nincs az adott karakter albumában.
 - Ha kép van a posztban, a kommentelők azt is látják.
@@ -37803,589 +28608,17 @@ Formátum:
 }
 
 
-function socialPostCopiesPrivateCharacterSheetPhrase(w, authorId, value) {
-  if (!w || !authorId || !value) return false;
-  const c = charById(w, authorId);
-  if (!c) return false;
-
-  const postNorm = normalizeExactCommentGroundingText(value);
-  if (!postNorm) return false;
-  const wrappedPost = ` ${postNorm} `;
-
-  /* These fields are motivation/canon, not ready-made captions. A five-word
-     private-sheet clause copied verbatim into a post is almost always the
-     exact failure mode where Goals/Backstory becomes visible UI prose. */
-  const privateFields = [
-    c.goals,
-    c.fears,
-    c.secrets,
-    c.backstory,
-    c.extra,
-    c.brief,
-    c.personality,
-    c.traits,
-    c.connections,
-  ].filter(Boolean);
-
-  for (const rawField of privateFields) {
-    const tokens = normalizeExactCommentGroundingText(rawField)
-      .split(/\s+/)
-      .filter(Boolean);
-    if (tokens.length < 5) continue;
-
-    for (let i = 0; i <= tokens.length - 5; i += 1) {
-      const phraseTokens = tokens.slice(i, i + 5);
-      const phrase = phraseTokens.join(" ");
-      if (phrase.length < 22) continue;
-      const contentCount = socialCommentGroundingContentTokens(phrase).length;
-      if (contentCount < 3) continue;
-      if (wrappedPost.includes(` ${phrase} `)) return true;
-    }
-  }
-
-  return false;
-}
-
-function socialPostLooksLikeRawProfileMetadata(w, authorId, value) {
-  if (!w || !authorId || !value) return false;
-  const c = charById(w, authorId);
-  if (!c) return false;
-
-  const raw = String(value || "").replace(/\s+/g, " ").trim();
-  const normalized = normalizeExactCommentGroundingText(raw);
-  if (!normalized) return false;
-
-  const metadataFields = [
-    c.job,
-    c.occupation,
-    c.role,
-    c.rank,
-    c.affiliation,
-    c.organization,
-    c.organisation,
-    c.team,
-    c.dojo,
-    c.house,
-    c.club,
-    c.gang,
-    c.crew,
-    c.faction,
-  ].filter(Boolean);
-
-  for (const field of metadataFields) {
-    const fieldRaw = String(field || "").replace(/\s+/g, " ").trim();
-    if (!fieldRaw) continue;
-
-    const fieldNorm = normalizeExactCommentGroundingText(fieldRaw);
-    const fragments = fieldRaw
-      .split(/\s*(?:,|\||;|\/|·)\s*/g)
-      .map((part) => normalizeExactCommentGroundingText(part))
-      .filter((part) => part && part.length >= 4);
-
-    /* A profile field such as "Cobra Kai Sensei, Frollo Mafia member" is
-       metadata, not something a real person recites as a caption. */
-    if (fragments.length >= 2) {
-      const matched = fragments.filter((part) =>
-        (` ${normalized} `).includes(` ${part} `)
-      );
-      if (matched.length >= 2) return true;
-    }
-
-    if (
-      /[,|;\/·]/.test(fieldRaw) &&
-      fieldNorm.length >= 18 &&
-      (` ${normalized} `).includes(` ${fieldNorm} `)
-    ) {
-      return true;
-    }
-  }
-
-  const roleWords = raw.match(
-    /\b(?:sensei|member|leader|captain|student|teacher|coach|manager|owner|founder|director|heir|mafia|affiliate|affiliation)\b/gi
-  ) || [];
-
-  return roleWords.length >= 2 && /[,|;\/·]/.test(raw);
-}
-
-function socialPostLooksLikeEmptyAutonomousScaffold(value) {
-  const raw = String(value || "").replace(/\s+/g, " ").trim();
-  if (!raw) return true;
-
-  const normalized = normalizeExactCommentGroundingText(raw);
-  if (!normalized) return true;
-
-  /* Old emergency scaffolds are never acceptable as visible posts. Even when
-     the tail contains a real noun, these prefixes are exactly what made the
-     feed read like generated placeholders instead of people posting. */
-  if (/^(?:plan for now|current mood|mood check|priority|on the list|for now one target|next up|one thing first|still unfinished|need to deal with this|not done yet)\b/i.test(normalized)) {
-    return true;
-  }
-
-  if (/^(?:not naming names today|somebody is taking up too much space in my head|no names they know|no comment|scroll past|keep scrolling|moving on|whatever|anyway|still here|quiet day|long day|good vibes|training done)$/i.test(normalized)) {
-    return true;
-  }
-
-  /* A bare name + generic confrontation has no public meaning. If there is a
-     real conflict, the post must contain at least one concrete clue about it. */
-  if (/^.{1,42}[,.!]\s*(?:we need to talk|explain yourself|talk to me|call me|answer me|seriously)\s*[.!?]*$/i.test(raw)) {
-    return true;
-  }
-
-  return false;
-}
-
-function socialAutonomousPostTextMakesSense(w, authorId, value) {
-  const raw = String(value || "").replace(/\s+/g, " ").trim();
-  if (!raw) return false;
-  if (socialPostCopiesPrivateCharacterSheetPhrase(w, authorId, raw)) return false;
-  if (socialPostLooksLikeRawProfileMetadata(w, authorId, raw)) return false;
-  if (socialPostLooksLikeEmptyAutonomousScaffold(raw)) return false;
-  return true;
-}
-
-
-const SOCIAL_AUTONOMOUS_POST_TYPES = new Set([
-  "casual_status",
-  "short_observation",
-  "question",
-  "direct_callout",
-  "subtweet",
-  "mini_story",
-  "photo_caption",
-  "event_reaction",
-  "opinion",
-  "complaint",
-  "joke",
-  "inside_joke",
-  "invitation",
-  "achievement",
-  "late_night_thought",
-  "gossip_reaction",
-  "relationship_hint",
-  "training_update",
-  "location_update",
-]);
-
-const SOCIAL_AUTONOMOUS_ANCHOR_TYPES = new Set([
-  "event",
-  "activity",
-  "plan",
-  "person",
-  "place",
-  "object",
-  "image",
-  "public_post",
-  "gossip",
-  "relationship",
-  "achievement",
-  "opinion",
-  "self_life",
-]);
-
-const SOCIAL_AUTONOMOUS_ENGAGEMENT_INTENTS = new Set([
-  "none",
-  "question",
-  "invite",
-  "challenge",
-  "opinion_request",
-]);
-
-function socialAutonomousPostHasGenericCreatorCTA(value) {
-  const raw = String(value || "").replace(/\s+/g, " ").trim();
-  if (!raw) return false;
-  return /\b(?:like\s+(?:this|if)|comment\s+(?:below|if)|drop\s+(?:a|your)\s+comment|follow\s+(?:me\s+)?for\s+more|share\s+(?:this|if)|save\s+this\s+post|link\s+in\s+(?:my\s+)?bio|lájkold\s+ha|írd\s+meg\s+kommentben|kommenteld\s+le|kövess\s+(?:be\s+)?további|oszd\s+meg|link\s+a\s+bioban)\b/i.test(raw);
-}
-
-function normalizeSocialAutonomousPostContract(w, authorId, row, visibleText) {
-  if (!row || String(row.social_contract || row.socialContract || "").trim().toLowerCase() !== "v1") {
-    return null;
-  }
-
-  const decision = String(row.decision || "").trim().toUpperCase();
-  const postType = String(row.postType || row.post_type || "").trim().toLowerCase();
-  const anchorType = String(row.anchorType || row.anchor_type || "").trim().toLowerCase();
-  const anchorId = String(row.anchorId || row.anchor_id || "").trim().slice(0, 180);
-  const anchorBasis = String(row.anchorBasis || row.anchor_basis || row.anchor || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 260);
-  const postReason = String(row.postReason || row.post_reason || row.reason || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 260);
-  const audienceIntent = String(row.audienceIntent || row.audience_intent || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 100);
-  const engagementIntentRaw = String(row.engagementIntent || row.engagement_intent || "none")
-    .trim()
-    .toLowerCase();
-  const engagementIntent = SOCIAL_AUTONOMOUS_ENGAGEMENT_INTENTS.has(engagementIntentRaw)
-    ? engagementIntentRaw
-    : "none";
-  const targetIds = [...new Set(
-    (Array.isArray(row.targetIds) ? row.targetIds : Array.isArray(row.target_ids) ? row.target_ids : [])
-      .map((id) => findChar(w, id))
-      .filter((id) => id && id !== authorId)
-  )].slice(0, 8);
-
-  return {
-    version: 1,
-    decision,
-    postType,
-    anchorType,
-    anchorId,
-    anchorBasis,
-    postReason,
-    audienceIntent,
-    engagementIntent,
-    targetIds,
-    publicKnowledgeOnly: row.publicKnowledgeOnly !== false && row.public_knowledge_only !== false,
-    text: String(visibleText || "").replace(/\s+/g, " ").trim(),
-  };
-}
-
-function socialAutonomousPostContractIsValid(w, authorId, row, visibleText) {
-  const meta = normalizeSocialAutonomousPostContract(w, authorId, row, visibleText);
-  if (!meta) return null;
-  if (meta.decision !== "POST") return null;
-  if (!SOCIAL_AUTONOMOUS_POST_TYPES.has(meta.postType)) return null;
-  if (!SOCIAL_AUTONOMOUS_ANCHOR_TYPES.has(meta.anchorType)) return null;
-  if (meta.anchorBasis.length < 3 || meta.postReason.length < 3) return null;
-
-  /* The hidden anchor is evidence/reasoning metadata, not another place to dump
-     a private character-sheet sentence. */
-  if (socialPostCopiesPrivateCharacterSheetPhrase(w, authorId, meta.anchorBasis)) return null;
-
-  /* Callouts/subtweets need an actual situation, not merely a person's name. */
-  if (
-    ["direct_callout", "subtweet", "relationship_hint"].includes(meta.postType) &&
-    socialCommentGroundingContentTokens(meta.anchorBasis).length < 2
-  ) {
-    return null;
-  }
-
-  /* Fictional characters are not forced engagement-farming creators. A generic
-     marketing CTA is allowed only when the model explicitly chose a real social
-     interaction intent for this specific post. */
-  if (meta.engagementIntent === "none" && socialAutonomousPostHasGenericCreatorCTA(visibleText)) {
-    return null;
-  }
-
-  return meta;
-}
-
-function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
-  const author = charById(w, authorId);
-  if (!author || !characterCanAutonomouslyPost(w, author, null, options)) return null;
-
-  /*
-   * HARD LOCAL POST FALLBACK v101 — EVENT-GROUNDED ONLY
-   *
-   * The old fallback tried to manufacture captions from Goals, mood, job, dojo
-   * and relationship labels. That produced technically grounded but humanly
-   * nonsensical posts such as "X, we need to talk", "Plan for now: scroll
-   * past" and raw profile-title chains. A provider-independent fallback is now
-   * allowed ONLY when there is a concrete current trigger event the character
-   * actually experienced. Otherwise we publish nothing and let a later world
-   * tick retry rather than filling the feed with synthetic placeholder prose.
-   */
-  const en = worldLanguage(w, w.meId) === "en";
-  const trigger = String(options && options.trigger || "").trim();
-  const burstKey = String(options && options.burstKey || "").trim();
-  const stats = characterAutonomousPostStats24h(w, author.id);
-  const seed = commentSeedNumber(`${author.id}|${burstKey}|${trigger}|${stats.count}|${Math.floor(now()/60000)}`);
-
-  const compactEventTitle = (value) => {
-    const text = String(value || "")
-      .replace(/[\r\n]+/g, " ")
-      .replace(/^[-•*\s]+/, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .replace(/[,:;\-–—\s]+$/g, "");
-    if (!text) return "";
-    const words = normalizeExactCommentGroundingText(text).split(/\s+/).filter(Boolean);
-    if (words.length < 2 || words.length > 8) return "";
-    if (socialPostLooksLikeEmptyAutonomousScaffold(text)) return "";
-    if (socialPostLooksLikeRawProfileMetadata(w, author.id, text)) return "";
-    return cut(text, 90);
-  };
-
-  let fact = "";
-  let anchorId = "";
-  let targetIds = [];
-
-  if ((trigger === "popup-choice" || trigger === "popup-custom-response") && options.popupEventId) {
-    const event = (w.popupEvents || []).find((e) => e && e.id === options.popupEventId);
-    if (event) {
-      const involved = (event.involvedIds || []).map(String);
-      const witnesses = (event.witnessIds || []).map(String);
-      const canKnow = String(event.visibility || "limited") !== "private" || involved.includes(String(author.id));
-      const wasThere = involved.includes(String(author.id)) || witnesses.includes(String(author.id));
-      if (canKnow && wasThere) {
-        fact = compactEventTitle(event.title || "");
-        anchorId = String(event.id || options.popupEventId || "");
-        targetIds = involved.filter((id) => id && id !== String(author.id)).slice(0, 8);
-      }
-    }
-  }
-
-  if (!fact && trigger === "roleplay-ended" && options.sceneId) {
-    const scene = (w.scenes || []).find((row) => row && row.id === options.sceneId);
-    const cast = scene && Array.isArray(scene.cast) ? scene.cast.map(String) : [];
-    if (scene && cast.includes(String(author.id))) {
-      fact = compactEventTitle(scene.title || "");
-      anchorId = String(scene.id || options.sceneId || "");
-      targetIds = cast.filter((id) => id && id !== String(author.id)).slice(0, 8);
-    }
-  }
-
-  if (!fact) return null;
-
-  const forms = en
-    ? [
-        `Still thinking about ${fact}.`,
-        `${fact}. Yeah, that happened.`,
-        `Not sure I'm done with ${fact} yet.`,
-      ]
-    : [
-        `Még mindig a(z) ${fact} jár a fejemben.`,
-        `${fact}. Igen, ez tényleg megtörtént.`,
-        `Nem hiszem, hogy lezártam magamban a(z) ${fact} dolgot.`,
-      ];
-
-  let chosen = String(forms[seed % forms.length] || "").replace(/\s+/g, " ").trim();
-  if (!socialAutonomousPostTextMakesSense(w, author.id, chosen)) return null;
-
-  const recentWorld = (w.posts || [])
-    .filter((p) => p && p.text && !isHuman(w, p.authorId))
-    .slice(0, 50)
-    .map((p) => normalizeExactCommentGroundingText(p.text || ""))
-    .filter(Boolean);
-
-  if (recentWorld.includes(normalizeExactCommentGroundingText(chosen))) {
-    chosen = String(forms[(seed + 1) % forms.length] || "").replace(/\s+/g, " ").trim();
-    if (!chosen || recentWorld.includes(normalizeExactCommentGroundingText(chosen))) return null;
-  }
-
-  return {
-    posts: [{
-      id: author.id,
-      text: chosen,
-      image: "",
-      comments: [],
-      social_contract: "v1",
-      decision: "POST",
-      postReason: "reacting to a concrete event the character personally experienced",
-      postType: "event_reaction",
-      anchorType: "event",
-      anchorId,
-      anchorBasis: fact,
-      audienceIntent: "react",
-      targetIds,
-      publicKnowledgeOnly: true,
-      engagementIntent: "none",
-      __localEmergencyFallback: true,
-    }],
-    changes: [],
-    events: [],
-    selfUpdates: [],
-    relationshipUpdates: [],
-  };
-}
-
-async function hydrateAuthorAlbumForSocialPosting(
-  w,
-  author
-) {
-  if (
-    !w ||
-    !author ||
-    !Array.isArray(author.album) ||
-    !author.album.length
-  ) {
-    return author;
-  }
-
-  const mediaMap =
-    mediaRef.current || {};
-
-  let changed = false;
-  const hydratedAlbum = [];
-
-  for (const row of author.album) {
-    if (!row || typeof row !== "object") {
-      hydratedAlbum.push(row);
-      continue;
-    }
-
-    const existingVision =
-      String(
-        row.vision || ""
-      )
-        .replace(/\s+/g, " ")
-        .trim();
-
-    if (existingVision) {
-      hydratedAlbum.push(row);
-      continue;
-    }
-
-    const srcValue =
-      row.imageId
-        ? imageRef(
-            row.imageId
-          )
-        : row.src;
-
-    const resolved =
-      resolveImg(
-        srcValue,
-        mediaMap
-      );
-
-    if (
-      !resolved ||
-      (
-        !isInlineImageData(
-          resolved
-        ) &&
-        !/^https:\/\//i.test(
-          resolved
-        )
-      )
-    ) {
-      hydratedAlbum.push(row);
-      continue;
-    }
-
-    let vision = "";
-
-    try {
-      vision =
-        await analyzeSocialPostImageInput(
-          resolved
-        );
-    } catch (visionErr) {
-      console.warn(
-        "Author album posting vision analysis failed:",
-        visionErr
-      );
-    }
-
-    if (!vision) {
-      hydratedAlbum.push(row);
-      continue;
-    }
-
-    changed = true;
-
-    hydratedAlbum.push({
-      ...row,
-      vision:
-        String(
-          vision
-        )
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(
-            0,
-            700
-          ),
-      analyzedAt:
-        now(),
-    });
-  }
-
-  if (!changed) {
-    return author;
-  }
-
-  const nextAuthor = {
-    ...author,
-    album: hydratedAlbum,
-  };
-
-  setWorld((prev) => {
-    if (!prev) return prev;
-
-    const n = { ...prev };
-    const found =
-      charById(
-        n,
-        author.id
-      );
-
-    if (!found) {
-      return prev;
-    }
-
-    found.album =
-      hydratedAlbum.map(
-        (row) =>
-          row && typeof row === "object"
-            ? { ...row }
-            : row
-      );
-
-    n.rev =
-      (n.rev || 0) + 1;
-
-    return n;
-  });
-
-  return nextAuthor;
-}
-
-async function genFocusedWorldStep(w, triggerPayload = {}) {
-  const triggerSelectionContext = autonomousTriggeredFeedContext(w, triggerPayload);
-  const postingSelectionOptions = {
-    allowBurst: Boolean(triggerPayload && triggerPayload.allowBurst),
-    burstKey: String(triggerPayload && triggerPayload.burstKey || ""),
-    preferredIds: triggerSelectionContext.preferredIds,
-  };
-
-  const requestedAuthor =
-    triggerPayload && triggerPayload.authorId
-      ? charById(w, triggerPayload.authorId)
-      : null;
-
-  const author =
-    requestedAuthor &&
-    characterCanAutonomouslyPost(
-      w,
-      requestedAuthor,
-      null,
-      postingSelectionOptions
-    )
-      ? requestedAuthor
-      : fairPostCast(
-          w,
-          postingSelectionOptions
-        )[0];
-
+async function genFocusedWorldStep(w) {
+  const author = fairPostCast(w)[0];
   if (!author) return null;
-
-  const triggerContext = autonomousTriggeredFeedContext(w, triggerPayload, author.id);
-
-  const promptAuthor =
-    await hydrateAuthorAlbumForSocialPosting(
-      w,
-      author
-    );
 
   const authorPostStats24h = characterAutonomousPostStats24h(w, author.id);
   const authorPostTarget24h = autonomousCharacterPostTarget24h(w, author);
-  const usableAlbumItems = albumOf(promptAuthor || author).filter((item) =>
-    item && (String(item.vision || "").trim() || String(item.who || "").trim() || String(item.note || "").trim())
-  );
-  const imageSlotOpen = authorPostStats24h.imageCount < AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H && usableAlbumItems.length > 0;
-  const imageOpportunityDue = imageSlotOpen && authorPostStats24h.count >= 2;
 
   const recentOwn = (w.posts || [])
     .filter((p) => p && p.authorId === author.id)
     .slice(0, 5)
-    .map((p) => `[type:${p.postType || "legacy"}] ${p.text || ""}${p.imageDescription ? ` [image: ${p.imageDescription}]` : ""}`)
+    .map((p) => `${p.text || ""}${p.imageDescription ? ` [image: ${p.imageDescription}]` : ""}`)
     .join("\n");
 
   const recentWorld = (w.posts || [])
@@ -38394,17 +28627,6 @@ async function genFocusedWorldStep(w, triggerPayload = {}) {
     .join("\n");
 
   const selfState = (w.charMemory && w.charMemory[author.id] && w.charMemory[author.id].selfState) || {};
-  const postFormModes = [
-    "specific observation or opinion with a concrete noun/detail; no generic mood filler",
-    "one natural question or invitation tied to a concrete current fact",
-    "two-sentence mini anecdote: concrete thing first, reaction second",
-    "short direct statement built around one specific plan/person/place/activity",
-    "casual fragment/caption that only this character could plausibly post right now",
-    "small complaint/brag/joke about one concrete current detail, not an abstract vibe"
-  ];
-  const postFormHint = postFormModes[
-    commentSeedNumber(`${author.id}|post-form|${authorPostStats24h.count}|${String(triggerPayload && triggerPayload.burstKey || "")}`) % postFormModes.length
-  ];
 
   return askWorldJSON(
     w,
@@ -38418,16 +28640,10 @@ async function genFocusedWorldStep(w, triggerPayload = {}) {
         includePlayer: false,
         includeRecentWorld: false,
         socialScope: true,
-        agentPrivacyScope: true,
       }
     )}
 
 ${voiceCard(author)}
-
-${socialSelfStyleOwnershipCard(author)}
-
-FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
-${fullSelfCharacterSheetForSocial(w, author)}
 
 AUTHORSHIP / SELF-CANON LOCK:
 - SELF is exactly ${author.name} [${author.id}].
@@ -38439,23 +28655,12 @@ AUTHORSHIP / SELF-CANON LOCK:
 
 TE MOST ${String(author.name || "").toUpperCase()} VAGY, ÉS SAJÁT MAGADTÓL POSZTOLSZ.
 
-${triggerContext.text}
-
-${liveSocialNetworkContextCard(w, author.id, 12)}
-
-${dynamicStoryChapterCard(w, author.id)}
-
-${relationshipAutonomySpotlightCard(w, author.id)}
-
 AKTUÁLIS SAJÁT ÁLLAPOTOD:
 - mood: ${selfState.mood || "-"}
 - intent: ${selfState.intent || "-"}
 - open loops: ${(selfState.openLoops || []).slice(-4).join(" | ") || "-"}
 - rolling 24h posts: ${authorPostStats24h.count}/${authorPostTarget24h}
 - rolling 24h image posts: ${authorPostStats24h.imageCount}/${AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H}
-- usable album images right now: ${usableAlbumItems.length}
-- image slot: ${imageSlotOpen ? "OPEN" : "CLOSED"}
-- image opportunity: ${imageOpportunityDue ? "DUE — strongly prefer one fitting album image now" : "optional"}
 
 JÁTÉKOS-ALAPÉRTELMEZÉS:
 A játékos NEM automatikus poszttéma. A saját életedből indulj ki.
@@ -38467,93 +28672,40 @@ LEGUTÓBBI FEED:
 ${recentWorld || "-"}
 
 SAJÁT FOTÓALBUMOD:
-${albumPostingList(promptAuthor || author) || "nincs használható albumkép"}
-
-SOCIAL DECISION FIRST — REJTETT TERVEZÉSI SZERZŐDÉS:
-Mielőtt megfogalmazod a látható mondatot, hozd meg ezt a döntést EBBEN A SORRENDBEN:
-1. POST REASON — miért posztol ${author.name} MOST? Válassz egyetlen konkrét okot a saját aktuális életéből vagy egy számára ténylegesen ismert történésből. A personality önmagában NEM ok.
-2. POST TYPE — válassz pontosan egyet: casual_status | short_observation | question | direct_callout | subtweet | mini_story | photo_caption | event_reaction | opinion | complaint | joke | inside_joke | invitation | achievement | late_night_thought | gossip_reaction | relationship_hint | training_update | location_update. A típuseloszlás legyen KARAKTERFÜGGŐ: a személyiség, életkor, occupation/életmód és saját online hang döntse el, mely formák gyakoriak nála. Ne adj minden karakternek ugyanazt az eloszlást, és a SAJÁT LEGUTÓBBI POSZTOK type-jait se ismételd mechanikusan.
-3. REALITY ANCHOR — válassz pontosan egy konkrét tényt/helyzetet, amely nélkül ez a poszt nem születne meg. anchorType: event | activity | plan | person | place | object | image | public_post | gossip | relationship | achievement | opinion | self_life.
-4. PUBLIC EXPRESSION — döntsd el, ebből mennyit mondana ki nyilvánosan ${author.name}. A belső érzés NEM automatikusan publikus vallomás. Büszke/titkolózó karakter célozhat, rövidíthet vagy hallgathat részletekről.
-5. ENGAGEMENT INTENT — none | question | invite | challenge | opinion_request. A default NONE. Ne gyárts marketinges CTA-t csak engagement kedvéért.
-6. CHARACTER VOICE — csak EZUTÁN fogalmazd meg a captiont a saját personality + Speech/Voice + kor + social szokások szerint.
-
-HARD ARCHITECTURE RULES:
-- REALITY → CHARACTER INTERPRETATION → PUBLIC EXPRESSION → WORDING. Ebben a sorrendben dolgozz.
-- A karakter NEM tartalomgyártó bot. Ő egy emberként működő fiktív személy, aki történetesen használ közösségi médiát. Először legyen oka posztolni, csak utána legyen szöveg.
-- Hook NEM kötelező. CTA NEM kötelező. Hashtag NEM kötelező. Emoji NEM kötelező. Ezek csak akkor jelenjenek meg, ha a konkrét karakter saját online stílusa ÉS az adott poszt típusa indokolja.
-- TILOS minden posztot marketinges Hook→Value→CTA formulává alakítani.
-- targetIds csak olyan konkrét játékbeli személy lehet, aki ténylegesen része a választott anchornek vagy akire a publikus szöveg/kép valósan céloz.
-- anchorBasis REJTETT bizonyíték: 2–18 szavas, konkrét leírás arról, MI a poszt valódi alapja. Ne másolj bele hosszú karakterlap-mondatot.
-- anchorId csak akkor legyen kitöltve, ha van valódi azonosítható forrás (event/post/scene/popup stb.); különben üres.
-- publicKnowledgeOnly=true: ne használj olyan külső történést, amit ${author.name} nem láthatott/tudhatott.
-- Ha nincs emberileg posztolható ok, a normál generátor ne találjon ki mesterséges konfliktust vagy profilmezőből gyártott témát.
+${albumList(author) || "nincs használható albumkép"}
 
 ÍRJ EGYETLEN VALÓDI SOCIAL MEDIA POSZTOT.
-- FIKTÍV SOCIAL NETWORK HARD RULE: úgy viselkedj, mintha ez a konkrét univerzum saját Instagram/X/Threads-szerű hálózata lenne. ${author.name} nem chatbot-választ ad, hanem a saját életét éli online, önállóan posztol, és csak olyan friss történést használhat, amit a fenti LIVE SOCIAL NETWORK CONTEXT szerint reálisan ismer.
-- A follow/kapcsolat/frakció/barátság/rivalizálás a figyelmet és a témaválasztást is alakítja. Nyilvános esemény sem válik automatikusan minden karakter fejében ismertté; private/group/limited információ soha ne szivárogjon át jogosulatlanul.
-- AUTONÓM STATUS UPDATE: a témát ${author.name} SAJÁT personality/speech + aktuális mood/intent/open loops + számára ténylegesen ismert friss világ-események + saját kapcsolatai/tettei együtt adják. Ne várj a játékos utasítására, és ne gyárts rendszer-fillert.
-- Ha egy friss, számára ismert történés vagy más karakter tényleges nyilvános tette érdemben érinti, természetesen reagálhat rá saját posztban; ha nem érinti, maradjon a saját életénél.
-- Fotós posztnál ugyanaz az autonóm döntés érvényes: csak olyan, az adott karakterhez és aktuális helyzethez illő saját vizuált válassz, amit a meglévő képrendszer enged. A kép ne írja felül a caption karakterhangját.
-- ${author.name} saját gördülő 24 órás célja 18–30 poszt aktivitásától függően, DE EZ CSAK AKTIVITÁSI CÉL/PRIORITÁS, NEM PLAFON; 48 a valódi biztonsági kemény maximum.
-- Normál körben a scheduler csak a saját cooldown lejárta után választ ki. Triggerelt aftermath burstben több KÜLÖNBÖZŐ AI gyorsabban is sorra kerülhet, de ugyanaz az AI egy burston belül nem ismétlődhet.
-- Ha ide kerültél, ÍRJ egy természetes posztot; ne skipelj pusztán azért, mert nincs dráma.
+- ${author.name} saját gördülő 24 órás célja 3–5 poszt aktivitásától függően; 5 a kemény maximum.
+- Ne posztolj csak azért, hogy kitöltsd a feedet.
 - ${author.name} 24 órán belül maximum 1 képes posztot tehet ki; a többi legyen szöveges.
 - A képlimit karakterenként értendő, nem az egész feedre.
-- Ha ${author.name} még 12 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó.
+- Ha ${author.name} még 3 poszt alatt áll az elmúlt 24 órában, ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó.
 - A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
-- A szöveges poszt továbbra is gyakori, DE az 1 kép/24h maximumot NE értelmezd úgy, hogy kerülnöd kell a képeket. Ha az image slot OPEN, valóban használj néha albumképet.
-- Ha fent IMAGE OPPORTUNITY = DUE, akkor HATÁROZOTTAN részesíts előnyben EGY konkrét, jelenlegi kontextushoz illő albumképet; csak akkor maradjon szöveges, ha egyik megmaradt kép sem illik hitelesen.
-- Albumképet csak akkor válassz, ha a konkrét kép ténylegesen illik az aktuális élethelyzethez.
+- A legtöbb poszt legyen szöveges; albumképet csak néha használj, amikor a konkrét kép ténylegesen illik az aktuális élethelyzethez.
 - A poszt kizárólag ${author.name} SAJÁT karakterlapjából, életéből, occupation/job-jából, dojo/organization oldalából, céljaiból, hangulatából, kapcsolataiból vagy friss világhelyzetéből szülessen.
-- CHARACTER-SHEET → CAPTION FIREWALL: Goals / Fears / Secrets / Backstory / Extra / Personality / Connections belső motiváció és kánon, NEM kész social-media szöveg. SOHA ne másolj ki belőlük teljes mondatot vagy 5+ szavas szó szerinti részletet captionként. Előbb értsd meg a tényt/szándékot, aztán írd meg új, természetes, karakterhű social nyelven.
-- PROFILE-METADATA FIREWALL: job / occupation / role / rank / dojo / organization / faction / affiliation címkék NEM caption-elemek. TILOS ilyen listát vagy címkeláncot mondatba önteni (pl. „Sensei, X member, Y leader…”). Ezek csak háttérinformációk ahhoz, hogy tudd, milyen életet él a karakter.
-- Ha egy Goals-sor nyelvtanilag parancs/infinitív (pl. „prepare X...”, „become...”, „protect...”), TILOS egy sablonmondat közepébe nyersen beilleszteni. A kész poszt önálló, természetes mondat legyen.
-- KONKRÉT OK NÉLKÜLI CALLOUT TILOS: puszta „X, we need to talk”, „X, explain yourself”, „no names”, „somebody…” jellegű poszt nem elég. Ha valakit megszólítasz vagy subtweetelsz, a posztból legyen legalább egy konkrét, jelenlegi ok/részlet is érthető.
-- PLACEHOLDER/SCAFFOLD TILOS: ne használj „Plan for now: …”, „Current mood: …”, „Priority: …”, „On the list: …”, „Next up: …” jellegű mesterséges keretet. Írd ki közvetlenül azt, amit egy ember ténylegesen posztolna.
-- Ha nincs valódi, aktuális és emberileg posztolható gondolat, inkább NE gyárts üres filler-mondatot. A mennyiségi cél soha nem írhatja felül az értelmet.
-- FONTOS: az occupation/job, szerep, dojo, organization, rank és affiliation HÁTTÉRKONTEXTUS, nem kötelező caption-szöveg. Határozza meg természetesen, mit csinál, mit tud, milyen napja van és miről lehet oka posztolni, DE ne sorolja fel ezeket minden posztban, ne ismételje a karakterlap megfogalmazását, és ne írjon mini bio/CV-szerű „szerep · szervezet · supporter” felsorolást csak azért, hogy jelezze a kánont. Csak akkor nevezze meg konkrétan a munkát/szervezetet/oldalt, ha az adott poszt témájához ténylegesen releváns.
 - OWNERSHIP HARD RULE: amit ${author.name} "én / my / our" formában állít magáról, annak ${author.name} saját lapján kell igaznak lennie. Más karakter foglalkozását, dojóját, rangját, senseijét, családját, crushát vagy történetét ne vedd át.
 - Ha a poszt egy konkrét másik embert említ/calloutol, a VELE való kapcsolatod kötelező korlát. Jó/közeli barátot ne alázz, sértegess vagy kezelj ellenségként csak azért, mert a személyiséged szarkasztikus/bunkó/domináns. Komoly negatív poszthoz konkrét jelenlegi konfliktus kell.
 - Ha a karakternek kölcsönös baráti kapcsolatai vannak, ezek legyenek aktív részei a social életének: természetesen posztolhat közös programról, megemlítheti vagy barátilag ugrasshatja a barátját, reagálhat annak életére, megvédheti, megkérdezheti, merre van, vagy szervezhet vele valamit. Ne kezeld a barátokat véletlenszerű idegenként.
-- A nagyon erős egyirányú kapcsolat is legyen LÁTHATÓ a social viselkedés gyakoriságában. Ha ${author.name} valakivel megszállott/crush/erősen possessive viszonyban van, az illető feltűnően gyakrabban kerüljön a figyelmébe és időnként a saját posztjaiba is, a relationship spotlight szerint. Ez nem kötelező vallomás: titkolt érzésnél lehet indirect/subtweet/callout/kódolt utalás vagy feltűnően sok figyelem. Ne legyen viszont minden egyes poszt ugyanarról az emberről.
 - SAJÁT BESOROLÁSOD: ${characterFactionIdentityCard(author) || "nincs biztosan azonosított frakció/dojo"}. Ezt tekintsd saját oldaladnak; a riválisok említése a karakterlapodon nem változtatja meg a saját besorolásodat.
 - Ha rivális dojo/frakció vagy konkrét negatív relationship-célpont kerül a posztba, a caption hangja ezt tükrözze. Ne dicsérd/hype-old őket haverként, kivéve ha a köztetek lévő explicit személyes kapcsolat ezt tényleg felülírja.
 - Ne legyen rendszer-poszt vagy mesterséges filler.
 - Lehet teljesen hétköznapi is; az élő világ nem csak dráma.
 - Ha erős explicit személyiségjegyed releváns (féltékeny, possessive, psycho, flörtölős, rideg, kaotikus stb.), az ténylegesen színezze a döntést és a hangot, de ne erőltesd minden posztra ugyanazt a témát.
-- Ha albumképet választasz, ELŐBB a VISIBLE IMAGE CONTENT + biztos szereplők + PRIVATE ALBUM RECOGNITION HINT segítségével azonosítsd a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra az EGY képre illik.
-- PRIVATE ALBUM RECOGNITION HINT HARD RULE: ez a felhasználó belső segítő szövege a kép felismeréséhez. NEM caption. A "text" mezőben TILOS szó szerint visszaadni, közeli parafrázisként újrafogalmazni vagy egyszerűen képleírássá alakítani. A captiont nulláról írd meg ${author.name} saját social hangján.
-- A caption ne az legyen, hogy mi van a képen teljes mondatban felsorolva. Használd a képet kontextusként, de azt írd, amit ${author.name} emberként ténylegesen a kép ALÁ írna.
-- KÉP + SELF HANG HARD RULE: a kép megmondja, MI látható; kizárólag ${author.name} saját Personality / Traits / Speech / Voice / kor / online szokásai mondják meg, HOGYAN captioneli. A fotó vibe-ja nem írhatja át ${author.name} személyiségét.
-- Ne használj automatikusan generikus influencer-captiont ("party ready", "good vibes", "felt cute", "another night") csak azért, mert szelfi/outfit kép van. Csak akkor ilyen a caption, ha ${author.name} saját hangjában tényleg természetes.
-- A caption legyen felcserélhetetlen: ha ugyanazt a mondatot bármely másik karakter ugyanilyen hitelesen kitehetné ugyanarra a képre, írd újra ${author.name} saját ritmusára/szókincsére.
-- Ne írd le katalógusszerűen a teljes képet. Egy valódi ember azt a részletet / alkalmat / hangulatot emeli ki, ami NEKI számít.
+- Ha albumképet választasz, ELŐBB a visible image content alapján válaszd ki a konkrét képet, és UTÁNA írj hozzá olyan captiont, ami valóban arra a képre illik.
 - Kép nélkül is teljesen jó poszt.
 - Ha ebben a válaszban mégis comments tömböt adsz vissza egy poszt mellett, az a comments tömb KIZÁRÓLAG AZ ADOTT posts elemhez tartozik. A kommentelőnek tudnia kell, melyik karakter posztolta azt a konkrét posztot, és a kommentnek arra a konkrét captionre/képre kell reagálnia. Soha ne keverd össze egy másik, ugyanebben a válaszban létrehozott poszttal.
 - Ne generálj kommenteket ebben a hívásban; a többi AI külön fog reagálni rá a saját karakteréből.
 - A játékos helyett soha ne írj.
 
-KREATÍV KARAKTERPOSZT — HARD RULE:
-- FORM THIS TURN: ${postFormHint}. Ezt a szerkezetet használd, hogy a feed ne legyen egymás után ugyanolyan egysoros formulákból.
-- KONKRÉT ANCHOR KÖTELEZŐ: kép nélküli posztban legyen legalább egy konkrét jelenlegi személy/hely/tevékenység/terv/cél/esemény/tárgy vagy saját élethelyzet a fenti adatokból. Puszta absztrakt vibe („long day”, „some people”, „still here”, „no comment”, „quiet day”, „I have thoughts”) önmagában NEM poszt.
-- Ne gyárts generikus „still alive / long day / good vibes / training done” fillert, ha a karakterlapból vagy a friss triggerből konkrétabb, egyedibb poszt születhet.
-- TILTOTT SABLONLOGIKA: ne csak egy nevet cserélj ki ugyanabban a mondatvázban több karakter között; ne használd újra a „X is becoming a distraction / I had a plan then X / some people… / no comment… / still thinking about…” típusú scaffoldingot más névvel.
-- Ne minden poszt legyen egymondatos mottó. A kijelölt FORM THIS TURN szerint természetesen váltakozzon kérdés, rövid anekdota, konkrét terv, caption, vélemény, panasz, meghívás vagy megfigyelés.
-- Válassz egy olyan apró részletet, véleményt, konfliktust, inside joke-ot, szokást, célt, kapcsolatot, helyzetet vagy konkrét eseményrészletet, amely ettől a karaktertől felismerhetővé teszi a posztot.
-- A karakter personality + speech/voice + aktuális kapcsolat + jelenlegi világhelyzet EGYÜTT határozza meg a témát és a megfogalmazást. Egyik se írhatja felül a másikat.
-- Ha triggerelt aftermath poszt készül, előbb dolgozd fel a trigger konkrét tényét a karakter saját nézőpontjából, csak utána adj hozzá kreatív stílust.
-- Ha ugyanaz a caption könnyen odaadható lenne három másik karakternek is, nem elég karakterhű: írd újra.
-
 ${repetitionGuard(w, [author.id], "autonóm posztok és kommentek")}
 
 JSON:
-{"posts":[{"id":"${author.id}","social_contract":"v1","decision":"POST","postReason":"1 rövid konkrét ok, amiért MOST posztol","postType":"egy engedélyezett post type","anchorType":"egy engedélyezett anchor type","anchorId":"valódi forrás ID vagy üres","anchorBasis":"2-18 szavas rejtett konkrét valóság-anchor, NEM karakterlap-másolat","audienceIntent":"pl. vent / share / tease / inform / invite / ask / react","targetIds":["csak valóban érintett karakter ID-k"],"publicKnowledgeOnly":true,"engagementIntent":"none|question|invite|challenge|opinion_request","text":"a LÁTHATÓ természetes poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}],"relationshipUpdates":[]}${TAIL}`,
+{"posts":[{"id":"${author.id}","text":"a poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}],"relationshipUpdates":[]}${TAIL}`,
     { maxTokens: 900 }
   );
 }
 
-function applyWorldStep(n, out, postingOptions = {}) {
+function applyWorldStep(n, out) {
   let createdPosts = 0;
   const causalPairs = new Set();
 
@@ -38561,54 +28713,14 @@ function applyWorldStep(n, out, postingOptions = {}) {
     /* v99.3: hard quota is per author / rolling 24h below. */
     const author = aiVoice(n, p && (p.id !== undefined ? p.id : p.name));
     if (!author || !p.text) return;
-    const localEmergencyFallback = Boolean(
-      p &&
-      p.__localEmergencyFallback === true &&
-      postingOptions &&
-      postingOptions.allowBurst
-    );
     const authorChar = charById(n, author);
-    if (!authorChar || !characterCanAutonomouslyPost(n, authorChar, null, postingOptions)) return;
-    const postText =
-      applySocialOwnedSpeechStyle(
-        n,
-        author,
-        cleanGeneratedUtterance(
-          n,
-          author,
-          p.text,
-          700
-        )
-      );
+    if (!authorChar || !characterCanAutonomouslyPost(n, authorChar)) return;
+    const postText = cleanGeneratedUtterance(n, author, p.text, 700);
     if (!postText) return;
-    if (!socialAutonomousPostTextMakesSense(n, author, postText)) return;
-
-    const hasStructuredSocialContract =
-      String(p && (p.social_contract || p.socialContract) || "").trim().toLowerCase() === "v1";
-    const socialContractMeta = hasStructuredSocialContract
-      ? socialAutonomousPostContractIsValid(n, author, p, postText)
-      : null;
-
-    /* Focused autonomous social generation now publishes only if its hidden
-       reason/type/anchor contract is coherent. Legacy/time-skip world outputs
-       without the v1 marker keep their existing behavior. */
-    if (hasStructuredSocialContract && !socialContractMeta) return;
-
-    /*
-     * The local emergency fallback is built exclusively from the selected
-     * author's own sheet. During a triggered burst it must not be rejected by
-     * a secondary stylistic/self-classification heuristic after the provider
-     * has already failed, otherwise the "guaranteed" slot can still vanish.
-     * Normal generated posts keep every existing guard.
-     */
-    if (
-      !localEmergencyFallback &&
-      socialSelfClassificationContradiction(n, author, postText)
-    ) return;
+    if (socialSelfClassificationContradiction(n, author, postText)) return;
 
     const mentionedPostTargets = explicitNamedCharacterIdsInText(n, postText, author);
     if (
-      !localEmergencyFallback &&
       mentionedPostTargets.some((targetId) =>
         friendshipHostilityMismatch(
           n,
@@ -38639,17 +28751,7 @@ function applyWorldStep(n, out, postingOptions = {}) {
     safePostComments(p).forEach((c, idx) => {
       const cid = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!cid || !c.text) return;
-      const body =
-        applySocialOwnedSpeechStyle(
-          n,
-          cid,
-          cleanGeneratedUtterance(
-            n,
-            cid,
-            c.text,
-            240
-          )
-        );
+      const body = cleanGeneratedUtterance(n, cid, c.text, 240);
       if (!body) return;
       if (socialSelfClassificationContradiction(n, cid, body)) return;
 
@@ -38705,10 +28807,7 @@ function applyWorldStep(n, out, postingOptions = {}) {
      * Ha az AI túl korán kér képet, attól még a szöveges poszt létrejöhet,
      * csak a kép kerül elhagyásra.
      */
-    const requestedPic =
-      localEmergencyFallback
-        ? null
-        : (p.image ? albumFind(authorChar, p.image) : null);
+    const requestedPic = p.image ? albumFind(authorChar, p.image) : null;
     const pic = requestedPic && autonomousCanUseAlbumImageToday(
       n,
       authorChar,
@@ -38717,29 +28816,12 @@ function applyWorldStep(n, out, postingOptions = {}) {
       ? requestedPic
       : null;
 
-    /* A structured photo/image anchor is not allowed to survive as a text-only
-       orphan if the requested image was unavailable or rejected by limits. */
-    if (
-      socialContractMeta &&
-      (socialContractMeta.postType === "photo_caption" || socialContractMeta.anchorType === "image") &&
-      !pic
-    ) {
-      return;
-    }
-
-    /* The user's album note is recognition metadata only. If the provider leaks
-       it into the visible caption (including a near-copy), reject this row and
-       let the normal retry/fallback path produce a fresh caption instead. */
-    if (pic && albumCaptionCopiesPrivateHelper(postText, pic)) {
-      return;
-    }
-
     const picRef = pic ? (pic.imageId ? imageRef(pic.imageId) : pic.src) : "";
     const picId = imageIdOf(picRef);
     const picPeople = pic ? String(pic.who || "").replace(/\s+/g, " ").trim() : "";
     const picManualNote = pic ? String(pic.note || "").replace(/\s+/g, " ").trim() : "";
     const picVision = pic ? String(pic.vision || "").replace(/\s+/g, " ").trim() : "";
-    const picContext = pic ? albumPublicImageContext(pic, 1200) : "";
+    const picContext = pic ? albumItemContext(pic, 1200) : "";
     const picCharacterIds = pic
       ? namedCharacterIdsInImageContext(
           n,
@@ -38763,19 +28845,6 @@ function applyWorldStep(n, out, postingOptions = {}) {
       imageAnalyzedAt: pic ? Number(pic.analyzedAt || 0) : 0,
       comments: made,
       language: worldLanguage(n, n.meId),
-      triggerBurstKey: String(postingOptions && postingOptions.burstKey || ""),
-      triggerSource: String(postingOptions && postingOptions.trigger || ""),
-      triggerRefId: String(postingOptions && (postingOptions.triggerRefId || postingOptions.postId || postingOptions.popupEventId || postingOptions.sceneId) || ""),
-      socialContractVersion: socialContractMeta ? 1 : 0,
-      postReason: socialContractMeta ? socialContractMeta.postReason : "",
-      postType: socialContractMeta ? socialContractMeta.postType : "",
-      anchorType: socialContractMeta ? socialContractMeta.anchorType : "",
-      anchorId: socialContractMeta ? socialContractMeta.anchorId : "",
-      anchorBasis: socialContractMeta ? socialContractMeta.anchorBasis : "",
-      audienceIntent: socialContractMeta ? socialContractMeta.audienceIntent : "",
-      engagementIntent: socialContractMeta ? socialContractMeta.engagementIntent : "",
-      socialTargetIds: socialContractMeta ? socialContractMeta.targetIds : [],
-      publicKnowledgeOnly: socialContractMeta ? socialContractMeta.publicKnowledgeOnly : true,
     };
 
     /*
@@ -38815,7 +28884,6 @@ function applyWorldStep(n, out, postingOptions = {}) {
       ...new Set([
         ...mentionedIdsInText(n, fresh.text, author),
         ...(fresh.imageCharacterIds || []),
-        ...(fresh.socialTargetIds || []),
       ]),
     ],
 
@@ -38844,7 +28912,6 @@ function applyWorldStep(n, out, postingOptions = {}) {
       (fresh.imageId || fresh.image)
         ? "image-post"
         : "text-post",
-      ...(fresh.postType ? [`post-type:${fresh.postType}`] : []),
     ],
 
     meta: {
@@ -38859,11 +28926,6 @@ function applyWorldStep(n, out, postingOptions = {}) {
       imageCharacterIds: Array.isArray(fresh.imageCharacterIds)
         ? fresh.imageCharacterIds.slice(0, 12)
         : [],
-      postType: fresh.postType || "",
-      anchorType: fresh.anchorType || "",
-      anchorId: fresh.anchorId || "",
-      audienceIntent: fresh.audienceIntent || "",
-      engagementIntent: fresh.engagementIntent || "",
     },
   }
 );
@@ -39273,8 +29335,6 @@ function NotesStrip({ w, update, setErr, onOpenChat, jump, onRequestNoteReaction
   );
 }
 
-const MemoNotesStrip = React.memo(NotesStrip);
-
 /* Választó a saját albumodból: egy koppintás, és a kép a poszthoz kerül. */
 function AlbumPick({ items, value, onPick }) {
   const { media } = useMedia();
@@ -39323,15 +29383,13 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   /* All posts stay in world state. Only mounted feed DOM is windowed. */
   const [visiblePostLimit, setVisiblePostLimit] = useState(60);
 
-  const activeMedia = useMemo(
-    () => activeGossipMediaAccount(w),
-    [w]
-  );
+  const activeMedia =
+    activeGossipMediaAccount(
+      w
+    );
 
-  const activeTrends = useMemo(
-    () => (w.trends || []).slice(0, 8),
-    [w]
-  );
+  const activeTrends =
+    (w.trends || []).slice(0, 8);
 
   const refs = useRef({});
 
@@ -39406,21 +29464,14 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       try {
         const data = resolveImg(img, media);
 
-        if (
-          data &&
-          (
-            isInlineImageData(
-              String(data)
-            ) ||
-            /^https:\/\//i.test(
-              String(data)
+        if (data && String(data).startsWith("data:image/")) {
+          imageDescription = await analyzeImageDataUrl(
+            data,
+            tt(
+              "Írd le 1-3 rövid mondatban, mi látható ezen a social media képen. Csak látható részleteket említs: személyek száma, tevékenység, ruha, helyszín, hangulat. Ne azonosíts valódi személyt név szerint.",
+              "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
             )
-          )
-        ) {
-          imageDescription =
-            await analyzeSocialPostImageInput(
-              data
-            );
+          );
         }
       } catch (e) {
         console.warn("Player post image analysis failed:", e);
@@ -39437,16 +29488,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       imageId: imageId || "",
       image: imageId ? "" : (img || ""),
       imageDescription,
-      imageVision:
-        String(
-          imageDescription || ""
-        )
-          .replace(/\s+/g, " ")
-          .trim(),
-      imageAnalyzedAt:
-        imageDescription
-          ? now()
-          : 0,
       comments: [],
       language: worldLanguage(w, w.meId),
     };
@@ -39535,64 +29576,71 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     if (!ok) setErr(tt("A világ már feldolgoz egy lépéskérést.", "The world is already processing a step request."));
   };
 
+  const postById = useMemo(() => {
+    const map = new Map();
+    (w.posts || []).forEach((post) => {
+      if (post && post.id) map.set(post.id, post);
+    });
+    return map;
+  }, [w.posts]);
+
   const followingIds = useMemo(() => {
     const set = new Set();
     const meProfile = socialProfileById(w, w.meId);
     ((meProfile && meProfile.following) || []).forEach((id) => set.add(id));
     return set;
-  }, [w]);
+  }, [w, w.meId]);
 
-  const timelineItems = useMemo(() => {
-    const postById = new Map();
-    (w.posts || []).forEach((post) => {
-      if (post && post.id) postById.set(post.id, post);
-    });
+  const basePosts =
+    feedMode === "following"
+      ? (w.posts || []).filter((p) =>
+          p && (p.authorId === w.meId || followingIds.has(p.authorId))
+        )
+      : (w.posts || []);
 
-    const basePosts =
-      feedMode === "following"
-        ? (w.posts || []).filter((p) =>
-            p && (p.authorId === w.meId || followingIds.has(p.authorId))
-          )
-        : (w.posts || []);
+  const baseItems = basePosts.map((post) => ({
+    kind: "post",
+    id: "post:" + post.id,
+    ts: Number(post.ts) || 0,
+    post,
+    repost: null,
+  }));
 
-    const baseItems = basePosts.map((post) => ({
-      kind: "post",
-      id: "post:" + post.id,
-      ts: Number(post.ts) || 0,
-      post,
-      repost: null,
-    }));
+  const repostItems = repostRows(w)
+    .map((repost) => {
+      const post = postById.get(repost.postId);
+      const reposter = socialProfileById(w, repost.actorId);
 
-    const repostItems = repostRows(w)
-      .map((repost) => {
-        const post = postById.get(repost.postId);
-        const reposter = socialProfileById(w, repost.actorId);
+      if (!post || !reposter) {
+        return null;
+      }
 
-        if (!post || !reposter) return null;
+      if (
+        feedMode === "following" &&
+        reposter.id !== w.meId &&
+        !isFollowing(w, w.meId, reposter.id)
+      ) {
+        return null;
+      }
 
-        if (
-          feedMode === "following" &&
-          reposter.id !== w.meId &&
-          !isFollowing(w, w.meId, reposter.id)
-        ) {
-          return null;
-        }
+      return {
+        kind: "repost",
+        id: "repost:" + repost.id,
+        ts: Number(repost.ts) || 0,
+        post,
+        repost,
+      };
+    })
+    .filter(Boolean);
 
-        return {
-          kind: "repost",
-          id: "repost:" + repost.id,
-          ts: Number(repost.ts) || 0,
-          post,
-          repost,
-        };
-      })
-      .filter(Boolean);
-
-    return baseItems
+  const timelineItems =
+    baseItems
       .concat(repostItems)
-      .sort((a, b) => b.ts - a.ts)
+      .sort(
+        (a, b) =>
+          b.ts - a.ts
+      )
       .slice(0, 40);
-  }, [w, feedMode, followingIds]);
 
   const visibleTimelineItems =
     timelineItems.slice(0, visiblePostLimit);
@@ -39642,7 +29690,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         </div>
       </div>
 
-      <MemoNotesStrip
+      <NotesStrip
         w={w}
         update={update}
         setErr={setErr}
@@ -39931,7 +29979,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               </div>
             ) : null}
 
-            <MemoPost
+            <Post
           w={w}
           post={p}
           highlight={hl === p.id}
@@ -40085,7 +30133,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               });
             });
 
-
             /*
              * A relationship consequence a komment TARTALMÁBÓL jön.
              * Nem az számít, hogy "reply volt", hanem hogy mit mondott,
@@ -40166,8 +30213,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 parentId: parent || "",
               });
             }
-
-            return true;
           }}
           onRepost={(id) =>
             update((n) => {
@@ -40321,107 +30366,43 @@ function RelBar({ score }) {
 /* Kétirányú kapcsolat-szerkesztő: külön az egyik és külön a másik irány.
    Az érzés lehet egyoldalú — ez a lényeg. */
 function RelPair({ w, aId, bId, aName, bName, update }) {
-  const { tt, lang } = useLang();
-
-  const aRel = getRel(
-    w,
-    aId,
-    bId
-  );
-
-  const bRel = getRel(
-    w,
-    bId,
-    aId
-  );
-
-  const pairAsymmetry =
-    relationshipPairAsymmetryText(
-      aRel,
-      bRel,
-      aName,
-      bName,
-      lang
-    );
-
-  const side = (from, to, label, r) => {
-    const detailParts =
-      relationshipDirectionDetails(
-        r,
-        lang
-      );
-
+  const { tt } = useLang();
+  const side = (from, to, label) => {
+    const r = getRel(w, from, to);
     return (
       <div>
         <div className="between" style={{ marginBottom: 4 }}>
           <span style={{ fontSize: 12.5, color: "var(--bone)" }}>{label}</span>
           <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score}</span>
         </div>
-
-        <div style={{ fontFamily: "Fraunces, Georgia, serif", fontSize: 15, color: r.mood ? "var(--rose)" : "var(--muted)", marginBottom: 5 }}>
-          {relLabel(r)}
+        <div style={{ fontFamily: "Fraunces, Georgia, serif", fontSize: 15, color: r.mood ? "var(--rose)" : "var(--muted)", marginBottom: 6 }}>
+          {r.mood
+            ? localizedRelationshipDisplayText(r.mood, CURRENT_LANG)
+            : relLabel(r)}
         </div>
-
-        {detailParts.length ? (
-          <p
-            className="hint"
-            style={{
-              marginBottom: 7,
-              lineHeight: 1.55,
-            }}
-          >
-            {detailParts.join(" · ")}
-          </p>
-        ) : null}
-
         {r.why ? <p className="hint" style={{ marginBottom: 6 }}>{r.why}</p> : null}
-
         <RelBar score={r.score} />
-
         <input className="i mono" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} type="range" min="-100" max="100"
           value={r.score} onChange={(e) => update((n) => setConfiguredRel(n, from, to, { score: Number(e.target.value) }, "manual"))} />
-
         <MoodPicker value={r.mood} style={{ padding: "6px 10px", fontSize: 12 }}
           onChange={(v) => update((n) => setConfiguredRel(n, from, to, { mood: v }, "manual"))} />
-
         <BondPicker value={r.bond || r.type || ""} fixed={!!r.fixed} style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }}
           onChange={(pp) => update((n) => setConfiguredRel(n, from, to, { ...pp, type: "" }, "manual"))} />
-
         <input className="i" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} value={r.hidden || ""}
           placeholder={tt("titkos érzés — csak az AI látja, ő nem mondja ki", "hidden feeling — only the AI sees it, they won't say it out loud")}
           onChange={(e) => update((n) => setConfiguredRel(n, from, to, { hidden: e.target.value }, "manual"))} />
       </div>
     );
   };
-
   return (
     <>
-      {side(aId, bId, `${aName} → ${bName}`, aRel)}
-
+      {side(aId, bId, `${aName} → ${bName}`)}
       <div className="sep" style={{ margin: "14px 0" }} />
-
-      {side(bId, aId, `${bName} → ${aName}`, bRel)}
-
-      {pairAsymmetry ? (
-        <div
-          className="hint"
-          style={{
-            marginTop: 10,
-            padding: "9px 10px",
-            border: "1px solid var(--line)",
-            borderRadius: 10,
-            color: "var(--gold)",
-            lineHeight: 1.5,
-          }}
-        >
-          {pairAsymmetry}
-        </div>
-      ) : null}
-
+      {side(bId, aId, `${bName} → ${aName}`)}
       <p className="hint" style={{ marginTop: 8 }}>
         {tt(
-          "A két irány külön él: crush, titkos vonzalom, megszállottság, féltékenység vagy gyűlölet is lehet teljesen egyoldalú. A fenti összegzés mindig külön hasonlítja össze A → B és B → A állapotát.",
-          "The two directions are independent: a crush, secret attraction, obsession, jealousy, or hatred can be completely one-sided. The summary above always compares A → B and B → A separately."
+          "A két irány külön él: attól, hogy az egyik rajong a másikért, a másik még érezhet mást.",
+          "The two directions are separate: even if one person adores the other, the other may feel something completely different."
         )}
       </p>
     </>
@@ -42623,8 +32604,8 @@ function applySceneChangesWithStatus(n, scene, changes) {
         sysLangText(
           n,
           n.meId,
-          `${actor ? actor.name : "Valaki"} hangulata megváltozott ${target ? target.name : "veled"} kapcsolatban: ${localizedRelationshipDisplayText(newMood, "hu")}`,
-          `${actor ? actor.name : "Someone"}'s mood toward ${target ? target.name : "you"} changed: ${localizedRelationshipDisplayText(newMood, "en")}`
+          `${actor ? actor.name : "Valaki"} hangulata megváltozott ${target ? target.name : "veled"} kapcsolatban: ${newMood}`,
+          `${actor ? actor.name : "Someone"}'s mood toward ${target ? target.name : "you"} changed: ${newMood}`
         ),
         "mood",
         ch.a
@@ -43298,10 +33279,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
     }
   });
 
-  const advance = async (rawPlayerText) => {
-    const parsedPlayerInput = parseRoleplayPlayerInput(rawPlayerText);
-    const playerText = parsedPlayerInput.text;
-    const playerInputKind = parsedPlayerInput.kind;
+  const advance = async (playerText) => {
     if (sendLockRef.current) return;
     sendLockRef.current = true;
     setBusy("turn");
@@ -43326,7 +33304,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
           id: "turn_" + uid(),
           authorId: w.meId,
           to: playerTarget.id || "",
-          kind: playerInputKind,
+          kind: "action",
           text: playerText,
           ts: now(),
           language: worldLanguage(w, w.meId),
@@ -43464,10 +33442,6 @@ ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` :
 
 ${playerText ? playerInputUnderstandingInstruction(w, playerText, "roleplay") : ""}
 
-${playerText ? (playerInputKind === "action"
-  ? `PLAYER INPUT TYPE — ACTION: A játékos a teljes inputot *...* jelek közé tette. Ez DETERMINISZTIKUSAN cselekvés. A játékos karaktere ezt a konkrét cselekvést hajtotta végre; ne kezeld kimondott párbeszédként, ne tedd idézőjelbe, és ne írj helyette további cselekvést. A jelenlévő AI-karakterek erre reagáljanak karakterhűen.`
-  : `PLAYER INPUT TYPE — SPEECH: A játékos inputja nem *...* akcióformátumú, ezért alapértelmezésben kimondott párbeszédként kezeld.`) : ""}
-
 ${characterAgentRuntimeCard(
   w,
   cast.map((c) => c.id),
@@ -43562,12 +33536,6 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 ${worldLanguage(w, w.meId) === "en"
   ? "- Every user-visible turn, narration, memory, mood, reason and event summary in the JSON must be natural English."
   : "- Minden felhasználónak látható turn, narráció, memória, mood, indok és event-összefoglaló természetes, hibátlan magyar legyen."}
-
-ROLEPLAY INPUT PARSING — KÖTELEZŐ:
-- Ha a játékos inputja pontosan *...* formában érkezik, az teljes egészében CSELEKVÉS. A csillagok csak jelölők, a tárolt turn textből elhagyhatók, de a jelentés és a cselekvés megmaradjon.
-- *felállok* = action, NEM speech. *megfogom a kezét* = action, NEM speech.
-- Normál, csillag nélküli játékosi szöveg alapértelmezésben speech.
-- A játékos cselekvését soha ne fordítsd át olyan mondattá, mintha azt hangosan kimondta volna.
 
 Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","to":"annak a jelenlévő karakternek/játékosnak az id-ja, akinek a speech közvetlenül szól, vagy üres","kind":"speech vagy action","text":"..."}],
@@ -43698,10 +33666,6 @@ ${playerText ? `${w.player.name} most ezt teszi vagy mondja:
 "${playerText}"` : "A játékos most nem lép közbe."}
 
 ${playerText ? playerInputUnderstandingInstruction(w, playerText, "roleplay") : ""}
-
-${playerText ? (playerInputKind === "action"
-  ? `PLAYER INPUT TYPE — ACTION: A játékos a teljes inputot *...* jelek közé tette. Ez DETERMINISZTIKUSAN cselekvés. A játékos karaktere ezt a konkrét cselekvést hajtotta végre; ne kezeld kimondott párbeszédként, ne tedd idézőjelbe, és ne írj helyette további cselekvést. A jelenlévő AI-karakterek erre reagáljanak karakterhűen.`
-  : `PLAYER INPUT TYPE — SPEECH: A játékos inputja nem *...* akcióformátumú, ezért alapértelmezésben kimondott párbeszédként kezeld.`) : ""}
 
 KARAKTEREK — TÖMÖR, DE KÖTELEZŐ KÁNON + EMLÉKEZET:
 ${retryCast}
@@ -45542,320 +35506,6 @@ function recentDmBridgeScene(w, botId, chatKeyValue) {
     .sort((a, b) => (Number(b.startedAt || b.ts) || 0) - (Number(a.startedAt || a.ts) || 0))[0] || null;
 }
 
-function fullSelfCharacterSheetForDirectDm(
-  w,
-  c
-) {
-  if (!c) return "";
-
-  /*
-   * DIRECT DM SELF SHEET:
-   * every actual character-sheet field remains complete and unabridged.
-   * Album metadata is handled by the image pipeline instead of being pasted
-   * into every text DM request.
-   */
-  const rows = [
-    ["Name", c.name],
-    ["Nickname", c.nick || c.nickname],
-    ["Username", c.username],
-    ["Birth", c.birth],
-    ["Age", ageOf(c, w) || ""],
-    ["Gender", c.gender],
-    ["Orientation", c.orientation],
-    ["Height", c.height],
-    ["City", c.city],
-
-    ["Occupation / Job", c.job || c.occupation || c.profession],
-    ["Role", c.role],
-    ["Rank / Title", c.rank || c.title],
-    ["Organization", c.organization],
-    ["Affiliation", c.affiliation],
-
-    ["Public Bio", c.bio],
-    ["Appearance", c.looks],
-
-    ["Personality", c.personality],
-    ["Traits", c.traits],
-    ["Speech Style", c.speech],
-    ["Voice / Example Sentences — STYLE ONLY", c.voice],
-
-    ["Goals", c.goals],
-    ["Fears", c.fears],
-    ["Likes / Favorite Things", c.likes],
-    ["Secrets", c.secrets],
-
-    ["Relations / Connections — PRIVATE SELF-CANON", c.connections],
-
-    ["Backstory / History", c.backstory],
-    ["Other Important Canon", c.extra],
-    ["Brief / Additional Sheet Canon", c.brief],
-
-    ["Skills", c.skills],
-    ["Abilities", c.abilities],
-    ["Combat", c.combat],
-  ];
-
-  return rows
-    .map(([label, value]) => {
-      const raw =
-        String(value || "")
-          .replace(/\r/g, "")
-          .trim();
-
-      return raw
-        ? `${label}: ${raw}`
-        : "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function directDmOtherReferenceProfile(
-  w,
-  c
-) {
-  if (!c) return null;
-
-  return {
-    id: String(c.id || ""),
-    name: String(c.name || ""),
-    nickname: String(c.nick || c.nickname || ""),
-    username: String(c.username || ""),
-    birth: String(c.birth || ""),
-    age: ageOf(c, w) || "",
-    gender: String(c.gender || ""),
-    orientation: String(c.orientation || ""),
-    height: String(c.height || ""),
-    city: String(c.city || ""),
-    occupation: String(c.job || c.occupation || c.profession || ""),
-    role: String(c.role || ""),
-    rank: String(c.rank || c.title || ""),
-    organization: String(c.organization || ""),
-    affiliation: String(c.affiliation || ""),
-    bio: cut(String(c.bio || ""), 1200),
-    appearance: cut(String(c.looks || ""), 1200),
-    history: spread(String(c.backstory || ""), 9000),
-    otherInformation: spread(String(c.extra || ""), 2200),
-    primaryDojo: karateFactionDisplayName(factionFlags(c)),
-    classification: characterFactionIdentityCard(c) || "",
-  };
-}
-
-function directDmLiveContextCard(w, actor, latestPlayerText = "") {
-  if (!w || !actor) return "";
-  const adaptive = compactAdaptiveProfileForPrompt(w, actor.id, w.meId);
-  const continuity = relationshipContinuityCard(w, actor.id, w.meId);
-  const liveSocial = liveSocialNetworkContextCard(w, actor.id, 10);
-  const chapter = dynamicStoryChapterCard(w, actor.id);
-  const activeScenes = (w.scenes || [])
-    .filter((scene) => scene && !scene.archived && Array.isArray(scene.cast) && scene.cast.includes(actor.id))
-    .sort((a, b) => Number(b.updatedAt || b.ts || 0) - Number(a.updatedAt || a.ts || 0))
-    .slice(0, 3)
-    .map((scene) => `- ${scene.title || "Event"}: ${cut(scene.setting || scene.goal || "", 220)}`)
-    .join("\n");
-
-  return `REAL-TIME CONTEXT FOR THIS PRIVATE CONVERSATION:\n${liveSocial}\n${chapter}\n${continuity || ""}\nOBSERVED PLAYER PATTERN — BEHAVIORAL EVIDENCE ONLY, NEVER PRIVATE PLAYER SHEET:\n${adaptive ? JSON.stringify(adaptive) : "- not enough observed evidence yet"}\nACTIVE/RECENT SHARED EVENT CONTEXT FOR SELF:\n${activeScenes || "-"}\nLATEST PLAYER MESSAGE FOCUS:\n${cut(String(latestPlayerText || ""), 700) || "-"}\nHARD RULE: answer from what SELF actually knows now. Recent public/shared events and prior conversation may inform the reply only when relevant to the latest message; do not dump context or invent knowledge.`;
-}
-
-function contextualizeChatSnapPrompt(w, character, rawPrompt, latestPlayerText = "", historyText = "", explicitRequest = false, reasonBasis = "") {
-  const intent = cut(String(rawPrompt || "").replace(/\s+/g, " ").trim(), 520);
-  if (!intent) return "";
-  const latest = cut(String(latestPlayerText || "").replace(/\s+/g, " ").trim(), 260);
-  const recent = cut(String(historyText || "").replace(/\s+/g, " ").trim(), 700);
-  const reason = cut(String(reasonBasis || "").replace(/\s+/g, " ").trim(), 320);
-  const mode = explicitRequest ? "The player explicitly requested a picture; satisfy that exact request first." : "This is a spontaneous snap; it must have a concrete reason in the current conversation/context.";
-  return `CHAT-GROUNDED SNAP. ${mode}\nVISUAL INTENT: ${intent}\nLATEST CHAT INPUT: ${latest || "-"}\n${reason ? `CURRENT REASON: ${reason}\n` : ""}RECENT CHAT CONTINUITY: ${recent || "-"}\nHARD: depict a NEW present-moment smartphone photo that is plausible NOW. Do not invent off-screen people, events, locations, relationship milestones or activities that the chat/context did not establish. If visual intent conflicts with the current conversation, follow the conversation. Keep SELF's established identity.`;
-}
-
-function directDmSystemPrompt(
-  w,
-  actor
-) {
-  const en =
-    worldLanguage(
-      w,
-      w.meId
-    ) === "en";
-
-  return en
-    ? `You are the private-DM character engine for MÁSVILÁG. Write only as ${actor.name}. The user prompt contains ${actor.name}'s complete self character sheet, exact relationship state, grounded memory and current private chat. SELF's own Personality/Traits/Speech/Voice define SELF's style. Other-person reference facts are knowledge only and must never alter SELF's personality or voice. Answer the latest player message directly and naturally. Do not narrate actions or write for the player. Follow the requested JSON schema exactly.`
-    : `Te a MÁSVILÁG privát-DM karakterengine-je vagy. Kizárólag ${actor.name} karaktereként írj. A user prompt tartalmazza ${actor.name} teljes saját karakterlapját, pontos kapcsolatállapotát, földelt emlékezetét és az aktuális privát chatet. SELF saját Personality/Traits/Speech/Voice mezői határozzák meg SELF hangját. Más karakter referencia-tényei csak tudások, soha nem írhatják át SELF személyiségét vagy hangját. Közvetlenül a játékos legutóbbi üzenetére válaszolj. Ne narrálj cselekvést és ne írj a játékos helyett. A kért JSON sémát pontosan kövesd.`;
-}
-
-function directPlayerDmContextCard(
-  w,
-  actor
-) {
-  if (!w || !actor) return "";
-
-  const lang =
-    worldLanguage(
-      w,
-      w.meId
-    );
-
-  const en =
-    lang === "en";
-
-  return `
-${en ? "DIRECT DM CONTEXT — PLAYER-INITIATED PRIVATE MESSAGE" : "KÖZVETLEN DM KONTEXTUS — JÁTÉKOS ÁLTAL INDÍTOTT PRIVÁT ÜZENET"}
-
-${en ? "WORLD / UNIVERSE" : "VILÁG / UNIVERZUM"}:
-${cut(
-  String(
-    w.name ||
-    w.title ||
-    w.universe ||
-    ""
-  ),
-  1200
-)}
-
-${en ? "FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY" : "TELJES SAJÁT KARAKTERLAP — VÁGATLAN, LEGMAGASABB PRIORITÁS"}:
-${fullSelfCharacterSheetForDirectDm(
-  w,
-  actor
-)}
-
-${socialSelfStyleOwnershipCard(
-  actor
-)}
-
-${en ? "OTHER PERSON REFERENCE FACTS — KNOWLEDGE ONLY, NEVER SELF STYLE" : "A MÁSIK FÉL REFERENCIA-TÉNYEI — CSAK TUDÁS, SOHA NEM SAJÁT STÍLUS"}:
-${JSON.stringify(
-  directDmOtherReferenceProfile(
-    w,
-    w.player
-  )
-)}
-
-${en
-  ? `HARD OWNERSHIP: You are ${actor.name} [${actor.id}]. The player is ${w.player.name} [${w.meId}]. Never swap speaker ownership.`
-  : `KEMÉNY TULAJDONJOG: Te ${actor.name} [${actor.id}] vagy. A játékos ${w.player.name} [${w.meId}]. Soha ne cseréld fel, ki beszél.`}
-`;
-}
-
-async function repairDirectPlayerDmReply(
-  w,
-  actor,
-  playerText,
-  historyText,
-  outgoingImageDescription = ""
-) {
-  if (!w || !actor) return "";
-
-  const rel =
-    getRel(
-      w,
-      actor.id,
-      w.meId
-    );
-
-  const raw =
-    await askWorldJSONInteractive(
-      w,
-      directDmSystemPrompt(
-        w,
-        actor
-      ),
-      `${directPlayerDmContextCard(
-        w,
-        actor
-      )}
-
-DIRECT REPLY REPAIR — TEXT RESPONSE ONLY.
-
-CURRENT RELATIONSHIP:
-${relationshipBehaviorCard(
-  w,
-  actor.id,
-  w.meId
-)}
-
-CURRENT GROUNDED MEMORY:
-${characterMemoryCard(
-  w,
-  actor
-) || "none"}
-
-${directDmLiveContextCard(w, actor, playerText)}
-
-RECENT PRIVATE CHAT:
-${String(
-  historyText || ""
-).slice(-12000)}
-
-LATEST PLAYER MESSAGE — ANSWER THIS NOW:
-"${String(
-  playerText || ""
-).slice(0, 4000)}"
-
-${outgoingImageDescription
-  ? `THE PLAYER ALSO SENT AN IMAGE. VISIBLE CONTENT ONLY:\n${String(outgoingImageDescription).slice(0, 1800)}`
-  : ""}
-
-HARD:
-- Return ONE actual private-message reply from ${actor.name}.
-- Use ${actor.name}'s COMPLETE SELF sheet above for personality, Speech Style, Voice, casing and behavior.
-- Other-person facts are knowledge only; never absorb them as SELF style.
-- Answer the latest message directly.
-- No narration, no roleplay actions, no assistant language.
-- Do not return empty/skip.
-- Do not invent a photo unless an image description is supplied above.
-- Keep it natural for an actual DM; usually concise.
-
-JSON ONLY:
-{"reply":"actual DM reply"}${TAIL}`,
-      {
-        maxTries: 2,
-        maxTokens: 320,
-        timeoutMs: 30000,
-        maxSystemChars: 7000,
-        maxPromptChars: 56000,
-        maxBusyWaits: 2,
-        busyRetryCapMs: 65000,
-      }
-    );
-
-  let reply =
-    String(
-      raw &&
-      raw.reply ||
-      ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!reply) return "";
-
-  reply =
-    enforceChatEmojiVariety(
-      w,
-      actor.id,
-      reply
-    );
-
-  reply =
-    sanitizePhoneDm(
-      w,
-      actor.id,
-      reply,
-      historyText
-    );
-
-  reply =
-    sanitizeUnjustifiedColdDm(
-      w,
-      actor.id,
-      playerText,
-      reply
-    );
-
-  return String(
-    reply || ""
-  ).trim();
-}
-
 function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply, onOpenScene }) {
   const { tt } = useLang();
   const { media, addImage } = useMedia();
@@ -45919,20 +35569,6 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
   }
 
   sendLockRef.current.add(c.id);
-
-  /*
-   * Reserve provider capacity immediately when the human presses Send.
-   * This blocks a new autonomous feed/world AI request from starting while
-   * this exact private message is waiting for its answer.
-   */
-  AI.directDmPending =
-    Math.max(
-      0,
-      Number(
-        AI.directDmPending
-      ) || 0
-    ) + 1;
-
   setBusyChats((prev) => ({ ...prev, [c.id]: true }));
   setText("");
   setChatImg("");
@@ -46003,7 +35639,9 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
    * a világ tényleges részeként kapja meg.
    */
   const requestWorld =
-    cloneWorldState(w);
+    JSON.parse(
+      JSON.stringify(w)
+    );
 
   if (!requestWorld.chats) {
     requestWorld.chats = {};
@@ -46057,7 +35695,7 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
     const hist = (
       requestWorld.chats[ck] || []
     )
-      .slice(-28)
+      .slice(-14)
       .map(
         (m) =>
           `${
@@ -46090,19 +35728,14 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
       requestWorld.meId
     );
 
-    let out = null;
-    let primaryDmError = null;
-
-    try {
-      out = await askWorldJSONInteractive(
+    const out = await askWorldJSONInteractive(
+      requestWorld,
+      engineFor(requestWorld),
+      `${worldContext(
         requestWorld,
-        directDmSystemPrompt(
-          requestWorld,
-          c
-        ),
-      `${directPlayerDmContextCard(
-        requestWorld,
-        c
+        [c.id],
+        false,
+        c.id
       )}
 
 TE MOST ${c.name.toUpperCase()} VAGY egy privát beszélgetésben ${requestWorld.player.name} karakterrel.
@@ -46157,22 +35790,25 @@ ${relationshipBehaviorCard(
 )}
 
 Amire emlékszel:
-${characterMemoryCard(
+${selfMemoryForPrompt(
   requestWorld,
-  c
-) || "semmi különös"}
-
-${directDmLiveContextCard(requestWorld, c, t)}
+  c.id
+)}
 
 BESZÉLGETÉS:
 ${hist}
 
-DIRECT DM RUNTIME FACTS:
-- SELF ID: ${c.id}
-- PLAYER ID: ${requestWorld.meId}
-- CURRENT SURFACE: private DM
-- CURRENT TARGET: ${requestWorld.player.name}
-- The latest player message in BESZÉLGETÉS is the exact input to answer now.
+${characterAgentRuntimeCard(
+  requestWorld,
+  [c.id],
+  {
+    surface: "dm",
+    targetId: requestWorld.meId,
+    playerText: t,
+    inputAuthorId: requestWorld.meId,
+    messages: requestWorld.chats[ck] || [],
+  }
+)}
 
 ${conversationOwnershipInstruction(
   requestWorld,
@@ -46210,6 +35846,8 @@ ${positiveDmContinuityInstruction(
   c.id,
   t
 )}
+
+${voiceCard(c)}
 
 ${repetitionGuard(
   requestWorld,
@@ -46257,6 +35895,9 @@ ${chatExplicitlyRequestsImage(t) ? `A JÁTÉKOS KIFEJEZETTEN KÉPET KÉRT.
 - Albumképet SOHA nem küldesz el közvetlenül DM-ben.
 - Ha a kérés konkrét (pl. selfie, outfit, kávé, buli, hol vagy most), a generált kép pontosan ahhoz igazodjon.
 - A szöveges reply lehet mellette, de a generált kép nem maradhat el.` : ""}
+
+VIZUÁLIS REFERENCIA A GENERÁLT SNAPHEZ — EZEKET NEM KÜLDHETED EL KÖZVETLENÜL:
+${albumList(c) || "nincs albumkép; a profilkép/looks marad referencia"}
 
 Ha természetes része a válaszodnak, küldhetsz EGY ÚJONNAN GENERÁLT képet.
 - DM-ben az album képei CSAK arc/kinézet/referencia céljára szolgálnak.
@@ -46323,41 +35964,13 @@ KAPCSOLATVÁLTOZÁS:
 - Jelentős interakciónál ne adj alibi ±1/±2 értéket.
 - Ha nincs valódi érzelmi hatás, a changes lehet üres.
 - Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
-- Ha changes-ben moodot adsz, az NE általános címke legyen. Rövid, karakter-specifikus aktuális érzés legyen, amit a SAJÁT personality/traits/history és a konkrét kapcsolat alakít; ne csak "jealous/hurt/annoyed". A túl generikus moodot a rendszer személyiséghez igazítva finomítja.
-- A mood és why nyelve a világ nyelve legyen.
 
 Formátum:
 {"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event vagy group_social","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
-    , {
-        maxTries: 2,
-        maxTokens: 650,
-        timeoutMs: 28000,
+    , { maxTries: 1, maxTokens: 650, timeoutMs: 28000 }
+    );
 
-        /*
-         * DIRECT DM ONLY — other AI surfaces keep their existing budgets.
-         */
-        maxSystemChars: 7000,
-        maxPromptChars: 68000,
-
-        /*
-         * Wait through the provider's real TPM cooldown instead of retrying
-         * the same request halfway through a 30–60 second rate-limit window.
-         */
-        maxBusyWaits: 2,
-        busyRetryCapMs: 65000,
-      }
-      );
-    } catch (primaryDmErr) {
-      primaryDmError =
-        primaryDmErr;
-
-      console.warn(
-        "Primary direct DM generation failed; trying focused reply repair:",
-        primaryDmErr
-      );
-    }
-
-    let requestedReplyText = String(
+    const requestedReplyText = String(
       out && out.reply !== undefined
         ? out.reply
         : ""
@@ -46390,24 +36003,15 @@ Formátum:
         ? forcedChatSnapPrompt(t, c)
         : "");
 
-    const groundedGeneratedRequestPrompt = contextualizeChatSnapPrompt(
-      requestWorld,
-      c,
-      generatedRequestPrompt,
-      t,
-      hist,
-      explicitImageRequest
-    );
-
     const generatedAiSnap =
-      groundedGeneratedRequestPrompt &&
+      generatedRequestPrompt &&
       (
         !requestedReplyText ||
         explicitImageRequest
       )
         ? await generateAiChatSnap(
             c,
-            groundedGeneratedRequestPrompt,
+            generatedRequestPrompt,
             addImage,
             media
           )
@@ -46466,52 +36070,6 @@ Formátum:
         reply
       );
 
-    /*
-     * If the full DM call failed, returned no text, or a safety/continuity
-     * sanitizer legitimately removed the whole sentence, do one focused AI
-     * repair WHILE the chat still shows typing. This is still an actual model
-     * reply using the character's complete SELF sheet — not a canned fallback.
-     */
-    if (
-      !String(
-        reply || ""
-      ).trim() &&
-      !explicitImageRequest
-    ) {
-      try {
-        const repairedReply =
-          await repairDirectPlayerDmReply(
-            requestWorld,
-            c,
-            t,
-            hist,
-            outgoingImageDescription
-          );
-
-        if (
-          String(
-            repairedReply || ""
-          ).trim()
-        ) {
-          reply =
-            repairedReply;
-
-          requestedReplyText =
-            repairedReply;
-        }
-      } catch (repairDmErr) {
-        console.warn(
-          "Focused direct DM reply repair failed:",
-          repairDmErr
-        );
-
-        if (!primaryDmError) {
-          primaryDmError =
-            repairDmErr;
-        }
-      }
-    }
-
     if (
       explicitImageRequest &&
       !aiImageRef
@@ -46525,12 +36083,6 @@ Formátum:
     }
 
     if (!reply && !aiImageRef) {
-      if (
-        primaryDmError
-      ) {
-        throw primaryDmError;
-      }
-
       throw new Error(
         explicitImageRequest
           ? tt(
@@ -46772,24 +36324,18 @@ Formátum:
     });
 
     /*
-     * A reply is now committed to the local chat state. Clear a stale CHAT
-     * provider error only after that commit actually succeeded.
-     */
-    setErr("");
-
-    /*
      * Text + fresh Snap esetén a chatválasz AZONNAL megjelenik.
      * A képgenerálás nem blokkolja a beszélgetést; ha elkészül,
      * külön képes üzenetként csatlakozik utána.
      */
     if (
       requestedReplyText &&
-      groundedGeneratedRequestPrompt &&
+      generatedRequestPrompt &&
       !explicitImageRequest
     ) {
       void generateAiChatSnap(
         c,
-        groundedGeneratedRequestPrompt,
+        generatedRequestPrompt,
         addImage,
         media
       )
@@ -46826,6 +36372,12 @@ Formátum:
         });
     }
   } catch (e) {
+    console.warn(
+      "[dm-ai-failed]",
+      c && c.name,
+      (e && e.message) || e
+    );
+
     /*
      * A játékos üzenete már biztosan bent marad.
      * A közvetlen chat-hívás rövid, korlátozott próbálkozást kapott,
@@ -46842,22 +36394,6 @@ Formátum:
       )
     );
   } finally {
-  AI.directDmPending =
-    Math.max(
-      0,
-      (
-        Number(
-          AI.directDmPending
-        ) || 0
-      ) - 1
-    );
-
-  /*
-   * If a queued direct DM was waiting behind one already-running provider
-   * request, resume the priority queue now that the reservation count changed.
-   */
-  pumpAiQueue();
-
   sendLockRef.current.delete(c.id);
   setBusyChats((prev) => {
     const next = { ...prev };
@@ -48000,10 +37536,14 @@ function restartWorldHistoryInPlace(w) {
 
   /*
    * Before deleting the old feed, return every AI album image that had been
-   * consumed by posting. This also makes those image IDs persistent again
-   * before trimWorldImagesToFreshPeople() runs.
+   * consumed by posting. This is best-effort only: a malformed legacy post
+   * must never prevent the actual restart from completing.
    */
-  restorePostedAlbumImagesForFreshRun(w);
+  try {
+    restorePostedAlbumImagesForFreshRun(w);
+  } catch (e) {
+    console.warn("[restart-world] album restoration skipped:", e);
+  }
 
   /* Epoch invalidates any autonomous AI request that started before restart. */
   w.historyEpoch = Math.max(0, Math.floor(Number(w.historyEpoch) || 0)) + 1;
@@ -48029,8 +37569,17 @@ function restartWorldHistoryInPlace(w) {
    * - active character names in Connections/backstory seed relationships;
    * - rival factions/dojos default negative unless personal canon overrides;
    * - live score/bond drift from the previous run does NOT become the new start.
+   *
+   * If an old/malformed relationship entry is encountered, fall back to a
+   * clean relationship container instead of aborting the entire restart.
    */
-  restoreRelationshipBaselinesForFreshRun(w, at);
+  try {
+    restoreRelationshipBaselinesForFreshRun(w, at);
+  } catch (e) {
+    console.warn("[restart-world] relationship baseline rebuild failed:", e);
+    w.rels = {};
+    w.relationshipCanonFingerprint = "";
+  }
 
   /* RP/Event, rewards, diary and visible world-history surfaces. */
   w.scenes = [];
@@ -48092,9 +37641,17 @@ function restartWorldHistoryInPlace(w) {
   w.characterArrivalTrendMigratedV2 = true;
   w.socialDiscoveryMigratedV1 = true;
 
-  /* New autonomous runtime starts cleanly instead of replaying queued old work. */
+  /* New autonomous runtime starts cleanly instead of replaying queued old work.
+   * Keep this assignment last so no stale queue/running action can survive restart.
+   */
   w.autoAt = 0;
   w.sim = freshSimulationRuntime(at);
+  if (!w.sim || typeof w.sim !== "object" || Array.isArray(w.sim)) {
+    w.sim = {};
+  }
+  if (!Array.isArray(w.sim.queue)) w.sim.queue = [];
+  w.sim.running = "";
+  w.sim.at = at;
   w.activeSceneId = "";
 
   if (w.universe && typeof w.universe === "object") {
@@ -48116,14 +37673,33 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState("");
 
-  /* v79: this handler belongs to the World settings component.
-   * v76 accidentally inserted it inside socialProfiles(), where React state
-   * setters/update/tt do not exist; the settings button therefore crashed with
-   * `ReferenceError: restartWorldHistory is not defined`. */
-  const restartWorldHistory = () => {
-    update((n) => {
-      restartWorldHistoryInPlace(n);
-    });
+  /* v100.0 — crash-safe restart handler.
+   * Keep this handler inside World, where update()/state setters/tt are in scope.
+   * The restart itself is committed through the same authoritative update path
+   * as every other world mutation, so the existing autosave/sync system persists it.
+   */
+  const restartWorldHistory = useCallback(() => {
+    let restarted = false;
+
+    try {
+      restarted = update((n) => {
+        restarted = restartWorldHistoryInPlace(n) === true;
+      });
+    } catch (e) {
+      console.error("[restart-world] restart failed:", e);
+      restarted = false;
+    }
+
+    if (!restarted) {
+      setRestartMsg(
+        tt(
+          "A világ újrakezdése nem sikerült. A meglévő játékállapotot nem módosítottam.",
+          "The world could not be restarted. The existing game state was left unchanged."
+        )
+      );
+      return;
+    }
+
     setRestartConfirm(false);
     setRestartMsg(
       tt(
@@ -48131,8 +37707,9 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
         "The world started a fresh run. Characters were kept, while relationships were restored to the starting baseline built from manual settings plus character-sheet/Connections canon. Rival dojos/factions start negative unless explicit personal canon overrides that. Daily post, image-post and popup quotas restarted, and previously posted AI album images returned to their albums."
       )
     );
-    setTimeout(() => setRestartMsg(""), 4500);
-  };
+
+    window.setTimeout(() => setRestartMsg(""), 4500);
+  }, [update, tt]);
   
   
   const acc = (w.accounts || {})[w.meId] || null;
@@ -49032,321 +38609,8 @@ Csak JSON:
     : "";
 }
 
-
-/* ============================================================
-   AUTONOMOUS DM — CONCRETE REASON GROUNDING
-
-   AI -> player DM may start only from something the character can actually
-   point to: a visible player post/Note/comment, a known event, a rumor they
-   genuinely heard, or an unresolved shared plan/promise/thread. This is DM-only
-   logic; it does not alter feed, comments, follow, popup, Event or Notes lanes.
-   ============================================================ */
-function autonomousDmReasonCandidates(w, bot) {
-  if (!w || !bot || !bot.id || isHuman(w, bot.id) || !w.meId) return [];
-
-  const at = now();
-  const rows = [];
-  const seen = new Set();
-  const playerName = String((w.player && w.player.name) || nameOfIn(w, w.meId) || "the player");
-
-  const add = (kind, basis, ts = 0, weight = 50, refId = "") => {
-    const cleanBasis = String(basis || "").replace(/\s+/g, " ").trim();
-    if (!cleanBasis || cleanBasis.length < 3) return;
-    const stamp = Number(ts) || 0;
-    const key = `${kind}|${cleanBasis.toLowerCase().slice(0, 180)}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    rows.push({
-      id: `dmreason:${kind}:${commentSeedNumber(`${bot.id}|${key}|${refId || stamp}`)}`,
-      kind,
-      basis: cut(cleanBasis, 360),
-      ts: stamp,
-      weight: Number(weight) || 0,
-      refId: String(refId || ""),
-    });
-  };
-
-  /* 1) Explicit shared continuity is always a real reason to reopen chat. */
-  const continuity = compactRelationshipContinuity(w, bot.id, w.meId);
-  if (continuity) {
-    const continuityAt = Number(continuity.lastMeaningfulInteractionAt) || 0;
-    (continuity.plans || []).slice(-3).forEach((item) =>
-      add("shared-plan", `Our still-open plan: ${String(item || "")}`, continuityAt, 138)
-    );
-    (continuity.promises || []).slice(-3).forEach((item) =>
-      add("shared-promise", `An unresolved promise between us: ${String(item || "")}`, continuityAt, 132)
-    );
-    (continuity.unresolved || []).slice(-4).forEach((item) =>
-      add("shared-open-loop", `An unfinished issue/question between us: ${String(item || "")}`, continuityAt, 126)
-    );
-  }
-
-  /* 2) Direct player activity the bot could naturally have seen. */
-  const socialInterest = socialInteractionInterest(w, bot.id, w.meId);
-  const seesPlayerSocial =
-    isFollowing(w, bot.id, w.meId) ||
-    linked(w, bot.id, w.meId) ||
-    socialInterest >= 18;
-
-  if (seesPlayerSocial) {
-    (w.posts || [])
-      .filter((post) =>
-        post &&
-        post.authorId === w.meId &&
-        at - (Number(post.ts) || 0) <= 18 * 3600e3
-      )
-      .slice(0, 4)
-      .forEach((post) => {
-        const visible = [post.text, post.imageDescription].filter(Boolean).join(" | ");
-        add(
-          "player-post",
-          `${playerName}'s recent post: ${visible || "image post"}`,
-          post.ts,
-          142,
-          post.id
-        );
-      });
-
-    const playerNote = noteOf(w, w.meId);
-    if (
-      playerNote &&
-      at - (Number(playerNote.ts) || 0) <= NOTE_LIFE
-    ) {
-      const noteText = [
-        playerNote.text,
-        playerNote.music && (playerNote.music.title || playerNote.music.artist)
-          ? `music: ${playerNote.music.title || ""}${playerNote.music.artist ? ` — ${playerNote.music.artist}` : ""}`
-          : "",
-      ].filter(Boolean).join(" | ");
-      if (noteText) {
-        add("player-note", `${playerName}'s current Note: ${noteText}`, playerNote.ts, 128, playerNote.id);
-      }
-    }
-  }
-
-  /* 3) A fresh player comment directed into this bot's own thread is concrete. */
-  (w.posts || []).slice(0, 24).forEach((post) => {
-    if (!post || at - (Number(post.ts) || 0) > 18 * 3600e3) return;
-    const comments = safePostComments(post);
-    comments.forEach((comment) => {
-      if (
-        !comment ||
-        !isHuman(w, comment.authorId) ||
-        at - (Number(comment.ts) || 0) > 12 * 3600e3
-      ) return;
-
-      const parent = comment.parent
-        ? comments.find((row) => row && row.id === comment.parent)
-        : null;
-      const aimedAtBot =
-        post.authorId === bot.id ||
-        (parent && parent.authorId === bot.id);
-
-      if (aimedAtBot && comment.text) {
-        add(
-          "player-comment",
-          `${playerName} recently wrote in my public thread: ${comment.text}`,
-          comment.ts,
-          148,
-          comment.id
-        );
-      }
-    });
-  });
-
-  /* 4) Use the bot's OWN knowledge ledger, so private facts cannot leak in. */
-  const mem = ensureCharMemory(w, bot.id);
-  const knownTarget =
-    mem && mem.knownCharacters && mem.knownCharacters[w.meId]
-      ? mem.knownCharacters[w.meId]
-      : null;
-
-  (knownTarget && Array.isArray(knownTarget.knownEvents) ? knownTarget.knownEvents : [])
-    .slice(-10)
-    .forEach((entry) => {
-      const ts = Number(entry && entry.timestamp) || 0;
-      if (ts && at - ts > 72 * 3600e3) return;
-      add(
-        "known-player-event",
-        `Something I genuinely know happened involving ${playerName}: ${entry && entry.text || ""}`,
-        ts,
-        136,
-        entry && entry.source
-      );
-    });
-
-  (mem && Array.isArray(mem.rumors) ? mem.rumors : [])
-    .slice(-10)
-    .forEach((entry) => {
-      const ts = Number(entry && entry.timestamp) || 0;
-      if (ts && at - ts > 72 * 3600e3) return;
-      add(
-        "heard-rumor",
-        `A rumor/gossip item I actually heard: ${entry && entry.text || ""}`,
-        ts,
-        118,
-        entry && entry.source
-      );
-    });
-
-  (mem && Array.isArray(mem.witnessedEvents) ? mem.witnessedEvents : [])
-    .slice(-12)
-    .forEach((entry) => {
-      const ts = Number(entry && entry.timestamp) || 0;
-      if (ts && at - ts > 48 * 3600e3) return;
-      const source = String(entry && entry.source || "").toLowerCase();
-      const body = String(entry && entry.text || "");
-      const playerMention =
-        body.toLowerCase().includes(playerName.toLowerCase()) ||
-        body.toLowerCase().includes("player") ||
-        body.toLowerCase().includes("játékos");
-      const sharedSource = /roleplay|scene|popup|interaction|comment|post|event/.test(source);
-      if (!playerMention && !sharedSource) return;
-      add(
-        "known-event",
-        `A recent event I personally know about: ${body}`,
-        ts,
-        104,
-        entry && entry.source
-      );
-    });
-
-  /* 5) Public posts about the player can naturally trigger a private heads-up. */
-  (w.posts || [])
-    .filter((post) =>
-      post &&
-      !isHuman(w, post.authorId) &&
-      at - (Number(post.ts) || 0) <= 18 * 3600e3
-    )
-    .slice(0, 20)
-    .forEach((post) => {
-      const mentioned = new Set([
-        ...explicitNamedCharacterIdsInText(w, String(post.text || ""), post.authorId),
-        ...((post.gossipStory && Array.isArray(post.gossipStory.mentionedIds))
-          ? post.gossipStory.mentionedIds.map(String)
-          : []),
-      ]);
-      if (!mentioned.has(String(w.meId))) return;
-      const visible = [post.text, post.imageDescription].filter(Boolean).join(" | ");
-      add(
-        "public-post-about-player",
-        `${nameOfIn(w, post.authorId) || "Someone"} publicly posted about ${playerName}: ${visible}`,
-        post.ts,
-        124,
-        post.id
-      );
-    });
-
-  /* Do not repeatedly open chat about the exact same reason in a short window. */
-  const recentUsed = new Set(
-    ((w.chats && w.chats[chatKey(w.meId, bot.id)]) || [])
-      .filter((msg) =>
-        msg &&
-        msg.from === "them" &&
-        msg.autonomous === true &&
-        msg.autonomousReasonId &&
-        at - (Number(msg.ts) || 0) <= 6 * 3600e3
-      )
-      .map((msg) => String(msg.autonomousReasonId))
-  );
-
-  return rows
-    .map((row) => {
-      const ageHours = row.ts ? Math.max(0, (at - row.ts) / 3600e3) : 0;
-      const freshness = row.ts ? Math.max(0, 34 - ageHours * 2.4) : 8;
-      const repeatPenalty = recentUsed.has(row.id) ? 160 : 0;
-      return { ...row, rank: row.weight + freshness - repeatPenalty };
-    })
-    .sort((a, b) => b.rank - a.rank)
-    .slice(0, 8);
-}
-
-function autonomousDmReasonContext(w, bot) {
-  const candidates = autonomousDmReasonCandidates(w, bot);
-  return {
-    candidates,
-    primary: candidates[0] || null,
-  };
-}
-
-function autonomousDmReasonCard(reasonContext) {
-  const rows = reasonContext && Array.isArray(reasonContext.candidates)
-    ? reasonContext.candidates
-    : [];
-  if (!rows.length) return "NO GROUNDED DM REASON IS CURRENTLY AVAILABLE.";
-  return rows.map((row, index) =>
-    `${index + 1}. reasonId=${row.id} | type=${row.kind} | EXACT BASIS: ${row.basis}`
-  ).join("\n");
-}
-
-function autonomousDmLooksLikeGenericPing(value) {
-  const raw = String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
-  if (!raw) return true;
-  return /^(?:hey+|hi+|hello|szia+|hé+|yo+|wyd\??|sup\??|you around\??|you busy\??|what are you doing(?: rn)?\??|what are you up to\??|random but hi|come talk to me(?: for a sec)?|we need to talk\.?|ráérsz\??|ráérsz egy percre\??|elfoglalt vagy\??|mit csinálsz(?: most)?\??|na gyere beszélj velem|beszélnünk kell\.?)$/i.test(raw);
-}
-
-function autonomousDmOutputMatchesReason(out, reasonContext) {
-  if (!out || out.skip === true) return false;
-  const rows = reasonContext && Array.isArray(reasonContext.candidates)
-    ? reasonContext.candidates
-    : [];
-  if (!rows.length) return false;
-
-  const reasonId = String(out.reasonId || "").trim();
-  const chosen = rows.find((row) => row && row.id === reasonId);
-  if (!chosen) return false;
-
-  const reasonBasis = String(out.reasonBasis || "").replace(/\s+/g, " ").trim();
-  if (!reasonBasis) return false;
-  const normalizedBasis = reasonBasis.toLowerCase();
-  const normalizedExpected = String(chosen.basis || "").replace(/\s+/g, " ").trim().toLowerCase();
-  if (
-    normalizedBasis !== normalizedExpected &&
-    !normalizedExpected.includes(normalizedBasis) &&
-    !normalizedBasis.includes(normalizedExpected)
-  ) {
-    return false;
-  }
-
-  const text = String(out.text || "").replace(/\s+/g, " ").trim();
-  const imagePrompt = String(out.imagePrompt || "").replace(/\s+/g, " ").trim();
-  if (!text && !imagePrompt) return false;
-  if (text && autonomousDmLooksLikeGenericPing(text)) return false;
-
-  if (!text) return true;
-
-  const normalize = (value) => String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9áéíóöőúüűàèìòùäëïöüâêîôûçñß]+/gi, " ")
-    .trim();
-  const stop = new Set([
-    "about","after","again","also","been","between","could","from","have","into","just","know","like","more","player","recent","something","that","their","them","there","they","this","what","when","where","which","with","would","your",
-    "akkor","amit","arról","azért","ennek","erről","hogy","ilyen","játékos","között","legyen","már","mert","mint","most","neki","olyan","róla","szerint","után","vele","volt"
-  ]);
-  const tokenSet = (value) => new Set(
-    normalize(value)
-      .split(/\s+/)
-      .filter((token) => token.length >= 4 && !stop.has(token))
-  );
-
-  const reasonTokens = tokenSet(chosen.basis);
-  const dmTokens = tokenSet(text);
-  for (const token of dmTokens) {
-    if (reasonTokens.has(token)) return true;
-  }
-
-  const anchoredLanguage = /\b(?:post|posted|caption|note|comment|reply|heard|rumou?r|gossip|saw|seen|about that|about this|after that|what happened|did you hear|still on|still happening|promise|plan|tonight|tomorrow|yesterday|poszt|posztod|jegyzet|note-od|komment|kommented|válaszod|hallott|pletyk|láttam|erről|arról|ami történt|mi történt|utána|még áll|megbeszélt|terv|ígéret|ma este|holnap|tegnap)\b/i.test(text);
-
-  return anchoredLanguage;
-}
-
 /* Egy bot magától ír privátban. */
-async function genDM(w, bot, reasonContextOverride = null) {
-  const reasonContext = reasonContextOverride || autonomousDmReasonContext(w, bot);
-  if (!reasonContext.primary) {
-    return { skip:true, text:"", image:"", imagePrompt:"", reasonId:"", reasonBasis:"", relationshipImpact:false, changes:[], selfUpdates:[], relationshipUpdates:[] };
-  }
-
+async function genDM(w, bot) {
   const rel = getRel(
     w,
     bot.id,
@@ -49358,7 +38622,7 @@ async function genDM(w, bot, reasonContextOverride = null) {
       chatKey(w.meId, bot.id)
     ] || []
   )
-    .slice(-28)
+    .slice(-14)
     .map(
       (m) =>
         `${
@@ -49398,40 +38662,15 @@ async function genDM(w, bot, reasonContextOverride = null) {
       w,
       [bot.id],
       false,
-      bot.id,
-      {
-        agentPrivacyScope: true,
-      }
+      bot.id
     )}
 
 TE MOST ${String(
       bot.name
     ).toUpperCase()} VAGY.
 
-FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
-${fullSelfCharacterSheetForSocial(w, bot)}
-
-${socialSelfStyleOwnershipCard(bot)}
-
-KNOWLEDGE BOUNDARY:
-- A SAJÁT teljes lapodat látod és használod: personality, Relations/Connections, history, goals, fears, likes, secrets, speech, occupation — mindent.
-- ${w.player.name} és más karakterekről ismerheted a referencia-tényeket: név/becenév, születés/kor, foglalkozás/role/dojo, kinézet, bio, történet/backstory és Extra/Other Information, plusz amit ténylegesen megtudtál/láttál/hallottál a világban.
-- EZEK CSAK TUDÁSOK RÓLUK. Semmit ne vegyél át belőlük saját személyiségként, beszédstílusként, szokásként, traumaként vagy identitásként.
-- Más karakter Personality/Traits/Speech/Voice/Goals/Fears/Likes/Secrets/private Connections mezője SOHA nem írhatja felül vagy formálhatja a TE hangodat.
-
 Magadtól írsz privát üzenetet ${w.player.name} karakternek.
 NEM ő kezdeményezett. Neked kell valódi, karakterhű okod legyen arra, hogy most ráírj.
-
-KONKRÉT DM-INDOK — HARD GROUNDING, MINDEN MÁS TÉMASZABÁLY ELŐTT:
-${autonomousDmReasonCard(reasonContext)}
-
-- A fenti listából PONTOSAN EGY reasonId-t válassz.
-- A reasonBasis mezőbe másold vissza a kiválasztott EXACT BASIS szöveget. Ez rejtett ellenőrző mező, a felhasználó nem látja.
-- A látható DM-nek TÉNYLEG ebből a konkrét okból kell következnie. A relationship/personality csak azt szabja meg, HOGYAN írsz róla; nem cserélheti le a témát.
-- Tilos az olyan önmagában álló filler, mint „you around?”, „mit csinálsz?”, „ráérsz?”, „beszélnünk kell”, „random but hi”, ha az üzenetből nem derül ki, MILYEN konkrét poszt/Note/komment/pletyka/esemény/terv/nyitott ügy miatt írsz.
-- Pletykáról csak akkor írj, ha az EXACT BASIS szerint te valóban hallottad. Privát eseményt csak akkor említs, ha a saját knowledge/memory ledgeredben szerepel.
-- Ha a kiválasztott ok egy poszt vagy Note, reagálj annak konkrét tartalmára; ne csak annyit írj, hogy „láttam a posztod”.
-- Ha terv/ígéret/open loop az ok, a DM a konkrét terv/ígéret/ügy következő lépésére kérdezzen vagy reagáljon.
 
 A viszonyod vele:
 ${rel.score}${
@@ -49475,8 +38714,6 @@ ${selfMemoryForPrompt(
   w,
   bot.id
 )}
-
-${directDmLiveContextCard(w, bot, "")}
 
 ${characterAgentRuntimeCard(
   w,
@@ -49534,13 +38771,14 @@ ${matureContentInstruction(
 
 PRIVÁT ÜZENET SZABÁLYOK:
 
-- Ezt a kört a rendszer azért adta NEKED, mert van legalább egy fent felsorolt, konkrét és számodra ismert DM-indok.
-- Ne találj ki új ürügyet. A DM kizárólag a kiválasztott reasonId / EXACT BASIS tartalmából indulhat.
-- Egy apró hétköznapi ok teljesen elég, HA konkrét: például a játékos tényleges posztjának egy részlete, az általa kiírt Note, egy tényleges kommentje, egy hallott pletyka, egy közösen átélt történés, vagy egy valóban nyitott terv/ígéret.
-- A puszta kapcsolati késztetés („hiányzik”, „crushom”, „barátom”) önmagában NEM elég témának. Az érzés a hangnemet erősítheti, de kell mellé a fenti konkrét kapaszkodó.
-- Ha a modell nem tud a kiválasztott basisből természetes üzenetet írni, inkább skip:true; ne válts generikus small talkra.
-- Nem kell minden spontán DM mögé nagy dráma, de minden elküldött spontán DM mögött legyen azonosítható aktuális tárgy.
-- Lehet poén, flört, számonkérés, meghívás vagy féltés, de mindig A KONKRÉT BASISRA reagálva. Flört CSAK akkor opció, ha (1) ez a célpont a nemed + szexualitásod alapján kompatibilis ÉS (2) VAGY eleve explicit flörtölős a személyiséged, VAGY valódi crush/dating/romantikus vonzalmad van PONT iránta. A játékos/playful/teasing személyiség önmagában NEM flirty.
+- Ezt a kört a rendszer azért adta NEKED, mert a személyiséged, kapcsolatod és online aktivitásod alapján most te vagy az egyik legvalószínűbb spontán kezdeményező.
+- Ne várj feltétlenül nagy eseményre. Egy valódi ember is ráírhat valakire pusztán egy apró kérdés, poén, gondolat, pletyka, meghívás, kép, "hol vagy?", praktikus ügy vagy pillanatnyi késztetés miatt.
+- A skip:true teljesen legitim. Csak akkor írj, ha MOST van természetes okod: nyitott ügy, friss történés, konkrét kérdés/terv, kapcsolati késztetés vagy valóban karakterhű hétköznapi kontaktus. Ne gyárts kötelező DM-et pusztán az idő múlásából.
+- Ha nincs nagy történés, egy KICSI, hétköznapi, karakterhű indok elég, DE ne erőltesd az üzenetet csak azért, mert a scheduler most neked adott kört. Ha a continuity, friss kontextus és személyiséged alapján sem lenne természetes, inkább skip:true.
+- Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz, tervhez vagy egyszerűen valamihez, amit most akarsz tőle.
+- Az ok lehet egészen hétköznapi is.
+- Nem kell minden spontán DM mögé nagy történés, konfliktus vagy dráma.
+- Lehet, hogy csak eszedbe jutott valami, láttál valamit, kérdeznél valamit, átküldenél egy reakciót, piszkálnád vagy akarsz tőle valamit. Flört CSAK akkor opció, ha (1) ez a célpont a nemed + szexualitásod alapján kompatibilis ÉS (2) VAGY eleve explicit flörtölős a személyiséged, VAGY valódi crush/dating/romantikus vonzalmad van PONT iránta. A játékos/playful/teasing személyiség önmagában NEM flirty.
 - Ha az orientációd szerint ${w.player.name} nem romantikus/szexuális célpont számodra, a közeli barátság maradjon PLATONIKUS: ne hajts rá, ne célozgass csókra/randira/intimitásra, és ne alakíts baráti hype-ot romantikus érdeklődéssé.
 - Ha köztetek tényleges, orientáció-kompatibilis crush/dating/romantikus vonzalom van, te is KEZDEMÉNYEZHETSZ: írhatsz direkt flörtöt, utalhatsz arra, hogy meg akarod csókolni, találkozót javasolhatsz, vagy Mature 18+ módban felnőtt szereplőként nem explicit módon jelezheted, hogy intimebb találkozást akarsz. Ne várj mindig arra, hogy a játékos hozza fel először.
 - A chat azonban továbbra is távoli chat: ne írd úgy, mintha fizikailag már megcsókoltad volna vagy hozzáértél volna, hacsak a jelenet szerint ténylegesen egy helyen vagytok.
@@ -49727,7 +38965,7 @@ A DM első pillantásra úgy hasson, mint egy valódi ember spontán privát üz
 Formátum:
 
 Ha nincs természetes okod írni:
-{"skip":true,"text":"","image":"","reasonId":"","reasonBasis":"","changes":[]}
+{"skip":true,"text":"","image":"","changes":[]}
 
 Ha van:
 - Alapértelmezés: "relationshipImpact": false és changes: [].
@@ -49738,16 +38976,12 @@ Ha van:
 - Plusz és mínusz egyformán lehetséges.
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
-{"skip":false,"reasonId":"a fenti lista egyik EXACT reasonId-ja","reasonBasis":"a kiválasztott EXACT BASIS szó szerinti másolata","text":"a rövid, konkrét okhoz kötött privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"csak a kiválasztott reasonBasis miatt természetes ÚJ snap/selfie rövid leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"kifejezetten iránta MOST élő érzés vagy üres","currentIntent":"mit akarsz VELE kapcsolatban következőnek vagy üres","lastTone":"a mostani DM tényleges hangneme","perceivedTargetMood":"csak ha a meglévő beszélgetésből van róla benyomásod, különben üres","addOpenLoops":["csak új, ténylegesen nyitva maradó kettőtök közti ügy"],"resolveOpenLoops":["csak most ténylegesen lezárt korábbi ügy"],"addPromises":["csak explicit ígéret"],"resolvePromises":["teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["teljesült/lemondott terv"]}]}${TAIL}`,
+{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"kifejezetten iránta MOST élő érzés vagy üres","currentIntent":"mit akarsz VELE kapcsolatban következőnek vagy üres","lastTone":"a mostani DM tényleges hangneme","perceivedTargetMood":"csak ha a meglévő beszélgetésből van róla benyomásod, különben üres","addOpenLoops":["csak új, ténylegesen nyitva maradó kettőtök közti ügy"],"resolveOpenLoops":["csak most ténylegesen lezárt korábbi ügy"],"addPromises":["csak explicit ígéret"],"resolvePromises":["teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["teljesült/lemondott terv"]}]}${TAIL}`,
     { maxTokens: 700, priority: 22 }
   );
 }
-async function genForcedEverydayDM(w, bot, reasonContextOverride = null) {
+async function genForcedEverydayDM(w, bot) {
   if (!w || !bot) return null;
-  const reasonContext = reasonContextOverride || autonomousDmReasonContext(w, bot);
-  if (!reasonContext.primary) {
-    return { skip:true, text:"", image:"", imagePrompt:"", reasonId:"", reasonBasis:"", relationshipImpact:false, changes:[], selfUpdates:[], relationshipUpdates:[] };
-  }
   const rel = getRel(w, bot.id, w.meId);
   return askWorldJSON(
     w,
@@ -49756,116 +38990,55 @@ async function genForcedEverydayDM(w, bot, reasonContextOverride = null) {
 ${voiceCard(bot)}
 ${characterMemoryCard(w,bot)}
 ${relationshipBehaviorCard(w,bot.id,w.meId)}
-${directDmLiveContextCard(w, bot, "")}
-${autonomousDmWarmthInstruction(w,bot.id,(w.chats[chatKey(w.meId,bot.id)]||[]).slice(-28).map((m)=>m&&m.text||"").join("\n"))}
+${autonomousDmWarmthInstruction(w,bot.id,(w.chats[chatKey(w.meId,bot.id)]||[]).slice(-14).map((m)=>m&&m.text||"").join("\n"))}
 ${characterAgentRuntimeCard(w,[bot.id],{surface:"dm",targetId:w.meId,messages:w.chats[chatKey(w.meId,bot.id)]||[]})}
 
-AUTONOMOUS DM GROUNDED RETRY — NO GENERIC PING:
-You are ${bot.name}. You may message ${w.player.name} ONLY because one of these concrete reasons currently exists:
-${autonomousDmReasonCard(reasonContext)}
-
-Choose EXACTLY ONE reasonId. Copy its EXACT BASIS verbatim into reasonBasis. The visible DM must clearly make sense as a reaction/follow-up to that basis.
-Do NOT send generic "you around?", "what are you doing?", "we need to talk", "hi", "ráérsz?", "mit csinálsz?" or equivalent without naming/referencing the concrete topic.
-Personality + relationship decide TONE, not TOPIC. Do not invent a new event, rumor, promise, plan or off-screen fact.
-If a post/Note/comment is the reason, react to a concrete detail from it. If gossip/event is the reason, write only from what this character actually knows. If continuity is the reason, ask/follow up on that exact unfinished plan/promise/issue.
+AUTONOMOUS DM RETRY — DO NOT SKIP:
+You are ${bot.name}. Send ${w.player.name} ONE natural spontaneous private message now.
+This is not a dramatic scene. A tiny human reason is enough: unfinished conversation, question, joke, practical thing, gossip, plan, invitation, checking in, teasing or a simple thought. Flirting is allowed ONLY if this target is compatible with your gender/orientation AND either you are explicitly naturally flirty OR you have a real target-specific crush/romantic bond. If the crush is secret, keep it guarded/indirect rather than openly hitting on them.
 ${orientationBlockedRomanceInstruction(w, bot.id, w.meId)}
-Respect relationship=${Number(rel.score)||0}${rel.bond?`, bond=${rel.bond}`:""}.
-Usually 1 short line, maximum 2 short sentences. No narration, no *actions*, no assistant voice. Do not write for the player.
+Do not invent off-screen facts. Respect relationship=${Number(rel.score)||0}${rel.bond?`, bond=${rel.bond}`:""}.
+Use only text you would actually send in chat. Usually 1 short line, maximum 2 short sentences. No narration, no *actions*, no assistant voice. Do not write for the player.
 ${matureContentInstruction(w,[bot.id],"chat")}
 
 JSON ONLY:
-{"skip":false,"reasonId":"one exact reasonId above","reasonBasis":"the exact basis for that reasonId","text":"short DM grounded in that exact reason","image":"","imagePrompt":"","relationshipImpact":false,"changes":[],"selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
-    { maxTokens: 320, priority: 25 }
+{"skip":false,"text":"short DM","image":"","imagePrompt":"","relationshipImpact":false,"changes":[],"selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
+    { maxTokens: 260, priority: 25 }
   );
 }
 
-function fallbackAutonomousDmResponse(w, bot, reasonContextOverride = null) {
-  const reasonContext = reasonContextOverride || autonomousDmReasonContext(w, bot);
-  const reason = reasonContext && reasonContext.primary;
-  if (!reason) {
-    return { skip:true, text:"", image:"", imagePrompt:"", reasonId:"", reasonBasis:"", relationshipImpact:false, changes:[], selfUpdates:[], relationshipUpdates:[] };
-  }
-
+function fallbackAutonomousDmResponse(w, bot) {
   const en = worldLanguage(w, w.meId) === "en";
-  const basis = String(reason.basis || "").replace(/\s+/g, " ").trim();
-  const body = cut(
-    basis
-      .replace(/^Our still-open plan:\s*/i, "")
-      .replace(/^An unresolved promise between us:\s*/i, "")
-      .replace(/^An unfinished issue\/question between us:\s*/i, "")
-      .replace(/^A rumor\/gossip item I actually heard:\s*/i, "")
-      .replace(/^A recent event I personally know about:\s*/i, "")
-      .replace(/^Something I genuinely know happened involving [^:]+:\s*/i, ""),
-    105
-  );
+  const rel = getRel(w, bot.id, w.meId) || {};
+  const bond = String(rel.bond || "").toLowerCase();
+  const tier = relationshipFilterTier(rel);
+  const romantic = relationshipCrushActive(w, bot.id, w.meId, rel);
+  const secretCrush = relationshipSecretCrushActive(w, bot.id, w.meId, rel);
+  const friendly = tier === "good" || tier === "close" || relationshipDeclaresFriendship(rel);
+  const negative = Number(rel.score) <= -25 || /enemy|rival|ellens|riv[aá]l/.test(bond);
+  let text;
 
-  let text = "";
-  switch (reason.kind) {
-    case "player-post":
-      text = en
-        ? `saw your post — ${body}. what happened?`
-        : `láttam a posztod — ${body}. mi történt?`;
-      break;
-    case "player-note":
-      text = en
-        ? `your Note about ${body} — you good?`
-        : `a Note-od: ${body} — minden oké?`;
-      break;
-    case "player-comment":
-      text = en
-        ? `about what you wrote on my post — ${body}. what did you mean?`
-        : `amit a posztom alá írtál — ${body}. ezt hogy értetted?`;
-      break;
-    case "heard-rumor":
-      text = en
-        ? `I just heard this: ${body}. do you know anything about it?`
-        : `most hallottam ezt: ${body}. te tudsz erről?`;
-      break;
-    case "shared-plan":
-      text = en
-        ? `about ${body} — still on?`
-        : `a tervünkről: ${body} — még áll?`;
-      break;
-    case "shared-promise":
-      text = en
-        ? `about ${body} — are we still doing that?`
-        : `az ígéretünkről: ${body} — ezt még tartjuk?`;
-      break;
-    case "shared-open-loop":
-      text = en
-        ? `we never finished this: ${body}`
-        : `ezt még nem beszéltük végig: ${body}`;
-      break;
-    case "public-post-about-player":
-      text = en
-        ? `did you see what got posted about you? ${body}`
-        : `láttad, mit raktak ki rólad? ${body}`;
-      break;
-    case "known-player-event":
-    case "known-event":
-      text = en
-        ? `about what happened — ${body}. are you okay?`
-        : `ami történt — ${body}. jól vagy?`;
-      break;
-    default:
-      text = en
-        ? `I wanted to ask you about this: ${body}`
-        : `erről akartam írni neked: ${body}`;
-      break;
+  if (romantic && !negative) {
+    const options = secretCrush
+      ? (en
+          ? ["what are you up to?", "you around?", "random but hi", "you busy?"]
+          : ["mit csinálsz?", "ráérsz?", "random, de szia", "elfoglalt vagy?"])
+      : (en
+          ? ["you free later?", "what are you doing rn?", "come talk to me for a sec", "kinda wanted to hear from you"]
+          : ["ráérsz később?", "mit csinálsz most?", "gyere beszélj velem egy kicsit", "most valamiért rád akartam írni"]);
+    text = options[Math.floor(Math.random() * options.length)];
+  } else if (friendly && !negative) {
+    const options = en
+      ? ["what are you up to?", "you alive? 😭", "okay come talk to me", "random but how are you?"]
+      : ["mit csinálsz?", "élsz még? 😭", "na gyere beszélj velem", "random, de hogy vagy?"];
+    text = options[Math.floor(Math.random() * options.length)];
+  } else if (negative) {
+    text = en ? "we need to talk." : "beszélnünk kell.";
+  } else {
+    text = en ? "you around?" : "ráérsz egy percre?";
   }
 
-  return {
-    skip:false,
-    reasonId:reason.id,
-    reasonBasis:reason.basis,
-    text:cut(text, 280),
-    image:"",
-    imagePrompt:"",
-    relationshipImpact:false,
-    changes:[],
-    selfUpdates:[],
-    relationshipUpdates:[],
-  };
+  return { skip:false, text, image:"", imagePrompt:"", relationshipImpact:false, changes:[], selfUpdates:[], relationshipUpdates:[] };
 }
 
 function characterNoteActivityScore(w, c) {
@@ -49936,9 +39109,8 @@ ${repetitionGuard(
 
 INSTAGRAM NOTES SZABÁLYOK:
 
-- A scheduler azért választotta most ${bot.name} karaktert, mert a saját Note-ritmusa alapján esedékes. A Note funkciót ténylegesen HASZNÁLD: ne skipelj automatikusan csak azért, mert nincs nagy dráma.
-- "skip": true csak akkor legyen, ha ${bot.name} kifejezetten zárkózott/private online karakter ÉS a friss saját állapotából/eseményeiből tényleg semmi természetes rövid Note nem következik.
-- Egyébként írj egy valódi közösségi médiás Note-ot ${bot.name} nevében.
+- Először döntsd el, ${bot.name} MOST tényleg kiírna-e Note-ot. Ha a személyisége, aktuális hangulata és online szokásai alapján nem, legyen "skip": true.
+- Ha igen, írj egy valódi közösségi médiás Note-ot ${bot.name} nevében.
 - Ez NEM poszt, NEM naplóbejegyzés és NEM roleplay jelenet.
 - Legfeljebb ${NOTE_MAX} karakter lehet.
 - Törekedj rövidségre: gyakran csak néhány szó vagy egy rövid félmondat természetes.
@@ -50203,10 +39375,6 @@ function pickInitiator(w) {
 
     const rel = getRel(w, c.id, w.meId);
     const mem = ensureCharMemory(w, c.id);
-    const dmReasonContext = autonomousDmReasonContext(w, c);
-    if (!dmReasonContext.primary) {
-      return { c, score: -999, dmReasonContext };
-    }
     const lore = [
       c.personality,
       c.traits,
@@ -50229,7 +39397,6 @@ function pickInitiator(w) {
     score += socialInteractionInterest(w, c.id, w.meId) * 0.55;
     score += relationshipObsessionLevel(w, c.id, w.meId) * 18;
     score += (activity - 1) * 28;
-    score += Math.min(54, Math.max(0, Number(dmReasonContext.primary.rank) || Number(dmReasonContext.primary.weight) || 0) * 0.34);
 
     if (/social|társas|outgoing|extrovert|chatty|beszédes|flirt|flört|impulsive|impulzív|gossip|pletyka|possess|birtokl|obsess|megszáll/.test(lore)) score += 14;
     if (/reserved|zárkózott|shy|félénk|quiet|csendes|private|low.?profile|visszahúzód/.test(lore)) score -= 9;
@@ -50527,6 +39694,49 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 70;
   if (!Number.isFinite(Number(w.sim.queueRepairVersion))) w.sim.queueRepairVersion = 1;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
+
+  /*
+   * RECOVERY v99.6 — ONE-TIME REACTIVE QUEUE ORDER REPAIR
+   *
+   * Old v99.5 worlds may already have event-reply/event-post reactions sitting
+   * behind unrelated autonomous work. The queue is capped at 40, so this is a
+   * tiny bounded pass performed once per saved world.
+   */
+  if (
+    Math.max(
+      0,
+      Math.floor(
+        Number(
+          w.sim.playerReactionQueueVersion
+        ) || 0
+      )
+    ) < 1
+  ) {
+    const urgent = [];
+    const normal = [];
+
+    w.sim.queue.forEach(
+      (action) => {
+        (
+          isPriorityPlayerSocialReaction(
+            action
+          )
+            ? urgent
+            : normal
+        ).push(action);
+      }
+    );
+
+    w.sim.queue =
+      urgent
+        .concat(normal)
+        .slice(
+          0,
+          SIM_QUEUE_LIMIT
+        );
+
+    w.sim.playerReactionQueueVersion = 1;
+  }
 
   const cutoff = now() - SIM_DONE_TTL;
   Object.keys(w.sim.done).forEach((k) => {
@@ -53165,40 +42375,6 @@ function publishGossipMediaStory(
       candidate
     );
 
-  const effectiveMentionedIds =
-    [
-      ...new Set([
-        ...(
-          Array.isArray(
-            out.mentionedIds
-          )
-            ? out.mentionedIds
-            : []
-        ),
-
-        ...(
-          candidate.popupBased &&
-          Array.isArray(
-            candidate.subjectIds
-          )
-            ? candidate.subjectIds
-            : []
-        ),
-      ]),
-    ]
-      .filter(
-        (id) =>
-          id &&
-          socialProfileById(
-            w,
-            id
-          ) &&
-          !isMediaAccount(
-            w,
-            id
-          )
-      );
-
   const post = {
     id: uid(),
 
@@ -53247,7 +42423,7 @@ function publishGossipMediaStory(
         liveUsedEventIds,
 
       mentionedIds:
-        effectiveMentionedIds,
+        out.mentionedIds,
 
       roleplayBased:
         Boolean(
@@ -53262,10 +42438,6 @@ function publishGossipMediaStory(
       eventRecap: Boolean(candidate.eventRecap),
       eventTitle: candidate.eventTitle || "",
       attendeeIds: Array.isArray(candidate.attendeeIds) ? candidate.attendeeIds : [],
-      popupBased: Boolean(candidate.popupBased),
-      popupEventId: candidate.popupEventId || "",
-      popupChoiceKey: candidate.popupChoiceKey || "",
-      forceReason: candidate.forceReason || "",
       reactedBy: [],
       reactionRounds: 0,
       rumorEvolvedAt: 0,
@@ -53321,20 +42493,12 @@ function publishGossipMediaStory(
       liveUsedEventIds,
 
     mentionedIds:
-      effectiveMentionedIds,
+      out.mentionedIds,
 
     roleplayBased:
       Boolean(
         candidate.roleplayBased
       ),
-
-    popupBased:
-      Boolean(
-        candidate.popupBased
-      ),
-
-    popupEventId:
-      candidate.popupEventId || "",
   };
 
   w.whisperWire.stories = [
@@ -53366,8 +42530,8 @@ function publishGossipMediaStory(
     null;
 
   const mentionedIds =
-    effectiveMentionedIds.length
-      ? effectiveMentionedIds
+    out.mentionedIds.length
+      ? out.mentionedIds
       : (
           candidate.subjectIds ||
           []
@@ -53474,14 +42638,6 @@ function publishGossipMediaStory(
           Boolean(
             candidate.roleplayBased
           ),
-
-        popupBased:
-          Boolean(
-            candidate.popupBased
-          ),
-
-        popupEventId:
-          candidate.popupEventId || "",
       },
     }
   );
@@ -53500,9 +42656,7 @@ function publishGossipMediaStory(
         "gossip-reaction",
         `gossip-reaction-required:${post.id}:0`,
         { postId: post.id, cast: requiredReactionCast },
-        post.gossipStory.popupBased
-          ? "coverage"
-          : "event"
+        "event"
       )
     );
   }
@@ -54004,280 +43158,6 @@ function gossipReactionKnowledgeContext(w,post,cast){
   }).filter(Boolean).join("\n\n");
 }
 
-function normalizeGossipReactionBasis(value) {
-  return String(
-    value || ""
-  )
-    .toLowerCase()
-    .replace(/[“”‘’"'`]/g, "")
-    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function gossipReactionBasisSupported(
-  post,
-  basis
-) {
-  if (!post) return false;
-
-  const normalizedBasis =
-    normalizeGossipReactionBasis(
-      basis
-    );
-
-  const basisWords =
-    normalizedBasis
-      .split(/\s+/)
-      .filter(Boolean);
-
-  if (
-    basisWords.length < 2 ||
-    basisWords.length > 18
-  ) {
-    return false;
-  }
-
-  const source =
-    normalizeGossipReactionBasis(
-      `${post.gossipStory && post.gossipStory.headline
-        ? post.gossipStory.headline
-        : ""} ${post.text || ""}`
-    );
-
-  return Boolean(
-    source &&
-    source.includes(
-      normalizedBasis
-    )
-  );
-}
-
-function gossipFallbackReactionBasis(post) {
-  const headline =
-    String(
-      post &&
-      post.gossipStory &&
-      post.gossipStory.headline ||
-      ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (headline) {
-    return headline
-      .split(/\s+/)
-      .slice(0, 12)
-      .join(" ");
-  }
-
-  return String(
-    post &&
-    post.text ||
-    ""
-  )
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(/\s+/)
-    .slice(0, 12)
-    .join(" ");
-}
-
-function validGossipReactionRelationshipChanges(
-  w,
-  post,
-  cast,
-  out
-) {
-  if (
-    !w ||
-    !post ||
-    !post.gossipStory
-  ) {
-    return [];
-  }
-
-  const castSet =
-    new Set(
-      (cast || [])
-        .map(
-          (row) =>
-            row &&
-            row.id
-        )
-        .filter(Boolean)
-    );
-
-  const allowedTargets =
-    new Set(
-      [
-        ...(post.gossipStory.mentionedIds || []),
-      ]
-        .filter(Boolean)
-    );
-
-  return (
-    out &&
-    Array.isArray(
-      safeAiChanges(
-        out
-      )
-    )
-      ? safeAiChanges(
-          out
-        )
-      : []
-  )
-    .filter(
-      (ch) => {
-        const a =
-          findChar(
-            w,
-            ch &&
-            ch.a
-          );
-
-        const b =
-          findChar(
-            w,
-            ch &&
-            ch.b
-          );
-
-        return Boolean(
-          a &&
-          b &&
-          a !== b &&
-          castSet.has(a) &&
-          allowedTargets.has(b)
-        );
-      }
-    );
-}
-
-async function genPopupGossipRelationshipRipple(
-  w,
-  post,
-  cast
-) {
-  if (
-    !w ||
-    !post ||
-    !post.gossipStory ||
-    !post.gossipStory.popupBased ||
-    !(cast || []).length
-  ) {
-    return [];
-  }
-
-  const subjects =
-    (post.gossipStory.mentionedIds || [])
-      .filter(
-        (id) =>
-          id &&
-          !isMediaAccount(
-            w,
-            id
-          )
-      );
-
-  if (!subjects.length) {
-    return [];
-  }
-
-  const actors =
-    (cast || [])
-      .map(
-        (row) =>
-          charById(
-            w,
-            row.id
-          )
-      )
-      .filter(Boolean);
-
-  if (!actors.length) {
-    return [];
-  }
-
-  const relationRows =
-    actors
-      .map(
-        (actor) => {
-          const pairs =
-            subjects
-              .filter(
-                (targetId) =>
-                  targetId !==
-                  actor.id
-              )
-              .map(
-                (targetId) =>
-                  `${actor.name} [${actor.id}] → ${nameOfIn(w, targetId)} [${targetId}]: ${relationshipBehaviorCard(w, actor.id, targetId)}`
-              )
-              .join("\n");
-
-          return pairs;
-        }
-      )
-      .filter(Boolean)
-      .join("\n");
-
-  const raw =
-    await askWorldJSON(
-      w,
-      engineFor(
-        w
-      ),
-      `${worldContext(
-        w,
-        [
-          ...actors.map((c) => c.id),
-          ...subjects.filter((id) => !isHuman(w, id)),
-        ].filter((id,index,arr)=>id&&arr.indexOf(id)===index),
-        true,
-        null
-      )}
-
-POPUP-GOSSIP RELATIONSHIP RIPPLE — RELATIONSHIP ONLY.
-
-THIS EXACT PUBLISHED GOSSIP POST:
-${post.gossipStory.headline ? `HEADLINE: ${post.gossipStory.headline}` : ""}
-${post.text}
-
-REACTING AI CHARACTERS — FULL SELF CAPSULES:
-${strictSocialActorCapsules(w, actors, post)}
-
-CURRENT DIRECTED RELATIONSHIPS TO ARTICLE SUBJECTS:
-${relationRows || "-"}
-
-HARD:
-- This is NOT a new story. Evaluate only how reading THIS PUBLISHED GOSSIP POST changes the reacting AI's feelings toward a person actually named/represented in the article.
-- Because this is the public aftermath of a gossip-worthy popup, choose the MOST emotionally affected valid reacting AI and return at least ONE small relationship movement when any plausible emotional effect exists.
-- Allowed direction: reacting AI → article subject. AI → AI and AI → player are both valid.
-- Do NOT change the gossip media account relationship.
-- Use a small realistic delta, usually -6..-2 or +2..+6. Do not jump relationship stages.
-- mood/why must state the reaction to THIS article: belief, disbelief, defense, jealousy, embarrassment, distrust, sympathy, irritation, loyalty, etc.
-- Relationship/personality must come from the reacting AI's OWN capsule only.
-- No invented event, quote, DM, source or off-page fact.
-- oneSided:true unless there is a separate explicit reason to change the reverse direction.
-- bond should normally be empty; score/mood can move without changing status.
-
-JSON ONLY:
-{"changes":[{"a":"reacting AI id","b":"article subject id","delta":-3,"mood":"","bond":"","oneSided":true,"why":""}]}${TAIL}`,
-      {
-        maxTokens:700,
-      }
-    );
-
-  return validGossipReactionRelationshipChanges(
-    w,
-    post,
-    cast,
-    raw
-  );
-}
-
 async function genGossipReactions(w,post,cast){
   const story=post&&post.gossipStory;if(!post||!story||!(cast||[]).length)return{comments:[],reposts:[],follows:[],dms:[],statements:[],changes:[]};
   const castIds=cast.map((x)=>x.id);
@@ -54297,12 +43177,8 @@ ${currentComments||"-"}
 REAKCIÓRA JELÖLT KARAKTEREK ÉS A SAJÁT TUDÁSUK:
 ${gossipReactionKnowledgeContext(w,post,cast)}
 
-A REAGÁLÓ KARAKTEREK TELJES SAJÁT, LEZÁRT SOCIAL CAPSULE-JAI:
-${strictSocialActorCapsules(
-  w,
-  cast.map((row) => charById(w, row.id)).filter(Boolean),
-  post
-)}
+A REAGÁLÓ KARAKTEREK TELJES SAJÁT KÁNONJA ÉS EMLÉKEZETE:
+${cast.map((row) => charById(w, row.id)).filter(Boolean).map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
 
 ${repetitionGuard(w, castIds, "gossip reakciók")}
 
@@ -54311,10 +43187,6 @@ ${allowedTargets.join(", ")}
 
 A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saját nyilvános statement, DM a játékosnak, kapcsolatváltozás.
 - EZ KÖTELEZŐ REAKCIÓKÖR: legalább EGY jelölt karakternek legyen tényleges, látható reakciója (komment / repost / statement / DM). Ne adj teljesen üres választ.
-- GOSSIP-KOMMENT HARD GROUNDING: a comments minden eleme KIZÁRÓLAG EHHEZ A FENTI, MÁR PUBLIKÁLT GOSSIP-POSZTHOZ szóló top-level komment. Ne úgy kommentelj, mintha közvetlenül a popup jelenetben lennél.
-- Minden comment kapjon egy "basis" mezőt: 2–18 EGYMÁST KÖVETŐ szót másolj ki szó szerint a HEADLINE-ból vagy a publikált gossip-poszt szövegéből, amelyre az adott komment reagál. A basis nem jelenik meg a felhasználónak; grounding-bizonyíték.
-- Ha a karakter személyes tanú és ki akarja javítani a sztorit, akkor is a PUBLIKÁLT CIKK egyik konkrét állítását tedd a basis mezőbe, és arra válaszoljon ("ez nem így történt", stb.).
-- A háttéresemény személyes tudása csak azt befolyásolhatja, hogy hisz-e a cikknek / hogyan reagál rá. A komment témáját nem cserélheti le egy másik, nem publikált beszélgetésre vagy konfliktusra.
 - Nem kell mindenkinek reagálnia, és ne csináljon mindenki mindent egyszerre.
 - Az érintett tagadhat, megerősíthet, gúnyolódhat, dühös lehet vagy ignorálhat.
 - Pletyka esetén a HITETLENSÉG ugyanolyan valós reakció, mint az elhívés: kételkedő, bizalmatlan vagy személyes tanú karakter mondhatja, hogy nem hiszi el / nem így történt.
@@ -54329,13 +43201,9 @@ A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saj
 - Follow/unfollow csak az engedélyezett célpontokra mehet.
 - A DM kizárólag a játékosnak szól.
 - Relationship change: a reagáló AI érzése változik egy érintett iránt; delta -35..+35. Lehet erősen pozitív VAGY erősen negatív, és AI → AI célpont is teljesen érvényes. A jealousy / disbelief / defense / betrayal érzéseket a mood és why mezőben konkrétan nevezd meg, ha tényleg ezek mozgatják a változást.
-- A bond opcionális: csak akkor add meg, ha a gossip utóélete ténylegesen kapcsolati STÁTUSZVÁLTÁST okoz (pl. Barát → Rivális, Ismerős → Barát, kialakuló Crush). Ne változtass státuszt pusztán azért, mert van pletyka. oneSided:true, ha az adott változás csak A → B irányú.
-${story.popupBased
-  ? "- EZ A GOSSIP EGY POPUP KIMENETELÉBŐL SZÜLETETT: a direkt popup-résztvevő kapcsolata már a popup kimenetelénél változhatott. ITT a későbbi NYILVÁNOS UTÓÉLETET modellezd: barátok védhetnek, riválisok rátehetnek egy lapáttal, féltékeny/crush/obsessive karakterek reagálhatnak, és emiatt a játékos ↔ más AI-k, illetve AI ↔ AI kapcsolatok is tovább változhatnak, de csak karakterhű és ténylegesen indokolt módon."
-  : ""}
 
 VÁLASZ CSAK JSON:
-{"comments":[{"id":"AI id","text":"komment","basis":"2-18 consecutive words copied from this gossip post"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","bond":"","oneSided":false,"why":""}]}${TAIL}`,{maxTokens:1500});
+{"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","why":""}]}${TAIL}`,{maxTokens:1500});
 }
 
 
@@ -54345,126 +43213,25 @@ function fallbackGossipReactionOutput(w, post, cast) {
   if (!c) return { comments: [], reposts: [], follows: [], dms: [], statements: [], changes: [] };
   const en = worldLanguage(w, w.meId) === "en";
   const role = String(row.role || "observer");
-  let text = en ? "this story is wild." : "ez a sztori azért erős.";
-  if (role === "witness") text = en ? "this post is leaving out what actually happened." : "ez a poszt kihagyja, mi történt valójában.";
-  else if (role === "skeptic") text = en ? "I'm not buying this story." : "ezt a sztorit nem veszem be.";
-  else if (role === "supporter") text = en ? "this post is reaching." : "ez a poszt nagyon nyújtózkodik.";
-  else if (role === "critic") text = en ? "this story tracks." : "ez a sztori sajnos teljesen hihető.";
-  else if (role === "jealous") text = en ? "so this is what we're posting now." : "szóval most már ezt posztoljuk.";
-  else if (role === "mentioned") text = en ? "you're seriously posting this about me?" : "ezt most komolyan kiposztoltátok rólam?";
-
-  const basis =
-    gossipFallbackReactionBasis(
-      post
-    );
-
-  const changes = [];
-
-  if (
-    post.gossipStory.popupBased &&
-    row.strongestTargetId &&
-    row.strongestTargetId !== c.id &&
-    charById(
-      w,
-      row.strongestTargetId
-    )
-  ) {
-    let delta = 0;
-    let mood = "";
-    let why = "";
-
-    if (role === "supporter") {
-      delta = 3;
-      mood =
-        en
-          ? "more protective and loyal after seeing the fallout"
-          : "védelmezőbb és lojálisabb lett a pletyka utóélete miatt";
-      why =
-        en
-          ? "The popup gossip made them want to stand by this person."
-          : "A popupból lett pletyka miatt inkább ki akar állni mellette.";
-    } else if (role === "critic") {
-      delta = -3;
-      mood =
-        en
-          ? "more critical and less trusting after the public fallout"
-          : "kritikusabb és bizalmatlanabb lett a nyilvános utóélet miatt";
-      why =
-        en
-          ? "The popup gossip reinforced their negative view of this person."
-          : "A popupból lett pletyka megerősítette a negatív véleményét róla.";
-    } else if (role === "jealous") {
-      delta = -5;
-      mood =
-        en
-          ? "jealous and unsettled by what the gossip implies"
-          : "féltékeny és nyugtalan attól, amit a pletyka sugall";
-      why =
-        en
-          ? "The popup gossip hit an existing romantic or possessive nerve."
-          : "A popupból lett pletyka egy meglévő romantikus vagy birtokló érzékeny pontra talált.";
-    }
-
-    if (delta) {
-      changes.push({
-        a:c.id,
-        b:row.strongestTargetId,
-        delta,
-        mood,
-        bond:"",
-        oneSided:true,
-        why,
-      });
-    }
-  }
-
-  return {
-    comments: [{
-      id:c.id,
-      text,
-      basis,
-    }],
-    reposts: [],
-    follows: [],
-    dms: [],
-    statements: [],
-    changes,
-  };
+  let text = en ? "wait WHAT" : "várj MI";
+  if (role === "witness") text = en ? "that's not even what happened." : "ez nem is így történt.";
+  else if (role === "skeptic") text = en ? "yeah… I don't buy this." : "aha… ezt nem veszem be.";
+  else if (role === "supporter") text = en ? "nah. I'm not buying that about them." : "na ezt róla nem veszem be.";
+  else if (role === "critic") text = en ? "called it." : "mondtam.";
+  else if (role === "jealous") text = en ? "oh. cute." : "ó. de cuki.";
+  else if (role === "mentioned") text = en ? "excuse me??" : "elnézést??";
+  return { comments: [{ id: c.id, text }], reposts: [], follows: [], dms: [], statements: [], changes: [] };
 }
 
 function applyGossipReactions(n,postId,cast,out){
   const post=(n.posts||[]).find((p)=>p&&p.id===postId);if(!post||!post.gossipStory)return;
   const castSet=new Set((cast||[]).map((r)=>r&&r.id).filter(Boolean));
   const visibleActors=new Set();
-  const allowedTargets=new Set([...(post.gossipStory.mentionedIds||[])].filter(Boolean));
+  const allowedTargets=new Set([post.authorId,...(post.gossipStory.mentionedIds||[])].filter(Boolean));
   if(!Array.isArray(post.gossipStory.reactedBy))post.gossipStory.reactedBy=[];
   let reactionOut=out&&typeof out==="object"?out:null;
-
-  const groundedComments =
-    reactionOut &&
-    Array.isArray(
-      reactionOut.comments
-    )
-      ? reactionOut.comments.filter(
-          (item) =>
-            item &&
-            item.text &&
-            gossipReactionBasisSupported(
-              post,
-              item.basis
-            )
-        )
-      : [];
-
-  if (reactionOut) {
-    reactionOut = {
-      ...reactionOut,
-      comments: groundedComments,
-    };
-  }
-
   const hasVisible=Boolean(reactionOut&&(
-    groundedComments.length||
+    (Array.isArray(reactionOut.comments)&&reactionOut.comments.length)||
     (Array.isArray(reactionOut.reposts)&&reactionOut.reposts.length)||
     (Array.isArray(reactionOut.statements)&&reactionOut.statements.length)||
     (Array.isArray(reactionOut.dms)&&reactionOut.dms.length)
@@ -54499,24 +43266,9 @@ function applyGossipReactions(n,postId,cast,out){
     const ck=chatKey(n.meId,who);n.chats[ck]=[...(n.chats[ck]||[]),{from:"them",text:body,ts:now(),language:worldLanguage(n,n.meId)}];visibleActors.add(who);
     const a=charById(n,who);pushNote(n,n.meId,{icon:"✉️",text:sysLangText(n,n.meId,`${a?a.name:"Valaki"} írt neked a pletyka után.`,`${a?a.name:"Someone"} messaged you after the gossip post.`),link:{type:"dm",id:who}});
   });
-  const popupFallout =
-    Boolean(
-      post.gossipStory &&
-      post.gossipStory.popupBased
-    );
-
-  const safeChanges=
-    validGossipReactionRelationshipChanges(
-      n,
-      post,
-      cast,
-      reactionOut
-    )
-      .filter((ch)=>{
-        const a=findChar(n,ch&&ch.a);
-        return a&&(visibleActors.has(a)||popupFallout);
-      })
-      .map((ch)=>({...ch,delta:Math.max(-35,Math.min(35,Number(ch.delta)||0))}));
+  const safeChanges=(reactionOut&&Array.isArray(safeAiChanges(reactionOut))?safeAiChanges(reactionOut):[]).filter((ch)=>{
+    const a=findChar(n,ch&&ch.a), b=findChar(n,ch&&ch.b);return a&&b&&castSet.has(a)&&visibleActors.has(a)&&allowedTargets.has(b)&&a!==b;
+  }).map((ch)=>({...ch,delta:Math.max(-35,Math.min(35,Number(ch.delta)||0))}));
   if(visibleActors.size){
     post.gossipStory.reactedBy=[...new Set([...(post.gossipStory.reactedBy||[]),...visibleActors])];
     post.gossipStory.reactionRounds=Math.max(0,Number(post.gossipStory.reactionRounds)||0)+1;
@@ -54968,8 +43720,6 @@ ${triggerRule}
 ÉLETKOR / ÉLETHELYZET — GROUND TRUTH:
 ${popupRealityRoster(w, seed)}
 
-${playerProgressionAccessCard(w, w.meId)}
-
 Készíts rövid, telefonon is egy pillantással érthető, KONKRÉT popup helyzetet 3 eltérő választási stratégiával.
 
 KÖTELEZŐ REALIZMUS:
@@ -54989,12 +43739,11 @@ KÖTELEZŐ REALIZMUS:
 - tone csak: ignore | clarify | defend | joke | apologize | doubleDown | private | noComment
 - Ha tone="private", csak akkor használd, ha van a helyzetben létező AI karakter, akinek reálisan lehet írni, és adj meg targetId-t.
 - reactions: a KÖZVETLENÜL ÉRINTETT létező AI-karakter(ek)nél kötelező kapcsolatreakciót adni, ha a választás érzékelhetően érinti őket; összesen 1-4 reakció, ha van érintett AI. delta azt jelenti, AZ AI mit érez a játékos iránt, -20..+20. Ne hagyd mindhárom választás reactions tömbjét üresen egy olyan popupnál, ahol valaki ténylegesen a játékossal interakcióban van.
-- A reaction bond mezője opcionális KAPCSOLATI STÁTUSZVÁLTÁS. Csak akkor töltsd ki, ha a konkrét kimenetel ténylegesen átírja a kapcsolat jellegét (pl. Ismerős → Barát, Barát → Közeli barát, Barát → Rivális, kialakuló Crush stb.). Egy apró reakcióból ne találj ki nagy státuszváltást. oneSided:true, ha a változás kifejezetten csak az adott AI → játékos irány érzése.
 - socialImpact: opcionális, kicsi közvetlen stat-hatás. aura -8..8, reputation -12..12, hype -12..16, humor -8..8, followerRate -0.01..0.01. Ne jutalmazz/büntess mindent; csak ha valóban van társas következmény.
 - publicSentiment: support/dislike/controversy/cancel 0..100. Cancel ne legyen automatikus: csak akkor legyen jelentős, ha az adott stratégia nyilvánosan kínos, agresszív, hazug, érzéketlen, botrányos vagy "double down" jellegű.
 
 VÁLASZ CSAK JSON:
-{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat konkrét helyzet","location":"","visibility":"limited","witnessIds":[],"gossipPotential":45,"eventKind":"encounter","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","bond":"","oneSided":false,"why":""}],"socialImpact":{"aura":0,"reputation":1,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1150,priority:18});
+{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat konkrét helyzet","location":"","visibility":"limited","witnessIds":[],"gossipPotential":45,"eventKind":"encounter","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":1,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1150,priority:18});
 }
 
 function fallbackPopupEventResponse(w, seed) {
@@ -55062,8 +43811,6 @@ function normalizePopupEvent(w,seed,raw){
       id:r&&r.id?String(r.id):"",
       delta:Math.max(-20,Math.min(20,Number(r&&r.delta)||0)),
       mood:cut(String(r&&r.mood||""),60),
-      bond:cut(String(r&&r.bond||""),40),
-      oneSided:Boolean(r&&r.oneSided===true),
       why:cut(String(r&&r.why||""),160)
     })).filter((r)=>validAiIds.has(r.id));
     const targetId = choice&&choice.targetId&&validAiIds.has(String(choice.targetId))?String(choice.targetId):"";
@@ -55124,16 +43871,8 @@ function normalizePopupEvent(w,seed,raw){
     seedActorId:seed.actorId||"",
     seedTargetIds:Array.isArray(seed.targetIds)?seed.targetIds.slice(0,6):[],
     seedText:cut(String(seed.text||""),900),
-    involvedIds:[
-      ...new Set([
-        ...gossipEventSubjectIds(seed),
-        ...mentionedIdsInText(w,`${title}
-${body}`,w.meId),
-        ...choices.map((c)=>c&&c.targetId).filter(Boolean),
-        ...choices.flatMap((c)=>Array.isArray(c&&c.reactions)?c.reactions.map((r)=>r&&r.id):[]).filter(Boolean),
-      ])
-    ]
-      .filter((id)=>id&&id!==w.meId&&!isMediaAccount(w,id)&&charById(w,id)),
+    involvedIds:gossipEventSubjectIds(seed)
+      .filter((id)=>id!==w.meId&&!isMediaAccount(w,id)),
     choices
   };
 }
@@ -55241,14 +43980,13 @@ NE írd át a játékos cselekvését más cselekvéssé. A feladatod kizáróla
 - witnessIds: csak létező AI-karakter ID-k, akik ténylegesen láthatták/hallhatták; 0-4.
 - gossipPotential 0-100; ne legyen mindenből pletyka.
 - reactions: 1-4 AI egyirányú kapcsolatváltozása a játékos felé, HA van közvetlenül érintett AI; delta -20..20. A tényleges résztvevő ne maradjon automatikusan kapcsolat-következmény nélkül csak azért, mert a modell kihagyná a mezőt.
-- bond csak akkor legyen kitöltve, ha a szabad reakció ténylegesen új kapcsolati státuszt hoz létre vagy egy meglévőt átír; oneSided:true, ha ez kifejezetten csak az AI → játékos irányra igaz.
 - socialImpact: aura -10..10, reputation -15..15, hype -15..20, humor -10..10, followerRate -0.015..0.015.
 - publicSentiment: support/dislike/controversy/cancel 0..100. Cancel csak akkor legyen magas, ha a játékos reakciója nyilvánosan botrányos, hazug, agresszív, megalázó, érzéketlen vagy visszaütő.
 - drama/romance/embarrassment 0..100 a tényleges eseményhez.
 - gossipTags: legfeljebb 5 rövid tag, pl. confrontation, awkward, romance, fight, public-drama, scandal, receipts, cringe, backlash.
 
 JSON:
-{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","bond":"","oneSided":false,"why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{maxTokens:800,priority:65});
+{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{maxTokens:800,priority:65});
 }
 
 function normalizePopupCustomOutcome(w,event,customText,raw){
@@ -55262,12 +44000,7 @@ function normalizePopupCustomOutcome(w,event,customText,raw){
   const visibility=allowedVisibility.has(String(raw.visibility||""))?String(raw.visibility):(event.visibility||"limited");
   const witnessIds=visibility==="private"?[]:(Array.isArray(raw.witnessIds)?raw.witnessIds:[]).map((id)=>String(id||"")).filter((id,index,arr)=>validAiIds.has(id)&&arr.indexOf(id)===index).slice(0,4);
   const reactions=(Array.isArray(raw.reactions)?raw.reactions:[]).slice(0,4).map((r)=>({
-    id:String(r&&r.id||""),
-    delta:Math.max(-20,Math.min(20,Number(r&&r.delta)||0)),
-    mood:cut(String(r&&r.mood||""),60),
-    bond:cut(String(r&&r.bond||""),40),
-    oneSided:Boolean(r&&r.oneSided===true),
-    why:cut(String(r&&r.why||""),160)
+    id:String(r&&r.id||""),delta:Math.max(-20,Math.min(20,Number(r&&r.delta)||0)),mood:cut(String(r&&r.mood||""),60),why:cut(String(r&&r.why||""),160)
   })).filter((r)=>validAiIds.has(r.id));
   const si=raw.socialImpact&&typeof raw.socialImpact==="object"?raw.socialImpact:{};
   const ps=raw.publicSentiment&&typeof raw.publicSentiment==="object"?raw.publicSentiment:{};
@@ -55525,7 +44258,9 @@ async function genPopupPrivateReply(
     );
 
   const requestWorld=
-    cloneWorldState(w);
+    JSON.parse(
+      JSON.stringify(w)
+    );
 
   if(!requestWorld.chats){
     requestWorld.chats={};
@@ -55907,14 +44642,7 @@ function popupCombinedImpact(w,choice){
 function popupFallbackRelationshipReaction(w, event, choice, actorId) {
   if (!w || !event || !choice || !actorId || isHuman(w, actorId) || !charById(w, actorId)) return null;
 
-  const playerId =
-    socialPlayerId(
-      w
-    );
-
-  if (!playerId) return null;
-
-  const rel = getRel(w, actorId, playerId) || {};
+  const rel = getRel(w, actorId, w.meId) || {};
   const score = Number(rel.score) || 0;
   const tone = String(choice.tone || "clarify");
   const romantic = String(event.eventKind || "").toLowerCase() === "romance";
@@ -55972,135 +44700,6 @@ function popupFallbackRelationshipReaction(w, event, choice, actorId) {
   };
 }
 
-function popupDirectParticipantIds(
-  w,
-  event,
-  choice = null
-) {
-  if (!w || !event) return [];
-
-  const playerId =
-    socialPlayerId(
-      w
-    );
-
-  const validAi = (id) =>
-    Boolean(
-      id &&
-      charById(
-        w,
-        id
-      ) &&
-      !isHuman(
-        w,
-        id
-      ) &&
-      !isMediaAccount(
-        w,
-        id
-      )
-    );
-
-  const ids = [];
-
-  const add = (value) => {
-    const id =
-      String(
-        value || ""
-      );
-
-    if (
-      validAi(id) &&
-      !ids.includes(id)
-    ) {
-      ids.push(id);
-    }
-  };
-
-  /*
-   * Most concrete evidence first:
-   * choice target/reaction IDs describe who the selected outcome affects.
-   */
-  if (choice) {
-    add(
-      choice.targetId
-    );
-
-    (
-      Array.isArray(
-        choice.reactions
-      )
-        ? choice.reactions
-        : []
-    ).forEach(
-      (row) =>
-        add(
-          row &&
-          row.id
-        )
-    );
-  }
-
-  /*
-   * The popup's ACTUAL displayed text is ground truth too. This catches a
-   * generated ambient/rerolled popup where the provider used a real character
-   * different from the original seed but forgot to return targetId/reactions.
-   */
-  const visiblePopupText =
-    [
-      event.title,
-      event.text,
-      choice && choice.label,
-      choice && choice.description,
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-  mentionedIdsInText(
-    w,
-    visiblePopupText,
-    playerId
-  ).forEach(
-    add
-  );
-
-  /*
-   * Then fall back to stored/seed participants.
-   */
-  (
-    Array.isArray(
-      event.involvedIds
-    )
-      ? event.involvedIds
-      : []
-  ).forEach(
-    add
-  );
-
-  add(
-    event.seedActorId
-  );
-
-  const seed =
-    popupSourceEvent(
-      w,
-      event
-    );
-
-  if (seed) {
-    gossipEventSubjectIds(
-      seed
-    ).forEach(
-      add
-    );
-  }
-
-  return ids.slice(
-    0,
-    6
-  );
-}
-
 function popupResolvedRelationshipReactions(w, event, choice) {
   if (!w || !event || !choice) return [];
   const validAi = (id) => Boolean(id && charById(w, id) && !isHuman(w, id) && !isMediaAccount(w, id));
@@ -56113,25 +44712,18 @@ function popupResolvedRelationshipReactions(w, event, choice) {
       id,
       delta: Math.max(-20, Math.min(20, Number(raw && raw.delta) || 0)),
       mood: cut(String(raw && raw.mood || ""), 60),
-      bond: cut(String(raw && raw.bond || ""), 40),
-      oneSided: Boolean(raw && raw.oneSided === true),
       why: cut(String(raw && raw.why || ""), 180),
     });
   });
 
-  const directIds =
-    popupDirectParticipantIds(
-      w,
-      event,
-      choice
-    )
-      .filter(
-        validAi
-      )
-      .slice(
-        0,
-        6
-      );
+  const directIds = [
+    choice.targetId,
+    event.seedActorId,
+    ...(Array.isArray(event.involvedIds) ? event.involvedIds : []),
+  ]
+    .map((id) => String(id || ""))
+    .filter((id, index, arr) => validAi(id) && arr.indexOf(id) === index)
+    .slice(0, 4);
 
   directIds.forEach((id) => {
     const existing = merged.get(id);
@@ -56144,8 +44736,6 @@ function popupResolvedRelationshipReactions(w, event, choice) {
       merged.set(id, existing ? {
         ...fallback,
         mood: existing.mood || fallback.mood,
-        bond: existing.bond || fallback.bond || "",
-        oneSided: Boolean(existing.oneSided === true || fallback.oneSided === true),
         why: existing.why || fallback.why,
       } : fallback);
     }
@@ -56154,206 +44744,9 @@ function popupResolvedRelationshipReactions(w, event, choice) {
   return [...merged.values()].slice(0, 6);
 }
 
-function applyPopupRelationshipConsequences(
-  w,
-  event,
-  choice
-) {
-  if (!w || !event || !choice) {
-    return [];
-  }
-
-  const playerId =
-    socialPlayerId(
-      w
-    );
-
-  if (!playerId) {
-    return [];
-  }
-
-  const reactions =
-    popupResolvedRelationshipReactions(
-      w,
-      event,
-      choice
-    );
-
-  if (!reactions.length) {
-    return [];
-  }
-
-  const before =
-    new Map(
-      reactions.map(
-        (r) => {
-          const rel =
-            getRel(
-              w,
-              r.id,
-              playerId
-            ) || EMPTY_REL;
-
-          return [
-            r.id,
-            {
-              score:
-                Number(
-                  rel.score
-                ) || 0,
-
-              mood:
-                String(
-                  rel.mood || ""
-                ),
-
-              why:
-                String(
-                  rel.why || ""
-                ),
-            },
-          ];
-        }
-      )
-    );
-
-  const toChanges = (targetValue) =>
-    reactions.map(
-      (r) => ({
-        a:
-          r &&
-          r.id
-            ? r.id
-            : "",
-
-        b:
-          targetValue,
-
-        delta:
-          Number(
-            r &&
-            r.delta
-          ) || 0,
-
-        mood:
-          r &&
-          r.mood,
-
-        bond:
-          r &&
-          r.bond,
-
-        oneSided:
-          Boolean(
-            r &&
-            r.oneSided === true
-          ),
-
-        why:
-          r &&
-          r.why,
-      })
-    );
-
-  applyChanges(
-    w,
-    toChanges(
-      playerId
-    )
-  );
-
-  /*
-   * Existing-world compatibility:
-   * if an older world can resolve the player by profile/name but not by the
-   * stored ID shape, retry ONLY the unchanged popup pair using the player's
-   * canonical profile name. This does not double-apply successful changes.
-   */
-  const unchanged =
-    reactions.filter(
-      (r) => {
-        if (
-          !r ||
-          !r.id ||
-          !Number(
-            r.delta
-          )
-        ) {
-          return false;
-        }
-
-        const old =
-          before.get(
-            r.id
-          ) || {};
-
-        const live =
-          getRel(
-            w,
-            r.id,
-            playerId
-          ) || EMPTY_REL;
-
-        return (
-          Number(
-            live.score
-          ) ===
-            Number(
-              old.score
-            ) &&
-          String(
-            live.mood || ""
-          ) ===
-            String(
-              old.mood || ""
-            ) &&
-          String(
-            live.why || ""
-          ) ===
-            String(
-              old.why || ""
-            )
-        );
-      }
-    );
-
-  if (
-    unchanged.length &&
-    w.player &&
-    w.player.name
-  ) {
-    applyChanges(
-      w,
-      unchanged.map(
-        (r) => ({
-          a:r.id,
-          b:w.player.name,
-          delta:Number(r.delta) || 0,
-          mood:r.mood || "",
-          bond:r.bond || "",
-          oneSided:Boolean(r.oneSided === true),
-          why:r.why || "",
-        })
-      )
-    );
-  }
-
-  return reactions;
-}
-
 function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
   if (!w || !event || !socialEntry || !socialEntry.meta) return false;
   if (socialEntry.visibility === "private" || socialEntry.meta.gossipEligible !== true) return false;
-
-  const mode =
-    w.gossipSettings &&
-    (
-      w.gossipSettings.mediaMode === "local" ||
-      w.gossipSettings.mediaMode === "global"
-    )
-      ? w.gossipSettings.mediaMode
-      : "";
-
-  if (!mode || !activeGossipMediaAccount(w)) return false;
 
   const potential = Number(socialEntry.meta.gossipPotential) || 0;
   const witnesses = Number(socialEntry.meta.witnessCount) || 0;
@@ -56362,217 +44755,54 @@ function queuePopupGossipAfterResolution(w, event, choiceKey, socialEntry) {
     : (socialEntry.visibility === "limited" && witnesses >= 1 && potential >= 35);
   if (!worthSurfacing) return false;
 
-  const sourceEventId =
-    String(
-      socialEntry.id || ""
-    );
-
-  /*
-   * Once the resolved popup has already passed the existing factual
-   * visibility/witness + gossipPotential gate, THIS exact popup becomes the
-   * candidate. Do not let an unrelated global selector swallow it.
-   */
-  const candidate =
-    buildGossipStoryCandidate(
-      w,
-      socialEntry,
-      [socialEntry],
-      mode
-    );
-
+  /* recordSocialEvent already seeds the grounded rumor graph. We call the
+     selector again here only to surface a candidate that includes THIS popup;
+     private/unwitnessed events can never pass this gate. */
+  const candidate = selectGossipStoryCandidate(w);
   if (!candidate) return false;
+  const sourceEventId = String(socialEntry.id || "");
+  const coversPopup = candidate.primaryEventId === sourceEventId ||
+    (Array.isArray(candidate.eventIds) && candidate.eventIds.includes(sourceEventId));
+  if (!coversPopup) return false;
 
-  candidate.popupBased = true;
-  candidate.popupEventId = String(event.id || "");
-  candidate.popupChoiceKey = String(choiceKey || "choice");
-
-  /*
-   * Popup coverage is guaranteed after the gate above. Force mode bypasses
-   * unrelated gossip cooldown/repetition collisions, while the source facts
-   * remain exactly the resolved popup social event.
-   */
-  candidate.forcePublish = true;
-  candidate.forceReason =
-    potential >= 45
-      ? "juicy-popup-outcome"
-      : "grounded-popup-outcome";
-
-  candidate.score = Math.max(
-    Number(candidate.score) || 0,
-    68 + Math.round(potential * 0.35)
-  );
-
-  /*
-   * `coverage` actions are unshifted by simEnqueue. The gossip page should
-   * cover a resolved juicy popup before unrelated background maintenance.
-   */
   return simEnqueue(
     w,
     mkAction(
       "gossip-story",
       `popup-gossip:${event.id}:${String(choiceKey || "choice")}:${sourceEventId}`,
       { candidate },
-      "coverage"
+      "event"
     )
   );
-}
-
-function popupOutcomeGossipPotential(
-  event,
-  visibility,
-  witnessIds,
-  basePotential,
-  publicSentiment = {},
-  extra = {}
-) {
-  if (visibility === "private") return 0;
-
-  const clamp100 = (value) =>
-    Math.max(0, Math.min(100, Number(value) || 0));
-
-  const controversy = clamp100(publicSentiment && publicSentiment.controversy);
-  const cancel = clamp100(publicSentiment && publicSentiment.cancel);
-  const dislike = clamp100(publicSentiment && publicSentiment.dislike);
-  const drama = clamp100(extra && extra.drama);
-  const romance = clamp100(extra && extra.romance);
-  const embarrassment = clamp100(extra && extra.embarrassment);
-
-  const socialJuice =
-    controversy * 0.62 +
-    cancel * 0.48 +
-    dislike * 0.12;
-
-  const storyJuice =
-    Math.max(
-      drama * 0.55,
-      romance * 0.60,
-      embarrassment * 0.58
-    );
-
-  const kind =
-    String(event && event.eventKind || "").toLowerCase();
-
-  const kindBoost =
-    /romance|confront|rival|awkward|fight|scandal/.test(kind)
-      ? 6
-      : 0;
-
-  const witnessBoost =
-    Math.min(
-      visibility === "public" ? 10 : 6,
-      Math.max(
-        0,
-        (Array.isArray(witnessIds) ? witnessIds.length : 0) * 2
-      )
-    );
-
-  return Math.round(
-    Math.min(
-      100,
-      Math.max(
-        Number(basePotential) || 0,
-        socialJuice,
-        storyJuice
-      ) +
-      kindBoost +
-      witnessBoost
-    )
-  );
-}
-
-function fallbackForcedPopupGossipStory(w, candidate) {
-  if (!w || !candidate || !candidate.popupBased) return null;
-
-  const facts =
-    (Array.isArray(candidate.events) ? candidate.events : [])
-      .map((event) =>
-        event && event.text
-          ? cut(String(event.text), 900)
-          : ""
-      )
-      .filter(Boolean)
-      .slice(-4);
-
-  if (!facts.length) return null;
-
-  const en = worldLanguage(w, w.meId) === "en";
-  const names =
-    (candidate.subjectIds || [])
-      .map((id) => charById(w, id))
-      .filter(Boolean)
-      .map((c) => c.name)
-      .filter(Boolean)
-      .slice(0, 4);
-
-  const headline =
-    names.length
-      ? (
-          en
-            ? `👀 ${names.join(" × ")}: the aftermath`
-            : `👀 ${names.join(" × ")}: az utóélet`
-        )
-      : (
-          en
-            ? "👀 That choice had an aftermath"
-            : "👀 Ennek a döntésnek lett utóélete"
-        );
-
-  const intro =
-    en
-      ? "Here is the part that is actually grounded in what happened:"
-      : "Ami ebből ténylegesen biztosan megtörtént:";
-
-  return {
-    skip:false,
-    format:facts.length > 1 ? "recap" : "short",
-    headline,
-    text:`${intro}\n\n${facts.join("\n\n")}`.slice(0,6000),
-    usedEventIds:(candidate.eventIds || []).slice(-8),
-    mentionedIds:(candidate.subjectIds || []).slice(0,12),
-  };
 }
 
 function popupEventGossipEligible(event,visibility,witnessIds,gossipPotential){
   if(!event)return false;
-  /* A resolved public popup is a real world event. Its outcome must be able
-     to enter the gossip pipeline even when the model underestimates its
-     gossipPotential. Limited events need at least one real witness. */
-  if(visibility==="public")return true;
-  if(visibility==="limited")return (witnessIds||[]).length>=1;
+  if(visibility==="public")return gossipPotential>=18;
+  if(visibility==="limited")return (witnessIds||[]).length>=1&&gossipPotential>=28;
   return false;
 }
 
 function resolvePopupEvent(w,eventId,choiceId){
   const event=(w.popupEvents||[]).find((e)=>e&&e.id===eventId);if(!event||event.resolved)return false;
-  const playerId=socialPlayerId(w);if(!playerId)return false;
   const choice=(event.choices||[]).find((c)=>c&&c.id===choiceId);if(!choice)return false;
   const impact=popupCombinedImpact(w,choice);
   applyExplicitSocialImpact(w,w.meId,{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers});
-  const resolvedRelationshipReactions =
-    applyPopupRelationshipConsequences(
-      w,
-      event,
-      choice
-    );
+  const resolvedRelationshipReactions = popupResolvedRelationshipReactions(w, event, choice);
+  applyChanges(
+    w,
+    resolvedRelationshipReactions.map((r) => ({
+      a:r&&r.id?r.id:"",b:w.meId,delta:Number(r&&r.delta)||0,mood:r&&r.mood,why:r&&r.why,
+    }))
+  );
 
   const visibility=["public","limited","private"].includes(event.visibility)?event.visibility:"limited";
   const witnessIds=visibility==="private"?[]:(event.witnessIds||[]).filter(Boolean).slice(0,4);
-  const ps=choice.publicSentiment&&typeof choice.publicSentiment==="object"?choice.publicSentiment:{};
-  const gossipPotential=popupOutcomeGossipPotential(
-    event,
-    visibility,
-    witnessIds,
-    event.gossipPotential,
-    ps,
-    {
-      drama:Math.min(100,Math.max(0,impact.hype*4)),
-      romance:event.eventKind==="romance"?55:0,
-      embarrassment:Number(ps.dislike)||0,
-    }
-  );
+  const gossipPotential=Math.max(0,Math.min(100,Number(event.gossipPotential)||0));
   const gossipEligible=popupEventGossipEligible(event,visibility,witnessIds,gossipPotential);
+  const ps=choice.publicSentiment&&typeof choice.publicSentiment==="object"?choice.publicSentiment:{};
   const cancelRisk=(Number(ps.cancel)||0)>=12||(Number(ps.controversy)||0)>=28;
-  const participantIds=[...(event.involvedIds||[]),playerId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
+  const participantIds=[...(event.involvedIds||[]),w.meId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
 
   event.resolved=true;
   event.resolvedAt=now();
@@ -56580,7 +44810,6 @@ function resolvePopupEvent(w,eventId,choiceId){
   event.choiceTone=choice.tone;
   event.socialImpact={aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers};
   event.publicSentiment={...ps};
-  event.gossipPotential=gossipPotential;
   event.gossipEligible=gossipEligible;
   event.relationshipReactions=resolvedRelationshipReactions.map((r)=>({ ...r }));
 
@@ -56588,7 +44817,7 @@ function resolvePopupEvent(w,eventId,choiceId){
     type:"popup-choice",
     refId:`${event.id}:${choice.id}`,
     ts:event.resolvedAt,
-    actorId:playerId,
+    actorId:w.meId,
     targetIds:(event.involvedIds||[]).filter(Boolean),
     witnessIds,
     visibility,
@@ -56607,7 +44836,7 @@ function resolvePopupEvent(w,eventId,choiceId){
     meta:{
       popupEventId:event.id,choiceId:choice.id,location:event.location||"",gossipEligible,witnessCount:witnessIds.length,participantIds,
       gossipPotential,publicSentiment:{support:Number(ps.support)||0,dislike:Number(ps.dislike)||0,controversy:Number(ps.controversy)||0,cancel:Number(ps.cancel)||0},
-      sentimentTargetIds:[playerId],choiceImpact:{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers},
+      sentimentTargetIds:[w.meId],choiceImpact:{aura:impact.aura,reputation:impact.reputation,hype:impact.hype,humor:impact.humor,followers:impact.followers},
     }
   });
   queuePopupGossipAfterResolution(w, event, choice.id, popupSocialEvent);
@@ -56616,27 +44845,23 @@ function resolvePopupEvent(w,eventId,choiceId){
 
 function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
   const event=(w.popupEvents||[]).find((e)=>e&&e.id===eventId);if(!event||event.resolved)return false;
-  const playerId=socialPlayerId(w);if(!playerId)return false;
   const outcome=normalizePopupCustomOutcome(w,event,customText,outcomeRaw);if(!outcome)return false;
   const audience=Math.max(1,displayFollowerCount(w,w.meId));
   const followerDelta=Math.round(audience*(Number(outcome.socialImpact.followerRate)||0));
   applyExplicitSocialImpact(w,w.meId,{
     aura:outcome.socialImpact.aura,reputation:outcome.socialImpact.reputation,hype:outcome.socialImpact.hype,humor:outcome.socialImpact.humor,followers:followerDelta,
   });
-  const resolvedRelationshipReactions =
-    applyPopupRelationshipConsequences(
-      w,
-      event,
-      {
-        tone: outcome.tone,
-        targetId: "",
-        reactions: outcome.reactions || [],
-      }
-    );
+  const resolvedRelationshipReactions = popupResolvedRelationshipReactions(w, event, {
+    tone: outcome.tone,
+    targetId: "",
+    reactions: outcome.reactions || [],
+  });
+  applyChanges(w,resolvedRelationshipReactions.map((r)=>({a:r.id,b:w.meId,delta:r.delta,mood:r.mood,why:r.why})));
 
   const visibility=outcome.visibility;
   const witnessIds=outcome.witnessIds||[];
-  const participantIds=[...(event.involvedIds||[]),playerId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
+  const gossipEligible=popupEventGossipEligible(event,visibility,witnessIds,outcome.gossipPotential);
+  const participantIds=[...(event.involvedIds||[]),w.meId].filter((id,index,arr)=>id&&arr.indexOf(id)===index);
   const risk=publicCancelRiskSignals(outcome.customText);
   const publicSentiment={
     support:Math.max(Number(outcome.publicSentiment.support)||0,Number(risk.publicSentiment.support)||0),
@@ -56644,19 +44869,6 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
     controversy:Math.max(Number(outcome.publicSentiment.controversy)||0,Number(risk.publicSentiment.controversy)||0),
     cancel:Math.max(Number(outcome.publicSentiment.cancel)||0,Number(risk.publicSentiment.cancel)||0),
   };
-  const gossipPotential=popupOutcomeGossipPotential(
-    event,
-    visibility,
-    witnessIds,
-    outcome.gossipPotential,
-    publicSentiment,
-    {
-      drama:outcome.drama,
-      romance:outcome.romance,
-      embarrassment:Math.max(outcome.embarrassment,risk.embarrassment),
-    }
-  );
-  const gossipEligible=popupEventGossipEligible(event,visibility,witnessIds,gossipPotential);
   const cancelRisk=publicSentiment.cancel>=12||publicSentiment.controversy>=28;
 
   event.resolved=true;
@@ -56667,7 +44879,7 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
   event.customOutcome=outcome.summary;
   event.visibility=visibility;
   event.witnessIds=witnessIds;
-  event.gossipPotential=gossipPotential;
+  event.gossipPotential=outcome.gossipPotential;
   event.gossipEligible=gossipEligible;
   event.socialImpact={...outcome.socialImpact,followers:followerDelta};
   event.publicSentiment=publicSentiment;
@@ -56677,12 +44889,12 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
     type:"popup-choice",
     refId:`${event.id}:custom`,
     ts:event.resolvedAt,
-    actorId:playerId,
+    actorId:w.meId,
     targetIds:(event.involvedIds||[]).filter(Boolean),
     witnessIds,
     visibility,
     factLevel:"observed",
-    importance:Math.min(100,42+Math.round(gossipPotential*0.35)),
+    importance:Math.min(100,42+Math.round(outcome.gossipPotential*0.35)),
     drama:Math.max(outcome.drama,Math.round(publicSentiment.controversy*0.7)),
     romance:outcome.romance,
     embarrassment:Math.max(outcome.embarrassment,risk.embarrassment),
@@ -56690,12 +44902,12 @@ function resolvePopupCustomResponse(w,eventId,customText,outcomeRaw){
     text:`${event.title}: ${outcome.summary||outcome.customText}`,
     tags:[
       "popup-event","custom-response",outcome.tone,event.eventKind||"social",...outcome.tags,...risk.tags,
-      ...(gossipEligible&&gossipPotential>=35?["gossip-worthy-thread"]:[]),
+      ...(gossipEligible&&outcome.gossipPotential>=35?["gossip-worthy-thread"]:[]),
       ...(cancelRisk?["controversy","backlash-risk"]:[]),
     ],
     meta:{
-      popupEventId:event.id,choiceId:"custom",location:event.location||"",gossipEligible,witnessCount:witnessIds.length,participantIds,gossipPotential,
-      publicSentiment,sentimentTargetIds:[playerId],customResponse:outcome.customText,
+      popupEventId:event.id,choiceId:"custom",location:event.location||"",gossipEligible,witnessCount:witnessIds.length,participantIds,gossipPotential:outcome.gossipPotential,
+      publicSentiment,sentimentTargetIds:[w.meId],customResponse:outcome.customText,
       socialImpact:{aura:outcome.socialImpact.aura,reputation:outcome.socialImpact.reputation,hype:outcome.socialImpact.hype,humor:outcome.socialImpact.humor,followers:followerDelta},
     }
   });
@@ -58310,42 +46522,6 @@ function strongestSocialPostFor(
   );
 }
 
-function socialWavePersonalityBias(w, actorId, targetId, mode) {
-  const actor = socialProfileById(w, actorId);
-  if (!actor) return 0;
-
-  const corpus = [
-    actor.bio,
-    actor.personality,
-    actor.traits,
-    actor.speech,
-    actor.voice,
-    actor.extra,
-    actor.brief,
-    actor.backstory,
-  ].filter(Boolean).join(" ").toLowerCase();
-
-  const gravity = relationshipSocialGravityProfile(w, actorId, targetId);
-  let score = 0;
-
-  if (/social|outgoing|extrovert|chatty|talkative|online|gossip|pletyka|dramatic|impulsive|impulzív/.test(corpus)) score += 5;
-  if (/reserved|private|quiet|shy|introvert|zárkózott|csendes|félénk|conflict[- ]?avoid|kerüli a konflikt/.test(corpus)) score -= 5;
-
-  if (mode === "cancel") {
-    if (/argumentative|confrontational|blunt|sarcastic|mocking|critical|judgmental|ruthless|hostile|aggressive|provocative|gúnyos|szarkasztikus|kritikus|konfrontatív|köteked|kíméletlen/.test(corpus)) score += 10;
-    if (/compassionate|forgiving|gentle|peacekeeper|empathetic|supportive|megbocsát|együttérző|békítő|gyengéd/.test(corpus)) score -= 8;
-    if (gravity.mode === "rival") score += 12;
-    if (["close", "friend", "crush", "possessive", "obsession"].includes(gravity.mode)) score -= 16 + gravity.level * 3;
-  } else {
-    if (/loyal|supportive|protective|devoted|ride or die|warm|friendly|compassionate|empathetic|hűséges|támogató|védelmez|odaadó|barátságos|együttérző/.test(corpus)) score += 10;
-    if (/cold|detached|apathetic|selfish|emotionless|rideg|távolságtart|közönyös|önző/.test(corpus)) score -= 5;
-    if (["close", "friend", "crush", "possessive", "obsession"].includes(gravity.mode)) score += 8 + gravity.level * 3;
-    if (gravity.mode === "rival") score -= 10;
-  }
-
-  return Math.round(score);
-}
-
 function socialSupportScore(
   w,
   actorId,
@@ -58391,8 +46567,7 @@ function socialSupportScore(
     0;
 
   let score =
-    relScore +
-    socialWavePersonalityBias(w, actor.id, target.id, "support");
+    relScore;
 
   if (
     isFollowing(
@@ -58507,8 +46682,7 @@ function socialCriticScore(
   }
 
   let score =
-    -relScore +
-    socialWavePersonalityBias(w, actor.id, target.id, "cancel");
+    -relScore;
 
   if (
     isFollowing(
@@ -58587,24 +46761,9 @@ function socialWaveCast(
         );
       });
 
-  const sentiment = publicSentimentFor(w, targetId);
-  const strength =
-    mode === "cancel"
-      ? Number(sentiment.cancelPressure) || 0
-      : Number(sentiment.stanEnergy) || 0;
-  const dramaLevel = storySettingsOf(w).dramaLevel;
-  const dramaExtra = dramaLevel === "chaotic" ? 1 : dramaLevel === "high" ? 1 : 0;
-  const castLimit = Math.max(
-    3,
-    Math.min(
-      6,
-      3 + Math.floor(strength / 30) + dramaExtra
-    )
-  );
-
   return rows.slice(
     0,
-    castLimit
+    3
   );
 }
 
@@ -59458,220 +47617,6 @@ function romanticEventParticipantIds(w, event) {
   return fallback.length === 2 ? fallback : [];
 }
 
-function observedRomanticPairGrounded(
-  w,
-  event,
-  firstId,
-  secondId,
-  signal
-) {
-  if (
-    !w ||
-    !event ||
-    !firstId ||
-    !secondId ||
-    firstId === secondId
-  ) {
-    return false;
-  }
-
-  const tags =
-    new Set(
-      (event.tags || [])
-        .map(
-          (x) =>
-            String(x || "")
-              .toLowerCase()
-        )
-    );
-
-  const raw =
-    String(
-      event.text || ""
-    );
-
-  /*
-   * Concrete observed acts are factual. They do not rely on an inferred
-   * "maybe flirt" label.
-   */
-  const explicitPhysical =
-    tags.has("kiss") ||
-    tags.has("hookup") ||
-    tags.has("cheating") ||
-    tags.has("affair") ||
-    /\b(?:kiss(?:ed|ing|es)?|making\s*out|made\s*out|hook(?:ed)?\s*up|cheat(?:ed|ing)?|affair|cs[oó]kol|cs[oó]k|kavar|megcsal)\b/i.test(
-      raw
-    );
-
-  if (explicitPhysical) {
-    return true;
-  }
-
-  /*
-   * A weak romance/flirt tag alone is NEVER enough.
-   * At least one directed orientation must actually support the pairing.
-   */
-  const forwardAllowed =
-    romanceTargetAllowed(
-      w,
-      firstId,
-      secondId
-    );
-
-  const reverseAllowed =
-    romanceTargetAllowed(
-      w,
-      secondId,
-      firstId
-    );
-
-  if (
-    !forwardAllowed &&
-    !reverseAllowed
-  ) {
-    return false;
-  }
-
-  const explicitFlirt =
-    explicitPlayerSocialFlirtSignal(
-      raw
-    ) ||
-    /\b(?:flirt(?:ed|ing|s)?|fl[oö]rt(?:ölt|öl|öltek)?|hit\s+on|hitting\s+on|made\s+a\s+pass|asked\s+(?:him|her|them)\s+out|date\s+me|go\s+out\s+with\s+me|i['’]?m\s+into\s+you|want\s+you|can\s+i\s+kiss\s+you|i\s+want\s+to\s+kiss\s+you)\b/i.test(
-      raw
-    );
-
-  if (explicitFlirt) {
-    return true;
-  }
-
-  const establishedRomance =
-    relationshipRomanceActive(
-      w,
-      firstId,
-      secondId
-    ) ||
-    relationshipRomanceActive(
-      w,
-      secondId,
-      firstId
-    );
-
-  /*
-   * Existing real romance + strongly charged wording may count.
-   * Friendly compliments alone still do not.
-   */
-  const chargedInteraction =
-    /\b(?:you['’]?re\s+(?:so\s+)?(?:hot|sexy)|i\s+miss\s+your\s+kiss|come\s+over\s+tonight|just\s+you\s+and\s+me|my\s+(?:girl|boy)|babe\s*[😉😏]|baby\s*[😉😏])\b/i.test(
-      raw
-    );
-
-  return Boolean(
-    establishedRomance &&
-    chargedInteraction &&
-    Number(
-      signal &&
-      signal.strength
-    ) >= 20
-  );
-}
-
-function personalityAwareRomanticObserverFeeling(
-  w,
-  observer,
-  subject,
-  other,
-  stakeInfo,
-  event
-) {
-  const lore =
-    characterLoreCorpus(
-      observer
-    ).toLowerCase();
-
-  let style = "default";
-
-  if (/obsess|fixat|megszáll|possess|birtokl|territorial/.test(lore)) {
-    style = "possessive";
-  } else if (/sarcast|szark|deadpan|dry humor|mock|gúny/.test(lore)) {
-    style = "sarcastic";
-  } else if (/proud|büszke|dominant|domináns|competitive|verseng|arrogant|fölény/.test(lore)) {
-    style = "proud";
-  } else if (/reserved|zárkózott|stoic|sztoikus|quiet|csendes|guarded|visszafogott|cold|rideg/.test(lore)) {
-    style = "reserved";
-  } else if (/anxious|szorong|insecure|bizonytalan|overthink|túlgondol|sensitive|érzékeny/.test(lore)) {
-    style = "anxious";
-  } else if (/loyal|lojális|protective|védelmez|devoted|odaadó/.test(lore)) {
-    style = "loyal";
-  } else if (/playful|játékos|chaotic|kaotikus|impulsive|impulzív|flirty|flörtölős/.test(lore)) {
-    style = "playful";
-  }
-
-  const rows = {
-    possessive: [
-      ["féltékeny és territoriális, nehezen viseli, hogy valaki más kapott ilyen figyelmet", "jealous and territorial, struggling with someone else getting that kind of attention"],
-      ["birtoklóan sértett és túlzottan éber, fejben újra és újra visszatér a jelenetre", "possessively stung and hyper-alert, replaying the interaction over and over"],
-      ["csendesen dühös és birtokló, mintha valaki belépett volna arra a helyre, amit magáénak érez", "quietly furious and possessive, like someone stepped into a place they consider theirs"],
-    ],
-    sarcastic: [
-      ["féltékeny és megcsípett, de ezt inkább csípősebb humor mögé rejtené", "jealous and stung, more likely to hide it behind sharper humor"],
-      ["rosszul esett neki, ezért lazábbnak tetteti magát, miközben minden poénja egy fokkal élesebb", "it got to them, so they act casual while every joke comes out a little sharper"],
-      ["féltékeny, de túl büszke a nyílt sértettséghez; inkább odaszúrással leplezné", "jealous but too proud to show the hurt directly, masking it with a jab instead"],
-    ],
-    proud: [
-      ["féltékeny és személyesen kihívva érzi magát, versenyhelyzetként kezeli a figyelmedet", "jealous and personally challenged, treating your attention like a competition"],
-      ["büszkeségében sértett és makacsul versengő, nem akarja átengedni a helyét melletted", "pride-bruised and stubbornly competitive, unwilling to give up their place beside you"],
-      ["nemcsak féltékeny, hanem sértve érzi a státuszát is kettőtök között", "not just jealous, but feeling their place in your relationship has been challenged"],
-    ],
-    reserved: [
-      ["csendesen féltékeny és zártabb lett, inkább távolodik, mintsem bevallja, hogy fájt", "quietly jealous and more closed off, pulling back rather than admitting it hurt"],
-      ["hidegebb és óvatosabb lett veled, miközben magában újra lejátssza a történteket", "colder and more guarded with you while privately replaying what happened"],
-      ["nem mutat sokat belőle, de a féltékenység ott van a hirtelen távolságtartásában", "not showing much, but the jealousy is sitting underneath the sudden distance"],
-    ],
-    anxious: [
-      ["féltékeny és bizonytalan, túlgondolja, mit jelenthet ez kettőtök kapcsolatára", "jealous and insecure, overthinking what this could mean for your relationship"],
-      ["nyugtalan és fenyegetve érzi magát, több rossz forgatókönyvet lát bele, mint amennyit tud", "uneasy and threatened, imagining more bad outcomes than they actually know"],
-      ["megütötte a bizonytalanság, ezért most minden apró jelre túlérzékenyen figyel", "hit by insecurity and now reading far too much into every small signal"],
-    ],
-    loyal: [
-      ["féltékeny és sértett, főleg mert félti azt a köteléket, amit fontosnak hitt köztetek", "jealous and hurt mainly because they are protective of the bond they thought mattered between you"],
-      ["rosszul esett neki, és most ösztönösen védi azt, amit kettőtök között értékesnek érez", "it stung, and they are instinctively guarding what they value between you"],
-      ["féltékenysége inkább a kapcsolat elvesztésétől való félelemből jön, mint puszta birtoklásból", "their jealousy is coming more from fear of losing the bond than simple possessiveness"],
-    ],
-    playful: [
-      ["féltékeny, de egyszerre akarja elviccelni és letesztelni, mennyire számít még neked", "jealous, torn between joking it off and testing how much they still matter to you"],
-      ["felpiszkálta a féltékenység; játékosan húzna vissza magára több figyelmet", "jealousy has them restless and playfully trying to pull more of your attention back"],
-      ["zavarja a helyzet, de inkább provokatív ugratással próbálná visszaszerezni az egyensúlyt", "bothered by it, more likely to regain balance through provocative teasing"],
-    ],
-    default: [
-      ["féltékeny és nyugtalan, most sokkal jobban figyeli, mit jelentett ez valójában", "jealous and unsettled, watching much more closely for what this actually meant"],
-      ["megütötte a féltékenység, és most óvatosabban méri fel, hol áll melletted", "stung by jealousy and reassessing more carefully where they stand with you"],
-      ["sértette a látvány, és nehezebben tud úgy tenni, mintha teljesen mindegy lenne neki", "bothered by what they saw and finding it harder to pretend it means nothing"],
-    ],
-  };
-
-  const candidates =
-    rows[style] ||
-    rows.default;
-
-  const seed =
-    dynamicRelationshipMoodSeed(
-      `${observer.id}|${subject.id}|${other.id}|${event.id || event.refId || event.ts}`
-    );
-
-  const pair =
-    candidates[
-      seed %
-      candidates.length
-    ];
-
-  return sysLangText(
-    w,
-    observer.id,
-    pair[0],
-    pair[1]
-  );
-}
-
 function applyObservedRomanticThirdPartyConsequences(w, event) {
   if (!w || !event || event.factLevel !== "observed") return 0;
   if (event.meta && event.meta.skipRomanticObserverConsequences) return 0;
@@ -59700,31 +47645,13 @@ function applyObservedRomanticThirdPartyConsequences(w, event) {
       const others = participantIds.filter((id) => id && id !== subjectId && id !== observer.id);
       if (!others.length) return;
 
-      const otherId = others[0];
-
-      /*
-       * HARD REALITY CHECK:
-       * ordinary friendship/compliments may not become a fake flirt trigger.
-       */
-      if (
-        !observedRomanticPairGrounded(
-          w,
-          event,
-          subjectId,
-          otherId,
-          signal
-        )
-      ) {
-        return;
-      }
-
       const delta = romanticObserverDelta(stake, event, signal.strength);
       if (!delta) return;
 
       candidates.push({
         observerId: observer.id,
         subjectId,
-        otherId,
+        otherId: others[0],
         delta,
         stake,
         severity: Math.abs(delta) + stake.stake * 3 + stake.jealousy,
@@ -59746,20 +47673,14 @@ function applyObservedRomanticThirdPartyConsequences(w, event) {
     if (!observer || !subject || !other) return;
 
     const isPublic = event.visibility === "public";
-    const feeling =
-      personalityAwareRomanticObserverFeeling(
-        w,
-        observer,
-        subject,
-        other,
-        row.stake,
-        event
-      );
+    const feeling = row.stake.jealousy >= 5
+      ? sysLangText(w, observer.id, "erősen féltékeny, sértett és birtokló", "intensely jealous, hurt and possessive")
+      : sysLangText(w, observer.id, "féltékeny és sértett", "jealous and hurt");
     const why = sysLangText(
       w,
       observer.id,
-      `${observer.name} észlelte ${subject.name} és ${other.name} tényleges romantikus/flörtös interakcióját${isPublic ? " nyilvánosan" : " mások előtt"}.`,
-      `${observer.name} witnessed an actually grounded romantic/flirty interaction between ${subject.name} and ${other.name}${isPublic ? " in public" : " in front of others"}.`
+      `${observer.name} látta, hogy ${subject.name} ${isPublic ? "nyilvánosan " : "mások előtt "}romantikusan/flörtölve viselkedett ${other.name} felé.`,
+      `${observer.name} saw ${subject.name} act romantically/flirtatiously with ${other.name} ${isPublic ? "in public" : "in front of others"}.`
     );
 
     applyChanges(w, [{
@@ -60144,22 +48065,53 @@ function recordSocialEvent(
     selectGossipStoryCandidate(w);
   }
 
-  /* Dynamic chapters consume the already-committed event as continuity only.
-     This never creates an action by itself; it simply lets later social/chat
-     generation remember how decisions and conversations changed the story. */
-  recordDynamicStoryBeatFromSocialEvent(w, entry);
-
-  /* Advanced AI memory + player progression consume only the already-committed
-     structured event. They do not alter the event itself or trigger new social
-     actions, so existing feed/DM/popup scheduling remains untouched. */
-  applyAdaptiveCharacterLearningFromSocialEvent(w, entry);
-  applyPlayerProgressionFromSocialEvent(w, entry);
-
   return entry;
 }
 
 function mkAction(type, key, payload = {}, source = "auto") {
   return { id: uid(), type, key, payload, source, ts: now() };
+}
+
+/*
+ * RECOVERY v99.6 — PLAYER SOCIAL REACTION PRIORITY
+ *
+ * These actions exist because the player has JUST spoken/posted publicly.
+ * They must not sit behind unrelated autonomous queue work.
+ *
+ * This helper is intentionally tiny and O(1): no world/history scan.
+ */
+function isPriorityPlayerSocialReaction(action) {
+  if (
+    !action ||
+    action.source !== "event"
+  ) {
+    return false;
+  }
+
+  const trigger =
+    String(
+      action.payload &&
+      action.payload.trigger ||
+      ""
+    );
+
+  if (
+    action.type === "reply" &&
+    trigger === "player-comment"
+  ) {
+    return true;
+  }
+
+  if (
+    action.type === "comments" &&
+    String(action.key || "").startsWith(
+      "event-post:"
+    )
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function simEnqueue(w, action) {
@@ -60205,45 +48157,33 @@ function simEnqueue(w, action) {
   const doneAt = Number(sim.done[action.key] || 0);
   if (doneAt && now() - doneAt < SIM_DONE_TTL) return false;
   if (sim.queue.some((x) => x && x.key === action.key)) return false;
-  const triggeredFeedBurst =
-    action.type === "world" &&
-    String(action.key || "").startsWith("triggered-feed-burst:");
 
-  if (action.source === "manual" || triggeredFeedBurst) {
-    sim.queue.unshift(action);
-    sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
-  } else if (action.source === "coverage") {
+  const priorityPlayerReaction =
+    isPriorityPlayerSocialReaction(
+      action
+    );
+
+  if (
+    action.source === "manual" ||
+    action.source === "coverage" ||
+    priorityPlayerReaction
+  ) {
     /*
-     * Coverage generated by burst post #1 must not jump in front of already
-     * queued burst posts #2/#3. Keep the leading burst block intact, then place
-     * comment coverage immediately after it.
+     * Player comment/post reactions are conversationally time-sensitive.
+     * Keep them ahead of autonomous follows, gossip, DMs, etc.
      */
-    let burstPrefix = 0;
-    while (
-      burstPrefix < sim.queue.length &&
-      sim.queue[burstPrefix] &&
-      sim.queue[burstPrefix].type === "world" &&
-      String(sim.queue[burstPrefix].key || "").startsWith(
-        "triggered-feed-burst:"
-      )
-    ) {
-      burstPrefix += 1;
-    }
-
-    if (burstPrefix > 0) {
-      sim.queue.splice(
-        burstPrefix,
+    sim.queue.unshift(action);
+    sim.queue =
+      sim.queue.slice(
         0,
-        action
+        SIM_QUEUE_LIMIT
       );
-      sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
-    } else {
-      sim.queue.unshift(action);
-      sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
-    }
   } else {
     sim.queue.push(action);
-    sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
+    sim.queue =
+      sim.queue.slice(
+        -SIM_QUEUE_LIMIT
+      );
   }
   sim.at = now();
   return true;
@@ -60616,75 +48556,6 @@ Formátum:
 }
 
 
-function socialWavePublicEvidenceRows(w, targetId, post, limit = 6) {
-  const rows = [];
-  const add = (sourceId, value) => {
-    const text = String(value || "").replace(/\s+/g, " ").trim();
-    if (!text) return;
-    if (rows.some((row) => normalizeExactCommentGroundingText(row.text) === normalizeExactCommentGroundingText(text))) return;
-    rows.push({ sourceId: String(sourceId || "public"), text: cut(text, 520) });
-  };
-
-  if (post) {
-    add(`post:${post.id}`, [post.text, post.imageDescription].filter(Boolean).join(" | "));
-  }
-
-  const cutoff = now() - 36 * 3600e3;
-  (w.socialEvents || [])
-    .filter((event) => event && event.visibility === "public" && Number(event.ts || 0) >= cutoff)
-    .filter((event) => {
-      if (event.actorId === targetId) return true;
-      if (Array.isArray(event.targetIds) && event.targetIds.includes(targetId)) return true;
-      const sentimentTargets = event.meta && Array.isArray(event.meta.sentimentTargetIds)
-        ? event.meta.sentimentTargetIds
-        : [];
-      return sentimentTargets.includes(targetId);
-    })
-    .slice(0, 16)
-    .forEach((event) => add(`event:${event.refId || event.id || event.type}`, event.text));
-
-  return rows.slice(0, Math.max(1, Math.min(10, Number(limit) || 6)));
-}
-
-function socialWaveEvidenceCard(w, targetId, post) {
-  const rows = socialWavePublicEvidenceRows(w, targetId, post, 6);
-  return `PUBLIC EVIDENCE — ONLY THESE FACTS MAY BE USED AS THE REASON FOR THE WAVE COMMENTS:
-${
-    rows.length
-      ? rows.map((row) => `- [${row.sourceId}] ${row.text}`).join("\n")
-      : "- no concrete public evidence available"
-  }
-- Backlash/support can react to public evidence and the character's own relationship to the target, but MUST NOT invent a new scandal, confession, receipt or private fact.`;
-}
-
-function socialWaveBasisMatchesPublicEvidence(w, targetId, post, basis) {
-  const normalizedBasis = normalizeExactCommentGroundingText(basis);
-  const words = normalizedBasis.split(/\s+/).filter(Boolean);
-  if (!normalizedBasis || words.length < 1 || words.length > 18) return false;
-  return socialWavePublicEvidenceRows(w, targetId, post, 8).some((row) => {
-    const source = normalizeExactCommentGroundingText(row.text);
-    return source && (` ${source} `).includes(` ${normalizedBasis} `);
-  });
-}
-
-function socialWaveMeaningMatchesPublicEvidence(w, targetId, post, basis, meaning) {
-  if (!socialWaveBasisMatchesPublicEvidence(w, targetId, post, basis)) return false;
-  const rawMeaning = String(meaning || "").replace(/\s+/g, " ").trim();
-  if (!rawMeaning || rawMeaning.length > 360) return false;
-  const basisTokens = socialCommentGroundingContentTokens(basis);
-  const meaningTokens = socialCommentGroundingContentTokens(rawMeaning);
-  if (!meaningTokens.length) return false;
-  if (!basisTokens.length) return true;
-  return basisTokens.some((left) => meaningTokens.some((right) => {
-    if (left === right) return true;
-    if (left.length >= 5 && right.length >= 5) {
-      const prefixLen = Math.min(6, left.length, right.length);
-      return left.slice(0, prefixLen) === right.slice(0, prefixLen);
-    }
-    return false;
-  }));
-}
-
 async function genSocialWave(
   w,
   target,
@@ -60716,17 +48587,6 @@ async function genSocialWave(
     cast.map(
       (c) => c.id
     );
-
-  const climate = socialCommentClimateSnapshot(w, post || target);
-  const desiredVisibleComments = Math.max(
-    1,
-    Math.min(
-      cast.length,
-      mode === "cancel"
-        ? (climate.cancelPressure >= 60 ? 5 : climate.cancelPressure >= 32 ? 4 : 3)
-        : (climate.stanEnergy >= 60 ? 5 : climate.stanEnergy >= 32 ? 4 : 3)
-    )
-  );
 
   const modeText =
     mode === "cancel"
@@ -60776,19 +48636,12 @@ ${target.name}: ${post.text || "[képes poszt]"}`
 
 ${modeText}
 
-${socialCommentClimateCard(w, post || target)}
-
-${socialCharacterCustomizationRuleCard()}
-
-${socialWaveEvidenceCard(w, target.id, post)}
-
 MEGSZÓLALHATÓ KARAKTEREK:
 ${cast
   .map(
     (c) =>
       `${c.name} [${c.id}]
 ${voiceCard(c)}
-${relationshipBehaviorCard(w, c.id, target.id)}
 ${characterMemoryCard(w, c)}`
   )
   .join("\n\n")}
@@ -60802,30 +48655,22 @@ ${repetitionGuard(
 SZABÁLYOK:
 - CSAK a fenti AI-karakterek nevében írj.
 - A játékos helyett SOHA ne írj.
-- Ne szólaljon meg mindenki kötelezően; a saját personality + Detailed Description + relationship + learned memory dönti el, ki áll be a hullámba.
-- Cél: legfeljebb ${desiredVisibleComments} külön karaktertől rövid, valódi social-media komment; ha kevesebbnek van hiteles oka, legyen kevesebb.
-- Legtöbbször 1-18 szó bőven elég.
+- Ne szólaljon meg mindenki kötelezően.
+- 1-3 rövid, valódi social-media komment legyen.
+- Legtöbbször 1-15 szó bőven elég.
 - Ne írj esszét vagy narrációt.
-- Minden comment előtt válassz reactionAct-et, utána PUBLIC EVIDENCE basis-t, és csak utána fogalmazz karakterhangon.
-- A basis 1-18 egymást követő szó legyen SZÓ SZERINT a PUBLIC EVIDENCE egyik sorából; meaning röviden rögzítse, mit jelent ez a konkrét nyilvános tény.
+- A hangnem legyen karakterhű.
 - Ne használj ugyanazt a mondatot vagy emoji-mintát több szereplőnél.
 - Ne találj ki olyan titkos információt, amit a karakter nem tudhat.
-- Cancel hullám NEM kollektív agymosás: barát/partner/lojális karakter kritizálhatja a konkrét tettet, megvédheti a célpontot, megtagadhatja a pile-ont vagy csendben maradhat, ahogy a saját kánonja diktálja.
-- Support hullám NEM kollektív rajongás: rivális/ellenség nem hype-ol automatikusan csak azért, mert a célpont népszerű.
 - ${mode === "cancel"
-  ? "A kritika csak a megadott nyilvános tényre épülhet. Lehet kemény, gúnyos, csalódott, szkeptikus vagy távolságtartó, de ne találj ki új vádat/receipteket."
-  : "A támogatás lehet védelem, hype, száraz beszólás az ellenzőknek, konkrét tény helyretétele vagy egyszerű kiállás — az adott karakter saját hangján."}
+  ? "A kritika lehet kemény vagy gúnyos, de ne legyen mindenki ugyanúgy dühös."
+  : "A támogatás lehet védelem, hype, száraz beszólás az ellenzőknek vagy egyszerű kiállás."}
 
 Formátum:
 {
   "comments":[
     {
       "id":"karakter azonosítója",
-      "social_contract":"v1",
-      "decision":"COMMENT",
-      "reactionAct":"answer|agree|disagree|tease|roast|support|compliment|question|challenge|defend|correct|flirt|jealous_reaction|inside_joke|concern|sarcasm|shock|laugh|gossip_probe|callout|invite|dismiss",
-      "basis":"1-18 szó szó szerint a PUBLIC EVIDENCE egyik sorából",
-      "meaning":"rövid rejtett jelentés erről a konkrét nyilvános tényről",
       "text":"rövid nyilvános komment"
     }
   ]
@@ -61116,18 +48961,6 @@ function applySocialWave(
 
         if (!isHuman(n, who) && who === post.authorId) return;
 
-        const structuredComment =
-          String(comment && (comment.social_contract || comment.socialContract) || "").trim().toLowerCase() === "v1";
-        const reactionAct = normalizeSocialCommentReactionAct(comment && (comment.reactionAct || comment.reaction_act));
-        const declaredDecision = String(comment && comment.decision || "").trim().toUpperCase();
-
-        if (!structuredComment) return;
-        if (structuredComment) {
-          if (declaredDecision !== "COMMENT") return;
-          if (!reactionAct) return;
-          if (!socialWaveMeaningMatchesPublicEvidence(n, targetId, post, comment && comment.basis, comment && comment.meaning)) return;
-        }
-
         let body =
           cleanGeneratedComment(
             n,
@@ -61137,11 +48970,8 @@ function applySocialWave(
           );
 
         if (!body) return;
-        if (isUncharacteristicGenericComment(n, who, body)) return;
-        if (socialSelfClassificationContradiction(n, who, body)) return;
         body = sanitizeGeneratedDirectAddress(n, who, post.authorId, body);
         if (!body) return;
-        if (socialCommentContradictsRelationship(n, who, targetId, body, [post.text, post.imageDescription].filter(Boolean).join(" "))) return;
 
         const made = {
           id: uid(),
@@ -61154,10 +48984,6 @@ function applySocialWave(
               n,
               n.meId
             ),
-          socialContractVersion: structuredComment ? 1 : 0,
-          reactionAct: reactionAct || "",
-          groundingBasis: structuredComment ? String(comment && comment.basis || "").replace(/\s+/g, " ").trim().slice(0, 260) : "",
-          groundingMeaning: structuredComment ? String(comment && comment.meaning || "").replace(/\s+/g, " ").trim().slice(0, 360) : "",
         };
 
         post.comments = safePostComments(post);
@@ -61238,36 +49064,9 @@ function applySocialWave(
                 made.id,
               postAuthorId:
                 targetId,
-              reactionAct:
-                made.reactionAct || "",
-              groundingBasis:
-                made.groundingBasis || "",
             },
           }
         );
-
-        recordCharacterAgentAction(n, who, {
-          surface: "comment",
-          action: mode === "cancel" ? "PUBLIC_CRITICISM" : mode === "counter" ? "PUBLIC_DEFENSE" : "PUBLIC_SUPPORT",
-          targetId,
-          refId: made.id,
-          ts: made.ts,
-        });
-        rememberAboutTarget(n, who, targetId, {
-          kind: "event",
-          source: "social-wave-interaction",
-          confidence: 1,
-          text: sysLangText(
-            n,
-            who,
-            mode === "cancel"
-              ? `${nameOfIn(n, targetId)} körüli nyilvános backlashben kommenteltem.`
-              : `${nameOfIn(n, targetId)} mellett nyilvánosan kiálltam.`,
-            mode === "cancel"
-              ? `I commented during the public backlash around ${nameOfIn(n, targetId)}.`
-              : `I publicly supported ${nameOfIn(n, targetId)}.`
-          ),
-        });
       }
     );
   }
@@ -61552,27 +49351,10 @@ function feedNeedsFreshPost(w) {
     return Number((stats && stats.count) || 0) < AUTONOMOUS_CHARACTER_POST_MIN_24H;
   });
 
-  /*
-   * When the player is actively inside the app, check the feed frequently.
-   * fairPostCast() only returns characters whose OWN cooldown has elapsed, so
-   * the global ~30s pulse cannot make one character spam repeatedly.
-   */
-  if (
-    playerIsActivelyViewingWorld()
-  ) {
-    const target = autonomousDynamicFeedPulseMs(w);
-    return (
-      !last ||
-      now() - last >= target
-    );
-  }
-
-  /* Background posting is dynamic too, just intentionally slower than the
-     visible-session feed. */
-  const dynamicTarget = autonomousDynamicFeedPulseMs(w);
+  /* Catch up under-three bots visibly, then return to the normal slower pulse. */
   const target = belowMinimum
-    ? Math.min(dynamicTarget, 75 * 1000)
-    : dynamicTarget;
+    ? Math.min(LIVE_WORLD_POST_TARGET_MS, 90 * 1000)
+    : LIVE_WORLD_POST_TARGET_MS;
 
   return !last || now() - last >= target;
 }
@@ -62071,8 +49853,6 @@ ${voiceCard(bot)}
 ${characterMemoryCard(w, bot)}
 ${relCard}
 
-${playerProgressionAccessCard(w, w.meId)}
-
 ${characterAgentRuntimeCard(
   w,
   [bot.id],
@@ -62145,7 +49925,6 @@ async function genForcedEverydayRoleplayInvitation(w, bot) {
 ${voiceCard(bot)}
 ${characterMemoryCard(w,bot)}
 ${relationshipBehaviorCard(w,bot.id,w.meId)}
-${playerProgressionAccessCard(w, w.meId)}
 ${characterAgentRuntimeCard(w,[bot.id],{surface:"roleplay",targetId:w.meId,messages:w.chats[chatKey(w.meId,bot.id)]||[]})}
 
 AI EVENT INVITATION RETRY — DO NOT SKIP:
@@ -62309,7 +50088,7 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
 
   /* A feed ugyanebben a deficit-versenyben vesz részt; nem külön VIP-sáv. */
   const feedLast = lastAiFeedPostAt(view);
-  const feedTarget = autonomousDynamicFeedPulseMs(view);
+  const feedTarget = LIVE_WORLD_POST_TARGET_MS;
   const feedElapsed = feedLast ? ts - feedLast : feedTarget * 2.2;
 
   if (permits("feed") && feedElapsed >= feedTarget) {
@@ -62410,56 +50189,6 @@ function planAutoAction(view) {
   }
 
   /*
-   * v99.6 PLAYER RESPONSE FIRST:
-   * A fresh human comment/mention is always handled before autonomous content.
-   * This keeps replies feeling immediate without creating a second global tick.
-   */
-  const immediateThread = findUnanswered(view);
-  if (immediateThread && immediateThread.comment) {
-    return mkAction(
-      "reply",
-      `reply:${immediateThread.post.id}:${immediateThread.comment.id}`,
-      {
-        postId: immediateThread.post.id,
-        commentId: immediateThread.comment.id,
-        rootId: immediateThread.comment.id,
-        targetId: immediateThread.targetId || ""
-      }
-    );
-  }
-
-  /*
-   * v99.8 FEED HARD PRIORITY:
-   * If any normal AI is below its minimum rolling-24h post quota, feed creation
-   * is a mandatory next lane after direct player replies. DM/RP/gossip maintenance
-   * must not starve autonomous posting.
-   */
-  const feedDeficitCast = fairPostCast(view);
-  const feedDeficit = feedDeficitCast.some((c) => {
-    const stats = characterAutonomousPostStats24h(view, c.id);
-    return Number(stats.count || 0) < AUTONOMOUS_CHARACTER_POST_MIN_24H;
-  });
-  if (feedDeficit && feedNeedsFreshPost(view)) {
-    return mkAction(
-      "world",
-      `mandatory-feed:${feedDeficitCast[0].id}:${Math.floor(now() / 15000)}`,
-      { trigger: "mandatory-feed", authorId: feedDeficitCast[0].id },
-      "event"
-    );
-  }
-
-  /*
-   * AUTONOMOUS COMMENT PULSE:
-   * A fresh AI post with missing comment coverage gets a guaranteed comment
-   * generation slot before another world post is allowed. This makes the feed
-   * behave like a social network instead of a graveyard with excellent CSS.
-   */
-  const commentCoveragePost = guaranteedCommentCoverageCandidate(view);
-  if (commentCoveragePost) {
-    return guaranteedPostCommentAction(view, commentCoveragePost, "scheduler-comment-pulse");
-  }
-
-  /*
    * RECOVERY v99.2 ESSENTIAL FEED PULSE:
    * Once due, one autonomous feed post gets priority over private maintenance
    * lanes. Recent comment coverage is NOT allowed to block the next post.
@@ -62535,10 +50264,8 @@ function planAutoAction(view) {
   }
 
   /*
-   * ACTIVE FEED CADENCE
-   * 1) ÚJ POSZT — amikor a játékos bent van, kb. 30 másodpercenként nézzük,
-   * van-e SAJÁT cooldownja alapján esedékes AI. Ugyanaz a karakter nem tud
-   * 7–16 percnél sűrűbben posztolni, ezért a feed aktív, de nem spam jellegű.
+   * v65 FEED CADENCE
+   * 1) ÚJ POSZT — legkorábban kb. 10 percenként egy új autonóm feed-poszt.
    */
   if (feedNeedsFreshPost(view) && !freshFeedPostCommentCandidate(view)) {
     return mkAction(
@@ -63031,7 +50758,7 @@ function planAutoAction(view) {
       return (
         !active ||
         now() - (active.ts || 0) >=
-          autonomousAiNoteRefreshMs(view, c)
+          NOTE_REFRESH
       );
     })
     .map((c) => {
@@ -63076,10 +50803,10 @@ function planAutoAction(view) {
    * Ritka saját Note a maradék körökből.
    */
   if (
-    roll < 0.24 &&
-    noteless.some((row) => row.noteScore >= 4)
+    roll < 0.07 &&
+    noteless.some((row) => row.noteScore >= 8)
   ) {
-    const eligibleNotes = noteless.filter((row) => row.noteScore >= 4).slice(0, 6);
+    const eligibleNotes = noteless.filter((row) => row.noteScore >= 8).slice(0, 4);
     eligibleNotes.sort((a, b) => (b.noteScore - a.noteScore) || (a.lastNoteAt - b.lastNoteAt) || (a.tie - b.tie));
     const bot = eligibleNotes[Math.floor(Math.random() * Math.min(2, eligibleNotes.length))].c;
 
@@ -63556,78 +51283,6 @@ Ha van természetes folytatás:
   );
 }
 /* Egy központi szimulációs akció futtatása. Mindig pontosan egy AI-hívás. */
-/*
- * v99.9 AUTONOMOUS FEED HEARTBEAT
- *
- * The normal AI scheduler remains the primary content engine. This tiny local
- * watchdog is a last-resort safety net: if an AI character is currently due
- * by its own posting rhythm and the feed has gone silent, create one canon-safe post
- * locally. It never calls the provider, so provider busy/cooldown cannot starve
- * the social feed.
- */
-function runAutonomousFeedHeartbeat(w, update) {
-  if (!w || !update || !Array.isArray(w.chars) || !w.chars.length) return false;
-  const cast = fairPostCast(w);
-  if (!cast.length) return false;
-
-  const latest = lastAiFeedPostAt(w);
-  const silence = latest ? now() - latest : Infinity;
-
-  /*
-   * LIGHTWEIGHT REGULARITY HEARTBEAT:
-   * During an active visible session the generative scheduler gets first chance
-   * at the normal feed target. This provider-free fallback waits only ~20s more
-   * and rescues the feed if that richer post never materialized. fairPostCast()
-   * still enforces the selected character's own cooldown and daily safety cap.
-   *
-   * Outside the visible app, keep a slower 90s rescue pulse.
-   */
-  const heartbeatTarget =
-    playerIsActivelyViewingWorld()
-      ? autonomousDynamicFeedPulseMs(w) + 8 * 1000
-      : Math.max(45 * 1000, autonomousDynamicFeedPulseMs(w) + 18 * 1000);
-
-  const due =
-    silence >=
-    heartbeatTarget;
-
-  if (!due) return false;
-
-  const candidate = cast[0];
-  const stats = characterAutonomousPostStats24h(w, candidate.id);
-  if (Number(stats.count || 0) >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) return false;
-
-  let created = false;
-  update((n) => {
-    const live = charById(n, candidate.id);
-    if (!live || !characterCanAutonomouslyPost(n, live)) return;
-    const liveLatest = lastAiFeedPostAt(n);
-
-    const liveHeartbeatTarget =
-      playerIsActivelyViewingWorld()
-        ? autonomousDynamicFeedPulseMs(n) + 8 * 1000
-        : Math.max(45 * 1000, autonomousDynamicFeedPulseMs(n) + 18 * 1000);
-
-    if (
-      liveLatest &&
-      now() - liveLatest <
-        liveHeartbeatTarget
-    ) {
-      return;
-    }
-
-    const fallback = deterministicAutonomousFallbackPost(n, live.id);
-    if (!fallback) return;
-    created = Boolean(applyWorldStep(n, fallback));
-    if (created) {
-      const sim = ensureSimState(n);
-      sim.lastSuccessAt = now();
-      sim.lastAttemptAt = now();
-    }
-  });
-  return created;
-}
-
 async function runSimulationAction(view, update, action, addImage) {
   if (!view || !action) return null;
 
@@ -63647,7 +51302,7 @@ async function runSimulationAction(view, update, action, addImage) {
     const out = await genWorldStep(view, false, hours);
     if (!out || !Array.isArray(out.posts)) return null;
 
-    const probe = cloneWorldState(view);
+    const probe = JSON.parse(JSON.stringify(view));
     const visible = applyWorldStep(probe, out);
     if (!visible && !(Array.isArray(out.events) && out.events.length)) return null;
 
@@ -63750,7 +51405,7 @@ async function runSimulationAction(view, update, action, addImage) {
     }
     if (!out || !String(out.text || "").trim()) return null;
 
-    const gossipProbe = cloneWorldState(view);
+    const gossipProbe = JSON.parse(JSON.stringify(view));
     const probeCandidate = forcedRoleplayGossipCandidate(gossipProbe, sceneId) || candidate;
     const probePost = publishGossipMediaStory(gossipProbe, probeCandidate, out);
     if (!probePost) return null;
@@ -63962,7 +51617,7 @@ async function runSimulationAction(view, update, action, addImage) {
 
   if (action.type === "gossip-spread") {
     const payload = action.payload || {};
-    const probe = cloneWorldState(view);
+    const probe = JSON.parse(JSON.stringify(view));
     if (!applyGossipPropagationRound(probe, payload)) return null;
     update((n) => { applyGossipPropagationRound(n, payload); });
     return "gossip-spread";
@@ -63974,7 +51629,7 @@ async function runSimulationAction(view, update, action, addImage) {
     const rumor = state && state.rumors.find((r) => r && r.id === payload.rumorId);
     if (!rumor) return null;
     const out = await genGossipNetworkEcho(view, payload);
-    const probe = cloneWorldState(view);
+    const probe = JSON.parse(JSON.stringify(view));
     if (!applyGossipNetworkEcho(probe, payload, out)) return null;
     update((n) => { applyGossipNetworkEcho(n, payload, out); });
     return "gossip-echo";
@@ -64021,79 +51676,18 @@ async function runSimulationAction(view, update, action, addImage) {
       return null;
     }
 
-    let out = null;
-
-    try {
-      out =
-        await genGossipMediaStory(
-          view,
-          candidate
-        );
-    } catch (gossipStoryErr) {
-      if (
-        !(
-          candidate.popupBased &&
-          candidate.forcePublish
-        )
-      ) {
-        throw gossipStoryErr;
-      }
-
-      console.warn(
-        "Forced popup gossip generation failed; using grounded fallback:",
-        gossipStoryErr
+    const out =
+      await genGossipMediaStory(
+        view,
+        candidate
       );
 
-      out =
-        fallbackForcedPopupGossipStory(
-          view,
-          candidate
-        );
-    }
-
-    if (
-      (
-        !out ||
-        out.skip === true ||
-        !String(
-          out.text || ""
-        ).trim()
-      ) &&
-      candidate.popupBased &&
-      candidate.forcePublish
-    ) {
-      out =
-        fallbackForcedPopupGossipStory(
-          view,
-          candidate
-        );
-    }
-
-    if (!out) return null;
-
-    let gossipProbe = cloneWorldState(view);
-    let probePost = publishGossipMediaStory(
+    const gossipProbe = JSON.parse(JSON.stringify(view));
+    const probePost = publishGossipMediaStory(
       gossipProbe,
       candidate,
       out
     );
-
-    if (
-      !probePost &&
-      candidate.popupBased &&
-      candidate.forcePublish
-    ) {
-      out = fallbackForcedPopupGossipStory(view, candidate);
-      if (!out) return null;
-
-      gossipProbe = cloneWorldState(view);
-      probePost = publishGossipMediaStory(
-        gossipProbe,
-        candidate,
-        out
-      );
-    }
-
     if (!probePost) return null;
 
     update((n) => {
@@ -64125,38 +51719,6 @@ async function runSimulationAction(view, update, action, addImage) {
       (Array.isArray(out.dms) && out.dms.length)
     ));
     if (!hasVisibleReaction) out = fallbackGossipReactionOutput(view, post, cast);
-
-    if (
-      post.gossipStory.popupBased &&
-      !validGossipReactionRelationshipChanges(
-        view,
-        post,
-        cast,
-        out
-      ).length
-    ) {
-      try {
-        const repairedChanges =
-          await genPopupGossipRelationshipRipple(
-            view,
-            post,
-            cast
-          );
-
-        if (repairedChanges.length) {
-          out = {
-            ...(out || {}),
-            changes: repairedChanges,
-          };
-        }
-      } catch (gossipRelationshipErr) {
-        console.warn(
-          "Popup gossip relationship ripple repair failed:",
-          gossipRelationshipErr
-        );
-      }
-    }
-
     update((n) => { applyGossipReactions(n, post.id, cast, out); });
     return "gossip-reaction";
   }
@@ -64166,7 +51728,7 @@ async function runSimulationAction(view, update, action, addImage) {
     const post = (view.posts || []).find((p) => p && p.id === postId);
     if (!post || !post.gossipStory || post.gossipStory.rumorEvolvedAt) return null;
     const out = await genRumorEvolution(view, post);
-    const rumorProbe = cloneWorldState(view);
+    const rumorProbe = JSON.parse(JSON.stringify(view));
     const probePost = publishRumorEvolution(rumorProbe, post.id, out);
     if (!probePost) return null;
     update((n) => { publishRumorEvolution(n, post.id, out); });
@@ -64569,7 +52131,7 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : rawOut;
 
-    const replyProbe = cloneWorldState(view);
+    const replyProbe = JSON.parse(JSON.stringify(view));
     const replyCount = applyReplies(replyProbe, post.id, comment.id, out);
     if (!replyCount) return null;
 
@@ -64616,7 +52178,7 @@ async function runSimulationAction(view, update, action, addImage) {
     const maxComments = Math.max(2, Math.min(20, Number(action.payload && action.payload.maxComments) || 14));
     const minComments = Math.max(
       0,
-      Math.min(maxComments, Number(action.payload && action.payload.minComments) || 2)
+      Math.min(maxComments, Number(action.payload && action.payload.minComments) || 0)
     );
 
     const { out: generatedOut, label } =
@@ -64641,7 +52203,7 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : quotaOut;
 
-    const commentsProbe = cloneWorldState(view);
+    const commentsProbe = JSON.parse(JSON.stringify(view));
     const visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
 
     if (!visibleReactionCount) {
@@ -64997,7 +52559,7 @@ if (targetNote) {
       (
         activeNote &&
         now() - (activeNote.ts || 0) <
-          autonomousAiNoteRefreshMs(view, bot)
+          NOTE_REFRESH
       )
     ) {
       return null;
@@ -65559,24 +53121,19 @@ if (targetNote) {
       return null;
     }
 
-    const autonomousReasonContext = autonomousDmReasonContext(view, bot);
-    if (!autonomousReasonContext.primary) {
-      return null;
-    }
-
     let out =
-      await genDM(view, bot, autonomousReasonContext);
+      await genDM(view, bot);
 
-    if (!autonomousDmOutputMatchesReason(out, autonomousReasonContext)) {
+    if (!out || out.skip === true || (!String(out.text || "").trim() && !String(out.imagePrompt || "").trim() && !String(out.image || "").trim())) {
       try {
-        out = await genForcedEverydayDM(view, bot, autonomousReasonContext);
+        out = await genForcedEverydayDM(view, bot);
       } catch (dmRetryErr) {
-        console.warn("Autonomous DM grounded retry failed:", dmRetryErr);
+        console.warn("Autonomous DM retry failed:", dmRetryErr);
       }
     }
 
-    if (!autonomousDmOutputMatchesReason(out, autonomousReasonContext)) {
-      out = fallbackAutonomousDmResponse(view, bot, autonomousReasonContext);
+    if (!out || out.skip === true || (!String(out.text || "").trim() && !String(out.imagePrompt || "").trim() && !String(out.image || "").trim())) {
+      out = fallbackAutonomousDmResponse(view, bot);
     }
 
     const rawTxt =
@@ -65649,7 +53206,7 @@ if (targetNote) {
       autonomousConflict === 0 &&
       (!txt || socialTextHostilityLevel(txt) > 0 || DM_COLD_DISMISSAL_RE.test(txt))
     ) {
-      txt = fallbackAutonomousDmResponse(view, bot, autonomousReasonContext).text;
+      txt = fallbackAutonomousDmResponse(view, bot).text;
     }
 
     const legacyAlbumIntent =
@@ -65663,25 +53220,11 @@ if (targetNote) {
         ? albumIntentToGeneratedSnapPrompt(bot, legacyAlbumIntent, txt)
         : "");
 
-    const groundedSpontaneousImagePrompt = contextualizeChatSnapPrompt(
-      view,
-      bot,
-      spontaneousImagePrompt,
-      autonomousReasonContext && autonomousReasonContext.primary
-        ? autonomousReasonContext.primary.basis
-        : txt,
-      recentDmContext,
-      false,
-      autonomousReasonContext && autonomousReasonContext.primary
-        ? autonomousReasonContext.primary.basis
-        : ""
-    );
-
     const generatedAiSnap =
-      groundedSpontaneousImagePrompt
+      spontaneousImagePrompt
         ? await generateAiChatSnap(
             bot,
-            groundedSpontaneousImagePrompt,
+            spontaneousImagePrompt,
             addImage,
             media
           )
@@ -65745,9 +53288,6 @@ if (targetNote) {
             ),
           autonomous: true,
           source: "autonomous-dm",
-          autonomousReasonId: String(out && out.reasonId || autonomousReasonContext.primary.id || ""),
-          autonomousReasonType: String(autonomousReasonContext.primary.kind || ""),
-          autonomousReasonBasis: cut(String(out && out.reasonBasis || autonomousReasonContext.primary.basis || ""), 360),
         },
       ];
 
@@ -65894,41 +53434,13 @@ if (targetNote) {
     return "dm";
   }
 
-  let out = null;
-
-  if (action.type === "world") {
-    /*
-     * BURST EXECUTION RELIABILITY FIX:
-     * A provider failure used to escape runSimulationAction() before the local
-     * post fallback below could run. The outer scheduler caught the exception
-     * silently for background actions, so the console showed "selected world"
-     * while no post was ever committed.
-     *
-     * World/feed generation is now best-effort: provider failure becomes an
-     * empty result and immediately falls through to the existing deterministic
-     * local fallback. No other simulation lane is changed here.
-     */
-    try {
-      out = await genFocusedWorldStep(
-        view,
-        action.payload || {}
-      );
-    } catch (worldPostErr) {
-      console.warn(
-        "[autonomous-feed] provider generation failed; using local fallback",
-        action && action.key || "",
-        worldPostErr && worldPostErr.message
-          ? worldPostErr.message
-          : worldPostErr
-      );
-      out = null;
-    }
-  } else {
-    out = await genWorldStep(
-      view,
-      false
-    );
-  }
+  const out =
+    action.type === "world"
+      ? await genFocusedWorldStep(view)
+      : await genWorldStep(
+          view,
+          false
+        );
 
   /*
    * Üres/stale AI-result nem számít sikeres világkörnek. Így nem indítjuk
@@ -65938,43 +53450,11 @@ if (targetNote) {
     !out ||
     !Array.isArray(out.posts)
   ) {
-    const fallbackPayload = action && action.payload || {};
-    const fallbackTriggerContext = autonomousTriggeredFeedContext(view, fallbackPayload);
-    const fallbackAuthor = fallbackPayload.authorId
-      || fairPostCast(view, {
-        allowBurst:Boolean(fallbackPayload.allowBurst),
-        burstKey:String(fallbackPayload.burstKey || ""),
-        preferredIds:fallbackTriggerContext.preferredIds,
-      })[0]?.id
-      || "";
-    const fallback = deterministicAutonomousFallbackPost(view, fallbackAuthor, fallbackPayload);
-    if (!fallback) return null;
-    out = fallback;
+    return null;
   }
 
   if (!out.posts.length) {
-    /* v99.8 POST GUARANTEE: a provider may return an empty social result.
-       Do not let that silently consume the feed lane. Create a deterministic,
-       canon-safe fallback from the selected character's own sheet instead. */
-    const fallbackPayload = action && action.payload || {};
-    const fallbackTriggerContext = autonomousTriggeredFeedContext(view, fallbackPayload);
-    const fallbackAuthor = fallbackPayload.authorId
-      || fairPostCast(view, {
-        allowBurst:Boolean(fallbackPayload.allowBurst),
-        burstKey:String(fallbackPayload.burstKey || ""),
-        preferredIds:fallbackTriggerContext.preferredIds,
-      })[0]?.id
-      || "";
-    const fallback = deterministicAutonomousFallbackPost(view, fallbackAuthor, fallbackPayload);
-    if (fallback) {
-      out.posts = fallback.posts;
-      out.changes = fallback.changes;
-      out.events = fallback.events;
-      out.selfUpdates = fallback.selfUpdates;
-      out.relationshipUpdates = fallback.relationshipUpdates;
-    } else {
-      return null;
-    }
+    return null;
   }
 
   let visiblePostsCreated = 0;
@@ -65995,25 +53475,11 @@ if (targetNote) {
     visiblePostsCreated =
       applyWorldStep(
         n,
-        out,
-        action.payload || {}
+        out
       );
 
     if (!visiblePostsCreated) {
-      const fallbackPayload = action && action.payload || {};
-      const fallbackTriggerContext = autonomousTriggeredFeedContext(n, fallbackPayload);
-      const fallbackAuthor = fallbackPayload.authorId
-        || fairPostCast(n, {
-          allowBurst:Boolean(fallbackPayload.allowBurst),
-          burstKey:String(fallbackPayload.burstKey || ""),
-          preferredIds:fallbackTriggerContext.preferredIds,
-        })[0]?.id
-        || "";
-      const fallback = deterministicAutonomousFallbackPost(n, fallbackAuthor, fallbackPayload);
-      if (fallback) {
-        visiblePostsCreated = applyWorldStep(n, fallback, action.payload || {});
-      }
-      if (!visiblePostsCreated) return;
+      return;
     }
 
     const freshPosts =
@@ -66088,10 +53554,6 @@ export default function App() {
   const albumVisionBusy = useRef(false);
   const albumVisionAttempted = useRef(new Set());
 
-  /* Existing image-post vision backfill — one post at a time. */
-  const postVisionBusy = useRef(false);
-  const postVisionAttempted = useRef(new Set());
-
   wRef.current = world;
   mediaRef.current = media;
 
@@ -66125,7 +53587,11 @@ export default function App() {
 
     const authoritative =
       migrate(
-        cloneWorldState(serverWorld)
+        JSON.parse(
+          JSON.stringify(
+            serverWorld
+          )
+        )
       );
 
     if (!authoritative) {
@@ -66430,30 +53896,6 @@ useEffect(() => {
   const [prefill, setPrefill] = useState("");
 
   const signIn = useCallback((wld, id) => {
-    const previousCode = wRef.current && wRef.current.code ? String(wRef.current.code) : "";
-    const nextCode = wld && wld.code ? String(wld.code) : "";
-    if (previousCode && nextCode && previousCode !== nextCode) {
-      /* Hard world boundary: stale popup/flash/jump/queue UI must not survive
-         into the newly opened world. In-flight AI work is rejected by epoch. */
-      setFlash(null);
-      setPopupNav(null);
-      setJump(null);
-      setShowNotes(false);
-      setChatId(null);
-      setSceneId(null);
-      const freshAt = now();
-      wld.historyEpoch = Math.max(0, Math.floor(Number(wld.historyEpoch) || 0)) + 1;
-      wld.popupEvents = [];
-      wld.popupRuntime = { startedAt: freshAt, lastGeneratedAt: 0 };
-
-      /*
-       * Crossing into another world resets only runtime/UI carry-over, while
-       * booting the complete autonomous feature set for that world.
-       */
-      wld.autoAt = 0;
-      wld.sim = freshSimulationRuntime(freshAt);
-      wld.activeSceneId = "";
-    }
     const preferred = asLang((wld.userSettings && wld.userSettings[id] && wld.userSettings[id].language) || (wld.aiLang || lang));
     saveLang(preferred);
     setLangState(preferred);
@@ -66961,177 +54403,6 @@ const signOut = useCallback(async () => {
     media,
   ]);
 
-  /*
-   * EXISTING-WORLD POST IMAGE VISION BACKFILL
-   * Analyze one real image-post at a time when its dedicated imageVision is
-   * missing. Only visual metadata changes.
-   */
-  useEffect(() => {
-    if (
-      !world ||
-      !code ||
-      !mediaReady.current ||
-      postVisionBusy.current
-    ) {
-      return;
-    }
-
-    let targetPost = null;
-    let imageInput = "";
-
-    for (const row of (world.posts || [])) {
-      if (
-        !row ||
-        !(
-          row.imageId ||
-          row.image
-        ) ||
-        String(
-          row.imageVision || ""
-        ).trim()
-      ) {
-        continue;
-      }
-
-      const key =
-        String(
-          row.id ||
-          row.imageId ||
-          row.image ||
-          ""
-        );
-
-      if (
-        !key ||
-        postVisionAttempted.current.has(
-          key
-        )
-      ) {
-        continue;
-      }
-
-      const srcValue =
-        row.imageId
-          ? imageRef(
-              row.imageId
-            )
-          : row.image;
-
-      const resolved =
-        resolveImg(
-          srcValue,
-          mediaRef.current || {}
-        );
-
-      if (
-        !resolved ||
-        (
-          !isInlineImageData(
-            resolved
-          ) &&
-          !/^https:\/\//i.test(
-            resolved
-          )
-        )
-      ) {
-        continue;
-      }
-
-      targetPost = row;
-      imageInput = resolved;
-      postVisionAttempted.current.add(
-        key
-      );
-      break;
-    }
-
-    if (
-      !targetPost ||
-      !imageInput
-    ) {
-      return;
-    }
-
-    postVisionBusy.current = true;
-
-    analyzeSocialPostImageInput(
-      imageInput
-    )
-      .then((vision) => {
-        if (!vision) return;
-
-        setWorld((prev) => {
-          if (!prev) return prev;
-
-          const n =
-            cloneWorldState(
-              prev
-            );
-
-          const found =
-            (n.posts || [])
-              .find(
-                (row) =>
-                  row &&
-                  String(
-                    row.id || ""
-                  ) ===
-                  String(
-                    targetPost.id || ""
-                  )
-              );
-
-          if (
-            !found ||
-            String(
-              found.imageVision || ""
-            ).trim()
-          ) {
-            return prev;
-          }
-
-          found.imageVision =
-            String(
-              vision
-            )
-              .replace(/\s+/g, " ")
-              .trim()
-              .slice(
-                0,
-                1000
-              );
-
-          found.imageDescription =
-            composePostImageDescriptionFromVision(
-              found,
-              found.imageVision
-            );
-
-          found.imageAnalyzedAt =
-            now();
-
-          n.rev =
-            (n.rev || 0) + 1;
-
-          return n;
-        });
-      })
-      .catch((visionErr) => {
-        console.warn(
-          "Background post image vision analysis failed:",
-          visionErr
-        );
-      })
-      .finally(() => {
-        postVisionBusy.current = false;
-      });
-  }, [
-    world ? world.code : null,
-    world ? world.rev : 0,
-    code,
-    media,
-  ]);
-
   useEffect(() => {
     let alive = true;
 
@@ -67242,18 +54513,13 @@ const signOut = useCallback(async () => {
                     latestLocal
                   );
 
-                const acceptedSnapshot =
-                  acceptedWorldFromServerSave(
-                    latestLocal,
-                    saved
-                  );
-
                 if (
-                  acceptedSnapshot
+                  saved &&
+                  saved.world
                 ) {
                   const accepted =
                     migrate(
-                      acceptedSnapshot
+                      saved.world
                     );
 
                   const acceptedRev =
@@ -67281,7 +54547,11 @@ const signOut = useCallback(async () => {
                       localRev
                     ) {
                       const next =
-                        cloneWorldState(cur);
+                        JSON.parse(
+                          JSON.stringify(
+                            cur
+                          )
+                        );
 
                       next.syncRev =
                         acceptedRev;
@@ -67345,7 +54615,11 @@ const signOut = useCallback(async () => {
                         localRev
                       ) {
                         const next =
-                          cloneWorldState(cur);
+                          JSON.parse(
+                            JSON.stringify(
+                              cur
+                            )
+                          );
 
                         next.syncRev =
                           worldSyncRev(
@@ -67375,7 +54649,11 @@ const signOut = useCallback(async () => {
                       if (!cur) return cur;
 
                       const next =
-                        cloneWorldState(cur);
+                        JSON.parse(
+                          JSON.stringify(
+                            cur
+                          )
+                        );
 
                       next.syncRev =
                         worldSyncRev(
@@ -67462,7 +54740,11 @@ const signOut = useCallback(async () => {
                 if (!cur) return cur;
 
                 const next =
-                  cloneWorldState(cur);
+                  JSON.parse(
+                    JSON.stringify(
+                      cur
+                    )
+                  );
 
                 next.syncRev =
                   serverRev;
@@ -67975,71 +55257,6 @@ const signOut = useCallback(async () => {
     return true;
   }, [update]);
 
-  const requestTriggeredFeedBurst = useCallback((trigger, refId, payload = {}, count = 3) => {
-    const total = Math.max(2, Math.min(5, Math.round(Number(count) || 3)));
-    const burstKey = `${String(trigger || "social-trigger")}:${String(refId || "event")}:${now()}:${uid()}`;
-    let queued = false;
-
-    update((n) => {
-      /*
-       * Pick the burst authors NOW, while the triggering post/event is already
-       * present in the authoritative world. This prevents three queued slots
-       * from repeatedly resolving to the same/temporarily unavailable author.
-       */
-      const triggerPayload = {
-        ...(payload || {}),
-        trigger: String(trigger || "social-trigger"),
-        triggerRefId: String(refId || ""),
-        allowBurst: true,
-        burstKey,
-      };
-
-      const triggerContext =
-        autonomousTriggeredFeedContext(
-          n,
-          triggerPayload
-        );
-
-      const burstAuthors =
-        fairPostCast(
-          n,
-          {
-            allowBurst: true,
-            burstKey,
-            preferredIds: triggerContext.preferredIds,
-          }
-        )
-          .filter((c) => c && c.id)
-          .slice(0, total);
-
-      const actualTotal = burstAuthors.length;
-
-      /* coverage is intentional: a user/popup/multi-AI-event aftermath should
-         be visible before unrelated stale maintenance. Reverse insertion keeps
-         burstIndex 0 at the front even though coverage uses unshift(). */
-      for (let i = actualTotal - 1; i >= 0; i -= 1) {
-        const burstAuthor = burstAuthors[i];
-
-        queued = simEnqueue(
-          n,
-          mkAction(
-            "world",
-            `triggered-feed-burst:${burstKey}:${i}:${burstAuthor.id}`,
-            {
-              ...triggerPayload,
-              authorId: burstAuthor.id,
-              burstIndex: i,
-              burstTotal: actualTotal,
-            },
-            "coverage"
-          )
-        ) || queued;
-      }
-    });
-
-    return queued;
-  }, [update]);
-
   const requestWorldStep = useCallback(() => {
     const key = `manual-world:${now()}:${uid()}`;
     return requestSimulationAction(mkAction("world-full", key, {}, "manual"));
@@ -68075,11 +55292,16 @@ const signOut = useCallback(async () => {
         )
       ) || queuedAny;
 
-      queuedAny = requestTriggeredFeedBurst(
-        "player-post",
-        event.postId,
-        { postId: event.postId },
-        4
+      queuedAny = requestSimulationAction(
+        mkAction(
+          "world-full",
+          `event-world-after-post:${event.postId}`,
+          {
+            trigger: "player-post",
+            postId: event.postId,
+          },
+          "event"
+        )
       ) || queuedAny;
 
       return queuedAny;
@@ -68111,23 +55333,17 @@ const signOut = useCallback(async () => {
         ) || queuedAny;
       }
 
-      if (aiCount >= 2) {
-        queuedAny = requestTriggeredFeedBurst(
-          "roleplay-ended",
-          event.sceneId,
-          { sceneId: event.sceneId, finishedAt: event.finishedAt || now() },
-          3
-        ) || queuedAny;
-      } else {
-        queuedAny = requestSimulationAction(
-          mkAction(
-            "world-full",
-            `event-world-after-rp:${event.sceneId}:${event.finishedAt || now()}`,
-            { trigger: "roleplay-ended", sceneId: event.sceneId },
-            "event"
-          )
-        ) || queuedAny;
-      }
+      queuedAny = requestSimulationAction(
+        mkAction(
+          "world-full",
+          `event-world-after-rp:${event.sceneId}:${event.finishedAt || now()}`,
+          {
+            trigger: "roleplay-ended",
+            sceneId: event.sceneId,
+          },
+          "event"
+        )
+      ) || queuedAny;
 
       return queuedAny;
     }
@@ -68229,48 +55445,54 @@ const signOut = useCallback(async () => {
             return false;
           }
 
-          /*
-           * v99.9 POPUP RESOLVE-FIRST
-           *
-           * The relationship/social consequence must never depend on an AI
-           * generation request succeeding. Resolve the actual choice first,
-           * which closes the popup immediately and applies relationship +
-           * gossip consequences. Text generation is secondary.
-           */
-          update((n) => {
-            resolvePopupEvent(n, event.id, choice.id);
-          });
+          const playerText =
+            await genPopupPlayerActionText(
+              view,
+              event,
+              choice,
+              "private",
+              targetId
+            );
 
-          let playerText = "";
-          try {
-            playerText = String(
-              await genPopupPlayerActionText(
-                view,
-                event,
-                choice,
-                "private",
-                targetId
-              ) || ""
-            ).trim();
-          } catch (textErr) {
-            console.warn("Popup private text generation failed:", textErr);
-          }
           if (!playerText) {
-            playerText = worldLanguage(view, view.meId) === "en"
-              ? "Can we talk about this privately?"
-              : "Beszéljünk erről négyszemközt.";
+            throw new Error(
+              tt(
+                "Nem sikerült létrehozni a privát üzenetet.",
+                "Couldn't create the private message."
+              )
+            );
           }
 
           let replyText = "";
+
           try {
-            replyText = String(
-              await genPopupPrivateReply(view, targetId, playerText) || ""
-            ).trim();
+            replyText =
+              await genPopupPrivateReply(
+                view,
+                targetId,
+                playerText
+              );
           } catch (replyErr) {
-            console.warn("Popup private reply generation failed:", replyErr);
+            /*
+             * A játékos DM-je ettől még megtörténik.
+             * A karakter később is reagálhat.
+             */
+            console.warn(
+              "Popup private reply generation failed:",
+              replyErr
+            );
           }
 
           update((n) => {
+            const ok =
+              resolvePopupEvent(
+                n,
+                event.id,
+                choice.id
+              );
+
+            if (!ok) return;
+
             appendPopupPrivateConversation(
               n,
               targetId,
@@ -68288,11 +55510,13 @@ const signOut = useCallback(async () => {
             at:now(),
           });
 
-          requestTriggeredFeedBurst(
-            "popup-choice",
-            event.id,
-            { popupEventId:event.id, choiceId:choice.id },
-            3
+          requestSimulationAction(
+            mkAction(
+              "world-full",
+              `popup-followup:${event.id}:${choice.id}`,
+              { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id },
+              "event"
+            )
           );
 
           return true;
@@ -68310,29 +55534,21 @@ const signOut = useCallback(async () => {
             choice.tone
           )
         ) {
-          /* Resolve immediately. AI text is an enhancement, not the gatekeeper
-           * for the actual popup outcome. */
-          update((n) => {
-            resolvePopupEvent(n, event.id, choice.id);
-          });
+          const postText =
+            await genPopupPlayerActionText(
+              view,
+              event,
+              choice,
+              "public"
+            );
 
-          let postText = "";
-          try {
-            postText = String(
-              await genPopupPlayerActionText(
-                view,
-                event,
-                choice,
-                "public"
-              ) || ""
-            ).trim();
-          } catch (textErr) {
-            console.warn("Popup public text generation failed:", textErr);
-          }
           if (!postText) {
-            postText = worldLanguage(view, view.meId) === "en"
-              ? String(choice.label || "I chose not to ignore this.").trim()
-              : String(choice.label || "Nem hagyom figyelmen kívül ezt.").trim();
+            throw new Error(
+              tt(
+                "Nem sikerült létrehozni a nyilvános reakciót.",
+                "Couldn't create the public response."
+              )
+            );
           }
 
           const postId =
@@ -68340,6 +55556,15 @@ const signOut = useCallback(async () => {
             uid();
 
           update((n) => {
+            const ok =
+              resolvePopupEvent(
+                n,
+                event.id,
+                choice.id
+              );
+
+            if (!ok) return;
+
             const p =
               appendPopupPublicPost(
                 n,
@@ -68378,11 +55603,13 @@ const signOut = useCallback(async () => {
             at:now(),
           });
 
-          requestTriggeredFeedBurst(
-            "popup-choice",
-            event.id,
-            { popupEventId:event.id, choiceId:choice.id, postId },
-            3
+          requestSimulationAction(
+            mkAction(
+              "world-full",
+              `popup-followup:${event.id}:${choice.id}`,
+              { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id, postId },
+              "event"
+            )
           );
 
           return true;
@@ -68402,11 +55629,13 @@ const signOut = useCallback(async () => {
           )
         );
 
-        requestTriggeredFeedBurst(
-          "popup-choice",
-          event.id,
-          { popupEventId:event.id, choiceId:choice.id },
-          3
+        requestSimulationAction(
+          mkAction(
+            "world-full",
+            `popup-followup:${event.id}:${choice.id}`,
+            { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id },
+            "event"
+          )
         );
 
         return true;
@@ -68436,7 +55665,6 @@ const signOut = useCallback(async () => {
       update,
       tt,
       requestSimulationAction,
-      requestTriggeredFeedBurst,
     ]
   );
 
@@ -68484,28 +55712,29 @@ const signOut = useCallback(async () => {
           return false;
         }
 
-        let resolved = false;
         update((n) => {
-          resolved = resolvePopupCustomResponse(n, event.id, text, raw) === true;
+          const ok = resolvePopupCustomResponse(n, event.id, text, raw) === true;
+          if (ok) {
+            simEnqueue(
+              n,
+              mkAction(
+                "world-full",
+                `popup-custom-followup:${event.id}`,
+                { trigger:"popup-custom-response", popupEventId:event.id },
+                "event"
+              )
+            );
+          }
         });
 
-        if (resolved) {
-          requestTriggeredFeedBurst(
-            "popup-custom-response",
-            event.id,
-            { popupEventId:event.id, choiceId:"custom" },
-            3
-          );
-        }
-
-        return resolved;
+            return true;
       } catch (e) {
         console.error("Popup custom response failed:", e);
         setErr((e && e.message) || tt("A saját reakció következményeit most nem sikerült feldolgozni.", "Couldn't process the consequences of your custom response."));
         return false;
       }
     },
-    [update, tt, requestTriggeredFeedBurst]
+    [update, tt]
   );
 
   /*
@@ -68666,8 +55895,7 @@ const signOut = useCallback(async () => {
         try {
           localResult =
             await saveWorldMerged(
-              snap,
-              true
+              snap
             );
         } catch (e) {
           localResult = null;
@@ -68726,10 +55954,8 @@ const signOut = useCallback(async () => {
               );
 
             if (
-              acceptedWorldFromServerSave(
-                snap,
-                saved
-              )
+              saved &&
+              saved.world
             ) {
               serverResult =
                 saved;
@@ -68817,7 +56043,11 @@ const signOut = useCallback(async () => {
                   snapSyncRev
                 ) {
                   const next =
-                    cloneWorldState(current);
+                    JSON.parse(
+                      JSON.stringify(
+                        current
+                      )
+                    );
 
                   next.syncRev =
                     conflictSyncRev;
@@ -68852,7 +56082,11 @@ const signOut = useCallback(async () => {
                 }
 
                 const next =
-                  cloneWorldState(current);
+                  JSON.parse(
+                    JSON.stringify(
+                      current
+                    )
+                  );
 
                 next.syncRev =
                   conflictSyncRev;
@@ -68934,16 +56168,9 @@ const signOut = useCallback(async () => {
         /*
          * 3. Sikeres szerver save.
          */
-        const acceptedSnapshot =
-          acceptedWorldFromServerSave(
-            snap,
-            serverResult
-          );
-
         const savedWorld =
           migrate(
-            acceptedSnapshot ||
-            snap
+            serverResult.world
           );
 
         const savedSyncRev =
@@ -68983,7 +56210,11 @@ const signOut = useCallback(async () => {
               ) === snapSyncRev
             ) {
               const next =
-                cloneWorldState(current);
+                JSON.parse(
+                  JSON.stringify(
+                    current
+                  )
+                );
 
               next.syncRev =
                 savedSyncRev;
@@ -69060,6 +56291,10 @@ const signOut = useCallback(async () => {
 
   const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
+  const priorityPlayerReactionQueued =
+    isPriorityPlayerSocialReaction(
+      queued
+    );
 
   /*
    * RECOVERY v99.2:
@@ -69130,19 +56365,16 @@ const signOut = useCallback(async () => {
    */
   if (
     !manualQueued &&
-    (
-      AI.interactivePending > 0 ||
-      AI.directDmPending > 0
-    )
+    AI.interactivePending > 0
   ) {
     return;
   }
 
-  /* Provider backoff is handled inside the AI queue. Never block the simulation
-   * loop or show a user-facing cooldown just because the provider throttled. */
+  if (!manualQueued && cooldownLeft() > 0) return;
 
   if (
     !manualQueued &&
+    !priorityPlayerReactionQueued &&
     view2.sim &&
     Number(view2.sim.lastAttemptAt || 0) > 0 &&
     now() - Number(view2.sim.lastAttemptAt || 0) < LIVE_WORLD_MIN_ACTION_GAP_MS
@@ -69173,18 +56405,6 @@ const signOut = useCallback(async () => {
 
       if (!action) {
         /*
-         * v99.9 LOCAL FEED SAFETY NET
-         *
-         * Try the provider-independent heartbeat before the generative
-         * scheduler. If it creates a post, this beat is complete. This makes
-         * autonomous posting resilient to provider busy/cooldown/empty-output
-         * states while preserving the normal AI scheduler for richer posts.
-         */
-        if (runAutonomousFeedHeartbeat(view2, update)) {
-          return;
-        }
-
-        /*
          * Live world hard-on: régi mentett state sem állíthatja le.
          */
         if (
@@ -69202,6 +56422,18 @@ const signOut = useCallback(async () => {
           );
       }
       if (!action) return;
+
+      if (
+        isPriorityPlayerSocialReaction(
+          action
+        )
+      ) {
+        console.info(
+          "[social-react] priority",
+          action.type,
+          action.key || ""
+        );
+      }
 
       if (
         action.type === "world" ||
@@ -69283,6 +56515,13 @@ const signOut = useCallback(async () => {
         result = await runSimulationAction(viewRef.current, update, action, addImage);
         ok = Boolean(result);
       } catch (e) {
+        console.warn(
+          "[ai-action-failed]",
+          action && action.type,
+          action && action.key,
+          (e && e.message) || e
+        );
+
         if (action && action.source === "manual" && alive) {
           setErr(
   "SIM: " +
@@ -69311,55 +56550,47 @@ const signOut = useCallback(async () => {
           return;
         }
 
-        const retryableTriggeredFeed = Boolean(
-          action &&
-          action.type === "world" &&
-          String(action.key || "").startsWith("triggered-feed-burst:")
-        );
-
-        const burstRetryCount = Math.max(
-          0,
-          Math.floor(
-            Number(
-              action &&
-              action.payload &&
-              action.payload.__burstRetryCount
-            ) || 0
-          )
-        );
-
         if (
           queued &&
           action &&
           queued.id === action.id
         ) {
-          if (
-            ok ||
-            !retryableTriggeredFeed ||
-            burstRetryCount >= 2
-          ) {
-            simDropQueued(n, queued.id);
-          } else {
-            /*
-             * A selected triggered-feed slot may fail because of a transient
-             * provider/network problem. Keep the SAME slot at the front for up
-             * to two retries instead of silently consuming it. This touches
-             * only triggered feed burst actions.
-             */
-            action.payload = {
-              ...(action.payload || {}),
-              __burstRetryCount: burstRetryCount + 1,
-            };
+          simDropQueued(n, queued.id);
+        }
 
-            const sim = ensureSimState(n);
-            const idx = sim.queue.findIndex(
-              (row) => row && row.id === action.id
-            );
-            if (idx > 0) {
-              const [row] = sim.queue.splice(idx, 1);
-              sim.queue.unshift(row);
+        /*
+         * RECOVERY v99.7:
+         * A player comment/reply is conversationally time-sensitive. If its
+         * first provider/JSON attempt failed, retry exactly ONCE with a new key.
+         * This is bounded and cannot create a retry storm.
+         */
+        if (
+          !ok &&
+          action &&
+          isPriorityPlayerSocialReaction(action) &&
+          Math.max(
+            0,
+            Number(
+              action.payload &&
+              action.payload._reactionRetry
+            ) || 0
+          ) < 1
+        ) {
+          simEnqueue(
+            n,
+            {
+              ...action,
+              id: uid(),
+              key:
+                String(action.key || "player-reaction") +
+                ":retry1",
+              ts: now(),
+              payload: {
+                ...(action.payload || {}),
+                _reactionRetry: 1,
+              },
             }
-          }
+          );
         }
 
         if (ok) {
@@ -69392,136 +56623,12 @@ const signOut = useCallback(async () => {
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 4000);
-    const first = setTimeout(beat, 100);
+    const i = setInterval(beat, 9000);
+    const first = setTimeout(beat, 150);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
 
   useEffect(() => { if (err) { const t = setTimeout(() => setErr(""), 9000); return () => clearTimeout(t); } }, [err]);
-
-  const openChatTab = useCallback((id) => {
-    setChatId(id);
-    setTab("chat");
-  }, []);
-
-  const openRoomsPanel = useCallback(() => {
-    setShowRooms(true);
-  }, []);
-
-  const openSceneFromChat = useCallback((nextSceneId) => {
-    setSceneId(nextSceneId);
-    setJump({ type: "scene", id: nextSceneId, at: now() });
-    setTab("scene");
-  }, []);
-
-  const mediaCtxValue = useMemo(
-    () => ({ media, addImage }),
-    [media, addImage]
-  );
-
-  const memoView = useMemo(() => {
-    if (!world || !meId) return null;
-    const player =
-      (world.players && world.players[meId]) ||
-      blankPlayer(meId, "Névtelen", "jatekos");
-    const next = { ...world, meId, player };
-    next.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
-    return next;
-  }, [world, meId, tab, sceneId]);
-
-  const memoActivePopup = useMemo(
-    () => (editLocked || !memoView ? null : currentPopupEvent(memoView)),
-    [editLocked, memoView]
-  );
-
-  const memoTabs = useMemo(
-    () => [
-      ["feed", tt("Feed", "Feed"), Home],
-      ["cast", tt("Karakterek", "Characters"), Users],
-      ["bonds", tt("Kapcsolat", "Bonds"), Network],
-      ["scene", tt("Jelenet", "Scene"), Film],
-      ["chat", tt("Üzenetek", "Messages"), MessageCircle],
-      ["world", tt("Világ", "World"), Globe2],
-    ],
-    [tt]
-  );
-
-  const memoMainContent = useMemo(() => {
-    if (!memoView) return null;
-
-    if (tab === "feed") {
-      return (
-        <Feed
-          w={memoView}
-          update={update}
-          setErr={setErr}
-          jump={jump}
-          autoOn={auto.on}
-          onOpenChat={openChatTab}
-          onOpenWorlds={openRoomsPanel}
-          onRequestWorldStep={requestWorldStep}
-          onRequestNoteReactions={requestNoteReactions}
-          onSignal={signalSimulation}
-        />
-      );
-    }
-
-    if (tab === "cast") {
-      return <Cast w={memoView} update={update} setErr={setErr} jump={jump} goChat={openChatTab} />;
-    }
-
-    if (tab === "bonds") {
-      return <Bonds w={memoView} update={update} setErr={setErr} />;
-    }
-
-    if (tab === "scene") {
-      return <Scenes w={memoView} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />;
-    }
-
-    if (tab === "chat") {
-      return <Chat w={memoView} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={openSceneFromChat} />;
-    }
-
-    if (tab === "world") {
-      return (
-        <World
-          w={memoView}
-          update={update}
-          setErr={setErr}
-          onLeave={signOut}
-          onDeleteAccount={deleteOwnAccount}
-          onRooms={openRoomsPanel}
-          auto={auto}
-          onAuto={changeAuto}
-          detail={detail}
-          onDetail={changeDetail}
-          onLang={changeLang}
-        />
-      );
-    }
-
-    return null;
-  }, [
-    memoView,
-    tab,
-    update,
-    jump,
-    auto,
-    openChatTab,
-    openRoomsPanel,
-    requestWorldStep,
-    requestNoteReactions,
-    signalSimulation,
-    sceneId,
-    chatId,
-    openSceneFromChat,
-    signOut,
-    deleteOwnAccount,
-    changeAuto,
-    detail,
-    changeDetail,
-    changeLang,
-  ]);
 
   if (!bootReady) {
     return (
@@ -69550,12 +56657,15 @@ const signOut = useCallback(async () => {
     );
   }
 
-  const view = memoView;
-  const me = view.player;
+  const me = (world.players && world.players[meId]) || blankPlayer(meId, "Névtelen", "jatekos");
+  const view = { ...world, meId, player: me };
+  view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
   setLiveUiActiveSceneId(view.activeSceneId);
   viewRef.current = view;
-  const activePopup = memoActivePopup;
-  const TABS = memoTabs;
+  const activePopup = editLocked ? null : currentPopupEvent(view);
+
+  const TABS = [["feed", tt("Feed", "Feed"), Home], ["cast", tt("Karakterek", "Characters"), Users], ["bonds", tt("Kapcsolat", "Bonds"), Network],
+    ["scene", tt("Jelenet", "Scene"), Film], ["chat", tt("Üzenetek", "Messages"), MessageCircle], ["world", tt("Világ", "World"), Globe2]];
 
   const markRead = (id) => update((n) => {
     const list = (n.notify && n.notify[meId]) || [];
@@ -69582,7 +56692,7 @@ const signOut = useCallback(async () => {
 
   return (
     <LangCtx.Provider value={langCtxValue}>
-    <MediaCtx.Provider value={mediaCtxValue}>
+    <MediaCtx.Provider value={{ media, addImage }}>
     <div className="mv">
       <style>{CSS}</style>
       <div className="mv-wrap">
@@ -69613,7 +56723,25 @@ const signOut = useCallback(async () => {
         </div>
 
         <div className="mv-main">
-          {memoMainContent}
+          {tab === "feed" && <Feed w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
+            onOpenChat={(id) => { setChatId(id); setTab("chat"); }}
+            onOpenWorlds={() => setShowRooms(true)}
+            onRequestWorldStep={requestWorldStep}
+            onRequestNoteReactions={requestNoteReactions}
+            onSignal={signalSimulation} />}
+          {tab === "cast" && <Cast w={view} update={update} setErr={setErr} jump={jump} goChat={(id) => { setChatId(id); setTab("chat"); }} />}
+          {tab === "bonds" && <Bonds w={view} update={update} setErr={setErr} />}
+          {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />}
+          {tab === "chat" && <Chat w={view} update={update} setErr={setErr} openId={chatId} setOpenId={setChatId} jump={jump} onOpenScene={(nextSceneId) => { setSceneId(nextSceneId); setJump({ type: "scene", id: nextSceneId, at: now() }); setTab("scene"); }} />}
+          {tab === "world" && <World
+  w={view}
+  update={update}
+  setErr={setErr}
+ 
+  onLeave={signOut}
+  onDeleteAccount={deleteOwnAccount}
+            onRooms={() => setShowRooms(true)} auto={auto} onAuto={changeAuto}
+            detail={detail} onDetail={changeDetail} onLang={changeLang} />}
         </div>
       </div>
 
