@@ -22376,7 +22376,7 @@ function worldContext(w, ids, deep, observerId, contextOptions = {}) {
   }
 
   const notes = notesForAI(w);
-  const knownTimeline = observerId
+  const knownTimeline = observerId && selfMem
     ? mergeKnowledgeItems([], (selfMem.witnessedEvents || []).concat(selfMem.knownFacts || []), "timeline", 10)
         .slice(-4).map(memoryToLine)
     : [];
