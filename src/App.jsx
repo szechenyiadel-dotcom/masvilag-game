@@ -7035,7 +7035,13 @@ function naturalCommentReplyTargets(w, post, comment) {
       Boolean(postBond) ||
       crossSideReason ||
       juice.juicy;
-    if (hasRealReason && base >= 46) push(observer.id, "bystander", base);
+    if (hasRealReason && base >= 46) {
+      push(
+        observer.id,
+        crossSideReason ? "defend-attack" : "bystander",
+        base + (crossSideReason ? 18 : 0)
+      );
+    }
   });
 
   return candidates.map((row) => {
@@ -7085,6 +7091,9 @@ function commentWarrantsAiReply(w, post, comment, targetId) {
 
   if (row.reason.includes("mention") || row.reason.includes("parent")) return row.score >= Math.max(38, 48 + Math.round(dramaShift * 0.35));
   if (row.reason.includes("post-author")) return row.score >= Math.max(44, 58 + Math.round(dramaShift * 0.55));
+  if (row.reason.includes("defend-attack")) {
+    return row.score >= Math.max(38, 48 + dramaShift + heatShift);
+  }
   if (row.reason.includes("bystander")) {
     const base = juice.juicy ? 56 : 66;
     return row.score >= Math.max(42, base + dramaShift + heatShift);
@@ -7181,6 +7190,107 @@ function enqueueNaturalThreadReply(w, postId, preferredCommentIds = []) {
 }
 
 
+
+/* SOCIAL THREAD WAVE — several relationship-grounded AI↔AI replies may
+ * start after a top-level comment batch. This is deliberately NOT all-to-all:
+ * the network chooses the strongest direct/defense/rivalry reasons, then the
+ * existing reply engine can continue those branches naturally. */
+function enqueueNaturalThreadReplyWave(w, postId, preferredCommentIds = [], maxReplies = 4) {
+  if (!w || !postId) return 0;
+  const post = (w.posts || []).find((p) => p && p.id === postId);
+  if (!post) return 0;
+
+  const preferred = new Set((preferredCommentIds || []).filter(Boolean));
+  const allComments = safePostComments(post)
+    .filter((c) => c && c.id && c.authorId && !isHuman(w, c.authorId))
+    .sort((a, b) => {
+      const ap = preferred.has(a.id) ? 1 : 0;
+      const bp = preferred.has(b.id) ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      return (Number(b.ts) || 0) - (Number(a.ts) || 0);
+    });
+
+  const pendingPairs = new Set(
+    ((w.sim && Array.isArray(w.sim.queue)) ? w.sim.queue : [])
+      .filter((action) => action && action.type === "reply" && action.payload)
+      .map((action) => `${String(action.payload.commentId || "")}>${String(action.payload.targetId || "")}`)
+  );
+
+  const rows = [];
+  allComments.forEach((comment) => {
+    naturalCommentReplyTargets(w, post, comment).forEach((target) => {
+      if (!target || !target.id) return;
+      const pairKey = `${comment.id}>${target.id}`;
+      if (pendingPairs.has(pairKey)) return;
+      if (!commentWarrantsAiReply(w, post, comment, target.id)) return;
+      rows.push({
+        comment,
+        targetId: target.id,
+        reason: target.reason || "natural-thread",
+        score: Number(target.score) || 0,
+        pairKey,
+      });
+    });
+  });
+
+  if (!rows.length) return 0;
+
+  rows.sort((a, b) => {
+    const ad = String(a.reason).includes("defend-attack") ? 1 : 0;
+    const bd = String(b.reason).includes("defend-attack") ? 1 : 0;
+    if (ad !== bd) return bd - ad;
+    return b.score - a.score;
+  });
+
+  const climate = socialCommentClimateSnapshot(w, post);
+  const desired = Math.max(
+    1,
+    Math.min(
+      Math.max(1, Math.round(Number(maxReplies) || 4)),
+      climate.dramaLevel === "chaotic" ? 6 : climate.dramaLevel === "high" ? 5 : climate.dramaLevel === "low" ? 2 : 4
+    )
+  );
+
+  const usedResponders = new Set();
+  const usedPairs = new Set();
+  let queued = 0;
+
+  for (const row of rows) {
+    if (queued >= desired) break;
+    if (usedPairs.has(row.pairKey)) continue;
+    /* Spread the first wave across multiple voices instead of letting one very
+       dramatic character answer every comment at once. Later chain replies can
+       naturally bring that character back in. */
+    if (usedResponders.has(row.targetId) && queued < Math.max(1, desired - 1)) continue;
+
+    const ok = simEnqueue(
+      w,
+      mkAction(
+        "reply",
+        `thread-wave:${post.id}:${row.comment.id}:${row.targetId}`,
+        {
+          postId: post.id,
+          commentId: row.comment.id,
+          rootId: row.comment.id,
+          targetId: row.targetId,
+          trigger: String(row.reason).includes("defend-attack")
+            ? "defend-attack-thread"
+            : "natural-thread-wave",
+          threadReason: row.reason,
+        },
+        "event"
+      )
+    );
+
+    if (!ok) continue;
+    pendingPairs.add(row.pairKey);
+    usedPairs.add(row.pairKey);
+    usedResponders.add(row.targetId);
+    queued += 1;
+  }
+
+  return queued;
+}
 
 function visualCrushThreadConflictCandidate(w, postId, preferredCommentIds = []) {
   const post = (w.posts || []).find((p) => p && p.id === postId);
@@ -13249,6 +13359,14 @@ function guaranteedPostCommentTarget(w, post) {
   const available = availableAiCommenterCountForPost(w, post);
   if (!available) return 0;
 
+  /* FULL SOCIAL COMMENT COVERAGE:
+   * New posts are not a lottery. Every AI character except the post author gets
+   * one top-level comment slot. We keep the old dynamic target only for saved
+   * historical posts so an upgrade cannot create a huge retroactive backlog. */
+  if (post.fullCommentCoverageV1 === true) {
+    return available;
+  }
+
   const visual = visualPostReactionProfile(w, post);
   const climate = socialCommentClimateSnapshot(w, post);
   const dramaDelta =
@@ -13298,17 +13416,25 @@ function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
   const coverage = postCommentCoverageState(w, post);
   if (coverage.complete || coverage.missing <= 0) return null;
 
+  const fullCoverage = post.fullCommentCoverageV1 === true;
+  const batchMissing = fullCoverage
+    ? Math.max(1, Math.min(8, coverage.missing))
+    : coverage.missing;
+
   return mkAction(
     "comments",
     `comment-coverage:${post.id}:${coverage.current}:${coverage.target}`,
     {
       postId: post.id,
       trigger: "guaranteed-coverage",
-      minComments: coverage.missing,
-      maxComments: Math.max(coverage.missing, Math.min(20, coverage.missing + 4)),
+      minComments: batchMissing,
+      maxComments: fullCoverage
+        ? batchMissing
+        : Math.max(coverage.missing, Math.min(20, coverage.missing + 4)),
       allowThreadFollowup: true,
       coverageTarget: coverage.target,
       coverageSource: source,
+      everyAiMustComment: fullCoverage,
     },
     "coverage"
   );
@@ -33057,11 +33183,18 @@ HARD CAPSULE BOUNDARY:
 }
 
 async function genComments(w, post, options = {}) {
-  const cast = fairCommentCast(
+  const fullCoverage = Boolean(
+    post && post.fullCommentCoverageV1 === true
+  );
+  const alreadyTopLevel = topLevelAiCommenterIds(w, post);
+  const baseCast = fairCommentCast(
     w,
     post.authorId,
     post
   );
+  const cast = fullCoverage
+    ? baseCast.filter((c) => c && !alreadyTopLevel.has(c.id))
+    : baseCast;
 
   const requestedMinComments = Math.max(
     0,
@@ -33310,8 +33443,9 @@ KOMMENT SZABÁLYOK:
 ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD GROUNDED MINIMUM:
 - Ha legalább ${requestedMinComments} jogosult karakter van a castban, adj legalább ${requestedMinComments}, legfeljebb ${requestedMaxComments} KÜLÖNBÖZŐ AI-karaktertől valódi top-level kommentet.
 - A minimum NEM jogosít fel nonszenszre. Ha egy első ötlet nem illik a poszthoz, NE hallgass el automatikusan: keress ugyanennek a karakternek egy egyszerűbb, ténylegesen post-grounded reakciót (válasz a kérdésre, releváns visszakérdezés, konkrét poén, rövid vélemény, részvétel/elutasítás, stb.).
-- LIKE/IGNORE továbbra is létezhet a cast többi szereplőjénél, de a kért minimumot valódi, értelmes kommentek töltsék ki.
+${fullCoverage ? `- FULL COMMENT COVERAGE: LIKE/IGNORE is not an alternative for the listed batch. If SELF has little personal stake, write a brief neutral, curious, dry or low-key reaction that still makes sense under this exact post.` : `- LIKE/IGNORE továbbra is létezhet a cast többi szereplőjénél, de a kért minimumot valódi, értelmes kommentek töltsék ki.`}
 - Elsősorban TOP-LEVEL kommenteket adj; a külön reply-engine utána továbbviszi a threadet.
+${fullCoverage ? `- FULL COMMENT COVERAGE — HARD RULE: EVERY character listed in this batch MUST output exactly one top-level COMMENT. Do NOT choose LIKE or IGNORE for these listed characters; every bot gets one visible comment slot under this post. Relationship/personality changes the CONTENT and tone, not whether the slot exists.` : ""}
 - AI-karakterek EGYMÁS posztjai alatt is ugyanilyen aktívan reagáljanak. A játékos posztja nem kap különleges komment-prioritást.
 ` : ""}
 
@@ -33319,10 +33453,10 @@ ${requestedMinComments > 0 ? `AUTOMATIKUS KOMMENTHULLÁM — HARD GROUNDED MINIM
 - Szöveges átlagposztnál gyakran 4-8 valódi karakter kommentel; egy kifejezetten csendes/személyes szövegposztnál is reális 2-4; egy drámai/felkapott szövegposztnál 6-10.
 - KÉPES POSZTNÁL a kép ténylegesen növeli a reakciósűrűséget: normál fotónál kb. 6-10, erős selfie/outfit/appearance fókusznál 8-12, ismert felnőtt vizuálisan feltűnőbb beachwear/bikini/thirst-trap jellegű képnél kb. 10-14 természetes komment is reális, HA van ennyi kapcsolat/releváns szereplő.
 - A több komment NEM jelent több generikus bókot: barát hype-olhat, ellenség szurkálhat, crush olvadozhat vagy féltékenykedhet, rivális provokálhat, más poénkodhat, kérdezhet, belsős utalást tehet vagy egy másik kommentre reagálhat.
-- Minden jelölt külön döntsön: KOMMENT / LIKE / IGNORE. Az IGNORE továbbra is érvényes, de ha egy közeli barát, crush, rivális, aktív követő vagy történetileg erősen érintett karakternek VAN konkrét mondanivalója a posztról, ne váltsd automatikusan puszta like-ra csak azért, hogy kevesebb output legyen.
+${fullCoverage ? `- FULL COMMENT COVERAGE: every listed candidate's decision is COMMENT in this batch. Still decide the reactionAct separately so the comments do not become identical.` : `- Minden jelölt külön döntsön: KOMMENT / LIKE / IGNORE. Az IGNORE továbbra is érvényes, de ha egy közeli barát, crush, rivális, aktív követő vagy történetileg erősen érintett karakternek VAN konkrét mondanivalója a posztról, ne váltsd automatikusan puszta like-ra csak azért, hogy kevesebb output legyen.`}
 - A plusz kommenteket lehetőleg KÜLÖNBÖZŐ karakterek írják. Ugyanaz a szereplő ne írjon újabb top-level kommentet ugyanarra a posztra csak a darabszám növeléséért; a további reakciója inkább természetes reply legyen.
 - Egy generálási körben ugyanaz a karakter legfeljebb EGY új kommentet írjon. Ne töltsd fel a csomagot ugyanannak az embernek több hasonló reakciójával.
-- Csak olyan szereplő kommenteljen, akinek természetes oka van rá. Ha nincs konkrét mondanivalója, inkább like vagy semmi.
+${fullCoverage ? `- Every listed bot has a comment slot. When the relationship/topic is low-stakes, keep the comment correspondingly low-stakes instead of inventing drama: a short opinion, acknowledgment, question, dry observation or casual reaction is enough.` : `- Csak olyan szereplő kommenteljen, akinek természetes oka van rá. Ha nincs konkrét mondanivalója, inkább like vagy semmi.`}
 - Minden komment előtt nézd meg az adott karakter fenti KORÁBBI FEED-KOMMENTJEIT. A feed-komment memória fontosabb ismétlésvédelmi forrás, mint az, hogy közben DM-ben vagy RP-ben mást mondott.
 - Ezek VALÓDI közösségi médiás kommentek, nem roleplay-jelenetek és nem mini novellák.
 - Úgy írjanak, mintha telefonról, gyorsan reagálnának egy Instagram/TikTok/X jellegű posztra.
@@ -33456,9 +33590,9 @@ NYELVTAN ÉS NÉZŐPONT:
 
 LIKE:
 
-- Aki nem kommentelne, de természetesen lájkolná a posztot, bekerülhet a "likes" listába.
+${fullCoverage ? `- FULL COMMENT COVERAGE MODE: the listed cast MUST COMMENT. A like may exist in addition only if separately natural, but LIKE/IGNORE may not replace the required top-level comment.` : `- Aki nem kommentelne, de természetesen lájkolná a posztot, bekerülhet a "likes" listába.
 - Ne lájkolja automatikusan mindenki.
-- Egy lájk önmagában is lehet reakció; ne generálj kommentet csak azért, mert minden szereplőnek csinálnia kell valamit.
+- Egy lájk önmagában is lehet reakció; ne generálj kommentet csak azért, mert minden szereplőnek csinálnia kell valamit.`}
 
 LEGFONTOSABB:
 A kommentnek első pillantásra úgy kell kinéznie, mint amit egy valódi ember odadobott egy social media poszt alá. Ha egy komment inkább hangzik dialógusnak egy regényből, pszichológiai elemzésnek vagy AI által megírt mini beszédnek, ÍRD ÚJRA rövidebb, spontánabb és internetesebb formában.
@@ -36350,25 +36484,35 @@ function fairCommentCast(w, targetId, post = null) {
     return a.tie - b.tie;
   });
 
-  const eligible =
-    chars.filter((x) => x.eligible);
+  const forceEveryAiComment = Boolean(
+    post && post.fullCommentCoverageV1 === true
+  );
 
-  /*
-   * Keep enough candidates for an active world, but do not pretend every
-   * unrelated NPC saw every post. The AI still decides comment / like / ignore.
-   */
-  const pool =
-    eligible.length >= 5
-      ? eligible
-      : chars.slice(
-          0,
-          Math.min(8, chars.length)
-        );
+  const eligible = forceEveryAiComment
+    ? chars
+    : chars.filter((x) => x.eligible);
+
+  /* Full-coverage posts eventually include EVERY bot. Relevance still decides
+   * who appears in the first batch; later coverage rounds pick the fresh voices.
+   * The per-request batch stays bounded so character voice does not get lost in
+   * an enormous prompt. */
+  const pool = forceEveryAiComment
+    ? chars
+    : (
+        eligible.length >= 5
+          ? eligible
+          : chars.slice(
+              0,
+              Math.min(8, chars.length)
+            )
+      );
 
   const visual = visualPostReactionProfile(w, post);
-  const castLimit = visual.hasImage
-    ? (visual.appearanceForward ? 22 : 20)
-    : 19;
+  const castLimit = forceEveryAiComment
+    ? 8
+    : (visual.hasImage
+        ? (visual.appearanceForward ? 22 : 20)
+        : 19);
 
   /*
    * Prefer NEW voices on a post before recycling somebody who has already left
@@ -39282,7 +39426,8 @@ HARD ARCHITECTURE RULES:
 - FIKTÍV SOCIAL NETWORK HARD RULE: úgy viselkedj, mintha ez a konkrét univerzum saját Instagram/X/Threads-szerű hálózata lenne. ${author.name} nem chatbot-választ ad, hanem a saját életét éli online, önállóan posztol, és csak olyan friss történést használhat, amit a fenti LIVE SOCIAL NETWORK CONTEXT szerint reálisan ismer.
 - A follow/kapcsolat/frakció/barátság/rivalizálás a figyelmet és a témaválasztást is alakítja. Nyilvános esemény sem válik automatikusan minden karakter fejében ismertté; private/group/limited információ soha ne szivárogjon át jogosulatlanul.
 - AUTONÓM STATUS UPDATE: a témát ${author.name} SAJÁT personality/speech + aktuális mood/intent/open loops + számára ténylegesen ismert friss világ-események + saját kapcsolatai/tettei együtt adják. Ne várj a játékos utasítására, és ne gyárts rendszer-fillert.
-- Ha egy friss, számára ismert történés vagy más karakter tényleges nyilvános tette érdemben érinti, természetesen reagálhat rá saját posztban; ha nem érinti, maradjon a saját életénél.
+- PLAYER-POST ROUTING — HARD RULE: a JÁTÉKOS friss social posztjára adott közvetlen válasz, vélemény, kérdés, beszólás, támogatás, flört vagy vita a KOMMENTRENDSZER feladata. A játékos posztját NE használd külön autonóm status update/public_post anchor alapjaként és ne subtweeteld pusztán azért, mert most jelent meg a feedben.
+- Más AI/media nyilvános tetteire vagy valódi világ-eseményre ${author.name} továbbra is reagálhat saját posztban, ha az ténylegesen az ő saját social megszólalását indokolja; a játékos saját posztjára viszont kommentben reagál.
 - Fotós posztnál ugyanaz az autonóm döntés érvényes: csak olyan, az adott karakterhez és aktuális helyzethez illő saját vizuált válassz, amit a meglévő képrendszer enged. A kép ne írja felül a caption karakterhangját.
 - ${author.name} saját gördülő 24 órás célja 18–30 poszt aktivitásától függően, DE EZ CSAK AKTIVITÁSI CÉL/PRIORITÁS, NEM PLAFON; 48 a valódi biztonsági kemény maximum.
 - Normál körben a scheduler csak a saját cooldown lejárta után választ ki. Triggerelt aftermath burstben több KÜLÖNBÖZŐ AI gyorsabban is sorra kerülhet, de ugyanaz az AI egy burston belül nem ismétlődhet.
@@ -39489,6 +39634,21 @@ function applyWorldStep(n, out, postingOptions = {}) {
        without the v1 marker keep their existing behavior. */
     if (hasStructuredSocialContract && !socialContractMeta) return;
 
+    /* PLAYER POST -> COMMENT ROUTING HARD GUARD:
+     * Even outside an explicit reaction burst, a focused autonomous post may
+     * not use the human player's public post as its hidden public_post anchor.
+     * That social reaction belongs under the source post as a comment/thread. */
+    if (
+      socialContractMeta &&
+      socialContractMeta.anchorType === "public_post" &&
+      socialContractMeta.anchorId
+    ) {
+      const anchoredPost = (n.posts || []).find(
+        (row) => row && String(row.id) === String(socialContractMeta.anchorId)
+      );
+      if (anchoredPost && anchoredPost.authorId === n.meId) return;
+    }
+
     /*
      * The local emergency fallback is built exclusively from the selected
      * author's own sheet. During a triggered burst it must not be rejected by
@@ -39657,6 +39817,9 @@ function applyWorldStep(n, out, postingOptions = {}) {
       sourceAlbumItemId: pic ? String(pic.id || "") : "",
       imageAnalyzedAt: pic ? Number(pic.analyzedAt || 0) : 0,
       comments: made,
+      /* Every-AI comment coverage applies to posts created by this build.
+       * Older saved history is intentionally not backfilled all at once. */
+      fullCommentCoverageV1: true,
       language: worldLanguage(n, n.meId),
       triggerBurstKey: String(postingOptions && postingOptions.burstKey || ""),
       triggerSource: String(postingOptions && postingOptions.trigger || ""),
@@ -40343,6 +40506,9 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
           ? now()
           : 0,
       comments: [],
+      /* Every AI character (except the author) should eventually leave one
+       * top-level comment under every new post. */
+      fullCommentCoverageV1: true,
       language: worldLanguage(w, w.meId),
     };
 
@@ -49220,6 +49386,7 @@ function freshSimulationRuntime(at = now()) {
     lastRecoveryAttemptAt: 0,
     liveWorldStartedAt: at,
     schedulerVersion: 70,
+    queueRepairVersion: 2,
     lastError: "",
   };
 }
@@ -52208,6 +52375,7 @@ function ensureSimState(w) {
       lastRecoveryLane: "",
       lastRecoveryAttemptAt: 0,
       liveWorldStartedAt: now(),
+      queueRepairVersion: 2,
       lastError: "",
     };
   }
@@ -52252,6 +52420,26 @@ function ensureSimState(w) {
     console.info(
       "[recovery-queue] relationship auto-follow backlog repaired"
     );
+  }
+
+  /* COMMENT-ROUTING MIGRATION v2:
+   * Older builds may have persisted player-post triggered world/feed bursts.
+   * Those are now semantically wrong: a direct reaction to the player's post
+   * belongs in that post's comment thread, not as a separate AI status. */
+  if (Math.max(0, Math.floor(Number(w.sim.queueRepairVersion) || 0)) < 2) {
+    w.sim.queue = w.sim.queue.filter((action) => {
+      if (!action) return false;
+      const payloadTrigger = String(action.payload && action.payload.trigger || "");
+      const stalePlayerReactionPost =
+        action.type === "world" &&
+        (
+          payloadTrigger === "player-post" ||
+          String(action.key || "").startsWith("triggered-feed-burst:player-post:")
+        );
+      return !stalePlayerReactionPost;
+    });
+    w.sim.running = "";
+    w.sim.queueRepairVersion = 2;
   }
 
   /* v51 migration/runtime guard: a régi buildből bent maradt automatikus
@@ -52360,7 +52548,7 @@ function ensureSimState(w) {
     w.sim.schedulerVersion = 70;
   }
   if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 70;
-  if (!Number.isFinite(Number(w.sim.queueRepairVersion))) w.sim.queueRepairVersion = 1;
+  if (!Number.isFinite(Number(w.sim.queueRepairVersion))) w.sim.queueRepairVersion = 2;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -55219,6 +55407,7 @@ function publishGossipMediaStory(
     image: "",
 
     comments: [],
+    fullCommentCoverageV1: true,
 
     language:
       worldLanguage(
@@ -55290,6 +55479,7 @@ function publishGossipMediaStory(
   ].slice(-800);
 
   w.posts.unshift(post);
+  enqueueGuaranteedPostCommentCoverage(w, post.id, "gossip-post-created");
 
   const storyRow = {
     id:
@@ -56509,8 +56699,8 @@ function applyGossipReactions(n,postId,cast,out){
   (reactionOut&&Array.isArray(reactionOut.statements)?reactionOut.statements:[]).slice(0,2).forEach((item)=>{
     const who=aiVoice(n,item&&item.id);if(!who||!castSet.has(who)||!item.text)return;
     const body=cleanGeneratedUtterance(n,who,item.text,1200);if(!body)return;
-    const statement={id:uid(),authorId:who,ts:now(),likes:0,likedBy:[],text:body,imageId:"",image:"",comments:[],language:worldLanguage(n,n.meId),responseToGossipId:post.gossipStory.id||""};
-    n.posts.unshift(statement);visibleActors.add(who);
+    const statement={id:uid(),authorId:who,ts:now(),likes:0,likedBy:[],text:body,imageId:"",image:"",comments:[],fullCommentCoverageV1:true,language:worldLanguage(n,n.meId),responseToGossipId:post.gossipStory.id||""};
+    n.posts.unshift(statement);enqueueGuaranteedPostCommentCoverage(n,statement.id,"gossip-response-post-created");visibleActors.add(who);
     recordSocialEvent(n,{type:"post",refId:statement.id,ts:statement.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:42,drama:30,romance:0,embarrassment:0,source:"gossip-response",text:body,tags:["social","gossip-response","statement"],meta:{postId:statement.id,gossipPostId:post.id,storyId:post.gossipStory.id||""}});
   });
   (reactionOut&&Array.isArray(reactionOut.dms)?reactionOut.dms:[]).slice(0,3).forEach((item)=>{
@@ -56589,13 +56779,13 @@ function publishRumorEvolution(w,parentPostId,raw){
   const allowed=new Set(parent.gossipStory.mentionedIds||[]);
   const mentionedIds=[...new Set((Array.isArray(raw.mentionedIds)?raw.mentionedIds:[]).map(String).filter((id)=>allowed.has(id)))];
   const distortionLevel=Math.max(0,Math.min(100,Math.round(Number(raw.distortionLevel)||30)));
-  const post={id:uid(),authorId:media.id,ts:now(),likes:0,likedBy:[],text:body.slice(0,5000),imageId:"",image:"",comments:[],language:worldLanguage(w,w.meId),gossipStory:{
+  const post={id:uid(),authorId:media.id,ts:now(),likes:0,likedBy:[],text:body.slice(0,5000),imageId:"",image:"",comments:[],fullCommentCoverageV1:true,language:worldLanguage(w,w.meId),gossipStory:{
     id:"gs_"+uid(),mediaMode:w.gossipSettings.mediaMode,format:["analysis","short","long"].includes(raw.format)?raw.format:"analysis",
     headline:cut(String(raw.headline||"").replace(/\s+/g," ").trim(),180),factLevel:"speculation",eventIds:parent.gossipStory.eventIds||[],
     mentionedIds:mentionedIds.length?mentionedIds:(parent.gossipStory.mentionedIds||[]),roleplayBased:Boolean(parent.gossipStory.roleplayBased),
     parentStoryId:parent.gossipStory.id||"",rumorEvolution:true,distortionLevel,reactedBy:[],reactionRounds:0,rumorEvolvedAt:0,
   }};
-  parent.gossipStory.rumorEvolvedAt=now();w.posts.unshift(post);
+  parent.gossipStory.rumorEvolvedAt=now();w.posts.unshift(post);enqueueGuaranteedPostCommentCoverage(w,post.id,"rumor-evolution-post-created");
   if(!Array.isArray(w.rumors))w.rumors=[];
   w.rumors.unshift({id:"rum_"+uid(),storyId:post.gossipStory.id,parentStoryId:parent.gossipStory.id||"",postId:post.id,text:post.text,factLevel:"speculation",distortionLevel,ts:post.ts,mentionedIds:post.gossipStory.mentionedIds});w.rumors=w.rumors.slice(0,160);
   recordSocialEvent(w,{type:"rumor-evolution",refId:post.gossipStory.id,ts:post.ts,actorId:media.id,targetIds:post.gossipStory.mentionedIds,visibility:"public",factLevel:"speculation",importance:52,drama:30+distortionLevel*0.35,romance:0,embarrassment:0,source:"gossip-media",text:post.gossipStory.headline?`${post.gossipStory.headline} — ${cut(post.text,220)}`:cut(post.text,260),tags:["social","gossip-media","rumor","speculation","rumor-evolution"],meta:{postId:post.id,storyId:post.gossipStory.id,parentStoryId:parent.gossipStory.id||"",distortionLevel}});
@@ -57821,6 +58011,7 @@ function appendPopupPublicPost(
     imageId:"",
     image:"",
     comments:[],
+    fullCommentCoverageV1:true,
     language:
       worldLanguage(
         w,
@@ -57832,6 +58023,7 @@ function appendPopupPublicPost(
   };
 
   w.posts.unshift(post);
+  enqueueGuaranteedPostCommentCoverage(w, post.id, "popup-public-post-created");
 
   recordSocialEvent(
     w,
@@ -62235,8 +62427,9 @@ function simEnqueue(w, action) {
     /* Direct reactions to a fresh player post are latency-sensitive. They are
        deliberately front-queued just like a manual action, but they remain
        background actions for error/UI purposes. signalSimulation enqueues the
-       player-post bundle in reverse priority so the final order is:
-       comments -> relevant DM -> reaction feed burst. */
+       player-post bundle in reverse priority so comments stay ahead of any
+       optional grounded private DM. Direct reaction feed posts are no longer
+       part of the player-post lane. */
     sim.queue.unshift(action);
     sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
   } else if (action.source === "coverage") {
@@ -67073,19 +67266,17 @@ async function runSimulationAction(view, update, action, addImage) {
 
       if (
         refreshedPost &&
-        isGuaranteedCoverage &&
-        !isImmediatePlayerPostReaction
+        isGuaranteedCoverage
       ) {
-        /*
-         * A fresh player post already has DM/feed aftermath waiting directly
-         * behind this first-wave comment action. Do not front-insert another
-         * coverage round here and starve those reactions. The normal coverage
-         * planner may fill any remaining comment target on a later scheduler beat.
-         */
+        /* Every-AI coverage continues in bounded batches until every eligible
+         * bot has one top-level comment. This now includes the player's immediate
+         * first wave because there is no separate player-post feed burst to protect. */
         enqueueGuaranteedPostCommentCoverage(
           n,
           refreshedPost.id,
-          "coverage-followup"
+          isImmediatePlayerPostReaction
+            ? "player-post-all-bots-followup"
+            : "coverage-followup"
         );
       }
 
@@ -67093,13 +67284,23 @@ async function runSimulationAction(view, update, action, addImage) {
         newCommentIds.length &&
         (!action.payload || action.payload.allowThreadFollowup !== false)
       ) {
+        /* A real comment section is multi-person: seed several relationship-
+         * grounded branches. Friends may defend, rivals may challenge/pile on,
+         * and neutral characters only enter when the public thread gives them a
+         * real reason. The normal reply engine keeps each branch coherent. */
         const queuedVisualFriction = enqueueVisualCrushThreadFriction(
           n,
           post.id,
           newCommentIds
         );
+        const waveCount = enqueueNaturalThreadReplyWave(
+          n,
+          post.id,
+          newCommentIds,
+          Math.min(6, Math.max(2, Math.ceil(newCommentIds.length / 2)))
+        );
 
-        if (!queuedVisualFriction) {
+        if (!queuedVisualFriction && !waveCount) {
           enqueueNaturalThreadReply(n, post.id, newCommentIds);
         }
       }
@@ -68309,6 +68510,16 @@ if (targetNote) {
   let out = null;
 
   if (action.type === "world") {
+    /* Direct reactions to a fresh PLAYER POST belong in comments, never in a
+       separate AI status. This also neutralizes a stale queued burst that may
+       arrive from another device running an older build. */
+    if (
+      action.payload &&
+      action.payload.trigger === "player-post"
+    ) {
+      return null;
+    }
+
     /*
      * BURST EXECUTION RELIABILITY FIX:
      * A provider failure used to escape runSimulationAction() before the local
@@ -70486,9 +70697,9 @@ const signOut = useCallback(async () => {
        *
        * Fresh visible social feedback must not wait behind an optional private
        * DM. Enqueue in reverse priority because these actions are front-inserted:
-       * FINAL queue order becomes
-       *   1) first-wave comments, 2) distinct-author reaction posts,
-       *   3) one relevant DM when a real post-grounded reason exists.
+       * FINAL public reaction is comment-first. The player's fresh post does
+       * NOT create separate reaction/subtweet feed posts; remaining commenters
+       * are filled by coverage waves. An optional grounded DM may still happen.
        * Nothing outside the player-post reaction lane is changed.
        */
       let queuedAny = false;
@@ -70518,18 +70729,22 @@ const signOut = useCallback(async () => {
         ) || queuedAny;
       }
 
-      /* Middle priority: visible feed aftermath from distinct AI authors. */
-      queuedAny = requestTriggeredFeedBurst(
-        "player-post",
-        event.postId,
-        { postId: event.postId },
-        4
-      ) || queuedAny;
+      /* PUBLIC REACTION ROUTING:
+       * A player's post is answered UNDER that post. Do not manufacture separate
+       * AI feed posts whose real purpose is to answer/subtweet the player's fresh
+       * status. Independent autonomous AI posts continue through their normal
+       * world cadence; only this direct player-post reaction burst is removed. */
 
-      /* Highest priority: the player's own post must visibly receive a small,
-         focused comment wave before any other reaction generation. */
-      const immediateCommentMin = Math.max(1, Math.min(3, Number(coverage.missing) || 2));
-      const immediateCommentMax = Math.max(immediateCommentMin, Math.min(5, immediateCommentMin + 2));
+      /* Highest priority: the player's own post immediately receives the first
+         comment batch. Remaining bots are filled by guaranteed coverage waves. */
+      const immediateCommentMin = Math.max(
+        1,
+        Math.min(4, Number(coverage.missing) || 2)
+      );
+      const immediateCommentMax = Math.max(
+        immediateCommentMin,
+        Math.min(5, Number(coverage.missing) || immediateCommentMin)
+      );
 
       queuedAny = requestSimulationAction(
         mkAction(
