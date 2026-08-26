@@ -33732,6 +33732,182 @@ JSON ONLY:
   }
 }
 
+
+/* PLAYER-POST COMMENT OUTPUT NORMALIZER — recovery metadata only.
+ * The provider can write a perfectly natural visible comment while missing or
+ * slightly mis-shaping hidden contract fields (basis/reactionAct/id). For an
+ * immediate HUMAN-player post reaction, repair ONLY those hidden fields before
+ * the normal hard visible-grounding validator runs. The visible comment text is
+ * never replaced with a canned/local sentence here. */
+function immediatePlayerPostLiteralBasis(post) {
+  if (!post) return "";
+
+  const sources = [
+    String(post.text || "").replace(/\s+/g, " ").trim(),
+    socialPostHasVisibleImage(post)
+      ? String(post.imageDescription || "").replace(/\s+/g, " ").trim()
+      : "",
+  ].filter(Boolean);
+
+  for (const source of sources) {
+    const words = source.split(/\s+/).filter(Boolean);
+    for (let len = Math.min(18, words.length); len >= 1; len--) {
+      const candidate = words.slice(0, len).join(" ");
+      if (socialCommentBasisMatchesExactPost(post, candidate)) return candidate;
+    }
+  }
+
+  return "";
+}
+
+function inferImmediatePlayerPostReactionAct(post, text) {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+  if (/\?$/.test(raw)) return "question";
+  if (socialPostQuestionMode(post) !== "none") return "answer";
+  if (/\b(?:sorry|rough|sucks|okay|ok\?|you good|u good|here for you|take care|hang in|kitart|j[oó]l vagy|minden ok)\b/i.test(raw)) {
+    return "concern";
+  }
+  if (/\b(?:lol|lmao|haha|funny|😂|😭|💀)\b/iu.test(raw)) return "laugh";
+  if (/\b(?:come|let['’]?s|join|with me|gyere|menj[uü]nk)\b/i.test(raw)) return "invite";
+  return "support";
+}
+
+function normalizeImmediatePlayerPostCommentOutput(w, post, out, allowedIds = []) {
+  if (!w || !post || post.authorId !== w.meId) return out;
+
+  const configuredIds = [
+    ...(Array.isArray(allowedIds) ? allowedIds : []),
+    ...(out && Array.isArray(out.__castIds) ? out.__castIds : []),
+  ]
+    .map((id) => aiVoice(w, id))
+    .filter((id, index, arr) => id && id !== post.authorId && arr.indexOf(id) === index);
+
+  const allowedSet = new Set(configuredIds);
+  const rawRows = safeAiComments(out).slice();
+
+  if (!rawRows.length && Array.isArray(out)) {
+    out.forEach((row) => {
+      if (row && typeof row === "object") rawRows.push(row);
+    });
+  }
+
+  if (!rawRows.length && out && typeof out === "object" && !Array.isArray(out)) {
+    Object.keys(out)
+      .filter((key) => /^\d+$/.test(key))
+      .sort((a, b) => Number(a) - Number(b))
+      .forEach((key) => {
+        const row = out[key];
+        if (row && typeof row === "object") rawRows.push(row);
+      });
+  }
+
+  /* Accept a couple of harmless provider schema slips in this ONE recovery
+     lane. The text still has to pass applyComments' exact-post grounding. */
+  if (!rawRows.length && out && out.comment && typeof out.comment === "object") {
+    rawRows.push(out.comment);
+  }
+  if (!rawRows.length && out && typeof out.comment === "string") {
+    rawRows.push({ text: out.comment });
+  }
+  if (!rawRows.length && out && typeof out.text === "string") {
+    rawRows.push({ text: out.text });
+  }
+
+  const literalBasis = immediatePlayerPostLiteralBasis(post);
+  if (!literalBasis) return out;
+
+  const used = new Set();
+  const normalizedRows = [];
+
+  rawRows.forEach((row) => {
+    if (!row || typeof row !== "object") return;
+
+    const visibleText = String(
+      row.text !== undefined ? row.text :
+      row.comment !== undefined ? row.comment :
+      row.message !== undefined ? row.message :
+      row.content !== undefined ? row.content : ""
+    ).replace(/\s+/g, " ").trim();
+    if (!visibleText) return;
+
+    let id = aiVoice(
+      w,
+      row.id !== undefined ? row.id :
+      row.name !== undefined ? row.name :
+      row.authorId !== undefined ? row.authorId :
+      row.commenterId !== undefined ? row.commenterId : ""
+    );
+
+    if (!id || id === post.authorId || (allowedSet.size && !allowedSet.has(id)) || used.has(id)) {
+      id = configuredIds.find((candidateId) => candidateId && !used.has(candidateId)) || "";
+    }
+    if (!id) return;
+
+    const suppliedBasis = String(row.basis || "").replace(/\s+/g, " ").trim();
+    const basis = socialCommentBasisMatchesExactPost(post, suppliedBasis)
+      ? suppliedBasis
+      : literalBasis;
+
+    let meaning = String(row.meaning || "").replace(/\s+/g, " ").trim();
+    if (!meaning) meaning = `Direct reaction to: ${basis}`;
+    if (meaning.length > 360) meaning = meaning.slice(0, 360).trim();
+
+    const reactionAct = normalizeSocialCommentReactionAct(
+      row.reactionAct !== undefined ? row.reactionAct : row.reaction_act
+    ) || inferImmediatePlayerPostReactionAct(post, visibleText);
+    if (!reactionAct) return;
+
+    used.add(id);
+    normalizedRows.push({
+      ...row,
+      id,
+      social_contract: "v1",
+      decision: "COMMENT",
+      post_id: String(post.id),
+      post_author_id: String(post.authorId),
+      reactionAct,
+      basis,
+      meaning,
+      text: visibleText,
+      reply_to: "",
+      trigger: String(row.trigger || "player-post-immediate-normalized"),
+    });
+  });
+
+  if (!normalizedRows.length) return out;
+
+  return {
+    ...(out || {}),
+    comments: normalizedRows,
+    socialDecisions: normalizedRows.map((row) => ({
+      id: row.id,
+      action: "COMMENT",
+      reason: "direct reaction to this fresh player post",
+    })),
+    __castIds: configuredIds,
+    __postMeaning: (out && out.__postMeaning) ||
+      ((post.socialMeaning && typeof post.socialMeaning === "object")
+        ? post.socialMeaning
+        : fallbackSocialPostMeaning(w, post)),
+  };
+}
+
+function cleanGeneratedImmediatePlayerPostComment(w, id, text, maxLen = 240) {
+  let t = sanitizeDegenerateGeneratedCommentText(text, maxLen);
+  if (!t) return "";
+  if (generatedCommentStillDegenerate(t)) return "";
+  if (socialGeneratedTextHasCharacterNameLoop(w, t)) return "";
+
+  t = socialEmojiFallback(w, id, t);
+  t = applySocialOwnedSpeechStyle(w, id, t);
+
+  /* Immediate player-post recovery must not lose an otherwise valid direct
+     reaction merely because the same character once used a similar tiny phrase
+     in a DM/RP. Exact-post grounding below remains mandatory. */
+  return t;
+}
+
 async function repairImmediatePlayerPostComments(w, post, minComments = 2, maxComments = 4) {
   if (!w || !post || post.authorId !== w.meId) return null;
 
@@ -33891,6 +34067,84 @@ JSON ONLY:
   normalized.__castIds = candidates.map((c) => c.id);
   normalized.__postMeaning = meaning;
   return { out: normalized, label: th.label };
+}
+
+
+/* FINAL PLAYER-POST COMMENT RECOVERY — one character, one visible sentence.
+ * This runs ONLY after both normal immediate comment passes produced zero
+ * committable rows. It asks the model for visible text only; hidden grounding
+ * metadata is then attached deterministically by the normalizer above. */
+async function generateSingleHardRecoveryPlayerPostComment(w, post) {
+  if (!w || !post || post.authorId !== w.meId) return null;
+
+  const already = topLevelAiCommenterIds(w, post);
+  const candidate = fairCommentCast(w, post.authorId, post)
+    .find((c) => c && c.id && c.id !== post.authorId && !already.has(c.id));
+  if (!candidate) return null;
+
+  const relation = relationshipBehaviorCard(w, candidate.id, post.authorId);
+  const pairCanon = exactPairCanonCard(w, candidate.id, post.authorId) || {};
+  const questionMode = socialPostQuestionMode(post);
+
+  let raw = await askWorldJSONInteractive(
+    w,
+    `Write exactly ONE short, natural social-media comment as the supplied fictional character. No narration, no actions, no metadata prose, no unrelated topic. Return JSON only.`,
+    `CHARACTER: ${candidate.name} [${candidate.id}]
+PERSONALITY: ${cut(String(candidate.personality || ""), 1200)}
+TRAITS: ${cut(String(candidate.traits || ""), 500)}
+SPEECH/VOICE: ${cut(String(candidate.speech || candidate.voice || ""), 1000)}
+DIRECT RELATIONSHIP TO POST AUTHOR:
+${cut(String(relation || ""), 1400)}
+DIRECT PAIR CANON: ${cut(JSON.stringify(pairCanon), 700)}
+
+PLAYER POST AUTHOR: ${nameOfIn(w, post.authorId)} [${post.authorId}]
+VISIBLE POST: ${JSON.stringify(String(post.text || "").slice(0, 1000))}
+${socialPostHasVisibleImage(post) && post.imageDescription ? `VISIBLE IMAGE: ${cut(String(post.imageDescription), 700)}` : ""}
+
+TASK:
+- Write ONE top-level comment that makes immediate sense under THIS exact post.
+- Usually 1-12 words; maximum 24 words.
+- ${questionMode !== "none" ? "This post is a question/invitation: actually answer it or ask a directly relevant clarification." : "React directly to the author's visible current statement/state."}
+- Personality and relationship change tone only; they cannot replace the topic.
+- No roleplay actions, no asterisks, no invented event, no third-person gossip.
+- If the post expresses distress/frustration, a check-in, blunt practical response, teasing acknowledgment, skepticism, or support can be valid depending on THIS character.
+
+JSON ONLY: {"text":"one visible comment"}`,
+    {
+      maxTokens: 180,
+      maxTries: 2,
+      maxBusyWaits: 1,
+      busyRetryCapMs: 1800,
+      timeoutMs: 10000,
+      maxSystemChars: 1200,
+      maxPromptChars: 9000,
+    }
+  );
+
+  if (typeof raw === "string") raw = { text: raw };
+  if (!raw || typeof raw !== "object") return null;
+
+  raw.__castIds = [candidate.id];
+  const normalized = normalizeImmediatePlayerPostCommentOutput(
+    w,
+    post,
+    raw,
+    [candidate.id]
+  );
+
+  /* Mark this last AI-written sentence explicitly so only the immediate
+     player-post cleaner/grounding path receives the narrow recovery treatment. */
+  if (normalized && Array.isArray(normalized.comments)) {
+    normalized.comments = normalized.comments.slice(0, 1).map((row) => ({
+      ...row,
+      trigger: "player-post-hard-recovery",
+    }));
+  }
+
+  return {
+    out: normalized,
+    label: threadOf(w, post).label,
+  };
 }
 
 function normalizePerceptionConfidence(value) {
@@ -34734,7 +34988,15 @@ function applyComments(n, postId, out, label) {
 
       if (isUncharacteristicGenericComment(n, who, c.text)) return;
 
-      let body = cleanGeneratedComment(n, who, c.text, 240);
+      const immediatePlayerPostComment =
+        isHuman(n, p.authorId) &&
+        /^player-post-(?:immediate|compact-recovery|immediate-normalized|hard-recovery)/i.test(
+          String(c && c.trigger || "")
+        );
+
+      let body = immediatePlayerPostComment
+        ? cleanGeneratedImmediatePlayerPostComment(n, who, c.text, 240)
+        : cleanGeneratedComment(n, who, c.text, 240);
       if (!body) return;
       if (socialSelfClassificationContradiction(n, who, body)) return;
 
@@ -66564,6 +66826,10 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       : quotaOut;
 
+    if (isImmediatePlayerPostReaction) {
+      out = normalizeImmediatePlayerPostCommentOutput(view, post, out);
+    }
+
     let commentsProbe = cloneWorldState(view);
     let visibleReactionCount = applyComments(commentsProbe, post.id, out, label);
 
@@ -66571,10 +66837,15 @@ async function runSimulationAction(view, update, action, addImage) {
       try {
         const repaired = await repairImmediatePlayerPostComments(view, post, minComments, maxComments);
         if (repaired && repaired.out) {
-          const repairedOut = {
-            ...repaired.out,
-            comments: safeAiComments(repaired.out).slice(0, maxComments),
-          };
+          const repairedOut = normalizeImmediatePlayerPostCommentOutput(
+            view,
+            post,
+            {
+              ...repaired.out,
+              comments: safeAiComments(repaired.out).slice(0, maxComments),
+            },
+            repaired.out.__castIds || []
+          );
           const repairedProbe = cloneWorldState(view);
           const repairedVisible = applyComments(repairedProbe, post.id, repairedOut, repaired.label || label);
           if (repairedVisible) {
@@ -66603,16 +66874,29 @@ async function runSimulationAction(view, update, action, addImage) {
           Math.max(1, Math.min(2, maxComments))
         );
         if (compact && compact.out) {
-          const compactOut = {
-            ...compact.out,
-            comments: safeAiComments(compact.out).slice(0, Math.max(1, Math.min(2, maxComments))),
-          };
+          const compactOut = normalizeImmediatePlayerPostCommentOutput(
+            view,
+            post,
+            {
+              ...compact.out,
+              comments: safeAiComments(compact.out).slice(0, Math.max(1, Math.min(2, maxComments))),
+            },
+            compact.out.__castIds || []
+          );
           const compactProbe = cloneWorldState(view);
           const compactVisible = applyComments(
             compactProbe,
             post.id,
             compactOut,
             compact.label || label
+          );
+          console.info(
+            "[player-post-comments] compact recovery result",
+            {
+              rawRows: safeAiComments(compact.out).length,
+              normalizedRows: safeAiComments(compactOut).length,
+              committed: compactVisible,
+            }
           );
           if (compactVisible) {
             out = compactOut;
@@ -66623,6 +66907,39 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       } catch (compactErr) {
         console.warn("[player-post-comments] compact recovery failed:", compactErr);
+      }
+    }
+
+    if (!visibleReactionCount && isImmediatePlayerPostReaction) {
+      try {
+        console.warn(
+          "[player-post-comments] compact recovery still produced 0 comments; using one-character hard recovery"
+        );
+        const hard = await generateSingleHardRecoveryPlayerPostComment(view, post);
+        if (hard && hard.out) {
+          const hardProbe = cloneWorldState(view);
+          const hardVisible = applyComments(
+            hardProbe,
+            post.id,
+            hard.out,
+            hard.label || label
+          );
+          console.info(
+            "[player-post-comments] hard recovery result",
+            {
+              rows: safeAiComments(hard.out).length,
+              committed: hardVisible,
+            }
+          );
+          if (hardVisible) {
+            out = hard.out;
+            label = hard.label || label;
+            commentsProbe = hardProbe;
+            visibleReactionCount = hardVisible;
+          }
+        }
+      } catch (hardErr) {
+        console.warn("[player-post-comments] hard recovery failed:", hardErr);
       }
     }
 
