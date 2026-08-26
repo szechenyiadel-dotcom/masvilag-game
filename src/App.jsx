@@ -14914,6 +14914,25 @@ function socialCommentMeaningMatchesExactPost(post, basis, meaning) {
   const meaningTokens = socialCommentGroundingContentTokens(rawMeaning);
   if (!meaningTokens.length) return false;
 
+  /* PLAYER-POST SHORT STATUS SEMANTICS:
+   * The literal BASIS has already been proven to come from this exact post.
+   * For a very short text status, a correct hidden semantic paraphrase often
+   * shares no literal vocabulary with it ("I hate my life" -> "the author
+   * is overwhelmed/upset"). Requiring token overlap here made perfectly
+   * grounded visible comments disappear at commit time. The visible comment
+   * still passes socialCommentGroundedInExactPost() below, so this relaxes
+   * ONLY the hidden meaning proof, not the actual visible grounding. */
+  const postTextWordCount = normalizeExactCommentGroundingText(post.text || "")
+    .split(/\s+/)
+    .filter(Boolean).length;
+  if (
+    !socialPostHasVisibleImage(post) &&
+    postTextWordCount > 0 &&
+    postTextWordCount <= 8
+  ) {
+    return true;
+  }
+
   /* A short direct question often has a perfectly correct semantic paraphrase
      with zero literal token overlap (e.g. "up for some fun?" -> "the author
      is inviting people to do something"). The literal BASIS is already hard-
@@ -33785,6 +33804,92 @@ JSON ONLY:
   normalized.__castIds = candidates.map((c) => c.id);
   normalized.__postMeaning = meaning;
 
+  return { out: normalized, label: th.label };
+}
+
+/* PLAYER-POST COMMENT COMMIT RECOVERY — compact, one-purpose fallback.
+ * Used ONLY when the normal immediate player-post comment batch generated no
+ * comment that survives the exact-post validators. It deliberately avoids the
+ * giant world/full-sheet prompt so a simple fresh post cannot end up with 0
+ * comments merely because a large ensemble request was truncated or rejected. */
+async function generateCompactImmediatePlayerPostComments(
+  w,
+  post,
+  minComments = 1,
+  maxComments = 2
+) {
+  if (!w || !post || post.authorId !== w.meId) return null;
+
+  const already = topLevelAiCommenterIds(w, post);
+  const wanted = Math.max(1, Math.min(2, Math.round(Number(minComments) || 1)));
+  const candidates = fairCommentCast(w, post.authorId, post)
+    .filter((c) => c && c.id && c.id !== post.authorId && !already.has(c.id))
+    .slice(0, Math.max(wanted, Math.min(2, Math.round(Number(maxComments) || 2))));
+
+  if (!candidates.length) return null;
+
+  const meaning = (post.socialMeaning && typeof post.socialMeaning === "object")
+    ? normalizeSocialPostMeaning(w, post, post.socialMeaning)
+    : fallbackSocialPostMeaning(w, post);
+  const th = threadOf(w, post);
+
+  const conciseActorCards = candidates.map((c) => {
+    const rel = relationshipBehaviorCard(w, c.id, post.authorId);
+    const pair = exactPairCanonCard(w, c.id, post.authorId) || {};
+    return `COMMENTER: ${c.name} [${c.id}]
+BIO: ${cut(String(c.bio || ""), 420)}
+PERSONALITY: ${cut(String(c.personality || ""), 1500)}
+TRAITS: ${cut(String(c.traits || ""), 700)}
+SPEECH/VOICE: ${cut(String(c.speech || c.voice || ""), 1200)}
+DIRECT PAIR CANON: ${cut(JSON.stringify(pair), 900)}
+${rel}
+${commentGenerationStyleCard(w, c)}`;
+  }).join("\n\n---\n\n");
+
+  const out = await askWorldJSONInteractive(
+    w,
+    `You generate ONLY immediate top-level social-media comments for one fresh player post. Keep them short, natural, character-specific and exactly grounded in the supplied visible post. Never narrate actions. Never invent an unrelated topic.`,
+    `FRESH PLAYER POST — COMMENT NOW
+POST ID: ${post.id}
+AUTHOR: ${nameOfIn(w, post.authorId)} [${post.authorId}]
+TEXT: ${JSON.stringify(String(post.text || "").slice(0, 1000))}
+${socialPostHasVisibleImage(post) && post.imageDescription ? `VISIBLE IMAGE: ${cut(String(post.imageDescription), 800)}` : ""}
+
+${socialPostMeaningCard(w, post, meaning)}
+${socialCommentExactPostGroundingCard(w, post)}
+${socialNsfwContextCard(w, candidates.map((c) => c.id), [post.authorId])}
+
+ELIGIBLE COMMENTERS — USE ONLY THESE IDS:
+${conciseActorCards}
+
+HARD OUTPUT:
+- Return exactly ${Math.min(wanted, candidates.length)} different COMMENT rows if at all possible.
+- One top-level comment per character; reply_to must be empty.
+- Usually 1-12 words. A natural short response is preferred over a mini speech.
+- basis must be 1-18 consecutive words copied literally from THIS exact post/image.
+- meaning is hidden semantic meaning; it may paraphrase naturally.
+- The visible text must genuinely answer/react to the exact post. Relationship/personality changes tone only.
+- For distress/frustration statuses, a character-faithful check-in, support, tease, practical response or skeptical reaction can be valid; do not invent a different conflict.
+- No LIKE/IGNORE in this recovery call.
+
+JSON ONLY:
+{"comments":[{"id":"eligible id","social_contract":"v1","decision":"COMMENT","reactionAct":"answer|agree|disagree|tease|roast|support|compliment|question|challenge|defend|correct|flirt|jealous_reaction|inside_joke|concern|sarcasm|shock|laugh|gossip_probe|callout|invite|dismiss","basis":"literal post/image words","meaning":"short semantic meaning","text":"natural comment","reply_to":"","trigger":"player-post-compact-recovery"}],"likes":[],"socialDecisions":[]}${TAIL}`,
+    {
+      maxTokens: Math.max(520, 360 * Math.min(candidates.length, wanted)),
+      maxTries: 2,
+      maxBusyWaits: 1,
+      busyRetryCapMs: 2500,
+      timeoutMs: 14000,
+      maxSystemChars: 4500,
+      maxPromptChars: 18000,
+    }
+  );
+
+  const normalized = out && typeof out === "object"
+    ? out
+    : { comments: [], likes: [], socialDecisions: [] };
+  normalized.__castIds = candidates.map((c) => c.id);
+  normalized.__postMeaning = meaning;
   return { out: normalized, label: th.label };
 }
 
@@ -66481,6 +66586,43 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       } catch (repairErr) {
         console.warn("Focused immediate player-post comment repair failed:", repairErr);
+      }
+    }
+
+    /* If the large/full-fidelity first-wave call still produced zero COMMITTABLE
+       comments, do one much smaller player-post-only recovery call. This is not
+       a canned local comment: the AI still writes in the selected characters'
+       voices, but the request contains only what is needed for this exact post. */
+    if (!visibleReactionCount && isImmediatePlayerPostReaction) {
+      try {
+        console.warn("[player-post-comments] primary batch produced 0 committable comments; using compact recovery");
+        const compact = await generateCompactImmediatePlayerPostComments(
+          view,
+          post,
+          Math.max(1, Math.min(2, minComments)),
+          Math.max(1, Math.min(2, maxComments))
+        );
+        if (compact && compact.out) {
+          const compactOut = {
+            ...compact.out,
+            comments: safeAiComments(compact.out).slice(0, Math.max(1, Math.min(2, maxComments))),
+          };
+          const compactProbe = cloneWorldState(view);
+          const compactVisible = applyComments(
+            compactProbe,
+            post.id,
+            compactOut,
+            compact.label || label
+          );
+          if (compactVisible) {
+            out = compactOut;
+            label = compact.label || label;
+            commentsProbe = compactProbe;
+            visibleReactionCount = compactVisible;
+          }
+        }
+      } catch (compactErr) {
+        console.warn("[player-post-comments] compact recovery failed:", compactErr);
       }
     }
 
