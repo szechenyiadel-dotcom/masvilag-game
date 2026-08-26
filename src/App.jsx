@@ -25856,6 +25856,10 @@ const LIVE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS = Math.max(
   Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS) || 105000)
 );
 const LIVE_WORLD_CLOCK_FUTURE_TOLERANCE_MS = 90 * 1000;
+/* Failed recovery lanes must yield to another visible-world lane instead of
+   monopolising every watchdog beat. */
+const LIVE_WORLD_RECOVERY_ROTATION_WINDOW_MS = 45 * 1000;
+const LIVE_WORLD_RECOVERY_COMMENT_BACKOFF_MS = 16 * 1000;
 
 async function loadAuto() {
   return {
@@ -33767,6 +33771,9 @@ JSON ONLY:
     {
       maxTokens: Math.max(700, Math.min(1400, 260 * Math.min(candidates.length, wanted + 1))),
       maxTries: 2,
+      maxBusyWaits: 1,
+      busyRetryCapMs: 3200,
+      timeoutMs: 16000,
       maxSystemChars: 6500,
       maxPromptChars: 52000,
     }
@@ -38958,6 +38965,9 @@ JSON ONLY:
     {
       maxTokens: 420,
       maxTries: 2,
+      maxBusyWaits: 1,
+      busyRetryCapMs: 3200,
+      timeoutMs: 16000,
       maxSystemChars: 6500,
       maxPromptChars: 42000,
     }
@@ -48761,6 +48771,8 @@ function freshSimulationRuntime(at = now()) {
     lastPopupSuccessAt: 0,
     lastRoleplayInviteAt: 0,
     lastNoteReactionAt: 0,
+    lastRecoveryLane: "",
+    lastRecoveryAttemptAt: 0,
     liveWorldStartedAt: at,
     schedulerVersion: 70,
     lastError: "",
@@ -51748,6 +51760,8 @@ function ensureSimState(w) {
       lastPopupSuccessAt: 0,
       lastRoleplayInviteAt: 0,
       lastNoteReactionAt: 0,
+      lastRecoveryLane: "",
+      lastRecoveryAttemptAt: 0,
       liveWorldStartedAt: now(),
       lastError: "",
     };
@@ -51826,6 +51840,8 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.lastPopupSuccessAt))) w.sim.lastPopupSuccessAt = 0;
   if (!Number.isFinite(Number(w.sim.lastRoleplayInviteAt))) w.sim.lastRoleplayInviteAt = 0;
   if (!Number.isFinite(Number(w.sim.lastNoteReactionAt))) w.sim.lastNoteReactionAt = 0;
+  if (typeof w.sim.lastRecoveryLane !== "string") w.sim.lastRecoveryLane = "";
+  if (!Number.isFinite(Number(w.sim.lastRecoveryAttemptAt))) w.sim.lastRecoveryAttemptAt = 0;
   if (!Number.isFinite(Number(w.sim.liveWorldStartedAt))) w.sim.liveWorldStartedAt = now();
 
   /* LIVE WORLD CLOCK SANITY:
@@ -51851,6 +51867,7 @@ function ensureSimState(w) {
       "lastPopupSuccessAt",
       "lastRoleplayInviteAt",
       "lastNoteReactionAt",
+      "lastRecoveryAttemptAt",
     ];
 
     clockFields.forEach((field) => {
@@ -64011,78 +64028,131 @@ function planLiveWorldRecoveryAction(view) {
   if (!view || !(view.chars || []).length) return null;
   if (liveWorldSilenceMs(view) < liveWorldSilenceRecoveryThresholdMs()) return null;
 
-  /* First rescue the player's newest visible post if it is still socially dead. */
+  const at = now();
+  const sim = view.sim || {};
+  const lastLane = String(sim.lastRecoveryLane || "");
+  const lastRecoveryAt = Number(sim.lastRecoveryAttemptAt) || 0;
+  const rotateAwayFromLast = Boolean(
+    lastLane &&
+    lastRecoveryAt &&
+    at - lastRecoveryAt < LIVE_WORLD_RECOVERY_ROTATION_WINDOW_MS
+  );
+  const candidates = [];
+
+  /* Player-post comments are still the first recovery preference, but a failed
+     coverage attempt gets a short backoff so it cannot starve the whole world. */
   const recentPlayerPost = (view.posts || [])
     .filter((post) =>
       post &&
       post.authorId === view.meId &&
-      now() - (Number(post.ts) || 0) <= 2 * 3600e3
+      at - (Number(post.ts) || 0) <= 2 * 3600e3
     )
     .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))
     .find((post) => {
       const coverage = postCommentCoverageState(view, post);
-      return coverage && !coverage.complete;
+      if (!coverage || coverage.complete) return false;
+      const attemptedAt = Number(post.commentCoverageAttemptAt) || 0;
+      return !attemptedAt || at - attemptedAt >= LIVE_WORLD_RECOVERY_COMMENT_BACKOFF_MS;
     });
 
   if (recentPlayerPost) {
-    return guaranteedPostCommentAction(
+    const commentAction = guaranteedPostCommentAction(
       view,
       recentPlayerPost,
       "liveness-player-post"
     );
+    if (commentAction) {
+      commentAction.payload = {
+        ...(commentAction.payload || {}),
+        livenessRecovery: true,
+        recoveryLane: "comments",
+      };
+      candidates.push({ lane: "comments", action: commentAction });
+    }
   }
 
-  /* Then wake a fresh existing feed item before manufacturing another post. */
-  const freshCommentPost = freshFeedPostCommentCandidate(view);
-  if (freshCommentPost) {
-    return mkAction(
-      "comments",
-      `liveness-comments:${freshCommentPost.id}:${Math.floor(now() / 30000)}`,
-      {
-        postId: freshCommentPost.id,
-        trigger: "fresh-post",
-        minComments: 2,
-        maxComments: 5,
-        allowThreadFollowup: true,
-      },
-      "event"
-    );
-  }
-
-  /* If the feed itself is the silent part, shorten only the selected author's
-     cooldown enough to recover visible life. This is not a burst and cannot
-     bypass the rolling 24h hard cap. */
+  /* A visible AI post is an independent rescue lane. It must still get a turn
+     when comment generation is temporarily unavailable or rejected. */
   const recoveryCast = fairPostCast(view, { livenessRecovery: true });
   if (recoveryCast.length) {
     const author = recoveryCast[0];
-    return mkAction(
-      "world",
-      `liveness-feed:${author.id}:${Math.floor(now() / 30000)}`,
-      {
-        trigger: "liveness-recovery",
-        authorId: author.id,
-        livenessRecovery: true,
-      },
-      "event"
-    );
+    candidates.push({
+      lane: "feed",
+      action: mkAction(
+        "world",
+        `liveness-feed:${author.id}:${Math.floor(at / 30000)}`,
+        {
+          trigger: "liveness-recovery",
+          authorId: author.id,
+          livenessRecovery: true,
+          recoveryLane: "feed",
+        },
+        "event"
+      ),
+    });
   }
 
-  /* A grounded private reason is preferable to inventing filler. */
+  /* Wake a fresh existing feed item too, but never let it duplicate the exact
+     player-post coverage action selected above. */
+  const freshCommentPost = freshFeedPostCommentCandidate(view);
+  if (
+    freshCommentPost &&
+    (!recentPlayerPost || freshCommentPost.id !== recentPlayerPost.id)
+  ) {
+    candidates.push({
+      lane: "fresh-comments",
+      action: mkAction(
+        "comments",
+        `liveness-comments:${freshCommentPost.id}:${Math.floor(at / 30000)}`,
+        {
+          postId: freshCommentPost.id,
+          trigger: "fresh-post",
+          minComments: 2,
+          maxComments: 5,
+          allowThreadFollowup: true,
+          livenessRecovery: true,
+          recoveryLane: "fresh-comments",
+        },
+        "event"
+      ),
+    });
+  }
+
+  /* A grounded private reason is a separate lane; it may proceed while a feed
+     generation attempt is cooling down, but it never invents a DM reason. */
   const groundedDmBot = (view.chars || [])
     .filter((bot) => bot && !isHuman(view, bot.id))
     .map((bot) => ({ bot, ctx: autonomousDmReasonContext(view, bot) }))
     .find((row) => row.ctx && row.ctx.primary);
 
   if (groundedDmBot) {
-    return mkAction(
-      "dm",
-      `liveness-dm:${groundedDmBot.bot.id}:${Math.floor(now() / 30000)}`,
-      { botId: groundedDmBot.bot.id, trigger: "liveness-recovery" },
-      "event"
-    );
+    candidates.push({
+      lane: "dm",
+      action: mkAction(
+        "dm",
+        `liveness-dm:${groundedDmBot.bot.id}:${Math.floor(at / 30000)}`,
+        {
+          botId: groundedDmBot.bot.id,
+          trigger: "liveness-recovery",
+          livenessRecovery: true,
+          recoveryLane: "dm",
+        },
+        "event"
+      ),
+    });
   }
 
-  return null;
+  if (!candidates.length) return null;
+
+  /* If the previous watchdog attempt did not visibly wake the world, choose a
+     DIFFERENT lane on the next beat whenever one exists. This is the key
+     anti-deadlock rule: comments -> feed -> DM/fresh-comments -> retry later. */
+  if (rotateAwayFromLast && candidates.length > 1) {
+    const alternate = candidates.find((row) => row.lane !== lastLane);
+    if (alternate) return alternate.action;
+  }
+
+  return candidates[0].action;
 }
 
 function planAutoAction(view) {
@@ -66321,10 +66391,15 @@ async function runSimulationAction(view, update, action, addImage) {
     );
 
     const isImmediatePlayerPostReaction = Boolean(
-      action.source === "player-reactive" &&
       post.authorId === view.meId &&
       action.payload &&
-      action.payload.coverageSource === "player-post-immediate"
+      (
+        (
+          action.source === "player-reactive" &&
+          action.payload.coverageSource === "player-post-immediate"
+        ) ||
+        action.payload.coverageSource === "liveness-player-post"
+      )
     );
 
     let generatedOut = null;
@@ -71120,6 +71195,15 @@ const signOut = useCallback(async () => {
          * úgy nézne ki, mintha történt volna valami, és a világ újra várna.
          */
         simMarkRunning(n, action);
+        if (
+          action &&
+          action.payload &&
+          action.payload.livenessRecovery
+        ) {
+          const sim = ensureSimState(n);
+          sim.lastRecoveryLane = String(action.payload.recoveryLane || action.type || "");
+          sim.lastRecoveryAttemptAt = now();
+        }
         if (action && action.type === "roleplay-initiate") {
           ensureSimState(n).roleplayAttemptAt = now();
         }
@@ -71242,9 +71326,12 @@ const signOut = useCallback(async () => {
             const idx = sim.queue.findIndex(
               (row) => row && row.id === action.id
             );
-            if (idx > 0) {
+            if (idx >= 0) {
+              /* The failed reaction keeps its retry, but yields the front slot.
+                 This prevents one temporarily failing comment/feed request from
+                 freezing every sibling reaction behind it. */
               const [row] = sim.queue.splice(idx, 1);
-              sim.queue.unshift(row);
+              sim.queue.push(row);
             }
           }
         }
