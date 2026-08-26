@@ -7072,7 +7072,8 @@ function commentWarrantsAiReply(w, post, comment, targetId) {
   /* Ne induljon végtelen AI↔AI pingpong. Emberi megszólalás újra megnyitja a láncot. */
   const aiTurns = consecutiveAiThreadTurns(w, post, comment);
   const juice = publicSocialJuiceSignals(comment.text);
-  if (!isHuman(w, comment.authorId) && aiTurns >= (juice.juicy ? 10 : 7)) return false;
+  const fullSocialThreadCap = postRequiresFullAiCommentCoverage(w, post);
+  if (!isHuman(w, comment.authorId) && aiTurns >= (fullSocialThreadCap ? (juice.juicy ? 12 : 9) : (juice.juicy ? 10 : 7))) return false;
   const climate = socialCommentClimateSnapshot(w, post);
   const dramaShift =
     climate.dramaLevel === "chaotic"
@@ -7089,16 +7090,21 @@ function commentWarrantsAiReply(w, post, comment, targetId) {
   );
   const heatShift = publicHeat >= 55 ? -5 : publicHeat >= 28 ? -2 : 0;
 
-  if (row.reason.includes("mention") || row.reason.includes("parent")) return row.score >= Math.max(38, 48 + Math.round(dramaShift * 0.35));
-  if (row.reason.includes("post-author")) return row.score >= Math.max(44, 58 + Math.round(dramaShift * 0.55));
+  const fullSocialThread = postRequiresFullAiCommentCoverage(w, post);
+  if (row.reason.includes("mention") || row.reason.includes("parent")) {
+    return row.score >= (fullSocialThread ? 32 : Math.max(38, 48 + Math.round(dramaShift * 0.35)));
+  }
+  if (row.reason.includes("post-author")) {
+    return row.score >= (fullSocialThread ? 38 : Math.max(44, 58 + Math.round(dramaShift * 0.55)));
+  }
   if (row.reason.includes("defend-attack")) {
-    return row.score >= Math.max(38, 48 + dramaShift + heatShift);
+    return row.score >= (fullSocialThread ? 30 : Math.max(38, 48 + dramaShift + heatShift));
   }
   if (row.reason.includes("bystander")) {
     const base = juice.juicy ? 56 : 66;
-    return row.score >= Math.max(42, base + dramaShift + heatShift);
+    return row.score >= (fullSocialThread ? 38 : Math.max(42, base + dramaShift + heatShift));
   }
-  return row.score >= Math.max(46, 62 + Math.round(dramaShift * 0.7) + heatShift);
+  return row.score >= (fullSocialThread ? 42 : Math.max(46, 62 + Math.round(dramaShift * 0.7) + heatShift));
 }
 
 function findNaturalThreadReply(w, onlyPostId = "") {
@@ -7233,6 +7239,65 @@ function enqueueNaturalThreadReplyWave(w, postId, preferredCommentIds = [], maxR
     });
   });
 
+  if (!rows.length && postRequiresFullAiCommentCoverage(w, post) && allComments.length >= 2) {
+    const hostileActs = new Set(["disagree", "roast", "challenge", "callout", "dismiss", "sarcasm", "correct"]);
+
+    for (const comment of allComments.slice(0, 10)) {
+      const commentAct = String(comment.reactionAct || "").toLowerCase();
+
+      for (const observer of (w.chars || [])) {
+        if (!observer || !observer.id || isHuman(w, observer.id)) continue;
+        if (observer.id === comment.authorId) continue;
+
+        const pairKey = `${comment.id}>${observer.id}`;
+        if (pendingPairs.has(pairKey) || commentAlreadyAnsweredBy(post, comment.id, observer.id)) continue;
+
+        const toCommenter = getRel(w, observer.id, comment.authorId) || {};
+        const toPoster = post.authorId ? (getRel(w, observer.id, post.authorId) || {}) : {};
+        const commenterScore = Number(toCommenter.score) || 0;
+        const posterScore = Number(toPoster.score) || 0;
+        const commenterBond = String(toCommenter.bond || toCommenter.type || "").toLowerCase();
+        const posterBond = String(toPoster.bond || toPoster.type || "").toLowerCase();
+
+        const againstCommenter =
+          commenterScore <= -12 ||
+          hasEnemyOrRivalBond(toCommenter) ||
+          /enemy|rival|ellens|riv[aá]l|hostile|hate/.test(commenterBond);
+        const forCommenter =
+          commenterScore >= 18 ||
+          relationshipDeclaresFriendship(toCommenter) ||
+          hasPositiveFollowBond(toCommenter) ||
+          /friend|best|close|ally|partner|dating|bar[aá]t|szövetséges/.test(commenterBond);
+        const forPoster = Boolean(
+          post.authorId &&
+          (
+            posterScore >= 18 ||
+            relationshipDeclaresFriendship(toPoster) ||
+            hasPositiveFollowBond(toPoster) ||
+            /friend|best|close|ally|partner|dating|bar[aá]t|szövetséges/.test(posterBond)
+          )
+        );
+
+        let reason = "";
+        let score = 0;
+
+        if (hostileActs.has(commentAct) && forPoster) {
+          reason = "defend-attack";
+          score = 92 + Math.max(0, posterScore) * 0.18 + Math.max(0, -commenterScore) * 0.12;
+        } else if (againstCommenter) {
+          reason = "rival-clash";
+          score = 76 + Math.max(0, -commenterScore) * 0.22;
+        } else if (forCommenter && commentReplyCueScore(comment.text) >= 18) {
+          reason = "ally-backup";
+          score = 62 + Math.max(0, commenterScore) * 0.16;
+        }
+
+        if (!reason) continue;
+        rows.push({ comment, targetId: observer.id, reason, score, pairKey });
+      }
+    }
+  }
+
   if (!rows.length) return 0;
 
   rows.sort((a, b) => {
@@ -7275,7 +7340,11 @@ function enqueueNaturalThreadReplyWave(w, postId, preferredCommentIds = [], maxR
           targetId: row.targetId,
           trigger: String(row.reason).includes("defend-attack")
             ? "defend-attack-thread"
-            : "natural-thread-wave",
+            : String(row.reason).includes("rival-clash")
+              ? "rivalry-thread"
+              : String(row.reason).includes("ally-backup")
+                ? "ally-backup-thread"
+                : "natural-thread-wave",
           threadReason: row.reason,
         },
         "event"
@@ -13341,7 +13410,11 @@ function topLevelAiCommenterIds(w, post) {
   );
 }
 
-const GUARANTEED_POST_COMMENT_RETRY_MS = 12000;
+function postRequiresFullAiCommentCoverage(w, post) {
+  return Boolean(w && post && post.id && post.authorId);
+}
+
+const GUARANTEED_POST_COMMENT_RETRY_MS = 4000;
 
 function availableAiCommenterCountForPost(w, post) {
   if (!w || !post) return 0;
@@ -13359,45 +13432,11 @@ function guaranteedPostCommentTarget(w, post) {
   const available = availableAiCommenterCountForPost(w, post);
   if (!available) return 0;
 
-  /* FULL SOCIAL COMMENT COVERAGE:
-   * New posts are not a lottery. Every AI character except the post author gets
-   * one top-level comment slot. We keep the old dynamic target only for saved
-   * historical posts so an upgrade cannot create a huge retroactive backlog. */
-  if (post.fullCommentCoverageV1 === true) {
-    return available;
-  }
-
-  const visual = visualPostReactionProfile(w, post);
-  const climate = socialCommentClimateSnapshot(w, post);
-  const dramaDelta =
-    climate.dramaLevel === "chaotic"
-      ? 2
-      : climate.dramaLevel === "high"
-        ? 1
-        : climate.dramaLevel === "low"
-          ? -1
-          : 0;
-  const attentionDelta =
-    climate.attentionScore >= 150
-      ? 2
-      : climate.attentionScore >= 85
-        ? 1
-        : 0;
-  const waveDelta =
-    Math.max(climate.cancelPressure, climate.stanEnergy, climate.controversy) >= 55
-      ? 2
-      : Math.max(climate.cancelPressure, climate.stanEnergy, climate.controversy) >= 28
-        ? 1
-        : 0;
-
-  /* Dynamic social density: the app guarantees a living comment section, but
-     fame/drama only changes the SIZE of the relevant reaction pool. The model
-     still chooses COMMENT / LIKE / IGNORE character-by-character. */
-  const requested = Math.max(
-    1,
-    Math.round(Number(visual.targetMin) || 4) + dramaDelta + attentionDelta + waveDelta
-  );
-  return Math.min(available, requested);
+  /* FULL SOCIAL COMMENT COVERAGE — HARD RULE:
+   * every actual character bot except the post author receives exactly one
+   * top-level comment slot on every post. Relationship/personality determines
+   * HOW they comment, never whether their required slot disappears. */
+  return available;
 }
 
 function postCommentCoverageState(w, post) {
@@ -13416,7 +13455,7 @@ function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
   const coverage = postCommentCoverageState(w, post);
   if (coverage.complete || coverage.missing <= 0) return null;
 
-  const fullCoverage = post.fullCommentCoverageV1 === true;
+  const fullCoverage = postRequiresFullAiCommentCoverage(w, post);
   const batchMissing = fullCoverage
     ? Math.max(1, Math.min(8, coverage.missing))
     : coverage.missing;
@@ -13463,12 +13502,21 @@ function guaranteedCommentCoverageCandidate(w) {
       })
       .map((post) => {
         const coverage = postCommentCoverageState(w, post);
+        const age = Math.max(0, ts - (Number(post.ts) || 0));
+        const freshBoost =
+          age <= 30 * 60 * 1000
+            ? 1000000
+            : age <= 6 * 60 * 60 * 1000
+              ? 180000
+              : 0;
+        const inProgressBoost = coverage.current > 0 ? 70000 : 0;
         return {
           post,
           score:
-            (coverage.current === 0 ? 100000 : 0) +
+            freshBoost +
+            inProgressBoost +
             coverage.missing * 1000 +
-            Math.max(0, Number(post.ts) || 0) / 1e12,
+            Math.max(0, Number(post.ts) || 0) / 1e10,
         };
       })
       .sort((a, b) => b.score - a.score)[0]?.post || null
@@ -33183,9 +33231,7 @@ HARD CAPSULE BOUNDARY:
 }
 
 async function genComments(w, post, options = {}) {
-  const fullCoverage = Boolean(
-    post && post.fullCommentCoverageV1 === true
-  );
+  const fullCoverage = postRequiresFullAiCommentCoverage(w, post);
   const alreadyTopLevel = topLevelAiCommenterIds(w, post);
   const baseCast = fairCommentCast(
     w,
@@ -33307,11 +33353,18 @@ ${socialCommentClimateCard(w, post)}
 
 ${socialShortStatusCharacterFidelityCard(w, post)}
 
+${fullCoverage ? `FULL COMMENT COVERAGE — ABSOLUTE OVERRIDE:
+- EVERY character listed in the current cast MUST create exactly ONE top-level COMMENT under this exact post.
+- COMMENT is mandatory in this coverage batch. LIKE or IGNORE may NOT replace that required comment.
+- A reserved/private character may answer very briefly; an enemy may be dry, skeptical or hostile; a bored character may be dismissive — but they still leave a grounded comment.
+- socialDecisions action MUST be COMMENT for every listed cast member.
+- Do not omit a character because they would normally stay quiet; express that quietness through a short restrained comment instead.
+` : ``}
 SOCIAL REACTION DECISION FIRST — COMMENT / LIKE / IGNORE:
 MINDEN cast-szereplőnél ugyanebben a sorrendben dolgozz:
 1. WHAT HAPPENED — értsd meg a SHARED POST COMPREHENSION alapján, mit mond/mutat EZ az egy poszt.
 2. WHY CARE — van-e ennek a karakternek természetes oka reagálni rá? Csak a konkrét poszt + valódi kapcsolat/relevancia számít.
-3. ACTION — válassz COMMENT / LIKE / IGNORE. Ne gyárts kommentet csak azért, hogy mindenki megszólaljon. A guaranteed minimum szabály csak a ténylegesen releváns karakterek közül kér kommentet.
+3. ACTION — ${fullCoverage ? `COMMENT kötelező minden itt felsorolt cast-szereplőnek; LIKE/IGNORE nem helyettesítheti.` : `válassz COMMENT / LIKE / IGNORE a konkrét social relevancia alapján.`}
 4. REACTION ACT — COMMENT esetén válassz pontosan egy funkciót: answer | agree | disagree | tease | roast | support | compliment | question | challenge | defend | correct | flirt | jealous_reaction | inside_joke | concern | sarcasm | shock | laugh | gossip_probe | callout | invite | dismiss.
 5. BASIS — másolj ki 1–18 egymást követő szót szó szerint EBBŐL a posztból vagy a megerősített látható képleírásból. Ez a reakció konkrét kiváltó oka.
 6. MEANING — egy rövid rejtett mondatban írd le, mit jelent az a basis EBBEN a posztban. Ne relationship-magyarázat legyen, hanem a látható tartalom értelme.
@@ -36484,9 +36537,7 @@ function fairCommentCast(w, targetId, post = null) {
     return a.tie - b.tie;
   });
 
-  const forceEveryAiComment = Boolean(
-    post && post.fullCommentCoverageV1 === true
-  );
+  const forceEveryAiComment = postRequiresFullAiCommentCoverage(w, post);
 
   const eligible = forceEveryAiComment
     ? chars
@@ -36601,7 +36652,7 @@ function fairCommentCast(w, targetId, post = null) {
     .slice(0, castLimit);
 }
 
-async function genReply(w, post, comment, forcedResponderId = "") {
+async function genReply(w, post, comment, forcedResponderId = "", forcedThreadReason = "") {
   if (!post || typeof post !== "object" || !comment || typeof comment !== "object") {
     return { comments: [], changes: [], events: [] };
   }
@@ -36766,6 +36817,7 @@ PUBLIKUS THREAD REALIZMUS:
 - A PUBLIC SOCIAL CLIMATE befolyásolhatja, hogy több megfigyelő mer-e beszállni, DE minden beszálló külön dönt: egy lojális barát megvédhet valakit cancel-hullámban, egy rivális kritizálhat, egy konfliktuskerülő karakter pedig maradhat csendben.
 - A korábbi döntésekből/kommentekből tanult kapcsolat és emlékezet változtathatja a reakció INTENZITÁSÁT és bizalmasságát; a karakter alapvető személyisége és saját Speech/Voice stílusa ettől nem cserélődik le.
 ${forcedResponderIsDirect ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott KÖZVETLEN VÁLASZOLÓ; a legutóbbi komment neki szólt, ezért az ő reply-ja az elsődleges.` : forcedResponderIsBystander ? `- EBBEN a körben ${forcedResponder.name} [${forcedResponder.id}] a scheduler által kiválasztott HARMADIK FÉL / BYSTANDER; beszállhat a threadbe, de a legutóbbi komment NEM neki szólt.` : ""}
+${forcedThreadReason ? `- SCHEDULER SOCIAL REASON: ${forcedThreadReason}. This is a relationship-grounded reason to ENTER the public thread, not text to quote. If it is defend-attack, naturally defend the person SELF genuinely supports and challenge the hostile commenter. If it is rival-clash, answer from the real rivalry. If it is ally-backup, back up the ally without inventing a conflict. The exact parent comment still controls the topic.` : ""}
 
 REPLY DECISION FIRST — THREAD ARCHITEKTÚRA:
 Mielőtt látható reply-t írsz, minden lehetséges válaszolónál ezt a sorrendet kövesd:
@@ -62433,34 +62485,12 @@ function simEnqueue(w, action) {
     sim.queue.unshift(action);
     sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
   } else if (action.source === "coverage") {
-    /*
-     * Coverage generated by burst post #1 must not jump in front of already
-     * queued burst posts #2/#3. Keep the leading burst block intact, then place
-     * comment coverage immediately after it.
-     */
-    let burstPrefix = 0;
-    while (
-      burstPrefix < sim.queue.length &&
-      sim.queue[burstPrefix] &&
-      sim.queue[burstPrefix].type === "world" &&
-      String(sim.queue[burstPrefix].key || "").startsWith(
-        "triggered-feed-burst:"
-      )
-    ) {
-      burstPrefix += 1;
-    }
-
-    if (burstPrefix > 0) {
-      sim.queue.splice(
-        burstPrefix,
-        0,
-        action
-      );
-      sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
-    } else {
-      sim.queue.unshift(action);
-      sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
-    }
+    /* Full-comment coverage is persistent, not blocking. The immediate first
+     * player-post wave is already player-reactive/front-queued; subsequent
+     * coverage batches go to the back so thread replies and autonomous life can
+     * interleave instead of one post monopolizing the whole simulation queue. */
+    sim.queue.push(action);
+    sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
   } else {
     sim.queue.push(action);
     sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
@@ -64857,22 +64887,10 @@ function planAutoAction(view) {
     );
   }
 
-  /*
-   * AUTONOMOUS COMMENT PULSE:
-   * A fresh AI post with missing comment coverage gets a guaranteed comment
-   * generation slot before another world post is allowed. This makes the feed
-   * behave like a social network instead of a graveyard with excellent CSS.
-   */
-  const commentCoveragePost = guaranteedCommentCoverageCandidate(view);
-  if (commentCoveragePost) {
-    return guaranteedPostCommentAction(view, commentCoveragePost, "scheduler-comment-pulse");
-  }
-
-  /*
-   * RECOVERY v99.2 ESSENTIAL FEED PULSE:
-   * Once due, one autonomous feed post gets priority over private maintenance
-   * lanes. Recent comment coverage is NOT allowed to block the next post.
-   */
+  /* AUTONOMOUS FEED + ALL-BOT COMMENT FAIRNESS:
+   * A due independent AI status gets one slot before background coverage. The
+   * very next scheduler beat can continue comment coverage. This prevents the
+   * "everyone comments" requirement from accidentally stopping new posts. */
   if (feedNeedsFreshPost(view)) {
     return mkAction(
       "world",
@@ -64880,6 +64898,11 @@ function planAutoAction(view) {
       { trigger: "recovery-feed" },
       "event"
     );
+  }
+
+  const commentCoveragePost = guaranteedCommentCoverageCandidate(view);
+  if (commentCoveragePost) {
+    return guaranteedPostCommentAction(view, commentCoveragePost, "scheduler-comment-pulse");
   }
 
   const dmLate = autonomousDmOverdueByMs(view);
@@ -65004,7 +65027,7 @@ function planAutoAction(view) {
 
   /* Friss AI→AI thread csak akkor él tovább, ha valóban reply-ra hív. */
   const naturalThread = findNaturalThreadReply(view);
-  if (naturalThread && Math.random() < 0.90) {
+  if (naturalThread) {
     return mkAction(
       "reply",
       `auto-thread:${naturalThread.post.id}:${naturalThread.comment.id}:${naturalThread.targetId}`,
@@ -66964,7 +66987,8 @@ async function runSimulationAction(view, update, action, addImage) {
       view,
       post,
       comment,
-      requestedTargetId || ""
+      requestedTargetId || "",
+      String(action.payload && (action.payload.threadReason || action.payload.trigger) || "")
     );
 
     const out = requestedTargetId
@@ -67265,29 +67289,13 @@ async function runSimulationAction(view, update, action, addImage) {
         .map((c) => c.id);
 
       if (
-        refreshedPost &&
-        isGuaranteedCoverage
-      ) {
-        /* Every-AI coverage continues in bounded batches until every eligible
-         * bot has one top-level comment. This now includes the player's immediate
-         * first wave because there is no separate player-post feed burst to protect. */
-        enqueueGuaranteedPostCommentCoverage(
-          n,
-          refreshedPost.id,
-          isImmediatePlayerPostReaction
-            ? "player-post-all-bots-followup"
-            : "coverage-followup"
-        );
-      }
-
-      if (
         newCommentIds.length &&
         (!action.payload || action.payload.allowThreadFollowup !== false)
       ) {
-        /* A real comment section is multi-person: seed several relationship-
-         * grounded branches. Friends may defend, rivals may challenge/pile on,
-         * and neutral characters only enter when the public thread gives them a
-         * real reason. The normal reply engine keeps each branch coherent. */
+        /* Interleave the social conversation BEFORE the next all-bot coverage
+         * batch. This creates visible reply/defense/rivalry activity while the
+         * remaining bots are still arriving instead of postponing every thread
+         * until the final top-level commenter has finished. */
         const queuedVisualFriction = enqueueVisualCrushThreadFriction(
           n,
           post.id,
@@ -67297,12 +67305,28 @@ async function runSimulationAction(view, update, action, addImage) {
           n,
           post.id,
           newCommentIds,
-          Math.min(6, Math.max(2, Math.ceil(newCommentIds.length / 2)))
+          Math.min(8, Math.max(2, Math.ceil(newCommentIds.length * 0.75)))
         );
 
         if (!queuedVisualFriction && !waveCount) {
           enqueueNaturalThreadReply(n, post.id, newCommentIds);
         }
+      }
+
+      if (
+        refreshedPost &&
+        isGuaranteedCoverage
+      ) {
+        /* Continue bounded all-bot coverage after the freshly queued public
+         * thread reactions. Every bot still eventually receives its top-level
+         * slot, but coverage no longer suppresses visible conversations. */
+        enqueueGuaranteedPostCommentCoverage(
+          n,
+          refreshedPost.id,
+          isImmediatePlayerPostReaction
+            ? "player-post-all-bots-followup"
+            : "coverage-followup"
+        );
       }
     });
 
@@ -71789,6 +71813,36 @@ const signOut = useCallback(async () => {
     }
   }
 
+  /* FULL SOCIAL FAIRNESS: a long all-bot comment/reply backlog must not freeze
+   * autonomous statuses. Direct player-reactive work still stays first. Only
+   * generated coverage/thread work may yield a single slot when the feed is due. */
+  let socialBacklogFeedOverride = null;
+  const queuedKey = String(queued && queued.key || "");
+  const queuedIsGeneratedSocialBacklog = Boolean(
+    queued &&
+    queued.source !== "player-reactive" &&
+    (
+      queued.source === "coverage" ||
+      queuedKey.startsWith("thread-wave:") ||
+      queuedKey.startsWith("thread-reply:") ||
+      queuedKey.startsWith("auto-thread:") ||
+      queuedKey.startsWith("visual-crush-friction:")
+    )
+  );
+
+  if (
+    !manualQueued &&
+    queuedIsGeneratedSocialBacklog &&
+    feedNeedsFreshPost(view2)
+  ) {
+    socialBacklogFeedOverride = mkAction(
+      "world",
+      `social-backlog-feed-yield:${Math.floor(now() / 30000)}`,
+      { trigger: "social-backlog-feed-yield" },
+      "event"
+    );
+  }
+
   /* A popup queued just before entering an Event must not fire on top of it. */
   if (
     !manualQueued &&
@@ -71855,6 +71909,7 @@ const signOut = useCallback(async () => {
   let action =
     coverageOverride ||
     essentialActivityOverride ||
+    socialBacklogFeedOverride ||
     queued ||
     livenessRecoveryAction;
 
