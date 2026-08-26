@@ -13075,6 +13075,13 @@ function cleanGeneratedComment(w, id, text, maxLen = 240) {
       t
     );
 
+  t =
+    normalizeAccidentalCommentAllCaps(
+      w,
+      id,
+      t
+    );
+
   /* Dedicated feed history first, then the universal cross-surface guard. */
   if (isRepetitiveComment(w, id, t)) return "";
   if (isRepetitiveUtterance(w, id, t)) return "";
@@ -16369,6 +16376,76 @@ function applySocialOwnedSpeechStyle(
   return raw.toLocaleUpperCase(
     locale
   );
+}
+
+/* COMMENT/REPLY CASING ISOLATION — v1
+ *
+ * A multi-character comment prompt can occasionally leak one character's ALL-CAPS
+ * voice into another character's row. ALL CAPS is valid only when THIS commenter's
+ * own Speech/Voice explicitly establishes it. This repair is intentionally scoped
+ * to comments/replies; posts, DMs, RP and every other surface are untouched.
+ */
+function normalizeAccidentalCommentAllCaps(w, id, value) {
+  const raw = String(value || "");
+  if (!raw) return "";
+
+  const c = charById(w, id);
+  if (!c || socialSpeechStyleRequiresAllCaps(c)) return raw;
+
+  const letters = [...raw].filter((ch) => /\p{L}/u.test(ch));
+  if (letters.length < 7) return raw;
+
+  const upper = letters.filter(
+    (ch) => ch === ch.toLocaleUpperCase() && ch !== ch.toLocaleLowerCase()
+  ).length;
+  const lower = letters.filter(
+    (ch) => ch === ch.toLocaleLowerCase() && ch !== ch.toLocaleUpperCase()
+  ).length;
+
+  /* Only touch unmistakable full-caps leakage. Deliberate emphasis such as
+     "NO" or a short acronym remains unchanged. */
+  if (upper / letters.length < 0.82 || lower / letters.length > 0.10) return raw;
+
+  const locale = worldLanguage(w, w && w.meId) === "hu" ? "hu-HU" : "en-US";
+  let text = raw.toLocaleLowerCase(locale);
+
+  /* Restore normal sentence starts without rewriting wording/punctuation. */
+  let capitalizeNext = true;
+  text = [...text].map((ch) => {
+    if (capitalizeNext && /\p{L}/u.test(ch)) {
+      capitalizeNext = false;
+      return ch.toLocaleUpperCase(locale);
+    }
+    if (/[.!?]/.test(ch)) capitalizeNext = true;
+    return ch;
+  }).join("");
+
+  if (locale === "en-US") {
+    text = text.replace(/\bi\b/g, "I");
+  }
+
+  /* Restore canonical character names if the model mentioned one. */
+  const proper = [];
+  [w && w.player, ...(w && Array.isArray(w.chars) ? w.chars : [])].forEach((row) => {
+    if (!row) return;
+    [row.name, row.nick].forEach((name) => {
+      const cleanName = String(name || "").trim();
+      if (cleanName.length >= 2 && !proper.includes(cleanName)) proper.push(cleanName);
+    });
+  });
+  proper
+    .sort((a, b) => b.length - a.length)
+    .forEach((name) => {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      text = text.replace(new RegExp(`\\b${escaped}\\b`, "gi"), name);
+    });
+
+  /* A few normal chat acronyms should not be damaged by sentence casing. */
+  text = text.replace(/\b(?:dm|dms|ai|rp|nsfw|lol|lmao|omg|wtf|idk|irl)\b/gi, (m) =>
+    /^(?:dm|dms|ai|rp|nsfw)$/i.test(m) ? m.toUpperCase() : m.toLowerCase()
+  );
+
+  return text;
 }
 
 function compactSelfCanonForPrompt(c, maxChars = 6200) {
@@ -33901,6 +33978,7 @@ function cleanGeneratedImmediatePlayerPostComment(w, id, text, maxLen = 240) {
 
   t = socialEmojiFallback(w, id, t);
   t = applySocialOwnedSpeechStyle(w, id, t);
+  t = normalizeAccidentalCommentAllCaps(w, id, t);
 
   /* Immediate player-post recovery must not lose an otherwise valid direct
      reaction merely because the same character once used a similar tiny phrase
