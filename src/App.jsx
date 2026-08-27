@@ -39406,7 +39406,8 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
 
 async function hydrateAuthorAlbumForSocialPosting(
   w,
-  author
+  author,
+  mediaMap = {}
 ) {
   if (
     !w ||
@@ -39417,8 +39418,10 @@ async function hydrateAuthorAlbumForSocialPosting(
     return author;
   }
 
-  const mediaMap =
-    mediaRef.current || {};
+  const runtimeMediaMap =
+    mediaMap && typeof mediaMap === "object"
+      ? mediaMap
+      : {};
 
   let changed = false;
   const hydratedAlbum = [];
@@ -39451,7 +39454,7 @@ async function hydrateAuthorAlbumForSocialPosting(
     const resolved =
       resolveImg(
         srcValue,
-        mediaMap
+        runtimeMediaMap
       );
 
     if (
@@ -39516,38 +39519,13 @@ async function hydrateAuthorAlbumForSocialPosting(
     album: hydratedAlbum,
   };
 
-  setWorld((prev) => {
-    if (!prev) return prev;
-
-    const n = { ...prev };
-    const found =
-      charById(
-        n,
-        author.id
-      );
-
-    if (!found) {
-      return prev;
-    }
-
-    found.album =
-      hydratedAlbum.map(
-        (row) =>
-          row && typeof row === "object"
-            ? { ...row }
-            : row
-      );
-
-    n.rev =
-      (n.rev || 0) + 1;
-
-    return n;
-  });
-
+  /* This helper lives outside the React component, so it must not reference
+     component-local setWorld/mediaRef. The hydrated copy is used immediately
+     by the focused post generator; persistent media state remains owned by App. */
   return nextAuthor;
 }
 
-async function genFocusedWorldStep(w, triggerPayload = {}) {
+async function genFocusedWorldStep(w, triggerPayload = {}, mediaMap = {}) {
   const triggerSelectionContext = autonomousTriggeredFeedContext(w, triggerPayload);
   const postingSelectionOptions = {
     allowBurst: Boolean(triggerPayload && triggerPayload.allowBurst),
@@ -39583,7 +39561,8 @@ async function genFocusedWorldStep(w, triggerPayload = {}) {
   const promptAuthor =
     await hydrateAuthorAlbumForSocialPosting(
       w,
-      author
+      author,
+      mediaMap
     );
 
   const authorPostStats24h = characterAutonomousPostStats24h(w, author.id);
@@ -66344,7 +66323,7 @@ function runAutonomousFeedHeartbeat(w, update) {
   return created;
 }
 
-async function runSimulationAction(view, update, action, addImage) {
+async function runSimulationAction(view, update, action, addImage, mediaMap = {}) {
   if (!view || !action) return null;
 
   /* v76 RESET EPOCH GUARD:
@@ -68945,7 +68924,8 @@ if (targetNote) {
         ? await repairImmediatePlayerPostFeedPost(view, action.payload || {})
         : await genFocusedWorldStep(
             view,
-            action.payload || {}
+            action.payload || {},
+            mediaMap
           );
     } catch (worldPostErr) {
       console.warn(
@@ -72444,7 +72424,13 @@ const signOut = useCallback(async () => {
         Math.floor(Number(viewRef.current && viewRef.current.historyEpoch) || 0)
       );
       try {
-        result = await runSimulationAction(viewRef.current, update, action, addImage);
+        result = await runSimulationAction(
+          viewRef.current,
+          update,
+          action,
+          addImage,
+          mediaRef.current || {}
+        );
         ok = Boolean(result);
       } catch (e) {
         if (action && action.source === "manual" && alive) {
