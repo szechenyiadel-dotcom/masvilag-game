@@ -13413,6 +13413,19 @@ function topLevelAiCommenterIds(w, post) {
 function missingAiCommenterIdsForPost(w, post) {
   if (!w || !post) return [];
   const already = topLevelAiCommenterIds(w, post);
+  const attempts = post.commentCoverageAttemptsByActor && typeof post.commentCoverageAttemptsByActor === "object"
+    ? post.commentCoverageAttemptsByActor
+    : {};
+  const lastTried = post.commentCoverageLastTriedByActor && typeof post.commentCoverageLastTriedByActor === "object"
+    ? post.commentCoverageLastTriedByActor
+    : {};
+
+  /* COMMENT-ONLY FAIRNESS:
+   * Never let one temporarily failing character become the permanent first
+   * missing ID and block everybody behind them. Missing commenters with fewer
+   * failed attempts / older attempts get their top-level slot first. Every
+   * still-missing actor remains eligible, so failed actors are retried after
+   * the rest of the cast has had a chance. */
   return (w.chars || [])
     .filter(
       (c) =>
@@ -13422,7 +13435,18 @@ function missingAiCommenterIdsForPost(w, post) {
         c.id !== post.authorId &&
         !already.has(c.id)
     )
-    .map((c) => c.id);
+    .map((c, index) => ({
+      id: c.id,
+      index,
+      attempts: Math.max(0, Math.floor(Number(attempts[c.id]) || 0)),
+      lastTried: Math.max(0, Number(lastTried[c.id]) || 0),
+    }))
+    .sort((a, b) =>
+      (a.attempts - b.attempts) ||
+      (a.lastTried - b.lastTried) ||
+      (a.index - b.index)
+    )
+    .map((row) => row.id);
 }
 
 function postRequiresFullAiCommentCoverage(w, post) {
@@ -13455,13 +13479,21 @@ function guaranteedPostCommentTarget(w, post) {
 }
 
 function postCommentCoverageState(w, post) {
-  const current = topLevelAiCommentCount(w, post);
   const target = guaranteedPostCommentTarget(w, post);
+  const uniqueCommenters = topLevelAiCommenterIds(w, post);
+  const missingIds = missingAiCommenterIdsForPost(w, post);
+  const current = uniqueCommenters.size;
+
+  /* HARD EVERY-BOT INVARIANT:
+   * Coverage is complete only when there are ZERO missing AI identities.
+   * Raw comment count is intentionally ignored because repeated top-level
+   * comments from the same 1-2 bots must never impersonate full coverage. */
   return {
     current,
     target,
-    missing: Math.max(0, target - current),
-    complete: target <= 0 || current >= target,
+    missing: missingIds.length,
+    missingIds,
+    complete: target <= 0 || missingIds.length === 0,
   };
 }
 
@@ -13486,9 +13518,11 @@ function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
     ? missingIds.slice(0, 1)
     : [];
 
+  const requiredCommenterId = forcedCommenterIds[0] || "any";
+
   return mkAction(
     "comments",
-    `comment-coverage:${post.id}:${coverage.current}:${coverage.target}`,
+    `comment-coverage:${post.id}:${requiredCommenterId}:${coverage.current}:${coverage.target}`,
     {
       postId: post.id,
       trigger: "guaranteed-coverage",
@@ -35461,6 +35495,22 @@ const pc =
   p.comments.find(
     (x) => x.id === parent
   );
+
+/* EVERY-BOT TOP-LEVEL INVARIANT:
+ * One AI identity gets one top-level slot per post. Existing replies are not
+ * affected. This prevents the same two active bots from repeatedly occupying
+ * slots that belong to still-missing characters. */
+if (
+  !pc &&
+  p.comments.some(
+    (existing) =>
+      existing &&
+      !existing.parent &&
+      existing.authorId === who
+  )
+) {
+  return;
+}
 
 /* HARD GUARD: AI never replies to its own comment. */
 if (pc && pc.authorId === who && !isHuman(n, who)) {
@@ -67578,6 +67628,18 @@ async function runSimulationAction(view, update, action, addImage) {
         refreshedPost.commentCoverageLastSuccessAt = now();
         refreshedPost.commentCoverageAttempts =
           Math.max(0, Math.round(Number(refreshedPost.commentCoverageAttempts) || 0)) + 1;
+
+        const presentTopLevel = topLevelAiCommenterIds(n, refreshedPost);
+        if (refreshedPost.commentCoverageAttemptsByActor && typeof refreshedPost.commentCoverageAttemptsByActor === "object") {
+          Object.keys(refreshedPost.commentCoverageAttemptsByActor).forEach((id) => {
+            if (presentTopLevel.has(id)) delete refreshedPost.commentCoverageAttemptsByActor[id];
+          });
+        }
+        if (refreshedPost.commentCoverageLastTriedByActor && typeof refreshedPost.commentCoverageLastTriedByActor === "object") {
+          Object.keys(refreshedPost.commentCoverageLastTriedByActor).forEach((id) => {
+            if (presentTopLevel.has(id)) delete refreshedPost.commentCoverageLastTriedByActor[id];
+          });
+        }
       }
 
       if (
@@ -72482,12 +72544,38 @@ const signOut = useCallback(async () => {
             ? playerReactionRetryCount
             : burstRetryCount;
 
-        /* Required all-bot coverage is a persistent obligation. A transient
-         * provider/schema failure may rotate it to the back, but it is never
-         * permanently consumed while that exact AI is still missing. */
+        /* Required all-bot coverage remains persistent, but one bad actor may
+         * NOT monopolize the queue forever. A failed one-character coverage
+         * action is released; per-actor failure metadata makes the next coverage
+         * action choose another still-missing bot first. The failed bot remains
+         * missing and will be retried after the rest of the cast gets a turn. */
         const immediateRetryLimit = retryableCoverageComment
-          ? Number.POSITIVE_INFINITY
+          ? 0
           : 2;
+
+        if (retryableCoverageComment && !ok) {
+          const postId = String(action && action.payload && action.payload.postId || "");
+          const forcedIds = Array.isArray(action && action.payload && action.payload.forcedCommenterIds)
+            ? action.payload.forcedCommenterIds.map((id) => aiVoice(n, id)).filter(Boolean)
+            : [];
+          const failedActorId = forcedIds[0] || "";
+          const failedPost = postId
+            ? (n.posts || []).find((row) => row && row.id === postId)
+            : null;
+
+          if (failedPost && failedActorId) {
+            if (!failedPost.commentCoverageAttemptsByActor || typeof failedPost.commentCoverageAttemptsByActor !== "object") {
+              failedPost.commentCoverageAttemptsByActor = {};
+            }
+            if (!failedPost.commentCoverageLastTriedByActor || typeof failedPost.commentCoverageLastTriedByActor !== "object") {
+              failedPost.commentCoverageLastTriedByActor = {};
+            }
+            failedPost.commentCoverageAttemptsByActor[failedActorId] =
+              Math.max(0, Math.floor(Number(failedPost.commentCoverageAttemptsByActor[failedActorId]) || 0)) + 1;
+            failedPost.commentCoverageLastTriedByActor[failedActorId] = now();
+            failedPost.commentCoverageAttemptAt = now();
+          }
+        }
 
         if (
           queued &&
