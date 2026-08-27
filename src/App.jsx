@@ -13474,11 +13474,16 @@ function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
   const missingIds = fullCoverage
     ? missingAiCommenterIdsForPost(w, post)
     : [];
+  /* STRICT EVERY-BOT COVERAGE: one missing AI per coverage action.
+   * Large ensemble batches were the reason coverage repeatedly stopped after
+   * the first 1-2 accepted rows: one malformed/filtered batch could strand all
+   * remaining characters together. A one-character lane makes progress
+   * deterministic and keeps each character's own voice isolated. */
   const batchMissing = fullCoverage
-    ? Math.max(1, Math.min(8, coverage.missing))
+    ? Math.min(1, coverage.missing)
     : coverage.missing;
   const forcedCommenterIds = fullCoverage
-    ? missingIds.slice(0, batchMissing)
+    ? missingIds.slice(0, 1)
     : [];
 
   return mkAction(
@@ -38488,6 +38493,17 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
 
   const burstKey = String(options && options.burstKey || "").trim();
   const allowBurst = Boolean(options && options.allowBurst && burstKey);
+  const independentFeedRefresh = Boolean(options && options.independentFeedRefresh);
+
+  /* A player-post feed refresh is an INDEPENDENT autonomous status, not a
+   * reaction to the player's post. It may bypass the ordinary personal gap so
+   * the refresh actually produces a new feed item, while the rolling 24h hard
+   * safety cap above remains authoritative. Fair author rotation is handled by
+   * fairPostCast(), so this cannot repeatedly privilege the same bot. */
+  if (independentFeedRefresh) {
+    return true;
+  }
+
   if (allowBurst) {
     /*
      * A triggered aftermath burst already forbids reusing the same author by
@@ -38576,15 +38592,45 @@ function fairPostCast(w, options = {}) {
       Number(stats.recentPosts48h || 0) * 3 +
       Math.random() * 28;
 
-    return { c, activity, count, lastPostAt:Number(stats.lastPostAt || 0), pressure };
+    /* Fairness is measured against each character's OWN activity target, so a
+     * deliberately quieter character can still be quieter without disappearing
+     * from the feed. The least-complete characters rotate to the front first. */
+    const targetProgress = count / Math.max(1, target);
+
+    return {
+      c,
+      activity,
+      count,
+      target,
+      targetProgress,
+      lastPostAt:Number(stats.lastPostAt || 0),
+      pressure,
+    };
   });
 
-  ranked.sort((a,b) =>
-    (b.pressure-a.pressure) ||
-    (a.count-b.count) ||
-    (a.lastPostAt-b.lastPostAt) ||
-    (b.activity-a.activity)
-  );
+  const strictFairRotation =
+    preferred.size === 0 &&
+    !(options && options.allowBurst);
+
+  ranked.sort((a,b) => {
+    if (strictFairRotation) {
+      return (
+        (a.targetProgress - b.targetProgress) ||
+        (a.count - b.count) ||
+        (a.lastPostAt - b.lastPostAt) ||
+        (b.pressure - a.pressure) ||
+        (b.activity - a.activity)
+      );
+    }
+
+    return (
+      (b.pressure-a.pressure) ||
+      (a.targetProgress-b.targetProgress) ||
+      (a.count-b.count) ||
+      (a.lastPostAt-b.lastPostAt) ||
+      (b.activity-a.activity)
+    );
+  });
 
   return ranked.map((x) => x.c).slice(0,5);
 }
@@ -39457,6 +39503,7 @@ async function genFocusedWorldStep(w, triggerPayload = {}) {
     allowBurst: Boolean(triggerPayload && triggerPayload.allowBurst),
     burstKey: String(triggerPayload && triggerPayload.burstKey || ""),
     livenessRecovery: Boolean(triggerPayload && triggerPayload.livenessRecovery),
+    independentFeedRefresh: Boolean(triggerPayload && triggerPayload.independentFeedRefresh),
     preferredIds: triggerSelectionContext.preferredIds,
   };
 
@@ -67272,19 +67319,34 @@ async function runSimulationAction(view, update, action, addImage) {
         generatedOut = focused && focused.out;
         label = focused && focused.label || label;
       } else {
-        const generated = await genComments(
-          view,
-          post,
-          {
-            minComments: quotaEnforced ? minComments : 0,
-            maxComments,
-            forcedCommenterIds: Array.isArray(action.payload && action.payload.forcedCommenterIds)
-              ? action.payload.forcedCommenterIds
-              : [],
-          }
-        );
-        generatedOut = generated && generated.out;
-        label = generated && generated.label || label;
+        const forcedCoverageIds = Array.isArray(action.payload && action.payload.forcedCommenterIds)
+          ? action.payload.forcedCommenterIds.map((id) => aiVoice(view, id)).filter(Boolean)
+          : [];
+
+        /* Every-bot coverage uses the existing one-character grounded generator
+         * directly. This avoids asking a broad ensemble model for many mandatory
+         * rows and then losing most of them to schema/grounding validation. */
+        if (isGuaranteedCoverage && forcedCoverageIds.length === 1) {
+          const singleCoverage = await generateSingleGuaranteedCoverageComment(
+            view,
+            post,
+            forcedCoverageIds[0]
+          );
+          generatedOut = singleCoverage && singleCoverage.out;
+          label = singleCoverage && singleCoverage.label || label;
+        } else {
+          const generated = await genComments(
+            view,
+            post,
+            {
+              minComments: quotaEnforced ? minComments : 0,
+              maxComments,
+              forcedCommenterIds: forcedCoverageIds,
+            }
+          );
+          generatedOut = generated && generated.out;
+          label = generated && generated.label || label;
+        }
       }
     } catch (commentErr) {
       if (!isGuaranteedCoverage) throw commentErr;
@@ -68854,6 +68916,7 @@ if (targetNote) {
       || fairPostCast(view, {
         allowBurst:Boolean(fallbackPayload.allowBurst),
         burstKey:String(fallbackPayload.burstKey || ""),
+        independentFeedRefresh:Boolean(fallbackPayload.independentFeedRefresh),
         preferredIds:fallbackTriggerContext.preferredIds,
       })[0]?.id
       || "";
@@ -68872,6 +68935,7 @@ if (targetNote) {
       || fairPostCast(view, {
         allowBurst:Boolean(fallbackPayload.allowBurst),
         burstKey:String(fallbackPayload.burstKey || ""),
+        independentFeedRefresh:Boolean(fallbackPayload.independentFeedRefresh),
         preferredIds:fallbackTriggerContext.preferredIds,
       })[0]?.id
       || "";
@@ -70994,7 +71058,7 @@ const signOut = useCallback(async () => {
             trigger: "feed-refresh-after-player-post",
             independentFeedRefresh: true,
           },
-          "event"
+          "player-reactive"
         )
       ) || queuedAny;
 
@@ -72097,11 +72161,19 @@ const signOut = useCallback(async () => {
    * commenters forever. Direct player-reactive work still stays first. */
   let socialBacklogFeedOverride = null;
   const queuedKey = String(queued && queued.key || "");
+  const queuedCoverageRetryCount = Math.max(
+    0,
+    Math.floor(Number(queued && queued.payload && queued.payload.__coverageRetryCount) || 0)
+  );
   const queuedIsGeneratedSocialBacklog = Boolean(
     queued &&
     queued.source !== "player-reactive" &&
-    queued.source !== "coverage" &&
     (
+      /* Successful required coverage stays ahead of normal feed until it makes
+       * progress. If the SAME missing commenter has already failed twice, allow
+       * one due autonomous status to pass; contentAt then closes the feed lane
+       * and the persistent coverage action gets the next chance. */
+      (queued.source === "coverage" && queuedCoverageRetryCount >= 2) ||
       queuedKey.startsWith("thread-wave:") ||
       queuedKey.startsWith("thread-reply:") ||
       queuedKey.startsWith("auto-thread:") ||
@@ -72347,10 +72419,29 @@ const signOut = useCallback(async () => {
           String(action.key || "").startsWith("triggered-feed-burst:")
         );
 
+        const retryableCoverageComment = Boolean(
+          action &&
+          action.type === "comments" &&
+          action.source === "coverage"
+        );
+
+        const retryableIndependentFeedRefresh = Boolean(
+          action &&
+          action.type === "world" &&
+          action.source === "player-reactive" &&
+          action.payload &&
+          action.payload.independentFeedRefresh
+        );
+
         const retryablePlayerReaction = Boolean(
           action &&
           action.source === "player-reactive" &&
-          (action.type === "comments" || action.type === "dm" || action.type === "reply")
+          (
+            action.type === "comments" ||
+            action.type === "dm" ||
+            action.type === "reply" ||
+            retryableIndependentFeedRefresh
+          )
         );
 
         const burstRetryCount = Math.max(
@@ -72375,13 +72466,28 @@ const signOut = useCallback(async () => {
           )
         );
 
+        const coverageRetryCount = Math.max(
+          0,
+          Math.floor(Number(action && action.payload && action.payload.__coverageRetryCount) || 0)
+        );
+
         const retryableImmediateReaction =
           retryableTriggeredFeed ||
-          retryablePlayerReaction;
+          retryablePlayerReaction ||
+          retryableCoverageComment;
 
-        const immediateRetryCount = retryablePlayerReaction
-          ? playerReactionRetryCount
-          : burstRetryCount;
+        const immediateRetryCount = retryableCoverageComment
+          ? coverageRetryCount
+          : retryablePlayerReaction
+            ? playerReactionRetryCount
+            : burstRetryCount;
+
+        /* Required all-bot coverage is a persistent obligation. A transient
+         * provider/schema failure may rotate it to the back, but it is never
+         * permanently consumed while that exact AI is still missing. */
+        const immediateRetryLimit = retryableCoverageComment
+          ? Number.POSITIVE_INFINITY
+          : 2;
 
         if (
           queued &&
@@ -72391,7 +72497,7 @@ const signOut = useCallback(async () => {
           if (
             ok ||
             !retryableImmediateReaction ||
-            immediateRetryCount >= 2
+            immediateRetryCount >= immediateRetryLimit
           ) {
             simDropQueued(n, queued.id);
           } else {
@@ -72403,9 +72509,11 @@ const signOut = useCallback(async () => {
              */
             action.payload = {
               ...(action.payload || {}),
-              ...(retryablePlayerReaction
-                ? { __playerReactionRetryCount: playerReactionRetryCount + 1 }
-                : { __burstRetryCount: burstRetryCount + 1 }),
+              ...(retryableCoverageComment
+                ? { __coverageRetryCount: coverageRetryCount + 1 }
+                : retryablePlayerReaction
+                  ? { __playerReactionRetryCount: playerReactionRetryCount + 1 }
+                  : { __burstRetryCount: burstRetryCount + 1 }),
             };
 
             const sim = ensureSimState(n);
