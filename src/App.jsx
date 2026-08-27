@@ -13410,6 +13410,21 @@ function topLevelAiCommenterIds(w, post) {
   );
 }
 
+function missingAiCommenterIdsForPost(w, post) {
+  if (!w || !post) return [];
+  const already = topLevelAiCommenterIds(w, post);
+  return (w.chars || [])
+    .filter(
+      (c) =>
+        c &&
+        c.id &&
+        !isHuman(w, c.id) &&
+        c.id !== post.authorId &&
+        !already.has(c.id)
+    )
+    .map((c) => c.id);
+}
+
 function postRequiresFullAiCommentCoverage(w, post) {
   return Boolean(w && post && post.id && post.authorId);
 }
@@ -13456,9 +13471,15 @@ function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
   if (coverage.complete || coverage.missing <= 0) return null;
 
   const fullCoverage = postRequiresFullAiCommentCoverage(w, post);
+  const missingIds = fullCoverage
+    ? missingAiCommenterIdsForPost(w, post)
+    : [];
   const batchMissing = fullCoverage
     ? Math.max(1, Math.min(8, coverage.missing))
     : coverage.missing;
+  const forcedCommenterIds = fullCoverage
+    ? missingIds.slice(0, batchMissing)
+    : [];
 
   return mkAction(
     "comments",
@@ -13474,6 +13495,7 @@ function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
       coverageTarget: coverage.target,
       coverageSource: source,
       everyAiMustComment: fullCoverage,
+      forcedCommenterIds,
     },
     "coverage"
   );
@@ -33233,11 +33255,18 @@ HARD CAPSULE BOUNDARY:
 async function genComments(w, post, options = {}) {
   const fullCoverage = postRequiresFullAiCommentCoverage(w, post);
   const alreadyTopLevel = topLevelAiCommenterIds(w, post);
-  const baseCast = fairCommentCast(
-    w,
-    post.authorId,
-    post
-  );
+  const forcedCoverageIds = Array.isArray(options && options.forcedCommenterIds)
+    ? options.forcedCommenterIds
+        .map((id) => aiVoice(w, id))
+        .filter((id, index, arr) => id && id !== post.authorId && !alreadyTopLevel.has(id) && arr.indexOf(id) === index)
+    : [];
+  const baseCast = fullCoverage && forcedCoverageIds.length
+    ? forcedCoverageIds.map((id) => charById(w, id)).filter(Boolean)
+    : fairCommentCast(
+        w,
+        post.authorId,
+        post
+      );
   const cast = fullCoverage
     ? baseCast.filter((c) => c && !alreadyTopLevel.has(c.id))
     : baseCast;
@@ -34408,6 +34437,103 @@ JSON ONLY: {"text":"one visible comment"}`,
 
   return {
     out: normalized,
+    label: threadOf(w, post).label,
+  };
+}
+
+
+/* FULL-COVERAGE LAST-MILE RECOVERY — one exact missing AI, one exact post.
+ * Used only when an every-bot coverage batch failed to persist a required
+ * character. The model writes the visible sentence; the app supplies the
+ * hidden grounding contract so schema drift cannot permanently omit one bot. */
+async function generateSingleGuaranteedCoverageComment(w, post, commenterId) {
+  if (!w || !post || !commenterId) return null;
+  const candidate = charById(w, commenterId);
+  if (!candidate || isHuman(w, candidate.id) || candidate.id === post.authorId) return null;
+  if (topLevelAiCommenterIds(w, post).has(candidate.id)) return null;
+
+  const literalBasis = immediatePlayerPostLiteralBasis(post);
+  if (!literalBasis) return null;
+
+  const relation = relationshipBehaviorCard(w, candidate.id, post.authorId);
+  const pairCanon = exactPairCanonCard(w, candidate.id, post.authorId) || {};
+  const questionMode = socialPostQuestionMode(post);
+
+  let raw = await askWorldJSONInteractive(
+    w,
+    `Write exactly ONE short, natural top-level social-media comment as the supplied fictional character. It must react to the exact supplied post. Return JSON only.`,
+    `REQUIRED COMMENTER: ${candidate.name} [${candidate.id}]
+PERSONALITY: ${cut(String(candidate.personality || ""), 1200)}
+TRAITS: ${cut(String(candidate.traits || ""), 600)}
+SPEECH/VOICE: ${cut(String(candidate.speech || candidate.voice || ""), 1000)}
+${socialSelfStyleOwnershipCard(candidate)}
+DIRECT RELATIONSHIP TO POST AUTHOR:
+${cut(String(relation || ""), 1400)}
+DIRECT PAIR CANON: ${cut(JSON.stringify(pairCanon), 700)}
+
+POST AUTHOR: ${nameOfIn(w, post.authorId)} [${post.authorId}]
+VISIBLE POST: ${JSON.stringify(String(post.text || "").slice(0, 1100))}
+${socialPostHasVisibleImage(post) && post.imageDescription ? `VISIBLE IMAGE: ${cut(String(post.imageDescription), 800)}` : ""}
+
+TASK:
+- ${candidate.name} MUST leave one top-level comment under THIS post. Do not output LIKE or IGNORE.
+- ${questionMode !== "none" ? "This is a question/invitation: answer it or ask a directly relevant clarification." : "React directly to the visible statement/image."}
+- Usually 1-16 words; maximum 28 words.
+- Relationship and personality change tone, never the topic.
+- No narration, no roleplay actions, no unrelated third-person drama.
+- Keep ${candidate.name}'s own casing, slang, punctuation and generation-specific voice.
+
+JSON ONLY: {"text":"one visible top-level comment"}`,
+    {
+      maxTokens: 180,
+      maxTries: 2,
+      maxBusyWaits: 1,
+      busyRetryCapMs: 1800,
+      timeoutMs: 10000,
+      maxSystemChars: 1400,
+      maxPromptChars: 9500,
+    }
+  );
+
+  if (typeof raw === "string") raw = { text: raw };
+  if (!raw || typeof raw !== "object") return null;
+
+  const visibleText = String(
+    raw.text !== undefined ? raw.text :
+    raw.comment !== undefined ? raw.comment :
+    raw.message !== undefined ? raw.message : ""
+  ).replace(/\s+/g, " ").trim();
+  if (!visibleText) return null;
+
+  const reactionAct = inferImmediatePlayerPostReactionAct(post, visibleText) || "support";
+  const row = {
+    id: candidate.id,
+    social_contract: "v1",
+    decision: "COMMENT",
+    post_id: String(post.id),
+    post_author_id: String(post.authorId),
+    reactionAct,
+    basis: literalBasis,
+    meaning: `Direct reaction to: ${literalBasis}`.slice(0, 360),
+    text: visibleText,
+    reply_to: "",
+    trigger: "guaranteed-coverage-hard-recovery",
+  };
+
+  return {
+    out: {
+      comments: [row],
+      likes: [],
+      socialDecisions: [{
+        id: candidate.id,
+        action: "COMMENT",
+        reason: "required every-post top-level comment",
+      }],
+      __castIds: [candidate.id],
+      __postMeaning: (post.socialMeaning && typeof post.socialMeaning === "object")
+        ? post.socialMeaning
+        : fallbackSocialPostMeaning(w, post),
+    },
     label: threadOf(w, post).label,
   };
 }
@@ -64823,6 +64949,55 @@ function planLiveWorldRecoveryAction(view) {
   return candidates[0].action;
 }
 
+const AUTONOMOUS_AI_NOTE_GLOBAL_GAP_MS = 2 * 60 * 1000;
+
+function pickDueAutonomousAiNoteAction(view) {
+  if (!view || !(view.chars || []).length) return null;
+
+  const latestAiNoteAt = (view.notes || []).reduce((latest, note) => {
+    if (!note || !note.authorId || isHuman(view, note.authorId)) return latest;
+    return Math.max(latest, Number(note.ts) || 0);
+  }, 0);
+
+  if (latestAiNoteAt && now() - latestAiNoteAt < AUTONOMOUS_AI_NOTE_GLOBAL_GAP_MS) {
+    return null;
+  }
+
+  const candidates = (view.chars || [])
+    .filter((c) => {
+      if (!c || !c.id || isHuman(view, c.id)) return false;
+      const active = noteOf(view, c.id);
+      return !active || now() - (Number(active.ts) || 0) >= autonomousAiNoteRefreshMs(view, c);
+    })
+    .map((c) => {
+      const lastNoteAt = (view.notes || [])
+        .filter((note) => note && note.authorId === c.id)
+        .reduce((latest, note) => Math.max(latest, Number(note.ts) || 0), 0);
+      return {
+        c,
+        lastNoteAt,
+        score: characterNoteActivityScore(view, c),
+        tie: Math.random(),
+      };
+    })
+    .sort((a, b) =>
+      (b.score - a.score) ||
+      (a.lastNoteAt - b.lastNoteAt) ||
+      (a.tie - b.tie)
+    );
+
+  if (!candidates.length) return null;
+
+  const pool = candidates.slice(0, Math.min(3, candidates.length));
+  const bot = pool[Math.floor(Math.random() * pool.length)].c;
+  return mkAction(
+    "note",
+    `autonomous-note-priority:${bot.id}:${Math.floor(now() / AUTONOMOUS_AI_NOTE_GLOBAL_GAP_MS)}`,
+    { botId: bot.id, trigger: "autonomous-note-priority" },
+    "event"
+  );
+}
+
 function planAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
@@ -64899,6 +65074,12 @@ function planAutoAction(view) {
       "event"
     );
   }
+
+  /* A due autonomous Note gets a real lane before the potentially long
+   * every-bot comment backlog. The 2-minute global gap keeps this from
+   * crowding out comments while preventing Notes from starving forever. */
+  const autonomousNoteAction = pickDueAutonomousAiNoteAction(view);
+  if (autonomousNoteAction) return autonomousNoteAction;
 
   const commentCoveragePost = guaranteedCommentCoverageCandidate(view);
   if (commentCoveragePost) {
@@ -67091,6 +67272,9 @@ async function runSimulationAction(view, update, action, addImage) {
           {
             minComments: quotaEnforced ? minComments : 0,
             maxComments,
+            forcedCommenterIds: Array.isArray(action.payload && action.payload.forcedCommenterIds)
+              ? action.payload.forcedCommenterIds
+              : [],
           }
         );
         generatedOut = generated && generated.out;
@@ -67235,6 +67419,68 @@ async function runSimulationAction(view, update, action, addImage) {
         }
       } catch (hardErr) {
         console.warn("[player-post-comments] hard recovery failed:", hardErr);
+      }
+    }
+
+    if (isGuaranteedCoverage) {
+      const probePost = (commentsProbe.posts || []).find((row) => row && row.id === post.id);
+      const missingAfterPrimary = probePost
+        ? missingAiCommenterIdsForPost(commentsProbe, probePost)
+        : missingAiCommenterIdsForPost(view, post);
+      const forcedIds = Array.isArray(action.payload && action.payload.forcedCommenterIds)
+        ? action.payload.forcedCommenterIds.map((id) => aiVoice(view, id)).filter(Boolean)
+        : [];
+      const requiredMissing =
+        forcedIds.find((id) => missingAfterPrimary.includes(id)) ||
+        missingAfterPrimary[0] ||
+        "";
+
+      if (requiredMissing) {
+        try {
+          const coveragePost = (commentsProbe.posts || []).find((row) => row && row.id === post.id) || post;
+          const hardCoverage = await generateSingleGuaranteedCoverageComment(
+            commentsProbe,
+            coveragePost,
+            requiredMissing
+          );
+          if (hardCoverage && hardCoverage.out) {
+            const hardCoverageProbe = cloneWorldState(commentsProbe);
+            const hardCoverageVisible = applyComments(
+              hardCoverageProbe,
+              post.id,
+              hardCoverage.out,
+              hardCoverage.label || label
+            );
+            if (hardCoverageVisible) {
+              const hardCoverageIds = new Set(
+                safeAiComments(hardCoverage.out)
+                  .map((row) => aiVoice(view, row && (row.id !== undefined ? row.id : row.name)))
+                  .filter(Boolean)
+              );
+              out = {
+                ...(out || {}),
+                comments: [
+                  ...safeAiComments(out).filter((row) => {
+                    const id = aiVoice(view, row && (row.id !== undefined ? row.id : row.name));
+                    return !id || !hardCoverageIds.has(id);
+                  }),
+                  ...safeAiComments(hardCoverage.out),
+                ],
+                socialDecisions: [
+                  ...((out && Array.isArray(out.socialDecisions)) ? out.socialDecisions : []).filter((row) => {
+                    const id = aiVoice(view, row && (row.id !== undefined ? row.id : row.name));
+                    return !id || !hardCoverageIds.has(id);
+                  }),
+                  ...((hardCoverage.out && Array.isArray(hardCoverage.out.socialDecisions)) ? hardCoverage.out.socialDecisions : []),
+                ],
+              };
+              commentsProbe = hardCoverageProbe;
+              visibleReactionCount += hardCoverageVisible;
+            }
+          }
+        } catch (coverageHardErr) {
+          console.warn("[all-bot-comments] one-character coverage recovery failed:", coverageHardErr);
+        }
       }
     }
 
