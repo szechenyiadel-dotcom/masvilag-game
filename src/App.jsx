@@ -13497,7 +13497,12 @@ function postCommentCoverageState(w, post) {
   };
 }
 
-function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
+function guaranteedPostCommentAction(
+  w,
+  post,
+  source = "coverage-watchdog",
+  exactCommenterId = ""
+) {
   if (!w || !post || !post.id) return null;
   const coverage = postCommentCoverageState(w, post);
   if (coverage.complete || coverage.missing <= 0) return null;
@@ -13514,8 +13519,17 @@ function guaranteedPostCommentAction(w, post, source = "coverage-watchdog") {
   const batchMissing = fullCoverage
     ? Math.min(1, coverage.missing)
     : coverage.missing;
-  const forcedCommenterIds = fullCoverage
-    ? missingIds.slice(0, 1)
+  const normalizedExactCommenterId =
+    exactCommenterId
+      ? aiVoice(w, exactCommenterId)
+      : "";
+  const selectedMissingId =
+    normalizedExactCommenterId &&
+    missingIds.includes(normalizedExactCommenterId)
+      ? normalizedExactCommenterId
+      : (missingIds[0] || "");
+  const forcedCommenterIds = fullCoverage && selectedMissingId
+    ? [selectedMissingId]
     : [];
 
   const requiredCommenterId = forcedCommenterIds[0] || "any";
@@ -13544,8 +13558,25 @@ function enqueueGuaranteedPostCommentCoverage(w, postId, source = "post-created"
   if (!w || !postId) return false;
   const post = (w.posts || []).find((row) => row && row.id === postId);
   if (!post) return false;
-  const action = guaranteedPostCommentAction(w, post, source);
-  return action ? simEnqueue(w, action) : false;
+
+  /* EVERY-BOT COMMENT FAN-OUT — COMMENT SYSTEM ONLY:
+   * Queue one isolated coverage action for EVERY currently missing AI instead
+   * of relying on a fragile one-success-then-enqueue-next chain. Each action
+   * has the actor ID in its key, so duplicates are naturally suppressed. */
+  const missingIds = missingAiCommenterIdsForPost(w, post);
+  if (!missingIds.length) return false;
+
+  let queuedAny = false;
+  missingIds.forEach((commenterId) => {
+    const action = guaranteedPostCommentAction(
+      w,
+      post,
+      source,
+      commenterId
+    );
+    if (action && simEnqueue(w, action)) queuedAny = true;
+  });
+  return queuedAny;
 }
 
 function guaranteedCommentCoverageCandidate(w) {
@@ -15553,9 +15584,15 @@ function socialCommentGroundedInExactPost(
      attached to that selected post/image detail. This catches fluent but
      off-topic relationship/personality lines that previously passed because
      the model copied a valid basis while writing about something else. */
+  const mandatoryAllBotCoverageComment =
+    /^guaranteed-coverage(?:-|$)/i.test(
+      String(trigger || "")
+    );
+
   if (
     basis &&
     socialCommentBasisMatchesExactPost(post, basis) &&
+    !mandatoryAllBotCoverageComment &&
     !socialCommentTextEchoesBasis(post, basis, raw)
   ) {
     return false;
@@ -41474,6 +41511,11 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 postId: id,
                 commentId: madeId,
                 parentId: parent || "",
+                /* COMMENT-ONLY DIRECT REPLY ROUTING:
+                 * carry the already-resolved AI target explicitly so the
+                 * scheduler never has to rediscover it from a potentially
+                 * one-render-old viewRef snapshot. */
+                targetId: primaryTargetId || "",
               });
             }
 
@@ -62696,13 +62738,40 @@ function simEnqueue(w, action) {
     let insertAt = sim.queue.length;
     for (let i = 0; i < sim.queue.length; i += 1) {
       const queued = sim.queue[i];
-      if (!queued || queued.source !== "coverage") continue;
-      const queuedPostId = String(queued.payload && queued.payload.postId || "");
-      const queuedPost = queuedPostId
-        ? (w.posts || []).find((post) => post && String(post.id) === queuedPostId)
-        : null;
-      const queuedPostTs = Number(queuedPost && queuedPost.ts) || 0;
-      if (actionPostTs > queuedPostTs) {
+      if (!queued) continue;
+
+      /* COMMENT-ONLY HARD COVERAGE PRIORITY:
+       * Direct player reactions/manual work stay ahead. Optional generated
+       * comment/reply wars may NOT permanently sit in front of the missing
+       * top-level commenters, otherwise the same visible 1-2 bots can keep
+       * chatting while the rest of the cast never reaches the post. */
+      if (queued.source === "manual" || queued.source === "player-reactive") {
+        continue;
+      }
+
+      if (queued.source === "coverage") {
+        const queuedPostId = String(queued.payload && queued.payload.postId || "");
+        const queuedPost = queuedPostId
+          ? (w.posts || []).find((post) => post && String(post.id) === queuedPostId)
+          : null;
+        const queuedPostTs = Number(queuedPost && queuedPost.ts) || 0;
+        if (actionPostTs > queuedPostTs) {
+          insertAt = i;
+          break;
+        }
+        continue;
+      }
+
+      const queuedKey = String(queued.key || "");
+      const optionalThreadWork =
+        queued.type === "reply" ||
+        (queued.type === "comments" && queued.source !== "coverage") ||
+        queuedKey.startsWith("thread-wave:") ||
+        queuedKey.startsWith("thread-reply:") ||
+        queuedKey.startsWith("auto-thread:") ||
+        queuedKey.startsWith("visual-crush-friction:");
+
+      if (optionalThreadWork) {
         insertAt = i;
         break;
       }
@@ -66336,6 +66405,87 @@ function runAutonomousFeedHeartbeat(w, update) {
   return created;
 }
 
+async function generateSingleDirectPlayerCommentReplyRecovery(
+  w,
+  post,
+  playerComment,
+  responderId
+) {
+  if (!w || !post || !playerComment || !responderId) return null;
+  if (!isHuman(w, playerComment.authorId)) return null;
+
+  const responder = charById(w, responderId);
+  if (!responder || isHuman(w, responder.id) || responder.id === playerComment.authorId) {
+    return null;
+  }
+
+  const source = String(playerComment.text || "").replace(/\s+/g, " ").trim();
+  if (!source) return null;
+  const parentBasis = source.split(/\s+/).filter(Boolean).slice(0, 18).join(" ");
+  if (!socialReplyBasisMatchesParent(playerComment, parentBasis)) return null;
+
+  const relation = relationshipBehaviorCard(w, responder.id, playerComment.authorId);
+  let raw = await askWorldJSONInteractive(
+    w,
+    `Write exactly ONE short public social-media reply as the supplied fictional character. Return JSON only.`,
+    `RESPONDER: ${responder.name} [${responder.id}]
+${voiceCard(responder)}
+PERSONALITY: ${cut(String(responder.personality || ""), 1000)}
+TRAITS: ${cut(String(responder.traits || ""), 500)}
+RELATIONSHIP TO THE PLAYER COMMENT AUTHOR:
+${cut(String(relation || ""), 1200)}
+
+POST: ${nameOfIn(w, post.authorId)}: ${JSON.stringify(String(post.text || "").slice(0, 700))}
+EXACT PLAYER COMMENT YOU MUST ANSWER: ${JSON.stringify(source)}
+
+HARD RULES:
+- ${responder.name} MUST answer this exact player comment now.
+- One natural social-media reply, usually 1-18 words.
+- Stay on the exact comment topic. No unrelated third-person drama.
+- Keep ${responder.name}'s own Speech/Voice, casing and relationship tone.
+- No narration or roleplay actions.
+
+JSON ONLY: {"text":"one direct reply"}`,
+    {
+      maxTokens: 180,
+      maxTries: 2,
+      maxBusyWaits: 1,
+      busyRetryCapMs: 1800,
+      timeoutMs: 10000,
+      maxSystemChars: 1400,
+      maxPromptChars: 9000,
+    }
+  );
+
+  if (typeof raw === "string") raw = { text: raw };
+  if (!raw || typeof raw !== "object") return null;
+  const text = String(
+    raw.text !== undefined ? raw.text :
+    raw.reply !== undefined ? raw.reply :
+    raw.comment !== undefined ? raw.comment : ""
+  ).replace(/\s+/g, " ").trim();
+  if (!text) return null;
+
+  return {
+    comments: [{
+      id: responder.id,
+      social_contract: "v1",
+      decision: "REPLY",
+      post_id: String(post.id),
+      post_author_id: String(post.authorId),
+      targetId: String(playerComment.authorId),
+      replyTo: String(playerComment.id),
+      reactionAct: inferImmediatePlayerPostReactionAct(post, text) || "answer",
+      parentBasis,
+      meaning: `Direct reply to: ${parentBasis}`.slice(0, 360),
+      text,
+      trigger: "direct-player-reply-recovery",
+    }],
+    changes: [],
+    events: [],
+  };
+}
+
 async function runSimulationAction(view, update, action, addImage, mediaMap = {}) {
   if (!view || !action) return null;
 
@@ -67278,8 +67428,47 @@ async function runSimulationAction(view, update, action, addImage, mediaMap = {}
         }
       : rawOut;
 
-    const replyProbe = cloneWorldState(view);
-    const replyCount = applyReplies(replyProbe, post.id, comment.id, out);
+    let finalReplyOut = out;
+    let replyProbe = cloneWorldState(view);
+    let replyCount = applyReplies(replyProbe, post.id, comment.id, finalReplyOut);
+
+    /* DIRECT PLAYER→AI REPLY GUARANTEE — COMMENT SYSTEM ONLY:
+     * If the ordinary multi-context reply pass is filtered to zero, do one
+     * tiny exact-responder recovery. This does not affect autonomous AI↔AI
+     * thread behavior; it only guarantees a response when the player directly
+     * replied to a specific AI comment. */
+    if (
+      !replyCount &&
+      requestedTargetId &&
+      isHuman(view, comment.authorId) &&
+      String(action.payload && action.payload.trigger || "") === "player-comment-direct-reply"
+    ) {
+      try {
+        const recovered = await generateSingleDirectPlayerCommentReplyRecovery(
+          view,
+          post,
+          comment,
+          requestedTargetId
+        );
+        if (recovered) {
+          const recoveredProbe = cloneWorldState(view);
+          const recoveredCount = applyReplies(
+            recoveredProbe,
+            post.id,
+            comment.id,
+            recovered
+          );
+          if (recoveredCount) {
+            finalReplyOut = recovered;
+            replyProbe = recoveredProbe;
+            replyCount = recoveredCount;
+          }
+        }
+      } catch (directReplyErr) {
+        console.warn("[player-comment-reply] direct responder recovery failed:", directReplyErr);
+      }
+    }
+
     if (!replyCount) return null;
 
     update((n) => {
@@ -67288,7 +67477,7 @@ async function runSimulationAction(view, update, action, addImage, mediaMap = {}
         post.id,
         /* mindig közvetlenül arra a kommentre válaszoljon, ami kiváltotta */
         comment.id,
-        out
+        finalReplyOut
       );
     });
 
@@ -71240,13 +71429,32 @@ const signOut = useCallback(async () => {
       const explicitParent = explicitParentId
         ? liveComments.find((c) => c && c.id === explicitParentId)
         : null;
+      const explicitEventTargetId =
+        event.type === "player-comment-reply" &&
+        event.targetId &&
+        !isHuman(live, event.targetId) &&
+        charById(live, event.targetId)
+          ? String(event.targetId)
+          : "";
+
       const directReplyTarget =
         event.type === "player-comment-reply" &&
-        explicitParent &&
-        explicitParent.authorId &&
-        !isHuman(live, explicitParent.authorId) &&
-        charById(live, explicitParent.authorId)
-          ? { id: explicitParent.authorId, reason: "direct-player-reply", score: 999 }
+        (
+          explicitEventTargetId ||
+          (
+            explicitParent &&
+            explicitParent.authorId &&
+            !isHuman(live, explicitParent.authorId) &&
+            charById(live, explicitParent.authorId)
+              ? explicitParent.authorId
+              : ""
+          )
+        )
+          ? {
+              id: explicitEventTargetId || explicitParent.authorId,
+              reason: "direct-player-reply",
+              score: 999,
+            }
           : null;
       const naturalTarget = directReplyTarget || (livePost && liveComment
         ? naturalCommentReplyTargets(live, livePost, liveComment)
