@@ -38381,6 +38381,12 @@ function autonomousTriggeredFeedContext(w, payload = {}, authorId = "") {
     }
   }
 
+  if (trigger === "feed-refresh-after-player-post") {
+    lines.push("TRIGGER = INDEPENDENT FEED REFRESH AFTER PLAYER ACTIVITY");
+    lines.push("ROUTING HARD RULE: this is NOT a reaction, reply, subtweet or vaguepost about the player's fresh post. Any direct response to the player's post belongs under that post as a COMMENT. Generate a normal autonomous status from this author's own current life, mood, plans, public-safe recent context or everyday activity instead.");
+    lines.push("Do not quote, paraphrase, answer or reference the player's fresh post merely because this feed refresh happened right after it.");
+  }
+
   if ((trigger === "popup-choice" || trigger === "popup-custom-response") && payload.popupEventId) {
     const event = (w.popupEvents || []).find((e) => e && e.id === payload.popupEventId);
     if (event) {
@@ -67535,13 +67541,25 @@ async function runSimulationAction(view, update, action, addImage) {
         .map((c) => c.id);
 
       if (
+        refreshedPost &&
+        isGuaranteedCoverage
+      ) {
+        /* Required top-level coverage is queued before optional bot-to-bot
+         * thread expansion. This is what guarantees that EVERY AI reaches every
+         * post instead of the thread/feed backlog permanently stopping at 1-2. */
+        enqueueGuaranteedPostCommentCoverage(
+          n,
+          refreshedPost.id,
+          isImmediatePlayerPostReaction
+            ? "player-post-all-bots-followup"
+            : "coverage-followup"
+        );
+      }
+
+      if (
         newCommentIds.length &&
         (!action.payload || action.payload.allowThreadFollowup !== false)
       ) {
-        /* Interleave the social conversation BEFORE the next all-bot coverage
-         * batch. This creates visible reply/defense/rivalry activity while the
-         * remaining bots are still arriving instead of postponing every thread
-         * until the final top-level commenter has finished. */
         const queuedVisualFriction = enqueueVisualCrushThreadFriction(
           n,
           post.id,
@@ -67557,22 +67575,6 @@ async function runSimulationAction(view, update, action, addImage) {
         if (!queuedVisualFriction && !waveCount) {
           enqueueNaturalThreadReply(n, post.id, newCommentIds);
         }
-      }
-
-      if (
-        refreshedPost &&
-        isGuaranteedCoverage
-      ) {
-        /* Continue bounded all-bot coverage after the freshly queued public
-         * thread reactions. Every bot still eventually receives its top-level
-         * slot, but coverage no longer suppresses visible conversations. */
-        enqueueGuaranteedPostCommentCoverage(
-          n,
-          refreshedPost.id,
-          isImmediatePlayerPostReaction
-            ? "player-post-all-bots-followup"
-            : "coverage-followup"
-        );
       }
     });
 
@@ -70979,6 +70981,23 @@ const signOut = useCallback(async () => {
         ? postCommentCoverageState(live, livePost)
         : { missing: 2, target: 2 };
 
+      /* Feed refresh after posting: queue ONE independent autonomous status.
+       * It deliberately carries no postId/triggerRefId, so it cannot use the
+       * player's post as its semantic anchor; direct reactions stay in comments.
+       * Because event actions append while the comment/DM actions below unshift,
+       * public comment feedback still arrives before this refresh slot. */
+      queuedAny = requestSimulationAction(
+        mkAction(
+          "world",
+          `independent-feed-refresh-after-player-post:${event.postId}:${Math.floor(now() / 15000)}`,
+          {
+            trigger: "feed-refresh-after-player-post",
+            independentFeedRefresh: true,
+          },
+          "event"
+        )
+      ) || queuedAny;
+
       /* Lowest immediate priority: the optional private reaction. */
       const dmBot = live
         ? playerPostReactiveDmCandidate(live, event.postId)
@@ -71096,11 +71115,24 @@ const signOut = useCallback(async () => {
     ) {
       const live = viewRef.current;
       const livePost = live && (live.posts || []).find((p) => p && p.id === event.postId);
-      const liveComment = livePost && safePostComments(livePost).find((c) => c && c.id === event.commentId);
-      const naturalTarget = livePost && liveComment
+      const liveComments = livePost ? safePostComments(livePost) : [];
+      const liveComment = liveComments.find((c) => c && c.id === event.commentId);
+      const explicitParentId = String(event.parentId || (liveComment && liveComment.parent) || "");
+      const explicitParent = explicitParentId
+        ? liveComments.find((c) => c && c.id === explicitParentId)
+        : null;
+      const directReplyTarget =
+        event.type === "player-comment-reply" &&
+        explicitParent &&
+        explicitParent.authorId &&
+        !isHuman(live, explicitParent.authorId) &&
+        charById(live, explicitParent.authorId)
+          ? { id: explicitParent.authorId, reason: "direct-player-reply", score: 999 }
+          : null;
+      const naturalTarget = directReplyTarget || (livePost && liveComment
         ? naturalCommentReplyTargets(live, livePost, liveComment)
             .find((row) => commentWarrantsAiReply(live, livePost, liveComment, row.id))
-        : null;
+        : null);
 
       const openReplyCue = liveComment
         ? commentReplyCueScore(liveComment.text)
@@ -71124,9 +71156,9 @@ const signOut = useCallback(async () => {
             commentId: event.commentId,
             rootId: event.commentId,
             targetId: naturalTarget ? naturalTarget.id : "",
-            trigger: "player-comment",
+            trigger: directReplyTarget ? "player-comment-direct-reply" : "player-comment",
           },
-          "event"
+          directReplyTarget ? "player-reactive" : "event"
         )
       );
     }
@@ -72059,16 +72091,17 @@ const signOut = useCallback(async () => {
     }
   }
 
-  /* FULL SOCIAL FAIRNESS: a long all-bot comment/reply backlog must not freeze
-   * autonomous statuses. Direct player-reactive work still stays first. Only
-   * generated coverage/thread work may yield a single slot when the feed is due. */
+  /* FULL SOCIAL FAIRNESS: thread/reply backlog may yield one slot to a due
+   * autonomous status, but REQUIRED all-bot comment coverage may not be skipped.
+   * Otherwise a constantly-due feed can leave every post stuck at the first 1-2
+   * commenters forever. Direct player-reactive work still stays first. */
   let socialBacklogFeedOverride = null;
   const queuedKey = String(queued && queued.key || "");
   const queuedIsGeneratedSocialBacklog = Boolean(
     queued &&
     queued.source !== "player-reactive" &&
+    queued.source !== "coverage" &&
     (
-      queued.source === "coverage" ||
       queuedKey.startsWith("thread-wave:") ||
       queuedKey.startsWith("thread-reply:") ||
       queuedKey.startsWith("auto-thread:") ||
@@ -72317,7 +72350,7 @@ const signOut = useCallback(async () => {
         const retryablePlayerReaction = Boolean(
           action &&
           action.source === "player-reactive" &&
-          (action.type === "comments" || action.type === "dm")
+          (action.type === "comments" || action.type === "dm" || action.type === "reply")
         );
 
         const burstRetryCount = Math.max(
