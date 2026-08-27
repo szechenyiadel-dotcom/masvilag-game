@@ -13552,6 +13552,12 @@ function guaranteedCommentCoverageCandidate(w) {
   if (!w) return null;
   const ts = now();
 
+  /* FRESH-POST COMMENT PRIORITY — HARD RULE:
+   * Comment coverage is still eventually required for every post, but the
+   * watchdog must never drain historical backlog while a newer post is still
+   * missing AI commenters. Choose strictly by newest post timestamp first;
+   * retry timing only decides whether that specific post is temporarily
+   * eligible, not whether an older in-progress post outranks it. */
   return (
     (w.posts || [])
       .filter((post) => {
@@ -13561,26 +13567,9 @@ function guaranteedCommentCoverageCandidate(w) {
         const attemptedAt = Number(post.commentCoverageAttemptAt) || 0;
         return !attemptedAt || ts - attemptedAt >= GUARANTEED_POST_COMMENT_RETRY_MS;
       })
-      .map((post) => {
-        const coverage = postCommentCoverageState(w, post);
-        const age = Math.max(0, ts - (Number(post.ts) || 0));
-        const freshBoost =
-          age <= 30 * 60 * 1000
-            ? 1000000
-            : age <= 6 * 60 * 60 * 1000
-              ? 180000
-              : 0;
-        const inProgressBoost = coverage.current > 0 ? 70000 : 0;
-        return {
-          post,
-          score:
-            freshBoost +
-            inProgressBoost +
-            coverage.missing * 1000 +
-            Math.max(0, Number(post.ts) || 0) / 1e10,
-        };
-      })
-      .sort((a, b) => b.score - a.score)[0]?.post || null
+      .sort((a, b) =>
+        (Number(b.ts) || 0) - (Number(a.ts) || 0)
+      )[0] || null
   );
 }
 
@@ -62693,12 +62682,36 @@ function simEnqueue(w, action) {
     sim.queue.unshift(action);
     sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
   } else if (action.source === "coverage") {
-    /* Full-comment coverage is persistent, not blocking. The immediate first
-     * player-post wave is already player-reactive/front-queued; subsequent
-     * coverage batches go to the back so thread replies and autonomous life can
-     * interleave instead of one post monopolizing the whole simulation queue. */
-    sim.queue.push(action);
-    sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
+    /* FRESH-POST COMMENT COVERAGE PRIORITY:
+     * Coverage remains background work relative to non-coverage actions, but
+     * coverage actions themselves are ordered newest-post first. Without this,
+     * a saved historical backlog could sit ahead of the brand-new post for many
+     * turns, making comments appear only on old posts. */
+    const actionPostId = String(action.payload && action.payload.postId || "");
+    const actionPost = actionPostId
+      ? (w.posts || []).find((post) => post && String(post.id) === actionPostId)
+      : null;
+    const actionPostTs = Number(actionPost && actionPost.ts) || 0;
+
+    let insertAt = sim.queue.length;
+    for (let i = 0; i < sim.queue.length; i += 1) {
+      const queued = sim.queue[i];
+      if (!queued || queued.source !== "coverage") continue;
+      const queuedPostId = String(queued.payload && queued.payload.postId || "");
+      const queuedPost = queuedPostId
+        ? (w.posts || []).find((post) => post && String(post.id) === queuedPostId)
+        : null;
+      const queuedPostTs = Number(queuedPost && queuedPost.ts) || 0;
+      if (actionPostTs > queuedPostTs) {
+        insertAt = i;
+        break;
+      }
+    }
+
+    sim.queue.splice(insertAt, 0, action);
+    if (sim.queue.length > SIM_QUEUE_LIMIT) {
+      sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
+    }
   } else {
     sim.queue.push(action);
     sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
