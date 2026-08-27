@@ -13559,24 +13559,14 @@ function enqueueGuaranteedPostCommentCoverage(w, postId, source = "post-created"
   const post = (w.posts || []).find((row) => row && row.id === postId);
   if (!post) return false;
 
-  /* EVERY-BOT COMMENT FAN-OUT — COMMENT SYSTEM ONLY:
-   * Queue one isolated coverage action for EVERY currently missing AI instead
-   * of relying on a fragile one-success-then-enqueue-next chain. Each action
-   * has the actor ID in its key, so duplicates are naturally suppressed. */
-  const missingIds = missingAiCommenterIdsForPost(w, post);
-  if (!missingIds.length) return false;
-
-  let queuedAny = false;
-  missingIds.forEach((commenterId) => {
-    const action = guaranteedPostCommentAction(
-      w,
-      post,
-      source,
-      commenterId
-    );
-    if (action && simEnqueue(w, action)) queuedAny = true;
-  });
-  return queuedAny;
+  /* COMMENT QUEUE BACKPRESSURE — COMMENT SYSTEM ONLY:
+   * Keep the every-bot guarantee, but queue only ONE missing AI for this post
+   * at a time. After success the existing coverage-followup enqueues the next
+   * missing AI; after failure the watchdog rotates via per-actor attempt data.
+   * This avoids N-way fan-out + repeated re-fan-out, which could create dozens
+   * of consecutive provider calls/state updates and freeze the UI. */
+  const action = guaranteedPostCommentAction(w, post, source);
+  return action ? simEnqueue(w, action) : false;
 }
 
 function guaranteedCommentCoverageCandidate(w) {
@@ -52731,6 +52721,33 @@ function ensureSimState(w) {
     });
     w.sim.running = "";
     w.sim.queueRepairVersion = 2;
+  }
+
+  /* COMMENT QUEUE FAN-OUT REPAIR v3 — COMMENT SYSTEM ONLY:
+   * The previous every-bot implementation could persist one coverage action
+   * per missing AI for the same post. Keep at most one generated coverage
+   * action per post so an already-saved fan-out backlog cannot continue to
+   * hammer the provider/UI after upgrading. No comments/history are deleted. */
+  if (Math.max(0, Math.floor(Number(w.sim.queueRepairVersion) || 0)) < 3) {
+    const seenCoveragePosts = new Set();
+    w.sim.queue = w.sim.queue.filter((action) => {
+      if (!action) return false;
+      const isCoverage =
+        action.type === "comments" &&
+        action.source === "coverage" &&
+        action.payload &&
+        action.payload.trigger === "guaranteed-coverage";
+      if (!isCoverage) return true;
+
+      const postId = String(action.payload.postId || "");
+      if (!postId) return false;
+      if (seenCoveragePosts.has(postId)) return false;
+      seenCoveragePosts.add(postId);
+      return true;
+    });
+    w.sim.running = "";
+    w.sim.queueRepairVersion = 3;
+    console.info("[comment-queue] fan-out backlog compacted");
   }
 
   /* v51 migration/runtime guard: a régi buildből bent maradt automatikus
