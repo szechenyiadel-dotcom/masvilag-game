@@ -5097,16 +5097,11 @@ function retryAfterMs(value, fallbackMs = 12000) {
 /*
  * MULTI-USER PROVIDER GATE
  *
- * The previous implementation kept separate "interactive" and "background"
- * serial chains. That meant one Scene/DM request and one autonomous-world
- * request could still hit the SAME provider concurrently. With two browser
- * clients this could become several large requests at once and trigger 429/TPM
- * limits even though each client thought it was being polite.
- *
- * Keep exactly ONE in-flight message request per provider. Waiting interactive
- * tasks jump ahead of waiting background tasks, but never run in parallel with
- * them. A tiny start gap also prevents two queued requests from hitting the
- * upstream on the same millisecond after a long response finishes.
+ * Exactly one upstream message request may run on a given provider at once,
+ * but INTERACTIVE requests must not blindly wait behind that provider when a
+ * different configured provider is free. The route below can inspect this gate
+ * and immediately spill a second user's Scene/DM request onto a free fallback.
+ * Background work remains lower priority inside every provider queue.
  */
 function providerTaskQueue(provider) {
   let state = AI_PROVIDER_TASK_QUEUES.get(provider);
@@ -5119,6 +5114,23 @@ function providerTaskQueue(provider) {
     AI_PROVIDER_TASK_QUEUES.set(provider, state);
   }
   return state;
+}
+
+function providerTaskState(provider) {
+  return AI_PROVIDER_TASK_QUEUES.get(provider) || null;
+}
+
+function providerQueueLoad(provider) {
+  const state = providerTaskState(provider);
+  if (!state) return 0;
+  return (state.running ? 1 : 0) +
+    (Array.isArray(state.interactive) ? state.interactive.length : 0) +
+    (Array.isArray(state.background) ? state.background.length : 0);
+}
+
+function providerIsRunning(provider) {
+  const state = providerTaskState(provider);
+  return !!(state && state.running);
 }
 
 function pumpProviderTaskQueue(provider) {
@@ -5137,7 +5149,7 @@ function pumpProviderTaskQueue(provider) {
   state.running = true;
 
   const lastStart = Number(AI_PROVIDER_LAST_START.get(provider) || 0);
-  const minGapMs = task.interactive ? 350 : 1200;
+  const minGapMs = task.interactive ? 120 : 900;
   const delayMs = Math.max(0, minGapMs - (Date.now() - lastStart));
 
   setTimeout(async () => {
@@ -6198,8 +6210,35 @@ app.post(
 
     const runPass = async (body) => {
       const limited = [];
+      const busyProviders = [];
+      const interactive = String(body?.masvilag_priority || "") === "interactive";
+
+      /*
+       * FAST MULTI-USER ROUTING:
+       * For a player-triggered Scene/DM, do not enqueue behind a provider that
+       * is already serving somebody else if another configured provider is free.
+       * This preserves one in-flight request PER provider while allowing two
+       * users to be served concurrently by two different providers.
+       */
+      const passProviders = [];
 
       for (const provider of providers) {
+        const throttled = providerCooldownResult(provider);
+        if (throttled) {
+          last = throttled;
+          limited.push(throttled);
+          continue;
+        }
+
+        if (interactive && providerIsRunning(provider)) {
+          busyProviders.push(provider);
+          continue;
+        }
+
+        passProviders.push(provider);
+      }
+
+      for (const provider of passProviders) {
         try {
           const result = await callMessageProvider(provider, body);
 
@@ -6215,13 +6254,48 @@ app.post(
 
           if (Number(result?.status) === 429) {
             limited.push(result);
-            /* Crucial: do NOT wait here. Try the next configured provider now. */
             continue;
           }
 
           /* A provider-specific model/auth/upstream error must not prevent a
              different configured provider from answering this same request. */
           continue;
+        } catch (err) {
+          last = {
+            status: err?.name === "AbortError" ? 504 : 502,
+            payload: {
+              error: {
+                message:
+                  err?.name === "AbortError"
+                    ? `${provider} timed out.`
+                    : (err?.message || `${provider} proxy error`),
+              },
+            },
+            provider,
+          };
+        }
+      }
+
+      /*
+       * If every healthy provider was merely BUSY (not rate-limited), wait on
+       * exactly one least-loaded provider instead of returning a fake overload.
+       * This path is the unavoidable queue case when all configured providers
+       * are already serving interactive work.
+       */
+      if (interactive && busyProviders.length) {
+        const provider = [...busyProviders].sort(
+          (a, b) => providerQueueLoad(a) - providerQueueLoad(b)
+        )[0];
+
+        try {
+          const result = await callMessageProvider(provider, body);
+          if (result?.ok) {
+            return { ok: true, result, limited };
+          }
+          if (!result?.unavailable) {
+            last = result;
+            if (Number(result?.status) === 429) limited.push(result);
+          }
         } catch (err) {
           last = {
             status: err?.name === "AbortError" ? 504 : 502,
