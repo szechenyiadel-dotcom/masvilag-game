@@ -3163,6 +3163,7 @@ function visionTextFromAnthropic(data) {
 }
 
 app.post("/ai/vision", async (req, res) => {
+  let visionStage = "auth";
   try {
     if (!(await requireDb(res))) return;
 
@@ -3177,6 +3178,7 @@ app.post("/ai/vision", async (req, res) => {
       });
     }
 
+    visionStage = "image";
     const image =
       await resolveInputImage(
         req.body?.image
@@ -3208,10 +3210,20 @@ app.post("/ai/vision", async (req, res) => {
       });
     }
 
+    visionStage = "provider";
     const provider =
       getProvider(
         req.body || {}
       );
+
+    const throttled = providerCooldownResult(provider);
+    if (throttled) {
+      res.setHeader("retry-after", throttled.retryAfter);
+      return res.status(req.body?.optional === true ? 200 : 429).json({
+        ok: false, text: "", code: "PROVIDER_RATE_LIMIT", retryAfter: throttled.retryAfter,
+        error: "A képelemző szolgáltatás átmenetileg túlterhelt.",
+      });
+    }
 
     if (
       provider === "openai"
@@ -3241,7 +3253,7 @@ app.post("/ai/vision", async (req, res) => {
             );
 
       const r =
-        await fetch(
+        await fetchWithTimeout(
           "https://api.openai.com/v1/chat/completions",
           {
             method: "POST",
@@ -3288,6 +3300,8 @@ app.post("/ai/vision", async (req, res) => {
           );
 
       if (!r.ok) {
+        if (r.status === 429) recordProviderCooldown(provider, r.headers.get("retry-after"));
+        if (r.headers.get("retry-after")) res.setHeader("retry-after", r.headers.get("retry-after"));
         return res
           .status(r.status)
           .json(payload);
@@ -3343,7 +3357,7 @@ app.post("/ai/vision", async (req, res) => {
       );
 
       const r =
-        await fetch(
+        await fetchWithTimeout(
           url,
           {
             method:
@@ -3390,6 +3404,8 @@ app.post("/ai/vision", async (req, res) => {
           );
 
       if (!r.ok) {
+        if (r.status === 429) recordProviderCooldown(provider, r.headers.get("retry-after"));
+        if (r.headers.get("retry-after")) res.setHeader("retry-after", r.headers.get("retry-after"));
         return res
           .status(r.status)
           .json(payload);
@@ -3441,7 +3457,7 @@ app.post("/ai/vision", async (req, res) => {
           );
 
     const r =
-      await fetch(
+      await fetchWithTimeout(
         "https://api.anthropic.com/v1/messages",
         {
           method: "POST",
@@ -3498,6 +3514,8 @@ app.post("/ai/vision", async (req, res) => {
         );
 
     if (!r.ok) {
+      if (r.status === 429) recordProviderCooldown(provider, r.headers.get("retry-after"));
+      if (r.headers.get("retry-after")) res.setHeader("retry-after", r.headers.get("retry-after"));
       return res
         .status(r.status)
         .json(payload);
@@ -3518,8 +3536,13 @@ app.post("/ai/vision", async (req, res) => {
     // A távoli kép letöltési hibája nem a képelemző modell hibája.
     // Ezt külön jelezzük, hogy a hiba oka a konzolban is kiderüljön.
     const reason = String(err && err.message || "");
-    const remoteImageError =
-      /reference image|image reference|image-reference|private.network|unsupported reference image/i.test(reason);
+    const remoteImageError = visionStage === "image";
+    if (remoteImageError && req.body?.optional === true) {
+      // A background enrichment is optional. Preserve the post/manual caption
+      // and explicitly report that no image understanding was produced.
+      return res.json({ ok: false, text: "", code: "IMAGE_UNAVAILABLE",
+        error: "A külső kép nem érhető el elemzéshez; a megadott képleírás marad." });
+    }
     const timedOut = err && (err.name === "AbortError" || /timed out|timeout/i.test(reason));
 
     return res.status(remoteImageError ? 422 : timedOut ? 504 : 502).json({
@@ -4778,6 +4801,8 @@ async function proxyGeminiMessage(
           "gemini",
       };
 
+      if (r.status === 429) return last;
+
       if (
         !retryableProviderStatus(
           r.status
@@ -4966,6 +4991,8 @@ async function proxyAnthropicMessage(
           "anthropic",
       };
 
+      if (r.status === 429) return last;
+
       if (
         !retryableProviderStatus(
           r.status
@@ -4997,30 +5024,36 @@ async function proxyAnthropicMessage(
   );
 }
 
-async function callMessageProvider(
-  provider,
-  body
-) {
-  if (
-    provider === "openai"
-  ) {
-    return proxyOpenAIMessage(
-      body
-    );
-  }
+const AI_PROVIDER_COOLDOWNS = new Map();
 
-  if (
-    provider === "gemini"
-  ) {
-    return proxyGeminiMessage(
-      body
-    );
-  }
-
-  return proxyAnthropicMessage(
-    body
-  );
+function recordProviderCooldown(provider, retryAfter) {
+  const seconds = Number(retryAfter);
+  const requestedMs = Number.isFinite(seconds) && seconds > 0
+    ? seconds * 1000 : Math.max(0, Date.parse(String(retryAfter || "")) - Date.now()) || 0;
+  const until = Date.now() + Math.max(12000, requestedMs);
+  AI_PROVIDER_COOLDOWNS.set(provider, Math.max(until, AI_PROVIDER_COOLDOWNS.get(provider) || 0));
 }
+
+function providerCooldownResult(provider) {
+  const until = AI_PROVIDER_COOLDOWNS.get(provider) || 0;
+  if (until <= Date.now()) {
+    AI_PROVIDER_COOLDOWNS.delete(provider);
+    return null;
+  }
+  return { ok: false, status: 429, provider, retryAfter: String(Math.ceil((until - Date.now()) / 1000)),
+    payload: { error: { message: "AI provider rate limit; waiting for Retry-After." } } };
+}
+
+async function callMessageProvider(provider, body) {
+  const throttled = providerCooldownResult(provider);
+  if (throttled) return throttled;
+  const result = provider === "openai" ? await proxyOpenAIMessage(body)
+    : provider === "gemini" ? await proxyGeminiMessage(body)
+    : await proxyAnthropicMessage(body);
+  if (result && Number(result.status) === 429) recordProviderCooldown(provider, result.retryAfter);
+  return result;
+}
+
 /* -------------------------------------------------------------------------
    SEMANTIC CHARACTER MEMORY — v37
 

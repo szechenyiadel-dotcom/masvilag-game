@@ -4092,7 +4092,10 @@ function charById(w, id) {
   if (!w || !id) return null;
   return worldEntityIndex(w).get(String(id)) || null;
 }
-const isHuman = (w, id) => !!(w.players && w.players[id]);
+const isHuman = (w, id) => Boolean(w && id && (
+  (w.players && w.players[id]) || String(id) === String(w.meId || "") ||
+  (w.player && String(id) === String(w.player.id || ""))
+));
 // Minden emberi játékos karaktere.
 const humanChars = (w) => Object.keys(w.players || {}).map((id) => w.players[id]).filter(Boolean);
 // Dinamikus kapcsolat csak tényleges játékbeli karakterek között létezhet.
@@ -6947,6 +6950,14 @@ function naturalCommentReplyTargets(w, post, comment) {
   if (parent && parent.authorId) push(parent.authorId, "parent", 74);
   if (!comment.parent && post.authorId) push(post.authorId, "post-author", 70);
 
+  if (!isHuman(w, comment.authorId)) {
+    // Presence in this thread is a concrete reason to reply, even without a
+    // pre-existing friendship or a provocative keyword. Personality stays in generation.
+    for (const peer of comments) {
+      if (peer && peer.authorId !== comment.authorId) push(peer.authorId, "thread-peer", 52);
+    }
+  }
+
   const cue = commentReplyCueScore(comment.text);
   const juice = publicSocialJuiceSignals(comment.text);
   const parentAuthorId = parent && parent.authorId ? parent.authorId : "";
@@ -7152,6 +7163,8 @@ function findNaturalThreadReply(w, onlyPostId = "") {
 
 function enqueueNaturalThreadReply(w, postId, preferredCommentIds = []) {
   if (!w || !postId) return false;
+  if (((w.sim && w.sim.queue) || []).filter((action) => action && action.type === "reply" &&
+      action.payload && action.payload.postId === postId && !isPlayerCommentReplyAction(w, action)).length >= 4) return false;
   const post = (w.posts || []).find((p) => p && p.id === postId);
   if (!post) return false;
 
@@ -7222,6 +7235,12 @@ function enqueueNaturalThreadReplyWave(w, postId, preferredCommentIds = [], maxR
       .map((action) => `${String(action.payload.commentId || "")}>${String(action.payload.targetId || "")}`)
   );
 
+  const pendingForPost = ((w.sim && w.sim.queue) || []).filter((action) =>
+    action && action.type === "reply" && action.payload && action.payload.postId === postId &&
+    !isPlayerCommentReplyAction(w, action)).length;
+  const availableSlots = Math.max(0, 4 - pendingForPost);
+  if (!availableSlots) return 0;
+
   const rows = [];
   allComments.forEach((comment) => {
     naturalCommentReplyTargets(w, post, comment).forEach((target) => {
@@ -7251,6 +7270,7 @@ function enqueueNaturalThreadReplyWave(w, postId, preferredCommentIds = [], maxR
 
         const pairKey = `${comment.id}>${observer.id}`;
         if (pendingPairs.has(pairKey) || commentAlreadyAnsweredBy(post, comment.id, observer.id)) continue;
+        if (consecutiveAiThreadTurns(w, post, comment) >= 9) continue;
 
         const toCommenter = getRel(w, observer.id, comment.authorId) || {};
         const toPoster = post.authorId ? (getRel(w, observer.id, post.authorId) || {}) : {};
@@ -7311,6 +7331,7 @@ function enqueueNaturalThreadReplyWave(w, postId, preferredCommentIds = [], maxR
   const desired = Math.max(
     1,
     Math.min(
+      availableSlots,
       Math.max(1, Math.round(Number(maxReplies) || 4)),
       climate.dramaLevel === "chaotic" ? 6 : climate.dramaLevel === "high" ? 5 : climate.dramaLevel === "low" ? 2 : 4
     )
@@ -10282,7 +10303,8 @@ function AlbumEditor({ value, onChange, owner }) {
       tt(
         `Írd le röviden, mi látható ezen a ${owner && owner.name ? owner.name + " karakterhez" : "karakterhez"} tartozó képen. Ne találj ki neveket és ne azonosíts valódi személyt név szerint. Írd le a látható személyeket, ruhát, tevékenységet, helyszínt, tárgyakat és hangulatot. A felhasználó külön megjegyzésben adhat meg neveket/kapcsolati kontextust.`,
         `Briefly describe what is visibly shown in this image belonging to ${owner && owner.name ? owner.name : "the character"}. Do not invent names or identify real people by name. Describe visible people, clothing, activity, setting, objects and mood. The user may separately provide names/relationship context in the manual note.`
-      )
+      ),
+      { optional: true }
     )
       .then((vision) => {
         const latest = listRef.current.map((item) =>
@@ -10975,7 +10997,7 @@ function aiCostGapFor(system, prompt, maxTokens) {
    */
   return Math.max(
     350,
-    Math.min(18000, raw)
+    Math.min(60000, raw)
   );
 }
 
@@ -11117,11 +11139,7 @@ async function runAiQueueWorker() {
       }
 
       try {
-        for (let guard = 0; guard < 40; guard++) {
-          const left = cooldownLeft();
-          if (left <= 0) break;
-          await wait(Math.min(left, 2500) + 50);
-        }
+        while (cooldownLeft() > 0) await wait(Math.min(cooldownLeft() + 25, 1000));
 
         const since = now() - AI.last;
         const baseGap =
@@ -11135,11 +11153,19 @@ async function runAiQueueWorker() {
           task.priority >= 50
             ? Math.min(1500, Number(AI.lastCostGap) || 0)
             : task.priority >= 15
-              ? Math.min(7000, Number(AI.lastCostGap) || 0)
-              : Math.min(10000, Number(AI.lastCostGap) || 0);
+              ? Math.min(60000, Number(AI.lastCostGap) || 0)
+              : Math.min(60000, Number(AI.lastCostGap) || 0);
 
         const gap = Math.max(baseGap, costGap);
         if (since < gap) await wait(gap - since);
+        while (cooldownLeft() > 0) await wait(Math.min(cooldownLeft() + 25, 1000));
+
+        // A player request may arrive while this background task was waiting.
+        if (task.priority < 50 && (AI.directDmPending > 0 ||
+            AI.queue.some((row) => row.priority > task.priority))) {
+          AI.queue.unshift(task);
+          continue;
+        }
 
         // Reserve the start slot before awaiting the provider. This keeps
         // two fast-lane requests from starting at exactly the same instant.
@@ -11328,6 +11354,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     // az `Authorization: Bearer <API_KEY>` fejlécet. Indítsd a proxy-t a
     // `server/proxy.js` fájllal (lásd README). A production környezetben
     // használj szerver-oldali proxyt vagy közvetlen, biztonságos backendet.
+    AI.last = now();
     res = await requestAiProxy({
   provider: DEFAULT_AI_PROVIDER,
   model: DEFAULT_AI_MODEL,
@@ -11505,8 +11532,8 @@ async function askJSON(system, prompt, options = {}) {
             )
           : (
               priority >= 50
-                ? 6   // unchanged default for interactive requests
-                : 4   // unchanged default for background requests
+                ? 2
+                : 1
             );
 
       while (
@@ -11514,6 +11541,7 @@ async function askJSON(system, prompt, options = {}) {
         busyWaits < maxBusyWaits
       ) {
         try {
+          while (cooldownLeft() > 0) await wait(Math.min(cooldownLeft() + 25, 1000));
           const langRule = languageInstruction(lang, strictMode);
           const jsonRule = lang === "en"
             ? "Return valid JSON only. Add a top-level \"language\" field with value \"en\"."
@@ -11562,47 +11590,10 @@ async function askJSON(system, prompt, options = {}) {
           }
           if (err && err.busy) {
             busyWaits++;
-            /*
-             * Player-triggered DM/group chat/RP really DOES restart itself now.
-             * Previously we threw as soon as the cooldown exceeded 3 seconds,
-             * while the UI incorrectly promised an automatic restart.
-             *
-             * For interactive work we wait through a short provider cooldown and
-             * retry the SAME queued request. Very long cooldowns are capped so a
-             * broken provider cannot freeze the UI forever.
-             */
-            const left = cooldownLeft();
-
-            const requestedBusyRetryCapMs =
-              Number(
-                options &&
-                options.busyRetryCapMs
-              );
-
-            const retryCap =
-              Number.isFinite(
-                requestedBusyRetryCapMs
-              ) &&
-              requestedBusyRetryCapMs > 0
-                ? Math.max(
-                    1000,
-                    Math.min(
-                      70000,
-                      requestedBusyRetryCapMs
-                    )
-                  )
-                : (
-                    priority >= 50
-                      ? 15000
-                      : 12000
-                  );
-
-            await wait(
-              Math.min(
-                left + 120,
-                retryCap
-              )
-            );
+            // Background jobs yield after a real rate-limit instead of holding
+            // the only worker and re-hitting the provider before Retry-After.
+            if (priority < 50 || busyWaits >= maxBusyWaits) throw err;
+            while (cooldownLeft() > 0) await wait(Math.min(cooldownLeft() + 25, 1000));
             continue;
           }
           tries++;
@@ -13505,11 +13496,8 @@ function guaranteedPostCommentAction(
   const missingIds = fullCoverage
     ? missingAiCommenterIdsForPost(w, post)
     : [];
-  /* STRICT EVERY-BOT COVERAGE: one missing AI per coverage action.
-   * Large ensemble batches were the reason coverage repeatedly stopped after
-   * the first 1-2 accepted rows: one malformed/filtered batch could strand all
-   * remaining characters together. A one-character lane makes progress
-   * deterministic and keeps each character's own voice isolated. */
+  /* A small, explicit three-actor batch shares one request. Missing actors
+   * remain eligible for later waves; replies get alternating scheduler slots. */
   const batchMissing = fullCoverage
     ? Math.min(3, coverage.missing)
     : coverage.missing;
@@ -13553,12 +13541,8 @@ function enqueueGuaranteedPostCommentCoverage(w, postId, source = "post-created"
   const post = (w.posts || []).find((row) => row && row.id === postId);
   if (!post) return false;
 
-  /* COMMENT QUEUE BACKPRESSURE — COMMENT SYSTEM ONLY:
-   * Keep the every-bot guarantee, but queue only ONE missing AI for this post
-   * at a time. After success the existing coverage-followup enqueues the next
-   * missing AI; after failure the watchdog rotates via per-actor attempt data.
-   * This avoids N-way fan-out + repeated re-fan-out, which could create dozens
-   * of consecutive provider calls/state updates and freeze the UI. */
+  /* Queue one small batch for this post at a time; the next wave is
+   * scheduled only after this one finishes. */
   const action = guaranteedPostCommentAction(w, post, source);
   return action ? simEnqueue(w, action) : false;
 }
@@ -23492,6 +23476,9 @@ async function apiJson(path, options = {}) {
 
     err.status = res.status;
     err.data = data;
+    const retryAfter = res.headers.get("retry-after");
+    err.retryAfterMs = Number(retryAfter) > 0 ? Number(retryAfter) * 1000
+      : Math.max(0, Date.parse(retryAfter || "") - Date.now()) || 0;
 
     throw err;
   }
@@ -23568,7 +23555,8 @@ async function serverCreateProfileWorld(
 
 async function analyzeImageDataUrl(
   dataUrl,
-  prompt = ""
+  prompt = "",
+  options = {}
 ) {
   const imageInput = String(dataUrl || "").trim();
   if (
@@ -23578,17 +23566,29 @@ async function analyzeImageDataUrl(
     return "";
   }
 
-  const result = await apiJson("/ai/vision", {
-    method: "POST",
-    body: JSON.stringify({
-      provider: DEFAULT_AI_PROVIDER,
-      model: DEFAULT_AI_MODEL,
-      image: imageInput,
-      prompt:
-        prompt ||
-        "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when visible. Do not identify real people by name.",
-    }),
-  });
+  const result = await queued(async () => {
+    try {
+      const result = await apiJson("/ai/vision", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: DEFAULT_AI_PROVIDER,
+          model: DEFAULT_AI_MODEL,
+          image: imageInput,
+          optional: options.optional === true,
+          prompt: prompt || "Describe what is visibly happening in this image in 1-3 concise sentences. Do not identify real people by name.",
+        }),
+      });
+      if (result && result.code === "PROVIDER_RATE_LIMIT") {
+        setCooldown(Math.max(12000, Number(result.retryAfter || 0) * 1000), false);
+      }
+      return result;
+    } catch (err) {
+      if (err && [429, 503, 529].includes(Number(err.status))) {
+        setCooldown(Math.max(12000, Number(err.retryAfterMs) || 0), false);
+      }
+      throw err;
+    }
+  }, options.optional ? 0 : 100);
 
   return String(
     (result && result.text) || ""
@@ -23620,16 +23620,6 @@ async function analyzeSocialPostImageInput(
     return "";
   }
 
-  // A Pinterest CDN a szerveroldali letöltést gyakran elutasítja.
-  // A poszt képe továbbra is megjelenik; a már megadott képleírás marad.
-  if (raw.startsWith("https://")) {
-    try {
-      if (/(^|\.)pinimg\.com$/i.test(new URL(raw).hostname)) return "";
-    } catch (_) {
-      return "";
-    }
-  }
-
   const vision =
     await analyzeImageDataUrl(
       raw,
@@ -23650,7 +23640,8 @@ Prioritize useful social details:
 Be specific enough that different fictional characters could react to different concrete details.
 Do NOT identify a real person by name.
 Do NOT infer fictional identities from pixels.
-Do NOT invent relationships, hidden events, off-camera people, motives or unseen actions.`
+Do NOT invent relationships, hidden events, off-camera people, motives or unseen actions.`,
+      { optional: true }
     );
 
   return String(
@@ -37894,7 +37885,7 @@ function applyReplies(n, postId, rootId, out) {
     if (declaredPostId && declaredPostId !== String(p.id)) return;
     if (declaredPostAuthorId && declaredPostAuthorId !== String(p.authorId)) return;
 
-    if (createdReplyActors.has(who)) return;
+    if (createdReplyActors.has(who) || commentAlreadyAnsweredBy(p, rootId, who)) return;
     if (isUncharacteristicGenericComment(n, who, c.text)) return;
     let body = cleanGeneratedComment(n, who, c.text, 240);
     if (!body) return;
@@ -41427,72 +41418,17 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
             });
 
 
-            /*
-             * A relationship consequence a komment TARTALMÁBÓL jön.
-             * Nem az számít, hogy "reply volt", hanem hogy mit mondott,
-             * kinek mondta, milyen kapcsolatban vannak és milyen a thread.
-             *
-             * A komment azonnal megjelenik; ez az értékelés utána fut le.
-             * A következő AI-reply csak ezután kap signal-t, így már a
-             * friss kapcsolatállapotból reagál.
-             */
+            // Apply the existing local relationship impact immediately; a separate
+            // provider assessment must not block enqueueing the player's reply.
             if (impactTargetIds.length) {
-              let impact = null;
-
-              try {
-                impact =
-                  await assessPlayerSocialRelationshipImpact(
-                    w,
-                    p,
-                    madeForImpact,
-                    impactTargetIds,
-                    parent
-                      ? "reply"
-                      : "comment"
-                  );
-              } catch (e) {
-                console.warn(
-                  "Comment relationship impact AI assessment failed; using local fallback:",
-                  e
-                );
-              }
-
               update((n) => {
-                const freshActorId =
-                  n.meId || actorId;
-
-                const changes =
-                  impact &&
-                  impact.assessed
-                    ? impact.changes
-                    : playerSocialImpactFallbackChanges(
-                        n,
-                        freshActorId,
-                        impactTargetIds,
-                        text2,
-                        parent
-                          ? "reply"
-                          : "comment"
-                      );
-
-                if (
-                  Array.isArray(changes) &&
-                  changes.length
-                ) {
-                  applyChanges(
-                    n,
-                    changes
-                  );
-                }
-
+                const freshActorId = n.meId || actorId;
+                const changes = playerSocialImpactFallbackChanges(
+                  n, freshActorId, impactTargetIds, text2, parent ? "reply" : "comment"
+                );
+                if (Array.isArray(changes) && changes.length) applyChanges(n, changes);
                 rememberPlayerSocialCommentImpact(
-                  n,
-                  freshActorId,
-                  impactTargetIds,
-                  text2,
-                  parent
-                    ? "reply"
-                    : "comment"
+                  n, freshActorId, impactTargetIds, text2, parent ? "reply" : "comment"
                 );
               });
             }
@@ -52494,71 +52430,63 @@ function pickInitiator(w) {
 
 /* Van-e olyan, amit tőled láttak, de még nem reagáltak rá? */
 function findUnanswered(w) {
-  const posts = (w.posts || []).slice(0, 14);
+  if (!w) return null;
   const tsNow = now();
-
-  for (let i = 0; i < posts.length; i++) {
-    const po = posts[i];
-    if (!po || typeof po !== "object") continue;
-    const cs = safePostComments(po);
-
-    /*
-     * Nem csak a poszt abszolút utolsó kommentjét nézzük.
-     * Ha a játékos válaszolt valakinek, majd közben egy másik AI is kommentelt,
-     * attól a játékos válasza még nem válhat "láthatatlanná" a reply motornak.
-     */
-    for (let j = cs.length - 1; j >= 0; j--) {
-      const playerComment = cs[j];
-
-      if (!playerComment || !isHuman(w, playerComment.authorId)) {
-        continue;
-      }
-
-      /* A régi posztot egy FRISS játékos-komment újra megnyithatja, de egy
-       * napokkal ezelőtti, már ott maradt komment miatt ne induljon újra thread. */
-      if (tsNow - (Number(playerComment.ts) || 0) > 45 * 60000) {
-        continue;
-      }
-
-      const parentComment = playerComment.parent
-        ? cs.find((c) => c && c.id === playerComment.parent)
-        : null;
-
-      const directTargetId =
-        parentComment && parentComment.authorId && !isHuman(w, parentComment.authorId)
-          ? parentComment.authorId
-          : (!isHuman(w, po.authorId) ? po.authorId : "");
-
-      const directReplies = cs.filter(
-        (c) =>
-          c &&
-          c.parent === playerComment.id &&
-          !isHuman(w, c.authorId)
-      );
-
-      const answered = directTargetId
-        ? directReplies.some((c) => c.authorId === directTargetId)
-        : directReplies.length > 0;
-
-      if (!answered) {
-        return {
-          post: po,
-          comment: playerComment,
-          targetId: directTargetId,
-        };
-      }
+  const pending = [];
+  let unansweredPost = null;
+  for (const post of (w.posts || [])) {
+    if (!post || !post.id) continue;
+    const comments = safePostComments(post);
+    for (const comment of comments) {
+      if (!comment || !comment.id || !isHuman(w, comment.authorId)) continue;
+      if (tsNow - (Number(comment.ts) || 0) > 24 * 3600e3) continue;
+      if (Number(comment.replyRetryAt || 0) > tsNow) continue;
+      const parent = comments.find((row) => row && row.id === comment.parent);
+      const directTarget = parent && !isHuman(w, parent.authorId)
+        ? parent.authorId
+        : (!comment.parent && !isHuman(w, post.authorId) ? post.authorId : "");
+      const target = directTarget || (naturalCommentReplyTargets(w, post, comment)
+        .find((row) => commentWarrantsAiReply(w, post, comment, row.id)) || {}).id || "";
+      if (!target || !charById(w, target) || target === comment.authorId) continue;
+      if (commentAlreadyAnsweredBy(post, comment.id, target)) continue;
+      pending.push({ post, comment, targetId: target });
     }
-
-    if (
-      isHuman(w, po.authorId) &&
-      tsNow - (Number(po.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS &&
-      !cs.some((c) => c && !c.parent && !isHuman(w, c.authorId))
-    ) {
-      return { post: po, comment: null, targetId: "" };
+    if (isHuman(w, post.authorId) &&
+        tsNow - (Number(post.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS &&
+        !comments.some((row) => row && !row.parent && !isHuman(w, row.authorId)) &&
+        (!unansweredPost || Number(post.ts) > Number(unansweredPost.ts))) {
+      unansweredPost = post;
     }
   }
+  pending.sort((a, b) => Number(a.comment.ts || 0) - Number(b.comment.ts || 0));
+  return pending[0] || (unansweredPost ? { post: unansweredPost, comment: null, targetId: "" } : null);
+}
 
-  return null;
+function pendingPlayerReplyAction(w, pending = findUnanswered(w)) {
+  if (!pending || !pending.comment) return null;
+  return mkAction("reply", `player-reply:${pending.post.id}:${pending.comment.id}:${pending.targetId}`, {
+    postId: pending.post.id,
+    commentId: pending.comment.id,
+    rootId: pending.comment.id,
+    targetId: pending.targetId,
+    trigger: "player-comment-direct-reply",
+  }, "player-reactive");
+}
+
+function isPlayerCommentReplyAction(w, action) {
+  if (!action || action.type !== "reply") return false;
+  const payload = action.payload || {};
+  const post = (w.posts || []).find((row) => row && row.id === payload.postId);
+  const comment = safePostComments(post).find((row) => row && row.id === payload.commentId);
+  return Boolean(comment && isHuman(w, comment.authorId));
+}
+
+function trimSimulationQueue(w, queue) {
+  const protectedRows = queue.filter((row) => row &&
+    (row.source === "manual" || row.source === "player-reactive" || isPlayerCommentReplyAction(w, row)));
+  const protectedIds = new Set(protectedRows.map((row) => row.id));
+  let remaining = Math.max(0, SIM_QUEUE_LIMIT - protectedRows.length);
+  return queue.filter((row) => row && (protectedIds.has(row.id) || remaining-- > 0));
 }
 
 /*
@@ -62729,6 +62657,10 @@ function simEnqueue(w, action) {
   const doneAt = Number(sim.done[action.key] || 0);
   if (doneAt && now() - doneAt < SIM_DONE_TTL) return false;
   if (sim.queue.some((x) => x && x.key === action.key)) return false;
+  if (action.type === "reply" && sim.queue.some((row) => row && row.type === "reply" &&
+      row.payload && action.payload && row.payload.postId === action.payload.postId &&
+      row.payload.commentId === action.payload.commentId &&
+      String(row.payload.targetId || "") === String(action.payload.targetId || ""))) return false;
   const triggeredFeedBurst =
     action.type === "world" &&
     String(action.key || "").startsWith("triggered-feed-burst:");
@@ -62743,7 +62675,7 @@ function simEnqueue(w, action) {
        optional grounded private DM. Direct reaction feed posts are no longer
        part of the player-post lane. */
     sim.queue.unshift(action);
-    sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
+    sim.queue = trimSimulationQueue(w, sim.queue);
   } else if (action.source === "coverage") {
     /* FRESH-POST COMMENT COVERAGE PRIORITY:
      * Coverage remains background work relative to non-coverage actions, but
@@ -62800,11 +62732,11 @@ function simEnqueue(w, action) {
 
     sim.queue.splice(insertAt, 0, action);
     if (sim.queue.length > SIM_QUEUE_LIMIT) {
-      sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
+      sim.queue = trimSimulationQueue(w, sim.queue);
     }
   } else {
     sim.queue.push(action);
-    sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
+    sim.queue = trimSimulationQueue(w, sim.queue);
   }
   sim.at = now();
   return true;
@@ -62812,7 +62744,22 @@ function simEnqueue(w, action) {
 
 function simPeek(w) {
   const sim = ensureSimState(w);
-  return sim.queue.length ? sim.queue[0] : null;
+  const ready = sim.queue.filter((action) => {
+    if (!action || Number(action.payload && action.payload.notBefore || 0) > now()) return false;
+    if (action.type !== "reply") return true;
+    const post = (w.posts || []).find((row) => row && row.id === (action.payload || {}).postId);
+    const comment = safePostComments(post).find((row) => row && row.id === (action.payload || {}).commentId);
+    return !comment || Number(comment.replyRetryAt || 0) <= now();
+  });
+  const manual = ready.find((action) => action.source === "manual");
+  const playerReply = ready.find((action) => isPlayerCommentReplyAction(w, action));
+  const playerReaction = ready.find((action) => action.source === "player-reactive");
+  if (manual || playerReply || playerReaction) return manual || playerReply || playerReaction;
+  const threadReply = ready.find((action) => action.type === "reply");
+  const coverage = ready.find((action) => action.source === "coverage");
+  // Alternate visible conversation with coverage; a large cast cannot starve replies.
+  if (threadReply && coverage) return sim.lastSocialType === "reply" ? coverage : threadReply;
+  return ready[0] || null;
 }
 
 function simMarkRunning(w, action) {
@@ -62831,6 +62778,7 @@ function simMarkDone(w, action) {
   const sim = ensureSimState(w);
   sim.running = "";
   if (action && action.key) sim.done[action.key] = now();
+  if (action && (action.type === "comments" || action.type === "reply")) sim.lastSocialType = action.type;
   sim.at = now();
 }
 /*
@@ -66426,14 +66374,13 @@ function runAutonomousFeedHeartbeat(w, update) {
   return created;
 }
 
-async function generateSingleDirectPlayerCommentReplyRecovery(
+async function generateFocusedCommentReply(
   w,
   post,
   playerComment,
   responderId
 ) {
   if (!w || !post || !playerComment || !responderId) return null;
-  if (!isHuman(w, playerComment.authorId)) return null;
 
   const responder = charById(w, responderId);
   if (!responder || isHuman(w, responder.id) || responder.id === playerComment.authorId) {
@@ -66446,21 +66393,29 @@ async function generateSingleDirectPlayerCommentReplyRecovery(
   if (!socialReplyBasisMatchesParent(playerComment, parentBasis)) return null;
 
   const relation = relationshipBehaviorCard(w, responder.id, playerComment.authorId);
-  let raw = await askWorldJSONInteractive(
+  const branch = threadBranchOf(w, post, playerComment, 12);
+  const humanReply = isHuman(w, playerComment.authorId);
+  const request = humanReply ? askWorldJSONInteractive : askWorldJSON;
+  let raw = await request(
     w,
     `Write exactly ONE short public social-media reply as the supplied fictional character. Return JSON only.`,
     `RESPONDER: ${responder.name} [${responder.id}]
-${voiceCard(responder)}
-PERSONALITY: ${cut(String(responder.personality || ""), 1000)}
+${cut(String(voiceCard(responder) || ""), 3500)}
+PERSONALITY: ${cut(String(responder.personality || ""), 2000)}
 TRAITS: ${cut(String(responder.traits || ""), 500)}
-RELATIONSHIP TO THE PLAYER COMMENT AUTHOR:
+RELATIONSHIP TO THE COMMENT AUTHOR:
 ${cut(String(relation || ""), 1200)}
 
 POST: ${nameOfIn(w, post.authorId)}: ${JSON.stringify(String(post.text || "").slice(0, 700))}
-EXACT PLAYER COMMENT YOU MUST ANSWER: ${JSON.stringify(source)}
+CONFIRMED IMAGE DESCRIPTION: ${cut(String(post.imageDescription || ""), 900)}
+EXACT ROOT-TO-CURRENT BRANCH:
+${cut(String(branch.text || ""), 5000)}
+TARGET-SPECIFIC MEMORY:
+${cut(String(commentTargetMemoryCard(w, responder, playerComment.authorId) || ""), 1600)}
+EXACT COMMENT YOU MUST ANSWER (${nameOfIn(w, playerComment.authorId)}): ${JSON.stringify(source)}
 
 HARD RULES:
-- ${responder.name} MUST answer this exact player comment now.
+- ${responder.name} MUST answer this exact comment now, using the branch to understand short replies.
 - One natural social-media reply, usually 1-18 words.
 - Stay on the exact comment topic. No unrelated third-person drama.
 - Keep ${responder.name}'s own Speech/Voice, casing and relationship tone.
@@ -66468,13 +66423,14 @@ HARD RULES:
 
 JSON ONLY: {"text":"one direct reply"}`,
     {
-      maxTokens: 180,
+      maxTokens: 260,
       maxTries: 2,
-      maxBusyWaits: 1,
-      busyRetryCapMs: 1800,
-      timeoutMs: 10000,
+      priority: humanReply ? 100 : 20,
+      maxBusyWaits: humanReply ? 2 : 1,
+      busyRetryCapMs: 60000,
+      timeoutMs: 18000,
       maxSystemChars: 1400,
-      maxPromptChars: 9000,
+      maxPromptChars: 18000,
     }
   );
 
@@ -66500,7 +66456,7 @@ JSON ONLY: {"text":"one direct reply"}`,
       parentBasis,
       meaning: `Direct reply to: ${parentBasis}`.slice(0, 360),
       text,
-      trigger: "direct-player-reply-recovery",
+      trigger: "focused-comment-reply",
     }],
     changes: [],
     events: [],
@@ -67426,69 +67382,19 @@ async function runSimulationAction(view, update, action, addImage, mediaMap = {}
       return null;
     }
 
-    const requestedTargetId =
-      action.payload &&
-      action.payload.targetId;
-
-    const rawOut = await genReply(
-      view,
-      post,
-      comment,
-      requestedTargetId || "",
-      String(action.payload && (action.payload.threadReason || action.payload.trigger) || "")
-    );
-
-    const out = requestedTargetId
-      ? {
-          ...(rawOut || {}),
-          comments: safeAiComments(rawOut).filter((row) => {
-            const who = row && (row.id !== undefined ? row.id : row.name);
-            const resolved = aiVoice(view, who);
-            return resolved === requestedTargetId;
-          }),
-        }
+    const requestedTargetId = String(action.payload && action.payload.targetId || "") ||
+      ((naturalCommentReplyTargets(view, post, comment)
+        .find((row) => commentWarrantsAiReply(view, post, comment, row.id)) || {}).id || "");
+    if (requestedTargetId && commentAlreadyAnsweredBy(post, comment.id, requestedTargetId)) return "reply";
+    const rawOut = requestedTargetId
+      ? await generateFocusedCommentReply(view, post, comment, requestedTargetId)
+      : await genReply(view, post, comment);
+    const finalReplyOut = requestedTargetId
+      ? { ...(rawOut || {}), comments: safeAiComments(rawOut).filter((row) =>
+          aiVoice(view, row.id !== undefined ? row.id : row.name) === requestedTargetId) }
       : rawOut;
-
-    let finalReplyOut = out;
-    let replyProbe = cloneWorldState(view);
-    let replyCount = applyReplies(replyProbe, post.id, comment.id, finalReplyOut);
-
-    /* DIRECT PLAYER→AI REPLY GUARANTEE — COMMENT SYSTEM ONLY:
-     * If the ordinary multi-context reply pass is filtered to zero, do one
-     * tiny exact-responder recovery. This does not affect autonomous AI↔AI
-     * thread behavior; it only guarantees a response when the player directly
-     * replied to a specific AI comment. */
-    if (
-      !replyCount &&
-      requestedTargetId &&
-      isHuman(view, comment.authorId) &&
-      String(action.payload && action.payload.trigger || "") === "player-comment-direct-reply"
-    ) {
-      try {
-        const recovered = await generateSingleDirectPlayerCommentReplyRecovery(
-          view,
-          post,
-          comment,
-          requestedTargetId
-        );
-        if (recovered) {
-          const recoveredProbe = cloneWorldState(view);
-          const recoveredCount = applyReplies(
-            recoveredProbe,
-            post.id,
-            comment.id,
-            recovered
-          );
-          if (recoveredCount) {
-            finalReplyOut = recovered;
-            replyProbe = recoveredProbe;
-            replyCount = recoveredCount;
-          }
-        }
-      } catch (directReplyErr) {
-        console.warn("[player-comment-reply] direct responder recovery failed:", directReplyErr);
-      }
-    }
+    const replyProbe = cloneWorldState(view);
+    const replyCount = applyReplies(replyProbe, post.id, comment.id, finalReplyOut);
 
     if (!replyCount) return null;
 
@@ -67610,11 +67516,12 @@ async function runSimulationAction(view, update, action, addImage, mediaMap = {}
         commentErr
       );
 
+      if (commentErr && commentErr.busy) throw commentErr;
       generatedOut = null;
     }
 
     const quotaOut =
-      quotaEnforced && !isImmediatePlayerPostReaction
+      quotaEnforced && !isGuaranteedCoverage && !isImmediatePlayerPostReaction
         ? await ensureAutomaticCommentQuota(view, post, generatedOut, label, minComments, maxComments)
         : generatedOut;
 
@@ -67755,7 +67662,7 @@ async function runSimulationAction(view, update, action, addImage, mediaMap = {}
         missingAfterPrimary[0] ||
         "";
 
-      if (requiredMissing) {
+      if (requiredMissing && !visibleReactionCount && cooldownLeft() <= 0) {
         try {
           const coveragePost = (commentsProbe.posts || []).find((row) => row && row.id === post.id) || post;
           const hardCoverage = await generateSingleGuaranteedCoverageComment(
@@ -70132,7 +70039,8 @@ const signOut = useCallback(async () => {
 
     analyzeImageDataUrl(
       imageInput,
-      `Analyze what is visibly shown in this ${owner.name || "character"} album image in 1-3 concise sentences. Mention the number of visible people, pose/activity, clothing, setting, important objects and overall mood. Do not invent fictional character names from pixels and do not identify a real person by name. Do not infer off-camera relationships. A separate user-confirmed field supplies exact in-game identities when needed.`
+      `Analyze what is visibly shown in this ${owner.name || "character"} album image in 1-3 concise sentences. Mention the number of visible people, pose/activity, clothing, setting, important objects and overall mood. Do not invent fictional character names from pixels and do not identify a real person by name. Do not infer off-camera relationships. A separate user-confirmed field supplies exact in-game identities when needed.`,
+      { optional: true }
     )
       .then((vision) => {
         if (!vision) return;
@@ -71506,7 +71414,7 @@ const signOut = useCallback(async () => {
             targetId: naturalTarget ? naturalTarget.id : "",
             trigger: directReplyTarget ? "player-comment-direct-reply" : "player-comment",
           },
-          directReplyTarget ? "player-reactive" : "event"
+          "player-reactive"
         )
       );
     }
@@ -72375,22 +72283,16 @@ const signOut = useCallback(async () => {
     const beat = async () => {
   if (!alive) return;
 
-  if (autoRunning.current) {
-    /* Recover from a rejected/aborted render cycle that left the engine locked. */
-    if (autoRunningSince.current && now() - autoRunningSince.current > 90000) {
-      autoRunning.current = false;
-      autoRunningSince.current = 0;
-      setAutoBusy(false);
-    } else {
-      return;
-    }
-  }
+  if (autoRunning.current || cooldownLeft() > 0) return;
 
   const view2 = viewRef.current;
   if (!view2 || !(view2.chars || []).length) return;
 
   const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
+  const pendingReplyOverride = !manualQueued && !isPlayerCommentReplyAction(view2, queued)
+    ? pendingPlayerReplyAction(view2)
+    : null;
 
   /*
    * RECOVERY v99.2:
@@ -72542,6 +72444,8 @@ const signOut = useCallback(async () => {
       : null;
 
   let action =
+    pendingReplyOverride ||
+    (isPlayerCommentReplyAction(view2, queued) ? queued : null) ||
     coverageOverride ||
     essentialActivityOverride ||
     socialBacklogFeedOverride ||
@@ -72701,6 +72605,18 @@ const signOut = useCallback(async () => {
           const sim = ensureSimState(n);
           sim.running = "";
           return;
+        }
+
+        if (action && action.type === "reply") {
+          const post = (n.posts || []).find((row) => row && row.id === (action.payload || {}).postId);
+          const comment = safePostComments(post).find((row) => row && row.id === (action.payload || {}).commentId);
+          if (comment) {
+            comment.replyAttempts = ok ? 0 : Math.min(6, Number(comment.replyAttempts || 0) + 1);
+            comment.replyRetryAt = ok ? 0 : now() + Math.max(cooldownLeft(), Math.min(60000, 5000 * Math.pow(2, comment.replyAttempts - 1)));
+          }
+        }
+        if (!ok && action) {
+          action.payload = { ...(action.payload || {}), notBefore: now() + Math.max(cooldownLeft(), 8000) };
         }
 
         const retryableTriggeredFeed = Boolean(
