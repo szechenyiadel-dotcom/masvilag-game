@@ -44888,6 +44888,55 @@ JSON ONLY:
   }
 }
 
+
+
+/* ROLEPLAY-ONLY affiliation grounding.
+ * This does not change relationship scores, social feeds, DMs, saves or global
+ * faction classification. It only makes the active Scene read each person's
+ * own dojo / organization canon before generating dialogue.
+ */
+function roleplayAffiliationGroundTruthCard(w, cast = []) {
+  if (!w) return "";
+
+  const people = [w.player, ...(Array.isArray(cast) ? cast : [])]
+    .filter(Boolean)
+    .filter((person, index, arr) =>
+      arr.findIndex((other) => String(other && other.id || "") === String(person && person.id || "")) === index
+    );
+
+  const rows = people.map((person) => {
+    const structured = [
+      person.affiliation ? `affiliation=${cut(String(person.affiliation), 240)}` : "",
+      person.organization ? `organization=${cut(String(person.organization), 220)}` : "",
+      person.role ? `role=${cut(String(person.role), 180)}` : "",
+      person.rank ? `rank=${cut(String(person.rank), 160)}` : "",
+      person.job ? `job=${cut(String(person.job), 220)}` : "",
+    ].filter(Boolean);
+
+    const ownCanon = [person.bio, person.backstory, person.extra]
+      .filter(Boolean)
+      .join(" | ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const canonLimit = String(person.id || "") === String(w.meId || "") ? 900 : 360;
+    const canon = ownCanon ? ` | own-canon=${cut(ownCanon, canonLimit)}` : "";
+
+    return `- ${person.name || "?"} [${person.id || ""}]: ${structured.join(" | ") || "no explicit structured affiliation"}${canon}`;
+  });
+
+  return `
+ROLEPLAY DOJO / AFFILIATION GROUND TRUTH — HARD IDENTITY RULES:
+${rows.join("\n")}
+- Every row belongs ONLY to that named person / ID. Never transfer another character's dojo, organization, rank, role or mentor to the player or to someone else.
+- A dojo/team/sensei name merely APPEARING in backstory can mean rival, enemy, former contact, opponent, tournament history or someone else's affiliation. A mention alone is NOT membership.
+- Current explicit affiliation / organization / role / rank on THAT PERSON'S OWN sheet has priority over rival mentions, past associations, scene location and another character's sheet.
+- A sensei may treat the player as "my student", "one of ours", a member of their dojo, or speak as if they train under that sensei ONLY when the PLAYER'S OWN canon explicitly establishes current membership in that same dojo.
+- Being in a dojo building, sparring with someone, talking to a sensei, knowing a sensei, or being present at the same event does NOT make the player that sensei's student.
+- If the player's current dojo is different, preserve that difference explicitly. If current membership is genuinely unclear, treat it as unknown / unaffiliated instead of assigning the player to the sensei's dojo.
+`;
+}
+
 function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const { tt } = useLang();
   const playerId = w.meId;
@@ -45112,6 +45161,8 @@ ${playerText
     )
   : ""}
 JELEN VANNAK: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ")}, valamint ${w.player.name} [${w.meId}] — őt a felhasználó játssza.
+
+${roleplayAffiliationGroundTruthCard(w, cast)}
 
 ${participationCard}
 
@@ -45366,6 +45417,8 @@ EMLÉKEZET: ${spread(memory, 900)}`;
 JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
 JELEN VANNAK: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ")}, valamint ${w.player.name} [${w.meId}] — őt kizárólag a felhasználó irányítja.
+
+${roleplayAffiliationGroundTruthCard(w, cast)}
 
 EDDIG TÖRTÉNT:
 ${log || "a jelenet most kezdődik"}
