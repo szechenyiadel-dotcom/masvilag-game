@@ -5070,6 +5070,7 @@ function providerCooldownResult(provider) {
    timeout window waiting on the same rate-limited upstream.
    ------------------------------------------------------------------------- */
 const AI_PROVIDER_MESSAGE_CHAINS = new Map();
+const AI_PROVIDER_INTERACTIVE_CHAINS = new Map();
 
 function sleepMs(ms) {
   return new Promise((resolve) =>
@@ -5093,19 +5094,27 @@ function retryAfterMs(value, fallbackMs = 12000) {
   return Math.max(1000, Number(fallbackMs) || 12000);
 }
 
-function runProviderMessageSerial(provider, work) {
-  const previous = AI_PROVIDER_MESSAGE_CHAINS.get(provider) || Promise.resolve();
+function runProviderLaneSerial(map, provider, work) {
+  const previous = map.get(provider) || Promise.resolve();
   const current = previous.catch(() => undefined).then(work);
   let tracked;
 
   tracked = current.finally(() => {
-    if (AI_PROVIDER_MESSAGE_CHAINS.get(provider) === tracked) {
-      AI_PROVIDER_MESSAGE_CHAINS.delete(provider);
+    if (map.get(provider) === tracked) {
+      map.delete(provider);
     }
   });
 
-  AI_PROVIDER_MESSAGE_CHAINS.set(provider, tracked);
+  map.set(provider, tracked);
   return current;
+}
+
+function runProviderMessageSerial(provider, work) {
+  return runProviderLaneSerial(AI_PROVIDER_MESSAGE_CHAINS, provider, work);
+}
+
+function runProviderInteractiveSerial(provider, work) {
+  return runProviderLaneSerial(AI_PROVIDER_INTERACTIVE_CHAINS, provider, work);
 }
 
 function preserveMessageEdges(value, maxChars) {
@@ -5152,7 +5161,10 @@ function compactMessageBodyForRateLimit(body = {}) {
 }
 
 async function callMessageProvider(provider, body) {
-  return runProviderMessageSerial(provider, async () => {
+  const interactive = String(body?.masvilag_priority || "") === "interactive";
+  const runLane = interactive ? runProviderInteractiveSerial : runProviderMessageSerial;
+
+  return runLane(provider, async () => {
     const throttled = providerCooldownResult(provider);
     if (throttled) return throttled;
 
@@ -6195,7 +6207,10 @@ app.post(
     /* If every usable path was rate-limited, wait only a SHORT single window,
        then retry once with a smaller payload. This stays inside the client's
        timeout budget and especially helps TPM/context-size rate limits. */
-    if (first.limited.length) {
+    const interactiveRequest =
+      String(incomingBody?.masvilag_priority || "") === "interactive";
+
+    if (first.limited.length && !interactiveRequest) {
       const waits = first.limited
         .map((x) => retryAfterMs(x?.retryAfter, 12000))
         .filter((ms) => Number.isFinite(ms) && ms >= 0);

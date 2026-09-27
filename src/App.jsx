@@ -11184,10 +11184,20 @@ async function runAiQueueWorker() {
 }
 
 function pumpAiQueue() {
+  const interactiveQueued = AI.queue.some(
+    (task) => task && Number(task.priority) >= 50
+  );
+
+  /* PERFORMANCE v20: normally keep the conservative worker count, but if a
+   * Scene/group action is waiting while one background provider call is already
+   * in flight, allow exactly one temporary interactive worker. Direct DM keeps
+   * its stricter exclusive lane. */
   const effectiveMaxConcurrent =
     AI.directDmPending > 0
       ? 1
-      : AI.maxConcurrent;
+      : (AI.interactivePending > 0 && interactiveQueued
+          ? Math.max(2, AI.maxConcurrent)
+          : AI.maxConcurrent);
 
   /*
    * The user may press Send before the direct-DM AI task itself is queued
@@ -11362,6 +11372,10 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   temperature: 0.9,
   system,
   messages: [{ role: "user", content: prompt }],
+  /* Backend uses this only for queue scheduling; provider payload builders
+     ignore it. Interactive Scene/DM/group work must not sit behind a long
+     autonomous request that already started. */
+  masvilag_priority: requestMeta.interactive ? "interactive" : "background",
 }, ctrl.signal);
   } catch (e) {
     if (e && e.name === "AbortError") throw new Error("Az AI nem válaszolt időben.");
@@ -23508,8 +23522,14 @@ async function serverMigrate(world, username, password) {
   });
 }
 
-async function serverSession() {
-  return apiJson("/auth/session", {
+async function serverSession(lite = false) {
+  return apiJson(lite ? "/auth/session?lite=1" : "/auth/session", {
+    method: "GET",
+  });
+}
+
+async function serverWorldLoad() {
+  return apiJson("/world/load", {
     method: "GET",
   });
 }
@@ -24726,8 +24746,20 @@ async function loadPrimaryWorld(code) {
 const stamp = (o) => (o && (o.updatedAt || o.at || 0)) || 0;
 const newer = (a, b) => (stamp(a) >= stamp(b) ? a : b);
 
+const WORLD_CONTENT_CACHE = new WeakMap();
+
 function contentOf(w) {
-  if (!w) return "";
+  if (!w || typeof w !== "object") return "";
+
+  /* PERFORMANCE v20: contentOf() is used heavily by autosave/conflict checks.
+   * A large world can take noticeable main-thread time to stringify. World
+   * mutations always bump `rev`, so repeated comparisons of the same snapshot
+   * can safely reuse one serialization. syncRev/universe.at are intentionally
+   * excluded from content equality, exactly as before. */
+  const rev = Number(w.rev || 0);
+  const cached = WORLD_CONTENT_CACHE.get(w);
+  if (cached && cached.rev === rev) return cached.value;
+
   const copy = { ...w };
 
   /*
@@ -24747,7 +24779,9 @@ function contentOf(w) {
     delete copy.universe.at;
   }
 
-  return JSON.stringify(copy);
+  const value = JSON.stringify(copy);
+  WORLD_CONTENT_CACHE.set(w, { rev, value });
+  return value;
 }
 
 function mergeById(remoteArr, localArr, deleted) {
@@ -25162,6 +25196,9 @@ async function saveWorld(w) {
  * semmilyen régi böngészős világot az online állapotba.
  * PostgreSQL az egyetlen authoritative world online.
  */
+const WORLD_HISTORY_SNAPSHOT_MIN_GAP_MS = 45000;
+const LAST_WORLD_HISTORY_SNAPSHOT_AT = new Map();
+
 async function saveWorldMerged(local, alreadyDetached = false) {
   if (!local || !local.code) {
     return {
@@ -25181,15 +25218,29 @@ async function saveWorldMerged(local, alreadyDetached = false) {
   let snapshotOk = false;
   let primaryOk = false;
 
-  try {
-    snapshotOk =
-      await writeWorldSnapshot(
-        local.code,
-        snapshot,
-        false
-      );
-  } catch (e) {
-    snapshotOk = false;
+  /* PERFORMANCE v20: autosave used to write TWO complete multi-MB local copies
+   * every time (history snapshot + primary emergency backup). Keep the current
+   * primary backup on every save, but rotate the heavier history snapshot at
+   * most once every 45 seconds during normal autosave. Explicit/manual callers
+   * still get a history snapshot immediately. */
+  const snapshotNow = now();
+  const previousSnapshotAt = Number(LAST_WORLD_HISTORY_SNAPSHOT_AT.get(local.code) || 0);
+  const shouldWriteHistorySnapshot =
+    !alreadyDetached ||
+    snapshotNow - previousSnapshotAt >= WORLD_HISTORY_SNAPSHOT_MIN_GAP_MS;
+
+  if (shouldWriteHistorySnapshot) {
+    try {
+      snapshotOk =
+        await writeWorldSnapshot(
+          local.code,
+          snapshot,
+          false
+        );
+      if (snapshotOk) LAST_WORLD_HISTORY_SNAPSHOT_AT.set(local.code, snapshotNow);
+    } catch (e) {
+      snapshotOk = false;
+    }
   }
 
   try {
@@ -69293,6 +69344,8 @@ export default function App() {
   const [langReady, setLangReady] = useState(false);
   const [saveState, setSaveState] = useState("saved");
   const [saveAt, setSaveAt] = useState(0);
+  const [saveRetryPulse, setSaveRetryPulse] = useState(0);
+  const saveRetryTimer = useRef(null);
   const lastSavedMedia = useRef("");
   /* Reactive mirror of the global editor lock so an already-visible popup is
      removed immediately when CharForm opens, not only on the next world tick. */
@@ -69313,6 +69366,10 @@ export default function App() {
   /* Existing image-post vision backfill — one post at a time. */
   const postVisionBusy = useRef(false);
   const postVisionAttempted = useRef(new Set());
+
+  useEffect(() => () => {
+    if (saveRetryTimer.current) clearTimeout(saveRetryTimer.current);
+  }, []);
 
   wRef.current = world;
   mediaRef.current = media;
@@ -70063,7 +70120,10 @@ const signOut = useCallback(async () => {
       !world ||
       !code ||
       !mediaReady.current ||
-      albumVisionBusy.current
+      albumVisionBusy.current ||
+      AI.interactivePending > 0 ||
+      AI.directDmPending > 0 ||
+      cooldownLeft() > 0
     ) {
       return;
     }
@@ -70194,7 +70254,10 @@ const signOut = useCallback(async () => {
       !world ||
       !code ||
       !mediaReady.current ||
-      postVisionBusy.current
+      postVisionBusy.current ||
+      AI.interactivePending > 0 ||
+      AI.directDmPending > 0 ||
+      cooldownLeft() > 0
     ) {
       return;
     }
@@ -70286,32 +70349,20 @@ const signOut = useCallback(async () => {
         setWorld((prev) => {
           if (!prev) return prev;
 
-          const n =
-            cloneWorldState(
-              prev
-            );
+          /* PERFORMANCE v20: update one post with structural sharing instead of
+           * structuredClone() of the entire world. */
+          const posts = Array.isArray(prev.posts) ? prev.posts.slice() : [];
+          const foundIndex = posts.findIndex(
+            (row) => row && String(row.id || "") === String(targetPost.id || "")
+          );
 
-          const found =
-            (n.posts || [])
-              .find(
-                (row) =>
-                  row &&
-                  String(
-                    row.id || ""
-                  ) ===
-                  String(
-                    targetPost.id || ""
-                  )
-              );
+          if (foundIndex < 0) return prev;
+          const existingPost = posts[foundIndex];
+          if (String(existingPost.imageVision || "").trim()) return prev;
 
-          if (
-            !found ||
-            String(
-              found.imageVision || ""
-            ).trim()
-          ) {
-            return prev;
-          }
+          const found = { ...existingPost };
+          posts[foundIndex] = found;
+          const n = { ...prev, posts };
 
           found.imageVision =
             String(
@@ -70399,53 +70450,91 @@ const signOut = useCallback(async () => {
         lastServerCheckAt.current = ts;
 
         try {
+          /* PERFORMANCE v20: focus/poll checks are normally metadata-only.
+           * The old path downloaded and JSON-parsed the entire world every
+           * minute/focus even when nothing changed, which caused visible UI
+           * stalls on large worlds. */
           const session =
-            await serverSession();
+            await serverSession(true);
 
           if (
             !alive ||
             !session ||
             !session.authenticated ||
-            !session.world ||
             !session.meId
           ) {
             return;
           }
-
-          const serverWorld =
-            migrate(
-              session.world
-            );
 
           const latestLocal =
             wRef.current;
 
           if (
             !latestLocal ||
-            latestLocal.code !==
-              serverWorld.code ||
+            String(latestLocal.code || "").trim().toLowerCase() !==
+              String(session.code || latestLocal.code || "").trim().toLowerCase() ||
             session.meId !== meId
           ) {
             return;
           }
 
-          const serverRev =
-            worldSyncRev(
-              serverWorld
-            );
+          const serverRev = Math.max(0, Math.floor(Number(session.syncRev) || 0));
+          const localRev = worldSyncRev(latestLocal);
+          const localContent = contentOf(latestLocal);
+          const localDirty = localContent !== lastSavedContent.current;
 
-          const localRev =
-            worldSyncRev(
-              latestLocal
-            );
+          /* Same revision + no local edits means there is nothing to download
+           * or reconcile. Keep the poll path tiny and leave media lazy-loaded. */
+          if (serverRev === localRev && !localDirty) {
+            setSaveState("saved");
+            return;
+          }
+
+          /* Same server revision but local content changed: safely push the
+           * local snapshot without first downloading the same multi-MB world. */
+          if (serverRev === localRev && localDirty) {
+            if (!worldSaveBusy.current) {
+              worldSaveBusy.current = true;
+              try {
+                const saved = await serverSaveWorld(latestLocal);
+                const acceptedSnapshot = acceptedWorldFromServerSave(latestLocal, saved);
+                if (acceptedSnapshot) {
+                  const accepted = migrate(acceptedSnapshot);
+                  const acceptedRev = worldSyncRev(accepted);
+                  lastSavedContent.current = contentOf(accepted);
+                  setWorld((cur) => {
+                    if (!cur) return cur;
+                    const curContent = contentOf(cur);
+                    if (curContent === localContent) return accepted;
+                    if (worldSyncRev(cur) === localRev) {
+                      const next = cloneWorldState(cur);
+                      next.syncRev = acceptedRev;
+                      return next;
+                    }
+                    return cur;
+                  });
+                  setSaveState("saved");
+                  setSaveAt(now());
+                }
+              } catch (e) {
+                /* Let the normal autosave/conflict path resolve this later. */
+                setSaveState("retry");
+              } finally {
+                worldSaveBusy.current = false;
+              }
+            }
+            return;
+          }
+
+          /* Only a real remote revision change needs the full world payload. */
+          const loaded = await serverWorldLoad();
+          if (!alive || !loaded || !loaded.world || loaded.meId !== meId) return;
+          const serverWorld = migrate(loaded.world);
+          if (!serverWorld || serverWorld.code !== latestLocal.code) return;
 
           const sameContent =
-            contentOf(
-              latestLocal
-            ) ===
-            contentOf(
-              serverWorld
-            );
+            contentOf(latestLocal) ===
+            contentOf(serverWorld);
 
           if (
             serverRev === localRev &&
@@ -72009,19 +72098,15 @@ const signOut = useCallback(async () => {
         if (worldSaveBusy.current) {
           setSaveState("retry");
 
-          setTimeout(() => {
-            setWorld((cur) => {
-              if (!cur) return cur;
-
-              /*
-               * New object identity retriggers the debounced autosave,
-               * while content/rev stay untouched.
-               */
-              return {
-                ...cur,
-              };
-            });
-          }, 700);
+          /* PERFORMANCE v20: do not manufacture a new world object merely to
+           * wake autosave. That invalidated world-dependent memos and rerendered
+           * the whole app. A tiny pulse retries once the current save can finish. */
+          if (!saveRetryTimer.current) {
+            saveRetryTimer.current = setTimeout(() => {
+              saveRetryTimer.current = null;
+              setSaveRetryPulse((value) => value + 1);
+            }, 900);
+          }
 
           return;
         }
@@ -72311,7 +72396,7 @@ const signOut = useCallback(async () => {
 
           return savedWorld;
         });
-      }, 2800);
+      }, 3600);
 
     return () => {
       if (timer.current) {
@@ -72320,7 +72405,7 @@ const signOut = useCallback(async () => {
         );
       }
     };
-  }, [world, meId, installAuthoritativeWorld, tt]);
+  }, [world, meId, installAuthoritativeWorld, tt, saveRetryPulse]);
   const myNotes = (world && meId && world.notify && world.notify[meId]) || [];
   const unread = myNotes.filter((x) => !x.read).length;
   const topNoteId = myNotes.length ? myNotes[0].id : "";
@@ -72868,7 +72953,7 @@ const signOut = useCallback(async () => {
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 4000);
+    const i = setInterval(beat, 9000);
     const first = setTimeout(beat, 100);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
