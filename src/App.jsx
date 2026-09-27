@@ -11306,13 +11306,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   system = budgeted.system;
   prompt = budgeted.prompt;
 
-  if (budgeted.wasCompacted) {
-    console.warn(
-      "AI request compacted before provider call:",
-      `system=${system.length} chars`,
-      `prompt=${prompt.length} chars`
-    );
-  }
+  // A prompt hosszkorlátja normál védelmi lépés, nem konzolhiba.
 
   /*
    * Ezt a költséget a KÖVETKEZŐ queue-elem előtt használjuk.
@@ -23624,6 +23618,16 @@ async function analyzeSocialPostImageInput(
     )
   ) {
     return "";
+  }
+
+  // A Pinterest CDN a szerveroldali letöltést gyakran elutasítja.
+  // A poszt képe továbbra is megjelenik; a már megadott képleírás marad.
+  if (/^https:\/\/i.test(raw)) {
+    try {
+      if (/(^|\.)pinimg\.com$/i.test(new URL(raw).hostname)) return "";
+    } catch (_) {
+      return "";
+    }
   }
 
   const vision =
