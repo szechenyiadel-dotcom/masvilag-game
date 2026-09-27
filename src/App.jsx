@@ -11487,6 +11487,172 @@ function validateGeneratedLanguage(result, expectedLanguage) {
   return enMarks > 0 || huMarks === 0;
 }
 
+/* ============================================================
+   LOCAL AI JSON REPAIR — NO EXTRA PROVIDER CALL FOR SMALL FORMAT ERRORS
+
+   Scene responses occasionally contain a perfectly usable answer with one
+   missing comma / trailing comma / unfinished closing bracket. Retrying the
+   whole provider request for that formatting slip creates request bursts and
+   unnecessary cooldowns. These helpers repair ONLY JSON syntax locally; they
+   never invent roleplay content.
+   ============================================================ */
+function aiJsonObjectCandidate(raw) {
+  const text = String(raw || "").replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  const start = text.indexOf("{");
+  if (start < 0) return "";
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === "\\") { escaped = true; continue; }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return text.slice(start);
+}
+
+function balanceAiJsonClosers(value) {
+  let text = String(value || "").trim();
+  if (!text) return text;
+
+  const stack = [];
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === "\\") { escaped = true; continue; }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{" || ch === "[") stack.push(ch);
+    else if (ch === "}" && stack[stack.length - 1] === "{") stack.pop();
+    else if (ch === "]" && stack[stack.length - 1] === "[") stack.pop();
+  }
+
+  if (inString) {
+    if (text.endsWith("\\")) text = text.slice(0, -1);
+    text += '"';
+  }
+  for (let i = stack.length - 1; i >= 0; i -= 1) {
+    text += stack[i] === "{" ? "}" : "]";
+  }
+  return text;
+}
+
+function repairAiJsonTextConservative(value) {
+  let text = String(value || "").trim();
+  if (!text) return text;
+
+  /* Common provider slips: trailing commas and missing separators between
+     complete JSON values. Do not touch prose inside quoted strings. */
+  text = text
+    .replace(/,\s*([}\]])/g, "$1")
+    .replace(/}\s*(?={)/g, "},")
+    .replace(/]\s*(?=\[)/g, "],")
+    .replace(/([}\]])\s*(?="(?:[^"\\]|\\.)*"\s*:)/g, "$1,")
+    .replace(/(true|false|null|-?\d+(?:\.\d+)?|"(?:[^"\\]|\\.)*")\s*(?="(?:[^"\\]|\\.)*"\s*:)/g, "$1,")
+    .replace(/"\s*(?="(?:[^"\\]|\\.)*"\s*(?:,|\]))/g, '",');
+
+  /* A model sometimes emits bare JS-style property names. This is safe to fix
+     only where JSON grammar requires a property name after { or ,. */
+  text = text.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)/g, '$1"$2"$3');
+  return balanceAiJsonClosers(text);
+}
+
+function aiJsonArrayPropertyCandidate(raw, key) {
+  const text = String(raw || "");
+  const re = new RegExp(`(?:"${escapeAddressRegex(key)}"|${escapeAddressRegex(key)})\\s*:`,'i');
+  const hit = re.exec(text);
+  if (!hit) return "";
+  const start = text.indexOf("[", hit.index + hit[0].length);
+  if (start < 0) return "";
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === "\\") { escaped = true; continue; }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "[") depth += 1;
+    else if (ch === "]") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return text.slice(start);
+}
+
+function parseAiJsonResponse(raw, options = {}, expectedLanguage = CURRENT_LANG) {
+  const candidate = aiJsonObjectCandidate(raw);
+  if (!candidate) {
+    const err = new SyntaxError("Az AI válasza nem tartalmazott feldolgozható JSON-t.");
+    err.aiJsonParseFailure = true;
+    throw err;
+  }
+
+  try {
+    return JSON.parse(candidate);
+  } catch (firstError) {
+    if (!(options && options.localJsonRepair)) {
+      firstError.aiJsonParseFailure = true;
+      throw firstError;
+    }
+  }
+
+  const repaired = repairAiJsonTextConservative(candidate);
+  try {
+    return JSON.parse(repaired);
+  } catch (repairError) {
+    /* RP safety net: if later metadata is malformed but the visible turns array
+       is recoverable, keep those turns instead of firing another provider call. */
+    const salvageKey = String(options && options.salvageArrayKey || "").trim();
+    if (salvageKey) {
+      const arrayCandidate = aiJsonArrayPropertyCandidate(candidate, salvageKey);
+      if (arrayCandidate) {
+        try {
+          const arr = JSON.parse(repairAiJsonTextConservative(arrayCandidate));
+          if (Array.isArray(arr) && arr.length) {
+            return {
+              language: asLang(expectedLanguage),
+              [salvageKey]: arr,
+              changes: [],
+              memories: [],
+              longTermMemories: [],
+              events: [],
+              statusUpdates: [],
+              selfUpdates: [],
+              relationshipUpdates: [],
+            };
+          }
+        } catch (_) {}
+      }
+    }
+    const err = new SyntaxError(repairError && repairError.message ? repairError.message : "Hibás AI JSON.");
+    err.aiJsonParseFailure = true;
+    throw err;
+  }
+}
+
 /* Kitartó kérés: ha a szolgáltató visszafog minket, nem adjuk fel, hanem
    kivárjuk a pihenőt és újrapróbáljuk. A kérés csak akkor hiúsul meg, ha
    percekig egyszer sem enged át — így a játékosnak nem kell hibát látnia. */
@@ -11585,9 +11751,7 @@ async function askJSON(system, prompt, options = {}) {
                 ) || undefined,
             }
           );
-          const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
-          if (a === -1 || b === -1) throw new Error("Az AI válasza nem tartalmazott feldolgozható JSON-t.");
-          const parsed = JSON.parse(raw.slice(a, b + 1));
+          const parsed = parseAiJsonResponse(raw, options, lang);
           if (!validateGeneratedLanguage(parsed, lang)) {
             if (!strictMode) {
               strictMode = true;
@@ -11600,6 +11764,12 @@ async function askJSON(system, prompt, options = {}) {
         } catch (err) {
           last = err;
           if (err && err.retryable === false) {
+            throw err;
+          }
+          /* Scene can repair common JSON syntax locally. If even local repair
+             cannot recover it, do NOT hammer the provider again merely because
+             of formatting; surface one clean error and preserve the scene. */
+          if (err && err.aiJsonParseFailure && options && options.noMalformedJsonRetry) {
             throw err;
           }
           if (err && err.busy) {
@@ -44639,6 +44809,17 @@ function roleplayDirectPlayerRequestCue(value) {
   return null;
 }
 
+
+/* Pragmatic meaning: challenges such as "you wanted to talk, don't chicken out"
+   mean STAY / FOLLOW THROUGH / CONTINUE THE CONVERSATION. They are not refusal,
+   dismissal or an instruction to leave. */
+function roleplayConversationCommitmentCue(value) {
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  if (!raw) return null;
+  const continueTalk = /\b(?:you\s+(?:wanted|asked)\s+to\s+talk|we\s+need\s+to\s+talk|then\s+talk|say\s+what\s+you\s+came\s+to\s+say|don['’]?t\s+(?:chicken\s+out|back\s+out|walk\s+away|run\s+away|shut\s+down)|finish\s+what\s+you\s+(?:started|were\s+saying)|stay\s+and\s+talk|te\s+akart[aá]l\s+besz[eé]lni|akkor\s+besz[eé]lj|ne\s+futamodj\s+meg|ne\s+h[aá]tr[aá]lj\s+ki|ne\s+s[eé]t[aá]lj\s+el|fejezd\s+be\s+amit\s+elkezdt[eé]l)\b/i;
+  return continueTalk.test(raw) ? { kind: "continue-conversation", text: raw } : null;
+}
+
 function roleplayMeaningfulTokenOverlap(a, b) {
   const stop = new Set([
     "the","a","an","and","or","but","to","of","in","on","at","for","with","is","are","was","were","be","been","being",
@@ -44673,6 +44854,7 @@ function roleplayImmediateContinuityCard(
   const rows = Array.isArray(recentTurns) ? recentTurns : [];
   const followupKind = roleplayFollowupQuestionKind(playerText);
   const directRequest = roleplayDirectPlayerRequestCue(playerText);
+  const conversationCommitment = roleplayConversationCommitmentCue(playerText);
 
   let targetId = playerTargetId && charById(w, playerTargetId)
     ? playerTargetId
@@ -44716,6 +44898,17 @@ ${threadRows || "(no earlier stored beats)"}
 - Do NOT restart introductions, re-establish context the characters already know, ask a generic conversation opener, jump to an unrelated memory, or replace the active topic with a random new issue.
 - Character initiative is allowed AFTER directly processing the current message; initiative must grow from this same thread, not erase it.
 - If the player clearly introduces a new subject, follow that new subject while preserving physical/location/relationship continuity.`;
+
+  if (conversationCommitment) {
+    return `${baseThreadLock}
+CONVERSATION FOLLOW-THROUGH LOCK — ABSOLUTE PRAGMATIC MEANING:
+- The player's latest line means: STAY in this interaction and FOLLOW THROUGH with the conversation already requested/started.
+- Do NOT reinterpret it as the player refusing to listen, shutting ${actorName} out, ending the conversation, asking ${actorName} to leave, or withdrawing from the discussion.
+- Example: "You wanted to talk. Then don't chicken out of it" means "You said you wanted this conversation, so don't back out now — continue it." It does NOT mean "I refuse to talk to you."
+- ${actorName} may react defensively, angrily, reluctantly, calmly or emotionally according to character, but the reaction must preserve this basic pragmatic meaning.
+- Do not manufacture an exit/door-opening beat merely to contradict the player unless an EXACT earlier stored turn already established that ${actorName} was leaving.
+- Continue the SAME disputed topic from the immediately preceding exchange; do not reset to a generic speech about needing to talk.`;
+  }
 
   if (directRequest) {
     return `${baseThreadLock}
@@ -44991,6 +45184,8 @@ JSON ONLY:
         timeoutMs: 7000,
         maxSystemChars: 6000,
         maxPromptChars: 8000,
+        localJsonRepair: true,
+        noMalformedJsonRetry: true,
       }
     );
 
@@ -45450,6 +45645,7 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - Mindenki a SAJÁT hangmintája szerint szólaljon meg. A mondataik ne legyenek felcserélhetők, gépiesen egyformák vagy ugyanazon hangon megírva.
 - A párbeszéd és a cselekvés vigye a jelenetet, ne összefoglaló.
 - A szereplők kezdeményezhetnek, megszakíthatják egymást, kerülhetnek valakit, provokálhatnak, flörtölhetnek, összeveszhetnek vagy elterelhetik a témát, ha ez a személyiségükből és a helyzetből következik.
+- UGYANAZON KÖR FIZIKAI KONZISZTENCIÁJA: egy AI actionje és az utána adott speechje ugyanabban a generált körben nem mondhat ellent egymásnak. Ha az actionben már kinyitotta az ajtót, ne mondja utána saját maga úgy, hogy "Open the door" mintha az ajtó még csukva lenne; ha már leült/felállt/elindult/megfogott valamit, a következő saját sor ezt a friss fizikai állapotot vegye alapul.
 - ROMANTIKUS KEZDEMÉNYEZÉS: ha a karakterlap, kapcsolat, vonzalom és az aktuális helyzet indokolja, az AI ne csak reagáljon a játékos közeledésére. Ő maga is tehet első lépést: közelebb mehet, megérintheti a másik kezét/arcát karakterhű módon, megpróbálhat csókot kezdeményezni, viszonzott vonzalomnál csókolózást kezdeményezhet, vagy Mature 18+ módban felnőtt szereplők között nem részletező intimebb folytatást indíthat.
 - A romantikus kezdeményezés NEM kötelező minden vonzalomnál és ne legyen random. A merészebb/flörtölősebb/dominánsabb/impulzívabb karakterek könnyebben teszik meg az első lépést; a félénkebb, bizalmatlanabb vagy visszafogottabb karakterekhez lassabb kezdeményezés illik.
 - Ha az AI a JÁTÉKOS karakterével kezdeményez csókot vagy intimebb lépést, csak a saját karakter mozdulatát írd le. A játékos válaszát soha ne döntsd el helyette; hagyj neki valódi lehetőséget reagálni.
@@ -45507,6 +45703,9 @@ Formátum:
   timeoutMs: 60000,
   maxSystemChars: 8000,
   maxPromptChars: 12000,
+  localJsonRepair: true,
+  noMalformedJsonRetry: true,
+  salvageArrayKey: "turns",
 }));
 
       /*
@@ -45792,6 +45991,9 @@ VÁLASZ CSAK JSON:
             timeoutMs: 45000,
             maxSystemChars: 6500,
             maxPromptChars: 9000,
+            localJsonRepair: true,
+            noMalformedJsonRetry: true,
+            salvageArrayKey: "turns",
           }
         ));
 
@@ -45905,6 +46107,9 @@ JSON ONLY:
                   timeoutMs: 9000,
                   maxSystemChars: 9000,
                   maxPromptChars: 14000,
+                  localJsonRepair: true,
+                  noMalformedJsonRetry: true,
+                  salvageArrayKey: "turns",
                 }
               )
             );
