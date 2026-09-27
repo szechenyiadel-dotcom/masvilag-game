@@ -10948,24 +10948,24 @@ const AI = {
   queueRunning: false,
   queueSeq: 0,
 };
+/*
+ * NO-WAIT PLAYER PATH.
+ *
+ * `cooldownUntil` is kept only as a quiet BACKGROUND circuit-breaker so the
+ * autonomous world does not hammer a provider that just returned 429. Player
+ * Scene/DM/group requests never sleep on this value and no countdown is shown.
+ */
 const cooldownLeft = () => Math.max(0, AI.cooldownUntil - now());
-const visibleCooldownLeft = () => Math.max(0, AI.visibleCooldownUntil - now());
+const visibleCooldownLeft = () => 0;
 const onCooldown = (fn) => { AI.listeners.push(fn); return () => { AI.listeners = AI.listeners.filter((x) => x !== fn); }; };
-function setCooldown(ms, visible = true) {
+function setCooldown(ms, visible = false) {
   const until = now() + Math.max(0, Number(ms) || 0);
   AI.cooldownUntil = Math.max(AI.cooldownUntil, until);
+  AI.visibleCooldownUntil = 0;
 
-  /*
-   * Háttérvilág miatti provider-throttle ne villogjon úgy a játékosnak,
-   * mintha az ő konkrét kérésével lenne baj. A queue ettől még ugyanúgy
-   * kivárja a globális cooldown-t.
-   */
-  if (visible) {
-    AI.visibleCooldownUntil = Math.max(AI.visibleCooldownUntil, until);
-  }
-
+  /* Never block the UI with a provider countdown. */
   AI.listeners.forEach((fn) => {
-    try { fn(visibleCooldownLeft()); } catch (e) {}
+    try { fn(0); } catch (e) {}
   });
 }
 
@@ -11139,7 +11139,18 @@ async function runAiQueueWorker() {
       }
 
       try {
-        while (cooldownLeft() > 0) await wait(Math.min(cooldownLeft() + 25, 1000));
+        /*
+         * Never make a player-triggered task sleep on a global cooldown. If the
+         * hidden background circuit-breaker is active, background work yields
+         * immediately and the live-world scheduler can try again later.
+         */
+        if (task.priority < 50 && cooldownLeft() > 0) {
+          const deferred = new Error("Háttér-AI átmenetileg elhalasztva.");
+          deferred.busy = true;
+          deferred.backgroundDeferred = true;
+          task.reject(deferred);
+          continue;
+        }
 
         const since = now() - AI.last;
         const baseGap =
@@ -11158,7 +11169,6 @@ async function runAiQueueWorker() {
 
         const gap = Math.max(baseGap, costGap);
         if (since < gap) await wait(gap - since);
-        while (cooldownLeft() > 0) await wait(Math.min(cooldownLeft() + 25, 1000));
 
         // A player request may arrive while this background task was waiting.
         if (task.priority < 50 && (AI.directDmPending > 0 ||
@@ -11380,10 +11390,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   } catch (e) {
     if (e && e.name === "AbortError") throw new Error("Az AI nem válaszolt időben.");
     if (e && e.message) {
-      if (e && e.retryable === false) {
-        AI.strikes = Math.min(AI.strikes + 1, 3);
-        setCooldown(15000 * AI.strikes, false);
-      }
+      /* Config/network errors must never create a fake client cooldown. */
       throw e;
     }
     throw new Error("Nem sikerült elérni az AI-t (hálózati hiba). A helyi proxy futása és az API kulcsok ellenőrzése szükséges.");
@@ -11411,8 +11418,6 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       throw err;
     }
     if (busy) {
-      // ismétlődő elutasításnál egyre hosszabb pihenő, hogy kimásszunk a gödörből
-      AI.strikes = Math.min(AI.strikes + 1, 3);
       const retryAfterRaw =
         res.headers && res.headers.get
           ? res.headers.get("retry-after")
@@ -11420,7 +11425,6 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
 
       let retryAfterMs = 0;
       const retryAfterSeconds = Number(retryAfterRaw);
-
       if (retryAfterSeconds > 0) {
         retryAfterMs = retryAfterSeconds * 1000;
       } else if (retryAfterRaw) {
@@ -11431,28 +11435,26 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       }
 
       /*
-       * RATE-LIMIT BACKOFF: the backend already tries every configured provider
-       * and returns Retry-After for the one that can recover first. Respect that
-       * value instead of multiplying the same 429 into 12 -> 22 -> 39 -> 60s.
-       * Only use a small local fallback when the upstream supplied no timing.
+       * NO PLAYER COOLDOWN: the proxy already attempted all configured providers.
+       * Do not convert a provider 429/503 into a 12-60 second browser sleep. Keep
+       * only a short hidden background breaker so autonomous jobs do not spin.
        */
-      const msgLower = String((data && data.error && data.error.message) || data?.error || "").toLowerCase();
-      const tokenMinuteLimit =
-        code === 429 &&
-        (msgLower.includes("tokens per min") || msgLower.includes("tokens per minute") || msgLower.includes("tpm"));
-      const fallbackRestMs = tokenMinuteLimit
-        ? 12000
-        : (code === 429 ? 4000 : 3000);
-      const restMs = Math.max(1000, retryAfterMs > 0 ? retryAfterMs : fallbackRestMs);
+      if (!requestMeta.interactive) {
+        setCooldown(
+          Math.max(1500, Math.min(8000, retryAfterMs || 3000)),
+          false
+        );
+      }
 
-      /*
-       * A rate-limitet a queue belül kezeli és ugyanazt a játékosi kérést
-       * újrapróbálja. Ezt nem mutatjuk globális "AI can't keep up" bannerként,
-       * mert DM/group chat közben csak félrevezető és zajos.
-       */
-      setCooldown(restMs, false);
-      const err = new Error(`Az AI most nem győzi — ${Math.ceil(restMs / 1000)} másodperc pihenő.`);
+      AI.strikes = 0;
+      const err = new Error(
+        requestMeta.interactive
+          ? "Az AI-szolgáltatók most nem tudtak azonnal válaszolni. Próbáld újra."
+          : "A háttér-AI átmenetileg elhalasztva."
+      );
       err.busy = true;
+      err.noCooldown = true;
+      err.retryAfterMs = retryAfterMs;
       throw err;
     }
     AI.strikes = 0;
@@ -11723,7 +11725,6 @@ async function askJSON(system, prompt, options = {}) {
         busyWaits < maxBusyWaits
       ) {
         try {
-          while (cooldownLeft() > 0) await wait(Math.min(cooldownLeft() + 25, 1000));
           const langRule = languageInstruction(lang, strictMode);
           const jsonRule = lang === "en"
             ? "Return valid JSON only. Add a top-level \"language\" field with value \"en\"."
@@ -11775,12 +11776,13 @@ async function askJSON(system, prompt, options = {}) {
             throw err;
           }
           if (err && err.busy) {
+            /*
+             * NO-WAIT: the backend already performed immediate provider failover.
+             * Never sleep/retry the same player request in the browser; that was
+             * the source of the visible 12/22/39 second stalls and request storms.
+             */
             busyWaits++;
-            // Background jobs yield after a real rate-limit instead of holding
-            // the only worker and re-hitting the provider before Retry-After.
-            if (priority < 50 || busyWaits >= maxBusyWaits) throw err;
-            while (cooldownLeft() > 0) await wait(Math.min(cooldownLeft() + 25, 1000));
-            continue;
+            throw err;
           }
           tries++;
 
@@ -23771,12 +23773,12 @@ async function analyzeImageDataUrl(
         }),
       });
       if (result && result.code === "PROVIDER_RATE_LIMIT") {
-        setCooldown(Math.max(12000, Number(result.retryAfter || 0) * 1000), false);
+        setCooldown(Math.max(1500, Math.min(6000, Number(result.retryAfter || 0) * 1000 || 2500)), false);
       }
       return result;
     } catch (err) {
       if (err && [429, 503, 529].includes(Number(err.status))) {
-        setCooldown(Math.max(12000, Number(err.retryAfterMs) || 0), false);
+        setCooldown(Math.max(1500, Math.min(6000, Number(err.retryAfterMs) || 2500)), false);
       }
       throw err;
     }
