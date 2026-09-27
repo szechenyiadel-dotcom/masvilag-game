@@ -5035,7 +5035,16 @@ function recordProviderCooldown(provider, retryAfter) {
   const requestedMs = Number.isFinite(seconds) && seconds > 0
     ? seconds * 1000
     : Math.max(0, Date.parse(String(retryAfter || "")) - Date.now()) || 0;
-  const until = Date.now() + Math.max(12000, requestedMs);
+
+  /*
+   * Do not manufacture a 12 second lock when the upstream did not actually
+   * request one. Missing Retry-After gets only a short circuit-breaker; a real
+   * provider Retry-After is still respected (bounded only against nonsense).
+   */
+  const cooldownMs = requestedMs > 0
+    ? Math.min(60000, Math.max(800, requestedMs))
+    : 2200;
+  const until = Date.now() + cooldownMs;
   AI_PROVIDER_COOLDOWNS.set(
     provider,
     Math.max(until, AI_PROVIDER_COOLDOWNS.get(provider) || 0)
@@ -5087,9 +5096,16 @@ const AI_INTERACTIVE_MICRO_WAIT_MS = Math.max(
   400,
   Math.min(3000, Number(process.env.AI_INTERACTIVE_MICRO_WAIT_MS) || 1800)
 );
+/* A player request may remain pending server-side while a provider becomes
+   available. This is NOT a client cooldown: the browser remains responsive and
+   the user never has to press Send again. */
+const AI_INTERACTIVE_RATE_LIMIT_RECOVERY_MS = Math.max(
+  2500,
+  Math.min(15000, Number(process.env.AI_INTERACTIVE_RATE_LIMIT_RECOVERY_MS) || 12000)
+);
 const AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS = Math.max(
-  500,
-  Math.min(8000, Number(process.env.AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS) || 2800)
+  1500,
+  Math.min(12000, Number(process.env.AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS) || 6000)
 );
 let AI_LAST_INTERACTIVE_REQUEST_AT = 0;
 
@@ -5271,6 +5287,29 @@ function compactMessageBodyForRateLimit(body = {}) {
   return next;
 }
 
+function compactInteractiveMessageBodyForRateLimit(body = {}) {
+  const next = { ...(body || {}) };
+  /* Scene prompts intentionally repeat the newest player meaning near the tail,
+     so edge-preserving compaction keeps current intent while cutting TPM cost. */
+  next.system = preserveMessageEdges(next.system, 5600);
+
+  const messages = Array.isArray(next.messages) ? next.messages.slice(-6) : [];
+  next.messages = messages.map((item, index) => {
+    const copy = { ...(item || {}) };
+    const content = extractText(copy.content || "");
+    const limit = index === messages.length - 1 ? 8500 : 1800;
+    copy.content = preserveMessageEdges(content, limit);
+    return copy;
+  });
+
+  const maxTokens = Number(next.max_tokens);
+  next.max_tokens = Math.min(
+    Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 900,
+    620
+  );
+  return next;
+}
+
 async function callMessageProvider(provider, body) {
   const interactive = String(body?.masvilag_priority || "") === "interactive";
 
@@ -5302,7 +5341,7 @@ async function callMessageProvider(provider, body) {
      * provider is still limited it will return a real 429 and we immediately
      * fall through to another configured provider.
      */
-    const throttled = interactive ? null : providerCooldownResult(provider);
+    const throttled = providerCooldownResult(provider);
     if (throttled) return throttled;
 
     const result = provider === "openai"
@@ -6326,7 +6365,7 @@ app.post(
          * Interactive traffic gets one fresh probe; background traffic still
          * honors the circuit-breaker.
          */
-        const throttled = interactive ? null : providerCooldownResult(provider);
+        const throttled = providerCooldownResult(provider);
         if (throttled) {
           last = throttled;
           limited.push(throttled);
@@ -6383,55 +6422,38 @@ app.post(
       }
 
       /*
-       * If every otherwise-healthy provider was only BUSY with an in-flight
-       * request, give the first one that frees a tiny invisible micro-window.
-       * This is NOT a cooldown and there is no countdown/retry sleep in the
-       * browser. It prevents the false "no provider could answer immediately"
-       * error when two users press Send a moment apart.
+       * If every healthy provider is merely BUSY, do not fail the player's
+       * Scene/DM. Queue behind the least-loaded provider. The HTTP promise stays
+       * pending but the React app remains responsive; no countdown/cooldown is
+       * created and the user never has to press Send again.
        */
       if (interactive && busyProviders.length) {
-        const deadline = Date.now() + AI_INTERACTIVE_MICRO_WAIT_MS;
-        let releasedProvider = "";
+        const provider = [...busyProviders].sort(
+          (a, b) => providerQueueLoad(a) - providerQueueLoad(b)
+        )[0];
 
-        while (Date.now() < deadline) {
-          releasedProvider =
-            [...busyProviders]
-              .filter((provider) => !providerIsRunning(provider))
-              .sort((a, b) => providerQueueLoad(a) - providerQueueLoad(b))[0] ||
-            "";
-
-          if (releasedProvider) break;
-          await sleepMs(70);
-        }
-
-        if (releasedProvider) {
-          try {
-            const result = await callMessageProvider(releasedProvider, body);
-
-            if (result?.ok) {
-              return { ok: true, result, limited, busyProviders };
-            }
-
-            if (!result?.deferred && !result?.unavailable) {
-              last = result;
-              if (Number(result?.status) === 429) {
-                limited.push(result);
-              }
-            }
-          } catch (err) {
-            last = {
-              status: err?.name === "AbortError" ? 504 : 502,
-              payload: {
-                error: {
-                  message:
-                    err?.name === "AbortError"
-                      ? `${releasedProvider} timed out.`
-                      : (err?.message || `${releasedProvider} proxy error`),
-                },
-              },
-              provider: releasedProvider,
-            };
+        try {
+          const result = await callMessageProvider(provider, body);
+          if (result?.ok) {
+            return { ok: true, result, limited, busyProviders };
           }
+          if (!result?.deferred && !result?.unavailable) {
+            last = result;
+            if (Number(result?.status) === 429) limited.push(result);
+          }
+        } catch (err) {
+          last = {
+            status: err?.name === "AbortError" ? 504 : 502,
+            payload: {
+              error: {
+                message:
+                  err?.name === "AbortError"
+                    ? `${provider} timed out.`
+                    : (err?.message || `${provider} proxy error`),
+              },
+            },
+            provider,
+          };
         }
       }
 
@@ -6444,9 +6466,11 @@ app.post(
     const incomingBody = req.body || {};
     const interactiveRequest =
       String(incomingBody?.masvilag_priority || "") === "interactive";
-    const compactThreshold = interactiveRequest ? 18000 : 12000;
+    const compactThreshold = interactiveRequest ? 10000 : 12000;
     const firstBody = messageBodyCharSize(incomingBody) > compactThreshold
-      ? compactMessageBodyForRateLimit(incomingBody)
+      ? (interactiveRequest
+          ? compactInteractiveMessageBodyForRateLimit(incomingBody)
+          : compactMessageBodyForRateLimit(incomingBody))
       : incomingBody;
 
     const first = await runPass(firstBody);
@@ -6467,7 +6491,37 @@ app.post(
      * Never sleep 6/12/39 seconds on Retry-After. Background work is retried by
      * its scheduler on a later tick.
      */
-    const finalLimited = first.limited.slice();
+    let finalLimited = first.limited.slice();
+
+    /*
+     * Automatic interactive recovery: if the providers really returned 429,
+     * keep this one request pending until the earliest advertised/recorded slot
+     * (bounded). Then retry ONCE with the smaller interactive payload. This
+     * replaces the old visible 12/22/39 second client cooldown and manual retry.
+     */
+    if (interactiveRequest && finalLimited.length) {
+      const waits = finalLimited
+        .map((x) => retryAfterMs(x?.retryAfter, 2200))
+        .filter((ms) => Number.isFinite(ms) && ms > 0);
+      const shortestWait = waits.length ? Math.min(...waits) : 2200;
+
+      if (shortestWait <= AI_INTERACTIVE_RATE_LIMIT_RECOVERY_MS) {
+        await sleepMs(Math.max(250, shortestWait) + 90);
+        const retryBody = compactInteractiveMessageBodyForRateLimit(incomingBody);
+        const second = await runPass(retryBody);
+        finalLimited = finalLimited.concat(second.limited || []);
+
+        if (second.ok) {
+          const result = second.result;
+          res.setHeader(
+            "x-masvilag-ai-provider",
+            result.provider || requestedProvider
+          );
+          res.setHeader("x-masvilag-ai-auto-recovery", "1");
+          return res.json(result.payload);
+        }
+      }
+    }
 
     const upstreamStatus = Number(last?.status) || 503;
     const status = upstreamStatus === 404 ? 502 : upstreamStatus;
@@ -6518,9 +6572,9 @@ app.post(
         .status(status === 429 ? 503 : status)
         .json({
           error: {
-            code: "AI_CAPACITY_NOWAIT",
+            code: "AI_CAPACITY_TEMPORARY",
             message:
-              "No configured AI provider accepted the request after fresh failover and a short busy-slot recovery. No cooldown was applied.",
+              "Configured AI providers did not recover within the bounded automatic retry window.",
           },
         });
     }

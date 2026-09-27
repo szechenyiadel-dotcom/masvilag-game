@@ -11375,18 +11375,37 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     // `server/proxy.js` fájllal (lásd README). A production környezetben
     // használj szerver-oldali proxyt vagy közvetlen, biztonságos backendet.
     AI.last = now();
-    res = await requestAiProxy({
-  provider: DEFAULT_AI_PROVIDER,
-  model: DEFAULT_AI_MODEL,
-  max_tokens: maxTokens,
-  temperature: 0.9,
-  system,
-  messages: [{ role: "user", content: prompt }],
-  /* Backend uses this only for queue scheduling; provider payload builders
-     ignore it. Interactive Scene/DM/group work must not sit behind a long
-     autonomous request that already started. */
-  masvilag_priority: requestMeta.interactive ? "interactive" : "background",
-}, ctrl.signal);
+    const aiPayload = {
+      provider: DEFAULT_AI_PROVIDER,
+      model: DEFAULT_AI_MODEL,
+      max_tokens: maxTokens,
+      temperature: 0.9,
+      system,
+      messages: [{ role: "user", content: prompt }],
+      /* Backend uses this only for queue scheduling; provider payload builders
+         ignore it. Interactive Scene/DM/group work must not sit behind a long
+         autonomous request that already started. */
+      masvilag_priority: requestMeta.interactive ? "interactive" : "background",
+    };
+
+    /*
+     * Last-resort transparent recovery for a transient server-capacity response.
+     * The proxy already performs provider routing/queuing; this ONE short retry
+     * only covers the race where capacity frees immediately after its bounded
+     * recovery window. No cooldown, no countdown and no manual second click.
+     */
+    const proxyAttempts = requestMeta.interactive ? 2 : 1;
+    for (let attempt = 0; attempt < proxyAttempts; attempt++) {
+      res = await requestAiProxy(aiPayload, ctrl.signal);
+      if (
+        res.ok ||
+        ![429, 503, 529].includes(Number(res.status)) ||
+        attempt >= proxyAttempts - 1
+      ) {
+        break;
+      }
+      await wait(550);
+    }
   } catch (e) {
     if (e && e.name === "AbortError") throw new Error("Az AI nem válaszolt időben.");
     if (e && e.message) {
@@ -11449,7 +11468,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       AI.strikes = 0;
       const err = new Error(
         requestMeta.interactive
-          ? "Az AI-szolgáltatók most nem tudtak azonnal válaszolni. Próbáld újra."
+          ? "Az AI-szolgáltatók átmenetileg nem adtak használható választ. A jelenet és az üzeneted megmaradt."
           : "A háttér-AI átmenetileg elhalasztva."
       );
       err.busy = true;
