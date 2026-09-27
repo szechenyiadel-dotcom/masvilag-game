@@ -5044,14 +5044,117 @@ function providerCooldownResult(provider) {
     payload: { error: { message: "AI provider rate limit; waiting for Retry-After." } } };
 }
 
+/* -------------------------------------------------------------------------
+   MESSAGE RATE-LIMIT GATE
+
+   /ai/messages is shared by foreground DM/Event replies and autonomous world
+   activity. A provider-level 429 used to be returned to the browser
+   immediately, while the next queued request hit the exact same cooldown.
+   Keep only ONE message request in flight per provider and wait out the
+   provider's Retry-After window before retrying. This changes only the
+   message proxy path; image/vision/media behaviour is untouched.
+   ------------------------------------------------------------------------- */
+const AI_PROVIDER_MESSAGE_CHAINS = new Map();
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function retryAfterMs(value, fallbackMs = 12000) {
+  const raw = String(value || "").trim();
+  const seconds = Number(raw);
+
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.ceil(seconds * 1000);
+  }
+
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) {
+    return Math.max(0, dateMs - Date.now());
+  }
+
+  return Math.max(1000, Number(fallbackMs) || 12000);
+}
+
+function runProviderMessageSerial(provider, work) {
+  const previous = AI_PROVIDER_MESSAGE_CHAINS.get(provider) || Promise.resolve();
+  const current = previous
+    .catch(() => undefined)
+    .then(work);
+  let tracked;
+
+  tracked = current.finally(() => {
+    if (AI_PROVIDER_MESSAGE_CHAINS.get(provider) === tracked) {
+      AI_PROVIDER_MESSAGE_CHAINS.delete(provider);
+    }
+  });
+
+  AI_PROVIDER_MESSAGE_CHAINS.set(provider, tracked);
+  return current;
+}
+
 async function callMessageProvider(provider, body) {
-  const throttled = providerCooldownResult(provider);
-  if (throttled) return throttled;
-  const result = provider === "openai" ? await proxyOpenAIMessage(body)
-    : provider === "gemini" ? await proxyGeminiMessage(body)
-    : await proxyAnthropicMessage(body);
-  if (result && Number(result.status) === 429) recordProviderCooldown(provider, result.retryAfter);
-  return result;
+  return runProviderMessageSerial(provider, async () => {
+    let last = null;
+
+    /* Two provider attempts absorb ordinary short RPM/TPM windows without
+       holding the browser request open indefinitely. */
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const throttled = providerCooldownResult(provider);
+
+      if (throttled) {
+        const waitMs = retryAfterMs(throttled.retryAfter, 12000);
+
+        /* The current client aborts around 60 seconds. Keep the server wait
+           bounded so there is still time for the retry itself. */
+        if (waitMs > 42000) {
+          return throttled;
+        }
+
+        await sleepMs(waitMs + 250);
+      }
+
+      const result = provider === "openai"
+        ? await proxyOpenAIMessage(body)
+        : provider === "gemini"
+          ? await proxyGeminiMessage(body)
+          : await proxyAnthropicMessage(body);
+
+      if (!result || Number(result.status) !== 429) {
+        return result;
+      }
+
+      last = result;
+      recordProviderCooldown(provider, result.retryAfter);
+
+      if (attempt >= 2) {
+        break;
+      }
+
+      const cooldown = providerCooldownResult(provider);
+      const waitMs = retryAfterMs(
+        cooldown?.retryAfter || result.retryAfter,
+        12000
+      );
+
+      if (waitMs > 42000) {
+        break;
+      }
+
+      await sleepMs(waitMs + 250);
+    }
+
+    return last || {
+      ok: false,
+      status: 429,
+      provider,
+      payload: {
+        error: {
+          message: "AI provider rate limit; retry window did not clear.",
+        },
+      },
+    };
+  });
 }
 
 /* -------------------------------------------------------------------------
