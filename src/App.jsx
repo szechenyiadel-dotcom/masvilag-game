@@ -10872,10 +10872,10 @@ function playerIsActivelyViewingWorld() {
   );
 }
 const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
-const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1500, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 900));
-const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
+const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1500, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 1500));
+const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 22)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 45 * 1000));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 35 * 1000));
 const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 5 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
 const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
@@ -10888,7 +10888,7 @@ const AI = {
   gap: AI_BACKGROUND_GAP_MS, // Railway/Vite változóval hangolható háttérritmus
   interactiveGap: 120,       // gyors játékosi DM/group/RP lane
   initiativeGap: AI_INITIATIVE_GAP_MS, // gyors autonóm DM / event / group lane
-  maxConcurrent: Math.max(1, Math.min(2, Number(import.meta.env.VITE_AI_MAX_CONCURRENT) || 2)),
+  maxConcurrent: Math.max(1, Math.min(2, Number(import.meta.env.VITE_AI_MAX_CONCURRENT) || 1)),
   activeWorkers: 0,
 
   /*
@@ -10990,7 +10990,7 @@ function aiCostGapFor(system, prompt, maxTokens) {
  * regions if an emergency trim is needed.
  */
 const AI_MAX_SYSTEM_CHARS = Math.max(18000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 42000);
-const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 82000);
+const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 48000);
 
 function preserveEdges(value, maxChars, label = "context") {
   const text = String(value || "");
@@ -11020,10 +11020,10 @@ function budgetAiRequest(
   const promptLimit =
     Math.max(
       12000,
-      Number(
-        limits &&
-        limits.maxPromptChars
-      ) || AI_MAX_PROMPT_CHARS
+      Math.min(
+        AI_MAX_PROMPT_CHARS,
+        Number(limits && limits.maxPromptChars) || AI_MAX_PROMPT_CHARS
+      )
     );
 
   const compactSystem =
@@ -11133,7 +11133,7 @@ async function runAiQueueWorker() {
 
         const costGap =
           task.priority >= 50
-            ? Math.min(5000, Number(AI.lastCostGap) || 0)
+            ? Math.min(1500, Number(AI.lastCostGap) || 0)
             : task.priority >= 15
               ? Math.min(7000, Number(AI.lastCostGap) || 0)
               : Math.min(10000, Number(AI.lastCostGap) || 0);
@@ -13453,7 +13453,7 @@ function postRequiresFullAiCommentCoverage(w, post) {
   return Boolean(w && post && post.id && post.authorId);
 }
 
-const GUARANTEED_POST_COMMENT_RETRY_MS = 4000;
+const GUARANTEED_POST_COMMENT_RETRY_MS = 2000;
 
 function availableAiCommenterCountForPost(w, post) {
   if (!w || !post) return 0;
@@ -13517,7 +13517,7 @@ function guaranteedPostCommentAction(
    * remaining characters together. A one-character lane makes progress
    * deterministic and keeps each character's own voice isolated. */
   const batchMissing = fullCoverage
-    ? Math.min(1, coverage.missing)
+    ? Math.min(3, coverage.missing)
     : coverage.missing;
   const normalizedExactCommenterId =
     exactCommenterId
@@ -13529,7 +13529,7 @@ function guaranteedPostCommentAction(
       ? normalizedExactCommenterId
       : (missingIds[0] || "");
   const forcedCommenterIds = fullCoverage && selectedMissingId
-    ? [selectedMissingId]
+    ? [selectedMissingId, ...missingIds.filter((id) => id !== selectedMissingId)].slice(0, batchMissing)
     : [];
 
   const requiredCommenterId = forcedCommenterIds[0] || "any";
@@ -64200,7 +64200,7 @@ function freshFeedPostCommentCandidate(w) {
     .filter((post) => {
       if (!post || !post.id || !post.authorId) return false;
       const age = ts - (Number(post.ts) || 0);
-      if (age < 9000 || age > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) return false;
+      if (age < 3000 || age > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) return false;
 
       const comments = safePostComments(post);
       const visual = visualPostReactionProfile(w, post);
@@ -64212,10 +64212,10 @@ function freshFeedPostCommentCandidate(w) {
         roundsDone,
         Math.round(Number(post.autoCommentAttempts) || (Number(post.autoCommentedAt) > 0 ? 1 : 0))
       );
-      const maxRounds = visual.appearanceForward ? 5 : 4;
+      const maxRounds = visual.appearanceForward ? 7 : 6;
 
       if (topLevelCount >= freshCommentCap) return false;
-      if (roundsDone >= maxRounds || attemptsDone >= 6) return false;
+      if (roundsDone >= maxRounds || attemptsDone >= 7) return false;
 
       const lastCommentAt = comments.reduce(
         (latest, c) => Math.max(latest, Number(c && c.ts) || 0),
@@ -64835,7 +64835,7 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   const dmLast = Number(sim.lastAutonomousDmAt) || 0;
   const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
-  const dmTarget = Math.max(2.5 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
+  const dmTarget = Math.max(30 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const dmElapsed = dmLast ? ts - dmLast : Math.max(0, ts - laneStartedAt);
   const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 22 * 1000;
 
@@ -64956,7 +64956,7 @@ function autonomousDmOverdueByMs(w) {
   if (!w) return -Infinity;
   const dmPeak = Math.max(0.25, channelActivityPeak(w, "dm"));
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
-  const target = Math.max(2.5 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
+  const target = Math.max(30 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const last = Number(w.sim && w.sim.lastAutonomousDmAt) || 0;
   const startedAt = Number(w.sim && w.sim.liveWorldStartedAt) || now();
   const elapsed = last ? now() - last : Math.max(0, now() - startedAt);
@@ -67891,7 +67891,7 @@ async function runSimulationAction(view, update, action, addImage, mediaMap = {}
           n,
           post.id,
           newCommentIds,
-          Math.min(8, Math.max(2, Math.ceil(newCommentIds.length * 0.75)))
+          Math.min(12, Math.max(3, Math.ceil(newCommentIds.length * 1.25)))
         );
 
         if (!queuedVisualFriction && !waveCount) {

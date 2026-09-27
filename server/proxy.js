@@ -3513,14 +3513,21 @@ app.post("/ai/vision", async (req, res) => {
         "anthropic",
     });
   } catch (err) {
-    console.error(
-      "Vision proxy error:",
-      err
-    );
+    console.error("Vision proxy error:", err);
 
-    return res.status(502).json({
-      error:
-        "Vision analysis failed.",
+    // A távoli kép letöltési hibája nem a képelemző modell hibája.
+    // Ezt külön jelezzük, hogy a hiba oka a konzolban is kiderüljön.
+    const reason = String(err && err.message || "");
+    const remoteImageError =
+      /reference image|image reference|image-reference|private.network|unsupported reference image/i.test(reason);
+    const timedOut = err && (err.name === "AbortError" || /timed out|timeout/i.test(reason));
+
+    return res.status(remoteImageError ? 422 : timedOut ? 504 : 502).json({
+      error: remoteImageError
+        ? "A külső kép nem tölthető le elemzéshez. Töltsd fel a képet közvetlenül, vagy használj másik képlinket."
+        : timedOut
+          ? "A képelemzés időtúllépés miatt nem sikerült."
+          : "A képelemző szolgáltatás jelenleg nem válaszol.",
     });
   }
 });
