@@ -44643,9 +44643,37 @@ function roleplayImmediateContinuityCard(
 
   const previous = targetId ? roleplayPreviousActorTurn(rows, targetId) : null;
   const actorName = targetId ? (nameOfIn(w, targetId) || targetId) : "the addressed AI";
+  const threadRows = rows
+    .slice(-6)
+    .map((row) => {
+      if (!row || !String(row.text || "").trim()) return "";
+      if (row.authorId === "narrator") {
+        return `(narrator) ${String(row.text || "").slice(0, 420)}`;
+      }
+      const speaker = isHuman(w, row.authorId)
+        ? (w.player && w.player.name ? w.player.name : "PLAYER")
+        : (nameOfIn(w, row.authorId) || row.authorId || "?");
+      const target = row.to ? (nameOfIn(w, row.to) || row.to) : "";
+      return `${speaker}${target ? ` -> ${target}` : ""}: ${String(row.text || "").slice(0, 520)}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+
+  const baseThreadLock = `
+CURRENT CONVERSATION THREAD LOCK — HIGHEST PRIORITY:
+- THIS IS A CONTINUATION OF THE SAME OPEN SCENE AND SAME ONGOING CONVERSATION. Do NOT treat the player's new message as the start of a fresh conversation unless the player explicitly changes subject, leaves, time-skips, or starts a clearly different interaction.
+- PLAYER'S CURRENT ${playerInputKind === "action" ? "ACTION" : "SPEECH"}: "${String(playerText).slice(0, 700)}"
+- CURRENT ADDRESSEE / FOCUS: ${actorName}${targetId ? ` [${targetId}]` : ""}.
+- EXACT IMMEDIATE THREAD (latest stored beats, newest last):
+${threadRows || "(no earlier stored beats)"}
+- The FIRST relevant AI beat must answer/react to the player's current message as the next turn of THIS exact exchange.
+- Resolve short replies, pronouns, ellipsis and references ("yes", "no", "okay", "why?", "what?", "and?", "that", "it", "him/her", "you said...", "I know", etc.) from the immediately preceding turns instead of inventing a new topic.
+- Do NOT restart introductions, re-establish context the characters already know, ask a generic conversation opener, jump to an unrelated memory, or replace the active topic with a random new issue.
+- Character initiative is allowed AFTER directly processing the current message; initiative must grow from this same thread, not erase it.
+- If the player clearly introduces a new subject, follow that new subject while preserving physical/location/relationship continuity.`;
 
   if (followupKind && previous) {
-    return `
+    return `${baseThreadLock}
 DIRECT FOLLOW-UP REFERENT LOCK — HIGHEST PRIORITY:
 - PLAYER'S CURRENT QUESTION: "${String(playerText).slice(0, 500)}"
 - IT REFERS BACK TO ${actorName.toUpperCase()}'S IMMEDIATELY PRECEDING LINE/ACTION:
@@ -44657,7 +44685,7 @@ DIRECT FOLLOW-UP REFERENT LOCK — HIGHEST PRIORITY:
   }
 
   if (playerInputKind === "action" && roleplayLatestPhysicalCue(playerText)) {
-    return `
+    return `${baseThreadLock}
 LATEST PHYSICAL-ACTION LOCK — HIGHEST PRIORITY:
 - PLAYER'S CURRENT ACTION: "${String(playerText).slice(0, 500)}"
 - This is a concrete visible physical/intimacy cue. The next relevant AI beat must react to that cue itself.
@@ -44665,7 +44693,7 @@ LATEST PHYSICAL-ACTION LOCK — HIGHEST PRIORITY:
 - A direct look, pause, movement, touch, short line, or other concrete response is preferable to invented pseudo-profound analysis.`;
   }
 
-  return "";
+  return baseThreadLock;
 }
 
 function normalizeOneToOneRoleplayRound(w, scene, turns, playerText = "") {
@@ -45365,6 +45393,10 @@ ${worldLanguage(w, w.meId) === "en"
   ? "- Every user-visible turn, narration, memory, mood, reason and event summary in the JSON must be natural English."
   : "- Minden felhasználónak látható turn, narráció, memória, mood, indok és event-összefoglaló természetes, hibátlan magyar legyen."}
 
+CURRENT PLAYER MEANING LOCK — FINAL PRE-OUTPUT REMINDER:
+${playerText ? immediateContinuityCard : ""}
+- A mostani válasz NEM lehet új beszélgetésnyitás, ha a játékos nem váltott egyértelműen témát. Az első AI-mozzanat kötődjön közvetlenül az előző exchange-hez és a játékos legutóbbi inputjához.
+
 ROLEPLAY INPUT PARSING — KÖTELEZŐ:
 - Ha a játékos inputja pontosan *...* formában érkezik, az teljes egészében CSELEKVÉS. A csillagok csak jelölők, a tárolt turn textből elhagyhatók, de a jelentés és a cselekvés megmaradjon.
 - *felállok* = action, NEM speech. *megfogom a kezét* = action, NEM speech.
@@ -45555,6 +45587,10 @@ SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
 
 RÖVID TÁVÚ JELENETMEMÓRIA:
 ${sceneRoleplayMemoryCard(promptScene, w)}
+
+CURRENT PLAYER MEANING LOCK — RETRY FINAL REMINDER:
+${playerText ? immediateContinuityCard : ""}
+- A retry is ugyanennek a beszélgetésnek a KÖVETKEZŐ válasza legyen; ne induljon új téma vagy új beszélgetés, hacsak a játékos ezt maga nem kezdeményezte.
 
 VÁLASZ CSAK JSON:
 {"turns":[{"id":"pontos karakter-ID vagy narrator","kind":"speech vagy action","text":"friss megszólalás vagy cselekvés"}],"changes":[],"memories":[],"sceneMemory":{"summary":"","continuity":[],"resolvedContinuity":[],"openThreads":[],"resolvedOpenThreads":[],"participantStates":[],"sceneState":{"location":"","currentBeat":"","intimacyStage":"","boundaries":[]}},"longTermMemories":[],"events":[]}${TAIL}`,
