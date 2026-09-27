@@ -45177,6 +45177,28 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
         playerInputKind
       );
 
+      /* SCENE-ONLY CAST LOCK:
+       * The selected scene.cast is the authoritative attendance list. The model may
+       * reference other world characters as background facts, but it may never turn
+       * them into a speaker/actor/arrival unless they were explicitly selected.
+       */
+      const allowedSceneActorIds = new Set(
+        (scene.cast || []).map((id) => String(id))
+      );
+      const sceneCastLockCard = `SCENE CAST LOCK — ABSOLUTE GROUND TRUTH:
+- The ONLY AI characters physically present in this scene are: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ") || "none"}.
+- The player ${w.player.name} [${w.meId}] is also present and is controlled only by the user.
+- Do NOT introduce, summon, invite, teleport in, or give dialogue/action to ANY other world character.
+- A non-cast character may be mentioned as an off-scene fact ONLY if relevant; mentioning them does NOT make them present.
+- Do not invent an interruption, phone call, text, knock at the door, passer-by, witness, friend, rival, sensei, teammate, staff member or stranger as a way to add a new character.
+- Every generated turn id must be either "narrator" or one of these exact cast IDs: ${cast.map((c) => c.id).join(", ") || "none"}.
+${cast.length === 1 ? `- STRICT TWO-PERSON SCENE: this Event is ONLY ${w.player.name} + ${cast[0].name}. No third character may enter, speak, act, interrupt, message/call into the scene, or become physically present unless the USER explicitly edits/starts a different Event with them selected.` : `- This is a fixed invited cast. Do not expand it during generation.`}
+`;
+      const detailedAdultScene =
+        worldContentLevel(w, w.meId) === "mature" &&
+        worldNsfwIntensity(w, w.meId) !== "off" &&
+        matureParticipantsAreAdults(w, scene.cast || []);
+
       let out = sanitizeRoleplayAiOutput(await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
 
 EVENT / JELENET: ${scene.title}
@@ -45212,6 +45234,8 @@ ${playerText
     )
   : ""}
 JELEN VANNAK: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ")}, valamint ${w.player.name} [${w.meId}] — őt a felhasználó játssza.
+
+${sceneCastLockCard}
 
 ${roleplayAffiliationGroundTruthCard(w, cast)}
 
@@ -45322,6 +45346,8 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - A romantikus kezdeményezés NEM kötelező minden vonzalomnál és ne legyen random. A merészebb/flörtölősebb/dominánsabb/impulzívabb karakterek könnyebben teszik meg az első lépést; a félénkebb, bizalmatlanabb vagy visszafogottabb karakterekhez lassabb kezdeményezés illik.
 - Ha az AI a JÁTÉKOS karakterével kezdeményez csókot vagy intimebb lépést, csak a saját karakter mozdulatát írd le. A játékos válaszát soha ne döntsd el helyette; hagyj neki valódi lehetőséget reagálni.
 - MATURE 18+ FOLYTONOSSÁG: ha minden érintett ismerten felnőtt, nincs friss explicit határ, és a játékos/karakterek már egyértelműen kölcsönösen elindítottak egy intim helyzetet, NE reseteld vissza small talkra vagy végtelen "majdnem csók" körre. Reagálj közvetlenül a megtörtént közeledésre, és a jelenet karakterhűen továbbhaladhat felnőtt intimitás felé nem-grafikus szinten.
+- FELNŐTT JELENET KIFEJTÉSE: ha az NSFW-intenzitás nincs kikapcsolva és minden résztvevő biztosan 18+, ne rövidítsd le a felnőtt romantikus/intim beatet egyetlen homályos mondatra. Fejtsd ki a karakter SAJÁT párbeszédét, kezdeményezését, megfigyelhető testbeszédét, hangulatát és a köztük lévő dinamika következő lépését több konkrét, de nem anatómiai/nem pornografikus részlettel. A játékos következő reakcióját továbbra se írd meg helyette.
+- AI-KEZDEMÉNYEZÉS NEM PASSZÍV: ha egy ismerten felnőtt AI-nál a valódi crush/dating/partner/intim kánon, orientáció és az aktuális helyzet támogatja, ne várjon automatikusan újabb játékosi jelre minden körben. Ő maga is elindíthat karakterhű közeledést, csókot/csókolózást, félrevonulást vagy nem grafikus felnőtt intimitás felé vezető következő lépést, majd hagyjon valódi választási teret a játékosnak.
 - FELNŐTT, NEM YA-HANG: ha a helyzet eleve mature, ne puhítsd automatikusan aranyos/tinédzseres zavarba, udvarias small talkba vagy ködös "kémia" narrációba. A karakter lehet direkt, káromkodós, szuggesztív, féltékeny, birtokló, csípős, merész vagy érzelmileg nyers a saját kánonja szerint.
 - KONKRÉT NEM-GRAFIKUS INTIMITÁS: ismert felnőtteknél, valós kölcsönösségnél használhatsz konkrét csókot, csókolózást, magához húzást, derekán/arcán/kezén tartott kezet, nyakra/vállra adott csókot, ölbe húzást/ölbe ülést, privátabb helyre mozdulást és egyértelmű felnőtt célzást. Ne menj anatómiai vagy explicit szexuális részletekbe.
 - A "nem-grafikus" NEM azt jelenti, hogy azonnal zárd le vagy fade-to-blackold a jelenetet. Maradhat felnőtt, intim, érzéki és konkrét a közelség, csók, csókolózás, párbeszéd, hangulat, helyváltoztatás és az idő előrehaladása; csak anatómiai/pornográf részletekbe ne menj bele.
@@ -45361,7 +45387,7 @@ Formátum:
   // Fast Scene lane: send much less context so the provider can answer sooner.
   // The longer transport timeout prevents aborting a reply that the backend is
   // still finishing/failing over; it does NOT add an artificial wait.
-  maxTokens: 650,
+  maxTokens: detailedAdultScene ? 850 : 650,
   maxTries: 2,
   maxBusyWaits: 1,
   timeoutMs: 60000,
@@ -45380,7 +45406,13 @@ Formátum:
             const resolvedId = isNarr
               ? "narrator"
               : (findChar(w, raw) || findChar(w, t && t.name));
-            const allowed = isNarr || (resolvedId && !isHuman(w, resolvedId));
+            const allowed =
+              isNarr ||
+              (
+                resolvedId &&
+                !isHuman(w, resolvedId) &&
+                allowedSceneActorIds.has(String(resolvedId))
+              );
 
             const rawText = t && t.text ? String(t.text) : "";
             const freshText = isNarr
@@ -45416,8 +45448,8 @@ Formátum:
               (
                 resolvedTo ===
                   w.meId ||
-                (scene.cast || []).includes(
-                  resolvedTo
+                allowedSceneActorIds.has(
+                  String(resolvedTo)
                 )
               )
                 ? resolvedTo
@@ -45469,6 +45501,8 @@ JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
 JELEN VANNAK: ${cast.map((c) => `${c.name} [${c.id}]`).join(", ")}, valamint ${w.player.name} [${w.meId}] — őt kizárólag a felhasználó irányítja.
 
+${sceneCastLockCard}
+
 ${roleplayAffiliationGroundTruthCard(w, cast)}
 
 EDDIG TÖRTÉNT:
@@ -45509,6 +45543,7 @@ SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
 - Adj ${participationPlan.beatMin}-${participationPlan.beatMax} TELJESEN FRISS mozzanatot.
 - A MANDATORY FAIRNESS SPEAKERS/ACTORS listán szereplő minden AI-nak legyen legalább egy látható speech vagy action mozzanata.
 - A kiválasztott cast MIND jelen van; senkit ne tüntess el csak azért, mert sokan vannak.
+- CAST LOCK: CSAK a kiválasztott cast + a játékos lehet fizikailag jelen. Ha egyetlen AI van a castban, a retry is szigorúan kettes jelenet marad; harmadik karakter nem léphet be, nem szólalhat meg és nem szakíthatja félbe.
 - Egyetlen korábbi mondatot, akciót, poént, fenyegetést, flörtformulát vagy közeli parafrázist se használj újra.
 - CSAK a fent megadott [ID]-kat vagy a "narrator" értéket használd.
 - A szereplők karakterhűek legyenek; ne váljanak semleges AI-hanggá.
@@ -64740,13 +64775,13 @@ function roleplayRomanticInitiativeCard(w, scene, cast) {
     );
 
   const sustained =
-    (scene.turns || []).length >= 4 &&
+    (scene.turns || []).length >= 3 &&
     !hasConcreteEscalation &&
     !top[0].secretCrush &&
-    top[0].initiative >= 74;
+    top[0].initiative >= 70;
   const intimacyStage = roleplayAdultIntimacyStage(w, scene);
 
-  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}${row.secretCrush ? ", SECRET CRUSH — keep initiative guarded/indirect unless mutual escalation is already visible" : ""}`).join("\n")}\n- Current non-graphic intimacy stage inferred from ACTUAL recent turns: ${intimacyStage}.\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- SECRET CRUSH rows are NOT a reason for an abrupt confession or kiss. Unless exact recent turns already show mutual exposure/escalation, keep their initiative guarded, indirect and easier to retreat from.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- If the scene is already at kiss-touch / mutual-kissing / private-intimacy / post-intimacy and there is no recent explicit player boundary, DO NOT reset it back to coy small talk or another almost-kiss. Continue from the actual established physical/emotional state.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating/continuing a non-graphic transition toward adult intimacy.\n- If the player has already clearly reciprocated in an actual stored turn, the AI may respond to that reciprocity; still never invent the player's NEXT reaction.\n- Non-graphic adult intimacy may continue as a scene through suggestive adult dialogue, closeness, kissing/making out, concrete but non-anatomical touch, movement to a private place, atmosphere, implied time progression and post-intimacy aftermath; fade-to-black is optional, not mandatory. Never add graphic anatomical/pornographic detail.\n- If the target is the PLAYER, write only the AI's own next action/dialogue and stop before deciding the player's next choice.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
+  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}${row.secretCrush ? ", SECRET CRUSH — keep initiative guarded/indirect unless mutual escalation is already visible" : ""}`).join("\n")}\n- Current non-graphic intimacy stage inferred from ACTUAL recent turns: ${intimacyStage}.\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- SECRET CRUSH rows are NOT a reason for an abrupt confession or kiss. Unless exact recent turns already show mutual exposure/escalation, keep their initiative guarded, indirect and easier to retreat from.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- In a one-AI scene, if that AI has a valid adult romantic lane and the current moment supports it, treat the private two-person setup as permission to FOCUS on that relationship — not as a reason to import a third character for drama. The AI may initiate on its own while still stopping before inventing the player's response.\n- If the scene is already at kiss-touch / mutual-kissing / private-intimacy / post-intimacy and there is no recent explicit player boundary, DO NOT reset it back to coy small talk or another almost-kiss. Continue from the actual established physical/emotional state.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating/continuing a non-graphic transition toward adult intimacy.\n- If the player has already clearly reciprocated in an actual stored turn, the AI may respond to that reciprocity; still never invent the player's NEXT reaction.\n- Non-graphic adult intimacy may continue as a scene through suggestive adult dialogue, closeness, kissing/making out, concrete but non-anatomical touch, movement to a private place, atmosphere, implied time progression and post-intimacy aftermath; fade-to-black is optional, not mandatory. Never add graphic anatomical/pornographic detail.\n- If the target is the PLAYER, write only the AI's own next action/dialogue and stop before deciding the player's next choice.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
 }
 
 async function genRoleplayInitiation(w, bot) {
