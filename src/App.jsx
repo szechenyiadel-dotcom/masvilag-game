@@ -11431,17 +11431,19 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       }
 
       /*
-       * Exponenciálisabb backoff kevesebb újraütéssel. A rövid provider
-       * retry-after értéket is tiszteletben tartjuk, de 429 esetén legalább
-       * 12 mp pihenőt adunk, hogy ne essünk vissza azonnal ugyanabba a limitbe.
+       * RATE-LIMIT BACKOFF: the backend already tries every configured provider
+       * and returns Retry-After for the one that can recover first. Respect that
+       * value instead of multiplying the same 429 into 12 -> 22 -> 39 -> 60s.
+       * Only use a small local fallback when the upstream supplied no timing.
        */
       const msgLower = String((data && data.error && data.error.message) || data?.error || "").toLowerCase();
       const tokenMinuteLimit =
         code === 429 &&
         (msgLower.includes("tokens per min") || msgLower.includes("tokens per minute") || msgLower.includes("tpm"));
-      const base = tokenMinuteLimit ? 30000 : (code === 429 ? 12000 : 8000);
-      const adaptive = Math.min(60000, base * Math.pow(1.8, Math.max(0, AI.strikes - 1)));
-      const restMs = Math.max(retryAfterMs, adaptive);
+      const fallbackRestMs = tokenMinuteLimit
+        ? 12000
+        : (code === 429 ? 4000 : 3000);
+      const restMs = Math.max(1000, retryAfterMs > 0 ? retryAfterMs : fallbackRestMs);
 
       /*
        * A rate-limitet a queue belül kezeli és ugyanazt a játékosi kérést

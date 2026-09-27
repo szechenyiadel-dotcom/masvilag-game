@@ -6340,19 +6340,32 @@ app.post(
     const interactiveRequest =
       String(incomingBody?.masvilag_priority || "") === "interactive";
 
-    if (first.limited.length && !interactiveRequest) {
+    let finalLimited = first.limited.slice();
+
+    if (first.limited.length) {
       const waits = first.limited
         .map((x) => retryAfterMs(x?.retryAfter, 12000))
         .filter((ms) => Number.isFinite(ms) && ms >= 0);
 
       const shortestWait = waits.length ? Math.min(...waits) : 12000;
 
-      if (shortestWait <= 12000) {
-        await sleepMs(shortestWait + 200);
+      /*
+       * Player-triggered work gets one QUICK server-side recovery when an
+       * upstream explicitly says it will free up within a few seconds. Longer
+       * windows are returned to the client instead of hiding a 12-60s wait.
+       * Background work may wait a little longer because it is not blocking a
+       * human interaction.
+       */
+      const retryWindowMs = interactiveRequest ? 6000 : 12000;
+
+      if (shortestWait <= retryWindowMs) {
+        await sleepMs(shortestWait + 120);
 
         const second = await runPass(
           compactMessageBodyForRateLimit(incomingBody)
         );
+
+        finalLimited = second.limited.slice();
 
         if (second.ok) {
           const result = second.result;
@@ -6369,7 +6382,22 @@ app.post(
     const upstreamStatus = Number(last?.status) || 503;
     const status = upstreamStatus === 404 ? 502 : upstreamStatus;
 
-    if (last?.retryAfter) {
+    /*
+     * If several providers are rate-limited, advertise the provider that will
+     * become usable FIRST. The old code exposed only `last.retryAfter`, which
+     * could make two users wait for the slowest/last attempted provider even
+     * when another one was about to recover.
+     */
+    const finalRetryWaits = finalLimited
+      .map((x) => retryAfterMs(x?.retryAfter, 12000))
+      .filter((ms) => Number.isFinite(ms) && ms > 0);
+    const shortestFinalRetryMs = finalRetryWaits.length
+      ? Math.min(...finalRetryWaits)
+      : 0;
+
+    if (shortestFinalRetryMs > 0) {
+      res.setHeader("retry-after", String(Math.max(1, Math.ceil(shortestFinalRetryMs / 1000))));
+    } else if (last?.retryAfter) {
       res.setHeader("retry-after", last.retryAfter);
     }
 
