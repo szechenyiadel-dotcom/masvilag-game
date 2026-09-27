@@ -44618,6 +44618,50 @@ function roleplayLatestPhysicalCue(value) {
   return /\b(?:leans?\s+(?:in|closer)|moves?\s+closer|steps?\s+closer|closes?\s+the\s+distance|gaze\s+(?:drops?|falls?)\s+to\s+(?:his|her|their)\s+lips|looks?\s+(?:at|to)\s+(?:his|her|their)\s+lips|eyes?\s+(?:drop|fall)\s+to\s+(?:his|her|their)\s+lips|touch(?:es|ing)?\s+(?:his|her|their)|reaches?\s+for|kisses?|kiss(?:es|ing)?|hajol\s+közelebb|közelebb\s+(?:hajol|lép)|ajk(?:ára|aira|ait)\s+néz|tekintete\s+.*ajk|megérinti|megfogja|megcsókol)\b/i.test(raw);
 }
 
+function roleplayDirectPlayerRequestCue(value) {
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  if (!raw) return null;
+
+  const patterns = [
+    ["approach", /\b(?:come\s+here|come\s+over|come\s+closer|come\s+with\s+me|get\s+over\s+here|gyere\s+ide|gyere\s+oda|gyere\s+k[oö]zelebb|gyere\s+velem)\b/i],
+    ["attention", /\b(?:look\s+at\s+me|look\s+here|listen\s+to\s+me|listen\s+to\s+this|n[eé]zz\s+r[aá]m|figyelj\s+r[aá]m|hallgass\s+meg)\b/i],
+    ["wait", /\b(?:wait(?:\s+for\s+me)?|stay(?:\s+here)?|don['’]?t\s+go|stop|v[aá]rj|maradj(?:\s+itt)?|ne\s+menj|[aá]llj)\b/i],
+    ["answer", /\b(?:tell\s+me|answer\s+me|say\s+it|explain(?:\s+it)?|mondd\s+el|v[aá]laszolj|mondjad|magyar[aá]zd\s+el)\b/i],
+    ["position", /\b(?:sit\s+down|sit\s+here|sit\s+with\s+me|stand\s+up|[uü]lj\s+le|[uü]lj\s+ide|[uü]lj\s+mell[eé]m|[aá]llj\s+fel)\b/i],
+    ["leave", /\b(?:go\s+away|leave(?:\s+me)?|get\s+out|menj\s+el|hagyj\s+magamra|t[uű]nj\s+el)\b/i],
+    ["intimacy", /\b(?:kiss\s+me|hug\s+me|hold\s+me|touch\s+me|cs[oó]kolj\s+meg|[oö]lelj\s+meg|fogj\s+meg|[eé]rints\s+meg)\b/i],
+    ["request", /^(?:please\s+|k[eé]rlek\s+)?(?:can\s+you|could\s+you|would\s+you|will\s+you|megtenn[eé]d|tudn[aá]l|l[eé]gyszi)\b/i],
+  ];
+
+  for (const [kind, re] of patterns) {
+    if (re.test(raw)) return { kind, text: raw };
+  }
+  return null;
+}
+
+function roleplayMeaningfulTokenOverlap(a, b) {
+  const stop = new Set([
+    "the","a","an","and","or","but","to","of","in","on","at","for","with","is","are","was","were","be","been","being",
+    "i","im","i'm","you","youre","you're","your","yours","we","we're","they","he","she","it","this","that","these","those",
+    "do","does","did","dont","don't","just","so","really","very","here","there","my","me","his","her","their",
+    "az","a","egy","es","és","de","hogy","nem","igen","te","en","én","mi","ő","o","itt","ott","ezt","azt","neked","veled"
+  ]);
+  const tokens = (value) => String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((word) => word.length >= 3 && !stop.has(word));
+  const left = new Set(tokens(a));
+  const right = new Set(tokens(b));
+  if (!left.size || !right.size) return 0;
+  let common = 0;
+  left.forEach((word) => { if (right.has(word)) common += 1; });
+  return common / Math.max(1, Math.min(left.size, right.size));
+}
+
 function roleplayImmediateContinuityCard(
   w,
   recentTurns = [],
@@ -44628,6 +44672,7 @@ function roleplayImmediateContinuityCard(
   if (!w || !String(playerText || "").trim()) return "";
   const rows = Array.isArray(recentTurns) ? recentTurns : [];
   const followupKind = roleplayFollowupQuestionKind(playerText);
+  const directRequest = roleplayDirectPlayerRequestCue(playerText);
 
   let targetId = playerTargetId && charById(w, playerTargetId)
     ? playerTargetId
@@ -44671,6 +44716,17 @@ ${threadRows || "(no earlier stored beats)"}
 - Do NOT restart introductions, re-establish context the characters already know, ask a generic conversation opener, jump to an unrelated memory, or replace the active topic with a random new issue.
 - Character initiative is allowed AFTER directly processing the current message; initiative must grow from this same thread, not erase it.
 - If the player clearly introduces a new subject, follow that new subject while preserving physical/location/relationship continuity.`;
+
+  if (directRequest) {
+    return `${baseThreadLock}
+LATEST PLAYER DIRECTIVE / REQUEST LOCK — ABSOLUTE PRIORITY:
+- The player's latest line is a DIRECT request/command to ${actorName}: "${String(playerText).slice(0, 500)}".
+- Treat that line as the NEWEST event in the conversation. It overrides the urge to resume, restate or paraphrase ${actorName}'s previous speech.
+- ${actorName}'s very next beat must visibly respond to THIS request: comply, move toward it, refuse, hesitate, question it, or otherwise react in-character to the request itself.
+- Example semantics: "come here Daniel" means the player is telling Daniel to come closer/come to them NOW. Daniel must react to being called over; he must NOT restart his earlier relationship monologue as though the player never spoke.
+- A refusal or hesitation is valid when character-accurate. IGNORING the request and continuing the previous speech is not.
+- After responding to the request, ${actorName} may continue the existing topic naturally. Do not erase the ongoing context; just respect turn order: PREVIOUS AI LINE → PLAYER REQUEST → AI REACTION.`;
+  }
 
   if (followupKind && previous) {
     return `${baseThreadLock}
@@ -44787,11 +44843,34 @@ function roleplaySemanticDriftRisk(turn, playerText = "", playerInputKind = "spe
     }
   }
 
+  /* A direct player request/command must become the newest conversational
+     anchor. A common failure mode is that the model simply paraphrases its own
+     previous monologue and behaves as if the player's command never happened. */
+  const directRequest = roleplayDirectPlayerRequestCue(latest);
+  const previousActorTurn = roleplayPreviousActorTurn(recentTurns, turn.authorId);
+  if (directRequest && previousActorTurn) {
+    const overlap = roleplayMeaningfulTokenOverlap(text, previousActorTurn.text || "");
+    if (overlap >= 0.42) return true;
+
+    const previousOpening = String(previousActorTurn.text || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .slice(0, 6)
+      .join(" ");
+    const nextOpening = text
+      .toLowerCase()
+      .split(/\s+/)
+      .slice(0, 6)
+      .join(" ");
+    if (previousOpening.length >= 16 && nextOpening === previousOpening) return true;
+  }
+
   /* An anaphoric follow-up question (“and what is that?”, “what do you mean?”)
      must resolve the actor's own immediately preceding statement. A fresh
      challenge is not an answer. */
   const followupKind = roleplayFollowupQuestionKind(latest);
-  const previousActorTurn = roleplayPreviousActorTurn(recentTurns, turn.authorId);
   if (followupKind && previousActorTurn) {
     const evasive = /^(?:then\s+)?(?:prove\s+it|show\s+me|you\s+tell\s+me|guess|figure\s+it\s+out|find\s+out|make\s+me|try\s+me|you\s+know(?:\s+exactly)?|don['’]?t\s+play\s+dumb|say\s+it\s+yourself|bizonyítsd|mutasd\s+meg|mondd\s+meg\s+te|találd\s+ki|tudod\s+te|ne\s+játszd\s+az\s+ártatlant)\b/i.test(text);
     if (evasive) return true;
@@ -44894,6 +44973,7 @@ HARD RULES:
 - Preserve each flagged actor, kind, addressee and underlying immediate intent. Rewrite only the TEXT.
 - The new line must be immediately understandable as the NEXT beat after the latest player input and exact recent scene.
 - If the latest player input is an ACTION, respond to what physically/visibly just happened before adding interpretation.
+- If the latest player input is a direct command/request (for example "come here Daniel"), that command is the NEWEST conversational event. The addressed AI must react to it first (comply/refuse/hesitate/question in-character). NEVER repair the line by paraphrasing the AI's own previous monologue.
 - If the latest player input is a follow-up such as “and what is that?”, resolve the immediately preceding actor statement in the FIRST speech/action. Do not replace the answer with “prove it”, “show me”, “you tell me”, “guess”, “you know”, another challenge, or another vague question.
 - Do NOT invent a repeated behavioral pattern (“you always…”, “every time…”, “this is what you do…”) unless the exact recent turns actually demonstrate repetition.
 - Do NOT invent a new metaphor, vague symbolic accusation, therapy-speak or psychological diagnosis to manufacture depth.
@@ -45395,6 +45475,8 @@ ${worldLanguage(w, w.meId) === "en"
 
 CURRENT PLAYER MEANING LOCK — FINAL PRE-OUTPUT REMINDER:
 ${playerText ? immediateContinuityCard : ""}
+- A játékos LEGUTOLSÓ sora a legfrissebb történés. Az AI soha ne ugorjon vissza úgy a saját előző mondatához, mintha a játékos közben nem szólt volna.
+- Ha a játékos rövid utasítást/kérést ad (pl. "come here Daniel"), az első AI-mozzanat arra reagáljon konkrétan; csak UTÁNA folytathatja a korábbi témát.
 - A mostani válasz NEM lehet új beszélgetésnyitás, ha a játékos nem váltott egyértelműen témát. Az első AI-mozzanat kötődjön közvetlenül az előző exchange-hez és a játékos legutóbbi inputjához.
 
 ROLEPLAY INPUT PARSING — KÖTELEZŐ:
@@ -45590,6 +45672,8 @@ ${sceneRoleplayMemoryCard(promptScene, w)}
 
 CURRENT PLAYER MEANING LOCK — RETRY FINAL REMINDER:
 ${playerText ? immediateContinuityCard : ""}
+- A játékos LEGUTOLSÓ sora a legfrissebb történés. Ne ismételd/parafrazáld az AI előző mondatát úgy, mintha a játékos válasza nem történt volna meg.
+- Direkt kérés/utasítás esetén előbb arra reagálj konkrétan, és csak utána térj vissza a korábbi témához.
 - A retry is ugyanennek a beszélgetésnek a KÖVETKEZŐ válasza legyen; ne induljon új téma vagy új beszélgetés, hacsak a játékos ezt maga nem kezdeményezte.
 
 VÁLASZ CSAK JSON:
