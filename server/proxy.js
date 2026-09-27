@@ -4801,7 +4801,9 @@ async function proxyGeminiMessage(
           "gemini",
       };
 
-      if (r.status === 429) return last;
+      if (r.status === 429) {
+        break;
+      }
 
       if (
         !retryableProviderStatus(
@@ -4991,7 +4993,9 @@ async function proxyAnthropicMessage(
           "anthropic",
       };
 
-      if (r.status === 429) return last;
+      if (r.status === 429) {
+        break;
+      }
 
       if (
         !retryableProviderStatus(
@@ -5029,9 +5033,13 @@ const AI_PROVIDER_COOLDOWNS = new Map();
 function recordProviderCooldown(provider, retryAfter) {
   const seconds = Number(retryAfter);
   const requestedMs = Number.isFinite(seconds) && seconds > 0
-    ? seconds * 1000 : Math.max(0, Date.parse(String(retryAfter || "")) - Date.now()) || 0;
+    ? seconds * 1000
+    : Math.max(0, Date.parse(String(retryAfter || "")) - Date.now()) || 0;
   const until = Date.now() + Math.max(12000, requestedMs);
-  AI_PROVIDER_COOLDOWNS.set(provider, Math.max(until, AI_PROVIDER_COOLDOWNS.get(provider) || 0));
+  AI_PROVIDER_COOLDOWNS.set(
+    provider,
+    Math.max(until, AI_PROVIDER_COOLDOWNS.get(provider) || 0)
+  );
 }
 
 function providerCooldownResult(provider) {
@@ -5040,24 +5048,33 @@ function providerCooldownResult(provider) {
     AI_PROVIDER_COOLDOWNS.delete(provider);
     return null;
   }
-  return { ok: false, status: 429, provider, retryAfter: String(Math.ceil((until - Date.now()) / 1000)),
-    payload: { error: { message: "AI provider rate limit; waiting for Retry-After." } } };
+  return {
+    ok: false,
+    status: 429,
+    provider,
+    retryAfter: String(Math.ceil((until - Date.now()) / 1000)),
+    payload: {
+      error: {
+        message: "AI provider rate limit; waiting for Retry-After.",
+      },
+    },
+  };
 }
 
 /* -------------------------------------------------------------------------
-   MESSAGE RATE-LIMIT GATE
+   /ai/messages RATE-LIMIT GATE
 
-   /ai/messages is shared by foreground DM/Event replies and autonomous world
-   activity. A provider-level 429 used to be returned to the browser
-   immediately, while the next queued request hit the exact same cooldown.
-   Keep only ONE message request in flight per provider and wait out the
-   provider's Retry-After window before retrying. This changes only the
-   message proxy path; image/vision/media behaviour is untouched.
+   Keep at most one message request in flight per provider. IMPORTANT: a
+   provider already in cooldown is returned to the route immediately so the
+   route can try another configured provider instead of wasting the browser's
+   timeout window waiting on the same rate-limited upstream.
    ------------------------------------------------------------------------- */
 const AI_PROVIDER_MESSAGE_CHAINS = new Map();
 
 function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+  return new Promise((resolve) =>
+    setTimeout(resolve, Math.max(0, Number(ms) || 0))
+  );
 }
 
 function retryAfterMs(value, fallbackMs = 12000) {
@@ -5078,9 +5095,7 @@ function retryAfterMs(value, fallbackMs = 12000) {
 
 function runProviderMessageSerial(provider, work) {
   const previous = AI_PROVIDER_MESSAGE_CHAINS.get(provider) || Promise.resolve();
-  const current = previous
-    .catch(() => undefined)
-    .then(work);
+  const current = previous.catch(() => undefined).then(work);
   let tracked;
 
   tracked = current.finally(() => {
@@ -5093,67 +5108,65 @@ function runProviderMessageSerial(provider, work) {
   return current;
 }
 
+function preserveMessageEdges(value, maxChars) {
+  const text = String(value || "");
+  const max = Math.max(1000, Number(maxChars) || 1000);
+  if (text.length <= max) return text;
+  const marker = "\n\n[… rate-limit compacted …]\n\n";
+  const room = Math.max(0, max - marker.length);
+  const head = Math.floor(room * 0.38);
+  const tail = room - head;
+  return text.slice(0, head) + marker + text.slice(-tail);
+}
+
+function messageBodyCharSize(body = {}) {
+  let total = String(body?.system || "").length;
+  for (const item of Array.isArray(body?.messages) ? body.messages : []) {
+    total += extractText(item?.content || "").length;
+  }
+  return total;
+}
+
+function compactMessageBodyForRateLimit(body = {}) {
+  const next = { ...(body || {}) };
+  next.system = preserveMessageEdges(next.system, 8000);
+
+  const messages = Array.isArray(next.messages) ? next.messages.slice(-8) : [];
+  next.messages = messages.map((item, index) => {
+    const copy = { ...(item || {}) };
+    const content = extractText(copy.content || "");
+    /* Keep the newest user turn most generously; older context is only a
+       fallback aid when the original request would be rate-limit heavy. */
+    const limit = index === messages.length - 1 ? 14000 : 2500;
+    copy.content = preserveMessageEdges(content, limit);
+    return copy;
+  });
+
+  const maxTokens = Number(next.max_tokens);
+  next.max_tokens = Math.min(
+    Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 1024,
+    700
+  );
+
+  return next;
+}
+
 async function callMessageProvider(provider, body) {
   return runProviderMessageSerial(provider, async () => {
-    let last = null;
+    const throttled = providerCooldownResult(provider);
+    if (throttled) return throttled;
 
-    /* Two provider attempts absorb ordinary short RPM/TPM windows without
-       holding the browser request open indefinitely. */
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      const throttled = providerCooldownResult(provider);
+    const result = provider === "openai"
+      ? await proxyOpenAIMessage(body)
+      : provider === "gemini"
+        ? await proxyGeminiMessage(body)
+        : await proxyAnthropicMessage(body);
 
-      if (throttled) {
-        const waitMs = retryAfterMs(throttled.retryAfter, 12000);
-
-        /* The current client aborts around 60 seconds. Keep the server wait
-           bounded so there is still time for the retry itself. */
-        if (waitMs > 42000) {
-          return throttled;
-        }
-
-        await sleepMs(waitMs + 250);
-      }
-
-      const result = provider === "openai"
-        ? await proxyOpenAIMessage(body)
-        : provider === "gemini"
-          ? await proxyGeminiMessage(body)
-          : await proxyAnthropicMessage(body);
-
-      if (!result || Number(result.status) !== 429) {
-        return result;
-      }
-
-      last = result;
+    if (result && Number(result.status) === 429) {
       recordProviderCooldown(provider, result.retryAfter);
-
-      if (attempt >= 2) {
-        break;
-      }
-
-      const cooldown = providerCooldownResult(provider);
-      const waitMs = retryAfterMs(
-        cooldown?.retryAfter || result.retryAfter,
-        12000
-      );
-
-      if (waitMs > 42000) {
-        break;
-      }
-
-      await sleepMs(waitMs + 250);
     }
 
-    return last || {
-      ok: false,
-      status: 429,
-      provider,
-      payload: {
-        error: {
-          message: "AI provider rate limit; retry window did not clear.",
-        },
-      },
-    };
+    return result;
   });
 }
 
@@ -6096,149 +6109,138 @@ app.post(
     "/ai/respond",
   ],
   async (req, res) => {
-    const requestedProvider =
-      getProvider(
-        req.body || {}
+    const requestedProvider = getProvider(req.body || {});
+
+    const configuredFallbacks = [
+      "anthropic",
+      "openai",
+      "gemini",
+    ]
+      .filter((p) => p !== requestedProvider)
+      .filter((p) =>
+        p === "anthropic"
+          ? ANTHROPIC_API_KEY
+          : p === "openai"
+            ? OPENAI_API_KEY
+            : GEMINI_API_KEY
       );
 
-    const configuredFallbacks =
-      [
-        "anthropic",
-        "openai",
-        "gemini",
-      ]
-        .filter(
-          (p) =>
-            p !==
-            requestedProvider
-        )
-        .filter(
-          (p) =>
-            p === "anthropic"
-              ? ANTHROPIC_API_KEY
-              : p === "openai"
-                ? OPENAI_API_KEY
-                : GEMINI_API_KEY
-        );
-
-    const providers = [
-      requestedProvider,
-      ...configuredFallbacks,
-    ];
-
+    const providers = [requestedProvider, ...configuredFallbacks];
     let last = null;
 
-    for (
-      const provider of
-      providers
-    ) {
-      try {
-        const result =
-          await callMessageProvider(
-            provider,
-            req.body || {}
-          );
+    const runPass = async (body) => {
+      const limited = [];
 
-        if (
-          result?.ok
-        ) {
+      for (const provider of providers) {
+        try {
+          const result = await callMessageProvider(provider, body);
+
+          if (result?.ok) {
+            return { ok: true, result, limited };
+          }
+
+          if (result?.unavailable) {
+            continue;
+          }
+
+          last = result;
+
+          if (Number(result?.status) === 429) {
+            limited.push(result);
+            /* Crucial: do NOT wait here. Try the next configured provider now. */
+            continue;
+          }
+
+          /* A provider-specific model/auth/upstream error must not prevent a
+             different configured provider from answering this same request. */
+          continue;
+        } catch (err) {
+          last = {
+            status: err?.name === "AbortError" ? 504 : 502,
+            payload: {
+              error: {
+                message:
+                  err?.name === "AbortError"
+                    ? `${provider} timed out.`
+                    : (err?.message || `${provider} proxy error`),
+              },
+            },
+            provider,
+          };
+        }
+      }
+
+      return { ok: false, limited };
+    };
+
+    /* Huge DM/Event/world prompts can hit token-per-minute limits even when
+       request-per-minute is fine. Keep ordinary requests untouched; only very
+       large /ai/messages bodies are compacted before the first provider call. */
+    const incomingBody = req.body || {};
+    const firstBody = messageBodyCharSize(incomingBody) > 24000
+      ? compactMessageBodyForRateLimit(incomingBody)
+      : incomingBody;
+
+    const first = await runPass(firstBody);
+
+    if (first.ok) {
+      const result = first.result;
+      res.setHeader(
+        "x-masvilag-ai-provider",
+        result.provider || requestedProvider
+      );
+      return res.json(result.payload);
+    }
+
+    /* If every usable path was rate-limited, wait only a SHORT single window,
+       then retry once with a smaller payload. This stays inside the client's
+       timeout budget and especially helps TPM/context-size rate limits. */
+    if (first.limited.length) {
+      const waits = first.limited
+        .map((x) => retryAfterMs(x?.retryAfter, 12000))
+        .filter((ms) => Number.isFinite(ms) && ms >= 0);
+
+      const shortestWait = waits.length ? Math.min(...waits) : 12000;
+
+      if (shortestWait <= 12000) {
+        await sleepMs(shortestWait + 200);
+
+        const second = await runPass(
+          compactMessageBodyForRateLimit(incomingBody)
+        );
+
+        if (second.ok) {
+          const result = second.result;
           res.setHeader(
             "x-masvilag-ai-provider",
-            result.provider ||
-            provider
+            result.provider || requestedProvider
           );
-
-          return res.json(
-            result.payload
-          );
+          res.setHeader("x-masvilag-ai-compacted-retry", "1");
+          return res.json(result.payload);
         }
-
-        if (
-          result?.unavailable
-        ) {
-          continue;
-        }
-
-        last =
-          result;
-
-        /*
-         * Only fail over for transient/upstream/model availability problems.
-         */
-        if (
-          !retryableProviderStatus(
-            result?.status
-          ) &&
-          ![
-            400,
-            404,
-          ].includes(
-            Number(
-              result?.status
-            )
-          )
-        ) {
-          break;
-        }
-      } catch (err) {
-        last = {
-          status:
-            err?.name ===
-            "AbortError"
-              ? 504
-              : 502,
-          payload: {
-            error: {
-              message:
-                err?.name ===
-                "AbortError"
-                  ? `${provider} timed out.`
-                  : (
-                      err?.message ||
-                      `${provider} proxy error`
-                    ),
-            },
-          },
-          provider,
-        };
       }
     }
 
-    const upstreamStatus =
-      Number(
-        last?.status
-      ) || 503;
+    const upstreamStatus = Number(last?.status) || 503;
+    const status = upstreamStatus === 404 ? 502 : upstreamStatus;
 
-    const status =
-      upstreamStatus === 404
-        ? 502
-        : upstreamStatus;
-
-    if (
-      last?.retryAfter
-    ) {
-      res.setHeader(
-        "retry-after",
-        last.retryAfter
-      );
+    if (last?.retryAfter) {
+      res.setHeader("retry-after", last.retryAfter);
     }
 
     res.setHeader(
       "x-masvilag-ai-provider",
-      last?.provider ||
-      requestedProvider
+      last?.provider || requestedProvider
     );
-
     res.setHeader(
       "x-masvilag-ai-upstream-status",
-      String(
-        upstreamStatus
-      )
+      String(upstreamStatus)
     );
 
     console.error(
       "AI message providers exhausted:",
       requestedProvider,
+      `configured=${providers.join(",")}`,
       `upstream=${upstreamStatus}`,
       proxyErrorMessage(
         last?.payload,
