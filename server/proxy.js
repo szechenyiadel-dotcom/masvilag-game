@@ -5069,8 +5069,8 @@ function providerCooldownResult(provider) {
    route can try another configured provider instead of wasting the browser's
    timeout window waiting on the same rate-limited upstream.
    ------------------------------------------------------------------------- */
-const AI_PROVIDER_MESSAGE_CHAINS = new Map();
-const AI_PROVIDER_INTERACTIVE_CHAINS = new Map();
+const AI_PROVIDER_TASK_QUEUES = new Map();
+const AI_PROVIDER_LAST_START = new Map();
 
 function sleepMs(ms) {
   return new Promise((resolve) =>
@@ -5094,27 +5094,84 @@ function retryAfterMs(value, fallbackMs = 12000) {
   return Math.max(1000, Number(fallbackMs) || 12000);
 }
 
-function runProviderLaneSerial(map, provider, work) {
-  const previous = map.get(provider) || Promise.resolve();
-  const current = previous.catch(() => undefined).then(work);
-  let tracked;
+/*
+ * MULTI-USER PROVIDER GATE
+ *
+ * The previous implementation kept separate "interactive" and "background"
+ * serial chains. That meant one Scene/DM request and one autonomous-world
+ * request could still hit the SAME provider concurrently. With two browser
+ * clients this could become several large requests at once and trigger 429/TPM
+ * limits even though each client thought it was being polite.
+ *
+ * Keep exactly ONE in-flight message request per provider. Waiting interactive
+ * tasks jump ahead of waiting background tasks, but never run in parallel with
+ * them. A tiny start gap also prevents two queued requests from hitting the
+ * upstream on the same millisecond after a long response finishes.
+ */
+function providerTaskQueue(provider) {
+  let state = AI_PROVIDER_TASK_QUEUES.get(provider);
+  if (!state) {
+    state = {
+      running: false,
+      interactive: [],
+      background: [],
+    };
+    AI_PROVIDER_TASK_QUEUES.set(provider, state);
+  }
+  return state;
+}
 
-  tracked = current.finally(() => {
-    if (map.get(provider) === tracked) {
-      map.delete(provider);
+function pumpProviderTaskQueue(provider) {
+  const state = AI_PROVIDER_TASK_QUEUES.get(provider);
+  if (!state || state.running) return;
+
+  const task =
+    state.interactive.shift() ||
+    state.background.shift();
+
+  if (!task) {
+    AI_PROVIDER_TASK_QUEUES.delete(provider);
+    return;
+  }
+
+  state.running = true;
+
+  const lastStart = Number(AI_PROVIDER_LAST_START.get(provider) || 0);
+  const minGapMs = task.interactive ? 350 : 1200;
+  const delayMs = Math.max(0, minGapMs - (Date.now() - lastStart));
+
+  setTimeout(async () => {
+    AI_PROVIDER_LAST_START.set(provider, Date.now());
+
+    try {
+      task.resolve(await task.work());
+    } catch (err) {
+      task.reject(err);
+    } finally {
+      state.running = false;
+      queueMicrotask(() => pumpProviderTaskQueue(provider));
     }
+  }, delayMs);
+}
+
+function runProviderScheduled(provider, interactive, work) {
+  return new Promise((resolve, reject) => {
+    const state = providerTaskQueue(provider);
+    const task = {
+      interactive: !!interactive,
+      work,
+      resolve,
+      reject,
+    };
+
+    if (task.interactive) {
+      state.interactive.push(task);
+    } else {
+      state.background.push(task);
+    }
+
+    pumpProviderTaskQueue(provider);
   });
-
-  map.set(provider, tracked);
-  return current;
-}
-
-function runProviderMessageSerial(provider, work) {
-  return runProviderLaneSerial(AI_PROVIDER_MESSAGE_CHAINS, provider, work);
-}
-
-function runProviderInteractiveSerial(provider, work) {
-  return runProviderLaneSerial(AI_PROVIDER_INTERACTIVE_CHAINS, provider, work);
 }
 
 function preserveMessageEdges(value, maxChars) {
@@ -5162,9 +5219,8 @@ function compactMessageBodyForRateLimit(body = {}) {
 
 async function callMessageProvider(provider, body) {
   const interactive = String(body?.masvilag_priority || "") === "interactive";
-  const runLane = interactive ? runProviderInteractiveSerial : runProviderMessageSerial;
 
-  return runLane(provider, async () => {
+  return runProviderScheduled(provider, interactive, async () => {
     const throttled = providerCooldownResult(provider);
     if (throttled) return throttled;
 

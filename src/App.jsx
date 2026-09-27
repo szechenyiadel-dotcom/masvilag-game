@@ -45699,7 +45699,9 @@ Formátum:
   // still finishing/failing over; it does NOT add an artificial wait.
   maxTokens: detailedAdultScene ? 850 : 650,
   maxTries: 2,
-  maxBusyWaits: 1,
+  // If every configured provider is briefly busy, wait through one real
+  // Retry-After window instead of surfacing the 12-second cooldown immediately.
+  maxBusyWaits: 2,
   timeoutMs: 60000,
   maxSystemChars: 8000,
   maxPromptChars: 12000,
