@@ -44826,12 +44826,12 @@ HARD RULES:
 JSON ONLY:
 {"repairs":[{"slot":0,"text":"clear replacement text"}]}${TAIL}`,
       {
-        maxTokens: 420,
+        maxTokens: 260,
         maxTries: 2,
         maxBusyWaits: 1,
-        timeoutMs: 9000,
-        maxSystemChars: 9000,
-        maxPromptChars: 12000,
+        timeoutMs: 7000,
+        maxSystemChars: 6000,
+        maxPromptChars: 8000,
       }
     );
 
@@ -45256,12 +45256,15 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`, {
-  maxTokens: 900,
+  // Fast Scene lane: send much less context so the provider can answer sooner.
+  // The longer transport timeout prevents aborting a reply that the backend is
+  // still finishing/failing over; it does NOT add an artificial wait.
+  maxTokens: 650,
   maxTries: 2,
-  maxBusyWaits: 2,
-  timeoutMs: 18000,
-  maxSystemChars: 16000,
-  maxPromptChars: 24000,
+  maxBusyWaits: 1,
+  timeoutMs: 60000,
+  maxSystemChars: 8000,
+  maxPromptChars: 12000,
 }));
 
       const resolveSceneTurns = (candidateOut) =>
@@ -45417,12 +45420,12 @@ ${sceneRoleplayMemoryCard(promptScene, w)}
 VÁLASZ CSAK JSON:
 {"turns":[{"id":"pontos karakter-ID vagy narrator","kind":"speech vagy action","text":"friss megszólalás vagy cselekvés"}],"changes":[],"memories":[],"sceneMemory":{"summary":"","continuity":[],"resolvedContinuity":[],"openThreads":[],"resolvedOpenThreads":[],"participantStates":[],"sceneState":{"location":"","currentBeat":"","intimacyStage":"","boundaries":[]}},"longTermMemories":[],"events":[]}${TAIL}`,
           {
-            maxTokens: 850,
+            maxTokens: 500,
             maxTries: 2,
-            maxBusyWaits: 2,
-            timeoutMs: 14000,
-            maxSystemChars: 12000,
-            maxPromptChars: 16000,
+            maxBusyWaits: 1,
+            timeoutMs: 45000,
+            maxSystemChars: 6500,
+            maxPromptChars: 9000,
           }
         ));
 
@@ -45464,7 +45467,10 @@ VÁLASZ CSAK JSON:
        * mandatory attendee was still omitted (or their line was removed by a
        * sanitizer), request one compact batched repair for the missing IDs.
        */
-      if (resolved.length && participationPlan.mandatoryIds.length) {
+      // Do not block a player's visible Scene reply on a second fairness-only
+      // provider call. The primary prompt still contains the fairness plan;
+      // any missed attendee is rotated in naturally on a later beat.
+      if (!playerText && resolved.length && participationPlan.mandatoryIds.length) {
         const usedIds = new Set(
           resolved
             .filter((turn) => turn && turn.authorId !== "narrator")
