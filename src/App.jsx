@@ -1489,9 +1489,7 @@ const AI = {
   strikes: 0,                // hányszor utasított el minket zsinórban
   pending: 0,                // hány kérés vár épp válaszra
   listeners: [],
-  queue: [],                 // prioritásos sor: a közvetlen felhasználói DM előremehet
-  running: false,
-  seq: 0,
+  chain: Promise.resolve(),  // stabil, egyenkénti AI-sor
 };
 const cooldownLeft = () => Math.max(0, AI.cooldownUntil - now());
 const onCooldown = (fn) => { AI.listeners.push(fn); return () => { AI.listeners = AI.listeners.filter((x) => x !== fn); }; };
@@ -1500,46 +1498,29 @@ function setCooldown(ms) {
   AI.listeners.forEach((fn) => { try { fn(cooldownLeft()); } catch (e) {} });
 }
 
-/* Sorba állítás: egyszerre egy kérés fut. A közvetlen felhasználói DM
-   magasabb prioritással a már VÁRAKOZÓ háttérműveletek elé kerülhet. */
-async function pumpAiQueue() {
-  if (AI.running) return;
-  AI.running = true;
-  try {
-    while (AI.queue.length) {
-      AI.queue.sort((a, b) => (b.priority - a.priority) || (a.seq - b.seq));
-      const job = AI.queue.shift();
-      for (let guard = 0; guard < 40; guard++) {
-        const left = cooldownLeft();
-        if (left <= 0) break;
-        await wait(Math.min(left, 5000) + 150);
-      }
-
-      const since = now() - AI.last;
-      /* A direkt DM nem várja végig a teljes 8 mp-es háttér-gapet, de
-         továbbra sem indítunk párhuzamos provider-hívást. */
-      const gap = job.priority >= 100 ? Math.min(AI.gap, 2200) : AI.gap;
-      if (since < gap) await wait(gap - since);
-
-      try {
-        job.resolve(await job.fn());
-      } catch (e) {
-        job.reject(e);
-      } finally {
-        AI.last = now();
-      }
-    }
-  } finally {
-    AI.running = false;
-    if (AI.queue.length) pumpAiQueue();
-  }
-}
-
+/* Sorba állítás: egyszerre pontosan egy AI-kérés fut. A stabil Promise-chain
+   megakadályozza, hogy egy hibás/lezárt queue után a DM vagy az Event beragadjon. */
 function queued(fn, priority = 0) {
-  return new Promise((resolve, reject) => {
-    AI.queue.push({ fn, priority: Number(priority) || 0, seq: ++AI.seq, resolve, reject });
-    pumpAiQueue();
+  const run = AI.chain.then(async () => {
+    for (let guard = 0; guard < 40; guard++) {
+      const left = cooldownLeft();
+      if (left <= 0) break;
+      await wait(Math.min(left, 5000) + 150);
+    }
+
+    const since = now() - AI.last;
+    const gap = Number(priority || 0) >= 100 ? Math.min(AI.gap, 2200) : AI.gap;
+    if (since < gap) await wait(gap - since);
+
+    try {
+      return await fn();
+    } finally {
+      AI.last = now();
+    }
   });
+
+  AI.chain = run.then(() => {}, () => {});
+  return run;
 }
 
 const DEFAULT_AI_MODEL = import.meta.env.VITE_AI_MODEL || "claude-sonnet-4-6";
@@ -2799,12 +2780,25 @@ async function serverDeleteAccount() {
 }
 
 async function serverSaveWorld(world) {
-  return apiJson("/world/save", {
+  const saved = await apiJson("/world/save", {
     method: "POST",
     body: JSON.stringify({
       world,
+      syncRev: Math.max(0, Math.floor(Number(world && world.syncRev) || 0)),
     }),
   });
+
+  /* A jelenlegi backend sikeres hot save-nél csak {ok, syncRev, rev, meId}
+     metaadatot küld vissza. A kliens régi mentési kódja viszont saved.world-öt
+     vár. Ugyanazt az elfogadott snapshotot adjuk vissza a szerver új rev-jeivel. */
+  if (saved && saved.ok === true && (!saved.world || typeof saved.world !== "object")) {
+    const accepted = JSON.parse(JSON.stringify(world));
+    if (Number.isFinite(Number(saved.syncRev))) accepted.syncRev = Number(saved.syncRev);
+    if (Number.isFinite(Number(saved.rev))) accepted.rev = Number(saved.rev);
+    return { ...saved, world: accepted };
+  }
+
+  return saved;
 }
 function migrate(w) {
   if (!w || !w.universe) return w;
@@ -8230,7 +8224,7 @@ EVENT / TALÁLKOZÓ MEGHÍVÁS:
 - Ne írd meg a játékos elfogadását vagy cselekvését; a meghívás után ő dönt.
 
 Formátum:
-{"reply":"a válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres","eventInvite":null vagy {"title":"rövid Event cím","setting":"2-3 mondat: hol/mikor/mi a helyzet","goal":"konkrét közös cél","cast":["${c.id}"],"opening":"az első jelenetbeli mondatod vagy a meghívás rövid változata","openingKind":"speech"}}${TAIL}`
+{"reply":"a válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres","eventInvite":null}${TAIL}`
     , { maxTokens: 520, priority: 120 });
 
     const reply = String(
