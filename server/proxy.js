@@ -5072,6 +5072,27 @@ function providerCooldownResult(provider) {
 const AI_PROVIDER_TASK_QUEUES = new Map();
 const AI_PROVIDER_LAST_START = new Map();
 
+/*
+ * INTERACTIVE CAPACITY SMOOTHING
+ * ------------------------------
+ * Player requests never inherit the long cached provider cooldown. They get
+ * one fresh probe per configured provider. If every provider is merely busy
+ * with another in-flight request, wait only a tiny invisible window for the
+ * first one to free up instead of returning an immediate false-capacity error.
+ *
+ * Background work stays out of the way for a short grace period after any
+ * player request so it cannot steal the slot between two Scene/DM turns.
+ */
+const AI_INTERACTIVE_MICRO_WAIT_MS = Math.max(
+  400,
+  Math.min(3000, Number(process.env.AI_INTERACTIVE_MICRO_WAIT_MS) || 1800)
+);
+const AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS = Math.max(
+  500,
+  Math.min(8000, Number(process.env.AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS) || 2800)
+);
+let AI_LAST_INTERACTIVE_REQUEST_AT = 0;
+
 function sleepMs(ms) {
   return new Promise((resolve) =>
     setTimeout(resolve, Math.max(0, Number(ms) || 0))
@@ -5275,7 +5296,13 @@ async function callMessageProvider(provider, body) {
   }
 
   return runProviderScheduled(provider, interactive, async () => {
-    const throttled = providerCooldownResult(provider);
+    /*
+     * Cached cooldowns are a BACKGROUND circuit-breaker, not a hard lock on
+     * player actions. A player request gets one fresh upstream probe; if the
+     * provider is still limited it will return a real 429 and we immediately
+     * fall through to another configured provider.
+     */
+    const throttled = interactive ? null : providerCooldownResult(provider);
     if (throttled) return throttled;
 
     const result = provider === "openai"
@@ -6255,8 +6282,12 @@ app.post(
       const busyProviders = [];
       const interactive = String(body?.masvilag_priority || "") === "interactive";
 
+      if (interactive) {
+        AI_LAST_INTERACTIVE_REQUEST_AT = Date.now();
+      }
+
       /*
-       * NO-WAIT MULTI-USER ROUTING
+       * FAST MULTI-USER ROUTING
        * --------------------------
        * - Player Scene/DM requests never queue behind a busy provider.
        * - They immediately spill to the next configured free provider.
@@ -6266,10 +6297,14 @@ app.post(
        */
       if (!interactive) {
         const requestedThrottle = providerCooldownResult(requestedProvider);
+        const recentInteractive =
+          Date.now() - AI_LAST_INTERACTIVE_REQUEST_AT <
+          AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS;
         if (
           requestedThrottle ||
           providerIsRunning(requestedProvider) ||
-          anyInteractiveProviderPressure()
+          anyInteractiveProviderPressure() ||
+          recentInteractive
         ) {
           if (requestedThrottle) limited.push(requestedThrottle);
           return {
@@ -6286,7 +6321,12 @@ app.post(
       const passProviders = [];
 
       for (const provider of providers) {
-        const throttled = providerCooldownResult(provider);
+        /*
+         * Do not reject a Scene/DM because of an OLD cached Retry-After.
+         * Interactive traffic gets one fresh probe; background traffic still
+         * honors the circuit-breaker.
+         */
+        const throttled = interactive ? null : providerCooldownResult(provider);
         if (throttled) {
           last = throttled;
           limited.push(throttled);
@@ -6343,10 +6383,58 @@ app.post(
       }
 
       /*
-       * Crucially, DO NOT enqueue an interactive request behind busy providers.
-       * Returning immediately keeps the app responsive; the browser can retry on
-       * the user's next action while existing provider work finishes normally.
+       * If every otherwise-healthy provider was only BUSY with an in-flight
+       * request, give the first one that frees a tiny invisible micro-window.
+       * This is NOT a cooldown and there is no countdown/retry sleep in the
+       * browser. It prevents the false "no provider could answer immediately"
+       * error when two users press Send a moment apart.
        */
+      if (interactive && busyProviders.length) {
+        const deadline = Date.now() + AI_INTERACTIVE_MICRO_WAIT_MS;
+        let releasedProvider = "";
+
+        while (Date.now() < deadline) {
+          releasedProvider =
+            [...busyProviders]
+              .filter((provider) => !providerIsRunning(provider))
+              .sort((a, b) => providerQueueLoad(a) - providerQueueLoad(b))[0] ||
+            "";
+
+          if (releasedProvider) break;
+          await sleepMs(70);
+        }
+
+        if (releasedProvider) {
+          try {
+            const result = await callMessageProvider(releasedProvider, body);
+
+            if (result?.ok) {
+              return { ok: true, result, limited, busyProviders };
+            }
+
+            if (!result?.deferred && !result?.unavailable) {
+              last = result;
+              if (Number(result?.status) === 429) {
+                limited.push(result);
+              }
+            }
+          } catch (err) {
+            last = {
+              status: err?.name === "AbortError" ? 504 : 502,
+              payload: {
+                error: {
+                  message:
+                    err?.name === "AbortError"
+                      ? `${releasedProvider} timed out.`
+                      : (err?.message || `${releasedProvider} proxy error`),
+                },
+              },
+              provider: releasedProvider,
+            };
+          }
+        }
+      }
+
       return { ok: false, limited, busyProviders };
     };
 
@@ -6373,11 +6461,11 @@ app.post(
     }
 
     /*
-     * NO SERVER-SIDE COOLDOWN WAIT.
-     * The first pass has already tried every free configured provider. Never
-     * sleep 6/12/39 seconds inside a player HTTP request and never re-hit a
-     * provider merely because Retry-After exists. Background work is retried by
-     * its scheduler on a later tick; interactive work returns immediately.
+     * NO LONG SERVER-SIDE COOLDOWN WAIT.
+     * The first pass tried every free configured provider and, only when all
+     * were actively busy, allowed a tiny bounded micro-wait for one to finish.
+     * Never sleep 6/12/39 seconds on Retry-After. Background work is retried by
+     * its scheduler on a later tick.
      */
     const finalLimited = first.limited.slice();
 
@@ -6432,7 +6520,7 @@ app.post(
           error: {
             code: "AI_CAPACITY_NOWAIT",
             message:
-              "No configured AI provider could answer immediately. No cooldown was applied.",
+              "No configured AI provider accepted the request after fresh failover and a short busy-slot recovery. No cooldown was applied.",
           },
         });
     }
