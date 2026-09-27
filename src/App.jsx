@@ -2841,63 +2841,25 @@ async function serverDeleteAccount() {
 }
 
 async function serverSaveWorld(world) {
-  /*
-   * WORLD_CONFLICT FIX:
-   * a szerver authoritative syncRev-et használ. Ha közben egy másik mentés
-   * előrébb vitte a világot, nem ugyanazt a stale snapshotot küldjük vissza
-   * újra és újra, hanem a 409-ben kapott szervervilággal összefésüljük,
-   * átveszük az aktuális syncRev-et, majd csak ezt az egy mentést próbáljuk újra.
-   */
-  let candidate = JSON.parse(JSON.stringify(world));
+  const saved = await apiJson("/world/save", {
+    method: "POST",
+    body: JSON.stringify({
+      world,
+      syncRev: Math.max(0, Math.floor(Number(world && world.syncRev) || 0)),
+    }),
+  });
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const saved = await apiJson("/world/save", {
-        method: "POST",
-        body: JSON.stringify({
-          world: candidate,
-          syncRev: Math.max(0, Math.floor(Number(candidate && candidate.syncRev) || 0)),
-        }),
-      });
-
-      /* A jelenlegi backend sikeres hot save-nél csak {ok, syncRev, rev, meId}
-         metaadatot küld vissza. Ugyanazt az elfogadott snapshotot adjuk vissza
-         a szerver új rev-jeivel. */
-      if (saved && saved.ok === true && (!saved.world || typeof saved.world !== "object")) {
-        const accepted = JSON.parse(JSON.stringify(candidate));
-        if (Number.isFinite(Number(saved.syncRev))) accepted.syncRev = Number(saved.syncRev);
-        if (Number.isFinite(Number(saved.rev))) accepted.rev = Number(saved.rev);
-        return { ...saved, world: accepted };
-      }
-
-      return saved;
-    } catch (e) {
-      const conflict =
-        e &&
-        e.status === 409 &&
-        e.data &&
-        e.data.code === "WORLD_CONFLICT" &&
-        e.data.world &&
-        typeof e.data.world === "object";
-
-      if (!conflict || attempt >= 2) throw e;
-
-      const remote = migrate(e.data.world);
-      candidate = mergeWorlds(remote, candidate);
-      candidate.syncRev = Math.max(
-        0,
-        Math.floor(
-          Number(e.data.serverSyncRev) ||
-          Number(remote && remote.syncRev) ||
-          0
-        )
-      );
-
-      await wait(120 + attempt * 180);
-    }
+  /* A jelenlegi backend sikeres hot save-nél csak {ok, syncRev, rev, meId}
+     metaadatot küld vissza. A kliens régi mentési kódja viszont saved.world-öt
+     vár. Ugyanazt az elfogadott snapshotot adjuk vissza a szerver új rev-jeivel. */
+  if (saved && saved.ok === true && (!saved.world || typeof saved.world !== "object")) {
+    const accepted = JSON.parse(JSON.stringify(world));
+    if (Number.isFinite(Number(saved.syncRev))) accepted.syncRev = Number(saved.syncRev);
+    if (Number.isFinite(Number(saved.rev))) accepted.rev = Number(saved.rev);
+    return { ...saved, world: accepted };
   }
 
-  throw new Error("World save conflict could not be resolved.");
+  return saved;
 }
 function migrate(w) {
   if (!w || !w.universe) return w;
