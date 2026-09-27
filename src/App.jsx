@@ -1617,7 +1617,7 @@ async function callClaude(system, prompt, maxTokens = 1200) {
       const base = code === 429 ? 20000 : 10000;
       const restMs = ra > 0 ? ra * 1000 : base * AI.strikes;
       setCooldown(restMs);
-      const err = new Error(`Az AI most nem győzi — ${Math.ceil(restMs / 1000)} másodperc pihenő.`);
+      const err = new Error(`Az AI átmenetileg várakozik.`);
       err.busy = true;
       throw err;
     }
@@ -1665,7 +1665,10 @@ async function askJSON(system, prompt, options = {}) {
   try {
     return await queued(async () => {
       let last = null, tries = 0, busyWaits = 0;
-      while (tries < 2 && busyWaits < 4) {
+      const interactive = Number(options.priority || 0) >= 100;
+      const maxTries = interactive ? 3 : 2;
+      const maxBusyWaits = interactive ? 8 : 4;
+      while (tries < maxTries && busyWaits < maxBusyWaits) {
         try {
           const langRule = languageInstruction(lang, strictMode);
           const jsonRule = lang === "en"
@@ -1702,8 +1705,13 @@ async function askJSON(system, prompt, options = {}) {
             continue;                 // ez nem számít elrontott próbálkozásnak
           }
           tries++;
-          if (tries < 4) await wait(700 * tries);
+          if (tries < maxTries) await wait(700 * tries);
         }
+      }
+      if (interactive && last && last.busy) {
+        const err = new Error(lang === "en" ? "The AI did not respond yet. Try again." : "Az AI most nem válaszolt. Próbáld újra.");
+        err.busy = true;
+        throw err;
       }
       throw last || new Error("Hibás válasz");
     }, Number(options.priority || 0));
@@ -7327,7 +7335,7 @@ Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","kind":"speech vagy action","text":"..."}],
  "changes":[{"a":"aki érez","b":"aki iránt","delta":10,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék"}],
  "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
- "events":["egy mondat, ha a világ szempontjából fontos történt"]}${TAIL}`);
+ "events":["egy mondat, ha a világ szempontjából fontos történt"]}${TAIL}`, { maxTokens: 1200, priority: 120 });
 
       const resolved = (out.turns || []).map((t) => {
         const raw = t && (t.id !== undefined ? t.id : t.name);
@@ -7378,7 +7386,7 @@ JELENET: ${scene.title}
 ${log}
 
 Zárd le a jelenetet. Foglald össze 2-3 mondatban, mi történt és mi változott, majd mondd meg, ki mit visz tovább magával.
-Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}],"changes":[{"a":"aki érez","b":"aki iránt","delta":0,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék"}]}${TAIL}`);
+Formátum: {"summary":"","memories":[{"id":"szereplő azonosítója","text":""}],"changes":[{"a":"aki érez","b":"aki iránt","delta":0,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék"}]}${TAIL}`, { maxTokens: 900, priority: 120 });
 
       patch((s, n) => {
         s.open = false;
@@ -8214,7 +8222,7 @@ EVENT / TALÁLKOZÓ MEGHÍVÁS:
 
 Formátum:
 {"reply":"a válaszod","delta":0,"mood":"mit érzel most iránta, néhány szóban","why":"egy rövid mondat, miért változott","memory":"egy mondat, ha történt valami emlékezetes, különben üres","eventInvite":null vagy {"title":"rövid Event cím","setting":"2-3 mondat: hol/mikor/mi a helyzet","goal":"konkrét közös cél","cast":["${c.id}"],"opening":"az első jelenetbeli mondatod vagy a meghívás rövid változata","openingKind":"speech"}}${TAIL}`
-    , { maxTokens: 520, priority: 100 });
+    , { maxTokens: 520, priority: 120 });
 
     const reply = String(
       out &&
@@ -8843,21 +8851,7 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
 
 /* Pihenő-kijelző: ha a szolgáltató visszafogott minket, itt látszik, meddig. */
 function RestBar() {
-  const { tt } = useLang();
-  const [left, setLeft] = useState(cooldownLeft());
-  useEffect(() => {
-    const off = onCooldown((ms) => setLeft(ms));
-    const i = setInterval(() => setLeft(cooldownLeft()), 500);
-    return () => { off(); clearInterval(i); };
-  }, []);
-  if (left <= 0) return null;
-  return (
-    <div className="rest">
-      <Loader2 size={14} className="spin" />
-      <span>{tt(`Az AI most nem győzi — ${Math.ceil(left / 1000)} másodperc múlva folytatjuk. Amit kértél, magától újraindul.`,
-                 `The AI can't keep up right now — we'll continue in ${Math.ceil(left / 1000)} seconds. What you asked for will restart on its own.`)}</span>
-    </div>
-  );
+  return null;
 }
 
 /* ============================================================
