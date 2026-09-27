@@ -45509,17 +45509,133 @@ Formátum:
   maxPromptChars: 12000,
 }));
 
-      const resolveSceneTurns = (candidateOut) =>
-        (candidateOut && Array.isArray(candidateOut.turns)
+      /*
+       * SCENE-LOCAL ACTOR RESOLUTION.
+       *
+       * Provider JSON occasionally returns a character NAME/alias instead of the
+       * requested exact ID. The old code called global findChar() first; when two
+       * world characters shared a first name, that could resolve to the WRONG
+       * person and the cast lock then discarded an otherwise valid Scene reply.
+       *
+       * Resolve against THIS Scene cast first. This keeps the hard cast lock while
+       * making one-to-one scenes tolerant of harmless provider ID formatting drift.
+       */
+      const sceneActorAliasIndex = new Map();
+      cast.forEach((c) => {
+        if (!c || !c.id) return;
+        const aliases = [String(c.id), ...characterAddressAliases(c)];
+        aliases.forEach((alias) => {
+          const key = normalizeAddressText(String(alias || "").replace(/^@/, ""));
+          if (!key) return;
+          if (!sceneActorAliasIndex.has(key)) {
+            sceneActorAliasIndex.set(key, c.id);
+          } else if (sceneActorAliasIndex.get(key) !== c.id) {
+            /* Ambiguous alias inside the selected cast: never guess. */
+            sceneActorAliasIndex.set(key, null);
+          }
+        });
+      });
+
+      const playerAliasKeys = new Set(
+        [
+          w.meId,
+          "player",
+          "jatekos",
+          "játékos",
+          w.player && w.player.name,
+          w.player && w.player.username,
+        ]
+          .filter(Boolean)
+          .map((value) => normalizeAddressText(String(value).replace(/^@/, "")))
+          .filter(Boolean)
+      );
+
+      const resolveSceneRef = (value, options = {}) => {
+        const allowPlayer = Boolean(options.allowPlayer);
+        const soleActorFallback = Boolean(options.soleActorFallback);
+        const rawValue = value === null || value === undefined ? "" : String(value).trim();
+        const lowered = rawValue.toLowerCase();
+
+        if (lowered === "narrator") return "narrator";
+
+        const normalized = normalizeAddressText(rawValue.replace(/^@/, ""));
+        if (allowPlayer && normalized && playerAliasKeys.has(normalized)) return w.meId;
+
+        /* Exact selected cast ID wins before any world-global lookup. */
+        const exactId = cast.find((c) => c && String(c.id).toLowerCase() === lowered);
+        if (exactId) return exactId.id;
+
+        /* Providers sometimes emit "Name [exact-id]" or "[exact-id]". */
+        if (rawValue) {
+          const rawLower = rawValue.toLowerCase();
+          const bracketHit = cast.find((c) => {
+            if (!c || !c.id) return false;
+            const id = String(c.id).toLowerCase();
+            return rawLower === `[${id}]` || rawLower.includes(`[${id}]`);
+          });
+          if (bracketHit) return bracketHit.id;
+        }
+
+        /* Name / username / nickname / first-name match, scoped to scene cast. */
+        if (normalized && sceneActorAliasIndex.has(normalized)) {
+          const scoped = sceneActorAliasIndex.get(normalized);
+          if (scoped) return scoped;
+        }
+
+        /* If the global resolver happens to resolve to a CURRENT attendee, accept it. */
+        const globalResolved = rawValue ? findChar(w, rawValue) : null;
+        if (globalResolved && allowedSceneActorIds.has(String(globalResolved))) {
+          return globalResolved;
+        }
+        if (allowPlayer && globalResolved === w.meId) return w.meId;
+
+        /*
+         * In a genuine 1:1 Scene there is exactly one legal AI speaker. If the
+         * provider omitted the ID or used a harmless generic speaker label, keep
+         * the reply instead of failing the whole round. Never remap a reference
+         * that clearly resolves to a DIFFERENT real world character.
+         */
+        if (soleActorFallback && cast.length === 1) {
+          const genericSpeaker = !normalized || /^(?:ai|assistant|character|npc|self|speaker|actor|them|they|he|she)$/.test(normalized);
+          if (genericSpeaker || !globalResolved) return cast[0].id;
+        }
+
+        return null;
+      };
+
+      const resolveSceneTurns = (candidateOut) => {
+        let rows = candidateOut && Array.isArray(candidateOut.turns)
           ? candidateOut.turns
-          : []
-        )
-          .map((t) => {
-            const raw = t && (t.id !== undefined ? t.id : t.name);
-            const isNarr = String(raw || "").trim().toLowerCase() === "narrator";
+          : [];
+
+        /* Small schema-drift salvage for a one-AI Scene: {text:"..."}. */
+        if (!rows.length && cast.length === 1 && candidateOut && typeof candidateOut === "object") {
+          const directText = candidateOut.text || candidateOut.dialogue || candidateOut.message || candidateOut.line;
+          if (typeof directText === "string" && directText.trim()) {
+            rows = [{ id: cast[0].id, kind: "speech", text: directText }];
+          }
+        }
+
+        return rows
+          .map((rawTurn) => {
+            /* Another harmless provider drift: turns:["dialogue text"]. */
+            const t = typeof rawTurn === "string"
+              ? { id: cast.length === 1 ? cast[0].id : "", kind: "speech", text: rawTurn }
+              : (rawTurn || {});
+
+            const rawActor =
+              t.id !== undefined ? t.id :
+              t.authorId !== undefined ? t.authorId :
+              t.characterId !== undefined ? t.characterId :
+              t.speaker !== undefined ? t.speaker :
+              t.actor !== undefined ? t.actor :
+              t.name;
+
+            const isNarr = String(rawActor || "").trim().toLowerCase() === "narrator";
             const resolvedId = isNarr
               ? "narrator"
-              : (findChar(w, raw) || findChar(w, t && t.name));
+              : resolveSceneRef(rawActor, { soleActorFallback: true });
+
             const allowed =
               isNarr ||
               (
@@ -45528,7 +45644,12 @@ Formátum:
                 allowedSceneActorIds.has(String(resolvedId))
               );
 
-            const rawText = t && t.text ? String(t.text) : "";
+            const rawTextValue =
+              t.text !== undefined ? t.text :
+              t.dialogue !== undefined ? t.dialogue :
+              t.content !== undefined ? t.content :
+              t.line !== undefined ? t.line : "";
+            const rawText = rawTextValue ? String(rawTextValue) : "";
             const freshText = isNarr
               ? rawText.trim()
               : (
@@ -45538,33 +45659,19 @@ Formátum:
                 );
 
             const rawTo =
-              t &&
-              t.to;
+              t.to !== undefined ? t.to :
+              t.targetId !== undefined ? t.targetId :
+              t.addressee !== undefined ? t.addressee : "";
 
-            const resolvedTo =
-              rawTo
-                ? (
-                    findChar(
-                      w,
-                      rawTo
-                    ) ||
-                    (
-                      String(rawTo) ===
-                        String(w.meId)
-                        ? w.meId
-                        : null
-                    )
-                  )
-                : null;
+            const resolvedTo = rawTo
+              ? resolveSceneRef(rawTo, { allowPlayer: true, soleActorFallback: false })
+              : null;
 
             const allowedTo =
               resolvedTo &&
               (
-                resolvedTo ===
-                  w.meId ||
-                allowedSceneActorIds.has(
-                  String(resolvedTo)
-                )
+                resolvedTo === w.meId ||
+                allowedSceneActorIds.has(String(resolvedTo))
               )
                 ? resolvedTo
                 : "";
@@ -45577,13 +45684,13 @@ Formátum:
 
             return {
               authorId: allowed ? resolvedId : null,
-              to:
-                allowedTo,
+              to: allowedTo,
               kind: t && t.kind === "action" ? "action" : "speech",
               text: roleplayText,
             };
           })
           .filter((t) => t.authorId && t.text);
+      };
 
       let resolved = resolveSceneTurns(out);
 
@@ -45823,8 +45930,8 @@ JSON ONLY:
       if (!resolved.length) {
         throw new Error(
           tt(
-            "Az AI kétszer is csak ismétlődő vagy hibás szereplőhöz tartozó választ adott. Próbáld újra — a jelenet és a memóriák megmaradtak.",
-            "The AI twice returned only repeated text or turns assigned to invalid characters. Try again — the scene and memories were preserved."
+            "Az AI válaszából kétszer sem érkezett használható Scene-mozzanat. Próbáld újra — a jelenet és a memóriák megmaradtak.",
+            "The AI twice returned no usable Scene beat. Try again — the scene and memories were preserved."
           )
         );
       }
