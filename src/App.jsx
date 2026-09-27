@@ -23622,7 +23622,7 @@ async function analyzeSocialPostImageInput(
 
   // A Pinterest CDN a szerveroldali letöltést gyakran elutasítja.
   // A poszt képe továbbra is megjelenik; a már megadott képleírás marad.
-  if (/^https:\/\/i.test(raw)) {
+  if (raw.startsWith("https://")) {
     try {
       if (/(^|\.)pinimg\.com$/i.test(new URL(raw).hostname)) return "";
     } catch (_) {
