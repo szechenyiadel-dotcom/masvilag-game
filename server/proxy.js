@@ -1,72 +1,120 @@
 --- /mnt/data/App-fixed_social_fixes_v7_crashfix.txt	2026-09-27 15:22:57.462093906 +0000
-+++ /mnt/data/App-fixed_social_fixes_v8_scene_409fix.txt	2026-09-27 15:29:36.625984713 +0000
-@@ -1543,7 +1543,9 @@
++++ /mnt/data/App-fixed_social_fixes_v9_scene_safe_409fix.txt	2026-09-27 15:36:05.633282550 +0000
+@@ -1543,7 +1543,10 @@
  
          const since = now() - AI.last;
          const minimumGap = task.priority >= 100 ? 500 : AI.gap;
 -        const costGap = Math.max(0, Number(AI.lastCostGap) || 0);
 +        const rawCostGap = Math.max(0, Number(AI.lastCostGap) || 0);
-+        /* Interaktív DM/Scene ne örökölhessen akár 45 mp háttér-TPM várakozást. */
-+        const costGap = task.priority >= 100 ? Math.min(5000, rawCostGap) : rawCostGap;
++        const costGap = Number.isFinite(Number(task.costGapCap))
++          ? Math.min(rawCostGap, Math.max(0, Number(task.costGapCap)))
++          : rawCostGap;
          const gap = Math.max(minimumGap, costGap);
          if (since < gap) await wait(gap - since);
  
-@@ -7406,6 +7408,8 @@
-   const patch = (fn) => update((n) => { const s = n.scenes.find((x) => x.id === scene.id); if (s) fn(s, n); });
+@@ -1560,11 +1563,12 @@
+ }
  
-   const advance = async (playerText) => {
-+    if (sendLockRef.current) return;
-+    sendLockRef.current = true;
-     setBusy("turn");
-     if (playerText) patch((s) => { s.turns.push({ authorId: w.meId, kind: "action", text: playerText, ts: now() }); });
-     try {
-@@ -7438,7 +7442,7 @@
+ /* Valódi prioritásos sor: priority >= 100 = közvetlen játékosi DM/Event. */
+-function queued(fn, priority = 0) {
++function queued(fn, priority = 0, costGapCap = null) {
+   return new Promise((resolve, reject) => {
+     AI.queue.push({
+       fn,
+       priority: Number(priority) || 0,
++      costGapCap,
+       seq: ++AI.queueSeq,
+       resolve,
+       reject,
+@@ -1765,7 +1769,7 @@
+         throw err;
+       }
+       throw last || new Error("Hibás válasz");
+-    }, Number(options.priority || 0));
++    }, Number(options.priority || 0), options.costGapCap);
+   } finally { AI.pending--; }
+ }
+ 
+@@ -2840,12 +2844,18 @@
+   });
+ }
+ 
+-async function serverSaveWorld(world) {
++async function serverSaveWorld(world, expectedSyncRevOverride = null) {
++  const worldSyncRev = Math.max(0, Math.floor(Number(world && world.syncRev) || 0));
++  const overrideSyncRev = Number(expectedSyncRevOverride);
++  const expectedSyncRev = Number.isFinite(overrideSyncRev)
++    ? Math.max(worldSyncRev, Math.floor(overrideSyncRev))
++    : worldSyncRev;
++
+   const saved = await apiJson("/world/save", {
+     method: "POST",
+     body: JSON.stringify({
+       world,
+-      syncRev: Math.max(0, Math.floor(Number(world && world.syncRev) || 0)),
++      syncRev: expectedSyncRev,
+     }),
+   });
+ 
+@@ -6860,7 +6870,6 @@
+     {tt("Mentés", "Save")}
+   </button>
+ </div>
+-        )}
+       </div>
+     </div>
+   );
+@@ -7438,7 +7447,7 @@
  {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","kind":"speech vagy action","text":"..."}],
   "changes":[{"a":"aki érez","b":"aki iránt","delta":10,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék"}],
   "memories":[{"id":"szereplő azonosítója","text":"amit ebből megjegyez"}],
 - "events":["egy mondat, ha a világ szempontjából fontos történt"]}${TAIL}`, { maxTokens: 800, priority: 120 });
-+ "events":["egy mondat, ha a világ szempontjából fontos történt"]}${TAIL}`, { maxTokens: 650, priority: 120 });
++ "events":["egy mondat, ha a világ szempontjából fontos történt"]}${TAIL}`, { maxTokens: 650, priority: 120, costGapCap: 5000 });
  
        const resolved = (out.turns || []).map((t) => {
          const raw = t && (t.id !== undefined ? t.id : t.name);
-@@ -7473,6 +7477,7 @@
-     } catch (e) {
-       setErr(((e && e.message) ? e.message + " " : "") + tt("Nyomd meg még egyszer — ha újra elakad, rövidítsd a helyzet leírását vagy csökkentsd a szereplők számát.", "Press it again — if it gets stuck again, shorten the situation description or reduce the number of characters."));
-     }
-+    sendLockRef.current = false;
-     setBusy("");
-   };
- 
-@@ -12108,6 +12113,7 @@
+@@ -12108,6 +12117,7 @@
    const [media, setMedia] = useState({});
    const wRef = useRef(null);
    const timer = useRef(null);
-+  const worldSaveBusy = useRef(false);
++  const serverSyncRevRef = useRef(0);
    const mediaRef = useRef({});
    const mediaTimer = useRef(null);
    const mediaReady = useRef(false);
-@@ -12799,11 +12805,19 @@
+@@ -12130,6 +12140,12 @@
+   const [saveAt, setSaveAt] = useState(0);
+   const lastSavedMedia = useRef("");
+   wRef.current = world;
++  if (world) {
++    serverSyncRevRef.current = Math.max(
++      Number(serverSyncRevRef.current) || 0,
++      Number(world.syncRev) || 0
++    );
++  }
+   mediaRef.current = media;
  
-     /*
-       2. PostgreSQL autosave.
--      Ezt legfeljebb háromszor próbáljuk meg.
-+      Egyszerre csak egy world/save futhat. A 409 stale snapshotot NEM
-+      küldjük el háromszor ugyanazzal a syncRev-vel.
-     */
-     let serverResult = null;
-     let lastError = null;
+   useEffect(() => {
+@@ -12810,20 +12826,37 @@
+       i++
+     ) {
+       try {
++        const expectedSyncRev = Math.max(
++          Number(snap && snap.syncRev) || 0,
++          Number(serverSyncRevRef.current) || 0
++        );
+         const saved =
+-          await serverSaveWorld(snap);
++          await serverSaveWorld(snap, expectedSyncRev);
  
-+    if (worldSaveBusy.current) {
-+      setSaveState("retry");
-+      return;
-+    }
-+
-+    worldSaveBusy.current = true;
-+
-     for (
-       let i = 0;
-       i < 3 && !serverResult;
-@@ -12820,11 +12834,9 @@
+         if (saved && saved.world) {
++          serverSyncRevRef.current = Math.max(
++            Number(serverSyncRevRef.current) || 0,
++            Number(saved.syncRev) || 0,
++            Number(saved.world.syncRev) || 0
++          );
+           serverResult = saved;
+           break;
+         }
        } catch (e) {
          lastError = e;
  
@@ -74,67 +122,18 @@
 -          Lejárt / érvénytelen session esetén
 -          nincs értelme háromszor ugyanazt próbálni.
 -        */
--        if (e && e.status === 401) {
-+        /* 409-nél a szerver rev-je már előrébb jár: ugyanazt a stale
-+           snapshotot újraküldeni csak újabb 409-et gyártana. */
-+        if (e && (e.status === 409 || e.status === 401)) {
++        /* 409-nél nem módosítjuk a React world state-et. Csak megjegyezzük
++           a szerver authoritative rev-jét, és ugyanazt a helyi snapshotot
++           egyszer újraküldjük már a friss expectedSyncRev-vel. */
++        if (e && e.status === 409 && e.data && Number.isFinite(Number(e.data.serverSyncRev))) {
++          serverSyncRevRef.current = Math.max(
++            Number(serverSyncRevRef.current) || 0,
++            Number(e.data.serverSyncRev) || 0
++          );
++          await wait(120);
++          continue;
++        }
++
+         if (e && e.status === 401) {
            break;
          }
- 
-@@ -12832,6 +12844,37 @@
-       }
-     }
- 
-+    worldSaveBusy.current = false;
-+
-+    /*
-+      409: átvezetjük a szerver aktuális syncRev-jét a legfrissebb helyi
-+      állapotra. A következő debounced autosave már friss rev-vel indul.
-+      Tartalmat itt nem dobunk el és nem merge-elünk, ezért nincs crash-kockázat.
-+    */
-+    if (
-+      !serverResult &&
-+      lastError &&
-+      lastError.status === 409 &&
-+      lastError.data &&
-+      Number.isFinite(Number(lastError.data.serverSyncRev))
-+    ) {
-+      const serverSyncRev = Math.max(0, Math.floor(Number(lastError.data.serverSyncRev) || 0));
-+
-+      setWorld((current) => {
-+        if (!current) return current;
-+        const currentSyncRev = Math.max(0, Math.floor(Number(current.syncRev) || 0));
-+        if (currentSyncRev >= serverSyncRev) return current;
-+        const next = JSON.parse(JSON.stringify(current));
-+        next.syncRev = serverSyncRev;
-+        return next;
-+      });
-+
-+      setSaveState("retry");
-+      setSaveAt(now());
-+      setErr("");
-+      return;
-+    }
-+
-     /*
-       A helyi backup megvan, de a szerveres mentés nem.
-     */
-@@ -12895,6 +12938,18 @@
-       chatválasz — a régi szerverválasz SOHA ne írja felül.
-     */
-     if (contentOf(current) !== json) {
-+      const currentSyncRev = Math.max(0, Math.floor(Number(current.syncRev) || 0));
-+      const savedSyncRev = Math.max(0, Math.floor(Number(savedWorld.syncRev) || 0));
-+
-+      /* A save közben érkezett új Scene/chat változást megtartjuk, de a
-+         szerver által kiosztott friss syncRev-et átvezetjük rá. Enélkül a
-+         következő autosave saját magunk előző mentésével ütközik 409-re. */
-+      if (savedSyncRev > currentSyncRev) {
-+        const next = JSON.parse(JSON.stringify(current));
-+        next.syncRev = savedSyncRev;
-+        return next;
-+      }
-+
-       return current;
-     }
- 
