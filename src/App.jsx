@@ -1483,44 +1483,94 @@ function albumFind(c, key) {
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 const AI = {
-  last: 0,                   // mikor futott le az utolsó
+  last: 0,                   // mikor indult az utolsó AI-kérés
   gap: 8000,                 // háttérhívások között legalább ennyi teljen el
   cooldownUntil: 0,          // eddig nem küldünk semmit
   strikes: 0,                // hányszor utasított el minket zsinórban
   pending: 0,                // hány kérés vár épp válaszra
   listeners: [],
-  chain: Promise.resolve(),  // stabil, egyenkénti AI-sor
+
+  /* 429 FIX: a közvetlen DM/Event mindig a háttérmunka elé kerül. */
+  queue: [],
+  queueRunning: false,
+  queueSeq: 0,
+
+  /* Nagy prompt után ne üssük meg rögtön újra a provider TPM-limitjét. */
+  lastCostGap: 0,
+  targetTokensPerMinute: Math.max(18000, Number(import.meta.env.VITE_AI_TARGET_TPM) || 30000),
 };
 const cooldownLeft = () => Math.max(0, AI.cooldownUntil - now());
 const onCooldown = (fn) => { AI.listeners.push(fn); return () => { AI.listeners = AI.listeners.filter((x) => x !== fn); }; };
 function setCooldown(ms) {
-  AI.cooldownUntil = Math.max(AI.cooldownUntil, now() + ms);
+  AI.cooldownUntil = Math.max(AI.cooldownUntil, now() + Math.max(0, Number(ms) || 0));
   AI.listeners.forEach((fn) => { try { fn(cooldownLeft()); } catch (e) {} });
 }
 
-/* Sorba állítás: egyszerre pontosan egy AI-kérés fut. A stabil Promise-chain
-   megakadályozza, hogy egy hibás/lezárt queue után a DM vagy az Event beragadjon. */
+function estimatedAiRequestTokens(system, prompt, maxTokens) {
+  const chars = String(system || "").length + String(prompt || "").length;
+  return Math.max(1, Math.ceil(chars / 2.8) + Math.max(0, Number(maxTokens) || 0));
+}
+
+function aiCostGapFor(system, prompt, maxTokens) {
+  const tokens = estimatedAiRequestTokens(system, prompt, maxTokens);
+  return Math.max(500, Math.min(45000, Math.ceil((tokens / AI.targetTokensPerMinute) * 60000)));
+}
+
+function preserveAiEdges(value, maxChars, label) {
+  const text = String(value || "");
+  const max = Math.max(4000, Number(maxChars) || 0);
+  if (text.length <= max) return text;
+  const marker = `\n\n[${String(label || "context").toUpperCase()} COMPACTED]\n\n`;
+  const usable = Math.max(1000, max - marker.length);
+  const head = Math.floor(usable * 0.55);
+  const tail = usable - head;
+  return text.slice(0, head) + marker + text.slice(text.length - tail);
+}
+
+async function runAiQueue() {
+  if (AI.queueRunning) return;
+  AI.queueRunning = true;
+  try {
+    while (AI.queue.length) {
+      AI.queue.sort((a, b) => b.priority !== a.priority ? b.priority - a.priority : a.seq - b.seq);
+      const task = AI.queue.shift();
+      if (!task) continue;
+
+      try {
+        while (cooldownLeft() > 0) {
+          await wait(Math.min(cooldownLeft(), 5000) + 100);
+        }
+
+        const since = now() - AI.last;
+        const minimumGap = task.priority >= 100 ? 500 : AI.gap;
+        const costGap = Math.max(0, Number(AI.lastCostGap) || 0);
+        const gap = Math.max(minimumGap, costGap);
+        if (since < gap) await wait(gap - since);
+
+        AI.last = now();
+        task.resolve(await task.fn());
+      } catch (e) {
+        task.reject(e);
+      }
+    }
+  } finally {
+    AI.queueRunning = false;
+    if (AI.queue.length) runAiQueue();
+  }
+}
+
+/* Valódi prioritásos sor: priority >= 100 = közvetlen játékosi DM/Event. */
 function queued(fn, priority = 0) {
-  const run = AI.chain.then(async () => {
-    for (let guard = 0; guard < 40; guard++) {
-      const left = cooldownLeft();
-      if (left <= 0) break;
-      await wait(Math.min(left, 5000) + 150);
-    }
-
-    const since = now() - AI.last;
-    const gap = Number(priority || 0) >= 100 ? Math.min(AI.gap, 2200) : AI.gap;
-    if (since < gap) await wait(gap - since);
-
-    try {
-      return await fn();
-    } finally {
-      AI.last = now();
-    }
+  return new Promise((resolve, reject) => {
+    AI.queue.push({
+      fn,
+      priority: Number(priority) || 0,
+      seq: ++AI.queueSeq,
+      resolve,
+      reject,
+    });
+    runAiQueue();
   });
-
-  AI.chain = run.then(() => {}, () => {});
-  return run;
 }
 
 const DEFAULT_AI_MODEL = import.meta.env.VITE_AI_MODEL || "claude-sonnet-4-6";
@@ -1554,7 +1604,13 @@ const res = await fetch(url, {
   throw lastErr || new Error("AI proxy unavailable");
 }
 
-async function callClaude(system, prompt, maxTokens = 1200) {
+async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
+  /* 429 FIX: csak az AI-nak küldött kontextust korlátozzuk; a világ/adatlap nem változik. */
+  const interactive = !!(requestMeta && requestMeta.interactive);
+  system = preserveAiEdges(system, interactive ? 18000 : 26000, "system");
+  prompt = preserveAiEdges(prompt, interactive ? 34000 : 52000, "prompt");
+  AI.lastCostGap = aiCostGapFor(system, prompt, maxTokens);
+
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), 60000);
   let res;
@@ -1670,7 +1726,12 @@ async function askJSON(system, prompt, options = {}) {
             : (lang === "en"
               ? "\n\nPrevious output was invalid. Return only compact valid JSON in English."
               : "\n\nAz előző válasz hibás volt. Most csak rövid, érvényes JSON jöjjön, magyarul.");
-          const raw = await callClaude(sys, prompt + hint, Number(options.maxTokens || 1200));
+          const raw = await callClaude(
+            sys,
+            prompt + hint,
+            Number(options.maxTokens || 1200),
+            { interactive }
+          );
           const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
           if (a === -1 || b === -1) throw new Error("Az AI válasza nem tartalmazott feldolgozható JSON-t.");
           const parsed = JSON.parse(raw.slice(a, b + 1));
@@ -3584,6 +3645,9 @@ async function dropBig(base) {
 const mediaBytes = (m) => Object.keys(m || {}).reduce((sum, k) => sum + ((m[k] && m[k].length) || 0), 0);
 const MEDIA_CAP = 40 * 1048576;
 
+/* A /media/load által visszaadott authoritative média-revízió. */
+let MEDIA_SYNC_REV = 0;
+
 async function serverLoadMedia() {
   const res = await fetch("/media/load", {
     method: "GET",
@@ -3608,6 +3672,11 @@ async function serverLoadMedia() {
     );
   }
 
+  MEDIA_SYNC_REV = Math.max(
+    0,
+    Math.floor(Number(data && data.syncRev) || 0)
+  );
+
   return (
     data?.media &&
     typeof data.media === "object"
@@ -3618,34 +3687,65 @@ async function serverLoadMedia() {
 
 
 async function serverSaveMedia(media) {
-  const res = await fetch("/media/save", {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      media: media || {},
-    }),
-  });
+  /*
+   * 409 FIX: /media/save revision-aware. Ha közben másik mentés növelte a
+   * szerver revízióját, ugyanazt a merge-biztos payloadot az aktuális
+   * serverSyncRev-vel ismételjük meg. Más hibához nem nyúlunk.
+   */
+  let expectedSyncRev = Math.max(0, Math.floor(Number(MEDIA_SYNC_REV) || 0));
 
-  let data = {};
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const res = await fetch("/media/save", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        media: media || {},
+        syncRev: expectedSyncRev,
+      }),
+    });
 
-  try {
-    data = await res.json();
-  } catch (e) {
-    data = {};
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (e) {
+      data = {};
+    }
+
+    if (res.ok) {
+      MEDIA_SYNC_REV = Math.max(
+        0,
+        Math.floor(Number(data && data.syncRev) || expectedSyncRev)
+      );
+      return {
+        ok: true,
+        syncRev: MEDIA_SYNC_REV,
+      };
+    }
+
+    if (
+      res.status === 409 &&
+      data &&
+      data.code === "MEDIA_CONFLICT" &&
+      Number.isFinite(Number(data.serverSyncRev))
+    ) {
+      expectedSyncRev = Math.max(0, Math.floor(Number(data.serverSyncRev) || 0));
+      MEDIA_SYNC_REV = expectedSyncRev;
+      await wait(120 + attempt * 180);
+      continue;
+    }
+
+    const err = new Error(data?.error || `Media save failed (${res.status})`);
+    err.status = res.status;
+    throw err;
   }
 
-  if (!res.ok) {
-    throw new Error(
-      data?.error ||
-      `Media save failed (${res.status})`
-    );
-  }
-
-  return true;
+  const err = new Error("The media library kept changing during save.");
+  err.status = 409;
+  throw err;
 }
 
 
