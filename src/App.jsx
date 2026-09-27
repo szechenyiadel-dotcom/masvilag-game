@@ -508,10 +508,19 @@ const mediaDataUrl = (media, id) => {
   const entry = normalizeMediaEntry(id, raw);
   return entry && entry.status !== "deleted" ? entry.dataUrl || "" : "";
 };
+const mediaFileUrl = (id) => {
+  const safeId = encodeURIComponent(String(id || "").trim());
+  if (!safeId) return "";
+  const path = `/media/file/${safeId}`;
+  if (typeof window !== "undefined" && window.location && window.location.origin) {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+};
 const resolveImg = (src, media) => {
   if (!src) return "";
   const id = imageIdOf(src);
-  if (id) return mediaDataUrl(media, id);
+  if (id) return mediaDataUrl(media, id) || mediaFileUrl(id);
   return src;
 };
 
