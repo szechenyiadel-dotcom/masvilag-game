@@ -10882,10 +10882,10 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * the timeline while still letting a larger cast keep the world visibly alive.
  */
 const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  20 * 60 * 1000,
+  90 * 1000,
   Math.min(
-    30 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 24 * 60 * 1000
+    6 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 3 * 60 * 1000
   )
 );
 
@@ -10897,11 +10897,11 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
  * never feels like it is posting on a fixed clock.
  */
 const LIVE_WORLD_ACTIVE_POST_TARGET_MS = Math.max(
-  20 * 60 * 1000,
+  35 * 1000,
   Math.min(
-    30 * 60 * 1000,
+    2 * 60 * 1000,
     Number(import.meta.env.VITE_WORLD_ACTIVE_POST_INTERVAL_MS) ||
-      24 * 60 * 1000
+      65 * 1000
   )
 );
 
@@ -10920,7 +10920,7 @@ const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 360
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1500, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 1500));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 22)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 30 * 1000));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(60 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 2 * 60 * 1000));
 const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 4 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
 const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(20 * 1000, Math.min(3 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 45 * 1000));
@@ -11455,8 +11455,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
      * provider a real recovery window so the 5-second live-world beat cannot
      * immediately manufacture another autonomous request. */
     const retryAfterMs = Math.max(
-      30000,
-      Math.min(120000, Number(data.retryAfterMs) || 45000)
+      10000,
+      Math.min(60000, Number(data.retryAfterMs) || 15000)
     );
     if (!requestMeta.interactive) {
       setCooldown(retryAfterMs, false);
@@ -11510,7 +11510,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
        */
       if (!requestMeta.interactive) {
         setCooldown(
-          Math.max(30000, Math.min(120000, retryAfterMs || 45000)),
+          Math.max(10000, Math.min(60000, retryAfterMs || 15000)),
           false
         );
       }
@@ -11525,7 +11525,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       err.noCooldown = true;
       err.retryAfterMs = requestMeta.interactive
         ? retryAfterMs
-        : Math.max(30000, Math.min(120000, retryAfterMs || 45000));
+        : Math.max(10000, Math.min(60000, retryAfterMs || 15000));
       throw err;
     }
     AI.strikes = 0;
@@ -26643,7 +26643,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "99.9";
+const BUILD_VERSION = "100.0";
 const WORLD_SCHEMA_VERSION = 97;
 
 /* Fast, safe clone for the large world state. */
@@ -38850,10 +38850,13 @@ function autonomousDynamicFeedPulseMs(w) {
   const reactionFactor = 1 / (1 + signal.heat * 0.20);
   const target = Math.round(base * jitter * reactionFactor);
 
-  /* Global feed heartbeat: when at least one AI still has a daily slot,
-     the world should not go more than ~30 minutes without a fresh post.
-     This changes only cadence; per-character 3/24h hard caps still win. */
-  return Math.max(18 * 60 * 1000, Math.min(30 * 60 * 1000, target));
+  /* LIVE FEED v100:
+     Active play must feel alive on a human timescale, not on a 20-30 minute
+     background cron. Character-level cooldowns + rolling hard caps still stop
+     any one character from spamming. */
+  return active
+    ? Math.max(35 * 1000, Math.min(2 * 60 * 1000, target))
+    : Math.max(90 * 1000, Math.min(6 * 60 * 1000, target));
 }
 
 function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
@@ -39077,12 +39080,12 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
   let requiredGap = gapMs;
 
   if (options && options.livenessRecovery) {
-    /* Recovery is deliberately narrower than an aftermath burst: it only
-       shortens a normal personal cooldown after the whole visible world has
-       gone quiet, while keeping the rolling hard cap intact. */
+    /* LIVE v100: once the whole visible world is quiet, a character may wake
+       sooner than their normal personal rhythm. The rolling 24h hard cap still
+       remains authoritative, so this fixes silence without enabling spam. */
     requiredGap = Math.min(
       requiredGap,
-      Math.max(75 * 60 * 1000, Math.round(gapMs * 0.34))
+      Math.max(4 * 60 * 1000, Math.round(gapMs * 0.12))
     );
   }
 
@@ -39855,19 +39858,69 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
     }
   }
 
-  if (!fact) return null;
+  const ambientHeartbeat = Boolean(!fact && options && options.allowAmbientHeartbeat);
 
-  const forms = en
-    ? [
-        `Still thinking about ${fact}.`,
-        `${fact}. Yeah, that happened.`,
-        `Not sure I'm done with ${fact} yet.`,
-      ]
-    : [
-        `Még mindig a(z) ${fact} jár a fejemben.`,
-        `${fact}. Igen, ez tényleg megtörtént.`,
-        `Nem hiszem, hogy lezártam magamban a(z) ${fact} dolgot.`,
-      ];
+  let forms = [];
+  let postReason = "reacting to a concrete event the character personally experienced";
+  let postType = "event_reaction";
+  let anchorType = "event";
+  let anchorBasis = fact;
+
+  if (ambientHeartbeat) {
+    /* PROVIDER-FREE AMBIENT HEARTBEAT v100:
+     * This exists ONLY as a liveness safety net after the world has been quiet
+     * long enough. It intentionally avoids copying private goals/secrets/profile
+     * prose. Character casing/punctuation/emoji ownership is applied later by
+     * applyWorldStep(), so the same neutral seed still lands in that character's
+     * established online style. */
+    const socialScore = characterNoteActivityScore(w, author);
+    const expressive = socialScore >= 24;
+    forms = en
+      ? (expressive
+          ? [
+              "okay why is everything happening at once today",
+              "someone tell me I'm not the only one running on fumes today",
+              "yeah I need five minutes where nobody needs anything from me",
+              "today has been a lot actually",
+            ]
+          : [
+              "need five minutes of silence",
+              "today has been a lot",
+              "keeping to myself for a minute",
+              "still processing today honestly",
+            ])
+      : (expressive
+          ? [
+              "na jó miért történik ma minden egyszerre",
+              "valaki mondja hogy nem csak én működöm ma maradék energiából",
+              "kell öt perc amikor senki nem akar tőlem semmit",
+              "ez a nap mondjuk elég sok volt",
+            ]
+          : [
+              "kell öt perc csend",
+              "ez a nap elég sok volt",
+              "most egy kicsit eltűnök a világ elől",
+              "ezt a napot még feldolgozom",
+            ]);
+    postReason = "brief everyday status during an unusually quiet social stretch";
+    postType = "casual_status";
+    anchorType = "self_life";
+    anchorBasis = en ? "ordinary present-moment life update" : "hétköznapi jelenidejű saját élethelyzet";
+  } else if (fact) {
+    forms = en
+      ? [
+          `Still thinking about ${fact}.`,
+          `${fact}. Yeah, that happened.`,
+          `Not sure I'm done with ${fact} yet.`,
+        ]
+      : [
+          `Még mindig a(z) ${fact} jár a fejemben.`,
+          `${fact}. Igen, ez tényleg megtörtént.`,
+          `Nem hiszem, hogy lezártam magamban a(z) ${fact} dolgot.`,
+        ];
+  } else {
+    return null;
+  }
 
   let chosen = String(forms[seed % forms.length] || "").replace(/\s+/g, " ").trim();
   if (!socialAutonomousPostTextMakesSense(w, author.id, chosen)) return null;
@@ -39883,20 +39936,36 @@ function deterministicAutonomousFallbackPost(w, authorId, options = {}) {
     if (!chosen || recentWorld.includes(normalizeExactCommentGroundingText(chosen))) return null;
   }
 
+  const emergencyCommenters = ambientHeartbeat
+    ? (w.chars || [])
+        .filter((c) => c && c.id && c.id !== author.id && !isHuman(w, c.id) && !isMediaAccount(w, c.id))
+        .sort((a, b) => fairBotIdleMs(w, b.id) - fairBotIdleMs(w, a.id))
+        .slice(0, 2)
+    : [];
+
+  const localCommentForms = en
+    ? ["same.", "honestly yeah.", "real.", "mood."]
+    : ["ugyanez.", "amúgy igen.", "na ez.", "hangulat."];
+
+  const localComments = emergencyCommenters.map((c, index) => ({
+    id: c.id,
+    text: localCommentForms[(seed + index) % localCommentForms.length],
+  }));
+
   return {
     posts: [{
       id: author.id,
       text: chosen,
       image: "",
-      comments: [],
+      comments: localComments,
       social_contract: "v1",
       decision: "POST",
-      postReason: "reacting to a concrete event the character personally experienced",
-      postType: "event_reaction",
-      anchorType: "event",
+      postReason,
+      postType,
+      anchorType,
       anchorId,
-      anchorBasis: fact,
-      audienceIntent: "react",
+      anchorBasis,
+      audienceIntent: ambientHeartbeat ? "share" : "react",
       targetIds,
       publicKnowledgeOnly: true,
       engagementIntent: "none",
@@ -53756,8 +53825,8 @@ const SIM_DONE_TTL = 20 * 60000;
 const SIM_QUEUE_LIMIT = 40;
 const PLAYER_REACTIVE_QUEUE_MAX = 8;
 const PLAYER_POST_REACTION_MAX_AGE_MS = 8 * 60 * 1000;
-const PLAYER_REACTION_BUSY_BACKOFF_MS = 45 * 1000;
-const LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION = 2;
+const PLAYER_REACTION_BUSY_BACKOFF_MS = 15 * 1000;
+const LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION = 3;
 
 function ensureSimState(w) {
   if (!w.sim) {
@@ -53966,24 +54035,26 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.liveWorldStartedAt))) w.sim.liveWorldStartedAt = now();
   if (!Number.isFinite(Number(w.sim.providerClockRepairVersion))) w.sim.providerClockRepairVersion = 0;
 
-  /* PROVIDER-BUSY CLOCK REPAIR v1:
-   * Old saves can carry starvation clocks that are 60-120+ minutes overdue.
-   * After a provider outage that made the scheduler immediately "catch up" by
-   * firing a heartbeat DM/popup/event on every recovery beat. Rebase ONLY the
-   * autonomous scheduler hunger clocks once; no story/chat/history timestamp is
-   * touched. Fresh worlds already carry the repair version and skip this block. */
+  /* PROVIDER CLOCK REPAIR v3:
+   * v2 over-corrected old starvation by stamping DM/popup/event as if they had
+   * JUST succeeded and by starting the app inside a provider backoff. That can
+   * make a healthy world look completely dead after deploy. Undo only that
+   * synthetic pattern: genuine success timestamps that differ from the busy
+   * marker are preserved. No story/chat/history timestamp is touched. */
   if (Math.floor(Number(w.sim.providerClockRepairVersion) || 0) < LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION) {
-    const rebaseAt = now();
-    w.sim.lastAutonomousDmAt = rebaseAt;
-    w.sim.lastPopupSuccessAt = rebaseAt;
-    w.sim.lastRoleplayInviteAt = rebaseAt;
-    w.sim.lastProviderBusyAt = rebaseAt;
-    w.sim.backgroundBackoffUntil = Math.max(
-      Number(w.sim.backgroundBackoffUntil) || 0,
-      rebaseAt + PLAYER_REACTION_BUSY_BACKOFF_MS
-    );
+    const syntheticBusyAt = Number(w.sim.lastProviderBusyAt) || 0;
+    const looksSynthetic = (value) =>
+      syntheticBusyAt > 0 &&
+      Math.abs((Number(value) || 0) - syntheticBusyAt) <= 5000;
+
+    if (looksSynthetic(w.sim.lastAutonomousDmAt)) w.sim.lastAutonomousDmAt = 0;
+    if (looksSynthetic(w.sim.lastPopupSuccessAt)) w.sim.lastPopupSuccessAt = 0;
+    if (looksSynthetic(w.sim.lastRoleplayInviteAt)) w.sim.lastRoleplayInviteAt = 0;
+
+    w.sim.lastProviderBusyAt = 0;
+    w.sim.backgroundBackoffUntil = 0;
     w.sim.providerClockRepairVersion = LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION;
-    console.info("[scheduler-clock] stale provider/starvation clocks rebased");
+    console.info("[scheduler-clock] v4 synthetic silence clocks released");
   }
 
   /* LIVE WORLD CLOCK SANITY:
@@ -65449,7 +65520,12 @@ function liveWorldSilenceRecoveryThresholdMs() {
 
 function feedNeedsFreshPost(w) {
   const last = lastAiFeedPostAt(w);
-  const cast = fairPostCast(w);
+  const cast = fairPostCast(
+    w,
+    playerIsActivelyViewingWorld()
+      ? { livenessRecovery: true }
+      : {}
+  );
   if (!cast.length) return false;
 
   const snapshot = autonomousPostStatsSnapshot(w);
@@ -67764,7 +67840,7 @@ Ha van természetes folytatás:
  */
 function runAutonomousFeedHeartbeat(w, update) {
   if (!w || !update || !Array.isArray(w.chars) || !w.chars.length) return false;
-  const cast = fairPostCast(w);
+  const cast = fairPostCast(w, { livenessRecovery: true });
   if (!cast.length) return false;
 
   const latest = lastAiFeedPostAt(w);
@@ -67794,10 +67870,18 @@ function runAutonomousFeedHeartbeat(w, update) {
   const stats = characterAutonomousPostStats24h(w, candidate.id);
   if (Number(stats.count || 0) >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) return false;
 
+  const heartbeatOptions = {
+    trigger: "local-heartbeat",
+    allowAmbientHeartbeat: true,
+    livenessRecovery: true,
+    allowBurst: true,
+    burstKey: `local-heartbeat:${Math.floor(now() / Math.max(30000, heartbeatTarget))}`,
+  };
+
   let created = false;
   update((n) => {
     const live = charById(n, candidate.id);
-    if (!live || !characterCanAutonomouslyPost(n, live)) return;
+    if (!live || !characterCanAutonomouslyPost(n, live, null, heartbeatOptions)) return;
     const liveLatest = lastAiFeedPostAt(n);
 
     const liveHeartbeatTarget =
@@ -67813,9 +67897,9 @@ function runAutonomousFeedHeartbeat(w, update) {
       return;
     }
 
-    const fallback = deterministicAutonomousFallbackPost(n, live.id);
+    const fallback = deterministicAutonomousFallbackPost(n, live.id, heartbeatOptions);
     if (!fallback) return;
-    created = Boolean(applyWorldStep(n, fallback));
+    created = Boolean(applyWorldStep(n, fallback, heartbeatOptions));
     if (created) {
       const sim = ensureSimState(n);
       sim.lastSuccessAt = now();
@@ -70148,16 +70232,43 @@ if (targetNote) {
       return null;
     }
 
-    let out =
-      await genDM(view, bot, autonomousReasonContext);
+    let out = null;
+    let usedLocalProviderFallback = false;
 
-    /* AUTONOMOUS DM SINGLE-CALL RULE v4:
-     * The old grounded repair made a SECOND provider request whenever the first
-     * answer failed validation. Under load this was exactly the request that
-     * tipped providers into 429, after which the heartbeat lane retried again.
-     * Autonomous DM is optional: one model attempt is enough. If its grounding
-     * is unusable, fall back locally instead of spending another provider slot. */
-    if (!autonomousDmOutputMatchesReason(out, autonomousReasonContext)) {
+    try {
+      out = await genDM(view, bot, autonomousReasonContext);
+    } catch (dmProviderErr) {
+      const mayFallbackLocally = Boolean(
+        dmProviderErr &&
+        dmProviderErr.busy &&
+        action.source !== "manual" &&
+        action.source !== "player-reactive"
+      );
+
+      if (!mayFallbackLocally) throw dmProviderErr;
+
+      const localFallback = fallbackAutonomousDmResponse(
+        view,
+        bot,
+        autonomousReasonContext
+      );
+
+      if (!localFallback || localFallback.skip || !String(localFallback.text || "").trim()) {
+        throw dmProviderErr;
+      }
+
+      out = localFallback;
+      usedLocalProviderFallback = true;
+      console.info(
+        "[autonomous-dm] provider busy; committed grounded local fallback",
+        { botId: bot.id, reason: autonomousReasonContext.primary && autonomousReasonContext.primary.kind }
+      );
+    }
+
+    /* AUTONOMOUS DM SINGLE-CALL RULE v5:
+     * Validation failure also falls back locally. Never spend a second provider
+     * request on an optional autonomous DM. */
+    if (!usedLocalProviderFallback && !autonomousDmOutputMatchesReason(out, autonomousReasonContext)) {
       out = fallbackAutonomousDmResponse(view, bot, autonomousReasonContext);
     }
 
@@ -73804,16 +73915,17 @@ const signOut = useCallback(async () => {
   );
   const directHumanReplyQueued = isPlayerCommentReplyAction(view2, queued);
 
-  /* A provider-capacity miss pauses ALL autonomous lanes for a short bounded
-   * window. Manual actions and a direct reply to a fresh human comment still
-   * bypass this guard. Without this, a failed comment batch was followed five
-   * seconds later by a hard-heartbeat DM, producing a 503 cascade. */
+  /* PROVIDER BACKOFF MUST NOT FREEZE THE WORLD.
+   * The v4 guard returned before the provider-free heartbeat, so during a
+   * capacity pause literally nothing could happen. Give the local feed safety
+   * net a chance first; only provider-backed autonomous work is paused. */
   if (
     !manualQueued &&
     !pendingReplyOverride &&
     !directHumanReplyQueued &&
     backgroundProviderBackoffUntil > now()
   ) {
+    if (runAutonomousFeedHeartbeat(view2, update)) return;
     return;
   }
 
