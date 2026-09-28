@@ -9655,65 +9655,51 @@ function socialTextRelationshipDelta(
   }
 
   /*
-   * Csak FALLBACK arra az esetre, ha az AI-s jelentésértékelés nem érhető el.
-   * A normál út a teljes kommentet + thread-kontextust + kapcsolatot értelmezi.
-   * Fontos: egy direkt reply önmagában NEM jár automatikus plusszal.
+   * SIMS-LIKE MICRO DYNAMICS v8
+   * ---------------------------
+   * A direct social interaction is itself relationship information. Neutral
+   * conversation moves the receiver only a tiny amount; warmth, flirting,
+   * insults and public hostility move it more. These are intentionally micro
+   * deltas so repeated lived interactions matter without one comment rewriting
+   * an established canon relationship.
    */
   const positive =
-    /(^|\s)(love|luv|ily|adore|cute|pretty|beautiful|gorgeous|hot|proud|congrats|congratulations|thanks|thank you|miss you|best|sweet|amazing|perfect|legend|queen|king|icon|szeretlek|imádlak|cuki|szép|gyönyörű|büszke|gratulálok|köszi|köszönöm|hiányzol|kedvenc|imádom|zseniális|király)(\s|$|[!?.])/i.test(
-      raw
-    );
+    /(^|\s)(love|luv|ily|adore|cute|pretty|beautiful|gorgeous|hot|proud|congrats|congratulations|thanks|thank you|miss you|best|sweet|amazing|perfect|legend|queen|king|icon|szeretlek|imádlak|cuki|szép|gyönyörű|büszke|gratulálok|köszi|köszönöm|hiányzol|kedvenc|imádom|zseniális|király)(\s|$|[!?.])/i.test(raw);
 
   const negative =
-    /(^|\s)(hate|shut up|stfu|fuck off|fuck you|idiot|stupid|loser|pathetic|disgusting|creep|annoying|liar|bitch|asshole|moron|trash|clown|cringe|ew|utállak|fogd be|kuss|húzz el|menj a francba|menj a faszba|hülye|idióta|vesztes|szánalmas|undorító|idegesítő|hazug|kurva|seggfej|bohóc|gáz|ciki)(\s|$|[!?.])/i.test(
-      raw
-    ) ||
+    /(^|\s)(hate|shut up|stfu|fuck off|fuck you|idiot|stupid|loser|pathetic|disgusting|creep|annoying|liar|bitch|asshole|moron|trash|clown|cringe|ew|utállak|fogd be|kuss|húzz el|menj a francba|menj a faszba|hülye|idióta|vesztes|szánalmas|undorító|idegesítő|hazug|kurva|seggfej|bohóc|gáz|ciki)(\s|$|[!?.])/i.test(raw) ||
     /(^|\s)(🤡|🙄|🖕)(\s|$)/u.test(raw);
 
-  let delta = 0;
+  const explicitFlirt =
+    explicitPlayerSocialFlirtSignal(raw) &&
+    romanceTargetAllowed(w, targetId, actorId);
 
-  if (
-    positive &&
-    !negative
-  ) {
-    delta =
-      directReply
-        ? 6
-        : 5;
-  } else if (
-    negative &&
-    !positive
-  ) {
-    delta =
-      directReply
-        ? -8
-        : -6;
+  let delta = 1; // ordinary targeted interaction / attention
+
+  if (positive && !negative) {
+    delta = directReply ? 4 : 3;
+  } else if (negative && !positive) {
+    delta = directReply ? -5 : -4;
   }
 
-  const obsession =
-    relationshipObsessionLevel(
-      w,
-      targetId,
-      actorId
-    );
-
-  if (
-    obsession >= 3 &&
-    delta !== 0
-  ) {
-    delta +=
-      delta > 0
-        ? 2
-        : -2;
+  if (explicitFlirt && !negative) {
+    delta = Math.max(delta, directReply ? 5 : 4);
   }
 
-  return Math.max(
-    -12,
-    Math.min(
-      10,
-      delta
-    )
-  );
+  const current = getRel(w, targetId, actorId) || {};
+  const currentScore = Number(current.score) || 0;
+
+  /* Existing enemies take a hostile jab a little more personally; positive
+     contact can still soften them slowly instead of instantly flipping them. */
+  if (delta < 0 && currentScore <= -35) delta -= 1;
+  if (delta > 1 && currentScore <= -45) delta = Math.max(1, delta - 1);
+
+  const obsession = relationshipObsessionLevel(w, targetId, actorId);
+  if (obsession >= 3 && delta !== 0) {
+    delta += delta > 0 ? 1 : -1;
+  }
+
+  return Math.max(-5, Math.min(5, Math.round(delta)));
 }
 
 function playerSocialImpactFallbackChanges(
@@ -9773,6 +9759,7 @@ function playerSocialImpactFallbackChanges(
                   : "Pozitívan érintette a nyilvános kommented."
               ),
         oneSided: true,
+        micro: true,
       };
     })
     .filter(Boolean);
@@ -9920,7 +9907,7 @@ async function assessPlayerSocialRelationshipImpact(
       .join("\n");
 
   const out =
-    await askWorldJSONInteractive(
+    await askWorldJSONResponsive(
       w,
       engineFor(w),
       `${worldContext(
@@ -10008,6 +9995,9 @@ Formátum:
       {
         maxTokens: 650,
         maxTries: 2,
+        priority: 35,
+        maxBusyWaits: 1,
+        timeoutMs: 18000,
       }
     );
 
@@ -24666,7 +24656,7 @@ async function serverWorldPeek(code) {
 }
 
 async function serverSaveWorld(world) {
-  return apiJson("/world/save", {
+  const saved = await apiJson("/world/save", {
     method: "POST",
     body: JSON.stringify({
       world,
@@ -24674,6 +24664,28 @@ async function serverSaveWorld(world) {
         worldSyncRev(world),
     }),
   });
+
+  /*
+   * CONFLICT-AS-DATA v8:
+   * The backend returns WORLD_CONFLICT as HTTP 200 so Edge/Chrome does not flood
+   * the console with a red 409 failed-resource entry. Recreate the same internal
+   * error shape here so every existing safe reconciliation path keeps working
+   * unchanged and no stale client can overwrite the authoritative server world.
+   */
+  if (
+    saved &&
+    (
+      saved.conflict === true ||
+      saved.code === "WORLD_CONFLICT"
+    )
+  ) {
+    const err = new Error(saved.error || "The world changed on another client.");
+    err.status = 409;
+    err.data = saved;
+    throw err;
+  }
+
+  return saved;
 }
 
 function acceptedWorldFromServerSave(
@@ -41960,18 +41972,71 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
             });
 
 
-            // Apply the existing local relationship impact immediately; a separate
-            // provider assessment must not block enqueueing the player's reply.
+            // Direct relationship micro-impact is now applied centrally by
+            // recordSocialEvent(), for humans and AI alike. Keep the target memory
+            // here and let the richer AI assessment refine meaningful interactions
+            // asynchronously without blocking the visible comment/reply.
             if (impactTargetIds.length) {
               update((n) => {
                 const freshActorId = n.meId || actorId;
-                const changes = playerSocialImpactFallbackChanges(
-                  n, freshActorId, impactTargetIds, text2, parent ? "reply" : "comment"
-                );
-                if (Array.isArray(changes) && changes.length) applyChanges(n, changes);
                 rememberPlayerSocialCommentImpact(
                   n, freshActorId, impactTargetIds, text2, parent ? "reply" : "comment"
                 );
+              });
+
+              const impactPost = {
+                ...p,
+                comments: [
+                  ...safePostComments(p),
+                  madeForImpact,
+                ],
+              };
+
+              void assessPlayerSocialRelationshipImpact(
+                w,
+                impactPost,
+                madeForImpact,
+                impactTargetIds,
+                parent ? "reply" : "comment"
+              ).then((assessment) => {
+                const rows = assessment && Array.isArray(assessment.changes)
+                  ? assessment.changes
+                  : [];
+                if (!rows.length) return;
+
+                update((n) => {
+                  const freshActorId = n.meId || actorId;
+                  const refinements = rows.map((row) => {
+                    const targetId = String(row && row.a || "");
+                    if (!targetId) return null;
+                    const baseline = socialTextRelationshipDelta(
+                      n,
+                      freshActorId,
+                      targetId,
+                      text2,
+                      Boolean(parent)
+                    );
+                    const proposed = Math.round(Number(row.delta) || 0);
+                    let residual = proposed;
+                    if (baseline && Math.sign(baseline) === Math.sign(proposed)) {
+                      residual = proposed - baseline;
+                    }
+                    residual = Math.max(-5, Math.min(5, residual));
+                    if (!residual) return null;
+                    return {
+                      ...row,
+                      b: freshActorId,
+                      delta: residual,
+                      oneSided: true,
+                      micro: true,
+                    };
+                  }).filter(Boolean);
+                  if (refinements.length) applyChanges(n, refinements);
+                });
+              }).catch((err) => {
+                if (!(err && (err.busy || err.backgroundDeferred))) {
+                  console.warn("Player social relationship assessment failed:", err);
+                }
               });
             }
 
@@ -63602,6 +63667,222 @@ function applyObservedRomanticThirdPartyConsequences(w, event) {
   return chosen.length;
 }
 
+
+/* ============================================================
+   LIVING RELATIONSHIP GRAPH v8 — DIRECT + THIRD-PARTY CONSEQUENCES
+   ============================================================ */
+function applyDirectSocialRelationshipConsequences(w, event) {
+  if (!w || !event || event.factLevel !== "observed") return 0;
+  if (!["comment", "reply", "dm", "dm-message"].includes(String(event.type || ""))) return 0;
+
+  const actorId = String(event.actorId || "");
+  if (!actorId) return 0;
+
+  let changed = 0;
+  const targets = [...new Set((event.targetIds || []).filter(Boolean).map(String))];
+
+  targets.forEach((targetId) => {
+    if (!targetId || targetId === actorId || !findChar(w, targetId) || !findChar(w, actorId)) return;
+
+    const actorHuman = isHuman(w, actorId);
+    const targetHuman = isHuman(w, targetId);
+    if (actorHuman && targetHuman) return;
+
+    /* Never invent the human player's feelings. In a human↔AI interaction the
+       AI-owned direction is the one that moves. For AI↔AI the receiver moves
+       first and the existing small echo can affect the speaker too. */
+    const perspectiveId = targetHuman && !actorHuman ? actorId : targetId;
+    const otherId = perspectiveId === targetId ? actorId : targetId;
+    const deltaActorArg = perspectiveId === targetId ? actorId : targetId;
+    const deltaTargetArg = perspectiveId;
+
+    const direct = event.type === "reply" || event.type === "dm" || event.type === "dm-message";
+    let delta = socialTextRelationshipDelta(w, deltaActorArg, deltaTargetArg, event.text, direct);
+
+    const romantic = romanticObserverSignal(event);
+    if (
+      romantic.active &&
+      romanceTargetAllowed(w, perspectiveId, otherId) &&
+      delta >= 0
+    ) {
+      delta = Math.max(delta, romantic.strength >= 60 ? 5 : 3);
+    }
+
+    const conflictTags = new Set((event.tags || []).map((x) => String(x || "").toLowerCase()));
+    const conflictish =
+      Number(event.drama || 0) >= 35 ||
+      ["rivalry", "argument", "fight", "callout", "insult", "hostile", "attack"].some((tag) => conflictTags.has(tag));
+    if (conflictish && delta > 0 && Number((getRel(w, perspectiveId, otherId) || {}).score || 0) < -20) {
+      delta = 0;
+    }
+    if (conflictish && delta === 0) delta = -1;
+    if (!delta) return;
+
+    const humanInPair = actorHuman || targetHuman;
+    applyChanges(w, [{
+      a: perspectiveId,
+      b: otherId,
+      delta,
+      micro: true,
+      oneSided: humanInPair,
+      mood: "",
+      why: sysLangText(
+        w,
+        perspectiveId,
+        `${nameOfIn(w, actorId)} közvetlenül ${event.type === "reply" ? "válaszolt" : (event.type === "dm" || event.type === "dm-message") ? "írt" : "kommentelt"}: ${cut(String(event.text || ""), 120)}`,
+        `${nameOfIn(w, actorId)} directly ${event.type === "reply" ? "replied" : (event.type === "dm" || event.type === "dm-message") ? "messaged" : "commented"}: ${cut(String(event.text || ""), 120)}`
+      ),
+    }]);
+    changed += 1;
+  });
+
+  return changed;
+}
+
+function conflictObserverSignal(event) {
+  if (!event || typeof event !== "object") return { active:false, strength:0 };
+  const tags = new Set((event.tags || []).map((x) => String(x || "").toLowerCase()));
+  const text = String(event.text || "").toLowerCase();
+  let strength = Number(event.drama) || 0;
+
+  if (["fight", "argument", "rivalry", "callout", "insult", "attack", "threat", "betrayal"].some((tag) => tags.has(tag))) {
+    strength = Math.max(strength, 45);
+  }
+  if (/\b(?:fuck\s+you|shut\s+up|stfu|idiot|stupid|loser|pathetic|liar|bitch|asshole|hate\s+you|fogd\s+be|kuss|hülye|idióta|vesztes|szánalmas|hazug|utállak|veszeked|összevesz|fenyeget|megaláz)\b/i.test(text)) {
+    strength = Math.max(strength, 38);
+  }
+
+  return { active: strength >= 28, strength: Math.max(0, Math.min(100, Math.round(strength))) };
+}
+
+function socialSideStake(w, observerId, subjectId) {
+  if (!w || !observerId || !subjectId || observerId === subjectId) return { ally:0, enemy:0 };
+  const rel = getRel(w, observerId, subjectId) || {};
+  const score = Number(rel.score) || 0;
+  const corpus = [rel.bond, rel.type, rel.hidden, rel.mood, rel.why, ownStorySnippetAbout(charById(w, observerId), charById(w, subjectId))]
+    .filter(Boolean).join(" ").toLowerCase();
+
+  let ally = score >= 55 ? 4 : score >= 35 ? 3 : score >= 15 ? 1 : 0;
+  let enemy = score <= -55 ? 4 : score <= -35 ? 3 : score <= -15 ? 1 : 0;
+
+  if (/\b(?:best\s+friend|close\s+friend|friend|family|sibling|brother|sister|partner|girlfriend|boyfriend|wife|husband|ally|loyal|barát|legjobb\s+barát|közeli\s+barát|család|testvér|párja|szövetséges)\b/i.test(corpus)) ally = Math.max(ally, 3);
+  if (/\b(?:enemy|rival|nemesis|hate|hatred|ellenség|rivális|gyűlöl|utál)\b/i.test(corpus)) enemy = Math.max(enemy, 3);
+  return { ally, enemy };
+}
+
+function scheduleConflictObserverReaction(w, event, observerId, againstId) {
+  if (!w || !event || !observerId || !againstId) return false;
+  const base = `conflict-observer:${event.id || event.refId || event.ts}:${observerId}:${againstId}`;
+
+  if (
+    event.visibility === "public" &&
+    (event.type === "comment" || event.type === "reply") &&
+    event.meta && event.meta.postId && event.meta.commentId
+  ) {
+    return simEnqueue(w, mkAction(
+      "reply",
+      `${base}:thread`,
+      {
+        postId: event.meta.postId,
+        commentId: event.meta.commentId,
+        targetId: observerId,
+        trigger: "conflict-observer",
+      },
+      "event"
+    ));
+  }
+
+  if (event.visibility === "public" && event.meta && event.meta.postId) {
+    return simEnqueue(w, mkAction(
+      "comments",
+      `${base}:post`,
+      {
+        postId: event.meta.postId,
+        forcedCommenterIds: [observerId],
+        minComments: 1,
+        maxComments: 1,
+        coverageSource: "conflict-observer",
+      },
+      "coverage"
+    ));
+  }
+
+  return false;
+}
+
+function applyObservedConflictThirdPartyConsequences(w, event) {
+  if (!w || !event || event.factLevel !== "observed") return 0;
+  if (event.meta && event.meta.skipConflictObserverConsequences) return 0;
+
+  const signal = conflictObserverSignal(event);
+  if (!signal.active) return 0;
+
+  const actorId = String(event.actorId || "");
+  const targetId = String((event.targetIds || [])[0] || "");
+  if (!actorId || !targetId || actorId === targetId) return 0;
+
+  const participantSet = new Set([actorId, targetId]);
+  const rows = [];
+
+  (w.chars || []).forEach((observer) => {
+    if (!observer || isHuman(w, observer.id) || participantSet.has(observer.id)) return;
+    if (!observerActuallyKnowsSocialEvent(w, observer.id, event)) return;
+
+    const toActor = socialSideStake(w, observer.id, actorId);
+    const toTarget = socialSideStake(w, observer.id, targetId);
+
+    let affectedId = "";
+    let delta = 0;
+    let reason = "";
+    let priority = 0;
+
+    if (toTarget.ally >= 2 || toActor.enemy >= 2) {
+      affectedId = actorId;
+      delta = -Math.min(5, Math.max(2, Math.round(signal.strength / 22) + Math.max(toTarget.ally, toActor.enemy) - 2));
+      priority = Math.max(toTarget.ally, toActor.enemy) * 10 + signal.strength;
+      reason = sysLangText(w, observer.id, `${nameOfIn(w, targetId)} oldalára állt a konfliktusban.`, `They sided with ${nameOfIn(w, targetId)} in the conflict.`);
+    } else if (toActor.ally >= 2 || toTarget.enemy >= 2) {
+      affectedId = targetId;
+      delta = -Math.min(5, Math.max(2, Math.round(signal.strength / 22) + Math.max(toActor.ally, toTarget.enemy) - 2));
+      priority = Math.max(toActor.ally, toTarget.enemy) * 10 + signal.strength;
+      reason = sysLangText(w, observer.id, `${nameOfIn(w, actorId)} oldalára állt a konfliktusban.`, `They sided with ${nameOfIn(w, actorId)} in the conflict.`);
+    } else if (toTarget.enemy >= 3) {
+      affectedId = actorId;
+      delta = 2;
+      priority = toTarget.enemy * 8 + signal.strength;
+      reason = sysLangText(w, observer.id, `Egyetértett azzal, hogy ${nameOfIn(w, targetId)} kapott egy beszólást.`, `They approved of ${nameOfIn(w, targetId)} getting challenged.`);
+    }
+
+    if (!affectedId || !delta) return;
+    rows.push({ observerId: observer.id, affectedId, delta, reason, priority });
+  });
+
+  rows.sort((a,b) => b.priority - a.priority);
+  rows.slice(0, 4).forEach((row, index) => {
+    applyChanges(w, [{
+      a: row.observerId,
+      b: row.affectedId,
+      delta: row.delta,
+      micro: true,
+      oneSided: true,
+      mood: "",
+      why: row.reason,
+    }]);
+
+    rememberAboutTarget(w, row.observerId, row.affectedId, {
+      kind: "event",
+      source: "witnessed_conflict",
+      confidence: 1,
+      timestamp: Number(event.ts) || now(),
+      text: `${row.reason} ${cut(String(event.text || ""), 180)}`,
+    });
+
+    if (index < 2) scheduleConflictObserverReaction(w, event, row.observerId, row.affectedId);
+  });
+
+  return Math.min(4, rows.length);
+}
+
 function recordSocialEvent(
   w,
   event = {}
@@ -63889,10 +64170,19 @@ function recordSocialEvent(
     );
   }
 
+  /* Every real direct comment/reply/DM can move the relationship graph a
+   * little, including AI↔AI. Human-involved pairs stay one-sided so the game
+   * never invents the player's own feelings. */
+  applyDirectSocialRelationshipConsequences(w, entry);
+
   /* Third-party romantic fallout: a crush / partner / situationship who
    * actually saw a public or witnessed romantic interaction may become
    * jealous, remember it, lose relationship points and react. */
   applyObservedRomanticThirdPartyConsequences(w, entry);
+
+  /* Friends, allies, rivals and enemies can also take sides in a witnessed
+   * argument/callout instead of behaving as isolated NPC pairs. */
+  applyObservedConflictThirdPartyConsequences(w, entry);
 
   /*
    * A social ledger eseménye lehet egy backchannel rumor MAGJA.
@@ -67901,7 +68191,13 @@ async function generateFocusedCommentReply(
   const relation = relationshipBehaviorCard(w, responder.id, playerComment.authorId);
   const branch = threadBranchOf(w, post, playerComment, 12);
   const humanReply = isHuman(w, playerComment.authorId);
-  const request = humanReply ? askWorldJSONInteractive : askWorldJSON;
+  /*
+   * The HUMAN wrote the parent comment, but this generated reply is still an
+   * autonomous world reaction. Keep it fast without reserving the same provider
+   * lane as a player's Scene/DM send. This lets provider backpressure defer and
+   * retry the world reaction instead of surfacing a browser-level 503.
+   */
+  const request = askWorldJSONResponsive;
   let raw = await request(
     w,
     `Write exactly ONE short public social-media reply as the supplied fictional character. Return JSON only.`,
@@ -67931,8 +68227,8 @@ JSON ONLY: {"text":"one direct reply"}`,
     {
       maxTokens: 260,
       maxTries: 2,
-      priority: humanReply ? 100 : 35,
-      maxBusyWaits: humanReply ? 2 : 1,
+      priority: humanReply ? 40 : 35,
+      maxBusyWaits: 1,
       busyRetryCapMs: 60000,
       timeoutMs: 18000,
       maxSystemChars: 1400,
@@ -67966,6 +68262,31 @@ JSON ONLY: {"text":"one direct reply"}`,
     }],
     changes: [],
     events: [],
+  };
+}
+
+
+function observerReactionDmReasonContext(w, bot, action) {
+  if (!w || !bot || !action || !action.payload) return null;
+  const trigger = String(action.payload.trigger || "");
+  if (!["romantic-jealousy", "conflict-observer"].includes(trigger)) return null;
+  const eventId = String(action.payload.eventId || "");
+  if (!eventId) return null;
+  const event = (w.socialEvents || []).find((row) => row && String(row.id || row.refId || "") === eventId);
+  if (!event || !observerActuallyKnowsSocialEvent(w, bot.id, event)) return null;
+  const basis = cut(String(event.text || "").replace(/\s+/g, " ").trim(), 260);
+  if (!basis) return null;
+  const reason = {
+    id: `observed-social-event:${event.id || event.refId}:${bot.id}`,
+    kind: "known-event",
+    basis: `A recent event I personally know about: ${basis}`,
+    refId: event.id || event.refId || "",
+    rank: 220,
+  };
+  return {
+    candidates: [reason],
+    primary: reason,
+    forcedBy: trigger,
   };
 }
 
@@ -70188,14 +70509,23 @@ if (targetNote) {
         ? autonomousDmReasonContextForPlayerPost(view, bot, playerPostTriggerId)
         : null;
 
-    /* A DM explicitly queued as a player-post reaction may NEVER silently
-       switch to an older unrelated autonomous reason if the post reason has
-       disappeared. Ordinary autonomous DMs keep their existing selector. */
+    const observerReactionReasonContext =
+      observerReactionDmReasonContext(view, bot, action);
+
+    /* A DM explicitly queued as a player-post or witnessed-social reaction may
+       NEVER silently switch to an unrelated older topic. */
     if (playerPostTriggerId && !playerPostReasonContext) {
+      return null;
+    }
+    if (
+      ["romantic-jealousy", "conflict-observer"].includes(String(action.payload && action.payload.trigger || "")) &&
+      !observerReactionReasonContext
+    ) {
       return null;
     }
 
     const autonomousReasonContext =
+      observerReactionReasonContext ||
       playerPostReasonContext ||
       autonomousDmReasonContext(view, bot);
 
@@ -70418,6 +70748,28 @@ if (targetNote) {
             : "",
         },
       ];
+
+      recordSocialEvent(n, {
+        type: "dm-message",
+        refId: spontaneousDmId,
+        ts: spontaneousDmTs,
+        actorId: bot.id,
+        targetIds: [n.meId],
+        visibility: "private",
+        factLevel: "observed",
+        importance: 22,
+        drama: Math.max(0, Math.min(100, Number((out && out.drama) || 0))),
+        romance: Math.max(0, Math.min(100, Number((out && out.romance) || 0))),
+        embarrassment: 0,
+        source: "ai",
+        text: txt || aiImageDescription || "DM",
+        tags: ["social", "dm", "autonomous-dm"],
+        meta: {
+          chatWith: bot.id,
+          reasonId: String(out && out.reasonId || autonomousReasonContext.primary.id || ""),
+          reasonType: String(autonomousReasonContext.primary.kind || ""),
+        },
+      });
 
       recordCharacterAgentAction(n, bot.id, {
         surface: "dm",
