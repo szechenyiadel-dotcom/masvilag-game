@@ -11445,6 +11445,27 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   let data;
   try { data = await res.json(); } catch (e) { data = null; }
 
+  if (
+    res.ok &&
+    data &&
+    data.deferred === true
+  ) {
+    const retryAfterMs = Math.max(
+      1500,
+      Math.min(15000, Number(data.retryAfterMs) || 3000)
+    );
+    if (!requestMeta.interactive) {
+      setCooldown(retryAfterMs, false);
+    }
+    AI.strikes = 0;
+    const err = new Error("A háttér-AI átmenetileg elhalasztva.");
+    err.busy = true;
+    err.backgroundDeferred = true;
+    err.noCooldown = true;
+    err.retryAfterMs = retryAfterMs;
+    throw err;
+  }
+
   if (!res.ok) {
     const code = res.status;
     /*
@@ -35617,6 +35638,15 @@ function applyNotePerceptionImpact(
       : []
   );
 
+  /* Every character sent in this Note-reaction cast has now evaluated this
+   * exact Note, even if they deliberately chose no emoji/DM and omitted a
+   * perception row. Marking the whole cast prevents the same silent character
+   * from being regenerated forever on later scheduler beats. */
+  castIds.forEach((actorId) => {
+    if (!actorId || actorId === note.authorId || isHuman(n, actorId)) return;
+    processed.add(actorId);
+  });
+
   const changes = [];
 
   (
@@ -53278,7 +53308,7 @@ Ha ír:
 }
 
 /* Reakciók a játékos jegyzetére. */
-async function genNoteReact(w, note) {
+async function genNoteReact(w, note, options = {}) {
   const reactedBy = new Set(
     note.reactedBy || []
   );
@@ -53320,7 +53350,12 @@ async function genNoteReact(w, note) {
     .filter(Boolean)
     .join(", ");
 
-  return askWorldJSON(
+  const noteReactionInteractive = Boolean(options && options.interactive);
+  const noteReactionAsk = noteReactionInteractive
+    ? askWorldJSONInteractive
+    : askWorldJSONResponsive;
+
+  const out = await noteReactionAsk(
     w,
     engineFor(w),
     `${worldContext(
@@ -53426,14 +53461,16 @@ Formátum:
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":3,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ]}${TAIL}`,
-      { maxTokens: 1100, priority: 25, maxBusyWaits: 1, busyRetryCapMs: 6000, timeoutMs: 18000 }
+      {
+        maxTokens: 1100,
+        priority: noteReactionInteractive ? 100 : Math.max(25, Number(options && options.priority) || 25),
+        maxBusyWaits: 1,
+        busyRetryCapMs: 6000,
+        timeoutMs: noteReactionInteractive ? 22000 : 18000,
+      }
     );
 
-  out.__castIds =
-    cast.map(
-      (c) => c.id
-    );
-
+  out.__castIds = cast.map((c) => c.id);
   return out;
 }
 
@@ -53733,6 +53770,7 @@ function ensureSimState(w) {
       lastNoteReactionAt: 0,
       lastRecoveryLane: "",
       lastRecoveryAttemptAt: 0,
+      backgroundBackoffUntil: 0,
       liveWorldStartedAt: now(),
       queueRepairVersion: 4,
       lastError: "",
@@ -53892,6 +53930,7 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.lastNoteReactionAt))) w.sim.lastNoteReactionAt = 0;
   if (typeof w.sim.lastRecoveryLane !== "string") w.sim.lastRecoveryLane = "";
   if (!Number.isFinite(Number(w.sim.lastRecoveryAttemptAt))) w.sim.lastRecoveryAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.backgroundBackoffUntil))) w.sim.backgroundBackoffUntil = 0;
   if (!Number.isFinite(Number(w.sim.liveWorldStartedAt))) w.sim.liveWorldStartedAt = now();
 
   /* LIVE WORLD CLOCK SANITY:
@@ -53918,6 +53957,7 @@ function ensureSimState(w) {
       "lastRoleplayInviteAt",
       "lastNoteReactionAt",
       "lastRecoveryAttemptAt",
+      "backgroundBackoffUntil",
     ];
 
     clockFields.forEach((field) => {
@@ -68856,12 +68896,19 @@ async function runSimulationAction(view, update, action, addImage, mediaMap = {}
     } catch (commentErr) {
       if (!isGuaranteedCoverage) throw commentErr;
 
-      console.warn(
-        isImmediatePlayerPostReaction
-          ? "Immediate player-post focused comment generation failed; retrying through the player reaction queue:"
-          : "Guaranteed comment generation failed; entering coverage backoff:",
-        commentErr
-      );
+      if (commentErr && commentErr.backgroundDeferred) {
+        console.info(
+          "[comment-coverage] provider busy; coverage deferred with backoff",
+          { postId: post.id }
+        );
+      } else {
+        console.warn(
+          isImmediatePlayerPostReaction
+            ? "Immediate player-post focused comment generation failed; retrying through the player reaction queue:"
+            : "Guaranteed comment generation failed; entering coverage backoff:",
+          commentErr
+        );
+      }
 
       if (commentErr && commentErr.busy) throw commentErr;
       generatedOut = null;
@@ -69197,8 +69244,10 @@ async function runSimulationAction(view, update, action, addImage, mediaMap = {}
     return null;
   }
 
-  const out =
-    await genNoteReact(view, note);
+  const out = await genNoteReact(view, note, {
+    interactive: action && action.source === "manual",
+    priority: action && action.source === "manual" ? 100 : 30,
+  });
 
   update((n) => {
     
@@ -73687,6 +73736,25 @@ const signOut = useCallback(async () => {
     ? pendingPlayerReplyAction(view2)
     : null;
 
+  const backgroundProviderBackoffUntil = Math.max(
+    0,
+    Number(view2.sim && view2.sim.backgroundBackoffUntil) || 0
+  );
+  const directHumanReplyQueued = isPlayerCommentReplyAction(view2, queued);
+
+  /* A provider-capacity miss pauses ALL autonomous lanes for a short bounded
+   * window. Manual actions and a direct reply to a fresh human comment still
+   * bypass this guard. Without this, a failed comment batch was followed five
+   * seconds later by a hard-heartbeat DM, producing a 503 cascade. */
+  if (
+    !manualQueued &&
+    !pendingReplyOverride &&
+    !directHumanReplyQueued &&
+    backgroundProviderBackoffUntil > now()
+  ) {
+    return;
+  }
+
   /* VISIBLE SOCIAL LATENCY FIX:
    * A fresh post that is still missing its first visible comment set must not sit
    * behind an unrelated old background action. Reuse the SAME single simulation
@@ -74052,6 +74120,16 @@ const signOut = useCallback(async () => {
             retryAfterMs,
             failedBusy ? PLAYER_REACTION_BUSY_BACKOFF_MS : 8000
           );
+
+          if (failedBusy) {
+            const sim = ensureSimState(n);
+            sim.backgroundBackoffUntil = Math.max(
+              Number(sim.backgroundBackoffUntil) || 0,
+              now() + retryDelay
+            );
+            sim.lastError = "provider-busy";
+          }
+
           action.payload = {
             ...(action.payload || {}),
             notBefore: now() + retryDelay,
@@ -74224,6 +74302,7 @@ const signOut = useCallback(async () => {
 
           const sim = ensureSimState(n);
           sim.lastSuccessAt = now();
+          sim.backgroundBackoffUntil = 0;
           sim.lastError = "";
         } else {
           const sim = ensureSimState(n);
