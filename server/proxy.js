@@ -1,4 +1,4 @@
-/* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
+/* MÁSVILÁG SERVER v19.1 — BACKGROUND BACKPRESSURE — 20260928 */
 /*
  * MÁSVILÁG — server/proxy.js
  * Full drop-in backend with authoritative multi-device world + media sync.
@@ -6460,6 +6460,22 @@ app.post(
       return res.json(result.payload);
     }
 
+    /* Background social/world work is intentionally deferable. Return a small,
+       explicit backoff instead of a generic exhausted-provider 503 so the client
+       can pause the whole sibling reaction bundle without reclassifying it as a
+       player-interactive failure. */
+    if (!interactiveRequest && first.backgroundDeferred) {
+      res.setHeader("retry-after", "3");
+      res.setHeader("x-masvilag-ai-provider", requestedProvider);
+      res.setHeader("x-masvilag-ai-upstream-status", "503");
+      return res.status(503).json({
+        error: {
+          code: "AI_BACKGROUND_DEFERRED",
+          message: "Background AI work deferred while provider capacity is reserved or recovering.",
+        },
+      });
+    }
+
     /*
      * NO LONG SERVER-SIDE COOLDOWN WAIT.
      * The first pass tried every free configured provider and, only when all
@@ -6490,6 +6506,8 @@ app.post(
         res.setHeader("retry-after", String(Math.max(1, Math.ceil(shortestFinalRetryMs / 1000))));
       } else if (last?.retryAfter) {
         res.setHeader("retry-after", last.retryAfter);
+      } else if ([429, 503, 529].includes(upstreamStatus)) {
+        res.setHeader("retry-after", "3");
       }
     }
 
