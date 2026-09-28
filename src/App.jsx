@@ -44866,6 +44866,117 @@ function roleplayMeaningfulTokenOverlap(a, b) {
   return common / Math.max(1, Math.min(left.size, right.size));
 }
 
+const ROLEPLAY_MANIPULABLE_PROP_RULES = [
+  { name: "phone", re: /\b(?:phone|cell\s*phone|cellphone|mobile|smartphone|telefon|mobil)\b/i },
+  { name: "keys", re: /\b(?:key|keys|kulcs|kulcsok)\b/i },
+  { name: "wallet", re: /\b(?:wallet|purse|pénztárca|penztarca)\b/i },
+  { name: "bag", re: /\b(?:bag|handbag|backpack|tote|táska|taska|hátizsák|hatizsak)\b/i },
+  { name: "drink-container", re: /\b(?:glass|cup|mug|bottle|pohár|pohar|csésze|csesze|bögre|bogre|üveg|uveg)\b/i },
+  { name: "paper-item", re: /\b(?:note|letter|paper|envelope|jegyzet|levél|level|papír|papir|boríték|boritek)\b/i },
+  { name: "book", re: /\b(?:book|notebook|journal|könyv|konyv|füzet|fuzet|napló|naplo)\b/i },
+  { name: "clothing-prop", re: /\b(?:jacket|coat|hoodie|kabát|kabat|dzseki|pulóver|pulover)\b/i },
+  { name: "smoking-device", re: /\b(?:cigarette|cigar|vape|iqos|lighter|cigi|cigaretta|szivar|öngyújtó|ongyujto)\b/i },
+  { name: "weapon", re: /\b(?:gun|pistol|rifle|knife|blade|weapon|pisztoly|fegyver|kés|kes|penge)\b/i },
+  { name: "remote", re: /\b(?:remote|remote\s+control|távirányító|taviranyito)\b/i },
+  { name: "photo", re: /\b(?:photo|photograph|picture|fotó|foto|fénykép|fenykep)\b/i },
+];
+
+function roleplayPhysicalGroundTruthText(scene, w, recentTurns = [], playerText = "") {
+  const rows = Array.isArray(recentTurns) ? recentTurns : [];
+  let memory = "";
+  try {
+    memory = scene && w ? sceneRoleplayMemoryCard(scene, w) : "";
+  } catch (e) {
+    memory = "";
+  }
+  return [
+    scene && scene.title,
+    scene && scene.setting,
+    memory,
+    ...rows.slice(-10).map((row) => row && row.text),
+    playerText,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function roleplayTrustedPhysicalPropGroundingText(scene, w, recentTurns = [], playerText = "") {
+  const rows = Array.isArray(recentTurns) ? recentTurns : [];
+  const trustedTurns = rows
+    .filter((row) => row && (row.authorId === "narrator" || isHuman(w, row.authorId)))
+    .slice(-12)
+    .map((row) => row.text);
+  return [
+    scene && scene.title,
+    scene && scene.setting,
+    ...trustedTurns,
+    playerText,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function roleplayPhysicalContinuityCard(scene, w, recentTurns = [], playerText = "") {
+  const ground = roleplayPhysicalGroundTruthText(scene, w, recentTurns, playerText);
+  const trustedProps = roleplayTrustedPhysicalPropGroundingText(scene, w, recentTurns, playerText);
+  return `PHYSICAL OBJECT / SPACE CONTINUITY LOCK — ABSOLUTE:
+- Treat the exact recent turns + short-term scene memory + current setting as the authoritative physical state, BUT do not let one unsupported AI line self-create a new prop.
+- NEVER invent a handheld/interactive prop and immediately behave as if it was already present, held, dropped, lying nearby, ringing, open, closed, switched on, or previously used.
+- A phone, keys, wallet, bag, glass/bottle, note/letter, book, jacket, cigarette/vape, weapon, remote, photo or similar manipulable object may be picked up, handed over, grabbed, checked, opened, used or referenced as physically present ONLY when a trusted anchor already established it: the scene setting, narrator/player action, or the player's CURRENT input.
+- An object mentioned ONLY by an AI line is NOT permission to retroactively invent that it had already been there. If there is no trusted anchor, drop the object and preserve the emotional/conversational beat without it.
+- NEVER tell the player to pick up / hand over / use an object that has not already been established. Example: do not say “pick up my phone” unless a phone was explicitly established before this reply.
+- Do NOT retroactively invent that an object was dropped, placed somewhere, taken out, left behind, ringing, vibrating or in somebody's hand.
+- Do not create a random phone call, text, notification, knock, package, letter or other prop/event to move the scene forward.
+- If no object is grounded, react through dialogue, facial expression, posture, distance, touch, movement or silence instead of manufacturing a prop.
+- Existing grounded objects may be used normally; this rule prevents NEW unsupported props, not legitimate continuity.
+TRUSTED PHYSICAL PROP ANCHORS:
+${String(trustedProps || "No explicit manipulable prop has been established by setting/player/narrator.").slice(-1800)}
+FULL RECENT PHYSICAL CONTEXT:
+${String(ground || "No explicit physical prop state beyond the setting/current people.").slice(-1800)}`;
+}
+
+function roleplayUnsupportedPhysicalPropRisk(turn, scene, w, recentTurns = [], playerText = "") {
+  if (!turn || !String(turn.text || "").trim()) return false;
+  const text = String(turn.text || "").replace(/\s+/g, " ").trim();
+  const manipulation = /\b(?:pick(?:s|ed|ing)?\s+up|grab(?:s|bed|bing)?|tak(?:e|es|en|ing)|took|hand(?:s|ed|ing)?|giv(?:e|es|en|ing)|gave|pass(?:es|ed|ing)?|bring(?:s|ing)?|brought|fetch(?:es|ed|ing)?|reach(?:es|ed|ing)?\s+for|pull(?:s|ed|ing)?\s+(?:out|from)|put(?:s|ting)?\s+down|set(?:s|ting)?\s+down|hold(?:s|ing)?|held|check(?:s|ed|ing)?|look(?:s|ed|ing)?\s+(?:at|through)|unlock(?:s|ed|ing)?|lock(?:s|ed|ing)?|open(?:s|ed|ing)?|close(?:s|d|ing)?|turn(?:s|ed|ing)?\s+(?:on|off)|switch(?:es|ed|ing)?\s+(?:on|off)|dial(?:s|ed|ing)?|text(?:s|ed|ing)?|scroll(?:s|ed|ing)?|felvesz|felkap|megfog|megragad|átad|atad|odaad|elvesz|elővesz|elovesz|letesz|lerak|érte\s+nyúl|erte\s+nyul|megnéz|megnez|kinyit|becsuk|bezár|bezar|felold|bekapcsol|kikapcsol)\b/i;
+  if (!manipulation.test(text)) return false;
+
+  const source = roleplayTrustedPhysicalPropGroundingText(scene, w, recentTurns, playerText);
+  for (const rule of ROLEPLAY_MANIPULABLE_PROP_RULES) {
+    rule.re.lastIndex = 0;
+    const inDraft = rule.re.test(text);
+    rule.re.lastIndex = 0;
+    const grounded = rule.re.test(source);
+    if (inDraft && !grounded) return true;
+  }
+  return false;
+}
+
+function roleplayRemoveUnsupportedPropSentences(turn, scene, w, recentTurns = [], playerText = "") {
+  if (!roleplayUnsupportedPhysicalPropRisk(turn, scene, w, recentTurns, playerText)) return turn;
+  const original = String(turn.text || "").trim();
+  const sentences = original.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+  const safe = sentences
+    .map((sentence) => String(sentence || "").trim())
+    .filter(Boolean)
+    .filter((sentence) => !roleplayUnsupportedPhysicalPropRisk({ ...turn, text: sentence }, scene, w, recentTurns, playerText));
+  if (safe.length) return { ...turn, text: safe.join(" ") };
+
+  const actor = charById(w, turn.authorId);
+  const actorName = actor && actor.name ? actor.name : "The character";
+  const en = worldLanguage(w, w.meId) === "en";
+  return {
+    ...turn,
+    text: turn.kind === "action"
+      ? (en ? `${actorName} pauses, reacting to the moment without reaching for anything.` : `${actorName} megtorpan, és a pillanatra reagál anélkül, hogy bármiért nyúlna.`)
+      : (en ? "Wait." : "Várj."),
+  };
+}
+
 function roleplayImmediateContinuityCard(
   w,
   recentTurns = [],
@@ -45131,9 +45242,24 @@ async function repairRoleplaySemanticDriftTurns(
   const risky = turns
     .map((turn, index) => ({ turn, index }))
     .filter(({ turn }) => {
-      if (!roleplaySemanticDriftRisk(turn, playerText, playerInputKind, recentTurns)) return false;
-      /* Prefer repairing the person the player is actually addressing. If the
-         target is unknown, repair any clearly risky AI line. */
+      const semanticRisk = roleplaySemanticDriftRisk(
+        turn,
+        playerText,
+        playerInputKind,
+        recentTurns
+      );
+      const physicalPropRisk = roleplayUnsupportedPhysicalPropRisk(
+        turn,
+        scene,
+        w,
+        recentTurns,
+        playerText
+      );
+      if (!semanticRisk && !physicalPropRisk) return false;
+      /* Unsupported physical props are always repaired, even when they appeared
+         in narrator/secondary-cast text. Semantic-only drift keeps the existing
+         addressee preference so unrelated cast members are not rewritten. */
+      if (physicalPropRisk) return true;
       return !playerTargetId || turn.authorId === playerTargetId || turn.to === w.meId;
     })
     .slice(0, 2);
@@ -45174,6 +45300,8 @@ ${roleplayImmediateContinuityCard(
   playerInputKind
 )}
 
+${roleplayPhysicalContinuityCard(scene, w, recentTurns, playerText)}
+
 EXACT RECENT SCENE:
 ${recentLog || "-"}
 
@@ -45194,6 +45322,8 @@ HARD RULES:
 - Do NOT invent a repeated behavioral pattern (“you always…”, “every time…”, “this is what you do…”) unless the exact recent turns actually demonstrate repetition.
 - Do NOT invent a new metaphor, vague symbolic accusation, therapy-speak or psychological diagnosis to manufacture depth.
 - Do NOT introduce new off-screen facts, motives, history, conflict or relationship milestones.
+- PHYSICAL PROP CONTINUITY: do NOT invent a new phone/keys/bag/drink/note/book/jacket/smoking device/weapon/remote/photo or similar manipulable object and act as if it was already present. Never repair a line into "pick up my phone" or any equivalent unless that object is explicitly grounded in the setting, scene memory, exact recent turns, or the player's current input.
+- If the bad draft introduced an unsupported object, REMOVE that object entirely and preserve the emotional/conversational intent through dialogue, expression, posture, movement, touch or silence instead.
 - Flirting may remain flirting, anger may remain anger, teasing may remain teasing; make it CONCRETE and conversational rather than cryptic.
 - Prefer one clear sentence or one short action over a clever but ambiguous monologue.
 - Do not write for the player. No emoji.
@@ -45216,14 +45346,22 @@ JSON ONLY:
     const next = turns.slice();
     if (!rows.length) {
       risky.forEach((target) => {
-        next[target.index] = roleplayConservativeDriftFallback(
-          target.turn,
-          playerText,
-          playerInputKind,
-          recentTurns
+        next[target.index] = roleplayRemoveUnsupportedPropSentences(
+          roleplayConservativeDriftFallback(
+            target.turn,
+            playerText,
+            playerInputKind,
+            recentTurns
+          ),
+          scene,
+          w,
+          recentTurns,
+          playerText
         );
       });
-      return next;
+      return next.map((turn) =>
+        roleplayRemoveUnsupportedPropSentences(turn, scene, w, recentTurns, playerText)
+      );
     }
     rows.forEach((row) => {
       const slot = Math.round(Number(row && row.slot));
@@ -45242,26 +45380,68 @@ JSON ONLY:
         return;
       }
       /* Never replace a risky line with another line that triggers the same
-         narrow continuity guard. */
-      if (roleplaySemanticDriftRisk({ ...original, text: cleaned }, playerText, playerInputKind, recentTurns)) {
-        next[target.index] = roleplayConservativeDriftFallback(original, playerText, playerInputKind, recentTurns);
+         semantic OR physical-prop continuity guard. */
+      const repairedCandidate = { ...original, text: cleaned };
+      if (
+        roleplaySemanticDriftRisk(
+          repairedCandidate,
+          playerText,
+          playerInputKind,
+          recentTurns
+        ) ||
+        roleplayUnsupportedPhysicalPropRisk(
+          repairedCandidate,
+          scene,
+          w,
+          recentTurns,
+          playerText
+        )
+      ) {
+        next[target.index] = roleplayRemoveUnsupportedPropSentences(
+          roleplayConservativeDriftFallback(
+            original,
+            playerText,
+            playerInputKind,
+            recentTurns
+          ),
+          scene,
+          w,
+          recentTurns,
+          playerText
+        );
         return;
       }
-      next[target.index] = { ...original, text: stripRoleplayEmoji(cleaned) };
+      next[target.index] = roleplayRemoveUnsupportedPropSentences(
+        { ...original, text: stripRoleplayEmoji(cleaned) },
+        scene,
+        w,
+        recentTurns,
+        playerText
+      );
     });
-    return next;
+    return next.map((turn) =>
+      roleplayRemoveUnsupportedPropSentences(turn, scene, w, recentTurns, playerText)
+    );
   } catch (err) {
     console.warn("Roleplay semantic continuity repair failed; applying conservative RP-only fallback:", err);
     const next = turns.slice();
     risky.forEach((target) => {
-      next[target.index] = roleplayConservativeDriftFallback(
-        target.turn,
-        playerText,
-        playerInputKind,
-        recentTurns
+      next[target.index] = roleplayRemoveUnsupportedPropSentences(
+        roleplayConservativeDriftFallback(
+          target.turn,
+          playerText,
+          playerInputKind,
+          recentTurns
+        ),
+        scene,
+        w,
+        recentTurns,
+        playerText
       );
     });
-    return next;
+    return next.map((turn) =>
+      roleplayRemoveUnsupportedPropSentences(turn, scene, w, recentTurns, playerText)
+    );
   }
 }
 
@@ -45502,6 +45682,12 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
         playerTarget.id || "",
         playerInputKind
       );
+      const physicalContinuityCard = roleplayPhysicalContinuityCard(
+        promptScene,
+        w,
+        promptTurns,
+        playerText
+      );
 
       /* SCENE-ONLY CAST LOCK:
        * The selected scene.cast is the authoritative attendance list. The model may
@@ -45588,6 +45774,8 @@ ${playerText ? (playerInputKind === "action"
 
 ${immediateContinuityCard}
 
+${physicalContinuityCard}
+
 ${characterAgentRuntimeCard(
   w,
   cast.map((c) => c.id),
@@ -45668,6 +45856,7 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 - Mindenki a SAJÁT hangmintája szerint szólaljon meg. A mondataik ne legyenek felcserélhetők, gépiesen egyformák vagy ugyanazon hangon megírva.
 - A párbeszéd és a cselekvés vigye a jelenetet, ne összefoglaló.
 - A szereplők kezdeményezhetnek, megszakíthatják egymást, kerülhetnek valakit, provokálhatnak, flörtölhetnek, összeveszhetnek vagy elterelhetik a témát, ha ez a személyiségükből és a helyzetből következik.
+- TÁRGYFOLYTONOSSÁG — ABSZOLÚT: ne találj ki új telefont, kulcsot, táskát, poharat/üveget, levelet, könyvet, kabátot, cigarettát/vape-et, fegyvert, távirányítót, fotót vagy más manipulálható kelléket úgy, mintha az már eddig is a jelenetben lett volna. Ilyen tárgyat csak akkor vegyen fel/adjon át/használjon/nézzen meg bárki, ha a setting, sceneMemory, exact recent turnök vagy a játékos MOSTANI inputja már explicit megalapozta. Soha ne mondd a játékosnak például, hogy "pick up my phone", ha telefon korábban nem volt megállapítva. Ha nincs grounded tárgy, reagálj beszéddel, arckifejezéssel, testtartással, távolsággal, érintéssel, mozgással vagy csenddel.
 - UGYANAZON KÖR FIZIKAI KONZISZTENCIÁJA: egy AI actionje és az utána adott speechje ugyanabban a generált körben nem mondhat ellent egymásnak. Ha az actionben már kinyitotta az ajtót, ne mondja utána saját maga úgy, hogy "Open the door" mintha az ajtó még csukva lenne; ha már leült/felállt/elindult/megfogott valamit, a következő saját sor ezt a friss fizikai állapotot vegye alapul.
 - ROMANTIKUS KEZDEMÉNYEZÉS: ha a karakterlap, kapcsolat, vonzalom és az aktuális helyzet indokolja, az AI ne csak reagáljon a játékos közeledésére. Ő maga is tehet első lépést: közelebb mehet, megérintheti a másik kezét/arcát karakterhű módon, megpróbálhat csókot kezdeményezni, viszonzott vonzalomnál csókolózást kezdeményezhet, vagy Mature 18+ módban felnőtt szereplők között nem részletező intimebb folytatást indíthat.
 - A romantikus kezdeményezés NEM kötelező minden vonzalomnál és ne legyen random. A merészebb/flörtölősebb/dominánsabb/impulzívabb karakterek könnyebben teszik meg az első lépést; a félénkebb, bizalmatlanabb vagy visszafogottabb karakterekhez lassabb kezdeményezés illik.
@@ -45972,6 +46161,8 @@ ${playerText ? (playerInputKind === "action"
 
 ${immediateContinuityCard}
 
+${physicalContinuityCard}
+
 KARAKTEREK — TÖMÖR, DE KÖTELEZŐ KÁNON + EMLÉKEZET:
 ${retryCast}
 
@@ -45984,6 +46175,7 @@ ${participationCard}
 SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
 - SZEMANTIKAI FOLYTONOSSÁG: a retry ne csak „új” legyen, hanem LOGIKAILAG a játékos legutóbbi konkrét speech/actionjának következő beatje. Rövid actionből ne találj ki „te mindig / minden alkalommal” viselkedésmintát, új homályos metaforát vagy nem megalapozott pszichoanalízist. Ha a játékos actiont írt, reagálj először arra, amit ténylegesen tett.
 - FOLLOW-UP REFERENCIA: „and what is that / what do you mean / what comes next” esetén válaszold meg az előző AI-mondat tényleges referenciáját; ne dodge-old „prove it / show me / you tell me / guess” típusú új kihívással.
+- TÁRGYFOLYTONOSSÁG: a retry sem találhat ki új telefont, kulcsot, táskát, italt, levelet, fegyvert vagy más manipulálható kelléket úgy, mintha már ott lett volna. Ha egy tárgy nincs explicit megalapozva a settingben, jelenetmemóriában, exact turnökben vagy a játékos mostani inputjában, ne vedd fel, ne add át, ne kérd a játékost hogy használja, és ne építs rá új akciót.
 - EMOJI TILOS minden roleplay beszédben, actionben, narrációban és minden visszaadott szövegmezőben.
 - Adj ${participationPlan.beatMin}-${participationPlan.beatMax} TELJESEN FRISS mozzanatot.
 - A MANDATORY FAIRNESS SPEAKERS/ACTORS listán szereplő minden AI-nak legyen legalább egy látható speech vagy action mozzanata.
