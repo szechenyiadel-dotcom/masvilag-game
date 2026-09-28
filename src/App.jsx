@@ -11450,9 +11450,13 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     data &&
     data.deferred === true
   ) {
+    /* BACKGROUND BACKPRESSURE v4:
+     * A deliberate backend defer is not a transient 3-second hiccup. Give the
+     * provider a real recovery window so the 5-second live-world beat cannot
+     * immediately manufacture another autonomous request. */
     const retryAfterMs = Math.max(
-      1500,
-      Math.min(15000, Number(data.retryAfterMs) || 3000)
+      30000,
+      Math.min(120000, Number(data.retryAfterMs) || 45000)
     );
     if (!requestMeta.interactive) {
       setCooldown(retryAfterMs, false);
@@ -11506,7 +11510,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
        */
       if (!requestMeta.interactive) {
         setCooldown(
-          Math.max(1500, Math.min(8000, retryAfterMs || 3000)),
+          Math.max(30000, Math.min(120000, retryAfterMs || 45000)),
           false
         );
       }
@@ -11519,7 +11523,9 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       );
       err.busy = true;
       err.noCooldown = true;
-      err.retryAfterMs = retryAfterMs;
+      err.retryAfterMs = requestMeta.interactive
+        ? retryAfterMs
+        : Math.max(30000, Math.min(120000, retryAfterMs || 45000));
       throw err;
     }
     AI.strikes = 0;
@@ -53750,8 +53756,8 @@ const SIM_DONE_TTL = 20 * 60000;
 const SIM_QUEUE_LIMIT = 40;
 const PLAYER_REACTIVE_QUEUE_MAX = 8;
 const PLAYER_POST_REACTION_MAX_AGE_MS = 8 * 60 * 1000;
-const PLAYER_REACTION_BUSY_BACKOFF_MS = 30 * 1000;
-const LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION = 1;
+const PLAYER_REACTION_BUSY_BACKOFF_MS = 45 * 1000;
+const LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION = 2;
 
 function ensureSimState(w) {
   if (!w.sim) {
@@ -53903,6 +53909,25 @@ function ensureSimState(w) {
     console.info("[recovery-queue] stale player-post reaction backlog repaired");
   }
 
+  /* HARD-HEARTBEAT QUEUE REPAIR v5:
+   * v3 could persist a provider-backed hard-heartbeat DM/Note. Those actions
+   * are obsolete in v4 because emergency liveness is local/provider-free. */
+  if (Math.max(0, Math.floor(Number(w.sim.queueRepairVersion) || 0)) < 5) {
+    w.sim.queue = (w.sim.queue || []).filter((action) => {
+      if (!action) return false;
+      const key = String(action.key || "");
+      const trigger = String(action.payload && action.payload.trigger || "");
+      return !(
+        key.startsWith("hard-heartbeat-dm:") ||
+        key.startsWith("hard-heartbeat-note:") ||
+        trigger === "hard-idle-heartbeat"
+      );
+    });
+    w.sim.running = "";
+    w.sim.queueRepairVersion = 5;
+    console.info("[recovery-queue] provider-backed hard-heartbeat backlog removed");
+  }
+
   /* v51 migration/runtime guard: a régi buildből bent maradt automatikus
    * comment queue ne élesszen fel régi posztokat az új feed-first ritmusban. */
   w.sim.queue = w.sim.queue.filter((action) => {
@@ -54019,7 +54044,7 @@ function ensureSimState(w) {
   /* v95 migration: clear stale background queue state from older schedulers.
      Manual requests survive; comments/follows/replies are rebuilt from the
      current world state without restart-created queue storms. */
-  if (Number(w.sim.schedulerVersion) !== 70) {
+  if (Number(w.sim.schedulerVersion) !== 71) {
     w.sim.queue = (w.sim.queue || []).filter((action) => action && action.source === "manual");
     w.sim.running = "";
     w.sim.dmAttemptAt = 0;
@@ -54031,10 +54056,10 @@ function ensureSimState(w) {
        successful DM/Event, which meant their hard deadline could never be
        reached for the FIRST occurrence. */
     w.sim.liveWorldStartedAt = now();
-    w.sim.schedulerVersion = 70;
+    w.sim.schedulerVersion = 71;
   }
-  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 70;
-  if (!Number.isFinite(Number(w.sim.queueRepairVersion))) w.sim.queueRepairVersion = 4;
+  if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 71;
+  if (!Number.isFinite(Number(w.sim.queueRepairVersion))) w.sim.queueRepairVersion = 5;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -66578,8 +66603,9 @@ function planAutoAction(view) {
     );
   }
 
-  const hardHeartbeat = pickHardIdleWorldHeartbeatAction(view);
-  if (hardHeartbeat) return hardHeartbeat;
+  /* v4: hard-idle recovery must never create a provider-backed DM/Note.
+   * Provider-free feed heartbeat runs in the scheduler before generative planning.
+   * Normal autonomous DM/Note still run through their ordinary cadence below. */
 
   /*
    * FEED HEARTBEAT:
@@ -70125,14 +70151,12 @@ if (targetNote) {
     let out =
       await genDM(view, bot, autonomousReasonContext);
 
-    if (!autonomousDmOutputMatchesReason(out, autonomousReasonContext)) {
-      try {
-        out = await genForcedEverydayDM(view, bot, autonomousReasonContext);
-      } catch (dmRetryErr) {
-        console.warn("Autonomous DM grounded retry failed:", dmRetryErr);
-      }
-    }
-
+    /* AUTONOMOUS DM SINGLE-CALL RULE v4:
+     * The old grounded repair made a SECOND provider request whenever the first
+     * answer failed validation. Under load this was exactly the request that
+     * tipped providers into 429, after which the heartbeat lane retried again.
+     * Autonomous DM is optional: one model attempt is enough. If its grounding
+     * is unusable, fall back locally instead of spending another provider slot. */
     if (!autonomousDmOutputMatchesReason(out, autonomousReasonContext)) {
       out = fallbackAutonomousDmResponse(view, bot, autonomousReasonContext);
     }
@@ -73811,16 +73835,12 @@ const signOut = useCallback(async () => {
       ? guaranteedPostCommentAction(view2, urgentFreshCoveragePost, "fresh-visible-priority")
       : null;
 
-  /* HARD LIVENESS OVERRIDE:
-   * Even if an old queue item is hanging around, four minutes with no VISIBLE AI
-   * activity is enough. A grounded DM wins; otherwise a fair-rotation AI Note is
-   * forced. Manual/player-reply work still stays above this. */
-  const hardIdleHeartbeatOverride =
-    !manualQueued &&
-    !pendingReplyOverride &&
-    liveWorldSilenceMs(view2) >= LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS
-      ? pickHardIdleWorldHeartbeatAction(view2)
-      : null;
+  /* HARD LIVENESS v4:
+   * Do NOT preempt the scheduler with a provider-backed DM/Note. The old
+   * hard-heartbeat lane was able to recreate the same DM key every 5 seconds
+   * after a 429. Provider-free runAutonomousFeedHeartbeat() below owns emergency
+   * visible liveness; ordinary DM/Note cadence remains generative. */
+  const hardIdleHeartbeatOverride = null;
 
   /*
    * RECOVERY v99.2:
@@ -73965,6 +73985,20 @@ const signOut = useCallback(async () => {
   }
 
   /* Background tabs may be browser-throttled, but we do not intentionally stop the world. */
+
+  /* PROVIDER-FREE HARD HEARTBEAT v4:
+   * Emergency liveness is resolved locally BEFORE any generative recovery lane.
+   * This makes a long provider outage incapable of turning into repeated
+   * hard-heartbeat DMs. */
+  if (
+    !manualQueued &&
+    !pendingReplyOverride &&
+    !directHumanReplyQueued &&
+    !queued &&
+    liveWorldSilenceMs(view2) >= LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS
+  ) {
+    if (runAutonomousFeedHeartbeat(view2, update)) return;
+  }
 
   const livenessRecoveryAction =
     !queued && !manualQueued
@@ -74150,7 +74184,7 @@ const signOut = useCallback(async () => {
         if (!ok && action) {
           const retryAfterMs = Math.max(
             0,
-            Math.min(60000, Number(runError && runError.retryAfterMs) || 0)
+            Math.min(120000, Number(runError && runError.retryAfterMs) || 0)
           );
           const failedBusy = Boolean(runError && runError.busy);
           const retryDelay = Math.max(
@@ -74170,6 +74204,18 @@ const signOut = useCallback(async () => {
               Number(sim.backgroundBackoffUntil) || 0,
               busyAt + retryDelay
             );
+            /* A failed autonomous DM is not a debt that must be repaid as soon
+             * as backoff expires. Rebase that lane's hunger clock as well. */
+            if (
+              action.type === "dm" &&
+              action.source !== "manual" &&
+              action.source !== "player-reactive"
+            ) {
+              sim.lastAutonomousDmAt = Math.max(
+                Number(sim.lastAutonomousDmAt) || 0,
+                busyAt
+              );
+            }
             sim.lastError = "provider-busy";
           }
 
