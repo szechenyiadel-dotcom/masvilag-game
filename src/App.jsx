@@ -44778,11 +44778,15 @@ function roleplayFollowupQuestionKind(value) {
       /^(?:so\s+)?what\s+do\s+you\s+mean(?:\s+by\s+(?:that|it))?\s*[?.!]*$/.test(raw) ||
       /^(?:and\s+)?what\s+(?:comes|happens)\s+next\s*[?.!]*$/.test(raw) ||
       /^(?:and\s+)?then(?:\s+what)?\s*[?.!]*$/.test(raw) ||
+      /^(?:and\s+|so\s+)?what\s*[?.!]*$/.test(raw) ||
+      /^(?:stop|stopping|do|doing|say|saying|mean|meaning|want|wanting)\s+what\s*[?.!]*$/.test(raw) ||
+      /^what\s+(?:exactly\s+)?(?:should\s+i|am\s+i\s+supposed\s+to|do\s+you\s+want\s+me\s+to)\s+(?:stop|do|say|change|fix)\s*[?.!]*$/.test(raw) ||
       /^(?:és\s+)?(?:az\s+)?mi\s+(?:az|lenne)\s*[?.!]*$/.test(raw) ||
       /^(?:és\s+)?mi\s+jön\s+(?:ezután|utána)\s*[?.!]*$/.test(raw) ||
       /^(?:és\s+)?utána\s+mi\s*[?.!]*$/.test(raw) ||
       /^(?:ezt|azt)\s+hogy\s+érted\s*[?.!]*$/.test(raw) ||
-      /^mire\s+gondolsz\s*[?.!]*$/.test(raw)) {
+      /^mire\s+gondolsz\s*[?.!]*$/.test(raw) ||
+      /^(?:mit\s+)?(?:hagyjak\s+abba|állítsak\s+le|csináljak|mondjak)\s*[?.!]*$/.test(raw)) {
     return "referent";
   }
 
@@ -44814,6 +44818,11 @@ function roleplayLatestPhysicalCue(value) {
 function roleplayDirectPlayerRequestCue(value) {
   const raw = String(value || "").replace(/\s+/g, " ").trim();
   if (!raw) return null;
+
+  /* Elliptical questions such as "Stop what?" contain an imperative-looking
+     verb but are NOT commands. They ask the addressed AI to resolve its own
+     immediately preceding statement, so never classify them as directives. */
+  if (roleplayFollowupQuestionKind(raw)) return null;
 
   const patterns = [
     ["approach", /\b(?:come\s+here|come\s+over|come\s+closer|come\s+with\s+me|get\s+over\s+here|gyere\s+ide|gyere\s+oda|gyere\s+k[oö]zelebb|gyere\s+velem)\b/i],
@@ -45030,6 +45039,7 @@ ${threadRows || "(no earlier stored beats)"}
 - The FIRST relevant AI beat must answer/react to the player's current message as the next turn of THIS exact exchange.
 - Resolve short replies, pronouns, ellipsis and references ("yes", "no", "okay", "why?", "what?", "and?", "that", "it", "him/her", "you said...", "I know", etc.) from the immediately preceding turns instead of inventing a new topic.
 - Do NOT restart introductions, re-establish context the characters already know, ask a generic conversation opener, jump to an unrelated memory, or replace the active topic with a random new issue.
+- If the exact recent thread already shows what the characters are discussing, NEVER reset with lines like "What did you want to talk about?", "What is it you wanted to talk about?", "So what do you want?", "Why are you here?" or equivalent generic openers. Continue the already-active subject.
 - Character initiative is allowed AFTER directly processing the current message; initiative must grow from this same thread, not erase it.
 - If the player clearly introduces a new subject, follow that new subject while preserving physical/location/relationship continuity.`;
 
@@ -45061,7 +45071,9 @@ DIRECT FOLLOW-UP REFERENT LOCK — HIGHEST PRIORITY:
 - PLAYER'S CURRENT QUESTION: "${String(playerText).slice(0, 500)}"
 - IT REFERS BACK TO ${actorName.toUpperCase()}'S IMMEDIATELY PRECEDING LINE/ACTION:
   "${String(previous.text || "").slice(0, 700)}"
-- ${actorName} must resolve THAT exact referent now. If the player asks “what is that / what do you mean / what comes next?”, give the actual meaning/answer in the first speech or concrete action beat.
+- ${actorName} must resolve THAT exact referent now. This includes elliptical follow-ups such as “Stop what?”, “Do what?”, “Say what?”, “What?”, “What should I stop?”, “what is that?”, “what do you mean?” and “what comes next?”.
+- For “Stop what?” after ${actorName} said “stop / please stop”, the next answer must state or clearly show WHAT ${actorName} meant the player should stop doing. It is NOT a new command from the player.
+- Do NOT reset to a generic opener such as “What did you want to talk about?” when the exact recent thread already shows the conversation is underway.
 - Do NOT answer only with a new challenge or dodge such as “prove it”, “show me”, “you tell me”, “guess”, “you know”, “figure it out”, or another vague question.
 - Teasing/flirting/challenging may come AFTER the referent is made clear, not instead of answering it.
 - Do not invent a new topic, metaphor, accusation or relationship thesis.`;
@@ -45202,7 +45214,11 @@ function roleplaySemanticDriftRisk(turn, playerText = "", playerInputKind = "spe
     const evasive = /^(?:then\s+)?(?:prove\s+it|show\s+me|you\s+tell\s+me|guess|figure\s+it\s+out|find\s+out|make\s+me|try\s+me|you\s+know(?:\s+exactly)?|don['’]?t\s+play\s+dumb|say\s+it\s+yourself|bizonyítsd|mutasd\s+meg|mondd\s+meg\s+te|találd\s+ki|tudod\s+te|ne\s+játszd\s+az\s+ártatlant)\b/i.test(text);
     if (evasive) return true;
 
-    if (followupKind === "referent" && text.length <= 160 && /^[^.!]*\?\s*$/.test(text)) {
+    /* A follow-up must not cause a conversation RESET. */
+    const genericConversationReset = /\b(?:what\s+(?:is\s+it\s+you|did\s+you|do\s+you)\s+want(?:ed)?\s+to\s+talk\s+about|what\s+did\s+you\s+want\s+to\s+say|so\s+what\s+do\s+you\s+want(?:\s+to\s+talk\s+about)?|why\s+are\s+you\s+here|what\s+brings\s+you\s+here)\b/i.test(text);
+    if (genericConversationReset) return true;
+
+    if (followupKind === "referent" && text.length <= 180 && /\?\s*$/.test(text)) {
       return true;
     }
   }
@@ -45318,7 +45334,7 @@ HARD RULES:
 - The new line must be immediately understandable as the NEXT beat after the latest player input and exact recent scene.
 - If the latest player input is an ACTION, respond to what physically/visibly just happened before adding interpretation.
 - If the latest player input is a direct command/request (for example "come here Daniel"), that command is the NEWEST conversational event. The addressed AI must react to it first (comply/refuse/hesitate/question in-character). NEVER repair the line by paraphrasing the AI's own previous monologue.
-- If the latest player input is a follow-up such as “and what is that?”, resolve the immediately preceding actor statement in the FIRST speech/action. Do not replace the answer with “prove it”, “show me”, “you tell me”, “guess”, “you know”, another challenge, or another vague question.
+- If the latest player input is a follow-up such as “and what is that?”, “Stop what?”, “Do what?”, “What?”, resolve the immediately preceding actor statement in the FIRST speech/action. “Stop what?” asks what the AI meant by its own previous “stop”; it is NOT a new stop-command from the player. Do not replace the answer with “prove it”, “show me”, “you tell me”, “guess”, “you know”, a generic “what did you want to talk about?” reset, another challenge, or another vague question.
 - Do NOT invent a repeated behavioral pattern (“you always…”, “every time…”, “this is what you do…”) unless the exact recent turns actually demonstrate repetition.
 - Do NOT invent a new metaphor, vague symbolic accusation, therapy-speak or psychological diagnosis to manufacture depth.
 - Do NOT introduce new off-screen facts, motives, history, conflict or relationship milestones.
@@ -45829,7 +45845,7 @@ ROLEPLAY FOLYTATÁS — FONTOS:
 
 - SZEMANTIKAI FOLYTONOSSÁG — LEGMAGASABB PRIORITÁS: a következő beatnek közvetlenül és érthetően abból kell következnie, ami az EXACT recent turnökben és különösen a játékos LEGUTÓBBI inputjában ténylegesen megtörtént. Ne írj „mélynek hangzó”, de nem megalapozott mondatot.
 - Ha a játékos legutóbbi inputja ACTION, az első releváns válasz először arra a konkrét látható mozdulatra/helyzetváltozásra reagáljon. Ne ugorj át rögtön egy új pszichológiai tézisre a karakteréről.
-- KÖZVETLEN FOLLOW-UP KÉRDÉS: ha a játékos olyan visszakérdezést ír, mint „and what is that?”, „what do you mean?”, „what comes next?”, „és az mi?”, akkor az megszólított AI SAJÁT közvetlenül előző állítására kérdez rá. Az első speech/action konkrétan oldja fel ezt a referenciát. „Then prove it”, „show me”, „you tell me”, „guess”, újabb homályos kérdés vagy új metafora önmagában NEM válasz.
+- KÖZVETLEN FOLLOW-UP KÉRDÉS: ha a játékos olyan visszakérdezést ír, mint „Stop what?”, „Do what?”, „What?”, „and what is that?”, „what do you mean?”, „what comes next?”, „és az mi?”, akkor az megszólított AI SAJÁT közvetlenül előző állítására kérdez rá. „Stop what?” azt jelenti: „pontosan mit hagyjak abba abból, amire TE az előbb azt mondtad, hogy stop?” — ez NEM új játékosi parancs. Az első speech/action konkrétan oldja fel ezt a referenciát. „Then prove it”, „show me”, „you tell me”, „guess”, „what did you want to talk about?” típusú reset, újabb homályos kérdés vagy új metafora önmagában NEM válasz.
 - TILOS egyetlen aktuális mozdulatból olyan ismétlődő mintát kitalálni, mint „you always…”, „every time…”, „this is what you do…”, „you keep doing this…”, ha a pontos korábbi turnök ezt nem bizonyítják.
 - Ne vezess be új, homályos metaforát csak azért, hogy drámaibbnak hangozzon a válasz. Metafora csak akkor folytatható, ha az exact jelenetben már ténylegesen felépült és a jelentése egyértelmű.
 - Egy flörtös vagy feszült válasz lehet rövid és direkt. A világos „közelebb jöttél → erre reagálok” jobb, mint egy költői, de logikailag nem következő monológ.
@@ -46174,7 +46190,7 @@ ${participationCard}
 
 SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
 - SZEMANTIKAI FOLYTONOSSÁG: a retry ne csak „új” legyen, hanem LOGIKAILAG a játékos legutóbbi konkrét speech/actionjának következő beatje. Rövid actionből ne találj ki „te mindig / minden alkalommal” viselkedésmintát, új homályos metaforát vagy nem megalapozott pszichoanalízist. Ha a játékos actiont írt, reagálj először arra, amit ténylegesen tett.
-- FOLLOW-UP REFERENCIA: „and what is that / what do you mean / what comes next” esetén válaszold meg az előző AI-mondat tényleges referenciáját; ne dodge-old „prove it / show me / you tell me / guess” típusú új kihívással.
+- FOLLOW-UP REFERENCIA: „Stop what? / Do what? / What? / and what is that / what do you mean / what comes next” esetén válaszold meg az előző AI-mondat tényleges referenciáját. „Stop what?” nem parancs, hanem az AI saját előző „stop” mondatára kérdez vissza. Ne dodge-old „prove it / show me / you tell me / guess” kihívással, és ne reseteld „what did you want to talk about?” típusú beszélgetésnyitásra.
 - TÁRGYFOLYTONOSSÁG: a retry sem találhat ki új telefont, kulcsot, táskát, italt, levelet, fegyvert vagy más manipulálható kelléket úgy, mintha már ott lett volna. Ha egy tárgy nincs explicit megalapozva a settingben, jelenetmemóriában, exact turnökben vagy a játékos mostani inputjában, ne vedd fel, ne add át, ne kérd a játékost hogy használja, és ne építs rá új akciót.
 - EMOJI TILOS minden roleplay beszédben, actionben, narrációban és minden visszaadott szövegmezőben.
 - Adj ${participationPlan.beatMin}-${participationPlan.beatMax} TELJESEN FRISS mozzanatot.
