@@ -2093,7 +2093,15 @@ app.post("/world/save", async (req, res) => {
       client.release();
       client = null;
 
-      return res.status(409).json({
+      /*
+       * CONFLICT-AS-DATA v8:
+       * Keep optimistic concurrency exactly as strict as before, but return the
+       * authoritative conflict payload with HTTP 200. The client recreates an
+       * internal synthetic 409 and runs the existing safe merge path, while the
+       * browser no longer logs every expected autosave race as a failed resource.
+       */
+      return res.status(200).json({
+        conflict: true,
         code: "WORLD_CONFLICT",
         error: "The world changed on another client.",
         meId: session.accountId,
@@ -6624,6 +6632,27 @@ app.post(
         "No provider returned a usable response."
       )
     );
+
+    if (
+      interactiveRequest &&
+      [429, 503, 529].includes(upstreamStatus)
+    ) {
+      const retryAfterMs = Math.max(
+        1200,
+        Math.min(8000, shortestFinalRetryMs || 2200)
+      );
+      res.setHeader("retry-after", String(Math.ceil(retryAfterMs / 1000)));
+      res.setHeader("x-masvilag-ai-deferred", "1");
+      return res.status(200).json({
+        deferred: true,
+        interactive: true,
+        retryAfterMs,
+        error: {
+          code: "AI_INTERACTIVE_DEFERRED",
+          message: "All configured AI providers are temporarily at capacity after fresh failover.",
+        },
+      });
+    }
 
     if (interactiveRequest) {
       return res
