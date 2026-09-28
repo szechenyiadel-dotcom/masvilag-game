@@ -11479,13 +11479,14 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       }
 
       /*
-       * NO PLAYER COOLDOWN: the proxy already attempted all configured providers.
-       * Do not convert a provider 429/503 into a 12-60 second browser sleep. Keep
-       * only a short hidden background breaker so autonomous jobs do not spin.
+       * PLAYER requests still never wait on this hidden breaker. Background work,
+       * however, MUST respect the provider's real Retry-After window; retrying a
+       * heartbeat every few seconds only creates another 429 and keeps the world
+       * visibly empty. Keep it hidden and capped at one minute.
        */
       if (!requestMeta.interactive) {
         setCooldown(
-          Math.max(1500, Math.min(8000, retryAfterMs || 3000)),
+          Math.max(5000, Math.min(60000, retryAfterMs || 15000)),
           false
         );
       }
@@ -69878,8 +69879,29 @@ if (targetNote) {
       return null;
     }
 
-    let out =
-      await genDM(view, bot, autonomousReasonContext);
+    let out;
+    try {
+      out = await genDM(view, bot, autonomousReasonContext);
+    } catch (dmErr) {
+      /* HARD-IDLE FAILSAFE: if the provider itself is rate-limited, do not hammer
+         the exact same heartbeat DM every scheduler beat. For the four-minute
+         liveness heartbeat only, fall back to the already-grounded deterministic
+         DM builder. It uses the exact selected reason and does not invent a new
+         topic. Other autonomous DMs keep their normal failure semantics. */
+      const hardIdleHeartbeat = Boolean(
+        action &&
+        action.payload &&
+        action.payload.trigger === "hard-idle-heartbeat"
+      );
+      if (hardIdleHeartbeat && dmErr && dmErr.busy) {
+        out = fallbackAutonomousDmResponse(view, bot, autonomousReasonContext);
+        if (!out || out.skip || !String(out.text || "").trim()) {
+          throw dmErr;
+        }
+      } else {
+        throw dmErr;
+      }
+    }
 
     if (!autonomousDmOutputMatchesReason(out, autonomousReasonContext)) {
       try {
@@ -73521,6 +73543,15 @@ const signOut = useCallback(async () => {
 
   const view2 = viewRef.current;
   if (!view2 || !(view2.chars || []).length) return;
+
+  /* RATE-LIMIT LOOP BREAKER: automatic world actions yield while the hidden
+     provider breaker is active. Direct player DM/Scene/Group requests use the
+     interactive lane and are not blocked here. A provider-free feed heartbeat
+     may still rescue a genuinely due event-grounded post. */
+  if (cooldownLeft() > 0) {
+    runAutonomousFeedHeartbeat(view2, update);
+    return;
+  }
 
   const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
