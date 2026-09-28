@@ -1,4 +1,4 @@
-/* MÁSVILÁG SERVER v19.1 — BACKGROUND BACKPRESSURE — 20260928 */
+/* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
 /*
  * MÁSVILÁG — server/proxy.js
  * Full drop-in backend with authoritative multi-device world + media sync.
@@ -2093,15 +2093,7 @@ app.post("/world/save", async (req, res) => {
       client.release();
       client = null;
 
-      /*
-       * CONFLICT-AS-DATA v8:
-       * Keep optimistic concurrency exactly as strict as before, but return the
-       * authoritative conflict payload with HTTP 200. The client recreates an
-       * internal synthetic 409 and runs the existing safe merge path, while the
-       * browser no longer logs every expected autosave race as a failed resource.
-       */
-      return res.status(200).json({
-        conflict: true,
+      return res.status(409).json({
         code: "WORLD_CONFLICT",
         error: "The world changed on another client.",
         meId: session.accountId,
@@ -3171,7 +3163,6 @@ function visionTextFromAnthropic(data) {
 }
 
 app.post("/ai/vision", async (req, res) => {
-  let visionStage = "auth";
   try {
     if (!(await requireDb(res))) return;
 
@@ -3186,7 +3177,6 @@ app.post("/ai/vision", async (req, res) => {
       });
     }
 
-    visionStage = "image";
     const image =
       await resolveInputImage(
         req.body?.image
@@ -3218,20 +3208,10 @@ app.post("/ai/vision", async (req, res) => {
       });
     }
 
-    visionStage = "provider";
     const provider =
       getProvider(
         req.body || {}
       );
-
-    const throttled = providerCooldownResult(provider);
-    if (throttled) {
-      res.setHeader("retry-after", throttled.retryAfter);
-      return res.status(req.body?.optional === true ? 200 : 429).json({
-        ok: false, text: "", code: "PROVIDER_RATE_LIMIT", retryAfter: throttled.retryAfter,
-        error: "A képelemző szolgáltatás átmenetileg túlterhelt.",
-      });
-    }
 
     if (
       provider === "openai"
@@ -3261,7 +3241,7 @@ app.post("/ai/vision", async (req, res) => {
             );
 
       const r =
-        await fetchWithTimeout(
+        await fetch(
           "https://api.openai.com/v1/chat/completions",
           {
             method: "POST",
@@ -3308,8 +3288,6 @@ app.post("/ai/vision", async (req, res) => {
           );
 
       if (!r.ok) {
-        if (r.status === 429) recordProviderCooldown(provider, r.headers.get("retry-after"));
-        if (r.headers.get("retry-after")) res.setHeader("retry-after", r.headers.get("retry-after"));
         return res
           .status(r.status)
           .json(payload);
@@ -3365,7 +3343,7 @@ app.post("/ai/vision", async (req, res) => {
       );
 
       const r =
-        await fetchWithTimeout(
+        await fetch(
           url,
           {
             method:
@@ -3412,8 +3390,6 @@ app.post("/ai/vision", async (req, res) => {
           );
 
       if (!r.ok) {
-        if (r.status === 429) recordProviderCooldown(provider, r.headers.get("retry-after"));
-        if (r.headers.get("retry-after")) res.setHeader("retry-after", r.headers.get("retry-after"));
         return res
           .status(r.status)
           .json(payload);
@@ -3465,7 +3441,7 @@ app.post("/ai/vision", async (req, res) => {
           );
 
     const r =
-      await fetchWithTimeout(
+      await fetch(
         "https://api.anthropic.com/v1/messages",
         {
           method: "POST",
@@ -3522,8 +3498,6 @@ app.post("/ai/vision", async (req, res) => {
         );
 
     if (!r.ok) {
-      if (r.status === 429) recordProviderCooldown(provider, r.headers.get("retry-after"));
-      if (r.headers.get("retry-after")) res.setHeader("retry-after", r.headers.get("retry-after"));
       return res
         .status(r.status)
         .json(payload);
@@ -3539,26 +3513,14 @@ app.post("/ai/vision", async (req, res) => {
         "anthropic",
     });
   } catch (err) {
-    console.error("Vision proxy error:", err);
+    console.error(
+      "Vision proxy error:",
+      err
+    );
 
-    // A távoli kép letöltési hibája nem a képelemző modell hibája.
-    // Ezt külön jelezzük, hogy a hiba oka a konzolban is kiderüljön.
-    const reason = String(err && err.message || "");
-    const remoteImageError = visionStage === "image";
-    if (remoteImageError && req.body?.optional === true) {
-      // A background enrichment is optional. Preserve the post/manual caption
-      // and explicitly report that no image understanding was produced.
-      return res.json({ ok: false, text: "", code: "IMAGE_UNAVAILABLE",
-        error: "A külső kép nem érhető el elemzéshez; a megadott képleírás marad." });
-    }
-    const timedOut = err && (err.name === "AbortError" || /timed out|timeout/i.test(reason));
-
-    return res.status(remoteImageError ? 422 : timedOut ? 504 : 502).json({
-      error: remoteImageError
-        ? "A külső kép nem tölthető le elemzéshez. Töltsd fel a képet közvetlenül, vagy használj másik képlinket."
-        : timedOut
-          ? "A képelemzés időtúllépés miatt nem sikerült."
-          : "A képelemző szolgáltatás jelenleg nem válaszol.",
+    return res.status(502).json({
+      error:
+        "Vision analysis failed.",
     });
   }
 });
@@ -4809,10 +4771,6 @@ async function proxyGeminiMessage(
           "gemini",
       };
 
-      if (r.status === 429) {
-        break;
-      }
-
       if (
         !retryableProviderStatus(
           r.status
@@ -5001,10 +4959,6 @@ async function proxyAnthropicMessage(
           "anthropic",
       };
 
-      if (r.status === 429) {
-        break;
-      }
-
       if (
         !retryableProviderStatus(
           r.status
@@ -5036,301 +4990,30 @@ async function proxyAnthropicMessage(
   );
 }
 
-const AI_PROVIDER_COOLDOWNS = new Map();
+async function callMessageProvider(
+  provider,
+  body
+) {
+  if (
+    provider === "openai"
+  ) {
+    return proxyOpenAIMessage(
+      body
+    );
+  }
 
-function recordProviderCooldown(provider, retryAfter) {
-  const seconds = Number(retryAfter);
-  const requestedMs = Number.isFinite(seconds) && seconds > 0
-    ? seconds * 1000
-    : Math.max(0, Date.parse(String(retryAfter || "")) - Date.now()) || 0;
-  const until = Date.now() + Math.max(12000, requestedMs);
-  AI_PROVIDER_COOLDOWNS.set(
-    provider,
-    Math.max(until, AI_PROVIDER_COOLDOWNS.get(provider) || 0)
+  if (
+    provider === "gemini"
+  ) {
+    return proxyGeminiMessage(
+      body
+    );
+  }
+
+  return proxyAnthropicMessage(
+    body
   );
 }
-
-function providerCooldownResult(provider) {
-  const until = AI_PROVIDER_COOLDOWNS.get(provider) || 0;
-  if (until <= Date.now()) {
-    AI_PROVIDER_COOLDOWNS.delete(provider);
-    return null;
-  }
-  return {
-    ok: false,
-    status: 429,
-    provider,
-    retryAfter: String(Math.ceil((until - Date.now()) / 1000)),
-    payload: {
-      error: {
-        message: "AI provider rate limit; waiting for Retry-After.",
-      },
-    },
-  };
-}
-
-/* -------------------------------------------------------------------------
-   /ai/messages RATE-LIMIT GATE
-
-   Keep at most one message request in flight per provider. IMPORTANT: a
-   provider already in cooldown is returned to the route immediately so the
-   route can try another configured provider instead of wasting the browser's
-   timeout window waiting on the same rate-limited upstream.
-   ------------------------------------------------------------------------- */
-const AI_PROVIDER_TASK_QUEUES = new Map();
-const AI_PROVIDER_LAST_START = new Map();
-
-/*
- * INTERACTIVE CAPACITY SMOOTHING
- * ------------------------------
- * Player requests never inherit the long cached provider cooldown. They get
- * one fresh probe per configured provider. If every provider is merely busy
- * with another in-flight request, wait only a tiny invisible window for the
- * first one to free up instead of returning an immediate false-capacity error.
- *
- * Background work stays out of the way for a short grace period after any
- * player request so it cannot steal the slot between two Scene/DM turns.
- */
-const AI_INTERACTIVE_MICRO_WAIT_MS = Math.max(
-  400,
-  Math.min(3000, Number(process.env.AI_INTERACTIVE_MICRO_WAIT_MS) || 1800)
-);
-const AI_BACKGROUND_MICRO_WAIT_MS = Math.max(
-  500,
-  Math.min(5000, Number(process.env.AI_BACKGROUND_MICRO_WAIT_MS) || 2500)
-);
-const AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS = Math.max(
-  500,
-  Math.min(8000, Number(process.env.AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS) || 2800)
-);
-let AI_LAST_INTERACTIVE_REQUEST_AT = 0;
-
-function sleepMs(ms) {
-  return new Promise((resolve) =>
-    setTimeout(resolve, Math.max(0, Number(ms) || 0))
-  );
-}
-
-function retryAfterMs(value, fallbackMs = 12000) {
-  const raw = String(value || "").trim();
-  const seconds = Number(raw);
-
-  if (Number.isFinite(seconds) && seconds > 0) {
-    return Math.ceil(seconds * 1000);
-  }
-
-  const dateMs = Date.parse(raw);
-  if (Number.isFinite(dateMs)) {
-    return Math.max(0, dateMs - Date.now());
-  }
-
-  return Math.max(1000, Number(fallbackMs) || 12000);
-}
-
-/*
- * MULTI-USER PROVIDER GATE
- *
- * Exactly one upstream message request may run on a given provider at once,
- * but INTERACTIVE requests must not blindly wait behind that provider when a
- * different configured provider is free. The route below can inspect this gate
- * and immediately spill a second user's Scene/DM request onto a free fallback.
- * Background work remains lower priority inside every provider queue.
- */
-function providerTaskQueue(provider) {
-  let state = AI_PROVIDER_TASK_QUEUES.get(provider);
-  if (!state) {
-    state = {
-      running: false,
-      runningInteractive: false,
-      interactive: [],
-      background: [],
-    };
-    AI_PROVIDER_TASK_QUEUES.set(provider, state);
-  }
-  return state;
-}
-
-function providerTaskState(provider) {
-  return AI_PROVIDER_TASK_QUEUES.get(provider) || null;
-}
-
-function providerQueueLoad(provider) {
-  const state = providerTaskState(provider);
-  if (!state) return 0;
-  return (state.running ? 1 : 0) +
-    (Array.isArray(state.interactive) ? state.interactive.length : 0) +
-    (Array.isArray(state.background) ? state.background.length : 0);
-}
-
-function providerIsRunning(provider) {
-  const state = providerTaskState(provider);
-  return !!(state && state.running);
-}
-
-function providerHasInteractivePressure(provider) {
-  const state = providerTaskState(provider);
-  return !!(
-    state &&
-    (
-      state.runningInteractive ||
-      (Array.isArray(state.interactive) && state.interactive.length > 0)
-    )
-  );
-}
-
-function anyInteractiveProviderPressure() {
-  for (const provider of AI_PROVIDER_TASK_QUEUES.keys()) {
-    if (providerHasInteractivePressure(provider)) return true;
-  }
-  return false;
-}
-
-function pumpProviderTaskQueue(provider) {
-  const state = AI_PROVIDER_TASK_QUEUES.get(provider);
-  if (!state || state.running) return;
-
-  const task =
-    state.interactive.shift() ||
-    state.background.shift();
-
-  if (!task) {
-    AI_PROVIDER_TASK_QUEUES.delete(provider);
-    return;
-  }
-
-  state.running = true;
-  state.runningInteractive = !!task.interactive;
-
-  const lastStart = Number(AI_PROVIDER_LAST_START.get(provider) || 0);
-  const minGapMs = task.interactive ? 120 : 900;
-  const delayMs = Math.max(0, minGapMs - (Date.now() - lastStart));
-
-  setTimeout(async () => {
-    AI_PROVIDER_LAST_START.set(provider, Date.now());
-
-    try {
-      task.resolve(await task.work());
-    } catch (err) {
-      task.reject(err);
-    } finally {
-      state.running = false;
-      state.runningInteractive = false;
-      queueMicrotask(() => pumpProviderTaskQueue(provider));
-    }
-  }, delayMs);
-}
-
-function runProviderScheduled(provider, interactive, work) {
-  return new Promise((resolve, reject) => {
-    const state = providerTaskQueue(provider);
-    const task = {
-      interactive: !!interactive,
-      work,
-      resolve,
-      reject,
-    };
-
-    if (task.interactive) {
-      state.interactive.push(task);
-    } else {
-      state.background.push(task);
-    }
-
-    pumpProviderTaskQueue(provider);
-  });
-}
-
-function preserveMessageEdges(value, maxChars) {
-  const text = String(value || "");
-  const max = Math.max(1000, Number(maxChars) || 1000);
-  if (text.length <= max) return text;
-  const marker = "\n\n[… rate-limit compacted …]\n\n";
-  const room = Math.max(0, max - marker.length);
-  const head = Math.floor(room * 0.38);
-  const tail = room - head;
-  return text.slice(0, head) + marker + text.slice(-tail);
-}
-
-function messageBodyCharSize(body = {}) {
-  let total = String(body?.system || "").length;
-  for (const item of Array.isArray(body?.messages) ? body.messages : []) {
-    total += extractText(item?.content || "").length;
-  }
-  return total;
-}
-
-function compactMessageBodyForRateLimit(body = {}) {
-  const next = { ...(body || {}) };
-  next.system = preserveMessageEdges(next.system, 8000);
-
-  const messages = Array.isArray(next.messages) ? next.messages.slice(-8) : [];
-  next.messages = messages.map((item, index) => {
-    const copy = { ...(item || {}) };
-    const content = extractText(copy.content || "");
-    /* Keep the newest user turn most generously; older context is only a
-       fallback aid when the original request would be rate-limit heavy. */
-    const limit = index === messages.length - 1 ? 14000 : 2500;
-    copy.content = preserveMessageEdges(content, limit);
-    return copy;
-  });
-
-  const maxTokens = Number(next.max_tokens);
-  next.max_tokens = Math.min(
-    Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 1024,
-    700
-  );
-
-  return next;
-}
-
-async function callMessageProvider(provider, body) {
-  const interactive = String(body?.masvilag_priority || "") === "interactive";
-
-  /*
-   * Player work owns the fast lane. Autonomous/background work is optional in
-   * the current instant, so it must never occupy a provider while a Scene/DM is
-   * already active or waiting. Defer it immediately; the live-world scheduler
-   * will try again later without blocking a human request.
-   */
-  if (!interactive && anyInteractiveProviderPressure()) {
-    return {
-      ok: false,
-      status: 503,
-      deferred: true,
-      provider,
-      payload: {
-        error: {
-          code: "BACKGROUND_DEFERRED",
-          message: "Background AI deferred while player interaction has priority.",
-        },
-      },
-    };
-  }
-
-  return runProviderScheduled(provider, interactive, async () => {
-    /*
-     * Cached cooldowns are a BACKGROUND circuit-breaker, not a hard lock on
-     * player actions. A player request gets one fresh upstream probe; if the
-     * provider is still limited it will return a real 429 and we immediately
-     * fall through to another configured provider.
-     */
-    const throttled = interactive ? null : providerCooldownResult(provider);
-    if (throttled) return throttled;
-
-    const result = provider === "openai"
-      ? await proxyOpenAIMessage(body)
-      : provider === "gemini"
-        ? await proxyGeminiMessage(body)
-        : await proxyAnthropicMessage(body);
-
-    if (result && Number(result.status) === 429) {
-      recordProviderCooldown(provider, result.retryAfter);
-    }
-
-    return result;
-  });
-}
-
 /* -------------------------------------------------------------------------
    SEMANTIC CHARACTER MEMORY — v37
 
@@ -6270,401 +5953,155 @@ app.post(
     "/ai/respond",
   ],
   async (req, res) => {
-    const requestedProvider = getProvider(req.body || {});
-
-    const configuredFallbacks = [
-      "anthropic",
-      "openai",
-      "gemini",
-    ]
-      .filter((p) => p !== requestedProvider)
-      .filter((p) =>
-        p === "anthropic"
-          ? ANTHROPIC_API_KEY
-          : p === "openai"
-            ? OPENAI_API_KEY
-            : GEMINI_API_KEY
+    const requestedProvider =
+      getProvider(
+        req.body || {}
       );
 
-    const providers = [requestedProvider, ...configuredFallbacks];
+    const configuredFallbacks =
+      [
+        "anthropic",
+        "openai",
+        "gemini",
+      ]
+        .filter(
+          (p) =>
+            p !==
+            requestedProvider
+        )
+        .filter(
+          (p) =>
+            p === "anthropic"
+              ? ANTHROPIC_API_KEY
+              : p === "openai"
+                ? OPENAI_API_KEY
+                : GEMINI_API_KEY
+        );
+
+    const providers = [
+      requestedProvider,
+      ...configuredFallbacks,
+    ];
+
     let last = null;
 
-    const runPass = async (body) => {
-      const limited = [];
-      const busyProviders = [];
-      const interactive = String(body?.masvilag_priority || "") === "interactive";
-
-      if (interactive) {
-        AI_LAST_INTERACTIVE_REQUEST_AT = Date.now();
-      }
-
-      /*
-       * FAST MULTI-USER ROUTING
-       * --------------------------
-       * - Player Scene/DM requests never queue behind a busy provider.
-       * - They immediately spill to the next configured free provider.
-       * - Background work yields to real interactive pressure, but may use a
-       *   free configured fallback or a tiny bounded wait before deferring.
-       * - No long cooldown sleep/retry loop exists here.
-       */
-      if (!interactive) {
-        const recentInteractive =
-          Date.now() - AI_LAST_INTERACTIVE_REQUEST_AT <
-          AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS;
-
-        /* Background work yields only to REAL player pressure. A provider being
-           busy by itself is not a reason to emit an immediate 503: another
-           configured provider may be free, or the current one may finish inside
-           the small bounded background wait below. */
-        if (anyInteractiveProviderPressure() || recentInteractive) {
-          return {
-            ok: false,
-            limited,
-            busyProviders: [],
-            backgroundDeferred: true,
-          };
-        }
-      }
-
-      const passProviders = [];
-
-      for (const provider of providers) {
-        /*
-         * Do not reject a Scene/DM because of an OLD cached Retry-After.
-         * Interactive traffic gets one fresh probe; background traffic still
-         * honors the circuit-breaker.
-         */
-        const throttled = interactive ? null : providerCooldownResult(provider);
-        if (throttled) {
-          last = throttled;
-          limited.push(throttled);
-          continue;
-        }
-
-        if (providerIsRunning(provider)) {
-          busyProviders.push(provider);
-          continue;
-        }
-
-        passProviders.push(provider);
-      }
-
-      for (const provider of passProviders) {
-        try {
-          const result = await callMessageProvider(provider, body);
-
-          if (result?.ok) {
-            return { ok: true, result, limited, busyProviders };
-          }
-
-          if (result?.deferred) {
-            continue;
-          }
-
-          if (result?.unavailable) {
-            continue;
-          }
-
-          last = result;
-
-          if (Number(result?.status) === 429) {
-            limited.push(result);
-            continue;
-          }
-
-          /* Provider-specific errors fall through to the next configured one. */
-          continue;
-        } catch (err) {
-          last = {
-            status: err?.name === "AbortError" ? 504 : 502,
-            payload: {
-              error: {
-                message:
-                  err?.name === "AbortError"
-                    ? `${provider} timed out.`
-                    : (err?.message || `${provider} proxy error`),
-              },
-            },
-            provider,
-          };
-        }
-      }
-
-      /*
-       * If every otherwise-healthy provider was only BUSY with an in-flight
-       * request, give the first one that frees a tiny invisible micro-window.
-       * This is NOT a cooldown and there is no countdown/retry sleep in the
-       * browser. It prevents the false "no provider could answer immediately"
-       * error when two users press Send a moment apart.
-       */
-      if (interactive && busyProviders.length) {
-        const deadline = Date.now() + AI_INTERACTIVE_MICRO_WAIT_MS;
-        let releasedProvider = "";
-
-        while (Date.now() < deadline) {
-          releasedProvider =
-            [...busyProviders]
-              .filter((provider) => !providerIsRunning(provider))
-              .sort((a, b) => providerQueueLoad(a) - providerQueueLoad(b))[0] ||
-            "";
-
-          if (releasedProvider) break;
-          await sleepMs(70);
-        }
-
-        if (releasedProvider) {
-          try {
-            const result = await callMessageProvider(releasedProvider, body);
-
-            if (result?.ok) {
-              return { ok: true, result, limited, busyProviders };
-            }
-
-            if (!result?.deferred && !result?.unavailable) {
-              last = result;
-              if (Number(result?.status) === 429) {
-                limited.push(result);
-              }
-            }
-          } catch (err) {
-            last = {
-              status: err?.name === "AbortError" ? 504 : 502,
-              payload: {
-                error: {
-                  message:
-                    err?.name === "AbortError"
-                      ? `${releasedProvider} timed out.`
-                      : (err?.message || `${releasedProvider} proxy error`),
-                },
-              },
-              provider: releasedProvider,
-            };
-          }
-        }
-      }
-
-      if (!interactive && busyProviders.length && !anyInteractiveProviderPressure()) {
-        const deadline = Date.now() + AI_BACKGROUND_MICRO_WAIT_MS;
-        let releasedProvider = "";
-
-        while (Date.now() < deadline) {
-          if (anyInteractiveProviderPressure()) {
-            return {
-              ok: false,
-              limited,
-              busyProviders,
-              backgroundDeferred: true,
-            };
-          }
-
-          releasedProvider =
-            [...busyProviders]
-              .filter((provider) => !providerIsRunning(provider) && !providerCooldownResult(provider))
-              .sort((a, b) => providerQueueLoad(a) - providerQueueLoad(b))[0] ||
-            "";
-
-          if (releasedProvider) break;
-          await sleepMs(80);
-        }
-
-        if (releasedProvider) {
-          try {
-            const result = await callMessageProvider(releasedProvider, body);
-            if (result?.ok) {
-              return { ok: true, result, limited, busyProviders };
-            }
-            if (!result?.deferred && !result?.unavailable) {
-              last = result;
-              if (Number(result?.status) === 429) limited.push(result);
-            }
-          } catch (err) {
-            last = {
-              status: err?.name === "AbortError" ? 504 : 502,
-              payload: {
-                error: {
-                  message:
-                    err?.name === "AbortError"
-                      ? `${releasedProvider} timed out.`
-                      : (err?.message || `${releasedProvider} proxy error`),
-                },
-              },
-              provider: releasedProvider,
-            };
-          }
-        } else {
-          return {
-            ok: false,
-            limited,
-            busyProviders,
-            backgroundDeferred: true,
-          };
-        }
-      }
-
-      return { ok: false, limited, busyProviders };
-    };
-
-    /* Huge DM/Event/world prompts can hit token-per-minute limits even when
-       request-per-minute is fine. Keep ordinary requests untouched; only very
-       large /ai/messages bodies are compacted before the first provider call. */
-    const incomingBody = req.body || {};
-    const interactiveRequest =
-      String(incomingBody?.masvilag_priority || "") === "interactive";
-    const compactThreshold = interactiveRequest ? 18000 : 12000;
-    const firstBody = messageBodyCharSize(incomingBody) > compactThreshold
-      ? compactMessageBodyForRateLimit(incomingBody)
-      : incomingBody;
-
-    const first = await runPass(firstBody);
-
-    if (first.ok) {
-      const result = first.result;
-      res.setHeader(
-        "x-masvilag-ai-provider",
-        result.provider || requestedProvider
-      );
-      return res.json(result.payload);
-    }
-
-    /* Background social/world work is intentionally deferable. Return a small,
-       explicit backoff instead of a generic exhausted-provider 503 so the client
-       can pause the whole sibling reaction bundle without reclassifying it as a
-       player-interactive failure. */
-    if (!interactiveRequest && first.backgroundDeferred) {
-      const retryAfterMs = 15000;
-      res.setHeader("retry-after", String(Math.ceil(retryAfterMs / 1000)));
-      res.setHeader("x-masvilag-ai-provider", requestedProvider);
-      res.setHeader("x-masvilag-ai-deferred", "1");
-      return res.status(200).json({
-        deferred: true,
-        retryAfterMs,
-        error: {
-          code: "AI_BACKGROUND_DEFERRED",
-          message: "Background AI work deferred while provider capacity is reserved or recovering.",
-        },
-      });
-    }
-
-    /*
-     * NO LONG SERVER-SIDE COOLDOWN WAIT.
-     * The first pass tried every free configured provider and, only when all
-     * were actively busy, allowed a tiny bounded micro-wait for one to finish.
-     * Never sleep 6/12/39 seconds on Retry-After. Background work is retried by
-     * its scheduler on a later tick.
-     */
-    const finalLimited = first.limited.slice();
-
-    const upstreamStatus = Number(last?.status) || 503;
-    const status = upstreamStatus === 404 ? 502 : upstreamStatus;
-
-    /*
-     * If several providers are rate-limited, advertise the provider that will
-     * become usable FIRST. The old code exposed only `last.retryAfter`, which
-     * could make two users wait for the slowest/last attempted provider even
-     * when another one was about to recover.
-     */
-    const finalRetryWaits = finalLimited
-      .map((x) => retryAfterMs(x?.retryAfter, 12000))
-      .filter((ms) => Number.isFinite(ms) && ms > 0);
-    const shortestFinalRetryMs = finalRetryWaits.length
-      ? Math.min(...finalRetryWaits)
-      : 0;
-
-    if (!interactiveRequest) {
-      if (shortestFinalRetryMs > 0) {
-        res.setHeader("retry-after", String(Math.max(1, Math.ceil(shortestFinalRetryMs / 1000))));
-      } else if (last?.retryAfter) {
-        res.setHeader("retry-after", last.retryAfter);
-      } else if ([429, 503, 529].includes(upstreamStatus)) {
-        res.setHeader("retry-after", "3");
-      }
-    }
-
-    /* BACKGROUND RATE-LIMIT NORMALIZATION v4:
-     * A 429/503/529 from every configured provider is expected backpressure for
-     * autonomous work, not a browser-level failed resource. Convert it to the
-     * same explicit 200/deferred protocol used for provider occupancy. Human
-     * interactive requests still receive a real error immediately. */
-    if (
-      !interactiveRequest &&
-      (
-        [429, 503, 529].includes(upstreamStatus) ||
-        finalLimited.length > 0
-      )
+    for (
+      const provider of
+      providers
     ) {
-      const retryAfterMs = Math.max(
-        10000,
-        Math.min(
-          60000,
-          shortestFinalRetryMs || 15000
-        )
+      try {
+        const result =
+          await callMessageProvider(
+            provider,
+            req.body || {}
+          );
+
+        if (
+          result?.ok
+        ) {
+          res.setHeader(
+            "x-masvilag-ai-provider",
+            result.provider ||
+            provider
+          );
+
+          return res.json(
+            result.payload
+          );
+        }
+
+        if (
+          result?.unavailable
+        ) {
+          continue;
+        }
+
+        last =
+          result;
+
+        /*
+         * Only fail over for transient/upstream/model availability problems.
+         */
+        if (
+          !retryableProviderStatus(
+            result?.status
+          ) &&
+          ![
+            400,
+            404,
+          ].includes(
+            Number(
+              result?.status
+            )
+          )
+        ) {
+          break;
+        }
+      } catch (err) {
+        last = {
+          status:
+            err?.name ===
+            "AbortError"
+              ? 504
+              : 502,
+          payload: {
+            error: {
+              message:
+                err?.name ===
+                "AbortError"
+                  ? `${provider} timed out.`
+                  : (
+                      err?.message ||
+                      `${provider} proxy error`
+                    ),
+            },
+          },
+          provider,
+        };
+      }
+    }
+
+    const upstreamStatus =
+      Number(
+        last?.status
+      ) || 503;
+
+    const status =
+      upstreamStatus === 404
+        ? 502
+        : upstreamStatus;
+
+    if (
+      last?.retryAfter
+    ) {
+      res.setHeader(
+        "retry-after",
+        last.retryAfter
       );
-      res.setHeader("retry-after", String(Math.ceil(retryAfterMs / 1000)));
-      res.setHeader("x-masvilag-ai-provider", last?.provider || requestedProvider);
-      res.setHeader("x-masvilag-ai-deferred", "1");
-      res.setHeader("x-masvilag-ai-upstream-status", String(upstreamStatus));
-      return res.status(200).json({
-        deferred: true,
-        retryAfterMs,
-        error: {
-          code: "AI_BACKGROUND_DEFERRED",
-          message: "Background AI deferred because all configured providers are rate-limited or recovering.",
-        },
-      });
     }
 
     res.setHeader(
       "x-masvilag-ai-provider",
-      last?.provider || requestedProvider
+      last?.provider ||
+      requestedProvider
     );
+
     res.setHeader(
       "x-masvilag-ai-upstream-status",
-      String(upstreamStatus)
+      String(
+        upstreamStatus
+      )
     );
 
     console.error(
       "AI message providers exhausted:",
       requestedProvider,
-      `configured=${providers.join(",")}`,
       `upstream=${upstreamStatus}`,
       proxyErrorMessage(
         last?.payload,
         "No provider returned a usable response."
       )
     );
-
-    if (
-      interactiveRequest &&
-      [429, 503, 529].includes(upstreamStatus)
-    ) {
-      const retryAfterMs = Math.max(
-        1200,
-        Math.min(8000, shortestFinalRetryMs || 2200)
-      );
-      res.setHeader("retry-after", String(Math.ceil(retryAfterMs / 1000)));
-      res.setHeader("x-masvilag-ai-deferred", "1");
-      return res.status(200).json({
-        deferred: true,
-        interactive: true,
-        retryAfterMs,
-        error: {
-          code: "AI_INTERACTIVE_DEFERRED",
-          message: "All configured AI providers are temporarily at capacity after fresh failover.",
-        },
-      });
-    }
-
-    if (interactiveRequest) {
-      return res
-        .status(status === 429 ? 503 : status)
-        .json({
-          error: {
-            code: "AI_CAPACITY_NOWAIT",
-            message:
-              "No configured AI provider accepted the request after fresh failover and a short busy-slot recovery. No cooldown was applied.",
-          },
-        });
-    }
 
     return res
       .status(status)
