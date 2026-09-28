@@ -5087,6 +5087,10 @@ const AI_INTERACTIVE_MICRO_WAIT_MS = Math.max(
   400,
   Math.min(3000, Number(process.env.AI_INTERACTIVE_MICRO_WAIT_MS) || 1800)
 );
+const AI_BACKGROUND_MICRO_WAIT_MS = Math.max(
+  500,
+  Math.min(5000, Number(process.env.AI_BACKGROUND_MICRO_WAIT_MS) || 2500)
+);
 const AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS = Math.max(
   500,
   Math.min(8000, Number(process.env.AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS) || 2800)
@@ -6291,28 +6295,24 @@ app.post(
        * --------------------------
        * - Player Scene/DM requests never queue behind a busy provider.
        * - They immediately spill to the next configured free provider.
-       * - Background work never spreads onto fallback providers merely because
-       *   the requested provider is busy/cooling; it is deferred instead.
-       * - No sleep/retry loop exists here. Provider failover is immediate.
+       * - Background work yields to real interactive pressure, but may use a
+       *   free configured fallback or a tiny bounded wait before deferring.
+       * - No long cooldown sleep/retry loop exists here.
        */
       if (!interactive) {
-        const requestedThrottle = providerCooldownResult(requestedProvider);
         const recentInteractive =
           Date.now() - AI_LAST_INTERACTIVE_REQUEST_AT <
           AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS;
-        if (
-          requestedThrottle ||
-          providerIsRunning(requestedProvider) ||
-          anyInteractiveProviderPressure() ||
-          recentInteractive
-        ) {
-          if (requestedThrottle) limited.push(requestedThrottle);
+
+        /* Background work yields only to REAL player pressure. A provider being
+           busy by itself is not a reason to emit an immediate 503: another
+           configured provider may be free, or the current one may finish inside
+           the small bounded background wait below. */
+        if (anyInteractiveProviderPressure() || recentInteractive) {
           return {
             ok: false,
             limited,
-            busyProviders: providerIsRunning(requestedProvider)
-              ? [requestedProvider]
-              : [],
+            busyProviders: [],
             backgroundDeferred: true,
           };
         }
@@ -6435,6 +6435,64 @@ app.post(
         }
       }
 
+      if (!interactive && busyProviders.length && !anyInteractiveProviderPressure()) {
+        const deadline = Date.now() + AI_BACKGROUND_MICRO_WAIT_MS;
+        let releasedProvider = "";
+
+        while (Date.now() < deadline) {
+          if (anyInteractiveProviderPressure()) {
+            return {
+              ok: false,
+              limited,
+              busyProviders,
+              backgroundDeferred: true,
+            };
+          }
+
+          releasedProvider =
+            [...busyProviders]
+              .filter((provider) => !providerIsRunning(provider) && !providerCooldownResult(provider))
+              .sort((a, b) => providerQueueLoad(a) - providerQueueLoad(b))[0] ||
+            "";
+
+          if (releasedProvider) break;
+          await sleepMs(80);
+        }
+
+        if (releasedProvider) {
+          try {
+            const result = await callMessageProvider(releasedProvider, body);
+            if (result?.ok) {
+              return { ok: true, result, limited, busyProviders };
+            }
+            if (!result?.deferred && !result?.unavailable) {
+              last = result;
+              if (Number(result?.status) === 429) limited.push(result);
+            }
+          } catch (err) {
+            last = {
+              status: err?.name === "AbortError" ? 504 : 502,
+              payload: {
+                error: {
+                  message:
+                    err?.name === "AbortError"
+                      ? `${releasedProvider} timed out.`
+                      : (err?.message || `${releasedProvider} proxy error`),
+                },
+              },
+              provider: releasedProvider,
+            };
+          }
+        } else {
+          return {
+            ok: false,
+            limited,
+            busyProviders,
+            backgroundDeferred: true,
+          };
+        }
+      }
+
       return { ok: false, limited, busyProviders };
     };
 
@@ -6465,10 +6523,13 @@ app.post(
        can pause the whole sibling reaction bundle without reclassifying it as a
        player-interactive failure. */
     if (!interactiveRequest && first.backgroundDeferred) {
-      res.setHeader("retry-after", "3");
+      const retryAfterMs = 3000;
+      res.setHeader("retry-after", String(Math.ceil(retryAfterMs / 1000)));
       res.setHeader("x-masvilag-ai-provider", requestedProvider);
-      res.setHeader("x-masvilag-ai-upstream-status", "503");
-      return res.status(503).json({
+      res.setHeader("x-masvilag-ai-deferred", "1");
+      return res.status(200).json({
+        deferred: true,
+        retryAfterMs,
         error: {
           code: "AI_BACKGROUND_DEFERRED",
           message: "Background AI work deferred while provider capacity is reserved or recovering.",
