@@ -26637,7 +26637,7 @@ function sysLangText(w, playerId, hu, en) {
   return worldLanguage(w, playerId) === "en" ? en : hu;
 }
 
-const BUILD_VERSION = "99.8";
+const BUILD_VERSION = "99.9";
 const WORLD_SCHEMA_VERSION = 97;
 
 /* Fast, safe clone for the large world state. */
@@ -50719,9 +50719,12 @@ function freshSimulationRuntime(at = now()) {
     lastNoteReactionAt: 0,
     lastRecoveryLane: "",
     lastRecoveryAttemptAt: 0,
+    lastProviderBusyAt: 0,
+    backgroundBackoffUntil: 0,
     liveWorldStartedAt: at,
-    schedulerVersion: 70,
+    schedulerVersion: 71,
     queueRepairVersion: 4,
+    providerClockRepairVersion: LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION,
     lastError: "",
   };
 }
@@ -53747,7 +53750,8 @@ const SIM_DONE_TTL = 20 * 60000;
 const SIM_QUEUE_LIMIT = 40;
 const PLAYER_REACTIVE_QUEUE_MAX = 8;
 const PLAYER_POST_REACTION_MAX_AGE_MS = 8 * 60 * 1000;
-const PLAYER_REACTION_BUSY_BACKOFF_MS = 15 * 1000;
+const PLAYER_REACTION_BUSY_BACKOFF_MS = 30 * 1000;
+const LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION = 1;
 
 function ensureSimState(w) {
   if (!w.sim) {
@@ -53770,9 +53774,11 @@ function ensureSimState(w) {
       lastNoteReactionAt: 0,
       lastRecoveryLane: "",
       lastRecoveryAttemptAt: 0,
+      lastProviderBusyAt: 0,
       backgroundBackoffUntil: 0,
       liveWorldStartedAt: now(),
       queueRepairVersion: 4,
+      providerClockRepairVersion: LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION,
       lastError: "",
     };
   }
@@ -53930,8 +53936,30 @@ function ensureSimState(w) {
   if (!Number.isFinite(Number(w.sim.lastNoteReactionAt))) w.sim.lastNoteReactionAt = 0;
   if (typeof w.sim.lastRecoveryLane !== "string") w.sim.lastRecoveryLane = "";
   if (!Number.isFinite(Number(w.sim.lastRecoveryAttemptAt))) w.sim.lastRecoveryAttemptAt = 0;
+  if (!Number.isFinite(Number(w.sim.lastProviderBusyAt))) w.sim.lastProviderBusyAt = 0;
   if (!Number.isFinite(Number(w.sim.backgroundBackoffUntil))) w.sim.backgroundBackoffUntil = 0;
   if (!Number.isFinite(Number(w.sim.liveWorldStartedAt))) w.sim.liveWorldStartedAt = now();
+  if (!Number.isFinite(Number(w.sim.providerClockRepairVersion))) w.sim.providerClockRepairVersion = 0;
+
+  /* PROVIDER-BUSY CLOCK REPAIR v1:
+   * Old saves can carry starvation clocks that are 60-120+ minutes overdue.
+   * After a provider outage that made the scheduler immediately "catch up" by
+   * firing a heartbeat DM/popup/event on every recovery beat. Rebase ONLY the
+   * autonomous scheduler hunger clocks once; no story/chat/history timestamp is
+   * touched. Fresh worlds already carry the repair version and skip this block. */
+  if (Math.floor(Number(w.sim.providerClockRepairVersion) || 0) < LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION) {
+    const rebaseAt = now();
+    w.sim.lastAutonomousDmAt = rebaseAt;
+    w.sim.lastPopupSuccessAt = rebaseAt;
+    w.sim.lastRoleplayInviteAt = rebaseAt;
+    w.sim.lastProviderBusyAt = rebaseAt;
+    w.sim.backgroundBackoffUntil = Math.max(
+      Number(w.sim.backgroundBackoffUntil) || 0,
+      rebaseAt + PLAYER_REACTION_BUSY_BACKOFF_MS
+    );
+    w.sim.providerClockRepairVersion = LIVE_WORLD_PROVIDER_BUSY_CLOCK_REPAIR_VERSION;
+    console.info("[scheduler-clock] stale provider/starvation clocks rebased");
+  }
 
   /* LIVE WORLD CLOCK SANITY:
    * Multi-device/server snapshots can contain a timestamp from a clock that was
@@ -53957,6 +53985,7 @@ function ensureSimState(w) {
       "lastRoleplayInviteAt",
       "lastNoteReactionAt",
       "lastRecoveryAttemptAt",
+      "lastProviderBusyAt",
       "backgroundBackoffUntil",
     ];
 
@@ -58406,7 +58435,8 @@ function popupOverdueByMs(w) {
   const runtimeStarted = Number(w.popupRuntime && w.popupRuntime.startedAt) || 0;
   const laneStartedAt = Number(w.sim && w.sim.liveWorldStartedAt) || 0;
   const lastSuccess = Number(w.sim && w.sim.lastPopupSuccessAt) || 0;
-  const lastAt = Math.max(lastSuccess, popupLastGeneratedAt(w)) || laneStartedAt || runtimeStarted;
+  const providerBusyAt = Number(w.sim && w.sim.lastProviderBusyAt) || 0;
+  const lastAt = Math.max(lastSuccess, popupLastGeneratedAt(w), providerBusyAt) || laneStartedAt || runtimeStarted;
   if (!lastAt) return -Infinity;
   return now() - lastAt - popupCadenceMs(w);
 }
@@ -65377,8 +65407,12 @@ function fairBotIdleMs(w, actorId) {
 function liveWorldSilenceMs(w) {
   if (!w) return 0;
   const latest = latestVisibleAiWorldActivityAt(w);
+  const providerBusyAt = Number(w.sim && w.sim.lastProviderBusyAt) || 0;
   const started = Number(w.sim && w.sim.liveWorldStartedAt) || now();
-  const anchor = latest || Math.min(started, now());
+  /* Provider downtime is NOT world silence that must later be caught up. Treat
+     the most recent capacity deferral as a scheduler-only activity anchor so a
+     90-minute outage cannot instantly trigger a hard-heartbeat DM after backoff. */
+  const anchor = Math.max(latest, providerBusyAt) || Math.min(started, now());
   return Math.max(0, now() - anchor);
 }
 
@@ -66198,7 +66232,10 @@ function autonomousDmOverdueByMs(w) {
   const dmPeak = Math.max(0.25, channelActivityPeak(w, "dm"));
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
   const target = Math.max(30 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
-  const last = Number(w.sim && w.sim.lastAutonomousDmAt) || 0;
+  const last = Math.max(
+    Number(w.sim && w.sim.lastAutonomousDmAt) || 0,
+    Number(w.sim && w.sim.lastProviderBusyAt) || 0
+  );
   const startedAt = Number(w.sim && w.sim.liveWorldStartedAt) || now();
   const elapsed = last ? now() - last : Math.max(0, now() - startedAt);
   return elapsed - target;
@@ -66211,7 +66248,8 @@ function roleplayInviteOverdueByMs(w) {
   const target = Math.max(4 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   const last = Math.max(
     Number(w.sim && w.sim.lastRoleplayInviteAt) || 0,
-    lastAiInitiatedRoleplayAt(w)
+    lastAiInitiatedRoleplayAt(w),
+    Number(w.sim && w.sim.lastProviderBusyAt) || 0
   );
   const startedAt = Number(w.sim && w.sim.liveWorldStartedAt) || now();
   const elapsed = last ? now() - last : Math.max(0, now() - startedAt);
@@ -74123,9 +74161,14 @@ const signOut = useCallback(async () => {
 
           if (failedBusy) {
             const sim = ensureSimState(n);
+            const busyAt = now();
+            sim.lastProviderBusyAt = Math.max(
+              Number(sim.lastProviderBusyAt) || 0,
+              busyAt
+            );
             sim.backgroundBackoffUntil = Math.max(
               Number(sim.backgroundBackoffUntil) || 0,
-              now() + retryDelay
+              busyAt + retryDelay
             );
             sim.lastError = "provider-busy";
           }
