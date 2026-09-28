@@ -1,4 +1,4 @@
-/* MÁSVILÁG v100.0 — CONTEXT + CANON + LIVE SOCIAL + RESPONSIVE — 20260928 */
+/* MÁSVILÁG v100.1 — QUEUE BACKPRESSURE + PROVIDER RECOVERY — 20260928 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -11186,9 +11186,11 @@ async function runAiQueueWorker() {
         const costGap =
           task.priority >= 50
             ? Math.min(1500, Number(AI.lastCostGap) || 0)
-            : task.priority >= 15
-              ? Math.min(60000, Number(AI.lastCostGap) || 0)
-              : Math.min(60000, Number(AI.lastCostGap) || 0);
+            : task.priority >= 30
+              ? Math.min(4500, Number(AI.lastCostGap) || 0)
+              : task.priority >= 15
+                ? Math.min(9000, Number(AI.lastCostGap) || 0)
+                : Math.min(30000, Number(AI.lastCostGap) || 0);
 
         const gap = Math.max(baseGap, costGap);
         if (since < gap) await wait(gap - since);
@@ -11887,6 +11889,39 @@ async function askWorldJSONInteractive(
         AI.interactivePending - 1
       );
   }
+}
+
+/*
+ * AUTOMATIC PLAYER-SOCIAL REACTION LANE.
+ *
+ * A player post should receive quick comments, but those generated comments are
+ * still background world work — they must never reserve the same provider lane
+ * as a human-triggered DM / Scene / group turn. Priority 30 keeps them ahead of
+ * ordinary autonomous maintenance while the backend still treats them as
+ * background, so 429/503 can apply a short circuit-breaker instead of spawning
+ * an interactive retry storm.
+ */
+function askWorldJSONResponsive(
+  w,
+  system,
+  prompt,
+  options = {}
+) {
+  const requestedPriority = Number(options && options.priority);
+  const priority = Number.isFinite(requestedPriority)
+    ? Math.max(15, Math.min(40, requestedPriority))
+    : 30;
+
+  return askJSON(
+    system,
+    prompt,
+    {
+      ...options,
+      language: worldLanguage(w),
+      priority,
+      maxTries: options.maxTries || 2,
+    }
+  );
 }
 
 
@@ -26626,7 +26661,7 @@ const LIVE_WORLD_ACTIVE_SILENCE_RECOVERY_MS = Math.max(
   22000,
   Math.min(60000, Number(import.meta.env.VITE_WORLD_ACTIVE_SILENCE_RECOVERY_MS) || 32000)
 );
-const LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS = 5 * 60 * 1000;
+const LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS = 4 * 60 * 1000;
 const LIVE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS = Math.max(
   60000,
   Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS) || 105000)
@@ -34192,7 +34227,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 3000 }
+    { maxTokens: 3000, priority: 35, maxBusyWaits: 1, busyRetryCapMs: 5000, timeoutMs: 20000 }
   );
 
   /*
@@ -34359,7 +34394,7 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
   if (!candidates.length) return baseOut;
 
   try {
-    const repairOut = await askWorldJSONInteractive(
+    const repairOut = await askWorldJSONResponsive(
       w,
       engineFor(w),
       `${worldContext(
@@ -34702,7 +34737,7 @@ async function repairImmediatePlayerPostComments(w, post, minComments = 2, maxCo
     : fallbackSocialPostMeaning(w, post);
   const th = threadOf(w, post);
 
-  const out = await askWorldJSONInteractive(
+  const out = await askWorldJSONResponsive(
     w,
     engineFor(w),
     `${worldContext(w, candidates.map((c) => c.id), true, null, {
@@ -34800,7 +34835,7 @@ ${rel}
 ${commentGenerationStyleCard(w, c)}`;
   }).join("\n\n---\n\n");
 
-  const out = await askWorldJSONInteractive(
+  const out = await askWorldJSONResponsive(
     w,
     `You generate ONLY immediate top-level social-media comments for one fresh player post. Keep them short, natural, character-specific and exactly grounded in the supplied visible post. Never narrate actions. Never invent an unrelated topic.`,
     `FRESH PLAYER POST — COMMENT NOW
@@ -34864,7 +34899,7 @@ async function generateSingleHardRecoveryPlayerPostComment(w, post) {
   const pairCanon = exactPairCanonCard(w, candidate.id, post.authorId) || {};
   const questionMode = socialPostQuestionMode(post);
 
-  let raw = await askWorldJSONInteractive(
+  let raw = await askWorldJSONResponsive(
     w,
     `Write exactly ONE short, natural social-media comment as the supplied fictional character. No narration, no actions, no metadata prose, no unrelated topic. Return JSON only.`,
     `CHARACTER: ${candidate.name} [${candidate.id}]
@@ -34943,7 +34978,7 @@ async function generateSingleGuaranteedCoverageComment(w, post, commenterId) {
   const pairCanon = exactPairCanonCard(w, candidate.id, post.authorId) || {};
   const questionMode = socialPostQuestionMode(post);
 
-  let raw = await askWorldJSONInteractive(
+  let raw = await askWorldJSONResponsive(
     w,
     `Write exactly ONE short, natural top-level social-media comment as the supplied fictional character. It must react to the exact supplied post. Return JSON only.`,
     `REQUIRED COMMENTER: ${candidate.name} [${candidate.id}]
@@ -37648,7 +37683,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 900 }
+    { maxTokens: 900, priority: 35, maxBusyWaits: 1, busyRetryCapMs: 5000, timeoutMs: 18000 }
   );
 
   /*
@@ -39438,6 +39473,10 @@ Formátum:
       maxTokens: single
         ? 1800
         : 4096,
+      priority: 18,
+      maxBusyWaits: 1,
+      busyRetryCapMs: 7000,
+      timeoutMs: 24000,
     }
   );
 }
@@ -50652,7 +50691,7 @@ function freshSimulationRuntime(at = now()) {
     lastRecoveryAttemptAt: 0,
     liveWorldStartedAt: at,
     schedulerVersion: 70,
-    queueRepairVersion: 2,
+    queueRepairVersion: 4,
     lastError: "",
   };
 }
@@ -53125,7 +53164,7 @@ function pickNoteReactionCast(w, authorId, processedBy) {
 }
 
 /* Egy bot kiír magának egy jegyzetet. */
-async function genNote(w, bot) {
+async function genNote(w, bot, options = {}) {
   return askWorldJSON(
     w,
     engineFor(w),
@@ -53228,7 +53267,13 @@ Ha most nem írna Note-ot:
 
 Ha ír:
 {"skip":false,"text":"a note","selfUpdates":[{"id":"${bot.id}","mood":"csak ha a Note valóban kifejez/frissít egy pillanatnyi állapotot","intent":"csak ha a Note mögött konkrét szándék van","openLoops":[]}]}${TAIL}`,
-    { maxTokens: 520 }
+    {
+      maxTokens: 520,
+      priority: Math.max(18, Number(options.priority) || 0),
+      maxBusyWaits: 1,
+      busyRetryCapMs: 5000,
+      timeoutMs: 16000,
+    }
   );
 }
 
@@ -53381,7 +53426,7 @@ Formátum:
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":3,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ]}${TAIL}`,
-      { maxTokens: 1100 }
+      { maxTokens: 1100, priority: 25, maxBusyWaits: 1, busyRetryCapMs: 6000, timeoutMs: 18000 }
     );
 
   out.__castIds =
@@ -53506,12 +53551,85 @@ function isPlayerCommentReplyAction(w, action) {
   return Boolean(comment && isHuman(w, comment.authorId));
 }
 
+function playerPostActionPostId(action) {
+  if (!action) return "";
+  const payloadId = String(action.payload && action.payload.postId || "").trim();
+  if (payloadId) return payloadId;
+  const key = String(action.key || "");
+  const match = key.match(/^(?:player-post-(?:comments|dm)|independent-feed-refresh-after-player-post):([^:]+)/);
+  return match ? String(match[1] || "") : "";
+}
+
+function isPlayerPostReactiveAction(action) {
+  if (!action) return false;
+  const payload = action.payload || {};
+  return Boolean(
+    action.source === "player-reactive" &&
+    (
+      payload.trigger === "player-post" ||
+      payload.coverageSource === "player-post-immediate" ||
+      String(action.key || "").startsWith("player-post-comments:") ||
+      String(action.key || "").startsWith("player-post-dm:")
+    )
+  );
+}
+
+function playerPostReactiveActionAgeMs(w, action) {
+  if (!isPlayerPostReactiveAction(action)) return 0;
+  const postId = playerPostActionPostId(action);
+  const post = postId
+    ? (w.posts || []).find((row) => row && String(row.id) === postId)
+    : null;
+  const anchorAt = Math.max(
+    Number(action && action.ts) || 0,
+    Number(post && post.ts) || 0
+  );
+  return anchorAt ? Math.max(0, now() - anchorAt) : Infinity;
+}
+
+function isStalePlayerPostReactiveAction(w, action) {
+  return Boolean(
+    isPlayerPostReactiveAction(action) &&
+    playerPostReactiveActionAgeMs(w, action) > PLAYER_POST_REACTION_MAX_AGE_MS
+  );
+}
+
+function samePlayerPostReactionLane(a, b) {
+  if (!a || !b) return false;
+  const aPostId = playerPostActionPostId(a);
+  const bPostId = playerPostActionPostId(b);
+  if (!aPostId || aPostId !== bPostId) return false;
+  if (a.type !== b.type) return false;
+  if (a.type === "dm") {
+    return String(a.payload && a.payload.botId || "") === String(b.payload && b.payload.botId || "");
+  }
+  return true;
+}
+
 function trimSimulationQueue(w, queue) {
-  const protectedRows = queue.filter((row) => row &&
-    (row.source === "manual" || row.source === "player-reactive" || isPlayerCommentReplyAction(w, row)));
-  const protectedIds = new Set(protectedRows.map((row) => row.id));
-  let remaining = Math.max(0, SIM_QUEUE_LIMIT - protectedRows.length);
-  return queue.filter((row) => row && (protectedIds.has(row.id) || remaining-- > 0));
+  const cleaned = (Array.isArray(queue) ? queue : [])
+    .filter((row) => row && !isStalePlayerPostReactiveAction(w, row));
+
+  /* Manual work and direct replies to a human comment are never discarded by
+     the normal queue cap. Automatic player-post reactions are latency-sensitive
+     but bounded: newest rows win, so a provider outage cannot grow an unlimited
+     protected backlog. */
+  const criticalRows = cleaned.filter((row) =>
+    row.source === "manual" || isPlayerCommentReplyAction(w, row)
+  );
+  const criticalIds = new Set(criticalRows.map((row) => row.id));
+
+  const freshPlayerRows = cleaned
+    .filter((row) => row.source === "player-reactive" && !criticalIds.has(row.id))
+    .slice(0, PLAYER_REACTIVE_QUEUE_MAX);
+
+  const protectedIds = new Set([
+    ...criticalIds,
+    ...freshPlayerRows.map((row) => row.id),
+  ]);
+
+  let remaining = Math.max(0, SIM_QUEUE_LIMIT - protectedIds.size);
+  return cleaned.filter((row) => row && (protectedIds.has(row.id) || remaining-- > 0));
 }
 
 /*
@@ -53590,6 +53708,9 @@ const canRunLocalSimulationAction = (w) => {
 
 const SIM_DONE_TTL = 20 * 60000;
 const SIM_QUEUE_LIMIT = 40;
+const PLAYER_REACTIVE_QUEUE_MAX = 8;
+const PLAYER_POST_REACTION_MAX_AGE_MS = 8 * 60 * 1000;
+const PLAYER_REACTION_BUSY_BACKOFF_MS = 15 * 1000;
 
 function ensureSimState(w) {
   if (!w.sim) {
@@ -53613,7 +53734,7 @@ function ensureSimState(w) {
       lastRecoveryLane: "",
       lastRecoveryAttemptAt: 0,
       liveWorldStartedAt: now(),
-      queueRepairVersion: 2,
+      queueRepairVersion: 4,
       lastError: "",
     };
   }
@@ -53705,6 +53826,37 @@ function ensureSimState(w) {
     w.sim.running = "";
     w.sim.queueRepairVersion = 3;
     console.info("[comment-queue] fan-out backlog compacted");
+  }
+
+  /* QUEUE BACKPRESSURE REPAIR v4:
+   * Provider outages in older builds could leave several protected
+   * player-post reactions in a saved world. Remove only stale direct reactions,
+   * collapse duplicate lanes, and discard the obsolete high-priority feed
+   * refresh rows. No committed post/comment/DM/history content is touched. */
+  if (Math.max(0, Math.floor(Number(w.sim.queueRepairVersion) || 0)) < 4) {
+    const seenPlayerLanes = new Set();
+    w.sim.queue = (w.sim.queue || []).filter((action) => {
+      if (!action) return false;
+
+      if (String(action.key || "").startsWith("independent-feed-refresh-after-player-post:")) {
+        return false;
+      }
+
+      if (isStalePlayerPostReactiveAction(w, action)) return false;
+
+      if (isPlayerPostReactiveAction(action)) {
+        const postId = playerPostActionPostId(action);
+        const laneKey = `${postId}:${action.type}:${String(action.payload && action.payload.botId || "")}`;
+        if (seenPlayerLanes.has(laneKey)) return false;
+        seenPlayerLanes.add(laneKey);
+      }
+
+      return true;
+    });
+    w.sim.queue = trimSimulationQueue(w, w.sim.queue);
+    w.sim.running = "";
+    w.sim.queueRepairVersion = 4;
+    console.info("[recovery-queue] stale player-post reaction backlog repaired");
   }
 
   /* v51 migration/runtime guard: a régi buildből bent maradt automatikus
@@ -53813,7 +53965,7 @@ function ensureSimState(w) {
     w.sim.schedulerVersion = 70;
   }
   if (!Number.isFinite(Number(w.sim.schedulerVersion))) w.sim.schedulerVersion = 70;
-  if (!Number.isFinite(Number(w.sim.queueRepairVersion))) w.sim.queueRepairVersion = 2;
+  if (!Number.isFinite(Number(w.sim.queueRepairVersion))) w.sim.queueRepairVersion = 4;
   if (typeof w.sim.lastError !== "string") w.sim.lastError = "";
 
   const cutoff = now() - SIM_DONE_TTL;
@@ -53869,7 +54021,12 @@ function markSimulationCadence(w, action) {
 
   /* v53: each autonomous lane owns a SUCCESS clock. Reactive DM traffic,
      feed posts or failed attempts can no longer reset another lane's hunger. */
-  if (action && action.type === "dm") sim.lastAutonomousDmAt = ts;
+  if (
+    action &&
+    action.type === "dm" &&
+    action.source !== "player-reactive" &&
+    action.source !== "manual"
+  ) sim.lastAutonomousDmAt = ts;
   if (action && action.type === "popup-event") sim.lastPopupSuccessAt = ts;
   if (action && action.type === "roleplay-initiate") sim.lastRoleplayInviteAt = ts;
   if (action && action.type === "note-react") sim.lastNoteReactionAt = ts;
@@ -63682,6 +63839,17 @@ function simEnqueue(w, action) {
   const doneAt = Number(sim.done[action.key] || 0);
   if (doneAt && now() - doneAt < SIM_DONE_TTL) return false;
   if (sim.queue.some((x) => x && x.key === action.key)) return false;
+
+  if (
+    (isPlayerPostReactiveAction(action) || (action.payload && action.payload.independentFeedRefresh)) &&
+    sim.queue.some((queued) =>
+      queued &&
+      (isPlayerPostReactiveAction(queued) || (queued.payload && queued.payload.independentFeedRefresh)) &&
+      samePlayerPostReactionLane(queued, action)
+    )
+  ) {
+    return false;
+  }
   if (action.type === "reply" && sim.queue.some((row) => row && row.type === "reply" &&
       row.payload && action.payload && row.payload.postId === action.payload.postId &&
       row.payload.commentId === action.payload.commentId &&
@@ -63769,6 +63937,7 @@ function simEnqueue(w, action) {
 
 function simPeek(w) {
   const sim = ensureSimState(w);
+  sim.queue = trimSimulationQueue(w, sim.queue);
   const ready = sim.queue.filter((action) => {
     if (!action || Number(action.payload && action.payload.notBefore || 0) > now()) return false;
     if (action.type !== "reply") return true;
@@ -67603,7 +67772,7 @@ JSON ONLY: {"text":"one direct reply"}`,
     {
       maxTokens: 260,
       maxTries: 2,
-      priority: humanReply ? 100 : 20,
+      priority: humanReply ? 100 : 35,
       maxBusyWaits: humanReply ? 2 : 1,
       busyRetryCapMs: 60000,
       timeoutMs: 18000,
@@ -69281,7 +69450,11 @@ if (targetNote) {
     }
 
     const out =
-      await genNote(view, bot);
+      await genNote(
+        view,
+        bot,
+        { priority: forceHeartbeat ? 55 : 20 }
+      );
 
     if (!out || out.skip) return null;
 
@@ -72441,10 +72614,11 @@ const signOut = useCallback(async () => {
         : { missing: 2, target: 2 };
 
       /* Feed refresh after posting: queue ONE independent autonomous status.
-       * It deliberately carries no postId/triggerRefId, so it cannot use the
-       * player's post as its semantic anchor; direct reactions stay in comments.
-       * Because event actions append while the comment/DM actions below unshift,
-       * public comment feedback still arrives before this refresh slot. */
+       * postId is carried only as scheduler metadata for dedupe/staleness; the
+       * feed-refresh trigger explicitly forbids using the player's post as the
+       * generated status topic. Direct reactions stay in comments. Because event
+       * actions append while comment/DM actions below unshift, public comment
+       * feedback still arrives before this refresh slot. */
       queuedAny = requestSimulationAction(
         mkAction(
           "world",
@@ -72452,8 +72626,9 @@ const signOut = useCallback(async () => {
           {
             trigger: "feed-refresh-after-player-post",
             independentFeedRefresh: true,
+            postId: event.postId,
           },
-          "player-reactive"
+          "event"
         )
       ) || queuedAny;
 
@@ -73501,7 +73676,7 @@ const signOut = useCallback(async () => {
     const beat = async () => {
   if (!alive) return;
 
-  if (autoRunning.current || cooldownLeft() > 0) return;
+  if (autoRunning.current) return;
 
   const view2 = viewRef.current;
   if (!view2 || !(view2.chars || []).length) return;
@@ -73511,6 +73686,35 @@ const signOut = useCallback(async () => {
   const pendingReplyOverride = !manualQueued && !isPlayerCommentReplyAction(view2, queued)
     ? pendingPlayerReplyAction(view2)
     : null;
+
+  /* VISIBLE SOCIAL LATENCY FIX:
+   * A fresh post that is still missing its first visible comment set must not sit
+   * behind an unrelated old background action. Reuse the SAME single simulation
+   * slot; this is priority ordering, not extra concurrency. */
+  const urgentFreshCoveragePost = !manualQueued
+    ? guaranteedCommentCoverageCandidate(view2)
+    : null;
+  const queuedAlreadyCoversUrgentPost = Boolean(
+    queued &&
+    queued.type === "comments" &&
+    urgentFreshCoveragePost &&
+    String(queued.payload && queued.payload.postId || "") === String(urgentFreshCoveragePost.id || "")
+  );
+  const urgentFreshCommentOverride =
+    urgentFreshCoveragePost && !queuedAlreadyCoversUrgentPost
+      ? guaranteedPostCommentAction(view2, urgentFreshCoveragePost, "fresh-visible-priority")
+      : null;
+
+  /* HARD LIVENESS OVERRIDE:
+   * Even if an old queue item is hanging around, four minutes with no VISIBLE AI
+   * activity is enough. A grounded DM wins; otherwise a fair-rotation AI Note is
+   * forced. Manual/player-reply work still stays above this. */
+  const hardIdleHeartbeatOverride =
+    !manualQueued &&
+    !pendingReplyOverride &&
+    liveWorldSilenceMs(view2) >= LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS
+      ? pickHardIdleWorldHeartbeatAction(view2)
+      : null;
 
   /*
    * RECOVERY v99.2:
@@ -73664,6 +73868,8 @@ const signOut = useCallback(async () => {
   let action =
     pendingReplyOverride ||
     (isPlayerCommentReplyAction(view2, queued) ? queued : null) ||
+    urgentFreshCommentOverride ||
+    hardIdleHeartbeatOverride ||
     coverageOverride ||
     essentialActivityOverride ||
     socialBacklogFeedOverride ||
@@ -73783,6 +73989,7 @@ const signOut = useCallback(async () => {
       });
       let ok = false;
       let result = null;
+      let runError = null;
       const actionHistoryEpoch = Math.max(
         0,
         Math.floor(Number(viewRef.current && viewRef.current.historyEpoch) || 0)
@@ -73797,6 +74004,7 @@ const signOut = useCallback(async () => {
         );
         ok = Boolean(result);
       } catch (e) {
+        runError = e || null;
         if (action && action.source === "manual" && alive) {
           setErr(
   "SIM: " +
@@ -73834,7 +74042,39 @@ const signOut = useCallback(async () => {
           }
         }
         if (!ok && action) {
-          action.payload = { ...(action.payload || {}), notBefore: now() + Math.max(cooldownLeft(), 8000) };
+          const retryAfterMs = Math.max(
+            0,
+            Math.min(60000, Number(runError && runError.retryAfterMs) || 0)
+          );
+          const failedBusy = Boolean(runError && runError.busy);
+          const retryDelay = Math.max(
+            cooldownLeft(),
+            retryAfterMs,
+            failedBusy ? PLAYER_REACTION_BUSY_BACKOFF_MS : 8000
+          );
+          action.payload = {
+            ...(action.payload || {}),
+            notBefore: now() + retryDelay,
+          };
+
+          /* One provider-capacity miss on the player-post bundle should pause
+             its sibling comment/DM rows too. Otherwise the very next 5-second
+             beat simply hits the same unavailable providers with another row. */
+          if (failedBusy && isPlayerPostReactiveAction(action)) {
+            const failedPostId = playerPostActionPostId(action);
+            const sim = ensureSimState(n);
+            sim.queue.forEach((row) => {
+              if (!row || row.id === action.id || !isPlayerPostReactiveAction(row)) return;
+              if (playerPostActionPostId(row) !== failedPostId) return;
+              row.payload = {
+                ...(row.payload || {}),
+                notBefore: Math.max(
+                  Number(row.payload && row.payload.notBefore) || 0,
+                  now() + retryDelay
+                ),
+              };
+            });
+          }
         }
 
         const retryableTriggeredFeed = Boolean(
@@ -73849,22 +74089,13 @@ const signOut = useCallback(async () => {
           action.source === "coverage"
         );
 
-        const retryableIndependentFeedRefresh = Boolean(
-          action &&
-          action.type === "world" &&
-          action.source === "player-reactive" &&
-          action.payload &&
-          action.payload.independentFeedRefresh
-        );
-
         const retryablePlayerReaction = Boolean(
           action &&
           action.source === "player-reactive" &&
           (
             action.type === "comments" ||
             action.type === "dm" ||
-            action.type === "reply" ||
-            retryableIndependentFeedRefresh
+            action.type === "reply"
           )
         );
 
@@ -73913,7 +74144,7 @@ const signOut = useCallback(async () => {
          * missing and will be retried after the rest of the cast gets a turn. */
         const immediateRetryLimit = retryableCoverageComment
           ? 0
-          : 2;
+          : (retryablePlayerReaction && runError && runError.busy ? 1 : 2);
 
         if (retryableCoverageComment && !ok) {
           const postId = String(action && action.payload && action.payload.postId || "");
@@ -73955,7 +74186,7 @@ const signOut = useCallback(async () => {
              * Fresh player-post reactions are user-visible latency-sensitive
              * work. A transient provider/empty-output failure must not consume
              * the comment/DM/burst slot after one attempt. Keep the exact same
-             * action at the front for up to two retries.
+             * action for a bounded retry. Capacity failures get only one retry.
              */
             action.payload = {
               ...(action.payload || {}),
@@ -74005,12 +74236,12 @@ const signOut = useCallback(async () => {
       if (alive) setAutoBusy(false);
     };
     /*
-     * 9 másodpercenként nézzük meg, van-e sürgős queue-teendő.
-     * Ez NEM jelent 9 másodpercenként AI-hívást:
+     * 5 másodpercenként nézzük meg, van-e sürgős queue-teendő.
+     * Ez NEM jelent 5 másodpercenként AI-hívást:
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 9000);
+    const i = setInterval(beat, 5000);
     const first = setTimeout(beat, 100);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
