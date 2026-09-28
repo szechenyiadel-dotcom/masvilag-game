@@ -11186,11 +11186,9 @@ async function runAiQueueWorker() {
         const costGap =
           task.priority >= 50
             ? Math.min(1500, Number(AI.lastCostGap) || 0)
-            : task.priority >= 30
-              ? Math.min(4500, Number(AI.lastCostGap) || 0)
-              : task.priority >= 15
-                ? Math.min(9000, Number(AI.lastCostGap) || 0)
-                : Math.min(30000, Number(AI.lastCostGap) || 0);
+            : task.priority >= 15
+              ? Math.min(60000, Number(AI.lastCostGap) || 0)
+              : Math.min(60000, Number(AI.lastCostGap) || 0);
 
         const gap = Math.max(baseGap, costGap);
         if (since < gap) await wait(gap - since);
@@ -11479,14 +11477,13 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       }
 
       /*
-       * PLAYER requests still never wait on this hidden breaker. Background work,
-       * however, MUST respect the provider's real Retry-After window; retrying a
-       * heartbeat every few seconds only creates another 429 and keeps the world
-       * visibly empty. Keep it hidden and capped at one minute.
+       * NO PLAYER COOLDOWN: the proxy already attempted all configured providers.
+       * Do not convert a provider 429/503 into a 12-60 second browser sleep. Keep
+       * only a short hidden background breaker so autonomous jobs do not spin.
        */
       if (!requestMeta.interactive) {
         setCooldown(
-          Math.max(30000, Math.min(90000, retryAfterMs || 45000)),
+          Math.max(1500, Math.min(8000, retryAfterMs || 3000)),
           false
         );
       }
@@ -26629,7 +26626,7 @@ const LIVE_WORLD_ACTIVE_SILENCE_RECOVERY_MS = Math.max(
   22000,
   Math.min(60000, Number(import.meta.env.VITE_WORLD_ACTIVE_SILENCE_RECOVERY_MS) || 32000)
 );
-const LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS = 4 * 60 * 1000;
+const LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS = 5 * 60 * 1000;
 const LIVE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS = Math.max(
   60000,
   Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS) || 105000)
@@ -34195,7 +34192,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 3000, priority: 35, maxBusyWaits: 1, busyRetryCapMs: 5000, timeoutMs: 20000 }
+    { maxTokens: 3000 }
   );
 
   /*
@@ -37651,7 +37648,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 900, priority: 35, maxBusyWaits: 1, busyRetryCapMs: 5000, timeoutMs: 18000 }
+    { maxTokens: 900 }
   );
 
   /*
@@ -39441,10 +39438,6 @@ Formátum:
       maxTokens: single
         ? 1800
         : 4096,
-      priority: 18,
-      maxBusyWaits: 1,
-      busyRetryCapMs: 7000,
-      timeoutMs: 24000,
     }
   );
 }
@@ -53132,7 +53125,7 @@ function pickNoteReactionCast(w, authorId, processedBy) {
 }
 
 /* Egy bot kiír magának egy jegyzetet. */
-async function genNote(w, bot, options = {}) {
+async function genNote(w, bot) {
   return askWorldJSON(
     w,
     engineFor(w),
@@ -53235,13 +53228,7 @@ Ha most nem írna Note-ot:
 
 Ha ír:
 {"skip":false,"text":"a note","selfUpdates":[{"id":"${bot.id}","mood":"csak ha a Note valóban kifejez/frissít egy pillanatnyi állapotot","intent":"csak ha a Note mögött konkrét szándék van","openLoops":[]}]}${TAIL}`,
-    {
-      maxTokens: 520,
-      priority: Math.max(18, Number(options.priority) || 0),
-      maxBusyWaits: 1,
-      busyRetryCapMs: 5000,
-      timeoutMs: 16000,
-    }
+    { maxTokens: 520 }
   );
 }
 
@@ -53394,7 +53381,7 @@ Formátum:
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":3,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ]}${TAIL}`,
-      { maxTokens: 1100, priority: 25, maxBusyWaits: 1, busyRetryCapMs: 6000, timeoutMs: 18000 }
+      { maxTokens: 1100 }
     );
 
   out.__castIds =
@@ -67565,337 +67552,6 @@ function runAutonomousFeedHeartbeat(w, update) {
   return created;
 }
 
-/*
- * PROVIDER-FREE SOCIAL LIFE FALLBACK
- *
- * The rich AI paths remain the primary source of comments, Notes and DMs. This
- * layer runs only when the provider is cooling down, or when the visible world
- * has been completely silent for an abnormally long time. It never starts a
- * second AI request. Its job is simply to guarantee that a 429 cannot make the
- * social world look dead.
- */
-const PROVIDER_FREE_WORLD_SILENCE_MS = 2 * 60 * 1000;
-const PROVIDER_FREE_FRESH_POST_MAX_AGE_MS = Math.min(
-  LIVE_WORLD_FRESH_COMMENT_WINDOW_MS,
-  90 * 60 * 1000
-);
-const PROVIDER_FREE_POST_COMMENT_TARGET = 2;
-
-function providerFreeActorLore(c) {
-  return [
-    c && c.personality,
-    c && c.traits,
-    c && c.speech,
-    c && c.voice,
-    c && c.extra,
-    c && c.job,
-    c && c.role,
-  ].filter(Boolean).join(" ").toLowerCase();
-}
-
-function providerFreeSocialCandidates(w, post = null, excluded = new Set()) {
-  const targetId = post && post.authorId ? post.authorId : w.meId;
-  return (w.chars || [])
-    .filter((c) =>
-      c &&
-      c.id &&
-      !isHuman(w, c.id) &&
-      !isMediaAccount(w, c.id) &&
-      (!post || c.id !== post.authorId) &&
-      !excluded.has(c.id)
-    )
-    .map((c) => {
-      const rel = targetId ? (getRel(w, c.id, targetId) || {}) : {};
-      const relationScore = Math.abs(Number(rel.score) || 0);
-      const follows = targetId && isFollowing(w, c.id, targetId) ? 28 : 0;
-      const interest = targetId ? socialInteractionInterest(w, c.id, targetId) : 0;
-      const idleMinutes = Math.min(240, fairBotIdleMs(w, c.id) / 60000);
-      return {
-        c,
-        score: idleMinutes * 1.7 + relationScore * 0.35 + follows + interest * 0.45,
-      };
-    })
-    .sort((a, b) =>
-      (b.score - a.score) ||
-      (characterVisibleWorldActivityAt(w, a.c.id) - characterVisibleWorldActivityAt(w, b.c.id)) ||
-      String(a.c.id).localeCompare(String(b.c.id))
-    )
-    .map((row) => row.c);
-}
-
-function providerFreeCommentText(w, actor, post) {
-  const en = worldLanguage(w, w.meId) === "en";
-  const caption = String(post && post.text || "").replace(/\s+/g, " ").trim();
-  const visual = String(post && post.imageDescription || "").replace(/\s+/g, " ").trim();
-  const low = `${caption} ${visual}`.toLowerCase();
-  const lore = providerFreeActorLore(actor);
-  const rel = getRel(w, actor.id, post.authorId) || {};
-  const tier = relationshipFilterTier(rel);
-  const hostile = tier === "hostile" || tier === "negative" || hasEnemyOrRivalBond(rel);
-  const close = tier === "close" || tier === "good" || relationshipDeclaresFriendship(rel);
-  const reserved = /reserved|quiet|private|formal|stoic|z[aá]rk[oó]zott|csendes|visszah[uú]z[oó]d/.test(lore);
-  const playful = /sarcast|teas|playful|chaotic|funny|humor|impulsive|szark|ugrat|j[aá]t[eé]kos|kaot/.test(lore);
-  const seed = commentSeedNumber(`${actor.id}|${post.id}|provider-free`);
-  let text = "";
-
-  if (/\b(tired|exhausted|drained|sleepy|burnt?\s*out|stress(?:ed)?|f[aá]radt|kimer[uü]lt|stressz)\b/.test(low)) {
-    text = hostile ? (en ? "rough." : "kemény.")
-      : close ? (en ? "you okay?" : "jól vagy?")
-      : (en ? "felt that." : "átérzem.");
-  } else if (/\b(bored|boring|nothing to do|unatkoz|unalmas)\b/.test(low)) {
-    text = playful ? (en ? "then do something 😭" : "akkor csinálj valamit 😭")
-      : reserved ? (en ? "same." : "ugyanez.")
-      : (en ? "mood 😭" : "hangulat 😭");
-  } else if (/\b(hurt|pain|sick|ill|hospital|injur|beteg|f[aá]j|k[oó]rh[aá]z|s[eé]r[uü]l)\b/.test(low)) {
-    text = hostile ? "👀" : (en ? "you good?" : "minden oké?");
-  } else if (/\b(congrats?|won|passed|accepted|proud|finally|success|nyert|siker|felvettek|v[eé]gre|b[uü]szke)\b/.test(low)) {
-    text = hostile ? (en ? "not bad." : "nem rossz.")
-      : reserved ? (en ? "congrats." : "gratulálok.")
-      : (en ? "okayyy congrats 😭" : "na jóóó gratula 😭");
-  } else if (/\b(training|practice|gym|workout|karate|dojo|edz[eé]s|gyakorl[aá]s|kondi)\b/.test(low)) {
-    text = hostile ? (en ? "we'll see." : "majd meglátjuk.")
-      : playful ? (en ? "training really got you huh 😭" : "az edzés rendesen kivégzett mi 😭")
-      : (en ? "sounds intense." : "keménynek hangzik.");
-  } else if (/\b(work|school|uni|college|study|exam|psychology|munka|suli|egyetem|tanul|vizsga|pszichol[oó]gia)\b/.test(low)) {
-    text = close ? (en ? "survive first, complain to me after 😭" : "előbb éld túl, aztán panaszkodj nekem 😭")
-      : reserved ? (en ? "good luck." : "sok sikert.")
-      : (en ? "yeah that sounds exhausting." : "ja, ez elég húzósnak hangzik.");
-  } else if ((post && (post.imageId || post.image)) || visual) {
-    text = hostile ? "👀"
-      : reserved ? (en ? "nice shot." : "jó kép.")
-      : playful ? (en ? "okay this pic 😭" : "na jó ez a kép 😭")
-      : (en ? "this one actually goes hard." : "ez amúgy nagyon jó lett.");
-  } else if (/[?？]\s*$/.test(caption)) {
-    text = hostile ? (en ? "interesting question." : "érdekes kérdés.")
-      : close ? "👀"
-      : (en ? "wait, now I'm curious too." : "várj, most már én is kíváncsi vagyok.");
-  } else if (/\b(love|miss|date|crush|kiss|cute|hot|szeret|hi[aá]ny|randi|cs[oó]k|cuki)\b/.test(low)) {
-    text = hostile ? "🙄" : close ? "👀" : "👀";
-  } else {
-    const neutral = reserved
-      ? (en ? ["noted.", "fair.", "👀"] : ["vettem.", "jogos.", "👀"])
-      : playful
-        ? (en ? ["😭", "okay then 😭", "👀"] : ["😭", "na jó 😭", "👀"])
-        : (en ? ["👀", "real.", "fair."] : ["👀", "real.", "jogos."]);
-    text = neutral[seed % neutral.length];
-  }
-
-  if (socialSpeechStyleRequiresAllCaps(actor) && /\p{L}/u.test(text)) {
-    text = text.toLocaleUpperCase();
-  }
-  return String(text || "👀").trim().slice(0, 180);
-}
-
-function appendProviderFreeComment(n, postId, actorId, rawText, parentId = "") {
-  const p = (n.posts || []).find((row) => row && row.id === postId);
-  const actor = charById(n, actorId);
-  if (!p || !actor || isHuman(n, actor.id) || actor.id === p.authorId) return false;
-  p.comments = safePostComments(p);
-  const parent = parentId ? p.comments.find((row) => row && row.id === parentId) : null;
-  if (!parent && p.comments.some((row) => row && !row.parent && row.authorId === actor.id)) return false;
-  if (parent && parent.authorId === actor.id) return false;
-
-  let body = cleanGeneratedComment(n, actor.id, String(rawText || "").trim(), 220);
-  if (!body) body = "👀";
-  if (socialSelfClassificationContradiction(n, actor.id, body)) body = "👀";
-  const targetId = parent && parent.authorId ? parent.authorId : p.authorId;
-  if (!socialNsfwTextAllowed(n, actor.id, targetId ? [targetId] : [], body)) return false;
-  if (socialTextHasOutOfScopeCharacterReference(n, p, parent || null, actor.id, body)) body = "👀";
-  body = sanitizeGeneratedDirectAddress(n, actor.id, targetId, body) || "👀";
-
-  const made = {
-    id: uid(),
-    authorId: actor.id,
-    text: body,
-    ts: now(),
-    parent: parent ? parent.id : null,
-    language: worldLanguage(n, n.meId),
-    socialContractVersion: 0,
-    reactionAct: "",
-    groundingBasis: "",
-    groundingMeaning: "",
-    providerFreeFallback: true,
-  };
-  p.comments.push(made);
-  noteComment(n, p, made);
-
-  const juice = publicSocialJuiceSignals(made.text);
-  recordSocialEvent(n, {
-    type: parent ? "reply" : "comment",
-    refId: made.id,
-    ts: made.ts,
-    actorId: actor.id,
-    targetIds: targetId && targetId !== actor.id ? [targetId] : [],
-    visibility: "public",
-    factLevel: "observed",
-    importance: (parent ? 28 : 20) + juice.importance,
-    drama: juice.drama,
-    romance: juice.romance,
-    embarrassment: juice.embarrassment,
-    source: "local-fallback",
-    text: made.text,
-    tags: ["social", "ai-comment", parent ? "reply" : "comment", "provider-free", ...juice.tags],
-    meta: { postId: p.id, commentId: made.id, parentId: made.parent || "", postAuthorId: p.authorId || "", targetId: targetId || "" },
-  });
-  recordCharacterAgentAction(n, actor.id, {
-    surface: parent ? "reply" : "comment",
-    action: parent ? "REPLY" : "COMMENT",
-    targetId: targetId || p.authorId || "",
-    refId: made.id,
-    ts: made.ts,
-  });
-  return true;
-}
-
-function providerFreeNoteText(w, bot) {
-  const en = worldLanguage(w, w.meId) === "en";
-  const mem = ensureCharMemory(w, bot.id);
-  const mood = String(mem && mem.selfState && mem.selfState.mood || "").toLowerCase();
-  const lore = providerFreeActorLore(bot);
-  const seed = commentSeedNumber(`${bot.id}|provider-free-note|${Math.floor(now() / (10 * 60000))}`);
-  let options;
-
-  if (/tired|exhaust|sleep|drained|f[aá]radt|kimer[uü]lt|alv/.test(mood)) {
-    options = en ? ["need sleep.", "running on fumes", "done for today."] : ["aludnom kell.", "mára ennyi.", "kifújtam."];
-  } else if (/angry|annoy|frustrat|pissed|d[uü]h|ideges|frusztr/.test(mood)) {
-    options = en ? ["not in the mood.", "yeah, no.", "interesting."] : ["most ne.", "na persze.", "érdekes."];
-  } else if (/jealous|possess|f[eé]lt[eé]ken|birtokl/.test(mood)) {
-    options = en ? ["interesting.", "noted 👀", "right."] : ["érdekes.", "vettem 👀", "aha."];
-  } else if (/happy|excited|good|great|boldog|izgatott|j[oó]kedv/.test(mood)) {
-    options = en ? ["okay today is actually good", "good mood. suspicious.", "we're up"] : ["na jó, ez a nap tényleg jó", "túl jó kedvem van, gyanús", "ma működünk"];
-  } else if (/sarcast|chaotic|teas|playful|szark|kaot|ugrat/.test(lore)) {
-    options = en ? ["love that for me.", "anyway 😭", "what a day."] : ["imádom ezt nekem.", "mindegy is 😭", "micsoda nap."];
-  } else if (/flirt|charm|romantic|fl[oö]rt|romantik/.test(lore)) {
-    options = en ? ["bored. entertain me.", "who's awake 👀", "hmm."] : ["unatkozom. szórakoztass.", "ki van még ébren 👀", "hmm."];
-  } else if (/reserved|quiet|private|formal|stoic|z[aá]rk[oó]zott|csendes|visszah[uú]z[oó]d/.test(lore)) {
-    options = en ? ["offline mentally.", "quiet day.", "need a minute."] : ["fejben offline.", "csendes nap.", "kell egy perc."];
-  } else {
-    options = en ? ["long day.", "need a minute.", "anyway."] : ["hosszú nap.", "kell egy perc.", "na mindegy."];
-  }
-
-  let text = options[seed % options.length];
-  if (socialSpeechStyleRequiresAllCaps(bot) && /\p{L}/u.test(text)) text = text.toLocaleUpperCase();
-  return String(text || "").slice(0, NOTE_MAX);
-}
-
-function addProviderFreeNoteReaction(n, noteId, actorId) {
-  const note = (n.notes || []).find((row) => row && row.id === noteId);
-  const actor = charById(n, actorId);
-  if (!note || !actor || isHuman(n, actor.id) || actor.id === note.authorId) return false;
-  note.reactedBy = Array.isArray(note.reactedBy) ? note.reactedBy : [];
-  note.processedBy = Array.isArray(note.processedBy) ? note.processedBy : [];
-  note.reacts = Array.isArray(note.reacts) ? note.reacts : [];
-  if (note.reactedBy.includes(actor.id)) return false;
-
-  const rel = getRel(n, actor.id, note.authorId) || {};
-  const tier = relationshipFilterTier(rel);
-  const lore = providerFreeActorLore(actor);
-  const low = String(note.text || "").toLowerCase();
-  const seed = commentSeedNumber(`${actor.id}|${note.id}|provider-free-note-react`);
-  let pool = ["👀", "😭", "🤨"];
-  if (tier === "close" || tier === "good" || relationshipDeclaresFriendship(rel)) pool = /sad|tired|hurt|f[aá]radt|szomor|f[aá]j/.test(low) ? ["🫶", "❤️", "🥺"] : ["👀", "😭", "🫶"];
-  if (tier === "hostile" || tier === "negative" || hasEnemyOrRivalBond(rel)) pool = ["👀", "🙄", "🤨"];
-  if (/reserved|formal|stoic|z[aá]rk[oó]zott/.test(lore)) pool = ["👀", "🤨"];
-  const emoji = pool[seed % pool.length];
-
-  note.reacts.push({ by: actor.id, e: emoji });
-  note.reactedBy.push(actor.id);
-  if (!note.processedBy.includes(actor.id)) note.processedBy.push(actor.id);
-  return true;
-}
-
-function runProviderFreeSocialFallback(w, update, options = {}) {
-  if (!w || !update || !Array.isArray(w.chars) || !w.chars.length) return false;
-  const ts = now();
-
-  /* 1) Every fresh post gets visible comments even while the provider is 429ing. */
-  const commentPost = (w.posts || [])
-    .filter((post) => {
-      if (!post || !post.id || !post.authorId) return false;
-      const age = ts - (Number(post.ts) || 0);
-      if (age < 2500 || age > PROVIDER_FREE_FRESH_POST_MAX_AGE_MS) return false;
-      return topLevelAiCommentCount(w, post) < PROVIDER_FREE_POST_COMMENT_TARGET;
-    })
-    .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))[0] || null;
-
-  if (commentPost) {
-    const existing = topLevelAiCommenterIds(w, commentPost);
-    const actor = providerFreeSocialCandidates(w, commentPost, existing)[0];
-    if (actor) {
-      let created = false;
-      update((n) => {
-        const livePost = (n.posts || []).find((row) => row && row.id === commentPost.id);
-        const liveActor = charById(n, actor.id);
-        if (!livePost || !liveActor) return;
-        const liveExisting = topLevelAiCommenterIds(n, livePost);
-        if (liveExisting.has(liveActor.id)) return;
-        created = appendProviderFreeComment(
-          n,
-          livePost.id,
-          liveActor.id,
-          providerFreeCommentText(n, liveActor, livePost)
-        );
-        if (created) {
-          const sim = ensureSimState(n);
-          sim.lastSuccessAt = now();
-          sim.lastAttemptAt = now();
-        }
-      });
-      if (created) return true;
-    }
-  }
-
-  /* 2) The player's current Note gets a visible reaction without needing AI. */
-  const myNote = noteOf(w, w.meId);
-  if (myNote && ts - (Number(myNote.ts) || 0) >= 5000 && ts - (Number(myNote.ts) || 0) < NOTE_LIFE) {
-    const done = new Set([...(myNote.reactedBy || []), ...(myNote.processedBy || [])]);
-    const candidates = providerFreeSocialCandidates(w, null, done)
-      .filter((c) => c.id !== myNote.authorId);
-    const actor = candidates[0];
-    if (actor) {
-      let reacted = false;
-      update((n) => {
-        reacted = addProviderFreeNoteReaction(n, myNote.id, actor.id);
-        if (reacted) {
-          const sim = ensureSimState(n);
-          sim.lastSuccessAt = now();
-          sim.lastAttemptAt = now();
-        }
-      });
-      if (reacted) return true;
-    }
-  }
-
-  /* 3) If the whole visible world is silent, the fairest idle bot posts a Note. */
-  if (liveWorldSilenceMs(w) >= PROVIDER_FREE_WORLD_SILENCE_MS) {
-    const candidates = providerFreeSocialCandidates(w)
-      .filter((c) => {
-        const active = noteOf(w, c.id);
-        return !active || ts - (Number(active.ts) || 0) >= autonomousAiNoteRefreshMs(w, c);
-      });
-    const bot = candidates[0];
-    if (bot) {
-      let made = false;
-      update((n) => {
-        const live = charById(n, bot.id);
-        if (!live) return;
-        const active = noteOf(n, live.id);
-        if (active && now() - (Number(active.ts) || 0) < autonomousAiNoteRefreshMs(n, live)) return;
-        const text = providerFreeNoteText(n, live);
-        if (!text) return;
-        setNote(n, live.id, text);
-        const sim = ensureSimState(n);
-        sim.lastSuccessAt = now();
-        sim.lastAttemptAt = now();
-        made = true;
-      });
-      if (made) return true;
-    }
-  }
-
-  return false;
-}
-
 async function generateFocusedCommentReply(
   w,
   post,
@@ -67947,7 +67603,7 @@ JSON ONLY: {"text":"one direct reply"}`,
     {
       maxTokens: 260,
       maxTries: 2,
-      priority: humanReply ? 100 : 35,
+      priority: humanReply ? 100 : 20,
       maxBusyWaits: humanReply ? 2 : 1,
       busyRetryCapMs: 60000,
       timeoutMs: 18000,
@@ -69625,11 +69281,7 @@ if (targetNote) {
     }
 
     const out =
-      await genNote(
-        view,
-        bot,
-        { priority: forceHeartbeat ? 55 : 20 }
-      );
+      await genNote(view, bot);
 
     if (!out || out.skip) return null;
 
@@ -70210,29 +69862,8 @@ if (targetNote) {
       return null;
     }
 
-    let out;
-    try {
-      out = await genDM(view, bot, autonomousReasonContext);
-    } catch (dmErr) {
-      /* HARD-IDLE FAILSAFE: if the provider itself is rate-limited, do not hammer
-         the exact same heartbeat DM every scheduler beat. For the four-minute
-         liveness heartbeat only, fall back to the already-grounded deterministic
-         DM builder. It uses the exact selected reason and does not invent a new
-         topic. Other autonomous DMs keep their normal failure semantics. */
-      const hardIdleHeartbeat = Boolean(
-        action &&
-        action.payload &&
-        action.payload.trigger === "hard-idle-heartbeat"
-      );
-      if (hardIdleHeartbeat && dmErr && dmErr.busy) {
-        out = fallbackAutonomousDmResponse(view, bot, autonomousReasonContext);
-        if (!out || out.skip || !String(out.text || "").trim()) {
-          throw dmErr;
-        }
-      } else {
-        throw dmErr;
-      }
-    }
+    let out =
+      await genDM(view, bot, autonomousReasonContext);
 
     if (!autonomousDmOutputMatchesReason(out, autonomousReasonContext)) {
       try {
@@ -73870,55 +73501,16 @@ const signOut = useCallback(async () => {
     const beat = async () => {
   if (!alive) return;
 
-  if (autoRunning.current) return;
+  if (autoRunning.current || cooldownLeft() > 0) return;
 
   const view2 = viewRef.current;
   if (!view2 || !(view2.chars || []).length) return;
-
-  /* RATE-LIMIT LOOP BREAKER: automatic world actions yield while the hidden
-     provider breaker is active. Direct player DM/Scene/Group requests use the
-     interactive lane and are not blocked here. A provider-free feed heartbeat
-     may still rescue a genuinely due event-grounded post. */
-  if (cooldownLeft() > 0) {
-    if (runProviderFreeSocialFallback(view2, update, { reason: "provider-cooldown" })) return;
-    runAutonomousFeedHeartbeat(view2, update);
-    return;
-  }
 
   const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
   const pendingReplyOverride = !manualQueued && !isPlayerCommentReplyAction(view2, queued)
     ? pendingPlayerReplyAction(view2)
     : null;
-
-  /* VISIBLE SOCIAL LATENCY FIX:
-   * A fresh post that is still missing its first visible comment set must not sit
-   * behind an unrelated old background action. Reuse the SAME single simulation
-   * slot; this is priority ordering, not extra concurrency. */
-  const urgentFreshCoveragePost = !manualQueued
-    ? guaranteedCommentCoverageCandidate(view2)
-    : null;
-  const queuedAlreadyCoversUrgentPost = Boolean(
-    queued &&
-    queued.type === "comments" &&
-    urgentFreshCoveragePost &&
-    String(queued.payload && queued.payload.postId || "") === String(urgentFreshCoveragePost.id || "")
-  );
-  const urgentFreshCommentOverride =
-    urgentFreshCoveragePost && !queuedAlreadyCoversUrgentPost
-      ? guaranteedPostCommentAction(view2, urgentFreshCoveragePost, "fresh-visible-priority")
-      : null;
-
-  /* HARD LIVENESS OVERRIDE:
-   * Even if an old queue item is hanging around, four minutes with no VISIBLE AI
-   * activity is enough. A grounded DM wins; otherwise a fair-rotation AI Note is
-   * forced. Manual/player-reply work still stays above this. */
-  const hardIdleHeartbeatOverride =
-    !manualQueued &&
-    !pendingReplyOverride &&
-    liveWorldSilenceMs(view2) >= LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS
-      ? pickHardIdleWorldHeartbeatAction(view2)
-      : null;
 
   /*
    * RECOVERY v99.2:
@@ -74036,17 +73628,6 @@ const signOut = useCallback(async () => {
     return;
   }
 
-  /* LAST-RESORT VISIBLE-WORLD RESCUE: if AI returned empty/invalid output without
-     setting a provider cooldown, never leave the app visually dead for minutes. */
-  if (
-    !manualQueued &&
-    !pendingReplyOverride &&
-    liveWorldSilenceMs(view2) >= PROVIDER_FREE_WORLD_SILENCE_MS &&
-    runProviderFreeSocialFallback(view2, update, { reason: "silent-world" })
-  ) {
-    return;
-  }
-
   /* Provider backoff is handled inside the AI queue. Never block the simulation
    * loop or show a user-facing cooldown just because the provider throttled. */
 
@@ -74083,8 +73664,6 @@ const signOut = useCallback(async () => {
   let action =
     pendingReplyOverride ||
     (isPlayerCommentReplyAction(view2, queued) ? queued : null) ||
-    urgentFreshCommentOverride ||
-    hardIdleHeartbeatOverride ||
     coverageOverride ||
     essentialActivityOverride ||
     socialBacklogFeedOverride ||
@@ -74426,12 +74005,12 @@ const signOut = useCallback(async () => {
       if (alive) setAutoBusy(false);
     };
     /*
-     * 5 másodpercenként nézzük meg, van-e sürgős queue-teendő.
-     * Ez NEM jelent 5 másodpercenként AI-hívást:
+     * 9 másodpercenként nézzük meg, van-e sürgős queue-teendő.
+     * Ez NEM jelent 9 másodpercenként AI-hívást:
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 5000);
+    const i = setInterval(beat, 9000);
     const first = setTimeout(beat, 100);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
