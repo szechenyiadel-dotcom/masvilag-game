@@ -14236,6 +14236,169 @@ ${rows.join("\n")}`;
 
 
 /* -------------------------------------------------------------------------
+   CHARACTER-FIRST SOCIAL DECISION + SEMANTIC VARIETY
+
+   Wording diversity alone is not enough. These helpers force the model to
+   vary WHAT a character chooses to do while keeping that choice traceable to
+   the same stable personality/canon. They are read-only prompt aids except for
+   the autonomous-post semantic duplicate guard below.
+   ------------------------------------------------------------------------- */
+const SOCIAL_VARIETY_STOPWORDS = new Set([
+  "this","that","with","from","have","just","really","very","your","youre","about","like","they","them","their","what","when","where","would","could","should","still","because","there","here","then","than","into","over","under","some","more","most","been","being","were","was","are","the","and","for","but","not","you","its","im","ive","dont","cant","wont","yeah","okay","ok",
+  "hogy","egy","az","ami","amit","aki","akkor","most","még","már","csak","nagyon","tényleg","mert","mint","veled","neked","róla","erről","arról","ilyen","olyan","volt","van","lesz","nem","igen","meg","is","de","és","vagy","én","te","ő","ők"
+]);
+
+function socialVarietyTokens(value) {
+  return normUtterance(value)
+    .split(" ")
+    .map((x) => x.trim())
+    .filter((x) => x.length >= 4 && !SOCIAL_VARIETY_STOPWORDS.has(x));
+}
+
+function recentSurfaceTextsFor(w, id, surface = "social", limit = 14) {
+  if (!w || !id) return [];
+  const rows = [];
+  const add = (text, ts) => {
+    const value = String(text || "").replace(/\s+/g, " ").trim();
+    if (value) rows.push({ text: value, ts: Number(ts) || 0 });
+  };
+
+  if (surface === "post" || surface === "social") {
+    (w.posts || []).forEach((p) => {
+      if (p && p.authorId === id && p.text) add(p.text, p.ts);
+    });
+  }
+  if (surface === "comment" || surface === "reply" || surface === "social") {
+    (w.posts || []).forEach((p) => safePostComments(p).forEach((c) => {
+      if (!c || c.authorId !== id || !c.text) return;
+      if (surface === "reply" && !c.parent) return;
+      if (surface === "comment" && c.parent) return;
+      add(c.text, c.ts || p.ts);
+    }));
+  }
+  if (surface === "dm" || surface === "social") {
+    Object.keys(w.chats || {}).forEach((k) => {
+      const otherId = String(k).split("|")[1];
+      if (otherId !== id) return;
+      (w.chats[k] || []).forEach((m) => {
+        if (m && m.from === "them" && m.text) add(m.text, m.ts);
+      });
+    });
+  }
+
+  rows.sort((a, b) => b.ts - a.ts);
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const sig = normUtterance(row.text);
+    if (!sig || seen.has(sig)) continue;
+    seen.add(sig);
+    out.push(row.text);
+    if (out.length >= Math.max(1, Number(limit) || 14)) break;
+  }
+  return out;
+}
+
+function socialSemanticOverlap(a, b) {
+  const A = new Set(socialVarietyTokens(a));
+  const B = new Set(socialVarietyTokens(b));
+  if (!A.size || !B.size) return 0;
+  let hit = 0;
+  A.forEach((x) => { if (B.has(x)) hit += 1; });
+  return hit / Math.max(1, Math.min(A.size, B.size));
+}
+
+function isRepetitiveAutonomousPostTopic(w, id, text) {
+  const fresh = String(text || "").replace(/\s+/g, " ").trim();
+  if (!fresh) return true;
+  const freshTokens = socialVarietyTokens(fresh);
+  if (freshTokens.length < 2) return false;
+
+  const history = recentSurfaceTextsFor(w, id, "post", 14);
+  for (const old of history) {
+    if (isRepetitiveUtterance(w, id, fresh)) return true;
+    const overlap = socialSemanticOverlap(fresh, old);
+    if (overlap >= 0.72) return true;
+
+    const a = freshTokens.slice(0, 4).join(" ");
+    const b = socialVarietyTokens(old).slice(0, 4).join(" ");
+    if (a && b && a === b && overlap >= 0.48) return true;
+  }
+  return false;
+}
+
+function recentReactionActProfile(w, id, limit = 12) {
+  const acts = [];
+  (w.posts || []).slice(0, 80).forEach((post) => {
+    safePostComments(post).forEach((comment) => {
+      if (!comment || comment.authorId !== id || !comment.reactionAct) return;
+      acts.push({ act: String(comment.reactionAct), ts: Number(comment.ts) || Number(post.ts) || 0 });
+    });
+  });
+  acts.sort((a, b) => b.ts - a.ts);
+  return acts.slice(0, Math.max(1, Number(limit) || 12)).map((row) => row.act);
+}
+
+function socialVarietyProfileCard(w, c, surface = "social") {
+  if (!w || !c || !c.id) return "";
+  const recent = recentSurfaceTextsFor(w, c.id, surface, surface === "post" ? 10 : 12);
+  const themes = [];
+  const seen = new Set();
+  recent.forEach((line) => {
+    socialVarietyTokens(line).slice(0, 6).forEach((token) => {
+      if (!seen.has(token)) { seen.add(token); themes.push(token); }
+    });
+  });
+  const acts = recentReactionActProfile(w, c.id, 12);
+  const recentActs = acts.length ? acts.join(" → ") : "-";
+
+  return `
+SOCIAL VARIETY MEMORY — ${String(surface).toUpperCase()}:
+- recent own ${surface} lines to avoid repeating/paraphrasing: ${recent.length ? recent.slice(0, 8).map((x) => `“${cut(x, 100)}”`).join(" | ") : "-"}
+- recently overrepresented content words/themes: ${themes.slice(0, 18).join(", ") || "-"}
+- recent public reaction acts: ${recentActs}
+- Do NOT merely rewrite an old idea with synonyms. Change the concrete subject, reaction function, emotional angle, sentence architecture or social intention when reality allows it.
+- Variety must stay INSIDE SELF's personality. A quiet person becomes varied through different quiet behaviors; they do not become loud just for novelty. A rival can vary between ignore, dry skepticism, competition, sarcasm, challenge and begrudging acknowledgement without turning supportive.
+- Repeating a topic is allowed only when a CURRENT event genuinely reactivates it; if so, advance the situation instead of restating the old line.
+`;
+}
+
+function characterBehaviorDecisionCard(w, c, targetId = "", surface = "social") {
+  if (!w || !c || !c.id) return "";
+  const lore = [c.personality, c.traits, c.speech, c.voice, c.goals, c.fears, c.likes, c.secrets, c.backstory, c.extra, c.connections]
+    .filter(Boolean).join(" ").toLowerCase();
+  const target = targetId ? charById(w, targetId) : null;
+  const rel = target ? (effectiveRelationshipForBehavior(w, c.id, target.id) || {}) : {};
+  const cue = target ? connectionRelationshipCue(w, c, target) : {};
+  const directives = [];
+
+  if (/sarcast|szarkaszt|dry|deadpan|csipkel|teas|roast/.test(lore)) directives.push("Uses dry/sarcastic/teasing interpretation when appropriate; warmth should still sound like SELF, not generic sweetness.");
+  if (/quiet|reserved|introvert|zárkózott|visszafogott|stoic|guarded/.test(lore)) directives.push("Low-expression character: often chooses silence, like-only, short replies or delayed/private reactions; strong feelings do not automatically become long public speeches.");
+  if (/impuls|chaotic|kaot|hot.?headed|forrófej|volatile/.test(lore)) directives.push("Impulsive/volatile character: can react quickly and emotionally, but the reaction must still have a concrete trigger and may later create regret/open loops.");
+  if (/arrogant|arrogáns|proud|büszke|status|státusz|competitive|verseng/.test(lore)) directives.push("Pride/status/competition affects what SELF publicly concedes. Compliments to rivals should be rare, qualified or competitive unless the relationship has genuinely softened.");
+  if (/loyal|lojális|protect|védelmez|devoted|ragaszkod/.test(lore)) directives.push("Loyalty has behavioral consequences: protects trusted people, resists weak gossip, remembers betrayals and may take sides when the evidence/knowledge supports it.");
+  if (/jealous|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(lore)) directives.push("Jealous/possessive traits change attention and interpretation when a real romantic/social trigger is visible; expression follows SELF's personality and public mask, not a generic jealousy line.");
+  if (/manipulat|számító|calculating|schem|intrig/.test(lore)) directives.push("Strategic/manipulative SELF may conceal motive, test people, use timing/ambiguity or choose a private channel instead of saying the obvious thing publicly.");
+  if (/warm|kind|kedves|empat|caring|gondoskod/.test(lore)) directives.push("Warmth is specific and relational, not universal politeness. Support should reference the actual person/situation and can disappear toward enemies/rivals.");
+  if (/flirt|flört|seduct|csábít|charm/.test(lore)) directives.push("Charm/flirt is target-gated by orientation and actual attraction/canon; do not spray the same flirt pattern at everyone.");
+  if (/aggress|violent|erőszak|dominant|domináns|ruthless|könyörtelen/.test(lore)) directives.push("Aggression/dominance can affect conflict decisions, but do not manufacture fights without a real trigger. It may show as pressure, terse control, challenge or escalation.");
+
+  return `
+CHARACTER-FIRST BEHAVIOR DECISION — ${String(surface).toUpperCase()}:
+- SELF = ${c.name}. Personality/Traits/Goals/Fears/Likes/Secrets/Backstory/Connections decide WHAT SELF notices, wants, avoids, misreads, values and chooses to do — not merely the wording after a generic decision.
+- Speech/Voice decides HOW SELF expresses that decision.
+- Current mood/memory/relationship may temporarily bend behavior, but cannot erase core personality without accumulated story evidence.
+${target ? `- current directed relationship toward ${target.name}: score=${Number(rel.score) || 0}; bond=${String(rel.bond || rel.type || "-")}; mood=${String(rel.mood || "-")}; own Connections cue=${cut(String(cue && cue.snippet || "-"), 420)}` : "- no single direct target for this action."}
+- Public behavior and private behavior are different. Choose COMMENT/REPLY/POST/DM/IGNORE based on what SELF would realistically expose on that surface.
+- Relationship changes are subjective: the SAME event may move different characters differently because personality, history, insecurity, loyalty, pride, jealousy and values differ.
+- Do not reward interaction merely because it happened. A rival can resent attention; a guarded character may appreciate support but hide it; a loyal friend may forgive a small mistake; an enemy may interpret ambiguous behavior suspiciously.
+- Never normalize everybody toward friendly, reasonable, therapeutic, polite behavior. Preserve flaws, bias, ego, humor, awkwardness, cruelty, restraint and contradiction when they are canon-consistent.
+${directives.length ? `- SELF-specific behavioral consequences:\n  - ${directives.join("\n  - ")}` : ""}
+`;
+}
+
+
+/* -------------------------------------------------------------------------
    PUBLIC COMMENT REALISM
 
    A character's public comment is not identical to their private inner state.
@@ -33742,35 +33905,55 @@ RULE:
 
 function authorialSocialWorldMap(w) {
   if (!w) return "";
+
+  /*
+   * FULL-CAST AUTHORIAL INDEX.
+   *
+   * Every active character is represented here so the WORLD ENGINE can keep
+   * the entire social graph coherent. The currently speaking actors still get
+   * their full, unabridged SELF sheets in sealed capsules below. Other people
+   * are represented as a compressed authorial index containing EVERY behavior-
+   * relevant category; this avoids blowing the provider context window while
+   * preserving the whole-cast picture.
+   */
   const rows = (w.chars || [])
     .filter((c) => c && c.id)
-    .slice(0, 80)
     .map((c) => {
-      const identity = [
-        c.job || c.occupation || c.role || "",
-        characterFactionIdentityCard(c) || "",
-      ].filter(Boolean).join(" | ");
-      const behavior = cut(
-        [c.personality, c.traits, c.goals, c.fears].filter(Boolean).join(" | "),
-        420
-      );
-      const history = cut(
-        [c.bio, c.backstory, c.extra].filter(Boolean).join(" | "),
-        360
-      );
-      const connections = cut(String(c.connections || ""), 420);
-      return `- ${c.name} [${c.id}] :: identity=${identity || "-"} :: behavior=${behavior || "-"} :: story=${history || "-"} :: ownConnections=${connections || "-"}`;
+      const mem = (w.charMemory && w.charMemory[c.id]) || {};
+      const selfState = mem && mem.selfState && typeof mem.selfState === "object"
+        ? mem.selfState
+        : {};
+
+      const f = (value, max) => cut(String(value || "").replace(/\s+/g, " ").trim(), max) || "-";
+
+      return `- ${c.name} [${c.id}]
+  identity=${f([c.gender, c.orientation, c.job || c.occupation, c.role, c.rank, c.organization, c.affiliation].filter(Boolean).join(" | "), 220)}
+  public=${f([c.bio, c.looks].filter(Boolean).join(" | "), 180)}
+  personality=${f(c.personality, 220)}
+  traits=${f(c.traits, 170)}
+  speech=${f(c.speech, 180)}
+  voiceExamples=${f(c.voice, 200)}
+  goals=${f(c.goals, 150)}
+  fears=${f(c.fears, 130)}
+  likes=${f(c.likes, 130)}
+  secrets=${f(c.secrets, 120)}
+  story=${f(c.backstory, 220)}
+  extra=${f(c.extra, 170)}
+  ownConnections=${f(c.connections, 260)}
+  currentSelfState=${f([selfState.mood, selfState.intent, ...(Array.isArray(selfState.openLoops) ? selfState.openLoops.slice(-3) : [])].filter(Boolean).join(" | "), 180)}`;
     });
 
   return `
-AUTHORIAL WORLD MODEL — NON-DIEGETIC, FOR SIMULATION ONLY:
+AUTHORIAL WORLD MODEL — COMPLETE CAST INDEX, NON-DIEGETIC:
 ${rows.join("\n") || "-"}
 
 ABSOLUTE EPISTEMIC FIREWALL:
-- The WORLD ENGINE may read this entire map to understand who everybody really is, how each person would behave, and which relationships/rivalries/crushes plausibly matter.
-- A CHARACTER does NOT automatically know this map. Never quote, reveal, imply knowledge of, or act on another person's private personality/backstory/secrets/private Connections merely because the engine can see them.
-- For each speaking actor, diegetic knowledge comes ONLY from that actor's sealed capsule: visible current post/thread, public profile facts, SELF's own directed Connections canon, and SELF's stored memories/witnessed events/rumors/learned information.
-- Use hidden authorial information only to SIMULATE the owner of that information accurately, never to grant it to another actor.
+- The WORLD ENGINE receives EVERY active character above so it can understand the whole social system, personalities, rivalries, loyalties, crushes, history and likely behavior.
+- The CURRENT SPEAKER does NOT automatically know this authorial map. Never convert engine knowledge into telepathy.
+- The speaking actor's own full sheet is authoritative for SELF. Their diegetic knowledge of OTHERS comes ONLY from visible current content, public facts, SELF's own Connections/canon, stored memories, witnessed events, conversations and rumors they plausibly heard.
+- Hidden authorial facts may be used to simulate the OWNER of those facts accurately. They may NOT be spoken/assumed by another actor unless that actor's diegetic packet supports them.
+- Several known clues may be combined into a realistic inference, but an inference remains a suspicion/guess until confirmed.
+- Private Secrets, hidden crushes, private Connections and inner motives NEVER become common knowledge simply because the world engine can read them.
 `;
 }
 
@@ -33841,6 +34024,10 @@ ${voiceCard(actor)}
 ${socialSelfStyleOwnershipCard(actor)}
 
 ${commentGenerationStyleCard(w, actor)}
+
+${characterBehaviorDecisionCard(w, actor, targetId, directComment ? "reply" : "comment")}
+
+${socialVarietyProfileCard(w, actor, directComment ? "reply" : "comment")}
 
 FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
 ${fullSelfCharacterSheetForSocial(w, actor)}
@@ -34120,6 +34307,9 @@ SZUBJEKTÍV REAKCIÓ — CSAK A FENTI KÖZÖS JELENTÉS UTÁN:
 - Ne változtass kapcsolatot pusztán azért, mert van poszt; csak ha a karakter reakciója/értelmezése tényleg érzelmileg számít.
 - A "perceptions" mezőben add meg a karakter SAJÁT értelmezését. "aboutMe": true csak azt jelenti, hogy Ő azt hiszi, hogy róla/neki szól.
 - A "changes" mezőt használd más közvetlen social interakciókhoz is, ha tényleg indokolt.
+- RELATIONSHIP IMPACT IS CHARACTER-SPECIFIC: ugyanaz a poszt/komment különböző személyiségeknél eltérő deltát/moodot okozhat. Büszkeség, féltékenység, lojalitás, bizalmatlanság, érzékenység, rivalizálás, korábbi sérülés és aktuális mood ténylegesen számítson.
+- Ne adj automatikus +pontot kedvességre vagy automatikus -pontot nézeteltérésre. A karakter saját értékrendje és a kapcsolat története döntse el, hogy az esemény számára közeledés, semleges, szórakoztató, sértő, fenyegető vagy versengő.
+- AI↔AI interakciónál is csak annak a karakternek az iránya változzon, akinek tényleg érzelmi/percepciós reakciója keletkezett; ne szimmetrizáld automatikusan.
 - Ha ugyanaz a karakter ezt a konkrét posztot már egyszer személyesen értelmezte, ne generálj ugyanabból újra relationship deltát.
 
 ${commentVariationCard(
@@ -34140,6 +34330,8 @@ KARAKTERHANG — EZ A GENERÁLÁS EGYIK LEGFONTOSABB CÉLJA:
 - A speech/voice mezőből a megfogalmazás módja következzen: ritmus, mondathossz, szleng, szóhasználat, káromkodás, emoji, írásjelek, kis-/nagybetű, becenevek, szárazság vagy túláradás.
 - A backstory és Connections csak akkor jelenjen meg konkrét utalásként, ha a jelenlegi poszt vagy thread valóban megnyomja azt a pontot.
 - KÉT KARAKTER UGYANARRA A POSZTRA NE UGYANAZT ÉREZZE ÉS NE UGYANAZT MONDJA.
+- SEMANTIC VARIETY: ne csak más szavakkal írd ugyanazt a reakciót. Ha SELF utóbbi kommentjei főleg hype/roast/question/flirt/concern voltak, csak akkor használd újra ugyanazt a funkciót, ha EZ a poszt tényleg azt váltja ki.
+- A karakter saját visszatérő témái lehetnek felismerhetők, de minden új megszólalásnak legyen friss konkrét oka és előrelépése; ne legyen ugyanaz a személyiségjegy újracsomagolva.
 - Ha a karakter természetéből következik, hogy kérdez, provokál, mesél, védekezik, rájátszik, túlreagál, kinevet, flörtöl vagy részletesebben kifejti a véleményét, TEDD MEG. Ne lapítsd mindegyiket egy száraz egysoros reakcióvá.
 - A cél nem a hosszú szöveg, hanem a felismerhető karakterhang.
 
@@ -40270,6 +40462,10 @@ ${socialNsfwContextCard(w, [author.id], [])}
 FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
 ${fullSelfCharacterSheetForSocial(w, author)}
 
+${characterBehaviorDecisionCard(w, author, "", "post")}
+
+${socialVarietyProfileCard(w, author, "post")}
+
 AUTHORSHIP / SELF-CANON LOCK:
 - SELF is exactly ${author.name} [${author.id}].
 - SELF occupation/job: ${String(author.job || author.occupation || author.role || "unknown")}.
@@ -40337,7 +40533,8 @@ HARD ARCHITECTURE RULES:
 - PLAYER-POST ROUTING — HARD RULE: a JÁTÉKOS friss social posztjára adott közvetlen válasz, vélemény, kérdés, beszólás, támogatás, flört vagy vita a KOMMENTRENDSZER feladata. A játékos posztját NE használd külön autonóm status update/public_post anchor alapjaként és ne subtweeteld pusztán azért, mert most jelent meg a feedben.
 - Más AI/media nyilvános tetteire vagy valódi világ-eseményre ${author.name} továbbra is reagálhat saját posztban, ha az ténylegesen az ő saját social megszólalását indokolja; a játékos saját posztjára viszont kommentben reagál.
 - Fotós posztnál ugyanaz az autonóm döntés érvényes: csak olyan, az adott karakterhez és aktuális helyzethez illő saját vizuált válassz, amit a meglévő képrendszer enged. A kép ne írja felül a caption karakterhangját.
-- ${author.name} saját gördülő 24 órás célja aktivitástól függően 1–3 poszt, és 3 a valódi HARD MAXIMUM. Ha már 3 autonóm feed-posztja van az elmúlt 24 órában, újabbat nem írhat.
+- ${author.name} gördülő 24 órás HARD MAXIMUMA 5 autonóm feed-poszt, ebből legfeljebb 1 képes. Ez plafon, nem kvóta: ne posztoljon csak azért, hogy kitöltse az ötöt.
+- SEMANTIC NOVELTY: ne írja újra ugyanazt a hangulatot/témát más szavakkal. Saját visszatérő érdeklődése megmaradhat, de az új poszt konkrét történése, tárgya, célja vagy nézőpontja legyen ténylegesen új, vagy vigye előre az előző ügyet.
 - Normál körben a scheduler csak a saját cooldown lejárta után választ ki. Triggerelt aftermath burstben több KÜLÖNBÖZŐ AI gyorsabban is sorra kerülhet, de ugyanaz az AI egy burston belül nem ismétlődhet.
 - Ha ide kerültél, ÍRJ egy természetes posztot; ne skipelj pusztán azért, mert nincs dráma.
 - ${author.name} 24 órán belül maximum 1 képes posztot tehet ki; a többi legyen szöveges.
@@ -40527,6 +40724,7 @@ function applyWorldStep(n, out, postingOptions = {}) {
         )
       );
     if (!postText) return;
+    if (isRepetitiveAutonomousPostTopic(n, author, postText)) return;
     if (!socialAutonomousPostTextMakesSense(n, author, postText)) return;
     const nsfwPostTargets = explicitNamedCharacterIdsInText(n, postText, author);
     if (!socialNsfwTextAllowed(n, author, nsfwPostTargets, postText)) return;
@@ -52870,6 +53068,10 @@ TE MOST ${String(
 FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY:
 ${fullSelfCharacterSheetForSocial(w, bot)}
 
+${characterBehaviorDecisionCard(w, bot, w.meId, "dm")}
+
+${socialVarietyProfileCard(w, bot, "dm")}
+
 ${socialSelfStyleOwnershipCard(bot)}
 
 KNOWLEDGE BOUNDARY:
@@ -53007,6 +53209,8 @@ PRIVÁT ÜZENET SZABÁLYOK:
 - A chat azonban továbbra is távoli chat: ne írd úgy, mintha fizikailag már megcsókoltad volna vagy hozzáértél volna, hacsak a jelenet szerint ténylegesen egy helyen vagytok.
 - Ne találj ki mesterséges drámát csak azért, hogy legyen üzenet.
 - Ne generálj üzenetet pusztán azért, mert eltelt valamennyi idő.
+- Ne ismételd ugyanazt a DM-funkciót/témát pusztán más szavakkal. A következő privát kezdeményezésnek legyen friss oka vagy vigye előre a korábbi nyitott ügyet.
+- Personality/Goals/Fears/Secrets/Connections döntse el, hogy SELF egyáltalán ráír-e, mit akar elérni vele és mennyit mer kimondani; Speech/Voice csak ezután formálja a szöveget.
 - Ha nincs valódi, karakterhű okod írni, legyen "skip": true.
 
 KAPCSOLATI FOLYTONOSSÁG — EZ MOST ELSŐBBSÉGET KAP AZ ÚJ TÉMÁVAL SZEMBEN:
