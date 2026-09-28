@@ -6414,10 +6414,9 @@ const NOTE_REFRESH = NOTE_LIFE; // player/UI compatibility; AI uses its own shor
 const NOTE_MAX = 80;
 
 function autonomousAiNoteRefreshMs(w, c) {
-  const activity = Number(c && characterOnlineActivityProfile(w, c).note) || 0;
-  if (activity >= 1.15) return 2 * 3600e3;
-  if (activity >= 0.82) return 3.5 * 3600e3;
-  return 6 * 3600e3;
+  void w;
+  void c;
+  return 3.5 * 3600e3;
 }
 
 function pruneExpiredNotes(w) {
@@ -16728,6 +16727,7 @@ function publicBasicCharacterProfileForAgent(w, c) {
     otherInformation: String(c.extra || ""),
     primaryDojo: karateFactionDisplayName(factionFlags(c)),
     classification: characterFactionIdentityCard(c) || "",
+    ownershipBoundary: `All facts in this object belong only to ${String(c.name || c.id || "this person")} [${String(c.id || "")}]. Rival/former/opponent names inside history do not change current membership. Structured affiliation/organization/role/rank/job override rival mentions.`,
   };
 }
 
@@ -17065,7 +17065,69 @@ function factionMembershipScore(c, aliases) {
   return score;
 }
 
+function structuredCurrentKarateFaction(c) {
+  if (!c) return "";
+
+  const defs = [
+    ["cobraKai", ["cobra kai", "cobra-kai"]],
+    ["miyagiFang", ["miyagi-fang", "miyagi fang", "miyagi-do", "miyagi do", "eagle fang", "eagle-fang"]],
+    ["ironDragons", ["iron dragons", "iron dragon"]],
+    ["wasabi", ["wasabi dojo", "wasabi"]],
+  ];
+
+  const normalize = (value) =>
+    String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+
+  const uniqueHit = (values, requireMembershipCue = false) => {
+    const hits = new Set();
+
+    (values || []).forEach((value) => {
+      const raw = normalize(value);
+      if (!raw) return;
+
+      defs.forEach(([key, aliases]) => {
+        aliases.forEach((alias) => {
+          let from = 0;
+          while (from < raw.length) {
+            const at = raw.indexOf(alias, from);
+            if (at < 0) break;
+
+            const around = raw.slice(
+              Math.max(0, at - 95),
+              Math.min(raw.length, at + alias.length + 120)
+            );
+
+            const formerOrOpponent =
+              /\b(?:former|ex-|ex\s|previously|used to|left|quit|rival|enemy|opponent|against|versus|vs\.?|fought|fighting|competed against|defeated by|threat from)\b/.test(around);
+
+            const membershipCue =
+              /\b(?:captain|co-?captain|member|student|sensei|fighter|karateka|team|leader|head|coach|instructor|represents?|representing|belongs?|part of|joined|trains?|training under|current|currently)\b/.test(around);
+
+            if (!formerOrOpponent && (!requireMembershipCue || membershipCue)) {
+              hits.add(key);
+            }
+
+            from = at + alias.length;
+          }
+        });
+      });
+    });
+
+    return hits.size === 1 ? [...hits][0] : "";
+  };
+
+  return (
+    uniqueHit([c.affiliation, c.organization], false) ||
+    uniqueHit([c.role, c.rank, c.job], true) ||
+    uniqueHit([c.bio], true) ||
+    ""
+  );
+}
+
 function primaryKarateFaction(c) {
+  const structured = structuredCurrentKarateFaction(c);
+  if (structured) return structured;
+
   const candidates = [
     ["cobraKai", ["cobra kai", "cobra-kai"]],
     ["miyagiFang", ["miyagi-fang", "miyagi fang", "miyagi-do", "miyagi do", "eagle fang", "eagle-fang"]],
@@ -17081,13 +17143,7 @@ function primaryKarateFaction(c) {
     .sort((a, b) => b.score - a.score);
 
   if (!scored.length || scored[0].score <= 0) return "";
-  if (scored.length > 1 && scored[0].score === scored[1].score) {
-    /*
-     * Ambiguous history should not make the character simultaneously belong
-     * to rival dojos. Prefer no automatic dojo over a wrong one.
-     */
-    return "";
-  }
+  if (scored.length > 1 && scored[0].score === scored[1].score) return "";
 
   return scored[0].key;
 }
@@ -20160,7 +20216,8 @@ function messageLooksLikeQuestion(value) {
 
   if (/[?？]/.test(text)) return true;
 
-  return /^(who|what|when|where|why|how|which|whose|do|does|did|are|is|was|were|can|could|would|will|have|has|had|should|may|might|ki|mi|mikor|hol|miért|hogyan|melyik|kinek|kivel|mit|mivel|van|volt|lesz|tudsz|akarod|szerinted)\b/i.test(text);
+  return /^(who|what|when|where|why|how|which|whose|do|does|did|are|is|was|were|can|could|would|will|have|has|had|should|may|might|ki|mi|mikor|hol|miért|hogyan|melyik|kinek|kivel|mit|mivel|van|volt|lesz|tudsz|akarod|szerinted)\b/i.test(text) ||
+    /(?:^|[\s.…,;:\-])(?:who|what|when|where|why|how|ki|mi|mikor|hol|miért|hogyan)\s*[.!…]*$/i.test(text);
 }
 
 function chatQuestionInstruction(
@@ -20200,6 +20257,83 @@ KÖZVETLEN KÉRDÉS — NE DODGE-OLD AUTOMATIKUSAN:
 - Csak akkor tagadj meg / hazudj / térj ki, ha erre konkrét karakterhű ok van: titok, bizalmatlanság, veszély, tudáshiány, manipuláció, szégyen stb.
 - Ha kitérsz, akkor is látszódjon, hogy pontosan értetted a kérdést.
 `;
+}
+
+function directDmCurrentSpeechActInstruction(w, playerText, historyText = "") {
+  const raw = String(playerText || "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+
+  const en = worldLanguage(w, w && w.meId) === "en";
+  const lower = raw.toLowerCase();
+
+  const dateTiming =
+    /\b(?:us|we|you\s+and\s+me)\b[\s.…,;:-]{0,10}(?:date|dating)\b.*\bwhen\b/i.test(raw) ||
+    /\b(?:date|dating)\b.*\bwhen\b/i.test(raw) ||
+    /\bwhen\b.*\b(?:date|dating)\b/i.test(raw);
+
+  const dmInitiation =
+    /\byou\b.{0,24}\b(?:slid|slided|slide|dm(?:'d|ed)?|dmed|messaged|texted|wrote)\b.{0,24}\b(?:dm|dms|message|me)?\b/i.test(lower) ||
+    /\byou\s+(?:came|showed)\s+into\s+my\s+dms?\b/i.test(lower);
+
+  if (dateTiming) {
+    return en
+      ? `CURRENT DM SPEECH ACT — DATE/TIMING QUESTION:
+- The player is asking about YOU + THEM dating / when the date is.
+- Answer that exact romantic/timing question FIRST: accept, refuse, clarify, suggest a time/plan, or state a character-grounded reason you cannot.
+- Do NOT pivot to their major, club, dojo, job, backstory, personality profile or another topic unless it is directly necessary to answer the date question.
+- A witty line is allowed only AFTER the actual answer.`
+      : `AKTUÁLIS DM BESZÉDAKTUS — RANDI / IDŐPONT KÉRDÉS:
+- A játékos kettőtök randijáról / annak időpontjáról kérdez.
+- ELŐSZÖR erre válaszolj: igen/nem, konkrét időpont vagy terv, tisztázás, illetve karakterhű konkrét ok, ha nem akarod.
+- Ne válts a szakjára, klubjára, dojójára, munkájára, backstoryjára vagy más profiladatra, ha az nem szükséges a randi-kérdéshez.
+- Poén/flört csak a tényleges válasz UTÁN jöhet.`;
+  }
+
+  if (dmInitiation) {
+    return en
+      ? `CURRENT DM SPEECH ACT — WHO INITIATED THIS CHAT:
+- The player is pointing out that YOU initiated/slid into their DMs.
+- Respond to that fact first: acknowledge, tease, explain, deny only if the actual chat history contradicts it, or say why you messaged.
+- Do NOT answer with an unrelated profile observation about the player.
+- The chat history is the authority on who messaged first.`
+      : `AKTUÁLIS DM BESZÉDAKTUS — KI ÍRT RÁ KIRE:
+- A játékos arra mutat rá, hogy TE írtál rá / csúsztál be a DM-jébe.
+- Először erre reagálj: ismerd el, ugrass, magyarázd meg, vagy csak akkor tagadd, ha a tényleges chat history ennek ellentmond.
+- Ne válaszolj egy teljesen más profilmegfigyeléssel a játékosról.
+- Hogy ki kezdeményezett, azt a tényleges chat history dönti el.`;
+  }
+
+  void historyText;
+  return "";
+}
+
+function directDmReplyNeedsTopicRepair(w, playerText, replyText) {
+  void w;
+  const input = String(playerText || "").replace(/\s+/g, " ").trim();
+  const reply = String(replyText || "").replace(/\s+/g, " ").trim();
+  if (!input || !reply) return false;
+
+  const dateTiming =
+    /\b(?:us|we|you\s+and\s+me)\b[\s.…,;:-]{0,10}(?:date|dating)\b.*\bwhen\b/i.test(input) ||
+    /\b(?:date|dating)\b.*\bwhen\b/i.test(input) ||
+    /\bwhen\b.*\b(?:date|dating)\b/i.test(input);
+
+  if (dateTiming) {
+    const answered =
+      /\b(?:tonight|tomorrow|today|weekend|friday|saturday|sunday|monday|tuesday|wednesday|thursday|next\s+week|this\s+week|at\s+\d|around\s+\d|yes|yeah|sure|okay|ok|deal|let['’]?s|date|when|time|free|busy|can['’]?t|cannot|won['’]?t|not\s+dating|don['’]?t\s+want|pick\s+a\s+day|name\s+a\s+time)\b/i.test(reply);
+    if (!answered) return true;
+  }
+
+  const dmInitiation =
+    /\byou\b.{0,24}\b(?:slid|slided|slide|dm(?:'d|ed)?|dmed|messaged|texted|wrote)\b.{0,24}\b(?:dm|dms|message|me)?\b/i.test(input.toLowerCase());
+
+  if (dmInitiation) {
+    const acknowledged =
+      /\b(?:i\s+did|yeah|yep|guilty|obviously|of\s+course|i\s+messaged|i\s+texted|i\s+dm|wanted\s+to|couldn['’]?t\s+resist|and\??|so\??|you\s+noticed|caught\s+me|because)\b/i.test(reply);
+    if (!acknowledged) return true;
+  }
+
+  return false;
 }
 
 function normalizeAddressText(value) {
@@ -22893,7 +23027,7 @@ function worldIdentityCanon(w, includePlayer = true) {
     return `${c.name} [${c.id}] — ${faction}`;
   });
   return rows.length
-    ? `\nWORLD IDENTITY / AFFILIATION CANON — HARD FACTS:\n${rows.join("\n")}\n- These affiliation/dojo identities are authoritative. Mentioning a rival dojo in backstory does NOT change a character's own dojo.\n- Characters recognize the established dojo/organization of other named world characters from this canon.\n`
+    ? `\nWORLD IDENTITY / AFFILIATION CANON — HARD FACTS:\n${rows.join("\n")}\n- EACH ROW BELONGS ONLY TO THAT EXACT NAME + ID. Never transfer one person's dojo, captaincy, rank, job, mentor, family or organization to another person.\n- Current structured Affiliation / Organization / Role / Rank / Job facts are authoritative for membership. A line like "Cobra Kai captain" means that PERSON is Cobra Kai even if Iron Dragons, Miyagi-Do or another rival appears elsewhere in their backstory.\n- Rival/opponent/former-dojo mentions in Backstory / Extra / Connections are relationship/history facts, NOT current membership.\n- Characters may reason from other people's established factual profiles, but those facts stay owned by the named person and never redefine SELF.\n- Characters recognize the established dojo/organization of other named world characters from this canon.\n`
     : "";
 }
 
@@ -26492,6 +26626,7 @@ const LIVE_WORLD_ACTIVE_SILENCE_RECOVERY_MS = Math.max(
   22000,
   Math.min(60000, Number(import.meta.env.VITE_WORLD_ACTIVE_SILENCE_RECOVERY_MS) || 32000)
 );
+const LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS = 5 * 60 * 1000;
 const LIVE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS = Math.max(
   60000,
   Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS) || 105000)
@@ -36918,7 +37053,7 @@ function fairCommentCast(w, targetId, post = null) {
         visualPriority >= 20 ||
         relationshipGravity.level >= 2;
 
-      const activity = characterOnlineActivityProfile(w, c).comment;
+      const activity = 1;
       const dramaDiscoveryMultiplier =
         socialClimate.dramaLevel === "chaotic"
           ? 1.42
@@ -36978,14 +37113,9 @@ function fairCommentCast(w, targetId, post = null) {
     });
 
   chars.sort((a, b) => {
-    /*
-     * Relevance + believable feed visibility + PERSONAL activity rhythm.
-     * A highly-online character may comment repeatedly; a private character
-     * pays a larger recent-activity penalty and therefore appears less often.
-     */
     const ap =
       a.recentComments *
-        (20 / Math.max(0.35, a.activity)) *
+        24 *
         Math.max(
           0.12,
           Number(
@@ -36994,12 +37124,11 @@ function fairCommentCast(w, targetId, post = null) {
           ) || 1
         ) -
       a.interest -
-      a.visibilityBonus -
-      (a.activity - 1) * 24;
+      a.visibilityBonus;
 
     const bp =
       b.recentComments *
-        (20 / Math.max(0.35, b.activity)) *
+        24 *
         Math.max(
           0.12,
           Number(
@@ -37008,8 +37137,7 @@ function fairCommentCast(w, targetId, post = null) {
           ) || 1
         ) -
       b.interest -
-      b.visibilityBonus -
-      (b.activity - 1) * 24;
+      b.visibilityBonus;
 
     if (ap !== bp) {
       return ap - bp;
@@ -38529,13 +38657,9 @@ function autonomousPostStatsSnapshot(w) {
 }
 
 function autonomousCharacterPostTarget24h(w, c, activityOverride = null) {
-  if (!c) return 1;
-  const activity = Number.isFinite(Number(activityOverride))
-    ? Number(activityOverride)
-    : Number(characterOnlineActivityProfile(w, c).post) || 0;
-  if (activity >= 1.15) return 3;
-  if (activity >= 0.82) return 2;
-  return 1;
+  void w;
+  void activityOverride;
+  return c ? 3 : 0;
 }
 
 /*
@@ -38671,11 +38795,7 @@ function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
      timer. Recent player activity, relationship gravity and social status can
      temporarily accelerate it, while a deterministic moving jitter prevents
      bots from lining up on exact recurring minute marks. */
-  const baseGap = activity >= 1.15
-    ? 6 * 3600e3
-    : activity >= 0.82
-      ? 8 * 3600e3
-      : 12 * 3600e3;
+  const baseGap = 8 * 3600e3;
 
   const signal = autonomousPlayerActivityPostingSignal(w, c);
   const epoch = Math.floor(now() / (90 * 1000));
@@ -38822,11 +38942,11 @@ function autonomousPostTypeInstruction(w, cast) {
   });
 
   return [
-    "PER-AI RULE: every normal AI has its OWN rolling-24h posting rhythm: quieter characters target 1 post, normal characters 2, very-online characters 3.",
+    "PER-AI FAIRNESS RULE: every normal AI has the SAME rolling target of up to 3 autonomous feed posts / 24h. Quiet vs extrovert changes CONTENT/VOICE, not whether the bot gets starved of activity.",
     "HARD CAP: NO character may create more than 3 autonomous feed posts in any rolling 24-hour window.",
-    "Characters below 1 post in rolling 24h get fairness priority, but personality still decides who is most natural next.",
+    "FAIR ROTATION: prioritize bots with fewer recent posts and bots that have been visibly quiet longer. Do not let the same few characters monopolize the feed.",
     "GLOBAL FEED HEARTBEAT: while at least one AI still has a legal daily slot, aim to produce a fresh post at least about every 30 minutes. Rotate authors; never break the 3/24h per-character cap to satisfy the heartbeat.",
-    "NO FIXED PERSONAL CLOCK: personality supplies the personal rhythm. Recent player interaction may reorder eligible authors, but must not turn one character into a spammer.",
+    "NO FIXED PERSONAL CLOCK: recent player interaction may reorder eligible authors, but must not turn one character into a spammer.",
     "IMAGE HARD MAX: each character may have at most 1 image post in rolling 24h. This is per character, not global.",
     "IMAGE BEHAVIOR: the 1/24h rule is a maximum, NOT a reason to avoid images. If imageSlot=OPEN, the character should genuinely use an album image sometimes. After several text posts with an unused image slot, strongly prefer a fitting image unless every remaining album image clashes with the current context.",
     "Never invent an image outside the author's own album; the caption must match the selected image's confirmed/visible context and the author's own voice.",
@@ -38935,15 +39055,16 @@ function fairPostCast(w, options = {}) {
     const afterTargetPenalty = Math.max(0, count - target) * 38;
     const playerSignal = autonomousPlayerActivityPostingSignal(w, c);
     const playerGravity = relationshipSocialGravityProfile(w, c.id, w.meId);
+    const worldIdleHours = Math.min(48, fairBotIdleMs(w, c.id) / 3600e3);
 
     const pressure =
       (belowMinimum ? 1000 : 0) +
-      deficit * 180 +
+      deficit * 220 +
       (preferred.has(String(c.id)) ? 720 : 0) +
       (options && options.allowBurst ? 180 : 0) +
       overdueRatio * 120 +
-      idleHours * 4 +
-      activity * 30 +
+      idleHours * 6 +
+      worldIdleHours * 20 +
       playerSignal.heat * 115 +
       playerSignal.directHeat * 220 +
       Math.max(0, Number(playerGravity.postPriority) || 0) * 0.55 -
@@ -45553,7 +45674,8 @@ function roleplayAffiliationGroundTruthCard(w, cast = []) {
     const canonLimit = String(person.id || "") === String(w.meId || "") ? 900 : 360;
     const canon = ownCanon ? ` | own-canon=${cut(ownCanon, canonLimit)}` : "";
 
-    return `- ${person.name || "?"} [${person.id || ""}]: ${structured.join(" | ") || "no explicit structured affiliation"}${canon}`;
+    const currentClassification = characterFactionIdentityCard(person) || "classification unknown";
+    return `- ${person.name || "?"} [${person.id || ""}]: CURRENT=${currentClassification} | ${structured.join(" | ") || "no explicit structured affiliation"}${canon}`;
   });
 
   return `
@@ -45561,7 +45683,8 @@ ROLEPLAY DOJO / AFFILIATION GROUND TRUTH — HARD IDENTITY RULES:
 ${rows.join("\n")}
 - Every row belongs ONLY to that named person / ID. Never transfer another character's dojo, organization, rank, role or mentor to the player or to someone else.
 - A dojo/team/sensei name merely APPEARING in backstory can mean rival, enemy, former contact, opponent, tournament history or someone else's affiliation. A mention alone is NOT membership.
-- Current explicit affiliation / organization / role / rank on THAT PERSON'S OWN sheet has priority over rival mentions, past associations, scene location and another character's sheet.
+- CURRENT= is the deterministic current classification for THAT exact person. Current explicit affiliation / organization / role / rank / job on THAT PERSON'S OWN sheet has priority over rival mentions, past associations, scene location and another character's sheet.
+- If one person's Role/Rank says they are captain/member/student/sensei of a dojo, preserve that exact membership even if a rival dojo appears repeatedly in Backstory/Extra/Connections.
 - A sensei may treat the player as "my student", "one of ours", a member of their dojo, or speak as if they train under that sensei ONLY when the PLAYER'S OWN canon explicitly establishes current membership in that same dojo.
 - Being in a dojo building, sparring with someone, talking to a sensei, knowing a sensei, or being present at the same event does NOT make the player that sensei's student.
 - If the player's current dojo is different, preserve that difference explicitly. If current membership is genuinely unclear, treat it as unknown / unaffiliated instead of assigning the player to the sensei's dojo.
@@ -48298,7 +48421,7 @@ ${cut(
 ${en ? "HARD IDENTITY / AFFILIATION FACTS — READ BEFORE PROSE" : "KEMÉNY IDENTITÁS / DOJO / SZERVEZET TÉNYEK — PRÓZA ELŐTT OLVASD"}:
 SELF ${actor.name} [${actor.id}]: ${characterFactionIdentityCard(actor) || "classification unknown"}
 PLAYER ${w.player.name} [${w.meId}]: ${characterFactionIdentityCard(w.player) || "classification unknown"}
-${en ? "- These rows are authoritative for current dojo/organization/job/role/rank. A rival dojo or mentor appearing in backstory does NOT make that person a member." : "- Ezek az aktuális dojo/szervezet/munka/szerep/rang authoritative tényei. Rivális dojo vagy mentor említése a backstoryban NEM teszi annak tagjává az illetőt."}
+${en ? "- These rows are authoritative for current dojo/organization/job/role/rank. A rival dojo or mentor appearing in backstory does NOT make that person a member. A structured role like 'Cobra Kai captain' belongs to that exact person and cannot be overwritten by an Iron Dragons rival mention elsewhere." : "- Ezek az aktuális dojo/szervezet/munka/szerep/rang authoritative tényei. Rivális dojo vagy mentor említése a backstoryban NEM teszi annak tagjává az illetőt. A strukturált szerep, pl. 'Cobra Kai captain', annak az EGY személynek a saját tagsága, és egy máshol említett Iron Dragons-rivális ezt nem írhatja felül."}
 
 ${en ? "FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY" : "TELJES SAJÁT KARAKTERLAP — VÁGATLAN, LEGMAGASABB PRIORITÁS"}:
 ${fullSelfCharacterSheetForDirectDm(
@@ -48369,6 +48492,12 @@ ${characterMemoryCard(
 ) || "none"}
 
 ${directDmLiveContextCard(w, actor, playerText)}
+
+${directDmCurrentSpeechActInstruction(w, playerText, historyText)}
+
+PROFILE FACTS ARE NOT A FALLBACK TOPIC:
+- Do not pivot to the player's major/job/club/dojo/rank/backstory unless the latest message/current thread is actually about it.
+- Repair the exact conversational meaning, not merely the tone.
 
 RECENT PRIVATE CHAT:
 ${String(
@@ -48811,6 +48940,14 @@ ${conversationOwnershipInstruction(
 
 ${playerInputUnderstandingInstruction(requestWorld, t, "chat")}
 
+${directDmCurrentSpeechActInstruction(requestWorld, t, hist)}
+
+PROFILE FACTS ARE NOT CONVERSATION TOPICS:
+- The player's major/job/club/dojo/rank/bio/backstory/Extra are reference facts, NOT automatic banter prompts.
+- Mention one only when the LATEST PLAYER MESSAGE or the active recent DM thread is actually about that fact, or when it is strictly necessary to answer.
+- Never dodge a concrete question by reciting two profile facts and turning them into a generic "dangerous combination / should I watch my back?" style line.
+- First continue the exact current topic; character wit comes after comprehension.
+
 ${chatReferenceInstruction(
   requestWorld,
   requestWorld.player.name,
@@ -49107,9 +49244,16 @@ Formátum:
      * reply using the character's complete SELF sheet — not a canned fallback.
      */
     if (
-      !String(
-        reply || ""
-      ).trim() &&
+      (
+        !String(
+          reply || ""
+        ).trim() ||
+        directDmReplyNeedsTopicRepair(
+          requestWorld,
+          t,
+          reply
+        )
+      ) &&
       !explicitImageRequest
     ) {
       try {
@@ -53279,44 +53423,23 @@ function pickInitiator(w) {
     if (!dmReasonContext.primary) {
       return { c, score: -999, dmReasonContext };
     }
-    const lore = [
-      c.personality,
-      c.traits,
-      c.speech,
-      c.goals,
-      c.extra,
-      c.brief,
-      rel && rel.mood,
-      rel && rel.hidden,
-      rel && rel.bond,
-    ].filter(Boolean).join(" ").toLowerCase();
-
     const sinceHours = lastOwnDm
       ? Math.min(36, Math.max(0, (now() - lastOwnDm) / 3600e3))
       : 36;
 
-    const activity = characterOnlineActivityProfile(w, c).dm;
+    const activity = 1;
+    const worldIdleHours = Math.min(36, fairBotIdleMs(w, c.id) / 3600e3);
 
-    let score = sinceHours * (0.72 + activity * 0.58);
+    let score = sinceHours * 1.30;
+    score += worldIdleHours * 2.4;
     score += socialInteractionInterest(w, c.id, w.meId) * 0.55;
     score += relationshipObsessionLevel(w, c.id, w.meId) * 18;
-    score += (activity - 1) * 28;
     score += Math.min(54, Math.max(0, Number(dmReasonContext.primary.rank) || Number(dmReasonContext.primary.weight) || 0) * 0.34);
 
-    if (/social|társas|outgoing|extrovert|chatty|beszédes|flirt|flört|impulsive|impulzív|gossip|pletyka|possess|birtokl|obsess|megszáll/.test(lore)) score += 14;
-    if (/reserved|zárkózott|shy|félénk|quiet|csendes|private|low.?profile|visszahúzód/.test(lore)) score -= 9;
     if (mem.selfState && mem.selfState.intent) score += 10;
     if (mem.selfState && Array.isArray(mem.selfState.openLoops) && mem.selfState.openLoops.length) score += 8;
 
-    /* Az aktív karakter hamarabb pingelhet újra; a visszahúzódó nagyobb szünetet tart. */
-    const personalDmGapMs =
-      Math.max(
-        75 * 1000,
-        Math.min(
-          12 * 60 * 1000,
-          (4 * 60 * 1000) / Math.max(0.28, activity)
-        )
-      );
+    const personalDmGapMs = 4 * 60 * 1000;
 
     if (lastOwnDm && now() - lastOwnDm < personalDmGapMs) score -= 40;
 
@@ -64996,6 +65119,52 @@ function latestVisibleAiWorldActivityAt(w) {
   return latest;
 }
 
+function characterVisibleWorldActivityAt(w, actorId) {
+  if (!w || !actorId) return 0;
+  const id = String(actorId);
+  let latest = 0;
+
+  (w.posts || []).forEach((post) => {
+    if (!post) return;
+    if (String(post.authorId || "") === id) latest = Math.max(latest, Number(post.ts) || 0);
+    safePostComments(post).forEach((comment) => {
+      if (comment && String(comment.authorId || "") === id) {
+        latest = Math.max(latest, Number(comment.ts) || 0);
+      }
+    });
+  });
+
+  (((w.chats || {})[chatKey(w.meId, actorId)]) || []).forEach((message) => {
+    if (message && message.from === "them") latest = Math.max(latest, Number(message.ts) || 0);
+  });
+
+  (w.groups || []).forEach((group) => {
+    ((group && group.msgs) || []).forEach((message) => {
+      if (message && String(message.from || "") === id) {
+        latest = Math.max(latest, Number(message.ts) || 0);
+      }
+    });
+  });
+
+  (w.notes || []).forEach((note) => {
+    if (note && String(note.authorId || "") === id) latest = Math.max(latest, Number(note.ts) || 0);
+  });
+
+  (w.scenes || []).forEach((scene) => {
+    ((scene && scene.turns) || []).forEach((turn) => {
+      if (turn && String(turn.authorId || "") === id) latest = Math.max(latest, Number(turn.ts) || 0);
+    });
+  });
+
+  return latest;
+}
+
+function fairBotIdleMs(w, actorId) {
+  const last = characterVisibleWorldActivityAt(w, actorId);
+  const startedAt = Number(w && w.sim && w.sim.liveWorldStartedAt) || now();
+  return Math.max(0, now() - (last || Math.min(startedAt, now())));
+}
+
 function liveWorldSilenceMs(w) {
   if (!w) return 0;
   const latest = latestVisibleAiWorldActivityAt(w);
@@ -65167,7 +65336,8 @@ function roleplayInitiatorScore(w, c) {
   if (/jealous|féltéken|possess|birtokl|obsess|megszáll|dominant|domináns|psycho|pszichopat|unhinged|kiszámíthatatlan/.test(lore)) score += 10;
   const mem = ensureCharMemory(w, c.id);
   if (mem.selfState && mem.selfState.intent) score += 8;
-  return score + Math.random() * 18;
+  score += Math.min(28, (fairBotIdleMs(w, c.id) / 3600e3) * 2.5);
+  return score + Math.random() * 10;
 }
 
 function pickRoleplayInitiator(w) {
@@ -66023,20 +66193,72 @@ function pickDueAutonomousAiNoteAction(view) {
         tie: Math.random(),
       };
     })
+    .map((row) => ({
+      ...row,
+      worldLastAt: characterVisibleWorldActivityAt(view, row.c.id),
+    }))
     .sort((a, b) =>
-      (b.score - a.score) ||
       (a.lastNoteAt - b.lastNoteAt) ||
+      (a.worldLastAt - b.worldLastAt) ||
+      (b.score - a.score) ||
       (a.tie - b.tie)
     );
 
   if (!candidates.length) return null;
 
-  const pool = candidates.slice(0, Math.min(3, candidates.length));
-  const bot = pool[Math.floor(Math.random() * pool.length)].c;
+  const bot = candidates[0].c;
   return mkAction(
     "note",
     `autonomous-note-priority:${bot.id}:${Math.floor(now() / AUTONOMOUS_AI_NOTE_GLOBAL_GAP_MS)}`,
     { botId: bot.id, trigger: "autonomous-note-priority" },
+    "event"
+  );
+}
+
+function pickHardIdleWorldHeartbeatAction(view) {
+  if (!view || !(view.chars || []).length) return null;
+  if (liveWorldSilenceMs(view) < LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS) return null;
+
+  const bots = (view.chars || [])
+    .filter((c) => c && c.id && !isHuman(view, c.id) && !isMediaAccount(view, c.id))
+    .map((c) => ({
+      c,
+      lastVisibleAt: characterVisibleWorldActivityAt(view, c.id),
+      dmContext: autonomousDmReasonContext(view, c),
+    }))
+    .sort((a, b) =>
+      (a.lastVisibleAt - b.lastVisibleAt) ||
+      String(a.c.id).localeCompare(String(b.c.id))
+    );
+
+  if (!bots.length) return null;
+
+  const groundedDm = bots.find((row) => row.dmContext && row.dmContext.primary);
+  if (groundedDm) {
+    return mkAction(
+      "dm",
+      `hard-heartbeat-dm:${groundedDm.c.id}:${Math.floor(now() / LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS)}`,
+      {
+        botId: groundedDm.c.id,
+        trigger: "hard-idle-heartbeat",
+        livenessRecovery: true,
+        recoveryLane: "dm",
+      },
+      "event"
+    );
+  }
+
+  const bot = bots[0].c;
+  return mkAction(
+    "note",
+    `hard-heartbeat-note:${bot.id}:${Math.floor(now() / LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS)}`,
+    {
+      botId: bot.id,
+      trigger: "hard-idle-heartbeat",
+      forceHeartbeat: true,
+      livenessRecovery: true,
+      recoveryLane: "note",
+    },
     "event"
   );
 }
@@ -66108,6 +66330,9 @@ function planAutoAction(view) {
       "event"
     );
   }
+
+  const hardHeartbeat = pickHardIdleWorldHeartbeatAction(view);
+  if (hardHeartbeat) return hardHeartbeat;
 
   /*
    * FEED HEARTBEAT:
@@ -69037,10 +69262,16 @@ if (targetNote) {
         ? noteOf(view, bot.id)
         : null;
 
+    const forceHeartbeat = Boolean(
+      action.payload &&
+      action.payload.forceHeartbeat
+    );
+
     if (
       !bot ||
       isHuman(view, bot.id) ||
       (
+        !forceHeartbeat &&
         activeNote &&
         now() - (activeNote.ts || 0) <
           autonomousAiNoteRefreshMs(view, bot)
