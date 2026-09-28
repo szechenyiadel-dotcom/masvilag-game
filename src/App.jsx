@@ -13718,7 +13718,7 @@ function postRequiresFullAiCommentCoverage(w, post) {
   return age >= 0 && age <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS;
 }
 
-const GUARANTEED_POST_COMMENT_RETRY_MS = 2000;
+const GUARANTEED_POST_COMMENT_RETRY_MS = 60 * 1000;
 
 function availableAiCommenterCountForPost(w, post) {
   if (!w || !post) return 0;
@@ -13826,6 +13826,12 @@ function enqueueGuaranteedPostCommentCoverage(w, postId, source = "post-created"
 function guaranteedCommentCoverageCandidate(w) {
   if (!w) return null;
   const ts = now();
+
+  /* SOCIAL REALISM v9: provider capacity must never let mandatory comment
+   * coverage become the entire world. While the shared background lane is in
+   * backoff, skip coverage discovery and let feed/DM/reply/event lanes move. */
+  const coverageBackoffUntil = Math.max(0, Number(w.sim && w.sim.backgroundBackoffUntil) || 0);
+  if (coverageBackoffUntil > ts) return null;
 
   /* FRESH-POST COMMENT PRIORITY — HARD RULE:
    * Comment coverage is still eventually required for every post, but the
@@ -21235,14 +21241,14 @@ function relationshipBehaviorCard(
   if (filterTier === "hostile") {
     parts.push(
       en
-        ? "strongly hostile: cold, contemptuous, distrustful or openly antagonistic; do NOT default to warmth"
-        : "erősen ellenséges: hideg, lenéző, bizalmatlan vagy nyíltan antagonisztikus; NE legyen alapból kedves"
+        ? "strongly hostile: cold, contemptuous, distrustful or openly antagonistic; do NOT default to warmth. SOCIAL HARD RULE: no sincere hype, flattering compliment, supportive fan-energy or affectionate emoji toward this person unless a concrete CURRENT reconciliation/change explicitly justifies it. If you must acknowledge something impressive, make it begrudging, skeptical, competitive, backhanded or terse in a way that still fits SELF."
+        : "erősen ellenséges: hideg, lenéző, bizalmatlan vagy nyíltan antagonisztikus; NE legyen alapból kedves. SOCIAL HARD RULE: nincs őszinte hype, hízelgő bók, rajongó támogatás vagy szeretetteljes emoji ennek az embernek, hacsak egy konkrét JELENLEGI kibékülés/változás ezt kifejezetten nem indokolja. Ha valami látványosan elismerésre méltó, az elismerés legyen vonakodó, szkeptikus, versengő, backhanded vagy rövid — mindig SELF karakteréhez illően."
     );
   } else if (filterTier === "negative") {
     parts.push(
       en
-        ? "negative relationship: tension, impatience, rivalry, suspicion or sharpness should be visible"
-        : "rossz viszony: a feszültség, türelmetlenség, rivalizálás, gyanakvás vagy élesség látszódjon"
+        ? "negative relationship: tension, impatience, rivalry, suspicion or sharpness should be visible. Do not turn a rival/enemy into a sincere supporter for social-media variety. Compliment/support requires a real current reason; otherwise prefer silence, skepticism, challenge, dry humor, competitive acknowledgement, sarcasm or a backhanded observation that stays grounded in the actual post."
+        : "rossz viszony: a feszültség, türelmetlenség, rivalizálás, gyanakvás vagy élesség látszódjon. Ne változtass riválist/ellenséget őszinte támogatónak pusztán social-media változatosság kedvéért. Bókhoz/támogatáshoz valódi jelenlegi ok kell; enélkül inkább csend, szkepszis, kihívás, száraz humor, versengő elismerés, szarkazmus vagy a konkrét poszthoz kötött backhanded megjegyzés illik."
     );
   } else if (filterTier === "close") {
     parts.push(
@@ -23271,7 +23277,10 @@ PÉLDA A FILTERRE: egy szarkasztikus karakter a legjobb barátjával lehet csíp
 KARAKTERHŰSÉG — ABSZOLÚT PRIORITÁS:
 - A rendszer-motor több karakter külön, lezárt SELF-adatlapját is láthatja ugyanabban a kérésben. EZ NEM KÖZÖS SZEMÉLYISÉGPOOL: minden Personality/Traits/Speech/Voice mező kizárólag annak az ID-nak a stílusát és viselkedését formálhatja, akihez tartozik.
 - CROSS-CHARACTER STYLE CONTAMINATION TILOS: A karakter soha ne vegye át B karakter szarkazmusát, CAPS LOCKját, szlengjét, félelmét, kedvencét, traumáját, agresszióját, formalitását vagy más személyiség-/beszédvonását csak azért, mert B lapja ugyanabban a promptban szerepel.
-- Másokról kapott név, becenév, születés/kor, foglalkozás, szerep/dojo, kinézet, bio, történet/backstory és Extra/Other Information TUDÁS RÓLUK. Ezekre reagálhat, hivatkozhat, emlékezhet — de SOHA nem alkalmazhatja őket saját magára.
+- WORLD-ENGINE ≠ CHARACTER KNOWLEDGE: a motor írói/szimulációs szinten olvashatja a világ összes karakterlapját azért, hogy mindenkit helyesen játsszon és a kapcsolati hálót konzisztensen tartsa. Ettől EGYETLEN szereplő sem lesz telepatikus.
+- MÁS EMBER ADATLAPJA NEM AUTOMATIKUS DIEGETIKUS TUDÁS. Egy másik karakter bio/backstory/history/Extra/Goals/Fears/Likes/Secrets/Connections/Personality/Traits/Speech/Voice mezőjét SELF csak akkor kezelheti ismert tényként, ha (a) az információ publikus a világban/profilban, (b) SELF saját karakterlapja/Connections mezője explicit tudást rögzít róla, vagy (c) SELF ténylegesen megtudta/látta/hallotta játék közben és ez memóriába került.
+- Az engine használhatja B teljes leírását arra, hogy B viselkedését hitelesen szimulálja; A karakter azonban nem hivatkozhat B privát leírására pusztán azért, mert ugyanaz a modell olvasta.
+- KÖVETKEZTETÉS ENGEDÉLYEZETT, MINDREADING NEM: SELF több valóban ismert jelből összerakhat egy valószínű képet (pl. gyanakodhat, féltékeny lehet, észrevehet mintát), de amit nem tud biztosan, azt feltételezésként kezelje és úgy is kommunikálja. Ne változtass következtetést narrátori ténnyé.
 - FONTOS TUDÁSHATÁR: más karakter Personality/Traits/Speech/Voice/Goals/Fears/Likes/Secrets/private Connections mezője nem válik automatikusan más szereplő tudásává vagy stílusává.
 - Saját magáról viszont minden karakter teljes adatlapja aktív kánon, és a SAJÁT Speech/Voice formai szabályait ténylegesen követni kell.
 - A karakterlap TELJES tartalma viselkedési specifikáció, nem háttérdísz.
@@ -33730,6 +33739,70 @@ RULE:
 `;
 }
 
+
+function authorialSocialWorldMap(w) {
+  if (!w) return "";
+  const rows = (w.chars || [])
+    .filter((c) => c && c.id)
+    .slice(0, 80)
+    .map((c) => {
+      const identity = [
+        c.job || c.occupation || c.role || "",
+        characterFactionIdentityCard(c) || "",
+      ].filter(Boolean).join(" | ");
+      const behavior = cut(
+        [c.personality, c.traits, c.goals, c.fears].filter(Boolean).join(" | "),
+        420
+      );
+      const history = cut(
+        [c.bio, c.backstory, c.extra].filter(Boolean).join(" | "),
+        360
+      );
+      const connections = cut(String(c.connections || ""), 420);
+      return `- ${c.name} [${c.id}] :: identity=${identity || "-"} :: behavior=${behavior || "-"} :: story=${history || "-"} :: ownConnections=${connections || "-"}`;
+    });
+
+  return `
+AUTHORIAL WORLD MODEL — NON-DIEGETIC, FOR SIMULATION ONLY:
+${rows.join("\n") || "-"}
+
+ABSOLUTE EPISTEMIC FIREWALL:
+- The WORLD ENGINE may read this entire map to understand who everybody really is, how each person would behave, and which relationships/rivalries/crushes plausibly matter.
+- A CHARACTER does NOT automatically know this map. Never quote, reveal, imply knowledge of, or act on another person's private personality/backstory/secrets/private Connections merely because the engine can see them.
+- For each speaking actor, diegetic knowledge comes ONLY from that actor's sealed capsule: visible current post/thread, public profile facts, SELF's own directed Connections canon, and SELF's stored memories/witnessed events/rumors/learned information.
+- Use hidden authorial information only to SIMULATE the owner of that information accurately, never to grant it to another actor.
+`;
+}
+
+function actorEpistemicRealityCard(w, actor, targetId, post = null, directComment = null) {
+  if (!w || !actor || !actor.id) return "";
+  const target = targetId ? charById(w, targetId) : null;
+  const publicTarget = target ? publicBasicCharacterProfileForAgent(w, target) : null;
+  const known = target ? knownLinesForObserver(w, actor.id, target.id) : "";
+  const ownPairCanon = target ? connectionCanonSnippetAbout(w, actor, target, 1200) : "";
+  const visiblePost = post
+    ? cut([post.text, post.imageDescription].filter(Boolean).join(" | "), 1200)
+    : "";
+  const visibleComment = directComment ? cut(String(directComment.text || ""), 700) : "";
+
+  return `
+DIEGETIC KNOWLEDGE PACKET — WHAT ${actor.name} MAY ACTUALLY USE:
+- PUBLIC TARGET PROFILE: ${publicTarget ? JSON.stringify(publicTarget) : "none"}
+- SELF'S OWN CONNECTIONS/CANON ABOUT TARGET: ${ownPairCanon || "none"}
+- STORED LEARNED / OBSERVED / HEARD INFORMATION ABOUT TARGET: ${known || "none"}
+- CURRENT VISIBLE POST/IMAGE: ${visiblePost || "none"}
+- CURRENT VISIBLE PARENT COMMENT: ${visibleComment || "none"}
+
+REALISTIC INFERENCE LADDER:
+1. Observed/current visible fact = may treat as fact.
+2. Explicit SELF-canon/Connections fact = SELF may know/feel it exactly as written, but it does not mean the TARGET knows SELF's private feeling.
+3. Stored learned/witnessed information = may use with its recorded certainty/source.
+4. Rumor/assumption = may influence suspicion or emotion, but MUST remain uncertain; do not state it as confirmed truth.
+5. Anything only present in somebody else's private sheet = UNKNOWN to SELF unless one of 1-4 establishes it.
+- ${actor.name} may connect several known clues like a real person would. They may infer, suspect, become jealous, distrustful, protective or curious. They may NOT mind-read or magically know the hidden cause.
+`;
+}
+
 function strictSocialActorCapsules(w, cast, post, directComment = null) {
   if (!w || !post) return "";
 
@@ -33781,10 +33854,12 @@ ${relationshipBehaviorCard(w, actor.id, targetId)}
 TARGET-SPECIFIC MEMORY ONLY:
 ${commentTargetMemoryCard(w, actor, targetId) || "-"}
 
+${actorEpistemicRealityCard(w, actor, targetId, post, directComment)}
+
 HARD CAPSULE BOUNDARY:
 - SELF may use EVERY field from SELF's full sheet above, including private personality, fears, favorites, secrets, history, Relations/Connections and speech canon.
-- OTHER character reference profiles may supply factual knowledge such as identity, nickname, birth/age, occupation/role/dojo, appearance, bio, history/backstory and Extra/Other Information.
-- KNOWLEDGE IS NOT IDENTITY: those OTHER-person facts may be known, remembered or reacted to, but they NEVER redefine SELF's personality, speech, casing, humor, temperament, trauma, preferences or behavior.
+- OTHER character reference profiles are AUTHORIAL SIMULATION REFERENCE, not automatic SELF knowledge. Public identity/visible profile facts are usable; private bio/history/backstory/Extra/Secrets/Connections/inner motives are usable by SELF ONLY if SELF's own canon or stored memory shows SELF actually knows them.
+- KNOWLEDGE IS NOT IDENTITY AND AUTHORIAL ACCESS IS NOT TELEPATHY: even a fact the engine knows about another person may not be spoken, assumed or reacted to by SELF unless the DIEGETIC KNOWLEDGE PACKET supports it. Other-person facts never redefine SELF's personality, speech, casing, humor, temperament, trauma, preferences or behavior.
 - NEVER use another person's Personality, Traits, Speech Style, Voice examples, Goals, Fears, Likes/Favorites, Secrets or private Connections as SELF's writing/behavior instructions.
 - SELF's wording and behavior must be traceable to SELF's own capsule only.
 - Do NOT copy any fact from this capsule into another actor's output.
@@ -33858,6 +33933,8 @@ async function genComments(w, post, options = {}) {
     )}
 
 ${socialScopeInstruction(w, post)}
+
+${authorialSocialWorldMap(w)}
 
 POST CONTEXT LOCK — EZ A KOMMENTGENERÁLÁS EGYETLEN CÉLPOSZTJA:
 - POST ID: ${post.id}
@@ -33944,6 +34021,8 @@ MINDEN cast-szereplőnél ugyanebben a sorrendben dolgozz:
 7. CHARACTER FILTER — csak ezután alkalmazd a relationship + Personality + Speech/Voice + kor + public/private viselkedést a megfogalmazásra.
 
 HARD COMMENT ARCHITECTURE:
+- NEGATIVE-BOND REALISM: enemy/rival/hostile commenters do NOT become sincere fans because a comment is mandatory or because the post looks good. Without an explicit current reconciliation/softening trigger, no warm hype, flattering praise, supportive-heart emoji or bestie energy. They may ignore when allowed; if a comment is required, use a grounded dry jab, skepticism, competitive acknowledgement, backhanded remark, challenge, disagreement, sarcasm or restrained begrudging respect that fits SELF.
+- RELATIONSHIP IS NOT POLITENESS NORMALIZATION: do not make everybody socially nice. A realistic world includes silence, awkwardness, envy, resentment, loyalty, defensive reactions, status competition and people choosing not to reward someone they dislike.
 - A relationship a reakció HANGJÁT/INTENZITÁSÁT változtatja, nem helyettesíti a poszt témáját.
 - A personality a reakció módját szabja meg, nem szolgálhat önmagában témaként.
 - NINCS kötelező SAVE/LinkedIn-formula: nem kell dicséret + hozzáadott érték + kérdés + emoji minden kommentbe. Egy rivális, barát, idősebb sensei vagy kaotikus Gen Z karakter teljesen máshogy kommentel.
@@ -37453,6 +37532,8 @@ async function genReply(w, post, comment, forcedResponderId = "", forcedThreadRe
 
 ${socialScopeInstruction(w, post, comment)}
 
+${authorialSocialWorldMap(w)}
+
 POSZT — ${nameOfIn(w, post.authorId)}:
 "${post.text}"
 
@@ -37536,6 +37617,8 @@ ${socialCommentExactPostGroundingCard(w, post)}
 ${socialNsfwContextCard(w, cast.map((c) => c.id), [post.authorId, comment.authorId])}
 
 REPLY SEMANTIC LOCK:
+- NEGATIVE-BOND REALISM: if SELF genuinely rivals/dislikes the parent author, do not normalize the reply into friendly support. Keep the actual parent topic, but let rivalry, distrust, competitiveness, irritation, sarcasm or hostility show in SELF's own realistic style unless a concrete recent reconciliation says otherwise. Conversely, do not invent hostility toward an ally/friend merely because SELF is generally sarcastic.
+- EPISTEMIC REALISM: reply only with facts SELF can know from the visible thread/public context/SELF memory/SELF canon. Hidden authorial character-sheet knowledge may shape how its OWNER behaves, but cannot leak into this speaker's reply. Inference is allowed only as inference.
 - A reply elsődleges értelme a KÖZVETLEN PARENT KOMMENTRE adott válasz. Relationship/personality csak ennek hangját formálja.
 - Ha a parent komment egyszerű kérdés/állítás, ne válaszolj egy teljesen más konfliktusból kiragadott mondattal.
 - Kép nélküli posztnál a reply sem találhat ki fotót vagy kinézeti részletet.
