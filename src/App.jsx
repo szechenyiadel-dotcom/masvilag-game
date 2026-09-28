@@ -38622,7 +38622,7 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
  * A per-character cooldown below spreads posts across the whole active session.
  * Gossip-media accounts remain outside this system and keep their own cadence.
  */
-const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 3;
+const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 6;
 const AUTONOMOUS_CHARACTER_POST_MIN_24H = 1;
 const AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H = 1;
 const AUTONOMOUS_TRIGGER_BURST_MIN_GAP_MS = 45 * 1000;
@@ -38630,7 +38630,7 @@ const AUTONOMOUS_TRIGGER_BURST_MIN_GAP_MS = 45 * 1000;
 /*
  * PER-CHARACTER SOCIAL RHYTHM
  * quieter = target 1 post / rolling 24h, normal = 2, highly online = 3.
- * IMPORTANT: 1–3 is a personality target and 3/24h is the hard per-character cap.
+ * IMPORTANT: 1–3 is the ordinary personality target; 6/24h is the hard emergency ceiling.
  * One image / rolling 24h stays hard.
  */
 function autonomousGameDayIndex(w) {
@@ -38869,7 +38869,11 @@ function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
      timer. Recent player activity, relationship gravity and social status can
      temporarily accelerate it, while a deterministic moving jitter prevents
      bots from lining up on exact recurring minute marks. */
-  const baseGap = 8 * 3600e3;
+  /* POST-ONLY FIX: the former 8-hour base / 90-minute floor made the
+     already-fast global feed pulse unable to find any eligible author after
+     characters had posted once. Keep per-character spacing on a living-world
+     timescale; the rolling 24h hard ceiling still prevents spam. */
+  const baseGap = 24 * 60 * 1000;
 
   const signal = autonomousPlayerActivityPostingSignal(w, c);
   const epoch = Math.floor(now() / (90 * 1000));
@@ -38878,7 +38882,7 @@ function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
   const reactionFactor = 1 / (1 + signal.heat * 0.24 + signal.directHeat * 0.18);
 
   return Math.max(
-    90 * 60 * 1000,
+    6 * 60 * 1000,
     Math.round(baseGap * jitter * reactionFactor)
   );
 }
@@ -39016,10 +39020,10 @@ function autonomousPostTypeInstruction(w, cast) {
   });
 
   return [
-    "PER-AI FAIRNESS RULE: every normal AI has the SAME rolling target of up to 3 autonomous feed posts / 24h. Quiet vs extrovert changes CONTENT/VOICE, not whether the bot gets starved of activity.",
-    "HARD CAP: NO character may create more than 3 autonomous feed posts in any rolling 24-hour window.",
+    "PER-AI FAIRNESS RULE: the ordinary rolling target stays around 1-3 autonomous feed posts / 24h, but the hard safety ceiling is 6 so an active living-world session cannot permanently exhaust the feed.",
+    "HARD CAP: NO character may create more than 6 autonomous feed posts in any rolling 24-hour window.",
     "FAIR ROTATION: prioritize bots with fewer recent posts and bots that have been visibly quiet longer. Do not let the same few characters monopolize the feed.",
-    "GLOBAL FEED HEARTBEAT: while at least one AI still has a legal daily slot, aim to produce a fresh post at least about every 30 minutes. Rotate authors; never break the 3/24h per-character cap to satisfy the heartbeat.",
+    "GLOBAL FEED HEARTBEAT: while at least one AI still has a legal daily slot, keep the feed moving. Rotate authors; never break the 6/24h per-character hard ceiling to satisfy the heartbeat.",
     "NO FIXED PERSONAL CLOCK: recent player interaction may reorder eligible authors, but must not turn one character into a spammer.",
     "IMAGE HARD MAX: each character may have at most 1 image post in rolling 24h. This is per character, not global.",
     "IMAGE BEHAVIOR: the 1/24h rule is a maximum, NOT a reason to avoid images. If imageSlot=OPEN, the character should genuinely use an album image sometimes. After several text posts with an unused image slot, strongly prefer a fitting image unless every remaining album image clashes with the current context.",
@@ -39039,7 +39043,7 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
     ? snapshot.get(String(c.id))
     : characterAutonomousPostStats24h(w, c.id);
 
-  /* The target is used for fair rotation; the separate 3/24h hard cap below is authoritative. */
+  /* The target is used for fair rotation; the separate 6/24h hard ceiling below is authoritative. */
   if (Number(stats.count || 0) >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) {
     return false;
   }
@@ -39085,7 +39089,7 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
        remains authoritative, so this fixes silence without enabling spam. */
     requiredGap = Math.min(
       requiredGap,
-      Math.max(4 * 60 * 1000, Math.round(gapMs * 0.12))
+      Math.max(90 * 1000, Math.round(gapMs * 0.12))
     );
   }
 
@@ -39095,12 +39099,12 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
      decide WHAT they are allowed to talk about. */
   if (signal.directHeat >= 0.55 && signal.lastAt && now() - signal.lastAt <= 12 * 60 * 1000) {
     requiredGap = Math.max(
-      60 * 60 * 1000,
+      4 * 60 * 1000,
       Math.round(gapMs * Math.max(0.22, 0.52 - signal.directHeat * 0.08))
     );
   } else if (signal.heat >= 1.15 && signal.lastAt && now() - signal.lastAt <= 15 * 60 * 1000) {
     requiredGap = Math.max(
-      75 * 60 * 1000,
+      6 * 60 * 1000,
       Math.round(gapMs * Math.max(0.38, 0.72 - signal.heat * 0.07))
     );
   }
@@ -39282,8 +39286,8 @@ KARAKTERHŰ POSZTOLÁS:
 - A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa, occupation/job-ja, dojo/organization oldala és az is, hogy egyáltalán posztolna-e valamiről, a SAJÁT karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
-- POSZTRITMUS: egy normál AI legfeljebb 3 autonóm feed-posztot írhat bármely gördülő 24 órában. Quiet karakter célozhat 1-et, normál 2-t, nagyon online 3-at; a 3/24h HARD CAP, ezt semmilyen trigger nem írhatja felül.
-- GLOBÁLIS FEED: amíg van olyan AI, akinek maradt legális napi slotja, a világ lehetőleg ne maradjon kb. 30 percnél tovább új poszt nélkül. Az authorok rotáljanak; ne ugyanaz a karakter spammeljen. Friss player activity csak a sorrendet/alkalmasságot befolyásolhatja, a 3/24h capot nem.
+- POSZTRITMUS: a normál személyiségalapú cél továbbra is kb. 1-3 autonóm feed-poszt / gördülő 24 óra, de az élő világ biztonsági felső határa 6/24h. A 6/24h HARD CAP-ot semmilyen trigger nem írhatja felül.
+- GLOBÁLIS FEED: amíg van olyan AI, akinek maradt legális napi slotja, a feed maradjon aktív és az authorok rotáljanak; ne ugyanaz a karakter spammeljen. Friss player activity csak a sorrendet/alkalmasságot befolyásíthatja, a 6/24h hard capot nem.
 - Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
 - A FEED AKTÍV: ha a karakternek nincs különleges eseménye, akkor is posztoljon egy rövid, hétköznapi, személyiségből következő gondolatot, státuszt, kérdést, poént vagy élethelyzetet. Üres posts tömböt NE adj vissza, amikor a karakter jogosult posztolni.
 - A karaktereknek nem kell megvárniuk a játékost vagy egy drámai eseményt ahhoz, hogy posztoljanak. A saját életükből kezdeményezzenek.
@@ -40268,7 +40272,7 @@ HARD ARCHITECTURE RULES:
 - Ha ide kerültél, ÍRJ egy természetes posztot; ne skipelj pusztán azért, mert nincs dráma.
 - ${author.name} 24 órán belül maximum 1 képes posztot tehet ki; a többi legyen szöveges.
 - A képlimit karakterenként értendő, nem az egész feedre.
-- Ha ${author.name} még 1 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó. A 3/24h capot viszont soha ne lépd át.
+- Ha ${author.name} még 1 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó. A 6/24h hard capot viszont soha ne lépd át.
 - A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
 - A szöveges poszt továbbra is gyakori, DE az 1 kép/24h maximumot NE értelmezd úgy, hogy kerülnöd kell a képeket. Ha az image slot OPEN, valóban használj néha albumképet.
 - Ha fent IMAGE OPPORTUNITY = DUE, akkor HATÁROZOTTAN részesíts előnyben EGY konkrét, jelenlegi kontextushoz illő albumképet; csak akkor maradjon szöveges, ha egyik megmaradt kép sem illik hitelesen.
@@ -66686,7 +66690,7 @@ function planAutoAction(view) {
   /*
    * FEED HEARTBEAT:
    * New feed items are much rarer now (global target <= ~30 min), while each
-   * character is hard-capped at 3 autonomous posts / rolling 24h.
+   * character is hard-capped at 6 autonomous posts / rolling 24h.
    */
   const feedDeficitCast = fairPostCast(view);
   const feedDeficit = feedDeficitCast.some((c) => {
