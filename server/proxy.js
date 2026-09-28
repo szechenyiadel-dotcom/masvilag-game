@@ -6523,7 +6523,7 @@ app.post(
        can pause the whole sibling reaction bundle without reclassifying it as a
        player-interactive failure. */
     if (!interactiveRequest && first.backgroundDeferred) {
-      const retryAfterMs = 45000;
+      const retryAfterMs = 15000;
       res.setHeader("retry-after", String(Math.ceil(retryAfterMs / 1000)));
       res.setHeader("x-masvilag-ai-provider", requestedProvider);
       res.setHeader("x-masvilag-ai-deferred", "1");
@@ -6585,10 +6585,10 @@ app.post(
       )
     ) {
       const retryAfterMs = Math.max(
-        30000,
+        10000,
         Math.min(
-          120000,
-          shortestFinalRetryMs || 45000
+          60000,
+          shortestFinalRetryMs || 15000
         )
       );
       res.setHeader("retry-after", String(Math.ceil(retryAfterMs / 1000)));
