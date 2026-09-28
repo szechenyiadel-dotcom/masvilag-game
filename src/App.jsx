@@ -11186,9 +11186,11 @@ async function runAiQueueWorker() {
         const costGap =
           task.priority >= 50
             ? Math.min(1500, Number(AI.lastCostGap) || 0)
-            : task.priority >= 15
-              ? Math.min(60000, Number(AI.lastCostGap) || 0)
-              : Math.min(60000, Number(AI.lastCostGap) || 0);
+            : task.priority >= 30
+              ? Math.min(4500, Number(AI.lastCostGap) || 0)
+              : task.priority >= 15
+                ? Math.min(9000, Number(AI.lastCostGap) || 0)
+                : Math.min(30000, Number(AI.lastCostGap) || 0);
 
         const gap = Math.max(baseGap, costGap);
         if (since < gap) await wait(gap - since);
@@ -26626,7 +26628,7 @@ const LIVE_WORLD_ACTIVE_SILENCE_RECOVERY_MS = Math.max(
   22000,
   Math.min(60000, Number(import.meta.env.VITE_WORLD_ACTIVE_SILENCE_RECOVERY_MS) || 32000)
 );
-const LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS = 5 * 60 * 1000;
+const LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS = 4 * 60 * 1000;
 const LIVE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS = Math.max(
   60000,
   Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_BACKGROUND_SILENCE_RECOVERY_MS) || 105000)
@@ -34192,7 +34194,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 3000 }
+    { maxTokens: 3000, priority: 35, maxBusyWaits: 1, busyRetryCapMs: 5000, timeoutMs: 20000 }
   );
 
   /*
@@ -37648,7 +37650,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 900 }
+    { maxTokens: 900, priority: 35, maxBusyWaits: 1, busyRetryCapMs: 5000, timeoutMs: 18000 }
   );
 
   /*
@@ -39438,6 +39440,10 @@ Formátum:
       maxTokens: single
         ? 1800
         : 4096,
+      priority: 18,
+      maxBusyWaits: 1,
+      busyRetryCapMs: 7000,
+      timeoutMs: 24000,
     }
   );
 }
@@ -53125,7 +53131,7 @@ function pickNoteReactionCast(w, authorId, processedBy) {
 }
 
 /* Egy bot kiír magának egy jegyzetet. */
-async function genNote(w, bot) {
+async function genNote(w, bot, options = {}) {
   return askWorldJSON(
     w,
     engineFor(w),
@@ -53228,7 +53234,13 @@ Ha most nem írna Note-ot:
 
 Ha ír:
 {"skip":false,"text":"a note","selfUpdates":[{"id":"${bot.id}","mood":"csak ha a Note valóban kifejez/frissít egy pillanatnyi állapotot","intent":"csak ha a Note mögött konkrét szándék van","openLoops":[]}]}${TAIL}`,
-    { maxTokens: 520 }
+    {
+      maxTokens: 520,
+      priority: Math.max(18, Number(options.priority) || 0),
+      maxBusyWaits: 1,
+      busyRetryCapMs: 5000,
+      timeoutMs: 16000,
+    }
   );
 }
 
@@ -53381,7 +53393,7 @@ Formátum:
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":3,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ]}${TAIL}`,
-      { maxTokens: 1100 }
+      { maxTokens: 1100, priority: 25, maxBusyWaits: 1, busyRetryCapMs: 6000, timeoutMs: 18000 }
     );
 
   out.__castIds =
@@ -67603,7 +67615,7 @@ JSON ONLY: {"text":"one direct reply"}`,
     {
       maxTokens: 260,
       maxTries: 2,
-      priority: humanReply ? 100 : 20,
+      priority: humanReply ? 100 : 35,
       maxBusyWaits: humanReply ? 2 : 1,
       busyRetryCapMs: 60000,
       timeoutMs: 18000,
@@ -69281,7 +69293,11 @@ if (targetNote) {
     }
 
     const out =
-      await genNote(view, bot);
+      await genNote(
+        view,
+        bot,
+        { priority: forceHeartbeat ? 55 : 20 }
+      );
 
     if (!out || out.skip) return null;
 
@@ -73501,7 +73517,7 @@ const signOut = useCallback(async () => {
     const beat = async () => {
   if (!alive) return;
 
-  if (autoRunning.current || cooldownLeft() > 0) return;
+  if (autoRunning.current) return;
 
   const view2 = viewRef.current;
   if (!view2 || !(view2.chars || []).length) return;
@@ -73511,6 +73527,35 @@ const signOut = useCallback(async () => {
   const pendingReplyOverride = !manualQueued && !isPlayerCommentReplyAction(view2, queued)
     ? pendingPlayerReplyAction(view2)
     : null;
+
+  /* VISIBLE SOCIAL LATENCY FIX:
+   * A fresh post that is still missing its first visible comment set must not sit
+   * behind an unrelated old background action. Reuse the SAME single simulation
+   * slot; this is priority ordering, not extra concurrency. */
+  const urgentFreshCoveragePost = !manualQueued
+    ? guaranteedCommentCoverageCandidate(view2)
+    : null;
+  const queuedAlreadyCoversUrgentPost = Boolean(
+    queued &&
+    queued.type === "comments" &&
+    urgentFreshCoveragePost &&
+    String(queued.payload && queued.payload.postId || "") === String(urgentFreshCoveragePost.id || "")
+  );
+  const urgentFreshCommentOverride =
+    urgentFreshCoveragePost && !queuedAlreadyCoversUrgentPost
+      ? guaranteedPostCommentAction(view2, urgentFreshCoveragePost, "fresh-visible-priority")
+      : null;
+
+  /* HARD LIVENESS OVERRIDE:
+   * Even if an old queue item is hanging around, four minutes with no VISIBLE AI
+   * activity is enough. A grounded DM wins; otherwise a fair-rotation AI Note is
+   * forced. Manual/player-reply work still stays above this. */
+  const hardIdleHeartbeatOverride =
+    !manualQueued &&
+    !pendingReplyOverride &&
+    liveWorldSilenceMs(view2) >= LIVE_WORLD_HARD_ACTIVITY_HEARTBEAT_MS
+      ? pickHardIdleWorldHeartbeatAction(view2)
+      : null;
 
   /*
    * RECOVERY v99.2:
@@ -73664,6 +73709,8 @@ const signOut = useCallback(async () => {
   let action =
     pendingReplyOverride ||
     (isPlayerCommentReplyAction(view2, queued) ? queued : null) ||
+    urgentFreshCommentOverride ||
+    hardIdleHeartbeatOverride ||
     coverageOverride ||
     essentialActivityOverride ||
     socialBacklogFeedOverride ||
@@ -74005,12 +74052,12 @@ const signOut = useCallback(async () => {
       if (alive) setAutoBusy(false);
     };
     /*
-     * 9 másodpercenként nézzük meg, van-e sürgős queue-teendő.
-     * Ez NEM jelent 9 másodpercenként AI-hívást:
+     * 5 másodpercenként nézzük meg, van-e sürgős queue-teendő.
+     * Ez NEM jelent 5 másodpercenként AI-hívást:
      * a contentAt + AI queue/token throttling továbbra is korlátozza
      * a generatív kérések tényleges sűrűségét.
      */
-    const i = setInterval(beat, 9000);
+    const i = setInterval(beat, 5000);
     const first = setTimeout(beat, 100);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
