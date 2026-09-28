@@ -6523,7 +6523,7 @@ app.post(
        can pause the whole sibling reaction bundle without reclassifying it as a
        player-interactive failure. */
     if (!interactiveRequest && first.backgroundDeferred) {
-      const retryAfterMs = 3000;
+      const retryAfterMs = 45000;
       res.setHeader("retry-after", String(Math.ceil(retryAfterMs / 1000)));
       res.setHeader("x-masvilag-ai-provider", requestedProvider);
       res.setHeader("x-masvilag-ai-deferred", "1");
@@ -6570,6 +6570,39 @@ app.post(
       } else if ([429, 503, 529].includes(upstreamStatus)) {
         res.setHeader("retry-after", "3");
       }
+    }
+
+    /* BACKGROUND RATE-LIMIT NORMALIZATION v4:
+     * A 429/503/529 from every configured provider is expected backpressure for
+     * autonomous work, not a browser-level failed resource. Convert it to the
+     * same explicit 200/deferred protocol used for provider occupancy. Human
+     * interactive requests still receive a real error immediately. */
+    if (
+      !interactiveRequest &&
+      (
+        [429, 503, 529].includes(upstreamStatus) ||
+        finalLimited.length > 0
+      )
+    ) {
+      const retryAfterMs = Math.max(
+        30000,
+        Math.min(
+          120000,
+          shortestFinalRetryMs || 45000
+        )
+      );
+      res.setHeader("retry-after", String(Math.ceil(retryAfterMs / 1000)));
+      res.setHeader("x-masvilag-ai-provider", last?.provider || requestedProvider);
+      res.setHeader("x-masvilag-ai-deferred", "1");
+      res.setHeader("x-masvilag-ai-upstream-status", String(upstreamStatus));
+      return res.status(200).json({
+        deferred: true,
+        retryAfterMs,
+        error: {
+          code: "AI_BACKGROUND_DEFERRED",
+          message: "Background AI deferred because all configured providers are rate-limited or recovering.",
+        },
+      });
     }
 
     res.setHeader(
