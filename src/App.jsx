@@ -7101,6 +7101,14 @@ function commentWarrantsAiReply(w, post, comment, targetId) {
   const juice = publicSocialJuiceSignals(comment.text);
   const fullSocialThreadCap = postRequiresFullAiCommentCoverage(w, post);
   if (!isHuman(w, comment.authorId) && aiTurns >= (fullSocialThreadCap ? (juice.juicy ? 12 : 9) : (juice.juicy ? 10 : 7))) return false;
+  const freshDirectReply =
+    now() - (Number(comment.ts) || 0) <= Math.min(30 * 60 * 1000, LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) &&
+    (row.reason.includes("mention") || row.reason.includes("parent") || row.reason.includes("post-author"));
+
+  /* Every fresh direct reply/comment should receive a real continuation when a
+     natural responder exists. The AI-only chain cap above still prevents loops. */
+  if (freshDirectReply) return true;
+
   const climate = socialCommentClimateSnapshot(w, post);
   const dramaShift =
     climate.dramaLevel === "chaotic"
@@ -10875,10 +10883,10 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * the timeline while still letting a larger cast keep the world visibly alive.
  */
 const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  25 * 1000,
+  20 * 60 * 1000,
   Math.min(
-    3 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 30 * 1000
+    30 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 24 * 60 * 1000
   )
 );
 
@@ -10890,11 +10898,11 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
  * never feels like it is posting on a fixed clock.
  */
 const LIVE_WORLD_ACTIVE_POST_TARGET_MS = Math.max(
-  9 * 1000,
+  20 * 60 * 1000,
   Math.min(
-    60 * 1000,
+    30 * 60 * 1000,
     Number(import.meta.env.VITE_WORLD_ACTIVE_POST_INTERVAL_MS) ||
-      14 * 1000
+      24 * 60 * 1000
   )
 );
 
@@ -10916,7 +10924,7 @@ const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(
 const LIVE_WORLD_DM_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 30 * 1000));
 const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 4 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
-const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
+const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(20 * 1000, Math.min(3 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 45 * 1000));
 const AI_BACKGROUND_GAP_MS = Math.max(250, Math.min(6000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 220));
 const AI_INITIATIVE_GAP_MS = Math.max(200, Math.min(5000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 180));
 
@@ -13668,7 +13676,9 @@ function missingAiCommenterIdsForPost(w, post) {
 }
 
 function postRequiresFullAiCommentCoverage(w, post) {
-  return Boolean(w && post && post.id && post.authorId);
+  if (!w || !post || !post.id || !post.authorId) return false;
+  const age = now() - (Number(post.ts) || 0);
+  return age >= 0 && age <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS;
 }
 
 const GUARANTEED_POST_COMMENT_RETRY_MS = 2000;
@@ -13689,29 +13699,25 @@ function guaranteedPostCommentTarget(w, post) {
   const available = availableAiCommenterCountForPost(w, post);
   if (!available) return 0;
 
-  /* FULL SOCIAL COMMENT COVERAGE — HARD RULE:
-   * every actual character bot except the post author receives exactly one
-   * top-level comment slot on every post. Relationship/personality determines
-   * HOW they comment, never whether their required slot disappears. */
-  return available;
+  /* FRESH-POST COVERAGE: every fresh post gets a visible conversation, but we
+   * deliberately do NOT force every single bot to comment. A small distinct
+   * set keeps the feed lively without flooding the provider queue. */
+  return Math.min(available, 4);
 }
 
 function postCommentCoverageState(w, post) {
   const target = guaranteedPostCommentTarget(w, post);
   const uniqueCommenters = topLevelAiCommenterIds(w, post);
-  const missingIds = missingAiCommenterIdsForPost(w, post);
-  const current = uniqueCommenters.size;
+  const current = Math.min(target, uniqueCommenters.size);
+  const needed = Math.max(0, target - current);
+  const missingIds = missingAiCommenterIdsForPost(w, post).slice(0, needed);
 
-  /* HARD EVERY-BOT INVARIANT:
-   * Coverage is complete only when there are ZERO missing AI identities.
-   * Raw comment count is intentionally ignored because repeated top-level
-   * comments from the same 1-2 bots must never impersonate full coverage. */
   return {
     current,
     target,
-    missing: missingIds.length,
+    missing: needed,
     missingIds,
-    complete: target <= 0 || missingIds.length === 0,
+    complete: target <= 0 || current >= target,
   };
 }
 
@@ -13794,6 +13800,8 @@ function guaranteedCommentCoverageCandidate(w) {
     (w.posts || [])
       .filter((post) => {
         if (!post || !post.id || !post.authorId) return false;
+        const age = ts - (Number(post.ts) || 0);
+        if (age < 0 || age > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) return false;
         const coverage = postCommentCoverageState(w, post);
         if (coverage.complete || coverage.missing <= 0) return false;
         const attemptedAt = Number(post.commentCoverageAttemptAt) || 0;
@@ -38415,16 +38423,15 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
  * A per-character cooldown below spreads posts across the whole active session.
  * Gossip-media accounts remain outside this system and keep their own cadence.
  */
-const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 48;
-const AUTONOMOUS_CHARACTER_POST_MIN_24H = 12;
+const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 3;
+const AUTONOMOUS_CHARACTER_POST_MIN_24H = 1;
 const AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H = 1;
 const AUTONOMOUS_TRIGGER_BURST_MIN_GAP_MS = 45 * 1000;
 
 /*
  * PER-CHARACTER SOCIAL RHYTHM
- * quieter = target 18 posts / rolling 24h, normal = 24, highly online = 30.
- * IMPORTANT: 18–30 is a PRIORITY TARGET, not a stop condition. Characters may
- * continue posting naturally after reaching it until the separate 48/24h hard cap.
+ * quieter = target 1 post / rolling 24h, normal = 2, highly online = 3.
+ * IMPORTANT: 1–3 is a personality target and 3/24h is the hard per-character cap.
  * One image / rolling 24h stays hard.
  */
 function autonomousGameDayIndex(w) {
@@ -38522,13 +38529,13 @@ function autonomousPostStatsSnapshot(w) {
 }
 
 function autonomousCharacterPostTarget24h(w, c, activityOverride = null) {
-  if (!c) return 18;
+  if (!c) return 1;
   const activity = Number.isFinite(Number(activityOverride))
     ? Number(activityOverride)
     : Number(characterOnlineActivityProfile(w, c).post) || 0;
-  if (activity >= 1.15) return 30;
-  if (activity >= 0.82) return 24;
-  return 18;
+  if (activity >= 1.15) return 3;
+  if (activity >= 0.82) return 2;
+  return 1;
 }
 
 /*
@@ -38648,9 +38655,10 @@ function autonomousDynamicFeedPulseMs(w) {
   const reactionFactor = 1 / (1 + signal.heat * 0.20);
   const target = Math.round(base * jitter * reactionFactor);
 
-  return active
-    ? Math.max(8 * 1000, Math.min(48 * 1000, target))
-    : Math.max(24 * 1000, Math.min(3 * 60 * 1000, target));
+  /* Global feed heartbeat: when at least one AI still has a daily slot,
+     the world should not go more than ~30 minutes without a fresh post.
+     This changes only cadence; per-character 3/24h hard caps still win. */
+  return Math.max(18 * 60 * 1000, Math.min(30 * 60 * 1000, target));
 }
 
 function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
@@ -38664,10 +38672,10 @@ function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
      temporarily accelerate it, while a deterministic moving jitter prevents
      bots from lining up on exact recurring minute marks. */
   const baseGap = activity >= 1.15
-    ? 150 * 1000
+    ? 6 * 3600e3
     : activity >= 0.82
-      ? 240 * 1000
-      : 390 * 1000;
+      ? 8 * 3600e3
+      : 12 * 3600e3;
 
   const signal = autonomousPlayerActivityPostingSignal(w, c);
   const epoch = Math.floor(now() / (90 * 1000));
@@ -38676,7 +38684,7 @@ function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
   const reactionFactor = 1 / (1 + signal.heat * 0.24 + signal.directHeat * 0.18);
 
   return Math.max(
-    55 * 1000,
+    90 * 60 * 1000,
     Math.round(baseGap * jitter * reactionFactor)
   );
 }
@@ -38814,11 +38822,11 @@ function autonomousPostTypeInstruction(w, cast) {
   });
 
   return [
-    "PER-AI RULE: every normal AI has its OWN dynamic posting rhythm and rolling-24h activity target of 18–30 posts depending on online activity.",
-    "CRITICAL: 18–30 is a PRIORITY TARGET, NOT A STOP LIMIT. Reaching the target never silences the character; only the separate hard safety maximum can do that.",
-    "Hard safety maximum is 48 posts per character in any rolling 24-hour window.",
-    "Characters below 12 posts in rolling 24h have extra priority.",
-    "NO FIXED POST CLOCK: personality supplies only a base rhythm. Recent player posts/comments/replies, direct DMs, relationship intensity and social status can temporarily accelerate posting, and timing is jittered so characters do not post on predictable recurring minute marks.",
+    "PER-AI RULE: every normal AI has its OWN rolling-24h posting rhythm: quieter characters target 1 post, normal characters 2, very-online characters 3.",
+    "HARD CAP: NO character may create more than 3 autonomous feed posts in any rolling 24-hour window.",
+    "Characters below 1 post in rolling 24h get fairness priority, but personality still decides who is most natural next.",
+    "GLOBAL FEED HEARTBEAT: while at least one AI still has a legal daily slot, aim to produce a fresh post at least about every 30 minutes. Rotate authors; never break the 3/24h per-character cap to satisfy the heartbeat.",
+    "NO FIXED PERSONAL CLOCK: personality supplies the personal rhythm. Recent player interaction may reorder eligible authors, but must not turn one character into a spammer.",
     "IMAGE HARD MAX: each character may have at most 1 image post in rolling 24h. This is per character, not global.",
     "IMAGE BEHAVIOR: the 1/24h rule is a maximum, NOT a reason to avoid images. If imageSlot=OPEN, the character should genuinely use an album image sometimes. After several text posts with an unused image slot, strongly prefer a fitting image unless every remaining album image clashes with the current context.",
     "Never invent an image outside the author's own album; the caption must match the selected image's confirmed/visible context and the author's own voice.",
@@ -38837,8 +38845,7 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
     ? snapshot.get(String(c.id))
     : characterAutonomousPostStats24h(w, c.id);
 
-  /* 18–30 is deliberately NOT checked here as a cap. It is a desired activity
-     target used by fairPostCast(), not a silence switch. */
+  /* The target is used for fair rotation; the separate 3/24h hard cap below is authoritative. */
   if (Number(stats.count || 0) >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) {
     return false;
   }
@@ -38884,7 +38891,7 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
        gone quiet, while keeping the rolling hard cap intact. */
     requiredGap = Math.min(
       requiredGap,
-      Math.max(55 * 1000, Math.round(gapMs * 0.34))
+      Math.max(75 * 60 * 1000, Math.round(gapMs * 0.34))
     );
   }
 
@@ -38894,12 +38901,12 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
      decide WHAT they are allowed to talk about. */
   if (signal.directHeat >= 0.55 && signal.lastAt && now() - signal.lastAt <= 12 * 60 * 1000) {
     requiredGap = Math.max(
-      32 * 1000,
+      60 * 60 * 1000,
       Math.round(gapMs * Math.max(0.22, 0.52 - signal.directHeat * 0.08))
     );
   } else if (signal.heat >= 1.15 && signal.lastAt && now() - signal.lastAt <= 15 * 60 * 1000) {
     requiredGap = Math.max(
-      48 * 1000,
+      75 * 60 * 1000,
       Math.round(gapMs * Math.max(0.38, 0.72 - signal.heat * 0.07))
     );
   }
@@ -39080,8 +39087,8 @@ KARAKTERHŰ POSZTOLÁS:
 - A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa, occupation/job-ja, dojo/organization oldala és az is, hogy egyáltalán posztolna-e valamiről, a SAJÁT karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
-- POSZTRITMUS: minden normál AI saját, DINAMIKUS és kiszámíthatatlan ritmusban posztol. Online aktivitástól függő gördülő 24 órás célja 18–30 poszt, a 48-as plafon csak biztonsági hard limit; nincs közös globális feedlimit.
-- A 24 órán belül 12 poszt alatt álló AI-k kapjanak elsőbbséget. NINCS fix személyes percszám: a personality/online aktivitás ad egy alapritmust, amit a friss játékos-aktivitás, közvetlen DM/comment/reply, kapcsolatintenzitás és social státusz ideiglenesen gyorsíthat, a jitter pedig szándékosan kiszámíthatatlanná tesz.
+- POSZTRITMUS: egy normál AI legfeljebb 3 autonóm feed-posztot írhat bármely gördülő 24 órában. Quiet karakter célozhat 1-et, normál 2-t, nagyon online 3-at; a 3/24h HARD CAP, ezt semmilyen trigger nem írhatja felül.
+- GLOBÁLIS FEED: amíg van olyan AI, akinek maradt legális napi slotja, a világ lehetőleg ne maradjon kb. 30 percnél tovább új poszt nélkül. Az authorok rotáljanak; ne ugyanaz a karakter spammeljen. Friss player activity csak a sorrendet/alkalmasságot befolyásolhatja, a 3/24h capot nem.
 - Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
 - A FEED AKTÍV: ha a karakternek nincs különleges eseménye, akkor is posztoljon egy rövid, hétköznapi, személyiségből következő gondolatot, státuszt, kérdést, poént vagy élethelyzetet. Üres posts tömböt NE adj vissza, amikor a karakter jogosult posztolni.
 - A karaktereknek nem kell megvárniuk a játékost vagy egy drámai eseményt ahhoz, hogy posztoljanak. A saját életükből kezdeményezzenek.
@@ -39991,12 +39998,12 @@ HARD ARCHITECTURE RULES:
 - PLAYER-POST ROUTING — HARD RULE: a JÁTÉKOS friss social posztjára adott közvetlen válasz, vélemény, kérdés, beszólás, támogatás, flört vagy vita a KOMMENTRENDSZER feladata. A játékos posztját NE használd külön autonóm status update/public_post anchor alapjaként és ne subtweeteld pusztán azért, mert most jelent meg a feedben.
 - Más AI/media nyilvános tetteire vagy valódi világ-eseményre ${author.name} továbbra is reagálhat saját posztban, ha az ténylegesen az ő saját social megszólalását indokolja; a játékos saját posztjára viszont kommentben reagál.
 - Fotós posztnál ugyanaz az autonóm döntés érvényes: csak olyan, az adott karakterhez és aktuális helyzethez illő saját vizuált válassz, amit a meglévő képrendszer enged. A kép ne írja felül a caption karakterhangját.
-- ${author.name} saját gördülő 24 órás célja 18–30 poszt aktivitásától függően, DE EZ CSAK AKTIVITÁSI CÉL/PRIORITÁS, NEM PLAFON; 48 a valódi biztonsági kemény maximum.
+- ${author.name} saját gördülő 24 órás célja aktivitástól függően 1–3 poszt, és 3 a valódi HARD MAXIMUM. Ha már 3 autonóm feed-posztja van az elmúlt 24 órában, újabbat nem írhat.
 - Normál körben a scheduler csak a saját cooldown lejárta után választ ki. Triggerelt aftermath burstben több KÜLÖNBÖZŐ AI gyorsabban is sorra kerülhet, de ugyanaz az AI egy burston belül nem ismétlődhet.
 - Ha ide kerültél, ÍRJ egy természetes posztot; ne skipelj pusztán azért, mert nincs dráma.
 - ${author.name} 24 órán belül maximum 1 képes posztot tehet ki; a többi legyen szöveges.
 - A képlimit karakterenként értendő, nem az egész feedre.
-- Ha ${author.name} még 12 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó.
+- Ha ${author.name} még 1 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó. A 3/24h capot viszont soha ne lépd át.
 - A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
 - A szöveges poszt továbbra is gyakori, DE az 1 kép/24h maximumot NE értelmezd úgy, hogy kerülnöd kell a képeket. Ha az image slot OPEN, valóban használj néha albumképet.
 - Ha fent IMAGE OPPORTUNITY = DUE, akkor HATÁROZOTTAN részesíts előnyben EGY konkrét, jelenlegi kontextushoz illő albumképet; csak akkor maradjon szöveges, ha egyik megmaradt kép sem illik hitelesen.
@@ -53148,7 +53155,8 @@ A reakcióban ezt ugyanúgy vedd figyelembe, mint a note szövegét. A karakter 
 NOTE-REAKCIÓ SZABÁLYOK:
 
 - Csak olyan karakter reagáljon, akinek erre ténylegesen természetes oka van.
-- Nem kell mindenkinek reagálnia.
+- Nem kell mindenkinek reagálnia, DE ha a felsorolt karakterek között van legalább egy barát, közeli kapcsolat, crush/partner, rivális, follower vagy más valóban érintett személy, legalább EGY látható reakció (emoji VAGY DM) szülessen ebben a körben.
+- Üres reacts+dms csak akkor elfogadható, ha a teljes felsorolt cast számára tényleg irreleváns lenne a Note.
 - Kizárólag az alább felsorolt, még nem reagált karakterek közül válassz.
 - Egy karakter erre a konkrét note-ra csak EGYSZER reagálhat.
 - Egy karakter vagy emoji-reakciót adjon, VAGY privát üzenetet írjon. Ugyanabban a körben ne szerepeljen mindkettőben.
@@ -66077,11 +66085,34 @@ function planAutoAction(view) {
     );
   }
 
+  /* FRESH SOCIAL FIRST — no extra parallel AI calls: these use the same single
+   * scheduler slot. Every fresh post gets its comment set before another feed
+   * post, and fresh direct comment replies continue while the thread is alive. */
+  const freshCoveragePost = guaranteedCommentCoverageCandidate(view);
+  if (freshCoveragePost) {
+    return guaranteedPostCommentAction(view, freshCoveragePost, "fresh-post-priority");
+  }
+
+  const freshDirectThread = findNaturalThreadReply(view);
+  if (freshDirectThread) {
+    return mkAction(
+      "reply",
+      `fresh-thread:${freshDirectThread.post.id}:${freshDirectThread.comment.id}:${freshDirectThread.targetId}`,
+      {
+        postId: freshDirectThread.post.id,
+        commentId: freshDirectThread.comment.id,
+        rootId: freshDirectThread.comment.id,
+        targetId: freshDirectThread.targetId,
+        trigger: "fresh-thread-guaranteed",
+      },
+      "event"
+    );
+  }
+
   /*
-   * v99.8 FEED HARD PRIORITY:
-   * If any normal AI is below its minimum rolling-24h post quota, feed creation
-   * is a mandatory next lane after direct player replies. DM/RP/gossip maintenance
-   * must not starve autonomous posting.
+   * FEED HEARTBEAT:
+   * New feed items are much rarer now (global target <= ~30 min), while each
+   * character is hard-capped at 3 autonomous posts / rolling 24h.
    */
   const feedDeficitCast = fairPostCast(view);
   const feedDeficit = feedDeficitCast.some((c) => {
@@ -66121,7 +66152,7 @@ function planAutoAction(view) {
    * top-level comments. This consumes the SAME scheduler slot (no extra parallel
    * AI request), so interactive speed and provider concurrency stay unchanged. */
   const earlyNaturalThread = findNaturalThreadReply(view);
-  if (earlyNaturalThread && Math.random() < 0.72) {
+  if (earlyNaturalThread) {
     return mkAction(
       "reply",
       `auto-thread-early:${earlyNaturalThread.post.id}:${earlyNaturalThread.comment.id}:${earlyNaturalThread.targetId}`,
