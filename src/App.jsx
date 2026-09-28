@@ -1,4 +1,4 @@
-/* MÁSVILÁG RECOVERY v99.8 — SOCIAL POST + FULL CANON LOCK — 20260816_1030 */
+/* MÁSVILÁG v100.0 — CONTEXT + CANON + LIVE SOCIAL + RESPONSIVE — 20260928 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
@@ -20,6 +20,7 @@ const CSS = `
   --oxblood:#8A1D3B; --gold:#C8A45C; --rose:#D9758F; --steel:#5B7A99;
   --bone:#ECE4DA; --muted:#8C84A0;
   position:fixed; inset:0; display:flex; flex-direction:column;
+  width:100%; height:100vh; height:100dvh; min-height:100svh; overflow:hidden;
   background:
     radial-gradient(120% 60% at 50% -10%, rgba(138,29,59,.22), transparent 60%),
     radial-gradient(90% 50% at 100% 100%, rgba(91,122,153,.12), transparent 70%),
@@ -2194,17 +2195,32 @@ label.f { color:#958da6; font-weight:600; }
   border-radius:14px;
 }
 
-/* Desktop: keep the app intentional, not stretched. */
+/* Desktop / tablet: use the available screen without turning the feed into a
+   stretched full-width wall. The app stays single-column, just comfortably
+   wider on laptops and desktops. */
 @media (min-width:700px) {
-  .mv-wrap { max-width:590px; }
-  .nav-in { max-width:590px; }
-  .sheet { max-width:590px; }
-  .social-post { padding:15px 16px 14px; }
+  .mv-wrap { max-width:720px; }
+  .nav-in { max-width:720px; }
+  .sheet { max-width:720px; }
+  .mv-main { padding-left:20px; padding-right:20px; }
+  .social-post { padding:16px 18px 15px; }
+  .bub { max-width:74%; }
 }
 
-/* Mobile compactness without sacrificing tapability. */
+/* Phone / touch ergonomics. 16px form controls prevent iOS focus-zoom; safe
+   area padding keeps navigation/composers clear of home indicators. */
+@media (max-width:768px) {
+  input.i, textarea.i, select.i { font-size:16px; }
+  .btn { min-height:42px; }
+  .btn.tiny { min-height:36px; }
+  .mv-main { padding-bottom:calc(92px + env(safe-area-inset-bottom, 0px)); }
+  .nav { padding-bottom:env(safe-area-inset-bottom, 0px); }
+  .nav button { min-height:54px; }
+  .bub { max-width:88%; }
+}
+
 @media (max-width:480px) {
-  .hdr { padding-left:14px; padding-right:14px; }
+  .hdr { padding-left:14px; padding-right:14px; padding-top:calc(12px + env(safe-area-inset-top, 0px)); }
   .mark { font-size:26px; }
   .mv-main { padding-left:10px; padding-right:10px; }
   .social-feed-head { margin-left:-10px; margin-right:-10px; padding-left:10px; padding-right:10px; }
@@ -10833,12 +10849,12 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * VITE_WORLD_CANCEL_SENSITIVITY=1.55
  * VITE_AI_BACKGROUND_GAP_MS=450
  */
-const LIVE_WORLD_ACTIVITY_MULTIPLIER = Math.max(0.55, Math.min(2.40, Number(import.meta.env.VITE_WORLD_ACTIVITY_MULTIPLIER) || 1.45));
-const LIVE_WORLD_POST_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_POST_MULTIPLIER) || 1.35));
-const LIVE_WORLD_COMMENT_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_COMMENT_MULTIPLIER) || 1.50));
-const LIVE_WORLD_DM_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_DM_MULTIPLIER) || 1.20));
+const LIVE_WORLD_ACTIVITY_MULTIPLIER = Math.max(0.55, Math.min(2.40, Number(import.meta.env.VITE_WORLD_ACTIVITY_MULTIPLIER) || 1.55));
+const LIVE_WORLD_POST_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_POST_MULTIPLIER) || 1.50));
+const LIVE_WORLD_COMMENT_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_COMMENT_MULTIPLIER) || 1.75));
+const LIVE_WORLD_DM_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_DM_MULTIPLIER) || 1.35));
 const LIVE_WORLD_GROUP_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_GROUP_MULTIPLIER) || 1.15));
-const LIVE_WORLD_ROLEPLAY_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_ROLEPLAY_MULTIPLIER) || 1.25));
+const LIVE_WORLD_ROLEPLAY_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_ROLEPLAY_MULTIPLIER) || 1.35));
 const LIVE_WORLD_NOTE_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_NOTE_MULTIPLIER) || 1.10));
 const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(4000, Math.min(30000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 5000));
 const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.60, Math.min(2.80, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 1.00));
@@ -10862,7 +10878,7 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
   25 * 1000,
   Math.min(
     3 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 35 * 1000
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 30 * 1000
   )
 );
 
@@ -10878,7 +10894,7 @@ const LIVE_WORLD_ACTIVE_POST_TARGET_MS = Math.max(
   Math.min(
     60 * 1000,
     Number(import.meta.env.VITE_WORLD_ACTIVE_POST_INTERVAL_MS) ||
-      16 * 1000
+      14 * 1000
   )
 );
 
@@ -10897,8 +10913,8 @@ const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 360
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(1500, Math.min(30000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 1500));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 22)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 35 * 1000));
-const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 5 * 60 * 1000));
+const LIVE_WORLD_DM_TARGET_MS = Math.max(30 * 1000, Math.min(8 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 30 * 1000));
+const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 4 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
 const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
 const AI_BACKGROUND_GAP_MS = Math.max(250, Math.min(6000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 220));
@@ -12316,6 +12332,16 @@ function voiceCard(c) {
   const selfCanon = compactSelfCanonForPrompt(c, 7800);
   const intensityDirective = characterIntensityDirective(c);
   const ownConnections = String(c && c.connections || "").replace(/\s+/g, " ").trim();
+  const hardIdentity = characterFactionIdentityCard(c);
+
+  if (hardIdentity) {
+    bits.push(
+      `HARD CURRENT IDENTITY / AFFILIATION — AUTHORITATIVE:
+${hardIdentity}
+- This row belongs ONLY to ${c.name}. Current explicit dojo / organization / role / rank / occupation wins over rival names, former affiliations, scene location, or other people's sheets.
+- Never infer SELF membership from a rival/mentor/dojo merely being mentioned in Backstory or Connections.`
+    );
+  }
 
   if (ownConnections) {
     bits.push(
@@ -16888,14 +16914,21 @@ function compactSelfCanonForPrompt(c, maxChars = 6200) {
   if (!c) return "";
 
   const specs = [
+    /* Identity / affiliation comes FIRST. Long personality/backstory fields must
+       never push current dojo, organization, job, role or rank out of a compact
+       prompt budget. */
     ["Name", c.name, 120],
     ["Nickname", c.nick, 180],
     ["Gender", c.gender, 100],
     ["Orientation", c.orientation, 120],
     ["Birth", c.birth, 120],
-    ["Job / school", c.job, 220],
+    ["Job / school", c.job, 260],
+    ["ROLE", c.role, 300],
+    ["RANK", c.rank, 240],
+    ["ORGANIZATION", c.organization, 320],
+    ["AFFILIATION", c.affiliation, 340],
     ["City", c.city, 160],
-    ["Public bio", c.bio, 260],
+    ["Public bio", c.bio, 320],
     ["Appearance", c.looks, 420],
     ["CONNECTIONS / IMPORTANT PEOPLE — PRIVATE SELF-CANON", c.connections, 1800],
     ["PERSONALITY", c.personality, 1500],
@@ -16911,10 +16944,6 @@ function compactSelfCanonForPrompt(c, maxChars = 6200) {
     ["SKILLS", c.skills, 360],
     ["ABILITIES", c.abilities, 320],
     ["COMBAT", c.combat, 420],
-    ["RANK", c.rank, 220],
-    ["ROLE", c.role, 260],
-    ["ORGANIZATION", c.organization, 260],
-    ["AFFILIATION", c.affiliation, 260],
   ];
 
   const rows = [];
@@ -19625,6 +19654,9 @@ function playerInputUnderstandingInstruction(w, rawText, surface = "chat") {
 - Code-switching is normal: the player may mix English, Hungarian, slang, names and fandom terms in the same sentence. Understand the intended meaning across languages instead of treating the mixed sentence as broken input.
 - MATURE SEMANTIC LITERACY: because this world is 18+, correctly recognize adult slang, thirst jokes, sexual innuendo, double entendres, suggestive euphemisms and deliberately provocative wordplay instead of flattening them into a literal/innocent reading. If all people implicated by the joke are known adults, characters may understand and respond to that adult meaning in a character-appropriate, non-graphic way. If a referenced person is a minor or their age is not confirmed 18+, you may understand that the phrase is adult-coded but must not sexualize that person.
 - Preserve who "you", pronouns, names, nicknames and @mentions refer to using the immediate conversation/thread/scene focus.
+- PRAGMATIC MEANING FIRST: interpret short replies, emotional statements, ellipsis, implied objects and conversational shorthand as responses to the exact immediately active topic. Do not answer by free-associating from one keyword.
+- CURRENT-TOPIC PRIORITY: older memories, backstory and world facts may clarify the active exchange, but they may NOT replace it with a different topic. Change subject only when the player actually changes it.
+- Before writing, silently determine: (1) what exact proposition/action the player is responding to, (2) who it is about, and (3) what a normal human reply would address first. Do not output this analysis.
 - If one interpretation is overwhelmingly natural, use it. Do not manufacture ambiguity.
 - Ask a clarification ONLY when two materially different interpretations remain genuinely plausible after using recent context.
 - Never mock or correct the player's English instead of responding to the intended meaning.
@@ -19635,6 +19667,9 @@ PLAYER'S EXACT INPUT: "${text.slice(0, 900)}"`
 - A code-switching normális: a játékos keverheti az angolt, magyart, szlenget, neveket és fandom-kifejezéseket ugyanabban a mondatban. A vegyes mondat szándékát értsd meg, ne kezeld hibás inputként.
 - FELNŐTT JELENTÉSÉRTÉS: mivel ez 18+ világ, ismerd fel a felnőtt szlenget, thirst joke-okat, szexuális célzásokat, double entendre-öket, kétértelmű eufemizmusokat és provokatív szóvicceket; ne lapítsd őket ártatlan, szó szerinti jelentésre. Ha a célzásban érintett személyek mind biztosan felnőttek, a karakterek a felnőtt jelentést karakterhűen, nem grafikusan értelmezhetik és reagálhatják le. Ha valaki kiskorú vagy nem igazoltan 18+, a nyelvi célzás felismerhető, de az adott személyt nem szexualizálhatod.
 - A "you", névmások, nevek, becenevek és @mentionök referenciáját a közvetlen chat/thread/jelenet fókuszából oldd fel.
+- PRAGMATIKUS JELENTÉS ELSŐ: a rövid választ, érzelmi kijelentést, ellipszist, kimondatlan tárgyat és hétköznapi beszédfordulatot az ÉPP AKTÍV konkrét témára adott reakcióként értsd. Ne egyetlen kulcsszóból asszociálj új témát.
+- AKTUÁLIS TÉMA PRIORITÁS: régi emlék, backstory vagy világtény csak tisztázhatja a mostani beszélgetést; nem cserélheti le egy másik témára. Csak akkor válts témát, ha a játékos ténylegesen témát vált.
+- Válasz előtt csendben oldd fel: (1) pontosan melyik előző állításra/cselekvésre reagál a játékos, (2) kiről van szó, (3) egy normál ember mire válaszolna először. Ezt az elemzést ne írd ki.
 - Ha egy értelmezés egyértelműen természetesebb, azt használd. Ne gyárts mesterséges kétértelműséget.
 - Csak akkor kérdezz vissza, ha a teljes közeli kontextus után is két lényegesen eltérő értelmezés marad.
 - A játékos angolját ne javítgasd és ne az elütésre reagálj a jelentés helyett.
@@ -20678,7 +20713,7 @@ function conversationOwnershipInstruction(
 
   const recent = (Array.isArray(rows) ? rows : [])
     .filter((row) => row && typeof row === "object" && String(row.text || "").trim())
-    .slice(-8)
+    .slice(-12)
     .map((row) => {
       const speaker = conversationSpeakerLabel(w, row, playerId);
       const targetId = row.to || "";
@@ -20687,7 +20722,7 @@ function conversationOwnershipInstruction(
             ? w.player
             : charById(w, targetId))
         : null;
-      return `[${speaker}${target ? ` -> ${target.name}` : ""}] ${String(row.text || "").trim().slice(0, 520)}`;
+      return `[${speaker}${target ? ` -> ${target.name}` : ""}] ${String(row.text || "").trim().slice(0, 650)}`;
     })
     .join("\n");
 
@@ -20701,6 +20736,9 @@ SPEAKER OWNERSHIP / FOLLOW-UP LOCK — ${String(surface || "conversation").toUpp
 - If an AI said something and the PLAYER now asks a follow-up such as “why?”, “what do you mean?”, “how so?”, “since when?”, “who?”, “really?”, or otherwise refers back to it, interpret the question as asking about THE AI'S OWN PREVIOUS MESSAGE/ACTION.
 - NEVER answer as though the player originally made the AI's statement. Never say “you said…” when the referenced sentence was authored by the AI.
 - If the current message is elliptical/short, resolve its missing subject/proposition from the immediately relevant prior AI line before inventing a new topic.
+- ACTIVE TOPIC IS STICKY: keep discussing the exact subject/problem/claim currently being exchanged until the PLAYER clearly changes it. A character memory, dojo fact, relationship fact or older event may inform the answer but cannot hijack the topic.
+- CAUSAL CONTINUITY: if the player reacts emotionally ("you are hurting me", "that's not what I meant", "stop what?", "why would you say that?"), answer the cause in the immediately preceding exchange first. Do not jump to a generic opener or unrelated concern.
+- Do not restart with "what did you want to talk about?", "what's going on?", "why are you here?" or equivalent when the recent context already establishes the topic.
 - The current player message is new input, not a rewrite of the previous AI line.${followup ? " THIS LOOKS LIKE A FOLLOW-UP: explicitly anchor it to the immediately relevant AI-authored line." : ""}
 RECENT AUTHOR-LOCKED CONTEXT:
 ${recent || "(no earlier authored lines)"}
@@ -20714,6 +20752,9 @@ BESZÉLŐ-TULAJDONJOG / VISSZAKÉRDEZÉS-RÖGZÍTÉS — ${String(surface || "co
 - Ha egy AI mondott valamit, és a JÁTÉKOS most visszakérdez (pl. „miért?”, „mit értesz ez alatt?”, „hogyhogy?”, „mióta?”, „ki?”, „tényleg?”), akkor a kérdés AZ AI SAJÁT ELŐZŐ ÜZENETÉRE/CSELEKVÉSÉRE vonatkozik.
 - SOHA ne válaszolj úgy, mintha az AI korábbi mondatát eredetileg a játékos mondta volna. Ne írd, hogy „te mondtad…”, ha azt valójában az AI írta.
 - Rövid/elliptikus kérdésnél a hiányzó alanyt vagy állítást a közvetlenül releváns előző AI-sorból oldd fel, ne találj ki új témát.
+- AZ AKTUÁLIS TÉMA RAGADÓS: ugyanazt a konkrét ügyet/állítást/problémát folytasd addig, amíg a JÁTÉKOS egyértelműen témát nem vált. Régi emlék, dojo-tény, kapcsolati tény vagy korábbi esemény segíthet, de nem rabolhatja el a beszélgetést.
+- OK-OKOZATI FOLYTONOSSÁG: ha a játékos érzelmileg reagál ("you are hurting me", "that's not what I meant", "stop what?", "why would you say that?"), először a közvetlen előző váltás okára válaszolj. Ne ugorj generikus nyitásra vagy másik problémára.
+- Ne resetelj "what did you want to talk about?", "what's going on?", "why are you here?" típusú nyitásra, ha a közeli kontextusból már világos, miről beszéltek.
 - A játékos mostani szövege új input, nem az AI előző mondatának átírása.${followup ? " EZ VISSZAKÉRDEZÉSNEK TŰNIK: kifejezetten az előző releváns AI-sorhoz kösd." : ""}
 KÖZELI, SZERZŐHÖZ RÖGZÍTETT KONTEXTUS:
 ${recent || "(nincs korábbi sor)"}
@@ -22829,14 +22870,20 @@ function recentStructuredWorldLines(w, limit = 6) {
   return rows;
 }
 
-function worldIdentityCanon(w) {
+function worldIdentityCanon(w, includePlayer = true) {
   if (!w) return "";
-  const rows = [
-    ...(w.chars || []).filter(Boolean).map((c) => {
-      const faction = characterFactionIdentityCard(c) || "classification unknown";
-      return `${c.name} [${c.id}] — ${faction}`;
-    }),
-  ];
+  const people = [
+    ...(includePlayer && w.player ? [w.player] : []),
+    ...(w.chars || []),
+  ]
+    .filter(Boolean)
+    .filter((person, index, arr) =>
+      arr.findIndex((other) => String(other && other.id || "") === String(person && person.id || "")) === index
+    );
+  const rows = people.map((c) => {
+    const faction = characterFactionIdentityCard(c) || "classification unknown";
+    return `${c.name} [${c.id}] — ${faction}`;
+  });
   return rows.length
     ? `\nWORLD IDENTITY / AFFILIATION CANON — HARD FACTS:\n${rows.join("\n")}\n- These affiliation/dojo identities are authoritative. Mentioning a rival dojo in backstory does NOT change a character's own dojo.\n- Characters recognize the established dojo/organization of other named world characters from this canon.\n`
     : "";
@@ -22983,7 +23030,7 @@ ${playerContextBlock}
 ${tt("A VILÁG TELJES NÉVSORA — RAJTUK KÍVÜL SENKI NEM LÉTEZIK", "FULL WORLD ROSTER — NO ONE ELSE EXISTS")}: 
 ${roster || "-"}
 
-${worldIdentityCanon(w)}
+${worldIdentityCanon(w, includePlayer)}
 
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
 ${cast.map((c) => (
@@ -45041,6 +45088,8 @@ ${threadRows || "(no earlier stored beats)"}
 - Do NOT restart introductions, re-establish context the characters already know, ask a generic conversation opener, jump to an unrelated memory, or replace the active topic with a random new issue.
 - If the exact recent thread already shows what the characters are discussing, NEVER reset with lines like "What did you want to talk about?", "What is it you wanted to talk about?", "So what do you want?", "Why are you here?" or equivalent generic openers. Continue the already-active subject.
 - Character initiative is allowed AFTER directly processing the current message; initiative must grow from this same thread, not erase it.
+- MEMORY / CANON CANNOT HIJACK THE THREAD: old relationship history, dojo lore, goals, trauma or other world facts may color the reaction only when relevant to the player's current line. Do not surface an unrelated fact just because it exists in the sheet.
+- Interpret the player's newest line as a normal human continuation of the previous 1–6 beats before considering older context.
 - If the player clearly introduces a new subject, follow that new subject while preserving physical/location/relationship continuity.`;
 
   if (conversationCommitment) {
@@ -45479,6 +45528,8 @@ function roleplayAffiliationGroundTruthCard(w, cast = []) {
 
   const rows = people.map((person) => {
     const structured = [
+      characterFactionIdentityCard(person) ? `identity=${characterFactionIdentityCard(person)}` : "",
+      karateFactionDisplayName(factionFlags(person)) ? `primaryDojo=${karateFactionDisplayName(factionFlags(person))}` : "",
       person.affiliation ? `affiliation=${cut(String(person.affiliation), 240)}` : "",
       person.organization ? `organization=${cut(String(person.organization), 220)}` : "",
       person.role ? `role=${cut(String(person.role), 180)}` : "",
@@ -48237,6 +48288,11 @@ ${cut(
   1200
 )}
 
+${en ? "HARD IDENTITY / AFFILIATION FACTS — READ BEFORE PROSE" : "KEMÉNY IDENTITÁS / DOJO / SZERVEZET TÉNYEK — PRÓZA ELŐTT OLVASD"}:
+SELF ${actor.name} [${actor.id}]: ${characterFactionIdentityCard(actor) || "classification unknown"}
+PLAYER ${w.player.name} [${w.meId}]: ${characterFactionIdentityCard(w.player) || "classification unknown"}
+${en ? "- These rows are authoritative for current dojo/organization/job/role/rank. A rival dojo or mentor appearing in backstory does NOT make that person a member." : "- Ezek az aktuális dojo/szervezet/munka/szerep/rang authoritative tényei. Rivális dojo vagy mentor említése a backstoryban NEM teszi annak tagjává az illetőt."}
+
 ${en ? "FULL SELF CHARACTER SHEET — UNABRIDGED, HIGHEST PRIORITY" : "TELJES SAJÁT KARAKTERLAP — VÁGATLAN, LEGMAGASABB PRIORITÁS"}:
 ${fullSelfCharacterSheetForDirectDm(
   w,
@@ -48327,7 +48383,10 @@ HARD:
 - Return ONE actual private-message reply from ${actor.name}.
 - Use ${actor.name}'s COMPLETE SELF sheet above for personality, Speech Style, Voice, casing and behavior.
 - Other-person facts are knowledge only; never absorb them as SELF style.
-- Answer the latest message directly.
+- Read RECENT PRIVATE CHAT as one continuous exchange. Resolve pronouns, short replies, ellipsis and emotional reactions from the immediately preceding relevant line.
+- Stay on the exact active topic unless the PLAYER clearly changed it. Do not substitute an unrelated memory/backstory/dojo/relationship topic.
+- Answer the latest message directly, and make the first clause/beat respond to its actual conversational meaning.
+- Never reset an already-running exchange with a generic opener.
 - No narration, no roleplay actions, no assistant language.
 - Do not return empty/skip.
 - Do not invent a photo unless an image description is supplied above.
@@ -48719,6 +48778,14 @@ ${directDmLiveContextCard(requestWorld, c, t)}
 
 BESZÉLGETÉS:
 ${hist}
+
+CURRENT DM TOPIC / CONTEXT LOCK — HIGHEST PRIORITY:
+- Read the latest 8–12 messages as one continuous human conversation, newest last.
+- The exact latest player message must be interpreted through the immediately preceding relevant message(s), not as a standalone keyword prompt.
+- Keep the current subject until the player clearly changes it. Do NOT introduce a different old memory, conflict, crush, dojo issue or random life topic merely because it exists in canon.
+- If the player says something short like "why?", "what?", "stop what?", "you are hurting me", "that's not what I meant", "okay", "no", "yes", or uses a pronoun/ellipsis, resolve what it refers to from this exact chat first.
+- First answer/reaction must address the player's actual meaning; character flavor comes AFTER comprehension.
+- Never reset a conversation already in progress with a generic opener.
 
 DIRECT DM RUNTIME FACTS:
 - SELF ID: ${c.id}
@@ -65070,7 +65137,7 @@ function canAiInitiateRoleplay(w) {
   const last = Math.max(simLast, historyLast);
   const rpPeak = Math.max(0.55, channelActivityPeak(w, "roleplay"));
   const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+  const target = Math.max(4 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   return !last || ts - last >= target;
 }
 
@@ -65116,27 +65183,35 @@ function roleplayBirthYear(c) {
 
 function roleplayAffiliationTags(c) {
   if (!c) return [];
-  const text = [
+
+  /*
+   * EVENT / INVITE AFFILIATION TAGS MUST REPRESENT CURRENT MEMBERSHIP, not every
+   * faction name appearing in a rivalry-heavy backstory. This was a major source
+   * of wrong-dojo invites/casts.
+   */
+  const tags = [];
+  const karate = primaryKarateFaction(c);
+
+  if (karate === "cobraKai") tags.push("cobra-kai");
+  if (karate === "ironDragons") tags.push("iron-dragons");
+  if (karate === "miyagiFang") tags.push("miyagi-fang");
+  if (karate === "wasabi") tags.push("wasabi");
+
+  /* Non-karate memberships may still be explicitly stated in structured/public
+     identity fields. Avoid scanning arbitrary rival mentions in Backstory. */
+  const explicit = [
+    c.affiliation,
+    c.organization,
+    c.role,
+    c.rank,
     c.job,
     c.bio,
-    c.backstory,
-    c.extra,
-    c.goals,
   ].filter(Boolean).join(" ").toLowerCase();
 
-  const defs = [
-    ["cobra-kai", /cobra\s*kai/],
-    ["iron-dragons", /iron\s*dragons?/],
-    ["miyagi-do", /miyagi[\s-]*do/],
-    ["miyagi-fang", /miyagi[\s-]*fang/],
-    ["eagle-fang", /eagle\s*fang/],
-    ["la-mamba", /la\s*mamba/],
-    ["borderland", /borderland|borderline\s*games?/],
-  ];
+  if (/\bla\s*mamba\b/.test(explicit)) tags.push("la-mamba");
+  if (/\bborderland\b|borderline\s*games?/.test(explicit)) tags.push("borderland");
 
-  return defs
-    .filter(([, re]) => re.test(text))
-    .map(([tag]) => tag);
+  return [...new Set(tags)];
 }
 
 function roleplayInviteeRoster(w, host) {
@@ -65681,7 +65756,7 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
     const rpLast = Math.max(Number(sim.lastRoleplayInviteAt) || 0, rpHistoryLast);
     const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
     const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-    const rpTarget = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+    const rpTarget = Math.max(4 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
     const rpElapsed = rpLast ? ts - rpLast : Math.max(0, ts - laneStartedAt);
     const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 35 * 1000;
 
@@ -65746,7 +65821,7 @@ function roleplayInviteOverdueByMs(w) {
   if (!w || !canAiInitiateRoleplay(w)) return -Infinity;
   const rpPeak = Math.max(0.25, channelActivityPeak(w, "roleplay"));
   const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+  const target = Math.max(4 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   const last = Math.max(
     Number(w.sim && w.sim.lastRoleplayInviteAt) || 0,
     lastAiInitiatedRoleplayAt(w)
@@ -66041,6 +66116,26 @@ function planAutoAction(view) {
   const autonomousNoteAction = pickDueAutonomousAiNoteAction(view);
   if (autonomousNoteAction) return autonomousNoteAction;
 
+  /* COMMENT-REPLY LIVELINESS:
+   * Existing public conversations should visibly continue too, not only receive
+   * top-level comments. This consumes the SAME scheduler slot (no extra parallel
+   * AI request), so interactive speed and provider concurrency stay unchanged. */
+  const earlyNaturalThread = findNaturalThreadReply(view);
+  if (earlyNaturalThread && Math.random() < 0.72) {
+    return mkAction(
+      "reply",
+      `auto-thread-early:${earlyNaturalThread.post.id}:${earlyNaturalThread.comment.id}:${earlyNaturalThread.targetId}`,
+      {
+        postId: earlyNaturalThread.post.id,
+        commentId: earlyNaturalThread.comment.id,
+        rootId: earlyNaturalThread.comment.id,
+        targetId: earlyNaturalThread.targetId,
+        trigger: "natural-thread-lively",
+      },
+      "event"
+    );
+  }
+
   const commentCoveragePost = guaranteedCommentCoverageCandidate(view);
   if (commentCoveragePost) {
     return guaranteedPostCommentAction(view, commentCoveragePost, "scheduler-comment-pulse");
@@ -66109,9 +66204,9 @@ function planAutoAction(view) {
 
   /*
    * ACTIVE FEED CADENCE
-   * 1) ÚJ POSZT — amikor a játékos bent van, kb. 30 másodpercenként nézzük,
-   * van-e SAJÁT cooldownja alapján esedékes AI. Ugyanaz a karakter nem tud
-   * 7–16 percnél sűrűbben posztolni, ezért a feed aktív, de nem spam jellegű.
+   * 1) ÚJ POSZT — aktív sessionben sűrűn ellenőrizzük, van-e SAJÁT
+   * cooldownja alapján esedékes AI. A karakterenkénti dinamikus gap továbbra
+   * megakadályozza, hogy ugyanaz az AI spammelje a feedet.
    */
   if (feedNeedsFreshPost(view) && !freshFeedPostCommentCandidate(view)) {
     return mkAction(
