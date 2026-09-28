@@ -5035,10 +5035,7 @@ function recordProviderCooldown(provider, retryAfter) {
   const requestedMs = Number.isFinite(seconds) && seconds > 0
     ? seconds * 1000
     : Math.max(0, Date.parse(String(retryAfter || "")) - Date.now()) || 0;
-  // Minimal stable fix: respect real Retry-After when present; otherwise use
-  // only a short background circuit-breaker instead of inventing 12 seconds.
-  const holdMs = requestedMs > 0 ? Math.min(30000, requestedMs) : 1500;
-  const until = Date.now() + Math.max(500, holdMs);
+  const until = Date.now() + Math.max(12000, requestedMs);
   AI_PROVIDER_COOLDOWNS.set(
     provider,
     Math.max(until, AI_PROVIDER_COOLDOWNS.get(provider) || 0)
@@ -5075,6 +5072,27 @@ function providerCooldownResult(provider) {
 const AI_PROVIDER_TASK_QUEUES = new Map();
 const AI_PROVIDER_LAST_START = new Map();
 
+/*
+ * INTERACTIVE CAPACITY SMOOTHING
+ * ------------------------------
+ * Player requests never inherit the long cached provider cooldown. They get
+ * one fresh probe per configured provider. If every provider is merely busy
+ * with another in-flight request, wait only a tiny invisible window for the
+ * first one to free up instead of returning an immediate false-capacity error.
+ *
+ * Background work stays out of the way for a short grace period after any
+ * player request so it cannot steal the slot between two Scene/DM turns.
+ */
+const AI_INTERACTIVE_MICRO_WAIT_MS = Math.max(
+  400,
+  Math.min(3000, Number(process.env.AI_INTERACTIVE_MICRO_WAIT_MS) || 1800)
+);
+const AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS = Math.max(
+  500,
+  Math.min(8000, Number(process.env.AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS) || 2800)
+);
+let AI_LAST_INTERACTIVE_REQUEST_AT = 0;
+
 function sleepMs(ms) {
   return new Promise((resolve) =>
     setTimeout(resolve, Math.max(0, Number(ms) || 0))
@@ -5100,28 +5118,59 @@ function retryAfterMs(value, fallbackMs = 12000) {
 /*
  * MULTI-USER PROVIDER GATE
  *
- * The previous implementation kept separate "interactive" and "background"
- * serial chains. That meant one Scene/DM request and one autonomous-world
- * request could still hit the SAME provider concurrently. With two browser
- * clients this could become several large requests at once and trigger 429/TPM
- * limits even though each client thought it was being polite.
- *
- * Keep exactly ONE in-flight message request per provider. Waiting interactive
- * tasks jump ahead of waiting background tasks, but never run in parallel with
- * them. A tiny start gap also prevents two queued requests from hitting the
- * upstream on the same millisecond after a long response finishes.
+ * Exactly one upstream message request may run on a given provider at once,
+ * but INTERACTIVE requests must not blindly wait behind that provider when a
+ * different configured provider is free. The route below can inspect this gate
+ * and immediately spill a second user's Scene/DM request onto a free fallback.
+ * Background work remains lower priority inside every provider queue.
  */
 function providerTaskQueue(provider) {
   let state = AI_PROVIDER_TASK_QUEUES.get(provider);
   if (!state) {
     state = {
       running: false,
+      runningInteractive: false,
       interactive: [],
       background: [],
     };
     AI_PROVIDER_TASK_QUEUES.set(provider, state);
   }
   return state;
+}
+
+function providerTaskState(provider) {
+  return AI_PROVIDER_TASK_QUEUES.get(provider) || null;
+}
+
+function providerQueueLoad(provider) {
+  const state = providerTaskState(provider);
+  if (!state) return 0;
+  return (state.running ? 1 : 0) +
+    (Array.isArray(state.interactive) ? state.interactive.length : 0) +
+    (Array.isArray(state.background) ? state.background.length : 0);
+}
+
+function providerIsRunning(provider) {
+  const state = providerTaskState(provider);
+  return !!(state && state.running);
+}
+
+function providerHasInteractivePressure(provider) {
+  const state = providerTaskState(provider);
+  return !!(
+    state &&
+    (
+      state.runningInteractive ||
+      (Array.isArray(state.interactive) && state.interactive.length > 0)
+    )
+  );
+}
+
+function anyInteractiveProviderPressure() {
+  for (const provider of AI_PROVIDER_TASK_QUEUES.keys()) {
+    if (providerHasInteractivePressure(provider)) return true;
+  }
+  return false;
 }
 
 function pumpProviderTaskQueue(provider) {
@@ -5138,9 +5187,10 @@ function pumpProviderTaskQueue(provider) {
   }
 
   state.running = true;
+  state.runningInteractive = !!task.interactive;
 
   const lastStart = Number(AI_PROVIDER_LAST_START.get(provider) || 0);
-  const minGapMs = task.interactive ? 350 : 1200;
+  const minGapMs = task.interactive ? 120 : 900;
   const delayMs = Math.max(0, minGapMs - (Date.now() - lastStart));
 
   setTimeout(async () => {
@@ -5152,6 +5202,7 @@ function pumpProviderTaskQueue(provider) {
       task.reject(err);
     } finally {
       state.running = false;
+      state.runningInteractive = false;
       queueMicrotask(() => pumpProviderTaskQueue(provider));
     }
   }, delayMs);
@@ -5223,9 +5274,34 @@ function compactMessageBodyForRateLimit(body = {}) {
 async function callMessageProvider(provider, body) {
   const interactive = String(body?.masvilag_priority || "") === "interactive";
 
+  /*
+   * Player work owns the fast lane. Autonomous/background work is optional in
+   * the current instant, so it must never occupy a provider while a Scene/DM is
+   * already active or waiting. Defer it immediately; the live-world scheduler
+   * will try again later without blocking a human request.
+   */
+  if (!interactive && anyInteractiveProviderPressure()) {
+    return {
+      ok: false,
+      status: 503,
+      deferred: true,
+      provider,
+      payload: {
+        error: {
+          code: "BACKGROUND_DEFERRED",
+          message: "Background AI deferred while player interaction has priority.",
+        },
+      },
+    };
+  }
+
   return runProviderScheduled(provider, interactive, async () => {
-    // Cached cooldown is only a background circuit-breaker. Player-triggered
-    // Scene/DM requests always get a fresh upstream probe on a new send.
+    /*
+     * Cached cooldowns are a BACKGROUND circuit-breaker, not a hard lock on
+     * player actions. A player request gets one fresh upstream probe; if the
+     * provider is still limited it will return a real 429 and we immediately
+     * fall through to another configured provider.
+     */
     const throttled = interactive ? null : providerCooldownResult(provider);
     if (throttled) return throttled;
 
@@ -6203,13 +6279,78 @@ app.post(
 
     const runPass = async (body) => {
       const limited = [];
+      const busyProviders = [];
+      const interactive = String(body?.masvilag_priority || "") === "interactive";
+
+      if (interactive) {
+        AI_LAST_INTERACTIVE_REQUEST_AT = Date.now();
+      }
+
+      /*
+       * FAST MULTI-USER ROUTING
+       * --------------------------
+       * - Player Scene/DM requests never queue behind a busy provider.
+       * - They immediately spill to the next configured free provider.
+       * - Background work never spreads onto fallback providers merely because
+       *   the requested provider is busy/cooling; it is deferred instead.
+       * - No sleep/retry loop exists here. Provider failover is immediate.
+       */
+      if (!interactive) {
+        const requestedThrottle = providerCooldownResult(requestedProvider);
+        const recentInteractive =
+          Date.now() - AI_LAST_INTERACTIVE_REQUEST_AT <
+          AI_BACKGROUND_AFTER_INTERACTIVE_GRACE_MS;
+        if (
+          requestedThrottle ||
+          providerIsRunning(requestedProvider) ||
+          anyInteractiveProviderPressure() ||
+          recentInteractive
+        ) {
+          if (requestedThrottle) limited.push(requestedThrottle);
+          return {
+            ok: false,
+            limited,
+            busyProviders: providerIsRunning(requestedProvider)
+              ? [requestedProvider]
+              : [],
+            backgroundDeferred: true,
+          };
+        }
+      }
+
+      const passProviders = [];
 
       for (const provider of providers) {
+        /*
+         * Do not reject a Scene/DM because of an OLD cached Retry-After.
+         * Interactive traffic gets one fresh probe; background traffic still
+         * honors the circuit-breaker.
+         */
+        const throttled = interactive ? null : providerCooldownResult(provider);
+        if (throttled) {
+          last = throttled;
+          limited.push(throttled);
+          continue;
+        }
+
+        if (providerIsRunning(provider)) {
+          busyProviders.push(provider);
+          continue;
+        }
+
+        passProviders.push(provider);
+      }
+
+      for (const provider of passProviders) {
         try {
           const result = await callMessageProvider(provider, body);
 
           if (result?.ok) {
-            return { ok: true, result, limited };
+            return { ok: true, result, limited, busyProviders };
+          }
+
+          if (result?.deferred) {
+            continue;
           }
 
           if (result?.unavailable) {
@@ -6220,12 +6361,10 @@ app.post(
 
           if (Number(result?.status) === 429) {
             limited.push(result);
-            /* Crucial: do NOT wait here. Try the next configured provider now. */
             continue;
           }
 
-          /* A provider-specific model/auth/upstream error must not prevent a
-             different configured provider from answering this same request. */
+          /* Provider-specific errors fall through to the next configured one. */
           continue;
         } catch (err) {
           last = {
@@ -6243,14 +6382,70 @@ app.post(
         }
       }
 
-      return { ok: false, limited };
+      /*
+       * If every otherwise-healthy provider was only BUSY with an in-flight
+       * request, give the first one that frees a tiny invisible micro-window.
+       * This is NOT a cooldown and there is no countdown/retry sleep in the
+       * browser. It prevents the false "no provider could answer immediately"
+       * error when two users press Send a moment apart.
+       */
+      if (interactive && busyProviders.length) {
+        const deadline = Date.now() + AI_INTERACTIVE_MICRO_WAIT_MS;
+        let releasedProvider = "";
+
+        while (Date.now() < deadline) {
+          releasedProvider =
+            [...busyProviders]
+              .filter((provider) => !providerIsRunning(provider))
+              .sort((a, b) => providerQueueLoad(a) - providerQueueLoad(b))[0] ||
+            "";
+
+          if (releasedProvider) break;
+          await sleepMs(70);
+        }
+
+        if (releasedProvider) {
+          try {
+            const result = await callMessageProvider(releasedProvider, body);
+
+            if (result?.ok) {
+              return { ok: true, result, limited, busyProviders };
+            }
+
+            if (!result?.deferred && !result?.unavailable) {
+              last = result;
+              if (Number(result?.status) === 429) {
+                limited.push(result);
+              }
+            }
+          } catch (err) {
+            last = {
+              status: err?.name === "AbortError" ? 504 : 502,
+              payload: {
+                error: {
+                  message:
+                    err?.name === "AbortError"
+                      ? `${releasedProvider} timed out.`
+                      : (err?.message || `${releasedProvider} proxy error`),
+                },
+              },
+              provider: releasedProvider,
+            };
+          }
+        }
+      }
+
+      return { ok: false, limited, busyProviders };
     };
 
     /* Huge DM/Event/world prompts can hit token-per-minute limits even when
        request-per-minute is fine. Keep ordinary requests untouched; only very
        large /ai/messages bodies are compacted before the first provider call. */
     const incomingBody = req.body || {};
-    const firstBody = messageBodyCharSize(incomingBody) > 24000
+    const interactiveRequest =
+      String(incomingBody?.masvilag_priority || "") === "interactive";
+    const compactThreshold = interactiveRequest ? 18000 : 12000;
+    const firstBody = messageBodyCharSize(incomingBody) > compactThreshold
       ? compactMessageBodyForRateLimit(incomingBody)
       : incomingBody;
 
@@ -6265,43 +6460,37 @@ app.post(
       return res.json(result.payload);
     }
 
-    /* If every usable path was rate-limited, wait only a SHORT single window,
-       then retry once with a smaller payload. This stays inside the client's
-       timeout budget and especially helps TPM/context-size rate limits. */
-    const interactiveRequest =
-      String(incomingBody?.masvilag_priority || "") === "interactive";
-
-    if (first.limited.length && !interactiveRequest) {
-      const waits = first.limited
-        .map((x) => retryAfterMs(x?.retryAfter, 12000))
-        .filter((ms) => Number.isFinite(ms) && ms >= 0);
-
-      const shortestWait = waits.length ? Math.min(...waits) : 12000;
-
-      if (shortestWait <= 12000) {
-        await sleepMs(shortestWait + 200);
-
-        const second = await runPass(
-          compactMessageBodyForRateLimit(incomingBody)
-        );
-
-        if (second.ok) {
-          const result = second.result;
-          res.setHeader(
-            "x-masvilag-ai-provider",
-            result.provider || requestedProvider
-          );
-          res.setHeader("x-masvilag-ai-compacted-retry", "1");
-          return res.json(result.payload);
-        }
-      }
-    }
+    /*
+     * NO LONG SERVER-SIDE COOLDOWN WAIT.
+     * The first pass tried every free configured provider and, only when all
+     * were actively busy, allowed a tiny bounded micro-wait for one to finish.
+     * Never sleep 6/12/39 seconds on Retry-After. Background work is retried by
+     * its scheduler on a later tick.
+     */
+    const finalLimited = first.limited.slice();
 
     const upstreamStatus = Number(last?.status) || 503;
     const status = upstreamStatus === 404 ? 502 : upstreamStatus;
 
-    if (last?.retryAfter) {
-      res.setHeader("retry-after", last.retryAfter);
+    /*
+     * If several providers are rate-limited, advertise the provider that will
+     * become usable FIRST. The old code exposed only `last.retryAfter`, which
+     * could make two users wait for the slowest/last attempted provider even
+     * when another one was about to recover.
+     */
+    const finalRetryWaits = finalLimited
+      .map((x) => retryAfterMs(x?.retryAfter, 12000))
+      .filter((ms) => Number.isFinite(ms) && ms > 0);
+    const shortestFinalRetryMs = finalRetryWaits.length
+      ? Math.min(...finalRetryWaits)
+      : 0;
+
+    if (!interactiveRequest) {
+      if (shortestFinalRetryMs > 0) {
+        res.setHeader("retry-after", String(Math.max(1, Math.ceil(shortestFinalRetryMs / 1000))));
+      } else if (last?.retryAfter) {
+        res.setHeader("retry-after", last.retryAfter);
+      }
     }
 
     res.setHeader(
@@ -6323,6 +6512,18 @@ app.post(
         "No provider returned a usable response."
       )
     );
+
+    if (interactiveRequest) {
+      return res
+        .status(status === 429 ? 503 : status)
+        .json({
+          error: {
+            code: "AI_CAPACITY_NOWAIT",
+            message:
+              "No configured AI provider accepted the request after fresh failover and a short busy-slot recovery. No cooldown was applied.",
+          },
+        });
+    }
 
     return res
       .status(status)
