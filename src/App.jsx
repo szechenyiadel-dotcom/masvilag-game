@@ -10877,33 +10877,19 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
 /*
  * AUTONOMOUS FEED CADENCE — REGULAR PER-CHARACTER POSTING
  *
- * The feed itself is allowed to pulse often, but an individual character has
- * their own cooldown further below. That prevents one loud AI from flooding
- * the timeline while still letting a larger cast keep the world visibly alive.
+ * The normal autonomous feed becomes due every five minutes. Individual
+ * character cooldowns + rolling daily caps prevent one loud AI from flooding
+ * the timeline while author rotation keeps a larger cast visibly alive.
  */
-const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  90 * 1000,
-  Math.min(
-    6 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 3 * 60 * 1000
-  )
-);
+const LIVE_WORLD_POST_TARGET_MS = 5 * 60 * 1000;
 
 /*
  * ACTIVE SESSION FEED PULSE
  *
- * This is only the BASE pulse. The real feed target is calculated dynamically
- * from recent player activity + social heat below, then jittered so the world
- * never feels like it is posting on a fixed clock.
+ * Active and background sessions use the same normal five-minute due-time.
+ * Author, topic, mood and format remain dynamic so the feed itself stays natural.
  */
-const LIVE_WORLD_ACTIVE_POST_TARGET_MS = Math.max(
-  35 * 1000,
-  Math.min(
-    2 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_ACTIVE_POST_INTERVAL_MS) ||
-      65 * 1000
-  )
-);
+const LIVE_WORLD_ACTIVE_POST_TARGET_MS = 5 * 60 * 1000;
 
 function playerIsActivelyViewingWorld() {
   if (
@@ -38622,7 +38608,7 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
  * A per-character cooldown below spreads posts across the whole active session.
  * Gossip-media accounts remain outside this system and keep their own cadence.
  */
-const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 6;
+const AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H = 5;
 const AUTONOMOUS_CHARACTER_POST_MIN_24H = 1;
 const AUTONOMOUS_CHARACTER_IMAGE_HARD_MAX_24H = 1;
 const AUTONOMOUS_TRIGGER_BURST_MIN_GAP_MS = 45 * 1000;
@@ -38630,7 +38616,7 @@ const AUTONOMOUS_TRIGGER_BURST_MIN_GAP_MS = 45 * 1000;
 /*
  * PER-CHARACTER SOCIAL RHYTHM
  * quieter = target 1 post / rolling 24h, normal = 2, highly online = 3.
- * IMPORTANT: 1–3 is the ordinary personality target; 6/24h is the hard emergency ceiling.
+ * IMPORTANT: 1–3 is the ordinary personality target; 5/24h is the hard ceiling.
  * One image / rolling 24h stays hard.
  */
 function autonomousGameDayIndex(w) {
@@ -38841,22 +38827,10 @@ function autonomousPlayerActivityPostingSignal(w, c = null) {
 }
 
 function autonomousDynamicFeedPulseMs(w) {
-  const active = playerIsActivelyViewingWorld();
-  const base = active ? LIVE_WORLD_ACTIVE_POST_TARGET_MS : LIVE_WORLD_POST_TARGET_MS;
-  const signal = autonomousPlayerActivityPostingSignal(w, null);
-  const epoch = Math.floor(now() / (45 * 1000));
-  const seed = commentSeedNumber(`${String(w && w.code || "world")}|feed-pulse|${epoch}`);
-  const jitter = 0.72 + (seed % 67) / 100; /* 0.72 .. 1.38 */
-  const reactionFactor = 1 / (1 + signal.heat * 0.20);
-  const target = Math.round(base * jitter * reactionFactor);
-
-  /* LIVE FEED v100:
-     Active play must feel alive on a human timescale, not on a 20-30 minute
-     background cron. Character-level cooldowns + rolling hard caps still stop
-     any one character from spamming. */
-  return active
-    ? Math.max(35 * 1000, Math.min(2 * 60 * 1000, target))
-    : Math.max(90 * 1000, Math.min(6 * 60 * 1000, target));
+  void w;
+  /* Normal autonomous feed cadence: one new AI post becomes due every 5 minutes.
+     Character selection, subject and format remain dynamic and relationship-aware. */
+  return 5 * 60 * 1000;
 }
 
 function autonomousCharacterPostGapMs(w, c, activityOverride = null) {
@@ -39020,10 +38994,10 @@ function autonomousPostTypeInstruction(w, cast) {
   });
 
   return [
-    "PER-AI FAIRNESS RULE: the ordinary rolling target stays around 1-3 autonomous feed posts / 24h, but the hard safety ceiling is 6 so an active living-world session cannot permanently exhaust the feed.",
-    "HARD CAP: NO character may create more than 6 autonomous feed posts in any rolling 24-hour window.",
+    "PER-AI FAIRNESS RULE: the ordinary rolling target stays around 1-3 autonomous feed posts / 24h, but the absolute hard ceiling is 5 posts per character in any rolling 24 hours.",
+    "HARD CAP: NO character may create more than 5 autonomous feed posts in any rolling 24-hour window.",
     "FAIR ROTATION: prioritize bots with fewer recent posts and bots that have been visibly quiet longer. Do not let the same few characters monopolize the feed.",
-    "GLOBAL FEED HEARTBEAT: while at least one AI still has a legal daily slot, keep the feed moving. Rotate authors; never break the 6/24h per-character hard ceiling to satisfy the heartbeat.",
+    "GLOBAL FEED HEARTBEAT: while at least one AI still has a legal daily slot, keep the feed moving. Rotate authors; never break the 5/24h per-character hard ceiling to satisfy the heartbeat.",
     "NO FIXED PERSONAL CLOCK: recent player interaction may reorder eligible authors, but must not turn one character into a spammer.",
     "IMAGE HARD MAX: each character may have at most 1 image post in rolling 24h. This is per character, not global.",
     "IMAGE BEHAVIOR: the 1/24h rule is a maximum, NOT a reason to avoid images. If imageSlot=OPEN, the character should genuinely use an album image sometimes. After several text posts with an unused image slot, strongly prefer a fitting image unless every remaining album image clashes with the current context.",
@@ -39043,7 +39017,7 @@ function characterCanAutonomouslyPost(w, c, snapshot = null, options = {}) {
     ? snapshot.get(String(c.id))
     : characterAutonomousPostStats24h(w, c.id);
 
-  /* The target is used for fair rotation; the separate 6/24h hard ceiling below is authoritative. */
+  /* The target is used for fair rotation; the separate 5/24h hard ceiling below is authoritative. */
   if (Number(stats.count || 0) >= AUTONOMOUS_CHARACTER_POST_HARD_MAX_24H) {
     return false;
   }
@@ -39286,8 +39260,9 @@ KARAKTERHŰ POSZTOLÁS:
 - A poszt témája, hossza, humora, agressziója, sebezhetősége, online stílusa, occupation/job-ja, dojo/organization oldala és az is, hogy egyáltalán posztolna-e valamiről, a SAJÁT karakterlapjából következzen.
 - Ne cserélhesd fel két karakter posztját úgy, hogy ugyanúgy működjön.
 - A saját történetükben szereplő család, barátok, ellenségek, szervezetek, célok, traumák és rutinok természetesen jelenjenek meg a social életükben, amikor releváns.
-- POSZTRITMUS: a normál személyiségalapú cél továbbra is kb. 1-3 autonóm feed-poszt / gördülő 24 óra, de az élő világ biztonsági felső határa 6/24h. A 6/24h HARD CAP-ot semmilyen trigger nem írhatja felül.
-- GLOBÁLIS FEED: amíg van olyan AI, akinek maradt legális napi slotja, a feed maradjon aktív és az authorok rotáljanak; ne ugyanaz a karakter spammeljen. Friss player activity csak a sorrendet/alkalmasságot befolyásíthatja, a 6/24h hard capot nem.
+- POSZTRITMUS: a normál személyiségalapú cél továbbra is kb. 1-3 autonóm feed-poszt / gördülő 24 óra, de az élő világ abszolút felső határa 5/24h. Az 5/24h HARD CAP-ot semmilyen trigger nem írhatja felül.
+- GLOBÁLIS FEED: normál működésben kb. 5 percenként váljon esedékessé egy új autonóm poszt. Az időzítés nem írhatja felül a karakterenkénti 5/24h hard capot.
+- GLOBÁLIS FEED ROTÁCIÓ: amíg van olyan AI, akinek maradt legális napi slotja, a feed maradjon aktív és az authorok rotáljanak; ne ugyanaz a karakter spammeljen. Friss player activity csak a sorrendet/alkalmasságot befolyásíthatja, az 5/24h hard capot nem.
 - Egy karaktertől ebben az egy generálási körben legfeljebb EGY új poszt legyen.
 - A FEED AKTÍV: ha a karakternek nincs különleges eseménye, akkor is posztoljon egy rövid, hétköznapi, személyiségből következő gondolatot, státuszt, kérdést, poént vagy élethelyzetet. Üres posts tömböt NE adj vissza, amikor a karakter jogosult posztolni.
 - A karaktereknek nem kell megvárniuk a játékost vagy egy drámai eseményt ahhoz, hogy posztoljanak. A saját életükből kezdeményezzenek.
@@ -40272,7 +40247,7 @@ HARD ARCHITECTURE RULES:
 - Ha ide kerültél, ÍRJ egy természetes posztot; ne skipelj pusztán azért, mert nincs dráma.
 - ${author.name} 24 órán belül maximum 1 képes posztot tehet ki; a többi legyen szöveges.
 - A képlimit karakterenként értendő, nem az egész feedre.
-- Ha ${author.name} még 1 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó. A 6/24h hard capot viszont soha ne lépd át.
+- Ha ${author.name} még 1 poszt alatt áll az elmúlt 24 órában, különösen ne skipeld pusztán azért, mert nincs dráma: hétköznapi, karakterhű poszt is teljesen jó. Az 5/24h hard capot viszont soha ne lépd át.
 - A feltöltött albumot takarékosan használd: ne posztold ki rögtön a képeket, és ne fogyaszd el a készletet egyetlen rövid időszak alatt.
 - A szöveges poszt továbbra is gyakori, DE az 1 kép/24h maximumot NE értelmezd úgy, hogy kerülnöd kell a képeket. Ha az image slot OPEN, valóban használj néha albumképet.
 - Ha fent IMAGE OPPORTUNITY = DUE, akkor HATÁROZOTTAN részesíts előnyben EGY konkrét, jelenlegi kontextushoz illő albumképet; csak akkor maradjon szöveges, ha egyik megmaradt kép sem illik hitelesen.
@@ -65532,12 +65507,6 @@ function feedNeedsFreshPost(w) {
   );
   if (!cast.length) return false;
 
-  const snapshot = autonomousPostStatsSnapshot(w);
-  const belowMinimum = cast.some((c) => {
-    const stats = snapshot.get(String(c.id));
-    return Number((stats && stats.count) || 0) < AUTONOMOUS_CHARACTER_POST_MIN_24H;
-  });
-
   /*
    * When the player is actively inside the app, check the feed frequently.
    * fairPostCast() only returns characters whose OWN cooldown has elapsed, so
@@ -65553,12 +65522,8 @@ function feedNeedsFreshPost(w) {
     );
   }
 
-  /* Background posting is dynamic too, just intentionally slower than the
-     visible-session feed. */
-  const dynamicTarget = autonomousDynamicFeedPulseMs(w);
-  const target = belowMinimum
-    ? Math.min(dynamicTarget, 75 * 1000)
-    : dynamicTarget;
+  /* Background and visible sessions use the same normal five-minute cadence. */
+  const target = autonomousDynamicFeedPulseMs(w);
 
   return !last || now() - last >= target;
 }
@@ -66432,7 +66397,9 @@ function planLiveWorldRecoveryAction(view) {
 
   /* A visible AI post is an independent rescue lane. It must still get a turn
      when comment generation is temporarily unavailable or rejected. */
-  const recoveryCast = fairPostCast(view, { livenessRecovery: true });
+  const recoveryCast = feedNeedsFreshPost(view)
+    ? fairPostCast(view, { livenessRecovery: true })
+    : [];
   if (recoveryCast.length) {
     const author = recoveryCast[0];
     candidates.push({
@@ -66690,7 +66657,7 @@ function planAutoAction(view) {
   /*
    * FEED HEARTBEAT:
    * New feed items are much rarer now (global target <= ~30 min), while each
-   * character is hard-capped at 6 autonomous posts / rolling 24h.
+   * character is hard-capped at 5 autonomous posts / rolling 24h.
    */
   const feedDeficitCast = fairPostCast(view);
   const feedDeficit = feedDeficitCast.some((c) => {
@@ -72839,24 +72806,9 @@ const signOut = useCallback(async () => {
         ? postCommentCoverageState(live, livePost)
         : { missing: 2, target: 2 };
 
-      /* Feed refresh after posting: queue ONE independent autonomous status.
-       * postId is carried only as scheduler metadata for dedupe/staleness; the
-       * feed-refresh trigger explicitly forbids using the player's post as the
-       * generated status topic. Direct reactions stay in comments. Because event
-       * actions append while comment/DM actions below unshift, public comment
-       * feedback still arrives before this refresh slot. */
-      queuedAny = requestSimulationAction(
-        mkAction(
-          "world",
-          `independent-feed-refresh-after-player-post:${event.postId}:${Math.floor(now() / 15000)}`,
-          {
-            trigger: "feed-refresh-after-player-post",
-            independentFeedRefresh: true,
-            postId: event.postId,
-          },
-          "event"
-        )
-      ) || queuedAny;
+      /* A player post gets its direct public reactions in comments and may
+       * naturally receive the optional grounded DM below. Do not manufacture an
+       * extra AI feed post here; the normal five-minute feed cadence stays global. */
 
       /* Lowest immediate priority: the optional private reaction. */
       const dmBot = live
