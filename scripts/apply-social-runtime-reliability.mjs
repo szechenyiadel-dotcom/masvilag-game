@@ -86,11 +86,10 @@ replace(`  const queued = simPeek(view2);
     )
   );
   const cooldownBypassQueued = manualQueued || playerPostQueued;`);
-section('    const beat = async () => {', '    const safeBeat = () => beat().catch', s => {
-  const old = '  if (!manualQueued && cooldownLeft() > 0) return;';
-  if (!s.includes(old)) throw new Error('Scheduler cooldown anchor missing');
-  return s.replace(old, '  if (!cooldownBypassQueued && cooldownLeft() > 0) return;');
-});
+replace(
+  'if (cooldownLeft() > 0) return; /* MÁSVILÁG AI BACKGROUND 429 CIRCUIT BREAKER v2: manual simulation queue also respects provider cooldown. */',
+  'if (!cooldownBypassQueued && cooldownLeft() > 0) return; /* MÁSVILÁG SOCIAL RUNTIME RELIABILITY v2: player-post/manual queue can enter retry handling during global cooldown. */'
+);
 
 // Follow-back complaints get a grace period; every queued follow DM is revalidated.
 replace('    pending.payload.followSignalAt = now();', '    pending.payload.followSignalAt = now();\n    pending.notBefore = signal === "you-follow-player-no-followback" ? now() + 10 * 60000 : now();');
