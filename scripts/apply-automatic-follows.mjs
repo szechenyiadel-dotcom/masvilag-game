@@ -27,6 +27,8 @@ ${marker}
  * is also called during autonomous social processing, a later relationship
  * change can naturally create a new follow as soon as the pair becomes eligible.
  */
+let automaticFollowSyncActive = false;
+
 function explicitSharedSocialContext(actor, target) {
   if (!actor || !target) return false;
 
@@ -70,37 +72,45 @@ function ensureFollowerSystem(w) {
   const out = legacyEnsureFollowerSystem(w);
   if (!w || typeof w !== "object") return out;
 
-  const profiles = socialProfiles(w);
+  /* setFollowState() itself calls ensureFollowerSystem(); avoid recursion. */
+  if (automaticFollowSyncActive) return out;
+  automaticFollowSyncActive = true;
 
-  profiles.forEach((actor) => {
-    if (!actor || isHuman(w, actor.id) || isMediaAccount(w, actor.id)) return;
+  try {
+    const profiles = socialProfiles(w);
 
-    profiles.forEach((target) => {
-      if (!target || target.id === actor.id || isMediaAccount(w, target.id)) return;
-      if (isFollowing(w, actor.id, target.id)) return;
-      if (!shouldAutoFollowEstablishedTie(w, actor, target)) return;
+    profiles.forEach((actor) => {
+      if (!actor || isHuman(w, actor.id) || isMediaAccount(w, actor.id)) return;
 
-      setFollowState(
-        w,
-        actor.id,
-        target.id,
-        true,
-        "relationship-auto-follow"
-      );
+      profiles.forEach((target) => {
+        if (!target || target.id === actor.id || isMediaAccount(w, target.id)) return;
+        if (isFollowing(w, actor.id, target.id)) return;
+        if (!shouldAutoFollowEstablishedTie(w, actor, target)) return;
+
+        setFollowState(
+          w,
+          actor.id,
+          target.id,
+          true,
+          "relationship-auto-follow"
+        );
+      });
     });
-  });
 
-  /* Remove stale queued copies created by older builds. */
-  const sim = ensureSimState(w);
-  if (sim && Array.isArray(sim.queue)) {
-    sim.queue = sim.queue.filter(
-      (action) =>
-        !(
-          action &&
-          action.type === "follow" &&
-          String(action.key || "").startsWith("relationship-auto-follow:")
-        )
-    );
+    /* Remove stale queued copies created by older builds. */
+    const sim = ensureSimState(w);
+    if (sim && Array.isArray(sim.queue)) {
+      sim.queue = sim.queue.filter(
+        (action) =>
+          !(
+            action &&
+            action.type === "follow" &&
+            String(action.key || "").startsWith("relationship-auto-follow:")
+          )
+      );
+    }
+  } finally {
+    automaticFollowSyncActive = false;
   }
 
   return out;
