@@ -22,19 +22,19 @@ function playerPublicMentionToneDelta(text) {
   const low = raw.toLowerCase();
 
   const positiveStrong = [
-    /\\b(?:i\\s+love|love\\s+you|adore|imádom|szeretem|szeretlek|büszke\\s+vagyok|proud\\s+of)\\b/i,
-    /\\b(?:amazing|incredible|gorgeous|beautiful|handsome|brilliant|iconic|csodálatos|gyönyörű|zseniális|lenyűgöző)\\b/i,
+    /(?:i\\s+love|love\\s+you|adore|imádom|szeretem|szeretlek|büszke\\s+vagyok|proud\\s+of)/i,
+    /(?:amazing|incredible|gorgeous|beautiful|handsome|brilliant|iconic|csodálatos|gyönyörű|zseniális|lenyűgöző)/i,
   ];
   const positiveSoft = [
-    /\\b(?:cute|hot|pretty|sweet|lovely|favorite|favourite|queen|king|best|cuki|dögös|szép|kedvenc|királynő|király)\\b/i,
+    /(?:cute|hot|pretty|sweet|lovely|favorite|favourite|queen|king|cuki|dögös|szép|kedvenc|királynő|király)/i,
     /(?:❤️|❤|🥰|😍|💖|💕|🔥)/u,
   ];
   const negativeStrong = [
-    /\\b(?:i\\s+hate|hate\\s+you|can't\\s+stand|cannot\\s+stand|utálom|utállak|gyűlölöm|gyűlöllek)\\b/i,
-    /\\b(?:disgusting|pathetic|worthless|repulsive|undorító|szánalmas|értéktelen)\\b/i,
+    /(?:i\\s+hate|hate\\s+you|can't\\s+stand|cannot\\s+stand|utálom|utállak|gyűlölöm|gyűlöllek)/i,
+    /(?:disgusting|pathetic|worthless|repulsive|undorító|szánalmas|értéktelen)/i,
   ];
   const negativeSoft = [
-    /\\b(?:liar|fake|coward|loser|idiot|moron|hazug|képmutató|gyáva|vesztes|idióta)\\b/i,
+    /(?:liar|coward|loser|moron|hazug|képmutató|gyáva|vesztes|idióta)/i,
     /(?:🤮|🖕)/u,
   ];
 
@@ -80,8 +80,7 @@ function applyPlayerPublicMentionRelationshipImpact(w, event) {
   const seenEntries = Object.entries(w.sim.playerMentionRelationshipImpactSeen)
     .sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0));
   if (seenEntries.length > 220) {
-    const keep = Object.fromEntries(seenEntries.slice(0, 180));
-    w.sim.playerMentionRelationshipImpactSeen = keep;
+    w.sim.playerMentionRelationshipImpactSeen = Object.fromEntries(seenEntries.slice(0, 180));
   }
 
   const delta = playerPublicMentionToneDelta(text);
@@ -90,6 +89,10 @@ function applyPlayerPublicMentionRelationshipImpact(w, event) {
     const target = charById(w, targetId);
     if (!target) return;
 
+    const playerName = w.player && w.player.name ? w.player.name : "";
+    const surfaceHu = type === "post" ? "posztban" : "kommentben";
+    const surfaceEn = type === "post" ? "post" : "comment";
+
     rememberAboutTarget(w, targetId, w.meId, {
       kind: "event",
       source: "public_social",
@@ -97,8 +100,8 @@ function applyPlayerPublicMentionRelationshipImpact(w, event) {
       text: sysLangText(
         w,
         targetId,
-        \\`\${w.player && w.player.name ? w.player.name : "A játékos"} nyilvánosan megemlített engem egy \${type === "post" ? "posztban" : "kommentben"}: \${cut(text, 180)}\\`,
-        \\`\${w.player && w.player.name ? w.player.name : "The player"} publicly mentioned me in a \${type === "post" ? "post" : "comment"}: \${cut(text, 180)}\\`
+        (playerName || "A játékos") + " nyilvánosan megemlített engem egy " + surfaceHu + ": " + cut(text, 180),
+        (playerName || "The player") + " publicly mentioned me in a " + surfaceEn + ": " + cut(text, 180)
       ),
     });
 
@@ -128,7 +131,7 @@ function applyPlayerPublicMentionRelationshipImpact(w, event) {
 
 `;
 
-  next = next.replace(anchor, (match) => `${helper}${match}\n  applyPlayerPublicMentionRelationshipImpact(w, event);`);
+  next = next.replace(anchor, (match) => helper + match + "\n  applyPlayerPublicMentionRelationshipImpact(w, event);");
 }
 
 if (next !== original) {
