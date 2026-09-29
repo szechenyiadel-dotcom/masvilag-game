@@ -7903,6 +7903,10 @@ const AI = {
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
   strikes: 0,
+  // Separate rate-limit history: background world traffic must never escalate
+  // the player's direct DM/group/RP backoff. `strikes` stays for save compatibility.
+  interactiveStrikes: 0,
+  backgroundStrikes: 0,
   pending: 0,
   interactivePending: 0,
   listeners: [],
@@ -7936,6 +7940,21 @@ function setCooldown(ms, visible = true) {
   AI.listeners.forEach((fn) => {
     try { fn(visibleCooldownLeft()); } catch (e) {}
   });
+}
+
+function aiStrikeKey(interactive) {
+  return interactive ? "interactiveStrikes" : "backgroundStrikes";
+}
+
+function bumpAiStrike(interactive) {
+  const key = aiStrikeKey(Boolean(interactive));
+  AI[key] = Math.min((Number(AI[key]) || 0) + 1, 3);
+  return AI[key];
+}
+
+function resetAiStrike(interactive) {
+  const key = aiStrikeKey(Boolean(interactive));
+  AI[key] = 0;
 }
 
 function estimatedAiRequestTokens(system, prompt, maxTokens) {
@@ -8219,8 +8238,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     if (e && e.name === "AbortError") throw new Error("Az AI nem válaszolt időben.");
     if (e && e.message) {
       if (e && e.retryable === false) {
-        AI.strikes = Math.min(AI.strikes + 1, 3);
-        setCooldown(15000 * AI.strikes, !!requestMeta.interactive);
+        const strikeCount = bumpAiStrike(!!requestMeta.interactive);
+        setCooldown(15000 * strikeCount, !!requestMeta.interactive);
       }
       throw e;
     }
@@ -8249,8 +8268,9 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       throw err;
     }
     if (busy) {
-      // ismétlődő elutasításnál egyre hosszabb pihenő, hogy kimásszunk a gödörből
-      AI.strikes = Math.min(AI.strikes + 1, 3);
+      // Ismétlődő elutasításnál lane-specifikus backoff. A háttérvilág
+      // rate-limitje nem emelheti a játékos közvetlen chatjének strike-ját.
+      const strikeCount = bumpAiStrike(!!requestMeta.interactive);
       const retryAfterRaw =
         res.headers && res.headers.get
           ? res.headers.get("retry-after")
@@ -8278,7 +8298,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
         code === 429 &&
         (msgLower.includes("tokens per min") || msgLower.includes("tokens per minute") || msgLower.includes("tpm"));
       const base = tokenMinuteLimit ? 30000 : (code === 429 ? 12000 : 8000);
-      const adaptive = Math.min(60000, base * Math.pow(1.8, Math.max(0, AI.strikes - 1)));
+      const adaptive = Math.min(60000, base * Math.pow(1.8, Math.max(0, strikeCount - 1)));
       const restMs = Math.max(retryAfterMs, adaptive);
 
       /*
@@ -8294,12 +8314,12 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       err.busy = true;
       throw err;
     }
-    AI.strikes = 0;
+    resetAiStrike(!!requestMeta.interactive);
     const msg = (data && data.error && data.error.message) || `HTTP ${code}`;
     throw new Error(`Az AI hibát adott: ${msg}`);
   }
 
-  AI.strikes = 0;   // sikeres hívás: tiszta lap
+  resetAiStrike(!!requestMeta.interactive);   // sikeres hívás: csak ennek a lane-nek tiszta lap
   if (!data || !data.content) throw new Error("Az AI üres választ adott.");
   const txt = data.content.map((b) => (b.type === "text" ? b.text : "")).join("");
   if (!txt.trim()) throw new Error("Az AI üres választ adott.");
@@ -8423,13 +8443,19 @@ async function askJSON(system, prompt, options = {}) {
              * broken provider cannot freeze the UI forever.
              */
             const left = cooldownLeft();
-            const interactiveWaitCap = 30000;
+            /*
+             * The client-side adaptive backoff tops out at 60s. Direct player
+             * actions therefore auto-wait through that entire normal recovery
+             * window instead of throwing away the already-sent DM at 30s.
+             * 75s still protects the UI from an abnormally long/broken provider.
+             */
+            const interactiveWaitCap = 75000;
 
             if (priority >= 50 && left > interactiveWaitCap) {
               const tooLong = new Error(
                 lang === "en"
-                  ? `The AI provider asked for a ${Math.ceil(left / 1000)}s cooldown. Please retry after the cooldown.`
-                  : `Az AI szolgáltató ${Math.ceil(left / 1000)} másodperces pihenőt kért. A pihenő után próbáld újra.`
+                  ? `The AI provider is temporarily rate-limited. The remaining cooldown is ${Math.ceil(left / 1000)}s.`
+                  : `Az AI szolgáltató átmenetileg limitált. A hátralévő pihenő ${Math.ceil(left / 1000)} másodperc.`
               );
               tooLong.busy = true;
               tooLong.retryable = false;
