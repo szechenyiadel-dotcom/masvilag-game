@@ -6,28 +6,24 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appPath = path.join(root, "src", "App.jsx");
 const original = fs.readFileSync(appPath, "utf8");
 
-const oldBlock = `    if (addressTargetId) {
-      body = sanitizeGeneratedDirectAddress(n, who, addressTargetId, body);
-    }`;
-
-const newBlock = `    if (addressTargetId) {
-      body = sanitizeGeneratedDirectAddress(n, who, addressTargetId, body);
-
-      /* Reply @mention must use the actual target profile username, never an internal ID. */
-      const replyTarget = charById(n, addressTargetId);
-      const replyUsername = String((replyTarget && replyTarget.username) || "").replace(/^@/, "").trim();
-      if (replyUsername) {
-        body = body.replace(/^@[A-Za-z0-9._-]+\\b\\s*/i, \`@\${replyUsername} \`);
-      } else {
-        body = body.replace(/^@[A-Za-z0-9._-]+\\b\\s*/i, "");
-      }
-    }`;
+const marker = "/* Reply @mention must use the actual target profile username, never an internal ID. */";
+const replyTargetAnchor = /(^[ \t]*)if\s*\(\s*addressTargetId\s*\)\s*\{\s*body\s*=\s*sanitizeGeneratedDirectAddress\s*\(\s*n\s*,\s*who\s*,\s*addressTargetId\s*,\s*body\s*\)\s*;/m;
 
 let next = original;
-if (next.includes(oldBlock)) {
-  next = next.replace(oldBlock, newBlock);
-} else if (!next.includes(newBlock)) {
-  throw new Error("Reply mention patch aborted: reply target block changed; refusing broad replacement.");
+
+if (!next.includes(marker)) {
+  const match = next.match(replyTargetAnchor);
+
+  if (!match) {
+    throw new Error("Reply mention patch aborted: reply target anchor not found; refusing broad replacement.");
+  }
+
+  const indent = match[1] || "";
+  const inner = `${indent}  `;
+
+  const replacement = `${indent}if (addressTargetId) {\n${inner}body = sanitizeGeneratedDirectAddress(n, who, addressTargetId, body);\n\n${inner}${marker}\n${inner}const replyTarget = charById(n, addressTargetId);\n${inner}const replyUsername = String((replyTarget && replyTarget.username) || "").replace(/^@/, "").trim();\n${inner}if (replyUsername) {\n${inner}  body = body.replace(/^@[A-Za-z0-9._-]+\\b\\s*/i, \`@\${replyUsername} \`);\n${inner}} else {\n${inner}  body = body.replace(/^@[A-Za-z0-9._-]+\\b\\s*/i, "");\n${inner}}`;
+
+  next = next.replace(replyTargetAnchor, replacement);
 }
 
 if (next !== original) {
