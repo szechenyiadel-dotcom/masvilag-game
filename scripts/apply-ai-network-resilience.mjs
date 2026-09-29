@@ -14,12 +14,11 @@ function countMatches(text, regex) {
   return count;
 }
 
-function patchApp() {
-  const original = fs.readFileSync(appPath, "utf8");
+function buildAppPatch(original) {
   let next = original;
   const marker = "MÁSVILÁG AI + PINIMG NETWORK RESILIENCE v1";
 
-  if (next.includes(marker)) return false;
+  if (next.includes(marker)) return { changed: false, text: next };
 
   const resolveStart = next.indexOf("const resolveImg = (src, media) => {");
   const resolveEnd = resolveStart >= 0 ? next.indexOf("function ensureImageMaps", resolveStart) : -1;
@@ -88,16 +87,14 @@ function patchApp() {
     `if (\n    budgeted.wasCompacted &&\n    (!Number(AI.lastCompactionNoticeAt) || now() - Number(AI.lastCompactionNoticeAt) >= 60000)\n  ) {\n    AI.lastCompactionNoticeAt = now();\n    console.info(\n      "AI request context compacted safely before provider call:",\n      \`system=\${system.length} chars\`,\n      \`prompt=\${prompt.length} chars\`\n    );\n  }`
   );
 
-  fs.writeFileSync(appPath, next, "utf8");
-  return true;
+  return { changed: next !== original, text: next };
 }
 
-function patchServer() {
-  const original = fs.readFileSync(serverPath, "utf8");
+function buildServerPatch(original) {
   let next = original;
   const marker = "MÁSVILÁG PINIMG SAME-ORIGIN PROXY + 429 RESILIENCE v1";
 
-  if (next.includes(marker)) return false;
+  if (next.includes(marker)) return { changed: false, text: next };
 
   const mediaVersionAnchor = 'app.get("/media/version", async (req, res) => {';
   if (!next.includes(mediaVersionAnchor)) {
@@ -107,13 +104,13 @@ function patchServer() {
   const remoteRoute = `/* ${marker} */\nfunction isPinimgRemoteUrl(rawUrl) {\n  try {\n    const parsed = new URL(String(rawUrl || "").trim());\n    const host = String(parsed.hostname || "").toLowerCase();\n    return (\n      parsed.protocol === "https:" &&\n      (host === "i.pinimg.com" || host.endsWith(".pinimg.com"))\n    );\n  } catch (e) {\n    return false;\n  }\n}\n\nasync function sendProxiedRemoteImage(rawUrl, res) {\n  const remote = await fetchRemoteImageReference(rawUrl);\n  const bytes = Buffer.from(remote.base64, "base64");\n  res.setHeader("Content-Type", remote.mimeType || "image/jpeg");\n  res.setHeader("Content-Length", String(bytes.length));\n  res.setHeader("Cache-Control", "private, max-age=86400, stale-while-revalidate=604800");\n  res.setHeader("X-Content-Type-Options", "nosniff");\n  return res.send(bytes);\n}\n\napp.get("/media/remote-image", async (req, res) => {\n  try {\n    if (!(await requireDb(res))) return;\n    const session = await getSessionIdentity(req);\n    if (!session) {\n      clearSessionCookie(res);\n      return res.status(401).end();\n    }\n\n    const rawUrl = String(req.query?.url || "").trim();\n    if (!isPinimgRemoteUrl(rawUrl)) return res.status(403).end();\n    return await sendProxiedRemoteImage(rawUrl, res);\n  } catch (err) {\n    console.warn("Remote image proxy failed:", err?.message || err);\n    return res.status(502).end();\n  }\n});\n\n`;
   next = next.replace(mediaVersionAnchor, remoteRoute + mediaVersionAnchor);
 
-  const externalRedirect = /if \(\/\^https:\\\/\\\/\/i\.test\(dataUrl\)\) \{\s*return res\.redirect\(302, dataUrl\);\s*\}/m;
-  if (!externalRedirect.test(next)) {
+  const externalRedirectText = `    if (/^https:\\/\\//i.test(dataUrl)) {\n      return res.redirect(302, dataUrl);\n    }`;
+  if (!next.includes(externalRedirectText)) {
     throw new Error("Network resilience patch aborted: media external redirect anchor changed.");
   }
   next = next.replace(
-    externalRedirect,
-    `if (/^https:\\/\\//i.test(dataUrl)) {\n      if (isPinimgRemoteUrl(dataUrl)) {\n        try {\n          return await sendProxiedRemoteImage(dataUrl, res);\n        } catch (err) {\n          console.warn("Stored Pinterest image proxy failed:", err?.message || err);\n          return res.status(502).end();\n        }\n      }\n      return res.redirect(302, dataUrl);\n    }`
+    externalRedirectText,
+    `    if (/^https:\\/\\//i.test(dataUrl)) {\n      if (isPinimgRemoteUrl(dataUrl)) {\n        try {\n          return await sendProxiedRemoteImage(dataUrl, res);\n        } catch (err) {\n          console.warn("Stored Pinterest image proxy failed:", err?.message || err);\n          return res.status(502).end();\n        }\n      }\n      return res.redirect(302, dataUrl);\n    }`
   );
 
   const providerRetryAnchor = /if \(\s*!retryableProviderStatus\(\s*r\.status\s*\) \|\|\s*attempt >= 2\s*\) \{\s*break;\s*\}/gm;
@@ -144,14 +141,20 @@ function patchServer() {
     `if (last?.retryAfter) {\n      res.setHeader("retry-after", last.retryAfter);\n    } else if ([429, 529].includes(upstreamStatus)) {\n      res.setHeader("retry-after", "45");\n    }`
   );
 
-  fs.writeFileSync(serverPath, next, "utf8");
-  return true;
+  return { changed: next !== original, text: next };
 }
 
-const appChanged = patchApp();
-const serverChanged = patchServer();
+const appOriginal = fs.readFileSync(appPath, "utf8");
+const serverOriginal = fs.readFileSync(serverPath, "utf8");
 
-if (appChanged || serverChanged) {
+/* Validate both transformations completely before writing either file. */
+const appPatch = buildAppPatch(appOriginal);
+const serverPatch = buildServerPatch(serverOriginal);
+
+if (appPatch.changed) fs.writeFileSync(appPath, appPatch.text, "utf8");
+if (serverPatch.changed) fs.writeFileSync(serverPath, serverPatch.text, "utf8");
+
+if (appPatch.changed || serverPatch.changed) {
   console.log("Applied AI rate-limit resilience and same-origin Pinterest image proxy.");
 } else {
   console.log("AI/network resilience already applied.");
