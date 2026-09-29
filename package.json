@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "social-policy": "node scripts/apply-social-policy.mjs && node scripts/apply-deep-relationship-baseline.mjs && node scripts/apply-automatic-follows.mjs",
+    "social-policy": "node scripts/apply-social-policy.mjs && node scripts/apply-deep-relationship-baseline.mjs && node scripts/apply-automatic-follows.mjs && node scripts/apply-reply-mention-fix.mjs",
     "dev": "npm run social-policy && vite",
     "build": "npm run social-policy && vite build",
     "preview": "vite preview",
