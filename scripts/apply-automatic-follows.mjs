@@ -72,11 +72,12 @@ function shouldAutoFollowEstablishedTie(w, actor, target) {
 }
 
 function applyChanges(n, changes) {
+  const result = legacyApplyChanges(n, changes);
   if (n && Array.isArray(changes) && changes.length) {
     const sim = ensureSimState(n);
     if (sim) sim.automaticFollowSyncDirty = true;
   }
-  return legacyApplyChanges(n, changes);
+  return result;
 }
 
 function ensureFollowerSystem(w) {
