@@ -8,11 +8,13 @@ const appPath = path.join(root, "src", "App.jsx");
 const original = fs.readFileSync(appPath, "utf8");
 let next = original;
 
-const marker = "/* MÁSVILÁG AUTOMATIC SOCIAL FOLLOWS v1 */";
+const marker = "/* MÁSVILÁG AUTOMATIC SOCIAL FOLLOWS v2 */";
 const oldCap = "const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 2;";
 const newCap = "const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 0; // legacy relationship-follow queue disabled; obvious follows are immediate";
 const originalEnsure = "function ensureFollowerSystem(";
 const legacyEnsure = "function legacyEnsureFollowerSystem(";
+const originalApplyChanges = "function applyChanges(";
+const legacyApplyChanges = "function legacyApplyChanges(";
 
 const wrapper = `
 
@@ -22,10 +24,11 @@ ${marker}
  * initialized: friends, family, partners/crushes, teammates, dojo/faction mates,
  * classmates/coworkers and similarly established positive bonds.
  *
- * This changes ONLY the social follow graph. Relationship score/mood/bond are
- * still controlled by the relationship system. Because ensureFollowerSystem()
- * is also called during autonomous social processing, a later relationship
- * change can naturally create a new follow as soon as the pair becomes eligible.
+ * IMPORTANT PERFORMANCE RULE:
+ * The expensive all-pairs scan must NOT run on every follower normalization.
+ * It runs once for the initial graph, then only when relationship changes mark
+ * the graph dirty. This keeps the automatic-follow behavior without repeatedly
+ * doing an O(n²) character scan during normal live-world activity.
  */
 let automaticFollowSyncActive = false;
 
@@ -68,12 +71,27 @@ function shouldAutoFollowEstablishedTie(w, actor, target) {
   );
 }
 
+function applyChanges(n, changes) {
+  if (n && Array.isArray(changes) && changes.length) {
+    const sim = ensureSimState(n);
+    if (sim) sim.automaticFollowSyncDirty = true;
+  }
+  return legacyApplyChanges(n, changes);
+}
+
 function ensureFollowerSystem(w) {
   const out = legacyEnsureFollowerSystem(w);
   if (!w || typeof w !== "object") return out;
 
+  const sim = ensureSimState(w);
+  if (!sim) return out;
+
   /* setFollowState() itself calls ensureFollowerSystem(); avoid recursion. */
   if (automaticFollowSyncActive) return out;
+
+  /* The heavy scan is needed only once initially, then after a real rel change. */
+  if (sim.automaticFollowSyncDone && !sim.automaticFollowSyncDirty) return out;
+
   automaticFollowSyncActive = true;
 
   try {
@@ -98,8 +116,7 @@ function ensureFollowerSystem(w) {
     });
 
     /* Remove stale queued copies created by older builds. */
-    const sim = ensureSimState(w);
-    if (sim && Array.isArray(sim.queue)) {
+    if (Array.isArray(sim.queue)) {
       sim.queue = sim.queue.filter(
         (action) =>
           !(
@@ -109,6 +126,9 @@ function ensureFollowerSystem(w) {
           )
       );
     }
+
+    sim.automaticFollowSyncDone = true;
+    sim.automaticFollowSyncDirty = false;
   } finally {
     automaticFollowSyncActive = false;
   }
@@ -132,12 +152,20 @@ if (!next.includes(marker)) {
     throw new Error("Automatic follow patch aborted: ensureFollowerSystem source changed.");
   }
 
+  if (next.includes(legacyApplyChanges)) {
+    // partial previous application
+  } else if (next.includes(originalApplyChanges)) {
+    next = next.replace(originalApplyChanges, legacyApplyChanges);
+  } else {
+    throw new Error("Automatic follow patch aborted: applyChanges source changed.");
+  }
+
   next += wrapper;
 }
 
 if (next !== original) {
   fs.writeFileSync(appPath, next, "utf8");
-  console.log("Applied automatic social follows for established ties and later relationship changes.");
+  console.log("Applied automatic social follows with relationship-dirty performance gating.");
 } else {
   console.log("Automatic social follow policy already applied.");
 }
