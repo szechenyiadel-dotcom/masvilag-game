@@ -37,13 +37,15 @@ replace('for (let guard = 0; guard < 40; guard++) {', 'while (cooldownLeft() > 0
 replace('            busyWaits++;', '            busyWaits++;\n            if (priority < 50) throw err; // Scheduler owns background retries; release worker immediately.');
 
 // The server intentionally transports provider 429/529 as HTTP 200 + {busy:true}.
-// Treat that envelope exactly like the original upstream status instead of parsing it
-// as a successful model response and silently dropping the requested world action.
-replace(`  let data;
+// Scope this rewrite to callClaude only: other JSON fetches legitimately use the same
+// response-reading pattern and must not be touched.
+section('async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {', 'async function askJSON(system, prompt, options = {}) {', s => {
+  const old = `  let data;
   try { data = await res.json(); } catch (e) { data = null; }
 
   if (!res.ok) {
-    const code = res.status;`, `  let data;
+    const code = res.status;`;
+  const next = `  let data;
   try { data = await res.json(); } catch (e) { data = null; }
 
   const quietBusyEnvelope = Boolean(data && data.busy === true);
@@ -53,7 +55,10 @@ replace(`  let data;
       : 0;
     const code = quietBusyEnvelope
       ? (upstreamHeader === 529 ? 529 : 429)
-      : res.status;`);
+      : res.status;`;
+  if (!s.includes(old)) throw new Error('callClaude busy-envelope anchor missing');
+  return s.replace(old, next);
+});
 
 // All lanes already check their own due times. The feed clock cannot gate them all.
 replace(`        if (
