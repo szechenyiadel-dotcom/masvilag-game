@@ -19,16 +19,10 @@ const wrapper = `
 ${marker}
 /*
  * Connections prose defines the fresh-run STARTING state, direction by direction.
- * It is not a permanent lock: after play begins, actual interactions may evolve
- * score / mood / bond / hidden state. A -> B never inherits B -> A automatically.
+ * It is private source material, not display copy. The AI must interpret it and
+ * express the relationship in its own words/behavior. After play begins, actual
+ * interactions may evolve score / mood / bond / hidden state.
  */
-function compactDirectedRelationshipCanon(text, maxChars = 460) {
-  return String(text || "")
-    .replace(/\\s+/g, " ")
-    .trim()
-    .slice(0, Math.max(120, Number(maxChars) || 460));
-}
-
 function directedRelationshipSignals(text) {
   const low = String(text || "").toLowerCase();
   const out = [];
@@ -57,10 +51,18 @@ function directedRelationshipSignals(text) {
 
 function directedHiddenCanon(text) {
   const low = String(text || "").toLowerCase();
-  const hidden =
-    /secret|hidden|keeps? .* secret|titok|titkos|rejteget|elhallgat|won.?t admit|will not admit|doesn.?t admit|denies|denial|tagad|nem vallja be|nem ismeri be|suppres|elfojt|subconscious|tudatalatti|unaware|nincs tudat[aá]ban/.test(low);
 
-  return hidden ? compactDirectedRelationshipCanon(text, 500) : "";
+  if (/subconscious|tudatalatti|unaware|nincs tudat[aá]ban|hasn.?t realized|nem ismerte fel/.test(low)) {
+    return "The feeling is not fully conscious or recognized yet.";
+  }
+  if (/won.?t admit|will not admit|doesn.?t admit|denies|denial|tagad|nem vallja be|nem ismeri be|suppres|elfojt/.test(low)) {
+    return "The feeling is denied, suppressed, or not openly admitted.";
+  }
+  if (/secret|hidden|keeps? .* secret|titok|titkos|rejteget|elhallgat/.test(low)) {
+    return "Part of the feeling is deliberately kept private.";
+  }
+
+  return "";
 }
 
 function inferCanonicalRelationshipBaseline(w, actor, target) {
@@ -76,7 +78,6 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
   const direct = connectionCanonSnippetAbout(w, actor, target, 24000);
   if (!direct) return legacy;
 
-  const canon = compactDirectedRelationshipCanon(direct, 500);
   const signals = directedRelationshipSignals(direct);
   const low = String(direct).toLowerCase();
 
@@ -93,16 +94,13 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
       };
 
   /*
-   * The three semantic relationship parts are initialized separately:
-   * 1) bond/category = the broad structural label (Crush/Friend/Enemy/etc.)
-   * 2) mood = the detailed directed emotional/dynamic prose
-   * 3) hidden = secrecy/denial/unawareness only when the prose actually says so
-   *
-   * This prevents "Crush + obsessed/possessive/jealous..." from collapsing
-   * into plain "Crush".
+   * Initialize the three semantic relationship parts separately without ever
+   * copying the user's Connections wording into visible/live relationship text:
+   * 1) bond/category = broad structural label
+   * 2) mood = interpreted emotional/dynamic signals only
+   * 3) hidden = interpreted secrecy/denial/awareness state only
    */
-  const signalText = signals.length ? signals.join(", ") : "directed canon";
-  base.mood = ("INITIAL CANON — " + signalText + ": " + canon).slice(0, 500);
+  base.mood = signals.length ? signals.join(", ") : (base.mood || "complex directed relationship");
   base.hidden = directedHiddenCanon(direct);
 
   /*
@@ -123,9 +121,9 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
 }
 
 /*
- * Preserve the previous deep two-sided context, but reinterpret it correctly:
- * Connections prose is the initial directed baseline. Current runtime state and
- * actual history win after genuine in-world change.
+ * Preserve the full source internally for comprehension, but never treat the
+ * user's wording as copy to reproduce. Current runtime state and actual history
+ * win after genuine in-world change.
  */
 function relationshipBehaviorCard(w, actorId, targetId) {
   const previous = String(legacyDeepRelationshipBehaviorCard(w, actorId, targetId) || "");
@@ -136,7 +134,7 @@ function relationshipBehaviorCard(w, actorId, targetId) {
   const evolved = previous
     .replace(
       "DEEP DIRECTED RELATIONSHIP CANON — RAW PROSE IS AUTHORITATIVE",
-      "DEEP DIRECTED RELATIONSHIP CANON — INITIAL BASELINE + LIVE EVOLUTION"
+      "DEEP DIRECTED RELATIONSHIP CANON — PRIVATE SOURCE FOR INITIAL BASELINE + LIVE EVOLUTION"
     )
     .replace(
       "- A→B governs A’s actual feelings, history, beliefs, self-awareness and intended behavior toward B.",
@@ -144,11 +142,11 @@ function relationshipBehaviorCard(w, actorId, targetId) {
     )
     .replace(
       "- Behavior must come from the prose above plus current context, not from a generic trope associated with a category word.",
-      "- At the start, behavior must come from the full prose above, not a generic category word. After play begins, preserve genuine changes caused by actual interactions instead of snapping back to the initial prose."
+      "- At the start, infer behavior from the meaning of the full prose, not from a generic category word. Never reuse the user's wording as output. After play begins, preserve genuine changes caused by actual interactions instead of snapping back to the initial prose."
     )
     .replace(
       "The coarse baseline may help routing/scoring, but it NEVER overrides or replaces the raw directed prose above.",
-      "The raw directed prose controls the fresh-run starting state. Once play has begun, documented current relationship state and actual interaction history may override the starting baseline where genuine change occurred."
+      "The source prose defines meaning for the fresh-run starting state, but it is private source material, not text to quote. Once play has begun, documented current relationship state and actual interaction history may override the starting baseline where genuine change occurred."
     );
 
   const liveCard = live && typeof live === "object"
@@ -163,9 +161,11 @@ function relationshipBehaviorCard(w, actorId, targetId) {
   return [
     evolved,
     "",
+    "PARAPHRASE RULE — HARD: Connections text is private source material. Never quote it, mirror its sentences, reuse distinctive phrasing, or output it as the relationship description. Understand the meaning, then express reactions, dialogue and behavior naturally in the character's own voice.",
+    "",
     "LIVE DIRECTED RELATIONSHIP STATE — CURRENT, NOT THE ORIGINAL BASELINE:",
     liveCard ? JSON.stringify(liveCard) : "(none)",
-    "EVOLUTION RULE: use Connections prose to establish the first state; after that, let actual posts, DMs, comments, scenes, betrayals, intimacy, conflict and reconciliation change this direction naturally. Never copy the reverse direction unless the story actually makes the feeling reciprocal.",
+    "EVOLUTION RULE: use Connections meaning to establish the first state; after that, let actual posts, DMs, comments, scenes, betrayals, intimacy, conflict and reconciliation change this direction naturally. Never copy the reverse direction unless the story actually makes the feeling reciprocal.",
   ].join("\\n");
 }
 `;
@@ -194,10 +194,34 @@ if (!next.includes(marker)) {
   next += wrapper;
 }
 
+/*
+ * Migration for a worktree where the previous v3 wrapper was already applied:
+ * remove copied user prose from live mood/hidden fields and add paraphrase rules
+ * without requiring a clean checkout.
+ */
+const oldAppliedCanonLine = '  const canon = compactDirectedRelationshipCanon(direct, 500);\\n';
+if (next.includes(oldAppliedCanonLine)) {
+  next = next.replace(oldAppliedCanonLine, "");
+}
+
+const oldAppliedMood = '  base.mood = ("INITIAL CANON — " + signalText + ": " + canon).slice(0, 500);';
+const newAppliedMood = '  base.mood = signals.length ? signals.join(", ") : (base.mood || "complex directed relationship");';
+if (next.includes(oldAppliedMood)) {
+  next = next.replace(oldAppliedMood, newAppliedMood);
+}
+
+const oldAppliedHiddenReturn = '  return hidden ? compactDirectedRelationshipCanon(text, 500) : "";';
+if (next.includes(oldAppliedHiddenReturn)) {
+  next = next.replace(
+    oldAppliedHiddenReturn,
+    '  if (/subconscious|tudatalatti|unaware|nincs tudat[aá]ban|hasn.?t realized|nem ismerte fel/.test(low)) return "The feeling is not fully conscious or recognized yet.";\\n  if (/won.?t admit|will not admit|doesn.?t admit|denies|denial|tagad|nem vallja be|nem ismeri be|suppres|elfojt/.test(low)) return "The feeling is denied, suppressed, or not openly admitted.";\\n  return hidden ? "Part of the feeling is deliberately kept private." : "";'
+  );
+}
+
 if (next !== original) {
   fs.writeFileSync(appPath, next, "utf8");
   console.log(
-    "Applied directional relationship baseline v3: detailed bond/mood/hidden initialization + live evolution."
+    "Applied directional relationship baseline v3: semantic initialization, paraphrased output, live evolution."
   );
 } else {
   console.log("Directional relationship baseline v3 already applied.");
