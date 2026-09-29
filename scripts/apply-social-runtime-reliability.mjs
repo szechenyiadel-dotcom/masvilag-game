@@ -49,9 +49,8 @@ section('async function analyzeSocialPostMeaning(', 'function socialPostMeaningC
   )
 );
 
-/* Do NOT rewrite AI pacing/backoff here. Network resilience owns provider pacing.
-   The previous runtime patch stacked a second 120-second throttle on top of it,
-   which is what made the social world appear dead. */
+/* IMPORTANT: provider pacing/backoff is owned only by apply-ai-network-resilience.
+   Do not stack a second global 429 circuit breaker here. */
 
 /* Each social lane already has its own due-time logic. A single feed clock must
    not prevent ready DMs/Notes/posts from being considered. */
@@ -72,7 +71,7 @@ replace(
 );
 
 /* Player-triggered public reactions are urgent queue work. They may enter the
-   normal AI retry handler even if a previous background request opened cooldown. */
+   existing retry handler even if an earlier background request opened cooldown. */
 replace(`  const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");`, `  const queued = simPeek(view2);
   const manualQueued = !!(queued && queued.source === "manual");
@@ -88,8 +87,8 @@ replace(
   '  if (!cooldownBypassQueued && cooldownLeft() > 0) return; /* MÁSVILÁG SOCIAL RUNTIME RELIABILITY v3 */'
 );
 
-/* Keep the stale-lock recovery from the original scheduler. Add only rejected
-   promise containment and guaranteed cleanup for the invocation that owns it. */
+/* Keep the original stale-lock recovery; only contain rejected beat promises and
+   guarantee cleanup for the invocation that acquired the lock. */
 replace(
   '    const i = setInterval(beat, 9000);\n    const first = setTimeout(beat, 150);',
   `    const safeBeat = () => beat().catch((error) => {
@@ -107,15 +106,14 @@ replace(
   '      } finally {\n        autoRunning.current = false;\n        autoRunningSince.current = 0;\n        if (alive) setAutoBusy(false);\n      }'
 );
 
-/* The player-post comment lane is hard coverage, not an optional wave. */
+/* A player-post comment wave is guaranteed coverage, not optional ambience. */
 replace(
   '    const isGuaranteedCoverage = commentTrigger === "guaranteed-coverage";',
   '    const isGuaranteedCoverage = commentTrigger === "guaranteed-coverage" || commentTrigger === "player-post";'
 );
 
-/* Mark quota output so applyComments can use a narrow last-resort acceptance path
-   only for guaranteed player/post coverage. The text still comes from the AI and
-   still passes actor, ownership, sanitation and direct-address guards. */
+/* Mark quota output so applyComments can use one narrow rescue path when the AI
+   did return comments but ordinary style filters rejected every single line. */
 section('    const out = quotaEnforced', '    const commentsProbe =', s => {
   const old = `    const out = quotaEnforced
       ? {
@@ -138,10 +136,10 @@ section('    const out = quotaEnforced', '    const commentsProbe =', s => {
   return s.replace(old, next);
 });
 
-/* Normal comment validation stays authoritative. Only if it rejected every
-   generated line for a guaranteed post do we accept one already-generated AI
-   line through a narrower rescue path. This prevents a successful provider call
-   from becoming an invisible no-op. */
+/* Normal comment validation stays authoritative. Only when it produced zero for
+   guaranteed coverage do we accept ONE already-generated AI line through a
+   narrower rescue path. It still validates actor, ownership, post id, sanitation,
+   direct addressing and duplicates. */
 section('function applyComments(n, postId, out, label) {', 'function socialInteractionInterest(', s => {
   const old = `  /* Raw AI "events" are not a second reality. Concrete social objects above are the source of truth. */
   return createdVisible;
@@ -192,69 +190,12 @@ section('function applyComments(n, postId, out, label) {', 'function socialInter
   return s.replace(old, next);
 });
 
-/* If even the rescue had no usable AI line, do not silently drop the coverage
-   action. Mark the post and throw a retryable scheduler error; the queue recovery
-   patch keeps the exact action alive instead of pretending it succeeded. */
-section('    const commentsProbe =', '    update((n) => {', s => {
-  const old = `    if (!visibleReactionCount) {
-      if (isGuaranteedCoverage) {
-        update((n) => {
-          const failedPost = (n.posts || []).find((row) => row && row.id === post.id);
-          if (!failedPost) return;
-          failedPost.commentCoverageAttemptAt = now();
-          failedPost.commentCoverageAttempts =
-            Math.max(0, Math.round(Number(failedPost.commentCoverageAttempts) || 0)) + 1;
-        });
-      }
-      return null;
-    }
-
-`;
-  const next = `    if (!visibleReactionCount) {
-      if (isGuaranteedCoverage) {
-        update((n) => {
-          const failedPost = (n.posts || []).find((row) => row && row.id === post.id);
-          if (!failedPost) return;
-          failedPost.commentCoverageAttemptAt = now();
-          failedPost.commentCoverageAttempts =
-            Math.max(0, Math.round(Number(failedPost.commentCoverageAttempts) || 0)) + 1;
-        });
-        const err = new Error("Guaranteed post comment produced no visible AI line");
-        err.busy = true;
-        err.retryable = true;
-        throw err;
-      }
-      return null;
-    }
-
-`;
-  if (!s.includes(old)) throw new Error('Empty-comment retry anchor changed');
-  return s.replace(old, next);
-});
-
-/* Retryable/background errors keep their action. Add a short notBefore to
-   coverage work so an invalid provider response cannot spin every 9 seconds. */
+/* Existing coverage watchdog already retries a zero-result post every 12 seconds.
+   Keep provider/network failures retryable too, without inventing another throttle. */
 replace(
   '        busyFailure = Boolean(e && e.busy);',
   '        busyFailure = Boolean(e && (e.busy || /időben|hálózat|fetch|network|timeout/i.test(e.message || "")));'
 );
-section('        if (busyFailure) {', '        if (\n          queued &&', s => {
-  const old = `          if (!(queued && action && queued.id === action.id) && action) {
-            simEnqueue(n, action);
-          }
-          return;`;
-  const next = `          if (queued && action && queued.id === action.id && action.source === "coverage") {
-            const same = sim.queue.find((row) => row && row.id === action.id);
-            if (same) same.notBefore = now() + GUARANTEED_POST_COMMENT_RETRY_MS;
-          }
-          if (!(queued && action && queued.id === action.id) && action) {
-            if (action.source === "coverage") action.notBefore = now() + GUARANTEED_POST_COMMENT_RETRY_MS;
-            simEnqueue(n, action);
-          }
-          return;`;
-  if (!s.includes(old)) throw new Error('Busy queue preservation anchor changed');
-  return s.replace(old, next);
-});
 
 /* Follow-back complaints get a grace period and stale follow events are
    revalidated immediately before an AI call. */
