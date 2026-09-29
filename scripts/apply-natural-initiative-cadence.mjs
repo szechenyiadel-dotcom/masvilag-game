@@ -51,12 +51,6 @@ if (!next.includes(MARKER)) {
     "const groupTarget = Math.max(7 * 60 * 1000, Math.round((10 * 60 * 1000) / groupPeak));",
     "group cadence"
   );
-
-  replaceExact(
-    "if (roll >= 0.18 && roll < 0.24) {",
-    "if (roll >= 0.18 && roll < 0.28) {",
-    "spontaneous DM opportunity"
-  );
 }
 
 if (next !== original) {
