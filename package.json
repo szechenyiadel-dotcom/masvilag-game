@@ -4,8 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "social-policy": "node scripts/apply-social-policy.mjs",
+    "dev": "npm run social-policy && vite",
+    "build": "npm run social-policy && vite build",
     "preview": "vite preview",
     "start": "node server/proxy.js"
   },
