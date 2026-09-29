@@ -42,9 +42,9 @@ if (!next.includes(helperMarker)) {
 }
 
 if (!next.includes(statusMarker)) {
-  const rowAnchor = /(const row = \{\r?\n\s*id: uid\(\),\r?\n\s*ts: now\(\),)/;
+  const rowAnchor = /(function addSceneStatusUpdate\(n, scene, text, kind = "status", actorId = ""\) \{[\s\S]*?const row = \{\r?\n\s*id: uid\(\),\r?\n\s*ts: now\(\),)/;
   if (!rowAnchor.test(next)) {
-    throw new Error("Scene coherence patch aborted: scene status row anchor not found.");
+    throw new Error("Scene coherence patch aborted: exact scene status row anchor not found.");
   }
   next = next.replace(rowAnchor, (match) => `${match}\n    source: "verified", /* ${statusMarker} */`);
 
