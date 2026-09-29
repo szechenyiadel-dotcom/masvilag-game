@@ -273,6 +273,50 @@ replaceOnce(
   false
 );
 
+/* Note reactions may be public, but a private DM reply still needs a real tie. */
+{
+  const noteStart = next.indexOf('if (action.type === "note-react") {');
+  const noteEnd = noteStart >= 0 ? next.indexOf('if (action.type === "note") {', noteStart) : -1;
+  if (noteStart < 0 || noteEnd < 0) {
+    throw new Error("Grounded social rhythm patch aborted: note-react boundaries not found.");
+  }
+
+  let noteBlock = next.slice(noteStart, noteEnd);
+  if (!noteBlock.includes("autonomousDmEligible(n, charById(n, who))")) {
+    const noteDmGuard = /isHuman\(n, who\) \|\|\r?\n\s*hasReacted\(who\) \|\|/;
+    if (!noteDmGuard.test(noteBlock)) {
+      throw new Error("Grounded social rhythm patch aborted: Note DM guard anchor changed.");
+    }
+    noteBlock = noteBlock.replace(
+      noteDmGuard,
+      `isHuman(n, who) ||\n          !autonomousDmEligible(n, charById(n, who)) ||\n          hasReacted(who) ||`
+    );
+    next = next.slice(0, noteStart) + noteBlock + next.slice(noteEnd);
+  }
+}
+
+/* Gossip can be public, but its optional private fallout must also be grounded. */
+{
+  const gossipStart = next.indexOf('if (action.type === "gossip-reaction") {');
+  const gossipEnd = gossipStart >= 0 ? next.indexOf('if (action.type === "rumor-evolution") {', gossipStart) : -1;
+  if (gossipStart < 0 || gossipEnd < 0) {
+    throw new Error("Grounded social rhythm patch aborted: gossip-reaction boundaries not found.");
+  }
+
+  let gossipBlock = next.slice(gossipStart, gossipEnd);
+  if (!gossipBlock.includes("GROUNDED GOSSIP DMS")) {
+    const visibleAnchor = /\s*const hasVisibleReaction = Boolean\(out && \(/;
+    if (!visibleAnchor.test(gossipBlock)) {
+      throw new Error("Grounded social rhythm patch aborted: gossip DM filter anchor changed.");
+    }
+    gossipBlock = gossipBlock.replace(
+      visibleAnchor,
+      `\n    /* GROUNDED GOSSIP DMS: public gossip is not permission for a stranger DM. */\n    if (out && Array.isArray(out.dms)) {\n      out = {\n        ...out,\n        dms: out.dms.filter((row) => {\n          const who = findChar(view, row && (row.id !== undefined ? row.id : row.name));\n          const actor = who ? charById(view, who) : null;\n          return Boolean(actor && autonomousDmEligible(view, actor));\n        }),\n      };\n    }\n\n    const hasVisibleReaction = Boolean(out && (`
+    );
+    next = next.slice(0, gossipStart) + gossipBlock + next.slice(gossipEnd);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* 3) Calmer background world, but a stronger public feed pulse.       */
 /* ------------------------------------------------------------------ */
@@ -331,6 +375,16 @@ const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(
   next = next.replace(
     dmWatchdogPattern,
     "Math.max(8 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor))"
+  );
+
+  const roleplayWatchdogPattern = /Math\.max\(6 \* 60 \* 1000, Math\.round\(LIVE_WORLD_EVENT_TARGET_MS \/ rpActivityFactor\)\)/g;
+  const roleplayMatches = next.match(roleplayWatchdogPattern) || [];
+  if (roleplayMatches.length < 2) {
+    throw new Error("Grounded social rhythm patch aborted: Event watchdog targets changed.");
+  }
+  next = next.replace(
+    roleplayWatchdogPattern,
+    "Math.max(12 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor))"
   );
 
   replaceOnce(
