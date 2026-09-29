@@ -112,20 +112,7 @@ function applyPlayerPublicMentionRelationshipImpact(w, event) {
     const nextScore = Math.max(-100, Math.min(100, oldScore + delta));
     if (nextScore === oldScore) return;
 
-    const positive = delta > 0;
-    setRel(w, targetId, w.meId, {
-      score: nextScore,
-      why: sysLangText(
-        w,
-        targetId,
-        positive
-          ? "Pozitív nyilvános említés rólam a közösségi médiában."
-          : "Negatív nyilvános említés rólam a közösségi médiában.",
-        positive
-          ? "A positive public social-media mention about me."
-          : "A negative public social-media mention about me."
-      ),
-    });
+    setRel(w, targetId, w.meId, { score: nextScore });
   });
 }
 
