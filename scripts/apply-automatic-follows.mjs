@@ -30,14 +30,7 @@ ${marker}
 function explicitSharedSocialContext(actor, target) {
   if (!actor || !target) return false;
 
-  const pairText = [
-    connectionCanonSnippetAbout(null, actor, target, 5000),
-    actor && actor.connections,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
+  const pairText = String((actor && actor.connections) || "").toLowerCase();
   const targetName = String((target && target.name) || "").toLowerCase();
   if (!targetName || !pairText.includes(targetName)) return false;
 
@@ -48,24 +41,29 @@ function shouldAutoFollowEstablishedTie(w, actor, target) {
   if (!w || !actor || !target || actor.id === target.id) return false;
   if (isMediaAccount(w, actor.id) || isMediaAccount(w, target.id)) return false;
 
+  const rel = getRel(w, actor.id, target.id);
+  const explicitGroupTie = sameFollowTeamOrFaction(actor, target) || explicitSharedSocialContext(actor, target);
+
+  /* Explicit personal hostility beats a generic shared-team default. */
+  if (hasEnemyOrRivalBond(rel)) return false;
+
+  /* Known or explicitly written same-dojo/team/class/work ties follow immediately. */
+  if (explicitGroupTie) return true;
+
   const eligibility = aiFollowEligibility(w, actor.id, target.id);
   if (!eligibility || !eligibility.allowed) return false;
 
   /* Enemy/rival + hidden crush remains a special case, not an automatic follow. */
   if (eligibility.mode === "enemy-secret-crush") return false;
 
-  if (
+  return (
     eligibility.mode === "family" ||
     eligibility.mode === "bond" ||
     eligibility.mode === "team" ||
     eligibility.mode === "relationship-score" ||
     eligibility.mode === "secret-crush" ||
     eligibility.mode === "interaction-bond"
-  ) {
-    return true;
-  }
-
-  return sameFollowTeamOrFaction(actor, target) || explicitSharedSocialContext(actor, target);
+  );
 }
 
 function ensureFollowerSystem(w) {
