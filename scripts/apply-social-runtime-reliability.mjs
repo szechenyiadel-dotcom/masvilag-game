@@ -86,7 +86,11 @@ replace(`  const queued = simPeek(view2);
     )
   );
   const cooldownBypassQueued = manualQueued || playerPostQueued;`);
-replace('  if (!manualQueued && cooldownLeft() > 0) return;', '  if (!cooldownBypassQueued && cooldownLeft() > 0) return;');
+section('    const beat = async () => {', '    const safeBeat = () => beat().catch', s => {
+  const old = '  if (!manualQueued && cooldownLeft() > 0) return;';
+  if (!s.includes(old)) throw new Error('Scheduler cooldown anchor missing');
+  return s.replace(old, '  if (!cooldownBypassQueued && cooldownLeft() > 0) return;');
+});
 
 // Follow-back complaints get a grace period; every queued follow DM is revalidated.
 replace('    pending.payload.followSignalAt = now();', '    pending.payload.followSignalAt = now();\n    pending.notBefore = signal === "you-follow-player-no-followback" ? now() + 10 * 60000 : now();');
