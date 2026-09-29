@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 const path = new URL('../src/App.jsx', import.meta.url);
 let source = fs.readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
-const marker = 'MÁSVILÁG SOCIAL RUNTIME RELIABILITY v1';
+const marker = 'MÁSVILÁG SOCIAL RUNTIME RELIABILITY v2';
 if (source.includes(marker)) {
   console.log('Social runtime reliability already applied.');
   process.exit(0);
@@ -30,11 +30,31 @@ replace('  note.processedBy =\n    [...processed];', `  for (const id of castIds
 section('  if (action.type === "note-react") {', '  const alreadyProcessed =', s => s.replace('    !note ||', '    !note || now() - (Number(note.ts) || 0) >= NOTE_LIFE ||'));
 // A semantic parser needs only its supplied post facts, not the 33k world engine.
 section('async function analyzeSocialPostMeaning(', 'function socialPostMeaningCard(', s => s.replace('      engineFor(w),', '      "You are a precise social-post meaning parser. Use only the supplied visible facts. Preserve uncertainty and never invent identities or private knowledge.",').replace('  const author = charById', '  if (cooldownLeft() > 0) return fallbackSocialPostMeaning(w, post);\n\n  const author = charById'));
-// Honor the cost estimate instead of truncating a 30k-token request to 18 seconds.
+// Honor the cost estimate instead of truncating a large request to an unrealistically short interval.
 replace('Math.min(18000, raw)', 'Math.min(120000, raw)');
 replace(': Math.min(45000, Number(AI.lastCostGap) || 0);', ': Math.min(120000, Number(AI.lastCostGap) || 0);');
 replace('for (let guard = 0; guard < 40; guard++) {', 'while (cooldownLeft() > 0) {');
 replace('            busyWaits++;', '            busyWaits++;\n            if (priority < 50) throw err; // Scheduler owns background retries; release worker immediately.');
+
+// The server intentionally transports provider 429/529 as HTTP 200 + {busy:true}.
+// Treat that envelope exactly like the original upstream status instead of parsing it
+// as a successful model response and silently dropping the requested world action.
+replace(`  let data;
+  try { data = await res.json(); } catch (e) { data = null; }
+
+  if (!res.ok) {
+    const code = res.status;`, `  let data;
+  try { data = await res.json(); } catch (e) { data = null; }
+
+  const quietBusyEnvelope = Boolean(data && data.busy === true);
+  if (!res.ok || quietBusyEnvelope) {
+    const upstreamHeader = res.headers && res.headers.get
+      ? Number(res.headers.get("x-masvilag-ai-upstream-status"))
+      : 0;
+    const code = quietBusyEnvelope
+      ? (upstreamHeader === 529 ? 529 : 429)
+      : res.status;`);
+
 // All lanes already check their own due times. The feed clock cannot gate them all.
 replace(`        if (
           !canTick(
@@ -67,6 +87,22 @@ replace('      autoRunning.current = true;\n      autoRunningSince.current = now
 replace('      autoRunning.current = false;\n      autoRunningSince.current = 0;\n      if (alive) setAutoBusy(false);', '      } finally {\n        autoRunning.current = false;\n        autoRunningSince.current = 0;\n        if (alive) setAutoBusy(false);\n      }');
 // A delayed action must not block ready actions behind it.
 replace('  return sim.queue.length ? sim.queue[0] : null;', '  return sim.queue.find((action) => action && (!action.notBefore || action.notBefore <= now())) || null;');
+
+// Player-post reactions are user-triggered consequences even though they are not
+// source="manual". Never leave their guaranteed comment/event work behind a global
+// background cooldown. Once started, the AI queue itself waits/retries safely.
+replace(`  const queued = simPeek(view2);
+  const manualQueued = !!(queued && queued.source === "manual");`, `  const queued = simPeek(view2);
+  const manualQueued = !!(queued && queued.source === "manual");
+  const playerPostQueued = Boolean(
+    queued && (
+      queued.source === "coverage" ||
+      (queued.source === "event" && queued.payload && queued.payload.trigger === "player-post")
+    )
+  );
+  const cooldownBypassQueued = manualQueued || playerPostQueued;`);
+replace('  if (!manualQueued && cooldownLeft() > 0) return;', '  if (!cooldownBypassQueued && cooldownLeft() > 0) return;');
+
 // Follow-back complaints get a grace period; every queued follow DM is revalidated.
 replace('    pending.payload.followSignalAt = now();', '    pending.payload.followSignalAt = now();\n    pending.notBefore = signal === "you-follow-player-no-followback" ? now() + 10 * 60000 : now();');
 section('function maybeQueuePersonalityFollowDm(', 'function autonomousDmGroundingEvidence(', s => s.replace('  return simEnqueue(\n    w,\n    mkAction(', '  const action = mkAction(').replace(`      "event"
@@ -106,6 +142,6 @@ replace('  const pending = findUnanswered(view);', '  const dueNote = dueAutonom
 replace('        simMarkRunning(n, action);', '        simMarkRunning(n, action);\n        if (action && action.type === "note") ensureSimState(n).noteAttemptAt = now();');
 // Retry rate-limit/network failures without dropping the requested reaction.
 replace('        busyFailure = Boolean(e && e.busy);', '        busyFailure = Boolean(e && (e.busy || /időben|hálózat|fetch|network|timeout/i.test(e.message || "")));');
-replace('const BUILD_VERSION = "v99-performance-canon-cache-feed-tree";', 'const BUILD_VERSION = "v99-social-runtime-reliability-20260929";');
+replace('const BUILD_VERSION = "v99-performance-canon-cache-feed-tree";', 'const BUILD_VERSION = "v99-social-runtime-reliability-20260929b";');
 fs.writeFileSync(path, source);
-console.log('Applied social runtime reliability.');
+console.log('Applied social runtime reliability v2.');
