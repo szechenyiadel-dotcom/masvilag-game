@@ -8,6 +8,7 @@ const original = fs.readFileSync(appPath, "utf8");
 let next = original;
 
 const promptMarker = "ROLEPLAY PHYSICAL PRESUPPOSITION — HARD";
+const retryPromptMarker = "ROLEPLAY RETRY PHYSICAL PRESUPPOSITION — HARD";
 const helperMarker = "MÁSVILÁG ROLEPLAY PHYSICAL CONTINUITY GUARD v1";
 const statusMarker = "MÁSVILÁG VERIFIED SCENE STATUS v1";
 const switchMarker = "MÁSVILÁG SCENE JUMP STABILITY v1";
@@ -19,6 +20,15 @@ if (!next.includes(promptMarker)) {
   }
 
   const block = `\n${promptMarker}:\n- Folytonosságot feltételező szavakat (pl. „még mindig”, „továbbra is”, „nem engedi el”, „tovább fogja”, „keeps holding”, „doesn't let go”, „still grips”, „continues to hold”) CSAK akkor használj, ha egy KORÁBBI PONTOS turn ténylegesen létrehozta azt az állapotot.\n- Ha korábban senki nem fogta meg a másik csuklóját, kezét, karját, derekát stb., nem írhatod azt, hogy „nem engedi el” vagy „továbbra is fogja”. Ha karakterhű, új cselekvésként kezdeményezheti MOST — pl. „megfogja a csuklóját” — de ne találj ki hamis előzményt.\n- Minden action előtt végezz PRESUPPOZÍCIÓ-ELLENŐRZÉST: amit a mondat már fennálló tényként feltételez, szerepel-e valóban a pontos turn-naplóban? Ha nem, fogalmazd át új cselekvésre vagy válassz más reakciót.\n- A játékos direkt mondatára/kérdésére adott fizikai reakciónak is legyen szemantikai értelme. Ne helyettesítsd a választ egy random birtokló testtartással vagy olyan érintéssel, amelyhez nincs előzmény.\n\n`;
+  next = next.replace(anchor, (match) => match + block);
+}
+
+if (!next.includes(retryPromptMarker)) {
+  const anchor = /(SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:\r?\n)/;
+  if (!anchor.test(next)) {
+    throw new Error("Scene coherence patch aborted: roleplay retry anchor not found.");
+  }
+  const block = `${retryPromptMarker}:\n- A retry sem állíthatja, hogy egy fizikai állapot „még mindig” fennáll, ha azt korábbi pontos turn nem hozta létre.\n- „doesn't let go / keeps holding / still grips / continues to hold” és hasonló folytató állítás csak valódi előzménnyel használható.\n- Ha a karakter MOST akar megfogni, lefogni, közelebb húzni valakit, azt új cselekvésként írd le — ne hamis folytonosságként.\n- Direkt kérdés/challenge után ne generálj random testhelyzetet pusztán hangulatként; az action válaszoljon a legutóbbi beat jelentésére.\n\n`;
   next = next.replace(anchor, (match) => match + block);
 }
 
