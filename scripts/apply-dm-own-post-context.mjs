@@ -7,32 +7,61 @@ const appPath = path.join(root, "src", "App.jsx");
 const original = fs.readFileSync(appPath, "utf8");
 let next = original;
 
-const oldRecent = /  const recent = \(\r?\n    w\.posts \|\| \[\]\r?\n  \)\r?\n    \.slice\(0, 4\)/;
-const newRecent = `  const recent = (\n    w.posts || []\n  )\n    .filter((po) => po && po.authorId === w.meId)\n    .slice(0, 4)`;
+/*
+ * Patch ONLY genDM(). App.jsx has existed in both compact one-line and expanded
+ * multiline forms, so matching exact whitespace is intentionally avoided.
+ */
+const genDmStart = next.indexOf("async function genDM(");
+const genDmEnd = genDmStart >= 0 ? next.indexOf("async function genNote(", genDmStart + 1) : -1;
 
-const oldRule = `- Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz, tervhez vagy egyszerűen valamihez, amit most akarsz tőle.`;
-const newRule = `- Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz, tervhez vagy egyszerűen valamihez, amit most akarsz tőle. Más karakter posztját SOHA ne kezeld úgy, mintha ${'${w.player.name}'} írta vagy csinálta volna.`;
-
-const oldRetry = `Do not invent off-screen facts. Respect relationship=${'${Number(rel.score)||0}'}${'${rel.bond?`, bond=${rel.bond}`:""}'}.`;
-const newRetry = `Do not invent off-screen facts. Never address ${'${w.player.name}'} as if another character's post or action belonged to them. Respect relationship=${'${Number(rel.score)||0}'}${'${rel.bond?`, bond=${rel.bond}`:""}'}.`;
-
-if (oldRecent.test(next)) {
-  next = next.replace(oldRecent, newRecent);
-} else if (!next.includes(newRecent)) {
-  throw new Error("DM own-post patch aborted: recent-post source changed.");
+if (genDmStart < 0 || genDmEnd < 0 || genDmEnd <= genDmStart) {
+  throw new Error("DM own-post patch aborted: genDM function boundary not found.");
 }
 
-if (next.includes(oldRule)) {
-  next = next.replace(oldRule, newRule);
-} else if (!next.includes(newRule)) {
-  throw new Error("DM own-post patch aborted: DM rule source changed.");
+let genDm = next.slice(genDmStart, genDmEnd);
+
+/* Keep autonomous-DM post context limited to the player's own posts. */
+const ownedPostFilter = "po.authorId === w.meId";
+if (!genDm.includes(ownedPostFilter)) {
+  const recentPostsAnchor = /(\bconst\s+recent\s*=\s*\(\s*w\.posts\s*\|\|\s*\[\]\s*\)\s*)\.slice\(\s*0\s*,\s*4\s*\)/;
+
+  if (!recentPostsAnchor.test(genDm)) {
+    throw new Error("DM own-post patch aborted: genDM recent-post anchor not found.");
+  }
+
+  genDm = genDm.replace(
+    recentPostsAnchor,
+    "$1.filter((po) => po && po.authorId === w.meId).slice(0, 4)"
+  );
 }
 
-if (next.includes(oldRetry)) {
-  next = next.replace(oldRetry, newRetry);
-} else if (!next.includes(newRetry)) {
-  throw new Error("DM own-post patch aborted: retry rule source changed.");
+/*
+ * The filtered context is also stated explicitly to the model. This is an
+ * idempotent semantic marker instead of a fragile replacement of whole prompt
+ * sentences, which have changed between App.jsx versions.
+ */
+const promptMarker = "DM OWN-POST ATTRIBUTION — HARD RULE:";
+if (!genDm.includes(promptMarker)) {
+  const recentPromptAnchor = /\$\{recent\s*\|\|\s*["']még nincs poszt["']\}/;
+
+  if (!recentPromptAnchor.test(genDm)) {
+    throw new Error("DM own-post patch aborted: genDM recent-post prompt anchor not found.");
+  }
+
+  const guard = [
+    promptMarker,
+    "- A fenti posztlista kizárólag ${w.player.name} saját posztjait tartalmazza.",
+    "- Más karakter posztját, kommentjét vagy tettét SOHA ne kezeld úgy, mintha ${w.player.name} írta vagy csinálta volna.",
+    "- Never attribute another character's post, comment, or action to ${w.player.name}."
+  ].join("\n");
+
+  genDm = genDm.replace(
+    recentPromptAnchor,
+    (match) => match + "\n" + guard
+  );
 }
+
+next = next.slice(0, genDmStart) + genDm + next.slice(genDmEnd);
 
 if (next !== original) {
   fs.writeFileSync(appPath, next, "utf8");
