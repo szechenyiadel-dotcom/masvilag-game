@@ -13,6 +13,11 @@ const newFreshWindow = 'const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = 10 * 60 * 100
 const oldRelationshipCue = 'const snippet = connectionCanonSnippetAbout(w, actor, target, 1800);';
 const newRelationshipCue = 'const snippet = connectionCanonSnippetAbout(w, actor, target, 12000); // read the full targeted relationship entry, not only its opening';
 
+const oldRestartCopyHu = 'A karakterek, a saját profilod, a karakterlapok, profil-/albumképek és a jelenlegi kapcsolatok megmaradnak.';
+const newRestartCopyHu = 'A karakterek, a saját profilod, a karakterlapok és a profil-/albumképek megmaradnak; a korábban kiposztolt albumképek világ-újraindításkor visszakerülnek az albumokba.';
+const oldRestartCopyEn = 'Characters, your profile, character sheets, profile/album images, and the current relationship graph are kept.';
+const newRestartCopyEn = 'Characters, your profile, character sheets, and profile/album images are kept; previously posted album images are restored to their albums when the world is restarted.';
+
 const originalRelationshipFunction = 'function relationshipBehaviorCard(';
 const legacyRelationshipFunction = 'function legacyRelationshipBehaviorCard(';
 const deepRelationshipMarker = '/* MÁSVILÁG DEEP DIRECTED RELATIONSHIP CANON v2 */';
@@ -101,6 +106,18 @@ if (next.includes(oldRelationshipCue)) {
   throw new Error("Social policy patch aborted: relationship cue source changed; refusing an unsafe broad replacement.");
 }
 
+if (next.includes(oldRestartCopyHu)) {
+  next = next.replace(oldRestartCopyHu, newRestartCopyHu);
+} else if (!next.includes(newRestartCopyHu)) {
+  throw new Error("Social policy patch aborted: Hungarian world-restart copy changed; refusing an unsafe broad replacement.");
+}
+
+if (next.includes(oldRestartCopyEn)) {
+  next = next.replace(oldRestartCopyEn, newRestartCopyEn);
+} else if (!next.includes(newRestartCopyEn)) {
+  throw new Error("Social policy patch aborted: English world-restart copy changed; refusing an unsafe broad replacement.");
+}
+
 if (!next.includes(deepRelationshipMarker)) {
   if (next.includes(legacyRelationshipFunction)) {
     // A previous partial application renamed the legacy function already.
@@ -115,7 +132,7 @@ if (!next.includes(deepRelationshipMarker)) {
 
 if (next !== original) {
   fs.writeFileSync(appPath, next, "utf8");
-  console.log("Applied Másvilág social policy: 10-minute comments + deep bidirectional relationship canon.");
+  console.log("Applied Másvilág social policy: 10-minute comments + deep bidirectional relationship canon + accurate world-restart copy.");
 } else {
   console.log("Másvilág social policy already applied.");
 }
