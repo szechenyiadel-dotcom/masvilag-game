@@ -36,29 +36,9 @@ replace(': Math.min(45000, Number(AI.lastCostGap) || 0);', ': Math.min(120000, N
 replace('for (let guard = 0; guard < 40; guard++) {', 'while (cooldownLeft() > 0) {');
 replace('            busyWaits++;', '            busyWaits++;\n            if (priority < 50) throw err; // Scheduler owns background retries; release worker immediately.');
 
-// The server intentionally transports provider 429/529 as HTTP 200 + {busy:true}.
-// Scope this rewrite to callClaude only: other JSON fetches legitimately use the same
-// response-reading pattern and must not be touched.
-section('async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {', 'async function askJSON(system, prompt, options = {}) {', s => {
-  const old = `  let data;
-  try { data = await res.json(); } catch (e) { data = null; }
-
-  if (!res.ok) {
-    const code = res.status;`;
-  const next = `  let data;
-  try { data = await res.json(); } catch (e) { data = null; }
-
-  const quietBusyEnvelope = Boolean(data && data.busy === true);
-  if (!res.ok || quietBusyEnvelope) {
-    const upstreamHeader = res.headers && res.headers.get
-      ? Number(res.headers.get("x-masvilag-ai-upstream-status"))
-      : 0;
-    const code = quietBusyEnvelope
-      ? (upstreamHeader === 529 ? 529 : 429)
-      : res.status;`;
-  if (!s.includes(old)) throw new Error('callClaude busy-envelope anchor missing');
-  return s.replace(old, next);
-});
+// The dedicated apply-ai-proxy-busy-envelope patch runs earlier in social-policy
+// and already converts HTTP 200 + {busy:true} into a retryable busy error.
+// Keep this runtime patch focused on queue/cooldown starvation.
 
 // All lanes already check their own due times. The feed clock cannot gate them all.
 replace(`        if (
