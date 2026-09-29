@@ -7,7 +7,7 @@ const appPath = path.join(root, "src", "App.jsx");
 const original = fs.readFileSync(appPath, "utf8");
 let next = original;
 
-const oldRecent = `  const recent = (\n    w.posts || []\n  )\n    .slice(0, 4)`;
+const oldRecent = /  const recent = \(\r?\n    w\.posts \|\| \[\]\r?\n  \)\r?\n    \.slice\(0, 4\)/;
 const newRecent = `  const recent = (\n    w.posts || []\n  )\n    .filter((po) => po && po.authorId === w.meId)\n    .slice(0, 4)`;
 
 const oldRule = `- Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, jegyzethez, közös ügyhöz, kapcsolati változáshoz, pletykához, konfliktushoz, tervhez vagy egyszerűen valamihez, amit most akarsz tőle.`;
@@ -16,7 +16,7 @@ const newRule = `- Az ok kapcsolódhat friss eseményhez, poszthoz, kommenthez, 
 const oldRetry = `Do not invent off-screen facts. Respect relationship=${'${Number(rel.score)||0}'}${'${rel.bond?`, bond=${rel.bond}`:""}'}.`;
 const newRetry = `Do not invent off-screen facts. Never address ${'${w.player.name}'} as if another character's post or action belonged to them. Respect relationship=${'${Number(rel.score)||0}'}${'${rel.bond?`, bond=${rel.bond}`:""}'}.`;
 
-if (next.includes(oldRecent)) {
+if (oldRecent.test(next)) {
   next = next.replace(oldRecent, newRecent);
 } else if (!next.includes(newRecent)) {
   throw new Error("DM own-post patch aborted: recent-post source changed.");
