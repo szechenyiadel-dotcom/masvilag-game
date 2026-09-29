@@ -4,11 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "social-policy": "node scripts/apply-social-policy.mjs && node scripts/apply-deep-relationship-baseline.mjs && node scripts/apply-automatic-follows.mjs && node scripts/apply-reply-mention-fix.mjs && node scripts/apply-dm-own-post-context.mjs && node scripts/apply-mature-intimacy.mjs && node scripts/apply-feed-recovery-backoff.mjs && node scripts/apply-dialogue-causality.mjs && node scripts/apply-roleplay-naturalism.mjs && node scripts/apply-scene-coherence.mjs && node scripts/apply-grounded-social-rhythm.mjs && node scripts/apply-sims-world-continuity.mjs && node scripts/apply-close-friend-comment-tone.mjs && node scripts/apply-natural-initiative-cadence.mjs && node scripts/apply-personality-initiative-policy.mjs && node scripts/apply-dm-scene-initiative-policy.mjs && node scripts/apply-living-social-knowledge.mjs && node scripts/apply-player-mention-relationship-impact.mjs && node scripts/apply-comment-reply-reliability.mjs && node scripts/apply-ai-network-resilience.mjs && node scripts/apply-ai-429-circuit-breaker.mjs && node scripts/apply-ai-background-busy-silence.mjs",
+    "social-policy": "node scripts/apply-social-policy.mjs && node scripts/apply-deep-relationship-baseline.mjs && node scripts/apply-automatic-follows.mjs && node scripts/apply-reply-mention-fix.mjs && node scripts/apply-dm-own-post-context.mjs && node scripts/apply-mature-intimacy.mjs && node scripts/apply-feed-recovery-backoff.mjs && node scripts/apply-dialogue-causality.mjs && node scripts/apply-roleplay-naturalism.mjs && node scripts/apply-scene-coherence.mjs && node scripts/apply-grounded-social-rhythm.mjs && node scripts/apply-sims-world-continuity.mjs && node scripts/apply-close-friend-comment-tone.mjs && node scripts/apply-natural-initiative-cadence.mjs && node scripts/apply-personality-initiative-policy.mjs && node scripts/apply-dm-scene-initiative-policy.mjs && node scripts/apply-living-social-knowledge.mjs && node scripts/apply-player-mention-relationship-impact.mjs && node scripts/apply-comment-reply-reliability.mjs && node scripts/apply-ai-network-resilience.mjs && node scripts/apply-ai-429-circuit-breaker.mjs && node scripts/apply-ai-background-busy-silence.mjs && node scripts/apply-ai-proxy-busy-envelope.mjs",
     "dev": "npm run social-policy && vite",
     "build": "npm run social-policy && vite build",
     "preview": "vite preview",
-    "start": "node scripts/apply-ai-network-resilience.mjs && node server/proxy.js"
+    "start": "node scripts/apply-ai-network-resilience.mjs && node scripts/apply-ai-proxy-busy-envelope.mjs && node server/proxy.js"
   },
   "dependencies": {
     "body-parser": "^2.3.0",
