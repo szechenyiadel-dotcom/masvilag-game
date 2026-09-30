@@ -2,6 +2,8 @@ name: Phase2 Source Export
 on:
   push:
     branches: [phase2-direct-social-fix]
+  pull_request:
+    branches: [main]
 permissions:
   contents: read
 jobs:
