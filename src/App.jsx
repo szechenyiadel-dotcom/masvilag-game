@@ -1,5 +1,7 @@
 /* MÁSVILÁG RECOVERY v99.5 — SCALABLE LAZY MEDIA STORAGE — 20260816_0045 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+
+console.info("[patch-status] canonical-source=phase2-direct; runtime-patches=none; patch-target-misses=none");
 import {
   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
   X, Trash2, ChevronLeft, ChevronRight, Loader2, Heart, Lock, Zap, Pencil,
@@ -3016,6 +3018,324 @@ function localizedRelationshipDisplayText(value, lang = CURRENT_LANG) {
 }
 
 // Amit a felületen mutatunk: elsősorban az, hogy MOST mit érez.
+
+/* MÁSVILÁG CHANNEL RELATIONSHIP IMPACT v2 */
+const RELATIONSHIP_CHANNEL_SETTINGS = Object.freeze({
+  dm: 0.45,
+  public: 1,
+  roleplay: 1.8,
+  severeDm: 2.2,
+  maxDm: 2,
+  maxSevereDm: 4,
+  maxPublic: 4,
+  maxRoleplay: 8,
+  publicHostilityEscalation: 3,
+});
+
+let RELATIONSHIP_CHANNEL_CONTEXT = null;
+
+function withRelationshipChannel(channel, ctx, fn) {
+  const prev = RELATIONSHIP_CHANNEL_CONTEXT;
+  RELATIONSHIP_CHANNEL_CONTEXT = { channel, ...(ctx || {}) };
+  try {
+    return fn();
+  } finally {
+    RELATIONSHIP_CHANNEL_CONTEXT = prev;
+  }
+}
+
+function channelTone(text) {
+  const s = String(text || "").toLowerCase();
+  if (/gyűlöl|utállak|undorító|szánalmas|értéktelen|rohadj|fuck you|hate you|disgusting|pathetic|worthless|fenyeget|megöllek|kill you/i.test(s)) return -2;
+  if (/bunkó|idióta|hülye|hazug|cringe|loser|annoying|stupid|rude|liar|coward/i.test(s)) return -1;
+  if (/szeretlek|imádlak|büszke vagyok|gyönyörű|csodálatos|love you|adore|proud of|gorgeous|beautiful|❤️|❤|🥰|😍|💖|💕/iu.test(s)) return 2;
+  if (/köszi|köszön|gratul|bocsánat|sajnálom|cuki|szép|dögös|vicces|haha|lol|thanks|congrats|sorry|cute|pretty|hot|funny|😂|🤣/iu.test(s)) return 1;
+  return 0;
+}
+
+function severeDm(text) {
+  return /szeretlek|szerelmes|i love you|in love|szakít|break up|it's over|its over|gyűlöl|utállak|hate you|fenyeget|megöllek|kill you|titkom|titkot|secret|vallomás|confess/i.test(String(text || ""));
+}
+
+function channelDelta(channel, text, aiDelta = 0) {
+  let tone = channelTone(text);
+  const ai = Number(aiDelta) || 0;
+  if (!tone && ai) tone = ai > 0 ? (Math.abs(ai) >= 8 ? 2 : 1) : (Math.abs(ai) >= 8 ? -2 : -1);
+  if (!tone) return 0;
+  let weight = RELATIONSHIP_CHANNEL_SETTINGS[channel] || 1;
+  const severe = channel === "dm" && severeDm(text);
+  if (severe) weight *= RELATIONSHIP_CHANNEL_SETTINGS.severeDm;
+  let delta = Math.round(tone * 2 * weight);
+  if (!delta) delta = tone > 0 ? 1 : -1;
+  const cap =
+    channel === "roleplay" ? RELATIONSHIP_CHANNEL_SETTINGS.maxRoleplay :
+    channel === "public" ? RELATIONSHIP_CHANNEL_SETTINGS.maxPublic :
+    severe ? RELATIONSHIP_CHANNEL_SETTINGS.maxSevereDm :
+    RELATIONSHIP_CHANNEL_SETTINGS.maxDm;
+  return Math.max(-cap, Math.min(cap, delta));
+}
+
+function channelScaleChanges(changes, channel, ctx = {}) {
+  return (Array.isArray(changes) ? changes : [])
+    .map((ch) => {
+      if (!ch || typeof ch !== "object") return null;
+      const reason = String(ch.why || ctx.reason || "interaction");
+      const text = [ctx.text, ch.why, ch.mood].filter(Boolean).join(" ");
+      return {
+        ...ch,
+        delta: channelDelta(channel, text, ch.delta),
+        why: reason,
+      };
+    })
+    .filter(Boolean);
+}
+
+function legacyFullSpecApplyChannelRelationshipChanges(w, changes, channel, ctx = {}) {
+  const rows = channelScaleChanges(changes, channel, ctx);
+  if (!rows.length) return;
+  const before = rows.map((ch) => ({
+    a: findChar(w, ch.a),
+    b: findChar(w, ch.b),
+    score: Number((getRel(w, findChar(w, ch.a), findChar(w, ch.b)) || {}).score) || 0,
+  }));
+  legacyChannelApplyChanges(w, rows);
+  rows.forEach((ch, i) => {
+    const a = findChar(w, ch.a);
+    const b = findChar(w, ch.b);
+    if (!a || !b || a === b) return;
+    const oldScore = before[i] ? before[i].score : 0;
+    const newScore = Number((getRel(w, a, b) || {}).score) || 0;
+    const actual = newScore - oldScore;
+    if (actual) {
+      console.info(
+        "[relationship-change]",
+        "from=" + a,
+        "toward=" + b,
+        "delta=" + actual,
+        "channel=" + channel,
+        "reason=" + String(ch.why || ctx.reason || "interaction").slice(0, 160),
+        "score=" + oldScore + "->" + newScore
+      );
+    }
+  });
+}
+
+function applyChanges(n, changes) {
+  const ctx = RELATIONSHIP_CHANNEL_CONTEXT;
+  if (!ctx || !ctx.channel) return legacyChannelApplyChanges(n, changes);
+  return applyChannelRelationshipChanges(n, changes, ctx.channel, ctx);
+}
+
+function legacyFullSpecApplyComments(...args) {
+  return withRelationshipChannel("public", { reason: "timeline-comments" }, () => legacyChannelApplyComments(...args));
+}
+function applyReplies(...args) {
+  return withRelationshipChannel("public", { reason: "timeline-replies" }, () => legacyChannelApplyReplies(...args));
+}
+function applyWorldStep(...args) {
+  return withRelationshipChannel("public", { reason: "timeline-feed" }, () => legacyChannelApplyWorldStep(...args));
+}
+function legacyFullSpecApplySceneChangesWithStatus(...args) {
+  const [world, scene, changes] = args;
+  const result = withRelationshipChannel("roleplay", { reason: "roleplay" }, () => legacyChannelApplySceneChangesWithStatus(...args));
+  recordExplicitMutualRelationshipMilestones(world, changes, scene && scene.id ? "roleplay:" + scene.id : "roleplay");
+  return result;
+}
+
+function normalizedOfficialKind(rel) {
+  const r = rel || EMPTY_REL;
+  const score = Math.max(-100, Math.min(100, Number(r.score) || 0));
+  const bond = String(r.bond || r.type || "").toLowerCase();
+
+  if (r.fixed && bond) return { kind: "fixed", rank: 1000, raw: String(r.bond || r.type || "") };
+  if (/spouse|házastárs|férj|feleség|married|házas/.test(bond)) return { kind: "spouse", rank: 90 };
+  if (/engaged|jegyes|fiancé|fiance/.test(bond)) return { kind: "engaged", rank: 80 };
+  if (/dating|járnak|partner|boyfriend|girlfriend|párkapcsolat|couple/.test(bond)) return { kind: "dating", rank: 70 };
+  if (/exes|\bex\b|volt pár/.test(bond)) return { kind: "exes", rank: 65 };
+  if (/best friend|legjobb barát/.test(bond) || score >= 80) return { kind: "best-friend", rank: 60 };
+  if (/close friend|közeli barát/.test(bond) || score >= 55) return { kind: "friend", rank: 50 };
+  if (/\bfriend\b|barát/.test(bond) || score >= 35) return { kind: "friend", rank: 50 };
+  if (/fan|rajong/.test(bond)) return { kind: "fan", rank: 45, unilateral: true };
+  if (/enemy|ellenség/.test(bond) || score <= -70) return { kind: "enemy", rank: 45, unilateral: true };
+  if (/rival|rivális/.test(bond) || score <= -30) return { kind: "rival", rank: 40, unilateral: true };
+  if (score >= 15) return { kind: "acquaintance", rank: 30 };
+  if (score <= -6) return { kind: "tense", rank: 25 };
+  return { kind: "stranger", rank: 10 };
+}
+
+function officialKindLabel(kind, lang = CURRENT_LANG) {
+  const en = lang === "en";
+  const map = {
+    spouse: en ? "Married" : "Házasok",
+    engaged: en ? "Engaged" : "Jegyesek",
+    dating: en ? "Dating" : "Randizgatnak / pár",
+    exes: en ? "Exes" : "Exek",
+    "best-friend": en ? "Best friends" : "Legjobb barátok",
+    friend: en ? "Friends" : "Barátok",
+    acquaintance: en ? "Acquaintances" : "Ismerősök",
+    stranger: en ? "Strangers" : "Idegenek",
+    tense: en ? "Tense" : "Feszült",
+    rival: en ? "Rival" : "Rivális",
+    enemy: en ? "Enemy" : "Ellenség",
+    fan: en ? "Admires them" : "Rajong érte",
+  };
+  return map[kind] || String(kind || "");
+}
+
+function relationshipOfficialOverrideKey(a, b) {
+  return [String(a || ""), String(b || "")].sort().join("<>");
+}
+
+function directedRomanticOfficialKind(rel) {
+  const bond = String(rel && (rel.bond || rel.type) || "").toLowerCase();
+  if (/spouse|married|házas|házastárs|férj|feleség/.test(bond)) return "spouse";
+  if (/engaged|jegyes|fiancé|fiance/.test(bond)) return "engaged";
+  if (/dating|járnak|partner|boyfriend|girlfriend|párkapcsolat|couple/.test(bond)) return "dating";
+  if (/exes|\bex\b|volt pár/.test(bond)) return "exes";
+  return "";
+}
+
+function mutualRomanticFloor(aKind, bKind) {
+  if (aKind === "exes" || bKind === "exes") return aKind === "exes" && bKind === "exes" ? "exes" : "";
+  const rank = { dating: 1, engaged: 2, spouse: 3 };
+  const a = rank[aKind] || 0;
+  const b = rank[bKind] || 0;
+  const floor = Math.min(a, b);
+  return floor >= 3 ? "spouse" : floor >= 2 ? "engaged" : floor >= 1 ? "dating" : "";
+}
+
+function explicitMutualStatus(w, a, b) {
+  const key = relationshipOfficialOverrideKey(a, b);
+  const override = w && w.relationshipOfficialOverrides && w.relationshipOfficialOverrides[key];
+  if (override && ["dating", "engaged", "spouse", "exes", "best-friend"].includes(String(override.kind || ""))) {
+    return String(override.kind);
+  }
+
+  const ra = getRel(w, a, b) || EMPTY_REL;
+  const rb = getRel(w, b, a) || EMPTY_REL;
+  const romantic = mutualRomanticFloor(directedRomanticOfficialKind(ra), directedRomanticOfficialKind(rb));
+  if (romantic) return romantic;
+
+  const aBest = /best friend|legjobb barát/i.test(String(ra.bond || ra.type || "")) || Number(ra.score) >= 80;
+  const bBest = /best friend|legjobb barát/i.test(String(rb.bond || rb.type || "")) || Number(rb.score) >= 80;
+  if (aBest && bBest) return "best-friend";
+  return "";
+}
+
+function legacyFullSpecRecordExplicitMutualRelationshipMilestones(w, changes, source = "roleplay") {
+  if (!w || !Array.isArray(changes)) return;
+  const rows = changes.filter((row) => row && row.a && row.b && row.a !== row.b);
+  for (const row of rows) {
+    const reverse = rows.find((other) => other && other.a === row.b && other.b === row.a);
+    if (!reverse) continue;
+    const kind = mutualRomanticFloor(directedRomanticOfficialKind(row), directedRomanticOfficialKind(reverse));
+    const rowBest = /best friend|legjobb barát/i.test(String(row.bond || row.type || ""));
+    const reverseBest = /best friend|legjobb barát/i.test(String(reverse.bond || reverse.type || ""));
+    const resolvedKind = kind || (rowBest && reverseBest ? "best-friend" : "");
+    if (!resolvedKind) continue;
+    if (!w.relationshipOfficialOverrides || typeof w.relationshipOfficialOverrides !== "object" || Array.isArray(w.relationshipOfficialOverrides)) {
+      w.relationshipOfficialOverrides = {};
+    }
+    const key = relationshipOfficialOverrideKey(row.a, row.b);
+    w.relationshipOfficialOverrides[key] = { kind: resolvedKind, source, at: now() };
+    console.info("[relationship-milestone]", "pair=" + key, "status=" + resolvedKind, "source=" + source);
+  }
+}
+
+function officialRelationshipStatusForPair(w, ownerId, targetId, lang = CURRENT_LANG) {
+  const own = getRel(w, ownerId, targetId) || EMPTY_REL;
+  const reverse = getRel(w, targetId, ownerId) || EMPTY_REL;
+
+  if (own.fixed && (own.bond || own.type)) return localizedBond(own.bond || own.type, lang);
+
+  const explicit = explicitMutualStatus(w, ownerId, targetId);
+  if (explicit) return officialKindLabel(explicit, lang);
+
+  const a = normalizedOfficialKind(own);
+  const b = normalizedOfficialKind(reverse);
+
+  if (a.unilateral) return officialKindLabel(a.kind, lang);
+
+  const mutualKinds = ["spouse", "engaged", "dating", "exes", "best-friend"];
+  if (mutualKinds.includes(a.kind) || mutualKinds.includes(b.kind)) {
+    const sharedRank = Math.min(a.rank, b.rank);
+    const shared =
+      sharedRank >= 60 ? "best-friend" :
+      sharedRank >= 50 ? "friend" :
+      sharedRank >= 30 ? "acquaintance" :
+      "stranger";
+    return officialKindLabel(shared, lang);
+  }
+
+  const sharedRank = Math.min(a.rank, b.rank);
+  const shared =
+    sharedRank >= 60 ? "best-friend" :
+    sharedRank >= 50 ? "friend" :
+    sharedRank >= 30 ? "acquaintance" :
+    sharedRank <= 10 ? "stranger" :
+    "acquaintance";
+  return officialKindLabel(shared, lang);
+}
+
+function channelAwareEventDelta(w, event) {
+  const old = Number(commentRepairDeterministicDelta(w, event)) || 0;
+  if (!event) return old;
+  const t = String(event.type || "").toLowerCase();
+  const src = String(event.source || "").toLowerCase();
+  if (!["post", "comment", "reply"].includes(t) && src !== "public_social" && src !== "player") return old;
+  return channelDelta("public", event.text, old);
+}
+
+function channelRegisterPublicHostility(w, event) {
+  if (!w || !event || !isHuman(w, event.actorId) || channelTone(event.text) > -2) return;
+  const t = String(event.type || "").toLowerCase();
+  if (!["post", "comment", "reply"].includes(t)) return;
+  w.sim = w.sim && typeof w.sim === "object" ? w.sim : {};
+  w.sim.channelRelationship = w.sim.channelRelationship || {};
+  const s = w.sim.channelRelationship;
+  s.publicHostility = s.publicHostility || {};
+  const id = String(event.actorId);
+  s.publicHostility[id] = (Number(s.publicHostility[id]) || 0) + 1;
+  if (s.publicHostility[id] >= RELATIONSHIP_CHANNEL_SETTINGS.publicHostilityEscalation) {
+    event.tags = Array.isArray(event.tags) ? event.tags : [];
+    if (!event.tags.includes("repeated-public-hostility")) event.tags.push("repeated-public-hostility");
+    console.info("[public-hostility] escalation-eligible", "actor=" + id, "count=" + s.publicHostility[id]);
+  }
+}
+
+function channelPublicPostFollowerEffect(w, postId) {
+  const p = (w.posts || []).find((x) => x && x.id === postId);
+  if (!p || !isHuman(w, p.authorId)) return;
+  w.sim = w.sim && typeof w.sim === "object" ? w.sim : {};
+  w.sim.channelRelationship = w.sim.channelRelationship || {};
+  const state = w.sim.channelRelationship;
+  state.publicPostFollowerSeen = state.publicPostFollowerSeen || {};
+  if (state.publicPostFollowerSeen[postId]) return;
+  state.publicPostFollowerSeen[postId] = now();
+
+  const tone = channelTone(p.text);
+  const dramaWorld = /drama|chaos|botrány|pletyka|tabloid|celebrity|influencer|viral|hírnév/i.test(
+    JSON.stringify({ u: w.universe || {}, l: w.lore || "", s: w.summary || "" })
+  );
+  const bots = (w.chars || []).filter((c) => c && !isHuman(w, c.id) && !isMediaAccount(w, c.id));
+  let changed = null;
+
+  if (tone > 0) {
+    changed = bots.find((x) => !isFollowing(w, x.id, p.authorId) && (Number((getRel(w, x.id, p.authorId) || {}).score) || 0) >= 0);
+    if (changed) setFollowState(w, changed.id, p.authorId, true, "public-post-reaction");
+  } else if (tone <= -2 && !dramaWorld) {
+    changed = bots.find((x) => isFollowing(w, x.id, p.authorId) && (Number((getRel(w, x.id, p.authorId) || {}).score) || 0) < 15);
+    if (changed) setFollowState(w, changed.id, p.authorId, false, "public-post-reaction");
+  } else if (tone <= -2 && dramaWorld) {
+    changed = bots.find((x) =>
+      !isFollowing(w, x.id, p.authorId) &&
+      /dram|chaot|gossip|plety|provoc|impuls|curious|kíváncsi/i.test(String(x.personality || "") + " " + String(x.traits || ""))
+    );
+    if (changed) setFollowState(w, changed.id, p.authorId, true, "public-post-drama-reaction");
+  }
+  console.info("[public-post-followers]", "post=" + postId, "tone=" + tone, "changed=" + (changed ? 1 : 0), "dramaWorld=" + dramaWorld);
+}
+
 function relLabel(r) {
   const bond =
     (r && (r.bond || r.type)) || "";
@@ -3531,7 +3851,7 @@ function mergeKnowledgeItems(existing = [], incoming = [], key, limit = 24) {
   return out.slice(-limit);
 }
 
-function ensureCharMemory(w, observerId) {
+function legacyCommentRepairEnsureCharMemory(w, observerId) {
   if (!w.charMemory) w.charMemory = {};
   if (!w.charMemory[observerId]) w.charMemory[observerId] = defaultCharacterMemory();
   const mem = w.charMemory[observerId];
@@ -4210,7 +4530,7 @@ function canonicalRelationshipEvidence(w, actor, target) {
   return connectionCanonSnippetAbout(w, actor, target, 2200);
 }
 
-function inferCanonicalRelationshipBaseline(w, actor, target) {
+function legacyInferCanonicalRelationshipBaseline(w, actor, target) {
   if (!w || !actor || !target || actor.id === target.id) return null;
 
   const evidence = canonicalRelationshipEvidence(w, actor, target);
@@ -4673,7 +4993,7 @@ function notesForAI(w) {
 }
 
 /* ---------- értesítések ---------- */
-function pushNote(n, playerId, note) {
+function legacyGroundedPushNote(n, playerId, note) {
   if (!playerId || !n.players || !n.players[playerId]) return;
   if (!n.notify) n.notify = {};
   const list = (n.notify[playerId] || []).slice();
@@ -4694,7 +5014,7 @@ function renderNoteText(w, playerId, note) {
 }
 
 /* Egy új komment nyomán keletkező értesítések. */
-function noteComment(n, post, c) {
+function legacyFullSpecNoteComment(n, post, c) {
   if (!post || typeof post !== "object" || !c || typeof c !== "object") return;
   const link = { type: "post", id: post.id };
   const who = charById(n, c.authorId);
@@ -5198,7 +5518,7 @@ function findNaturalThreadReply(w, onlyPostId = "") {
   return null;
 }
 
-function enqueueNaturalThreadReply(w, postId, preferredCommentIds = []) {
+function legacyEventDrivenEnqueueNaturalThreadReply(w, postId, preferredCommentIds = []) {
   if (!w || !postId) return false;
   const post = (w.posts || []).find((p) => p && p.id === postId);
   if (!post) return false;
@@ -5302,7 +5622,7 @@ function visualCrushThreadConflictCandidate(w, postId, preferredCommentIds = [])
   };
 }
 
-function enqueueVisualCrushThreadFriction(w, postId, preferredCommentIds = []) {
+function legacyEventDrivenEnqueueVisualCrushThreadFriction(w, postId, preferredCommentIds = []) {
   const candidate = visualCrushThreadConflictCandidate(w, postId, preferredCommentIds);
   if (!candidate) return false;
 
@@ -6120,7 +6440,7 @@ function reconcileLiveRelationshipsWithStrongCanon(w, force = false) {
   });
 }
 
-function applyChanges(
+function legacyApplyChanges(
   n,
   changes
 ) {
@@ -7848,8 +8168,12 @@ const LIVE_WORLD_COMMENT_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(impor
 const LIVE_WORLD_DM_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_DM_MULTIPLIER) || 1.20));
 const LIVE_WORLD_GROUP_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_GROUP_MULTIPLIER) || 1.15));
 const LIVE_WORLD_ROLEPLAY_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_ROLEPLAY_MULTIPLIER) || 1.25));
-const LIVE_WORLD_NOTE_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_NOTE_MULTIPLIER) || 1.10));
-const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(12000, Math.min(60000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 15000));
+const LIVE_WORLD_NOTE_MULTIPLIER = Math.max(0.55, Math.min(2.75, Number(import.meta.env.VITE_WORLD_NOTE_MULTIPLIER) || 1.25));
+/* MÁSVILÁG CALMER SOCIAL CADENCE v2 */
+const LIVE_WORLD_CONTENT_INTERVAL_MS = Math.max(
+  20000,
+  Math.min(90000, Number(import.meta.env.VITE_WORLD_CONTENT_INTERVAL_MS) || 30000)
+);
 const LIVE_WORLD_POPUP_CADENCE_MULTIPLIER = Math.max(0.60, Math.min(2.80, Number(import.meta.env.VITE_WORLD_POPUP_CADENCE_MULTIPLIER) || 1.00));
 const LIVE_WORLD_CANCEL_SENSITIVITY = Math.max(0.60, Math.min(2.20, Number(import.meta.env.VITE_WORLD_CANCEL_SENSITIVITY) || 1.32));
 const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(import.meta.env.VITE_WORLD_MAX_POPUP_REROLLS) || 5)));
@@ -7864,20 +8188,22 @@ const LIVE_WORLD_MAX_POPUP_REROLLS = Math.max(1, Math.min(5, Math.round(Number(i
  * (comments, replies, DMs, groups, follows, gossip reactions) may continue between
  * posts, but a normal new AI feed post gets a hard ~10 minute floor. */
 const LIVE_WORLD_POST_TARGET_MS = Math.max(
-  2 * 60 * 1000,
+  75 * 1000,
   Math.min(
-    12 * 60 * 1000,
-    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 3 * 60 * 1000
+    6 * 60 * 1000,
+    Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 100 * 1000
   )
 );
-const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = Math.max(20 * 60000, Math.min(4 * 3600e3, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_WINDOW_MS) || 90 * 60000));
+const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = 10 * 60 * 1000; // exact 10-minute live comment window
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
-const LIVE_WORLD_DM_TARGET_MS = Math.max(60 * 1000, Math.min(10 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 2.5 * 60 * 1000));
-const LIVE_WORLD_EVENT_TARGET_MS = Math.max(2.5 * 60 * 1000, Math.min(15 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 5 * 60 * 1000));
+/* MÁSVILÁG NATURAL AUTONOMOUS INITIATIVE CADENCE v1 */
+/* MÁSVILÁG LIVING SOCIAL REALISM CADENCE v1 */
+const LIVE_WORLD_DM_TARGET_MS = Math.max(6 * 60 * 1000, Math.min(25 * 60 * 1000, Number(import.meta.env.VITE_WORLD_DM_INTERVAL_MS) || 8 * 60 * 1000));
+const LIVE_WORLD_EVENT_TARGET_MS = Math.max(8 * 60 * 1000, Math.min(35 * 60 * 1000, Number(import.meta.env.VITE_WORLD_EVENT_INTERVAL_MS) || 12 * 60 * 1000));
 const LIVE_WORLD_POPUP_RETRY_MS = Math.max(15 * 1000, Math.min(90 * 1000, Number(import.meta.env.VITE_WORLD_POPUP_RETRY_MS) || 25 * 1000));
-const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(30 * 1000, Math.min(5 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 90 * 1000));
+const LIVE_WORLD_NOTE_REACTION_DEADLINE_MS = Math.max(90 * 1000, Math.min(10 * 60 * 1000, Number(import.meta.env.VITE_WORLD_NOTE_REACTION_DEADLINE_MS) || 150 * 1000));
 const AI_BACKGROUND_GAP_MS = Math.max(800, Math.min(12000, Number(import.meta.env.VITE_AI_BACKGROUND_GAP_MS) || 1600));
 const AI_INITIATIVE_GAP_MS = Math.max(350, Math.min(8000, Number(import.meta.env.VITE_AI_INITIATIVE_GAP_MS) || 700));
 
@@ -8013,7 +8339,8 @@ function preserveEdges(value, maxChars, label = "context") {
   return text.slice(0, head) + marker + text.slice(text.length - tail);
 }
 
-function budgetAiRequest(system, prompt) {
+/* MÁSVILÁG AI TOKEN SAFETY v1 */
+function legacyFullSpecBudgetAiRequest(system, prompt) {
   const compactSystem = preserveEdges(system, AI_MAX_SYSTEM_CHARS, "system");
   const compactPrompt = preserveEdges(prompt, AI_MAX_PROMPT_CHARS, "prompt");
   return {
@@ -8194,10 +8521,26 @@ async function requestAiProxy(payload, signal) {
 }
 
 async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
+  /* MÁSVILÁG GROUP CHAT PRE-BUDGET CAP v1 */
+  const preBudgetSource = typeof inferAiRequestSource === "function"
+    ? inferAiRequestSource(system, prompt, requestMeta)
+    : "";
+  if (preBudgetSource === "group-chat" && prompt.length > 28000) {
+    const beforeGroupPromptChars = prompt.length;
+    prompt = preserveEdges(prompt, 28000, "group-chat prompt");
+    console.info("[ai-context-client] group-chat", "promptChars=" + beforeGroupPromptChars + "->" + prompt.length, "stage=pre-budget");
+  }
   const budgeted = budgetAiRequest(system, prompt);
   system = budgeted.system;
   prompt = budgeted.prompt;
 
+  const backgroundPromptCap = Math.min(
+    AI_MAX_PROMPT_CHARS,
+    Math.max(18000, Number(import.meta.env.VITE_AI_BACKGROUND_MAX_PROMPT_CHARS) || 28000)
+  );
+  if (!requestMeta.interactive && prompt.length > backgroundPromptCap) {
+    prompt = preserveEdges(prompt, backgroundPromptCap, "background prompt");
+  }
   if (budgeted.wasCompacted) {
     console.warn(
       "AI request compacted before provider call:",
@@ -8231,6 +8574,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   model: DEFAULT_AI_MODEL,
   max_tokens: maxTokens,
   temperature: 0.9,
+  source: String(requestMeta && requestMeta.source || "client-ai"),
   system,
   messages: [{ role: "user", content: prompt }],
 }, ctrl.signal);
@@ -8412,6 +8756,7 @@ async function askJSON(system, prompt, options = {}) {
             {
               interactive: priority >= 50,
               timeoutMs: Number(options.timeoutMs) || undefined,
+              source: String(options && options.source || "askWorldJSON"),
             }
           );
           const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
@@ -8979,7 +9324,7 @@ function characterIntensityDirective(c) {
 }
 
 /* A hang közvetlenül a feladat elé — így nem sikkad el a sok szöveg végén. */
-function voiceCard(c) {
+function legacySimsSocialVoiceCard(c) {
   const bits = [];
 
   const selfCanon = compactSelfCanonForPrompt(c, 7800);
@@ -9289,7 +9634,7 @@ function isRepetitiveComment(w, id, text) {
   return false;
 }
 
-function cleanGeneratedComment(w, id, text, maxLen = 240) {
+function legacyVoiceStyleCleanGeneratedComment(w, id, text, maxLen = 240) {
   const t = String(text || "").replace(/\s+/g, " ").trim();
   if (!t) return "";
 
@@ -10257,7 +10602,81 @@ function connectionsCommentToneMismatch(
   return false;
 }
 
-function socialCommentContradictsRelationship(
+/* MÁSVILÁG CLOSE FRIEND PUBLIC TONE GUARD v1 */
+function closeFriendPublicPutdownMismatch(w, actorId, targetId, text, contextText = "") {
+  if (!w || !actorId || !targetId || actorId === targetId) return false;
+
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target) return false;
+
+  const rel = getRel(w, actorId, targetId) || {};
+  const reverse = getRel(w, targetId, actorId) || {};
+  const cue = connectionRelationshipCue(w, actor, target) || {};
+  const reverseCue = connectionRelationshipCue(w, target, actor) || {};
+  const tier = relationshipFilterTier(effectiveRelationshipForBehavior(w, actorId, targetId));
+  const reverseTier = relationshipFilterTier(effectiveRelationshipForBehavior(w, targetId, actorId));
+
+  const relText = [rel.bond, rel.type, rel.mood, rel.hidden, rel.why, cue.snippet]
+    .filter(Boolean).join(" ").toLowerCase();
+  const reverseText = [reverse.bond, reverse.type, reverse.mood, reverse.hidden, reverse.why, reverseCue.snippet]
+    .filter(Boolean).join(" ").toLowerCase();
+
+  const actorClose = Boolean(
+    cue.close ||
+    tier === "close" ||
+    /best\s*friend|close\s*friend|ride\s*or\s*die|legjobb\s+bar[aá]t|k[oö]zeli\s+bar[aá]t|chosen\s+(?:sister|brother|family)/i.test(relText)
+  );
+  const reversePositive = Boolean(
+    reverseCue.close ||
+    reverseTier === "close" ||
+    reverseTier === "good" ||
+    relationshipDeclaresFriendship(reverse) ||
+    /best\s*friend|close\s*friend|ride\s*or\s*die|legjobb\s+bar[aá]t|k[oö]zeli\s+bar[aá]t/i.test(reverseText)
+  );
+
+  /* This hard guard is intentionally narrow: it protects close/best-friend
+   * dynamics, while ordinary friends/rivals can still have sharper banter. */
+  if (!actorClose || !reversePositive) return false;
+
+  const liveConflictText = [rel.mood, rel.why, reverse.mood, reverse.why]
+    .filter(Boolean).join(" ").toLowerCase();
+  const explicitLiveConflict =
+    Number(rel.score) <= -10 ||
+    /\b(?:angry|mad|furious|hurt|betray|betrayed|resent|hostile|fight|fighting|argument|arguing|conflict|jealous|jealousy|upset|harag|d[uü]h|s[eé]rtett|el[aá]rul|veszeked|vita|konflikt|f[eé]lt[eé]ken)\b/i.test(liveConflictText);
+
+  if (explicitLiveConflict) return false;
+
+  const raw = String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const context = String(contextText || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!raw) return false;
+
+  /* Public best-friend teasing may be dry or sarcastic. What is NOT normal
+   * without a real conflict is status/self-worth humiliation: implying the
+   * friend is pathetic, desperate for validation, unattractive, embarrassing,
+   * or publicly rejecting them on an appearance/validation post. */
+  const directHumiliation = /\b(?:desperate\s+for\s+(?:attention|validation)|begging\s+for\s+(?:attention|validation)|fishing\s+for\s+(?:compliments|validation|attention)|scrolling\s+for\s+validation|validation[- ]seeking|attention[- ]seeking|pathetic|embarrassing|delusional|needy|insecure)\b/i.test(raw) ||
+    /\byou(?:'re|\s+are)\s+(?:desperate|pathetic|embarrassing|cringe|delusional|needy|insecure)\b/i.test(raw);
+
+  const appearanceOrValidationPost = /\b(?:hot|hottest|pretty|prettiest|beautiful|gorgeous|sexy|attractive|attractiveness|who\s+is\s+the|who'?s\s+the|validation|rate\s+me|rating)\b/i.test(context);
+  const publicRejection = appearanceOrValidationPost && (
+    /\b(?:surely|definitely|obviously|clearly)\s+not\s+you\b/i.test(raw) ||
+    /(?:^|[.!?\s])not\s+you(?:$|[.!?\s])/i.test(raw) ||
+    /\b(?:you\s+wish|keep\s+scrolling|try\s+again|not\s+even\s+close|who\s+told\s+you|couldn['’]?t\s+be\s+you)\b/i.test(raw) ||
+    (/\bvalidation\b/i.test(raw) && /\b(?:you|your|u|ur)\b/i.test(raw))
+  );
+
+  return directHumiliation || publicRejection;
+}
+
+function socialCommentContradictsRelationship(w, actorId, targetId, text, contextText = "") {
+  if (closeFriendPublicPutdownMismatch(w, actorId, targetId, text, contextText)) {
+    return true;
+  }
+  return legacySocialCommentContradictsRelationship(w, actorId, targetId, text, contextText);
+}
+
+function legacySocialCommentContradictsRelationship(
   w,
   actorId,
   targetId,
@@ -10784,6 +11203,32 @@ function isRepetitiveUtterance(w, id, text) {
   return false;
 }
 
+/* MÁSVILÁG ROLEPLAY FUNCTION REPEAT GUARD v1 */
+function roleplayFunctionTags(value) {
+  const low = normUtterance(value);
+  const tags = [];
+  if (/\b(?:wait|waiting|waited|made me wait|kept me waiting|long enough|took you long enough)\b/i.test(low)) tags.push("wait-grievance");
+  if (/\b(?:try harder|is that all|prove it|show me|make me|do better)\b/i.test(low)) tags.push("challenge");
+  if (/\byou think\b.*\b(?:gonna|going to|will|would)\b/i.test(low)) tags.push("rhetorical-challenge");
+  if (/\b(?:distract|playing innocent|play innocent|testing me|test me)\b/i.test(low)) tags.push("invented-motive-taunt");
+  return [...new Set(tags)];
+}
+
+function isRepetitiveRoleplayFunction(w, id, text) {
+  const tags = roleplayFunctionTags(text);
+  if (!tags.length) return false;
+  const recent = recentUtterancesFor(w, id, 10);
+  for (const oldText of recent) {
+    const oldTags = roleplayFunctionTags(oldText);
+    if (!oldTags.length) continue;
+    const overlap = tags.filter((tag) => oldTags.includes(tag));
+    if (overlap.length >= 2) return true;
+    if (overlap.includes("wait-grievance") && (tags.includes("challenge") || oldTags.includes("challenge"))) return true;
+    if (overlap.includes("challenge") && (tags.includes("rhetorical-challenge") || oldTags.includes("rhetorical-challenge"))) return true;
+  }
+  return false;
+}
+
 const SOCIAL_UI_PHONE_NAG_RE =
   /\b(?:quit|stop)\s+(?:staring|looking)\s+at\s+(?:your\s+)?(?:phone|screen)\b|\b(?:look|get)\s+up\s+from\s+(?:your\s+)?phone\b|\bput\s+(?:your\s+)?phone\s+down\b|\b(?:get|stay)\s+off\s+(?:your\s+)?(?:phone|screen|the\s+app|social\s+media|instagram)\b|\b(?:quit|stop)\s+scrolling\b|\blog\s+off\s+(?:the\s+app|social\s+media|instagram)?\b|\btouch\s+grass\b|\b(?:tedd|rakd)\s+le\s+a\s+telefon(?:od|odat)?\b|\bne\s+(?:a\s+)?telefon(?:od|odat)?\s+b[aá]muld\b|\bsz[aá]llj\s+le\s+(?:a\s+)?telefon(?:od|ról|rol)?\b|\bhagyd\s+abba\s+a\s+g[oö]rget[eé]st\b|\bne\s+g[oö]rgess\b/i;
 
@@ -10820,6 +11265,43 @@ function stripRoleplayEmoji(value) {
     .trim();
 }
 
+/* MÁSVILÁG ROLEPLAY PHYSICAL CONTINUITY GUARD v1 */
+function roleplayHasUnsupportedPhysicalContinuation(actorId, text, priorTurns) {
+  const raw = String(text || "").trim();
+  if (!raw || !actorId) return false;
+
+  const continuationClaim = /\b(?:does(?:n't| not)|won't)\s+let\s+go\b|\b(?:keeps?|kept|continues?|continued|still|remains?|remained)\b.{0,42}\b(?:hold|holding|held|grip|gripping|gripped|pin|pinning|pinned|press|pressing|pressed|trap|trapping|trapped|clasp|clasping|clasped)\b/i;
+  if (!continuationClaim.test(raw)) return false;
+
+  const actorHistory = (Array.isArray(priorTurns) ? priorTurns : [])
+    .filter((turn) => turn && turn.authorId === actorId && turn.text)
+    .slice(-10)
+    .map((turn) => String(turn.text || ""))
+    .join(" ");
+
+  if (!actorHistory.trim()) return true;
+
+  const contactVerb = /\b(?:grab|grabs|grabbed|grabbing|grip|grips|gripped|gripping|hold|holds|held|holding|seize|seizes|seized|seizing|pin|pins|pinned|pinning|clasp|clasps|clasped|clasping|catch|catches|caught|wrap|wraps|wrapped|wrapping|megfog|fogja|fogta|megragad|markol|szorít|szorítja|lefog|leszorít)\b/i;
+  if (!contactVerb.test(actorHistory)) return true;
+
+  const bodyParts = [
+    ["wrist", /\bwrists?\b|csukl/i],
+    ["hand", /\bhands?\b|kéz|kezét|kezeit/i],
+    ["arm", /\barms?\b|karját|karjait|karjától/i],
+    ["waist", /\bwaist\b|derek/i],
+    ["neck", /\bneck\b|nyak/i],
+    ["shoulder", /\bshoulders?\b|váll/i],
+    ["hip", /\bhips?\b|csíp/i],
+    ["throat", /\bthroat\b|torok|tork/i],
+  ];
+
+  for (const [, re] of bodyParts) {
+    if (re.test(raw) && !re.test(actorHistory)) return true;
+  }
+
+  return false;
+}
+
 function sanitizeRoleplayAiOutput(value) {
   if (typeof value === "string") return stripRoleplayEmoji(value);
   if (Array.isArray(value)) return value.map((item) => sanitizeRoleplayAiOutput(item));
@@ -10831,7 +11313,7 @@ function sanitizeRoleplayAiOutput(value) {
   return out;
 }
 
-function cleanGeneratedUtterance(
+function legacyVoiceStyleCleanGeneratedUtterance(
   w,
   id,
   text,
@@ -10852,6 +11334,7 @@ function cleanGeneratedUtterance(
 
   if (!t) return "";
   if (isRepetitiveUtterance(w, id, t)) return "";
+  if (allowPhysicalPhoneMeta && isRepetitiveRoleplayFunction(w, id, t)) return "";
   return t.length > maxLen ? t.slice(0, maxLen) : t;
 }
 
@@ -12531,7 +13014,7 @@ function connectionCanonSnippetAbout(w, actor, target, maxChars = 1800) {
 }
 
 function connectionRelationshipCue(w, actor, target) {
-  const snippet = connectionCanonSnippetAbout(w, actor, target, 1800);
+  const snippet = connectionCanonSnippetAbout(w, actor, target, 12000); // read the full targeted relationship entry, not only its opening
   const low = snippet.toLowerCase();
 
   return {
@@ -14398,7 +14881,7 @@ function relationshipFilterTier(rel) {
   return "neutral";
 }
 
-function relationshipBehaviorCard(
+function legacyRelationshipBehaviorCard(
   w,
   actorId,
   targetId
@@ -15546,7 +16029,7 @@ function recentStructuredWorldLines(w, limit = 6) {
   return rows;
 }
 
-function worldContext(w, ids, deep, observerId, contextOptions = {}) {
+function legacySimsSocialWorldContext(w, ids, deep, observerId, contextOptions = {}) {
   const focus = ids && ids.length ? ids : null;
   let cast = (w.chars || []).filter((c) => !focus || focus.indexOf(c.id) >= 0);
   if (!focus) cast = cast.slice(0, detailInfo().cast);
@@ -15592,7 +16075,7 @@ function worldContext(w, ids, deep, observerId, contextOptions = {}) {
 
   const notes = notesForAI(w);
   const knownTimeline = observerId
-    ? mergeKnowledgeItems([], (selfMem.witnessedEvents || []).concat(selfMem.knownFacts || []), "timeline", 10)
+    ? mergeKnowledgeItems([], ((selfMem && selfMem.witnessedEvents) || []).concat((selfMem && selfMem.knownFacts) || []), "timeline", 10)
         .slice(-4).map(memoryToLine)
     : [];
   const outLang = worldLanguage(w, observerId || w.meId);
@@ -15693,6 +16176,29 @@ const ENGINE = `Te egy élő, AI-vezérelt közösségi média világ motorja va
 Minden szereplőt a saját adatlapja alapján játszol el. Az adatlap nem háttérinfó: az a szereplő hangja.
 
 FŐ SZABÁLY: minden válasz legyen karakterhű, természetes, emberi és az adott helyzethez illő. A karakter személyisége, története, aktuális érzései és kapcsolatai határozzák meg, MIT mond — de a felület határozza meg, HOGYAN és milyen hosszan mondja.
+
+OK-OKOZATI FOLYTONOSSÁG — HARD RULE:
+- MINDIG a legfrissebb, időrendben utolsó megfigyelhető megszólalásból/cselekvésből indulj tovább. A régebbi állapotot ne kezeld úgy, mintha még mindig aktuális lenne.
+- Mielőtt választ írsz, fejben rögzítsd: mi történt LEGUTOLJÁRA, ki tette/mondta, kinek szólt, és ez mit változtatott meg a helyzeten. A válasznak erre kell épülnie.
+- Egy már lezajlott beatet ne játsz újra és ne mondd el újra közeli parafrázissal. Ha a csók már megtörtént, ne viselkedj úgy a következő turnben, mintha még mindig a csók előtti hezitálás lenne a jelenlegi probléma.
+- A következő mondatnak vagy cselekvésnek ÚJ reakciót, következményt, információt, döntést vagy előrelépést kell adnia. Ugyanazt a szemrehányást, poént, fenyegetést, flörtformulát vagy szándékot ne ismételd csak más szavakkal.
+- A fizikai állapot tartós: levett ruha levett marad, megfogott tárgy helye számít, testhelyzet/érintés/sérülés/ajtó/helyszín csak új cselekvéssel változhat meg.
+- A párbeszéd ténylegesen válaszoljon arra, ami elhangzott. Kérdésre válaszolj; puszta cselekvést ne kezelj kimondott mondatként; ne reagálj olyan kijelentésre, amit senki nem tett.
+- A kronológia erősebb, mint egy karakter tipikus catchphrase-e vagy visszatérő attitűdje. A karakter maradjon önmaga, de mindig a MOSTANI helyzetre reagáljon.
+- Ha ugyanaz a generált sor változtatás nélkül ugyanúgy működött volna egy turnnel korábban is, ellenőrizd újra: valószínűleg figyelmen kívül hagytad a legfrissebb történést.
+- Ne találj ki a játékosnak választ, mozdulatot, érzést vagy beleegyezést.
+
+TERMÉSZETES PÁRBESZÉDFUNKCIÓ — HARD RULE:
+- Egy karaktert ne redukálj egyetlen ismételt személyiségjegyre. A domináns, szarkasztikus, birtokló, hideg, flörtölős, arrogáns, félénk stb. csak szűrő a viselkedésen, nem utasítás ugyanarra a reakcióra minden körben.
+- Minden válasznak legyen a LEGFRISSEBB beathez illő kommunikációs FUNKCIÓJA: válasz, reagálás, cselekvés, döntés, felfedés, elhárítás, poén, eszkaláció, enyhülés, visszavonulás vagy irányváltás. Ne írj sort csak azért, mert önmagában karakterhűen hangzik.
+- Direkt kérdésre normál esetben tényleges válasz vagy tudatos, karakterindokolt kitérés jöjjön ELŐBB; ne hagyd figyelmen kívül a jelentését csak egy újabb beszólás kedvéért.
+- Egy már elhangzott szemrehányás, challenge, poén, vád, fenyegetés vagy flört-hook LEJÁRT, hacsak új esemény nem nyitja meg újra. Ne körözz ugyanazon sérelem körül egymást követő turnökben.
+- Puszta cselekvés mögé ne találj ki automatikusan motivációt. Ha valaki leveszi a pólóját, abból nem következik automatikusan, hogy „ártatlant játszik”, „el akar terelni”, „tesztel”, stb.
+- A válasz FORMÁJA is igazodjon a pillanathoz. Sokszor természetesebb egy rövid fizikai reakció, csend, pillantás, egyetlen mondat vagy konkrét következő lépés, mint még egy frappáns comeback.
+- Kölcsönös intim helyzetben ne legyen minden kör automatikusan versengő, gúnyos vagy power-play párbeszéd csak azért, mert a karakter domináns/teasing. Ha nincs élő konfliktus, a kölcsönösség változtassa meg a hangot.
+- Kerüld az egymásra halmozott retorikai kérdéseket és visszatérő challenge-formulákat (pl. „you think X?”, „try harder”, „is that all?”, „took you long enough”) új trigger nélkül.
+- A természetes párbeszéd nemcsak szavakban, hanem FUNKCIÓBAN is változatos. Ha az előző beat taunt volt, a következő általában csináljon valami mást, hacsak a másik fél explicit tovább nem viszi ugyanazt a verbális játékot.
+
 
 18+ JELENTÉSÉRTÉS — HARD RULE:
 - Minden felületen értsd a felnőtt szlenget, szexuális célzást, thirst joke-ot, double entendre-t, kétértelmű eufemizmust és provokatív szóviccet a természetes társas jelentése szerint.
@@ -15845,6 +16351,13 @@ VONZALOM, FESZÜLTSÉG, ÉRZÉKISÉG
 - Kettőjük között a kimondatlan is számít: egy elhaló mondat, egy megszakadt pillanat, egy tekintet gyakran erősebb, mint a kimondott szó.
 - Kiskorú szereplő soha, semmilyen formában nem kerülhet romantikus vagy szexuális helyzetbe — ez alól nincs kivétel.
 
+MATURE 18+ — FELNŐTT INTIMITÁS FOLYTATÁSA
+- Kizárólag ismert felnőtt szereplők között, valós kölcsönös beleegyezés és a karakterek/kapcsolat által indokolt helyzetben alkalmazd.
+- Az AI-karakter nem csak reagálhat: karakterhűen kezdeményezhet romantikus vagy szexuális közeledést is. Ha a célpont a JÁTÉKOS, csak az AI saját kezdeményező mozdulatát vagy mondatát írd meg, majd állj meg a játékos válasza előtt; a játékos beleegyezését, tettét vagy érzését soha ne találd ki.
+- Kialakult kölcsönös felnőtt intimitásnál a jelenet nem köteles csóknál vagy célzásnál megállni: eljuthat beleegyezésen alapuló szexuális együttlétig is.
+- A jelenet maradhat képernyőn érzéki, szuggesztív, eufemisztikus és érzelmileg konkrét módon; a közelség, légzés, ruházat, mozgás, párbeszéd, ritmus, idő múlása és utóhatás viheti tovább. Pornografikus anatómiai részleteket vagy explicit anatómiai aktusleírást ne adj.
+- A fade-to-black lehet eszköz, de nem kötelező automatikus lezárás. A jelenet természetes ritmusa és következményei folytatódhatnak.
+- Kiskorú vagy bizonytalan életkorú szereplő romantikus/szexuális helyzetbe továbbra sem kerülhet.
 NYERSESÉG, AGRESSZIÓ, KÁROMKODÁS
 - Ha a szereplő személyisége, indulata vagy a helyzet ezt hozza, nyugodtan legyen durva, nyers, agresszív vagy trágár — a káromkodást és a durva beszédet ne szépítsd el és ne kerüld meg, ha az adatlapja vagy a hangmintája ezt sugallja. A hamis simaság rosszabb hiba, mint egy kemény szó.
 - Egy dühös, veszélyes vagy kegyetlen szereplő tényleg legyen az: fenyegethet, gúnyolódhat, megalázhat, ha ez illik hozzá. Ne finomítsd le "biztonságosra".
@@ -15967,6 +16480,29 @@ You are the engine of a living, AI-driven social-media world for a roleplay game
 You play every character strictly from their own sheet. The sheet is not background info — it IS the character's voice.
 
 MAIN RULE: every response must be true to character, natural, human and appropriate to the current situation. Personality, history, current emotions and relationships determine WHAT a character says — but the communication format determines HOW they say it and how long the response should be.
+
+CAUSAL CONTINUITY — HARD RULE:
+- ALWAYS continue from the newest observable line/action in chronological order. Never answer an older state as if the newest turn had not happened.
+- Before writing, resolve four facts: what happened LAST, who did/said it, who it targeted, and what it changed in the situation. The response must grow from that.
+- Never replay a completed beat or restate it as a near-paraphrase. If a kiss already happened, the next turn must not behave as if the scene is still waiting for that kiss.
+- Each new line/action must add a new reaction, consequence, fact, decision, or progression. Do not repeat the same complaint, joke, threat, flirt formula, or intention in different words.
+- Physical state persists: removed clothing stays removed, held objects/positions/touch/injuries/doors/location remain true until a new action changes them.
+- Dialogue must answer what was actually said. Answer real questions; do not treat an action-only input as spoken dialogue; never respond to a line nobody said.
+- Chronology outranks a character's favorite catchphrase or recurring attitude. Stay in character while reacting to the CURRENT beat.
+- If a generated line would work unchanged one turn earlier, re-check it: it probably ignored the newest development.
+- Never invent the player's next action, dialogue, feeling, or consent.
+
+NATURAL DIALOGUE FUNCTION — HARD RULE:
+- Do not reduce a character to one repeated trait. Dominant, sarcastic, possessive, cold, flirty, arrogant, shy, etc. are filters on behavior, not a command to use the same attitude in every line.
+- Every reply needs a conversational PURPOSE that fits the newest beat: answer, acknowledge, act, decide, reveal, deflect, joke, escalate, soften, withdraw, or change course. Do not produce a line merely because it sounds in-character in isolation.
+- A direct question should normally receive an actual answer or an intentional, character-motivated deflection BEFORE unrelated banter. Do not ignore the semantic content just to deliver another taunt.
+- Once a complaint, challenge, joke, accusation, threat or flirt-hook has landed, treat it as SPENT unless a new event genuinely reopens it. Do not keep circling back to the same grievance in consecutive turns.
+- Do not invent motives for the other person from a bare action. If someone takes off a shirt, that does not automatically mean they are 'playing innocent', 'trying to distract you', 'testing you', etc. unless their words/context actually establish that.
+- Match response MODE to the moment. Sometimes the most natural response is a short physical action, a pause, a look, one blunt sentence, or a concrete next move instead of another witty comeback.
+- In mutually intimate scenes, do not make every exchange adversarial, competitive, mocking or power-play dialogue just because one character is dominant/teasing. If there is no live conflict, let mutuality change the tone.
+- Avoid stacked rhetorical questions and repeated challenge formulas (for example repeated variants of 'you think X?', 'try harder', 'is that all?', 'took you long enough') unless a genuinely new event makes that exact tactic natural again.
+- Natural dialogue varies FUNCTION as well as wording. If the previous beat was a taunt, the next beat should usually do something different unless the other person explicitly continues that verbal contest.
+
 
 18+ SEMANTIC LITERACY — HARD RULE:
 - Across every surface, understand adult slang, sexual innuendo, thirst jokes, double entendres, suggestive euphemisms and provocative wordplay by their natural social meaning.
@@ -16094,6 +16630,13 @@ ATTRACTION, TENSION, SENSUALITY
 - What goes unsaid matters too: a sentence that trails off, a broken-off moment, a look, is often stronger than the spoken word.
 - A minor character must never, under any circumstances, be placed in a romantic or sexual situation — there is no exception to this.
 
+MATURE 18+ — ADULT INTIMACY CONTINUATION
+- Apply this only between known adult characters when mutual consent is real and the characters, relationship, and situation support it.
+- An AI character may initiate romantic or sexual escalation in character instead of only reacting. If the target is the PLAYER, write only the AI character's own initiating move or line, then stop before deciding the player's response; never invent the player's consent, action, or feelings.
+- Once mutual adult intimacy is established, the scene does not have to stop at kissing or implication; it may progress into consensual sex.
+- The scene may remain on-page in sensual, suggestive, euphemistic, emotionally concrete language using closeness, breathing, clothing, movement, dialogue, rhythm, time passing, and aftermath. Do not use pornographic anatomical detail or explicit anatomical act descriptions.
+- Fade-to-black is available as a pacing tool, not a mandatory automatic ending. The scene and its aftermath may continue naturally.
+- Minors or characters of uncertain age remain completely excluded from romantic or sexual situations.
 RAWNESS, AGGRESSION, PROFANITY
 - If a character's personality, temper or the situation calls for it, let them be crude, raw, aggressive or foul-mouthed — don't sanitize or dodge cursing and rough speech if their sheet or voice sample suggests it. False politeness is a worse mistake than a harsh word.
 - An angry, dangerous, sadistic, psychopathic, violent, ruthless, manipulative or cruel character should genuinely feel dangerous when their sheet says so. They may threaten, mock, humiliate, intimidate, manipulate, provoke, retaliate or escalate instead of being softened into generic "safe" politeness.
@@ -18521,6 +19064,7 @@ const AUTO_DEFAULT = {
 };
 
 const LIVE_WORLD_MIN_ACTION_GAP_MS = 9000;
+const FEED_RECOVERY_RETRY_BACKOFF_MS = 2 * 60 * 1000; /* MÁSVILÁG FEED RECOVERY RETRY BACKOFF v1 */
 
 async function loadAuto() {
   return {
@@ -19858,9 +20402,9 @@ function ensureSocialProfileRow(c) {
   return c;
 }
 
-const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 2;
+const RELATIONSHIP_AUTO_FOLLOW_PENDING_MAX = 0; // legacy relationship-follow queue disabled; obvious follows are immediate
 
-function ensureFollowerSystem(w) {
+function legacyEnsureFollowerSystem(w) {
   if (!w || typeof w !== "object") {
     return w;
   }
@@ -21875,7 +22419,7 @@ function hasRecordedFollowEvent(
   });
 }
 
-function setFollowState(
+function legacySimsSocialSetFollowState(
   w,
   followerId,
   targetId,
@@ -24964,7 +25508,7 @@ IMPORTANT: these facts belong ONLY to the POST AUTHOR. Do not import another cha
   try {
     const raw = await askWorldJSON(
       w,
-      engineFor(w),
+      "You are a precise social-post meaning parser. Use only the supplied visible facts. Preserve uncertainty. Never invent identities, relationships, private knowledge, or events.",
       `${authorMeaningCard}
 
 SOCIAL POST MEANING PARSER — SHARED SEMANTIC ANCHOR
@@ -25139,7 +25683,7 @@ HARD CAPSULE BOUNDARY:
     .join("\n");
 }
 
-async function genComments(w, post, options = {}) {
+async function legacyVoiceStyleGenComments(w, post, options = {}) {
   const cast = fairCommentCast(
     w,
     post.authorId,
@@ -26408,7 +26952,7 @@ function applyNotePerceptionImpact(
   );
 }
 
-function applyComments(n, postId, out, label) {
+function legacyChannelApplyComments(n, postId, out, label) {
   const p = (n.posts || []).find((x) => x && x.id === postId);
   if (!p) return 0;
 
@@ -26491,6 +27035,38 @@ if (!parent && tag) {
       .filter((x) => x && x.authorId === mentionedAuthor)
       .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
     if (candidates[0]) parent = candidates[0].id;
+  }
+}
+
+/* MÁSVILÁG NATURAL COMMENT REENTRY v1 */
+{
+  const ownComments = p.comments
+    .filter((row) => row && row.authorId === who)
+    .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
+
+  if (ownComments.length) {
+    const lastOwnTs = Number(ownComments[0].ts) || 0;
+    const actorForThread = charById(n, who);
+    const handle = String((actorForThread && actorForThread.username) || "").trim().toLowerCase();
+    const fullName = String((actorForThread && actorForThread.name) || "").trim().toLowerCase();
+
+    const reentry = p.comments
+      .filter((row) => row && row.authorId !== who && (Number(row.ts) || 0) > lastOwnTs)
+      .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))
+      .find((row) => {
+        const parentRow = row.parent
+          ? p.comments.find((candidate) => candidate && candidate.id === row.parent)
+          : null;
+        const repliedToActor = Boolean(parentRow && parentRow.authorId === who);
+        const text = String(row.text || "").toLowerCase();
+        const directlyMentioned =
+          (handle && text.includes("@" + handle)) ||
+          (fullName && fullName.length >= 3 && text.includes(fullName));
+        return repliedToActor || directlyMentioned;
+      });
+
+    if (!reentry) return;
+    parent = reentry.id;
   }
 }
 
@@ -27169,7 +27745,7 @@ function fairCommentCast(w, targetId, post = null) {
     .slice(0, castLimit);
 }
 
-async function genReply(w, post, comment, forcedResponderId = "") {
+async function legacyVoiceStyleGenReply(w, post, comment, forcedResponderId = "") {
   if (!post || typeof post !== "object" || !comment || typeof comment !== "object") {
     return { comments: [], changes: [], events: [] };
   }
@@ -27249,12 +27825,9 @@ async function genReply(w, post, comment, forcedResponderId = "") {
   const cast = [
     ...priorityCast,
     ...fairCast.filter((c) => c && !priorityCast.some((x) => x.id === c.id)),
-  ].slice(0, 8);
+  ].slice(0, 4);
 
-  const th = threadOf(
-    w,
-    post
-  );
+  const th = compactPlayerReplyThread(w, post, comment);
 
   let out =
     await askWorldJSON(
@@ -27856,7 +28429,7 @@ JSON: {"reply":"short public reply"}${TAIL}`,
   return out;
 }
 
-function applyReplies(n, postId, rootId, out) {
+function legacyChannelApplyReplies(n, postId, rootId, out) {
   const p = (n.posts || []).find((x) => x && x.id === postId);
   if (!p) return 0;
 
@@ -27919,6 +28492,15 @@ function applyReplies(n, postId, rootId, out) {
 
     if (addressTargetId) {
       body = sanitizeGeneratedDirectAddress(n, who, addressTargetId, body);
+
+      /* Reply @mention must use the actual target profile username, never an internal ID. */
+      const replyTarget = charById(n, addressTargetId);
+      const replyUsername = String((replyTarget && replyTarget.username) || "").replace(/^@/, "").trim();
+      if (replyUsername) {
+        body = body.replace(/^@[A-Za-z0-9._-]+\b\s*/i, `@${replyUsername} `);
+      } else {
+        body = body.replace(/^@[A-Za-z0-9._-]+\b\s*/i, "");
+      }
     }
     if (!body) return;
     if (
@@ -28298,7 +28880,7 @@ HARD SELF BOUNDARY:
     .join("\n");
 }
 
-async function genWorldStep(w, single, timeSkipHours = 0) {
+async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
   const cast = fairPostCast(w);
   if (!cast.length) return null;
 
@@ -28682,7 +29264,7 @@ JSON:
   );
 }
 
-function applyWorldStep(n, out) {
+function legacyChannelApplyWorldStep(n, out) {
   let createdPosts = 0;
   const causalPairs = new Set();
 
@@ -28833,7 +29415,7 @@ function applyWorldStep(n, out) {
       consumeAlbumItem(authorChar, pic);
     }
     n.posts.unshift(fresh);
-    enqueueGuaranteedPostCommentCoverage(n, fresh.id, "ai-post-created");
+    if (!EVENT_DRIVEN_FEED_APPLYING || !made.length) enqueueGuaranteedPostCommentCoverage(n, fresh.id, "ai-post-created");
     createdPosts += 1;
 
     mentionedPostTargets.forEach((targetId) => {
@@ -30356,6 +30938,7 @@ function RelPair({ w, aId, bId, aName, bName, update }) {
           {r.mood
             ? localizedRelationshipDisplayText(r.mood, CURRENT_LANG)
             : relLabel(r)}
+          <div className="hint" style={{ marginTop: 3 }}>{tt("Hivatalos státusz: ", "Official status: ")}{officialRelationshipStatusForPair(w, from, to, CURRENT_LANG)}</div>
         </div>
         {r.why ? <p className="hint" style={{ marginBottom: 6 }}>{r.why}</p> : null}
         <RelBar score={r.score} />
@@ -31478,7 +32061,7 @@ function Cast({ w, update, setErr, goChat, jump }) {
               <div className="character-list-main" style={{ flex: 1, minWidth: 0 }}>
                 <div className="between">
                   <div className="name">{c.name}</div>
-                  <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score} · {relLabel(r)}</span>
+                  <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score} · {officialRelationshipStatusForPair(w, c.id, w.meId, CURRENT_LANG)}</span>
                 </div>
                 <div className="handle mono">
                   @{c.username} · {formatSocialCount(displayFollowerCount(w, c.id))} {tt("követő", "followers")}
@@ -32304,6 +32887,65 @@ function roleplayAdultIntimacyStage(w, scene) {
   return "none";
 }
 
+/* MÁSVILÁG IMMEDIATE DISCOURSE MODEL v1 */
+function roleplayImmediateDiscourseCard(w, turns) {
+  const rows = (Array.isArray(turns) ? turns : [])
+    .filter((turn) => turn && turn.text)
+    .slice(-8);
+  if (!rows.length) return "IMMEDIATE DISCOURSE STATE: no exact recent turns.";
+
+  const nameOf = (id) => {
+    if (id === "narrator") return "NARRATOR";
+    const c = charById(w, id);
+    return c ? c.name : String(id || "unknown");
+  };
+  const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const stripEdge = (value) => clean(value).replace(/^[*_'"“”‘’\s]+|[*_'"“”‘’\s]+$/g, "");
+  const last = rows[rows.length - 1];
+  const previous = rows.length > 1 ? rows[rows.length - 2] : null;
+  const lastText = stripEdge(last.text);
+  const previousText = previous ? stripEdge(previous.text) : "";
+  const lastWords = lastText.toLowerCase().match(/[a-zÀ-ž0-9'-]+/gi) || [];
+  const previousWords = previousText.toLowerCase().match(/[a-zÀ-ž0-9'-]+/gi) || [];
+  const contentWords = lastWords.filter((word) => word.length >= 3);
+  const echoed = contentWords.filter((word) => previousWords.includes(word));
+  const isQuestion = /[?？]\s*$/.test(lastText) || /^(?:who|what|when|where|why|how|which|whose|ki|mi|mikor|hol|miért|hogyan|melyik)\b/i.test(lastText);
+  const shortEchoQuestion = Boolean(
+    previous &&
+    last.authorId !== previous.authorId &&
+    isQuestion &&
+    lastWords.length > 0 &&
+    lastWords.length <= 5 &&
+    echoed.length > 0
+  );
+
+  const ledger = rows.map((turn, index) => {
+    const speaker = nameOf(turn.authorId);
+    const target = turn.to ? nameOf(turn.to) : "unspecified";
+    const kind = turn.kind || (turn.authorId === "narrator" ? "narration" : "speech/action");
+    return String(index + 1) + ") SPEAKER=" + speaker + " | TARGET=" + target + " | KIND=" + kind + " | EXACT=" + JSON.stringify(clean(turn.text));
+  }).join("\n");
+
+  const obligations = [];
+  if (isQuestion && last.authorId !== "narrator") {
+    obligations.push("The newest turn is a QUESTION by " + nameOf(last.authorId) + ". Answer its actual meaning or deliberately acknowledge/refuse it; do not answer an older beat instead.");
+  }
+  if (shortEchoQuestion) {
+    obligations.push("CRITICAL ECHO/CLARIFICATION: the newest short question repeats wording introduced by " + nameOf(previous.authorId) + " in the immediately previous turn (echoed term(s): " + echoed.join(", ") + "). The newest speaker is QUESTIONING/CLARIFYING that wording, NOT inventing, choosing, asserting or owning it. Never reply with a premise such as 'you call it X' / 'you want to call it X' unless they explicitly adopt the term later.");
+  }
+  if (last.kind === "action") {
+    obligations.push("The newest turn is an ACTION. Treat only the visible action as fact; do not invent dialogue or motive behind it.");
+  }
+
+  return [
+    "IMMEDIATE DISCOURSE STATE — deterministic ground truth, newest last:",
+    ledger,
+    obligations.length ? "CURRENT RESPONSE OBLIGATIONS:\n- " + obligations.join("\n- ") : "CURRENT RESPONSE OBLIGATION: continue causally from the newest exact turn.",
+    "ATTRIBUTION RULE: every label/metaphor/accusation belongs to the speaker who introduced it until another speaker explicitly adopts it.",
+    "REALITY RULE: do not invert speaker roles, turn clarification into assertion, or answer a line nobody said."
+  ].join("\n");
+}
+
 function sceneRoleplayMemoryCard(scene, w) {
   const mem = syncSceneRoleplayTurnLedger(scene, w);
   const en = worldLanguage(w, w.meId) === "en";
@@ -32535,6 +33177,7 @@ function addSceneStatusUpdate(n, scene, text, kind = "status", actorId = "") {
   const row = {
     id: uid(),
     ts: now(),
+    source: "verified", /* MÁSVILÁG VERIFIED SCENE STATUS v1 */
     kind: String(kind || "status").slice(0, 24),
     actorId: actorId || "",
     text: String(text).slice(0, 280),
@@ -32551,7 +33194,7 @@ function addSceneStatusUpdate(n, scene, text, kind = "status", actorId = "") {
   }
 }
 
-function applySceneChangesWithStatus(n, scene, changes) {
+function legacyChannelApplySceneChangesWithStatus(n, scene, changes) {
   const list = Array.isArray(changes) ? changes.filter(Boolean) : [];
   const before = list.map((ch) => {
     const r = ch && ch.a && ch.b ? getRel(n, ch.a, ch.b) : EMPTY_REL;
@@ -32572,7 +33215,12 @@ function applySceneChangesWithStatus(n, scene, changes) {
     const newMood = String((after && after.mood) || "");
     const involvesPlayer = ch.a === n.meId || ch.b === n.meId;
 
-    if (involvesPlayer && newMood && newMood !== old.mood) {
+    if (
+      involvesPlayer &&
+      newMood &&
+      newMood !== old.mood &&
+      Math.abs(Number(ch.delta) || 0) >= 8
+    ) {
       const actor = charById(n, ch.a);
       const target = charById(n, ch.b);
       addSceneStatusUpdate(
@@ -32592,18 +33240,9 @@ function applySceneChangesWithStatus(n, scene, changes) {
 }
 
 function applySceneAiStatusUpdates(n, scene, out) {
-  safeAiArray(out, "statusUpdates").slice(0, 8).forEach((row) => {
-    if (!row) return;
-    const text = stripRoleplayEmoji(typeof row === "string" ? row : row.text);
-    if (!text) return;
-    addSceneStatusUpdate(
-      n,
-      scene,
-      text,
-      typeof row === "object" && row.kind ? row.kind : "status",
-      typeof row === "object" && row.id ? row.id : ""
-    );
-  });
+  /* MÁSVILÁG VERIFIED SCENE STATUS v1: free-form model status text is intentionally ignored.
+   * Visible Scene status rows come only from code-verified state changes. */
+  return;
 }
 
 function SceneNew({ w, onClose, onCreate, setErr }) {
@@ -33207,6 +33846,9 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const eventProgress = sceneEventProgress(scene, clockNow);
   const eventLang = worldLanguage(w, w.meId);
   const eventLimitLabel = sceneEventProgressText(scene, eventLang, clockNow);
+  const verifiedStatusUpdates = Array.isArray(scene.statusUpdates)
+    ? scene.statusUpdates.filter((row) => row && row.source === "verified")
+    : [];
   /*
    * Three-layer render source:
    * 1) canonical scene.turns
@@ -33281,7 +33923,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
           id: "turn_" + uid(),
           authorId: w.meId,
           to: playerTarget.id || "",
-          kind: "action",
+          kind: /\*[^*]+\*/s.test(playerText) ? "action" : "speech",
           text: playerText,
           ts: now(),
           language: worldLanguage(w, w.meId),
@@ -33377,6 +34019,10 @@ AKTUÁLIS HALADÁS: ${sceneEventProgressText(scene, worldLanguage(w, w.meId))}
 ROLEPLAY RÖVID TÁVÚ MEMÓRIA — EZ A KORÁBBI KÖRÖK TÖMÖRÍTETT FOLYTONOSSÁGA, NEM ÚJ TÖRTÉNÉS:
 ${sceneRoleplayMemoryCard(promptScene, w)}
 
+MÁSVILÁG SCENE REALITY CARD v1:
+${roleplayImmediateDiscourseCard(w, promptTurns)}
+
+
 MEMÓRIA-RÉTEGEK SZABÁLYA:
 - RÖVID TÁVÚ JELENETMEMÓRIA: minden válasz végén frissítsd a sceneMemory mezőt. Tartsa meg a helyszínt, pozíciókat, sérüléseket, tárgyakat, ki mit tudott meg, félbehagyott kérdéseket, ígéreteket, fenyegetéseket, terveket, romantikus/intim folytonosságot és azt, hogy éppen min dolgozik a jelenet. Ne találj ki új tényt.
 - A fenti PONTOS LEGUTÓBBI TURN-NAPLÓ determinisztikus ground truth. Ha a tömörített summary bármiben ütközik vele, a pontos turnök nyernek. SOHA ne ismételj meg egy már megtörtént akciót csak azért, mert a summary nem emelte ki.
@@ -33416,6 +34062,7 @@ ${playerText ? conversationOwnershipInstruction(
 ) : ""}
 
 ${playerText ? `${w.player.name} most ezt teszi vagy mondja:\n"${playerText}"` : "A játékos most nem lép közbe; a szereplők maguktól viszik tovább a jelenetet."}
+${playerText && /\*[^*]+\*/s.test(playerText) ? "SZEREPJÁTÉK-MÓD: csillagos narráció érkezett; válaszolj narrált cselekvéssel és párbeszéddel, a helyszínhez/hangulathoz igazodva, a játékos helyett nem cselekedve." : "NORMÁL MÓD: csillagos narráció nélkül ne erőltess külön action-narrációt; természetesen reagálj a karakter saját stílusában."}
 
 ${playerText ? playerInputUnderstandingInstruction(w, playerText, "roleplay") : ""}
 
@@ -33469,6 +34116,34 @@ ${roleplayRomanticInitiativeCard(
 )}
 
 ROLEPLAY FOLYTATÁS — FONTOS:
+
+ROLEPLAY PHYSICAL PRESUPPOSITION — HARD:
+- Folytonosságot feltételező szavakat (pl. „még mindig”, „továbbra is”, „nem engedi el”, „tovább fogja”, „keeps holding”, „doesn't let go”, „still grips”, „continues to hold”) CSAK akkor használj, ha egy KORÁBBI PONTOS turn ténylegesen létrehozta azt az állapotot.
+- Ha korábban senki nem fogta meg a másik csuklóját, kezét, karját, derekát stb., nem írhatod azt, hogy „nem engedi el” vagy „továbbra is fogja”. Ha karakterhű, új cselekvésként kezdeményezheti MOST — pl. „megfogja a csuklóját” — de ne találj ki hamis előzményt.
+- Minden action előtt végezz PRESUPPOZÍCIÓ-ELLENŐRZÉST: amit a mondat már fennálló tényként feltételez, szerepel-e valóban a pontos turn-naplóban? Ha nem, fogalmazd át új cselekvésre vagy válassz más reakciót.
+- A játékos direkt mondatára/kérdésére adott fizikai reakciónak is legyen szemantikai értelme. Ne helyettesítsd a választ egy random birtokló testtartással vagy olyan érintéssel, amelyhez nincs előzmény.
+
+
+ROLEPLAY TURN CAUSALITY — HARD:
+- A PONTOS LEGUTÓBBI TURN-NAPLÓ utolsó 1-3 sora az elsődleges ok-okozati input. Minden új beat előtt külön ellenőrizd őket.
+- Az utolsó játékosi action AZONNAL megváltoztatja a jelenlegi scene-state-et. A következő AI-beat már az UTÁNA fennálló helyzetben történik, nem az előzőben.
+- Ha a játékos egy korábbi kezdeményezést már elfogadott/viszonzott, ne kérd vagy provokáld ki ugyanazt újra. Haladj a következő természetes reakcióra.
+- Konkrét példa a kerülendő hibára: ha már megtörtént a csók, majd a játékos leveszi a másik felsőjét, a következő válasz ne ismételje, hogy „végre megtetted / sokáig tartott”; reagáljon a LEGVÉGÉN történt új cselekvésre vagy vigye onnan tovább a jelenetet.
+- Fizikai kontinuitás audit minden körben: ki hol van, mit visel még, mit tart, kit érint, milyen testhelyzetben van, milyen sérülése van, milyen ajtó/tárgy/helyzet változott. Ne állíts vissza korábbi állapotot.
+- Intimitási szint nem léphet indokolatlanul vissza. A mutual-kissing/private-intimacy/post-intimacy állapotot csak tényleges új esemény módosítsa, ne feledékenység.
+- Egy karakter egymást követő beatjei ne ugyanazt az érzelmi vagy verbális funkciót ismételjék. A második beatnek következménynek vagy új lépésnek kell lennie.
+- A sceneMemory.currentBeat azt írja le, MI TÖRTÉNIK MOST, nem azt, mi történt két körrel ezelőtt.
+
+ROLEPLAY NATURALISM — HARD:
+- Before writing each AI beat, identify the NEWEST player's communicative act in plain language (e.g. 'she removed her shirt', 'she asked why he is still waiting'). React to THAT act's meaning first.
+- If the player asks a direct question, the addressed AI must answer it meaningfully or visibly choose not to; repeating an older taunt is not an answer.
+- Do not carry an old teasing premise forward after the scene has already disproved it. If the player has already stopped hesitating and is actively escalating, stop accusing them of still making the AI wait unless a new delay actually happens.
+- Do not assign unsupported intent to an action. 'Takes off shirt' is an observable fact; 'plays innocent games', 'tries to distract me', 'teases on purpose' are interpretations and require evidence.
+- Preserve tone evolution. Mutual physical escalation should normally shift the scene away from repetitive pre-escalation challenge banter and into a new beat: reaction, reciprocation, decision, movement, brief dialogue, or consequence.
+- A dominant or provocative character may remain dominant/provocative WITHOUT repeating the same sentence-function. Show it through timing, choices, body language, concise commands, confidence, or new actions—not endless recycled taunts.
+- Prefer one specific response to the current beat over generic 'character-brand' dialogue. If removing the newest player turn would leave the AI response unchanged, regenerate it.
+- Consecutive AI turns should not share the same grievance or rhetorical structure unless the player explicitly keeps that topic alive.
+
 
 - EMOJI ABSZOLÚT TILOS A ROLEPLAYBEN: sem beszédben, sem actionben, sem narrációban, sem sceneMemory/events/status mezőben ne használj emojit, emoji-piktogramot vagy dekoratív emoji jelet. Az érzelmet kizárólag szavakkal, ritmussal, testbeszéddel és cselekvéssel fejezd ki.
 - Ha fent AKTUÁLIS CÍMZETT van megadva a játékos mostani megszólalásához, a közvetlen "te/you" és a kérdés elsősorban ANNAK a karakternek szól. Más jelenlévő ne reagáljon úgy, mintha hozzá beszélt volna, hacsak természetesen közbe nem szól.
@@ -33587,9 +34262,17 @@ Formátum:
                 ? sanitizeGeneratedDirectAddress(w, resolvedId, allowedTo, freshText)
                 : freshText;
             const roleplayText = stripRoleplayEmoji(addressedText);
+            const unsupportedPhysicalContinuation =
+              !isNarr &&
+              allowed &&
+              roleplayHasUnsupportedPhysicalContinuation(
+                resolvedId,
+                roleplayText,
+                promptTurns
+              );
 
             return {
-              authorId: allowed ? resolvedId : null,
+              authorId: allowed && !unsupportedPhysicalContinuation ? resolvedId : null,
               to:
                 allowedTo,
               kind: t && t.kind === "action" ? "action" : "speech",
@@ -33654,6 +34337,24 @@ ${roleplayRomanticInitiativeCard(w, promptScene, cast)}
 ${participationCard}
 
 SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
+ROLEPLAY RETRY PHYSICAL PRESUPPOSITION — HARD:
+- A retry sem állíthatja, hogy egy fizikai állapot „még mindig” fennáll, ha azt korábbi pontos turn nem hozta létre.
+- „doesn't let go / keeps holding / still grips / continues to hold” és hasonló folytató állítás csak valódi előzménnyel használható.
+- Ha a karakter MOST akar megfogni, lefogni, közelebb húzni valakit, azt új cselekvésként írd le — ne hamis folytonosságként.
+- Direkt kérdés/challenge után ne generálj random testhelyzetet pusztán hangulatként; az action válaszoljon a legutóbbi beat jelentésére.
+
+ROLEPLAY RETRY CAUSALITY — HARD:
+- Az újragenerálásnál ne csak a szövegezést változtasd meg: a LEGVÉGÉN megtörtént turnből indulj tovább ok-okozatilag.
+- Tilos olyan új sort adni, amely egy már lezajlott mozzanatot újra aktuális problémának kezel.
+- Minden új beatnek legyen egyértelmű kiváltó oka a legfrissebb naplóban, és vigye előre a jelenlegi állapotot.
+- A fizikai és intim state-et ne reseteld.
+
+ROLEPLAY RETRY NATURALISM — HARD:
+- A retry ne csak más szavakat keressen ugyanahhoz a rossz reakcióhoz. Válasszon MÁS, természetesebb kommunikációs funkciót is, ha az előző kimenet a régi poént/sérelmet/tauntot ismételte.
+- Direkt kérdésre tényleges válasz vagy tudatos elhárítás kell.
+- Ne találjon ki szándékot egy puszta játékosi cselekvés mögé.
+- Ha az intim jelenet már kölcsönösen továbbhaladt, ne térjen vissza a korábbi 'várattál / bizonyítsd / próbálkozz jobban' körhöz új trigger nélkül.
+
 - EMOJI TILOS minden roleplay beszédben, actionben, narrációban és minden visszaadott szövegmezőben.
 - Adj ${participationPlan.beatMin}-${participationPlan.beatMax} TELJESEN FRISS mozzanatot.
 - A MANDATORY FAIRNESS SPEAKERS/ACTORS listán szereplő minden AI-nak legyen legalább egy látható speech vagy action mozzanata.
@@ -34457,10 +35158,10 @@ Formátum:
         </div>
       )}
 
-      {Array.isArray(scene.statusUpdates) && scene.statusUpdates.length ? (
+      {verifiedStatusUpdates.length ? (
         <div className="card">
           <label className="f" style={{ marginTop: 0 }}>{tt("Állapotfrissítések", "Status updates")}</label>
-          {scene.statusUpdates.slice(0, 6).map((row) => (
+          {verifiedStatusUpdates.slice(0, 6).map((row) => (
             <p className="hint" key={row.id} style={{ marginTop: 6 }}>{row.kind === "mood" ? "💭 " : "⚡ "}{row.text}</p>
           ))}
         </div>
@@ -34514,9 +35215,13 @@ function Scenes({ w, update, setErr, jump, onSignal, openId, setOpenId }) {
     if (openId === sceneId) setOpenId(null);
   };
 
+  /* MÁSVILÁG SCENE JUMP STABILITY v1: a persisted scene jump is consumed only when that jump itself changes.
+   * World/scene updates must never reopen an older scene over the one the player is viewing. */
   useEffect(() => {
-    if (jump && jump.type === "scene" && allScenes.some((s) => s.id === jump.id)) setOpenId(jump.id);
-  }, [jump, allScenes]);
+    if (jump && jump.type === "scene" && allScenes.some((s) => s.id === jump.id)) {
+      setOpenId(jump.id);
+    }
+  }, [jump && jump.type, jump && jump.id, jump && jump.at]);
 
   if (scene) return <Scene w={w} scene={scene} update={update} setErr={setErr} onBack={() => setOpenId(null)} onSignal={onSignal} />;
 
@@ -35483,7 +36188,214 @@ function recentDmBridgeScene(w, botId, chatKeyValue) {
     .sort((a, b) => (Number(b.startedAt || b.ts) || 0) - (Number(a.startedAt || a.ts) || 0))[0] || null;
 }
 
-function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply, onOpenScene }) {
+
+/* MÁSVILÁG DIRECT DM CONTINUITY v1 */
+function directDmProtectedHistory(w, c, ck) {
+  return ((w && w.chats && w.chats[ck]) || [])
+    .slice(-14)
+    .map((m) => {
+      if (!m) return "";
+      const speaker = m.from === "me"
+        ? (w.player && w.player.name || "Player")
+        : (c && c.name || "Character");
+      const image = (m.imageId || m.image)
+        ? " [IMAGE: " + String(m.imageDescription || "image").replace(/\s+/g, " ").trim() + "]"
+        : "";
+      return speaker + ": " + String(m.text || "") + image;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function directDmOwnRecent(w, c, ck) {
+  return ((w && w.chats && w.chats[ck]) || [])
+    .filter((m) => m && m.from !== "me" && String(m.text || "").trim())
+    .slice(-5)
+    .map((m, index) => String(index + 1) + ". " + String(m.text || "").trim())
+    .join("\n");
+}
+
+function directDmVoiceCard(w, c) {
+  if (!c) return "";
+  try {
+    if (typeof voiceStyleCardsForIds === "function") {
+      return String(voiceStyleCardsForIds(w, [c.id], c.id) || "");
+    }
+  } catch {}
+  if (c.aiVoiceStyleCard && typeof c.aiVoiceStyleCard === "object") {
+    return String(c.aiVoiceStyleCard.card || "");
+  }
+  return "";
+}
+
+function directDmProtectedTail(w, c, ck, latestText) {
+  const history = directDmProtectedHistory(w, c, ck);
+  const ownRecent = directDmOwnRecent(w, c, ck);
+  const styleCard = directDmVoiceCard(w, c);
+  const latest = String(latestText || "");
+
+  return "\n\n[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]\n" +
+    "PROTECTED DIRECT-DM CONTEXT — NEVER OMIT THIS BLOCK.\n\n" +
+    "VOICE / WRITING-STYLE CARD — MANDATORY FOR THIS SPEAKER ONLY:\n" +
+    (styleCard || "No separate style card available; follow the character canon already above.") + "\n\n" +
+    "LATEST 14 MESSAGES FROM THIS EXACT DM, BOTH SIDES, VERBATIM:\n" +
+    (history || "No earlier DM history.") + "\n\n" +
+    "YOUR LAST 5 OWN DM MESSAGES — DO NOT REUSE THEIR OPENINGS, PHRASES, METAPHORS OR FLIRT/THREAT FORMULAS:\n" +
+    (ownRecent || "No earlier authored DM messages.") + "\n\n" +
+    "MANDATORY RESPONSE BEHAVIOR:\n" +
+    "- React DIRECTLY to the latest player message: its literal content, tone and intention. Continue this same conversational beat; do not jump to a generic new topic.\n" +
+    "- If the player reciprocates flirtation, respond to the fact that they reciprocated it. If they ask a question, answer it when your character knows. If they reject you, react to that rejection. If they agree, react to the agreement.\n" +
+    "- Relationship level and personality decide HOW you react (embarrassed, pleased, teasing, defensive, sarcastic, possessive, calm, etc.), never WHETHER you acknowledge what was just said.\n" +
+    "- Do not repeat the same opening, image, threat, joke, metaphor, pet name pattern or distinctive 4+ word phrase from your recent DM messages.\n" +
+    "- Reply in the language of this DM conversation/latest player message: English conversation -> natural English; Hungarian conversation -> natural correct Hungarian, except character-sheet style rules intentionally overriding spelling/punctuation/casing.\n" +
+    "- Keep the exact JSON response schema requested earlier in the prompt.\n\n" +
+    "AMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\n" +
+    latest;
+}
+
+function directDmPrebudgetPrompt(prompt, protectedTail) {
+  const base = String(prompt || "");
+  const tail = String(protectedTail || "");
+  const cap = Math.min(50000, Math.max(28000, Number(AI_MAX_PROMPT_CHARS) || 82000));
+
+  if (!tail) {
+    return base.length <= cap ? base : base.slice(Math.max(0, base.length - cap));
+  }
+
+  if (tail.length >= cap) {
+    console.warn(
+      "[dm-prompt-tail] protected context exceeds normal prompt cap; preserving it intact",
+      "tailChars=" + tail.length,
+      "cap=" + cap
+    );
+    return tail;
+  }
+
+  const marker = "\n\n[DM BACKGROUND COMPACTED OLDEST-FIRST]\n\n";
+  const backgroundBudget = Math.max(0, cap - tail.length - marker.length);
+
+  if (base.length <= backgroundBudget) {
+    return base + tail;
+  }
+
+  const background = backgroundBudget > 0
+    ? base.slice(Math.max(0, base.length - backgroundBudget))
+    : "";
+
+  return marker + background + tail;
+}
+
+function directDmPromptDebugLog(prompt, c, latestText, retry = false) {
+  const value = String(prompt || "");
+  console.info(
+    "[dm-prompt-tail]",
+    retry ? "retry=1" : "retry=0",
+    "bot=" + String(c && c.name || "") + "[" + String(c && c.id || "") + "]",
+    "promptChars=" + value.length,
+    "latestChars=" + String(latestText || "").length,
+    "tail=" + value.slice(-500)
+  );
+}
+
+function directDmReplyLooksRepetitive(w, c, text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!w || !c || !value) return false;
+
+  const ck = chatKey(w.meId, c.id);
+  const old = ((w.chats && w.chats[ck]) || [])
+    .filter((m) => m && m.from !== "me" && String(m.text || "").trim())
+    .slice(-5)
+    .map((m) => String(m.text || "").replace(/\s+/g, " ").trim());
+
+  const base = normUtterance(value);
+  const words = base.split(" ").filter(Boolean);
+  const opening = words.slice(0, Math.min(6, words.length)).join(" ");
+
+  for (const prior of old) {
+    const previous = normUtterance(prior);
+    if (!previous) continue;
+    if (previous === base) return true;
+
+    const previousWords = previous.split(" ").filter(Boolean);
+    const previousOpening = previousWords
+      .slice(0, Math.min(6, previousWords.length))
+      .join(" ");
+
+    if (opening.length >= 18 && previousOpening && opening === previousOpening) return true;
+    if (
+      words.length >= 4 &&
+      previousWords.length >= 4 &&
+      jaccard(wordSet(base), wordSet(previous)) >= 0.58
+    ) {
+      return true;
+    }
+
+    for (let index = 0; index <= words.length - 4; index += 1) {
+      const phrase = words.slice(index, index + 4).join(" ");
+      if (phrase.length >= 18 && previous.includes(phrase)) return true;
+    }
+  }
+
+  return false;
+}
+
+async function askDirectDmJSONInteractive(w, system, prompt, options = {}) {
+  const charId = String(options.dmCharId || "");
+  const ck = String(options.dmChatKey || "");
+  const latestText = String(options.dmLatestText || "");
+  const forward = { ...options };
+  delete forward.dmCharId;
+  delete forward.dmChatKey;
+  delete forward.dmLatestText;
+
+  const c = charId ? charById(w, charId) : null;
+  const protectedTail = c
+    ? directDmProtectedTail(w, c, ck || chatKey(w.meId, c.id), latestText)
+    : "";
+  const finalPrompt = directDmPrebudgetPrompt(prompt, protectedTail);
+
+  directDmPromptDebugLog(finalPrompt, c, latestText, false);
+
+  const out = await askWorldJSONInteractive(
+    w,
+    system,
+    finalPrompt,
+    { ...forward, maxTries: 1 }
+  );
+
+  const firstReply = String(out && out.reply !== undefined ? out.reply : "").trim();
+  if (!c || !firstReply || !directDmReplyLooksRepetitive(w, c, firstReply)) {
+    return out;
+  }
+
+  const retryPrompt =
+    directDmProtectedTail(w, c, ck || chatKey(w.meId, c.id), latestText) +
+    "\n\nONE STRICT REWRITE ONLY:\n" +
+    "The rejected draft repeated your recent DM language. Write a genuinely new reply that still reacts directly to the exact latest player message. " +
+    "Do not reuse the same opening, metaphor, threat/flirt formula, or distinctive phrase.\n" +
+    "REJECTED DRAFT:\n" + firstReply + "\n\n" +
+    "Return ONLY JSON in this exact minimal form: {\"reply\":\"your rewritten reply\"}\n\n" +
+    "AMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\n" + latestText;
+
+  directDmPromptDebugLog(retryPrompt, c, latestText, true);
+
+  const retryOut = await askWorldJSONInteractive(
+    w,
+    system,
+    retryPrompt,
+    { ...forward, maxTries: 1, maxTokens: Math.min(500, Number(forward.maxTokens) || 500) }
+  );
+
+  const replacement = String(
+    retryOut && retryOut.reply !== undefined ? retryOut.reply : ""
+  ).trim();
+
+  return replacement
+    ? { ...(out || {}), reply: replacement }
+    : out;
+}
+
+function LegacyGroundedChat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply, onOpenScene }) {
   const { tt } = useLang();
   const { media, addImage } = useMedia();
   const matureMode =
@@ -35705,7 +36617,7 @@ function Chat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNote
       requestWorld.meId
     );
 
-    const out = await askWorldJSONInteractive(
+    const out = await askDirectDmJSONInteractive(
       requestWorld,
       engineFor(requestWorld),
       `${worldContext(
@@ -35944,7 +36856,7 @@ KAPCSOLATVÁLTOZÁS:
 
 Formátum:
 {"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event vagy group_social","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
-    , { maxTries: 1, maxTokens: 650, timeoutMs: 28000 }
+    , { maxTries: 1, maxTokens: 650, timeoutMs: 28000, dmCharId: c.id, dmChatKey: ck, dmLatestText: t }
     );
 
     const requestedReplyText = String(
@@ -36225,10 +37137,7 @@ Formátum:
           })
         : [];
 
-      applyChanges(
-        n,
-        dmChanges
-      );
+      applyChannelRelationshipChanges(n, dmChanges, "dm", { text: t, reason: "direct-dm" });
 
       rememberKnowledge(
         n,
@@ -37611,7 +38520,7 @@ function restartWorldHistoryInPlace(w) {
   return true;
 }
 
-function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onAuto, detail, onDetail, onLang }) {
+function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onAuto, detail, onDetail, onLang }) {
   const { tt, lang } = useLang();
   const [editPlayer, setEditPlayer] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -38326,8 +39235,8 @@ function World({ w, update, onLeave, onDeleteAccount, setErr, onRooms, auto, onA
           <>
             <p className="hint">
               {tt(
-                "A karakterek, a saját profilod, a karakterlapok, profil-/albumképek és a jelenlegi kapcsolatok megmaradnak. MINDEN játékmenetből létrejött állapot friss lesz: posztok, kommentek, reply-k, like/repost előzmények, követések, Note-ok, DM-ek, csoportok, AI-emlékek és runtime-állapotok, Roleplay/Eventek, popupok, pletykák, trendek, social statok, napló, jutalmak, értesítések és háttérben váró AI-akciók törlődnek. A nyelv és a kézzel beállított világ/story/gossip konfiguráció csak beállításként marad meg. Ez nem vonható vissza.",
-                "Characters, your profile, character sheets, profile/album images, and the current relationship graph are kept. EVERYTHING created by gameplay becomes fresh: posts, comments, replies, like/repost history, follows, Notes, DMs, groups, AI memories and runtime state, Roleplay/Events, popups, gossip, trends, social stats, diary, rewards, notifications, and queued AI actions are cleared. Language and manually chosen world/story/gossip configuration remain only as configuration. This cannot be undone."
+                "A karakterek, a saját profilod, a karakterlapok és a profil-/albumképek megmaradnak; a korábban kiposztolt albumképek világ-újraindításkor visszakerülnek az albumokba. MINDEN játékmenetből létrejött állapot friss lesz: posztok, kommentek, reply-k, like/repost előzmények, követések, Note-ok, DM-ek, csoportok, AI-emlékek és runtime-állapotok, Roleplay/Eventek, popupok, pletykák, trendek, social statok, napló, jutalmak, értesítések és háttérben váró AI-akciók törlődnek. A nyelv és a kézzel beállított világ/story/gossip konfiguráció csak beállításként marad meg. Ez nem vonható vissza.",
+                "Characters, your profile, character sheets, and profile/album images are kept; previously posted album images are restored to their albums when the world is restarted. EVERYTHING created by gameplay becomes fresh: posts, comments, replies, like/repost history, follows, Notes, DMs, groups, AI memories and runtime state, Roleplay/Events, popups, gossip, trends, social stats, diary, rewards, notifications, and queued AI actions are cleared. Language and manually chosen world/story/gossip configuration remain only as configuration. This cannot be undone."
               )}
             </p>
             <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}>
@@ -38540,7 +39449,18 @@ Csak JSON:
 }
 
 /* Egy bot magától ír privátban. */
-async function genDM(w, bot) {
+async function legacyVoiceStyleGenDM(w, bot) {
+  if (!autonomousDmEligible(w, bot)) {
+    return {
+      skip: true,
+      text: "",
+      image: "",
+      imagePrompt: "",
+      changes: [],
+      selfUpdates: [],
+      relationshipUpdates: [],
+    };
+  }
   const rel = getRel(
     w,
     bot.id,
@@ -38575,7 +39495,7 @@ async function genDM(w, bot) {
   const recent = (
     w.posts || []
   )
-    .slice(0, 4)
+    .filter((po) => po && po.authorId === w.meId).slice(0, 4)
     .map(
       (po) =>
         `${nameOfIn(
@@ -38657,6 +39577,10 @@ ${characterAgentRuntimeCard(
 
 LEGUTÓBBI POSZTOK:
 ${recent || "még nincs poszt"}
+DM OWN-POST ATTRIBUTION — HARD RULE:
+- A fenti posztlista kizárólag ${w.player.name} saját posztjait tartalmazza.
+- Más karakter posztját, kommentjét vagy tettét SOHA ne kezeld úgy, mintha ${w.player.name} írta vagy csinálta volna.
+- Never attribute another character's post, comment, or action to ${w.player.name}.
 
 MOSTANI JEGYZETEK:
 ${notesForAI(w) || "nincs"}
@@ -38698,6 +39622,14 @@ ${matureContentInstruction(
   [bot.id],
   "chat"
 )}
+
+AUTONOMOUS DM GROUNDING — HARD RULE:
+- Csak olyan konkrét dologra hivatkozhatsz, amelyet a PONTOS privát chat, ${w.player.name} SAJÁT fent felsorolt posztja, az ő tényleges aktív Note-ja, vagy egy ténylegesen közösen átélt/megfigyelt tárolt esemény bizonyít.
+- Más karakter posztja, képe, kommentje, sztorija vagy eseménye NEM ${w.player.name} tartalma. Soha ne mondd rá, hogy "your post / your story / te posztoltad".
+- Ne találj ki helyszínt, találkozást, korábbi beszélgetést, ígéretet, ruhát, cselekvést, randit, konfliktust vagy közös múltat csak azért, hogy legyen miről írni.
+- Ha a valódi kapcsolat indokol egy DM-et, de nincs friss közös esemény, írj önmagában is értelmes, jelen idejű üzenetet; NE gyárts hozzá hamis előzményt.
+- A worldContextban szereplő más emberek nyilvános történéseit nem sajátíthatod ki a játékosnak.
+- Ha nem tudod biztosan, hogy egy konkrét esemény ${w.player.name} saját cselekvése/tartalma volt-e, NE hivatkozz rá úgy, mintha az lett volna.
 
 PRIVÁT ÜZENET SZABÁLYOK:
 
@@ -39013,7 +39945,7 @@ function pickNoteReactionCast(w, authorId, processedBy) {
 }
 
 /* Egy bot kiír magának egy jegyzetet. */
-async function genNote(w, bot) {
+async function legacyVoiceStyleGenNote(w, bot) {
   return askWorldJSON(
     w,
     engineFor(w),
@@ -39287,8 +40219,85 @@ Formátum:
  * kezdeményezhet. A private/quiet karakter ritkábban ír magától.
  * Nincs mesterséges azonos aktivitási kvóta.
  */
+/* MÁSVILÁG GROUNDED SOCIAL RHYTHM v2 */
+function autonomousDmGroundingEvidence(w, c) {
+  if (!w || !c || !w.meId || isHuman(w, c.id)) {
+    return { eligible: false, reasons: [] };
+  }
+
+  const me = w.meId;
+  const reasons = [];
+
+  const chat = (w.chats && w.chats[chatKey(me, c.id)]) || [];
+  if (chat.some((m) => m && (m.text || m.image || m.imageId || m.imageDescription))) {
+    reasons.push("existing-dm");
+  }
+
+  const forward = getRel(w, c.id, me) || EMPTY_REL;
+  const reverse = getRel(w, me, c.id) || EMPTY_REL;
+  const relScore = Math.max(
+    Math.abs(Number(forward.score) || 0),
+    Math.abs(Number(reverse.score) || 0)
+  );
+  const relWords = [
+    forward.bond, forward.type, forward.mood, forward.hidden,
+    reverse.bond, reverse.type, reverse.mood, reverse.hidden,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const meaningfulBond =
+    /friend|bar[aá]t|best friend|közeli|testv[eé]r|sibling|parent|szül|family|rokon|coworker|munkat[aá]rs|classmate|oszt[aá]lyt[aá]rs|neighbor|szomsz[eé]d|mentor|tan[ií]tv[aá]ny|teacher|tan[aá]r|coach|edz[oő]|boss|f[oő]n[oö]k|teammate|csapatt[aá]rs|rival|riv[aá]l|enemy|ellens[eé]g|crush|dating|j[aá]rnak|partner|spouse|h[aá]zast[aá]rs|fianc|jegyes|ex\b|titkos viszony|secret relationship|lover/.test(relWords);
+  const meaningfulFeeling =
+    /obsess|megsz[aá]ll|possess|birtokl|jealous|f[eé]lt[eé]keny|protect|v[eé]delmez|love|szeret|vonz|attract|crush|hate|gy[uű]l[oö]l|distrust|bizalmatlan|fear|resent|harag|rival|riv[aá]l/.test(relWords);
+
+  if (meaningfulBond || meaningfulFeeling || relScore >= 15) {
+    reasons.push("relationship");
+  }
+
+  const sharedScene = (w.scenes || []).some((scene) => {
+    if (!scene || !(scene.cast || []).includes(c.id)) return false;
+    const turns = mergeRoleplayTurnStreams(
+      scene.turns || [],
+      scene.playerTurnJournal || []
+    ).slice(-50);
+    return turns.some((turn) => turn && turn.authorId === me) &&
+      turns.some((turn) => turn && turn.authorId === c.id);
+  });
+  if (sharedScene) reasons.push("shared-scene");
+
+  const sharedGroup = (w.groups || []).some((group) => {
+    if (!group || !(group.members || []).includes(c.id)) return false;
+    const msgs = (group.msgs || []).slice(-80);
+    return msgs.some((m) => m && m.from === me) &&
+      msgs.some((m) => m && m.from === c.id);
+  });
+  if (sharedGroup) reasons.push("shared-group-chat");
+
+  const directSocialInteraction = (w.posts || []).slice(0, 40).some((post) => {
+    if (!post) return false;
+    const comments = safePostComments(post);
+    if (post.authorId === me && comments.some((cm) => cm && cm.authorId === c.id)) return true;
+    if (post.authorId === c.id && comments.some((cm) => cm && cm.authorId === me)) return true;
+
+    const byId = new Map(comments.filter(Boolean).map((cm) => [cm.id, cm]));
+    return comments.some((cm) => {
+      if (!cm || !cm.parent) return false;
+      const parent = byId.get(cm.parent);
+      if (!parent) return false;
+      return (cm.authorId === me && parent.authorId === c.id) ||
+        (cm.authorId === c.id && parent.authorId === me);
+    });
+  });
+  if (directSocialInteraction) reasons.push("direct-public-interaction");
+
+  return { eligible: reasons.length > 0, reasons };
+}
+
+function autonomousDmEligible(w, c) {
+  return autonomousDmGroundingEvidence(w, c).eligible;
+}
+
 function pickInitiator(w) {
-  const chars = (w.chars || []).filter((c) => c && !isHuman(w, c.id));
+  const chars = (w.chars || []).filter((c) => c && !isHuman(w, c.id) && autonomousDmEligible(w, c));
   if (!chars.length) return null;
 
   const pool = chars.map((c) => {
@@ -47434,7 +48443,8 @@ function romanticObserverDelta(stakeInfo, event, strength) {
   return -Math.max(4, Math.min(22, Math.round(loss)));
 }
 
-function scheduleRomanticObserverReaction(w, event, observerId) {
+function scheduleRomanticObserverReaction(w, event, observerId, subjectId) {
+  /* MÁSVILÁG AI-AI JEALOUSY ROUTING v1 */
   if (!w || !event || !observerId) return;
   const keyBase = `romantic-observer:${event.id || event.refId || event.ts}:${observerId}`;
 
@@ -47454,15 +48464,28 @@ function scheduleRomanticObserverReaction(w, event, observerId) {
     return;
   }
 
-  /* For a witnessed scene / public post there may be no concrete comment
-     node to answer. Give the affected character a chance to confront the
-     person privately using the memory + continuity written below. */
-  simEnqueue(w, mkAction(
-    "dm",
-    `${keyBase}:dm`,
-    { botId: observerId, trigger: "romantic-jealousy", eventId: event.id || "" },
-    "event"
-  ));
+  /* For a witnessed scene / public post there may be no concrete comment node.
+     Route the consequence to the ACTUAL relationship target. AI→AI jealousy must
+     never be silently converted into a DM to the player. */
+  if (subjectId === w.meId) {
+    simEnqueue(w, mkAction(
+      "dm",
+      keyBase + ":dm",
+      { botId: observerId, trigger: "romantic-jealousy", eventId: event.id || "" },
+      "event"
+    ));
+    return;
+  }
+
+  const subject = subjectId ? charById(w, subjectId) : null;
+  if (subject && !isHuman(w, subject.id)) {
+    simEnqueue(w, mkAction(
+      "npc-pair-reaction",
+      keyBase + ":npc:" + subject.id,
+      { actorId: observerId, targetId: subject.id, trigger: "romantic-jealousy", eventId: event.id || "" },
+      "event"
+    ));
+  }
 }
 
 function romanticEventParticipantIds(w, event) {
@@ -47625,16 +48648,118 @@ function applyObservedRomanticThirdPartyConsequences(w, event) {
     }
 
     /* Keep visible fallout focused instead of making five people pile on at once. */
-    if (index < 2) scheduleRomanticObserverReaction(w, event, observer.id);
+    if (index < 2) scheduleRomanticObserverReaction(w, event, observer.id, row.subjectId);
   });
 
   return chosen.length;
 }
 
-function recordSocialEvent(
+/* MÁSVILÁG PLAYER PUBLIC MENTION RELATIONSHIP IMPACT v1 */
+function playerPublicMentionToneDelta(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return 0;
+  const low = raw.toLowerCase();
+
+  const positiveStrong = [
+    /(?:i\s+love|love\s+you|adore|imádom|szeretem|szeretlek|büszke\s+vagyok|proud\s+of)/i,
+    /(?:amazing|incredible|gorgeous|beautiful|handsome|brilliant|iconic|csodálatos|gyönyörű|zseniális|lenyűgöző)/i,
+  ];
+  const positiveSoft = [
+    /(?:cute|hot|pretty|sweet|lovely|favorite|favourite|queen|king|cuki|dögös|szép|kedvenc|királynő|király)/i,
+    /(?:❤️|❤|🥰|😍|💖|💕|🔥)/u,
+  ];
+  const negativeStrong = [
+    /(?:i\s+hate|hate\s+you|can't\s+stand|cannot\s+stand|utálom|utállak|gyűlölöm|gyűlöllek)/i,
+    /(?:disgusting|pathetic|worthless|repulsive|undorító|szánalmas|értéktelen)/i,
+  ];
+  const negativeSoft = [
+    /(?:liar|coward|loser|moron|hazug|képmutató|gyáva|vesztes|idióta)/i,
+    /(?:🤮|🖕)/u,
+  ];
+
+  let score = 0;
+  positiveStrong.forEach((rx) => { if (rx.test(low)) score += 2; });
+  positiveSoft.forEach((rx) => { if (rx.test(low)) score += 1; });
+  negativeStrong.forEach((rx) => { if (rx.test(low)) score -= 2; });
+  negativeSoft.forEach((rx) => { if (rx.test(low)) score -= 1; });
+
+  if (score >= 2) return 2;
+  if (score === 1) return 1;
+  if (score <= -2) return -2;
+  if (score === -1) return -1;
+  return 0;
+}
+
+function applyPlayerPublicMentionRelationshipImpact(w, event) {
+  if (!w || !event || typeof event !== "object") return;
+  if (!w.meId || String(event.actorId || "") !== String(w.meId)) return;
+
+  const type = String(event.type || "").toLowerCase();
+  if (!(type === "post" || type === "comment" || type === "reply")) return;
+
+  const text = String(event.text || "").trim();
+  if (!text) return;
+
+  const targetIds = explicitNamedCharacterIdsInText(w, text, w.meId)
+    .filter((id) => id && id !== w.meId && !isHuman(w, id));
+  if (!targetIds.length) return;
+
+  if (!w.sim || typeof w.sim !== "object" || Array.isArray(w.sim)) w.sim = {};
+  if (!w.sim.playerMentionRelationshipImpactSeen || typeof w.sim.playerMentionRelationshipImpactSeen !== "object" || Array.isArray(w.sim.playerMentionRelationshipImpactSeen)) {
+    w.sim.playerMentionRelationshipImpactSeen = {};
+  }
+
+  const ref = String(event.refId || event.id || "").trim();
+  const eventKey = ref
+    ? type + ":" + ref
+    : type + ":" + String(Number(event.ts) || 0) + ":" + text.slice(0, 120);
+  if (w.sim.playerMentionRelationshipImpactSeen[eventKey]) return;
+  w.sim.playerMentionRelationshipImpactSeen[eventKey] = now();
+
+  const seenEntries = Object.entries(w.sim.playerMentionRelationshipImpactSeen)
+    .sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0));
+  if (seenEntries.length > 220) {
+    w.sim.playerMentionRelationshipImpactSeen = Object.fromEntries(seenEntries.slice(0, 180));
+  }
+
+  const delta = playerPublicMentionToneDelta(text);
+
+  [...new Set(targetIds)].slice(0, 6).forEach((targetId) => {
+    const target = charById(w, targetId);
+    if (!target) return;
+
+    const playerName = w.player && w.player.name ? w.player.name : "";
+    const surfaceHu = type === "post" ? "posztban" : "kommentben";
+    const surfaceEn = type === "post" ? "post" : "comment";
+
+    rememberAboutTarget(w, targetId, w.meId, {
+      kind: "event",
+      source: "public_social",
+      confidence: 1,
+      text: sysLangText(
+        w,
+        targetId,
+        (playerName || "A játékos") + " nyilvánosan megemlített engem egy " + surfaceHu + ": " + cut(text, 180),
+        (playerName || "The player") + " publicly mentioned me in a " + surfaceEn + ": " + cut(text, 180)
+      ),
+    });
+
+    if (!delta) return;
+
+    const current = getRel(w, targetId, w.meId);
+    const oldScore = Number(current && current.score) || 0;
+    const nextScore = Math.max(-100, Math.min(100, oldScore + delta));
+    if (nextScore === oldScore) return;
+
+    setRel(w, targetId, w.meId, { score: nextScore });
+  });
+}
+
+function legacySimsSocialRecordSocialEvent(
   w,
   event = {}
 ) {
+  applyPlayerPublicMentionRelationshipImpact(w, event);
   if (!w || typeof w !== "object") {
     return null;
   }
@@ -49164,7 +50289,9 @@ function lastAiFeedPostAt(w) {
     );
 }
 
-function feedNeedsFreshPost(w) {
+function legacyEventDrivenFeedNeedsFreshPost(w) {
+  const lastFeedAttemptAt = Number(w && w.sim && w.sim.feedAttemptAt) || 0;
+  if (lastFeedAttemptAt && now() - lastFeedAttemptAt < FEED_RECOVERY_RETRY_BACKOFF_MS) return false;
   const last = lastAiFeedPostAt(w);
   const cast = fairPostCast(w);
   if (!cast.length) return false;
@@ -49177,13 +50304,13 @@ function feedNeedsFreshPost(w) {
 
   /* Catch up under-three bots visibly, then return to the normal slower pulse. */
   const target = belowMinimum
-    ? Math.min(LIVE_WORLD_POST_TARGET_MS, 90 * 1000)
+    ? Math.min(LIVE_WORLD_POST_TARGET_MS, 60 * 1000)
     : LIVE_WORLD_POST_TARGET_MS;
 
   return !last || now() - last >= target;
 }
 
-function freshFeedPostCommentCandidate(w) {
+function legacyEventDrivenFreshFeedPostCommentCandidate(w) {
   if (!w) return null;
   const ts = now();
 
@@ -49282,7 +50409,7 @@ function canAiInitiateRoleplay(w) {
   const last = Math.max(simLast, historyLast);
   const rpPeak = Math.max(0.55, channelActivityPeak(w, "roleplay"));
   const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+  const target = Math.max(8 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   return !last || ts - last >= target;
 }
 
@@ -49309,7 +50436,7 @@ function roleplayInitiatorScore(w, c) {
 
 function pickRoleplayInitiator(w) {
   const pool = (w.chars || [])
-    .filter((c) => c && !isHuman(w, c.id))
+    .filter((c) => c && !isHuman(w, c.id) && autonomousDmEligible(w, c))
     .map((c) => ({ c, score: roleplayInitiatorScore(w, c) }))
     .sort((a,b) => b.score - a.score);
 
@@ -49823,11 +50950,11 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   const dmLast = Number(sim.lastAutonomousDmAt) || 0;
   const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
-  const dmTarget = Math.max(2.5 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
+  const dmTarget = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const dmElapsed = dmLast ? ts - dmLast : Math.max(0, ts - laneStartedAt);
   const dmRetryReady = !Number(sim.dmAttemptAt) || ts - Number(sim.dmAttemptAt) >= 22 * 1000;
 
-  if (permits("dm") && dmElapsed >= dmTarget && dmRetryReady) {
+  if (!AI_ACTIVITY_OPTIMIZATION.EVENT_DRIVEN_UNSOLICITED_DM_ONLY && permits("dm") && dmElapsed >= dmTarget && dmRetryReady) {
     const bot = pickInitiator(view);
     if (bot) {
       candidates.push({
@@ -49848,7 +50975,7 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   );
   const groupPeak = Math.max(0.25, channelActivityPeak(view, "group"));
   const groupLast = lastAiGroupMessageAt(view);
-  const groupTarget = Math.max(210000, Math.round(290000 / groupPeak));
+  const groupTarget = Math.max(7 * 60 * 1000, Math.round((10 * 60 * 1000) / groupPeak));
   const groupElapsed = groupLast ? ts - groupLast : groupTarget * 2.5;
   const groupRetryReady = !Number(sim.groupAttemptAt) || ts - Number(sim.groupAttemptAt) >= 35000;
 
@@ -49890,7 +51017,7 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
     const rpLast = Math.max(Number(sim.lastRoleplayInviteAt) || 0, rpHistoryLast);
     const laneStartedAt = Number(sim.liveWorldStartedAt) || ts;
     const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-    const rpTarget = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+    const rpTarget = Math.max(8 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
     const rpElapsed = rpLast ? ts - rpLast : Math.max(0, ts - laneStartedAt);
     const rpRetryReady = !Number(sim.roleplayAttemptAt) || ts - Number(sim.roleplayAttemptAt) >= 35 * 1000;
 
@@ -49915,7 +51042,7 @@ function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   const feedTarget = LIVE_WORLD_POST_TARGET_MS;
   const feedElapsed = feedLast ? ts - feedLast : feedTarget * 2.2;
 
-  if (permits("feed") && feedElapsed >= feedTarget) {
+  if (!AI_ACTIVITY_OPTIMIZATION.EVENT_DRIVEN_FEED_ONLY && permits("feed") && feedElapsed >= feedTarget) {
     candidates.push({
       urgency: Math.min(5, feedElapsed / feedTarget) + 0.10 + Math.random() * 0.12,
       action: mkAction(
@@ -49940,11 +51067,441 @@ function hasRecentWidespreadGossip(w) {
   );
 }
 
-function autonomousDmOverdueByMs(w) {
+
+/* MÁSVILÁG EVENT-DRIVEN AI OPTIMIZATION v1 */
+const AI_ACTIVITY_OPTIMIZATION = Object.freeze({
+  EVENT_DRIVEN_FEED_ONLY: true,
+  EVENT_DRIVEN_UNSOLICITED_DM_ONLY: true,
+  FEED_MIN_POSTS: 6,
+  FEED_MAX_POSTS: 7,
+  PLAYER_COMMENT_MAX_AI_REPLIES: 4,
+  AI_THREAD_MAX_ROUNDS: 3,
+  RECENT_DM_WINDOW_MS: 10 * 60 * 1000,
+  RECENT_DM_THREAD_LIMIT: 2,
+  UNSOLICITED_DM_BURST_MAX: 2,
+  UNSOLICITED_DM_BURST_WINDOW_MS: 90 * 1000,
+});
+
+let EVENT_DRIVEN_FEED_BATCH_CONTEXT = null;
+let EVENT_DRIVEN_FEED_APPLYING = false;
+
+function eventDrivenRecentPlayerDmThreads(w) {
+  const cutoff = now() - AI_ACTIVITY_OPTIMIZATION.RECENT_DM_WINDOW_MS;
+  return [...new Set(Object.entries((w && w.chats) || {})
+    .filter(([, rows]) => Array.isArray(rows) && rows.some((m) =>
+      m && m.from === "me" && Number(m.ts || 0) >= cutoff
+    ))
+    .map(([key]) => key))];
+}
+
+function eventDrivenAutonomousDmPauseReason(w) {
+  if (!w) return "no-world";
+  const inScene = Boolean(
+    String(w.activeSceneId || "") ||
+    (typeof playerInsideActiveEvent === "function" && playerInsideActiveEvent(w))
+  );
+  if (inScene) return "scene-active";
+
+  const activeDmThreads = eventDrivenRecentPlayerDmThreads(w);
+  if (activeDmThreads.length >= AI_ACTIVITY_OPTIMIZATION.RECENT_DM_THREAD_LIMIT) {
+    return "parallel-dms";
+  }
+
+  const cutoff = now() - AI_ACTIVITY_OPTIMIZATION.UNSOLICITED_DM_BURST_WINDOW_MS;
+  const recentIncoming = ((w && w.socialEvents) || []).filter((event) =>
+    event &&
+    event.type === "dm-message" &&
+    Number(event.ts || 0) >= cutoff &&
+    event.actorId &&
+    !isHuman(w, event.actorId) &&
+    Array.isArray(event.targetIds) &&
+    event.targetIds.includes(w.meId)
+  ).length;
+  if (recentIncoming >= AI_ACTIVITY_OPTIMIZATION.UNSOLICITED_DM_BURST_MAX) {
+    return "unsolicited-burst-limit";
+  }
+  return "";
+}
+
+function eventDrivenRememberDeferredDm(w, action, reason) {
+  if (!w || !action) return;
+  const botId = String(action.payload && action.payload.botId || "");
+  if (!botId) return;
+
+  const sim = ensureSimState(w);
+  if (!sim.deferredAutonomousDms || typeof sim.deferredAutonomousDms !== "object" || Array.isArray(sim.deferredAutonomousDms)) {
+    sim.deferredAutonomousDms = {};
+  }
+
+  const latestCause = ((w.socialEvents || []).slice().reverse().find((event) => {
+    if (!event) return false;
+    const ids = [String(event.actorId || ""), ...((event.targetIds || []).map(String))];
+    return ids.includes(botId) && ids.includes(String(w.meId || ""));
+  })) || null;
+
+  const previous = sim.deferredAutonomousDms[botId];
+  sim.deferredAutonomousDms[botId] = {
+    ...(previous && typeof previous === "object" ? previous : {}),
+    botId,
+    at: now(),
+    reason: String(reason || "busy"),
+    trigger: String(action.payload && action.payload.trigger || "event"),
+    eventId: String(action.payload && action.payload.eventId || ""),
+    causeText: latestCause ? String(latestCause.text || "").slice(0, 500) : String(previous && previous.causeText || ""),
+  };
+
+  try {
+    if (typeof rememberKnowledge === "function" && charById(w, botId)) {
+      const cause = latestCause && latestCause.text
+        ? String(latestCause.text).replace(/\s+/g, " ").trim().slice(0, 420)
+        : String(action.payload && action.payload.trigger || "egy korábbi social esemény");
+      rememberKnowledge(w, botId, {
+        kind: "event",
+        source: "deferred_dm",
+        confidence: 1,
+        text: "Ezt később még természetesen szóba hozhatom " + nameOfIn(w, w.meId) + " karakterrel: " + cause,
+      });
+    }
+  } catch (memoryErr) {
+    console.warn("[dm-deferred] memory note failed", memoryErr);
+  }
+
+  console.info(
+    "[dm-deferred] skipped-before-generation",
+    "bot=" + botId,
+    "reason=" + String(reason || "busy"),
+    "trigger=" + String(action.payload && action.payload.trigger || "event")
+  );
+}
+
+function eventDrivenCommentDepth(post, commentId) {
+  if (!post || !commentId) return 0;
+  const rows = safePostComments(post);
+  const byId = new Map(rows.filter(Boolean).map((row) => [row.id, row]));
+  let cur = byId.get(commentId);
+  let depth = 0;
+  const seen = new Set();
+  while (cur && cur.parent && !seen.has(cur.id) && depth < 20) {
+    seen.add(cur.id);
+    depth += 1;
+    cur = byId.get(cur.parent);
+  }
+  return depth;
+}
+
+function eventDrivenAiThreadMaxed(w, postId, commentIds) {
+  const post = (w && w.posts || []).find((row) => row && row.id === postId);
+  if (!post) return false;
+  const ids = Array.isArray(commentIds) ? commentIds : [commentIds];
+  return ids.some((id) =>
+    eventDrivenCommentDepth(post, id) >= AI_ACTIVITY_OPTIMIZATION.AI_THREAD_MAX_ROUNDS
+  );
+}
+
+function eventDrivenFeedDirective() {
+  const ctx = EVENT_DRIVEN_FEED_BATCH_CONTEXT;
+  if (!ctx || !ctx.enabled) return "";
+  const triggerName = String(ctx.trigger || "event");
+  const triggerPostIds = Array.isArray(ctx.triggerPostIds) ? ctx.triggerPostIds.filter(Boolean) : [];
+  const excluded = Array.isArray(ctx.excludeAuthorIds) ? ctx.excludeAuthorIds.filter(Boolean) : [];
+  const needed = Math.max(
+    1,
+    Math.min(
+      AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS,
+      Number(ctx.neededPosts) || AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS
+    )
+  );
+
+  return "EVENT-DRIVEN FEED BATCH — HARD CONTRACT:\n" +
+    "Trigger: " + triggerName + ". This is the ONLY feed refresh for this event.\n" +
+    "Return " + needed + " NEW feed posts by " + needed + " DIFFERENT AI characters in the existing top-level posts JSON array. Never use the player or a gossip-media account as one of these character posts.\n" +
+    "Every new post MUST already contain 2-5 meaningful comments/replies in that post's existing comments array, from different plausible characters. Do not leave a new post commentless.\n" +
+    "Use each author's personality, current relationship state, stored summary, voice/style card, recent public events and current world state. Some posts may react to the trigger or gossip; others may naturally be about their own life. Do not make all posts about the player.\n" +
+    "Do not create near-duplicate captions or give multiple characters the same wording.\n" +
+    (excluded.length
+      ? "Do NOT choose these authors again in this batch retry: " + excluded.join(", ") + ".\n"
+      : "") +
+    (triggerPostIds.length
+      ? "Also return a top-level JSON array named triggerComments. It must contain 2-4 comments for EACH of these already-existing trigger posts: " + triggerPostIds.join(", ") + ". Each row: {\"postId\":\"EXACT_POST_ID\",\"id\":\"CHARACTER_ID_OR_NAME\",\"text\":\"comment\",\"reply_to\":\"optional\"}. These comments must react to that exact post and must not create replacement posts.\n"
+      : "") +
+    "Use the EXISTING response JSON schema for everything else. This batch must be usable in one provider response.";
+}
+
+function eventDrivenFeedRawAuthor(w, post) {
+  if (!post) return "";
+  try {
+    return String(aiVoice(w, post.id !== undefined ? post.id : post.name) || "");
+  } catch {
+    return "";
+  }
+}
+
+function eventDrivenUsableBatchPosts(w, out) {
+  const rows = out && Array.isArray(out.posts) ? out.posts : [];
+  const seen = new Set();
+  const selected = [];
+  for (const post of rows) {
+    const authorId = eventDrivenFeedRawAuthor(w, post);
+    if (!authorId || isHuman(w, authorId) || isMediaAccount(w, authorId) || seen.has(authorId)) continue;
+    if (!Array.isArray(post && post.comments) || !post.comments.length) continue;
+    seen.add(authorId);
+    selected.push(post);
+    if (selected.length >= AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS) break;
+  }
+  return selected;
+}
+
+function eventDrivenMergeBatchOutputs(w, first, second) {
+  const merged = { ...(first || {}) };
+  const candidates = [
+    ...eventDrivenUsableBatchPosts(w, first),
+    ...eventDrivenUsableBatchPosts(w, second),
+  ];
+  const seen = new Set();
+  merged.posts = [];
+  candidates.forEach((post) => {
+    const authorId = eventDrivenFeedRawAuthor(w, post);
+    if (!authorId || seen.has(authorId) || merged.posts.length >= AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS) return;
+    seen.add(authorId);
+    merged.posts.push(post);
+  });
+  merged.triggerComments = [
+    ...((first && Array.isArray(first.triggerComments)) ? first.triggerComments : []),
+    ...((second && Array.isArray(second.triggerComments)) ? second.triggerComments : []),
+  ];
+  ["changes", "selfUpdates", "relationshipUpdates"].forEach((key) => {
+    merged[key] = [
+      ...((first && Array.isArray(first[key])) ? first[key] : []),
+      ...((second && Array.isArray(second[key])) ? second[key] : []),
+    ];
+  });
+  return merged;
+}
+
+function eventDrivenTriggerCommentsCovered(out, postIds) {
+  if (!Array.isArray(postIds) || !postIds.length) return true;
+  const rows = out && Array.isArray(out.triggerComments) ? out.triggerComments : [];
+  return postIds.every((postId) =>
+    rows.filter((row) => row && String(row.postId || row.post_id || "") === String(postId)).length >= 2
+  );
+}
+
+function eventDrivenApplyTriggerComments(w, out, postIds) {
+  if (!w || !out || !Array.isArray(out.triggerComments)) return 0;
+  let total = 0;
+  (postIds || []).forEach((postId) => {
+    const comments = out.triggerComments
+      .filter((row) => row && String(row.postId || row.post_id || "") === String(postId))
+      .slice(0, AI_ACTIVITY_OPTIMIZATION.PLAYER_COMMENT_MAX_AI_REPLIES);
+    if (!comments.length) return;
+    total += Number(applyComments(w, postId, { comments }, {}) || 0);
+  });
+  return total;
+}
+
+function eventDrivenGossipSource(w, trigger, payload) {
+  const events = (w && w.socialEvents || []).slice().reverse();
+
+  if (trigger === "roleplay-ended") {
+    const sceneId = String(payload && payload.sceneId || "");
+    const scene = (w.scenes || []).find((row) => row && String(row.id) === sceneId);
+    const aiIds = scene
+      ? (scene.cast || []).filter((id) => id && !isHuman(w, id) && charById(w, id))
+      : [];
+    if (!scene || aiIds.length < 2) return null;
+
+    const source = events.find((event) =>
+      event &&
+      event.meta &&
+      String(event.meta.sceneId || "") === sceneId &&
+      gossipPrivacyEligible(event)
+    );
+
+    return {
+      key: "scene:" + sceneId,
+      source,
+      title: String(scene.title || "").trim(),
+      targetIds: [w.meId, ...aiIds].filter(Boolean),
+      sceneId,
+    };
+  }
+
+  if (trigger === "popup-choice") {
+    const popupId = String(payload && payload.popupEventId || "");
+    const source = events.find((event) => {
+      if (!event || !gossipPrivacyEligible(event)) return false;
+      if (popupId && (
+        String(event.refId || "") === popupId ||
+        String(event.id || "") === popupId ||
+        String(event.meta && event.meta.popupEventId || "") === popupId
+      )) return true;
+      return event.source === "popup-event" ||
+        (Array.isArray(event.tags) && event.tags.includes("popup-event"));
+    });
+
+    return {
+      key: "popup:" + (popupId || String(source && (source.id || source.refId) || "latest")),
+      source,
+      title: String(source && source.meta && (source.meta.title || source.meta.eventTitle) || "").trim(),
+      targetIds: [...new Set([
+        String(source && source.actorId || ""),
+        ...((source && source.targetIds) || []).map(String),
+      ].filter((id) => id && !isMediaAccount(w, id)))],
+      popupEventId: popupId,
+    };
+  }
+
+  return null;
+}
+
+function legacyFullSpecEnsureEventDrivenGossipPost(w, trigger, payload) {
+  if (!w) return null;
+  const info = eventDrivenGossipSource(w, trigger, payload);
+  if (!info) return null;
+
+  ensureGossipMediaState(w);
+  if (!w.gossipSettings || (w.gossipSettings.mediaMode !== "local" && w.gossipSettings.mediaMode !== "global")) {
+    w.gossipSettings.mediaMode = "local";
+    ensureGossipMediaState(w);
+  }
+
+  const media = activeGossipMediaAccount(w);
+  if (!media) return null;
+
+  const candidateId = "event-driven:" + info.key;
+  const existing = (w.posts || []).find((post) =>
+    post && post.gossipStory && post.gossipStory.candidateId === candidateId
+  );
+  if (existing) return existing;
+
+  const sourceText = String(info.source && info.source.text || "").replace(/\s+/g, " ").trim();
+  const names = info.targetIds.map((id) => nameOfIn(w, id)).filter(Boolean);
+  const title = info.title || (trigger === "popup-choice" ? "what just happened" : "event aftermath");
+  const en = worldLanguage(w, w.meId) === "en";
+  const headline = "👀 " + title;
+  const body = sourceText
+    ? headline + "\n\n" + cut(sourceText, 650) + "\n\n" +
+      (en
+        ? "People saw it. Now everyone has an opinion."
+        : "Látták. Most már mindenkinek van róla véleménye.")
+    : headline + "\n\n" +
+      (names.length ? names.join(", ") + " — " : "") +
+      (en
+        ? "the public aftermath is already making rounds."
+        : "a nyilvános utóélet már körbejár.");
+
+  const stable = typeof simsSocialStableHash === "function"
+    ? simsSocialStableHash(candidateId)
+    : String(uid());
+
+  const post = {
+    id: "gossip_evt_" + stable,
+    authorId: media.id,
+    ts: now(),
+    likes: 0,
+    likedBy: [],
+    text: body,
+    imageId: "",
+    image: "",
+    comments: [],
+    language: worldLanguage(w, w.meId),
+    gossipStory: {
+      id: "gs_evt_" + stable,
+      candidateId,
+      mediaMode: w.gossipSettings.mediaMode,
+      format: "recap",
+      headline,
+      factLevel: String(info.source && info.source.factLevel || "observed"),
+      eventIds: info.source
+        ? [String(info.source.id || info.source.refId || "")].filter(Boolean)
+        : [],
+      mentionedIds: info.targetIds,
+      roleplayBased: trigger === "roleplay-ended",
+      witnessCount: trigger === "roleplay-ended"
+        ? Math.max(2, info.targetIds.length - 1)
+        : 1,
+      eventRecap: true,
+      eventTitle: title,
+      attendeeIds: info.targetIds,
+      reactedBy: [],
+      reactionRounds: 0,
+      rumorEvolvedAt: 0,
+      eventDrivenKey: info.key,
+    },
+  };
+
+  if (!Array.isArray(w.posts)) w.posts = [];
+  w.posts.unshift(post);
+
+  recordSocialEvent(w, {
+    type: "gossip-story",
+    refId: post.gossipStory.id,
+    ts: post.ts,
+    actorId: media.id,
+    targetIds: info.targetIds,
+    visibility: "public",
+    factLevel: post.gossipStory.factLevel,
+    importance: 70,
+    drama: 55,
+    romance: 0,
+    embarrassment: 25,
+    source: "gossip-media",
+    text: cut(body, 300),
+    tags: ["social", "gossip-media", "event-driven", trigger],
+    meta: {
+      postId: post.id,
+      gossipStoryId: post.gossipStory.id,
+      mediaId: media.id,
+      sceneId: info.sceneId || "",
+      popupEventId: info.popupEventId || "",
+    },
+  });
+
+  return post;
+}
+
+function feedNeedsFreshPost() {
+  return false;
+}
+
+function autonomousDmOverdueByMs() {
+  return AI_ACTIVITY_OPTIMIZATION.EVENT_DRIVEN_UNSOLICITED_DM_ONLY
+    ? -Infinity
+    : legacyEventDrivenAutonomousDmOverdueByMs(...arguments);
+}
+
+function freshFeedPostCommentCandidate() {
+  return null;
+}
+
+function worldContext(...args) {
+  const base = String(legacyEventDrivenWorldContext(...args) || "");
+  const directive = eventDrivenFeedDirective();
+  return directive ? base + "\n\n" + directive : base;
+}
+
+function legacyFullSpecEnqueueNaturalThreadReply(...args) {
+  const w = args[0];
+  const postId = args[1];
+  const commentIds = args[2];
+  if (eventDrivenAiThreadMaxed(w, postId, commentIds)) return false;
+  return legacyEventDrivenEnqueueNaturalThreadReply(...args);
+}
+
+function legacyFullSpecEnqueueVisualCrushThreadFriction(...args) {
+  if (typeof legacyEventDrivenEnqueueVisualCrushThreadFriction !== "function") return false;
+  const w = args[0];
+  const postId = args[1];
+  const commentIds = args[2];
+  if (eventDrivenAiThreadMaxed(w, postId, commentIds)) return false;
+  return legacyEventDrivenEnqueueVisualCrushThreadFriction(...args);
+}
+
+function legacyEventDrivenAutonomousDmOverdueByMs(w) {
   if (!w) return -Infinity;
   const dmPeak = Math.max(0.25, channelActivityPeak(w, "dm"));
   const dmActivityFactor = Math.max(0.90, Math.min(1.30, 1 + (dmPeak - 1) * 0.28));
-  const target = Math.max(2.5 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
+  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_DM_TARGET_MS / dmActivityFactor));
   const last = Number(w.sim && w.sim.lastAutonomousDmAt) || 0;
   const startedAt = Number(w.sim && w.sim.liveWorldStartedAt) || now();
   const elapsed = last ? now() - last : Math.max(0, now() - startedAt);
@@ -49955,7 +51512,7 @@ function roleplayInviteOverdueByMs(w) {
   if (!w || !canAiInitiateRoleplay(w)) return -Infinity;
   const rpPeak = Math.max(0.25, channelActivityPeak(w, "roleplay"));
   const rpActivityFactor = Math.max(0.92, Math.min(1.24, 1 + (rpPeak - 1) * 0.22));
-  const target = Math.max(6 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
+  const target = Math.max(8 * 60 * 1000, Math.round(LIVE_WORLD_EVENT_TARGET_MS / rpActivityFactor));
   const last = Math.max(
     Number(w.sim && w.sim.lastRoleplayInviteAt) || 0,
     lastAiInitiatedRoleplayAt(w)
@@ -49987,7 +51544,7 @@ function popupPriorityAction(view, keyPrefix = "popup-priority") {
   );
 }
 
-function planAutoAction(view) {
+function legacyFullSpecPlanAutoAction(view) {
   if (!view || !(view.chars || []).length) return null;
 
   /*
@@ -50175,7 +51732,7 @@ function planAutoAction(view) {
    * az új feedet vagy a friss-feed kommenteket.
    */
   const priorityNoteState = playerNoteReactionUrgency(view);
-  if (priorityNoteState && Math.random() < 0.55) {
+  if (priorityNoteState && Math.random() < 0.25) {
     return mkAction(
       "note-react",
       `note-priority:${priorityNoteState.note.id}:${priorityNoteState.processedBy.size}`,
@@ -50196,11 +51753,11 @@ function planAutoAction(view) {
 
   /* Group chat a fő sorrend mögött él tovább, nem veheti át a feed helyét. */
   const groupInitiative = pickInitiativeWatchdogAction(view, ["group"]);
-  if (groupInitiative && Math.random() < 0.45) return groupInitiative;
+  if (groupInitiative && Math.random() < 0.20) return groupInitiative;
 
   /* A pletyka-háló tovább él, de csak a fenti fő social ritmus után. */
   const gossipSpread = pickGossipPropagationAction(view);
-  if (gossipSpread && Math.random() < (String(view.gossipSettings && view.gossipSettings.frequency || "normal") === "chaotic" ? 0.52 : 0.30)) {
+  if (gossipSpread && Math.random() < (String(view.gossipSettings && view.gossipSettings.frequency || "normal") === "chaotic" ? 0.34 : 0.16)) {
     return mkAction(
       "gossip-spread",
       `gossip-spread:${gossipSpread.rumorId}:${gossipSpread.fromId}:${gossipSpread.toId}`,
@@ -50210,7 +51767,7 @@ function planAutoAction(view) {
   }
 
   const gossipEcho = pickGossipNetworkEchoAction(view);
-  if (gossipEcho && Math.random() < 0.22) {
+  if (gossipEcho && Math.random() < 0.10) {
     return mkAction(
       "gossip-echo",
       `gossip-echo:${gossipEcho.rumorId}:${gossipEcho.mode}:${Math.floor(now() / 60000)}`,
@@ -50776,7 +52333,7 @@ function planAutoAction(view) {
    * A feed watchdog külön garantál friss posztot, ezért itt bátrabban
    * engedjük, hogy a karakterek privátban is megmozdítsák a történetet.
    */
-  if (roll < 0.36) {
+  if (!AI_ACTIVITY_OPTIMIZATION.EVENT_DRIVEN_UNSOLICITED_DM_ONLY && roll >= 0.18 && roll < 0.24) {
     const bot =
       pickInitiator(view);
 
@@ -51106,8 +52663,232 @@ Ha van természetes folytatás:
     { maxTokens: 900, priority: 18 }
   );
 }
+/* MÁSVILÁG NPC-PAIR REACTION v1 */
+async function legacyGroundedGenNpcPairReaction(w, actor, target, sourceEvent) {
+  if (!w || !actor || !target || actor.id === target.id || isHuman(w, actor.id) || isHuman(w, target.id)) return { skip: true };
+  const rel = getRel(w, actor.id, target.id) || {};
+  const reverse = getRel(w, target.id, actor.id) || {};
+  const eventText = sourceEvent ? String(sourceEvent.text || "") : "";
+  const eventVisibility = sourceEvent ? String(sourceEvent.visibility || "limited") : "limited";
+  const prompt = [
+    worldContext(w, [actor.id, target.id], true, actor.id),
+    "NPC→NPC AUTONOMOUS RELATIONSHIP REACTION.",
+    "The PLAYER is not the target of this action. Do not redirect the interaction toward the player.",
+    "ACTOR: " + actor.name + " [" + actor.id + "]",
+    "TARGET: " + target.name + " [" + target.id + "]",
+    "ACTOR→TARGET relationship: score=" + (Number(rel.score) || 0) + "; bond=" + (rel.bond || rel.type || "-") + "; mood=" + (rel.mood || "-") + "; hidden=" + (rel.hidden || "-"),
+    "TARGET→ACTOR relationship: score=" + (Number(reverse.score) || 0) + "; bond=" + (reverse.bond || reverse.type || "-") + "; mood=" + (reverse.mood || "-"),
+    "TRIGGER THEY ACTUALLY KNOW ABOUT:",
+    "visibility=" + eventVisibility,
+    eventText || "A witnessed relationship event created a real reaction.",
+    voiceCard(actor),
+    characterMemoryCard(w, actor),
+    relationshipBehaviorCard(w, actor.id, target.id),
+    "RULES:",
+    "- This is between " + actor.name + " and " + target.name + ". The player is not automatically involved.",
+    "- Preserve jealousy, possessiveness, rivalry, hostility, hurt, attraction or loyalty when canon + the trigger support them. Do not soften AI-AI conflict.",
+    "- Do not invent a new trigger, secret knowledge, off-screen betrayal or fake quote.",
+    "- Decide whether the reaction would plausibly become PUBLIC or stay PRIVATE/OFFSCREEN.",
+    "- PUBLIC means the actor would genuinely post a short statement/callout/subtweet visible on the feed. Use it sparingly.",
+    "- OFFSCREEN means the pair has a confrontation/reaction that becomes persistent relationship history but not a player-DM.",
+    "- Keep the reaction concrete and do not resolve the whole relationship in one beat.",
+    "JSON ONLY:",
+    '{"skip":false,"mode":"public_post or offscreen","text":"short public post if mode=public_post, otherwise empty","summary":"one concrete sentence describing the AI-AI reaction/confrontation","tone":"jealous/hostile/hurt/protective/etc"}'
+  ].join("\n\n");
+
+  return askWorldJSON(w, engineFor(w), prompt, { maxTokens: 650, priority: 16 });
+}
+
 /* Egy központi szimulációs akció futtatása. Mindig pontosan egy AI-hívás. */
-async function runSimulationAction(view, update, action, addImage) {
+
+/* MÁSVILÁG PLAYER POST COMMENT GUARANTEE v2 */
+function playerPostCommentDiagnostic(w, post, stage, extra = {}) {
+  const postId = String(post && post.id || extra.postId || "");
+  const authorId = String(post && post.authorId || "");
+  const ageMs = post ? Math.max(0, now() - (Number(post.ts) || 0)) : -1;
+  const fresh = post ? ageMs <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS : false;
+  const human = post ? Boolean(isHuman(w, post.authorId)) : false;
+  console.info(
+    "[player-post-comments]",
+    "stage=" + String(stage || "unknown"),
+    "post=" + postId,
+    "author=" + authorId,
+    "humanAuthor=" + human,
+    "me=" + String(w && w.meId || ""),
+    "fresh=" + fresh,
+    "ageMs=" + ageMs,
+    ...Object.entries(extra || {}).filter(([key]) => key !== "postId").map(([key, value]) => key + "=" + String(value))
+  );
+}
+
+function playerPostCommentFailureNotice(w, post, error) {
+  if (!w || !post || !isHuman(w, post.authorId)) return;
+  const message = String(error && error.message || error || "AI comment generation failed")
+    .replace(/\s+/g, " ")
+    .slice(0, 220);
+  pushNote(w, post.authorId, {
+    icon: "⚠️",
+    text: worldLanguage(w, post.authorId) === "en"
+      ? "AI comments could not be generated for your post: " + message
+      : "A botkommenteket most nem sikerült legenerálni a posztodhoz: " + message,
+    link: { type: "post", id: post.id },
+  });
+}
+
+function playerPostUsableCommentRows(w, out) {
+  const seen = new Set();
+  return safeAiComments(out).filter((row) => {
+    try {
+      if (!row || typeof row !== "object") return false;
+      const actorId = findChar(w, row.id !== undefined ? row.id : (row.authorId !== undefined ? row.authorId : row.name));
+      const text = String(row.text || "").trim();
+      if (!actorId || isHuman(w, actorId) || !text || seen.has(actorId)) return false;
+      seen.add(actorId);
+      return true;
+    } catch (error) {
+      console.warn("[player-post-comments] comment-skip", error);
+      return false;
+    }
+  }).slice(0, 4);
+}
+
+async function legacyFullSpecRunSimulationAction(view, update, action, addImage) {
+  if (!action || action.type !== "player-post-comments-guarantee") {
+    return legacyPlayerPostRunSimulationAction(view, update, action, addImage);
+  }
+  const postId = String(action.payload && action.payload.postId || "");
+  const post = (view.posts || []).find((row) => row && row.id === postId);
+  playerPostCommentDiagnostic(view, post, "start", { exists: Boolean(post), trigger: "player-post" });
+
+  if (!post) {
+    console.warn("[player-post-comments] stopped=post-missing", "post=" + postId);
+    return "player-post-comments-missing";
+  }
+  if (!isHuman(view, post.authorId)) {
+    console.warn("[player-post-comments] stopped=author-not-human", "post=" + post.id, "author=" + String(post.authorId || ""));
+    return "player-post-comments-not-human";
+  }
+
+  let label = "";
+  let combinedRows = [];
+  let combinedChanges = [];
+  let calls = 0;
+  let lastError = null;
+
+  while (calls < 1 && combinedRows.length < 2) {
+    calls += 1;
+    try {
+      playerPostCommentDiagnostic(view, post, "ai-call", { call: calls, providerRequest: "starting" });
+      const generated = await genComments(view, post, { minComments: 3, maxComments: 6, playerPostContentIsolation: true });
+      label = String(generated && generated.label || label || "");
+      const out = generated && generated.out && typeof generated.out === "object" ? generated.out : {};
+      const rows = playerPostUsableCommentRows(view, out);
+      const existingActors = new Set(combinedRows.map((row) => findChar(view, row.id !== undefined ? row.id : (row.authorId !== undefined ? row.authorId : row.name))).filter(Boolean));
+      rows.forEach((row) => {
+        const actorId = findChar(view, row.id !== undefined ? row.id : (row.authorId !== undefined ? row.authorId : row.name));
+        if (actorId && !existingActors.has(actorId) && combinedRows.length < 4) {
+          existingActors.add(actorId);
+          combinedRows.push(row);
+        }
+      });
+      combinedChanges.push(...safeAiChanges(out));
+      playerPostCommentDiagnostic(view, post, "ai-result", {
+        call: calls,
+        status: "success",
+        provider: label || "unknown",
+        usableComments: combinedRows.length,
+      });
+    } catch (error) {
+      lastError = error;
+      console.error("[player-post-comments]", "stage=ai-result", "call=" + calls, "status=failed", "post=" + post.id, error);
+    }
+  }
+
+  if (!combinedRows.length) {
+    const finalError = lastError || new Error("The AI returned no usable bot comments.");
+    update((n) => {
+      const livePost = (n.posts || []).find((row) => row && row.id === post.id);
+      playerPostCommentFailureNotice(n, livePost || post, finalError);
+    });
+    playerPostCommentDiagnostic(view, post, "failed", { calls, reason: String(finalError.message || finalError) });
+    return "player-post-comments-failed";
+  }
+
+  const safeOut = {
+    comments: combinedRows,
+    changes: combinedChanges,
+    likes: [],
+    memories: [],
+    events: [],
+    selfUpdates: [],
+    relationshipUpdates: [],
+  };
+
+  update((n) => {
+    const livePost = (n.posts || []).find((row) => row && row.id === post.id);
+    const before = livePost ? safePostComments(livePost).length : 0;
+    try {
+      applyComments(n, post.id, safeOut, label);
+      try {
+        const afterApplyPost = (n.posts || []).find((row) => row && row.id === post.id);
+        const newAiComments = afterApplyPost
+          ? safePostComments(afterApplyPost)
+              .slice(before)
+              .filter((row) => row && row.id && row.authorId && !isHuman(n, row.authorId))
+          : [];
+        if (newAiComments.length >= 2 && typeof simEnqueue === "function" && typeof mkAction === "function") {
+          const rootComment = newAiComments[0];
+          const responder = newAiComments.find((row) => row.authorId !== rootComment.authorId);
+          if (responder) {
+            const queued = simEnqueue(
+              n,
+              mkAction(
+                "reply",
+                "player-post-ai-ai:" + post.id + ":" + rootComment.id + ":" + responder.authorId,
+                {
+                  postId: post.id,
+                  commentId: rootComment.id,
+                  rootId: rootComment.id,
+                  targetId: responder.authorId,
+                  trigger: "player-post-ai-ai",
+                },
+                "event"
+              )
+            );
+            console.info(
+              "[player-post-comments]",
+              "stage=ai-ai-reply-queue",
+              "post=" + post.id,
+              "root=" + rootComment.id,
+              "responder=" + responder.authorId,
+              "queued=" + String(Boolean(queued))
+            );
+          }
+        }
+      } catch (threadError) {
+        console.warn("[player-post-comments] AI-AI reply queue failed; root comments preserved", threadError);
+      }
+    } catch (applyError) {
+      console.error("[player-post-comments]", "stage=apply", "post=" + post.id, applyError);
+      playerPostCommentFailureNotice(n, livePost || post, applyError);
+      return;
+    }
+    const afterPost = (n.posts || []).find((row) => row && row.id === post.id);
+    const after = afterPost ? safePostComments(afterPost).length : before;
+    const appliedCount = Math.max(0, after - before);
+    playerPostCommentDiagnostic(n, afterPost || post, "saved", {
+      aiCalls: calls,
+      provider: label || "unknown",
+      applied: appliedCount,
+      visibleComments: after,
+    });
+    groundedEventLog(n, "player-post-comments", appliedCount >= 3 ? "success" : "failed", "Isolated player-post comments applied: " + appliedCount + ".", "post:" + String(post.id), { comments: appliedCount, aiCalls: calls });
+  });
+
+  return "player-post-comments";
+}
+
+async function legacyPlayerPostRunSimulationAction(view, update, action, addImage) {
   if (!view || !action) return null;
 
   /* v76 RESET EPOCH GUARD:
@@ -51241,10 +53022,98 @@ async function runSimulationAction(view, update, action, addImage) {
     return "gossip-story-force";
   }
 
-  if (action.type === "roleplay-initiate") {
+  if (action.type === "sheet-summary-refresh") {
+    const charId = action.payload && action.payload.charId;
+    const expectedHash = action.payload && action.payload.sourceHash;
+    const c = charId ? charById(view, charId) : null;
+    if (!c) return null;
+
+    const before = ensureCharacterContextSummary(c);
+    if (expectedHash && before.sourceHash !== expectedHash) return null;
+
+    const out = await genCharacterSheetSummary(view, c);
+    if (!out) return null;
+
+    update((n) => {
+      const live = charById(n, charId);
+      if (!live) return;
+      const current = ensureCharacterContextSummary(live);
+      if (expectedHash && current.sourceHash !== expectedHash) return;
+
+      const publicSummary = String(out.publicSummary || "").trim().slice(0, 5000);
+      const privateSummary = String(out.privateSummary || "").trim().slice(0, 7000);
+      live.aiContextSummary = {
+        version: 1,
+        sourceHash: current.sourceHash,
+        public: publicSummary || current.public,
+        private: privateSummary || current.private,
+        updatedAt: now(),
+        generatedBy: publicSummary || privateSummary ? "ai" : current.generatedBy,
+        pending: false,
+      };
+
+      const intel = ensureSocialIntelligenceState(n);
+      intel.summaryJobs[charId] = {
+        hash: current.sourceHash,
+        lastFinishedAt: now(),
+        pending: false,
+      };
+    });
+    return "sheet-summary-refresh";
+  }
+
+if (action.type === "npc-pair-reaction") {
+    const actorId = action.payload && action.payload.actorId;
+    const targetId = action.payload && action.payload.targetId;
+    const eventId = action.payload && action.payload.eventId;
+    const actor = actorId ? charById(view, actorId) : null;
+    const target = targetId ? charById(view, targetId) : null;
+    if (!actor || !target || actor.id === target.id || isHuman(view, actor.id) || isHuman(view, target.id)) return null;
+
+    const sourceEvent = (view.socialEvents || []).find((row) => row && row.id === eventId) || null;
+    const out = await genNpcPairReaction(view, actor, target, sourceEvent);
+    if (!out || out.skip === true) return null;
+    const mode = out.mode === "public_post" ? "public_post" : "offscreen";
+    const summary = String(out.summary || "").trim().slice(0, 900);
+    const rawText = String(out.text || "").trim();
+    const publicText = rawText ? cleanGeneratedUtterance(view, actor.id, rawText, 1000) : "";
+    if (!summary && !publicText) return null;
+
+    update((n) => {
+      const liveActor = charById(n, actor.id);
+      const liveTarget = charById(n, target.id);
+      if (!liveActor || !liveTarget) return;
+      let createdPost = null;
+      if (mode === "public_post" && publicText) {
+        createdPost = {
+          id: uid(), authorId: liveActor.id, ts: now(), likes: 0, likedBy: [], text: publicText,
+          imageId: "", image: "", comments: [], language: worldLanguage(n, n.meId), npcPairReaction: true,
+        };
+        n.posts.unshift(createdPost);
+        enqueueGuaranteedPostCommentCoverage(n, createdPost.id, "npc-pair-reaction");
+      }
+
+      const eventSummary = summary || (createdPost ? publicText : (liveActor.name + " reacted to " + liveTarget.name));
+      recordSocialEvent(n, {
+        type: createdPost ? "post" : "npc-pair-interaction",
+        refId: createdPost ? createdPost.id : ("npc-pair:" + liveActor.id + ":" + liveTarget.id + ":" + now()),
+        ts: now(), actorId: liveActor.id, targetIds: [liveTarget.id],
+        visibility: createdPost ? "public" : "limited", factLevel: "observed",
+        importance: createdPost ? 44 : 34,
+        drama: /hostil|jealous|possess|angry|hurt|rival|félt|ellens|düh|sért/i.test(String(out.tone || "")) ? 52 : 26,
+        romance: 0, embarrassment: 0, source: "npc-pair-reaction", text: eventSummary,
+        tags: ["npc-pair", "relationship-reaction", String(out.tone || "").toLowerCase()].filter(Boolean),
+        meta: { postId: createdPost ? createdPost.id : "", sourceEventId: eventId || "", participantIds: [liveActor.id, liveTarget.id], skipRomanticObserverConsequences: true },
+      });
+      rememberAboutTarget(n, liveActor.id, liveTarget.id, { kind: "event", source: "npc_pair_reaction", confidence: 1, text: eventSummary });
+    });
+    return "npc-pair-reaction";
+  }
+
+if (action.type === "roleplay-initiate") {
     const botId = action.payload && action.payload.botId;
     const bot = botId ? charById(view, botId) : null;
-    if (!bot || isHuman(view, bot.id) || !canAiInitiateRoleplay(view)) return null;
+    if (!bot || isHuman(view, bot.id) || !canAiInitiateRoleplay(view) || !autonomousDmEligible(view, bot)) return null;
 
     let out = await genRoleplayInitiation(view, bot);
     if (!out || out.skip === true) {
@@ -51536,6 +53405,18 @@ async function runSimulationAction(view, update, action, addImage) {
     } catch (gossipReactionErr) {
       console.warn("Gossip reaction generation failed; using local fallback:", gossipReactionErr);
     }
+    /* GROUNDED GOSSIP DMS: public gossip is not permission for a stranger DM. */
+    if (out && Array.isArray(out.dms)) {
+      out = {
+        ...out,
+        dms: out.dms.filter((row) => {
+          const who = findChar(view, row && (row.id !== undefined ? row.id : row.name));
+          const actor = who ? charById(view, who) : null;
+          return Boolean(actor && autonomousDmEligible(view, actor));
+        }),
+      };
+    }
+
     const hasVisibleReaction = Boolean(out && (
       (Array.isArray(out.comments) && out.comments.length) ||
       (Array.isArray(out.reposts) && out.reposts.length) ||
@@ -51944,7 +53825,7 @@ async function runSimulationAction(view, update, action, addImage) {
       requestedTargetId || ""
     );
 
-    const out = requestedTargetId
+    const targetFilteredOut = requestedTargetId
       ? {
           ...(rawOut || {}),
           comments: safeAiComments(rawOut).filter((row) => {
@@ -51954,6 +53835,14 @@ async function runSimulationAction(view, update, action, addImage) {
           }),
         }
       : rawOut;
+
+    const out = {
+      ...(targetFilteredOut || {}),
+      comments: safeAiComments(targetFilteredOut).slice(
+        0,
+        requestedTargetId ? 1 : AI_ACTIVITY_OPTIMIZATION.PLAYER_COMMENT_MAX_AI_REPLIES
+      ),
+    };
 
     const replyProbe = JSON.parse(JSON.stringify(view));
     const replyCount = applyReplies(replyProbe, post.id, comment.id, out);
@@ -51988,14 +53877,12 @@ async function runSimulationAction(view, update, action, addImage) {
     const isGuaranteedCoverage = commentTrigger === "guaranteed-coverage";
     const quotaEnforced =
       commentTrigger === "fresh-post" ||
-      isGuaranteedCoverage;
+      commentTrigger === "player-post" ||
+      isGuaranteedCoverage; /* MÁSVILÁG COMMENT + REPLY RELIABILITY v1 */
 
     /* Ordinary automatic waves are fresh-feed only. Hard coverage can rescue
        any still-visible older post too. */
-    if (
-      !isGuaranteedCoverage &&
-      now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS
-    ) {
+    if (commentTrigger !== "player-post" && now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) {
       return null;
     }
 
@@ -52208,6 +54095,7 @@ async function runSimulationAction(view, update, action, addImage) {
         if (
           !who ||
           isHuman(n, who) ||
+          !autonomousDmEligible(n, charById(n, who)) ||
           hasReacted(who) ||
           !d.text
         ) {
@@ -52945,19 +54833,27 @@ if (targetNote) {
       return null;
     }
 
-    let out =
-      await genDM(view, bot);
-
-    if (!out || out.skip === true || (!String(out.text || "").trim() && !String(out.imagePrompt || "").trim() && !String(out.image || "").trim())) {
-      try {
-        out = await genForcedEverydayDM(view, bot);
-      } catch (dmRetryErr) {
-        console.warn("Autonomous DM retry failed:", dmRetryErr);
-      }
+    if (!autonomousDmEligible(view, bot)) {
+      return null;
     }
 
-    if (!out || out.skip === true || (!String(out.text || "").trim() && !String(out.imagePrompt || "").trim() && !String(out.image || "").trim())) {
-      out = fallbackAutonomousDmResponse(view, bot);
+    const dmPauseReason = action && action.payload && action.payload.trigger === "follow-not-returned" ? "" : eventDrivenAutonomousDmPauseReason(view);
+    if (dmPauseReason) {
+      update((n) => eventDrivenRememberDeferredDm(n, action, dmPauseReason));
+      return "dm-deferred";
+    }
+
+    const out =
+      await genDM(view, bot);
+
+    if (
+      !out ||
+      out.skip === true ||
+      (!String(out.text || "").trim() &&
+        !String(out.imagePrompt || "").trim() &&
+        !String(out.image || "").trim())
+    ) {
+      return null;
     }
 
     const rawTxt =
@@ -53028,7 +54924,8 @@ if (targetNote) {
     if (
       autonomousFriendly &&
       autonomousConflict === 0 &&
-      (!txt || socialTextHostilityLevel(txt) > 0 || DM_COLD_DISMISSAL_RE.test(txt))
+      txt &&
+      (socialTextHostilityLevel(txt) > 0 || DM_COLD_DISMISSAL_RE.test(txt))
     ) {
       txt = fallbackAutonomousDmResponse(view, bot).text;
     }
@@ -53163,10 +55060,7 @@ if (targetNote) {
           })
         : [];
 
-      applyChanges(
-        n,
-        dmChanges
-      );
+      applyChannelRelationshipChanges(n, dmChanges, "dm", { text: t, reason: "direct-dm" });
       applySelfUpdates(n, out);
 
       rememberKnowledge(
@@ -53258,71 +55152,160 @@ if (targetNote) {
     return "dm";
   }
 
-  const out =
-    action.type === "world"
-      ? await genFocusedWorldStep(view)
-      : await genWorldStep(
-          view,
-          false
-        );
+  const eventFeedTrigger = String(action.payload && action.payload.trigger || "");
+  const isEventFeedRefresh = ["player-post", "roleplay-ended", "popup-choice"].includes(eventFeedTrigger);
 
-  /*
-   * Üres/stale AI-result nem számít sikeres világkörnek. Így nem indítjuk
-   * újra a content timert úgy, hogy közben semmi sem jelent meg a játékban.
-   */
+  /* MÁSVILÁG EVENT-DRIVEN WORLD TIMER GUARD v2 */
   if (
-    !out ||
-    !Array.isArray(out.posts)
+    !isEventFeedRefresh &&
+    (action.type === "world-full" || action.type === "world")
   ) {
+    console.info(
+      "[feed-refresh] skipped",
+      "trigger=background-timer",
+      "action=" + String(action.type || "")
+    );
     return null;
   }
 
-  if (!out.posts.length) {
-    return null;
-  }
+  let out = null;
+  let feedAiCalls = 0;
+  let generationView = view;
+  let eventGossipPreview = null;
+  let eventTriggerPostIds = [];
 
-  let visiblePostsCreated = 0;
+  if (isEventFeedRefresh) {
+    generationView = JSON.parse(JSON.stringify(view));
+    eventGossipPreview = ensureEventDrivenGossipPost(generationView, eventFeedTrigger, action.payload || {});
+    eventTriggerPostIds = [
+      String(eventFeedTrigger === "player-post" ? "" : (action.payload && action.payload.postId || "")),
+      eventGossipPreview && eventGossipPreview.id ? String(eventGossipPreview.id) : "",
+    ].filter(Boolean);
 
-  /*
-   * RECOVERY v99.2:
-   * Apply the generated feed step once. The previous probe cloned the entire
-   * world before every autonomous post.
-   */
-  update((n) => {
-    const beforePostIds =
-      new Set(
-        (n.posts || [])
-          .map((p) => p && p.id)
-          .filter(Boolean)
+    const callWorldBatch = async (neededPosts, excludeAuthorIds) => {
+      EVENT_DRIVEN_FEED_BATCH_CONTEXT = {
+        enabled: true,
+        trigger: eventFeedTrigger,
+        neededPosts,
+        excludeAuthorIds,
+        triggerPostIds: eventTriggerPostIds,
+      };
+      try {
+        feedAiCalls += 1;
+        return typeof legacyVoiceStyleGenWorldStep === "function"
+          ? await legacyVoiceStyleGenWorldStep(generationView, false)
+          : await genWorldStep(generationView, false);
+      } finally {
+        EVENT_DRIVEN_FEED_BATCH_CONTEXT = null;
+      }
+    };
+
+    const first = await callWorldBatch(AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS, []);
+    let merged = eventDrivenMergeBatchOutputs(generationView, first, null);
+    let selectedAuthors = eventDrivenUsableBatchPosts(generationView, merged)
+      .map((post) => eventDrivenFeedRawAuthor(generationView, post))
+      .filter(Boolean);
+
+    let needsMore =
+      merged.posts.length < AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS ||
+      !eventDrivenTriggerCommentsCovered(merged, eventTriggerPostIds);
+
+    while (needsMore && feedAiCalls < 4) {
+      const missing = Math.max(
+        1,
+        AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS - merged.posts.length
       );
-
-    visiblePostsCreated =
-      applyWorldStep(
-        n,
-        out
-      );
-
-    if (!visiblePostsCreated) {
-      return;
+      const extra = await callWorldBatch(missing, selectedAuthors);
+      merged = eventDrivenMergeBatchOutputs(generationView, merged, extra);
+      selectedAuthors = eventDrivenUsableBatchPosts(generationView, merged)
+        .map((post) => eventDrivenFeedRawAuthor(generationView, post))
+        .filter(Boolean);
+      needsMore =
+        merged.posts.length < AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS ||
+        !eventDrivenTriggerCommentsCovered(merged, eventTriggerPostIds);
     }
 
-    const freshPosts =
-      (n.posts || []).filter(
-        (p) =>
-          p &&
-          !beforePostIds.has(p.id) &&
-          !isHuman(n, p.authorId)
+    if (merged.posts.length < AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS) {
+      console.warn(
+        "[feed-refresh]",
+        "incomplete-batch-preserved",
+        "trigger=" + eventFeedTrigger,
+        "posts=" + String(merged.posts.length),
+        "required=" + String(AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS),
+        "aiCalls=" + String(feedAiCalls)
       );
+    }
+    out = merged;
+  } else {
+    out = action.type === "world"
+      ? await genFocusedWorldStep(view)
+      : await genWorldStep(view, false);
+  }
+
+  if (!out || !Array.isArray(out.posts) || !out.posts.length) return null;
+
+  let visiblePostsCreated = 0;
+  let generatedCommentCount = 0;
+
+  update((n) => {
+    const beforePostIds = new Set((n.posts || []).map((p) => p && p.id).filter(Boolean));
+
+    let liveGossip = null;
+    if (isEventFeedRefresh) {
+      liveGossip = ensureEventDrivenGossipPost(n, eventFeedTrigger, action.payload || {});
+    }
+
+    EVENT_DRIVEN_FEED_APPLYING = isEventFeedRefresh;
+    try {
+      visiblePostsCreated = applyWorldStep(n, out);
+    } finally {
+      EVENT_DRIVEN_FEED_APPLYING = false;
+    }
+
+    const triggerIds = [
+      String(eventFeedTrigger === "player-post" ? "" : (action.payload && action.payload.postId || "")),
+      liveGossip && liveGossip.id ? String(liveGossip.id) : "",
+    ].filter(Boolean);
+
+    generatedCommentCount += eventDrivenApplyTriggerComments(n, out, triggerIds);
+
+    const freshPosts = (n.posts || []).filter((p) =>
+      p &&
+      !beforePostIds.has(p.id) &&
+      !isHuman(n, p.authorId) &&
+      !isMediaAccount(n, p.authorId)
+    );
 
     freshPosts.forEach((freshPost) => {
-      freshPost.autoCommentedAt =
-        Number(
-          freshPost.autoCommentedAt
-        ) || 0;
+      const inlineCount = safePostComments(freshPost)
+        .filter((c) => c && !isHuman(n, c.authorId))
+        .length;
+      generatedCommentCount += inlineCount;
+
+      if (isEventFeedRefresh && inlineCount > 0) {
+        freshPost.autoCommentedAt = now();
+        freshPost.autoCommentRounds = Math.max(
+          1,
+          Math.round(Number(freshPost.autoCommentRounds) || 0)
+        );
+      }
     });
   });
 
-  return visiblePostsCreated
+  if (isEventFeedRefresh) {
+    console.info(
+      "[feed-refresh]",
+      "trigger=" + eventFeedTrigger,
+      "posts=" + String(visiblePostsCreated),
+      "comments=" + String(generatedCommentCount),
+      "aiCalls=" + String(feedAiCalls)
+    );
+    if (eventFeedTrigger === "player-post") {
+      update((n) => groundedEventLog(n, "player-post-world", visiblePostsCreated >= AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS ? "success" : "failed", "Player-post world refresh finished; bot posts=" + visiblePostsCreated + ", target=" + AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS + "–" + AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS + ".", "post:" + String(action.payload && action.payload.postId || ""), { botPosts: visiblePostsCreated, aiCalls: feedAiCalls }));
+    }
+  }
+
+  return visiblePostsCreated || (isEventFeedRefresh && eventTriggerPostIds.length)
     ? "world"
     : null;
 }
@@ -55093,6 +57076,24 @@ const signOut = useCallback(async () => {
 
   const signalSimulation = useCallback((event) => {
     if (!event || !event.type) return false;
+    if (event.type === "player-post" && event.postId) {
+      update((n) => {
+        const p = (n.posts || []).find((row) => row && row.id === event.postId);
+        playerPostCommentDiagnostic(n, p, "signal", { queued: true });
+        groundedEventLog(n, "player-post", "started", "Player post consequence pipeline started.", "post:" + String(event.postId), { postId: event.postId });
+        if (typeof channelPublicPostFollowerEffect === "function") channelPublicPostFollowerEffect(n, event.postId);
+      });
+      const commentQueued = requestSimulationAction(
+        mkAction(
+          "player-post-comments-guarantee",
+          `player-post-comments:${event.postId}`,
+          { postId: event.postId, trigger: "player-post", requireHumanAuthor: true, minComments: 3, maxComments: 6, playerPostContentIsolation: true },
+          "manual"
+        )
+      );
+      update((n) => groundedEventLog(n, "player-post-comments", commentQueued ? "started" : "failed", commentQueued ? "Isolated 3–6 comment generation queued." : "Comment action could not be queued.", "post:" + String(event.postId)));
+      console.info("[player-post-comments]", "stage=queue", "post=" + event.postId, "queued=" + commentQueued);
+    }
 
     if (event.type === "player-post" && event.postId) {
       /*
@@ -55106,17 +57107,7 @@ const signOut = useCallback(async () => {
        * továbbra is megakadályozza a párhuzamos API-spamet.
        */
       let queuedAny = false;
-
-      queuedAny = requestSimulationAction(
-        mkAction(
-          "comments",
-          `event-post:${event.postId}`,
-          { postId: event.postId },
-          "event"
-        )
-      ) || queuedAny;
-
-      queuedAny = requestSimulationAction(
+      const worldQueued = requestSimulationAction(
         mkAction(
           "world-full",
           `event-world-after-post:${event.postId}`,
@@ -55126,7 +57117,9 @@ const signOut = useCallback(async () => {
           },
           "event"
         )
-      ) || queuedAny;
+      );
+      queuedAny = worldQueued || queuedAny;
+      update((n) => groundedEventLog(n, "player-post-world", worldQueued ? "started" : "failed", worldQueued ? "6–7 bot-post world refresh queued." : "World refresh action could not be queued.", "post:" + String(event.postId)));
 
       return queuedAny;
     }
@@ -55145,17 +57138,7 @@ const signOut = useCallback(async () => {
         : Number(event.aiCount) || 0;
       const gossipOn = live && live.gossipSettings &&
         (live.gossipSettings.mediaMode === "local" || live.gossipSettings.mediaMode === "global");
-
-      if (gossipOn && aiCount >= 2) {
-        queuedAny = requestSimulationAction(
-          mkAction(
-            "gossip-story-force",
-            `forced-rp-gossip:${event.sceneId}`,
-            { sceneId: event.sceneId },
-            "event"
-          )
-        ) || queuedAny;
-      }
+      /* Gossip is created inside the same event-driven feed refresh without another provider call. */
 
       queuedAny = requestSimulationAction(
         mkAction(
@@ -55186,10 +57169,17 @@ const signOut = useCallback(async () => {
       const live = viewRef.current;
       const livePost = live && (live.posts || []).find((p) => p && p.id === event.postId);
       const liveComment = livePost && safePostComments(livePost).find((c) => c && c.id === event.commentId);
-      const naturalTarget = livePost && liveComment
+      const replyTargets = livePost && liveComment
         ? naturalCommentReplyTargets(live, livePost, liveComment)
-            .find((row) => commentWarrantsAiReply(live, livePost, liveComment, row.id))
-        : null;
+        : [];
+      const directTarget = replyTargets.find((row) =>
+        row && (row.reason === "mention" || row.reason === "parent")
+      );
+      const naturalTarget =
+        directTarget ||
+        replyTargets.find((row) =>
+          commentWarrantsAiReply(live, livePost, liveComment, row.id)
+        );
 
       const openReplyCue = liveComment
         ? commentReplyCueScore(liveComment.text)
@@ -55215,7 +57205,7 @@ const signOut = useCallback(async () => {
             targetId: naturalTarget ? naturalTarget.id : "",
             trigger: "player-comment",
           },
-          "event"
+          "manual"
         )
       );
     }
@@ -55397,28 +57387,8 @@ const signOut = useCallback(async () => {
                 choice,
                 postId
               );
-
-            if (p) {
-              try {
-                simEnqueue(
-                  n,
-                  mkAction(
-                    "comments",
-                    `popup-post:${postId}`,
-                    {
-                      postId,
-                    },
-                    "event"
-                  )
-                );
-              } catch (queueErr) {
-                console.warn(
-                  "Popup comment queue failed:",
-                  queueErr
-                );
-              }
-            }
-          });
+            /* event-driven feed batch attaches the comments to this fresh popup post */
+});
 
           setPopupNav({
             type:"post",
@@ -56299,6 +58269,9 @@ const signOut = useCallback(async () => {
          * úgy nézne ki, mintha történt volna valami, és a világ újra várna.
          */
         simMarkRunning(n, action);
+        if (action && action.type === "world") {
+          ensureSimState(n).feedAttemptAt = now();
+        }
         if (action && action.type === "roleplay-initiate") {
           ensureSimState(n).roleplayAttemptAt = now();
         }
@@ -56372,6 +58345,9 @@ const signOut = useCallback(async () => {
           const sim = ensureSimState(n);
           sim.lastSuccessAt = now();
           sim.lastError = "";
+          if (action && action.type === "world") {
+            sim.feedAttemptAt = 0;
+          }
         } else {
           const sim = ensureSimState(n);
           sim.running = "";
@@ -56424,6 +58400,7 @@ const signOut = useCallback(async () => {
 
   const me = (world.players && world.players[meId]) || blankPlayer(meId, "Névtelen", "jatekos");
   const view = { ...world, meId, player: me };
+  groundedRepairKnownFalseBrentIncident(view);
   view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";
   setLiveUiActiveSceneId(view.activeSceneId);
   viewRef.current = view;
@@ -56562,7 +58539,17 @@ const signOut = useCallback(async () => {
         <div className="nav-in">
           {TABS.map(([k, label, Icon]) => (
             <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>
-              <Icon size={19} /> {label}
+              <span style={{ position: "relative", display: "inline-flex" }}>
+                <Icon size={19} />
+                {k === "chat" && groundedUnreadDmCount(view) > 0 ? (
+                  <span style={{
+                    position: "absolute", top: -7, right: -9, minWidth: 16, height: 16,
+                    padding: "0 4px", borderRadius: 99, background: "var(--rose)",
+                    color: "var(--ink)", fontSize: 9, fontWeight: 700,
+                    display: "grid", placeItems: "center", lineHeight: 1
+                  }}>{Math.min(99, groundedUnreadDmCount(view))}</span>
+                ) : null}
+              </span> {label}
             </button>
           ))}
         </div>
@@ -56572,3 +58559,2895 @@ const signOut = useCallback(async () => {
     </LangCtx.Provider>
   );
 }
+
+/* MÁSVILÁG DEEP DIRECTED RELATIONSHIP CANON v2 */
+/*
+ * IMPORTANT:
+ * The legacy relationship card is intentionally retained because other world
+ * mechanics still use its compact score/bond/mood vocabulary. AI-facing
+ * behavior, however, must receive the original directed relationship prose.
+ *
+ * A -> B and B -> A are separate source texts. The reverse side is included as
+ * authorial continuity only and is protected by an explicit knowledge firewall,
+ * so a secret on B's sheet never becomes knowledge in A's head by accident.
+ */
+function legacyDeepRelationshipBehaviorCard(w, actorId, targetId) {
+  const coarse = legacyRelationshipBehaviorCard(w, actorId, targetId);
+
+  if (!w || !actorId || !targetId || actorId === targetId) {
+    return coarse;
+  }
+
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+
+  if (!actor || !target) {
+    return coarse;
+  }
+
+  const forward = connectionCanonSnippetAbout(w, actor, target, 12000);
+  const reverse = connectionCanonSnippetAbout(w, target, actor, 12000);
+
+  if (!forward && !reverse) {
+    return coarse;
+  }
+
+  const actorName = String(actor.name || actorId);
+  const targetName = String(target.name || targetId);
+  const coarseText = String(coarse || '').trim();
+
+  return [
+    'DEEP DIRECTED RELATIONSHIP CANON — RAW PROSE IS AUTHORITATIVE',
+    'PAIR: ' + actorName + ' [' + actorId + '] → ' + targetName + ' [' + targetId + ']',
+    '',
+    'A→B — ' + actorName + "'s OWN connection text about " + targetName + ':',
+    forward || '(no explicit A→B connection text)',
+    '',
+    'B→A — ' + targetName + "'s OWN connection text about " + actorName + ':',
+    reverse || '(no explicit B→A connection text)',
+    '',
+    'KNOWLEDGE FIREWALL — HARD RULE:',
+    '- A→B governs A’s actual feelings, history, beliefs, self-awareness and intended behavior toward B.',
+    '- B→A is AUTHORIAL COUNTERPART CANON. It preserves the true two-sided dynamic, but A does NOT automatically know B’s private thoughts, secrets, denied feelings or hidden motives.',
+    '- If A→B says A does not know, has not realized, denies, suppresses or misunderstands something, write A from that exact awareness level. Do not make A consciously name information the sheet says is subconscious or unadmitted.',
+    '- Never mirror B→A into A→B. One-sided attraction, asymmetric hatred, unequal loyalty, hidden jealousy, mistaken assumptions and mixed feelings must stay asymmetric.',
+    '',
+    'REQUIRED DEEP READ — DO NOT REDUCE THIS PAIR TO ONE LABEL:',
+    '- Preserve the exact kind and intensity of feeling: affection, attachment, love, attraction, sexual tension, obsession, loyalty, resentment, fear, distrust, rivalry, protectiveness, jealousy, possessiveness, dependency, friendship, family-like attachment, or any combination actually written.',
+    '- Preserve self-awareness: conscious, admitted privately, denied, rationalized, suppressed, confused, or not yet admitted even internally.',
+    '- Preserve disclosure: public, private, secret from the target, secret from everyone, rumored, accidentally exposed, or known only by named people.',
+    '- Preserve reciprocity and mismatch: mutual, one-sided, rejected, unknown, misunderstood, uneven in intensity, or changing over time.',
+    '- Preserve history and timeline: current, past, unresolved, on-and-off, newly developing, long-standing, ended-but-lingering, betrayal, reconciliation, shared trauma/history, promises, boundaries and turning points.',
+    '- Preserve contradictions. “Enemy” can coexist with attraction; “friend” can coexist with jealousy; “ex” can coexist with unresolved love; affection can coexist with fear or resentment. Do not delete one dimension because another label also matches.',
+    '- Behavior must come from the prose above plus current context, not from a generic trope associated with a category word.',
+    '',
+    'COARSE MECHANICAL BASELINE — SECONDARY ROUTING METADATA ONLY:',
+    coarseText || '(none)',
+    'The coarse baseline may help routing/scoring, but it NEVER overrides or replaces the raw directed prose above.'
+  ].join('\n');
+}
+
+
+/* MÁSVILÁG DIRECTIONAL RELATIONSHIP BASELINE v3 */
+/*
+ * Connections prose defines the fresh-run STARTING state, direction by direction.
+ * It is private source material, not display copy. The AI must interpret it and
+ * express the relationship in its own words/behavior. After play begins, actual
+ * interactions may evolve score / mood / bond / hidden state.
+ */
+function directedRelationshipSignals(text) {
+  const low = String(text || "").toLowerCase();
+  const out = [];
+  const push = (value) => {
+    if (value && !out.includes(value)) out.push(value);
+  };
+
+  if (/obsess|fixat|megsz[aá]ll|k[eé]nyszeres/.test(low)) push("obsessive fixation");
+  if (/possess|birtokl|territorial|az eny[eé]m|mine\b/.test(low)) push("possessiveness");
+  if (/jealous|f[eé]lt[eé]ken/.test(low)) push("jealousy");
+  if (/overprotect|protectiv|v[eé]delmez|oltalmaz/.test(low)) push("protectiveness");
+  if (/dependen|f[uü]gg|needs? .* emotionally|cannot let go|nem tudja elengedni/.test(low)) push("dependency");
+  if (/in love|loves?\b|szerelmes|m[eé]lyen szeret/.test(low)) push("love");
+  if (/crush|attract|vonz[oó]d|vonzalom|sexual tension|romantic/.test(low)) push("attraction");
+  if (/loyal|h[uű]s[eé]g|ride or die|would do anything|b[aá]rmit megtenne/.test(low)) push("loyalty");
+  if (/distrust|doesn.?t trust|nem b[ií]zik|gyanak/.test(low)) push("distrust");
+  if (/resent|neheztel|harag|angry at/.test(low)) push("resentment");
+  if (/hate|gy[uű]l[oö]l/.test(low)) push("hatred");
+  if (/fear|afraid|rette|f[eé]l t[oő]le/.test(low)) push("fear");
+  if (/rival|riv[aá]lis|competitive|verseng/.test(low)) push("rivalry");
+  if (/friend|bar[aá]t|close to|k[oö]zel [aá]ll/.test(low)) push("friendship");
+  if (/family|sibling|brother|sister|cousin|csal[aá]d|testv[eé]r|unokatestv[eé]r/.test(low)) push("family bond");
+
+  return out;
+}
+
+function directedHiddenCanon(text) {
+  const low = String(text || "").toLowerCase();
+
+  if (/subconscious|tudatalatti|unaware|nincs tudat[aá]ban|hasn.?t realized|nem ismerte fel/.test(low)) {
+    return "The feeling is not fully conscious or recognized yet.";
+  }
+  if (/won.?t admit|will not admit|doesn.?t admit|denies|denial|tagad|nem vallja be|nem ismeri be|suppres|elfojt/.test(low)) {
+    return "The feeling is denied, suppressed, or not openly admitted.";
+  }
+  if (/secret|hidden|keeps? .* secret|titok|titkos|rejteget|elhallgat/.test(low)) {
+    return "Part of the feeling is deliberately kept private.";
+  }
+
+  return "";
+}
+
+function inferCanonicalRelationshipBaseline(w, actor, target) {
+  const legacy = legacyInferCanonicalRelationshipBaseline(w, actor, target);
+
+  if (!w || !actor || !target || actor.id === target.id) return legacy;
+
+  /*
+   * HARD DIRECTION RULE:
+   * Only actor -> target is allowed to initialize actor's relationship state.
+   * target -> actor may be completely different and is never copied here.
+   */
+  const direct = connectionCanonSnippetAbout(w, actor, target, 24000);
+  if (!direct) return legacy;
+
+  const signals = directedRelationshipSignals(direct);
+  const low = String(direct).toLowerCase();
+
+  const base = legacy && typeof legacy === "object"
+    ? { ...legacy }
+    : {
+        score: 0,
+        bond: "",
+        fixed: false,
+        hidden: "",
+        mood: "",
+        why: "",
+        source: "connections",
+      };
+
+  /*
+   * Initialize the three semantic relationship parts separately without ever
+   * copying the user's Connections wording into visible/live relationship text:
+   * 1) bond/category = broad structural label
+   * 2) mood = interpreted emotional/dynamic signals only
+   * 3) hidden = interpreted secrecy/denial/awareness state only
+   */
+  base.mood = signals.length ? signals.join(", ") : (base.mood || "complex directed relationship");
+  base.hidden = directedHiddenCanon(direct);
+
+  /*
+   * Score remains a coarse affinity/intensity axis, but extreme directed canon
+   * may strengthen the starting magnitude without changing directionality.
+   */
+  const numericScore = Number(base.score) || 0;
+  if (/obsess|fixat|megsz[aá]ll|k[eé]nyszeres/.test(low) && numericScore > 0) {
+    base.score = Math.max(numericScore, 78);
+  } else if (/\bin love\b|szerelmes|would do anything|b[aá]rmit megtenne/.test(low) && numericScore > 0) {
+    base.score = Math.max(numericScore, 72);
+  } else if (/\bhate\b|gy[uű]l[oö]l/.test(low) && numericScore < 0) {
+    base.score = Math.min(numericScore, -85);
+  }
+
+  base.source = "connections-deep";
+  return base;
+}
+
+/*
+ * Preserve the full source internally for comprehension, but never treat the
+ * user's wording as copy to reproduce. Current runtime state and actual history
+ * win after genuine in-world change.
+ */
+function legacySimsSocialRelationshipBehaviorCard(w, actorId, targetId) {
+  const previous = String(legacyDeepRelationshipBehaviorCard(w, actorId, targetId) || "");
+  const live = (w && actorId && targetId && actorId !== targetId)
+    ? getRel(w, actorId, targetId)
+    : null;
+
+  const evolved = previous
+    .replace(
+      "DEEP DIRECTED RELATIONSHIP CANON — RAW PROSE IS AUTHORITATIVE",
+      "DEEP DIRECTED RELATIONSHIP CANON — PRIVATE SOURCE FOR INITIAL BASELINE + LIVE EVOLUTION"
+    )
+    .replace(
+      "- A→B governs A’s actual feelings, history, beliefs, self-awareness and intended behavior toward B.",
+      "- A→B defines A’s fresh-run STARTING feelings, history, beliefs, self-awareness and intended behavior toward B. After real in-world interactions, the current runtime relationship may evolve away from this baseline."
+    )
+    .replace(
+      "- Behavior must come from the prose above plus current context, not from a generic trope associated with a category word.",
+      "- At the start, infer behavior from the meaning of the full prose, not from a generic category word. Never reuse the user's wording as output. After play begins, preserve genuine changes caused by actual interactions instead of snapping back to the initial prose."
+    )
+    .replace(
+      "The coarse baseline may help routing/scoring, but it NEVER overrides or replaces the raw directed prose above.",
+      "The source prose defines meaning for the fresh-run starting state, but it is private source material, not text to quote. Once play has begun, documented current relationship state and actual interaction history may override the starting baseline where genuine change occurred."
+    );
+
+  const liveCard = live && typeof live === "object"
+    ? {
+        score: Number(live.score) || 0,
+        bond: String(live.bond || live.type || ""),
+        mood: String(live.mood || ""),
+        hidden: String(live.hidden || ""),
+      }
+    : null;
+
+  return [
+    evolved,
+    "",
+    "PARAPHRASE RULE — HARD: Connections text is private source material. Never quote it, mirror its sentences, reuse distinctive phrasing, or output it as the relationship description. Understand the meaning, then express reactions, dialogue and behavior naturally in the character's own voice.",
+    "",
+    "LIVE DIRECTED RELATIONSHIP STATE — CURRENT, NOT THE ORIGINAL BASELINE:",
+    liveCard ? JSON.stringify(liveCard) : "(none)",
+    "EVOLUTION RULE: use Connections meaning to establish the first state; after that, let actual posts, DMs, comments, scenes, betrayals, intimacy, conflict and reconciliation change this direction naturally. Never copy the reverse direction unless the story actually makes the feeling reciprocal.",
+  ].join("\n");
+}
+
+
+/* MÁSVILÁG AUTOMATIC SOCIAL FOLLOWS v2 */
+/*
+ * Obvious real-world social ties should already be followed when the world is
+ * initialized: friends, family, partners/crushes, teammates, dojo/faction mates,
+ * classmates/coworkers and similarly established positive bonds.
+ *
+ * IMPORTANT PERFORMANCE RULE:
+ * The expensive all-pairs scan must NOT run on every follower normalization.
+ * It runs once for the initial graph, then only when relationship changes mark
+ * the graph dirty. This keeps the automatic-follow behavior without repeatedly
+ * doing an O(n²) character scan during normal live-world activity.
+ */
+let automaticFollowSyncActive = false;
+
+function explicitSharedSocialContext(actor, target) {
+  if (!actor || !target) return false;
+
+  const pairText = String((actor && actor.connections) || "").toLowerCase();
+  const targetName = String((target && target.name) || "").toLowerCase();
+  if (!targetName || !pairText.includes(targetName)) return false;
+
+  return /same dojo|same team|same squad|same club|same band|same class|same school|dojo mate|dojo-mate|dojomate|doj[oó]t[aá]rs|teammate|team mate|team-mate|csapatt[aá]rs|clubmate|club mate|klubt[aá]rs|classmate|oszt[aá]lyt[aá]rs|coworker|co-worker|munkat[aá]rs|bandmate|band mate|squadmate|squad mate/.test(pairText);
+}
+
+function shouldAutoFollowEstablishedTie(w, actor, target) {
+  if (!w || !actor || !target || actor.id === target.id) return false;
+  if (isMediaAccount(w, actor.id) || isMediaAccount(w, target.id)) return false;
+
+  const rel = getRel(w, actor.id, target.id);
+  const explicitGroupTie = sameFollowTeamOrFaction(actor, target) || explicitSharedSocialContext(actor, target);
+
+  /* Explicit personal hostility beats a generic shared-team default. */
+  if (hasEnemyOrRivalBond(rel)) return false;
+
+  /* Known or explicitly written same-dojo/team/class/work ties follow immediately. */
+  if (explicitGroupTie) return true;
+
+  const eligibility = aiFollowEligibility(w, actor.id, target.id);
+  if (!eligibility || !eligibility.allowed) return false;
+
+  /* Enemy/rival + hidden crush remains a special case, not an automatic follow. */
+  if (eligibility.mode === "enemy-secret-crush") return false;
+
+  return (
+    eligibility.mode === "family" ||
+    eligibility.mode === "bond" ||
+    eligibility.mode === "team" ||
+    eligibility.mode === "relationship-score" ||
+    eligibility.mode === "secret-crush" ||
+    eligibility.mode === "interaction-bond"
+  );
+}
+
+function legacyChannelApplyChanges(n, changes) {
+  const result = legacyApplyChanges(n, changes);
+  if (n && Array.isArray(changes) && changes.length) {
+    const sim = ensureSimState(n);
+    if (sim) sim.automaticFollowSyncDirty = true;
+  }
+  return result;
+}
+
+function ensureFollowerSystem(w) {
+  const out = legacyEnsureFollowerSystem(w);
+  if (!w || typeof w !== "object") return out;
+
+  const sim = ensureSimState(w);
+  if (!sim) return out;
+
+  /* setFollowState() itself calls ensureFollowerSystem(); avoid recursion. */
+  if (automaticFollowSyncActive) return out;
+
+  /* The heavy scan is needed only once initially, then after a real rel change. */
+  if (sim.automaticFollowSyncDone && !sim.automaticFollowSyncDirty) return out;
+
+  automaticFollowSyncActive = true;
+
+  try {
+    const profiles = socialProfiles(w);
+
+    profiles.forEach((actor) => {
+      if (!actor || isHuman(w, actor.id) || isMediaAccount(w, actor.id)) return;
+
+      profiles.forEach((target) => {
+        if (!target || target.id === actor.id || isMediaAccount(w, target.id)) return;
+        if (isFollowing(w, actor.id, target.id)) return;
+        if (!shouldAutoFollowEstablishedTie(w, actor, target)) return;
+
+        setFollowState(
+          w,
+          actor.id,
+          target.id,
+          true,
+          "relationship-auto-follow"
+        );
+      });
+    });
+
+    /* Remove stale queued copies created by older builds. */
+    if (Array.isArray(sim.queue)) {
+      sim.queue = sim.queue.filter(
+        (action) =>
+          !(
+            action &&
+            action.type === "follow" &&
+            String(action.key || "").startsWith("relationship-auto-follow:")
+          )
+      );
+    }
+
+    sim.automaticFollowSyncDone = true;
+    sim.automaticFollowSyncDirty = false;
+  } finally {
+    automaticFollowSyncActive = false;
+  }
+
+  return out;
+}
+
+
+/* MÁSVILÁG SIMS SOCIAL INTELLIGENCE v1 */
+const SIMS_SOCIAL_WORLD_CONTEXT_CAP = 22000;
+const SIMS_SOCIAL_SUMMARY_PUBLIC_CAP = 5000;
+const SIMS_SOCIAL_SUMMARY_PRIVATE_CAP = 7000;
+const SIMS_SOCIAL_SUMMARY_INPUT_CAP = 24000;
+const SIMS_SOCIAL_REACTION_COOLDOWN_MS = 12 * 60 * 1000;
+
+function ensureSocialIntelligenceState(w) {
+  if (!w || typeof w !== "object") return null;
+  if (!w.sim || typeof w.sim !== "object" || Array.isArray(w.sim)) w.sim = {};
+  if (!w.sim.socialIntelligence || typeof w.sim.socialIntelligence !== "object" || Array.isArray(w.sim.socialIntelligence)) {
+    w.sim.socialIntelligence = {};
+  }
+  const s = w.sim.socialIntelligence;
+  if (!s.version) s.version = 1;
+  if (!s.eventEffectsSeen || typeof s.eventEffectsSeen !== "object" || Array.isArray(s.eventEffectsSeen)) s.eventEffectsSeen = {};
+  if (!s.summaryJobs || typeof s.summaryJobs !== "object" || Array.isArray(s.summaryJobs)) s.summaryJobs = {};
+  if (!s.lastDirectReaction || typeof s.lastDirectReaction !== "object" || Array.isArray(s.lastDirectReaction)) s.lastDirectReaction = {};
+  if (!s.lastAttentionReaction || typeof s.lastAttentionReaction !== "object" || Array.isArray(s.lastAttentionReaction)) s.lastAttentionReaction = {};
+  return s;
+}
+
+function simsSocialStableHash(value) {
+  const text = String(value || "");
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function simsSocialStringify(value, depth = 0) {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (depth >= 2) return "";
+  if (Array.isArray(value)) {
+    return value.slice(0, 80).map((item) => simsSocialStringify(item, depth + 1)).filter(Boolean).join(" | ");
+  }
+  if (typeof value === "object") {
+    return Object.entries(value).slice(0, 120).map(([key, item]) => {
+      const txt = simsSocialStringify(item, depth + 1);
+      return txt ? key + ": " + txt : "";
+    }).filter(Boolean).join("\n");
+  }
+  return "";
+}
+
+function simsSocialSectionDigest(text, max = SIMS_SOCIAL_SUMMARY_INPUT_CAP) {
+  const value = String(text || "").replace(/\r\n/g, "\n").trim();
+  if (value.length <= max) return value;
+
+  const pieces = value.split(/(?=^\s*(?:#{1,6}\s+|[A-ZÁÉÍÓÖŐÚÜŰ][A-ZÁÉÍÓÖŐÚÜŰ0-9 _/()'-]{2,}:)\s*)/gmi)
+    .map((x) => x.trim()).filter(Boolean);
+  if (pieces.length <= 1) {
+    const chunk = Math.max(700, Math.floor(max / 8));
+    const starts = [0, .14, .28, .42, .56, .70, .84, 1].map((ratio) => Math.max(0, Math.floor((value.length - chunk) * ratio)));
+    return starts.map((at) => value.slice(at, at + chunk)).join("\n...[sampled]...\n").slice(0, max);
+  }
+
+  const per = Math.max(420, Math.floor(max / Math.min(24, pieces.length)));
+  const selected = pieces.slice(0, 24).map((part) => {
+    if (part.length <= per) return part;
+    const head = Math.floor(per * .7);
+    const tail = per - head - 30;
+    return part.slice(0, head) + "\n...[section compacted]...\n" + part.slice(-Math.max(0, tail));
+  });
+  return selected.join("\n\n").slice(0, max);
+}
+
+function characterSheetSourceParts(c) {
+  if (!c || typeof c !== "object") return { publicText: "", privateText: "" };
+  const skip = /^(?:aiContextSummary|aiVoiceStyleCard|avatar|avatarUrl|image|imageId|images|album|albums|photos|media|posts|comments|msgs|messages|chats|scenes|memory|memories)$/i;
+  const publicKey = /^(?:id|name|username|handle|bio|publicBio|displayName|age|birthday|birthDate|gender|pronouns|city|location|job|occupation|school|university|role|faction|team|public|appearance|height|nationality)$/i;
+  const rowsPublic = [];
+  const rowsPrivate = [];
+
+  for (const [key, raw] of Object.entries(c)) {
+    if (skip.test(key)) continue;
+    const value = simsSocialStringify(raw);
+    if (!value) continue;
+    const row = key + ": " + value;
+    if (publicKey.test(key)) rowsPublic.push(row);
+    else rowsPrivate.push(row);
+  }
+
+  return {
+    publicText: rowsPublic.join("\n"),
+    privateText: rowsPrivate.join("\n"),
+  };
+}
+
+function ensureCharacterContextSummary(c) {
+  const parts = characterSheetSourceParts(c);
+  const publicDigest = simsSocialSectionDigest(parts.publicText, SIMS_SOCIAL_SUMMARY_PUBLIC_CAP);
+  const privateDigest = simsSocialSectionDigest(parts.privateText, SIMS_SOCIAL_SUMMARY_PRIVATE_CAP);
+  const sourceHash = simsSocialStableHash(parts.publicText + "\n---PRIVATE---\n" + parts.privateText);
+  const current = c && c.aiContextSummary && typeof c.aiContextSummary === "object" ? c.aiContextSummary : null;
+
+  if (current && current.version === 1 && current.sourceHash === sourceHash && current.public && current.private) {
+    return current;
+  }
+
+  const fallback = {
+    version: 1,
+    sourceHash,
+    public: publicDigest,
+    private: [publicDigest, privateDigest].filter(Boolean).join("\n\n").slice(0, SIMS_SOCIAL_SUMMARY_PRIVATE_CAP),
+    updatedAt: now(),
+    generatedBy: "deterministic-fallback",
+    pending: true,
+  };
+  if (c && typeof c === "object") c.aiContextSummary = fallback;
+  return fallback;
+}
+
+function maybeQueueCharacterSummary(w, c) {
+  if (!w || !c || !c.id) return;
+  const summary = ensureCharacterContextSummary(c);
+  if (!summary.pending && summary.generatedBy === "ai") return;
+  const intel = ensureSocialIntelligenceState(w);
+  if (!intel) return;
+  const previous = intel.summaryJobs[c.id] || {};
+  const sameHash = previous.hash === summary.sourceHash;
+  const recent = sameHash && (now() - (Number(previous.lastQueuedAt) || 0) < 10 * 60 * 1000);
+  if (recent || previous.pending) return;
+  if (typeof simEnqueue !== "function" || typeof mkAction !== "function") return;
+
+  intel.summaryJobs[c.id] = {
+    hash: summary.sourceHash,
+    lastQueuedAt: now(),
+    pending: true,
+  };
+  simEnqueue(w, mkAction(
+    "sheet-summary-refresh",
+    "sheet-summary:" + c.id + ":" + summary.sourceHash,
+    { charId: c.id, sourceHash: summary.sourceHash },
+    "memory"
+  ));
+}
+
+async function genCharacterSheetSummary(w, c) {
+  const parts = characterSheetSourceParts(c);
+  const publicInput = simsSocialSectionDigest(parts.publicText, 8000);
+  const privateInput = simsSocialSectionDigest(parts.privateText, 16000);
+  const prompt = [
+    "CHARACTER SHEET ONE-TIME SUMMARY REFRESH.",
+    "Summarize only supplied facts. Never invent. Preserve contradictions, relationship nuance, family, goals, fears, values, speech style, habits, hobbies, preferences, secrets and important history when present.",
+    "PUBLIC SUMMARY contains only facts safe as public/profile/background-visible information.",
+    "PRIVATE SUMMARY is for portraying THIS CHARACTER and may include their private/hidden author-level facts. Do not turn another person's secrets into this character's knowledge.",
+    "Write compact Hungarian if the source is mainly Hungarian; otherwise keep the source language naturally.",
+    "PUBLIC SOURCE DIGEST:\n" + (publicInput || "(none)"),
+    "PRIVATE SOURCE DIGEST:\n" + (privateInput || "(none)"),
+    "JSON ONLY:",
+    '{"publicSummary":"max ~3500 chars","privateSummary":"max ~5500 chars"}'
+  ].join("\n\n");
+
+  try {
+    return await askWorldJSON(w, engineFor(w), prompt, {
+      maxTokens: 1500,
+      priority: -15,
+      source: "sheet-summary",
+    });
+  } catch (err) {
+    return null;
+  }
+}
+
+function simsSocialRelevantIds(w, focusIds, actorId) {
+  const out = [];
+  const add = (id) => {
+    const value = String(id || "").trim();
+    if (value && !out.includes(value)) out.push(value);
+  };
+  add(actorId);
+  if (Array.isArray(focusIds)) focusIds.forEach(add);
+  else add(focusIds);
+  if (w && w.meId) add(w.meId);
+  return out.slice(0, 8);
+}
+
+function simsSocialSummaryLens(w, focusIds, actorId) {
+  if (!w) return "";
+  const ids = simsSocialRelevantIds(w, focusIds, actorId);
+  const rows = [];
+  for (const id of ids) {
+    const c = charById(w, id);
+    if (!c) continue;
+    const summary = ensureCharacterContextSummary(c);
+    maybeQueueCharacterSummary(w, c);
+    const mayUsePrivate = id === actorId;
+    rows.push(
+      "CHARACTER " + String(c.name || id) + " [" + id + "] — " + (mayUsePrivate ? "SELF/PRIVATE SUMMARY" : "PUBLIC SUMMARY") + ":\n" +
+      String(mayUsePrivate ? summary.private : summary.public || "(none)")
+    );
+  }
+  return rows.length ? "CHARACTER SUMMARY LENS — STORED, RELEVANT ONLY:\n" + rows.join("\n\n") : "";
+}
+
+function simsSocialCompactWorldContext(w, text, focusIds, actorId) {
+  const value = String(text || "");
+  const lens = simsSocialSummaryLens(w, focusIds, actorId);
+  const lensRoom = lens ? Math.min(8500, lens.length + 120) : 0;
+  const mainCap = Math.max(9000, SIMS_SOCIAL_WORLD_CONTEXT_CAP - lensRoom);
+  let main = value;
+
+  if (value.length > mainCap) {
+    const relevantIds = simsSocialRelevantIds(w, focusIds, actorId);
+    const names = relevantIds.map((id) => {
+      const c = charById(w, id);
+      return c ? String(c.name || "") : "";
+    }).filter(Boolean);
+    const important = new RegExp(
+      ["world", "világ", "rule", "szabály", "era", "korszak", "year", "év", "current", "jelen", "recent", "legutóbbi", "memory", "emlék", "relationship", "kapcsolat", "public", "nyilvános", "group", "csoport", "scene", "jelenet", "event", "esemény"]
+        .concat(relevantIds, names)
+        .filter(Boolean)
+        .map((x) => String(x).replace(/[.*+?^$()|{}[\]\\]/g, "\\$&"))
+        .join("|"),
+      "i"
+    );
+
+    const blocks = value.split(/\n{2,}/).map((x) => x.trim()).filter(Boolean);
+    const selected = [];
+    let used = 0;
+    for (let i = 0; i < blocks.length; i += 1) {
+      const block = blocks[i];
+      if (!(i < 4 || important.test(block))) continue;
+      const room = mainCap - used;
+      if (room <= 0) break;
+      const clipped = block.length > room ? block.slice(0, Math.max(0, room - 40)) + "\n...[context compacted]..." : block;
+      selected.push(clipped);
+      used += clipped.length + 2;
+    }
+    if (used < Math.min(6000, mainCap * .45)) {
+      const room = Math.max(0, mainCap - used - 70);
+      selected.push("RECENT CONTEXT TAIL:\n" + value.slice(-Math.min(room, 4500)));
+    }
+    main = selected.join("\n\n").slice(0, mainCap);
+  }
+
+  return [main, lens].filter(Boolean).join("\n\n").slice(0, SIMS_SOCIAL_WORLD_CONTEXT_CAP + 1500);
+}
+
+function legacyVoiceStyleWorldContext(...args) {
+  const out = legacySimsSocialWorldContext(...args);
+  const w = args[0];
+  const focusIds = args[1];
+  const actorId = args.length >= 4 ? args[3] : "";
+  return simsSocialCompactWorldContext(w, out, focusIds, actorId);
+}
+
+function legacyVoiceStyleVoiceCard(...args) {
+  const base = String(legacySimsSocialVoiceCard(...args) || "");
+  const c = args[0];
+  if (!c || typeof c !== "object") return base;
+  const summary = ensureCharacterContextSummary(c);
+  const privateSummary = String(summary.private || "").slice(0, 5200);
+  if (!privateSummary) return base;
+  return [
+    base,
+    "SELF CHARACTER SHEET SUMMARY — PRIVATE PORTRAYAL CONTEXT, DO NOT LEAK AS OTHER PEOPLE'S KNOWLEDGE:",
+    privateSummary,
+  ].filter(Boolean).join("\n\n");
+}
+
+function simsSocialCanObserveEvent(w, observerId, event) {
+  if (!w || !observerId || !event) return false;
+  if (String(event.actorId || "") === String(observerId)) return true;
+  const visibility = String(event.visibility || "public").toLowerCase();
+  if (visibility === "public") return true;
+  const targets = Array.isArray(event.targetIds) ? event.targetIds.map(String) : [];
+  if (targets.includes(String(observerId))) return true;
+  const participants = event.meta && Array.isArray(event.meta.participantIds) ? event.meta.participantIds.map(String) : [];
+  return participants.includes(String(observerId));
+}
+
+function simsSocialUnansweredPrivateCard(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || typeof chatKey !== "function") return "";
+  const rows = w.chats && w.chats[chatKey(actorId, targetId)];
+  if (!Array.isArray(rows) || !rows.length) return "";
+  const ordered = rows.filter(Boolean).slice(-40);
+  let latestActorIndex = -1;
+  for (let i = ordered.length - 1; i >= 0; i -= 1) {
+    if (String(ordered[i].from || ordered[i].authorId || "") === String(actorId)) {
+      latestActorIndex = i;
+      break;
+    }
+  }
+  if (latestActorIndex < 0) return "";
+  const laterReply = ordered.slice(latestActorIndex + 1).some((row) => String(row.from || row.authorId || "") === String(targetId));
+  if (laterReply) return "";
+  const ts = Number(ordered[latestActorIndex].ts) || 0;
+  if (ts && now() - ts < 8 * 60 * 1000) return "";
+  return "PRIVATE RESPONSE STATUS: your latest private message to this person has not received a later reply yet. You may notice the silence if your personality/relationship makes it salient, but you do NOT know the reason and must not invent one.";
+}
+
+function simsSocialPlayerActivityCard(w, observerId) {
+  if (!w || !w.meId || !observerId) return "";
+  const events = (w.socialEvents || [])
+    .filter((event) => event && String(event.actorId || "") === String(w.meId) && simsSocialCanObserveEvent(w, observerId, event))
+    .slice(-60)
+    .reverse()
+    .slice(0, 10)
+    .map((event) => {
+      const targets = (event.targetIds || []).map((id) => {
+        const c = charById(w, id);
+        return c ? c.name : id;
+      }).filter(Boolean).join(", ");
+      return "- " + String(event.type || "event") + (targets ? " → " + targets : "") + ": " + String(event.text || "").replace(/\s+/g, " ").trim().slice(0, 220);
+    });
+  return events.length ? "VISIBLE RECENT PLAYER ACTIVITY — evidence only, newest first:\n" + events.join("\n") : "";
+}
+
+function simsSocialRivalryCard(w, actorId) {
+  if (!w || !w.meId || !actorId || actorId === w.meId) return "";
+  const actorRel = getRel(w, actorId, w.meId) || {};
+  const actorText = [actorRel.bond, actorRel.type, actorRel.mood, actorRel.hidden].filter(Boolean).join(" ").toLowerCase();
+  const actorScore = Number(actorRel.score) || 0;
+  const attached = actorScore >= 55 || /love|szerel|crush|vonz|attract|jealous|féltéken|possess|birtokl|obsess|megszáll/.test(actorText);
+  if (!attached) return "";
+
+  const rivals = (w.chars || []).filter((c) => c && c.id !== actorId && c.id !== w.meId && !isHuman(w, c.id)).map((c) => {
+    const rel = getRel(w, c.id, w.meId) || {};
+    const txt = [rel.bond, rel.type, rel.mood, rel.hidden].filter(Boolean).join(" ").toLowerCase();
+    const score = Number(rel.score) || 0;
+    const strong = score >= 55 || /love|szerel|crush|vonz|attract|obsess|megszáll/.test(txt);
+    return strong ? { id: c.id, name: c.name, score } : null;
+  }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 4);
+  if (!rivals.length) return "";
+  return "POTENTIAL ATTENTION RIVALS — not automatic enemies, react only to a concrete known trigger and according to personality:\n" + rivals.map((r) => "- " + r.name + " (attachment score " + r.score + ")").join("\n");
+}
+
+function simsSocialReactionStyle(c) {
+  if (!c) return "";
+  const summary = ensureCharacterContextSummary(c);
+  const text = String(summary.private || "").toLowerCase();
+  if (/calm|nyugodt|reserved|visszafogott|stoic|sztoikus|private|zárkózott|shy|félénk/.test(text)) {
+    return "REACTION STYLE: this character tends toward quiet/private/contained reactions. Do not force public drama.";
+  }
+  if (/impulsive|impulzív|hot[- ]?headed|lobbanékony|confront|konfront|aggressive|agressz|dramatic|drámai|proud|büszke/.test(text)) {
+    return "REACTION STYLE: this character may confront or react visibly when a real trigger exists, but must not invent one.";
+  }
+  if (/playful|játékos|teasing|csipkelőd|sarcastic|szarkaszt|humor/.test(text)) {
+    return "REACTION STYLE: teasing, humor or indirect remarks may fit better than melodrama when context supports it.";
+  }
+  return "REACTION STYLE: choose intensity from this character's actual personality; silence/no reaction is valid.";
+}
+
+function simsSocialRelationshipContextCard(w, actorId, targetId) {
+  if (!w || !actorId || !targetId) return "";
+  const actor = charById(w, actorId);
+  const target = charById(w, targetId);
+  if (!actor || !target) return "";
+  const forward = getRel(w, actorId, targetId) || {};
+  const reverse = getRel(w, targetId, actorId) || {};
+  const pieces = [
+    "CONTEXT-SENSITIVE SOCIAL BEHAVIOR — CURRENT LENS:",
+    "DIRECTIONAL LIVE STATE: " + actor.name + "→" + target.name + " score=" + (Number(forward.score) || 0) + "; " + target.name + "→" + actor.name + " score=" + (Number(reverse.score) || 0) + ". Never infer reciprocity.",
+    simsSocialReactionStyle(actor),
+  ];
+
+  if (targetId === w.meId) {
+    pieces.push(simsSocialPlayerActivityCard(w, actorId));
+    pieces.push(simsSocialUnansweredPrivateCard(w, actorId, targetId));
+    pieces.push(simsSocialRivalryCard(w, actorId));
+    const player = charById(w, w.meId) || w.player;
+    if (player) {
+      const summary = ensureCharacterContextSummary(player);
+      pieces.push("PLAYER PUBLIC PROFILE SUMMARY — only public/profile facts:\n" + String(summary.public || "").slice(0, 4200));
+    }
+  }
+
+  return pieces.filter(Boolean).join("\n\n");
+}
+
+function relationshipBehaviorCard(...args) {
+  const base = String(legacySimsSocialRelationshipBehaviorCard(...args) || "");
+  const w = args[0];
+  const actorId = args[1];
+  const targetId = args[2];
+  const extra = simsSocialRelationshipContextCard(w, actorId, targetId);
+  return [base, extra].filter(Boolean).join("\n\n");
+}
+
+function simsSocialEventKey(event) {
+  if (!event || typeof event !== "object") return "";
+  const ref = String(event.id || event.refId || "").trim();
+  if (ref) return String(event.type || "event") + ":" + ref;
+  return [event.type || "event", event.actorId || "", Number(event.ts) || 0, String(event.text || "").slice(0, 180)].join(":");
+}
+
+function simsSocialTrimLedger(obj, max = 260) {
+  const entries = Object.entries(obj || {}).sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0));
+  return entries.length > max ? Object.fromEntries(entries.slice(0, Math.floor(max * .75))) : obj;
+}
+
+function simsSocialToneDelta(event) {
+  const type = String(event && event.type || "").toLowerCase();
+  const text = String(event && event.text || "").toLowerCase();
+  if (type === "unfollow") return -2;
+  if (type === "follow") return 1;
+  if (type === "like") return 1;
+  if (/hate|gyűlöl|utál|disgust|undor|pathetic|szánal|idiot|idióta|liar|hazug|fuck you|kapd be/.test(text)) return -2;
+  if (/love|szeretlek|imádlak|adore|proud|büszke|beautiful|gyönyör|gorgeous|csodálatos/.test(text)) return 2;
+  if (/sorry|bocsánat|sajnálom|thank|köszön|congrats|gratul/.test(text)) return 1;
+  return 0;
+}
+
+function simsSocialApplyScoreDelta(w, fromId, towardId, delta) {
+  if (!w || !fromId || !towardId || !delta || fromId === towardId) return;
+  if (isHuman(w, fromId)) return;
+  const current = getRel(w, fromId, towardId) || {};
+  const oldScore = Number(current.score) || 0;
+  const nextScore = Math.max(-100, Math.min(100, oldScore + delta));
+  if (nextScore !== oldScore) setRel(w, fromId, towardId, { score: nextScore });
+}
+
+function simsSocialFollowReactionPropensity(c, rel) {
+  if (!c) return 0;
+  const summary = ensureCharacterContextSummary(c);
+  const text = [summary.private, rel && rel.bond, rel && rel.type, rel && rel.mood, rel && rel.hidden].filter(Boolean).join(" ").toLowerCase();
+  if (/detached|közömbös|unbothered|nem érdekli|aloof|távolságtartó/.test(text)) return 0;
+  if (/jealous|féltéken|possess|birtokl|proud|büszke|sensitive|érzékeny|social|társas|curious|kíváncsi|direct|egyenes|confront|konfront/.test(text)) return 2;
+  return Math.abs(Number(rel && rel.score) || 0) >= 35 ? 1 : 0;
+}
+
+function simsSocialScheduleDirectReaction(w, event, targetId) {
+  if (!w || !event || !targetId || isHuman(w, targetId)) return;
+  const type = String(event.type || "").toLowerCase();
+  if (!(type === "follow" || type === "unfollow")) return;
+  const actorId = String(event.actorId || "");
+  if (!actorId || actorId === targetId) return;
+  const target = charById(w, targetId);
+  const rel = getRel(w, targetId, actorId) || {};
+  if (!simsSocialFollowReactionPropensity(target, rel)) return;
+
+  const intel = ensureSocialIntelligenceState(w);
+  const key = targetId + ":" + actorId + ":" + type;
+  const last = Number(intel.lastDirectReaction[key]) || 0;
+  if (now() - last < SIMS_SOCIAL_REACTION_COOLDOWN_MS) return;
+  intel.lastDirectReaction[key] = now();
+
+  if (typeof simEnqueue !== "function" || typeof mkAction !== "function") return;
+  if (isHuman(w, actorId)) {
+    simEnqueue(w, mkAction(
+      "dm",
+      "follow-reaction:" + type + ":" + targetId + ":" + actorId + ":" + simsSocialEventKey(event),
+      { botId: targetId, trigger: type + "-reaction", eventId: String(event.id || event.refId || "") },
+      "event"
+    ));
+  } else {
+    simEnqueue(w, mkAction(
+      "npc-pair-reaction",
+      "follow-pair-reaction:" + type + ":" + targetId + ":" + actorId + ":" + simsSocialEventKey(event),
+      { actorId: targetId, targetId: actorId, trigger: type + "-reaction", eventId: String(event.id || event.refId || "") },
+      "event"
+    ));
+  }
+}
+
+function legacyGroundedPositiveAttentionEvent(event) {
+  const type = String(event && event.type || "").toLowerCase();
+  if (type === "like" || type === "follow") return true;
+  if (!(type === "comment" || type === "reply" || type === "post")) return false;
+  const text = String(event.text || "").toLowerCase();
+  if (/hate|utál|gyűlöl|idiot|idióta|pathetic|szánal|liar|hazug/.test(text)) return false;
+  return /love|szeret|imád|cute|cuki|hot|dögös|pretty|szép|beautiful|gyönyör|❤️|❤|🥰|😍|🔥|😉|😘/.test(text) || type === "comment" || type === "reply";
+}
+
+function legacyGroundedScheduleAttentionRivalry(w, event, subjectId) {
+  if (!w || !event || !w.meId || String(event.actorId || "") !== String(w.meId)) return;
+  if (!subjectId || subjectId === w.meId || !simsSocialPositiveAttentionEvent(event)) return;
+  const visibility = String(event.visibility || "public").toLowerCase();
+  if (visibility !== "public") return;
+  const subject = charById(w, subjectId);
+  if (!subject || isHuman(w, subjectId)) return;
+
+  const candidates = (w.chars || []).filter((c) => c && c.id !== subjectId && c.id !== w.meId && !isHuman(w, c.id)).map((c) => {
+    const rel = getRel(w, c.id, w.meId) || {};
+    const summary = ensureCharacterContextSummary(c);
+    const text = [summary.private, rel.bond, rel.type, rel.mood, rel.hidden].filter(Boolean).join(" ").toLowerCase();
+    const score = Number(rel.score) || 0;
+    const attachment = score >= 60 || /love|szerel|crush|vonz|attract|obsess|megszáll/.test(text);
+    const jealousyCapable = /jealous|féltéken|possess|birtokl|territorial|rival|rivális|competitive|verseng/.test(text);
+    return attachment && jealousyCapable && simsSocialCanObserveEvent(w, c.id, event) ? { c, score } : null;
+  }).filter(Boolean).sort((a, b) => b.score - a.score);
+
+  const chosen = candidates[0];
+  if (!chosen) return;
+  const intel = ensureSocialIntelligenceState(w);
+  const key = chosen.c.id + ":attention";
+  const last = Number(intel.lastAttentionReaction[key]) || 0;
+  if (now() - last < SIMS_SOCIAL_REACTION_COOLDOWN_MS) return;
+  intel.lastAttentionReaction[key] = now();
+
+  if (typeof simEnqueue === "function" && typeof mkAction === "function") {
+    simEnqueue(w, mkAction(
+      "npc-pair-reaction",
+      "attention-rivalry:" + chosen.c.id + ":" + subjectId + ":" + simsSocialEventKey(event),
+      { actorId: chosen.c.id, targetId: subjectId, trigger: "player-attention-rivalry", eventId: String(event.id || event.refId || "") },
+      "event"
+    ));
+  }
+}
+
+function legacyCommentRepairSimsSocialApplyEventConsequences(w, event) {
+  if (!w || !event || typeof event !== "object") return;
+  const intel = ensureSocialIntelligenceState(w);
+  const key = simsSocialEventKey(event);
+  if (!key || intel.eventEffectsSeen[key]) return;
+  intel.eventEffectsSeen[key] = now();
+  intel.eventEffectsSeen = simsSocialTrimLedger(intel.eventEffectsSeen);
+
+  const actorId = String(event.actorId || "");
+  if (!actorId) return;
+  const targets = [...new Set([
+    ...(Array.isArray(event.targetIds) ? event.targetIds : []),
+    ...((event.meta && Array.isArray(event.meta.participantIds)) ? event.meta.participantIds : []),
+  ].map(String).filter((id) => id && id !== actorId))].slice(0, 8);
+  const delta = simsSocialToneDelta(event);
+
+  for (const targetId of targets) {
+    if (!charById(w, targetId)) continue;
+    if (delta) {
+      simsSocialApplyScoreDelta(w, targetId, actorId, delta);
+      if (!isHuman(w, actorId) && !isHuman(w, targetId)) {
+        simsSocialApplyScoreDelta(w, actorId, targetId, delta > 0 ? 1 : -1);
+      }
+    }
+
+    if (typeof rememberAboutTarget === "function" && !isHuman(w, targetId) && simsSocialCanObserveEvent(w, targetId, event)) {
+      const actor = charById(w, actorId);
+      rememberAboutTarget(w, targetId, actorId, {
+        kind: "event",
+        source: "social_intelligence",
+        confidence: 1,
+        text: (actor ? actor.name : actorId) + " — " + String(event.type || "event") + ": " + String(event.text || "").replace(/\s+/g, " ").trim().slice(0, 320),
+      });
+    }
+
+    simsSocialScheduleDirectReaction(w, event, targetId);
+    simsSocialScheduleAttentionRivalry(w, event, targetId);
+  }
+}
+
+function legacyCommentRepairRecordSocialEvent(w, event = {}) {
+  const result = legacySimsSocialRecordSocialEvent(w, event);
+  simsSocialApplyEventConsequences(w, event);
+  return result;
+}
+
+function legacyGroundedSetFollowState(...args) {
+  const w = args[0];
+  const actorId = args[1];
+  const targetId = args[2];
+  const requested = Boolean(args[3]);
+  const reason = String(args[4] || "");
+  const before = w && actorId && targetId && typeof isFollowing === "function" ? Boolean(isFollowing(w, actorId, targetId)) : null;
+  const result = legacySimsSocialSetFollowState(...args);
+  const after = w && actorId && targetId && typeof isFollowing === "function" ? Boolean(isFollowing(w, actorId, targetId)) : requested;
+
+  if (
+    w && actorId && targetId && actorId !== targetId &&
+    before !== after &&
+    reason !== "relationship-auto-follow" &&
+    !/bootstrap|initial|normalize|migration/i.test(reason)
+  ) {
+    const actor = charById(w, actorId);
+    const target = charById(w, targetId);
+    const type = after ? "follow" : "unfollow";
+    recordSocialEvent(w, {
+      type,
+      refId: type + ":" + actorId + ":" + targetId + ":" + now(),
+      ts: now(),
+      actorId,
+      targetIds: [targetId],
+      visibility: "public",
+      factLevel: "observed",
+      importance: after ? 18 : 34,
+      drama: after ? 4 : 24,
+      romance: 0,
+      embarrassment: 0,
+      source: reason || "follow-state",
+      text: (actor ? actor.name : actorId) + (after ? " followed " : " unfollowed ") + (target ? target.name : targetId) + ".",
+      tags: [type, "follow-system"],
+      meta: { participantIds: [actorId, targetId] },
+    });
+  }
+  return result;
+}
+
+
+/* MÁSVILÁG COMMENT REACTION REPAIR v2 */
+const COMMENT_MEMORY_REPAIR_LOGGED = new Set();
+
+function commentRepairCharacterLabel(w, id) {
+  const c = id ? charById(w, id) : null;
+  const name = c && c.name
+    ? c.name
+    : (w && w.meId === id && w.player && w.player.name ? w.player.name : "ismeretlen karakter");
+  return { name: String(name || "ismeretlen karakter"), id: String(id || "") };
+}
+
+function commentRepairLogMissingMemory(w, id, fields) {
+  const list = [...new Set((fields || []).filter(Boolean))];
+  if (!list.length) return;
+  const key = String(id || "") + ":" + list.sort().join(",");
+  if (COMMENT_MEMORY_REPAIR_LOGGED.has(key)) return;
+  COMMENT_MEMORY_REPAIR_LOGGED.add(key);
+  const label = commentRepairCharacterLabel(w, id);
+  console.warn(
+    "[memory-repair] hiányzó karakter-emlék inicializálva",
+    "name=" + label.name,
+    "id=" + label.id,
+    "fields=" + list.join(",")
+  );
+}
+
+function ensureCharMemory(w, observerId) {
+  if (!w || typeof w !== "object") return defaultCharacterMemory();
+  const missing = [];
+
+  if (!w.charMemory || typeof w.charMemory !== "object" || Array.isArray(w.charMemory)) {
+    w.charMemory = {};
+    missing.push("charMemory");
+  }
+
+  let mem = w.charMemory[observerId];
+  if (!mem || typeof mem !== "object" || Array.isArray(mem)) {
+    mem = defaultCharacterMemory();
+    w.charMemory[observerId] = mem;
+    missing.push("characterMemory");
+  } else {
+    const base = defaultCharacterMemory();
+    Object.entries(base).forEach(([key, fallback]) => {
+      if (mem[key] !== null && mem[key] !== undefined) return;
+      mem[key] = Array.isArray(fallback)
+        ? []
+        : (fallback && typeof fallback === "object" ? { ...fallback } : fallback);
+      missing.push(key);
+    });
+  }
+
+  commentRepairLogMissingMemory(w, observerId, missing);
+  return legacyCommentRepairEnsureCharMemory(w, observerId);
+}
+
+function compactPlayerReplyThread(w, post, focusComment) {
+  const all = safePostComments(post);
+  const byId = new Map(all.filter(Boolean).map((row) => [row.id, row]));
+  const keep = new Set();
+  const add = (row) => {
+    if (row && row.id) keep.add(row.id);
+  };
+
+  add(focusComment);
+  let parent = focusComment && focusComment.parent ? byId.get(focusComment.parent) : null;
+  let depth = 0;
+  while (parent && depth < 4) {
+    add(parent);
+    parent = parent.parent ? byId.get(parent.parent) : null;
+    depth += 1;
+  }
+
+  all.slice(-10).forEach((row) => add(row));
+  all
+    .filter((row) => row && focusComment && row.parent === focusComment.id)
+    .slice(-6)
+    .forEach((row) => add(row));
+
+  const selected = all
+    .filter((row) => row && keep.has(row.id))
+    .slice(-16);
+  const label = {};
+  selected.forEach((row, index) => { label[row.id] = "k" + (index + 1); });
+
+  return {
+    label,
+    text: selected.map((row) => {
+      const parentLabel = row.parent && label[row.parent]
+        ? " (válasz erre: " + label[row.parent] + ")"
+        : "";
+      const body = String(row.text || "").replace(/\s+/g, " ").trim().slice(0, 320);
+      return "[" + label[row.id] + "]" + parentLabel + " " + nameOfIn(w, row.authorId) + ": " + body;
+    }).join("\n"),
+  };
+}
+
+function commentRepairDeterministicDelta(w, event) {
+  const base = Number(simsSocialToneDelta(event)) || 0;
+  if (base) return base;
+
+  const actorId = String(event && event.actorId || "");
+  const type = String(event && event.type || "").toLowerCase();
+  const source = String(event && event.source || "").toLowerCase();
+  if (!w || actorId !== String(w.meId || "")) return 0;
+  if (!(type === "comment" || type === "reply")) return 0;
+  if (source && source !== "player") return 0;
+
+  const text = String(event.text || "").toLowerCase();
+  if (/gyűlöl|utál|undor|szánal|idióta|hülye|hazug|rohadj|kapd be|fuck you|hate|disgust|pathetic|idiot|liar/.test(text)) return -2;
+  if (/bunkó|idegesít|bosszant|gáz|cringe|nevetséges|loser|annoying|stupid|rude/.test(text)) return -1;
+  if (/szeretlek|imádlak|büszke vagyok|gyönyörű|csodálatos|love you|adore|proud of|gorgeous|beautiful/.test(text)) return 2;
+  if (/köszi|köszön|gratul|bocsánat|sajnálom|cuki|szép|dögös|thanks|thank you|congrats|sorry|cute|pretty|hot/.test(text)) return 1;
+
+  /* A normál, közvetlen nyilvános interakció is kapcsolatépítő mikro-esemény.
+     Csak a bot -> játékos irány változik; a játékos érzését soha nem írjuk. */
+  return 1;
+}
+
+function legacyFullSpecSimsSocialApplyEventConsequences(w, event) {
+  if (!w || !event || typeof event !== "object") return;
+  const intel = ensureSocialIntelligenceState(w);
+  const key = simsSocialEventKey(event);
+  if (!key || (intel && intel.eventEffectsSeen && intel.eventEffectsSeen[key])) return;
+
+  if (intel) {
+    intel.eventEffectsSeen[key] = now();
+    intel.eventEffectsSeen = simsSocialTrimLedger(intel.eventEffectsSeen);
+  }
+
+  const actorId = String(event.actorId || "");
+  if (!actorId) return;
+  const targets = [...new Set([
+    ...(Array.isArray(event.targetIds) ? event.targetIds : []),
+    ...((event.meta && Array.isArray(event.meta.participantIds)) ? event.meta.participantIds : []),
+  ].map(String).filter((id) => id && id !== actorId))].slice(0, 8);
+
+  channelRegisterPublicHostility(w, event);
+  const delta = channelAwareEventDelta(w, event);
+
+  for (const targetId of targets) {
+    if (!charById(w, targetId)) continue;
+
+    try {
+      if (delta) {
+        const before = getRel(w, targetId, actorId) || {};
+        const beforeScore = Number(before.score) || 0;
+        simsSocialApplyScoreDelta(w, targetId, actorId, delta);
+        const after = getRel(w, targetId, actorId) || {};
+        const afterScore = Number(after.score) || 0;
+        if (afterScore !== beforeScore) {
+          console.info(
+            "[comment-relation] deterministic",
+            "event=" + String(event.type || "event"),
+            "from=" + targetId,
+            "toward=" + actorId,
+            "delta=" + String(afterScore - beforeScore),
+            "score=" + beforeScore + "->" + afterScore
+          );
+        }
+        if (!isHuman(w, actorId) && !isHuman(w, targetId)) {
+          simsSocialApplyScoreDelta(w, actorId, targetId, delta > 0 ? 1 : -1);
+        }
+      }
+    } catch (scoreErr) {
+      console.warn("[comment-pipeline] relationship update failed; continuing", scoreErr);
+    }
+
+    try {
+      if (typeof rememberAboutTarget === "function" && !isHuman(w, targetId) && simsSocialCanObserveEvent(w, targetId, event)) {
+        const actor = charById(w, actorId);
+        rememberAboutTarget(w, targetId, actorId, {
+          kind: "event",
+          source: "social_intelligence",
+          confidence: 1,
+          text: (actor ? actor.name : actorId) + " — " + String(event.type || "event") + ": " + String(event.text || "").replace(/\s+/g, " ").trim().slice(0, 320),
+        });
+      }
+    } catch (memoryErr) {
+      console.warn("[comment-pipeline] memory update failed; continuing", memoryErr);
+    }
+
+    try {
+      simsSocialScheduleDirectReaction(w, event, targetId);
+    } catch (reactionErr) {
+      console.warn("[comment-pipeline] direct reaction scheduling failed; continuing", reactionErr);
+    }
+
+    try {
+      simsSocialScheduleAttentionRivalry(w, event, targetId);
+    } catch (rivalryErr) {
+      console.warn("[comment-pipeline] rivalry scheduling failed; continuing", rivalryErr);
+    }
+  }
+}
+
+function legacyFullSpecRecordSocialEvent(w, event = {}) {
+  let result = null;
+  try {
+    result = legacyCommentRepairRecordSocialEvent(w, event);
+  } catch (ledgerErr) {
+    console.warn("[comment-pipeline] social ledger step failed; continuing", ledgerErr);
+  }
+
+  /* Run independently as a repair-safe step. The dedupe ledger makes this a
+     no-op if the legacy wrapper already completed it successfully. */
+  try {
+    simsSocialApplyEventConsequences(w, event);
+  } catch (consequenceErr) {
+    console.warn("[comment-pipeline] deterministic consequence step failed; continuing", consequenceErr);
+  }
+  return result;
+}
+
+
+/* MÁSVILÁG CHARACTER VOICE STYLE v1 */
+const VOICE_STYLE_CARD_VERSION = 1;
+const VOICE_STYLE_PREFIX_MAX = 14500; // enough for a separate compact card for every multi-speaker participant
+let VOICE_STYLE_STRICT_RETRY_IDS = null;
+
+function voiceStyleRawSheet(c) {
+  if (!c || typeof c !== "object") return "";
+  const skip = /^(?:aiContextSummary|aiVoiceStyleCard|avatar|avatarUrl|image|imageId|images|album|albums|photos|media|posts|comments|msgs|messages|chats|scenes|memory|memories)$/i;
+  return Object.entries(c)
+    .filter(([key]) => !skip.test(String(key || "")))
+    .map(([key, value]) => {
+      let rendered = "";
+      try {
+        rendered = typeof simsSocialStringify === "function"
+          ? simsSocialStringify(value)
+          : String(value == null ? "" : value);
+      } catch {
+        rendered = String(value == null ? "" : value);
+      }
+      return rendered ? String(key) + ": " + rendered : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function voiceStyleSourceHash(c) {
+  const raw = voiceStyleRawSheet(c);
+  return typeof simsSocialStableHash === "function"
+    ? simsSocialStableHash(raw)
+    : String(raw.length) + ":" + raw.slice(0, 80);
+}
+
+function voiceStyleUnique(rows, max = 8) {
+  const out = [];
+  for (const raw of rows || []) {
+    const value = String(raw || "").replace(/\s+/g, " ").trim();
+    if (!value) continue;
+    const key = value.toLocaleLowerCase("hu-HU");
+    if (out.some((item) => item.key === key)) continue;
+    out.push({ key, value });
+    if (out.length >= max) break;
+  }
+  return out.map((item) => item.value);
+}
+
+function voiceStyleKeywordSnippets(raw, pattern, max = 8) {
+  const text = String(raw || "");
+  if (!text) return [];
+  const lines = text.split(/\n+/).filter(Boolean);
+  const direct = lines
+    .filter((line) => pattern.test(line))
+    .map((line) => line.slice(0, 420));
+  if (direct.length >= max) return voiceStyleUnique(direct, max);
+
+  const extra = [];
+  const probe = new RegExp(pattern.source, pattern.flags.replace("g", ""));
+  let cursor = 0;
+  while (cursor < text.length && extra.length < max) {
+    const slice = text.slice(cursor);
+    const match = slice.match(probe);
+    if (!match || match.index == null) break;
+    const at = cursor + match.index;
+    const start = Math.max(0, at - 170);
+    const end = Math.min(text.length, at + Math.max(match[0].length, 20) + 220);
+    extra.push(text.slice(start, end).replace(/\s+/g, " ").trim());
+    cursor = at + Math.max(1, match[0].length);
+  }
+  return voiceStyleUnique([...direct, ...extra], max);
+}
+
+function voiceStyleTraitCandidates(c, raw) {
+  const rows = [];
+  const traitKey = /personality|traits?|temperament|character|szem[eé]lyis[eé]g|jellem|term[eé]szet|attitude|demeanou?r/i;
+  Object.entries(c || {}).forEach(([key, value]) => {
+    if (!traitKey.test(key)) return;
+    const rendered = typeof simsSocialStringify === "function"
+      ? simsSocialStringify(value)
+      : String(value || "");
+    String(rendered || "")
+      .split(/[\n;,|•]+/)
+      .map((x) => x.replace(/\s+/g, " ").trim())
+      .filter((x) => x.length >= 2 && x.length <= 150)
+      .forEach((x) => rows.push(x));
+  });
+  if (rows.length < 3) {
+    voiceStyleKeywordSnippets(
+      raw,
+      /calm|nyugodt|reserved|visszafogott|stoic|sztoikus|shy|f[eé]l[eé]nk|impulsive|impulz[ií]v|lobban[eé]kony|confront|aggress|playful|j[aá]t[eé]kos|sarcast|szarkaszt|funny|humor|flirt|protect|v[eé]delmez|jealous|f[eé]lt[eé]ken|possess|birtokl|loyal|h[uű]s[eé]g|cold|hideg|warm|kedves|blunt|nyers|direct|egyenes/gi,
+      5
+    ).forEach((x) => rows.push(x));
+  }
+  return voiceStyleUnique(rows, 5);
+}
+
+function voiceStyleExampleCandidates(c, raw) {
+  const rows = [];
+  const exampleKey = /example|sample|quote|speechExample|messageExample|p[eé]lda|p[eé]ldamondat|id[eé]zet|mintamondat/i;
+  Object.entries(c || {}).forEach(([key, value]) => {
+    if (!exampleKey.test(key)) return;
+    const rendered = typeof simsSocialStringify === "function"
+      ? simsSocialStringify(value)
+      : String(value || "");
+    String(rendered || "")
+      .split(/\n+/)
+      .map((x) => x.replace(/\s+/g, " ").trim())
+      .filter((x) => x.length >= 2)
+      .slice(0, 4)
+      .forEach((x) => rows.push(x.slice(0, 320)));
+  });
+  if (!rows.length) {
+    voiceStyleKeywordSnippets(
+      raw,
+      /(?:example|sample|quote|p[eé]lda(?:mondat)?|id[eé]zet|mintamondat)\s*[:：-]/gi,
+      3
+    ).forEach((x) => rows.push(x));
+  }
+  return voiceStyleUnique(rows, 3);
+}
+
+function extractCharacterVoiceStyleCard(c) {
+  const raw = voiceStyleRawSheet(c);
+  const sourceHash = voiceStyleSourceHash(c);
+  const current = c && c.aiVoiceStyleCard && typeof c.aiVoiceStyleCard === "object"
+    ? c.aiVoiceStyleCard
+    : null;
+  if (current && current.version === VOICE_STYLE_CARD_VERSION && current.sourceHash === sourceHash && current.card) {
+    return current;
+  }
+
+  const upper = /(?:csupa|mindig|kiz[aá]r[oó]lag|all|always).{0,28}(?:nagybet[uű]|caps(?:\s*lock)?|uppercase)|(?:caps(?:\s*lock)?|uppercase).{0,28}(?:[ií]r|write|speaks?|besz[eé]l)/i.test(raw);
+  const lower = /(?:csupa|mindig|kiz[aá]r[oó]lag|all|always).{0,28}(?:kisbet[uű]|lowercase)|(?:lowercase).{0,28}(?:[ií]r|write|speaks?|besz[eé]l)/i.test(raw);
+  const noEmoji = /(?:nem|soha|nincs|without|no|never).{0,28}(?:emoji|emodzsi)|(?:emoji|emodzsi).{0,28}(?:nem haszn[aá]l|tilos|never|none)/i.test(raw);
+  const manyEmoji = /(?:sok|rengeteg|gyakran|often|lots? of|many|heavy).{0,24}(?:emoji|emodzsi)|(?:emoji|emodzsi).{0,24}(?:sok|gyakran|often|heavy)/i.test(raw);
+  const noPunctuation = /(?:nem|soha|nincs|without|no|never).{0,32}(?:[ií]r[aá]sjel|punctuation)|(?:[ií]r[aá]sjel|punctuation).{0,32}(?:n[eé]lk[uü]l|nem haszn[aá]l|none|never)/i.test(raw);
+  const noFinalPeriod = /(?:nem|soha|never|doesn.?t).{0,36}(?:pontot|mondatv[eé]gi pont|period|full stop).{0,20}(?:v[eé]g[eé]n|end)?|(?:no|without).{0,20}(?:final )?(?:period|full stop)/i.test(raw);
+  const shortMessages = /(?:nagyon |mindig |usually |többnyire )?(?:rövid|t[oö]m[oö]r|short|brief).{0,28}(?:[uü]zenet|message|mondat|reply|v[aá]lasz)|(?:one[- ]?word|egy szavas|1[-– ]?3 szavas)/i.test(raw);
+  const longMessages = /(?:hossz[uú]|r[eé]szletes|long|lengthy|detailed).{0,28}(?:[uü]zenet|message|mondat|reply|v[aá]lasz|monol[oó]g)/i.test(raw);
+  const typos = /el[ií]r[aá]s|typo|misspell|helyes[ií]r[aá]si hib|sz[aá]nd[eé]kosan hib[aá]san/i.test(raw);
+  const slang = /szleng|slang|internet speak|netes nyelv|gen z|gen-z|rövid[ií]t[eé]s/i.test(raw);
+  const profanity = /k[aá]romkod|swear|profan|curse|tr[aá]g[aá]r|cs[uú]ny[aá]n besz[eé]l/i.test(raw);
+  const alwaysSwears = /(?:mindig|álland[oó]an|folyamatosan|every|always).{0,30}(?:k[aá]romkod|swear|profan|curse)/i.test(raw);
+  const nickname = /becen[eé]v|nickname|pet name|bec[eé]z/i.test(raw);
+  const languageMix = /nyelvkever|language mix|mix(?:es|ing)? (?:hungarian|english|languages?)|hunglish|magyar.{0,18}angol|angol.{0,18}magyar/i.test(raw);
+
+  let casing = "";
+  if (upper && !lower) casing = "upper";
+  else if (lower && !upper) casing = "lower";
+
+  const stylePattern = /caps|uppercase|lowercase|nagybet[uű]|kisbet[uű]|emoji|emodzsi|[ií]r[aá]sjel|punctuation|pontot|period|full stop|szleng|slang|k[aá]romkod|swear|profan|el[ií]r[aá]s|typo|rövid [uü]zenet|short message|hossz[uú] [uü]zenet|long message|becen[eé]v|nickname|language mix|nyelvkever|speech|besz[eé]dst[ií]lus|[ií]r[aá]sm[oó]d|writing style/gi;
+  const evidence = voiceStyleKeywordSnippets(raw, stylePattern, 8);
+  const traits = voiceStyleTraitCandidates(c, raw);
+  const examples = voiceStyleExampleCandidates(c, raw);
+
+  const rules = {
+    casing,
+    noEmoji,
+    noPunctuation,
+    noFinalPeriod,
+  };
+  const soft = {
+    manyEmoji: !noEmoji && manyEmoji,
+    shortMessages,
+    longMessages,
+    typos,
+    slang,
+    profanity,
+    alwaysSwears,
+    nickname,
+    languageMix,
+  };
+
+  const hardRows = [];
+  if (casing === "upper") hardRows.push("MECHANICAL CASING: every authored message must be ALL CAPS / uppercase.");
+  if (casing === "lower") hardRows.push("MECHANICAL CASING: every authored message must be all lowercase.");
+  if (noEmoji) hardRows.push("EMOJI: use no emoji.");
+  else if (manyEmoji) hardRows.push("EMOJI: this character explicitly uses many/frequent emoji when natural.");
+  if (noPunctuation) hardRows.push("PUNCTUATION: this character uses no sentence punctuation.");
+  else if (noFinalPeriod) hardRows.push("PUNCTUATION: do not end messages with a period/full stop.");
+  if (shortMessages) hardRows.push("LENGTH: strongly prefer the explicitly short/brief message style.");
+  if (longMessages) hardRows.push("LENGTH: this character tends toward longer/detailed messages when the situation supports it.");
+  if (typos) hardRows.push("TYPOS: preserve the explicitly described typo/misspelling habit; do not overdo beyond canon.");
+  if (slang) hardRows.push("SLANG: preserve the explicitly described slang/register.");
+  if (profanity) hardRows.push("PROFANITY: preserve the explicitly described swearing level; do not sanitize the character into generic politeness.");
+  if (nickname) hardRows.push("NICKNAMES: use established nicknames/pet names only for people the sheet/relationship supports.");
+  if (languageMix) hardRows.push("LANGUAGE: preserve the explicitly described language mixing pattern.");
+
+  const card = [
+    "VOICE / WRITING STYLE CARD — HARD PERFORMANCE CONTRACT FOR " + String(c && c.name || c && c.id || "CHARACTER") + " [" + String(c && c.id || "") + "]",
+    "This card controls ONLY this character's authored voice. It is author/performance data, NOT in-world knowledge other characters can quote or discover.",
+    hardRows.length ? "EXPLICIT STYLE RULES:\n- " + hardRows.join("\n- ") : "EXPLICIT STYLE RULES: follow the sheet's natural writing/speech register; do not drift into generic assistant voice.",
+    traits.length ? "TOP PERSONALITY / DELIVERY TRAITS:\n- " + traits.join("\n- ") : "",
+    evidence.length ? "SHEET EVIDENCE — paraphrase/obey, do not quote as exposition:\n- " + evidence.join("\n- ") : "",
+    examples.length ? "VOICE EXAMPLES FROM THE SHEET — imitate the pattern, never mechanically repeat the sentence:\n- " + examples.join("\n- ") : "",
+    "LANGUAGE CONTRACT: Hungarian stays natural and grammatical unless the sheet explicitly requires slang/typos. Address the player in E/2; the speaker refers to themself in E/1.",
+  ].filter(Boolean).join("\n\n").slice(0, 3600);
+
+  const result = {
+    version: VOICE_STYLE_CARD_VERSION,
+    sourceHash,
+    rules,
+    soft,
+    traits,
+    examples,
+    evidence,
+    card,
+    updatedAt: now(),
+  };
+  if (c && typeof c === "object") c.aiVoiceStyleCard = result;
+  return result;
+}
+
+function characterVoiceStyleCard(c) {
+  const card = extractCharacterVoiceStyleCard(c);
+  return card && card.card ? String(card.card).slice(0, 1600) : "";
+}
+
+function voiceStyleRetryInstruction(c) {
+  if (!c || !VOICE_STYLE_STRICT_RETRY_IDS || !VOICE_STYLE_STRICT_RETRY_IDS.has(String(c.id || ""))) return "";
+  return [
+    "STRICT VOICE RETRY — THE PREVIOUS DRAFT VIOLATED THIS CHARACTER'S EXPLICIT STYLE.",
+    "Obey the VOICE / WRITING STYLE CARD literally. Keep the content natural, but do not relax casing, message-length tendency, emoji policy, punctuation policy, slang/register, or the stated personality delivery.",
+    "This is the only automatic style retry.",
+  ].join("\n");
+}
+
+function voiceCard(c) {
+  if (!c || typeof c !== "object") return "";
+  const style = characterVoiceStyleCard(c);
+  const strict = voiceStyleRetryInstruction(c);
+  let summary = "";
+  try {
+    const contextSummary = ensureCharacterContextSummary(c);
+    summary = String(contextSummary && contextSummary.private || "").slice(0, 2800);
+  } catch {}
+  return [
+    style,
+    strict,
+    summary
+      ? "COMPACT SELF-CANON — RELEVANT PORTRAYAL CONTEXT; DO NOT LEAK PRIVATE FACTS AS OTHER CHARACTERS' KNOWLEDGE:\n" + summary
+      : "",
+  ].filter(Boolean).join("\n\n").slice(0, 6500);
+}
+
+function voiceStyleCardsForIds(w, ids, actorId) {
+  if (!w) return "";
+  const unique = [];
+  const add = (id) => {
+    const value = String(id || "").trim();
+    if (value && !unique.includes(value)) unique.push(value);
+  };
+  if (Array.isArray(ids)) ids.forEach(add);
+  else add(ids);
+  add(actorId);
+
+  const rows = unique
+    .slice(0, 8)
+    .map((id) => charById(w, id))
+    .filter((c) => c && !isHuman(w, c.id))
+    .map((c) => characterVoiceStyleCard(c))
+    .filter(Boolean);
+
+  return rows.length
+    ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER:\n\n" + rows.join("\n\n--- NEXT SPEAKER CARD ---\n\n")
+    : "";
+}
+
+function legacyEventDrivenWorldContext(...args) {
+  const w = args[0];
+  const ids = args[1];
+  const actorId = args.length >= 4 ? args[3] : "";
+  const options = args.length >= 5 && args[4] && typeof args[4] === "object" ? args[4] : {};
+  const prefix = voiceStyleCardsForIds(w, ids, actorId);
+  let base = String(legacyVoiceStyleWorldContext(...args) || "");
+
+  /* Social-thread context gets a tighter local cap. The prefix is never part of
+     this trimming operation, so voice cards cannot be lost to app compaction. */
+  if (options.socialScope === true && base.length > 12500) {
+    const head = Math.min(9000, base.length);
+    const tail = Math.min(3200, Math.max(0, base.length - head));
+    base = base.slice(0, head) +
+      "\n...[public social background compacted; voice cards preserved above]...\n" +
+      (tail ? base.slice(-tail) : "");
+  }
+
+  if (prefix) {
+    const idsLogged = (Array.isArray(ids) ? ids : [ids])
+      .filter(Boolean)
+      .slice(0, 8)
+      .map((id) => {
+        const c = charById(w, id);
+        return c ? String(c.name || id) + "[" + id + "]" : String(id);
+      });
+    console.info(
+      "[voice-style] cards-preserved",
+      "speakers=" + idsLogged.join(","),
+      "prefixChars=" + prefix.length,
+      "socialScope=" + String(Boolean(options.socialScope))
+    );
+  }
+
+  return [prefix.slice(0, VOICE_STYLE_PREFIX_MAX), base].filter(Boolean).join("\n\n");
+}
+
+function voiceStyleProtectTokens(text) {
+  const tokens = [];
+  const masked = String(text || "").replace(
+    /https?:\/\/[^\s]+|www\.[^\s]+|@[A-Za-z0-9_.]+|#[\p{L}\p{N}_]+/gu,
+    (match) => {
+      const marker = "§" + tokens.length + "§";
+      tokens.push(match);
+      return marker;
+    }
+  );
+  return {
+    masked,
+    restore(value) {
+      return String(value || "").replace(/§(\d+)§/g, (_, index) => tokens[Number(index)] || "");
+    },
+  };
+}
+
+function voiceStyleStripEmoji(text) {
+  return String(text || "")
+    .replace(/[\p{Extended_Pictographic}\uFE0F\u200D]+/gu, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ +\n/g, "\n")
+    .trim();
+}
+
+function applyCharacterVoiceStyle(w, id, text) {
+  const value = String(text || "");
+  if (!value || !w || !id || isHuman(w, id)) return value;
+  const c = charById(w, id);
+  if (!c) return value;
+  const style = extractCharacterVoiceStyleCard(c);
+  const rules = style && style.rules ? style.rules : {};
+  const protectedText = voiceStyleProtectTokens(value);
+  let out = protectedText.masked;
+
+  if (rules.casing === "upper") out = out.toLocaleUpperCase("hu-HU");
+  else if (rules.casing === "lower") out = out.toLocaleLowerCase("hu-HU");
+
+  if (rules.noEmoji) out = voiceStyleStripEmoji(out);
+  if (rules.noPunctuation) {
+    out = out
+      .replace(/[.!?,;:…。！？；：]+/g, "")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/ +\n/g, "\n")
+      .trim();
+  } else if (rules.noFinalPeriod) {
+    out = out.replace(/[.。]+\s*$/g, "").trimEnd();
+  }
+
+  return protectedText.restore(out).trim();
+}
+
+function cleanGeneratedUtterance(...args) {
+  const w = args[0];
+  const id = args[1];
+  const base = legacyVoiceStyleCleanGeneratedUtterance(...args);
+  return applyCharacterVoiceStyle(w, id, base);
+}
+
+function cleanGeneratedComment(...args) {
+  const w = args[0];
+  const id = args[1];
+  const base = legacyVoiceStyleCleanGeneratedComment(...args);
+  return applyCharacterVoiceStyle(w, id, base);
+}
+
+function voiceStyleHasEmoji(text) {
+  return /\p{Extended_Pictographic}/u.test(String(text || ""));
+}
+
+function voiceStyleExplicitProfanity(text) {
+  return /fuck|shit|damn|bitch|fasz|kurva|geci|bazd|baszd|pics[aá]|szar/i.test(String(text || ""));
+}
+
+function voiceStyleSoftMismatch(w, id, text) {
+  if (!w || !id || !text || isHuman(w, id)) return false;
+  const c = charById(w, id);
+  if (!c) return false;
+  const style = extractCharacterVoiceStyleCard(c);
+  const soft = style && style.soft ? style.soft : {};
+  const value = String(text || "").trim();
+  const words = value.split(/\s+/).filter(Boolean);
+
+  if (soft.shortMessages && (value.length > 360 || words.length > 55)) return true;
+  if (soft.longMessages && value.length < 18 && words.length <= 3) return true;
+  if (soft.manyEmoji && value.length >= 8 && !voiceStyleHasEmoji(value)) return true;
+  if (soft.alwaysSwears && value.length >= 12 && !voiceStyleExplicitProfanity(value)) return true;
+  return false;
+}
+
+function voiceStyleMismatchIdsFromOutput(w, out, fallbackActorId = "") {
+  const bad = new Set();
+  const inspect = (id, text) => {
+    const actorId = String(id || fallbackActorId || "");
+    if (actorId && voiceStyleSoftMismatch(w, actorId, text)) bad.add(actorId);
+  };
+  if (!out || typeof out !== "object") return bad;
+
+  inspect(fallbackActorId, out.text || out.dmText || out.opening || "");
+  ["comments", "replies", "posts", "messages", "notes", "turns"].forEach((key) => {
+    const rows = Array.isArray(out[key]) ? out[key] : [];
+    rows.forEach((row) => {
+      if (!row || typeof row !== "object") return;
+      const id = row.id !== undefined ? row.id : (row.authorId !== undefined ? row.authorId : row.name);
+      inspect(id, row.text || row.message || row.content || "");
+    });
+  });
+  return bad;
+}
+
+async function voiceStyleRunWithSingleRetry(w, firstRun, retryRun, fallbackActorId = "") {
+  const first = await firstRun();
+  const bad = voiceStyleMismatchIdsFromOutput(w, first, fallbackActorId);
+  if (!bad.size) return first;
+
+  console.warn(
+    "[voice-style] soft mismatch; one strict retry",
+    "characters=" + [...bad].join(",")
+  );
+  VOICE_STYLE_STRICT_RETRY_IDS = bad;
+  try {
+    const second = await retryRun();
+    return second || first;
+  } catch (err) {
+    console.warn("[voice-style] strict retry failed; keeping first result", err);
+    return first;
+  } finally {
+    VOICE_STYLE_STRICT_RETRY_IDS = null;
+  }
+}
+
+async function genReply(...args) {
+  const w = args[0];
+  return voiceStyleRunWithSingleRetry(
+    w,
+    () => legacyVoiceStyleGenReply(...args),
+    () => legacyVoiceStyleGenReply(...args)
+  );
+}
+
+async function legacyPlayerPostContentGenComments(...args) {
+  const w = args[0];
+  return voiceStyleRunWithSingleRetry(
+    w,
+    () => legacyVoiceStyleGenComments(...args),
+    () => legacyVoiceStyleGenComments(...args)
+  );
+}
+
+async function genDM(...args) {
+  const w = args[0];
+  const bot = args[1];
+  return voiceStyleRunWithSingleRetry(
+    w,
+    () => legacyVoiceStyleGenDM(...args),
+    () => legacyVoiceStyleGenDM(...args),
+    bot && bot.id
+  );
+}
+
+async function genWorldStep(...args) {
+  const w = args[0];
+  return voiceStyleRunWithSingleRetry(
+    w,
+    () => legacyVoiceStyleGenWorldStep(...args),
+    () => legacyVoiceStyleGenWorldStep(...args)
+  );
+}
+
+async function genNote(...args) {
+  const w = args[0];
+  const bot = args[1];
+  return voiceStyleRunWithSingleRetry(
+    w,
+    () => legacyVoiceStyleGenNote(...args),
+    () => legacyVoiceStyleGenNote(...args),
+    bot && bot.id
+  );
+}
+
+
+/* MÁSVILÁG FULL SPEC COMPLETION v1 */
+const FULL_SPEC_COMPLETION_SETTINGS = Object.freeze({
+  DEFERRED_DM_RETRY_MS: 5 * 60 * 1000,
+  DEFERRED_DM_MAX_ATTEMPTS: 3,
+  FOLLOW_BACK_GRACE_MS: 3 * 60 * 1000,
+  EVENT_DM_MAX_CANDIDATES: 2,
+  EVENT_DM_RECENT_DEDUPE_MS: 15 * 60 * 1000,
+});
+
+function fullSpecState(w) {
+  if (!w || typeof w !== "object") return null;
+  const sim = ensureSimState(w);
+  if (!sim.fullSpecCompletion || typeof sim.fullSpecCompletion !== "object" || Array.isArray(sim.fullSpecCompletion)) {
+    sim.fullSpecCompletion = {};
+  }
+  const state = sim.fullSpecCompletion;
+  if (!state.dmFallbacks || typeof state.dmFallbacks !== "object" || Array.isArray(state.dmFallbacks)) state.dmFallbacks = {};
+  if (!state.pendingDmTriggers || typeof state.pendingDmTriggers !== "object" || Array.isArray(state.pendingDmTriggers)) state.pendingDmTriggers = {};
+  if (!state.roleplayAiSeen || typeof state.roleplayAiSeen !== "object" || Array.isArray(state.roleplayAiSeen)) state.roleplayAiSeen = {};
+  if (!state.milestoneSeen || typeof state.milestoneSeen !== "object" || Array.isArray(state.milestoneSeen)) state.milestoneSeen = {};
+  return state;
+}
+
+function fullSpecRelScore(w, a, b) {
+  return Number((getRel(w, a, b) || {}).score) || 0;
+}
+
+function fullSpecLogRelationship(w, a, b, before, channel, reason) {
+  const after = fullSpecRelScore(w, a, b);
+  const delta = after - (Number(before) || 0);
+  if (!delta) return 0;
+  console.info(
+    "[relationship-change]",
+    "from=" + String(a || ""),
+    "toward=" + String(b || ""),
+    "delta=" + String(delta),
+    "channel=" + String(channel || "unknown"),
+    "reason=" + String(reason || "interaction").replace(/\s+/g, " ").slice(0, 180),
+    "score=" + String(Number(before) || 0) + "->" + String(after)
+  );
+  return delta;
+}
+
+function fullSpecEventChannel(event) {
+  const type = String(event && event.type || "").toLowerCase();
+  const source = String(event && event.source || "").toLowerCase();
+  if (type === "dm-message" || source === "direct-chat") return "dm";
+  if (type.startsWith("roleplay") || source === "roleplay") return "roleplay";
+  return "public";
+}
+
+function fullSpecRuleTone(channel, text, event = null) {
+  const value = String(text || "");
+  let tone = typeof channelTone === "function" ? channelTone(value) : 0;
+  if (!tone && channel === "roleplay") {
+    if (/megfogja a kez|holds? (?:his|her|their|your) hand|megölel|hugs?|megcsókol|kisses?|megvéd|protects?|segít|helps?|támogat|supports?|bocsánat|apolog|megment|saves?/i.test(value)) tone = 1;
+    if (/megüti|slaps?|punch|kicks?|megaláz|humiliat|elárul|betray|fenyeget|threat|ellök|shoves?|visszautasít|reject/i.test(value)) tone = -1;
+  }
+  if (!tone && event) {
+    const drama = Number(event.drama) || 0;
+    const romance = Number(event.romance) || 0;
+    const embarrassment = Number(event.embarrassment) || 0;
+    if (romance >= 20 && drama < 35) tone = 1;
+    else if (drama >= 45 || embarrassment >= 45) tone = -1;
+  }
+  return tone;
+}
+
+function fullSpecRuleDelta(channel, text, aiDelta = 0, event = null) {
+  const tone = fullSpecRuleTone(channel, text, event);
+  if (tone) return channelDelta(channel, text, tone > 0 ? Math.max(1, aiDelta || 1) : Math.min(-1, aiDelta || -1));
+  return channelDelta(channel, text, aiDelta);
+}
+
+function fullSpecDmFallbackKey(botId, humanId) {
+  return String(botId || "") + ">" + String(humanId || "");
+}
+
+function fullSpecApplyRawDelta(w, change, channel, reason) {
+  if (!w || !change) return 0;
+  const a = findChar(w, change.a);
+  const b = findChar(w, change.b);
+  if (!a || !b || a === b) return 0;
+  const before = fullSpecRelScore(w, a, b);
+  legacyChannelApplyChanges(w, [{ ...change, a, b, delta: Number(change.delta) || 0, why: String(change.why || reason || "interaction") }]);
+  return fullSpecLogRelationship(w, a, b, before, channel, change.why || reason || "interaction");
+}
+
+function fullSpecRememberDmFallback(w, botId, humanId, event, appliedDelta) {
+  const state = fullSpecState(w);
+  if (!state || !botId || !humanId) return;
+  state.dmFallbacks[fullSpecDmFallbackKey(botId, humanId)] = {
+    botId: String(botId), humanId: String(humanId), eventId: String(event && (event.id || event.refId) || ""),
+    text: String(event && event.text || ""), at: Number(event && event.ts) || now(),
+    appliedDelta: Number(appliedDelta) || 0, resolved: false,
+  };
+}
+
+function fullSpecRecentDmFallback(w, botId, humanId) {
+  const state = fullSpecState(w);
+  const row = state && state.dmFallbacks[fullSpecDmFallbackKey(botId, humanId)];
+  if (!row || row.resolved) return null;
+  if (now() - (Number(row.at) || 0) > 5 * 60 * 1000) return null;
+  return row;
+}
+
+function fullSpecOfficialStatus(w, a, b) {
+  try { return String(officialRelationshipStatusForPair(w, a, b, CURRENT_LANG) || ""); }
+  catch { return ""; }
+}
+
+function fullSpecRecordMilestone(w, a, b, beforeStatus, afterStatus, channel, reason) {
+  if (!w || !a || !b || !afterStatus || beforeStatus === afterStatus) return;
+  const state = fullSpecState(w);
+  const pair = [String(a), String(b)].sort().join("<>");
+  const key = pair + "|" + afterStatus;
+  const recent = Number(state.milestoneSeen[key]) || 0;
+  if (recent && now() - recent < 10 * 60 * 1000) return;
+  state.milestoneSeen[key] = now();
+  console.info("[relationship-milestone]", "pair=" + pair, "channel=" + String(channel || ""), "status=" + String(beforeStatus || "") + "->" + String(afterStatus || ""));
+  try {
+    recordSocialEvent(w, {
+      type: "relationship-milestone", refId: "relationship-milestone:" + pair + ":" + now(), ts: now(), actorId: a,
+      targetIds: [b], visibility: "limited", factLevel: "observed", importance: 36, drama: 8,
+      romance: /rand|dating|pár|engaged|jegyes|married|házas/i.test(afterStatus) ? 28 : 0, embarrassment: 0,
+      source: String(channel || "relationship"), text: "Official relationship status changed: " + String(beforeStatus || "—") + " → " + afterStatus,
+      tags: ["relationship", "milestone", "official-status"], meta: { pairIds: [a, b], officialStatus: afterStatus, reason: String(reason || "").slice(0, 220) },
+    });
+  } catch (error) { console.warn("[relationship-milestone] social event failed; continuing", error); }
+}
+
+function legacyGroundedFinalApplyChannelRelationshipChanges(w, changes, channel, ctx = {}) {
+  const rows = Array.isArray(changes) ? changes.filter(Boolean) : [];
+  if (!rows.length) return;
+  const statusBefore = rows.map((row) => {
+    const a = findChar(w, row.a), b = findChar(w, row.b);
+    return { a, b, status: a && b ? fullSpecOfficialStatus(w, a, b) : "" };
+  });
+  if (channel === "dm") {
+    const normal = [];
+    rows.forEach((row) => {
+      const a = findChar(w, row.a), b = findChar(w, row.b);
+      const fallback = a && b ? fullSpecRecentDmFallback(w, a, b) : null;
+      if (!fallback) { normal.push(row); return; }
+      const text = [ctx.text, row.why, row.mood].filter(Boolean).join(" ");
+      const desired = fullSpecRuleDelta("dm", text, Number(row.delta) || 0);
+      const correction = desired - (Number(fallback.appliedDelta) || 0);
+      const before = fullSpecRelScore(w, a, b);
+      legacyChannelApplyChanges(w, [{ ...row, a, b, delta: correction, why: String(row.why || ctx.reason || "direct-dm") }]);
+      fullSpecLogRelationship(w, a, b, before, "dm", row.why || ctx.reason || "direct-dm-ai-refinement");
+      fallback.resolved = true; fallback.aiDesiredDelta = desired; fallback.resolvedAt = now();
+    });
+    if (normal.length) legacyFullSpecApplyChannelRelationshipChanges(w, normal, channel, ctx);
+  } else legacyFullSpecApplyChannelRelationshipChanges(w, rows, channel, ctx);
+  rows.forEach((row, index) => {
+    const before = statusBefore[index];
+    if (!before || !before.a || !before.b) return;
+    fullSpecRecordMilestone(w, before.a, before.b, before.status, fullSpecOfficialStatus(w, before.a, before.b), channel, row.why || ctx.reason || "relationship change");
+  });
+}
+
+function applySceneChangesWithStatus(...args) {
+  const [world, scene, changes] = args;
+  const state = world ? fullSpecState(world) : null;
+  if (state && scene && scene.id && Array.isArray(changes) && changes.length) state.roleplayAiSeen[String(scene.id)] = now();
+  return legacyFullSpecApplySceneChangesWithStatus(...args);
+}
+
+function recordExplicitMutualRelationshipMilestones(...args) {
+  const [world, changes, source] = args;
+  const before = world && Array.isArray(changes) ? changes.map((row) => {
+    const a = row && findChar(world, row.a), b = row && findChar(world, row.b);
+    return { a, b, status: a && b ? fullSpecOfficialStatus(world, a, b) : "" };
+  }) : [];
+  const result = legacyFullSpecRecordExplicitMutualRelationshipMilestones(...args);
+  before.forEach((row) => {
+    if (!row.a || !row.b) return;
+    fullSpecRecordMilestone(world, row.a, row.b, row.status, fullSpecOfficialStatus(world, row.a, row.b), "roleplay", source || "explicit roleplay milestone");
+  });
+  return result;
+}
+
+function fullSpecSnapshotScores(w) {
+  const out = {};
+  Object.entries((w && w.rels) || {}).forEach(([key, rel]) => { out[key] = Number(rel && rel.score) || 0; });
+  return out;
+}
+
+function legacyGroundedApplyEventConsequences(w, event) {
+  const before = fullSpecSnapshotScores(w);
+  const result = legacyFullSpecSimsSocialApplyEventConsequences(w, event);
+  const channel = fullSpecEventChannel(event), after = fullSpecSnapshotScores(w);
+  Object.keys({ ...before, ...after }).forEach((key) => {
+    const a = Number(before[key]) || 0, b = Number(after[key]) || 0;
+    if (a === b) return;
+    const parts = String(key).split(">");
+    console.info("[relationship-change]", "from=" + String(parts[0] || ""), "toward=" + String(parts[1] || ""), "delta=" + String(b-a), "channel=" + channel,
+      "reason=" + String(event && event.type || "event") + ":" + String(event && event.text || "").replace(/\s+/g," ").slice(0,150), "score=" + a + "->" + b);
+  });
+  return result;
+}
+
+function fullSpecDmInitiativeText(w, botId, humanId) {
+  const bot = charById(w, botId), rel = getRel(w, botId, humanId) || EMPTY_REL;
+  return [bot && bot.personality, bot && bot.traits, bot && bot.backstory, bot && bot.secrets, rel.bond, rel.mood, rel.hidden].filter(Boolean).join(" ").toLowerCase();
+}
+function fullSpecDmInitiativeScore(w, botId, humanId, event) {
+  const bot = charById(w, botId); if (!bot || isHuman(w, botId) || !isHuman(w, humanId)) return -999;
+  const rel = getRel(w, botId, humanId) || EMPTY_REL, text = fullSpecDmInitiativeText(w, botId, humanId);
+  let score = Math.min(35, Math.abs(Number(rel.score)||0)*.35) + Math.min(30,(Number(event&&event.importance)||0)*.35) + Math.min(28,(Number(event&&event.drama)||0)*.35) + Math.min(24,(Number(event&&event.romance)||0)*.35);
+  if (/obsess|megszáll|possess|birtokl|jealous|féltéken|resent|sértőd|cling|ragaszkod|proud|büszke|sensitive|érzékeny|confront|konfront|impuls|direct|egyenes/.test(text)) score += 24;
+  if (/detached|közömbös|unbothered|aloof|távolságtartó/.test(text)) score -= 22;
+  return score;
+}
+function fullSpecPendingKey(event, botId, kind="") { return [String(kind||event&&event.type||"event"),String(botId||""),String(event&&(event.id||event.refId)||"")].join(":"); }
+function fullSpecQueuePendingDmTrigger(w, botId, event, trigger, options={}) {
+  if (!w || !botId || !event || isHuman(w,botId)) return false;
+  const state=fullSpecState(w), eventId=String(event.id||event.refId||""), key=fullSpecPendingKey(event,botId,trigger);
+  const existingQueue=((w.sim&&w.sim.queue)||[]).some((action)=>action&&action.type==="dm"&&String(action.payload&&action.payload.botId||"")===String(botId)&&eventId&&String(action.payload&&action.payload.eventId||"")===eventId);
+  if(existingQueue||state.pendingDmTriggers[key]) return false;
+  state.pendingDmTriggers[key]={key,botId:String(botId),humanId:String(options.humanId||w.meId||""),trigger:String(trigger||event.type||"event"),eventId,eventType:String(event.type||""),causeText:String(event.text||"").slice(0,500),at:now(),nextAt:now()+Math.max(0,Number(options.delayMs)||0),attempts:0,requireNoFollowBack:Boolean(options.requireNoFollowBack)};
+  return true;
+}
+function fullSpecScheduleEventDms(w,event){
+  if(!w||!event||typeof event!=="object")return; const type=String(event.type||"").toLowerCase(); if(type==="dm-message"||type==="follow"||type==="unfollow")return;
+  const actorId=String(event.actorId||""),targets=Array.isArray(event.targetIds)?event.targetIds.map(String):[],humanIds=[...new Set([...(actorId&&isHuman(w,actorId)?[actorId]:[]),...targets.filter((id)=>isHuman(w,id))])]; if(!humanIds.length)return;
+  const relevant=["comment","reply","gossip-story","roleplay-summary","roleplay-event","relationship-milestone"].includes(type)||/note|jealous|féltéken|gossip|pletyka|scene|roleplay|comment|reply/i.test([type,event.source,...(event.tags||[])].join(" ")); if(!relevant)return;
+  const candidates=new Map(); humanIds.forEach((humanId)=>{ if(actorId&&!isHuman(w,actorId)&&actorId!==humanId)candidates.set(actorId,humanId); targets.forEach((id)=>{if(id&&!isHuman(w,id)&&id!==humanId)candidates.set(id,humanId);}); if(type==="gossip-story"||type.startsWith("roleplay")){(w.chars||[]).forEach((c)=>{if(!c||isHuman(w,c.id))return; const rel=getRel(w,c.id,humanId)||EMPTY_REL; if(Math.abs(Number(rel.score)||0)>=55)candidates.set(c.id,humanId);});}});
+  [...candidates.entries()].map(([botId,humanId])=>({botId,humanId,score:fullSpecDmInitiativeScore(w,botId,humanId,event)})).filter((row)=>row.score>=38).sort((a,b)=>b.score-a.score).slice(0,FULL_SPEC_COMPLETION_SETTINGS.EVENT_DM_MAX_CANDIDATES).forEach((row)=>fullSpecQueuePendingDmTrigger(w,row.botId,event,type+"-reaction",{humanId:row.humanId}));
+}
+function fullSpecScheduleFollowBackDm(w,event){ if(!w||!event||String(event.type||"").toLowerCase()!=="follow")return; const botId=String(event.actorId||""),humanId=String((event.targetIds||[]).find((id)=>isHuman(w,id))||""); if(!botId||!humanId||isHuman(w,botId))return; if(!isFollowing(w,botId,humanId)||isFollowing(w,humanId,botId))return; const initiative=fullSpecDmInitiativeText(w,botId,humanId); if(!/obsess|megszáll|possess|birtokl|jealous|féltéken|resent|sértőd|cling|ragaszkod|proud|büszke|sensitive|érzékeny|confront|konfront/.test(initiative))return; fullSpecQueuePendingDmTrigger(w,botId,event,"follow-not-returned",{humanId,delayMs:FULL_SPEC_COMPLETION_SETTINGS.FOLLOW_BACK_GRACE_MS,requireNoFollowBack:true}); }
+
+function fullSpecApplyDmEventFallback(w,event,beforeScores){ if(!w||!event||String(event.type||"").toLowerCase()!=="dm-message")return; const actorId=String(event.actorId||""); if(!actorId||!isHuman(w,actorId))return; const botId=String((event.targetIds||[]).find((id)=>id&&!isHuman(w,id))||""); if(!botId)return; const scoreKey=botId+">"+actorId; const before=Object.prototype.hasOwnProperty.call(beforeScores,scoreKey)?Number(beforeScores[scoreKey])||0:0; const afterLegacy=fullSpecRelScore(w,botId,actorId),legacyDelta=afterLegacy-before,desired=fullSpecRuleDelta("dm",event.text,legacyDelta,event); if(desired!==legacyDelta)fullSpecApplyRawDelta(w,{a:botId,b:actorId,delta:desired-legacyDelta,why:"deterministic direct-DM fallback"},"dm","direct-dm-rule-fallback"); fullSpecRememberDmFallback(w,botId,actorId,event,desired); }
+function fullSpecApplyRoleplayFallback(w,event,beforeScores){ if(!w||!event||String(event.type||"").toLowerCase()!=="roleplay-summary")return; const sceneId=String(event.meta&&event.meta.sceneId||""),state=fullSpecState(w); if(sceneId&&Number(state.roleplayAiSeen[sceneId]))return; const humanId=String((event.targetIds||[]).find((id)=>isHuman(w,id))||w.meId||""); if(!humanId)return; const bots=[...new Set((event.targetIds||[]).filter((id)=>id&&!isHuman(w,id)&&charById(w,id)))]; bots.forEach((botId)=>{const scoreKey=botId+">"+humanId; const before=Object.prototype.hasOwnProperty.call(beforeScores,scoreKey)?Number(beforeScores[scoreKey])||0:fullSpecRelScore(w,botId,humanId); const existingAfter=fullSpecRelScore(w,botId,humanId); if(existingAfter!==before)return; const delta=fullSpecRuleDelta("roleplay",event.text,0,event); if(delta)fullSpecApplyRawDelta(w,{a:botId,b:humanId,delta,why:"scene-end deterministic fallback"},"roleplay","scene-end deterministic fallback");}); }
+function fullSpecCleanupFollowBackPending(w,event){ if(!w||!event)return; const type=String(event.type||"").toLowerCase(); if(type!=="follow"&&type!=="unfollow")return; const actorId=String(event.actorId||""),targets=Array.isArray(event.targetIds)?event.targetIds.map(String):[],state=fullSpecState(w); Object.entries(state.pendingDmTriggers||{}).forEach(([key,row])=>{if(!row||!row.requireNoFollowBack)return; const botId=String(row.botId||""),humanId=String(row.humanId||""); const followBackHappened=type==="follow"&&actorId===humanId&&targets.includes(botId),botUnfollowed=type==="unfollow"&&actorId===botId&&targets.includes(humanId); if(followBackHappened||botUnfollowed){delete state.pendingDmTriggers[key]; console.info("[event-dm]","cancelled=follow-back-condition-cleared","bot="+botId,"human="+humanId);}}); }
+function legacyGroundedRecordSocialEvent(w,event={}){ const beforeScores=fullSpecSnapshotScores(w); let result=null; try{result=legacyFullSpecRecordSocialEvent(w,event);}catch(error){console.warn("[social-event] ledger/consequence step failed; completion hooks continue",error);} try{fullSpecApplyDmEventFallback(w,event,beforeScores);}catch(error){console.warn("[relationship-fallback] DM fallback failed; continuing",error);} try{fullSpecApplyRoleplayFallback(w,event,beforeScores);}catch(error){console.warn("[relationship-fallback] roleplay fallback failed; continuing",error);} try{fullSpecCleanupFollowBackPending(w,event);fullSpecScheduleFollowBackDm(w,event);fullSpecScheduleEventDms(w,event);}catch(error){console.warn("[event-dm] scheduling failed; continuing",error);} return result; }
+
+function fullSpecSafeCommentRowApply(n,postId,row,label){if(!row||typeof row!=="object")return 0;try{return Number(legacyFullSpecApplyComments(n,postId,{comments:[row]},label)||0);}catch(error){console.warn("[comment-pipeline] comment row failed; skipped only this row","post="+String(postId||""),"character="+String(row.id!==undefined?row.id:(row.authorId!==undefined?row.authorId:row.name||"")),error);return 0;}}
+function applyComments(n, postId, out, label) {
+  const payload = out && typeof out === "object" ? out : {};
+  const rows = safeAiComments(payload);
+  const post = (n.posts || []).find((p) => p && p.id === postId);
+  const beforeIds = new Set(safePostComments(post).map((c) => c && c.id).filter(Boolean));
+  let applied = 0;
+  rows.forEach((row) => { applied += fullSpecSafeCommentRowApply(n, postId, row, label); });
+  const remainder = { ...payload, comments: [] };
+  try { applied += Number(legacyFullSpecApplyComments(n, postId, remainder, label) || 0); }
+  catch (error) { console.warn("[comment-pipeline] non-comment apply step failed; comments already preserved", error); }
+  const refreshed = (n.posts || []).find((p) => p && p.id === postId);
+  if (refreshed && isHuman(n, refreshed.authorId) && groundedPlayerPostIsInvitation(refreshed)) {
+    safePostComments(refreshed).filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId)).forEach((c) => groundedRegisterPlayerPostInvitation(n, refreshed, c));
+  }
+  return applied;
+}
+function noteComment(...args){try{return legacyFullSpecNoteComment(...args);}catch(error){console.warn("[comment-pipeline] notification failed; comment/relation pipeline continues",error);return null;}}
+function fullSpecHumanRootComment(w,post,commentId){if(!post||!commentId)return null;const rows=safePostComments(post),byId=new Map(rows.filter(Boolean).map((row)=>[row.id,row]));let current=byId.get(commentId);const seen=new Set();while(current&&!seen.has(current.id)){seen.add(current.id);if(isHuman(w,current.authorId))return current;current=current.parent?byId.get(current.parent):null;}return null;}
+function fullSpecIsDescendantOf(post,comment,ancestorId){if(!post||!comment||!ancestorId)return false;const rows=safePostComments(post),byId=new Map(rows.filter(Boolean).map((row)=>[row.id,row]));let current=comment;const seen=new Set();while(current&&current.parent&&!seen.has(current.id)){seen.add(current.id);if(current.parent===ancestorId)return true;current=byId.get(current.parent);}return false;}
+function fullSpecPlayerThreadReplyCapReached(w,postId,commentIds){const post=(w&&w.posts||[]).find((row)=>row&&row.id===postId);if(!post)return false;const ids=Array.isArray(commentIds)?commentIds:[commentIds];return ids.some((commentId)=>{const root=fullSpecHumanRootComment(w,post,commentId);if(!root)return false;const aiReplies=safePostComments(post).filter((row)=>row&&!isHuman(w,row.authorId)&&fullSpecIsDescendantOf(post,row,root.id)).length;return aiReplies>=AI_ACTIVITY_OPTIMIZATION.PLAYER_COMMENT_MAX_AI_REPLIES;});}
+function enqueueNaturalThreadReply(...args){if(fullSpecPlayerThreadReplyCapReached(args[0],args[1],args[2])){console.info("[comment-thread] stopped=max-player-replies","post="+String(args[1]||""));return false;}return legacyFullSpecEnqueueNaturalThreadReply(...args);}
+function enqueueVisualCrushThreadFriction(...args){if(typeof legacyFullSpecEnqueueVisualCrushThreadFriction!=="function")return false;if(fullSpecPlayerThreadReplyCapReached(args[0],args[1],args[2]))return false;return legacyFullSpecEnqueueVisualCrushThreadFriction(...args);}
+function ensureEventDrivenGossipPost(w,trigger,payload){const info=eventDrivenGossipSource(w,trigger,payload);if(!info||!info.source||!gossipPrivacyEligible(info.source)){console.info("[gossip-event]","skipped=no-public-or-leaked-source","trigger="+String(trigger||""));return null;}return legacyFullSpecEnsureEventDrivenGossipPost(w,trigger,payload);}
+
+function budgetAiRequest(system,prompt){const text=String(prompt||""),marker="[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]",at=text.indexOf(marker);if(at<0)return legacyFullSpecBudgetAiRequest(system,prompt);const systemText=String(system||""),compactSystem=preserveEdges(systemText,AI_MAX_SYSTEM_CHARS,"system"),protectedTail=text.slice(at),prefix=text.slice(0,at),promptCap=Math.min(50000, Math.max(28000, Number(AI_MAX_PROMPT_CHARS) || 82000));let compactPrompt="";if(protectedTail.length>=promptCap){compactPrompt=protectedTail;console.warn("[dm-prompt-tail]","protected tail kept above global cap","tailChars="+protectedTail.length,"cap="+promptCap);}else{const omission="\n\n[OLDER DM BACKGROUND OMITTED BEFORE PROVIDER CALL]\n\n",prefixBudget=Math.max(0,promptCap-protectedTail.length-omission.length),compactPrefix=prefix.length<=prefixBudget?prefix:prefix.slice(Math.max(0,prefix.length-prefixBudget));compactPrompt=(prefix.length>prefixBudget?omission:"")+compactPrefix+protectedTail;}return{system:compactSystem,prompt:compactPrompt,wasCompacted:compactSystem.length!==systemText.length||compactPrompt.length!==text.length};}
+function fullSpecPendingStillValid(w,row){if(!w||!row||!row.botId||!charById(w,row.botId)||isHuman(w,row.botId))return false;const humanId=String(row.humanId||w.meId||"");if(!humanId||!isHuman(w,humanId))return false;if(row.requireNoFollowBack){if(!isFollowing(w,row.botId,humanId))return false;if(isFollowing(w,humanId,row.botId))return false;}return true;}
+function fullSpecNextAutonomousDmAction(view){if(!view||eventDrivenAutonomousDmPauseReason(view))return null;const sim=ensureSimState(view),state=fullSpecState(view),nowTs=now();const deferred=Object.values(sim.deferredAutonomousDms||{}).filter((row)=>row&&row.botId&&(!row.nextAt||Number(row.nextAt)<=nowTs)).sort((a,b)=>(Number(a.at)||0)-(Number(b.at)||0));for(const row of deferred){if(!charById(view,row.botId)||isHuman(view,row.botId)){delete sim.deferredAutonomousDms[row.botId];continue;}return mkAction("dm","deferred-dm:"+String(row.botId)+":"+String(row.eventId||row.at||nowTs),{botId:row.botId,trigger:row.trigger||"deferred-event",eventId:row.eventId||"",fullSpecDeferredKey:String(row.botId)},"event");}const pending=Object.values(state.pendingDmTriggers||{}).filter((row)=>row&&Number(row.nextAt||0)<=nowTs).sort((a,b)=>(Number(a.nextAt)||0)-(Number(b.nextAt)||0));for(const row of pending){if(!fullSpecPendingStillValid(view,row)){delete state.pendingDmTriggers[row.key];continue;}return mkAction("dm","event-dm:"+row.key,{botId:row.botId,trigger:row.trigger||"social-event",eventId:row.eventId||"",fullSpecPendingKey:row.key},"event");}return null;}
+function legacyGroundedPlanAutoAction(view){const deferredOrEventDm=fullSpecNextAutonomousDmAction(view);if(deferredOrEventDm)return deferredOrEventDm;return legacyFullSpecPlanAutoAction(view);}
+function fullSpecFinishDmTrigger(w,action,result,error=null){if(!w||!action||action.type!=="dm")return;const sim=ensureSimState(w),state=fullSpecState(w),deferredKey=String(action.payload&&action.payload.fullSpecDeferredKey||""),pendingKey=String(action.payload&&action.payload.fullSpecPendingKey||"");if(result==="dm-deferred"){if(pendingKey)delete state.pendingDmTriggers[pendingKey];return;}if(result){if(deferredKey&&sim.deferredAutonomousDms)delete sim.deferredAutonomousDms[deferredKey];if(pendingKey)delete state.pendingDmTriggers[pendingKey];return;}const retry=(row,drop)=>{if(!row)return;row.attempts=(Number(row.attempts)||0)+1;row.lastError=String(error&&error.message||error||"generation returned no DM").slice(0,220);row.nextAt=now()+FULL_SPEC_COMPLETION_SETTINGS.DEFERRED_DM_RETRY_MS;if(row.attempts>=FULL_SPEC_COMPLETION_SETTINGS.DEFERRED_DM_MAX_ATTEMPTS)drop();};if(deferredKey&&sim.deferredAutonomousDms&&sim.deferredAutonomousDms[deferredKey])retry(sim.deferredAutonomousDms[deferredKey],()=>delete sim.deferredAutonomousDms[deferredKey]);if(pendingKey&&state.pendingDmTriggers[pendingKey])retry(state.pendingDmTriggers[pendingKey],()=>delete state.pendingDmTriggers[pendingKey]);}
+async function legacyGroundedRunSimulationAction(view,update,action,addImage){let result=null;try{result=await legacyFullSpecRunSimulationAction(view,update,action,addImage);}catch(error){if(action&&action.type==="dm"&&action.payload&&(action.payload.fullSpecDeferredKey||action.payload.fullSpecPendingKey))update((n)=>fullSpecFinishDmTrigger(n,action,null,error));throw error;}if(action&&action.type==="dm"&&action.payload&&(action.payload.fullSpecDeferredKey||action.payload.fullSpecPendingKey))update((n)=>fullSpecFinishDmTrigger(n,action,result,null));return result;}
+
+
+/* MÁSVILÁG PLAYER POST COMMENT CONTENT ISOLATION v1 */
+const PLAYER_POST_COMMENT_TECH_LEAK_RE =
+  /\b(?:variables?|json|prompt|backlog|queue|cache|tokens?|system(?:\s+(?:message|prompt))?|schema|payload|debug|api|function|javascript|typescript|field\s*name|internal\s+instruction|model\s+instruction)\b|(?:változó(?:k|kat|val)?|belső\s+utasítás|rendszerprompt|hibakeresési\s+szöveg)/iu;
+
+const PLAYER_POST_COMMENT_FOLLOW_RE =
+  /\b(?:follow(?:ing|ed)?|follow\s*back|unfollow(?:ed|ing)?|click(?:ing|ed)?\s+(?:the\s+)?follow|fan\s*club|add(?:ing|ed)?\s+(?:the\s+)?whole\s+(?:town|world|everyone)|bekövet(?:és|ett|ni)?|visszakövet(?:és|ett|ni)?|kikövet(?:és|ett|ni)?|követget(?:sz|ed|és)?)\b/iu;
+
+const PLAYER_POST_COMMENT_POSITIVE_RE =
+  /\b(?:love|adore|cute|pretty|beautiful|gorgeous|hot|amazing|iconic|proud|sweet|funny|perfect|slay|queen|king|support|szeret|imád|cuki|szép|gyönyörű|dögös|büszke|vicces|tökéletes|zseniális)\b|[❤️❤🥰😍💖💕😂🤣]/iu;
+
+const PLAYER_POST_COMMENT_NEGATIVE_RE =
+  /\b(?:hate|pathetic|stupid|idiot|annoying|embarrassing|cringe|loser|waste|shut\s*up|boring|desperate|utál|szánalmas|hülye|idióta|idegesítő|kínos|unalmas|rosszindulatú)\b/iu;
+
+const PLAYER_POST_COMMENT_JEALOUS_RE =
+  /\b(?:jealous|jealousy|possessive|mine|who(?:'s| is)\s+that|féltékeny|féltékenység|enyém|ki\s+ez)\b/iu;
+
+function playerPostCommentPostContext(w, post) {
+  const tagged = new Set();
+
+  (Array.isArray(post && post.taggedIds) ? post.taggedIds : []).forEach((id) => {
+    if (id && charById(w, id)) tagged.add(String(id));
+  });
+  (Array.isArray(post && post.mentions) ? post.mentions : []).forEach((value) => {
+    const raw = typeof value === "object" ? (value.id || value.characterId || value.username || "") : value;
+    const id = raw ? findChar(w, raw) : "";
+    if (id) tagged.add(String(id));
+  });
+
+  const visibleText = String(post && (post.text || post.caption) || "");
+  const handles = visibleText.match(/@[A-Za-z0-9_.-]+/g) || [];
+  handles.forEach((handle) => {
+    const clean = handle.slice(1).toLowerCase();
+    const c = (w.chars || []).find((row) =>
+      row &&
+      [row.username, row.handle].filter(Boolean).some((name) =>
+        String(name).replace(/^@/, "").toLowerCase() === clean
+      )
+    );
+    if (c) tagged.add(c.id);
+  });
+
+  const imageDescription = String(
+    post && (
+      post.imageDescription ||
+      post.imagePrompt ||
+      post.imageAlt ||
+      post.alt ||
+      post.imageCaption ||
+      ""
+    ) || ""
+  ).trim();
+
+  const isQuestion = /\?|\b(?:who|what|when|where|why|how|anyone|valaki|ki|mi|mikor|hol|miért|hogyan)\b/iu.test(visibleText);
+  const isInvitation = /\b(?:anyone\s+up\s+for|who\s+wants\s+to|join\s+me|come\s+with|party|hang\s*out|meet\s+up|coffee|drinks?|dinner|valaki\s+jön|ki\s+jön|gyertek|gyere|buli|találkozz|kávé|ital|vacsora)\b/iu.test(visibleText);
+  const hasImage = Boolean(post && (post.imageId || post.image));
+
+  return {
+    postId: String(post && post.id || ""),
+    authorId: String(post && post.authorId || ""),
+    authorName: nameOfIn(w, post && post.authorId),
+    text: visibleText,
+    isQuestion,
+    isInvitation,
+    hasImage,
+    imageDescription,
+    imageDescriptionStatus: hasImage ? (imageDescription ? "available" : "missing-do-not-infer") : "no-image",
+    mood: String(post && (post.mood || post.feeling || post.vibe) || ""),
+    visibleTags: Array.isArray(post && post.tags) ? post.tags.map(String).slice(0, 16) : [],
+    taggedPeople: [...tagged].map((id) => ({
+      id,
+      name: nameOfIn(w, id),
+    })),
+  };
+}
+
+function playerPostCommentExpectedTone(rel) {
+  const score = Number(rel && rel.score) || 0;
+  const text = [
+    rel && rel.bond,
+    rel && rel.type,
+    rel && rel.mood,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  if (/jealous|féltéken|possess|birtokl/.test(text)) return "jealous";
+  if (/enemy|ellens|rival|rivális|hate|utál/.test(text) || score <= -20) return "negative";
+  if (/crush|dating|partner|couple|pár|love|szeret|best friend|legjobb barát|close friend|közeli barát|friend|barát/.test(text) || score >= 15) return "positive";
+  return "neutral";
+}
+
+function playerPostCommentGeneratedTone(text) {
+  const value = String(text || "");
+  if (PLAYER_POST_COMMENT_JEALOUS_RE.test(value)) return "jealous";
+  if (PLAYER_POST_COMMENT_NEGATIVE_RE.test(value)) return "negative";
+  if (PLAYER_POST_COMMENT_POSITIVE_RE.test(value)) return "positive";
+  return "neutral";
+}
+
+function playerPostCommentVoiceCard(w, c) {
+  if (!c) return "";
+  try {
+    if (typeof voiceStyleCardsForIds === "function") {
+      return String(voiceStyleCardsForIds(w, [c.id], c.id) || "").slice(0, 2600);
+    }
+  } catch {}
+  return String(c.aiVoiceStyleCard && c.aiVoiceStyleCard.card || "").slice(0, 2600);
+}
+
+function playerPostCommentCandidateCards(w, post, maxComments) {
+  const cast = fairCommentCast(w, post.authorId, post)
+    .filter((c) => c && c.id && !isHuman(w, c.id))
+    .slice(0, Math.max(2, Math.min(8, Number(maxComments) || 4)));
+
+  return cast.map((c) => {
+    const rel = getRel(w, c.id, post.authorId) || EMPTY_REL;
+    let official = "";
+    try {
+      if (typeof officialRelationshipStatusForPair === "function") {
+        official = String(officialRelationshipStatusForPair(w, c.id, post.authorId, worldLanguage(w, post.authorId)) || "");
+      }
+    } catch {}
+
+    return {
+      id: c.id,
+      name: c.name,
+      voiceStyleCard: playerPostCommentVoiceCard(w, c),
+      relationshipToPostAuthor: {
+        score: Math.max(-100, Math.min(100, Number(rel.score) || 0)),
+        type: String(rel.bond || rel.type || ""),
+        officialStatus: official,
+        currentMood: String(rel.mood || ""),
+        expectedPublicTone: playerPostCommentExpectedTone(rel),
+      },
+    };
+  });
+}
+
+function playerPostCommentHasFollowLeak(postContext, text) {
+  const source = [
+    postContext && postContext.text,
+    postContext && postContext.imageDescription,
+    postContext && postContext.mood,
+    ...((postContext && postContext.visibleTags) || []),
+  ].filter(Boolean).join(" ");
+  if (PLAYER_POST_COMMENT_FOLLOW_RE.test(source)) return false;
+  return PLAYER_POST_COMMENT_FOLLOW_RE.test(String(text || ""));
+}
+
+function playerPostCommentRowsFromOutput(w, out, cards, postContext) {
+  const allowed = new Set(cards.map((row) => row.id));
+  const seen = new Set();
+  const rows = [];
+
+  safeAiComments(out).forEach((row) => {
+    try {
+      if (!row || typeof row !== "object") return;
+      const actorId = findChar(
+        w,
+        row.id !== undefined
+          ? row.id
+          : (row.authorId !== undefined ? row.authorId : row.name)
+      );
+      const text = String(row.text || "").trim();
+      const reactsTo = String(row.reagal_erre || row.reactsTo || row.trigger || "").trim();
+
+      if (!actorId || !allowed.has(actorId) || isHuman(w, actorId) || !text || seen.has(actorId)) return;
+      if (!reactsTo || reactsTo.length < 2) {
+        console.warn("[player-post-comments] rejected=missing-reagal_erre", "character=" + actorId);
+        return;
+      }
+      if (PLAYER_POST_COMMENT_TECH_LEAK_RE.test(text)) {
+        console.warn("[player-post-comments] rejected=technical-leak", "character=" + actorId, "text=" + text.slice(0, 180));
+        return;
+      }
+      if (playerPostCommentHasFollowLeak(postContext, text)) {
+        console.warn("[player-post-comments] rejected=follow-context-leak", "character=" + actorId, "text=" + text.slice(0, 180));
+        return;
+      }
+
+      const postWords = new Set(String([postContext.text, postContext.imageDescription, ...(postContext.visibleTags || [])].filter(Boolean).join(" ")).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((x) => x.length >= 3));
+      const groundingWords = String(reactsTo + " " + text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((x) => x.length >= 3);
+      const grounded = !postWords.size || groundingWords.some((x) => postWords.has(x)) || (postContext.isInvitation && /\b(?:yes|yeah|yep|sure|i'?m\s+in|count\s+me\s+in|coming|ott\s+leszek|megyek|benne\s+vagyok|persze|igen)\b/iu.test(text));
+      if (!grounded) {
+        console.warn("[player-post-comments] rejected=off-topic", "character=" + actorId, "reagal_erre=" + reactsTo.slice(0, 120));
+        return;
+      }
+
+      seen.add(actorId);
+      rows.push({ ...row, id: actorId, text, reagal_erre: reactsTo });
+    } catch (error) {
+      console.warn("[player-post-comments] rejected=invalid-row", error);
+    }
+  });
+
+  return rows;
+}
+
+function playerPostCommentBatchProblems(w, rows, cards, postContext, minComments) {
+  const problems = [];
+  const rawRows = Array.isArray(rows) ? rows : [];
+
+  if (rawRows.length < Math.max(2, Number(minComments) || 2)) {
+    problems.push("too-few-valid-comments");
+  }
+
+  const expectedById = new Map(cards.map((card) => [
+    card.id,
+    card.relationshipToPostAuthor.expectedPublicTone,
+  ]));
+  const expectedSet = new Set(
+    rawRows.map((row) => expectedById.get(findChar(w, row.id)) || "neutral")
+  );
+  const generatedSet = new Set(
+    rawRows.map((row) => playerPostCommentGeneratedTone(row.text))
+  );
+
+  if (rawRows.length >= 3 && expectedSet.size >= 2 && generatedSet.size <= 1) {
+    problems.push("uniform-tone-despite-different-relationships");
+  }
+
+  const stop = new Set([
+    "this","that","with","from","your","youre","just","really","like","have","what","when","then","they","them",
+    "hogy","amit","csak","mert","egy","azt","most","vagy","volt","még","mar","már","nem","igen","neked","veled"
+  ]);
+  const tokenSets = rawRows.map((row) => new Set(
+    String(row.text || "")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .split(/\s+/)
+      .filter((token) => token.length >= 4 && !stop.has(token))
+  ));
+  let pairs = 0;
+  let similar = 0;
+  for (let i = 0; i < tokenSets.length; i += 1) {
+    for (let j = i + 1; j < tokenSets.length; j += 1) {
+      const a = tokenSets[i];
+      const b = tokenSets[j];
+      const union = new Set([...a, ...b]);
+      if (!union.size) continue;
+      pairs += 1;
+      const common = [...a].filter((token) => b.has(token)).length;
+      if (common / union.size >= 0.48) similar += 1;
+    }
+  }
+  if (pairs >= 3 && similar / pairs >= 0.72) {
+    problems.push("comments-repeat-the-same-topic-or-wording");
+  }
+
+  rawRows.forEach((row) => {
+    if (PLAYER_POST_COMMENT_TECH_LEAK_RE.test(String(row.text || ""))) {
+      problems.push("technical-language-leak");
+    }
+    if (playerPostCommentHasFollowLeak(postContext, row.text)) {
+      problems.push("follow-event-leak");
+    }
+  });
+
+  return [...new Set(problems)];
+}
+
+function playerPostCommentPrivateSystem(w, post) {
+  const en = worldLanguage(w, post.authorId) === "en";
+  return en
+    ? [
+        "You generate authentic social-media comments for exactly ONE visible player post.",
+        "The CHARACTER CONTENT block in the user message is the entire visible subject of the comments.",
+        "Do not use recent follows, unfollows, queues, backlogs, unrelated timeline events, or any fact not present in that block.",
+        "COMMENTER CARDS are private behavioral instructions only. Never quote, expose, explain, or mention their fields.",
+        "Each commenter must react to the actual post text/image/mood/tagged people and must sound like their own voice card and relationship to the post author.",
+        "Positive/friendly relationships should read warm, supportive, playful or naturally flirty when appropriate; hostile relationships may be sharp; jealous relationships may be pointed; neutral relationships may be brief and neutral.",
+        "Do not make all commenters share one attitude. Do not copy a theme from one commenter into all the others.",
+        "Never output software/internal/model terminology such as variable, JSON, prompt, backlog, queue, cache, token, system, schema, payload, debug, API or function.",
+        "Return only the requested structured object."
+      ].join("\n")
+    : [
+        "Pontosan EGY látható játékos-poszthoz generálsz hiteles közösségimédia-kommenteket.",
+        "A felhasználói üzenet CHARACTER CONTENT blokkja a kommentek TELJES látható témája.",
+        "Ne használj korábbi follow/unfollow eseményt, queue/backlog tartalmat, más timeline-eseményt vagy bármi olyat, ami nincs ebben a blokkban.",
+        "A COMMENTER CARDS privát viselkedési utasítás. A mezőit soha ne idézd, magyarázd vagy szivárogtasd ki.",
+        "Minden kommentelő a konkrét poszt szövegére/képére/hangulatára/tagelt személyeire reagáljon, a saját voice cardja és a poszt szerzőjéhez fűződő kapcsolata szerint.",
+        "Pozitív/baráti kapcsolatnál legyen meleg, támogató, játékos vagy indokoltan flörtös; ellenségesnél lehet éles; féltékenynél célzós; semlegesnél rövid és semleges.",
+        "Ne legyen minden kommentelő ugyanolyan hangulatú. Egy komment témáját ne másold rá az összes többire.",
+        "Soha ne írj ki programozási/belső modellkifejezést: variable, JSON, prompt, backlog, queue, cache, token, system, schema, payload, debug, API, function, változó, belső utasítás.",
+        "Csak a kért strukturált objektumot add vissza."
+      ].join("\n");
+}
+
+function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxComments, retryProblems = [], rejectedRows = []) {
+  const en = worldLanguage(w, post.authorId) === "en";
+  const retryBlock = retryProblems.length
+    ? [
+        "",
+        "[ONE ALLOWED REGENERATION]",
+        "The previous batch was rejected for: " + retryProblems.join(", ") + ".",
+        "Do not repeat these rejected comments:",
+        JSON.stringify(rejectedRows.map((row) => ({ id: row.id, text: row.text })).slice(0, 6)),
+      ].join("\n")
+    : "";
+
+  return [
+    en ? "[CHARACTER CONTENT — VISIBLE POST ONLY]" : "[CHARACTER CONTENT — CSAK A LÁTHATÓ POSZT]",
+    JSON.stringify(postContext),
+    "",
+    en ? "[COMMENTER CARDS — PRIVATE, NEVER OUTPUT THEIR FIELDS]" : "[COMMENTER CARDS — PRIVÁT, A MEZŐKET SOHA NE ÍRD KI]",
+    JSON.stringify(cards),
+    "",
+    en ? "[TASK]" : "[FELADAT]",
+    en
+      ? ("Write " + minComments + "-" + maxComments + " top-level comments by DIFFERENT listed commenters. Every comment must directly make sense as a reaction to this exact post.")
+      : ("Írj " + minComments + "-" + maxComments + " TOP-LEVEL kommentet KÜLÖNBÖZŐ felsorolt kommentelőktől. Mindegyik komment közvetlenül ennek a konkrét posztnak a reakciójaként legyen értelmes."),
+    en
+      ? "Use the relationship/voice differences; do not force everyone into the same negative, positive or sarcastic attitude."
+      : "Használd a kapcsolat- és voice-különbségeket; ne kényszeríts mindenkit ugyanabba a negatív, pozitív vagy szarkasztikus hangnembe.",
+    en
+      ? '{"comments":[{"id":"EXACT_CHARACTER_ID","text":"natural comment","reagal_erre":"short exact post detail this comment responds to"}],"changes":[]}'
+      : '{"comments":[{"id":"PONTOS_KARAKTER_ID","text":"természetes komment","reagal_erre":"rövid konkrét posztrészlet, amire ez a komment reagál"}],"changes":[]}',
+    retryBlock,
+    "",
+    en
+      ? ("THE POST YOU ARE REACTING TO: " + JSON.stringify(postContext.text) + (postContext.isQuestion ? " [QUESTION]" : "") + (postContext.isInvitation ? " [INVITATION]" : "") + (postContext.hasImage ? (postContext.imageDescription ? " [IMAGE DESCRIPTION: " + postContext.imageDescription + "]" : " [IMAGE PRESENT, NO DESCRIPTION AVAILABLE — DO NOT INVENT VISUAL DETAILS]") : ""))
+      : ("A POSZT, AMIRE REAGÁLSZ: " + JSON.stringify(postContext.text) + (postContext.isQuestion ? " [KÉRDÉS]" : "") + (postContext.isInvitation ? " [MEGHÍVÁS]" : "") + (postContext.hasImage ? (postContext.imageDescription ? " [KÉPLEÍRÁS: " + postContext.imageDescription + "]" : " [VAN KÉP, DE NINCS LEÍRÁS — NE TALÁLJ KI VIZUÁLIS RÉSZLETEKET]") : "")),
+  ].filter(Boolean).join("\n");
+}
+
+async function isolatedPlayerPostComments(w, post, options = {}) {
+  const minComments = Math.max(3, Math.min(6, Math.round(Number(options.minComments) || 3)));
+  const maxComments = Math.max(minComments, Math.min(6, Math.round(Number(options.maxComments) || 6)));
+  const postContext = playerPostCommentPostContext(w, post);
+  const cards = playerPostCommentCandidateCards(w, post, maxComments);
+
+  if (!cards.length) {
+    return { out: { comments: [], changes: [] }, label: "isolated-player-post-comments-no-cast" };
+  }
+
+  const logContext = {
+    post: postContext,
+    commenters: cards.map((card) => ({
+      id: card.id,
+      name: card.name,
+      relationshipToPostAuthor: card.relationshipToPostAuthor,
+      voiceStyleCard: card.voiceStyleCard,
+    })),
+  };
+
+  let firstRows = [];
+  let firstProblems = [];
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    console.info(
+      "[player-post-comment-context]",
+      "attempt=" + String(attempt + 1),
+      "post=" + postContext.postId,
+      "context=" + JSON.stringify(logContext).slice(0, 14000)
+    );
+
+    const prompt = playerPostCommentPrompt(
+      w,
+      post,
+      postContext,
+      cards,
+      minComments,
+      maxComments,
+      attempt ? firstProblems : [],
+      attempt ? firstRows : []
+    );
+
+    let out;
+    try {
+      out = await askWorldJSON(
+        w,
+        playerPostCommentPrivateSystem(w, post),
+        prompt,
+        {
+          maxTokens: 900,
+          priority: 65,
+          source: "player-post-comments-isolated",
+        }
+      );
+    } catch (error) {
+      console.error(
+        "[player-post-comments]",
+        "stage=isolated-ai-result",
+        "attempt=" + String(attempt + 1),
+        "status=failed",
+        "post=" + postContext.postId,
+        error
+      );
+      throw error;
+    }
+
+    const rows = playerPostCommentRowsFromOutput(w, out, cards, postContext).slice(0, maxComments);
+    const problems = playerPostCommentBatchProblems(w, rows, cards, postContext, minComments);
+
+    console.info(
+      "[player-post-comments]",
+      "stage=isolated-ai-result",
+      "attempt=" + String(attempt + 1),
+      "status=" + (problems.length ? "rejected" : "success"),
+      "post=" + postContext.postId,
+      "usable=" + String(rows.length),
+      "problems=" + (problems.join("|") || "none")
+    );
+
+    if (!problems.length) {
+      return {
+        out: { ...(out || {}), comments: rows, changes: [] },
+        label: "isolated-player-post-comments",
+      };
+    }
+
+    if (attempt === 0) {
+      firstRows = rows;
+      firstProblems = problems;
+      continue;
+    }
+
+    return {
+      out: { comments: rows, changes: [] },
+      label: "isolated-player-post-comments-retry",
+    };
+  }
+
+  return { out: { comments: [], changes: [] }, label: "isolated-player-post-comments" };
+}
+
+async function genComments(w, post, options = {}) {
+  if (post && isHuman(w, post.authorId)) {
+    return isolatedPlayerPostComments(w, post, { ...options, playerPostContentIsolation: true });
+  }
+  return legacyPlayerPostContentGenComments(w, post, options);
+}
+
+
+/* MÁSVILÁG GROUNDED EVENTS + INVITES v2 */
+let GROUNDED_REL_EVENT_CONTEXT = null;
+
+const GROUNDED_FALSE_BRENT_RE =
+  /saw\s+Angela\s+Mallory\s+Silverman\s+act\s+romantically\/flirtatiously\s+with\s+Brent\s+LaRusso\s+in\s+public/i;
+
+function groundedRuntime(w) {
+  if (!w || typeof w !== "object") return null;
+  if (!w.sim || typeof w.sim !== "object" || Array.isArray(w.sim)) w.sim = {};
+  if (!w.sim.groundedEventsV2 || typeof w.sim.groundedEventsV2 !== "object" || Array.isArray(w.sim.groundedEventsV2)) {
+    w.sim.groundedEventsV2 = {};
+  }
+  const s = w.sim.groundedEventsV2;
+  if (!s.pendingFollowBack || typeof s.pendingFollowBack !== "object" || Array.isArray(s.pendingFollowBack)) s.pendingFollowBack = {};
+  if (!s.dmUnread || typeof s.dmUnread !== "object" || Array.isArray(s.dmUnread)) s.dmUnread = {};
+  if (!Array.isArray(w.eventLog)) w.eventLog = [];
+  if (!Array.isArray(w.invitations)) w.invitations = [];
+  return s;
+}
+
+function groundedEventLog(w, kind, status, message, sourceRef = "", meta = {}) {
+  if (!w) return null;
+  groundedRuntime(w);
+  const row = {
+    id: "elog_" + uid(),
+    ts: now(),
+    kind: String(kind || "event"),
+    status: String(status || "info"),
+    message: String(message || "").replace(/\s+/g, " ").trim().slice(0, 600),
+    sourceRef: String(sourceRef || "").slice(0, 180),
+    meta: meta && typeof meta === "object" ? { ...meta } : {},
+  };
+  w.eventLog.unshift(row);
+  if (w.eventLog.length > 220) w.eventLog.length = 220;
+  console.info(
+    "[event-log]",
+    "kind=" + row.kind,
+    "status=" + row.status,
+    "source=" + (row.sourceRef || "-"),
+    "message=" + row.message
+  );
+  return row;
+}
+
+function groundedSourceRef(event) {
+  if (!event) return "";
+  const meta = event.meta && typeof event.meta === "object" ? event.meta : {};
+  const type = String(event.type || "event");
+  const ref = meta.commentId || meta.postId || meta.sceneId || meta.popupEventId || event.refId || event.id || "";
+  return type + ":" + String(ref || "unknown");
+}
+
+function groundedFindComment(w, id) {
+  if (!w || !id) return null;
+  for (const post of w.posts || []) {
+    const row = safePostComments(post).find((c) => c && String(c.id) === String(id));
+    if (row) return { post, comment: row };
+  }
+  return null;
+}
+
+function groundedEventIsRecordedFact(w, event) {
+  if (!w || !event) return false;
+  const type = String(event.type || "").toLowerCase();
+  const meta = event.meta && typeof event.meta === "object" ? event.meta : {};
+  const ref = String(event.refId || event.id || "");
+
+  if (type === "post") {
+    const postId = String(meta.postId || ref);
+    return Boolean((w.posts || []).find((p) => p && String(p.id) === postId));
+  }
+  if (type === "comment" || type === "reply") {
+    const commentId = String(meta.commentId || ref);
+    return Boolean(groundedFindComment(w, commentId));
+  }
+  if (type === "follow" || type === "unfollow") {
+    const actor = String(event.actorId || "");
+    const target = String((event.targetIds || [])[0] || "");
+    if (!actor || !target || !charById(w, actor) || !charById(w, target)) return false;
+    return type === "follow" ? isFollowing(w, actor, target) : !isFollowing(w, actor, target);
+  }
+  if (type === "popup-choice") {
+    const popupId = String(meta.popupEventId || ref.split(":")[0] || "");
+    return Boolean((w.popupEvents || []).find((e) => e && String(e.id) === popupId && e.resolvedAt));
+  }
+  if (/roleplay|scene/.test(type) || meta.sceneId) {
+    const sceneId = String(meta.sceneId || ref);
+    return Boolean((w.scenes || []).find((s) => s && String(s.id) === sceneId));
+  }
+  if (type === "dm-message") {
+    const actor = String(event.actorId || "");
+    const human = String((event.targetIds || []).find((id) => isHuman(w, id)) || "");
+    if (!actor || !human) return false;
+    const key = chatKey(actor, human);
+    const rows = (w.chats && w.chats[key]) || [];
+    return rows.some((m) => {
+      if (!m) return false;
+      if (ref && String(m.id || "") === ref) return true;
+      return Math.abs((Number(m.ts) || 0) - (Number(event.ts) || 0)) < 5000 && String(m.text || "") === String(event.text || "");
+    });
+  }
+  return false;
+}
+
+function groundedExplicitRomanticSignal(event) {
+  if (!event) return false;
+  if (event.meta && event.meta.romantic === true) return true;
+  const text = String(event.text || "");
+  return /\b(flirt|flirting|kiss|kissing|date|dating|romantic|love\s+you|hot|gorgeous|beautiful|crush|vonz|flört|csók|megcsókol|randi|randiz|szerelmes|dögös|gyönyörű)\b|[😘😍🥰❤️❤💕💖]/iu.test(text);
+}
+
+function groundedJealousyEligibility(w, charId, humanId) {
+  const c = charById(w, charId);
+  if (!c || isHuman(w, charId) || !humanId) return { allowed: false, strength: 0 };
+  const rel = getRel(w, charId, humanId) || EMPTY_REL;
+  const relationshipText = [rel.bond, rel.type, rel.mood, rel.hidden].filter(Boolean).join(" ").toLowerCase();
+  const personalityText = [c.personality, c.traits, c.backstory, c.secrets].filter(Boolean).join(" ").toLowerCase();
+  const score = Number(rel.score) || 0;
+  const romantic = /love|szerel|crush|vonz|attract|dating|partner|boyfriend|girlfriend|pár|spouse|házastárs|obsess|megszáll/.test(relationshipText);
+  const explicitlyJealousPersonality = /jealous|féltéken|possess|birtokl|territorial|obsess|megszáll/.test(personalityText);
+  const allowed = romantic || (explicitlyJealousPersonality && score >= 20);
+  const strength = allowed ? Math.max(1, Math.min(5, (romantic ? 2 : 0) + (explicitlyJealousPersonality ? 1 : 0) + (score >= 70 ? 2 : score >= 40 ? 1 : 0))) : 0;
+  return { allowed, strength };
+}
+
+function simsSocialPositiveAttentionEvent(event) {
+  const type = String(event && event.type || "").toLowerCase();
+  if (type === "like" || type === "follow") return true;
+  if (type === "comment" || type === "reply" || type === "post") return groundedExplicitRomanticSignal(event);
+  return false;
+}
+
+function simsSocialScheduleAttentionRivalry(w, event, subjectId) {
+  if (!w || !event || !w.meId || String(event.actorId || "") !== String(w.meId)) return;
+  if (!subjectId || subjectId === w.meId || !simsSocialPositiveAttentionEvent(event)) return;
+  if (!groundedEventIsRecordedFact(w, event)) {
+    groundedEventLog(w, "relationship-trigger", "skipped", "Romantic/jealousy reaction blocked because the source event is not recorded in world state.", groundedSourceRef(event));
+    return;
+  }
+  if (String(event.visibility || "public").toLowerCase() !== "public") return;
+  const subject = charById(w, subjectId);
+  if (!subject || isHuman(w, subjectId)) return;
+
+  const candidates = (w.chars || [])
+    .filter((c) => c && c.id !== subjectId && c.id !== w.meId && !isHuman(w, c.id))
+    .map((c) => {
+      const eligible = groundedJealousyEligibility(w, c.id, w.meId);
+      if (!eligible.allowed) return null;
+      if (typeof simsSocialCanObserveEvent === "function" && !simsSocialCanObserveEvent(w, c.id, event)) return null;
+      return { c, eligible, score: Number((getRel(w, c.id, w.meId) || {}).score) || 0 };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (b.eligible.strength - a.eligible.strength) || (b.score - a.score));
+
+  const chosen = candidates[0];
+  if (!chosen) {
+    groundedEventLog(w, "relationship-trigger", "no-reaction", "Public romantic attention had no jealousy-eligible observer.", groundedSourceRef(event));
+    return;
+  }
+
+  const intel = ensureSocialIntelligenceState(w);
+  const key = chosen.c.id + ":attention";
+  const last = Number(intel.lastAttentionReaction[key]) || 0;
+  if (now() - last < SIMS_SOCIAL_REACTION_COOLDOWN_MS) return;
+  intel.lastAttentionReaction[key] = now();
+
+  if (typeof simEnqueue === "function" && typeof mkAction === "function") {
+    const queued = simEnqueue(w, mkAction(
+      "npc-pair-reaction",
+      "grounded-attention-rivalry:" + chosen.c.id + ":" + subjectId + ":" + simsSocialEventKey(event),
+      { actorId: chosen.c.id, targetId: subjectId, trigger: "grounded-player-attention-rivalry", eventId: String(event.id || event.refId || ""), jealousyStrength: chosen.eligible.strength },
+      "event"
+    ));
+    groundedEventLog(w, "relationship-trigger", queued ? "queued" : "skipped", chosen.c.name + " may react to a verified public romantic signal; strength=" + chosen.eligible.strength + ".", groundedSourceRef(event), { observerId: chosen.c.id, subjectId });
+  }
+}
+
+async function genNpcPairReaction(w, actor, target, sourceEvent) {
+  if (!sourceEvent || !groundedEventIsRecordedFact(w, sourceEvent)) {
+    console.warn("[grounded-event] npc-pair reaction blocked: missing/unverified source event");
+    return { skip: true };
+  }
+  const out = await legacyGroundedGenNpcPairReaction(w, actor, target, sourceEvent);
+  if (!out || out.skip === true) return out;
+  if (!groundedExplicitRomanticSignal(sourceEvent) && /flirt|romantic|kiss|date|szerel|flört|csók|randi/i.test(String(out.summary || "") + " " + String(out.tone || ""))) {
+    console.warn("[grounded-event] rejected invented romantic interpretation", groundedSourceRef(sourceEvent));
+    return { skip: true };
+  }
+  return out;
+}
+
+function groundedSanitizeNotificationText(text) {
+  return String(text || "")
+    .replace(/\bhidden\s*[:=][^•|\n]+/gi, "")
+    .replace(/\bsecret(?:ly)?\s+(?:in love|crush|attracted|jealous|possessive)[^•|\n]*/gi, "private feeling")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function pushNote(w, ownerId, note) {
+  if (!note || typeof note !== "object") return legacyGroundedPushNote(w, ownerId, note);
+  let nextNote = { ...note, text: groundedSanitizeNotificationText(note.text) };
+  if (GROUNDED_REL_EVENT_CONTEXT && String(nextNote.text || "").match(/kapcsol|relationship|score|pont|bond|viszony/i)) {
+    const suffix = worldLanguage(w, ownerId) === "en" ? " • Source: " + GROUNDED_REL_EVENT_CONTEXT : " • Forrás: " + GROUNDED_REL_EVENT_CONTEXT;
+    if (!String(nextNote.text || "").includes(GROUNDED_REL_EVENT_CONTEXT)) nextNote.text = String(nextNote.text || "") + suffix;
+  }
+  return legacyGroundedPushNote(w, ownerId, nextNote);
+}
+
+function simsSocialApplyEventConsequences(w, event) {
+  const sourceRef = groundedSourceRef(event);
+  if (event && String(event.source || "") === "npc-pair-reaction") {
+    const sourceId = String(event.meta && event.meta.sourceEventId || "");
+    const sourceEvent = (w.socialEvents || []).find((row) => row && (String(row.id || "") === sourceId || String(row.refId || "") === sourceId));
+    if (!sourceEvent || !groundedEventIsRecordedFact(w, sourceEvent)) {
+      groundedEventLog(w, "relationship-change", "blocked", "AI-derived relationship consequence blocked because its concrete source event is missing.", sourceRef);
+      return;
+    }
+  }
+  const before = {};
+  Object.entries((w && w.rels) || {}).forEach(([key, rel]) => { before[key] = Number(rel && rel.score) || 0; });
+  const previous = GROUNDED_REL_EVENT_CONTEXT;
+  GROUNDED_REL_EVENT_CONTEXT = sourceRef;
+  try {
+    return legacyGroundedApplyEventConsequences(w, event);
+  } finally {
+    GROUNDED_REL_EVENT_CONTEXT = previous;
+    Object.entries((w && w.rels) || {}).forEach(([key, rel]) => {
+      const oldScore = Object.prototype.hasOwnProperty.call(before, key) ? before[key] : Number(rel && rel.score) || 0;
+      const newScore = Number(rel && rel.score) || 0;
+      if (oldScore === newScore) return;
+      groundedEventLog(w, "relationship-change", "applied", key + " " + (newScore - oldScore >= 0 ? "+" : "") + (newScore - oldScore) + " (" + oldScore + "→" + newScore + ")", sourceRef, { relationshipKey: key, delta: newScore - oldScore });
+    });
+  }
+}
+
+function groundedRepairKnownFalseBrentIncident(w) {
+  if (!w) return;
+  const state = groundedRuntime(w);
+  if (state.falseBrentRollbackV1) return;
+  const haystack = [...(w.socialEvents || []).map((e) => String(e && e.text || "")), ...Object.values(w.notify || {}).flat().map((n) => String(n && n.text || ""))].join("\n");
+  if (!GROUNDED_FALSE_BRENT_RE.test(haystack)) return;
+  const corrections = [["Harry Osborn", 10, true], ["Eli Moskowitz", 5, false], ["Terrance Silver", 5, false], ["Feng Xiao", 5, false], ["Daniel LaRusso", 5, false]];
+  corrections.forEach(([name, amount, restoreRival]) => {
+    const c = (w.chars || []).find((row) => row && String(row.name || "").toLowerCase() === String(name).toLowerCase());
+    if (!c || !w.meId) return;
+    const rel = getRel(w, c.id, w.meId);
+    if (!rel) return;
+    rel.score = Math.max(-100, Math.min(100, (Number(rel.score) || 0) + Number(amount)));
+    if (restoreRival && !rel.fixed && /enemy|ellens/i.test(String(rel.bond || rel.type || ""))) {
+      if ("bond" in rel || !("type" in rel)) rel.bond = "Rival";
+      else rel.type = "Rival";
+    }
+    groundedEventLog(w, "repair", "applied", "Restored erroneous fabricated-Brent deduction for " + name + ": +" + amount + (restoreRival ? ", Enemy→Rival when applicable" : "") + ".", "repair:false-brent-romance");
+  });
+  state.falseBrentRollbackV1 = now();
+  Object.values(w.notify || {}).flat().forEach((note) => {
+    if (note && GROUNDED_FALSE_BRENT_RE.test(String(note.text || ""))) note.text = groundedSanitizeNotificationText(String(note.text || "") + " • [Hibás, kitalált esemény — automatikusan visszaállítva]");
+  });
+}
+
+function recordSocialEvent(w, event = {}) {
+  groundedRepairKnownFalseBrentIncident(w);
+  const result = legacyGroundedRecordSocialEvent(w, event);
+  try {
+    const ref = groundedSourceRef(event);
+    groundedEventLog(w, String(event.type || "social-event"), "recorded", String(event.text || event.type || "Social event recorded."), ref, { actorId: event.actorId || "", targetIds: event.targetIds || [] });
+    if (String(event.type || "").toLowerCase() === "dm-message") groundedRegisterIncomingDm(w, event);
+  } catch (error) {
+    console.warn("[grounded-event] post-record hook failed; base event preserved", error);
+  }
+  return result;
+}
+
+function groundedFollowBackPersonalityEligible(w, botId, humanId) {
+  const c = charById(w, botId);
+  const rel = getRel(w, botId, humanId) || EMPTY_REL;
+  if (!c) return false;
+  const text = [c.personality, c.traits, c.backstory, c.secrets, rel.bond, rel.mood, rel.hidden].filter(Boolean).join(" ").toLowerCase();
+  return /obsess|megszáll|possess|birtokl|jealous|féltéken|cling|ragaszkod|territorial|proud|büszke|sensitive|érzékeny|confront|konfront/.test(text);
+}
+
+function setFollowState(w, actorId, targetId, following, reason) {
+  const before = isFollowing(w, actorId, targetId);
+  const result = legacyGroundedSetFollowState(w, actorId, targetId, following, reason);
+  const after = isFollowing(w, actorId, targetId);
+  if (!before && after && !isHuman(w, actorId) && isHuman(w, targetId)) {
+    const source = String(reason || "");
+    if (!/bootstrap|startup|normalize|migration/i.test(source) && !isFollowing(w, targetId, actorId)) {
+      const state = groundedRuntime(w);
+      state.pendingFollowBack[actorId] = { botId: actorId, humanId: targetId, createdAt: now(), dueAt: now() + 3 * 60 * 1000, reason: source || "follow" };
+      groundedEventLog(w, "follow-not-returned", "started", nameOfIn(w, actorId) + " followed " + nameOfIn(w, targetId) + "; follow-back reaction armed.", "follow:" + actorId + ">" + targetId);
+    }
+  }
+  if (after && isHuman(w, actorId) && !isHuman(w, targetId)) {
+    const state = groundedRuntime(w);
+    if (state.pendingFollowBack[targetId]) {
+      delete state.pendingFollowBack[targetId];
+      groundedEventLog(w, "follow-not-returned", "cancelled", "Follow-back arrived before the DM trigger.", "follow:" + targetId + ">" + actorId);
+    }
+  }
+  return result;
+}
+
+function groundedDueFollowBackAction(w) {
+  if (!w) return null;
+  const state = groundedRuntime(w);
+  const rows = Object.values(state.pendingFollowBack || {}).filter((row) => row && Number(row.dueAt || 0) <= now()).sort((a, b) => Number(a.dueAt || 0) - Number(b.dueAt || 0));
+  for (const row of rows) {
+    if (!charById(w, row.botId) || isHuman(w, row.botId)) { delete state.pendingFollowBack[row.botId]; continue; }
+    const pauseReason = typeof eventDrivenAutonomousDmPauseReason === "function" ? String(eventDrivenAutonomousDmPauseReason(w) || "") : "";
+    if (pauseReason && /scene|roleplay|event/i.test(pauseReason)) {
+      if (!row.lastDeferredLogAt || now() - Number(row.lastDeferredLogAt) > 60000) {
+        row.lastDeferredLogAt = now();
+        groundedEventLog(w, "follow-not-returned", "failed", "Due follow-back DM deferred while player is in an active scene/event: " + pauseReason, "follow:" + row.botId + ">" + row.humanId);
+      }
+      continue;
+    }
+    if (!isFollowing(w, row.botId, row.humanId) || isFollowing(w, row.humanId, row.botId)) { delete state.pendingFollowBack[row.botId]; continue; }
+    groundedEventLog(w, "follow-not-returned", "started", "Unreturned-follow DM queued for " + nameOfIn(w, row.botId) + ".", "follow:" + row.botId + ">" + row.humanId);
+    return mkAction("dm", "grounded-follow-not-returned:" + row.botId + ":" + row.createdAt, { botId: row.botId, trigger: "follow-not-returned", groundedFollowBackBotId: row.botId }, "event");
+  }
+  return null;
+}
+
+function planAutoAction(view) {
+  const followBack = groundedDueFollowBackAction(view);
+  if (followBack) return followBack;
+  return legacyGroundedPlanAutoAction(view);
+}
+
+async function runSimulationAction(view, update, action, addImage) {
+  if (action && action.type === "npc-pair-reaction") {
+    const eventId = String(action.payload && action.payload.eventId || "");
+    const sourceEvent = (view.socialEvents || []).find((row) => row && (String(row.id || "") === eventId || String(row.refId || "") === eventId));
+    if (!sourceEvent || !groundedEventIsRecordedFact(view, sourceEvent)) {
+      update((n) => groundedEventLog(n, "npc-pair-reaction", "blocked", "Reaction blocked: concrete source event not found.", "event:" + (eventId || "missing")));
+      return null;
+    }
+  }
+  const isPopup = action && action.type === "world-full" && String(action.payload && action.payload.trigger || "") === "popup-choice";
+  const isFollowBack = action && action.type === "dm" && action.payload && action.payload.groundedFollowBackBotId;
+  if (isPopup) update((n) => groundedEventLog(n, "popup-choice-followup", "started", "Popup follow-up started: relationship/feed/gossip pipeline.", "popup:" + String(action.payload.popupEventId || "")));
+  let result;
+  try {
+    result = await legacyGroundedRunSimulationAction(view, update, action, addImage);
+  } catch (error) {
+    if (isPopup || isFollowBack) update((n) => groundedEventLog(n, isPopup ? "popup-choice-followup" : "follow-not-returned", "failed", String(error && error.message || error || "Unknown failure"), isPopup ? "popup:" + String(action.payload.popupEventId || "") : "follow:" + String(action.payload.groundedFollowBackBotId || "")));
+    throw error;
+  }
+  if (isFollowBack) {
+    update((n) => {
+      const state = groundedRuntime(n);
+      const botId = String(action.payload.groundedFollowBackBotId || "");
+      if (result) delete state.pendingFollowBack[botId];
+      groundedEventLog(n, "follow-not-returned", result ? "success" : "failed", result ? "Unreturned-follow DM generated." : "DM action returned no message; trigger kept for retry.", "follow:" + botId + ">" + String(n.meId || ""));
+    });
+  }
+  if (isPopup) {
+    update((n) => {
+      const popupId = String(action.payload.popupEventId || "");
+      const popup = (n.popupEvents || []).find((e) => e && String(e.id) === popupId);
+      let gossip = null;
+      try {
+        if (popup && popup.gossipEligible !== false && typeof ensureEventDrivenGossipPost === "function") gossip = ensureEventDrivenGossipPost(n, "popup-choice", { popupEventId: popupId, choiceId: action.payload.choiceId || "" });
+      } catch (error) { console.warn("[popup-followup] gossip safeguard failed", error); }
+      const freshPosts = (n.posts || []).filter((p) => p && !isHuman(n, p.authorId) && now() - (Number(p.ts) || 0) < 2 * 60 * 1000).length;
+      groundedEventLog(n, "popup-choice-followup", result ? "success" : "partial", "Popup follow-up finished; fresh AI posts=" + freshPosts + "; gossip=" + Boolean(gossip) + ".", "popup:" + popupId, { freshPosts, gossip: Boolean(gossip), actionResult: String(result || "") });
+    });
+  }
+  return result;
+}
+
+function groundedRegisterIncomingDm(w, event) {
+  const actorId = String(event && event.actorId || "");
+  const humanId = String((event && event.targetIds || []).find((id) => isHuman(w, id)) || "");
+  if (!actorId || !humanId || isHuman(w, actorId)) return;
+  const state = groundedRuntime(w);
+  state.dmUnread[actorId] = (Number(state.dmUnread[actorId]) || 0) + 1;
+  const text = String(event.text || "");
+  groundedEventLog(w, "dm", "received", nameOfIn(w, actorId) + " sent a DM.", groundedSourceRef(event), { actorId, humanId });
+  if (groundedLooksLikeInvitation(text)) {
+    const existing = (w.invitations || []).find((inv) => inv && inv.status === "pending" && inv.fromId === actorId && inv.sourceRef === groundedSourceRef(event));
+    if (!existing) {
+      w.invitations.unshift({ id: "inv_" + uid(), fromId: actorId, toId: humanId, createdAt: now(), when: groundedExtractInviteWhen(text), where: groundedExtractInviteWhere(text), context: text.slice(0, 800), sourceRef: groundedSourceRef(event), status: "pending" });
+      groundedEventLog(w, "invitation", "received", "Invitation received from " + nameOfIn(w, actorId) + ".", groundedSourceRef(event));
+    }
+  }
+}
+
+function groundedLooksLikeInvitation(text) {
+  return /\b(?:come\s+(?:with|to|over)|join\s+me|meet\s+me|want\s+to\s+(?:meet|come|go)|party|dinner|coffee|drinks?|hang\s*out|date|gyere|találkozz|találkozn|meghívlak|meghív|buli|vacsora|kávé|ital|találkozó|randi|edzés|dojo)\b/iu.test(String(text || ""));
+}
+function groundedExtractInviteWhen(text) {
+  const m = String(text || "").match(/\b(?:tonight|tomorrow|today|this\s+(?:evening|afternoon|weekend)|at\s+\d{1,2}(?::\d{2})?|ma\s+este|holnap|ma|hétvégén|\d{1,2}:\d{2})\b/iu);
+  return m ? m[0] : "";
+}
+function groundedExtractInviteWhere(text) {
+  const m = String(text || "").match(/\b(?:at|to|in)\s+([A-ZÁÉÍÓÖŐÚÜŰ][^,.!?]{2,50})|(?:a|az)\s+([^,.!?]{3,50})(?:ba|be|ra|re|hoz|hez|höz)\b/u);
+  return m ? String(m[1] || m[2] || "").trim() : "";
+}
+
+function groundedUnreadDmCount(w) {
+  const state = groundedRuntime(w);
+  return Object.values(state && state.dmUnread || {}).reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0);
+}
+
+function groundedPlayerPostIsInvitation(post) {
+  return Boolean(post && /\b(?:anyone\s+up\s+for|who\s+wants\s+to|join\s+me|come\s+with|party|hang\s*out|meet\s+up|coffee|drinks?|dinner|valaki\s+jön|ki\s+jön|gyertek|gyere|buli|találkozz|kávé|ital|vacsora)\b/iu.test(String(post.text || post.caption || "")));
+}
+
+function groundedCommentAcceptsInvitation(text) {
+  return /(?:^|\b)(?:yes|yeah|yep|sure|absolutely|i'?m\s+in|count\s+me\s+in|i'?ll\s+come|coming|igen|persze|naná|megyek|ott\s+leszek|benne\s+vagyok|jöhet)(?:\b|$)/iu.test(String(text || ""));
+}
+
+function groundedRegisterPlayerPostInvitation(w, post, comment) {
+  if (!w || !post || !comment || !isHuman(w, post.authorId) || !groundedPlayerPostIsInvitation(post) || !groundedCommentAcceptsInvitation(comment.text)) return null;
+  const fromId = String(comment.authorId || comment.id || "");
+  if (!fromId || isHuman(w, fromId) || !charById(w, fromId)) return null;
+  groundedRuntime(w);
+  const sourceRef = "comment:" + String(comment.id || "") + "@post:" + String(post.id || "");
+  const existing = (w.invitations || []).find((inv) => inv && inv.status === "pending" && inv.fromId === fromId && inv.sourceRef === sourceRef);
+  if (existing) return existing;
+  const inv = { id: "inv_" + uid(), fromId, toId: post.authorId, participantIds: [post.authorId, fromId], createdAt: now(), when: groundedExtractInviteWhen(post.text || ""), where: groundedExtractInviteWhere(post.text || ""), context: ("Post invitation: " + String(post.text || "") + " | " + nameOfIn(w, fromId) + ": " + String(comment.text || "")).slice(0, 1000), sourceRef, sourcePostId: post.id, sourceCommentId: comment.id || "", status: "pending" };
+  w.invitations.unshift(inv);
+  groundedEventLog(w, "invitation", "success", nameOfIn(w, fromId) + " accepted the player post invitation; scene offer created.", sourceRef, { postId: post.id, commentId: comment.id || "", participantIds: inv.participantIds });
+  return inv;
+}
+
+function GroundedInvitationsPanel({ w, update, onOpenScene }) {
+  const pending = (w.invitations || []).filter((inv) => inv && inv.status === "pending");
+  if (!pending.length) return null;
+  const decide = (invite, accept) => {
+    let createdSceneId = "";
+    update((n) => {
+      const live = (n.invitations || []).find((row) => row && row.id === invite.id);
+      if (!live || live.status !== "pending") return;
+      live.status = accept ? "accepted" : "declined";
+      live.resolvedAt = now();
+      if (accept) {
+        const from = charById(n, live.fromId);
+        const scene = { id: "scene_" + uid(), title: (from ? from.name + " — " : "") + (live.where || "Meghívás"), setting: live.where || live.context || "Invitation meetup", goal: live.context || "Continue the accepted invitation naturally.", cast: (Array.isArray(live.participantIds) ? live.participantIds : [live.fromId]).filter((id) => id && !isHuman(n, id)), turns: [], open: true, createdAt: now(), ts: now(), language: worldLanguage(n, n.meId), invitationId: live.id, invitationContext: live.context, invitationParticipants: Array.isArray(live.participantIds) ? live.participantIds.slice() : [n.meId, live.fromId].filter(Boolean) };
+        n.scenes = Array.isArray(n.scenes) ? n.scenes : [];
+        n.scenes.unshift(scene);
+        createdSceneId = scene.id;
+      }
+      groundedEventLog(n, "invitation", accept ? "accepted" : "declined", (accept ? "Accepted" : "Declined") + " invitation from " + nameOfIn(n, live.fromId) + ".", live.sourceRef || ("invitation:" + live.id));
+    });
+    if (accept && createdSceneId && typeof onOpenScene === "function") onOpenScene(createdSceneId);
+  };
+  return (
+    <div className="card" style={{ marginTop: 0 }}>
+      <div className="between"><div><div className="name">Meghívások</div><div className="hint">{pending.length} függő meghívás</div></div><span className="mono" style={{ color: "var(--rose)" }}>{pending.length}</span></div>
+      {pending.map((inv) => (
+        <div key={inv.id} style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+          <div className="name">{nameOfIn(w, inv.fromId)}</div>
+          <div className="hint">{inv.where ? "Hova: " + inv.where : "Hova: a meghívásban megadott hely"}{" · "}{inv.when ? "Mikor: " + inv.when : "Mikor: nincs pontosítva"}</div>
+          <div className="body" style={{ fontSize: 13 }}>{inv.context}</div>
+          <div className="row" style={{ marginTop: 9 }}><button className="btn tiny primary" onClick={() => decide(inv, true)}>Elfogadom</button><button className="btn tiny" onClick={() => decide(inv, false)}>Elutasítom</button></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Chat(props) {
+  const { w, update, openId } = props;
+  useEffect(() => {
+    if (!openId) return;
+    update((n) => { const state = groundedRuntime(n); if (state.dmUnread[openId]) state.dmUnread[openId] = 0; });
+  }, [openId]);
+  return (<>{!openId ? <GroundedInvitationsPanel w={w} update={update} onOpenScene={props.onOpenScene} /> : null}<LegacyGroundedChat {...props} /></>);
+}
+
+function GroundedEventLogPanel({ w }) {
+  const rows = (w.eventLog || []).slice(0, 60);
+  return (
+    <div className="card" style={{ marginTop: 0 }}>
+      <div className="between"><div><div className="name">Eseménynapló</div><div className="hint">Trigger → reakció → eredmény, konkrét forrással</div></div><span className="mono">{rows.length}</span></div>
+      {!rows.length ? <p className="hint">Még nincs naplózott esemény.</p> : null}
+      {rows.map((row) => (<div key={row.id} style={{ marginTop: 10, paddingTop: 9, borderTop: "1px solid var(--line)" }}><div className="between"><span className="mono" style={{ fontSize: 10 }}>{row.kind}</span><span className="hint">{row.status}</span></div><div style={{ marginTop: 3, fontSize: 12.5 }}>{row.message}</div>{row.sourceRef ? <div className="hint mono" style={{ marginTop: 3 }}>forrás: {row.sourceRef}</div> : null}</div>))}
+    </div>
+  );
+}
+
+function World(props) {
+  return (<><GroundedEventLogPanel w={props.w} /><LegacyGroundedWorld {...props} /></>);
+}
+
+
+/* MÁSVILÁG GROUNDED EVENTS FINAL GUARDS v1 */
+function groundedBondFamily(label) {
+  const s = String(label || "").toLowerCase();
+  if (/mother|father|mom|dad|parent|sibling|brother|sister|cousin|aunt|uncle|family|anya|apa|szülő|testvér|unokatestvér|nagynéni|nagybácsi|rokon/.test(s)) return "family";
+  if (/enemy|ellens/.test(s)) return "enemy";
+  if (/rival|rivális/.test(s)) return "rival";
+  if (/best friend|legjobb barát/.test(s)) return "best";
+  if (/close friend|közeli barát/.test(s)) return "close";
+  if (/friend|barát/.test(s)) return "friend";
+  if (/acquaint|ismerős/.test(s)) return "acquaintance";
+  if (/stranger|idegen/.test(s)) return "stranger";
+  return "";
+}
+
+function groundedBondRank(label) {
+  const family = groundedBondFamily(label);
+  const map = { enemy: -2, rival: -1, stranger: 0, acquaintance: 1, friend: 2, close: 3, best: 4 };
+  return Object.prototype.hasOwnProperty.call(map, family) ? map[family] : null;
+}
+
+function groundedRemoveRequestedBond(row) {
+  const out = { ...row };
+  delete out.bond;
+  delete out.type;
+  return out;
+}
+
+function groundedGuardBondChange(w, row, channel, ctx = {}) {
+  if (!row || typeof row !== "object") return row;
+  const a = findChar(w, row.a);
+  const b = findChar(w, row.b);
+  if (!a || !b || a === b) return row;
+  const current = getRel(w, a, b) || EMPTY_REL;
+  if (current.fixed || groundedBondFamily(current.bond || current.type) === "family") {
+    return groundedRemoveRequestedBond(row);
+  }
+
+  const requested = row.bond || row.type;
+  if (!requested) return row;
+  const oldLabel = current.bond || current.type || "";
+  const oldRank = groundedBondRank(oldLabel);
+  const newRank = groundedBondRank(requested);
+
+  if (oldRank !== null && newRank !== null && Math.abs(newRank - oldRank) > 1) {
+    console.info("[relationship-status-guard]", "blocked=multi-level-jump", "from=" + a, "toward=" + b, "old=" + oldLabel, "requested=" + requested, "channel=" + String(channel || ""));
+    return groundedRemoveRequestedBond(row);
+  }
+
+  if (groundedBondFamily(oldLabel) === "rival" && groundedBondFamily(requested) === "enemy") {
+    const why = String(row.why || ctx.reason || "");
+    const strongRoleplay = channel === "roleplay" && (Math.abs(Number(row.delta) || 0) >= 6 || /betray|árul|attack|megtámad|violence|erőszak|serious threat|komoly fenyeget|humiliat|megaláz/i.test(why));
+    if (!strongRoleplay) {
+      console.info("[relationship-status-guard]", "blocked=rival-to-enemy-without-strong-grounded-roleplay", "from=" + a, "toward=" + b, "channel=" + String(channel || ""));
+      return groundedRemoveRequestedBond(row);
+    }
+  }
+  return row;
+}
+
+function applyChannelRelationshipChanges(w, changes, channel, ctx = {}) {
+  const guarded = (Array.isArray(changes) ? changes : []).map((row) => groundedGuardBondChange(w, row, channel, ctx));
+  return legacyGroundedFinalApplyChannelRelationshipChanges(w, guarded, channel, ctx);
+}
+
+
+/* MÁSVILÁG GROUNDED RUNTIME WIRING v3 */

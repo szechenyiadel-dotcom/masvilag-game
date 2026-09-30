@@ -236,30 +236,35 @@ async function askDirectDmJSONInteractive(w, system, prompt, options = {}) {
   }
   next = next.replace(chatAnchor, helper + "\nfunction Chat(");
 
-  replaceInBlock(
-    "const send = async (override) => {",
-    "function Groups(",
-    (block) => {
-      let out = block;
-      const callAt = out.indexOf("const out = await askWorldJSONInteractive(");
-      if (callAt < 0) return block;
+  const sendStart = next.indexOf("const send = async (override) => {");
+  if (sendStart < 0) {
+    throw new Error("Direct DM continuity patch aborted: Chat.send anchor not found.");
+  }
 
-      out =
-        out.slice(0, callAt) +
-        out.slice(callAt).replace(
-          "const out = await askWorldJSONInteractive(",
-          "const out = await askDirectDmJSONInteractive("
-        );
+  const directCallNeedle = "const out = await askWorldJSONInteractive(";
+  const directCallAt = next.indexOf(directCallNeedle, sendStart);
+  if (directCallAt < 0) {
+    throw new Error("Direct DM continuity patch aborted: direct DM AI call not found after Chat.send.");
+  }
 
-      out = out.replace(
-        /\{ maxTries: 1, maxTokens: 650, timeoutMs: 28000 \}/,
-        "{ maxTries: 1, maxTokens: 650, timeoutMs: 28000, dmCharId: c.id, dmChatKey: ck, dmLatestText: t }"
-      );
+  next =
+    next.slice(0, directCallAt) +
+    next.slice(directCallAt).replace(
+      directCallNeedle,
+      "const out = await askDirectDmJSONInteractive("
+    );
 
-      return out;
-    },
-    "normal player-to-bot DM"
-  );
+  const optionsNeedle = "{ maxTries: 1, maxTokens: 650, timeoutMs: 28000 }";
+  const optionsAt = next.indexOf(optionsNeedle, directCallAt);
+  if (optionsAt < 0) {
+    throw new Error("Direct DM continuity patch aborted: direct DM request options not found.");
+  }
+  next =
+    next.slice(0, optionsAt) +
+    next.slice(optionsAt).replace(
+      optionsNeedle,
+      "{ maxTries: 1, maxTokens: 650, timeoutMs: 28000, dmCharId: c.id, dmChatKey: ck, dmLatestText: t }"
+    );
 }
 
 if (next !== original) {

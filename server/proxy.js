@@ -19,6 +19,15 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || process.env.AI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const MISTRAL_API_KEY = String(process.env.MISTRAL_API_KEY || "").trim();
+const MISTRAL_MODEL = String(process.env.MISTRAL_MODEL || "").trim();
+const GROQ_API_KEY = String(process.env.GROQ_API_KEY || "").trim();
+const GROQ_MODEL = String(process.env.GROQ_MODEL || "").trim();
+/* New exact name first; historical Gemini fallback name remains accepted. */
+const GEMINI_MODEL_ENV = String(process.env.GEMINI_MODEL || process.env.GEMINI_FALLBACK_MODEL || "").trim();
+const AI_PROVIDER_ORDER_ENV = String(process.env.AI_PROVIDER_ORDER || "").trim();
+const AI_AUTONOMY_INTERVAL_MINUTES = Math.max(0.05, Math.min(60, Number(process.env.AI_AUTONOMY_INTERVAL_MINUTES) || 1));
+const AI_MIN_REQUEST_GAP_MS = Math.max(250, Math.min(30000, Number(process.env.AI_MIN_REQUEST_GAP_MS) || 2000));
 const GEMINI_EMBEDDING_MODEL = String(process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001").trim();
 const GEMINI_EMBEDDING_DIM = Math.min(3072, Math.max(128, Number(process.env.GEMINI_EMBEDDING_DIM) || 768));
 const DEFAULT_PROVIDER = process.env.AI_PROVIDER || "anthropic";
@@ -2212,6 +2221,8 @@ function getProvider(body = {}) {
       body?.provider || ""
     ).toLowerCase();
 
+  if (provider === "mistral" || provider === "groq") return provider;
+
   if (provider === "gemini") {
     return "gemini";
   }
@@ -3212,6 +3223,10 @@ app.post("/ai/vision", async (req, res) => {
       getProvider(
         req.body || {}
       );
+
+    if (AI_PROMPT_DEBUG) {
+      console.info(`[AI_PROMPT_DEBUG] source=${String(req.body?.source || "vision")} provider=${provider}\n--- SYSTEM ---\n\n--- USER ---\n${prompt}\n--- END PROMPT ---`);
+    }
 
     if (
       provider === "openai"
@@ -4629,391 +4644,604 @@ async function proxyOpenAIMessage(
       };
 }
 
-async function proxyGeminiMessage(
-  body
-) {
-  if (
-    !GEMINI_API_KEY
-  ) {
+async function proxyGeminiMessage(body) {
+  if (!GEMINI_API_KEY) return { unavailable: true, provider: "gemini" };
+
+  const requested = String(body?.model || "").trim();
+  const model = requested.startsWith("gemini")
+    ? requested
+    : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
+
+  const url = new URL(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+  );
+  url.searchParams.set("key", GEMINI_API_KEY);
+
+  const r = await fetchWithTimeout(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildGeminiPayload({ ...body, model })),
+  });
+  const payload = await responseJsonSafe(r);
+
+  if (!r.ok) {
     return {
-      unavailable: true,
-      provider:
-        "gemini",
+      ok: false,
+      status: r.status,
+      payload,
+      retryAfter: r.headers.get("retry-after"),
+      provider: "gemini",
     };
   }
 
-  const requested =
-    String(
-      body?.model || ""
-    );
+  const normalized = normalizeGeminiResponse(payload);
+  const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
+  return hasText
+    ? { ok: true, payload: normalized, provider: "gemini" }
+    : { ok: false, status: 502, payload: { error: { message: "Gemini returned empty content." } }, provider: "gemini" };
+}
 
-  const modelsToTry =
-    [
-      ...new Set(
-        [
-          requested.startsWith(
-            "gemini"
-          )
-            ? requested
-            : "",
-          process.env
-            .GEMINI_MODEL ||
-            "",
-          process.env
-            .GEMINI_FALLBACK_MODEL ||
-            "gemini-3.5-flash",
-        ].filter(
-          Boolean
-        )
-      ),
-    ];
+async function proxyAnthropicMessage(body) {
+  if (!ANTHROPIC_API_KEY) return { unavailable: true, provider: "anthropic" };
 
+  const requested = String(body?.model || "").trim();
+  const model = requested.startsWith("claude")
+    ? requested
+    : String(process.env.ANTHROPIC_MODEL || process.env.ANTHROPIC_FALLBACK_MODEL || "claude-sonnet-4-6").trim();
+
+  const { provider, source, priority, client_instance_id, __worldKey, ...rest } = body || {};
+  const outboundBody = { ...rest, model, max_tokens: body?.max_tokens ?? 1024 };
+  const r = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": process.env.ANTHROPIC_VERSION || "2023-06-01",
+      "Accept": "application/json",
+    },
+    body: JSON.stringify(outboundBody),
+  });
+  const payload = await responseJsonSafe(r);
+
+  if (!r.ok) {
+    return {
+      ok: false,
+      status: r.status,
+      payload,
+      retryAfter: r.headers.get("retry-after"),
+      provider: "anthropic",
+    };
+  }
+
+  const hasText = Array.isArray(payload?.content) && payload.content.some((x) => x?.type === "text" && String(x?.text || "").trim());
+  return hasText
+    ? { ok: true, payload, provider: "anthropic" }
+    : { ok: false, status: 502, payload: { error: { message: "Anthropic returned empty content." } }, provider: "anthropic" };
+}
+
+/* MÁSVILÁG AI 403 FAILOVER + GROUP CHAT DEDUPE v4 */
+const AI_GROQ_MAX_INPUT_CHARS = 18000;
+const AI_GROUP_CHAT_SYSTEM_CAP = 14000;
+const AI_GROUP_CHAT_PROMPT_CAP = 18000;
+const AI_GROUP_CHAT_DEDUPE_MS = 15000;
+
+function buildCompatibleChatPayload(body = {}, model) {
+  const messages = [];
+  if (body.system) messages.push({ role: "system", content: String(body.system) });
+  for (const item of Array.isArray(body.messages) ? body.messages : []) {
+    const text = extractText(item?.content || "");
+    if (!text) continue;
+    messages.push({ role: item?.role === "assistant" ? "assistant" : "user", content: text });
+  }
+  const payload = { model, messages, max_tokens: body.max_tokens ?? 1024 };
+  if (Number.isFinite(Number(body.temperature))) payload.temperature = Number(body.temperature);
+  return payload;
+}
+
+async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
+  if (!apiKey || !model) return { unavailable: true, provider, model: model || "" };
+  const r = await fetchWithTimeout(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+    body: JSON.stringify(buildCompatibleChatPayload(body, model)),
+  });
+  const payload = await responseJsonSafe(r);
+  if (!r.ok) {
+    return { ok: false, status: r.status, payload, retryAfter: r.headers.get("retry-after"), provider, model };
+  }
+  const normalized = normalizeOpenAIResponse(payload);
+  const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
+  return hasText
+    ? { ok: true, payload: normalized, provider, model }
+    : { ok: false, status: 502, payload: { error: { message: `${provider} returned empty content.` } }, provider, model };
+}
+
+function providerModel(provider, body = {}) {
+  const requested = String(body?.model || "").trim();
+  if (provider === "mistral") return MISTRAL_MODEL || "";
+  if (provider === "groq") return GROQ_MODEL || "";
+  if (provider === "gemini") return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
+  if (provider === "anthropic") {
+    return requested.startsWith("claude")
+      ? requested
+      : String(process.env.ANTHROPIC_MODEL || process.env.ANTHROPIC_FALLBACK_MODEL || "claude-sonnet-4-6").trim();
+  }
+  if (provider === "openai") return requested || String(process.env.OPENAI_MODEL || "").trim() || "openai-default";
+  return requested;
+}
+
+async function callMessageProvider(provider, body) {
+  if (provider === "mistral") return proxyCompatibleMessage("mistral", MISTRAL_API_KEY, MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
+  if (provider === "groq") return proxyCompatibleMessage("groq", GROQ_API_KEY, GROQ_MODEL, "https://api.groq.com/openai/v1/chat/completions", body);
+  if (provider === "openai") {
+    const result = await proxyOpenAIMessage(body);
+    return { ...result, provider: "openai", model: providerModel("openai", body) };
+  }
+  if (provider === "gemini") {
+    const result = await proxyGeminiMessage(body);
+    return { ...result, provider: "gemini", model: providerModel("gemini", body) };
+  }
+  const result = await proxyAnthropicMessage(body);
+  return { ...result, provider: "anthropic", model: providerModel("anthropic", body) };
+}
+
+function configuredAIProvider(provider) {
+  if (provider === "mistral") return Boolean(MISTRAL_API_KEY && MISTRAL_MODEL);
+  if (provider === "groq") return Boolean(GROQ_API_KEY && GROQ_MODEL);
+  if (provider === "gemini") return Boolean(GEMINI_API_KEY);
+  if (provider === "openai") return Boolean(OPENAI_API_KEY);
+  if (provider === "anthropic") return Boolean(ANTHROPIC_API_KEY);
+  return false;
+}
+
+function providerOrder(requestedProvider) {
+  const configured = AI_PROVIDER_ORDER_ENV
+    .split(/[>,;|\s]+/)
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
+  const raw = configured.length
+    ? configured
+    : [requestedProvider, "mistral", "gemini", "groq", "openai", "anthropic"];
+  const ordered = [];
+  for (const provider of raw) {
+    if (!ordered.includes(provider) && configuredAIProvider(provider)) ordered.push(provider);
+  }
+  if (!configured.length && configuredAIProvider(requestedProvider) && !ordered.includes(requestedProvider)) ordered.unshift(requestedProvider);
+  return ordered;
+}
+
+function aiRequestText(body = {}) {
+  return (Array.isArray(body.messages) ? body.messages : [])
+    .map((m) => extractText(m?.content || ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function aiRequestChars(body = {}) {
+  return String(body?.system || "").length + aiRequestText(body).length;
+}
+
+function inferAIRequestSource(body = {}) {
+  const explicit = String(body.source || "").trim();
+  if (explicit) return explicit.slice(0, 80);
+  const text = (String(body.system || "") + "\n" + aiRequestText(body)).toLowerCase();
+  if (text.includes("social-post meaning parser") || text.includes("post meaning") || text.includes("meaning analysis")) return "meaning-analysis";
+  if (text.includes("recovery-queue") || text.includes("relationship-auto-follow") || text.includes("auto-follow backlog")) return "recovery-queue";
+  if (text.includes("group chat") || text.includes("groupchat") || text.includes("csoportos chat")) return "group-chat";
+  if (text.includes("roleplay") || text.includes("jelenet") || text.includes("scene")) return "scene";
+  if (text.includes("direct message") || text.includes("private message") || /(^|[^a-z])dm([^a-z]|$)/.test(text)) return "dm";
+  if (text.includes("comment") || text.includes("komment") || text.includes("reply") || text.includes("válaszkomment")) return "comments";
+  if (text.includes("note") || text.includes("jegyzet")) return "notes";
+  if (text.includes("social post") || text.includes("feed") || text.includes("poszt")) return "feed-post";
+  return "autonomy-other";
+}
+
+function aiRequestPriority(body = {}, source = inferAIRequestSource(body)) {
+  const supplied = Number(body.priority);
+  if (Number.isFinite(supplied) && supplied !== 0) return supplied;
+  if (["interactive", "dm", "group-chat", "scene"].includes(source)) return 100;
+  if (source === "comments") return 70;
+  if (source === "feed-post") return 30;
+  if (source === "notes") return 25;
+  if (source === "meaning-analysis") return -20;
+  if (source === "recovery-queue") return -30;
+  return 20;
+}
+
+function preservePromptEdges(text, max) {
+  const value = String(text || "");
+  if (value.length <= max) return value;
+  const head = Math.floor(max * 0.72);
+  const tail = Math.max(0, max - head - 80);
+  return value.slice(0, head) + "\n...[context compacted by AI gate]...\n" + value.slice(-tail);
+}
+
+function compactGroupChatSystem(text, max = AI_GROUP_CHAT_SYSTEM_CAP) {
+  const value = String(text || "");
+  if (value.length <= max) return value;
+
+  const blocks = value.split(/\n{2,}/).map((x) => x.trim()).filter(Boolean);
+  const relevant = /(summary|összefoglal|tömör|compact|relevant|kapcsolat|relationship|current|recent|jelenlegi|legutóbbi|group\s*chat|csoport|participant|résztvevő|knowledge|tudás|personality|személyiség|speech|beszéd|style|stílus|goal|cél|secret|titok|status|állapot|memory|emlék)/i;
+  const selected = [];
+  let used = 0;
+
+  for (let i = 0; i < blocks.length && used < max; i += 1) {
+    const block = blocks[i];
+    const isOpeningInstruction = i < 2 && used < 3500;
+    if (!isOpeningInstruction && !relevant.test(block)) continue;
+    if (selected.includes(block)) continue;
+    const room = max - used;
+    const clipped = block.length > room ? preservePromptEdges(block, room) : block;
+    if (!clipped) break;
+    selected.push(clipped);
+    used += clipped.length + 2;
+  }
+
+  let compacted = selected.join("\n\n");
+  if (compacted.length < Math.min(5000, max * 0.45)) {
+    const fallbackRoom = Math.max(0, max - compacted.length - 90);
+    const tail = value.slice(-Math.min(fallbackRoom, 5000));
+    compacted = [compacted, "[RECENT / RELEVANT TAIL]", tail].filter(Boolean).join("\n\n");
+  }
+  return preservePromptEdges(compacted || value, max);
+}
+
+function prepareAIRequestBody(body, priority, source) {
+  let system = String(body?.system || "");
+  const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (priority >= 50 ? 30000 : 18000);
+  const promptCap = source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (priority >= 50 ? 52000 : 28000);
+
+  if (source === "group-chat") {
+    const before = system.length;
+    system = compactGroupChatSystem(system, systemCap);
+    if (before !== system.length) {
+      console.info("[ai-context] group-chat", `systemChars=${before}->${system.length}`, "mode=summary+relevant");
+    }
+  } else {
+    system = preservePromptEdges(system, systemCap);
+  }
+
+  let left = promptCap;
+  const messages = [];
+  for (const item of Array.isArray(body?.messages) ? body.messages : []) {
+    if (left <= 0) break;
+    const text = extractText(item?.content || "");
+    if (!text) continue;
+    const clipped = preservePromptEdges(text, left);
+    left -= clipped.length;
+    messages.push({ ...item, content: clipped });
+  }
+  return { ...body, system, messages };
+}
+
+function parseRetryAfterMs(value) {
+  const text = String(value || "").trim();
+  if (!text) return 0;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const at = Date.parse(text);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : 0;
+}
+
+const AI_GATE = {
+  queue: [], active: false, seq: 0, lastStartAt: 0, wakeTimer: null,
+  pendingKeys: new Set(), recentKeys: new Map(), providerCooldownUntil: new Map(), providerFailures: new Map(),
+  providerConfigurationErrors: new Map(), leaderByWorld: new Map(), lastAutonomyAt: new Map(),
+  minute: "", minuteTotal: 0, minuteSources: Object.create(null), lastError: "",
+};
+
+function safeProviderMessage(result, fallback = "") {
+  return String(proxyErrorMessage(result?.payload, fallback) || fallback || "").replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+function aiMinuteTrace(source, body, eventId = "") {
+  const stamp = new Date().toISOString();
+  const minute = stamp.slice(0, 16);
+  if (AI_GATE.minute && AI_GATE.minute !== minute) {
+    console.info("[ai-trace-minute]", AI_GATE.minute, `total=${AI_GATE.minuteTotal}`, `sources=${JSON.stringify(AI_GATE.minuteSources)}`);
+    AI_GATE.minuteTotal = 0;
+    AI_GATE.minuteSources = Object.create(null);
+  }
+  AI_GATE.minute = minute;
+  AI_GATE.minuteTotal += 1;
+  AI_GATE.minuteSources[source] = (AI_GATE.minuteSources[source] || 0) + 1;
+  const prompt = aiRequestText(body);
+  console.info("[ai-trace]", stamp, `source=${source}`, eventId ? `event=${eventId}` : "event=none", `systemChars=${String(body.system || "").length}`, `promptChars=${prompt.length}`, `totalChars=${String(body.system || "").length + prompt.length}`);
+}
+setInterval(() => {
+  if (AI_GATE.minuteTotal) {
+    console.info("[ai-trace-minute]", AI_GATE.minute || new Date().toISOString().slice(0,16), `total=${AI_GATE.minuteTotal}`, `sources=${JSON.stringify(AI_GATE.minuteSources)}`);
+    AI_GATE.minuteTotal = 0;
+    AI_GATE.minuteSources = Object.create(null);
+  }
+}, 60000).unref?.();
+
+function providerCooldownMs(provider) {
+  return Math.max(0, Number(AI_GATE.providerCooldownUntil.get(provider) || 0) - Date.now());
+}
+
+function markProviderFailure(provider, model, result) {
+  const status = Number(result?.status || 0);
+  const message = safeProviderMessage(result, `HTTP ${status}`);
+
+  if ([401, 403].includes(status)) {
+    AI_GATE.providerConfigurationErrors.set(provider, { status, model, message, at: Date.now() });
+    AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
+    console.warn("[ai-gate] provider-config-invalid", `${provider}/${model}`, `status=${status}`, message);
+    return -1;
+  }
+
+  if (![429, 503, 529].includes(status)) return 0;
+  const previous = Number(AI_GATE.providerFailures.get(provider) || 0);
+  const failures = Math.min(4, previous + 1);
+  AI_GATE.providerFailures.set(provider, failures);
+  const retryHeader = parseRetryAfterMs(result?.retryAfter);
+  const lower = message.toLowerCase();
+  const hardQuota = /free[_ -]?tier|quota exceeded|current quota|resource exhausted|no credits|daily limit/.test(lower);
+  const exponential = Math.min(60000, 5000 * Math.pow(2, failures - 1));
+  const jitter = Math.floor(Math.random() * Math.min(2500, Math.max(500, exponential * 0.2)));
+  const rest = hardQuota ? Math.max(retryHeader, 15 * 60 * 1000) : Math.max(retryHeader, exponential + jitter);
+  AI_GATE.providerCooldownUntil.set(provider, Date.now() + rest);
+  AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
+  console.warn("[ai-gate] provider-cooldown", `${provider}/${model}`, `status=${status}`, `ms=${rest}`, message);
+  return rest;
+}
+
+function markProviderSuccess(provider) {
+  AI_GATE.providerFailures.set(provider, 0);
+  AI_GATE.providerCooldownUntil.delete(provider);
+  AI_GATE.lastError = "";
+}
+
+function providerAllowedForBody(provider, body) {
+  const chars = aiRequestChars(body);
+  if (chars <= AI_GROQ_MAX_INPUT_CHARS) return true;
+  return provider === "mistral" || provider === "gemini";
+}
+
+function healthyProvider(requestedProvider, body, excluded = new Set()) {
+  return providerOrder(requestedProvider).find((p) =>
+    !excluded.has(p) &&
+    !AI_GATE.providerConfigurationErrors.has(p) &&
+    providerCooldownMs(p) <= 0 &&
+    providerAllowedForBody(p, body)
+  ) || "";
+}
+
+function suppliedEventId(body = {}) {
+  const meta = body?.metadata && typeof body.metadata === "object" ? body.metadata : {};
+  const value = body.event_id || body.eventId || body.eventID || body.request_id || body.requestId || meta.event_id || meta.eventId || "";
+  return String(value || "").trim().slice(0, 180);
+}
+
+function normalizedGroupChatFingerprint(body = {}) {
+  const prompt = aiRequestText(body)
+    .replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b/g, "<ts>")
+    .replace(/\b\d{10,13}\b/g, "<epoch>")
+    .replace(/\s+/g, " ")
+    .trim();
+  return crypto.createHash("sha256").update(prompt.slice(-12000)).digest("hex").slice(0, 24);
+}
+
+function requestEventId(body, source) {
+  const supplied = suppliedEventId(body);
+  if (supplied) return supplied;
+  if (source === "group-chat") return `derived-${normalizedGroupChatFingerprint(body)}`;
+  return "";
+}
+
+function dedupeKey(body, source, eventId = "") {
+  if (eventId) return `${source}:event:${eventId}`;
+  return crypto.createHash("sha256")
+    .update(source + "\n" + String(body.system || "") + "\n" + aiRequestText(body))
+    .digest("hex");
+}
+
+function quietSkip(reason) {
+  return {
+    ok: true,
+    status: 200,
+    provider: "server-gate",
+    model: "masvilag-server-gate",
+    payload: {
+      model: "masvilag-server-gate", type: "message", role: "assistant",
+      content: [{ type: "text", text: JSON.stringify({ skip: true, reason }) }],
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  };
+}
+
+function isAutonomySource(source) {
+  return ["feed-post", "notes", "autonomy-other"].includes(source);
+}
+
+function leaderAllows(worldKey, clientId, source, priority) {
+  if (priority >= 50 || !isAutonomySource(source)) return true;
+  const now = Date.now();
+  const current = AI_GATE.leaderByWorld.get(worldKey);
+  if (current && current.expiresAt > now && current.clientId !== clientId) return false;
+  AI_GATE.leaderByWorld.set(worldKey, { clientId, expiresAt: now + 45000 });
+  return true;
+}
+
+function autonomyNotBefore(worldKey, source) {
+  if (!isAutonomySource(source)) return Date.now();
+  const last = Number(AI_GATE.lastAutonomyAt.get(worldKey) || 0);
+  return Math.max(Date.now(), last + AI_AUTONOMY_INTERVAL_MINUTES * 60000);
+}
+
+function scheduleAIGate(delay = 0) {
+  if (AI_GATE.wakeTimer) clearTimeout(AI_GATE.wakeTimer);
+  AI_GATE.wakeTimer = setTimeout(() => { AI_GATE.wakeTimer = null; pumpAIGate(); }, Math.max(0, delay));
+  AI_GATE.wakeTimer.unref?.();
+}
+
+function summarizeProviderFailures(attempts, requestedProvider, body) {
+  const details = [];
+  const seen = new Set();
+  for (const item of attempts) {
+    const key = item.provider;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    details.push(`${item.provider}/${item.model}: HTTP ${item.status || "?"} ${item.message || "hiba"}`);
+  }
+  for (const provider of providerOrder(requestedProvider)) {
+    if (seen.has(provider)) continue;
+    const config = AI_GATE.providerConfigurationErrors.get(provider);
+    if (config) details.push(`${provider}/${config.model || providerModel(provider, body)}: HTTP ${config.status} ${config.message}`);
+    else if (providerCooldownMs(provider) > 0) details.push(`${provider}/${providerModel(provider, body)}: átmenetileg kimerült vagy limitált`);
+    else if (!providerAllowedForBody(provider, body)) details.push(`${provider}/${providerModel(provider, body)}: kihagyva, mert a prompt túl nagy ehhez a szolgáltatóhoz`);
+  }
+  return details;
+}
+
+const AI_PROMPT_DEBUG = String(process.env.AI_PROMPT_DEBUG || "").trim() === "1";
+
+function logFullAIPromptDebug(body = {}, source = "unknown", provider = "unknown") {
+  if (!AI_PROMPT_DEBUG) return;
+  const system = String(body?.system || "");
+  const user = (Array.isArray(body?.messages) ? body.messages : [])
+    .filter((item) => String(item?.role || "").toLowerCase() === "user")
+    .map((item) => extractText(item?.content || ""))
+    .filter(Boolean)
+    .join("\n\n");
+  console.info(
+    `[AI_PROMPT_DEBUG] source=${String(source || body?.source || "unknown")} provider=${String(provider || "unknown")}\n` +
+    `--- SYSTEM ---\n${system}\n--- USER ---\n${user}\n--- END PROMPT ---`
+  );
+}
+
+async function executeAITask(task) {
+  const attempted = new Set();
+  const attempts = [];
   let last = null;
 
-  for (
-    const model of
-    modelsToTry
-  ) {
-    const url =
-      new URL(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
-      );
+  while (true) {
+    const provider = healthyProvider(task.requestedProvider, task.body, attempted);
+    if (!provider) break;
+    attempted.add(provider);
+    const model = providerModel(provider, task.body);
 
-    url.searchParams.set(
-      "key",
-      GEMINI_API_KEY
-    );
+    console.info("[ai-gate] start", new Date().toISOString(), `source=${task.source}`, `event=${task.eventId || "none"}`, `priority=${task.priority}`, `provider=${provider}`, `model=${model}`, `queued=${AI_GATE.queue.length}`);
+    console.info("[ai-provider] request", `provider=${provider}`, `model=${model}`, `chars=${aiRequestChars(task.body)}`);
+    logFullAIPromptDebug(task.body, task.source || task.body?.source || "unknown", provider);
 
-    for (
-      let attempt = 1;
-      attempt <= 2;
-      attempt++
-    ) {
-      const r =
-        await fetchWithTimeout(
-          url,
-          {
-            method:
-              "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body:
-              JSON.stringify(
-                buildGeminiPayload({
-                  ...body,
-                  model,
-                })
-              ),
-          }
-        );
+    const result = await callMessageProvider(provider, task.body);
+    result.provider = provider;
+    result.model = result.model || model;
+    last = result;
 
-      const payload =
-        await responseJsonSafe(
-          r
-        );
+    const status = result?.ok ? 200 : (result?.unavailable ? 0 : Number(result?.status || 0));
+    const message = result?.ok ? "ok" : (result?.unavailable ? "not configured" : safeProviderMessage(result, "upstream error"));
+    console.info("[ai-provider] response", `provider=${provider}`, `model=${model}`, `status=${status}`, `message=${message}`);
 
-      if (r.ok) {
-        const normalized =
-          normalizeGeminiResponse(
-            payload
-          );
-
-        const hasText =
-          Array.isArray(
-            normalized?.content
-          ) &&
-          normalized.content.some(
-            (x) =>
-              String(
-                x?.text ||
-                ""
-              ).trim()
-          );
-
-        if (hasText) {
-          return {
-            ok: true,
-            payload:
-              normalized,
-            provider:
-              "gemini",
-          };
-        }
-
-        last = {
-          ok: false,
-          status: 502,
-          payload: {
-            error: {
-              message:
-                "Gemini returned empty content.",
-            },
-          },
-          provider:
-            "gemini",
-        };
-
-        break;
-      }
-
-      last = {
-        ok: false,
-        status:
-          r.status,
-        payload,
-        retryAfter:
-          r.headers.get(
-            "retry-after"
-          ),
-        provider:
-          "gemini",
-      };
-
-      if (
-        !retryableProviderStatus(
-          r.status
-        ) ||
-        attempt >= 2
-      ) {
-        break;
-      }
-
-      await new Promise(
-        (resolve) =>
-          setTimeout(
-            resolve,
-            700 *
-            attempt
-          )
-      );
+    if (result?.ok) {
+      markProviderSuccess(provider);
+      return result;
     }
+    if (result?.unavailable) continue;
+
+    attempts.push({ provider, model, status, message });
+    if ([401, 403, 429, 503, 529].includes(status)) {
+      markProviderFailure(provider, model, result);
+      continue;
+    }
+
+    return result;
   }
 
-  return (
-    last ||
-    {
-      unavailable:
-        true,
-      provider:
-        "gemini",
-    }
-  );
+  const details = summarizeProviderFailures(attempts, task.requestedProvider, task.body);
+  if (last && attempts.length === 1 && ![401, 403, 429, 503, 529].includes(Number(last?.status || 0))) return last;
+
+  const retryWaits = providerOrder(task.requestedProvider).map(providerCooldownMs).filter((ms) => ms > 0);
+  const retryMs = retryWaits.length ? Math.min(...retryWaits) : 30000;
+  return {
+    ok: false,
+    status: 503,
+    provider: last?.provider || "server-gate",
+    model: last?.model || "provider-failover",
+    lastUpstreamStatus: Number(last?.status || 0) || 503,
+    retryAfter: retryWaits.length ? String(Math.max(1, Math.ceil(retryMs / 1000))) : "",
+    payload: {
+      error: {
+        message: details.length
+          ? `Egyik használható AI-szolgáltató sem tudta teljesíteni a kérést. ${details.join(" | ")}`
+          : "Egyik konfigurált AI-szolgáltató sem érhető el ehhez a kéréshez.",
+        providers: details,
+      },
+    },
+  };
 }
 
-async function proxyAnthropicMessage(
-  body
-) {
-  if (
-    !ANTHROPIC_API_KEY
-  ) {
-    return {
-      unavailable: true,
-      provider:
-        "anthropic",
-    };
+async function pumpAIGate() {
+  if (AI_GATE.active || !AI_GATE.queue.length) return;
+  const now = Date.now();
+  AI_GATE.queue.sort((a, b) => b.priority - a.priority || a.seq - b.seq);
+  const index = AI_GATE.queue.findIndex((t) => t.notBefore <= now);
+  if (index < 0) {
+    scheduleAIGate(Math.max(1, Math.min(...AI_GATE.queue.map((t) => t.notBefore)) - now));
+    return;
   }
+  const gap = Math.max(0, AI_MIN_REQUEST_GAP_MS - (now - AI_GATE.lastStartAt));
+  if (gap > 0) { scheduleAIGate(gap); return; }
 
-  const requestedModel =
-    String(
-      body?.model ||
-      ""
-    );
-
-  const modelsToTry =
-    [
-      ...new Set(
-        [
-          requestedModel.startsWith(
-            "claude"
-          )
-            ? requestedModel
-            : "",
-          process.env
-            .ANTHROPIC_MODEL ||
-            "",
-          process.env
-            .ANTHROPIC_FALLBACK_MODEL ||
-            "",
-        ].filter(
-          Boolean
-        )
-      ),
-    ];
-
-  if (
-    !modelsToTry.length
-  ) {
-    modelsToTry.push(
-      requestedModel ||
-      "claude-sonnet-4-6"
-    );
+  const task = AI_GATE.queue.splice(index, 1)[0];
+  AI_GATE.active = true;
+  AI_GATE.lastStartAt = Date.now();
+  try {
+    const result = await executeAITask(task);
+    if (isAutonomySource(task.source)) AI_GATE.lastAutonomyAt.set(task.worldKey, Date.now());
+    AI_GATE.recentKeys.set(task.key, Date.now());
+    task.resolve(result);
+  } catch (err) {
+    AI_GATE.lastError = String(err?.message || err || "AI gate error").slice(0, 240);
+    task.reject(err);
+  } finally {
+    AI_GATE.pendingKeys.delete(task.key);
+    AI_GATE.active = false;
+    const cutoff = Date.now() - 60000;
+    for (const [key, at] of AI_GATE.recentKeys) if (at < cutoff) AI_GATE.recentKeys.delete(key);
+    if (AI_GATE.queue.length) scheduleAIGate(0);
   }
-
-  let last = null;
-
-  for (
-    const model of
-    modelsToTry
-  ) {
-    const {
-      provider,
-      ...rest
-    } =
-      body || {};
-
-    const outboundBody = {
-      ...rest,
-      model,
-      max_tokens:
-        body?.max_tokens ??
-        1024,
-    };
-
-    for (
-      let attempt = 1;
-      attempt <= 2;
-      attempt++
-    ) {
-      const r =
-        await fetchWithTimeout(
-          "https://api.anthropic.com/v1/messages",
-          {
-            method:
-              "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-              "x-api-key":
-                ANTHROPIC_API_KEY,
-              "anthropic-version":
-                process.env
-                  .ANTHROPIC_VERSION ||
-                "2023-06-01",
-              "Accept":
-                "application/json",
-            },
-            body:
-              JSON.stringify(
-                outboundBody
-              ),
-          }
-        );
-
-      const payload =
-        await responseJsonSafe(
-          r
-        );
-
-      if (r.ok) {
-        const hasText =
-          Array.isArray(
-            payload?.content
-          ) &&
-          payload.content.some(
-            (x) =>
-              x?.type ===
-                "text" &&
-              String(
-                x?.text ||
-                ""
-              ).trim()
-          );
-
-        if (hasText) {
-          return {
-            ok: true,
-            payload,
-            provider:
-              "anthropic",
-          };
-        }
-
-        last = {
-          ok: false,
-          status: 502,
-          payload: {
-            error: {
-              message:
-                "Anthropic returned empty content.",
-            },
-          },
-          provider:
-            "anthropic",
-        };
-
-        break;
-      }
-
-      last = {
-        ok: false,
-        status:
-          r.status,
-        payload,
-        retryAfter:
-          r.headers.get(
-            "retry-after"
-          ),
-        provider:
-          "anthropic",
-      };
-
-      if (
-        !retryableProviderStatus(
-          r.status
-        ) ||
-        attempt >= 2
-      ) {
-        break;
-      }
-
-      await new Promise(
-        (resolve) =>
-          setTimeout(
-            resolve,
-            700 *
-            attempt
-          )
-      );
-    }
-  }
-
-  return (
-    last ||
-    {
-      unavailable:
-        true,
-      provider:
-        "anthropic",
-    }
-  );
 }
 
-async function callMessageProvider(
-  provider,
-  body
-) {
-  if (
-    provider === "openai"
-  ) {
-    return proxyOpenAIMessage(
-      body
-    );
+function enqueueAIMessage(body, session) {
+  const source = inferAIRequestSource(body);
+  const priority = aiRequestPriority(body, source);
+  const prepared = prepareAIRequestBody(body, priority, source);
+  const worldKey = String(session?.worldCode || "anonymous");
+  const clientId = String(body?.client_instance_id || body?.clientInstanceId || session?.accountId || "unknown");
+  const eventId = requestEventId(prepared, source);
+
+  if (source === "recovery-queue") return Promise.resolve(quietSkip("recovery-is-data-only"));
+  if (source === "meaning-analysis" && (AI_GATE.active || AI_GATE.queue.length)) return Promise.resolve(quietSkip("meaning-analysis-yielded"));
+  if (!leaderAllows(worldKey, clientId, source, priority)) return Promise.resolve(quietSkip("another-client-is-autonomy-leader"));
+
+  const key = dedupeKey(prepared, source, eventId);
+  const recent = Number(AI_GATE.recentKeys.get(key) || 0);
+  const groupDuplicate = source === "group-chat" && (AI_GATE.pendingKeys.has(key) || (recent && Date.now() - recent < AI_GROUP_CHAT_DEDUPE_MS));
+  const backgroundDuplicate = priority < 50 && (AI_GATE.pendingKeys.has(key) || (recent && Date.now() - recent < 30000));
+  if (groupDuplicate || backgroundDuplicate) {
+    console.info("[ai-dedupe] skip", `source=${source}`, `event=${eventId || key.slice(0, 24)}`, groupDuplicate ? "reason=duplicate-group-chat-event" : "reason=duplicate-background-request");
+    return Promise.resolve(quietSkip(groupDuplicate ? "duplicate-group-chat-event" : "duplicate-background-request"));
   }
 
-  if (
-    provider === "gemini"
-  ) {
-    return proxyGeminiMessage(
-      body
-    );
-  }
+  aiMinuteTrace(source, prepared, eventId);
 
-  return proxyAnthropicMessage(
-    body
-  );
+  return new Promise((resolve, reject) => {
+    AI_GATE.pendingKeys.add(key);
+    AI_GATE.queue.push({
+      body: prepared,
+      requestedProvider: getProvider(prepared),
+      source, priority, key, eventId, resolve, reject, worldKey,
+      seq: ++AI_GATE.seq,
+      notBefore: autonomyNotBefore(worldKey, source),
+    });
+    pumpAIGate();
+  });
 }
+
+
 /* -------------------------------------------------------------------------
    SEMANTIC CHARACTER MEMORY — v37
 
@@ -5946,175 +6174,50 @@ app.get(
   }
 );
 
+/* MÁSVILÁG AI TOKEN SAFETY v1 */
 app.post(
-  [
-    "/ai/messages",
-    "/ai/chat",
-    "/ai/respond",
-  ],
+  ["/ai/messages", "/ai/chat", "/ai/respond"],
   async (req, res) => {
-    const requestedProvider =
-      getProvider(
-        req.body || {}
-      );
-
-    const configuredFallbacks =
-      [
-        "anthropic",
-        "openai",
-        "gemini",
-      ]
-        .filter(
-          (p) =>
-            p !==
-            requestedProvider
-        )
-        .filter(
-          (p) =>
-            p === "anthropic"
-              ? ANTHROPIC_API_KEY
-              : p === "openai"
-                ? OPENAI_API_KEY
-                : GEMINI_API_KEY
-        );
-
-    const providers = [
-      requestedProvider,
-      ...configuredFallbacks,
-    ];
-
-    let last = null;
-
-    for (
-      const provider of
-      providers
-    ) {
-      try {
-        const result =
-          await callMessageProvider(
-            provider,
-            req.body || {}
-          );
-
-        if (
-          result?.ok
-        ) {
-          res.setHeader(
-            "x-masvilag-ai-provider",
-            result.provider ||
-            provider
-          );
-
-          return res.json(
-            result.payload
-          );
-        }
-
-        if (
-          result?.unavailable
-        ) {
-          continue;
-        }
-
-        last =
-          result;
-
-        /*
-         * Only fail over for transient/upstream/model availability problems.
-         */
-        if (
-          !retryableProviderStatus(
-            result?.status
-          ) &&
-          ![
-            400,
-            404,
-          ].includes(
-            Number(
-              result?.status
-            )
-          )
-        ) {
-          break;
-        }
-      } catch (err) {
-        last = {
-          status:
-            err?.name ===
-            "AbortError"
-              ? 504
-              : 502,
-          payload: {
-            error: {
-              message:
-                err?.name ===
-                "AbortError"
-                  ? `${provider} timed out.`
-                  : (
-                      err?.message ||
-                      `${provider} proxy error`
-                    ),
-            },
-          },
-          provider,
-        };
+    const session = await getSessionIdentity(req).catch(() => null);
+    const requestedProvider = getProvider(req.body || {});
+    try {
+      const result = await enqueueAIMessage(req.body || {}, session);
+      if (result?.ok) {
+        res.setHeader("x-masvilag-ai-provider", result.provider || requestedProvider);
+        if (result?.model) res.setHeader("x-masvilag-ai-model", String(result.model));
+        return res.json(result.payload);
       }
+
+      const upstreamStatus = Number(result?.status) || 503;
+      if (result?.retryAfter) res.setHeader("retry-after", result.retryAfter);
+      res.setHeader("x-masvilag-ai-provider", result?.provider || requestedProvider);
+      if (result?.model) res.setHeader("x-masvilag-ai-model", String(result.model));
+      res.setHeader("x-masvilag-ai-upstream-status", String(upstreamStatus));
+
+      const source = inferAIRequestSource(req.body || {});
+      const priority = aiRequestPriority(req.body || {}, source);
+      const message = proxyErrorMessage(result?.payload, "No configured AI provider returned a usable response.");
+      const actualProvider = String(result?.provider || requestedProvider || "unknown");
+      const actualModel = String(result?.model || providerModel(actualProvider, req.body || {}) || "unknown");
+      const logUpstreamStatus = Number(result?.lastUpstreamStatus || upstreamStatus);
+      console.error("AI message unavailable:", source, `${actualProvider}/${actualModel}`, `upstream=${logUpstreamStatus}`, message);
+
+      if (priority < 50 && [429, 503, 529].includes(upstreamStatus)) {
+        return res.status(200).json({
+          model: "masvilag-server-gate", type: "message", role: "assistant",
+          content: [{ type: "text", text: JSON.stringify({ skip: true, reason: "background-provider-busy" }) }],
+          usage: { input_tokens: 0, output_tokens: 0 },
+        });
+      }
+
+      return res.status(upstreamStatus === 404 ? 502 : upstreamStatus).json(result?.payload || { error: { message } });
+    } catch (err) {
+      console.error("AI gate error:", err);
+      return res.status(502).json({ error: { message: err?.message || "AI gate failed." } });
     }
-
-    const upstreamStatus =
-      Number(
-        last?.status
-      ) || 503;
-
-    const status =
-      upstreamStatus === 404
-        ? 502
-        : upstreamStatus;
-
-    if (
-      last?.retryAfter
-    ) {
-      res.setHeader(
-        "retry-after",
-        last.retryAfter
-      );
-    }
-
-    res.setHeader(
-      "x-masvilag-ai-provider",
-      last?.provider ||
-      requestedProvider
-    );
-
-    res.setHeader(
-      "x-masvilag-ai-upstream-status",
-      String(
-        upstreamStatus
-      )
-    );
-
-    console.error(
-      "AI message providers exhausted:",
-      requestedProvider,
-      `upstream=${upstreamStatus}`,
-      proxyErrorMessage(
-        last?.payload,
-        "No provider returned a usable response."
-      )
-    );
-
-    return res
-      .status(status)
-      .json(
-        last?.payload || {
-          error: {
-            message:
-              "No configured AI provider returned a usable response.",
-          },
-        }
-      );
   }
 );
+
 
 // Serve the built React/Vite app in production.
 // v31: never let an old frontend bundle survive a deploy in browser/proxy cache.

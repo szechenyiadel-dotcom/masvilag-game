@@ -142,7 +142,10 @@ function applyWorldStep(...args) {
   return withRelationshipChannel("public", { reason: "timeline-feed" }, () => legacyChannelApplyWorldStep(...args));
 }
 function applySceneChangesWithStatus(...args) {
-  return withRelationshipChannel("roleplay", { reason: "roleplay" }, () => legacyChannelApplySceneChangesWithStatus(...args));
+  const [world, scene, changes] = args;
+  const result = withRelationshipChannel("roleplay", { reason: "roleplay" }, () => legacyChannelApplySceneChangesWithStatus(...args));
+  recordExplicitMutualRelationshipMilestones(world, changes, scene && scene.id ? "roleplay:" + scene.id : "roleplay");
+  return result;
 }
 
 function normalizedOfficialKind(rel) {
@@ -185,19 +188,64 @@ function officialKindLabel(kind, lang = CURRENT_LANG) {
   return map[kind] || String(kind || "");
 }
 
+function relationshipOfficialOverrideKey(a, b) {
+  return [String(a || ""), String(b || "")].sort().join("<>");
+}
+
+function directedRomanticOfficialKind(rel) {
+  const bond = String(rel && (rel.bond || rel.type) || "").toLowerCase();
+  if (/spouse|married|házas|házastárs|férj|feleség/.test(bond)) return "spouse";
+  if (/engaged|jegyes|fiancé|fiance/.test(bond)) return "engaged";
+  if (/dating|járnak|partner|boyfriend|girlfriend|párkapcsolat|couple/.test(bond)) return "dating";
+  if (/exes|\bex\b|volt pár/.test(bond)) return "exes";
+  return "";
+}
+
+function mutualRomanticFloor(aKind, bKind) {
+  if (aKind === "exes" || bKind === "exes") return aKind === "exes" && bKind === "exes" ? "exes" : "";
+  const rank = { dating: 1, engaged: 2, spouse: 3 };
+  const a = rank[aKind] || 0;
+  const b = rank[bKind] || 0;
+  const floor = Math.min(a, b);
+  return floor >= 3 ? "spouse" : floor >= 2 ? "engaged" : floor >= 1 ? "dating" : "";
+}
+
 function explicitMutualStatus(w, a, b) {
+  const key = relationshipOfficialOverrideKey(a, b);
+  const override = w && w.relationshipOfficialOverrides && w.relationshipOfficialOverrides[key];
+  if (override && ["dating", "engaged", "spouse", "exes", "best-friend"].includes(String(override.kind || ""))) {
+    return String(override.kind);
+  }
+
   const ra = getRel(w, a, b) || EMPTY_REL;
   const rb = getRel(w, b, a) || EMPTY_REL;
-  const text = [
-    ra.bond, ra.type, ra.why, ra.mood,
-    rb.bond, rb.type, rb.why, rb.mood,
-  ].filter(Boolean).join(" ").toLowerCase();
-  if (/spouse|married|házas|férj|feleség/.test(text)) return "spouse";
-  if (/engaged|jegyes|fiancé|fiance/.test(text)) return "engaged";
-  if (/dating|járnak|összejöttek|got together|became a couple|párkapcsolat/.test(text)) return "dating";
-  if (/exes|\bex\b|szakítottak|broke up/.test(text)) return "exes";
-  if (/best friend|legjobb barát/.test(text)) return "best-friend";
+  const romantic = mutualRomanticFloor(directedRomanticOfficialKind(ra), directedRomanticOfficialKind(rb));
+  if (romantic) return romantic;
+
+  const aBest = /best friend|legjobb barát/i.test(String(ra.bond || ra.type || "")) || Number(ra.score) >= 80;
+  const bBest = /best friend|legjobb barát/i.test(String(rb.bond || rb.type || "")) || Number(rb.score) >= 80;
+  if (aBest && bBest) return "best-friend";
   return "";
+}
+
+function recordExplicitMutualRelationshipMilestones(w, changes, source = "roleplay") {
+  if (!w || !Array.isArray(changes)) return;
+  const rows = changes.filter((row) => row && row.a && row.b && row.a !== row.b);
+  for (const row of rows) {
+    const reverse = rows.find((other) => other && other.a === row.b && other.b === row.a);
+    if (!reverse) continue;
+    const kind = mutualRomanticFloor(directedRomanticOfficialKind(row), directedRomanticOfficialKind(reverse));
+    const rowBest = /best friend|legjobb barát/i.test(String(row.bond || row.type || ""));
+    const reverseBest = /best friend|legjobb barát/i.test(String(reverse.bond || reverse.type || ""));
+    const resolvedKind = kind || (rowBest && reverseBest ? "best-friend" : "");
+    if (!resolvedKind) continue;
+    if (!w.relationshipOfficialOverrides || typeof w.relationshipOfficialOverrides !== "object" || Array.isArray(w.relationshipOfficialOverrides)) {
+      w.relationshipOfficialOverrides = {};
+    }
+    const key = relationshipOfficialOverrideKey(row.a, row.b);
+    w.relationshipOfficialOverrides[key] = { kind: resolvedKind, source, at: now() };
+    console.info("[relationship-milestone]", "pair=" + key, "status=" + resolvedKind, "source=" + source);
+  }
 }
 
 function officialRelationshipStatusForPair(w, ownerId, targetId, lang = CURRENT_LANG) {
@@ -313,11 +361,17 @@ function channelPublicPostFollowerEffect(w, postId) {
     "public deterministic delta"
   );
 
-  replaceOne(
-    /applyChanges\(\s*n,\s*dmChanges\s*\);/,
-    `applyChannelRelationshipChanges(n, dmChanges, "dm", { text: t, reason: "direct-dm" });`,
-    "direct DM channel weighting"
-  );
+  {
+    const dmRx = /applyChanges\(\s*n,\s*dmChanges\s*\);/g;
+    const dmCount = allMatches(dmRx).length;
+    if (dmCount !== 2) {
+      throw new Error(`Channel relationship v2 aborted: direct DM channel weighting expected 2 matches, found ${dmCount}.`);
+    }
+    next = next.replace(
+      dmRx,
+      `applyChannelRelationshipChanges(n, dmChanges, "dm", { text: t, reason: "direct-dm" });`
+    );
+  }
 
   replaceOne(
     /\{r\.mood\s*\?\s*localizedRelationshipDisplayText\(r\.mood,\s*CURRENT_LANG\)\s*:\s*relLabel\(r\)\}/,
@@ -325,12 +379,18 @@ function channelPublicPostFollowerEffect(w, postId) {
     "RelPair official status"
   );
 
-  replaceOne(
-    /\{r\.score > 0 \? "\+" : ""\}\{r\.score\} · \{relLabel\(r\)\}<\/span>/,
-    `{r.score > 0 ? "+" : ""}{r.score} · {officialRelationshipStatusForPair(w, c.id, w.meId, CURRENT_LANG)}</span>`,
-    "character list official status",
-    false
-  );
+  {
+    const listAnchor = 'className="character-list-main"';
+    const listStart = next.indexOf(listAnchor);
+    const spanNeedle = '{r.score > 0 ? "+" : ""}{r.score} · {relLabel(r)}</span>';
+    const spanAt = listStart >= 0 ? next.indexOf(spanNeedle, listStart) : -1;
+    if (listStart < 0 || spanAt < 0 || spanAt - listStart > 1800) {
+      throw new Error("Channel relationship v2 aborted: character-list official status anchor not found.");
+    }
+    next = next.slice(0, spanAt) +
+      '{r.score > 0 ? "+" : ""}{r.score} · {officialRelationshipStatusForPair(w, c.id, w.meId, CURRENT_LANG)}</span>' +
+      next.slice(spanAt + spanNeedle.length);
+  }
 
   const starredNeedle = '${playerText ? `${w.player.name} most ezt teszi vagy mondja:\\n"${playerText}"` : "A játékos most nem lép közbe; a szereplők maguktól viszik tovább a jelenetet."}';
   if (next.includes(starredNeedle)) {

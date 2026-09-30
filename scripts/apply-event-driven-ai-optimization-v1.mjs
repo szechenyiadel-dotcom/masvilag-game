@@ -542,13 +542,9 @@ function enqueueVisualCrushThreadFriction(...args) {
     "signalSimulation event batching"
   );
 
-  replaceInBlock(
-    "const enactPopupChoice = useCallback(",
-    "const requestWorldStep = useCallback",
-    (block) => block.replace(
-      /\s*if \(p\) \{\s*try \{\s*simEnqueue\([\s\S]*?Popup comment queue failed:[\s\S]*?\}\s*\}\s*/m,
-      "\n            /* event-driven feed batch attaches the comments to this fresh popup post */\n"
-    ),
+  replaceOne(
+    /\s*if \(p\) \{\s*try \{\s*simEnqueue\([\s\S]*?Popup comment queue failed:[\s\S]*?\}\s*\}\s*/m,
+    "\n            /* event-driven feed batch attaches the comments to this fresh popup post */\n",
     "popup choice comment batching"
   );
 
@@ -579,15 +575,9 @@ function enqueueVisualCrushThreadFriction(...args) {
     "player comment reply cap"
   );
 
-  replaceInBlock(
-    'if (action.type === "dm") {',
-    'const out =',
-    (block) => {
-      const anchor = /\n\s*(?:let|const) out =\s*\n\s*await genDM\(view, bot\);/m;
-      if (!anchor.test(block)) return block;
-      return block.replace(
-        anchor,
-        `
+  replaceOne(
+    /\n\s*const out =\s*\n\s*await genDM\(view, bot\);/m,
+    `
 
     const dmPauseReason = eventDrivenAutonomousDmPauseReason(view);
     if (dmPauseReason) {
@@ -596,9 +586,7 @@ function enqueueVisualCrushThreadFriction(...args) {
     }
 
     const out =
-      await genDM(view, bot);`
-      );
-    },
+      await genDM(view, bot);`,
     "autonomous DM pre-generation guard"
   );
 
