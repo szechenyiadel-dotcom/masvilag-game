@@ -4851,6 +4851,16 @@ function aiRequestPriority(body = {}, source = inferAIRequestSource(body)) {
 function preservePromptEdges(text, max) {
   const value = String(text || "");
   if (value.length <= max) return value;
+  /* CLAUDE FIX R2: never cut the protected tail (latest player input, DM reason, author roster). */
+  let protectedAt = value.lastIndexOf("[[PROTECTED_TAIL]]");
+  if (protectedAt < 0) protectedAt = value.indexOf("[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]");
+  if (protectedAt >= 0 && value.length - protectedAt < max * 0.7) {
+    const protectedTail = value.slice(protectedAt);
+    const room = Math.max(1000, max - protectedTail.length - 80);
+    const head = Math.floor(room * 0.6);
+    const beforeTail = room - head;
+    return value.slice(0, head) + "\n...[context compacted by AI gate]...\n" + value.slice(Math.max(head, protectedAt - beforeTail), protectedAt) + protectedTail;
+  }
   const head = Math.floor(max * 0.72);
   const tail = Math.max(0, max - head - 80);
   return value.slice(0, head) + "\n...[context compacted by AI gate]...\n" + value.slice(-tail);
@@ -4888,8 +4898,9 @@ function compactGroupChatSystem(text, max = AI_GROUP_CHAT_SYSTEM_CAP) {
 
 function prepareAIRequestBody(body, priority, source) {
   let system = String(body?.system || "");
-  const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (priority >= 50 ? 30000 : 18000);
-  const promptCap = source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (priority >= 50 ? 52000 : 28000);
+  /* CLAUDE FIX R2: player-facing work (scene, DM reply, reactions to the player's post) gets room. */
+  const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (priority >= 50 ? 40000 : 18000);
+  const promptCap = source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (priority >= 50 ? 70000 : 28000);
 
   if (source === "group-chat") {
     const before = system.length;

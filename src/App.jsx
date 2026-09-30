@@ -2934,7 +2934,7 @@ const FIXED_BONDS = ["Anya", "Apa", "Szülő", "Fia", "Lánya", "Gyerek", "Testv
   "Mostohatestvér", "Mostohaszülő", "Nevelt gyerek", "Nagymama", "Nagypapa", "Nagyszülő", "Unoka",
   "Unokatestvér", "Nagynéni", "Nagybácsi", "Rokon", "Após / anyós", "Sógor / sógornő"];
 const SOFT_BONDS = ["Ellenség", "Rivális", "Ismerős", "Barát", "Közeli barát", "Legjobb barát",
-  "Crush", "Kölcsönös crush", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony",
+  "Crush", "Kölcsönös crush", "Megszállottság", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony",
   "Osztálytárs", "Szomszéd", "Munkatárs", "Főnök", "Beosztott", "Mentor", "Tanítvány", "Edző", "Tanár"];
 
 // A kapcsolat hangulata a pontszám alapján, a kötelék címkéjétől függetlenül.
@@ -3148,6 +3148,13 @@ function normalizedOfficialKind(rel) {
   const bond = String(r.bond || r.type || "").toLowerCase();
 
   if (r.fixed && bond) return { kind: "fixed", rank: 1000, raw: String(r.bond || r.type || "") };
+  /* CLAUDE FIX R2: an obsession, a crush or fear is not a friendship, whatever the score. */
+  const visibleFeeling = (bond + " " + String(r.mood || "")).toLowerCase();
+  const fearful = /(?:afraid|scared|frightened|terrified) of (?:him|her|them)|\bfears? (?:him|her|them)\b|f[eé]l t[oő]le|retteg t[oő]le|tart t[oő]le|^(?:fear|f[eé]lelem)/.test(visibleFeeling) || /^(?:fear|f[eé]lelem|afraid)/.test(bond);
+  if (/obsess|megsz[aá]ll|fixat/.test(bond)) return { kind: "obsessed", rank: 55, unilateral: true, romantic: true, fearful };
+  if (/k[oö]lcs[oö]n[oö]s crush|mutual crush|mutual attraction|k[oö]lcs[oö]n[oö]s vonzalom/.test(bond)) return { kind: "mutual-attraction", rank: 55, romantic: true, fearful };
+  if (/crush|vonzalom|vonz[oó]d|attraction|attracted|in love|szerelmes|love interest/.test(bond)) return { kind: fearful ? "afraid" : "crush", rank: 55, unilateral: true, romantic: true, fearful };
+  if (fearful && !/spouse|házastárs|married|engaged|jegyes|dating|járnak/.test(bond)) return { kind: "afraid", rank: 35, unilateral: true, fearful };
   if (/spouse|házastárs|férj|feleség|married|házas/.test(bond)) return { kind: "spouse", rank: 90 };
   if (/engaged|jegyes|fiancé|fiance/.test(bond)) return { kind: "engaged", rank: 80 };
   if (/dating|járnak|partner|boyfriend|girlfriend|párkapcsolat|couple/.test(bond)) return { kind: "dating", rank: 70 };
@@ -3178,6 +3185,10 @@ function officialKindLabel(kind, lang = CURRENT_LANG) {
     rival: en ? "Rival" : "Rivális",
     enemy: en ? "Enemy" : "Ellenség",
     fan: en ? "Admires them" : "Rajong érte",
+    crush: en ? "Attracted" : "Vonzódik hozzá",
+    obsessed: en ? "Obsessed" : "Megszállottja",
+    afraid: en ? "Afraid of them" : "Fél tőle",
+    "mutual-attraction": en ? "Mutual attraction" : "Kölcsönös vonzalom",
   };
   return map[kind] || String(kind || "");
 }
@@ -3254,6 +3265,12 @@ function officialRelationshipStatusForPair(w, ownerId, targetId, lang = CURRENT_
   const a = normalizedOfficialKind(own);
   const b = normalizedOfficialKind(reverse);
 
+  if (a.romantic && b.romantic) {
+    const base = officialKindLabel("mutual-attraction", lang);
+    if (a.kind === "obsessed") return base + " · " + officialKindLabel("obsessed", lang);
+    if (a.fearful) return base + " · " + officialKindLabel("afraid", lang);
+    return base;
+  }
   if (a.unilateral) return officialKindLabel(a.kind, lang);
 
   const mutualKinds = ["spouse", "engaged", "dating", "exes", "best-friend"];
@@ -4573,6 +4590,10 @@ function legacyInferCanonicalRelationshipBaseline(w, actor, target) {
     /crush|has a crush|vonz[oó]d|vonzalom|attraction|attracted|in love|szerelmes|love interest|fixation|obsess/.test(low);
   const explicitSecret =
     /secret crush|hidden crush|secret attraction|titkos crush|titkos vonzalom|rejtett vonzalom|senki nem tud|doesn['’]?t know/.test(low);
+  /* CLAUDE FIX R2: "obsessed with her", "she is afraid of him" is not a friendship,
+     even if the word "friend" appears somewhere in the entry. */
+  const explicitFearOrObsession =
+    /obsess|fixat|megsz[aá]ll|stalk|afraid|scared|terrified|\bfears?\b|f[eé]l t[oő]le|retteg|tart t[oő]le|danger(?:ous)?|vesz[eé]lyes/.test(low);
 
   const explicitMother =
     /\bmother\b|\bmom\b|\bmum\b|\banya\b|édesany/.test(low);
@@ -4611,7 +4632,7 @@ function legacyInferCanonicalRelationshipBaseline(w, actor, target) {
    * keywords elsewhere. This prevents "both sheets say best friend" from
    * becoming hate because some unrelated dojo rivalry was also mentioned.
    */
-  if (explicitBest || exactBest || cue.close) {
+  if ((explicitBest && !explicitFearOrObsession) || exactBest || (cue.close && !explicitFearOrObsession)) {
     return {
       score: 92,
       bond: "Legjobb barát",
@@ -4625,7 +4646,7 @@ function legacyInferCanonicalRelationshipBaseline(w, actor, target) {
       source: "connections",
     };
   }
-  if (explicitClose || exactClose) {
+  if ((explicitClose && !explicitFearOrObsession) || exactClose) {
     return {
       score: 78,
       bond: "Közeli barát",
@@ -4640,7 +4661,7 @@ function legacyInferCanonicalRelationshipBaseline(w, actor, target) {
     };
   }
   if (
-    (explicitFriend || exactFriend || cue.friendly) &&
+    (exactFriend || ((explicitFriend || cue.friendly) && !explicitFearOrObsession)) &&
     !(explicitEnemy || cue.hostile)
   ) {
     return {
@@ -8328,10 +8349,48 @@ function aiCostGapFor(system, prompt, maxTokens) {
 const AI_MAX_SYSTEM_CHARS = Math.max(18000, Number(import.meta.env.VITE_AI_MAX_SYSTEM_CHARS) || 42000);
 const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_PROMPT_CHARS) || 82000);
 
+/* CLAUDE FIX R2: everything after this marker (latest player input, the author
+   roster, the reason for a DM, ...) must survive every compaction step. */
+const PROTECTED_TAIL_MARKER = "[[PROTECTED_TAIL]]";
+
+/* CLAUDE FIX R2 (scenes): the newest turns + the player's newest action are
+   repeated in the protected tail, so the model answers THAT, even if the long
+   middle of the prompt had to be shortened. */
+function roleplayLatestBeatTail(w, turns, playerText, who) {
+  const en = worldLanguage(w, w && w.meId) === "en";
+  const lookup = typeof who === "function" ? who : (id) => charById(w, id);
+  const lines = (Array.isArray(turns) ? turns : []).slice(-6).map((t) => {
+    if (!t) return "";
+    if (t.authorId === "narrator") return "(" + String(t.text || "") + ")";
+    const a = lookup(t.authorId);
+    return (a && a.name ? a.name : "?") + ": " + String(t.text || "");
+  }).filter(Boolean).join("\n");
+  const playerName = (w && w.player && w.player.name) || (en ? "The player" : "A játékos");
+  const newest = String(playerText || "").trim();
+  return "\n\n" + PROTECTED_TAIL_MARKER + "\n" +
+    (en ? "=== THE NEWEST MOMENT OF THE SCENE — REACT TO THIS FIRST ===\n" : "=== A JELENET LEGÚJABB PILLANATA — ELSŐKÉNT ERRE REAGÁLJ ===\n") +
+    (en ? "Last turns (oldest → newest):\n" : "Utolsó körök (régebbitől az újabbig):\n") + (lines || "-") + "\n" +
+    (newest
+      ? (en
+          ? playerName + "'s NEWEST action/words (answer exactly this, its content and intent; do not answer an older line instead):\n\"" + newest + "\""
+          : playerName + " LEGÚJABB cselekvése/mondata (pontosan erre felelj, a tartalmára és a szándékára; ne egy régebbi sorra):\n\"" + newest + "\"")
+      : (en ? "The player does not act now; continue from the newest line above." : "A játékos most nem lép; a fenti legújabb sorból folytasd.")) +
+    "\n===";
+}
+
 function preserveEdges(value, maxChars, label = "context") {
   const text = String(value || "");
   const max = Math.max(4000, Number(maxChars) || 0);
   if (text.length <= max) return text;
+  const protectedAt = text.lastIndexOf(PROTECTED_TAIL_MARKER);
+  if (protectedAt >= 0 && text.length - protectedAt < max * 0.7) {
+    const protectedTail = text.slice(protectedAt);
+    const marker = `\n\n[${label.toUpperCase()} COMPACTED: ${text.length - max} excess characters omitted; canonical state remains stored in-world]\n\n`;
+    const room = Math.max(1000, max - protectedTail.length - marker.length);
+    const head = Math.floor(room * 0.6);
+    const beforeTail = room - head;
+    return text.slice(0, head) + marker + text.slice(Math.max(head, protectedAt - beforeTail), protectedAt) + protectedTail;
+  }
   const marker = `\n\n[${label.toUpperCase()} COMPACTED: ${text.length - max} excess characters omitted; canonical state remains stored in-world]\n\n`;
   const usable = Math.max(1000, max - marker.length);
   const head = Math.floor(usable * 0.56);
@@ -8575,6 +8634,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   max_tokens: maxTokens,
   temperature: 0.9,
   source: String(requestMeta && requestMeta.source || "client-ai"),
+  priority: Number(requestMeta && requestMeta.priority) || (requestMeta && requestMeta.interactive ? 100 : 0),
   system,
   messages: [{ role: "user", content: prompt }],
 }, ctrl.signal);
@@ -8681,9 +8741,33 @@ function languageInstruction(lang, strict) {
     : "Minden felhasználónak látható szöveget magyarul adj. A forrásadatok lehetnek angolul, de csak háttérként használd őket.";
 }
 
+/* CLAUDE FIX R2: English worlds must get English text — the model's own
+   "language":"en" claim is not enough when the values are Hungarian. */
+function generatedVisibleStrings(value, key = "", out = []) {
+  if (out.length > 400) return out;
+  if (typeof value === "string") {
+    if (!/^(?:id|ids|language|image|imageId|imagePrompt|postId|post_id|targetId|target_id|a|b|to|from|authorId|reply_to|replyTo|kind|type|status|bond|hangnem|tone)$/i.test(key)) out.push(value);
+  } else if (Array.isArray(value)) {
+    value.forEach((item) => generatedVisibleStrings(item, key, out));
+  } else if (value && typeof value === "object") {
+    Object.entries(value).forEach(([k, v]) => generatedVisibleStrings(v, k, out));
+  }
+  return out;
+}
+
+function generatedTextLooksHungarian(result) {
+  const text = generatedVisibleStrings(result).join(" \n ");
+  if (!text.trim()) return false;
+  const huOnlyLetters = (text.match(/[őűŐŰ]/g) || []).length;
+  const huWords = (text.match(/(?<![\p{L}])(?:és|hogy|nem|vagy|még|csak|már|egy|van|vagyok|neked|téged|engem|nekem|mert|akkor|miért|hol|itt|ott|meg|lesz|volt)(?![\p{L}])/giu) || []).length;
+  const enWords = (text.match(/\b(?:the|and|you|with|from|that|this|is|are|was|were|your|their|what|not|but|for)\b/gi) || []).length;
+  return huOnlyLetters >= 3 || (huWords >= 4 && huWords > enWords);
+}
+
 function validateGeneratedLanguage(result, expectedLanguage) {
   if (!result || typeof result !== "object") return false;
   const expected = asLang(expectedLanguage);
+  if (expected === "en" && generatedTextLooksHungarian(result)) return false;
   if (result.language) return asLang(result.language) === expected;
   const text = JSON.stringify(result);
   const huMarks = (text.match(/[áéíóöőúüűÁÉÍÓÖŐÚÜŰ]/g) || []).length;
@@ -8755,6 +8839,7 @@ async function askJSON(system, prompt, options = {}) {
             Number(options.maxTokens || 1200),
             {
               interactive: priority >= 50 || options.keepFullPrompt === true,
+              priority,
               timeoutMs: Number(options.timeoutMs) || undefined,
               source: String(options && options.source || "askWorldJSON"),
             }
@@ -18494,7 +18579,7 @@ const TERM_TEXT = {
       "Unokatestvér": "Unokatestvér", "Rokon": "Rokon", "Após / anyós": "Após / anyós", "Meny / vő": "Meny / vő",
       "Sógor / sógornő": "Sógor / sógornő", "Járnak": "Járnak", "Jegyesek": "Jegyesek", "Házastárs": "Házastárs",
       "Exek": "Exek", "Titkos viszony": "Titkos viszony", "Osztálytárs": "Osztálytárs", "Szomszéd": "Szomszéd",
-      "Munkatárs": "Munkatárs", "Crush": "Crush", "Kölcsönös crush": "Kölcsönös crush", "Főnök": "Főnök",
+      "Munkatárs": "Munkatárs", "Crush": "Crush", "Kölcsönös crush": "Kölcsönös crush", "Megszállottság": "Megszállottság", "Főnök": "Főnök",
       "Beosztott": "Beosztott", "Mentor": "Mentor", "Tanítvány": "Tanítvány", "Tanár": "Tanár", "Edző": "Edző",
       "Teammate": "Csapattárs", "Frenemy": "Barát-ellenség", "Obsession": "Megszállottság", "Hate": "Gyűlölet",
     },
@@ -18535,7 +18620,7 @@ const TERM_TEXT = {
       "Unokatestvér": "Cousin", "Rokon": "Relative", "Após / anyós": "Parent-in-law", "Meny / vő": "Daughter/son-in-law",
       "Sógor / sógornő": "Sibling-in-law", "Járnak": "Dating", "Jegyesek": "Engaged", "Házastárs": "Spouse",
       "Exek": "Exes", "Titkos viszony": "Secret affair", "Osztálytárs": "Classmate", "Szomszéd": "Neighbor",
-      "Munkatárs": "Coworker", "Crush": "Crush", "Kölcsönös crush": "Mutual crush", "Főnök": "Boss",
+      "Munkatárs": "Coworker", "Crush": "Crush", "Kölcsönös crush": "Mutual crush", "Megszállottság": "Obsession", "Főnök": "Boss",
       "Beosztott": "Subordinate", "Mentor": "Mentor", "Tanítvány": "Student", "Tanár": "Teacher", "Edző": "Coach",
       "Teammate": "Teammate", "Frenemy": "Frenemy", "Obsession": "Obsession", "Hate": "Hate",
     },
@@ -29172,7 +29257,7 @@ Formátum:
       maxTokens: single
         ? 1800
         : 4096,
-      ...(eventBatch ? { keepFullPrompt: true, timeoutMs: 60000, priority: 40, source: "event-feed-batch" } : {}),
+      ...(eventBatch ? { keepFullPrompt: true, timeoutMs: 60000, priority: 60, source: "event-feed-batch" } : {}),
     }
   );
 }
@@ -34222,7 +34307,7 @@ Formátum:
  "relationshipUpdates":[
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
-}${TAIL}`));
+}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${TAIL}`));
 
       const resolveSceneTurns = (candidateOut) =>
         (candidateOut && Array.isArray(candidateOut.turns)
@@ -51338,7 +51423,7 @@ function eventDrivenRosterTail(w, cast, ctx) {
     ].filter(Boolean).join("\n");
   }).join("\n");
   const triggerIds = Array.isArray(ctx && ctx.triggerPostIds) ? ctx.triggerPostIds.filter(Boolean) : [];
-  return "\n\n==== EBBEN A KÖRBEN EZEK A KARAKTEREK POSZTOLNAK — KÖTELEZŐ ====\n" +
+  return "\n\n" + PROTECTED_TAIL_MARKER + "\n==== EBBEN A KÖRBEN EZEK A KARAKTEREK POSZTOLNAK — KÖTELEZŐ ====\n" +
     "Pontosan " + need + " új posztot adj vissza a \"posts\" tömbben, mindegyiket MÁS szerző írja, és a \"posts[].id\" mező CSAK az alábbi id-k egyike lehet (pontosan így).\n" +
     "Minden poszt alá 2–5 komment kerüljön más szereplőktől, a kommentelő pontos id-jával.\n" +
     "Nem mindegyik poszt szólhat " + playerName + "-ról; legyen, aki a saját életéről posztol.\n" +
@@ -55613,6 +55698,21 @@ export default function App() {
   }, [meId]);
   const tt = useCallback((hu, en) => (lang === "en" ? en : hu), [lang]);
 
+  /* CLAUDE FIX R2: one language everywhere. The account's language in the world
+     (which the AI already uses) also drives the interface on every device, so a
+     phone that once stored "hu" cannot show a Hungarian UI next to English AI text. */
+  const accountLanguage = world && meId && world.userSettings && world.userSettings[meId]
+    ? world.userSettings[meId].language
+    : "";
+  useEffect(() => {
+    if (!langReady || !accountLanguage) return;
+    const next = asLang(accountLanguage);
+    if (next !== lang) {
+      saveLang(next);
+      setLangState(next);
+    }
+  }, [langReady, accountLanguage]);
+
   const installAuthoritativeWorld = useCallback((serverWorld, serverMeId, reason = "sync") => {
     if (!serverWorld) return false;
 
@@ -58902,6 +59002,17 @@ function directedHiddenCanon(text) {
 }
 
 function inferCanonicalRelationshipBaseline(w, actor, target) {
+  const reading = relationshipReadingResult(w, actor, target);
+  if (reading) {
+    /* The AI read the whole entry, so its label wins over the keyword guess
+       ("used to be friends with her brother" is not a sibling bond). */
+    const family = FIXED_BONDS.indexOf(String(reading.bond || "")) >= 0;
+    return { score: reading.score, bond: reading.bond, fixed: family, hidden: reading.hidden, mood: reading.mood, why: reading.why, source: "connections-ai" };
+  }
+  return inferCanonicalRelationshipBaselineFromText(w, actor, target);
+}
+
+function inferCanonicalRelationshipBaselineFromText(w, actor, target) {
   const legacy = legacyInferCanonicalRelationshipBaseline(w, actor, target);
 
   if (!w || !actor || !target || actor.id === target.id) return legacy;
@@ -61403,7 +61514,7 @@ function groundedRepairKnownFalseBrentIncident(w) {
   });
   state.falseBrentRollbackV1 = now();
   Object.values(w.notify || {}).flat().forEach((note) => {
-    if (note && GROUNDED_FALSE_BRENT_RE.test(String(note.text || ""))) note.text = groundedSanitizeNotificationText(String(note.text || "") + " • [Hibás, kitalált esemény — automatikusan visszaállítva]");
+    if (note && GROUNDED_FALSE_BRENT_RE.test(String(note.text || ""))) note.text = groundedSanitizeNotificationText(String(note.text || "") + (worldLanguage(w, w.meId) === "en" ? " • [Invented event — automatically reverted]" : " • [Hibás, kitalált esemény — automatikusan visszaállítva]"));
   });
 }
 
@@ -61447,13 +61558,13 @@ function autonomousDmTriggerDirective(w, bot) {
   if (!ctx || !bot || String(ctx.botId) !== String(bot.id)) return "";
   const player = (w && w.player && w.player.name) || "a játékos";
   if (ctx.trigger === "follow-not-returned") {
-    return "\n\nEZÉRT ÍRSZ MOST — VALÓDI, MEGTÖRTÉNT ESEMÉNY (KÖTELEZŐ, \"skip\": false):\n" +
+    return "\n\n" + PROTECTED_TAIL_MARKER + "\nEZÉRT ÍRSZ MOST — VALÓDI, MEGTÖRTÉNT ESEMÉNY (KÖTELEZŐ, \"skip\": false):\n" +
       "Bekövetted " + player + " profilját, de " + player + " NEM követett vissza. A személyiséged miatt ez zavar. " +
       "Ebben a DM-ben erre reagálj a saját hangodon: szóvá teszed, kérdőre vonod, sértődötten, rámenősen vagy célzósan rákérdezel, miért nem követ vissza. " +
       "Ne találj ki más okot, ne kérj bocsánatot, és ne írj semleges small talkot helyette.";
   }
   if (ctx.causeText) {
-    return "\n\nEZ A MEGTÖRTÉNT ESEMÉNY INDÍTOTTA A DM-ET (erre reagálj, ne találj ki mást):\n" + String(ctx.causeText).slice(0, 400);
+    return "\n\n" + PROTECTED_TAIL_MARKER + "\nEZ A MEGTÖRTÉNT ESEMÉNY INDÍTOTTA A DM-ET (erre reagálj, ne találj ki mást):\n" + String(ctx.causeText).slice(0, 400);
   }
   return "";
 }
@@ -61516,13 +61627,196 @@ function groundedDueFollowBackAction(w) {
   return null;
 }
 
+
+/* =====================================================================
+   CLAUDE FIX R2 — RELATIONSHIP READING
+   Each character's own Connections entries are read ONCE by the AI (cached by
+   a hash of the text) into a directed relationship: score, bond, visible mood,
+   hidden feeling, and attraction / fear / obsession / trust. The keyword
+   mapper stays only as a fallback. When a reading arrives, the live
+   relationship is corrected but the points earned in play are kept.
+   ===================================================================== */
+const RELATIONSHIP_READING_MIN_GAP_MS = 40 * 1000;
+const RELATIONSHIP_READING_RETRY_MS = 10 * 60 * 1000;
+const RELATIONSHIP_READING_BATCH = 10;
+const RELATIONSHIP_READING_CHECKED = new Map();
+
+function relationshipReadingState(w) {
+  const sim = ensureSimState(w);
+  if (!sim) return null;
+  if (!sim.relationshipReading || typeof sim.relationshipReading !== "object" || Array.isArray(sim.relationshipReading)) sim.relationshipReading = {};
+  return sim.relationshipReading;
+}
+
+function relationshipReadingSnippet(w, actor, target) {
+  if (!w || !actor || !target || actor.id === target.id || isMediaAccount(w, target.id)) return "";
+  try {
+    return String(connectionCanonSnippetAbout(w, actor, target, 2500) || "");
+  } catch (error) {
+    return "";
+  }
+}
+
+function relationshipReadingResult(w, actor, target) {
+  if (!w || !actor || !target) return null;
+  const state = w.sim && w.sim.relationshipReading;
+  const row = state && state[actor.id] && state[actor.id].targets && state[actor.id].targets[target.id];
+  if (!row) return null;
+  const snippet = relationshipReadingSnippet(w, actor, target);
+  if (!snippet || row.hash !== simsSocialStableHash(snippet)) return null;
+  return row;
+}
+
+function relationshipReadingDueTargets(w, actor) {
+  const state = relationshipReadingState(w);
+  const done = (state && state[actor.id] && state[actor.id].targets) || {};
+  return allSubjects(w)
+    .filter((target) => target && target.id && target.id !== actor.id)
+    .map((target) => ({ target, snippet: relationshipReadingSnippet(w, actor, target) }))
+    .filter((row) => row.snippet && (!done[row.target.id] || done[row.target.id].hash !== simsSocialStableHash(row.snippet)));
+}
+
+function relationshipReadingDueAction(w) {
+  if (!w || !w.meId) return null;
+  const state = relationshipReadingState(w);
+  if (!state) return null;
+  const sim = ensureSimState(w);
+  if (now() - Number(sim.relationshipReadingLastAt || 0) < RELATIONSHIP_READING_MIN_GAP_MS) return null;
+  const subjects = allSubjects(w).filter((c) => c && c.id && !isMediaAccount(w, c.id));
+  const roster = subjects.map((c) => c.id + ":" + String(c.name || "") + ":" + String(c.username || "")).join("|");
+  for (const actor of subjects) {
+    const meta = state[actor.id] || {};
+    if (meta.failedAt && now() - Number(meta.failedAt) < RELATIONSHIP_READING_RETRY_MS) continue;
+    const sourceKey = simsSocialStableHash(String(actor.connections || "") + "\n" + roster + "\n" + Object.keys(meta.targets || {}).length);
+    if (RELATIONSHIP_READING_CHECKED.get(actor.id) === sourceKey) continue;
+    const due = relationshipReadingDueTargets(w, actor);
+    if (!due.length) { RELATIONSHIP_READING_CHECKED.set(actor.id, sourceKey); continue; }
+    return mkAction("relationship-reading", "relationship-reading:" + actor.id + ":" + simsSocialStableHash(due.map((d) => d.target.id + d.snippet).join("|")), { actorId: actor.id }, "memory");
+  }
+  return null;
+}
+
+const RELATIONSHIP_READING_BONDS = ["Anya", "Apa", "Szülő", "Fia", "Lánya", "Testvér", "Ikertestvér", "Féltestvér", "Mostohatestvér", "Mostohaszülő", "Nagyszülő", "Unoka", "Unokatestvér", "Nagynéni", "Nagybácsi", "Rokon", "Ismerős", "Barát", "Közeli barát", "Legjobb barát", "Crush", "Kölcsönös crush", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony", "Rivális", "Ellenség", "Osztálytárs", "Szomszéd", "Munkatárs", "Főnök", "Beosztott", "Mentor", "Tanítvány", "Edző", "Tanár", "Megszállottság"];
+
+async function genRelationshipReading(w, actor, due) {
+  const en = worldLanguage(w, w.meId) === "en";
+  const lang = en ? "English" : "Hungarian";
+  const targets = due.slice(0, RELATIONSHIP_READING_BATCH);
+  const prompt = [
+    "RELATIONSHIP READING — ONE-TIME ANALYSIS OF ONE CHARACTER SHEET.",
+    "Actor: " + actor.name + " [" + actor.id + "]" + (actor.personality ? " — personality: " + cut(String(actor.personality), 400) : ""),
+    "Below are the actor's OWN Connections entries about specific people. They describe how THE ACTOR relates to each person. Direction matters: return only the actor's feelings toward the target, never the target's feelings.",
+    "",
+    "For EACH target read the whole entry carefully and return:",
+    "- score: -100..100, the actor's overall warmth toward the target. Fear, hatred, contempt, distrust push it down; love, loyalty, trust push it up. Mixed feelings land in between. Intensity is NOT friendship: an obsession or a fearful attraction is not a friendship.",
+    "- bond: the structural relationship label. Choose one of: " + RELATIONSHIP_READING_BONDS.join(", ") + " — or a short custom label if none fits (e.g. \"Ex-lover\", \"Stalker\"). Use Barát / Közeli barát / Legjobb barát ONLY if the entry says they are actually friends NOW. Use Crush for one-sided or unspoken attraction, Kölcsönös crush only if the entry says the attraction is mutual, Megszállottság for obsession.",
+    "- mood: 2-10 words in " + lang + ": how the actor visibly feels toward the target (e.g. \"afraid of him, yet drawn to him\").",
+    "- hidden: in " + lang + ", the feeling the actor hides or does not admit (or empty).",
+    "- attraction, fear, obsession, trust: 0-100 each.",
+    "- why: one short " + lang + " sentence that points to the entry.",
+    "Stay conservative when the entry is ambiguous. Never invent history. Use a family label ONLY for the actor's own relative (not for \"her brother's friend\"); for a relative, describe the feeling in mood/score.",
+    "",
+    "TARGETS:",
+    ...targets.map((row) => "- id=\"" + row.target.id + "\" " + row.target.name + ": " + cut(row.snippet, 1500)),
+    "",
+    "JSON ONLY:",
+    '{"targets":[{"id":"TARGET_ID","score":0,"bond":"","mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"why":""}]}',
+  ].join("\n");
+  return askWorldJSON(w, engineFor(w), prompt, { maxTokens: 1600, priority: 5, source: "relationship-reading" });
+}
+
+function applyRelationshipReadingToLive(n, actorId, targetId, oldBase, newBase) {
+  const live = getRel(n, actorId, targetId) || EMPTY_REL;
+  if (relationshipBaselineIsManual(oldBase)) return null;
+  const oldScore = oldBase ? Number(oldBase.score) || 0 : Number(live.score) || 0;
+  const earned = Math.max(-40, Math.min(40, (Number(live.score) || 0) - oldScore));
+  const patch = { score: clampRelationshipScore((Number(newBase.score) || 0) + earned) };
+  const liveBond = String(live.bond || live.type || "");
+  /* A friendship / acquaintance label that the sheet contradicts (obsession, attraction,
+     fear, hatred) came from the old keyword reader, so it is replaced. Bonds reached in
+     play (dating, engaged, married, exes) are never touched. */
+  const weakLiveBond = !liveBond || /^(?:bar[aá]t|k[oö]zeli bar[aá]t|legjobb bar[aá]t|ismer[oő]s|friend|close friend|best friend|acquaintance)$/i.test(liveBond.trim());
+  const committedLiveBond = /j[aá]rnak|jegyes|h[aá]zast[aá]rs|exek|dating|engaged|married|spouse|\bex/i.test(liveBond);
+  if (!live.fixed && newBase.bond && !committedLiveBond && (weakLiveBond || !oldBase || liveBond === String(oldBase.bond || oldBase.type || ""))) patch.bond = newBase.bond;
+  const keywordMood = /^(?:(?:attraction|dependency|distrust|family bond|fear|friendship|hatred|jealousy|love|loyalty|obsessive fixation|possessiveness|protectiveness|resentment|rivalry|complex directed relationship)(?:,\s*|$))+$/i.test(String(live.mood || "").trim());
+  if (!String(live.mood || "").trim() || keywordMood || (oldBase && String(live.mood || "") === String(oldBase.mood || ""))) patch.mood = String(newBase.mood || "").slice(0, 160);
+  if (!String(live.hidden || "").trim() || (oldBase && String(live.hidden || "") === String(oldBase.hidden || ""))) patch.hidden = String(newBase.hidden || "").slice(0, 500);
+  setRel(n, actorId, targetId, patch);
+  return { before: live, after: getRel(n, actorId, targetId) };
+}
+
+async function runRelationshipReadingAction(view, update, action) {
+  const actorId = String(action.payload && action.payload.actorId || "");
+  const actor = charById(view, actorId);
+  update((n) => { ensureSimState(n).relationshipReadingLastAt = now(); });
+  if (!actor) return null;
+  const due = relationshipReadingDueTargets(view, actor).slice(0, RELATIONSHIP_READING_BATCH);
+  if (!due.length) return "relationship-reading-nothing";
+  let out = null;
+  try {
+    out = await genRelationshipReading(view, actor, due);
+  } catch (error) {
+    update((n) => {
+      const state = relationshipReadingState(n);
+      state[actorId] = { ...(state[actorId] || {}), failedAt: now() };
+      groundedEventLog(n, "relationship-reading", "failed", actor.name + ": " + String(error && error.message || error || "AI error"), "sheet:" + actorId);
+    });
+    return null;
+  }
+  const rows = Array.isArray(out && out.targets) ? out.targets : [];
+  update((n) => {
+    const state = relationshipReadingState(n);
+    const liveActor = charById(n, actorId);
+    if (!liveActor) return;
+    const entry = state[actorId] = { ...(state[actorId] || {}), failedAt: 0, at: now(), targets: { ...((state[actorId] && state[actorId].targets) || {}) } };
+    const store = ensureRelationshipBaselineStore(n);
+    due.forEach(({ target }) => {
+      const row = rows.find((r) => r && findChar(n, r.id) === target.id);
+      const liveTarget = charById(n, target.id);
+      const snippet = liveTarget ? relationshipReadingSnippet(n, liveActor, liveTarget) : "";
+      if (!row || !snippet) return;
+      entry.targets[target.id] = {
+        hash: simsSocialStableHash(snippet),
+        score: clampRelationshipScore(Number(row.score) || 0),
+        bond: String(row.bond || "").trim().slice(0, 60),
+        mood: String(row.mood || "").trim().slice(0, 160),
+        hidden: String(row.hidden || "").trim().slice(0, 300),
+        why: String(row.why || "").trim().slice(0, 300),
+        attraction: Math.max(0, Math.min(100, Number(row.attraction) || 0)),
+        fear: Math.max(0, Math.min(100, Number(row.fear) || 0)),
+        obsession: Math.max(0, Math.min(100, Number(row.obsession) || 0)),
+        trust: Math.max(0, Math.min(100, Number(row.trust) || 0)),
+        at: now(),
+      };
+      const key = relKey(actorId, target.id);
+      const oldBase = store[key] ? { ...store[key] } : null;
+      const newBase = inferCanonicalRelationshipBaseline(n, liveActor, liveTarget);
+      if (!newBase || relationshipBaselineIsManual(oldBase)) return;
+      store[key] = { ...relationshipBaselineSnapshot(newBase, "connections-ai"), ...newBase, updatedAt: now() };
+      const changed = applyRelationshipReadingToLive(n, actorId, target.id, oldBase, newBase);
+      if (changed) {
+        const b = changed.before || EMPTY_REL, a = changed.after || EMPTY_REL;
+        groundedEventLog(n, "relationship-reading", "applied",
+          liveActor.name + " → " + liveTarget.name + ": " + (b.bond ? localizedBond(b.bond, worldLanguage(n, n.meId)) : "—") + " " + (Number(b.score) || 0) + " → " + (a.bond ? localizedBond(a.bond, worldLanguage(n, n.meId)) : "—") + " " + (Number(a.score) || 0) + (a.mood ? " · " + a.mood : ""),
+          "sheet:" + actorId, { targetId: target.id });
+      }
+    });
+  });
+  return "relationship-reading";
+}
+
 function planAutoAction(view) {
   const followBack = groundedDueFollowBackAction(view);
   if (followBack) return followBack;
+  const reading = relationshipReadingDueAction(view);
+  if (reading) return reading;
   return legacyGroundedPlanAutoAction(view);
 }
 
 async function runSimulationAction(view, update, action, addImage) {
+  if (action && action.type === "relationship-reading") {
+    return runRelationshipReadingAction(view, update, action);
+  }
   if (action && action.type === "npc-pair-reaction") {
     const eventId = String(action.payload && action.payload.eventId || "");
     const sourceEvent = (view.socialEvents || []).find((row) => row && (String(row.id || "") === eventId || String(row.refId || "") === eventId));
@@ -61630,6 +61924,7 @@ function groundedRegisterPlayerPostInvitation(w, post, comment) {
 }
 
 function GroundedInvitationsPanel({ w, update, onOpenScene }) {
+  const { tt } = useLang();
   const pending = (w.invitations || []).filter((inv) => inv && inv.status === "pending");
   if (!pending.length) return null;
   const decide = (invite, accept) => {
@@ -61641,7 +61936,7 @@ function GroundedInvitationsPanel({ w, update, onOpenScene }) {
       live.resolvedAt = now();
       if (accept) {
         const from = charById(n, live.fromId);
-        const scene = { id: "scene_" + uid(), title: (from ? from.name + " — " : "") + (live.where || "Meghívás"), setting: live.where || live.context || "Invitation meetup", goal: live.context || "Continue the accepted invitation naturally.", cast: (Array.isArray(live.participantIds) ? live.participantIds : [live.fromId]).filter((id) => id && !isHuman(n, id)), turns: [], open: true, createdAt: now(), ts: now(), language: worldLanguage(n, n.meId), invitationId: live.id, invitationContext: live.context, invitationParticipants: Array.isArray(live.participantIds) ? live.participantIds.slice() : [n.meId, live.fromId].filter(Boolean) };
+        const scene = { id: "scene_" + uid(), title: (from ? from.name + " — " : "") + (live.where || (worldLanguage(n, n.meId) === "en" ? "Invitation" : "Meghívás")), setting: live.where || live.context || "Invitation meetup", goal: live.context || "Continue the accepted invitation naturally.", cast: (Array.isArray(live.participantIds) ? live.participantIds : [live.fromId]).filter((id) => id && !isHuman(n, id)), turns: [], open: true, createdAt: now(), ts: now(), language: worldLanguage(n, n.meId), invitationId: live.id, invitationContext: live.context, invitationParticipants: Array.isArray(live.participantIds) ? live.participantIds.slice() : [n.meId, live.fromId].filter(Boolean) };
         n.scenes = Array.isArray(n.scenes) ? n.scenes : [];
         n.scenes.unshift(scene);
         createdSceneId = scene.id;
@@ -61652,13 +61947,13 @@ function GroundedInvitationsPanel({ w, update, onOpenScene }) {
   };
   return (
     <div className="card" style={{ marginTop: 0 }}>
-      <div className="between"><div><div className="name">Meghívások</div><div className="hint">{pending.length} függő meghívás</div></div><span className="mono" style={{ color: "var(--rose)" }}>{pending.length}</span></div>
+      <div className="between"><div><div className="name">{tt("Meghívások", "Invitations")}</div><div className="hint">{pending.length} {tt("függő meghívás", "pending invitation(s)")}</div></div><span className="mono" style={{ color: "var(--rose)" }}>{pending.length}</span></div>
       {pending.map((inv) => (
         <div key={inv.id} style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
           <div className="name">{nameOfIn(w, inv.fromId)}</div>
-          <div className="hint">{inv.where ? "Hova: " + inv.where : "Hova: a meghívásban megadott hely"}{" · "}{inv.when ? "Mikor: " + inv.when : "Mikor: nincs pontosítva"}</div>
+          <div className="hint">{tt("Hova: ", "Where: ") + (inv.where || tt("a meghívásban megadott hely", "as in the invitation"))}{" · "}{tt("Mikor: ", "When: ") + (inv.when || tt("nincs pontosítva", "not specified"))}</div>
           <div className="body" style={{ fontSize: 13 }}>{inv.context}</div>
-          <div className="row" style={{ marginTop: 9 }}><button className="btn tiny primary" onClick={() => decide(inv, true)}>Elfogadom</button><button className="btn tiny" onClick={() => decide(inv, false)}>Elutasítom</button></div>
+          <div className="row" style={{ marginTop: 9 }}><button className="btn tiny primary" onClick={() => decide(inv, true)}>{tt("Elfogadom", "Accept")}</button><button className="btn tiny" onClick={() => decide(inv, false)}>{tt("Elutasítom", "Decline")}</button></div>
         </div>
       ))}
     </div>
@@ -61674,19 +61969,30 @@ function Chat(props) {
   return (<>{!openId ? <GroundedInvitationsPanel w={w} update={update} onOpenScene={props.onOpenScene} /> : null}<LegacyGroundedChat {...props} /></>);
 }
 
-function GroundedEventLogPanel({ w }) {
+function GroundedEventLogPanel({ w, update }) {
+  const { tt } = useLang();
   const rows = (w.eventLog || []).slice(0, 60);
+  const rereadRelationships = () => {
+    if (typeof update !== "function") return;
+    update((n) => {
+      const sim = ensureSimState(n);
+      if (sim) { sim.relationshipReading = {}; sim.relationshipReadingLastAt = 0; }
+      RELATIONSHIP_READING_CHECKED.clear();
+      groundedEventLog(n, "relationship-reading", "started", "Re-reading every character's Connections with the AI (one character about every 40 seconds).", "manual");
+    });
+  };
   return (
     <div className="card" style={{ marginTop: 0 }}>
-      <div className="between"><div><div className="name">Eseménynapló</div><div className="hint">Trigger → reakció → eredmény, konkrét forrással</div></div><span className="mono">{rows.length}</span></div>
-      {!rows.length ? <p className="hint">Még nincs naplózott esemény.</p> : null}
-      {rows.map((row) => (<div key={row.id} style={{ marginTop: 10, paddingTop: 9, borderTop: "1px solid var(--line)" }}><div className="between"><span className="mono" style={{ fontSize: 10 }}>{row.kind}</span><span className="hint">{row.status}</span></div><div style={{ marginTop: 3, fontSize: 12.5 }}>{row.message}</div>{row.sourceRef ? <div className="hint mono" style={{ marginTop: 3 }}>forrás: {row.sourceRef}</div> : null}</div>))}
+      <div className="between"><div><div className="name">{tt("Eseménynapló", "Event log")}</div><div className="hint">{tt("Trigger → reakció → eredmény, konkrét forrással", "Trigger → reaction → result, with the concrete source")}</div></div><span className="mono">{rows.length}</span></div>
+      <div className="row" style={{ marginTop: 8 }}><button className="btn tiny" onClick={rereadRelationships}>{tt("Kapcsolatok újraolvasása a karakterlapokból", "Re-read relationships from the character sheets")}</button></div>
+      {!rows.length ? <p className="hint">{tt("Még nincs naplózott esemény.", "No logged events yet.")}</p> : null}
+      {rows.map((row) => (<div key={row.id} style={{ marginTop: 10, paddingTop: 9, borderTop: "1px solid var(--line)" }}><div className="between"><span className="mono" style={{ fontSize: 10 }}>{row.kind}</span><span className="hint">{row.status}</span></div><div style={{ marginTop: 3, fontSize: 12.5 }}>{row.message}</div>{row.sourceRef ? <div className="hint mono" style={{ marginTop: 3 }}>{tt("forrás", "source")}: {row.sourceRef}</div> : null}</div>))}
     </div>
   );
 }
 
 function World(props) {
-  return (<><GroundedEventLogPanel w={props.w} /><LegacyGroundedWorld {...props} /></>);
+  return (<><GroundedEventLogPanel w={props.w} update={props.update} /><LegacyGroundedWorld {...props} /></>);
 }
 
 
