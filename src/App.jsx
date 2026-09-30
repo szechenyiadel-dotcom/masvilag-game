@@ -8601,8 +8601,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     prompt = preserveEdges(prompt, backgroundPromptCap, "background prompt");
   }
   if (budgeted.wasCompacted) {
-    console.warn(
-      "AI request compacted before provider call:",
+    console.info(
+      "[ai-budget] long request shortened before sending (protected tail kept):",
       `system=${system.length} chars`,
       `prompt=${prompt.length} chars`
     );
@@ -8733,8 +8733,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
 function languageInstruction(lang, strict) {
   if (lang === "en") {
     return strict
-      ? "OUTPUT LANGUAGE: English only. Do not output Hungarian in any user-visible field."
-      : "Generate every user-visible value in English. Some source fields may be Hungarian; use them only as background, never copy their language.";
+      ? "OUTPUT LANGUAGE: English only. Do not output Hungarian in any user-visible field. Write natural, idiomatic, native-speaker English — the way young adults actually text and post (contractions, casual rhythm, slang only where the character would use it). Never sound translated, stiff, formal or like an assistant; never mirror Hungarian word order."
+      : "Generate every user-visible value in English. Some source fields may be Hungarian; use them only as background, never copy their language. Write natural, idiomatic, native-speaker English — the way young adults actually text and post (contractions, casual rhythm, slang only where the character would use it). Never sound translated, stiff, formal or like an assistant; never mirror Hungarian word order.";
   }
   return strict
     ? "KIMENETI NYELV: kizárólag magyar. Ne adj angol nyelvű felhasználói szöveget."
@@ -42997,7 +42997,10 @@ async function genGossipMediaStory(
   const style =
     local
       ? `
-SPILL&CHILL HANG:
+SPILL&CHILL HANG — GOSSIP GIRL STÍLUS:
+- névtelen, mindentudó narrátor, aki közvetlenül az olvasóihoz beszél ("Spotted:", "Beacon Falls, wake up", költői kérdések, sokatmondó célzások);
+- rövid (2-5 mondat), szaftos, szellemes, kicsit kegyetlen, de CSAK a nyilvános/kiszivárgott tényekből dolgozik;
+- az érintetteket @névvel említi, és a végén saját, a stílushoz illő aláírás ("XOXO, Spill&Chill" jellegű — ne a sorozat szó szerinti szlogenje);
 - helyi / kisvárosi gossip account;
 - cheeky, kíváncsi, ironikus, enyhén gonosz, játékosan kegyetlen lehet;
 - olyan érzés legyen, mintha mindenki ismerne mindenkit;
@@ -51447,12 +51450,49 @@ function eventDrivenRosterTail(w, cast, ctx) {
     ].filter(Boolean).join("\n");
   }).join("\n");
   const triggerIds = Array.isArray(ctx && ctx.triggerPostIds) ? ctx.triggerPostIds.filter(Boolean) : [];
-  return "\n\n" + PROTECTED_TAIL_MARKER + "\n==== EBBEN A KÖRBEN EZEK A KARAKTEREK POSZTOLNAK — KÖTELEZŐ ====\n" +
+  const gossipId = String(ctx && ctx.gossipPostId || "");
+  const gossipBlock = gossipId
+    ? "\n==== PLETYKAOLDAL POSZTJA — KÖTELEZŐ ====\n" +
+      "Adj vissza egy \"gossipPost\" objektumot: {\"postId\":\"" + gossipId + "\",\"text\":\"...\"}. A text a pletykaoldal (" + String(ctx.gossipAccountName || "Spill&Chill") + ") posztja legyen GOSSIP GIRL stílusban: névtelen, mindentudó narrátor, \"Spotted:\", sokatmondó célzások, költői kérdés, 2-5 mondat, az érintettek @névvel, a végén saját XOXO-s aláírás (ne a sorozat szó szerinti szlogenje). CSAK ezekből a nyilvános tényekből dolgozz, ne találj ki új eseményt:\n" +
+      cut(String(ctx.gossipFacts || ""), 900) + "\n" +
+      "A \"triggerComments\" közé tegyél 3-5 reakciót erre a posztra (postId=\"" + gossipId + "\"): az ÉRINTETTEK is reagáljanak (tagad, visszaszól, nevet rajta, zavarban van), és mások is (kárörvendő, védelmező, féltékeny, kíváncsi). Minden ilyen sorba: \"about\":\"annak az id-ja, akiről a komment szól\", \"hangnem\":\"flirty|supportive|teasing|neutral|jealous|dismissive|hostile\" (a komment hangneme az about személy felé).\n"
+    : "";
+  return "\n\n" + PROTECTED_TAIL_MARKER + gossipBlock + "\n==== EBBEN A KÖRBEN EZEK A KARAKTEREK POSZTOLNAK — KÖTELEZŐ ====\n" +
     "Pontosan " + need + " új posztot adj vissza a \"posts\" tömbben, mindegyiket MÁS szerző írja, és a \"posts[].id\" mező CSAK az alábbi id-k egyike lehet (pontosan így).\n" +
     "Minden poszt alá 2–5 komment kerüljön más szereplőktől, a kommentelő pontos id-jával.\n" +
     "Nem mindegyik poszt szólhat " + playerName + "-ról; legyen, aki a saját életéről posztol.\n" +
     (triggerIds.length ? "A \"triggerComments\" tömbbe is tegyél 2–4 kommentet ezekhez a meglévő posztokhoz: " + triggerIds.join(", ") + ".\n" : "") +
     lines + "\n==== VÉGE ====";
+}
+
+/* CLAUDE FIX R4 (5.3): reactions to a gossip post move the commenter's feelings
+   toward the person the comment is about (public channel, rule-based). */
+function gossipReactionRelationshipImpact(n, postId, beforeCount, rows) {
+  const post = (n.posts || []).find((p) => p && p.id === postId);
+  if (!post) return;
+  const fresh = safePostComments(post).slice(beforeCount).filter((c) => c && c.authorId && !isMediaAccount(n, c.authorId));
+  fresh.forEach((comment) => {
+    const row = (rows || []).find((r) => r && String(r.postId || r.post_id || "") === String(postId) &&
+      findChar(n, r.id !== undefined ? r.id : r.name) === comment.authorId &&
+      String(r.text || "").slice(0, 20) && String(comment.text || "").toLowerCase().includes(String(r.text || "").toLowerCase().slice(0, 12))) ||
+      (rows || []).find((r) => r && String(r.postId || r.post_id || "") === String(postId) && findChar(n, r.id !== undefined ? r.id : r.name) === comment.authorId) || {};
+    const aboutId = row.about ? findChar(n, row.about) : "";
+    if (!aboutId || aboutId === comment.authorId || isMediaAccount(n, aboutId)) return;
+    const tone = normalizePlayerPostCommentTone(row.hangnem || row.tone, comment.text);
+    const raw = PLAYER_POST_TONE_RAW_DELTA[tone] || 0;
+    if (!raw) return;
+    const before = Number((getRel(n, comment.authorId, aboutId) || {}).score) || 0;
+    applyChannelRelationshipChanges(n, [{
+      a: comment.authorId, b: aboutId, delta: raw, micro: true, oneSided: true,
+      why: sysLangText(n, n.meId, "reagált a róla szóló pletykára", "reacted to the gossip about them"),
+    }], "public", { reason: "gossip-reaction" });
+    const after = Number((getRel(n, comment.authorId, aboutId) || {}).score) || 0;
+    if (after !== before) {
+      groundedEventLog(n, "relationship-change", "applied",
+        nameOfIn(n, comment.authorId) + " → " + nameOfIn(n, aboutId) + ": " + (after - before >= 0 ? "+" : "") + (after - before) + " (" + before + "→" + after + "), gossip reaction, tone=" + tone,
+        "comment:" + String(comment.id || "") + "@post:" + String(postId));
+    }
+  });
 }
 
 function eventDrivenFeedDirective() {
@@ -51526,6 +51566,7 @@ function eventDrivenMergeBatchOutputs(w, first, second) {
     ...((first && Array.isArray(first.triggerComments)) ? first.triggerComments : []),
     ...((second && Array.isArray(second.triggerComments)) ? second.triggerComments : []),
   ];
+  merged.gossipPost = (second && second.gossipPost && second.gossipPost.text) ? second.gossipPost : (first && first.gossipPost) || null;
   ["changes", "selfUpdates", "relationshipUpdates"].forEach((key) => {
     merged[key] = [
       ...((first && Array.isArray(first[key])) ? first[key] : []),
@@ -55522,6 +55563,9 @@ if (targetNote) {
         neededPosts,
         excludeAuthorIds,
         triggerPostIds: eventTriggerPostIds,
+        gossipPostId: eventGossipPreview && eventGossipPreview.id ? String(eventGossipPreview.id) : "",
+        gossipFacts: eventGossipPreview ? String(eventGossipPreview.text || "") : "",
+        gossipAccountName: eventGossipPreview ? nameOfIn(generationView, eventGossipPreview.authorId) : "",
       };
       try {
         feedAiCalls += 1;
@@ -55600,7 +55644,20 @@ if (targetNote) {
       liveGossip && liveGossip.id ? String(liveGossip.id) : "",
     ].filter(Boolean);
 
+    if (liveGossip && out && out.gossipPost && String(out.gossipPost.postId || liveGossip.id) === String(liveGossip.id)) {
+      const gossipText = cleanGeneratedUtterance(n, liveGossip.authorId, String(out.gossipPost.text || ""), 900);
+      if (gossipText && gossipText.length > 20) {
+        liveGossip.text = gossipText;
+        if (liveGossip.gossipStory) liveGossip.gossipStory.aiWritten = true;
+        groundedEventLog(n, "gossip-story", "success", "Gossip page post written: " + cut(gossipText, 140), "post:" + liveGossip.id);
+      }
+    }
+    const gossipCommentsBefore = liveGossip ? safePostComments((n.posts || []).find((p) => p && p.id === liveGossip.id)).length : 0;
     generatedCommentCount += eventDrivenApplyTriggerComments(n, out, triggerIds);
+    if (liveGossip) {
+      try { gossipReactionRelationshipImpact(n, liveGossip.id, gossipCommentsBefore, out.triggerComments || []); }
+      catch (error) { console.warn("[gossip] relationship impact failed", error); }
+    }
 
     const freshPosts = (n.posts || []).filter((p) =>
       p &&
@@ -59882,8 +59939,8 @@ function commentRepairLogMissingMemory(w, id, fields) {
   if (COMMENT_MEMORY_REPAIR_LOGGED.has(key)) return;
   COMMENT_MEMORY_REPAIR_LOGGED.add(key);
   const label = commentRepairCharacterLabel(w, id);
-  console.warn(
-    "[memory-repair] hiányzó karakter-emlék inicializálva",
+  console.info(
+    "[memory-repair] missing character memory initialized (normal self-repair)",
     "name=" + label.name,
     "id=" + label.id,
     "fields=" + list.join(",")
