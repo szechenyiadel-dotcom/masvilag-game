@@ -8639,7 +8639,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   messages: [{ role: "user", content: prompt }],
 }, ctrl.signal);
   } catch (e) {
-    if (e && e.name === "AbortError") throw new Error("Az AI nem válaszolt időben.");
+    if (e && e.name === "AbortError") throw new Error(CURRENT_LANG === "en" ? "The AI did not answer in time." : "Az AI nem válaszolt időben.");
     if (e && e.message) {
       if (e && e.retryable === false) {
         const strikeCount = bumpAiStrike(!!requestMeta.interactive);
@@ -8647,7 +8647,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       }
       throw e;
     }
-    throw new Error("Nem sikerült elérni az AI-t (hálózati hiba). A helyi proxy futása és az API kulcsok ellenőrzése szükséges.");
+    throw new Error(CURRENT_LANG === "en" ? "Could not reach the AI (network error)." : "Nem sikerült elérni az AI-t (hálózati hiba). A helyi proxy futása és az API kulcsok ellenőrzése szükséges.");
   } finally {
     clearTimeout(to);
   }
@@ -8665,7 +8665,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     const busy = code === 429 || code === 529 || code === 503;
     if (code === 404 || code === 502) {
       const msg = (data && data.error && data.error.message) || `HTTP ${code}`;
-      const err = new Error(`Az AI-szerver nem érhető el: ${msg}`);
+      const err = new Error(CURRENT_LANG === "en" ? `The AI server is not reachable: ${msg}` : `Az AI-szerver nem érhető el: ${msg}`);
       err.busy = false;
       err.retryable = false;
       // A proxy/config hiba nem rate-limit. Ne indítsunk hamis cooldown bannert.
@@ -8714,19 +8714,22 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
         restMs,
         false
       );
-      const err = new Error(`Az AI most nem győzi — ${Math.ceil(restMs / 1000)} másodperc pihenő.`);
+      const quotaGone = /quota|kvót|egyik használható|no usable|all providers/i.test(String((data && data.error && data.error.message) || ""));
+      const err = new Error(CURRENT_LANG === "en"
+        ? (quotaGone ? `Every AI provider is out of quota right now — retrying in ${Math.ceil(restMs / 1000)} s. (Free Gemini/Mistral limits.)` : `The AI is busy — retrying in ${Math.ceil(restMs / 1000)} s.`)
+        : (quotaGone ? `Minden AI-szolgáltató kerete elfogyott — ${Math.ceil(restMs / 1000)} mp múlva újrapróbálja. (Ingyenes Gemini/Mistral limit.)` : `Az AI most nem győzi — ${Math.ceil(restMs / 1000)} másodperc pihenő.`));
       err.busy = true;
       throw err;
     }
     resetAiStrike(!!requestMeta.interactive);
     const msg = (data && data.error && data.error.message) || `HTTP ${code}`;
-    throw new Error(`Az AI hibát adott: ${msg}`);
+    throw new Error(CURRENT_LANG === "en" ? `The AI returned an error: ${msg}` : `Az AI hibát adott: ${msg}`);
   }
 
   resetAiStrike(!!requestMeta.interactive);   // sikeres hívás: csak ennek a lane-nek tiszta lap
-  if (!data || !data.content) throw new Error("Az AI üres választ adott.");
+  if (!data || !data.content) throw new Error(CURRENT_LANG === "en" ? "The AI returned an empty answer." : "Az AI üres választ adott.");
   const txt = data.content.map((b) => (b.type === "text" ? b.text : "")).join("");
-  if (!txt.trim()) throw new Error("Az AI üres választ adott.");
+  if (!txt.trim()) throw new Error(CURRENT_LANG === "en" ? "The AI returned an empty answer." : "Az AI üres választ adott.");
   return txt;
 }
 

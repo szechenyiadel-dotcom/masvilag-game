@@ -4899,8 +4899,10 @@ function compactGroupChatSystem(text, max = AI_GROUP_CHAT_SYSTEM_CAP) {
 function prepareAIRequestBody(body, priority, source) {
   let system = String(body?.system || "");
   /* CLAUDE FIX R2: player-facing work (scene, DM reply, reactions to the player's post) gets room. */
-  const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (priority >= 50 ? 40000 : 18000);
-  const promptCap = source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (priority >= 50 ? 70000 : 28000);
+  /* R4: the protected tail keeps what matters, so a moderate cap is enough.
+     Bigger requests burned through the free Gemini per-minute token quota. */
+  const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (priority >= 50 ? 22000 : 16000);
+  const promptCap = source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (priority >= 50 ? 40000 : 26000);
 
   if (source === "group-chat") {
     const before = system.length;
@@ -5176,7 +5178,7 @@ async function executeAITask(task) {
     payload: {
       error: {
         message: details.length
-          ? `Egyik használható AI-szolgáltató sem tudta teljesíteni a kérést. ${details.join(" | ")}`
+          ? `No usable AI provider could complete the request (all providers are out of quota or busy) / Egyik AI-szolgáltató sem tudta teljesíteni a kérést. ${details.join(" | ")}`
           : "Egyik konfigurált AI-szolgáltató sem érhető el ehhez a kéréshez.",
         providers: details,
       },
