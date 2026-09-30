@@ -1,0 +1,81 @@
+n,postId,row,label);});const remainder={...payload,comments:[]};try{applied+=Number(legacyFullSpecApplyComments(n,postId,remainder,label)||0);}catch(error){console.warn("[comment-pipeline] non-comment apply step failed; comments already preserved",error);}return applied;}
++function applyComments(n, postId, out, label) {
++  const payload = out && typeof out === "object" ? out : {};
++  const rows = safeAiComments(payload);
++  const post = (n.posts || []).find((p) => p && p.id === postId);
++  const beforeIds = new Set(safePostComments(post).map((c) => c && c.id).filter(Boolean));
++  let applied = 0;
++  rows.forEach((row) => { applied += fullSpecSafeCommentRowApply(n, postId, row, label); });
++  const remainder = { ...payload, comments: [] };
++  try { applied += Number(legacyFullSpecApplyComments(n, postId, remainder, label) || 0); }
++  catch (error) { console.warn("[comment-pipeline] non-comment apply step failed; comments already preserved", error); }
++  const refreshed = (n.posts || []).find((p) => p && p.id === postId);
++  if (refreshed && isHuman(n, refreshed.authorId) && groundedPlayerPostIsInvitation(refreshed)) {
++    safePostComments(refreshed).filter((c) => c && !beforeIds.has(c.id) && !isHuman(n, c.authorId)).forEach((c) => groundedRegisterPlayerPostInvitation(n, refreshed, c));
++  }
++  return applied;
++}
+ function noteComment(...args){try{return legacyFullSpecNoteComment(...args);}catch(error){console.warn("[comment-pipeline] notification failed; comment/relation pipeline continues",error);return null;}}
+ function fullSpecHumanRootComment(w,post,commentId){if(!post||!commentId)return null;const rows=safePostComments(post),byId=new Map(rows.filter(Boolean).map((row)=>[row.id,row]));let current=byId.get(commentId);const seen=new Set();while(current&&!seen.has(current.id)){seen.add(current.id);if(isHuman(w,current.authorId))return current;current=current.parent?byId.get(current.parent):null;}return null;}
+ function fullSpecIsDescendantOf(post,comment,ancestorId){if(!post||!comment||!ancestorId)return false;const rows=safePostComments(post),byId=new Map(rows.filter(Boolean).map((row)=>[row.id,row]));let current=comment;const seen=new Set();while(current&&current.parent&&!seen.has(current.id)){seen.add(current.id);if(current.parent===ancestorId)return true;current=byId.get(current.parent);}return false;}
+@@ -60487,12 +60515,20 @@
+     ) || ""
+   ).trim();
+ 
++  const isQuestion = /\?|\b(?:who|what|when|where|why|how|anyone|valaki|ki|mi|mikor|hol|miért|hogyan)\b/iu.test(visibleText);
++  const isInvitation = /\b(?:anyone\s+up\s+for|who\s+wants\s+to|join\s+me|come\s+with|party|hang\s*out|meet\s+up|coffee|drinks?|dinner|valaki\s+jön|ki\s+jön|gyertek|gyere|buli|találkozz|kávé|ital|vacsora)\b/iu.test(visibleText);
++  const hasImage = Boolean(post && (post.imageId || post.image));
++
+   return {
+     postId: String(post && post.id || ""),
+     authorId: String(post && post.authorId || ""),
+     authorName: nameOfIn(w, post && post.authorId),
+     text: visibleText,
++    isQuestion,
++    isInvitation,
++    hasImage,
+     imageDescription,
++    imageDescriptionStatus: hasImage ? (imageDescription ? "available" : "missing-do-not-infer") : "no-image",
+     mood: String(post && (post.mood || post.feeling || post.vibe) || ""),
+     visibleTags: Array.isArray(post && post.tags) ? post.tags.map(String).slice(0, 16) : [],
+     taggedPeople: [...tagged].map((id) => ({
+@@ -60589,8 +60625,13 @@
+           : (row.authorId !== undefined ? row.authorId : row.name)
+       );
+       const text = String(row.text || "").trim();
++      const reactsTo = String(row.reagal_erre || row.reactsTo || row.trigger || "").trim();
+ 
+       if (!actorId || !allowed.has(actorId) || isHuman(w, actorId) || !text || seen.has(actorId)) return;
++      if (!reactsTo || reactsTo.length < 2) {
++        console.warn("[player-post-comments] rejected=missing-reagal_erre", "character=" + actorId);
++        return;
++      }
+       if (PLAYER_POST_COMMENT_TECH_LEAK_RE.test(text)) {
+         console.warn("[player-post-comments] rejected=technical-leak", "character=" + actorId, "text=" + text.slice(0, 180));
+         return;
+@@ -60600,8 +60641,16 @@
+         return;
+       }
+ 
++      const postWords = new Set(String([postContext.text, postContext.imageDescription, ...(postContext.visibleTags || [])].filter(Boolean).join(" ")).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((x) => x.length >= 3));
++      const groundingWords = String(reactsTo + " " + text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((x) => x.length >= 3);
++      const grounded = !postWords.size || groundingWords.some((x) => postWords.has(x)) || (postContext.isInvitation && /\b(?:yes|yeah|yep|sure|i'?m\s+in|count\s+me\s+in|coming|ott\s+leszek|megyek|benne\s+vagyok|persze|igen)\b/iu.test(text));
++      if (!grounded) {
++        console.warn("[player-post-comments] rejected=off-topic", "character=" + actorId, "reagal_erre=" + reactsTo.slice(0, 120));
++        return;
++      }
++
+       seen.add(actorId);
+-      rows.push({ ...row, id: actorId, text });
++      rows.push({ ...row, id: actorId, text, reagal_erre: reactsTo });
+     } catch (error) {
+       console.warn("[player-post-comments] rejected=invalid-row", error);
+     }
+@@ -60727,9 +60776,13 @@
+       ? "Use the relationship/voice differences; do not force everyone into the same negative, positive or sarcastic attitude."
+       : "Használd a kapcsolat- és voice-különbségeket; ne kényszeríts mindenkit ugyanabba a negatív, pozitív vagy szarkasztikus hangnembe.",
+     en
+-      ? '{"comments":[{"id":"EXACT_CHARACTER_ID","text":"natural comment"}],"changes":[]}'
+-      : '{"comments":[{"id":"PONTOS_KARAKTER_ID","text":"természetes komment"}],"changes":[]}',
++      ? '{"comments":[{"id":"EXACT_CHARACTER_ID","text":"natural comment","reagal_erre":"short exact post detail this comment responds to"}],"changes":[]}'
++      : '{"comments":[{"id":"PONTOS_KARAKTER_ID","text":"
