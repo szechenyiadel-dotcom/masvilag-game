@@ -20,17 +20,12 @@ function one(regex, replacement, label) {
 }
 
 if (!next.includes(`/* ${MARKER} */`)) {
-  one(
-    /groundedRepairKnownFalseBrentIncident\(view\);\s*\n\s*view\.activeSceneId = tab === "scene" && sceneId \? sceneId : "";/,
-    `useEffect(() => {
-    update((n) => {
-      groundedRepairKnownFalseBrentIncident(n);
-    });
-  }, [meId]);
-
-  view.activeSceneId = tab === "scene" && sceneId ? sceneId : "";`,
-    "persisted false-Brent repair"
-  );
+  // Keep the known false-Brent rollback in the same render path where it already existed.
+  // Do NOT introduce a new React hook here: this patch runs inside a component section whose
+  // render branches can return before this point, and adding useEffect caused React #310.
+  if (!/groundedRepairKnownFalseBrentIncident\(view\);\s*\n\s*view\.activeSceneId = tab === "scene" && sceneId \? sceneId : "";/.test(next)) {
+    throw new Error("Grounded final guards aborted: false-Brent repair hook missing.");
+  }
 
   if (!/playerPostContentIsolation:\s*true/.test(next)) {
     throw new Error("Grounded final guards aborted: isolated player-post comment route missing.");
@@ -117,7 +112,7 @@ function applyChannelRelationshipChanges(w, changes, channel, ctx = {}) {
 
 if (next !== original) {
   fs.writeFileSync(appPath, next, "utf8");
-  console.log("Applied grounded final guards: persisted false-event rollback, verified 3–6 comments, and bounded bond transitions.");
+  console.log("Applied grounded final guards without adding React hooks; verified 3–6 comments and bounded bond transitions.");
 } else {
   console.log("Grounded final guards already applied.");
 }
