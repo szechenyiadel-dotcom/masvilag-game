@@ -1,37 +1,32 @@
-name: Phase2 Direct Source Repair
+name: Export Current Main Phase2 Files
 on:
   push:
     branches: [phase2-direct-social-fix]
 permissions:
-  contents: write
+  contents: read
 jobs:
-  repair-and-build:
+  export-main:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      - name: Apply existing chain once
+          ref: main
+      - name: Verify current main invariants
         run: |
-          if ! grep -q 'A POSZT, AMIRE REAGÁLSZ:' src/App.jsx; then
-            npm run social-policy
-          fi
-      - name: Migrate to canonical direct source
-        run: python tools/phase2_direct_source_migration.py
-      - name: Validate server syntax
-        run: node --check server/proxy.js
-      - name: Install dependencies
-        run: npm install --no-audit --no-fund
-      - name: Build
-        run: npm run build
-      - name: Commit canonical direct source
-        run: |
-          git config user.name 'phase2-direct-repair'
-          git config user.email 'actions@users.noreply.github.com'
-          git add src/App.jsx server/proxy.js package.json
-          if git diff --cached --quiet; then
-            echo '[phase2] no source changes to commit'
-          else
-            git commit -m 'Canonicalize social runtime and fix Phase 2 flow'
-            git push origin HEAD:phase2-direct-social-fix
-          fi
+          grep -q 'A POSZT, AMIRE REAGÁLSZ:' src/App.jsx
+          grep -q 'reagal_erre' src/App.jsx
+          grep -q 'groundedRegisterPlayerPostInvitation' src/App.jsx
+          grep -q 'player-post-world' src/App.jsx
+          grep -q 'follow-not-returned' src/App.jsx
+          grep -q 'AI_PROMPT_DEBUG' server/proxy.js
+          grep -q 'apply-patches=disabled' package.json
+          node --check server/proxy.js
+      - name: Archive full ready files
+        uses: actions/upload-artifact@v4
+        with:
+          name: masvilag-phase2-ready-files
+          path: |
+            src/App.jsx
+            server/proxy.js
+            package.json
+          if-no-files-found: error
