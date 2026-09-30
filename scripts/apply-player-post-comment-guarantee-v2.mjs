@@ -182,16 +182,11 @@ async function runSimulationAction(view, update, action, addImage) {
 
   {
     const needle = 'String(action.payload && action.payload.postId || "")';
-    const legacyAt = next.indexOf("async function legacyPlayerPostRunSimulationAction");
-    if (legacyAt < 0) throw new Error("Player-post comment guarantee v2 aborted: legacy action runner not found.");
-    const head = next.slice(0, legacyAt);
-    let tail = next.slice(legacyAt);
-    const count = tail.split(needle).length - 1;
+    const count = next.split(needle).length - 1;
     if (count !== 2) {
-      throw new Error(`Player-post comment guarantee v2 aborted: legacy event-feed post-id anchors expected 2, found ${count}.`);
+      throw new Error(`Player-post comment guarantee v2 aborted: event-feed post-id anchors expected 2, found ${count}.`);
     }
-    tail = tail.split(needle).join('String(eventFeedTrigger === "player-post" ? "" : (action.payload && action.payload.postId || ""))');
-    next = head + tail;
+    next = next.split(needle).join('String(eventFeedTrigger === "player-post" ? "" : (action.payload && action.payload.postId || ""))');
   }
 
   replaceOne(

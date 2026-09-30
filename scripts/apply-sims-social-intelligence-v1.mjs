@@ -151,7 +151,7 @@ function patchApp(original) {
 `;
   next = next.replace(runnerAnchor, summaryHandler + 'if (action.type === "npc-pair-reaction") {');
 
-  const helper = String.raw`
+  const helper = `
 
 /* ${marker} */
 const SIMS_SOCIAL_WORLD_CONTEXT_CAP = 22000;
