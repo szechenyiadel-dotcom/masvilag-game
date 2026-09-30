@@ -1,0 +1,27 @@
+name: Phase2 Source Export
+on:
+  push:
+    branches: [phase2-direct-social-fix]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Archive exact source files
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase2-source
+          path: |
+            src/App.jsx
+            server/proxy.js
+            package.json
+            scripts/apply-player-post-comment-content-isolation-v1.mjs
+            scripts/apply-player-post-comment-guarantee-v2.mjs
+            scripts/apply-event-driven-ai-optimization-v1.mjs
+            scripts/apply-grounded-events-invites-v1.mjs
+            scripts/fix-grounded-events-final-guards-v1.mjs
+            scripts/fix-grounded-runtime-wiring-v3.mjs
+            scripts/apply-automatic-follows.mjs
+          if-no-files-found: error
