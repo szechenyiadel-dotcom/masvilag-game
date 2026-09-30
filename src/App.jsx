@@ -27831,6 +27831,23 @@ function fairCommentCast(w, targetId, post = null) {
     .slice(0, castLimit);
 }
 
+/* CLAUDE FIX R3: the comment being answered (and what it replies to) is repeated
+   in the protected tail, so a long prompt can never lose it. */
+function commentReplyLatestTail(w, post, comment) {
+  if (!post || !comment) return "";
+  const en = worldLanguage(w, w && w.meId) === "en";
+  const parent = comment.parent ? safePostComments(post).find((c) => c && c.id === comment.parent) : null;
+  return "\n\n" + PROTECTED_TAIL_MARKER + "\n" +
+    (en ? "=== THE COMMENT YOU ARE ANSWERING — REPLY TO EXACTLY THIS ===\n" : "=== A KOMMENT, AMIRE VÁLASZOLSZ — PONTOSAN ERRE REAGÁLJ ===\n") +
+    (en ? "Post by " : "Poszt, szerző: ") + nameOfIn(w, post.authorId) + ": \"" + String(post.text || "").slice(0, 300) + "\"\n" +
+    (parent ? (en ? "It replies to " : "Erre válaszol: ") + nameOfIn(w, parent.authorId) + ": \"" + String(parent.text || "").slice(0, 300) + "\"\n" : "") +
+    (en ? "NEWEST comment by " : "LEGÚJABB komment, szerző: ") + nameOfIn(w, comment.authorId) + ": \"" + String(comment.text || "").slice(0, 400) + "\"\n" +
+    (en
+      ? "Answer what this newest comment actually says or implies (e.g. if it says someone cannot come or is not invited, react to THAT). Do not ignore it and do not just repeat your previous point."
+      : "Arra felelj, amit ez a legújabb komment ténylegesen mond vagy sugall (pl. ha azt mondja, hogy valaki nem jöhet / nincs meghívva, arra reagálj). Ne hagyd figyelmen kívül, és ne ismételd a korábbi mondandódat.") +
+    "\n===";
+}
+
 async function legacyVoiceStyleGenReply(w, post, comment, forcedResponderId = "") {
   if (!post || typeof post !== "object" || !comment || typeof comment !== "object") {
     return { comments: [], changes: [], events: [] };
@@ -28149,7 +28166,7 @@ Formátum:
 "relationshipUpdates":[
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
-}${TAIL}`,
+}${commentReplyLatestTail(w, post, comment)}${TAIL}`,
     { maxTokens: 900 }
   );
 
@@ -28243,7 +28260,7 @@ Write ONLY ${directResponder.name}'s natural direct social-media reply.
 - Do not explain the relationship. Do not become assistant-like.
 - Do not copy example phrases from the prompt. Generate a fresh line.
 
-JSON: {"reply":"short natural reply"}${TAIL}`,
+JSON: {"reply":"short natural reply"}${commentReplyLatestTail(w, post, comment)}${TAIL}`,
             {
               maxTokens: 180,
               maxTries: 2,
@@ -28389,7 +28406,7 @@ That draft contradicts the target-specific relationship. This is a GOOD/CLOSE fr
 - Do not write a polished paragraph. Usually 1-10 words.
 - Do not use a severe insult, contempt, cold dismissal, or mean-spirited put-down.
 
-JSON: {"reply":"short friendship-consistent reply"}${TAIL}`,
+JSON: {"reply":"short friendship-consistent reply"}${commentReplyLatestTail(w, post, comment)}${TAIL}`,
           { maxTokens: 180, maxTries: 3 }
         );
 
@@ -28485,7 +28502,7 @@ ${forcedResponder.name} has already been selected by the social scheduler becaus
 - Do not invent a reason that is not supported by the visible thread/character context.
 - No narration. No assistant language.
 
-JSON: {"reply":"short public reply"}${TAIL}`,
+JSON: {"reply":"short public reply"}${commentReplyLatestTail(w, post, comment)}${TAIL}`,
           { maxTokens: 180, maxTries: 2 }
         );
 
@@ -49312,6 +49329,13 @@ function simEnqueue(w, action) {
   if (action.source === "manual" || action.source === "coverage") {
     sim.queue.unshift(action);
     sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
+  } else if (action.source === "player-event") {
+    /* CLAUDE FIX R3: consequences of the player's own action (post, popup choice,
+       scene end) go right after manual items, never behind the background backlog. */
+    let at = 0;
+    while (at < sim.queue.length && sim.queue[at] && ["manual", "coverage", "player-event"].includes(sim.queue[at].source)) at += 1;
+    sim.queue.splice(at, 0, action);
+    sim.queue = sim.queue.slice(0, SIM_QUEUE_LIMIT);
   } else {
     sim.queue.push(action);
     sim.queue = sim.queue.slice(-SIM_QUEUE_LIMIT);
@@ -55132,7 +55156,7 @@ if (targetNote) {
       return null;
     }
 
-    const dmPauseReason = action && action.payload && action.payload.trigger === "follow-not-returned" ? "" : eventDrivenAutonomousDmPauseReason(view);
+    const dmPauseReason = action && action.payload && ["follow-not-returned", "player-unfollowed"].includes(action.payload.trigger) ? "" : eventDrivenAutonomousDmPauseReason(view);
     if (dmPauseReason) {
       update((n) => eventDrivenRememberDeferredDm(n, action, dmPauseReason));
       return "dm-deferred";
@@ -57439,7 +57463,7 @@ const signOut = useCallback(async () => {
             trigger: "player-post",
             postId: event.postId,
           },
-          "event"
+          "player-event"
         )
       );
       queuedAny = worldQueued || queuedAny;
@@ -57472,7 +57496,7 @@ const signOut = useCallback(async () => {
             trigger: "roleplay-ended",
             sceneId: event.sceneId,
           },
-          "event"
+          "player-event"
         )
       ) || queuedAny;
 
@@ -57653,7 +57677,7 @@ const signOut = useCallback(async () => {
               "world-full",
               `popup-followup:${event.id}:${choice.id}`,
               { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id },
-              "event"
+              "player-event"
             )
           );
 
@@ -57726,7 +57750,7 @@ const signOut = useCallback(async () => {
               "world-full",
               `popup-followup:${event.id}:${choice.id}`,
               { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id, postId },
-              "event"
+              "player-event"
             )
           );
 
@@ -57752,7 +57776,7 @@ const signOut = useCallback(async () => {
             "world-full",
             `popup-followup:${event.id}:${choice.id}`,
             { trigger:"popup-choice", popupEventId:event.id, choiceId:choice.id },
-            "event"
+            "player-event"
           )
         );
 
@@ -58407,8 +58431,10 @@ const signOut = useCallback(async () => {
   const view2 = viewRef.current;
   if (!view2 || !(view2.chars || []).length) return;
 
-  const queued = simPeek(view2);
-  const manualQueued = !!(queued && queued.source === "manual");
+  /* CLAUDE FIX R3: a due follow / unfollow reaction must not wait for an empty queue. */
+  const dueSocialReaction = groundedDueFollowBackAction(view2);
+  const queued = dueSocialReaction || simPeek(view2);
+  const manualQueued = !!(queued && (queued.source === "manual" || queued.source === "player-event"));
 
   /*
    * RECOVERY v99.2:
@@ -61563,6 +61589,10 @@ function autonomousDmTriggerDirective(w, bot) {
       "Ebben a DM-ben erre reagálj a saját hangodon: szóvá teszed, kérdőre vonod, sértődötten, rámenősen vagy célzósan rákérdezel, miért nem követ vissza. " +
       "Ne találj ki más okot, ne kérj bocsánatot, és ne írj semleges small talkot helyette.";
   }
+  if (ctx.trigger === "player-unfollowed") {
+    return "\n\n" + PROTECTED_TAIL_MARKER + "\nEZÉRT ÍRSZ MOST — VALÓDI, MEGTÖRTÉNT ESEMÉNY (KÖTELEZŐ, \"skip\": false):\n" +
+      player + " az imént KIKÖVETETT téged (unfollow). Ebben a DM-ben erre reagálj a saját személyiséged és a kapcsolatotok szerint: megbántva, dühösen, kérdőre vonva, gúnyosan, sértetten vagy közönyt mímelve — ahogy te tennéd. Ne találj ki más okot.";
+  }
   if (ctx.causeText) {
     return "\n\n" + PROTECTED_TAIL_MARKER + "\nEZ A MEGTÖRTÉNT ESEMÉNY INDÍTOTTA A DM-ET (erre reagálj, ne találj ki mást):\n" + String(ctx.causeText).slice(0, 400);
   }
@@ -61574,7 +61604,9 @@ function groundedFollowBackPersonalityEligible(w, botId, humanId) {
   const rel = getRel(w, botId, humanId) || EMPTY_REL;
   if (!c) return false;
   const text = [c.personality, c.traits, c.backstory, c.secrets, rel.bond, rel.mood, rel.hidden].filter(Boolean).join(" ").toLowerCase();
-  return /obsess|megszáll|possess|birtokl|jealous|féltéken|cling|ragaszkod|territorial|proud|büszke|sensitive|érzékeny|confront|konfront/.test(text);
+  if (/obsess|megszáll|possess|birtokl|jealous|féltéken|cling|ragaszkod|territorial|proud|büszke|sensitive|érzékeny|confront|konfront/.test(text)) return true;
+  /* CLAUDE FIX R3: someone who cares about the player (or has a crush) also notices. */
+  return (Number(rel.score) || 0) >= 50 || /crush|vonz|attract|szerelm|in love/.test(String(rel.bond || "") + " " + String(rel.hidden || ""));
 }
 
 function setFollowState(w, actorId, targetId, following, reason) {
@@ -61589,9 +61621,19 @@ function setFollowState(w, actorId, targetId, following, reason) {
       groundedEventLog(w, "follow-not-returned", "started", nameOfIn(w, actorId) + " followed " + nameOfIn(w, targetId) + "; follow-back reaction armed.", "follow:" + actorId + ">" + targetId);
     }
   }
+  if (before && !after && isHuman(w, actorId) && !isHuman(w, targetId) && charById(w, targetId)) {
+    /* CLAUDE FIX R3 (7.4): the player unfollowed a character who cares -> they react once. */
+    if (groundedFollowBackPersonalityEligible(w, targetId, actorId) || Math.abs(Number((getRel(w, targetId, actorId) || EMPTY_REL).score) || 0) >= 35) {
+      const state = groundedRuntime(w);
+      state.pendingFollowBack[targetId] = { botId: targetId, humanId: actorId, createdAt: now(), dueAt: now() + 60 * 1000, reason: "player-unfollowed", trigger: "player-unfollowed" };
+      groundedEventLog(w, "player-unfollowed", "started", nameOfIn(w, actorId) + " unfollowed " + nameOfIn(w, targetId) + "; reaction armed.", "unfollow:" + actorId + ">" + targetId);
+    } else {
+      groundedEventLog(w, "player-unfollowed", "skipped", nameOfIn(w, targetId) + " does not care enough to react to the unfollow.", "unfollow:" + actorId + ">" + targetId);
+    }
+  }
   if (after && isHuman(w, actorId) && !isHuman(w, targetId)) {
     const state = groundedRuntime(w);
-    if (state.pendingFollowBack[targetId]) {
+    if (state.pendingFollowBack[targetId] && state.pendingFollowBack[targetId].trigger !== "player-unfollowed") {
       delete state.pendingFollowBack[targetId];
       groundedEventLog(w, "follow-not-returned", "cancelled", "Follow-back arrived before the DM trigger.", "follow:" + targetId + ">" + actorId);
     }
@@ -61606,6 +61648,12 @@ function groundedDueFollowBackAction(w) {
   const rows = Object.values(state.pendingFollowBack || {}).filter((row) => row && Number(row.dueAt || 0) <= now() && !row.inFlight).sort((a, b) => Number(a.dueAt || 0) - Number(b.dueAt || 0));
   for (const row of rows) {
     if (!charById(w, row.botId) || isHuman(w, row.botId)) { delete state.pendingFollowBack[row.botId]; continue; }
+    const rowTrigger = String(row.trigger || "follow-not-returned");
+    if (rowTrigger === "player-unfollowed") {
+      if (isFollowing(w, row.humanId, row.botId)) { delete state.pendingFollowBack[row.botId]; continue; }
+      groundedEventLog(w, "player-unfollowed", "started", "Unfollow reaction DM queued for " + nameOfIn(w, row.botId) + " (attempt " + ((Number(row.attempts) || 0) + 1) + "/" + FOLLOW_BACK_DM_MAX_ATTEMPTS + ").", "unfollow:" + row.humanId + ">" + row.botId);
+      return mkAction("dm", "grounded-player-unfollowed:" + row.botId + ":" + row.createdAt, { botId: row.botId, trigger: "player-unfollowed", groundedFollowBackBotId: row.botId }, "event");
+    }
     if (!groundedFollowBackPersonalityEligible(w, row.botId, row.humanId)) {
       groundedEventLog(w, "follow-not-returned", "failed", "No follow-back DM: character personality/relationship does not justify a direct reaction.", "follow:" + row.botId + ">" + row.humanId);
       delete state.pendingFollowBack[row.botId];
@@ -61621,7 +61669,6 @@ function groundedDueFollowBackAction(w) {
     }
     if (!isFollowing(w, row.botId, row.humanId) || isFollowing(w, row.humanId, row.botId)) { delete state.pendingFollowBack[row.botId]; continue; }
     groundedEventLog(w, "follow-not-returned", "started", "Unreturned-follow DM queued for " + nameOfIn(w, row.botId) + " (attempt " + ((Number(row.attempts) || 0) + 1) + "/" + FOLLOW_BACK_DM_MAX_ATTEMPTS + ").", "follow:" + row.botId + ">" + row.humanId);
-    row.inFlight = now();
     return mkAction("dm", "grounded-follow-not-returned:" + row.botId + ":" + row.createdAt, { botId: row.botId, trigger: "follow-not-returned", groundedFollowBackBotId: row.botId }, "event");
   }
   return null;
@@ -61842,7 +61889,8 @@ async function runSimulationAction(view, update, action, addImage) {
       const botId = String(action.payload.groundedFollowBackBotId || "");
       if (result && result !== "dm-deferred") {
         delete state.pendingFollowBack[botId];
-        groundedEventLog(n, "follow-not-returned", "success", "Unreturned-follow DM generated.", "follow:" + botId + ">" + String(n.meId || ""));
+        const doneTrigger = String(action.payload.trigger || "follow-not-returned");
+        groundedEventLog(n, doneTrigger, "success", doneTrigger === "player-unfollowed" ? "Unfollow reaction DM generated." : "Unreturned-follow DM generated.", "follow:" + botId + ">" + String(n.meId || ""));
       } else {
         groundedFollowBackAttemptFailed(n, botId, result === "dm-deferred" ? "deferred" : "no message returned");
       }
