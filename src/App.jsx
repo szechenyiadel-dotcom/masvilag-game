@@ -6565,8 +6565,9 @@ function legacyApplyChanges(
      * Existing specialized metadata is not destructively deleted here, but
      * relationshipRomanceActive() will no longer treat it as active attraction.
      */
+    const committedGuard = identityCommittedElsewhere(n, charById(n, a), charById(n, b));
     if (
-      romanceState.blocked &&
+      (romanceState.blocked || committedGuard) &&
       romanticRelationshipText(bondEvolution.bond) &&
       !romanticRelationshipText(oldBond)
     ) {
@@ -6604,7 +6605,7 @@ function legacyApplyChanges(
 
     if (
       ch.mood &&
-      !(romanceState.blocked && romanticRelationshipText(ch.mood))
+      !((romanceState.blocked || committedGuard) && romanticRelationshipText(ch.mood))
     ) {
       patch.mood =
         String(
@@ -8736,8 +8737,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
 function languageInstruction(lang, strict) {
   if (lang === "en") {
     return strict
-      ? "OUTPUT LANGUAGE: English only. Do not output Hungarian in any user-visible field. Write natural, idiomatic, native-speaker English — the way young adults actually text and post (contractions, casual rhythm, slang only where the character would use it). Never sound translated, stiff, formal or like an assistant; never mirror Hungarian word order."
-      : "Generate every user-visible value in English. Some source fields may be Hungarian; use them only as background, never copy their language. Write natural, idiomatic, native-speaker English — the way young adults actually text and post (contractions, casual rhythm, slang only where the character would use it). Never sound translated, stiff, formal or like an assistant; never mirror Hungarian word order.";
+      ? "OUTPUT LANGUAGE: English only. Do not output Hungarian in any user-visible field. Write polished, idiomatic, native-speaker English with a real writer's ear. Posts, comments and DMs sound the way these characters actually text (contractions, casual rhythm, slang only where the character would use it). Roleplay narration and actions read like good literary fiction: precise, vivid verbs, concrete sensory detail, varied sentence rhythm, subtext instead of stated feelings — never purple, never clichéd. Use the correct pronouns for every person (he/him, she/her, they/them as given); never swap them. Never sound translated, stiff or like an assistant; never mirror Hungarian word order."
+      : "Generate every user-visible value in English. Some source fields may be Hungarian; use them only as background, never copy their language. Write polished, idiomatic, native-speaker English with a real writer's ear. Posts, comments and DMs sound the way these characters actually text (contractions, casual rhythm, slang only where the character would use it). Roleplay narration and actions read like good literary fiction: precise, vivid verbs, concrete sensory detail, varied sentence rhythm, subtext instead of stated feelings — never purple, never clichéd. Use the correct pronouns for every person (he/him, she/her, they/them as given); never swap them. Never sound translated, stiff or like an assistant; never mirror Hungarian word order.";
   }
   return strict
     ? "KIMENETI NYELV: kizárólag magyar. Ne adj angol nyelvű felhasználói szöveget."
@@ -13454,6 +13455,7 @@ function flirtPermissionState(w, actorId, targetId, rel = null) {
      orientation is also remembered: if it explicitly rules the actor out, the
      AI must not knowingly hit on them as if reciprocation were plausible. */
   const targetKnownIncompatible = Boolean(targetOrientationTowardActor.blocked);
+  const committedElsewhere = identityCommittedElsewhere(w, actor, target);
   const casualCompatibilityKnown = Boolean(
     !orientation.blocked &&
     orientation.known &&
@@ -13466,11 +13468,13 @@ function flirtPermissionState(w, actorId, targetId, rel = null) {
     !family &&
     !orientation.blocked &&
     !targetKnownIncompatible &&
+    !committedElsewhere &&
     (crushActive || (naturallyFlirty && casualCompatibilityKnown))
   );
 
   let mode = "platonic";
-  if (crushActive && targetKnownIncompatible) mode = "unrequited-orientation-crush";
+  if (committedElsewhere && !family) mode = "committed-elsewhere";
+  else if (crushActive && targetKnownIncompatible) mode = "unrequited-orientation-crush";
   else if (allowed && secretCrush) mode = "secret-crush";
   else if (allowed && crushActive && naturallyFlirty) mode = "flirty-crush";
   else if (allowed && crushActive) mode = "crush-only";
@@ -13486,6 +13490,7 @@ function flirtPermissionState(w, actorId, targetId, rel = null) {
     orientation,
     targetOrientationTowardActor,
     targetKnownIncompatible,
+    committedElsewhere,
   };
 }
 
@@ -13500,6 +13505,13 @@ function flirtIdentityInstruction(w, actorId, targetId, rel = null) {
   const actorOrientation = String(actor.orientation || "").trim() || "unknown";
   const targetOrientation = String(target.orientation || "").trim() || "unknown";
 
+  const committedPartner = state.committedElsewhere && state.committedElsewhere.partner ? state.committedElsewhere.partner : "";
+  if (state.mode === "committed-elsewhere") {
+    const behaviorCommitted = en
+      ? "COMMITTED ELSEWHERE — HARD LOCK: " + actor.name + " is " + (state.committedElsewhere.status || "committed") + (committedPartner ? " (partner: " + committedPartner + ")" : "") + " and is faithful. " + actor.name + " does NOT flirt with " + target.name + ", does not return flirting, compliments on looks, touches, kisses or confessions, and never says or implies they are interested. React in character — awkward, firm, cold, amused, fatherly/motherly or annoyed — and set a clear boundary. Any unspoken feeling stays unacted."
+      : "MÁSHOL ELKÖTELEZETT — KEMÉNY ZÁR: " + actor.name + " " + (state.committedElsewhere.status || "elkötelezett") + (committedPartner ? " (partner: " + committedPartner + ")" : "") + " és hűséges. " + actor.name + " NEM flörtöl " + target.name + " felé, nem viszonozza a flörtöt, a külsejére tett bókot, érintést, csókot vagy vallomást, és soha nem mondja vagy sugallja, hogy érdeklődik. Karakterhűen reagáljon — zavar, határozottság, hidegség, derültség, szülői hang vagy bosszúság — és húzzon egyértelmű határt. Ha van is kimondatlan érzés, nem cselekszik belőle.";
+    return (en ? "IDENTITY / FLIRT GROUND TRUTH — NEVER FORGET: " : "IDENTITÁS / FLÖRT GROUND TRUTH — SOHA NE FELEJTSD EL: ") + behaviorCommitted;
+  }
   if (en) {
     const behavior = state.mode === "unrequited-orientation-crush"
       ? "UNREQUITED ORIENTATION MISMATCH: SELF may have a crush, but TARGET's known orientation rules SELF out. Remember that fact. Do not knowingly hit on TARGET, ask for a kiss/date, act entitled to a chance, or interpret friendliness as possible reciprocation. The feeling may exist privately as awkwardness, disappointment, distance or restrained attention."
@@ -15259,6 +15271,17 @@ function legacyRelationshipBehaviorCard(
     );
 
   if (
+    adultRomanceAllowed &&
+    crushActive &&
+    !flirtState.allowed &&
+    flirtState.mode === "committed-elsewhere"
+  ) {
+    parts.push(
+      en
+        ? "COMMITTED ELSEWHERE: any attraction stays private and is never acted on. No flirting back, no romantic hints, no kisses; keep the boundary the way this personality would."
+        : "MÁSHOL ELKÖTELEZETT: ha van is vonzalom, privát marad és nem cselekszik belőle. Nincs visszaflörtölés, romantikus célzás, csók; a határt a saját személyisége szerint tartja."
+    );
+  } else if (
     adultRomanceAllowed &&
     crushActive &&
     !flirtState.allowed
@@ -34393,7 +34416,7 @@ ROLEPLAY NATURALISM — HARD:
 - ${w.player.name} helyett SOHA ne beszélj, ne dönts és ne cselekedj. Ha az ő reakciója kellene a folytatáshoz, állj meg előtte.
 - Ha ${w.player.name} karakterhez beszélnek, E/2-ben, tegezve szóljanak hozzá; magukról E/1-ben beszéljenek.
 ${worldLanguage(w, w.meId) === "en"
-  ? "- Every user-visible turn, narration, memory, mood, reason and event summary in the JSON must be natural English."
+  ? "- Every user-visible turn, narration, memory, mood, reason and event summary in the JSON must be natural English. Narration and *actions* are written as literary prose — third person, past or present tense consistently, precise verbs, concrete sensory detail, body language and subtext; dialogue stays true to each character's voice. Always use each person's correct pronouns (see WHO IS WHO)."
   : "- Minden felhasználónak látható turn, narráció, memória, mood, indok és event-összefoglaló természetes, hibátlan magyar legyen."}
 
 Formátum:
@@ -51617,19 +51640,69 @@ function eventDrivenFeedRawAuthor(w, post) {
   }
 }
 
+/* CLAUDE FIX R6: models return the feed in slightly different shapes (author
+   under "authorId"/"author", caption under "caption", comments at the top
+   level). Normalize before judging, and never drop a good post only because
+   it came without comments — the comment wave fills those in afterwards. */
+function eventDrivenNormalizeBatchOutput(w, out) {
+  if (!out || typeof out !== "object") return out;
+  const pick = (o, keys) => { for (const k of keys) { if (o && o[k] !== undefined && o[k] !== null && String(o[k]).trim() !== "") return o[k]; } return undefined; };
+  const rawPosts = [out.posts, out.feed, out.newPosts, out.feedPosts, out.items].find((x) => Array.isArray(x) && x.length) || [];
+  const looseComments = Array.isArray(out.comments) ? out.comments : [];
+  const posts = rawPosts.filter((p) => p && typeof p === "object").map((p) => {
+    const authorRaw = pick(p, ["id", "authorId", "author_id", "author", "characterId", "character", "name", "by"]);
+    const author = authorRaw && typeof authorRaw === "object" ? (authorRaw.id || authorRaw.name) : authorRaw;
+    const text = pick(p, ["text", "caption", "content", "post", "body"]);
+    let comments = [p.comments, p.replies, p.reactions].find((x) => Array.isArray(x)) || [];
+    comments = comments.filter((c) => c && typeof c === "object").map((c) => {
+      const cid = pick(c, ["id", "authorId", "author_id", "author", "characterId", "character", "name", "by"]);
+      return { ...c, id: cid && typeof cid === "object" ? (cid.id || cid.name) : cid, text: pick(c, ["text", "comment", "content", "body"]) };
+    });
+    return { ...p, id: author, text: text === undefined ? p.text : text, comments };
+  });
+  if (looseComments.length && posts.length) {
+    looseComments.forEach((c) => {
+      if (!c || typeof c !== "object") return;
+      const owner = String(c.post_author_id || c.postAuthorId || c.postAuthor || "");
+      const post = owner ? posts.find((p) => String(p.id) === owner || (findChar(w, p.id) && findChar(w, p.id) === findChar(w, owner))) : null;
+      if (post) post.comments.push({ ...c, id: c.id || c.authorId || c.author || c.name });
+    });
+  }
+  return { ...out, posts };
+}
+
+function eventDrivenBatchDropReasons(w, out) {
+  const rows = out && Array.isArray(out.posts) ? out.posts : [];
+  const reasons = {};
+  const seen = new Set();
+  rows.forEach((post) => {
+    const authorId = eventDrivenFeedRawAuthor(w, post);
+    let reason = "";
+    if (!authorId) reason = "unknown-author";
+    else if (isHuman(w, authorId)) reason = "player-as-author";
+    else if (isMediaAccount(w, authorId)) reason = "media-account";
+    else if (seen.has(authorId)) reason = "same-author-twice";
+    else if (!String(post && post.text || "").trim()) reason = "empty-text";
+    if (authorId) seen.add(authorId);
+    if (reason) reasons[reason] = (reasons[reason] || 0) + 1;
+  });
+  return reasons;
+}
+
 function eventDrivenUsableBatchPosts(w, out) {
   const rows = out && Array.isArray(out.posts) ? out.posts : [];
   const seen = new Set();
-  const selected = [];
+  const withComments = [];
+  const withoutComments = [];
   for (const post of rows) {
     const authorId = eventDrivenFeedRawAuthor(w, post);
     if (!authorId || isHuman(w, authorId) || isMediaAccount(w, authorId) || seen.has(authorId)) continue;
-    if (!Array.isArray(post && post.comments) || !post.comments.length) continue;
+    if (!String(post && post.text || "").trim()) continue;
     seen.add(authorId);
-    selected.push(post);
-    if (selected.length >= AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS) break;
+    if (Array.isArray(post && post.comments) && post.comments.length) withComments.push(post);
+    else withoutComments.push(post);
   }
-  return selected;
+  return withComments.concat(withoutComments).slice(0, AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS);
 }
 
 function eventDrivenMergeBatchOutputs(w, first, second) {
@@ -51858,8 +51931,11 @@ function freshFeedPostCommentCandidate() {
 
 function worldContext(...args) {
   const base = String(legacyEventDrivenWorldContext(...args) || "");
+  let who = "";
+  try { who = whoIsWhoCard(args[0], args[1]); } catch (error) { who = ""; }
+  const withWho = who ? who + "\n\n" + base : base;
   const directive = eventDrivenFeedDirective();
-  return directive ? base + "\n\n" + directive : base;
+  return directive ? withWho + "\n\n" + directive : withWho;
 }
 
 function legacyFullSpecEnqueueNaturalThreadReply(...args) {
@@ -54318,6 +54394,15 @@ if (action.type === "roleplay-initiate") {
     if (!post) return null;
 
     const commentTrigger = String(action.payload && action.payload.trigger || "");
+    /* CLAUDE FIX R6: the player's post gets its 3–6 comments from the isolated
+       pipeline; a later automatic wave only added near-duplicates. */
+    if (isHuman(view, post.authorId) && commentTrigger !== "manual" && topLevelAiCommentCount(view, post) >= 3) {
+      update((n) => {
+        const livePost = (n.posts || []).find((row) => row && row.id === post.id);
+        if (livePost) { livePost.commentCoverageAttemptAt = now(); livePost.commentCoverageLastSuccessAt = now(); }
+      });
+      return null;
+    }
     const isGuaranteedCoverage = commentTrigger === "guaranteed-coverage";
     const quotaEnforced =
       commentTrigger === "fresh-post" ||
@@ -55631,6 +55716,7 @@ if (targetNote) {
   let generationView = view;
   let eventGossipPreview = null;
   let eventTriggerPostIds = [];
+  const feedBatchDiagnostics = [];
 
   if (isEventFeedRefresh) {
     generationView = JSON.parse(JSON.stringify(view));
@@ -55653,9 +55739,17 @@ if (targetNote) {
       };
       try {
         feedAiCalls += 1;
-        return typeof legacyVoiceStyleGenWorldStep === "function"
+        const raw = typeof legacyVoiceStyleGenWorldStep === "function"
           ? await legacyVoiceStyleGenWorldStep(generationView, false)
           : await genWorldStep(generationView, false);
+        const normalized = eventDrivenNormalizeBatchOutput(generationView, raw);
+        const rawCount = normalized && Array.isArray(normalized.posts) ? normalized.posts.length : 0;
+        const usable = eventDrivenUsableBatchPosts(generationView, normalized).length;
+        const reasons = eventDrivenBatchDropReasons(generationView, normalized);
+        const keys = raw && typeof raw === "object" ? Object.keys(raw).join(",") : typeof raw;
+        feedBatchDiagnostics.push("call " + feedAiCalls + ": " + rawCount + " posts from the AI, " + usable + " usable" + (Object.keys(reasons).length ? " (dropped: " + Object.entries(reasons).map(([k, v]) => k + "×" + v).join(", ") + ")" : "") + (rawCount ? "" : " [answer keys: " + keys + "]"));
+        console.info("[feed-refresh] batch", "call=" + feedAiCalls, "rawPosts=" + rawCount, "usable=" + usable, "dropped=" + JSON.stringify(reasons), "keys=" + keys);
+        return normalized;
       } finally {
         EVENT_DRIVEN_FEED_BATCH_CONTEXT = null;
       }
@@ -55703,7 +55797,14 @@ if (targetNote) {
       : await genWorldStep(view, false);
   }
 
-  if (!out || !Array.isArray(out.posts) || !out.posts.length) return null;
+  if (!out || !Array.isArray(out.posts) || !out.posts.length) {
+    if (isEventFeedRefresh) {
+      update((n) => groundedEventLog(n, eventFeedTrigger === "player-post" ? "player-post-world" : "feed-refresh", "failed",
+        "Feed refresh produced no usable posts. " + (feedBatchDiagnostics.join(" | ") || "No AI answer."),
+        "post:" + String(action.payload && action.payload.postId || "")));
+    }
+    return null;
+  }
 
   let visiblePostsCreated = 0;
   let generatedCommentCount = 0;
@@ -55775,7 +55876,7 @@ if (targetNote) {
       "aiCalls=" + String(feedAiCalls)
     );
     if (eventFeedTrigger === "player-post") {
-      update((n) => groundedEventLog(n, "player-post-world", visiblePostsCreated >= AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS ? "success" : "failed", "Player-post world refresh finished; bot posts=" + visiblePostsCreated + ", target=" + AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS + "–" + AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS + ".", "post:" + String(action.payload && action.payload.postId || ""), { botPosts: visiblePostsCreated, aiCalls: feedAiCalls }));
+      update((n) => groundedEventLog(n, "player-post-world", visiblePostsCreated >= AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS ? "success" : "failed", "Player-post world refresh finished; bot posts=" + visiblePostsCreated + ", target=" + AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS + "–" + AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS + "." + (visiblePostsCreated < AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS && feedBatchDiagnostics.length ? " " + feedBatchDiagnostics.join(" | ") : ""), "post:" + String(action.payload && action.payload.postId || ""), { botPosts: visiblePostsCreated, aiCalls: feedAiCalls }));
     }
   }
 
@@ -61851,8 +61952,9 @@ function relationshipReadingResult(w, actor, target) {
   const row = state && state[actor.id] && state[actor.id].targets && state[actor.id].targets[target.id];
   if (!row) return null;
   const snippet = relationshipReadingSnippet(w, actor, target);
-  if (!snippet || row.hash !== simsSocialStableHash(snippet)) return null;
-  return row;
+  if (snippet) return !row.structural && row.hash === simsSocialStableHash(snippet) ? row : null;
+  if (row.structural && row.hash === structuralRelationshipHash(w, actor, target)) return row;
+  return null;
 }
 
 function relationshipReadingDueTargets(w, actor) {
@@ -61913,19 +62015,31 @@ async function genRelationshipReading(w, actor, due) {
   return askWorldJSON(w, engineFor(w), prompt, { maxTokens: 1600, priority: 5, source: "relationship-reading" });
 }
 
-function applyRelationshipReadingToLive(n, actorId, targetId, oldBase, newBase) {
+function applyRelationshipReadingToLive(n, actorId, targetId, oldBase, newBase, options = {}) {
   const live = getRel(n, actorId, targetId) || EMPTY_REL;
   if (relationshipBaselineIsManual(oldBase)) return null;
-  const oldScore = oldBase ? Number(oldBase.score) || 0 : Number(live.score) || 0;
-  const earned = Math.max(-40, Math.min(40, (Number(live.score) || 0) - oldScore));
-  const patch = { score: clampRelationshipScore((Number(newBase.score) || 0) + earned) };
+  /* Structural readings (sheets that do not mention each other): whatever the
+     pair built in play counts as earned from a neutral start. */
   const liveBond = String(live.bond || live.type || "");
+  const actorLive = charById(n, actorId), targetLive = charById(n, targetId);
+  const unfaithfulRomance = Boolean(identityCommittedElsewhere(n, actorLive, targetLive) && romanticRelationshipText(liveBond + " " + String(live.mood || "")) && !romanticRelationshipText(String(newBase.bond || "")));
+  const oldScore = oldBase ? Number(oldBase.score) || 0 : (options.structural ? 0 : Number(live.score) || 0);
+  let earned = options.structural && !oldBase
+    ? (Number(live.score) || 0)
+    : Math.max(-40, Math.min(40, (Number(live.score) || 0) - oldScore));
+  /* warmth that only came from a romance a faithful, married character would never have is not kept */
+  if (unfaithfulRomance) earned = Math.min(0, earned);
+  const patch = { score: clampRelationshipScore((Number(newBase.score) || 0) + earned) };
   /* A friendship / acquaintance label that the sheet contradicts (obsession, attraction,
      fear, hatred) came from the old keyword reader, so it is replaced. Bonds reached in
      play (dating, engaged, married, exes) are never touched. */
-  const weakLiveBond = !liveBond || /^(?:bar[aá]t|k[oö]zeli bar[aá]t|legjobb bar[aá]t|ismer[oő]s|friend|close friend|best friend|acquaintance)$/i.test(liveBond.trim());
+  const weakLiveBond = options.structural
+    ? (!liveBond || /^(?:ismer[oő]s|acquaintance)$/i.test(liveBond.trim()))
+    : (!liveBond || /^(?:bar[aá]t|k[oö]zeli bar[aá]t|legjobb bar[aá]t|ismer[oő]s|friend|close friend|best friend|acquaintance)$/i.test(liveBond.trim()));
   const committedLiveBond = /j[aá]rnak|jegyes|h[aá]zast[aá]rs|exek|dating|engaged|married|spouse|\bex/i.test(liveBond);
-  if (!live.fixed && newBase.bond && !committedLiveBond && (weakLiveBond || !oldBase || liveBond === String(oldBase.bond || oldBase.type || ""))) patch.bond = newBase.bond;
+  const replaceableBond = weakLiveBond || (!options.structural && !oldBase) || (oldBase && liveBond === String(oldBase.bond || oldBase.type || ""));
+  if (!live.fixed && newBase.bond && (unfaithfulRomance || (!committedLiveBond && replaceableBond))) patch.bond = newBase.bond;
+  if (unfaithfulRomance) { patch.mood = String(newBase.mood || "").slice(0, 160); patch.hidden = String(newBase.hidden || "").slice(0, 500); }
   const keywordMood = /^(?:(?:attraction|dependency|distrust|family bond|fear|friendship|hatred|jealousy|love|loyalty|obsessive fixation|possessiveness|protectiveness|resentment|rivalry|complex directed relationship)(?:,\s*|$))+$/i.test(String(live.mood || "").trim());
   if (!String(live.mood || "").trim() || keywordMood || (oldBase && String(live.mood || "") === String(oldBase.mood || ""))) patch.mood = String(newBase.mood || "").slice(0, 160);
   if (!String(live.hidden || "").trim() || (oldBase && String(live.hidden || "") === String(oldBase.hidden || ""))) patch.hidden = String(newBase.hidden || "").slice(0, 500);
@@ -61993,17 +62107,380 @@ async function runRelationshipReadingAction(view, update, action) {
   return "relationship-reading";
 }
 
+/* =====================================================================
+   CLAUDE FIX R6 — IDENTITY CANON ("who is who")
+   Each person's own sheet is read ONCE by the AI (cached by a hash of the
+   sheet) into public, structural facts: dojo/team/organization, role, their
+   sensei/leader, teammates, rivals, relationship status and partner. These
+   facts are shown to the AI in every scene / DM / feed prompt, they gate
+   flirting (a married character does not return advances), and they seed a
+   default attitude for pairs whose sheets do not mention each other.
+   ===================================================================== */
+const IDENTITY_CANON_VERSION = "1";
+const IDENTITY_CANON_MIN_GAP_MS = 12 * 1000;
+const IDENTITY_CANON_RETRY_MS = 10 * 60 * 1000;
+const STRUCTURAL_READING_BATCH = 12;
+
+function identityCanonState(w) {
+  const sim = ensureSimState(w);
+  if (!sim) return null;
+  if (!sim.identityCanon || typeof sim.identityCanon !== "object" || Array.isArray(sim.identityCanon)) sim.identityCanon = {};
+  return sim.identityCanon;
+}
+
+function identityCanonSource(c) {
+  if (!c) return "";
+  const rows = [
+    ["Name", c.name], ["Nickname", c.nick], ["Gender", c.gender], ["Orientation", c.orientation],
+    ["Birth / age", c.birth], ["Job / school", c.job], ["City", c.city], ["Public bio", c.bio],
+    ["Connections / important people", c.connections], ["Personality", c.personality],
+    ["Goals", c.goals], ["Secrets", c.secrets], ["Backstory", c.backstory], ["Other canon", c.extra],
+    ["Rank", c.rank], ["Role", c.role], ["Organization", c.organization], ["Affiliation", c.affiliation],
+  ].filter(([, v]) => v !== undefined && v !== null && String(v).trim())
+    .map(([label, v]) => label + ": " + String(v).trim());
+  const text = rows.join("\n");
+  if (text.length <= 14000) return text;
+  return text.slice(0, 10000) + "\n...\n" + text.slice(-4000);
+}
+
+function identityCanonFor(w, id) {
+  const state = w && w.sim && w.sim.identityCanon;
+  const row = state && id ? state[id] : null;
+  return row && row.data && typeof row.data === "object" ? row.data : null;
+}
+
+function identityNameMatches(text, person) {
+  const hay = String(text || "").toLowerCase();
+  if (!hay || !person) return false;
+  const names = [person.name, person.nick, person.username]
+    .map((x) => String(x || "").trim().toLowerCase())
+    .filter(Boolean);
+  const first = String(person.name || "").trim().split(/\s+/)[0].toLowerCase();
+  if (first && first.length >= 3) names.push(first);
+  return names.some((n) => n.length >= 3 && hay.includes(n));
+}
+
+/* The actor is married / engaged / in a relationship with someone OTHER than
+   the target, and the sheet does not say they cheat. */
+function identityCommittedElsewhere(w, actor, target) {
+  if (!w || !actor || !target || actor.id === target.id) return null;
+  const d = identityCanonFor(w, actor.id);
+  if (!d) return null;
+  const status = String(d.relationshipStatus || "").toLowerCase();
+  if (!/married|engaged|dating|relationship|partner/.test(status)) return null;
+  if (d.faithful === false) return null;
+  const partner = String(d.partner || "").trim();
+  if (partner && identityNameMatches(partner, target)) return null;
+  let snippet = "";
+  try { snippet = String(connectionCanonSnippetAbout(w, actor, target, 700) || "").toLowerCase(); } catch (_) { snippet = ""; }
+  if (/\b(?:wife|husband|spouse|married|fianc[eé]e?|girlfriend|boyfriend)\b|feles[eé]g|f[eé]rj|h[aá]zast[aá]rs|jegyes|bar[aá]tn[oő]j/.test(snippet) && !/\bex[- ]|volt (?:feles|f[eé]rj|bar[aá]t)/.test(snippet)) return null;
+  return { status, partner };
+}
+
+function identityPronouns(c) {
+  const g = String(c && c.gender || "").trim().toLowerCase();
+  if (!g) return "";
+  if (/non-?binary|nemb[ie]n[aá]ris|\bthey\b|genderfluid|agender/.test(g)) return "they/them";
+  if (/female|woman|girl|\bshe\b|^n[őo]\b|^n[őo]$|l[aá]ny|asszony/.test(g)) return "she/her";
+  if (/\bmale\b|^man\b|\bman\b|boy|\bhe\b|f[eé]rfi|fi[uú]/.test(g)) return "he/him";
+  return "";
+}
+
+function identityCanonLine(w, c) {
+  if (!w || !c) return "";
+  const d = identityCanonFor(w, c.id) || {};
+  const en = worldLanguage(w, w.meId) === "en";
+  const pronouns = identityPronouns(c);
+  const bits = [];
+  if (pronouns) bits.push((en ? "pronouns: " : "névmások: ") + pronouns);
+  if (d.group) bits.push((en ? "group: " : "csoport: ") + d.group + (d.role ? " (" + d.role + ")" : ""));
+  else if (d.role) bits.push((en ? "role: " : "szerep: ") + d.role);
+  if (d.leader) bits.push((en ? "sensei/leader: " : "sensei/vezető: ") + d.leader);
+  if (Array.isArray(d.teammates) && d.teammates.length) bits.push((en ? "teammates/students: " : "csapattársak/tanítványok: ") + d.teammates.slice(0, 5).join(", "));
+  if (Array.isArray(d.rivals) && d.rivals.length) bits.push((en ? "rivals: " : "riválisok: ") + d.rivals.slice(0, 4).join(", "));
+  if (Array.isArray(d.hates) && d.hates.length) bits.push((en ? "despises: " : "megveti: ") + d.hates.slice(0, 3).join(", "));
+  const status = String(d.relationshipStatus || "").toLowerCase();
+  if (status && status !== "unknown" && status !== "single") {
+    bits.push((en ? "status: " : "családi állapot: ") + status + (d.partner ? (en ? " — partner: " : " — partner: ") + d.partner : "") + (d.faithful === false ? (en ? " (not faithful)" : " (nem hűséges)") : ""));
+  } else if (status === "single") {
+    bits.push(en ? "status: single" : "családi állapot: egyedülálló");
+  }
+  if (d.children) bits.push((en ? "children: " : "gyerekek: ") + d.children);
+  if (d.age) bits.push((en ? "age: " : "kor: ") + d.age);
+  const who = c.name + " [" + c.id + "]" + (isHuman(w, c.id) ? (en ? " — PLAYER" : " — JÁTÉKOS") : "");
+  const call = isHuman(w, c.id)
+    ? (en ? (pronouns === "she/her" ? " · call her: " : pronouns === "he/him" ? " · call him: " : " · call them: ") : " · így szólítsák: ") + (String(c.nick || "").trim() || String(c.name || "").split(/\s+/)[0])
+    : "";
+  if (!d.oneLine && bits.length <= (pronouns ? 1 : 0) && !call) return pronouns ? "- " + who + " · " + bits.join(" · ") : "";
+  return "- " + who + (d.oneLine ? " — " + d.oneLine : "") + (bits.length ? " · " + bits.join(" · ") : "") + call;
+}
+
+function whoIsWhoCard(w, ids) {
+  if (!w) return "";
+  const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean).map(String);
+  if (w.meId) list.unshift(String(w.meId));
+  const seen = new Set();
+  const lines = [];
+  list.forEach((id) => {
+    if (seen.has(id) || lines.length >= 14) return;
+    seen.add(id);
+    const c = charById(w, id);
+    if (!c || isMediaAccount(w, id)) return;
+    const line = identityCanonLine(w, c);
+    if (line) lines.push(line);
+  });
+  if (!lines.length) return "";
+  const en = worldLanguage(w, w.meId) === "en";
+  return en
+    ? "WHO IS WHO — CANON FROM EACH PERSON'S OWN SHEET (public facts; everyone in town knows them):\n" + lines.join("\n") +
+      "\nRULES: Everyone knows which dojo/team/group each person belongs to, who their sensei/leader is, who their teammates are and who is married. Members of rival groups treat each other as rivals unless a personal bond written on their own sheet says otherwise. A married/committed person stays faithful: they never flirt back, kiss or accept romantic or sexual advances from anyone but their partner — they react in character (awkward, firm, cold, amused, protective) and set a boundary. Adults who teach, coach or lead younger people keep a professional distance from them unless their sheet says otherwise. Use each person's pronouns exactly as listed — never swap he/she or him/her. Address the player by her/his real name or the given nickname, never by another character's name."
+    : "KI KICSODA — KÁNON MINDENKI SAJÁT LAPJÁRÓL (nyilvános tények, a városban mindenki tudja):\n" + lines.join("\n") +
+      "\nSZABÁLYOK: Mindenki tudja, ki melyik dojóhoz/csapathoz/csoporthoz tartozik, ki a senseie/vezetője, kik a csapattársai és ki házas. Rivális csoportok tagjai riválisként kezelik egymást, hacsak a saját lapjukon leírt személyes kötődés mást nem mond. Házas/elkötelezett ember hűséges marad: nem flörtöl vissza, nem csókol és nem fogad el romantikus vagy szexuális közeledést senkitől a partnerén kívül — karakterhűen reagál (zavar, határozottság, hidegség, derültség, védelmezés) és meghúzza a határt. Fiatalabbakat tanító/edző/vezető felnőtt szakmai távolságot tart velük, hacsak a lapja mást nem mond. Mindenkire a megadott névmással hivatkozz (angol szövegben he/him, she/her) — soha ne keverd a nemeket. A játékost a valódi nevén vagy a megadott becenevén szólítsák, soha ne egy másik karakter nevén."
+}
+
+function identityCanonDueAction(w) {
+  if (!w) return null;
+  const state = identityCanonState(w);
+  const sim = ensureSimState(w);
+  if (!state || !sim) return null;
+  if (now() - Number(sim.identityCanonLastAt || 0) < IDENTITY_CANON_MIN_GAP_MS) return null;
+  for (const c of allSubjects(w)) {
+    if (!c || !c.id || isMediaAccount(w, c.id)) continue;
+    const src = identityCanonSource(c);
+    if (!src.trim()) continue;
+    const hash = simsSocialStableHash(IDENTITY_CANON_VERSION + "\n" + src);
+    const row = state[c.id];
+    if (row && row.hash === hash) continue;
+    if (row && row.failedAt && row.failedHash === hash && now() - Number(row.failedAt) < IDENTITY_CANON_RETRY_MS) continue;
+    return mkAction("identity-canon", "identity-canon:" + c.id + ":" + hash, { charId: c.id, hash }, "memory");
+  }
+  return null;
+}
+
+async function runIdentityCanonAction(view, update, action) {
+  const charId = String(action.payload && action.payload.charId || "");
+  const c = charById(view, charId);
+  update((n) => { ensureSimState(n).identityCanonLastAt = now(); });
+  if (!c) return null;
+  const src = identityCanonSource(c);
+  const hash = simsSocialStableHash(IDENTITY_CANON_VERSION + "\n" + src);
+  const en = worldLanguage(view, view.meId) === "en";
+  const prompt = [
+    "CANON IDENTITY EXTRACTION — read ONE character sheet and extract only facts it states. Never invent.",
+    "Return what is true NOW in the story (not what used to be).",
+    "",
+    "CHARACTER SHEET:",
+    src,
+    "",
+    "Fields:",
+    "- oneLine: max 18 words in " + (en ? "English" : "Hungarian") + ", who this person is right now (e.g. \"high-school quarterback, youngest of three brothers\").",
+    "- group: the dojo / team / gang / organization they belong to NOW (empty if none).",
+    "- role: their role in it (sensei, student, captain, owner, member...).",
+    "- leader: name of their CURRENT sensei / coach / boss (empty if none or if they are the leader).",
+    "- teammates: names of current teammates or students mentioned on the sheet (max 8).",
+    "- rivals: rival groups or people (max 6).",
+    "- hates: groups or people they openly despise (max 4).",
+    "- relationshipStatus: one of single | dating | engaged | married | divorced | widowed | complicated | unknown.",
+    "- partner: current partner's name (empty if none).",
+    "- faithful: false ONLY if the sheet says they cheat / have an affair / are in an open relationship; otherwise true.",
+    "- children: short text or empty.",
+    "- age: number or empty.",
+    "",
+    "JSON ONLY:",
+    '{"oneLine":"","group":"","role":"","leader":"","teammates":[],"rivals":[],"hates":[],"relationshipStatus":"unknown","partner":"","faithful":true,"children":"","age":""}',
+  ].join("\n");
+  let out = null;
+  try {
+    out = await askWorldJSON(view, engineFor(view), prompt, { maxTokens: 700, priority: 6, source: "identity-canon" });
+  } catch (error) {
+    update((n) => {
+      const state = identityCanonState(n);
+      state[charId] = { ...(state[charId] || {}), failedAt: now(), failedHash: hash };
+      groundedEventLog(n, "identity-canon", "failed", c.name + ": " + String(error && error.message || error || "AI error"), "sheet:" + charId);
+    });
+    return null;
+  }
+  if (!out || typeof out !== "object" || out.skip === true || !("oneLine" in out || "group" in out || "relationshipStatus" in out)) {
+    /* the server answers {skip:true} when every provider is busy: try again later, store nothing */
+    update((n) => {
+      const state = identityCanonState(n);
+      state[charId] = { ...(state[charId] || {}), failedAt: now() - IDENTITY_CANON_RETRY_MS + 3 * 60 * 1000, failedHash: hash };
+    });
+    return null;
+  }
+  const str = (v, max) => String(v === undefined || v === null ? "" : v).replace(/\s+/g, " ").trim().slice(0, max);
+  const arr = (v, max) => (Array.isArray(v) ? v : (v ? String(v).split(/[,;]/) : []))
+    .map((x) => str(typeof x === "object" && x ? (x.name || x.id || "") : x, 60)).filter(Boolean).slice(0, max);
+  const data = {
+    oneLine: str(out && out.oneLine, 160),
+    group: str(out && out.group, 80),
+    role: str(out && out.role, 60),
+    leader: str(out && out.leader, 60),
+    teammates: arr(out && out.teammates, 8),
+    rivals: arr(out && out.rivals, 6),
+    hates: arr(out && out.hates, 4),
+    relationshipStatus: str(out && out.relationshipStatus, 30).toLowerCase() || "unknown",
+    partner: str(out && out.partner, 60),
+    faithful: !(out && (out.faithful === false || String(out.faithful).toLowerCase() === "false")),
+    children: str(out && out.children, 80),
+    age: str(out && out.age, 10),
+  };
+  update((n) => {
+    const state = identityCanonState(n);
+    state[charId] = { hash, at: now(), data };
+    const live = charById(n, charId);
+    groundedEventLog(n, "identity-canon", "applied",
+      (live ? live.name : c.name) + ": " + [data.oneLine, data.group ? data.group + (data.role ? " (" + data.role + ")" : "") : "", data.leader ? "sensei: " + data.leader : "", data.relationshipStatus !== "unknown" ? data.relationshipStatus + (data.partner ? " — " + data.partner : "") : ""].filter(Boolean).join(" · "),
+      "sheet:" + charId);
+  });
+  return "identity-canon";
+}
+
+function structuralRelationshipHash(w, actor, target) {
+  return "s" + simsSocialStableHash(identityCanonLine(w, actor) + "|" + identityCanonLine(w, target) + "|" + String(actor.personality || "").slice(0, 300));
+}
+
+function structuralReadingDue(w) {
+  if (!w) return null;
+  const state = relationshipReadingState(w);
+  if (!state) return null;
+  const humans = humanChars(w).filter((h) => h && h.id && identityCanonFor(w, h.id));
+  for (const target of humans) {
+    const actors = [];
+    for (const actor of (w.chars || [])) {
+      if (!actor || !actor.id || isHuman(w, actor.id) || isMediaAccount(w, actor.id)) continue;
+      if (!identityCanonFor(w, actor.id)) continue;
+      if (relationshipReadingSnippet(w, actor, target)) continue; /* the sheet mentions them: normal reading */
+      const meta = state[actor.id] || {};
+      const row = meta.targets && meta.targets[target.id];
+      const hash = structuralRelationshipHash(w, actor, target);
+      if (row && row.structural && row.hash === hash) continue;
+      if (meta.structuralFailedAt && now() - Number(meta.structuralFailedAt) < RELATIONSHIP_READING_RETRY_MS) continue;
+      actors.push({ actor, hash });
+      if (actors.length >= STRUCTURAL_READING_BATCH) break;
+    }
+    if (actors.length) return { target, actors };
+  }
+  return null;
+}
+
+function structuralReadingDueAction(w) {
+  if (!w || !w.meId) return null;
+  const sim = ensureSimState(w);
+  if (!sim || now() - Number(sim.relationshipReadingLastAt || 0) < RELATIONSHIP_READING_MIN_GAP_MS) return null;
+  const due = structuralReadingDue(w);
+  if (!due) return null;
+  return mkAction("relationship-structural", "relationship-structural:" + due.target.id + ":" + simsSocialStableHash(due.actors.map((row) => row.actor.id + row.hash).join("|")), { targetId: due.target.id }, "memory");
+}
+
+async function runStructuralReadingAction(view, update, action) {
+  update((n) => { ensureSimState(n).relationshipReadingLastAt = now(); });
+  const due = structuralReadingDue(view);
+  if (!due || String(due.target.id) !== String(action.payload && action.payload.targetId || due.target.id)) return "relationship-structural-nothing";
+  const target = due.target;
+  const en = worldLanguage(view, view.meId) === "en";
+  const lang = en ? "English" : "Hungarian";
+  const prompt = [
+    "STRUCTURAL RELATIONSHIP READING.",
+    "The actors below have NO personal entry about the target on their own sheets. Decide each actor's DEFAULT attitude toward the target from public, structural facts only: their groups/dojos and those groups' rivalries, roles (sensei, student, boss), family and marital status, age gap, and the actor's personality. Never invent shared history.",
+    "",
+    "TARGET: " + identityCanonLine(view, target).replace(/^- /, ""),
+    "",
+    "ACTORS:",
+    ...due.actors.map(({ actor }) => "- id=\"" + actor.id + "\" " + identityCanonLine(view, actor).replace(/^- /, "") + (actor.personality ? " · personality: " + cut(String(actor.personality), 260) : "")),
+    "",
+    "Rules:",
+    "- Rival dojo/group members: score -20..-60, bond \"Rivális\" (or \"Ellenség\" if the actor despises the target's group), mood like \"distrusts her as a Cobra Kai student\".",
+    "- Same dojo/group: teammates, score 15..45, bond \"Csapattárs\".",
+    "- bond = what the TARGET is to the actor: \"Mentor\" if the target is the actor's sensei/coach, \"Tanítvány\" if the target is the actor's student.",
+    "- A married/committed actor has attraction 0 toward anyone but their partner.",
+    "- No shared group and no rivalry: bond \"Ismerős\" (if they would plausibly know each other in town) with score 0..15, or empty bond with score 0.",
+    "- mood / hidden / why in " + lang + ", short.",
+    "",
+    "JSON ONLY:",
+    '{"targets":[{"id":"ACTOR_ID","score":0,"bond":"","mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"why":""}]}',
+  ].join("\n");
+  let out = null;
+  try {
+    out = await askWorldJSON(view, engineFor(view), prompt, { maxTokens: 1800, priority: 5, source: "relationship-structural" });
+  } catch (error) {
+    update((n) => {
+      const state = relationshipReadingState(n);
+      due.actors.forEach(({ actor }) => { state[actor.id] = { ...(state[actor.id] || {}), structuralFailedAt: now() }; });
+      groundedEventLog(n, "relationship-reading", "failed", "Structural reading toward " + target.name + ": " + String(error && error.message || error || "AI error"), "structural:" + target.id);
+    });
+    return null;
+  }
+  const rows = Array.isArray(out && out.targets) ? out.targets : [];
+  if (!rows.length) {
+    update((n) => {
+      const state = relationshipReadingState(n);
+      due.actors.forEach(({ actor }) => { state[actor.id] = { ...(state[actor.id] || {}), structuralFailedAt: now() - RELATIONSHIP_READING_RETRY_MS + 3 * 60 * 1000 }; });
+    });
+    return null;
+  }
+  update((n) => {
+    const state = relationshipReadingState(n);
+    const store = ensureRelationshipBaselineStore(n);
+    const liveTarget = charById(n, target.id);
+    if (!liveTarget) return;
+    due.actors.forEach(({ actor }) => {
+      const row = rows.find((r) => r && findChar(n, r.id) === actor.id);
+      const liveActor = charById(n, actor.id);
+      if (!row || !liveActor) return;
+      const entry = state[actor.id] = { ...(state[actor.id] || {}), structuralFailedAt: 0, targets: { ...((state[actor.id] && state[actor.id].targets) || {}) } };
+      entry.targets[target.id] = {
+        structural: true,
+        hash: structuralRelationshipHash(n, liveActor, liveTarget),
+        score: clampRelationshipScore(Number(row.score) || 0),
+        bond: String(row.bond || "").trim().slice(0, 60),
+        mood: String(row.mood || "").trim().slice(0, 160),
+        hidden: String(row.hidden || "").trim().slice(0, 300),
+        why: String(row.why || "").trim().slice(0, 300),
+        attraction: Math.max(0, Math.min(100, Number(row.attraction) || 0)),
+        fear: Math.max(0, Math.min(100, Number(row.fear) || 0)),
+        obsession: Math.max(0, Math.min(100, Number(row.obsession) || 0)),
+        trust: Math.max(0, Math.min(100, Number(row.trust) || 0)),
+        at: now(),
+      };
+      const key = relKey(actor.id, target.id);
+      const oldBase = store[key] ? { ...store[key] } : null;
+      const newBase = inferCanonicalRelationshipBaseline(n, liveActor, liveTarget);
+      if (!newBase || relationshipBaselineIsManual(oldBase)) return;
+      store[key] = { ...relationshipBaselineSnapshot(newBase, "structural-ai"), ...newBase, updatedAt: now() };
+      const changed = applyRelationshipReadingToLive(n, actor.id, target.id, oldBase, newBase, { structural: true });
+      if (changed) {
+        const b = changed.before || EMPTY_REL, a = changed.after || EMPTY_REL;
+        groundedEventLog(n, "relationship-reading", "applied",
+          liveActor.name + " → " + liveTarget.name + " (structural): " + (b.bond ? localizedBond(b.bond, worldLanguage(n, n.meId)) : "—") + " " + (Number(b.score) || 0) + " → " + (a.bond ? localizedBond(a.bond, worldLanguage(n, n.meId)) : "—") + " " + (Number(a.score) || 0) + (a.mood ? " · " + a.mood : ""),
+          "structural:" + actor.id, { targetId: target.id });
+      }
+    });
+  });
+  return "relationship-structural";
+}
+
 function planAutoAction(view) {
   const followBack = groundedDueFollowBackAction(view);
   if (followBack) return followBack;
+  const identity = identityCanonDueAction(view);
+  if (identity) return identity;
   const reading = relationshipReadingDueAction(view);
   if (reading) return reading;
+  const structural = structuralReadingDueAction(view);
+  if (structural) return structural;
   return legacyGroundedPlanAutoAction(view);
 }
 
 async function runSimulationAction(view, update, action, addImage) {
   if (action && action.type === "relationship-reading") {
     return runRelationshipReadingAction(view, update, action);
+  }
+  if (action && action.type === "identity-canon") {
+    return runIdentityCanonAction(view, update, action);
+  }
+  if (action && action.type === "relationship-structural") {
+    return runStructuralReadingAction(view, update, action);
   }
   if (action && action.type === "npc-pair-reaction") {
     const eventId = String(action.payload && action.payload.eventId || "");
@@ -62020,6 +62497,9 @@ async function runSimulationAction(view, update, action, addImage) {
   try {
     result = await legacyGroundedRunSimulationAction(view, update, action, addImage);
   } catch (error) {
+    if (action && action.type === "world-full" && String(action.payload && action.payload.trigger || "") === "player-post") {
+      update((n) => groundedEventLog(n, "player-post-world", "failed", "Feed refresh after your post failed: " + String(error && error.message || error || "Unknown failure"), "post:" + String(action.payload.postId || "")));
+    }
     if (isPopup || isFollowBack) update((n) => groundedEventLog(n, isPopup ? "popup-choice-followup" : "follow-not-returned", "failed", String(error && error.message || error || "Unknown failure"), isPopup ? "popup:" + String(action.payload.popupEventId || "") : "follow:" + String(action.payload.groundedFollowBackBotId || "")));
     if (isFollowBack) update((n) => groundedFollowBackAttemptFailed(n, String(action.payload.groundedFollowBackBotId || ""), String(error && error.message || error || "error")));
     throw error;
@@ -62165,9 +62645,9 @@ function GroundedEventLogPanel({ w, update }) {
     if (typeof update !== "function") return;
     update((n) => {
       const sim = ensureSimState(n);
-      if (sim) { sim.relationshipReading = {}; sim.relationshipReadingLastAt = 0; }
+      if (sim) { sim.relationshipReading = {}; sim.relationshipReadingLastAt = 0; sim.identityCanon = {}; sim.identityCanonLastAt = 0; }
       RELATIONSHIP_READING_CHECKED.clear();
-      groundedEventLog(n, "relationship-reading", "started", "Re-reading every character's Connections with the AI (one character about every 40 seconds).", "manual");
+      groundedEventLog(n, "relationship-reading", "started", "Re-reading every character sheet with the AI: who is who (dojo, sensei, partner), then each relationship.", "manual");
     });
   };
   return (
