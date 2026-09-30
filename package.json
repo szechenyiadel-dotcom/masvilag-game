@@ -8,7 +8,7 @@
     "dev": "npm run social-policy && vite",
     "build": "npm run social-policy && vite build",
     "preview": "vite preview",
-    "start": "node scripts/apply-ai-token-safety.mjs && node scripts/apply-ai-429-server-gate-v3.mjs && node scripts/fix-ai-gate-v3-syntax.mjs && node scripts/apply-ai-403-failover-v4.mjs && node server/proxy.js"
+    "start": "node scripts/apply-ai-403-failover-v4.mjs && node server/proxy.js"
   },
   "dependencies": {
     "body-parser": "^2.3.0",
