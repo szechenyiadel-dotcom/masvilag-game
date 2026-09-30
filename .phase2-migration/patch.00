@@ -1,0 +1,97 @@
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -1,5 +1,7 @@
+ /* MÁSVILÁG RECOVERY v99.5 — SCALABLE LAZY MEDIA STORAGE — 20260816_0045 */
+ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
++
++console.info("[patch-status] canonical-source=phase2-direct; runtime-patches=none; patch-target-misses=none");
+ import {
+   Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
+   X, Trash2, ChevronLeft, ChevronRight, Loader2, Heart, Lock, Zap, Pencil,
+@@ -8572,6 +8574,7 @@
+   model: DEFAULT_AI_MODEL,
+   max_tokens: maxTokens,
+   temperature: 0.9,
++  source: String(requestMeta && requestMeta.source || "client-ai"),
+   system,
+   messages: [{ role: "user", content: prompt }],
+ }, ctrl.signal);
+@@ -8753,6 +8756,7 @@
+             {
+               interactive: priority >= 50,
+               timeoutMs: Number(options.timeoutMs) || undefined,
++              source: String(options && options.source || "askWorldJSON"),
+             }
+           );
+           const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
+@@ -52871,12 +52875,14 @@
+     }
+     const afterPost = (n.posts || []).find((row) => row && row.id === post.id);
+     const after = afterPost ? safePostComments(afterPost).length : before;
++    const appliedCount = Math.max(0, after - before);
+     playerPostCommentDiagnostic(n, afterPost || post, "saved", {
+       aiCalls: calls,
+       provider: label || "unknown",
+-      applied: Math.max(0, after - before),
++      applied: appliedCount,
+       visibleComments: after,
+     });
++    groundedEventLog(n, "player-post-comments", appliedCount >= 3 ? "success" : "failed", "Isolated player-post comments applied: " + appliedCount + ".", "post:" + String(post.id), { comments: appliedCount, aiCalls: calls });
+   });
+ 
+   return "player-post-comments";
+@@ -55294,6 +55300,9 @@
+       "comments=" + String(generatedCommentCount),
+       "aiCalls=" + String(feedAiCalls)
+     );
++    if (eventFeedTrigger === "player-post") {
++      update((n) => groundedEventLog(n, "player-post-world", visiblePostsCreated >= AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS ? "success" : "failed", "Player-post world refresh finished; bot posts=" + visiblePostsCreated + ", target=" + AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS + "–" + AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS + ".", "post:" + String(action.payload && action.payload.postId || ""), { botPosts: visiblePostsCreated, aiCalls: feedAiCalls }));
++    }
+   }
+ 
+   return visiblePostsCreated || (isEventFeedRefresh && eventTriggerPostIds.length)
+@@ -57071,16 +57080,18 @@
+       update((n) => {
+         const p = (n.posts || []).find((row) => row && row.id === event.postId);
+         playerPostCommentDiagnostic(n, p, "signal", { queued: true });
++        groundedEventLog(n, "player-post", "started", "Player post consequence pipeline started.", "post:" + String(event.postId), { postId: event.postId });
+         if (typeof channelPublicPostFollowerEffect === "function") channelPublicPostFollowerEffect(n, event.postId);
+       });
+       const commentQueued = requestSimulationAction(
+         mkAction(
+           "player-post-comments-guarantee",
+           `player-post-comments:${event.postId}`,
+-          { postId: event.postId, trigger: "player-post", requireHumanAuthor: true },
++          { postId: event.postId, trigger: "player-post", requireHumanAuthor: true, minComments: 3, maxComments: 6, playerPostContentIsolation: true },
+           "manual"
+         )
+       );
++      update((n) => groundedEventLog(n, "player-post-comments", commentQueued ? "started" : "failed", commentQueued ? "Isolated 3–6 comment generation queued." : "Comment action could not be queued.", "post:" + String(event.postId)));
+       console.info("[player-post-comments]", "stage=queue", "post=" + event.postId, "queued=" + commentQueued);
+     }
+ 
+@@ -57096,7 +57107,7 @@
+        * továbbra is megakadályozza a párhuzamos API-spamet.
+        */
+       let queuedAny = false;
+-queuedAny = requestSimulationAction(
++      const worldQueued = requestSimulationAction(
+         mkAction(
+           "world-full",
+           `event-world-after-post:${event.postId}`,
+@@ -57106,7 +57117,9 @@
+           },
+           "event"
+         )
+-      ) || queuedAny;
++      );
++      queuedAny = worldQueued || queuedAny;
++      update((n) => groundedEventLog(n, "player-post-world", worldQueued ? "started" : "failed", worldQueued ? "6–7 bot-post world refresh queued." : "World refresh action could not be queued.", "post:" + String(event.postId)));
+ 
+       return queuedAny;
+     }
+@@ -60418,7 +60431,22 @@
+ function legacyGroundedRecordSocialEvent(w,event={}){ const beforeScores=fullSpecSnapshotScores(w); let result=null; try{result=legacyFullSpecRecordSocialEvent(w,event);}catch(error){console.warn("[social-event] ledger/consequence step failed; completion hooks continue",error);} try{fullSpecApplyDmEventFallback(w,event,beforeScores);}catch(error){console.warn("[relationship-fallback] DM fallback failed; continuing",error);} try{fullSpecApplyRoleplayFallback(w,event,beforeScores);}catch(error){console.warn("[relationship-fallback] roleplay fallback failed; continuing",error);} try{fullSpecCleanupFollowBackPending(w,event);fullSpecScheduleFollowBackDm(w,event);fullSpecScheduleEventDms(w,event);}catch(error){console.warn("[event-dm] scheduling failed; continuing",error);} return result; }
+ 
+ function fullSpecSafeCommentRowApply(n,postId,row,label){if(!row||typeof row!=="object")return 0;try{return Number(legacyFullSpecApplyComments(n,postId,{comments:[row]},label)||0);}catch(error){console.warn("[comment-pipeline] comment row failed; skipped only this row","post="+String(postId||""),"character="+String(row.id!==undefined?row.id:(row.authorId!==undefined?row.authorId:row.name||"")),error);return 0;}}
+-function applyComments(n,postId,out,label){const payload=out&&typeof out==="object"?out:{},rows=safeAiComments(payload);let applied=0;rows.forEach((row)=>{applied+=fullSpecSafeCommentRowApply(
