@@ -8782,6 +8782,89 @@ function validateGeneratedLanguage(result, expectedLanguage) {
 /* Kitartó kérés: ha a szolgáltató visszafog minket, nem adjuk fel, hanem
    kivárjuk a pihenőt és újrapróbáljuk. A kérés csak akkor hiúsul meg, ha
    percekig egyszer sem enged át — így a játékosnak nem kell hibát látnia. */
+/* CLAUDE FIX R5: tolerant parsing of AI JSON. Models sometimes return a trailing
+   comma, a raw line break inside a string, text after the object, or an answer
+   cut off at the token limit. Previously one such glitch threw away the whole
+   scene round ("Expected property name or '}' ..."). We keep every complete
+   value and close what was left open. */
+function repairAiJsonText(raw) {
+  const text = String(raw || "").replace(/```(?:json)?/gi, "");
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let out = "";
+  const stack = [];
+  const cuts = [];
+  let inString = false;
+  let escaped = false;
+  let finished = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) { out += ch; escaped = false; continue; }
+      if (ch === "\\") { out += ch; escaped = true; continue; }
+      if (ch === "\"") { out += ch; inString = false; continue; }
+      if (ch === "\n") { out += "\\n"; continue; }
+      if (ch === "\r") continue;
+      if (ch === "\t") { out += "\\t"; continue; }
+      out += ch;
+      continue;
+    }
+    if (ch === "\"") { out += ch; inString = true; continue; }
+    if (ch === "{" || ch === "[") { stack.push(ch === "{" ? "}" : "]"); out += ch; continue; }
+    if (ch === "}" || ch === "]") {
+      out = out.replace(/[\s,]+$/, "");
+      if (stack.length) stack.pop();
+      out += ch;
+      if (!stack.length) { finished = true; break; }
+      continue;
+    }
+    if (ch === ",") {
+      const trimmed = out.replace(/\s+$/, "");
+      if (/[,{[]$/.test(trimmed)) continue;
+      cuts.push({ at: trimmed.length, stack: stack.slice() });
+      out = trimmed + ",";
+      continue;
+    }
+    out += ch;
+  }
+  const attempts = [];
+  if (finished) attempts.push(out);
+  else {
+    /* Cut-off answer: prefer dropping the unfinished last item (no half
+       sentences in the scene); close the open text only as a last resort. */
+    for (let k = cuts.length - 1; k >= 0 && attempts.length < 8; k--) {
+      attempts.push(out.slice(0, cuts[k].at) + cuts[k].stack.slice().reverse().join(""));
+    }
+    let tail = out;
+    if (inString) tail += "\"";
+    attempts.push(tail.replace(/[\s,:]+$/, "") + stack.slice().reverse().join(""));
+  }
+  for (const candidate of attempts) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch (_) { /* try the next, shorter candidate */ }
+  }
+  return null;
+}
+
+function parseAiJsonResponse(raw) {
+  const text = String(raw || "");
+  const a = text.indexOf("{"), b = text.lastIndexOf("}");
+  let firstError = null;
+  if (a !== -1 && b > a) {
+    try { return JSON.parse(text.slice(a, b + 1)); }
+    catch (error) { firstError = error; }
+  }
+  const repaired = repairAiJsonText(text);
+  if (repaired) {
+    console.info("[ai-json] repaired a malformed AI answer instead of failing");
+    return repaired;
+  }
+  if (a === -1) throw new Error(CURRENT_LANG === "en" ? "The AI answer contained no usable JSON." : "Az AI válasza nem tartalmazott feldolgozható JSON-t.");
+  throw firstError || new Error(CURRENT_LANG === "en" ? "The AI answer was not valid JSON." : "Az AI válasza nem volt érvényes JSON.");
+}
+
 async function askJSON(system, prompt, options = {}) {
   const lang = asLang(options && options.language ? options.language : CURRENT_LANG);
   let strictMode = !!(options && options.strictLanguageMode);
@@ -8847,9 +8930,7 @@ async function askJSON(system, prompt, options = {}) {
               source: String(options && options.source || "askWorldJSON"),
             }
           );
-          const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
-          if (a === -1 || b === -1) throw new Error("Az AI válasza nem tartalmazott feldolgozható JSON-t.");
-          const parsed = JSON.parse(raw.slice(a, b + 1));
+          const parsed = parseAiJsonResponse(raw);
           if (!validateGeneratedLanguage(parsed, lang)) {
             if (!strictMode) {
               strictMode = true;
@@ -34327,7 +34408,7 @@ Formátum:
  "relationshipUpdates":[
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
-}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${TAIL}`));
+}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${TAIL}`, { maxTokens: 3200, timeoutMs: 90000 }));
 
       const resolveSceneTurns = (candidateOut) =>
         (candidateOut && Array.isArray(candidateOut.turns)
@@ -34886,7 +34967,7 @@ Formátum:
 - EMOJI TILOS a summary, diary, goalResult, memories, statusUpdates, mood, why és minden más Event-szövegmezőben.
 
 Formátum:
-{"summary":"","diary":"","success":true,"outcome":"success vagy partial vagy failed","goalResult":"egy rövid konkrét értékelés","memories":[{"id":"szereplő azonosítója","text":""}],"longTermMemories":[{"id":"AI id","targetId":"konkrét másik szereplő id-ja vagy üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":85,"text":"tartós karakter-POV emlék"}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],"statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"mi változott / mi zárult le"}]}${TAIL}`));
+{"summary":"","diary":"","success":true,"outcome":"success vagy partial vagy failed","goalResult":"egy rövid konkrét értékelés","memories":[{"id":"szereplő azonosítója","text":""}],"longTermMemories":[{"id":"AI id","targetId":"konkrét másik szereplő id-ja vagy üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":85,"text":"tartós karakter-POV emlék"}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],"statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"mi változott / mi zárult le"}]}${TAIL}`, { maxTokens: 2600, timeoutMs: 90000 }));
 
       const safeOut = out && typeof out === "object" ? out : {};
 
