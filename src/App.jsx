@@ -61205,6 +61205,11 @@ function groundedDueFollowBackAction(w) {
   const rows = Object.values(state.pendingFollowBack || {}).filter((row) => row && Number(row.dueAt || 0) <= now()).sort((a, b) => Number(a.dueAt || 0) - Number(b.dueAt || 0));
   for (const row of rows) {
     if (!charById(w, row.botId) || isHuman(w, row.botId)) { delete state.pendingFollowBack[row.botId]; continue; }
+    if (!groundedFollowBackPersonalityEligible(w, row.botId, row.humanId)) {
+      groundedEventLog(w, "follow-not-returned", "failed", "No follow-back DM: character personality/relationship does not justify a direct reaction.", "follow:" + row.botId + ">" + row.humanId);
+      delete state.pendingFollowBack[row.botId];
+      continue;
+    }
     const pauseReason = typeof eventDrivenAutonomousDmPauseReason === "function" ? String(eventDrivenAutonomousDmPauseReason(w) || "") : "";
     if (pauseReason && /scene|roleplay|event/i.test(pauseReason)) {
       if (!row.lastDeferredLogAt || now() - Number(row.lastDeferredLogAt) > 60000) {
