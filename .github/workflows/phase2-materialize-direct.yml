@@ -16,7 +16,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
       - name: Materialize existing effective source once
         run: npm run social-policy
       - name: Apply direct-source Phase 2 repair
@@ -44,7 +43,7 @@ jobs:
           if grep -q 'node scripts/apply-grounded-events-invites-v1.mjs' package.json; then echo 'ERROR: patch chain still active' >&2; exit 1; fi
       - name: Install and build canonical source
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npm run build
       - name: Commit canonical source and remove migration tooling
         shell: bash
@@ -52,7 +51,7 @@ jobs:
           rm -rf .phase2-migration
           rm -f .github/workflows/phase2-source-export.yml
           rm -f .github/workflows/phase2-materialize-direct.yml
-          git add src/App.jsx server/proxy.js package.json .github .phase2-migration || true
+          git add -A
           git config user.name 'phase2-direct-source'
           git config user.email 'actions@users.noreply.github.com'
           git commit -m 'Phase 2 direct social event repair [phase2-direct-done]'
