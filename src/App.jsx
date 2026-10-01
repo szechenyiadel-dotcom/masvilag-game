@@ -2912,7 +2912,7 @@ const BOND_PAIR = {
   "Testvér": "Testvér", "Ikertestvér": "Ikertestvér", "Féltestvér": "Féltestvér",
   "Mostohatestvér": "Mostohatestvér", "Unokatestvér": "Unokatestvér", "Rokon": "Rokon",
   "Após / anyós": "Meny / vő", "Sógor / sógornő": "Sógor / sógornő",
-  "Randizgatnak": "Randizgatnak", "Csapattárs": "Csapattárs",
+  "Randizgatnak": "Randizgatnak", "Csapattárs": "Csapattárs", "Álkapcsolat": "Álkapcsolat",
   "Járnak": "Járnak", "Jegyesek": "Jegyesek", "Házastárs": "Házastárs", "Exek": "Exek",
   "Titkos viszony": "Titkos viszony", "Osztálytárs": "Osztálytárs", "Szomszéd": "Szomszéd",
   "Munkatárs": "Munkatárs", "Kölcsönös crush": "Kölcsönös crush",
@@ -2936,7 +2936,7 @@ const FIXED_BONDS = ["Anya", "Apa", "Szülő", "Fia", "Lánya", "Gyerek", "Testv
   "Mostohatestvér", "Mostohaszülő", "Nevelt gyerek", "Nagymama", "Nagypapa", "Nagyszülő", "Unoka",
   "Unokatestvér", "Nagynéni", "Nagybácsi", "Rokon", "Após / anyós", "Sógor / sógornő"];
 const SOFT_BONDS = ["Ellenség", "Rivális", "Ismerős", "Haver", "Barát", "Közeli barát", "Legjobb barát",
-  "Crush", "Kölcsönös crush", "Megszállottság", "Randizgatnak", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony",
+  "Crush", "Kölcsönös crush", "Megszállottság", "Randizgatnak", "Álkapcsolat", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony",
   "Osztálytárs", "Szomszéd", "Munkatárs", "Főnök", "Beosztott", "Mentor", "Tanítvány", "Edző", "Tanár"];
 
 // A kapcsolat hangulata a pontszám alapján, a kötelék címkéjétől függetlenül.
@@ -3159,6 +3159,7 @@ function normalizedOfficialKind(rel) {
   if (fearful && !/spouse|házastárs|married|engaged|jegyes|dating|járnak/.test(bond)) return { kind: "afraid", rank: 35, unilateral: true, fearful };
   if (/spouse|házastárs|férj|feleség|married|házas/.test(bond)) return { kind: "spouse", rank: 90 };
   if (/engaged|jegyes|fiancé|fiance/.test(bond)) return { kind: "engaged", rank: 80 };
+  if (isFakeDatingText(bond)) return { kind: "fake-dating", rank: 70 };
   if (/randizgat|seeing each other/.test(bond)) return { kind: "seeing", rank: 68 };
   if (/dating|járnak|partner|boyfriend|girlfriend|párkapcsolat|couple/.test(bond)) return { kind: "dating", rank: 70 };
   if (/exes|\bex\b|volt pár/.test(bond)) return { kind: "exes", rank: 65 };
@@ -3181,6 +3182,7 @@ function officialKindLabel(kind, lang = CURRENT_LANG) {
     engaged: en ? "Engaged" : "Jegyesek",
     dating: en ? "Dating" : "Járnak",
     seeing: en ? "Seeing each other" : "Randizgatnak",
+    "fake-dating": en ? "Fake dating" : "Álkapcsolat",
     buddy: en ? "Buddies" : "Haverok",
     exes: en ? "Exes" : "Exek",
     "best-friend": en ? "Best friends" : "Legjobb barátok",
@@ -3225,12 +3227,14 @@ function mutualRomanticFloor(aKind, bKind) {
 function explicitMutualStatus(w, a, b) {
   const key = relationshipOfficialOverrideKey(a, b);
   const override = w && w.relationshipOfficialOverrides && w.relationshipOfficialOverrides[key];
-  if (override && ["seeing", "dating", "engaged", "spouse", "exes", "best-friend"].includes(String(override.kind || ""))) {
+  if (override && ["seeing", "dating", "engaged", "spouse", "exes", "best-friend", "fake-dating"].includes(String(override.kind || ""))) {
     return String(override.kind);
   }
 
   const ra = getRel(w, a, b) || EMPTY_REL;
   const rb = getRel(w, b, a) || EMPTY_REL;
+  /* CLAUDE FIX R15: a fake-dating arrangement is one shared status for the pair. */
+  if (isFakeDatingText(ra.bond || ra.type) || isFakeDatingText(rb.bond || rb.type)) return "fake-dating";
   const romantic = mutualRomanticFloor(directedRomanticOfficialKind(ra), directedRomanticOfficialKind(rb));
   if (romantic) return romantic;
 
@@ -3280,7 +3284,7 @@ function officialRelationshipStatusForPair(w, ownerId, targetId, lang = CURRENT_
   }
   if (a.unilateral) return officialKindLabel(a.kind, lang);
 
-  const mutualKinds = ["spouse", "engaged", "dating", "seeing", "exes", "best-friend"];
+  const mutualKinds = ["spouse", "engaged", "dating", "seeing", "exes", "best-friend", "fake-dating"];
   if (mutualKinds.includes(a.kind) || mutualKinds.includes(b.kind)) {
     const sharedRank = Math.min(a.rank, b.rank);
     const shared =
@@ -15194,6 +15198,8 @@ function legacyRelationshipBehaviorCard(
   }
 
   parts.push(flirtIdentityInstruction(w, actorId, targetId, rel));
+  const fakeDating = fakeDatingBehaviorCard(w, actorId, targetId);
+  if (fakeDating) parts.push(fakeDating);
 
   if (filterTier === "hostile") {
     parts.push(
@@ -18800,7 +18806,7 @@ const TERM_TEXT = {
       "Nagynéni": "Aunt", "Nagybácsi": "Uncle", "Unokahúg / unokaöcs": "Niece / nephew",
       "Testvér": "Sibling", "Ikertestvér": "Twin sibling", "Féltestvér": "Half-sibling", "Mostohatestvér": "Stepsibling",
       "Unokatestvér": "Cousin", "Rokon": "Relative", "Após / anyós": "Parent-in-law", "Meny / vő": "Daughter/son-in-law",
-      "Sógor / sógornő": "Sibling-in-law", "Randizgatnak": "Seeing each other", "Haver": "Buddy", "Csapattárs": "Teammate", "Járnak": "Dating", "Jegyesek": "Engaged", "Házastárs": "Spouse",
+      "Sógor / sógornő": "Sibling-in-law", "Álkapcsolat": "Fake dating", "Randizgatnak": "Seeing each other", "Haver": "Buddy", "Csapattárs": "Teammate", "Járnak": "Dating", "Jegyesek": "Engaged", "Házastárs": "Spouse",
       "Exek": "Exes", "Titkos viszony": "Secret affair", "Osztálytárs": "Classmate", "Szomszéd": "Neighbor",
       "Munkatárs": "Coworker", "Crush": "Crush", "Kölcsönös crush": "Mutual crush", "Megszállottság": "Obsession", "Főnök": "Boss",
       "Beosztott": "Subordinate", "Mentor": "Mentor", "Tanítvány": "Student", "Tanár": "Teacher", "Edző": "Coach",
@@ -18838,6 +18844,7 @@ function localizedBond(value, lang = CURRENT_LANG) {
     "Acquaintance": "Ismerős",
     "Buddy": "Haver",
     "Seeing each other": "Randizgatnak",
+    "Fake dating": "Álkapcsolat",
     "Friend": "Barát",
     "Close friend": "Közeli barát",
     "Best friend": "Legjobb barát",
@@ -62437,13 +62444,18 @@ function relationshipReadingSnippet(w, actor, target) {
   }
 }
 
+/* versioned so a reading-rule change (R15: fake dating) re-reads every sheet once */
+function relationshipReadingHash(snippet) {
+  return simsSocialStableHash("v2|" + String(snippet || ""));
+}
+
 function relationshipReadingResult(w, actor, target) {
   if (!w || !actor || !target) return null;
   const state = w.sim && w.sim.relationshipReading;
   const row = state && state[actor.id] && state[actor.id].targets && state[actor.id].targets[target.id];
   if (!row) return null;
   const snippet = relationshipReadingSnippet(w, actor, target);
-  if (snippet) return !row.structural && row.hash === simsSocialStableHash(snippet) ? row : null;
+  if (snippet) return !row.structural && row.hash === relationshipReadingHash(snippet) ? row : null;
   if (row.structural && row.hash === structuralRelationshipHash(w, actor, target)) return row;
   return null;
 }
@@ -62454,7 +62466,7 @@ function relationshipReadingDueTargets(w, actor) {
   return allSubjects(w)
     .filter((target) => target && target.id && target.id !== actor.id)
     .map((target) => ({ target, snippet: relationshipReadingSnippet(w, actor, target) }))
-    .filter((row) => row.snippet && (!done[row.target.id] || done[row.target.id].hash !== simsSocialStableHash(row.snippet)));
+    .filter((row) => row.snippet && (!done[row.target.id] || done[row.target.id].hash !== relationshipReadingHash(row.snippet)));
 }
 
 function relationshipReadingDueAction(w) {
@@ -62477,7 +62489,7 @@ function relationshipReadingDueAction(w) {
   return null;
 }
 
-const RELATIONSHIP_READING_BONDS = ["Anya", "Apa", "Szülő", "Fia", "Lánya", "Testvér", "Ikertestvér", "Féltestvér", "Mostohatestvér", "Mostohaszülő", "Nagyszülő", "Unoka", "Unokatestvér", "Nagynéni", "Nagybácsi", "Rokon", "Ismerős", "Haver", "Barát", "Közeli barát", "Legjobb barát", "Crush", "Kölcsönös crush", "Randizgatnak", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony", "Rivális", "Ellenség", "Osztálytárs", "Szomszéd", "Munkatárs", "Főnök", "Beosztott", "Mentor", "Tanítvány", "Edző", "Tanár", "Megszállottság"];
+const RELATIONSHIP_READING_BONDS = ["Anya", "Apa", "Szülő", "Fia", "Lánya", "Testvér", "Ikertestvér", "Féltestvér", "Mostohatestvér", "Mostohaszülő", "Nagyszülő", "Unoka", "Unokatestvér", "Nagynéni", "Nagybácsi", "Rokon", "Ismerős", "Haver", "Barát", "Közeli barát", "Legjobb barát", "Crush", "Kölcsönös crush", "Randizgatnak", "Álkapcsolat", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony", "Rivális", "Ellenség", "Osztálytárs", "Szomszéd", "Munkatárs", "Főnök", "Beosztott", "Mentor", "Tanítvány", "Edző", "Tanár", "Megszállottság"];
 
 async function genRelationshipReading(w, actor, due) {
   const en = worldLanguage(w, w.meId) === "en";
@@ -62490,7 +62502,7 @@ async function genRelationshipReading(w, actor, due) {
     "",
     "For EACH target read the whole entry carefully and return:",
     "- score: -100..100, the actor's overall warmth toward the target. Fear, hatred, contempt, distrust push it down; love, loyalty, trust push it up. Mixed feelings land in between. Intensity is NOT friendship: an obsession or a fearful attraction is not a friendship.",
-    "- bond: the structural relationship label. Choose one of: " + RELATIONSHIP_READING_BONDS.join(", ") + " — or a short custom label if none fits (e.g. \"Ex-lover\", \"Stalker\"). Use Barát / Közeli barát / Legjobb barát ONLY if the entry says they are actually friends NOW. Use Crush for one-sided or unspoken attraction, Kölcsönös crush only if the entry says the attraction is mutual, Megszállottság for obsession.",
+    "- bond: the structural relationship label. Choose one of: " + RELATIONSHIP_READING_BONDS.join(", ") + " — or a short custom label if none fits (e.g. \"Ex-lover\", \"Stalker\"). Use Barát / Közeli barát / Legjobb barát ONLY if the entry says they are actually friends NOW. Use Crush for one-sided or unspoken attraction, Kölcsönös crush only if the entry says the attraction is mutual, Megszállottság for obsession, Álkapcsolat if they only PRETEND to be a couple (fake dating) — then put the real feeling in mood/hidden.",
     "- mood: 2-10 words in " + lang + ": how the actor visibly feels toward the target (e.g. \"afraid of him, yet drawn to him\").",
     "- hidden: in " + lang + ", the feeling the actor hides or does not admit (or empty).",
     "- attraction, fear, obsession, trust: 0-100 each.",
@@ -62570,9 +62582,9 @@ async function runRelationshipReadingAction(view, update, action) {
       const snippet = liveTarget ? relationshipReadingSnippet(n, liveActor, liveTarget) : "";
       if (!row || !snippet) return;
       entry.targets[target.id] = {
-        hash: simsSocialStableHash(snippet),
+        hash: relationshipReadingHash(snippet),
         score: clampRelationshipScore(Number(row.score) || 0),
-        bond: String(row.bond || "").trim().slice(0, 60),
+        bond: normalizeFakeDatingBond(String(row.bond || "").trim().slice(0, 60)),
         mood: String(row.mood || "").trim().slice(0, 160),
         hidden: String(row.hidden || "").trim().slice(0, 300),
         why: String(row.why || "").trim().slice(0, 300),
@@ -62608,10 +62620,30 @@ async function runRelationshipReadingAction(view, update, action) {
    flirting (a married character does not return advances), and they seed a
    default attitude for pairs whose sheets do not mention each other.
    ===================================================================== */
-const IDENTITY_CANON_VERSION = "2";
+const IDENTITY_CANON_VERSION = "3";
 const IDENTITY_CANON_MIN_GAP_MS = 12 * 1000;
 const IDENTITY_CANON_RETRY_MS = 10 * 60 * 1000;
 const STRUCTURAL_READING_BATCH = 12;
+
+function isFakeDatingText(value) {
+  return /[aá]lkapcsolat|[aá]l-kapcsolat|kamu ?(?:kapcsolat|p[aá]r)|fake[- ]?dat|fake (?:relationship|couple|girlfriend|boyfriend)|pretend(?:ing)? to (?:date|be (?:a )?couple|be together)|fake-dating/i.test(String(value || ""));
+}
+
+function normalizeFakeDatingBond(value) {
+  return isFakeDatingText(value) ? "Álkapcsolat" : value;
+}
+
+function fakeDatingBehaviorCard(w, actorId, targetId) {
+  const rel = getRel(w, actorId, targetId) || EMPTY_REL;
+  const reverse = getRel(w, targetId, actorId) || EMPTY_REL;
+  if (!isFakeDatingText(rel.bond || rel.type) && !isFakeDatingText(reverse.bond || reverse.type)) return "";
+  const en = worldLanguage(w, w && w.meId) === "en";
+  const target = nameOfIn(w, targetId);
+  const real = [rel.mood, rel.hidden].filter(Boolean).join("; ");
+  return en
+    ? "FAKE DATING WITH " + target + ": the two of you PRETEND to be a couple. In public (posts, comments, events with others) keep up the act — couple behaviour, pet names, defending the 'relationship', reacting as a partner would. In private (DMs, scenes with only the two of you) your real feelings show" + (real ? " (" + real + ")" : "") + ". Never reveal publicly that it is fake."
+    : "ÁLKAPCSOLAT " + target + " FELÉ: ti ketten csak ELJÁTSSZÁTOK, hogy egy pár vagytok. Nyilvánosan (posztok, kommentek, közös események) tartsátok fenn a látszatot — páros viselkedés, becenevek, a „kapcsolat” védelme, partnerként reagálás. Privátban (DM, kettesben zajló jelenet) a valódi érzéseid látszanak" + (real ? " (" + real + ")" : "") + ". Nyilvánosan soha ne áruld el, hogy kamu.";
+}
 
 function identityCanonState(w) {
   const sim = ensureSimState(w);
@@ -62659,6 +62691,7 @@ function identityCommittedElsewhere(w, actor, target) {
   const d = identityCanonFor(w, actor.id);
   if (!d) return null;
   const status = String(d.relationshipStatus || "").toLowerCase();
+  if (isFakeDatingText(status)) return null;
   if (!/married|engaged|dating|relationship|partner/.test(status)) return null;
   if (d.faithful === false) return null;
   const partner = String(d.partner || "").trim();
@@ -62694,7 +62727,10 @@ function identityCanonLine(w, c) {
   if (Array.isArray(d.rivals) && d.rivals.length) bits.push((en ? "rivals: " : "riválisok: ") + d.rivals.slice(0, 4).join(", "));
   if (Array.isArray(d.hates) && d.hates.length) bits.push((en ? "despises: " : "megveti: ") + d.hates.slice(0, 3).join(", "));
   const status = String(d.relationshipStatus || "").toLowerCase();
-  if (status && status !== "unknown" && status !== "single") {
+  if (isFakeDatingText(status)) {
+    /* shown to everyone as the public version; the "fake" part lives only in the pair's own cards */
+    bits.push((en ? "status: publicly dating " : "családi állapot: nyilvánosan együtt van vele: ") + (d.partner || "?"));
+  } else if (status && status !== "unknown" && status !== "single") {
     bits.push((en ? "status: " : "családi állapot: ") + status + (d.partner ? (en ? " — partner: " : " — partner: ") + d.partner : "") + (d.faithful === false ? (en ? " (not faithful)" : " (nem hűséges)") : ""));
   } else if (status === "single") {
     bits.push(en ? "status: single" : "családi állapot: egyedülálló");
@@ -62818,7 +62854,7 @@ async function runIdentityCanonAction(view, update, action) {
     "- teammates: names of current teammates or students mentioned on the sheet (max 8).",
     "- rivals: rival groups or people (max 6).",
     "- hates: groups or people they openly despise (max 4).",
-    "- relationshipStatus: one of single | dating | engaged | married | divorced | widowed | complicated | unknown.",
+    "- relationshipStatus: one of single | dating | fake-dating | engaged | married | divorced | widowed | complicated | unknown (fake-dating = they only pretend to be a couple).",
     "- partner: current partner's name (empty if none).",
     "- faithful: false ONLY if the sheet says they cheat / have an affair / are in an open relationship; otherwise true.",
     "- children: short text or empty.",
