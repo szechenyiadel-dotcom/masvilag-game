@@ -8846,6 +8846,7 @@ function repairAiJsonText(raw) {
   let inString = false;
   let escaped = false;
   let finished = false;
+  let stringStart = -1;
   for (let i = start; i < text.length; i++) {
     const ch = text[i];
     if (inString) {
@@ -8858,7 +8859,7 @@ function repairAiJsonText(raw) {
       out += ch;
       continue;
     }
-    if (ch === "\"") { out += ch; inString = true; continue; }
+    if (ch === "\"") { out += ch; inString = true; stringStart = out.length; continue; }
     if (ch === "{" || ch === "[") { stack.push(ch === "{" ? "}" : "]"); out += ch; continue; }
     if (ch === "}" || ch === "]") {
       out = out.replace(/[\s,]+$/, "");
@@ -8885,8 +8886,16 @@ function repairAiJsonText(raw) {
       attempts.push(out.slice(0, cuts[k].at) + cuts[k].stack.slice().reverse().join(""));
     }
     let tail = out;
-    if (inString) tail += "\"";
-    attempts.push(tail.replace(/[\s,:]+$/, "") + stack.slice().reverse().join(""));
+    if (inString) {
+      /* R37: the answer was cut inside a text — keep it only up to its last full sentence */
+      const body = out.slice(stringStart);
+      const re = /[.!?…]+(?=\s|$)/g;
+      let m, last = -1;
+      while ((m = re.exec(body))) last = m.index + m[0].length;
+      if (last > 0) tail = out.slice(0, stringStart + last) + "\"";
+      else tail = "";
+    }
+    if (tail) attempts.push(tail.replace(/[\s,:]+$/, "") + stack.slice().reverse().join(""));
   }
   for (const candidate of attempts) {
     try {
@@ -10047,11 +10056,8 @@ function legacyVoiceStyleCleanGeneratedComment(w, id, text, maxLen = 240) {
   if (isRepetitiveUtterance(w, id, t)) return "";
 
   if (t.length <= maxLen) return t;
-  /* CLAUDE FIX R18: never cut a comment mid-sentence — keep whole sentences or drop it */
-  const head = t.slice(0, maxLen);
-  const end = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "), head.lastIndexOf("… "));
-  if (end >= Math.floor(maxLen * 0.35)) return head.slice(0, end + 1).trim();
-  return "";
+  /* CLAUDE FIX R18/R37: never cut a comment mid-sentence */
+  return trimToWholeSentences(t, maxLen);
 }
 
 function commentSeedNumber(value) {
@@ -11763,7 +11769,35 @@ function legacyVoiceStyleCleanGeneratedUtterance(
   if (!t) return "";
   if (isRepetitiveUtterance(w, id, t)) return "";
   if (allowPhysicalPhoneMeta && isRepetitiveRoleplayFunction(w, id, t)) return "";
-  return t.length > maxLen ? t.slice(0, maxLen) : t;
+  return trimToWholeSentences(t, maxLen);
+}
+
+/* CLAUDE FIX R37: a length limit must never chop a sentence in half. The text
+   ends at the last complete sentence inside the limit — or, if the first
+   sentence runs a little over, that sentence is finished (up to 1.6× the
+   limit). Only a single endless sentence is cut at a word with "…". */
+function trimToWholeSentences(value, maxLen) {
+  const t = String(value || "").trim();
+  const max = Math.max(40, Number(maxLen) || 500);
+  if (t.length <= max) return t;
+  const soft = Math.round(max * 1.6);
+  const head = t.slice(0, soft);
+  const re = /[.!?…]+["'”’)\]*]*(?=\s|$)/g;
+  let m, inside = -1, beyond = -1;
+  while ((m = re.exec(head))) {
+    const end = m.index + m[0].length;
+    if (end <= max) inside = end;
+    else if (beyond < 0) beyond = end;
+  }
+  let out;
+  if (inside >= max * 0.35) out = t.slice(0, inside);
+  else if (beyond > 0) out = t.slice(0, beyond);
+  else if (inside > 0) out = t.slice(0, inside);
+  else out = (t.slice(0, max).replace(/\s+\S*$/, "") || t.slice(0, max)).replace(/[,;:\-–—\s]+$/, "") + "…";
+  out = out.trim();
+  /* an action left open (*walks to…) is closed */
+  if (((out.match(/\*/g) || []).length % 2) === 1) out += "*";
+  return out;
 }
 
 /* ============================================================
@@ -13981,7 +14015,7 @@ function isOwnSenseiRelationship(w, actorId, targetId) {
   if (!actor || !target || !characterIsSensei(target)) return false;
 
   const rel = getRel(w, actorId, targetId) || {};
-  const relationText = `${rel.bond || ""} ${rel.type || ""} ${rel.hidden || ""}`.toLowerCase();
+  const relationText = `${rel.bond || ""} ${rel.type || ""} ${rel.hidden || ""} ${rel.role || ""}`.toLowerCase();
 
   if (/\b(?:my\s+)?sensei\b|\bteacher\b|\bmentor\b|\bkarate instructor\b|\bmartial arts instructor\b|\btan[aá]r\b|\bedz[oő]\b|\bmester\b/.test(relationText)) {
     return true;
@@ -31755,7 +31789,7 @@ function RelPair({ w, aId, bId, aName, bName, update }) {
             : r.mood
               ? localizedRelationshipDisplayText(r.mood, CURRENT_LANG)
               : relLabel(r)}
-          <div className="hint" style={{ marginTop: 3 }}>{tt("Hivatalos státusz: ", "Official status: ")}{officialRelationshipStatusForPair(w, from, to, CURRENT_LANG)}</div>
+          <div className="hint" style={{ marginTop: 3 }}>{tt("Hivatalos státusz: ", "Official status: ")}{officialRelationshipStatusForPair(w, from, to, CURRENT_LANG)}{r.role ? " · " + tt("szerep: ", "role: ") + r.role : ""}</div>
         </div>
         {r.why ? <p className="hint" style={{ marginBottom: 6 }}>{r.why}</p> : null}
         <RelBar score={r.score} />
@@ -39626,7 +39660,15 @@ function restartWorldHistoryInPlace(w) {
 
   /* New autonomous runtime starts cleanly instead of replaying queued old work. */
   w.autoAt = 0;
+  /* CLAUDE FIX R37: the sheet readings (who is who, character bible) are kept —
+     they re-read themselves when a sheet changes — but EVERY relationship is
+     read again from the sheets on each restart. */
+  const keptIdentity = w.sim && w.sim.identityCanon;
+  const keptBible = w.sim && w.sim.characterBible;
   w.sim = freshSimulationRuntime(at);
+  if (keptIdentity) w.sim.identityCanon = keptIdentity;
+  if (keptBible) w.sim.characterBible = keptBible;
+  try { RELATIONSHIP_READING_CHECKED.clear(); } catch (error) { /* first load */ }
   w.activeSceneId = "";
 
   if (w.universe && typeof w.universe === "object") {
@@ -60480,7 +60522,7 @@ function inferCanonicalRelationshipBaseline(w, actor, target) {
     /* The AI read the whole entry, so its label wins over the keyword guess
        ("used to be friends with her brother" is not a sibling bond). */
     const family = FIXED_BONDS.indexOf(String(reading.bond || "")) >= 0;
-    return { score: reading.score, bond: reading.bond, fixed: family, hidden: reading.hidden, mood: reading.mood, why: reading.why, source: "connections-ai" };
+    return { score: reading.score, bond: reading.bond, role: reading.role || "", fixed: family, hidden: reading.hidden, mood: reading.mood, why: reading.why, source: "connections-ai" };
   }
   return inferCanonicalRelationshipBaselineFromText(w, actor, target);
 }
@@ -61108,7 +61150,19 @@ function relationshipBehaviorCard(...args) {
   const actorId = args[1];
   const targetId = args[2];
   const extra = simsSocialRelationshipContextCard(w, actorId, targetId);
-  return [base, extra].filter(Boolean).join("\n\n");
+  /* R37: both layers of a relationship (role + what lies beyond it) */
+  let layers = "";
+  try {
+    const r = getRel(w, actorId, targetId) || EMPTY_REL;
+    if (r.role) {
+      const en = worldLanguage(w, w.meId) === "en";
+      const deeper = [r.bond && !new RegExp(String(r.role).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(r.bond) ? r.bond : "", r.label, r.mood, r.hidden].filter(Boolean).join(" · ");
+      layers = en
+        ? "ROLE BETWEEN YOU: " + r.role + (deeper ? ". BEYOND THE ROLE: " + deeper + " — play both layers at once: the role shapes how you behave in front of others, the deeper layer leaks through (looks, tension, lines you almost cross)." : ".")
+        : "SZEREP KÖZÖTTETEK: " + r.role + (deeper ? ". A SZEREPEN TÚL: " + deeper + " — mindkét réteget egyszerre játszd: a szerep szabja meg, hogyan viselkedsz mások előtt, a mélyebb réteg kiszivárog (pillantások, feszültség, majdnem átlépett határok)." : ".");
+    }
+  } catch (error) { layers = ""; }
+  return [base, extra, layers].filter(Boolean).join("\n\n");
 }
 
 function simsSocialEventKey(event) {
@@ -63400,7 +63454,7 @@ function relationshipReadingSnippet(w, actor, target) {
 
 /* versioned so a reading-rule change re-reads every sheet once (R36: deep pair reading) */
 function relationshipReadingHash(snippet) {
-  return simsSocialStableHash("v4|" + String(snippet || ""));
+  return simsSocialStableHash("v5|" + String(snippet || "")); /* R37: + role layer */
 }
 
 function relationshipReadingResult(w, actor, target) {
@@ -63470,6 +63524,8 @@ async function genRelationshipReading(w, actor, due) {
     "- hidden: in " + lang + ", the feeling the actor hides or does not admit (or empty).",
     "- attraction, fear, obsession, trust: 0-100 each.",
     "- why: one short " + lang + " sentence that points to the entry.",
+    "- role: the structural tie between them if there is one (mentor / student, sensei / student, teacher, coach, boss / employee, teammate, bandmate, roommate, neighbour, classmate...), from the actor's side, in " + lang + " — or empty.",
+    "LAYERS: a role is rarely the whole story. If they are mentor & student (or boss & employee, teammates...) AND the sheets show more — attraction, a crush, obsession, love, a secret affair, rivalry, resentment, hatred — then `bond` must name that deeper layer (Crush, Kölcsönös crush, Megszállottság, Titkos viszony, Rivális...), `role` keeps the structural tie, and mood / hidden / label must show both (e.g. label \"mentor who looks a beat too long\"). Use Mentor / Tanítvány / Edző / Tanár as bond ONLY when the role really is all there is.",
     "- label: 2-6 words in " + lang + ", a vivid, specific tag for how the actor relates to the target right now (e.g. \"plays it cool, can't stop watching\", \"old wound, still loyal\") — never a bare category.",
     "Stay conservative when the entry is ambiguous. Never invent history. Use a family label ONLY for the actor's own relative (not for \"her brother's friend\"); for a relative, describe the feeling in mood/score.",
     "",
@@ -63477,7 +63533,7 @@ async function genRelationshipReading(w, actor, due) {
     ...targets.map((row) => "- id=\"" + row.target.id + "\" " + row.target.name + ":\n" + cut(row.snippet, 5200)),
     "",
     "JSON ONLY:",
-    '{"targets":[{"id":"TARGET_ID","score":0,"bond":"","mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"why":"","label":""}]}',
+    '{"targets":[{"id":"TARGET_ID","score":0,"bond":"","role":"","mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"why":"","label":""}]}',
   ].filter((x) => x !== "").join("\n");
   return askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 3200, priority: 5, source: "relationship-reading", quality: "deep", timeoutMs: 110000 });
 }
@@ -63498,12 +63554,13 @@ function applyRelationshipReadingToLive(n, actorId, targetId, oldBase, newBase, 
   /* warmth that only came from a romance a faithful, married character would never have is not kept */
   if (unfaithfulRomance) earned = Math.min(0, earned);
   const patch = { score: clampRelationshipScore((Number(newBase.score) || 0) + earned) };
+  if (newBase.role !== undefined) patch.role = String(newBase.role || "").slice(0, 60);
   /* A friendship / acquaintance label that the sheet contradicts (obsession, attraction,
      fear, hatred) came from the old keyword reader, so it is replaced. Bonds reached in
      play (dating, engaged, married, exes) are never touched. */
   const weakLiveBond = options.structural
     ? (!liveBond || /^(?:ismer[oő]s|acquaintance)$/i.test(liveBond.trim()))
-    : (!liveBond || /^(?:haver|buddy|bar[aá]t|k[oö]zeli bar[aá]t|legjobb bar[aá]t|ismer[oő]s|friend|close friend|best friend|acquaintance)$/i.test(liveBond.trim()));
+    : (!liveBond || /^(?:haver|buddy|bar[aá]t|k[oö]zeli bar[aá]t|legjobb bar[aá]t|ismer[oő]s|friend|close friend|best friend|acquaintance|mentor|tan[ií]tv[aá]ny|student|edz[oő]|coach|tan[aá]r|teacher|sensei|munkat[aá]rs|coworker|f[oő]n[oö]k|boss|beosztott|employee|oszt[aá]lyt[aá]rs|classmate|csapatt[aá]rs|teammate)$/i.test(liveBond.trim()));
   const committedLiveBond = /j[aá]rnak|jegyes|h[aá]zast[aá]rs|exek|dating|engaged|married|spouse|\bex/i.test(liveBond);
   const replaceableBond = weakLiveBond || (!options.structural && !oldBase) || (oldBase && liveBond === String(oldBase.bond || oldBase.type || ""));
   if (!live.fixed && newBase.bond && (unfaithfulRomance || (!committedLiveBond && replaceableBond))) patch.bond = newBase.bond;
@@ -63553,6 +63610,7 @@ async function runRelationshipReadingAction(view, update, action) {
         hidden: String(row.hidden || "").trim().slice(0, 300),
         why: String(row.why || "").trim().slice(0, 300),
         label: String(row.label || "").replace(/["“”]/g, "").trim().slice(0, 70),
+        role: String(row.role || "").trim().slice(0, 60),
         attraction: Math.max(0, Math.min(100, Number(row.attraction) || 0)),
         fear: Math.max(0, Math.min(100, Number(row.fear) || 0)),
         obsession: Math.max(0, Math.min(100, Number(row.obsession) || 0)),
@@ -63847,7 +63905,7 @@ function whoIsWhoCard(w, ids) {
   const en = worldLanguage(w, w.meId) === "en";
   return en
     ? "WHO IS WHO — CANON FROM EACH PERSON'S OWN SHEET (public facts; everyone in town knows them):\n" + lines.join("\n") +
-      "\nRULES: Everyone knows which dojo/team/group each person belongs to, who their sensei/leader is, who their teammates are and who is married. Members of rival groups treat each other as rivals unless a personal bond written on their own sheet says otherwise. A married/committed person is loyal to their partner: they don't start flirting, and advances from others meet resistance that fits their personality (guilt, deflection, awkwardness, a firm reminder of their partner). Only tension built up slowly over time can create cracks, and they struggle with it. Adults who teach, coach or lead younger people keep a professional distance from them unless their sheet says otherwise. Use each person's pronouns exactly as listed — never swap he/she or him/her. Address the player by her/his real name or the given nickname, never by another character's name."
+      "\nRULES: Everyone knows which dojo/team/group each person belongs to, who their sensei/leader is, who their teammates are and who is married. Members of rival groups treat each other as rivals unless a personal bond written on their own sheet says otherwise. A married/committed person is loyal to their partner: they don't start flirting, and advances from others meet resistance that fits their personality (guilt, deflection, awkwardness, a firm reminder of their partner). Only tension built up slowly over time can create cracks, and they struggle with it. Adults who teach, coach or lead younger people keep a professional distance from them unless their sheet says otherwise — and when the sheets DO give such a pair more (attraction, tension, a secret), that layer is real: play it with the weight of the line they should not cross. Use each person's pronouns exactly as listed — never swap he/she or him/her. Address the player by her/his real name or the given nickname, never by another character's name."
     : "KI KICSODA — KÁNON MINDENKI SAJÁT LAPJÁRÓL (nyilvános tények, a városban mindenki tudja):\n" + lines.join("\n") +
       "\nSZABÁLYOK: Mindenki tudja, ki melyik dojóhoz/csapathoz/csoporthoz tartozik, ki a senseie/vezetője, kik a csapattársai és ki házas. Rivális csoportok tagjai riválisként kezelik egymást, hacsak a saját lapjukon leírt személyes kötődés mást nem mond. Házas/elkötelezett ember lojális a partneréhez: nem kezdeményez flörtöt, és a közeledésre a személyiségéhez illő ellenállással reagál (bűntudat, hárítás, zavar, a partnerére való emlékeztetés). Csak lassan, idővel felépülő feszültség okozhat repedést, és ő vívódik vele. Fiatalabbakat tanító/edző/vezető felnőtt szakmai távolságot tart velük, hacsak a lapja mást nem mond. Mindenkire a megadott névmással hivatkozz (angol szövegben he/him, she/her) — soha ne keverd a nemeket. A játékost a valódi nevén vagy a megadott becenevén szólítsák, soha ne egy másik karakter nevén."
 }
