@@ -52083,7 +52083,7 @@ function freshFeedPostCommentCandidate() {
 function worldContext(...args) {
   const base = String(legacyEventDrivenWorldContext(...args) || "");
   let who = "";
-  try { who = whoIsWhoCard(args[0], args[1]); } catch (error) { who = ""; }
+  try { who = [worldGroupGlossaryCard(args[0]), whoIsWhoCard(args[0], args[1])].filter(Boolean).join("\n\n"); } catch (error) { who = ""; }
   const withWho = who ? who + "\n\n" + base : base;
   const directive = eventDrivenFeedDirective();
   return directive ? withWho + "\n\n" + directive : withWho;
@@ -62395,7 +62395,7 @@ async function runRelationshipReadingAction(view, update, action) {
    flirting (a married character does not return advances), and they seed a
    default attitude for pairs whose sheets do not mention each other.
    ===================================================================== */
-const IDENTITY_CANON_VERSION = "1";
+const IDENTITY_CANON_VERSION = "2";
 const IDENTITY_CANON_MIN_GAP_MS = 12 * 1000;
 const IDENTITY_CANON_RETRY_MS = 10 * 60 * 1000;
 const STRUCTURAL_READING_BATCH = 12;
@@ -62472,7 +62472,9 @@ function identityCanonLine(w, c) {
   const pronouns = identityPronouns(c);
   const bits = [];
   if (pronouns) bits.push((en ? "pronouns: " : "névmások: ") + pronouns);
-  if (d.group) bits.push((en ? "group: " : "csoport: ") + d.group + (d.role ? " (" + d.role + ")" : ""));
+  if (Array.isArray(d.affiliations) && d.affiliations.length) {
+    bits.push((en ? "belongs to: " : "tagja: ") + d.affiliations.map((a) => a.name + " (" + [a.kind, a.role].filter(Boolean).join(", ") + ")").join("; "));
+  } else if (d.group) bits.push((en ? "group: " : "csoport: ") + d.group + (d.role ? " (" + d.role + ")" : ""));
   else if (d.role) bits.push((en ? "role: " : "szerep: ") + d.role);
   if (d.leader) bits.push((en ? "sensei/leader: " : "sensei/vezető: ") + d.leader);
   if (Array.isArray(d.teammates) && d.teammates.length) bits.push((en ? "teammates/students: " : "csapattársak/tanítványok: ") + d.teammates.slice(0, 5).join(", "));
@@ -62492,6 +62494,49 @@ function identityCanonLine(w, c) {
     : "";
   if (!d.oneLine && bits.length <= (pronouns ? 1 : 0) && !call) return pronouns ? "- " + who + " · " + bits.join(" · ") : "";
   return "- " + who + (d.oneLine ? " — " + d.oneLine : "") + (bits.length ? " · " + bits.join(" · ") : "") + call;
+}
+
+/* CLAUDE FIX R11: separate groups/settings must never blend into one storyline
+   (a death game, a gang and a university house do not share a scoreboard). */
+function worldGroupGlossary(w) {
+  const state = w && w.sim && w.sim.identityCanon;
+  if (!state) return [];
+  const groups = new Map();
+  const norm = (x) => String(x || "").toLowerCase().replace(/^the\s+/, "").replace(/\s+/g, " ").trim();
+  allSubjects(w).forEach((c) => {
+    if (!c || !c.id || isMediaAccount(w, c.id)) return;
+    const d = identityCanonFor(w, c.id);
+    if (!d) return;
+    const list = Array.isArray(d.affiliations) && d.affiliations.length ? d.affiliations : (d.group ? [{ name: d.group, kind: "", role: d.role }] : []);
+    list.forEach((a) => {
+      const key = norm(a.name);
+      if (!key || key.length < 2) return;
+      const row = groups.get(key) || { name: a.name, kinds: {}, members: [] };
+      if (a.kind) row.kinds[a.kind] = (row.kinds[a.kind] || 0) + 1;
+      if (row.members.length < 6) row.members.push(String(c.name || "").split(/\s+/)[0] + (a.role ? " (" + a.role + ")" : ""));
+      groups.set(key, row);
+    });
+  });
+  return [...groups.values()]
+    .sort((a, b) => b.members.length - a.members.length)
+    .slice(0, 14)
+    .map((g) => {
+      const kind = Object.entries(g.kinds).sort((x, y) => y[1] - x[1]).map(([k]) => k)[0] || "";
+      return { name: g.name, kind, members: g.members };
+    });
+}
+
+function worldGroupGlossaryCard(w) {
+  const rows = worldGroupGlossary(w);
+  if (!rows.length) return "";
+  const en = worldLanguage(w, w.meId) === "en";
+  return (en
+    ? "WORLD GROUPS & SETTINGS — SEPARATE THINGS, NEVER MERGE THEM:\n"
+    : "A VILÁG CSOPORTJAI ÉS HELYSZÍNEI — KÜLÖN DOLGOK, SOHA NE MOSD ÖSSZE ŐKET:\n") +
+    rows.map((g) => "- " + g.name + (g.kind ? " = " + g.kind : "") + (g.members.length ? (en ? " · people: " : " · emberek: ") + g.members.join(", ") : "")).join("\n") +
+    (en
+      ? "\nRULES: each of these is its own thing and behaves only like its kind (a gang does gang things, a university house does campus life, a death game is a deadly game, not a sport). Never put different groups into one contest, league or scoreboard, never invent scores or rankings between them, and never move one group's events into another's setting unless the story explicitly connects them."
+      : "\nSZABÁLYOK: mindegyik önálló dolog, és csak a saját fajtája szerint működik (a banda bandaként, az egyetemi ház campus-életként, a halálos játék halálos játékként, nem sportként). Különböző csoportokat soha ne tegyél egy versenybe, ligába vagy pontversenybe, ne találj ki köztük pontszámot vagy rangsort, és egyik csoport eseményeit se helyezd át a másik közegébe, hacsak a történet kifejezetten össze nem köti őket.");
 }
 
 function whoIsWhoCard(w, ids) {
@@ -62553,8 +62598,9 @@ async function runIdentityCanonAction(view, update, action) {
     "",
     "Fields:",
     "- oneLine: max 18 words in " + (en ? "English" : "Hungarian") + ", who this person is right now (e.g. \"high-school quarterback, youngest of three brothers\").",
-    "- group: the dojo / team / gang / organization they belong to NOW (empty if none).",
+    "- group: their MAIN dojo / team / gang / organization NOW (empty if none).",
     "- role: their role in it (sensei, student, captain, owner, member...).",
+    "- affiliations: EVERY group, place-bound community or story setting they belong to NOW, each with what KIND of thing it is (e.g. dojo, gang, university house, sorority/fraternity, death game, sports team, school, company, family, secret organization, club). A death game is not a sports league; a gang is not a team; a university house is not a gang. Max 6.",
     "- leader: name of their CURRENT sensei / coach / boss (empty if none or if they are the leader).",
     "- teammates: names of current teammates or students mentioned on the sheet (max 8).",
     "- rivals: rival groups or people (max 6).",
@@ -62566,7 +62612,7 @@ async function runIdentityCanonAction(view, update, action) {
     "- age: number or empty.",
     "",
     "JSON ONLY:",
-    '{"oneLine":"","group":"","role":"","leader":"","teammates":[],"rivals":[],"hates":[],"relationshipStatus":"unknown","partner":"","faithful":true,"children":"","age":""}',
+    '{"oneLine":"","group":"","role":"","affiliations":[{"name":"","kind":"","role":""}],"leader":"","teammates":[],"rivals":[],"hates":[],"relationshipStatus":"unknown","partner":"","faithful":true,"children":"","age":""}',
   ].join("\n");
   let out = null;
   try {
@@ -62590,10 +62636,15 @@ async function runIdentityCanonAction(view, update, action) {
   const str = (v, max) => String(v === undefined || v === null ? "" : v).replace(/\s+/g, " ").trim().slice(0, max);
   const arr = (v, max) => (Array.isArray(v) ? v : (v ? String(v).split(/[,;]/) : []))
     .map((x) => str(typeof x === "object" && x ? (x.name || x.id || "") : x, 60)).filter(Boolean).slice(0, max);
+  const affiliations = (Array.isArray(out && out.affiliations) ? out.affiliations : [])
+    .filter((a) => a && typeof a === "object" && String(a.name || "").trim())
+    .slice(0, 6)
+    .map((a) => ({ name: str(a.name, 60), kind: str(a.kind, 40).toLowerCase(), role: str(a.role, 40) }));
   const data = {
     oneLine: str(out && out.oneLine, 160),
     group: str(out && out.group, 80),
     role: str(out && out.role, 60),
+    affiliations,
     leader: str(out && out.leader, 60),
     teammates: arr(out && out.teammates, 8),
     rivals: arr(out && out.rivals, 6),
