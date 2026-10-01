@@ -28017,6 +28017,92 @@ function fairCommentCast(w, targetId, post = null) {
 
 /* CLAUDE FIX R3: the comment being answered (and what it replies to) is repeated
    in the protected tail, so a long prompt can never lose it. */
+/* CLAUDE FIX R14 (7.1–7.3): Sims-like social dynamics inside comment threads. */
+let REPLY_DYNAMIC_CONTEXT = null;
+/* while a jealous / rival / defend reply is applied, the "keep it friendly"
+   guards must not throw away the very conflict we asked for */
+let REPLY_DYNAMIC_APPLYING = "";
+
+function replyDynamicDirective(w, comment) {
+  const ctx = REPLY_DYNAMIC_CONTEXT;
+  if (!ctx || !comment || String(ctx.commentId) !== String(comment.id)) return "";
+  const en = worldLanguage(w, w && w.meId) === "en";
+  const responder = nameOfIn(w, ctx.responderId), target = nameOfIn(w, comment.authorId), author = nameOfIn(w, ctx.postAuthorId);
+  const map = {
+    jealous: en
+      ? responder + " has feelings for " + author + " and just watched " + target + " flirt with " + author + " in public. Reply to " + target + " with visible jealousy in your own style — a territorial jab, a cold warning, sarcasm or a possessive remark. Address " + target + ", not the post."
+      : responder + " érez valamit " + author + " iránt, és most látta, ahogy " + target + " nyilvánosan flörtöl vele. Válaszolj " + target + " kommentjére látható féltékenységgel a saját stílusodban — territoriális beszólás, hideg figyelmeztetés, szarkazmus vagy birtokló megjegyzés. " + target + " felé szólj, ne a poszthoz.",
+    rival: en
+      ? responder + " and " + target + " are rivals. Reply to " + target + "'s comment with a jab, mockery or a challenge that fits the rivalry (dojo pride, old grudges)."
+      : responder + " és " + target + " riválisok. Válaszolj " + target + " kommentjére a rivalizáláshoz illő beszólással, gúnnyal vagy kihívással (dojo-büszkeség, régi sérelmek).",
+    defend: en
+      ? responder + " is close to " + author + " and " + target + " was rude to " + author + ". Defend " + author + " and push back on " + target + " in your own style."
+      : responder + " közel áll " + author + "-hoz/hez, " + target + " pedig bunkó volt vele. Védd meg " + author + "-t, és szólj vissza " + target + "-nak/nek a saját stílusodban.",
+    banter: en
+      ? responder + " and " + target + " get along. Reply with friendly banter or a teasing addition to " + target + "'s comment."
+      : responder + " és " + target + " jóban vannak. Válaszolj baráti ugratással vagy poénos hozzáfűzéssel " + target + " kommentjére.",
+  };
+  const line = map[ctx.dynamic];
+  return line ? "\n" + (en ? "SOCIAL DYNAMIC FOR THIS REPLY: " : "TÁRSAS DINAMIKA EHHEZ A VÁLASZHOZ: ") + line : "";
+}
+
+function playerPostRomanticInterest(w, actorId, authorId) {
+  if (!actorId || !authorId || actorId === authorId) return false;
+  const rel = getRel(w, actorId, authorId) || EMPTY_REL;
+  const text = [rel.bond, rel.type, rel.hidden, rel.mood].filter(Boolean).join(" ").toLowerCase();
+  if (/crush|vonz|attract|obsess|megsz[aá]ll|szerelm|in love|love|j[aá]rnak|dating|randizgat|partner|possess|birtokl/.test(text)) return true;
+  try { return Boolean(relationshipCrushActive(w, actorId, authorId, rel)); } catch (error) { return false; }
+}
+
+function playerPostAreRivals(w, a, b) {
+  if (!a || !b || a === b) return false;
+  const score = Number((getRel(w, a, b) || EMPTY_REL).score) || 0;
+  if (score <= -25) return true;
+  try {
+    const ca = charById(w, a), cb = charById(w, b);
+    if (ca && cb && karateFactionRivalryFlags(factionFlags(ca), factionFlags(cb)) && score < 40) return true;
+  } catch (error) { /* ignore */ }
+  return false;
+}
+
+/* Pick up to two AI→AI replies under the player's post that carry real social
+   meaning: jealousy over someone flirting with the author, rivals jabbing,
+   friends defending the author against a rude comment. */
+function playerPostSocialDynamicsPairs(n, post, newComments, rows) {
+  const authorId = post && post.authorId;
+  if (!authorId) return [];
+  const toneOf = (comment) => {
+    const row = (rows || []).find((r) => findChar(n, r && (r.id !== undefined ? r.id : r.name)) === comment.authorId) || {};
+    return normalizePlayerPostCommentTone(row.hangnem || row.tone, comment.text);
+  };
+  const commenters = [...new Set((newComments || []).map((c) => c.authorId))];
+  const lurkers = (n.chars || []).filter((c) => c && !isHuman(n, c.id) && !isMediaAccount(n, c.id) && !commenters.includes(c.id) && playerPostRomanticInterest(n, c.id, authorId)).map((c) => c.id);
+  const pairs = [];
+  const usedResponders = new Set();
+  const usedRoots = new Set();
+  const push = (root, responderId, dynamic) => {
+    if (pairs.length >= 2 || usedResponders.has(responderId) || usedRoots.has(root.id) || responderId === root.authorId) return;
+    usedResponders.add(responderId); usedRoots.add(root.id);
+    pairs.push({ root, responderId, dynamic });
+  };
+  (newComments || []).forEach((root) => {
+    const tone = toneOf(root);
+    if (tone === "flirty") {
+      [...commenters, ...lurkers].forEach((x) => { if (x !== root.authorId && playerPostRomanticInterest(n, x, authorId)) push(root, x, "jealous"); });
+    }
+  });
+  (newComments || []).forEach((root) => {
+    const tone = toneOf(root);
+    if (tone === "hostile" || tone === "dismissive") {
+      commenters.forEach((x) => { if (x !== root.authorId && (Number((getRel(n, x, authorId) || EMPTY_REL).score) || 0) >= 55) push(root, x, "defend"); });
+    }
+  });
+  (newComments || []).forEach((root) => {
+    commenters.forEach((x) => { if (playerPostAreRivals(n, x, root.authorId)) push(root, x, "rival"); });
+  });
+  return pairs;
+}
+
 function commentReplyLatestTail(w, post, comment) {
   if (!post || !comment) return "";
   const en = worldLanguage(w, w && w.meId) === "en";
@@ -28029,6 +28115,7 @@ function commentReplyLatestTail(w, post, comment) {
     (en
       ? "Answer what this newest comment actually says or implies (e.g. if it says someone cannot come or is not invited, react to THAT). Do not ignore it and do not just repeat your previous point."
       : "Arra felelj, amit ez a legújabb komment ténylegesen mond vagy sugall (pl. ha azt mondja, hogy valaki nem jöhet / nincs meghívva, arra reagálj). Ne hagyd figyelmen kívül, és ne ismételd a korábbi mondandódat.") +
+    replyDynamicDirective(w, comment) +
     "\n===";
 }
 
@@ -28541,6 +28628,11 @@ JSON: {"reply":"short natural reply"}${commentReplyLatestTail(w, post, comment)}
         repairedComments.push(row);
         continue;
       }
+      /* CLAUDE FIX R14: a jealous / rival / defend reply was asked for on purpose. */
+      if (REPLY_DYNAMIC_CONTEXT && ["jealous", "rival", "defend"].includes(REPLY_DYNAMIC_CONTEXT.dynamic) && String(REPLY_DYNAMIC_CONTEXT.responderId) === String(responderId)) {
+        repairedComments.push(row);
+        continue;
+      }
 
       const rel = getRel(w, responderId, comment.authorId) || {};
       const tier = relationshipFilterTier(rel);
@@ -28791,6 +28883,7 @@ function legacyChannelApplyReplies(n, postId, rootId, out) {
     }
     if (!body) return;
     if (
+      !["jealous", "rival", "defend"].includes(REPLY_DYNAMIC_APPLYING) &&
       addressTargetId &&
       socialCommentContradictsRelationship(
         n,
@@ -28805,6 +28898,7 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
       return;
     }
     if (
+      !["jealous", "rival", "defend"].includes(REPLY_DYNAMIC_APPLYING) &&
       rootForAddress &&
       p.authorId &&
       socialThreadAllyHostilityMismatch(
@@ -53541,7 +53635,14 @@ async function legacyFullSpecRunSimulationAction(view, update, action, addImage)
               .slice(before)
               .filter((row) => row && row.id && row.authorId && !isHuman(n, row.authorId))
           : [];
-        if (newAiComments.length >= 2 && typeof simEnqueue === "function" && typeof mkAction === "function") {
+        const socialPairs = newAiComments.length ? playerPostSocialDynamicsPairs(n, afterApplyPost, newAiComments, combinedRows) : [];
+        socialPairs.forEach((pair) => {
+          const queued = simEnqueue(n, mkAction("reply", "player-post-social:" + post.id + ":" + pair.root.id + ":" + pair.responderId, {
+            postId: post.id, commentId: pair.root.id, rootId: pair.root.id, targetId: pair.responderId, trigger: "player-post-ai-ai", dynamic: pair.dynamic,
+          }, "player-event"));
+          groundedEventLog(n, "social-dynamic", queued ? "queued" : "skipped", nameOfIn(n, pair.responderId) + " → " + nameOfIn(n, pair.root.authorId) + ": " + pair.dynamic + " reply queued under your post.", "comment:" + pair.root.id + "@post:" + post.id);
+        });
+        if (!socialPairs.length && newAiComments.length >= 2 && typeof simEnqueue === "function" && typeof mkAction === "function") {
           const rootComment = newAiComments[0];
           const responder = newAiComments.find((row) => row.authorId !== rootComment.authorId);
           if (responder) {
@@ -54523,12 +54624,19 @@ if (action.type === "roleplay-initiate") {
       action.payload &&
       action.payload.targetId;
 
-    const rawOut = await genReply(
-      view,
-      post,
-      comment,
-      requestedTargetId || ""
-    );
+    const replyDynamic = String(action.payload && action.payload.dynamic || "");
+    REPLY_DYNAMIC_CONTEXT = replyDynamic ? { commentId: comment.id, responderId: requestedTargetId, postAuthorId: post.authorId, dynamic: replyDynamic } : null;
+    let rawOut;
+    try {
+      rawOut = await genReply(
+        view,
+        post,
+        comment,
+        requestedTargetId || ""
+      );
+    } finally {
+      REPLY_DYNAMIC_CONTEXT = null;
+    }
 
     const targetFilteredOut = requestedTargetId
       ? {
@@ -54550,17 +54658,47 @@ if (action.type === "roleplay-initiate") {
     };
 
     const replyProbe = JSON.parse(JSON.stringify(view));
-    const replyCount = applyReplies(replyProbe, post.id, comment.id, out);
-    if (!replyCount) return null;
+    REPLY_DYNAMIC_APPLYING = replyDynamic;
+    let replyCount = 0;
+    try { replyCount = applyReplies(replyProbe, post.id, comment.id, out); } finally { REPLY_DYNAMIC_APPLYING = ""; }
+    if (!replyCount) {
+      if (replyDynamic) update((n) => groundedEventLog(n, "social-dynamic", "failed", nameOfIn(n, requestedTargetId) + " → " + nameOfIn(n, comment.authorId) + ": " + replyDynamic + " reply was filtered out.", "comment:" + comment.id));
+      return null;
+    }
 
     update((n) => {
-      applyReplies(
-        n,
-        post.id,
-        /* mindig közvetlenül arra a kommentre válaszoljon, ami kiváltotta */
-        comment.id,
-        out
-      );
+      REPLY_DYNAMIC_APPLYING = replyDynamic;
+      try {
+        applyReplies(
+          n,
+          post.id,
+          /* mindig közvetlenül arra a kommentre válaszoljon, ami kiváltotta */
+          comment.id,
+          out
+        );
+      } finally { REPLY_DYNAMIC_APPLYING = ""; }
+      /* CLAUDE FIX R14: the social dynamic of an AI→AI reply moves their mutual relationship by rule. */
+      if (replyDynamic && requestedTargetId && comment.authorId && !isHuman(n, comment.authorId)) {
+        const deltas = {
+          jealous: [[requestedTargetId, comment.authorId, -6], [comment.authorId, requestedTargetId, -3]],
+          rival: [[requestedTargetId, comment.authorId, -4], [comment.authorId, requestedTargetId, -4]],
+          defend: [[requestedTargetId, comment.authorId, -4], [requestedTargetId, post.authorId, 3]],
+          banter: [[requestedTargetId, comment.authorId, 3], [comment.authorId, requestedTargetId, 2]],
+        }[replyDynamic] || [];
+        const whyText = {
+          jealous: ["féltékeny lett rá egy flörtölős komment miatt", "got jealous of them over a flirty comment"],
+          rival: ["összeszólalkoztak a kommentek alatt", "traded jabs in the comments"],
+          defend: ["megvédte tőle a poszt szerzőjét", "defended the post author against them"],
+          banter: ["jót ugratták egymást a kommentek alatt", "had a fun back-and-forth in the comments"],
+        }[replyDynamic] || ["", ""];
+        deltas.forEach(([a, b, d]) => {
+          if (!a || !b || a === b) return;
+          const before = Number((getRel(n, a, b) || EMPTY_REL).score) || 0;
+          applyChannelRelationshipChanges(n, [{ a, b, delta: d, micro: true, oneSided: true, why: sysLangText(n, a, whyText[0], whyText[1]) }], "public", { reason: "comment-social-dynamic" });
+          const after = Number((getRel(n, a, b) || EMPTY_REL).score) || 0;
+          if (after !== before) groundedEventLog(n, "relationship-change", "applied", nameOfIn(n, a) + " → " + nameOfIn(n, b) + ": " + (after - before >= 0 ? "+" : "") + (after - before) + " (" + before + "→" + after + "), " + replyDynamic + " in comments", "comment:" + comment.id + "@post:" + post.id);
+        });
+      }
     });
 
     return "reply";
@@ -61012,6 +61150,14 @@ async function voiceStyleRunWithSingleRetry(w, firstRun, retryRun, fallbackActor
   VOICE_STYLE_STRICT_RETRY_IDS = bad;
   try {
     const second = await retryRun();
+    /* CLAUDE FIX R14: a strict retry that comes back empty must not throw away a usable first answer. */
+    const usable = (o) => Boolean(o && typeof o === "object" && (
+      safeAiComments(o).length || safeAiArray(o, "posts").length || String(o.text || o.reply || "").trim() || (Array.isArray(o.turns) && o.turns.length)
+    ));
+    if (!usable(second) && usable(first)) {
+      console.warn("[voice-style] strict retry returned nothing usable; keeping first result");
+      return first;
+    }
     return second || first;
   } catch (err) {
     console.warn("[voice-style] strict retry failed; keeping first result", err);
@@ -61968,7 +62114,7 @@ function groundedExplicitRomanticSignal(event) {
   if (!event) return false;
   if (event.meta && event.meta.romantic === true) return true;
   const text = String(event.text || "");
-  return /\b(flirt|flirting|kiss|kissing|date|dating|romantic|love\s+you|hot|gorgeous|beautiful|crush|vonz|flört|csók|megcsókol|randi|randiz|szerelmes|dögös|gyönyörű)\b|[😘😍🥰❤️❤💕💖]/iu.test(text);
+  return /\b(flirt|flirting|kiss|kissing|date|dating|romantic|love\s+you|hot|gorgeous|beautiful|crush|sexy|babe|handsome|vonz|flört|csók|megcsókol|randi|randiz|szerelmes|dögös|gyönyörű|szexi)\b|[😘😍🥰❤️❤💕💖😉😏💋]|;-?\)/iu.test(text);
 }
 
 function groundedJealousyEligibility(w, charId, humanId) {
