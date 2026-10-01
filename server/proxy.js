@@ -4648,9 +4648,11 @@ async function proxyGeminiMessage(body) {
   if (!GEMINI_API_KEY) return { unavailable: true, provider: "gemini" };
 
   const requested = String(body?.model || "").trim();
-  const model = requested.startsWith("gemini")
-    ? requested
-    : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
+  const model = String(body?.quality || "") === "deep"
+    ? String(process.env.GEMINI_DEEP_MODEL || "gemini-3.5-flash").trim()
+    : (requested.startsWith("gemini")
+      ? requested
+      : (GEMINI_MODEL_ENV || "gemini-3.5-flash"));
 
   const url = new URL(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
@@ -4761,6 +4763,8 @@ function providerModel(provider, body = {}) {
   if (provider === "mistral") {
     /* R17: careful one-time sheet reading may use a stronger model */
     if (String(body?.quality || "") === "deep") return String(process.env.MISTRAL_DEEP_MODEL || "mistral-medium-latest").trim();
+    /* R21: scenes (incl. mature ones) get the best writer */
+    if (String(body?.source || "") === "scene") return String(process.env.MISTRAL_SCENE_MODEL || "mistral-large-latest").trim();
     /* R18: everything the player directly reads and answers (DM replies, scenes, group chat,
        comments under the player's posts, the feed refresh after the player's events) uses the
        stronger model; background chatter stays on the cheap one. Set MISTRAL_PLAYER_MODEL to
@@ -4769,7 +4773,10 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
-  if (provider === "gemini") return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
+  if (provider === "gemini") {
+    if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || "gemini-3.5-flash").trim();
+    return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
+  }
   if (provider === "anthropic") {
     return requested.startsWith("claude")
       ? requested
@@ -5023,8 +5030,19 @@ function providerAllowedForBody(provider, body) {
   return provider === "mistral" || provider === "gemini";
 }
 
+/* CLAUDE FIX R21: task-based routing. Careful sheet reading ("deep") goes to
+   Gemini first (falls back to Mistral); everything in a character's voice stays
+   on Mistral (permissive, good at voice). */
+function taskProviderOrder(requestedProvider, body) {
+  const order = providerOrder(requestedProvider);
+  if (String(body?.quality || "") === "deep" && order.includes("gemini")) {
+    return ["gemini", ...order.filter((p) => p !== "gemini")];
+  }
+  return order;
+}
+
 function healthyProvider(requestedProvider, body, excluded = new Set()) {
-  return providerOrder(requestedProvider).find((p) =>
+  return taskProviderOrder(requestedProvider, body).find((p) =>
     !excluded.has(p) &&
     !AI_GATE.providerConfigurationErrors.has(p) &&
     providerCooldownMs(p) <= 0 &&
@@ -5170,6 +5188,8 @@ async function executeAITask(task) {
       markProviderFailure(provider, model, result);
       continue;
     }
+    /* R21: a careful reading must not die on one provider's odd error — try the next */
+    if (String(task.body?.quality || "") === "deep") continue;
 
     return result;
   }

@@ -34622,7 +34622,7 @@ Formátum:
  "relationshipUpdates":[
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
-}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${TAIL}`, { maxTokens: 3200, timeoutMs: 90000 }));
+}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${TAIL}`, { maxTokens: 3200, timeoutMs: 90000, source: "scene" }));
 
       const resolveSceneTurns = (candidateOut) =>
         (candidateOut && Array.isArray(candidateOut.turns)
@@ -34797,6 +34797,8 @@ VÁLASZ CSAK JSON:
           {
             maxTokens: 1500,
             maxTries: 3,
+            source: "scene",
+            timeoutMs: 90000,
           }
         ));
 
@@ -34879,7 +34881,8 @@ JSON ONLY:
                 {
                   maxTokens: Math.max(420, Math.min(1100, 260 * missingChars.length)),
                   maxTries: 2,
-                  timeoutMs: 26000,
+                  timeoutMs: 60000,
+                  source: "scene",
                 }
               )
             );
@@ -35181,7 +35184,7 @@ Formátum:
 - EMOJI TILOS a summary, diary, goalResult, memories, statusUpdates, mood, why és minden más Event-szövegmezőben.
 
 Formátum:
-{"summary":"","diary":"","success":true,"outcome":"success vagy partial vagy failed","goalResult":"egy rövid konkrét értékelés","memories":[{"id":"szereplő azonosítója","text":""}],"longTermMemories":[{"id":"AI id","targetId":"konkrét másik szereplő id-ja vagy üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":85,"text":"tartós karakter-POV emlék"}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],"statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"mi változott / mi zárult le"}]}${TAIL}`, { maxTokens: 2600, timeoutMs: 90000 }));
+{"summary":"","diary":"","success":true,"outcome":"success vagy partial vagy failed","goalResult":"egy rövid konkrét értékelés","memories":[{"id":"szereplő azonosítója","text":""}],"longTermMemories":[{"id":"AI id","targetId":"konkrét másik szereplő id-ja vagy üres","kind":"milestone vagy anchor vagy event vagy relationship vagy secret","importance":85,"text":"tartós karakter-POV emlék"}],"changes":[{"a":"aki érez","b":"aki iránt","delta":18,"mood":"mit érez most iránta","why":"egy rövid mondat","bond":"csak ha a viszony tényleg megváltozott, és nem állandó kötelék","oneSided":false}],"statusUpdates":[{"id":"érintett karakter azonosítója vagy üres","kind":"mood vagy process","text":"mi változott / mi zárult le"}]}${TAIL}`, { maxTokens: 2600, timeoutMs: 90000, source: "scene" }));
 
       const safeOut = out && typeof out === "object" ? out : {};
 
