@@ -8801,6 +8801,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   quality: requestMeta && requestMeta.quality === "deep" ? "deep" : undefined,
   source: String(requestMeta && requestMeta.source || "client-ai"),
   priority: Number(requestMeta && requestMeta.priority) || (requestMeta && requestMeta.interactive ? 100 : 0),
+  /* R45: the server waits for the model as long as this request may take */
+  timeout_ms: Math.max(10000, timeoutMs - 2000),
   system,
   messages: [{ role: "user", content: prompt }],
 }, ctrl.signal);
@@ -18827,6 +18829,23 @@ function mergeWorlds(remote, local) {
         readings[actorId] = { ...(pickAt(r) > pickAt(l) ? r : l), targets: mergeTimed(r.targets, l.targets) };
       });
       out.sim.relationshipReading = readings;
+      /* CLAUDE FIX R45: queued actions from the other device (e.g. the comments
+         owed to a post made on the phone) are kept, not dropped by this device's
+         copy; anything either side already finished is removed. */
+      const doneMerged = { ...(rs.done || {}) };
+      Object.entries(ls.done || {}).forEach(([k, v]) => { doneMerged[k] = Math.max(Number(doneMerged[k]) || 0, Number(v) || 0); });
+      out.sim.done = doneMerged;
+      if (Array.isArray(ls.queue) || Array.isArray(rs.queue)) {
+        const seenKeys = new Set();
+        const runningLocal = String(ls.running || "");
+        out.sim.queue = [...(ls.queue || []), ...(rs.queue || [])].filter((a) => {
+          if (!a || !a.key) return false;
+          if (seenKeys.has(a.key)) return false;
+          seenKeys.add(a.key);
+          if (a.id !== runningLocal && Number(doneMerged[a.key]) && Number(doneMerged[a.key]) >= (Number(a.ts) || 0)) return false;
+          return true;
+        }).slice(0, typeof SIM_QUEUE_LIMIT === "number" ? SIM_QUEUE_LIMIT : 60);
+      }
     }
   } catch (mergeError) { /* fall back to the local copy */ }
 
@@ -57220,6 +57239,11 @@ export default function App() {
   const [autoBusy, setAutoBusy] = useState(false);
   const autoRunning = useRef(false);
   const autoRunningSince = useRef(0);
+  /* CLAUDE FIX R45: the player's own actions (comments on their post, etc.) get a
+     second lane, so a long background job (sheet reading) cannot hold them back. */
+  const manualLaneBusy = useRef(false);
+  const manualLaneSince = useRef(0);
+  const inFlightActionIds = useRef(new Set());
   const viewRef = useRef(null);
   const [flash, setFlash] = useState(null);
   const [jump, setJump] = useState(null);
@@ -58982,6 +59006,8 @@ const signOut = useCallback(async () => {
   const signalSimulation = useCallback((event) => {
     if (!event || !event.type) return false;
     if (event.type === "player-post" && event.postId) {
+      /* R45: the device the player posts from runs the reactions to it */
+      try { simLeaderPing(true); } catch (error) { /* keep going */ }
       update((n) => {
         const p = (n.posts || []).find((row) => row && row.id === event.postId);
         playerPostCommentDiagnostic(n, p, "signal", { queued: true });
@@ -60001,8 +60027,49 @@ const signOut = useCallback(async () => {
   useEffect(() => {
     if (!langReady || !world || !meId) return;
     let alive = true;
+    const runManualLane = async (laneAction) => {
+      manualLaneBusy.current = true;
+      manualLaneSince.current = now();
+      inFlightActionIds.current.add(laneAction.id);
+      let laneOk = false;
+      try {
+        laneOk = Boolean(await runSimulationAction(viewRef.current, update, laneAction, addImage));
+      } catch (e) {
+        if (alive) setErr("SIM: " + ((e && e.message) ? e.message : tt("Az AI-kérés nem sikerült.", "AI request failed.")));
+      }
+      update((n) => {
+        simDropQueued(n, laneAction.id);
+        if (laneOk) {
+          try { markSimulationCadence(n, laneAction); } catch (error) { /* cadence is optional */ }
+          const sim = ensureSimState(n);
+          if (laneAction.key) sim.done[laneAction.key] = now();
+          sim.lastSuccessAt = now();
+        }
+      });
+      inFlightActionIds.current.delete(laneAction.id);
+      manualLaneBusy.current = false;
+      manualLaneSince.current = 0;
+    };
     const beat = async () => {
   if (!alive) return;
+
+  /* R45: while the main lane is busy, the player's own queued action runs beside it. */
+  if (manualLaneBusy.current && manualLaneSince.current && now() - manualLaneSince.current > 180000) {
+    manualLaneBusy.current = false;
+    manualLaneSince.current = 0;
+    inFlightActionIds.current.clear();
+  }
+  if (autoRunning.current && !manualLaneBusy.current && simLeaderActive()) {
+    const laneView = viewRef.current;
+    const laneQueue = ((laneView && laneView.sim && laneView.sim.queue) || []).filter((a) => a && a.id && !inFlightActionIds.current.has(a.id));
+    const runningId = String((laneView && laneView.sim && laneView.sim.running) || "");
+    const laneAction =
+      laneQueue.find((a) => a.type === "player-post-comments-guarantee" && a.id !== runningId) ||
+      laneQueue.find((a) => (a.source === "manual" || a.source === "player-event") && a.id !== runningId);
+    if (laneAction) {
+      runManualLane(laneAction);
+    }
+  }
 
   if (autoRunning.current) {
     /* Recover from a rejected/aborted render cycle that left the engine locked. */
@@ -60035,7 +60102,9 @@ const signOut = useCallback(async () => {
 
   /* CLAUDE FIX R3: a due follow / unfollow reaction must not wait for an empty queue. */
   const dueSocialReaction = groundedDueFollowBackAction(view2);
-  const queued = dueSocialReaction || simPeek(view2);
+  /* R45: skip what the second lane is already doing; the player's post comments go first */
+  const queueFree = ((view2.sim && view2.sim.queue) || []).filter((a) => a && !inFlightActionIds.current.has(a.id));
+  const queued = dueSocialReaction || queueFree.find((a) => a.type === "player-post-comments-guarantee") || queueFree[0] || null;
   const manualQueued = !!(queued && (queued.source === "manual" || queued.source === "player-event"));
   /* CLAUDE FIX R9 (4.5): during an emergency brake only the player's own actions run. */
   if (simBrakeLeftMs() > 0 && !manualQueued) return;
@@ -60215,6 +60284,8 @@ const signOut = useCallback(async () => {
 
       autoRunning.current = true;
       autoRunningSince.current = now();
+      const mainLaneActionId = action && action.id ? action.id : "";
+      if (mainLaneActionId) inFlightActionIds.current.add(mainLaneActionId);
       setAutoBusy(true);
       update((n) => {
         /*
@@ -60311,6 +60382,7 @@ const signOut = useCallback(async () => {
           sim.lastAttemptAt = now();
         }
       });
+      if (mainLaneActionId) inFlightActionIds.current.delete(mainLaneActionId);
       autoRunning.current = false;
       autoRunningSince.current = 0;
       if (alive) setAutoBusy(false);

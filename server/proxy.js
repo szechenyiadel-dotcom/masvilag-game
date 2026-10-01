@@ -3899,6 +3899,17 @@ const AI_UPSTREAM_TIMEOUT_MS = Math.max(
   Number(process.env.AI_UPSTREAM_TIMEOUT_MS) || 45000
 );
 
+/* CLAUDE FIX R45: deep sheet readings (character bible, sheet summary) need
+   60–100 s on the large model. A fixed 45 s cut them off every single time, so
+   they failed forever and blocked the world queue. The client now says how long
+   it is willing to wait; deep requests get up to that. */
+function upstreamTimeoutFor(body) {
+  const asked = Number(body && body.timeout_ms) || 0;
+  if (asked > 0) return Math.max(12000, Math.min(170000, asked));
+  if (body && body.quality === "deep") return Math.max(AI_UPSTREAM_TIMEOUT_MS, 110000);
+  return AI_UPSTREAM_TIMEOUT_MS;
+}
+
 async function fetchWithTimeout(
   url,
   options = {},
@@ -5060,7 +5071,7 @@ async function proxyGeminiMessage(body) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(buildGeminiPayload({ ...body, model })),
-  });
+  }, upstreamTimeoutFor(body));
   const payload = await responseJsonSafe(r);
 
   if (!r.ok) {
@@ -5088,7 +5099,7 @@ async function proxyAnthropicMessage(body) {
     ? requested
     : String(process.env.ANTHROPIC_MODEL || process.env.ANTHROPIC_FALLBACK_MODEL || "claude-sonnet-4-6").trim();
 
-  const { provider, source, priority, client_instance_id, __worldKey, quality, ...rest } = body || {};
+  const { provider, source, priority, client_instance_id, __worldKey, quality, timeout_ms, ...rest } = body || {};
   const outboundBody = { ...rest, model, max_tokens: body?.max_tokens ?? 1024 };
   const r = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -5099,7 +5110,7 @@ async function proxyAnthropicMessage(body) {
       "Accept": "application/json",
     },
     body: JSON.stringify(outboundBody),
-  });
+  }, upstreamTimeoutFor(body));
   const payload = await responseJsonSafe(r);
 
   if (!r.ok) {
@@ -5143,7 +5154,7 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
     body: JSON.stringify(buildCompatibleChatPayload(body, model)),
-  });
+  }, upstreamTimeoutFor(body));
   const payload = await responseJsonSafe(r);
   if (!r.ok) {
     return { ok: false, status: r.status, payload, retryAfter: r.headers.get("retry-after"), provider, model };
