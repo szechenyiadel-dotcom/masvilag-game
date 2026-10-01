@@ -15926,7 +15926,49 @@ function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
   text = sanitizeWrongCharacterVocative(w, actorId, targetId, text);
   text = sanitizeOrientationIncompatibleRomanceText(w, actorId, targetId, text);
   text = sanitizeDisallowedFlirtText(w, actorId, targetId, text);
+  text = stripHostileEndearments(w, actorId, targetId, text);
   return text;
+}
+
+/* CLAUDE FIX R22: people who dislike / hate each other never call each other
+   babe, baby, honey, darling... The pet name is removed from the line. */
+function relationshipIsHostile(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || actorId === targetId) return false;
+  const rel = getRel(w, actorId, targetId) || EMPTY_REL;
+  const text = [rel.bond, rel.type, rel.mood].filter(Boolean).join(" ").toLowerCase();
+  if ((Number(rel.score) || 0) <= -15) return true;
+  if (/ellens[eé]g|riv[aá]lis|enemy|rival|hate|gy[uű]l[oö]l|utál|despis|contempt|megvet/.test(text)) return true;
+  try {
+    const d = identityCanonFor(w, actorId);
+    const target = charById(w, targetId);
+    if (d && target && Array.isArray(d.hates) && d.hates.some((h) => identityNameMatches(h, target))) return true;
+  } catch (error) { /* ignore */ }
+  return false;
+}
+
+const HOSTILE_ENDEARMENT_WORDS = "babe|babes|baby|bae|honey|hun|hon|sweetheart|sweetie|sweets|darling|darlin'?|love|lovey|cutie|cutie ?pie|gorgeous|beautiful|handsome|sexy|sugar|doll|dollface|princess|kitten|pumpkin|bébi|cica|cicám|drágám|drága|kincsem|szívem|édesem|bogaram|tündérem";
+
+function stripHostileEndearments(w, actorId, targetId, value) {
+  const text = String(value || "");
+  if (!text || !relationshipIsHostile(w, actorId, targetId)) return text;
+  const words = HOSTILE_ENDEARMENT_WORDS;
+  /* pet names that are almost never ordinary words; these are removed even without a comma ("hey babe!") */
+  const pure = "babe|babes|bae|sweetheart|sweetie|darling|darlin'?|cutie|cutie ?pie|dollface|bébi|cicám|drágám|kincsem|szívem|édesem|bogaram|tündérem";
+  const end = "(?=\\s*(?:[,.!?…:;)*\"”]|$))";
+  let out = text
+    /* "Babe, ..." at the start */
+    .replace(new RegExp("^\\s*(?:" + words + ")\\s*[,!.…]+\\s*", "iu"), "")
+    /* ", babe." / ", my love!" — a comma-marked vocative */
+    .replace(new RegExp(",\\s*(?:my\\s+|kis\\s+)?(?:" + words + ")" + end, "giu"), "")
+    /* "hey babe!" — unambiguous pet names right before punctuation or the end */
+    .replace(new RegExp("\\s+(?:my\\s+)?(?:" + pure + ")" + end, "giu"), "");
+  out = out.replace(/[ \t]{2,}/g, " ").replace(/\s+([,.!?…])/g, "$1").replace(/^[,\s]+/, "").trim();
+  if (!out) return text;
+  if (out !== text) {
+    if (/^[a-záéíóöőúüű]/.test(out) && /^[A-ZÁÉÍÓÖŐÚÜŰ]/.test(text.trim())) out = out.charAt(0).toUpperCase() + out.slice(1);
+    console.info("[hostile-endearment] removed pet name", "from=" + String(actorId), "to=" + String(targetId));
+  }
+  return out;
 }
 
 /* CLAUDE FIX R7 (9.2): a *starred action* from the player turns the DM into roleplay. */
@@ -61052,7 +61094,9 @@ function voiceStyleCardsForIds(w, ids, actorId) {
     .filter(Boolean);
 
   return rows.length
-    ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER:\n\n" + rows.join("\n\n--- NEXT SPEAKER CARD ---\n\n")
+    ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
+      "FULL INTENSITY: play every character exactly as extreme as their own sheet says — cruel is cruel, obsessed is visibly obsessed, cold is cold, arrogant is arrogant. Never soften, sanitize or average them into a polite generic person. People who dislike or hate each other show it and never use pet names (babe, baby, honey, darling…) with each other; warmth and pet names only where the relationship really is warm.\n\n" +
+      rows.join("\n\n--- NEXT SPEAKER CARD ---\n\n")
     : "";
 }
 
