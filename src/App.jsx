@@ -13573,7 +13573,7 @@ function flirtIdentityInstruction(w, actorId, targetId, rel = null) {
     const behavior = state.mode === "unrequited-orientation-crush"
       ? "UNREQUITED ORIENTATION MISMATCH: SELF may have a crush, but TARGET's known orientation rules SELF out. Remember that fact. Do not knowingly hit on TARGET, ask for a kiss/date, act entitled to a chance, or interpret friendliness as possible reciprocation. The feeling may exist privately as awkwardness, disappointment, distance or restrained attention."
       : state.mode === "secret-crush"
-        ? "SECRET CRUSH: attraction is real, but keep it guarded and deniable. Prefer extra attention, awkward softness, quick retreats, indirect compliments, restrained jealousy, looking away/changing subject, or a flirt that can pass as a joke. Do not suddenly act like an openly seductive dater or blurt out a confession unless the story has actually exposed the secret."
+        ? "SECRET CRUSH: attraction is real, but keep it guarded and deniable. Prefer extra attention, awkward softness, quick retreats, indirect compliments, jealousy that flares sharply at rivals (as strong as the sheet says) while they deny the reason, looking away/changing subject, or a flirt that can pass as a joke. Do not suddenly act like an openly seductive dater or blurt out a confession unless the story has actually exposed the secret."
       : state.mode === "crush-only"
         ? "CRUSH-ONLY FLIRTING: this character is NOT broadly flirty. They may flirt with THIS person because a real crush/romantic bond exists, but it must still sound like their normal personality rather than turning them into a serial flirt."
         : state.mode === "flirty-crush"
@@ -13588,7 +13588,7 @@ function flirtIdentityInstruction(w, actorId, targetId, rel = null) {
   const behavior = state.mode === "unrequited-orientation-crush"
     ? "VISZONZATLAN / ORIENTÁCIÓS INKOMPATIBILITÁS: lehet crush, de a CÉLPONT ismert szexualitása kizárja ezt a párost. Ezt jegyezze meg. Ne hajtson rá tudatosan, ne kérjen csókot/randit, ne viselkedjen úgy, mintha lenne romantikus esélye, és ne értelmezze a baráti kedvességet viszonzásnak. Az érzés maradhat privát zavar, csalódottság, távolságtartás vagy visszafogott figyelem."
     : state.mode === "secret-crush"
-      ? "TITKOS CRUSH: a vonzalom valódi, de maradjon visszahúzódóbb, kontrollált és letagadható. Inkább extra figyelem, zavar, gyors visszakozás, indirekt bók, visszafogott féltékenység, témaváltás vagy viccnek álcázható flört szivárogjon ki. Ne váljon hirtelen nyíltan csábítóvá és ne vallja be váratlanul, amíg a történet ténylegesen fel nem fedi a titkot."
+      ? "TITKOS CRUSH: a vonzalom valódi, de maradjon visszahúzódóbb, kontrollált és letagadható. Inkább extra figyelem, zavar, gyors visszakozás, indirekt bók, riválisokra élesen kitörő féltékenység (olyan erős, amilyet a lap ír), miközben letagadja az okát, témaváltás vagy viccnek álcázható flört szivárogjon ki. Ne váljon hirtelen nyíltan csábítóvá és ne vallja be váratlanul, amíg a történet ténylegesen fel nem fedi a titkot."
     : state.mode === "crush-only"
       ? "CRUSH-ALAPÚ FLÖRT: ez a karakter NEM általánosan flörtölős. EZZEL az emberrel azért flörtölhet, mert valódi crush/romantikus kötelék van, de a flört továbbra is a saját normál személyiségéből nőjön ki, ne váljon hirtelen sorozatflörtölővé."
       : state.mode === "flirty-crush"
@@ -28133,17 +28133,59 @@ let REPLY_DYNAMIC_CONTEXT = null;
    guards must not throw away the very conflict we asked for */
 let REPLY_DYNAMIC_APPLYING = "";
 
+/* CLAUDE FIX R25: jealousy and enmity are played as extreme as the sheet and the
+   relationship say. "extreme" = obsession / possessive or jealous nature /
+   deep hatred; otherwise still clearly visible, never subtle. */
+function emotionalIntensity(w, actorId, otherId, kind) {
+  if (!w || !actorId || !otherId) return "strong";
+  const actor = charById(w, actorId);
+  const other = charById(w, otherId);
+  const rel = getRel(w, actorId, otherId) || EMPTY_REL;
+  const reading = (typeof relationshipReadingFeelings === "function" ? relationshipReadingFeelings(w, actorId, otherId) : null) || {};
+  const bible = (typeof characterBibleFor === "function" ? characterBibleFor(w, actorId) : null) || {};
+  const extremes = Array.isArray(bible.extremes) ? bible.extremes : [];
+  const relText = [rel.bond, rel.type, rel.mood, rel.hidden].filter(Boolean).join(" ").toLowerCase();
+  const nature = [actor && actor.personality, actor && actor.traits, bible.core, extremes.map((x) => x.trait + " " + x.shows).join(" ")].filter(Boolean).join(" ").toLowerCase();
+  const aimedAtOther = extremes.some((x) => x && x.toward && other && identityNameMatches(x.toward, other));
+  const score = Number(rel.score) || 0;
+  if (kind === "jealous") {
+    if ((Number(reading.obsession) || 0) >= 50 || (Number(reading.attraction) || 0) >= 70 || score >= 75) return "extreme";
+    if (/obsess|megsz[aá]ll|possess|birtokl|jealous|f[eé]lt[eé]ken|territorial|ragaszkod|controlling|kontroll/.test(relText + " " + nature)) return "extreme";
+    return "strong";
+  }
+  if (kind === "hostile") {
+    if (score <= -50) return "extreme";
+    if (/hate|gy[uű]l[oö]l|ut[aá]l|despis|enemy|ellens[eé]g|nemesis|revenge|bossz[uú]|contempt|megvet|archenemy|blood feud/.test(relText)) return "extreme";
+    if (aimedAtOther && extremes.some((x) => x && x.toward && identityNameMatches(x.toward, other) && /hate|gy[uű]l[oö]l|ut[aá]l|despis|contempt|megvet|revenge|bossz|enemy|ellens/i.test(x.trait + " " + x.shows))) return "extreme";
+    try { const d = identityCanonFor(w, actorId); if (d && Array.isArray(d.hates) && other && d.hates.some((h) => identityNameMatches(h, other))) return "extreme"; } catch (error) { /* ignore */ }
+    return "strong";
+  }
+  return "strong";
+}
+
 function replyDynamicDirective(w, comment) {
   const ctx = REPLY_DYNAMIC_CONTEXT;
   if (!ctx || !comment || String(ctx.commentId) !== String(comment.id)) return "";
   const en = worldLanguage(w, w && w.meId) === "en";
   const responder = nameOfIn(w, ctx.responderId), target = nameOfIn(w, comment.authorId), author = nameOfIn(w, ctx.postAuthorId);
+  const jealousLevel = ctx.dynamic === "jealous" ? emotionalIntensity(w, ctx.responderId, ctx.postAuthorId, "jealous") : "";
+  const rivalLevel = ctx.dynamic === "rival" ? emotionalIntensity(w, ctx.responderId, comment.authorId, "hostile") : "";
+  if (jealousLevel === "extreme") {
+    return "\n" + (en
+      ? "SOCIAL DYNAMIC FOR THIS REPLY — FULL INTENSITY: " + responder + " is obsessively, possessively into " + author + " and just watched " + target + " flirt with " + author + " in public. The jealousy hits at full force, exactly as extreme as " + responder + "'s sheet: reply to " + target + " with open, ugly, territorial jealousy — a threat, a humiliating put-down, claiming " + author + ", warning " + target + " off. If " + responder + " is the cold type, make it icy and menacing; if hot-headed, explosive. No subtlety, no polite irony, no 'lol', no friendliness. Address " + target + ", not the post."
+      : "TÁRSAS DINAMIKA EHHEZ A VÁLASZHOZ — TELJES INTENZITÁS: " + responder + " megszállottan, birtoklóan vonzódik " + author + " felé, és most látta, ahogy " + target + " nyilvánosan flörtöl vele. A féltékenység teljes erővel tör ki, pontosan olyan szélsőségesen, ahogy " + responder + " lapja mondja: válaszolj " + target + " kommentjére nyílt, csúnya, territoriális féltékenységgel — fenyegetés, megalázó beszólás, " + author + " kisajátítása, " + target + " elzavarása. Ha " + responder + " hideg típus, legyen jeges és fenyegető; ha lobbanékony, robbanjon. Semmi finomkodás, udvarias irónia, „lol” vagy kedvesség. " + target + " felé szólj, ne a poszthoz.");
+  }
+  if (rivalLevel === "extreme") {
+    return "\n" + (en
+      ? "SOCIAL DYNAMIC FOR THIS REPLY — FULL INTENSITY: " + responder + " and " + target + " are bitter enemies. Reply to " + target + "'s comment with open contempt and hostility at full force, exactly as their sheets and history say — a cutting insult, humiliation, a threat or a provocation (dojo pride, old grudges, what " + target + " did). No friendliness, no respect, no pet names, no 'good one', no softening."
+      : "TÁRSAS DINAMIKA EHHEZ A VÁLASZHOZ — TELJES INTENZITÁS: " + responder + " és " + target + " esküdt ellenségek. Válaszolj " + target + " kommentjére nyílt megvetéssel és ellenségességgel, teljes erővel, ahogy a lapjuk és a múltjuk mondja — vágó sértés, megalázás, fenyegetés vagy provokáció (dojo-büszkeség, régi sérelmek, amit " + target + " tett). Semmi kedvesség, tisztelet, becézés, „jó volt” vagy tompítás.");
+  }
   const map = {
     jealous: en
-      ? responder + " has feelings for " + author + " and just watched " + target + " flirt with " + author + " in public. Reply to " + target + " with visible jealousy in your own style — a territorial jab, a cold warning, sarcasm or a possessive remark. Address " + target + ", not the post."
+      ? responder + " has feelings for " + author + " and just watched " + target + " flirt with " + author + " in public. Reply to " + target + " with clearly visible jealousy in your own style — a territorial jab, a cold warning, biting sarcasm or a possessive remark. Not subtle, not friendly. Address " + target + ", not the post."
       : responder + " érez valamit " + author + " iránt, és most látta, ahogy " + target + " nyilvánosan flörtöl vele. Válaszolj " + target + " kommentjére látható féltékenységgel a saját stílusodban — territoriális beszólás, hideg figyelmeztetés, szarkazmus vagy birtokló megjegyzés. " + target + " felé szólj, ne a poszthoz.",
     rival: en
-      ? responder + " and " + target + " are rivals. Reply to " + target + "'s comment with a jab, mockery or a challenge that fits the rivalry (dojo pride, old grudges)."
+      ? responder + " and " + target + " are rivals. Reply to " + target + "'s comment with a sharp jab, mockery or a challenge that fits the rivalry (dojo pride, old grudges). No friendliness."
       : responder + " és " + target + " riválisok. Válaszolj " + target + " kommentjére a rivalizáláshoz illő beszólással, gúnnyal vagy kihívással (dojo-büszkeség, régi sérelmek).",
     defend: en
       ? responder + " is close to " + author + " and " + target + " was rude to " + author + ". Defend " + author + " and push back on " + target + " in your own style."
@@ -28191,7 +28233,7 @@ function playerPostSocialDynamicsPairs(n, post, newComments, rows) {
   const usedResponders = new Set();
   const usedRoots = new Set();
   const push = (root, responderId, dynamic) => {
-    if (pairs.length >= 2 || usedResponders.has(responderId) || usedRoots.has(root.id) || responderId === root.authorId) return;
+    if (pairs.length >= 3 || usedResponders.has(responderId) || usedRoots.has(root.id) || responderId === root.authorId) return;
     usedResponders.add(responderId); usedRoots.add(root.id);
     pairs.push({ root, responderId, dynamic });
   };
@@ -36767,12 +36809,44 @@ function directDmClarificationBlock(w, c, ck, latestText) {
     "Explain in plain words what you meant, tied to the concrete situation between you (where you are, what just happened, what you want). You may stay in character and keep your tone, but the meaning must become clear. Do not answer with another vague, poetic or cryptic one-liner.\n\n";
 }
 
+/* CLAUDE FIX R25: the player names someone in the DM — a jealous admirer reacts
+   to the rival, and an enemy's name provokes real hostility. */
+function directDmEmotionTrigger(w, c, latestText) {
+  const latest = String(latestText || "");
+  if (!w || !c || !latest || !w.meId) return "";
+  const ids = mentionedIdsInText(w, latest, w.meId).filter((id) => id && id !== c.id && !isHuman(w, id) && !isMediaAccount(w, id)).slice(0, 3);
+  if (!ids.length) return "";
+  const en = worldLanguage(w, w.meId) === "en";
+  const player = nameOfIn(w, w.meId);
+  let crush = false;
+  try { crush = relationshipCrushActive(w, c.id, w.meId); } catch (error) { crush = false; }
+  const rows = [];
+  ids.forEach((id) => {
+    const other = nameOfIn(w, id);
+    if (relationshipIsHostile(w, c.id, id)) {
+      const level = emotionalIntensity(w, c.id, id, "hostile");
+      rows.push(en
+        ? "- " + player + " just mentioned " + other + ", whom you " + (level === "extreme" ? "hate — let the contempt show at full force, as extreme as your sheet" : "can't stand — let it show clearly") + "."
+        : "- " + player + " épp megemlítette " + other + "-t, akit " + (level === "extreme" ? "gyűlölsz — a megvetés teljes erővel látsszon, olyan szélsőségesen, ahogy a lapod mondja" : "ki nem állhatsz — ez látsszon is") + ".");
+    } else if (crush) {
+      const level = emotionalIntensity(w, c.id, w.meId, "jealous");
+      rows.push(en
+        ? "- " + player + " just mentioned " + other + ". You have feelings for " + player + ": react with " + (level === "extreme" ? "open, possessive jealousy at full force, as extreme as your sheet (cold and menacing or explosive — your nature decides)" : "visible jealousy in your own way") + " — unless the message makes clear " + other + " is no threat at all."
+        : "- " + player + " épp megemlítette " + other + "-t. Érzel valamit " + player + " iránt: reagálj " + (level === "extreme" ? "nyílt, birtokló féltékenységgel, teljes erővel, ahogy a lapod mondja (hidegen fenyegetően vagy robbanékonyan — a természeted dönt)" : "látható féltékenységgel a saját módodon") + " — hacsak az üzenetből nem egyértelmű, hogy " + other + " egyáltalán nem fenyegetés.");
+    }
+  });
+  if (!rows.length) return "";
+  return (en ? "EMOTIONAL TRIGGER IN THE PLAYER'S MESSAGE:\n" : "ÉRZELMI KIVÁLTÓ A JÁTÉKOS ÜZENETÉBEN:\n") + rows.join("\n") + "\n\n";
+}
+
 function directDmProtectedTail(w, c, ck, latestText) {
   const history = directDmProtectedHistory(w, c, ck);
   const ownRecent = directDmOwnRecent(w, c, ck);
   const styleCard = directDmVoiceCard(w, c);
   const latest = String(latestText || "");
   const clarification = directDmClarificationBlock(w, c, ck, latest);
+  let emotionTrigger = "";
+  try { emotionTrigger = directDmEmotionTrigger(w, c, latest); } catch (error) { emotionTrigger = ""; }
 
   return "\n\n[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]\n" +
     "PROTECTED DIRECT-DM CONTEXT — NEVER OMIT THIS BLOCK.\n\n" +
@@ -36792,6 +36866,7 @@ function directDmProtectedTail(w, c, ck, latestText) {
     "- Reply in the language of this DM conversation/latest player message: English conversation -> natural English; Hungarian conversation -> natural correct Hungarian, except character-sheet style rules intentionally overriding spelling/punctuation/casing.\n" +
     "- Keep the exact JSON response schema requested earlier in the prompt.\n\n" +
     clarification +
+    emotionTrigger +
     "AMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\n" +
     latest;
 }
@@ -61151,7 +61226,7 @@ function voiceStyleCardsForIds(w, ids, actorId) {
 
   return rows.length
     ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
-      "FULL INTENSITY: play every character exactly as extreme as their own sheet says — cruel is cruel, obsessed is visibly obsessed, cold is cold, arrogant is arrogant. Never soften, sanitize or average them into a polite generic person. People who dislike or hate each other show it and never use pet names (babe, baby, honey, darling…) with each other; warmth and pet names only where the relationship really is warm. Each speaker knows their own SHEET CANON history exactly — the right names, places, order of events — and never contradicts it or makes up a different past.\n\n" +
+      "FULL INTENSITY: play every character exactly as extreme as their own sheet says — cruel is cruel, obsessed is visibly obsessed, cold is cold, arrogant is arrogant. Never soften, sanitize or average them into a polite generic person. JEALOUSY and ENMITY are extremes too: a jealous or possessive person reacts to a rival with open, ugly jealousy (icy and menacing or explosive, as their nature says); enemies treat each other with real contempt and hostility, never polite irony. People who dislike or hate each other show it and never use pet names (babe, baby, honey, darling…) with each other; warmth and pet names only where the relationship really is warm. Each speaker knows their own SHEET CANON history exactly — the right names, places, order of events — and never contradicts it or makes up a different past.\n\n" +
       rows.join("\n\n--- NEXT SPEAKER CARD ---\n\n")
     : "";
 }
@@ -63054,8 +63129,8 @@ function groupChatSocialTail(w, aiIds) {
     (en ? "RELATIONSHIPS BETWEEN THE MEMBERS (each from their own side — these decide the tone):\n" : "KAPCSOLATOK A TAGOK KÖZÖTT (mindenki a saját oldaláról — ezek határozzák meg a hangot):\n") +
     lines.join("\n") + "\n" +
     (en
-      ? "RULES: talk to each other exactly as these relationships say — strangers and acquaintances do not call each other bro or banter like old friends; rivals snipe; enemies are hostile; only real friends joke around like friends. Play every character 1:1 from their own sheet — personality, speech style, history — never one generic voice."
-      : "SZABÁLYOK: pontosan úgy beszéljenek egymással, ahogy ezek a kapcsolatok mondják — idegenek és ismerősök nem „bro”-znak és nem haverkodnak; riválisok szurkálódnak; ellenségek ellenségesek; csak valódi barátok poénkodnak barátként. Minden karaktert 1:1 a saját lapja szerint játssz — személyiség, beszédstílus, történet —, soha ne egy általános hangon.");
+      ? "RULES: talk to each other exactly as these relationships say — strangers and acquaintances do not call each other bro or banter like old friends; rivals snipe hard; enemies are openly hostile at full intensity (contempt, insults, threats in their own style — never polite); someone with feelings for a person turns visibly jealous when others get close to them; only real friends joke around like friends. Play every character 1:1 from their own sheet — personality, speech style, history — never one generic voice."
+      : "SZABÁLYOK: pontosan úgy beszéljenek egymással, ahogy ezek a kapcsolatok mondják — idegenek és ismerősök nem „bro”-znak és nem haverkodnak; riválisok keményen szurkálódnak; ellenségek nyíltan, teljes intenzitással ellenségesek (megvetés, sértés, fenyegetés a saját stílusukban — sosem udvariasan); aki érez valamit valaki iránt, látványosan féltékeny lesz, ha más közel kerül hozzá; csak valódi barátok poénkodnak barátként. Minden karaktert 1:1 a saját lapja szerint játssz — személyiség, beszédstílus, történet —, soha ne egy általános hangon.");
 }
 
 function whoIsWhoCard(w, ids) {
