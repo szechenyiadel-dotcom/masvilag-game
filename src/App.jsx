@@ -10920,7 +10920,7 @@ function relationshipAllowsDarkEdge(w, actorId, targetId) {
   if (!w || !actorId || !targetId || actorId === targetId) return false;
   const rel = getRel(w, actorId, targetId) || EMPTY_REL;
   const relText = [rel.bond, rel.type, rel.mood, rel.hidden].filter(Boolean).join(" ").toLowerCase();
-  if (/obsess|megsz[aá]ll|possess|birtokl|fixat|toxic|toxikus|dark|s[oö]t[eé]t|stalk|danger|vesz[eé]ly|rival|riv[aá]lis|enemy|ellens[eé]g|hate|gy[uű]l[oö]l|ut[aá]l|love-hate|kill|[oö]l(?:ni|ök)|threat|fenyeget|captor|fogva/.test(relText)) return true;
+  if (/obsess|megsz[aá]ll|possess|birtokl|fixat|toxic|toxikus|dark|s[oö]t[eé]t|stalk|danger|vesz[eé]ly|rival|riv[aá]lis|enemy|ellens[eé]g|hate|gy[uű]l[oö]l|ut[aá]l|love-hate|kill|[oö]l(?:ni|ök)|threat|fenyeget|captor|fogva|jealous|f[eé]lt[eé]ken|hurt|s[eé]rtett|megb[aá]nt|betray|[aá]rul|resent|neheztel/.test(relText + " " + String(rel.label || "").toLowerCase())) return true;
   let reading = null;
   try { reading = relationshipReadingFeelings(w, actorId, targetId); } catch (error) { reading = null; }
   if (reading && ((Number(reading.obsession) || 0) >= 40 || (Number(reading.fear) || 0) >= 40)) return true;
@@ -16348,10 +16348,14 @@ function sanitizePhoneDm(
             )
         );
 
-    text =
+    const kept =
       pieces
         .join(" ")
         .trim();
+    /* R32: a dropped "I'm outside" line must not leave "And ..." behind */
+    text = dmSentenceDropLeavesFragment(text, kept)
+      ? kept.replace(/^(?:and|or|so|but|then|és|de|vagy|szóval|aztán)\s*,?\s*/i, "").replace(/^\p{Ll}/u, (ch) => ch.toUpperCase())
+      : kept;
   }
 
   return text;
@@ -16425,6 +16429,15 @@ function emergencyFriendlyDmReply(w, botId, contextText = "") {
   return en ? "okay." : "oké.";
 }
 
+/* CLAUDE FIX R32: dropping a sentence must never leave a dangling fragment
+   ("And you only let me.", "Or what, ...") — then the whole reply is kept. */
+function dmSentenceDropLeavesFragment(original, cleaned) {
+  const a = String(original || "").trim(), b = String(cleaned || "").trim();
+  if (!b || a === b) return false;
+  if (/^(?:and|or|so|but|for|because|then|which|cause|'cause|és|de|vagy|szóval|mert|aztán|pedig)\b/i.test(b)) return true;
+  return b.length < a.length * 0.45;
+}
+
 function sanitizeUnjustifiedColdDm(w, botId, contextText, value) {
   let text = String(value || "").trim();
   if (!text) return text;
@@ -16473,6 +16486,7 @@ function sanitizeUnjustifiedColdDm(w, botId, contextText, value) {
     });
 
   const cleaned = pieces.join(" ").trim();
+  if (dmSentenceDropLeavesFragment(text, cleaned)) return text;
   return cleaned || emergencyFriendlyDmReply(w, botId, contextText);
 }
 
@@ -37079,7 +37093,8 @@ function directDmClarificationBlock(w, c, ck, latestText) {
   const ownWords = new Set(words(own));
   const echo = latestWords.length && latestWords.length <= 7 && /\?\s*$/.test(latest) && latestWords.filter((t) => ownWords.has(t)).length >= Math.min(2, latestWords.length);
   const asks = /^(?:\?+|huh\??|what\??|wdym|what do you mean|meaning\?|what\s+(?:is\s+that|are\s+you\s+(?:talking|on)\s+about)|explain|mi\?|mi van\?|hogy(?:an)? érted|ezt hogy érted|mire gondolsz|mit akarsz ezzel)/i.test(latest) ||
-    (latestWords.length <= 7 && /\b(?:with|about|for|by|of|like|to)?\s*what\s*\?+\s*$|\b(?:mi|mit|mivel|mir[oő]l|mire|hogy)\s*\?+\s*$|\bmeaning\s*\?+\s*$/i.test(latest));
+    (latestWords.length <= 7 && /\b(?:with|about|for|by|of|like|to)?\s*what\s*\?+\s*$|\b(?:mi|mit|mivel|mir[oő]l|mire|hogy)\s*\?+\s*$|\bmeaning\s*\?+\s*$/i.test(latest)) ||
+    (latestWords.length <= 4 && /^(?:(?:for|with|about|like|meaning)\s+)?what\b[\s?!.]*$|^(?:mi(?:t|ért|vel)?|hogy(?:hogy)?|mire)\b[\s?!.]*$|^what do you mean\b/i.test(latest));
   if (!echo && !asks) return "";
   return "CLARIFICATION REQUEST — THE PLAYER DID NOT UNDERSTAND YOUR LAST LINE:\n" +
     "Your last message was: \"" + own.slice(0, 300) + "\"\n" +
@@ -37145,6 +37160,8 @@ function directDmProtectedTail(w, c, ck, latestText) {
     "- React DIRECTLY to the latest player message: its literal content, tone and intention. Continue this same conversational beat; do not jump to a generic new topic.\n" +
     "- MAKE SENSE: a real person reading your reply must understand exactly what you mean. Every reply carries at least one concrete point — an answer, a statement about the actual situation, a feeling about something specific, a specific question or a plan. No cryptic riddles, empty dramatic one-liners or vague lines like \"exactly where you belong\" that leave the player guessing.\n" +
     "- Keep track of the conversation: the history above is one continuous exchange. Your reply must fit what both of you said in the last few messages, not just the last line.\n" +
+    "- Answer the PLAYER'S latest line, not your own previous one: do not open with And / Or / So / But / For as if you were still finishing your last message. Write a complete thought (usually 1–3 sentences) that a reader understands without guessing — sharp and in character is fine, cryptic is not.\n" +
+    "- If the player names someone they are with, flirting with or choosing (e.g. 'I'm with X'), react to THAT person and that fact directly, the way your feelings for the player demand.\n" +
     "- If the player reciprocates flirtation, respond to the fact that they reciprocated it. If they ask a question, answer it when your character knows. If they reject you, react to that rejection. If they agree, react to the agreement.\n" +
     "- Relationship level and personality decide HOW you react (embarrassed, pleased, teasing, defensive, sarcastic, possessive, calm, etc.), never WHETHER you acknowledge what was just said.\n" +
     "- Do not repeat the same opening, image, threat, joke, metaphor, pet name pattern or distinctive 4+ word phrase from your recent DM messages.\n" +
