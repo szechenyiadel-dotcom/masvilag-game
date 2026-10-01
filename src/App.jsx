@@ -13452,7 +13452,24 @@ function relationshipCrushActive(w, actorId, targetId, rel = null) {
 
   /* Strict target-specific attraction. Generic flirting, playfulness, jealousy,
      high friendship score or obsession alone do NOT count as a crush. */
-  return /(?:\bcrush\b|mutual\s+crush|secret\s+crush|has\s+a\s+crush|crush\s+on|love\s+interest|in\s+love|secretly\s+in\s+love|attraction|attracted\s+to|vonzalom|vonz[oó]d|szerelmes|szerelem|titokban\s+szerelmes|dating|járnak|randi(?:zik)?|girlfriend|boyfriend|partner|spouse|wife|husband|lover|engaged|fianc[eé]|jegyes)/i.test(text);
+  if (/(?:\bcrush\b|mutual\s+crush|secret\s+crush|has\s+a\s+crush|crush\s+on|love\s+interest|in\s+love|secretly\s+in\s+love|attraction|attracted\s+to|vonzalom|vonz[oó]d|szerelmes|szerelem|titokban\s+szerelmes|dating|járnak|randi(?:zik)?|girlfriend|boyfriend|partner|spouse|wife|husband|lover|engaged|fianc[eé]|jegyes)/i.test(text)) return true;
+  /* CLAUDE FIX R24: an obsession that the sheet reading marked as romantic
+     (attraction) or that sits on a positive bond is a crush too — an obsessed
+     admirer must never fall back to "platonic buddy" mode. */
+  const reading = relationshipReadingFeelings(w, actorId, targetId);
+  const attraction = Number(reading && reading.attraction) || 0;
+  const obsession = Number(reading && reading.obsession) || 0;
+  if (attraction >= 45) return true;
+  if (obsession >= 50 && (attraction >= 20 || (Number(r.score) || 0) >= 15)) return true;
+  if (/obsess|megsz[aá]llott|infatuat|besotted|fixated|rajong[aá]s(?:a)?\s+(?:ir[aá]nt|[eé]rte)/i.test(text) && (Number(r.score) || 0) >= 15) return true;
+  return false;
+}
+
+function relationshipReadingFeelings(w, actorId, targetId) {
+  const state = w && w.sim && w.sim.relationshipReading;
+  const entry = state && actorId ? state[actorId] : null;
+  const row = entry && entry.targets ? entry.targets[targetId] : null;
+  return row && typeof row === "object" ? row : null;
 }
 
 function relationshipSecretCrushActive(w, actorId, targetId, rel = null) {
@@ -13564,7 +13581,8 @@ function flirtIdentityInstruction(w, actorId, targetId, rel = null) {
           : state.mode === "casual-flirty"
             ? "CASUAL FLIRT PERMITTED: this character is explicitly naturally flirty and this target is orientation-compatible. Light flirting is allowed even without a crush, but do not invent jealousy, possessiveness, love or relationship claims without a real crush."
             : "NO FLIRT: keep warmth, compliments, jokes, teasing and affection platonic. This character is either not broadly flirty and has no crush on this target, or this target is not a valid romantic target.";
-    return `IDENTITY / FLIRT GROUND TRUTH — NEVER FORGET: ${actor.name}: gender=${actorGender}, orientation=${actorOrientation}. ${target.name}: gender=${targetGender}, orientation=${targetOrientation}. Target orientation means only possible compatibility, NEVER automatic reciprocal attraction or consent. ${behavior}`;
+    const noBuddy = state.crushActive ? " " + target.name + " is NOT one of the guys to " + actor.name + ": never call them bro, dude, buddy, pal, man or mate, never treat them like a teammate or a mate — the attraction" + (relationshipReadingFeelings(w, actorId, targetId) && Number(relationshipReadingFeelings(w, actorId, targetId).obsession) >= 50 ? " and the obsession" : "") + " must be felt in every line, in this character's own way." : "";
+    return `IDENTITY / FLIRT GROUND TRUTH — NEVER FORGET: ${actor.name}: gender=${actorGender}, orientation=${actorOrientation}. ${target.name}: gender=${targetGender}, orientation=${targetOrientation}. Target orientation means only possible compatibility, NEVER automatic reciprocal attraction or consent. ${behavior}${noBuddy}`;
   }
 
   const behavior = state.mode === "unrequited-orientation-crush"
@@ -13578,7 +13596,8 @@ function flirtIdentityInstruction(w, actorId, targetId, rel = null) {
         : state.mode === "casual-flirty"
           ? "ALKALMI FLÖRT ENGEDÉLYEZETT: a karakter explicit módon eleve flörtölős, a célpont pedig orientáció-kompatibilis. Könnyed flört crush nélkül is lehet, de ne találj ki féltékenységet, birtoklást, szerelmet vagy kapcsolatot valódi crush nélkül."
           : "NINCS FLÖRT: a kedvesség, bók, poén, ugratás és szeretet maradjon platonikus. A karakter vagy nem általánosan flörtölős és nincs crush-a erre a célpontra, vagy a célpont nem érvényes romantikus célpont.";
-  return `IDENTITÁS / FLÖRT GROUND TRUTH — SOHA NE FELEJTSD EL: ${actor.name}: nem=${actorGender}, szexualitás=${actorOrientation}. ${target.name}: nem=${targetGender}, szexualitás=${targetOrientation}. A célpont orientációja csak lehetséges kompatibilitást jelent, SOHA nem automatikus viszonzást vagy beleegyezést. ${behavior}`;
+  const noBuddyHu = state.crushActive ? " " + target.name + " " + actor.name + " számára NEM haver: soha ne szólítsa bro-nak, tesónak, havernak, dude-nak, és ne kezelje csapattársként vagy haverként — a vonzalomnak" + (relationshipReadingFeelings(w, actorId, targetId) && Number(relationshipReadingFeelings(w, actorId, targetId).obsession) >= 50 ? " és a megszállottságnak" : "") + " minden sorában éreznie kell, a karakter saját módján." : "";
+  return `IDENTITÁS / FLÖRT GROUND TRUTH — SOHA NE FELEJTSD EL: ${actor.name}: nem=${actorGender}, szexualitás=${actorOrientation}. ${target.name}: nem=${targetGender}, szexualitás=${targetOrientation}. A célpont orientációja csak lehetséges kompatibilitást jelent, SOHA nem automatikus viszonzást vagy beleegyezést. ${behavior}${noBuddyHu}`;
 }
 
 function sanitizeDisallowedFlirtText(w, actorId, targetId, value) {
@@ -15927,7 +15946,39 @@ function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
   text = sanitizeOrientationIncompatibleRomanceText(w, actorId, targetId, text);
   text = sanitizeDisallowedFlirtText(w, actorId, targetId, text);
   text = stripHostileEndearments(w, actorId, targetId, text);
+  text = stripBuddyVocatives(w, actorId, targetId, text);
   return text;
+}
+
+/* CLAUDE FIX R24: someone with a crush on / an obsession with the target does
+   not call them "bro"; nobody calls a woman "bro" by default either. */
+function stripBuddyVocatives(w, actorId, targetId, value) {
+  const text = String(value || "");
+  if (!text || !w || !actorId || !targetId || actorId === targetId) return text;
+  let crush = false;
+  try { crush = relationshipCrushActive(w, actorId, targetId); } catch (error) { crush = false; }
+  const target = charById(w, targetId);
+  const female = identityPronouns(target) === "she/her";
+  if (!crush && !female) return text;
+  /* words that are only ever an address */
+  const pure = "bro|broski|brah|bruv|my\\s+guy|my\\s+man";
+  /* words that are also ordinary words: only when comma-marked */
+  const marked = crush
+    ? "brother|homie|buddy|bud|dude|man|pal|mate|tes[oó]m?|haver(?:om)?|cimbi|cimbor[aá]m|[oö]reg|cs[aá]v[oó]"
+    : "brother|homie";
+  const end = "(?=\\s*(?:[,.!?…:;)*\"”]|$))";
+  let out = text
+    .replace(new RegExp("^\\s*(?:" + pure + (marked ? "|" + marked : "") + ")\\s*[,!.…]+\\s*", "iu"), "")
+    .replace(new RegExp(",\\s*(?:" + pure + (marked ? "|" + marked : "") + ")" + end, "giu"), "")
+    .replace(new RegExp("\\s+(?:" + pure + ")" + end, "giu"), "")
+    .replace(new RegExp("^\\s*(?:" + pure + ")\\s+(?=\\S)", "iu"), "");
+  out = out.replace(/[ \t]{2,}/g, " ").replace(/\s+([,.!?…])/g, "$1").replace(/^[,\s]+/, "").trim();
+  if (!out) return text;
+  if (out !== text) {
+    if (/^[a-záéíóöőúüű]/.test(out) && /^[A-ZÁÉÍÓÖŐÚÜŰ]/.test(text.trim())) out = out.charAt(0).toUpperCase() + out.slice(1);
+    console.info("[buddy-vocative] removed", crush ? "crush" : "female-target", "from=" + String(actorId), "to=" + String(targetId));
+  }
+  return out;
 }
 
 /* CLAUDE FIX R22: people who dislike / hate each other never call each other
