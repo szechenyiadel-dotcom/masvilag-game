@@ -3052,6 +3052,11 @@ function channelTone(text) {
   if (/bunkó|idióta|hülye|hazug|cringe|loser|annoying|stupid|rude|liar|coward/i.test(s)) return -1;
   if (/szeretlek|imádlak|büszke vagyok|gyönyörű|csodálatos|love you|adore|proud of|gorgeous|beautiful|❤️|❤|🥰|😍|💖|💕/iu.test(s)) return 2;
   if (/köszi|köszön|gratul|bocsánat|sajnálom|cuki|szép|dögös|vicces|haha|lol|thanks|congrats|sorry|cute|pretty|hot|funny|😂|🤣/iu.test(s)) return 1;
+  /* CLAUDE FIX R27: everyday put-downs and flirting move the needle too */
+  const juice = publicSocialJuiceSignals(text);
+  if (juice.tags.includes("threat")) return -2;
+  if (juice.tags.includes("conflict")) return -1;
+  if (juice.tags.includes("flirt")) return 1;
   return 0;
 }
 
@@ -5278,6 +5283,13 @@ function publicSocialJuiceSignals(text) {
   }
   if (/\b(?:cheat|cheated|cheating|affair|caught|exposed|receipts|screenshots?|leak|leaked|megcsal|lebuk|bizonyíték|kiszivárg)\b/i.test(low)) {
     drama += 30; embarrassment += 28; importance += 18; tags.push("scandal", "receipts");
+  }
+  /* CLAUDE FIX R27: everyday flirting and fighting are noticed too */
+  if (!tags.includes("romance") && (/\b(?:handsome|cutie|cute|sexy|hottie|sweetheart|darling|honey|beautiful|looking\s+(?:good|fine|hot)|you\s+look\s+(?:good|great|amazing|hot|fine|cute)|my\s+type|miss(?:ed)?\s+you|thinking\s+(?:of|about)\s+you|can['’]?t\s+stop\s+thinking|wanna\s+(?:go\s+out|hang\s+out\s+(?:tonight|alone)|get\s+(?:dinner|drinks|coffee))|take\s+me\s+out|come\s+over|my\s+place|your\s+place|tonight\s*\?|call\s+me|text\s+me|kiss\s+me|cuddle|marry\s+me|be\s+mine|all\s+yours|only\s+yours|so\s+fine|damn\s+you|you['’]?re\s+(?:so\s+)?(?:hot|cute|fine|gorgeous|beautiful|handsome|sexy)|helyes|cuki|szexi|hiányzol|rád\s+gondolok|gyere\s+át|randizz|csókolj|édes(?:em)?|drágám|szívem|bébi)\b/i.test(low) || /(?:😏|😘|😉|💋|🥵|😍|🫦|❤️‍🔥|😚|💕|💘|💞|🔥\s*🔥)/u.test(raw))) {
+    romance += 22; importance += 6; tags.push("romance", "flirt");
+  }
+  if (!tags.includes("callout") && (/\b(?:screw\s+you|go\s+to\s+hell|piss\s+off|f\s*off|get\s+lost|back\s+off|nobody\s+asked|who\s+asked|cry\s+about\s+it|stay\s+mad|you\s+wish|clown|joke|ugly|weak|dumb|useless|disgusting|creep|creepy|psycho|freak|go\s+away|leave\s+me\s+alone|stay\s+away|don['’]?t\s+touch|hate|despise|can['’]?t\s+stand|dögölj|húzz\s+el|tűnj\s+el|senki\s+nem\s+kérdezett|bohóc|nyomorult|béna|undorító|gyenge|gyűlöl|utál|szállj\s+le|hagyj\s+békén)\b/i.test(low) || /(?:🙄|🖕|🤡|😒|💀\s*💀)/u.test(raw))) {
+    drama += 26; importance += 8; tags.push("callout", "conflict");
   }
   if ((raw.match(/!/g) || []).length >= 3 || /\b(?:OMG|WTF)\b/.test(raw)) drama += 5;
   return {
@@ -28154,6 +28166,7 @@ let REPLY_DYNAMIC_CONTEXT = null;
 /* while a jealous / rival / defend reply is applied, the "keep it friendly"
    guards must not throw away the very conflict we asked for */
 let REPLY_DYNAMIC_APPLYING = "";
+const REPLY_CONFLICT_DYNAMICS = ["jealous", "rival", "defend", "jealous-watch", "defend-target"];
 
 /* CLAUDE FIX R25: jealousy and enmity are played as extreme as the sheet and the
    relationship say. "extreme" = obsession / possessive or jealous nature /
@@ -28190,6 +28203,21 @@ function replyDynamicDirective(w, comment) {
   if (!ctx || !comment || String(ctx.commentId) !== String(comment.id)) return "";
   const en = worldLanguage(w, w && w.meId) === "en";
   const responder = nameOfIn(w, ctx.responderId), target = nameOfIn(w, comment.authorId), author = nameOfIn(w, ctx.postAuthorId);
+  if (ctx.dynamic === "jealous-watch") {
+    /* the responder has feelings for the commenter, who just flirted with someone else */
+    const other = nameOfIn(w, ctx.otherId || ctx.postAuthorId);
+    const level = emotionalIntensity(w, ctx.responderId, comment.authorId, "jealous");
+    return "\n" + (en
+      ? "SOCIAL DYNAMIC FOR THIS REPLY" + (level === "extreme" ? " — FULL INTENSITY" : "") + ": " + responder + " has feelings for " + target + " and just watched " + target + " flirt with " + other + " in public. Reply to " + target + " with " + (level === "extreme" ? "open, possessive jealousy at full force, exactly as extreme as " + responder + "'s sheet — cutting, hurt or menacing, a jab at " + other + ", demanding what that was" : "clearly visible jealousy in your own style — hurt, sarcastic or cold, maybe a jab at " + other) + ". Never friendly or indifferent."
+      : "TÁRSAS DINAMIKA EHHEZ A VÁLASZHOZ" + (level === "extreme" ? " — TELJES INTENZITÁS" : "") + ": " + responder + " érez valamit " + target + " iránt, és most látta, ahogy " + target + " nyilvánosan flörtöl " + other + "-val/vel. Válaszolj " + target + " kommentjére " + (level === "extreme" ? "nyílt, birtokló féltékenységgel, teljes erővel, ahogy " + responder + " lapja mondja — vágósan, sértetten vagy fenyegetően, egy beszólással " + other + " felé, számonkérve, mi volt ez" : "jól látható féltékenységgel a saját stílusodban — sértetten, szarkasztikusan vagy hidegen, akár egy beszólással " + other + " felé") + ". Soha ne legyél barátságos vagy közömbös.");
+  }
+  if (ctx.dynamic === "defend-target") {
+    const victim = nameOfIn(w, ctx.otherId);
+    const level = emotionalIntensity(w, ctx.responderId, comment.authorId, "hostile");
+    return "\n" + (en
+      ? "SOCIAL DYNAMIC FOR THIS REPLY: " + target + " just went after " + victim + " in public, and " + responder + " is on " + victim + "'s side. Push back on " + target + " in your own style" + (level === "extreme" ? ", at full intensity — you can't stand " + target : "") + ". Stand up for " + victim + "; do not stay neutral."
+      : "TÁRSAS DINAMIKA EHHEZ A VÁLASZHOZ: " + target + " épp nyilvánosan nekiment " + victim + "-nak/nek, " + responder + " pedig " + victim + " oldalán áll. Szólj vissza " + target + "-nak/nek a saját stílusodban" + (level === "extreme" ? ", teljes erővel — ki nem állhatod " + target + "-t" : "") + ". Állj ki " + victim + " mellett; ne maradj semleges.");
+  }
   const jealousLevel = ctx.dynamic === "jealous" ? emotionalIntensity(w, ctx.responderId, ctx.postAuthorId, "jealous") : "";
   const rivalLevel = ctx.dynamic === "rival" ? emotionalIntensity(w, ctx.responderId, comment.authorId, "hostile") : "";
   if (jealousLevel === "extreme") {
@@ -29060,7 +29088,7 @@ function legacyChannelApplyReplies(n, postId, rootId, out) {
     }
     if (!body) return;
     if (
-      !["jealous", "rival", "defend"].includes(REPLY_DYNAMIC_APPLYING) &&
+      !REPLY_CONFLICT_DYNAMICS.includes(REPLY_DYNAMIC_APPLYING) &&
       addressTargetId &&
       socialCommentContradictsRelationship(
         n,
@@ -29075,7 +29103,7 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
       return;
     }
     if (
-      !["jealous", "rival", "defend"].includes(REPLY_DYNAMIC_APPLYING) &&
+      !REPLY_CONFLICT_DYNAMICS.includes(REPLY_DYNAMIC_APPLYING) &&
       rootForAddress &&
       p.authorId &&
       socialThreadAllyHostilityMismatch(
@@ -36012,6 +36040,23 @@ const turn = async (mine) => {
           playerTarget.id;
       }
 
+      /* CLAUDE FIX R27: the other members witness what the player says to someone */
+      const groupTargetId = playerTarget.id || (mentionedIdsInText(n, mine, n.meId).find((id) => (g.members || []).includes(id)) || "");
+      if (groupTargetId) {
+        const juice = publicSocialJuiceSignals(mine);
+        if (juice.romance >= 20 || juice.drama >= 26) {
+          recordSocialEvent(n, {
+            type: "group-message", refId: playerGroupMessage.id, ts: playerGroupMessage.ts,
+            actorId: n.meId, targetIds: [groupTargetId],
+            witnessIds: (g.members || []).filter((id) => id && !isHuman(n, id) && id !== groupTargetId),
+            visibility: "group", factLevel: "observed",
+            importance: 20 + juice.importance, drama: juice.drama, romance: juice.romance, embarrassment: juice.embarrassment,
+            source: "group-chat", text: cut(mine, 360), tags: ["group", ...juice.tags],
+            meta: { groupId: g.id, messageId: playerGroupMessage.id, participantIds: [n.meId, groupTargetId] },
+          });
+        }
+      }
+
       g.updatedAt = now();
     });
   }
@@ -36316,7 +36361,7 @@ A válaszok első pillantásra úgy hassanak, mint egy valódi group chat követ
 Formátum:
 {"replies":[{"id":"tag azonosítója","to":"annak az id-ja, akinek közvetlenül szól, vagy üres","text":"természetes rövid group chat üzenet"}],
 "changes":[{"a":"aki érez","b":"aki iránt","delta":12,"mood":"mit érez most iránta","why":"egy rövid mondat","oneSided":false}],
-"memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${groupChatSocialTail(w, groupAiIds)}${TAIL}`,
+"memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${groupChatSocialTail(w, groupAiIds, mine ? { text: mine, targetId: playerTarget.id || "" } : null)}${TAIL}`,
       { maxTokens: 700, maxTries: 1, timeoutMs: 50000 }
       );
     } catch (primaryGroupErr) {
@@ -49067,6 +49112,12 @@ function romanticStakeForObserver(w, observerId, subjectId) {
   if (!stake && jealousy >= 3 && relationshipRomanceActive(w, observerId, subjectId, rel)) {
     stake = 2; label = "romantic-fixation";
   }
+  /* CLAUDE FIX R27: a crush / obsession read from the sheet is a stake too */
+  if (!stake) {
+    let crush = false;
+    try { crush = relationshipCrushActive(w, observerId, subjectId, rel); } catch (error) { crush = false; }
+    if (crush) { stake = 2; label = obsession >= 1 || /obsess|megsz[aá]ll/.test(relText) ? "romantic-fixation" : "crush"; }
+  }
   if (!stake) return null;
 
   return {
@@ -49112,10 +49163,12 @@ function romanticObserverDelta(stakeInfo, event, strength) {
   return -Math.max(2, Math.min(14, Math.round(loss)));
 }
 
-function scheduleRomanticObserverReaction(w, event, observerId, subjectId) {
+function scheduleRomanticObserverReaction(w, event, observerId, subjectId, row = null) {
   /* MÁSVILÁG AI-AI JEALOUSY ROUTING v1 */
   if (!w || !event || !observerId) return;
   const keyBase = `romantic-observer:${event.id || event.refId || event.ts}:${observerId}`;
+  /* R27: in a group chat the members react inside the chat itself */
+  if (event.type === "group-message") return;
 
   /* A public flirt inside a comment thread should be allowed to explode
      IN that same thread instead of always becoming an unrelated DM. */
@@ -49127,8 +49180,14 @@ function scheduleRomanticObserverReaction(w, event, observerId, subjectId) {
     simEnqueue(w, mkAction(
       "reply",
       `${keyBase}:thread`,
-      { postId: event.meta.postId, commentId: event.meta.commentId, targetId: observerId, trigger: "romantic-jealousy" },
-      "event"
+      {
+        postId: event.meta.postId, commentId: event.meta.commentId, targetId: observerId, trigger: "romantic-jealousy",
+        /* R27: observer loves the flirter → hurt jealousy at them; observer loves the addressee → rival jealousy at the flirter */
+        dynamic: row && row.rival ? "jealous" : "jealous-watch",
+        dynamicLoveId: row && row.rival ? row.otherId : subjectId,
+        dynamicOtherId: row && row.rival ? "" : (row && row.otherId) || "",
+      },
+      event.actorId === w.meId || (event.targetIds || []).includes(w.meId) ? "player-event" : "event"
     ));
     return;
   }
@@ -49168,7 +49227,7 @@ function romanticEventParticipantIds(w, event) {
   const targets = [...new Set((event.targetIds || []).filter(Boolean).map(String))];
 
   /* Social messages have a reliable author + addressee structure. */
-  if (["comment","reply","post","dm"].includes(String(event.type || "")) && actorId && targets.length) {
+  if (["comment","reply","post","dm","group-message"].includes(String(event.type || "")) && actorId && targets.length) {
     return [...new Set([actorId, ...targets])].slice(0, 4);
   }
 
@@ -49254,7 +49313,7 @@ function applyObservedRomanticThirdPartyConsequences(w, event) {
   /* CLAUDE FIX 2.6: in a comment / reply / post / DM only its author did the
      flirting. The addressee did nothing, so they must never become the subject
      ("X saw Angela act romantically with Brent" when only Brent wrote). */
-  const socialMessage = ["comment", "reply", "post", "dm", "dm-message"].includes(String(event.type || ""));
+  const socialMessage = ["comment", "reply", "post", "dm", "dm-message", "group-message"].includes(String(event.type || ""));
   const subjectIds = socialMessage && event.actorId ? [String(event.actorId)] : participantIds;
 
   (w.chars || []).forEach((observer) => {
@@ -49393,9 +49452,106 @@ function applyObservedRomanticThirdPartyConsequences(w, event) {
     }
 
     /* Keep visible fallout focused instead of making five people pile on at once. */
-    if (index < 2) scheduleRomanticObserverReaction(w, event, observer.id, row.subjectId);
+    if (index < 2) scheduleRomanticObserverReaction(w, event, observer.id, row.subjectId, row);
   });
 
+  return chosen.length;
+}
+
+/* CLAUDE FIX R27 — SIMS-LIKE CONFLICT OBSERVERS
+   When someone publicly (or in front of a group) attacks somebody, everyone who
+   knows about it reacts by their own ties: the victim's friends, family,
+   partner, admirers and group mates take the victim's side and cool toward the
+   attacker; the victim's enemies quietly approve. Friendly roasting between two
+   real friends is not a fight. */
+function socialPersonClosenessStake(w, observerId, personId) {
+  const rel = getRel(w, observerId, personId) || EMPTY_REL;
+  const text = [rel.bond, rel.type, rel.hidden].filter(Boolean).join(" ").toLowerCase();
+  let stake = 0;
+  if (/wife|husband|spouse|partner|girlfriend|boyfriend|dating|fianc|feles[eé]g|f[eé]rj|p[aá]rja|j[aá]rnak|anya|apa|mother|father|mom|dad|sister|brother|sibling|testv[eé]r|son|daughter|fia|l[aá]nya|family|csal[aá]d/.test(text)) stake = 4;
+  else if (/best\s+friend|legjobb|close\s+friend|k[oö]zeli\s+bar[aá]t|mentor|sensei|student|tan[ií]tv[aá]ny/.test(text)) stake = 3;
+  else if (/friend|bar[aá]t|buddy|teammate|csapatt[aá]rs/.test(text)) stake = 2;
+  let crush = false;
+  try { crush = relationshipCrushActive(w, observerId, personId, rel); } catch (error) { crush = false; }
+  if (crush) stake = Math.max(stake, 3);
+  const score = Number(rel.score) || 0;
+  if (score >= 70) stake = Math.max(stake, 3);
+  else if (score >= 40) stake = Math.max(stake, 2);
+  try {
+    const a = identityCanonFor(w, observerId), b = identityCanonFor(w, personId);
+    if (a && b && a.group && b.group && a.group.toLowerCase() === b.group.toLowerCase()) stake = Math.max(stake, 1);
+  } catch (error) { /* ignore */ }
+  if (relationshipIsHostile(w, observerId, personId)) stake = 0;
+  return stake;
+}
+
+function applyObservedConflictThirdPartyConsequences(w, event) {
+  if (!w || !event || event.factLevel !== "observed") return 0;
+  if (event.meta && (event.meta.skipConflictObserverConsequences || event.meta.skipRomanticObserverConsequences)) return 0;
+  const type = String(event.type || "");
+  if (!["comment", "reply", "post", "group-message"].includes(type)) return 0;
+  const tags = new Set((event.tags || []).map((x) => String(x || "").toLowerCase()));
+  const hostile = tags.has("callout") || tags.has("threat") || tags.has("fight") || tags.has("public-drama") || tags.has("conflict") || (Number(event.drama) || 0) >= 30;
+  if (!hostile) return 0;
+  const attackerId = String(event.actorId || "");
+  const victimId = String((event.targetIds || []).find((id) => id && String(id) !== attackerId) || "");
+  if (!attackerId || !victimId) return 0;
+  /* two real friends roasting each other is banter, not a fight */
+  const ab = Number((getRel(w, attackerId, victimId) || EMPTY_REL).score) || 0;
+  const ba = Number((getRel(w, victimId, attackerId) || EMPTY_REL).score) || 0;
+  const threat = tags.has("threat") || tags.has("fight");
+  if (!threat && ab >= 55 && ba >= 55) return 0;
+  const severity = threat ? 1.6 : 1;
+  const attacker = charById(w, attackerId), victim = charById(w, victimId);
+  if (!attacker || !victim) return 0;
+  const sourceRef = type + ":" + String(event.refId || event.id || "");
+  const rows = [];
+  (w.chars || []).forEach((observer) => {
+    if (!observer || !observer.id || isHuman(w, observer.id) || isMediaAccount(w, observer.id)) return;
+    if (observer.id === attackerId || observer.id === victimId) return;
+    if (!observerActuallyKnowsSocialEvent(w, observer.id, event)) return;
+    const loyal = socialPersonClosenessStake(w, observer.id, victimId);
+    const toAttacker = socialPersonClosenessStake(w, observer.id, attackerId);
+    if (loyal >= 1 && loyal >= toAttacker) {
+      let delta = -Math.round((1.5 + loyal * 1.6) * severity);
+      if (toAttacker >= 2) delta = Math.round(delta / 2);
+      rows.push({ observer, kind: "sides", delta: Math.max(-12, Math.min(-1, delta)), weight: loyal * 3 + (toAttacker ? 0 : 1) });
+    } else if (relationshipIsHostile(w, observer.id, victimId) && !relationshipIsHostile(w, observer.id, attackerId)) {
+      rows.push({ observer, kind: "approves", delta: threat ? 3 : 2, weight: 2 });
+    }
+  });
+  const chosen = rows.sort((x, y) => y.weight - x.weight).slice(0, 6);
+  const en = worldLanguage(w, w.meId) === "en";
+  chosen.forEach((row, index) => {
+    const o = row.observer;
+    const current = Number((getRel(w, o.id, attackerId) || EMPTY_REL).score) || 0;
+    const delta = relationshipOneTierDelta(current, row.delta);
+    if (!delta) return;
+    const mood = row.kind === "sides"
+      ? (en ? "angry about how " + attacker.name + " treated " + victim.name : "dühös, ahogy " + attacker.name + " bánt " + victim.name + "-val/vel")
+      : (en ? "enjoyed seeing " + attacker.name + " go after " + victim.name : "élvezte, ahogy " + attacker.name + " nekiment " + victim.name + "-nak/nek");
+    const why = en
+      ? o.name + " saw " + attacker.name + " attack " + victim.name + (event.visibility === "public" ? " in public" : "") + " (source: " + sourceRef + ")."
+      : o.name + " látta, ahogy " + attacker.name + " nekimegy " + victim.name + "-nak/nek" + (event.visibility === "public" ? " nyilvánosan" : "") + " (forrás: " + sourceRef + ").";
+    applyChanges(w, [{ a: o.id, b: attackerId, delta, mood, why, oneSided: true, micro: true }]);
+    if (typeof groundedEventLog === "function") {
+      groundedEventLog(w, "relationship-change", "applied",
+        o.name + " → " + attacker.name + ": " + (delta > 0 ? "+" : "") + delta + " (" + (row.kind === "sides" ? "took " + victim.name + "'s side" : "enjoyed the fight") + ")",
+        sourceRef, { observerId: o.id, subjectId: attackerId, delta });
+    }
+    rememberAboutTarget(w, o.id, attackerId, {
+      kind: "event", source: "observed_conflict", confidence: 1, timestamp: Number(event.ts) || now(),
+      text: attacker.name + " went after " + victim.name + ": " + cut(event.text || "", 200),
+    });
+    /* the closest ally speaks up in the same thread (player involved only, to avoid endless AI pile-ons) */
+    if (index === 0 && row.kind === "sides" && (attackerId === w.meId || victimId === w.meId) &&
+        (type === "comment" || type === "reply") && event.meta && event.meta.postId && event.meta.commentId && typeof simEnqueue === "function") {
+      simEnqueue(w, mkAction("reply", "conflict-observer:" + String(event.refId || event.id) + ":" + o.id, {
+        postId: event.meta.postId, commentId: event.meta.commentId, targetId: o.id, trigger: "conflict-defend",
+        dynamic: "defend-target", dynamicOtherId: victimId,
+      }, "player-event"));
+    }
+  });
   return chosen.length;
 }
 
@@ -49792,6 +49948,7 @@ function legacySimsSocialRecordSocialEvent(
    * actually saw a public or witnessed romantic interaction may become
    * jealous, remember it, lose relationship points and react. */
   applyObservedRomanticThirdPartyConsequences(w, entry);
+  try { applyObservedConflictThirdPartyConsequences(w, entry); } catch (conflictError) { console.warn("[conflict-observers] failed", conflictError); }
 
   /*
    * A social ledger eseménye lehet egy backchannel rumor MAGJA.
@@ -54847,7 +55004,12 @@ if (action.type === "roleplay-initiate") {
       action.payload.targetId;
 
     const replyDynamic = String(action.payload && action.payload.dynamic || "");
-    REPLY_DYNAMIC_CONTEXT = replyDynamic ? { commentId: comment.id, responderId: requestedTargetId, postAuthorId: post.authorId, dynamic: replyDynamic } : null;
+    REPLY_DYNAMIC_CONTEXT = replyDynamic ? {
+      commentId: comment.id, responderId: requestedTargetId,
+      postAuthorId: String(action.payload && action.payload.dynamicLoveId || "") || post.authorId,
+      otherId: String(action.payload && action.payload.dynamicOtherId || ""),
+      dynamic: replyDynamic,
+    } : null;
     let rawOut;
     try {
       rawOut = await genReply(
@@ -63136,7 +63298,36 @@ function worldGroupGlossaryCard(w) {
 /* CLAUDE FIX R16: group chats get exact identities and the members' real
    relationships to each other in a protected tail, so nobody mistakes the
    player for someone from a backstory and strangers do not "bro" each other. */
-function groupChatSocialTail(w, aiIds) {
+function groupChatPlayerMoveLines(w, ids, move, en) {
+  if (!move || !move.text || !w.meId) return "";
+  const juice = publicSocialJuiceSignals(move.text);
+  const targetId = move.targetId || (mentionedIdsInText(w, move.text, w.meId).find((id) => ids.includes(id)) || "");
+  if (!targetId) return "";
+  const player = nameOfIn(w, w.meId), target = nameOfIn(w, targetId);
+  const lines = [];
+  if (juice.romance >= 20) {
+    ids.filter((id) => id !== targetId).forEach((id) => {
+      let crush = false;
+      try { crush = relationshipCrushActive(w, id, w.meId); } catch (error) { crush = false; }
+      if (!crush) return;
+      const level = emotionalIntensity(w, id, w.meId, "jealous");
+      lines.push(en
+        ? "- " + nameOfIn(w, id) + " has feelings for " + player + " and just watched her/him flirt with " + target + " right here: " + (level === "extreme" ? "open, possessive jealousy at full intensity" : "visible jealousy") + " in their own style."
+        : "- " + nameOfIn(w, id) + " érez valamit " + player + " iránt, és most itt látta flörtölni " + target + "-val/vel: " + (level === "extreme" ? "nyílt, birtokló féltékenység teljes erővel" : "látható féltékenység") + ", a saját stílusában.");
+    });
+  }
+  if (juice.drama >= 26) {
+    ids.filter((id) => id !== targetId).forEach((id) => {
+      const loyal = socialPersonClosenessStake(w, id, targetId);
+      if (loyal >= 2) lines.push(en ? "- " + nameOfIn(w, id) + " is close to " + target + " and takes " + target + "'s side against " + player + "." : "- " + nameOfIn(w, id) + " közel áll " + target + "-hoz/hez, és " + target + " oldalára áll " + player + " ellen.");
+      else if (relationshipIsHostile(w, id, targetId)) lines.push(en ? "- " + nameOfIn(w, id) + " can't stand " + target + " and enjoys seeing " + player + " go after them." : "- " + nameOfIn(w, id) + " ki nem állhatja " + target + "-t, és élvezi, hogy " + player + " nekimegy.");
+    });
+  }
+  if (!lines.length) return "";
+  return (en ? "WHAT THE OTHERS JUST SAW — THEY REACT TO IT NOW:\n" : "AMIT A TÖBBIEK MOST LÁTTAK — MOST REAGÁLNAK RÁ:\n") + lines.slice(0, 5).join("\n") + "\n";
+}
+
+function groupChatSocialTail(w, aiIds, move = null) {
   if (!w) return "";
   const en = worldLanguage(w, w.meId) === "en";
   const ids = [...new Set((aiIds || []).filter(Boolean).map(String))].filter((id) => charById(w, id) && !isHuman(w, id)).slice(0, 7);
@@ -63156,6 +63347,7 @@ function groupChatSocialTail(w, aiIds) {
     ? "GROUP CHAT — EXACT IDENTITIES:\n- The player is " + player.name + " [" + w.meId + "], call her/him \"" + playerCall + "\". Every message from [" + w.meId + "] is " + player.name + " — never anyone else (not a friend, rival or name from somebody's backstory).\n"
     : "GROUP CHAT — PONTOS SZEMÉLYAZONOSSÁGOK:\n- A játékos " + player.name + " [" + w.meId + "], szólítsák így: \"" + playerCall + "\". Minden [" + w.meId + "] üzenet " + player.name + " — soha nem valaki más (nem egy barát, rivális vagy név valakinek a hátteréből).\n") +
     (members ? members + "\n" : "") +
+    groupChatPlayerMoveLines(w, ids, move, en) +
     (en ? "RELATIONSHIPS BETWEEN THE MEMBERS (each from their own side — these decide the tone):\n" : "KAPCSOLATOK A TAGOK KÖZÖTT (mindenki a saját oldaláról — ezek határozzák meg a hangot):\n") +
     lines.join("\n") + "\n" +
     (en
