@@ -4409,7 +4409,7 @@ function setRel(w, a, b, patch) {
    dynamic score happened to exist at the end of the previous run.
    ============================================================ */
 
-const RELATIONSHIP_CANON_VERSION = 6;
+const RELATIONSHIP_CANON_VERSION = 7; /* R42: instant sheet sync */
 
 function ensureRelationshipBaselineStore(w) {
   if (!w.relationshipBaselines || typeof w.relationshipBaselines !== "object") {
@@ -4864,6 +4864,51 @@ function refreshCanonicalRelationshipBaselines(w, focusId = "") {
        Force the next full refresh unless the caller intentionally did one. */
     w.relationshipCanonFingerprint = "";
   }
+}
+
+function relationshipIsUntouched(live) {
+  if (!live) return true;
+  if (live.freshFromSheet === true) return true;
+  return live.freshFromSheet === undefined && !String(live.mood || "").trim() && !String(live.why || "").trim() && !String(live.hidden || "").trim();
+}
+
+function syncUntouchedRelationshipsFromBaselines(w) {
+  if (!w || !w.relationshipBaselines || typeof w.relationshipBaselines !== "object") return 0;
+  if (!w.rels || typeof w.rels !== "object") w.rels = {};
+  const store = w.relationshipBaselines;
+  let changed = 0;
+  Object.keys(store).forEach((key) => {
+    const base = store[key];
+    if (!base || relationshipBaselineIsManual(base) || /^legacy$/i.test(String(base.source || ""))) return;
+    const at = key.indexOf(">");
+    if (at < 1) return;
+    const a = key.slice(0, at), b = key.slice(at + 1);
+    const live = w.rels[key];
+    if (!relationshipIsUntouched(live) || (live && live.fixed && (live.bond || live.type))) return;
+    const next = {
+      ...EMPTY_REL,
+      ...(live || {}),
+      score: clampRelationshipScore(Number(base.score) || 0),
+      bond: String(base.bond || base.type || "").slice(0, 160),
+      mood: String(base.mood || "").slice(0, 160),
+      hidden: String(base.hidden || "").slice(0, 500),
+      fixed: !!base.fixed,
+      freshFromSheet: true,
+    };
+    if (base.role) next.role = String(base.role).slice(0, 60);
+    try {
+      const actor = charById(w, a), target = charById(w, b);
+      const reading = actor && target ? relationshipReadingResult(w, actor, target) : null;
+      if (reading && reading.label && !next.label) { next.label = String(reading.label).slice(0, 70); next.labelBasis = relationshipLabelBasis(next); }
+      if (reading && reading.role && !next.role) next.role = String(reading.role).slice(0, 60);
+    } catch (error) { /* label is optional */ }
+    const same = live && Number(live.score) === next.score && String(live.bond || "") === next.bond && String(live.mood || "") === next.mood && String(live.hidden || "") === next.hidden && String(live.role || "") === String(next.role || "") && live.freshFromSheet === true;
+    if (same) return;
+    w.rels[key] = next;
+    changed += 1;
+  });
+  if (changed) console.info("[relationship-sync] relationships written from the sheets", "count=" + changed);
+  return changed;
 }
 
 function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
@@ -18375,6 +18420,10 @@ function migrate(w) {
     refreshCanonicalRelationshipBaselines(w);
   }
 
+  /* CLAUDE FIX R42: every relationship that has not moved in play IS the sheet
+     right now — written straight from the sheet baseline at load, no waiting. */
+  try { syncUntouchedRelationshipsFromBaselines(w); } catch (error) { console.warn("[relationship-sync] failed", error); }
+
   /*
    * v94 one-time canon repair for stale impossible relationship states.
    * Example: both character sheets say Best Friend but old runtime says Hate.
@@ -18705,6 +18754,32 @@ function mergeWorlds(remote, local) {
   const out = { ...local };
   delete out.extras;
   out.rev = Math.max(remote.rev || 0, local.rev || 0) + 1;
+
+  /* CLAUDE FIX R42: with several devices open (phone + PC) one device used to
+     overwrite the other's sheet readings and starting relationships with its own
+     older copy, so finished readings were lost and re-done forever. These stores
+     are now merged entry by entry, newest wins. */
+  try {
+    const pickAt = (x) => Number(x && (x.updatedAt || x.at)) || 0;
+    const mergeTimed = (a, b) => {
+      const outMap = { ...(a || {}) };
+      Object.entries(b || {}).forEach(([k, v]) => { outMap[k] = outMap[k] && pickAt(outMap[k]) > pickAt(v) ? outMap[k] : v; });
+      return outMap;
+    };
+    out.relationshipBaselines = mergeTimed(remote.relationshipBaselines, local.relationshipBaselines);
+    if (remote.sim || local.sim) {
+      const rs = remote.sim || {}, ls = local.sim || {};
+      out.sim = { ...ls };
+      out.sim.identityCanon = mergeTimed(rs.identityCanon, ls.identityCanon);
+      out.sim.characterBible = mergeTimed(rs.characterBible, ls.characterBible);
+      const readings = {};
+      new Set([...Object.keys(rs.relationshipReading || {}), ...Object.keys(ls.relationshipReading || {})]).forEach((actorId) => {
+        const r = (rs.relationshipReading || {})[actorId] || {}, l = (ls.relationshipReading || {})[actorId] || {};
+        readings[actorId] = { ...(pickAt(r) > pickAt(l) ? r : l), targets: mergeTimed(r.targets, l.targets) };
+      });
+      out.sim.relationshipReading = readings;
+    }
+  } catch (mergeError) { /* fall back to the local copy */ }
 
   out.deleted = { ...(remote.deleted || {}), ...(local.deleted || {}) };
   out.accounts = { ...(remote.accounts || {}), ...(local.accounts || {}) };
@@ -33329,7 +33404,6 @@ function Bonds({ w, update, setErr }) {
   return (
     <>
       <div className="card">
-        <RelationshipReadingProgress w={w} />
         <label className="f" style={{ marginTop: 0 }}>{tt("Kinek a kapcsolatait nézzük?", "Whose bonds are we looking at?")}</label>
         <select className="i" value={focus} onChange={(e) => setFocus(e.target.value)}>
           {subjects.map((x) => (
