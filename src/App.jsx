@@ -9633,6 +9633,17 @@ function sheet(c, w, deep, isPlayerSheet, accessMode = "private") {
   ];
 
   let out = `[${c.id}] ${c.name} (@${c.username})`;
+  /* CLAUDE FIX R47: knowledge boundary. A private sheet belongs to its owner only;
+     everyone else sees the public profile. */
+  if (accessMode === "public") {
+    out += `\n  NYILVÁNOS PROFIL / PUBLIC PROFILE — csak ennyit tudhat róla más (ami a saját lapján vagy a közös előzményekben nincs, azt NEM tudja): only what others can know about this person.`;
+    try {
+      const pub = String((c.aiContextSummary && c.aiContextSummary.public) || "").trim();
+      if (pub) out += `\n  nyilvános kép / public image: ${spread(clean(pub), 1600)}`;
+    } catch (error) { /* optional */ }
+  } else {
+    out += `\n  PRIVÁT LAP — CSAK ${String(c.name || "").toUpperCase()} TUDJA / PRIVATE SHEET — ONLY ${String(c.name || "").toUpperCase()} KNOWS THIS: helyek, események, titkok, emberek erről a lapról csak az ő szájából jöhetnek, vagy olyantól, akinek a SAJÁT lapján is szerepel ugyanez.`;
+  }
   let freeUsed = 0;
   if (c.bio) {
     out += `\n  NYILVÁNOS BIO (ezt írta ki magáról a profiljára, mint egy Instagram-bemutatkozást — dísz és ízelítő, DE NEM SZABÁLY: a viselkedését a SZEMÉLYISÉG, a TITKOK és a TÖRTÉNET írja elő, ne csak ebből következtess): ${clean(c.bio)}`;
@@ -16754,7 +16765,8 @@ function deepBrief(w, c, isPlayerSheet, observerId) {
       w,
       true,
       isPlayerSheet,
-      observerId && !selfView ? "private_no_connections" : "private"
+      /* R47: about yourself your own sheet; about anyone else (and the player) only the public profile */
+      (observerId && !selfView) || (isPlayerSheet && !selfView) ? "public" : "private"
     );
   return body +
     (!selfView ? knownLinesForObserver(w, observerId, c.id) : "") +
@@ -16872,9 +16884,8 @@ ${deep
             w,
             false,
             true,
-            observerId && observerId !== w.player.id
-              ? "private_no_connections"
-              : "private"
+            /* R47: AI characters know the player only from public info, their own sheets and shared history */
+            "public"
           )}`
     : tt(
         "JÁTÉKOS-KONTEXTUS: ebben a lokális social feladatban a játékos nincs benne a poszt/thread releváns szereplői között. A profilját és privát kánonját szándékosan nem kapod meg. NE hozd be őt témának.",
@@ -16908,7 +16919,7 @@ ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}:
 ${cast.map((c) => (
   socialScope
     ? `${c.name} [${c.id}] — ${characterFactionIdentityCard(c) || "classification unknown"}`
-    : (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId && observerId !== c.id ? "private_no_connections" : "private"))
+    : (deep ? deepBrief(w, c, false, observerId) : sheet(c, w, false, false, observerId && observerId !== c.id ? "public" : "private"))
 )).join("\n") || "-"}
 ${!observerId && deep && !socialScope ? multiActorPerformanceContext(w, cast.map((c) => c.id)) : ""}
 ${knownCtx.length ? `
@@ -62121,20 +62132,32 @@ function voiceStyleCardsForIds(w, ids, actorId) {
     .filter((c) => c && !isHuman(w, c.id));
   /* R23: the whole prefix stays around 14k characters however many people speak */
   const perSpeaker = Math.min(5600, Math.floor(14500 / Math.max(1, speakers.length)));
+  /* CLAUDE FIX R47: when one person is speaking (actorId), only THEY get their private
+     sheet; everyone else in the prompt is shown by their public profile. */
+  const soloActor = actorId && charById(w, actorId) && !isHuman(w, actorId) ? String(actorId) : "";
   const rows = speakers
     .map((c, index) => {
+      if (soloActor && String(c.id) !== soloActor) {
+        let pub = "";
+        try { pub = identityCanonLine(w, c); } catch (error) { pub = ""; }
+        const pubSummary = String((c.aiContextSummary && c.aiContextSummary.public) || "").trim().slice(0, 900);
+        return "PUBLIC PROFILE OF " + String(c.name || "").toUpperCase() + " — NOT A SPEAKER HERE. This is all the speaker can know about them besides the speaker's OWN sheet and shared history; never use their private life, places or past events:\n" +
+          [pub, pubSummary].filter(Boolean).join("\n");
+      }
       const persona = characterPersonaBrief(c);
       const style = characterVoiceStyleCard(c).slice(0, speakers.length > 4 ? 900 : 1600);
       const personaBlock = persona ? "PERSONALITY OF " + String(c.name || "").toUpperCase() + " — FROM THEIR OWN SHEET, PLAY EXACTLY THIS (not a generic type, not the original fandom):\n" + persona.slice(0, speakers.length > 4 ? 600 : 1200) : "";
       const room = Math.max(500, perSpeaker - style.length - personaBlock.length - 10);
       let bible = "";
       try { bible = characterBibleCard(w, c, room); } catch (error) { bible = ""; }
-      return [style, personaBlock, bible].filter(Boolean).join("\n");
+      const owner = "PRIVATE CARD OF " + String(c.name || "").toUpperCase() + " — ONLY " + String(c.name || "").toUpperCase() + " KNOWS THESE FACTS. Places, events, secrets and people from this card come only from their mouth, or from someone whose OWN card has the same thing.";
+      return [owner, style, personaBlock, bible].filter(Boolean).join("\n");
     })
     .filter(Boolean);
 
   return rows.length
     ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
+      "KNOWLEDGE BOUNDARY — HARD RULE: about themselves everyone uses their OWN sheet. About anyone else they know only that person's public profile, what their OWN sheet says about them, and what really happened between them in play. Never let one character mention a place, event, secret, nickname or memory that appears only on SOMEONE ELSE's sheet (e.g. a cabin, a hideout, a past incident) — if it is not on the speaker's own card, the speaker does not know it.\n" +
       "FULL INTENSITY: play every character exactly as extreme as their own sheet says — cruel is cruel, obsessed is visibly obsessed, cold is cold, arrogant is arrogant. Never soften, sanitize or average them into a polite generic person. JEALOUSY and ENMITY are extremes too: a jealous or possessive person reacts to a rival with open, ugly jealousy (icy and menacing or explosive, as their nature says); enemies treat each other with real contempt and hostility, never polite irony. People who dislike or hate each other show it and never use pet names (babe, baby, honey, darling…) with each other; warmth and pet names only where the relationship really is warm. Each speaker knows their own SHEET CANON history exactly — the right names, places, order of events — and never contradicts it or makes up a different past.\n\n" +
       rows.join("\n\n--- NEXT SPEAKER CARD ---\n\n")
     : "";
