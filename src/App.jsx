@@ -4894,6 +4894,18 @@ function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
       why: "",
       at,
     };
+    /* R40: the fresh run shows the sheet reading's own role and label at once */
+    try {
+      const actor = charById(w, parts[0]), target = charById(w, parts[1]);
+      const reading = actor && target ? relationshipReadingResult(w, actor, target) : null;
+      if (reading && !relationshipBaselineIsManual(baseline)) {
+        if (reading.role) next[key].role = String(reading.role).slice(0, 60);
+        if (reading.label) {
+          next[key].label = String(reading.label).slice(0, 70);
+          next[key].labelBasis = relationshipLabelBasis(next[key]);
+        }
+      }
+    } catch (error) { /* keep the plain baseline */ }
   });
 
   w.rels = next;
@@ -39666,10 +39678,14 @@ function restartWorldHistoryInPlace(w) {
      read again from the sheets on each restart. */
   const keptIdentity = w.sim && w.sim.identityCanon;
   const keptBible = w.sim && w.sim.characterBible;
+  /* R40: relationship readings are kept too — the fresh run starts EXACTLY from
+     them at once; a pair is only read again if its sheet passages changed. */
+  const keptReadings = w.sim && w.sim.relationshipReading;
   w.sim = freshSimulationRuntime(at);
   if (keptIdentity) w.sim.identityCanon = keptIdentity;
   if (keptBible) w.sim.characterBible = keptBible;
-  try { RELATIONSHIP_READING_CHECKED.clear(); } catch (error) { /* first load */ }
+  if (keptReadings) w.sim.relationshipReading = keptReadings;
+  try { RELATIONSHIP_READING_CHECKED.clear(); READING_CACHE_CHECKED.clear(); } catch (error) { /* first load */ }
   w.activeSceneId = "";
 
   if (w.universe && typeof w.universe === "object") {
@@ -63687,6 +63703,85 @@ function applyRelationshipReadingRows(n, actorId, due, rows) {
     });
   }
 
+/* CLAUDE FIX R40: SHARED READING CACHE. A relationship read once from the
+   sheets is stored on the server under a key made of the two names and the
+   exact sheet passages. A new world with the same sheets, or a restart, gets
+   every unchanged relationship back instantly; only changed ones are read. */
+const READING_CACHE_CHECKED = new Set();
+
+function relationshipReadingCacheKey(actor, target, snippet) {
+  return "rr5:" + simsSocialStableHash(String(actor && actor.name || "") + "|" + String(target && target.name || "") + "|" + relationshipReadingHash(snippet));
+}
+
+function relationshipReadingCacheDueAction(w) {
+  if (!w || !w.meId) return null;
+  const pending = [];
+  const subjects = allSubjects(w).filter((c) => c && c.id && !isMediaAccount(w, c.id));
+  for (const actor of subjects) {
+    let due = [];
+    try { due = relationshipReadingDueTargets(w, actor); } catch (error) { due = []; }
+    due.forEach((row) => {
+      const key = relationshipReadingCacheKey(actor, row.target, row.snippet);
+      if (!READING_CACHE_CHECKED.has(key)) pending.push(key);
+    });
+    if (pending.length > 600) break;
+  }
+  if (!pending.length) return null;
+  return mkAction("relationship-cache", "relationship-cache:" + simsSocialStableHash(pending.slice(0, 50).join("|")), { count: pending.length }, "memory");
+}
+
+async function runRelationshipReadingCacheAction(view, update) {
+  const jobs = [];
+  allSubjects(view).filter((c) => c && c.id && !isMediaAccount(view, c.id)).forEach((actor) => {
+    let due = [];
+    try { due = relationshipReadingDueTargets(view, actor); } catch (error) { due = []; }
+    due.forEach((row) => {
+      const key = relationshipReadingCacheKey(actor, row.target, row.snippet);
+      if (!READING_CACHE_CHECKED.has(key)) jobs.push({ actor, row, key });
+    });
+  });
+  if (!jobs.length) return null;
+  let found = {};
+  try {
+    const out = await apiJson("/ai/reading-cache/get", { method: "POST", body: JSON.stringify({ keys: jobs.map((j) => j.key).slice(0, 2000) }) });
+    found = (out && out.rows) || {};
+  } catch (error) {
+    found = {};
+  }
+  jobs.forEach((j) => READING_CACHE_CHECKED.add(j.key));
+  const byActor = new Map();
+  jobs.forEach((j) => {
+    const data = found[j.key];
+    if (!data) return;
+    if (!byActor.has(j.actor.id)) byActor.set(j.actor.id, { due: [], rows: [] });
+    const bucket = byActor.get(j.actor.id);
+    bucket.due.push(j.row);
+    bucket.rows.push({ ...data, id: j.row.target.id });
+  });
+  if (!byActor.size) return "relationship-cache-miss";
+  update((n) => {
+    byActor.forEach((bucket, actorId) => applyRelationshipReadingRows(n, actorId, bucket.due, bucket.rows));
+    groundedEventLog(n, "relationship-reading", "applied", "Restored " + [...byActor.values()].reduce((a, b) => a + b.rows.length, 0) + " relationships instantly from earlier sheet readings.", "reading-cache");
+  });
+  return "relationship-cache";
+}
+
+function relationshipReadingCachePut(view, jobs) {
+  const rows = {};
+  jobs.forEach(({ actor, due, out }) => {
+    const list = Array.isArray(out && out.targets) ? out.targets : [];
+    due.forEach((row) => {
+      const hit = list.find((r) => r && findChar(view, r.id) === row.target.id);
+      if (!hit) return;
+      const { id, ...data } = hit;
+      void id;
+      rows[relationshipReadingCacheKey(actor, row.target, row.snippet)] = data;
+    });
+  });
+  if (!Object.keys(rows).length) return;
+  apiJson("/ai/reading-cache/put", { method: "POST", body: JSON.stringify({ rows }) }).catch(() => {});
+}
+
 async function runRelationshipReadingAction(view, update, action) {
   const actorId = String(action.payload && action.payload.actorId || "");
   const actor = charById(view, actorId);
@@ -63715,6 +63810,9 @@ async function runRelationshipReadingAction(view, update, action) {
   const results = await Promise.all(jobs.map((job) => genRelationshipReading(view, job.actor, job.due)
     .then((out) => ({ job, out }))
     .catch((error) => ({ job, error }))));
+  try {
+    relationshipReadingCachePut(view, results.filter((r) => r.out && r.out.skip !== true && !r.error).map((r) => ({ actor: r.job.actor, due: r.job.due, out: r.out })));
+  } catch (error) { /* cache is best-effort */ }
   update((n) => {
     results.forEach(({ job, out, error }) => {
       if (error) {
@@ -64620,6 +64718,8 @@ async function runStructuralReadingAction(view, update, action) {
 function planAutoAction(view) {
   const followBack = groundedDueFollowBackAction(view);
   if (followBack) return followBack;
+  const cached = relationshipReadingCacheDueAction(view);
+  if (cached) return cached;
   const playerReading = relationshipReadingDueAction(view, { playerOnly: true });
   if (playerReading) return playerReading;
   const identity = identityCanonDueAction(view);
@@ -64636,6 +64736,9 @@ function planAutoAction(view) {
 }
 
 async function runSimulationAction(view, update, action, addImage) {
+  if (action && action.type === "relationship-cache") {
+    return runRelationshipReadingCacheAction(view, update, action);
+  }
   if (action && action.type === "relationship-reading") {
     return runRelationshipReadingAction(view, update, action);
   }

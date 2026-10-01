@@ -159,6 +159,14 @@ CREATE INDEX IF NOT EXISTS world_media_files_world_updated_idx
         PRIMARY KEY (profile_username, lib_id)
       );
 
+      /* CLAUDE FIX R40: a relationship read from the sheets once is reused in every
+         world and after every restart while those sheet passages are unchanged. */
+      CREATE TABLE IF NOT EXISTS relationship_reading_cache (
+        cache_key TEXT PRIMARY KEY,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
       CREATE TABLE IF NOT EXISTS profile_character_media (
         profile_username TEXT NOT NULL
           REFERENCES profiles(username)
@@ -3181,6 +3189,45 @@ app.post("/profile/characters/delete", async (req, res) => {
   }
 });
 
+/* CLAUDE FIX R40 — shared relationship reading cache */
+app.post("/ai/reading-cache/get", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+    const session = await getSessionIdentity(req);
+    if (!session) return res.status(401).json({ error: "Not authenticated." });
+    const keys = (Array.isArray(req.body?.keys) ? req.body.keys : []).map(String).filter((k) => k && k.length < 200).slice(0, 2000);
+    if (!keys.length) return res.json({ ok: true, rows: {} });
+    const result = await pool.query(`SELECT cache_key, data FROM relationship_reading_cache WHERE cache_key = ANY($1::text[])`, [keys]);
+    const rows = {};
+    result.rows.forEach((row) => { rows[row.cache_key] = row.data; });
+    return res.json({ ok: true, rows });
+  } catch (err) {
+    console.error("Reading cache get error:", err);
+    return res.status(500).json({ error: "Reading cache unavailable." });
+  }
+});
+
+app.post("/ai/reading-cache/put", async (req, res) => {
+  try {
+    if (!(await requireDb(res))) return;
+    const session = await getSessionIdentity(req);
+    if (!session) return res.status(401).json({ error: "Not authenticated." });
+    const rows = req.body?.rows && typeof req.body.rows === "object" ? req.body.rows : {};
+    const entries = Object.entries(rows).filter(([k, v]) => k && k.length < 200 && v && typeof v === "object").slice(0, 200);
+    for (const [key, data] of entries) {
+      await pool.query(
+        `INSERT INTO relationship_reading_cache (cache_key, data, updated_at) VALUES ($1, $2::jsonb, NOW())
+         ON CONFLICT (cache_key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
+        [key, stringifyJsonbSafe(data, "reading-cache")]
+      );
+    }
+    return res.json({ ok: true, saved: entries.length });
+  } catch (err) {
+    console.error("Reading cache put error:", err);
+    return res.status(500).json({ error: "Reading cache unavailable." });
+  }
+});
+
 app.get("/media/load", async (req, res) => {
   try {
     if (!(await requireDb(res))) return;
@@ -5108,7 +5155,8 @@ function providerModel(provider, body = {}) {
   const requested = String(body?.model || "").trim();
   if (provider === "mistral") {
     /* R17: careful one-time sheet reading may use a stronger model */
-    if (String(body?.quality || "") === "deep") return String(process.env.MISTRAL_DEEP_MODEL || "mistral-medium-latest").trim();
+    /* R40: sheet readings are done once and cached, so they get the strongest model */
+    if (String(body?.quality || "") === "deep") return String(process.env.MISTRAL_DEEP_MODEL || "mistral-large-latest").trim();
     /* R21: scenes (incl. mature ones) get the best writer */
     if (String(body?.source || "") === "scene") return String(process.env.MISTRAL_SCENE_MODEL || "mistral-large-latest").trim();
     /* R18: everything the player directly reads and answers (DM replies, scenes, group chat,
