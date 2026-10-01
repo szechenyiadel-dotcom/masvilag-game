@@ -9142,6 +9142,188 @@ const DETAIL_LEVELS = [
 let DETAIL = 4;   // kompatibilitási változó; a részletesség UI megszűnt
 let CURRENT_LANG = "hu";   // globálisan elérhető nyelv a nem-komponens (pl. timeAgo) függvényekhez
 
+/* CLAUDE FIX R30: ENGLISH MEANS ENGLISH EVERYWHERE. When the app is set to
+   English, any Hungarian text that still reaches the screen — character
+   sheet fields written in Hungarian, older posts/comments/notes from before
+   the switch, a stray Hungarian AI line — is shown in English. The page is
+   watched for Hungarian text; it is translated in small batches by the AI
+   (cheap model), cached on this device and swapped in on display only. The
+   stored data stays untouched, and switching back to Hungarian restores it. */
+const EN_TR_STORE_KEY = "mv-en-display-tr-v1";
+const EN_TR_CACHE = new Map();
+const EN_TR_PENDING = new Set();
+const EN_TR_FAILED = new Map();
+const EN_TR_NODES = new Map(); /* text node -> original Hungarian text */
+let EN_TR_BUSY = false;
+let EN_TR_OBSERVER = null;
+let EN_TR_SCAN_SCHEDULED = false;
+let EN_TR_SAVE_TIMER = null;
+const HU_STOPWORDS = new Set("és hogy nem egy az ez már még csak mint vagy aki ami nagyon itt ott lesz volt sem mert én ő ők nincs igen hol mit miért mikor velem veled neki nekem neked rá ide oda szia jó rossz kell lehet tudom tudod nálam nálad azt ezt vagyok vagy vagyunk lenne majd persze akkor úgy így".split(" "));
+
+function enTrHash(text) {
+  let h = 0;
+  const v = String(text || "");
+  for (let i = 0; i < v.length; i++) h = (h * 31 + v.charCodeAt(i)) | 0;
+  return String(h) + ":" + v.length;
+}
+
+function enTrLoad() {
+  if (EN_TR_CACHE.size) return;
+  try {
+    const raw = window.localStorage.getItem(EN_TR_STORE_KEY);
+    const obj = raw ? JSON.parse(raw) : null;
+    if (obj && typeof obj === "object") Object.entries(obj).forEach(([k, v]) => { if (typeof v === "string") EN_TR_CACHE.set(k, v); });
+  } catch (error) { /* storage unavailable */ }
+}
+
+function enTrSave() {
+  if (EN_TR_SAVE_TIMER) return;
+  EN_TR_SAVE_TIMER = setTimeout(() => {
+    EN_TR_SAVE_TIMER = null;
+    try {
+      const entries = [...EN_TR_CACHE.entries()].slice(-2500);
+      window.localStorage.setItem(EN_TR_STORE_KEY, JSON.stringify(Object.fromEntries(entries)));
+    } catch (error) { /* quota / unavailable */ }
+  }, 1500);
+}
+
+function looksHungarianText(value) {
+  const text = String(value || "").trim();
+  if (text.length < 3 || !/\p{L}/u.test(text)) return false;
+  if (/^[@#]/.test(text) || /^https?:/i.test(text)) return false;
+  if (/[őűŐŰ]/.test(text)) return true;
+  const words = text.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean);
+  if (!words.length) return false;
+  const stop = words.filter((x) => HU_STOPWORDS.has(x)).length;
+  const accented = words.filter((x) => /[áéíóöúü]/.test(x)).length;
+  if (accented >= 2) return true;
+  if (accented >= 1 && stop >= 1) return true;
+  if (stop >= 3 && stop / words.length >= 0.25) return true;
+  return false;
+}
+
+function enTrSkipNode(node) {
+  let el = node && node.parentElement;
+  for (let i = 0; el && i < 8; i++, el = el.parentElement) {
+    const tag = el.tagName;
+    if (tag === "SCRIPT" || tag === "STYLE" || tag === "TEXTAREA" || tag === "INPUT" || tag === "CODE" || tag === "PRE") return true;
+    if (el.isContentEditable || (el.dataset && el.dataset.noTranslate !== undefined)) return true;
+    if (el.classList && el.classList.contains("mark")) return true;
+  }
+  return false;
+}
+
+function enTrApplyNode(node) {
+  if (!node || node.nodeType !== 3) return;
+  const current = String(node.nodeValue || "");
+  const trimmed = current.trim();
+  if (!trimmed) return;
+  const known = EN_TR_NODES.get(node);
+  /* our own translated value is already showing */
+  if (known && known.shown === current) return;
+  if (!looksHungarianText(trimmed) || enTrSkipNode(node)) return;
+  const key = enTrHash(trimmed);
+  const done = EN_TR_CACHE.get(key);
+  if (done) {
+    const shown = current.replace(trimmed, done);
+    EN_TR_NODES.set(node, { original: current, shown });
+    node.nodeValue = shown;
+    return;
+  }
+  if (trimmed.length > 1800) return;
+  const failedAt = EN_TR_FAILED.get(key) || 0;
+  if (Date.now() - failedAt < 5 * 60 * 1000) return;
+  EN_TR_PENDING.add(trimmed);
+}
+
+function enTrScanNow() {
+  EN_TR_SCAN_SCHEDULED = false;
+  if (typeof document === "undefined" || !document.body) return;
+  if (CURRENT_LANG !== "en") { enTrRestoreAll(); return; }
+  enTrLoad();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node, count = 0;
+  while ((node = walker.nextNode()) && count < 6000) { count++; enTrApplyNode(node); }
+  /* forget nodes that left the page */
+  EN_TR_NODES.forEach((_, n) => { if (!n.isConnected) EN_TR_NODES.delete(n); });
+  if (EN_TR_PENDING.size) enTrFlush();
+}
+
+function enTrScheduleScan() {
+  if (EN_TR_SCAN_SCHEDULED) return;
+  EN_TR_SCAN_SCHEDULED = true;
+  const run = () => { try { enTrScanNow(); } catch (error) { EN_TR_SCAN_SCHEDULED = false; } };
+  if (typeof window !== "undefined" && window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 600 });
+  else setTimeout(run, 250);
+}
+
+function enTrRestoreAll() {
+  EN_TR_NODES.forEach((row, node) => {
+    try { if (node.isConnected && node.nodeValue === row.shown) node.nodeValue = row.original; } catch (error) { /* ignore */ }
+  });
+  EN_TR_NODES.clear();
+}
+
+async function enTrFlush() {
+  if (EN_TR_BUSY || !EN_TR_PENDING.size || CURRENT_LANG !== "en") return;
+  EN_TR_BUSY = true;
+  const batch = [];
+  let size = 0;
+  for (const text of EN_TR_PENDING) {
+    if (batch.length >= 30 || size + text.length > 5000) break;
+    batch.push(text);
+    size += text.length;
+  }
+  batch.forEach((t) => EN_TR_PENDING.delete(t));
+  try {
+    const out = await askJSON(
+      "You translate short Hungarian UI and social-media texts into natural, idiomatic English. Return JSON only.",
+      [
+        "Translate every string below into natural English as a native speaker would write it on social media / in a game UI.",
+        "Keep exactly: names, @handles, #tags, emojis, numbers, punctuation style, ALL CAPS or all-lowercase styling, slang level and tone (rude stays rude, flirty stays flirty).",
+        "If a string is already English, return it unchanged. Same order, same count.",
+        "STRINGS:",
+        JSON.stringify(batch),
+        'JSON ONLY: {"t":["translation 1","translation 2"]}',
+      ].join("\n"),
+      { maxTokens: Math.min(3500, 200 + Math.ceil(size / 2)), priority: -18, source: "display-translate", language: "en", maxTries: 2 }
+    );
+    const rows = out && Array.isArray(out.t) ? out.t : [];
+    if (!rows.length || (out && out.skip === true)) throw new Error("no translation");
+    batch.forEach((text, i) => {
+      const tr = typeof rows[i] === "string" ? rows[i].trim() : "";
+      if (tr) EN_TR_CACHE.set(enTrHash(text), tr);
+      else EN_TR_FAILED.set(enTrHash(text), Date.now());
+    });
+    enTrSave();
+  } catch (error) {
+    batch.forEach((text) => EN_TR_FAILED.set(enTrHash(text), Date.now() - 4 * 60 * 1000));
+  } finally {
+    EN_TR_BUSY = false;
+    enTrScheduleScan();
+    if (EN_TR_PENDING.size) setTimeout(enTrFlush, 1500);
+  }
+}
+
+function installEnglishDisplayTranslator() {
+  if (typeof window === "undefined" || typeof MutationObserver === "undefined" || EN_TR_OBSERVER) { enTrScheduleScan(); return; }
+  EN_TR_OBSERVER = new MutationObserver((mutations) => {
+    if (CURRENT_LANG !== "en") return;
+    for (const m of mutations) {
+      if (m.type === "characterData") { enTrApplyNode(m.target); continue; }
+      if (m.addedNodes && m.addedNodes.length) { enTrScheduleScan(); break; }
+    }
+    if (EN_TR_PENDING.size) setTimeout(enTrFlush, 800);
+  });
+  const start = () => {
+    if (!document.body) { setTimeout(start, 300); return; }
+    EN_TR_OBSERVER.observe(document.body, { subtree: true, childList: true, characterData: true });
+    enTrScheduleScan();
+  };
+  start();
+}
+
+
 const detailInfo = () => ({
   id: 4,
   nameHu: "Teljes adatlap",
@@ -56858,6 +57040,7 @@ export default function App() {
    * Ezért a render aktuális nyelvét rögtön szinkronizáljuk.
    */
   CURRENT_LANG = lang;
+  React.useEffect(() => { try { installEnglishDisplayTranslator(); } catch (error) { /* display-only helper */ } }, [lang]);
 
   const langCtxValue =
     React.useMemo(
