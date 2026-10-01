@@ -63331,9 +63331,9 @@ function groundedDueFollowBackAction(w) {
    mapper stays only as a fallback. When a reading arrives, the live
    relationship is corrected but the points earned in play are kept.
    ===================================================================== */
-const RELATIONSHIP_READING_MIN_GAP_MS = 40 * 1000;
+const RELATIONSHIP_READING_MIN_GAP_MS = 20 * 1000;
 const RELATIONSHIP_READING_RETRY_MS = 10 * 60 * 1000;
-const RELATIONSHIP_READING_BATCH = 10;
+const RELATIONSHIP_READING_BATCH = 6;
 const RELATIONSHIP_READING_CHECKED = new Map();
 
 function relationshipReadingState(w) {
@@ -63343,18 +63343,64 @@ function relationshipReadingState(w) {
   return sim.relationshipReading;
 }
 
+/* CLAUDE FIX R36: DEEP PAIR READING. A relationship is no longer read from the
+   actor's Connections row alone. Every passage of the actor's WHOLE sheet that
+   mentions the other person (backstory, secrets, goals, personality...) goes
+   in, and so does what the OTHER person's sheet says about the actor (shared
+   history, facts), so the AI sees the full story of the two of them. */
+function sheetPassagesAbout(person, other, maxChars = 2200) {
+  if (!person || !other || person.id === other.id) return "";
+  const skip = /^(?:id|aiContextSummary|aiVoiceStyleCard|avatar|avatarUrl|cover|coverUrl|image|imageId|images|album|albums|photos|media|posts|comments|msgs|messages|chats|scenes|memory|memories|followers|following|baseFollowers|followerDelta|username|name|nick|label|labelBasis)$/i;
+  const names = [other.name, other.nick, other.nickname, other.username]
+    .map((x) => String(x || "").trim()).filter((x) => x.length >= 3);
+  const parts = String(other.name || "").trim().split(/\s+/).filter((x) => x.length >= 3);
+  if (parts[0]) names.push(parts[0]);
+  if (parts.length > 1 && parts[parts.length - 1].length >= 4) names.push(parts[parts.length - 1]);
+  const uniq = [...new Set(names.map((x) => x.toLowerCase()))];
+  if (!uniq.length) return "";
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rx = new RegExp("(?:^|[^\\p{L}])(?:" + uniq.map(esc).join("|") + ")(?:$|[^\\p{L}])", "iu");
+  const out = [];
+  let used = 0;
+  Object.entries(person).forEach(([key, value]) => {
+    if (skip.test(key) || used >= maxChars) return;
+    let text = "";
+    try { text = typeof value === "string" ? value : simsSocialStringify(value); } catch (error) { text = ""; }
+    if (!text || text.length < 3) return;
+    const sentences = String(text).replace(/\r/g, "").split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+    sentences.forEach((sentence, i) => {
+      if (used >= maxChars || !rx.test(sentence)) return;
+      /* keep the next sentence too when it carries on about the same person (he / she / ő ...) */
+      const next = sentences[i + 1] && /^(?:he|she|they|his|her|their|him|ő|neki|vele|őt|azóta|since|but|de|és|and)\b/i.test(sentences[i + 1]) ? " " + sentences[i + 1] : "";
+      const piece = "[" + key + "] " + sentence + next;
+      if (out.some((x) => x.includes(sentence))) return;
+      out.push(piece.slice(0, 600));
+      used += piece.length;
+    });
+  });
+  return out.join(" | ").slice(0, maxChars);
+}
+
 function relationshipReadingSnippet(w, actor, target) {
   if (!w || !actor || !target || actor.id === target.id || isMediaAccount(w, target.id)) return "";
   try {
-    return String(connectionCanonSnippetAbout(w, actor, target, 2500) || "");
+    const conn = String(connectionCanonSnippetAbout(w, actor, target, 2500) || "");
+    const ownMore = sheetPassagesAbout(actor, target, 2000);
+    const theirs = sheetPassagesAbout(target, actor, 1400);
+    if (!conn && !ownMore && !theirs) return "";
+    return [
+      conn ? "ACTOR'S CONNECTIONS ENTRY: " + conn : "",
+      ownMore ? "ACTOR'S SHEET ELSEWHERE ABOUT THEM: " + ownMore : "",
+      theirs ? "WHAT " + String(target.name || "THE TARGET").toUpperCase() + "'S OWN SHEET SAYS ABOUT THE ACTOR (shared history / facts — not the actor's feelings): " + theirs : "",
+    ].filter(Boolean).join("\n");
   } catch (error) {
     return "";
   }
 }
 
-/* versioned so a reading-rule change (R15: fake dating) re-reads every sheet once */
+/* versioned so a reading-rule change re-reads every sheet once (R36: deep pair reading) */
 function relationshipReadingHash(snippet) {
-  return simsSocialStableHash("v3|" + String(snippet || ""));
+  return simsSocialStableHash("v4|" + String(snippet || ""));
 }
 
 function relationshipReadingResult(w, actor, target) {
@@ -63385,10 +63431,11 @@ function relationshipReadingDueAction(w) {
   if (now() - Number(sim.relationshipReadingLastAt || 0) < RELATIONSHIP_READING_MIN_GAP_MS) return null;
   const subjects = allSubjects(w).filter((c) => c && c.id && !isMediaAccount(w, c.id));
   const roster = subjects.map((c) => c.id + ":" + String(c.name || "") + ":" + String(c.username || "")).join("|");
+  const sheetsRev = subjects.map((c) => { try { return voiceStyleRawSheet(c).length; } catch (error) { return 0; } }).join(",");
   for (const actor of subjects) {
     const meta = state[actor.id] || {};
     if (meta.failedAt && now() - Number(meta.failedAt) < RELATIONSHIP_READING_RETRY_MS) continue;
-    const sourceKey = simsSocialStableHash(String(actor.connections || "") + "\n" + roster + "\n" + Object.keys(meta.targets || {}).length);
+    const sourceKey = simsSocialStableHash(String(actor.connections || "") + "\n" + roster + "\n" + Object.keys(meta.targets || {}).length + "\n" + sheetsRev);
     if (RELATIONSHIP_READING_CHECKED.get(actor.id) === sourceKey) continue;
     const due = relationshipReadingDueTargets(w, actor);
     if (!due.length) { RELATIONSHIP_READING_CHECKED.set(actor.id, sourceKey); continue; }
@@ -63403,10 +63450,18 @@ async function genRelationshipReading(w, actor, due) {
   const en = worldLanguage(w, w.meId) === "en";
   const lang = en ? "English" : "Hungarian";
   const targets = due.slice(0, RELATIONSHIP_READING_BATCH);
+  let actorBibleBlock = "";
+  try {
+    const d = characterBibleFor(w, actor.id);
+    if (d) actorBibleBlock = "Actor in short (from the full sheet): " + [d.core, (d.extremes || []).map((x) => x.trait + (x.toward ? " → " + x.toward : "")).join("; ")].filter(Boolean).join(" | ").slice(0, 900);
+  } catch (error) { actorBibleBlock = ""; }
   const prompt = [
-    "RELATIONSHIP READING — ONE-TIME ANALYSIS OF ONE CHARACTER SHEET.",
-    "Actor: " + actor.name + " [" + actor.id + "]" + (actor.personality ? " — personality: " + cut(String(actor.personality), 400) : ""),
-    "Below are the actor's OWN Connections entries about specific people. They describe how THE ACTOR relates to each person. Direction matters: return only the actor's feelings toward the target, never the target's feelings.",
+    "RELATIONSHIP READING — DEEP ANALYSIS OF HOW ONE CHARACTER RELATES TO SPECIFIC PEOPLE.",
+    "Actor: " + actor.name + " [" + actor.id + "]" + (actor.personality ? " — personality: " + cut(String(actor.personality), 500) : ""),
+    actorBibleBlock,
+    "For each target you get EVERYTHING the sheets say about the two of them: the actor's Connections entry, every other place in the actor's sheet that mentions the target (backstory, secrets, goals...), and what the TARGET's own sheet says about the actor (shared history and facts). Read all of it, every word, and work out the real, current relationship — the whole story, not just the first line.",
+    "Direction matters: return the ACTOR's feelings toward the target. The actor's own sheet decides the actor's feelings; the target's sheet only supplies shared facts and history (e.g. they are exes, siblings, teammates). If the two sheets conflict about feelings, trust the actor's sheet.",
+    "Get the INTENSITY right: a sheet that keeps repeating that the actor likes / wants / cannot stop thinking about someone means a real crush or obsession, even if it is hidden; hatred stays hatred; a relationship that ended is an ex, not a partner.",
     "",
     "For EACH target read the whole entry carefully and return:",
     "- score: -100..100, the actor's overall warmth toward the target. Fear, hatred, contempt, distrust push it down; love, loyalty, trust push it up. Mixed feelings land in between. Intensity is NOT friendship: an obsession or a fearful attraction is not a friendship.",
@@ -63415,15 +63470,16 @@ async function genRelationshipReading(w, actor, due) {
     "- hidden: in " + lang + ", the feeling the actor hides or does not admit (or empty).",
     "- attraction, fear, obsession, trust: 0-100 each.",
     "- why: one short " + lang + " sentence that points to the entry.",
+    "- label: 2-6 words in " + lang + ", a vivid, specific tag for how the actor relates to the target right now (e.g. \"plays it cool, can't stop watching\", \"old wound, still loyal\") — never a bare category.",
     "Stay conservative when the entry is ambiguous. Never invent history. Use a family label ONLY for the actor's own relative (not for \"her brother's friend\"); for a relative, describe the feeling in mood/score.",
     "",
     "TARGETS:",
-    ...targets.map((row) => "- id=\"" + row.target.id + "\" " + row.target.name + ": " + cut(row.snippet, 3500)),
+    ...targets.map((row) => "- id=\"" + row.target.id + "\" " + row.target.name + ":\n" + cut(row.snippet, 5200)),
     "",
     "JSON ONLY:",
-    '{"targets":[{"id":"TARGET_ID","score":0,"bond":"","mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"why":""}]}',
-  ].join("\n");
-  return askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 2200, priority: 5, source: "relationship-reading", quality: "deep", timeoutMs: 90000 });
+    '{"targets":[{"id":"TARGET_ID","score":0,"bond":"","mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"why":"","label":""}]}',
+  ].filter((x) => x !== "").join("\n");
+  return askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 3200, priority: 5, source: "relationship-reading", quality: "deep", timeoutMs: 110000 });
 }
 
 function applyRelationshipReadingToLive(n, actorId, targetId, oldBase, newBase, options = {}) {
@@ -63496,6 +63552,7 @@ async function runRelationshipReadingAction(view, update, action) {
         mood: String(row.mood || "").trim().slice(0, 160),
         hidden: String(row.hidden || "").trim().slice(0, 300),
         why: String(row.why || "").trim().slice(0, 300),
+        label: String(row.label || "").replace(/["“”]/g, "").trim().slice(0, 70),
         attraction: Math.max(0, Math.min(100, Number(row.attraction) || 0)),
         fear: Math.max(0, Math.min(100, Number(row.fear) || 0)),
         obsession: Math.max(0, Math.min(100, Number(row.obsession) || 0)),
@@ -63508,6 +63565,9 @@ async function runRelationshipReadingAction(view, update, action) {
       if (!newBase || relationshipBaselineIsManual(oldBase)) return;
       store[key] = { ...relationshipBaselineSnapshot(newBase, "connections-ai"), ...newBase, updatedAt: now() };
       const changed = applyRelationshipReadingToLive(n, actorId, target.id, oldBase, newBase);
+      /* R36: the reading's own vivid label goes straight onto the relationship */
+      const readLabel = entry.targets[target.id] && entry.targets[target.id].label;
+      if (readLabel && n.rels && n.rels[key]) n.rels[key] = { ...n.rels[key], label: readLabel, labelBasis: relationshipLabelBasis(n.rels[key]), labelAt: now(), labelTriedAt: 0 };
       if (changed) {
         const b = changed.before || EMPTY_REL, a = changed.after || EMPTY_REL;
         groundedEventLog(n, "relationship-reading", "applied",
