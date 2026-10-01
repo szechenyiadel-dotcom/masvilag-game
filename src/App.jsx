@@ -3372,6 +3372,8 @@ function channelPublicPostFollowerEffect(w, postId) {
 }
 
 function relLabel(r) {
+  /* CLAUDE FIX R31: the AI-written, pair-specific label is what people see */
+  if (r && r.label && String(r.label).trim()) return String(r.label).trim();
   const bond =
     (r && (r.bond || r.type)) || "";
 
@@ -31733,10 +31735,12 @@ function RelPair({ w, aId, bId, aName, bName, update }) {
           <span style={{ fontSize: 12.5, color: "var(--bone)" }}>{label}</span>
           <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score}</span>
         </div>
-        <div style={{ fontFamily: "Fraunces, Georgia, serif", fontSize: 15, color: r.mood ? "var(--rose)" : "var(--muted)", marginBottom: 6 }}>
-          {r.mood
-            ? localizedRelationshipDisplayText(r.mood, CURRENT_LANG)
-            : relLabel(r)}
+        <div style={{ fontFamily: "Fraunces, Georgia, serif", fontSize: 15, color: r.label || r.mood ? "var(--rose)" : "var(--muted)", marginBottom: 6 }}>
+          {r.label
+            ? String(r.label)
+            : r.mood
+              ? localizedRelationshipDisplayText(r.mood, CURRENT_LANG)
+              : relLabel(r)}
           <div className="hint" style={{ marginTop: 3 }}>{tt("Hivatalos státusz: ", "Official status: ")}{officialRelationshipStatusForPair(w, from, to, CURRENT_LANG)}</div>
         </div>
         {r.why ? <p className="hint" style={{ marginBottom: 6 }}>{r.why}</p> : null}
@@ -38734,7 +38738,7 @@ if (group) {
                 </span>
               ) : null}
             </div>
-            {relNow.mood ? <div style={{ fontSize: 11, color: "var(--rose)" }}>{relNow.mood}</div> : null}
+            {relNow.label || relNow.mood ? <div style={{ fontSize: 11, color: "var(--rose)" }}>{relNow.label || relNow.mood}</div> : null}
           </div>
           <Av src={c.avatar} name={c.name} size={28} radius={9} />
         </div>
@@ -63980,6 +63984,109 @@ async function runCharacterBibleAction(view, update, action) {
   return "character-bible";
 }
 
+/* CLAUDE FIX R31: CREATIVE RELATIONSHIP LABELS. Every directed relationship
+   an AI character has gets its own short, specific label ("can't-look-away
+   obsession", "sparring partner with a grudge") — first from the sheets, and
+   rewritten by the AI every time the relationship actually moves (new event,
+   new mood, a real score jump), so it never stays a generic category. */
+const RELATION_LABEL_MIN_GAP_MS = 20 * 1000;
+const RELATION_LABEL_RETRY_MS = 3 * 60 * 1000;
+
+function relationshipLabelBasis(rel) {
+  const r = rel || EMPTY_REL;
+  return [String(r.bond || r.type || ""), Math.round((Number(r.score) || 0) / 8), String(r.mood || "").slice(0, 80)].join("|");
+}
+
+function relationshipLabelDueRows(w, max = 10) {
+  if (!w || !w.rels) return [];
+  const me = w.meId;
+  return Object.keys(w.rels)
+    .map((k) => { const at = k.indexOf(">"); return { k, a: k.slice(0, at), b: k.slice(at + 1), rel: w.rels[k] }; })
+    .filter((row) => {
+      const rel = row.rel;
+      if (!row.a || !row.b || !rel || typeof rel !== "object") return false;
+      if (!charById(w, row.a) || !charById(w, row.b) || isHuman(w, row.a) || isMediaAccount(w, row.a) || isMediaAccount(w, row.b)) return false;
+      const meaningful = Math.abs(Number(rel.score) || 0) >= 12 || rel.bond || rel.type || rel.mood;
+      if (!meaningful) return false;
+      if (rel.label && rel.labelBasis === relationshipLabelBasis(rel)) return false;
+      if (rel.labelTriedAt && now() - Number(rel.labelTriedAt) < RELATION_LABEL_RETRY_MS) return false;
+      return true;
+    })
+    .sort((x, y) => ((y.b === me ? 2 : 0) + (y.rel.label ? 0 : 1)) - ((x.b === me ? 2 : 0) + (x.rel.label ? 0 : 1)))
+    .slice(0, max);
+}
+
+function relationshipLabelDueAction(w) {
+  if (!w) return null;
+  const sim = ensureSimState(w);
+  if (!sim || now() - Number(sim.relationshipLabelLastAt || 0) < RELATION_LABEL_MIN_GAP_MS) return null;
+  const rows = relationshipLabelDueRows(w, 10);
+  if (!rows.length) return null;
+  return mkAction("relationship-labels", "relationship-labels:" + simsSocialStableHash(rows.map((r) => r.k + relationshipLabelBasis(r.rel)).join("|")), { keys: rows.map((r) => r.k) }, "memory");
+}
+
+async function runRelationshipLabelsAction(view, update, action) {
+  update((n) => { ensureSimState(n).relationshipLabelLastAt = now(); });
+  const keys = (action.payload && Array.isArray(action.payload.keys) ? action.payload.keys : []).filter((k) => view.rels && view.rels[k]);
+  if (!keys.length) return null;
+  const en = worldLanguage(view, view.meId) === "en";
+  const rows = keys.map((k, i) => {
+    const at = k.indexOf(">");
+    const a = k.slice(0, at), b = k.slice(at + 1);
+    const rel = view.rels[k] || EMPTY_REL;
+    const actor = charById(view, a), target = charById(view, b);
+    let sheet = "";
+    try {
+      const d = characterBibleFor(view, a);
+      const person = d && Array.isArray(d.people) ? d.people.find((x) => x && identityNameMatches(x.name, target)) : null;
+      const ext = d && Array.isArray(d.extremes) ? d.extremes.filter((x) => x && x.toward && identityNameMatches(x.toward, target)).map((x) => x.trait + ": " + x.shows) : [];
+      sheet = [person ? person.is + "; " + person.feels : "", ...ext].filter(Boolean).join(" | ");
+    } catch (error) { sheet = ""; }
+    if (!sheet) { try { sheet = String(relationshipReadingSnippet(view, actor, target) || "").slice(0, 300); } catch (error) { sheet = ""; } }
+    return i + ". " + (actor ? actor.name : a) + " → " + (target ? target.name : b) + (isHuman(view, b) ? " (the player)" : "") +
+      " | category: " + (rel.bond || rel.type ? localizedBond(rel.bond || rel.type, en ? "en" : "hu") : "none") +
+      " | score: " + (Number(rel.score) || 0) +
+      (rel.mood ? " | current feeling: " + String(rel.mood).slice(0, 140) : "") +
+      (rel.why ? " | latest event: " + String(rel.why).slice(0, 180) : "") +
+      (rel.hidden ? " | PRIVATE (never reveal in the label): " + String(rel.hidden).slice(0, 140) : "") +
+      (sheet ? " | from the sheet: " + sheet.slice(0, 300) : "") +
+      (rel.label ? " | previous label: \"" + rel.label + "\"" : "");
+  });
+  const prompt = [
+    "RELATIONSHIP LABELS — write one short, creative label for each directed relationship below (how the FIRST person relates to the SECOND right now).",
+    "Rules:",
+    "- 2 to 6 words, " + (en ? "English" : "Hungarian") + ", lowercase like a mood tag (e.g. \"can't-look-away obsession\", \"sparring partner with a grudge\", \"protective older-brother energy\", \"cold war since the party\").",
+    "- Specific to THESE two people and their CURRENT state: the latest event and feeling first, otherwise what the sheet says about them.",
+    "- Never a bare generic category (friend, rival, acquaintance, crush, enemy, family) and never the same as the previous label — find a fresh angle every time.",
+    "- Match the intensity: obsession reads obsessive, hatred reads hateful, cold reads cold.",
+    "- Do not reveal anything marked PRIVATE: a secret crush may read as tension or fixation, never as 'secretly in love'.",
+    "",
+    rows.join("\n"),
+    "",
+    'JSON ONLY: {"labels":[{"i":0,"label":""}]}',
+  ].join("\n");
+  let out = null;
+  try {
+    out = await askWorldJSON(view, engineFor(view), prompt, { maxTokens: 900, priority: 8, source: "relationship-labels", timeoutMs: 45000 });
+  } catch (error) { out = null; }
+  const list = out && Array.isArray(out.labels) ? out.labels : [];
+  update((n) => {
+    keys.forEach((k, i) => {
+      const live = n.rels && n.rels[k];
+      if (!live) return;
+      const row = list.find((x) => x && Number(x.i) === i);
+      let label = row ? normalizeGeneratedSocialText(String(row.label || "")).replace(/["“”]/g, "").replace(/\s+/g, " ").trim() : "";
+      if (label.split(/\s+/).length > 8) label = label.split(/\s+/).slice(0, 8).join(" ");
+      if (label && label.length <= 70 && label.toLowerCase() !== String(live.label || "").toLowerCase()) {
+        n.rels[k] = { ...live, label, labelBasis: relationshipLabelBasis(live), labelAt: now(), labelTriedAt: 0 };
+      } else {
+        n.rels[k] = { ...live, labelTriedAt: now() };
+      }
+    });
+  });
+  return list.length ? "relationship-labels" : null;
+}
+
 function structuralRelationshipHash(w, actor, target) {
   return "s" + simsSocialStableHash(identityCanonLine(w, actor) + "|" + identityCanonLine(w, target) + "|" + String(actor.personality || "").slice(0, 300));
 }
@@ -64115,6 +64222,8 @@ function planAutoAction(view) {
   if (structural) return structural;
   const bible = characterBibleDueAction(view);
   if (bible) return bible;
+  const labels = relationshipLabelDueAction(view);
+  if (labels) return labels;
   return legacyGroundedPlanAutoAction(view);
 }
 
@@ -64130,6 +64239,9 @@ async function runSimulationAction(view, update, action, addImage) {
   }
   if (action && action.type === "character-bible") {
     return runCharacterBibleAction(view, update, action);
+  }
+  if (action && action.type === "relationship-labels") {
+    return runRelationshipLabelsAction(view, update, action);
   }
   if (action && action.type === "npc-pair-reaction") {
     const eventId = String(action.payload && action.payload.eventId || "");
