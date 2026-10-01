@@ -8654,7 +8654,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   );
 
   const ctrl = new AbortController();
-  const timeoutMs = Math.max(7000, Number(requestMeta.timeoutMs) || (requestMeta.quality === "deep" ? 90000 : (requestMeta.interactive ? 18000 : 32000)));
+  const timeoutMs = Math.max(7000, Number(requestMeta.timeoutMs) || (requestMeta.quality === "deep" ? 90000 : (requestMeta.interactive ? 45000 : 40000)));
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
   try {
@@ -9850,9 +9850,12 @@ function legacyVoiceStyleCleanGeneratedComment(w, id, text, maxLen = 240) {
   if (isRepetitiveComment(w, id, t)) return "";
   if (isRepetitiveUtterance(w, id, t)) return "";
 
-  return t.length > maxLen
-    ? t.slice(0, maxLen)
-    : t;
+  if (t.length <= maxLen) return t;
+  /* CLAUDE FIX R18: never cut a comment mid-sentence — keep whole sentences or drop it */
+  const head = t.slice(0, maxLen);
+  const end = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "), head.lastIndexOf("… "));
+  if (end >= Math.floor(maxLen * 0.35)) return head.slice(0, end + 1).trim();
+  return "";
 }
 
 function commentSeedNumber(value) {
@@ -28128,6 +28131,9 @@ function commentReplyLatestTail(w, post, comment) {
       ? "Answer what this newest comment actually says or implies (e.g. if it says someone cannot come or is not invited, react to THAT). Do not ignore it and do not just repeat your previous point."
       : "Arra felelj, amit ez a legújabb komment ténylegesen mond vagy sugall (pl. ha azt mondja, hogy valaki nem jöhet / nincs meghívva, arra reagálj). Ne hagyd figyelmen kívül, és ne ismételd a korábbi mondandódat.") +
     replyDynamicDirective(w, comment) +
+    (en
+      ? "\nRULES: 3–25 words, complete sentences. Speak only as yourself (never name yourself in third person). No invented past events or shared memories. Only names/nicknames that appear in WHO IS WHO or the sheets."
+      : "\nSZABÁLYOK: 3–25 szó, befejezett mondatok. Csak önmagadként szólj (magadat ne nevezd meg E/3-ban). Ne találj ki múltbeli eseményt vagy közös emléket. Csak a KI KICSODA listában vagy a lapokon szereplő nevek/becenevek.") +
     "\n===";
 }
 
@@ -36149,7 +36155,7 @@ Formátum:
 {"replies":[{"id":"tag azonosítója","to":"annak az id-ja, akinek közvetlenül szól, vagy üres","text":"természetes rövid group chat üzenet"}],
 "changes":[{"a":"aki érez","b":"aki iránt","delta":12,"mood":"mit érez most iránta","why":"egy rövid mondat","oneSided":false}],
 "memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${groupChatSocialTail(w, groupAiIds)}${TAIL}`,
-      { maxTokens: 700, maxTries: 1, timeoutMs: 32000 }
+      { maxTokens: 700, maxTries: 1, timeoutMs: 50000 }
       );
     } catch (primaryGroupErr) {
       const fallbackId = playerTarget.id || groupAiIds[0] || "";
@@ -37300,7 +37306,7 @@ KAPCSOLATVÁLTOZÁS:
 
 Formátum:
 {"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event vagy group_social","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
-    , { maxTries: 1, maxTokens: 650, timeoutMs: 28000, dmCharId: c.id, dmChatKey: ck, dmLatestText: t }
+    , { maxTries: 1, maxTokens: 650, timeoutMs: 50000, dmCharId: c.id, dmChatKey: ck, dmLatestText: t }
     );
 
     const requestedReplyText = String(
@@ -61720,6 +61726,31 @@ function playerPostCommentHasFollowLeak(postContext, text) {
   return PLAYER_POST_COMMENT_FOLLOW_RE.test(String(text || ""));
 }
 
+/* CLAUDE FIX R18: generic sanity checks for a short social text written as
+   one character — the most common nonsense the small model produced. */
+function generatedSocialTextSanityProblem(w, actorId, text, card) {
+  const value = String(text || "");
+  const actor = charById(w, actorId);
+  if (!actor) return "";
+  /* every capitalised part of the own name (handles "Park Nam-gyu" as well as "Brent LaRusso");
+     case-sensitive, so "the park" is not mistaken for "Park" */
+  const names = [...String(actor.name || "").split(/\s+/), String(actor.nick || "").trim()]
+    .filter((n) => n && n.length >= 3 && /^\p{Lu}/u.test(n));
+  const low = value.toLowerCase();
+  for (const n of [...new Set(names)]) {
+    const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp("(^|[^\\p{L}])" + esc + "(?=$|[^\\p{L}])", "u");
+    if (re.test(value) && !new RegExp("(?:i'?m|i am|call me|it'?s|this is|name'?s|vagyok|hívj)\\s+(?:\\p{L}+\\s+)?" + esc.toLowerCase(), "u").test(low)) return "self-named-in-third-person";
+  }
+  const cardText = JSON.stringify(card || {}).toLowerCase();
+  if (/\b(?:last time|remember when|like (?:that|the) time|again\?? like|the other night|last (?:night|week|weekend) you|múltkor|emlékszel(?:, amikor)?|legutóbb)\b/i.test(value)) {
+    const words = low.replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((x) => x.length >= 5);
+    if (!words.some((x) => cardText.includes(x))) return "invented-shared-past";
+  }
+  if (value.length > 260) return "too-long";
+  return "";
+}
+
 function playerPostCommentRowsFromOutput(w, out, cards, postContext) {
   const allowed = new Set(cards.map((row) => row.id));
   const seen = new Set();
@@ -61748,6 +61779,11 @@ function playerPostCommentRowsFromOutput(w, out, cards, postContext) {
       }
       if (playerPostCommentHasFollowLeak(postContext, text)) {
         console.warn("[player-post-comments] rejected=follow-context-leak", "character=" + actorId, "text=" + text.slice(0, 180));
+        return;
+      }
+      const sanity = generatedSocialTextSanityProblem(w, actorId, text, cards.find((card) => card && card.id === actorId));
+      if (sanity) {
+        console.warn("[player-post-comments] rejected=" + sanity, "character=" + actorId, "text=" + text.slice(0, 180));
         return;
       }
 
@@ -61894,6 +61930,9 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
     en
       ? "STEP 2 — every comment reacts to THAT meaning, the way this commenter would: the people it hints at react as the target (flattered, smug, awkward, deflecting, amused); people with a crush or obsession on the author get visibly jealous or possessive if the post flirts with someone else; friends play along or tease; rivals mock. Nobody acts as if they did not get an obvious joke unless that is truly their character."
       : "2. LÉPÉS — minden komment ERRE a jelentésre reagál, ahogy az adott kommentelő tenné: akire céloz, célpontként reagál (hízelgő, önelégült, zavart, hárító, szórakozott); akinek crushja vagy megszállottsága van a szerzőre, láthatóan féltékeny vagy birtokló, ha a poszt mással flörtöl; a barátok beszállnak vagy ugratják; a riválisok gúnyolódnak. Senki ne tegyen úgy, mintha nem értené a nyilvánvaló poént, hacsak tényleg nem ilyen a karaktere.",
+    en
+      ? "HARD RULES FOR EVERY COMMENT: 3–25 words, complete sentences (never cut off). Each commenter speaks only as themself — never names themself in third person, never speaks for or about another commenter as if they were them. Do not invent past events, parties, accidents or shared memories that are not written in that commenter's card. Use only names and nicknames that appear in WHO IS WHO or the cards; never invent a nickname. A comment must make sense to a stranger reading the post."
+      : "KEMÉNY SZABÁLYOK MINDEN KOMMENTRE: 3–25 szó, befejezett mondatok (soha nem félbevágva). Mindenki csak önmagaként szól — magáról nem beszél E/3-ban a saját nevével, és nem beszél más kommentelő helyett. Ne találj ki olyan múltbeli eseményt, bulit, balesetet vagy közös emléket, ami nincs a kommentelő kártyáján. Csak a KI KICSODA listában vagy a kártyákon szereplő neveket és beceneveket használd; ne találj ki becenevet. A kommentnek egy kívülálló számára is értelmesnek kell lennie.",
     en
       ? ("Write " + minComments + "-" + maxComments + " top-level comments by DIFFERENT listed commenters. Every comment must directly make sense as a reaction to this exact post.")
       : ("Írj " + minComments + "-" + maxComments + " TOP-LEVEL kommentet KÜLÖNBÖZŐ felsorolt kommentelőktől. Mindegyik komment közvetlenül ennek a konkrét posztnak a reakciójaként legyen értelmes."),

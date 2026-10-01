@@ -4761,6 +4761,11 @@ function providerModel(provider, body = {}) {
   if (provider === "mistral") {
     /* R17: careful one-time sheet reading may use a stronger model */
     if (String(body?.quality || "") === "deep") return String(process.env.MISTRAL_DEEP_MODEL || "mistral-medium-latest").trim();
+    /* R18: everything the player directly reads and answers (DM replies, scenes, group chat,
+       comments under the player's posts, the feed refresh after the player's events) uses the
+       stronger model; background chatter stays on the cheap one. Set MISTRAL_PLAYER_MODEL to
+       mistral-small-latest to switch this off. */
+    if ((Number(body?.priority) || 0) >= 50) return String(process.env.MISTRAL_PLAYER_MODEL || "mistral-medium-latest").trim();
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
