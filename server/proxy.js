@@ -3490,7 +3490,8 @@ app.post("/ai/vision", async (req, res) => {
 
     const image =
       await resolveInputImage(
-        req.body?.image
+        req.body?.image,
+        session.worldCode
       );
 
     const prompt =
@@ -4233,8 +4234,45 @@ async function fetchRemoteImageReference(
   };
 }
 
+/* CLAUDE FIX R35: our own /media/file/<id> links need the login cookie, so the
+   server fetching them over HTTP got 401 ("Reference image fetch failed").
+   They are read straight from the database instead. */
+async function loadOwnMediaImage(raw, worldCode) {
+  const match = String(raw || "").match(/^(?:https?:\/\/[^/]+)?\/media\/file\/([^/?#]+)/i);
+  if (!match || !worldCode || !pool) return null;
+  const imageId = decodeURIComponent(match[1]);
+  const files = await pool.query(
+    `SELECT data FROM world_media_files WHERE world_code = $1 AND image_id = $2 LIMIT 1`,
+    [worldCode, imageId]
+  );
+  let entry = files.rows.length ? files.rows[0].data : null;
+  if (!entry) {
+    const legacy = await pool.query(
+      `
+      SELECT
+        CASE
+          WHEN data->>'__masvilagMediaEnvelope' = $3
+            THEN jsonb_extract_path(data->'media', $2::text)
+          ELSE jsonb_extract_path(data, $2::text)
+        END AS item
+      FROM world_media
+      WHERE world_code = $1
+      LIMIT 1
+      `,
+      [worldCode, imageId, String(MEDIA_ENVELOPE_VERSION)]
+    );
+    entry = legacy.rows.length ? legacy.rows[0].item : null;
+  }
+  const dataUrl = typeof entry === "string" ? entry : String(entry && (entry.dataUrl || entry.url) || "");
+  const parsed = parseImageDataUrl(dataUrl);
+  if (parsed) return { ...parsed, source: "own-media" };
+  if (/^https:\/\//i.test(dataUrl)) return fetchRemoteImageReference(dataUrl);
+  return null;
+}
+
 async function resolveInputImage(
-  value
+  value,
+  worldCode = ""
 ) {
   const raw =
     String(
@@ -4243,6 +4281,11 @@ async function resolveInputImage(
 
   if (!raw) {
     return null;
+  }
+
+  if (/\/media\/file\//i.test(raw) && worldCode) {
+    const own = await loadOwnMediaImage(raw, worldCode);
+    if (own) return own;
   }
 
   const inline =
@@ -4273,7 +4316,8 @@ async function resolveInputImage(
 
 async function imageReferencesFromBody(
   body = {},
-  limit = 3
+  limit = 3,
+  worldCode = ""
 ) {
   const raw =
     Array.isArray(
@@ -4318,7 +4362,8 @@ async function imageReferencesFromBody(
     try {
       const parsed =
         await resolveInputImage(
-          key
+          key,
+          worldCode
         );
 
       if (!parsed) {
@@ -4604,7 +4649,8 @@ app.post(
       const references =
         await imageReferencesFromBody(
           req.body || {},
-          3
+          3,
+          session && session.worldCode
         );
 
       if (

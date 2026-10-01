@@ -41210,7 +41210,8 @@ async function genNoteReact(w, note) {
     .filter(Boolean)
     .join(", ");
 
-  return askWorldJSON(
+  /* CLAUDE FIX R35: the answer was returned before the cast ids were attached */
+  const out = await askWorldJSON(
     w,
     engineFor(w),
     `${worldContext(
@@ -41318,7 +41319,7 @@ Formátum:
       { maxTokens: 1100 }
     );
 
-  out.__castIds =
+  if (out && typeof out === "object") out.__castIds =
     cast.map(
       (c) => c.id
     );
@@ -56606,7 +56607,8 @@ if (targetNote) {
             bot,
             spontaneousImagePrompt,
             addImage,
-            media
+            /* CLAUDE FIX R35: no React media context here — images resolve through /media/file */
+            {}
           )
         : null;
 
