@@ -36502,11 +36502,34 @@ function directDmVoiceCard(w, c) {
   return "";
 }
 
+/* CLAUDE FIX R10: the player echoing / questioning the bot's last line
+   ("now we are?", "what do you mean?", "??", "hogy érted?") is a request
+   to explain it, not a cue for another cryptic one-liner. */
+function directDmClarificationBlock(w, c, ck, latestText) {
+  const latest = String(latestText || "").trim();
+  if (!latest) return "";
+  const rows = ((w && w.chats && w.chats[ck]) || []).filter((m) => m && String(m.text || "").trim());
+  const lastOwn = [...rows].reverse().find((m) => m.from !== "me");
+  if (!lastOwn) return "";
+  const own = String(lastOwn.text || "").trim();
+  const words = (x) => String(x || "").toLowerCase().replace(/[^\p{L}\p{N}\s']/gu, " ").split(/\s+/).filter((t) => t.length >= 2);
+  const latestWords = words(latest);
+  const ownWords = new Set(words(own));
+  const echo = latestWords.length && latestWords.length <= 7 && /\?\s*$/.test(latest) && latestWords.filter((t) => ownWords.has(t)).length >= Math.min(2, latestWords.length);
+  const asks = /^(?:\?+|huh\??|what\??|wdym|what do you mean|meaning\?|what\s+(?:is\s+that|are\s+you\s+(?:talking|on)\s+about)|explain|mi\?|mi van\?|hogy(?:an)? érted|ezt hogy érted|mire gondolsz|mit akarsz ezzel)/i.test(latest);
+  if (!echo && !asks) return "";
+  return "CLARIFICATION REQUEST — THE PLAYER DID NOT UNDERSTAND YOUR LAST LINE:\n" +
+    "Your last message was: \"" + own.slice(0, 300) + "\"\n" +
+    "The player now answers: \"" + latest.slice(0, 300) + "\"\n" +
+    "Explain in plain words what you meant, tied to the concrete situation between you (where you are, what just happened, what you want). You may stay in character and keep your tone, but the meaning must become clear. Do not answer with another vague, poetic or cryptic one-liner.\n\n";
+}
+
 function directDmProtectedTail(w, c, ck, latestText) {
   const history = directDmProtectedHistory(w, c, ck);
   const ownRecent = directDmOwnRecent(w, c, ck);
   const styleCard = directDmVoiceCard(w, c);
   const latest = String(latestText || "");
+  const clarification = directDmClarificationBlock(w, c, ck, latest);
 
   return "\n\n[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]\n" +
     "PROTECTED DIRECT-DM CONTEXT — NEVER OMIT THIS BLOCK.\n\n" +
@@ -36518,11 +36541,14 @@ function directDmProtectedTail(w, c, ck, latestText) {
     (ownRecent || "No earlier authored DM messages.") + "\n\n" +
     "MANDATORY RESPONSE BEHAVIOR:\n" +
     "- React DIRECTLY to the latest player message: its literal content, tone and intention. Continue this same conversational beat; do not jump to a generic new topic.\n" +
+    "- MAKE SENSE: a real person reading your reply must understand exactly what you mean. Every reply carries at least one concrete point — an answer, a statement about the actual situation, a feeling about something specific, a specific question or a plan. No cryptic riddles, empty dramatic one-liners or vague lines like \"exactly where you belong\" that leave the player guessing.\n" +
+    "- Keep track of the conversation: the history above is one continuous exchange. Your reply must fit what both of you said in the last few messages, not just the last line.\n" +
     "- If the player reciprocates flirtation, respond to the fact that they reciprocated it. If they ask a question, answer it when your character knows. If they reject you, react to that rejection. If they agree, react to the agreement.\n" +
     "- Relationship level and personality decide HOW you react (embarrassed, pleased, teasing, defensive, sarcastic, possessive, calm, etc.), never WHETHER you acknowledge what was just said.\n" +
     "- Do not repeat the same opening, image, threat, joke, metaphor, pet name pattern or distinctive 4+ word phrase from your recent DM messages.\n" +
     "- Reply in the language of this DM conversation/latest player message: English conversation -> natural English; Hungarian conversation -> natural correct Hungarian, except character-sheet style rules intentionally overriding spelling/punctuation/casing.\n" +
     "- Keep the exact JSON response schema requested earlier in the prompt.\n\n" +
+    clarification +
     "AMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\n" +
     latest;
 }
