@@ -2912,6 +2912,7 @@ const BOND_PAIR = {
   "Testvér": "Testvér", "Ikertestvér": "Ikertestvér", "Féltestvér": "Féltestvér",
   "Mostohatestvér": "Mostohatestvér", "Unokatestvér": "Unokatestvér", "Rokon": "Rokon",
   "Após / anyós": "Meny / vő", "Sógor / sógornő": "Sógor / sógornő",
+  "Randizgatnak": "Randizgatnak", "Csapattárs": "Csapattárs",
   "Járnak": "Járnak", "Jegyesek": "Jegyesek", "Házastárs": "Házastárs", "Exek": "Exek",
   "Titkos viszony": "Titkos viszony", "Osztálytárs": "Osztálytárs", "Szomszéd": "Szomszéd",
   "Munkatárs": "Munkatárs", "Kölcsönös crush": "Kölcsönös crush",
@@ -2923,6 +2924,7 @@ function relType(score) {
   if (score <= -30) return localizedRelType("Rivális", CURRENT_LANG);
   if (score <= -5) return localizedRelType("Feszült", CURRENT_LANG);
   if (score < 25) return localizedRelType("Ismerős", CURRENT_LANG);
+  if (score < 40) return localizedRelType("Haver", CURRENT_LANG);
   if (score < 55) return localizedRelType("Barát", CURRENT_LANG);
   if (score < 80) return localizedRelType("Közeli barát", CURRENT_LANG);
   return localizedRelType("Legjobb barát", CURRENT_LANG);
@@ -2933,8 +2935,8 @@ function relType(score) {
 const FIXED_BONDS = ["Anya", "Apa", "Szülő", "Fia", "Lánya", "Gyerek", "Testvér", "Ikertestvér", "Féltestvér",
   "Mostohatestvér", "Mostohaszülő", "Nevelt gyerek", "Nagymama", "Nagypapa", "Nagyszülő", "Unoka",
   "Unokatestvér", "Nagynéni", "Nagybácsi", "Rokon", "Após / anyós", "Sógor / sógornő"];
-const SOFT_BONDS = ["Ellenség", "Rivális", "Ismerős", "Barát", "Közeli barát", "Legjobb barát",
-  "Crush", "Kölcsönös crush", "Megszállottság", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony",
+const SOFT_BONDS = ["Ellenség", "Rivális", "Ismerős", "Haver", "Barát", "Közeli barát", "Legjobb barát",
+  "Crush", "Kölcsönös crush", "Megszállottság", "Randizgatnak", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony",
   "Osztálytárs", "Szomszéd", "Munkatárs", "Főnök", "Beosztott", "Mentor", "Tanítvány", "Edző", "Tanár"];
 
 // A kapcsolat hangulata a pontszám alapján, a kötelék címkéjétől függetlenül.
@@ -3157,11 +3159,13 @@ function normalizedOfficialKind(rel) {
   if (fearful && !/spouse|házastárs|married|engaged|jegyes|dating|járnak/.test(bond)) return { kind: "afraid", rank: 35, unilateral: true, fearful };
   if (/spouse|házastárs|férj|feleség|married|házas/.test(bond)) return { kind: "spouse", rank: 90 };
   if (/engaged|jegyes|fiancé|fiance/.test(bond)) return { kind: "engaged", rank: 80 };
+  if (/randizgat|seeing each other/.test(bond)) return { kind: "seeing", rank: 68 };
   if (/dating|járnak|partner|boyfriend|girlfriend|párkapcsolat|couple/.test(bond)) return { kind: "dating", rank: 70 };
   if (/exes|\bex\b|volt pár/.test(bond)) return { kind: "exes", rank: 65 };
   if (/best friend|legjobb barát/.test(bond) || score >= 80) return { kind: "best-friend", rank: 60 };
   if (/close friend|közeli barát/.test(bond) || score >= 55) return { kind: "friend", rank: 50 };
-  if (/\bfriend\b|barát/.test(bond) || score >= 35) return { kind: "friend", rank: 50 };
+  if (/\bfriend\b|barát/.test(bond) || score >= 40) return { kind: "friend", rank: 50 };
+  if (/haver|buddy|csapatt[aá]rs|teammate/.test(bond) || score >= 25) return { kind: "buddy", rank: 42 };
   if (/fan|rajong/.test(bond)) return { kind: "fan", rank: 45, unilateral: true };
   if (/enemy|ellenség/.test(bond) || score <= -70) return { kind: "enemy", rank: 45, unilateral: true };
   if (/rival|rivális/.test(bond) || score <= -30) return { kind: "rival", rank: 40, unilateral: true };
@@ -3175,7 +3179,9 @@ function officialKindLabel(kind, lang = CURRENT_LANG) {
   const map = {
     spouse: en ? "Married" : "Házasok",
     engaged: en ? "Engaged" : "Jegyesek",
-    dating: en ? "Dating" : "Randizgatnak / pár",
+    dating: en ? "Dating" : "Járnak",
+    seeing: en ? "Seeing each other" : "Randizgatnak",
+    buddy: en ? "Buddies" : "Haverok",
     exes: en ? "Exes" : "Exek",
     "best-friend": en ? "Best friends" : "Legjobb barátok",
     friend: en ? "Friends" : "Barátok",
@@ -3201,6 +3207,7 @@ function directedRomanticOfficialKind(rel) {
   const bond = String(rel && (rel.bond || rel.type) || "").toLowerCase();
   if (/spouse|married|házas|házastárs|férj|feleség/.test(bond)) return "spouse";
   if (/engaged|jegyes|fiancé|fiance/.test(bond)) return "engaged";
+  if (/randizgat|seeing each other/.test(bond)) return "seeing";
   if (/dating|járnak|partner|boyfriend|girlfriend|párkapcsolat|couple/.test(bond)) return "dating";
   if (/exes|\bex\b|volt pár/.test(bond)) return "exes";
   return "";
@@ -3208,17 +3215,17 @@ function directedRomanticOfficialKind(rel) {
 
 function mutualRomanticFloor(aKind, bKind) {
   if (aKind === "exes" || bKind === "exes") return aKind === "exes" && bKind === "exes" ? "exes" : "";
-  const rank = { dating: 1, engaged: 2, spouse: 3 };
+  const rank = { seeing: 1, dating: 2, engaged: 3, spouse: 4 };
   const a = rank[aKind] || 0;
   const b = rank[bKind] || 0;
   const floor = Math.min(a, b);
-  return floor >= 3 ? "spouse" : floor >= 2 ? "engaged" : floor >= 1 ? "dating" : "";
+  return floor >= 4 ? "spouse" : floor >= 3 ? "engaged" : floor >= 2 ? "dating" : floor >= 1 ? "seeing" : "";
 }
 
 function explicitMutualStatus(w, a, b) {
   const key = relationshipOfficialOverrideKey(a, b);
   const override = w && w.relationshipOfficialOverrides && w.relationshipOfficialOverrides[key];
-  if (override && ["dating", "engaged", "spouse", "exes", "best-friend"].includes(String(override.kind || ""))) {
+  if (override && ["seeing", "dating", "engaged", "spouse", "exes", "best-friend"].includes(String(override.kind || ""))) {
     return String(override.kind);
   }
 
@@ -3273,12 +3280,13 @@ function officialRelationshipStatusForPair(w, ownerId, targetId, lang = CURRENT_
   }
   if (a.unilateral) return officialKindLabel(a.kind, lang);
 
-  const mutualKinds = ["spouse", "engaged", "dating", "exes", "best-friend"];
+  const mutualKinds = ["spouse", "engaged", "dating", "seeing", "exes", "best-friend"];
   if (mutualKinds.includes(a.kind) || mutualKinds.includes(b.kind)) {
     const sharedRank = Math.min(a.rank, b.rank);
     const shared =
       sharedRank >= 60 ? "best-friend" :
       sharedRank >= 50 ? "friend" :
+      sharedRank >= 42 ? "buddy" :
       sharedRank >= 30 ? "acquaintance" :
       "stranger";
     return officialKindLabel(shared, lang);
@@ -3288,6 +3296,7 @@ function officialRelationshipStatusForPair(w, ownerId, targetId, lang = CURRENT_
   const shared =
     sharedRank >= 60 ? "best-friend" :
     sharedRank >= 50 ? "friend" :
+    sharedRank >= 42 ? "buddy" :
     sharedRank >= 30 ? "acquaintance" :
     sharedRank <= 10 ? "stranger" :
     "acquaintance";
@@ -6032,6 +6041,7 @@ const AUTO_EVOLVING_SOCIAL_BONDS = new Set([
   "Ellenség",
   "Rivális",
   "Ismerős",
+  "Haver",
   "Barát",
   "Közeli barát",
   "Legjobb barát",
@@ -6053,6 +6063,10 @@ function canonicalSocialBondFromScore(
 
   if (s < 25) {
     return "Ismerős";
+  }
+
+  if (s < 40) {
+    return "Haver";
   }
 
   if (s < 55) {
@@ -6183,7 +6197,7 @@ function evolvedBondForChange(
 function relationshipBondPolarity(value) {
   const text = String(value || "").toLowerCase();
   if (
-    /best friend|close friend|friend|ally|bar[aá]t|sz[oö]vets[eé]ges|dating|spouse|engaged|crush|partner|teammate|mentor|student|tan[ií]tv[aá]ny/.test(
+    /best friend|close friend|friend|ally|bar[aá]t|sz[oö]vets[eé]ges|dating|spouse|engaged|crush|partner|teammate|mentor|student|tan[ií]tv[aá]ny|haver|buddy|randizgat|seeing each other|csapatt[aá]rs|j[aá]rnak/.test(
       text
     )
   ) {
@@ -6314,8 +6328,23 @@ function relationshipBondTransitionPaceAllowed(w, a, b, currentRel, proposedBond
         meaningfulRelationshipHistoryCount(w, a, b, 1) >= 3;
     }
     if (/^Barát$|^Friend$/i.test(proposed)) {
-      return Number(nextScore) >= 28 &&
+      return Number(nextScore) >= 38 &&
         meaningfulRelationshipHistoryCount(w, a, b, 1) >= 2;
+    }
+    if (/^Haver$|^Buddy$/i.test(proposed)) {
+      return Number(nextScore) >= 22;
+    }
+    /* CLAUDE FIX R9 (6.4): romance climbs one rung at a time. */
+    const crushLike = /crush|vonz|attract|megsz[aá]ll|obsess/i.test(current);
+    if (/^(?:Randizgatnak|Seeing each other)$/i.test(proposed)) {
+      return Number(nextScore) >= 55 && meaningfulRelationshipHistoryCount(w, a, b, 1) >= 2;
+    }
+    if (/^(?:Járnak|Dating|Pár|Couple)$/i.test(proposed)) {
+      if (crushLike || !current || /bar[aá]t|friend|haver|buddy|ismer/i.test(current)) return Number(nextScore) >= 85 && meaningfulRelationshipHistoryCount(w, a, b, 1) >= 5;
+      return Number(nextScore) >= 60;
+    }
+    if (/^(?:Jegyesek|Engaged)$/i.test(proposed)) {
+      return /j[aá]rnak|dating|p[aá]r|couple|partner/i.test(current) && Number(nextScore) >= 75;
     }
   }
 
@@ -18671,6 +18700,7 @@ const TERM_TEXT = {
       "Rivális": "Rivális",
       "Feszült": "Feszült",
       "Ismerős": "Ismerős",
+      "Haver": "Haver",
       "Barát": "Barát",
       "Közeli barát": "Közeli barát",
       "Legjobb barát": "Legjobb barát",
@@ -18712,6 +18742,7 @@ const TERM_TEXT = {
       "Rivális": "Rival",
       "Feszült": "Tense",
       "Ismerős": "Acquaintance",
+      "Haver": "Buddy",
       "Barát": "Friend",
       "Közeli barát": "Close friend",
       "Legjobb barát": "Best friend",
@@ -18736,7 +18767,7 @@ const TERM_TEXT = {
       "Nagynéni": "Aunt", "Nagybácsi": "Uncle", "Unokahúg / unokaöcs": "Niece / nephew",
       "Testvér": "Sibling", "Ikertestvér": "Twin sibling", "Féltestvér": "Half-sibling", "Mostohatestvér": "Stepsibling",
       "Unokatestvér": "Cousin", "Rokon": "Relative", "Após / anyós": "Parent-in-law", "Meny / vő": "Daughter/son-in-law",
-      "Sógor / sógornő": "Sibling-in-law", "Járnak": "Dating", "Jegyesek": "Engaged", "Házastárs": "Spouse",
+      "Sógor / sógornő": "Sibling-in-law", "Randizgatnak": "Seeing each other", "Haver": "Buddy", "Csapattárs": "Teammate", "Járnak": "Dating", "Jegyesek": "Engaged", "Házastárs": "Spouse",
       "Exek": "Exes", "Titkos viszony": "Secret affair", "Osztálytárs": "Classmate", "Szomszéd": "Neighbor",
       "Munkatárs": "Coworker", "Crush": "Crush", "Kölcsönös crush": "Mutual crush", "Megszállottság": "Obsession", "Főnök": "Boss",
       "Beosztott": "Subordinate", "Mentor": "Mentor", "Tanítvány": "Student", "Tanár": "Teacher", "Edző": "Coach",
@@ -18772,6 +18803,8 @@ function localizedBond(value, lang = CURRENT_LANG) {
     "Enemy": "Ellenség",
     "Rival": "Rivális",
     "Acquaintance": "Ismerős",
+    "Buddy": "Haver",
+    "Seeing each other": "Randizgatnak",
     "Friend": "Barát",
     "Close friend": "Közeli barát",
     "Best friend": "Legjobb barát",
@@ -48795,9 +48828,10 @@ function relationshipTierIndex(score) {
   if (v <= -30) return 1;
   if (v <= -5) return 2;
   if (v < 25) return 3;
-  if (v < 55) return 4;
-  if (v < 80) return 5;
-  return 6;
+  if (v < 40) return 4;
+  if (v < 55) return 5;
+  if (v < 80) return 6;
+  return 7;
 }
 
 function relationshipOneTierDelta(current, delta) {
@@ -49488,6 +49522,34 @@ function simEnqueue(w, action) {
 const SIM_CLIENT_INSTANCE_ID = "tab_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 const SIM_LEADER = { leader: true, checkedAt: 0, holder: "" };
 const SIM_STALE_ACTION_MS = 3 * 60 * 60 * 1000;
+/* CLAUDE FIX R9 (4.5): emergency brake — if background actions keep failing,
+   the background world pauses for 5 minutes instead of hammering the AI. */
+const SIM_BRAKE = { errors: [], until: 0 };
+function simBrakeNoteFailure() {
+  const t = now();
+  SIM_BRAKE.errors = SIM_BRAKE.errors.filter((x) => t - x < 5 * 60 * 1000);
+  SIM_BRAKE.errors.push(t);
+  if (SIM_BRAKE.errors.length >= 6 && t >= SIM_BRAKE.until) {
+    SIM_BRAKE.until = t + 5 * 60 * 1000;
+    SIM_BRAKE.errors = [];
+    console.warn("[sim-brake] 6 background AI failures within 5 minutes — background world paused for 5 minutes");
+    return true;
+  }
+  return false;
+}
+function simBrakeLeftMs() { return Math.max(0, SIM_BRAKE.until - now()); }
+
+function AiStatusChip() {
+  const { tt } = useLang();
+  const [, setTick] = useState(0);
+  useEffect(() => { const i = setInterval(() => setTick((x) => x + 1), 2000); return () => clearInterval(i); }, []);
+  let label = "";
+  if (!simLeaderActive()) label = tt("másik eszközön fut", "running on another device");
+  else if (simBrakeLeftMs() > 0) label = tt("AI szünet · " + Math.ceil(simBrakeLeftMs() / 60000) + " p", "AI paused · " + Math.ceil(simBrakeLeftMs() / 60000) + " min");
+  else if (cooldownLeft() > 1500) label = tt("AI pihen · " + Math.ceil(cooldownLeft() / 1000) + " mp", "AI resting · " + Math.ceil(cooldownLeft() / 1000) + "s");
+  if (!label) return null;
+  return <span className="hint mono" style={{ fontSize: 10, alignSelf: "center", whiteSpace: "nowrap" }}>{label}</span>;
+}
 
 function simLeaderActive() {
   if (!SIM_LEADER.checkedAt) return true; /* never checked yet → old behaviour */
@@ -58757,6 +58819,8 @@ const signOut = useCallback(async () => {
   const dueSocialReaction = groundedDueFollowBackAction(view2);
   const queued = dueSocialReaction || simPeek(view2);
   const manualQueued = !!(queued && (queued.source === "manual" || queued.source === "player-event"));
+  /* CLAUDE FIX R9 (4.5): during an emergency brake only the player's own actions run. */
+  if (simBrakeLeftMs() > 0 && !manualQueued) return;
 
   /*
    * RECOVERY v99.2:
@@ -58967,6 +59031,9 @@ const signOut = useCallback(async () => {
         result = await runSimulationAction(viewRef.current, update, action, addImage);
         ok = Boolean(result);
       } catch (e) {
+        if (action && action.source !== "manual" && action.source !== "player-event" && simBrakeNoteFailure()) {
+          update((n) => groundedEventLog(n, "sim-brake", "applied", "Background world paused for 5 minutes after repeated AI failures: " + String(e && e.message || e || "error").slice(0, 160), "brake"));
+        }
         if (action && action.source === "manual" && alive) {
           setErr(
   "SIM: " +
@@ -59149,6 +59216,7 @@ const signOut = useCallback(async () => {
               {autoBusy ? <Loader2 size={13} className="spin" />
                         : <span className="dot" style={{ background: auto.on ? "var(--rose)" : "var(--muted)", animation: auto.on ? undefined : "none" }} />}
             </button>
+            <AiStatusChip />
             <button className="btn tiny ghost" style={{ position: "relative" }} onClick={() => setShowNotes(true)} title={tt("Értesítések", "Notifications")}>
               <Bell size={15} color={unread ? "var(--rose)" : undefined} />
               {unread > 0 && <span className="badge">{unread > 9 ? "9+" : unread}</span>}
@@ -62170,7 +62238,7 @@ function relationshipReadingDueAction(w) {
   return null;
 }
 
-const RELATIONSHIP_READING_BONDS = ["Anya", "Apa", "Szülő", "Fia", "Lánya", "Testvér", "Ikertestvér", "Féltestvér", "Mostohatestvér", "Mostohaszülő", "Nagyszülő", "Unoka", "Unokatestvér", "Nagynéni", "Nagybácsi", "Rokon", "Ismerős", "Barát", "Közeli barát", "Legjobb barát", "Crush", "Kölcsönös crush", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony", "Rivális", "Ellenség", "Osztálytárs", "Szomszéd", "Munkatárs", "Főnök", "Beosztott", "Mentor", "Tanítvány", "Edző", "Tanár", "Megszállottság"];
+const RELATIONSHIP_READING_BONDS = ["Anya", "Apa", "Szülő", "Fia", "Lánya", "Testvér", "Ikertestvér", "Féltestvér", "Mostohatestvér", "Mostohaszülő", "Nagyszülő", "Unoka", "Unokatestvér", "Nagynéni", "Nagybácsi", "Rokon", "Ismerős", "Haver", "Barát", "Közeli barát", "Legjobb barát", "Crush", "Kölcsönös crush", "Randizgatnak", "Járnak", "Jegyesek", "Házastárs", "Exek", "Titkos viszony", "Rivális", "Ellenség", "Osztálytárs", "Szomszéd", "Munkatárs", "Főnök", "Beosztott", "Mentor", "Tanítvány", "Edző", "Tanár", "Megszállottság"];
 
 async function genRelationshipReading(w, actor, due) {
   const en = worldLanguage(w, w.meId) === "en";
@@ -62220,7 +62288,7 @@ function applyRelationshipReadingToLive(n, actorId, targetId, oldBase, newBase, 
      play (dating, engaged, married, exes) are never touched. */
   const weakLiveBond = options.structural
     ? (!liveBond || /^(?:ismer[oő]s|acquaintance)$/i.test(liveBond.trim()))
-    : (!liveBond || /^(?:bar[aá]t|k[oö]zeli bar[aá]t|legjobb bar[aá]t|ismer[oő]s|friend|close friend|best friend|acquaintance)$/i.test(liveBond.trim()));
+    : (!liveBond || /^(?:haver|buddy|bar[aá]t|k[oö]zeli bar[aá]t|legjobb bar[aá]t|ismer[oő]s|friend|close friend|best friend|acquaintance)$/i.test(liveBond.trim()));
   const committedLiveBond = /j[aá]rnak|jegyes|h[aá]zast[aá]rs|exek|dating|engaged|married|spouse|\bex/i.test(liveBond);
   const replaceableBond = weakLiveBond || (!options.structural && !oldBase) || (oldBase && liveBond === String(oldBase.bond || oldBase.type || ""));
   if (!live.fixed && newBase.bond && (unfaithfulRomance || (!committedLiveBond && replaceableBond))) patch.bond = newBase.bond;
