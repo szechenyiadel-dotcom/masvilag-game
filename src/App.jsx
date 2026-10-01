@@ -6567,7 +6567,7 @@ function legacyApplyChanges(
      */
     const committedGuard = identityCommittedElsewhere(n, charById(n, a), charById(n, b));
     if (
-      (romanceState.blocked || committedGuard) &&
+      (romanceState.blocked || (committedGuard && nextScore < 75)) &&
       romanticRelationshipText(bondEvolution.bond) &&
       !romanticRelationshipText(oldBond)
     ) {
@@ -6605,7 +6605,7 @@ function legacyApplyChanges(
 
     if (
       ch.mood &&
-      !((romanceState.blocked || committedGuard) && romanticRelationshipText(ch.mood))
+      !(romanceState.blocked && romanticRelationshipText(ch.mood))
     ) {
       patch.mood =
         String(
@@ -13468,7 +13468,6 @@ function flirtPermissionState(w, actorId, targetId, rel = null) {
     !family &&
     !orientation.blocked &&
     !targetKnownIncompatible &&
-    !committedElsewhere &&
     (crushActive || (naturallyFlirty && casualCompatibilityKnown))
   );
 
@@ -13508,8 +13507,8 @@ function flirtIdentityInstruction(w, actorId, targetId, rel = null) {
   const committedPartner = state.committedElsewhere && state.committedElsewhere.partner ? state.committedElsewhere.partner : "";
   if (state.mode === "committed-elsewhere") {
     const behaviorCommitted = en
-      ? "COMMITTED ELSEWHERE — HARD LOCK: " + actor.name + " is " + (state.committedElsewhere.status || "committed") + (committedPartner ? " (partner: " + committedPartner + ")" : "") + " and is faithful. " + actor.name + " does NOT flirt with " + target.name + ", does not return flirting, compliments on looks, touches, kisses or confessions, and never says or implies they are interested. React in character — awkward, firm, cold, amused, fatherly/motherly or annoyed — and set a clear boundary. Any unspoken feeling stays unacted."
-      : "MÁSHOL ELKÖTELEZETT — KEMÉNY ZÁR: " + actor.name + " " + (state.committedElsewhere.status || "elkötelezett") + (committedPartner ? " (partner: " + committedPartner + ")" : "") + " és hűséges. " + actor.name + " NEM flörtöl " + target.name + " felé, nem viszonozza a flörtöt, a külsejére tett bókot, érintést, csókot vagy vallomást, és soha nem mondja vagy sugallja, hogy érdeklődik. Karakterhűen reagáljon — zavar, határozottság, hidegség, derültség, szülői hang vagy bosszúság — és húzzon egyértelmű határt. Ha van is kimondatlan érzés, nem cselekszik belőle.";
+      ? "COMMITTED ELSEWHERE — MAKE IT HARD, NOT IMPOSSIBLE: " + actor.name + " is " + (state.committedElsewhere.status || "committed") + (committedPartner ? " (partner: " + committedPartner + ")" : "") + ". That loyalty is real and weighs on every interaction with " + target.name + ". " + actor.name + " does not start flirting, deflects or shuts down advances the way this personality would (a principled family man resists hard; an impulsive or flirtatious person gives way sooner), feels guilt and conflict, and pulls back after any slip. Only tension that has genuinely built up over several interactions may show cracks — a lingering look, a hesitation, a moment that almost crosses the line — and it never happens easily or all at once. Do not invent reciprocation the story has not earned."
+      : "MÁSHOL ELKÖTELEZETT — LEGYEN NEHÉZ, DE NEM LEHETETLEN: " + actor.name + " " + (state.committedElsewhere.status || "elkötelezett") + (committedPartner ? " (partner: " + committedPartner + ")" : "") + ". Ez a hűség valódi, és minden " + target.name + " felé tett lépésére rányomja a bélyegét. " + actor.name + " nem kezdeményez flörtöt, a közeledést a személyiségéhez illően hárítja vagy leállítja (egy elvhű családapa keményen ellenáll, egy impulzív vagy flörtölős ember hamarabb enged), bűntudatot és vívódást érez, és minden megcsúszás után visszahúzódik. Csak a több interakción át valóban felépült feszültség okozhat repedést — egy elnyúló pillantás, habozás, egy majdnem-átlépett határ —, és ez sosem könnyen vagy egyszerre történik. Ne találj ki olyan viszonzást, amit a történet még nem érdemelt ki.";
     return (en ? "IDENTITY / FLIRT GROUND TRUTH — NEVER FORGET: " : "IDENTITÁS / FLÖRT GROUND TRUTH — SOHA NE FELEJTSD EL: ") + behaviorCommitted;
   }
   if (en) {
@@ -15273,13 +15272,12 @@ function legacyRelationshipBehaviorCard(
   if (
     adultRomanceAllowed &&
     crushActive &&
-    !flirtState.allowed &&
     flirtState.mode === "committed-elsewhere"
   ) {
     parts.push(
       en
-        ? "COMMITTED ELSEWHERE: any attraction stays private and is never acted on. No flirting back, no romantic hints, no kisses; keep the boundary the way this personality would."
-        : "MÁSHOL ELKÖTELEZETT: ha van is vonzalom, privát marad és nem cselekszik belőle. Nincs visszaflörtölés, romantikus célzás, csók; a határt a saját személyisége szerint tartja."
+        ? "COMMITTED ELSEWHERE: the attraction is real but fought against — guilt, restraint, mixed signals, pulling back after slips. Progress is slow and must be earned over time; how hard the resistance is depends on this personality."
+        : "MÁSHOL ELKÖTELEZETT: a vonzalom valódi, de küzd ellene — bűntudat, visszafogottság, kevert jelek, visszahúzódás egy-egy megcsúszás után. Lassan halad, ki kell érdemelni; hogy mennyire áll ellen, az a személyiségétől függ."
     );
   } else if (
     adultRomanceAllowed &&
@@ -62022,7 +62020,8 @@ function applyRelationshipReadingToLive(n, actorId, targetId, oldBase, newBase, 
      pair built in play counts as earned from a neutral start. */
   const liveBond = String(live.bond || live.type || "");
   const actorLive = charById(n, actorId), targetLive = charById(n, targetId);
-  const unfaithfulRomance = Boolean(identityCommittedElsewhere(n, actorLive, targetLive) && romanticRelationshipText(liveBond + " " + String(live.mood || "")) && !romanticRelationshipText(String(newBase.bond || "")));
+  const unfaithfulRomance = false; /* R6b: a committed character's romance is slowed in play, not erased */
+  void actorLive; void targetLive;
   const oldScore = oldBase ? Number(oldBase.score) || 0 : (options.structural ? 0 : Number(live.score) || 0);
   let earned = options.structural && !oldBase
     ? (Number(live.score) || 0)
@@ -62233,9 +62232,9 @@ function whoIsWhoCard(w, ids) {
   const en = worldLanguage(w, w.meId) === "en";
   return en
     ? "WHO IS WHO — CANON FROM EACH PERSON'S OWN SHEET (public facts; everyone in town knows them):\n" + lines.join("\n") +
-      "\nRULES: Everyone knows which dojo/team/group each person belongs to, who their sensei/leader is, who their teammates are and who is married. Members of rival groups treat each other as rivals unless a personal bond written on their own sheet says otherwise. A married/committed person stays faithful: they never flirt back, kiss or accept romantic or sexual advances from anyone but their partner — they react in character (awkward, firm, cold, amused, protective) and set a boundary. Adults who teach, coach or lead younger people keep a professional distance from them unless their sheet says otherwise. Use each person's pronouns exactly as listed — never swap he/she or him/her. Address the player by her/his real name or the given nickname, never by another character's name."
+      "\nRULES: Everyone knows which dojo/team/group each person belongs to, who their sensei/leader is, who their teammates are and who is married. Members of rival groups treat each other as rivals unless a personal bond written on their own sheet says otherwise. A married/committed person is loyal to their partner: they don't start flirting, and advances from others meet resistance that fits their personality (guilt, deflection, awkwardness, a firm reminder of their partner). Only tension built up slowly over time can create cracks, and they struggle with it. Adults who teach, coach or lead younger people keep a professional distance from them unless their sheet says otherwise. Use each person's pronouns exactly as listed — never swap he/she or him/her. Address the player by her/his real name or the given nickname, never by another character's name."
     : "KI KICSODA — KÁNON MINDENKI SAJÁT LAPJÁRÓL (nyilvános tények, a városban mindenki tudja):\n" + lines.join("\n") +
-      "\nSZABÁLYOK: Mindenki tudja, ki melyik dojóhoz/csapathoz/csoporthoz tartozik, ki a senseie/vezetője, kik a csapattársai és ki házas. Rivális csoportok tagjai riválisként kezelik egymást, hacsak a saját lapjukon leírt személyes kötődés mást nem mond. Házas/elkötelezett ember hűséges marad: nem flörtöl vissza, nem csókol és nem fogad el romantikus vagy szexuális közeledést senkitől a partnerén kívül — karakterhűen reagál (zavar, határozottság, hidegség, derültség, védelmezés) és meghúzza a határt. Fiatalabbakat tanító/edző/vezető felnőtt szakmai távolságot tart velük, hacsak a lapja mást nem mond. Mindenkire a megadott névmással hivatkozz (angol szövegben he/him, she/her) — soha ne keverd a nemeket. A játékost a valódi nevén vagy a megadott becenevén szólítsák, soha ne egy másik karakter nevén."
+      "\nSZABÁLYOK: Mindenki tudja, ki melyik dojóhoz/csapathoz/csoporthoz tartozik, ki a senseie/vezetője, kik a csapattársai és ki házas. Rivális csoportok tagjai riválisként kezelik egymást, hacsak a saját lapjukon leírt személyes kötődés mást nem mond. Házas/elkötelezett ember lojális a partneréhez: nem kezdeményez flörtöt, és a közeledésre a személyiségéhez illő ellenállással reagál (bűntudat, hárítás, zavar, a partnerére való emlékeztetés). Csak lassan, idővel felépülő feszültség okozhat repedést, és ő vívódik vele. Fiatalabbakat tanító/edző/vezető felnőtt szakmai távolságot tart velük, hacsak a lapja mást nem mond. Mindenkire a megadott névmással hivatkozz (angol szövegben he/him, she/her) — soha ne keverd a nemeket. A játékost a valódi nevén vagy a megadott becenevén szólítsák, soha ne egy másik karakter nevén."
 }
 
 function identityCanonDueAction(w) {
