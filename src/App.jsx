@@ -15916,6 +15916,38 @@ function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
 }
 
 /* CLAUDE FIX R7 (9.2): a *starred action* from the player turns the DM into roleplay. */
+/* CLAUDE FIX R12: narration point of view. Outside quoted speech an AI
+   character's action must never speak about the player as "I/me/my", and a
+   sentence must not start with a bare verb ("Steps back…"). */
+function repairRoleplayNarrationPov(w, actorId, value) {
+  const text = String(value || "");
+  if (!text || worldLanguage(w, w && w.meId) !== "en") return text;
+  const player = w && w.meId ? charById(w, w.meId) || w.player : (w && w.player);
+  const pron = identityPronouns(player) || "she/her";
+  const obj = pron === "he/him" ? "him" : pron === "they/them" ? "them" : "her";
+  const poss = pron === "he/him" ? "his" : pron === "they/them" ? "their" : "her";
+  const actor = charById(w, actorId);
+  const actorFirst = String(actor && actor.name || "").split(/\s+/)[0];
+  const NOT_VERBS = new Set(["This", "His", "Hers", "Its", "Is", "Was", "Yes", "As", "Thus", "Has", "Does", "Always", "Perhaps", "Sometimes", "Besides", "Afterwards", "Towards", "Unless", "Less", "Princess", "Class", "Glass", "Kiss", "Miss", "Boss", "Chess", "Dress", "Us", "Plus", "Less", "Nevertheless", "Regardless", "Seconds", "Minutes", "Hours", "Lips", "Eyes", "Hands", "Words", "Thoughts"]);
+  /* split into quoted speech and narration; repair only the narration */
+  const parts = text.split(/(\"[^\"]*\"|“[^”]*”)/);
+  const fixed = parts.map((part, index) => {
+    if (index % 2 === 1) return part; /* spoken words stay untouched */
+    let out = part
+      .replace(/\bmy\b/g, poss).replace(/\bMy\b/g, poss.charAt(0).toUpperCase() + poss.slice(1))
+      .replace(/\bmyself\b/g, obj === "them" ? "themself" : obj + "self")
+      .replace(/\bme\b/g, obj);
+    if (actorFirst) {
+      /* a bare verb is followed by a particle/object ("Steps back", "Looks at her"),
+         a plural noun subject by its own verb ("Fingers tighten") — only the first is repaired */
+      const FOLLOW = /^(?:back|at|up|down|over|closer|away|forward|towards?|to|into|out|off|in|on|his|her|their|its|the|a|an|for|past|through|around|across|behind|beside|against|without|with|onto|under|him|them|it|nothing|something|once|again|still|just|only|slightly|[a-z]+ly)\b/;
+      out = out.replace(/(^\s*|[.!?…]\s+|\*\s*)([A-Z][a-z]+(?:es|s))\s+(?=(\S+))/g, (m, lead, word, next) => (NOT_VERBS.has(word) || !FOLLOW.test(String(next || "").toLowerCase()) ? m : lead + actorFirst + " " + word.toLowerCase() + " "));
+    }
+    return out;
+  });
+  return fixed.join("");
+}
+
 function dmRoleplayMode(playerText) {
   return /\*[^*\n]{2,}\*/.test(String(playerText || ""));
 }
@@ -15929,6 +15961,7 @@ function sanitizePhoneDm(
 ) {
   if (options && options.roleplay) {
     let rpText = String(value || "").replace(/[ \t]+/g, " ").trim();
+    rpText = String(rpText).replace(/\*([^*]+)\*/g, (m, inner) => "*" + repairRoleplayNarrationPov(w, botId, inner) + "*");
     if (!rpText) return "";
     rpText = sanitizeSocialUiMetaText(rpText);
     if (!rpText) return "";
@@ -34460,8 +34493,8 @@ ROLEPLAY NATURALISM — HARD:
 - ${w.player.name} helyett SOHA ne beszélj, ne dönts és ne cselekedj. Ha az ő reakciója kellene a folytatáshoz, állj meg előtte.
 - Ha ${w.player.name} karakterhez beszélnek, E/2-ben, tegezve szóljanak hozzá; magukról E/1-ben beszéljenek.
 ${worldLanguage(w, w.meId) === "en"
-  ? "- Every user-visible turn, narration, memory, mood, reason and event summary in the JSON must be natural English. Narration and *actions* are written as literary prose — third person, past or present tense consistently, precise verbs, concrete sensory detail, body language and subtext; dialogue stays true to each character's voice. Always use each person's correct pronouns (see WHO IS WHO)."
-  : "- Minden felhasználónak látható turn, narráció, memória, mood, indok és event-összefoglaló természetes, hibátlan magyar legyen."}
+  ? "- Every user-visible turn, narration, memory, mood, reason and event summary in the JSON must be natural English. Narration and *actions* are written as literary prose — third person, past or present tense consistently, precise verbs, concrete sensory detail, body language and subtext; dialogue stays true to each character's voice. Always use each person's correct pronouns (see WHO IS WHO).\n- NARRATION POINT OF VIEW — HARD: every action/narration sentence is in THIRD PERSON with an explicit subject (\"" + String(w.player.name || "").split(/\s+/)[0] + "\" or he/she/the character's name) — never start with a bare verb like \"Steps back…\". Refer to " + w.player.name + " in narration ONLY by name or " + (identityPronouns(w.player) || "she/her") + " — NEVER as I, me, my or you. First person (I/me/my) exists only inside a character's own spoken words in quotation marks."
+  : "- Minden felhasználónak látható turn, narráció, memória, mood, indok és event-összefoglaló természetes, hibátlan magyar legyen.\n- NARRÁCIÓS NÉZŐPONT — KÖTELEZŐ: a cselekvés/narráció mindig E/3-ban szól, kitett alannyal (a karakter neve vagy ő). " + w.player.name + " a narrációban CSAK a nevén vagy E/3-ban szerepelhet — SOHA nem E/1-ben (én, engem, az én…) és nem E/2-ben. E/1 csak a karakter idézőjeles, kimondott mondataiban lehet."}
 
 Formátum:
 {"turns":[{"id":"a szereplő szögletes zárójelben megadott azonosítója szó szerint, vagy narrator","to":"annak a jelenlévő karakternek/játékosnak az id-ja, akinek a speech közvetlenül szól, vagy üres","kind":"speech vagy action","text":"..."}],
@@ -34535,7 +34568,7 @@ Formátum:
               !isNarr && allowedTo && resolvedId
                 ? sanitizeGeneratedDirectAddress(w, resolvedId, allowedTo, freshText)
                 : freshText;
-            const roleplayText = stripRoleplayEmoji(addressedText);
+            const roleplayText = stripRoleplayEmoji(isNarr ? addressedText : repairRoleplayNarrationPov(w, resolvedId, addressedText));
             const unsupportedPhysicalContinuation =
               !isNarr &&
               allowed &&
@@ -37107,6 +37140,7 @@ PRIVÁT CHAT SZABÁLYOK:
 ${dmRoleplayMode(t)
   ? `- SZEREPJÁTÉK-MÓD (a játékos legutóbbi üzenetében *csillagos* cselekvés van): ez most nem sima üzenetváltás, hanem személyes jelenet — ugyanott vagytok. Válaszolj ugyanígy: a saját cselekvésedet, mozdulatodat, testbeszédedet *csillagok közé* írd, mellette a karakter élőszavas mondata(i). Reagálj a játékos cselekvésére ÉS szavaira is, a helyszínhez és a hangulathoz igazodva.
 - 1-4 rövid mondat legyen; ne írj a játékos helyett, ne dönts helyette, a saját belső gondolataidat ne mondd ki.
+- A *csillagos* cselekvés E/3-ban szól, kitett alannyal (a neved vagy he/she), a játékosról pedig a nevén vagy E/3-ban (angolul she/her, he/him) — SOHA nem E/1-ben (I/me/my), mert nem ő a narrátor. E/1 csak a te kimondott mondataidban lehet.
 - Ha a játékos később csillag nélkül ír, térj vissza a normál DM-stílushoz.`
   : `- Ez social-media privát DM, nem roleplay-jelenet. A felületet vagy a „textinget” ne tedd a beszélgetés tárgyává önmagában.
 - A válasz lehet egyetlen szó, félmondat, rövid mondat vagy néhány rövid üzenetszerű mondat.
