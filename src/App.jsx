@@ -26883,6 +26883,8 @@ Formátum:
 async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments = 0, maxComments = 14) {
   const minWanted = Math.max(0, Math.round(Number(minComments) || 0));
   if (!minWanted || !w || !post) return baseOut;
+  /* R46: never for the player's own post (see the comments action) */
+  if (isHuman(w, post.authorId)) return baseOut;
 
   const beforeActors = topLevelAiCommenterIds(w, post);
   const probe = JSON.parse(JSON.stringify(w));
@@ -51174,7 +51176,10 @@ ${target.name} [${target.id}]
 
 ${post
   ? `A POSZT, AMI KÖRÜL A HULLÁM FUT:
-${target.name}: ${post.text || "[képes poszt]"}`
+${target.name}: ${post.text || "[képes poszt]"}` + (isHuman(w, post.authorId)
+      ? `
+EZ A JÁTÉKOS POSZTJA: minden komment ERRE a posztszövegre reagáljon, értelmesen e poszt alatt. Ne hozz be más eseményt (ki kit követett be/ki, régi dráma, más posztok), ha a poszt nem szól róla.`
+      : "")
   : "Nincs egyetlen konkrét poszt; a hullám a profil körül zajlik."}
 
 ${modeText}
@@ -51515,6 +51520,10 @@ function applySocialWave(
         if (!body) return;
         body = sanitizeGeneratedDirectAddress(n, who, post.authorId, body);
         if (!body) return;
+        /* R46: under the player's post, no comments about who followed whom unless the post is about that */
+        try {
+          if (isHuman(n, post.authorId) && playerPostCommentHasFollowLeak({ text: post.text || "", imageDescription: post.imageDescription || "", visibleTags: post.tags || [] }, body)) return;
+        } catch (error) { /* keep */ }
 
         const made = {
           id: uid(),
@@ -55732,10 +55741,15 @@ if (action.type === "roleplay-initiate") {
       return null;
     }
     const isGuaranteedCoverage = commentTrigger === "guaranteed-coverage";
+    /* CLAUDE FIX R46: the "fill up the missing comments" repair sees the whole
+       world (who followed whom, old drama) and wrote comments about THAT under
+       the player's post. The player's post only ever gets comments that react to
+       the post itself (the isolated pipeline). */
     const quotaEnforced =
+      !isHuman(view, post.authorId) && (
       commentTrigger === "fresh-post" ||
       commentTrigger === "player-post" ||
-      isGuaranteedCoverage; /* MÁSVILÁG COMMENT + REPLY RELIABILITY v1 */
+      isGuaranteedCoverage); /* MÁSVILÁG COMMENT + REPLY RELIABILITY v1 */
 
     /* Ordinary automatic waves are fresh-feed only. Hard coverage can rescue
        any still-visible older post too. */
@@ -62948,7 +62962,9 @@ function playerPostCommentRowsFromOutput(w, out, cards, postContext) {
 
       const postWords = new Set(String([postContext.text, postContext.imageDescription, ...(postContext.visibleTags || [])].filter(Boolean).join(" ")).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((x) => x.length >= 3));
       const groundingWords = String(reactsTo + " " + text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((x) => x.length >= 3);
-      const grounded = !postWords.size || groundingWords.some((x) => postWords.has(x)) || (postContext.isInvitation && /\b(?:yes|yeah|yep|sure|i'?m\s+in|count\s+me\s+in|coming|ott\s+leszek|megyek|benne\s+vagyok|persze|igen)\b/iu.test(text));
+      /* R46: a 1–3 word post ("oh fuck me", "ugh", "finally") shares no words with a
+         natural reaction ("what happened??") — judge those by reagal_erre only */
+      const grounded = !postWords.size || postWords.size <= 3 || groundingWords.some((x) => postWords.has(x)) || (postContext.isInvitation && /\b(?:yes|yeah|yep|sure|i'?m\s+in|count\s+me\s+in|coming|ott\s+leszek|megyek|benne\s+vagyok|persze|igen)\b/iu.test(text));
       if (!grounded) {
         console.warn("[player-post-comments] rejected=off-topic", "character=" + actorId, "reagal_erre=" + reactsTo.slice(0, 120));
         return;
@@ -63099,6 +63115,9 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
     en
       ? "HARD RULES FOR EVERY COMMENT: 3–25 words, complete sentences (never cut off). Each commenter speaks only as themself — never names themself in third person, never speaks for or about another commenter as if they were them. Do not invent past events, parties, accidents or shared memories that are not written in that commenter's card. Use only names and nicknames that appear in WHO IS WHO or the cards; never invent a nickname. A comment must make sense to a stranger reading the post."
       : "KEMÉNY SZABÁLYOK MINDEN KOMMENTRE: 3–25 szó, befejezett mondatok (soha nem félbevágva). Mindenki csak önmagaként szól — magáról nem beszél E/3-ban a saját nevével, és nem beszél más kommentelő helyett. Ne találj ki olyan múltbeli eseményt, bulit, balesetet vagy közös emléket, ami nincs a kommentelő kártyáján. Csak a KI KICSODA listában vagy a kártyákon szereplő neveket és beceneveket használd; ne találj ki becenevet. A kommentnek egy kívülálló számára is értelmesnek kell lennie.",
+    en
+      ? "SHORT OR VAGUE POSTS (an exclamation like \"oh fuck me\", \"ugh\", \"finally\"): react to the exclamation itself, as each commenter would — ask what happened, worry, tease, joke, mock — by their relationship. Do NOT explain it with something else from the world (who followed or unfollowed whom, old drama, other posts); nobody knows more than the post says."
+      : "RÖVID VAGY HOMÁLYOS POSZT (felkiáltás, pl. \"oh fuck me\", \"ugh\", \"végre\"): magára a felkiáltásra reagáljanak, ahogy az adott kommentelő tenné — mi történt?, aggódás, ugratás, poén, gúny — a kapcsolatuk szerint. NE magyarázd valami mással a világból (ki kit követett be vagy ki, régi dráma, más posztok); senki nem tud többet, mint amit a poszt mond.",
     en
       ? ("Write " + minComments + "-" + maxComments + " top-level comments by DIFFERENT listed commenters. Every comment must directly make sense as a reaction to this exact post.")
       : ("Írj " + minComments + "-" + maxComments + " TOP-LEVEL kommentet KÜLÖNBÖZŐ felsorolt kommentelőktől. Mindegyik komment közvetlenül ennek a konkrét posztnak a reakciójaként legyen értelmes."),
