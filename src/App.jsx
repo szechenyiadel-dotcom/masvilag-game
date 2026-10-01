@@ -33306,6 +33306,7 @@ function Bonds({ w, update, setErr }) {
   return (
     <>
       <div className="card">
+        <RelationshipReadingProgress w={w} />
         <label className="f" style={{ marginTop: 0 }}>{tt("Kinek a kapcsolatait nézzük?", "Whose bonds are we looking at?")}</label>
         <select className="i" value={focus} onChange={(e) => setFocus(e.target.value)}>
           {subjects.map((x) => (
@@ -63385,10 +63386,45 @@ function groundedDueFollowBackAction(w) {
    mapper stays only as a fallback. When a reading arrives, the live
    relationship is corrected but the points earned in play are kept.
    ===================================================================== */
-const RELATIONSHIP_READING_MIN_GAP_MS = 20 * 1000;
+const RELATIONSHIP_READING_MIN_GAP_MS = 6 * 1000;
 const RELATIONSHIP_READING_RETRY_MS = 10 * 60 * 1000;
-const RELATIONSHIP_READING_BATCH = 6;
+const RELATIONSHIP_READING_BATCH = 8;
 const RELATIONSHIP_READING_CHECKED = new Map();
+
+/* CLAUDE FIX R38: show that relationships are still being read from the sheets */
+let RELATIONSHIP_READING_PROGRESS_CACHE = { at: 0, key: "", value: null };
+function relationshipReadingProgress(w) {
+  if (!w) return null;
+  const key = String(w.syncRev || "") + ":" + Object.keys((w.sim && w.sim.relationshipReading) || {}).length;
+  if (RELATIONSHIP_READING_PROGRESS_CACHE.key === key && now() - RELATIONSHIP_READING_PROGRESS_CACHE.at < 20000) return RELATIONSHIP_READING_PROGRESS_CACHE.value;
+  let pending = 0, total = 0;
+  try {
+    allSubjects(w).filter((c) => c && c.id && !isMediaAccount(w, c.id)).forEach((actor) => {
+      const done = (w.sim && w.sim.relationshipReading && w.sim.relationshipReading[actor.id] && w.sim.relationshipReading[actor.id].targets) || {};
+      allSubjects(w).forEach((target) => {
+        if (!target || !target.id || target.id === actor.id || isMediaAccount(w, target.id)) return;
+        const snippet = relationshipReadingSnippet(w, actor, target);
+        if (!snippet) return;
+        total += 1;
+        if (!done[target.id] || done[target.id].hash !== relationshipReadingHash(snippet)) pending += 1;
+      });
+    });
+  } catch (error) { return null; }
+  const value = { pending, total };
+  RELATIONSHIP_READING_PROGRESS_CACHE = { at: now(), key, value };
+  return value;
+}
+
+function RelationshipReadingProgress({ w }) {
+  const { tt } = useLang();
+  const p = relationshipReadingProgress(w);
+  if (!p || !p.pending) return null;
+  return (
+    <p className="hint" style={{ marginTop: 0, marginBottom: 10, color: "var(--gold)" }}>
+      {tt("Kapcsolatok olvasása a karakterlapokból… még ", "Reading relationships from the character sheets… ")}{p.pending}{tt(" / " + p.total + " van hátra.", " of " + p.total + " left.")}
+    </p>
+  );
+}
 
 function relationshipReadingState(w) {
   const sim = ensureSimState(w);
@@ -63402,8 +63438,21 @@ function relationshipReadingState(w) {
    mentions the other person (backstory, secrets, goals, personality...) goes
    in, and so does what the OTHER person's sheet says about the actor (shared
    history, facts), so the AI sees the full story of the two of them. */
+const SHEET_PASSAGES_CACHE = new Map();
 function sheetPassagesAbout(person, other, maxChars = 2200) {
   if (!person || !other || person.id === other.id) return "";
+  /* R38: cached — the planner and the progress hint ask for every pair often */
+  const sig = [person.id, other.id, maxChars, other.name, other.nick, other.username, person.updatedAt || "",
+    ...["connections", "backstory", "secrets", "goals", "personality", "bio", "extra", "traits", "likes", "fears"].map((k) => String(person[k] || "").length),
+    Object.keys(person).length].join("|");
+  if (SHEET_PASSAGES_CACHE.has(sig)) return SHEET_PASSAGES_CACHE.get(sig);
+  const value = sheetPassagesAboutUncached(person, other, maxChars);
+  if (SHEET_PASSAGES_CACHE.size > 6000) SHEET_PASSAGES_CACHE.clear();
+  SHEET_PASSAGES_CACHE.set(sig, value);
+  return value;
+}
+
+function sheetPassagesAboutUncached(person, other, maxChars = 2200) {
   const skip = /^(?:id|aiContextSummary|aiVoiceStyleCard|avatar|avatarUrl|cover|coverUrl|image|imageId|images|album|albums|photos|media|posts|comments|msgs|messages|chats|scenes|memory|memories|followers|following|baseFollowers|followerDelta|username|name|nick|label|labelBasis)$/i;
   const names = [other.name, other.nick, other.nickname, other.username]
     .map((x) => String(x || "").trim()).filter((x) => x.length >= 3);
@@ -63439,7 +63488,7 @@ function relationshipReadingSnippet(w, actor, target) {
   if (!w || !actor || !target || actor.id === target.id || isMediaAccount(w, target.id)) return "";
   try {
     const conn = String(connectionCanonSnippetAbout(w, actor, target, 2500) || "");
-    const ownMore = sheetPassagesAbout(actor, target, 2000);
+    const ownMore = sheetPassagesAbout(actor, target, 2000).split(" | ").filter((x) => !conn || !x.startsWith("[connections]") || !conn.includes(x.replace(/^\[connections\]\s*/, "").slice(0, 60))).join(" | ");
     const theirs = sheetPassagesAbout(target, actor, 1400);
     if (!conn && !ownMore && !theirs) return "";
     return [
@@ -63474,16 +63523,38 @@ function relationshipReadingDueTargets(w, actor) {
   return allSubjects(w)
     .filter((target) => target && target.id && target.id !== actor.id)
     .map((target) => ({ target, snippet: relationshipReadingSnippet(w, actor, target) }))
-    .filter((row) => row.snippet && (!done[row.target.id] || done[row.target.id].hash !== relationshipReadingHash(row.snippet)));
+    .filter((row) => row.snippet && (!done[row.target.id] || done[row.target.id].hash !== relationshipReadingHash(row.snippet)))
+    /* R38: relationships with the player are read first */
+    .sort((x, y) => (isHuman(w, y.target.id) ? 1 : 0) - (isHuman(w, x.target.id) ? 1 : 0));
 }
 
-function relationshipReadingDueAction(w) {
+function relationshipReadingDueAction(w, options = {}) {
   if (!w || !w.meId) return null;
   const state = relationshipReadingState(w);
   if (!state) return null;
   const sim = ensureSimState(w);
-  if (now() - Number(sim.relationshipReadingLastAt || 0) < RELATIONSHIP_READING_MIN_GAP_MS) return null;
+  /* R38: relationships that involve the player are read first and faster */
+  const playerOnly = Boolean(options && options.playerOnly);
+  if (now() - Number(sim.relationshipReadingLastAt || 0) < (playerOnly ? 8 * 1000 : RELATIONSHIP_READING_MIN_GAP_MS)) return null;
+  if (playerOnly) {
+    const me = w.meId;
+    const people = allSubjects(w).filter((c) => c && c.id && !isMediaAccount(w, c.id));
+    for (const actor of [charById(w, me), ...people.filter((c) => c.id !== me)].filter(Boolean)) {
+      const meta = state[actor.id] || {};
+      if (meta.failedAt && now() - Number(meta.failedAt) < RELATIONSHIP_READING_RETRY_MS) continue;
+      const due = relationshipReadingDueTargets(w, actor).filter((row) => actor.id === me || row.target.id === me);
+      if (due.length) return mkAction("relationship-reading", "relationship-reading:" + actor.id + ":" + simsSocialStableHash(due.map((d) => d.target.id + d.snippet).join("|")), { actorId: actor.id, playerFirst: true }, "memory");
+    }
+    return null;
+  }
   const subjects = allSubjects(w).filter((c) => c && c.id && !isMediaAccount(w, c.id));
+  /* R38: actors with an unread relationship toward the player go first */
+  const playerFirst = (c) => {
+    if (isHuman(w, c.id)) return 2;
+    const st = state[c.id] && state[c.id].targets && w.meId ? state[c.id].targets[w.meId] : null;
+    return st ? 0 : 1;
+  };
+  subjects.sort((x, y) => playerFirst(y) - playerFirst(x));
   const roster = subjects.map((c) => c.id + ":" + String(c.name || "") + ":" + String(c.username || "")).join("|");
   const sheetsRev = subjects.map((c) => { try { return voiceStyleRawSheet(c).length; } catch (error) { return 0; } }).join(",");
   for (const actor of subjects) {
@@ -63577,7 +63648,13 @@ async function runRelationshipReadingAction(view, update, action) {
   const actor = charById(view, actorId);
   update((n) => { ensureSimState(n).relationshipReadingLastAt = now(); });
   if (!actor) return null;
-  const due = relationshipReadingDueTargets(view, actor).slice(0, RELATIONSHIP_READING_BATCH);
+  let due = relationshipReadingDueTargets(view, actor);
+  /* R38: the player's pairs first */
+  if (action.payload && action.payload.playerFirst) {
+    const me = view.meId;
+    due = due.filter((row) => actor.id === me || row.target.id === me).concat(due.filter((row) => !(actor.id === me || row.target.id === me)));
+  }
+  due = due.slice(0, RELATIONSHIP_READING_BATCH);
   if (!due.length) return "relationship-reading-nothing";
   let out = null;
   try {
@@ -64526,6 +64603,8 @@ async function runStructuralReadingAction(view, update, action) {
 function planAutoAction(view) {
   const followBack = groundedDueFollowBackAction(view);
   if (followBack) return followBack;
+  const playerReading = relationshipReadingDueAction(view, { playerOnly: true });
+  if (playerReading) return playerReading;
   const identity = identityCanonDueAction(view);
   if (identity) return identity;
   const reading = relationshipReadingDueAction(view);
