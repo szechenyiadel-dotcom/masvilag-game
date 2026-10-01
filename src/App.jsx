@@ -4370,6 +4370,12 @@ function setRel(w, a, b, patch) {
   const k = relKey(a, b);
   if (!w.rels) w.rels = {};
   w.rels[k] = { ...EMPTY_REL, ...(w.rels[k] || {}), ...patch, at: now() };
+  /* CLAUDE FIX R41: anything that moves a relationship in play ends its
+     "fresh from the sheet" state; only sheet readings set it back. */
+  if (patch && !Object.prototype.hasOwnProperty.call(patch, "freshFromSheet") &&
+      (patch.score !== undefined || patch.mood !== undefined || patch.bond !== undefined)) {
+    w.rels[k].freshFromSheet = false;
+  }
 
   // A kötelék a viszony ténybeli oldala: ha az egyik irányba beállítod, a
   // másik irány párja kitöltődik — de csak ha ott még nincs semmi.
@@ -4380,6 +4386,8 @@ function setRel(w, a, b, patch) {
       w.rels[relKey(b, a)] = {
         ...EMPTY_REL, ...(back || {}),
         bond: pair, fixed: !!patch.fixed || (back ? !!back.fixed : false), at: now(),
+        /* R41: a back-filled default is not something that happened in play */
+        freshFromSheet: back ? back.freshFromSheet : true,
       };
     }
   }
@@ -4883,8 +4891,11 @@ function restoreRelationshipBaselinesForFreshRun(w, at = now()) {
     }
 
     const baseline = store[key] || {};
+    /* R41: a "legacy" baseline was copied from an old run's live state — not from a sheet */
+    if (/^legacy$/i.test(String(baseline.source || ""))) return;
     next[key] = {
       ...EMPTY_REL,
+      freshFromSheet: !relationshipBaselineIsManual(baseline),
       score: clampRelationshipScore(baseline.score),
       hidden: String(baseline.hidden || "").slice(0, 500),
       type: "",
@@ -63628,6 +63639,22 @@ async function genRelationshipReading(w, actor, due) {
 function applyRelationshipReadingToLive(n, actorId, targetId, oldBase, newBase, options = {}) {
   const live = getRel(n, actorId, targetId) || EMPTY_REL;
   if (relationshipBaselineIsManual(oldBase)) return null;
+  /* CLAUDE FIX R41: a relationship that is still exactly the fresh-run start (or
+     empty) becomes EXACTLY what the sheets say — score, kind, feeling, secret,
+     role. Nothing from an earlier run or a stale default survives. */
+  const untouched = live.freshFromSheet === true ||
+    (live.freshFromSheet === undefined && !String(live.mood || "").trim() && !String(live.why || "").trim() && !String(live.hidden || "").trim());
+  if (untouched && !live.fixed) {
+    setRel(n, actorId, targetId, {
+      score: clampRelationshipScore(Number(newBase.score) || 0),
+      bond: String(newBase.bond || "").slice(0, 160),
+      mood: String(newBase.mood || "").slice(0, 160),
+      hidden: String(newBase.hidden || "").slice(0, 500),
+      role: String(newBase.role || "").slice(0, 60),
+      freshFromSheet: true,
+    });
+    return { before: live, after: getRel(n, actorId, targetId) };
+  }
   /* Structural readings (sheets that do not mention each other): whatever the
      pair built in play counts as earned from a neutral start. */
   const liveBond = String(live.bond || live.type || "");
@@ -63708,6 +63735,7 @@ function applyRelationshipReadingRows(n, actorId, due, rows) {
    exact sheet passages. A new world with the same sheets, or a restart, gets
    every unchanged relationship back instantly; only changed ones are read. */
 const READING_CACHE_CHECKED = new Set();
+const READING_CACHE_HITS = new Map();
 
 function relationshipReadingCacheKey(actor, target, snippet) {
   return "rr5:" + simsSocialStableHash(String(actor && actor.name || "") + "|" + String(target && target.name || "") + "|" + relationshipReadingHash(snippet));
@@ -63748,7 +63776,11 @@ async function runRelationshipReadingCacheAction(view, update) {
   } catch (error) {
     found = {};
   }
-  jobs.forEach((j) => READING_CACHE_CHECKED.add(j.key));
+  jobs.forEach((j) => {
+    const hits = (READING_CACHE_HITS.get(j.key) || 0) + (found[j.key] ? 1 : 0);
+    READING_CACHE_HITS.set(j.key, hits);
+    if (!found[j.key] || hits >= 3) READING_CACHE_CHECKED.add(j.key);
+  });
   const byActor = new Map();
   jobs.forEach((j) => {
     const data = found[j.key];
