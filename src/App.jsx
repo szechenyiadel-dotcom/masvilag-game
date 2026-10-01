@@ -34878,7 +34878,18 @@ Formátum:
               !isNarr && allowedTo && resolvedId
                 ? sanitizeGeneratedDirectAddress(w, resolvedId, allowedTo, freshText)
                 : freshText;
-            const roleplayText = stripRoleplayEmoji(isNarr ? addressedText : repairRoleplayNarrationPov(w, resolvedId, addressedText));
+            /* CLAUDE FIX R29: the point-of-view repair is for NARRATION only. Spoken
+               lines keep their I/me/my ("You're on my bed") — repairing them turned
+               the speaker's own "my bed" into a random "her bed". In a speech turn
+               only *starred* action segments are repaired. */
+            const turnIsAction = Boolean(t && t.kind === "action");
+            const roleplayText = stripRoleplayEmoji(
+              isNarr
+                ? addressedText
+                : turnIsAction
+                  ? repairRoleplayNarrationPov(w, resolvedId, addressedText)
+                  : String(addressedText || "").replace(/\*([^*]+)\*/g, (m, inner) => "*" + repairRoleplayNarrationPov(w, resolvedId, inner) + "*")
+            );
             const unsupportedPhysicalContinuation =
               !isNarr &&
               allowed &&
