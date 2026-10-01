@@ -36143,7 +36143,7 @@ A válaszok első pillantásra úgy hassanak, mint egy valódi group chat követ
 Formátum:
 {"replies":[{"id":"tag azonosítója","to":"annak az id-ja, akinek közvetlenül szól, vagy üres","text":"természetes rövid group chat üzenet"}],
 "changes":[{"a":"aki érez","b":"aki iránt","delta":12,"mood":"mit érez most iránta","why":"egy rövid mondat","oneSided":false}],
-"memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${TAIL}`,
+"memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${groupChatSocialTail(w, groupAiIds)}${TAIL}`,
       { maxTokens: 700, maxTries: 1, timeoutMs: 32000 }
       );
     } catch (primaryGroupErr) {
@@ -53403,7 +53403,7 @@ Ha van természetes folytatás:
 "relationshipUpdates":[
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ],
-"event":"csak akkor egy rövid mondat, ha a beszélgetésben tényleg történt valami emlékezetes, különben üres"}${TAIL}`,
+"event":"csak akkor egy rövid mondat, ha a beszélgetésben tényleg történt valami emlékezetes, különben üres"}${groupChatSocialTail(w, memberIds)}${TAIL}`,
     { maxTokens: 900, priority: 18 }
   );
 }
@@ -62786,6 +62786,36 @@ function worldGroupGlossaryCard(w) {
     (en
       ? "\nRULES: each of these is its own thing and behaves only like its kind (a gang does gang things, a university house does campus life, a death game is a deadly game, not a sport). Never put different groups into one contest, league or scoreboard, never invent scores or rankings between them, and never move one group's events into another's setting unless the story explicitly connects them."
       : "\nSZABÁLYOK: mindegyik önálló dolog, és csak a saját fajtája szerint működik (a banda bandaként, az egyetemi ház campus-életként, a halálos játék halálos játékként, nem sportként). Különböző csoportokat soha ne tegyél egy versenybe, ligába vagy pontversenybe, ne találj ki köztük pontszámot vagy rangsort, és egyik csoport eseményeit se helyezd át a másik közegébe, hacsak a történet kifejezetten össze nem köti őket.");
+}
+
+/* CLAUDE FIX R16: group chats get exact identities and the members' real
+   relationships to each other in a protected tail, so nobody mistakes the
+   player for someone from a backstory and strangers do not "bro" each other. */
+function groupChatSocialTail(w, aiIds) {
+  if (!w) return "";
+  const en = worldLanguage(w, w.meId) === "en";
+  const ids = [...new Set((aiIds || []).filter(Boolean).map(String))].filter((id) => charById(w, id) && !isHuman(w, id)).slice(0, 7);
+  const player = w.player || charById(w, w.meId) || {};
+  const playerCall = String(player.nick || "").trim() || String(player.name || "").split(/\s+/)[0];
+  const relLine = (a, b) => {
+    const r = getRel(w, a, b) || EMPTY_REL;
+    const bond = r.bond || r.type ? localizedBond(r.bond || r.type, en ? "en" : "hu") : (en ? "no special bond" : "nincs külön kötelék");
+    return "- " + nameOfIn(w, a) + " → " + nameOfIn(w, b) + ": " + bond + " (" + (Number(r.score) || 0) + ")" + (r.mood ? " · " + String(r.mood).slice(0, 60) : "");
+  };
+  const lines = [];
+  ids.forEach((a) => ids.forEach((b) => { if (a !== b && lines.length < 30) lines.push(relLine(a, b)); }));
+  ids.forEach((a) => { if (w.meId && lines.length < 40) lines.push(relLine(a, w.meId)); });
+  let members = "";
+  try { members = whoIsWhoCard(w, ids); } catch (error) { members = ""; }
+  return "\n\n" + PROTECTED_TAIL_MARKER + "\n" + (en
+    ? "GROUP CHAT — EXACT IDENTITIES:\n- The player is " + player.name + " [" + w.meId + "], call her/him \"" + playerCall + "\". Every message from [" + w.meId + "] is " + player.name + " — never anyone else (not a friend, rival or name from somebody's backstory).\n"
+    : "GROUP CHAT — PONTOS SZEMÉLYAZONOSSÁGOK:\n- A játékos " + player.name + " [" + w.meId + "], szólítsák így: \"" + playerCall + "\". Minden [" + w.meId + "] üzenet " + player.name + " — soha nem valaki más (nem egy barát, rivális vagy név valakinek a hátteréből).\n") +
+    (members ? members + "\n" : "") +
+    (en ? "RELATIONSHIPS BETWEEN THE MEMBERS (each from their own side — these decide the tone):\n" : "KAPCSOLATOK A TAGOK KÖZÖTT (mindenki a saját oldaláról — ezek határozzák meg a hangot):\n") +
+    lines.join("\n") + "\n" +
+    (en
+      ? "RULES: talk to each other exactly as these relationships say — strangers and acquaintances do not call each other bro or banter like old friends; rivals snipe; enemies are hostile; only real friends joke around like friends. Play every character 1:1 from their own sheet — personality, speech style, history — never one generic voice."
+      : "SZABÁLYOK: pontosan úgy beszéljenek egymással, ahogy ezek a kapcsolatok mondják — idegenek és ismerősök nem „bro”-znak és nem haverkodnak; riválisok szurkálódnak; ellenségek ellenségesek; csak valódi barátok poénkodnak barátként. Minden karaktert 1:1 a saját lapja szerint játssz — személyiség, beszédstílus, történet —, soha ne egy általános hangon.");
 }
 
 function whoIsWhoCard(w, ids) {
