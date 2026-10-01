@@ -57943,9 +57943,26 @@ const signOut = useCallback(async () => {
       event.postId &&
       event.commentId
     ) {
-      const live = viewRef.current;
-      const livePost = live && (live.posts || []).find((p) => p && p.id === event.postId);
-      const liveComment = livePost && safePostComments(livePost).find((c) => c && c.id === event.commentId);
+      /* CLAUDE FIX R13: the fresh comment may not be in the rendered view yet —
+         read the authoritative store, and if it is still missing, try again shortly. */
+      const findIn = (src) => {
+        const post = src && (src.posts || []).find((p) => p && p.id === event.postId);
+        const comment = post && safePostComments(post).find((c) => c && c.id === event.commentId);
+        return post && comment ? { post, comment } : null;
+      };
+      let live = viewRef.current;
+      let found = findIn(live);
+      if (!found && wRef.current) {
+        const store = { ...wRef.current, meId: (viewRef.current && viewRef.current.meId) || wRef.current.meId };
+        const inStore = findIn(store);
+        if (inStore) { live = store; found = inStore; }
+      }
+      if (!found) {
+        if (!event.__retried) setTimeout(() => signalSimulation({ ...event, __retried: true }), 1500);
+        return false;
+      }
+      const livePost = found.post;
+      const liveComment = found.comment;
       const replyTargets = livePost && liveComment
         ? naturalCommentReplyTargets(live, livePost, liveComment)
         : [];
@@ -61659,6 +61676,7 @@ function playerPostCommentPrivateSystem(w, post) {
         "The CHARACTER CONTENT block in the user message is the entire visible subject of the comments.",
         "Do not use recent follows, unfollows, queues, backlogs, unrelated timeline events, or any fact not present in that block.",
         "COMMENTER CARDS are private behavioral instructions only. Never quote, expose, explain, or mention their fields.",
+        "WHO IS WHO and WORLD GROUPS are background knowledge for understanding the post's references and hints (who is a sensei, who belongs where); they are not topics to comment about on their own.",
         "Each commenter must react to the actual post text/image/mood/tagged people and must sound like their own voice card and relationship to the post author.",
         "Positive/friendly relationships should read warm, supportive, playful or naturally flirty when appropriate; hostile relationships may be sharp; jealous relationships may be pointed; neutral relationships may be brief and neutral.",
         "Do not make all commenters share one attitude. Do not copy a theme from one commenter into all the others.",
@@ -61670,6 +61688,7 @@ function playerPostCommentPrivateSystem(w, post) {
         "A felhasználói üzenet CHARACTER CONTENT blokkja a kommentek TELJES látható témája.",
         "Ne használj korábbi follow/unfollow eseményt, queue/backlog tartalmat, más timeline-eseményt vagy bármi olyat, ami nincs ebben a blokkban.",
         "A COMMENTER CARDS privát viselkedési utasítás. A mezőit soha ne idézd, magyarázd vagy szivárogtasd ki.",
+        "A KI KICSODA és a VILÁG CSOPORTJAI háttértudás a poszt utalásainak megértéséhez (ki sensei, ki hová tartozik); önmagukban nem kommenttémák.",
         "Minden kommentelő a konkrét poszt szövegére/képére/hangulatára/tagelt személyeire reagáljon, a saját voice cardja és a poszt szerzőjéhez fűződő kapcsolata szerint.",
         "Pozitív/baráti kapcsolatnál legyen meleg, támogató, játékos vagy indokoltan flörtös; ellenségesnél lehet éles; féltékenynél célzós; semlegesnél rövid és semleges.",
         "Ne legyen minden kommentelő ugyanolyan hangulatú. Egy komment témáját ne másold rá az összes többire.",
@@ -61690,7 +61709,14 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
       ].join("\n")
     : "";
 
+  /* CLAUDE FIX R13: who is who + world groups, so jokes about "a sensei" or a
+     group land on the right people. */
+  let canonCard = "";
+  try {
+    canonCard = [worldGroupGlossaryCard(w), whoIsWhoCard(w, (cards || []).map((card) => card && card.id).filter(Boolean))].filter(Boolean).join("\n\n");
+  } catch (error) { canonCard = ""; }
   return [
+    canonCard,
     en ? "[CHARACTER CONTENT — VISIBLE POST ONLY]" : "[CHARACTER CONTENT — CSAK A LÁTHATÓ POSZT]",
     JSON.stringify(postContext),
     "",
@@ -61699,14 +61725,20 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
     "",
     en ? "[TASK]" : "[FELADAT]",
     en
+      ? "STEP 1 — UNDERSTAND THE POST FIRST: work out what it really means — jokes, wordplay, innuendo, memes, twisted famous phrases or song lines (e.g. \"save a horse, ride a cowboy\" turned into something else), winks like ;) — and who or what it hints at (use WHO IS WHO: who is a sensei, who belongs to which group). Write that in \"postMeaning\" (one sentence)."
+      : "1. LÉPÉS — ELŐSZÖR ÉRTSD MEG A POSZTOT: mit jelent valójában — poén, szójáték, kétértelműség, mém, kifordított híres mondat vagy dalszöveg, kacsintás ;) — és kire/mire céloz (használd a KI KICSODA listát: ki sensei, ki melyik csoport tagja). Ezt írd a \"postMeaning\" mezőbe (egy mondat).",
+    en
+      ? "STEP 2 — every comment reacts to THAT meaning, the way this commenter would: the people it hints at react as the target (flattered, smug, awkward, deflecting, amused); people with a crush or obsession on the author get visibly jealous or possessive if the post flirts with someone else; friends play along or tease; rivals mock. Nobody acts as if they did not get an obvious joke unless that is truly their character."
+      : "2. LÉPÉS — minden komment ERRE a jelentésre reagál, ahogy az adott kommentelő tenné: akire céloz, célpontként reagál (hízelgő, önelégült, zavart, hárító, szórakozott); akinek crushja vagy megszállottsága van a szerzőre, láthatóan féltékeny vagy birtokló, ha a poszt mással flörtöl; a barátok beszállnak vagy ugratják; a riválisok gúnyolódnak. Senki ne tegyen úgy, mintha nem értené a nyilvánvaló poént, hacsak tényleg nem ilyen a karaktere.",
+    en
       ? ("Write " + minComments + "-" + maxComments + " top-level comments by DIFFERENT listed commenters. Every comment must directly make sense as a reaction to this exact post.")
       : ("Írj " + minComments + "-" + maxComments + " TOP-LEVEL kommentet KÜLÖNBÖZŐ felsorolt kommentelőktől. Mindegyik komment közvetlenül ennek a konkrét posztnak a reakciójaként legyen értelmes."),
     en
       ? "Use the relationship/voice differences; do not force everyone into the same negative, positive or sarcastic attitude."
       : "Használd a kapcsolat- és voice-különbségeket; ne kényszeríts mindenkit ugyanabba a negatív, pozitív vagy szarkasztikus hangnembe.",
     en
-      ? '{"comments":[{"id":"EXACT_CHARACTER_ID","text":"natural comment","reagal_erre":"short exact post detail this comment responds to","hangnem":"one of: flirty | supportive | teasing | neutral | jealous | dismissive | hostile"}],"changes":[]}'
-      : '{"comments":[{"id":"PONTOS_KARAKTER_ID","text":"természetes komment","reagal_erre":"rövid konkrét posztrészlet, amire ez a komment reagál","hangnem":"egy ezek közül: flörtölős | támogató | ugrató | semleges | féltékeny | lekezelő | ellenséges"}],"changes":[]}',
+      ? '{"postMeaning":"what the post really means and whom it hints at","comments":[{"id":"EXACT_CHARACTER_ID","text":"natural comment","reagal_erre":"short exact post detail this comment responds to","hangnem":"one of: flirty | supportive | teasing | neutral | jealous | dismissive | hostile"}],"changes":[]}'
+      : '{"postMeaning":"mit jelent valójában a poszt és kire céloz","comments":[{"id":"PONTOS_KARAKTER_ID","text":"természetes komment","reagal_erre":"rövid konkrét posztrészlet, amire ez a komment reagál","hangnem":"egy ezek közül: flörtölős | támogató | ugrató | semleges | féltékeny | lekezelő | ellenséges"}],"changes":[]}',
     en
       ? 'If the post is a question or an invitation, answer it (yes / no / where? / who else?). "hangnem" = the real tone of that comment toward the post author.'
       : 'Ha a poszt kérdés vagy meghívás, arra válaszoljanak (jövök / nem jövök / hol lesz? / kivel?). A "hangnem" a komment valódi hangneme a poszt szerzője felé.',
@@ -61784,6 +61816,7 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
       throw error;
     }
 
+    if (out && out.postMeaning) console.info("[player-post-comments] meaning=" + String(out.postMeaning).slice(0, 240));
     const rows = playerPostCommentRowsFromOutput(w, out, cards, postContext).slice(0, maxComments);
     const problems = playerPostCommentBatchProblems(w, rows, cards, postContext, minComments);
 
@@ -62863,6 +62896,17 @@ async function runSimulationAction(view, update, action, addImage) {
   } catch (error) {
     if (action && action.type === "world-full" && String(action.payload && action.payload.trigger || "") === "player-post") {
       update((n) => groundedEventLog(n, "player-post-world", "failed", "Feed refresh after your post failed: " + String(error && error.message || error || "Unknown failure"), "post:" + String(action.payload.postId || "")));
+    }
+    /* CLAUDE FIX R13: an event-driven feed refresh (post / scene / popup) that failed
+       — server restart, timeout, busy provider — is retried once 30 s later. */
+    const refreshTrigger = String(action && action.payload && action.payload.trigger || "");
+    if (action && action.type === "world-full" && ["player-post", "roleplay-ended", "popup-choice"].includes(refreshTrigger) && !(action.payload && action.payload.retry)) {
+      setTimeout(() => {
+        update((n) => {
+          simEnqueue(n, mkAction("world-full", String(action.key || "event-world") + ":retry", { ...(action.payload || {}), retry: 1 }, "player-event"));
+          groundedEventLog(n, "feed-refresh", "retry", "Feed refresh (" + refreshTrigger + ") queued again after a failure.", "retry:" + String(action.key || ""));
+        });
+      }, 30000);
     }
     if (isPopup || isFollowBack) update((n) => groundedEventLog(n, isPopup ? "popup-choice-followup" : "follow-not-returned", "failed", String(error && error.message || error || "Unknown failure"), isPopup ? "popup:" + String(action.payload.popupEventId || "") : "follow:" + String(action.payload.groundedFollowBackBotId || "")));
     if (isFollowBack) update((n) => groundedFollowBackAttemptFailed(n, String(action.payload.groundedFollowBackBotId || ""), String(error && error.message || error || "error")));
