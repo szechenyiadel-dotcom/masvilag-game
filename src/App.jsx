@@ -8631,7 +8631,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
     AI_MAX_PROMPT_CHARS,
     Math.max(18000, Number(import.meta.env.VITE_AI_BACKGROUND_MAX_PROMPT_CHARS) || 28000)
   );
-  if (!requestMeta.interactive && prompt.length > backgroundPromptCap) {
+  if (!requestMeta.interactive && requestMeta.quality !== "deep" && prompt.length > backgroundPromptCap) {
     prompt = preserveEdges(prompt, backgroundPromptCap, "background prompt");
   }
   if (budgeted.wasCompacted) {
@@ -8654,7 +8654,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   );
 
   const ctrl = new AbortController();
-  const timeoutMs = Math.max(7000, Number(requestMeta.timeoutMs) || (requestMeta.interactive ? 18000 : 32000));
+  const timeoutMs = Math.max(7000, Number(requestMeta.timeoutMs) || (requestMeta.quality === "deep" ? 90000 : (requestMeta.interactive ? 18000 : 32000)));
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
   try {
@@ -8666,7 +8666,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   provider: DEFAULT_AI_PROVIDER,
   model: DEFAULT_AI_MODEL,
   max_tokens: maxTokens,
-  temperature: 0.9,
+  temperature: requestMeta && requestMeta.quality === "deep" ? 0.3 : 0.9,
+  quality: requestMeta && requestMeta.quality === "deep" ? "deep" : undefined,
   source: String(requestMeta && requestMeta.source || "client-ai"),
   priority: Number(requestMeta && requestMeta.priority) || (requestMeta && requestMeta.interactive ? 100 : 0),
   system,
@@ -8947,7 +8948,10 @@ async function askJSON(system, prompt, options = {}) {
           const jsonRule = lang === "en"
             ? "Return valid JSON only. Add a top-level \"language\" field with value \"en\"."
             : "KIZÁRÓLAG érvényes JSON-t adj vissza. Adj meg egy legfelső \"language\" mezőt \"hu\" értékkel.";
-          const sys = `${langRule}\n\n${jsonRule}\nNo markdown fences.\n\nPERFORMANCE: Be concise. Do not add explanations outside the requested JSON. Return the smallest complete valid JSON that satisfies the schema.\n\n${system}`;
+          const perfRule = options && options.quality === "deep"
+            ? "THOROUGHNESS: completeness and accuracy matter more than brevity. Use the full length the schema allows. No text outside the JSON."
+            : "PERFORMANCE: Be concise. Do not add explanations outside the requested JSON. Return the smallest complete valid JSON that satisfies the schema.";
+          const sys = `${langRule}\n\n${jsonRule}\nNo markdown fences.\n\n${perfRule}\n\n${system}`;
           const hint = tries === 0
             ? ""
             : (lang === "en"
@@ -8962,6 +8966,7 @@ async function askJSON(system, prompt, options = {}) {
               priority,
               timeoutMs: Number(options.timeoutMs) || undefined,
               source: String(options && options.source || "askWorldJSON"),
+              quality: options && options.quality === "deep" ? "deep" : undefined,
             }
           );
           const parsed = parseAiJsonResponse(raw);
@@ -53854,9 +53859,9 @@ async function legacyPlayerPostRunSimulationAction(view, update, action, addImag
       if (expectedHash && current.sourceHash !== expectedHash) return;
 
       const publicSummary = String(out.publicSummary || "").trim().slice(0, 5000);
-      const privateSummary = String(out.privateSummary || "").trim().slice(0, 7000);
+      const privateSummary = String(out.privateSummary || "").trim().slice(0, 7500);
       live.aiContextSummary = {
-        version: 1,
+        version: 2,
         sourceHash: current.sourceHash,
         public: publicSummary || current.public,
         private: privateSummary || current.private,
@@ -60009,12 +60014,12 @@ function ensureCharacterContextSummary(c) {
   const sourceHash = simsSocialStableHash(parts.publicText + "\n---PRIVATE---\n" + parts.privateText);
   const current = c && c.aiContextSummary && typeof c.aiContextSummary === "object" ? c.aiContextSummary : null;
 
-  if (current && current.version === 1 && current.sourceHash === sourceHash && current.public && current.private) {
+  if (current && current.version === 2 && current.sourceHash === sourceHash && current.public && current.private) {
     return current;
   }
 
   const fallback = {
-    version: 1,
+    version: 2,
     sourceHash,
     public: publicDigest,
     private: [publicDigest, privateDigest].filter(Boolean).join("\n\n").slice(0, SIMS_SOCIAL_SUMMARY_PRIVATE_CAP),
@@ -60053,25 +60058,31 @@ function maybeQueueCharacterSummary(w, c) {
 
 async function genCharacterSheetSummary(w, c) {
   const parts = characterSheetSourceParts(c);
-  const publicInput = simsSocialSectionDigest(stripTechnicalSheetRows(parts.publicText), 8000);
-  const privateInput = simsSocialSectionDigest(stripTechnicalSheetRows(parts.privateText), 16000);
+  const fullPublic = stripTechnicalSheetRows(parts.publicText);
+  const fullPrivate = stripTechnicalSheetRows(parts.privateText);
+  /* R17: the WHOLE sheet is read (only truly huge sheets are trimmed in the middle) */
+  const publicInput = fullPublic.length <= 12000 ? fullPublic : simsSocialSectionDigest(fullPublic, 12000);
+  const privateInput = fullPrivate.length <= 40000 ? fullPrivate : simsSocialSectionDigest(fullPrivate, 40000);
   const prompt = [
-    "CHARACTER SHEET ONE-TIME SUMMARY REFRESH.",
-    "Summarize only supplied facts. Never invent. Preserve contradictions, relationship nuance, family, goals, fears, values, speech style, habits, hobbies, preferences, secrets and important history when present.",
-    "PUBLIC SUMMARY contains only facts safe as public/profile/background-visible information.",
-    "PRIVATE SUMMARY is for portraying THIS CHARACTER and may include their private/hidden author-level facts. Do not turn another person's secrets into this character's knowledge.",
-    "Write compact Hungarian if the source is mainly Hungarian; otherwise keep the source language naturally.",
-    "PUBLIC SOURCE DIGEST:\n" + (publicInput || "(none)"),
-    "PRIVATE SOURCE DIGEST:\n" + (privateInput || "(none)"),
+    "CHARACTER SHEET — THOROUGH ONE-TIME READING.",
+    "Read the entire sheet below, every section. Then write two summaries that let a writer play this person 1:1 without ever seeing the sheet again.",
+    "PRIVATE SUMMARY (for portraying THIS character) must cover, as compact labelled sections, everything the sheet gives: 1) who they are now (age, job/school, groups and role in them); 2) personality — core traits, contradictions, how they act in public vs in private, temper, humour, flaws; 3) how they talk and write — tone, slang, swearing, casing, emoji, typical phrasing, what they would never say; 4) values, goals, fears, wants; 5) history — the key events of their backstory in order and how those events shaped them; 6) every important person — name, what they are to them, how they feel and behave toward them, shared history; 7) habits, hobbies, likes/dislikes; 8) secrets and hidden feelings; 9) HOW TO PLAY THEM — 5–8 concrete do/don't rules drawn from the sheet.",
+    "PUBLIC SUMMARY: only what others could know — public identity, reputation, visible personality, groups, visible relationships.",
+    "Never invent. Do not flatten them into a generic type. Do not turn another person's secrets into this character's knowledge.",
+    "Write the summaries in " + (worldLanguage(w, w && w.meId) === "en" ? "English" : "Hungarian") + " (quote the character's own typical phrases in their original language).",
+    "PUBLIC SOURCE:\n" + (publicInput || "(none)"),
+    "PRIVATE SOURCE (full sheet):\n" + (privateInput || "(none)"),
     "JSON ONLY:",
-    '{"publicSummary":"max ~3500 chars","privateSummary":"max ~5500 chars"}'
+    '{"publicSummary":"max ~3500 chars","privateSummary":"max ~6500 chars, labelled sections 1-9"}'
   ].join("\n\n");
 
   try {
-    return await askWorldJSON(w, engineFor(w), prompt, {
-      maxTokens: 1500,
+    return await askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, {
+      maxTokens: 3600,
       priority: -15,
       source: "sheet-summary",
+      quality: "deep",
+      timeoutMs: 120000,
     });
   } catch (err) {
     return null;
@@ -60166,7 +60177,7 @@ function legacyVoiceStyleVoiceCard(...args) {
   const c = args[0];
   if (!c || typeof c !== "object") return base;
   const summary = ensureCharacterContextSummary(c);
-  const privateSummary = String(summary.private || "").slice(0, 5200);
+  const privateSummary = String(summary.private || "").slice(0, 6500);
   if (!privateSummary) return base;
   return [
     base,
@@ -62446,7 +62457,7 @@ function relationshipReadingSnippet(w, actor, target) {
 
 /* versioned so a reading-rule change (R15: fake dating) re-reads every sheet once */
 function relationshipReadingHash(snippet) {
-  return simsSocialStableHash("v2|" + String(snippet || ""));
+  return simsSocialStableHash("v3|" + String(snippet || ""));
 }
 
 function relationshipReadingResult(w, actor, target) {
@@ -62510,12 +62521,12 @@ async function genRelationshipReading(w, actor, due) {
     "Stay conservative when the entry is ambiguous. Never invent history. Use a family label ONLY for the actor's own relative (not for \"her brother's friend\"); for a relative, describe the feeling in mood/score.",
     "",
     "TARGETS:",
-    ...targets.map((row) => "- id=\"" + row.target.id + "\" " + row.target.name + ": " + cut(row.snippet, 1500)),
+    ...targets.map((row) => "- id=\"" + row.target.id + "\" " + row.target.name + ": " + cut(row.snippet, 3500)),
     "",
     "JSON ONLY:",
     '{"targets":[{"id":"TARGET_ID","score":0,"bond":"","mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"why":""}]}',
   ].join("\n");
-  return askWorldJSON(w, engineFor(w), prompt, { maxTokens: 1600, priority: 5, source: "relationship-reading" });
+  return askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 2200, priority: 5, source: "relationship-reading", quality: "deep", timeoutMs: 90000 });
 }
 
 function applyRelationshipReadingToLive(n, actorId, targetId, oldBase, newBase, options = {}) {
@@ -62620,7 +62631,16 @@ async function runRelationshipReadingAction(view, update, action) {
    flirting (a married character does not return advances), and they seed a
    default attitude for pairs whose sheets do not mention each other.
    ===================================================================== */
-const IDENTITY_CANON_VERSION = "3";
+const IDENTITY_CANON_VERSION = "4";
+/* CLAUDE FIX R17: one-time sheet reading is done carefully, with a stronger
+   model (server: quality "deep"), the whole sheet and a focused instruction. */
+const SHEET_ANALYST_SYSTEM = [
+  "You are a meticulous reader of role-play character sheets for a living social-media story world.",
+  "Read EVERY line of the material before answering — every section, every relationship entry, every detail of history, personality and speech.",
+  "Extract what the sheet states and carefully infer what it clearly implies (relationships, loyalties, history, personality, how the person talks). Base every conclusion on the text; never invent and never fall back on generic stereotypes or the original fandom's canon when the sheet says otherwise.",
+  "Keep nuance and contradictions: a person can be cold in public and soft in private, loyal and jealous at once.",
+  "Return JSON only.",
+].join("\n");
 const IDENTITY_CANON_MIN_GAP_MS = 12 * 1000;
 const IDENTITY_CANON_RETRY_MS = 10 * 60 * 1000;
 const STRUCTURAL_READING_BATCH = 12;
@@ -62663,8 +62683,8 @@ function identityCanonSource(c) {
   ].filter(([, v]) => v !== undefined && v !== null && String(v).trim())
     .map(([label, v]) => label + ": " + String(v).trim());
   const text = rows.join("\n");
-  if (text.length <= 14000) return text;
-  return text.slice(0, 10000) + "\n...\n" + text.slice(-4000);
+  if (text.length <= 40000) return text;
+  return text.slice(0, 30000) + "\n...\n" + text.slice(-10000);
 }
 
 function identityCanonFor(w, id) {
@@ -62895,7 +62915,7 @@ async function runIdentityCanonAction(view, update, action) {
   ].join("\n");
   let out = null;
   try {
-    out = await askWorldJSON(view, engineFor(view), prompt, { maxTokens: 700, priority: 6, source: "identity-canon" });
+    out = await askWorldJSON(view, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 900, priority: 6, source: "identity-canon", quality: "deep", timeoutMs: 90000 });
   } catch (error) {
     update((n) => {
       const state = identityCanonState(n);
@@ -63011,7 +63031,7 @@ async function runStructuralReadingAction(view, update, action) {
   ].join("\n");
   let out = null;
   try {
-    out = await askWorldJSON(view, engineFor(view), prompt, { maxTokens: 1800, priority: 5, source: "relationship-structural" });
+    out = await askWorldJSON(view, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 1800, priority: 5, source: "relationship-structural", quality: "deep", timeoutMs: 90000 });
   } catch (error) {
     update((n) => {
       const state = relationshipReadingState(n);

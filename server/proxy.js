@@ -4689,7 +4689,7 @@ async function proxyAnthropicMessage(body) {
     ? requested
     : String(process.env.ANTHROPIC_MODEL || process.env.ANTHROPIC_FALLBACK_MODEL || "claude-sonnet-4-6").trim();
 
-  const { provider, source, priority, client_instance_id, __worldKey, ...rest } = body || {};
+  const { provider, source, priority, client_instance_id, __worldKey, quality, ...rest } = body || {};
   const outboundBody = { ...rest, model, max_tokens: body?.max_tokens ?? 1024 };
   const r = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -4758,7 +4758,11 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
 
 function providerModel(provider, body = {}) {
   const requested = String(body?.model || "").trim();
-  if (provider === "mistral") return MISTRAL_MODEL || "";
+  if (provider === "mistral") {
+    /* R17: careful one-time sheet reading may use a stronger model */
+    if (String(body?.quality || "") === "deep") return String(process.env.MISTRAL_DEEP_MODEL || "mistral-medium-latest").trim();
+    return MISTRAL_MODEL || "";
+  }
   if (provider === "groq") return GROQ_MODEL || "";
   if (provider === "gemini") return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
   if (provider === "anthropic") {
@@ -4771,7 +4775,7 @@ function providerModel(provider, body = {}) {
 }
 
 async function callMessageProvider(provider, body) {
-  if (provider === "mistral") return proxyCompatibleMessage("mistral", MISTRAL_API_KEY, MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
+  if (provider === "mistral") return proxyCompatibleMessage("mistral", MISTRAL_API_KEY, providerModel("mistral", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
   if (provider === "groq") return proxyCompatibleMessage("groq", GROQ_API_KEY, GROQ_MODEL, "https://api.groq.com/openai/v1/chat/completions", body);
   if (provider === "openai") {
     const result = await proxyOpenAIMessage(body);
@@ -4901,8 +4905,10 @@ function prepareAIRequestBody(body, priority, source) {
   /* CLAUDE FIX R2: player-facing work (scene, DM reply, reactions to the player's post) gets room. */
   /* R4: the protected tail keeps what matters, so a moderate cap is enough.
      Bigger requests burned through the free Gemini per-minute token quota. */
-  const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (priority >= 50 ? 22000 : 16000);
-  const promptCap = source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (priority >= 50 ? 40000 : 26000);
+  /* CLAUDE FIX R17: one-time deep reading of character sheets is never cut short. */
+  const deep = String(body?.quality || "") === "deep";
+  const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (deep ? 20000 : (priority >= 50 ? 22000 : 16000));
+  const promptCap = source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (deep ? 70000 : (priority >= 50 ? 40000 : 26000));
 
   if (source === "group-chat") {
     const before = system.length;
