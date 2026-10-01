@@ -33082,7 +33082,179 @@ function Cast({ w, update, setErr, goChat, jump }) {
             setForm(null);
           }} />
       )}
+
+      <CharacterLibraryPanel w={w} update={update} setErr={setErr} />
     </>
+  );
+}
+
+/* ============================================================
+   CLAUDE FIX R33 — SAJÁT KARAKTERTÁR (character library)
+   Characters (full sheet + images) are saved to the login profile and can be
+   brought into any other world of the same profile — as AI characters, or a
+   saved character can become your own character in the new world.
+   ============================================================ */
+function libraryNameKey(value) {
+  return String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function CharacterLibraryPanel({ w, update, setErr }) {
+  const { tt } = useLang();
+  const [openLib, setOpenLib] = useState(false);
+  const [lib, setLib] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const [pickSave, setPickSave] = useState({});
+  const [pickImport, setPickImport] = useState({});
+  const worldChars = (w.chars || []).filter((c) => c && c.id && !isMediaAccount(w, c.id));
+
+  const loadLib = async () => {
+    try {
+      const out = await apiJson("/profile/characters", { method: "GET" });
+      setLib(out && Array.isArray(out.characters) ? out.characters : []);
+    } catch (error) {
+      setLib([]);
+      setMsg(tt("A karaktertár nem érhető el: ", "The character library is not available: ") + String(error && error.message || error));
+    }
+  };
+  useEffect(() => { if (openLib && lib === null) loadLib(); }, [openLib]);
+
+  const saveSelected = async (all = false) => {
+    const ids = all ? worldChars.map((c) => c.id) : Object.keys(pickSave).filter((id) => pickSave[id] && id !== "__me");
+    const includeMe = all ? false : Boolean(pickSave.__me);
+    if (!ids.length && !includeMe) { setMsg(tt("Jelölj ki legalább egy karaktert.", "Select at least one character.")); return; }
+    setBusy("save"); setMsg("");
+    try {
+      const out = await apiJson("/profile/characters/save", { method: "POST", body: JSON.stringify({ ids, includeMe }) });
+      setMsg(tt("Elmentve a karaktertáradba: ", "Saved to your library: ") + (out.saved || []).join(", ") + " (" + (out.images || 0) + tt(" kép)", " images)"));
+      setPickSave({});
+      await loadLib();
+    } catch (error) {
+      setMsg(tt("Mentés sikertelen: ", "Saving failed: ") + String(error && error.message || error));
+    } finally { setBusy(""); }
+  };
+
+  const importSelected = async (ids, asMe = false) => {
+    if (!ids.length) { setMsg(tt("Jelölj ki legalább egy karaktert.", "Select at least one character.")); return; }
+    setBusy(asMe ? "me" : "import"); setMsg("");
+    try {
+      const out = await apiJson("/profile/characters/import", { method: "POST", body: JSON.stringify({ ids }) });
+      const rows = out && Array.isArray(out.characters) ? out.characters : [];
+      const images = (out && out.images) || {};
+      const added = [], skipped = [];
+      update((n) => {
+        Object.entries(images).forEach(([imageId, meta]) => registerImageMeta(n, imageId, { ...meta, status: "active" }));
+        rows.forEach((row) => {
+          const clean = { ...(row.data || {}) };
+          delete clean.__kind; delete clean.__sourceId;
+          if (asMe) {
+            const mine = n.players && n.players[n.meId];
+            if (!mine) return;
+            n.players[n.meId] = {
+              ...mine, ...clean,
+              id: n.meId, username: mine.username,
+              followers: mine.followers || [], following: mine.following || [],
+              updatedAt: now(),
+            };
+            added.push(clean.name || "");
+            return;
+          }
+          const key = libraryNameKey(clean.name);
+          const taken = (n.chars || []).some((x) => libraryNameKey(x.name) === key) ||
+            Object.values(n.players || {}).some((x) => x && libraryNameKey(x.name) === key);
+          if (!key || taken) { skipped.push(clean.name || "?"); return; }
+          const id = "c_" + uid() + uid();
+          const stamp = now();
+          n.chars.push({
+            ...clean, id,
+            username: uniqueHandle(n, clean.username || key.replace(/[^a-z0-9]+/g, ""), id),
+            followers: [], following: [],
+            createdAt: stamp, updatedAt: stamp, arrivalTrendAt: stamp,
+          });
+          added.push(clean.name);
+        });
+        refreshCanonicalRelationshipBaselines(n);
+      });
+      setPickImport({});
+      setMsg(asMe
+        ? tt("Mostantól ez a saját karaktered ebben a világban: ", "This is now your own character in this world: ") + added.join(", ")
+        : tt("Hozzáadva ehhez a világhoz: ", "Added to this world: ") + (added.join(", ") || "—") +
+          (skipped.length ? tt(" · Kihagyva (már van ilyen nevű): ", " · Skipped (already here): ") + skipped.join(", ") : ""));
+    } catch (error) {
+      setMsg(tt("Behozás sikertelen: ", "Import failed: ") + String(error && error.message || error));
+    } finally { setBusy(""); }
+  };
+
+  const remove = async (id) => {
+    setBusy("del:" + id);
+    try { await apiJson("/profile/characters/delete", { method: "POST", body: JSON.stringify({ id }) }); await loadLib(); }
+    catch (error) { setMsg(String(error && error.message || error)); }
+    finally { setBusy(""); }
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="between">
+        <div>
+          <div className="name">{tt("Saját karaktertár", "My character library")}</div>
+          <div className="hint">{tt("Mentsd el a karaktereidet (leírás + képek), és hozd be őket egy másik világodba.", "Save your characters (sheet + images) and bring them into another world of yours.")}</div>
+        </div>
+        <button className="btn tiny ghost" onClick={() => setOpenLib((x) => !x)}>{openLib ? tt("Bezár", "Close") : tt("Megnyit", "Open")}</button>
+      </div>
+      {openLib ? (
+        <>
+          <label className="f" style={{ marginTop: 12 }}>{tt("Mentés ebből a világból", "Save from this world")}</label>
+          <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 10, padding: 8 }}>
+            <label className="row" style={{ alignItems: "center", gap: 8, fontSize: 13.5, padding: "3px 0" }}>
+              <input type="checkbox" checked={Boolean(pickSave.__me)} onChange={(e) => setPickSave((x) => ({ ...x, __me: e.target.checked }))} />
+              <span>{w.player && w.player.name} <span className="hint">({tt("saját karakterem", "my character")})</span></span>
+            </label>
+            {worldChars.map((c) => (
+              <label key={c.id} className="row" style={{ alignItems: "center", gap: 8, fontSize: 13.5, padding: "3px 0" }}>
+                <input type="checkbox" checked={Boolean(pickSave[c.id])} onChange={(e) => setPickSave((x) => ({ ...x, [c.id]: e.target.checked }))} />
+                <span>{c.name}</span>
+              </label>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: "wrap" }}>
+            <button className="btn tiny" disabled={Boolean(busy)} onClick={() => saveSelected(false)}>{busy === "save" ? <Loader2 size={12} className="spin" /> : null} {tt("Kijelöltek mentése", "Save selected")}</button>
+            <button className="btn tiny ghost" disabled={Boolean(busy)} onClick={() => saveSelected(true)}>{tt("Összes AI karakter mentése", "Save all AI characters")}</button>
+          </div>
+
+          <label className="f" style={{ marginTop: 16 }}>{tt("Elmentett karaktereid", "Your saved characters")}</label>
+          {lib === null ? <p className="hint">{tt("Betöltés…", "Loading…")}</p> : null}
+          {lib && !lib.length ? <p className="hint">{tt("Még nincs elmentett karaktered.", "No saved characters yet.")}</p> : null}
+          {lib && lib.length ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {lib.map((row) => (
+                <div key={row.id} className="between" style={{ gap: 8, borderBottom: "1px solid var(--line)", paddingBottom: 6 }}>
+                  <label className="row" style={{ alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+                    <input type="checkbox" checked={Boolean(pickImport[row.id])} onChange={(e) => setPickImport((x) => ({ ...x, [row.id]: e.target.checked }))} />
+                    {row.avatarImageId
+                      ? <img alt="" src={backendUrl("/profile/characters/media/" + encodeURIComponent(row.avatarImageId))} style={{ width: 34, height: 34, borderRadius: 10, objectFit: "cover", flex: "none" }} />
+                      : <Av name={row.name} size={34} radius={10} />}
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 14 }}>{row.name}{row.kind === "player" ? <span className="hint"> · {tt("volt saját karakter", "was your character")}</span> : null}</div>
+                      <div className="hint mono" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.username ? "@" + row.username + " · " : ""}{row.job || ""}{row.imageCount ? " · " + row.imageCount + tt(" kép", " images") : ""}</div>
+                    </div>
+                  </label>
+                  <div className="row" style={{ gap: 6, flex: "none" }}>
+                    <button className="btn tiny ghost" disabled={Boolean(busy)} title={tt("Legyen ez a saját karakterem ebben a világban", "Make this my own character in this world")} onClick={() => importSelected([row.id], true)}>{tt("Én leszek", "Play as")}</button>
+                    <button className="btn tiny ghost" disabled={Boolean(busy)} title={tt("Törlés a karaktertárból", "Remove from library")} onClick={() => remove(row.id)}><Trash2 size={12} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {lib && lib.length ? (
+            <button className="btn tiny" style={{ marginTop: 10 }} disabled={Boolean(busy)} onClick={() => importSelected(Object.keys(pickImport).filter((id) => pickImport[id]))}>
+              {busy === "import" ? <Loader2 size={12} className="spin" /> : null} {tt("Kijelöltek behozása ebbe a világba", "Add selected to this world")}
+            </button>
+          ) : null}
+          {msg ? <p className="hint" style={{ marginTop: 10 }}>{msg}</p> : null}
+        </>
+      ) : null}
+    </div>
   );
 }
 

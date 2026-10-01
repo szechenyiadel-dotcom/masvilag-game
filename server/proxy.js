@@ -143,6 +143,31 @@ CREATE INDEX IF NOT EXISTS world_media_files_world_updated_idx
 
       CREATE INDEX IF NOT EXISTS sessions_expires_idx
       ON sessions (expires_at);
+
+      /* CLAUDE FIX R33: personal character library — characters (sheet + images)
+         saved to the login profile, reusable in any other world of that profile. */
+      CREATE TABLE IF NOT EXISTS profile_characters (
+        profile_username TEXT NOT NULL
+          REFERENCES profiles(username)
+          ON DELETE CASCADE,
+        lib_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        data JSONB NOT NULL,
+        image_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        source_world TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (profile_username, lib_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS profile_character_media (
+        profile_username TEXT NOT NULL
+          REFERENCES profiles(username)
+          ON DELETE CASCADE,
+        image_id TEXT NOT NULL,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (profile_username, image_id)
+      );
     `).then(() => {
       console.log("PostgreSQL ready");
     }).catch((err) => {
@@ -2878,6 +2903,281 @@ app.post("/media/file/:id", async (req, res) => {
     return res.status(500).json({
       error: "Media file save failed.",
     });
+  }
+});
+
+/* ============================================================
+   CLAUDE FIX R33 — PERSONAL CHARACTER LIBRARY
+   Save characters (full sheet + every image they use) from the current world
+   into the login profile, and bring them into any other world of the profile.
+   ============================================================ */
+const LIBRARY_RUNTIME_KEYS = new Set([
+  "followers", "following", "baseFollowers", "followerDelta", "posts", "comments",
+  "msgs", "messages", "chats", "scenes", "memory", "memories", "notes", "stats",
+  "createdAt", "updatedAt", "arrivalTrendAt", "lastActiveAt", "lastSeenAt",
+  "deleted", "deletedAt", "online", "presence", "status", "sync", "syncRev",
+]);
+
+function libraryCharacterData(c) {
+  const out = {};
+  Object.entries(c || {}).forEach(([key, value]) => {
+    if (LIBRARY_RUNTIME_KEYS.has(key)) return;
+    if (/^ai[A-Z]/.test(key)) return;
+    out[key] = value;
+  });
+  return out;
+}
+
+function libraryCollectImageIds(value, out = new Set(), depth = 0) {
+  if (depth > 8 || value == null) return out;
+  if (typeof value === "string") {
+    const v = value.trim();
+    if (v.startsWith("img:") && v.length > 4 && v.length < 190) out.add(v.slice(4));
+    return out;
+  }
+  if (Array.isArray(value)) { value.forEach((x) => libraryCollectImageIds(x, out, depth + 1)); return out; }
+  if (typeof value === "object") {
+    Object.entries(value).forEach(([key, x]) => {
+      if ((key === "imageId" || key === "image_id") && typeof x === "string" && x && x.length < 190 && !x.startsWith("img:")) out.add(x);
+      else libraryCollectImageIds(x, out, depth + 1);
+    });
+  }
+  return out;
+}
+
+async function libraryLoadWorldMediaEntry(worldCode, imageId) {
+  const files = await pool.query(
+    `SELECT data FROM world_media_files WHERE world_code = $1 AND image_id = $2 LIMIT 1`,
+    [worldCode, imageId]
+  );
+  if (files.rows.length) return files.rows[0].data;
+  const legacy = await pool.query(
+    `
+    SELECT
+      CASE
+        WHEN data->>'__masvilagMediaEnvelope' = $3
+          THEN jsonb_extract_path(data->'media', $2::text)
+        ELSE jsonb_extract_path(data, $2::text)
+      END AS item
+    FROM world_media
+    WHERE world_code = $1
+    LIMIT 1
+    `,
+    [worldCode, imageId, String(MEDIA_ENVELOPE_VERSION)]
+  );
+  const raw = legacy.rows.length ? legacy.rows[0].item : null;
+  if (raw == null) return null;
+  return typeof raw === "string" ? { id: imageId, dataUrl: raw, status: "active" } : raw;
+}
+
+function librarySlug(name) {
+  return String(name || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || ("char-" + Date.now());
+}
+
+async function libraryProfileFromRequest(req, res) {
+  if (!(await requireDb(res))) return null;
+  const session = await getSession(req);
+  if (!session) {
+    clearSessionCookie(res);
+    res.status(401).json({ error: "Not authenticated." });
+    return null;
+  }
+  const profile = await currentProfileForSession(session);
+  if (!profile) {
+    res.status(404).json({ error: "Global profile not found." });
+    return null;
+  }
+  return { session, profile };
+}
+
+app.get("/profile/characters", async (req, res) => {
+  try {
+    const ctx = await libraryProfileFromRequest(req, res);
+    if (!ctx) return;
+    const result = await pool.query(
+      `
+      SELECT lib_id, name, source_world, updated_at,
+        data->>'username' AS username, data->>'job' AS job, data->>'avatar' AS avatar,
+        data->>'__kind' AS kind, jsonb_array_length(image_ids) AS image_count
+      FROM profile_characters
+      WHERE profile_username = $1
+      ORDER BY name ASC
+      `,
+      [ctx.profile.username]
+    );
+    return res.json({
+      ok: true,
+      characters: result.rows.map((row) => ({
+        id: row.lib_id,
+        name: row.name,
+        username: row.username || "",
+        job: row.job || "",
+        kind: row.kind || "npc",
+        avatarImageId: String(row.avatar || "").startsWith("img:") ? String(row.avatar).slice(4) : "",
+        imageCount: Number(row.image_count) || 0,
+        sourceWorld: row.source_world || "",
+        updatedAt: row.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error("Character library list error:", err);
+    return res.status(500).json({ error: "Failed to load the character library." });
+  }
+});
+
+app.get("/profile/characters/media/:imageId", async (req, res) => {
+  try {
+    const ctx = await libraryProfileFromRequest(req, res);
+    if (!ctx) return;
+    const imageId = String(req.params?.imageId || "").trim();
+    const result = await pool.query(
+      `SELECT data FROM profile_character_media WHERE profile_username = $1 AND image_id = $2 LIMIT 1`,
+      [ctx.profile.username, imageId]
+    );
+    const entry = result.rows.length ? result.rows[0].data : null;
+    const dataUrl = String(entry && (entry.dataUrl || entry.url) || "");
+    if (/^https:\/\//i.test(dataUrl)) return res.redirect(302, dataUrl);
+    const match = dataUrl.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,([\s\S]+)$/i);
+    if (!match) return res.status(404).end();
+    const bytes = Buffer.from(match[2], "base64");
+    res.setHeader("Content-Type", String(match[1] || "image/jpeg").slice(0, 100));
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    return res.send(bytes);
+  } catch (err) {
+    console.error("Character library media error:", err);
+    return res.status(500).end();
+  }
+});
+
+app.post("/profile/characters/save", async (req, res) => {
+  try {
+    const ctx = await libraryProfileFromRequest(req, res);
+    if (!ctx) return;
+    const { session, profile } = ctx;
+    const world = session.world || {};
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String).slice(0, 200) : [];
+    const includeMe = Boolean(req.body?.includeMe);
+    const picked = [];
+    (Array.isArray(world.chars) ? world.chars : []).forEach((c) => {
+      if (c && c.id && ids.includes(String(c.id))) picked.push({ c, kind: "npc" });
+    });
+    if (includeMe && world.players && world.players[session.accountId]) {
+      picked.push({ c: world.players[session.accountId], kind: "player" });
+    }
+    if (!picked.length) return res.status(400).json({ error: "No characters selected." });
+
+    const saved = [];
+    let images = 0;
+    for (const { c, kind } of picked) {
+      const name = String(c.name || "").trim();
+      if (!name) continue;
+      const data = { ...libraryCharacterData(c), __kind: kind, __sourceId: String(c.id || "") };
+      const imageIds = [...libraryCollectImageIds(data)].slice(0, 120);
+      for (const imageId of imageIds) {
+        const entry = await libraryLoadWorldMediaEntry(session.worldCode, imageId);
+        if (!entry) continue;
+        const json = stringifyJsonbSafe({ ...entry, id: imageId }, "library-media");
+        if (json.length > 10 * 1024 * 1024) continue;
+        await pool.query(
+          `
+          INSERT INTO profile_character_media (profile_username, image_id, data, updated_at)
+          VALUES ($1, $2, $3::jsonb, NOW())
+          ON CONFLICT (profile_username, image_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+          `,
+          [profile.username, imageId, json]
+        );
+        images += 1;
+      }
+      const libId = librarySlug(name) + (kind === "player" ? "--me" : "");
+      await pool.query(
+        `
+        INSERT INTO profile_characters (profile_username, lib_id, name, data, image_ids, source_world, updated_at)
+        VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, NOW())
+        ON CONFLICT (profile_username, lib_id) DO UPDATE SET
+          name = EXCLUDED.name, data = EXCLUDED.data, image_ids = EXCLUDED.image_ids,
+          source_world = EXCLUDED.source_world, updated_at = NOW()
+        `,
+        [profile.username, libId, name, stringifyJsonbSafe(data, "library-character"), JSON.stringify(imageIds), session.worldCode]
+      );
+      saved.push(name);
+    }
+    return res.json({ ok: true, saved, images });
+  } catch (err) {
+    console.error("Character library save error:", err);
+    return res.status(500).json({ error: "Saving to the character library failed." });
+  }
+});
+
+app.post("/profile/characters/import", async (req, res) => {
+  try {
+    const ctx = await libraryProfileFromRequest(req, res);
+    if (!ctx) return;
+    const { session, profile } = ctx;
+    const libIds = Array.isArray(req.body?.ids) ? req.body.ids.map(String).slice(0, 200) : [];
+    if (!libIds.length) return res.status(400).json({ error: "No characters selected." });
+    const rows = await pool.query(
+      `SELECT lib_id, name, data, image_ids FROM profile_characters WHERE profile_username = $1 AND lib_id = ANY($2::text[])`,
+      [profile.username, libIds]
+    );
+    const images = {};
+    for (const row of rows.rows) {
+      const imageIds = Array.isArray(row.image_ids) ? row.image_ids : [];
+      for (const imageId of imageIds) {
+        const media = await pool.query(
+          `SELECT data FROM profile_character_media WHERE profile_username = $1 AND image_id = $2 LIMIT 1`,
+          [profile.username, imageId]
+        );
+        if (!media.rows.length) continue;
+        const entry = media.rows[0].data || {};
+        await pool.query(
+          `
+          INSERT INTO world_media_files (world_code, image_id, data, updated_at)
+          VALUES ($1, $2, $3::jsonb, NOW())
+          ON CONFLICT (world_code, image_id) DO NOTHING
+          `,
+          [session.worldCode, imageId, stringifyJsonbSafe(entry, "library-import")]
+        );
+        images[imageId] = {
+          mimeType: entry.mimeType || "image/jpeg",
+          size: Number(entry.size || 0),
+          category: entry.category || "other",
+          originalFileName: entry.originalFileName || "image",
+        };
+      }
+    }
+    return res.json({
+      ok: true,
+      characters: rows.rows.map((row) => ({ libId: row.lib_id, name: row.name, data: row.data })),
+      images,
+    });
+  } catch (err) {
+    console.error("Character library import error:", err);
+    return res.status(500).json({ error: "Importing from the character library failed." });
+  }
+});
+
+app.post("/profile/characters/delete", async (req, res) => {
+  try {
+    const ctx = await libraryProfileFromRequest(req, res);
+    if (!ctx) return;
+    const libId = String(req.body?.id || "");
+    await pool.query(`DELETE FROM profile_characters WHERE profile_username = $1 AND lib_id = $2`, [ctx.profile.username, libId]);
+    /* drop images no saved character uses any more */
+    await pool.query(
+      `
+      DELETE FROM profile_character_media m
+      WHERE m.profile_username = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM profile_characters c
+          WHERE c.profile_username = $1 AND c.image_ids ? m.image_id
+        )
+      `,
+      [ctx.profile.username]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Character library delete error:", err);
+    return res.status(500).json({ error: "Deleting from the character library failed." });
   }
 });
 
