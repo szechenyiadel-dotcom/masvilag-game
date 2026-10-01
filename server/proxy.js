@@ -5301,7 +5301,7 @@ function parseRetryAfterMs(value) {
 }
 
 const AI_GATE = {
-  queue: [], active: false, seq: 0, lastStartAt: 0, wakeTimer: null,
+  queue: [], active: 0, seq: 0, lastStartAt: 0, wakeTimer: null,
   pendingKeys: new Set(), recentKeys: new Map(), providerCooldownUntil: new Map(), providerFailures: new Map(),
   providerConfigurationErrors: new Map(), leaderByWorld: new Map(), lastAutonomyAt: new Map(),
   minute: "", minuteTotal: 0, minuteSources: Object.create(null), lastError: "",
@@ -5563,8 +5563,14 @@ async function executeAITask(task) {
   };
 }
 
-async function pumpAIGate() {
-  if (AI_GATE.active || !AI_GATE.queue.length) return;
+/* CLAUDE FIX R39: the gate used to run ONE AI request at a time for the whole
+   app, so a long sheet reading made everything else wait. Now up to
+   AI_GATE_MAX_CONCURRENT requests run side by side (starts still spaced by
+   AI_MIN_REQUEST_GAP_MS), highest priority first. */
+const AI_GATE_MAX_CONCURRENT = Math.max(1, Math.min(6, Number(process.env.AI_GATE_MAX_CONCURRENT) || 3));
+
+function pumpAIGate() {
+  if (AI_GATE.active >= AI_GATE_MAX_CONCURRENT || !AI_GATE.queue.length) return;
   const now = Date.now();
   AI_GATE.queue.sort((a, b) => b.priority - a.priority || a.seq - b.seq);
   const index = AI_GATE.queue.findIndex((t) => t.notBefore <= now);
@@ -5576,8 +5582,13 @@ async function pumpAIGate() {
   if (gap > 0) { scheduleAIGate(gap); return; }
 
   const task = AI_GATE.queue.splice(index, 1)[0];
-  AI_GATE.active = true;
+  AI_GATE.active += 1;
   AI_GATE.lastStartAt = Date.now();
+  runAIGateTask(task);
+  if (AI_GATE.queue.length && AI_GATE.active < AI_GATE_MAX_CONCURRENT) scheduleAIGate(AI_MIN_REQUEST_GAP_MS);
+}
+
+async function runAIGateTask(task) {
   try {
     const result = await executeAITask(task);
     if (isAutonomySource(task.source)) AI_GATE.lastAutonomyAt.set(task.worldKey, Date.now());
@@ -5588,7 +5599,7 @@ async function pumpAIGate() {
     task.reject(err);
   } finally {
     AI_GATE.pendingKeys.delete(task.key);
-    AI_GATE.active = false;
+    AI_GATE.active = Math.max(0, AI_GATE.active - 1);
     const cutoff = Date.now() - 60000;
     for (const [key, at] of AI_GATE.recentKeys) if (at < cutoff) AI_GATE.recentKeys.delete(key);
     if (AI_GATE.queue.length) scheduleAIGate(0);

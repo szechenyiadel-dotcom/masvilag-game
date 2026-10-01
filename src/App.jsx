@@ -63643,32 +63643,7 @@ function applyRelationshipReadingToLive(n, actorId, targetId, oldBase, newBase, 
   return { before: live, after: getRel(n, actorId, targetId) };
 }
 
-async function runRelationshipReadingAction(view, update, action) {
-  const actorId = String(action.payload && action.payload.actorId || "");
-  const actor = charById(view, actorId);
-  update((n) => { ensureSimState(n).relationshipReadingLastAt = now(); });
-  if (!actor) return null;
-  let due = relationshipReadingDueTargets(view, actor);
-  /* R38: the player's pairs first */
-  if (action.payload && action.payload.playerFirst) {
-    const me = view.meId;
-    due = due.filter((row) => actor.id === me || row.target.id === me).concat(due.filter((row) => !(actor.id === me || row.target.id === me)));
-  }
-  due = due.slice(0, RELATIONSHIP_READING_BATCH);
-  if (!due.length) return "relationship-reading-nothing";
-  let out = null;
-  try {
-    out = await genRelationshipReading(view, actor, due);
-  } catch (error) {
-    update((n) => {
-      const state = relationshipReadingState(n);
-      state[actorId] = { ...(state[actorId] || {}), failedAt: now() };
-      groundedEventLog(n, "relationship-reading", "failed", actor.name + ": " + String(error && error.message || error || "AI error"), "sheet:" + actorId);
-    });
-    return null;
-  }
-  const rows = Array.isArray(out && out.targets) ? out.targets : [];
-  update((n) => {
+function applyRelationshipReadingRows(n, actorId, due, rows) {
     const state = relationshipReadingState(n);
     const liveActor = charById(n, actorId);
     if (!liveActor) return;
@@ -63709,6 +63684,48 @@ async function runRelationshipReadingAction(view, update, action) {
           liveActor.name + " → " + liveTarget.name + ": " + (b.bond ? localizedBond(b.bond, worldLanguage(n, n.meId)) : "—") + " " + (Number(b.score) || 0) + " → " + (a.bond ? localizedBond(a.bond, worldLanguage(n, n.meId)) : "—") + " " + (Number(a.score) || 0) + (a.mood ? " · " + a.mood : ""),
           "sheet:" + actorId, { targetId: target.id });
       }
+    });
+  }
+
+async function runRelationshipReadingAction(view, update, action) {
+  const actorId = String(action.payload && action.payload.actorId || "");
+  const actor = charById(view, actorId);
+  update((n) => { ensureSimState(n).relationshipReadingLastAt = now(); });
+  if (!actor) return null;
+  const me = view.meId;
+  const pickDue = (a, playerFirst) => {
+    let due = relationshipReadingDueTargets(view, a);
+    if (playerFirst) due = due.filter((row) => a.id === me || row.target.id === me).concat(due.filter((row) => !(a.id === me || row.target.id === me)));
+    return due.slice(0, RELATIONSHIP_READING_BATCH);
+  };
+  /* CLAUDE FIX R39: up to 3 characters are read side by side (the server now runs requests in parallel) */
+  const jobs = [];
+  const first = pickDue(actor, Boolean(action.payload && action.payload.playerFirst));
+  if (first.length) jobs.push({ actor, due: first });
+  const state = (view.sim && view.sim.relationshipReading) || {};
+  for (const other of allSubjects(view)) {
+    if (jobs.length >= 3) break;
+    if (!other || !other.id || other.id === actor.id || isMediaAccount(view, other.id)) continue;
+    const meta = state[other.id] || {};
+    if (meta.failedAt && now() - Number(meta.failedAt) < RELATIONSHIP_READING_RETRY_MS) continue;
+    const due = pickDue(other, true);
+    if (due.length) jobs.push({ actor: other, due });
+  }
+  if (!jobs.length) return "relationship-reading-nothing";
+  const results = await Promise.all(jobs.map((job) => genRelationshipReading(view, job.actor, job.due)
+    .then((out) => ({ job, out }))
+    .catch((error) => ({ job, error }))));
+  update((n) => {
+    results.forEach(({ job, out, error }) => {
+      if (error) {
+        const st = relationshipReadingState(n);
+        st[job.actor.id] = { ...(st[job.actor.id] || {}), failedAt: now() };
+        groundedEventLog(n, "relationship-reading", "failed", job.actor.name + ": " + String(error && error.message || error || "AI error"), "sheet:" + job.actor.id);
+        return;
+      }
+      if (out && out.skip === true) return;
+      const rows = Array.isArray(out && out.targets) ? out.targets : [];
+      applyRelationshipReadingRows(n, job.actor.id, job.due, rows);
     });
   });
   return "relationship-reading";
