@@ -15973,6 +15973,8 @@ function sanitizePhoneDm(
   contextText = "",
   options = {}
 ) {
+  value = normalizeGeneratedSocialText(value);
+  if (!value) return "";
   if (options && options.roleplay) {
     let rpText = String(value || "").replace(/[ \t]+/g, " ").trim();
     rpText = String(rpText).replace(/\*([^*]+)\*/g, (m, inner) => "*" + repairRoleplayNarrationPov(w, botId, inner) + "*");
@@ -59343,6 +59345,28 @@ const signOut = useCallback(async () => {
 
   /* CLAUDE FIX R7 (4.3): leader heartbeat. Touching / typing / reopening this
      tab claims the world for it; a hidden tab only keeps a lease nobody else wants. */
+  /* CLAUDE FIX R19: remove junk AI comments that slipped in earlier ("[object Object]", ids, bare numbers). */
+  useEffect(() => {
+    if (!world || !meId) return;
+    const t = setTimeout(() => {
+      let removed = 0;
+      const current = wRef.current;
+      const hasJunk = (current && current.posts || []).some((p) => safePostComments(p).some((c) => c && c.authorId && !isHuman(current, c.authorId) && !normalizeGeneratedSocialText(c.text)));
+      if (!hasJunk) return;
+      update((n) => {
+        (n.posts || []).forEach((p) => {
+          if (!p || !Array.isArray(p.comments)) return;
+          const junkIds = new Set(p.comments.filter((c) => c && c.authorId && !isHuman(n, c.authorId) && !normalizeGeneratedSocialText(c.text)).map((c) => c.id));
+          if (!junkIds.size) return;
+          removed += junkIds.size;
+          p.comments = p.comments.filter((c) => c && !junkIds.has(c.id) && !junkIds.has(c.parent));
+        });
+        if (removed) groundedEventLog(n, "cleanup", "applied", "Removed " + removed + " broken AI comment(s) (e.g. [object Object]).", "cleanup");
+      });
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [world ? world.code : null, meId]);
+
   useEffect(() => {
     if (!world || !meId) return undefined;
     let lastClaim = 0;
@@ -61096,9 +61120,31 @@ function generatedTextHasTechLeak(text) {
   return GENERATED_TECH_LEAK_RE.test(String(text || ""));
 }
 
+/* CLAUDE FIX R19: the model sometimes returns an object, an array, an id or a
+   bare number where a sentence belongs ("[object Object]", "4821"). Turn it
+   into real text or drop it — never show junk. */
+function normalizeGeneratedSocialText(value) {
+  let v = value;
+  for (let depth = 0; depth < 3 && v && typeof v === "object"; depth += 1) {
+    if (Array.isArray(v)) { v = v.map((x) => (typeof x === "string" ? x : (x && (x.text || x.content || x.message || x.reply)) || "")).filter(Boolean).join(" "); break; }
+    v = v.text || v.content || v.message || v.reply || v.comment || v.body || "";
+  }
+  const text = String(v === undefined || v === null ? "" : v).replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (/\[object [A-Za-z]+\]|^undefined$|^null$|^NaN$/i.test(text)) return "";
+  if (/^[\[{].*[\]}]$/.test(text) && /"\s*:/.test(text)) return "";              /* raw JSON */
+  if (/^[\d\s.,:;#+\-–—_/|()]+$/.test(text) && !/^\d{1,2}(?:\s*\/\s*10)?[.!]*$/.test(text)) return "";  /* bare numbers (a 1–10 rating is fine) */
+  if (/^[a-z0-9_]{5,14}$/i.test(text) && /\d/.test(text) && !/\s/.test(text)) return "";  /* an id like "ypacb6p" */
+  if (/^\d{1,2}(?:\s*\/\s*10)?[.!]*$/.test(text)) return text;  /* "7", "10/10" as a rating */
+  if (!/[\p{L}\p{Extended_Pictographic}]/u.test(text)) return "";
+  return text;
+}
+
 function cleanGeneratedUtterance(...args) {
   const w = args[0];
   const id = args[1];
+  args[2] = normalizeGeneratedSocialText(args[2]);
+  if (!args[2]) return "";
   const base = legacyVoiceStyleCleanGeneratedUtterance(...args);
   if (generatedTextHasTechLeak(base)) {
     console.warn("[tech-leak] dropped generated text", "character=" + String(id || ""), String(base || "").slice(0, 120));
@@ -61110,6 +61156,8 @@ function cleanGeneratedUtterance(...args) {
 function cleanGeneratedComment(...args) {
   const w = args[0];
   const id = args[1];
+  args[2] = normalizeGeneratedSocialText(args[2]);
+  if (!args[2]) return "";
   const base = legacyVoiceStyleCleanGeneratedComment(...args);
   if (generatedTextHasTechLeak(base)) {
     console.warn("[tech-leak] dropped generated comment", "character=" + String(id || ""), String(base || "").slice(0, 120));
@@ -61765,7 +61813,7 @@ function playerPostCommentRowsFromOutput(w, out, cards, postContext) {
           ? row.id
           : (row.authorId !== undefined ? row.authorId : row.name)
       );
-      const text = String(row.text || "").trim();
+      const text = normalizeGeneratedSocialText(row.text);
       const reactsTo = String(row.reagal_erre || row.reactsTo || row.trigger || "").trim();
 
       if (!actorId || !allowed.has(actorId) || isHuman(w, actorId) || !text || seen.has(actorId)) return;
