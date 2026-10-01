@@ -5215,6 +5215,55 @@ function explicitNamedCharacterIdsInText(w, txt, authorId = "") {
   return [...ids];
 }
 
+/* CLAUDE FIX R44: a plain name in a post / comment / message ("Ian", "Wolf",
+   "Nam-gyu", a nickname) means that person — not only an @handle. */
+function namedPeopleInText(w, txt, authorId = "") {
+  if (!w || !txt) return [];
+  let ids = [];
+  try { ids = explicitNamedCharacterIdsInText(w, txt, authorId); } catch (error) { ids = mentionedIdsInText(w, txt, authorId); }
+  /* Hungarian case endings and unique surnames: "Iannal", "Tandyt",
+     "Nam-gyuval", "Sesterónak". The bare alias must resolve to exactly this
+     person and the whole word must not be some other character's name. */
+  try {
+    const source = String(txt || "");
+    const SUFFIX = "(?:-?(?:nak|nek|nál|nél|val|vel|ról|ről|tól|től|hoz|hez|höz|ban|ben|ból|ből|ba|be|ra|re|ré|ig|ért|ként|ék|éké|nk|ot|et|öt|at|t|on|en|ön|né|é|\\p{L}?(?:al|el|á|é)(?:\\p{L}{0,2}))|-(?:a|e|n|s))";
+    socialProfiles(w).forEach((person) => {
+      if (!person || !person.id || person.id === authorId || ids.includes(person.id)) return;
+      const aliases = characterIdentityAliases(person, { includeFirst: true, includeSurname: true, strongOnly: false })
+        .map((a) => String(a || "").trim()).filter((a) => a.length >= 3);
+      for (const alias of aliases) {
+        const re = new RegExp("(^|[^\\p{L}\\p{N}_])(" + regexEscapeLiteral(alias) + SUFFIX + "?)(?=$|[^\\p{L}\\p{N}_])", "iu");
+        const m = source.match(re);
+        if (!m) continue;
+        const resolved = resolveCharacterIdentity(w, alias, { relationshipOnly: false });
+        if (!resolved || String(resolved.id) !== String(person.id)) continue;
+        const word = m[2];
+        if (word.length !== alias.length) {
+          const other = resolveCharacterIdentity(w, word, { relationshipOnly: false });
+          if (other && String(other.id) !== String(person.id)) continue;
+        }
+        ids.push(person.id);
+        break;
+      }
+    });
+  } catch (error) { /* keep what we have */ }
+  return [...new Set(ids)].filter((id) => id && id !== authorId && !isMediaAccount(w, id));
+}
+
+function namedPeopleCard(w, ids, en) {
+  const rows = (ids || []).slice(0, 5).map((id) => {
+    const c = charById(w, id);
+    if (!c) return "";
+    let line = "";
+    try { line = identityCanonLine(w, c); } catch (error) { line = ""; }
+    return line || ("- " + c.name + " [" + id + "]");
+  }).filter(Boolean);
+  if (!rows.length) return "";
+  return (en
+    ? "PEOPLE NAMED IN THIS TEXT — a first name, nickname or surname means exactly this person, everyone knows who it is:\n"
+    : "A SZÖVEGBEN MEGNEVEZETT EMBEREK — a keresztnév, becenév vagy vezetéknév pontosan ezt az embert jelenti, mindenki tudja, kiről van szó:\n") + rows.join("\n");
+}
+
 function publicSocialExplicitTargetIds(w, post) {
   if (!w || !post) return [];
 
@@ -28655,6 +28704,7 @@ function commentReplyLatestTail(w, post, comment) {
     (en ? "Post by " : "Poszt, szerző: ") + nameOfIn(w, post.authorId) + ": \"" + String(post.text || "").slice(0, 300) + "\"\n" +
     (parent ? (en ? "It replies to " : "Erre válaszol: ") + nameOfIn(w, parent.authorId) + ": \"" + String(parent.text || "").slice(0, 300) + "\"\n" : "") +
     (en ? "NEWEST comment by " : "LEGÚJABB komment, szerző: ") + nameOfIn(w, comment.authorId) + ": \"" + String(comment.text || "").slice(0, 400) + "\"\n" +
+    (() => { try { const card = namedPeopleCard(w, namedPeopleInText(w, String(comment.text || "") + " " + String(post.text || ""), comment.authorId), en); return card ? card + "\n" : ""; } catch (error) { return ""; } })() +
     (en
       ? "Answer what this newest comment actually says or implies (e.g. if it says someone cannot come or is not invited, react to THAT). Do not ignore it and do not just repeat your previous point."
       : "Arra felelj, amit ez a legújabb komment ténylegesen mond vagy sugall (pl. ha azt mondja, hogy valaki nem jöhet / nincs meghívva, arra reagálj). Ne hagyd figyelmen kívül, és ne ismételd a korábbi mondandódat.") +
@@ -31583,7 +31633,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               x.comments.push(made);
               noteComment(n, x, made);
 
-              const freshMentionTargets = mentionedIdsInText(
+              const freshMentionTargets = namedPeopleInText(
                 n,
                 made.text,
                 freshActorId
@@ -36567,7 +36617,7 @@ const turn = async (mine) => {
       }
 
       /* CLAUDE FIX R27: the other members witness what the player says to someone */
-      const groupTargetId = playerTarget.id || (mentionedIdsInText(n, mine, n.meId).find((id) => (g.members || []).includes(id)) || "");
+      const groupTargetId = playerTarget.id || (namedPeopleInText(n, mine, n.meId).find((id) => (g.members || []).includes(id)) || "");
       if (groupTargetId) {
         const juice = publicSocialJuiceSignals(mine);
         let nickHit = null;
@@ -37419,7 +37469,7 @@ function directDmEmotionTrigger(w, c, latestText) {
       ? "- " + nameOfIn(w, w.meId) + " just called you \"" + hit.nickname + "\" — a name you hate. React to it in your own style" + (hit.reaction ? " (your sheet: " + hit.reaction + ")" : "") + ".\n"
       : "- " + nameOfIn(w, w.meId) + " épp \"" + hit.nickname + "\"-nak/nek hívott — ezt a nevet utálod. Reagálj rá a saját stílusodban" + (hit.reaction ? " (a lapod szerint: " + hit.reaction + ")" : "") + ".\n";
   } catch (error) { nickLine = ""; }
-  const ids = mentionedIdsInText(w, latest, w.meId).filter((id) => id && id !== c.id && !isHuman(w, id) && !isMediaAccount(w, id)).slice(0, 3);
+  const ids = namedPeopleInText(w, latest, w.meId).filter((id) => id && id !== c.id && !isHuman(w, id) && !isMediaAccount(w, id)).slice(0, 3);
   if (!ids.length) return nickLine ? (en ? "EMOTIONAL TRIGGER IN THE PLAYER'S MESSAGE:\n" : "ÉRZELMI KIVÁLTÓ A JÁTÉKOS ÜZENETÉBEN:\n") + nickLine + "\n" : "";
   const player = nameOfIn(w, w.meId);
   let crush = false;
@@ -62637,6 +62687,7 @@ function playerPostCommentPostContext(w, post) {
   });
 
   const visibleText = String(post && (post.text || post.caption) || "");
+  namedPeopleInText(w, visibleText, post && post.authorId).forEach((id) => tagged.add(String(id)));
   const handles = visibleText.match(/@[A-Za-z0-9_.-]+/g) || [];
   handles.forEach((handle) => {
     const clean = handle.slice(1).toLowerCase();
@@ -62716,7 +62767,9 @@ function playerPostCommentVoiceCard(w, c) {
 }
 
 function playerPostCommentCandidateCards(w, post, maxComments) {
-  const cast = fairCommentCast(w, post.authorId, post)
+  const named = namedPeopleInText(w, String(post && (post.text || post.caption) || ""), post && post.authorId)
+    .map((id) => charById(w, id)).filter((c) => c && !isHuman(w, c.id)).slice(0, 3);
+  const cast = [...named, ...fairCommentCast(w, post.authorId, post).filter((c) => c && !named.some((x) => x.id === c.id))]
     .filter((c) => c && c.id && !isHuman(w, c.id))
     .slice(0, Math.max(2, Math.min(8, Number(maxComments) || 4)));
 
@@ -62740,6 +62793,11 @@ function playerPostCommentCandidateCards(w, post, maxComments) {
         currentMood: String(rel.mood || ""),
         expectedPublicTone: playerPostCommentExpectedTone(rel),
       },
+      isNamedInPost: named.some((x) => x.id === c.id),
+      relationshipToPeopleNamedInPost: named.filter((x) => x.id !== c.id).map((x) => {
+        const r = getRel(w, c.id, x.id) || EMPTY_REL;
+        return { name: x.name, type: String(r.label || r.bond || r.type || ""), score: Number(r.score) || 0, mood: String(r.mood || "") };
+      }),
     };
   });
 }
@@ -62942,7 +63000,14 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
      group land on the right people. */
   let canonCard = "";
   try {
-    canonCard = [worldGroupGlossaryCard(w), whoIsWhoCard(w, (cards || []).map((card) => card && card.id).filter(Boolean))].filter(Boolean).join("\n\n");
+    const namedIds = namedPeopleInText(w, String(post && (post.text || post.caption) || ""), post && post.authorId);
+    canonCard = [
+      worldGroupGlossaryCard(w),
+      whoIsWhoCard(w, [...(cards || []).map((card) => card && card.id).filter(Boolean), ...namedIds]),
+      namedPeopleCard(w, namedIds, en) + (namedIds.length ? (en
+        ? "\nThe post is about / addressed to these people. Every commenter reacts to them by their OWN relationship to them (relationshipToPeopleNamedInPost); a commenter marked isNamedInPost answers as the one being talked about."
+        : "\nA poszt ezekről / ezekhez az emberekről szól. Minden kommentelő a SAJÁT kapcsolata szerint reagál rájuk (relationshipToPeopleNamedInPost); akinél isNamedInPost igaz, az úgy válaszol, mint akiről szó van.") : ""),
+    ].filter(Boolean).join("\n\n");
   } catch (error) { canonCard = ""; }
   return [
     canonCard,
@@ -64142,7 +64207,7 @@ function worldGroupGlossaryCard(w) {
 function groupChatPlayerMoveLines(w, ids, move, en) {
   if (!move || !move.text || !w.meId) return "";
   const juice = publicSocialJuiceSignals(move.text);
-  const targetId = move.targetId || (mentionedIdsInText(w, move.text, w.meId).find((id) => ids.includes(id)) || "");
+  const targetId = move.targetId || (namedPeopleInText(w, move.text, w.meId).find((id) => ids.includes(id)) || "");
   const player = nameOfIn(w, w.meId), target = targetId ? nameOfIn(w, targetId) : "";
   const lines = [];
   if (juice.romance >= 20 && targetId) {
