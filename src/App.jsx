@@ -57189,6 +57189,8 @@ export default function App() {
   /* Authoritative multi-device sync state. */
   const mediaSyncRev = useRef(0);
   const worldSaveBusy = useRef(false);
+  /* CLAUDE FIX R43: the database disk filled up from full-world saves every few seconds */
+  const lastCloudSaveAt = useRef(0);
   const mediaSaveBusy = useRef(false);
   const syncRefreshBusy = useRef(false);
   const lastServerCheckAt = useRef(0);
@@ -59579,7 +59581,20 @@ const signOut = useCallback(async () => {
 
         /*
          * 2. Revision-aware PostgreSQL save.
+         * R43: at most one cloud save every 15 s per device — the background world
+         * changes constantly, and each save rewrites the whole world in the database.
+         * The local emergency save above still happens every time.
          */
+        const CLOUD_SAVE_MIN_GAP_MS = 15000;
+        const sinceCloud = now() - (Number(lastCloudSaveAt.current) || 0);
+        if (sinceCloud < CLOUD_SAVE_MIN_GAP_MS) {
+          setTimeout(() => {
+            setWorld((cur) => (cur ? { ...cur } : cur));
+          }, CLOUD_SAVE_MIN_GAP_MS - sinceCloud + 100);
+          return;
+        }
+        lastCloudSaveAt.current = now();
+
         let serverResult = null;
         let lastError = null;
 

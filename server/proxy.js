@@ -144,6 +144,10 @@ CREATE INDEX IF NOT EXISTS world_media_files_world_updated_idx
       CREATE INDEX IF NOT EXISTS sessions_expires_idx
       ON sessions (expires_at);
 
+      /* CLAUDE FIX R43: the world row is rewritten on every save; clean up the old
+         copies quickly so the small database disk does not fill up. */
+      ALTER TABLE worlds SET (autovacuum_vacuum_scale_factor = 0.0, autovacuum_vacuum_threshold = 20, toast.autovacuum_vacuum_scale_factor = 0.0, toast.autovacuum_vacuum_threshold = 20);
+
       /* CLAUDE FIX R33: personal character library — characters (sheet + images)
          saved to the login profile, reusable in any other world of that profile. */
       CREATE TABLE IF NOT EXISTS profile_characters (
