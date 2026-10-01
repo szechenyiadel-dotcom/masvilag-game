@@ -15886,12 +15886,25 @@ function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
   return text;
 }
 
+/* CLAUDE FIX R7 (9.2): a *starred action* from the player turns the DM into roleplay. */
+function dmRoleplayMode(playerText) {
+  return /\*[^*\n]{2,}\*/.test(String(playerText || ""));
+}
+
 function sanitizePhoneDm(
   w,
   botId,
   value,
-  contextText = ""
+  contextText = "",
+  options = {}
 ) {
+  if (options && options.roleplay) {
+    let rpText = String(value || "").replace(/[ \t]+/g, " ").trim();
+    if (!rpText) return "";
+    rpText = sanitizeSocialUiMetaText(rpText);
+    if (!rpText) return "";
+    return sanitizeGeneratedDirectAddress(w, botId, w && w.meId, rpText);
+  }
   let text =
     String(value || "")
       .replace(
@@ -37032,12 +37045,16 @@ PRIVÁT CHAT SZABÁLYOK:
 - Most KÖZVETLENÜL a játékos legutóbbi üzenetére válaszolj.
 - Már egyetlen játékosi üzenet is elegendő ahhoz, hogy válaszolj.
 - Soha ne várj arra, hogy a játékos még egy üzenetet küldjön.
-- Ez social-media privát DM, nem roleplay-jelenet. A felületet vagy a „textinget” ne tedd a beszélgetés tárgyává önmagában.
+${dmRoleplayMode(t)
+  ? `- SZEREPJÁTÉK-MÓD (a játékos legutóbbi üzenetében *csillagos* cselekvés van): ez most nem sima üzenetváltás, hanem személyes jelenet — ugyanott vagytok. Válaszolj ugyanígy: a saját cselekvésedet, mozdulatodat, testbeszédedet *csillagok közé* írd, mellette a karakter élőszavas mondata(i). Reagálj a játékos cselekvésére ÉS szavaira is, a helyszínhez és a hangulathoz igazodva.
+- 1-4 rövid mondat legyen; ne írj a játékos helyett, ne dönts helyette, a saját belső gondolataidat ne mondd ki.
+- Ha a játékos később csillag nélkül ír, térj vissza a normál DM-stílushoz.`
+  : `- Ez social-media privát DM, nem roleplay-jelenet. A felületet vagy a „textinget” ne tedd a beszélgetés tárgyává önmagában.
 - A válasz lehet egyetlen szó, félmondat, rövid mondat vagy néhány rövid üzenetszerű mondat.
 - Ne írj fölöslegesen hosszú monológot.
 - Ne narrálj cselekvéseket.
 - Ne írj belső gondolatokat.
-- Ne használj *csillagok közé tett cselekvéseket*.
+- Ne használj *csillagok közé tett cselekvéseket*.`}
 - Reagálj arra, amit a játékos TÉNYLEG most írt.
 - Ha konkrét kérdést tett fel, ne cseréld le automatikusan a választ egy visszakérdezésre vagy ködös reakcióra. Ha tudod és nincs karakterhű okod titkolni, VÁLASZOLJ rá konkrétan; utána jöhet flört, poén, provokáció vagy visszakérdezés.
 - Maradj teljesen karakterhű.
@@ -37176,7 +37193,8 @@ Formátum:
         requestWorld,
         c.id,
         reply,
-        hist
+        hist,
+        { roleplay: dmRoleplayMode(t) }
       );
 
     reply =
@@ -49452,6 +49470,42 @@ function simEnqueue(w, action) {
   return true;
 }
 
+/* CLAUDE FIX R7 (4.3): only ONE open copy of a world runs the background
+   simulation. The device the player is actually using claims the lease; other
+   tabs/devices stay quiet and pick up the saved results. If the server cannot
+   be asked, this tab keeps running as before. */
+const SIM_CLIENT_INSTANCE_ID = "tab_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+const SIM_LEADER = { leader: true, checkedAt: 0, holder: "" };
+const SIM_STALE_ACTION_MS = 3 * 60 * 60 * 1000;
+
+function simLeaderActive() {
+  if (!SIM_LEADER.checkedAt) return true; /* never checked yet → old behaviour */
+  if (now() - SIM_LEADER.checkedAt > 70 * 1000) return true; /* server unreachable → do not freeze the world */
+  return SIM_LEADER.leader;
+}
+
+async function simLeaderPing(claim) {
+  try {
+    const res = await fetch(backendUrl("/ai/leader"), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId: SIM_CLIENT_INSTANCE_ID, claim: Boolean(claim) }),
+    });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (!data || typeof data.leader !== "boolean") return;
+    if (data.leader !== SIM_LEADER.leader) {
+      console.info("[sim-leader]", data.leader ? "this tab runs the world simulation" : "another open tab/device runs the world simulation; this tab stays quiet");
+    }
+    SIM_LEADER.leader = data.leader;
+    SIM_LEADER.holder = String(data.holder || "");
+    SIM_LEADER.checkedAt = now();
+  } catch (error) {
+    /* offline: keep the last answer until it goes stale */
+  }
+}
+
 function simPeek(w) {
   const sim = ensureSimState(w);
   return sim.queue.length ? sim.queue[0] : null;
@@ -55364,7 +55418,9 @@ if (targetNote) {
       return null;
     }
 
-    const dmPauseReason = action && action.payload && ["follow-not-returned", "player-unfollowed"].includes(action.payload.trigger) ? "" : eventDrivenAutonomousDmPauseReason(view);
+    const rawDmPauseReason = eventDrivenAutonomousDmPauseReason(view);
+    /* follow / unfollow reactions skip only the burst limit, not the scene / parallel-DM pause (5.5) */
+    const dmPauseReason = action && action.payload && ["follow-not-returned", "player-unfollowed"].includes(action.payload.trigger) && !["scene-active", "parallel-dms"].includes(rawDmPauseReason) ? "" : rawDmPauseReason;
     if (dmPauseReason) {
       update((n) => eventDrivenRememberDeferredDm(n, action, dmPauseReason));
       return "dm-deferred";
@@ -58671,6 +58727,21 @@ const signOut = useCallback(async () => {
   const view2 = viewRef.current;
   if (!view2 || !(view2.chars || []).length) return;
 
+  /* CLAUDE FIX R7 (4.3): another open tab/device runs the world right now. */
+  if (!simLeaderActive()) return;
+
+  /* CLAUDE FIX R7 (4.3): actions that waited more than 3 hours are not replayed with AI. */
+  const staleCutoff = now() - SIM_STALE_ACTION_MS;
+  if (((view2.sim && view2.sim.queue) || []).some((a) => a && Number(a.ts) && Number(a.ts) < staleCutoff)) {
+    update((n) => {
+      const sim = ensureSimState(n);
+      const before = sim.queue.length;
+      sim.queue = sim.queue.filter((a) => !(a && Number(a.ts) && Number(a.ts) < staleCutoff));
+      groundedEventLog(n, "sim-queue", "pruned", "Dropped " + (before - sim.queue.length) + " queued action(s) older than 3 hours instead of replaying them.", "queue");
+    });
+    return;
+  }
+
   /* CLAUDE FIX R3: a due follow / unfollow reaction must not wait for an empty queue. */
   const dueSocialReaction = groundedDueFollowBackAction(view2);
   const queued = dueSocialReaction || simPeek(view2);
@@ -58958,6 +59029,32 @@ const signOut = useCallback(async () => {
     const first = setTimeout(beat, 150);
     return () => { alive = false; clearInterval(i); clearTimeout(first); };
   }, [langReady, world ? world.code : null, meId, auto.on, auto.every, update]);
+
+  /* CLAUDE FIX R7 (4.3): leader heartbeat. Touching / typing / reopening this
+     tab claims the world for it; a hidden tab only keeps a lease nobody else wants. */
+  useEffect(() => {
+    if (!world || !meId) return undefined;
+    let lastClaim = 0;
+    const claim = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (now() - lastClaim < 10000) return;
+      lastClaim = now();
+      simLeaderPing(true);
+    };
+    const tick = () => simLeaderPing(false);
+    const onVisible = () => { if (!document.hidden) { lastClaim = 0; claim(); } };
+    claim();
+    const i = setInterval(tick, 15000);
+    window.addEventListener("pointerdown", claim, { passive: true });
+    window.addEventListener("keydown", claim);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(i);
+      window.removeEventListener("pointerdown", claim);
+      window.removeEventListener("keydown", claim);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [world ? world.code : null, meId]);
 
   useEffect(() => { if (err) { const t = setTimeout(() => setErr(""), 9000); return () => clearTimeout(t); } }, [err]);
 
@@ -61053,7 +61150,75 @@ function fullSpecScheduleFollowBackDm(w,event){ /* CLAUDE FIX 2.3: the grounded 
 function fullSpecApplyDmEventFallback(w,event,beforeScores){ if(!w||!event||String(event.type||"").toLowerCase()!=="dm-message")return; const actorId=String(event.actorId||""); if(!actorId||!isHuman(w,actorId))return; const botId=String((event.targetIds||[]).find((id)=>id&&!isHuman(w,id))||""); if(!botId)return; const scoreKey=botId+">"+actorId; const before=Object.prototype.hasOwnProperty.call(beforeScores,scoreKey)?Number(beforeScores[scoreKey])||0:0; const afterLegacy=fullSpecRelScore(w,botId,actorId),legacyDelta=afterLegacy-before,desired=fullSpecRuleDelta("dm",event.text,legacyDelta,event); if(desired!==legacyDelta)fullSpecApplyRawDelta(w,{a:botId,b:actorId,delta:desired-legacyDelta,why:"deterministic direct-DM fallback"},"dm","direct-dm-rule-fallback"); fullSpecRememberDmFallback(w,botId,actorId,event,desired); }
 function fullSpecApplyRoleplayFallback(w,event,beforeScores){ if(!w||!event||String(event.type||"").toLowerCase()!=="roleplay-summary")return; const sceneId=String(event.meta&&event.meta.sceneId||""),state=fullSpecState(w); if(sceneId&&Number(state.roleplayAiSeen[sceneId]))return; const humanId=String((event.targetIds||[]).find((id)=>isHuman(w,id))||w.meId||""); if(!humanId)return; const bots=[...new Set((event.targetIds||[]).filter((id)=>id&&!isHuman(w,id)&&charById(w,id)))]; bots.forEach((botId)=>{const scoreKey=botId+">"+humanId; const before=Object.prototype.hasOwnProperty.call(beforeScores,scoreKey)?Number(beforeScores[scoreKey])||0:fullSpecRelScore(w,botId,humanId); const existingAfter=fullSpecRelScore(w,botId,humanId); if(existingAfter!==before)return; const delta=fullSpecRuleDelta("roleplay",event.text,0,event); if(delta)fullSpecApplyRawDelta(w,{a:botId,b:humanId,delta,why:"scene-end deterministic fallback"},"roleplay","scene-end deterministic fallback");}); }
 function fullSpecCleanupFollowBackPending(w,event){ if(!w||!event)return; const type=String(event.type||"").toLowerCase(); if(type!=="follow"&&type!=="unfollow")return; const actorId=String(event.actorId||""),targets=Array.isArray(event.targetIds)?event.targetIds.map(String):[],state=fullSpecState(w); Object.entries(state.pendingDmTriggers||{}).forEach(([key,row])=>{if(!row||!row.requireNoFollowBack)return; const botId=String(row.botId||""),humanId=String(row.humanId||""); const followBackHappened=type==="follow"&&actorId===humanId&&targets.includes(botId),botUnfollowed=type==="unfollow"&&actorId===botId&&targets.includes(humanId); if(followBackHappened||botUnfollowed){delete state.pendingDmTriggers[key]; console.info("[event-dm]","cancelled=follow-back-condition-cleared","bot="+botId,"human="+humanId);}}); }
-function legacyGroundedRecordSocialEvent(w,event={}){ const beforeScores=fullSpecSnapshotScores(w); let result=null; try{result=legacyFullSpecRecordSocialEvent(w,event);}catch(error){console.warn("[social-event] ledger/consequence step failed; completion hooks continue",error);} try{fullSpecApplyDmEventFallback(w,event,beforeScores);}catch(error){console.warn("[relationship-fallback] DM fallback failed; continuing",error);} try{fullSpecApplyRoleplayFallback(w,event,beforeScores);}catch(error){console.warn("[relationship-fallback] roleplay fallback failed; continuing",error);} try{fullSpecCleanupFollowBackPending(w,event);fullSpecScheduleFollowBackDm(w,event);fullSpecScheduleEventDms(w,event);}catch(error){console.warn("[event-dm] scheduling failed; continuing",error);} return result; }
+/* CLAUDE FIX R7 (7.2): characters notice when the player is clearly online but
+   leaves their DM unanswered, and when the player tags them. Only real, recorded
+   activity triggers this; the DM goes through the normal pause rules (5.5). */
+function fullSpecScheduleIgnoredAndTagDms(w, event) {
+  if (!w || !event) return;
+  const type = String(event.type || "").toLowerCase();
+  const actor = String(event.actorId || "");
+  if (!actor || !isHuman(w, actor)) return;
+  if (!["post", "comment", "reply", "dm-message", "note"].includes(type)) return;
+  const state = fullSpecState(w);
+  if (!state.ignoredDmSeen || typeof state.ignoredDmSeen !== "object" || Array.isArray(state.ignoredDmSeen)) state.ignoredDmSeen = {};
+  const playerName = nameOfIn(w, actor) || "the player";
+  const did = type === "post" ? "posted on the feed" : type === "dm-message" ? "is messaging someone else" : type === "note" ? "wrote a note" : "is commenting under posts";
+  const targets = Array.isArray(event.targetIds) ? event.targetIds.map(String) : [];
+  let queued = 0;
+  const alreadyWriting = new Set();
+  (w.chars || []).forEach((c) => {
+    if (!c || !c.id || queued >= 1 || isHuman(w, c.id) || isMediaAccount(w, c.id)) return;
+    if (type === "dm-message" && targets.includes(String(c.id))) return;
+    const rows = (w.chats && w.chats[chatKey(actor, c.id)]) || [];
+    const last = rows[rows.length - 1];
+    if (!last || String(last.from || "") !== "them") return;
+    const age = now() - (Number(last.ts) || 0);
+    if (age < 20 * 60 * 1000 || age > 24 * 60 * 60 * 1000) return;
+    const seenKey = c.id + ":" + String(last.id || last.ts);
+    if (state.ignoredDmSeen[seenKey]) return;
+    if (!groundedFollowBackPersonalityEligible(w, c.id, actor)) return;
+    state.ignoredDmSeen[seenKey] = now();
+    const minutes = Math.round(age / 60000);
+    const cause = {
+      id: "ignored_" + seenKey,
+      type: "ignored-dm",
+      actorId: actor,
+      targetIds: [c.id],
+      text: playerName + " has not answered your last DM (\"" + cut(String(last.text || ""), 140) + "\") for " + minutes + " minutes, yet is clearly online: " + playerName + " " + did + (event.text ? " (\"" + cut(String(event.text), 120) + "\")" : "") + ". React to being ignored in your own way — hurt, annoyed, jealous, sarcastic or pretending not to care.",
+    };
+    if (fullSpecQueuePendingDmTrigger(w, c.id, cause, "ignored-dm", { humanId: actor, delayMs: 60 * 1000 })) {
+      queued += 1;
+      alreadyWriting.add(String(c.id));
+      groundedEventLog(w, "ignored-dm", "started", c.name + " noticed an unanswered DM while " + playerName + " is active; reaction DM queued.", type + ":" + String(event.id || event.refId || ""));
+    }
+  });
+  if ((type === "post" || type === "comment" || type === "reply") && /@/.test(String(event.text || ""))) {
+    const low = String(event.text || "").toLowerCase();
+    let tagged = 0;
+    (w.chars || []).forEach((c) => {
+      if (!c || !c.id || tagged >= 2 || alreadyWriting.has(String(c.id)) || isHuman(w, c.id) || isMediaAccount(w, c.id)) return;
+      const handles = [c.username, c.nick, String(c.name || "").split(/\s+/)[0], c.name].map((x) => String(x || "").trim().toLowerCase()).filter((x) => x.length >= 3);
+      if (!handles.some((h) => low.includes("@" + h) || low.includes("@" + h.replace(/\s+/g, "")))) return;
+      const rel = getRel(w, c.id, actor) || EMPTY_REL;
+      if (Math.abs(Number(rel.score) || 0) < 15 && !groundedFollowBackPersonalityEligible(w, c.id, actor)) return;
+      const cause = {
+        id: "tag_" + String(event.id || event.refId || now()) + "_" + c.id,
+        type: "player-tagged",
+        actorId: actor,
+        targetIds: [c.id],
+        text: playerName + " tagged you publicly: \"" + cut(String(event.text || ""), 220) + "\". React to being tagged the way you would — playful, flattered, annoyed, flirty or awkward, depending on your relationship.",
+      };
+      if (fullSpecQueuePendingDmTrigger(w, c.id, cause, "player-tagged", { humanId: actor, delayMs: 90 * 1000 })) {
+        tagged += 1;
+        groundedEventLog(w, "player-tagged", "started", c.name + " was tagged by " + playerName + "; reaction DM queued.", type + ":" + String(event.id || event.refId || ""));
+      }
+    });
+  }
+  const keys = Object.keys(state.ignoredDmSeen);
+  if (keys.length > 300) keys.sort((a, b) => state.ignoredDmSeen[a] - state.ignoredDmSeen[b]).slice(0, keys.length - 300).forEach((k) => delete state.ignoredDmSeen[k]);
+}
+
+function legacyGroundedRecordSocialEvent(w,event={}){ const beforeScores=fullSpecSnapshotScores(w); let result=null; try{result=legacyFullSpecRecordSocialEvent(w,event);}catch(error){console.warn("[social-event] ledger/consequence step failed; completion hooks continue",error);} try{fullSpecApplyDmEventFallback(w,event,beforeScores);}catch(error){console.warn("[relationship-fallback] DM fallback failed; continuing",error);} try{fullSpecApplyRoleplayFallback(w,event,beforeScores);}catch(error){console.warn("[relationship-fallback] roleplay fallback failed; continuing",error);} try{fullSpecCleanupFollowBackPending(w,event);fullSpecScheduleFollowBackDm(w,event);fullSpecScheduleEventDms(w,event);}catch(error){console.warn("[event-dm] scheduling failed; continuing",error);} try{fullSpecScheduleIgnoredAndTagDms(w,event);}catch(error){console.warn("[event-dm] ignored/tag scheduling failed; continuing",error);} return result; }
 
 function fullSpecSafeCommentRowApply(n,postId,row,label){if(!row||typeof row!=="object")return 0;try{return Number(legacyFullSpecApplyComments(n,postId,{comments:[row]},label)||0);}catch(error){console.warn("[comment-pipeline] comment row failed; skipped only this row","post="+String(postId||""),"character="+String(row.id!==undefined?row.id:(row.authorId!==undefined?row.authorId:row.name||"")),error);return 0;}}
 function applyComments(n, postId, out, label) {
@@ -61889,6 +62054,16 @@ function groundedDueFollowBackAction(w) {
   for (const row of rows) {
     if (!charById(w, row.botId) || isHuman(w, row.botId)) { delete state.pendingFollowBack[row.botId]; continue; }
     const rowTrigger = String(row.trigger || "follow-not-returned");
+    /* CLAUDE FIX R7 (5.5): no follow/unfollow DM while the player is in a scene or
+       chatting in 2+ DM threads; the row stays pending, so the reason is not lost. */
+    const followPause = typeof eventDrivenAutonomousDmPauseReason === "function" ? String(eventDrivenAutonomousDmPauseReason(w) || "") : "";
+    if (followPause === "scene-active" || followPause === "parallel-dms") {
+      if (!row.lastDeferredLogAt || now() - Number(row.lastDeferredLogAt) > 60000) {
+        row.lastDeferredLogAt = now();
+        groundedEventLog(w, rowTrigger, "deferred", "DM to the player deferred (" + followPause + "); it will be sent afterwards.", "follow:" + row.botId + ">" + row.humanId);
+      }
+      continue;
+    }
     if (rowTrigger === "player-unfollowed") {
       if (isFollowing(w, row.humanId, row.botId)) { delete state.pendingFollowBack[row.botId]; continue; }
       groundedEventLog(w, "player-unfollowed", "started", "Unfollow reaction DM queued for " + nameOfIn(w, row.botId) + " (attempt " + ((Number(row.attempts) || 0) + 1) + "/" + FOLLOW_BACK_DM_MAX_ATTEMPTS + ").", "unfollow:" + row.humanId + ">" + row.botId);
@@ -62660,7 +62835,10 @@ function GroundedEventLogPanel({ w, update }) {
 }
 
 function World(props) {
-  return (<><GroundedEventLogPanel w={props.w} update={props.update} /><LegacyGroundedWorld {...props} /></>);
+  /* The event log is a background/debug tool: it is recorded and printed to the
+     console, but the panel only shows with ?debug in the address. */
+  const showEventLog = typeof window !== "undefined" && /[?&#]debug\b/i.test(String(window.location.search || "") + String(window.location.hash || ""));
+  return (<>{showEventLog ? <GroundedEventLogPanel w={props.w} update={props.update} /> : null}<LegacyGroundedWorld {...props} /></>);
 }
 
 

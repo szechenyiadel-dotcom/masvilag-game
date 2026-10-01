@@ -6187,6 +6187,32 @@ app.get(
   }
 );
 
+/* CLAUDE FIX R7 (4.3): one open copy of a world runs the background simulation.
+   A tab that the player is actively using may take the lease from another tab
+   or device of the SAME account; another player's live lease is respected. */
+const SIM_LEADER_LEASE_MS = 40000;
+const SIM_LEADER_BY_WORLD = new Map();
+
+app.post("/ai/leader", async (req, res) => {
+  const session = await getSessionIdentity(req).catch(() => null);
+  if (!session) return res.status(401).json({ leader: true, reason: "no-session" });
+  const worldKey = String(session.worldCode || "anonymous");
+  const accountId = String(session.accountId || "");
+  const clientId = String(req.body?.clientId || "").slice(0, 80) || accountId || "unknown";
+  const claim = req.body?.claim === true;
+  const now = Date.now();
+  const lease = SIM_LEADER_BY_WORLD.get(worldKey);
+  const free = !lease || lease.expiresAt <= now;
+  const mine = lease && lease.clientId === clientId;
+  const sameAccountTakeover = claim && lease && lease.accountId === accountId;
+  if (free || mine || sameAccountTakeover) {
+    if (lease && !mine && !free) console.info("[sim-leader] takeover", `world=${worldKey}`);
+    SIM_LEADER_BY_WORLD.set(worldKey, { clientId, accountId, expiresAt: now + SIM_LEADER_LEASE_MS });
+    return res.json({ leader: true, holder: "this-tab" });
+  }
+  return res.json({ leader: false, holder: lease.accountId === accountId ? "your-other-tab-or-device" : "another-player" });
+});
+
 /* MÁSVILÁG AI TOKEN SAFETY v1 */
 app.post(
   ["/ai/messages", "/ai/chat", "/ai/respond"],
