@@ -37455,6 +37455,13 @@ Formátum:
        * deterministic chat/event memory paths above. */
     });
 
+    /* CLAUDE FIX R8 (9.3): optional auto-start of the scene a DM agreed on. */
+    if (bridgePlan && !existingBridgeScene && dmAutoStartScenes(requestWorld, requestWorld.meId)) {
+      const autoPlayerId = requestWorld.meId;
+      update((n) => { acceptRoleplayInvitation(n, bridgeSceneId, autoPlayerId); });
+      if (typeof onOpenScene === "function") onOpenScene(bridgeSceneId);
+    }
+
     /*
      * Text + fresh Snap esetén a chatválasz AZONNAL megjelenik.
      * A képgenerálás nem blokkolja a beszélgetést; ha elkészül,
@@ -38139,8 +38146,11 @@ if (group) {
               if (!inviteScene) return null;
               const status = roleplayInvitationStatus(inviteScene);
               if (status === "pending" && roleplayInviteIsPending(inviteScene)) {
+                const offerPeople = [w.meId, ...(inviteScene.cast || [])].filter((id, i, arr) => id && arr.indexOf(id) === i).map((id) => nameOfIn(w, id)).filter(Boolean).join(", ");
                 return (
-                  <div className="row" style={{ marginTop: 8, gap: 6 }}>
+                  <>
+                  <div className="hint" style={{ marginTop: 8 }}>🎬 {tt("Jelenet indítása", "Start scene")}: {inviteScene.setting || inviteScene.title}{offerPeople ? " · " + offerPeople : ""}?</div>
+                  <div className="row" style={{ marginTop: 6, gap: 6 }}>
                     <button
                       type="button"
                       className="btn tiny primary"
@@ -38163,6 +38173,7 @@ if (group) {
                       ✕ {tt("Elutasítás", "Decline")}
                     </button>
                   </div>
+                  </>
                 );
               }
               if (status === "declined") return <div className="hint" style={{ marginTop: 7 }}>{tt("Meghívás elutasítva", "Invitation declined")}</div>;
@@ -62714,7 +62725,8 @@ function groundedRegisterIncomingDm(w, event) {
   state.dmUnread[actorId] = (Number(state.dmUnread[actorId]) || 0) + 1;
   const text = String(event.text || "");
   groundedEventLog(w, "dm", "received", nameOfIn(w, actorId) + " sent a DM.", groundedSourceRef(event), { actorId, humanId });
-  if (groundedLooksLikeInvitation(text)) {
+  const bridgeInvite = (w.scenes || []).some((sc) => sc && sc.chatBridge && String(sc.initiatedBy || "") === actorId && sc.invitationStatus === "pending" && now() - (Number(sc.invitedAt) || 0) < 5 * 60 * 1000);
+  if (!bridgeInvite && groundedLooksLikeInvitation(text)) {
     const existing = (w.invitations || []).find((inv) => inv && inv.status === "pending" && inv.fromId === actorId && inv.sourceRef === groundedSourceRef(event));
     if (!existing) {
       w.invitations.unshift({ id: "inv_" + uid(), fromId: actorId, toId: humanId, createdAt: now(), when: groundedExtractInviteWhen(text), where: groundedExtractInviteWhere(text), context: text.slice(0, 800), sourceRef: groundedSourceRef(event), status: "pending" });
@@ -62723,8 +62735,15 @@ function groundedRegisterIncomingDm(w, event) {
   }
 }
 
+/* CLAUDE FIX R8 (9.4): only a real invitation addressed to the player counts —
+   "how was the party?" or "coffee is my religion" is not one. */
 function groundedLooksLikeInvitation(text) {
-  return /\b(?:come\s+(?:with|to|over)|join\s+me|meet\s+me|want\s+to\s+(?:meet|come|go)|party|dinner|coffee|drinks?|hang\s*out|date|gyere|találkozz|találkozn|meghívlak|meghív|buli|vacsora|kávé|ital|találkozó|randi|edzés|dojo)\b/iu.test(String(text || ""));
+  const s = String(text || "").toLowerCase();
+  if (!s.trim()) return false;
+  const en = /\b(?:come\s+(?:over|with\s+me|along|by|to\s+(?:my|the|our|this)\b)|join\s+(?:me|us)\b|meet\s+(?:me|up)\b|wanna\s+(?:come|go|grab|hang|get|meet|join)|want\s+to\s+(?:come|go|grab|hang|get|meet|join)|do\s+you\s+want\s+to\s+(?:come|go|grab|hang|get|meet|join)|are\s+you\s+(?:coming|free|down)\b|you\s+(?:coming|free|down)\b[^.!?\n]{0,40}\?|let'?s\s+(?:go|grab|get|meet|hang|head)\b|(?:i'?ll|let\s+me)\s+pick\s+you\s+up|be\s+my\s+date|go\s+out\s+with\s+me|see\s+you\s+(?:there|at\s+\w+|tonight|tomorrow)|i'?m\s+inviting\s+you|you'?re\s+invited)/i.test(s);
+  const hu = /(?:^|[^\p{L}])(?:gyere(?:l)?|gyertek|eljössz|átjössz|jössz\s+(?:el|velem|át|ma|holnap)|van\s+kedved|nincs\s+kedved|menjünk|találkozzunk|elviszlek|érted\s+megyek|felveszlek|meghívlak|meg\s+vagy\s+hívva|ráérsz)(?=$|[^\p{L}])/iu.test(s);
+  const pastOnly = /\b(?:was|were|last\s+(?:night|week|time)|yesterday)\b|tegnap|múlt(?:\s|kor)/i.test(s) && !/\?/.test(s);
+  return (en || hu) && !pastOnly;
 }
 function groundedExtractInviteWhen(text) {
   const m = String(text || "").match(/\b(?:tonight|tomorrow|today|this\s+(?:evening|afternoon|weekend)|at\s+\d{1,2}(?::\d{2})?|ma\s+este|holnap|ma|hétvégén|\d{1,2}:\d{2})\b/iu);
@@ -62803,13 +62822,37 @@ function GroundedInvitationsPanel({ w, update, onOpenScene }) {
   );
 }
 
+function dmAutoStartScenes(w, playerId) {
+  const settings = w && w.userSettings && playerId ? w.userSettings[playerId] : null;
+  return Boolean(settings && settings.autoStartDmScenes === true);
+}
+
+function DmSceneAutoStartToggle({ w, update }) {
+  const { tt } = useLang();
+  const me = w && w.meId;
+  const on = dmAutoStartScenes(w, me);
+  if (!me) return null;
+  return (
+    <label className="hint" style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px", cursor: "pointer" }}>
+      <input type="checkbox" checked={on} onChange={(e) => {
+        const next = e.target.checked;
+        update((n) => {
+          if (!n.userSettings) n.userSettings = {};
+          n.userSettings[me] = { ...(n.userSettings[me] || {}), autoStartDmScenes: next };
+        });
+      }} />
+      {tt("Ha egy DM-ben megbeszéltek egy találkozót, a jelenet magától induljon el", "When a DM agrees on meeting up, start the scene automatically")}
+    </label>
+  );
+}
+
 function Chat(props) {
   const { w, update, openId } = props;
   useEffect(() => {
     if (!openId) return;
     update((n) => { const state = groundedRuntime(n); if (state.dmUnread[openId]) state.dmUnread[openId] = 0; });
   }, [openId]);
-  return (<>{!openId ? <GroundedInvitationsPanel w={w} update={update} onOpenScene={props.onOpenScene} /> : null}<LegacyGroundedChat {...props} /></>);
+  return (<>{!openId ? <DmSceneAutoStartToggle w={w} update={update} /> : null}{!openId ? <GroundedInvitationsPanel w={w} update={update} onOpenScene={props.onOpenScene} /> : null}<LegacyGroundedChat {...props} /></>);
 }
 
 function GroundedEventLogPanel({ w, update }) {
