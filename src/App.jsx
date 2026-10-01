@@ -16454,7 +16454,8 @@ function sanitizePhoneDm(
   if (!value) return "";
   if (options && options.roleplay) {
     let rpText = String(value || "").replace(/[ \t]+/g, " ").trim();
-    rpText = String(rpText).replace(/\*([^*]+)\*/g, (m, inner) => "*" + repairRoleplayNarrationPov(w, botId, inner) + "*");
+    /* R48: short *emphasis* ("*me*", "*stop*") is not an action — leave it */
+    rpText = String(rpText).replace(/\*([^*]+)\*/g, (m, inner) => String(inner).trim().split(/\s+/).length < 4 ? m : "*" + repairRoleplayNarrationPov(w, botId, inner) + "*");
     if (!rpText) return "";
     rpText = sanitizeSocialUiMetaText(rpText);
     if (!rpText) return "";
@@ -35474,7 +35475,9 @@ Formátum:
                 ? addressedText
                 : turnIsAction
                   ? repairRoleplayNarrationPov(w, resolvedId, addressedText)
-                  : String(addressedText || "").replace(/\*([^*]+)\*/g, (m, inner) => "*" + repairRoleplayNarrationPov(w, resolvedId, inner) + "*")
+                  /* R48: a short *starred* bit inside speech is emphasis ("You worried about *me*?"),
+                     not an action — repairing it turned "me"/"you" into a random "her". */
+                  : String(addressedText || "").replace(/\*([^*]+)\*/g, (m, inner) => String(inner).trim().split(/\s+/).length < 4 ? m : "*" + repairRoleplayNarrationPov(w, resolvedId, inner) + "*")
             );
             const unsupportedPhysicalContinuation =
               !isNarr &&
