@@ -16035,9 +16035,12 @@ const HOSTILE_ENDEARMENT_WORDS = "babe|babes|baby|bae|honey|hun|hon|sweetheart|s
 function stripHostileEndearments(w, actorId, targetId, value) {
   const text = String(value || "");
   if (!text || !relationshipIsHostile(w, actorId, targetId)) return text;
-  const words = HOSTILE_ENDEARMENT_WORDS;
+  /* R28: a nickname the sheets give this pair (e.g. a mocking "princess") stays */
+  let sheetNicks = [];
+  try { sheetNicks = nicknamesUsedBy(w, actorId, targetId).map((x) => String(x.nickname || "").toLowerCase()); } catch (error) { sheetNicks = []; }
+  const words = HOSTILE_ENDEARMENT_WORDS.split("|").filter((x) => !sheetNicks.some((n) => n && new RegExp("^(?:" + x + ")$", "i").test(n))).join("|") || "\\u0000";
   /* pet names that are almost never ordinary words; these are removed even without a comma ("hey babe!") */
-  const pure = "babe|babes|bae|sweetheart|sweetie|darling|darlin'?|cutie|cutie ?pie|dollface|bébi|cicám|drágám|kincsem|szívem|édesem|bogaram|tündérem";
+  const pure = "babe|babes|bae|sweetheart|sweetie|darling|darlin'?|cutie|cutie ?pie|dollface|bébi|cicám|drágám|kincsem|szívem|édesem|bogaram|tündérem".split("|").filter((x) => !sheetNicks.some((n) => n && new RegExp("^(?:" + x + ")$", "i").test(n))).join("|") || "\\u0000";
   const end = "(?=\\s*(?:[,.!?…:;)*\"”]|$))";
   let out = text
     /* "Babe, ..." at the start */
@@ -28166,7 +28169,7 @@ let REPLY_DYNAMIC_CONTEXT = null;
 /* while a jealous / rival / defend reply is applied, the "keep it friendly"
    guards must not throw away the very conflict we asked for */
 let REPLY_DYNAMIC_APPLYING = "";
-const REPLY_CONFLICT_DYNAMICS = ["jealous", "rival", "defend", "jealous-watch", "defend-target"];
+const REPLY_CONFLICT_DYNAMICS = ["jealous", "rival", "defend", "jealous-watch", "defend-target", "hated-nickname"];
 
 /* CLAUDE FIX R25: jealousy and enmity are played as extreme as the sheet and the
    relationship say. "extreme" = obsession / possessive or jealous nature /
@@ -28210,6 +28213,14 @@ function replyDynamicDirective(w, comment) {
     return "\n" + (en
       ? "SOCIAL DYNAMIC FOR THIS REPLY" + (level === "extreme" ? " — FULL INTENSITY" : "") + ": " + responder + " has feelings for " + target + " and just watched " + target + " flirt with " + other + " in public. Reply to " + target + " with " + (level === "extreme" ? "open, possessive jealousy at full force, exactly as extreme as " + responder + "'s sheet — cutting, hurt or menacing, a jab at " + other + ", demanding what that was" : "clearly visible jealousy in your own style — hurt, sarcastic or cold, maybe a jab at " + other) + ". Never friendly or indifferent."
       : "TÁRSAS DINAMIKA EHHEZ A VÁLASZHOZ" + (level === "extreme" ? " — TELJES INTENZITÁS" : "") + ": " + responder + " érez valamit " + target + " iránt, és most látta, ahogy " + target + " nyilvánosan flörtöl " + other + "-val/vel. Válaszolj " + target + " kommentjére " + (level === "extreme" ? "nyílt, birtokló féltékenységgel, teljes erővel, ahogy " + responder + " lapja mondja — vágósan, sértetten vagy fenyegetően, egy beszólással " + other + " felé, számonkérve, mi volt ez" : "jól látható féltékenységgel a saját stílusodban — sértetten, szarkasztikusan vagy hidegen, akár egy beszólással " + other + " felé") + ". Soha ne legyél barátságos vagy közömbös.");
+  }
+  if (ctx.dynamic === "hated-nickname") {
+    let hit = null;
+    try { hit = hatedNicknameHit(w, comment.authorId, ctx.responderId, comment.text); } catch (error) { hit = null; }
+    const nick = hit ? hit.nickname : "";
+    return "\n" + (en
+      ? "SOCIAL DYNAMIC FOR THIS REPLY: " + target + " just called " + responder + " \"" + nick + "\" — a name " + responder + " hates. React to THAT, in your own style" + (hit && hit.reaction ? " (your sheet: " + hit.reaction + ")" : "") + "."
+      : "TÁRSAS DINAMIKA EHHEZ A VÁLASZHOZ: " + target + " épp \"" + nick + "\"-nak/nek hívta " + responder + "-t — ezt a nevet " + responder + " utálja. Erre reagálj, a saját stílusodban" + (hit && hit.reaction ? " (a lapod szerint: " + hit.reaction + ")" : "") + ".");
   }
   if (ctx.dynamic === "defend-target") {
     const victim = nameOfIn(w, ctx.otherId);
@@ -36044,7 +36055,9 @@ const turn = async (mine) => {
       const groupTargetId = playerTarget.id || (mentionedIdsInText(n, mine, n.meId).find((id) => (g.members || []).includes(id)) || "");
       if (groupTargetId) {
         const juice = publicSocialJuiceSignals(mine);
-        if (juice.romance >= 20 || juice.drama >= 26) {
+        let nickHit = null;
+        try { nickHit = hatedNicknameHit(n, n.meId, groupTargetId, mine); } catch (error) { nickHit = null; }
+        if (juice.romance >= 20 || juice.drama >= 26 || nickHit) {
           recordSocialEvent(n, {
             type: "group-message", refId: playerGroupMessage.id, ts: playerGroupMessage.ts,
             actorId: n.meId, targetIds: [groupTargetId],
@@ -36882,9 +36895,16 @@ function directDmClarificationBlock(w, c, ck, latestText) {
 function directDmEmotionTrigger(w, c, latestText) {
   const latest = String(latestText || "");
   if (!w || !c || !latest || !w.meId) return "";
-  const ids = mentionedIdsInText(w, latest, w.meId).filter((id) => id && id !== c.id && !isHuman(w, id) && !isMediaAccount(w, id)).slice(0, 3);
-  if (!ids.length) return "";
   const en = worldLanguage(w, w.meId) === "en";
+  let nickLine = "";
+  try {
+    const hit = hatedNicknameHit(w, w.meId, c.id, latest);
+    if (hit) nickLine = en
+      ? "- " + nameOfIn(w, w.meId) + " just called you \"" + hit.nickname + "\" — a name you hate. React to it in your own style" + (hit.reaction ? " (your sheet: " + hit.reaction + ")" : "") + ".\n"
+      : "- " + nameOfIn(w, w.meId) + " épp \"" + hit.nickname + "\"-nak/nek hívott — ezt a nevet utálod. Reagálj rá a saját stílusodban" + (hit.reaction ? " (a lapod szerint: " + hit.reaction + ")" : "") + ".\n";
+  } catch (error) { nickLine = ""; }
+  const ids = mentionedIdsInText(w, latest, w.meId).filter((id) => id && id !== c.id && !isHuman(w, id) && !isMediaAccount(w, id)).slice(0, 3);
+  if (!ids.length) return nickLine ? (en ? "EMOTIONAL TRIGGER IN THE PLAYER'S MESSAGE:\n" : "ÉRZELMI KIVÁLTÓ A JÁTÉKOS ÜZENETÉBEN:\n") + nickLine + "\n" : "";
   const player = nameOfIn(w, w.meId);
   let crush = false;
   try { crush = relationshipCrushActive(w, c.id, w.meId); } catch (error) { crush = false; }
@@ -36903,8 +36923,8 @@ function directDmEmotionTrigger(w, c, latestText) {
         : "- " + player + " épp megemlítette " + other + "-t. Érzel valamit " + player + " iránt: reagálj " + (level === "extreme" ? "nyílt, birtokló féltékenységgel, teljes erővel, ahogy a lapod mondja (hidegen fenyegetően vagy robbanékonyan — a természeted dönt)" : "látható féltékenységgel a saját módodon") + " — hacsak az üzenetből nem egyértelmű, hogy " + other + " egyáltalán nem fenyegetés.");
     }
   });
-  if (!rows.length) return "";
-  return (en ? "EMOTIONAL TRIGGER IN THE PLAYER'S MESSAGE:\n" : "ÉRZELMI KIVÁLTÓ A JÁTÉKOS ÜZENETÉBEN:\n") + rows.join("\n") + "\n\n";
+  if (!rows.length && !nickLine) return "";
+  return (en ? "EMOTIONAL TRIGGER IN THE PLAYER'S MESSAGE:\n" : "ÉRZELMI KIVÁLTÓ A JÁTÉKOS ÜZENETÉBEN:\n") + nickLine + rows.join("\n") + "\n\n";
 }
 
 function directDmProtectedTail(w, c, ck, latestText) {
@@ -49949,6 +49969,7 @@ function legacySimsSocialRecordSocialEvent(
    * jealous, remember it, lose relationship points and react. */
   applyObservedRomanticThirdPartyConsequences(w, entry);
   try { applyObservedConflictThirdPartyConsequences(w, entry); } catch (conflictError) { console.warn("[conflict-observers] failed", conflictError); }
+  try { applyHatedNicknameConsequence(w, entry); } catch (nicknameError) { console.warn("[hated-nickname] failed", nicknameError); }
 
   /*
    * A social ledger eseménye lehet egy backchannel rumor MAGJA.
@@ -63302,10 +63323,9 @@ function groupChatPlayerMoveLines(w, ids, move, en) {
   if (!move || !move.text || !w.meId) return "";
   const juice = publicSocialJuiceSignals(move.text);
   const targetId = move.targetId || (mentionedIdsInText(w, move.text, w.meId).find((id) => ids.includes(id)) || "");
-  if (!targetId) return "";
-  const player = nameOfIn(w, w.meId), target = nameOfIn(w, targetId);
+  const player = nameOfIn(w, w.meId), target = targetId ? nameOfIn(w, targetId) : "";
   const lines = [];
-  if (juice.romance >= 20) {
+  if (juice.romance >= 20 && targetId) {
     ids.filter((id) => id !== targetId).forEach((id) => {
       let crush = false;
       try { crush = relationshipCrushActive(w, id, w.meId); } catch (error) { crush = false; }
@@ -63316,13 +63336,18 @@ function groupChatPlayerMoveLines(w, ids, move, en) {
         : "- " + nameOfIn(w, id) + " érez valamit " + player + " iránt, és most itt látta flörtölni " + target + "-val/vel: " + (level === "extreme" ? "nyílt, birtokló féltékenység teljes erővel" : "látható féltékenység") + ", a saját stílusában.");
     });
   }
-  if (juice.drama >= 26) {
+  if (juice.drama >= 26 && targetId) {
     ids.filter((id) => id !== targetId).forEach((id) => {
       const loyal = socialPersonClosenessStake(w, id, targetId);
       if (loyal >= 2) lines.push(en ? "- " + nameOfIn(w, id) + " is close to " + target + " and takes " + target + "'s side against " + player + "." : "- " + nameOfIn(w, id) + " közel áll " + target + "-hoz/hez, és " + target + " oldalára áll " + player + " ellen.");
       else if (relationshipIsHostile(w, id, targetId)) lines.push(en ? "- " + nameOfIn(w, id) + " can't stand " + target + " and enjoys seeing " + player + " go after them." : "- " + nameOfIn(w, id) + " ki nem állhatja " + target + "-t, és élvezi, hogy " + player + " nekimegy.");
     });
   }
+  ids.forEach((id) => {
+    let hit = null;
+    try { hit = hatedNicknameHit(w, w.meId, id, move.text); } catch (error) { hit = null; }
+    if (hit) lines.push(en ? "- " + player + " just called " + nameOfIn(w, id) + " \"" + hit.nickname + "\", a name " + nameOfIn(w, id) + " hates — " + nameOfIn(w, id) + " reacts to it" + (hit.reaction ? " (" + hit.reaction + ")" : "") + "." : "- " + player + " épp \"" + hit.nickname + "\"-nak/nek hívta " + nameOfIn(w, id) + "-t, amit utál — reagál rá" + (hit.reaction ? " (" + hit.reaction + ")" : "") + ".");
+  });
   if (!lines.length) return "";
   return (en ? "WHAT THE OTHERS JUST SAW — THEY REACT TO IT NOW:\n" : "AMIT A TÖBBIEK MOST LÁTTAK — MOST REAGÁLNAK RÁ:\n") + lines.slice(0, 5).join("\n") + "\n";
 }
@@ -63488,7 +63513,7 @@ async function runIdentityCanonAction(view, update, action) {
    how it shows, their backstory in order, their key people, what they would
    never do and their typical lines. This card travels with the speaker into
    every prompt, so the story is known 1:1 and the personality is not softened. */
-const CHARACTER_BIBLE_VERSION = "1";
+const CHARACTER_BIBLE_VERSION = "2"; /* R28: + nicknames */
 const CHARACTER_BIBLE_MIN_GAP_MS = 15 * 1000;
 const CHARACTER_BIBLE_RETRY_MS = 10 * 60 * 1000;
 
@@ -63524,6 +63549,10 @@ function characterBibleCard(w, c, budget = 2400) {
       : "LAPKÁNON — " + name + " SZEMÉLYISÉGE ÉS TÖRTÉNETE (a saját lapjáról; 1:1 tudd, TELJES intenzitással játszd; privát, hacsak nem közismert):",
   ];
   if (d.core) lines.push((en ? "CORE: " : "LÉNYEG: ") + d.core);
+  try {
+    const nick = characterNicknameLines(w, c, en);
+    if (nick) lines.push(nick);
+  } catch (error) { /* ignore */ }
   if (Array.isArray(d.extremes) && d.extremes.length) {
     lines.push(en ? "DEFINING EXTREMES — show them every time they are relevant, never tone them down:" : "MEGHATÁROZÓ SZÉLSŐSÉGEK — mindig mutasd, amikor számít, soha ne tompítsd:");
     d.extremes.forEach((x) => lines.push("- " + x.trait + (x.toward ? " → " + x.toward : "") + (x.shows ? ": " + x.shows : "")));
@@ -63546,6 +63575,107 @@ function characterBibleCard(w, c, budget = 2400) {
   return out;
 }
 
+/* CLAUDE FIX R28: NICKNAMES FROM THE SHEETS. "X calls Y <nickname>" (on either
+   person's sheet) is used in play, and "Y hates being called that" makes Y
+   react — and costs X a little with Y every time. */
+function nicknameMatchesPerson(name, person) {
+  if (!person) return false;
+  try { return identityNameMatches(name, person); } catch (error) { return false; }
+}
+
+function nicknamesUsedBy(w, speakerId, targetId) {
+  const speaker = charById(w, speakerId), target = charById(w, targetId);
+  if (!speaker || !target || speakerId === targetId) return [];
+  const out = [];
+  const own = characterBibleFor(w, speakerId);
+  (own && Array.isArray(own.callsOthers) ? own.callsOthers : []).forEach((x) => {
+    if (x && x.nickname && nicknameMatchesPerson(x.person, target)) out.push({ nickname: x.nickname, tone: x.tone || "" });
+  });
+  const theirs = characterBibleFor(w, targetId);
+  (theirs && Array.isArray(theirs.calledBy) ? theirs.calledBy : []).forEach((x) => {
+    if (x && x.nickname && x.by && nicknameMatchesPerson(x.by, speaker) && !out.some((y) => y.nickname.toLowerCase() === x.nickname.toLowerCase())) {
+      out.push({ nickname: x.nickname, tone: /hate|ut[aá]l|gy[uű]l[oö]l/.test(x.feeling || "") ? "they hate it" : (x.feeling || "") });
+    }
+  });
+  return out.slice(0, 4);
+}
+
+function hatedNicknameHit(w, speakerId, targetId, text) {
+  const value = String(text || "").toLowerCase();
+  if (!value || !targetId) return null;
+  const d = characterBibleFor(w, targetId);
+  const speaker = charById(w, speakerId);
+  const rows = d && Array.isArray(d.calledBy) ? d.calledBy : [];
+  for (const x of rows) {
+    if (!x || !x.nickname || !/hate|ut[aá]l|gy[uű]l[oö]l|despis|can['’]?t stand|ki nem [aá]llhat|annoy|ideges[ií]t|irrit/.test(String(x.feeling || "") + " " + String(x.reaction || ""))) continue;
+    if (/secretly likes|titokban/.test(String(x.feeling || ""))) continue;
+    if (x.by && speaker && !nicknameMatchesPerson(x.by, speaker)) continue;
+    const nick = String(x.nickname).toLowerCase().trim();
+    if (nick.length < 2) continue;
+    const at = value.indexOf(nick);
+    if (at < 0) continue;
+    const before = at === 0 ? " " : value.charAt(at - 1), after = value.charAt(at + nick.length) || " ";
+    if (/[\p{L}\p{N}]/u.test(before) || /[\p{L}\p{N}]/u.test(after)) continue;
+    return x;
+  }
+  return null;
+}
+
+function characterNicknameLines(w, c, en) {
+  if (!w || !c) return "";
+  const lines = [];
+  const people = allSubjects(w).filter((p) => p && p.id && p.id !== c.id && !isMediaAccount(w, p.id));
+  people.forEach((p) => {
+    nicknamesUsedBy(w, c.id, p.id).forEach((x) => lines.push((en ? "you call " : "így szólítod: ") + p.name + " → \"" + x.nickname + "\"" + (x.tone ? " (" + x.tone + ")" : "")));
+  });
+  const d = characterBibleFor(w, c.id);
+  const calledBy = d && Array.isArray(d.calledBy) ? d.calledBy : [];
+  const own = [];
+  calledBy.forEach((x) => {
+    if (!x || !x.nickname) return;
+    own.push("\"" + x.nickname + "\"" + (x.by ? (en ? " from " : " – ") + x.by : "") + ": " + (x.feeling || "") + (x.reaction ? (en ? " — reaction: " : " — reakció: ") + x.reaction : ""));
+  });
+  const out = [];
+  if (lines.length) out.push((en ? "NICKNAMES YOU USE — use them naturally when you address these people, as your sheet says (even if they hate it): " : "BECENEVEK, AMIKET HASZNÁLSZ — szólítsd így őket természetesen, ahogy a lapod mondja (akkor is, ha utálják): ") + lines.slice(0, 6).join(" · "));
+  if (own.length) out.push((en ? "WHAT OTHERS CALL YOU — when someone uses one of these, react exactly as written: " : "AHOGY TÉGED HÍVNAK — ha valaki így szólít, pontosan így reagálj: ") + own.slice(0, 5).join(" · "));
+  return out.join("\n");
+}
+
+function applyHatedNicknameConsequence(w, event) {
+  if (!w || !event || event.factLevel !== "observed") return;
+  const type = String(event.type || "");
+  if (!["comment", "reply", "post", "group-message", "dm-message", "dm"].includes(type)) return;
+  const actorId = String(event.actorId || "");
+  if (!actorId) return;
+  (event.targetIds || []).map(String).filter((id) => id && id !== actorId && !isHuman(w, id)).slice(0, 4).forEach((targetId) => {
+    const hit = hatedNicknameHit(w, actorId, targetId, event.text);
+    if (!hit) return;
+    const rel = getRel(w, targetId, actorId) || EMPTY_REL;
+    const oldScore = Number(rel.score) || 0;
+    const next = Math.max(-100, oldScore - 2);
+    const en = worldLanguage(w, w.meId) === "en";
+    setRel(w, targetId, actorId, {
+      score: next,
+      mood: en ? "annoyed at being called \"" + hit.nickname + "\"" : "idegesíti, hogy \"" + hit.nickname + "\"-nak/nek hívják",
+    });
+    groundedEventLog(w, "relationship-change", "applied",
+      nameOfIn(w, targetId) + " → " + nameOfIn(w, actorId) + ": -2 (called \"" + hit.nickname + "\", which " + nameOfIn(w, targetId) + " hates)",
+      type + ":" + String(event.refId || event.id || ""));
+    /* the target answers it in the same thread (cooldown per pair) */
+    const sim = ensureSimState(w);
+    sim.nicknameReactAt = sim.nicknameReactAt && typeof sim.nicknameReactAt === "object" ? sim.nicknameReactAt : {};
+    const key = targetId + ">" + actorId;
+    if ((type === "comment" || type === "reply") && event.meta && event.meta.postId && event.meta.commentId &&
+        now() - (Number(sim.nicknameReactAt[key]) || 0) > 20 * 60 * 1000 && typeof simEnqueue === "function") {
+      sim.nicknameReactAt[key] = now();
+      simEnqueue(w, mkAction("reply", "hated-nickname:" + String(event.refId || event.id) + ":" + targetId, {
+        postId: event.meta.postId, commentId: event.meta.commentId, targetId, trigger: "hated-nickname",
+        dynamic: "hated-nickname", dynamicOtherId: actorId,
+      }, actorId === w.meId ? "player-event" : "event"));
+    }
+  });
+}
+
 function characterBibleDueAction(w) {
   if (!w) return null;
   const state = characterBibleState(w);
@@ -63560,8 +63690,8 @@ function characterBibleDueAction(w) {
     return Math.abs(Number(a.score) || 0) + Math.abs(Number(b.score) || 0) + (a.bond || b.bond ? 50 : 0);
   };
   const list = allSubjects(w)
-    .filter((c) => c && c.id && !isHuman(w, c.id) && !isMediaAccount(w, c.id))
-    .sort((x, y) => closeness(y) - closeness(x));
+    .filter((c) => c && c.id && !isMediaAccount(w, c.id))
+    .sort((x, y) => (isHuman(w, y.id) ? 1 : 0) - (isHuman(w, x.id) ? 1 : 0) || closeness(y) - closeness(x));
   for (const c of list) {
     const src = characterBibleSource(c);
     if (src.trim().length < 40) continue;
@@ -63597,9 +63727,11 @@ async function runCharacterBibleAction(view, update, action) {
     "- people: the most important people on the sheet. Each: name, is (what they are to them), feels (how they feel and act toward them). Max 10.",
     "- never: things this person would never do or say, from the sheet. Max 6.",
     "- phrases: up to 4 typical lines or words they use (from the sheet, or very close to how the sheet describes their speech).",
+    "- callsOthers: nicknames / pet names / mocking names THIS person uses for specific other people, exactly as the sheet states. Each: person (name), nickname (exact spelling), tone (affectionate | teasing | mocking | possessive | formal). Max 8. Empty if the sheet says nothing.",
+    "- calledBy: names or nicknames OTHERS use for THIS person, and how THIS person feels about each, exactly as the sheet states. Each: by (who uses it; empty = anyone), nickname (exact spelling), feeling (hates | likes | tolerates | secretly likes), reaction (how they react when called that). Max 6. Empty if the sheet says nothing.",
     "",
     "JSON ONLY:",
-    '{"core":"","extremes":[{"trait":"","toward":"","shows":""}],"history":[""],"people":[{"name":"","is":"","feels":""}],"never":[""],"phrases":[""]}',
+    '{"core":"","extremes":[{"trait":"","toward":"","shows":""}],"history":[""],"people":[{"name":"","is":"","feels":""}],"never":[""],"phrases":[""],"callsOthers":[{"person":"","nickname":"","tone":""}],"calledBy":[{"by":"","nickname":"","feeling":"","reaction":""}]}',
   ].join("\n");
   let out = null;
   try {
@@ -63631,6 +63763,10 @@ async function runCharacterBibleAction(view, update, action) {
       .slice(0, 10).map((x) => ({ name: clean(x.name, 60), is: clean(x.is, 70), feels: clean(x.feels, 170) })),
     never: list(out.never, 6, 140),
     phrases: list(out.phrases, 4, 140),
+    callsOthers: (Array.isArray(out.callsOthers) ? out.callsOthers : []).filter((x) => x && typeof x === "object" && String(x.nickname || "").trim() && String(x.person || "").trim())
+      .slice(0, 8).map((x) => ({ person: clean(x.person, 60), nickname: clean(x.nickname, 40), tone: clean(x.tone, 30).toLowerCase() })),
+    calledBy: (Array.isArray(out.calledBy) ? out.calledBy : []).filter((x) => x && typeof x === "object" && String(x.nickname || "").trim())
+      .slice(0, 6).map((x) => ({ by: clean(x.by, 60), nickname: clean(x.nickname, 40), feeling: clean(x.feeling, 30).toLowerCase(), reaction: clean(x.reaction, 160) })),
   };
   if (!data.core && !data.extremes.length && !data.history.length) {
     update((n) => {
