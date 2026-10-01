@@ -10680,6 +10680,9 @@ function friendshipHostilityMismatch(
   contextText = ""
 ) {
   if (!w || !actorId || !targetId || actorId === targetId) return false;
+  /* CLAUDE FIX R26: an obsessed, dangerous or love-hate character's threats are
+     canon, not "unjustified coldness" — never cut them out of the reply. */
+  if (relationshipAllowsDarkEdge(w, actorId, targetId)) return false;
 
   const rel = effectiveRelationshipForBehavior(w, actorId, targetId) || {};
   const tier = relationshipFilterTier(rel);
@@ -10715,6 +10718,24 @@ function friendshipHostilityMismatch(
   }
 
   return true;
+}
+
+function relationshipAllowsDarkEdge(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || actorId === targetId) return false;
+  const rel = getRel(w, actorId, targetId) || EMPTY_REL;
+  const relText = [rel.bond, rel.type, rel.mood, rel.hidden].filter(Boolean).join(" ").toLowerCase();
+  if (/obsess|megsz[aá]ll|possess|birtokl|fixat|toxic|toxikus|dark|s[oö]t[eé]t|stalk|danger|vesz[eé]ly|rival|riv[aá]lis|enemy|ellens[eé]g|hate|gy[uű]l[oö]l|ut[aá]l|love-hate|kill|[oö]l(?:ni|ök)|threat|fenyeget|captor|fogva/.test(relText)) return true;
+  let reading = null;
+  try { reading = relationshipReadingFeelings(w, actorId, targetId); } catch (error) { reading = null; }
+  if (reading && ((Number(reading.obsession) || 0) >= 40 || (Number(reading.fear) || 0) >= 40)) return true;
+  let reverse = null;
+  try { reverse = relationshipReadingFeelings(w, targetId, actorId); } catch (error) { reverse = null; }
+  if (reverse && (Number(reverse.fear) || 0) >= 40) return true;
+  const actor = charById(w, actorId);
+  let bible = null;
+  try { bible = characterBibleFor(w, actorId); } catch (error) { bible = null; }
+  const nature = [actor && actor.personality, actor && actor.traits, bible && bible.core, bible && Array.isArray(bible.extremes) ? bible.extremes.map((x) => x.trait).join(" ") : ""].filter(Boolean).join(" ").toLowerCase();
+  return /cruel|sadist|psycho|menacing|dangerous|ruthless|violent|killer|murder|manipulat|obsess|possessive|sociopath|predator|kegyetlen|vesz[eé]lyes|er[oő]szakos|szadista|pszichop|manipulat[ií]v|k[oö]ny[oö]rtelen|megsz[aá]llott|birtokl[oó]|gyilkos|f[eé]lelmetes/.test(nature);
 }
 
 function socialCommentLooksBuddyFriendly(value) {
@@ -16208,6 +16229,7 @@ function emergencyFriendlyDmReply(w, botId, contextText = "") {
 function sanitizeUnjustifiedColdDm(w, botId, contextText, value) {
   let text = String(value || "").trim();
   if (!text) return text;
+  if (relationshipAllowsDarkEdge(w, botId, w && w.meId)) return text;
 
   const directCold = DM_COLD_DISMISSAL_RE.test(text);
   const friendshipMismatch = friendshipHostilityMismatch(
@@ -36801,7 +36823,8 @@ function directDmClarificationBlock(w, c, ck, latestText) {
   const latestWords = words(latest);
   const ownWords = new Set(words(own));
   const echo = latestWords.length && latestWords.length <= 7 && /\?\s*$/.test(latest) && latestWords.filter((t) => ownWords.has(t)).length >= Math.min(2, latestWords.length);
-  const asks = /^(?:\?+|huh\??|what\??|wdym|what do you mean|meaning\?|what\s+(?:is\s+that|are\s+you\s+(?:talking|on)\s+about)|explain|mi\?|mi van\?|hogy(?:an)? érted|ezt hogy érted|mire gondolsz|mit akarsz ezzel)/i.test(latest);
+  const asks = /^(?:\?+|huh\??|what\??|wdym|what do you mean|meaning\?|what\s+(?:is\s+that|are\s+you\s+(?:talking|on)\s+about)|explain|mi\?|mi van\?|hogy(?:an)? érted|ezt hogy érted|mire gondolsz|mit akarsz ezzel)/i.test(latest) ||
+    (latestWords.length <= 7 && /\b(?:with|about|for|by|of|like|to)?\s*what\s*\?+\s*$|\b(?:mi|mit|mivel|mir[oő]l|mire|hogy)\s*\?+\s*$|\bmeaning\s*\?+\s*$/i.test(latest));
   if (!echo && !asks) return "";
   return "CLARIFICATION REQUEST — THE PLAYER DID NOT UNDERSTAND YOUR LAST LINE:\n" +
     "Your last message was: \"" + own.slice(0, 300) + "\"\n" +
@@ -36982,18 +37005,25 @@ async function askDirectDmJSONInteractive(w, system, prompt, options = {}) {
   );
 
   const firstReply = String(out && out.reply !== undefined ? out.reply : "").trim();
+  const askingAboutLastLine = Boolean(c && directDmClarificationBlock(w, c, ck || chatKey(w.meId, c.id), latestText));
   if (!c || !firstReply || !directDmReplyLooksRepetitive(w, c, firstReply)) {
     return out;
   }
+  if (askingAboutLastLine) {
+    /* explaining the last line naturally reuses its words — only an exact repeat is rewritten */
+    const ownTexts = ((w.chats && w.chats[ck || chatKey(w.meId, c.id)]) || []).filter((m) => m && m.from !== "me").slice(-5).map((m) => normUtterance(String(m.text || "")));
+    if (!ownTexts.includes(normUtterance(firstReply))) return out;
+  }
 
-  const retryPrompt =
+  /* CLAUDE FIX R26: the rewrite keeps the whole character/world context */
+  const retryPrompt = directDmPrebudgetPrompt(prompt,
     directDmProtectedTail(w, c, ck || chatKey(w.meId, c.id), latestText) +
     "\n\nONE STRICT REWRITE ONLY:\n" +
     "The rejected draft repeated your recent DM language. Write a genuinely new reply that still reacts directly to the exact latest player message. " +
     "Do not reuse the same opening, metaphor, threat/flirt formula, or distinctive phrase.\n" +
     "REJECTED DRAFT:\n" + firstReply + "\n\n" +
     "Return ONLY JSON in this exact minimal form: {\"reply\":\"your rewritten reply\"}\n\n" +
-    "AMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\n" + latestText;
+    "AMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\n" + latestText);
 
   directDmPromptDebugLog(retryPrompt, c, latestText, true);
 
