@@ -53869,7 +53869,8 @@ async function legacyPlayerPostRunSimulationAction(view, update, action, addImag
       const publicSummary = String(out.publicSummary || "").trim().slice(0, 5000);
       const privateSummary = String(out.privateSummary || "").trim().slice(0, 7500);
       live.aiContextSummary = {
-        version: 2,
+        version: 3,
+        persona: String(out.persona || "").trim().slice(0, 1200) || current.persona || "",
         sourceHash: current.sourceHash,
         public: publicSummary || current.public,
         private: privateSummary || current.private,
@@ -60044,12 +60045,13 @@ function ensureCharacterContextSummary(c) {
   const sourceHash = simsSocialStableHash(parts.publicText + "\n---PRIVATE---\n" + parts.privateText);
   const current = c && c.aiContextSummary && typeof c.aiContextSummary === "object" ? c.aiContextSummary : null;
 
-  if (current && current.version === 2 && current.sourceHash === sourceHash && current.public && current.private) {
+  if (current && current.version === 3 && current.sourceHash === sourceHash && current.public && current.private) {
     return current;
   }
 
   const fallback = {
-    version: 2,
+    version: 3,
+    persona: current && current.persona && current.sourceHash === sourceHash ? current.persona : "",
     sourceHash,
     public: publicDigest,
     private: [publicDigest, privateDigest].filter(Boolean).join("\n\n").slice(0, SIMS_SOCIAL_SUMMARY_PRIVATE_CAP),
@@ -60102,13 +60104,14 @@ async function genCharacterSheetSummary(w, c) {
     "Write the summaries in " + (worldLanguage(w, w && w.meId) === "en" ? "English" : "Hungarian") + " (quote the character's own typical phrases in their original language).",
     "PUBLIC SOURCE:\n" + (publicInput || "(none)"),
     "PRIVATE SOURCE (full sheet):\n" + (privateInput || "(none)"),
+    "PERSONA: additionally write \"persona\" — max ~900 characters — the essence of this person for a writer who gets only this: core personality, how they behave in public vs in private, how they typically react (to flirting, insults, rivals, friends), how they talk, and what they would NEVER do. Concrete, drawn from the sheet, no generic adjectives without evidence.",
     "JSON ONLY:",
-    '{"publicSummary":"max ~3500 chars","privateSummary":"max ~6500 chars, labelled sections 1-9"}'
+    '{"publicSummary":"max ~3500 chars","privateSummary":"max ~6500 chars, labelled sections 1-9","persona":"max ~900 chars"}'
   ].join("\n\n");
 
   try {
     return await askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, {
-      maxTokens: 3600,
+      maxTokens: 4500,
       priority: -15,
       source: "sheet-summary",
       quality: "deep",
@@ -60759,7 +60762,7 @@ function legacyFullSpecRecordSocialEvent(w, event = {}) {
 
 /* MÁSVILÁG CHARACTER VOICE STYLE v1 */
 const VOICE_STYLE_CARD_VERSION = 1;
-const VOICE_STYLE_PREFIX_MAX = 14500; // enough for a separate compact card for every multi-speaker participant
+const VOICE_STYLE_PREFIX_MAX = 22000; // enough for a separate compact card for every multi-speaker participant
 let VOICE_STYLE_STRICT_RETRY_IDS = null;
 
 function voiceStyleRawSheet(c) {
@@ -60968,6 +60971,23 @@ function extractCharacterVoiceStyleCard(c) {
   return result;
 }
 
+function characterPersonaBrief(c) {
+  if (!c) return "";
+  let persona = "";
+  try {
+    const summary = ensureCharacterContextSummary(c);
+    persona = String(summary && summary.persona || "").trim();
+  } catch (error) { persona = ""; }
+  if (persona) return persona.slice(0, 1200);
+  /* until the AI brief exists: the sheet's own personality fields, verbatim */
+  const raw = [
+    c.personality ? "Personality: " + String(c.personality) : "",
+    c.traits ? "Traits: " + String(c.traits) : "",
+    c.speech ? "Speech: " + String(c.speech) : "",
+  ].filter(Boolean).join("\n");
+  return raw.replace(/\s+\n/g, "\n").slice(0, 1100);
+}
+
 function characterVoiceStyleCard(c) {
   const card = extractCharacterVoiceStyleCard(c);
   return card && card.card ? String(card.card).slice(0, 1600) : "";
@@ -60991,8 +61011,10 @@ function voiceCard(c) {
     const contextSummary = ensureCharacterContextSummary(c);
     summary = String(contextSummary && contextSummary.private || "").slice(0, 2800);
   } catch {}
+  const persona = characterPersonaBrief(c);
   return [
     style,
+    persona ? "PERSONALITY — FROM THE OWN SHEET, PLAY EXACTLY THIS:\n" + persona : "",
     strict,
     summary
       ? "COMPACT SELF-CANON — RELEVANT PORTRAYAL CONTEXT; DO NOT LEAK PRIVATE FACTS AS OTHER CHARACTERS' KNOWLEDGE:\n" + summary
@@ -61011,11 +61033,19 @@ function voiceStyleCardsForIds(w, ids, actorId) {
   else add(ids);
   add(actorId);
 
+  /* CLAUDE FIX R20: every speaker gets their PERSONALITY from their own sheet next
+     to the writing-style card, in the preserved prefix that is never trimmed. */
   const rows = unique
     .slice(0, 8)
     .map((id) => charById(w, id))
     .filter((c) => c && !isHuman(w, c.id))
-    .map((c) => characterVoiceStyleCard(c))
+    .map((c) => {
+      const persona = characterPersonaBrief(c);
+      return [
+        characterVoiceStyleCard(c),
+        persona ? "PERSONALITY OF " + String(c.name || "").toUpperCase() + " — FROM THEIR OWN SHEET, PLAY EXACTLY THIS (not a generic type, not the original fandom):\n" + persona : "",
+      ].filter(Boolean).join("\n");
+    })
     .filter(Boolean);
 
   return rows.length
@@ -61728,7 +61758,7 @@ function playerPostCommentVoiceCard(w, c) {
   if (!c) return "";
   try {
     if (typeof voiceStyleCardsForIds === "function") {
-      return String(voiceStyleCardsForIds(w, [c.id], c.id) || "").slice(0, 2600);
+      return String(voiceStyleCardsForIds(w, [c.id], c.id) || "").slice(0, 3600);
     }
   } catch {}
   return String(c.aiVoiceStyleCard && c.aiVoiceStyleCard.card || "").slice(0, 2600);
