@@ -64178,7 +64178,7 @@ async function runCharacterBibleAction(view, update, action) {
    obsession", "sparring partner with a grudge") — first from the sheets, and
    rewritten by the AI every time the relationship actually moves (new event,
    new mood, a real score jump), so it never stays a generic category. */
-const RELATION_LABEL_MIN_GAP_MS = 20 * 1000;
+const RELATION_LABEL_MIN_GAP_MS = 12 * 1000;
 const RELATION_LABEL_RETRY_MS = 3 * 60 * 1000;
 
 function relationshipLabelBasis(rel) {
@@ -64194,14 +64194,14 @@ function relationshipLabelDueRows(w, max = 10) {
     .filter((row) => {
       const rel = row.rel;
       if (!row.a || !row.b || !rel || typeof rel !== "object") return false;
-      if (!charById(w, row.a) || !charById(w, row.b) || isHuman(w, row.a) || isMediaAccount(w, row.a) || isMediaAccount(w, row.b)) return false;
+      if (!charById(w, row.a) || !charById(w, row.b) || isMediaAccount(w, row.a) || isMediaAccount(w, row.b)) return false;
       const meaningful = Math.abs(Number(rel.score) || 0) >= 12 || rel.bond || rel.type || rel.mood;
       if (!meaningful) return false;
       if (rel.label && rel.labelBasis === relationshipLabelBasis(rel)) return false;
       if (rel.labelTriedAt && now() - Number(rel.labelTriedAt) < RELATION_LABEL_RETRY_MS) return false;
       return true;
     })
-    .sort((x, y) => ((y.b === me ? 2 : 0) + (y.rel.label ? 0 : 1)) - ((x.b === me ? 2 : 0) + (x.rel.label ? 0 : 1)))
+    .sort((x, y) => (((y.b === me || y.a === me) ? 4 : 0) + (y.rel.label ? 0 : 2)) - (((x.b === me || x.a === me) ? 4 : 0) + (x.rel.label ? 0 : 2)) || (Number(y.rel.at) || 0) - (Number(x.rel.at) || 0))
     .slice(0, max);
 }
 
@@ -64209,7 +64209,7 @@ function relationshipLabelDueAction(w) {
   if (!w) return null;
   const sim = ensureSimState(w);
   if (!sim || now() - Number(sim.relationshipLabelLastAt || 0) < RELATION_LABEL_MIN_GAP_MS) return null;
-  const rows = relationshipLabelDueRows(w, 10);
+  const rows = relationshipLabelDueRows(w, 18);
   if (!rows.length) return null;
   return mkAction("relationship-labels", "relationship-labels:" + simsSocialStableHash(rows.map((r) => r.k + relationshipLabelBasis(r.rel)).join("|")), { keys: rows.map((r) => r.k) }, "memory");
 }
@@ -64231,24 +64231,27 @@ async function runRelationshipLabelsAction(view, update, action) {
       const ext = d && Array.isArray(d.extremes) ? d.extremes.filter((x) => x && x.toward && identityNameMatches(x.toward, target)).map((x) => x.trait + ": " + x.shows) : [];
       sheet = [person ? person.is + "; " + person.feels : "", ...ext].filter(Boolean).join(" | ");
     } catch (error) { sheet = ""; }
-    if (!sheet) { try { sheet = String(relationshipReadingSnippet(view, actor, target) || "").slice(0, 300); } catch (error) { sheet = ""; } }
-    return i + ". " + (actor ? actor.name : a) + " → " + (target ? target.name : b) + (isHuman(view, b) ? " (the player)" : "") +
+    /* R34: the sheet's own words about this person always go along (e.g. "likes him but never shows it") */
+    let own = "";
+    try { own = String(relationshipReadingSnippet(view, actor, target) || "").replace(/\s+/g, " ").slice(0, 420); } catch (error) { own = ""; }
+    if (own) sheet = [sheet, "sheet text: " + own].filter(Boolean).join(" | ");
+    return i + ". " + (actor ? actor.name : a) + (isHuman(view, a) ? " (the player — describe only from her/his own sheet and what she/he actually did, never invent feelings)" : "") + " → " + (target ? target.name : b) + (isHuman(view, b) ? " (the player)" : "") +
       " | category: " + (rel.bond || rel.type ? localizedBond(rel.bond || rel.type, en ? "en" : "hu") : "none") +
       " | score: " + (Number(rel.score) || 0) +
       (rel.mood ? " | current feeling: " + String(rel.mood).slice(0, 140) : "") +
       (rel.why ? " | latest event: " + String(rel.why).slice(0, 180) : "") +
-      (rel.hidden ? " | PRIVATE (never reveal in the label): " + String(rel.hidden).slice(0, 140) : "") +
-      (sheet ? " | from the sheet: " + sheet.slice(0, 300) : "") +
+      (rel.hidden ? " | hidden feeling: " + String(rel.hidden).slice(0, 160) : "") +
+      (sheet ? " | from the sheet: " + sheet.slice(0, 700) : "") +
       (rel.label ? " | previous label: \"" + rel.label + "\"" : "");
   });
   const prompt = [
     "RELATIONSHIP LABELS — write one short, creative label for each directed relationship below (how the FIRST person relates to the SECOND right now).",
     "Rules:",
     "- 2 to 6 words, " + (en ? "English" : "Hungarian") + ", lowercase like a mood tag (e.g. \"can't-look-away obsession\", \"sparring partner with a grudge\", \"protective older-brother energy\", \"cold war since the party\").",
-    "- Specific to THESE two people and their CURRENT state: the latest event and feeling first, otherwise what the sheet says about them.",
+    "- Specific to THESE two people and their CURRENT state: the latest event and feeling first, otherwise what the sheet says about them. If the sheet keeps saying something (e.g. they like the other person but never show it), the label must capture exactly that.",
     "- Never a bare generic category (friend, rival, acquaintance, crush, enemy, family) and never the same as the previous label — find a fresh angle every time.",
     "- Match the intensity: obsession reads obsessive, hatred reads hateful, cold reads cold.",
-    "- Do not reveal anything marked PRIVATE: a secret crush may read as tension or fixation, never as 'secretly in love'.",
+    "- Hidden feelings belong in the label as what lies under the surface (e.g. \"plays it cool, can't stop watching\", \"pretends not to care, cares too much\") — evocative, not a flat \"secretly in love\".",
     "",
     rows.join("\n"),
     "",
@@ -64256,7 +64259,7 @@ async function runRelationshipLabelsAction(view, update, action) {
   ].join("\n");
   let out = null;
   try {
-    out = await askWorldJSON(view, engineFor(view), prompt, { maxTokens: 900, priority: 8, source: "relationship-labels", timeoutMs: 45000 });
+    out = await askWorldJSON(view, "You write short, vivid relationship tags for characters in a social-media role-play world, strictly based on their sheets and recent events. Return JSON only.", prompt, { maxTokens: 1400, priority: 8, source: "relationship-labels", timeoutMs: 45000 });
   } catch (error) { out = null; }
   const list = out && Array.isArray(out.labels) ? out.labels : [];
   update((n) => {
