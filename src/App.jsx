@@ -61080,22 +61080,27 @@ function voiceStyleCardsForIds(w, ids, actorId) {
 
   /* CLAUDE FIX R20: every speaker gets their PERSONALITY from their own sheet next
      to the writing-style card, in the preserved prefix that is never trimmed. */
-  const rows = unique
+  const speakers = unique
     .slice(0, 8)
     .map((id) => charById(w, id))
-    .filter((c) => c && !isHuman(w, c.id))
-    .map((c) => {
+    .filter((c) => c && !isHuman(w, c.id));
+  /* R23: the whole prefix stays around 14k characters however many people speak */
+  const perSpeaker = Math.min(5600, Math.floor(14500 / Math.max(1, speakers.length)));
+  const rows = speakers
+    .map((c, index) => {
       const persona = characterPersonaBrief(c);
-      return [
-        characterVoiceStyleCard(c),
-        persona ? "PERSONALITY OF " + String(c.name || "").toUpperCase() + " — FROM THEIR OWN SHEET, PLAY EXACTLY THIS (not a generic type, not the original fandom):\n" + persona : "",
-      ].filter(Boolean).join("\n");
+      const style = characterVoiceStyleCard(c).slice(0, speakers.length > 4 ? 900 : 1600);
+      const personaBlock = persona ? "PERSONALITY OF " + String(c.name || "").toUpperCase() + " — FROM THEIR OWN SHEET, PLAY EXACTLY THIS (not a generic type, not the original fandom):\n" + persona.slice(0, speakers.length > 4 ? 600 : 1200) : "";
+      const room = Math.max(500, perSpeaker - style.length - personaBlock.length - 10);
+      let bible = "";
+      try { bible = characterBibleCard(w, c, room); } catch (error) { bible = ""; }
+      return [style, personaBlock, bible].filter(Boolean).join("\n");
     })
     .filter(Boolean);
 
   return rows.length
     ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
-      "FULL INTENSITY: play every character exactly as extreme as their own sheet says — cruel is cruel, obsessed is visibly obsessed, cold is cold, arrogant is arrogant. Never soften, sanitize or average them into a polite generic person. People who dislike or hate each other show it and never use pet names (babe, baby, honey, darling…) with each other; warmth and pet names only where the relationship really is warm.\n\n" +
+      "FULL INTENSITY: play every character exactly as extreme as their own sheet says — cruel is cruel, obsessed is visibly obsessed, cold is cold, arrogant is arrogant. Never soften, sanitize or average them into a polite generic person. People who dislike or hate each other show it and never use pet names (babe, baby, honey, darling…) with each other; warmth and pet names only where the relationship really is warm. Each speaker knows their own SHEET CANON history exactly — the right names, places, order of events — and never contradicts it or makes up a different past.\n\n" +
       rows.join("\n\n--- NEXT SPEAKER CARD ---\n\n")
     : "";
 }
@@ -63129,6 +63134,174 @@ async function runIdentityCanonAction(view, update, action) {
   return "identity-canon";
 }
 
+/* CLAUDE FIX R23: CHARACTER BIBLE. Every AI character's full sheet is read once
+   more (deep model) into a compact "sheet canon": the person at full intensity,
+   their defining extremes (obsessed, cruel, possessive...) with the target and
+   how it shows, their backstory in order, their key people, what they would
+   never do and their typical lines. This card travels with the speaker into
+   every prompt, so the story is known 1:1 and the personality is not softened. */
+const CHARACTER_BIBLE_VERSION = "1";
+const CHARACTER_BIBLE_MIN_GAP_MS = 15 * 1000;
+const CHARACTER_BIBLE_RETRY_MS = 10 * 60 * 1000;
+
+function characterBibleState(w) {
+  const sim = ensureSimState(w);
+  if (!sim) return null;
+  if (!sim.characterBible || typeof sim.characterBible !== "object" || Array.isArray(sim.characterBible)) sim.characterBible = {};
+  return sim.characterBible;
+}
+
+function characterBibleSource(c) {
+  if (!c) return "";
+  const parts = characterSheetSourceParts(c);
+  const text = [stripTechnicalSheetRows(parts.publicText), stripTechnicalSheetRows(parts.privateText)].filter(Boolean).join("\n");
+  return text.length <= 45000 ? text : simsSocialSectionDigest(text, 45000);
+}
+
+function characterBibleFor(w, id) {
+  const state = w && w.sim && w.sim.characterBible;
+  const row = state && id ? state[id] : null;
+  return row && row.data && typeof row.data === "object" ? row.data : null;
+}
+
+function characterBibleCard(w, c, budget = 2400) {
+  if (!w || !c) return "";
+  const d = characterBibleFor(w, c.id);
+  if (!d) return "";
+  const en = worldLanguage(w, w.meId) === "en";
+  const name = String(c.name || c.id || "").toUpperCase();
+  const lines = [
+    en
+      ? "SHEET CANON — PERSONALITY & HISTORY OF " + name + " (from their own sheet; know it 1:1, play it at FULL intensity; private unless it is public knowledge):"
+      : "LAPKÁNON — " + name + " SZEMÉLYISÉGE ÉS TÖRTÉNETE (a saját lapjáról; 1:1 tudd, TELJES intenzitással játszd; privát, hacsak nem közismert):",
+  ];
+  if (d.core) lines.push((en ? "CORE: " : "LÉNYEG: ") + d.core);
+  if (Array.isArray(d.extremes) && d.extremes.length) {
+    lines.push(en ? "DEFINING EXTREMES — show them every time they are relevant, never tone them down:" : "MEGHATÁROZÓ SZÉLSŐSÉGEK — mindig mutasd, amikor számít, soha ne tompítsd:");
+    d.extremes.forEach((x) => lines.push("- " + x.trait + (x.toward ? " → " + x.toward : "") + (x.shows ? ": " + x.shows : "")));
+  }
+  if (Array.isArray(d.history) && d.history.length) {
+    lines.push(en ? "HISTORY — their own past, in order; they remember it exactly and never contradict it or invent another version:" : "TÖRTÉNET — a saját múltja, sorrendben; pontosan emlékszik rá, soha nem mond ellent neki és nem talál ki más változatot:");
+    d.history.forEach((x, i) => lines.push((i + 1) + ". " + x));
+  }
+  if (Array.isArray(d.people) && d.people.length) {
+    lines.push(en ? "KEY PEOPLE:" : "FONTOS EMBEREK:");
+    d.people.forEach((x) => lines.push("- " + x.name + (x.is ? " (" + x.is + ")" : "") + (x.feels ? ": " + x.feels : "")));
+  }
+  if (Array.isArray(d.never) && d.never.length) lines.push((en ? "NEVER: " : "SOHA: ") + d.never.join(" · "));
+  if (Array.isArray(d.phrases) && d.phrases.length) lines.push((en ? "TYPICAL LINES (imitate the pattern, do not repeat verbatim): " : "JELLEMZŐ MONDATOK (a mintát kövesd, ne szó szerint ismételd): ") + d.phrases.map((x) => "\"" + x + "\"").join(" · "));
+  let out = lines.join("\n");
+  if (out.length > budget) {
+    /* keep the head (core + extremes) whole; the tail lines go first */
+    out = out.slice(0, Math.max(400, budget - 20)).replace(/\n[^\n]*$/, "") + "\n…";
+  }
+  return out;
+}
+
+function characterBibleDueAction(w) {
+  if (!w) return null;
+  const state = characterBibleState(w);
+  const sim = ensureSimState(w);
+  if (!state || !sim) return null;
+  if (now() - Number(sim.characterBibleLastAt || 0) < CHARACTER_BIBLE_MIN_GAP_MS) return null;
+  const me = w.meId;
+  const closeness = (c) => {
+    if (!me) return 0;
+    const a = getRel(w, c.id, me) || EMPTY_REL;
+    const b = getRel(w, me, c.id) || EMPTY_REL;
+    return Math.abs(Number(a.score) || 0) + Math.abs(Number(b.score) || 0) + (a.bond || b.bond ? 50 : 0);
+  };
+  const list = allSubjects(w)
+    .filter((c) => c && c.id && !isHuman(w, c.id) && !isMediaAccount(w, c.id))
+    .sort((x, y) => closeness(y) - closeness(x));
+  for (const c of list) {
+    const src = characterBibleSource(c);
+    if (src.trim().length < 40) continue;
+    const hash = simsSocialStableHash(CHARACTER_BIBLE_VERSION + "\n" + src);
+    const row = state[c.id];
+    if (row && row.hash === hash) continue;
+    if (row && row.failedAt && row.failedHash === hash && now() - Number(row.failedAt) < CHARACTER_BIBLE_RETRY_MS) continue;
+    return mkAction("character-bible", "character-bible:" + c.id + ":" + hash, { charId: c.id, hash }, "memory");
+  }
+  return null;
+}
+
+async function runCharacterBibleAction(view, update, action) {
+  const charId = String(action.payload && action.payload.charId || "");
+  const c = charById(view, charId);
+  update((n) => { ensureSimState(n).characterBibleLastAt = now(); });
+  if (!c) return null;
+  const src = characterBibleSource(c);
+  const hash = simsSocialStableHash(CHARACTER_BIBLE_VERSION + "\n" + src);
+  const en = worldLanguage(view, view.meId) === "en";
+  const lang = en ? "English" : "Hungarian";
+  const prompt = [
+    "CHARACTER BIBLE — read this ONE character sheet completely, every section and every line, then extract how to play this person 1:1.",
+    "Rules: only what the sheet states or clearly implies; never invent; never fall back on the original fandom or a generic type. Keep the sheet's INTENSITY: if the sheet says obsessed, write obsessed (not 'interested'); cruel stays cruel, possessive stays possessive, cold stays cold. Do not soften or moralise.",
+    "",
+    "CHARACTER SHEET (" + String(c.name || charId) + "):",
+    src,
+    "",
+    "Fields (write in " + lang + "; quote typical phrases in their original language):",
+    "- core: max 600 characters — who this person is at full intensity right now: the 3-5 traits that define them, how they behave in public vs in private.",
+    "- extremes: their strongest traits, fixations and feelings exactly as extreme as the sheet (obsession, possessiveness, jealousy, cruelty, hatred, devotion, arrogance, fear...). Each: trait, toward (person/group it targets, or empty), shows (how it VISIBLY shows in messages, comments and actions — concrete behaviour). Max 6.",
+    "- history: the key events of their backstory IN ORDER, each one short line with names, places and what happened, and how it marked them. Max 12, each max 170 characters.",
+    "- people: the most important people on the sheet. Each: name, is (what they are to them), feels (how they feel and act toward them). Max 10.",
+    "- never: things this person would never do or say, from the sheet. Max 6.",
+    "- phrases: up to 4 typical lines or words they use (from the sheet, or very close to how the sheet describes their speech).",
+    "",
+    "JSON ONLY:",
+    '{"core":"","extremes":[{"trait":"","toward":"","shows":""}],"history":[""],"people":[{"name":"","is":"","feels":""}],"never":[""],"phrases":[""]}',
+  ].join("\n");
+  let out = null;
+  try {
+    out = await askWorldJSON(view, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 3500, priority: 5, source: "character-bible", quality: "deep", timeoutMs: 120000 });
+  } catch (error) {
+    update((n) => {
+      const state = characterBibleState(n);
+      state[charId] = { ...(state[charId] || {}), failedAt: now(), failedHash: hash };
+      groundedEventLog(n, "character-bible", "failed", c.name + ": " + String(error && error.message || error || "AI error"), "sheet:" + charId);
+    });
+    return null;
+  }
+  if (!out || typeof out !== "object" || out.skip === true || !("core" in out || "extremes" in out || "history" in out)) {
+    update((n) => {
+      const state = characterBibleState(n);
+      state[charId] = { ...(state[charId] || {}), failedAt: now() - CHARACTER_BIBLE_RETRY_MS + 3 * 60 * 1000, failedHash: hash };
+    });
+    return null;
+  }
+  const clean = (v, max) => normalizeGeneratedSocialText(String(v === undefined || v === null ? "" : (typeof v === "object" ? (v.text || v.name || "") : v)))
+    .replace(/\s+/g, " ").trim().slice(0, max);
+  const list = (v, max, each) => (Array.isArray(v) ? v : (v ? [v] : [])).map((x) => clean(x, each)).filter(Boolean).slice(0, max);
+  const data = {
+    core: clean(out.core, 700),
+    extremes: (Array.isArray(out.extremes) ? out.extremes : []).filter((x) => x && typeof x === "object" && String(x.trait || "").trim())
+      .slice(0, 6).map((x) => ({ trait: clean(x.trait, 60), toward: clean(x.toward, 60), shows: clean(x.shows, 220) })),
+    history: list(out.history, 12, 200),
+    people: (Array.isArray(out.people) ? out.people : []).filter((x) => x && typeof x === "object" && String(x.name || "").trim())
+      .slice(0, 10).map((x) => ({ name: clean(x.name, 60), is: clean(x.is, 70), feels: clean(x.feels, 170) })),
+    never: list(out.never, 6, 140),
+    phrases: list(out.phrases, 4, 140),
+  };
+  if (!data.core && !data.extremes.length && !data.history.length) {
+    update((n) => {
+      const state = characterBibleState(n);
+      state[charId] = { ...(state[charId] || {}), failedAt: now(), failedHash: hash };
+    });
+    return null;
+  }
+  update((n) => {
+    const state = characterBibleState(n);
+    state[charId] = { hash, at: now(), data };
+    const live = charById(n, charId);
+    groundedEventLog(n, "character-bible", "applied",
+      (live ? live.name : c.name) + ": " + data.extremes.map((x) => x.trait + (x.toward ? " → " + x.toward : "")).join(", ") + (data.history.length ? " · " + data.history.length + " history beats" : ""),
+      "sheet:" + charId);
+  });
+  return "character-bible";
+}
+
 function structuralRelationshipHash(w, actor, target) {
   return "s" + simsSocialStableHash(identityCanonLine(w, actor) + "|" + identityCanonLine(w, target) + "|" + String(actor.personality || "").slice(0, 300));
 }
@@ -63262,6 +63435,8 @@ function planAutoAction(view) {
   if (reading) return reading;
   const structural = structuralReadingDueAction(view);
   if (structural) return structural;
+  const bible = characterBibleDueAction(view);
+  if (bible) return bible;
   return legacyGroundedPlanAutoAction(view);
 }
 
@@ -63274,6 +63449,9 @@ async function runSimulationAction(view, update, action, addImage) {
   }
   if (action && action.type === "relationship-structural") {
     return runStructuralReadingAction(view, update, action);
+  }
+  if (action && action.type === "character-bible") {
+    return runCharacterBibleAction(view, update, action);
   }
   if (action && action.type === "npc-pair-reaction") {
     const eventId = String(action.payload && action.payload.eventId || "");
@@ -63481,7 +63659,7 @@ function GroundedEventLogPanel({ w, update }) {
     if (typeof update !== "function") return;
     update((n) => {
       const sim = ensureSimState(n);
-      if (sim) { sim.relationshipReading = {}; sim.relationshipReadingLastAt = 0; sim.identityCanon = {}; sim.identityCanonLastAt = 0; }
+      if (sim) { sim.relationshipReading = {}; sim.relationshipReadingLastAt = 0; sim.identityCanon = {}; sim.identityCanonLastAt = 0; sim.characterBible = {}; sim.characterBibleLastAt = 0; }
       RELATIONSHIP_READING_CHECKED.clear();
       groundedEventLog(n, "relationship-reading", "started", "Re-reading every character sheet with the AI: who is who (dojo, sensei, partner), then each relationship.", "manual");
     });

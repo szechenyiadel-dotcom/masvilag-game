@@ -4887,7 +4887,7 @@ function compactGroupChatSystem(text, max = AI_GROUP_CHAT_SYSTEM_CAP) {
   if (value.length <= max) return value;
 
   const blocks = value.split(/\n{2,}/).map((x) => x.trim()).filter(Boolean);
-  const relevant = /(summary|összefoglal|tömör|compact|relevant|kapcsolat|relationship|current|recent|jelenlegi|legutóbbi|group\s*chat|csoport|participant|résztvevő|knowledge|tudás|personality|személyiség|speech|beszéd|style|stílus|goal|cél|secret|titok|status|állapot|memory|emlék)/i;
+  const relevant = /(summary|összefoglal|tömör|compact|relevant|kapcsolat|relationship|current|recent|jelenlegi|legutóbbi|group\s*chat|csoport|participant|résztvevő|knowledge|tudás|personality|személyiség|speech|beszéd|style|stílus|goal|cél|secret|titok|status|állapot|memory|emlék|canon|kánon|history|történet|extreme|szélsőség)/i;
   const selected = [];
   let used = 0;
 
