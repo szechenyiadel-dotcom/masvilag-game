@@ -5314,7 +5314,11 @@ function providerModel(provider, body = {}) {
       ? requested
       : String(process.env.ANTHROPIC_MODEL || process.env.ANTHROPIC_FALLBACK_MODEL || "claude-sonnet-4-6").trim();
   }
-  if (provider === "openai") return requested || String(process.env.OPENAI_MODEL || "").trim() || "openai-default";
+  if (provider === "openai") {
+    return /^(gpt|o1|o3|o4)/i.test(requested)
+      ? requested
+      : String(process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
+  }
   return requested;
 }
 
@@ -5584,6 +5588,27 @@ function providerCooldownMs(provider) {
 function markProviderFailure(provider, model, result) {
   const status = Number(result?.status || 0);
   const message = safeProviderMessage(result, `HTTP ${status}`);
+  const lower = message.toLowerCase();
+
+  /* OpenRouter may return HTTP 402 temporarily when the account has enough
+     credits overall but current in-flight paid requests reserve the remaining
+     balance. That is NOT a broken key/configuration: cool down briefly and retry. */
+  const transientInFlight402 =
+    status === 402 &&
+    /in[- ]?flight|requests settle|current.*requests|retry after.*settle/.test(lower);
+
+  if (transientInFlight402) {
+    const previous = Number(AI_GATE.providerFailures.get(provider) || 0);
+    const failures = Math.min(4, previous + 1);
+    AI_GATE.providerFailures.set(provider, failures);
+    AI_GATE.providerConfigurationErrors.delete(provider);
+    const retryHeader = parseRetryAfterMs(result?.retryAfter);
+    const rest = Math.max(retryHeader, Math.min(30000, 5000 * Math.pow(2, failures - 1)));
+    AI_GATE.providerCooldownUntil.set(provider, Date.now() + rest);
+    AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
+    console.warn("[ai-gate] provider-cooldown", `${provider}/${model}`, `status=${status}`, `ms=${rest}`, "reason=in-flight-credit-reservation", message);
+    return rest;
+  }
 
   if ([401, 402, 403, 404].includes(status)) {
     AI_GATE.providerConfigurationErrors.set(provider, { status, model, message, at: Date.now() });
@@ -5598,7 +5623,6 @@ function markProviderFailure(provider, model, result) {
   const failures = Math.min(4, previous + 1);
   AI_GATE.providerFailures.set(provider, failures);
   const retryHeader = parseRetryAfterMs(result?.retryAfter);
-  const lower = message.toLowerCase();
   const hardQuota = /free[_ -]?tier|quota exceeded|current quota|resource exhausted|no credits|daily limit|budget exhausted|payment required|insufficient credits/.test(lower);
   const exponential = Math.min(60000, 5000 * Math.pow(2, failures - 1));
   const jitter = Math.floor(Math.random() * Math.min(2500, Math.max(500, exponential * 0.2)));
