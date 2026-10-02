@@ -9244,7 +9244,8 @@ MIELŐTT ELKÜLDÖD, ELLENŐRIZD:
 1) Névmások: tárgyként engem / téged / őt / minket / titeket / őket — SOHA nem "én is meglep", hanem "engem is meglep".
 2) Magadról E/1 ("megyek", "nem tudom"), a játékoshoz E/2, tegezve ("hol vagy?", "megígérted"). Magázás tilos.
 3) Minden megszólalás a saját hangmintája szerint szóljon — ha letakarnád a nevet, akkor is felismerhető legyen, ki beszél.
-4) Csak a NÉVSORBAN szereplő emberek léteznek. Új nevet nem találsz ki.`;
+4) Csak a NÉVSORBAN szereplő emberek léteznek. Új nevet nem találsz ki.
+5) NINCS KITALÁLT MÚLT: csak olyan közös eseményre, helyre, bulira, verekedésre, randira, beszélgetésre utalhatsz ("tegnap", "múltkor", "emlékszel, amikor", "last night", "at the party"), ami a SAJÁT lapodon szerepel, vagy ténylegesen megtörtént a játékban (a fenti előzmények, emlékek, chat, jelenet mutatják). Ha nincs ilyen, ne utalj rá — maradj a jelennél. / NO INVENTED HISTORY: never mention a shared past event that is not on your own sheet or in the recorded history above.`;
 
 /* ---------- kontextus a modellnek ----------
    A szolgáltató nem a hívások számát méri, hanem a szöveg mennyiségét, ezért
@@ -16481,6 +16482,45 @@ function dmRoleplayMode(playerText) {
   return /\*[^*\n]{2,}\*/.test(String(playerText || ""));
 }
 
+/* CLAUDE FIX R53b: INVENTED SHARED PAST. A sentence that claims something happened
+   between the speaker and someone else ("remember when…", "last night you…",
+   "at the party", "tegnap veled…") is kept only if there is a trace of it: a
+   recorded social event, a scene, a DM or group chat between them in the last
+   10 days, or the speaker's own sheet mentions that person. */
+const INVENTED_PAST_EN_RE = /\b(?:remember when|like last time|last time (?:you|we|u)\b|(?:you|we|u)\b[^.!?]{0,40}\b(?:last night|yesterday|the other (?:night|day)|last (?:week|weekend))\b|(?:last night|yesterday|the other (?:night|day)|last (?:week|weekend))[^.!?]{0,40}\b(?:you|we|us|u|your)\b|after (?:the|that|your|our) (?:party|fight|game|race|tournament|dinner|date|match)\b|what (?:you|u) did (?:at|last|yesterday|to))/i;
+const INVENTED_PAST_HU_RE = /(?:eml[eé]kszel,? (?:amikor|arra)|mint (?:m[uú]ltkor|legut[oó]bb)|(?:tegnap|tegnapel[oő]tt|m[uú]lt (?:[eé]jjel|h[eé]ten|h[eé]tv[eé]g[eé]n)|m[uú]ltkor|legut[oó]bb)[^.!?]{0,40}(?:\bte\b|\bmi\b|veled|velem|egy[uü]tt|neked|n[aá]lad|n[aá]lam)|a (?:buli ut[aá]n|veszeked[eé]s ut[aá]n|verekedés ut[aá]n|meccs ut[aá]n))/i;
+
+function sharedPastEvidence(w, speakerId, otherIds, days = 10) {
+  if (!w || !speakerId) return true;
+  const since = now() - days * 24 * 3600 * 1000;
+  const others = (otherIds || []).filter(Boolean).map(String);
+  if (!others.length) return true;
+  const sp = String(speakerId);
+  const involves = (ids) => ids.includes(sp) && others.some((o) => ids.includes(o));
+  if ((w.socialEvents || []).some((e) => e && Number(e.ts) >= since && involves([String(e.actorId || ""), ...((e.targetIds || []).map(String)), ...(((e.meta && e.meta.participantIds) || []).map(String))]))) return true;
+  if ((w.scenes || []).some((sc) => sc && Math.max(Number(sc.ts) || 0, Number(sc.startedAt) || 0, Number(sc.updatedAt) || 0) >= since && involves([...(sc.cast || []).map(String), String(w.meId || "")]) && (sc.turns || []).length > 1)) return true;
+  if (others.includes(String(w.meId)) && ((w.chats && w.chats[chatKey(w.meId, sp)]) || []).some((m) => m && Number(m.ts) >= since && m.from !== "them")) return true;
+  if ((w.groups || []).some((g) => g && (g.members || []).map(String).includes(sp) && others.some((o) => (g.members || []).map(String).includes(o)) && (g.msgs || []).some((m) => m && Number(m.ts) >= since))) return true;
+  const speaker = charById(w, sp);
+  if (speaker) {
+    for (const o of others) {
+      const other = charById(w, o);
+      try { if (other && sheetPassagesAbout(speaker, other, 400)) return true; } catch (error) { /* ignore */ }
+    }
+  }
+  return false;
+}
+
+function stripInventedSharedPast(w, speakerId, text, otherIds) {
+  const value = String(text || "");
+  if (!value || !(INVENTED_PAST_EN_RE.test(value) || INVENTED_PAST_HU_RE.test(value))) return value;
+  if (sharedPastEvidence(w, speakerId, otherIds)) return value;
+  const parts = value.split(/(?<=[.!?…])\s+/);
+  const kept = parts.filter((part) => !(INVENTED_PAST_EN_RE.test(part) || INVENTED_PAST_HU_RE.test(part))).join(" ").trim();
+  console.info("[invented-past] removed a claim with no trace in play or on the sheet", "character=" + String(speakerId || ""), value.slice(0, 160));
+  return kept;
+}
+
 function sanitizePhoneDm(
   w,
   botId,
@@ -16560,6 +16600,9 @@ function sanitizePhoneDm(
       ? kept.replace(/^(?:and|or|so|but|then|és|de|vagy|szóval|aztán)\s*,?\s*/i, "").replace(/^\p{Ll}/u, (ch) => ch.toUpperCase())
       : kept;
   }
+
+  /* R53b: no invented shared past with the player */
+  try { text = stripInventedSharedPast(w, botId, text, [w && w.meId]); } catch (error) { /* keep */ }
 
   return text;
 }
@@ -55813,6 +55856,15 @@ if (action.type === "roleplay-initiate") {
         }
       : rawOut;
 
+    /* R53b: a reply to someone about a shared past with no trace loses that sentence */
+    try {
+      const addressee = comment.authorId;
+      (safeAiComments(targetFilteredOut) || []).forEach((row) => {
+        if (!row || !row.text) return;
+        const who = aiVoice(view, row.id !== undefined ? row.id : row.name);
+        if (who) row.text = stripInventedSharedPast(view, who, row.text, [addressee]);
+      });
+    } catch (error) { /* keep */ }
     let out = {
       ...(targetFilteredOut || {}),
       comments: safeAiComments(targetFilteredOut).slice(
@@ -63146,6 +63198,8 @@ function generatedSocialTextSanityProblem(w, actorId, text, card) {
   const value = String(text || "");
   const actor = charById(w, actorId);
   if (!actor) return "";
+  /* R53b: a comment to the player about a shared past that never happened */
+  try { if (w && w.meId && stripInventedSharedPast(w, actorId, value, [w.meId]) !== value) return "invented-shared-past"; } catch (error) { /* ignore */ }
   /* every capitalised part of the own name (handles "Park Nam-gyu" as well as "Brent LaRusso");
      case-sensitive, so "the park" is not mistaken for "Park" */
   const names = [...String(actor.name || "").split(/\s+/), String(actor.nick || "").trim()]
