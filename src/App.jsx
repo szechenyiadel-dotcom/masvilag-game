@@ -3211,6 +3211,26 @@ function stripForeignGroupClaims(w, speakerId, text) {
   return changed ? kept.join(" ").trim() : value;
 }
 
+/* CLAUDE FIX R65: "what's mine" / "my girl" belongs only to someone who really is
+   with — or possessive / obsessed about — that person. A friend who repeats the
+   possessive line of someone else in the thread loses that sentence. */
+const POSSESSIVE_CLAIM_RE = /\b(?:(?:she|he)(?:'s| is) mine|(?:what|who)(?:'s| is) mine|you don'?t touch what'?s mine|my (?:girl|boy|woman|man|girlfriend|boyfriend|babe)\b|mine\.?$|back off,? (?:she|he)(?:'s| is) (?:mine|taken))|(?:az eny[eé]m|a cs[aá]jom|a pasim|a bar[aá]tn[oő]m\b|az [eé]n (?:cs[aá]jom|pasim|l[aá]nyom))/i;
+function stripUnfoundedPossessiveClaims(w, speakerId, text) {
+  const value = String(text || "");
+  const straight = (x) => String(x || "").replace(/[’‘]/g, "'");
+  if (!w || !speakerId || !value || isHuman(w, speakerId) || !POSSESSIVE_CLAIM_RE.test(straight(value))) return value;
+  const candidates = [w.meId, ...((w.chars || []).map((c) => c && c.id))].filter((id) => id && id !== speakerId);
+  const entitled = candidates.some((id) => {
+    let stake = null;
+    try { stake = romanticStakeForObserver(w, speakerId, id); } catch (error) { stake = null; }
+    return Boolean(stake && (stake.stake >= 3 || stake.label === "romantic-fixation" || (Number(stake.jealousy) || 0) >= 4));
+  });
+  if (entitled) return value;
+  const kept = value.split(/(?<=[.!?…])\s+/).filter((part) => !POSSESSIVE_CLAIM_RE.test(straight(part))).join(" ").trim();
+  console.info("[possessive] removed a 'mine' claim from someone who is not with / possessive about anyone", "speaker=" + speakerId, value.slice(0, 120));
+  return kept;
+}
+
 function filterDisrespectToAuthority(n, rows, addresseeOf) {
   return (rows || []).filter((row) => {
     if (!row || !row.text) return true;
@@ -62669,6 +62689,7 @@ function voiceStyleCardsForIds(w, ids, actorId) {
 
   return rows.length
     ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
+      "OWNERSHIP — HARD RULE: \"mine\", \"my girl\", \"don't touch what's mine\" only from someone whose own card says they are with that person or are possessive / obsessed about them. Never repeat another commenter's possessive line; a friend defends a friend as a friend (\"she's not yours\", \"leave her alone\").\n" +
       "GROUPS — HARD RULE: say \"we / us / our sensei / makes us\" only about a dojo, team or group that is on your OWN card (WHO IS WHO). Never imply you train or work under someone who is not your own sensei / boss.\n" +
       "RANK — HARD RULE: a student or younger fighter never tells a sensei (their own, or a feared one from another dojo) \"shut up\", never insults or mocks them in public. They may disagree respectfully, go quiet, obey grudgingly or grumble to friends — only fellow senseis / equals can be openly rude to a sensei.\n" +
       "NAMES — HARD RULE: call people only by their real name, surname, username or a nickname that a sheet actually gives them. Never invent a new nickname or a pop-culture comparison name (no \"Draco\", \"Romeo\", \"Joker\" for a real person) and never mention someone who is not in this world.\n" +
@@ -62867,6 +62888,7 @@ function cleanGeneratedComment(...args) {
   args[2] = normalizeGeneratedSocialText(args[2]);
   if (!args[2]) return "";
   try { args[2] = stripForeignGroupClaims(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
+  try { args[2] = stripUnfoundedPossessiveClaims(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
   try {
     const stranger = generatedTextUnknownPersonName(w, args[2]);
     if (stranger) {
