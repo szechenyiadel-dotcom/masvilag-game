@@ -5155,7 +5155,7 @@ async function proxyAnthropicMessage(body) {
 }
 
 /* MÁSVILÁG AI 403 FAILOVER + GROUP CHAT DEDUPE v4 */
-const AI_GROQ_MAX_INPUT_CHARS = 18000;
+const AI_GROQ_MAX_INPUT_CHARS = 300000;
 const AI_GROUP_CHAT_SYSTEM_CAP = 18000;
 const AI_GROUP_CHAT_PROMPT_CAP = 36000;
 const AI_GROUP_CHAT_DEDUPE_MS = 15000;
@@ -5207,7 +5207,7 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
-  if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "cognitivecomputations/dolphin3.0-mistral-24b:free").trim();
+  if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "stealth/space-bunny-alpha").trim();
   if (provider === "gemini") {
     if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || "gemini-3.5-flash").trim();
     return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
