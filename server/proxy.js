@@ -5716,6 +5716,7 @@ function taskProviderOrder(requestedProvider, body) {
     "sheet-summary",
     "character-bible",
     "identity-canon",
+    "relationship-reading",
     "relationship-labels",
     "relationship-structural",
   ]);
@@ -5739,8 +5740,12 @@ function taskProviderOrder(requestedProvider, body) {
   } else if (isFeed) {
     /* Feed stays on free Gemini first; paid OpenAI is fallback only. */
     raw = ["gemini", "openai"];
+  } else if (source === "relationship-reading") {
+    /* Exhaustive full-sheet relationship maps are large and important.
+       A Gemini quota hit must fall through instead of freezing the rebuild. */
+    raw = ["gemini", "openai", "mistral2", "mistral"];
   } else if (characterKnowledgeSources.has(source)) {
-    /* Character-sheet reading, canon/identity and relationship knowledge stay Gemini-first. */
+    /* Other character-sheet canon/identity knowledge stays Gemini-first. */
     raw = ["gemini", "openai"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
     raw = ["groq", "groq2", "gemini"];
