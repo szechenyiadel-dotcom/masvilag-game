@@ -52992,9 +52992,11 @@ const AI_ACTIVITY_OPTIMIZATION = Object.freeze({
   PLAYER_COMMENT_MAX_AI_REPLIES: 4,
   AI_THREAD_MAX_ROUNDS: 3,
   RECENT_DM_WINDOW_MS: 10 * 60 * 1000,
-  RECENT_DM_THREAD_LIMIT: 2,
-  UNSOLICITED_DM_BURST_MAX: 2,
-  UNSOLICITED_DM_BURST_WINDOW_MS: 90 * 1000,
+  /* CLAUDE FIX R57: more DMs when there is a reason — the old limits paused every
+     DM as soon as the player had two DM chats going */
+  RECENT_DM_THREAD_LIMIT: 4,
+  UNSOLICITED_DM_BURST_MAX: 3,
+  UNSOLICITED_DM_BURST_WINDOW_MS: 60 * 1000,
 });
 
 let EVENT_DRIVEN_FEED_BATCH_CONTEXT = null;
@@ -53062,7 +53064,7 @@ function eventDrivenRememberDeferredDm(w, action, reason) {
     reason: String(reason || "busy"),
     trigger: String(action.payload && action.payload.trigger || "event"),
     eventId: String(action.payload && action.payload.eventId || ""),
-    causeText: latestCause ? String(latestCause.text || "").slice(0, 500) : String(previous && previous.causeText || ""),
+    causeText: String(action.payload && action.payload.causeText || "") || (latestCause ? String(latestCause.text || "").slice(0, 500) : String(previous && previous.causeText || "")),
   };
 
   try {
@@ -57063,7 +57065,9 @@ if (targetNote) {
 
     const rawDmPauseReason = eventDrivenAutonomousDmPauseReason(view);
     /* follow / unfollow reactions skip only the burst limit, not the scene / parallel-DM pause (5.5) */
-    const dmPauseReason = action && action.payload && ["follow-not-returned", "player-unfollowed"].includes(action.payload.trigger) && !["scene-active", "parallel-dms"].includes(rawDmPauseReason) ? "" : rawDmPauseReason;
+    const dmPauseReason =
+      commentAgreedDm && rawDmPauseReason !== "scene-active" ? "" :
+      action && action.payload && ["follow-not-returned", "player-unfollowed"].includes(action.payload.trigger) && !["scene-active", "parallel-dms"].includes(rawDmPauseReason) ? "" : rawDmPauseReason;
     if (dmPauseReason) {
       update((n) => eventDrivenRememberDeferredDm(n, action, dmPauseReason));
       return "dm-deferred";
@@ -63045,6 +63049,8 @@ function fullSpecDmInitiativeScore(w, botId, humanId, event) {
   let score = Math.min(35, Math.abs(Number(rel.score)||0)*.35) + Math.min(30,(Number(event&&event.importance)||0)*.35) + Math.min(28,(Number(event&&event.drama)||0)*.35) + Math.min(24,(Number(event&&event.romance)||0)*.35);
   if (/obsess|megszáll|possess|birtokl|jealous|féltéken|resent|sértőd|cling|ragaszkod|proud|büszke|sensitive|érzékeny|confront|konfront|impuls|direct|egyenes/.test(text)) score += 24;
   if (/detached|közömbös|unbothered|aloof|távolságtartó/.test(text)) score -= 22;
+  /* R57: a crush / obsession / partner reaches out more */
+  try { const stake = romanticStakeForObserver(w, botId, humanId); if (stake) score += stake.stake * 6 + Math.min(12, (Number(stake.jealousy) || 0) * 2); } catch (error) { /* ignore */ }
   return score;
 }
 function fullSpecPendingKey(event, botId, kind="") { return [String(kind||event&&event.type||"event"),String(botId||""),String(event&&(event.id||event.refId)||"")].join(":"); }
@@ -63059,9 +63065,9 @@ function fullSpecQueuePendingDmTrigger(w, botId, event, trigger, options={}) {
 function fullSpecScheduleEventDms(w,event){
   if(!w||!event||typeof event!=="object")return; const type=String(event.type||"").toLowerCase(); if(type==="dm-message"||type==="follow"||type==="unfollow")return;
   const actorId=String(event.actorId||""),targets=Array.isArray(event.targetIds)?event.targetIds.map(String):[],humanIds=[...new Set([...(actorId&&isHuman(w,actorId)?[actorId]:[]),...targets.filter((id)=>isHuman(w,id))])]; if(!humanIds.length)return;
-  const relevant=["comment","reply","gossip-story","roleplay-summary","roleplay-event","relationship-milestone"].includes(type)||/note|jealous|féltéken|gossip|pletyka|scene|roleplay|comment|reply/i.test([type,event.source,...(event.tags||[])].join(" ")); if(!relevant)return;
-  const candidates=new Map(); humanIds.forEach((humanId)=>{ if(actorId&&!isHuman(w,actorId)&&actorId!==humanId)candidates.set(actorId,humanId); targets.forEach((id)=>{if(id&&!isHuman(w,id)&&id!==humanId)candidates.set(id,humanId);}); if(type==="gossip-story"||type.startsWith("roleplay")){(w.chars||[]).forEach((c)=>{if(!c||isHuman(w,c.id))return; const rel=getRel(w,c.id,humanId)||EMPTY_REL; if(Math.abs(Number(rel.score)||0)>=55)candidates.set(c.id,humanId);});}});
-  [...candidates.entries()].map(([botId,humanId])=>({botId,humanId,score:fullSpecDmInitiativeScore(w,botId,humanId,event)})).filter((row)=>row.score>=38).sort((a,b)=>b.score-a.score).slice(0,FULL_SPEC_COMPLETION_SETTINGS.EVENT_DM_MAX_CANDIDATES).forEach((row)=>fullSpecQueuePendingDmTrigger(w,row.botId,event,type+"-reaction",{humanId:row.humanId}));
+  const relevant=["comment","reply","post","gossip-story","roleplay-summary","roleplay-event","relationship-milestone"].includes(type)||/note|jealous|féltéken|gossip|pletyka|scene|roleplay|comment|reply/i.test([type,event.source,...(event.tags||[])].join(" ")); if(!relevant)return;
+  const candidates=new Map(); humanIds.forEach((humanId)=>{ if(actorId&&!isHuman(w,actorId)&&actorId!==humanId)candidates.set(actorId,humanId); targets.forEach((id)=>{if(id&&!isHuman(w,id)&&id!==humanId)candidates.set(id,humanId);}); if(type==="gossip-story"||type.startsWith("roleplay")||(type==="post"&&actorId===humanId)){(w.chars||[]).forEach((c)=>{if(!c||isHuman(w,c.id))return; const rel=getRel(w,c.id,humanId)||EMPTY_REL; let caresRomantically=false; if(type==="post"){try{caresRomantically=Boolean(romanticStakeForObserver(w,c.id,humanId));}catch(error){caresRomantically=false;}} if(Math.abs(Number(rel.score)||0)>=55||caresRomantically)candidates.set(c.id,humanId);});}});
+  [...candidates.entries()].map(([botId,humanId])=>({botId,humanId,score:fullSpecDmInitiativeScore(w,botId,humanId,event)})).filter((row)=>row.score>=32).sort((a,b)=>b.score-a.score).slice(0,FULL_SPEC_COMPLETION_SETTINGS.EVENT_DM_MAX_CANDIDATES).forEach((row)=>fullSpecQueuePendingDmTrigger(w,row.botId,event,type+"-reaction",{humanId:row.humanId}));
 }
 function fullSpecScheduleFollowBackDm(w,event){ /* CLAUDE FIX 2.3: the grounded follow-back system (setFollowState) owns this trigger; a second scheduler caused duplicate DMs. */ return; if(!w||!event||String(event.type||"").toLowerCase()!=="follow")return; const botId=String(event.actorId||""),humanId=String((event.targetIds||[]).find((id)=>isHuman(w,id))||""); if(!botId||!humanId||isHuman(w,botId))return; if(!isFollowing(w,botId,humanId)||isFollowing(w,humanId,botId))return; const initiative=fullSpecDmInitiativeText(w,botId,humanId); if(!/obsess|megszáll|possess|birtokl|jealous|féltéken|resent|sértőd|cling|ragaszkod|proud|büszke|sensitive|érzékeny|confront|konfront/.test(initiative))return; fullSpecQueuePendingDmTrigger(w,botId,event,"follow-not-returned",{humanId,delayMs:FULL_SPEC_COMPLETION_SETTINGS.FOLLOW_BACK_GRACE_MS,requireNoFollowBack:true}); }
 
@@ -63174,7 +63180,7 @@ function ensureEventDrivenGossipPost(w,trigger,payload){const info=eventDrivenGo
 
 function budgetAiRequest(system,prompt){const text=String(prompt||""),marker="[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]",at=text.indexOf(marker);if(at<0)return legacyFullSpecBudgetAiRequest(system,prompt);const systemText=String(system||""),compactSystem=preserveEdges(systemText,AI_MAX_SYSTEM_CHARS,"system"),protectedTail=text.slice(at),prefix=text.slice(0,at),promptCap=Math.min(50000, Math.max(28000, Number(AI_MAX_PROMPT_CHARS) || 82000));let compactPrompt="";if(protectedTail.length>=promptCap){compactPrompt=protectedTail;console.warn("[dm-prompt-tail]","protected tail kept above global cap","tailChars="+protectedTail.length,"cap="+promptCap);}else{const omission="\n\n[OLDER DM BACKGROUND OMITTED BEFORE PROVIDER CALL]\n\n",prefixBudget=Math.max(0,promptCap-protectedTail.length-omission.length),compactPrefix=prefix.length<=prefixBudget?prefix:prefix.slice(Math.max(0,prefix.length-prefixBudget));compactPrompt=(prefix.length>prefixBudget?omission:"")+compactPrefix+protectedTail;}return{system:compactSystem,prompt:compactPrompt,wasCompacted:compactSystem.length!==systemText.length||compactPrompt.length!==text.length};}
 function fullSpecPendingStillValid(w,row){if(!w||!row||!row.botId||!charById(w,row.botId)||isHuman(w,row.botId))return false;const humanId=String(row.humanId||w.meId||"");if(!humanId||!isHuman(w,humanId))return false;if(row.requireNoFollowBack){if(!isFollowing(w,row.botId,humanId))return false;if(isFollowing(w,humanId,row.botId))return false;}return true;}
-function fullSpecNextAutonomousDmAction(view){if(!view||eventDrivenAutonomousDmPauseReason(view))return null;const sim=ensureSimState(view),state=fullSpecState(view),nowTs=now();const deferred=Object.values(sim.deferredAutonomousDms||{}).filter((row)=>row&&row.botId&&(!row.nextAt||Number(row.nextAt)<=nowTs)).sort((a,b)=>(Number(a.at)||0)-(Number(b.at)||0));for(const row of deferred){if(!charById(view,row.botId)||isHuman(view,row.botId)){delete sim.deferredAutonomousDms[row.botId];continue;}return mkAction("dm","deferred-dm:"+String(row.botId)+":"+String(row.eventId||row.at||nowTs),{botId:row.botId,trigger:row.trigger||"deferred-event",eventId:row.eventId||"",fullSpecDeferredKey:String(row.botId)},"event");}const pending=Object.values(state.pendingDmTriggers||{}).filter((row)=>row&&Number(row.nextAt||0)<=nowTs).sort((a,b)=>(Number(a.nextAt)||0)-(Number(b.nextAt)||0));for(const row of pending){if(!fullSpecPendingStillValid(view,row)){delete state.pendingDmTriggers[row.key];continue;}return mkAction("dm","event-dm:"+row.key,{botId:row.botId,trigger:row.trigger||"social-event",eventId:row.eventId||"",fullSpecPendingKey:row.key},"event");}return null;}
+function fullSpecNextAutonomousDmAction(view){if(!view||eventDrivenAutonomousDmPauseReason(view))return null;const sim=ensureSimState(view),state=fullSpecState(view),nowTs=now();const deferred=Object.values(sim.deferredAutonomousDms||{}).filter((row)=>row&&row.botId&&(!row.nextAt||Number(row.nextAt)<=nowTs)).sort((a,b)=>(Number(a.at)||0)-(Number(b.at)||0));for(const row of deferred){if(!charById(view,row.botId)||isHuman(view,row.botId)){delete sim.deferredAutonomousDms[row.botId];continue;}return mkAction("dm","deferred-dm:"+String(row.botId)+":"+String(row.eventId||row.at||nowTs),{botId:row.botId,trigger:row.trigger||"deferred-event",eventId:row.eventId||"",causeText:String(row.causeText||""),fullSpecDeferredKey:String(row.botId)},/^comment-dm-/.test(String(row.trigger||""))?"player-event":"event");}const pending=Object.values(state.pendingDmTriggers||{}).filter((row)=>row&&Number(row.nextAt||0)<=nowTs).sort((a,b)=>(Number(a.nextAt)||0)-(Number(b.nextAt)||0));for(const row of pending){if(!fullSpecPendingStillValid(view,row)){delete state.pendingDmTriggers[row.key];continue;}return mkAction("dm","event-dm:"+row.key,{botId:row.botId,trigger:row.trigger||"social-event",eventId:row.eventId||"",fullSpecPendingKey:row.key},"event");}return null;}
 function legacyGroundedPlanAutoAction(view){const deferredOrEventDm=fullSpecNextAutonomousDmAction(view);if(deferredOrEventDm)return deferredOrEventDm;return legacyFullSpecPlanAutoAction(view);}
 function fullSpecFinishDmTrigger(w,action,result,error=null){if(!w||!action||action.type!=="dm")return;const sim=ensureSimState(w),state=fullSpecState(w),deferredKey=String(action.payload&&action.payload.fullSpecDeferredKey||""),pendingKey=String(action.payload&&action.payload.fullSpecPendingKey||"");if(result==="dm-deferred"){if(pendingKey)delete state.pendingDmTriggers[pendingKey];return;}if(result){if(deferredKey&&sim.deferredAutonomousDms)delete sim.deferredAutonomousDms[deferredKey];if(pendingKey)delete state.pendingDmTriggers[pendingKey];return;}const retry=(row,drop)=>{if(!row)return;row.attempts=(Number(row.attempts)||0)+1;row.lastError=String(error&&error.message||error||"generation returned no DM").slice(0,220);row.nextAt=now()+FULL_SPEC_COMPLETION_SETTINGS.DEFERRED_DM_RETRY_MS;if(row.attempts>=FULL_SPEC_COMPLETION_SETTINGS.DEFERRED_DM_MAX_ATTEMPTS)drop();};if(deferredKey&&sim.deferredAutonomousDms&&sim.deferredAutonomousDms[deferredKey])retry(sim.deferredAutonomousDms[deferredKey],()=>delete sim.deferredAutonomousDms[deferredKey]);if(pendingKey&&state.pendingDmTriggers[pendingKey])retry(state.pendingDmTriggers[pendingKey],()=>delete state.pendingDmTriggers[pendingKey]);}
 async function legacyGroundedRunSimulationAction(view,update,action,addImage){let result=null;try{result=await legacyFullSpecRunSimulationAction(view,update,action,addImage);}catch(error){if(action&&action.type==="dm"&&action.payload&&(action.payload.fullSpecDeferredKey||action.payload.fullSpecPendingKey))update((n)=>fullSpecFinishDmTrigger(n,action,null,error));throw error;}if(action&&action.type==="dm"&&action.payload&&(action.payload.fullSpecDeferredKey||action.payload.fullSpecPendingKey))update((n)=>fullSpecFinishDmTrigger(n,action,result,null));return result;}
