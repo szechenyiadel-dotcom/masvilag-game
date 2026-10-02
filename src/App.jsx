@@ -60977,7 +60977,12 @@ const signOut = useCallback(async () => {
   const dueSocialReaction = groundedDueFollowBackAction(view2);
   /* R45: skip what the second lane is already doing; the player's post comments go first */
   const queueFree = ((view2.sim && view2.sim.queue) || []).filter((a) => a && !inFlightActionIds.current.has(a.id));
-  const queued = dueSocialReaction || queueFree.find((a) => a.type === "player-post-comments-guarantee") || queueFree[0] || null;
+  const queued =
+    queueFree.find((a) => a.type === "player-post-comments-guarantee") ||
+    queueFree.find((a) => a.source === "manual" || a.source === "player-event") ||
+    dueSocialReaction ||
+    queueFree[0] ||
+    null;
   const manualQueued = !!(queued && (queued.source === "manual" || queued.source === "player-event"));
   /* CLAUDE FIX R9 (4.5): during an emergency brake only the player's own actions run. */
   if (simBrakeLeftMs() > 0 && !manualQueued) return;
@@ -64009,12 +64014,17 @@ function playerPostCommentRowsFromOutput(w, out, cards, postContext) {
           : (row.authorId !== undefined ? row.authorId : row.name)
       );
       const text = normalizeGeneratedSocialText(row.text);
-      const reactsTo = String(row.reagal_erre || row.reactsTo || row.trigger || "").trim();
+      const reactsToRaw = String(row.reagal_erre || row.reactsTo || row.trigger || "").trim();
+      const reactsTo = reactsToRaw || String(
+        postContext.text ||
+        postContext.imageDescription ||
+        (postContext.visibleTags || []).join(" ") ||
+        "current post"
+      ).trim();
 
       if (!actorId || !allowed.has(actorId) || isHuman(w, actorId) || !text || seen.has(actorId)) return;
-      if (!reactsTo || reactsTo.length < 2) {
-        console.warn("[player-post-comments] rejected=missing-reagal_erre", "character=" + actorId);
-        return;
+      if (!reactsToRaw) {
+        console.info("[player-post-comments] normalized=missing-reagal_erre", "character=" + actorId);
       }
       if (PLAYER_POST_COMMENT_TECH_LEAK_RE.test(text)) {
         console.warn("[player-post-comments] rejected=technical-leak", "character=" + actorId, "text=" + text.slice(0, 180));
