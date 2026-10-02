@@ -5290,8 +5290,8 @@ function providerModel(provider, body = {}) {
   const requested = String(body?.model || "").trim();
   if (provider === "mistral" || provider === "mistral2") {
     const source = String(body?.source || "").trim().toLowerCase();
-    if (source === "voice-style" || source === "voice-profile") return String(process.env.MISTRAL_VOICE_MODEL || "mistral-medium-latest").trim();
     if (source === "scene") return String(process.env.MISTRAL_SCENE_MODEL || "mistral-small-latest").trim();
+    if (source === "comments" || /(?:^|[-_])comments?(?:[-_]|$)/.test(source) || source.includes("player-post-comment")) return String(process.env.MISTRAL_COMMENT_MODEL || "mistral-small-latest").trim();
     if (source === "dm") return String(process.env.MISTRAL_DM_FALLBACK_MODEL || "mistral-small-latest").trim();
     if (String(body?.quality || "") === "deep") return String(process.env.MISTRAL_DEEP_MODEL || "mistral-large-latest").trim();
     if ((Number(body?.priority) || 0) >= 50) return String(process.env.MISTRAL_PLAYER_MODEL || "mistral-medium-latest").trim();
@@ -5671,26 +5671,24 @@ function providerAllowedForBody(provider, body) {
 }
 
 /* Provider roles are intentionally strict.
-   - DeepSeek/OpenRouter3 owns only direct RP voice work: DMs, Scenes, and the
-     cached character sheet/personality summaries that feed every channel.
-   - Feed/comment planning AND final social writing use Gemini -> Groq -> Groq2
-     -> OpenAI. They still receive the DeepSeek-produced private summary plus
-     the preserved per-character voice/style cards from the app prompt.
-   - Other background tasks keep the existing Gemini/Groq routing.
-   This separation prevents social refreshes from competing with long RP calls
-   for OpenRouter in-flight credit while preserving character voice/canon. */
+   - DM: OpenRouter3 / DeepSeek Flash.
+   - Scene: Mistral Small 1 -> Mistral Small 2.
+   - Feed: Gemini -> OpenAI.
+   - Comments/replies: Mistral Small 1 -> Mistral Small 2.
+   - Existing character voice/style cards remain prompt context; there is no separate AI voice pass.
+   - Other small background tasks keep the existing Gemini/Groq routing. */
 function taskProviderOrder(requestedProvider, body) {
   const source = String(body?.source || inferAIRequestSource(body) || "").trim().toLowerCase();
   const chars = aiRequestChars(body);
 
-  const deepSeekRoleplaySources = new Set([
-    "dm",
-  ]);
-
-  const socialFeedOrComment =
+  const isComment =
     source === "comments" ||
-    /(?:^|[-_])(feed|comments?)(?:[-_]|$)/.test(source) ||
+    /(?:^|[-_])comments?(?:[-_]|$)/.test(source) ||
     source.includes("player-post-comment");
+
+  const isFeed =
+    source === "feed-post" ||
+    /(?:^|[-_])feed(?:[-_]|$)/.test(source);
 
   const groqSmallBackgroundSources = new Set([
     "relationship-labels",
@@ -5702,16 +5700,19 @@ function taskProviderOrder(requestedProvider, body) {
   const groqSmallEnough = chars <= 26000;
   let raw;
 
-  if (deepSeekRoleplaySources.has(source)) {
-    /* Direct messages stay on DeepSeek Flash first; if OpenRouter cannot serve
-       them (credits/provider issue), Mistral takes over with the player model. */
-    raw = ["openrouter3", "mistral", "mistral2"];
+  if (source === "dm") {
+    /* Direct messages belong to DeepSeek Flash only. */
+    raw = ["openrouter3"];
   } else if (source === "scene") {
-    /* Scenes are intentionally Mistral-owned; providerModel selects the scene model. */
+    /* Scenes use Mistral Small, with the second Mistral key as fallback. */
     raw = ["mistral", "mistral2"];
-  } else if (source === "sheet-summary" || source === "character-bible") {
+  } else if (isComment) {
+    /* All comment/reply writing uses Mistral Small 1 -> 2. */
+    raw = ["mistral", "mistral2"];
+  } else if (isFeed) {
+    /* Feed stays on free Gemini first; paid OpenAI is fallback only. */
     raw = ["gemini", "openai"];
-  } else if (socialFeedOrComment) {
+  } else if (source === "sheet-summary" || source === "character-bible") {
     raw = ["gemini", "openai"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
     raw = ["groq", "groq2", "gemini"];
@@ -5840,113 +5841,6 @@ function logFullAIPromptDebug(body = {}, source = "unknown", provider = "unknown
   );
 }
 
-const VOICE_PROFILE_CACHE = new Map();
-const VOICE_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
-
-function isVoiceProfileSource(source = "") {
-  const value = String(source || "").trim().toLowerCase();
-  if (value === "dm" || value === "scene" || value === "comments" || value === "feed-post") return true;
-  if (value.includes("plan")) return false;
-  return value.includes("player-post-comments");
-}
-
-function voiceProfileContext(body = {}) {
-  const combined = [
-    String(body?.system || ""),
-    ...(Array.isArray(body?.messages) ? body.messages.map((m) => extractText(m?.content || "")) : []),
-  ].filter(Boolean).join("\n\n");
-  const chunks = [];
-  const addWindow = (marker, cap = 7200, stopMarker = "") => {
-    const at = combined.indexOf(marker);
-    if (at < 0) return;
-    let finish = Math.min(combined.length, at + cap);
-    if (stopMarker) {
-      const stop = combined.indexOf(stopMarker, at + marker.length);
-      if (stop >= 0 && stop < finish) finish = stop;
-    }
-    const value = combined.slice(at, finish).trim();
-    if (value && !chunks.includes(value)) chunks.push(value);
-  };
-  addWindow("VOICE STYLE CARDS — PRESERVED PROMPT PREFIX", 9000);
-  addWindow("VOICE / WRITING-STYLE CARD — MANDATORY FOR THIS SPEAKER ONLY:", 7600, "LATEST 14 MESSAGES");
-  addWindow("VOICE / WRITING STYLE CARD — HARD PERFORMANCE CONTRACT", 5200);
-  const stableVoiceText = chunks.join("\n\n---\n\n");
-  const maturityLines = stableVoiceText
-    .split(/\n+/)
-    .filter((line) => /mature|intimacy|intimate|nsfw|sexual|sensual|flirt|desire|adult|consens/i.test(line))
-    .slice(0, 18)
-    .map((line) => line.slice(0, 420));
-  if (maturityLines.length) chunks.push("MATURE / NSFW TONE NOTES:\n" + maturityLines.join("\n"));
-  return chunks.join("\n\n---\n\n").slice(0, 14000);
-}
-
-function cleanupVoiceProfileCache() {
-  const now = Date.now();
-  for (const [key, entry] of VOICE_PROFILE_CACHE) {
-    if (!entry || entry.expiresAt <= now) VOICE_PROFILE_CACHE.delete(key);
-  }
-  while (VOICE_PROFILE_CACHE.size > 300) {
-    const first = VOICE_PROFILE_CACHE.keys().next().value;
-    if (!first) break;
-    VOICE_PROFILE_CACHE.delete(first);
-  }
-}
-
-async function buildCachedVoiceProfile(body, source) {
-  if (!isVoiceProfileSource(source) || (!MISTRAL_API_KEY && !MISTRAL_API_KEY_2)) return "";
-  const context = voiceProfileContext(body);
-  if (!context) return "";
-  cleanupVoiceProfileCache();
-  const key = crypto.createHash("sha256").update(context).digest("hex");
-  const cached = VOICE_PROFILE_CACHE.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    console.info("[ai-voice-profile] cache-hit", "source=" + source, "chars=" + cached.profile.length);
-    return cached.profile;
-  }
-
-  const model = String(process.env.MISTRAL_VOICE_MODEL || "mistral-medium-latest").trim();
-  const profileBody = {
-    source: "voice-profile",
-    priority: 100,
-    temperature: 0.2,
-    max_tokens: 520,
-    system: [
-      "Create a compact reusable CHARACTER VOICE / WRITING / MATURE-TONE PROFILE from the supplied canon/style cards.",
-      "This profile will be injected into DM, scene, feed and comment prompts. Preserve only performance guidance: cadence, sentence length, casing, slang, profanity, humor, emotional register, nicknames, flirting, mature/adult tone, boundaries and what the character would never sound like.",
-      "Do not invent plot facts, relationships, secrets or sexual acts. Do not sanitize consensual adult/mature tone already present in canon.",
-      "Nicknames/codenames/hero names are names, not metadata: never recommend explanatory parentheticals such as (her hero name), (nickname), (codename) or aka.",
-      "Return concise plain text, maximum about 350 words.",
-    ].join("\n"),
-    messages: [{ role: "user", content: context }],
-  };
-
-  let provider = "mistral";
-  let result = MISTRAL_API_KEY
-    ? await proxyCompatibleMessage("mistral", MISTRAL_API_KEY, model, "https://api.mistral.ai/v1/chat/completions", profileBody)
-    : null;
-  if ((!result || !result.ok) && MISTRAL_API_KEY_2) {
-    provider = "mistral2";
-    result = await proxyCompatibleMessage("mistral2", MISTRAL_API_KEY_2, model, "https://api.mistral.ai/v1/chat/completions", profileBody);
-  }
-  if (!result?.ok) {
-    console.warn("[ai-voice-profile] soft-fallback", "source=" + source, "provider=" + provider, "status=" + Number(result?.status || 0));
-    return "";
-  }
-  const profile = extractText(result?.payload?.content || "").trim().slice(0, 5000);
-  if (!profile) return "";
-  VOICE_PROFILE_CACHE.set(key, { profile, expiresAt: Date.now() + VOICE_PROFILE_TTL_MS });
-  console.info("[ai-voice-profile] cache-store", "source=" + source, "provider=" + provider, "model=" + model, "chars=" + profile.length);
-  return profile;
-}
-
-async function attachCachedVoiceProfile(task) {
-  const source = String(task?.source || task?.body?.source || "").trim().toLowerCase();
-  if (!isVoiceProfileSource(source)) return;
-  const profile = await buildCachedVoiceProfile(task.body, source);
-  if (!profile) return;
-  const marker = "\n\n[CACHED CHARACTER VOICE / MATURE-TONE PROFILE — PERFORMANCE ONLY]\n";
-  task.body = { ...task.body, system: String(task.body?.system || "") + marker + profile };
-}
 function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
   /* OpenAI is a normal final fallback for feed/comment tasks. For other
      Gemini-owned background work it remains emergency-only on provider outage. */
@@ -5974,7 +5868,6 @@ function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
 }
 
 async function executeAITask(task) {
-  await attachCachedVoiceProfile(task);
   const attempted = new Set();
   const attempts = [];
   let last = null;
