@@ -62225,6 +62225,7 @@ function voiceStyleCardsForIds(w, ids, actorId) {
 
   return rows.length
     ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
+      "NAMES — HARD RULE: call people only by their real name, surname, username or a nickname that a sheet actually gives them. Never invent a new nickname or a pop-culture comparison name (no \"Draco\", \"Romeo\", \"Joker\" for a real person) and never mention someone who is not in this world.\n" +
       "KNOWLEDGE BOUNDARY — HARD RULE: about themselves everyone uses their OWN sheet. About anyone else they know only that person's public profile, what their OWN sheet says about them, and what really happened between them in play. Never let one character mention a place, event, secret, nickname or memory that appears only on SOMEONE ELSE's sheet (e.g. a cabin, a hideout, a past incident) — if it is not on the speaker's own card, the speaker does not know it.\n" +
       "FULL INTENSITY: play every character exactly as extreme as their own sheet says — cruel is cruel, obsessed is visibly obsessed, cold is cold, arrogant is arrogant. Never soften, sanitize or average them into a polite generic person. JEALOUSY and ENMITY are extremes too: a jealous or possessive person reacts to a rival with open, ugly jealousy (icy and menacing or explosive, as their nature says); enemies treat each other with real contempt and hostility, never polite irony. People who dislike or hate each other show it and never use pet names (babe, baby, honey, darling…) with each other; warmth and pet names only where the relationship really is warm. Each speaker knows their own SHEET CANON history exactly — the right names, places, order of events — and never contradicts it or makes up a different past.\n\n" +
       rows.join("\n\n--- NEXT SPEAKER CARD ---\n\n")
@@ -62361,11 +62362,69 @@ function cleanGeneratedUtterance(...args) {
   return applyCharacterVoiceStyle(w, id, base);
 }
 
+/* CLAUDE FIX R52: a comment that talks about / to a person who does not exist in
+   this world ("Draco's still practicing...") is dropped. Known = every character's
+   and player's name parts, nicknames, usernames, and any capitalised word that
+   appears anywhere in the world's sheets or world text (places, groups, brands
+   the sheets use). Only person-like uses are judged: possessive ("Draco's"),
+   address ("Draco," / ", Draco.") or "Draco is/was/still/has…". */
+const WORLD_WORD_CORPUS_CACHE = new WeakMap();
+function worldKnownWordSet(w) {
+  if (!w) return new Set();
+  const chars = [...(w.chars || []), ...Object.values(w.players || {})].filter(Boolean);
+  const sig = chars.length + ":" + chars.reduce((sum, c) => sum + JSON.stringify(c).length, 0) + ":" + JSON.stringify(w.universe || {}).length;
+  const cached = WORLD_WORD_CORPUS_CACHE.get(w);
+  if (cached && cached.sig === sig) return cached.set;
+  const set = new Set();
+  const addWords = (text) => String(text || "").replace(/[^\p{L}\p{N}'’\- ]+/gu, " ").split(/\s+/).forEach((word) => {
+    const clean = word.replace(/['’]s$/i, "").replace(/^[-'’]+|[-'’]+$/g, "").toLowerCase();
+    if (clean.length >= 2) set.add(clean);
+    clean.split("-").forEach((part) => { if (part.length >= 2) set.add(part); });
+  });
+  chars.forEach((c) => {
+    try { addWords(JSON.stringify(c)); } catch (error) { /* skip */ }
+  });
+  try { addWords(JSON.stringify(w.universe || {})); addWords(w.lore || ""); addWords(JSON.stringify(w.groups || []).slice(0, 200000)); } catch (error) { /* skip */ }
+  WORLD_WORD_CORPUS_CACHE.set(w, { sig, set });
+  return set;
+}
+
+function generatedTextUnknownPersonName(w, text) {
+  const value = String(text || "");
+  if (!w || !value) return "";
+  const known = worldKnownWordSet(w);
+  const common = /^(?:i|im|ok|okay|omg|lol|lmao|god|jesus|christ|lord|mom|mum|dad|bro|sis|babe|baby|honey|darling|sweetheart|princess|queen|king|boss|sir|miss|mister|mr|mrs|ms|dr|sensei|coach|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december|christmas|halloween|instagram|tiktok|snapchat|twitter|facebook|youtube|google|netflix|spotify|iphone|uber|starbucks|english|american|korean|japanese|chinese|french|hungarian|hell|heaven|that|what|it|there|here|he|she|who|everyone|everybody|nobody|somebody|someone|life|nothing|everything|this|today|tonight|tomorrow|yesterday|nah|yeah|yes|no|guess|bet|wow|damn|fuck|shit)$/i;
+  const rx = /(^|[.!?…]\s+|\s|,\s*)([\p{Lu}][\p{Ll}][\p{L}\-]{1,20})(?=(['’]s\s+(?:still|just|always|never|gonna|been|got|really|so|such|out|back|over|trying|practicing|acting|playing|pretending|talking|crying|losing|face|ego)\b|['’]s\b|\s*,|\s*[.!?]|\s+(?:is|was|has|had|still|just|never|always|can|will|would|thinks|says|said|wants)\b))/gu;
+  let m;
+  while ((m = rx.exec(value))) {
+    const word = m[2];
+    const low = word.toLowerCase();
+    if (common.test(word) || known.has(low)) continue;
+    const after = m[3] || "";
+    const sentenceStart = !m[1] || /[.!?…]\s+$/.test(m[1]);
+    if (sentenceStart) {
+      /* sentence-initial: only an unmistakable person — "Draco's still …", "Draco, …" */
+      if (/^['’]s\s+\w/.test(after) || /^\s*,/.test(after)) return word;
+      continue;
+    }
+    /* mid-sentence: possessive, address or subject of a verb */
+    if (/^['’]s\b/.test(after) || /^\s*[,.!?]/.test(after) || /,\s*$/.test(m[1] || "") || /^\s+\w/.test(after)) return word;
+  }
+  return "";
+}
+
 function cleanGeneratedComment(...args) {
   const w = args[0];
   const id = args[1];
   args[2] = normalizeGeneratedSocialText(args[2]);
   if (!args[2]) return "";
+  try {
+    const stranger = generatedTextUnknownPersonName(w, args[2]);
+    if (stranger) {
+      console.warn("[unknown-name] dropped generated comment", "character=" + String(id || ""), "name=" + stranger, String(args[2]).slice(0, 120));
+      return "";
+    }
+  } catch (error) { /* keep the comment */ }
   const base = legacyVoiceStyleCleanGeneratedComment(...args);
   if (generatedTextHasTechLeak(base)) {
     console.warn("[tech-leak] dropped generated comment", "character=" + String(id || ""), String(base || "").slice(0, 120));
