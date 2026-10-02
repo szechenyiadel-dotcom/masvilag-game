@@ -8605,6 +8605,44 @@ const PROTECTED_TAIL_MARKER = "[[PROTECTED_TAIL]]";
 /* CLAUDE FIX R2 (scenes): the newest turns + the player's newest action are
    repeated in the protected tail, so the model answers THAT, even if the long
    middle of the prompt had to be shortened. */
+/* CLAUDE FIX R58: WHO IS WHO IN THIS EVENT. The host / inviter explains why people
+   were invited; a fellow invitee answers only from their own position and never
+   talks about themselves in the third person ("you two" when they are one of them). */
+function sceneRolesCard(w, scene) {
+  if (!w || !scene) return "";
+  const en = worldLanguage(w, w.meId) === "en";
+  const hostId = String(scene.initiatedBy || "");
+  const cast = (scene.cast || []).filter(Boolean);
+  const host = hostId && charById(w, hostId) ? nameOfIn(w, hostId) : "";
+  const guests = [w.meId, ...cast.filter((id) => id !== hostId)].filter(Boolean).map((id) => nameOfIn(w, id));
+  if (!host) {
+    return en
+      ? "ROLES: everyone speaks only as themself — never about themself in the third person, never \"you two\" when they are one of the two."
+      : "SZEREPEK: mindenki csak önmagaként beszél — magáról soha E/3-ban, és soha nem mondja, hogy „ti ketten”, ha ő maga is az egyik.";
+  }
+  return en
+    ? "ROLES IN THIS EVENT: host / the one who invited everyone = " + host + ". Invited: " + guests.join(", ") + ". Questions like \"why did you invite us?\" are answered by " + host + " (the host knows why). An invited guest does not answer for the host or explain the invitation as if it were theirs — they answer from their own position (what they were told, what they think). Nobody talks about themself in the third person or says \"you two\" about a pair they belong to."
+    : "SZEREPEK AZ EVENTEN: házigazda / aki mindenkit meghívott = " + host + ". Meghívottak: " + guests.join(", ") + ". Az olyan kérdésekre, mint „miért hívtatok meg?”, " + host + " felel (ő tudja, miért). Egy meghívott vendég nem felel a házigazda helyett, és nem magyarázza úgy a meghívást, mintha az övé lett volna — a saját helyzetéből szól (amit mondtak neki, amit gondol). Senki nem beszél magáról E/3-ban, és nem mondja, hogy „ti ketten”, ha ő maga is az egyik.";
+}
+
+/* a speech line in which the speaker names themself in the third person
+   ("…the only ones who could handle it — Tandy and Lennon…" said by Lennon) */
+function sceneSpeechSelfThirdPerson(w, speakerId, text) {
+  const c = charById(w, speakerId);
+  if (!c || isHuman(w, speakerId)) return false;
+  const spoken = String(text || "").replace(/\*[^*]*\*/g, " ");
+  const first = String(c.name || "").split(/\s+/)[0];
+  const names = [...new Set([first, String(c.nick || "").trim()].filter((n) => n && n.length >= 3 && /^\p{Lu}/u.test(n)))];
+  return names.some((n) => {
+    const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp("(^|[^\\p{L}])" + esc + "(?=$|[^\\p{L}])", "u");
+    if (!re.test(spoken)) return false;
+    /* "I'm Lennon", "call me Lennon", "it's Lennon" are fine; a quote of someone else saying it is fine too */
+    if (new RegExp("(?:i'?m|i am|call me|it'?s|this is|name'?s|vagyok|hívj)\\s+" + esc.toLowerCase(), "u").test(spoken.toLowerCase())) return false;
+    return true;
+  });
+}
+
 function roleplayLatestBeatTail(w, turns, playerText, who) {
   const en = worldLanguage(w, w && w.meId) === "en";
   const lookup = typeof who === "function" ? who : (id) => charById(w, id);
@@ -35485,6 +35523,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
 EVENT / JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
 EVENT CÉLJA: ${scene.goal || "nincs külön megadva"}
+${sceneRolesCard(w, scene)}
 EVENT AJÁNLOTT MINIMUMA: ${scene.limitMode === "minutes" ? `${scene.targetMinutes || 20} perc` : `${scene.targetTurns || 16} üzenet`}
 AKTUÁLIS HALADÁS: ${sceneEventProgressText(scene, worldLanguage(w, w.meId))}
 
@@ -35761,6 +35800,10 @@ Formátum:
             if (unsupportedPhysicalContinuation) {
               keptText = String(roleplayText).split(/(?<=[.!?…])\s+/).filter((part) => !roleplayHasUnsupportedPhysicalContinuation(resolvedId, part, promptTurns)).join(" ").trim();
               console.info("[roleplay] unsupported hold removed", "character=" + String(resolvedId || ""), "kept=" + keptText.length);
+            }
+            if (allowed && !isNarr && !turnIsAction && keptText && sceneSpeechSelfThirdPerson(w, resolvedId, keptText)) {
+              console.info("[roleplay] speech in which the speaker talks about themself in the third person removed", "character=" + String(resolvedId || ""), keptText.slice(0, 120));
+              keptText = "";
             }
             if (!allowed) console.warn("[roleplay] turn dropped: unknown or player author", String(raw || "").slice(0, 60));
             else if (!keptText) console.warn("[roleplay] turn dropped: empty after cleaning", "character=" + String(resolvedId || ""), rawText.slice(0, 120));
