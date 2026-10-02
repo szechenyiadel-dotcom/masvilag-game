@@ -37227,7 +37227,7 @@ ${
 }
 
 TAGOK TELJES KARAKTERKÁNONJA ÉS EMLÉKEZETE:
-${groupAiMembers.map((c) => `${voiceCard(c)}${characterMemoryCard(w, c)}`).join("")}
+${groupAiMembers.map((c) => characterMemoryCard(w, c)).join("")}
 
 ${repetitionGuard(
   w,
@@ -62677,7 +62677,11 @@ function voiceStyleCardsForIds(w, ids, actorId) {
           [pub, pubSummary].filter(Boolean).join("\n");
       }
       const persona = characterPersonaBrief(c);
-      const style = characterVoiceStyleCard(c).slice(0, speakers.length > 4 ? 900 : 1600);
+      const rawStyle = characterVoiceStyleCard(c);
+      const style = (speakers.length > 1
+        ? rawStyle.split("SHEET EVIDENCE —")[0].split("VOICE EXAMPLES FROM THE SHEET —")[0]
+        : rawStyle
+      ).slice(0, speakers.length > 4 ? 900 : 1600);
       const personaBlock = persona ? "PERSONALITY OF " + String(c.name || "").toUpperCase() + " — FROM THEIR OWN SHEET, PLAY EXACTLY THIS (not a generic type, not the original fandom):\n" + persona.slice(0, speakers.length > 4 ? 600 : 1200) : "";
       const room = Math.max(500, perSpeaker - style.length - personaBlock.length - 10);
       let bible = "";
@@ -62689,6 +62693,7 @@ function voiceStyleCardsForIds(w, ids, actorId) {
 
   return rows.length
     ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
+      "VOICE OWNERSHIP — HARD RULE: each speaker uses ONLY their own card's personality, cadence, slang, profanity, pet names, casing, punctuation and emoji habits. Never borrow another speaker's delivery or distinctive phrasing.\n" +
       "OWNERSHIP — HARD RULE: \"mine\", \"my girl\", \"don't touch what's mine\" only from someone whose own card says they are with that person or are possessive / obsessed about them. Never repeat another commenter's possessive line; a friend defends a friend as a friend (\"she's not yours\", \"leave her alone\").\n" +
       "GROUPS — HARD RULE: say \"we / us / our sensei / makes us\" only about a dojo, team or group that is on your OWN card (WHO IS WHO). Never imply you train or work under someone who is not your own sensei / boss.\n" +
       "RANK — HARD RULE: a student or younger fighter never tells a sensei (their own, or a feared one from another dojo) \"shut up\", never insults or mocks them in public. They may disagree respectfully, go quiet, obey grudgingly or grumble to friends — only fellow senseis / equals can be openly rude to a sensei.\n" +
