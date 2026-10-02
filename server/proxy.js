@@ -5290,7 +5290,7 @@ function providerModel(provider, body = {}) {
   const requested = String(body?.model || "").trim();
   if (provider === "mistral" || provider === "mistral2") {
     const source = String(body?.source || "").trim().toLowerCase();
-    if (source === "voice-style") return String(process.env.MISTRAL_VOICE_MODEL || "mistral-medium-latest").trim();
+    if (source === "voice-style" || source === "voice-profile") return String(process.env.MISTRAL_VOICE_MODEL || "mistral-medium-latest").trim();
     if (source === "scene") return String(process.env.MISTRAL_SCENE_MODEL || "mistral-small-latest").trim();
     if (source === "dm") return String(process.env.MISTRAL_DM_FALLBACK_MODEL || "mistral-small-latest").trim();
     if (String(body?.quality || "") === "deep") return String(process.env.MISTRAL_DEEP_MODEL || "mistral-large-latest").trim();
@@ -5321,7 +5321,24 @@ function providerModel(provider, body = {}) {
 
 async function callMessageProvider(provider, body) {
   /* OpenRouter roleplay chain: MODEL_3 first, then MODEL_2 on the second key, then MODEL_1. */
-  if (provider === "openrouter3") return proxyCompatibleMessage("openrouter3", process.env.OPENROUTER_API_KEY, providerModel("openrouter3", body), "https://openrouter.ai/api/v1/chat/completions", body);
+  if (provider === "openrouter3") {
+    const model = providerModel("openrouter3", body);
+    let result = await proxyCompatibleMessage("openrouter3", process.env.OPENROUTER_API_KEY, model, "https://openrouter.ai/api/v1/chat/completions", body);
+    if (!result?.ok && Number(result?.status) === 402) {
+      const message = safeProviderMessage(result, "");
+      const match = message.match(/can only afford\s+(\d+)/i);
+      const affordable = match ? Number(match[1]) : 0;
+      if (affordable >= 96) {
+        const requested = Math.max(1, Number(body?.max_tokens) || 1024);
+        const retryTokens = Math.max(80, Math.min(requested - 1, affordable - 16));
+        if (retryTokens < requested) {
+          console.warn("[ai-provider] openrouter3-token-downshift", "requested=" + requested, "retry=" + retryTokens, "affordable=" + affordable);
+          result = await proxyCompatibleMessage("openrouter3", process.env.OPENROUTER_API_KEY, model, "https://openrouter.ai/api/v1/chat/completions", { ...body, max_tokens: retryTokens });
+        }
+      }
+    }
+    return result;
+  }
   if (provider === "openrouter") return proxyCompatibleMessage("openrouter", process.env.OPENROUTER_API_KEY, providerModel("openrouter", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openrouter2") return proxyCompatibleMessage("openrouter2", process.env.OPENROUTER_API_KEY_2, providerModel("openrouter2", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "mistral") return proxyCompatibleMessage("mistral", MISTRAL_API_KEY, providerModel("mistral", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
@@ -5594,7 +5611,7 @@ function markProviderFailure(provider, model, result) {
      balance. That is NOT a broken key/configuration: cool down briefly and retry. */
   const transientInFlight402 =
     status === 402 &&
-    /in[- ]?flight|requests settle|current.*requests|retry after.*settle/.test(lower);
+    /in[- ]?flight|requests settle|current.*requests|retry after.*settle|can only afford|requires more credits, or fewer max_tokens/.test(lower);
 
   if (transientInFlight402) {
     const previous = Number(AI_GATE.providerFailures.get(provider) || 0);
@@ -5815,126 +5832,111 @@ function logFullAIPromptDebug(body = {}, source = "unknown", provider = "unknown
   );
 }
 
-const VOICE_FINALIZER_SOURCES = new Set(["dm", "scene", "comments", "feed-post"]);
-const VOICE_FINALIZER_TEXT_KEYS = /^(?:text|message|content|caption|reply|dmText|opening|dialogue|utterance|note|postText|commentText)$/i;
+const VOICE_PROFILE_CACHE = new Map();
+const VOICE_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 
-function voiceFinalizerContext(body = {}) {
+function isVoiceProfileSource(source = "") {
+  const value = String(source || "").trim().toLowerCase();
+  if (value === "dm" || value === "scene" || value === "comments" || value === "feed-post") return true;
+  if (value.includes("plan")) return false;
+  return value.includes("player-post-comments");
+}
+
+function voiceProfileContext(body = {}) {
   const combined = [
     String(body?.system || ""),
     ...(Array.isArray(body?.messages) ? body.messages.map((m) => extractText(m?.content || "")) : []),
   ].filter(Boolean).join("\n\n");
   const chunks = [];
-  const addWindow = (marker, cap = 7800, stopMarker = "") => {
+  const addWindow = (marker, cap = 7200, stopMarker = "") => {
     const at = combined.indexOf(marker);
     if (at < 0) return;
-    let end = Math.min(combined.length, at + cap);
+    let finish = Math.min(combined.length, at + cap);
     if (stopMarker) {
       const stop = combined.indexOf(stopMarker, at + marker.length);
-      if (stop >= 0 && stop < end) end = stop;
+      if (stop >= 0 && stop < finish) finish = stop;
     }
-    const value = combined.slice(at, end).trim();
+    const value = combined.slice(at, finish).trim();
     if (value && !chunks.includes(value)) chunks.push(value);
   };
-  addWindow("VOICE STYLE CARDS — PRESERVED PROMPT PREFIX", 8200);
-  addWindow("VOICE / WRITING-STYLE CARD — MANDATORY FOR THIS SPEAKER ONLY:", 6800, "LATEST 14 MESSAGES");
-  addWindow("VOICE / WRITING STYLE CARD — HARD PERFORMANCE CONTRACT", 4200);
+  addWindow("VOICE STYLE CARDS — PRESERVED PROMPT PREFIX", 9000);
+  addWindow("VOICE / WRITING-STYLE CARD — MANDATORY FOR THIS SPEAKER ONLY:", 7600, "LATEST 14 MESSAGES");
+  addWindow("VOICE / WRITING STYLE CARD — HARD PERFORMANCE CONTRACT", 5200);
   const maturityLines = combined
     .split(/\n+/)
     .filter((line) => /mature|intimacy|intimate|nsfw|sexual|sensual|flirt|desire|adult|consens/i.test(line))
-    .slice(0, 14)
+    .slice(0, 18)
     .map((line) => line.slice(0, 420));
-  if (maturityLines.length) chunks.push("MATURE/NSFW CANON & TONE NOTES:\n" + maturityLines.join("\n"));
-  return chunks.join("\n\n---\n\n").slice(0, 12000);
+  if (maturityLines.length) chunks.push("MATURE / NSFW TONE NOTES:\n" + maturityLines.join("\n"));
+  return chunks.join("\n\n---\n\n").slice(0, 14000);
 }
 
-function mergeVoiceTextFields(original, polished) {
-  if (Array.isArray(original)) {
-    if (!Array.isArray(polished) || polished.length !== original.length) return original;
-    return original.map((item, index) => mergeVoiceTextFields(item, polished[index]));
+function cleanupVoiceProfileCache() {
+  const now = Date.now();
+  for (const [key, entry] of VOICE_PROFILE_CACHE) {
+    if (!entry || entry.expiresAt <= now) VOICE_PROFILE_CACHE.delete(key);
   }
-  if (original && typeof original === "object") {
-    if (!polished || typeof polished !== "object" || Array.isArray(polished)) return original;
-    const out = { ...original };
-    for (const field of Object.keys(original)) {
-      if (!Object.prototype.hasOwnProperty.call(polished, field)) continue;
-      const before = original[field];
-      const after = polished[field];
-      if (typeof before === "string") {
-        if (VOICE_FINALIZER_TEXT_KEYS.test(field) && typeof after === "string" && after.trim()) out[field] = after;
-      } else if (before && typeof before === "object") {
-        out[field] = mergeVoiceTextFields(before, after);
-      }
-    }
-    return out;
+  while (VOICE_PROFILE_CACHE.size > 300) {
+    const first = VOICE_PROFILE_CACHE.keys().next().value;
+    if (!first) break;
+    VOICE_PROFILE_CACHE.delete(first);
   }
-  return original;
 }
 
-function stripVoiceCodeFence(text) {
-  const value = String(text || "").trim();
-  const match = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return match ? match[1].trim() : value;
-}
+async function buildCachedVoiceProfile(body, source) {
+  if (!isVoiceProfileSource(source) || (!MISTRAL_API_KEY && !MISTRAL_API_KEY_2)) return "";
+  const context = voiceProfileContext(body);
+  if (!context) return "";
+  cleanupVoiceProfileCache();
+  const key = crypto.createHash("sha256").update(context).digest("hex");
+  const cached = VOICE_PROFILE_CACHE.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    console.info("[ai-voice-profile] cache-hit", "source=" + source, "chars=" + cached.profile.length);
+    return cached.profile;
+  }
 
-async function applySharedVoiceFinalizer(task, result) {
-  const source = String(task?.source || task?.body?.source || "").trim().toLowerCase();
-  if (!VOICE_FINALIZER_SOURCES.has(source) || !result?.ok || !MISTRAL_API_KEY) return result;
-  const draft = extractText(result?.payload?.content || "").trim();
-  if (!draft) return result;
-  const voiceContext = voiceFinalizerContext(task.body);
-  const voiceModel = String(process.env.MISTRAL_VOICE_MODEL || "mistral-medium-latest").trim();
-  const approxTokens = Math.ceil(draft.length / 3.2);
-  const maxTokens = Math.max(300, Math.min(2800, approxTokens + 220));
-  const voiceBody = {
-    source: "voice-style",
+  const model = String(process.env.MISTRAL_VOICE_MODEL || "mistral-medium-latest").trim();
+  const profileBody = {
+    source: "voice-profile",
     priority: 100,
-    temperature: Number.isFinite(Number(task.body?.temperature)) ? Number(task.body.temperature) : 0.75,
-    max_tokens: maxTokens,
+    temperature: 0.2,
+    max_tokens: 520,
     system: [
-      "FINAL CHARACTER VOICE / MATURE-TONE PASS.",
-      "Preserve facts, actions, chronology, relationship changes, speaker identities, JSON structure and array lengths exactly.",
-      "Rewrite ONLY authored speech/social text so each speaker matches the supplied VOICE / WRITING STYLE CARD: casing, slang, profanity, rhythm, punctuation, message length, nicknames, flirtation and established mature/adult tone.",
-      "Nickname/alias rule: use an established nickname/codename/hero name naturally as the name itself. In direct address choose one natural form at a time; never write combinations like Tandy, Dagger or Tandy \"Dagger\" Bowen, and never explain it with parentheticals like (her hero name), (nickname), (codename) or (aka ...).",
-      "Do not sanitize consensual adult tone already supported by the draft/canon. Do not invent new plot events, sexual acts, secrets, relationships, knowledge, IDs or metadata.",
-      "If the draft is JSON, return ONLY valid JSON with identical structure and keys. If it is plain text, return only the rewritten text.",
+      "Create a compact reusable CHARACTER VOICE / WRITING / MATURE-TONE PROFILE from the supplied canon/style cards.",
+      "This profile will be injected into DM, scene, feed and comment prompts. Preserve only performance guidance: cadence, sentence length, casing, slang, profanity, humor, emotional register, nicknames, flirting, mature/adult tone, boundaries and what the character would never sound like.",
+      "Do not invent plot facts, relationships, secrets or sexual acts. Do not sanitize consensual adult/mature tone already present in canon.",
+      "Nicknames/codenames/hero names are names, not metadata: never recommend explanatory parentheticals such as (her hero name), (nickname), (codename) or aka.",
+      "Return concise plain text, maximum about 350 words.",
     ].join("\n"),
-    messages: [{
-      role: "user",
-      content: [
-        voiceContext || "No separate voice card was extracted; preserve the established voice already present in the draft.",
-        "DRAFT TO FINALIZE:",
-        draft,
-      ].join("\n\n"),
-    }],
+    messages: [{ role: "user", content: context }],
   };
-  console.info("[ai-voice] request", "source=" + source, "model=" + voiceModel, "draftChars=" + draft.length, "voiceContextChars=" + voiceContext.length);
-  let voiceProvider = "mistral";
-  let polished = await proxyCompatibleMessage("mistral", MISTRAL_API_KEY, voiceModel, "https://api.mistral.ai/v1/chat/completions", voiceBody);
-  if (!polished?.ok && MISTRAL_API_KEY_2) {
-    console.warn("[ai-voice] mistral1-failed-trying-mistral2", "source=" + source, "model=" + voiceModel, "status=" + Number(polished?.status || 0));
-    voiceProvider = "mistral2";
-    polished = await proxyCompatibleMessage("mistral2", MISTRAL_API_KEY_2, voiceModel, "https://api.mistral.ai/v1/chat/completions", voiceBody);
+
+  let provider = "mistral";
+  let result = MISTRAL_API_KEY
+    ? await proxyCompatibleMessage("mistral", MISTRAL_API_KEY, model, "https://api.mistral.ai/v1/chat/completions", profileBody)
+    : null;
+  if ((!result || !result.ok) && MISTRAL_API_KEY_2) {
+    provider = "mistral2";
+    result = await proxyCompatibleMessage("mistral2", MISTRAL_API_KEY_2, model, "https://api.mistral.ai/v1/chat/completions", profileBody);
   }
-  if (!polished?.ok) {
-    console.warn("[ai-voice] soft-fallback", "source=" + source, "provider=" + voiceProvider, "model=" + voiceModel, "status=" + Number(polished?.status || 0), safeProviderMessage(polished, "voice finalizer unavailable"));
-    return result;
+  if (!result?.ok) {
+    console.warn("[ai-voice-profile] soft-fallback", "source=" + source, "provider=" + provider, "status=" + Number(result?.status || 0));
+    return "";
   }
-  let polishedText = stripVoiceCodeFence(extractText(polished?.payload?.content || ""));
-  if (!polishedText) return result;
-  let originalJson = null;
-  try { originalJson = JSON.parse(stripVoiceCodeFence(draft)); } catch {}
-  if (originalJson !== null) {
-    try {
-      const polishedJson = JSON.parse(polishedText);
-      polishedText = JSON.stringify(mergeVoiceTextFields(originalJson, polishedJson));
-    } catch {
-      console.warn("[ai-voice] invalid-json-soft-fallback", "source=" + source, "model=" + voiceModel);
-      return result;
-    }
-  }
-  const payload = { ...result.payload, content: [{ type: "text", text: polishedText }] };
-  console.info("[ai-voice] response", "source=" + source, "provider=" + voiceProvider, "model=" + voiceModel, "status=200");
-  return { ...result, payload, voiceProvider, voiceModel };
+  const profile = extractText(result?.payload?.content || "").trim().slice(0, 5000);
+  if (!profile) return "";
+  VOICE_PROFILE_CACHE.set(key, { profile, expiresAt: Date.now() + VOICE_PROFILE_TTL_MS });
+  console.info("[ai-voice-profile] cache-store", "source=" + source, "provider=" + provider, "model=" + model, "chars=" + profile.length);
+  return profile;
+}
+
+async function attachCachedVoiceProfile(task) {
+  const source = String(task?.source || task?.body?.source || "").trim().toLowerCase();
+  if (!isVoiceProfileSource(source)) return;
+  const profile = await buildCachedVoiceProfile(task.body, source);
+  if (!profile) return;
+  const marker = "\n\n[CACHED CHARACTER VOICE / MATURE-TONE PROFILE — PERFORMANCE ONLY]\n";
+  task.body = { ...task.body, system: String(task.body?.system || "") + marker + profile };
 }
 function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
   /* OpenAI is a normal final fallback for feed/comment tasks. For other
@@ -5963,6 +5965,7 @@ function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
 }
 
 async function executeAITask(task) {
+  await attachCachedVoiceProfile(task);
   const attempted = new Set();
   const attempts = [];
   let last = null;
@@ -5988,7 +5991,7 @@ async function executeAITask(task) {
 
     if (result?.ok) {
       markProviderSuccess(provider);
-      return await applySharedVoiceFinalizer(task, result);
+      return result;
     }
     if (result?.unavailable) continue;
 
@@ -6026,7 +6029,7 @@ async function executeAITask(task) {
 
       if (result?.ok) {
         markProviderSuccess(provider);
-        return await applySharedVoiceFinalizer(task, result);
+        return result;
       }
 
       if (!result?.unavailable) {
