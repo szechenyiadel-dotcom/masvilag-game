@@ -5207,7 +5207,7 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
-  if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat-v3-0324:free").trim();
+  if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat-v3-0324:free").trim();
   if (provider === "gemini") {
     if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || "gemini-3.5-flash").trim();
     return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
@@ -5224,6 +5224,7 @@ function providerModel(provider, body = {}) {
 async function callMessageProvider(provider, body) {
   /* R66: OpenRouter as a backup reader for sheet readings (OPENROUTER_API_KEY, OPENROUTER_MODEL) */
   if (provider === "openrouter") return proxyCompatibleMessage("openrouter", process.env.OPENROUTER_API_KEY, providerModel("openrouter", body), "https://openrouter.ai/api/v1/chat/completions", body);
+  if (provider === "openrouter2") return proxyCompatibleMessage("openrouter2", process.env.OPENROUTER_API_KEY_2, providerModel("openrouter2", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "mistral") return proxyCompatibleMessage("mistral", MISTRAL_API_KEY, providerModel("mistral", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
   if (provider === "groq") return proxyCompatibleMessage("groq", GROQ_API_KEY, GROQ_MODEL, "https://api.groq.com/openai/v1/chat/completions", body);
   if (provider === "openai") {
@@ -5243,6 +5244,7 @@ function configuredAIProvider(provider) {
   if (provider === "groq") return Boolean(GROQ_API_KEY && GROQ_MODEL);
   if (provider === "gemini") return Boolean(GEMINI_API_KEY || process.env.GEMINI_API_KEY_2);
   if (provider === "openrouter") return Boolean(process.env.OPENROUTER_API_KEY);
+  if (provider === "openrouter2") return Boolean(process.env.OPENROUTER_API_KEY_2);
   if (provider === "openai") return Boolean(OPENAI_API_KEY);
   if (provider === "anthropic") return Boolean(ANTHROPIC_API_KEY);
   return false;
@@ -5255,7 +5257,7 @@ function providerOrder(requestedProvider) {
     .filter(Boolean);
   const raw = configured.length
     ? configured
-    : [requestedProvider, "mistral", "gemini", "groq", "openai", "anthropic"];
+    : [requestedProvider, "mistral", "openrouter", "openrouter2", "groq", "gemini", "openai", "anthropic"];
   const ordered = [];
   for (const provider of raw) {
     if (!ordered.includes(provider) && configuredAIProvider(provider)) ordered.push(provider);
@@ -5509,20 +5511,13 @@ function markProviderSuccess(provider) {
 function providerAllowedForBody(provider, body) {
   const chars = aiRequestChars(body);
   if (chars <= AI_GROQ_MAX_INPUT_CHARS) return true;
-  return provider === "mistral" || provider === "gemini" || provider === "openrouter";
+  return provider === "mistral" || provider === "gemini" || provider === "openrouter" || provider === "openrouter2";
 }
 
-/* CLAUDE FIX R21: task-based routing. Careful sheet reading ("deep") goes to
-   Gemini first (falls back to Mistral); everything in a character's voice stays
-   on Mistral (permissive, good at voice). */
+/* R67: use one deterministic failover chain for AI message requests.
+   Railway AI_PROVIDER_ORDER controls the exact order. */
 function taskProviderOrder(requestedProvider, body) {
-  const order = providerOrder(requestedProvider).filter((p) => p !== "openrouter");
-  if (String(body?.quality || "") === "deep") {
-    /* R66: sheet reading — Gemini (all keys), then OpenRouter if a key is set, then the rest */
-    const first = [order.includes("gemini") ? "gemini" : "", configuredAIProvider("openrouter") ? "openrouter" : ""].filter(Boolean);
-    return [...first, ...order.filter((p) => !first.includes(p))];
-  }
-  return order;
+  return providerOrder(requestedProvider);
 }
 
 function healthyProvider(requestedProvider, body, excluded = new Set()) {
