@@ -4599,8 +4599,10 @@ function legacyInferCanonicalRelationshipBaseline(w, actor, target) {
     /close friend|k[oö]zeli bar[aá]t|like a sibling|testv[eé]rk[eé]nt/.test(low);
   const explicitFriend =
     /\bfriend\b|bar[aá]t|ally|sz[oö]vets[eé]ges|trusted ally|loyal friend/.test(low);
-  const explicitEnemy =
-    /archenemy|sworn enemy|enemy|ellens[eé]g|hate(?:s|d)?\b|hates\b|gy[uű]l[oö]l|despise|f[oő]ellens[eé]g/.test(low);
+  /* CLAUDE FIX R49: "she hates that he worries", "hates to admit it", "gyűlöli, hogy…"
+     are not enmity. A hate verb only counts when it is aimed at a person, and never
+     over an explicit friendship / crush in the same entry. */
+  const explicitEnemy = connectionTextIsHostile(low);
   const explicitRival =
     /rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(low);
 
@@ -13257,9 +13259,11 @@ function connectionRelationshipEntriesAbout(w, actor, target) {
   const aliases = strictConnectionTargetAliases(target);
   if (!aliases.length) return [];
 
+  /* CLAUDE FIX R49: "- Ryan Cole: ...", "• Ryan Cole — ...", "1. Ryan Cole — ..." are
+     entries too — the bullet hid them from the parser. */
   const rows = source
     .split(/\n+/)
-    .map((line) => line.replace(/\s+/g, " ").trim())
+    .map((line) => line.replace(/\s+/g, " ").trim().replace(/^(?:[-–—•*·▪►>]+|\d{1,2}[.)])\s+/, ""))
     .filter(Boolean);
 
   const found = [];
@@ -13450,9 +13454,22 @@ function connectionRelationshipEntriesAbout(w, actor, target) {
       dash &&
       connectionSubjectIsExactTarget(w, dash[1], target)
     ) {
+      /* R49: lines of one paragraph are joined here — stop at the NEXT person's
+         entry, so "Ryan — Friend. Feng Xiao — Relationship: Enemy." is not one entry */
+      let ownPart = String(dash[2]);
+      try {
+        const nextRx = /\s([\p{Lu}][\p{L}'’\-]*(?:\s[\p{Lu}][\p{L}'’\-]*){0,3})\s[—–-]\s/gu;
+        let m;
+        while ((m = nextRx.exec(ownPart))) {
+          const who = m[1].trim();
+          let other = null;
+          try { other = resolveCharacterIdentity(w, who, { relationshipOnly: true }); } catch (error) { other = null; }
+          if (other && String(other.id) !== String(target.id)) { ownPart = ownPart.slice(0, m.index).trim(); break; }
+        }
+      } catch (error) { /* keep the whole part */ }
       add(
         dash[1],
-        `${heading ? `${heading}. ` : ""}${dash[2]}`,
+        `${heading ? `${heading}. ` : ""}${ownPart}`,
         rawBlock
       );
       return;
@@ -13511,6 +13528,19 @@ function connectionRelationshipEntriesAbout(w, actor, target) {
   return entries;
 }
 
+/* CLAUDE FIX R49: one shared reading of "is this entry hostile?". "Enemy" words
+   count (not "used to be enemies"); a hate verb counts only when aimed at a person
+   ("hates him"), never "hates that / how / to admit…", and never over an explicit
+   friendship or love in the same entry. */
+function connectionTextIsHostile(lowRaw) {
+  const low = String(lowRaw || "").toLowerCase().replace(/(?:used to be|former|formerly|once|no longer|not|were|went from)\s+(?:sworn\s+)?enem(?:y|ies)|enem(?:y|ies)[\s-]+(?:turned|to)[\s-]+(?:friends?|lovers?|allies)|(?:volt|korábbi|egykori|régi|már nem)\s+ellens[eé]g\w*/g, " ");
+  if (/archenemy|sworn enemy|\benem(?:y|ies)\b|ellens[eé]g|despise|f[oő]ellens[eé]g/.test(low)) return true;
+  const hate = /\bhate[sd]?\b(?!\s+(?:that|when|it|to|how|the\s+way|seeing|being|admitting|having|losing|needing|lying|himself|herself|myself|themselves|everything|everyone|this|what|not|nothing)\b)/.test(low) ||
+    /gy[uű]l[oö]l(?!i?,?\s+hogy)/.test(low);
+  if (!hate) return false;
+  return !/best friend|close friend|\bfriends?\b|bar[aá]t|crush|in love|szerelm|\bloves?\b|szereti|\bally\b|sz[oö]vets[eé]ges|trusts?\b|b[ií]zik/.test(low);
+}
+
 function exactConnectionBondLabel(w, actor, target) {
   const entries = connectionRelationshipEntriesAbout(w, actor, target);
   const text = entries
@@ -13539,7 +13569,7 @@ function exactConnectionBondLabel(w, actor, target) {
   else if (/close friend|k[oö]zeli bar[aá]t/.test(text)) push("Közeli barát");
   else if (/\bfriend\b|bar[aá]t|ally|sz[oö]vets[eé]ges/.test(text)) push("Barát");
 
-  if (/enemy|ellens[eé]g|archenemy|hate|gy[uű]l[oö]l|despise/.test(text)) push("Ellenség");
+  if (connectionTextIsHostile(text)) push("Ellenség");
   else if (/rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(text)) push("Rivális");
 
   const mentorRelationshipText = entries
@@ -13614,7 +13644,8 @@ function connectionRelationshipCue(w, actor, target) {
     romantic: /crush|has a crush|secret crush|vonz[oó]d|vonzalom|szerelmes|szerelem|in love|love interest|romantic|romantikus|fl[oö]rt|flirt|attraction|attracted|obsess|megsz[aá]ll|r[aá] van kattanva/.test(low),
     close: /best friend|close friend|ride or die|legjobb bar[aá]t|közeli bar[aá]t|testv[eé]rk[eé]nt|like a sibling|sisters? she chose|brothers? she chose|chosen sister|chosen brother|chosen family/.test(low),
     friendly: /friend|bar[aá]t|ally|sz[oö]vets[eé]ges|loyal|loj[aá]lis/.test(low),
-    hostile: /enemy|ellens[eé]g|hate|gy[uű]l[oö]l|nem b[ií]rja|despise|archenemy|f[oő]ellens[eé]g/.test(low),
+    /* R49: "hates that…", "nem bírja ki nélküle" are not hostility */
+    hostile: connectionTextIsHostile(low),
     rival: /rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(low),
     family: /mother|father|mom|dad|sister|brother|cousin|family|anya|apa|testv[eé]r|unokatestv[eé]r|csal[aá]d/.test(low),
     mentor: /sensei|mentor|teacher|coach|mester|tan[aá]r|edz[oő]/.test(low),
