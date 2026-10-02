@@ -32,6 +32,7 @@ if (!next.includes("/* " + MARKER + " */")) {
   renameOne("relationshipReadingCacheKey", "legacyV6RelationshipReadingCacheKey");
   renameOne("structuralRelationshipHash", "legacyV6StructuralRelationshipHash");
   renameOne("structuralReadingDue", "legacyV6StructuralReadingDue");
+  renameOne("inferCanonicalRelationshipBaseline", "legacyV6InferCanonicalRelationshipBaseline");
 
   replaceExact(
     "const RELATIONSHIP_READING_BATCH = 8;",
@@ -171,7 +172,13 @@ function relV6ExplicitPairRole(w, actor, target) {
   try { text += String(connectionCanonSnippetAbout(w, actor, target, 50000) || ""); } catch (_) {}
   text += "\\n" + relV6FullFieldsMentioning(actor, target);
   text += "\\n" + relV6FullFieldsMentioning(target, actor);
-  return REL_V6_MENTORISH.test(text);
+  const low = text.toLowerCase();
+  if (!low || !REL_V6_MENTORISH.test(low)) return false;
+  return /\\b(?:his|her|their|my|your)\\s+(?:sensei|teacher|mentor|coach|master|student|mentee|apprentice|trainee)\\b/i.test(low) ||
+    /\\b(?:sensei|teacher|mentor|coach|master)\\s+(?:of|to|for)\\b/i.test(low) ||
+    /\\b(?:student|mentee|apprentice|trainee)\\s+(?:of|under)\\b/i.test(low) ||
+    /\\b(?:teaches|teaching|taught|coaches|coaching|mentors|mentoring|trains|training|trained by|training under)\\b/i.test(low) ||
+    /\\b(?:senseie|sensei-je|mentora|tan[aá]ra|edz[oő]je|mestere|tan[ií]tv[aá]nya|mentor[aá]lja|tan[ií]tja|edzi|k[eé]pzi)\\b/i.test(low);
 }
 
 function relV6DerivedRole(w, actor, target) {
@@ -205,15 +212,21 @@ function relationshipReadingSnippet(w, actor, target) {
   if (!w || !actor || !target || actor.id === target.id || isMediaAccount(w, target.id)) return "";
   const actorConnections = relV6Connections(actor);
   const targetConnections = relV6Connections(target);
+  let actorExact = "", targetExact = "";
+  try { actorExact = String(connectionCanonSnippetAbout(w, actor, target, 50000) || ""); } catch (_) {}
+  try { targetExact = String(connectionCanonSnippetAbout(w, target, actor, 50000) || ""); } catch (_) {}
   const actorOther = relV6FullFieldsMentioning(actor, target);
   const targetOther = relV6FullFieldsMentioning(target, actor);
-  const direct = relV6Mentions(actorConnections, target) || Boolean(actorOther);
-  const reverse = relV6Mentions(targetConnections, actor) || Boolean(targetOther);
+  const direct = Boolean(actorExact || actorOther || relV6Mentions(actorConnections, target));
+  const reverse = Boolean(targetExact || targetOther || relV6Mentions(targetConnections, actor));
   if (!direct && !reverse) return "";
   return [
     "PAIR: " + String(actor.name || actor.id) + " → " + String(target.name || target.id),
     "",
-    "ACTOR FULL CONNECTIONS SECTION — READ ALL OF IT, BUT ONLY FACTS ABOUT THIS TARGET MAY DEFINE THIS PAIR:",
+    "ACTOR EXACT TARGET CONNECTION ENTRY — HIGHEST AUTHORITY FOR THIS PAIR:",
+    actorExact || "(none)",
+    "",
+    "ACTOR FULL CONNECTIONS SECTION — READ 1/1 FOR CONTEXT, BUT ENTRIES WHOSE SUBJECT IS SOMEONE ELSE MUST NEVER BE ASSIGNED TO THIS TARGET:",
     actorConnections || "(none)",
     "",
     "ACTOR OTHER FULL SHEET FIELDS THAT MENTION TARGET:",
@@ -225,7 +238,10 @@ function relationshipReadingSnippet(w, actor, target) {
     "TARGET STRUCTURAL DATA:",
     relV6StructuralSummary(w, target),
     "",
-    "REVERSE FULL CONNECTIONS SECTION — OBJECTIVE SHARED HISTORY/STRUCTURE ONLY; NEVER COPY TARGET'S PRIVATE FEELINGS INTO ACTOR:",
+    "REVERSE EXACT ACTOR CONNECTION ENTRY — OBJECTIVE SHARED FACTS/HISTORY ONLY; NEVER COPY TARGET'S PRIVATE FEELINGS INTO ACTOR:",
+    targetExact || "(none)",
+    "",
+    "REVERSE FULL CONNECTIONS SECTION — READ 1/1 FOR CONTEXT; OTHER people's rows do not belong to this pair:",
     targetConnections || "(none)",
     "",
     "TARGET OTHER FULL SHEET FIELDS THAT MENTION ACTOR — OBJECTIVE FACTS ONLY:",
@@ -262,9 +278,10 @@ function relV6SanitizeRow(w, actor, target, input) {
   const row = { ...input };
   const explicit = relV6ExplicitPairRole(w, actor, target);
   const derived = relV6DerivedRole(w, actor, target);
+  const derivedMentorish = /^(?:Mentor|Tan[ií]tv[aá]ny)$/i.test(String(derived || ""));
   const hasMentorish = REL_V6_MENTORISH.test(String(row.role || "") + " " + String(row.bond || ""));
-  if (hasMentorish && !explicit && !derived) {
-    row.role = "";
+  if (hasMentorish && !explicit && !derivedMentorish) {
+    row.role = derived && derived !== "explicit" ? derived : "";
     row.bond = relV6StripBadStructural(row.bond);
     row.layers = (Array.isArray(row.layers) ? row.layers : []).filter((x) => !REL_V6_MENTORISH.test(String(x || "")));
   } else if (!explicit && derived && derived !== "explicit") {
@@ -283,6 +300,28 @@ function relV6SanitizeRow(w, actor, target, input) {
 function relationshipReadingResult(w, actor, target) {
   const row = legacyV6RelationshipReadingResult(w, actor, target);
   return row ? relV6SanitizeRow(w, actor, target, row) : row;
+}
+
+function inferCanonicalRelationshipBaseline(w, actor, target) {
+  const base = legacyV6InferCanonicalRelationshipBaseline(w, actor, target);
+  if (!base || !actor || !target || actor.id === target.id) return base;
+  const beforeBond = String(base.bond || base.type || "");
+  const beforeRole = String(base.role || "");
+  const hadMentorish = REL_V6_MENTORISH.test(beforeBond + " " + beforeRole);
+  if (!hadMentorish) return base;
+  const clean = relV6SanitizeRow(w, actor, target, {
+    ...base,
+    bond: beforeBond,
+    role: beforeRole,
+    layers: Array.isArray(base.layers) ? base.layers : [],
+  });
+  const out = { ...base, bond: String(clean.bond || ""), role: String(clean.role || "") };
+  if (hadMentorish && !REL_V6_MENTORISH.test(out.bond + " " + out.role) && !out.bond) {
+    out.score = 0;
+    if (REL_V6_MENTORISH.test(String(out.mood || ""))) out.mood = "";
+    if (REL_V6_MENTORISH.test(String(out.hidden || ""))) out.hidden = "";
+  }
+  return out;
 }
 
 async function relV6ExtractLongSource(w, actor, target, source) {
@@ -328,7 +367,7 @@ async function genRelationshipReading(w, actor, due) {
     "Actor: " + String(actor.name || actor.id) + " [" + String(actor.id) + "]",
     "Target: " + String(target.name || target.id) + " [" + String(target.id) + "]",
     "",
-    "Read EVERY supplied fact before deciding. The ACTOR'S full Connections section is authoritative for actor → target, plus every other actor field that mentions this target. Reverse-sheet material is only shared objective history/structure; never copy the target's private feelings into the actor.",
+    "Read EVERY supplied fact before deciding. The ACTOR EXACT TARGET CONNECTION ENTRY is highest authority for actor → target. The complete Connections section must still be read 1/1, but a row about some OTHER person can never be transferred onto this target. Also use every other actor field that actually mentions this target. Reverse-sheet material is only shared objective history/structure; never copy the target's private feelings into the actor.",
     "MULTI-LAYER RULE: preserve ALL supported layers simultaneously. A person can be student + rival + friend, mentor + enemy, coworker + ex, teammate + crush, etc. Do not collapse a layered relationship to one generic word.",
     "STRUCTURAL HARD RULE: Sensei/mentor/teacher/coach ↔ student/mentee exists only if (A) the pair is explicitly named that way in the sheets, OR (B) both belong to the SAME concrete named organization/dojo/team/school/workplace and their roles are complementary. A Wasabi sensei is NOT the teacher/mentor of an Iron Dragons student merely because one is a sensei and the other is a student. Different named organizations = no inferred teacher/student link.",
     "Exact shared affiliations detected by code: " + (shared.length ? shared.join(", ") : "(none)"),
