@@ -151,13 +151,7 @@ ${enemyHelperAnchor}`;
   }`;
   replaceExact(hiddenAnchor, hiddenWithEnemy, "fresh-world enemy baseline override");
 
-  replaceExact(
-    `  } else if (/\\bhate\\b|gy[uű]l[oö]l/.test(low) && numericScore < 0) {
-    base.score = Math.min(numericScore, -85);`,
-    `  } else if (/\\benemy\\b|ellens[eé]g|\\bhate\\b|gy[uű]l[oö]l|ut[aá]l|despis|loath|detest/.test(low) && numericScore < 0) {
-    base.score = Math.min(numericScore, -85);`,
-    "enemy score hardening"
-  );
+
 }
 
 if (next !== original) {
