@@ -5552,12 +5552,12 @@ function providerAllowedForBody(provider, body) {
   return provider === "mistral" || provider === "gemini" || provider === "openrouter3" || provider === "openrouter" || provider === "openrouter2";
 }
 
-/* R71: provider roles are intentionally narrow.
-   - OpenRouter: player-facing scene/chat/comment/post work.
-   - Mistral: ONLY the final fallback for those player-facing roleplay/social tasks.
-   - Groq: ONLY small, fast background classifiers/checks; Gemini is its fallback.
-   - Gemini: deep/large background canon work and all non-roleplay background work.
-   Groq and Gemini must never take over player-facing roleplay/social calls; Mistral must never receive background/canon work. */
+/* Provider roles are intentionally strict.
+   - OpenRouter: ALL generated writing/social/roleplay work — scenes, DMs, group chat, comments/replies, feed posts and Notes.
+   - Mistral: ONLY the final fallback for those writing/social/roleplay tasks.
+   - Groq: ONLY the designated small, fast background classifiers/checks; Gemini is its fallback.
+   - Gemini: character-sheet/canon reading and every other non-writing background task.
+   Gemini must never generate social/roleplay writing; Mistral must never receive background/canon work. */
 function taskProviderOrder(requestedProvider, body) {
   const source = String(body?.source || inferAIRequestSource(body) || "").trim().toLowerCase();
   const chars = aiRequestChars(body);
@@ -5568,7 +5568,7 @@ function taskProviderOrder(requestedProvider, body) {
     "group-chat",
     "comments",
     "feed-post",
-    "interactive",
+    "notes",
   ]);
 
   const groqSmallBackgroundSources = new Set([
