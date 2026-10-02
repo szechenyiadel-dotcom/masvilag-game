@@ -5664,11 +5664,6 @@ function taskProviderOrder(requestedProvider, body) {
     "dm",
   ]);
 
-  const deepSeekPersonalitySources = new Set([
-    "sheet-summary",
-    "character-bible",
-  ]);
-
   const socialFeedOrComment =
     source === "comments" ||
     /(?:^|[-_])(feed|comments?)(?:[-_]|$)/.test(source) ||
@@ -5684,8 +5679,10 @@ function taskProviderOrder(requestedProvider, body) {
   const groqSmallEnough = chars <= 26000;
   let raw;
 
-  if (deepSeekRoleplaySources.has(source) || deepSeekPersonalitySources.has(source)) {
+  if (deepSeekRoleplaySources.has(source)) {
     raw = ["openrouter3"];
+  } else if (source === "sheet-summary" || source === "character-bible") {
+    raw = ["gemini"];
   } else if (socialFeedOrComment) {
     raw = ["gemini", "openai"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
