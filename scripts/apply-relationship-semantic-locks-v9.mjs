@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appPath = path.join(root, "src", "App.jsx");
 const original = fs.readFileSync(appPath, "utf8");
 let next = original;
-const MARKER = "MÁSVILÁG RELATIONSHIP SEMANTIC LOCKS v9";
+const MARKER = "MÁSVILÁG RELATIONSHIP SEMANTIC LOCKS v10";
 
 function renameOne(name, replacement) {
   const rx = new RegExp("function\\s+" + name + "\\s*\\(");
@@ -52,10 +52,15 @@ const REL_V9_MENTOR_RE = /(?:\\b(?:my|his|her|their|your)\\s+(?:sensei|mentor|te
 const REL_V9_STUDENT_RE = /(?:\\b(?:my|his|her|their|your)\\s+(?:student|mentee|apprentice|trainee|prot[eé]g[eé])\\b|\\b(?:student|mentee|apprentice|trainee|prot[eé]g[eé])\\s+(?:of|under)\\b|tan[ií]tv[aá]nya|di[aá]kja)/i;
 const REL_V9_TEAMMATE_RE = /(?:\\bteammates?\\b|team[- ]?mates?|dojo[- ]?mates?|csapatt[aá]rs|doj[oó]t[aá]rs)/i;
 
+function relV9ExactPairConnectionText(w, actor, target) {
+  if (!w || !actor || !target) return "";
+  try { return String(connectionCanonSnippetAbout(w, actor, target, 50000) || ""); } catch (_) { return ""; }
+}
+
 function relV9PairText(w, actor, target) {
   if (!w || !actor || !target) return "";
-  let exact = "", elsewhere = "";
-  try { exact = String(connectionCanonSnippetAbout(w, actor, target, 50000) || ""); } catch (_) {}
+  const exact = relV9ExactPairConnectionText(w, actor, target);
+  let elsewhere = "";
   try { elsewhere = String(relV6PairPassages(w, actor, target, 16000) || ""); } catch (_) {}
   return [exact, elsewhere].filter(Boolean).join("\\n");
 }
@@ -151,9 +156,10 @@ function relV9SharedGroup(w, actor, target) {
 }
 
 function relV9StrictStructuralRole(w, actor, target) {
-  const own = relV9PairText(w, actor, target);
-  const low = own.toLowerCase();
+  const exact = relV9ExactPairConnectionText(w, actor, target);
+  const low = exact.toLowerCase();
 
+  /* Hard relationship types must belong to THIS exact target row. */
   if (REL_V9_MENTOR_RE.test(low)) return "Mentor";
   if (REL_V9_STUDENT_RE.test(low)) return "Student";
   if (REL_V9_TEAMMATE_RE.test(low)) return "Teammate";
@@ -173,7 +179,7 @@ function relV9StrictStructuralRole(w, actor, target) {
 }
 
 function relV9CanonicalBondParts(w, actor, target) {
-  const source = relV9PairText(w, actor, target);
+  const source = relV9ExactPairConnectionText(w, actor, target);
   const low = source.toLowerCase();
   if (!low) {
     const structural = relV9StrictStructuralRole(w, actor, target);
@@ -222,11 +228,11 @@ function relV9CanonicalBondParts(w, actor, target) {
 }
 
 function relationshipReadingHash(snippet) {
-  return simsSocialStableHash("v9-semantic-locks|" + String(snippet || ""));
+  return simsSocialStableHash("v10-exact-pair-types|" + String(snippet || ""));
 }
 
 function relationshipReadingCacheKey(actor, target, snippet) {
-  return "rr9-semantic-locks:" + simsSocialStableHash(
+  return "rr10-exact-pair-types:" + simsSocialStableHash(
     String(actor && actor.name || "") + "|" +
     String(target && target.name || "") + "|" +
     relationshipReadingHash(snippet)
@@ -443,7 +449,7 @@ function relLabel(r) {
 
   next += helper;
   fs.writeFileSync(appPath, next, "utf8");
-  console.log("[patch-status] relationship-semantic-locks=v9 applied; cache=rr9; fake-dating-lock=on; strict-team-dojo=on; english-visible-guard=on");
+  console.log("[patch-status] relationship-semantic-locks=v10 applied; cache=rr10; exact-pair-hard-types=on; fake-dating-lock=on; strict-team-dojo=on; english-visible-guard=on");
 } else {
-  console.log("[patch-status] relationship-semantic-locks=v9 already applied");
+  console.log("[patch-status] relationship-semantic-locks=v10 already applied");
 }
