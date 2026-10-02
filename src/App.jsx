@@ -50248,7 +50248,7 @@ function romanticStakeForObserver(w, observerId, subjectId) {
   let stake = 0;
   let label = "";
 
-  if (/\b(?:wife|husband|spouse|girlfriend|boyfriend|fianc[eé]e?|partner|dating|together|lover|relationship|járnak|párja|bar[aá]tn[oő](?:je)?|pasija|jegyes|házastárs)\b/i.test(corpus)) {
+  if (/\b(?:wife|husband|spouse|girlfriend|boyfriend|fianc[eé]e?|partner|dating|together|lover|relationship|járnak|párja|pasija|csaja|szerelme|jegyes|házastárs)\b/i.test(corpus)) {
     stake = 4; label = "partner";
   } else if (/\b(?:situationship|hooking\s*up|hookup|friends?\s+with\s+benefits|fwb|secret\s+affair|affair|titkos\s+viszony|kavar|kavarnak|összejár)\b/i.test(corpus)) {
     stake = 3; label = "involved";
