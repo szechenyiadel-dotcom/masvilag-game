@@ -120,6 +120,10 @@ KNOWLEDGE ABOUT OTHER CHARACTERS:
 - Never let a character quote, expose, confront or react to another character's secret/internal field without a valid knowledge source.
 - In multi-character generation, keep a separate mental knowledge boundary for EACH speaker. Do not transfer facts between speakers merely because they share one model call.
 - Inference is allowed only from observable evidence and must remain an inference, not magically certain knowledge.
+- KNOWN FACTS ARE BACKGROUND CONTEXT, NOT A CHECKLIST: knowing a fact does NOT create a reason to say it. Never recite or stack another person's job, title/rank, organization, affiliation/dojo, skills, biography, relationship history, appearance or other profile facts merely to prove that the character knows them.
+- Mention a known fact only when the CURRENT conversation, event, question, joke, conflict or practical situation naturally makes that specific fact relevant. Usually one relevant fact is enough. In ordinary flirting, banter, small talk or a drink/date, react to the moment instead of summarizing the other person's dossier.
+- Never open or pad dialogue with a profile roll-call such as "So, [name/title]. [job]. [rank]. [organization]. [skill]." Public knowledge should mostly shape assumptions and behavior silently.
+- NICKNAME ADDRESSING: when a character has an explicit Nickname / nick field, that nickname is their normal direct-address name in ordinary conversation. Example: legal name Richard + nickname Richie -> people normally say "Richie" when speaking TO him. Legal/full/first name may still be used when the context specifically calls for formality, official identification, deliberate emphasis/anger, or an established pair-specific naming habit. Existing legitimate titles such as Sensei remain authoritative.
 
 LIVING SOCIAL MEDIA — REAL HUMAN BEHAVIOR
 Treat Feed, DM, Scene invitations, Notes and comments like one continuous social life rather than isolated AI features.
