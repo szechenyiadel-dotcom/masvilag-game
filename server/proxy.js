@@ -5235,6 +5235,7 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
+  if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim();
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "minimax/minimax-m3:free").trim();
   if (provider === "openrouter2") return String(process.env.OPENROUTER_MODEL_2 || "openrouter/free").trim();
   if (provider === "gemini") {
@@ -5251,7 +5252,8 @@ function providerModel(provider, body = {}) {
 }
 
 async function callMessageProvider(provider, body) {
-  /* R66: OpenRouter as a backup reader for sheet readings (OPENROUTER_API_KEY, OPENROUTER_MODEL) */
+  /* OpenRouter roleplay chain: MODEL_3 first, then MODEL_2 on the second key, then MODEL_1. */
+  if (provider === "openrouter3") return proxyCompatibleMessage("openrouter3", process.env.OPENROUTER_API_KEY, providerModel("openrouter3", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openrouter") return proxyCompatibleMessage("openrouter", process.env.OPENROUTER_API_KEY, providerModel("openrouter", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openrouter2") return proxyCompatibleMessage("openrouter2", process.env.OPENROUTER_API_KEY_2, providerModel("openrouter2", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "mistral") return proxyCompatibleMessage("mistral", MISTRAL_API_KEY, providerModel("mistral", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
@@ -5272,6 +5274,7 @@ function configuredAIProvider(provider) {
   if (provider === "mistral") return Boolean(MISTRAL_API_KEY && MISTRAL_MODEL);
   if (provider === "groq") return Boolean(GROQ_API_KEY && GROQ_MODEL);
   if (provider === "gemini") return GEMINI_KEYS.length > 0;
+  if (provider === "openrouter3") return Boolean(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_MODEL_3);
   if (provider === "openrouter") return Boolean(process.env.OPENROUTER_API_KEY);
   if (provider === "openrouter2") return Boolean(process.env.OPENROUTER_API_KEY_2);
   if (provider === "openai") return Boolean(OPENAI_API_KEY);
@@ -5286,7 +5289,7 @@ function providerOrder(requestedProvider) {
     .filter(Boolean);
   const raw = configured.length
     ? configured
-    : [requestedProvider, "mistral", "openrouter", "openrouter2", "groq", "gemini", "openai", "anthropic"];
+    : [requestedProvider, "openrouter3", "openrouter2", "openrouter", "mistral", "groq", "gemini", "openai", "anthropic"];
   const ordered = [];
   for (const provider of raw) {
     if (!ordered.includes(provider) && configuredAIProvider(provider)) ordered.push(provider);
@@ -5546,7 +5549,7 @@ function markProviderSuccess(provider) {
 function providerAllowedForBody(provider, body) {
   const chars = aiRequestChars(body);
   if (chars <= AI_GROQ_MAX_INPUT_CHARS) return true;
-  return provider === "mistral" || provider === "gemini" || provider === "openrouter" || provider === "openrouter2";
+  return provider === "mistral" || provider === "gemini" || provider === "openrouter3" || provider === "openrouter" || provider === "openrouter2";
 }
 
 /* R71: provider roles are intentionally narrow.
@@ -5584,7 +5587,7 @@ function taskProviderOrder(requestedProvider, body) {
   let raw;
 
   if (openRouterSources.has(source)) {
-    raw = ["openrouter", "openrouter2", "mistral"];
+    raw = ["openrouter3", "openrouter2", "openrouter", "mistral"];
   } else if (deepSheetSources.has(source)) {
     raw = ["gemini"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
