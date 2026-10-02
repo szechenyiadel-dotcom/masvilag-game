@@ -29336,6 +29336,7 @@ KOMMENTVÁLASZ-KARAKTERHŰSÉG:
 - KAPCSOLATI PRIORITÁS: a jó/közeli kapcsolat nem válhat random bunkósággá csak a változatosság kedvéért. Sértegetés, lenézés, hideg lepattintás vagy rosszindulatú gúny csak konkrét jelenlegi triggerből vagy a karakter SAJÁT explicit kánonjából jöhet.
 - KÖLCSÖNÖS BARÁTSÁG: ha a válaszoló és a kommentelő mindkét irányban barátok, ezt a reply konkrétan tükrözze. Legyen természetes közvetlenség, támogatás, belsős ugratás, érdeklődés vagy szeretetteljes reakció. A karakter lehet szarkasztikus, de a barátja felé ne változzon hirtelen ellenséggé.
 - A reply legyen felismerhetően az adott karakteré, ne generikus social reakció.
+- BIRTOKLÓ PÁRKAPCSOLATI ÁLLÍTÁS: \"my girl\", \"my boyfriend\", \"mine\", \"a csajom\", \"stealing my girl\" vagy ezek megfelelője csak akkor írható, ha a válaszoló és a konkrét kisajátított személy tényleges, kölcsönös hivatalos párkapcsolatban vannak. Crush, obsession, féltékenység, best friendship vagy magas score NEM elég.
 - A korábbi saját kommentjeinek/DM-jeinek/posztjainak fordulatait se használja újra.
 - Ha a komment vagy a válasz ténylegesen közelebb hozza, felidegesíti, féltékennyé teszi, megsérti, megnevetteti vagy másképp érzelmileg megmozdítja a karaktert, ezt a "changes" tömbben IS jelezd. Ne csak a reply szövegében jelenjen meg.
 - Kis social reakcióhoz kis változás illik (általában 1-6 pont); nagyobb változás csak erős, konkrét érzelmi okból legyen.
@@ -50247,7 +50248,7 @@ function romanticStakeForObserver(w, observerId, subjectId) {
   let stake = 0;
   let label = "";
 
-  if (/\b(?:wife|husband|spouse|girlfriend|boyfriend|fianc[eé]e?|partner|dating|together|lover|relationship|járnak|párja|barátnő|barátja|jegyes|házastárs)\b/i.test(corpus)) {
+  if (/\b(?:wife|husband|spouse|girlfriend|boyfriend|fianc[eé]e?|partner|dating|together|lover|relationship|járnak|párja|bar[aá]tn[oő](?:je)?|pasija|jegyes|házastárs)\b/i.test(corpus)) {
     stake = 4; label = "partner";
   } else if (/\b(?:situationship|hooking\s*up|hookup|friends?\s+with\s+benefits|fwb|secret\s+affair|affair|titkos\s+viszony|kavar|kavarnak|összejár)\b/i.test(corpus)) {
     stake = 3; label = "involved";
@@ -55194,35 +55195,8 @@ async function legacyFullSpecRunSimulationAction(view, update, action, addImage)
           }, "player-event"));
           groundedEventLog(n, "social-dynamic", queued ? "queued" : "skipped", nameOfIn(n, pair.responderId) + " → " + nameOfIn(n, pair.root.authorId) + ": " + pair.dynamic + " reply queued under your post.", "comment:" + pair.root.id + "@post:" + post.id);
         });
-        if (!socialPairs.length && newAiComments.length >= 2 && typeof simEnqueue === "function" && typeof mkAction === "function") {
-          const rootComment = newAiComments[0];
-          const responder = newAiComments.find((row) => row.authorId !== rootComment.authorId);
-          if (responder) {
-            const queued = simEnqueue(
-              n,
-              mkAction(
-                "reply",
-                "player-post-ai-ai:" + post.id + ":" + rootComment.id + ":" + responder.authorId,
-                {
-                  postId: post.id,
-                  commentId: rootComment.id,
-                  rootId: rootComment.id,
-                  targetId: responder.authorId,
-                  trigger: "player-post-ai-ai",
-                },
-                "event"
-              )
-            );
-            console.info(
-              "[player-post-comments]",
-              "stage=ai-ai-reply-queue",
-              "post=" + post.id,
-              "root=" + rootComment.id,
-              "responder=" + responder.authorId,
-              "queued=" + String(Boolean(queued))
-            );
-          }
-        }
+        /* No fallback AI→AI reply here: if no real jealousy/defense/rivalry pair exists,
+           unrelated commenters stay separate instead of inventing a social parallel. */
       } catch (threadError) {
         console.warn("[player-post-comments] AI-AI reply queue failed; root comments preserved", threadError);
       }
@@ -56196,7 +56170,7 @@ if (action.type === "roleplay-initiate") {
       REPLY_DYNAMIC_CONTEXT = null;
     }
 
-    const targetFilteredOut = requestedTargetId
+    const targetFilteredOutBase = requestedTargetId
       ? {
           ...(rawOut || {}),
           comments: safeAiComments(rawOut).filter((row) => {
@@ -56206,6 +56180,17 @@ if (action.type === "roleplay-initiate") {
           }),
         }
       : rawOut;
+
+    const targetFilteredOut = {
+      ...(targetFilteredOutBase || {}),
+      comments: safeAiComments(targetFilteredOutBase).filter((row) => {
+        const who = aiVoice(view, row && (row.id !== undefined ? row.id : row.name));
+        if (!who) return false;
+        if (commentReplyPossessiveClaimAllowed(view, who, row.text, post, comment)) return true;
+        console.warn("[reply] rejected=unfounded-possessive-claim", "character=" + who, "text=" + String(row.text || "").slice(0, 180));
+        return false;
+      }),
+    };
 
     /* R53b: a reply to someone about a shared past with no trace loses that sentence */
     try {
@@ -63458,7 +63443,61 @@ const PLAYER_POST_COMMENT_NEGATIVE_RE =
   /\b(?:hate|pathetic|stupid|idiot|annoying|embarrassing|cringe|loser|waste|shut\s*up|boring|desperate|utál|szánalmas|hülye|idióta|idegesítő|kínos|unalmas|rosszindulatú)\b/iu;
 
 const PLAYER_POST_COMMENT_JEALOUS_RE =
-  /\b(?:jealous|jealousy|possessive|mine|who(?:'s| is)\s+that|féltékeny|féltékenység|enyém|ki\s+ez)\b/iu;
+  /\b(?:jealous|jealousy|possessive|mine|my\s+(?:girl|boy|girlfriend|boyfriend|woman|man)|steal(?:ing|s)?\s+(?:my|your)\s+(?:girl|boy|girlfriend|boyfriend|woman|man)|who(?:'s| is)\s+that|féltékeny|féltékenység|enyém|az\s+én\s+(?:csajom|pasim)|ki\s+ez)\b/iu;
+
+function playerPostCommentOfficialCouple(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || actorId === targetId) return false;
+  try {
+    const status = String(explicitMutualStatus(w, actorId, targetId) || "");
+    return ["seeing", "dating", "engaged", "spouse", "fake-dating"].includes(status);
+  } catch (error) {
+    return false;
+  }
+}
+
+function playerPostCommentPossessiveClaimAllowed(w, actorId, text, postContext, card = null) {
+  const value = String(text || "").replace(/[’‘]/g, "'");
+  if (!POSSESSIVE_CLAIM_RE.test(value)) return true;
+
+  const relevant = new Set();
+  if (postContext && postContext.authorId) relevant.add(String(postContext.authorId));
+  ((postContext && postContext.taggedPeople) || []).forEach((row) => {
+    if (row && row.id) relevant.add(String(row.id));
+  });
+  ((card && card.relationshipToPeopleNamedInPost) || []).forEach((row) => {
+    if (row && row.id) relevant.add(String(row.id));
+  });
+
+  return [...relevant].some((targetId) =>
+    targetId &&
+    targetId !== actorId &&
+    playerPostCommentOfficialCouple(w, actorId, targetId)
+  );
+}
+
+function commentReplyPossessiveClaimAllowed(w, actorId, text, post, comment) {
+  const value = String(text || "").replace(/[’‘]/g, "'");
+  if (!POSSESSIVE_CLAIM_RE.test(value)) return true;
+
+  const relevant = new Set([
+    post && post.authorId,
+    comment && comment.authorId,
+  ].filter(Boolean).map(String));
+
+  try {
+    namedPeopleInText(
+      w,
+      String(post && post.text || "") + " " + String(comment && comment.text || ""),
+      actorId
+    ).forEach((id) => { if (id) relevant.add(String(id)); });
+  } catch (error) { /* keep only explicit author/addressee */ }
+
+  return [...relevant].some((targetId) =>
+    targetId &&
+    targetId !== actorId &&
+    playerPostCommentOfficialCouple(w, actorId, targetId)
+  );
+}
 
 function playerPostCommentPostContext(w, post) {
   const tagged = new Set();
@@ -63578,11 +63617,20 @@ function playerPostCommentCandidateCards(w, post, maxComments) {
         officialStatus: official,
         currentMood: String(rel.mood || ""),
         expectedPublicTone: playerPostCommentExpectedTone(rel),
+        romanticInterest: Boolean(relationshipCrushActive(w, c.id, post.authorId, rel)),
+        officialCouple: playerPostCommentOfficialCouple(w, c.id, post.authorId),
       },
       isNamedInPost: named.some((x) => x.id === c.id),
       relationshipToPeopleNamedInPost: named.filter((x) => x.id !== c.id).map((x) => {
         const r = getRel(w, c.id, x.id) || EMPTY_REL;
-        return { name: x.name, type: String(r.label || r.bond || r.type || ""), score: Number(r.score) || 0, mood: String(r.mood || "") };
+        return {
+          id: x.id,
+          name: x.name,
+          type: String(r.label || r.bond || r.type || ""),
+          score: Number(r.score) || 0,
+          mood: String(r.mood || ""),
+          officialCouple: playerPostCommentOfficialCouple(w, c.id, x.id),
+        };
       }),
     };
   });
@@ -63656,7 +63704,12 @@ function playerPostCommentRowsFromOutput(w, out, cards, postContext) {
         console.warn("[player-post-comments] rejected=follow-context-leak", "character=" + actorId, "text=" + text.slice(0, 180));
         return;
       }
-      const sanity = generatedSocialTextSanityProblem(w, actorId, text, cards.find((card) => card && card.id === actorId));
+      const actorCard = cards.find((card) => card && card.id === actorId);
+      if (!playerPostCommentPossessiveClaimAllowed(w, actorId, text, postContext, actorCard)) {
+        console.warn("[player-post-comments] rejected=unfounded-possessive-claim", "character=" + actorId, "text=" + text.slice(0, 180));
+        return;
+      }
+      const sanity = generatedSocialTextSanityProblem(w, actorId, text, actorCard);
       if (sanity) {
         console.warn("[player-post-comments] rejected=" + sanity, "character=" + actorId, "text=" + text.slice(0, 180));
         return;
@@ -63740,6 +63793,11 @@ function playerPostCommentBatchProblems(w, rows, cards, postContext, minComments
     if (playerPostCommentHasFollowLeak(postContext, row.text)) {
       problems.push("follow-event-leak");
     }
+    const actorId = findChar(w, row && (row.id !== undefined ? row.id : (row.authorId !== undefined ? row.authorId : row.name)));
+    const actorCard = cards.find((card) => card && card.id === actorId);
+    if (actorId && !playerPostCommentPossessiveClaimAllowed(w, actorId, row.text, postContext, actorCard)) {
+      problems.push("unfounded-possessive-claim:" + actorId);
+    }
   });
 
   return [...new Set(problems)];
@@ -63755,6 +63813,7 @@ function playerPostCommentPrivateSystem(w, post) {
         "COMMENTER CARDS are private behavioral instructions only. Never quote, expose, explain, or mention their fields.",
         "WHO IS WHO and WORLD GROUPS are background knowledge for understanding the post's references and hints (who is a sensei, who belongs where); they are not topics to comment about on their own.",
         "Each commenter must react to the actual post text/image/mood/tagged people and must sound like their own voice card and relationship to the post author.",
+        "Possessive relationship claims such as \"my girl\", \"my boyfriend\", \"mine\" or \"stealing my girl\" are allowed ONLY when the COMMENTER CARD says officialCouple=true for the specific person being claimed. A crush, obsession, jealousy, best friendship or high score is NOT enough.",
         "Positive/friendly relationships should read warm, supportive, playful or naturally flirty when appropriate; hostile relationships may be sharp; jealous relationships may be pointed; neutral relationships may be brief and neutral.",
         "Do not make all commenters share one attitude. Do not copy a theme from one commenter into all the others.",
         "Never output software/internal/model terminology such as variable, JSON, prompt, backlog, queue, cache, token, system, schema, payload, debug, API or function.",
@@ -63767,6 +63826,7 @@ function playerPostCommentPrivateSystem(w, post) {
         "A COMMENTER CARDS privát viselkedési utasítás. A mezőit soha ne idézd, magyarázd vagy szivárogtasd ki.",
         "A KI KICSODA és a VILÁG CSOPORTJAI háttértudás a poszt utalásainak megértéséhez (ki sensei, ki hová tartozik); önmagukban nem kommenttémák.",
         "Minden kommentelő a konkrét poszt szövegére/képére/hangulatára/tagelt személyeire reagáljon, a saját voice cardja és a poszt szerzőjéhez fűződő kapcsolata szerint.",
+        "Birtokló párkapcsolati állítás — pl. \"my girl\", \"a csajom\", \"mine\", \"stealing my girl\" — CSAK annál a konkrét személynél megengedett, akinél a COMMENTER CARD officialCouple=true. Crush, obsession, féltékenység, best friendship vagy magas score önmagában NEM jogosít ilyen állításra.",
         "Pozitív/baráti kapcsolatnál legyen meleg, támogató, játékos vagy indokoltan flörtös; ellenségesnél lehet éles; féltékenynél célzós; semlegesnél rövid és semleges.",
         "Ne legyen minden kommentelő ugyanolyan hangulatú. Egy komment témáját ne másold rá az összes többire.",
         "Soha ne írj ki programozási/belső modellkifejezést: variable, JSON, prompt, backlog, queue, cache, token, system, schema, payload, debug, API, function, változó, belső utasítás.",
