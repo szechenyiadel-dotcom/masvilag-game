@@ -5550,11 +5550,12 @@ function providerAllowedForBody(provider, body) {
   return provider === "mistral" || provider === "gemini" || provider === "openrouter" || provider === "openrouter2";
 }
 
-/* R70: provider roles are intentionally narrow.
+/* R71: provider roles are intentionally narrow.
    - OpenRouter: player-facing scene/chat/comment/post work.
+   - Mistral: ONLY the final fallback for those player-facing roleplay/social tasks.
    - Groq: ONLY small, fast background classifiers/checks; Gemini is its fallback.
-   - Gemini: deep/large background canon work, including complete one-time sheet reads.
-   Groq must never receive scenes, chats, posts, comments or large canon reads. */
+   - Gemini: deep/large background canon work and all non-roleplay background work.
+   Groq and Gemini must never take over player-facing roleplay/social calls; Mistral must never receive background/canon work. */
 function taskProviderOrder(requestedProvider, body) {
   const source = String(body?.source || inferAIRequestSource(body) || "").trim().toLowerCase();
   const chars = aiRequestChars(body);
@@ -5584,13 +5585,13 @@ function taskProviderOrder(requestedProvider, body) {
   let raw;
 
   if (openRouterSources.has(source)) {
-    raw = ["openrouter", "openrouter2", "gemini", "mistral"];
+    raw = ["openrouter", "openrouter2", "mistral"];
   } else if (deepSheetSources.has(source)) {
     raw = ["gemini"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
     raw = ["groq", "gemini"];
   } else {
-    raw = ["gemini", "mistral"];
+    raw = ["gemini"];
   }
 
   return raw.filter((provider, index, all) =>
