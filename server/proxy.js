@@ -5589,11 +5589,14 @@ function taskProviderOrder(requestedProvider, body) {
   if (openRouterSources.has(source)) {
     raw = ["openrouter3", "openrouter2", "openrouter", "mistral"];
   } else if (deepSheetSources.has(source)) {
-    raw = ["gemini"];
+    /* Gemini owns canon/background reading; Groq is the automatic outage fallback. */
+    raw = ["gemini", "groq"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
     raw = ["groq", "gemini"];
   } else {
-    raw = ["gemini"];
+    /* Generic background work prefers Gemini but must keep running if Gemini is
+       rate-limited, over quota, temporarily unavailable or times out. */
+    raw = ["gemini", "groq"];
   }
 
   return raw.filter((provider, index, all) =>
