@@ -67,6 +67,25 @@ function relV9WithoutFakeDating(text) {
     .replace(/kamu\\s*(?:kapcsolat|p[aá]r)/gi, " ");
 }
 
+function relV9OrientationAllows(w, actor, target) {
+  if (!actor || !target || actor.id === target.id) return false;
+  const actorGender = characterGenderAttractionClass(actor);
+  const targetGender = characterGenderAttractionClass(target);
+  const orientation = characterOrientationAttractionClass(actor);
+
+  if (orientation === "none") return false;
+  if (orientation === "multi") return true;
+
+  const binary =
+    (actorGender === "male" || actorGender === "female") &&
+    (targetGender === "male" || targetGender === "female");
+
+  if (!binary) return true;
+  if (orientation === "opposite") return actorGender !== targetGender;
+  if (orientation === "same") return actorGender === targetGender;
+  return true;
+}
+
 function relV9RoleClassRaw(c) {
   if (!c) return "";
   const text = [
@@ -188,7 +207,7 @@ function relV9CanonicalBondParts(w, actor, target) {
   else if (/rival|riv[aá]lis|competition|verseng|vet[eé]lyt[aá]rs/.test(low)) push("Rival");
 
   const romanticText = relV9WithoutFakeDating(low);
-  if (romanceTargetAllowed(w, actor.id, target.id)) {
+  if (relV9OrientationAllows(w, actor, target)) {
     if (/mutual crush|mutual attraction|k[oö]lcs[oö]n[oö]s crush|k[oö]lcs[oö]n[oö]s vonzalom/.test(romanticText)) push("Mutual crush");
     else if (/obsess|romantic fixation|megsz[aá]ll/.test(romanticText) && REL_V9_CRUSH_RE.test(romanticText)) push("Obsession");
     else if (REL_V9_CRUSH_RE.test(romanticText)) push("Crush");
@@ -212,7 +231,7 @@ function connectionRelationshipCue(w, actor, target) {
   const romanticText = relV9WithoutFakeDating(low);
   return {
     snippet,
-    romantic: !fake && romanceTargetAllowed(w, actor.id, target.id) && REL_V9_CRUSH_RE.test(romanticText),
+    romantic: !fake && relV9OrientationAllows(w, actor, target) && REL_V9_CRUSH_RE.test(romanticText),
     close: parts.includes("Best friend") || parts.includes("Close friend"),
     friendly: parts.some((x) => ["Friend", "Close friend", "Best friend"].includes(x)),
     hostile: parts.includes("Enemy"),
@@ -226,7 +245,7 @@ function connectionRelationshipCue(w, actor, target) {
 }
 
 function relV8ExplicitRomance(w, actor, target) {
-  if (!w || !actor || !target || !romanceTargetAllowed(w, actor.id, target.id)) return false;
+  if (!w || !actor || !target || !relV9OrientationAllows(w, actor, target)) return false;
   const parts = relV9CanonicalBondParts(w, actor, target);
   if (parts.includes("Fake dating") && !parts.some((x) => ["Crush", "Mutual crush", "Obsession"].includes(x))) return false;
   return parts.some((x) => ["Dating", "Seeing each other", "Engaged", "Spouse", "Crush", "Mutual crush", "Obsession"].includes(x));
@@ -313,7 +332,7 @@ function relV8SanitizeRow(w, actor, target, input) {
     row.attraction = 0;
     row.obsession = 0;
     row.hidden = "";
-    if (!relV9PairText(w, actor, target).match(REL_V9_PERSONAL_WORDS)) {
+    if (!relV9PairText(w, actor, target).match(REL_V8_PERSONAL_WORDS)) {
       row.mood = "";
       row.description = "";
       row.why = "";
@@ -347,7 +366,7 @@ function directedRomanticOfficialKind(rel) {
 }
 
 function relationshipRomanceActive(w, actorId, targetId, rel = null) {
-  if (!romanceTargetAllowed(w, actorId, targetId)) return false;
+  if (!relV9OrientationAllows(w, actor, target)) return false;
   const actor = charById(w, actorId), target = charById(w, targetId);
   if (!actor || !target) return false;
   const parts = relV9CanonicalBondParts(w, actor, target);
@@ -356,7 +375,7 @@ function relationshipRomanceActive(w, actorId, targetId, rel = null) {
 }
 
 function relationshipCrushActive(w, actorId, targetId, rel = null) {
-  if (!romanceTargetAllowed(w, actorId, targetId)) return false;
+  if (!relV9OrientationAllows(w, actor, target)) return false;
   const actor = charById(w, actorId), target = charById(w, targetId);
   if (!actor || !target) return false;
   const parts = relV9CanonicalBondParts(w, actor, target);
