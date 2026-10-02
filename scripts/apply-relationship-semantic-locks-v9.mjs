@@ -288,7 +288,11 @@ function relV9UnsupportedRestrictedText(w, actor, target, value) {
   for (const [re, needed] of checks) {
     if (re.test(low)) {
       if (needed === "fake dating" && !parts.includes("Fake dating")) return true;
-      if (needed === "dating" && !parts.some((x) => ["Dating","Seeing each other","Engaged","Spouse","Fake dating"].includes(x))) return true;
+      if (needed === "dating") {
+        const onlyFake = parts.includes("Fake dating") && !parts.some((x) => ["Dating","Seeing each other","Engaged","Spouse"].includes(x));
+        if (onlyFake && !REL_V9_FAKE_RE.test(low)) return true;
+        if (!parts.some((x) => ["Dating","Seeing each other","Engaged","Spouse","Fake dating"].includes(x))) return true;
+      }
       if (needed === "crush" && !parts.some((x) => ["Crush","Mutual crush","Obsession"].includes(x))) return true;
       if (needed === "mentor" && !parts.some((x) => ["Mentor","Student"].includes(x))) return true;
       if (needed === "teammate" && !parts.includes("Teammate")) return true;
@@ -333,7 +337,14 @@ function relV8SanitizeRow(w, actor, target, input) {
   if (fake && !actualRomance) {
     row.attraction = 0;
     row.obsession = 0;
-    if (REL_V9_CRUSH_RE.test(String(row.hidden || ""))) row.hidden = "";
+    for (const key of ["mood","hidden","description","why","label"]) {
+      const value = String(row[key] || "");
+      const low = value.toLowerCase();
+      const soundsRealDating = REL_V9_ROMANTIC_STATUS_RE.test(low) && !REL_V9_FAKE_RE.test(low);
+      if (REL_V9_CRUSH_RE.test(low) || soundsRealDating) row[key] = "";
+    }
+    row.bond = localizedBond("Fake dating", lang);
+    row.layers = [localizedBond("Fake dating", lang)];
   }
 
   if (!actualRomance) row.attraction = 0;
@@ -380,18 +391,18 @@ function directedRomanticOfficialKind(rel) {
 }
 
 function relationshipRomanceActive(w, actorId, targetId, rel = null) {
-  if (!relV9OrientationAllows(w, actor, target)) return false;
   const actor = charById(w, actorId), target = charById(w, targetId);
   if (!actor || !target) return false;
+  if (!relV9OrientationAllows(w, actor, target)) return false;
   const parts = relV9CanonicalBondParts(w, actor, target);
   if (parts.includes("Fake dating") && !parts.some((x) => ["Crush","Mutual crush","Obsession"].includes(x))) return false;
   return parts.some((x) => ["Dating","Seeing each other","Engaged","Spouse","Crush","Mutual crush","Obsession"].includes(x));
 }
 
 function relationshipCrushActive(w, actorId, targetId, rel = null) {
-  if (!relV9OrientationAllows(w, actor, target)) return false;
   const actor = charById(w, actorId), target = charById(w, targetId);
   if (!actor || !target) return false;
+  if (!relV9OrientationAllows(w, actor, target)) return false;
   const parts = relV9CanonicalBondParts(w, actor, target);
   return parts.some((x) => ["Crush","Mutual crush","Obsession"].includes(x));
 }
