@@ -25,15 +25,12 @@ if (!next.includes("/* " + MARKER + " */")) {
 function prepareRelationshipsForTrueFreshRestart(w, at = now()) {
   if (!w || typeof w !== "object") return;
 
-  /* Keep ONLY explicit manual starting relationships. Everything inferred/read
-     by an earlier run must be rebuilt from the retained character sheets. */
-  const previous = ensureRelationshipBaselineStore(w);
-  const manualOnly = {};
-  Object.entries(previous).forEach(([key, row]) => {
-    if (!row || !relationshipBaselineIsManual(row)) return;
-    manualOnly[key] = { ...row };
-  });
-  w.relationshipBaselines = manualOnly;
+  /* The user explicitly requested a CHARACTER-SHEET fresh restart.
+     Do not carry any previous relationship baseline — including legacy rows that
+     were accidentally promoted to "manual" by simply saving a character form.
+     The retained sheets / Connections become the fresh source of truth. */
+  ensureRelationshipBaselineStore(w);
+  w.relationshipBaselines = {};
 
   /* A restart is a new interpretation pass too, not only a new social timeline. */
   w.sim = freshSimulationRuntime(at);
@@ -81,7 +78,7 @@ function prepareRelationshipsForTrueFreshRestart(w, at = now()) {
 
   /*
    * TRUE FRESH RELATIONSHIP RESTART:
-   * retain the character sheets and manual editor choices, but discard every
+   * retain the character sheets, but discard every previous relationship baseline and
    * AI/sheet-derived baseline and every previous AI interpretation. This must
    * happen BEFORE restoreRelationshipBaselinesForFreshRun(), otherwise stale
    * relationship rows can be copied straight into the new run.
@@ -162,11 +159,11 @@ function prepareRelationshipsForTrueFreshRestart(w, at = now()) {
   replaceExact(planAnchor, planReplacement, "restart identity-before-relationships order");
 
   const msgHu = "A világ új játékmenetet kezdett. A karakterek megmaradtak, a kapcsolatok pedig a kézzel beállított + karakterlap/Connections alapján felépített kiinduló baseline-ra álltak vissza. A rivális dojo/frakciók explicit személyes kivétel nélkül negatív viszonnyal indulnak. A napi poszt-, képesposzt- és popup-kvóták újraindultak, a korábban kiposztolt AI-albumképek visszakerültek az albumokba.";
-  const msgHuNew = "A világ új játékmenetet kezdett. A karakterek és karakterlapok megmaradtak, de az összes korábbi AI-kapcsolatértelmezés és AI-ból származó kapcsolati baseline törlődött. A rendszer most újraolvassa az identity/dojo/szervezet adatokat és utána minden kapcsolatot frissen épít fel a kézzel beállított baseline + karakterlapok/Connections alapján.";
+  const msgHuNew = "A világ új játékmenetet kezdett. A karakterek és karakterlapok megmaradtak, de az összes korábbi AI-kapcsolatértelmezés és AI-ból származó kapcsolati baseline törlődött. A rendszer most újraolvassa az identity/dojo/szervezet adatokat és utána minden kapcsolatot frissen épít fel a karakterlapok/Connections alapján.";
   replaceExact(msgHu, msgHuNew, "restart success copy hu");
 
   const msgEn = "The world started a fresh run. Characters were kept, while relationships were restored to the starting baseline built from manual settings plus character-sheet/Connections canon. Rival dojos/factions start negative unless explicit personal canon overrides that. Daily post, image-post and popup quotas restarted, and previously posted AI album images returned to their albums.";
-  const msgEnNew = "The world started a fresh run. Characters and their sheets were kept, but every previous AI relationship interpretation and AI-derived relationship baseline was cleared. The system is now rereading identity/dojo/organization facts first and then rebuilding every relationship fresh from manual baselines plus character sheets/Connections.";
+  const msgEnNew = "The world started a fresh run. Characters and their sheets were kept, but every previous AI relationship interpretation and AI-derived relationship baseline was cleared. The system is now rereading identity/dojo/organization facts first and then rebuilding every relationship fresh from character sheets/Connections.";
   replaceExact(msgEn, msgEnNew, "restart success copy en");
 
   fs.writeFileSync(appPath, next, "utf8");
