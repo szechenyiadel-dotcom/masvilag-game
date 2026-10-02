@@ -5573,7 +5573,7 @@ function naturalCommentReplyTargets(w, post, comment) {
     candidates.push({ id, reason, base });
   };
 
-  mentionedIdsInText(w, comment.text, comment.authorId).forEach((id) => push(id, "mention", 82));
+  namedPeopleInText(w, comment.text, comment.authorId).forEach((id) => push(id, "mention", 82));
   const parent = comment.parent ? comments.find((c) => c && c.id === comment.parent) : null;
   if (parent && parent.authorId) push(parent.authorId, "parent", 74);
   if (!comment.parent && post.authorId) push(post.authorId, "post-author", 70);
@@ -7388,7 +7388,7 @@ function playerSocialImpactFallbackChanges(
         return null;
       }
 
-      const delta =
+      let delta =
         socialTextRelationshipDelta(
           w,
           actorId,
@@ -7397,8 +7397,11 @@ function playerSocialImpactFallbackChanges(
           directReply
         );
 
+      /* R53: a neutral comment is still attention — noticed a little warmer,
+         unless they already dislike the player, then it annoys a little */
       if (!delta) {
-        return null;
+        const sc = Number((getRel(w, targetId, actorId) || {}).score) || 0;
+        delta = sc <= -30 ? -1 : 1;
       }
 
       const en =
@@ -28616,7 +28619,7 @@ let REPLY_DYNAMIC_CONTEXT = null;
 /* while a jealous / rival / defend reply is applied, the "keep it friendly"
    guards must not throw away the very conflict we asked for */
 let REPLY_DYNAMIC_APPLYING = "";
-const REPLY_CONFLICT_DYNAMICS = ["jealous", "rival", "defend", "jealous-watch", "defend-target", "hated-nickname"];
+const REPLY_CONFLICT_DYNAMICS = ["jealous", "rival", "defend", "jealous-watch", "attention-jealous", "defend-target", "hated-nickname"];
 
 /* CLAUDE FIX R25: jealousy and enmity are played as extreme as the sheet and the
    relationship say. "extreme" = obsession / possessive or jealous nature /
@@ -28648,11 +28651,68 @@ function emotionalIntensity(w, actorId, otherId, kind) {
   return "strong";
 }
 
+/* CLAUDE FIX R53: ATTENTION JEALOUSY. The player comments (not flirting) under
+   someone's post / comment. Anyone with a crush, obsession or relationship toward
+   the player who sees it gets a little colder toward the person who got the
+   attention; the most jealous one (jealous / possessive / obsessed) says so in the
+   same thread — at most once per 20 minutes per person. */
+function applyPlayerAttentionJealousy(w, info) {
+  if (!w || !info || !w.meId) return 0;
+  const playerId = w.meId;
+  const targetId = String(info.targetId || "");
+  if (!targetId || targetId === playerId || isHuman(w, targetId) || isMediaAccount(w, targetId)) return 0;
+  const sim = ensureSimState(w);
+  sim.attentionJealousyAt = sim.attentionJealousyAt || {};
+  const en = worldLanguage(w, playerId) === "en";
+  const rows = [];
+  (w.chars || []).forEach((o) => {
+    if (!o || !o.id || o.id === targetId || isHuman(w, o.id) || isMediaAccount(w, o.id)) return;
+    let stake = null;
+    try { stake = romanticStakeForObserver(w, o.id, playerId); } catch (error) { stake = null; }
+    if (!stake) return;
+    const jealousy = Number(stake.jealousy) || 0;
+    if (stake.stake < 3 && jealousy < 2) return;
+    rows.push({ o, stake, jealousy, weight: stake.stake * 2 + jealousy });
+  });
+  if (!rows.length) return 0;
+  rows.sort((a, b) => b.weight - a.weight);
+  const target = charById(w, targetId);
+  rows.slice(0, 4).forEach((row, index) => {
+    const delta = -Math.max(1, Math.min(5, 1 + Math.floor(row.jealousy / 2)));
+    const current = Number((getRel(w, row.o.id, targetId) || EMPTY_REL).score) || 0;
+    const guarded = relationshipOneTierDelta(current, delta);
+    if (guarded) {
+      applyChanges(w, [{
+        a: row.o.id, b: targetId, delta: guarded, oneSided: true, micro: true,
+        mood: en ? "jealous: " + nameOfIn(w, playerId) + " gives " + (target ? target.name : "them") + " attention" : "féltékeny: " + nameOfIn(w, playerId) + " figyelmet ad " + (target ? target.name : "neki") + "-nak/nek",
+        why: en ? row.o.name + " saw " + nameOfIn(w, playerId) + " comment on " + (target ? target.name : "them") + "." : row.o.name + " látta, hogy " + nameOfIn(w, playerId) + " kommentelt " + (target ? target.name : "neki") + ".",
+      }]);
+      groundedEventLog(w, "relationship-change", "applied", row.o.name + " → " + (target ? target.name : targetId) + ": " + guarded + " (attention jealousy, " + row.stake.label + ", temperament=" + row.jealousy + ")", "comment:" + String(info.commentId || ""));
+    }
+    const last = Number(sim.attentionJealousyAt[row.o.id]) || 0;
+    if (index === 0 && (row.jealousy >= 3 || row.stake.stake >= 3) && now() - last > 20 * 60 * 1000 && info.postId && info.commentId) {
+      sim.attentionJealousyAt[row.o.id] = now();
+      simEnqueue(w, mkAction("reply", "attention-jealousy:" + String(info.commentId) + ":" + row.o.id, {
+        postId: info.postId, commentId: info.commentId, targetId: row.o.id, trigger: "attention-jealousy",
+        dynamic: "attention-jealous", dynamicLoveId: playerId, dynamicOtherId: targetId,
+      }, "player-event"));
+    }
+  });
+  return rows.length;
+}
+
 function replyDynamicDirective(w, comment) {
   const ctx = REPLY_DYNAMIC_CONTEXT;
   if (!ctx || !comment || String(ctx.commentId) !== String(comment.id)) return "";
   const en = worldLanguage(w, w && w.meId) === "en";
   const responder = nameOfIn(w, ctx.responderId), target = nameOfIn(w, comment.authorId), author = nameOfIn(w, ctx.postAuthorId);
+  if (ctx.dynamic === "attention-jealous") {
+    const other = nameOfIn(w, ctx.otherId || ctx.postAuthorId);
+    const level = emotionalIntensity(w, ctx.responderId, comment.authorId, "jealous");
+    return "\n" + (en
+      ? "SOCIAL DYNAMIC FOR THIS REPLY" + (level === "extreme" ? " — FULL INTENSITY" : "") + ": " + responder + " has feelings for " + target + " and just watched " + target + " give attention to " + other + " in public (a comment, not necessarily flirting). Reply to " + target + " showing that it bothers you, in your own style" + (level === "extreme" ? " — possessive and openly jealous, exactly as extreme as your sheet" : " — a jealous jab, a cold remark or a needy question") + ", maybe a dig at " + other + ". React to what " + target + " actually wrote. Never friendly-neutral."
+      : "TÁRSAS DINAMIKA EHHEZ A VÁLASZHOZ" + (level === "extreme" ? " — TELJES INTENZITÁS" : "") + ": " + responder + " érez valamit " + target + " iránt, és most látta, hogy " + target + " nyilvánosan figyelmet ad " + other + "-nak/nek (egy komment, nem feltétlenül flört). Válaszolj " + target + " kommentjére úgy, hogy látszódjon, hogy ez zavar, a saját stílusodban" + (level === "extreme" ? " — birtoklóan, nyíltan féltékenyen, ahogy a lapod mondja" : " — féltékeny beszólás, hideg megjegyzés vagy rámenős kérdés") + ", akár egy szúrás " + other + " felé. Arra reagálj, amit " + target + " ténylegesen írt. Soha ne legyél semlegesen kedves.");
+  }
   if (ctx.dynamic === "jealous-watch") {
     /* the responder has feelings for the commenter, who just flirted with someone else */
     const other = nameOfIn(w, ctx.otherId || ctx.postAuthorId);
@@ -31755,6 +31815,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   cancelRiskSeed: playerCommentCancelRisk.risky,
                 },
               });
+              /* R53: whoever is into the player notices who the player gives attention to */
+              try {
+                if (playerCommentJuice.romance < 20) applyPlayerAttentionJealousy(n, { postId: x.id, commentId: made.id, targetId, text: made.text });
+              } catch (jealousyError) { console.warn("[attention-jealousy] failed", jealousyError); }
             });
 
             /*
@@ -31791,19 +31855,26 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                 const freshActorId =
                   n.meId || actorId;
 
-                const changes =
+                const fallbackChanges = playerSocialImpactFallbackChanges(
+                  n,
+                  freshActorId,
+                  impactTargetIds,
+                  text2,
+                  parent
+                    ? "reply"
+                    : "comment"
+                );
+                let changes =
                   impact &&
                   impact.assessed
-                    ? impact.changes
-                    : playerSocialImpactFallbackChanges(
-                        n,
-                        freshActorId,
-                        impactTargetIds,
-                        text2,
-                        parent
-                          ? "reply"
-                          : "comment"
-                      );
+                    ? (Array.isArray(impact.changes) ? impact.changes : [])
+                    : fallbackChanges;
+                /* R53: every person the comment was aimed at feels SOMETHING — if the
+                   assessment left someone out, the rule-based attention change fills in */
+                if (impact && impact.assessed) {
+                  const covered = new Set(changes.map((c) => String(c && c.a || "")));
+                  changes = changes.concat((fallbackChanges || []).filter((c) => c && !covered.has(String(c.a))));
+                }
 
                 if (
                   Array.isArray(changes) &&
@@ -55742,7 +55813,7 @@ if (action.type === "roleplay-initiate") {
         }
       : rawOut;
 
-    const out = {
+    let out = {
       ...(targetFilteredOut || {}),
       comments: safeAiComments(targetFilteredOut).slice(
         0,
@@ -55750,10 +55821,30 @@ if (action.type === "roleplay-initiate") {
       ),
     };
 
-    const replyProbe = JSON.parse(JSON.stringify(view));
+    let replyProbe = JSON.parse(JSON.stringify(view));
     REPLY_DYNAMIC_APPLYING = replyDynamic;
     let replyCount = 0;
     try { replyCount = applyReplies(replyProbe, post.id, comment.id, out); } finally { REPLY_DYNAMIC_APPLYING = ""; }
+    /* CLAUDE FIX R53: a reply to the PLAYER that the filters threw away gets one
+       more try — before, the player's comment just stayed unanswered. */
+    if (!replyCount && isHuman(view, comment.authorId)) {
+      console.info("[reply] filtered out, retrying once", "responder=" + String(requestedTargetId || "any"));
+      REPLY_DYNAMIC_CONTEXT = replyDynamic ? {
+        commentId: comment.id, responderId: requestedTargetId,
+        postAuthorId: String(action.payload && action.payload.dynamicLoveId || "") || post.authorId,
+        otherId: String(action.payload && action.payload.dynamicOtherId || ""),
+        dynamic: replyDynamic,
+      } : null;
+      let retryRaw = null;
+      try { retryRaw = await genReply(view, post, comment, requestedTargetId || ""); } catch (error) { retryRaw = null; } finally { REPLY_DYNAMIC_CONTEXT = null; }
+      const retryRows = safeAiComments(retryRaw).filter((row) => !requestedTargetId || aiVoice(view, row && (row.id !== undefined ? row.id : row.name)) === requestedTargetId);
+      const retryOut = { ...(retryRaw || {}), comments: retryRows.slice(0, requestedTargetId ? 1 : AI_ACTIVITY_OPTIMIZATION.PLAYER_COMMENT_MAX_AI_REPLIES) };
+      replyProbe = JSON.parse(JSON.stringify(view));
+      REPLY_DYNAMIC_APPLYING = replyDynamic;
+      try { replyCount = applyReplies(replyProbe, post.id, comment.id, retryOut); } finally { REPLY_DYNAMIC_APPLYING = ""; }
+      if (replyCount) { out.comments = retryOut.comments; Object.keys(retryOut).forEach((k) => { if (k !== "comments") out[k] = retryOut[k]; }); }
+      else console.warn("[reply] no usable reply after retry", "responder=" + String(requestedTargetId || "any"), JSON.stringify(safeAiComments(retryRaw)).slice(0, 300));
+    }
     if (!replyCount) {
       if (replyDynamic) update((n) => groundedEventLog(n, "social-dynamic", "failed", nameOfIn(n, requestedTargetId) + " → " + nameOfIn(n, comment.authorId) + ": " + replyDynamic + " reply was filtered out.", "comment:" + comment.id));
       return null;
