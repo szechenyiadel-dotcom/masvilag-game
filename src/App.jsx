@@ -14954,6 +14954,9 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
       "Canon + relationship + memory + current context outrank generic drama or generic personality stereotypes.",
       "SELF CLASSIFICATION IS HARD CANON: self.primaryDojo / self.classification describe SELF's own side. Do not infer SELF's dojo from rival/enemy names mentioned inside Connections or backstory. A character mentioning Iron Dragons as rivals does NOT make that character Iron Dragons.",
       "READ THE FULL SHEET, NOT JUST PERSONALITY: self.fullCanon.occupation, factionAndSide, history, abilities, motives, speech and private Connections all constrain behavior. Occupation/job, rank, dojo, organization and side are factual character canon and must affect what they know, do, post about and how they speak.",
+      "KNOWN FACTS ARE SILENT CONTEXT, NOT DIALOGUE CHECKLISTS: knowing TARGET's job, rank, organization/dojo, skills, public history, appearance or other facts does not create a reason to say them. Never recite, stack or introduce several profile facts just to prove knowledge. Mention a known fact only when the CURRENT beat naturally makes that specific fact relevant; ordinary flirting, banter, dates and small talk should react to the moment, not read like a dossier.",
+      "NO PROFILE ROLL-CALL OPENINGS: do not open with patterns like 'So, [name/title]. [job]. [rank]. [organization]. [skill].' or paraphrased equivalents unless the current scene is literally an interrogation, briefing, formal introduction or another context where such a list is the point.",
+      "NICKNAME DIRECT ADDRESS: relationshipToTarget.preferredAddress is the default way to address TARGET directly. If TARGET has targetNickname, use that nickname in ordinary conversation (e.g. Richard -> Richie). Full/legal/first names are not the default vocative; use them only when the current context specifically calls for formality, official identification, deliberate emphasis/anger, or a clearly established pair-specific naming habit. Legitimate titles such as Sensei still override this when applicable.",
       "PAIR CANON IS DIRECTED: exactPairCanon is SELF -> TARGET only. If it says Best friend, do not write hatred or enemy behavior because another unrelated rivalry exists. If it says Enemy/Rival, do not write generic buddy behavior. A single ordinary interaction may change mood/score a little, but it must not instantly rewrite a deeply established relationship.",
       ...(targetId
         ? [flirtIdentityInstruction(w, actorId, targetId)]
@@ -16693,10 +16696,43 @@ function sanitizeWrongCharacterVocative(w, actorId, targetId, value) {
     .trim();
 }
 
+function normalizePreferredNicknameVocative(w, actorId, targetId, value) {
+  let text = String(value || "");
+  if (!text || !w || !targetId || actorId === targetId) return text;
+
+  const target = charById(w, targetId);
+  if (!target || isOwnSenseiRelationship(w, actorId, targetId)) return text;
+
+  const nickname = String(target.nick || target.nickname || "").replace(/\s+/g, " ").trim();
+  if (!nickname) return text;
+
+  const fullName = String(target.name || "").replace(/\s+/g, " ").trim();
+  const firstName = fullName.split(/\s+/).filter(Boolean)[0] || "";
+  if (!firstName || normalizeAddressText(firstName) === normalizeAddressText(nickname)) return text;
+
+  const escaped = regexEscapeLiteral(firstName);
+
+  /* Only normalize DIRECT VOCATIVES. Third-person mentions stay untouched:
+     "Richard left" remains Richard, while "Richard, come here" becomes "Richie, come here". */
+  text = text.replace(
+    new RegExp(`(^|[.!?]\\s+)(["'“”‘’(]*)(?:(hey|yo|hi|hello|szia|hé)\\s+)?(?:${escaped})(\\s*[,!:;—-]\\s*)`, "gi"),
+    (_m, lead, quote, greeting, punct) =>
+      `${lead}${quote}${greeting ? greeting + " " : ""}${nickname}${punct}`
+  );
+
+  text = text.replace(
+    new RegExp(`([,;:—-]\\s*)(?:${escaped})(?=\\s*[,;:!?.”’"']*(?:$|\\n))`, "gi"),
+    (_m, lead) => `${lead}${nickname}`
+  );
+
+  return text;
+}
+
 function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
   let text = sanitizeIncorrectSenseiAddress(w, actorId, targetId, value);
   text = sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, text);
   text = sanitizeWrongCharacterVocative(w, actorId, targetId, text);
+  text = normalizePreferredNicknameVocative(w, actorId, targetId, text);
   text = sanitizeOrientationIncompatibleRomanceText(w, actorId, targetId, text);
   text = sanitizeDisallowedFlirtText(w, actorId, targetId, text);
   text = stripHostileEndearments(w, actorId, targetId, text);
