@@ -1,0 +1,27 @@
+import fs from "node:fs";import path from "node:path";import{fileURLToPath}from"node:url";
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),".."),appPath=path.join(root,"src","App.jsx");let next=fs.readFileSync(appPath,"utf8");
+const MARKER="MÁSVILÁG WHOLE-SHEET GLOBAL RELATIONSHIP MAP v16";
+function renameOne(n,r){const rx=new RegExp("function\\s+"+n+"\\s*\\("),m=[...next.matchAll(new RegExp(rx.source,"g"))];if(m.length!==1)throw new Error("v16 "+n+" count "+m.length);next=next.replace(rx,"function "+r+"(");}
+if(!next.includes("/* "+MARKER+" */")){
+renameOne("relV8ExtractOwnSheetFacts","legacyV16RelV8ExtractOwnSheetFacts");renameOne("relV8TargetSynthesisCard","legacyV16RelV8TargetSynthesisCard");renameOne("relationshipReadingHash","legacyV16RelationshipReadingHash");renameOne("relationshipReadingCacheKey","legacyV16RelationshipReadingCacheKey");
+next+=`
+/* ${MARKER} */
+async function relV8ExtractOwnSheetFacts(w,actor){
+ const sheet=relV8FullOwnSheet(actor),roster=relV8Roster(w,actor),valid=new Set(roster.map(r=>r.id)),chunks=relV8Chunks(sheet,12000),gathered=[];
+ for(let i=0;i<chunks.length;i++){
+  const out=await askWorldJSON(w,SHEET_ANALYST_SYSTEM,["WHOLE-SHEET EVIDENCE COLLECTION "+(i+1)+"/"+chunks.length+".","Owner: "+String(actor.name||actor.id)+". Evidence collection only; do NOT decide final relationships yet.","Read EVERY line. Preserve EVERY detail about each ACTIVE ROSTER target. Keep people and direction exact. Separate OWNER feelings from TARGET feelings. Separate desire/intention/fantasy from events that actually happened. Do not infer from personality. Paraphrase faithfully.","ACTIVE ROSTER:\n"+relV8RosterText(w,actor),"SHEET BLOCK:\n"+chunks[i],'JSON ONLY: {"facts":[{"targetId":"","fact":"faithful detailed paraphrase","kind":"structural|history|friendship|hostility|romance|family|trust|fear|rivalry|desire|other","actuality":"occurred|current|desire|negated|uncertain"}]}'].join("\n\n"),{maxTokens:5000,priority:58,source:"relationship-reading",quality:"deep",timeoutMs:110000});
+  if(!out||out.skip)throw new Error("whole-sheet evidence pass failed");
+  for(const row of Array.isArray(out.facts)?out.facts:[]){const targetId=String(row?.targetId||""),fact=String(row?.fact||"").trim();if(!valid.has(targetId)||!fact||relV8ForeignIdsInFact(w,actor,targetId,fact).length)continue;gathered.push({targetId,fact,kind:String(row?.kind||"other"),actuality:String(row?.actuality||"uncertain")});}
+ }
+ if(!gathered.length)return[];
+ const merge=await askWorldJSON(w,SHEET_ANALYST_SYSTEM,["GLOBAL A-Z RELATIONSHIP MAP — FINAL MERGE.","Owner: "+String(actor.name||actor.id)+". Evidence below comes from the owner's ENTIRE sheet from beginning to end.","Reason across ALL evidence together. For EACH target preserve EVERY distinct supported detail; remove only true duplicates.","HARD: owner feelings stay owner feelings; target feelings are not reversed. Desire/intention/fantasy is NOT an occurred event. Fake dating != dating. Teammate != friend. Obsession != romance unless separately explicit. Family requires explicit literal family evidence.","Return detailed natural paraphrases, not copied fragments. Every relevant detail must survive.","ACTIVE ROSTER:\n"+relV8RosterText(w,actor),"ALL A-Z EVIDENCE:\n"+gathered.map((f,i)=>(i+1)+". targetId="+f.targetId+" ["+f.kind+"; "+f.actuality+"] "+f.fact).join("\n"),'JSON ONLY: {"facts":[{"targetId":"","fact":"complete faithful paraphrase of one distinct relationship detail","kind":"structural|history|friendship|hostility|romance|family|trust|fear|rivalry|desire|other","actuality":"occurred|current|desire|negated|uncertain"}]}'].join("\n\n"),{maxTokens:7000,priority:58,source:"relationship-reading",quality:"deep",timeoutMs:110000});
+ const rows=Array.isArray(merge?.facts)?merge.facts:gathered,out=[],seen=new Set();
+ for(const row of rows){const targetId=String(row?.targetId||""),fact=String(row?.fact||"").trim();if(!valid.has(targetId)||!fact||relV8ForeignIdsInFact(w,actor,targetId,fact).length)continue;const key=targetId+"|"+fact.toLowerCase().replace(/\\s+/g," ");if(seen.has(key))continue;seen.add(key);out.push({key,targetId,fact,kind:String(row?.kind||"other").toLowerCase(),actuality:String(row?.actuality||"uncertain").toLowerCase()});}
+ return out;
+}
+function relV8TargetSynthesisCard(w,actor,target,facts){const base=legacyV16RelV8TargetSynthesisCard(w,actor,target,facts),rows=Array.isArray(facts)?facts:[];return base+"\nA-Z GLOBAL CONTEXT — HARD: these facts are from a completed whole-sheet merge. Use ALL "+rows.length+" distinct facts together. The Bonds entry must be a natural AI paraphrase preserving every supported detail: meeting/history, current relationship, structural role, trust/hostility/friendship, feelings, hidden feelings, desires, and only events explicitly marked occurred. Do not omit details because another seems more important. Do not copy source wording verbatim.";}
+function relationshipReadingHash(snippet){return simsSocialStableHash("v16-whole-sheet-global-map|"+String(snippet||""));}
+function relationshipReadingCacheKey(actor,target,snippet){return "rr16-whole-sheet-global:"+simsSocialStableHash(String(actor?.name||"")+"|"+String(target?.name||"")+"|"+relationshipReadingHash(snippet));}
+`;
+fs.writeFileSync(appPath,next,"utf8");console.log("[patch-status] whole-sheet-global-map=v16 applied; az-read=on; global-merge=on; all-details-paraphrased=on; rr16-reread=on");
+}else console.log("[patch-status] whole-sheet-global-map=v16 already applied");
