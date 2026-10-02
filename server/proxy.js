@@ -5319,8 +5319,16 @@ function providerModel(provider, body = {}) {
     if ((Number(body?.priority) || 0) >= 50) return String(process.env.MISTRAL_PLAYER_MODEL || "mistral-medium-latest").trim();
     return MISTRAL_MODEL || "";
   }
-  if (provider === "groq") return GROQ_MODEL || "";
-  if (provider === "groq2") return GROQ_MODEL_2 || GROQ_MODEL || "";
+  if (provider === "groq") {
+    const source = String(body?.source || "").trim().toLowerCase();
+    if (source === "relationship-reading") return "openai/gpt-oss-120b";
+    return GROQ_MODEL || "";
+  }
+  if (provider === "groq2") {
+    const source = String(body?.source || "").trim().toLowerCase();
+    if (source === "relationship-reading") return "openai/gpt-oss-120b";
+    return GROQ_MODEL_2 || GROQ_MODEL || "";
+  }
   if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim();
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
   if (provider === "openrouter2") return String(process.env.OPENROUTER_MODEL_2 || "openrouter/free").trim();
@@ -5741,9 +5749,10 @@ function taskProviderOrder(requestedProvider, body) {
     /* Feed stays on free Gemini first; paid OpenAI is fallback only. */
     raw = ["gemini", "openai"];
   } else if (source === "relationship-reading") {
-    /* Exhaustive full-sheet relationship maps are large and important.
-       A Gemini quota hit must fall through instead of freezing the rebuild. */
-    raw = ["gemini", "openai", "mistral2", "mistral"];
+    /* Relationship sheet extraction is intentionally isolated on GPT-OSS-120B.
+       Do not silently switch semantics between unrelated providers. Key 2 is only
+       a same-model Groq fallback when the first Groq key is rate-limited. */
+    raw = ["groq", "groq2"];
   } else if (characterKnowledgeSources.has(source)) {
     /* Other character-sheet canon/identity knowledge stays Gemini-first. */
     raw = ["gemini", "openai"];
