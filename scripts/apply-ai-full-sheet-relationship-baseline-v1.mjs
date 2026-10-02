@@ -7,7 +7,7 @@ const appPath = path.join(root, "src", "App.jsx");
 const original = fs.readFileSync(appPath, "utf8");
 let next = original;
 
-const MARKER = "MÁSVILÁG NATIVE FULL-SHEET RELATIONSHIP READING v6";
+const MARKER = "MÁSVILÁG PAIR-ISOLATED RELATIONSHIP READING v7";
 
 function renameOne(name, replacement) {
   const rx = new RegExp("function\\s+" + name + "\\s*\\(");
@@ -78,25 +78,50 @@ function relV6Mentions(text, c) {
   return Boolean(low && relV6Aliases(c).some((name) => low.includes(name)));
 }
 
-function relV6FullFieldsMentioning(person, other) {
-  if (!person || !other) return "";
-  const rows = [];
-  Object.entries(person).forEach(([key, value]) => {
-    if (REL_V6_RUNTIME_SKIP.test(key) || /^(?:connections?|kapcsolatok?)$/i.test(key)) return;
-    const text = relV6Text(value);
-    if (!text || !relV6Mentions(text, other)) return;
-    rows.push("[" + key + "]\\n" + text);
-  });
-  return rows.join("\\n\\n");
+function relV6PairPassages(w, person, other, maxChars = 12000) {
+  if (!w || !person || !other || person.id === other.id) return "";
+  let raw = "";
+  try { raw = String(sheetPassagesAbout(person, other, Math.max(4000, maxChars)) || ""); } catch (_) { raw = ""; }
+  if (!raw) return "";
+
+  /*
+   * HARD PAIR ISOLATION:
+   * sheetPassagesAbout() already returns only sentences that explicitly name THIS
+   * target. Connections is handled separately by connectionCanonSnippetAbout(),
+   * so remove every [connections] passage here to prevent another person's row
+   * from ever entering this pair prompt.
+   */
+  const parts = raw
+    .split(" | ")
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .filter((x) => !/^\\[(?:connections?|kapcsolatok?)\\]/i.test(x));
+
+  const clean = [];
+  for (const part of parts) {
+    let ok = false;
+    try { ok = textExplicitlyMentionsCharacter(w, part, other, { relationshipOnly: true }); } catch (_) { ok = false; }
+    if (!ok) continue;
+    if (!clean.includes(part)) clean.push(part);
+  }
+  return clean.join(" | ").slice(0, maxChars);
 }
 
-function relV6Connections(person) {
-  if (!person || typeof person !== "object") return "";
-  return Object.entries(person)
-    .filter(([key]) => /^(?:connections?|kapcsolatok?|relationshipsCanon|relationshipCanon)$/i.test(key))
-    .map(([key, value]) => "[" + key + "]\\n" + relV6Text(value))
-    .filter(Boolean)
-    .join("\\n\\n");
+function relV6ForeignIdsInGeneratedRow(w, actor, target, row) {
+  if (!w || !actor || !target || !row || typeof row !== "object") return [];
+  const text = [
+    row.bond, row.role, row.mood, row.hidden, row.why, row.label, row.description,
+    ...(Array.isArray(row.layers) ? row.layers : []),
+  ].filter(Boolean).join(" | ");
+  if (!text) return [];
+  let ids = [];
+  try { ids = explicitNamedCharacterIdsInText(w, text, actor.id) || []; } catch (_) { ids = []; }
+  const allowed = new Set([String(actor.id), String(target.id)]);
+  return [...new Set(ids.map(String))].filter((id) => !allowed.has(id));
+}
+
+function relV6RowIsPairPure(w, actor, target, row) {
+  return relV6ForeignIdsInGeneratedRow(w, actor, target, row).length === 0;
 }
 
 function relV6NormalizeAffiliation(value) {
@@ -170,8 +195,8 @@ function relV6RoleClass(w, c) {
 function relV6ExplicitPairRole(w, actor, target) {
   let text = "";
   try { text += String(connectionCanonSnippetAbout(w, actor, target, 50000) || ""); } catch (_) {}
-  text += "\\n" + relV6FullFieldsMentioning(actor, target);
-  text += "\\n" + relV6FullFieldsMentioning(target, actor);
+  text += "\\n" + relV6PairPassages(w, actor, target, 12000);
+  text += "\\n" + relV6PairPassages(w, target, actor, 8000);
   const low = text.toLowerCase();
   if (!low || !REL_V6_MENTORISH.test(low)) return false;
   return /\\b(?:his|her|their|my|your)\\s+(?:sensei|teacher|mentor|coach|master|student|mentee|apprentice|trainee)\\b/i.test(low) ||
@@ -210,26 +235,29 @@ function relV6StructuralSummary(w, c) {
 
 function relationshipReadingSnippet(w, actor, target) {
   if (!w || !actor || !target || actor.id === target.id || isMediaAccount(w, target.id)) return "";
-  const actorConnections = relV6Connections(actor);
-  const targetConnections = relV6Connections(target);
   let actorExact = "", targetExact = "";
   try { actorExact = String(connectionCanonSnippetAbout(w, actor, target, 50000) || ""); } catch (_) {}
   try { targetExact = String(connectionCanonSnippetAbout(w, target, actor, 50000) || ""); } catch (_) {}
-  const actorOther = relV6FullFieldsMentioning(actor, target);
-  const targetOther = relV6FullFieldsMentioning(target, actor);
-  const direct = Boolean(actorExact || actorOther || relV6Mentions(actorConnections, target));
-  const reverse = Boolean(targetExact || targetOther || relV6Mentions(targetConnections, actor));
+  const actorOther = relV6PairPassages(w, actor, target, 14000);
+  const targetOther = relV6PairPassages(w, target, actor, 9000);
+  const direct = Boolean(actorExact || actorOther);
+  const reverse = Boolean(targetExact || targetOther);
   if (!direct && !reverse) return "";
+
+  /*
+   * IMPORTANT: do NOT include actor.connections or target.connections wholesale.
+   * The model sees ONLY the exact target's parsed Connections entry plus exact
+   * target-naming passages elsewhere. This makes cross-person leakage impossible
+   * at the input level.
+   */
   return [
-    "PAIR: " + String(actor.name || actor.id) + " → " + String(target.name || target.id),
+    "PAIR-ISOLATED SOURCE: " + String(actor.name || actor.id) + " → " + String(target.name || target.id),
+    "ALLOWED PEOPLE IN THIS READING: " + String(actor.name || actor.id) + " AND " + String(target.name || target.id) + " ONLY.",
     "",
-    "ACTOR EXACT TARGET CONNECTION ENTRY — HIGHEST AUTHORITY FOR THIS PAIR:",
+    "ACTOR → THIS EXACT TARGET — CONNECTIONS ENTRY:",
     actorExact || "(none)",
     "",
-    "ACTOR FULL CONNECTIONS SECTION — READ 1/1 FOR CONTEXT, BUT ENTRIES WHOSE SUBJECT IS SOMEONE ELSE MUST NEVER BE ASSIGNED TO THIS TARGET:",
-    actorConnections || "(none)",
-    "",
-    "ACTOR OTHER FULL SHEET FIELDS THAT MENTION TARGET:",
+    "ACTOR SHEET — ONLY PASSAGES THAT EXPLICITLY NAME THIS EXACT TARGET:",
     actorOther || "(none)",
     "",
     "ACTOR STRUCTURAL DATA:",
@@ -238,23 +266,22 @@ function relationshipReadingSnippet(w, actor, target) {
     "TARGET STRUCTURAL DATA:",
     relV6StructuralSummary(w, target),
     "",
-    "REVERSE EXACT ACTOR CONNECTION ENTRY — OBJECTIVE SHARED FACTS/HISTORY ONLY; NEVER COPY TARGET'S PRIVATE FEELINGS INTO ACTOR:",
+    "TARGET → ACTOR — EXACT CONNECTIONS ENTRY, OBJECTIVE SHARED FACTS ONLY:",
     targetExact || "(none)",
     "",
-    "REVERSE FULL CONNECTIONS SECTION — READ 1/1 FOR CONTEXT; OTHER people's rows do not belong to this pair:",
-    targetConnections || "(none)",
-    "",
-    "TARGET OTHER FULL SHEET FIELDS THAT MENTION ACTOR — OBJECTIVE FACTS ONLY:",
+    "TARGET SHEET — ONLY PASSAGES THAT EXPLICITLY NAME THE ACTOR, OBJECTIVE SHARED FACTS ONLY:",
     targetOther || "(none)",
+    "",
+    "NO OTHER CHARACTER'S CONNECTION ENTRY OR STORY MAY BE USED FOR THIS PAIR.",
   ].join("\\n");
 }
 
 function relationshipReadingHash(snippet) {
-  return simsSocialStableHash("v6-fullsheet-strict-groups|" + String(snippet || ""));
+  return simsSocialStableHash("v7-pair-isolated|" + String(snippet || ""));
 }
 
 function relationshipReadingCacheKey(actor, target, snippet) {
-  return "rr6-fullsheet-strict-groups:" + simsSocialStableHash(String(actor && actor.name || "") + "|" + String(target && target.name || "") + "|" + relationshipReadingHash(snippet));
+  return "rr7-pair-isolated:" + simsSocialStableHash(String(actor && actor.name || "") + "|" + String(target && target.name || "") + "|" + relationshipReadingHash(snippet));
 }
 
 function structuralRelationshipHash(w, actor, target) {
@@ -367,7 +394,7 @@ async function genRelationshipReading(w, actor, due) {
     "Actor: " + String(actor.name || actor.id) + " [" + String(actor.id) + "]",
     "Target: " + String(target.name || target.id) + " [" + String(target.id) + "]",
     "",
-    "Read EVERY supplied fact before deciding. The ACTOR EXACT TARGET CONNECTION ENTRY is highest authority for actor → target. The complete Connections section must still be read 1/1, but a row about some OTHER person can never be transferred onto this target. Also use every other actor field that actually mentions this target. Reverse-sheet material is only shared objective history/structure; never copy the target's private feelings into the actor.",
+    "PAIR ISOLATION — HARD: the source has already been filtered to this exact pair. Use ONLY facts explicitly supplied for ACTOR ↔ TARGET. Never import, infer, recall or mention any third character, even if you know them from another sheet, prior call, character bible, world context or stereotype. The ACTOR exact-target Connections entry is highest authority. Other actor passages are allowed only because they explicitly name this target. Reverse-sheet material is objective shared history/structure only; never copy target-private feelings into the actor.",
     "MULTI-LAYER RULE: preserve ALL supported layers simultaneously. A person can be student + rival + friend, mentor + enemy, coworker + ex, teammate + crush, etc. Do not collapse a layered relationship to one generic word.",
     "STRUCTURAL HARD RULE: Sensei/mentor/teacher/coach ↔ student/mentee exists only if (A) the pair is explicitly named that way in the sheets, OR (B) both belong to the SAME concrete named organization/dojo/team/school/workplace and their roles are complementary. A Wasabi sensei is NOT the teacher/mentor of an Iron Dragons student merely because one is a sensei and the other is a student. Different named organizations = no inferred teacher/student link.",
     "Exact shared affiliations detected by code: " + (shared.length ? shared.join(", ") : "(none)"),
@@ -391,10 +418,45 @@ async function genRelationshipReading(w, actor, due) {
     "",
     'JSON ONLY: {"targets":[{"id":"' + String(target.id) + '","score":0,"bond":"","role":"","layers":[],"mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"description":"","why":"","label":""}]}'
   ].join("\\n");
-  const out = await askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 3000, priority: 55, source: "relationship-reading", quality: "deep", timeoutMs: 110000 });
+  let out = await askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 3000, priority: 55, source: "relationship-reading", quality: "deep", timeoutMs: 110000 });
   if (!out || out.skip) return out;
-  const rows = Array.isArray(out.targets) ? out.targets : [];
-  out.targets = rows.map((row) => relV6SanitizeRow(w, actor, target, row));
+
+  let rows = (Array.isArray(out.targets) ? out.targets : [])
+    .filter((row) => row && findChar(w, row.id) === target.id)
+    .map((row) => relV6SanitizeRow(w, actor, target, row));
+
+  const leaked = rows.some((row) => !relV6RowIsPairPure(w, actor, target, row));
+  if (leaked) {
+    const badIds = [...new Set(rows.flatMap((row) => relV6ForeignIdsInGeneratedRow(w, actor, target, row)))];
+    console.warn("[relationship-reading] rejected third-person leakage", actor.id, target.id, badIds.join(","));
+
+    const recoveryPrompt = [
+      "PAIR-ISOLATED RELATIONSHIP RECOVERY.",
+      "Rewrite the relationship using ONLY these two people: " + String(actor.name || actor.id) + " and " + String(target.name || target.id) + ".",
+      "HARD: do not mention, imply, compare with, defend, attack, become jealous over, or explain the relationship through ANY third person.",
+      "If a claim cannot be supported without a third person, OMIT that claim entirely.",
+      "Do not invent events.",
+      "",
+      "PAIR SOURCE:",
+      source,
+      "",
+      'JSON ONLY: {"targets":[{"id":"' + String(target.id) + '","score":0,"bond":"","role":"","layers":[],"mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"description":"","why":"","label":""}]}'
+    ].join("\\n");
+
+    try {
+      out = await askWorldJSON(w, SHEET_ANALYST_SYSTEM, recoveryPrompt, { maxTokens: 2200, priority: 55, source: "relationship-reading", quality: "deep", timeoutMs: 110000 });
+      rows = (out && Array.isArray(out.targets) ? out.targets : [])
+        .filter((row) => row && findChar(w, row.id) === target.id)
+        .map((row) => relV6SanitizeRow(w, actor, target, row))
+        .filter((row) => relV6RowIsPairPure(w, actor, target, row));
+    } catch (_) {
+      rows = [];
+    }
+  }
+
+  /* Wrong pair data is worse than no AI reading. Never persist a contaminated row. */
+  out = out && typeof out === "object" ? out : {};
+  out.targets = rows.filter((row) => relV6RowIsPairPure(w, actor, target, row));
   return out;
 }
 
@@ -473,7 +535,7 @@ function structuralReadingDue(w) {
 
 if (next !== original) {
   fs.writeFileSync(appPath, next, "utf8");
-  console.log("[patch-status] native-full-sheet-relationship-reading=v6 applied; cache=rr6; strict-cross-group-role-validation=on");
+  console.log("[patch-status] pair-isolated-relationship-reading=v7 applied; cache=rr7; third-person-leakage=blocked");
 } else {
-  console.log("[patch-status] native-full-sheet-relationship-reading=v6 already applied");
+  console.log("[patch-status] pair-isolated-relationship-reading=v7 already applied");
 }
