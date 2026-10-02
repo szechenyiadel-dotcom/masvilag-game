@@ -3,7 +3,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),".."),appPa
 const MARKER="MÁSVILÁG WHOLE-SHEET GLOBAL RELATIONSHIP MAP v16";
 function renameOne(n,r){const rx=new RegExp("function\\s+"+n+"\\s*\\("),m=[...next.matchAll(new RegExp(rx.source,"g"))];if(m.length!==1)throw new Error("v16 "+n+" count "+m.length);next=next.replace(rx,"function "+r+"(");}
 if(!next.includes("/* "+MARKER+" */")){
-renameOne("relV8ExtractOwnSheetFacts","legacyV16RelV8ExtractOwnSheetFacts");renameOne("relV8TargetSynthesisCard","legacyV16RelV8TargetSynthesisCard");renameOne("relationshipReadingHash","legacyV16RelationshipReadingHash");renameOne("relationshipReadingCacheKey","legacyV16RelationshipReadingCacheKey");
+renameOne("relV8ExtractOwnSheetFacts","legacyV16RelV8ExtractOwnSheetFacts");renameOne("relV8TargetSynthesisCard","legacyV16RelV8TargetSynthesisCard");
 next+=`
 /* ${MARKER} */
 async function relV8ExtractOwnSheetFacts(w,actor){
