@@ -5660,7 +5660,6 @@ function taskProviderOrder(requestedProvider, body) {
   const chars = aiRequestChars(body);
 
   const deepSeekRoleplaySources = new Set([
-    "scene",
     "dm",
   ]);
 
@@ -5680,7 +5679,12 @@ function taskProviderOrder(requestedProvider, body) {
   let raw;
 
   if (deepSeekRoleplaySources.has(source)) {
-    raw = ["openrouter3"];
+    /* Direct messages stay on DeepSeek Flash first; if OpenRouter cannot serve
+       them (credits/provider issue), Mistral takes over with the player model. */
+    raw = ["openrouter3", "mistral"];
+  } else if (source === "scene") {
+    /* Scenes are intentionally Mistral-owned; providerModel selects the scene model. */
+    raw = ["mistral"];
   } else if (source === "sheet-summary" || source === "character-bible") {
     raw = ["gemini", "openai"];
   } else if (socialFeedOrComment) {
