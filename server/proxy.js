@@ -5671,7 +5671,7 @@ function providerAllowedForBody(provider, body) {
 }
 
 /* Provider roles are intentionally strict.
-   - DM: OpenRouter3 / DeepSeek Flash.
+   - DM: OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2.
    - Scene: Mistral Small 1 -> Mistral Small 2.
    - Feed: Gemini -> OpenAI.
    - Comments/replies: OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2.
@@ -5690,19 +5690,24 @@ function taskProviderOrder(requestedProvider, body) {
     source === "feed-post" ||
     /(?:^|[-_])feed(?:[-_]|$)/.test(source);
 
-  const groqSmallBackgroundSources = new Set([
-    "relationship-labels",
-    "meaning-analysis",
-    "relationship-structural",
+  const characterKnowledgeSources = new Set([
+    "sheet-summary",
+    "character-bible",
     "identity-canon",
+    "relationship-labels",
+    "relationship-structural",
+  ]);
+
+  const groqSmallBackgroundSources = new Set([
+    "meaning-analysis",
   ]);
 
   const groqSmallEnough = chars <= 26000;
   let raw;
 
   if (source === "dm") {
-    /* Direct messages belong to DeepSeek Flash only. */
-    raw = ["openrouter3"];
+    /* Direct messages: DeepSeek Flash first, then Mistral Small key 1 -> key 2. */
+    raw = ["openrouter3", "mistral", "mistral2"];
   } else if (source === "scene") {
     /* Scenes use Mistral Small, with the second Mistral key as fallback. */
     raw = ["mistral", "mistral2"];
@@ -5712,7 +5717,8 @@ function taskProviderOrder(requestedProvider, body) {
   } else if (isFeed) {
     /* Feed stays on free Gemini first; paid OpenAI is fallback only. */
     raw = ["gemini", "openai"];
-  } else if (source === "sheet-summary" || source === "character-bible") {
+  } else if (characterKnowledgeSources.has(source)) {
+    /* Character-sheet reading, canon/identity and relationship knowledge stay Gemini-first. */
     raw = ["gemini", "openai"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
     raw = ["groq", "groq2", "gemini"];
