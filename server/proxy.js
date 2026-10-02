@@ -5156,8 +5156,8 @@ async function proxyAnthropicMessage(body) {
 
 /* MÁSVILÁG AI 403 FAILOVER + GROUP CHAT DEDUPE v4 */
 const AI_GROQ_MAX_INPUT_CHARS = 18000;
-const AI_GROUP_CHAT_SYSTEM_CAP = 14000;
-const AI_GROUP_CHAT_PROMPT_CAP = 18000;
+const AI_GROUP_CHAT_SYSTEM_CAP = 18000;
+const AI_GROUP_CHAT_PROMPT_CAP = 36000;
 const AI_GROUP_CHAT_DEDUPE_MS = 15000;
 
 function buildCompatibleChatPayload(body = {}, model) {
@@ -5305,16 +5305,57 @@ function aiRequestPriority(body = {}, source = inferAIRequestSource(body)) {
 function preservePromptEdges(text, max) {
   const value = String(text || "");
   if (value.length <= max) return value;
+
+  const fidelityStartMarker = "[[CHARACTER_FIDELITY]]";
+  const fidelityEndMarker = "[[/CHARACTER_FIDELITY]]";
+  const fidelityAt = value.indexOf(fidelityStartMarker);
+  const fidelityEndAt = fidelityAt >= 0
+    ? value.indexOf(fidelityEndMarker, fidelityAt + fidelityStartMarker.length)
+    : -1;
+  const fidelityEnd = fidelityEndAt >= 0 ? fidelityEndAt + fidelityEndMarker.length : -1;
+  const fidelityBlock = fidelityAt >= 0 && fidelityEnd > fidelityAt
+    ? value.slice(fidelityAt, fidelityEnd)
+    : "";
+
   /* CLAUDE FIX R2: never cut the protected tail (latest player input, DM reason, author roster). */
   let protectedAt = value.lastIndexOf("[[PROTECTED_TAIL]]");
   if (protectedAt < 0) protectedAt = value.indexOf("[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]");
-  if (protectedAt >= 0 && value.length - protectedAt < max * 0.7) {
-    const protectedTail = value.slice(protectedAt);
-    const room = Math.max(1000, max - protectedTail.length - 80);
-    const head = Math.floor(room * 0.6);
-    const beforeTail = room - head;
-    return value.slice(0, head) + "\n...[context compacted by AI gate]...\n" + value.slice(Math.max(head, protectedAt - beforeTail), protectedAt) + protectedTail;
+  const protectedTail = protectedAt >= 0 && (fidelityEnd < 0 || protectedAt >= fidelityEnd)
+    ? value.slice(protectedAt)
+    : "";
+
+  if (fidelityBlock || protectedTail) {
+    const compactBlock = (block, cap, label) => {
+      if (!block || block.length <= cap) return block;
+      const note = "\n...[" + label + " compacted, protected]...\n";
+      const usable = Math.max(0, cap - note.length);
+      const head = Math.floor(usable * 0.68);
+      const tail = Math.max(0, usable - head);
+      return block.slice(0, head) + note + (tail ? block.slice(-tail) : "");
+    };
+    const keptFidelity = compactBlock(fidelityBlock, Math.floor(max * 0.60), "character fidelity");
+    const keptTail = compactBlock(protectedTail, Math.floor(max * 0.32), "latest protected tail");
+
+    let body = value;
+    if (fidelityBlock) body = body.slice(0, fidelityAt) + body.slice(fidelityEnd);
+    if (protectedTail) {
+      let tailAtInBody = body.lastIndexOf("[[PROTECTED_TAIL]]");
+      if (tailAtInBody < 0) tailAtInBody = body.indexOf("[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]");
+      if (tailAtInBody >= 0) body = body.slice(0, tailAtInBody);
+    }
+    body = body.trim();
+
+    const note = "\n...[context compacted by AI gate; character fidelity + newest beat preserved]...\n";
+    const room = Math.max(0, max - keptFidelity.length - keptTail.length - note.length - 8);
+    let keptBody = body;
+    if (keptBody.length > room) {
+      const head = Math.floor(room * 0.58);
+      const tail = Math.max(0, room - head);
+      keptBody = keptBody.slice(0, head) + note + (tail ? keptBody.slice(-tail) : "");
+    }
+    return [keptFidelity, keptBody, keptTail].filter(Boolean).join("\n\n").slice(0, max);
   }
+
   const head = Math.floor(max * 0.72);
   const tail = Math.max(0, max - head - 80);
   return value.slice(0, head) + "\n...[context compacted by AI gate]...\n" + value.slice(-tail);

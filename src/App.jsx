@@ -8687,6 +8687,8 @@ const AI_MAX_PROMPT_CHARS = Math.max(28000, Number(import.meta.env.VITE_AI_MAX_P
 /* CLAUDE FIX R2: everything after this marker (latest player input, the author
    roster, the reason for a DM, ...) must survive every compaction step. */
 const PROTECTED_TAIL_MARKER = "[[PROTECTED_TAIL]]";
+const CHARACTER_FIDELITY_MARKER = "[[CHARACTER_FIDELITY]]";
+const CHARACTER_FIDELITY_END_MARKER = "[[/CHARACTER_FIDELITY]]";
 
 /* CLAUDE FIX R2 (scenes): the newest turns + the player's newest action are
    repeated in the protected tail, so the model answers THAT, even if the long
@@ -8755,16 +8757,53 @@ function preserveEdges(value, maxChars, label = "context") {
   const text = String(value || "");
   const max = Math.max(4000, Number(maxChars) || 0);
   if (text.length <= max) return text;
-  const protectedAt = text.lastIndexOf(PROTECTED_TAIL_MARKER);
-  if (protectedAt >= 0 && text.length - protectedAt < max * 0.7) {
-    const protectedTail = text.slice(protectedAt);
-    const marker = `\n\n[${label.toUpperCase()} COMPACTED: ${text.length - max} excess characters omitted; canonical state remains stored in-world]\n\n`;
-    const room = Math.max(1000, max - protectedTail.length - marker.length);
-    const head = Math.floor(room * 0.6);
-    const beforeTail = room - head;
-    return text.slice(0, head) + marker + text.slice(Math.max(head, protectedAt - beforeTail), protectedAt) + protectedTail;
-  }
+
   const marker = `\n\n[${label.toUpperCase()} COMPACTED: ${text.length - max} excess characters omitted; canonical state remains stored in-world]\n\n`;
+  const fidelityAt = text.indexOf(CHARACTER_FIDELITY_MARKER);
+  const fidelityEndAt = fidelityAt >= 0
+    ? text.indexOf(CHARACTER_FIDELITY_END_MARKER, fidelityAt + CHARACTER_FIDELITY_MARKER.length)
+    : -1;
+  const fidelityEnd = fidelityEndAt >= 0
+    ? fidelityEndAt + CHARACTER_FIDELITY_END_MARKER.length
+    : -1;
+  const fidelityBlock = fidelityAt >= 0 && fidelityEnd > fidelityAt
+    ? text.slice(fidelityAt, fidelityEnd)
+    : "";
+  const protectedAt = text.lastIndexOf(PROTECTED_TAIL_MARKER);
+  const protectedTail = protectedAt >= 0 && (fidelityEnd < 0 || protectedAt >= fidelityEnd)
+    ? text.slice(protectedAt)
+    : "";
+
+  if (fidelityBlock || protectedTail) {
+    const compactProtectedBlock = (block, cap, noteLabel) => {
+      if (!block || block.length <= cap) return block;
+      const note = "\n...[" + noteLabel + " compacted, protected]...\n";
+      const usable = Math.max(0, cap - note.length);
+      const head = Math.floor(usable * 0.68);
+      const tail = Math.max(0, usable - head);
+      return block.slice(0, head) + note + (tail ? block.slice(-tail) : "");
+    };
+    const keptFidelity = compactProtectedBlock(fidelityBlock, Math.floor(max * 0.60), "character fidelity");
+    const keptTail = compactProtectedBlock(protectedTail, Math.floor(max * 0.32), "latest protected tail");
+
+    let body = text;
+    if (fidelityBlock) body = body.slice(0, fidelityAt) + body.slice(fidelityEnd);
+    if (protectedTail) {
+      const tailAtInBody = body.lastIndexOf(PROTECTED_TAIL_MARKER);
+      if (tailAtInBody >= 0) body = body.slice(0, tailAtInBody);
+    }
+    body = body.trim();
+
+    const room = Math.max(0, max - keptFidelity.length - keptTail.length - marker.length - 8);
+    let keptBody = body;
+    if (keptBody.length > room) {
+      const head = Math.floor(room * 0.58);
+      const tail = Math.max(0, room - head);
+      keptBody = keptBody.slice(0, head) + marker + (tail ? keptBody.slice(-tail) : "");
+    }
+    return [keptFidelity, keptBody, keptTail].filter(Boolean).join("\n\n").slice(0, max);
+  }
+
   const usable = Math.max(1000, max - marker.length);
   const head = Math.floor(usable * 0.56);
   const tail = usable - head;
@@ -8957,9 +8996,9 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   const preBudgetSource = typeof inferAiRequestSource === "function"
     ? inferAiRequestSource(system, prompt, requestMeta)
     : "";
-  if (preBudgetSource === "group-chat" && prompt.length > 28000) {
+  if (preBudgetSource === "group-chat" && prompt.length > 36000) {
     const beforeGroupPromptChars = prompt.length;
-    prompt = preserveEdges(prompt, 28000, "group-chat prompt");
+    prompt = preserveEdges(prompt, 36000, "group-chat prompt");
     console.info("[ai-context-client] group-chat", "promptChars=" + beforeGroupPromptChars + "->" + prompt.length, "stage=pre-budget");
   }
   const budgeted = budgetAiRequest(system, prompt);
@@ -61314,13 +61353,36 @@ function directedHiddenCanon(text) {
   return "";
 }
 
+function stabilizeDirectedRelationshipScore(text, score) {
+  const numeric = Number(score) || 0;
+  const low = String(text || "").toLowerCase();
+  const obsession = /obsess|fixat|megsz[aá]ll|k[eé]nyszeres/.test(low);
+  const loveSignal = /\bin love\b|szerelmes|m[eé]lyen szeret|deeply loves|would do anything|b[aá]rmit megtenne|crush on|has a crush|vonz[oó]dik|er[oő]s vonzalom|strong attraction/.test(low);
+  const loveNegated = /not in love|isn.?t in love|doesn.?t love|nem szerelmes|nem vonz[oó]dik|nincs vonzalom|not attracted/.test(low);
+  const hateSignal = /\bhate\b|gy[uű]l[oö]l/.test(low);
+  const hateNegated = /doesn.?t hate|does not hate|not hate|nem gy[uű]l[oö]l/.test(low);
+  const love = loveSignal && !loveNegated;
+  const hate = hateSignal && !hateNegated;
+
+  if (numeric === 0) {
+    if (hate && !love) return -85;
+    if (love) return obsession ? 78 : 72;
+    return numeric;
+  }
+  if (obsession && numeric > 0) return Math.max(numeric, 78);
+  if (love && numeric > 0) return Math.max(numeric, 72);
+  if (hate && numeric < 0) return Math.min(numeric, -85);
+  return numeric;
+}
+
 function inferCanonicalRelationshipBaseline(w, actor, target) {
   const reading = relationshipReadingResult(w, actor, target);
   if (reading) {
     /* The AI read the whole entry, so its label wins over the keyword guess
        ("used to be friends with her brother" is not a sibling bond). */
     const family = FIXED_BONDS.indexOf(String(reading.bond || "")) >= 0;
-    return { score: reading.score, bond: reading.bond, role: reading.role || "", fixed: family, hidden: reading.hidden, mood: reading.mood, why: reading.why, source: "connections-ai" };
+    const direct = connectionCanonSnippetAbout(w, actor, target, 24000);
+    return { score: stabilizeDirectedRelationshipScore(direct, reading.score), bond: reading.bond, role: reading.role || "", fixed: family, hidden: reading.hidden, mood: reading.mood, why: reading.why, source: "connections-ai" };
   }
   return inferCanonicalRelationshipBaselineFromText(w, actor, target);
 }
@@ -61368,13 +61430,7 @@ function inferCanonicalRelationshipBaselineFromText(w, actor, target) {
    * may strengthen the starting magnitude without changing directionality.
    */
   const numericScore = Number(base.score) || 0;
-  if (/obsess|fixat|megsz[aá]ll|k[eé]nyszeres/.test(low) && numericScore > 0) {
-    base.score = Math.max(numericScore, 78);
-  } else if (/\bin love\b|szerelmes|would do anything|b[aá]rmit megtenne/.test(low) && numericScore > 0) {
-    base.score = Math.max(numericScore, 72);
-  } else if (/\bhate\b|gy[uű]l[oö]l/.test(low) && numericScore < 0) {
-    base.score = Math.min(numericScore, -85);
-  }
+  base.score = stabilizeDirectedRelationshipScore(direct, numericScore);
 
   base.source = "connections-deep";
   return base;
@@ -62486,7 +62542,7 @@ function voiceStyleTraitCandidates(c, raw) {
 
 function voiceStyleExampleCandidates(c, raw) {
   const rows = [];
-  const exampleKey = /example|sample|quote|speechExample|messageExample|p[eé]lda|p[eé]ldamondat|id[eé]zet|mintamondat/i;
+  const exampleKey = /(?:example|sample|quote|speechExample|messageExample|p[eé]lda|p[eé]ldamondat|id[eé]zet|mintamondat|^(?:speech|voice|speechStyle|voiceStyle|writingStyle|dialogueStyle|chatStyle)$)/i;
   Object.entries(c || {}).forEach(([key, value]) => {
     if (!exampleKey.test(key)) return;
     const rendered = typeof simsSocialStringify === "function"
@@ -62614,13 +62670,14 @@ function characterPersonaBrief(c) {
     c.personality ? "Personality: " + String(c.personality) : "",
     c.traits ? "Traits: " + String(c.traits) : "",
     c.speech ? "Speech: " + String(c.speech) : "",
+    c.voice ? "Voice: " + String(c.voice) : "",
   ].filter(Boolean).join("\n");
   return raw.replace(/\s+\n/g, "\n").slice(0, 1100);
 }
 
 function characterVoiceStyleCard(c) {
   const card = extractCharacterVoiceStyleCard(c);
-  return card && card.card ? String(card.card).slice(0, 1600) : "";
+  return card && card.card ? String(card.card).slice(0, 2600) : "";
 }
 
 function voiceStyleRetryInstruction(c) {
@@ -62685,10 +62742,7 @@ function voiceStyleCardsForIds(w, ids, actorId) {
       }
       const persona = characterPersonaBrief(c);
       const rawStyle = characterVoiceStyleCard(c);
-      const style = (speakers.length > 1
-        ? rawStyle.split("SHEET EVIDENCE —")[0].split("VOICE EXAMPLES FROM THE SHEET —")[0]
-        : rawStyle
-      ).slice(0, speakers.length > 4 ? 900 : 1600);
+      const style = rawStyle.slice(0, speakers.length > 4 ? 1200 : 2200);
       const personaBlock = persona ? "PERSONALITY OF " + String(c.name || "").toUpperCase() + " — FROM THEIR OWN SHEET, PLAY EXACTLY THIS (not a generic type, not the original fandom):\n" + persona.slice(0, speakers.length > 4 ? 600 : 1200) : "";
       const room = Math.max(500, perSpeaker - style.length - personaBlock.length - 10);
       let bible = "";
@@ -62699,7 +62753,8 @@ function voiceStyleCardsForIds(w, ids, actorId) {
     .filter(Boolean);
 
   return rows.length
-    ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
+    ? CHARACTER_FIDELITY_MARKER + "\n" +
+      "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
       "VOICE OWNERSHIP — HARD RULE: each speaker uses ONLY their own card's personality, cadence, slang, profanity, pet names, casing, punctuation and emoji habits. Never borrow another speaker's delivery or distinctive phrasing.\n" +
       "OWNERSHIP — HARD RULE: \"mine\", \"my girl\", \"don't touch what's mine\" only from someone whose own card says they are with that person or are possessive / obsessed about them. Never repeat another commenter's possessive line; a friend defends a friend as a friend (\"she's not yours\", \"leave her alone\").\n" +
       "GROUPS — HARD RULE: say \"we / us / our sensei / makes us\" only about a dojo, team or group that is on your OWN card (WHO IS WHO). Never imply you train or work under someone who is not your own sensei / boss.\n" +
@@ -62707,7 +62762,7 @@ function voiceStyleCardsForIds(w, ids, actorId) {
       "NAMES — HARD RULE: call people only by their real name, surname, username or a nickname that a sheet actually gives them. Never invent a new nickname or a pop-culture comparison name (no \"Draco\", \"Romeo\", \"Joker\" for a real person) and never mention someone who is not in this world.\n" +
       "KNOWLEDGE BOUNDARY — HARD RULE: about themselves everyone uses their OWN sheet. About anyone else they know only that person's public profile, what their OWN sheet says about them, and what really happened between them in play. Never let one character mention a place, event, secret, nickname or memory that appears only on SOMEONE ELSE's sheet (e.g. a cabin, a hideout, a past incident) — if it is not on the speaker's own card, the speaker does not know it.\n" +
       "FULL INTENSITY: play every character exactly as extreme as their own sheet says — cruel is cruel, obsessed is visibly obsessed, cold is cold, arrogant is arrogant. Never soften, sanitize or average them into a polite generic person. JEALOUSY and ENMITY are extremes too: a jealous or possessive person reacts to a rival with open, ugly jealousy (icy and menacing or explosive, as their nature says); enemies treat each other with real contempt and hostility, never polite irony. People who dislike or hate each other show it and never use pet names (babe, baby, honey, darling…) with each other; warmth and pet names only where the relationship really is warm. Each speaker knows their own SHEET CANON history exactly — the right names, places, order of events — and never contradicts it or makes up a different past.\n\n" +
-      rows.join("\n\n--- NEXT SPEAKER CARD ---\n\n")
+      rows.join("\n\n--- NEXT SPEAKER CARD ---\n\n") + "\n" + CHARACTER_FIDELITY_END_MARKER
     : "";
 }
 
