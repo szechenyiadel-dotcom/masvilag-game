@@ -5207,7 +5207,7 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
-  if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat-v3-0324:free").trim();
+  if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "cognitivecomputations/dolphin-mistral-24b-venice-edition:free").trim();
   if (provider === "gemini") {
     if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || "gemini-3.5-flash").trim();
     return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
