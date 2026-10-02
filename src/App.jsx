@@ -6864,6 +6864,46 @@ function legacyApplyChanges(
         nextScore
       );
 
+    const recentExplicitStatus =
+      n.relationshipOfficialOverrides &&
+      n.relationshipOfficialOverrides[
+        relationshipOfficialOverrideKey(
+          a,
+          b
+        )
+      ];
+
+    if (
+      recentExplicitStatus &&
+      recentExplicitStatus.explicitEvent === true &&
+      now() - (Number(recentExplicitStatus.at) || 0) < 2 * 60 * 1000 &&
+      bondEvolution.changed
+    ) {
+      const requestedKind =
+        directedRomanticOfficialKind({
+          bond: bondEvolution.bond,
+        });
+
+      if (
+        requestedKind !==
+        String(
+          recentExplicitStatus.kind ||
+          ""
+        )
+      ) {
+        bondEvolution = {
+          bond:
+            String(
+              r.bond ||
+              r.type ||
+              ""
+            ),
+          changed:false,
+          source:"recent-explicit-status-guard",
+        };
+      }
+    }
+
     if (
       bondEvolution.bond &&
       (
@@ -37179,6 +37219,30 @@ const turn = async (mine) => {
           playerTarget.id;
       }
 
+      try {
+        applyExplicitRelationshipStatusFromEvent(
+          n,
+          {
+            type: "group-message",
+            refId: playerGroupMessage.id,
+            actorId: n.meId,
+            targetIds: playerTarget.id ? [playerTarget.id] : [],
+            text: mine,
+            source: "group-chat",
+            meta: {
+              groupId: g.id,
+              messageId: playerGroupMessage.id,
+              targetId: playerTarget.id || "",
+            },
+          }
+        );
+      } catch (relationshipStatusError) {
+        console.warn(
+          "Group relationship-status update failed; message preserved:",
+          relationshipStatusError
+        );
+      }
+
       /* CLAUDE FIX R27 + semantic target guard:
          a named third person is not automatically the person the player flirted with / attacked. */
       const socialSignal =
@@ -37329,6 +37393,14 @@ ${addresseePromptInstruction(
   playerTarget.confidence,
   "group"
 )}
+
+${mine ? explicitRelationshipStatusPromptInstruction(
+  w,
+  w.meId,
+  mine,
+  playerTarget.id || "",
+  "group chat"
+) : ""}
 
 ${chatQuestionInstruction(
   w,
@@ -37745,6 +37817,30 @@ ${hist || ""}`
             n.meId
           ),
         });
+
+        try {
+          applyExplicitRelationshipStatusFromEvent(
+            n,
+            {
+              type: "group-message",
+              refId: r.id,
+              actorId: r.from,
+              targetIds: r.to ? [r.to] : [],
+              text: r.text,
+              source: "group-chat",
+              meta: {
+                groupId: g.id,
+                messageId: r.id,
+                targetId: r.to || "",
+              },
+            }
+          );
+        } catch (relationshipStatusError) {
+          console.warn(
+            "AI group relationship-status update failed; message preserved:",
+            relationshipStatusError
+          );
+        }
 
         noteMentions(
           n,
@@ -38467,6 +38563,31 @@ function LegacyGroundedChat({ w, update, setErr, openId, setOpenId, jump, noteRe
     ...(requestWorld.chats[ck] || []),
     outgoingMessage,
   ];
+
+  try {
+    applyExplicitRelationshipStatusFromEvent(
+      requestWorld,
+      {
+        type: "dm-message",
+        refId: outgoingMessage.id,
+        actorId: requestWorld.meId,
+        targetIds: [c.id],
+        text: t,
+        source: "direct-chat",
+        meta: {
+          targetId: c.id,
+          chatKey: ck,
+          messageId: outgoingMessage.id,
+        },
+      },
+      { recordMilestone: false }
+    );
+  } catch (statusPreviewError) {
+    console.warn(
+      "DM relationship-status preview failed; continuing with normal chat:",
+      statusPreviewError
+    );
+  }
 
   /*
    * A képernyőn is azonnal megjelenik
@@ -64381,10 +64502,387 @@ function groundedRepairKnownFalseBrentIncident(w) {
   });
 }
 
+
+/* MÁSVILÁG EXPLICIT RELATIONSHIP STATUS ACROSS CHAT / COMMENTS / POSTS v1 */
+const EXPLICIT_RELATIONSHIP_STATUS_EVENT_TYPES = new Set([
+  "dm-message", "group-message", "comment", "reply", "post"
+]);
+
+function explicitRelationshipStatusNormalizedText(value) {
+  return normalizeAddressText(
+    String(value || "")
+      .replace(/["“„][^"”“„\n]{0,240}["”“]/g, " ")
+      .replace(/[’‘]/g, "'")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+}
+
+function explicitRelationshipStatusIntent(value) {
+  const raw = String(value || "").trim();
+  const text = explicitRelationshipStatusNormalizedText(raw);
+  if (!text) return null;
+
+  if (
+    /^(?:why|what|how|when|where|who|did|do|does|are|is|was|were|should|would|could|can|will|miert|mit|hogyan|mikor|hol|ki|vajon|tenyleg)\b/.test(text) &&
+    /[?？]/.test(raw)
+  ) return null;
+
+  if (
+    /\b(?:did you say|you said|he said|she said|they said|someone said|i heard|we heard|apparently|rumou?r|gossip|reportedly|allitolag|azt mondta|azt mondtad|mondta hogy|mondtad hogy|hallottam|ugy hallottam|pletyka|hirlik)\b/.test(text)
+  ) return null;
+
+  if (
+    /\b(?:i(?:'m| am)\s+breaking\s+up(?:\s+with\b)?|i\s+broke\s+up\s+with\b|i\s+break\s+up\s+with\b|we\s+broke\s+up\b|we(?:'ve| have)\s+broken\s+up\b|and\s+i\s+broke\s+up\b|we(?:'re| are)\s+done(?:\s*[.!]|$)|we(?:'re| are)\s+over(?:\s*[.!]|$)|it(?:'s| is)\s+over\s+(?:between\s+us|for\s+us)\b|our\s+relationship\s+is\s+over\b|i(?:'m| am)\s+done\s+with\s+you\b|we(?:'re| are)\s+no\s+longer\s+(?:dating|a\s+couple|together)\b|we(?:'re| are)\s+not\s+(?:dating|a\s+couple|together)(?:\s+anymore)?\b|szakitok\b|szakitottam\b|szakitottunk\b|szetmentunk\b|vege\s+koztunk\b|vege\s+a\s+kapcsolatunknak\b|mar\s+nem\s+vagyunk\s+egyutt\b|nem\s+jarunk(?:\s+tobbe)?\b|nem\s+vagyunk\s+egy\s+par\b)/.test(text)
+  ) return { kind: "exes", action: "breakup" };
+
+  if (
+    /\b(?:we(?:'re| are)\s+married\b|we\s+got\s+married\b|and\s+i\s+are\s+married\b|i(?:'m| am)\s+married\s+to\b|hazasok\s+vagyunk\b|osszehazasodtunk\b)/.test(text)
+  ) return { kind: "spouse", action: "married" };
+
+  if (
+    /\b(?:we(?:'re| are)\s+engaged\b|we\s+got\s+engaged\b|and\s+i\s+are\s+engaged\b|i(?:'m| am)\s+engaged\s+to\b|jegyesek\s+vagyunk\b|eljegyeztuk\s+egymast\b)/.test(text)
+  ) return { kind: "engaged", action: "engaged" };
+
+  if (
+    /\b(?:we(?:'re| are)\s+fake[- ]dating\b|we(?:'re| are)\s+pretending\s+to\s+date\b|alkapcsolatban\s+vagyunk\b|csak\s+eljatszuk\s+hogy\s+jarunk\b)/.test(text)
+  ) return { kind: "fake-dating", action: "fake-dating" };
+
+  if (
+    /\b(?:we(?:'re| are)\s+officially\s+dating\b|we(?:'re| are)\s+dating\b|we(?:'re| are)\s+a\s+couple\b|we\s+made\s+it\s+official\b|and\s+i\s+are\s+dating\b|i(?:'m| am)\s+dating\b|you(?:'re| are)\s+my\s+(?:boyfriend|girlfriend|partner)\b|i(?:'m| am)\s+your\s+(?:boyfriend|girlfriend|partner)\b|hivatalosan\s+egyutt\s+vagyunk\b|egy\s+par\s+vagyunk\b|osszejottunk\b|jarunk\s+egymassal\b|jarok\b|te\s+vagy\s+a\s+(?:pasim|csajom|baratom|baratnom|parom)\b)/.test(text)
+  ) return { kind: "dating", action: "dating" };
+
+  if (
+    /\b(?:we(?:'re| are)\s+seeing\s+each\s+other\b|we(?:'re| are)\s+going\s+out\b|i(?:'m| am)\s+seeing\b|randizgatunk\b|randizunk\s+egymassal\b|randizom\b)/.test(text)
+  ) return { kind: "seeing", action: "seeing" };
+
+  if (/\b(?:we(?:'re| are)\s+exes\b|exek\s+vagyunk\b)/.test(text)) {
+    return { kind: "exes", action: "exes" };
+  }
+
+  return null;
+}
+
+function explicitRelationshipStatusBond(kind) {
+  return ({
+    seeing: "Randizgatnak",
+    dating: "Járnak",
+    engaged: "Jegyesek",
+    spouse: "Házastárs",
+    exes: "Exek",
+    "fake-dating": "Álkapcsolat",
+  })[String(kind || "")] || "";
+}
+
+function explicitRelationshipStatusCurrentKind(w, a, b) {
+  const shared = explicitMutualStatus(w, a, b);
+  if (shared) return shared;
+
+  const forward = directedRomanticOfficialKind(getRel(w, a, b) || EMPTY_REL);
+  const reverse = directedRomanticOfficialKind(getRel(w, b, a) || EMPTY_REL);
+  const mutual = mutualRomanticFloor(forward, reverse);
+  if (mutual) return mutual;
+
+  const kinds = new Set(["seeing", "dating", "engaged", "spouse", "fake-dating", "exes"]);
+  if (kinds.has(forward)) return forward;
+  if (kinds.has(reverse)) return reverse;
+  return "";
+}
+
+function explicitRelationshipStatusCurrentPartners(w, actorId) {
+  const active = new Set(["seeing", "dating", "engaged", "spouse", "fake-dating"]);
+  return socialProfiles(w)
+    .filter((person) => person && person.id && person.id !== actorId && !isMediaAccount(w, person.id))
+    .filter((person) => active.has(explicitRelationshipStatusCurrentKind(w, actorId, person.id)))
+    .map((person) => person.id);
+}
+
+function explicitRelationshipStatusTextLinksActorToPerson(w, actorId, personId, value) {
+  const person = charById(w, personId);
+  if (!person) return false;
+
+  const text = explicitRelationshipStatusNormalizedText(value);
+  const aliases = characterAddressAliases(person)
+    .map((alias) => normalizeAddressText(String(alias || "").replace(/^@/, "")))
+    .filter((alias) => alias.length >= 2);
+
+  return aliases.some((alias) => {
+    const core = escapeAddressRegex(alias);
+    const token = core + "[\\p{L}'’-]{0,12}";
+    return [
+      new RegExp("\\b" + token + "\\s+(?:and|&)\\s+i\\b", "iu"),
+      new RegExp("\\bi\\s+(?:and|&)\\s+" + token + "\\b", "iu"),
+      new RegExp("\\b(?:with|dating|seeing|married\\s+to|engaged\\s+to)\\s+" + token + "\\b", "iu"),
+      new RegExp("\\b" + token + "\\s+(?:is|['’]s)\\s+my\\s+(?:boyfriend|girlfriend|partner|husband|wife|fiance|fiancee|ex)\\b", "iu"),
+      new RegExp("\\b(?:szakit\\p{L}*|jarok|randizom)\\s+" + token + "\\b", "iu"),
+      new RegExp("\\b" + token + "[\\p{L}'’-]{0,12}\\s+(?:szakitottam|szakitottunk|szetmentunk|osszejottunk|jarok|randizom)\\b", "iu"),
+    ].some((re) => re.test(text));
+  });
+}
+
+function explicitRelationshipStatusDirectPairLanguage(value) {
+  return /\b(?:you|we|us|our|ours|between\s+us|our\s+relationship|veled|koztunk|kapcsolatunk|mi|egymassal|parom|pasim|csajom|baratom|baratnom)\b/.test(
+    explicitRelationshipStatusNormalizedText(value)
+  );
+}
+
+function explicitRelationshipStatusEventTarget(w, event) {
+  const actorId = String(event.actorId || "");
+  const text = String(event.text || "");
+  const meta = event.meta && typeof event.meta === "object" ? event.meta : {};
+  const type = String(event.type || "").toLowerCase();
+
+  let named = [];
+  try {
+    named = namedPeopleInText(w, text, actorId)
+      .filter((id) => id && id !== actorId && !isMediaAccount(w, id));
+  } catch (error) {
+    named = [];
+  }
+
+  const linkedNamed = named.find((id) =>
+    explicitRelationshipStatusTextLinksActorToPerson(w, actorId, id, text)
+  );
+  if (linkedNamed) return linkedNamed;
+
+  const directCandidate =
+    meta.targetId && String(meta.targetId) !== actorId
+      ? String(meta.targetId)
+      : (
+          Array.isArray(event.targetIds) &&
+          event.targetIds.length === 1 &&
+          String(event.targetIds[0]) !== actorId
+            ? String(event.targetIds[0])
+            : ""
+        );
+
+  if (
+    directCandidate &&
+    charById(w, directCandidate) &&
+    !isMediaAccount(w, directCandidate) &&
+    ["dm-message", "group-message", "comment", "reply"].includes(type) &&
+    explicitRelationshipStatusDirectPairLanguage(text)
+  ) {
+    return directCandidate;
+  }
+
+  const partners = explicitRelationshipStatusCurrentPartners(w, actorId);
+  return partners.length === 1 ? partners[0] : "";
+}
+
+function detectExplicitRelationshipStatusChange(w, event = {}) {
+  if (!w || !event) return null;
+
+  const type = String(event.type || "").toLowerCase();
+  if (!EXPLICIT_RELATIONSHIP_STATUS_EVENT_TYPES.has(type)) return null;
+
+  const actorId = String(event.actorId || "");
+  if (!actorId || isMediaAccount(w, actorId)) return null;
+
+  const intent = explicitRelationshipStatusIntent(event.text);
+  if (!intent) return null;
+
+  let targetId = explicitRelationshipStatusEventTarget(w, event);
+  if (!targetId || targetId === actorId || isMediaAccount(w, targetId) || !charById(w, targetId)) return null;
+
+  let aRel = getRel(w, actorId, targetId) || EMPTY_REL;
+  let bRel = getRel(w, targetId, actorId) || EMPTY_REL;
+  if (isPermanentFamilyBond(aRel) || isPermanentFamilyBond(bRel)) return null;
+
+  let currentKind = explicitRelationshipStatusCurrentKind(w, actorId, targetId);
+
+  if (
+    intent.kind === "exes" &&
+    !["seeing", "dating", "engaged", "spouse", "fake-dating", "exes"].includes(currentKind)
+  ) {
+    const partners = explicitRelationshipStatusCurrentPartners(w, actorId);
+    if (partners.length !== 1) return null;
+
+    targetId = partners[0];
+    aRel = getRel(w, actorId, targetId) || EMPTY_REL;
+    bRel = getRel(w, targetId, actorId) || EMPTY_REL;
+    if (isPermanentFamilyBond(aRel) || isPermanentFamilyBond(bRel)) return null;
+    currentKind = explicitRelationshipStatusCurrentKind(w, actorId, targetId);
+  }
+
+  if (currentKind === intent.kind) return null;
+
+  const rank = { seeing: 1, dating: 2, engaged: 3, spouse: 4 };
+  if (
+    intent.kind !== "exes" &&
+    intent.kind !== "fake-dating" &&
+    currentKind !== "exes" &&
+    (rank[currentKind] || 0) > (rank[intent.kind] || 0)
+  ) {
+    return null;
+  }
+
+  return {
+    actorId,
+    targetId,
+    kind: intent.kind,
+    action: intent.action,
+    eventType: type,
+    refId: String(event.refId || event.id || ""),
+    text: String(event.text || "").slice(0, 500),
+    beforeStatus: officialRelationshipStatusForPair(w, actorId, targetId, CURRENT_LANG),
+  };
+}
+
+function finalizeExplicitRelationshipStatusChange(w, change) {
+  if (!w || !change) return;
+
+  const afterStatus = officialRelationshipStatusForPair(
+    w,
+    change.actorId,
+    change.targetId,
+    CURRENT_LANG
+  );
+
+  try {
+    fullSpecRecordMilestone(
+      w,
+      change.actorId,
+      change.targetId,
+      change.beforeStatus || "",
+      afterStatus,
+      change.eventType || "relationship",
+      change.text || change.action || "explicit relationship status change"
+    );
+  } catch (error) {
+    console.warn("[relationship-status-explicit] milestone record failed", error);
+  }
+
+  [change.actorId, change.targetId]
+    .filter((id) => id && !isHuman(w, id) && charById(w, id))
+    .forEach((id) => {
+      const otherId = id === change.actorId ? change.targetId : change.actorId;
+      try {
+        rememberAboutTarget(w, id, otherId, {
+          kind: "event",
+          source: "explicit_relationship_status",
+          confidence: 1,
+          text:
+            "Official relationship status changed to " +
+            officialKindLabel(change.kind, worldLanguage(w, id)) +
+            ": " +
+            cut(change.text || change.action || "", 220),
+        });
+      } catch (error) {}
+    });
+}
+
+function applyExplicitRelationshipStatusFromEvent(w, event = {}, options = {}) {
+  const change = detectExplicitRelationshipStatusChange(w, event);
+  if (!change) return null;
+
+  const bond = explicitRelationshipStatusBond(change.kind);
+  if (!bond) return null;
+
+  if (
+    !w.relationshipOfficialOverrides ||
+    typeof w.relationshipOfficialOverrides !== "object" ||
+    Array.isArray(w.relationshipOfficialOverrides)
+  ) {
+    w.relationshipOfficialOverrides = {};
+  }
+
+  const key = relationshipOfficialOverrideKey(change.actorId, change.targetId);
+  w.relationshipOfficialOverrides[key] = {
+    kind: change.kind,
+    source: "explicit-" + String(change.eventType || "conversation"),
+    at: now(),
+    actorId: change.actorId,
+    refId: change.refId || "",
+    explicitEvent: true,
+  };
+
+  setRel(w, change.actorId, change.targetId, {
+    bond,
+    type: "",
+    fixed: false,
+    why: cut(change.text || change.action || "", 160),
+  });
+
+  setRel(w, change.targetId, change.actorId, {
+    bond,
+    type: "",
+    fixed: false,
+    why: cut(change.text || change.action || "", 160),
+  });
+
+  try {
+    const sim = ensureSimState(w);
+    if (sim) sim.automaticFollowSyncDirty = true;
+  } catch (error) {}
+
+  if (options.recordMilestone !== false) {
+    finalizeExplicitRelationshipStatusChange(w, change);
+  }
+
+  return change;
+}
+
+function explicitRelationshipStatusPromptInstruction(
+  w,
+  actorId,
+  text,
+  directTargetId = "",
+  surface = "conversation"
+) {
+  const change = detectExplicitRelationshipStatusChange(w, {
+    type: surface === "group chat" ? "group-message" : "dm-message",
+    actorId,
+    targetIds: directTargetId ? [directTargetId] : [],
+    text,
+    source: surface,
+    meta: { targetId: directTargetId || "" },
+  });
+
+  if (!change) return "";
+
+  return (
+    "\nRELATIONSHIP STATUS CHANGE IN THIS TURN — HARD FACT:\n" +
+    "- " +
+    nameOfIn(w, change.actorId) +
+    " explicitly changes the shared relationship with " +
+    nameOfIn(w, change.targetId) +
+    " to " +
+    officialKindLabel(change.kind, worldLanguage(w, actorId)) +
+    ".\n" +
+    "- This takes effect NOW. React from the state AFTER that change; do not keep treating the old official status as current.\n"
+  );
+}
+
+
 function recordSocialEvent(w, event = {}) {
   groundedRepairKnownFalseBrentIncident(w);
-  const result = legacyGroundedRecordSocialEvent(w, event);
+
+  let explicitRelationshipStatusChange = null;
   try {
+    explicitRelationshipStatusChange =
+      applyExplicitRelationshipStatusFromEvent(
+        w,
+        event,
+        { recordMilestone: false }
+      );
+  } catch (error) {
+    console.warn(
+      "[relationship-status-explicit] pre-record detection failed; social event preserved",
+      error
+    );
+  }
+
+  const result = legacyGroundedRecordSocialEvent(w, event);
+
+  try {
+    if (explicitRelationshipStatusChange) {
+      finalizeExplicitRelationshipStatusChange(
+        w,
+        explicitRelationshipStatusChange
+      );
+    }
+
     const ref = groundedSourceRef(event);
     groundedEventLog(w, String(event.type || "social-event"), "recorded", String(event.text || event.type || "Social event recorded."), ref, { actorId: event.actorId || "", targetIds: event.targetIds || [] });
     if (String(event.type || "").toLowerCase() === "dm-message") groundedRegisterIncomingDm(w, event);
