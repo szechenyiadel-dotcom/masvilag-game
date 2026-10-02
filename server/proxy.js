@@ -22,7 +22,9 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const MISTRAL_API_KEY = String(process.env.MISTRAL_API_KEY || "").trim();
 const MISTRAL_MODEL = String(process.env.MISTRAL_MODEL || "").trim();
 const GROQ_API_KEY = String(process.env.GROQ_API_KEY || "").trim();
+const GROQ_API_KEY_2 = String(process.env.GROQ_API_KEY_2 || "").trim();
 const GROQ_MODEL = String(process.env.GROQ_MODEL || "").trim();
+const GROQ_MODEL_2 = String(process.env.GROQ_MODEL_2 || GROQ_MODEL || "").trim();
 /* New exact name first; historical Gemini fallback name remains accepted. */
 const GEMINI_MODEL_ENV = String(process.env.GEMINI_MODEL || process.env.GEMINI_FALLBACK_MODEL || "").trim();
 const AI_PROVIDER_ORDER_ENV = String(process.env.AI_PROVIDER_ORDER || "").trim();
@@ -2258,7 +2260,7 @@ function getProvider(body = {}) {
       body?.provider || ""
     ).toLowerCase();
 
-  if (provider === "mistral" || provider === "groq") return provider;
+  if (provider === "mistral" || provider === "groq" || provider === "groq2") return provider;
 
   if (provider === "gemini") {
     return "gemini";
@@ -5188,7 +5190,7 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
   const providerTimeout =
     provider === "openrouter" || provider === "openrouter2" || provider === "openrouter3"
       ? Math.min(baseTimeout, 15000)
-      : provider === "groq"
+      : provider === "groq" || provider === "groq2"
         ? Math.min(baseTimeout, 35000)
         : baseTimeout;
 
@@ -5235,6 +5237,7 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
+  if (provider === "groq2") return GROQ_MODEL_2 || GROQ_MODEL || "";
   if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim();
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
   if (provider === "openrouter2") return String(process.env.OPENROUTER_MODEL_2 || "openrouter/free").trim();
@@ -5257,7 +5260,8 @@ async function callMessageProvider(provider, body) {
   if (provider === "openrouter") return proxyCompatibleMessage("openrouter", process.env.OPENROUTER_API_KEY, providerModel("openrouter", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openrouter2") return proxyCompatibleMessage("openrouter2", process.env.OPENROUTER_API_KEY_2, providerModel("openrouter2", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "mistral") return proxyCompatibleMessage("mistral", MISTRAL_API_KEY, providerModel("mistral", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
-  if (provider === "groq") return proxyCompatibleMessage("groq", GROQ_API_KEY, GROQ_MODEL, "https://api.groq.com/openai/v1/chat/completions", body);
+  if (provider === "groq") return proxyCompatibleMessage("groq", GROQ_API_KEY, providerModel("groq", body), "https://api.groq.com/openai/v1/chat/completions", body);
+  if (provider === "groq2") return proxyCompatibleMessage("groq2", GROQ_API_KEY_2, providerModel("groq2", body), "https://api.groq.com/openai/v1/chat/completions", body);
   if (provider === "openai") {
     const result = await proxyOpenAIMessage(body);
     return { ...result, provider: "openai", model: providerModel("openai", body) };
@@ -5273,6 +5277,7 @@ async function callMessageProvider(provider, body) {
 function configuredAIProvider(provider) {
   if (provider === "mistral") return Boolean(MISTRAL_API_KEY && MISTRAL_MODEL);
   if (provider === "groq") return Boolean(GROQ_API_KEY && GROQ_MODEL);
+  if (provider === "groq2") return Boolean(GROQ_API_KEY_2 && (GROQ_MODEL_2 || GROQ_MODEL));
   if (provider === "gemini") return GEMINI_KEYS.length > 0;
   if (provider === "openrouter3") return Boolean(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_MODEL_3);
   if (provider === "openrouter") return Boolean(process.env.OPENROUTER_API_KEY);
@@ -5289,7 +5294,7 @@ function providerOrder(requestedProvider) {
     .filter(Boolean);
   const raw = configured.length
     ? configured
-    : [requestedProvider, "openrouter3", "openrouter2", "openrouter", "mistral", "groq", "gemini", "openai", "anthropic"];
+    : [requestedProvider, "openrouter3", "openrouter2", "openrouter", "mistral", "groq", "groq2", "gemini", "openai", "anthropic"];
   const ordered = [];
   for (const provider of raw) {
     if (!ordered.includes(provider) && configuredAIProvider(provider)) ordered.push(provider);
@@ -5555,9 +5560,10 @@ function providerAllowedForBody(provider, body) {
 /* Provider roles are intentionally strict.
    - OpenRouter: ALL generated writing/social/roleplay work — scenes, DMs, group chat, comments/replies, feed posts and Notes.
    - Mistral: ONLY the final fallback for those writing/social/roleplay tasks.
-   - Groq: ONLY the designated small, fast background classifiers/checks; Gemini is its fallback.
-   - Gemini: character-sheet/canon reading and every other non-writing background task.
-   Gemini must never generate social/roleplay writing; Mistral must never receive background/canon work. */
+   - Gemini: primary provider for canon/background work.
+   - Groq: primary provider for designated small background checks and first fallback for Gemini work.
+   - Groq2: second independent Groq-key fallback for BOTH Gemini-owned and Groq-owned background work.
+   Gemini/Groq/Groq2 must never replace OpenRouter for social/roleplay writing. */
 function taskProviderOrder(requestedProvider, body) {
   const source = String(body?.source || inferAIRequestSource(body) || "").trim().toLowerCase();
   const chars = aiRequestChars(body);
@@ -5589,14 +5595,11 @@ function taskProviderOrder(requestedProvider, body) {
   if (openRouterSources.has(source)) {
     raw = ["openrouter3", "openrouter2", "openrouter", "mistral"];
   } else if (deepSheetSources.has(source)) {
-    /* Gemini owns canon/background reading; Groq is the automatic outage fallback. */
-    raw = ["gemini", "groq"];
+    raw = ["gemini", "groq", "groq2"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
-    raw = ["groq", "gemini"];
+    raw = ["groq", "groq2", "gemini"];
   } else {
-    /* Generic background work prefers Gemini but must keep running if Gemini is
-       rate-limited, over quota, temporarily unavailable or times out. */
-    raw = ["gemini", "groq"];
+    raw = ["gemini", "groq", "groq2"];
   }
 
   return raw.filter((provider, index, all) =>
