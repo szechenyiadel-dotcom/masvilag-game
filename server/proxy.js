@@ -5194,13 +5194,24 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
         ? Math.min(baseTimeout, 35000)
         : baseTimeout;
 
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), providerTimeout);
   try {
-    const r = await fetchWithTimeout(endpoint, {
+    /* Keep the SAME abort signal alive until the entire response body is read.
+       Previously fetchWithTimeout() cleared its timer as soon as headers arrived,
+       so a provider could stream/hang the body for another 40–60 seconds. */
+    const r = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
       body: JSON.stringify(buildCompatibleChatPayload(body, model)),
-    }, providerTimeout);
-    const payload = await responseJsonSafe(r);
+      signal: ctrl.signal,
+    });
+    const raw = await r.text();
+    let payload = {};
+    if (raw) {
+      try { payload = JSON.parse(raw); }
+      catch { payload = { error: { message: raw } }; }
+    }
     if (!r.ok) {
       return { ok: false, status: r.status, payload, retryAfter: r.headers.get("retry-after"), provider, model };
     }
@@ -5218,6 +5229,8 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
       provider,
       model,
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
