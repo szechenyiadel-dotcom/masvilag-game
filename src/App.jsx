@@ -9538,6 +9538,33 @@ async function askWorldJSONInteractive(
   }
 }
 
+/* Explicit writing lanes: generated social/roleplay text must never fall through
+   the generic askWorldJSON background lane. The source is forced AFTER options
+   so a custom caller label cannot accidentally route writing to Gemini. */
+function askWorldWritingJSON(source, w, system, prompt, options = {}) {
+  return askWorldJSON(
+    w,
+    system,
+    prompt,
+    {
+      ...options,
+      source: String(source || ""),
+    }
+  );
+}
+
+async function askWorldWritingJSONInteractive(source, w, system, prompt, options = {}) {
+  return askWorldJSONInteractive(
+    w,
+    system,
+    prompt,
+    {
+      ...options,
+      source: String(source || ""),
+    }
+  );
+}
+
 
 /* Rövid emlékeztető, ami minden kérés VÉGÉRE kerül. A hosszú szabálykönyv
    eleje elsikkad; ami közvetlenül az írás előtt áll, az tapad. */
@@ -27001,7 +27028,7 @@ async function legacyVoiceStyleGenComments(w, post, options = {}) {
   /* v71: understand the post once before any character applies a subjective lens. */
   const postMeaning = await analyzeSocialPostMeaning(w, post);
 
-  const out = await askWorldJSON(
+  const out = await askWorldWritingJSON("comments", 
     w,
     engineFor(w),
     `${worldContext(
@@ -27385,7 +27412,7 @@ async function ensureAutomaticCommentQuota(w, post, baseOut, label, minComments 
   if (!candidates.length) return baseOut;
 
   try {
-    const repairOut = await askWorldJSONInteractive(
+    const repairOut = await askWorldWritingJSONInteractive("comments", 
       w,
       engineFor(w),
       `${worldContext(
@@ -29384,7 +29411,7 @@ async function legacyVoiceStyleGenReply(w, post, comment, forcedResponderId = ""
   const th = compactPlayerReplyThread(w, post, comment);
 
   let out =
-    await askWorldJSON(
+    await askWorldWritingJSON("comments", 
       w,
       engineFor(w),
     `${worldContext(
@@ -29680,7 +29707,7 @@ Formátum:
     ) {
       try {
         const repaired =
-          await askWorldJSONInteractive(
+          await askWorldWritingJSONInteractive("comments", 
             w,
             engineFor(w),
             `${worldContext(
@@ -29837,7 +29864,7 @@ JSON: {"reply":"short natural reply"}${commentReplyLatestTail(w, post, comment)}
 
       changed = true;
       try {
-        const friendRepair = await askWorldJSONInteractive(
+        const friendRepair = await askWorldWritingJSONInteractive("comments", 
           w,
           engineFor(w),
           `${worldContext(w, [responderId], true, responderId)}
@@ -29916,7 +29943,7 @@ JSON: {"reply":"short friendship-consistent reply"}${commentReplyLatestTail(w, p
 
     if (!alreadyPresent) {
       try {
-        const repairedBystander = await askWorldJSONInteractive(
+        const repairedBystander = await askWorldWritingJSONInteractive("comments", 
           w,
           engineFor(w),
           `${worldContext(
@@ -30466,7 +30493,7 @@ async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
     )
     .join("\n");
 
-  return askWorldJSON(
+  return askWorldWritingJSON("feed-post", 
     w,
     engineFor(w),
     `${worldContext(
@@ -30759,7 +30786,7 @@ async function genFocusedWorldStep(w) {
 
   const selfState = (w.charMemory && w.charMemory[author.id] && w.charMemory[author.id].selfState) || {};
 
-  return askWorldJSON(
+  return askWorldWritingJSON("feed-post", 
     w,
     engineFor(w),
     `${worldContext(
@@ -35102,7 +35129,7 @@ function SceneNew({ w, onClose, onCreate, setErr }) {
     setBusy(true);
     try {
       const cast = w.chars.filter((c) => ids.indexOf(c.id) >= 0);
-      const out = sanitizeRoleplayAiOutput(await askWorldJSON(w, engineFor(w), `${worldContext(w, ids.length ? ids : null, false, null)}
+      const out = sanitizeRoleplayAiOutput(await askWorldWritingJSON("scene", w, engineFor(w), `${worldContext(w, ids.length ? ids : null, false, null)}
 
 Találj ki egy jelenetet ${ids.length ? "ezekkel a szereplőkkel: " + cast.map((c) => c.name).join(", ") : "a világ szereplőivel"}.
 Legyen benne feszültség vagy tét, és kapcsolódjon ahhoz, ami mostanában történt.
@@ -35782,7 +35809,7 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
         }: ${t.text}`;
       }).join("\n");
 
-      let out = sanitizeRoleplayAiOutput(await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
+      let out = sanitizeRoleplayAiOutput(await askWorldWritingJSONInteractive("scene", w, engineFor(w), `${worldContext(w, scene.cast, true, null)}
 
 EVENT / JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
@@ -36103,7 +36130,7 @@ EMLÉKEZET: ${spread(memory, 900)}`;
           })
           .join("\n\n");
 
-        const retryOut = sanitizeRoleplayAiOutput(await askWorldJSONInteractive(
+        const retryOut = sanitizeRoleplayAiOutput(await askWorldWritingJSONInteractive("scene", 
           w,
           engineFor(w),
           `ROLEPLAY ÚJRAGENERÁLÁS — az előző kimenet nem volt használható, mert minden sora túl közel állt korábbi megszólalásokhoz vagy hibás szereplő-ID-t használt.
@@ -36220,7 +36247,7 @@ VÁLASZ CSAK JSON:
               .join("\n");
 
             const fairnessRepair = sanitizeRoleplayAiOutput(
-              await askWorldJSONInteractive(
+              await askWorldWritingJSONInteractive("scene", 
                 w,
                 engineFor(w),
                 `${worldContext(w, missingFairIds, true, null)}
@@ -36553,7 +36580,7 @@ JSON ONLY:
         return t.authorId === "narrator" ? `(${t.text})` : `${a ? a.name : "?"}: ${t.text}`;
       }).join("\n");
 
-      const out = sanitizeRoleplayAiOutput(await askWorldJSONInteractive(w, engineFor(w), `${worldContext(w, scene.cast, false, null)}
+      const out = sanitizeRoleplayAiOutput(await askWorldWritingJSONInteractive("scene", w, engineFor(w), `${worldContext(w, scene.cast, false, null)}
 
 EVENT / JELENET: ${scene.title}
 HELYZET: ${scene.setting || "-"}
@@ -37368,7 +37395,7 @@ const turn = async (mine) => {
 
     let out;
     try {
-      out = await askWorldJSONInteractive(
+      out = await askWorldWritingJSONInteractive("group-chat", 
         w,
         engineFor(w),
       `${worldContext(
@@ -37644,7 +37671,7 @@ Formátum:
       const fallbackChar = fallbackId ? charById(w, fallbackId) : null;
       if (!fallbackChar) throw primaryGroupErr;
 
-      out = await askWorldJSONInteractive(
+      out = await askWorldWritingJSONInteractive("group-chat", 
         w,
         engineFor(w),
         `${worldContext(w, [fallbackChar.id], false, fallbackChar.id)}
@@ -37777,7 +37804,7 @@ ${hist || ""}`
             ? rows[rows.length - 1].from
             : (playerTarget.id || w.meId);
 
-          const repair = await askWorldJSONInteractive(
+          const repair = await askWorldWritingJSONInteractive("group-chat", 
             w,
             engineFor(w),
             `${worldContext(w, [missingChar.id], false, missingChar.id)}
@@ -38408,7 +38435,7 @@ async function askDirectDmJSONInteractive(w, system, prompt, options = {}) {
 
   directDmPromptDebugLog(finalPrompt, c, latestText, false);
 
-  const out = await askWorldJSONInteractive(
+  const out = await askWorldWritingJSONInteractive("dm", 
     w,
     system,
     finalPrompt,
@@ -38438,7 +38465,7 @@ async function askDirectDmJSONInteractive(w, system, prompt, options = {}) {
 
   directDmPromptDebugLog(retryPrompt, c, latestText, true);
 
-  const retryOut = await askWorldJSONInteractive(
+  const retryOut = await askWorldWritingJSONInteractive("dm", 
     w,
     system,
     retryPrompt,
@@ -41634,7 +41661,7 @@ async function legacyVoiceStyleGenDM(w, bot) {
     )
     .join("\n");
 
-  return askWorldJSON(
+  return askWorldWritingJSON("dm", 
     w,
     engineFor(w),
     `${worldContext(
@@ -41974,7 +42001,7 @@ Ha van:
 async function genForcedEverydayDM(w, bot) {
   if (!w || !bot) return null;
   const rel = getRel(w, bot.id, w.meId);
-  return askWorldJSON(
+  return askWorldWritingJSON("dm", 
     w,
     engineFor(w),
     `${worldContext(w,[bot.id],false,bot.id)}
@@ -42075,7 +42102,7 @@ function pickNoteReactionCast(w, authorId, processedBy) {
 
 /* Egy bot kiír magának egy jegyzetet. */
 async function legacyVoiceStyleGenNote(w, bot) {
-  return askWorldJSON(
+  return askWorldWritingJSON("notes", 
     w,
     engineFor(w),
     `${worldContext(
@@ -42224,7 +42251,7 @@ async function genNoteReact(w, note) {
     .join(", ");
 
   /* CLAUDE FIX R35: the answer was returned before the cast ids were attached */
-  const out = await askWorldJSON(
+  const out = await askWorldWritingJSON("comments", 
     w,
     engineFor(w),
     `${worldContext(
@@ -43780,7 +43807,7 @@ async function genGossipNetworkEcho(w, payload) {
     ? `PUBLIC POST THEY CAN SEE:\nAuthor: ${nameOfIn(w, post.authorId)} [${post.authorId}]\nCaption: ${cut(String(post.text || ""), 800)}\nImage: ${cut(String(post.imageDescription || ""), 360)}`
     : "There is no single existing post that naturally fits this rumor, so one informed character may make their own social-media post/vaguepost/callout.";
 
-  return askWorldJSON(
+  return askWorldWritingJSON("feed-post", 
     w,
     `You generate a tiny amount of character-faithful social-media fallout from a rumor that genuinely propagated through an agent network. This is NOT an omniscient narrator. Every speaker may use only the rumor knowledge, source provenance, relationship and confidence explicitly supplied. This is an 18+ world: correctly understand adult slang, thirst jokes, sexual innuendo, double entendres and suggestive wordplay already present in the supplied rumor/post instead of sanitizing them into a literal innocent reading. For known adults, reactions may acknowledge that subtext in a non-graphic character-specific way. Never sexualize a minor/unknown-age person and never invent an actual sexual event that the source did not establish. Keep output compact JSON.`,
     `${actorContext}
@@ -45057,7 +45084,7 @@ információként jutott hozzá. Használhatsz "állítólag", "word is",
 NE nevezd meg, ki szivárogtatta ki, mert ezt a rendszer nem tudja.
 `;
 
-  return askWorldJSON(
+  return askWorldWritingJSON("feed-post", 
     w,
     engineFor(w),
     `${worldContext(
@@ -46192,7 +46219,7 @@ async function genGossipReactions(w,post,cast){
   const castIds=cast.map((x)=>x.id);
   const allowedTargets=[post.authorId,...(story.mentionedIds||[])].filter(Boolean).filter((id,index,arr)=>arr.indexOf(id)===index);
   const currentComments=safePostComments(post).slice(-8).map((c)=>{const a=charById(w,c.authorId);return`${a?a.name:"?"}: ${c.text}`;}).join("\n");
-  return askWorldJSON(w,engineFor(w),`${worldContext(w,[...castIds,...(story.mentionedIds||[]).filter((id)=>!isHuman(w,id))].filter((id,index,arr)=>arr.indexOf(id)===index),true,null)}
+  return askWorldWritingJSON("comments", w,engineFor(w),`${worldContext(w,[...castIds,...(story.mentionedIds||[]).filter((id)=>!isHuman(w,id))].filter((id,index,arr)=>arr.indexOf(id)===index),true,null)}
 
 FRISS GOSSIP MEDIA POSZT:
 ${nameOfIn(w,post.authorId)}
@@ -46321,7 +46348,7 @@ async function genRumorEvolution(w,post){
   if(!post||!post.gossipStory)return{skip:true};
   const media=charById(w,post.authorId);
   const publicComments=safePostComments(post).slice(-10).map((c)=>{const a=charById(w,c.authorId);return`${a?a.name:"?"}: ${c.text}`;}).join("\n");
-  return askWorldJSON(w,engineFor(w),`${worldContext(w,(post.gossipStory.mentionedIds||[]).filter((id)=>!isHuman(w,id)),false,null)}
+  return askWorldWritingJSON("feed-post", w,engineFor(w),`${worldContext(w,(post.gossipStory.mentionedIds||[]).filter((id)=>!isHuman(w,id)),false,null)}
 
 ${media?media.name:"GOSSIP MEDIA"} EGY KORÁBBI PLETYKÁJA TOVÁBB TERJED.
 EREDETI HEADLINE: ${post.gossipStory.headline||"-"}
@@ -46738,7 +46765,7 @@ async function genPopupEvent(w,seed){
     ? `EZ MOST VALÓDI RANDOM / AMBIENT LIVE-WORLD EVENT. Hozz létre egy FRISS, váratlan, de a meglévő kánonból, életkorból, élethelyzetből, rutinból és kapcsolatokból természetesen következő helyzetet. Lehet például: valaki odalép a játékoshoz egy HOZZÁJUK ILLŐ helyen; váratlanul elhívja valahova; meghívás érkezik buliba/randira/eseményre; egy rivális konfrontál; valaki segítséget kér; kínos helyzet alakul ki mások előtt; társas kihívás, lehetőség, félreértés vagy spontán találkozás történik. CSAK létező karaktereket használj. Ne találj ki múltbeli tényt vagy oda nem illő intézményt csak azért, hogy dráma legyen.`
     : `Ez a popup a fenti, MÁR MEGTÖRTÉNT social helyzet következménye. Ne találj ki új alap-eseményt vagy új személyt; a következmény a valódi eseményből nőjön ki.`;
 
-  return askWorldJSON(w,engineFor(w),`${worldContext(w,involved.filter((id)=>!isHuman(w,id)),false,null)}
+  return askWorldWritingJSON("scene", w,engineFor(w),`${worldContext(w,involved.filter((id)=>!isHuman(w,id)),false,null)}
 
 A JÁTÉKOS KARAKTERE EGY VÁRATLAN HELYZET KÖZEPÉBE KERÜL.
 TRIGGER: ${seed.type}\n${seed.text}
@@ -46929,7 +46956,7 @@ async function genPopupEventReroll(w,event){
   ].slice(-5).join("\n---\n");
   const cast=(w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)).slice(0,10).map((c)=>c.id);
 
-  return askWorldJSON(w,engineFor(w),`${worldContext(w,cast,false,null)}
+  return askWorldWritingJSON("scene", w,engineFor(w),`${worldContext(w,cast,false,null)}
 
 A játékos a 🎲 kockával ÚJ VÁLTOZATOT kér ugyanahhoz a jelenlegi világpillanathoz.
 Az előző variánsok, amiket NEM szabad lényegében megismételni:
@@ -46991,7 +47018,7 @@ async function genPopupCustomOutcome(w,event,customText){
   if(!event||!text)return{skip:true};
   const cast=[...(event.involvedIds||[]),...(event.witnessIds||[])].filter((id,index,arr)=>id&&!isHuman(w,id)&&arr.indexOf(id)===index).slice(0,8);
 
-  return askWorldJSON(w,engineFor(w),`${worldContext(w,cast,false,null)}
+  return askWorldWritingJSON("scene", w,engineFor(w),`${worldContext(w,cast,false,null)}
 
 POPUP HELYZET:
 ${event.title}\n${event.text}
@@ -47210,7 +47237,7 @@ async function genPopupPlayerActionText(
       : null;
 
   const out=
-    await askWorldJSONInteractive(
+    await askWorldWritingJSONInteractive(mode === "private" ? "dm" : "feed-post", 
       w,
       engineFor(w),
       `${worldContext(
@@ -47325,7 +47352,7 @@ async function genPopupPrivateReply(
     );
 
   const out=
-    await askWorldJSONInteractive(
+    await askWorldWritingJSONInteractive("dm", 
       requestWorld,
       engineFor(requestWorld),
       `${worldContext(
@@ -51680,7 +51707,7 @@ async function genAutoGroup(w) {
     .map((p) => `${nameOfIn(w, p.authorId)}: ${p.text}`)
     .join("\n");
 
-  return askWorldJSON(
+  return askWorldWritingJSON("group-chat", 
     w,
     engineFor(w),
     `${worldContext(
@@ -51955,7 +51982,7 @@ A felsorolt karakterek közül azok reagáljanak, akik
 természetesen támogatnák, hype-olnák vagy megvédenék.
 `;
 
-  return askWorldJSON(
+  return askWorldWritingJSON("comments", 
     w,
     engineFor(w),
     `${worldContext(
@@ -53196,7 +53223,7 @@ async function genRoleplayInitiation(w, bot) {
     .map((m) => `${m && m.from === "them" ? bot.name : w.player.name}: ${m && m.text || ""}`)
     .join("\n");
 
-  return askWorldJSON(
+  return askWorldWritingJSON("scene", 
     w,
     engineFor(w),
     `${worldContext(w, [bot.id], false, bot.id)}
@@ -53271,7 +53298,7 @@ JSON:
 
 async function genForcedEverydayRoleplayInvitation(w, bot) {
   if (!w || !bot) return null;
-  return askWorldJSON(
+  return askWorldWritingJSON("scene", 
     w,
     engineFor(w),
     `${worldContext(w,[bot.id],false,bot.id)}
@@ -54969,7 +54996,7 @@ const memberIds = members.map(
     )
     .join("\n");
 
-  return askWorldJSON(
+  return askWorldWritingJSON("group-chat", 
     w,
     engineFor(w),
     `${worldContext(
@@ -55242,7 +55269,7 @@ async function legacyGroundedGenNpcPairReaction(w, actor, target, sourceEvent) {
     '{"skip":false,"mode":"public_post or offscreen","text":"short public post if mode=public_post, otherwise empty","summary":"one concrete sentence describing the AI-AI reaction/confrontation","tone":"jealous/hostile/hurt/protective/etc"}'
   ].join("\n\n");
 
-  return askWorldJSON(w, engineFor(w), prompt, { maxTokens: 650, priority: 16 });
+  return askWorldWritingJSON("feed-post", w, engineFor(w), prompt, { maxTokens: 650, priority: 16 });
 }
 
 /* Egy központi szimulációs akció futtatása. Mindig pontosan egy AI-hívás. */
@@ -64241,7 +64268,7 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
 
     let out;
     try {
-      out = await askWorldJSON(
+      out = await askWorldWritingJSON("comments", 
         w,
         playerPostCommentPrivateSystem(w, post),
         prompt,
