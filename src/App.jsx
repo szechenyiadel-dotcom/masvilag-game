@@ -64533,7 +64533,7 @@ function explicitRelationshipStatusIntent(value) {
   ) return null;
 
   if (
-    /\b(?:i(?:'m| am)\s+breaking\s+up(?:\s+with\b)?|i\s+broke\s+up\s+with\b|i\s+break\s+up\s+with\b|we\s+broke\s+up\b|we(?:'ve| have)\s+broken\s+up\b|and\s+i\s+broke\s+up\b|we(?:'re| are)\s+done(?:\s*[.!]|$)|we(?:'re| are)\s+over(?:\s*[.!]|$)|it(?:'s| is)\s+over\s+(?:between\s+us|for\s+us)\b|our\s+relationship\s+is\s+over\b|i(?:'m| am)\s+done\s+with\s+you\b|we(?:'re| are)\s+no\s+longer\s+(?:dating|a\s+couple|together)\b|we(?:'re| are)\s+not\s+(?:dating|a\s+couple|together)(?:\s+anymore)?\b|szakitok\b|szakitottam\b|szakitottunk\b|szetmentunk\b|vege\s+koztunk\b|vege\s+a\s+kapcsolatunknak\b|mar\s+nem\s+vagyunk\s+egyutt\b|nem\s+jarunk(?:\s+tobbe)?\b|nem\s+vagyunk\s+egy\s+par\b)/.test(text)
+    /\b(?:i(?:'m| am)\s+breaking\s+up(?:\s+with\b)?|i\s+broke\s+up\s+with\b|i\s+break\s+up\s+with\b|we\s+broke\s+up\b|we(?:'ve| have)\s+broken\s+up\b|and\s+i\s+broke\s+up\b|we(?:'re| are)\s+done(?:\s*[.!]|$)|we(?:'re| are)\s+over(?:\s*[.!]|$)|it(?:'s| is)\s+over\s+(?:between\s+us|for\s+us)\b|our\s+relationship\s+is\s+over\b|i(?:'m| am)\s+done\s+with\s+you\b|we(?:'re| are)\s+no\s+longer\s+(?:dating|a\s+couple|together)\b|we(?:'re| are)\s+not\s+(?:dating|a\s+couple|together)(?:\s+anymore)?\b|szakitok\s+veled\b|szakitottunk\b|szetmentunk\b|vege\s+koztunk\b|vege\s+a\s+kapcsolatunknak\b|mar\s+nem\s+vagyunk\s+egyutt\b|nem\s+jarunk(?:\s+tobbe)?\b|nem\s+vagyunk\s+egy\s+par\b)/.test(text)
   ) return { kind: "exes", action: "breakup" };
 
   if (
@@ -64549,7 +64549,7 @@ function explicitRelationshipStatusIntent(value) {
   ) return { kind: "fake-dating", action: "fake-dating" };
 
   if (
-    /\b(?:we(?:'re| are)\s+officially\s+dating\b|we(?:'re| are)\s+dating\b|we(?:'re| are)\s+a\s+couple\b|we\s+made\s+it\s+official\b|and\s+i\s+are\s+dating\b|i(?:'m| am)\s+dating\b|you(?:'re| are)\s+my\s+(?:boyfriend|girlfriend|partner)\b|i(?:'m| am)\s+your\s+(?:boyfriend|girlfriend|partner)\b|hivatalosan\s+egyutt\s+vagyunk\b|egy\s+par\s+vagyunk\b|osszejottunk\b|jarunk\s+egymassal\b|jarok\b|te\s+vagy\s+a\s+(?:pasim|csajom|baratom|baratnom|parom)\b)/.test(text)
+    /\b(?:we(?:'re| are)\s+officially\s+dating\b|we(?:'re| are)\s+dating\b|we(?:'re| are)\s+a\s+couple\b|we\s+made\s+it\s+official\b|and\s+i\s+are\s+dating\b|i(?:'m| am)\s+dating\b|you(?:'re| are)\s+my\s+(?:boyfriend|girlfriend)\b|i(?:'m| am)\s+your\s+(?:boyfriend|girlfriend)\b|hivatalosan\s+egyutt\s+vagyunk\b|egy\s+par\s+vagyunk\b|es\s+en\s+egyutt\s+vagyunk\b|osszejottunk\b|jarunk\s+egymassal\b|te\s+vagy\s+a\s+(?:pasim|csajom|parom)\b)/.test(text)
   ) return { kind: "dating", action: "dating" };
 
   if (
@@ -64609,19 +64609,22 @@ function explicitRelationshipStatusTextLinksActorToPerson(w, actorId, personId, 
   return aliases.some((alias) => {
     const core = escapeAddressRegex(alias);
     const token = core + "[\\p{L}'’-]{0,12}";
+
     return [
       new RegExp("\\b" + token + "\\s+(?:and|&)\\s+i\\b", "iu"),
       new RegExp("\\bi\\s+(?:and|&)\\s+" + token + "\\b", "iu"),
+      new RegExp("\\b" + token + "\\s+es\\s+en\\b", "iu"),
+      new RegExp("\\ben\\s+es\\s+" + token + "\\b", "iu"),
       new RegExp("\\b(?:with|dating|seeing|married\\s+to|engaged\\s+to)\\s+" + token + "\\b", "iu"),
-      new RegExp("\\b" + token + "\\s+(?:is|['’]s)\\s+my\\s+(?:boyfriend|girlfriend|partner|husband|wife|fiance|fiancee|ex)\\b", "iu"),
-      new RegExp("\\b(?:szakit\\p{L}*|jarok|randizom)\\s+" + token + "\\b", "iu"),
-      new RegExp("\\b" + token + "[\\p{L}'’-]{0,12}\\s+(?:szakitottam|szakitottunk|szetmentunk|osszejottunk|jarok|randizom)\\b", "iu"),
+      new RegExp("\\b" + token + "\\s+(?:is|['’]s)\\s+my\\s+(?:boyfriend|girlfriend|husband|wife|fiance|fiancee|ex)\\b", "iu"),
+      new RegExp("\\brandizom\\s+" + token + "\\b", "iu"),
+      new RegExp("\\b" + token + "[\\p{L}'’-]{0,12}\\s+(?:szakitottunk|szetmentunk|osszejottunk|randizom)\\b", "iu"),
     ].some((re) => re.test(text));
   });
 }
 
 function explicitRelationshipStatusDirectPairLanguage(value) {
-  return /\b(?:you|we|us|our|ours|between\s+us|our\s+relationship|veled|koztunk|kapcsolatunk|mi|egymassal|parom|pasim|csajom|baratom|baratnom)\b/.test(
+  return /\b(?:you|we|us|our|ours|between\s+us|our\s+relationship|veled|koztunk|kapcsolatunk|mi|egymassal|parom|pasim|csajom)\b/.test(
     explicitRelationshipStatusNormalizedText(value)
   );
 }
