@@ -3147,20 +3147,70 @@ function disrespectsAuthority(w, speakerId, addresseeId, text) {
   const speaker = charById(w, speakerId), addressee = charById(w, addresseeId);
   if (!speaker || !addressee) return false;
   if (!DISRESPECT_TO_AUTHORITY_RE.test(String(text || ""))) return false;
-  const isSenseiRank = (c) => {
-    try { if (characterIsSensei(c)) return true; } catch (error) { /* fall through */ }
-    try {
-      const d = identityCanonFor(w, c.id) || {};
-      const roles = [d.role, ...((d.affiliations || []).map((a) => a && a.role))].filter(Boolean).join(" ");
-      return /\bsensei\b|head instructor|dojo (?:owner|head|master)|karate (?:master|instructor)|mester(?:e)?\b|vezet[oő]edz[oő]|edz[oő]\b/i.test(roles);
-    } catch (error) { return false; }
-  };
+  const isSenseiRank = (c) => characterIsSenseiRank(w, c);
   const senseiAddressee = isSenseiRank(addressee), senseiSpeaker = isSenseiRank(speaker);
   if (!senseiAddressee || senseiSpeaker) return false;
   const rel = getRel(w, speakerId, addresseeId) || EMPTY_REL;
   if (FIXED_BONDS.indexOf(String(rel.bond || "")) >= 0 || /anya|apa|sz[uü]l[oő]|fia|l[aá]nya|parent|father|mother|dad|mom|son|daughter/i.test(String(rel.bond || "") + " " + String(rel.role || ""))) return false;
   return true;
 }
+function characterIsSenseiRank(w, c) {
+  if (!c) return false;
+  try { if (characterIsSensei(c)) return true; } catch (error) { /* fall through */ }
+  try {
+    const d = identityCanonFor(w, c.id) || {};
+    const roles = [d.role, ...((d.affiliations || []).map((a) => a && a.role))].filter(Boolean).join(" ");
+    return /\bsensei\b|head instructor|dojo (?:owner|head|master)|karate (?:master|instructor)|vezet[oő]edz[oő]/i.test(roles);
+  } catch (error) { return false; }
+}
+
+/* CLAUDE FIX R60: nobody speaks as a member of someone else's dojo / team.
+   "Ian makes us sprint at dawn" from someone who does not train under Ian loses
+   that sentence. Belonging = shared affiliation, the leader named on the speaker's
+   identity, a student/teacher tie, or the speaker listed among the leader's people. */
+function speakerBelongsUnder(w, speakerId, leader) {
+  const sp = charById(w, speakerId);
+  if (!sp || !leader) return true;
+  let ds = {}, dl = {};
+  try { ds = identityCanonFor(w, speakerId) || {}; dl = identityCanonFor(w, leader.id) || {}; } catch (error) { return true; }
+  const norm = (x) => String(x || "").toLowerCase().replace(/[^\p{L}\p{N} ]+/gu, " ").replace(/\s+/g, " ").trim();
+  const groupsOf = (d) => new Set([d.group, ...((d.affiliations || []).map((a) => a && a.name))].map(norm).filter(Boolean));
+  const gs = groupsOf(ds), gl = groupsOf(dl);
+  /* without identity data we cannot tell — never strip on a guess */
+  if (!gs.size && !ds.leader) return true;
+  if ([...gs].some((g) => gl.has(g))) return true;
+  const leaderNames = [leader.name, String(leader.name || "").split(/\s+/)[0], String(leader.name || "").split(/\s+/).slice(-1)[0], leader.nick].map(norm).filter((x) => x.length >= 3);
+  if (ds.leader && leaderNames.some((ln) => norm(ds.leader).includes(ln))) return true;
+  const spNames = [sp.name, String(sp.name || "").split(/\s+/)[0]].map(norm).filter((x) => x.length >= 3);
+  if ((dl.teammates || []).some((t) => spNames.some((sn) => norm(t).includes(sn)))) return true;
+  const rel = getRel(w, speakerId, leader.id) || EMPTY_REL;
+  if (/student|tan[ií]tv[aá]ny|mentee|disciple|pupil|edz[eé]s|trains? (?:under|with)/i.test(String(rel.role || "") + " " + String(rel.bond || ""))) return true;
+  if (FIXED_BONDS.indexOf(String(rel.bond || "")) >= 0) return true;
+  return false;
+}
+
+function stripForeignGroupClaims(w, speakerId, text) {
+  const value = String(text || "");
+  if (!w || !speakerId || !value || isHuman(w, speakerId)) return value;
+  const INCLUSIVE = /\b(?:us|we|we'?re|we'?ve|our|ours|my sensei|our sensei|makes? me|made me|trains? me|trained me)\b|(?:\bminket\b|\bnek[uü]nk\b|\bmi\s|senseinek|senseij[uü]nk|edz[oő]nk|velem edz|engem edz)/i;
+  if (!INCLUSIVE.test(value)) return value;
+  const parts = value.split(/(?<=[.!?…])\s+/);
+  let changed = false;
+  const kept = parts.filter((part) => {
+    if (!INCLUSIVE.test(part)) return true;
+    let named = [];
+    try { named = namedPeopleInText(w, part, speakerId); } catch (error) { named = []; }
+    const foreign = named.map((id) => charById(w, id)).find((c) => c && !isHuman(w, c.id) && characterIsSenseiRank(w, c) && !speakerBelongsUnder(w, speakerId, c));
+    if (foreign) {
+      changed = true;
+      console.info("[groups] removed a line speaking as a member under someone else's sensei", "speaker=" + speakerId, "sensei=" + foreign.id, part.slice(0, 120));
+      return false;
+    }
+    return true;
+  });
+  return changed ? kept.join(" ").trim() : value;
+}
+
 function filterDisrespectToAuthority(n, rows, addresseeOf) {
   return (rows || []).filter((row) => {
     if (!row || !row.text) return true;
@@ -62564,6 +62614,7 @@ function voiceStyleCardsForIds(w, ids, actorId) {
 
   return rows.length
     ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
+      "GROUPS — HARD RULE: say \"we / us / our sensei / makes us\" only about a dojo, team or group that is on your OWN card (WHO IS WHO). Never imply you train or work under someone who is not your own sensei / boss.\n" +
       "RANK — HARD RULE: a student or younger fighter never tells a sensei (their own, or a feared one from another dojo) \"shut up\", never insults or mocks them in public. They may disagree respectfully, go quiet, obey grudgingly or grumble to friends — only fellow senseis / equals can be openly rude to a sensei.\n" +
       "NAMES — HARD RULE: call people only by their real name, surname, username or a nickname that a sheet actually gives them. Never invent a new nickname or a pop-culture comparison name (no \"Draco\", \"Romeo\", \"Joker\" for a real person) and never mention someone who is not in this world.\n" +
       "KNOWLEDGE BOUNDARY — HARD RULE: about themselves everyone uses their OWN sheet. About anyone else they know only that person's public profile, what their OWN sheet says about them, and what really happened between them in play. Never let one character mention a place, event, secret, nickname or memory that appears only on SOMEONE ELSE's sheet (e.g. a cabin, a hideout, a past incident) — if it is not on the speaker's own card, the speaker does not know it.\n" +
@@ -62694,6 +62745,8 @@ function cleanGeneratedUtterance(...args) {
   const id = args[1];
   args[2] = normalizeGeneratedSocialText(args[2]);
   if (!args[2]) return "";
+  /* R60 */
+  try { args[2] = stripForeignGroupClaims(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
   const base = legacyVoiceStyleCleanGeneratedUtterance(...args);
   if (generatedTextHasTechLeak(base)) {
     console.warn("[tech-leak] dropped generated text", "character=" + String(id || ""), String(base || "").slice(0, 120));
@@ -62758,6 +62811,7 @@ function cleanGeneratedComment(...args) {
   const id = args[1];
   args[2] = normalizeGeneratedSocialText(args[2]);
   if (!args[2]) return "";
+  try { args[2] = stripForeignGroupClaims(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
   try {
     const stranger = generatedTextUnknownPersonName(w, args[2]);
     if (stranger) {
