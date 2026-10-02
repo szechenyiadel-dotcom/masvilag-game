@@ -7,459 +7,434 @@ const appPath = path.join(root, "src", "App.jsx");
 const original = fs.readFileSync(appPath, "utf8");
 let next = original;
 
-const MARKER = "MÁSVILÁG AI FULL-SHEET RELATIONSHIP BASELINE v1";
+const MARKER = "MÁSVILÁG NATIVE FULL-SHEET RELATIONSHIP READING v6";
 
-function replaceExactlyOnce(oldText, newText, label) {
+function renameOne(name, replacement) {
+  const rx = new RegExp("function\\\\s+" + name + "\\\\s*\\\\(");
+  const matches = [...next.matchAll(new RegExp(rx.source, "g"))];
+  if (matches.length !== 1) throw new Error("Relationship v6 aborted: " + name + " expected once, found " + matches.length);
+  next = next.replace(rx, "function " + replacement + "(");
+}
+
+function replaceExact(oldText, newText, label) {
   const first = next.indexOf(oldText);
   const second = first >= 0 ? next.indexOf(oldText, first + oldText.length) : -1;
-  if (first < 0 || second >= 0) {
-    throw new Error(`AI relationship baseline patch aborted: ${label} expected exactly one anchor.`);
-  }
+  if (first < 0 || second >= 0) throw new Error("Relationship v6 aborted: " + label + " anchor mismatch.");
   next = next.slice(0, first) + newText + next.slice(first + oldText.length);
 }
 
-if (!next.includes(`/* ${MARKER} */`)) {
-  const inferDecl = "function inferCanonicalRelationshipBaseline(w, actor, target) {";
-  const legacyInferDecl = "function legacyAiFullSheetInferCanonicalRelationshipBaseline(w, actor, target) {";
-  replaceExactlyOnce(inferDecl, legacyInferDecl, "relationship baseline function");
+if (!next.includes("/* " + MARKER + " */")) {
+  renameOne("relationshipReadingSnippet", "legacyV6RelationshipReadingSnippet");
+  renameOne("relationshipReadingHash", "legacyV6RelationshipReadingHash");
+  renameOne("relationshipReadingResult", "legacyV6RelationshipReadingResult");
+  renameOne("genRelationshipReading", "legacyV6GenRelationshipReading");
+  renameOne("applyRelationshipReadingRows", "legacyV6ApplyRelationshipReadingRows");
+  renameOne("relationshipReadingCacheKey", "legacyV6RelationshipReadingCacheKey");
+  renameOne("structuralRelationshipHash", "legacyV6StructuralRelationshipHash");
+  renameOne("structuralReadingDue", "legacyV6StructuralReadingDue");
 
-  const runnerAnchor = 'if (action.type === "npc-pair-reaction") {';
-  const handler = `if (action.type === "relationship-sheet-read") {
-    const actorId = String(action.payload && action.payload.actorId || "");
-    const targetId = String(action.payload && action.payload.targetId || "");
-    const expectedHash = String(action.payload && action.payload.evidenceHash || "");
-    const pendingKey = actorId + ">" + targetId;
-    const actor = actorId ? charById(view, actorId) : null;
-    const target = targetId ? charById(view, targetId) : null;
-    if (!actor || !target || actorId === targetId) {
-      aiRelationshipClearPending(view, pendingKey);
-      return null;
-    }
+  replaceExact(
+    "const RELATIONSHIP_READING_BATCH = 8;",
+    "const RELATIONSHIP_READING_BATCH = 1;",
+    "relationship batch"
+  );
 
-    const evidence = aiRelationshipEvidence(view, actor, target);
-    if (!evidence.relevant || (expectedHash && evidence.hash !== expectedHash)) {
-      aiRelationshipClearPending(view, pendingKey);
-      return null;
-    }
+  replaceExact(
+    'const IDENTITY_CANON_VERSION = "4";',
+    'const IDENTITY_CANON_VERSION = "5";',
+    "identity canon version"
+  );
 
-    const before = getRel(view, actorId, targetId) || {};
-    const beforeSignature = aiRelationshipLiveSignature(before);
-    const out = await genAiFullSheetRelationship(view, actor, target, evidence);
+  const helper = `
+/* \${MARKER} */
+const REL_V6_RUNTIME_SKIP = /^(?:id|aiContextSummary|aiVoiceStyleCard|avatar|avatarUrl|cover|coverUrl|image|imageId|images|album|albums|photos|media|posts|comments|msgs|messages|chats|scenes|memory|memories|followers|following|baseFollowers|followerDelta|rels|relationships|relationship|socialEvents|sim|notifications|invitations)$/i;
+const REL_V6_STRUCTURAL_KEYS = /^(?:job|occupation|profession|school|university|college|role|rank|organization|organisation|affiliation|faction|team|dojo|academy|club|department|workplace|employer)$/i;
+const REL_V6_ROLE_WORDS = /\\\\b(?:head\\\\s+student|sensei|teacher|tan[aá]r|mentor|coach|edz[oő]|master|mester|leader|vezet[oő]|student|di[aá]k|tanul[oó]|tan[ií]tv[aá]ny|mentee|trainee|apprentice|tanonc|intern|gyakornok|employee|alkalmazott|boss|f[oő]n[oö]k|captain|kapit[aá]ny|member|tag)\\\\b/giu;
+const REL_V6_MENTORISH = /\\\\b(?:sensei|teacher|tan[aá]r|mentor|coach|edz[oő]|master|mester|tan[ií]tv[aá]ny|student|di[aá]k|tanul[oó]|mentee|trainee|apprentice|tanonc)\\\\b/iu;
 
-    if (!out || out.skip) {
-      update((n) => aiRelationshipClearPending(n, pendingKey));
-      return null;
-    }
-
-    update((n) => {
-      const liveActor = charById(n, actorId);
-      const liveTarget = charById(n, targetId);
-      if (!liveActor || !liveTarget) {
-        aiRelationshipClearPending(n, pendingKey);
-        return;
-      }
-
-      const currentEvidence = aiRelationshipEvidence(n, liveActor, liveTarget);
-      if (expectedHash && currentEvidence.hash !== expectedHash) {
-        aiRelationshipClearPending(n, pendingKey);
-        return;
-      }
-
-      const current = getRel(n, actorId, targetId) || {};
-      if (aiRelationshipLiveSignature(current) !== beforeSignature) {
-        aiRelationshipClearPending(n, pendingKey);
-        return;
-      }
-
-      const normalized = aiRelationshipNormalizeOutput(out, current);
-      if (!normalized) {
-        aiRelationshipClearPending(n, pendingKey);
-        return;
-      }
-
-      setRel(n, actorId, targetId, normalized);
-      aiRelationshipClearPending(n, pendingKey);
-      console.info(
-        "[relationship-sheet-read]",
-        "applied",
-        "pair=" + pendingKey,
-        "layers=" + String(normalized.bond || "").slice(0, 220)
-      );
-    });
-
-    return "relationship-sheet-read";
-  }
-
-`;
-  replaceExactlyOnce(runnerAnchor, handler + runnerAnchor, "relationship action runner");
-
-  next += `
-
-/* ${MARKER} */
-const AI_RELATIONSHIP_RUNTIME_SKIP_KEYS = /^(?:aiContextSummary|aiVoiceStyleCard|avatar|avatarUrl|image|imageId|images|album|albums|photos|media|posts|comments|msgs|messages|chats|scenes|memory|memories|relationships|rels|relationship|socialEvents|sim|notifications|invitations|following|followers)$/i;
-const AI_RELATIONSHIP_STRUCTURAL_KEY = /(?:job|occupation|profession|school|university|college|role|faction|team|organization|organisation|affiliation|dojo|class|rank|title|department|workplace|employer|club|group|academy|teacher|student|mentor|sensei|coach)/i;
-const AI_RELATIONSHIP_ROLE_WORDS = /\\b(?:sensei|student|diák|tanuló|teacher|tanár|mentor|mentee|coach|edző|boss|főnök|employee|alkalmazott|intern|gyakornok|member|tag|leader|vezető|captain|kapitány|master|mester|apprentice|tanonc|senpai|kohai|doctor|orvos|nurse|ápoló|assistant|asszisztens)\\b/giu;
-
-function aiRelationshipValueText(value) {
+function relV6Text(value) {
   if (value == null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    try { return String(value); } catch { return ""; }
-  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  try { return JSON.stringify(value, null, 2); } catch (_) { try { return String(value); } catch (_) { return ""; } }
 }
 
-function aiRelationshipStableHash(value) {
-  const text = String(value || "");
-  let h = 2166136261;
-  for (let i = 0; i < text.length; i += 1) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(36);
-}
-
-function aiRelationshipIdentityTokens(c) {
-  if (!c || typeof c !== "object") return [];
-  const raw = [
-    c.name, c.displayName, c.username, c.handle, c.nick, c.nickname,
-    c.firstName, c.lastName, c.fullName
-  ].filter(Boolean).map((x) => String(x).trim()).filter(Boolean);
+function relV6Aliases(c) {
+  if (!c) return [];
   const out = [];
-  for (const value of raw) {
-    const low = value.toLocaleLowerCase();
-    if (low.length >= 2 && !out.includes(low)) out.push(low);
-    for (const piece of low.split(/[^\\p{L}\\p{N}_-]+/u)) {
-      if (piece.length >= 3 && !out.includes(piece)) out.push(piece);
-    }
-  }
-  return out;
-}
-
-function aiRelationshipTextMentionsCharacter(text, c) {
-  const low = String(text || "").toLocaleLowerCase();
-  if (!low) return false;
-  return aiRelationshipIdentityTokens(c).some((token) => low.includes(token));
-}
-
-function aiRelationshipFieldRows(c, predicate) {
-  if (!c || typeof c !== "object") return [];
-  const rows = [];
-  for (const [key, raw] of Object.entries(c)) {
-    if (AI_RELATIONSHIP_RUNTIME_SKIP_KEYS.test(key)) continue;
-    if (!predicate(key, raw)) continue;
-    const value = aiRelationshipValueText(raw);
-    if (!value) continue;
-    rows.push(key + ": " + value);
-  }
-  return rows;
-}
-
-function aiRelationshipConnectionsText(c) {
-  if (!c || typeof c !== "object") return "";
-  const keys = Object.keys(c).filter((key) => /^(?:connections?|kapcsolatok?|relationshipsCanon|relationshipCanon)$/i.test(key));
-  return keys.map((key) => key + ": " + aiRelationshipValueText(c[key])).filter(Boolean).join("\\n\\n");
-}
-
-function aiRelationshipMentionRows(c, other) {
-  return aiRelationshipFieldRows(c, (key, raw) => {
-    if (/^(?:connections?|kapcsolatok?|relationshipsCanon|relationshipCanon)$/i.test(key)) return false;
-    return aiRelationshipTextMentionsCharacter(aiRelationshipValueText(raw), other);
+  [c.name, c.nick, c.nickname, c.username, c.displayName].filter(Boolean).forEach((raw) => {
+    const text = String(raw).trim().toLowerCase();
+    if (text.length >= 2 && !out.includes(text)) out.push(text);
+    String(raw).trim().split(/[^\\\\p{L}\\\\p{N}_-]+/u).filter((x) => x.length >= 3).forEach((x) => {
+      const low = x.toLowerCase();
+      if (!out.includes(low)) out.push(low);
+    });
   });
-}
-
-function aiRelationshipStructuralRows(c) {
-  return aiRelationshipFieldRows(c, (key) => AI_RELATIONSHIP_STRUCTURAL_KEY.test(key));
-}
-
-function aiRelationshipAffiliationCores(rows) {
-  const out = [];
-  for (const row of rows || []) {
-    const value = String(row || "")
-      .toLocaleLowerCase()
-      .replace(AI_RELATIONSHIP_ROLE_WORDS, " ")
-      .replace(/[^\\p{L}\\p{N}]+/gu, " ")
-      .replace(/\\s+/g, " ")
-      .trim();
-    if (value.length >= 4 && !out.includes(value)) out.push(value);
-  }
   return out;
 }
 
-function aiRelationshipSharedStructure(actorRows, targetRows) {
-  const a = aiRelationshipAffiliationCores(actorRows);
-  const b = aiRelationshipAffiliationCores(targetRows);
-  const shared = [];
-  for (const left of a) {
-    for (const right of b) {
-      if (left === right || (left.length >= 6 && right.includes(left)) || (right.length >= 6 && left.includes(right))) {
-        const value = left.length <= right.length ? left : right;
-        if (value && !shared.includes(value)) shared.push(value);
-      }
-    }
-  }
-  return shared;
+function relV6Mentions(text, c) {
+  const low = String(text || "").toLowerCase();
+  return Boolean(low && relV6Aliases(c).some((name) => low.includes(name)));
 }
 
-function aiRelationshipEvidence(w, actor, target) {
-  const actorConnections = aiRelationshipConnectionsText(actor);
-  const targetConnections = aiRelationshipConnectionsText(target);
-  const actorMentions = aiRelationshipMentionRows(actor, target);
-  const targetMentions = aiRelationshipMentionRows(target, actor);
-  const actorStructural = aiRelationshipStructuralRows(actor);
-  const targetStructural = aiRelationshipStructuralRows(target);
-  const sharedStructure = aiRelationshipSharedStructure(actorStructural, targetStructural);
+function relV6FullFieldsMentioning(person, other) {
+  if (!person || !other) return "";
+  const rows = [];
+  Object.entries(person).forEach(([key, value]) => {
+    if (REL_V6_RUNTIME_SKIP.test(key) || /^(?:connections?|kapcsolatok?)$/i.test(key)) return;
+    const text = relV6Text(value);
+    if (!text || !relV6Mentions(text, other)) return;
+    rows.push("[" + key + "]\\\\n" + text);
+  });
+  return rows.join("\\\\n\\\\n");
+}
 
-  const directMention =
-    aiRelationshipTextMentionsCharacter(actorConnections, target) ||
-    actorMentions.length > 0;
-  const reverseMention =
-    aiRelationshipTextMentionsCharacter(targetConnections, actor) ||
-    targetMentions.length > 0;
-  const structuralTie = sharedStructure.length > 0;
+function relV6Connections(person) {
+  if (!person || typeof person !== "object") return "";
+  return Object.entries(person)
+    .filter(([key]) => /^(?:connections?|kapcsolatok?|relationshipsCanon|relationshipCanon)$/i.test(key))
+    .map(([key, value]) => "[" + key + "]\\\\n" + relV6Text(value))
+    .filter(Boolean)
+    .join("\\\\n\\\\n");
+}
 
-  const actorName = String(actor.name || actor.displayName || actor.id || "Actor");
-  const targetName = String(target.name || target.displayName || target.id || "Target");
-  const text = [
-    "PAIR DIRECTION: " + actorName + " [" + String(actor.id || "") + "] → " + targetName + " [" + String(target.id || "") + "]",
+function relV6NormalizeAffiliation(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/^the\\\\s+/, "")
+    .replace(REL_V6_ROLE_WORDS, " ")
+    .replace(/\\\\b(?:dojo|academy|team|club|organization|organisation|group|faction|school|university|college)\\\\b/giu, " ")
+    .replace(/[^\\\\p{L}\\\\p{N}]+/gu, " ")
+    .replace(/\\\\s+/g, " ")
+    .trim();
+}
+
+function relV6RawAffiliations(w, c) {
+  if (!c) return [];
+  const raw = [];
+  Object.entries(c).forEach(([key, value]) => {
+    if (!REL_V6_STRUCTURAL_KEYS.test(key)) return;
+    const text = relV6Text(value);
+    if (text) raw.push(text);
+  });
+  const normalized = [];
+  raw.forEach((value) => {
+    String(value).split(/[\\\\n,;|/]+/).forEach((piece) => {
+      const n = relV6NormalizeAffiliation(piece);
+      if (n.length >= 2 && !normalized.includes(n)) normalized.push(n);
+    });
+  });
+  if (normalized.length) return normalized;
+  try {
+    const d = identityCanonFor(w, c.id);
+    if (d) {
+      const values = [];
+      if (Array.isArray(d.affiliations)) d.affiliations.forEach((a) => values.push(a && a.name));
+      if (d.group) values.push(d.group);
+      values.filter(Boolean).forEach((value) => {
+        const n = relV6NormalizeAffiliation(value);
+        if (n.length >= 2 && !normalized.includes(n)) normalized.push(n);
+      });
+    }
+  } catch (_) {}
+  return normalized;
+}
+
+function relV6SharedAffiliations(w, a, b) {
+  const aa = relV6RawAffiliations(w, a);
+  const bb = relV6RawAffiliations(w, b);
+  return aa.filter((x) => bb.includes(x));
+}
+
+function relV6RoleClass(w, c) {
+  if (!c) return "";
+  const bits = [];
+  Object.entries(c).forEach(([key, value]) => {
+    if (!REL_V6_STRUCTURAL_KEYS.test(key)) return;
+    bits.push(relV6Text(value));
+  });
+  try {
+    const d = identityCanonFor(w, c.id);
+    if (d) {
+      bits.push(d.role, d.group);
+      if (Array.isArray(d.affiliations)) d.affiliations.forEach((a) => bits.push(a && a.role));
+    }
+  } catch (_) {}
+  const text = bits.filter(Boolean).join(" ").toLowerCase();
+  if (/\\\\b(?:sensei|teacher|tan[aá]r|mentor|coach|edz[oő]|master|mester)\\\\b/i.test(text)) return "mentor";
+  if (/\\\\b(?:head\\\\s+student|student|di[aá]k|tanul[oó]|tan[ií]tv[aá]ny|mentee|trainee|apprentice|tanonc)\\\\b/i.test(text)) return "student";
+  return "";
+}
+
+function relV6ExplicitPairRole(w, actor, target) {
+  let text = "";
+  try { text += String(connectionCanonSnippetAbout(w, actor, target, 50000) || ""); } catch (_) {}
+  text += "\\\\n" + relV6FullFieldsMentioning(actor, target);
+  text += "\\\\n" + relV6FullFieldsMentioning(target, actor);
+  return REL_V6_MENTORISH.test(text);
+}
+
+function relV6DerivedRole(w, actor, target) {
+  if (relV6ExplicitPairRole(w, actor, target)) return "explicit";
+  const shared = relV6SharedAffiliations(w, actor, target);
+  if (!shared.length) return "";
+  const a = relV6RoleClass(w, actor);
+  const b = relV6RoleClass(w, target);
+  if (a === "mentor" && b === "student") return "Tanítvány";
+  if (a === "student" && b === "mentor") return "Mentor";
+  if (a || b) return "Csapattárs";
+  return "Csapattárs";
+}
+
+function relV6StructuralSummary(w, c) {
+  if (!c) return "(none)";
+  const rows = [];
+  Object.entries(c).forEach(([key, value]) => {
+    if (!REL_V6_STRUCTURAL_KEYS.test(key)) return;
+    const text = relV6Text(value);
+    if (text) rows.push(key + ": " + text);
+  });
+  try {
+    const line = identityCanonLine(w, c);
+    if (line) rows.push("identity-canon: " + line);
+  } catch (_) {}
+  return rows.length ? rows.join("\\\\n") : "(none)";
+}
+
+function relationshipReadingSnippet(w, actor, target) {
+  if (!w || !actor || !target || actor.id === target.id || isMediaAccount(w, target.id)) return "";
+  const actorConnections = relV6Connections(actor);
+  const targetConnections = relV6Connections(target);
+  const actorOther = relV6FullFieldsMentioning(actor, target);
+  const targetOther = relV6FullFieldsMentioning(target, actor);
+  const direct = relV6Mentions(actorConnections, target) || Boolean(actorOther);
+  const reverse = relV6Mentions(targetConnections, actor) || Boolean(targetOther);
+  if (!direct && !reverse) return "";
+  return [
+    "PAIR: " + String(actor.name || actor.id) + " → " + String(target.name || target.id),
     "",
-    "ACTOR CONNECTIONS — FULL, UNTRUNCATED AUTHOR SOURCE:",
+    "ACTOR FULL CONNECTIONS SECTION — READ ALL OF IT, BUT ONLY FACTS ABOUT THIS TARGET MAY DEFINE THIS PAIR:",
     actorConnections || "(none)",
     "",
-    "ACTOR OTHER SHEET FIELDS THAT MENTION TARGET — FULL FIELD VALUES:",
-    actorMentions.length ? actorMentions.join("\\n\\n") : "(none)",
+    "ACTOR OTHER FULL SHEET FIELDS THAT MENTION TARGET:",
+    actorOther || "(none)",
     "",
-    "ACTOR STRUCTURAL ROLE / JOB / SCHOOL / FACTION / TEAM / DOJO DATA:",
-    actorStructural.length ? actorStructural.join("\\n") : "(none)",
+    "ACTOR STRUCTURAL DATA:",
+    relV6StructuralSummary(w, actor),
     "",
-    "TARGET STRUCTURAL ROLE / JOB / SCHOOL / FACTION / TEAM / DOJO DATA:",
-    targetStructural.length ? targetStructural.join("\\n") : "(none)",
+    "TARGET STRUCTURAL DATA:",
+    relV6StructuralSummary(w, target),
     "",
-    "SHARED STRUCTURAL AFFILIATION CANDIDATES:",
-    sharedStructure.length ? sharedStructure.join(" | ") : "(none)",
-    "",
-    "REVERSE-DIRECTION CONNECTIONS — FULL SOURCE, OBJECTIVE HISTORY/STRUCTURE ONLY:",
+    "REVERSE FULL CONNECTIONS SECTION — OBJECTIVE SHARED HISTORY/STRUCTURE ONLY; NEVER COPY TARGET'S PRIVATE FEELINGS INTO ACTOR:",
     targetConnections || "(none)",
     "",
-    "TARGET OTHER SHEET FIELDS THAT MENTION ACTOR — OBJECTIVE SHARED FACTS ONLY:",
-    targetMentions.length ? targetMentions.join("\\n\\n") : "(none)",
-  ].join("\\n");
-
-  return {
-    relevant: Boolean(directMention || reverseMention || structuralTie),
-    directMention,
-    reverseMention,
-    structuralTie,
-    text,
-    hash: aiRelationshipStableHash(text),
-  };
+    "TARGET OTHER FULL SHEET FIELDS THAT MENTION ACTOR — OBJECTIVE FACTS ONLY:",
+    targetOther || "(none)",
+  ].join("\\\\n");
 }
 
-function aiRelationshipPendingState(w) {
-  if (!w || typeof w !== "object") return null;
-  if (!w.sim || typeof w.sim !== "object" || Array.isArray(w.sim)) w.sim = {};
-  if (!w.sim.aiRelationshipBaselinePending || typeof w.sim.aiRelationshipBaselinePending !== "object" || Array.isArray(w.sim.aiRelationshipBaselinePending)) {
-    w.sim.aiRelationshipBaselinePending = {};
+function relationshipReadingHash(snippet) {
+  return simsSocialStableHash("v6-fullsheet-strict-groups|" + String(snippet || ""));
+}
+
+function relationshipReadingCacheKey(actor, target, snippet) {
+  return "rr6-fullsheet-strict-groups:" + simsSocialStableHash(String(actor && actor.name || "") + "|" + String(target && target.name || "") + "|" + relationshipReadingHash(snippet));
+}
+
+function structuralRelationshipHash(w, actor, target) {
+  return "s2-strict-groups|" + simsSocialStableHash(
+    identityCanonLine(w, actor) + "|" +
+    identityCanonLine(w, target) + "|" +
+    relV6RawAffiliations(w, actor).join(",") + "|" +
+    relV6RawAffiliations(w, target).join(",") + "|" +
+    relV6RoleClass(w, actor) + "|" + relV6RoleClass(w, target)
+  );
+}
+
+function relV6StripBadStructural(value) {
+  const parts = String(value || "").split(/\\\\s*(?:\\\\+|\\\\/|\\\\||,|;)\\\\s*/).filter(Boolean);
+  const kept = parts.filter((part) => !REL_V6_MENTORISH.test(part));
+  return kept.join(" + ");
+}
+
+function relV6SanitizeRow(w, actor, target, input) {
+  if (!input || typeof input !== "object") return input;
+  const row = { ...input };
+  const explicit = relV6ExplicitPairRole(w, actor, target);
+  const derived = relV6DerivedRole(w, actor, target);
+  const hasMentorish = REL_V6_MENTORISH.test(String(row.role || "") + " " + String(row.bond || ""));
+  if (hasMentorish && !explicit && !derived) {
+    row.role = "";
+    row.bond = relV6StripBadStructural(row.bond);
+    row.layers = (Array.isArray(row.layers) ? row.layers : []).filter((x) => !REL_V6_MENTORISH.test(String(x || "")));
+  } else if (!explicit && derived && derived !== "explicit") {
+    row.role = derived;
   }
-  return w.sim.aiRelationshipBaselinePending;
+  if (derived && derived !== "explicit") {
+    const layers = Array.isArray(row.layers) ? row.layers.map(String) : [];
+    if (!layers.some((x) => x.toLowerCase() === derived.toLowerCase())) layers.push(derived);
+    row.layers = layers;
+  }
+  const desc = String(row.description || row.mood || "").trim();
+  if (desc) row.description = desc;
+  return row;
 }
 
-function aiRelationshipClearPending(w, key) {
-  const pending = aiRelationshipPendingState(w);
-  if (pending && key) delete pending[key];
+function relationshipReadingResult(w, actor, target) {
+  const row = legacyV6RelationshipReadingResult(w, actor, target);
+  return row ? relV6SanitizeRow(w, actor, target, row) : row;
 }
 
-function aiRelationshipQueueRead(w, actor, target, evidence) {
-  if (!w || !actor || !target || !evidence || !evidence.relevant) return;
-  if (typeof simEnqueue !== "function" || typeof mkAction !== "function") return;
-  const pending = aiRelationshipPendingState(w);
-  if (!pending) return;
-  const key = String(actor.id || "") + ">" + String(target.id || "");
-  if (!key || key === ">") return;
-  if (pending[key] === evidence.hash) return;
-
-  pending[key] = evidence.hash;
-  simEnqueue(w, mkAction(
-    "relationship-sheet-read",
-    "relationship-sheet-read:" + key + ":" + evidence.hash,
-    {
-      actorId: actor.id,
-      targetId: target.id,
-      evidenceHash: evidence.hash,
-    },
-    "memory"
-  ));
-}
-
-function aiRelationshipChunkText(text, max = 16000) {
-  const value = String(text || "");
-  if (value.length <= max) return [value];
+async function relV6ExtractLongSource(w, actor, target, source) {
+  const chunkSize = 15000;
   const chunks = [];
-  let at = 0;
-  while (at < value.length) {
-    let end = Math.min(value.length, at + max);
-    if (end < value.length) {
-      const newline = value.lastIndexOf("\\n", end);
-      if (newline > at + Math.floor(max * 0.65)) end = newline + 1;
-    }
-    chunks.push(value.slice(at, end));
-    at = end;
-  }
-  return chunks;
-}
-
-async function aiRelationshipExtractChunk(w, actor, target, chunk, index, total) {
-  const prompt = [
-    "RELATIONSHIP SHEET SOURCE PASS " + (index + 1) + "/" + total + ".",
-    "Read the ENTIRE source block below. Extract EVERY fact in this block that can define " + String(actor.name || actor.id) + " → " + String(target.name || target.id) + ".",
-    "Do not flatten multiple simultaneous relationships. Keep formal hierarchy, shared institution/faction/dojo, personal history, friendship, rivalry, hostility, romance, family, power imbalance, loyalty, distrust, secrecy and one-sided feelings as separate facts when present.",
-    "Direction is hard: reverse-direction private feelings may NOT be copied into the actor. Reverse source may only supply objective shared history or structural facts.",
-    "Never infer student/teacher/mentor/etc from age or stereotype. Structural roles require actual sheet evidence. If the same named dojo/team/school/workplace plus complementary roles establish a real relation (e.g. Sensei + student), record that structural relation.",
-    "Do not quote distinctive source sentences. Preserve facts, not wording.",
-    "SOURCE BLOCK:",
-    chunk,
-    "JSON ONLY:",
-    '{"facts":["all relevant facts from this block"],"structural":["formal/organizational layers"],"personal":["personal/history/emotional layers"],"hidden":["actor awareness/secrecy facts"]}'
-  ].join("\\n\\n");
-
-  try {
-    return await askWorldJSON(w, engineFor(w), prompt, {
-      maxTokens: 1800,
-      priority: 55,
-      source: "relationship-sheet-read",
+  for (let at = 0; at < source.length; at += chunkSize) chunks.push(source.slice(at, at + chunkSize));
+  const facts = [];
+  for (let i = 0; i < chunks.length; i += 1) {
+    const prompt = [
+      "RELATIONSHIP SOURCE PASS " + (i + 1) + "/" + chunks.length + ".",
+      "Read this ENTIRE block and extract EVERY fact relevant to " + String(actor.name || actor.id) + " → " + String(target.name || target.id) + ".",
+      "Keep separate layers: formal role, shared organization/dojo/school/work, friendship, rivalry, hostility, romance, family, loyalty, distrust, secrecy, one-sided feelings, history.",
+      "Do not copy reverse private feelings into the actor.",
+      "Sensei/mentor/teacher/student relations require either an explicit pair statement OR the SAME concrete named organization plus complementary roles. Different organizations can NEVER create teacher/student merely because one person is a sensei and the other a student.",
+      "SOURCE:",
+      chunks[i],
+      'JSON ONLY: {"facts":["..."]}'
+    ].join("\\\\n\\\\n");
+    const out = await askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 1800, priority: 55, source: "relationship-reading", quality: "deep", timeoutMs: 110000 });
+    if (!out || out.skip) throw new Error("relationship source pass failed");
+    (Array.isArray(out.facts) ? out.facts : []).forEach((fact) => {
+      const text = String(fact || "").trim();
+      if (text && !facts.includes(text)) facts.push(text);
     });
-  } catch {
-    return null;
   }
+  return facts.join("\\\\n- ");
 }
 
-function aiRelationshipExtractionText(rows) {
-  const out = [];
-  for (const row of rows || []) {
-    if (!row || typeof row !== "object") continue;
-    for (const key of ["facts", "structural", "personal", "hidden"]) {
-      const values = Array.isArray(row[key]) ? row[key] : [];
-      for (const value of values) {
-        const text = String(value || "").trim();
-        if (text && !out.includes(text)) out.push(text);
-      }
-    }
+async function genRelationshipReading(w, actor, due) {
+  const en = worldLanguage(w, w.meId) === "en";
+  const lang = en ? "English" : "Hungarian";
+  const targetRow = due && due[0];
+  if (!targetRow || !targetRow.target) return { targets: [] };
+  const target = targetRow.target;
+  let source = String(targetRow.snippet || "");
+  if (source.length > 38000) {
+    source = "FACTS EXTRACTED FROM COMPLETE MULTI-PASS READING:\\\\n- " + await relV6ExtractLongSource(w, actor, target, source);
   }
-  return out.join("\\n- ");
-}
-
-async function genAiFullSheetRelationship(w, actor, target, evidence) {
-  if (!evidence || !evidence.relevant) return { skip: true };
-  const chunks = aiRelationshipChunkText(evidence.text, 16000);
-  let sourceForSynthesis = evidence.text;
-
-  if (chunks.length > 1) {
-    const extracted = [];
-    for (let i = 0; i < chunks.length; i += 1) {
-      const row = await aiRelationshipExtractChunk(w, actor, target, chunks[i], i, chunks.length);
-      if (!row || row.skip) return null;
-      extracted.push(row);
-    }
-    sourceForSynthesis = "FACTS EXTRACTED FROM " + chunks.length + " COMPLETE SOURCE PASSES:\\n- " + aiRelationshipExtractionText(extracted);
-  }
-
-  const actorName = String(actor.name || actor.id || "Actor");
-  const targetName = String(target.name || target.id || "Target");
+  const shared = relV6SharedAffiliations(w, actor, target);
+  const derivedRole = relV6DerivedRole(w, actor, target);
   const prompt = [
-    "FRESH-WORLD RELATIONSHIP BASELINE — FULL-SHEET AI INTERPRETATION.",
-    "Build ONLY the directed relationship " + actorName + " → " + targetName + ".",
-    "SOURCE PRIORITY: explicit ACTOR Connections and explicit actor-sheet statements are highest authority. Then objective shared history/structure. Derived structural ties may coexist with explicit personal ties unless the sheet directly contradicts them.",
-    "MULTI-LAYER RULE — HARD: preserve EVERY relationship layer supported by the source. Never collapse mentor–student + rivalry into only rivalry, or same-dojo + friendship into only friendship. Formal/structural and personal/emotional relations can exist simultaneously.",
-    "STRUCTURAL INFERENCE RULE: if actual sheet fields establish complementary roles inside the same named institution/faction/team/dojo/workplace — e.g. Iron Dragons Sensei + Iron Dragons student — include mentor–student / teacher–student as a relationship layer even if Connections does not spell it out. Similar logic applies to coach–athlete, boss–employee, senior–junior, supervisor–intern, etc. Do not infer any role from age or stereotype.",
-    "DIRECTION RULE: do not copy the target's private feelings back into the actor. Reverse-direction Connections can support objective shared history/structure only.",
-    "DETAIL RULE: description must be detailed enough to preserve how they know each other, formal hierarchy or shared affiliation, major history, current personal/emotional dynamic, conflict/loyalty/attraction if present, and important one-sided or hidden nuance. Aim for 3–6 substantive sentences when the source is rich.",
-    "PARAPHRASE RULE — HARD: never copy the user's Connections sentences word-for-word and never reuse a distinctive long phrase. State the same meaning naturally in your own words.",
-    "SCORE is only coarse affinity from -100 to 100. It must never erase structural layers. A mentor can also be hated; a rival can also be a friend; an ex can also be a coworker, etc.",
-    "SOURCE MATERIAL:",
-    sourceForSynthesis,
-    "JSON ONLY:",
-    '{"types":["EVERY applicable relationship layer, most important first"],"bond":"compact combined label preserving the important layers","description":"detailed 3–6 sentence paraphrased relationship description","score":0,"hidden":"actor-side secrecy/self-awareness nuance or empty","why":"concise paraphrased basis for this baseline"}'
-  ].join("\\n\\n");
-
-  try {
-    return await askWorldJSON(w, engineFor(w), prompt, {
-      maxTokens: 2200,
-      priority: 55,
-      source: "relationship-sheet-read",
-    });
-  } catch {
-    return null;
-  }
+    "RELATIONSHIP READING v6 — ONE PAIR, DEEP FULL-SHEET ANALYSIS.",
+    "Actor: " + String(actor.name || actor.id) + " [" + String(actor.id) + "]",
+    "Target: " + String(target.name || target.id) + " [" + String(target.id) + "]",
+    "",
+    "Read EVERY supplied fact before deciding. The ACTOR'S full Connections section is authoritative for actor → target, plus every other actor field that mentions this target. Reverse-sheet material is only shared objective history/structure; never copy the target's private feelings into the actor.",
+    "MULTI-LAYER RULE: preserve ALL supported layers simultaneously. A person can be student + rival + friend, mentor + enemy, coworker + ex, teammate + crush, etc. Do not collapse a layered relationship to one generic word.",
+    "STRUCTURAL HARD RULE: Sensei/mentor/teacher/coach ↔ student/mentee exists only if (A) the pair is explicitly named that way in the sheets, OR (B) both belong to the SAME concrete named organization/dojo/team/school/workplace and their roles are complementary. A Wasabi sensei is NOT the teacher/mentor of an Iron Dragons student merely because one is a sensei and the other is a student. Different named organizations = no inferred teacher/student link.",
+    "Exact shared affiliations detected by code: " + (shared.length ? shared.join(", ") : "(none)"),
+    "Code-supported structural role from actor side: " + (derivedRole || "(none)"),
+    "",
+    "Return:",
+    "- score -100..100",
+    "- bond = strongest personal/official relationship layer; if multiple equally important layers, combine them briefly rather than deleting one",
+    "- role = formal structural tie from actor side, or empty",
+    "- layers = every supported relationship layer",
+    "- mood = concise current emotional dynamic",
+    "- hidden = actor-side hidden/denied feeling only",
+    "- attraction/fear/obsession/trust 0..100",
+    "- description = detailed 3–6 sentence " + lang + " paraphrase explaining how they know each other, formal hierarchy/affiliation, major history, current personal dynamic, conflicts/loyalty/attraction, and one-sided/hidden nuance when present",
+    "- why = short factual basis",
+    "- label = vivid 2–6 word tag",
+    "Never quote the sheet wording verbatim. Never invent.",
+    "",
+    "FULL SOURCE:",
+    source,
+    "",
+    'JSON ONLY: {"targets":[{"id":"' + String(target.id) + '","score":0,"bond":"","role":"","layers":[],"mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"description":"","why":"","label":""}]}'
+  ].join("\\\\n");
+  const out = await askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 3000, priority: 55, source: "relationship-reading", quality: "deep", timeoutMs: 110000 });
+  if (!out || out.skip) return out;
+  const rows = Array.isArray(out.targets) ? out.targets : [];
+  out.targets = rows.map((row) => relV6SanitizeRow(w, actor, target, row));
+  return out;
 }
 
-function aiRelationshipLiveSignature(rel) {
-  const r = rel || {};
-  return JSON.stringify({
-    score: Number(r.score) || 0,
-    bond: String(r.bond || r.type || ""),
-    mood: String(r.mood || ""),
-    hidden: String(r.hidden || ""),
-    why: String(r.why || ""),
-    source: String(r.source || ""),
-    fixed: Boolean(r.fixed),
+function applyRelationshipReadingRows(n, actorId, due, rows) {
+  const actor = charById(n, actorId);
+  const clean = (rows || []).map((row) => {
+    const target = row ? charById(n, findChar(n, row.id)) : null;
+    return actor && target ? relV6SanitizeRow(n, actor, target, row) : row;
+  });
+  legacyV6ApplyRelationshipReadingRows(n, actorId, due, clean);
+  const state = relationshipReadingState(n);
+  const store = ensureRelationshipBaselineStore(n);
+  due.forEach(({ target }) => {
+    const row = clean.find((r) => r && findChar(n, r.id) === target.id);
+    const liveTarget = charById(n, target.id);
+    if (!row || !actor || !liveTarget) return;
+    const sanitized = relV6SanitizeRow(n, actor, liveTarget, row);
+    const entry = state && state[actorId] && state[actorId].targets && state[actorId].targets[target.id];
+    const desc = String(sanitized.description || sanitized.mood || "").trim().slice(0, 1400);
+    const layers = (Array.isArray(sanitized.layers) ? sanitized.layers : []).map((x) => String(x || "").trim()).filter(Boolean).slice(0, 12);
+    if (entry) {
+      entry.description = desc;
+      entry.layers = layers;
+      if (desc) entry.mood = desc;
+      entry.role = String(sanitized.role || entry.role || "").slice(0, 100);
+    }
+    const key = relKey(actorId, target.id);
+    if (store[key]) {
+      if (desc) store[key].mood = desc;
+      store[key].role = String(sanitized.role || store[key].role || "").slice(0, 100);
+      store[key].layers = layers;
+      store[key].relationshipDescription = desc;
+      store[key].source = "connections-ai-v6";
+    }
+    const live = n.rels && n.rels[key];
+    if (live && live.freshFromSheet === true) {
+      n.rels[key] = {
+        ...live,
+        role: String(sanitized.role || live.role || "").slice(0, 100),
+        layers,
+        relationshipDescription: desc,
+        mood: desc || live.mood,
+      };
+    }
   });
 }
 
-function aiRelationshipNormalizeOutput(out, current) {
-  if (!out || typeof out !== "object") return null;
-  const types = (Array.isArray(out.types) ? out.types : [])
-    .map((x) => String(x || "").trim())
-    .filter(Boolean)
-    .filter((x, i, arr) => arr.indexOf(x) === i)
-    .slice(0, 12);
-
-  let bond = String(out.bond || "").trim();
-  if (!bond && types.length) bond = types.join(" + ");
-  const description = String(out.description || "").trim();
-  const hidden = String(out.hidden || "").trim();
-  const why = String(out.why || "").trim();
-  let score = Number(out.score);
-  if (!Number.isFinite(score)) score = Number(current && current.score) || 0;
-  score = Math.max(-100, Math.min(100, Math.round(score)));
-
-  if (!bond && !description && !why) return null;
-
-  const existingScore = Number(current && current.score) || 0;
-  const existingBond = String(current && (current.bond || current.type) || "");
-  if (existingScore <= -80 && score > -30) score = existingScore;
-  if (existingScore <= -80 && /enemy|ellens/i.test(existingBond) && !/enemy|ellens/i.test(bond)) {
-    bond = [existingBond, bond].filter(Boolean).join(" + ");
+function structuralReadingDue(w) {
+  if (!w) return null;
+  const state = relationshipReadingState(w);
+  if (!state) return null;
+  const targets = allSubjects(w).filter((c) => c && c.id && !isMediaAccount(w, c.id) && identityCanonFor(w, c.id));
+  for (const target of targets) {
+    const actors = [];
+    for (const actor of targets) {
+      if (!actor || actor.id === target.id || isMediaAccount(w, actor.id)) continue;
+      if (relationshipReadingSnippet(w, actor, target)) continue;
+      const shared = relV6SharedAffiliations(w, actor, target);
+      if (!shared.length) continue;
+      const meta = state[actor.id] || {};
+      const row = meta.targets && meta.targets[target.id];
+      const hash = structuralRelationshipHash(w, actor, target);
+      if (row && row.structural && row.hash === hash) continue;
+      if (meta.structuralFailedAt && now() - Number(meta.structuralFailedAt) < RELATIONSHIP_READING_RETRY_MS) continue;
+      actors.push({ actor, hash });
+      if (actors.length >= STRUCTURAL_READING_BATCH) break;
+    }
+    if (actors.length) return { target, actors };
   }
-
-  return {
-    score,
-    bond: (current && current.fixed && existingBond) ? existingBond : bond.slice(0, 500),
-    mood: description.slice(0, 4000),
-    hidden: hidden.slice(0, 1200),
-    why: (why || description).slice(0, 2500),
-    source: "sheet-ai-v1",
-    fixed: Boolean(current && current.fixed),
-  };
-}
-
-function inferCanonicalRelationshipBaseline(w, actor, target) {
-  const base = legacyAiFullSheetInferCanonicalRelationshipBaseline(w, actor, target);
-  if (!w || !actor || !target || actor.id === target.id) return base;
-
-  const evidence = aiRelationshipEvidence(w, actor, target);
-  if (evidence.relevant) {
-    aiRelationshipQueueRead(w, actor, target, evidence);
-  }
-  return base;
+  return null;
 }
 `;
+
+  next += helper;
 }
 
 if (next !== original) {
   fs.writeFileSync(appPath, next, "utf8");
-  console.log("[patch-status] ai-full-sheet-relationship-baseline=v1 applied; scope=relationship-baseline-only");
+  console.log("[patch-status] native-full-sheet-relationship-reading=v6 applied; cache=rr6; strict-cross-group-role-validation=on");
 } else {
-  console.log("[patch-status] ai-full-sheet-relationship-baseline=v1 already applied");
+  console.log("[patch-status] native-full-sheet-relationship-reading=v6 already applied");
 }
