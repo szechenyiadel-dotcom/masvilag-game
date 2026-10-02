@@ -5674,7 +5674,7 @@ function providerAllowedForBody(provider, body) {
    - DM: OpenRouter3 / DeepSeek Flash.
    - Scene: Mistral Small 1 -> Mistral Small 2.
    - Feed: Gemini -> OpenAI.
-   - Comments/replies: Mistral Small 1 -> Mistral Small 2.
+   - Comments/replies: OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2.
    - Existing character voice/style cards remain prompt context; there is no separate AI voice pass.
    - Other small background tasks keep the existing Gemini/Groq routing. */
 function taskProviderOrder(requestedProvider, body) {
@@ -5707,8 +5707,8 @@ function taskProviderOrder(requestedProvider, body) {
     /* Scenes use Mistral Small, with the second Mistral key as fallback. */
     raw = ["mistral", "mistral2"];
   } else if (isComment) {
-    /* All comment/reply writing uses Mistral Small 1 -> 2. */
-    raw = ["mistral", "mistral2"];
+    /* Comments/replies use DeepSeek Flash first; Mistral Small 1 -> 2 are fallbacks. */
+    raw = ["openrouter3", "mistral", "mistral2"];
   } else if (isFeed) {
     /* Feed stays on free Gemini first; paid OpenAI is fallback only. */
     raw = ["gemini", "openai"];
