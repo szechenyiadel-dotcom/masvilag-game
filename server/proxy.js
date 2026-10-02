@@ -5065,13 +5065,23 @@ async function proxyGeminiMessage(body) {
   if (!GEMINI_KEYS.length) return { unavailable: true, provider: "gemini" };
   const usable = GEMINI_KEYS.filter((k) => (GEMINI_KEY_REST_UNTIL.get(k) || 0) <= Date.now());
   const keys = usable.length ? usable : GEMINI_KEYS.slice(0, 1);
+
+  /* Keep key rotation inside ONE request budget. This lets 503/high-demand try
+     later Gemini keys without multiplying an 8–45s planner request by five. */
+  const deadline = Date.now() + upstreamTimeoutFor(body);
   let last = null;
+
   for (let i = 0; i < keys.length; i += 1) {
-    const result = await proxyGeminiMessageWithKey(body, keys[i]);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 1000) break;
+
+    const result = await proxyGeminiMessageWithKey(body, keys[i], remainingMs);
     if (result && result.ok) return result;
     last = result;
-    if (result && [401, 403, 429].includes(Number(result.status)) && GEMINI_KEYS.length > 1) {
-      const invalidKey = [401, 403].includes(Number(result.status));
+
+    const status = Number(result && result.status);
+    if ([401, 403, 429].includes(status) && GEMINI_KEYS.length > 1) {
+      const invalidKey = [401, 403].includes(status);
       GEMINI_KEY_REST_UNTIL.set(
         keys[i],
         Date.now() + (invalidKey ? 24 * 60 * 60 * 1000 : 30 * 60 * 1000)
@@ -5083,12 +5093,21 @@ async function proxyGeminiMessage(body) {
       );
       continue;
     }
+
+    if (status === 503 && i + 1 < keys.length && deadline - Date.now() > 1000) {
+      console.warn(
+        "[ai-provider] gemini key #" + (GEMINI_KEYS.indexOf(keys[i]) + 1) +
+        " high-demand/503 — trying the next key within the same request budget"
+      );
+      continue;
+    }
+
     break;
   }
   return last || { unavailable: true, provider: "gemini" };
 }
 
-async function proxyGeminiMessageWithKey(body, GEMINI_API_KEY) {
+async function proxyGeminiMessageWithKey(body, GEMINI_API_KEY, timeoutMs = upstreamTimeoutFor(body)) {
 
   const model = String(body?.quality || "") === "deep"
     ? String(process.env.GEMINI_DEEP_MODEL || GEMINI_MODEL_ENV || "gemini-3.8-flash").trim()
@@ -5103,7 +5122,7 @@ async function proxyGeminiMessageWithKey(body, GEMINI_API_KEY) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(buildGeminiPayload({ ...body, model })),
-  }, upstreamTimeoutFor(body));
+  }, Math.max(1000, Number(timeoutMs) || upstreamTimeoutFor(body)));
   const payload = await responseJsonSafe(r);
 
   if (!r.ok) {
@@ -5183,16 +5202,27 @@ function buildCompatibleChatPayload(body = {}, model) {
 async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
   if (!apiKey || !model) return { unavailable: true, provider, model: model || "" };
 
-  /* R68: free OpenRouter endpoints can hang long enough for the mobile client to
-     close the request (~90s). Give each OR key a short turn, then fail over.
-     Groq gets longer because it is the final large-context safety net. */
+  /* Paid OpenRouter3 (DeepSeek) needs more than the old 15s free-router turn for
+     long RP context. Keep free OpenRouter keys short, while giving each user-facing
+     writing source only as much time as it reasonably needs. */
   const baseTimeout = upstreamTimeoutFor(body);
+  const source = String(body?.source || "").trim().toLowerCase();
+  const openRouter3Timeout =
+    source === "scene"
+      ? Math.min(baseTimeout, 65000)
+      : source === "dm" || source === "group-chat"
+        ? Math.min(baseTimeout, 30000)
+        : source === "comments" || source === "feed-post"
+          ? Math.min(baseTimeout, 25000)
+          : Math.min(baseTimeout, 35000);
   const providerTimeout =
-    provider === "openrouter" || provider === "openrouter2" || provider === "openrouter3"
-      ? Math.min(baseTimeout, 15000)
-      : provider === "groq" || provider === "groq2"
-        ? Math.min(baseTimeout, 35000)
-        : baseTimeout;
+    provider === "openrouter3"
+      ? openRouter3Timeout
+      : provider === "openrouter" || provider === "openrouter2"
+        ? Math.min(baseTimeout, 15000)
+        : provider === "groq" || provider === "groq2"
+          ? Math.min(baseTimeout, 35000)
+          : baseTimeout;
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), providerTimeout);
