@@ -5642,31 +5642,36 @@ function markProviderSuccess(provider) {
 function providerAllowedForBody(provider, body) {
   const chars = aiRequestChars(body);
   if (chars <= AI_GROQ_MAX_INPUT_CHARS) return true;
-  return provider === "mistral" || provider === "gemini" || provider === "openrouter3" || provider === "openrouter" || provider === "openrouter2";
+  return provider === "mistral" || provider === "gemini" || provider === "openai" ||
+    provider === "openrouter3" || provider === "openrouter" || provider === "openrouter2";
 }
 
 /* Provider roles are intentionally strict.
-   - OpenRouter: ALL generated writing/social/roleplay work — scenes, DMs, group chat, comments/replies, feed posts and Notes.
-   - Mistral: ONLY the final fallback for those writing/social/roleplay tasks.
-   - Gemini: primary provider for canon/background work.
-   - Groq: primary provider for designated small background checks and first fallback for Gemini work.
-   - Groq2: second independent Groq-key fallback for BOTH Gemini-owned and Groq-owned background work.
-   Gemini/Groq/Groq2 must never replace OpenRouter for social/roleplay writing. */
+   - DeepSeek/OpenRouter3 owns only direct RP voice work: DMs, Scenes, and the
+     cached character sheet/personality summaries that feed every channel.
+   - Feed/comment planning AND final social writing use Gemini -> Groq -> Groq2
+     -> OpenAI. They still receive the DeepSeek-produced private summary plus
+     the preserved per-character voice/style cards from the app prompt.
+   - Other background tasks keep the existing Gemini/Groq routing.
+   This separation prevents social refreshes from competing with long RP calls
+   for OpenRouter in-flight credit while preserving character voice/canon. */
 function taskProviderOrder(requestedProvider, body) {
   const source = String(body?.source || inferAIRequestSource(body) || "").trim().toLowerCase();
   const chars = aiRequestChars(body);
 
-  const openRouterSources = new Set([
+  const deepSeekRoleplaySources = new Set([
     "scene",
     "dm",
-    "group-chat",
-    "notes",
   ]);
 
-  const socialWritingSources = new Set([
-    "comments",
-    "feed-post",
+  const deepSeekPersonalitySources = new Set([
+    "sheet-summary",
+    "character-bible",
   ]);
+
+  const socialFeedOrComment =
+    /(?:^|[-_])(feed|comment)(?:[-_]|$)/.test(source) ||
+    source.includes("player-post-comment");
 
   const groqSmallBackgroundSources = new Set([
     "relationship-labels",
@@ -5675,20 +5680,13 @@ function taskProviderOrder(requestedProvider, body) {
     "identity-canon",
   ]);
 
-  const deepSheetSources = new Set([
-    "sheet-summary",
-    "character-bible",
-  ]);
-
   const groqSmallEnough = chars <= 26000;
   let raw;
 
-  if (openRouterSources.has(source)) {
-    raw = ["openrouter3", "openrouter2", "openrouter", "mistral"];
-  } else if (socialWritingSources.has(source)) {
-    raw = ["openrouter3", "openrouter2", "openrouter", "mistral", "gemini", "groq", "groq2"];
-  } else if (deepSheetSources.has(source)) {
-    raw = ["gemini", "groq", "groq2"];
+  if (deepSeekRoleplaySources.has(source) || deepSeekPersonalitySources.has(source)) {
+    raw = ["openrouter3"];
+  } else if (socialFeedOrComment) {
+    raw = ["gemini", "groq", "groq2", "openai"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
     raw = ["groq", "groq2", "gemini"];
   } else {
@@ -5788,7 +5786,7 @@ function summarizeProviderFailures(attempts, requestedProvider, body) {
     seen.add(key);
     details.push(`${item.provider}/${item.model}: HTTP ${item.status || "?"} ${item.message || "hiba"}`);
   }
-  for (const provider of providerOrder(requestedProvider)) {
+  for (const provider of taskProviderOrder(requestedProvider, body)) {
     if (seen.has(provider)) continue;
     const config = AI_GATE.providerConfigurationErrors.get(provider);
     if (config) details.push(`${provider}/${config.model || providerModel(provider, body)}: HTTP ${config.status} ${config.message}`);
@@ -5815,10 +5813,10 @@ function logFullAIPromptDebug(body = {}, source = "unknown", provider = "unknown
 }
 
 function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
-  /* OpenAI is deliberately NOT part of normal routing. It is allowed only for
-     Gemini-primary/background work when Gemini itself has a transient service
-     incident (not auth/quota), and the configured Groq safety nets cannot finish. */
+  /* OpenAI is a normal final fallback for feed/comment tasks. For other
+     Gemini-owned background work it remains emergency-only on provider outage. */
   if (!configuredAIProvider("openai")) return false;
+  if (attempts.some((item) => item.provider === "openai")) return false;
 
   const order = taskProviderOrder(task.requestedProvider, task.body);
   if (order[0] !== "gemini") return false;
@@ -5924,7 +5922,7 @@ async function executeAITask(task) {
   const details = summarizeProviderFailures(attempts, task.requestedProvider, task.body);
   if (last && attempts.length === 1 && ![401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504, 529].includes(Number(last?.status || 0))) return last;
 
-  const retryWaits = providerOrder(task.requestedProvider).map(providerCooldownMs).filter((ms) => ms > 0);
+  const retryWaits = taskProviderOrder(task.requestedProvider, task.body).map(providerCooldownMs).filter((ms) => ms > 0);
   const retryMs = retryWaits.length ? Math.min(...retryWaits) : 30000;
   return {
     ok: false,
