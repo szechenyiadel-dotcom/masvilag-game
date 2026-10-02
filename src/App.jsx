@@ -38002,6 +38002,29 @@ function directDmClarificationBlock(w, c, ck, latestText) {
 
 /* CLAUDE FIX R25: the player names someone in the DM — a jealous admirer reacts
    to the rival, and an enemy's name provokes real hostility. */
+function directDmPlayerSignalsRomanticAttentionToNamedPerson(latestText, otherName) {
+  const text = String(latestText || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const name = String(otherName || "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text || !name || !text.includes(name)) return false;
+
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const nameToken = escaped + "[\\p{L}'’\\-]{0,10}";
+
+  const patterns = [
+    new RegExp("\\b(?:i(?:'m| am)?\\s+(?:with|dating|seeing|choosing)|i\\s+(?:like|love|want|choose|chose|kissed|kiss|dated|date)|(?:dating|seeing|flirting|flirted|hooking\\s+up|hooked\\s+up|slept)\\s+with)\\s+" + nameToken + "\\b", "iu"),
+    new RegExp("\\b" + nameToken + "\\s+(?:is|['’]s)\\s+my\\s+(?:boyfriend|girlfriend|partner|date|crush|lover)\\b", "iu"),
+    new RegExp("\\b" + nameToken + "\\s+and\\s+i\\s+(?:are|were)\\s+(?:together|dating|seeing\\s+each\\s+other|hooking\\s+up)\\b", "iu"),
+    new RegExp("\\b" + nameToken + "\\s+(?:likes?|loves?|wants?|kissed)\\s+me\\b", "iu"),
+    new RegExp("\\b(?:szeretem|akarom|választom|megcsókoltam)\\s+" + nameToken + "\\b", "iu"),
+    new RegExp("\\b(?:járok|randizom|flörtölök|kavargok)\\s+" + nameToken + "\\b", "iu"),
+    new RegExp("\\b" + nameToken + "\\s+(?:vagyok|járok|randizom|flörtölök|kavargok)\\b", "iu"),
+    new RegExp("\\b" + nameToken + "\\s+(?:a\\s+)?(?:barátom|barátnőm|pasim|csajom|párom|partnerem|szerelmem)\\b", "iu"),
+    new RegExp("\\b" + nameToken + "\\s+(?:engem\\s+(?:szeret|akar)|belém\\s+szerelmes|velem\\s+(?:jár|randizik|flörtöl)|megcsókolt)\\b", "iu")
+  ];
+
+  return patterns.some((re) => re.test(text));
+}
+
 function directDmEmotionTrigger(w, c, latestText) {
   const latest = String(latestText || "");
   if (!w || !c || !latest || !w.meId) return "";
@@ -38026,7 +38049,7 @@ function directDmEmotionTrigger(w, c, latestText) {
       rows.push(en
         ? "- " + player + " just mentioned " + other + ", whom you " + (level === "extreme" ? "hate — let the contempt show at full force, as extreme as your sheet" : "can't stand — let it show clearly") + "."
         : "- " + player + " épp megemlítette " + other + "-t, akit " + (level === "extreme" ? "gyűlölsz — a megvetés teljes erővel látsszon, olyan szélsőségesen, ahogy a lapod mondja" : "ki nem állhatsz — ez látsszon is") + ".");
-    } else if (crush) {
+    } else if (crush && directDmPlayerSignalsRomanticAttentionToNamedPerson(latest, other)) {
       const level = emotionalIntensity(w, c.id, w.meId, "jealous");
       rows.push(en
         ? "- " + player + " just mentioned " + other + ". You have feelings for " + player + ": react with " + (level === "extreme" ? "open, possessive jealousy at full force, as extreme as your sheet (cold and menacing or explosive — your nature decides)" : "visible jealousy in your own way") + " — unless the message makes clear " + other + " is no threat at all."
@@ -38058,6 +38081,7 @@ function directDmProtectedTail(w, c, ck, latestText) {
     "- React DIRECTLY to the latest player message: its literal content, tone and intention. Continue this same conversational beat; do not jump to a generic new topic.\n" +
     "- MAKE SENSE: a real person reading your reply must understand exactly what you mean. Every reply carries at least one concrete point — an answer, a statement about the actual situation, a feeling about something specific, a specific question or a plan. No cryptic riddles, empty dramatic one-liners or vague lines like \"exactly where you belong\" that leave the player guessing.\n" +
     "- Keep track of the conversation: the history above is one continuous exchange. Your reply must fit what both of you said in the last few messages, not just the last line.\n" +
+    "- Preserve speaker roles, subjects and possessives exactly. If the player asks why YOU called/described X as yours/mine/possessively, answer for YOUR own wording or behavior. Do NOT flip it into a claim that the player called X theirs, wants X, is competing for X, or said something they did not say. Mentioning a third person in a question, accusation, quote or correction is NOT by itself evidence of romantic interest in that person.\n" +
     "- Answer the PLAYER'S latest line, not your own previous one: do not open with And / Or / So / But / For as if you were still finishing your last message. Write a complete thought (usually 1–3 sentences) that a reader understands without guessing — sharp and in character is fine, cryptic is not.\n" +
     "- If the player names someone they are with, flirting with or choosing (e.g. 'I'm with X'), react to THAT person and that fact directly, the way your feelings for the player demand.\n" +
     "- If the player reciprocates flirtation, respond to the fact that they reciprocated it. If they ask a question, answer it when your character knows. If they reject you, react to that rejection. If they agree, react to the agreement.\n" +
