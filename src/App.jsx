@@ -11900,7 +11900,11 @@ function legacyVoiceStyleCleanGeneratedUtterance(
 
   if (!t) return "";
   if (isRepetitiveUtterance(w, id, t)) return "";
-  if (allowPhysicalPhoneMeta && isRepetitiveRoleplayFunction(w, id, t)) return "";
+  /* CLAUDE FIX R51: in scenes a strongly-typed character (obsessed, possessive,
+     aggressive) shares "functions" with almost every earlier line — dropping the
+     whole turn left the scene with NO reply at all. Variety is asked for in the
+     prompt; here it is only noted. */
+  if (allowPhysicalPhoneMeta && isRepetitiveRoleplayFunction(w, id, t)) console.info("[roleplay] similar beat kept", "character=" + String(id || ""));
   return trimToWholeSentences(t, maxLen);
 }
 
@@ -35510,6 +35514,7 @@ Formátum:
                      not an action — repairing it turned "me"/"you" into a random "her". */
                   : String(addressedText || "").replace(/\*([^*]+)\*/g, (m, inner) => String(inner).trim().split(/\s+/).length < 4 ? m : "*" + repairRoleplayNarrationPov(w, resolvedId, inner) + "*")
             );
+            let keptText = roleplayText;
             const unsupportedPhysicalContinuation =
               !isNarr &&
               allowed &&
@@ -35518,13 +35523,21 @@ Formátum:
                 roleplayText,
                 promptTurns
               );
+            /* R51: only the sentence that claims an unsupported "still holding her"
+               goes — the rest of the turn stays (it used to drop the whole reply). */
+            if (unsupportedPhysicalContinuation) {
+              keptText = String(roleplayText).split(/(?<=[.!?…])\s+/).filter((part) => !roleplayHasUnsupportedPhysicalContinuation(resolvedId, part, promptTurns)).join(" ").trim();
+              console.info("[roleplay] unsupported hold removed", "character=" + String(resolvedId || ""), "kept=" + keptText.length);
+            }
+            if (!allowed) console.warn("[roleplay] turn dropped: unknown or player author", String(raw || "").slice(0, 60));
+            else if (!keptText) console.warn("[roleplay] turn dropped: empty after cleaning", "character=" + String(resolvedId || ""), rawText.slice(0, 120));
 
             return {
-              authorId: allowed && !unsupportedPhysicalContinuation ? resolvedId : null,
+              authorId: allowed ? resolvedId : null,
               to:
                 allowedTo,
               kind: t && t.kind === "action" ? "action" : "speech",
-              text: roleplayText,
+              text: keptText,
             };
           })
           .filter((t) => t.authorId && t.text);
@@ -35729,6 +35742,26 @@ JSON ONLY:
           } catch (_) {
             /* Keep the usable main round if the small fairness repair provider call fails. */
           }
+        }
+      }
+
+      /* R51: never leave the player without a reply — take the main answer's own
+         lines with light cleaning (no repetition filters), skipping exact repeats. */
+      if (!resolved.length) {
+        const lastTexts = new Set((promptTurns || []).slice(-8).map((t) => String(t && t.text || "").trim().toLowerCase()));
+        const fallbackRows = (out && Array.isArray(out.turns) ? out.turns : []).map((t) => {
+          const raw = t && (t.id !== undefined ? t.id : t.name);
+          const isNarr = String(raw || "").trim().toLowerCase() === "narrator";
+          const id = isNarr ? "narrator" : (findChar(w, raw) || findChar(w, t && t.name));
+          if (!id || (!isNarr && isHuman(w, id))) return null;
+          const text = stripRoleplayEmoji(trimToWholeSentences(normalizeGeneratedSocialText(String(t && t.text || "")), 2600));
+          if (!text || lastTexts.has(text.trim().toLowerCase())) return null;
+          const to = t && t.to ? (findChar(w, t.to) || (String(t.to) === String(w.meId) ? w.meId : "")) : "";
+          return { authorId: id, to: to && (to === w.meId || (scene.cast || []).includes(to)) ? to : "", kind: t && t.kind === "action" ? "action" : "speech", text };
+        }).filter(Boolean);
+        if (fallbackRows.length) {
+          console.warn("[roleplay] filters removed every line — using the main answer with light cleaning", fallbackRows.length);
+          resolved = fallbackRows;
         }
       }
 

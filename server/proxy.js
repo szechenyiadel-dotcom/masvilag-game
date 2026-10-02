@@ -5328,8 +5328,11 @@ function prepareAIRequestBody(body, priority, source) {
      Bigger requests burned through the free Gemini per-minute token quota. */
   /* CLAUDE FIX R17: one-time deep reading of character sheets is never cut short. */
   const deep = String(body?.quality || "") === "deep";
-  const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (deep ? 20000 : (priority >= 50 ? 22000 : 16000));
-  const promptCap = source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (deep ? 70000 : (priority >= 50 ? 40000 : 26000));
+  /* CLAUDE FIX R51: a live scene turn is the most player-facing call there is; cutting
+     its 80k prompt to 40k removed the scene's own recent turns and goal. */
+  const liveScene = String(body?.source || "") === "scene" && priority >= 50;
+  const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (liveScene ? 36000 : (deep ? 20000 : (priority >= 50 ? 22000 : 16000)));
+  const promptCap = source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (liveScene ? 84000 : (deep ? 70000 : (priority >= 50 ? 40000 : 26000)));
 
   if (source === "group-chat") {
     const before = system.length;
