@@ -5235,7 +5235,8 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
-  if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "arcee-ai/trinity-large-preview:free").trim();
+  if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "minimax/minimax-m3:free").trim();
+  if (provider === "openrouter2") return String(process.env.OPENROUTER_MODEL_2 || "openrouter/free").trim();
   if (provider === "gemini") {
     if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || GEMINI_MODEL_ENV || "gemini-3.8-flash").trim();
     return String(GEMINI_MODEL_ENV || "gemini-3.8-flash").trim();
@@ -5512,14 +5513,15 @@ function markProviderFailure(provider, model, result) {
   const status = Number(result?.status || 0);
   const message = safeProviderMessage(result, `HTTP ${status}`);
 
-  if ([401, 403, 404].includes(status)) {
+  if ([401, 402, 403, 404].includes(status)) {
     AI_GATE.providerConfigurationErrors.set(provider, { status, model, message, at: Date.now() });
+    AI_GATE.providerCooldownUntil.delete(provider);
     AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
     console.warn("[ai-gate] provider-config-invalid", `${provider}/${model}`, `status=${status}`, message);
     return -1;
   }
 
-  if (![402, 408, 429, 500, 502, 503, 504, 529].includes(status)) return 0;
+  if (![408, 429, 500, 502, 503, 504, 529].includes(status)) return 0;
   const previous = Number(AI_GATE.providerFailures.get(provider) || 0);
   const failures = Math.min(4, previous + 1);
   AI_GATE.providerFailures.set(provider, failures);
