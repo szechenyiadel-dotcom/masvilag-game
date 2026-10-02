@@ -5186,7 +5186,7 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
      Groq gets longer because it is the final large-context safety net. */
   const baseTimeout = upstreamTimeoutFor(body);
   const providerTimeout =
-    provider === "openrouter" || provider === "openrouter2"
+    provider === "openrouter" || provider === "openrouter2" || provider === "openrouter3"
       ? Math.min(baseTimeout, 15000)
       : provider === "groq"
         ? Math.min(baseTimeout, 35000)
@@ -5236,7 +5236,7 @@ function providerModel(provider, body = {}) {
   }
   if (provider === "groq") return GROQ_MODEL || "";
   if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim();
-  if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "nvidia/nemotron-3-ultra-550b-a55b:free").trim();
+  if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
   if (provider === "openrouter2") return String(process.env.OPENROUTER_MODEL_2 || "openrouter/free").trim();
   if (provider === "gemini") {
     if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || GEMINI_MODEL_ENV || "gemini-3.8-flash").trim();
