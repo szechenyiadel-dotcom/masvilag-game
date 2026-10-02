@@ -5175,20 +5175,43 @@ function buildCompatibleChatPayload(body = {}, model) {
 
 async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
   if (!apiKey || !model) return { unavailable: true, provider, model: model || "" };
-  const r = await fetchWithTimeout(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-    body: JSON.stringify(buildCompatibleChatPayload(body, model)),
-  }, upstreamTimeoutFor(body));
-  const payload = await responseJsonSafe(r);
-  if (!r.ok) {
-    return { ok: false, status: r.status, payload, retryAfter: r.headers.get("retry-after"), provider, model };
+
+  /* R68: free OpenRouter endpoints can hang long enough for the mobile client to
+     close the request (~90s). Give each OR key a short turn, then fail over.
+     Groq gets longer because it is the final large-context safety net. */
+  const baseTimeout = upstreamTimeoutFor(body);
+  const providerTimeout =
+    provider === "openrouter" || provider === "openrouter2"
+      ? Math.min(baseTimeout, 15000)
+      : provider === "groq"
+        ? Math.min(baseTimeout, 35000)
+        : baseTimeout;
+
+  try {
+    const r = await fetchWithTimeout(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+      body: JSON.stringify(buildCompatibleChatPayload(body, model)),
+    }, providerTimeout);
+    const payload = await responseJsonSafe(r);
+    if (!r.ok) {
+      return { ok: false, status: r.status, payload, retryAfter: r.headers.get("retry-after"), provider, model };
+    }
+    const normalized = normalizeOpenAIResponse(payload);
+    const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
+    return hasText
+      ? { ok: true, payload: normalized, provider, model }
+      : { ok: false, status: 502, payload: { error: { message: `${provider} returned empty content.` } }, provider, model };
+  } catch (err) {
+    const timeout = err?.name === "AbortError" || /aborted|timeout/i.test(String(err?.message || err || ""));
+    return {
+      ok: false,
+      status: timeout ? 504 : 502,
+      payload: { error: { message: timeout ? `${provider} timed out after ${providerTimeout}ms.` : String(err?.message || err || "Provider request failed.") } },
+      provider,
+      model,
+    };
   }
-  const normalized = normalizeOpenAIResponse(payload);
-  const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
-  return hasText
-    ? { ok: true, payload: normalized, provider, model }
-    : { ok: false, status: 502, payload: { error: { message: `${provider} returned empty content.` } }, provider, model };
 }
 
 function providerModel(provider, body = {}) {
@@ -5486,7 +5509,7 @@ function markProviderFailure(provider, model, result) {
     return -1;
   }
 
-  if (![402, 429, 503, 529].includes(status)) return 0;
+  if (![402, 408, 429, 500, 502, 503, 504, 529].includes(status)) return 0;
   const previous = Number(AI_GATE.providerFailures.get(provider) || 0);
   const failures = Math.min(4, previous + 1);
   AI_GATE.providerFailures.set(provider, failures);
@@ -5663,7 +5686,7 @@ async function executeAITask(task) {
     if (result?.unavailable) continue;
 
     attempts.push({ provider, model, status, message });
-    if ([401, 402, 403, 404, 429, 503, 529].includes(status)) {
+    if ([401, 402, 403, 404, 408, 429, 500, 502, 503, 504, 529].includes(status)) {
       markProviderFailure(provider, model, result);
       continue;
     }
@@ -5674,7 +5697,7 @@ async function executeAITask(task) {
   }
 
   const details = summarizeProviderFailures(attempts, task.requestedProvider, task.body);
-  if (last && attempts.length === 1 && ![401, 402, 403, 404, 429, 503, 529].includes(Number(last?.status || 0))) return last;
+  if (last && attempts.length === 1 && ![401, 402, 403, 404, 408, 429, 500, 502, 503, 504, 529].includes(Number(last?.status || 0))) return last;
 
   const retryWaits = providerOrder(task.requestedProvider).map(providerCooldownMs).filter((ms) => ms > 0);
   const retryMs = retryWaits.length ? Math.min(...retryWaits) : 30000;
