@@ -38507,15 +38507,127 @@ async function askDirectDmJSONInteractive(w, system, prompt, options = {}) {
     { ...forward, maxTries: 1 }
   );
 
-  const firstReply = String(out && out.reply !== undefined ? out.reply : "").trim();
-  const askingAboutLastLine = Boolean(c && directDmClarificationBlock(w, c, ck || chatKey(w.meId, c.id), latestText));
-  if (!c || !firstReply || !directDmReplyLooksRepetitive(w, c, firstReply)) {
-    return out;
+  const firstReply = String(
+    out && out.reply !== undefined
+      ? out.reply
+      : out && out.text !== undefined
+        ? out.text
+        : out && out.message !== undefined
+          ? out.message
+          : ""
+  ).trim();
+
+  const normalizedOut =
+    firstReply &&
+    (!out || out.reply === undefined)
+      ? { ...(out || {}), reply: firstReply }
+      : out;
+
+  const askingAboutLastLine = Boolean(
+    c &&
+    directDmClarificationBlock(
+      w,
+      c,
+      ck || chatKey(w.meId, c.id),
+      latestText
+    )
+  );
+
+  if (!c) {
+    return normalizedOut;
   }
+
+  if (!firstReply) {
+    const recoveryLanguage =
+      typeof worldLanguage === "function"
+        ? worldLanguage(w)
+        : "hu";
+
+    const recoveryPrompt =
+      directDmProtectedTail(
+        w,
+        c,
+        ck || chatKey(w.meId, c.id),
+        latestText
+      ) +
+      "\n\nSTRICT EMPTY-REPLY RECOVERY:\n" +
+      "The previous AI response was parseable but did not contain a usable reply field. " +
+      "Answer the exact latest DM now. Do not return image, relationship, or roleplay fields in this recovery call.\n" +
+      "Return ONLY compact valid JSON in this exact shape: " +
+      JSON.stringify({
+        reply: "your direct DM reply",
+        language: recoveryLanguage,
+      }) +
+      "\n\nAMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\n" +
+      latestText;
+
+    console.warn(
+      "[dm-empty-reply]",
+      "recovery requested",
+      "bot=" + String(c.name || "") + "[" + String(c.id || "") + "]"
+    );
+
+    directDmPromptDebugLog(
+      recoveryPrompt,
+      c,
+      latestText,
+      true
+    );
+
+    const recoveryOut =
+      await askWorldWritingJSONInteractive(
+        "dm",
+        w,
+        system,
+        recoveryPrompt,
+        {
+          ...forward,
+          maxTries: 1,
+          maxTokens: Math.min(
+            320,
+            Number(forward.maxTokens) || 320
+          ),
+        }
+      );
+
+    const recoveredReply = String(
+      recoveryOut && recoveryOut.reply !== undefined
+        ? recoveryOut.reply
+        : recoveryOut && recoveryOut.text !== undefined
+          ? recoveryOut.text
+          : recoveryOut && recoveryOut.message !== undefined
+            ? recoveryOut.message
+            : ""
+    ).trim();
+
+    if (recoveredReply) {
+      console.info(
+        "[dm-empty-reply]",
+        "recovery succeeded",
+        "bot=" + String(c.name || "") + "[" + String(c.id || "") + "]"
+      );
+      return {
+        ...(out || {}),
+        reply: recoveredReply,
+      };
+    }
+
+    console.warn(
+      "[dm-empty-reply]",
+      "recovery returned no usable reply",
+      "bot=" + String(c.name || "") + "[" + String(c.id || "") + "]"
+    );
+    return normalizedOut;
+  }
+
+  if (!directDmReplyLooksRepetitive(w, c, firstReply)) {
+    return normalizedOut;
+  }
+
   if (askingAboutLastLine) {
     /* explaining the last line naturally reuses its words — only an exact repeat is rewritten */
     const ownTexts = ((w.chats && w.chats[ck || chatKey(w.meId, c.id)]) || []).filter((m) => m && m.from !== "me").slice(-5).map((m) => normUtterance(String(m.text || "")));
-    if (!ownTexts.includes(normUtterance(firstReply))) return out;
+    if (!ownTexts.includes(normUtterance(firstReply))) return normalizedOut;
   }
 
   /* CLAUDE FIX R26: the rewrite keeps the whole character/world context */
@@ -38542,8 +38654,8 @@ async function askDirectDmJSONInteractive(w, system, prompt, options = {}) {
   ).trim();
 
   return replacement
-    ? { ...(out || {}), reply: replacement }
-    : out;
+    ? { ...(normalizedOut || {}), reply: replacement }
+    : normalizedOut;
 }
 
 function LegacyGroundedChat({ w, update, setErr, openId, setOpenId, jump, noteReply, clearNoteReply, onOpenScene }) {
