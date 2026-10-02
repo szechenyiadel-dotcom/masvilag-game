@@ -3139,7 +3139,8 @@ function legacyFullSpecApplyComments(...args) {
 /* CLAUDE FIX R55: RANK. A student / non-sensei does not tell a sensei "shut up",
    insult or mock them in public (own sensei or someone else's dangerous one).
    Family (a kid and their sensei-parent) and fellow senseis are exempt. */
-const DISRESPECT_TO_AUTHORITY_RE = /\b(?:shut (?:up|it)|stfu|fuck (?:off|you)|piss off|screw you|bite me|get lost|nobody asked|clown|loser|pathetic|idiot|moron|dumbass|cringe|old man|boomer|has-?been|washed[- ]up|sit down,? old)\b|(?:\bkuss\b|fogd be|pofa be|kapd be|bunk[oó]|h[uü]lye|idi[oó]ta|sz[aá]nalmas|l[uú]zer|v[eé]n (?:kecske|marha|hülye)|vénember)/i;
+/* R59: mockery counts too — "yikes someone needs a nap", "says the guy who couldn't…" */
+const DISRESPECT_TO_AUTHORITY_RE = /\b(?:shut (?:up|it)|stfu|fuck (?:off|you)|piss off|screw you|bite me|get lost|nobody asked|who asked|clown|loser|pathetic|idiot|moron|dumbass|cringe|old man|boomer|has-?been|washed[- ]up|sit down,? old|yikes|needs? a nap|says the (?:guy|man|one|dude)|(?:couldn['’]?t|can['’]?t) even|calm down|chill(?: out)?|touch grass|cope|ratio|imagine (?:being|thinking)|bro thinks|someone'?s (?:cranky|grumpy|salty|mad|pressed|angry)|relax,? (?:old|grandpa|man)|take a (?:pill|chill)|retire|try ?hard|lol|lmf?ao|rofl|ok(?:ay)? sensei)\b|💀|🤡|😂|🤣|🙄|(?:\bkuss\b|fogd be|pofa be|kapd be|bunk[oó]|h[uü]lye|idi[oó]ta|sz[aá]nalmas|l[uú]zer|v[eé]n (?:kecske|marha|hülye)|vénember)/i;
 function disrespectsAuthority(w, speakerId, addresseeId, text) {
   if (!w || !speakerId || !addresseeId || speakerId === addresseeId) return false;
   if (isHuman(w, speakerId)) return false;
@@ -3186,6 +3187,21 @@ function applyReplies(...args) {
   return withRelationshipChannel("public", { reason: "timeline-replies" }, () => legacyChannelApplyReplies(...args));
 }
 function applyWorldStep(...args) {
+  /* R59: comments under a sensei's new post — no mockery from students */
+  try {
+    const n = args[0], out = args[1];
+    if (n && out && Array.isArray(out.posts)) {
+      args[1] = {
+        ...out,
+        posts: out.posts.map((p) => {
+          if (!p || !Array.isArray(p.comments) || !p.comments.length) return p;
+          const authorId = aiVoice(n, p.id !== undefined ? p.id : (p.authorId !== undefined ? p.authorId : p.name));
+          if (!authorId) return p;
+          return { ...p, comments: filterDisrespectToAuthority(n, p.comments, () => authorId) };
+        }),
+      };
+    }
+  } catch (error) { /* keep */ }
   return withRelationshipChannel("public", { reason: "timeline-feed" }, () => legacyChannelApplyWorldStep(...args));
 }
 function legacyFullSpecApplySceneChangesWithStatus(...args) {
