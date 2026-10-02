@@ -28,6 +28,22 @@ function replaceBlock(startText, endText, replacement, label) {
   next = next.slice(0, start) + replacement + "\n\n" + next.slice(end);
 }
 
+function replaceInsideBlock(startText, endText, oldText, newText, label) {
+  const start = next.indexOf(startText);
+  const end = start >= 0 ? next.indexOf(endText, start + startText.length) : -1;
+  if (start < 0 || end < 0) {
+    throw new Error(`Enemy/sheet guard aborted: ${label} function boundaries not found.`);
+  }
+  const block = next.slice(start, end);
+  const first = block.indexOf(oldText);
+  const second = first >= 0 ? block.indexOf(oldText, first + oldText.length) : -1;
+  if (first < 0 || second >= 0) {
+    throw new Error(`Enemy/sheet guard aborted: ${label} expected exactly one inner anchor.`);
+  }
+  const patched = block.slice(0, first) + newText + block.slice(first + oldText.length);
+  next = next.slice(0, start) + patched + next.slice(end);
+}
+
 if (!next.includes(`/* ${MARKER} */`)) {
   const enemyHelperAnchor = "function playerPostCommentGeneratedTone(text) {";
   const enemyGuard = `/* ${MARKER} */
@@ -43,18 +59,8 @@ function playerPostCommentIsEnemyCard(card) {
 ${enemyHelperAnchor}`;
   replaceExact(enemyHelperAnchor, enemyGuard, "enemy support guard helper");
 
-  const followLeakGuard = `      if (playerPostCommentHasFollowLeak(postContext, text)) {
-        console.warn("[player-post-comments] rejected=follow-context-leak", "character=" + actorId, "text=" + text.slice(0, 180));
-        return;
-      }
-
-      seen.add(actorId);`;
-  const enemyRowGuard = `      if (playerPostCommentHasFollowLeak(postContext, text)) {
-        console.warn("[player-post-comments] rejected=follow-context-leak", "character=" + actorId, "text=" + text.slice(0, 180));
-        return;
-      }
-
-      const commenterCard = cards.find((card) => card && card.id === actorId);
+  const enemySeenAnchor = `      seen.add(actorId);`;
+  const enemySeenGuard = `      const commenterCard = cards.find((card) => card && card.id === actorId);
       if (
         playerPostCommentIsEnemyCard(commenterCard) &&
         (PLAYER_POST_COMMENT_POSITIVE_RE.test(text) || PLAYER_POST_COMMENT_ENEMY_SUPPORT_RE.test(text))
@@ -64,7 +70,13 @@ ${enemyHelperAnchor}`;
       }
 
       seen.add(actorId);`;
-  replaceExact(followLeakGuard, enemyRowGuard, "enemy output rejection");
+  replaceInsideBlock(
+    "function playerPostCommentRowsFromOutput(w, out, cards, postContext) {",
+    "function playerPostCommentBatchProblems(",
+    enemySeenAnchor,
+    enemySeenGuard,
+    "enemy output rejection"
+  );
 
   replaceExact(
     `        "Positive/friendly relationships should read warm, supportive, playful or naturally flirty when appropriate; hostile relationships may be sharp; jealous relationships may be pointed; neutral relationships may be brief and neutral.",`,
