@@ -61160,6 +61160,43 @@ const signOut = useCallback(async () => {
         action = plannedWhileLocalWaits;
       }
 
+      /*
+       * PLAYER-POST PAIRED LANE:
+       * Comments and the 6–7 post world refresh are one player event, but they
+       * must not block each other. If the comment action is selected first,
+       * start its matching player-post world refresh immediately in the second
+       * lane instead of waiting for the next scheduler beat.
+       */
+      const pairedPlayerPostWorld =
+        action &&
+        action.type === "player-post-comments-guarantee" &&
+        action.payload &&
+        action.payload.postId
+          ? queueFree.find((candidate) =>
+              candidate &&
+              candidate.id !== action.id &&
+              candidate.type === "world-full" &&
+              candidate.source === "player-event" &&
+              candidate.payload &&
+              candidate.payload.trigger === "player-post" &&
+              String(candidate.payload.postId || "") === String(action.payload.postId || "")
+            )
+          : null;
+
+      if (
+        pairedPlayerPostWorld &&
+        !manualLaneBusy.current &&
+        !inFlightActionIds.current.has(pairedPlayerPostWorld.id)
+      ) {
+        console.info(
+          "[player-post-world]",
+          "stage=paired-lane-start",
+          "post=" + String(action.payload.postId || ""),
+          "action=" + String(pairedPlayerPostWorld.id || "")
+        );
+        runManualLane(pairedPlayerPostWorld);
+      }
+
       autoRunning.current = true;
       autoRunningSince.current = now();
       const mainLaneActionId = action && action.id ? action.id : "";
@@ -64285,6 +64322,7 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
         {
           maxTokens: 900,
           priority: 65,
+          timeoutMs: 60000,
           source: "player-post-comments-isolated",
         }
       );
