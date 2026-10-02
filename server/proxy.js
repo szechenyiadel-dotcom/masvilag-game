@@ -5670,7 +5670,8 @@ function taskProviderOrder(requestedProvider, body) {
   ]);
 
   const socialFeedOrComment =
-    /(?:^|[-_])(feed|comment)(?:[-_]|$)/.test(source) ||
+    source === "comments" ||
+    /(?:^|[-_])(feed|comments?)(?:[-_]|$)/.test(source) ||
     source.includes("player-post-comment");
 
   const groqSmallBackgroundSources = new Set([
@@ -5686,11 +5687,13 @@ function taskProviderOrder(requestedProvider, body) {
   if (deepSeekRoleplaySources.has(source) || deepSeekPersonalitySources.has(source)) {
     raw = ["openrouter3"];
   } else if (socialFeedOrComment) {
-    raw = ["gemini", "groq", "groq2", "openai"];
+    raw = ["gemini", "openai"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
     raw = ["groq", "groq2", "gemini"];
-  } else {
+  } else if (groqSmallEnough) {
     raw = ["gemini", "groq", "groq2"];
+  } else {
+    raw = ["gemini"];
   }
 
   return raw.filter((provider, index, all) =>
