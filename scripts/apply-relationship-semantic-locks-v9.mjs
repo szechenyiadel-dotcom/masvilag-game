@@ -33,6 +33,8 @@ if (!next.includes("/* " + MARKER + " */")) {
   renameOne("relationshipCrushActive", "legacyV9RelationshipCrushActive");
   renameOne("officialRelationshipStatusForPair", "legacyV9OfficialRelationshipStatusForPair");
   renameOne("relLabel", "legacyV9RelLabel");
+  renameOne("relationshipReadingHash", "legacyV9RelationshipReadingHash");
+  renameOne("relationshipReadingCacheKey", "legacyV9RelationshipReadingCacheKey");
 
   /* Relationship output language validation must include bond/role-ish fields. */
   replaceExact(
@@ -219,6 +221,18 @@ function relV9CanonicalBondParts(w, actor, target) {
   return parts.slice(0, 6);
 }
 
+function relationshipReadingHash(snippet) {
+  return simsSocialStableHash("v9-semantic-locks|" + String(snippet || ""));
+}
+
+function relationshipReadingCacheKey(actor, target, snippet) {
+  return "rr9-semantic-locks:" + simsSocialStableHash(
+    String(actor && actor.name || "") + "|" +
+    String(target && target.name || "") + "|" +
+    relationshipReadingHash(snippet)
+  );
+}
+
 function exactConnectionBondLabel(w, actor, target) {
   return relV9CanonicalBondParts(w, actor, target).join(" / ");
 }
@@ -231,7 +245,7 @@ function connectionRelationshipCue(w, actor, target) {
   const romanticText = relV9WithoutFakeDating(low);
   return {
     snippet,
-    romantic: !fake && relV9OrientationAllows(w, actor, target) && REL_V9_CRUSH_RE.test(romanticText),
+    romantic: relV9OrientationAllows(w, actor, target) && parts.some((x) => ["Crush", "Mutual crush", "Obsession", "Dating", "Seeing each other", "Engaged", "Spouse"].includes(x)),
     close: parts.includes("Best friend") || parts.includes("Close friend"),
     friendly: parts.some((x) => ["Friend", "Close friend", "Best friend"].includes(x)),
     hostile: parts.includes("Enemy"),
@@ -418,7 +432,7 @@ function relLabel(r) {
 
   next += helper;
   fs.writeFileSync(appPath, next, "utf8");
-  console.log("[patch-status] relationship-semantic-locks=v9 applied; fake-dating-lock=on; strict-team-dojo=on; english-visible-guard=on");
+  console.log("[patch-status] relationship-semantic-locks=v9 applied; cache=rr9; fake-dating-lock=on; strict-team-dojo=on; english-visible-guard=on");
 } else {
   console.log("[patch-status] relationship-semantic-locks=v9 already applied");
 }
