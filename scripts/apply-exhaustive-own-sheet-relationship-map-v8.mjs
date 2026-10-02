@@ -431,6 +431,9 @@ async function genRelationshipReading(w, actor, due) {
       "EXHAUSTIVE OWN-SHEET RELATIONSHIP MAP — SYNTHESIS.",
       "Actor / sheet owner: " + String(actor.name || actor.id) + " [" + String(actor.id) + "]",
       "You are building THIS ACTOR'S directed relationships. The actor's own sheet is the ONLY emotional authority.",
+      "OUTPUT LANGUAGE — HARD: " + (worldLanguage(w, w.meId) === "en"
+        ? "ENGLISH ONLY in every returned user-visible field: bond, role, layers, mood, hidden, description, why and label. Never return Hungarian words or phrases."
+        : "HUNGARIAN ONLY in every returned user-visible field."),
       "",
       "HARD RULES:",
       "- Use ONLY the extracted facts under each exact target. Never move a fact from one target to another.",
