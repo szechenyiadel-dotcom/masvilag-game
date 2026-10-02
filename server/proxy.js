@@ -5052,9 +5052,9 @@ async function proxyOpenAIMessage(
       };
 }
 
-/* CLAUDE FIX R66: several Gemini keys (GEMINI_API_KEY, GEMINI_API_KEY_2 … _5). When
-   one key's free quota runs out (429), the next key is tried at once; a used-up key
-   rests for 30 minutes. */
+/* R71: several Gemini keys (GEMINI_API_KEY, GEMINI_API_KEY_2 … _5).
+   Quota-exhausted keys rest for 30 minutes. Invalid/revoked keys are skipped too,
+   so one bad key can never disable every later Gemini key. */
 const GEMINI_KEYS = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2, process.env.GEMINI_API_KEY_3, process.env.GEMINI_API_KEY_4, process.env.GEMINI_API_KEY_5]
   .map((k) => String(k || "").trim()).filter(Boolean).filter((k, i, a) => a.indexOf(k) === i);
 const GEMINI_KEY_REST_UNTIL = new Map();
@@ -5068,9 +5068,17 @@ async function proxyGeminiMessage(body) {
     const result = await proxyGeminiMessageWithKey(body, keys[i]);
     if (result && result.ok) return result;
     last = result;
-    if (result && result.status === 429 && GEMINI_KEYS.length > 1) {
-      GEMINI_KEY_REST_UNTIL.set(keys[i], Date.now() + 30 * 60 * 1000);
-      console.warn("[ai-provider] gemini key #" + (GEMINI_KEYS.indexOf(keys[i]) + 1) + " out of quota — trying the next key");
+    if (result && [401, 403, 429].includes(Number(result.status)) && GEMINI_KEYS.length > 1) {
+      const invalidKey = [401, 403].includes(Number(result.status));
+      GEMINI_KEY_REST_UNTIL.set(
+        keys[i],
+        Date.now() + (invalidKey ? 24 * 60 * 60 * 1000 : 30 * 60 * 1000)
+      );
+      console.warn(
+        "[ai-provider] gemini key #" + (GEMINI_KEYS.indexOf(keys[i]) + 1) +
+        (invalidKey ? " invalid/rejected" : " out of quota") +
+        " — trying the next key"
+      );
       continue;
     }
     break;
@@ -5230,7 +5238,7 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
-  if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "inclusionai/ling-3.0-tiny:free").trim();
+  if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "arcee-ai/trinity-large-preview:free").trim();
   if (provider === "gemini") {
     if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || "gemini-3.5-flash").trim();
     return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
@@ -5265,7 +5273,7 @@ async function callMessageProvider(provider, body) {
 function configuredAIProvider(provider) {
   if (provider === "mistral") return Boolean(MISTRAL_API_KEY && MISTRAL_MODEL);
   if (provider === "groq") return Boolean(GROQ_API_KEY && GROQ_MODEL);
-  if (provider === "gemini") return Boolean(GEMINI_API_KEY || process.env.GEMINI_API_KEY_2);
+  if (provider === "gemini") return GEMINI_KEYS.length > 0;
   if (provider === "openrouter") return Boolean(process.env.OPENROUTER_API_KEY);
   if (provider === "openrouter2") return Boolean(process.env.OPENROUTER_API_KEY_2);
   if (provider === "openai") return Boolean(OPENAI_API_KEY);
