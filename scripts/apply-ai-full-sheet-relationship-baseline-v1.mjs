@@ -10,7 +10,7 @@ let next = original;
 const MARKER = "MÁSVILÁG NATIVE FULL-SHEET RELATIONSHIP READING v6";
 
 function renameOne(name, replacement) {
-  const rx = new RegExp("function\\\\s+" + name + "\\\\s*\\\\(");
+  const rx = new RegExp("function\\s+" + name + "\\s*\\(");
   const matches = [...next.matchAll(new RegExp(rx.source, "g"))];
   if (matches.length !== 1) throw new Error("Relationship v6 aborted: " + name + " expected once, found " + matches.length);
   next = next.replace(rx, "function " + replacement + "(");
