@@ -5738,9 +5738,30 @@ function naturalCommentReplyTargets(w, post, comment) {
     candidates.push({ id, reason, base });
   };
 
-  namedPeopleInText(w, comment.text, comment.authorId).forEach((id) => push(id, "mention", 82));
+  const explicitMentions = new Set(
+    mentionedIdsInText(
+      w,
+      comment.text,
+      comment.authorId
+    )
+  );
+
+  explicitMentions.forEach(
+    (id) =>
+      push(
+        id,
+        "mention",
+        92
+      )
+  );
+
   const parent = comment.parent ? comments.find((c) => c && c.id === comment.parent) : null;
-  if (parent && parent.authorId) push(parent.authorId, "parent", 74);
+  if (parent && parent.authorId) push(parent.authorId, "parent", 88);
+
+  namedPeopleInText(w, comment.text, comment.authorId)
+    .filter((id) => !explicitMentions.has(id))
+    .forEach((id) => push(id, "named-person", 54));
+
   if (!comment.parent && post.authorId) push(post.authorId, "post-author", 70);
 
   const cue = commentReplyCueScore(comment.text);
@@ -15078,8 +15099,7 @@ function textDirectlyUsesSecondPerson(value) {
 
   return (
     /\b(you|your|yours|yourself|u|ur)\b/.test(t) ||
-    /\b(te|teged|neked|veled|rolad|hozzad|toled|nalad|tied|magad|szerinted)\b/.test(t) ||
-    /[?？]/.test(t)
+    /\b(te|teged|neked|veled|rolad|hozzad|toled|nalad|tied|magad|szerinted)\b/.test(t)
   );
 }
 
@@ -15219,11 +15239,16 @@ function inferConversationAddressee(
         String(alias)
           .startsWith("@");
 
+      const core =
+        escapeAddressRegex(
+          nAlias.replace(/^@/, "")
+        );
+
       const pattern =
         new RegExp(
-          `(^|[^a-z0-9_])${escapeAddressRegex(
-            nAlias.replace(/^@/, "")
-          )}([^a-z0-9_]|$)`,
+          "(^|[^a-z0-9_])" +
+          core +
+          "([^a-z0-9_]|$)",
           "i"
         );
 
@@ -15244,53 +15269,82 @@ function inferConversationAddressee(
 
       if (!match) return;
 
-      let weight = 2;
+      const normalizedRaw =
+        normalizeAddressText(
+          raw
+        );
 
-      if (isHandle) {
-        weight = 5;
+      const explicitHandle =
+        isHandle &&
+        new RegExp(
+          "(^|[^a-z0-9._-])@" +
+          core +
+          "(?=$|[^a-z0-9._-])",
+          "i"
+        ).test(
+          normalizedRaw
+        );
+
+      const standalone =
+        new RegExp(
+          "^\\s*@?" +
+          core +
+          "[?!.]*\\s*$",
+          "i"
+        ).test(
+          normalizedRaw
+        );
+
+      const startsAsAddress =
+        new RegExp(
+          "^\\s*(?:(?:hey|yo|hi|hello|szia|he)\\s+)?@?" +
+          core +
+          "(?=\\s*[,;:!?—-]|\\s*$)",
+          "i"
+        ).test(
+          normalizedRaw
+        );
+
+      const startsConversationally =
+        new RegExp(
+          "^\\s*(?:(?:hey|yo|hi|hello|szia|he)\\s+)?@?" +
+          core +
+          "\\s+(?=(?:why|what|how|who|when|where|which|do|did|does|are|were|is|can|could|will|would|you|your|miert|mit|hogyan|ki|mikor|hol|melyik|te|neked|szerinted)\\b)",
+          "i"
+        ).test(
+          normalizedRaw
+        );
+
+      const endsAsAddress =
+        new RegExp(
+          "(?:[,;:!?—-]\\s*|\\b(?:hey|yo|szia|he)\\s+)@?" +
+          core +
+          "[.!?]*\\s*$",
+          "i"
+        ).test(
+          normalizedRaw
+        );
+
+      let weight = 0;
+
+      if (explicitHandle) {
+        weight = 10;
+      } else if (standalone) {
+        weight = 9;
       } else if (
-        c.username &&
-        nAlias ===
-          normalizeAddressText(
-            c.username
-          )
+        startsAsAddress ||
+        startsConversationally ||
+        endsAsAddress
       ) {
-        weight = 4;
-      } else if (
-        c.name &&
-        nAlias ===
-          normalizeAddressText(
-            c.name
-          )
-      ) {
-        weight = 4;
-      } else if (
-        c.nick &&
-        nAlias ===
-          normalizeAddressText(
-            c.nick
-          )
-      ) {
-        weight = 4;
+        weight = 8;
       }
 
       /*
-       * "Feng, ..." / "Feng?" / "to Feng" / "Fengnek..."
-       * jellegű megszólítás kapjon extra súlyt.
+       * A puszta névemlítés NEM címzés.
+       * "Brent, why are you calling Manon yours?" -> Brent a címzett,
+       * Manon csak a mondat tárgya. Csak valódi megszólítás kerül a hits listába.
        */
-      const vocative =
-        new RegExp(
-          `(^|[\\s,;:!?])${escapeAddressRegex(
-            nAlias.replace(/^@/, "")
-          )}(?=[\\s,;:!?]|$)`,
-          "i"
-        ).test(
-          haystack
-        );
-
-      if (vocative) {
-        weight += 2;
-      }
+      if (!weight) return;
 
       hits.push({
         id: c.id,
@@ -15306,7 +15360,7 @@ function inferConversationAddressee(
       (a, b) =>
         b.weight !== a.weight
           ? b.weight - a.weight
-          : b.index - a.index
+          : a.index - b.index
     );
 
     const best =
@@ -15323,11 +15377,11 @@ function inferConversationAddressee(
       return {
         id: best.id,
         confidence:
-          best.weight >= 5
+          best.weight >= 9
             ? 1
-            : 0.92,
+            : 0.96,
         reason:
-          "explicit-name",
+          "explicit-address",
       };
     }
   }
@@ -15339,10 +15393,6 @@ function inferConversationAddressee(
       candidateSet
     );
 
-  /*
-   * Ha az utolsó AI-üzenet kifejezetten A JÁTÉKOSNAK szólt,
-   * és a játékos most E/2-ben válaszol, az a beszélő az elsődleges célpont.
-   */
   if (
     latest &&
     textDirectlyUsesSecondPerson(
@@ -15367,10 +15417,6 @@ function inferConversationAddressee(
     };
   }
 
-  /*
-   * Ha korábban már egyértelműen valakire fókuszált a játékos,
-   * ezt több körön át megőrizzük.
-   */
   if (
     persistedFocusId &&
     candidateSet.has(
@@ -15386,22 +15432,28 @@ function inferConversationAddressee(
     };
   }
 
-  /*
-   * Rövid "igen/nem/oké/miért?" jellegű válasznál az utolsó beszélő
-   * általában természetesebb célpont, mint egy véletlen másik tag.
-   */
   const words =
     raw
       .trim()
       .split(/\s+/)
       .filter(Boolean);
 
+  const shortFollowup =
+    /^\s*(?:yes|yeah|yep|no|nope|okay|ok|sure|really|seriously|why(?:\s+though)?|what(?:\s+do\s+you\s+mean)?|how\s+so|and|then\s+what|igen|ja|aha|nem|oke|miert(?:\s+amugy)?|mit\s+ertesz|tenyleg|komolyan|es|es\s+aztan)\s*[?!.]*\s*$/i.test(
+      normalizeAddressText(
+        raw
+      )
+    );
+
   if (
     latest &&
     (
-      words.length <= 8 ||
-      /^[\s]*(yes|yeah|yep|no|nope|okay|ok|sure|why|what|igen|ja|aha|nem|oké|oke|miért|miert|mit|mi)\b/i.test(
-        raw
+      shortFollowup ||
+      (
+        words.length <= 8 &&
+        textDirectlyUsesSecondPerson(
+          raw
+        )
       )
     )
   ) {
@@ -37127,20 +37179,46 @@ const turn = async (mine) => {
           playerTarget.id;
       }
 
-      /* CLAUDE FIX R27: the other members witness what the player says to someone */
-      const groupTargetId = playerTarget.id || (namedPeopleInText(n, mine, n.meId).find((id) => (g.members || []).includes(id)) || "");
+      /* CLAUDE FIX R27 + semantic target guard:
+         a named third person is not automatically the person the player flirted with / attacked. */
+      const socialSignal =
+        groupPlayerSemanticSocialSignals(
+          n,
+          mine,
+          playerTarget.id || "",
+          g.members || []
+        );
+
+      const groupTargetId =
+        socialSignal.romanceTargetId ||
+        socialSignal.dramaTargetId ||
+        socialSignal.nicknameTargetId ||
+        "";
+
       if (groupTargetId) {
-        const juice = publicSocialJuiceSignals(mine);
-        let nickHit = null;
-        try { nickHit = hatedNicknameHit(n, n.meId, groupTargetId, mine); } catch (error) { nickHit = null; }
-        if (juice.romance >= 20 || juice.drama >= 26 || nickHit) {
+        const romance =
+          socialSignal.romanceTargetId === groupTargetId
+            ? socialSignal.romance
+            : 0;
+
+        const drama =
+          socialSignal.dramaTargetId === groupTargetId
+            ? socialSignal.drama
+            : 0;
+
+        const nickHit =
+          socialSignal.nicknameTargetId === groupTargetId
+            ? socialSignal.nicknameHit
+            : null;
+
+        if (romance >= 20 || drama >= 26 || nickHit) {
           recordSocialEvent(n, {
             type: "group-message", refId: playerGroupMessage.id, ts: playerGroupMessage.ts,
             actorId: n.meId, targetIds: [groupTargetId],
             witnessIds: (g.members || []).filter((id) => id && !isHuman(n, id) && id !== groupTargetId),
             visibility: "group", factLevel: "observed",
-            importance: 20 + juice.importance, drama: juice.drama, romance: juice.romance, embarrassment: juice.embarrassment,
-            source: "group-chat", text: cut(mine, 360), tags: ["group", ...juice.tags],
+            importance: 20 + socialSignal.importance, drama, romance, embarrassment: socialSignal.embarrassment,
+            source: "group-chat", text: cut(mine, 360), tags: ["group", ...socialSignal.tags],
             meta: { groupId: g.id, messageId: playerGroupMessage.id, participantIds: [n.meId, groupTargetId] },
           });
         }
@@ -59727,9 +59805,13 @@ const signOut = useCallback(async () => {
       const replyTargets = livePost && liveComment
         ? naturalCommentReplyTargets(live, livePost, liveComment)
         : [];
-      const directTarget = replyTargets.find((row) =>
-        row && (row.reason === "mention" || row.reason === "parent")
-      );
+      const directTarget =
+        replyTargets.find((row) =>
+          row && String(row.reason || "").split("+").includes("mention")
+        ) ||
+        replyTargets.find((row) =>
+          row && String(row.reason || "").split("+").includes("parent")
+        );
       const naturalTarget =
         directTarget ||
         replyTargets.find((row) =>
@@ -65088,37 +65170,469 @@ function worldGroupGlossaryCard(w) {
 /* CLAUDE FIX R16: group chats get exact identities and the members' real
    relationships to each other in a protected tail, so nobody mistakes the
    player for someone from a backstory and strangers do not "bro" each other. */
+function conversationStripQuotedSegments(value) {
+  return String(value || "")
+    .replace(/["“„][^"”“„\n]{0,220}["”“]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function conversationReportedWordingQuestion(value) {
+  const t =
+    normalizeAddressText(
+      conversationStripQuotedSegments(
+        value
+      )
+    )
+      .replace(/[’‘]/g, "'");
+
+  return (
+    /\b(?:why|what|how|miert|mit|hogyan|hogyhogy)\b/.test(t) &&
+    /\b(?:call|called|calling|say|said|saying|write|wrote|written|comment|commented|mean|meant|hiv|hivtal|hivod|hivja|mond|mondtad|mondod|irta|irtad|komment)\w*/.test(t)
+  );
+}
+
+function conversationPlayerRomanceToAddressee(value) {
+  const raw =
+    conversationStripQuotedSegments(
+      value
+    );
+
+  const t =
+    normalizeAddressText(
+      raw
+    )
+      .replace(/[’‘]/g, "'");
+
+  return (
+    /\b(?:i\s+(?:love|want|need|miss|choose|like)\s+you|i(?:'m|\s+am)\s+into\s+you|love\s+you|miss\s+you|want\s+you|thinking\s+(?:of|about)\s+you|can'?t\s+stop\s+thinking\s+about\s+you|you(?:'re|\s+are)\s+(?:so\s+)?(?:hot|cute|pretty|beautiful|gorgeous|handsome|sexy|my\s+type)|you\s+look\s+(?:hot|cute|pretty|beautiful|gorgeous|handsome|sexy|amazing)|kiss\s+me|date\s+me|be\s+mine|come\s+over|marry\s+me)\b/.test(t) ||
+    /\b(?:szeretlek|akarlak|hianyzol|kellesz|rad\s+gondolok|csokolj\s+meg|randizz\s+velem|gyere\s+at|legyel\s+az\s+enyem|te\s+vagy\s+(?:olyan\s+)?(?:dogos|szexi|szep|gyonyoru|cuki|helyes))\b/.test(t) ||
+    /[😘😍🥰❤️❤💕💖😉😏💋🥵🫦]/u.test(raw)
+  );
+}
+
+function conversationPlayerConflictToAddressee(value) {
+  const t =
+    normalizeAddressText(
+      conversationStripQuotedSegments(
+        value
+      )
+    )
+      .replace(/[’‘]/g, "'");
+
+  return (
+    /\b(?:fuck\s+you|screw\s+you|shut\s+up|go\s+to\s+hell|piss\s+off|get\s+lost|back\s+off|i\s+(?:hate|despise)\s+you|i\s+can'?t\s+stand\s+you|you(?:'re|\s+are)\s+(?:a\s+)?(?:liar|bitch|slut|whore|idiot|loser|coward|pathetic|fake|trash|stupid|creep|psycho|freak)|i(?:'ll|\s+will)\s+(?:hit|kill|ruin)\s+you|watch\s+your\s+back|fight\s+me|try\s+me|leave\s+me\s+alone|don'?t\s+touch\s+me)\b/.test(t) ||
+    /\b(?:kuss|huzz\s+el|tunj\s+el|utallak|gyulollek|ki\s+nem\s+allhatlak|te\s+(?:egy\s+)?(?:hazug|kurva|ribanc|idiota|vesztes|gyava|szanalmas|kamu|undorito|hulye)|meg(?:ollek|verlek)|hagyj\s+beken|szallj\s+le\s+rolam)\b/.test(t)
+  );
+}
+
+function conversationPlayerConflictWithNamedPerson(w, value, targetId) {
+  const target =
+    charById(
+      w,
+      targetId
+    );
+
+  if (!target) return false;
+
+  const raw =
+    conversationStripQuotedSegments(
+      value
+    );
+
+  const t =
+    normalizeAddressText(
+      raw
+    )
+      .replace(/[’‘]/g, "'");
+
+  const aliases =
+    characterAddressAliases(
+      target
+    )
+      .map((alias) =>
+        normalizeAddressText(
+          String(alias || "")
+            .replace(/^@/, "")
+        )
+      )
+      .filter((alias) => alias.length >= 2);
+
+  return aliases.some((alias) => {
+    const core =
+      escapeAddressRegex(
+        alias
+      );
+
+    if (
+      new RegExp(
+        "\\b(?:i\\s+(?:hate|despise)\\s+|fuck\\s+|screw\\s+)" +
+        core +
+        "\\b",
+        "i"
+      ).test(
+        t
+      )
+    ) {
+      return true;
+    }
+
+    if (
+      new RegExp(
+        "\\b(?:utalom|gyulolom)\\s+" +
+        core +
+        "\\b",
+        "i"
+      ).test(
+        t
+      )
+    ) {
+      return true;
+    }
+
+    if (
+      !/[?？]/.test(
+        raw
+      ) &&
+      new RegExp(
+        "\\b" +
+        core +
+        "\\s+(?:is|['’]s)\\s+(?:a\\s+)?(?:liar|bitch|slut|whore|idiot|loser|coward|pathetic|fake|trash|stupid|creep|psycho|freak)\\b",
+        "i"
+      ).test(
+        t
+      )
+    ) {
+      return true;
+    }
+
+    return false;
+  });
+}
+
+function groupPlayerSemanticSocialSignals(
+  w,
+  value,
+  addresseeId,
+  memberIds
+) {
+  const ids =
+    [...new Set(
+      (memberIds || [])
+        .map(String)
+        .filter(Boolean)
+    )]
+      .filter((id) =>
+        charById(
+          w,
+          id
+        ) &&
+        !isHuman(
+          w,
+          id
+        )
+      );
+
+  const allowed =
+    new Set(
+      ids
+    );
+
+  const addressee =
+    addresseeId &&
+    allowed.has(
+      String(
+        addresseeId
+      )
+    )
+      ? String(
+          addresseeId
+        )
+      : "";
+
+  const clean =
+    conversationStripQuotedSegments(
+      value
+    );
+
+  let romanceTargetId = "";
+  let dramaTargetId = "";
+  let nicknameTargetId = "";
+  let nicknameHit = null;
+
+  if (
+    addressee &&
+    conversationPlayerRomanceToAddressee(
+      clean
+    )
+  ) {
+    romanceTargetId =
+      addressee;
+  }
+
+  if (!romanceTargetId) {
+    const named =
+      namedPeopleInText(
+        w,
+        clean,
+        w.meId
+      )
+        .filter((id) =>
+          allowed.has(
+            String(
+              id
+            )
+          )
+        );
+
+    romanceTargetId =
+      named.find((id) => {
+        try {
+          return directDmPlayerSignalsRomanticAttentionToNamedPerson(
+            clean,
+            nameOfIn(
+              w,
+              id
+            )
+          );
+        } catch (error) {
+          return false;
+        }
+      }) || "";
+  }
+
+  if (
+    addressee &&
+    conversationPlayerConflictToAddressee(
+      clean
+    )
+  ) {
+    dramaTargetId =
+      addressee;
+  }
+
+  if (!dramaTargetId) {
+    dramaTargetId =
+      namedPeopleInText(
+        w,
+        clean,
+        w.meId
+      )
+        .filter((id) =>
+          allowed.has(
+            String(
+              id
+            )
+          )
+        )
+        .find((id) =>
+          conversationPlayerConflictWithNamedPerson(
+            w,
+            clean,
+            id
+          )
+        ) || "";
+  }
+
+  if (
+    addressee &&
+    !conversationReportedWordingQuestion(
+      value
+    )
+  ) {
+    try {
+      nicknameHit =
+        hatedNicknameHit(
+          w,
+          w.meId,
+          addressee,
+          value
+        );
+    } catch (error) {
+      nicknameHit = null;
+    }
+
+    if (nicknameHit) {
+      nicknameTargetId =
+        addressee;
+    }
+  }
+
+  const rawJuice =
+    publicSocialJuiceSignals(
+      value
+    );
+
+  return {
+    romanceTargetId,
+    dramaTargetId,
+    nicknameTargetId,
+    nicknameHit,
+    romance:
+      romanceTargetId
+        ? Math.max(
+            24,
+            Number(rawJuice.romance) || 0
+          )
+        : 0,
+    drama:
+      dramaTargetId
+        ? Math.max(
+            26,
+            Number(rawJuice.drama) || 0
+          )
+        : 0,
+    importance:
+      Number(rawJuice.importance) || 0,
+    embarrassment:
+      Number(rawJuice.embarrassment) || 0,
+    tags:
+      Array.isArray(rawJuice.tags)
+        ? rawJuice.tags
+        : [],
+  };
+}
+
 function groupChatPlayerMoveLines(w, ids, move, en) {
   if (!move || !move.text || !w.meId) return "";
-  const juice = publicSocialJuiceSignals(move.text);
-  const targetId = move.targetId || (namedPeopleInText(w, move.text, w.meId).find((id) => ids.includes(id)) || "");
-  const player = nameOfIn(w, w.meId), target = targetId ? nameOfIn(w, targetId) : "";
+
+  const signal =
+    groupPlayerSemanticSocialSignals(
+      w,
+      move.text,
+      move.targetId || "",
+      ids
+    );
+
+  const player =
+    nameOfIn(
+      w,
+      w.meId
+    );
+
   const lines = [];
-  if (juice.romance >= 20 && targetId) {
-    ids.filter((id) => id !== targetId).forEach((id) => {
-      let crush = false;
-      try { crush = relationshipCrushActive(w, id, w.meId); } catch (error) { crush = false; }
-      if (!crush) return;
-      const level = emotionalIntensity(w, id, w.meId, "jealous");
-      lines.push(en
-        ? "- " + nameOfIn(w, id) + " has feelings for " + player + " and just watched her/him flirt with " + target + " right here: " + (level === "extreme" ? "open, possessive jealousy at full intensity" : "visible jealousy") + " in their own style."
-        : "- " + nameOfIn(w, id) + " érez valamit " + player + " iránt, és most itt látta flörtölni " + target + "-val/vel: " + (level === "extreme" ? "nyílt, birtokló féltékenység teljes erővel" : "látható féltékenység") + ", a saját stílusában.");
-    });
+
+  if (
+    signal.romanceTargetId
+  ) {
+    const target =
+      nameOfIn(
+        w,
+        signal.romanceTargetId
+      );
+
+    ids
+      .filter((id) =>
+        id !==
+        signal.romanceTargetId
+      )
+      .forEach((id) => {
+        let crush = false;
+
+        try {
+          crush =
+            relationshipCrushActive(
+              w,
+              id,
+              w.meId
+            );
+        } catch (error) {
+          crush = false;
+        }
+
+        if (!crush) return;
+
+        const level =
+          emotionalIntensity(
+            w,
+            id,
+            w.meId,
+            "jealous"
+          );
+
+        lines.push(
+          en
+            ? "- " + nameOfIn(w, id) + " has feelings for " + player + " and just watched her/him flirt with " + target + " right here: " + (level === "extreme" ? "open, possessive jealousy at full intensity" : "visible jealousy") + " in their own style."
+            : "- " + nameOfIn(w, id) + " érez valamit " + player + " iránt, és most itt látta flörtölni " + target + "-val/vel: " + (level === "extreme" ? "nyílt, birtokló féltékenység teljes erővel" : "látható féltékenység") + ", a saját stílusában."
+        );
+      });
   }
-  if (juice.drama >= 26 && targetId) {
-    ids.filter((id) => id !== targetId).forEach((id) => {
-      const loyal = socialPersonClosenessStake(w, id, targetId);
-      if (loyal >= 2) lines.push(en ? "- " + nameOfIn(w, id) + " is close to " + target + " and takes " + target + "'s side against " + player + "." : "- " + nameOfIn(w, id) + " közel áll " + target + "-hoz/hez, és " + target + " oldalára áll " + player + " ellen.");
-      else if (relationshipIsHostile(w, id, targetId)) lines.push(en ? "- " + nameOfIn(w, id) + " can't stand " + target + " and enjoys seeing " + player + " go after them." : "- " + nameOfIn(w, id) + " ki nem állhatja " + target + "-t, és élvezi, hogy " + player + " nekimegy.");
-    });
+
+  if (
+    signal.dramaTargetId
+  ) {
+    const targetId =
+      signal.dramaTargetId;
+
+    const target =
+      nameOfIn(
+        w,
+        targetId
+      );
+
+    ids
+      .filter((id) =>
+        id !==
+        targetId
+      )
+      .forEach((id) => {
+        const loyal =
+          socialPersonClosenessStake(
+            w,
+            id,
+            targetId
+          );
+
+        if (loyal >= 2) {
+          lines.push(
+            en
+              ? "- " + nameOfIn(w, id) + " is close to " + target + " and takes " + target + "'s side against " + player + "."
+              : "- " + nameOfIn(w, id) + " közel áll " + target + "-hoz/hez, és " + target + " oldalára áll " + player + " ellen."
+          );
+        } else if (
+          relationshipIsHostile(
+            w,
+            id,
+            targetId
+          )
+        ) {
+          lines.push(
+            en
+              ? "- " + nameOfIn(w, id) + " can't stand " + target + " and enjoys seeing " + player + " go after them."
+              : "- " + nameOfIn(w, id) + " ki nem állhatja " + target + "-t, és élvezi, hogy " + player + " nekimegy."
+          );
+        }
+      });
   }
-  ids.forEach((id) => {
-    let hit = null;
-    try { hit = hatedNicknameHit(w, w.meId, id, move.text); } catch (error) { hit = null; }
-    if (hit) lines.push(en ? "- " + player + " just called " + nameOfIn(w, id) + " \"" + hit.nickname + "\", a name " + nameOfIn(w, id) + " hates — " + nameOfIn(w, id) + " reacts to it" + (hit.reaction ? " (" + hit.reaction + ")" : "") + "." : "- " + player + " épp \"" + hit.nickname + "\"-nak/nek hívta " + nameOfIn(w, id) + "-t, amit utál — reagál rá" + (hit.reaction ? " (" + hit.reaction + ")" : "") + ".");
-  });
+
+  if (
+    signal.nicknameTargetId &&
+    signal.nicknameHit
+  ) {
+    const target =
+      nameOfIn(
+        w,
+        signal.nicknameTargetId
+      );
+
+    lines.push(
+      en
+        ? "- " + player + " just called " + target + " “" + signal.nicknameHit.nickname + "”, a name " + target + " hates — " + target + " reacts to it" + (signal.nicknameHit.reaction ? " (" + signal.nicknameHit.reaction + ")" : "") + "."
+        : "- " + player + " épp “" + signal.nicknameHit.nickname + "”-nak/nek hívta " + target + "-t, amit utál — reagál rá" + (signal.nicknameHit.reaction ? " (" + signal.nicknameHit.reaction + ")" : "") + "."
+    );
+  }
+
   if (!lines.length) return "";
-  return (en ? "WHAT THE OTHERS JUST SAW — THEY REACT TO IT NOW:\n" : "AMIT A TÖBBIEK MOST LÁTTAK — MOST REAGÁLNAK RÁ:\n") + lines.slice(0, 5).join("\n") + "\n";
+
+  return (
+    en
+      ? "WHAT THE OTHERS JUST SAW — THEY REACT TO IT NOW:\n"
+      : "AMIT A TÖBBIEK MOST LÁTTAK — MOST REAGÁLNAK RÁ:\n"
+  ) +
+    lines
+      .slice(0, 5)
+      .join("\n") +
+    "\n";
 }
 
 function groupChatSocialTail(w, aiIds, move = null) {
