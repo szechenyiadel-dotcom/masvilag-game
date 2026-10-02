@@ -9741,7 +9741,7 @@ function briefState(c) {
   if (Math.abs(src - (c.briefSrc || 0)) > 2500) return "elavult";
   return "kész";
 }
-const useBrief = (c) => !!(c && c.brief && briefState(c) !== "hiányzik");
+const useBrief = (c) => !!(c && c.brief && briefState(c) === "kész");
 const WORLD_CAP = 4000;   // a világleírásból ennyi megy át minden hívásnál
 
 const SHEET_BASE = 2600;       // a szűk keretű mezők közös kerete, ha csak jelen van
@@ -41179,6 +41179,8 @@ async function genBrief(c) {
         backstory: "BACKSTORY",
         connections: "CONNECTIONS / IMPORTANT PEOPLE",
         extra: "OTHER IMPORTANT INFO",
+        speech: "SPEECH STYLE",
+        voice: "VOICE EXAMPLES",
       }
     : {
         personality: "SZEMÉLYISÉG",
@@ -41186,9 +41188,11 @@ async function genBrief(c) {
         backstory: "HÁTTÉRTÖRTÉNET",
         connections: "KAPCSOLÓDÁSOK / FONTOS EMBEREK",
         extra: "EGYÉB",
+        speech: "BESZÉDSTÍLUS",
+        voice: "HANGMINTÁK",
       };
 
-  const src = FREE_KEYS
+  const src = [...FREE_KEYS, "speech", "voice"]
     .map((k) => {
       const t = clean(c[k]);
       if (!t) return "";
@@ -61609,7 +61613,10 @@ function simsSocialSectionDigest(text, max = SIMS_SOCIAL_SUMMARY_INPUT_CAP) {
   }
 
   const per = Math.max(420, Math.floor(max / Math.min(24, pieces.length)));
-  const selected = pieces.slice(0, 24).map((part) => {
+  const selectedPieces = pieces.length <= 24
+    ? pieces
+    : Array.from({ length: 24 }, (_, i) => pieces[Math.floor(i * (pieces.length - 1) / 23)]);
+  const selected = selectedPieces.map((part) => {
     if (part.length <= per) return part;
     const head = Math.floor(per * .7);
     const tail = per - head - 30;
