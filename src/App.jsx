@@ -62823,6 +62823,7 @@ function cleanGeneratedUtterance(...args) {
   if (!args[2]) return "";
   /* R60 */
   try { args[2] = stripForeignGroupClaims(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
+  try { args[2] = stripUnfoundedPossessiveClaims(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
   const base = legacyVoiceStyleCleanGeneratedUtterance(...args);
   if (generatedTextHasTechLeak(base)) {
     console.warn("[tech-leak] dropped generated text", "character=" + String(id || ""), String(base || "").slice(0, 120));
