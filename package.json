@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "social-policy": "node scripts/apply-enemy-sheet-restart-guards-v1.mjs && node scripts/apply-ai-full-sheet-relationship-baseline-v1.mjs && node scripts/apply-restart-fresh-relationship-reread-v1.mjs && node scripts/apply-manual-relationship-touch-guard-v1.mjs && node scripts/apply-exhaustive-own-sheet-relationship-map-v8.mjs && node scripts/apply-relationship-semantic-locks-v9.mjs && node scripts/apply-exhaustive-relationship-evidence-v11.mjs && node scripts/apply-relationship-fact-actuality-v12.mjs",
+    "social-policy": "node scripts/apply-enemy-sheet-restart-guards-v1.mjs && node scripts/apply-ai-full-sheet-relationship-baseline-v1.mjs && node scripts/apply-restart-fresh-relationship-reread-v1.mjs && node scripts/apply-manual-relationship-touch-guard-v1.mjs && node scripts/apply-exhaustive-own-sheet-relationship-map-v8.mjs && node scripts/apply-relationship-semantic-locks-v9.mjs && node scripts/apply-exhaustive-relationship-evidence-v11.mjs && node scripts/apply-relationship-fact-actuality-v12.mjs && node scripts/apply-every-owner-full-sheet-audit-v13.mjs",
     "dev": "npm run social-policy && vite",
     "build": "npm run social-policy && vite build",
     "preview": "vite preview",
@@ -25,4 +25,4 @@
     "playwright": "^1.62.1",
     "vite": "^5.4.0"
   }
-}\n
+}
