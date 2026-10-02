@@ -5423,11 +5423,16 @@ function prepareAIRequestBody(body, priority, source) {
      Bigger requests burned through the free Gemini per-minute token quota. */
   /* CLAUDE FIX R17: one-time deep reading of character sheets is never cut short. */
   const deep = String(body?.quality || "") === "deep";
+  const fullSheetRead = deep && (source === "sheet-summary" || source === "character-bible");
   /* CLAUDE FIX R51: a live scene turn is the most player-facing call there is; cutting
      its 80k prompt to 40k removed the scene's own recent turns and goal. */
   const liveScene = String(body?.source || "") === "scene" && priority >= 50;
   const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (liveScene ? 36000 : (deep ? 20000 : (priority >= 50 ? 22000 : 16000)));
-  const promptCap = source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (liveScene ? 84000 : (deep ? 70000 : (priority >= 50 ? 40000 : 26000)));
+  /* R70: one-time deep Gemini sheet reads must receive the complete raw sheet.
+     This exemption applies ONLY to sheet-summary / character-bible. */
+  const promptCap = fullSheetRead
+    ? Number.MAX_SAFE_INTEGER
+    : (source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (liveScene ? 84000 : (deep ? 70000 : (priority >= 50 ? 40000 : 26000))));
 
   if (source === "group-chat") {
     const before = system.length;
@@ -5537,12 +5542,14 @@ function providerAllowedForBody(provider, body) {
   return provider === "mistral" || provider === "gemini" || provider === "openrouter" || provider === "openrouter2";
 }
 
-/* R69: reserve OpenRouter capacity for player-facing social content.
-   Scene, chats, comments and posts use the two OpenRouter keys first.
-   Background analysis/canon/maintenance work uses Gemini instead, so it cannot
-   consume OpenRouter free-model rate limits before an interactive request. */
+/* R70: provider roles are intentionally narrow.
+   - OpenRouter: player-facing scene/chat/comment/post work.
+   - Groq: ONLY small, fast background classifiers/checks; Gemini is its fallback.
+   - Gemini: deep/large background canon work, including complete one-time sheet reads.
+   Groq must never receive scenes, chats, posts, comments or large canon reads. */
 function taskProviderOrder(requestedProvider, body) {
   const source = String(body?.source || inferAIRequestSource(body) || "").trim().toLowerCase();
+  const chars = aiRequestChars(body);
 
   const openRouterSources = new Set([
     "scene",
@@ -5553,9 +5560,30 @@ function taskProviderOrder(requestedProvider, body) {
     "interactive",
   ]);
 
-  const raw = openRouterSources.has(source)
-    ? ["openrouter", "openrouter2", "gemini", "groq", "mistral"]
-    : ["gemini", "groq", "mistral"];
+  const groqSmallBackgroundSources = new Set([
+    "relationship-labels",
+    "meaning-analysis",
+    "relationship-structural",
+    "identity-canon",
+  ]);
+
+  const deepSheetSources = new Set([
+    "sheet-summary",
+    "character-bible",
+  ]);
+
+  const groqSmallEnough = chars <= 26000;
+  let raw;
+
+  if (openRouterSources.has(source)) {
+    raw = ["openrouter", "openrouter2", "gemini", "mistral"];
+  } else if (deepSheetSources.has(source)) {
+    raw = ["gemini"];
+  } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
+    raw = ["groq", "gemini"];
+  } else {
+    raw = ["gemini", "mistral"];
+  }
 
   return raw.filter((provider, index, all) =>
     all.indexOf(provider) === index &&
