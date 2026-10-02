@@ -5207,7 +5207,7 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
-  if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "cognitivecomputations/dolphin-mistral-24b-venice-edition:free").trim();
+  if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "cognitivecomputations/dolphin3.0-mistral-24b:free").trim();
   if (provider === "gemini") {
     if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || "gemini-3.5-flash").trim();
     return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
@@ -5479,20 +5479,20 @@ function markProviderFailure(provider, model, result) {
   const status = Number(result?.status || 0);
   const message = safeProviderMessage(result, `HTTP ${status}`);
 
-  if ([401, 403].includes(status)) {
+  if ([401, 403, 404].includes(status)) {
     AI_GATE.providerConfigurationErrors.set(provider, { status, model, message, at: Date.now() });
     AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
     console.warn("[ai-gate] provider-config-invalid", `${provider}/${model}`, `status=${status}`, message);
     return -1;
   }
 
-  if (![429, 503, 529].includes(status)) return 0;
+  if (![402, 429, 503, 529].includes(status)) return 0;
   const previous = Number(AI_GATE.providerFailures.get(provider) || 0);
   const failures = Math.min(4, previous + 1);
   AI_GATE.providerFailures.set(provider, failures);
   const retryHeader = parseRetryAfterMs(result?.retryAfter);
   const lower = message.toLowerCase();
-  const hardQuota = /free[_ -]?tier|quota exceeded|current quota|resource exhausted|no credits|daily limit/.test(lower);
+  const hardQuota = /free[_ -]?tier|quota exceeded|current quota|resource exhausted|no credits|daily limit|budget exhausted|payment required|insufficient credits/.test(lower);
   const exponential = Math.min(60000, 5000 * Math.pow(2, failures - 1));
   const jitter = Math.floor(Math.random() * Math.min(2500, Math.max(500, exponential * 0.2)));
   const rest = hardQuota ? Math.max(retryHeader, 15 * 60 * 1000) : Math.max(retryHeader, exponential + jitter);
@@ -5663,7 +5663,7 @@ async function executeAITask(task) {
     if (result?.unavailable) continue;
 
     attempts.push({ provider, model, status, message });
-    if ([401, 403, 429, 503, 529].includes(status)) {
+    if ([401, 402, 403, 404, 429, 503, 529].includes(status)) {
       markProviderFailure(provider, model, result);
       continue;
     }
@@ -5674,7 +5674,7 @@ async function executeAITask(task) {
   }
 
   const details = summarizeProviderFailures(attempts, task.requestedProvider, task.body);
-  if (last && attempts.length === 1 && ![401, 403, 429, 503, 529].includes(Number(last?.status || 0))) return last;
+  if (last && attempts.length === 1 && ![401, 402, 403, 404, 429, 503, 529].includes(Number(last?.status || 0))) return last;
 
   const retryWaits = providerOrder(task.requestedProvider).map(providerCooldownMs).filter((ms) => ms > 0);
   const retryMs = retryWaits.length ? Math.min(...retryWaits) : 30000;
