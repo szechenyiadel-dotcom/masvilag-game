@@ -5525,12 +5525,20 @@ function prepareAIRequestBody(body, priority, source) {
   /* CLAUDE FIX R51: a live scene turn is the most player-facing call there is; cutting
      its 80k prompt to 40k removed the scene's own recent turns and goal. */
   const liveScene = String(body?.source || "") === "scene" && priority >= 50;
-  const systemCap = source === "group-chat" ? AI_GROUP_CHAT_SYSTEM_CAP : (liveScene ? 36000 : (deep ? 20000 : (priority >= 50 ? 22000 : 16000)));
+  const systemCap = source === "group-chat"
+    ? AI_GROUP_CHAT_SYSTEM_CAP
+    : source === "dm"
+      ? 12000
+      : (liveScene ? 36000 : (deep ? 20000 : (priority >= 50 ? 22000 : 16000)));
   /* R70: one-time deep Gemini sheet reads must receive the complete raw sheet.
      This exemption applies ONLY to sheet-summary / character-bible. */
   const promptCap = fullSheetRead
     ? Number.MAX_SAFE_INTEGER
-    : (source === "group-chat" ? AI_GROUP_CHAT_PROMPT_CAP : (liveScene ? 84000 : (deep ? 70000 : (priority >= 50 ? 40000 : 26000))));
+    : source === "group-chat"
+      ? AI_GROUP_CHAT_PROMPT_CAP
+      : source === "dm"
+        ? 18000
+        : (liveScene ? 84000 : (deep ? 70000 : (priority >= 50 ? 40000 : 26000)));
 
   if (source === "group-chat") {
     const before = system.length;
@@ -5611,7 +5619,7 @@ function markProviderFailure(provider, model, result) {
      balance. That is NOT a broken key/configuration: cool down briefly and retry. */
   const transientInFlight402 =
     status === 402 &&
-    /in[- ]?flight|requests settle|current.*requests|retry after.*settle|can only afford|requires more credits, or fewer max_tokens/.test(lower);
+    /in[- ]?flight|requests settle|current.*requests|retry after.*settle|can only afford|requires more credits, or fewer max_tokens|prompt tokens limit exceeded/.test(lower);
 
   if (transientInFlight402) {
     const previous = Number(AI_GATE.providerFailures.get(provider) || 0);
@@ -5862,7 +5870,8 @@ function voiceProfileContext(body = {}) {
   addWindow("VOICE STYLE CARDS — PRESERVED PROMPT PREFIX", 9000);
   addWindow("VOICE / WRITING-STYLE CARD — MANDATORY FOR THIS SPEAKER ONLY:", 7600, "LATEST 14 MESSAGES");
   addWindow("VOICE / WRITING STYLE CARD — HARD PERFORMANCE CONTRACT", 5200);
-  const maturityLines = combined
+  const stableVoiceText = chunks.join("\n\n---\n\n");
+  const maturityLines = stableVoiceText
     .split(/\n+/)
     .filter((line) => /mature|intimacy|intimate|nsfw|sexual|sensual|flirt|desire|adult|consens/i.test(line))
     .slice(0, 18)
