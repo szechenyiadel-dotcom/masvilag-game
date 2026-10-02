@@ -61924,19 +61924,51 @@ function characterSheetSourceParts(c) {
   };
 }
 
+/* R70: full-fidelity source used ONLY by one-time deep Gemini sheet readers.
+   Normal live prompts keep their existing compact context. */
+function deepCharacterSheetSourceParts(c) {
+  if (!c || typeof c !== "object") return { publicText: "", privateText: "" };
+  const skip = /^(?:aiContextSummary|aiVoiceStyleCard|avatar|avatarUrl|image|imageId|images|album|albums|photos|media|posts|comments|msgs|messages|chats|scenes|memory|memories)$/i;
+  const publicKey = /^(?:id|name|username|handle|bio|publicBio|displayName|age|birthday|birthDate|gender|pronouns|city|location|job|occupation|school|university|role|faction|team|public|appearance|height|nationality)$/i;
+  const rowsPublic = [];
+  const rowsPrivate = [];
+
+  const renderFull = (value) => {
+    if (value === undefined || value === null) return "";
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+    try { return JSON.stringify(value, null, 2); }
+    catch (error) { return simsSocialStringify(value); }
+  };
+
+  for (const [key, raw] of Object.entries(c)) {
+    if (skip.test(key)) continue;
+    const value = renderFull(raw);
+    if (!value) continue;
+    const row = key + ": " + value;
+    if (publicKey.test(key)) rowsPublic.push(row);
+    else rowsPrivate.push(row);
+  }
+
+  return {
+    publicText: rowsPublic.join("\n"),
+    privateText: rowsPrivate.join("\n"),
+  };
+}
+
 function ensureCharacterContextSummary(c) {
   const parts = characterSheetSourceParts(c);
+  const deepParts = deepCharacterSheetSourceParts(c);
   const publicDigest = simsSocialSectionDigest(stripTechnicalSheetRows(parts.publicText), SIMS_SOCIAL_SUMMARY_PUBLIC_CAP);
   const privateDigest = simsSocialSectionDigest(stripTechnicalSheetRows(parts.privateText), SIMS_SOCIAL_SUMMARY_PRIVATE_CAP);
-  const sourceHash = simsSocialStableHash(parts.publicText + "\n---PRIVATE---\n" + parts.privateText);
+  const sourceHash = simsSocialStableHash(deepParts.publicText + "\n---PRIVATE---\n" + deepParts.privateText);
   const current = c && c.aiContextSummary && typeof c.aiContextSummary === "object" ? c.aiContextSummary : null;
 
-  if (current && current.version === 3 && current.sourceHash === sourceHash && current.public && current.private) {
+  if (current && current.version === 4 && current.sourceHash === sourceHash && current.public && current.private) {
     return current;
   }
 
   const fallback = {
-    version: 3,
+    version: 4,
     persona: current && current.persona && current.sourceHash === sourceHash ? current.persona : "",
     sourceHash,
     public: publicDigest,
@@ -61975,12 +62007,10 @@ function maybeQueueCharacterSummary(w, c) {
 }
 
 async function genCharacterSheetSummary(w, c) {
-  const parts = characterSheetSourceParts(c);
-  const fullPublic = stripTechnicalSheetRows(parts.publicText);
-  const fullPrivate = stripTechnicalSheetRows(parts.privateText);
-  /* R17: the WHOLE sheet is read (only truly huge sheets are trimmed in the middle) */
-  const publicInput = fullPublic.length <= 12000 ? fullPublic : simsSocialSectionDigest(fullPublic, 12000);
-  const privateInput = fullPrivate.length <= 40000 ? fullPrivate : simsSocialSectionDigest(fullPrivate, 40000);
+  const parts = deepCharacterSheetSourceParts(c);
+  /* R70: one-time Gemini canon read gets the complete raw sheet with no sampling/truncation. */
+  const publicInput = stripTechnicalSheetRows(parts.publicText);
+  const privateInput = stripTechnicalSheetRows(parts.privateText);
   const prompt = [
     "CHARACTER SHEET — THOROUGH ONE-TIME READING.",
     "Read the entire sheet below, every section. Then write two summaries that let a writer play this person 1:1 without ever seeing the sheet again.",
@@ -66297,7 +66327,7 @@ async function runIdentityCanonAction(view, update, action) {
    how it shows, their backstory in order, their key people, what they would
    never do and their typical lines. This card travels with the speaker into
    every prompt, so the story is known 1:1 and the personality is not softened. */
-const CHARACTER_BIBLE_VERSION = "2"; /* R28: + nicknames */
+const CHARACTER_BIBLE_VERSION = "3"; /* R70: regenerate from complete raw sheet */
 const CHARACTER_BIBLE_MIN_GAP_MS = 15 * 1000;
 const CHARACTER_BIBLE_RETRY_MS = 10 * 60 * 1000;
 
@@ -66310,9 +66340,9 @@ function characterBibleState(w) {
 
 function characterBibleSource(c) {
   if (!c) return "";
-  const parts = characterSheetSourceParts(c);
-  const text = [stripTechnicalSheetRows(parts.publicText), stripTechnicalSheetRows(parts.privateText)].filter(Boolean).join("\n");
-  return text.length <= 45000 ? text : simsSocialSectionDigest(text, 45000);
+  const parts = deepCharacterSheetSourceParts(c);
+  /* R70: character bible is generated once from the complete raw sheet. */
+  return [stripTechnicalSheetRows(parts.publicText), stripTechnicalSheetRows(parts.privateText)].filter(Boolean).join("\n");
 }
 
 function characterBibleFor(w, id) {
