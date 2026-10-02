@@ -29,11 +29,8 @@ function replaceBlock(startText, endText, replacement, label) {
 }
 
 if (!next.includes(`/* ${MARKER} */`)) {
-  const jealousAnchor = `const PLAYER_POST_COMMENT_JEALOUS_RE =
-  /\\b(?:jealous|jealousy|possessive|mine|who(?:'s| is)\\s+that|féltékeny|féltékenység|enyém|ki\\s+ez)\\b/iu;`;
-  const enemyGuard = `${jealousAnchor}
-
-/* ${MARKER} */
+  const enemyHelperAnchor = "function playerPostCommentGeneratedTone(text) {";
+  const enemyGuard = `/* ${MARKER} */
 const PLAYER_POST_COMMENT_ENEMY_SUPPORT_RE =
   /\\b(?:you\\s+got\\s+this|you(?:'ve| have)\\s+got\\s+this|keep\\s+(?:going|grinding|pushing|it\\s+up)|stay\\s+(?:focused|strong)|good\\s+luck|rooting\\s+for\\s+you|believe\\s+in\\s+you|proud\\s+of\\s+you|don['’]?t\\s+let\\s+.*\\s+get\\s+to\\s+you|show\\s+them|go\\s+get\\s+it|nice\\s+work|great\\s+work|well\\s+done|congrats?|respect|hajrá|csak\\s+így\\s+tovább|ügyes\\s+vagy|büszke\\s+vagyok\\s+rád|szurkolok\\s+neked|menni\\s+fog|ne\\s+hagyd,?\\s+hogy.*letörjön)\\b|[🔥💪👏🙌]/iu;
 
@@ -41,8 +38,10 @@ function playerPostCommentIsEnemyCard(card) {
   const rel = card && card.relationshipToPostAuthor || {};
   const labels = [rel.type, rel.officialStatus].filter(Boolean).join(" ").toLowerCase();
   return /enemy|ellens/.test(labels) || Number(rel.score) <= -70;
-}`;
-  replaceExact(jealousAnchor, enemyGuard, "enemy support guard helper");
+}
+
+${enemyHelperAnchor}`;
+  replaceExact(enemyHelperAnchor, enemyGuard, "enemy support guard helper");
 
   const followLeakGuard = `      if (playerPostCommentHasFollowLeak(postContext, text)) {
         console.warn("[player-post-comments] rejected=follow-context-leak", "character=" + actorId, "text=" + text.slice(0, 180));
