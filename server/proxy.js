@@ -5682,7 +5682,7 @@ function taskProviderOrder(requestedProvider, body) {
   if (deepSeekRoleplaySources.has(source)) {
     raw = ["openrouter3"];
   } else if (source === "sheet-summary" || source === "character-bible") {
-    raw = ["gemini"];
+    raw = ["gemini", "openai"];
   } else if (socialFeedOrComment) {
     raw = ["gemini", "openai"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
