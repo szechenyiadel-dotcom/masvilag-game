@@ -5200,10 +5200,30 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
     /* Keep the SAME abort signal alive until the entire response body is read.
        Previously fetchWithTimeout() cleared its timer as soon as headers arrived,
        so a provider could stream/hang the body for another 40–60 seconds. */
+    let providerBody = body;
+    if ((provider === "groq" || provider === "groq2") && aiRequestChars(body) > 28000) {
+      const compactMessages = (Array.isArray(body.messages) ? body.messages : []).map((item, index, rows) => {
+        const text = extractText(item?.content || "");
+        const cap = index === rows.length - 1 ? 18000 : 6000;
+        return { ...item, content: preservePromptEdges(text, cap) };
+      });
+      providerBody = {
+        ...body,
+        system: preservePromptEdges(String(body.system || ""), 9000),
+        messages: compactMessages,
+      };
+      console.info(
+        "[ai-provider] compact",
+        `provider=${provider}`,
+        `before=${aiRequestChars(body)}`,
+        `after=${aiRequestChars(providerBody)}`
+      );
+    }
+
     const r = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-      body: JSON.stringify(buildCompatibleChatPayload(body, model)),
+      body: JSON.stringify(buildCompatibleChatPayload(providerBody, model)),
       signal: ctrl.signal,
     });
     const raw = await r.text();
@@ -5585,9 +5605,12 @@ function taskProviderOrder(requestedProvider, body) {
     "scene",
     "dm",
     "group-chat",
+    "notes",
+  ]);
+
+  const socialWritingSources = new Set([
     "comments",
     "feed-post",
-    "notes",
   ]);
 
   const groqSmallBackgroundSources = new Set([
@@ -5607,6 +5630,8 @@ function taskProviderOrder(requestedProvider, body) {
 
   if (openRouterSources.has(source)) {
     raw = ["openrouter3", "openrouter2", "openrouter", "mistral"];
+  } else if (socialWritingSources.has(source)) {
+    raw = ["openrouter3", "openrouter2", "openrouter", "mistral", "gemini", "groq", "groq2"];
   } else if (deepSheetSources.has(source)) {
     raw = ["gemini", "groq", "groq2"];
   } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
@@ -5765,7 +5790,7 @@ async function executeAITask(task) {
     if (result?.unavailable) continue;
 
     attempts.push({ provider, model, status, message });
-    if ([401, 402, 403, 404, 408, 429, 500, 502, 503, 504, 529].includes(status)) {
+    if ([401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504, 529].includes(status)) {
       markProviderFailure(provider, model, result);
       continue;
     }
@@ -5776,7 +5801,7 @@ async function executeAITask(task) {
   }
 
   const details = summarizeProviderFailures(attempts, task.requestedProvider, task.body);
-  if (last && attempts.length === 1 && ![401, 402, 403, 404, 408, 429, 500, 502, 503, 504, 529].includes(Number(last?.status || 0))) return last;
+  if (last && attempts.length === 1 && ![401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504, 529].includes(Number(last?.status || 0))) return last;
 
   const retryWaits = providerOrder(task.requestedProvider).map(providerCooldownMs).filter((ms) => ms > 0);
   const retryMs = retryWaits.length ? Math.min(...retryWaits) : 30000;
