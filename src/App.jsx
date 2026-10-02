@@ -41253,7 +41253,10 @@ Csak JSON:
 
 /* Egy bot magától ír privátban. */
 async function legacyVoiceStyleGenDM(w, bot) {
-  if (!autonomousDmEligible(w, bot)) {
+  /* R64: a DM agreed in the comments ("text me") is not an unsolicited DM — the
+     second eligibility gate here silently skipped it */
+  const agreedInComments = Boolean(AUTONOMOUS_DM_TRIGGER_CONTEXT && bot && String(AUTONOMOUS_DM_TRIGGER_CONTEXT.botId) === String(bot.id) && /^comment-dm-/.test(String(AUTONOMOUS_DM_TRIGGER_CONTEXT.trigger || "")));
+  if (!agreedInComments && !autonomousDmEligible(w, bot)) {
     return {
       skip: true,
       text: "",
@@ -64170,6 +64173,9 @@ function autonomousDmTriggerDirective(w, bot) {
   if (ctx.trigger === "player-unfollowed") {
     return "\n\n" + PROTECTED_TAIL_MARKER + "\nEZÉRT ÍRSZ MOST — VALÓDI, MEGTÖRTÉNT ESEMÉNY (KÖTELEZŐ, \"skip\": false):\n" +
       player + " az imént KIKÖVETETT téged (unfollow). Ebben a DM-ben erre reagálj a saját személyiséged és a kapcsolatotok szerint: megbántva, dühösen, kérdőre vonva, gúnyosan, sértetten vagy közönyt mímelve — ahogy te tennéd. Ne találj ki más okot.";
+  }
+  if (/^comment-dm-/.test(String(ctx.trigger || "")) && ctx.causeText) {
+    return "\n\n" + PROTECTED_TAIL_MARKER + "\nEZÉRT ÍRSZ MOST — A KOMMENTEKBEN MEGBESZÉLTÉTEK (KÖTELEZŐ, \"skip\": false):\n" + String(ctx.causeText).slice(0, 500) + "\nÍrj neki most DM-et, pontosan onnan folytatva, a saját hangodon.";
   }
   if (ctx.causeText) {
     return "\n\n" + PROTECTED_TAIL_MARKER + "\nEZ A MEGTÖRTÉNT ESEMÉNY INDÍTOTTA A DM-ET (erre reagálj, ne találj ki mást):\n" + String(ctx.causeText).slice(0, 400);
