@@ -20,6 +20,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || process.env.AI_API_KE
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const MISTRAL_API_KEY = String(process.env.MISTRAL_API_KEY || "").trim();
+const MISTRAL_API_KEY_2 = String(process.env.MISTRAL_API_KEY_2 || "").trim();
 const MISTRAL_MODEL = String(process.env.MISTRAL_MODEL || "").trim();
 const GROQ_API_KEY = String(process.env.GROQ_API_KEY || "").trim();
 const GROQ_API_KEY_2 = String(process.env.GROQ_API_KEY_2 || "").trim();
@@ -5287,7 +5288,7 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
 
 function providerModel(provider, body = {}) {
   const requested = String(body?.model || "").trim();
-  if (provider === "mistral") {
+  if (provider === "mistral" || provider === "mistral2") {
     const source = String(body?.source || "").trim().toLowerCase();
     if (source === "voice-style") return String(process.env.MISTRAL_VOICE_MODEL || "mistral-medium-latest").trim();
     if (source === "scene") return String(process.env.MISTRAL_SCENE_MODEL || "mistral-small-latest").trim();
@@ -5324,6 +5325,7 @@ async function callMessageProvider(provider, body) {
   if (provider === "openrouter") return proxyCompatibleMessage("openrouter", process.env.OPENROUTER_API_KEY, providerModel("openrouter", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openrouter2") return proxyCompatibleMessage("openrouter2", process.env.OPENROUTER_API_KEY_2, providerModel("openrouter2", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "mistral") return proxyCompatibleMessage("mistral", MISTRAL_API_KEY, providerModel("mistral", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
+  if (provider === "mistral2") return proxyCompatibleMessage("mistral2", MISTRAL_API_KEY_2, providerModel("mistral2", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
   if (provider === "groq") return proxyCompatibleMessage("groq", GROQ_API_KEY, providerModel("groq", body), "https://api.groq.com/openai/v1/chat/completions", body);
   if (provider === "groq2") return proxyCompatibleMessage("groq2", GROQ_API_KEY_2, providerModel("groq2", body), "https://api.groq.com/openai/v1/chat/completions", body);
   if (provider === "openai") {
@@ -5340,6 +5342,7 @@ async function callMessageProvider(provider, body) {
 
 function configuredAIProvider(provider) {
   if (provider === "mistral") return Boolean(MISTRAL_API_KEY && MISTRAL_MODEL);
+  if (provider === "mistral2") return Boolean(MISTRAL_API_KEY_2 && MISTRAL_MODEL);
   if (provider === "groq") return Boolean(GROQ_API_KEY && GROQ_MODEL);
   if (provider === "groq2") return Boolean(GROQ_API_KEY_2 && (GROQ_MODEL_2 || GROQ_MODEL));
   if (provider === "gemini") return GEMINI_KEYS.length > 0;
@@ -5358,7 +5361,7 @@ function providerOrder(requestedProvider) {
     .filter(Boolean);
   const raw = configured.length
     ? configured
-    : [requestedProvider, "openrouter3", "openrouter2", "openrouter", "mistral", "groq", "groq2", "gemini", "openai", "anthropic"];
+    : [requestedProvider, "openrouter3", "openrouter2", "openrouter", "mistral", "mistral2", "groq", "groq2", "gemini", "openai", "anthropic"];
   const ordered = [];
   for (const provider of raw) {
     if (!ordered.includes(provider) && configuredAIProvider(provider)) ordered.push(provider);
@@ -5638,7 +5641,7 @@ function markProviderSuccess(provider) {
 function providerAllowedForBody(provider, body) {
   const chars = aiRequestChars(body);
   if (chars <= AI_GROQ_MAX_INPUT_CHARS) return true;
-  return provider === "mistral" || provider === "gemini" || provider === "openai" ||
+  return provider === "mistral" || provider === "mistral2" || provider === "gemini" || provider === "openai" ||
     provider === "openrouter3" || provider === "openrouter" || provider === "openrouter2";
 }
 
@@ -5677,10 +5680,10 @@ function taskProviderOrder(requestedProvider, body) {
   if (deepSeekRoleplaySources.has(source)) {
     /* Direct messages stay on DeepSeek Flash first; if OpenRouter cannot serve
        them (credits/provider issue), Mistral takes over with the player model. */
-    raw = ["openrouter3", "mistral"];
+    raw = ["openrouter3", "mistral", "mistral2"];
   } else if (source === "scene") {
     /* Scenes are intentionally Mistral-owned; providerModel selects the scene model. */
-    raw = ["mistral"];
+    raw = ["mistral", "mistral2"];
   } else if (source === "sheet-summary" || source === "character-bible") {
     raw = ["gemini", "openai"];
   } else if (socialFeedOrComment) {
@@ -5904,9 +5907,15 @@ async function applySharedVoiceFinalizer(task, result) {
     }],
   };
   console.info("[ai-voice] request", "source=" + source, "model=" + voiceModel, "draftChars=" + draft.length, "voiceContextChars=" + voiceContext.length);
-  const polished = await proxyCompatibleMessage("mistral", MISTRAL_API_KEY, voiceModel, "https://api.mistral.ai/v1/chat/completions", voiceBody);
+  let voiceProvider = "mistral";
+  let polished = await proxyCompatibleMessage("mistral", MISTRAL_API_KEY, voiceModel, "https://api.mistral.ai/v1/chat/completions", voiceBody);
+  if (!polished?.ok && MISTRAL_API_KEY_2) {
+    console.warn("[ai-voice] mistral1-failed-trying-mistral2", "source=" + source, "model=" + voiceModel, "status=" + Number(polished?.status || 0));
+    voiceProvider = "mistral2";
+    polished = await proxyCompatibleMessage("mistral2", MISTRAL_API_KEY_2, voiceModel, "https://api.mistral.ai/v1/chat/completions", voiceBody);
+  }
   if (!polished?.ok) {
-    console.warn("[ai-voice] soft-fallback", "source=" + source, "model=" + voiceModel, "status=" + Number(polished?.status || 0), safeProviderMessage(polished, "voice finalizer unavailable"));
+    console.warn("[ai-voice] soft-fallback", "source=" + source, "provider=" + voiceProvider, "model=" + voiceModel, "status=" + Number(polished?.status || 0), safeProviderMessage(polished, "voice finalizer unavailable"));
     return result;
   }
   let polishedText = stripVoiceCodeFence(extractText(polished?.payload?.content || ""));
@@ -5923,8 +5932,8 @@ async function applySharedVoiceFinalizer(task, result) {
     }
   }
   const payload = { ...result.payload, content: [{ type: "text", text: polishedText }] };
-  console.info("[ai-voice] response", "source=" + source, "model=" + voiceModel, "status=200");
-  return { ...result, payload, voiceProvider: "mistral", voiceModel };
+  console.info("[ai-voice] response", "source=" + source, "provider=" + voiceProvider, "model=" + voiceModel, "status=200");
+  return { ...result, payload, voiceProvider, voiceModel };
 }
 function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
   /* OpenAI is a normal final fallback for feed/comment tasks. For other
