@@ -4993,7 +4993,8 @@ async function proxyOpenAIMessage(
               body
             )
           ),
-      }
+      },
+      upstreamTimeoutFor(body)
     );
 
   const payload =
@@ -5789,6 +5790,32 @@ function logFullAIPromptDebug(body = {}, source = "unknown", provider = "unknown
   );
 }
 
+function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
+  /* OpenAI is deliberately NOT part of normal routing. It is allowed only for
+     Gemini-primary/background work when Gemini itself has a transient service
+     incident (not auth/quota), and the configured Groq safety nets cannot finish. */
+  if (!configuredAIProvider("openai")) return false;
+
+  const order = taskProviderOrder(task.requestedProvider, task.body);
+  if (order[0] !== "gemini") return false;
+
+  const geminiServiceIncident = attempts.some((item) =>
+    item.provider === "gemini" &&
+    [408, 500, 502, 503, 504, 529].includes(Number(item.status))
+  );
+  if (!geminiServiceIncident) return false;
+
+  const groqProviders = ["groq", "groq2"].filter(configuredAIProvider);
+  if (!groqProviders.length) return false;
+
+  return groqProviders.every((provider) =>
+    attempts.some((item) => item.provider === provider) ||
+    providerCooldownMs(provider) > 0 ||
+    AI_GATE.providerConfigurationErrors.has(provider) ||
+    !providerAllowedForBody(provider, task.body)
+  );
+}
+
 async function executeAITask(task) {
   const attempted = new Set();
   const attempts = [];
@@ -5828,6 +5855,46 @@ async function executeAITask(task) {
     if (String(task.body?.quality || "") === "deep") continue;
 
     return result;
+  }
+
+  if (shouldUseEmergencyOpenAIFallback(task, attempts)) {
+    const provider = "openai";
+    const model = providerModel(provider, task.body);
+
+    console.warn(
+      "[ai-gate] emergency-openai-fallback",
+      `source=${task.source}`,
+      "reason=gemini-service-incident-and-groq-unavailable"
+    );
+    console.info("[ai-provider] request", `provider=${provider}`, `model=${model}`, `chars=${aiRequestChars(task.body)}`);
+
+    try {
+      const result = await callMessageProvider(provider, task.body);
+      result.provider = provider;
+      result.model = result.model || model;
+      last = result;
+
+      const status = result?.ok ? 200 : (result?.unavailable ? 0 : Number(result?.status || 0));
+      const message = result?.ok ? "ok" : (result?.unavailable ? "not configured" : safeProviderMessage(result, "upstream error"));
+      console.info("[ai-provider] response", `provider=${provider}`, `model=${model}`, `status=${status}`, `message=${message}`);
+
+      if (result?.ok) {
+        markProviderSuccess(provider);
+        return result;
+      }
+
+      if (!result?.unavailable) {
+        attempts.push({ provider, model, status, message });
+        if ([401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504, 529].includes(status)) {
+          markProviderFailure(provider, model, result);
+        }
+      }
+    } catch (error) {
+      const message = String(error?.message || error || "OpenAI emergency fallback failed");
+      attempts.push({ provider, model, status: 502, message });
+      last = { ok: false, status: 502, provider, model, payload: { error: { message } } };
+      console.warn("[ai-gate] emergency-openai-fallback-failed", message.slice(0, 220));
+    }
   }
 
   const details = summarizeProviderFailures(attempts, task.requestedProvider, task.body);
