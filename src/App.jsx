@@ -29091,6 +29091,16 @@ function commentReplyLatestTail(w, post, comment) {
     (en ? "Post by " : "Poszt, szerző: ") + nameOfIn(w, post.authorId) + ": \"" + String(post.text || "").slice(0, 300) + "\"\n" +
     (parent ? (en ? "It replies to " : "Erre válaszol: ") + nameOfIn(w, parent.authorId) + ": \"" + String(parent.text || "").slice(0, 300) + "\"\n" : "") +
     (en ? "NEWEST comment by " : "LEGÚJABB komment, szerző: ") + nameOfIn(w, comment.authorId) + ": \"" + String(comment.text || "").slice(0, 400) + "\"\n" +
+    /* CLAUDE FIX R62: say plainly WHO the newest comment was said to — "good boy ;)"
+       written under Charles's comment is said TO Charles, not about some "he" */
+    (() => {
+      const addresseeId = parent ? parent.authorId : post.authorId;
+      if (!addresseeId || addresseeId === comment.authorId) return "";
+      const to = nameOfIn(w, addresseeId), by = nameOfIn(w, comment.authorId);
+      return en
+        ? "THIS COMMENT IS SAID TO " + to.toUpperCase() + ": every \"you\", praise, tease, pet name or order in it (\"good boy\", \"cute\", \"shut up\", a question) is aimed at " + to + ". If " + to + " replies, they answer as the one it was said to — reacting to " + by + " saying it to THEM, never as if it were about someone else (\"he\", \"she\").\n"
+        : "EZT A KOMMENTET " + to.toUpperCase() + " KAPTA: minden „te”, dicséret, ugratás, becézés vagy utasítás benne (pl. „good boy”, „cuki”, „fogd be”, egy kérdés) " + to + "-nak/nek szól. Ha " + to + " válaszol, úgy felel, mint akinek mondták — arra reagál, hogy " + by + " ezt NEKI mondta, és sosem úgy, mintha valaki másról („ő”) szólna.\n";
+    })() +
     (() => { try { const card = namedPeopleCard(w, namedPeopleInText(w, String(comment.text || "") + " " + String(post.text || ""), comment.authorId), en); return card ? card + "\n" : ""; } catch (error) { return ""; } })() +
     (en
       ? "Answer what this newest comment actually says or implies (e.g. if it says someone cannot come or is not invited, react to THAT). Do not ignore it and do not just repeat your previous point."
@@ -37833,13 +37843,17 @@ const DM_MEET_COMMIT_RE = /\b(?:now|right now|be there|on my way|omw|meet (?:you
 function agreedDmMeetupBridge(w, bot, ck, playerText, replyText) {
   if (!w || !bot || !ck) return null;
   if (recentDmBridgeScene(w, bot.id, ck)) return null;
-  const rows = ((w.chats && w.chats[ck]) || []).slice(-10);
-  const lastBridge = rows.find((m) => m && m.roleplayInviteSceneId && now() - (Number(m.ts) || 0) < 30 * 60 * 1000);
-  if (lastBridge) return null;
-  const history = rows.map((m) => String(m && m.text || "")).concat([String(playerText || ""), String(replyText || "")]);
-  const proposal = history.some((x) => DM_MEET_PROPOSAL_RE.test(x));
-  const playerCommits = DM_MEET_COMMIT_RE.test(String(playerText || ""));
-  const botCommits = DM_MEET_COMMIT_RE.test(String(replyText || "")) || rows.slice(-3).some((m) => m && m.from === "them" && DM_MEET_COMMIT_RE.test(String(m.text || "")));
+  const all = (w.chats && w.chats[ck]) || [];
+  /* R61b: only what was said AFTER the last invite from this chat counts */
+  let lastInviteTs = 0;
+  all.forEach((m) => { if (m && m.roleplayInviteSceneId) lastInviteTs = Math.max(lastInviteTs, Number(m.ts) || 0); });
+  const freshSince = Math.max(lastInviteTs, now() - 6 * 3600 * 1000);
+  const rows = all.filter((m) => m && (Number(m.ts) || 0) > freshSince).slice(-14);
+  const mine = rows.filter((m) => m.from === "me").map((m) => String(m.text || "")).concat([String(playerText || "")]);
+  const theirs = rows.filter((m) => m.from !== "me").map((m) => String(m.text || "")).concat([String(replyText || "")]);
+  const proposal = mine.concat(theirs).some((x) => DM_MEET_PROPOSAL_RE.test(x));
+  const playerCommits = mine.slice(-6).some((x) => DM_MEET_COMMIT_RE.test(x));
+  const botCommits = theirs.slice(-6).some((x) => DM_MEET_COMMIT_RE.test(x));
   if (!proposal || !(playerCommits && botCommits)) return null;
   const en = worldLanguage(w, w.meId) === "en";
   const player = (w.player && w.player.name) || nameOfIn(w, w.meId);
@@ -63710,6 +63724,10 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
     en
       ? "HARD RULES FOR EVERY COMMENT: 3–25 words, complete sentences (never cut off). Each commenter speaks only as themself — never names themself in third person, never speaks for or about another commenter as if they were them. Do not invent past events, parties, accidents or shared memories that are not written in that commenter's card. Use only names and nicknames that appear in WHO IS WHO or the cards; never invent a nickname. A comment must make sense to a stranger reading the post."
       : "KEMÉNY SZABÁLYOK MINDEN KOMMENTRE: 3–25 szó, befejezett mondatok (soha nem félbevágva). Mindenki csak önmagaként szól — magáról nem beszél E/3-ban a saját nevével, és nem beszél más kommentelő helyett. Ne találj ki olyan múltbeli eseményt, bulit, balesetet vagy közös emléket, ami nincs a kommentelő kártyáján. Csak a KI KICSODA listában vagy a kártyákon szereplő neveket és beceneveket használd; ne találj ki becenevet. A kommentnek egy kívülálló számára is értelmesnek kell lennie.",
+    /* CLAUDE FIX R63: a question post gets ANSWERS */
+    en
+      ? "QUESTION POSTS — HARD RULE: if the post asks something (\"prettiest girl you know? name names\", \"who's coming?\", \"best movie?\"), work out exactly what is asked and every commenter ANSWERS it as themself, in their own voice and by their relationships: name a real person from WHO IS WHO when names are asked for (a crush names the poster or their crush, a friend hypes a friend, a rival names someone else to sting). Answers must fit the question literally — a guy is not \"the prettiest girl\", nobody answers a different question. A dodge is fine only if it fits the character, and then it is clearly a dodge of THIS question."
+      : "KÉRDÉS-POSZT — KEMÉNY SZABÁLY: ha a poszt kérdez valamit („ki a legszebb lány, akit ismersz? nevezz meg”, „ki jön?”, „legjobb film?”), értsd meg pontosan, mit kérdez, és minden kommentelő VÁLASZOLJON rá önmagaként, a saját hangján és kapcsolatai szerint: ha nevet kér, nevezzen meg valakit a KI KICSODA listából (a crush a posztolót vagy a crushát nevezi meg, a barát a barátját hype-olja, a rivális szúrásból mást nevez meg). A válasz szó szerint illjen a kérdésre — egy fiú nem „a legszebb lány”, és senki nem egy másik kérdésre felel. Kitérni csak karakterhűen lehet, és akkor is egyértelműen EZ elől a kérdés elől.",
     en
       ? "SHORT OR VAGUE POSTS (an exclamation like \"oh fuck me\", \"ugh\", \"finally\"): react to the exclamation itself, as each commenter would — ask what happened, worry, tease, joke, mock — by their relationship. Do NOT explain it with something else from the world (who followed or unfollowed whom, old drama, other posts); nobody knows more than the post says."
       : "RÖVID VAGY HOMÁLYOS POSZT (felkiáltás, pl. \"oh fuck me\", \"ugh\", \"végre\"): magára a felkiáltásra reagáljanak, ahogy az adott kommentelő tenné — mi történt?, aggódás, ugratás, poén, gúny — a kapcsolatuk szerint. NE magyarázd valami mással a világból (ki kit követett be vagy ki, régi dráma, más posztok); senki nem tud többet, mint amit a poszt mond.",
