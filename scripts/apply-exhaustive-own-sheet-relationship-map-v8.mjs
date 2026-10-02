@@ -390,7 +390,7 @@ function relV8TargetSynthesisCard(w, actor, target, facts) {
   const orientation = romanceOrientationState(w, actor.id, target.id);
   const explicitRomance = relV8ExplicitRomance(w, actor, target);
   return [
-    "TARGET id=\"" + String(target.id) + "\" name=\"" + String(target.name || "") + "\"",
+    "TARGET id=" + String(target.id) + " | name=" + String(target.name || ""),
     "EXTRACTED FACTS FROM ACTOR'S OWN FULL SHEET:",
     facts.length ? facts.map((f) => "- [" + f.kind + "] " + f.fact).join("\\n") : "- none",
     "DETERMINISTIC EXACT/STRUCTURAL BOND: " + (exactBond || "(none)"),
