@@ -5056,11 +5056,17 @@ async function proxyOpenAIMessage(
       };
 }
 
-/* R71: several Gemini keys (GEMINI_API_KEY, GEMINI_API_KEY_2 … _5).
-   Quota-exhausted keys rest for 30 minutes. Invalid/revoked keys are skipped too,
-   so one bad key can never disable every later Gemini key. */
-const GEMINI_KEYS = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2, process.env.GEMINI_API_KEY_3, process.env.GEMINI_API_KEY_4, process.env.GEMINI_API_KEY_5]
-  .map((k) => String(k || "").trim()).filter(Boolean).filter((k, i, a) => a.indexOf(k) === i);
+/* R71: rotate every configured Gemini key currently provisioned on Railway.
+   Quota-exhausted keys rest; one bad key never disables the later keys. */
+const GEMINI_KEYS = [
+  process.env.GEMINI_API_KEY,
+  process.env.GEMINI_API_KEY_2,
+  process.env.GEMINI_API_KEY_3,
+  process.env.GEMINI_API_KEY_4,
+  process.env.GEMINI_API_KEY_5,
+  process.env.GEMINI_API_KEY_6,
+  process.env.GEMINI_API_KEY_7,
+].map((k) => String(k || "").trim()).filter(Boolean).filter((k, i, a) => a.indexOf(k) === i);
 const GEMINI_KEY_REST_UNTIL = new Map();
 
 async function proxyGeminiMessage(body) {
@@ -5077,7 +5083,23 @@ async function proxyGeminiMessage(body) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 1000) break;
 
-    const result = await proxyGeminiMessageWithKey(body, keys[i], remainingMs);
+    const remainingKeys = Math.max(1, keys.length - i);
+    const perKeyBudget = Math.max(1800, Math.min(
+      String(body?.quality || "") === "deep" ? 12000 : 6500,
+      Math.floor(remainingMs / remainingKeys)
+    ));
+    let result;
+    try {
+      result = await proxyGeminiMessageWithKey(body, keys[i], perKeyBudget);
+    } catch (error) {
+      const timeout = error?.name === "AbortError" || /aborted|timeout/i.test(String(error?.message || error || ""));
+      result = {
+        ok: false,
+        status: timeout ? 504 : 502,
+        payload: { error: { message: timeout ? "Gemini key timed out." : String(error?.message || error || "Gemini request failed.") } },
+        provider: "gemini",
+      };
+    }
     if (result && result.ok) return result;
     last = result;
 
@@ -5096,10 +5118,10 @@ async function proxyGeminiMessage(body) {
       continue;
     }
 
-    if (status === 503 && i + 1 < keys.length && deadline - Date.now() > 1000) {
+    if ([408, 500, 502, 503, 504, 529].includes(status) && i + 1 < keys.length && deadline - Date.now() > 1000) {
       console.warn(
         "[ai-provider] gemini key #" + (GEMINI_KEYS.indexOf(keys[i]) + 1) +
-        " high-demand/503 — trying the next key within the same request budget"
+        " temporary/" + status + " — trying the next key within the same request budget"
       );
       continue;
     }
