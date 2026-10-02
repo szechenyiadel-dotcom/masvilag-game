@@ -5052,8 +5052,33 @@ async function proxyOpenAIMessage(
       };
 }
 
+/* CLAUDE FIX R66: several Gemini keys (GEMINI_API_KEY, GEMINI_API_KEY_2 … _5). When
+   one key's free quota runs out (429), the next key is tried at once; a used-up key
+   rests for 30 minutes. */
+const GEMINI_KEYS = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2, process.env.GEMINI_API_KEY_3, process.env.GEMINI_API_KEY_4, process.env.GEMINI_API_KEY_5]
+  .map((k) => String(k || "").trim()).filter(Boolean).filter((k, i, a) => a.indexOf(k) === i);
+const GEMINI_KEY_REST_UNTIL = new Map();
+
 async function proxyGeminiMessage(body) {
-  if (!GEMINI_API_KEY) return { unavailable: true, provider: "gemini" };
+  if (!GEMINI_KEYS.length) return { unavailable: true, provider: "gemini" };
+  const usable = GEMINI_KEYS.filter((k) => (GEMINI_KEY_REST_UNTIL.get(k) || 0) <= Date.now());
+  const keys = usable.length ? usable : GEMINI_KEYS.slice(0, 1);
+  let last = null;
+  for (let i = 0; i < keys.length; i += 1) {
+    const result = await proxyGeminiMessageWithKey(body, keys[i]);
+    if (result && result.ok) return result;
+    last = result;
+    if (result && result.status === 429 && GEMINI_KEYS.length > 1) {
+      GEMINI_KEY_REST_UNTIL.set(keys[i], Date.now() + 30 * 60 * 1000);
+      console.warn("[ai-provider] gemini key #" + (GEMINI_KEYS.indexOf(keys[i]) + 1) + " out of quota — trying the next key");
+      continue;
+    }
+    break;
+  }
+  return last || { unavailable: true, provider: "gemini" };
+}
+
+async function proxyGeminiMessageWithKey(body, GEMINI_API_KEY) {
 
   const requested = String(body?.model || "").trim();
   const model = String(body?.quality || "") === "deep"
@@ -5182,6 +5207,7 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") return GROQ_MODEL || "";
+  if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat-v3-0324:free").trim();
   if (provider === "gemini") {
     if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || "gemini-3.5-flash").trim();
     return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
@@ -5196,6 +5222,8 @@ function providerModel(provider, body = {}) {
 }
 
 async function callMessageProvider(provider, body) {
+  /* R66: OpenRouter as a backup reader for sheet readings (OPENROUTER_API_KEY, OPENROUTER_MODEL) */
+  if (provider === "openrouter") return proxyCompatibleMessage("openrouter", process.env.OPENROUTER_API_KEY, providerModel("openrouter", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "mistral") return proxyCompatibleMessage("mistral", MISTRAL_API_KEY, providerModel("mistral", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
   if (provider === "groq") return proxyCompatibleMessage("groq", GROQ_API_KEY, GROQ_MODEL, "https://api.groq.com/openai/v1/chat/completions", body);
   if (provider === "openai") {
@@ -5213,7 +5241,8 @@ async function callMessageProvider(provider, body) {
 function configuredAIProvider(provider) {
   if (provider === "mistral") return Boolean(MISTRAL_API_KEY && MISTRAL_MODEL);
   if (provider === "groq") return Boolean(GROQ_API_KEY && GROQ_MODEL);
-  if (provider === "gemini") return Boolean(GEMINI_API_KEY);
+  if (provider === "gemini") return Boolean(GEMINI_API_KEY || process.env.GEMINI_API_KEY_2);
+  if (provider === "openrouter") return Boolean(process.env.OPENROUTER_API_KEY);
   if (provider === "openai") return Boolean(OPENAI_API_KEY);
   if (provider === "anthropic") return Boolean(ANTHROPIC_API_KEY);
   return false;
@@ -5439,16 +5468,18 @@ function markProviderSuccess(provider) {
 function providerAllowedForBody(provider, body) {
   const chars = aiRequestChars(body);
   if (chars <= AI_GROQ_MAX_INPUT_CHARS) return true;
-  return provider === "mistral" || provider === "gemini";
+  return provider === "mistral" || provider === "gemini" || provider === "openrouter";
 }
 
 /* CLAUDE FIX R21: task-based routing. Careful sheet reading ("deep") goes to
    Gemini first (falls back to Mistral); everything in a character's voice stays
    on Mistral (permissive, good at voice). */
 function taskProviderOrder(requestedProvider, body) {
-  const order = providerOrder(requestedProvider);
-  if (String(body?.quality || "") === "deep" && order.includes("gemini")) {
-    return ["gemini", ...order.filter((p) => p !== "gemini")];
+  const order = providerOrder(requestedProvider).filter((p) => p !== "openrouter");
+  if (String(body?.quality || "") === "deep") {
+    /* R66: sheet reading — Gemini (all keys), then OpenRouter if a key is set, then the rest */
+    const first = [order.includes("gemini") ? "gemini" : "", configuredAIProvider("openrouter") ? "openrouter" : ""].filter(Boolean);
+    return [...first, ...order.filter((p) => !first.includes(p))];
   }
   return order;
 }
