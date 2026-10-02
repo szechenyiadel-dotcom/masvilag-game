@@ -37827,6 +37827,35 @@ function normalizeDmRoleplayBridge(w, bot, raw, playerText, replyText) {
   };
 }
 
+const DM_MEET_PROPOSAL_RE = /\b(?:wanna|want to|let'?s|lets|come|meet|hang ?out|pick (?:you|u) up|come over|swing by|see (?:you|u)|link up|pull up)\b[^.!?]{0,40}\b(?:meet|hang|come|over|up|out|there|place|tonight|now|later)\b|\bwanna meet\b|\bmeet (?:me|you|up)\b|(?:tal[aá]lkozzunk|gyere (?:[aá]t|ide|el)|[aá]tj[oö]ssz|[aá]tmegyek|felveszlek|l[oó]gjunk|tal[aá]lkozunk)/i;
+const DM_MEET_COMMIT_RE = /\b(?:now|right now|be there|on my way|omw|meet (?:you|u) there|see (?:you|u) (?:there|soon|in)|in (?:five|5|ten|10|a few)(?: ?min(?:ute)?s?)?|coming|heading (?:over|out|there)|i'?m (?:coming|leaving|here|outside)|hurry|leaving now)\b|(?:indulok|[uú]ton vagyok|ott leszek|mindj[aá]rt ott|megyek|j[oö]v[oö]k|sietek|most\b)/i;
+
+function agreedDmMeetupBridge(w, bot, ck, playerText, replyText) {
+  if (!w || !bot || !ck) return null;
+  if (recentDmBridgeScene(w, bot.id, ck)) return null;
+  const rows = ((w.chats && w.chats[ck]) || []).slice(-10);
+  const lastBridge = rows.find((m) => m && m.roleplayInviteSceneId && now() - (Number(m.ts) || 0) < 30 * 60 * 1000);
+  if (lastBridge) return null;
+  const history = rows.map((m) => String(m && m.text || "")).concat([String(playerText || ""), String(replyText || "")]);
+  const proposal = history.some((x) => DM_MEET_PROPOSAL_RE.test(x));
+  const playerCommits = DM_MEET_COMMIT_RE.test(String(playerText || ""));
+  const botCommits = DM_MEET_COMMIT_RE.test(String(replyText || "")) || rows.slice(-3).some((m) => m && m.from === "them" && DM_MEET_COMMIT_RE.test(String(m.text || "")));
+  if (!proposal || !(playerCommits && botCommits)) return null;
+  const en = worldLanguage(w, w.meId) === "en";
+  const player = (w.player && w.player.name) || nameOfIn(w, w.meId);
+  const transcript = rows.slice(-6).map((m) => (m && m.from === "me" ? player : bot.name) + ": " + String(m && m.text || "").slice(0, 140)).concat([player + ": " + String(playerText || "").slice(0, 140), bot.name + ": " + String(replyText || "").slice(0, 140)]).join(" / ");
+  return {
+    activate: true,
+    kind: "private_meet",
+    title: en ? bot.name + " & " + player + " meet up" : bot.name + " és " + player + " találkozója",
+    setting: (en ? "The place " + bot.name + " and " + player + " just agreed on in their DMs. What they said: " : "Az a hely, amiben " + bot.name + " és " + player + " épp megegyeztek DM-ben. Amit írtak: ") + transcript,
+    goal: en ? "Meet as agreed in the chat and pick up exactly what you planned." : "Találkozzanak, ahogy a chatben megbeszélték, és pontosan onnan folytassák.",
+    cast: [bot.id],
+    openingKind: "action",
+    opening: "",
+  };
+}
+
 function recentDmBridgeScene(w, botId, chatKeyValue) {
   return (w.scenes || [])
     .filter((scene) => scene && !scene.archived && scene.chatBridge === true && scene.initiatedBy === botId && scene.sourceChatKey === chatKeyValue && (roleplayInviteIsPending(scene) || (scene.open && roleplayInviteIsAccepted(scene))))
@@ -38648,13 +38677,22 @@ Formátum:
 
     let reply = requestedReplyText;
 
-    const bridgePlan = normalizeDmRoleplayBridge(
+    let bridgePlan = normalizeDmRoleplayBridge(
       requestWorld,
       c,
       out && out.roleplayBridge,
       t,
       requestedReplyText
     );
+    /* CLAUDE FIX R61: the model often forgets to flag a meetup it just agreed to
+       ("wanna meet?" … "now" … "be there in five"). Detect it from the chat itself. */
+    if (!bridgePlan) {
+      try {
+        const synthesized = agreedDmMeetupBridge(requestWorld, c, ck, t, requestedReplyText);
+        if (synthesized) bridgePlan = normalizeDmRoleplayBridge(requestWorld, c, synthesized, t, requestedReplyText);
+        if (bridgePlan) console.info("[dm-bridge] meetup agreed in chat — event invite created", "bot=" + c.id);
+      } catch (error) { bridgePlan = null; }
+    }
     const existingBridgeScene = bridgePlan ? recentDmBridgeScene(requestWorld, c.id, ck) : null;
     const bridgeSceneId = bridgePlan
       ? (existingBridgeScene ? existingBridgeScene.id : "chat_evt_" + uid())
