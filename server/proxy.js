@@ -5894,6 +5894,7 @@ async function applySharedVoiceFinalizer(task, result) {
       "FINAL CHARACTER VOICE / MATURE-TONE PASS.",
       "Preserve facts, actions, chronology, relationship changes, speaker identities, JSON structure and array lengths exactly.",
       "Rewrite ONLY authored speech/social text so each speaker matches the supplied VOICE / WRITING STYLE CARD: casing, slang, profanity, rhythm, punctuation, message length, nicknames, flirtation and established mature/adult tone.",
+      "Nickname/alias rule: use an established nickname/codename/hero name naturally as the name itself. In direct address choose one natural form at a time; never write combinations like Tandy, Dagger or Tandy \"Dagger\" Bowen, and never explain it with parentheticals like (her hero name), (nickname), (codename) or (aka ...).",
       "Do not sanitize consensual adult tone already supported by the draft/canon. Do not invent new plot events, sexual acts, secrets, relationships, knowledge, IDs or metadata.",
       "If the draft is JSON, return ONLY valid JSON with identical structure and keys. If it is plain text, return only the rewritten text.",
     ].join("\n"),
