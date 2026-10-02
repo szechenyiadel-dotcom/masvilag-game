@@ -140,7 +140,7 @@ function relV8Roster(w, actor) {
 
 function relV8RosterText(w, actor) {
   return relV8Roster(w, actor)
-    .map((c) => "- id=\"" + c.id + "\" name=\"" + c.name + "\"" + (c.nick ? " nick=\"" + c.nick + "\"" : "") + (c.username ? " @" + c.username : ""))
+    .map((c) => "- id=" + c.id + " | name=" + c.name + (c.nick ? " | nick=" + c.nick : "") + (c.username ? " | @" + c.username : ""))
     .join("\\n");
 }
 
