@@ -3136,7 +3136,53 @@ function applyChanges(n, changes) {
 function legacyFullSpecApplyComments(...args) {
   return withRelationshipChannel("public", { reason: "timeline-comments" }, () => legacyChannelApplyComments(...args));
 }
+/* CLAUDE FIX R55: RANK. A student / non-sensei does not tell a sensei "shut up",
+   insult or mock them in public (own sensei or someone else's dangerous one).
+   Family (a kid and their sensei-parent) and fellow senseis are exempt. */
+const DISRESPECT_TO_AUTHORITY_RE = /\b(?:shut (?:up|it)|stfu|fuck (?:off|you)|piss off|screw you|bite me|get lost|nobody asked|clown|loser|pathetic|idiot|moron|dumbass|cringe|old man|boomer|has-?been|washed[- ]up|sit down,? old)\b|(?:\bkuss\b|fogd be|pofa be|kapd be|bunk[oó]|h[uü]lye|idi[oó]ta|sz[aá]nalmas|l[uú]zer|v[eé]n (?:kecske|marha|hülye)|vénember)/i;
+function disrespectsAuthority(w, speakerId, addresseeId, text) {
+  if (!w || !speakerId || !addresseeId || speakerId === addresseeId) return false;
+  if (isHuman(w, speakerId)) return false;
+  const speaker = charById(w, speakerId), addressee = charById(w, addresseeId);
+  if (!speaker || !addressee) return false;
+  if (!DISRESPECT_TO_AUTHORITY_RE.test(String(text || ""))) return false;
+  const isSenseiRank = (c) => {
+    try { if (characterIsSensei(c)) return true; } catch (error) { /* fall through */ }
+    try {
+      const d = identityCanonFor(w, c.id) || {};
+      const roles = [d.role, ...((d.affiliations || []).map((a) => a && a.role))].filter(Boolean).join(" ");
+      return /\bsensei\b|head instructor|dojo (?:owner|head|master)|karate (?:master|instructor)|mester(?:e)?\b|vezet[oő]edz[oő]|edz[oő]\b/i.test(roles);
+    } catch (error) { return false; }
+  };
+  const senseiAddressee = isSenseiRank(addressee), senseiSpeaker = isSenseiRank(speaker);
+  if (!senseiAddressee || senseiSpeaker) return false;
+  const rel = getRel(w, speakerId, addresseeId) || EMPTY_REL;
+  if (FIXED_BONDS.indexOf(String(rel.bond || "")) >= 0 || /anya|apa|sz[uü]l[oő]|fia|l[aá]nya|parent|father|mother|dad|mom|son|daughter/i.test(String(rel.bond || "") + " " + String(rel.role || ""))) return false;
+  return true;
+}
+function filterDisrespectToAuthority(n, rows, addresseeOf) {
+  return (rows || []).filter((row) => {
+    if (!row || !row.text) return true;
+    const who = aiVoice(n, row.id !== undefined ? row.id : (row.authorId !== undefined ? row.authorId : row.name));
+    const to = addresseeOf(row);
+    if (who && to && disrespectsAuthority(n, who, to, row.text)) {
+      console.info("[rank] dropped a disrespectful line to a sensei", "speaker=" + who, "sensei=" + to, String(row.text).slice(0, 120));
+      return false;
+    }
+    return true;
+  });
+}
+
 function applyReplies(...args) {
+  /* R55 */
+  try {
+    const [n, postId, rootId, out] = args;
+    const post = n && (n.posts || []).find((p) => p && p.id === postId);
+    const root = post && safePostComments(post).find((c) => c && c.id === rootId);
+    if (root && out && Array.isArray(out.comments)) {
+      args[3] = { ...out, comments: filterDisrespectToAuthority(n, out.comments, () => root.authorId) };
+    }
+  } catch (error) { /* keep */ }
   return withRelationshipChannel("public", { reason: "timeline-replies" }, () => legacyChannelApplyReplies(...args));
 }
 function applyWorldStep(...args) {
@@ -28724,7 +28770,9 @@ function emotionalIntensity(w, actorId, otherId, kind) {
   const aimedAtOther = extremes.some((x) => x && x.toward && other && identityNameMatches(x.toward, other));
   const score = Number(rel.score) || 0;
   if (kind === "jealous") {
-    if ((Number(reading.obsession) || 0) >= 50 || (Number(reading.attraction) || 0) >= 70 || score >= 75) return "extreme";
+    /* CLAUDE FIX R56: a strong crush is not possessiveness — only obsession or a
+       possessive / jealous nature makes jealousy "extreme" */
+    if ((Number(reading.obsession) || 0) >= 50) return "extreme";
     if (/obsess|megsz[aá]ll|possess|birtokl|jealous|f[eé]lt[eé]ken|territorial|ragaszkod|controlling|kontroll/.test(relText + " " + nature)) return "extreme";
     return "strong";
   }
@@ -28817,7 +28865,7 @@ function replyDynamicDirective(w, comment) {
     const other = nameOfIn(w, ctx.otherId || ctx.postAuthorId);
     const level = emotionalIntensity(w, ctx.responderId, comment.authorId, "jealous");
     return "\n" + (en
-      ? "SOCIAL DYNAMIC FOR THIS REPLY" + (level === "extreme" ? " — FULL INTENSITY" : "") + ": " + responder + " has feelings for " + target + " and just watched " + target + " give attention to " + other + " in public (a comment, not necessarily flirting). Reply to " + target + " showing that it bothers you, in your own style" + (level === "extreme" ? " — possessive and openly jealous, exactly as extreme as your sheet" : " — a jealous jab, a cold remark or a needy question") + ", maybe a dig at " + other + ". React to what " + target + " actually wrote. Never friendly-neutral."
+      ? "SOCIAL DYNAMIC FOR THIS REPLY" + (level === "extreme" ? " — FULL INTENSITY" : "") + ": " + responder + " has feelings for " + target + " and just watched " + target + " give attention to " + other + " in public (a comment, not necessarily flirting). Reply to " + target + " showing that it bothers you, in your own style" + (level === "extreme" ? " — possessive and openly jealous, exactly as extreme as your sheet" : " — a jealous jab, a cold remark or a needy question; you are not the possessive type, so no \"mine\" and no threats") + ", maybe a dig at " + other + ". React to what " + target + " actually wrote. Never friendly-neutral."
       : "TÁRSAS DINAMIKA EHHEZ A VÁLASZHOZ" + (level === "extreme" ? " — TELJES INTENZITÁS" : "") + ": " + responder + " érez valamit " + target + " iránt, és most látta, hogy " + target + " nyilvánosan figyelmet ad " + other + "-nak/nek (egy komment, nem feltétlenül flört). Válaszolj " + target + " kommentjére úgy, hogy látszódjon, hogy ez zavar, a saját stílusodban" + (level === "extreme" ? " — birtoklóan, nyíltan féltékenyen, ahogy a lapod mondja" : " — féltékeny beszólás, hideg megjegyzés vagy rámenős kérdés") + ", akár egy szúrás " + other + " felé. Arra reagálj, amit " + target + " ténylegesen írt. Soha ne legyél semlegesen kedves.");
   }
   if (ctx.dynamic === "jealous-watch") {
@@ -28847,7 +28895,7 @@ function replyDynamicDirective(w, comment) {
   const rivalLevel = ctx.dynamic === "rival" ? emotionalIntensity(w, ctx.responderId, comment.authorId, "hostile") : "";
   if (jealousLevel === "extreme") {
     return "\n" + (en
-      ? "SOCIAL DYNAMIC FOR THIS REPLY — FULL INTENSITY: " + responder + " is obsessively, possessively into " + author + " and just watched " + target + " flirt with " + author + " in public. The jealousy hits at full force, exactly as extreme as " + responder + "'s sheet: reply to " + target + " with open, ugly, territorial jealousy — a threat, a humiliating put-down, claiming " + author + ", warning " + target + " off. If " + responder + " is the cold type, make it icy and menacing; if hot-headed, explosive. No subtlety, no polite irony, no 'lol', no friendliness. Address " + target + ", not the post."
+      ? "SOCIAL DYNAMIC FOR THIS REPLY — FULL INTENSITY: " + responder + " is obsessively, possessively into " + author + " and just watched " + target + " flirt with " + author + " in public. The jealousy hits at full force, exactly as extreme as " + responder + "'s sheet: reply to " + target + " with open, ugly, territorial jealousy — a threat, a humiliating put-down, claiming " + author + ", warning " + target + " off. If " + responder + " is the cold type, make it icy and menacing; if hot-headed, explosive. HOW it shows comes only from " + responder + "'s own card — never borrow another character's style, threats or catchphrases. No subtlety, no polite irony, no 'lol', no friendliness. Address " + target + ", not the post."
       : "TÁRSAS DINAMIKA EHHEZ A VÁLASZHOZ — TELJES INTENZITÁS: " + responder + " megszállottan, birtoklóan vonzódik " + author + " felé, és most látta, ahogy " + target + " nyilvánosan flörtöl vele. A féltékenység teljes erővel tör ki, pontosan olyan szélsőségesen, ahogy " + responder + " lapja mondja: válaszolj " + target + " kommentjére nyílt, csúnya, territoriális féltékenységgel — fenyegetés, megalázó beszólás, " + author + " kisajátítása, " + target + " elzavarása. Ha " + responder + " hideg típus, legyen jeges és fenyegető; ha lobbanékony, robbanjon. Semmi finomkodás, udvarias irónia, „lol” vagy kedvesség. " + target + " felé szólj, ne a poszthoz.");
   }
   if (rivalLevel === "extreme") {
@@ -28857,8 +28905,8 @@ function replyDynamicDirective(w, comment) {
   }
   const map = {
     jealous: en
-      ? responder + " has feelings for " + author + " and just watched " + target + " flirt with " + author + " in public. Reply to " + target + " with clearly visible jealousy in your own style — a territorial jab, a cold warning, biting sarcasm or a possessive remark. Not subtle, not friendly. Address " + target + ", not the post."
-      : responder + " érez valamit " + author + " iránt, és most látta, ahogy " + target + " nyilvánosan flörtöl vele. Válaszolj " + target + " kommentjére látható féltékenységgel a saját stílusodban — territoriális beszólás, hideg figyelmeztetés, szarkazmus vagy birtokló megjegyzés. " + target + " felé szólj, ne a poszthoz.",
+      ? responder + " has feelings for " + author + " and just watched " + target + " flirt with " + author + " in public. Reply to " + target + " with jealousy that shows — but in " + responder + "'s OWN way, exactly as " + responder + "'s personality card says (a competitive jab, sulky sarcasm, a joke with an edge, cool distance, trying to outshine " + target + "). " + responder + " is NOT the possessive type: no \"she's mine\", no claiming " + author + ", no threats or violence. Address " + target + ", not the post."
+      : responder + " érez valamit " + author + " iránt, és most látta, ahogy " + target + " nyilvánosan flörtöl vele. Válaszolj " + target + " kommentjére látszó féltékenységgel — de " + responder + " SAJÁT módján, pontosan ahogy a személyiségkártyája mondja (versengő beszólás, duzzogó szarkazmus, éles poén, hűvös távolságtartás, " + target + " lepipálása). " + responder + " NEM birtokló típus: semmi „az enyém”, " + author + " kisajátítása, fenyegetés vagy erőszak. " + target + " felé szólj, ne a poszthoz.",
     rival: en
       ? responder + " and " + target + " are rivals. Reply to " + target + "'s comment with a sharp jab, mockery or a challenge that fits the rivalry (dojo pride, old grudges). No friendliness."
       : responder + " és " + target + " riválisok. Válaszolj " + target + " kommentjére a rivalizáláshoz illő beszólással, gúnnyal vagy kihívással (dojo-büszkeség, régi sérelmek).",
@@ -62453,6 +62501,7 @@ function voiceStyleCardsForIds(w, ids, actorId) {
 
   return rows.length
     ? "VOICE STYLE CARDS — PRESERVED PROMPT PREFIX. EACH CARD APPLIES ONLY TO ITS OWN SPEAKER.\n" +
+      "RANK — HARD RULE: a student or younger fighter never tells a sensei (their own, or a feared one from another dojo) \"shut up\", never insults or mocks them in public. They may disagree respectfully, go quiet, obey grudgingly or grumble to friends — only fellow senseis / equals can be openly rude to a sensei.\n" +
       "NAMES — HARD RULE: call people only by their real name, surname, username or a nickname that a sheet actually gives them. Never invent a new nickname or a pop-culture comparison name (no \"Draco\", \"Romeo\", \"Joker\" for a real person) and never mention someone who is not in this world.\n" +
       "KNOWLEDGE BOUNDARY — HARD RULE: about themselves everyone uses their OWN sheet. About anyone else they know only that person's public profile, what their OWN sheet says about them, and what really happened between them in play. Never let one character mention a place, event, secret, nickname or memory that appears only on SOMEONE ELSE's sheet (e.g. a cabin, a hideout, a past incident) — if it is not on the speaker's own card, the speaker does not know it.\n" +
       "FULL INTENSITY: play every character exactly as extreme as their own sheet says — cruel is cruel, obsessed is visibly obsessed, cold is cold, arrogant is arrogant. Never soften, sanitize or average them into a polite generic person. JEALOUSY and ENMITY are extremes too: a jealous or possessive person reacts to a rival with open, ugly jealousy (icy and menacing or explosive, as their nature says); enemies treat each other with real contempt and hostility, never polite irony. People who dislike or hate each other show it and never use pet names (babe, baby, honey, darling…) with each other; warmth and pet names only where the relationship really is warm. Each speaker knows their own SHEET CANON history exactly — the right names, places, order of events — and never contradicts it or makes up a different past.\n\n" +
@@ -63092,8 +63141,17 @@ function legacyGroundedRecordSocialEvent(w,event={}){ const beforeScores=fullSpe
 function fullSpecSafeCommentRowApply(n,postId,row,label){if(!row||typeof row!=="object")return 0;try{return Number(legacyFullSpecApplyComments(n,postId,{comments:[row]},label)||0);}catch(error){console.warn("[comment-pipeline] comment row failed; skipped only this row","post="+String(postId||""),"character="+String(row.id!==undefined?row.id:(row.authorId!==undefined?row.authorId:row.name||"")),error);return 0;}}
 function applyComments(n, postId, out, label) {
   const payload = out && typeof out === "object" ? out : {};
-  const rows = safeAiComments(payload);
   const post = (n.posts || []).find((p) => p && p.id === postId);
+  /* R55: no "shut up" from a student to a sensei — the addressee is the comment it
+     replies to, otherwise the post author */
+  let rows = safeAiComments(payload);
+  try {
+    rows = filterDisrespectToAuthority(n, rows, (row) => {
+      const replyTo = row && (row.reply_to || row.replyTo || row.parent);
+      const parentRow = replyTo && post ? safePostComments(post).find((c) => c && c.id === replyTo) : null;
+      return parentRow ? parentRow.authorId : (post && post.authorId);
+    });
+  } catch (error) { rows = safeAiComments(payload); }
   const beforeIds = new Set(safePostComments(post).map((c) => c && c.id).filter(Boolean));
   let applied = 0;
   rows.forEach((row) => { applied += fullSpecSafeCommentRowApply(n, postId, row, label); });
