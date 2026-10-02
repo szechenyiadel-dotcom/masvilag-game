@@ -49,8 +49,8 @@ if (!next.includes("/* " + MARKER + " */")) {
 /* \${MARKER} */
 const REL_V6_RUNTIME_SKIP = /^(?:id|aiContextSummary|aiVoiceStyleCard|avatar|avatarUrl|cover|coverUrl|image|imageId|images|album|albums|photos|media|posts|comments|msgs|messages|chats|scenes|memory|memories|followers|following|baseFollowers|followerDelta|rels|relationships|relationship|socialEvents|sim|notifications|invitations)$/i;
 const REL_V6_STRUCTURAL_KEYS = /^(?:job|occupation|profession|school|university|college|role|rank|organization|organisation|affiliation|faction|team|dojo|academy|club|department|workplace|employer)$/i;
-const REL_V6_ROLE_WORDS = /\\\\b(?:head\\\\s+student|sensei|teacher|tan[aá]r|mentor|coach|edz[oő]|master|mester|leader|vezet[oő]|student|di[aá]k|tanul[oó]|tan[ií]tv[aá]ny|mentee|trainee|apprentice|tanonc|intern|gyakornok|employee|alkalmazott|boss|f[oő]n[oö]k|captain|kapit[aá]ny|member|tag)\\\\b/giu;
-const REL_V6_MENTORISH = /\\\\b(?:sensei|teacher|tan[aá]r|mentor|coach|edz[oő]|master|mester|tan[ií]tv[aá]ny|student|di[aá]k|tanul[oó]|mentee|trainee|apprentice|tanonc)\\\\b/iu;
+const REL_V6_ROLE_WORDS = /\\b(?:head\\s+student|sensei|teacher|tan[aá]r|mentor|coach|edz[oő]|master|mester|leader|vezet[oő]|student|di[aá]k|tanul[oó]|tan[ií]tv[aá]ny|mentee|trainee|apprentice|tanonc|intern|gyakornok|employee|alkalmazott|boss|f[oő]n[oö]k|captain|kapit[aá]ny|member|tag)\\b/giu;
+const REL_V6_MENTORISH = /\\b(?:sensei|teacher|tan[aá]r|mentor|coach|edz[oő]|master|mester|tan[ií]tv[aá]ny|student|di[aá]k|tanul[oó]|mentee|trainee|apprentice|tanonc)\\b/iu;
 
 function relV6Text(value) {
   if (value == null) return "";
@@ -64,7 +64,7 @@ function relV6Aliases(c) {
   [c.name, c.nick, c.nickname, c.username, c.displayName].filter(Boolean).forEach((raw) => {
     const text = String(raw).trim().toLowerCase();
     if (text.length >= 2 && !out.includes(text)) out.push(text);
-    String(raw).trim().split(/[^\\\\p{L}\\\\p{N}_-]+/u).filter((x) => x.length >= 3).forEach((x) => {
+    String(raw).trim().split(/[^\\p{L}\\p{N}_-]+/u).filter((x) => x.length >= 3).forEach((x) => {
       const low = x.toLowerCase();
       if (!out.includes(low)) out.push(low);
     });
@@ -84,28 +84,28 @@ function relV6FullFieldsMentioning(person, other) {
     if (REL_V6_RUNTIME_SKIP.test(key) || /^(?:connections?|kapcsolatok?)$/i.test(key)) return;
     const text = relV6Text(value);
     if (!text || !relV6Mentions(text, other)) return;
-    rows.push("[" + key + "]\\\\n" + text);
+    rows.push("[" + key + "]\\n" + text);
   });
-  return rows.join("\\\\n\\\\n");
+  return rows.join("\\n\\n");
 }
 
 function relV6Connections(person) {
   if (!person || typeof person !== "object") return "";
   return Object.entries(person)
     .filter(([key]) => /^(?:connections?|kapcsolatok?|relationshipsCanon|relationshipCanon)$/i.test(key))
-    .map(([key, value]) => "[" + key + "]\\\\n" + relV6Text(value))
+    .map(([key, value]) => "[" + key + "]\\n" + relV6Text(value))
     .filter(Boolean)
-    .join("\\\\n\\\\n");
+    .join("\\n\\n");
 }
 
 function relV6NormalizeAffiliation(value) {
   return String(value || "")
     .toLowerCase()
-    .replace(/^the\\\\s+/, "")
+    .replace(/^the\\s+/, "")
     .replace(REL_V6_ROLE_WORDS, " ")
-    .replace(/\\\\b(?:dojo|academy|team|club|organization|organisation|group|faction|school|university|college)\\\\b/giu, " ")
-    .replace(/[^\\\\p{L}\\\\p{N}]+/gu, " ")
-    .replace(/\\\\s+/g, " ")
+    .replace(/\\b(?:dojo|academy|team|club|organization|organisation|group|faction|school|university|college)\\b/giu, " ")
+    .replace(/[^\\p{L}\\p{N}]+/gu, " ")
+    .replace(/\\s+/g, " ")
     .trim();
 }
 
@@ -119,7 +119,7 @@ function relV6RawAffiliations(w, c) {
   });
   const normalized = [];
   raw.forEach((value) => {
-    String(value).split(/[\\\\n,;|/]+/).forEach((piece) => {
+    String(value).split(/[\\n,;|/]+/).forEach((piece) => {
       const n = relV6NormalizeAffiliation(piece);
       if (n.length >= 2 && !normalized.includes(n)) normalized.push(n);
     });
@@ -161,16 +161,16 @@ function relV6RoleClass(w, c) {
     }
   } catch (_) {}
   const text = bits.filter(Boolean).join(" ").toLowerCase();
-  if (/\\\\b(?:sensei|teacher|tan[aá]r|mentor|coach|edz[oő]|master|mester)\\\\b/i.test(text)) return "mentor";
-  if (/\\\\b(?:head\\\\s+student|student|di[aá]k|tanul[oó]|tan[ií]tv[aá]ny|mentee|trainee|apprentice|tanonc)\\\\b/i.test(text)) return "student";
+  if (/\\b(?:sensei|teacher|tan[aá]r|mentor|coach|edz[oő]|master|mester)\\b/i.test(text)) return "mentor";
+  if (/\\b(?:head\\s+student|student|di[aá]k|tanul[oó]|tan[ií]tv[aá]ny|mentee|trainee|apprentice|tanonc)\\b/i.test(text)) return "student";
   return "";
 }
 
 function relV6ExplicitPairRole(w, actor, target) {
   let text = "";
   try { text += String(connectionCanonSnippetAbout(w, actor, target, 50000) || ""); } catch (_) {}
-  text += "\\\\n" + relV6FullFieldsMentioning(actor, target);
-  text += "\\\\n" + relV6FullFieldsMentioning(target, actor);
+  text += "\\n" + relV6FullFieldsMentioning(actor, target);
+  text += "\\n" + relV6FullFieldsMentioning(target, actor);
   return REL_V6_MENTORISH.test(text);
 }
 
@@ -198,7 +198,7 @@ function relV6StructuralSummary(w, c) {
     const line = identityCanonLine(w, c);
     if (line) rows.push("identity-canon: " + line);
   } catch (_) {}
-  return rows.length ? rows.join("\\\\n") : "(none)";
+  return rows.length ? rows.join("\\n") : "(none)";
 }
 
 function relationshipReadingSnippet(w, actor, target) {
@@ -230,7 +230,7 @@ function relationshipReadingSnippet(w, actor, target) {
     "",
     "TARGET OTHER FULL SHEET FIELDS THAT MENTION ACTOR — OBJECTIVE FACTS ONLY:",
     targetOther || "(none)",
-  ].join("\\\\n");
+  ].join("\\n");
 }
 
 function relationshipReadingHash(snippet) {
@@ -252,7 +252,7 @@ function structuralRelationshipHash(w, actor, target) {
 }
 
 function relV6StripBadStructural(value) {
-  const parts = String(value || "").split(/\\\\s*(?:\\\\+|\\\\/|\\\\||,|;)\\\\s*/).filter(Boolean);
+  const parts = String(value || "").split(/\\s*(?:\\+|\\/|\\||,|;)\\s*/).filter(Boolean);
   const kept = parts.filter((part) => !REL_V6_MENTORISH.test(part));
   return kept.join(" + ");
 }
@@ -300,7 +300,7 @@ async function relV6ExtractLongSource(w, actor, target, source) {
       "SOURCE:",
       chunks[i],
       'JSON ONLY: {"facts":["..."]}'
-    ].join("\\\\n\\\\n");
+    ].join("\\n\\n");
     const out = await askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 1800, priority: 55, source: "relationship-reading", quality: "deep", timeoutMs: 110000 });
     if (!out || out.skip) throw new Error("relationship source pass failed");
     (Array.isArray(out.facts) ? out.facts : []).forEach((fact) => {
@@ -308,7 +308,7 @@ async function relV6ExtractLongSource(w, actor, target, source) {
       if (text && !facts.includes(text)) facts.push(text);
     });
   }
-  return facts.join("\\\\n- ");
+  return facts.join("\\n- ");
 }
 
 async function genRelationshipReading(w, actor, due) {
@@ -319,7 +319,7 @@ async function genRelationshipReading(w, actor, due) {
   const target = targetRow.target;
   let source = String(targetRow.snippet || "");
   if (source.length > 38000) {
-    source = "FACTS EXTRACTED FROM COMPLETE MULTI-PASS READING:\\\\n- " + await relV6ExtractLongSource(w, actor, target, source);
+    source = "FACTS EXTRACTED FROM COMPLETE MULTI-PASS READING:\\n- " + await relV6ExtractLongSource(w, actor, target, source);
   }
   const shared = relV6SharedAffiliations(w, actor, target);
   const derivedRole = relV6DerivedRole(w, actor, target);
@@ -351,7 +351,7 @@ async function genRelationshipReading(w, actor, due) {
     source,
     "",
     'JSON ONLY: {"targets":[{"id":"' + String(target.id) + '","score":0,"bond":"","role":"","layers":[],"mood":"","hidden":"","attraction":0,"fear":0,"obsession":0,"trust":0,"description":"","why":"","label":""}]}'
-  ].join("\\\\n");
+  ].join("\\n");
   const out = await askWorldJSON(w, SHEET_ANALYST_SYSTEM, prompt, { maxTokens: 3000, priority: 55, source: "relationship-reading", quality: "deep", timeoutMs: 110000 });
   if (!out || out.skip) return out;
   const rows = Array.isArray(out.targets) ? out.targets : [];
