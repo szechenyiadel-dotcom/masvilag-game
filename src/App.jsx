@@ -4874,6 +4874,39 @@ function relationshipIsUntouched(live) {
   return live.freshFromSheet === undefined && !String(live.mood || "").trim() && !String(live.why || "").trim() && !String(live.hidden || "").trim();
 }
 
+  /* CLAUDE FIX R54: one-time silent cleanup — an AI keeps following only people it
+     realistically would (aiFollowEligibility). Media accounts and the follow-back
+     of someone who follows them stay. No unfollow events or notifications. */
+function followRealismCleanupOnce(w) {
+  if (!w || typeof w !== "object") return;
+  const sim = ensureSimState(w);
+  if (!sim || !(!sim.followRealismV1 && (w.chars || []).length)) return;
+  {
+    sim.followRealismV1 = now();
+    let removed = 0;
+    try {
+      const profiles = socialProfiles(w);
+      const byId = {};
+      profiles.forEach((p) => { if (p && p.id) byId[p.id] = p; });
+      profiles.forEach((actor) => {
+        if (!actor || !actor.id || isHuman(w, actor.id) || isMediaAccount(w, actor.id) || !Array.isArray(actor.following)) return;
+        actor.following = actor.following.filter((targetId) => {
+          const target = byId[targetId];
+          if (!target || isMediaAccount(w, targetId)) return true;
+          if (Array.isArray(target.following) && target.following.includes(actor.id)) return true;
+          let ok = true;
+          try { ok = aiFollowEligibility(w, actor.id, targetId).allowed; } catch (error) { ok = true; }
+          if (ok) return true;
+          if (Array.isArray(target.followers)) target.followers = target.followers.filter((id) => id !== actor.id);
+          removed += 1;
+          return false;
+        });
+      });
+      if (removed) groundedEventLog(w, "follow-realism", "applied", "Removed " + removed + " follow(s) between people who do not really know each other.", "follow-graph");
+    } catch (error) { console.warn("[follow-realism] cleanup failed", error); }
+  }
+}
+
 function syncUntouchedRelationshipsFromBaselines(w) {
   if (!w || !w.relationshipBaselines || typeof w.relationshipBaselines !== "object") return 0;
   if (!w.rels || typeof w.rels !== "object") w.rels = {};
@@ -18567,6 +18600,7 @@ function migrate(w) {
   /* CLAUDE FIX R42: every relationship that has not moved in play IS the sheet
      right now — written straight from the sheet baseline at load, no waiting. */
   try { syncUntouchedRelationshipsFromBaselines(w); } catch (error) { console.warn("[relationship-sync] failed", error); }
+  try { followRealismCleanupOnce(w); } catch (error) { console.warn("[follow-realism] failed", error); }
 
   /*
    * v94 one-time canon repair for stale impossible relationship states.
@@ -21978,8 +22012,18 @@ function aiFollowEligibility(
     return { allowed:true, mode:"bond", reason:"positive-personal-bond" };
   }
 
+  /* CLAUDE FIX R54: a warm score alone is not a reason to follow a stranger — they
+     must actually know each other: a real bond, the sheets mention each other, or
+     they have really interacted. */
   if (relScore >= 25) {
-    return { allowed:true, mode:"relationship-score", reason:"positive-relationship-score" };
+    let knowEachOther = followBondWeight(rel) >= 16 || interactionScore >= 8;
+    if (!knowEachOther) {
+      try {
+        const a = charById(w, actor.id), b = charById(w, target.id);
+        knowEachOther = Boolean(a && b && (sheetPassagesAbout(a, b, 200) || sheetPassagesAbout(b, a, 200)));
+      } catch (error) { knowEachOther = false; }
+    }
+    if (knowEachOther) return { allowed:true, mode:"relationship-score", reason:"positive-relationship-score" };
   }
 
   if (secretCrush && !opposingFollowFaction(actor, target)) {
@@ -28699,6 +28743,26 @@ function emotionalIntensity(w, actorId, otherId, kind) {
    the player who sees it gets a little colder toward the person who got the
    attention; the most jealous one (jealous / possessive / obsessed) says so in the
    same thread — at most once per 20 minutes per person. */
+/* CLAUDE FIX R54: "DM me" / "I'll text you" agreed in the comments really happens. */
+const COMMENT_DM_REQUEST_RE = /\b(?:dm me|text me|message me|msg me|hit me up|slide (?:in)?to my dms?|send me a (?:dm|message|text)|call me)\b|(?:(?:^|\s)[ií]rj (?:r[aá]m|nekem|priv[aá]tban|dm-?ben)|(?:^|\s)[uü]zenj\b|dobj (?:egy )?(?:[uü]zit|[uü]zenetet|dm-?et)|\bh[ií]vj fel\b)/i;
+const COMMENT_DM_PROMISE_RE = /\b(?:i'?ll (?:dm|text|message|msg) (?:you|u)|(?:dm|text|message)(?:ing)? (?:you|u) (?:later|tonight|now|in a (?:sec|bit|min))|check (?:your|ur) (?:dms?|messages|inbox|phone)|sliding into (?:your|ur) dms?|i'?ll hit (?:you|u) up|dms? (?:in )?a sec)\b|(?:(?:^|\s)[ií]rok (?:neked|priv[aá]tban|dm-?ben|majd|r[aá]d)|\bmajd [ií]rok\b|n[eé]zd (?:a|meg a) (?:dm|[uü]zeneteid)|k[uü]ld[oö]k (?:egy )?(?:[uü]zit|[uü]zenetet|dm-?et))/i;
+
+function enqueueCommentAgreedDm(w, botId, info) {
+  if (!w || !botId || !w.meId || isHuman(w, botId) || isMediaAccount(w, botId) || !charById(w, botId)) return false;
+  const en = worldLanguage(w, w.meId) === "en";
+  const player = nameOfIn(w, w.meId), bot = nameOfIn(w, botId);
+  const cause = info.kind === "request"
+    ? (en ? player + " asked you in the comments to message them: \"" + cut(info.playerText || "", 220) + "\" (under " + (info.postAuthorName || "a post") + "'s post). You are writing to them now because of that — pick up exactly that thread."
+          : player + " a kommentekben megkért, hogy írj rá: \"" + cut(info.playerText || "", 220) + "\" (" + (info.postAuthorName || "egy") + " posztja alatt). Ezért írsz most — pontosan onnan folytasd.")
+    : (en ? "In the comments you told " + player + " you would message them: \"" + cut(info.botText || "", 220) + "\"" + (info.playerText ? " (they had written: \"" + cut(info.playerText, 160) + "\")" : "") + ". Now you keep that promise — continue exactly that thread."
+          : "A kommentekben megírtad " + player + " karakternek, hogy írsz neki: \"" + cut(info.botText || "", 220) + "\"" + (info.playerText ? " (ő ezt írta: \"" + cut(info.playerText, 160) + "\")" : "") + ". Most ezt teszed — pontosan onnan folytasd.");
+  const queued = simEnqueue(w, mkAction("dm", "comment-dm:" + String(info.commentId || "") + ":" + botId, {
+    botId, trigger: info.kind === "request" ? "comment-dm-request" : "comment-dm-promise", causeText: cause,
+  }, "player-event"));
+  groundedEventLog(w, "comment-dm", queued ? "queued" : "skipped", bot + " → " + player + ": DM agreed in the comments (" + info.kind + ").", "comment:" + String(info.commentId || ""));
+  return queued;
+}
+
 function applyPlayerAttentionJealousy(w, info) {
   if (!w || !info || !w.meId) return 0;
   const playerId = w.meId;
@@ -31858,6 +31922,13 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   cancelRiskSeed: playerCommentCancelRisk.risky,
                 },
               });
+              /* R54: "dm me" / "írj rám" in the player's comment → that person writes */
+              try {
+                if (COMMENT_DM_REQUEST_RE.test(String(made.text || ""))) {
+                  const askedIds = [...new Set([...freshMentionTargets, targetId].filter((tid) => tid && tid !== freshActorId && !isHuman(n, tid)))].slice(0, 2);
+                  askedIds.forEach((botId) => enqueueCommentAgreedDm(n, botId, { kind: "request", commentId: made.id, playerText: made.text, postAuthorName: nameOfIn(n, x.authorId) }));
+                }
+              } catch (dmAskError) { console.warn("[comment-dm] request failed", dmAskError); }
               /* R53: whoever is into the player notices who the player gives attention to */
               try {
                 if (playerCommentJuice.romance < 20) applyPlayerAttentionJealousy(n, { postId: x.id, commentId: made.id, targetId, text: made.text });
@@ -54836,6 +54907,9 @@ async function legacyFullSpecRunSimulationAction(view, update, action, addImage)
               .slice(before)
               .filter((row) => row && row.id && row.authorId && !isHuman(n, row.authorId))
           : [];
+        /* R54: a comment under the player's post that promises a DM is kept */
+        newAiComments.filter((c) => COMMENT_DM_PROMISE_RE.test(String(c.text || ""))).slice(0, 2)
+          .forEach((c) => enqueueCommentAgreedDm(n, c.authorId, { kind: "promise", commentId: c.id, botText: c.text, playerText: String(afterApplyPost && afterApplyPost.text || "") }));
         const socialPairs = newAiComments.length ? playerPostSocialDynamicsPairs(n, afterApplyPost, newAiComments, combinedRows) : [];
         socialPairs.forEach((pair) => {
           const queued = simEnqueue(n, mkAction("reply", "player-post-social:" + post.id + ":" + pair.root.id + ":" + pair.responderId, {
@@ -55913,6 +55987,14 @@ if (action.type === "roleplay-initiate") {
           out
         );
       } finally { REPLY_DYNAMIC_APPLYING = ""; }
+      /* R54: an AI reply that promises a DM to the player ("I'll text you", "írok privátban") is kept */
+      try {
+        if (isHuman(n, comment.authorId) && n.meId === comment.authorId) {
+          const livePost = (n.posts || []).find((row) => row && row.id === post.id);
+          safePostComments(livePost).filter((c) => c && c.parent === comment.id && !isHuman(n, c.authorId) && COMMENT_DM_PROMISE_RE.test(String(c.text || ""))).slice(-2)
+            .forEach((c) => enqueueCommentAgreedDm(n, c.authorId, { kind: "promise", commentId: c.id, botText: c.text, playerText: comment.text }));
+        }
+      } catch (dmPromiseError) { console.warn("[comment-dm] promise failed", dmPromiseError); }
       /* CLAUDE FIX R14: the social dynamic of an AI→AI reply moves their mutual relationship by rule. */
       if (replyDynamic && requestedTargetId && comment.authorId && !isHuman(n, comment.authorId)) {
         const deltas = {
@@ -56926,7 +57008,8 @@ if (targetNote) {
       return null;
     }
 
-    if (!autonomousDmEligible(view, bot)) {
+    const commentAgreedDm = /^comment-dm-/.test(String(action.payload && action.payload.trigger || ""));
+    if (!commentAgreedDm && !autonomousDmEligible(view, bot)) {
       return null;
     }
 
@@ -56946,7 +57029,7 @@ if (targetNote) {
     AUTONOMOUS_DM_TRIGGER_CONTEXT = {
       botId: bot.id,
       trigger: String(action.payload && action.payload.trigger || ""),
-      causeText: triggerPendingRow ? String(triggerPendingRow.causeText || "") : "",
+      causeText: String(action.payload && action.payload.causeText || "") || (triggerPendingRow ? String(triggerPendingRow.causeText || "") : ""),
     };
     let out = null;
     try {
@@ -61178,6 +61261,8 @@ function ensureFollowerSystem(w) {
 
   /* setFollowState() itself calls ensureFollowerSystem(); avoid recursion. */
   if (automaticFollowSyncActive) return out;
+
+
 
   /* The heavy scan is needed only once initially, then after a real rel change. */
   if (sim.automaticFollowSyncDone && !sim.automaticFollowSyncDirty) return out;
