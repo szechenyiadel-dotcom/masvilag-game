@@ -36,11 +36,18 @@ if (!next.includes("/* " + MARKER + " */")) {
   renameOne("genRelationshipReading", "legacyV8PairGenRelationshipReading");
   renameOne("inferCanonicalRelationshipBaseline", "legacyV8PairInferCanonicalRelationshipBaseline");
   renameOne("planAutoAction", "legacyV8PairPlanAutoAction");
+  renameOne("runRelationshipReadingAction", "legacyV8PairRunRelationshipReadingAction");
 
   replaceExact(
     "const RELATIONSHIP_READING_BATCH = 1;",
     "const RELATIONSHIP_READING_BATCH = 48;",
     "relationship reading batch"
+  );
+
+  replaceExact(
+    '  else if (cooldownLeft() > 1500) label = tt("AI pihen · " + Math.ceil(cooldownLeft() / 1000) + " mp", "AI resting · " + Math.ceil(cooldownLeft() / 1000) + "s");',
+    '  else if (visibleCooldownLeft() > 1500) label = tt("AI pihen · " + Math.ceil(visibleCooldownLeft() / 1000) + " mp", "AI resting · " + Math.ceil(visibleCooldownLeft() / 1000) + "s");',
+    "AI status chip visible cooldown"
   );
 
   const helper = `
@@ -462,6 +469,60 @@ async function genRelationshipReading(w, actor, due) {
   }
 
   return { targets: output };
+}
+
+async function runRelationshipReadingAction(view, update, action) {
+  const actorId = String(action && action.payload && action.payload.actorId || "");
+  const actor = charById(view, actorId);
+  update((n) => { ensureSimState(n).relationshipReadingLastAt = now(); });
+  if (!actor) return null;
+
+  let due = relationshipReadingDueTargets(view, actor);
+  if (action && action.payload && action.payload.playerFirst) {
+    const me = view.meId;
+    due = due
+      .filter((row) => actor.id === me || row.target.id === me)
+      .concat(due.filter((row) => !(actor.id === me || row.target.id === me)));
+  }
+  due = due.slice(0, RELATIONSHIP_READING_BATCH);
+  if (!due.length) return "relationship-reading-nothing";
+
+  /*
+   * v8: ONE exhaustive actor sheet job at a time.
+   * The legacy runner launched up to three full-sheet actor jobs in parallel.
+   * That creates giant simultaneous prompts and can trip provider quotas.
+   * Accuracy is preserved; only burst concurrency is removed.
+   */
+  let out = null;
+  try {
+    out = await genRelationshipReading(view, actor, due);
+  } catch (error) {
+    update((n) => {
+      const st = relationshipReadingState(n);
+      st[actor.id] = { ...(st[actor.id] || {}), failedAt: now() };
+      groundedEventLog(
+        n,
+        "relationship-reading",
+        "failed",
+        actor.name + ": " + String(error && error.message || error || "AI error"),
+        "sheet:" + actor.id
+      );
+    });
+    return null;
+  }
+
+  if (out && out.skip === true) return "relationship-reading-skip";
+
+  try {
+    relationshipReadingCachePut(view, [{ actor, due, out }]);
+  } catch (_) {}
+
+  update((n) => {
+    const rows = Array.isArray(out && out.targets) ? out.targets : [];
+    applyRelationshipReadingRows(n, actor.id, due, rows);
+  });
+
+  return "relationship-reading";
 }
 
 function planAutoAction(view) {
