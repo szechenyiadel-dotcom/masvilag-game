@@ -5088,12 +5088,9 @@ async function proxyGeminiMessage(body) {
 
 async function proxyGeminiMessageWithKey(body, GEMINI_API_KEY) {
 
-  const requested = String(body?.model || "").trim();
   const model = String(body?.quality || "") === "deep"
-    ? String(process.env.GEMINI_DEEP_MODEL || "gemini-3.5-flash").trim()
-    : (requested.startsWith("gemini")
-      ? requested
-      : (GEMINI_MODEL_ENV || "gemini-3.5-flash"));
+    ? String(process.env.GEMINI_DEEP_MODEL || GEMINI_MODEL_ENV || "gemini-3.8-flash").trim()
+    : String(GEMINI_MODEL_ENV || "gemini-3.8-flash").trim();
 
   const url = new URL(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
@@ -5240,8 +5237,8 @@ function providerModel(provider, body = {}) {
   if (provider === "groq") return GROQ_MODEL || "";
   if (provider === "openrouter" || provider === "openrouter2") return String(process.env.OPENROUTER_MODEL || "arcee-ai/trinity-large-preview:free").trim();
   if (provider === "gemini") {
-    if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || "gemini-3.5-flash").trim();
-    return requested.startsWith("gemini") ? requested : (GEMINI_MODEL_ENV || "gemini-3.5-flash");
+    if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || GEMINI_MODEL_ENV || "gemini-3.8-flash").trim();
+    return String(GEMINI_MODEL_ENV || "gemini-3.8-flash").trim();
   }
   if (provider === "anthropic") {
     return requested.startsWith("claude")
