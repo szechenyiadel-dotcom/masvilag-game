@@ -60936,8 +60936,11 @@ const signOut = useCallback(async () => {
     const laneView = viewRef.current;
     const laneQueue = ((laneView && laneView.sim && laneView.sim.queue) || []).filter((a) => a && a.id && !inFlightActionIds.current.has(a.id));
     const runningId = String((laneView && laneView.sim && laneView.sim.running) || "");
+    const newestPlayerPostLaneAction = laneQueue
+      .filter((a) => a.type === "player-post-comments-guarantee" && a.id !== runningId)
+      .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))[0] || null;
     const laneAction =
-      laneQueue.find((a) => a.type === "player-post-comments-guarantee" && a.id !== runningId) ||
+      newestPlayerPostLaneAction ||
       laneQueue.find((a) => (a.source === "manual" || a.source === "player-event") && a.id !== runningId);
     if (laneAction) {
       runManualLane(laneAction);
@@ -60977,8 +60980,11 @@ const signOut = useCallback(async () => {
   const dueSocialReaction = groundedDueFollowBackAction(view2);
   /* R45: skip what the second lane is already doing; the player's post comments go first */
   const queueFree = ((view2.sim && view2.sim.queue) || []).filter((a) => a && !inFlightActionIds.current.has(a.id));
+  const newestPlayerPostQueued = queueFree
+    .filter((a) => a.type === "player-post-comments-guarantee")
+    .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))[0] || null;
   const queued =
-    queueFree.find((a) => a.type === "player-post-comments-guarantee") ||
+    newestPlayerPostQueued ||
     queueFree.find((a) => a.source === "manual" || a.source === "player-event") ||
     dueSocialReaction ||
     queueFree[0] ||
