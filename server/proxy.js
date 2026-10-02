@@ -5537,10 +5537,31 @@ function providerAllowedForBody(provider, body) {
   return provider === "mistral" || provider === "gemini" || provider === "openrouter" || provider === "openrouter2";
 }
 
-/* R67: use one deterministic failover chain for AI message requests.
-   Railway AI_PROVIDER_ORDER controls the exact order. */
+/* R69: reserve OpenRouter capacity for player-facing social content.
+   Scene, chats, comments and posts use the two OpenRouter keys first.
+   Background analysis/canon/maintenance work uses Gemini instead, so it cannot
+   consume OpenRouter free-model rate limits before an interactive request. */
 function taskProviderOrder(requestedProvider, body) {
-  return providerOrder(requestedProvider);
+  const source = String(body?.source || inferAIRequestSource(body) || "").trim().toLowerCase();
+
+  const openRouterSources = new Set([
+    "scene",
+    "dm",
+    "group-chat",
+    "comments",
+    "feed-post",
+    "interactive",
+  ]);
+
+  const raw = openRouterSources.has(source)
+    ? ["openrouter", "openrouter2", "gemini", "groq", "mistral"]
+    : ["gemini", "groq", "mistral"];
+
+  return raw.filter((provider, index, all) =>
+    all.indexOf(provider) === index &&
+    configuredAIProvider(provider) &&
+    providerAllowedForBody(provider, body)
+  );
 }
 
 function healthyProvider(requestedProvider, body, excluded = new Set()) {
