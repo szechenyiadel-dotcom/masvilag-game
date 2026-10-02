@@ -5833,8 +5833,7 @@ function findNaturalThreadReply(w, onlyPostId = "") {
   const posts = (w.posts || [])
     .filter((p) =>
       p &&
-      (!onlyPostId || p.id === onlyPostId) &&
-      now() - (Number(p.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS
+      (!onlyPostId || p.id === onlyPostId)
     )
     .slice(0, 12);
 
@@ -5850,7 +5849,7 @@ function findNaturalThreadReply(w, onlyPostId = "") {
 
       /* Csak a ténylegesen friss feed él tovább automatikusan. Egy régi
        * threadet az AI nem ás elő magától; a játékos friss válasza külön út. */
-      if (now() - (Number(comment.ts) || 0) > Math.min(45 * 60000, LIVE_WORLD_FRESH_COMMENT_WINDOW_MS)) continue;
+      if (now() - (Number(comment.ts) || 0) > LIVE_WORLD_REPLY_WINDOW_MS) continue;
 
       const targets = naturalCommentReplyTargets(w, post, comment);
       for (let k = 0; k < targets.length; k++) {
@@ -8611,7 +8610,8 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
     Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 100 * 1000
   )
 );
-const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = 10 * 60 * 1000; // exact 10-minute live comment window
+const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = 10 * 60 * 1000; // exact 10-minute top-level comment window
+const LIVE_WORLD_REPLY_WINDOW_MS = 5 * 60 * 1000; // a comment/reply must be answered within 5 minutes or the thread goes quiet
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
 /* v53 — starvation-safe private/event lanes. These are cadence targets, not hard spam timers. */
@@ -30531,7 +30531,7 @@ async function eventDrivenFeedRefreshPlan(w, cast, eventBatch) {
 
 async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
   /* CLAUDE FIX 2.1: event-driven refreshes (my post / scene end / popup) get their
-     own 6–7 person cast, and the author roster is placed in the protected tail of
+     own 3–4 post cast, and the author roster is placed in the protected tail of
      the prompt so compaction can never cut it out. */
   const eventBatch = EVENT_DRIVEN_FEED_BATCH_CONTEXT && EVENT_DRIVEN_FEED_BATCH_CONTEXT.enabled
     ? EVENT_DRIVEN_FEED_BATCH_CONTEXT
@@ -53566,8 +53566,8 @@ function hasRecentWidespreadGossip(w) {
 const AI_ACTIVITY_OPTIMIZATION = Object.freeze({
   EVENT_DRIVEN_FEED_ONLY: true,
   EVENT_DRIVEN_UNSOLICITED_DM_ONLY: true,
-  FEED_MIN_POSTS: 6,
-  FEED_MAX_POSTS: 7,
+  FEED_MIN_POSTS: 3,
+  FEED_MAX_POSTS: 4,
   PLAYER_COMMENT_MAX_AI_REPLIES: 4,
   AI_THREAD_MAX_ROUNDS: 3,
   RECENT_DM_WINDOW_MS: 10 * 60 * 1000,
@@ -55462,6 +55462,10 @@ async function legacyFullSpecRunSimulationAction(view, update, action, addImage)
     console.warn("[player-post-comments] stopped=author-not-human", "post=" + post.id, "author=" + String(post.authorId || ""));
     return "player-post-comments-not-human";
   }
+  if (now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) {
+    console.info("[player-post-comments] stopped=comment-window-expired", "post=" + post.id);
+    return "player-post-comments-expired";
+  }
 
   let label = "";
   let combinedRows = [];
@@ -56497,6 +56501,9 @@ if (action.type === "roleplay-initiate") {
     if (!post || !comment) {
       return null;
     }
+    if (now() - (Number(comment.ts) || 0) > LIVE_WORLD_REPLY_WINDOW_MS) {
+      return null;
+    }
 
     const requestedTargetId =
       action.payload &&
@@ -56668,9 +56675,9 @@ if (action.type === "roleplay-initiate") {
       commentTrigger === "player-post" ||
       isGuaranteedCoverage); /* MÁSVILÁG COMMENT + REPLY RELIABILITY v1 */
 
-    /* Ordinary automatic waves are fresh-feed only. Hard coverage can rescue
-       any still-visible older post too. */
-    if (commentTrigger !== "player-post" && now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) {
+    /* Top-level AI comments are fresh-feed only: after 10 minutes the post can
+       continue only through a reply to a still-fresh comment. */
+    if (now() - (Number(post.ts) || 0) > LIVE_WORLD_FRESH_COMMENT_WINDOW_MS) {
       return null;
     }
 
@@ -57990,6 +57997,9 @@ if (targetNote) {
       String(eventFeedTrigger === "player-post" ? "" : (action.payload && action.payload.postId || "")),
       eventGossipPreview && eventGossipPreview.id ? String(eventGossipPreview.id) : "",
     ].filter(Boolean);
+    const reservedFeedPosts = eventGossipPreview ? 1 : 0;
+    const eventFeedMinRegular = Math.max(1, AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS - reservedFeedPosts);
+    const eventFeedMaxRegular = Math.max(eventFeedMinRegular, AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS - reservedFeedPosts);
 
     const callWorldBatch = async (neededPosts, excludeAuthorIds) => {
       EVENT_DRIVEN_FEED_BATCH_CONTEXT = {
@@ -58020,38 +58030,40 @@ if (targetNote) {
       }
     };
 
-    const first = await callWorldBatch(AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS, []);
+    const first = await callWorldBatch(eventFeedMaxRegular, []);
     let merged = eventDrivenMergeBatchOutputs(generationView, first, null);
+    merged.posts = (merged.posts || []).slice(0, eventFeedMaxRegular);
     let selectedAuthors = eventDrivenUsableBatchPosts(generationView, merged)
       .map((post) => eventDrivenFeedRawAuthor(generationView, post))
       .filter(Boolean);
 
     let needsMore =
-      merged.posts.length < AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS ||
+      merged.posts.length < eventFeedMinRegular ||
       !eventDrivenTriggerCommentsCovered(merged, eventTriggerPostIds);
 
     while (needsMore && feedAiCalls < 4) {
       const missing = Math.max(
         1,
-        AI_ACTIVITY_OPTIMIZATION.FEED_MAX_POSTS - merged.posts.length
+        eventFeedMaxRegular - merged.posts.length
       );
       const extra = await callWorldBatch(missing, selectedAuthors);
       merged = eventDrivenMergeBatchOutputs(generationView, merged, extra);
+      merged.posts = (merged.posts || []).slice(0, eventFeedMaxRegular);
       selectedAuthors = eventDrivenUsableBatchPosts(generationView, merged)
         .map((post) => eventDrivenFeedRawAuthor(generationView, post))
         .filter(Boolean);
       needsMore =
-        merged.posts.length < AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS ||
+        merged.posts.length < eventFeedMinRegular ||
         !eventDrivenTriggerCommentsCovered(merged, eventTriggerPostIds);
     }
 
-    if (merged.posts.length < AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS) {
+    if (merged.posts.length < eventFeedMinRegular) {
       console.warn(
         "[feed-refresh]",
         "incomplete-batch-preserved",
         "trigger=" + eventFeedTrigger,
         "posts=" + String(merged.posts.length),
-        "required=" + String(AI_ACTIVITY_OPTIMIZATION.FEED_MIN_POSTS),
+        "required=" + String(eventFeedMinRegular),
         "aiCalls=" + String(feedAiCalls)
       );
     }
@@ -59984,7 +59996,7 @@ const signOut = useCallback(async () => {
         )
       );
       queuedAny = worldQueued || queuedAny;
-      update((n) => groundedEventLog(n, "player-post-world", worldQueued ? "started" : "failed", worldQueued ? "6–7 bot-post world refresh queued." : "World refresh action could not be queued.", "post:" + String(event.postId)));
+      update((n) => groundedEventLog(n, "player-post-world", worldQueued ? "started" : "failed", worldQueued ? "3–4 total-post world refresh queued." : "World refresh action could not be queued.", "post:" + String(event.postId)));
 
       return queuedAny;
     }
