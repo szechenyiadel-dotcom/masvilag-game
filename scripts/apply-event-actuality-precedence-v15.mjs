@@ -29,10 +29,7 @@ function relV12EventState(text,eventRe){
  if(desire) return "desire";
  if(negated) return "negated";
  return "uncertain";
-}
-function relationshipReadingHash(snippet){return simsSocialStableHash("v15-actuality-precedence|"+String(snippet||""));}
-function relationshipReadingCacheKey(actor,target,snippet){return "rr15-actuality-precedence:"+simsSocialStableHash(String(actor&&actor.name||"")+"|"+String(target&&target.name||"")+"|"+relationshipReadingHash(snippet));}
-`;
+}`;
  next+=helper;
  fs.writeFileSync(appPath,next,"utf8");
  console.log("[patch-status] event-actuality-precedence=v15 applied; desire-beats-event-noun; completed-action-required; rr15-reread=on");
