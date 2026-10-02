@@ -30469,6 +30469,66 @@ HARD SELF BOUNDARY:
     .join("\n");
 }
 
+async function eventDrivenFeedRefreshPlan(w, cast, eventBatch) {
+  if (!w || !eventBatch || !cast || !cast.length) return null;
+  const compactCast = cast.map((actor) => {
+    const rel = getRel(w, actor.id, w.meId) || EMPTY_REL;
+    return {
+      id: actor.id,
+      name: actor.name,
+      job: String(actor.job || actor.occupation || "").slice(0, 120),
+      personality: String(actor.personality || "").replace(/\s+/g, " ").trim().slice(0, 320),
+      relationshipToPlayer: {
+        score: Number(rel.score) || 0,
+        type: String(rel.bond || rel.type || "").slice(0, 100),
+        mood: String(rel.mood || "").slice(0, 120),
+      },
+    };
+  });
+
+  try {
+    return await askWorldJSON(
+      w,
+      [
+        "You are a FAST feed refresh planner, not the final social-media writer.",
+        "Plan what each already-selected author is naturally doing/posting about right now.",
+        "Do NOT write final captions or comments. Do not invent canon. Keep topics varied and character-specific.",
+        "The final wording will be written by a separate high-quality writing model."
+      ].join("\n"),
+      [
+        "REFRESH TRIGGER:",
+        JSON.stringify({
+          trigger: eventBatch.trigger || "",
+          postId: eventBatch.postId || "",
+          causeText: String(eventBatch.causeText || "").slice(0, 500),
+          neededPosts: Number(eventBatch.neededPosts) || cast.length,
+          gossipFacts: String(eventBatch.gossipFacts || "").slice(0, 700),
+        }),
+        "",
+        "SELECTED AUTHORS:",
+        JSON.stringify(compactCast),
+        "",
+        '{"authors":[{"id":"EXACT_ID","topic":"short topic","intent":"what the post is trying to express/do","tone":"short tone"}]}',
+        "Return one row for each selected author; planning only, no final captions."
+      ].join("\n"),
+      {
+        maxTokens: 760,
+        priority: 45,
+        timeoutMs: 8000,
+        source: "feed-refresh-plan",
+      }
+    );
+  } catch (error) {
+    console.warn(
+      "[feed-refresh-plan]",
+      "fallback=local-cast",
+      "trigger=" + String(eventBatch && eventBatch.trigger || ""),
+      String(error && error.message || error || "planner failed")
+    );
+    return null;
+  }
+}
+
 async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
   /* CLAUDE FIX 2.1: event-driven refreshes (my post / scene end / popup) get their
      own 6–7 person cast, and the author roster is placed in the protected tail of
@@ -30481,6 +30541,10 @@ async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
     if (eventBatch) console.warn("[feed-refresh]", "no-eligible-authors", "trigger=" + String(eventBatch.trigger || ""));
     return null;
   }
+
+  const refreshPlan = eventBatch
+    ? await eventDrivenFeedRefreshPlan(w, cast, eventBatch)
+    : null;
 
   const recent = (w.posts || [])
     .slice(0, 4)
@@ -30509,6 +30573,7 @@ async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
     )}
 
 AUTONOMOUS AUTHORSHIP CONTRACT:
+${refreshPlan ? ("REFRESH PLANNER OUTPUT — planning only; do not copy wording:\n" + JSON.stringify(refreshPlan).slice(0, 7000) + "\nUse it only to decide each selected author's topic/intent/tone. You are still responsible for the final character-authentic wording.\n") : ""}
 - Each generated post's id selects EXACTLY ONE author.
 - That author may use only their OWN AUTONOMY SELF CAPSULE for self facts.
 - The player profile/private canon is intentionally omitted. Public recent feed/events may still be reacted to when actually relevant, but the player is not the default subject.
@@ -64277,6 +64342,84 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
   ].filter(Boolean).join("\n");
 }
 
+async function playerPostCommentReactionPlan(w, post, postContext, cards, minComments, maxComments) {
+  if (!w || !post || !cards || !cards.length) return null;
+  const compactCards = cards.map((card) => ({
+    id: card.id,
+    name: card.name,
+    relationshipToPostAuthor: card.relationshipToPostAuthor,
+    isNamedInPost: Boolean(card.isNamedInPost),
+    relationshipToPeopleNamedInPost: card.relationshipToPeopleNamedInPost,
+  }));
+
+  try {
+    const out = await askWorldJSON(
+      w,
+      [
+        "You are a FAST social reaction planner, not the final writer.",
+        "Choose who should react to the visible player post and what each reaction intends to do.",
+        "Do NOT write final comment wording. Do not invent events or facts.",
+        "Respect relationships, official couple status, jealousy, friendship, rivalry and named people in the post.",
+        "Return compact JSON only."
+      ].join("\n"),
+      [
+        "VISIBLE POST:",
+        JSON.stringify(postContext),
+        "",
+        "ELIGIBLE COMMENTERS:",
+        JSON.stringify(compactCards),
+        "",
+        "Choose " + minComments + "-" + maxComments + " different commenters.",
+        '{"commenters":[{"id":"EXACT_ID","tone":"flirty|supportive|teasing|neutral|jealous|dismissive|hostile","intent":"very short description of what this person reacts to / tries to convey"}]}'
+      ].join("\n"),
+      {
+        maxTokens: 420,
+        priority: 45,
+        timeoutMs: 8000,
+        source: "player-post-comment-plan",
+      }
+    );
+
+    const allowed = new Set(cards.map((card) => String(card.id)));
+    const rows = Array.isArray(out && out.commenters) ? out.commenters : [];
+    const planned = [];
+    const seen = new Set();
+
+    rows.forEach((row) => {
+      const id = String(row && row.id || "");
+      if (!id || !allowed.has(id) || seen.has(id)) return;
+      seen.add(id);
+      planned.push({
+        id,
+        tone: String(row.tone || "").slice(0, 40),
+        intent: String(row.intent || "").replace(/\s+/g, " ").trim().slice(0, 220),
+      });
+    });
+
+    for (const card of cards) {
+      if (planned.length >= minComments) break;
+      const id = String(card.id || "");
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      planned.push({
+        id,
+        tone: String(card.relationshipToPostAuthor && card.relationshipToPostAuthor.expectedPublicTone || "neutral"),
+        intent: "react naturally to the visible post",
+      });
+    }
+
+    return planned.length ? planned.slice(0, maxComments) : null;
+  } catch (error) {
+    console.warn(
+      "[player-post-comment-plan]",
+      "fallback=local-cast",
+      "post=" + String(postContext && postContext.postId || ""),
+      String(error && error.message || error || "planner failed")
+    );
+    return null;
+  }
+}
+
 async function isolatedPlayerPostComments(w, post, options = {}) {
   const minComments = Math.max(3, Math.min(6, Math.round(Number(options.minComments) || 3)));
   const maxComments = Math.max(minComments, Math.min(6, Math.round(Number(options.maxComments) || 6)));
@@ -64287,9 +64430,28 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
     return { out: { comments: [], changes: [] }, label: "isolated-player-post-comments-no-cast" };
   }
 
+  const reactionPlan = await playerPostCommentReactionPlan(
+    w,
+    post,
+    postContext,
+    cards,
+    minComments,
+    maxComments
+  );
+  const plannedIds = Array.isArray(reactionPlan)
+    ? reactionPlan.map((row) => String(row.id || ""))
+    : [];
+  const plannedCards = plannedIds.length
+    ? [
+        ...plannedIds.map((id) => cards.find((card) => String(card.id) === id)).filter(Boolean),
+        ...cards.filter((card) => !plannedIds.includes(String(card.id))),
+      ].slice(0, maxComments)
+    : cards;
+
   const logContext = {
     post: postContext,
-    commenters: cards.map((card) => ({
+    reactionPlan: reactionPlan || "local-fallback",
+    commenters: plannedCards.map((card) => ({
       id: card.id,
       name: card.name,
       relationshipToPostAuthor: card.relationshipToPostAuthor,
@@ -64312,19 +64474,24 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
       w,
       post,
       postContext,
-      cards,
+      plannedCards,
       minComments,
       maxComments,
       attempt ? firstProblems : [],
       attempt ? firstRows : []
     );
+    const plannedPrompt = reactionPlan && reactionPlan.length
+      ? prompt + "\n\n[REACTION PLAN — PLANNING ONLY, DO NOT COPY WORDING]\n" +
+        JSON.stringify(reactionPlan) +
+        "\nWrite the final comments yourself in each character's exact voice while preserving these intended speakers/tones."
+      : prompt;
 
     let out;
     try {
       out = await askWorldWritingJSON("comments", 
         w,
         playerPostCommentPrivateSystem(w, post),
-        prompt,
+        plannedPrompt,
         {
           maxTokens: 900,
           priority: 65,
@@ -64345,8 +64512,8 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
     }
 
     if (out && out.postMeaning) console.info("[player-post-comments] meaning=" + String(out.postMeaning).slice(0, 240));
-    const rows = playerPostCommentRowsFromOutput(w, out, cards, postContext).slice(0, maxComments);
-    const problems = playerPostCommentBatchProblems(w, rows, cards, postContext, minComments);
+    const rows = playerPostCommentRowsFromOutput(w, out, plannedCards, postContext).slice(0, maxComments);
+    const problems = playerPostCommentBatchProblems(w, rows, plannedCards, postContext, minComments);
 
     console.info(
       "[player-post-comments]",
