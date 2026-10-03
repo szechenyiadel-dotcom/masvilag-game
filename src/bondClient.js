@@ -83,7 +83,13 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
 
   const yieldToUi = async () => {
     if (!fastRestart) return;
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      if (typeof globalThis.requestAnimationFrame === "function") {
+        globalThis.requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
   };
 
   const analyze = async (body) => {
@@ -113,22 +119,34 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
   };
 
   if (fastRestart) {
-    // Restart World: start EVERY profile read immediately. Each worker yields
-    // once before flattening its sheet so mobile Safari can paint/respond instead
-    // of doing twenty large synchronous sheet conversions in one long JS task.
-    progress({ phase: "profile", owner: "", completed: 0, started: people.length, total: people.length });
-    await Promise.all(people.map(async (character, index) => {
+    // Prepare the heavy local sheet strings cooperatively so mobile Safari gets
+    // a paint/input frame between characters. Once preparation is complete,
+    // launch EVERY profile request in the same turn so AI reading is concurrent.
+    const jobs = [];
+    for (let index = 0; index < people.length; index += 1) {
+      const character = people[index];
       await yieldToUi();
       sheets[character.id] = fullSheetText(character, undefined, world);
-      const roster = people
-        .filter((other) => other.id !== character.id)
-        .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
+      jobs.push({
+        character,
+        index,
+        roster: people
+          .filter((other) => other.id !== character.id)
+          .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) })),
+        fieldNames: Object.keys(sheetFields(character, world)),
+      });
+    }
+
+    // At this point all local work is ready. The map callback reaches api()
+    // immediately for every profile before Promise.all waits for any one result.
+    progress({ phase: "profile", owner: "", completed: 0, started: people.length, total: people.length });
+    await Promise.all(jobs.map(async ({ character, index, roster, fieldNames }) => {
       const result = await analyze({
         stage: "profile",
         owner: character.id,
         roster,
         ownSheet: sheets[character.id],
-        fieldNames: Object.keys(sheetFields(character, world)),
+        fieldNames,
         language,
         restartProfileIndex: index,
       });

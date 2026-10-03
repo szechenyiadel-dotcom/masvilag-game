@@ -449,7 +449,9 @@ test("Only Restart World enables all-profile launch; normal queue and bounded ba
  assert.ok(appSource.includes("started"));
 
  const clientSource = fs.readFileSync(new URL("../src/bondClient.js", import.meta.url), "utf8");
- assert.ok(clientSource.includes("await Promise.all(people.map"));
+ assert.ok(clientSource.includes("await Promise.all(jobs.map"));
+ assert.ok(clientSource.includes("requestAnimationFrame"));
+ assert.ok(clientSource.includes("restartProfileIndex: index"));
  assert.ok(clientSource.includes("baselineConcurrency"));
 
  const serverSource = fs.readFileSync(new URL("../server/bondAnalysis.js", import.meta.url), "utf8");
