@@ -130,6 +130,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
         ownSheet: sheets[character.id],
         fieldNames: Object.keys(sheetFields(character, world)),
         language,
+        restartKeyOffset: index % 7,
       });
       profiles[character.id] = { profile: result.result, hash: result.hash };
       profileKeys[index] = result.cacheKey;
@@ -162,7 +163,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
 
   const baselines = {};
   const baselineConcurrency = fastRestart ? Math.min(4, Math.max(1, people.length)) : 1;
-  await runLimited(people, baselineConcurrency, async (character) => {
+  await runLimited(people, baselineConcurrency, async (character, index) => {
     // A cached profile may have completed before its local sheet was flattened
     // in another worker, so guarantee the owner's exact sheet is available.
     if (!sheets[character.id]) sheets[character.id] = fullSheetText(character, undefined, world);
@@ -182,6 +183,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       ownSheet: sheets[character.id],
       profileKeys,
       language,
+      restartKeyOffset: fastRestart ? index % 7 : 0,
     });
     if (!result.cached) recalculatedBonds += result.result.bonds.length;
     for (const bond of result.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
