@@ -9,6 +9,8 @@ import {
   geminiModelConfig, geminiModelLadder, geminiStreakRestMs, createGeminiLedger, planGeminiAttempts,
   DEFAULT_GEMINI_EXTRA_MODELS, DEFAULT_GEMINI_LITE_MODELS, DEFAULT_GEMINI_PRIMARY_MODEL,
   geminiBlockReason, looksLikeRefusal, requestExpectsJson,
+  PAID_INPUT_PROVIDERS, DEFAULT_PAID_MAX_INPUT_CHARS, paidMaxInputChars, planCharBudget, createUsageMeter,
+  createRefusalTracker, orderByRefusals,
 } from "../server/aiPolicy.js";
 
 test("Only an explicit foreground flag marks a request as player-waiting", () => {
@@ -458,4 +460,105 @@ test("An answer is never mistaken for a refusal: JSON, fenced JSON, long prose, 
     "x".repeat(900),
     'I cannot tell you how happy I am, here you go: {"ok":"yes"}',
   ]) assert.equal(looksLikeRefusal(text), false, text.slice(0, 60));
+});
+
+/* ---------- the paid providers' ceiling and the usage meter ---------- */
+
+test("The paid providers are DeepSeek and the two Mistral keys, and the ceiling defaults to 60,000 characters", () => {
+  assert.deepEqual([...PAID_INPUT_PROVIDERS].sort(), ["mistral", "mistral2", "openrouter3"]);
+  assert.equal(DEFAULT_PAID_MAX_INPUT_CHARS, 60000);
+  assert.equal(paidMaxInputChars({}), 60000);
+  assert.equal(paidMaxInputChars({ PAID_MAX_INPUT_CHARS: "" }), 60000);
+  assert.equal(paidMaxInputChars({ PAID_MAX_INPUT_CHARS: "30000" }), 30000);
+  assert.equal(paidMaxInputChars({ PAID_MAX_INPUT_CHARS: "0" }), 0, "0 switches it off");
+  assert.equal(paidMaxInputChars({ PAID_MAX_INPUT_CHARS: "lots" }), 60000);
+  assert.equal(paidMaxInputChars({ PAID_MAX_INPUT_CHARS: "-5" }), 60000);
+});
+
+test("A prompt that fits is left alone; one that does not is cut to the ceiling with the latest message getting the most room", () => {
+  assert.deepEqual(planCharBudget({ maxChars: 60000, systemChars: 20000, messageChars: [30000] }), { compact: false, maxChars: 60000 });
+  assert.equal(planCharBudget({ maxChars: 0, systemChars: 1e6, messageChars: [1e6] }).compact, false, "no ceiling, nothing to do");
+  const plan = planCharBudget({ maxChars: 60000, systemChars: 40000, messageChars: [80000] });
+  assert.equal(plan.compact, true);
+  assert.equal(plan.systemCap, 30000, "the system part may keep half");
+  assert.equal(plan.lastCap, 30000);
+  assert.ok(plan.systemCap + plan.lastCap <= plan.maxChars);
+  const small = planCharBudget({ maxChars: 60000, systemChars: 5000, messageChars: [100000] });
+  assert.equal(small.systemCap, 5000, "a short system part is never cut");
+  assert.equal(small.lastCap, 55000);
+  const several = planCharBudget({ maxChars: 60000, systemChars: 10000, messageChars: [20000, 20000, 60000] });
+  assert.ok(several.lastCap > several.otherCap && several.otherCap > 0);
+  assert.ok(several.systemCap + several.lastCap + 2 * several.otherCap <= 60000);
+});
+
+test("The usage meter adds up calls and tokens per provider and per kind of request", () => {
+  const meter = createUsageMeter({ now: () => Date.UTC(2026, 9, 3, 12, 0, 0) });
+  meter.record({ provider: "mistral", source: "dm", promptTokens: 1000, completionTokens: 100, cachedTokens: 400, reasoningTokens: 10, cost: 0.001 });
+  meter.record({ provider: "mistral", source: "scene", promptTokens: 2000, completionTokens: 300 });
+  meter.record({ provider: "openrouter3", source: "dm", promptTokens: 500, completionTokens: 50 });
+  const snapshot = meter.snapshot();
+  assert.equal(snapshot.day, "2026-10-03");
+  assert.deepEqual([snapshot.calls, snapshot.promptTokens, snapshot.completionTokens, snapshot.cachedTokens, snapshot.reasoningTokens], [3, 3500, 450, 400, 10]);
+  assert.deepEqual([snapshot.byProvider.mistral.calls, snapshot.byProvider.mistral.promptTokens], [2, 3000]);
+  assert.deepEqual([snapshot.bySource.dm.calls, snapshot.bySource.dm.promptTokens], [2, 1500]);
+  assert.equal(snapshot.byProviderSource["mistral/scene"].completionTokens, 300);
+  assert.equal(snapshot.cost, 0.001);
+  assert.equal(snapshot.previous, null);
+});
+
+test("The meter ignores nonsense numbers, starts a new day at midnight UTC and keeps yesterday to look at", () => {
+  const clock = { t: Date.UTC(2026, 9, 3, 23, 59, 0) };
+  const meter = createUsageMeter({ now: () => clock.t });
+  meter.record({ provider: "mistral", source: "dm", promptTokens: "x", completionTokens: -4, cachedTokens: undefined, cost: NaN });
+  assert.deepEqual([meter.snapshot().calls, meter.snapshot().promptTokens, meter.snapshot().completionTokens, meter.snapshot().cost], [1, 0, 0, 0]);
+  meter.record({ provider: "mistral", source: "dm", promptTokens: 700, completionTokens: 70 });
+  clock.t += 2 * 60 * 1000;
+  meter.record({ provider: "mistral", source: "dm", promptTokens: 100, completionTokens: 10 });
+  const snapshot = meter.snapshot();
+  assert.equal(snapshot.day, "2026-10-04");
+  assert.deepEqual([snapshot.calls, snapshot.promptTokens], [1, 100]);
+  assert.deepEqual([snapshot.previous.day, snapshot.previous.calls, snapshot.previous.promptTokens], ["2026-10-03", 2, 700]);
+  snapshot.calls = 99;
+  assert.equal(meter.snapshot().calls, 1, "a snapshot is a copy");
+});
+
+test("A provider is demoted only after enough samples and a high refusal share, and is asked first again 20 minutes later", () => {
+  const clock = { t: 1_000_000 };
+  const tracker = createRefusalTracker({ now: () => clock.t });
+  for (let i = 0; i < 3; i += 1) tracker.record("openrouter3", "dm", true);
+  assert.equal(tracker.demoted("openrouter3", "dm"), false, "three samples are not enough");
+  tracker.record("openrouter3", "dm", true);
+  assert.equal(tracker.demoted("openrouter3", "dm"), true);
+  assert.equal(tracker.rate("openrouter3", "dm"), 1);
+  assert.equal(tracker.demoted("openrouter3", "scene"), false, "per kind of request");
+  assert.equal(tracker.demoted("mistral", "dm"), false, "per provider");
+  assert.equal(tracker.demoted("openrouter3", " DM "), true, "the kind is compared case-insensitively");
+  clock.t += 19 * 60 * 1000;
+  assert.equal(tracker.demoted("openrouter3", "dm"), true, "still demoted after 19 minutes");
+  clock.t += 2 * 60 * 1000;
+  assert.equal(tracker.demoted("openrouter3", "dm"), false, "21 minutes later it is asked first again");
+  assert.equal(tracker.rate("openrouter3", "dm"), 0);
+});
+
+test("Three refusals in four is demotion, half is not; a run of good answers clears it", () => {
+  const tracker = createRefusalTracker({ now: () => 5000 });
+  [true, true, false, true].forEach((refused) => tracker.record("p", "dm", refused));
+  assert.equal(tracker.demoted("p", "dm"), true);
+  const half = createRefusalTracker({ now: () => 5000 });
+  [true, false, true, false].forEach((refused) => half.record("p", "dm", refused));
+  assert.equal(half.demoted("p", "dm"), false);
+  for (let i = 0; i < 6; i += 1) tracker.record("p", "dm", false);
+  assert.equal(tracker.demoted("p", "dm"), false);
+});
+
+test("The chain keeps its order except that refusers go to the end; if all refuse, nothing changes", () => {
+  const tracker = createRefusalTracker({ now: () => 5000 });
+  const refuse = (provider) => { for (let i = 0; i < 5; i += 1) tracker.record(provider, "dm", true); };
+  refuse("openrouter3");
+  assert.deepEqual(orderByRefusals(["openrouter3", "mistral", "mistral2"], "dm", tracker), ["mistral", "mistral2", "openrouter3"]);
+  assert.deepEqual(orderByRefusals(["openrouter3", "mistral", "mistral2"], "scene", tracker), ["openrouter3", "mistral", "mistral2"]);
+  refuse("mistral"); refuse("mistral2");
+  assert.deepEqual(orderByRefusals(["openrouter3", "mistral", "mistral2"], "dm", tracker), ["openrouter3", "mistral", "mistral2"]);
+  assert.deepEqual(orderByRefusals(["a", "b"], "dm", null), ["a", "b"]);
+  assert.deepEqual(orderByRefusals(undefined, "dm", tracker), []);
 });

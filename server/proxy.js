@@ -24,6 +24,12 @@ import {
   geminiBlockReason,
   looksLikeRefusal,
   requestExpectsJson,
+  PAID_INPUT_PROVIDERS,
+  paidMaxInputChars,
+  planCharBudget,
+  createUsageMeter,
+  createRefusalTracker,
+  orderByRefusals,
 } from "./aiPolicy.js";
 import { registerSemanticMemory, createEmbedder } from "./semanticMemory.js";
 import { createVisionRunner, DEFAULT_GROQ_VISION_MODEL } from "./vision.js";
@@ -57,6 +63,12 @@ const GROQ_MODEL = String(process.env.GROQ_MODEL || "").trim();
 const GROQ_MODEL_2 = String(process.env.GROQ_MODEL_2 || GROQ_MODEL || "").trim();
 /* Groq's free tier is small: each key serves one request at a time and stays inside its minute budget. */
 const GROQ_PACER = createGroqPacer();
+/* DeepSeek and Mistral cost per token: what they are sent has a ceiling (PAID_MAX_INPUT_CHARS, 0 = off), and
+   what every provider reports using is metered (see GET /ai/usage and the [ai-usage] log lines). */
+const PAID_MAX_INPUT_CHARS = paidMaxInputChars(process.env);
+const AI_USAGE = createUsageMeter();
+/* A provider that keeps refusing a kind of request (DeepSeek on DMs, say) is asked last for it, not first. */
+const AI_REFUSALS = createRefusalTracker();
 /* Gemini's free quota is counted per key AND per model. One ledger, shared by chat, pictures, embeddings
    and sheet analysis, knows which (key, model) pairs are resting, so none of them hits a spent bucket. */
 const GEMINI_LEDGER = createGeminiLedger();
@@ -5085,6 +5097,25 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
     lease = grant;
   }
 
+  /* The paid providers charge for every token sent: a prompt over the ceiling is shortened to it (the
+     character-fidelity block and the protected tail are never cut, see preservePromptEdges). */
+  if (PAID_INPUT_PROVIDERS.has(provider) && PAID_MAX_INPUT_CHARS > 0) {
+    const size = groqRequestSize(body);
+    const budget = planCharBudget({ maxChars: PAID_MAX_INPUT_CHARS, systemChars: size.systemChars, messageChars: size.messageChars });
+    if (budget.compact) {
+      const rows = Array.isArray(body.messages) ? body.messages : [];
+      providerBody = {
+        ...body,
+        system: preservePromptEdges(String(body.system || ""), budget.systemCap),
+        messages: rows.map((item, index) => ({
+          ...item,
+          content: preservePromptEdges(extractText(item?.content || ""), index === rows.length - 1 ? budget.lastCap : budget.otherCap),
+        })),
+      };
+      console.info("[ai-provider] paid-trim", `provider=${provider}`, `source=${String(body?.source || "unknown")}`, `before=${aiRequestChars(body)}`, `after=${aiRequestChars(providerBody)}`, `ceiling=${PAID_MAX_INPUT_CHARS}`);
+    }
+  }
+
   let usedTokens;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), providerTimeout);
@@ -5109,6 +5140,17 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
     }
     const reported = Number(payload?.usage?.total_tokens);
     if (Number.isFinite(reported) && reported >= 0) usedTokens = reported;
+    if (payload?.usage) {
+      const used = AI_USAGE.record({
+        provider, model, source: String(body?.source || "unknown"),
+        promptTokens: payload.usage.prompt_tokens, completionTokens: payload.usage.completion_tokens,
+        cachedTokens: payload.usage.prompt_tokens_details?.cached_tokens, reasoningTokens: payload.usage.completion_tokens_details?.reasoning_tokens,
+        cost: payload.usage.cost,
+      });
+      if (PAID_INPUT_PROVIDERS.has(provider)) {
+        console.info("[ai-usage]", `provider=${provider}`, `model=${model}`, `source=${String(body?.source || "unknown")}`, `in=${used.promptTokens}`, `out=${used.completionTokens}`, `cached=${used.cachedTokens}`, `reasoning=${used.reasoningTokens}`, used.cost ? `cost=${used.cost}` : "");
+      }
+    }
     const normalized = normalizeOpenAIResponse(payload);
     const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
     return hasText
@@ -5592,6 +5634,9 @@ function taskProviderOrder(requestedProvider, body) {
     raw = ["gemini"];
   }
 
+  /* Whoever has been refusing most of this kind of request goes to the end of the chain. */
+  raw = orderByRefusals(raw, source, AI_REFUSALS);
+
   /* Background work stays on free providers; only a player-waiting request may use paid ones. */
   return filterProvidersForBody(
     raw.filter((provider, index, all) =>
@@ -5750,6 +5795,8 @@ function answerText(result) {
 }
 
 async function executeAITask(task) {
+  /* the same kind of request taskProviderOrder orders the chain by */
+  const kindOfRequest = String(task.body?.source || inferAIRequestSource(task.body) || "").trim().toLowerCase();
   const attempted = new Set();
   const attempts = [];
   const waitHintsMs = [];   /* when a busy or spent provider says it will be ready again */
@@ -5775,7 +5822,10 @@ async function executeAITask(task) {
     console.info("[ai-provider] response", `provider=${provider}`, `model=${model}`, `status=${status}`, `message=${message}`);
 
     /* A model that answers a request for JSON with a polite refusal gave no answer: the next provider tries. */
-    if (result?.ok && requestExpectsJson(task.body) && looksLikeRefusal(answerText(result))) {
+    const askedForJson = result?.ok && requestExpectsJson(task.body);
+    const refusedByText = askedForJson && looksLikeRefusal(answerText(result));
+    if (askedForJson) AI_REFUSALS.record(provider, kindOfRequest, refusedByText);
+    if (refusedByText) {
       attempts.push({ provider, model, status: 422, message: "refused: " + answerText(result).slice(0, 120), refused: true });
       console.warn("[ai-gate] refused", `source=${task.source}`, `provider=${provider}/${model}`, "— handing the request to the next provider");
       markProviderSuccess(provider);
@@ -5789,7 +5839,7 @@ async function executeAITask(task) {
 
     attempts.push({ provider, model, status, message, ...(result?.blocked ? { refused: true } : {}) });
     /* A safety block is the prompt's doing, not the provider's: no cooldown, the next provider tries. */
-    if (result?.blocked) continue;
+    if (result?.blocked) { AI_REFUSALS.record(provider, kindOfRequest, true); continue; }
     /* Groq was busy with another request or had spent this minute's tokens. Not a failure: no cooldown,
        the next provider takes this one and Groq stays free for whoever is next. */
     if (result?.paced) {
@@ -6757,6 +6807,20 @@ app.post(
     }
   }
 );
+
+/* What the providers used today, by provider and by kind of request (tokens as the provider reports them). */
+app.get("/ai/usage", async (req, res) => {
+  const session = await getSessionIdentity(req).catch(() => null);
+  if (!session) return res.status(401).json({ error: "Not authenticated." });
+  return res.json({ ok: true, paidInputCeilingChars: PAID_MAX_INPUT_CHARS, usage: AI_USAGE.snapshot() });
+});
+
+/* An hourly line with the day's paid usage, so it can be read in the log without asking for it. */
+setInterval(() => {
+  const snapshot = AI_USAGE.snapshot();
+  const paid = Object.entries(snapshot.byProvider).filter(([name]) => PAID_INPUT_PROVIDERS.has(name));
+  if (paid.length) console.info("[ai-usage-day]", snapshot.day, JSON.stringify(Object.fromEntries(paid.map(([name, row]) => [name, { calls: row.calls, in: row.promptTokens, out: row.completionTokens, cached: row.cachedTokens, reasoning: row.reasoningTokens, ...(row.cost ? { cost: Number(row.cost.toFixed(5)) } : {}) }]))));
+}, 60 * 60 * 1000).unref?.();
 
 app.get(
   "/ai/health",

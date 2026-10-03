@@ -442,3 +442,112 @@ export function looksLikeRefusal(text) {
   if (/^[\[{`]/.test(t) || /\{[\s\S]*"[\s\S]*\}/.test(t)) return false;
   return REFUSAL_START.test(t) && REFUSAL_TOPIC.test(t.slice(0, 400));
 }
+
+/* ---------- what the paid providers are sent, and what they cost ---------- */
+
+/* DeepSeek (openrouter3) and Mistral are billed per token. The prompt is what costs, so it has a ceiling. */
+export const PAID_INPUT_PROVIDERS = Object.freeze(new Set(["openrouter3", "mistral", "mistral2"]));
+export const DEFAULT_PAID_MAX_INPUT_CHARS = 60000;   /* roughly 15-20k tokens */
+
+/* PAID_MAX_INPUT_CHARS in the environment; 0 switches the ceiling off. */
+export function paidMaxInputChars(env = {}) {
+  const raw = env.PAID_MAX_INPUT_CHARS;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return DEFAULT_PAID_MAX_INPUT_CHARS;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : DEFAULT_PAID_MAX_INPUT_CHARS;
+}
+
+/* How much of each part of a prompt may stay when the whole must fit maxChars: the system part gets up to
+   systemShare of it, the latest message the most of the rest. Nothing is cut that already fits. */
+export function planCharBudget({ maxChars, systemChars = 0, messageChars = [], systemShare = 0.5 }) {
+  const total = systemChars + messageChars.reduce((sum, n) => sum + n, 0);
+  if (!(maxChars > 0) || total <= maxChars) return { compact: false, maxChars };
+  const systemCap = Math.min(systemChars, Math.floor(maxChars * systemShare));
+  const rest = maxChars - systemCap;
+  const many = messageChars.length > 1;
+  const lastCap = Math.floor(many ? rest * 0.7 : rest);
+  const otherCap = many ? Math.floor((rest - lastCap) / (messageChars.length - 1)) : 0;
+  return { compact: true, maxChars, systemCap, lastCap, otherCap };
+}
+
+/* What each provider and each kind of request used today (tokens as the provider reports them), so the
+   heavy consumers can be seen instead of guessed. Resets with the UTC day; yesterday stays visible. */
+export function createUsageMeter({ now = Date.now } = {}) {
+  const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+  const fresh = () => ({ calls: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, reasoningTokens: 0, cost: 0, byProvider: {}, bySource: {}, byProviderSource: {} });
+  let day = dayOf(now());
+  let bucket = fresh();
+  let previous = null;
+  const num = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0);
+  const roll = () => {
+    const today = dayOf(now());
+    if (today !== day) { previous = { day, ...bucket }; day = today; bucket = fresh(); }
+  };
+  const add = (target, row) => {
+    target.calls += 1;
+    target.promptTokens += row.promptTokens;
+    target.completionTokens += row.completionTokens;
+    target.cachedTokens += row.cachedTokens;
+    target.reasoningTokens += row.reasoningTokens;
+    target.cost += row.cost;
+  };
+  const slot = (map, key) => (map[key] || (map[key] = { calls: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, reasoningTokens: 0, cost: 0 }));
+
+  return {
+    record({ provider = "unknown", model = "", source = "unknown", promptTokens, completionTokens, cachedTokens, reasoningTokens, cost } = {}) {
+      roll();
+      const row = { promptTokens: num(promptTokens), completionTokens: num(completionTokens), cachedTokens: num(cachedTokens), reasoningTokens: num(reasoningTokens), cost: num(cost) };
+      const name = String(source || "unknown").slice(0, 60);
+      add(bucket, row);
+      add(slot(bucket.byProvider, String(provider)), row);
+      add(slot(bucket.bySource, name), row);
+      add(slot(bucket.byProviderSource, `${provider}/${name}`), row);
+      return row;
+    },
+    snapshot() {
+      roll();
+      return JSON.parse(JSON.stringify({ day, ...bucket, previous }));
+    },
+  };
+}
+
+/* ---------- a provider that keeps refusing is not asked first ---------- */
+
+/* Every refused (or blocked) answer from a paid provider is a charge for nothing, and the next provider is
+   then charged too. When one provider refuses most of what it gets for a kind of request, it moves to the end
+   of that chain until its record (the last 20 minutes) improves or ages out; it is never dropped, only asked last.
+   Once asked last it is rarely asked at all, so the window is short: after 20 minutes it is simply asked first again. */
+export function createRefusalTracker({ now = Date.now, windowMs = 20 * 60 * 1000, minSamples = 4, threshold = 0.6, keep = 50 } = {}) {
+  const rows = new Map();
+  const keyOf = (provider, source) => `${provider}|${String(source || "").trim().toLowerCase()}`;
+  const live = (key) => {
+    const cutoff = now() - windowMs;
+    const list = (rows.get(key) || []).filter((row) => row.at > cutoff);
+    rows.set(key, list);
+    return list;
+  };
+  return {
+    record(provider, source, refused) {
+      const key = keyOf(provider, source);
+      const list = live(key);
+      list.push({ at: now(), refused: Boolean(refused) });
+      while (list.length > keep) list.shift();
+    },
+    rate(provider, source) {
+      const list = live(keyOf(provider, source));
+      return list.length ? list.filter((row) => row.refused).length / list.length : 0;
+    },
+    demoted(provider, source) {
+      const list = live(keyOf(provider, source));
+      return list.length >= minSamples && list.filter((row) => row.refused).length / list.length >= threshold;
+    },
+  };
+}
+
+/* The chain with the providers that keep refusing moved to the end; unchanged when all of them do. */
+export function orderByRefusals(providers, source, tracker) {
+  const list = Array.isArray(providers) ? providers : [];
+  if (!tracker) return list.slice();
+  const first = list.filter((provider) => !tracker.demoted(provider, source));
+  return first.length ? [...first, ...list.filter((provider) => tracker.demoted(provider, source))] : list.slice();
+}
