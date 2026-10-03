@@ -8905,7 +8905,7 @@ const FULL_CHARACTER_SHEETS = false;
 
 const DETAIL_LEVELS = [
   { id: 1, nameHu: "Takarékos", nameEn: "Economy", mul: 0.5, cast: 5, noteHu: "Fele keret, cserébe szinte sosem kell várni.", noteEn: "Half the budget, and you almost never have to wait." },
-  { id: 2, nameHu: "Teljes", nameEn: "Full", mul: 1.0, cast: 4, noteHu: "Személyiség 10 000, történet 15 000 karakter.", noteEn: "Personality 10,000, story 15,000 characters." },
+  { id: 2, nameHu: "Teljes", nameEn: "Full", mul: 1.0, cast: 4, noteHu: "Személyiség 4 000, történet 6 000 karakter.", noteEn: "Personality 4,000, story 6,000 characters." },
   { id: 3, nameHu: "Bőkezű", nameEn: "Generous", mul: 1.6, cast: 3, noteHu: "Másfélszeres keret, néha várni kell.", noteEn: "One and a half times the budget; expect occasional waiting." },
   { id: 4, nameHu: "Maximum", nameEn: "Maximum", mul: 2.4, cast: 2, noteHu: "A legtöbb, ami elfér — gyakori a várakozás.", noteEn: "The most that fits — waiting is common." },
 ];
@@ -9111,7 +9111,7 @@ const detailInfo = () => ({
 /* A LÉNYEG: a személyiség és a történet kapja a legnagyobb keretet, mert
    ezekből következik minden. A többi mező szándékosan szűk — azokat te
    tömörebbre tudod írni. [ha csak jelen van, ha ő a főszereplő] */
-const CORE_CAP = { personality: 10000, backstory: 15000, secrets: 1800, extra: 1200, connections: 4000 };
+const CORE_CAP = { personality: 4000, backstory: 6000, secrets: 1000, extra: 800, connections: 2500 };
 
 /* A te karakterednél szűkebb a keret: az AI SOHA nem játszik téged, csak
    reagál rád — ezért nem kell ismernie a teljes belső világodat. */
@@ -9124,13 +9124,13 @@ const coreCap = (key, isPlayerSheet, deep) => {
 };
 
 const FIELD_BASE = {
-  voice:  [700, 2000],   // a szó szerinti hangminta
-  speech: [320, 800],
-  traits: [120, 260],
-  goals:  [120, 260],
-  fears:  [110, 240],
-  likes:  [100, 220],
-  looks:  [120, 260],
+  voice:  [700, 1200],   // a szó szerinti hangminta
+  speech: [320, 700],
+  traits: [120, 500],
+  goals:  [120, 400],
+  fears:  [110, 400],
+  likes:  [100, 300],
+  looks:  [120, 500],
 };
 
 /* Korlátlan mezők: ezek teljes egészében átmennek, bármilyen hosszúak.
@@ -30861,7 +30861,7 @@ const FieldLimit = React.memo(function FieldLimit({ field, value }) {
 
   if (NO_LIMIT_UI[field]) return null;
 
-  if (field === "connections" || (isFree(field) && !CORE_CAP[field])) {
+  if (isFree(field) && !CORE_CAP[field]) {
     return (
       <p className="hint" style={{ marginTop: 4, color: "var(--muted)" }}>
         {len
