@@ -10,7 +10,7 @@
  *
  * Everything the outside world provides (fetch, keys, clock) is injected, so the routing is testable.
  */
-import { selectGeminiKeys, geminiKeyRestMs, groqRetryMs, buildWaitingResult, BACKGROUND_WAIT_MIN_SECONDS } from "./aiPolicy.js";
+import { selectGeminiKeys, groqRetryMs, buildWaitingResult, createGeminiLedger, geminiModelConfig, BACKGROUND_WAIT_MIN_SECONDS } from "./aiPolicy.js";
 
 export const DEFAULT_GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 export const GROQ_VISION_MAX_BASE64 = 3_900_000;   /* Groq accepts about 4 MB of base64 per image */
@@ -18,6 +18,7 @@ export const VISION_MAX_OUTPUT_TOKENS = 350;
 /* What one picture costs on a Groq key before Groq reports the real figure (image + prompt + answer). */
 export const GROQ_VISION_TOKEN_ESTIMATE = 5000;
 export const GROQ_VISION_MAX_WAIT_MS = 15000;
+export const GEMINI_VISION_MAX_ATTEMPTS = 6;   /* calls to Gemini for ONE picture, however many keys and models exist */
 const GROQ_VISION_DISABLED_MS = 60 * 60 * 1000;
 const GROQ_MODEL_CACHE_MS = 6 * 60 * 60 * 1000;
 /* Errors that say the MODEL is the problem (gone, no access, cannot take images), not this picture. */
@@ -27,7 +28,7 @@ const message = (payload, fallback = "") => String(payload?.error?.message || pa
 
 export function createVisionRunner({
   fetchFn, groqKeys = [], groqModel = DEFAULT_GROQ_VISION_MODEL, geminiFreeKeys = [], geminiPaidKey = "",
-  geminiModel = "gemini-3.5-flash", geminiRestUntil = new Map(), allowPaid = false, paid = {}, pacer = null, now = Date.now, log = console,
+  now = Date.now, geminiModels = geminiModelConfig({}).vision, ledger = createGeminiLedger({ now }), allowPaid = false, paid = {}, pacer = null, log = console,
 }) {
   const groqRestUntil = new Map();
   let groqDisabledUntil = 0;
@@ -116,36 +117,45 @@ export function createVisionRunner({
     return null;
   }
 
+  /* Light models first (reading what is on a picture is easy work), then the full ones; each model has
+     its own free quota on a key, so a spent one only moves on to the next. */
   async function viaGemini(image, prompt, note) {
-    const selection = selectGeminiKeys({ freeKeys: geminiFreeKeys, paidKey: geminiPaidKey, restUntil: geminiRestUntil, now: now(), foreground: false, allowPaidBackground: allowPaid });
-    if (!selection.keys.length) { note("gemini", 429, "every free key is resting"); return null; }
-    for (const key of selection.keys) {
-      let response, payload;
-      try {
-        response = await fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: image.mimeType, data: image.base64 } }] }],
-            generationConfig: { maxOutputTokens: VISION_MAX_OUTPUT_TOKENS },
-          }),
-          timeoutMs: 40000,
-        });
-        payload = await response.json().catch(() => ({}));
-      } catch (error) {
-        note("gemini", 504, error?.message || "request failed");
-        continue;
+    let calls = 0;
+    for (const model of geminiModels) {
+      const selection = selectGeminiKeys({ freeKeys: geminiFreeKeys, paidKey: geminiPaidKey, restUntil: ledger.view(model), now: now(), foreground: false, allowPaidBackground: allowPaid });
+      if (!selection.keys.length) { note("gemini", 429, `every free key is resting for ${model}`, selection.waitMs); continue; }
+      for (const key of selection.keys) {
+        /* an earlier try for this very picture may just have shown the model is gone */
+        if (ledger.restMs(key, model) > 0) continue;
+        if (calls >= GEMINI_VISION_MAX_ATTEMPTS) return null;
+        calls += 1;
+        let response, payload;
+        try {
+          response = await fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: image.mimeType, data: image.base64 } }] }],
+              generationConfig: { maxOutputTokens: VISION_MAX_OUTPUT_TOKENS },
+            }),
+            timeoutMs: 40000,
+          });
+          payload = await response.json().catch(() => ({}));
+        } catch (error) {
+          note("gemini", 504, error?.message || "request failed");
+          ledger.fail(key, model, { status: 504 });
+          continue;
+        }
+        if (response.ok) {
+          const text = (payload?.candidates?.[0]?.content?.parts || []).map((part) => part?.text || "").join("").trim();
+          if (text) { ledger.succeed(key, model); return { ok: true, text, provider: "gemini", model }; }
+          note("gemini", 502, "empty description");
+          continue;
+        }
+        const text = message(payload, `HTTP ${response.status}`);
+        note("gemini", response.status, text);
+        ledger.fail(key, model, { status: response.status, message: text, payload });
       }
-      if (response.ok) {
-        const text = (payload?.candidates?.[0]?.content?.parts || []).map((part) => part?.text || "").join("").trim();
-        if (text) return { ok: true, text, provider: "gemini", model: geminiModel };
-        note("gemini", 502, "empty description");
-        continue;
-      }
-      const text = message(payload, `HTTP ${response.status}`);
-      note("gemini", response.status, text);
-      const rest = geminiKeyRestMs(response.status, text, payload, now());
-      if (rest > 0) geminiRestUntil.set(key, now() + rest);
     }
     return null;
   }
@@ -179,7 +189,7 @@ export function createVisionRunner({
 
     const waits = [
       ...groqKeys.map(({ slot }) => (groqRestUntil.get(slot) || 0) - now()),
-      ...geminiFreeKeys.map((key) => (geminiRestUntil.get(key) || 0) - now()),
+      ...geminiFreeKeys.flatMap((key) => geminiModels.map((model) => ledger.restMs(key, model))),
       ...attempts.map((a) => a.retryMs || 0),
     ].filter((ms) => ms > 0);
     const seconds = waits.length ? Math.max(BACKGROUND_WAIT_MIN_SECONDS, Math.min(900, Math.ceil(Math.min(...waits) / 1000))) : 60;

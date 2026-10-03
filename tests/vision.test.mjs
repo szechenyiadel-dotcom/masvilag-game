@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { createVisionRunner, DEFAULT_GROQ_VISION_MODEL, GROQ_VISION_MAX_BASE64, GROQ_VISION_TOKEN_ESTIMATE } from "../server/vision.js";
-import { createGroqPacer } from "../server/aiPolicy.js";
+import { createVisionRunner, DEFAULT_GROQ_VISION_MODEL, GROQ_VISION_MAX_BASE64, GROQ_VISION_TOKEN_ESTIMATE, GEMINI_VISION_MAX_ATTEMPTS } from "../server/vision.js";
+import { createGroqPacer, createGeminiLedger, DEFAULT_GEMINI_LITE_MODELS } from "../server/aiPolicy.js";
 
 const NOW = 5_000_000;
 const image = (size = 1000) => ({ mimeType: "image/jpeg", base64: "A".repeat(size), dataUrl: "data:image/jpeg;base64," + "A".repeat(size) });
@@ -66,11 +66,13 @@ test("With both Groq keys spent the free Gemini keys take over, and the paid key
 
 test("A quota-spent Gemini key rests for the real window and the next free key is used", async () => {
   const perDay = answer(429, { error: { message: "quota", details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }] }] } });
-  const rest = new Map();
-  const t = setup((c) => (c.host === "api.groq.com" ? quota() : c.key === "f2" ? perDay : geminiOk()), { geminiRestUntil: rest });
+  const ledger = createGeminiLedger({ now: () => NOW });
+  const t = setup((c) => (c.host === "api.groq.com" ? quota() : c.key === "f2" ? perDay : geminiOk()), { ledger });
   const result = await t.runner.analyze({ image: image(), prompt: "p" });
   assert.equal(result.provider, "gemini");
-  assert.ok(rest.get("f2") - NOW > 60_000, "rested well beyond a minute");
+  const model = result.model;
+  assert.ok(ledger.restMs("f2", model) > 60_000, "rested well beyond a minute for the model it ran out on");
+  assert.equal(ledger.restMs("f3", model), 0, "the other key is untouched");
 });
 
 test("An image over Groq's 4 MB limit skips Groq and goes straight to Gemini", async () => {
@@ -202,4 +204,57 @@ test("When Groq is only busy and Gemini is spent, the answer is 'wait', with a s
   const result = await t.runner.analyze({ image: image(), prompt: "p" });
   assert.deepEqual([result.ok, result.status, result.waiting], [false, 503, true]);
   assert.ok(Number(result.retryAfter) >= 20 && Number(result.retryAfter) <= 900, "retryAfter " + result.retryAfter);
+});
+
+/* ---------- the Gemini side reads pictures with the light models first ---------- */
+
+const modelOf = (c) => decodeURIComponent(c.url.split("/models/")[1].split(":")[0]);
+const GROQ_SPENT = (c) => c.host === "api.groq.com";
+
+test("On Gemini a picture is read by the first light model, not the full one", async () => {
+  const t = setup((c) => (GROQ_SPENT(c) ? quota() : geminiOk("A park.")));
+  const result = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.deepEqual([result.ok, result.provider, result.model], [true, "gemini", "gemini-3.5-flash-lite"]);
+  assert.equal(modelOf(t.calls.find((c) => c.host === "generativelanguage.googleapis.com")), "gemini-3.5-flash-lite");
+});
+
+test("When a light model's quota is spent on a key, the next light model takes it, then the full ones", async () => {
+  const perDay = answer(429, { error: { message: "quota", details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue: "1000" }] }] } });
+  const spent = new Set(["gemini-3.5-flash-lite"]);
+  const t = setup((c) => (GROQ_SPENT(c) ? quota() : spent.has(modelOf(c)) ? perDay : geminiOk()));
+  const first = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.equal(first.model, "gemini-3.1-flash-lite", "the next light model answered");
+  t.calls.length = 0;
+  const second = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.equal(second.model, "gemini-3.1-flash-lite");
+  assert.ok(!t.calls.some((c) => c.host !== "api.groq.com" && modelOf(c) === "gemini-3.5-flash-lite" && c.key === "f2"), "the spent pair is not asked again");
+  for (const model of ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]) spent.add(model);
+  const third = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.equal(third.model, "gemini-3.8-flash", "only now a full model");
+  assert.ok(!t.calls.some((c) => c.key === "paid"));
+});
+
+test("One picture costs at most six Gemini calls, however many keys and models there are", async () => {
+  const t = setup((c) => (GROQ_SPENT(c) ? quota() : answer(500, { error: { message: "internal" } })), { geminiFreeKeys: ["f2", "f3", "f4", "f5", "f6", "f7", "f8"] });
+  const result = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.equal(result.ok, false);
+  assert.ok(t.calls.filter((c) => c.host === "generativelanguage.googleapis.com").length <= GEMINI_VISION_MAX_ATTEMPTS);
+});
+
+test("A model that does not exist is skipped for every key after one try", async () => {
+  const t = setup((c) => (GROQ_SPENT(c) ? quota() : modelOf(c) === "gemini-3.5-flash-lite" ? answer(404, { error: { message: "models/gemini-3.5-flash-lite is not found for API version v1beta, or is not supported for generateContent." } }) : geminiOk()));
+  const result = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.equal(result.model, "gemini-3.1-flash-lite");
+  assert.equal(t.calls.filter((c) => c.host !== "api.groq.com" && modelOf(c) === "gemini-3.5-flash-lite").length, 1);
+});
+
+test("A configured vision model is tried first, and the list can be set from outside", async () => {
+  const t = setup((c) => (GROQ_SPENT(c) ? quota() : geminiOk()), { geminiModels: ["my-vision-model", "gemini-3.5-flash-lite"] });
+  assert.equal((await t.runner.analyze({ image: image(), prompt: "p" })).model, "my-vision-model");
+});
+
+test("proxy.js gives the vision runner the picture models and the shared ledger", () => {
+  const source = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
+  assert.match(source, /geminiModels: GEMINI_MODELS\.vision/);
+  assert.match(source, /ledger: GEMINI_LEDGER/);
 });

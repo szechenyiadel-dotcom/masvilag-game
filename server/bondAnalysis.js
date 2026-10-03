@@ -22,6 +22,7 @@ async function request(url, options = {}) {
     if (!response.ok) {
       const error = new Error("Analysis provider HTTP " + response.status + ": " + String(data.error?.message || data.message || "request failed"));
       error.status = response.status;
+      error.payload = data;   /* the quota details (per day / per minute, the limit) come from here */
       error.invalidOutput = data.error?.code === "json_validate_failed" || response.status === 400 && /failed to validate json/i.test(data.error?.message || "");
       throw error;
     }
@@ -318,10 +319,20 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
     throw error;
   }
 
+  /* The server's shared view of which Gemini (key, model) pairs are resting: the chat, picture and memory
+     code report what they learn, and this job does not knock on a spent door again (or make others do so). */
+  const ledger = options.ledger || null;
+  const geminiLedgerOf = (candidate) => (ledger && candidate.name === "gemini" ? ledger : null);
+
   for (const candidate of candidates) {
     if (options.deadline && clock() > options.deadline) {
       failures.push({ phase: mode, provider: candidate.name, model: candidate.model, keySlot: candidate.keySlot, status: null, transient: false, reason: "analysis deadline exceeded" });
       break;
+    }
+    const resting = geminiLedgerOf(candidate) ? geminiLedgerOf(candidate).restMs(candidate.key, candidate.model) : 0;
+    if (resting > 0) {
+      failures.push({ phase: mode, provider: candidate.name, model: candidate.model, keySlot: candidate.keySlot, status: 429, transient: true, reason: "resting after its quota ran out (" + Math.ceil(resting / 60000) + " min left)" });
+      continue;
     }
     let raw = "";
     try {
@@ -329,6 +340,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
       const outputTokens = outputBudget(candidate, capability, options.outputTokens || 64000);
       assertCapacity(capability, outputTokens);
       raw = await callStructuredCandidate(candidate, prompt, schema, outputTokens, transport, mode);
+      geminiLedgerOf(candidate)?.succeed(candidate.key, candidate.model);
 
       try {
         const result = JSON.parse(raw);
@@ -368,6 +380,9 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
         throw validationError;
       }
     } catch (error) {
+      /* Only what says something about the provider (an HTTP error, a dropped connection) is reported; an
+         answer that arrived but did not validate says nothing about the key or the model. */
+      if (error.status || error.transient === true) geminiLedgerOf(candidate)?.fail(candidate.key, candidate.model, { status: error.status || 0, message: error.message, payload: error.payload });
       failures.push({
         phase: mode,
         provider: candidate.name,
@@ -414,7 +429,7 @@ function cleanIdentities(raw, castIds) {
 }
 const cacheKeyFor = (parts) => "bond-v" + BOND_ANALYSIS_VERSION + ":" + sheetHash(parts.join("\n"));
 
-export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, analyze = analyzeStructured, env = process.env, clock = Date.now }) {
+export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, analyze = analyzeStructured, env = process.env, clock = Date.now, ledger = null }) {
   // One scheduler for every job. The browser may submit all sheets at once; the
   // server decides how many heavy model calls really run together.
   const concurrency = Math.max(1, Number(env.BOND_ANALYSIS_CONCURRENCY) || 8);
@@ -532,7 +547,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     const work = async () => {
       try {
         console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, sheetHash: hash, sourceChars: metadata.sourceChars, promptChars: prompt.length, targets: prepared.missing?.length }));
-        const analyzed = await analyze(prompt, schema, validate, { outputTokens: 64000, semanticStartOffset: rotation++, deadline: clock() + deadlineMs, clock });
+        const analyzed = await analyze(prompt, schema, validate, { outputTokens: 64000, semanticStartOffset: rotation++, deadline: clock() + deadlineMs, clock, ledger });
         if (stage === "baseline") {
           await Promise.all(analyzed.result.bonds.map((bond) => {
             const index = prepared.cards.findIndex((card) => card.id === bond.to);

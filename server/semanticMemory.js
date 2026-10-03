@@ -98,24 +98,15 @@ export function rankRows(rows, { queryEmbedding = null, query = "", now = Date.n
 
 /* ---------- embeddings on the free Gemini keys ---------- */
 
-const mapLimit = async (items, limit, worker) => {
-  const results = new Array(items.length);
-  let next = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (;;) {
-      const index = next++;
-      if (index >= items.length) return;
-      results[index] = await worker(items[index], index);
-    }
-  });
-  await Promise.all(runners);
-  return results;
-};
+export const EMBED_BATCH_SIZE = 20;
 
+/* One request can carry many texts (batchEmbedContents), so a whole sheet is a handful of requests,
+   not one per chunk. If Google rejects the batch form, single requests take over for good. */
 export function createEmbedder({
   freeKeys, paidKey = "", allowPaid = false, fetchFn, model, dimensions, normalize = (v) => v,
   now = Date.now, timeoutMs = 30000, restUntil = new Map(),
 }) {
+  let batchUnsupported = false;
   const unavailable = (waitMs) => {
     const error = new Error("No free embedding capacity right now; try again later.");
     error.status = 503;
@@ -124,32 +115,29 @@ export function createEmbedder({
     return error;
   };
 
-  async function embed(text, taskType = "RETRIEVAL_DOCUMENT", title = "") {
-    const clean = clip(text, 7000);
-    if (!clean) throw Object.assign(new Error("Memory embedding text is empty."), { status: 400 });
+  const configFor = (taskType, title) => {
+    const config = { taskType, outputDimensionality: dimensions, autoTruncate: true };
+    if (taskType === "RETRIEVAL_DOCUMENT" && title) config.title = clip(title, 220);
+    return config;
+  };
+
+  /* One call on the first free key that answers; spent keys rest by what Google said (bad key a day,
+     spent credit hours, a per-minute limit a minute, a per-day limit until midnight Pacific time). */
+  async function callKeys(method, body) {
     const selection = selectGeminiKeys({ freeKeys, paidKey, restUntil, now: now(), foreground: false, allowPaidBackground: allowPaid });
     if (!selection.keys.length) throw unavailable(selection.waitMs);
-
     let lastError = null;
     for (const key of selection.keys) {
-      const config = { taskType, outputDimensionality: dimensions, autoTruncate: true };
-      if (taskType === "RETRIEVAL_DOCUMENT" && title) config.title = clip(title, 220);
-      const response = await fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:embedContent`, {
+      const response = await fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${method}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({ model: `models/${model}`, content: { parts: [{ text: clean }] }, embedContentConfig: config }),
+        body: JSON.stringify(body),
         timeoutMs,
       });
       const payload = await response.json().catch(() => ({}));
-      if (response.ok) {
-        const values = normalize(payload?.embedding?.values || []);
-        if (!values.length) throw Object.assign(new Error("Gemini embedding returned no vector values."), { status: 502 });
-        return values;
-      }
+      if (response.ok) return payload;
       const message = String(payload?.error?.message || payload?.error || "");
       lastError = Object.assign(new Error(message || `Gemini embedding failed with HTTP ${response.status}.`), { status: response.status });
-      /* Rest the key by what Google said (bad key a day, spent credit hours, a per-minute limit a
-         minute, a per-day limit until midnight Pacific time) and move on to the next free one. */
       const rest = geminiKeyRestMs(response.status, message, payload, now());
       if (rest > 0) restUntil.set(key, now() + rest);
       else if (![408, 500, 502, 503, 504, 529].includes(response.status)) throw lastError;
@@ -157,8 +145,51 @@ export function createEmbedder({
     throw Object.assign(unavailable(60000), { cause: lastError });
   }
 
-  return { embed, restUntil };
+  async function embed(text, taskType = "RETRIEVAL_DOCUMENT", title = "") {
+    const clean = clip(text, 7000);
+    if (!clean) throw Object.assign(new Error("Memory embedding text is empty."), { status: 400 });
+    const payload = await callKeys("embedContent", { model: `models/${model}`, content: { parts: [{ text: clean }] }, embedContentConfig: configFor(taskType, title) });
+    const values = normalize(payload?.embedding?.values || []);
+    if (!values.length) throw Object.assign(new Error("Gemini embedding returned no vector values."), { status: 502 });
+    return values;
+  }
+
+  async function embedSlice(rows, taskType) {
+    if (rows.length > 1 && !batchUnsupported) {
+      try {
+        const payload = await callKeys("batchEmbedContents", {
+          requests: rows.map((row) => ({ model: `models/${model}`, content: { parts: [{ text: row.text }] }, embedContentConfig: configFor(taskType, row.title) })),
+        });
+        const vectors = (Array.isArray(payload?.embeddings) ? payload.embeddings : []).map((item) => normalize(item?.values || []));
+        if (vectors.length === rows.length && vectors.every((vector) => vector.length)) return vectors;
+        batchUnsupported = true;   /* an answer of a shape we do not know: single requests from now on */
+      } catch (error) {
+        if (error?.waiting) throw error;
+        if ([404, 405, 501].includes(error?.status) || (error?.status === 400 && /unknown name|invalid json payload|cannot find field|batch/i.test(error.message))) batchUnsupported = true;
+        else if (![400].includes(error?.status)) throw error;
+      }
+    }
+    const vectors = [];
+    for (const row of rows) vectors.push(await embed(row.text, taskType, row.title));
+    return vectors;
+  }
+
+  /* items: [{ text, title }] -> vectors in the same order */
+  async function embedMany(items, taskType = "RETRIEVAL_DOCUMENT") {
+    const rows = (Array.isArray(items) ? items : []).map((item) => ({ text: clip(item?.text, 7000), title: String(item?.title || "") }));
+    if (rows.some((row) => !row.text)) throw Object.assign(new Error("Memory embedding text is empty."), { status: 400 });
+    const vectors = [];
+    for (let start = 0; start < rows.length; start += EMBED_BATCH_SIZE) vectors.push(...(await embedSlice(rows.slice(start, start + EMBED_BATCH_SIZE), taskType)));
+    return vectors;
+  }
+
+  return { embed, embedMany, restUntil };
 }
+
+/* Batch when the embedder can, one by one when it cannot (a plain stand-in in a test, say). */
+const embedAll = (embedder, items, taskType = "RETRIEVAL_DOCUMENT") => typeof embedder.embedMany === "function"
+  ? embedder.embedMany(items, taskType)
+  : items.reduce((chain, item) => chain.then(async (out) => [...out, await embedder.embed(item.text, taskType, item.title)]), Promise.resolve([]));
 
 /* ---------- routes ---------- */
 
@@ -216,14 +247,18 @@ export function registerSemanticMemory(app, { pool, requireDb, getSession, clear
 
     let added = 0;
     try {
-      await mapLimit(plan.add, 3, async (chunk) => {
-        const embedding = await embedder.embed(chunk.text, "RETRIEVAL_DOCUMENT", `sheet ${chunk.key} of ${characterId}`);
-        await insertMemory(session, {
-          characterId, subjectIds: [characterId], memoryType: SELF_SHEET_TYPE, source: `sheet:${chunk.key}`, text: chunk.text,
-          importance: chunk.importance, confidence: 1, knowledgeType: "self", visibility: "private", metadata: { hash: chunk.hash, key: chunk.key },
-        }, embedding);
-        added += 1;
-      });
+      for (let start = 0; start < plan.add.length; start += EMBED_BATCH_SIZE) {
+        const slice = plan.add.slice(start, start + EMBED_BATCH_SIZE);
+        const vectors = await embedAll(embedder, slice.map((chunk) => ({ text: chunk.text, title: `sheet ${chunk.key} of ${characterId}` })));
+        for (let i = 0; i < slice.length; i += 1) {
+          const chunk = slice[i];
+          await insertMemory(session, {
+            characterId, subjectIds: [characterId], memoryType: SELF_SHEET_TYPE, source: `sheet:${chunk.key}`, text: chunk.text,
+            importance: chunk.importance, confidence: 1, knowledgeType: "self", visibility: "private", metadata: { hash: chunk.hash, key: chunk.key },
+          }, vectors[i]);
+          added += 1;
+        }
+      }
     } catch (error) {
       if (!error?.waiting) throw error;
       /* What was stored stays stored (the hash makes a retry idempotent). */
@@ -261,11 +296,14 @@ export function registerSemanticMemory(app, { pool, requireDb, getSession, clear
 
     let stored = 0;
     try {
-      await mapLimit(fresh, 3, async (item) => {
-        const embedding = await embedder.embed(item.text, "RETRIEVAL_DOCUMENT", `${item.memoryType} memory for ${item.characterId}`);
-        await insertMemory(session, item, embedding);
-        stored += 1;
-      });
+      for (let start = 0; start < fresh.length; start += EMBED_BATCH_SIZE) {
+        const slice = fresh.slice(start, start + EMBED_BATCH_SIZE);
+        const vectors = await embedAll(embedder, slice.map((item) => ({ text: item.text, title: `${item.memoryType} memory for ${item.characterId}` })));
+        for (let i = 0; i < slice.length; i += 1) {
+          await insertMemory(session, slice[i], vectors[i]);
+          stored += 1;
+        }
+      }
     } catch (error) {
       if (!error?.waiting) throw error;
       return res.json({ ...waitingBody(error), stored, skipped: items.length - fresh.length });
