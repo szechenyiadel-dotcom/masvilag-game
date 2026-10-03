@@ -18,6 +18,8 @@ export const EVENT_BATCH_ITEMS = 24;
 export const RECALL_TIMEOUT_MS = 2500;
 export const RECALL_CACHE_MS = 60 * 1000;
 export const RECALL_BLOCK_CHARS = 3600;
+export const RECALL_MAX_CHARACTERS = 7;
+export const BACKGROUND_RECALL_TOP_K = 3;
 
 const SKIPPED_FIELDS = new Set(["album", "albums", "images", "photos", "media", "brief", "briefSrc", "profile", "profileHash", "sheetHash"]);
 const IMPORTANCE_BY_FIELD = {
@@ -172,13 +174,16 @@ const ageLabel = (createdAt, now) => {
 export function recallBlock(byCharacter, nameOf, { now = Date.now(), language = "hu" } = {}) {
   const en = language === "en";
   const sections = [];
-  let used = 0;
-  for (const [characterId, memories] of Object.entries(byCharacter || {})) {
+  const entries = Object.entries(byCharacter || {}).filter(([, memories]) => (memories || []).length);
+  /* One budget for the whole block, shared fairly: a long list for the first character must not squeeze out the rest. */
+  const perCharacter = Math.max(500, Math.floor(RECALL_BLOCK_CHARS / Math.max(1, entries.length)));
+  for (const [characterId, memories] of entries) {
     const lines = [];
+    let used = 0;
     for (const memory of memories || []) {
       const label = memory.memoryType === "self_sheet" ? (en ? "own sheet" : "saját lap") : `${en ? "event" : "esemény"}${memory.createdAt ? " · " + ageLabel(memory.createdAt, now) : ""}`;
       const line = `- (${label}) ${clip(memory.text, 500)}`;
-      if (used + line.length > RECALL_BLOCK_CHARS) break;
+      if (used + line.length > perCharacter) break;
       used += line.length;
       lines.push(line);
     }
@@ -239,7 +244,7 @@ const RECALL_PAUSE_MS = 2 * 60 * 1000;
 
 /* Memories of the characters in a conversation; null when none (never throws, never waits long). */
 export async function recallMemories(api, characterIds, query, { now = () => Date.now(), timeoutMs = RECALL_TIMEOUT_MS, topK = 4 } = {}) {
-  const ids = [...new Set((characterIds || []).map((id) => String(id || "")).filter(Boolean))].slice(0, 4);
+  const ids = [...new Set((characterIds || []).map((id) => String(id || "")).filter(Boolean))].slice(0, RECALL_MAX_CHARACTERS);
   const text = clip(query, 1500);
   if (!ids.length || !text) return null;
   const key = ids.join(",") + "|" + fnv1a(text);
@@ -268,3 +273,23 @@ export async function recallMemories(api, characterIds, query, { now = () => Dat
 }
 
 export const clearRecallCache = () => { recallCache.clear(); recallFailures = 0; recallSkipUntil = 0; };
+
+/* What is going on around these characters right now, as plain text: the newest events that involve
+   them or the player's dealings with them. Computed in code; used as the recall query when an AI
+   call has no single "latest message" (autonomous posts, comments, DMs, scene starts). */
+export function memoryQueryFromEvents(world, characterIds, { limit = 6, perEvent = 200, maxChars = 1200 } = {}) {
+  const ids = new Set((characterIds || []).map((id) => String(id || "")).filter(Boolean));
+  if (!ids.size || !world || !Array.isArray(world.socialEvents)) return "";
+  const involved = (event) => {
+    const people = [event.actorId, ...(event.targetIds || []), ...((event.meta && event.meta.participantIds) || [])].map((id) => String(id || ""));
+    return people.some((id) => ids.has(id));
+  };
+  const lines = [];
+  for (const event of world.socialEvents) {
+    if (!event || !event.text || /^(?:follow|unfollow|character-arrival)$/i.test(String(event.type || ""))) continue;
+    if (event.visibility === "system" || !involved(event)) continue;
+    lines.push(clip(event.text, perEvent));
+    if (lines.length >= limit) break;
+  }
+  return lines.join(" \n ").slice(0, maxChars);
+}

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+  memoryQueryFromEvents, RECALL_MAX_CHARACTERS, BACKGROUND_RECALL_TOP_K,
   chunkText, ownSheetChunks, fieldImportance, chunksFingerprint, sheetSyncJobs, markSheetSynced, recentActorIds, eventMemoryBatch, recallBlock, insertBeforeProtectedTail,
   runSheetSync, runEventFlush, recallMemories, clearRecallCache,
   SHEET_CHUNK_CHARS, MAX_CHUNKS_PER_SHEET, EVENT_MEMORY_MAX_AGE_MS, RECALL_BLOCK_CHARS,
@@ -264,7 +265,7 @@ function syncHarness() {
     brent: { id: "brent", backstory: "Works nights at the gym. ".repeat(80), connections: "Manon is my coach. ".repeat(10) },
   };
   const context = vm.createContext({
-    sheetSyncJobs: realSheetSyncJobs, markSheetSynced: realMarkSheetSynced, runSheetSync: realRunSheetSync,
+    sheetSyncJobs: realSheetSyncJobs, markSheetSynced: realMarkSheetSynced, runSheetSync: realRunSheetSync, RECALL_MAX_CHARACTERS,
     sheetFields: (c) => ({ backstory: c.backstory, connections: c.connections }),
     flattenSheetValue: (v) => String(v),
     apiJson: async (path, options) => {
@@ -302,4 +303,67 @@ test("App: two exchanges asking for the same character at once cause one sync", 
   const { context, requests, w } = syncHarness();
   await Promise.all([context.ensureActingSheetMemory(w, ["brent"]), context.ensureActingSheetMemory(w, ["brent"])]);
   assert.equal(requests.filter((r) => r.characterId === "brent" && r.scope === "all").length, 1);
+});
+
+test("The recall query for the world's own actions is what is going on around the acting characters", () => {
+  const w = { socialEvents: [
+    { actorId: "rita", targetIds: ["paul"], type: "comment", text: "Rita and Paul argued about the tournament." },
+    { actorId: "manon", targetIds: [], type: "post", text: "Manon posted about the lake trip." },
+    { actorId: "manon", targetIds: ["brent"], type: "follow", text: "Manon followed Brent" },
+    { actorId: "ann", targetIds: ["manon"], type: "comment", text: "Ann asked Manon about the dojo.", visibility: "public" },
+    { actorId: "manon", targetIds: [], type: "dm-message", text: "secret system note", visibility: "system" },
+  ] };
+  const query = memoryQueryFromEvents(w, ["manon", "brent"]);
+  assert.match(query, /Manon posted about the lake trip/);
+  assert.match(query, /Ann asked Manon about the dojo/);
+  assert.ok(!/argued|followed|system note/.test(query), "uninvolved, follow and system events stay out");
+  assert.equal(memoryQueryFromEvents(w, ["nobody"]), "");
+  assert.equal(memoryQueryFromEvents(w, []), "");
+  assert.equal(memoryQueryFromEvents({ socialEvents: [] }, ["manon"]), "");
+  assert.ok(memoryQueryFromEvents({ socialEvents: Array.from({ length: 40 }, () => ({ actorId: "manon", text: "x".repeat(500), type: "post" })) }, ["manon"]).length <= 1200);
+});
+
+test("The recall block shares its budget fairly: seven characters all get a section", () => {
+  const long = (n) => Array.from({ length: n }, (_, i) => ({ memoryType: "event", text: "memory " + "w".repeat(380) + i }));
+  const by = Object.fromEntries(["a", "b", "c", "d", "e", "f", "g"].map((id) => [id, long(5)]));
+  const block = recallBlock(by, (id) => id.toUpperCase(), { language: "en" });
+  for (const id of ["A", "B", "C", "D", "E", "F", "G"]) assert.match(block, new RegExp(`\\[${id} — private memory\\]`));
+  assert.ok(block.length < RECALL_BLOCK_CHARS + 1200);
+  assert.equal(RECALL_MAX_CHARACTERS, 7);
+  assert.ok(BACKGROUND_RECALL_TOP_K <= 3);
+});
+
+/* The real helpers of App.jsx for the world's own actions. */
+function backgroundHarness(events) {
+  const people = Object.fromEntries(["manon", "brent", "rita"].map((id) => [id, { id }]));
+  const context = vm.createContext({
+    memoryQueryFromEvents, RECALL_MAX_CHARACTERS, BACKGROUND_RECALL_TOP_K,
+    isHuman: (w, id) => id === w.meId,
+    charById: (w, id) => people[id] || null,
+    String, Array, Set,
+  });
+  vm.runInContext(pickApp(["backgroundMemory"]), context);
+  return { context, w: { meId: "me", socialEvents: events } };
+}
+
+test("App: the world's own actions recall for the acting AI characters only", () => {
+  const { context, w } = backgroundHarness([{ actorId: "manon", targetIds: ["brent"], type: "comment", text: "Manon challenged Brent to a sparring match." }]);
+  const memory = context.backgroundMemory(w, ["manon", "me", "brent", "ghost", "manon", ""]);
+  assert.deepEqual(Array.from(memory.ids), ["manon", "brent"], "no player, no unknown, no duplicates");
+  assert.match(memory.query, /sparring match/);
+  assert.equal(memory.topK, BACKGROUND_RECALL_TOP_K);
+  assert.match(context.backgroundMemory(w, ["rita"], "Rita got a rumour about the dojo").query, /rumour about the dojo/, "an explicit query is used even with no event");
+  assert.equal(context.backgroundMemory(w, ["rita"]), undefined, "nothing going on around her: no recall, no extra request");
+  assert.equal(context.backgroundMemory(w, ["me"]), undefined);
+  assert.equal(context.backgroundMemory(w, null), undefined);
+  assert.equal(context.backgroundMemory(null, ["manon"]), undefined);
+});
+
+test("App: every autonomous writing call that names its characters recalls their memory", () => {
+  const sites = appSource.match(/askWorldWritingJSON\("(?:feed-post|comments|dm|scene|group-chat|notes)"/g) || [];
+  const wired = appSource.match(/backgroundMemory\(/g) || [];
+  assert.ok(sites.length >= 20);
+  assert.ok(wired.length >= sites.length - 3, `wired ${wired.length} of ${sites.length}`);
+  assert.match(appSource, /function askWorldJSON\(w, system, prompt, options = \{\}\) \{[\s\S]{0,700}return memory \? memoryPromptBlock\(w, memory\)\.then\(run\) : run\(""\);/, "without a memory option the old path is untouched");
+  assert.match(appSource, /memory: backgroundMemory\(w, plannedCards\.map\(\(card\) => card\.id\), postContext\.text\)/);
 });

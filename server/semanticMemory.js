@@ -21,7 +21,7 @@ export const EVENT_TYPE = "event";
 export const MAX_CHUNK_CHARS = 1200;
 export const MAX_SHEET_CHUNKS = 60;
 export const MAX_EVENT_BATCH = 24;
-export const MAX_RECALL_CHARACTERS = 4;
+export const MAX_RECALL_CHARACTERS = 7;
 export const DEFAULT_RECALL_TOP_K = 5;
 export const MIN_SEMANTIC_SCORE = 0.4;
 
@@ -274,7 +274,7 @@ export function registerSemanticMemory(app, { pool, requireDb, getSession, clear
     res.json({ ok: true, stored, skipped: items.length - stored });
   }));
 
-  /* The memories of up to four characters that matter for this moment: ONE query embedding. */
+  /* The memories of up to seven characters that matter for this moment: ONE query embedding. */
   app.post("/memory/recall", guard(async (req, res, session) => {
     const characterIds = [...new Set((Array.isArray(req.body?.characterIds) ? req.body.characterIds : []).map((id) => clip(id, 120)).filter(Boolean))].slice(0, MAX_RECALL_CHARACTERS);
     const query = clip(req.body?.query, 5000);

@@ -1,6 +1,6 @@
 import { restoreBaselineGraph } from "./bondAnalysis.js";
 import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext, sheetFields, flattenSheetValue } from "./bondClient.js";
-import { sheetSyncJobs, markSheetSynced, recentActorIds, runSheetSync, eventMemoryBatch, runEventFlush, recallMemories, recallBlock, insertBeforeProtectedTail } from "./semanticMemory.js";
+import { sheetSyncJobs, markSheetSynced, recentActorIds, runSheetSync, eventMemoryBatch, runEventFlush, recallMemories, recallBlock, insertBeforeProtectedTail, memoryQueryFromEvents, RECALL_MAX_CHARACTERS, BACKGROUND_RECALL_TOP_K } from "./semanticMemory.js";
 import { focusedScope, inScope, relationshipInScope, eventInScope, strongestTieIds, groupsForScope } from "./aiScope.js";
 import { latestPlayerTriggerAt, ambientGateOpen, ambientGateAfterRun } from "./ambientGate.js";
 const bondAnalysisBusy = new Set();
@@ -8830,7 +8830,10 @@ async function askJSON(system, prompt, options = {}) {
 
 function askWorldJSON(w, system, prompt, options = {}) {
   if (!analysisReady(w, allSubjects)) return Promise.reject(new Error("A teljes karakterlap- és kapcsolatelemzés még nem készült el."));
-  return askJSON(system, prompt + bondGenerationContext(w), { ...options, keepFullPrompt: true, language: worldLanguage(w) });
+  const { memory, ...askOptions } = options;
+  const run = (memoryBlock) => askJSON(system, insertBeforeProtectedTail(prompt, memoryBlock) + bondGenerationContext(w), { ...askOptions, keepFullPrompt: true, language: worldLanguage(w) });
+  /* No memory option: exactly the old path, no extra step. */
+  return memory ? memoryPromptBlock(w, memory).then(run) : run("");
 }
 
 /*
@@ -8850,14 +8853,7 @@ async function askWorldJSONInteractive(
     /* What the characters in this conversation remember (their own sheet + what happened to them)
        that matches what is being said right now. Best effort: never delays or breaks the reply. */
     const { memory, ...askOptions } = options;
-    let memoryBlock = "";
-    if (memory && Array.isArray(memory.ids) && memory.ids.length) {
-      try {
-        await ensureActingSheetMemory(w, memory.ids);
-        const byCharacter = await recallMemories(apiJson, memory.ids, memory.query);
-        memoryBlock = recallBlock(byCharacter, (id) => nameOfIn(w, id), { language: worldLanguage(w) });
-      } catch (error) { memoryBlock = ""; }
-    }
+    const memoryBlock = await memoryPromptBlock(w, memory);
     return await askJSON(
       system,
       insertBeforeProtectedTail(prompt, memoryBlock) + bondGenerationContext(w),
@@ -25610,7 +25606,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 2400 }
+    { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 2400 }
   );
 
   /*
@@ -27887,7 +27883,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${commentReplyLatestTail(w, post, comment)}${TAIL}`,
-    { maxTokens: 900 }
+    { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 900 }
   );
 
   /*
@@ -28997,7 +28993,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${eventBatch ? eventDrivenRosterTail(w, cast, eventBatch) : ""}${TAIL}`,
-    {
+    { memory: backgroundMemory(w, cast.map((c) => c.id)),
       maxTokens: single
         ? 1800
         : 4096,
@@ -29100,7 +29096,7 @@ ${repetitionGuard(w, [author.id], "autonóm posztok és kommentek")}
 
 JSON:
 {"posts":[{"id":"${author.id}","text":"a poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}],"relationshipUpdates":[]}${TAIL}`,
-    { maxTokens: 900 }
+    { memory: backgroundMemory(w, [author.id]), maxTokens: 900 }
   );
 }
 
@@ -33431,7 +33427,7 @@ Az ötlet legyen valódi EVENT: adj hozzá egy konkrét, teljesíthető célt, e
 
 - EMOJI TILOS: az Event címe, helyzete, célja és jutalomtárgya se tartalmazzon emojit vagy pictogramot.
 
-Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyzet, mi a tét","goal":"egy konkrét teljesítési cél","limitMode":"turns vagy minutes","targetTurns":16,"targetMinutes":20,"rewardAffection":12,"rewardItem":"egyedi jutalomtárgy neve","cast":["szereplők azonosítói"]}${TAIL}`));
+Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyzet, mi a tét","goal":"egy konkrét teljesítési cél","limitMode":"turns vagy minutes","targetTurns":16,"targetMinutes":20,"rewardAffection":12,"rewardItem":"egyedi jutalomtárgy neve","cast":["szereplők azonosítói"]}${TAIL}`, { memory: backgroundMemory(w, ids.length ? ids : null) }));
       if (out.title) setTitle(out.title);
       if (out.setting) setSetting(out.setting);
       if (out.goal) setGoal(String(out.goal));
@@ -40436,7 +40432,7 @@ Ha van:
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
 {"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"kifejezetten iránta MOST élő érzés vagy üres","currentIntent":"mit akarsz VELE kapcsolatban következőnek vagy üres","lastTone":"a mostani DM tényleges hangneme","perceivedTargetMood":"csak ha a meglévő beszélgetésből van róla benyomásod, különben üres","addOpenLoops":["csak új, ténylegesen nyitva maradó kettőtök közti ügy"],"resolveOpenLoops":["csak most ténylegesen lezárt korábbi ügy"],"addPromises":["csak explicit ígéret"],"resolvePromises":["teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["teljesült/lemondott terv"]}]}${autonomousDmTriggerDirective(w, bot)}${TAIL}`,
-    { maxTokens: 700, priority: 22 }
+    { memory: backgroundMemory(w, [bot.id]), maxTokens: 700, priority: 22 }
   );
 }
 async function genForcedEverydayDM(w, bot) {
@@ -40462,7 +40458,7 @@ ${matureContentInstruction(w,[bot.id],"chat")}
 
 JSON ONLY:
 {"skip":false,"text":"short DM","image":"","imagePrompt":"","relationshipImpact":false,"changes":[],"selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
-    { maxTokens: 260, priority: 25 }
+    { memory: backgroundMemory(w, [bot.id]), maxTokens: 260, priority: 25 }
   );
 }
 
@@ -40644,7 +40640,7 @@ Ha most nem írna Note-ot:
 
 Ha ír:
 {"skip":false,"text":"a note","selfUpdates":[{"id":"${bot.id}","mood":"csak ha a Note valóban kifejez/frissít egy pillanatnyi állapotot","intent":"csak ha a Note mögött konkrét szándék van","openLoops":[]}]}${TAIL}`,
-    { maxTokens: 520 }
+    { memory: backgroundMemory(w, [bot.id]), maxTokens: 520 }
   );
 }
 
@@ -40797,7 +40793,7 @@ Formátum:
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":3,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ]}${TAIL}`,
-      { maxTokens: 1100 }
+      { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 1100 }
     );
 
   if (out && typeof out === "object") out.__castIds =
@@ -42278,7 +42274,7 @@ ${payload.mode === "comment"
 
 FORMAT:
 {"comments":[{"id":"actor id","text":"comment"}],"posts":[{"id":"actor id","text":"post"}]}${TAIL}`,
-    { maxTokens: 520, maxTries: 2 }
+    { memory: backgroundMemory(w, actors.map((c) => c.id), String(rumor.text || "")), maxTokens: 520, maxTries: 2 }
   );
 }
 
@@ -43651,7 +43647,13 @@ VÁLASZ CSAK JSON:
   "usedEventIds": ["csak a ténylegesen felhasznált EVENT ID-k"],
   "mentionedIds": ["csak a ténylegesen említett karakter ID-k"]
 }${TAIL}`,
-    {
+    { memory: backgroundMemory(w, (
+        candidate.subjectIds ||
+        []
+      ).filter(
+        (id) =>
+          !isHuman(w, id)
+      )),
       maxTokens: 2600,
     }
   );
@@ -44700,7 +44702,7 @@ A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saj
 - Relationship change: a reagáló AI érzése változik egy érintett iránt; delta -35..+35. Lehet erősen pozitív VAGY erősen negatív, és AI → AI célpont is teljesen érvényes. A jealousy / disbelief / defense / betrayal érzéseket a mood és why mezőben konkrétan nevezd meg, ha tényleg ezek mozgatják a változást.
 
 VÁLASZ CSAK JSON:
-{"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","why":""}]}${TAIL}`,{maxTokens:1500});
+{"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","why":""}]}${TAIL}`,{ memory: backgroundMemory(w, [...castIds,...(story.mentionedIds||[]).filter((id)=>!isHuman(w,id))].filter((id,index,arr)=>arr.indexOf(id)===index)),maxTokens:1500});
 }
 
 
@@ -44806,7 +44808,7 @@ NYILVÁNOS REAKCIÓK:\n${publicComments||"-"}
 - A játékos helyett ne beszélj.
 
 VÁLASZ CSAK JSON:
-{"skip":false,"format":"analysis","headline":"follow-up headline","text":"follow-up gossip post","mentionedIds":["csak az eredeti sztori érintettjei"],"distortionLevel":35}${TAIL}`,{maxTokens:1100});
+{"skip":false,"format":"analysis","headline":"follow-up headline","text":"follow-up gossip post","mentionedIds":["csak az eredeti sztori érintettjei"],"distortionLevel":35}${TAIL}`,{ memory: backgroundMemory(w, (post.gossipStory.mentionedIds||[]).filter((id)=>!isHuman(w,id))),maxTokens:1100});
 }
 
 function publishRumorEvolution(w,parentPostId,raw){
@@ -45030,12 +45032,37 @@ async function syncSheetMemory(w, characters, scope) {
 /* The characters about to act in a player-facing exchange need their whole sheet in memory now.
    Waits a few seconds at most; the sync carries on in the background if it takes longer. */
 async function ensureActingSheetMemory(w, ids) {
-  const acting = [...new Set((ids || []).map(String))].map((id) => charById(w, id)).filter((c) => c && !isHuman(w, c.id)).slice(0, 4);
+  const acting = [...new Set((ids || []).map(String))].map((id) => charById(w, id)).filter((c) => c && !isHuman(w, c.id)).slice(0, RECALL_MAX_CHARACTERS);
   if (!acting.length) return;
   await Promise.race([
     syncSheetMemory(w, acting, "all").catch(() => null),
     new Promise((resolve) => setTimeout(resolve, 6000)),
   ]);
+}
+
+/* The memory block for a prompt: what the acting characters remember (own sheet + what happened to
+   them) that fits this moment. Best effort, never throws, never holds a reply for long. */
+async function memoryPromptBlock(w, memory) {
+  if (!memory || !Array.isArray(memory.ids) || !memory.ids.length || !memory.query) return "";
+  try {
+    await ensureActingSheetMemory(w, memory.ids);
+    const byCharacter = await recallMemories(apiJson, memory.ids, memory.query, memory.topK ? { topK: memory.topK } : {});
+    return recallBlock(byCharacter, (id) => nameOfIn(w, id), { language: worldLanguage(w) });
+  } catch (error) {
+    return "";
+  }
+}
+
+/* Memory option for the world's own actions (posts, comments, replies, DMs, scene starts): the
+   characters that act, and what is going on around them as the recall query (computed in code). */
+function backgroundMemory(w, ids, extraQuery = "") {
+  if (!w || !w.meId) return undefined;
+  const list = [...new Set((Array.isArray(ids) ? ids : [ids]).map((id) => String(id || "")).filter(Boolean))]
+    .filter((id) => id !== String(w.meId) && !isHuman(w, id) && charById(w, id))
+    .slice(0, RECALL_MAX_CHARACTERS);
+  if (!list.length) return undefined;
+  const query = [String(extraQuery || "").replace(/\s+/g, " ").trim().slice(0, 600), memoryQueryFromEvents(w, list)].filter(Boolean).join(" \n ");
+  return query ? { ids: list, query, topK: BACKGROUND_RECALL_TOP_K } : undefined;
 }
 
 function isAmbientAction(action) {
@@ -45311,7 +45338,7 @@ KÖTELEZŐ REALIZMUS:
 - publicSentiment: support/dislike/controversy/cancel 0..100. Cancel ne legyen automatikus: csak akkor legyen jelentős, ha az adott stratégia nyilvánosan kínos, agresszív, hazug, érzéketlen, botrányos vagy "double down" jellegű.
 
 VÁLASZ CSAK JSON:
-{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat konkrét helyzet","location":"","visibility":"limited","witnessIds":[],"gossipPotential":45,"eventKind":"encounter","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":1,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1150,priority:18});
+{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat konkrét helyzet","location":"","visibility":"limited","witnessIds":[],"gossipPotential":45,"eventKind":"encounter","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":1,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{ memory: backgroundMemory(w, involved.filter((id)=>!isHuman(w,id))),maxTokens:1150,priority:18});
 }
 
 function fallbackPopupEventResponse(w, seed) {
@@ -45495,7 +45522,7 @@ Ugyanazokat a szabályokat tartsd, mint egy normál popupnál:
 - a játékos helyett soha ne dönts/cselekedj.
 
 JSON:
-{"skip":false,"icon":"🎲","title":"","text":"","location":"","visibility":"limited","witnessIds":[],"gossipPotential":40,"eventKind":"encounter","choices":[{"id":"c1","label":"","description":"","tone":"clarify","targetId":"","reactions":[],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1100,priority:22});
+{"skip":false,"icon":"🎲","title":"","text":"","location":"","visibility":"limited","witnessIds":[],"gossipPotential":40,"eventKind":"encounter","choices":[{"id":"c1","label":"","description":"","tone":"clarify","targetId":"","reactions":[],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{ memory: backgroundMemory(w, cast),maxTokens:1100,priority:22});
 }
 
 function applyPopupReroll(w,eventId,raw){
@@ -45554,7 +45581,7 @@ NE írd át a játékos cselekvését más cselekvéssé. A feladatod kizáróla
 - gossipTags: legfeljebb 5 rövid tag, pl. confrontation, awkward, romance, fight, public-drama, scandal, receipts, cringe, backlash.
 
 JSON:
-{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{maxTokens:800,priority:65});
+{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{ memory: backgroundMemory(w, cast),maxTokens:800,priority:65});
 }
 
 function normalizePopupCustomOutcome(w,event,customText,raw){
@@ -50441,7 +50468,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ],
 "event":"egy rövid mondat arról, miért jött létre a csoport"}${TAIL}`,
-    { maxTokens: 1200, priority: 18 }
+    { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 1200, priority: 18 }
   );
 }
 
@@ -50568,7 +50595,9 @@ Formátum:
     }
   ]
 }${TAIL}`,
-    {
+    { memory: backgroundMemory(w, castIds.concat(
+        [target.id]
+      )),
       maxTokens: 900,
     }
   );
@@ -51798,7 +51827,7 @@ HARMADIK SZEMÉLY, AKI NINCS OTT (CLAUDE FIX R50): ha az Event egy olyan emberr�
 
 JSON:
 {"skip":false,"mode":"dm_invite vagy arrival vagy encounter","audience":"private vagy group","eventKind":"private_meet vagy party vagy training vagy team_event vagy group_social","title":"rövid Event cím","setting":"2-4 mondat, hol/mikor/miért indul; a játékos döntését ne írd meg","goal":"konkrét Event cél","cast":["az eventhez ténylegesen illő AI-id-k; ${bot.id} kötelező; private audience esetén CSAK ${bot.id}"],"openingKind":"speech vagy action","opening":"${bot.name} első saját mondata vagy cselekvése; a játékos reakciója nélkül","dmText":"csak dm_invite esetén rövid valódi chat-üzenet, különben üres","targetTurns":20,"targetMinutes":30,"limitMode":"turns vagy minutes","rewardAffection":12,"rewardItem":"jelenethez illő egyedi emléktárgy","selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned","intent":"miért kezdeményezed","openLoops":["amit ezzel az Eventtel el akarsz intézni"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"mi dolgozik benned kifejezetten vele kapcsolatban","currentIntent":"mit akarsz vele elérni ezzel az Eventtel","lastTone":"kezdeményező/inviting/tense/playful/etc","perceivedTargetMood":"üres, ha nem tudhatod","addOpenLoops":["ami kettőtök között ezzel nyitva marad"],"resolveOpenLoops":[],"addPromises":[],"resolvePromises":[],"addPlans":["csak ha a meghívás konkrét közös tervet hoz létre"],"resolvePlans":[]}]}${TAIL}`,
-    { maxTokens: 1450, priority: 26 }
+    { memory: backgroundMemory(w, [bot.id]), maxTokens: 1450, priority: 26 }
   );
 }
 
@@ -51819,7 +51848,7 @@ Choose the smallest canon-consistent option that gives the player something to r
 Prefer dm_invite unless arriving/encountering is clearly more natural.
 JSON ONLY:
 {"skip":false,"mode":"dm_invite","audience":"private","eventKind":"private_meet","title":"short event title","setting":"2-3 sentences","goal":"concrete goal","cast":["${bot.id}"],"openingKind":"speech","opening":"short first line","dmText":"short invitation DM","targetTurns":20,"targetMinutes":30,"limitMode":"turns","rewardAffection":10,"rewardItem":"small fitting keepsake","selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
-    { maxTokens: 650, priority: 27 }
+    { memory: backgroundMemory(w, [bot.id]), maxTokens: 650, priority: 27 }
   );
 }
 
@@ -53749,7 +53778,7 @@ Ha van természetes folytatás:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ],
 "event":"csak akkor egy rövid mondat, ha a beszélgetésben tényleg történt valami emlékezetes, különben üres"}${groupChatSocialTail(w, memberIds)}${TAIL}`,
-    { maxTokens: 900, priority: 18 }
+    { memory: backgroundMemory(w, memberIds), maxTokens: 900, priority: 18 }
   );
 }
 /* MÁSVILÁG NPC-PAIR REACTION v1 */
@@ -53785,7 +53814,7 @@ async function legacyGroundedGenNpcPairReaction(w, actor, target, sourceEvent) {
     '{"skip":false,"mode":"public_post or offscreen","text":"short public post if mode=public_post, otherwise empty","summary":"one concrete sentence describing the AI-AI reaction/confrontation","tone":"jealous/hostile/hurt/protective/etc"}'
   ].join("\n\n");
 
-  return askWorldWritingJSON("feed-post", w, engineFor(w), prompt, { maxTokens: 650, priority: 16 });
+  return askWorldWritingJSON("feed-post", w, engineFor(w), prompt, { memory: backgroundMemory(w, [actor.id, target.id], eventText), maxTokens: 650, priority: 16 });
 }
 
 /* Egy központi szimulációs akció futtatása. Mindig pontosan egy AI-hívás. */
@@ -62710,6 +62739,7 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
           timeoutMs: 60000,
           source: "player-post-comments-isolated",
           foreground: true,
+          memory: backgroundMemory(w, plannedCards.map((card) => card.id), postContext.text),
         }
       );
     } catch (error) {
