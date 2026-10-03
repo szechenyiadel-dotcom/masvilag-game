@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import {
   isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN, planGroqRequest,
   isGroqUtilitySource, groqCarriesWhole, estimateGroqTokens, groqPaceMaxWaitMs, createGroqPacer, groqRetryMs, GROQ_UTILITY_CHAIN, GROQ_UTILITY_SOURCES,
-  createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts,
+  createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson,
 } from "../server/aiPolicy.js";
 
 const require = createRequire(import.meta.url);
@@ -26,7 +26,7 @@ const NAMES = [
   "extractText", "proxyErrorMessage", "configuredAIProvider", "aiRequestText", "aiRequestChars", "inferAIRequestSource",
   "providerAllowedForBody", "taskProviderOrder", "healthyProvider", "providerCooldownMs", "providerModel", "parseRetryAfterMs",
   "safeProviderMessage", "markProviderFailure", "markProviderSuccess", "summarizeProviderFailures", "logFullAIPromptDebug",
-  "shouldUseEmergencyOpenAIFallback", "executeAITask",
+  "shouldUseEmergencyOpenAIFallback", "answerText", "executeAITask",
 ];
 
 function gate(env, scripted) {
@@ -36,7 +36,7 @@ function gate(env, scripted) {
     console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error,
     isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN,
-    isGroqUtilitySource, groqCarriesWhole, GROQ_UTILITY_CHAIN, groqRetryMs, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts,
+    isGroqUtilitySource, groqCarriesWhole, GROQ_UTILITY_CHAIN, groqRetryMs, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson,
     callMessageProvider: async (provider, body) => { calls.push(provider); return scripted(provider, body); },
   });
   vm.runInContext(pick(NAMES), context);
@@ -53,15 +53,17 @@ const ENV = {
 };
 const task = (context, source, extra = {}) => ({ requestedProvider: "anthropic", source, body: { source, system: "s", messages: [{ role: "user", content: "hello" }], ...extra } });
 
-test("Background DM, scene and comments use only the free chain; the player's own exchange keeps the billed providers", () => {
+test("DM and scene use the DeepSeek and Mistral chain whoever started them; comments and the rest of the background stay free", () => {
   const { context } = gate(ENV, () => ok("x"));
   const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", task(context, source, extra).body));
-  /* gemini (free keys), groq, groq2, openrouter: openrouter2 has no key in this world */
-  for (const source of ["dm", "scene", "comments"]) assert.deepEqual(order(source), ["gemini", "groq", "groq2", "openrouter"], source);
-  assert.deepEqual(order("dm", { foreground: true }), ["openrouter3", "mistral", "mistral2"]);
-  assert.deepEqual(order("scene", { foreground: true }), ["mistral", "mistral2"]);
+  for (const extra of [{}, { foreground: true }]) {
+    assert.deepEqual(order("dm", extra), ["openrouter3", "mistral", "mistral2"], "dm " + JSON.stringify(extra));
+    assert.deepEqual(order("scene", extra), ["mistral", "mistral2"], "scene " + JSON.stringify(extra));
+  }
+  /* comments: free chain in the background, billed chain only when the player is waiting */
+  assert.deepEqual(order("comments"), ["gemini", "groq", "groq2", "openrouter"]);
   assert.deepEqual(order("comments", { foreground: true }), ["openrouter3", "mistral", "mistral2"]);
-  for (const source of ["dm", "scene", "comments", "feed-post", "notes", "meaning-analysis", "autonomy-other"]) {
+  for (const source of ["comments", "feed-post", "notes", "meaning-analysis", "autonomy-other", "group-chat", "ambient-popup", "sheet-summary"]) {
     const background = order(source);
     for (const billed of ["mistral", "mistral2", "openrouter3", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
   }
@@ -97,17 +99,22 @@ test("Background request with no free provider configured waits instead of faili
 
 test("A free provider that answers is used normally for background work, and Mistral is never called", async () => {
   const { context, calls } = gate(ENV, (provider) => (provider === "gemini" ? quota(provider) : ok(provider)));
-  const result = await context.executeAITask(task(context, "dm"));
+  const result = await context.executeAITask(task(context, "comments"));
   assert.equal(result.ok, true);
   assert.deepEqual(Array.from(calls), ["gemini", "groq"]);
 });
 
-test("A background DM with every free provider rate-limited waits instead of paying for Mistral", async () => {
-  const { context, calls } = gate(ENV, (provider) => quota(provider));
-  const result = await context.executeAITask(task(context, "dm"));
+test("A background DM is written by DeepSeek, then Mistral; when every one of them is down it waits, and never buys OpenAI", async () => {
+  const first = gate(ENV, (provider) => ok(provider));
+  const written = await first.context.executeAITask(task(first.context, "dm"));
+  assert.equal(written.ok, true);
+  assert.deepEqual(Array.from(first.calls), ["openrouter3"], "the first of the chain answered; no free model was asked");
+  const down = gate(ENV, (provider) => quota(provider));
+  const result = await down.context.executeAITask(task(down.context, "dm"));
   assert.equal(result.waiting, true);
   assert.equal(result.status, 503);
-  assert.ok(!calls.some((provider) => ["mistral", "mistral2", "openrouter3", "openai"].includes(provider)), "billed providers called: " + calls);
+  assert.deepEqual(Array.from(down.calls), ["openrouter3", "mistral", "mistral2"]);
+  assert.ok(!down.calls.some((provider) => ["openai", "gemini", "groq", "groq2"].includes(provider)), "no other provider wrote the voice: " + down.calls);
 });
 
 test("The emergency OpenAI fallback is closed to background work and still open to a player who is waiting", () => {
@@ -228,7 +235,9 @@ test("Utility tasks (meaning, translation, music note, relationship impact) go t
 test("Everything that gives a character a voice keeps its own chain, Groq only as a free fallback after Gemini", () => {
   const { context } = gate(ENV, () => ok("x"));
   const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", { ...task(context, source, extra).body, max_tokens: 600 }));
-  for (const source of ["dm", "scene", "comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "gemini", source);
+  assert.equal(order("dm")[0], "openrouter3");
+  assert.equal(order("scene")[0], "mistral");
+  for (const source of ["comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "gemini", source);
   assert.deepEqual(order("feed-post"), ["gemini"]);
   assert.deepEqual(order("sheet-summary"), ["gemini"]);
   assert.deepEqual(order("character-bible"), ["gemini"]);
@@ -369,7 +378,7 @@ function geminiPath({ env = {}, respond }) {
     process: { env: { GEMINI_API_KEY_2: "f2", GEMINI_API_KEY_3: "f3", GEMINI_API_KEY_4: "f4", ...env } },
     console: { info() {}, warn: (...args) => logs.push(args.join(" ")), error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error, URL, AbortController, setTimeout, clearTimeout,
-    isForegroundRequest, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts,
+    isForegroundRequest, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason,
     fetchWithTimeout: async (url) => {
       const key = url.searchParams.get("key");
       const model = decodeURIComponent(url.pathname.split("/models/")[1].split(":")[0]);
@@ -490,4 +499,84 @@ test("Gemini: a bad key is rested for every model", async () => {
   requests.length = 0;
   for (let i = 0; i < 4; i += 1) await context.proxyGeminiMessage(geminiBody());
   assert.ok(!requests.some((r) => r.key === "f2"));
+});
+
+/* ---------- blocked and refused answers move on without hurting anything ---------- */
+
+const jsonBody = (source, extra = {}) => ({ source, system: "Return valid JSON only.", messages: [{ role: "user", content: "write it" }], max_tokens: 300, ...extra });
+const jsonTask = (source, extra = {}) => ({ requestedProvider: "anthropic", source, body: jsonBody(source, extra) });
+const text = (provider, value) => ({ ok: true, payload: { content: [{ type: "text", text: value }] }, provider });
+const REFUSAL = "I'm sorry, but I can't continue with this request.";
+
+test("A refusal to a request for JSON is not an answer: the next provider writes it", async () => {
+  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : text(provider, '{"reply":"hello"}')));
+  const result = await context.executeAITask(jsonTask("dm"));
+  assert.equal(result.ok, true);
+  assert.deepEqual(Array.from(calls), ["openrouter3", "mistral"]);
+  assert.match(result.payload.content[0].text, /hello/);
+  assert.equal(context.providerCooldownMs("openrouter3"), 0, "a refusal does not rest the provider");
+});
+
+test("A refusal is only taken for one when JSON was asked for; plain prose requests are left alone", async () => {
+  const { context, calls } = gate(ENV, (provider) => text(provider, REFUSAL));
+  const plain = await context.executeAITask({ requestedProvider: "anthropic", source: "dm", body: { source: "dm", system: "You are a narrator.", messages: [{ role: "user", content: "Tell me about the weather" }] } });
+  assert.equal(plain.ok, true);
+  assert.deepEqual(Array.from(calls), ["openrouter3"]);
+});
+
+test("When every provider that answered refused, the result is a 422 that says so, not a 'wait' that would repeat it forever", async () => {
+  const { context, calls } = gate(ENV, (provider) => text(provider, REFUSAL));
+  const result = await context.executeAITask(jsonTask("dm"));
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 422);
+  assert.notEqual(result.waiting, true);
+  assert.equal(result.payload.error.type, "content_refused");
+  assert.deepEqual(Array.from(calls), ["openrouter3", "mistral", "mistral2"]);
+  for (const provider of ["openrouter3", "mistral", "mistral2"]) assert.equal(context.providerCooldownMs(provider), 0);
+});
+
+test("A Gemini safety block hands the request on without resting Gemini, and Gemini keeps serving the next request", async () => {
+  const { context, calls } = gate(ENV, (provider) => (provider === "gemini" ? { ok: false, status: 422, blocked: true, payload: { error: { message: "Gemini blocked the answer (SAFETY)." } }, provider } : text(provider, '{"ok":true}')));
+  const result = await context.executeAITask(jsonTask("comments"));
+  assert.equal(result.ok, true);
+  assert.deepEqual(Array.from(calls), ["gemini", "groq"]);
+  assert.equal(context.providerCooldownMs("gemini"), 0);
+  assert.equal(vm.runInContext("AI_GATE", context).providerConfigurationErrors.has("gemini"), false);
+});
+
+test("A refusal followed by a real outage is a normal failure, not a 'refused' verdict", async () => {
+  const { context } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : { ok: false, status: 503, payload: { error: { message: "overloaded" } }, provider }));
+  const result = await context.executeAITask(jsonTask("dm"));
+  assert.notEqual(result.payload?.error?.type, "content_refused");
+  assert.ok(result.waiting === true || result.status === 503, JSON.stringify(result).slice(0, 200));
+});
+
+test("Gemini: a blocked prompt costs one request, is not held against the key, and is handed on at once", async () => {
+  const blocked = { status: 200, payload: { promptFeedback: { blockReason: "PROHIBITED_CONTENT" }, candidates: [] } };
+  const { context, requests, ledger, logs } = geminiPath({ respond: () => blocked });
+  const result = await context.proxyGeminiMessage(geminiBody({ source: "comments" }));
+  assert.equal(result.ok, false);
+  assert.equal(result.blocked, true);
+  assert.equal(result.status, 422);
+  assert.equal(requests.length, 1, "no other key or model was asked the same thing");
+  for (let i = 0; i < 4; i += 1) await context.proxyGeminiMessage(geminiBody({ source: "comments" }));
+  assert.equal(ledger.restMs("f2", "gemini-3.8-flash"), 0);
+  assert.equal(ledger.restMs("f3", "gemini-3.8-flash"), 0);
+  assert.equal(ledger.restMs("f4", "gemini-3.8-flash"), 0, "five blocked prompts in a row rested no key");
+  assert.ok(logs.some((line) => /blocked the answer \(PROHIBITED_CONTENT\)/.test(line)));
+});
+
+test("Gemini: a filtered answer (finishReason SAFETY) is a block too; a plain empty answer is still an outage", async () => {
+  const filtered = geminiPath({ respond: () => ({ status: 200, payload: { candidates: [{ finishReason: "SAFETY", content: { parts: [] } }] } }) });
+  assert.equal((await filtered.context.proxyGeminiMessage(geminiBody())).blocked, true);
+  const empty = geminiPath({ respond: () => ({ status: 200, payload: { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "" }] } }] } }) });
+  const result = await empty.context.proxyGeminiMessage(geminiBody());
+  assert.equal(result.blocked, undefined);
+  assert.equal(result.status, 502);
+  assert.ok(empty.requests.length > 1, "an empty answer still tries the next pair");
+});
+
+test("The model that actually answered is the one reported, not always the first on the ladder", async () => {
+  const source = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
+  assert.match(source, /model: result\?\.model \|\| providerModel\("gemini", body\)/);
 });

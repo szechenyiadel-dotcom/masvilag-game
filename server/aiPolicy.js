@@ -409,3 +409,36 @@ export function planGeminiAttempts({ freeKeys, paidKey = "", models, ledger, for
   if (!pool.length || !ladder.length) return { attempts: [], waitMs: 0 };
   return { attempts: [], waitMs: Math.min(...pool.flatMap((key) => ladder.map((model) => ledger.restMs(key, model)))) };
 }
+
+/* ---------- blocked and refused answers ---------- */
+
+/* Gemini says why it gave no text: the prompt or the answer tripped a safety filter. Such a prompt
+   would be blocked again on every other key and model, so it is handed on to the next provider. */
+const GEMINI_BLOCK_REASONS = /^(SAFETY|PROHIBITED_CONTENT|BLOCKLIST|SPII|IMAGE_SAFETY|IMAGE_PROHIBITED_CONTENT|OTHER)$/i;
+export function geminiBlockReason(payload) {
+  const feedback = String(payload?.promptFeedback?.blockReason || "").trim();
+  if (feedback) return feedback;
+  const finish = String(payload?.candidates?.[0]?.finishReason || "").trim();
+  return GEMINI_BLOCK_REASONS.test(finish) ? finish : "";
+}
+
+/* Does the request ask for JSON (as every game request does)? Only then is plain prose an answer that
+   was not given. */
+export function requestExpectsJson(body) {
+  const rows = Array.isArray(body?.messages) ? body.messages : [];
+  const last = rows.length ? rows[rows.length - 1] : null;
+  const lastText = typeof last?.content === "string" ? last.content : Array.isArray(last?.content) ? last.content.map((p) => p?.text || "").join(" ") : "";
+  return /valid JSON|érvényes JSON|JSON only|csak JSON|return json/i.test(String(body?.system || "") + " " + lastText.slice(-4000));
+}
+
+const REFUSAL_START = /^["'“”‘’\s]*(?:i['’]?m sorry|i am sorry|sorry[,.! ]|i apologi[sz]e|i['’]?m afraid|i can(?:['’]t|not)|i could(?:n['’]t| not)|i['’]?m (?:unable|not able)|i am (?:unable|not able)|i won['’]?t|i will not|i must (?:decline|refuse)|as an ai|unfortunately,? i|sajn[aá]lom|nem tudok|nem seg[ií]thetek|nem fogok|elnézést,? de)/i;
+const REFUSAL_TOPIC = /assist|help|comply|fulfil|continue|generat|writ|provid|creat|content|request|explicit|sexual|policy|guideline|appropriate|seg[ií]t|teljes[ií]t|folytat|tartalom|k[ée]r[ée]s|szab[aá]ly|ir[aá]nyelv|nem megfelel/i;
+
+/* A short piece of prose that starts like an apology/refusal and speaks about the request, in answer to a
+   request for JSON. JSON (even fenced) or anything long is an answer, never a refusal. */
+export function looksLikeRefusal(text) {
+  const t = String(text || "").trim();
+  if (!t || t.length > 700) return false;
+  if (/^[\[{`]/.test(t) || /\{[\s\S]*"[\s\S]*\}/.test(t)) return false;
+  return REFUSAL_START.test(t) && REFUSAL_TOPIC.test(t.slice(0, 400));
+}
