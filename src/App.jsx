@@ -1,5 +1,6 @@
 import { restoreBaselineGraph } from "./bondAnalysis.js";
-import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext } from "./bondClient.js";
+import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext, sheetFields, flattenSheetValue } from "./bondClient.js";
+import { sheetSyncJobs, runSheetSync, eventMemoryBatch, runEventFlush, recallMemories, recallBlock, insertBeforeProtectedTail } from "./semanticMemory.js";
 import { focusedScope, inScope, relationshipInScope, eventInScope, strongestTieIds, groupsForScope } from "./aiScope.js";
 import { latestPlayerTriggerAt, ambientGateOpen, ambientGateAfterRun } from "./ambientGate.js";
 const bondAnalysisBusy = new Set();
@@ -8846,11 +8847,21 @@ async function askWorldJSONInteractive(
   AI.interactivePending++;
 
   try {
+    /* What the characters in this conversation remember (their own sheet + what happened to them)
+       that matches what is being said right now. Best effort: never delays or breaks the reply. */
+    const { memory, ...askOptions } = options;
+    let memoryBlock = "";
+    if (memory && Array.isArray(memory.ids) && memory.ids.length) {
+      try {
+        const byCharacter = await recallMemories(apiJson, memory.ids, memory.query);
+        memoryBlock = recallBlock(byCharacter, (id) => nameOfIn(w, id), { language: worldLanguage(w) });
+      } catch (error) { memoryBlock = ""; }
+    }
     return await askJSON(
       system,
-      prompt + bondGenerationContext(w),
+      insertBeforeProtectedTail(prompt, memoryBlock) + bondGenerationContext(w),
       {
-        ...options,
+        ...askOptions,
         keepFullPrompt: true,
         language:
           worldLanguage(w),
@@ -34273,7 +34284,7 @@ Formátum:
  "relationshipUpdates":[
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
-}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${TAIL}`, { maxTokens: 3200, timeoutMs: 90000, source: "scene" }));
+}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${TAIL}`, { maxTokens: 3200, timeoutMs: 90000, source: "scene", memory: { ids: (scene.cast || []).filter((id) => !isHuman(w, id)).slice(0, 4), query: String(log || "").slice(-900) } }));
 
       const resolveSceneTurns = (candidateOut) =>
         (candidateOut && Array.isArray(candidateOut.turns)
@@ -35934,7 +35945,7 @@ Formátum:
 {"replies":[{"id":"tag azonosítója","to":"annak az id-ja, akinek közvetlenül szól, vagy üres","text":"természetes rövid group chat üzenet"}],
 "changes":[{"a":"aki érez","b":"aki iránt","delta":12,"mood":"mit érez most iránta","why":"egy rövid mondat","oneSided":false}],
 "memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${groupChatSocialTail(w, groupAiIds, mine ? { text: mine, targetId: playerTarget.id || "" } : null)}${TAIL}`,
-      { maxTokens: 700, maxTries: 1, timeoutMs: 50000 }
+      { maxTokens: 700, maxTries: 1, timeoutMs: 50000, memory: { ids: groupAiIds.slice(0, 4), query: mine || String(hist || "").slice(-900) } }
       );
     } catch (primaryGroupErr) {
       const fallbackId = playerTarget.id || groupAiIds[0] || "";
@@ -36696,6 +36707,7 @@ async function askDirectDmJSONInteractive(w, system, prompt, options = {}) {
   delete forward.dmCharId;
   delete forward.dmChatKey;
   delete forward.dmLatestText;
+  if (charId && latestText) forward.memory = { ids: [charId], query: latestText };
 
   const c = charId ? charById(w, charId) : null;
   const protectedTail = c
@@ -44973,6 +44985,14 @@ function ambientActivityOpen(w) {
   if (!w) return false;
   const triggerAt = latestPlayerTriggerAt(w.socialEvents, (id) => isHuman(w, id));
   return ambientGateOpen({ triggerAt, now: now(), state: w.sim && w.sim.ambient });
+}
+
+/* Semantic memory bookkeeping: which sheets the server already holds (by fingerprint). */
+function ensureSemanticMemoryState(w) {
+  const sim = ensureSimState(w);
+  if (!sim.semanticMemory || typeof sim.semanticMemory !== "object" || Array.isArray(sim.semanticMemory)) sim.semanticMemory = {};
+  if (!sim.semanticMemory.sheets || typeof sim.semanticMemory.sheets !== "object" || Array.isArray(sim.semanticMemory.sheets)) sim.semanticMemory.sheets = {};
+  return sim.semanticMemory;
 }
 
 function isAmbientAction(action) {
@@ -59840,6 +59860,67 @@ const signOut = useCallback(async () => {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [world ? world.code : null, meId]);
+
+  /*
+   * SEMANTIC MEMORY — each character's OWN SHEET and the important things that happen to them are
+   * stored on the server (free embeddings only) and recalled by meaning in conversations.
+   * Triggered by changes in the world, debounced; a sheet is sent only when it changed and an
+   * event only once. If there is no free capacity it simply waits and tries again.
+   */
+  const memorySyncRef = useRef({ timer: null, busy: false });
+  useEffect(() => () => {
+    const st = memorySyncRef.current;
+    if (st.timer) clearTimeout(st.timer);
+    st.timer = null;
+  }, []);
+  const runMemorySync = useCallback(async () => {
+    const st = memorySyncRef.current;
+    st.timer = null;
+    const w = wRef.current;
+    if (st.busy || !w || !w.code || !w.meId || !(w.chars || []).length) return;
+    if (!simLeaderActive()) return;
+    st.busy = true;
+    let retryMs = 0;
+    try {
+      const synced = (w.sim && w.sim.semanticMemory && w.sim.semanticMemory.sheets) || {};
+      const jobs = sheetSyncJobs(w.chars, {
+        fieldsOf: (c) => sheetFields(c, w),
+        flatten: (value) => {
+          try { return flattenSheetValue(value); }
+          catch (error) { return String(value == null ? "" : value).replace(/<[^>]*>/g, " "); }
+        },
+        synced,
+      });
+      if (jobs.length) {
+        const done = [];
+        const result = await runSheetSync(jobs, apiJson, (job) => done.push(job));
+        if (done.length) update((n) => { const mem = ensureSemanticMemoryState(n); done.forEach((job) => { mem.sheets[job.characterId] = job.fingerprint; }); });
+        if (result.waiting) retryMs = result.retryAfter * 1000;
+        else if (result.failed) retryMs = 120000;
+      }
+      if (!retryMs) {
+        const batch = eventMemoryBatch(wRef.current, { isHuman, charById });
+        if (batch.eventIds.length) {
+          const result = await runEventFlush(batch, apiJson);
+          if (result.marked) update((n) => { const ids = new Set(result.marked); (n.socialEvents || []).forEach((e) => { if (e && ids.has(e.id)) e.semMem = 1; }); });
+          if (result.waiting) retryMs = result.retryAfter * 1000;
+          else if (result.failed) retryMs = 120000;
+        }
+      }
+    } catch (error) {
+      retryMs = 120000;
+    } finally {
+      st.busy = false;
+    }
+    if (retryMs && !st.timer) st.timer = setTimeout(runMemorySync, retryMs);
+  }, [update]);
+  const worldRevForMemory = world ? world.rev : 0;
+  useEffect(() => {
+    if (!world || !meId) return;
+    const st = memorySyncRef.current;
+    if (st.timer || st.busy) return;
+    st.timer = setTimeout(runMemorySync, 20000);
+  }, [worldRevForMemory, world ? world.code : null, meId, runMemorySync]);
 
   useEffect(() => { if (err) { const t = setTimeout(() => setErr(""), 9000); return () => clearTimeout(t); } }, [err]);
 

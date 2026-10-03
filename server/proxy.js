@@ -7,6 +7,7 @@ import {
   backgroundWaitSeconds,
   buildWaitingResult,
 } from "./aiPolicy.js";
+import { registerSemanticMemory, createEmbedder } from "./semanticMemory.js";
 /* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
 /*
  * MÁSVILÁG — server/proxy.js
@@ -149,6 +150,9 @@ CREATE INDEX IF NOT EXISTS world_media_files_world_updated_idx
 
       CREATE INDEX IF NOT EXISTS character_memories_subject_ids_gin_idx
       ON character_memories USING GIN (subject_ids);
+
+      CREATE INDEX IF NOT EXISTS character_memories_hash_idx
+      ON character_memories (world_code, (metadata->>'hash'));
 
       CREATE INDEX IF NOT EXISTS profile_worlds_world_idx
       ON profile_worlds (world_code);
@@ -2199,7 +2203,8 @@ app.post("/world/save", async (req, res) => {
         validationError.restartRejected = true;
         throw validationError;
       }
-      await client.query("DELETE FROM character_memories WHERE world_code = $1", [session.worldCode]);
+      /* A restart wipes what happened in the game, not who the characters are: their own-sheet memory stays. */
+      await client.query("DELETE FROM character_memories WHERE world_code = $1 AND memory_type <> 'self_sheet'", [session.worldCode]);
     }
     const nextWorldJson = stringifyJsonbSafe(nextWorld, "world-save");
 
@@ -6240,135 +6245,24 @@ function cosineSimilarity(a, b) {
   );
 }
 
+/* Embeddings run on the FREE Gemini keys only (rotating, resting on quota). With none available
+   the call fails with 503 + waiting, so memory writes wait and reads fall back to keywords. */
+const MEMORY_EMBEDDER = createEmbedder({
+  freeKeys: GEMINI_FREE_KEYS,
+  paidKey: GEMINI_PAID_KEY,
+  allowPaid: AI_ALLOW_PAID_BACKGROUND,
+  fetchFn: (url, { timeoutMs, ...options }) => fetchWithTimeout(url, options, timeoutMs),
+  model: GEMINI_EMBEDDING_MODEL,
+  dimensions: GEMINI_EMBEDDING_DIM,
+  normalize: normalizeEmbedding,
+});
+
 async function geminiEmbedMemory(
   text,
   taskType = "RETRIEVAL_DOCUMENT",
   title = ""
 ) {
-  if (!GEMINI_API_KEY) {
-    const err =
-      new Error(
-        "Missing GEMINI_API_KEY for semantic memory embeddings."
-      );
-
-    err.status = 503;
-    throw err;
-  }
-
-  const clean =
-    memoryText(
-      text,
-      7000
-    );
-
-  if (!clean) {
-    const err =
-      new Error(
-        "Memory embedding text is empty."
-      );
-
-    err.status = 400;
-    throw err;
-  }
-
-  const model =
-    GEMINI_EMBEDDING_MODEL;
-
-  const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:embedContent`;
-
-  const embedContentConfig = {
-    taskType,
-    outputDimensionality:
-      GEMINI_EMBEDDING_DIM,
-    autoTruncate:
-      true,
-  };
-
-  if (
-    taskType ===
-      "RETRIEVAL_DOCUMENT" &&
-    title
-  ) {
-    embedContentConfig.title =
-      memoryText(
-        title,
-        220
-      );
-  }
-
-  const r =
-    await fetchWithTimeout(
-      url,
-      {
-        method:
-          "POST",
-        headers: {
-          "Content-Type":
-            "application/json",
-          "x-goog-api-key":
-            GEMINI_API_KEY,
-        },
-        body:
-          JSON.stringify({
-            model:
-              `models/${model}`,
-            content: {
-              parts: [
-                {
-                  text:
-                    clean,
-                },
-              ],
-            },
-            embedContentConfig,
-          }),
-      },
-      30000
-    );
-
-  const payload =
-    await responseJsonSafe(
-      r
-    );
-
-  if (!r.ok) {
-    const err =
-      new Error(
-        proxyErrorMessage(
-          payload,
-          `Gemini embedding failed with HTTP ${r.status}.`
-        )
-      );
-
-    err.status =
-      r.status;
-
-    err.payload =
-      payload;
-
-    throw err;
-  }
-
-  const values =
-    normalizeEmbedding(
-      payload
-        ?.embedding
-        ?.values ||
-      []
-    );
-
-  if (!values.length) {
-    const err =
-      new Error(
-        "Gemini embedding returned no vector values."
-      );
-
-    err.status = 502;
-    throw err;
-  }
-
-  return values;
+  return MEMORY_EMBEDDER.embed(text, taskType, title);
 }
 
 function memoryRowForClient(
@@ -6461,9 +6355,7 @@ app.get(
               ?.count
           ) || 0,
         geminiConfigured:
-          Boolean(
-            GEMINI_API_KEY
-          ),
+          GEMINI_FREE_KEYS.length > 0,
         embeddingModel:
           GEMINI_EMBEDDING_MODEL,
         embeddingDimensions:
@@ -7111,6 +7003,16 @@ app.post(
   }
 );
 
+
+/* Semantic character memory: own sheet + important events, recalled by meaning. */
+registerSemanticMemory(app, {
+  pool,
+  requireDb,
+  getSession,
+  clearSessionCookie,
+  embedder: MEMORY_EMBEDDER,
+  model: GEMINI_EMBEDDING_MODEL,
+});
 
 // Serve the built React/Vite app in production.
 // v31: never let an old frontend bundle survive a deploy in browser/proxy cache.

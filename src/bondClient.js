@@ -65,6 +65,11 @@ export function fullSheetText(character, Parser, world) {
   return flattenFields(sheetFields(character, world), Parser);
 }
 
+// One field's value as plain text (HTML read through the parser); used by the semantic memory.
+export function flattenSheetValue(value, Parser) {
+  return flattenFields(value, Parser);
+}
+
 // Relationships are read from the Connections field only. The identity fields travel
 // with it because the AI needs the owner's own names to read the text, and the server
 // needs every character's aliases to resolve who is mentioned. Nothing else on the
