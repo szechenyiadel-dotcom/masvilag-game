@@ -7379,6 +7379,11 @@ function AlbumEditor({ value, onChange, owner }) {
   const [err, setErr] = useState("");
   const [autoVisionId, setAutoVisionId] = useState("");
   const visionScanRef = useRef(false);
+  /* "No free capacity right now" (503): the image is tried again later, never given up on. */
+  const visionRetryAtRef = useRef(0);
+  const visionRetryTimerRef = useRef(null);
+  const [visionTick, setVisionTick] = useState(0);
+  useEffect(() => () => { if (visionRetryTimerRef.current) clearTimeout(visionRetryTimerRef.current); }, []);
   const list = Array.isArray(value) ? value : [];
   const listRef = useRef(list);
 
@@ -7395,6 +7400,7 @@ function AlbumEditor({ value, onChange, owner }) {
    */
   useEffect(() => {
     if (visionScanRef.current || busy || autoVisionId) return;
+    if (now() < visionRetryAtRef.current) return;
 
     const pending = list.find(
       (item) =>
@@ -7446,6 +7452,18 @@ function AlbumEditor({ value, onChange, owner }) {
       })
       .catch((visionErr) => {
         console.warn("Automatic album vision backfill failed:", visionErr);
+        if (visionErr && visionErr.status === 503) {
+          /* The server found no free capacity: take the "attempted" mark back and come again in a few minutes. */
+          const retry = listRef.current.map((item) =>
+            item && item.id === pending.id ? { ...item, analysisAttemptedAt: 0 } : item
+          );
+          listRef.current = retry;
+          onChange(retry);
+          const waitMs = 5 * 60000;
+          visionRetryAtRef.current = now() + waitMs;
+          if (visionRetryTimerRef.current) clearTimeout(visionRetryTimerRef.current);
+          visionRetryTimerRef.current = setTimeout(() => setVisionTick((n) => n + 1), waitMs + 500);
+        }
       })
       .finally(() => {
         visionScanRef.current = false;
@@ -7455,6 +7473,7 @@ function AlbumEditor({ value, onChange, owner }) {
     list,
     media,
     busy,
+    visionTick,
     autoVisionId,
     owner && owner.id,
     owner && owner.name,

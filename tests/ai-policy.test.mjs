@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   PAID_PROVIDERS, isForegroundRequest, filterProvidersForBody, selectGeminiKeys,
-  backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, secondsUntilPacificMidnight,
+  backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, secondsUntilPacificMidnight, planGroqRequest, groqRetryMs, GROQ_FREE_TPM_BUDGET,
   BACKGROUND_WAIT_MIN_SECONDS, BACKGROUND_WAIT_MAX_SECONDS, BACKGROUND_WAIT_DEFAULT_SECONDS,
 } from "../server/aiPolicy.js";
 
@@ -123,4 +123,36 @@ test("A Gemini 429 says which limit it was: per day comes back at midnight Pacif
   assert.equal(geminiRateLimitInfo({ error: { details: [retry("20s")] } }, now).restMs, 22000, "a bare retryDelay is trusted");
   assert.equal(geminiRateLimitInfo(null, now).restMs, 30 * 60 * 1000);
   assert.equal(geminiKeyRestMs(429, "quota", { error: { details: [quotaFailure("GenerateRequestsPerDayPerProjectPerModel-FreeTier")] } }, now), daily.restMs);
+});
+
+test("Groq free tier: a request is shortened to fit 8,000 tokens a minute, prompt and output allowance together", () => {
+  const small = planGroqRequest({ maxTokens: 700, systemChars: 2000, messageChars: [3000] });
+  assert.deepEqual([small.fits, small.compact], [true, false]);
+
+  const big = planGroqRequest({ maxTokens: 1024, systemChars: 9000, messageChars: [30000] });
+  assert.deepEqual([big.fits, big.compact], [true, true]);
+  assert.ok(big.systemCap + big.lastCap <= big.maxChars, "what stays fits the budget");
+  assert.ok((big.maxChars / 3) + 1024 <= GROQ_FREE_TPM_BUDGET, "prompt tokens + output allowance stay under the limit");
+  assert.ok(big.systemCap <= 0.35 * big.maxChars + 1 && big.lastCap > big.systemCap, "the system part gets a third, the latest message the most room");
+
+  const several = planGroqRequest({ maxTokens: 1024, systemChars: 5000, messageChars: [4000, 4000, 30000] });
+  assert.ok(several.lastCap > several.otherCap && several.otherCap > 0);
+  assert.ok(several.systemCap + several.lastCap + 2 * several.otherCap <= several.maxChars);
+});
+
+test("Groq free tier: a request whose output allowance leaves no room is never sent", () => {
+  const plan = planGroqRequest({ maxTokens: 7000, systemChars: 100, messageChars: [100] });
+  assert.equal(plan.fits, false);
+  assert.match(plan.reason, /no room/);
+  assert.equal(planGroqRequest({ maxTokens: 64000, systemChars: 1, messageChars: [1] }).fits, false, "a 64k answer allowance can never fit");
+  assert.equal(planGroqRequest({ maxTokens: GROQ_FREE_TPM_BUDGET - 1200, systemChars: 10, messageChars: [10] }).fits, true, "exactly the minimum prompt room still fits");
+});
+
+test("Groq says when to come back: header seconds, or hours/minutes/seconds in the message", () => {
+  assert.equal(groqRetryMs("37", ""), 37000);
+  assert.equal(groqRetryMs("", "Rate limit reached ... Please try again in 56m13.92s. Need more tokens?"), 3373920);
+  assert.equal(groqRetryMs("", "try again in 37.3425s."), 37343);
+  assert.equal(groqRetryMs("", "try again in 1h2m3s"), 3723000);
+  assert.equal(groqRetryMs("", "try again in 250ms"), 0, "milliseconds are not minutes");
+  assert.equal(groqRetryMs("", "nothing useful"), 0);
 });

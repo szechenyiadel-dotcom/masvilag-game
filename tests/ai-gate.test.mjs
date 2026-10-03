@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { createRequire } from "node:module";
-import { isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN } from "../server/aiPolicy.js";
+import { isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN, planGroqRequest } from "../server/aiPolicy.js";
 
 const require = createRequire(import.meta.url);
 const { parse } = require("@babel/parser");
@@ -144,4 +144,53 @@ test("proxy.js rests each Gemini key by the error it returned, including spent c
   assert.match(source, /geminiKeyRestMs\(status, proxyErrorMessage\(result && result\.payload, ""\), result && result\.payload\)/);
   assert.match(source, /out of quota \(" \+ limit\.metric \+ "\)/, "the log says whether it was a per-minute or a per-day limit");
   assert.match(source, /out of prepaid credit/);
+});
+
+/* The real Groq request path of proxy.js against a fake Groq. */
+function groqPath() {
+  const sent = [];
+  const context = vm.createContext({
+    process: { env: {} }, console: { info() {}, warn() {}, error() {} },
+    Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error, AbortController, setTimeout, clearTimeout,
+    planGroqRequest, isForegroundRequest,
+    fetch: async (url, options) => {
+      sent.push(JSON.parse(options.body));
+      return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ choices: [{ message: { content: "hello" } }] }) };
+    },
+  });
+  vm.runInContext(pick(["AI_UPSTREAM_TIMEOUT_MS", "extractText", "aiRequestText", "aiRequestChars", "preservePromptEdges", "buildCompatibleChatPayload", "normalizeOpenAIResponse", "upstreamTimeoutFor", "proxyCompatibleMessage"]), context);
+  return { context, sent };
+}
+const chatBody = (extra = {}) => ({ source: "dm", system: "S".repeat(9000), messages: [{ role: "user", content: "U".repeat(30000) }], max_tokens: 1024, ...extra });
+const textLength = (payload) => payload.messages.reduce((n, m) => n + m.content.length, 0);
+
+test("Groq: a long chat request is shortened to its per-minute budget before it is sent", async () => {
+  const { context, sent } = groqPath();
+  const result = await context.proxyCompatibleMessage("groq", "key", "openai/gpt-oss-120b", "https://api.groq.com/openai/v1/chat/completions", chatBody());
+  assert.equal(result.ok, true);
+  assert.equal(sent.length, 1);
+  const chars = textLength(sent[0]);
+  assert.ok(chars <= planGroqRequest({ maxTokens: 1024, systemChars: 9000, messageChars: [30000] }).maxChars + 200, "sent " + chars + " chars");
+  assert.equal(sent[0].max_tokens, 1024);
+});
+
+test("Groq: a short request goes out exactly as it is", async () => {
+  const { context, sent } = groqPath();
+  await context.proxyCompatibleMessage("groq2", "key", "m", "https://api.groq.com/x", chatBody({ system: "short system", messages: [{ role: "user", content: "short question" }] }));
+  assert.equal(sent[0].messages[0].content, "short system");
+  assert.equal(sent[0].messages[1].content, "short question");
+});
+
+test("Groq: a request with a huge output allowance is skipped at once, with no network call", async () => {
+  const { context, sent } = groqPath();
+  const result = await context.proxyCompatibleMessage("groq", "key", "m", "https://api.groq.com/x", chatBody({ max_tokens: 6500 }));
+  assert.deepEqual([result.ok, result.status, result.skipped], [false, 413, true]);
+  assert.match(result.payload.error.message, /skipped: output allowance/);
+  assert.equal(sent.length, 0);
+});
+
+test("Other providers are not shortened by the Groq rule", async () => {
+  const { context, sent } = groqPath();
+  await context.proxyCompatibleMessage("mistral", "key", "m", "https://api.mistral.ai/x", chatBody());
+  assert.equal(textLength(sent[0]), 9000 + 30000);
 });
