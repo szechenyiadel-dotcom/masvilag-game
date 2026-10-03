@@ -69,44 +69,96 @@ export function analysisReady(world, subjects) {
   return world.bondAnalysis?.version === BOND_ANALYSIS_VERSION && world.bondAnalysis.source === bondSourceFingerprint(world, subjects);
 }
 
-export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress = () => {} }) {
+export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress = () => {}, fastRestart = false }) {
   const people = subjects(world);
   const source = bondSourceFingerprint(world, subjects);
   const profiles = {};
   const sheets = {};
-  const profileKeys = [];
+  const profileKeys = new Array(people.length);
   let recalculated = 0;
   let recalculatedBonds = 0;
   const forceRun = force ? String(Date.now()) + ":" + String(Math.random()) : "";
+  const pollDelay = fastRestart ? 700 : 3000;
+  const concurrency = fastRestart ? Math.min(4, Math.max(1, people.length)) : 1;
+
   const analyze = async (body) => {
-    const options = { method: "POST", body: JSON.stringify({ ...body, force: forceRun }) };
+    const options = { method: "POST", body: JSON.stringify({ ...body, force: forceRun, restartFast: fastRestart }) };
     let submitted = false;
     for (;;) {
       const response = await api("/ai/bond-analysis", options);
       if (!response.pending) return { ...response, cached: response.cached && !submitted };
       submitted = true;
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await new Promise(resolve => setTimeout(resolve, pollDelay));
     }
   };
-  for (const character of people) {
-    const roster = people.filter((other) => other.id !== character.id).map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
-    sheets[character.id] = fullSheetText(character, undefined, world);
+
+  const runLimited = async (items, limit, worker) => {
+    let next = 0;
+    const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (;;) {
+        const index = next++;
+        if (index >= items.length) return;
+        await worker(items[index], index);
+      }
+    });
+    await Promise.all(runners);
+  };
+
+  for (const character of people) sheets[character.id] = fullSheetText(character, undefined, world);
+
+  await runLimited(people, concurrency, async (character, index) => {
+    const roster = people
+      .filter((other) => other.id !== character.id)
+      .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
     progress({ phase: "profile", owner: character.name, completed: Object.keys(profiles).length, total: people.length });
-    const result = await analyze({ stage: "profile", owner: character.id, roster, ownSheet: sheets[character.id], fieldNames: Object.keys(sheetFields(character, world)), language });
+    const result = await analyze({
+      stage: "profile",
+      owner: character.id,
+      roster,
+      ownSheet: sheets[character.id],
+      fieldNames: Object.keys(sheetFields(character, world)),
+      language,
+    });
     profiles[character.id] = { profile: result.result, hash: result.hash };
-    profileKeys.push(result.cacheKey);
+    profileKeys[index] = result.cacheKey;
     if (!result.cached) recalculated += 1;
-  }
+  });
+
   const baselines = {};
-  for (const character of people) {
-    const roster = people.filter((other) => other.id !== character.id).map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
-    progress({ phase: "baseline", owner: character.name, completed: Object.keys(baselines).length, total: people.length * (people.length - 1) });
-    const result = await analyze({ stage: "baseline", owner: character.id, roster, ownSheet: sheets[character.id], profileKeys, language });
+  await runLimited(people, concurrency, async (character) => {
+    const roster = people
+      .filter((other) => other.id !== character.id)
+      .map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
+    progress({
+      phase: "baseline",
+      owner: character.name,
+      completed: Object.keys(baselines).length,
+      total: people.length * (people.length - 1),
+    });
+    const result = await analyze({
+      stage: "baseline",
+      owner: character.id,
+      roster,
+      ownSheet: sheets[character.id],
+      profileKeys,
+      language,
+    });
     if (!result.cached) recalculatedBonds += result.result.bonds.length;
     for (const bond of result.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
-  }
+  });
+
   assertCompleteGraph(people.map((character) => character.id), baselines);
-  return { baselines, analysis: { version: BOND_ANALYSIS_VERSION, source, profiles, recalculated, recalculatedBonds, completedAt: Date.now() } };
+  return {
+    baselines,
+    analysis: {
+      version: BOND_ANALYSIS_VERSION,
+      source,
+      profiles,
+      recalculated,
+      recalculatedBonds,
+      completedAt: Date.now(),
+    },
+  };
 }
 
 export function installBondGraph(world, result, subjects) {
