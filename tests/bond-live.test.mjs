@@ -8,8 +8,8 @@ import { analyzeStructured, sheetHash } from "../server/bondAnalysis.js";
 import { ProfileSchema, BondArraySchema, EXTRACT_PROMPT, BASELINE_PROMPT, validateProfile, validateBonds, resolveProfileReferences, buildGroupIndex, reconcileFacts, runtimeBond, restoreBaselineGraph, assertCompleteGraph } from "../src/bondAnalysis.js";
 import { fullSheetText } from "../src/bondClient.js";
 
-if (process.argv.includes("--require-live") && !(process.env.DATABASE_URL && (process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY))) throw new Error("Live acceptance credentials/database are required");
-const liveEnabled = Boolean(process.env.DATABASE_URL && (process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY));
+if (process.argv.includes("--require-live") && !(process.env.DATABASE_URL && (process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_2 || process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY))) throw new Error("Live acceptance credentials/database are required");
+const liveEnabled = Boolean(process.env.DATABASE_URL && (process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_2 || process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY));
 test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated disposable world", { skip: !liveEnabled, timeout: 3600000 }, async t => {
  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
  t.after(() => pool.end());
@@ -21,12 +21,11 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
   await pool.query("INSERT INTO relationship_reading_cache(cache_key,data,updated_at) VALUES ($1,$2::jsonb,NOW()) ON CONFLICT(cache_key) DO UPDATE SET data=EXCLUDED.data,updated_at=NOW()", [cacheKey, JSON.stringify(output)]);
   return output;
  };
- await t.test("Paid second Groq key supports the configured structured analysis model", async () => {
-  assert.ok(process.env.GROQ_API_KEY_2);
+ await t.test("Schema lane is Groq 1 -> Groq 2 -> OpenAI", async () => {
+  assert.ok(process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2 || process.env.OPENAI_API_KEY);
   const schema = { type: "object", properties: { verified: { type: "boolean" } }, required: ["verified"], additionalProperties: false };
-  const env = { GROQ_API_KEY: process.env.GROQ_API_KEY_2, GROQ_ANALYSIS_MODEL: process.env.GROQ_ANALYSIS_MODEL, GROQ_ANALYSIS_CONTEXT_WINDOW: process.env.GROQ_ANALYSIS_CONTEXT_WINDOW, GROQ_ANALYSIS_OUTPUT_LIMIT: process.env.GROQ_ANALYSIS_OUTPUT_LIMIT };
-  const result = await analyzeStructured('Return exactly {"verified":true} using the provided JSON schema.', schema, result => assert.equal(result.verified, true), { env, outputTokens: 64000 });
-  console.info("[bond-live-second-groq-key]", JSON.stringify({ provider: result.provider, model: result.model, verified: result.result.verified }));
+  const result = await analyzeStructured('Return exactly {"verified":true} using the provided JSON schema.', schema, result => assert.equal(result.verified, true), { outputTokens: 1000, mode: "schema" });
+  console.info("[bond-live-schema-provider]", JSON.stringify({ provider: result.provider, model: result.model, keySlot: result.keySlot, verified: result.result.verified }));
  });
  const people = [
   { id: "p", name: "Anna", nick: "Anni", personality: "Anna visszafogott, lojális, és nehezen beszél a saját érzéseiről.", backstory: "Anna a Cobra Kai tanítványa. A Cobra Kai senseie Sándor. A Cobra Kai és a Miyagi-Do rivális dojók. Anna és Béla régi barátok. Tavaly januárban egyszer volt köztük egy one-night stand a Fő utcai lakásban. Azóta kínos a viszony: Anna többet érez Béla iránt, Béla kerüli a témát. Anna nem meri bevallani az érzéseit; a csapatból senki nem tud az éjszakáról vagy a vonzalmáról. Anna és Dóra között soha nem volt semmi romantikus vagy szexuális. Anna nem vonzódik Dórához.", goals: "Anna szeretné visszanyerni Béla közelségét, de fél a visszautasítástól." },
@@ -43,7 +42,7 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
   assert.equal(JSON.parse(prompt.substring(prompt.lastIndexOf("\n") + 1)).ownSheet.length, ownSheet.length);
   console.info("[bond-live-input]", JSON.stringify({ stage: "profile", owner: person.id, sourceChars: ownSheet.length, submittedChars: payload.ownSheet.length }));
   const output = await analyzeLive(prompt, ProfileSchema, result => validateProfile(result, ownSheet, person.id, new Set(ids), fieldNames), { outputTokens: 64000 });
-  console.info("[bond-live-provider]", JSON.stringify({ stage: "profile", owner: person.id, provider: output.provider, model: output.model, keySlot: output.keySlot, inputTokens: output.inputTokens }));
+  console.info("[bond-live-provider]", JSON.stringify({ stage: "profile", owner: person.id, provider: output.provider, model: output.model, keySlot: output.keySlot, formatterProvider: output.formatterProvider || null, formatterKeySlot: output.formatterKeySlot || null, inputTokens: output.inputTokens }));
   extracted.push(output.result);
  }
  const profiles = resolveProfileReferences(extracted), index = buildGroupIndex(profiles), baselines = {};
@@ -53,7 +52,7 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
   const payload = { owner: person.id, ownSheet: sheets[person.id], profile: profiles.find(p => p.id === person.id), roster, groupIndex: index, objectiveFacts, outputLanguage: "Hungarian" };
   console.info("[bond-live-input]", JSON.stringify({ stage: "baseline", owner: person.id, sourceChars: sheets[person.id].length, submittedChars: payload.ownSheet.length }));
   const output = await analyzeLive(BASELINE_PROMPT + "\n" + JSON.stringify(payload), BondArraySchema, result => validateBonds(result, person.id, roster, payload.ownSheet, objectiveFacts), { outputTokens: 64000 });
-  console.info("[bond-live-provider]", JSON.stringify({ stage: "baseline", owner: person.id, provider: output.provider, model: output.model, keySlot: output.keySlot, inputTokens: output.inputTokens }));
+  console.info("[bond-live-provider]", JSON.stringify({ stage: "baseline", owner: person.id, provider: output.provider, model: output.model, keySlot: output.keySlot, formatterProvider: output.formatterProvider || null, formatterKeySlot: output.formatterKeySlot || null, inputTokens: output.inputTokens }));
   for (const bond of output.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
  }
  await t.test("A1: teammates and sensei present in every required direction", () => {
