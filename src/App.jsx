@@ -1,6 +1,6 @@
 import { restoreBaselineGraph } from "./bondAnalysis.js";
 import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext, sheetFields, flattenSheetValue } from "./bondClient.js";
-import { sheetSyncJobs, runSheetSync, eventMemoryBatch, runEventFlush, recallMemories, recallBlock, insertBeforeProtectedTail } from "./semanticMemory.js";
+import { sheetSyncJobs, markSheetSynced, recentActorIds, runSheetSync, eventMemoryBatch, runEventFlush, recallMemories, recallBlock, insertBeforeProtectedTail } from "./semanticMemory.js";
 import { focusedScope, inScope, relationshipInScope, eventInScope, strongestTieIds, groupsForScope } from "./aiScope.js";
 import { latestPlayerTriggerAt, ambientGateOpen, ambientGateAfterRun } from "./ambientGate.js";
 const bondAnalysisBusy = new Set();
@@ -8853,6 +8853,7 @@ async function askWorldJSONInteractive(
     let memoryBlock = "";
     if (memory && Array.isArray(memory.ids) && memory.ids.length) {
       try {
+        await ensureActingSheetMemory(w, memory.ids);
         const byCharacter = await recallMemories(apiJson, memory.ids, memory.query);
         memoryBlock = recallBlock(byCharacter, (id) => nameOfIn(w, id), { language: worldLanguage(w) });
       } catch (error) { memoryBlock = ""; }
@@ -44987,12 +44988,54 @@ function ambientActivityOpen(w) {
   return ambientGateOpen({ triggerAt, now: now(), state: w.sim && w.sim.ambient });
 }
 
-/* Semantic memory bookkeeping: which sheets the server already holds (by fingerprint). */
-function ensureSemanticMemoryState(w) {
-  const sim = ensureSimState(w);
-  if (!sim.semanticMemory || typeof sim.semanticMemory !== "object" || Array.isArray(sim.semanticMemory)) sim.semanticMemory = {};
-  if (!sim.semanticMemory.sheets || typeof sim.semanticMemory.sheets !== "object" || Array.isArray(sim.semanticMemory.sheets)) sim.semanticMemory.sheets = {};
-  return sim.semanticMemory;
+/* Semantic memory: what the server already holds of each character's own sheet.
+   Kept in memory only; the server skips unchanged chunks by hash, so a reload costs a request, not an embedding. */
+const SEMANTIC_SYNC = { states: new Map(), inflight: new Map() };
+
+function semanticSyncState(worldCode) {
+  const key = String(worldCode || "");
+  if (!SEMANTIC_SYNC.states.has(key)) SEMANTIC_SYNC.states.set(key, {});
+  return SEMANTIC_SYNC.states.get(key);
+}
+
+function memorySheetText(value) {
+  try { return flattenSheetValue(value); }
+  catch (error) { return String(value == null ? "" : value).replace(/<[^>]*>/g, " "); }
+}
+
+/* Own-sheet memory for some characters. scope "connections": only the Connections part (cheap, for
+   everyone). scope "all": the whole sheet, only for characters that are acting right now. */
+async function syncSheetMemory(w, characters, scope) {
+  if (!w || !w.code) return { ok: true };
+  const state = semanticSyncState(w.code);
+  const mine = [];
+  const running = [];
+  for (const c of characters || []) {
+    if (!c || !c.id) continue;
+    const pending = SEMANTIC_SYNC.inflight.get(w.code + ":" + c.id + ":" + scope);
+    if (pending) running.push(pending); else mine.push(c);
+  }
+  let outcome = { ok: true };
+  const jobs = mine.length ? sheetSyncJobs(mine, { fieldsOf: (c) => sheetFields(c, w), flatten: memorySheetText, state, scope }) : [];
+  if (jobs.length) {
+    const run = runSheetSync(jobs, apiJson, (job) => markSheetSynced(state, job));
+    const keys = jobs.map((job) => w.code + ":" + job.characterId + ":" + scope);
+    keys.forEach((key) => SEMANTIC_SYNC.inflight.set(key, run));
+    try { outcome = await run; } finally { keys.forEach((key) => SEMANTIC_SYNC.inflight.delete(key)); }
+  }
+  if (running.length) await Promise.all(running);
+  return outcome;
+}
+
+/* The characters about to act in a player-facing exchange need their whole sheet in memory now.
+   Waits a few seconds at most; the sync carries on in the background if it takes longer. */
+async function ensureActingSheetMemory(w, ids) {
+  const acting = [...new Set((ids || []).map(String))].map((id) => charById(w, id)).filter((c) => c && !isHuman(w, c.id)).slice(0, 4);
+  if (!acting.length) return;
+  await Promise.race([
+    syncSheetMemory(w, acting, "all").catch(() => null),
+    new Promise((resolve) => setTimeout(resolve, 6000)),
+  ]);
 }
 
 function isAmbientAction(action) {
@@ -59882,22 +59925,22 @@ const signOut = useCallback(async () => {
     st.busy = true;
     let retryMs = 0;
     try {
-      const synced = (w.sim && w.sim.semanticMemory && w.sim.semanticMemory.sheets) || {};
-      const jobs = sheetSyncJobs(w.chars, {
-        fieldsOf: (c) => sheetFields(c, w),
-        flatten: (value) => {
-          try { return flattenSheetValue(value); }
-          catch (error) { return String(value == null ? "" : value).replace(/<[^>]*>/g, " "); }
-        },
-        synced,
-      });
-      if (jobs.length) {
-        const done = [];
-        const result = await runSheetSync(jobs, apiJson, (job) => done.push(job));
-        if (done.length) update((n) => { const mem = ensureSemanticMemoryState(n); done.forEach((job) => { mem.sheets[job.characterId] = job.fingerprint; }); });
-        if (result.waiting) retryMs = result.retryAfter * 1000;
-        else if (result.failed) retryMs = 120000;
+      /* 1) Everyone's Connections part: a few thousand characters each, once. */
+      const connections = await syncSheetMemory(w, w.chars, "connections");
+      if (connections.waiting) retryMs = connections.retryAfter * 1000;
+      else if (connections.failed) retryMs = 120000;
+
+      /* 2) The whole sheet, only of characters that acted lately (posted, commented, DM, scene). */
+      if (!retryMs) {
+        const acted = recentActorIds(wRef.current, { isHuman, charById }).map((id) => charById(wRef.current, id)).filter(Boolean);
+        if (acted.length) {
+          const full = await syncSheetMemory(wRef.current, acted, "all");
+          if (full.waiting) retryMs = full.retryAfter * 1000;
+          else if (full.failed) retryMs = 120000;
+        }
       }
+
+      /* 3) What happened to them. */
       if (!retryMs) {
         const batch = eventMemoryBatch(wRef.current, { isHuman, charById });
         if (batch.eventIds.length) {

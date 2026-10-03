@@ -54,12 +54,17 @@ export function chunkText(text, max = SHEET_CHUNK_CHARS) {
   return chunks;
 }
 
-/* fields: { name: value }, flatten(value) -> plain text. Returns [{ key, text, importance }]. */
-export function ownSheetChunks(fields, flatten = (value) => String(value == null ? "" : value)) {
+export const CONNECTIONS_FIELD = "connections";
+
+/* fields: { name: value }, flatten(value) -> plain text. Returns [{ key, text, importance }].
+   scope "connections": only the Connections field (a few thousand characters, read for everyone);
+   scope "all": the whole sheet (read only for a character that is acting). */
+export function ownSheetChunks(fields, flatten = (value) => String(value == null ? "" : value), { scope = "all" } = {}) {
   const chunks = [];
   const shortLines = [];
   for (const field of Object.keys(fields || {}).sort()) {
     if (SKIPPED_FIELDS.has(field)) continue;
+    if (scope === "connections" && field !== CONNECTIONS_FIELD) continue;
     const text = String(flatten(fields[field]) || "").trim();
     if (!text) continue;
     if (text.length < SHORT_FIELD_CHARS) { shortLines.push(`${field}: ${text.replace(/\s+/g, " ")}`); continue; }
@@ -81,16 +86,47 @@ export function fnv1a(text) {
 
 export const chunksFingerprint = (chunks) => `${chunks.length}:${fnv1a(chunks.map((chunk) => chunk.key + "\u0000" + chunk.text).join("\u0001"))}`;
 
-/* Sheets whose chunks differ from what the server was last given. synced: { [characterId]: fingerprint }. */
-export function sheetSyncJobs(characters, { fieldsOf, flatten, synced = {} }) {
+/* Sheets whose chunks differ from what the server was last given.
+   state: { [characterId]: { connections: fingerprint, full: fingerprint } }. */
+export function sheetSyncJobs(characters, { fieldsOf, flatten, state = {}, scope = "all" }) {
   const jobs = [];
   for (const character of characters || []) {
     if (!character || !character.id) continue;
-    const chunks = ownSheetChunks(fieldsOf(character), flatten);
+    const fields = fieldsOf(character);
+    const connectionsFingerprint = chunksFingerprint(ownSheetChunks(fields, flatten, { scope: "connections" }));
+    const known = state[character.id] || {};
+    if (scope === "connections") {
+      if (known.connections === connectionsFingerprint) continue;
+      jobs.push({ characterId: String(character.id), scope, chunks: ownSheetChunks(fields, flatten, { scope }), fingerprint: connectionsFingerprint, connectionsFingerprint });
+      continue;
+    }
+    const chunks = ownSheetChunks(fields, flatten, { scope: "all" });
     const fingerprint = chunksFingerprint(chunks);
-    if (synced[character.id] !== fingerprint) jobs.push({ characterId: String(character.id), chunks, fingerprint });
+    if (known.full !== fingerprint) jobs.push({ characterId: String(character.id), scope: "all", chunks, fingerprint, connectionsFingerprint });
   }
   return jobs;
+}
+
+/* A finished job: remember what the server now holds. A full sync includes the Connections part. */
+export function markSheetSynced(state, job) {
+  const entry = state[job.characterId] || (state[job.characterId] = {});
+  entry.connections = job.connectionsFingerprint;
+  if (job.scope === "all") entry.full = job.fingerprint;
+}
+
+/* AI characters that acted lately (posted, commented, wrote a DM, played a scene): newest first. */
+export function recentActorIds(world, { isHuman, charById, now = Date.now(), windowMs = 30 * 60 * 1000, limit = 6 }) {
+  const ids = [];
+  for (const event of (world && Array.isArray(world.socialEvents) ? world.socialEvents : [])) {
+    if (!event || !event.actorId) continue;
+    if (now - (Number(event.ts) || 0) > windowMs) continue;
+    if (/^(?:follow|unfollow|character-arrival)$/i.test(String(event.type || ""))) continue;
+    const id = String(event.actorId);
+    if (isHuman(world, id) || !charById(world, id) || ids.includes(id)) continue;
+    ids.push(id);
+    if (ids.length >= limit) break;
+  }
+  return ids;
 }
 
 /* Important events not yet remembered. Newest first; one memory per AI character involved. */
@@ -170,7 +206,7 @@ export async function runSheetSync(jobs, api, onDone = () => {}) {
   for (const job of jobs) {
     let result;
     try {
-      result = await api("/memory/sync-sheet", { method: "POST", body: JSON.stringify({ characterId: job.characterId, chunks: job.chunks }) });
+      result = await api("/memory/sync-sheet", { method: "POST", body: JSON.stringify({ characterId: job.characterId, chunks: job.chunks, scope: job.scope || "all" }) });
     } catch (error) {
       return { failed: true, error };
     }

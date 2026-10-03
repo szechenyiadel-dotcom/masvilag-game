@@ -15,6 +15,7 @@ import crypto from "node:crypto";
 import { selectGeminiKeys } from "./aiPolicy.js";
 
 export const SELF_SHEET_TYPE = "self_sheet";
+export const CONNECTIONS_KEY_PREFIX = "connections#";
 export const EVENT_TYPE = "event";
 
 export const MAX_CHUNK_CHARS = 1200;
@@ -192,21 +193,26 @@ export function registerSemanticMemory(app, { pool, requireDb, getSession, clear
       row.confidence, row.knowledgeType, row.visibility, JSON.stringify(row.metadata), JSON.stringify(embedding), model],
   );
 
-  /* One character's own sheet. Only changed chunks cost an embedding. */
+  /* One character's own sheet. Only changed chunks cost an embedding.
+     scope "connections": only the Connections part is read and managed (cheap, done for everyone);
+     scope "all": the whole sheet (done for a character that is acting). A connections-only sync
+     never touches the rest of that character's stored sheet. */
   app.post("/memory/sync-sheet", guard(async (req, res, session) => {
     const characterId = clip(req.body?.characterId, 120);
     const incoming = Array.isArray(req.body?.chunks) ? req.body.chunks.slice(0, MAX_SHEET_CHUNKS) : [];
     if (!characterId) return res.status(400).json({ error: "characterId is required." });
+    const scope = req.body?.scope === "connections" ? "connections" : "all";
+    const inScope = (key) => scope === "all" || String(key || "").startsWith(CONNECTIONS_KEY_PREFIX);
     const wanted = incoming
       .map((chunk) => ({ key: clip(chunk?.key, 80), text: clip(chunk?.text, MAX_CHUNK_CHARS), importance: Math.round(Math.min(100, Math.max(0, Number(chunk?.importance) || 50))) }))
-      .filter((chunk) => chunk.text)
+      .filter((chunk) => chunk.text && inScope(chunk.key))
       .map((chunk) => ({ ...chunk, hash: memoryHash(characterId, SELF_SHEET_TYPE, chunk.text) }));
 
     const existing = await pool.query(
-      "SELECT id, metadata->>'hash' AS hash FROM character_memories WHERE world_code = $1 AND character_id = $2 AND memory_type = $3",
+      "SELECT id, metadata->>'hash' AS hash, metadata->>'key' AS key FROM character_memories WHERE world_code = $1 AND character_id = $2 AND memory_type = $3",
       [session.worldCode, characterId, SELF_SHEET_TYPE],
     );
-    const plan = planSheetSync(existing.rows, wanted);
+    const plan = planSheetSync(existing.rows.filter((row) => inScope(row.key)), wanted);
     if (plan.remove.length) await pool.query("DELETE FROM character_memories WHERE world_code = $1 AND id = ANY($2::int[])", [session.worldCode, plan.remove]);
 
     let added = 0;
@@ -222,9 +228,9 @@ export function registerSemanticMemory(app, { pool, requireDb, getSession, clear
     } catch (error) {
       if (!error?.waiting) throw error;
       /* What was stored stays stored (the hash makes a retry idempotent). */
-      return res.json({ ...waitingBody(error), characterId, kept: plan.keep, added, removed: plan.remove.length });
+      return res.json({ ...waitingBody(error), characterId, scope, kept: plan.keep, added, removed: plan.remove.length });
     }
-    res.json({ ok: true, characterId, kept: plan.keep, added, removed: plan.remove.length });
+    res.json({ ok: true, characterId, scope, kept: plan.keep, added, removed: plan.remove.length });
   }));
 
   /* Important things that happened to characters. */

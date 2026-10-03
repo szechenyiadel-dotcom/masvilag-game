@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
-  chunkText, ownSheetChunks, fieldImportance, chunksFingerprint, sheetSyncJobs, eventMemoryBatch, recallBlock, insertBeforeProtectedTail,
+  chunkText, ownSheetChunks, fieldImportance, chunksFingerprint, sheetSyncJobs, markSheetSynced, recentActorIds, eventMemoryBatch, recallBlock, insertBeforeProtectedTail,
   runSheetSync, runEventFlush, recallMemories, clearRecallCache,
   SHEET_CHUNK_CHARS, MAX_CHUNKS_PER_SHEET, EVENT_MEMORY_MAX_AGE_MS, RECALL_BLOCK_CHARS,
 } from "../src/semanticMemory.js";
@@ -44,15 +44,44 @@ test("A huge sheet keeps its most important chunks, in the original order", () =
   assert.deepEqual(keys, [...keys].sort((a, b) => ["backstory", "likes", "secrets"].indexOf(a.split("#")[0]) - ["backstory", "likes", "secrets"].indexOf(b.split("#")[0]) || Number(a.split("#")[1]) - Number(b.split("#")[1])));
 });
 
-test("Only sheets that changed since the last sync are sent", () => {
-  const people = [{ id: "a", backstory: "x ".repeat(60) }, { id: "b", backstory: "y ".repeat(60) }];
-  const fieldsOf = (c) => ({ backstory: c.backstory });
-  const first = sheetSyncJobs(people, { fieldsOf, synced: {} });
-  assert.deepEqual(first.map((j) => j.characterId), ["a", "b"]);
-  const synced = Object.fromEntries(first.map((j) => [j.characterId, j.fingerprint]));
-  assert.deepEqual(sheetSyncJobs(people, { fieldsOf, synced }), []);
-  people[1].backstory += " new line about her father and the boxing club that matters.";
-  assert.deepEqual(sheetSyncJobs(people, { fieldsOf, synced }).map((j) => j.characterId), ["b"]);
+test("The first sync reads only the Connections part of each sheet", () => {
+  const fields = { name: "Manon", backstory: "b ".repeat(5000), secrets: "s ".repeat(3000), connections: "Brent is my old training partner. ".repeat(60) };
+  const chunks = ownSheetChunks(fields, undefined, { scope: "connections" });
+  assert.ok(chunks.length >= 1 && chunks.every((c) => c.key.startsWith("connections#") && c.text.startsWith("connections: ")));
+  assert.ok(chunks.map((c) => c.text).join(" ").length < 3000, "a few thousand characters, not the whole sheet");
+  assert.deepEqual(ownSheetChunks({ backstory: "b ".repeat(500) }, undefined, { scope: "connections" }), [], "no Connections, nothing to read");
+  const all = ownSheetChunks(fields, undefined, { scope: "all" });
+  assert.ok(chunks.every((c) => all.some((a) => a.key === c.key && a.text === c.text)), "the full sheet contains the very same Connections chunks");
+});
+
+test("Connections are synced for everyone once; the whole sheet only on request, and only what changed", () => {
+  const people = [
+    { id: "a", backstory: "x ".repeat(60), connections: "Brent is a friend of mine and a rival of Rita. ".repeat(3) },
+    { id: "b", backstory: "y ".repeat(60), connections: "Manon is my coach and I trust her. ".repeat(3) },
+  ];
+  const fieldsOf = (c) => ({ backstory: c.backstory, connections: c.connections });
+  const state = {};
+  const first = sheetSyncJobs(people, { fieldsOf, state, scope: "connections" });
+  assert.deepEqual(first.map((j) => [j.characterId, j.scope]), [["a", "connections"], ["b", "connections"]]);
+  assert.ok(first.every((j) => j.chunks.every((c) => c.key.startsWith("connections#"))));
+  first.forEach((job) => markSheetSynced(state, job));
+  assert.deepEqual(sheetSyncJobs(people, { fieldsOf, state, scope: "connections" }), [], "nothing new");
+
+  /* Only the acting character's whole sheet is read, and it includes the Connections part. */
+  const acting = sheetSyncJobs([people[0]], { fieldsOf, state, scope: "all" });
+  assert.equal(acting.length, 1);
+  assert.ok(acting[0].chunks.some((c) => c.key.startsWith("backstory#")) && acting[0].chunks.some((c) => c.key.startsWith("connections#")));
+  markSheetSynced(state, acting[0]);
+  assert.deepEqual(sheetSyncJobs([people[0]], { fieldsOf, state, scope: "all" }), []);
+  assert.equal(state.b.full, undefined, "the other character's whole sheet was never read");
+
+  /* Editing the backstory matters for the whole sheet but not for the Connections-only sync. */
+  people[0].backstory += " Something new about her father and the boxing club that matters a lot.";
+  assert.deepEqual(sheetSyncJobs(people, { fieldsOf, state, scope: "connections" }), []);
+  assert.equal(sheetSyncJobs([people[0]], { fieldsOf, state, scope: "all" }).length, 1);
+  /* Editing Connections is caught by both. */
+  people[1].connections += " Brent is her boyfriend now.";
+  assert.deepEqual(sheetSyncJobs(people, { fieldsOf, state, scope: "connections" }).map((j) => j.characterId), ["b"]);
   assert.notEqual(chunksFingerprint(first[0].chunks), chunksFingerprint(first[1].chunks));
 });
 
@@ -181,6 +210,21 @@ test("Recall that keeps failing is switched off for a while instead of slowing e
   clearRecallCache();
 });
 
+test("Characters that acted lately are the ones whose whole sheet is read", () => {
+  const w = { meId: "me", chars: ["manon", "brent", "rita"].map((id) => ({ id })), socialEvents: [
+    { actorId: "me", ts: NOW - 1000, type: "post" },
+    { actorId: "manon", ts: NOW - 2000, type: "comment" },
+    { actorId: "rita", ts: NOW - 3000, type: "follow" },
+    { actorId: "brent", ts: NOW - 4000, type: "dm-message" },
+    { actorId: "manon", ts: NOW - 5000, type: "post" },
+    { actorId: "ghost", ts: NOW - 6000, type: "post" },
+    { actorId: "rita", ts: NOW - 31 * 60 * 1000, type: "post" },
+  ] };
+  assert.deepEqual(recentActorIds(w, { ...helpers }), ["manon", "brent"]);
+  assert.deepEqual(recentActorIds(w, { ...helpers, limit: 1 }), ["manon"]);
+  assert.deepEqual(recentActorIds({ socialEvents: [] }, helpers), []);
+});
+
 test("App wiring: recall before player-facing replies, own-sheet sync and event flush by world changes", () => {
   const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
   assert.match(source, /const \{ memory, \.\.\.askOptions \} = options;/);
@@ -188,11 +232,74 @@ test("App wiring: recall before player-facing replies, own-sheet sync and event 
   assert.match(source, /if \(charId && latestText\) forward\.memory = \{ ids: \[charId\], query: latestText \};/);
   assert.match(source, /memory: \{ ids: groupAiIds\.slice\(0, 4\)/);
   assert.match(source, /memory: \{ ids: \(scene\.cast \|\| \[\]\)\.filter\(\(id\) => !isHuman\(w, id\)\)\.slice\(0, 4\)/);
-  assert.match(source, /sheetSyncJobs\(w\.chars,/);
+  assert.match(source, /syncSheetMemory\(w, w\.chars, "connections"\)/, "everyone: Connections only");
+  assert.match(source, /recentActorIds\(wRef\.current, \{ isHuman, charById \}\)/, "whole sheet: only characters that acted lately");
+  assert.match(source, /syncSheetMemory\(wRef\.current, acted, "all"\)/);
+  assert.match(source, /await ensureActingSheetMemory\(w, memory\.ids\);\s*const byCharacter = await recallMemories/, "characters in a player-facing exchange are read first");
+  assert.ok(!source.includes("sim.semanticMemory"), "no world-state bookkeeping for the memory sync");
   assert.match(source, /eventMemoryBatch\(wRef\.current, \{ isHuman, charById \}\)/);
   assert.match(source, /e\.semMem = 1/);
   assert.match(source, /st\.timer = setTimeout\(runMemorySync, 20000\)/);
   const proxy = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
   assert.match(proxy, /memory_type <> 'self_sheet'/, "a restart must not wipe the characters' own-sheet memory");
   assert.match(proxy, /registerSemanticMemory\(app,/);
+});
+
+/* The real sync functions of App.jsx, run against a fake server. */
+import vm from "node:vm";
+import { createRequire as createRequireForApp } from "node:module";
+import { sheetSyncJobs as realSheetSyncJobs, markSheetSynced as realMarkSheetSynced, runSheetSync as realRunSheetSync } from "../src/semanticMemory.js";
+const requireApp = createRequireForApp(import.meta.url);
+const { parse: parseApp } = requireApp("@babel/parser");
+const appSource = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+const appAst = parseApp(appSource, { sourceType: "module", plugins: ["jsx"] });
+const pickApp = (names) => appAst.program.body
+  .filter((node) => names.includes(node.id?.name) || (node.declarations || []).some((d) => names.includes(d.id?.name)))
+  .map((node) => appSource.substring(node.start, node.end)).join("\n");
+
+function syncHarness() {
+  const requests = [];
+  const people = {
+    manon: { id: "manon", backstory: "Grew up by the lake. ".repeat(80), connections: "Brent is my training partner. ".repeat(10) },
+    brent: { id: "brent", backstory: "Works nights at the gym. ".repeat(80), connections: "Manon is my coach. ".repeat(10) },
+  };
+  const context = vm.createContext({
+    sheetSyncJobs: realSheetSyncJobs, markSheetSynced: realMarkSheetSynced, runSheetSync: realRunSheetSync,
+    sheetFields: (c) => ({ backstory: c.backstory, connections: c.connections }),
+    flattenSheetValue: (v) => String(v),
+    apiJson: async (path, options) => {
+      const body = JSON.parse(options.body);
+      requests.push({ path, scope: body.scope, characterId: body.characterId, chars: body.chunks.reduce((n, c) => n + c.text.length, 0) });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { ok: true };
+    },
+    charById: (w, id) => people[id] || null,
+    isHuman: (w, id) => id === "me",
+    setTimeout, Promise, Map, Set, String, Array, Object, JSON,
+  });
+  vm.runInContext(pickApp(["SEMANTIC_SYNC", "semanticSyncState", "memorySheetText", "syncSheetMemory", "ensureActingSheetMemory"]), context);
+  return { context, requests, w: { code: "W", chars: Object.values(people) } };
+}
+
+test("App: everyone gets only their Connections read; a character's whole sheet is read when it acts, once", async () => {
+  const { context, requests, w } = syncHarness();
+  await context.syncSheetMemory(w, w.chars, "connections");
+  assert.deepEqual(requests.map((r) => [r.characterId, r.scope]), [["manon", "connections"], ["brent", "connections"]]);
+  assert.ok(requests.every((r) => r.chars < 3500), "a few thousand characters per sheet, not the backstory");
+
+  requests.length = 0;
+  await context.ensureActingSheetMemory(w, ["manon", "me"]);
+  assert.deepEqual(requests.map((r) => [r.characterId, r.scope]), [["manon", "all"]], "only the acting character, never the player or the bystander");
+  assert.ok(requests[0].chars > 1500, "the rest of the sheet is read now");
+
+  requests.length = 0;
+  await context.ensureActingSheetMemory(w, ["manon"]);
+  await context.syncSheetMemory(w, w.chars, "connections");
+  assert.deepEqual(requests, [], "nothing changed, nothing sent");
+});
+
+test("App: two exchanges asking for the same character at once cause one sync", async () => {
+  const { context, requests, w } = syncHarness();
+  await Promise.all([context.ensureActingSheetMemory(w, ["brent"]), context.ensureActingSheetMemory(w, ["brent"])]);
+  assert.equal(requests.filter((r) => r.characterId === "brent" && r.scope === "all").length, 1);
 });

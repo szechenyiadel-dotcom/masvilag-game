@@ -34,7 +34,7 @@ function fakeDb() {
         return { rows: [] };
       }
       if (/SELECT id, metadata->>'hash' AS hash/.test(sql)) {
-        return { rows: rows.filter((r) => r.world_code === params[0] && r.character_id === params[1] && r.memory_type === params[2]).map((r) => ({ id: r.id, hash: r.metadata.hash })) };
+        return { rows: rows.filter((r) => r.world_code === params[0] && r.character_id === params[1] && r.memory_type === params[2]).map((r) => ({ id: r.id, hash: r.metadata.hash, key: r.metadata.key })) };
       }
       if (/SELECT metadata->>'hash' AS hash/.test(sql)) {
         return { rows: rows.filter((r) => r.world_code === params[0] && params[1].includes(r.metadata.hash)).map((r) => ({ hash: r.metadata.hash })) };
@@ -249,4 +249,33 @@ test("An invalid key (Google answers HTTP 400 'API key not valid') is rested for
   /* a real request error (not about the key) still stops at once */
   const strict = createEmbedder({ freeKeys: ["good"], fetchFn: async () => ({ ok: false, status: 400, json: async () => ({ error: { message: "Invalid JSON payload" } }) }), model: "m", dimensions: 2 });
   await assert.rejects(strict.embed("hello"), /Invalid JSON payload/);
+});
+
+const connectionsChunk = { key: "connections#0", text: "Manon: Brent is my old training partner and Rita is my rival from Iron Dragons.", importance: 75 };
+
+test("The Connections part is synced first and alone; the rest of the sheet follows only when the character acts", async () => {
+  const t = setup();
+  try {
+    const first = await t.post("/memory/sync-sheet", { characterId: "manon", scope: "connections", chunks: [connectionsChunk, ...sheetChunks] });
+    assert.deepEqual([first.body.ok, first.body.scope, first.body.added], [true, "connections", 1], "chunks outside Connections are ignored in this scope");
+    assert.equal(t.calls.embed, 1);
+
+    const full = await t.post("/memory/sync-sheet", { characterId: "manon", scope: "all", chunks: [connectionsChunk, ...sheetChunks] });
+    assert.deepEqual([full.body.added, full.body.kept], [2, 1]);
+    assert.equal(t.calls.embed, 3, "Connections is not embedded a second time");
+    assert.equal(t.db.rows.length, 3);
+  } finally { t.close(); }
+});
+
+test("A later Connections-only sync never touches the rest of a character's stored sheet", async () => {
+  const t = setup();
+  try {
+    await t.post("/memory/sync-sheet", { characterId: "manon", scope: "all", chunks: [connectionsChunk, ...sheetChunks] });
+    const changed = { ...connectionsChunk, text: "Manon: Brent is now her coach and Rita is still her rival." };
+    const result = await t.post("/memory/sync-sheet", { characterId: "manon", scope: "connections", chunks: [changed] });
+    assert.deepEqual([result.body.added, result.body.removed, result.body.kept], [1, 1, 0]);
+    assert.equal(t.db.rows.length, 3);
+    assert.ok(sheetChunks.every((c) => t.db.rows.some((r) => r.memory_text === c.text)), "the other parts of the sheet are still there");
+    assert.ok(t.db.rows.some((r) => r.memory_text === changed.text) && !t.db.rows.some((r) => r.memory_text === connectionsChunk.text));
+  } finally { t.close(); }
 });
