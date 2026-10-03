@@ -113,22 +113,33 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
   };
 
   if (fastRestart) {
-    // Restart World: start EVERY profile read immediately. Each worker yields
-    // once before flattening its sheet so mobile Safari can paint/respond instead
-    // of doing twenty large synchronous sheet conversions in one long JS task.
-    progress({ phase: "profile", owner: "", completed: 0, started: people.length, total: people.length });
-    await Promise.all(people.map(async (character, index) => {
+    // Prepare large sheet strings cooperatively so mobile Safari can keep
+    // painting/responding. No AI request is serialized by this preparation:
+    // once every prompt is ready, ALL profile requests are launched together.
+    const jobs = [];
+    for (let index = 0; index < people.length; index += 1) {
+      const character = people[index];
       await yieldToUi();
       sheets[character.id] = fullSheetText(character, undefined, world);
-      const roster = people
-        .filter((other) => other.id !== character.id)
-        .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
+      jobs.push({
+        character,
+        index,
+        roster: people
+          .filter((other) => other.id !== character.id)
+          .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) })),
+        fieldNames: Object.keys(sheetFields(character, world)),
+      });
+    }
+
+    progress({ phase: "profile", owner: "", completed: 0, started: people.length, total: people.length });
+
+    await Promise.all(jobs.map(async ({ character, index, roster, fieldNames }) => {
       const result = await analyze({
         stage: "profile",
         owner: character.id,
         roster,
         ownSheet: sheets[character.id],
-        fieldNames: Object.keys(sheetFields(character, world)),
+        fieldNames,
         language,
         restartKeyOffset: index % 7,
       });
