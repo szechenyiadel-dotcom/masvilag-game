@@ -7,6 +7,7 @@ import {
   isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN, planGroqRequest,
   isGroqUtilitySource, groqCarriesWhole, estimateGroqTokens, groqPaceMaxWaitMs, createGroqPacer, groqRetryMs, GROQ_UTILITY_CHAIN, GROQ_UTILITY_SOURCES,
   createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson,
+  PAID_INPUT_PROVIDERS, paidMaxInputChars, planCharBudget, createUsageMeter, createRefusalTracker, orderByRefusals,
 } from "../server/aiPolicy.js";
 
 const require = createRequire(import.meta.url);
@@ -22,7 +23,7 @@ const pick = (names) => ast.program.body
 const NAMES = [
   "MISTRAL_API_KEY", "MISTRAL_API_KEY_2", "MISTRAL_MODEL", "GROQ_API_KEY", "GROQ_API_KEY_2", "GROQ_MODEL", "GROQ_MODEL_2",
   "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_MODEL_ENV", "GEMINI_PAID_KEY", "GEMINI_FREE_KEYS", "GEMINI_KEYS", "AI_ALLOW_PAID_BACKGROUND",
-  "AI_GROQ_MAX_INPUT_CHARS", "AI_PROMPT_DEBUG", "AI_GATE", "GEMINI_LEDGER", "GEMINI_MODELS", "groqRequestSize",
+  "AI_GROQ_MAX_INPUT_CHARS", "AI_PROMPT_DEBUG", "AI_GATE", "AI_REFUSALS", "GEMINI_LEDGER", "GEMINI_MODELS", "groqRequestSize",
   "extractText", "proxyErrorMessage", "configuredAIProvider", "aiRequestText", "aiRequestChars", "inferAIRequestSource",
   "providerAllowedForBody", "taskProviderOrder", "healthyProvider", "providerCooldownMs", "providerModel", "parseRetryAfterMs",
   "safeProviderMessage", "markProviderFailure", "markProviderSuccess", "summarizeProviderFailures", "logFullAIPromptDebug",
@@ -36,7 +37,7 @@ function gate(env, scripted) {
     console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error,
     isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN,
-    isGroqUtilitySource, groqCarriesWhole, GROQ_UTILITY_CHAIN, groqRetryMs, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson,
+    isGroqUtilitySource, groqCarriesWhole, GROQ_UTILITY_CHAIN, groqRetryMs, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson, createRefusalTracker, orderByRefusals,
     callMessageProvider: async (provider, body) => { calls.push(provider); return scripted(provider, body); },
   });
   vm.runInContext(pick(NAMES), context);
@@ -178,14 +179,15 @@ function groqPath({ env = {}, respond, pacer = createGroqPacer() } = {}) {
     process: { env }, console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error, AbortController, setTimeout, clearTimeout,
     planGroqRequest, isForegroundRequest, estimateGroqTokens, groqPaceMaxWaitMs,
+    PAID_INPUT_PROVIDERS, paidMaxInputChars, planCharBudget, createUsageMeter,
     GROQ_PACER: pacer,
     fetch: async (url, options) => {
       sent.push(JSON.parse(options.body));
       return respond({ url, options });
     },
   });
-  vm.runInContext(pick(["AI_UPSTREAM_TIMEOUT_MS", "GROQ_API_KEY_2", "GROQ_MODEL", "GROQ_MODEL_2", "AI_GATE", "providerCooldownMs", "groqSiblingReady", "groqRequestSize", "extractText", "aiRequestText", "aiRequestChars", "preservePromptEdges", "buildCompatibleChatPayload", "normalizeOpenAIResponse", "upstreamTimeoutFor", "proxyCompatibleMessage"]), context);
-  return { context, sent, pacer };
+  vm.runInContext(pick(["AI_UPSTREAM_TIMEOUT_MS", "GROQ_API_KEY_2", "GROQ_MODEL", "GROQ_MODEL_2", "PAID_MAX_INPUT_CHARS", "AI_USAGE", "AI_GATE", "providerCooldownMs", "groqSiblingReady", "groqRequestSize", "extractText", "aiRequestText", "aiRequestChars", "preservePromptEdges", "buildCompatibleChatPayload", "normalizeOpenAIResponse", "upstreamTimeoutFor", "proxyCompatibleMessage"]), context);
+  return { context, sent, pacer, usage: vm.runInContext("AI_USAGE", context) };
 }
 const chatBody = (extra = {}) => ({ source: "dm", system: "S".repeat(9000), messages: [{ role: "user", content: "U".repeat(30000) }], max_tokens: 1024, ...extra });
 const textLength = (payload) => payload.messages.reduce((n, m) => n + m.content.length, 0);
@@ -579,4 +581,122 @@ test("Gemini: a filtered answer (finishReason SAFETY) is a block too; a plain em
 test("The model that actually answered is the one reported, not always the first on the ladder", async () => {
   const source = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
   assert.match(source, /model: result\?\.model \|\| providerModel\("gemini", body\)/);
+});
+
+/* ---------- the paid providers: a ceiling on what they are sent, and a meter on what they use ---------- */
+
+const paidUrl = { openrouter3: "https://openrouter.ai/api/v1/chat/completions", mistral: "https://api.mistral.ai/v1/chat/completions", mistral2: "https://api.mistral.ai/v1/chat/completions" };
+const callPaid = (context, provider, body) => context.proxyCompatibleMessage(provider, "key", "m", paidUrl[provider], body);
+const bigBody = (extra = {}) => ({
+  source: "dm",
+  system: "SYSTEM RULES ".repeat(2500),                       /* ~32k */
+  messages: [{ role: "user", content: "WORLD " .repeat(4000) + "\n[[PROTECTED_TAIL]]\nThe player just wrote: hello" }],   /* ~24k + tail */
+  max_tokens: 800,
+  ...extra,
+});
+const sentChars = (payload) => payload.messages.reduce((n, m) => n + m.content.length, 0);
+
+test("DeepSeek and Mistral are sent at most the ceiling, whatever the prompt grew to, and the protected tail survives", async () => {
+  for (const provider of ["openrouter3", "mistral", "mistral2"]) {
+    const { context, sent } = groqPath({ env: {} });
+    const body = { ...bigBody(), system: "S".repeat(40000), messages: [{ role: "user", content: "W".repeat(80000) + "\n[[PROTECTED_TAIL]]\nThe player just wrote: hello" }] };
+    await callPaid(context, provider, body);
+    assert.equal(sent.length, 1);
+    assert.ok(sentChars(sent[0]) <= 60000 + 200, provider + " sent " + sentChars(sent[0]));
+    const last = sent[0].messages[sent[0].messages.length - 1].content;
+    assert.match(last, /\[\[PROTECTED_TAIL\]\]\nThe player just wrote: hello$/, "what the player just said is never cut");
+  }
+});
+
+test("A prompt under the ceiling goes out exactly as it is", async () => {
+  const { context, sent } = groqPath({ env: {} });
+  await callPaid(context, "mistral", { source: "dm", system: "short system", messages: [{ role: "user", content: "short question" }], max_tokens: 300 });
+  assert.equal(sent[0].messages[0].content, "short system");
+  assert.equal(sent[0].messages[1].content, "short question");
+});
+
+test("PAID_MAX_INPUT_CHARS moves the ceiling, and 0 switches it off", async () => {
+  const body = { source: "dm", system: "S".repeat(10000), messages: [{ role: "user", content: "W".repeat(30000) }], max_tokens: 300 };
+  const lowered = groqPath({ env: { PAID_MAX_INPUT_CHARS: "20000" } });
+  await callPaid(lowered.context, "openrouter3", body);
+  assert.ok(sentChars(lowered.sent[0]) <= 20200, "sent " + sentChars(lowered.sent[0]));
+  const off = groqPath({ env: { PAID_MAX_INPUT_CHARS: "0" } });
+  await callPaid(off.context, "openrouter3", { ...body, messages: [{ role: "user", content: "W".repeat(150000) }] });
+  assert.equal(sentChars(off.sent[0]), 10000 + 150000, "no ceiling, nothing cut");
+});
+
+test("The paid ceiling does not touch the free providers (Groq has its own budget, other providers none)", async () => {
+  const other = groqPath({ env: {} });
+  await other.context.proxyCompatibleMessage("openrouter", "key", "m", "https://openrouter.ai/x", { ...bigBody(), system: "S".repeat(40000) });
+  assert.equal(sentChars(other.sent[0]), 40000 + bigBody().messages[0].content.length, "the free OpenRouter route is left alone");
+});
+
+test("What a paid provider reports using is metered: prompt, answer, cached and reasoning tokens, per provider and per kind of request", async () => {
+  const usage = { prompt_tokens: 12000, completion_tokens: 350, prompt_tokens_details: { cached_tokens: 9000 }, completion_tokens_details: { reasoning_tokens: 120 }, cost: 0.0012 };
+  const reply = () => ({ ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ choices: [{ message: { content: "hello" } }], usage }) });
+  const { context, usage: meter } = groqPath({ env: {}, respond: reply });
+  await callPaid(context, "openrouter3", { source: "dm", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
+  await callPaid(context, "mistral", { source: "scene", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
+  await callPaid(context, "mistral", { source: "scene", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
+  const snapshot = meter.snapshot();
+  assert.equal(snapshot.calls, 3);
+  assert.equal(snapshot.promptTokens, 36000);
+  assert.equal(snapshot.completionTokens, 1050);
+  assert.equal(snapshot.cachedTokens, 27000);
+  assert.equal(snapshot.reasoningTokens, 360);
+  assert.equal(snapshot.byProvider.mistral.calls, 2);
+  assert.equal(snapshot.bySource.scene.promptTokens, 24000);
+  assert.equal(snapshot.byProviderSource["openrouter3/dm"].calls, 1);
+  assert.ok(Math.abs(snapshot.cost - 0.0036) < 1e-9);
+});
+
+test("A reply without a usage block costs nothing in the meter and breaks nothing", async () => {
+  const { context, usage: meter } = groqPath({ env: {} });
+  const result = await callPaid(context, "mistral", { source: "dm", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
+  assert.equal(result.ok, true);
+  assert.equal(meter.snapshot().calls, 0);
+});
+
+test("proxy.js exposes the day's usage behind a session, and logs a line for every paid call", () => {
+  assert.match(source, /app\.get\("\/ai\/usage", async \(req, res\) => \{\s*const session = await getSessionIdentity\(req\)\.catch\(\(\) => null\);\s*if \(!session\) return res\.status\(401\)/);
+  assert.match(source, /console\.info\("\[ai-usage\]"/);
+  assert.match(source, /\[ai-usage-day\]/);
+});
+
+/* ---------- a provider that keeps refusing is asked last ---------- */
+
+test("DeepSeek keeps refusing DMs: after a few refusals Mistral is asked first, and DeepSeek is still there as the last resort", async () => {
+  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
+  const order = () => Array.from(context.taskProviderOrder("anthropic", jsonBody("dm")));
+  assert.deepEqual(order(), ["openrouter3", "mistral", "mistral2"], "to begin with, DeepSeek is first");
+  for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "write " + i }] }));
+  assert.deepEqual(order(), ["mistral", "mistral2", "openrouter3"]);
+  calls.length = 0;
+  const result = await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "write again" }] }));
+  assert.equal(result.ok, true);
+  assert.deepEqual(Array.from(calls), ["mistral"], "the refusing provider was not paid for this time");
+});
+
+test("The record is per kind of request: DeepSeek refusing DMs does not demote it for comments", async () => {
+  const { context } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
+  for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "w" + i }] }));
+  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", jsonBody("comments", { foreground: true }))), ["openrouter3", "mistral", "mistral2"]);
+});
+
+test("A provider that refused only now and then stays first: two refusals among many good answers do not demote it", async () => {
+  const script = ["refuse", "refuse", "ok", "ok", "ok", "ok", "ok", "ok"];
+  let n = 0;
+  const { context } = gate(ENV, (provider) => (provider === "openrouter3" && script[n] === "refuse" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
+  for (; n < script.length; n += 1) await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "w" + n }] }));
+  assert.equal(context.taskProviderOrder("anthropic", jsonBody("dm"))[0], "openrouter3");
+  assert.equal(vm.runInContext("AI_REFUSALS.rate('openrouter3','dm')", context), 0.25);
+});
+
+test("A Gemini safety block counts against Gemini for that kind of request, a prose answer to a prose request counts for nothing", async () => {
+  const blocked = gate(ENV, (provider) => (provider === "gemini" ? { ok: false, status: 422, blocked: true, payload: { error: { message: "blocked" } }, provider } : text(provider, '{"ok":true}')));
+  for (let i = 0; i < 4; i += 1) await blocked.context.executeAITask(jsonTask("comments", { messages: [{ role: "user", content: "c" + i }] }));
+  assert.equal(blocked.context.taskProviderOrder("anthropic", jsonBody("comments"))[0], "groq", "Gemini goes to the end for comments");
+  const prose = gate(ENV, (provider) => text(provider, REFUSAL));
+  for (let i = 0; i < 6; i += 1) await prose.context.executeAITask({ requestedProvider: "anthropic", source: "dm", body: { source: "dm", system: "narrator", messages: [{ role: "user", content: "p" + i }] } });
+  assert.equal(prose.context.taskProviderOrder("anthropic", jsonBody("dm"))[0], "openrouter3", "nothing was recorded for requests that did not ask for JSON");
 });
