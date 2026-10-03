@@ -224,6 +224,36 @@ test("Gemini semantic routing tries free keys 2 through 8 before paid key 1", as
  assert.equal(result.provider, "gemini");
  assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8"]);
 });
+test("Restart profile rotation keeps every free Gemini fallback before paid Gemini and OpenAI", async () => {
+ const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini", OPENAI_API_KEY: "openai-key", OPENAI_ANALYSIS_MODEL: "configured-openai" };
+ for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
+ const attempted = [];
+ const transport = async (url, opts) => {
+  if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+  if (url.endsWith(":generateContent")) {
+   attempted.push(opts.headers["x-goog-api-key"]);
+   const error = new Error("quota");
+   error.status = 429;
+   throw error;
+  }
+  if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  attempted.push(opts.headers.Authorization);
+  return response({ ok: true });
+ };
+ const result = await analyzeStructured(
+  "Complete source",
+  { type: "object" },
+  value => assert.equal(value.ok, true),
+  { env, transport, outputTokens: 1000, semanticStartOffset: 3 }
+ );
+ assert.deepEqual(attempted, [
+  "test-key-5","test-key-6","test-key-7","test-key-8",
+  "test-key-2","test-key-3","test-key-4",
+  "test-key-1","Bearer openai-key"
+ ]);
+ assert.equal(result.provider, "openai");
+});
+
 test("Paid Gemini key 1 is used only after free Gemini keys 2 through 8 fail", async () => {
  const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini" };
  for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
@@ -405,6 +435,11 @@ test("Restart starts every profile together, keeps baselines bounded, and normal
  assert.ok(restart.maxActive.baseline >= 2);
  assert.ok(restart.maxActive.baseline <= 4);
  assert.ok(restart.calls.every(call => call.restartFast === true));
+ const profileIndexes = restart.calls
+  .filter(call => call.stage === "profile")
+  .map(call => call.restartProfileIndex)
+  .sort((a,b) => a-b);
+ assert.deepEqual(profileIndexes, people.map((_, index) => index));
 });
 
 test("Only Restart World enables all-profile launch; normal queue and bounded baselines remain", () => {
