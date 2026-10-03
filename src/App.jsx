@@ -1,7 +1,8 @@
-import { restoreBaselineGraph } from "./bondAnalysis.js";
+import { BOND_ANALYSIS_VERSION, restoreBaselineGraph } from "./bondAnalysis.js";
 import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext } from "./bondClient.js";
 const bondAnalysisBusy = new Set();
 const bondRestartBusy = new Set();
+const bondRestartRefreshBusy = new Set();
 const bondAnalysisRetry = new Map();
 /* MÁSVILÁG RECOVERY v99.5 — SCALABLE LAZY MEDIA STORAGE — 20260816_0045 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -38910,6 +38911,85 @@ function resetSocialProfileForFreshRun(profile) {
 /* MÁSVILÁG RESTART FRESH RELATIONSHIP REREAD v1 */
 
 
+function ensureInstantRestartRelationshipBaselines(w) {
+  const ids = allSubjects(w).map((person) => person.id);
+  const previous = w.relationshipBaselines && typeof w.relationshipBaselines === "object"
+    ? w.relationshipBaselines
+    : {};
+  const live = w.rels && typeof w.rels === "object" ? w.rels : {};
+  const next = {};
+
+  const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+
+  for (const from of ids) {
+    for (const to of ids) {
+      if (from === to) continue;
+      const key = from + ">" + to;
+      const seed = structuredClone(previous[key] || live[key] || {});
+      const levels = {
+        sentiment: finite(seed.levels?.sentiment, finite(seed.score, 0)),
+        trust: finite(seed.levels?.trust, finite(seed.trust, 0)),
+        attraction: finite(seed.levels?.attraction, finite(seed.attraction, 0)),
+        tension: finite(seed.levels?.tension, finite(seed.tension, 0)),
+      };
+      const type = String(seed.type || seed.bond || "Semleges");
+      const publicFace = String(seed.publicFace || seed.mood || seed.why || "");
+      const hiddenFeelings = Object.prototype.hasOwnProperty.call(seed, "hiddenFeelings")
+        ? seed.hiddenFeelings
+        : (seed.hidden || null);
+      const summary = String(seed.summary || seed.why || publicFace || type);
+      const description = String(seed.description || summary || publicFace || type);
+
+      next[key] = {
+        ...seed,
+        from,
+        to,
+        type,
+        bond: type,
+        status: seed.status || "semleges",
+        layers: Array.isArray(seed.layers) ? seed.layers : [],
+        publicFace,
+        hiddenFeelings,
+        whoKnows: Array.isArray(seed.whoKnows) ? seed.whoKnows : (hiddenFeelings ? [from] : []),
+        history: Array.isArray(seed.history) ? seed.history : [],
+        dynamics: Array.isArray(seed.dynamics) ? seed.dynamics : [],
+        wants: Array.isArray(seed.wants) ? seed.wants : [],
+        summary,
+        description,
+        levels,
+        evidence: Array.isArray(seed.evidence) ? seed.evidence : [],
+        factEvidence: Array.isArray(seed.factEvidence) ? seed.factEvidence : [],
+        source: seed.source || "logikai következtetés",
+        score: levels.sentiment,
+        attraction: levels.attraction,
+        trust: levels.trust,
+        tension: levels.tension,
+        mood: seed.mood || publicFace,
+        hidden: hiddenFeelings || "",
+        why: seed.why || summary,
+        fixed: !!seed.fixed,
+        freshFromSheet: true,
+      };
+    }
+  }
+
+  w.relationshipBaselines = next;
+  return next;
+}
+
+function markRestartAnalysisUsableImmediately(w) {
+  const previous = w.bondAnalysis && typeof w.bondAnalysis === "object" ? w.bondAnalysis : {};
+  w.bondAnalysis = {
+    ...previous,
+    version: BOND_ANALYSIS_VERSION,
+    source: bondSourceFingerprint(w, allSubjects),
+    profiles: previous.profiles && typeof previous.profiles === "object" ? previous.profiles : {},
+    recalculated: 0,
+    recalculatedBonds: 0,
+    refreshPending: true,
+  };
+}
+
 function restartWorldHistoryInPlace(w) {
   if (!w || typeof w !== "object") return false;
 
@@ -39035,11 +39115,6 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
     bondRestartBusy.add(w.code);
     setRestartBusy(true);
 
-    // Restart may join an already-running background read. The cache key stays
-    // identical, so completed/in-flight work is reused instead of duplicated.
-    const ownsAnalysisLock = !bondAnalysisBusy.has(w.code);
-    if (ownsAnalysisLock) bondAnalysisBusy.add(w.code);
-
     const retryTransientRestartIo = async (operation) => {
       let lastError;
       for (let attempt = 0; attempt < 12; attempt += 1) {
@@ -39055,30 +39130,66 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
       throw lastError;
     };
 
+    let refreshSnapshot = null;
+    let refreshNeeded = false;
+
     try {
       const draft = cloneWorldState(w);
-      if (!analysisReady(draft, allSubjects)) {
-        const result = await rebuildBondGraph(draft, {
-          subjects: allSubjects,
-          api: apiJson,
-          language: worldLanguage(draft),
-          fastRestart: true,
-        });
-        installBondGraph(draft, result, allSubjects);
-      } else {
-        draft.bondAnalysis.recalculated = 0;
-        draft.bondAnalysis.recalculatedBonds = 0;
-      }
+
+      // Restart must never wait for AI. Restore a complete relationship graph
+      // immediately from existing baselines (falling back to current directed
+      // bonds only for missing pairs), then refresh from sheets in the background.
+      refreshNeeded = !analysisReady(draft, allSubjects);
+      ensureInstantRestartRelationshipBaselines(draft);
       restartWorldHistoryInPlace(draft);
+      markRestartAnalysisUsableImmediately(draft);
+
       const saved = await retryTransientRestartIo(() => serverSaveWorld(draft, { bondReset: true }));
       update(n => { for (const key of Object.keys(n)) delete n[key]; Object.assign(n, saved.world); });
       setRestartConfirm(false);
+
+      if (refreshNeeded) refreshSnapshot = cloneWorldState(saved.world);
     } catch (error) {
       setErr(error.message);
     } finally {
       setRestartBusy(false);
       bondRestartBusy.delete(w.code);
-      if (ownsAnalysisLock) bondAnalysisBusy.delete(w.code);
+    }
+
+    if (refreshSnapshot && !bondRestartRefreshBusy.has(w.code)) {
+      bondRestartRefreshBusy.add(w.code);
+      setTimeout(() => {
+        const refresh = async () => {
+          let lastError = null;
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              const result = await rebuildBondGraph(refreshSnapshot, {
+                subjects: allSubjects,
+                api: apiJson,
+                language: worldLanguage(refreshSnapshot),
+                force: true,
+                fastRestart: true,
+              });
+              update(n => {
+                try {
+                  installBondGraph(n, result, allSubjects);
+                  if (n.bondAnalysis) n.bondAnalysis.refreshPending = false;
+                } catch (error) {
+                  console.warn("[restart-background-bond-install]", error.message);
+                }
+              });
+              bondAnalysisRetry.delete(w.code);
+              return;
+            } catch (error) {
+              lastError = error;
+              await new Promise(resolve => setTimeout(resolve, 2500 * (attempt + 1)));
+            }
+          }
+          console.warn("[restart-background-bond-refresh]", lastError?.message || "failed");
+        };
+
+        void refresh().finally(() => bondRestartRefreshBusy.delete(w.code));
+      }, 0);
     }
   };
   

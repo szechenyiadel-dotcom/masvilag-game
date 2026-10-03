@@ -466,6 +466,36 @@ test("Restart fast mode retries a transient Load failed instead of failing the w
  assert.equal(Object.keys(result.baselines).length, 2);
 });
 
+test("Restart saves immediately before any background sheet reread", () => {
+ const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+ const start = source.indexOf("const restartWorldHistory = async () => {");
+ assert.ok(start >= 0);
+ const end = source.indexOf("\n  };", start);
+ assert.ok(end > start);
+ const block = source.slice(start, end);
+ const saveIndex = block.indexOf("serverSaveWorld(draft, { bondReset: true })");
+ const backgroundIndex = block.indexOf("rebuildBondGraph(refreshSnapshot");
+ assert.ok(saveIndex >= 0);
+ assert.ok(backgroundIndex > saveIndex);
+ assert.ok(block.includes("ensureInstantRestartRelationshipBaselines(draft)"));
+ assert.ok(block.includes("markRestartAnalysisUsableImmediately(draft)"));
+ assert.ok(block.includes("setRestartConfirm(false)"));
+});
+
+test("Instant restart baseline helper fills every directed pair without AI", () => {
+ const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+ const start = source.indexOf("function ensureInstantRestartRelationshipBaselines(w) {");
+ assert.ok(start >= 0);
+ const end = source.indexOf("\n}\n\nfunction markRestartAnalysisUsableImmediately", start);
+ assert.ok(end > start);
+ const block = source.slice(start, end);
+ assert.ok(block.includes("for (const from of ids)"));
+ assert.ok(block.includes("for (const to of ids)"));
+ assert.ok(block.includes('previous[key] || live[key] || {}'));
+ assert.ok(block.includes('source: seed.source || "logikai következtetés"'));
+ assert.ok(block.includes("freshFromSheet: true"));
+});
+
 test("Restart World stays seamless in UI while preserving simultaneous profile launch", () => {
  const appSource = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
  assert.equal((appSource.match(/fastRestart:\s*true/g) || []).length, 1);
