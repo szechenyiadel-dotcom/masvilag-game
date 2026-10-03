@@ -442,16 +442,44 @@ test("Restart starts every profile together, keeps baselines bounded, and normal
  assert.deepEqual(profileIndexes, people.map((_, index) => index));
 });
 
-test("Only Restart World enables all-profile launch; normal queue and bounded baselines remain", () => {
+test("Restart fast mode retries a transient Load failed instead of failing the whole rebuild", async () => {
+ const chars = [{ id: "a", name: "a", backstory: "a" }, { id: "b", name: "b", backstory: "b" }];
+ const attempts = new Map();
+ const api = async (_, options) => {
+  const row = JSON.parse(options.body);
+  const key = row.stage + ":" + row.owner;
+  const count = (attempts.get(key) || 0) + 1;
+  attempts.set(key, count);
+  if (row.stage === "profile" && row.owner === "a" && count === 1) throw new Error("Load failed");
+  return {
+   pending: false,
+   cached: false,
+   cacheKey: key,
+   hash: sheetHash(row.ownSheet),
+   result: row.stage === "profile"
+    ? profile(row.owner)
+    : { bonds: row.roster.map(target => bond(row.owner, target.id)) },
+  };
+ };
+ const result = await rebuildBondGraph({ chars }, { subjects: w => w.chars, api, fastRestart: true });
+ assert.equal(attempts.get("profile:a"), 2);
+ assert.equal(Object.keys(result.baselines).length, 2);
+});
+
+test("Restart World stays seamless in UI while preserving simultaneous profile launch", () => {
  const appSource = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
  assert.equal((appSource.match(/fastRestart:\s*true/g) || []).length, 1);
  assert.ok(appSource.includes("bondRestartBusy"));
- assert.ok(appSource.includes("started"));
+ assert.ok(appSource.includes("restartBusy"));
+ assert.ok(appSource.includes('tt("Újraindítás…", "Restarting…")'));
+ assert.ok(!appSource.includes("Profiles: "));
+ assert.ok(!appSource.includes("Profilok: "));
 
  const clientSource = fs.readFileSync(new URL("../src/bondClient.js", import.meta.url), "utf8");
  assert.ok(clientSource.includes("await Promise.all(jobs.map"));
  assert.ok(clientSource.includes("requestAnimationFrame"));
  assert.ok(clientSource.includes("restartProfileIndex: index"));
+ assert.ok(clientSource.includes("transientRestartError"));
  assert.ok(clientSource.includes("baselineConcurrency"));
 
  const serverSource = fs.readFileSync(new URL("../server/bondAnalysis.js", import.meta.url), "utf8");
