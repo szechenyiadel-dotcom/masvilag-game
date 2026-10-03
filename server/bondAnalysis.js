@@ -339,21 +339,22 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
   const active = new Set();
   let queue = Promise.resolve();
 
-  // Explicit Restart World requests get a small concurrent lane. Every normal
-  // background/manual analysis still uses the original single-file queue.
-  const restartConcurrency = 4;
-  let restartInFlight = 0;
-  const restartWaiters = [];
-  const runRestartTask = async (task) => {
-    if (restartInFlight >= restartConcurrency) {
-      await new Promise((resolve) => restartWaiters.push(resolve));
+  // Restart World profiles are intentionally not queued: all profile reads may
+  // start together. Only the much heavier baseline/relationship generation stays
+  // capped. Normal/background/manual analysis still uses the original serial queue.
+  const restartBaselineConcurrency = 4;
+  let restartBaselineInFlight = 0;
+  const restartBaselineWaiters = [];
+  const runRestartBaselineTask = async (task) => {
+    if (restartBaselineInFlight >= restartBaselineConcurrency) {
+      await new Promise((resolve) => restartBaselineWaiters.push(resolve));
     }
-    restartInFlight += 1;
+    restartBaselineInFlight += 1;
     try {
       return await task();
     } finally {
-      restartInFlight -= 1;
-      const next = restartWaiters.shift();
+      restartBaselineInFlight -= 1;
+      const next = restartBaselineWaiters.shift();
       if (next) next();
     }
   };
@@ -428,8 +429,12 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
           }
         };
 
-        if (restartFast) {
-          void runRestartTask(work);
+        if (restartFast && stage === "profile") {
+          // All profile reads begin immediately during Restart World.
+          void work();
+        } else if (restartFast) {
+          // Relationship baselines are larger, so keep them safely bounded.
+          void runRestartBaselineTask(work);
         } else {
           queue = queue.catch(() => {}).then(work);
         }
