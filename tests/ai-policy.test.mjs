@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   PAID_PROVIDERS, isForegroundRequest, filterProvidersForBody, selectGeminiKeys,
-  backgroundWaitSeconds, buildWaitingResult,
+  backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs,
   BACKGROUND_WAIT_MIN_SECONDS, BACKGROUND_WAIT_MAX_SECONDS, BACKGROUND_WAIT_DEFAULT_SECONDS,
 } from "../server/aiPolicy.js";
 
@@ -86,4 +86,15 @@ test("proxy.js wires the policy: paid fallback, emergency OpenAI and the silent 
   assert.match(source, /buildWaitingResult\(/);
   assert.match(source, /!result\?\.waiting && priority < 50/);
   assert.match(source, /foreground, \.\.\.rest/, "the flag must not be forwarded to Anthropic");
+});
+
+test("Gemini keys rest by what Google said: bad key a day, spent credit hours, spent quota half an hour", () => {
+  const hour = 3600 * 1000;
+  assert.equal(geminiKeyRestMs(401), 24 * hour);
+  assert.equal(geminiKeyRestMs(403), 24 * hour);
+  assert.equal(geminiKeyRestMs(400, "API key not valid. Please pass a valid API key."), 24 * hour);
+  assert.equal(geminiKeyRestMs(400, "Invalid JSON payload"), 0, "a real request error is not the key's fault");
+  assert.equal(geminiKeyRestMs(402, "Your prepayment credits are depleted."), 6 * hour);
+  assert.equal(geminiKeyRestMs(429), hour / 2);
+  assert.equal(geminiKeyRestMs(503), 0);
 });

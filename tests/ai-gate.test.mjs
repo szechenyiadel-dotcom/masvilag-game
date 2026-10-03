@@ -112,3 +112,21 @@ test("AI_ALLOW_PAID_BACKGROUND=1 is the only way background work reaches paid pr
   const { context } = gate({ ...ENV, AI_ALLOW_PAID_BACKGROUND: "1" }, () => ok("x"));
   assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", task(context, "feed-post").body)), ["gemini", "openai"]);
 });
+
+test("A Gemini key running out of prepaid credit (402) does not switch Gemini off for good", () => {
+  const { context } = gate(ENV, () => ok("x"));
+  const aiGate = vm.runInContext("AI_GATE", context);
+  const result = { status: 402, payload: { error: { message: "Your prepayment credits are depleted." } } };
+  const rest = context.markProviderFailure("gemini", "gemini-x", result);
+  assert.equal(rest, 10 * 60 * 1000);
+  assert.ok(!aiGate.providerConfigurationErrors.has("gemini"), "not marked as a broken configuration");
+  assert.ok(context.providerCooldownMs("gemini") > 0, "but it rests for a while");
+  /* every other provider keeps the strict rule: 402/401/403 means the configuration is wrong */
+  context.markProviderFailure("openai", "gpt", { status: 401, payload: { error: { message: "bad key" } } });
+  assert.ok(aiGate.providerConfigurationErrors.has("openai"));
+});
+
+test("proxy.js rests each Gemini key by the error it returned, including spent credit", () => {
+  assert.match(source, /geminiKeyRestMs\(status, proxyErrorMessage\(result && result\.payload, ""\)\)/);
+  assert.match(source, /out of prepaid credit/);
+});

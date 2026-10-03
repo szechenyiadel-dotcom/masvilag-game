@@ -74,3 +74,13 @@ export function buildWaitingResult({ retryAfterSeconds, details = [] }) {
     },
   };
 }
+
+/* How long a Gemini key rests after an error, in ms (0 = it does not rest). Google reports a bad or
+   expired key as HTTP 400 "API key not valid", exhausted prepaid credit as 402, a spent quota as 429. */
+export function geminiKeyRestMs(status, message = "") {
+  const code = Number(status);
+  if ([401, 403].includes(code) || (code === 400 && /api key/i.test(String(message)))) return 24 * 3600 * 1000;
+  if (code === 402) return 6 * 3600 * 1000;
+  if (code === 429) return 30 * 60 * 1000;
+  return 0;
+}

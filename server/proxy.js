@@ -6,6 +6,7 @@ import {
   selectGeminiKeys,
   backgroundWaitSeconds,
   buildWaitingResult,
+  geminiKeyRestMs,
 } from "./aiPolicy.js";
 import { registerSemanticMemory, createEmbedder } from "./semanticMemory.js";
 /* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
@@ -5123,16 +5124,13 @@ async function proxyGeminiMessage(body) {
     last = result;
 
     const status = Number(result && result.status);
-    if ([401, 403, 429].includes(status) && GEMINI_KEYS.length > 1) {
-      const invalidKey = [401, 403].includes(status);
-      GEMINI_KEY_REST_UNTIL.set(
-        keys[i],
-        Date.now() + (invalidKey ? 24 * 60 * 60 * 1000 : 30 * 60 * 1000)
-      );
+    const keyRestMs = geminiKeyRestMs(status, proxyErrorMessage(result && result.payload, ""));
+    if (keyRestMs > 0 && GEMINI_KEYS.length > 1) {
+      GEMINI_KEY_REST_UNTIL.set(keys[i], Date.now() + keyRestMs);
       console.warn(
         "[ai-provider] gemini key #" + (GEMINI_KEYS.indexOf(keys[i]) + 1) +
-        (invalidKey ? " invalid/rejected" : " out of quota") +
-        " — trying the next key"
+        (status === 402 ? " out of prepaid credit" : status === 429 ? " out of quota" : " invalid/rejected") +
+        " — resting it, trying the next key"
       );
       continue;
     }
@@ -5677,6 +5675,17 @@ function markProviderFailure(provider, model, result) {
     AI_GATE.providerCooldownUntil.set(provider, Date.now() + rest);
     AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
     console.warn("[ai-gate] provider-cooldown", `${provider}/${model}`, `status=${status}`, `ms=${rest}`, "reason=in-flight-credit-reservation", message);
+    return rest;
+  }
+
+  /* Gemini 402 = a key's prepaid credit is gone. The key rests on its own (see proxyGeminiMessage);
+     the provider as a whole must not be switched off for good because of it. */
+  if (provider === "gemini" && status === 402) {
+    const rest = 10 * 60 * 1000;
+    AI_GATE.providerConfigurationErrors.delete(provider);
+    AI_GATE.providerCooldownUntil.set(provider, Date.now() + rest);
+    AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
+    console.warn("[ai-gate] provider-cooldown", `${provider}/${model}`, `status=${status}`, `ms=${rest}`, "reason=gemini-key-credit-depleted", message);
     return rest;
   }
 
