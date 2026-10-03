@@ -78,6 +78,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
   let recalculated = 0;
   let recalculatedBonds = 0;
   let profileCompleted = 0;
+  let profileStarted = 0;
   const forceRun = force ? String(Date.now()) + ":" + String(Math.random()) : "";
   const pollDelay = fastRestart ? 500 : 3000;
 
@@ -116,13 +117,15 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
     // Restart World: start EVERY profile read immediately. Each worker yields
     // once before flattening its sheet so mobile Safari can paint/respond instead
     // of doing twenty large synchronous sheet conversions in one long JS task.
-    progress({ phase: "profile", owner: "", completed: 0, started: people.length, total: people.length });
+    progress({ phase: "profile", owner: "", completed: 0, started: 0, total: people.length });
     await Promise.all(people.map(async (character, index) => {
       await yieldToUi();
       sheets[character.id] = fullSheetText(character, undefined, world);
       const roster = people
         .filter((other) => other.id !== character.id)
         .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
+      profileStarted += 1;
+      progress({ phase: "profile", owner: character.name, completed: profileCompleted, started: profileStarted, total: people.length });
       const result = await analyze({
         stage: "profile",
         owner: character.id,
@@ -130,6 +133,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
         ownSheet: sheets[character.id],
         fieldNames: Object.keys(sheetFields(character, world)),
         language,
+        restartProfileIndex: index,
       });
       profiles[character.id] = { profile: result.result, hash: result.hash };
       profileKeys[index] = result.cacheKey;
