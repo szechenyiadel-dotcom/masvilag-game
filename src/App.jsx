@@ -39020,7 +39020,7 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
   const [copied, setCopied] = useState(false);
   const [delAcc, setDelAcc] = useState(false);
   const [restartConfirm, setRestartConfirm] = useState(false);
-  const [restartMsg, setRestartMsg] = useState("");
+  const [restartBusy, setRestartBusy] = useState(false);
   const [pwOld, setPwOld] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
@@ -39031,15 +39031,30 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
    * setters/update/tt do not exist; the settings button therefore crashed with
    * `ReferenceError: restartWorldHistory is not defined`. */
   const restartWorldHistory = async () => {
-    if (bondRestartBusy.has(w.code)) return;
+    if (bondRestartBusy.has(w.code) || restartBusy) return;
     bondRestartBusy.add(w.code);
+    setRestartBusy(true);
 
     // Restart may join an already-running background read. The cache key stays
     // identical, so completed/in-flight work is reused instead of duplicated.
     const ownsAnalysisLock = !bondAnalysisBusy.has(w.code);
     if (ownsAnalysisLock) bondAnalysisBusy.add(w.code);
 
-    setRestartMsg(tt("Teljes kapcsolatháló gyors ellenőrzése…", "Quickly validating the complete bond graph…"));
+    const retryTransientRestartIo = async (operation) => {
+      let lastError;
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        try {
+          return await operation();
+        } catch (error) {
+          lastError = error;
+          const transient = /load failed|failed to fetch|network|fetch|abort|econn|http\s*(429|500|502|503|504)|\b(429|500|502|503|504)\b/i.test(String(error?.message || error || ""));
+          if (!transient) throw error;
+          await new Promise(resolve => setTimeout(resolve, Math.min(3000, 500 + attempt * 250)));
+        }
+      }
+      throw lastError;
+    };
+
     try {
       const draft = cloneWorldState(w);
       if (!analysisReady(draft, allSubjects)) {
@@ -39048,16 +39063,6 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
           api: apiJson,
           language: worldLanguage(draft),
           fastRestart: true,
-          progress: p => {
-            if (p.phase === "profile") {
-              setRestartMsg(tt(
-                "Profilok: " + p.completed + "/" + p.total + " kész · " + (p.started || p.total) + "/" + p.total + " elindítva",
-                "Profiles: " + p.completed + "/" + p.total + " ready · " + (p.started || p.total) + "/" + p.total + " started"
-              ));
-            } else {
-              setRestartMsg(p.owner + " · " + p.phase + " · " + p.completed + "/" + p.total);
-            }
-          },
         });
         installBondGraph(draft, result, allSubjects);
       } else {
@@ -39065,12 +39070,13 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
         draft.bondAnalysis.recalculatedBonds = 0;
       }
       restartWorldHistoryInPlace(draft);
-      const saved = await serverSaveWorld(draft, { bondReset: true });
+      const saved = await retryTransientRestartIo(() => serverSaveWorld(draft, { bondReset: true }));
       update(n => { for (const key of Object.keys(n)) delete n[key]; Object.assign(n, saved.world); });
       setRestartConfirm(false);
-      setRestartMsg(tt("A világ és minden irányított kapcsolat visszaállt az alapra.", "The world and every directed bond were restored to baseline."));
-    } catch (error) { setErr(error.message); setRestartMsg(""); }
-    finally {
+    } catch (error) {
+      setErr(error.message);
+    } finally {
+      setRestartBusy(false);
       bondRestartBusy.delete(w.code);
       if (ownsAnalysisLock) bondAnalysisBusy.delete(w.code);
     }
@@ -39770,13 +39776,17 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
                 type="button"
                 className="btn primary full tiny"
                 onClick={restartWorldHistory}
+                disabled={restartBusy}
               >
-                <RefreshCcw size={14} /> {tt("Igen, kezdd újra a világot", "Yes, restart the world")}
+                <RefreshCcw size={14} /> {restartBusy
+                  ? tt("Újraindítás…", "Restarting…")
+                  : tt("Igen, kezdd újra a világot", "Yes, restart the world")}
               </button>
               <button
                 type="button"
                 className="btn full tiny ghost"
                 onClick={() => setRestartConfirm(false)}
+                disabled={restartBusy}
               >
                 {tt("Mégse", "Cancel")}
               </button>
@@ -39800,9 +39810,6 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
             </button>
           </>
         )}
-        {restartMsg ? (
-          <p className="hint" style={{ marginTop: 8, color: "var(--gold)" }}>{restartMsg}</p>
-        ) : null}
       </div>
 
       <button className="btn full" style={{ marginTop: 12 }} onClick={onRooms}><Globe2 size={14} /> {tt("Világaim — váltás, új világ", "My worlds — switch, new world")}</button>
