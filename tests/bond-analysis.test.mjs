@@ -421,16 +421,35 @@ test("A transient Load failed is retried instead of failing the whole rebuild", 
  assert.equal(Object.keys(result.baselines).length, 2);
 });
 
-test("Restart reads only what changed, and only then restores the baselines and saves", () => {
+test("Restart works from the latest live world, installs the analysis there, and retries a save conflict", () => {
  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
  const start = source.indexOf("const restartWorldHistory = async () => {");
  assert.ok(start >= 0);
  const block = source.slice(start, source.indexOf("\n  };", start));
- const order = ["analysisReady(draft, allSubjects)", "await rebuildBondGraph(draft", "installBondGraph(draft, result, allSubjects)", "restartWorldHistoryInPlace(draft)", "serverSaveWorld(draft, { bondReset: true })"].map(part => block.indexOf(part));
+ const order = ["update(n => { fresh = cloneWorldState(n); })", "analysisReady(fresh, allSubjects)", "await rebuildBondGraph(fresh", "installBondGraph(n, result, allSubjects)", "restartWorldHistoryInPlace(fresh)", "serverSaveWorld(fresh, { bondReset: true })"].map(part => block.indexOf(part));
  assert.ok(order.every(index => index >= 0), "missing step: " + order);
  assert.deepEqual([...order].sort((a, b) => a - b), order, "steps are out of order");
  assert.ok(!/force:\s*true/.test(block), "Restart must reuse the server cache, never force a full re-read");
+ assert.ok(!block.includes("cloneWorldState(w)"), "never save a click-time copy of the world");
+ assert.ok(block.includes("error?.status !== 409"), "a save conflict means: take the newest world and redo");
  assert.ok(block.includes("bondAnalysisBusy.add(w.code)") && block.includes("bondAnalysisBusy.delete(w.code)"));
+ assert.ok(block.includes("setErr(") && block.indexOf("setErr(") < block.indexOf("bondRestartBusy.add(w.code)"), "a click ignored because a restart is running must say so");
+});
+
+test("A restart the rules reject is answered 422 with the reason, never a retried 500", () => {
+ const source = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
+ assert.ok(source.includes("validationError.restartRejected = true"));
+ assert.ok(source.includes('res.status(422).json({ error: "Restart rejected: " + err.message })'));
+});
+
+test("validateBonds checks witnesses against the whole cast, the roster only for completeness", () => {
+ const one = (extra) => ({ bonds: [bond("a", "b", extra)] });
+ const roster = [{ id: "b" }];
+ const own = "a lap";
+ assert.throws(() => validateBonds(one({ whoKnows: ["a", "c"] }), "a", roster, own, { b: [] }), /Unknown hidden observer/, "without a cast list only the slice is known (old behaviour)");
+ validateBonds(one({ whoKnows: ["a", "c"] }), "a", roster, own, { b: [] }, ["a", "b", "c", "d"]);
+ assert.throws(() => validateBonds(one({ whoKnows: ["a", "zed"] }), "a", roster, own, { b: [] }, ["a", "b", "c"]), /Unknown hidden observer/, "an invented character is still rejected");
+ assert.throws(() => validateBonds({ bonds: [] }, "a", roster, own, { b: [] }, ["a", "b", "c"]), /Incomplete outgoing bond graph/, "every target in the slice still needs its bond");
 });
 
 test("Placeholder 'instant restart' baselines are gone and old ones are re-read", () => {

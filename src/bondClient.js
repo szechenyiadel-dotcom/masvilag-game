@@ -92,13 +92,14 @@ const transientError = (error) => error?.status
 const unknownJob = (error) => error?.status === 404 || /unknown analysis job/i.test(String(error?.message || ""));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress = () => {}, pollMs = POLL_FIRST_MS }) {
+export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress: report = () => {}, pollMs = POLL_FIRST_MS }) {
   const people = subjects(world);
   const source = bondSourceFingerprint(world, subjects);
   const forceRun = force ? String(Date.now()) + ":" + String(Math.random()) : "";
   const sheets = {};
   const fieldNames = {};
   let failed = false;
+  const progress = (state) => { if (!failed) report(state); };
 
   // Flattening a large sheet is real work; give the browser a turn now and then so
   // the page stays responsive on a phone. (Not requestAnimationFrame: it never
@@ -122,6 +123,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
     let transientFailures = 0;
     let delay = pollMs;
     for (;;) {
+      if (failed) throw new Error("Analysis cancelled: another part of this run failed");
       try {
         const response = await api("/ai/bond-analysis", {
           method: "POST",
@@ -139,6 +141,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
         missing = response.missing ?? missing;
         await sleep(delay);
         delay = Math.min(POLL_MAX_MS, Math.round(delay * 1.3));
+        if (failed) throw new Error("Analysis cancelled: another part of this run failed");
       } catch (error) {
         // The server forgot the job (restart/cleanup): send the full request again.
         if (jobKey && unknownJob(error)) { jobKey = null; continue; }

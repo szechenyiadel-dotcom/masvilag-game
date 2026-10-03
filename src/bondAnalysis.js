@@ -214,9 +214,13 @@ export function reconcileFacts(from, to, profiles, groupIndex) {
   return output;
 }
 
-export function validateBonds(result, owner, roster, ownSheet, factsByTarget) {
+// roster: exactly the targets this answer must cover (one bond each).
+// knownIds: every character of the world. A secret may be known to anyone, not only
+// to the people in this slice of targets, so witnesses are checked against the cast.
+export function validateBonds(result, owner, roster, ownSheet, factsByTarget, knownIds = null) {
   validateSchema(result, BondArraySchema);
   const ids = new Set(roster.map((entry) => entry.id));
+  const cast = knownIds ? new Set([...knownIds, owner]) : new Set([owner, ...ids]);
   if (result.bonds.length !== ids.size) throw new Error("Incomplete outgoing bond graph");
   for (const bond of result.bonds) {
     if (bond.from !== owner || !ids.delete(bond.to)) throw new Error("Duplicate, unknown or incorrectly directed bond");
@@ -234,7 +238,7 @@ export function validateBonds(result, owner, roster, ownSheet, factsByTarget) {
     for (const evidence of bond.factEvidence) {
       if (!objective.some((fact) => fact.evidence.some((q) => q.sheetOf === evidence.sheetOf && q.quote === evidence.quote))) throw new Error("Fabricated cross-sheet evidence");
     }
-    for (const observer of bond.whoKnows) if (observer !== owner && !roster.some(row => row.id === observer)) throw new Error("Unknown hidden observer");
+    for (const observer of bond.whoKnows) if (!cast.has(observer)) throw new Error("Unknown hidden observer");
     if (bond.history !== null && !bond.evidence.length && !bond.factEvidence.length) throw new Error("Unsupported shared history");
     for (const fact of objective) {
       if (fact.source === "logikai következtetés" && !bond.layers.includes(fact.type)) throw new Error("Missing deterministic group layer: " + fact.type);

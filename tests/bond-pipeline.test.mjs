@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import { registerBondAnalysis } from "../server/bondAnalysis.js";
+import { registerBondAnalysis, analyzeStructured } from "../server/bondAnalysis.js";
 import { EXTRACT_PROMPT, BASELINE_PROMPT } from "../src/bondAnalysis.js";
 import { fullSheetText, rebuildBondGraph, installBondGraph, analysisReady } from "../src/bondClient.js";
 
@@ -19,18 +19,21 @@ const until = async (condition, what = "condition") => {
 const person = (id, backstory = "Sima diák.") => ({ id, name: id.toUpperCase(), backstory });
 const subjects = (world) => world.chars;
 
-const profileFor = ({ owner, ownSheet, fieldNames }) => {
+const profileFor = ({ owner, ownSheet, fieldNames }, mentions = {}) => {
   const name = /\[name\]\n(.*)/.exec(ownSheet)[1];
+  const mentioned = mentions[owner] ? [{ targetName: mentions[owner], targetId: null, whatIsSaid: "említi", timeframe: "múlt", tone: "semleges", mutual: "nem derül ki", secret: false, whoKnows: [], negated: false, conditional: false, aftermath: null, evidence: "Sima diák." }] : [];
   const dojo = ownSheet.includes("Cobra Kai");
   return {
     id: owner, names: [name], processedFields: fieldNames,
     claims: [{ field: "names", value: name, evidence: name }],
     groups: dojo ? [{ name: "Cobra Kai", aliases: [], kind: "dojo", role: "tag", rank: null, evidence: "Cobra Kai" }] : [],
-    groupRelations: [], mentions: [], facts: [], traits: [], goals: [], fears: [], secrets: [], timeline: [],
+    groupRelations: [], mentions: mentioned, facts: [], traits: [], goals: [], fears: [], secrets: [], timeline: [],
   };
 };
 
-const bondsFor = ({ owner, roster, objectiveFacts }) => ({
+// witness: a character who (correctly) knows the owner's secret about everyone, even when
+// that character is not among the targets of this very call.
+const bondsFor = ({ owner, roster, objectiveFacts }, witness = null) => ({
   bonds: roster.map((card) => {
     const facts = objectiveFacts[card.id];
     const factEvidence = facts.flatMap((fact) => fact.evidence.map((e) => ({ sheetOf: e.sheetOf, quote: e.quote })));
@@ -43,14 +46,15 @@ const bondsFor = ({ owner, roster, objectiveFacts }) => ({
         ? owner + " ugyanabban a dojóban edz, mint " + card.id + ". Ez közös hétköznapokat jelent. A lap személyes érzést nem említ. A kapcsolat így csapattársi marad."
         : owner + " lapja nem ír személyes viszonyról " + card.id + " felé. Nincs igazolt közös múltjuk.",
       publicFace: "Személyes kapcsolatukról nincs adat.",
-      hiddenFeelings: null, history: null, dynamics: null, wants: null, whoKnows: [],
+      hiddenFeelings: null, history: null, dynamics: null, wants: null,
+      whoKnows: witness && witness !== owner && witness !== card.id ? [owner, witness] : [],
       source: "logikai következtetés", evidence: [], fieldEvidence: [], factEvidence,
       layers: facts.filter((fact) => fact.source === "logikai következtetés").map((fact) => fact.type),
     };
   }),
 });
 
-async function start({ delay = 0, concurrency, failures } = {}) {
+async function start({ delay = 0, concurrency, failures, witness = null, mentions = {} } = {}) {
   const store = new Map();
   const calls = [];
   let clockNow = 1_000_000;
@@ -65,7 +69,7 @@ async function start({ delay = 0, concurrency, failures } = {}) {
       await sleep(delay);
       const failure = failures?.(calls.length);
       if (failure) throw Object.assign(new Error(failure.message), { failures: failure.failures });
-      const result = stage === "profile" ? profileFor(payload) : bondsFor(payload);
+      const result = stage === "profile" ? profileFor(payload, mentions) : bondsFor(payload, witness);
       validate(result);
       return { result, provider: "mock", model: "mock", keySlot: "MOCK", inputTokens: 1 };
     } finally { inFlight -= 1; }
@@ -299,6 +303,145 @@ test("A cached reading that no longer passes today's validation is read again, n
     await until(() => sim.store.get(key).result?.id === "a", "re-read");
     assert.equal(sim.calls.length, 2);
   } finally { await sim.close(); }
+});
+
+
+test("A witness outside the slice of targets is valid: a secret may be known to anyone in the cast", async () => {
+  // 13 characters = two calls per owner (10 + 2 targets); p12 sits outside p0's first slice.
+  const sim = await start({ witness: "p12" });
+  try {
+    const chars = Array.from({ length: 13 }, (_, i) => person("p" + i));
+    const result = await sim.rebuild(chars);
+    assert.deepEqual(result.baselines["p0>p1"].whoKnows, ["p0", "p12"]);
+    assert.equal(Object.keys(result.baselines).length, 13 * 12);
+  } finally { await sim.close(); }
+});
+
+test("Adding a character works when the owner's secret is known to someone who is not among the new targets", async () => {
+  const sim = await start({ witness: "b" });
+  try {
+    const chars = [person("a"), person("b"), person("c")];
+    await sim.rebuild(chars);
+    sim.reset();
+    const result = await sim.rebuild([...chars, person("d")]);
+    const forA = sim.calls.find((call) => call.stage === "baseline" && call.owner === "a");
+    assert.deepEqual(forA.targets, ["d"], "only the new pair is read");
+    assert.deepEqual(result.baselines["a>d"].whoKnows, ["a", "b"]);
+    assert.equal(Object.keys(result.baselines).length, 12);
+  } finally { await sim.close(); }
+});
+
+test("Cached bonds that name a witness stay valid: unchanged sheets still cost no model call", async () => {
+  const sim = await start({ witness: "c" });
+  try {
+    const chars = [person("a"), person("b"), person("c"), person("d")];
+    const first = await sim.rebuild(chars);
+    sim.reset();
+    const again = await sim.rebuild(chars);
+    assert.equal(sim.calls.length, 0);
+    assert.equal(again.analysis.recalculatedBonds, 0);
+    assert.deepEqual(again.baselines, first.baselines);
+  } finally { await sim.close(); }
+});
+
+test("Someone who is only mentioned by an owner can join without re-reading that owner's other pairs", async () => {
+  const sim = await start({ mentions: { a: "E" } });
+  try {
+    const chars = [person("a"), person("b"), person("c")];
+    await sim.rebuild(chars);
+    sim.reset();
+    await sim.rebuild([...chars, person("e")]);
+    const forA = sim.calls.find((call) => call.stage === "baseline" && call.owner === "a");
+    assert.deepEqual(forA.targets, ["e"], "a>b and a>c must not be read again");
+  } finally { await sim.close(); }
+});
+
+test("A failed run cancels the other pollers instead of leaving them hammering the server", async () => {
+  const sim = await start({ delay: 30 });
+  try {
+    const chars = Array.from({ length: 6 }, (_, i) => person("p" + i));
+    let failedOnce = false;
+    const api = async (path, options) => {
+      const body = JSON.parse(options.body);
+      if (!failedOnce && body.ownSheet && body.owner === "p2") { failedOnce = true; throw Object.assign(new Error("HTTP 422"), { status: 422 }); }
+      return sim.api(path, options);
+    };
+    const reports = [];
+    await assert.rejects(rebuildBondGraph({ chars }, { subjects, api, language: "hu", pollMs: 5, progress: (state) => reports.push(state) }), /422/);
+    const sent = sim.bodies.length;
+    await sleep(300);
+    assert.ok(sim.bodies.length - sent <= 2, "requests after the failure: " + (sim.bodies.length - sent));
+    const reported = reports.length;
+    await sleep(100);
+    assert.equal(reports.length, reported, "no progress reports after the failure");
+  } finally { await sim.close(); }
+});
+
+test("Answers that fail validation are not swept again and again; outages are", async () => {
+  const sim = await start({ failures: () => invalid });
+  try {
+    await sim.post(profileRequest());
+    await until(() => [...sim.store.values()].some((row) => row.terminal), "terminal after ONE sweep");
+    assert.equal(sim.calls.length, 1);
+    const [row] = [...sim.store.values()];
+    assert.equal(row.attempts, 1);
+  } finally { await sim.close(); }
+});
+
+test("One rate limit among many invalid answers does not make the whole sweep worth repeating", async () => {
+  const mostlyInvalid = { message: "mostly invalid", failures: [
+    { phase: "semantic", status: 429, transient: true, reason: "quota" },
+    { phase: "semantic", status: null, transient: false, reason: "Missing reconciled objective fact" },
+    { phase: "semantic", status: null, transient: false, reason: "Missing reconciled objective fact" },
+    { phase: "semantic", status: null, transient: false, reason: "Missing reconciled objective fact" },
+  ] };
+  const sim = await start({ failures: () => mostlyInvalid });
+  try {
+    await sim.post(profileRequest());
+    await until(() => [...sim.store.values()].some((row) => row.terminal !== undefined), "failure to be recorded");
+    const [row] = [...sim.store.values()];
+    assert.equal(row.terminal, true, "3 of 4 providers answered and failed validation: do not re-sweep");
+    assert.equal((await sim.post(profileRequest())).status, 422);
+    assert.equal(sim.calls.length, 1);
+  } finally { await sim.close(); }
+});
+
+test("A mixed failure is classed by what the providers that were asked said; repair noise is ignored", async () => {
+  const mixed = { message: "mixed", failures: [
+    { phase: "semantic", status: 429, transient: true, reason: "quota" },
+    { phase: "semantic", status: 503, transient: true, reason: "overloaded" },
+    { phase: "semantic", status: null, transient: false, reason: "bond prose sentence counts mentions network and fetch" },
+    { phase: "schema-repair", status: null, transient: false, reason: "repair could not fix it" },
+  ] };
+  const sim = await start({ failures: (n) => (n === 1 ? mixed : null) });
+  try {
+    await sim.post(profileRequest());
+    await until(() => [...sim.store.values()].some((row) => row.retryAt), "failure to be recorded");
+    const [row] = [...sim.store.values()];
+    assert.equal(row.pending, true, "2 of 3 asked providers were unavailable: retry later");
+    assert.equal(row.terminal, false);
+  } finally { await sim.close(); }
+});
+
+test("With no provider configured the failure says what to set instead of an empty message", async () => {
+  await assert.rejects(analyzeStructured("x", { type: "object" }, () => {}, { env: {} }), /No analysis provider is configured/);
+});
+
+test("One analysis stops trying further providers after its deadline", async () => {
+  let t = 1000;
+  const clock = () => t;
+  const seen = [];
+  const transport = async (url) => {
+    if (url.endsWith(":generateContent")) { seen.push(url); t += 5000; const error = new Error("busy"); error.status = 503; throw error; }
+    if (url.endsWith(":countTokens")) return { totalTokens: 10 };
+    return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  };
+  const candidates = ["a", "b", "c", "d", "e"].map((key) => ({ name: "gemini", model: "m", key, keySlot: "K" + key }));
+  await assert.rejects(analyzeStructured("x", { type: "object" }, () => {}, { candidates, transport, clock, deadline: 1000 + 7000, outputTokens: 10 }), (error) => {
+    assert.equal(seen.length, 2, "tried until the deadline, then stopped");
+    assert.ok(error.failures.some((failure) => /deadline/.test(failure.reason)));
+    return true;
+  });
 });
 
 test("The mock sheets really are the ones the client builds", () => {

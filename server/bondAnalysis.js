@@ -7,6 +7,12 @@ import {
 
 export const sheetHash = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
+// A failure is worth retrying later only if it says nothing about the answer itself:
+// rate limits, overload, or the connection dropping. An answer that was received
+// but did not validate is NOT transient, however it is worded.
+const TRANSIENT_STATUSES = [408, 429, 500, 502, 503, 504, 529];
+const isTransient = (error) => error?.transient ?? TRANSIENT_STATUSES.includes(error?.status);
+
 async function request(url, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 600000);
@@ -20,6 +26,10 @@ async function request(url, options = {}) {
       throw error;
     }
     return data;
+  } catch (error) {
+    // No HTTP status: the connection failed, timed out, or the body was not JSON.
+    if (error.status === undefined && error.transient === undefined) error.transient = true;
+    throw error;
   } finally { clearTimeout(timer); }
 }
 
@@ -266,6 +276,7 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
         model: candidate.model,
         keySlot: candidate.keySlot,
         status: error.status || null,
+        transient: isTransient(error),
         reason: error.message,
       });
     }
@@ -280,8 +291,18 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
   const mode = options.mode === "schema" ? "schema" : "semantic";
   const candidates = options.candidates || providerCandidates(env, mode, options.semanticStartOffset || 0);
   const failures = [];
+  const clock = options.clock || Date.now;
+  if (!candidates.length) {
+    const error = new Error("No analysis provider is configured: set GEMINI_API_KEY_2..8 / GEMINI_API_KEY with a GEMINI_ANALYSIS_MODEL (or GEMINI_DEEP_MODEL / GEMINI_MODEL), or an OpenAI key.");
+    error.failures = [];
+    throw error;
+  }
 
   for (const candidate of candidates) {
+    if (options.deadline && clock() > options.deadline) {
+      failures.push({ phase: mode, provider: candidate.name, model: candidate.model, keySlot: candidate.keySlot, status: null, transient: false, reason: "analysis deadline exceeded" });
+      break;
+    }
     let raw = "";
     try {
       const capability = await modelCapabilities(candidate, prompt, schema, transport);
@@ -333,6 +354,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
         model: candidate.model,
         keySlot: candidate.keySlot,
         status: error.status || null,
+        transient: isTransient(error),
         reason: error.message,
       });
     }
@@ -361,6 +383,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
   // One scheduler for every job. The browser may submit all sheets at once; the
   // server decides how many heavy model calls really run together.
   const concurrency = Math.max(1, Number(env.BOND_ANALYSIS_CONCURRENCY) || 8);
+  const deadlineMs = Math.max(60000, Number(env.BOND_ANALYSIS_DEADLINE_MS) || 1200000);
   const active = new Set();
   const waiting = [];
   let running = 0;
@@ -420,6 +443,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     if (!own || own.hash !== hash) throw new Error("Owner sheet changed since profile analysis");
     const allProfiles = resolveProfileReferences(profiles.map((row) => row.result));
     const ownProfile = allProfiles.find((profile) => profile.id === owner);
+    const castIds = allProfiles.map((profile) => profile.id);
     const groupIndex = buildGroupIndex(allProfiles);
     const cards = roster.map((target) => {
       const profile = allProfiles.find((candidate) => candidate.id === target.id);
@@ -427,17 +451,22 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     });
     const facts = Object.fromEntries(cards.map((card) => [card.id, reconcileFacts(owner, card.id, allProfiles, groupIndex)]));
 
-    // A bond depends only on the owner's sheet/profile, the target's card and the
-    // objective facts for this pair. A new character therefore never forces the
-    // bonds between everyone else to be read again.
-    const pairKeys = cards.map((card) => cacheKeyFor([world, "pair", owner, hash, JSON.stringify(ownProfile), JSON.stringify(card), JSON.stringify(facts[card.id]), outputLanguage, BASELINE_PROMPT, String(force || "")]));
+    // A bond depends only on the owner's sheet, the target's card and the objective
+    // facts for this pair. The key therefore holds the owner's profile as extracted
+    // (it does not change when someone joins) plus only those resolved references that
+    // concern THIS target, so a new character never forces the bonds between everyone
+    // else to be read again.
+    const pairKeys = cards.map((card) => cacheKeyFor([world, "pair", owner, hash, JSON.stringify(own.result), JSON.stringify({
+      mentions: ownProfile.mentions.filter((row) => row.targetId === card.id),
+      facts: ownProfile.facts.filter((row) => row.targetId === card.id),
+    }), JSON.stringify(card), JSON.stringify(facts[card.id]), outputLanguage, BASELINE_PROMPT, String(force || "")]));
     const known = await readRows(pairKeys);
     const bonds = new Map();
     cards.forEach((card, index) => {
       const row = known.get(pairKeys[index]);
       if (!row?.bond || row.version !== BOND_ANALYSIS_VERSION || row.world !== world) return;
       try {
-        validateBonds({ bonds: [row.bond] }, owner, [card], ownSheet, { [card.id]: facts[card.id] });
+        validateBonds({ bonds: [row.bond] }, owner, [card], ownSheet, { [card.id]: facts[card.id] }, castIds);
         bonds.set(card.id, row.bond);
       } catch { /* stale or corrupt entry: read this pair again */ }
     });
@@ -446,7 +475,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     return {
       stage, metadata, body, owner, hash, schema: BondArraySchema, prompt, cards, pairKeys, bonds, missing,
       jobKey: cacheKeyFor([world, stage, prompt, String(force || "")]),
-      validate: (value) => validateBonds(value, owner, missing, ownSheet, Object.fromEntries(missing.map((card) => [card.id, facts[card.id]]))),
+      validate: (value) => validateBonds(value, owner, missing, ownSheet, Object.fromEntries(missing.map((card) => [card.id, facts[card.id]])), castIds),
     };
   }
 
@@ -465,7 +494,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     const work = async () => {
       try {
         console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, sheetHash: hash, sourceChars: metadata.sourceChars, promptChars: prompt.length, targets: prepared.missing?.length }));
-        const analyzed = await analyze(prompt, schema, validate, { outputTokens: 64000, semanticStartOffset: rotation++ });
+        const analyzed = await analyze(prompt, schema, validate, { outputTokens: 64000, semanticStartOffset: rotation++, deadline: clock() + deadlineMs, clock });
         if (stage === "baseline") {
           await Promise.all(analyzed.result.bonds.map((bond) => {
             const index = prepared.cards.findIndex((card) => card.id === bond.to);
@@ -476,7 +505,12 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
           await saveRow(jobKey, { ...metadata, ...analyzed });
         }
       } catch (error) {
-        const retryable = error.failures?.some((failure) => [429, 500, 502, 503, 504].includes(failure.status) || /abort|network|fetch|ECONN/i.test(failure.reason)) || !error.failures;
+        // Retry later only when the providers were unavailable (rate limit, overload,
+        // connection). If models answered and the answers did not validate, repeating the
+        // same sweep would only repeat the same cost: wait out the cooldown instead.
+        const asked = (error.failures || []).filter((failure) => failure.phase !== "schema-repair");
+        const unavailable = (failure) => failure.transient ?? TRANSIENT_STATUSES.includes(failure.status);
+        const retryable = error.failures ? asked.length > 0 && asked.filter(unavailable).length * 2 > asked.length : true;
         const rounds = attempts + 1;
         const terminal = !retryable || rounds >= MAX_RETRY_ROUNDS;
         console.warn("[bond-analysis-failed]", stage, owner, "round " + rounds, terminal ? "(giving up for now)" : "(will retry)", error.message);

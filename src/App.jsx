@@ -39032,7 +39032,11 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
    * setters/update/tt do not exist; the settings button therefore crashed with
    * `ReferenceError: restartWorldHistory is not defined`. */
   const restartWorldHistory = async () => {
-    if (bondRestartBusy.has(w.code) || restartBusy) return;
+    if (bondRestartBusy.has(w.code) || restartBusy) {
+      // The earlier click is still working (this tab may have been remounted meanwhile).
+      setErr(tt("Az újraindítás már folyamatban van, kérlek várj.", "A restart is already in progress, please wait."));
+      return;
+    }
     bondRestartBusy.add(w.code);
     setRestartBusy(true);
     setRestartProgress("");
@@ -39052,7 +39056,7 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
         } catch (error) {
           lastError = error;
           const transient = error?.status
-            ? [408, 429, 500, 502, 503, 504].includes(error.status)
+            ? [408, 429, 502, 503, 504].includes(error.status)
             : /load failed|failed to fetch|network|fetch|abort|econn/i.test(String(error?.message || error || ""));
           if (!transient) throw error;
           await new Promise(resolve => setTimeout(resolve, Math.min(3000, 500 + attempt * 250)));
@@ -39062,24 +39066,47 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
     };
 
     try {
-      const draft = cloneWorldState(w);
-      if (!analysisReady(draft, allSubjects)) {
-        const result = await rebuildBondGraph(draft, {
-          subjects: allSubjects,
-          api: apiJson,
-          language: worldLanguage(draft),
-          progress: ({ phase, completed, total }) => setRestartProgress(
-            (phase === "profile" ? tt("Lapok olvasása", "Reading sheets") : tt("Kapcsolatok", "Relationships")) + " " + completed + "/" + total
-          ),
-        });
-        installBondGraph(draft, result, allSubjects);
-      } else {
-        draft.bondAnalysis.recalculated = 0;
-        draft.bondAnalysis.recalculatedBonds = 0;
-      }
-      restartWorldHistoryInPlace(draft);
+      // Waiting for the analysis can take minutes while the player keeps editing, and
+      // autosave keeps moving the world forward. So every pass starts from the LATEST
+      // live world; the analysis is installed into the live world (never only into a
+      // private copy); and if the world moved or sheets changed, the next pass simply
+      // repeats against the newer state (reading is cached, so that is cheap).
+      let saved = null;
+      for (let pass = 0; pass < 4 && !saved; pass += 1) {
+        let fresh = null;
+        update(n => { fresh = cloneWorldState(n); });
+        if (!fresh) throw new Error(tt("A világ nem érhető el.", "The world is not available."));
 
-      const saved = await retryTransientRestartIo(() => serverSaveWorld(draft, { bondReset: true }));
+        if (!analysisReady(fresh, allSubjects)) {
+          const result = await rebuildBondGraph(fresh, {
+            subjects: allSubjects,
+            api: apiJson,
+            language: worldLanguage(fresh),
+            progress: ({ phase, completed, total }) => setRestartProgress(
+              (phase === "profile" ? tt("Lapok olvasása", "Reading sheets") : tt("Kapcsolatok", "Relationships")) + " " + completed + "/" + total
+            ),
+          });
+          update(n => {
+            try { installBondGraph(n, result, allSubjects); }
+            catch (error) { console.warn("[restart-bond-install]", error.message); }
+          });
+          continue;
+        }
+
+        if (pass === 0) {
+          fresh.bondAnalysis.recalculated = 0;
+          fresh.bondAnalysis.recalculatedBonds = 0;
+        }
+        restartWorldHistoryInPlace(fresh);
+        try {
+          saved = await retryTransientRestartIo(() => serverSaveWorld(fresh, { bondReset: true }));
+        } catch (error) {
+          if (error?.status !== 409) throw error;
+          // Another save won the race while we were saving: take the newest world and redo.
+        }
+      }
+      if (!saved) throw new Error(tt("A világ közben többször megváltozott, próbáld újra.", "The world kept changing meanwhile, please try again."));
+
       update(n => { for (const key of Object.keys(n)) delete n[key]; Object.assign(n, saved.world); });
       bondAnalysisRetry.delete(w.code);
       setRestartConfirm(false);
