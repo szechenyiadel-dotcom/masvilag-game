@@ -130,6 +130,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
         ownSheet: sheets[character.id],
         fieldNames: Object.keys(sheetFields(character, world)),
         language,
+        restartProfileIndex: index,
       });
       profiles[character.id] = { profile: result.result, hash: result.hash };
       profileKeys[index] = result.cacheKey;
