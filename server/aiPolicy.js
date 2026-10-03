@@ -93,17 +93,27 @@ export function secondsUntilPacificMidnight(nowMs = Date.now()) {
    quotas (…PerDay… / …PerMinute…) and, usually, a retryDelay such as "37s". */
 export function geminiRateLimitInfo(payload, nowMs = Date.now()) {
   const details = Array.isArray(payload?.error?.details) ? payload.error.details : [];
-  const quotaIds = details.flatMap((detail) => (Array.isArray(detail?.violations) ? detail.violations : []).map((v) => String(v?.quotaId || v?.quotaMetric || "")));
+  const violations = details.flatMap((detail) => (Array.isArray(detail?.violations) ? detail.violations : []));
+  const quotaIds = violations.map((v) => String(v?.quotaId || v?.quotaMetric || ""));
   const retry = details.find((detail) => /RetryInfo$/.test(String(detail?.["@type"] || "")));
   const delaySeconds = Number.parseFloat(String(retry?.retryDelay || ""));
   const retryDelayMs = Number.isFinite(delaySeconds) ? Math.ceil(delaySeconds * 1000) : 0;
-  if (quotaIds.some((id) => /perday/i.test(id.replace(/[_\s]/g, "")))) {
-    return { metric: "per-day", restMs: (secondsUntilPacificMidnight(nowMs) + 60) * 1000, retryDelayMs };
-  }
-  if (quotaIds.some((id) => /perminute/i.test(id.replace(/[_\s]/g, "")))) {
-    return { metric: "per-minute", restMs: Math.min(5 * 60 * 1000, Math.max(retryDelayMs + 2000, 15000)), retryDelayMs };
-  }
-  return { metric: "unknown", restMs: retryDelayMs ? Math.min(30 * 60 * 1000, retryDelayMs + 2000) : 30 * 60 * 1000, retryDelayMs };
+  const flat = (id) => id.replace(/[_\s]/g, "");
+  const perDay = quotaIds.some((id) => /perday/i.test(flat(id)));
+  const perMinute = quotaIds.some((id) => /perminute/i.test(flat(id)));
+  /* What Google says the limit is (quotaValue) and which model it counted on, so the real size of the
+     free quota shows up in the log instead of being guessed. */
+  const pickIndex = Math.max(0, quotaIds.findIndex((id) => (perDay ? /perday/i : /perminute/i).test(flat(id))));
+  const violation = violations[pickIndex] || {};
+  const extra = {
+    retryDelayMs,
+    limit: Number(violation.quotaValue) || 0,
+    quotaId: String(violation.quotaId || violation.quotaMetric || ""),
+    quotaModel: String(violation.quotaDimensions?.model || ""),
+  };
+  if (perDay) return { metric: "per-day", restMs: (secondsUntilPacificMidnight(nowMs) + 60) * 1000, ...extra };
+  if (perMinute) return { metric: "per-minute", restMs: Math.min(5 * 60 * 1000, Math.max(retryDelayMs + 2000, 15000)), ...extra };
+  return { metric: "unknown", restMs: retryDelayMs ? Math.min(30 * 60 * 1000, retryDelayMs + 2000) : 30 * 60 * 1000, ...extra };
 }
 
 /* How long a Gemini key rests after an error, in ms (0 = it does not rest). Google reports a bad or
@@ -260,4 +270,142 @@ export function createGroqPacer({ budgetTokens = GROQ_FREE_TPM_BUDGET, windowMs 
       return { busy: state.busy, spentTokens: total(state.spent.filter((row) => row.at > at - windowMs)) };
     },
   };
+}
+
+/* ---------- Gemini: which models, and which (key, model) pairs are resting ---------- */
+
+/* The free tier counts quota per project AND per model, so one key has several independent daily
+   buckets. The ladder uses them in turn instead of declaring a whole key spent. */
+export const DEFAULT_GEMINI_PRIMARY_MODEL = "gemini-3.8-flash";
+export const DEFAULT_GEMINI_EXTRA_MODELS = Object.freeze(["gemini-3.7-flash", "gemini-3.6-flash"]);
+export const DEFAULT_GEMINI_LITE_MODELS = Object.freeze(["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]);
+
+const unique = (values) => [...new Set((Array.isArray(values) ? values : []).map((v) => String(v || "").trim()).filter(Boolean))];
+const listFrom = (value, fallback) => {
+  const text = String(value || "").trim();
+  if (/^(off|none|-)$/i.test(text)) return [];
+  const rows = unique(text.split(/[\s,;]+/));
+  return rows.length ? rows : [...fallback];
+};
+
+/* GEMINI_MODEL: the main writing model (GEMINI_FALLBACK_MODEL is the old name for it).
+   GEMINI_DEEP_MODEL: careful readings. GEMINI_EXTRA_MODELS / GEMINI_LITE_MODELS: comma lists,
+   "off" switches a list off. GEMINI_VISION_MODEL, if set, is tried first for pictures. */
+export function geminiModelConfig(env = {}) {
+  const primary = String(env.GEMINI_MODEL || env.GEMINI_FALLBACK_MODEL || DEFAULT_GEMINI_PRIMARY_MODEL).trim();
+  const deep = String(env.GEMINI_DEEP_MODEL || primary).trim();
+  const extra = listFrom(env.GEMINI_EXTRA_MODELS, DEFAULT_GEMINI_EXTRA_MODELS).filter((m) => m !== primary);
+  const lite = listFrom(env.GEMINI_LITE_MODELS, DEFAULT_GEMINI_LITE_MODELS);
+  const visionFirst = String(env.GEMINI_VISION_MODEL || "").trim();
+  const vision = unique([visionFirst, ...lite, primary, ...extra]);
+  return { primary, deep, extra, lite, vision };
+}
+
+/* Models for one request, best first. Careful readings use the full models only. Everything that
+   speaks as a character uses the full models only too (a lite model would change the voice). Light
+   utility work (the same short list that goes to Groq first) uses the lite buckets first, so the
+   full models' daily quota is left for the writing. */
+export function geminiModelLadder(config, body) {
+  const source = String(body?.source || "").trim().toLowerCase();
+  const deep = String(body?.quality || "") === "deep";
+  const light = !deep && isGroqUtilitySource(source);
+  const list = deep
+    ? [config.deep, config.primary, ...config.extra]
+    : light
+      ? [...config.lite, config.primary, ...config.extra]
+      : [config.primary, ...config.extra];
+  return unique(list);
+}
+
+/* After a run of timeouts / 5xx a (key, model) pair rests a little instead of being tried by every
+   request: 30 s after the second failure in a row, doubling, never more than 10 minutes. */
+export function geminiStreakRestMs(streak) {
+  const n = Number(streak) || 0;
+  return n < 2 ? 0 : Math.min(10 * 60 * 1000, 30000 * Math.pow(2, n - 2));
+}
+
+const GEMINI_RETRYABLE = [0, 408, 500, 502, 503, 504, 529];
+
+export function createGeminiLedger({ now = Date.now } = {}) {
+  const keyRest = new Map();     /* key -> until: a bad key or spent credit, whatever the model */
+  const pairRest = new Map();    /* model|key -> until: that model's quota is spent on that key */
+  const modelRest = new Map();   /* model -> until: the model does not exist / is not offered */
+  const streaks = new Map();
+  let rotation = 0;
+  const pairId = (key, model) => model + "\u0000" + key;
+  const untilFor = (key, model) => Math.max(keyRest.get(key) || 0, pairRest.get(pairId(key, model)) || 0, modelRest.get(model) || 0);
+  const restMs = (key, model) => Math.max(0, untilFor(key, model) - now());
+  const extend = (map, id, until) => { if (until > (map.get(id) || 0)) map.set(id, until); };
+
+  /* A Map-like window onto one model's rest times, for code that only needs get(key) / set(key, until). */
+  const view = (model) => ({
+    get: (key) => untilFor(key, model),
+    set: (key, until) => { extend(pairRest, pairId(key, model), Number(until) || 0); },
+  });
+
+  function fail(key, model, { status, message = "", payload = null } = {}) {
+    const code = Number(status) || 0;
+    const text = String(message || "");
+    const at = now();
+    if ([401, 403].includes(code) || (code === 400 && /api key/i.test(text))) {
+      extend(keyRest, key, at + 24 * 3600 * 1000);
+      return { level: "key", restMs: 24 * 3600 * 1000, metric: "invalid-key" };
+    }
+    if (code === 402) {
+      extend(keyRest, key, at + 6 * 3600 * 1000);
+      return { level: "key", restMs: 6 * 3600 * 1000, metric: "no-credit" };
+    }
+    if (code === 429) {
+      const info = geminiRateLimitInfo(payload, at);
+      extend(pairRest, pairId(key, model), at + info.restMs);
+      streaks.delete(pairId(key, model));
+      return { level: "model", restMs: info.restMs, metric: info.metric, limit: info.limit, quotaId: info.quotaId, quotaModel: info.quotaModel };
+    }
+    if (code === 404 && /models\/\S+ is not found|is not found for api version|not supported for generatecontent|model[^.]*does not exist|no longer available|model[^.]*is not available/i.test(text)) {
+      extend(modelRest, model, at + 6 * 3600 * 1000);
+      return { level: "model-gone", restMs: 6 * 3600 * 1000, metric: "model-not-available" };
+    }
+    if (GEMINI_RETRYABLE.includes(code)) {
+      const streak = (streaks.get(pairId(key, model)) || 0) + 1;
+      streaks.set(pairId(key, model), streak);
+      const rest = geminiStreakRestMs(streak);
+      if (rest > 0) extend(pairRest, pairId(key, model), at + rest);
+      return { level: rest > 0 ? "model" : "none", restMs: rest, metric: "unavailable", streak, retryable: true };
+    }
+    return { level: "none", restMs: 0, metric: "request-error" };
+  }
+
+  const succeed = (key, model) => { streaks.delete(pairId(key, model)); };
+
+  return { restMs, view, fail, succeed, nextRotation: () => rotation++, state: () => ({ keys: keyRest.size, pairs: pairRest.size, models: modelRest.size }) };
+}
+
+/* The (key, model) pairs one request will try, in order, and how long to wait when there are none.
+   Free keys only, model by model (the best model on every free key before the next model), at most
+   perModel keys per model and maxAttempts in all, with the starting key rotated so no key takes every
+   request. A player who is waiting (or an explicit opt-in) gets the paid key as the very last step. */
+export function planGeminiAttempts({ freeKeys, paidKey = "", models, ledger, foreground = false, allowPaidBackground = false, rotation = 0, perModel = 2, maxAttempts = 4 }) {
+  const free = unique(freeKeys);
+  const ladder = unique(models);
+  const attempts = [];
+  for (const model of ladder) {
+    const usable = free.filter((key) => ledger.restMs(key, model) <= 0);
+    if (!usable.length) continue;
+    const start = ((Number(rotation) || 0) % usable.length + usable.length) % usable.length;
+    for (let i = 0; i < Math.min(perModel, usable.length); i += 1) attempts.push({ key: usable[(start + i) % usable.length], model });
+  }
+  const chosen = attempts.slice(0, maxAttempts);
+  const mayUsePaid = Boolean(paidKey) && (foreground === true || allowPaidBackground === true);
+  if (mayUsePaid && ladder.length) {
+    const model = ladder.find((m) => ledger.restMs(paidKey, m) <= 0) || ladder[0];
+    chosen.push({ key: paidKey, model, paid: true, forced: ledger.restMs(paidKey, model) > 0 });
+  }
+  if (!chosen.length && foreground === true && free.length && ladder.length) {
+    /* every free pair is resting but somebody is waiting: try the last one anyway */
+    chosen.push({ key: free[free.length - 1], model: ladder[0], forced: true });
+  }
+  if (chosen.length) return { attempts: chosen, waitMs: 0 };
+  const pool = [...free, ...(allowPaidBackground && paidKey ? [paidKey] : [])];
+  if (!pool.length || !ladder.length) return { attempts: [], waitMs: 0 };
+  return { attempts: [], waitMs: Math.min(...pool.flatMap((key) => ladder.map((model) => ledger.restMs(key, model)))) };
 }

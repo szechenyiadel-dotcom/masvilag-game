@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import {
   isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN, planGroqRequest,
   isGroqUtilitySource, groqCarriesWhole, estimateGroqTokens, groqPaceMaxWaitMs, createGroqPacer, groqRetryMs, GROQ_UTILITY_CHAIN, GROQ_UTILITY_SOURCES,
+  createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts,
 } from "../server/aiPolicy.js";
 
 const require = createRequire(import.meta.url);
@@ -21,7 +22,7 @@ const pick = (names) => ast.program.body
 const NAMES = [
   "MISTRAL_API_KEY", "MISTRAL_API_KEY_2", "MISTRAL_MODEL", "GROQ_API_KEY", "GROQ_API_KEY_2", "GROQ_MODEL", "GROQ_MODEL_2",
   "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_MODEL_ENV", "GEMINI_PAID_KEY", "GEMINI_FREE_KEYS", "GEMINI_KEYS", "AI_ALLOW_PAID_BACKGROUND",
-  "AI_GROQ_MAX_INPUT_CHARS", "AI_PROMPT_DEBUG", "AI_GATE", "groqRequestSize",
+  "AI_GROQ_MAX_INPUT_CHARS", "AI_PROMPT_DEBUG", "AI_GATE", "GEMINI_LEDGER", "GEMINI_MODELS", "groqRequestSize",
   "extractText", "proxyErrorMessage", "configuredAIProvider", "aiRequestText", "aiRequestChars", "inferAIRequestSource",
   "providerAllowedForBody", "taskProviderOrder", "healthyProvider", "providerCooldownMs", "providerModel", "parseRetryAfterMs",
   "safeProviderMessage", "markProviderFailure", "markProviderSuccess", "summarizeProviderFailures", "logFullAIPromptDebug",
@@ -35,7 +36,7 @@ function gate(env, scripted) {
     console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error,
     isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN,
-    isGroqUtilitySource, groqCarriesWhole, GROQ_UTILITY_CHAIN, groqRetryMs,
+    isGroqUtilitySource, groqCarriesWhole, GROQ_UTILITY_CHAIN, groqRetryMs, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts,
     callMessageProvider: async (provider, body) => { calls.push(provider); return scripted(provider, body); },
   });
   vm.runInContext(pick(NAMES), context);
@@ -131,22 +132,34 @@ test("AI_ALLOW_PAID_BACKGROUND=1 is the only way background work reaches paid pr
   assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", task(context, "feed-post").body)), ["gemini", "openai"]);
 });
 
-test("A Gemini key running out of prepaid credit (402) does not switch Gemini off for good", () => {
+test("Gemini quota, credit and key errors never rest or switch off the whole provider: the ledger rests the exact pair", () => {
   const { context } = gate(ENV, () => ok("x"));
   const aiGate = vm.runInContext("AI_GATE", context);
-  const result = { status: 402, payload: { error: { message: "Your prepayment credits are depleted." } } };
-  const rest = context.markProviderFailure("gemini", "gemini-x", result);
-  assert.equal(rest, 10 * 60 * 1000);
-  assert.ok(!aiGate.providerConfigurationErrors.has("gemini"), "not marked as a broken configuration");
-  assert.ok(context.providerCooldownMs("gemini") > 0, "but it rests for a while");
-  /* every other provider keeps the strict rule: 402/401/403 means the configuration is wrong */
+  for (const [status, message] of [[402, "Your prepayment credits are depleted."], [429, "quota"], [403, "key blocked"], [401, "bad key"], [404, "models/x is not found"]]) {
+    const rest = context.markProviderFailure("gemini", "gemini-x", { status, retryAfter: "7200", payload: { error: { message } } });
+    assert.equal(rest, 0, String(status));
+    assert.ok(!aiGate.providerConfigurationErrors.has("gemini"), status + " is not a broken configuration");
+    assert.equal(context.providerCooldownMs("gemini"), 0, status + " does not rest Gemini as a whole");
+  }
+  /* a run of server errors still gives the provider a short rest, and every other provider keeps the strict rule */
+  assert.ok(context.markProviderFailure("gemini", "gemini-x", { status: 503, payload: { error: { message: "overloaded" } } }) > 0);
   context.markProviderFailure("openai", "gpt", { status: 401, payload: { error: { message: "bad key" } } });
   assert.ok(aiGate.providerConfigurationErrors.has("openai"));
 });
 
-test("proxy.js rests each Gemini key by the error it returned, including spent credit", () => {
-  assert.match(source, /geminiKeyRestMs\(status, proxyErrorMessage\(result && result\.payload, ""\), result && result\.payload\)/);
-  assert.match(source, /out of quota \(" \+ limit\.metric \+ "\)/, "the log says whether it was a per-minute or a per-day limit");
+test("A Gemini 'come back at' still sets how long a waiting background request is told to wait", async () => {
+  const spent = (provider) => (provider === "gemini"
+    ? { ok: false, status: 429, retryAfter: "1800", payload: { error: { message: "All free Gemini keys are resting" } }, provider }
+    : { ok: false, status: 503, payload: { error: { message: "unavailable" } }, provider });
+  const { context } = gate({ ...ENV, GROQ_API_KEY: "", GROQ_API_KEY_2: "" }, spent);
+  const result = await context.executeAITask(task(context, "feed-post"));
+  assert.equal(result.waiting, true);
+  assert.ok(Number(result.retryAfter) >= 600 && Number(result.retryAfter) <= 900, "uses Gemini's own time, capped at fifteen minutes: " + result.retryAfter);
+});
+
+test("proxy.js rests each Gemini (key, model) pair by the error it returned, including spent credit", () => {
+  assert.match(source, /GEMINI_LEDGER\.fail\(key, model, \{ status, message: proxyErrorMessage\(result && result\.payload, ""\), payload: result && result\.payload \}\)/);
+  assert.match(source, /out of quota \(" \+ outcome\.metric \+ \(outcome\.limit \? ", limit " \+ outcome\.limit : ""\)/, "the log says per-minute or per-day, and the limit Google reports");
   assert.match(source, /out of prepaid credit/);
 });
 
@@ -345,4 +358,136 @@ test("Groq: when the second key is resting, the first key waits for its own turn
   assert.equal(sent.length, 2);
   gates[1]();
   assert.equal((await second).ok, true);
+});
+
+/* ---------- the real Gemini request path, against a scripted Gemini ---------- */
+
+function geminiPath({ env = {}, respond }) {
+  const requests = [];
+  const logs = [];
+  const context = vm.createContext({
+    process: { env: { GEMINI_API_KEY_2: "f2", GEMINI_API_KEY_3: "f3", GEMINI_API_KEY_4: "f4", ...env } },
+    console: { info() {}, warn: (...args) => logs.push(args.join(" ")), error() {} },
+    Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error, URL, AbortController, setTimeout, clearTimeout,
+    isForegroundRequest, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts,
+    fetchWithTimeout: async (url) => {
+      const key = url.searchParams.get("key");
+      const model = decodeURIComponent(url.pathname.split("/models/")[1].split(":")[0]);
+      requests.push({ key, model });
+      const answer = await respond({ key, model, n: requests.length });
+      return { ok: answer.status < 300, status: answer.status, headers: { get: (name) => (name === "retry-after" ? answer.retryAfter || null : null) }, text: async () => JSON.stringify(answer.payload) };
+    },
+  });
+  vm.runInContext(pick(["AI_UPSTREAM_TIMEOUT_MS", "upstreamTimeoutFor", "extractText", "buildGeminiPayload", "normalizeGeminiResponse", "responseJsonSafe", "proxyErrorMessage",
+    "GEMINI_PAID_KEY", "GEMINI_FREE_KEYS", "GEMINI_KEYS", "AI_ALLOW_PAID_BACKGROUND", "GEMINI_LEDGER", "GEMINI_MODELS", "proxyGeminiMessageWithKey", "proxyGeminiMessage"]), context);
+  return { context, requests, logs, ledger: vm.runInContext("GEMINI_LEDGER", context) };
+}
+const geminiOk = (text = "hi") => ({ status: 200, payload: { candidates: [{ content: { parts: [{ text }] } }] } });
+const geminiDayLimit = (model) => ({ status: 429, payload: { error: { message: "quota", details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue: "250", quotaDimensions: { model } }] }] } } });
+const geminiBody = (extra = {}) => ({ source: "dm", system: "s", messages: [{ role: "user", content: "hello" }], max_tokens: 200, ...extra });
+
+test("Gemini: a model whose daily quota is spent on a key moves on to the next model on a free key, and the result says which model answered", async () => {
+  const { context, requests, logs, ledger } = geminiPath({ respond: ({ model }) => (model === "gemini-3.8-flash" ? geminiDayLimit(model) : geminiOk("fallback answer")) });
+  const result = await context.proxyGeminiMessage(geminiBody());
+  assert.equal(result.ok, true);
+  assert.equal(result.model, "gemini-3.7-flash", "the next full model answered");
+  assert.deepEqual(requests.map((r) => r.model), ["gemini-3.8-flash", "gemini-3.8-flash", "gemini-3.7-flash"]);
+  assert.ok(ledger.restMs("f2", "gemini-3.8-flash") > 0 || ledger.restMs("f3", "gemini-3.8-flash") > 0);
+  assert.ok(logs.some((line) => /out of quota \(per-day, limit 250, GenerateRequestsPerDay/.test(line)), "the log shows the limit Google reported: " + logs.join(" | "));
+});
+
+test("Gemini: each spent pair is probed once; after that requests go straight to what works", async () => {
+  const { context, requests } = geminiPath({ respond: ({ model }) => (model === "gemini-3.8-flash" ? geminiDayLimit(model) : geminiOk()) });
+  await context.proxyGeminiMessage(geminiBody());
+  await context.proxyGeminiMessage(geminiBody());
+  await context.proxyGeminiMessage(geminiBody());   /* all three keys now know the main model is spent */
+  requests.length = 0;
+  for (let i = 0; i < 4; i += 1) await context.proxyGeminiMessage(geminiBody());
+  assert.equal(requests.length, 4, "one call per request, none wasted");
+  assert.ok(requests.every((r) => r.model === "gemini-3.7-flash"), JSON.stringify(requests));
+});
+
+test("Gemini: a character's voice never lands on a lite model, light utility work starts there", async () => {
+  const dm = geminiPath({ respond: () => geminiOk() });
+  assert.equal((await dm.context.proxyGeminiMessage(geminiBody({ source: "dm" }))).model, "gemini-3.8-flash");
+  const translate = geminiPath({ respond: () => geminiOk() });
+  assert.equal((await translate.context.proxyGeminiMessage(geminiBody({ source: "display-translate" }))).model, "gemini-3.5-flash-lite");
+  /* everything is spent except the lite models: a voice request waits, a translation is answered */
+  const onlyLite = ({ model }) => (/lite/.test(model) ? geminiOk() : geminiDayLimit(model));
+  const spent = geminiPath({ respond: onlyLite });
+  for (const key of ["f2", "f3", "f4"]) for (const model of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]) spent.ledger.fail(key, model, { status: 429, payload: geminiDayLimit(model).payload });
+  const voice = await spent.context.proxyGeminiMessage(geminiBody({ source: "dm" }));
+  assert.equal(voice.ok, false);
+  assert.equal(voice.status, 429, "the voice waits rather than being given to a lite model");
+  assert.equal(spent.requests.length, 0, "and nothing was even sent");
+  assert.ok(Number(voice.retryAfter) > 3600, "told to come back at the reset: " + voice.retryAfter);
+  assert.equal((await spent.context.proxyGeminiMessage(geminiBody({ source: "music-note" }))).ok, true);
+});
+
+test("Gemini: one request tries at most four (key, model) pairs", async () => {
+  const { context, requests } = geminiPath({ env: { GEMINI_API_KEY_5: "f5", GEMINI_API_KEY_6: "f6" }, respond: () => ({ status: 500, payload: { error: { message: "internal" } } }) });
+  const result = await context.proxyGeminiMessage(geminiBody());
+  assert.equal(result.ok, false);
+  assert.ok(requests.length <= 4, "tried " + requests.length);
+  assert.ok(requests.length >= 3);
+});
+
+test("Gemini: a key that keeps timing out is left alone for a while instead of being tried by every request", async () => {
+  const { context, requests } = geminiPath({ env: { GEMINI_API_KEY_3: "", GEMINI_API_KEY_4: "" }, respond: () => ({ status: 504, payload: { error: { message: "deadline" } } }) });
+  await context.proxyGeminiMessage(geminiBody());
+  await context.proxyGeminiMessage(geminiBody());
+  const before = requests.length;
+  const third = await context.proxyGeminiMessage(geminiBody());
+  assert.ok(requests.length - before < before / 2 + 1, "later requests stop hammering: " + before + " then " + (requests.length - before));
+  assert.equal(third.ok, false);
+});
+
+test("Gemini: the retry hint is short while untried pairs remain, and the real wait once everything rests", async () => {
+  const { context, ledger } = geminiPath({ env: { GEMINI_API_KEY_5: "f5", GEMINI_API_KEY_6: "f6" }, respond: ({ model }) => geminiDayLimit(model) });
+  const first = await context.proxyGeminiMessage(geminiBody());
+  assert.equal(first.status, 429);
+  assert.equal(first.retryAfter, "3", "pairs were left untried (the attempts are capped), so come back at once");
+  let last = first;
+  for (let i = 0; i < 8 && Number(last.retryAfter) <= 3; i += 1) last = await context.proxyGeminiMessage(geminiBody());
+  assert.ok(Number(last.retryAfter) > 600, "everything rests: " + last.retryAfter);
+  assert.equal(last.provider, "gemini");
+});
+
+test("Gemini: a model that does not exist is dropped for every key and the next model answers", async () => {
+  const { context, requests, ledger } = geminiPath({ respond: ({ model }) => (model === "gemini-3.8-flash" ? { status: 404, payload: { error: { message: "models/gemini-3.8-flash is not found for API version v1beta, or is not supported for generateContent." } } } : geminiOk()) });
+  const result = await context.proxyGeminiMessage(geminiBody());
+  assert.equal(result.ok, true);
+  assert.equal(result.model, "gemini-3.7-flash");
+  assert.equal(requests.filter((r) => r.model === "gemini-3.8-flash").length, 1, "tried once, not on every key");
+  assert.ok(ledger.restMs("f4", "gemini-3.8-flash") > 0);
+});
+
+test("Gemini: the paid key is used only by a player who is waiting, after the free keys and models", async () => {
+  const spent = ({ model }) => geminiDayLimit(model);
+  const env = { GEMINI_API_KEY: "paid" };
+  const background = geminiPath({ env, respond: ({ key, model }) => (key === "paid" ? geminiOk() : spent({ model })) });
+  const wait = await background.context.proxyGeminiMessage(geminiBody());
+  assert.equal(wait.ok, false);
+  assert.ok(!background.requests.some((r) => r.key === "paid"), "background work never reaches the paid key");
+  const player = geminiPath({ env, respond: ({ key, model }) => (key === "paid" ? geminiOk() : spent({ model })) });
+  const answer = await player.context.proxyGeminiMessage(geminiBody({ foreground: true }));
+  assert.equal(answer.ok, true);
+  assert.equal(player.requests[player.requests.length - 1].key, "paid");
+  assert.ok(player.requests.slice(0, -1).every((r) => r.key !== "paid"), "free pairs first");
+});
+
+test("Gemini: the starting key rotates between requests", async () => {
+  const { context, requests } = geminiPath({ respond: () => geminiOk() });
+  for (let i = 0; i < 6; i += 1) await context.proxyGeminiMessage(geminiBody());
+  assert.deepEqual(requests.map((r) => r.key), ["f2", "f3", "f4", "f2", "f3", "f4"]);
+});
+
+test("Gemini: a bad key is rested for every model", async () => {
+  const { context, requests, ledger } = geminiPath({ respond: ({ key }) => (key === "f2" ? { status: 400, payload: { error: { message: "API key not valid. Please pass a valid API key." } } } : geminiOk()) });
+  const result = await context.proxyGeminiMessage(geminiBody());
+  assert.equal(result.ok, true);
+  assert.ok(ledger.restMs("f2", "gemini-3.5-flash-lite") > 20 * 3600 * 1000);
+  requests.length = 0;
+  for (let i = 0; i < 4; i += 1) await context.proxyGeminiMessage(geminiBody());
+  assert.ok(!requests.some((r) => r.key === "f2"));
 });

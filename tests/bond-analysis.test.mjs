@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema } from "../src/bondAnalysis.js";
 import { fullSheetText, relationshipSourceText, relationshipFields, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext, bondSourceFingerprint } from "../src/bondClient.js";
 import { sheetHash, analyzeStructured } from "../server/bondAnalysis.js";
+import { createGeminiLedger } from "../server/aiPolicy.js";
 const require = createRequire(import.meta.url);
 const { parse } = require("@babel/parser");
 const ids = ["player", "ai-a", "ai-b", "sensei"];
@@ -611,4 +612,68 @@ test("Groq can repair exact quotations in long outputs without dropping the sour
  assert.equal(result.formatterProvider, "groq");
  assert.ok(calls[0].messages[0].content.includes(prompt));
  assert.ok(calls[0].max_completion_tokens <= 32768);
+});
+
+/* ---------- sheet analysis shares the server's view of resting Gemini keys ---------- */
+
+const geminiTransport = (calls, answer) => async (url, opts) => {
+  if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+  if (url.endsWith(":generateContent")) {
+    const key = opts.headers["x-goog-api-key"], model = decodeURIComponent(url.split("/models/")[1].split(":")[0]);
+    calls.push(key + "/" + model);
+    return answer({ key, model });
+  }
+  return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+};
+const gem = (key, model) => ({ name: "gemini", key, keySlot: "K_" + key, model });
+const okReply = { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":true}' }] } }] };
+const quotaError = () => Object.assign(new Error("Analysis provider HTTP 429: quota"), { status: 429, payload: { error: { details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue: "250" }] }] } } });
+
+test("Sheet analysis skips a (key, model) pair the server already knows is spent, without a single request", async () => {
+  const ledger = createGeminiLedger();
+  ledger.fail("k1", "m1", { status: 429, payload: quotaError().payload });
+  const calls = [];
+  const result = await analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), {
+    candidates: [gem("k1", "m1"), gem("k2", "m1")], transport: geminiTransport(calls, () => okReply), outputTokens: 1000, ledger,
+  });
+  assert.equal(result.keySlot, "K_k2");
+  assert.deepEqual(calls, ["k2/m1"], "k1/m1 was not even asked");
+});
+
+test("A quota error during sheet analysis is reported, so chat and pictures stop using that pair too", async () => {
+  const ledger = createGeminiLedger();
+  const calls = [];
+  const result = await analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), {
+    candidates: [gem("k1", "m1"), gem("k2", "m1")], transport: geminiTransport(calls, ({ key }) => { if (key === "k1") throw quotaError(); return okReply; }), outputTokens: 1000, ledger,
+  });
+  assert.equal(result.keySlot, "K_k2");
+  assert.ok(ledger.restMs("k1", "m1") > 3600 * 1000, "rested until the daily reset");
+  assert.equal(ledger.restMs("k2", "m1"), 0);
+  assert.equal(ledger.restMs("k1", "m2"), 0, "other models on that key stay open");
+});
+
+test("An answer that arrives but does not validate says nothing about the key: it is never rested for it", async () => {
+  const ledger = createGeminiLedger();
+  const calls = [];
+  const bad = { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "{}" }] } }] };
+  for (let round = 0; round < 3; round += 1) {
+    await analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), {
+      candidates: [gem("k1", "m1"), gem("k2", "m1")], transport: geminiTransport(calls, ({ key }) => (key === "k1" ? bad : okReply)), outputTokens: 1000, ledger,
+    });
+  }
+  assert.equal(ledger.restMs("k1", "m1"), 0, "three invalid answers in a row are not three provider failures");
+});
+
+test("When every pair rests, the analysis fails as 'transient' so the job waits and retries", async () => {
+  const ledger = createGeminiLedger();
+  ledger.fail("k1", "m1", { status: 429, payload: quotaError().payload });
+  const calls = [];
+  const error = await analyzeStructured("Complete source", { type: "object" }, () => {}, { candidates: [gem("k1", "m1")], transport: geminiTransport(calls, () => okReply), outputTokens: 1000, ledger }).then(() => null, (e) => e);
+  assert.ok(error, "it failed");
+  assert.deepEqual(calls, []);
+  assert.ok(error.failures.every((f) => f.transient === true), "every failure is worth retrying later");
+});
+
+test("proxy.js hands the shared ledger to the sheet analysis", () => {
+  assert.match(serverSource, /registerBondAnalysis\(app, \{[^}]*ledger: GEMINI_LEDGER \}\)/);
 });

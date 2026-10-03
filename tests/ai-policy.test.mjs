@@ -6,6 +6,8 @@ import {
   backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, secondsUntilPacificMidnight, planGroqRequest, groqRetryMs, GROQ_FREE_TPM_BUDGET,
   BACKGROUND_WAIT_MIN_SECONDS, BACKGROUND_WAIT_MAX_SECONDS, BACKGROUND_WAIT_DEFAULT_SECONDS,
   GROQ_UTILITY_SOURCES, GROQ_UTILITY_CHAIN, isGroqUtilitySource, estimateGroqTokens, groqCarriesWhole, groqPaceMaxWaitMs, createGroqPacer, GROQ_WINDOW_MS,
+  geminiModelConfig, geminiModelLadder, geminiStreakRestMs, createGeminiLedger, planGeminiAttempts,
+  DEFAULT_GEMINI_EXTRA_MODELS, DEFAULT_GEMINI_LITE_MODELS, DEFAULT_GEMINI_PRIMARY_MODEL,
 } from "../server/aiPolicy.js";
 
 test("Only an explicit foreground flag marks a request as player-waiting", () => {
@@ -263,4 +265,148 @@ test("Groq pacer: a budget wait longer than the allowed time is refused at once 
   assert.deepEqual([refused.ok, refused.reason], [false, "budget"]);
   assert.ok(refused.waitMs > 50_000, "tells the caller how long: " + refused.waitMs);
   assert.equal(clock.t, started, "it did not sit and wait for nothing");
+});
+
+/* ---------- Gemini models and the (key, model) ledger ---------- */
+
+test("Models come from the free list: the writing model, two more flash models, three lite ones", () => {
+  const config = geminiModelConfig({});
+  assert.equal(config.primary, DEFAULT_GEMINI_PRIMARY_MODEL);
+  assert.deepEqual(config.extra, ["gemini-3.7-flash", "gemini-3.6-flash"]);
+  assert.deepEqual(config.lite, ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]);
+  assert.deepEqual(Array.from(DEFAULT_GEMINI_EXTRA_MODELS).concat(Array.from(DEFAULT_GEMINI_LITE_MODELS), DEFAULT_GEMINI_PRIMARY_MODEL).sort(),
+    ["gemini-2.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"]);
+});
+
+test("The environment can change every list, and 'off' switches one off", () => {
+  const config = geminiModelConfig({ GEMINI_MODEL: "gemini-3.7-flash", GEMINI_DEEP_MODEL: "gemini-3.8-flash", GEMINI_EXTRA_MODELS: "a, b;c", GEMINI_LITE_MODELS: "off", GEMINI_VISION_MODEL: "v" });
+  assert.deepEqual([config.primary, config.deep, config.extra, config.lite], ["gemini-3.7-flash", "gemini-3.8-flash", ["a", "b", "c"], []]);
+  assert.deepEqual(config.vision, ["v", "gemini-3.7-flash", "a", "b", "c"]);
+  assert.equal(geminiModelConfig({ GEMINI_FALLBACK_MODEL: "old-name" }).primary, "old-name", "the old variable name still works");
+  assert.deepEqual(geminiModelConfig({ GEMINI_MODEL: "gemini-3.6-flash" }).extra, ["gemini-3.7-flash"], "the main model is not listed twice");
+});
+
+test("Characters' voices and careful readings use the full models only; light utility work starts on the lite ones", () => {
+  const config = geminiModelConfig({});
+  const full = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"];
+  for (const source of ["dm", "scene", "comments", "feed-post", "group-chat", "notes", "ambient-popup", "gossip-propagation", "sheet-summary", "character-bible", "askWorldJSON", ""]) {
+    assert.deepEqual(geminiModelLadder(config, { source }), full, source);
+  }
+  assert.deepEqual(geminiModelLadder(config, { source: "character-bible", quality: "deep" }), full);
+  assert.deepEqual(geminiModelLadder(config, { source: "meaning-analysis", quality: "deep" }), full, "a careful reading is never given to a lite model");
+  for (const source of ["meaning-analysis", "display-translate", "music-note", "relationship-impact"]) {
+    assert.deepEqual(geminiModelLadder(config, { source }), [...config.lite, ...full], source);
+  }
+  assert.deepEqual(geminiModelLadder(geminiModelConfig({ GEMINI_DEEP_MODEL: "gemini-3.7-flash" }), { quality: "deep" }), ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.6-flash"]);
+});
+
+test("A 429 reports the real size of the quota, the model it counted on, and when it comes back", () => {
+  const now = Date.UTC(2026, 9, 3, 11, 0, 0);
+  const violation = { quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue: "250", quotaDimensions: { model: "gemini-3.8-flash", location: "global" } };
+  const info = geminiRateLimitInfo({ error: { details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [violation] }] } }, now);
+  assert.deepEqual([info.metric, info.limit, info.quotaModel, info.quotaId], ["per-day", 250, "gemini-3.8-flash", violation.quotaId]);
+  const minute = geminiRateLimitInfo({ error: { details: [{ violations: [{ quotaId: "x", quotaValue: "9" }, { quotaId: "GenerateContentInputTokensPerModelPerMinute-FreeTier", quotaValue: "250000" }] }] } }, now);
+  assert.deepEqual([minute.metric, minute.limit], ["per-minute", 250000], "the figure of the limit that was hit, not just the first one");
+  assert.equal(geminiRateLimitInfo(null, now).limit, 0);
+});
+
+test("A key that timed out twice in a row rests a little, and the rest doubles up to ten minutes", () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 9].map(geminiStreakRestMs), [0, 0, 30000, 60000, 120000, 240000, 600000]);
+});
+
+function ledgerAt(start = 1_000_000) {
+  const clock = { t: start };
+  return { clock, ledger: createGeminiLedger({ now: () => clock.t }) };
+}
+const dayLimit = { error: { details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue: "250" }] }] } };
+
+test("A spent daily quota rests ONE model on that key; the key's other models stay open", () => {
+  const { ledger } = ledgerAt(Date.UTC(2026, 9, 3, 11, 0, 0));
+  const outcome = ledger.fail("k2", "gemini-3.8-flash", { status: 429, payload: dayLimit });
+  assert.deepEqual([outcome.level, outcome.metric, outcome.limit], ["model", "per-day", 250]);
+  assert.ok(ledger.restMs("k2", "gemini-3.8-flash") > 3600 * 1000);
+  assert.equal(ledger.restMs("k2", "gemini-3.7-flash"), 0, "same key, other model");
+  assert.equal(ledger.restMs("k3", "gemini-3.8-flash"), 0, "other key, same model");
+});
+
+test("A bad key rests for every model; spent credit too; a model that does not exist rests for every key", () => {
+  const { ledger } = ledgerAt();
+  assert.equal(ledger.fail("bad", "m1", { status: 400, message: "API key not valid. Please pass a valid API key." }).level, "key");
+  assert.ok(ledger.restMs("bad", "m2") > 20 * 3600 * 1000);
+  assert.equal(ledger.fail("broke", "m1", { status: 402, message: "credits are depleted" }).metric, "no-credit");
+  assert.ok(ledger.restMs("broke", "m3") > 0);
+  const gone = ledger.fail("any", "gemini-9", { status: 404, message: "models/gemini-9 is not found for API version v1beta" });
+  assert.equal(gone.level, "model-gone");
+  assert.ok(ledger.restMs("other-key", "gemini-9") > 0);
+  assert.equal(ledger.fail("any", "m1", { status: 404, message: "Not Found" }).level, "none", "a bare 404 says nothing about the model");
+  assert.equal(ledger.fail("any", "m1", { status: 400, message: "Invalid JSON payload" }).level, "none", "a request error is not the key's fault");
+});
+
+test("Timeouts and 5xx only rest a pair after a second failure in a row, and a success clears the count", () => {
+  const { ledger, clock } = ledgerAt();
+  assert.equal(ledger.fail("k", "m", { status: 504 }).restMs, 0);
+  assert.equal(ledger.restMs("k", "m"), 0, "one hiccup is not held against it");
+  assert.equal(ledger.fail("k", "m", { status: 503 }).restMs, 30000);
+  assert.equal(ledger.restMs("k", "m"), 30000);
+  clock.t += 31000;
+  assert.equal(ledger.restMs("k", "m"), 0);
+  ledger.succeed("k", "m");
+  assert.equal(ledger.fail("k", "m", { status: 504 }).restMs, 0, "the streak started over");
+  assert.equal(ledger.fail("k2", "m", { status: 0 }).restMs, 0, "a dropped connection counts as a hiccup too");
+});
+
+test("The ledger's Map-like view lets older code rest one model's key", () => {
+  const { ledger, clock } = ledgerAt();
+  const view = ledger.view("emb");
+  view.set("k", clock.t + 5000);
+  assert.equal(view.get("k"), clock.t + 5000);
+  assert.equal(ledger.restMs("k", "emb"), 5000);
+  assert.equal(ledger.restMs("k", "other"), 0);
+  view.set("k", clock.t + 1000);
+  assert.equal(view.get("k"), clock.t + 5000, "a rest is never shortened");
+});
+
+test("Attempts go model by model, two keys each, never more than four, and never to a resting pair", () => {
+  const { ledger } = ledgerAt();
+  const models = ["m1", "m2", "m3"];
+  const plan = planGeminiAttempts({ freeKeys: ["a", "b", "c", "d"], models, ledger, rotation: 0 });
+  assert.deepEqual(plan.attempts.map((x) => x.key + x.model), ["am1", "bm1", "am2", "bm2"]);
+  ledger.fail("a", "m1", { status: 429, payload: dayLimit });
+  ledger.fail("b", "m1", { status: 429, payload: dayLimit });
+  assert.deepEqual(planGeminiAttempts({ freeKeys: ["a", "b", "c", "d"], models, ledger, rotation: 0 }).attempts.map((x) => x.key + x.model), ["cm1", "dm1", "am2", "bm2"]);
+  for (const key of ["a", "b", "c", "d"]) ledger.fail(key, "m1", { status: 429, payload: dayLimit });
+  assert.deepEqual(planGeminiAttempts({ freeKeys: ["a", "b", "c", "d"], models, ledger, rotation: 0 }).attempts.map((x) => x.key + x.model), ["am2", "bm2", "am3", "bm3"], "a spent model is skipped on every key");
+});
+
+test("The starting key rotates, so no key takes every request", () => {
+  const { ledger } = ledgerAt();
+  const starts = [0, 1, 2, 3, 4].map((rotation) => planGeminiAttempts({ freeKeys: ["a", "b", "c"], models: ["m"], ledger, rotation }).attempts[0].key);
+  assert.deepEqual(starts, ["a", "b", "c", "a", "b"]);
+  const counter = createGeminiLedger();
+  assert.deepEqual([counter.nextRotation(), counter.nextRotation(), counter.nextRotation()], [0, 1, 2]);
+});
+
+test("Nothing usable: a background request gets the wait, a waiting player may still use the paid key", () => {
+  const { ledger, clock } = ledgerAt();
+  for (const model of ["m1", "m2"]) for (const key of ["a", "b"]) ledger.fail(key, model, { status: 429, payload: { error: { details: [{ violations: [{ quotaId: "RequestsPerMinute" }] }, { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "40s" }] } } });
+  const background = planGeminiAttempts({ freeKeys: ["a", "b"], paidKey: "paid", models: ["m1", "m2"], ledger });
+  assert.equal(background.attempts.length, 0);
+  assert.equal(background.waitMs, 42000);
+  clock.t += 10000;
+  assert.equal(planGeminiAttempts({ freeKeys: ["a", "b"], paidKey: "paid", models: ["m1", "m2"], ledger }).waitMs, 32000);
+  const player = planGeminiAttempts({ freeKeys: ["a", "b"], paidKey: "paid", models: ["m1", "m2"], ledger, foreground: true });
+  assert.deepEqual(player.attempts.map((x) => x.key), ["paid"]);
+  assert.equal(player.attempts[0].paid, true);
+  const optIn = planGeminiAttempts({ freeKeys: ["a"], paidKey: "paid", models: ["m1"], ledger, allowPaidBackground: true });
+  assert.deepEqual(optIn.attempts.map((x) => x.key), ["paid"]);
+  assert.deepEqual(planGeminiAttempts({ freeKeys: [], paidKey: "", models: ["m1"], ledger }), { attempts: [], waitMs: 0 }, "nothing configured is not a wait");
+});
+
+test("A waiting player with free keys that all rest is still given the last one to try, and free keys come before the paid one", () => {
+  const { ledger } = ledgerAt();
+  ledger.fail("a", "m1", { status: 429, payload: dayLimit });
+  const onlyFree = planGeminiAttempts({ freeKeys: ["a"], models: ["m1"], ledger, foreground: true });
+  assert.deepEqual(onlyFree.attempts.map((x) => x.key), ["a"]);
+  const both = planGeminiAttempts({ freeKeys: ["a", "b"], paidKey: "paid", models: ["m1"], ledger, foreground: true });
+  assert.deepEqual(both.attempts.map((x) => x.key), ["b", "paid"]);
 });

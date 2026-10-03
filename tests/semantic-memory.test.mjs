@@ -48,15 +48,24 @@ function fakeDb() {
   };
 }
 
-function setup({ failFree = false } = {}) {
+function setup({ failFree = false, batch = null } = {}) {
   const db = fakeDb();
-  const calls = { embed: 0, keys: [] };
+  const calls = { embed: 0, http: 0, batches: 0, keys: [], bodies: [] };
   const fetchFn = async (url, options) => {
     const key = options.headers["x-goog-api-key"];
     calls.keys.push(key);
+    calls.http += 1;
     if (failFree && key !== "paid") return { ok: false, status: 429, json: async () => ({ error: { message: "rate limit per minute" } }) };
+    const body = JSON.parse(options.body);
+    calls.bodies.push({ url, body });
+    if (/:batchEmbedContents/.test(url)) {
+      if (batch) { const answer = batch(body); if (answer) return answer; }
+      calls.batches += 1;
+      calls.embed += body.requests.length;
+      return { ok: true, status: 200, json: async () => ({ embeddings: body.requests.map((request) => ({ values: fakeVector(request.content.parts[0].text) })) }) };
+    }
     calls.embed += 1;
-    const text = JSON.parse(options.body).content.parts[0].text;
+    const text = body.content.parts[0].text;
     return { ok: true, status: 200, json: async () => ({ embedding: { values: fakeVector(text) } }) };
   };
   const embedder = createEmbedder({ freeKeys: ["free1", "free2"], paidKey: "paid", fetchFn, model: "emb", dimensions: DIM });
@@ -294,4 +303,100 @@ test("The embedder reads the quota window: a per-minute limit rests the key brie
   };
   assert.equal(await attempt(detail("EmbedContentRequestsPerMinutePerProjectPerModel-FreeTier", "20s")), 22000);
   assert.equal(await attempt(detail("EmbedContentRequestsPerDayPerProjectPerModel-FreeTier")), (19 * 3600 + 42 * 60 + 60) * 1000);
+});
+
+/* ---------- batches ---------- */
+
+const manyChunks = (n) => Array.from({ length: n }, (_, i) => ({ key: "bio#" + i, text: "Chunk number " + i + " about Manon and her gym.", importance: 50 }));
+
+test("A whole sheet is embedded in ONE request, not one request per chunk", async () => {
+  const t = setup();
+  try {
+    const result = await t.post("/memory/sync-sheet", { characterId: "manon", chunks: manyChunks(7) });
+    assert.deepEqual([result.body.ok, result.body.added], [true, 7]);
+    assert.equal(t.calls.http, 1, "one request for seven chunks");
+    assert.equal(t.calls.batches, 1);
+    assert.equal(t.calls.embed, 7);
+    const sent = t.calls.bodies[0].body.requests;
+    assert.equal(sent.length, 7);
+    assert.equal(sent[0].model, "models/emb");
+    assert.equal(sent[0].embedContentConfig.taskType, "RETRIEVAL_DOCUMENT");
+    assert.match(sent[0].embedContentConfig.title, /sheet bio#0 of manon/);
+  } finally { t.close(); }
+});
+
+test("A big sheet goes out in batches of twenty", async () => {
+  const t = setup();
+  try {
+    const result = await t.post("/memory/sync-sheet", { characterId: "manon", chunks: manyChunks(45) });
+    assert.equal(result.body.added, 45);
+    assert.equal(t.calls.http, 3, "20 + 20 + 5");
+    assert.deepEqual(t.calls.bodies.map((b) => b.body.requests.length), [20, 20, 5]);
+  } finally { t.close(); }
+});
+
+test("A single chunk and a single event use the plain request", async () => {
+  const t = setup();
+  try {
+    await t.post("/memory/sync-sheet", { characterId: "manon", chunks: manyChunks(1) });
+    assert.match(t.calls.bodies[0].url, /:embedContent$/);
+  } finally { t.close(); }
+});
+
+test("Events are embedded together too", async () => {
+  const t = setup();
+  try {
+    const memories = ["Manon won the regional final.", "Brent lied about the keys.", "Manon fell out with Brent."].map((text, i) => ({ characterId: i === 1 ? "brent" : "manon", text, importance: 60 }));
+    const result = await t.post("/memory/remember-batch", { memories });
+    assert.deepEqual([result.body.ok, result.body.stored], [true, 3]);
+    assert.equal(t.calls.http, 1);
+  } finally { t.close(); }
+});
+
+test("If Google rejects the batch form, single requests take over and the batch form is not tried again", async () => {
+  const t = setup({ batch: () => ({ ok: false, status: 400, json: async () => ({ error: { message: "Invalid JSON payload received. Unknown name \"embedContentConfig\"" } }) }) });
+  try {
+    const first = await t.post("/memory/sync-sheet", { characterId: "manon", chunks: manyChunks(3) });
+    assert.deepEqual([first.body.ok, first.body.added], [true, 3], "nothing is lost");
+    assert.equal(t.calls.batches, 0);
+    const batchAttempts = t.calls.bodies.filter((b) => /batchEmbedContents/.test(b.url)).length;
+    assert.equal(batchAttempts, 1, "one rejected try");
+    await t.post("/memory/sync-sheet", { characterId: "brent", chunks: manyChunks(3) });
+    assert.equal(t.calls.bodies.filter((b) => /batchEmbedContents/.test(b.url)).length, 1, "not tried again");
+  } finally { t.close(); }
+});
+
+test("A batch answer with the wrong number of vectors falls back to single requests", async () => {
+  const t = setup({ batch: () => ({ ok: true, status: 200, json: async () => ({ embeddings: [{ values: [1, 0, 0] }] }) }) });
+  try {
+    const result = await t.post("/memory/sync-sheet", { characterId: "manon", chunks: manyChunks(3) });
+    assert.deepEqual([result.body.ok, result.body.added], [true, 3]);
+    assert.ok(t.db.rows.every((row) => Array.isArray(row.embedding) && row.embedding.length === DIM));
+  } finally { t.close(); }
+});
+
+test("A rate-limited key rests during a batch and the next free key carries it", async () => {
+  const t = setup({ batch: (body) => null });
+  const rest = new Map();
+  const embedder = createEmbedder({
+    freeKeys: ["a", "b"], restUntil: rest, model: "emb", dimensions: DIM, now: () => 5000,
+    fetchFn: async (url, options) => (options.headers["x-goog-api-key"] === "a"
+      ? { ok: false, status: 429, json: async () => ({ error: { message: "quota", details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "RequestsPerMinute" }] }] } }) }
+      : { ok: true, status: 200, json: async () => ({ embeddings: JSON.parse(options.body).requests.map(() => ({ values: [1, 0, 0] })) }) }),
+  });
+  try {
+    const vectors = await embedder.embedMany([{ text: "one" }, { text: "two" }]);
+    assert.equal(vectors.length, 2);
+    assert.ok(rest.get("a") > 5000, "the limited key rests");
+    assert.equal(rest.get("b"), undefined);
+  } finally { t.close(); }
+});
+
+test("With no free capacity a batch waits like a single request does", async () => {
+  const t = setup({ failFree: true });
+  try {
+    const result = await t.post("/memory/sync-sheet", { characterId: "manon", chunks: manyChunks(3) });
+    assert.equal(result.body.waiting, true);
+    assert.equal(result.body.added, 0);
+  } finally { t.close(); }
 });

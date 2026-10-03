@@ -17,6 +17,10 @@ import {
   createGroqPacer,
   groqRetryMs,
   GROQ_UTILITY_CHAIN,
+  createGeminiLedger,
+  geminiModelConfig,
+  geminiModelLadder,
+  planGeminiAttempts,
 } from "./aiPolicy.js";
 import { registerSemanticMemory, createEmbedder } from "./semanticMemory.js";
 import { createVisionRunner, DEFAULT_GROQ_VISION_MODEL } from "./vision.js";
@@ -50,6 +54,10 @@ const GROQ_MODEL = String(process.env.GROQ_MODEL || "").trim();
 const GROQ_MODEL_2 = String(process.env.GROQ_MODEL_2 || GROQ_MODEL || "").trim();
 /* Groq's free tier is small: each key serves one request at a time and stays inside its minute budget. */
 const GROQ_PACER = createGroqPacer();
+/* Gemini's free quota is counted per key AND per model. One ledger, shared by chat, pictures, embeddings
+   and sheet analysis, knows which (key, model) pairs are resting, so none of them hits a spent bucket. */
+const GEMINI_LEDGER = createGeminiLedger();
+const GEMINI_MODELS = geminiModelConfig(process.env);
 /* New exact name first; historical Gemini fallback name remains accepted. */
 const GEMINI_MODEL_ENV = String(process.env.GEMINI_MODEL || process.env.GEMINI_FALLBACK_MODEL || "").trim();
 const AI_PROVIDER_ORDER_ENV = String(process.env.AI_PROVIDER_ORDER || "").trim();
@@ -226,7 +234,7 @@ async function requireDb(res) {
   await dbReady;
   return true;
 }
-registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe });
+registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, ledger: GEMINI_LEDGER });
 
 /* ---------- biztonságos account + session segédek ---------- */
 
@@ -3574,8 +3582,8 @@ function visionRunner() {
     groqModel: String(process.env.GROQ_VISION_MODEL || DEFAULT_GROQ_VISION_MODEL).trim(),
     geminiFreeKeys: GEMINI_FREE_KEYS,
     geminiPaidKey: GEMINI_PAID_KEY,
-    geminiModel: String(process.env.GEMINI_VISION_MODEL || "gemini-3.5-flash").trim(),
-    geminiRestUntil: GEMINI_KEY_REST_UNTIL,
+    geminiModels: GEMINI_MODELS.vision,
+    ledger: GEMINI_LEDGER,
     pacer: GROQ_PACER,
     allowPaid: AI_ALLOW_PAID_BACKGROUND,
     paid: { openai: visionViaOpenAI, anthropic: visionViaAnthropic },
@@ -4798,52 +4806,56 @@ const GEMINI_FREE_KEYS = [
   process.env.GEMINI_API_KEY_8,
 ].map((k) => String(k || "").trim()).filter(Boolean).filter((k, i, a) => a.indexOf(k) === i && k !== GEMINI_PAID_KEY);
 const GEMINI_KEYS = [...GEMINI_FREE_KEYS, GEMINI_PAID_KEY].filter(Boolean);
-const GEMINI_KEY_REST_UNTIL = new Map();
 /* Background work never touches paid capacity unless this is switched on explicitly. */
 const AI_ALLOW_PAID_BACKGROUND = String(process.env.AI_ALLOW_PAID_BACKGROUND || "").trim() === "1";
 
 async function proxyGeminiMessage(body) {
   if (!GEMINI_KEYS.length) return { unavailable: true, provider: "gemini" };
   const foreground = isForegroundRequest(body);
-  const selection = selectGeminiKeys({
+  /* Free keys only, model by model: the best model on two free keys, then the next model, and so on.
+     Pairs known to be resting (spent quota, bad key, a run of timeouts) are not even tried. */
+  const plan = planGeminiAttempts({
     freeKeys: GEMINI_FREE_KEYS,
     paidKey: GEMINI_PAID_KEY,
-    restUntil: GEMINI_KEY_REST_UNTIL,
-    now: Date.now(),
+    models: geminiModelLadder(GEMINI_MODELS, body),
+    ledger: GEMINI_LEDGER,
     foreground,
     allowPaidBackground: AI_ALLOW_PAID_BACKGROUND,
+    rotation: GEMINI_LEDGER.nextRotation(),
   });
-  /* Background request, every free key resting: report it so the caller waits
+  /* Background request, every free key and model resting: report it so the caller waits
      instead of spending the paid key. */
-  if (!selection.keys.length) {
+  if (!plan.attempts.length) {
     return {
       ok: false,
       status: 429,
       payload: { error: { message: "All free Gemini keys are resting after rate limits." } },
-      retryAfter: selection.waitMs > 0 ? String(Math.ceil(selection.waitMs / 1000)) : "",
+      retryAfter: plan.waitMs > 0 ? String(Math.ceil(plan.waitMs / 1000)) : "",
       provider: "gemini",
     };
   }
-  /* A player waiting for the answer may still use the paid key (last) when every key is resting. */
-  const keys = selection.keys;
 
-  /* Keep key rotation inside ONE request budget. This lets 503/high-demand try
-     later Gemini keys without multiplying an 8–45s planner request by five. */
+  /* Keep the attempts inside ONE request budget. This lets 503/high-demand try
+     another key or model without multiplying an 8–45s request by five. */
   const deadline = Date.now() + upstreamTimeoutFor(body);
   let last = null;
 
-  for (let i = 0; i < keys.length; i += 1) {
+  for (let i = 0; i < plan.attempts.length; i += 1) {
+    const { key, model, forced } = plan.attempts[i];
+    /* An earlier attempt of this same request may just have shown that a model or key is spent. */
+    if (!forced && GEMINI_LEDGER.restMs(key, model) > 0) continue;
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 1000) break;
 
-    const remainingKeys = Math.max(1, keys.length - i);
+    const remainingAttempts = Math.max(1, plan.attempts.length - i);
     const perKeyBudget = Math.max(1800, Math.min(
       String(body?.quality || "") === "deep" ? 12000 : 6500,
-      Math.floor(remainingMs / remainingKeys)
+      Math.floor(remainingMs / remainingAttempts)
     ));
+    const label = "gemini key #" + (GEMINI_KEYS.indexOf(key) + 1) + "/" + model;
     let result;
     try {
-      result = await proxyGeminiMessageWithKey(body, keys[i], perKeyBudget);
+      result = await proxyGeminiMessageWithKey(body, key, perKeyBudget, model);
     } catch (error) {
       const timeout = error?.name === "AbortError" || /aborted|timeout/i.test(String(error?.message || error || ""));
       result = {
@@ -4851,46 +4863,50 @@ async function proxyGeminiMessage(body) {
         status: timeout ? 504 : 502,
         payload: { error: { message: timeout ? "Gemini key timed out." : String(error?.message || error || "Gemini request failed.") } },
         provider: "gemini",
+        model,
       };
     }
-    if (result && result.ok) return result;
+    if (result && result.ok) {
+      GEMINI_LEDGER.succeed(key, model);
+      return result;
+    }
     last = result;
 
     const status = Number(result && result.status);
-    const keyRestMs = geminiKeyRestMs(status, proxyErrorMessage(result && result.payload, ""), result && result.payload);
-    if (keyRestMs > 0 && GEMINI_KEYS.length > 1) {
-      GEMINI_KEY_REST_UNTIL.set(keys[i], Date.now() + keyRestMs);
-      const limit = status === 429 ? geminiRateLimitInfo(result && result.payload) : null;
-      console.warn(
-        "[ai-provider] gemini key #" + (GEMINI_KEYS.indexOf(keys[i]) + 1) +
-        (status === 402 ? " out of prepaid credit" : status === 429 ? " out of quota (" + limit.metric + ")" : " invalid/rejected") +
-        " — resting it for " + Math.round(keyRestMs / 60000) + " min, trying the next key"
-      );
+    const outcome = GEMINI_LEDGER.fail(key, model, { status, message: proxyErrorMessage(result && result.payload, ""), payload: result && result.payload });
+    if (outcome.restMs > 0) {
+      const minutes = Math.max(1, Math.round(outcome.restMs / 60000));
+      const what = outcome.metric === "no-credit" ? "out of prepaid credit"
+        : outcome.metric === "invalid-key" ? "invalid/rejected"
+        : outcome.level === "model-gone" ? "model not available"
+        : outcome.metric === "unavailable" ? "failing repeatedly (" + status + ")"
+        : "out of quota (" + outcome.metric + (outcome.limit ? ", limit " + outcome.limit : "") + (outcome.quotaId ? ", " + outcome.quotaId : "") + ")";
+      console.warn("[ai-provider] " + label + " " + what + " — resting it for " + minutes + " min, trying the next one");
       continue;
     }
-
-    if ([408, 500, 502, 503, 504, 529].includes(status) && i + 1 < keys.length && deadline - Date.now() > 1000) {
-      console.warn(
-        "[ai-provider] gemini key #" + (GEMINI_KEYS.indexOf(keys[i]) + 1) +
-        " temporary/" + status + " — trying the next key within the same request budget"
-      );
+    if (outcome.retryable && i + 1 < plan.attempts.length && deadline - Date.now() > 1000) {
+      console.warn("[ai-provider] " + label + " temporary/" + status + " — trying the next one within the same request budget");
       continue;
     }
-
     break;
   }
   if (last && Number(last.status) === 429) {
-    const wakeMs = Math.min(...keys.map((key) => (GEMINI_KEY_REST_UNTIL.get(key) || 0) - Date.now()));
+    /* Come back when the soonest free (key, model) pair is ready: at once if some pair has not been
+       tried yet (the attempts are capped), otherwise when the first of the resting ones is. */
+    const again = planGeminiAttempts({
+      freeKeys: GEMINI_FREE_KEYS, paidKey: "", models: geminiModelLadder(GEMINI_MODELS, body), ledger: GEMINI_LEDGER, foreground: false,
+    });
+    const wakeMs = again.attempts.length ? 3000 : again.waitMs;
     if (Number.isFinite(wakeMs) && wakeMs > 0) last.retryAfter = String(Math.ceil(wakeMs / 1000));
   }
   return last || { unavailable: true, provider: "gemini" };
 }
 
-async function proxyGeminiMessageWithKey(body, GEMINI_API_KEY, timeoutMs = upstreamTimeoutFor(body)) {
+async function proxyGeminiMessageWithKey(body, GEMINI_API_KEY, timeoutMs = upstreamTimeoutFor(body), modelOverride = "") {
 
-  const model = String(body?.quality || "") === "deep"
-    ? String(process.env.GEMINI_DEEP_MODEL || GEMINI_MODEL_ENV || "gemini-3.8-flash").trim()
-    : String(GEMINI_MODEL_ENV || "gemini-3.8-flash").trim();
+  const model = String(modelOverride || "").trim() || (String(body?.quality || "") === "deep"
+    ? GEMINI_MODELS.deep
+    : GEMINI_MODELS.primary);
 
   const url = new URL(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
@@ -4911,14 +4927,15 @@ async function proxyGeminiMessageWithKey(body, GEMINI_API_KEY, timeoutMs = upstr
       payload,
       retryAfter: r.headers.get("retry-after"),
       provider: "gemini",
+      model,
     };
   }
 
   const normalized = normalizeGeminiResponse(payload);
   const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
   return hasText
-    ? { ok: true, payload: normalized, provider: "gemini" }
-    : { ok: false, status: 502, payload: { error: { message: "Gemini returned empty content." } }, provider: "gemini" };
+    ? { ok: true, payload: normalized, provider: "gemini", model }
+    : { ok: false, status: 502, payload: { error: { message: "Gemini returned empty content." } }, provider: "gemini", model };
 }
 
 async function proxyAnthropicMessage(body) {
@@ -5121,8 +5138,7 @@ function providerModel(provider, body = {}) {
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
   if (provider === "openrouter2") return String(process.env.OPENROUTER_MODEL_2 || "openrouter/free").trim();
   if (provider === "gemini") {
-    if (String(body?.quality || "") === "deep") return String(process.env.GEMINI_DEEP_MODEL || GEMINI_MODEL_ENV || "gemini-3.8-flash").trim();
-    return String(GEMINI_MODEL_ENV || "gemini-3.8-flash").trim();
+    return String(body?.quality || "") === "deep" ? GEMINI_MODELS.deep : GEMINI_MODELS.primary;
   }
   if (provider === "anthropic") {
     return requested.startsWith("claude")
@@ -5453,15 +5469,13 @@ function markProviderFailure(provider, model, result) {
     return rest;
   }
 
-  /* Gemini 402 = a key's prepaid credit is gone. The key rests on its own (see proxyGeminiMessage);
-     the provider as a whole must not be switched off for good because of it. */
-  if (provider === "gemini" && status === 402) {
-    const rest = 10 * 60 * 1000;
+  /* Gemini's quota, credit and key problems are kept per (key, model) by GEMINI_LEDGER, which already rests
+     exactly the pair that is spent. They must not rest or switch off the whole provider: another key, or
+     another model's separate daily quota (a lite one, say), may well be open. */
+  if (provider === "gemini" && [401, 402, 403, 404, 429].includes(status)) {
     AI_GATE.providerConfigurationErrors.delete(provider);
-    AI_GATE.providerCooldownUntil.set(provider, Date.now() + rest);
     AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
-    console.warn("[ai-gate] provider-cooldown", `${provider}/${model}`, `status=${status}`, `ms=${rest}`, "reason=gemini-key-credit-depleted", message);
-    return rest;
+    return 0;
   }
 
   if ([401, 402, 403, 404].includes(status)) {
@@ -5719,7 +5733,7 @@ function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
 async function executeAITask(task) {
   const attempted = new Set();
   const attempts = [];
-  const paceWaitsMs = [];
+  const waitHintsMs = [];   /* when a busy or spent provider says it will be ready again */
   let last = null;
 
   while (true) {
@@ -5751,8 +5765,13 @@ async function executeAITask(task) {
     /* Groq was busy with another request or had spent this minute's tokens. Not a failure: no cooldown,
        the next provider takes this one and Groq stays free for whoever is next. */
     if (result?.paced) {
-      paceWaitsMs.push(Math.max(1000, (Number.parseInt(result.retryAfter, 10) || 3) * 1000));
+      waitHintsMs.push(Math.max(1000, (Number.parseInt(result.retryAfter, 10) || 3) * 1000));
       continue;
+    }
+    /* Gemini keeps its own books (see markProviderFailure), so its "come back at" has to be taken here. */
+    if (provider === "gemini" && status === 429) {
+      const hint = Number.parseInt(result.retryAfter, 10);
+      if (hint > 0) waitHintsMs.push(hint * 1000);
     }
     if ([401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504, 529].includes(status)) {
       markProviderFailure(provider, model, result);
@@ -5809,7 +5828,7 @@ async function executeAITask(task) {
 
   /* Background work found no free capacity: tell the caller to wait, never pay for it. */
   if (!isForegroundRequest(task.body) && !AI_ALLOW_PAID_BACKGROUND) {
-    const seconds = backgroundWaitSeconds([...taskProviderOrder(task.requestedProvider, task.body).map(providerCooldownMs), ...paceWaitsMs]);
+    const seconds = backgroundWaitSeconds([...taskProviderOrder(task.requestedProvider, task.body).map(providerCooldownMs), ...waitHintsMs]);
     console.warn("[ai-gate] background-waiting", `source=${task.source}`, `retryAfter=${seconds}s`, "reason=no-free-provider-available");
     return buildWaitingResult({ retryAfterSeconds: seconds, details });
   }
@@ -6055,6 +6074,7 @@ const MEMORY_EMBEDDER = createEmbedder({
   model: GEMINI_EMBEDDING_MODEL,
   dimensions: GEMINI_EMBEDDING_DIM,
   normalize: normalizeEmbedding,
+  restUntil: GEMINI_LEDGER.view(GEMINI_EMBEDDING_MODEL),
 });
 
 async function geminiEmbedMemory(
