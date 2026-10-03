@@ -338,12 +338,31 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
 export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe }) {
   const active = new Set();
   let queue = Promise.resolve();
+
+  // Only Restart World may bypass the normal single-file analysis queue.
+  // It gets a bounded lane so we gain speed without changing normal/background behavior.
+  const restartConcurrency = 4;
+  let restartInFlight = 0;
+  const restartWaiters = [];
+  const runRestartTask = async (task) => {
+    if (restartInFlight >= restartConcurrency) {
+      await new Promise((resolve) => restartWaiters.push(resolve));
+    }
+    restartInFlight += 1;
+    try {
+      return await task();
+    } finally {
+      restartInFlight -= 1;
+      const next = restartWaiters.shift();
+      if (next) next();
+    }
+  };
   app.post("/ai/bond-analysis", async (req, res) => {
     try {
       if (!(await requireDb(res))) return;
       const session = await getSessionIdentity(req);
       if (!session) return res.status(401).json({ error: "Not authenticated." });
-      const { stage, owner, roster, ownSheet, profileKeys, language, force, fieldNames = [] } = req.body || {};
+      const { stage, owner, roster, ownSheet, profileKeys, language, force, restartFast = false, fieldNames = [] } = req.body || {};
       if (!["profile", "baseline"].includes(stage) || typeof owner !== "string" || typeof ownSheet !== "string" || !Array.isArray(roster)) return res.status(400).json({ error: "Invalid analysis request" });
       const ids = new Set([owner, ...roster.map((entry) => entry.id)]);
       if (ids.size !== roster.length + 1) return res.status(400).json({ error: "Duplicate roster IDs" });
@@ -386,17 +405,44 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
         // server restart cannot lose a completed profile/baseline checkpoint.
         await save({ ...metadata, pending: true, request: req.body });
         active.add(cacheKey);
-        queue = queue.catch(() => {}).then(async () => {
+        const work = async () => {
           try {
-            console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, sheetHash: hash, sourceChars: ownSheet.length, submittedChars: ownSheet.length, promptChars: prompt.length }));
+            console.info("[bond-analysis-input]", JSON.stringify({
+              stage,
+              owner,
+              sheetHash: hash,
+              sourceChars: ownSheet.length,
+              submittedChars: ownSheet.length,
+              promptChars: prompt.length,
+              restartFast: !!restartFast,
+            }));
             const analyzed = await analyzeStructured(prompt, schema, validate, { outputTokens: 64000 });
             await save({ ...metadata, ...analyzed });
           } catch (error) {
-            const retryable = error.failures?.some(failure => [429, 500, 502, 503, 504].includes(failure.status) || /abort|network|fetch|ECONN/i.test(failure.reason));
-            await save({ ...metadata, request: req.body, pending: !!retryable, fatal: !retryable, error: error.message, retryAt: Date.now() + 60000 });
+            const retryable = error.failures?.some(
+              (failure) =>
+                [429, 500, 502, 503, 504].includes(failure.status) ||
+                /abort|network|fetch|ECONN/i.test(failure.reason)
+            );
+            await save({
+              ...metadata,
+              request: req.body,
+              pending: !!retryable,
+              fatal: !retryable,
+              error: error.message,
+              retryAt: Date.now() + 60000,
+            });
             console.warn("[bond-analysis-failed]", stage, owner, error.message);
-          } finally { active.delete(cacheKey); }
-        });
+          } finally {
+            active.delete(cacheKey);
+          }
+        };
+
+        if (restartFast) {
+          void runRestartTask(work);
+        } else {
+          queue = queue.catch(() => {}).then(work);
+        }
       }
       res.status(202).json({ ...metadata, cacheKey, pending: true, error: previous?.error || null, retryAt: previous?.retryAt || null, cached: false });
     } catch (error) {
