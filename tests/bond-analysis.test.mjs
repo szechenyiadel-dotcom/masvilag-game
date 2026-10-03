@@ -1,0 +1,206 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import vm from "node:vm";
+import { createRequire } from "node:module";
+import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema } from "../src/bondAnalysis.js";
+import { fullSheetText, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext } from "../src/bondClient.js";
+import { sheetHash, analyzeStructured } from "../server/bondAnalysis.js";
+const require = createRequire(import.meta.url);
+const { parse } = require("@babel/parser");
+const ids = ["player", "ai-a", "ai-b", "sensei"];
+const profile = (id, group = "Cobra Kai", role = "tag") => ({ id, names: [id], processedFields: ["name", "backstory"], claims: [{ field: "names", value: id, evidence: id }], groups: [{ name: group, aliases: [], kind: "dojo", role, rank: null, evidence: id + " a " + group + " " + role + "." }], groupRelations: [], mentions: [], facts: [], traits: [], goals: [], fears: [], secrets: [], timeline: [] });
+const profiles = ids.map(id => profile(id, "Cobra Kai", id === "sensei" ? "sensei" : "tag"));
+const ownText = p => p.id + "\n" + p.groups[0].evidence;
+const bond = (from, to, extra = {}) => ({ from, to, type: "semleges", status: "semleges", levels: { sentiment: 0, trust: 0, attraction: 0, tension: 0 }, intensity: 0, confidence: 1, summary: from + " nem ismeri " + to + " karakterét.", description: from + " lapja nem ír személyes viszonyról " + to + " felé. Nincs igazolt közös múltjuk.", publicFace: "Személyes kapcsolatukról nincs adat.", hiddenFeelings: null, history: null, dynamics: null, wants: null, whoKnows: [], source: "logikai következtetés", evidence: [], fieldEvidence: [], factEvidence: [], layers: [], ...extra });
+const graph = () => Object.fromEntries(ids.flatMap(a => ids.filter(b => b !== a).map(b => [a + ">" + b, runtimeBond(bond(a, b))])));
+
+test("A1: same dojo teammates and both directed sensei relationships", () => {
+ const index = buildGroupIndex(profiles);
+ assert.equal(deriveFromGroups("ai-a", "ai-b", index)[0].type, "csapattárs");
+ for (const id of ["ai-a", "ai-b"]) {
+  assert.equal(deriveFromGroups(id, "sensei", index)[0].type, "tanítvány–sensei");
+  assert.equal(deriveFromGroups("sensei", id, index)[0].type, "sensei–tanítvány");
+ }
+});
+test("A2: rivalry requires literal group proof; different groups alone neutral", () => {
+ const left = profile("a"), right = profile("b", "Miyagi-Do");
+ assert.deepEqual(deriveFromGroups("a", "b", buildGroupIndex([left, right])), []);
+ left.groupRelations.push({ from: "Cobra Kai", to: "Miyagi-Do", kind: "rivális", evidence: "A Cobra Kai riválisa a Miyagi-Do." });
+ const facts = deriveFromGroups("a", "b", buildGroupIndex([left, right]));
+ assert.equal(facts[0].type, "rivális");
+ assert.ok(facts[0].evidence.some(q => q.quote === left.groupRelations[0].evidence));
+});
+test("A3/R2/R3: all pairs including AI–AI; missing direction rejected", () => {
+ const bases = graph(); assertCompleteGraph(ids, bases); assert.equal(Object.keys(bases).length, 12);
+ assert.ok(bases["ai-a>ai-b"] && bases["ai-b>ai-a"]);
+ delete bases["ai-b>ai-a"]; assert.throws(() => assertCompleteGraph(ids, bases));
+});
+test("A8/R5/R6: schema, verbatim own evidence, asymmetric prose, hidden null", () => {
+ const quote = "Anna titokban többet érez Béla iránt.";
+ const a = bond("a", "b", { type: "titkos crush", status: "egyoldalú", summary: "Anna barátként ismeri Bélát. Többre vágyik, mint barátságra.", description: "Anna régi barátként tekint Bélára. Mégis többet érez iránta. Ezt az érzést magában tartja. A külvilág ebből nem értesül a titkáról.", hiddenFeelings: "Anna többre vágyik.", whoKnows: ["a"], evidence: [quote], fieldEvidence: [{ field: "hiddenFeelings", quotes: [quote] }], source: "explicit" });
+ const b = bond("b", "a");
+ validateBonds({ bonds: [a] }, "a", [{ id: "b" }], quote, {});
+ validateBonds({ bonds: [b] }, "b", [{ id: "a" }], "Béla.", {});
+ assert.notEqual(a.description, b.description); assert.equal(b.hiddenFeelings, null);
+ assert.throws(() => validateBonds({ bonds: [{ ...a, evidence: ["kitalált idézet"] }] }, "a", [{ id: "b" }], quote, {}));
+ assert.throws(() => validateBonds({ bonds: [{ ...a, fieldEvidence: [] }] }, "a", [{ id: "b" }], quote, {}));
+});
+test("Objective cross-check retains contradictions without mirroring feelings", () => {
+ const a = profile("a"), b = profile("b");
+ a.facts.push({ targetName: "b", targetId: "b", kind: "rokonság", forward: "testvér", reverse: "testvér", timeframe: "jelen", negated: false, conditional: false, secret: false, whoKnows: [], evidence: "b a testvérem." });
+ b.facts.push({ ...a.facts[0], targetName: "a", targetId: "a", negated: true, evidence: "a nem a testvérem." });
+ const facts = reconcileFacts("b", "a", [a, b], buildGroupIndex([a, b]));
+ assert.ok(facts.some(f => f.perspective === "a")); assert.ok(facts.some(f => f.perspective === "b" && f.negated));
+ assert.ok(!facts.some(f => f.hiddenFeelings));
+});
+test("Alias resolution accepts unique aliases, excludes outsiders and ambiguous names", () => {
+ const a = profile("a"), b = profile("b"), c = profile("c"); b.names.push("Béci", "Közös"); c.names.push("Közös");
+ a.mentions = ["Béci", "Közös", "Világon kívüli"].map(targetName => ({ targetName, targetId: null, whoKnows: ["Béci"] }));
+ assert.deepEqual(resolveProfileReferences([a, b, c])[0].mentions.map(row => row.targetId), ["b", null, null]);
+});
+test("A7: full long original text retained and sent exactly; hashes change", async () => {
+ const people = [{ id: "a", name: "Anna", backstory: "Árnyalt előtörténet. ".repeat(10000) + "LAP VÉGE" }, { id: "b", name: "Béla", backstory: "Másik teljes lap." }];
+ const calls = [];
+ const world = { chars: people };
+ const api = async (url, options) => {
+  const request = JSON.parse(options.body); calls.push(request);
+  return { cached: false, cacheKey: request.owner, hash: sheetHash(request.ownSheet), result: request.stage === "profile" ? { ...profile(request.owner), groups: [] } : { bonds: request.roster.map(row => bond(request.owner, row.id)) } };
+ };
+ const result = await rebuildBondGraph(world, { subjects: w => w.chars, api, language: "hu" });
+ for (const call of calls) assert.equal(call.ownSheet, fullSheetText(people.find(p => p.id === call.owner)));
+ assert.ok(calls[0].ownSheet.endsWith("[name]\nAnna")); assert.ok(calls[0].ownSheet.includes("LAP VÉGE"));
+ assert.equal(calls.filter(c => c.stage === "baseline").length, 2);
+ installBondGraph(world, result, w => w.chars); assert.ok(analysisReady(world, w => w.chars));
+ people[0].backstory += " Változás"; assert.ok(!analysisReady(world, w => w.chars));
+ assert.notEqual(sheetHash(calls[0].ownSheet), sheetHash(fullSheetText(people[0])));
+});
+test("A6/R7: sheet change recomputes complete outgoing graph and incoming dependencies", async () => {
+ const people = ids.map(id => ({ id, name: id, backstory: id })); const world = { chars: people };
+ const counts = [];
+ const api = async (_, opts) => { const row = JSON.parse(opts.body); counts.push(row); return { cached: true, cacheKey: row.owner, hash: sheetHash(row.ownSheet), result: row.stage === "profile" ? profile(row.owner) : { bonds: row.roster.map(t => bond(row.owner, t.id)) } }; };
+ const initial = await rebuildBondGraph(world, { subjects: w => w.chars, api }); installBondGraph(world, initial, w => w.chars);
+ people[1].backstory += " módosítás"; counts.length = 0;
+ const next = await rebuildBondGraph(world, { subjects: w => w.chars, api }); installBondGraph(world, next, w => w.chars);
+ assert.equal(Object.keys(next.baselines).length, 12);
+ for (const id of ids) assert.ok(counts.some(c => c.stage === "baseline" && c.owner === id));
+});
+test("R1/R3/R4: three manually changed currents and invented game romance reset every field", () => {
+ const bases = graph(), snapshot = structuredClone(bases);
+ const world = { relationshipBaselines: bases, rels: structuredClone(bases), relationshipHistory: { change: "old" }, relationshipContinuity: { old: 1 }, officialRelationships: { old: 1 } };
+ for (const key of ["player>ai-a", "ai-a>player", "ai-a>ai-b"]) Object.assign(world.rels[key], { type: "Járnak", hiddenFeelings: "Új játékbeli titok", whoKnows: ids, levels: { sentiment: 99, trust: 100, attraction: 100, tension: 80 }, extraRuntimeField: "must disappear" });
+ restoreBaselineGraph(world, ids);
+ assert.deepEqual(world.rels, snapshot); assert.deepEqual(world.relationshipHistory, {});
+ world.rels["ai-a>ai-b"].levels.trust = 99; assert.deepEqual(bases, snapshot);
+});
+test("Incomplete baseline cannot partially reset even in memory", () => {
+ const world = { relationshipBaselines: graph(), rels: { unchanged: true }, relationshipHistory: { unchanged: true } };
+ delete world.relationshipBaselines["ai-b>sensei"];
+ const before = structuredClone(world); assert.throws(() => restoreBaselineGraph(world, ids)); assert.deepEqual(world, before);
+});
+const candidates = [{ name: "gemini", model: "configured-primary", key: "test", priority: 100 }, { name: "groq", model: "configured-fallback", key: "test", contextWindow: 1000000, outputLimit: 65536 }];
+const response = result => ({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(result) } }] });
+const transportFor = (mode, calls) => async (url, opts) => {
+ calls.push({ url, body: opts?.body ? JSON.parse(opts.body) : null });
+ if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+ if (url.endsWith(":generateContent")) {
+  if (mode === "rate") { const error = new Error("rate limit"); error.status = 429; throw error; }
+  return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "{}" }] } }] };
+ }
+ if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: mode === "size" ? 200 : 1000000, outputTokenLimit: 65536 };
+ if (url.includes("/models/")) return { active: true, context_window: 1000000, max_completion_tokens: 65536 };
+ return response({ ok: true });
+};
+for (const mode of ["rate", "invalid", "size"]) test("Provider fallback: " + mode + ", full prompt unchanged", async () => {
+ const calls = [], prompt = "TELJES LAP ".repeat(3000) + "VÉGE";
+ const result = await analyzeStructured(prompt, { type: "object" }, value => { if (!value.ok) throw new Error("invalid output"); }, { candidates, transport: transportFor(mode, calls), outputTokens: 1000 });
+ assert.equal(result.provider, "groq");
+ const sent = calls.find(c => c.url.endsWith("/chat/completions")); assert.equal(sent.body.messages[0].content, prompt);
+ assert.equal(calls.filter(c => c.url.endsWith(":generateContent")).length, mode === "invalid" ? 2 : mode === "rate" ? 1 : 0);
+});
+test("Profile rejects unprocessed fields and unsupported claims", () => {
+ const p = profile("a"); validateProfile(p, ownText(p), "a", new Set(["a", "b"]), ["name"]);
+ assert.throws(() => validateProfile(p, ownText(p), "a", new Set(["a", "b"]), ["extra"]));
+ p.secrets.push("kitalált titok"); assert.throws(() => validateProfile(p, ownText(p), "a", new Set(["a", "b"])));
+});
+test("Generation receives complete profiles and both CURRENT directions", () => {
+ const world = { bondAnalysis: { profiles: Object.fromEntries(profiles.map(p => [p.id, { profile: p }])) }, rels: graph() };
+ world.rels["ai-a>ai-b"].description = "Játékban változott viszony.";
+ const prompt = bondGenerationContext(world); assert.ok(prompt.includes("Játékban változott viszony."));
+ for (const id of ids) assert.ok(prompt.includes('"id":"' + id + '"'));
+ assert.ok(prompt.includes('"ai-a>ai-b"') && prompt.includes('"ai-b>ai-a"'));
+});
+
+// Execute the actual world-save handler, extracted unchanged from the server.
+// The SQL adapter is a transaction-aware test double, not a live PostgreSQL instance.
+const serverSource = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
+const serverAst = parse(serverSource, { sourceType: "module" });
+const route = serverAst.program.body.find(n => n.type === "ExpressionStatement" && n.expression.type === "CallExpression" && n.expression.arguments[0]?.value === "/world/save").expression.arguments[1];
+async function resetRequest(failUpdate = false) {
+ const database = { world: { code: "test", syncRev: 1, rels: { old: true } }, memories: ["old"] };
+ const original = structuredClone(database); let transaction;
+ const statements = [];
+ const client = { release() {}, async query(sql, args) {
+  statements.push(sql.trim());
+  if (sql === "BEGIN") transaction = structuredClone(database);
+  else if (sql === "ROLLBACK") transaction = null;
+  else if (sql === "COMMIT") Object.assign(database, transaction);
+  else if (sql.includes("FOR UPDATE")) return { rows: [{ sync_rev: 1, rev: 1, accounts: {} }] };
+  else if (sql.startsWith("DELETE FROM character_memories")) transaction.memories = [];
+  else if (sql.includes("UPDATE worlds")) { if (failUpdate) throw new Error("Injected write failure"); transaction.world = JSON.parse(args[1]); }
+  return { rows: [] };
+ }};
+ const context = vm.createContext({ requireDb: async () => true, getSessionIdentity: async () => ({ worldCode: "test", accountId: "player" }), cleanCode: s => s.toLowerCase(), pool: { connect: async () => client }, assertCompleteGraph, stringifyJsonbSafe: JSON.stringify, console: { info() {}, error() {} } });
+ const handler = vm.runInContext("(" + serverSource.substring(route.start, route.end) + ")", context);
+ const world = { code: "test", syncRev: 1, players: { accountKey: { id: "player" } }, chars: ids.filter(id => id !== "player").map(id => ({ id })), relationshipBaselines: graph(), bondAnalysis: { version: 1, profiles: Object.fromEntries(ids.map(id => [id, {}])) } };
+ restoreBaselineGraph(world, ids);
+ const res = { code: 200, status(code) { this.code = code; return this; }, json(value) { this.body = value; return this; } };
+ await handler({ body: { world, bondReset: true } }, res);
+ return { database, original, statements, res };
+}
+test("Restart SQL handler atomically saves graph and deletes memories", async () => {
+ const result = await resetRequest(); assert.equal(result.res.code, 200); assert.equal(result.database.memories.length, 0);
+ assert.deepEqual(result.database.world.rels, result.database.world.relationshipBaselines);
+ assert.ok(result.statements.at(-1) === "COMMIT");
+});
+test("R8: actual save handler rolls back graph AND deleted memories on error", async () => {
+ const result = await resetRequest(true); assert.equal(result.res.code, 500);
+ assert.deepEqual(result.database, result.original); assert.equal(result.statements.at(-1), "ROLLBACK");
+});
+
+test("Posting an album image preserves the full sheet and does not invalidate baselines", () => {
+ const item = { id: "photo1", imageId: "img1", who: "Anna és Béla", note: "  Teljes, eredeti képaláírás.  ", vision: "Dojo", analyzedAt: 5, customCaption: "Rejtett doboz felirata" };
+ const character = { id: "a", name: "Anna", album: [item] };
+ const world = { chars: [character], posts: [] };
+ const before = fullSheetText(character, undefined, world);
+ character.album = [];
+ world.posts.push({ authorId: "a", sourceAlbumItemId: "photo1", sourceSheetAlbumItem: item });
+ assert.equal(fullSheetText(character, undefined, world), before);
+ assert.ok(before.includes(item.customCaption) && before.includes(item.note));
+});
+test("Actor knowledge excludes another person's private feelings unless whoKnows authorizes it", () => {
+ const world = { bondAnalysis: { profiles: { a: { profile: profile("a") }, b: { profile: profile("b") } } }, rels: { "a>b": bond("a", "b"), "b>a": bond("b", "a", { hiddenFeelings: "Titkos vonzalom", whoKnows: ["b"] }) } };
+ const context = JSON.parse(bondGenerationContext(world).split("[[FULL_BOND_CONTEXT]]\n")[1].split("\n[[/FULL_BOND_CONTEXT]]")[0]);
+ assert.equal(context.knowledgeByActor.a["b>a"].hiddenFeelings, undefined);
+ assert.equal(context.knowledgeByActor.b["b>a"].hiddenFeelings, "Titkos vonzalom");
+});
+
+test("First migration preserves played relationships; only Restart resets them", async () => {
+ const people = [{ id: "a", name: "Anna" }, { id: "b", name: "Béla" }];
+ const current = { score: 74, bond: "Játékban összejöttek", hidden: "Új titok", why: "A jelenetben történt", trust: 80, attraction: 93, tension: 4, freshFromSheet: false, gameMarker: true };
+ const world = { chars: people, rels: { "a>b": structuredClone(current) } };
+ const api = async (_, options) => { const request = JSON.parse(options.body); return { cached: false, cacheKey: request.owner, hash: sheetHash(request.ownSheet), result: request.stage === "profile" ? profile(request.owner) : { bonds: request.roster.map(row => bond(request.owner, row.id)) } }; };
+ const result = await rebuildBondGraph(world, { subjects: w => w.chars, api, language: "en" });
+ installBondGraph(world, result, w => w.chars);
+ for (const [key, value] of Object.entries(current)) assert.deepEqual(world.rels["a>b"][key], value);
+ assert.equal(world.rels["a>b"].levels.attraction, 93); assert.equal(world.rels["a>b"].hiddenFeelings, current.hidden);
+ restoreBaselineGraph(world, ["a", "b"]); assert.deepEqual(world.rels, result.baselines);
+});
+test("English mode sends English interpretation language at BOTH analysis stages", async () => {
+ const world = { chars: [{ id: "a", name: "Anna", backstory: "She has never been in love with Bela." }, { id: "b", name: "Bela" }] };
+ const calls = [];
+ const api = async (_, options) => { const request = JSON.parse(options.body); calls.push(request); return { cacheKey: request.owner, hash: sheetHash(request.ownSheet), result: request.stage === "profile" ? profile(request.owner) : { bonds: request.roster.map(row => bond(request.owner, row.id)) } }; };
+ await rebuildBondGraph(world, { subjects: w => w.chars, api, language: "en" });
+ assert.equal(calls.length, 4); assert.ok(calls.every(row => row.language === "en"));
+ assert.ok(calls[0].ownSheet.includes(world.chars[0].backstory));
+});

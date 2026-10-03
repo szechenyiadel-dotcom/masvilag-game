@@ -1,3 +1,5 @@
+import { registerBondAnalysis } from "./bondAnalysis.js";
+import { assertCompleteGraph } from "../src/bondAnalysis.js";
 /* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
 /*
  * MÁSVILÁG — server/proxy.js
@@ -199,6 +201,8 @@ async function requireDb(res) {
   await dbReady;
   return true;
 }
+registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe });
+
 /* ---------- biztonságos account + session segédek ---------- */
 
 const SESSION_COOKIE = "mv_session";
@@ -2177,6 +2181,13 @@ app.post("/world/save", async (req, res) => {
 
     if (nextWorld.universe) nextWorld.universe.at = Date.now();
 
+    if (req.body?.bondReset) {
+      const ids = [...new Set([...Object.values(nextWorld.players || {}).map(c => c.id), ...(nextWorld.chars || []).map(c => c.id), ...(nextWorld.player?.id ? [nextWorld.player.id] : [])])];
+      assertCompleteGraph(ids, nextWorld.relationshipBaselines || {});
+      if (JSON.stringify(nextWorld.rels) !== JSON.stringify(nextWorld.relationshipBaselines)) throw new Error("Restart graph differs from baseline");
+      if (!nextWorld.bondAnalysis?.version) throw new Error("Validated sheet analysis is missing");
+      await client.query("DELETE FROM character_memories WHERE world_code = $1", [session.worldCode]);
+    }
     const nextWorldJson = stringifyJsonbSafe(nextWorld, "world-save");
 
     await client.query(
@@ -2192,6 +2203,8 @@ app.post("/world/save", async (req, res) => {
     await client.query("COMMIT");
     client.release();
     client = null;
+
+    if (req.body?.bondReset) console.info("[bond-restart]", JSON.stringify({ characters: Object.keys(nextWorld.bondAnalysis.profiles).length, restored: Object.keys(nextWorld.rels).length, recalculatedProfiles: nextWorld.bondAnalysis.recalculated || 0 }));
 
     /* PERFORMANCE v15: successful saves return only tiny metadata. The client
        already owns the accepted snapshot; echoing several MB back was wasteful. */
@@ -3193,45 +3206,6 @@ app.post("/profile/characters/delete", async (req, res) => {
   } catch (err) {
     console.error("Character library delete error:", err);
     return res.status(500).json({ error: "Deleting from the character library failed." });
-  }
-});
-
-/* CLAUDE FIX R40 — shared relationship reading cache */
-app.post("/ai/reading-cache/get", async (req, res) => {
-  try {
-    if (!(await requireDb(res))) return;
-    const session = await getSessionIdentity(req);
-    if (!session) return res.status(401).json({ error: "Not authenticated." });
-    const keys = (Array.isArray(req.body?.keys) ? req.body.keys : []).map(String).filter((k) => k && k.length < 200).slice(0, 2000);
-    if (!keys.length) return res.json({ ok: true, rows: {} });
-    const result = await pool.query(`SELECT cache_key, data FROM relationship_reading_cache WHERE cache_key = ANY($1::text[])`, [keys]);
-    const rows = {};
-    result.rows.forEach((row) => { rows[row.cache_key] = row.data; });
-    return res.json({ ok: true, rows });
-  } catch (err) {
-    console.error("Reading cache get error:", err);
-    return res.status(500).json({ error: "Reading cache unavailable." });
-  }
-});
-
-app.post("/ai/reading-cache/put", async (req, res) => {
-  try {
-    if (!(await requireDb(res))) return;
-    const session = await getSessionIdentity(req);
-    if (!session) return res.status(401).json({ error: "Not authenticated." });
-    const rows = req.body?.rows && typeof req.body.rows === "object" ? req.body.rows : {};
-    const entries = Object.entries(rows).filter(([k, v]) => k && k.length < 200 && v && typeof v === "object").slice(0, 200);
-    for (const [key, data] of entries) {
-      await pool.query(
-        `INSERT INTO relationship_reading_cache (cache_key, data, updated_at) VALUES ($1, $2::jsonb, NOW())
-         ON CONFLICT (cache_key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
-        [key, stringifyJsonbSafe(data, "reading-cache")]
-      );
-    }
-    return res.json({ ok: true, saved: entries.length });
-  } catch (err) {
-    console.error("Reading cache put error:", err);
-    return res.status(500).json({ error: "Reading cache unavailable." });
   }
 });
 
@@ -5320,13 +5294,9 @@ function providerModel(provider, body = {}) {
     return MISTRAL_MODEL || "";
   }
   if (provider === "groq") {
-    const source = String(body?.source || "").trim().toLowerCase();
-    if (source === "relationship-reading") return "openai/gpt-oss-120b";
     return GROQ_MODEL || "";
   }
   if (provider === "groq2") {
-    const source = String(body?.source || "").trim().toLowerCase();
-    if (source === "relationship-reading") return "openai/gpt-oss-120b";
     return GROQ_MODEL_2 || GROQ_MODEL || "";
   }
   if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim();
@@ -5545,6 +5515,7 @@ function compactGroupChatSystem(text, max = AI_GROUP_CHAT_SYSTEM_CAP) {
 }
 
 function prepareAIRequestBody(body, priority, source) {
+  if ((body.messages || []).some(item => extractText(item.content || "").includes("[[FULL_BOND_CONTEXT]]"))) return body;
   let system = String(body?.system || "");
   /* CLAUDE FIX R2: player-facing work (scene, DM reply, reactions to the player's post) gets room. */
   /* R4: the protected tail keeps what matters, so a moderate cap is enough.
@@ -5723,10 +5694,6 @@ function taskProviderOrder(requestedProvider, body) {
   const characterKnowledgeSources = new Set([
     "sheet-summary",
     "character-bible",
-    "identity-canon",
-    "relationship-reading",
-    "relationship-labels",
-    "relationship-structural",
   ]);
 
   const groqSmallBackgroundSources = new Set([
@@ -5748,11 +5715,6 @@ function taskProviderOrder(requestedProvider, body) {
   } else if (isFeed) {
     /* Feed stays on free Gemini first; paid OpenAI is fallback only. */
     raw = ["gemini", "openai"];
-  } else if (source === "relationship-reading") {
-    /* Relationship sheet extraction is intentionally isolated on GPT-OSS-120B.
-       Do not silently switch semantics between unrelated providers. Key 2 is only
-       a same-model Groq fallback when the first Groq key is rate-limited. */
-    raw = ["groq", "groq2"];
   } else if (characterKnowledgeSources.has(source)) {
     /* Other character-sheet canon/identity knowledge stays Gemini-first. */
     raw = ["gemini", "openai"];
