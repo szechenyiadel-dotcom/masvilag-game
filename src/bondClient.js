@@ -98,11 +98,23 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       body: JSON.stringify({ ...body, force: forceRun, restartFast: fastRestart }),
     };
     let submitted = false;
+    let transientFailures = 0;
+    const transientRestartError = (error) => /load failed|failed to fetch|network|fetch|abort|econn|http\s*(429|500|502|503|504)|\b(429|500|502|503|504)\b/i.test(String(error?.message || error || ""));
+
     for (;;) {
-      const response = await api("/ai/bond-analysis", options);
-      if (!response.pending) return { ...response, cached: response.cached && !submitted };
-      submitted = true;
-      await new Promise(resolve => setTimeout(resolve, pollDelay));
+      try {
+        const response = await api("/ai/bond-analysis", options);
+        transientFailures = 0;
+        if (!response.pending) return { ...response, cached: response.cached && !submitted };
+        submitted = true;
+        await new Promise(resolve => setTimeout(resolve, pollDelay));
+      } catch (error) {
+        if (!fastRestart || !transientRestartError(error) || transientFailures >= 20) throw error;
+        transientFailures += 1;
+        // A repeated request is safe: the server cache/active key deduplicates it.
+        // This absorbs brief mobile-network drops and rolling Railway restarts.
+        await new Promise(resolve => setTimeout(resolve, Math.min(3000, 350 + transientFailures * 200)));
+      }
     }
   };
 
