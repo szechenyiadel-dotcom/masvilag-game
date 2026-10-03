@@ -12,7 +12,7 @@
  * in code. Nothing here ever blocks a conversation.
  */
 import crypto from "node:crypto";
-import { selectGeminiKeys } from "./aiPolicy.js";
+import { selectGeminiKeys, geminiKeyRestMs } from "./aiPolicy.js";
 
 export const SELF_SHEET_TYPE = "self_sheet";
 export const CONNECTIONS_KEY_PREFIX = "connections#";
@@ -148,11 +148,10 @@ export function createEmbedder({
       }
       const message = String(payload?.error?.message || payload?.error || "");
       lastError = Object.assign(new Error(message || `Gemini embedding failed with HTTP ${response.status}.`), { status: response.status });
-      /* Google answers an invalid or expired key with HTTP 400 "API key not valid", not 401/403:
-         rest that key for a day and move on to the next free one. */
-      const badKey = [401, 403].includes(response.status) || (response.status === 400 && /api key/i.test(message));
-      if (badKey) restUntil.set(key, now() + 24 * 3600 * 1000);
-      else if (response.status === 429) restUntil.set(key, now() + (/day|daily|quota/i.test(message) ? 30 * 60 * 1000 : 90 * 1000));
+      /* Rest the key by what Google said (bad key a day, spent credit hours, a per-minute limit a
+         minute, a per-day limit until midnight Pacific time) and move on to the next free one. */
+      const rest = geminiKeyRestMs(response.status, message, payload, now());
+      if (rest > 0) restUntil.set(key, now() + rest);
       else if (![408, 500, 502, 503, 504, 529].includes(response.status)) throw lastError;
     }
     throw Object.assign(unavailable(60000), { cause: lastError });

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   PAID_PROVIDERS, isForegroundRequest, filterProvidersForBody, selectGeminiKeys,
-  backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs,
+  backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, secondsUntilPacificMidnight,
   BACKGROUND_WAIT_MIN_SECONDS, BACKGROUND_WAIT_MAX_SECONDS, BACKGROUND_WAIT_DEFAULT_SECONDS,
 } from "../server/aiPolicy.js";
 
@@ -16,7 +16,7 @@ test("Only an explicit foreground flag marks a request as player-waiting", () =>
 
 test("Background requests never get a paid provider; foreground ones keep the whole chain", () => {
   const chain = ["openrouter3", "mistral", "gemini", "openai", "anthropic", "groq"];
-  assert.deepEqual(filterProvidersForBody(chain, { source: "feed-post" }, { freeGeminiKeyCount: 2 }), ["mistral", "gemini", "groq"]);
+  assert.deepEqual(filterProvidersForBody(chain, { source: "feed-post" }, { freeGeminiKeyCount: 2 }), ["gemini", "groq"], "Mistral is billed per use too");
   assert.deepEqual(filterProvidersForBody(chain, { foreground: true }, { freeGeminiKeyCount: 0 }), chain);
   for (const paid of PAID_PROVIDERS) assert.ok(!filterProvidersForBody(chain, {}, { freeGeminiKeyCount: 1 }).includes(paid));
 });
@@ -97,4 +97,30 @@ test("Gemini keys rest by what Google said: bad key a day, spent credit hours, s
   assert.equal(geminiKeyRestMs(402, "Your prepayment credits are depleted."), 6 * hour);
   assert.equal(geminiKeyRestMs(429), hour / 2);
   assert.equal(geminiKeyRestMs(503), 0);
+});
+
+test("Google resets the daily free quota at midnight Pacific time", () => {
+  assert.equal(secondsUntilPacificMidnight(Date.UTC(2026, 9, 3, 7, 0, 0)), 24 * 3600, "07:00 UTC is 00:00 PDT");
+  assert.equal(secondsUntilPacificMidnight(Date.UTC(2026, 9, 3, 11, 18, 0)), (24 * 3600) - (4 * 3600 + 18 * 60));
+  assert.equal(secondsUntilPacificMidnight(Date.UTC(2026, 9, 3, 6, 59, 59)), 1);
+  /* in winter (PST, UTC-8) the reset is one hour later in UTC */
+  assert.equal(secondsUntilPacificMidnight(Date.UTC(2026, 11, 3, 8, 0, 0)), 24 * 3600);
+});
+
+test("A Gemini 429 says which limit it was: per day comes back at midnight Pacific, per minute within the minute", () => {
+  const now = Date.UTC(2026, 9, 3, 11, 18, 0);
+  const quotaFailure = (quotaId) => ({ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId }] });
+  const retry = (delay) => ({ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: delay });
+  const daily = geminiRateLimitInfo({ error: { details: [quotaFailure("GenerateRequestsPerDayPerProjectPerModel-FreeTier")] } }, now);
+  assert.equal(daily.metric, "per-day");
+  assert.equal(daily.restMs, (secondsUntilPacificMidnight(now) + 60) * 1000);
+  const perMinute = geminiRateLimitInfo({ error: { details: [quotaFailure("GenerateContentInputTokensPerModelPerMinute-FreeTier"), retry("37s")] } }, now);
+  assert.deepEqual([perMinute.metric, perMinute.restMs], ["per-minute", 39000]);
+  assert.equal(geminiRateLimitInfo({ error: { details: [quotaFailure("RequestsPerMinute"), retry("0.2s")] } }, now).restMs, 15000, "never hammered sooner than 15 s");
+  assert.equal(geminiRateLimitInfo({ error: { details: [quotaFailure("RequestsPerMinute"), retry("9000s")] } }, now).restMs, 5 * 60 * 1000, "a per-minute limit never rests longer than 5 min");
+  const unknown = geminiRateLimitInfo({ error: { message: "You exceeded your current quota" } }, now);
+  assert.deepEqual([unknown.metric, unknown.restMs], ["unknown", 30 * 60 * 1000]);
+  assert.equal(geminiRateLimitInfo({ error: { details: [retry("20s")] } }, now).restMs, 22000, "a bare retryDelay is trusted");
+  assert.equal(geminiRateLimitInfo(null, now).restMs, 30 * 60 * 1000);
+  assert.equal(geminiKeyRestMs(429, "quota", { error: { details: [quotaFailure("GenerateRequestsPerDayPerProjectPerModel-FreeTier")] } }, now), daily.restMs);
 });

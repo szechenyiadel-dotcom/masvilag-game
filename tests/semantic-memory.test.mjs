@@ -279,3 +279,19 @@ test("A later Connections-only sync never touches the rest of a character's stor
     assert.ok(t.db.rows.some((r) => r.memory_text === changed.text) && !t.db.rows.some((r) => r.memory_text === connectionsChunk.text));
   } finally { t.close(); }
 });
+
+test("The embedder reads the quota window: a per-minute limit rests the key briefly, a per-day one until midnight Pacific", async () => {
+  const detail = (quotaId, delay) => ({ error: { message: "You exceeded your current quota", details: [
+    { "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId }] },
+    ...(delay ? [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: delay }] : []),
+  ] } });
+  const now = Date.UTC(2026, 9, 3, 11, 18, 0);
+  const attempt = async (payload) => {
+    const rest = new Map();
+    const embedder = createEmbedder({ freeKeys: ["k"], fetchFn: async () => ({ ok: false, status: 429, json: async () => payload }), model: "m", dimensions: 2, restUntil: rest, now: () => now });
+    await assert.rejects(embedder.embed("hello"), (error) => error.waiting === true);
+    return rest.get("k") - now;
+  };
+  assert.equal(await attempt(detail("EmbedContentRequestsPerMinutePerProjectPerModel-FreeTier", "20s")), 22000);
+  assert.equal(await attempt(detail("EmbedContentRequestsPerDayPerProjectPerModel-FreeTier")), (19 * 3600 + 42 * 60 + 60) * 1000);
+});
