@@ -118,20 +118,84 @@ test("A comment call that names nobody is left alone", async () => {
   assert.equal(sent[0].prompt, "PROMPT");
 });
 
-test("Every comment generator names the poster and the people it writes for, so the age check covers all of them", () => {
+/* ---------- the writers decide the crude language, everyone decides the sexual banter ---------- */
+
+const mixed = () => ({
+  meId: "me", lang: "en",
+  chars: [{ id: "me" }, { id: "rita", age: "27" }, { id: "paul", age: "31" }, { id: "kid", age: "16" }, { id: "poster-unknown" }, { id: "mystery" }],
+});
+
+test("Adult commenters get the crude-language block even when the poster or the player has no confirmed age, but with the sexual banter switched off", () => {
+  const { context } = harness();
+  for (const poster of ["poster-unknown", "kid", "mystery"]) {
+    const text = context.matureCommentInstruction(mixed(), ["rita", "paul", poster], ["rita", "paul"]);
+    assert.match(text, /MATURE 18\+ COMMENT MODE — CRUDE LANGUAGE/, poster);
+    assert.match(text, /strong profanity, brutal roasting, trash talk/, poster);
+    assert.match(text, /keep it NON-SEXUAL: no sexual banter, innuendo or thirst aimed at anyone/, poster);
+    assert.match(text, /nothing sexual about any person who is not a confirmed adult/, poster);
+    assert.doesNotMatch(text, /filthy jokes|blunt sexual banter|shameless thirst/, poster + ": no sexual banter in this tier");
+  }
+  /* the player's own character (not an argument, always counted) with no age: same tier */
+  const text = context.matureCommentInstruction(mixed(), ["rita", "paul"], ["rita", "paul"]);
+  assert.match(text, /CRUDE LANGUAGE/);
+});
+
+test("When everyone involved is a known adult the writers get the full adult block, as before", () => {
+  const { context } = harness();
+  const text = context.matureCommentInstruction(world(), ["rita", "paul", "me"], ["rita", "paul"]);
+  assert.match(text, /MATURE 18\+ COMMENT MODE — ADULTS ONLY/);
+  assert.match(text, /filthy jokes, blunt sexual banter/);
+});
+
+test("A commenter who is a minor or has no confirmed age gets nothing, whoever else is in the thread", () => {
+  const { context } = harness();
+  for (const writers of [["kid"], ["rita", "kid"], ["rita", "mystery"], ["mystery"], []]) {
+    assert.equal(context.matureCommentInstruction(mixed(), ["rita", "paul", ...writers], writers), "", writers.join(",") || "(nobody)");
+  }
+});
+
+test("The Hungarian world gets the Hungarian crude-language block, also without sexual content", () => {
+  const { context } = harness();
+  const text = context.matureCommentInstruction({ ...mixed(), lang: "hu" }, ["rita", "poster-unknown"], ["rita"]);
+  assert.match(text, /NYERS NYELVEZET/);
+  assert.match(text, /erős káromkodás, brutális beszólás/);
+  assert.match(text, /maradjon SZEXUÁLIS TARTALOM NÉLKÜL/);
+  assert.doesNotMatch(text, /mocskos viccek|szégyentelen vágyakozás/);
+});
+
+test("A call that does not name its writers keeps the strict rule: everyone must be a known adult, otherwise nothing", () => {
+  const { context } = harness();
+  assert.equal(context.matureCommentInstruction(mixed(), ["rita", "paul"]), "", "the player's character has no age, so nothing without named writers");
+  assert.notEqual(context.matureCommentInstruction(world(), ["rita", "paul"]), "");
+});
+
+test("The comment wrapper passes the writers on, strips both options from the AI request and picks the tier", async () => {
+  const { context, sent } = harness();
+  await context.askWorldWritingJSON("comments", mixed(), "sys", "THREAD\n[[PROTECTED_TAIL]]\nJSON", { maxTokens: 200, participants: ["rita", "poster-unknown"], commenters: ["rita"] });
+  await context.askWorldWritingJSONInteractive("comments", mixed(), "sys", "THREAD", { participants: ["rita", "kid"], commenters: ["kid"] });
+  assert.match(sent[0].prompt, /CRUDE LANGUAGE/);
+  assert.ok(sent[0].prompt.indexOf("CRUDE LANGUAGE") < sent[0].prompt.indexOf("[[PROTECTED_TAIL]]"));
+  assert.equal(sent[1].prompt, "THREAD", "a minor writing: untouched");
+  for (const call of sent) { assert.equal("participants" in call.options, false); assert.equal("commenters" in call.options, false); }
+  await context.askWorldWritingJSON("dm", mixed(), "sys", "P", { commenters: ["rita"], participants: ["rita"] });
+  assert.equal(sent[2].prompt, "P", "never for anything but comments");
+});
+
+test("Every comment generator names the poster and the people it writes for, and who writes, so the age check covers all of them", () => {
   const sites = [...source.matchAll(/askWorldWritingJSON(?:Interactive)?\("comments"/g)];
   assert.equal(sites.length, 10);
   assert.equal((source.match(/participants:/g) || []).length, 9, "nine of the ten name their participants");
+  assert.equal((source.match(/^\s*(?:\{.*)?.*[ ,{]commenters: (?:\[|cast\.|candidates\.|castIds|plannedCards\.map\(\(card\) => card\.id\))/gm) || []).length >= 9, true, "and name who writes");
   const gossip = source.slice(source.indexOf("async function genGossipReactions"), source.indexOf("async function genGossipReactions") + 4000);
   assert.ok(!/participants:/.test(gossip), "the gossip-media reactions do not (a media account has no age, so it could never pass the check anyway)");
   for (const needle of [
-    "participants: [...cast.map((c) => c.id), post.authorId]",
-    "participants: [...candidates.map((c) => c.id), post.authorId]",
-    "participants: [...cast.map((c) => c.id), post.authorId, comment.authorId]",
-    "participants: [directResponder.id, post.authorId, comment.authorId]",
-    "participants: [responderId, post.authorId, comment.authorId]",
-    "participants: [forcedResponder.id, post.authorId, comment.authorId]",
-    "participants: castIds.concat([target.id])",
-    "participants: [...plannedCards.map((card) => card.id), post.authorId]",
+    "participants: [...cast.map((c) => c.id), post.authorId], commenters: cast.map((c) => c.id)",
+    "participants: [...candidates.map((c) => c.id), post.authorId], commenters: candidates.map((c) => c.id)",
+    "participants: [...cast.map((c) => c.id), post.authorId, comment.authorId], commenters: cast.map((c) => c.id)",
+    "commenters: [directResponder.id],",
+    "participants: [responderId, post.authorId, comment.authorId], commenters: [responderId]",
+    "participants: [forcedResponder.id, post.authorId, comment.authorId], commenters: [forcedResponder.id]",
+    "participants: castIds.concat([target.id]),\n      commenters: castIds,",
+    "participants: [...plannedCards.map((card) => card.id), post.authorId],\n          commenters: plannedCards.map((card) => card.id),",
   ]) assert.ok(source.includes(needle), needle);
 });
