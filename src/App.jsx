@@ -39030,13 +39030,36 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
    * setters/update/tt do not exist; the settings button therefore crashed with
    * `ReferenceError: restartWorldHistory is not defined`. */
   const restartWorldHistory = async () => {
-    if (bondAnalysisBusy.has(w.code)) { setErr(tt("A lapok elemzése még folyamatban van.", "Sheet analysis is still running.")); return; }
+    /*
+     * Restart should never make the user dismiss an error and tap again just
+     * because the automatic sheet reader got there first. Let that in-flight
+     * pass finish, then reuse its server cache and continue automatically.
+     */
+    if (bondAnalysisBusy.has(w.code)) {
+      setRestartMsg(tt("A futó karakterlap-elemzés befejezése…", "Finishing the current sheet analysis…"));
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (bondAnalysisBusy.has(w.code) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 400));
+      }
+      if (bondAnalysisBusy.has(w.code)) {
+        setErr(tt("A karakterlap-elemzés túl sokáig tart. Próbáld újra egy pillanat múlva.", "Sheet analysis is taking unusually long. Try again in a moment."));
+        setRestartMsg("");
+        return;
+      }
+    }
+
     bondAnalysisBusy.add(w.code);
-    setRestartMsg(tt("Teljes kapcsolatháló ellenőrzése…", "Validating the complete bond graph…"));
+    setRestartMsg(tt("Teljes kapcsolatháló gyors ellenőrzése…", "Quickly validating the complete bond graph…"));
     try {
       const draft = cloneWorldState(w);
       if (!analysisReady(draft, allSubjects)) {
-        const result = await rebuildBondGraph(draft, { subjects: allSubjects, api: apiJson, language: worldLanguage(draft), progress: p => setRestartMsg(p.owner + " · " + p.phase + " · " + p.completed + "/" + p.total) });
+        const result = await rebuildBondGraph(draft, {
+          subjects: allSubjects,
+          api: apiJson,
+          language: worldLanguage(draft),
+          pollIntervalMs: 500,
+          progress: p => setRestartMsg(p.owner + " · " + p.phase + " · " + p.completed + "/" + p.total),
+        });
         installBondGraph(draft, result, allSubjects);
       } else {
         draft.bondAnalysis.recalculated = 0;
