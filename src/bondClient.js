@@ -69,41 +69,46 @@ export function analysisReady(world, subjects) {
   return world.bondAnalysis?.version === BOND_ANALYSIS_VERSION && world.bondAnalysis.source === bondSourceFingerprint(world, subjects);
 }
 
-export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress = () => {}, pollIntervalMs = 1500 }) {
+export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress = () => {}, fastRestart = false }) {
   const people = subjects(world);
   const source = bondSourceFingerprint(world, subjects);
   const profiles = {};
-  const sheets = Object.fromEntries(people.map((character) => [character.id, fullSheetText(character, undefined, world)]));
-  const profileKeys = [];
+  const sheets = Object.fromEntries(
+    people.map((character) => [character.id, fullSheetText(character, undefined, world)])
+  );
+  const profileKeys = new Array(people.length);
   let recalculated = 0;
   let recalculatedBonds = 0;
-  let profileCompleted = 0;
-  let baselineCompleted = 0;
   const forceRun = force ? String(Date.now()) + ":" + String(Math.random()) : "";
-  const pollDelay = Math.max(250, Number(pollIntervalMs) || 1500);
+  const pollDelay = fastRestart ? 500 : 3000;
 
   const analyze = async (body) => {
-    const options = { method: "POST", body: JSON.stringify({ ...body, force: forceRun }) };
+    const options = {
+      method: "POST",
+      body: JSON.stringify({ ...body, force: forceRun, restartFast: !!fastRestart }),
+    };
     let submitted = false;
     for (;;) {
       const response = await api("/ai/bond-analysis", options);
       if (!response.pending) return { ...response, cached: response.cached && !submitted };
       submitted = true;
-      await new Promise(resolve => setTimeout(resolve, pollDelay));
+      await new Promise((resolve) => setTimeout(resolve, pollDelay));
     }
   };
 
-  /*
-   * Submit every profile immediately instead of waiting for character A to
-   * finish before character B is even queued. The server still owns the AI
-   * execution queue, so provider order/quality/rate-limit behavior is unchanged;
-   * this only removes idle gaps between sheet jobs.
-   */
-  const profileRows = await Promise.all(people.map(async (character) => {
+  const profileJob = async (character, index) => {
     const roster = people
       .filter((other) => other.id !== character.id)
-      .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
-    progress({ phase: "profile", owner: character.name, completed: profileCompleted, total: people.length });
+      .map((other) => ({
+        id: other.id,
+        names: [other.name, other.nick, other.nickname, other.username].filter(Boolean),
+      }));
+    progress({
+      phase: "profile",
+      owner: character.name,
+      completed: Object.keys(profiles).length,
+      total: people.length,
+    });
     const result = await analyze({
       stage: "profile",
       owner: character.id,
@@ -112,30 +117,49 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       fieldNames: Object.keys(sheetFields(character, world)),
       language,
     });
-    profileCompleted += 1;
-    progress({ phase: "profile", owner: character.name, completed: profileCompleted, total: people.length });
-    return { character, result };
-  }));
-
-  for (const { character, result } of profileRows) {
     profiles[character.id] = { profile: result.result, hash: result.hash };
-    profileKeys.push(result.cacheKey);
+    profileKeys[index] = result.cacheKey;
     if (!result.cached) recalculated += 1;
+    progress({
+      phase: "profile",
+      owner: character.name,
+      completed: Object.keys(profiles).length,
+      total: people.length,
+    });
+  };
+
+  if (fastRestart) {
+    let next = 0;
+    const workers = Array.from(
+      { length: Math.min(4, Math.max(1, people.length)) },
+      async () => {
+        for (;;) {
+          const index = next++;
+          if (index >= people.length) return;
+          await profileJob(people[index], index);
+        }
+      }
+    );
+    await Promise.all(workers);
+  } else {
+    for (let index = 0; index < people.length; index += 1) {
+      await profileJob(people[index], index);
+    }
   }
 
-  /*
-   * Baselines depend on all profiles, but once those exist every owner's
-   * baseline request can also be queued at once. Actual AI work remains
-   * serialized by the server; polling no longer creates multi-second dead time.
-   */
-  const baselineRows = await Promise.all(people.map(async (character) => {
+  const baselines = {};
+  const baselineJob = async (character) => {
     const roster = people
       .filter((other) => other.id !== character.id)
-      .map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
+      .map((other) => ({
+        id: other.id,
+        names: profiles[other.id].profile.names,
+        oneLine: other.shortDescription || "",
+      }));
     progress({
       phase: "baseline",
       owner: character.name,
-      completed: baselineCompleted * Math.max(0, people.length - 1),
+      completed: Object.keys(baselines).length,
       total: people.length * Math.max(0, people.length - 1),
     });
     const result = await analyze({
@@ -146,20 +170,35 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       profileKeys,
       language,
     });
-    baselineCompleted += 1;
+    if (!result.cached) recalculatedBonds += result.result.bonds.length;
+    for (const bond of result.result.bonds) {
+      baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
+    }
     progress({
       phase: "baseline",
       owner: character.name,
-      completed: baselineCompleted * Math.max(0, people.length - 1),
+      completed: Object.keys(baselines).length,
       total: people.length * Math.max(0, people.length - 1),
     });
-    return { result };
-  }));
+  };
 
-  const baselines = {};
-  for (const { result } of baselineRows) {
-    if (!result.cached) recalculatedBonds += result.result.bonds.length;
-    for (const bond of result.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
+  if (fastRestart) {
+    let next = 0;
+    const workers = Array.from(
+      { length: Math.min(4, Math.max(1, people.length)) },
+      async () => {
+        for (;;) {
+          const index = next++;
+          if (index >= people.length) return;
+          await baselineJob(people[index]);
+        }
+      }
+    );
+    await Promise.all(workers);
+  } else {
+    for (const character of people) {
+      await baselineJob(character);
+    }
   }
 
   assertCompleteGraph(people.map((character) => character.id), baselines);
