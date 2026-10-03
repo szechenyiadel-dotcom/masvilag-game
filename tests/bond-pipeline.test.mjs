@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import express from "express";
 import { registerBondAnalysis, analyzeStructured } from "../server/bondAnalysis.js";
 import { EXTRACT_PROMPT, BASELINE_PROMPT } from "../src/bondAnalysis.js";
-import { fullSheetText, rebuildBondGraph, installBondGraph, analysisReady } from "../src/bondClient.js";
+import { fullSheetText, relationshipSourceText, rebuildBondGraph, installBondGraph, analysisReady } from "../src/bondClient.js";
 
 // The whole path: real client -> real Express handler -> in-memory cache table ->
 // scripted "model". The model returns valid output derived from the prompt, so the
@@ -16,7 +16,7 @@ const until = async (condition, what = "condition") => {
   throw new Error("timed out waiting for " + what);
 };
 
-const person = (id, backstory = "Sima diák.") => ({ id, name: id.toUpperCase(), backstory });
+const person = (id, connections = "Sima diák.") => ({ id, name: id.toUpperCase(), connections });
 const subjects = (world) => world.chars;
 
 const profileFor = ({ owner, ownSheet, fieldNames }, mentions = {}) => {
@@ -57,6 +57,7 @@ const bondsFor = ({ owner, roster, objectiveFacts }, witness = null) => ({
 async function start({ delay = 0, concurrency, failures, witness = null, mentions = {} } = {}) {
   const store = new Map();
   const calls = [];
+  const payloads = [];
   let clockNow = 1_000_000;
   let inFlight = 0;
   let maxInFlight = 0;
@@ -64,6 +65,7 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
     const stage = prompt.startsWith(EXTRACT_PROMPT) ? "profile" : "baseline";
     const payload = JSON.parse(prompt.slice((stage === "profile" ? EXTRACT_PROMPT : BASELINE_PROMPT).length + 1));
     calls.push({ stage, owner: payload.owner, targets: payload.roster?.map((card) => card.id) });
+    payloads.push({ stage, payload });
     inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight);
     try {
       await sleep(delay);
@@ -104,8 +106,8 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
     return data;
   };
   return {
-    store, calls, bodies, post, api, advance: (ms) => { clockNow += ms; },
-    maxInFlight: () => maxInFlight, reset: () => { calls.length = 0; bodies.length = 0; },
+    store, calls, payloads, bodies, post, api, advance: (ms) => { clockNow += ms; },
+    maxInFlight: () => maxInFlight, reset: () => { calls.length = 0; bodies.length = 0; payloads.length = 0; },
     rebuild: (chars, options = {}) => rebuildBondGraph({ chars }, { subjects, api, language: "hu", pollMs: 5, ...options }),
     close: () => new Promise((resolve) => server.close(resolve)),
   };
@@ -172,13 +174,13 @@ test("Editing one sheet re-reads that owner; others are re-read only toward fact
     await sim.rebuild(chars);
 
     sim.reset();
-    const edited = chars.map((char) => char.id === "c" ? { ...char, backstory: "Sima diák, szereti a csendet." } : char);
+    const edited = chars.map((char) => char.id === "c" ? { ...char, connections: "Sima diák, szereti a csendet." } : char);
     await sim.rebuild(edited);
     assert.deepEqual(owners(sim.calls, "profile"), ["c"]);
     assert.deepEqual(sim.calls.filter((call) => call.stage === "baseline").map((call) => [call.owner, call.targets]), [["c", ["a", "b", "d"]]]);
 
     sim.reset();
-    const joined = edited.map((char) => char.id === "c" ? { ...char, backstory: "Cobra Kai tag lett." } : char);
+    const joined = edited.map((char) => char.id === "c" ? { ...char, connections: "Cobra Kai tag lett." } : char);
     const result = await sim.rebuild(joined);
     assert.deepEqual(owners(sim.calls, "profile"), ["c"]);
     const byOwner = Object.fromEntries(sim.calls.filter((call) => call.stage === "baseline").map((call) => [call.owner, call.targets]));
@@ -424,7 +426,7 @@ test("A mixed failure is classed by what the providers that were asked said; rep
 });
 
 test("With no provider configured the failure says what to set instead of an empty message", async () => {
-  await assert.rejects(analyzeStructured("x", { type: "object" }, () => {}, { env: {} }), /No analysis provider is configured/);
+  await assert.rejects(analyzeStructured("x", { type: "object" }, () => {}, { env: {} }), /No free analysis provider is configured.*AI_ALLOW_PAID_BACKGROUND=1/);
 });
 
 test("One analysis stops trying further providers after its deadline", async () => {
@@ -445,7 +447,8 @@ test("One analysis stops trying further providers after its deadline", async () 
 });
 
 test("The mock sheets really are the ones the client builds", () => {
-  assert.equal(fullSheetText(person("a")), "[backstory]\nSima diák.\n[name]\nA");
+  assert.equal(relationshipSourceText(person("a")), "[name]\nA\n[connections]\nSima diák.");
+  assert.ok(fullSheetText(person("a")).includes("[connections]"));
 });
 
 test("Restart progresses beyond 16 sheets to 20 and all 380 directed bonds", async () => {
@@ -461,5 +464,49 @@ test("Restart progresses beyond 16 sheets to 20 and all 380 directed bonds", asy
     const world = { chars };
     installBondGraph(world, result, subjects);
     assert.equal(analysisReady(world, subjects), true);
+  } finally { await sim.close(); }
+});
+
+test("A nickname in one sheet's Connections leads to the person whose own nickname field says so", async () => {
+  /* Angela Silverman's nickname is Angel. Brent's Connections says "Angel". The model that read
+     Angela's identity forgot to list the nickname, so only the sheet's own fields can settle it. */
+  const sim = await start({ mentions: { brent: "Angel" } });
+  try {
+    const chars = [
+      { id: "angela", name: "Angela Silverman", nick: "Angel", connections: "Sima diák." },
+      { id: "brent", name: "BRENT", connections: "Sima diák. Angel a legjobb barátom." },
+      { id: "cara", name: "Cara Angeles", connections: "Sima diák." },
+    ];
+    await sim.rebuild(chars);
+
+    const request = sim.bodies.find((body) => body.stage === "baseline" && body.owner === "brent");
+    assert.deepEqual(request.identities.angela, { name: "Angela Silverman", aliases: ["Angel"] });
+    assert.deepEqual(request.identities.cara, { name: "Cara Angeles", aliases: [] });
+
+    const { payload } = sim.payloads.find((row) => row.stage === "baseline" && row.payload.owner === "brent");
+    assert.deepEqual(payload.profile.mentions.map((row) => [row.targetName, row.targetId]), [["Angel", "angela"]], "Angel is Angela, not an outsider and not Cara");
+    const angela = payload.roster.find((card) => card.id === "angela");
+    assert.equal(angela.fullName, "Angela Silverman");
+    assert.deepEqual(angela.names.slice(0, 2), ["Angela Silverman", "Angel"], "full name first, then the nickname");
+    assert.equal(payload.roster.find((card) => card.id === "cara").fullName, "Cara Angeles");
+  } finally { await sim.close(); }
+});
+
+test("Changing only a nickname changes who a mention resolves to, so the pair is read again", async () => {
+  const sim = await start({ mentions: { brent: "Angel" } });
+  try {
+    const chars = (nick) => [
+      { id: "angela", name: "Angela Silverman", nick, connections: "Sima diák." },
+      { id: "brent", name: "BRENT", connections: "Sima diák. Angel a legjobb barátom." },
+    ];
+    await sim.rebuild(chars("Angel"));
+    sim.reset();
+    await sim.rebuild(chars("Angel"));
+    assert.equal(sim.calls.length, 0, "nothing changed, nothing read");
+    sim.reset();
+    await sim.rebuild(chars("Angie"));
+    const reread = sim.payloads.find((row) => row.stage === "baseline" && row.payload.owner === "brent");
+    assert.ok(reread, "the pair Brent -> Angela is read again, because 'Angel' no longer names her");
+    assert.deepEqual(reread.payload.profile.mentions.map((row) => row.targetId), [null]);
   } finally { await sim.close(); }
 });

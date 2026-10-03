@@ -1,5 +1,14 @@
 import { registerBondAnalysis } from "./bondAnalysis.js";
 import { assertCompleteGraph } from "../src/bondAnalysis.js";
+import {
+  isForegroundRequest,
+  filterProvidersForBody,
+  selectGeminiKeys,
+  backgroundWaitSeconds,
+  buildWaitingResult,
+  geminiKeyRestMs,
+} from "./aiPolicy.js";
+import { registerSemanticMemory, createEmbedder } from "./semanticMemory.js";
 /* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
 /*
  * MÁSVILÁG — server/proxy.js
@@ -142,6 +151,9 @@ CREATE INDEX IF NOT EXISTS world_media_files_world_updated_idx
 
       CREATE INDEX IF NOT EXISTS character_memories_subject_ids_gin_idx
       ON character_memories USING GIN (subject_ids);
+
+      CREATE INDEX IF NOT EXISTS character_memories_hash_idx
+      ON character_memories (world_code, (metadata->>'hash'));
 
       CREATE INDEX IF NOT EXISTS profile_worlds_world_idx
       ON profile_worlds (world_code);
@@ -2192,7 +2204,8 @@ app.post("/world/save", async (req, res) => {
         validationError.restartRejected = true;
         throw validationError;
       }
-      await client.query("DELETE FROM character_memories WHERE world_code = $1", [session.worldCode]);
+      /* A restart wipes what happened in the game, not who the characters are: their own-sheet memory stays. */
+      await client.query("DELETE FROM character_memories WHERE world_code = $1 AND memory_type <> 'self_sheet'", [session.worldCode]);
     }
     const nextWorldJson = stringifyJsonbSafe(nextWorld, "world-save");
 
@@ -5041,7 +5054,8 @@ async function proxyOpenAIMessage(
    Quota-exhausted keys rest; one bad key never disables the later keys. */
 /* Only GEMINI_API_KEY is paid; keys 2-8 are free. The free keys are tried first
    and the paid key is the LAST Gemini option (OpenAI comes after Gemini). */
-const GEMINI_KEYS = [
+const GEMINI_PAID_KEY = String(process.env.GEMINI_API_KEY || "").trim();
+const GEMINI_FREE_KEYS = [
   process.env.GEMINI_API_KEY_2,
   process.env.GEMINI_API_KEY_3,
   process.env.GEMINI_API_KEY_4,
@@ -5049,15 +5063,36 @@ const GEMINI_KEYS = [
   process.env.GEMINI_API_KEY_6,
   process.env.GEMINI_API_KEY_7,
   process.env.GEMINI_API_KEY_8,
-  process.env.GEMINI_API_KEY,
-].map((k) => String(k || "").trim()).filter(Boolean).filter((k, i, a) => a.indexOf(k) === i);
+].map((k) => String(k || "").trim()).filter(Boolean).filter((k, i, a) => a.indexOf(k) === i && k !== GEMINI_PAID_KEY);
+const GEMINI_KEYS = [...GEMINI_FREE_KEYS, GEMINI_PAID_KEY].filter(Boolean);
 const GEMINI_KEY_REST_UNTIL = new Map();
+/* Background work never touches paid capacity unless this is switched on explicitly. */
+const AI_ALLOW_PAID_BACKGROUND = String(process.env.AI_ALLOW_PAID_BACKGROUND || "").trim() === "1";
 
 async function proxyGeminiMessage(body) {
   if (!GEMINI_KEYS.length) return { unavailable: true, provider: "gemini" };
-  const usable = GEMINI_KEYS.filter((k) => (GEMINI_KEY_REST_UNTIL.get(k) || 0) <= Date.now());
-  /* If every key is resting, the paid key (last) is the one most likely to answer. */
-  const keys = usable.length ? usable : GEMINI_KEYS.slice(-1);
+  const foreground = isForegroundRequest(body);
+  const selection = selectGeminiKeys({
+    freeKeys: GEMINI_FREE_KEYS,
+    paidKey: GEMINI_PAID_KEY,
+    restUntil: GEMINI_KEY_REST_UNTIL,
+    now: Date.now(),
+    foreground,
+    allowPaidBackground: AI_ALLOW_PAID_BACKGROUND,
+  });
+  /* Background request, every free key resting: report it so the caller waits
+     instead of spending the paid key. */
+  if (!selection.keys.length) {
+    return {
+      ok: false,
+      status: 429,
+      payload: { error: { message: "All free Gemini keys are resting after rate limits." } },
+      retryAfter: selection.waitMs > 0 ? String(Math.ceil(selection.waitMs / 1000)) : "",
+      provider: "gemini",
+    };
+  }
+  /* A player waiting for the answer may still use the paid key (last) when every key is resting. */
+  const keys = selection.keys;
 
   /* Keep key rotation inside ONE request budget. This lets 503/high-demand try
      later Gemini keys without multiplying an 8–45s planner request by five. */
@@ -5089,16 +5124,13 @@ async function proxyGeminiMessage(body) {
     last = result;
 
     const status = Number(result && result.status);
-    if ([401, 403, 429].includes(status) && GEMINI_KEYS.length > 1) {
-      const invalidKey = [401, 403].includes(status);
-      GEMINI_KEY_REST_UNTIL.set(
-        keys[i],
-        Date.now() + (invalidKey ? 24 * 60 * 60 * 1000 : 30 * 60 * 1000)
-      );
+    const keyRestMs = geminiKeyRestMs(status, proxyErrorMessage(result && result.payload, ""));
+    if (keyRestMs > 0 && GEMINI_KEYS.length > 1) {
+      GEMINI_KEY_REST_UNTIL.set(keys[i], Date.now() + keyRestMs);
       console.warn(
         "[ai-provider] gemini key #" + (GEMINI_KEYS.indexOf(keys[i]) + 1) +
-        (invalidKey ? " invalid/rejected" : " out of quota") +
-        " — trying the next key"
+        (status === 402 ? " out of prepaid credit" : status === 429 ? " out of quota" : " invalid/rejected") +
+        " — resting it, trying the next key"
       );
       continue;
     }
@@ -5159,7 +5191,7 @@ async function proxyAnthropicMessage(body) {
     ? requested
     : String(process.env.ANTHROPIC_MODEL || process.env.ANTHROPIC_FALLBACK_MODEL || "claude-sonnet-4-6").trim();
 
-  const { provider, source, priority, client_instance_id, __worldKey, quality, timeout_ms, ...rest } = body || {};
+  const { provider, source, priority, client_instance_id, __worldKey, quality, timeout_ms, foreground, ...rest } = body || {};
   const outboundBody = { ...rest, model, max_tokens: body?.max_tokens ?? 1024 };
   const r = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -5646,6 +5678,17 @@ function markProviderFailure(provider, model, result) {
     return rest;
   }
 
+  /* Gemini 402 = a key's prepaid credit is gone. The key rests on its own (see proxyGeminiMessage);
+     the provider as a whole must not be switched off for good because of it. */
+  if (provider === "gemini" && status === 402) {
+    const rest = 10 * 60 * 1000;
+    AI_GATE.providerConfigurationErrors.delete(provider);
+    AI_GATE.providerCooldownUntil.set(provider, Date.now() + rest);
+    AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
+    console.warn("[ai-gate] provider-cooldown", `${provider}/${model}`, `status=${status}`, `ms=${rest}`, "reason=gemini-key-credit-depleted", message);
+    return rest;
+  }
+
   if ([401, 402, 403, 404].includes(status)) {
     AI_GATE.providerConfigurationErrors.set(provider, { status, model, message, at: Date.now() });
     AI_GATE.providerCooldownUntil.delete(provider);
@@ -5737,10 +5780,15 @@ function taskProviderOrder(requestedProvider, body) {
     raw = ["gemini"];
   }
 
-  return raw.filter((provider, index, all) =>
-    all.indexOf(provider) === index &&
-    configuredAIProvider(provider) &&
-    providerAllowedForBody(provider, body)
+  /* Background work stays on free providers; only a player-waiting request may use paid ones. */
+  return filterProvidersForBody(
+    raw.filter((provider, index, all) =>
+      all.indexOf(provider) === index &&
+      configuredAIProvider(provider) &&
+      providerAllowedForBody(provider, body)
+    ),
+    body,
+    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, allowPaidBackground: AI_ALLOW_PAID_BACKGROUND }
   );
 }
 
@@ -5861,6 +5909,8 @@ function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
      Gemini-owned background work it remains emergency-only on provider outage. */
   if (!configuredAIProvider("openai")) return false;
   if (attempts.some((item) => item.provider === "openai")) return false;
+  /* Background work waits for the free providers; it never buys its way out of an outage. */
+  if (!isForegroundRequest(task.body) && !AI_ALLOW_PAID_BACKGROUND) return false;
 
   const order = taskProviderOrder(task.requestedProvider, task.body);
   if (order[0] !== "gemini") return false;
@@ -5965,6 +6015,13 @@ async function executeAITask(task) {
 
   const details = summarizeProviderFailures(attempts, task.requestedProvider, task.body);
   if (last && attempts.length === 1 && ![401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504, 529].includes(Number(last?.status || 0))) return last;
+
+  /* Background work found no free capacity: tell the caller to wait, never pay for it. */
+  if (!isForegroundRequest(task.body) && !AI_ALLOW_PAID_BACKGROUND) {
+    const seconds = backgroundWaitSeconds(taskProviderOrder(task.requestedProvider, task.body).map(providerCooldownMs));
+    console.warn("[ai-gate] background-waiting", `source=${task.source}`, `retryAfter=${seconds}s`, "reason=no-free-provider-available");
+    return buildWaitingResult({ retryAfterSeconds: seconds, details });
+  }
 
   const retryWaits = taskProviderOrder(task.requestedProvider, task.body).map(providerCooldownMs).filter((ms) => ms > 0);
   const retryMs = retryWaits.length ? Math.min(...retryWaits) : 30000;
@@ -6197,135 +6254,24 @@ function cosineSimilarity(a, b) {
   );
 }
 
+/* Embeddings run on the FREE Gemini keys only (rotating, resting on quota). With none available
+   the call fails with 503 + waiting, so memory writes wait and reads fall back to keywords. */
+const MEMORY_EMBEDDER = createEmbedder({
+  freeKeys: GEMINI_FREE_KEYS,
+  paidKey: GEMINI_PAID_KEY,
+  allowPaid: AI_ALLOW_PAID_BACKGROUND,
+  fetchFn: (url, { timeoutMs, ...options }) => fetchWithTimeout(url, options, timeoutMs),
+  model: GEMINI_EMBEDDING_MODEL,
+  dimensions: GEMINI_EMBEDDING_DIM,
+  normalize: normalizeEmbedding,
+});
+
 async function geminiEmbedMemory(
   text,
   taskType = "RETRIEVAL_DOCUMENT",
   title = ""
 ) {
-  if (!GEMINI_API_KEY) {
-    const err =
-      new Error(
-        "Missing GEMINI_API_KEY for semantic memory embeddings."
-      );
-
-    err.status = 503;
-    throw err;
-  }
-
-  const clean =
-    memoryText(
-      text,
-      7000
-    );
-
-  if (!clean) {
-    const err =
-      new Error(
-        "Memory embedding text is empty."
-      );
-
-    err.status = 400;
-    throw err;
-  }
-
-  const model =
-    GEMINI_EMBEDDING_MODEL;
-
-  const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:embedContent`;
-
-  const embedContentConfig = {
-    taskType,
-    outputDimensionality:
-      GEMINI_EMBEDDING_DIM,
-    autoTruncate:
-      true,
-  };
-
-  if (
-    taskType ===
-      "RETRIEVAL_DOCUMENT" &&
-    title
-  ) {
-    embedContentConfig.title =
-      memoryText(
-        title,
-        220
-      );
-  }
-
-  const r =
-    await fetchWithTimeout(
-      url,
-      {
-        method:
-          "POST",
-        headers: {
-          "Content-Type":
-            "application/json",
-          "x-goog-api-key":
-            GEMINI_API_KEY,
-        },
-        body:
-          JSON.stringify({
-            model:
-              `models/${model}`,
-            content: {
-              parts: [
-                {
-                  text:
-                    clean,
-                },
-              ],
-            },
-            embedContentConfig,
-          }),
-      },
-      30000
-    );
-
-  const payload =
-    await responseJsonSafe(
-      r
-    );
-
-  if (!r.ok) {
-    const err =
-      new Error(
-        proxyErrorMessage(
-          payload,
-          `Gemini embedding failed with HTTP ${r.status}.`
-        )
-      );
-
-    err.status =
-      r.status;
-
-    err.payload =
-      payload;
-
-    throw err;
-  }
-
-  const values =
-    normalizeEmbedding(
-      payload
-        ?.embedding
-        ?.values ||
-      []
-    );
-
-  if (!values.length) {
-    const err =
-      new Error(
-        "Gemini embedding returned no vector values."
-      );
-
-    err.status = 502;
-    throw err;
-  }
-
-  return values;
+  return MEMORY_EMBEDDER.embed(text, taskType, title);
 }
 
 function memoryRowForClient(
@@ -6418,9 +6364,7 @@ app.get(
               ?.count
           ) || 0,
         geminiConfigured:
-          Boolean(
-            GEMINI_API_KEY
-          ),
+          GEMINI_FREE_KEYS.length > 0,
         embeddingModel:
           GEMINI_EMBEDDING_MODEL,
         embeddingDimensions:
@@ -7052,7 +6996,7 @@ app.post(
       const logUpstreamStatus = Number(result?.lastUpstreamStatus || upstreamStatus);
       console.error("AI message unavailable:", source, `${actualProvider}/${actualModel}`, `upstream=${logUpstreamStatus}`, message);
 
-      if (priority < 50 && [429, 503, 529].includes(upstreamStatus)) {
+      if (!result?.waiting && priority < 50 && [429, 503, 529].includes(upstreamStatus)) {
         return res.status(200).json({
           model: "masvilag-server-gate", type: "message", role: "assistant",
           content: [{ type: "text", text: JSON.stringify({ skip: true, reason: "background-provider-busy" }) }],
@@ -7068,6 +7012,16 @@ app.post(
   }
 );
 
+
+/* Semantic character memory: own sheet + important events, recalled by meaning. */
+registerSemanticMemory(app, {
+  pool,
+  requireDb,
+  getSession,
+  clearSessionCookie,
+  embedder: MEMORY_EMBEDDER,
+  model: GEMINI_EMBEDDING_MODEL,
+});
 
 // Serve the built React/Vite app in production.
 // v31: never let an old frontend bundle survive a deploy in browser/proxy cache.

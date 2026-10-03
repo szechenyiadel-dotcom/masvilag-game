@@ -1,5 +1,8 @@
 import { restoreBaselineGraph } from "./bondAnalysis.js";
-import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext } from "./bondClient.js";
+import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext, sheetFields, flattenSheetValue } from "./bondClient.js";
+import { sheetSyncJobs, markSheetSynced, recentActorIds, runSheetSync, eventMemoryBatch, runEventFlush, recallMemories, recallBlock, insertBeforeProtectedTail, memoryQueryFromEvents, RECALL_MAX_CHARACTERS, BACKGROUND_RECALL_TOP_K } from "./semanticMemory.js";
+import { focusedScope, inScope, relationshipInScope, eventInScope, strongestTieIds, groupsForScope } from "./aiScope.js";
+import { latestPlayerTriggerAt, ambientGateOpen, ambientGateAfterRun } from "./ambientGate.js";
 const bondAnalysisBusy = new Set();
 const bondRestartBusy = new Set();
 const bondAnalysisRetry = new Map();
@@ -4650,8 +4653,8 @@ function setNote(n, authorId, text, forcedId, extra = {}) {
 }
 
 /* A jegyzetek szövege az AI-nak. */
-function notesForAI(w) {
-  const list = liveNotes(w);
+function notesForAI(w, scope = null) {
+  const list = liveNotes(w).filter((x) => !scope || inScope(scope, x.authorId));
   if (!list.length) return "";
 
   return list
@@ -7953,6 +7956,10 @@ const AI = {
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
+  /* Background-only rest: the server found no free AI capacity. It never touches the global
+     cooldown, so the player's own DM / scene keeps working. */
+  backgroundWaitUntil: 0,
+  waitingAt: 0,
   strikes: 0,
   // Separate rate-limit history: background world traffic must never escalate
   // the player's direct DM/group/RP backoff. `strikes` stays for save compatibility.
@@ -8417,6 +8424,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   temperature: requestMeta && requestMeta.quality === "deep" ? 0.3 : 0.9,
   quality: requestMeta && requestMeta.quality === "deep" ? "deep" : undefined,
   source: String(requestMeta && requestMeta.source || "client-ai"),
+  /* Only a call the player is waiting on may use paid capacity; the server treats everything else as background. */
+  foreground: requestMeta && requestMeta.foreground === true ? true : undefined,
   priority: Number(requestMeta && requestMeta.priority) || (requestMeta && requestMeta.interactive ? 100 : 0),
   /* R45: the server waits for the model as long as this request may take */
   timeout_ms: Math.max(10000, timeoutMs - 2000),
@@ -8455,6 +8464,20 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       err.retryable = false;
       // A proxy/config hiba nem rate-limit. Ne indítsunk hamis cooldown bannert.
       throw err;
+    }
+    if (busy && data && data.error && data.error.type === "free_ai_waiting") {
+      /* The server found no FREE capacity for this background request and refused to pay
+         for it. Only the background lane rests; the request is retried later by the world. */
+      const headerWait = Number(res.headers && res.headers.get ? res.headers.get("retry-after") : 0) || 0;
+      const waitMs = Math.max(20000, headerWait * 1000);
+      AI.backgroundWaitUntil = Math.max(AI.backgroundWaitUntil, now() + waitMs);
+      AI.waitingAt = now();
+      const waiting = new Error(CURRENT_LANG === "en"
+        ? `No free AI capacity right now — background work waits ${Math.ceil(waitMs / 1000)} s and retries by itself.`
+        : `Most nincs ingyenes AI-kapacitás — a háttérmunka ${Math.ceil(waitMs / 1000)} mp-et vár, majd magától újrapróbálja.`);
+      waiting.busy = true;
+      waiting.waiting = true;
+      throw waiting;
     }
     if (busy) {
       // Ismétlődő elutasításnál lane-specifikus backoff. A háttérvilág
@@ -8726,6 +8749,7 @@ async function askJSON(system, prompt, options = {}) {
               timeoutMs: Number(options.timeoutMs) || undefined,
               source: String(options && options.source || "askWorldJSON"),
               quality: options && options.quality === "deep" ? "deep" : undefined,
+              foreground: !!(options && options.foreground === true),
             }
           );
           const parsed = parseAiJsonResponse(raw);
@@ -8741,6 +8765,10 @@ async function askJSON(system, prompt, options = {}) {
         } catch (err) {
           last = err;
           if (err && err.retryable === false) {
+            throw err;
+          }
+          /* Free capacity is out: do not hold the AI queue lane waiting; the scheduler retries later. */
+          if (err && err.waiting) {
             throw err;
           }
           if (err && err.busy) {
@@ -8802,7 +8830,10 @@ async function askJSON(system, prompt, options = {}) {
 
 function askWorldJSON(w, system, prompt, options = {}) {
   if (!analysisReady(w, allSubjects)) return Promise.reject(new Error("A teljes karakterlap- és kapcsolatelemzés még nem készült el."));
-  return askJSON(system, prompt + bondGenerationContext(w), { ...options, keepFullPrompt: true, language: worldLanguage(w) });
+  const { memory, ...askOptions } = options;
+  const run = (memoryBlock) => askJSON(system, insertBeforeProtectedTail(prompt, memoryBlock) + bondGenerationContext(w), { ...askOptions, keepFullPrompt: true, language: worldLanguage(w) });
+  /* No memory option: exactly the old path, no extra step. */
+  return memory ? memoryPromptBlock(w, memory).then(run) : run("");
 }
 
 /*
@@ -8819,15 +8850,20 @@ async function askWorldJSONInteractive(
   AI.interactivePending++;
 
   try {
+    /* What the characters in this conversation remember (their own sheet + what happened to them)
+       that matches what is being said right now. Best effort: never delays or breaks the reply. */
+    const { memory, ...askOptions } = options;
+    const memoryBlock = await memoryPromptBlock(w, memory);
     return await askJSON(
       system,
-      prompt + bondGenerationContext(w),
+      insertBeforeProtectedTail(prompt, memoryBlock) + bondGenerationContext(w),
       {
-        ...options,
+        ...askOptions,
         keepFullPrompt: true,
         language:
           worldLanguage(w),
         priority: 100,
+        foreground: true,
         maxTries:
           options.maxTries ||
           2,
@@ -15494,14 +15530,32 @@ function rosterLine(w) {
   return rows.join("\n");
 }
 
-function recentStructuredWorldLines(w, limit = 6) {
+/* Roster for a focused conversation: the speakers, the player, and the speakers' strongest ties. */
+function scopedRosterLine(w, scope) {
+  const ties = [];
+  scope.focus.forEach((id) => {
+    (w.chars || []).forEach((other) => {
+      if (!other || other.id === id || inScope(scope, other.id)) return;
+      const rel = getRel(w, id, other.id);
+      ties.push({ id: other.id, strength: rel ? Number(rel.score) || 0 : 0 });
+    });
+  });
+  const keep = new Set([...scope.people, ...strongestTieIds(ties)]);
+  const rows = [];
+  humanChars(w).forEach((h) => { if (keep.has(h.id)) rows.push(`${h.name} (@${h.username}) — ${termText("player", worldLanguage(w))}`); });
+  (w.chars || []).forEach((c) => { if (keep.has(c.id)) rows.push(`${c.name} (@${c.username})`); });
+  return rows.join("\n");
+}
+
+function recentStructuredWorldLines(w, limit = 6, scope = null) {
   const rows = (w && Array.isArray(w.socialEvents) ? w.socialEvents : [])
     .filter((event) =>
       event &&
       event.text &&
       event.visibility === "public" &&
       event.factLevel !== "speculation" &&
-      !/^(?:follow|unfollow)$/i.test(String(event.type || "")) /* CLAUDE FIX 2.5 */
+      !/^(?:follow|unfollow)$/i.test(String(event.type || "")) && /* CLAUDE FIX 2.5 */
+      (!scope || eventInScope(scope, event))
     )
     .slice(0, Math.max(1, limit))
     .map((event) => {
@@ -15522,6 +15576,10 @@ function legacySimsSocialWorldContext(w, ids, deep, observerId, contextOptions =
   const includePlayer = contextOptions.includePlayer !== false;
   const includeRecentWorld = contextOptions.includeRecentWorld !== false;
   const socialScope = Boolean(contextOptions.socialScope);
+  /* A conversation between a few characters gets their data, not the whole world's. */
+  const scope = socialScope || contextOptions.fullWorld === true
+    ? null
+    : focusedScope(focus, { playerId: w.meId, includePlayer });
 
   const knownPeople = [
     ...(includePlayer && w.player ? [w.player] : []),
@@ -15546,7 +15604,7 @@ function legacySimsSocialWorldContext(w, ids, deep, observerId, contextOptions =
     Object.keys(w.rels || {}).forEach((k) => {
       if (rels.length >= 14) return;
       const [x, y] = k.split(">");
-      if (!inPlay[x] && !inPlay[y]) return;
+      if (scope ? !relationshipInScope(scope, x, y) : (!inPlay[x] && !inPlay[y])) return;
       const r = w.rels[k];
       if (!r || (!r.score && !r.mood && !r.bond)) return;
       const A = charById(w, x), B = charById(w, y);
@@ -15558,7 +15616,7 @@ function legacySimsSocialWorldContext(w, ids, deep, observerId, contextOptions =
     });
   }
 
-  const notes = notesForAI(w);
+  const notes = notesForAI(w, scope);
   const knownTimeline = observerId
     ? mergeKnowledgeItems([], ((selfMem && selfMem.witnessedEvents) || []).concat((selfMem && selfMem.knownFacts) || []), "timeline", 10)
         .slice(-4).map(memoryToLine)
@@ -15566,8 +15624,9 @@ function legacySimsSocialWorldContext(w, ids, deep, observerId, contextOptions =
   const outLang = worldLanguage(w, observerId || w.meId);
   const tt = (hu, en) => (outLang === "en" ? en : hu);
 
-  const roster =
-    includePlayer
+  const roster = scope
+    ? scopedRosterLine(w, scope)
+    : includePlayer
       ? rosterLine(w)
       : (w.chars || [])
           .filter(Boolean)
@@ -15622,7 +15681,9 @@ ${tt(
 
 ${playerContextBlock}
 
-${tt("A VILÁG TELJES NÉVSORA — RAJTUK KÍVÜL SENKI NEM LÉTEZIK", "FULL WORLD ROSTER — NO ONE ELSE EXISTS")}: 
+${scope
+  ? tt("A HELYZETBEN RELEVÁNS SZEMÉLYEK — rajtuk kívül senkit ne nevezz meg, aki nincs itt vagy a fenti előzményekben", "PEOPLE RELEVANT TO THIS MOMENT — name no one who is not listed here or in the history above")
+  : tt("A VILÁG TELJES NÉVSORA — RAJTUK KÍVÜL SENKI NEM LÉTEZIK", "FULL WORLD ROSTER — NO ONE ELSE EXISTS")}: 
 ${roster || "-"}
 
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
@@ -15651,7 +15712,7 @@ ${notes ? `\n${tt("MOSTANI JEGYZETEK", "CURRENT NOTES")}:\n${cut(notes, 260)}` :
 ${tt("MOSTANÁBAN TÖRTÉNT", "RECENT EVENTS")}: 
 ${(
   includeRecentWorld
-    ? (observerId ? knownTimeline : recentStructuredWorldLines(w, 4))
+    ? (observerId ? knownTimeline : recentStructuredWorldLines(w, 4, scope))
     : []
 ).join("\n") || (socialScope ? tt("kihagyva: nem releváns ehhez a lokális social threadhez", "omitted: unrelated to this local social thread") : "-")}`;
 }
@@ -25545,7 +25606,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { maxTokens: 2400 }
+    { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 2400 }
   );
 
   /*
@@ -27822,7 +27883,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${commentReplyLatestTail(w, post, comment)}${TAIL}`,
-    { maxTokens: 900 }
+    { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 900 }
   );
 
   /*
@@ -28645,66 +28706,6 @@ HARD SELF BOUNDARY:
     .join("\n");
 }
 
-async function eventDrivenFeedRefreshPlan(w, cast, eventBatch) {
-  if (!w || !eventBatch || !cast || !cast.length) return null;
-  const compactCast = cast.map((actor) => {
-    const rel = getRel(w, actor.id, w.meId) || EMPTY_REL;
-    return {
-      id: actor.id,
-      name: actor.name,
-      job: String(actor.job || actor.occupation || "").slice(0, 120),
-      personality: String(actor.personality || "").replace(/\s+/g, " ").trim().slice(0, 320),
-      relationshipToPlayer: {
-        score: Number(rel.score) || 0,
-        type: String(rel.bond || rel.type || "").slice(0, 100),
-        mood: String(rel.mood || "").slice(0, 120),
-      },
-    };
-  });
-
-  try {
-    return await askWorldJSON(
-      w,
-      [
-        "You are a FAST feed refresh planner, not the final social-media writer.",
-        "Plan what each already-selected author is naturally doing/posting about right now.",
-        "Do NOT write final captions or comments. Do not invent canon. Keep topics varied and character-specific.",
-        "The final wording will be written by a separate high-quality writing model."
-      ].join("\n"),
-      [
-        "REFRESH TRIGGER:",
-        JSON.stringify({
-          trigger: eventBatch.trigger || "",
-          postId: eventBatch.postId || "",
-          causeText: String(eventBatch.causeText || "").slice(0, 500),
-          neededPosts: Number(eventBatch.neededPosts) || cast.length,
-          gossipFacts: String(eventBatch.gossipFacts || "").slice(0, 700),
-        }),
-        "",
-        "SELECTED AUTHORS:",
-        JSON.stringify(compactCast),
-        "",
-        '{"authors":[{"id":"EXACT_ID","topic":"short topic","intent":"what the post is trying to express/do","tone":"short tone"}]}',
-        "Return one row for each selected author; planning only, no final captions."
-      ].join("\n"),
-      {
-        maxTokens: 760,
-        priority: 45,
-        timeoutMs: 8000,
-        source: "feed-refresh-plan",
-      }
-    );
-  } catch (error) {
-    console.warn(
-      "[feed-refresh-plan]",
-      "fallback=local-cast",
-      "trigger=" + String(eventBatch && eventBatch.trigger || ""),
-      String(error && error.message || error || "planner failed")
-    );
-    return null;
-  }
-}
-
 async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
   /* CLAUDE FIX 2.1: event-driven refreshes (my post / scene end / popup) get their
      own 3–4 post cast, and the author roster is placed in the protected tail of
@@ -28717,10 +28718,6 @@ async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
     if (eventBatch) console.warn("[feed-refresh]", "no-eligible-authors", "trigger=" + String(eventBatch.trigger || ""));
     return null;
   }
-
-  const refreshPlan = eventBatch
-    ? await eventDrivenFeedRefreshPlan(w, cast, eventBatch)
-    : null;
 
   const recent = (w.posts || [])
     .slice(0, 4)
@@ -28749,7 +28746,6 @@ async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
     )}
 
 AUTONOMOUS AUTHORSHIP CONTRACT:
-${refreshPlan ? ("REFRESH PLANNER OUTPUT — planning only; do not copy wording:\n" + JSON.stringify(refreshPlan).slice(0, 7000) + "\nUse it only to decide each selected author's topic/intent/tone. You are still responsible for the final character-authentic wording.\n") : ""}
 - Each generated post's id selects EXACTLY ONE author.
 - That author may use only their OWN AUTONOMY SELF CAPSULE for self facts.
 - The player profile/private canon is intentionally omitted. Public recent feed/events may still be reacted to when actually relevant, but the player is not the default subject.
@@ -28997,7 +28993,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${eventBatch ? eventDrivenRosterTail(w, cast, eventBatch) : ""}${TAIL}`,
-    {
+    { memory: backgroundMemory(w, cast.map((c) => c.id)),
       maxTokens: single
         ? 1800
         : 4096,
@@ -29100,7 +29096,7 @@ ${repetitionGuard(w, [author.id], "autonóm posztok és kommentek")}
 
 JSON:
 {"posts":[{"id":"${author.id}","text":"a poszt/caption","image":"kepN vagy üres","comments":[]}],"changes":[],"events":[],"selfUpdates":[{"id":"${author.id}","mood":"csak ha tényleg változott","intent":"következő saját szándék","openLoops":["megmaradó saját ügy"]}],"relationshipUpdates":[]}${TAIL}`,
-    { maxTokens: 900 }
+    { memory: backgroundMemory(w, [author.id]), maxTokens: 900 }
   );
 }
 
@@ -33431,7 +33427,7 @@ Az ötlet legyen valódi EVENT: adj hozzá egy konkrét, teljesíthető célt, e
 
 - EMOJI TILOS: az Event címe, helyzete, célja és jutalomtárgya se tartalmazzon emojit vagy pictogramot.
 
-Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyzet, mi a tét","goal":"egy konkrét teljesítési cél","limitMode":"turns vagy minutes","targetTurns":16,"targetMinutes":20,"rewardAffection":12,"rewardItem":"egyedi jutalomtárgy neve","cast":["szereplők azonosítói"]}${TAIL}`));
+Formátum: {"title":"rövid cím","setting":"2-3 mondat: hol, mikor, mi a helyzet, mi a tét","goal":"egy konkrét teljesítési cél","limitMode":"turns vagy minutes","targetTurns":16,"targetMinutes":20,"rewardAffection":12,"rewardItem":"egyedi jutalomtárgy neve","cast":["szereplők azonosítói"]}${TAIL}`, { memory: backgroundMemory(w, ids.length ? ids : null) }));
       if (out.title) setTitle(out.title);
       if (out.setting) setSetting(out.setting);
       if (out.goal) setGoal(String(out.goal));
@@ -34285,7 +34281,7 @@ Formátum:
  "relationshipUpdates":[
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
-}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${TAIL}`, { maxTokens: 3200, timeoutMs: 90000, source: "scene" }));
+}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${TAIL}`, { maxTokens: 3200, timeoutMs: 90000, source: "scene", memory: { ids: (scene.cast || []).filter((id) => !isHuman(w, id)).slice(0, 4), query: String(log || "").slice(-900) } }));
 
       const resolveSceneTurns = (candidateOut) =>
         (candidateOut && Array.isArray(candidateOut.turns)
@@ -35946,7 +35942,7 @@ Formátum:
 {"replies":[{"id":"tag azonosítója","to":"annak az id-ja, akinek közvetlenül szól, vagy üres","text":"természetes rövid group chat üzenet"}],
 "changes":[{"a":"aki érez","b":"aki iránt","delta":12,"mood":"mit érez most iránta","why":"egy rövid mondat","oneSided":false}],
 "memories":[{"id":"tag azonosítója","text":"amit ebből megjegyez"}]}${groupChatSocialTail(w, groupAiIds, mine ? { text: mine, targetId: playerTarget.id || "" } : null)}${TAIL}`,
-      { maxTokens: 700, maxTries: 1, timeoutMs: 50000 }
+      { maxTokens: 700, maxTries: 1, timeoutMs: 50000, memory: { ids: groupAiIds.slice(0, 4), query: mine || String(hist || "").slice(-900) } }
       );
     } catch (primaryGroupErr) {
       const fallbackId = playerTarget.id || groupAiIds[0] || "";
@@ -36708,6 +36704,7 @@ async function askDirectDmJSONInteractive(w, system, prompt, options = {}) {
   delete forward.dmCharId;
   delete forward.dmChatKey;
   delete forward.dmLatestText;
+  if (charId && latestText) forward.memory = { ids: [charId], query: latestText };
 
   const c = charId ? charById(w, charId) : null;
   const protectedTail = c
@@ -40435,7 +40432,7 @@ Ha van:
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
 {"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"kifejezetten iránta MOST élő érzés vagy üres","currentIntent":"mit akarsz VELE kapcsolatban következőnek vagy üres","lastTone":"a mostani DM tényleges hangneme","perceivedTargetMood":"csak ha a meglévő beszélgetésből van róla benyomásod, különben üres","addOpenLoops":["csak új, ténylegesen nyitva maradó kettőtök közti ügy"],"resolveOpenLoops":["csak most ténylegesen lezárt korábbi ügy"],"addPromises":["csak explicit ígéret"],"resolvePromises":["teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["teljesült/lemondott terv"]}]}${autonomousDmTriggerDirective(w, bot)}${TAIL}`,
-    { maxTokens: 700, priority: 22 }
+    { memory: backgroundMemory(w, [bot.id]), maxTokens: 700, priority: 22 }
   );
 }
 async function genForcedEverydayDM(w, bot) {
@@ -40461,7 +40458,7 @@ ${matureContentInstruction(w,[bot.id],"chat")}
 
 JSON ONLY:
 {"skip":false,"text":"short DM","image":"","imagePrompt":"","relationshipImpact":false,"changes":[],"selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
-    { maxTokens: 260, priority: 25 }
+    { memory: backgroundMemory(w, [bot.id]), maxTokens: 260, priority: 25 }
   );
 }
 
@@ -40643,7 +40640,7 @@ Ha most nem írna Note-ot:
 
 Ha ír:
 {"skip":false,"text":"a note","selfUpdates":[{"id":"${bot.id}","mood":"csak ha a Note valóban kifejez/frissít egy pillanatnyi állapotot","intent":"csak ha a Note mögött konkrét szándék van","openLoops":[]}]}${TAIL}`,
-    { maxTokens: 520 }
+    { memory: backgroundMemory(w, [bot.id]), maxTokens: 520 }
   );
 }
 
@@ -40796,7 +40793,7 @@ Formátum:
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":3,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ]}${TAIL}`,
-      { maxTokens: 1100 }
+      { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 1100 }
     );
 
   if (out && typeof out === "object") out.__castIds =
@@ -42277,7 +42274,7 @@ ${payload.mode === "comment"
 
 FORMAT:
 {"comments":[{"id":"actor id","text":"comment"}],"posts":[{"id":"actor id","text":"post"}]}${TAIL}`,
-    { maxTokens: 520, maxTries: 2 }
+    { memory: backgroundMemory(w, actors.map((c) => c.id), String(rumor.text || "")), maxTokens: 520, maxTries: 2 }
   );
 }
 
@@ -43650,7 +43647,13 @@ VÁLASZ CSAK JSON:
   "usedEventIds": ["csak a ténylegesen felhasznált EVENT ID-k"],
   "mentionedIds": ["csak a ténylegesen említett karakter ID-k"]
 }${TAIL}`,
-    {
+    { memory: backgroundMemory(w, (
+        candidate.subjectIds ||
+        []
+      ).filter(
+        (id) =>
+          !isHuman(w, id)
+      )),
       maxTokens: 2600,
     }
   );
@@ -44699,7 +44702,7 @@ A KARAKTEREK TERMÉSZETESEN REAGÁLHATNAK: komment, repost, follow/unfollow, saj
 - Relationship change: a reagáló AI érzése változik egy érintett iránt; delta -35..+35. Lehet erősen pozitív VAGY erősen negatív, és AI → AI célpont is teljesen érvényes. A jealousy / disbelief / defense / betrayal érzéseket a mood és why mezőben konkrétan nevezd meg, ha tényleg ezek mozgatják a változást.
 
 VÁLASZ CSAK JSON:
-{"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","why":""}]}${TAIL}`,{maxTokens:1500});
+{"comments":[{"id":"AI id","text":"komment"}],"reposts":["AI id"],"follows":[{"id":"AI id","targetId":"id","state":true}],"dms":[{"id":"AI id","text":"DM a játékosnak"}],"statements":[{"id":"AI id","text":"saját statement"}],"changes":[{"a":"AI id","b":"érintett id","delta":0,"mood":"","why":""}]}${TAIL}`,{ memory: backgroundMemory(w, [...castIds,...(story.mentionedIds||[]).filter((id)=>!isHuman(w,id))].filter((id,index,arr)=>arr.indexOf(id)===index)),maxTokens:1500});
 }
 
 
@@ -44805,7 +44808,7 @@ NYILVÁNOS REAKCIÓK:\n${publicComments||"-"}
 - A játékos helyett ne beszélj.
 
 VÁLASZ CSAK JSON:
-{"skip":false,"format":"analysis","headline":"follow-up headline","text":"follow-up gossip post","mentionedIds":["csak az eredeti sztori érintettjei"],"distortionLevel":35}${TAIL}`,{maxTokens:1100});
+{"skip":false,"format":"analysis","headline":"follow-up headline","text":"follow-up gossip post","mentionedIds":["csak az eredeti sztori érintettjei"],"distortionLevel":35}${TAIL}`,{ memory: backgroundMemory(w, (post.gossipStory.mentionedIds||[]).filter((id)=>!isHuman(w,id))),maxTokens:1100});
 }
 
 function publishRumorEvolution(w,parentPostId,raw){
@@ -44977,8 +44980,104 @@ function popupLastGeneratedAt(w) {
   return Math.max(runtimeAt, historyAt);
 }
 
+const AMBIENT_ACTION_TYPES = new Set(["popup-event", "group", "group-turn", "roleplay-initiate", "gossip-spread", "gossip-echo", "gossip-story", "gossip-reaction", "rumor-evolution"]);
+
+/* True while the world may still add an extra thing because of something the player recently did. */
+function ambientActivityOpen(w) {
+  if (!AI_ACTIVITY_OPTIMIZATION.EVENT_DRIVEN_AMBIENT_ONLY) return true;
+  if (!w) return false;
+  const triggerAt = latestPlayerTriggerAt(w.socialEvents, (id) => isHuman(w, id));
+  return ambientGateOpen({ triggerAt, now: now(), state: w.sim && w.sim.ambient });
+}
+
+/* Semantic memory: what the server already holds of each character's own sheet.
+   Kept in memory only; the server skips unchanged chunks by hash, so a reload costs a request, not an embedding. */
+const SEMANTIC_SYNC = { states: new Map(), inflight: new Map() };
+
+function semanticSyncState(worldCode) {
+  const key = String(worldCode || "");
+  if (!SEMANTIC_SYNC.states.has(key)) SEMANTIC_SYNC.states.set(key, {});
+  return SEMANTIC_SYNC.states.get(key);
+}
+
+function memorySheetText(value) {
+  try { return flattenSheetValue(value); }
+  catch (error) { return String(value == null ? "" : value).replace(/<[^>]*>/g, " "); }
+}
+
+/* Own-sheet memory for some characters. scope "connections": only the Connections part (cheap, for
+   everyone). scope "all": the whole sheet, only for characters that are acting right now. */
+async function syncSheetMemory(w, characters, scope) {
+  if (!w || !w.code) return { ok: true };
+  const state = semanticSyncState(w.code);
+  const mine = [];
+  const running = [];
+  for (const c of characters || []) {
+    if (!c || !c.id) continue;
+    const pending = SEMANTIC_SYNC.inflight.get(w.code + ":" + c.id + ":" + scope);
+    if (pending) running.push(pending); else mine.push(c);
+  }
+  let outcome = { ok: true };
+  const jobs = mine.length ? sheetSyncJobs(mine, { fieldsOf: (c) => sheetFields(c, w), flatten: memorySheetText, state, scope }) : [];
+  if (jobs.length) {
+    const run = runSheetSync(jobs, apiJson, (job) => markSheetSynced(state, job));
+    const keys = jobs.map((job) => w.code + ":" + job.characterId + ":" + scope);
+    keys.forEach((key) => SEMANTIC_SYNC.inflight.set(key, run));
+    try { outcome = await run; } finally { keys.forEach((key) => SEMANTIC_SYNC.inflight.delete(key)); }
+  }
+  if (running.length) await Promise.all(running);
+  return outcome;
+}
+
+/* The characters about to act in a player-facing exchange need their whole sheet in memory now.
+   Waits a few seconds at most; the sync carries on in the background if it takes longer. */
+async function ensureActingSheetMemory(w, ids) {
+  const acting = [...new Set((ids || []).map(String))].map((id) => charById(w, id)).filter((c) => c && !isHuman(w, c.id)).slice(0, RECALL_MAX_CHARACTERS);
+  if (!acting.length) return;
+  await Promise.race([
+    syncSheetMemory(w, acting, "all").catch(() => null),
+    new Promise((resolve) => setTimeout(resolve, 6000)),
+  ]);
+}
+
+/* The memory block for a prompt: what the acting characters remember (own sheet + what happened to
+   them) that fits this moment. Best effort, never throws, never holds a reply for long. */
+async function memoryPromptBlock(w, memory) {
+  if (!memory || !Array.isArray(memory.ids) || !memory.ids.length || !memory.query) return "";
+  try {
+    await ensureActingSheetMemory(w, memory.ids);
+    const byCharacter = await recallMemories(apiJson, memory.ids, memory.query, memory.topK ? { topK: memory.topK } : {});
+    return recallBlock(byCharacter, (id) => nameOfIn(w, id), { language: worldLanguage(w) });
+  } catch (error) {
+    return "";
+  }
+}
+
+/* Memory option for the world's own actions (posts, comments, replies, DMs, scene starts): the
+   characters that act, and what is going on around them as the recall query (computed in code). */
+function backgroundMemory(w, ids, extraQuery = "") {
+  if (!w || !w.meId) return undefined;
+  const list = [...new Set((Array.isArray(ids) ? ids : [ids]).map((id) => String(id || "")).filter(Boolean))]
+    .filter((id) => id !== String(w.meId) && !isHuman(w, id) && charById(w, id))
+    .slice(0, RECALL_MAX_CHARACTERS);
+  if (!list.length) return undefined;
+  const query = [String(extraQuery || "").replace(/\s+/g, " ").trim().slice(0, 600), memoryQueryFromEvents(w, list)].filter(Boolean).join(" \n ");
+  return query ? { ids: list, query, topK: BACKGROUND_RECALL_TOP_K } : undefined;
+}
+
+function isAmbientAction(action) {
+  return Boolean(action) && AMBIENT_ACTION_TYPES.has(action.type) && action.source !== "manual" && action.source !== "player-event";
+}
+
+/* Called inside update(): one ambient action started, so this trigger has one fewer left. */
+function ambientActivityConsume(n) {
+  const sim = ensureSimState(n);
+  sim.ambient = ambientGateAfterRun(sim.ambient, latestPlayerTriggerAt(n.socialEvents, (id) => isHuman(n, id)));
+}
+
 function popupOverdueByMs(w) {
   if (!w || popupGenerationBlocked(w)) return -Infinity;
+  if (!ambientActivityOpen(w)) return -Infinity;
   const runtimeStarted = Number(w.popupRuntime && w.popupRuntime.startedAt) || 0;
   const laneStartedAt = Number(w.sim && w.sim.liveWorldStartedAt) || 0;
   const lastSuccess = Number(w.sim && w.sim.lastPopupSuccessAt) || 0;
@@ -45239,7 +45338,7 @@ KÖTELEZŐ REALIZMUS:
 - publicSentiment: support/dislike/controversy/cancel 0..100. Cancel ne legyen automatikus: csak akkor legyen jelentős, ha az adott stratégia nyilvánosan kínos, agresszív, hazug, érzéketlen, botrányos vagy "double down" jellegű.
 
 VÁLASZ CSAK JSON:
-{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat konkrét helyzet","location":"","visibility":"limited","witnessIds":[],"gossipPotential":45,"eventKind":"encounter","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":1,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1150,priority:18});
+{"skip":false,"icon":"⚡","title":"rövid cím","text":"1-3 mondat konkrét helyzet","location":"","visibility":"limited","witnessIds":[],"gossipPotential":45,"eventKind":"encounter","choices":[{"id":"c1","label":"stratégia","description":"rövid magyarázat","tone":"clarify","targetId":"","reactions":[{"id":"AI id","delta":4,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":1,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{ memory: backgroundMemory(w, involved.filter((id)=>!isHuman(w,id))),maxTokens:1150,priority:18});
 }
 
 function fallbackPopupEventResponse(w, seed) {
@@ -45423,7 +45522,7 @@ Ugyanazokat a szabályokat tartsd, mint egy normál popupnál:
 - a játékos helyett soha ne dönts/cselekedj.
 
 JSON:
-{"skip":false,"icon":"🎲","title":"","text":"","location":"","visibility":"limited","witnessIds":[],"gossipPotential":40,"eventKind":"encounter","choices":[{"id":"c1","label":"","description":"","tone":"clarify","targetId":"","reactions":[],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{maxTokens:1100,priority:22});
+{"skip":false,"icon":"🎲","title":"","text":"","location":"","visibility":"limited","witnessIds":[],"gossipPotential":40,"eventKind":"encounter","choices":[{"id":"c1","label":"","description":"","tone":"clarify","targetId":"","reactions":[],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{ memory: backgroundMemory(w, cast),maxTokens:1100,priority:22});
 }
 
 function applyPopupReroll(w,eventId,raw){
@@ -45482,7 +45581,7 @@ NE írd át a játékos cselekvését más cselekvéssé. A feladatod kizáróla
 - gossipTags: legfeljebb 5 rövid tag, pl. confrontation, awkward, romance, fight, public-drama, scandal, receipts, cringe, backlash.
 
 JSON:
-{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{maxTokens:800,priority:65});
+{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{ memory: backgroundMemory(w, cast),maxTokens:800,priority:65});
 }
 
 function normalizePopupCustomOutcome(w,event,customText,raw){
@@ -50016,6 +50115,14 @@ function simDropQueued(w, actionId) {
   sim.at = now();
 }
 
+/* Keep a queued action for later: it ran into "no free AI capacity" and must not be lost. */
+function simDeferQueued(w, actionId, retryAt) {
+  const sim = ensureSimState(w);
+  const row = sim.queue.find((x) => x && x.id === actionId);
+  if (row) row.retryAt = Math.max(Number(retryAt) || 0, now() + 20000);
+  sim.at = now();
+}
+
 function simMarkDone(w, action) {
   const sim = ensureSimState(w);
   sim.running = "";
@@ -50361,7 +50468,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ],
 "event":"egy rövid mondat arról, miért jött létre a csoport"}${TAIL}`,
-    { maxTokens: 1200, priority: 18 }
+    { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 1200, priority: 18 }
   );
 }
 
@@ -50488,7 +50595,9 @@ Formátum:
     }
   ]
 }${TAIL}`,
-    {
+    { memory: backgroundMemory(w, castIds.concat(
+        [target.id]
+      )),
       maxTokens: 900,
     }
   );
@@ -51718,7 +51827,7 @@ HARMADIK SZEMÉLY, AKI NINCS OTT (CLAUDE FIX R50): ha az Event egy olyan emberr�
 
 JSON:
 {"skip":false,"mode":"dm_invite vagy arrival vagy encounter","audience":"private vagy group","eventKind":"private_meet vagy party vagy training vagy team_event vagy group_social","title":"rövid Event cím","setting":"2-4 mondat, hol/mikor/miért indul; a játékos döntését ne írd meg","goal":"konkrét Event cél","cast":["az eventhez ténylegesen illő AI-id-k; ${bot.id} kötelező; private audience esetén CSAK ${bot.id}"],"openingKind":"speech vagy action","opening":"${bot.name} első saját mondata vagy cselekvése; a játékos reakciója nélkül","dmText":"csak dm_invite esetén rövid valódi chat-üzenet, különben üres","targetTurns":20,"targetMinutes":30,"limitMode":"turns vagy minutes","rewardAffection":12,"rewardItem":"jelenethez illő egyedi emléktárgy","selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned","intent":"miért kezdeményezed","openLoops":["amit ezzel az Eventtel el akarsz intézni"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"mi dolgozik benned kifejezetten vele kapcsolatban","currentIntent":"mit akarsz vele elérni ezzel az Eventtel","lastTone":"kezdeményező/inviting/tense/playful/etc","perceivedTargetMood":"üres, ha nem tudhatod","addOpenLoops":["ami kettőtök között ezzel nyitva marad"],"resolveOpenLoops":[],"addPromises":[],"resolvePromises":[],"addPlans":["csak ha a meghívás konkrét közös tervet hoz létre"],"resolvePlans":[]}]}${TAIL}`,
-    { maxTokens: 1450, priority: 26 }
+    { memory: backgroundMemory(w, [bot.id]), maxTokens: 1450, priority: 26 }
   );
 }
 
@@ -51739,7 +51848,7 @@ Choose the smallest canon-consistent option that gives the player something to r
 Prefer dm_invite unless arriving/encountering is clearly more natural.
 JSON ONLY:
 {"skip":false,"mode":"dm_invite","audience":"private","eventKind":"private_meet","title":"short event title","setting":"2-3 sentences","goal":"concrete goal","cast":["${bot.id}"],"openingKind":"speech","opening":"short first line","dmText":"short invitation DM","targetTurns":20,"targetMinutes":30,"limitMode":"turns","rewardAffection":10,"rewardItem":"small fitting keepsake","selfUpdates":[],"relationshipUpdates":[]}${TAIL}`,
-    { maxTokens: 650, priority: 27 }
+    { memory: backgroundMemory(w, [bot.id]), maxTokens: 650, priority: 27 }
   );
 }
 
@@ -51781,6 +51890,7 @@ function channelActivityPeak(w, key) {
  */
 function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   if (!view || !(view.chars || []).length) return null;
+  if (!ambientActivityOpen(view)) return null;
 
   const ts = now();
   const sim = (view && view.sim) || {};
@@ -51927,6 +52037,8 @@ function hasRecentWidespreadGossip(w) {
 const AI_ACTIVITY_OPTIMIZATION = Object.freeze({
   EVENT_DRIVEN_FEED_ONLY: true,
   EVENT_DRIVEN_UNSOLICITED_DM_ONLY: true,
+  /* Popups, group chatter, gossip and rumours run only after something the player did, never on a timer. */
+  EVENT_DRIVEN_AMBIENT_ONLY: true,
   FEED_MIN_POSTS: 3,
   FEED_MAX_POSTS: 4,
   PLAYER_COMMENT_MAX_AI_REPLIES: 4,
@@ -52473,7 +52585,13 @@ function freshFeedPostCommentCandidate() {
 function worldContext(...args) {
   const base = String(legacyEventDrivenWorldContext(...args) || "");
   let who = "";
-  try { who = [worldGroupGlossaryCard(args[0]), whoIsWhoCard(args[0], args[1])].filter(Boolean).join("\n\n"); } catch (error) { who = ""; }
+  try {
+    const options = args.length >= 5 && args[4] && typeof args[4] === "object" ? args[4] : {};
+    const scope = options.socialScope === true || options.fullWorld === true
+      ? null
+      : focusedScope(args[1], { playerId: args[0] && args[0].meId, includePlayer: options.includePlayer !== false });
+    who = [worldGroupGlossaryCard(args[0], scope), whoIsWhoCard(args[0], args[1])].filter(Boolean).join("\n\n");
+  } catch (error) { who = ""; }
   const withWho = who ? who + "\n\n" + base : base;
   const directive = eventDrivenFeedDirective();
   return directive ? withWho + "\n\n" + directive : withWho;
@@ -52755,7 +52873,8 @@ function legacyFullSpecPlanAutoAction(view) {
   if (groupInitiative && Math.random() < 0.20) return groupInitiative;
 
   /* A pletyka-háló tovább él, de csak a fenti fő social ritmus után. */
-  const gossipSpread = pickGossipPropagationAction(view);
+  const ambientOpen = ambientActivityOpen(view);
+  const gossipSpread = ambientOpen ? pickGossipPropagationAction(view) : null;
   if (gossipSpread && Math.random() < (String(view.gossipSettings && view.gossipSettings.frequency || "normal") === "chaotic" ? 0.34 : 0.16)) {
     return mkAction(
       "gossip-spread",
@@ -52765,7 +52884,7 @@ function legacyFullSpecPlanAutoAction(view) {
     );
   }
 
-  const gossipEcho = pickGossipNetworkEchoAction(view);
+  const gossipEcho = ambientOpen ? pickGossipNetworkEchoAction(view) : null;
   if (gossipEcho && Math.random() < 0.10) {
     return mkAction(
       "gossip-echo",
@@ -52775,7 +52894,7 @@ function legacyFullSpecPlanAutoAction(view) {
     );
   }
 
-  const urgentGossipCandidate = gossipAutoCandidate(view);
+  const urgentGossipCandidate = ambientOpen ? gossipAutoCandidate(view) : null;
   if (urgentGossipCandidate && Math.random() < gossipPublishChance(view)) {
     return mkAction(
       "gossip-story",
@@ -52909,7 +53028,7 @@ function legacyFullSpecPlanAutoAction(view) {
   /*
    * 5. GOSSIP REAKCIÓK
    */
-  if (Math.random() < 0.72) {
+  if (ambientOpen && Math.random() < 0.72) {
     const reaction = pickGossipReactionAction(view);
     if (reaction) {
       return mkAction(
@@ -52923,7 +53042,7 @@ function legacyFullSpecPlanAutoAction(view) {
   /*
    * 6. RUMOR EVOLUTION / SPECULATION
    */
-  if (Math.random() < 0.18) {
+  if (ambientOpen && Math.random() < 0.18) {
     const rumorPost = pickRumorEvolutionCandidate(view);
     if (rumorPost) {
       return mkAction(
@@ -53659,7 +53778,7 @@ Ha van természetes folytatás:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ],
 "event":"csak akkor egy rövid mondat, ha a beszélgetésben tényleg történt valami emlékezetes, különben üres"}${groupChatSocialTail(w, memberIds)}${TAIL}`,
-    { maxTokens: 900, priority: 18 }
+    { memory: backgroundMemory(w, memberIds), maxTokens: 900, priority: 18 }
   );
 }
 /* MÁSVILÁG NPC-PAIR REACTION v1 */
@@ -53695,7 +53814,7 @@ async function legacyGroundedGenNpcPairReaction(w, actor, target, sourceEvent) {
     '{"skip":false,"mode":"public_post or offscreen","text":"short public post if mode=public_post, otherwise empty","summary":"one concrete sentence describing the AI-AI reaction/confrontation","tone":"jealous/hostile/hurt/protective/etc"}'
   ].join("\n\n");
 
-  return askWorldWritingJSON("feed-post", w, engineFor(w), prompt, { maxTokens: 650, priority: 16 });
+  return askWorldWritingJSON("feed-post", w, engineFor(w), prompt, { memory: backgroundMemory(w, [actor.id, target.id], eventText), maxTokens: 650, priority: 16 });
 }
 
 /* Egy központi szimulációs akció futtatása. Mindig pontosan egy AI-hívás. */
@@ -59339,6 +59458,7 @@ const signOut = useCallback(async () => {
     if (!langReady || !world || !meId) return;
     let alive = true;
     const runManualLane = async (laneAction) => {
+      const laneStartedAt = now();
       manualLaneBusy.current = true;
       manualLaneSince.current = now();
       inFlightActionIds.current.add(laneAction.id);
@@ -59348,8 +59468,10 @@ const signOut = useCallback(async () => {
       } catch (e) {
         if (alive) setErr("SIM: " + ((e && e.message) ? e.message : tt("Az AI-kérés nem sikerült.", "AI request failed.")));
       }
+      const laneWaiting = !laneOk && AI.waitingAt >= laneStartedAt;
       update((n) => {
-        simDropQueued(n, laneAction.id);
+        if (laneWaiting) simDeferQueued(n, laneAction.id, AI.backgroundWaitUntil);
+        else simDropQueued(n, laneAction.id);
         if (laneOk) {
           try { markSimulationCadence(n, laneAction); } catch (error) { /* cadence is optional */ }
           const sim = ensureSimState(n);
@@ -59372,7 +59494,7 @@ const signOut = useCallback(async () => {
   }
   if (autoRunning.current && !manualLaneBusy.current && simLeaderActive()) {
     const laneView = viewRef.current;
-    const laneQueue = ((laneView && laneView.sim && laneView.sim.queue) || []).filter((a) => a && a.id && !inFlightActionIds.current.has(a.id));
+    const laneQueue = ((laneView && laneView.sim && laneView.sim.queue) || []).filter((a) => a && a.id && !inFlightActionIds.current.has(a.id) && !(Number(a.retryAt) > now()));
     const runningId = String((laneView && laneView.sim && laneView.sim.running) || "");
     const newestPlayerPostLaneAction = laneQueue
       .filter((a) => a.type === "player-post-comments-guarantee" && a.id !== runningId)
@@ -59417,7 +59539,7 @@ const signOut = useCallback(async () => {
   /* CLAUDE FIX R3: a due follow / unfollow reaction must not wait for an empty queue. */
   const dueSocialReaction = groundedDueFollowBackAction(view2);
   /* R45: skip what the second lane is already doing; the player's post comments go first */
-  const queueFree = ((view2.sim && view2.sim.queue) || []).filter((a) => a && !inFlightActionIds.current.has(a.id));
+  const queueFree = ((view2.sim && view2.sim.queue) || []).filter((a) => a && !inFlightActionIds.current.has(a.id) && !(Number(a.retryAt) > now()));
   const newestPlayerPostQueued = queueFree
     .filter((a) => a.type === "player-post-comments-guarantee")
     .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))[0] || null;
@@ -59506,6 +59628,8 @@ const signOut = useCallback(async () => {
   }
 
   if (!manualQueued && cooldownLeft() > 0) return;
+  /* No free AI capacity: the world's own background work rests; the player's actions are not affected. */
+  if (!manualQueued && AI.backgroundWaitUntil > now()) return;
 
   if (
     !manualQueued &&
@@ -59653,6 +59777,7 @@ const signOut = useCallback(async () => {
          * úgy nézne ki, mintha történt volna valami, és a világ újra várna.
          */
         simMarkRunning(n, action);
+        if (isAmbientAction(action)) ambientActivityConsume(n);
         if (action && action.type === "world") {
           ensureSimState(n).feedAttemptAt = now();
         }
@@ -59675,11 +59800,12 @@ const signOut = useCallback(async () => {
         0,
         Math.floor(Number(viewRef.current && viewRef.current.historyEpoch) || 0)
       );
+      const actionStartedAt = now();
       try {
         result = await runSimulationAction(viewRef.current, update, action, addImage);
         ok = Boolean(result);
       } catch (e) {
-        if (action && action.source !== "manual" && action.source !== "player-event" && simBrakeNoteFailure()) {
+        if (action && action.source !== "manual" && action.source !== "player-event" && !(e && e.waiting) && simBrakeNoteFailure()) {
           update((n) => groundedEventLog(n, "sim-brake", "applied", "Background world paused for 5 minutes after repeated AI failures: " + String(e && e.message || e || "error").slice(0, 160), "brake"));
         }
         if (action && action.source === "manual" && alive) {
@@ -59715,7 +59841,9 @@ const signOut = useCallback(async () => {
           action &&
           queued.id === action.id
         ) {
-          simDropQueued(n, queued.id);
+          /* Out of free AI capacity: keep the action and retry it later instead of losing it. */
+          if (!ok && AI.waitingAt >= actionStartedAt) simDeferQueued(n, queued.id, AI.backgroundWaitUntil);
+          else simDropQueued(n, queued.id);
         }
 
         if (ok) {
@@ -59804,6 +59932,67 @@ const signOut = useCallback(async () => {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [world ? world.code : null, meId]);
+
+  /*
+   * SEMANTIC MEMORY — each character's OWN SHEET and the important things that happen to them are
+   * stored on the server (free embeddings only) and recalled by meaning in conversations.
+   * Triggered by changes in the world, debounced; a sheet is sent only when it changed and an
+   * event only once. If there is no free capacity it simply waits and tries again.
+   */
+  const memorySyncRef = useRef({ timer: null, busy: false });
+  useEffect(() => () => {
+    const st = memorySyncRef.current;
+    if (st.timer) clearTimeout(st.timer);
+    st.timer = null;
+  }, []);
+  const runMemorySync = useCallback(async () => {
+    const st = memorySyncRef.current;
+    st.timer = null;
+    const w = wRef.current;
+    if (st.busy || !w || !w.code || !w.meId || !(w.chars || []).length) return;
+    if (!simLeaderActive()) return;
+    st.busy = true;
+    let retryMs = 0;
+    try {
+      /* 1) Everyone's Connections part: a few thousand characters each, once. */
+      const connections = await syncSheetMemory(w, w.chars, "connections");
+      if (connections.waiting) retryMs = connections.retryAfter * 1000;
+      else if (connections.failed) retryMs = 120000;
+
+      /* 2) The whole sheet, only of characters that acted lately (posted, commented, DM, scene). */
+      if (!retryMs) {
+        const acted = recentActorIds(wRef.current, { isHuman, charById }).map((id) => charById(wRef.current, id)).filter(Boolean);
+        if (acted.length) {
+          const full = await syncSheetMemory(wRef.current, acted, "all");
+          if (full.waiting) retryMs = full.retryAfter * 1000;
+          else if (full.failed) retryMs = 120000;
+        }
+      }
+
+      /* 3) What happened to them. */
+      if (!retryMs) {
+        const batch = eventMemoryBatch(wRef.current, { isHuman, charById });
+        if (batch.eventIds.length) {
+          const result = await runEventFlush(batch, apiJson);
+          if (result.marked) update((n) => { const ids = new Set(result.marked); (n.socialEvents || []).forEach((e) => { if (e && ids.has(e.id)) e.semMem = 1; }); });
+          if (result.waiting) retryMs = result.retryAfter * 1000;
+          else if (result.failed) retryMs = 120000;
+        }
+      }
+    } catch (error) {
+      retryMs = 120000;
+    } finally {
+      st.busy = false;
+    }
+    if (retryMs && !st.timer) st.timer = setTimeout(runMemorySync, retryMs);
+  }, [update]);
+  const worldRevForMemory = world ? world.rev : 0;
+  useEffect(() => {
+    if (!world || !meId) return;
+    const st = memorySyncRef.current;
+    if (st.timer || st.busy) return;
+    st.timer = setTimeout(runMemorySync, 20000);
+  }, [worldRevForMemory, world ? world.code : null, meId, runMemorySync]);
 
   useEffect(() => { if (err) { const t = setTimeout(() => setErr(""), 9000); return () => clearTimeout(t); } }, [err]);
 
@@ -62491,84 +62680,6 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
   ].filter(Boolean).join("\n");
 }
 
-async function playerPostCommentReactionPlan(w, post, postContext, cards, minComments, maxComments) {
-  if (!w || !post || !cards || !cards.length) return null;
-  const compactCards = cards.map((card) => ({
-    id: card.id,
-    name: card.name,
-    relationshipToPostAuthor: card.relationshipToPostAuthor,
-    isNamedInPost: Boolean(card.isNamedInPost),
-    relationshipToPeopleNamedInPost: card.relationshipToPeopleNamedInPost,
-  }));
-
-  try {
-    const out = await askWorldJSON(
-      w,
-      [
-        "You are a FAST social reaction planner, not the final writer.",
-        "Choose who should react to the visible player post and what each reaction intends to do.",
-        "Do NOT write final comment wording. Do not invent events or facts.",
-        "Respect relationships, official couple status, jealousy, friendship, rivalry and named people in the post.",
-        "Return compact JSON only."
-      ].join("\n"),
-      [
-        "VISIBLE POST:",
-        JSON.stringify(postContext),
-        "",
-        "ELIGIBLE COMMENTERS:",
-        JSON.stringify(compactCards),
-        "",
-        "Choose " + minComments + "-" + maxComments + " different commenters.",
-        '{"commenters":[{"id":"EXACT_ID","tone":"flirty|supportive|teasing|neutral|jealous|dismissive|hostile","intent":"very short description of what this person reacts to / tries to convey"}]}'
-      ].join("\n"),
-      {
-        maxTokens: 420,
-        priority: 45,
-        timeoutMs: 8000,
-        source: "player-post-comment-plan",
-      }
-    );
-
-    const allowed = new Set(cards.map((card) => String(card.id)));
-    const rows = Array.isArray(out && out.commenters) ? out.commenters : [];
-    const planned = [];
-    const seen = new Set();
-
-    rows.forEach((row) => {
-      const id = String(row && row.id || "");
-      if (!id || !allowed.has(id) || seen.has(id)) return;
-      seen.add(id);
-      planned.push({
-        id,
-        tone: String(row.tone || "").slice(0, 40),
-        intent: String(row.intent || "").replace(/\s+/g, " ").trim().slice(0, 220),
-      });
-    });
-
-    for (const card of cards) {
-      if (planned.length >= minComments) break;
-      const id = String(card.id || "");
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      planned.push({
-        id,
-        tone: String(card.relationshipToPostAuthor && card.relationshipToPostAuthor.expectedPublicTone || "neutral"),
-        intent: "react naturally to the visible post",
-      });
-    }
-
-    return planned.length ? planned.slice(0, maxComments) : null;
-  } catch (error) {
-    console.warn(
-      "[player-post-comment-plan]",
-      "fallback=local-cast",
-      "post=" + String(postContext && postContext.postId || ""),
-      String(error && error.message || error || "planner failed")
-    );
-    return null;
-  }
-}
-
 async function isolatedPlayerPostComments(w, post, options = {}) {
   const minComments = Math.max(3, Math.min(6, Math.round(Number(options.minComments) || 3)));
   const maxComments = Math.max(minComments, Math.min(6, Math.round(Number(options.maxComments) || 6)));
@@ -62579,27 +62690,13 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
     return { out: { comments: [], changes: [] }, label: "isolated-player-post-comments-no-cast" };
   }
 
-  const reactionPlan = await playerPostCommentReactionPlan(
-    w,
-    post,
-    postContext,
-    cards,
-    minComments,
-    maxComments
-  );
-  const plannedIds = Array.isArray(reactionPlan)
-    ? reactionPlan.map((row) => String(row.id || ""))
-    : [];
-  const plannedCards = plannedIds.length
-    ? [
-        ...plannedIds.map((id) => cards.find((card) => String(card.id) === id)).filter(Boolean),
-        ...cards.filter((card) => !plannedIds.includes(String(card.id))),
-      ].slice(0, maxComments)
-    : cards;
+  /* Who reacts is decided locally: the candidate cards are already ranked by relationship,
+     and the writing call picks each commenter's tone. No separate planning call. */
+  const plannedCards = cards;
 
   const logContext = {
     post: postContext,
-    reactionPlan: reactionPlan || "local-fallback",
+    reactionPlan: "local",
     commenters: plannedCards.map((card) => ({
       id: card.id,
       name: card.name,
@@ -62629,23 +62726,20 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
       attempt ? firstProblems : [],
       attempt ? firstRows : []
     );
-    const plannedPrompt = reactionPlan && reactionPlan.length
-      ? prompt + "\n\n[REACTION PLAN — PLANNING ONLY, DO NOT COPY WORDING]\n" +
-        JSON.stringify(reactionPlan) +
-        "\nWrite the final comments yourself in each character's exact voice while preserving these intended speakers/tones."
-      : prompt;
 
     let out;
     try {
       out = await askWorldWritingJSON("comments", 
         w,
         playerPostCommentPrivateSystem(w, post),
-        plannedPrompt,
+        prompt,
         {
           maxTokens: 900,
           priority: 65,
           timeoutMs: 60000,
           source: "player-post-comments-isolated",
+          foreground: true,
+          memory: backgroundMemory(w, plannedCards.map((card) => card.id), postContext.text),
         }
       );
     } catch (error) {
@@ -63690,7 +63784,7 @@ function identityCanonLine(w, c) {
 
 /* CLAUDE FIX R11: separate groups/settings must never blend into one storyline
    (a death game, a gang and a university house do not share a scoreboard). */
-function worldGroupGlossary(w) {
+function worldGroupGlossary(w, scope = null) {
   const state = w && w.sim && w.sim.identityCanon;
   if (!state) return [];
   const groups = new Map();
@@ -63705,21 +63799,23 @@ function worldGroupGlossary(w) {
       if (!key || key.length < 2) return;
       const row = groups.get(key) || { name: a.name, kinds: {}, members: [] };
       if (a.kind) row.kinds[a.kind] = (row.kinds[a.kind] || 0) + 1;
-      if (row.members.length < 6) row.members.push(String(c.name || "").split(/\s+/)[0] + (a.role ? " (" + a.role + ")" : ""));
+      row.members.push({ id: c.id, label: String(c.name || "").split(/\s+/)[0] + (a.role ? " (" + a.role + ")" : "") });
       groups.set(key, row);
     });
   });
-  return [...groups.values()]
-    .sort((a, b) => b.members.length - a.members.length)
+  /* With a focused conversation only the groups of the people in it are listed. */
+  const rows = [...groups.values()]
+    .sort((a, b) => Math.min(6, b.members.length) - Math.min(6, a.members.length));
+  return groupsForScope(rows, scope, 6)
     .slice(0, 14)
     .map((g) => {
       const kind = Object.entries(g.kinds).sort((x, y) => y[1] - x[1]).map(([k]) => k)[0] || "";
-      return { name: g.name, kind, members: g.members };
+      return { name: g.name, kind, members: g.members.map((m) => m.label) };
     });
 }
 
-function worldGroupGlossaryCard(w) {
-  const rows = worldGroupGlossary(w);
+function worldGroupGlossaryCard(w, scope = null) {
+  const rows = worldGroupGlossary(w, scope);
   if (!rows.length) return "";
   const en = worldLanguage(w, w.meId) === "en";
   return (en
