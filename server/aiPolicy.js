@@ -115,3 +115,39 @@ export function geminiKeyRestMs(status, message = "", payload = null, nowMs = Da
   if (code === 429) return geminiRateLimitInfo(payload, nowMs).restMs;
   return 0;
 }
+
+/* ---------- Groq's free tier: 8,000 tokens per minute per key ---------- */
+
+export const GROQ_FREE_TPM_BUDGET = 7500;     /* a little under the 8,000 limit */
+export const GROQ_CHARS_PER_TOKEN = 3;        /* conservative: Hungarian and mixed text */
+export const GROQ_MIN_PROMPT_TOKENS = 1200;   /* below this a roleplay prompt is meaningless */
+
+/* Does a request fit Groq's per-minute limit, and if it has to be shortened, how much of each part
+   may stay? The answer counts the prompt AND the output allowance (max_tokens). A request that
+   cannot fit is never sent: it fails at once and the next provider takes it. */
+export function planGroqRequest({ maxTokens = 1024, systemChars = 0, messageChars = [], budgetTokens = GROQ_FREE_TPM_BUDGET }) {
+  const allowance = Math.max(1, Math.ceil(Number(maxTokens) || 1024));
+  const room = budgetTokens - allowance;
+  if (room < GROQ_MIN_PROMPT_TOKENS) {
+    return { fits: false, reason: `output allowance of ${allowance} tokens leaves no room for a prompt within ${budgetTokens} tokens per minute` };
+  }
+  const maxChars = room * GROQ_CHARS_PER_TOKEN;
+  const total = systemChars + messageChars.reduce((sum, n) => sum + n, 0);
+  if (total <= maxChars) return { fits: true, compact: false, maxChars };
+  const systemCap = Math.min(systemChars, Math.floor(maxChars * 0.35));
+  const rest = maxChars - systemCap;
+  const many = messageChars.length > 1;
+  const lastCap = Math.floor(many ? rest * 0.7 : rest);
+  const otherCap = many ? Math.floor((rest - lastCap) / (messageChars.length - 1)) : 0;
+  return { fits: true, compact: true, maxChars, systemCap, lastCap, otherCap };
+}
+
+/* When Groq says to come back: the retry-after header (seconds), or "try again in 1h2m3.4s" in the message. */
+export function groqRetryMs(headerValue, message = "") {
+  const seconds = Number.parseFloat(String(headerValue || ""));
+  if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds * 1000);
+  const match = /try again in\s+(?:(\d+)h)?\s*(?:(\d+)m(?!s))?\s*(?:(\d+(?:\.\d+)?)s)?/i.exec(String(message));
+  if (!match) return 0;
+  const total = (Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)) * 1000;
+  return Math.ceil(total);
+}
