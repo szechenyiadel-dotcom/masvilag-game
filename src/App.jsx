@@ -1,6 +1,7 @@
 import { restoreBaselineGraph } from "./bondAnalysis.js";
 import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext } from "./bondClient.js";
 const bondAnalysisBusy = new Set();
+const restartWorldBusy = new Set();
 const bondAnalysisRetry = new Map();
 /* MÁSVILÁG RECOVERY v99.5 — SCALABLE LAZY MEDIA STORAGE — 20260816_0045 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -39030,25 +39031,18 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
    * setters/update/tt do not exist; the settings button therefore crashed with
    * `ReferenceError: restartWorldHistory is not defined`. */
   const restartWorldHistory = async () => {
-    /*
-     * Restart should never make the user dismiss an error and tap again just
-     * because the automatic sheet reader got there first. Let that in-flight
-     * pass finish, then reuse its server cache and continue automatically.
-     */
-    if (bondAnalysisBusy.has(w.code)) {
-      setRestartMsg(tt("A futó karakterlap-elemzés befejezése…", "Finishing the current sheet analysis…"));
-      const deadline = Date.now() + 10 * 60 * 1000;
-      while (bondAnalysisBusy.has(w.code) && Date.now() < deadline) {
-        await new Promise(resolve => setTimeout(resolve, 400));
-      }
-      if (bondAnalysisBusy.has(w.code)) {
-        setErr(tt("A karakterlap-elemzés túl sokáig tart. Próbáld újra egy pillanat múlva.", "Sheet analysis is taking unusually long. Try again in a moment."));
-        setRestartMsg("");
-        return;
-      }
-    }
+    if (restartWorldBusy.has(w.code)) return;
+    restartWorldBusy.add(w.code);
 
-    bondAnalysisBusy.add(w.code);
+    /*
+     * Restart has its own fast analysis lane. If the automatic sheet reader is
+     * already running, we do not reject or wait for the entire background pass:
+     * identical requests attach to the same server cache/active job while the
+     * remaining restart work is submitted through the bounded fast lane.
+     */
+    const claimedAnalysisBusy = !bondAnalysisBusy.has(w.code);
+    if (claimedAnalysisBusy) bondAnalysisBusy.add(w.code);
+
     setRestartMsg(tt("Teljes kapcsolatháló gyors ellenőrzése…", "Quickly validating the complete bond graph…"));
     try {
       const draft = cloneWorldState(w);
@@ -39057,7 +39051,7 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
           subjects: allSubjects,
           api: apiJson,
           language: worldLanguage(draft),
-          pollIntervalMs: 500,
+          fastRestart: true,
           progress: p => setRestartMsg(p.owner + " · " + p.phase + " · " + p.completed + "/" + p.total),
         });
         installBondGraph(draft, result, allSubjects);
@@ -39065,13 +39059,25 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
         draft.bondAnalysis.recalculated = 0;
         draft.bondAnalysis.recalculatedBonds = 0;
       }
+
       restartWorldHistoryInPlace(draft);
       const saved = await serverSaveWorld(draft, { bondReset: true });
-      update(n => { for (const key of Object.keys(n)) delete n[key]; Object.assign(n, saved.world); });
+      update(n => {
+        for (const key of Object.keys(n)) delete n[key];
+        Object.assign(n, saved.world);
+      });
       setRestartConfirm(false);
-      setRestartMsg(tt("A világ és minden irányított kapcsolat visszaállt az alapra.", "The world and every directed bond were restored to baseline."));
-    } catch (error) { setErr(error.message); setRestartMsg(""); }
-    finally { bondAnalysisBusy.delete(w.code); }
+      setRestartMsg(tt(
+        "A világ és minden irányított kapcsolat visszaállt az alapra.",
+        "The world and every directed bond were restored to baseline."
+      ));
+    } catch (error) {
+      setErr(error.message);
+      setRestartMsg("");
+    } finally {
+      if (claimedAnalysisBusy) bondAnalysisBusy.delete(w.code);
+      restartWorldBusy.delete(w.code);
+    }
   };
   
   
