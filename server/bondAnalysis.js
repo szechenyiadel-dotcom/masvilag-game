@@ -338,12 +338,32 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
 export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe }) {
   const active = new Set();
   let queue = Promise.resolve();
+
+  // Explicit Restart World requests get a small concurrent lane. Every normal
+  // background/manual analysis still uses the original single-file queue.
+  const restartConcurrency = 4;
+  let restartInFlight = 0;
+  const restartWaiters = [];
+  const runRestartTask = async (task) => {
+    if (restartInFlight >= restartConcurrency) {
+      await new Promise((resolve) => restartWaiters.push(resolve));
+    }
+    restartInFlight += 1;
+    try {
+      return await task();
+    } finally {
+      restartInFlight -= 1;
+      const next = restartWaiters.shift();
+      if (next) next();
+    }
+  };
+
   app.post("/ai/bond-analysis", async (req, res) => {
     try {
       if (!(await requireDb(res))) return;
       const session = await getSessionIdentity(req);
       if (!session) return res.status(401).json({ error: "Not authenticated." });
-      const { stage, owner, roster, ownSheet, profileKeys, language, force, fieldNames = [] } = req.body || {};
+      const { stage, owner, roster, ownSheet, profileKeys, language, force, restartFast = false, fieldNames = [] } = req.body || {};
       if (!["profile", "baseline"].includes(stage) || typeof owner !== "string" || typeof ownSheet !== "string" || !Array.isArray(roster)) return res.status(400).json({ error: "Invalid analysis request" });
       const ids = new Set([owner, ...roster.map((entry) => entry.id)]);
       if (ids.size !== roster.length + 1) return res.status(400).json({ error: "Duplicate roster IDs" });
@@ -382,21 +402,37 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
       const metadata = { stage, world: session.worldCode, hash, version: BOND_ANALYSIS_VERSION, sourceChars: ownSheet.length, submittedChars: ownSheet.length };
       const save = (data) => pool.query("INSERT INTO relationship_reading_cache (cache_key,data,updated_at) VALUES ($1,$2::jsonb,NOW()) ON CONFLICT (cache_key) DO UPDATE SET data=EXCLUDED.data, updated_at=NOW()", [cacheKey, stringifyJsonbSafe(data, "bond-analysis")]);
       if (!active.has(cacheKey) && Date.now() >= Number(previous?.retryAt || 0)) {
-        // Persist the full source before starting. A dropped browser request or a
-        // server restart cannot lose a completed profile/baseline checkpoint.
-        await save({ ...metadata, pending: true, request: req.body });
+        // Claim first: a background reader and a Restart click can now overlap,
+        // but the same cache key must still launch only one AI job.
         active.add(cacheKey);
-        queue = queue.catch(() => {}).then(async () => {
+        try {
+          // Persist the full source before starting. A dropped browser request or a
+          // server restart cannot lose a completed profile/baseline checkpoint.
+          await save({ ...metadata, pending: true, request: req.body });
+        } catch (error) {
+          active.delete(cacheKey);
+          throw error;
+        }
+
+        const work = async () => {
           try {
-            console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, sheetHash: hash, sourceChars: ownSheet.length, submittedChars: ownSheet.length, promptChars: prompt.length }));
+            console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, restartFast: !!restartFast, sheetHash: hash, sourceChars: ownSheet.length, submittedChars: ownSheet.length, promptChars: prompt.length }));
             const analyzed = await analyzeStructured(prompt, schema, validate, { outputTokens: 64000 });
             await save({ ...metadata, ...analyzed });
           } catch (error) {
             const retryable = error.failures?.some(failure => [429, 500, 502, 503, 504].includes(failure.status) || /abort|network|fetch|ECONN/i.test(failure.reason));
             await save({ ...metadata, request: req.body, pending: !!retryable, fatal: !retryable, error: error.message, retryAt: Date.now() + 60000 });
             console.warn("[bond-analysis-failed]", stage, owner, error.message);
-          } finally { active.delete(cacheKey); }
-        });
+          } finally {
+            active.delete(cacheKey);
+          }
+        };
+
+        if (restartFast) {
+          void runRestartTask(work);
+        } else {
+          queue = queue.catch(() => {}).then(work);
+        }
       }
       res.status(202).json({ ...metadata, cacheKey, pending: true, error: previous?.error || null, retryAt: previous?.retryAt || null, cached: false });
     } catch (error) {
