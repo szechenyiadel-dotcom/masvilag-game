@@ -75,6 +75,7 @@ export function buildWaitingResult({ retryAfterSeconds, details = [] }) {
           "Nincs használható ingyenes AI-szolgáltató, várunk, fizetős tartalékot nem használunk." +
           (details.length ? " " + details.join(" | ") : ""),
         providers: details,
+        retryAfterSeconds: seconds,
       },
     },
   };
@@ -150,4 +151,113 @@ export function groqRetryMs(headerValue, message = "") {
   if (!match) return 0;
   const total = (Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)) * 1000;
   return Math.ceil(total);
+}
+
+/* ---------- Groq as the workhorse for utility tasks ---------- */
+
+/* Work that analyses, classifies, translates or summarises. None of it gives a character its voice,
+   so a model other than the usual writing chain may answer it. Everything that speaks as a
+   character (DMs, scenes, group chats, comments, posts, notes, popups, gossip, sheet summaries,
+   character bibles) keeps its own chain on purpose. */
+export const GROQ_UTILITY_SOURCES = Object.freeze(new Set([
+  "meaning-analysis",      /* what a post says/shows, before anyone reacts to it */
+  "display-translate",     /* showing the player's text in the other language */
+  "music-note",            /* the theme of a song picked for a note */
+  "relationship-impact",   /* how much a comment moved a relationship */
+]));
+
+export const GROQ_UTILITY_CHAIN = Object.freeze(["groq", "groq2", "gemini"]);
+
+export function isGroqUtilitySource(source) {
+  return GROQ_UTILITY_SOURCES.has(String(source || "").trim().toLowerCase());
+}
+
+/* Prompt and output allowance, in Groq tokens, never more than one minute's budget. */
+export function estimateGroqTokens({ maxTokens = 1024, systemChars = 0, messageChars = [], budgetTokens = GROQ_FREE_TPM_BUDGET }) {
+  const chars = systemChars + messageChars.reduce((sum, n) => sum + n, 0);
+  const output = Math.max(1, Math.ceil(Number(maxTokens) || 1024));
+  return Math.min(budgetTokens, Math.ceil(chars / GROQ_CHARS_PER_TOKEN) + output);
+}
+
+/* A utility task goes to Groq first only when Groq can take it WHOLE: a request that would have to
+   be cut down to fit is better read by a model with a bigger window. */
+export function groqCarriesWhole({ maxTokens, systemChars, messageChars }) {
+  const plan = planGroqRequest({ maxTokens, systemChars, messageChars });
+  return plan.fits && !plan.compact;
+}
+
+/* How long a request may wait for its turn on a Groq key before the next provider takes it. */
+export function groqPaceMaxWaitMs(body) {
+  return isForegroundRequest(body) ? 8000 : 20000;
+}
+
+export const GROQ_WINDOW_MS = 60 * 1000;
+
+/* Groq requests are spaced out, never piled up: each key runs ONE request at a time and the tokens
+   spent in the last minute (prompt + output allowance, corrected by what Groq reports afterwards)
+   never pass the free tier's budget. A request that does not fit right now either waits a little
+   (acquire) or is turned away with the time to come back (tryAcquire). */
+export function createGroqPacer({ budgetTokens = GROQ_FREE_TPM_BUDGET, windowMs = GROQ_WINDOW_MS, now = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  const slots = new Map();
+  const stateOf = (slot) => {
+    if (!slots.has(slot)) slots.set(slot, { busy: false, spent: [] });
+    return slots.get(slot);
+  };
+  const total = (rows) => rows.reduce((sum, row) => sum + row.tokens, 0);
+
+  function budgetWaitMs(state, tokens, at) {
+    state.spent = state.spent.filter((row) => row.at > at - windowMs);
+    let used = total(state.spent);
+    if (used + tokens <= budgetTokens) return 0;
+    for (const row of [...state.spent].sort((a, b) => a.at - b.at)) {
+      used -= row.tokens;
+      if (used + tokens <= budgetTokens) return Math.max(1, row.at + windowMs - at + 1);
+    }
+    return windowMs;
+  }
+
+  function tryAcquire(slot, tokens) {
+    const state = stateOf(slot);
+    const at = now();
+    if (state.busy) return { ok: false, reason: "busy", waitMs: 0 };
+    const claim = Math.min(budgetTokens, Math.max(1, Math.ceil(Number(tokens) || 1)));
+    const wait = budgetWaitMs(state, claim, at);
+    if (wait > 0) return { ok: false, reason: "budget", waitMs: wait };
+    const row = { at, tokens: claim };
+    state.busy = true;
+    state.spent.push(row);
+    let released = false;
+    return {
+      ok: true,
+      /* actualTokens: what Groq reported (0 when nothing was consumed); omitted = keep the estimate */
+      release(actualTokens) {
+        if (released) return;
+        released = true;
+        state.busy = false;
+        if (Number.isFinite(actualTokens) && actualTokens >= 0) row.tokens = Math.ceil(actualTokens);
+      },
+    };
+  }
+
+  async function acquire(slot, tokens, maxWaitMs = 0) {
+    const deadline = now() + Math.max(0, maxWaitMs);
+    for (;;) {
+      const attempt = tryAcquire(slot, tokens);
+      if (attempt.ok) return attempt;
+      const remaining = deadline - now();
+      const pause = attempt.reason === "busy" ? 400 : attempt.waitMs;
+      if (remaining <= 0 || pause > remaining) return attempt;
+      await sleep(Math.max(1, pause));
+    }
+  }
+
+  return {
+    tryAcquire,
+    acquire,
+    state: (slot) => {
+      const state = stateOf(slot);
+      const at = now();
+      return { busy: state.busy, spentTokens: total(state.spent.filter((row) => row.at > at - windowMs)) };
+    },
+  };
 }

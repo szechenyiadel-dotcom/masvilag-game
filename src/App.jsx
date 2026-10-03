@@ -3,6 +3,7 @@ import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGrap
 import { sheetSyncJobs, markSheetSynced, recentActorIds, runSheetSync, eventMemoryBatch, runEventFlush, recallMemories, recallBlock, insertBeforeProtectedTail, memoryQueryFromEvents, RECALL_MAX_CHARACTERS, BACKGROUND_RECALL_TOP_K } from "./semanticMemory.js";
 import { focusedScope, inScope, relationshipInScope, eventInScope, strongestTieIds, groupsForScope } from "./aiScope.js";
 import { latestPlayerTriggerAt, ambientGateOpen, ambientGateAfterRun } from "./ambientGate.js";
+import { classifyVisionError, visionRetryDelayMs, readImagePatiently, nextPostToRead, VISION_MAX_ATTEMPTS } from "./visionRetry.js";
 const bondAnalysisBusy = new Set();
 const bondRestartBusy = new Set();
 const bondAnalysisRetry = new Map();
@@ -7110,6 +7111,7 @@ Formátum:
       {
         maxTokens: 650,
         maxTries: 2,
+        source: "relationship-impact",
       }
     );
 
@@ -16450,12 +16452,18 @@ async function apiJson(path, options = {}) {
   }
 
   if (!res.ok) {
+    const detail = data && data.error;
     const err = new Error(
-      (data && data.error) || `HTTP ${res.status}`
+      (typeof detail === "string" ? detail : detail && detail.message) || `HTTP ${res.status}`
     );
 
     err.status = res.status;
     err.data = data;
+    /* a 503 from the free-only AI gate says when to come back */
+    err.retryAfter =
+      Number(res.headers && res.headers.get && res.headers.get("retry-after")) ||
+      Number(detail && detail.retryAfterSeconds) ||
+      0;
 
     throw err;
   }
@@ -25135,7 +25143,7 @@ HARD COMPREHENSION RULES:
 
 Return JSON only:
 {"literalMeaning":"what it explicitly means","likelyIntent":"visible communicative intent, not hidden mind-reading","impliedMeaning":"strongly supported subtext or empty","tone":"brief tone","imageRelation":"how caption and image relate or empty","addressedToIds":["only explicit/resolved world character IDs"],"ambiguity":"low|medium|high","personalProjectionAllowed":false,"uncertainPoints":["unresolved point"],"confidence":0.0}${TAIL}`,
-      { maxTokens: 520, maxTries: 1 }
+      { maxTokens: 520, maxTries: 1, source: "meaning-analysis" }
     );
 
     return normalizeSocialPostMeaning(w, post, raw);
@@ -29545,7 +29553,7 @@ function NotesStrip({ w, update, setErr, onOpenChat, jump, onRequestNoteReaction
           w,
           engineFor(w),
           `A játékos Instagram Notes-szerű jegyzetéhez ezt a zenét választotta:\nCím: ${title || "nincs megadva"}\nElőadó: ${artist || "nincs megadva"}\n\nA feladatod NEM dalszöveg-idézés. Röviden írd le a dal közismert témáját, érzelmi hangulatát és azt, milyen üzenetet/vibe-ot közvetíthet valaki azzal, hogy ezt teszi ki Note-ba. Ha nem ismered biztosan a számot, ne találj ki konkrét dalszöveget vagy tényt; csak a cím/előadó alapján adj óvatos hangulati értelmezést.\n\nFormátum: {"summary":"1-3 rövid mondat"}${TAIL}`,
-          { maxTokens: 350 }
+          { maxTokens: 350, source: "music-note" }
         );
 
         musicSummary = String(out && out.summary || "").trim().slice(0, 700);
@@ -29884,19 +29892,25 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
 
     const imageId = imageIdOf(img);
     let imageDescription = "";
+    let imageAnalysisPending = false;
 
     if (img) {
       try {
         const data = resolveImg(img, media);
 
         if (data && String(data).startsWith("data:image/")) {
-          imageDescription = await analyzeImageDataUrl(
+          /* If the free AI is busy the picture is retried for a short while; if it still cannot be read,
+             the post goes up marked "pending" and the background worker reads it later. */
+          const read = await readImagePatiently(() => analyzeImageDataUrl(
             data,
             tt(
               "Írd le 1-3 rövid mondatban, mi látható ezen a social media képen. Csak látható részleteket említs: személyek száma, tevékenység, ruha, helyszín, hangulat. Ne azonosíts valódi személyt név szerint.",
               "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
             )
-          );
+          ));
+          imageDescription = read.text;
+          imageAnalysisPending = read.pending && !read.text;
+          if (read.error && !read.text) console.warn("Player post image analysis not ready:", read.error);
         }
       } catch (e) {
         console.warn("Player post image analysis failed:", e);
@@ -29913,6 +29927,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       imageId: imageId || "",
       image: imageId ? "" : (img || ""),
       imageDescription,
+      ...(imageAnalysisPending ? { imageAnalysisPending: true } : {}),
       comments: [],
       language: worldLanguage(w, w.meId),
     };
@@ -36988,10 +37003,10 @@ function LegacyGroundedChat({ w, update, setErr, openId, setOpenId, jump, noteRe
         );
 
       outgoingImageDescription =
-        await analyzeImageDataUrl(
+        (await readImagePatiently(() => analyzeImageDataUrl(
           imageData,
           `This image was sent in a private chat by ${w.player.name} to ${c.name}. Describe only what is visibly present in 1-3 concise sentences: people, clothing, activity, setting, objects and mood when visible. Do not identify real people by name.`
-        );
+        ), { maxWaitMs: 20000 })).text;
     } catch (visionErr) {
       console.warn(
         "Chat image analysis failed:",
@@ -56718,6 +56733,19 @@ export default function App() {
   /* v90: background album vision worker — one image at a time. */
   const albumVisionBusy = useRef(false);
   const albumVisionAttempted = useRef(new Set());
+  /* Picture reading shares one clock: when the free AI has nothing to give, both workers rest. */
+  const albumVisionTries = useRef(new Map());
+  const postVisionAttempted = useRef(new Set());
+  const visionWorkerRetryAt = useRef(0);
+  const visionWorkerTimer = useRef(null);
+  const [visionWorkerTick, setVisionWorkerTick] = useState(0);
+  useEffect(() => () => { if (visionWorkerTimer.current) clearTimeout(visionWorkerTimer.current); }, []);
+  const scheduleVisionRetry = useCallback((error, tries) => {
+    const waitMs = visionRetryDelayMs(error, tries);
+    visionWorkerRetryAt.current = now() + waitMs;
+    if (visionWorkerTimer.current) clearTimeout(visionWorkerTimer.current);
+    visionWorkerTimer.current = setTimeout(() => setVisionWorkerTick((n) => n + 1), waitMs + 500);
+  }, []);
 
   wRef.current = world;
   mediaRef.current = media;
@@ -57464,7 +57492,8 @@ const signOut = useCallback(async () => {
       !world ||
       !code ||
       !mediaReady.current ||
-      albumVisionBusy.current
+      albumVisionBusy.current ||
+      now() < visionWorkerRetryAt.current
     ) {
       return;
     }
@@ -57472,6 +57501,7 @@ const signOut = useCallback(async () => {
     let owner = null;
     let item = null;
     let imageInput = "";
+    let itemKey = "";
 
     const people = allSubjects(world)
       .filter((person) => person && Array.isArray(person.album));
@@ -57505,6 +57535,7 @@ const signOut = useCallback(async () => {
         owner = person;
         item = row;
         imageInput = resolved;
+        itemKey = key;
         albumVisionAttempted.current.add(key);
         break outer;
       }
@@ -57568,20 +57599,111 @@ const signOut = useCallback(async () => {
           "Background album vision analysis failed:",
           visionErr
         );
+        /* No free capacity right now (or a hiccup): come back later instead of leaving the picture unread. */
+        const kind = classifyVisionError(visionErr);
+        if (kind !== "hard") {
+          const tries = (albumVisionTries.current.get(itemKey) || 0) + (kind === "transient" ? 1 : 0);
+          albumVisionTries.current.set(itemKey, tries);
+          if (tries < VISION_MAX_ATTEMPTS) {
+            albumVisionAttempted.current.delete(itemKey);
+            scheduleVisionRetry(visionErr, Math.max(1, tries));
+          }
+        }
       })
       .finally(() => {
         albumVisionBusy.current = false;
-
-        /*
-         * If the previous image failed without mutating world.rev, nudge the
-         * existing pulse so the worker can continue to the next album item.
-         */
+        /* a failed picture changes nothing in the world: nudge the workers on to the next one */
+        setVisionWorkerTick((n) => n + 1);
       });
   }, [
     world ? world.code : null,
     world ? world.rev : 0,
     code,
     media,
+    visionWorkerTick,
+  ]);
+
+  /*
+   * Posts whose picture could not be read at posting time (the free AI was busy) are read here,
+   * one at a time, as soon as the free AI has room. The description then reaches every later
+   * comment and reply; a cached post meaning is dropped so it is rebuilt with the picture.
+   */
+  useEffect(() => {
+    if (
+      !world ||
+      !code ||
+      !mediaReady.current ||
+      albumVisionBusy.current ||
+      now() < visionWorkerRetryAt.current
+    ) {
+      return;
+    }
+
+    const mediaNow = mediaRef.current || {};
+    const sourceOf = (row) => resolveImg(row.imageId ? imageRef(row.imageId) : row.image, mediaNow);
+    const post = nextPostToRead(world.posts, {
+      attempted: postVisionAttempted.current,
+      hasSource: (row) => {
+        const resolved = sourceOf(row);
+        return Boolean(resolved) && (isInlineImageData(resolved) || /^https:\/\//i.test(resolved));
+      },
+    });
+    if (!post) return;
+
+    const imageInput = sourceOf(post);
+    postVisionAttempted.current.add(post.id);
+    albumVisionBusy.current = true;
+
+    const settle = (patch) => setWorld((prev) => {
+      const target = prev && (prev.posts || []).find((row) => row && row.id === post.id);
+      if (!target) return prev;
+      const n = { ...prev };
+      patch(target);
+      n.rev = (n.rev || 0) + 1;
+      return n;
+    });
+
+    analyzeImageDataUrl(
+      imageInput,
+      "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
+    )
+      .then((vision) => {
+        const description = String(vision || "").trim();
+        settle((target) => {
+          if (description && !String(target.imageDescription || "").trim()) {
+            target.imageDescription = description;
+            delete target.socialMeaning;
+          }
+          delete target.imageAnalysisPending;
+          delete target.imageAnalysisAttempts;
+        });
+      })
+      .catch((visionErr) => {
+        console.warn("Background post image analysis failed:", visionErr);
+        const kind = classifyVisionError(visionErr);
+        if (kind === "hard") {
+          settle((target) => { delete target.imageAnalysisPending; });
+          return;
+        }
+        const tries = (Number(post.imageAnalysisAttempts) || 0) + (kind === "transient" ? 1 : 0);
+        if (tries >= VISION_MAX_ATTEMPTS) {
+          settle((target) => { delete target.imageAnalysisPending; });
+          return;
+        }
+        if (kind === "transient") settle((target) => { target.imageAnalysisAttempts = tries; });
+        postVisionAttempted.current.delete(post.id);
+        scheduleVisionRetry(visionErr, Math.max(1, tries));
+      })
+      .finally(() => {
+        albumVisionBusy.current = false;
+        setVisionWorkerTick((n) => n + 1);
+      });
+  }, [
+    world ? world.code : null,
+    world ? world.rev : 0,
+    code,
+    media,
+    visionWorkerTick,
   ]);
 
   useEffect(() => {

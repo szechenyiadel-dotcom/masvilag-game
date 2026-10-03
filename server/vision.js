@@ -15,6 +15,9 @@ import { selectGeminiKeys, geminiKeyRestMs, groqRetryMs, buildWaitingResult, BAC
 export const DEFAULT_GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 export const GROQ_VISION_MAX_BASE64 = 3_900_000;   /* Groq accepts about 4 MB of base64 per image */
 export const VISION_MAX_OUTPUT_TOKENS = 350;
+/* What one picture costs on a Groq key before Groq reports the real figure (image + prompt + answer). */
+export const GROQ_VISION_TOKEN_ESTIMATE = 5000;
+export const GROQ_VISION_MAX_WAIT_MS = 15000;
 const GROQ_VISION_DISABLED_MS = 60 * 60 * 1000;
 const GROQ_MODEL_CACHE_MS = 6 * 60 * 60 * 1000;
 /* Errors that say the MODEL is the problem (gone, no access, cannot take images), not this picture. */
@@ -24,7 +27,7 @@ const message = (payload, fallback = "") => String(payload?.error?.message || pa
 
 export function createVisionRunner({
   fetchFn, groqKeys = [], groqModel = DEFAULT_GROQ_VISION_MODEL, geminiFreeKeys = [], geminiPaidKey = "",
-  geminiModel = "gemini-3.5-flash", geminiRestUntil = new Map(), allowPaid = false, paid = {}, now = Date.now, log = console,
+  geminiModel = "gemini-3.5-flash", geminiRestUntil = new Map(), allowPaid = false, paid = {}, pacer = null, now = Date.now, log = console,
 }) {
   const groqRestUntil = new Map();
   let groqDisabledUntil = 0;
@@ -50,50 +53,64 @@ export function createVisionRunner({
     if (image.base64.length > GROQ_VISION_MAX_BASE64) { note("groq", 413, "image is over Groq's 4 MB limit"); return null; }
     for (const { slot, key } of groqKeys) {
       if ((groqRestUntil.get(slot) || 0) > now()) { note(slot, 429, "resting"); continue; }
-      let model = discovered.model || groqModel;
-      for (let tryNumber = 0; tryNumber < 2; tryNumber += 1) {
-        let response, payload;
-        try {
-          response = await fetchFn("https://api.groq.com/openai/v1/chat/completions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-            body: JSON.stringify({
-              model, max_completion_tokens: VISION_MAX_OUTPUT_TOKENS, temperature: 0.2,
-              messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: image.dataUrl } }] }],
-            }),
-            timeoutMs: 40000,
-          });
-          payload = await response.json().catch(() => ({}));
-        } catch (error) {
-          note(slot, 504, error?.message || "request failed");
-          break;
-        }
-        if (response.ok) {
-          const text = String(payload?.choices?.[0]?.message?.content || "").trim();
-          if (text) return { ok: true, text, provider: slot, model };
-          note(slot, 502, "empty description");
-          break;
-        }
-        const text = message(payload, `HTTP ${response.status}`);
-        note(slot, response.status, text);
-        if (response.status === 429) {
-          const wait = Math.max(15000, groqRetryMs(response.headers?.get?.("retry-after"), text) || 60000);
-          groqRestUntil.set(slot, now() + Math.min(wait, 6 * 3600 * 1000));
-          break;
-        }
-        if ([401, 403].includes(response.status)) { groqRestUntil.set(slot, now() + 24 * 3600 * 1000); break; }
-        if (response.status === 413) return null;
-        if ([400, 404, 422].includes(response.status) && MODEL_PROBLEM.test(text)) {
-          /* The model is gone or cannot read images: try a discovered one once, otherwise stand down for an hour. */
-          if (tryNumber === 0) {
-            const other = await discoverGroqModel(key);
-            if (other && other !== model) { log.warn?.(`[vision] groq model ${model} unusable (${text.slice(0, 120)}); trying ${other}`); model = other; continue; }
+      /* Shares the key's one-request-at-a-time turn and minute budget with the chat traffic. */
+      let lease = null;
+      if (pacer) {
+        const grant = await pacer.acquire(slot, GROQ_VISION_TOKEN_ESTIMATE, GROQ_VISION_MAX_WAIT_MS);
+        if (!grant.ok) { note(slot, 429, `busy (${grant.reason})`, Math.max(3000, grant.waitMs || 0)); continue; }
+        lease = grant;
+      }
+      let usedTokens;
+      try {
+        let model = discovered.model || groqModel;
+        for (let tryNumber = 0; tryNumber < 2; tryNumber += 1) {
+          let response, payload;
+          try {
+            response = await fetchFn("https://api.groq.com/openai/v1/chat/completions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+              body: JSON.stringify({
+                model, max_completion_tokens: VISION_MAX_OUTPUT_TOKENS, temperature: 0.2,
+                messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: image.dataUrl } }] }],
+              }),
+              timeoutMs: 40000,
+            });
+            payload = await response.json().catch(() => ({}));
+          } catch (error) {
+            note(slot, 504, error?.message || "request failed");
+            break;
           }
-          groqDisabledUntil = now() + GROQ_VISION_DISABLED_MS;
-          log.warn?.(`[vision] groq vision disabled for an hour: ${text.slice(0, 160)} (set GROQ_VISION_MODEL to a current vision model)`);
-          return null;
+          if (response.ok) {
+            const reported = Number(payload?.usage?.total_tokens);
+            if (Number.isFinite(reported) && reported >= 0) usedTokens = reported;
+            const text = String(payload?.choices?.[0]?.message?.content || "").trim();
+            if (text) return { ok: true, text, provider: slot, model };
+            note(slot, 502, "empty description");
+            break;
+          }
+          const text = message(payload, `HTTP ${response.status}`);
+          note(slot, response.status, text);
+          if (response.status === 429) {
+            const wait = Math.max(15000, groqRetryMs(response.headers?.get?.("retry-after"), text) || 60000);
+            groqRestUntil.set(slot, now() + Math.min(wait, 6 * 3600 * 1000));
+            break;
+          }
+          if ([401, 403].includes(response.status)) { groqRestUntil.set(slot, now() + 24 * 3600 * 1000); break; }
+          if (response.status === 413) return null;
+          if ([400, 404, 422].includes(response.status) && MODEL_PROBLEM.test(text)) {
+            /* The model is gone or cannot read images: try a discovered one once, otherwise stand down for an hour. */
+            if (tryNumber === 0) {
+              const other = await discoverGroqModel(key);
+              if (other && other !== model) { log.warn?.(`[vision] groq model ${model} unusable (${text.slice(0, 120)}); trying ${other}`); model = other; continue; }
+            }
+            groqDisabledUntil = now() + GROQ_VISION_DISABLED_MS;
+            log.warn?.(`[vision] groq vision disabled for an hour: ${text.slice(0, 160)} (set GROQ_VISION_MODEL to a current vision model)`);
+            return null;
+          }
+          break;
         }
-        break;
+      } finally {
+        if (lease) lease.release(usedTokens);
       }
     }
     return null;
@@ -151,7 +168,7 @@ export function createVisionRunner({
   async function analyze({ image, prompt }) {
     /* What was tried for THIS image; several images can be read at the same time. */
     const attempts = [];
-    const note = (provider, status, text) => attempts.push({ provider, status, message: String(text || "").slice(0, 200) });
+    const note = (provider, status, text, retryMs = 0) => attempts.push({ provider, status, message: String(text || "").slice(0, 200), retryMs });
     const result = (await viaGroq(image, prompt, note)) || (await viaGemini(image, prompt, note)) || (allowPaid ? await viaPaid(image, prompt, note) : null);
     if (result) return result;
 
@@ -160,7 +177,11 @@ export function createVisionRunner({
     const hard = attempts.length > 0 && attempts.every((a) => [400, 415, 422].includes(a.status) && !MODEL_PROBLEM.test(a.message));
     if (hard) return { ok: false, status: 422, payload: { error: { message: "The image could not be read: " + details.join(" | ") } } };
 
-    const waits = [...groqKeys.map(({ slot }) => (groqRestUntil.get(slot) || 0) - now()), ...geminiFreeKeys.map((key) => (geminiRestUntil.get(key) || 0) - now())].filter((ms) => ms > 0);
+    const waits = [
+      ...groqKeys.map(({ slot }) => (groqRestUntil.get(slot) || 0) - now()),
+      ...geminiFreeKeys.map((key) => (geminiRestUntil.get(key) || 0) - now()),
+      ...attempts.map((a) => a.retryMs || 0),
+    ].filter((ms) => ms > 0);
     const seconds = waits.length ? Math.max(BACKGROUND_WAIT_MIN_SECONDS, Math.min(900, Math.ceil(Math.min(...waits) / 1000))) : 60;
     return buildWaitingResult({ retryAfterSeconds: seconds, details });
   }

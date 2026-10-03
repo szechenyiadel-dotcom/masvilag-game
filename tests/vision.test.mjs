@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { createVisionRunner, DEFAULT_GROQ_VISION_MODEL, GROQ_VISION_MAX_BASE64 } from "../server/vision.js";
+import { createVisionRunner, DEFAULT_GROQ_VISION_MODEL, GROQ_VISION_MAX_BASE64, GROQ_VISION_TOKEN_ESTIMATE } from "../server/vision.js";
+import { createGroqPacer } from "../server/aiPolicy.js";
 
 const NOW = 5_000_000;
 const image = (size = 1000) => ({ mimeType: "image/jpeg", base64: "A".repeat(size), dataUrl: "data:image/jpeg;base64," + "A".repeat(size) });
@@ -155,4 +156,50 @@ test("App: an album image that had to wait gets its 'attempted' mark back and is
   assert.match(source, /analysisAttemptedAt: 0 \} : item/);
   assert.match(source, /if \(now\(\) < visionRetryAtRef\.current\) return;/);
   assert.match(source, /setTimeout\(\(\) => setVisionTick\(\(n\) => n \+ 1\), waitMs \+ 500\)/);
+});
+
+/* ---------- sharing a Groq key's turn with the chat traffic ---------- */
+
+test("A picture takes its turn on a Groq key, and the tokens Groq reports are what counts afterwards", async () => {
+  const clock = { t: NOW };
+  const pacer = createGroqPacer({ now: () => clock.t, sleep: async (ms) => { clock.t += ms; } });
+  const t = setup(() => answer(200, { choices: [{ message: { content: "A cat." } }], usage: { total_tokens: 2100 } }), { pacer, now: () => clock.t });
+  const result = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.equal(result.ok, true);
+  assert.deepEqual(pacer.state("groq"), { busy: false, spentTokens: 2100 });
+  assert.ok(GROQ_VISION_TOKEN_ESTIMATE <= 7500, "one picture always fits a minute's budget");
+});
+
+test("While a chat request holds a Groq key, the picture goes to the other key and never overlaps", async () => {
+  const clock = { t: NOW };
+  const pacer = createGroqPacer({ now: () => clock.t, sleep: async (ms) => { clock.t += ms; } });
+  const chat = pacer.tryAcquire("groq", 2000);
+  assert.equal(chat.ok, true);
+  const t = setup(() => groqOk(), { pacer, now: () => clock.t });
+  const result = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.deepEqual([result.ok, result.provider], [true, "groq2"]);
+  assert.deepEqual(t.hosts(), ["api.groq.com:g2"], "the busy key was not used at the same time");
+  chat.release();
+});
+
+test("With both Groq keys busy for a long while, the free Gemini keys read the picture", async () => {
+  const clock = { t: NOW };
+  const pacer = createGroqPacer({ now: () => clock.t, sleep: async (ms) => { clock.t += ms; } });
+  pacer.tryAcquire("groq", 2000);
+  pacer.tryAcquire("groq2", 2000);
+  const t = setup(() => geminiOk(), { pacer, now: () => clock.t });
+  const result = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.deepEqual([result.ok, result.provider], [true, "gemini"]);
+  assert.ok(!t.calls.some((c) => c.host === "api.groq.com"));
+});
+
+test("When Groq is only busy and Gemini is spent, the answer is 'wait', with a short time to come back", async () => {
+  const clock = { t: NOW };
+  const pacer = createGroqPacer({ now: () => clock.t, sleep: async (ms) => { clock.t += ms; } });
+  pacer.tryAcquire("groq", 2000);
+  pacer.tryAcquire("groq2", 2000);
+  const t = setup(() => quota(), { pacer, now: () => clock.t });
+  const result = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.deepEqual([result.ok, result.status, result.waiting], [false, 503, true]);
+  assert.ok(Number(result.retryAfter) >= 20 && Number(result.retryAfter) <= 900, "retryAfter " + result.retryAfter);
 });

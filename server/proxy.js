@@ -10,6 +10,13 @@ import {
   geminiRateLimitInfo,
   FREE_WRITING_CHAIN,
   planGroqRequest,
+  isGroqUtilitySource,
+  groqCarriesWhole,
+  estimateGroqTokens,
+  groqPaceMaxWaitMs,
+  createGroqPacer,
+  groqRetryMs,
+  GROQ_UTILITY_CHAIN,
 } from "./aiPolicy.js";
 import { registerSemanticMemory, createEmbedder } from "./semanticMemory.js";
 import { createVisionRunner, DEFAULT_GROQ_VISION_MODEL } from "./vision.js";
@@ -41,6 +48,8 @@ const GROQ_API_KEY = String(process.env.GROQ_API_KEY || "").trim();
 const GROQ_API_KEY_2 = String(process.env.GROQ_API_KEY_2 || "").trim();
 const GROQ_MODEL = String(process.env.GROQ_MODEL || "").trim();
 const GROQ_MODEL_2 = String(process.env.GROQ_MODEL_2 || GROQ_MODEL || "").trim();
+/* Groq's free tier is small: each key serves one request at a time and stays inside its minute budget. */
+const GROQ_PACER = createGroqPacer();
 /* New exact name first; historical Gemini fallback name remains accepted. */
 const GEMINI_MODEL_ENV = String(process.env.GEMINI_MODEL || process.env.GEMINI_FALLBACK_MODEL || "").trim();
 const AI_PROVIDER_ORDER_ENV = String(process.env.AI_PROVIDER_ORDER || "").trim();
@@ -3567,6 +3576,7 @@ function visionRunner() {
     geminiPaidKey: GEMINI_PAID_KEY,
     geminiModel: String(process.env.GEMINI_VISION_MODEL || "gemini-3.5-flash").trim(),
     geminiRestUntil: GEMINI_KEY_REST_UNTIL,
+    pacer: GROQ_PACER,
     allowPaid: AI_ALLOW_PAID_BACKGROUND,
     paid: { openai: visionViaOpenAI, anthropic: visionViaAnthropic },
   });
@@ -4968,6 +4978,25 @@ function buildCompatibleChatPayload(body = {}, model) {
   return payload;
 }
 
+/* What Groq's per-minute budget is measured on: the output allowance and the size of each prompt part. */
+function groqRequestSize(body) {
+  const rows = Array.isArray(body?.messages) ? body.messages : [];
+  return {
+    maxTokens: body?.max_tokens ?? 1024,
+    systemChars: String(body?.system || "").length,
+    messageChars: rows.map((item) => extractText(item?.content || "").length),
+  };
+}
+
+/* Can the second Groq key take a request the first one has no turn for? Only then is the first key
+   allowed to hand it on instead of waiting for its own turn. */
+function groqSiblingReady(provider) {
+  return provider === "groq" &&
+    Boolean(GROQ_API_KEY_2 && GROQ_MODEL_2) &&
+    !AI_GATE.providerConfigurationErrors.has("groq2") &&
+    providerCooldownMs("groq2") <= 0;
+}
+
 async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
   if (!apiKey || !model) return { unavailable: true, provider, model: model || "" };
 
@@ -4993,39 +5022,47 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
           ? Math.min(baseTimeout, 35000)
           : baseTimeout;
 
+  /* Groq's free tier takes 8,000 tokens per minute, prompt AND output allowance together. What
+     cannot fit is never sent (it would be refused with a 413 anyway); the rest is shortened to fit,
+     and the request waits its turn: one at a time per key, inside the minute's budget. */
+  let providerBody = body;
+  let lease = null;
+  if (provider === "groq" || provider === "groq2") {
+    const size = groqRequestSize(body);
+    const plan = planGroqRequest(size);
+    if (!plan.fits) {
+      console.info("[ai-provider] groq-skip", `provider=${provider}`, `chars=${aiRequestChars(body)}`, `max_tokens=${body.max_tokens ?? 1024}`);
+      return { ok: false, status: 413, skipped: true, payload: { error: { message: `${provider} skipped: ${plan.reason}` } }, provider, model };
+    }
+    if (plan.compact) {
+      const rows = Array.isArray(body.messages) ? body.messages : [];
+      providerBody = {
+        ...body,
+        system: preservePromptEdges(String(body.system || ""), plan.systemCap),
+        messages: rows.map((item, index) => ({
+          ...item,
+          content: preservePromptEdges(extractText(item?.content || ""), index === rows.length - 1 ? plan.lastCap : plan.otherCap),
+        })),
+      };
+      console.info("[ai-provider] compact", `provider=${provider}`, `before=${aiRequestChars(body)}`, `after=${aiRequestChars(providerBody)}`, `budget=${plan.maxChars}`);
+    }
+    /* With the second key free to take it, this one does not make the request wait. */
+    const grant = await GROQ_PACER.acquire(provider, estimateGroqTokens(groqRequestSize(providerBody)), groqSiblingReady(provider) ? 0 : groqPaceMaxWaitMs(body));
+    if (!grant.ok) {
+      const seconds = Math.max(1, Math.ceil((grant.waitMs || 3000) / 1000));
+      console.info("[ai-provider] groq-paced", `provider=${provider}`, `reason=${grant.reason}`, `retryAfter=${seconds}s`);
+      return { ok: false, status: 429, paced: true, retryAfter: String(seconds), payload: { error: { message: `${provider} is ${grant.reason === "busy" ? "busy with another request" : "at its per-minute token budget"}; trying the next provider` } }, provider, model };
+    }
+    lease = grant;
+  }
+
+  let usedTokens;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), providerTimeout);
   try {
     /* Keep the SAME abort signal alive until the entire response body is read.
        Previously fetchWithTimeout() cleared its timer as soon as headers arrived,
        so a provider could stream/hang the body for another 40–60 seconds. */
-    let providerBody = body;
-    if (provider === "groq" || provider === "groq2") {
-      /* Groq's free tier takes 8,000 tokens per minute, prompt AND output allowance together. What
-         cannot fit is never sent (it would be refused with a 413 anyway); the rest is shortened to fit. */
-      const rows = Array.isArray(body.messages) ? body.messages : [];
-      const plan = planGroqRequest({
-        maxTokens: body.max_tokens ?? 1024,
-        systemChars: String(body.system || "").length,
-        messageChars: rows.map((item) => extractText(item?.content || "").length),
-      });
-      if (!plan.fits) {
-        console.info("[ai-provider] groq-skip", `provider=${provider}`, `chars=${aiRequestChars(body)}`, `max_tokens=${body.max_tokens ?? 1024}`);
-        return { ok: false, status: 413, skipped: true, payload: { error: { message: `${provider} skipped: ${plan.reason}` } }, provider, model };
-      }
-      if (plan.compact) {
-        providerBody = {
-          ...body,
-          system: preservePromptEdges(String(body.system || ""), plan.systemCap),
-          messages: rows.map((item, index) => ({
-            ...item,
-            content: preservePromptEdges(extractText(item?.content || ""), index === rows.length - 1 ? plan.lastCap : plan.otherCap),
-          })),
-        };
-        console.info("[ai-provider] compact", `provider=${provider}`, `before=${aiRequestChars(body)}`, `after=${aiRequestChars(providerBody)}`, `budget=${plan.maxChars}`);
-      }
-    }
-
     const r = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
@@ -5041,6 +5078,8 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
     if (!r.ok) {
       return { ok: false, status: r.status, payload, retryAfter: r.headers.get("retry-after"), provider, model };
     }
+    const reported = Number(payload?.usage?.total_tokens);
+    if (Number.isFinite(reported) && reported >= 0) usedTokens = reported;
     const normalized = normalizeOpenAIResponse(payload);
     const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
     return hasText
@@ -5057,6 +5096,7 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
     };
   } finally {
     clearTimeout(timer);
+    if (lease) lease.release(usedTokens);
   }
 }
 
@@ -5440,8 +5480,11 @@ function markProviderFailure(provider, model, result) {
   const hardQuota = /free[_ -]?tier|quota exceeded|current quota|resource exhausted|no credits|daily limit|budget exhausted|payment required|insufficient credits/.test(lower);
   const exponential = Math.min(60000, 5000 * Math.pow(2, failures - 1));
   const jitter = Math.floor(Math.random() * Math.min(2500, Math.max(500, exponential * 0.2)));
+  /* Groq says when it is ready again: seconds for the minute limit, up to hours for the daily one. */
+  const groqHint = (provider === "groq" || provider === "groq2") && status === 429 ? groqRetryMs(result?.retryAfter, message) : 0;
   const rest = provider === "gemini" && retryHeader > 0
     ? retryHeader + 1000 /* the earliest Gemini key comes back then */
+    : groqHint > 0 ? Math.min(6 * 3600 * 1000, Math.max(5000, groqHint + 1000))
     : hardQuota ? Math.max(retryHeader, 15 * 60 * 1000) : Math.max(retryHeader, exponential + jitter);
   AI_GATE.providerCooldownUntil.set(provider, Date.now() + rest);
   AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
@@ -5468,6 +5511,8 @@ function providerAllowedForBody(provider, body) {
    - Feed: Gemini -> OpenAI.
    - Comments/replies: OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2.
    - Existing character voice/style cards remain prompt context; there is no separate AI voice pass.
+   - Analysis, classification and translation (meaning-analysis, display-translate, music-note,
+     relationship-impact) go to Groq first when Groq can take the whole request, then free Gemini.
    - Other small background tasks keep the existing Gemini/Groq routing. */
 function taskProviderOrder(requestedProvider, body) {
   const source = String(body?.source || inferAIRequestSource(body) || "").trim().toLowerCase();
@@ -5485,10 +5530,6 @@ function taskProviderOrder(requestedProvider, body) {
   const characterKnowledgeSources = new Set([
     "sheet-summary",
     "character-bible",
-  ]);
-
-  const groqSmallBackgroundSources = new Set([
-    "meaning-analysis",
   ]);
 
   const groqSmallEnough = chars <= 26000;
@@ -5512,8 +5553,11 @@ function taskProviderOrder(requestedProvider, body) {
   } else if (characterKnowledgeSources.has(source)) {
     /* Other character-sheet canon/identity knowledge stays Gemini-first. */
     raw = ["gemini", "openai"];
-  } else if (groqSmallBackgroundSources.has(source) && groqSmallEnough) {
-    raw = ["groq", "groq2", "gemini"];
+  } else if (isGroqUtilitySource(source)) {
+    /* Analysis, classification and translation (never a character's voice) go to Groq first when Groq can
+       take the WHOLE request (the pacer keeps them from running side by side); free Gemini after it. A
+       request too long for Groq goes to Gemini alone: a translation or reading cut short is wrong. */
+    raw = groqCarriesWhole(groqRequestSize(body)) ? [...GROQ_UTILITY_CHAIN] : ["gemini"];
   } else if (groqSmallEnough) {
     raw = ["gemini", "groq", "groq2"];
   } else {
@@ -5675,6 +5719,7 @@ function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
 async function executeAITask(task) {
   const attempted = new Set();
   const attempts = [];
+  const paceWaitsMs = [];
   let last = null;
 
   while (true) {
@@ -5703,6 +5748,12 @@ async function executeAITask(task) {
     if (result?.unavailable) continue;
 
     attempts.push({ provider, model, status, message });
+    /* Groq was busy with another request or had spent this minute's tokens. Not a failure: no cooldown,
+       the next provider takes this one and Groq stays free for whoever is next. */
+    if (result?.paced) {
+      paceWaitsMs.push(Math.max(1000, (Number.parseInt(result.retryAfter, 10) || 3) * 1000));
+      continue;
+    }
     if ([401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504, 529].includes(status)) {
       markProviderFailure(provider, model, result);
       continue;
@@ -5758,7 +5809,7 @@ async function executeAITask(task) {
 
   /* Background work found no free capacity: tell the caller to wait, never pay for it. */
   if (!isForegroundRequest(task.body) && !AI_ALLOW_PAID_BACKGROUND) {
-    const seconds = backgroundWaitSeconds(taskProviderOrder(task.requestedProvider, task.body).map(providerCooldownMs));
+    const seconds = backgroundWaitSeconds([...taskProviderOrder(task.requestedProvider, task.body).map(providerCooldownMs), ...paceWaitsMs]);
     console.warn("[ai-gate] background-waiting", `source=${task.source}`, `retryAfter=${seconds}s`, "reason=no-free-provider-available");
     return buildWaitingResult({ retryAfterSeconds: seconds, details });
   }
