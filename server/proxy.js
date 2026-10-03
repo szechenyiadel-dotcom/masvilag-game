@@ -21,6 +21,9 @@ import {
   geminiModelConfig,
   geminiModelLadder,
   planGeminiAttempts,
+  geminiBlockReason,
+  looksLikeRefusal,
+  requestExpectsJson,
 } from "./aiPolicy.js";
 import { registerSemanticMemory, createEmbedder } from "./semanticMemory.js";
 import { createVisionRunner, DEFAULT_GROQ_VISION_MODEL } from "./vision.js";
@@ -4872,6 +4875,13 @@ async function proxyGeminiMessage(body) {
     }
     last = result;
 
+    /* A blocked prompt says nothing about the key or the model, and would be blocked again on the next
+       one: stop here, spend nothing more, and let the next provider have it. */
+    if (result && result.blocked) {
+      console.warn("[ai-provider] " + label + " " + proxyErrorMessage(result.payload, "blocked") + " — handing the request to the next provider");
+      break;
+    }
+
     const status = Number(result && result.status);
     const outcome = GEMINI_LEDGER.fail(key, model, { status, message: proxyErrorMessage(result && result.payload, ""), payload: result && result.payload });
     if (outcome.restMs > 0) {
@@ -4933,9 +4943,11 @@ async function proxyGeminiMessageWithKey(body, GEMINI_API_KEY, timeoutMs = upstr
 
   const normalized = normalizeGeminiResponse(payload);
   const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
-  return hasText
-    ? { ok: true, payload: normalized, provider: "gemini", model }
-    : { ok: false, status: 502, payload: { error: { message: "Gemini returned empty content." } }, provider: "gemini", model };
+  if (hasText) return { ok: true, payload: normalized, provider: "gemini", model };
+  /* No text because a safety filter stopped it: not an outage, and every other key would stop it too. */
+  const blockedBy = geminiBlockReason(payload);
+  if (blockedBy) return { ok: false, status: 422, blocked: true, payload: { error: { message: `Gemini blocked the answer (${blockedBy}).` } }, provider: "gemini", model };
+  return { ok: false, status: 502, payload: { error: { message: "Gemini returned empty content." } }, provider: "gemini", model };
 }
 
 async function proxyAnthropicMessage(body) {
@@ -5185,7 +5197,7 @@ async function callMessageProvider(provider, body) {
   }
   if (provider === "gemini") {
     const result = await proxyGeminiMessage(body);
-    return { ...result, provider: "gemini", model: providerModel("gemini", body) };
+    return { ...result, provider: "gemini", model: result?.model || providerModel("gemini", body) };
   }
   const result = await proxyAnthropicMessage(body);
   return { ...result, provider: "anthropic", model: providerModel("anthropic", body) };
@@ -5520,8 +5532,8 @@ function providerAllowedForBody(provider, body) {
 }
 
 /* Provider roles are intentionally strict.
-   - DM: OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2.
-   - Scene: Mistral Small 1 -> Mistral Small 2.
+   - DM: OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2 (also when the world starts it).
+   - Scene: Mistral Small 1 -> Mistral Small 2 (also when the world starts it).
    - Feed: Gemini -> OpenAI.
    - Comments/replies: OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2.
    - Existing character voice/style cards remain prompt context; there is no separate AI voice pass.
@@ -5549,15 +5561,17 @@ function taskProviderOrder(requestedProvider, body) {
   const groqSmallEnough = chars <= 26000;
   let raw;
 
-  /* DeepSeek (openrouter3) and Mistral are billed per use: only a request the player is waiting on
-     gets them. The world's own DMs, scenes and comments use the free chain, or wait. */
+  /* DeepSeek (openrouter3) and Mistral are billed per use. Direct messages and scenes are what the game is
+     about and may be sexual, which the free models often refuse: they use this chain whether the player is
+     waiting or the world started them (a deliberate choice). Comments get it only when the player is waiting;
+     everything else in the background stays free. */
   const playerWaiting = isForegroundRequest(body);
   if (source === "dm") {
     /* Direct messages: DeepSeek Flash first, then Mistral Small key 1 -> key 2. */
-    raw = playerWaiting ? ["openrouter3", "mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
+    raw = ["openrouter3", "mistral", "mistral2"];
   } else if (source === "scene") {
     /* Scenes use Mistral Small, with the second Mistral key as fallback. */
-    raw = playerWaiting ? ["mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
+    raw = ["mistral", "mistral2"];
   } else if (isComment) {
     /* Comments/replies use DeepSeek Flash first; Mistral Small 1 -> 2 are fallbacks. */
     raw = playerWaiting ? ["openrouter3", "mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
@@ -5586,7 +5600,7 @@ function taskProviderOrder(requestedProvider, body) {
       providerAllowedForBody(provider, body)
     ),
     body,
-    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, allowPaidBackground: AI_ALLOW_PAID_BACKGROUND }
+    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" }
   );
 }
 
@@ -5730,6 +5744,11 @@ function shouldUseEmergencyOpenAIFallback(task, attempts = []) {
   );
 }
 
+/* The text of a provider's answer. */
+function answerText(result) {
+  return (Array.isArray(result?.payload?.content) ? result.payload.content : []).map((part) => String(part?.text || "")).join("").trim();
+}
+
 async function executeAITask(task) {
   const attempted = new Set();
   const attempts = [];
@@ -5755,13 +5774,22 @@ async function executeAITask(task) {
     const message = result?.ok ? "ok" : (result?.unavailable ? "not configured" : safeProviderMessage(result, "upstream error"));
     console.info("[ai-provider] response", `provider=${provider}`, `model=${model}`, `status=${status}`, `message=${message}`);
 
+    /* A model that answers a request for JSON with a polite refusal gave no answer: the next provider tries. */
+    if (result?.ok && requestExpectsJson(task.body) && looksLikeRefusal(answerText(result))) {
+      attempts.push({ provider, model, status: 422, message: "refused: " + answerText(result).slice(0, 120), refused: true });
+      console.warn("[ai-gate] refused", `source=${task.source}`, `provider=${provider}/${model}`, "— handing the request to the next provider");
+      markProviderSuccess(provider);
+      continue;
+    }
     if (result?.ok) {
       markProviderSuccess(provider);
       return result;
     }
     if (result?.unavailable) continue;
 
-    attempts.push({ provider, model, status, message });
+    attempts.push({ provider, model, status, message, ...(result?.blocked ? { refused: true } : {}) });
+    /* A safety block is the prompt's doing, not the provider's: no cooldown, the next provider tries. */
+    if (result?.blocked) continue;
     /* Groq was busy with another request or had spent this minute's tokens. Not a failure: no cooldown,
        the next provider takes this one and Groq stays free for whoever is next. */
     if (result?.paced) {
@@ -5824,6 +5852,18 @@ async function executeAITask(task) {
   }
 
   const details = summarizeProviderFailures(attempts, task.requestedProvider, task.body);
+
+  /* Every provider that answered refused or blocked it. Waiting would only repeat the same refusal. */
+  if (attempts.length > 0 && attempts.every((item) => item.refused)) {
+    console.warn("[ai-gate] content-refused", `source=${task.source}`, details.join(" | ").slice(0, 300));
+    return {
+      ok: false,
+      status: 422,
+      provider: last?.provider || attempts[attempts.length - 1].provider,
+      model: last?.model || attempts[attempts.length - 1].model,
+      payload: { error: { type: "content_refused", message: "Every provider that answered refused or blocked this request: " + details.join(" | "), providers: details } },
+    };
+  }
   if (last && attempts.length === 1 && ![401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504, 529].includes(Number(last?.status || 0))) return last;
 
   /* Background work found no free capacity: tell the caller to wait, never pay for it. */

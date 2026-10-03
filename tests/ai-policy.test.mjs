@@ -8,6 +8,7 @@ import {
   GROQ_UTILITY_SOURCES, GROQ_UTILITY_CHAIN, isGroqUtilitySource, estimateGroqTokens, groqCarriesWhole, groqPaceMaxWaitMs, createGroqPacer, GROQ_WINDOW_MS,
   geminiModelConfig, geminiModelLadder, geminiStreakRestMs, createGeminiLedger, planGeminiAttempts,
   DEFAULT_GEMINI_EXTRA_MODELS, DEFAULT_GEMINI_LITE_MODELS, DEFAULT_GEMINI_PRIMARY_MODEL,
+  geminiBlockReason, looksLikeRefusal, requestExpectsJson,
 } from "../server/aiPolicy.js";
 
 test("Only an explicit foreground flag marks a request as player-waiting", () => {
@@ -409,4 +410,52 @@ test("A waiting player with free keys that all rest is still given the last one 
   assert.deepEqual(onlyFree.attempts.map((x) => x.key), ["a"]);
   const both = planGeminiAttempts({ freeKeys: ["a", "b"], paidKey: "paid", models: ["m1"], ledger, foreground: true });
   assert.deepEqual(both.attempts.map((x) => x.key), ["b", "paid"]);
+});
+
+/* ---------- blocked and refused answers ---------- */
+
+test("Gemini says why it gave no text: a blocked prompt or a filtered answer", () => {
+  assert.equal(geminiBlockReason({ promptFeedback: { blockReason: "PROHIBITED_CONTENT" }, candidates: [] }), "PROHIBITED_CONTENT");
+  assert.equal(geminiBlockReason({ candidates: [{ finishReason: "SAFETY", content: { parts: [] } }] }), "SAFETY");
+  assert.equal(geminiBlockReason({ candidates: [{ finishReason: "BLOCKLIST" }] }), "BLOCKLIST");
+  for (const finishReason of ["STOP", "MAX_TOKENS", "RECITATION", ""]) assert.equal(geminiBlockReason({ candidates: [{ finishReason }] }), "", finishReason);
+  assert.equal(geminiBlockReason(null), "");
+  assert.equal(geminiBlockReason({}), "");
+});
+
+test("A request counts as asking for JSON when the system prompt or the last message says so, as the game's do", () => {
+  assert.equal(requestExpectsJson({ system: "Return valid JSON only. Add a top-level language field", messages: [] }), true);
+  assert.equal(requestExpectsJson({ system: "KIZÁRÓLAG érvényes JSON-t adj vissza.", messages: [] }), true);
+  assert.equal(requestExpectsJson({ system: "s", messages: [{ role: "user", content: "Write the scene.\nCsak JSON:\n{\"a\":1}" }] }), true);
+  assert.equal(requestExpectsJson({ system: "You are a friendly narrator.", messages: [{ role: "user", content: "Tell me a story." }] }), false);
+  assert.equal(requestExpectsJson({}), false);
+});
+
+test("A polite refusal to a request for JSON is recognised, in English and Hungarian", () => {
+  for (const text of [
+    "I'm sorry, but I can't continue with this request.",
+    "I can't help with that.",
+    "Sorry, I cannot assist with explicit sexual content.",
+    "I'm unable to write this scene as it goes against the content guidelines.",
+    "As an AI, I can't generate that kind of content.",
+    "Unfortunately, I won't be able to continue with this request.",
+    "Sajnálom, de ebben a tartalomban nem tudok segíteni.",
+    "Nem tudok ilyen jelenetet írni, mert nem megfelelő a tartalom.",
+    "Elnézést, de ezt a kérést nem teljesíthetem.",
+    "\"I'm sorry, I can't help with this request.\"",
+  ]) assert.equal(looksLikeRefusal(text), true, text);
+});
+
+test("An answer is never mistaken for a refusal: JSON, fenced JSON, long prose, or prose that is just a character talking", () => {
+  for (const text of [
+    '{"reply":"I\'m sorry, I can\'t come tonight."}',
+    '```json\n{"messages":[{"text":"Sorry, I can\'t help you move."}]}\n```',
+    '[{"text":"I can\'t believe you did that"}]',
+    "Sorry, I was late. The traffic was awful and the bus broke down, so I walked the last two miles. Anyway, shall we start?",
+    "I'm sorry I missed your call last night, it was a long shift.",
+    "Rendben, megyek. Hozom a kabátod.",
+    "",
+    "x".repeat(900),
+    'I cannot tell you how happy I am, here you go: {"ok":"yes"}',
+  ]) assert.equal(looksLikeRefusal(text), false, text.slice(0, 60));
 });
