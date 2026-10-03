@@ -224,6 +224,32 @@ test("Gemini semantic routing tries free keys 2 through 8 before paid key 1", as
  assert.equal(result.provider, "gemini");
  assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8"]);
 });
+test("Restart key offset rotates only free Gemini keys and preserves full fallback chain", async () => {
+ const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini", OPENAI_API_KEY: "oa", OPENAI_ANALYSIS_MODEL: "configured-openai" };
+ for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
+ const attempted = [];
+ const transport = async (url, opts) => {
+  if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+  if (url.endsWith(":generateContent")) {
+   const key = opts.headers["x-goog-api-key"];
+   attempted.push(key);
+   if (key !== "test-key-3") { const error = new Error("quota"); error.status = 429; throw error; }
+   return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":true}' }] } }] };
+  }
+  if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  attempted.push(opts.headers.Authorization);
+  return response({ ok: true });
+ };
+ const result = await analyzeStructured(
+  "Complete source",
+  { type: "object" },
+  value => assert.equal(value.ok, true),
+  { env, transport, outputTokens: 1000, keyOffset: 3 }
+ );
+ assert.equal(result.keySlot, "GEMINI_API_KEY_3");
+ assert.deepEqual(attempted, ["test-key-5","test-key-6","test-key-7","test-key-8","test-key-2","test-key-3"]);
+});
+
 test("Paid Gemini key 1 is used only after free Gemini keys 2 through 8 fail", async () => {
  const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini" };
  for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
@@ -414,11 +440,14 @@ test("Only Restart World enables all-profile launch; normal queue and bounded ba
  assert.ok(appSource.includes("started"));
 
  const clientSource = fs.readFileSync(new URL("../src/bondClient.js", import.meta.url), "utf8");
- assert.ok(clientSource.includes("await Promise.all(people.map"));
+ assert.ok(clientSource.includes("await Promise.all(jobs.map"));
+ assert.ok(clientSource.includes("restartKeyOffset: index % 7"));
  assert.ok(clientSource.includes("baselineConcurrency"));
 
  const serverSource = fs.readFileSync(new URL("../server/bondAnalysis.js", import.meta.url), "utf8");
  assert.ok(serverSource.includes('restartFast && stage === "profile"'));
+ assert.ok(serverSource.includes("options.keyOffset"));
+ assert.ok(serverSource.includes("restartKeyOffset"));
  assert.ok(serverSource.includes("const restartBaselineConcurrency = 4"));
  assert.ok(serverSource.includes("queue = queue.catch(() => {}).then(work)"));
 });
