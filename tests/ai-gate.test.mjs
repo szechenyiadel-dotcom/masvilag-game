@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { createRequire } from "node:module";
-import { isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult } from "../server/aiPolicy.js";
+import { isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN } from "../server/aiPolicy.js";
 
 const require = createRequire(import.meta.url);
 const { parse } = require("@babel/parser");
@@ -31,7 +31,7 @@ function gate(env, scripted) {
     process: { env: { OPENROUTER_API_KEY: "or", OPENROUTER_MODEL_3: "deepseek", ...env } },
     console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error,
-    isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult,
+    isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN,
     callMessageProvider: async (provider, body) => { calls.push(provider); return scripted(provider, body); },
   });
   vm.runInContext(pick(NAMES), context);
@@ -48,13 +48,19 @@ const ENV = {
 };
 const task = (context, source, extra = {}) => ({ requestedProvider: "anthropic", source, body: { source, system: "s", messages: [{ role: "user", content: "hello" }], ...extra } });
 
-test("Background DM and comments skip the paid DeepSeek route; the player's own DM keeps it first", () => {
+test("Background DM, scene and comments use only the free chain; the player's own exchange keeps the billed providers", () => {
   const { context } = gate(ENV, () => ok("x"));
-  const background = context.taskProviderOrder("anthropic", task(context, "dm").body);
-  assert.deepEqual(Array.from(background), ["mistral", "mistral2"]);
-  const foreground = context.taskProviderOrder("anthropic", task(context, "dm", { foreground: true }).body);
-  assert.deepEqual(Array.from(foreground), ["openrouter3", "mistral", "mistral2"]);
-  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", task(context, "comments").body)), ["mistral", "mistral2"]);
+  const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", task(context, source, extra).body));
+  /* gemini (free keys), groq, groq2, openrouter: openrouter2 has no key in this world */
+  for (const source of ["dm", "scene", "comments"]) assert.deepEqual(order(source), ["gemini", "groq", "groq2", "openrouter"], source);
+  assert.deepEqual(order("dm", { foreground: true }), ["openrouter3", "mistral", "mistral2"]);
+  assert.deepEqual(order("scene", { foreground: true }), ["mistral", "mistral2"]);
+  assert.deepEqual(order("comments", { foreground: true }), ["openrouter3", "mistral", "mistral2"]);
+  for (const source of ["dm", "scene", "comments", "feed-post", "notes", "meaning-analysis", "autonomy-other"]) {
+    const background = order(source);
+    for (const billed of ["mistral", "mistral2", "openrouter3", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
+  }
+  assert.deepEqual(Array.from(FREE_WRITING_CHAIN), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
 });
 
 test("Background feed never lists OpenAI, and a world with no free Gemini key has no Gemini for background", () => {
@@ -84,11 +90,19 @@ test("Background request with no free provider configured waits instead of faili
   assert.deepEqual(Array.from(calls), []);
 });
 
-test("A free provider that answers is used normally for background work", async () => {
-  const { context, calls } = gate(ENV, (provider) => (provider === "mistral" ? quota(provider) : ok(provider)));
+test("A free provider that answers is used normally for background work, and Mistral is never called", async () => {
+  const { context, calls } = gate(ENV, (provider) => (provider === "gemini" ? quota(provider) : ok(provider)));
   const result = await context.executeAITask(task(context, "dm"));
   assert.equal(result.ok, true);
-  assert.deepEqual(Array.from(calls), ["mistral", "mistral2"]);
+  assert.deepEqual(Array.from(calls), ["gemini", "groq"]);
+});
+
+test("A background DM with every free provider rate-limited waits instead of paying for Mistral", async () => {
+  const { context, calls } = gate(ENV, (provider) => quota(provider));
+  const result = await context.executeAITask(task(context, "dm"));
+  assert.equal(result.waiting, true);
+  assert.equal(result.status, 503);
+  assert.ok(!calls.some((provider) => ["mistral", "mistral2", "openrouter3", "openai"].includes(provider)), "billed providers called: " + calls);
 });
 
 test("The emergency OpenAI fallback is closed to background work and still open to a player who is waiting", () => {
@@ -127,6 +141,7 @@ test("A Gemini key running out of prepaid credit (402) does not switch Gemini of
 });
 
 test("proxy.js rests each Gemini key by the error it returned, including spent credit", () => {
-  assert.match(source, /geminiKeyRestMs\(status, proxyErrorMessage\(result && result\.payload, ""\)\)/);
+  assert.match(source, /geminiKeyRestMs\(status, proxyErrorMessage\(result && result\.payload, ""\), result && result\.payload\)/);
+  assert.match(source, /out of quota \(" \+ limit\.metric \+ "\)/, "the log says whether it was a per-minute or a per-day limit");
   assert.match(source, /out of prepaid credit/);
 });

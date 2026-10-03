@@ -10,8 +10,13 @@
  *   (503 + Retry-After) instead of falling back to a paid provider.
  */
 
-/* openrouter3 is the paid DeepSeek route; the paid Gemini key is handled by selectGeminiKeys. */
-export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter3"]));
+/* openrouter3 is the paid DeepSeek route and Mistral is billed per use; the paid Gemini key is
+   handled by selectGeminiKeys. Free: Gemini keys 2-8, Groq, and the OpenRouter free router. */
+export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter3", "mistral", "mistral2"]));
+
+/* What a request that nobody is waiting for may use for roleplay-style writing (DMs, scenes,
+   comments): free providers only, best first. */
+export const FREE_WRITING_CHAIN = Object.freeze(["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
 
 export const BACKGROUND_WAIT_MIN_SECONDS = 20;
 export const BACKGROUND_WAIT_MAX_SECONDS = 15 * 60;
@@ -75,12 +80,38 @@ export function buildWaitingResult({ retryAfterSeconds, details = [] }) {
   };
 }
 
+/* Seconds until the next midnight in Pacific time, when Google resets the daily free-tier quotas. */
+export function secondsUntilPacificMidnight(nowMs = Date.now()) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    .formatToParts(new Date(nowMs)).reduce((out, part) => ({ ...out, [part.type]: Number(part.value) }), {});
+  const spent = (parts.hour % 24) * 3600 + parts.minute * 60 + parts.second;
+  return 24 * 3600 - spent;
+}
+
+/* What a Gemini 429 says: which limit was hit and when it comes back. The body lists the violated
+   quotas (…PerDay… / …PerMinute…) and, usually, a retryDelay such as "37s". */
+export function geminiRateLimitInfo(payload, nowMs = Date.now()) {
+  const details = Array.isArray(payload?.error?.details) ? payload.error.details : [];
+  const quotaIds = details.flatMap((detail) => (Array.isArray(detail?.violations) ? detail.violations : []).map((v) => String(v?.quotaId || v?.quotaMetric || "")));
+  const retry = details.find((detail) => /RetryInfo$/.test(String(detail?.["@type"] || "")));
+  const delaySeconds = Number.parseFloat(String(retry?.retryDelay || ""));
+  const retryDelayMs = Number.isFinite(delaySeconds) ? Math.ceil(delaySeconds * 1000) : 0;
+  if (quotaIds.some((id) => /perday/i.test(id.replace(/[_\s]/g, "")))) {
+    return { metric: "per-day", restMs: (secondsUntilPacificMidnight(nowMs) + 60) * 1000, retryDelayMs };
+  }
+  if (quotaIds.some((id) => /perminute/i.test(id.replace(/[_\s]/g, "")))) {
+    return { metric: "per-minute", restMs: Math.min(5 * 60 * 1000, Math.max(retryDelayMs + 2000, 15000)), retryDelayMs };
+  }
+  return { metric: "unknown", restMs: retryDelayMs ? Math.min(30 * 60 * 1000, retryDelayMs + 2000) : 30 * 60 * 1000, retryDelayMs };
+}
+
 /* How long a Gemini key rests after an error, in ms (0 = it does not rest). Google reports a bad or
-   expired key as HTTP 400 "API key not valid", exhausted prepaid credit as 402, a spent quota as 429. */
-export function geminiKeyRestMs(status, message = "") {
+   expired key as HTTP 400 "API key not valid", exhausted prepaid credit as 402, a spent quota as 429
+   (a per-minute limit comes back in under a minute, a per-day one at midnight Pacific time). */
+export function geminiKeyRestMs(status, message = "", payload = null, nowMs = Date.now()) {
   const code = Number(status);
   if ([401, 403].includes(code) || (code === 400 && /api key/i.test(String(message)))) return 24 * 3600 * 1000;
   if (code === 402) return 6 * 3600 * 1000;
-  if (code === 429) return 30 * 60 * 1000;
+  if (code === 429) return geminiRateLimitInfo(payload, nowMs).restMs;
   return 0;
 }

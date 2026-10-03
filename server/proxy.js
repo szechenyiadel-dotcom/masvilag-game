@@ -7,6 +7,8 @@ import {
   backgroundWaitSeconds,
   buildWaitingResult,
   geminiKeyRestMs,
+  geminiRateLimitInfo,
+  FREE_WRITING_CHAIN,
 } from "./aiPolicy.js";
 import { registerSemanticMemory, createEmbedder } from "./semanticMemory.js";
 /* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
@@ -5124,13 +5126,14 @@ async function proxyGeminiMessage(body) {
     last = result;
 
     const status = Number(result && result.status);
-    const keyRestMs = geminiKeyRestMs(status, proxyErrorMessage(result && result.payload, ""));
+    const keyRestMs = geminiKeyRestMs(status, proxyErrorMessage(result && result.payload, ""), result && result.payload);
     if (keyRestMs > 0 && GEMINI_KEYS.length > 1) {
       GEMINI_KEY_REST_UNTIL.set(keys[i], Date.now() + keyRestMs);
+      const limit = status === 429 ? geminiRateLimitInfo(result && result.payload) : null;
       console.warn(
         "[ai-provider] gemini key #" + (GEMINI_KEYS.indexOf(keys[i]) + 1) +
-        (status === 402 ? " out of prepaid credit" : status === 429 ? " out of quota" : " invalid/rejected") +
-        " — resting it, trying the next key"
+        (status === 402 ? " out of prepaid credit" : status === 429 ? " out of quota (" + limit.metric + ")" : " invalid/rejected") +
+        " — resting it for " + Math.round(keyRestMs / 60000) + " min, trying the next key"
       );
       continue;
     }
@@ -5144,6 +5147,10 @@ async function proxyGeminiMessage(body) {
     }
 
     break;
+  }
+  if (last && Number(last.status) === 429) {
+    const wakeMs = Math.min(...keys.map((key) => (GEMINI_KEY_REST_UNTIL.get(key) || 0) - Date.now()));
+    if (Number.isFinite(wakeMs) && wakeMs > 0) last.retryAfter = String(Math.ceil(wakeMs / 1000));
   }
   return last || { unavailable: true, provider: "gemini" };
 }
@@ -5705,7 +5712,9 @@ function markProviderFailure(provider, model, result) {
   const hardQuota = /free[_ -]?tier|quota exceeded|current quota|resource exhausted|no credits|daily limit|budget exhausted|payment required|insufficient credits/.test(lower);
   const exponential = Math.min(60000, 5000 * Math.pow(2, failures - 1));
   const jitter = Math.floor(Math.random() * Math.min(2500, Math.max(500, exponential * 0.2)));
-  const rest = hardQuota ? Math.max(retryHeader, 15 * 60 * 1000) : Math.max(retryHeader, exponential + jitter);
+  const rest = provider === "gemini" && retryHeader > 0
+    ? retryHeader + 1000 /* the earliest Gemini key comes back then */
+    : hardQuota ? Math.max(retryHeader, 15 * 60 * 1000) : Math.max(retryHeader, exponential + jitter);
   AI_GATE.providerCooldownUntil.set(provider, Date.now() + rest);
   AI_GATE.lastError = `${provider}/${model} HTTP ${status}: ${message}`;
   console.warn("[ai-gate] provider-cooldown", `${provider}/${model}`, `status=${status}`, `ms=${rest}`, message);
@@ -5757,15 +5766,18 @@ function taskProviderOrder(requestedProvider, body) {
   const groqSmallEnough = chars <= 26000;
   let raw;
 
+  /* DeepSeek (openrouter3) and Mistral are billed per use: only a request the player is waiting on
+     gets them. The world's own DMs, scenes and comments use the free chain, or wait. */
+  const playerWaiting = isForegroundRequest(body);
   if (source === "dm") {
     /* Direct messages: DeepSeek Flash first, then Mistral Small key 1 -> key 2. */
-    raw = ["openrouter3", "mistral", "mistral2"];
+    raw = playerWaiting ? ["openrouter3", "mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
   } else if (source === "scene") {
     /* Scenes use Mistral Small, with the second Mistral key as fallback. */
-    raw = ["mistral", "mistral2"];
+    raw = playerWaiting ? ["mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
   } else if (isComment) {
     /* Comments/replies use DeepSeek Flash first; Mistral Small 1 -> 2 are fallbacks. */
-    raw = ["openrouter3", "mistral", "mistral2"];
+    raw = playerWaiting ? ["openrouter3", "mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
   } else if (isFeed) {
     /* Feed stays on free Gemini first; paid OpenAI is fallback only. */
     raw = ["gemini", "openai"];
