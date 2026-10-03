@@ -3160,7 +3160,7 @@ function disrespectsAuthority(w, speakerId, addresseeId, text) {
 }
 function characterIsSenseiRank(w, c) {
   if (!c) return false;
-  try { if (characterIsSensei(c)) return true; } catch (error) { /* fall through */ }
+  try { if (characterIsSensei(c, w)) return true; } catch (error) { /* fall through */ }
   try {
     const d = identityCanonFor(w, c.id) || {};
     const roles = [d.role, ...((d.affiliations || []).map((a) => a && a.role))].filter(Boolean).join(" ");
@@ -11968,7 +11968,7 @@ function socialSelfClassificationContradiction(w, actorId, text) {
   }
 
   if (
-    !characterIsSensei(actor) &&
+    !characterIsSensei(actor, w) &&
     /\b(?:i(?:'m| am)|as|me as)\s+(?:a |the )?sensei\b|\bmy\s+students?\b/i.test(
       String(text)
     )
@@ -13204,112 +13204,14 @@ function preferredTitleSurname(character) {
   return words[words.length - 1];
 }
 
-function characterIsSensei(character) {
-  if (!character) return false;
-
-  /*
-   * IMPORTANT: "sensei" appearing anywhere in somebody's biography does NOT
-   * make that person a sensei. A student sheet naturally contains lines such
-   * as "Sensei Silver trained her" or "her sensei is ...". v35 used the full
-   * lore corpus here, which could therefore promote a student/player into a
-   * sensei simply because their own teacher was mentioned in backstory.
-   *
-   * First trust fields that describe the character's OWN job/rank/role. Only
-   * then accept prose when it explicitly predicates the title of the character
-   * themselves. References to "my/her/his/their sensei" or "Sensei <other>"
-   * are deliberately not enough.
-   */
-  const explicitSelfRole = [
-    character.job,
-    character.rank,
-    character.role,
-    character.brief,
-  ]
-    .filter(Boolean)
-    .join("\n")
-    .toLowerCase();
-
-  if (
-    /\bsensei\b|\bdojo\s+(?:master|instructor|owner|head)\b|\bkarate\s+(?:master|instructor|teacher)\b|\bmartial\s+arts\s+(?:master|instructor|teacher)\b|\bkarateoktat[oó]\b|\bdojo\s+vezet[oő]\b/.test(
-      explicitSelfRole
-    )
-  ) {
-    return true;
-  }
-
-  const prose = [
-    character.bio,
-    character.backstory,
-    character.extra,
-    character.skills,
-    character.abilities,
-    character.combat,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-
-  if (!prose) return false;
-
-  const aliases = canonTargetAliases(character)
-    .map((value) => regexEscapeLiteral(String(value).toLowerCase()))
-    .filter(Boolean);
-
-  const subject = aliases.length
-    ? `(?:${aliases.join("|")}|he|she|they|i|the character)`
-    : "(?:he|she|they|i|the character)";
-
-  const selfSenseiPatterns = [
-    new RegExp(`\b${subject}\s+(?:is|was|became|remains|works\s+as|serves\s+as|acts\s+as|is\s+known\s+as)\s+(?:an?\s+|the\s+)?sensei\b`, "i"),
-    new RegExp(`\b${subject}\s+(?:is|was|became|remains)\s+(?:an?\s+|the\s+)?(?:dojo|karate|martial\s+arts)\s+(?:master|instructor|teacher|head)\b`, "i"),
-    new RegExp(`\b${subject}\s+(?:egy\s+|a\s+|az\s+)?sensei\b`, "i"),
-    new RegExp(`\b${subject}\s+(?:karateoktat[oó]|dojo\s+vezet[oő]|mester)\b`, "i"),
-  ];
-
-  return selfSenseiPatterns.some((pattern) => pattern.test(prose));
-}
-
-function canonSaysOwnSensei(actor, target) {
-  if (!actor || !target) return false;
-
-  const evidence = canonTargetEvidence(actor, target, 5).join(" ").toLowerCase();
-  if (!evidence) return false;
-
-  const aliases = canonTargetAliases(target)
-    .map((value) => regexEscapeLiteral(value.toLowerCase()));
-
-  if (!aliases.length) return false;
-
-  const alias = `(?:${aliases.join("|")})`;
-  const role = "(?:sensei|teacher|mentor|karate instructor|martial arts instructor|coach|master|tan[aá]r|mentor|edz[oő]|mester|senseie|sensei-je)";
-
-  const patterns = [
-    new RegExp(`(?:my|his|her|their|saj[aá]t|az \\w+)?\\s*${role}[^.!?]{0,100}${alias}`, "i"),
-    new RegExp(`${alias}[^.!?]{0,100}(?:is|was|became|remains|mint|a|az)?\\s*(?:my|his|her|their|saj[aá]t)?\\s*${role}`, "i"),
-    new RegExp(`(?:trained by|trains under|trained under|student of|pupil of|tan[ií]tv[aá]nya|alatta edz|n[aá]la edz|t[oő]le tanul)[^.!?]{0,100}${alias}`, "i"),
-    new RegExp(`${alias}[^.!?]{0,100}(?:trained|trains|teaches|mentors|edzi|tan[ií]tja)[^.!?]{0,70}(?:him|her|them|actor|student|tan[ií]tv[aá]ny)`, "i"),
-    new RegExp(`\\bsensei\\s+${alias}\\b`, "i"),
-  ];
-
-  return patterns.some((pattern) => pattern.test(evidence));
+function characterIsSensei(character, w) {
+  if (!character || !w) return false;
+  return (w.bondAnalysis?.profiles?.[character.id]?.profile.groups || []).some(group => group.role === "sensei");
 }
 
 function isOwnSenseiRelationship(w, actorId, targetId) {
   if (!w || !actorId || !targetId || actorId === targetId) return false;
-
-  const actor = charById(w, actorId);
-  const target = charById(w, targetId);
-  if (!actor || !target || !characterIsSensei(target)) return false;
-
-  const rel = getRel(w, actorId, targetId) || {};
-  const relationText = `${rel.bond || ""} ${rel.type || ""} ${rel.hidden || ""} ${rel.role || ""}`.toLowerCase();
-
-  if (/\b(?:my\s+)?sensei\b|\bteacher\b|\bmentor\b|\bkarate instructor\b|\bmartial arts instructor\b|\btan[aá]r\b|\bedz[oő]\b|\bmester\b/.test(relationText)) {
-    return true;
-  }
-
-  return canonSaysOwnSensei(actor, target);
+  return (getRel(w, actorId, targetId)?.layers || []).includes("tanítvány–sensei");
 }
 
 function hierarchyBehaviorCard(w, actorId, targetId) {
@@ -13319,7 +13221,7 @@ function hierarchyBehaviorCard(w, actorId, targetId) {
   const target = charById(w, targetId);
   if (!actor || !target) return "";
 
-  const targetSensei = characterIsSensei(target);
+  const targetSensei = characterIsSensei(target, w);
   const en = worldLanguage(w, w.meId) === "en";
 
   if (!targetSensei) {
@@ -13330,7 +13232,7 @@ function hierarchyBehaviorCard(w, actorId, targetId) {
   }
 
   const ownSensei = isOwnSenseiRelationship(w, actorId, targetId);
-  const actorSensei = characterIsSensei(actor);
+  const actorSensei = characterIsSensei(actor, w);
   const targetThreat = threatProfile(target);
   const dangerousSensei =
     targetThreat.danger >= 42 ||
@@ -13702,7 +13604,7 @@ function characterAgentRuntimePacket(w, actorId, options = {}) {
       name: actor.name,
       username: actor.username || "",
       nickname: actor.nick || actor.nickname || "",
-      isSensei: characterIsSensei(actor),
+      isSensei: characterIsSensei(actor, w),
       role: cut(String(actor.role || actor.job || ""), 260),
       organization: cut(String(actor.organization || actor.affiliation || ""), 260),
       classification: characterFactionIdentityCard(actor),
@@ -51410,41 +51312,27 @@ function roleplayBirthYear(c) {
   return m ? Number(m[1]) : 0;
 }
 
-function roleplayAffiliationTags(c) {
-  if (!c) return [];
-  const text = [
-    c.job,
-    c.bio,
-    c.backstory,
-    c.extra,
-    c.goals,
-  ].filter(Boolean).join(" ").toLowerCase();
-
-  const defs = [
-    ["cobra-kai", /cobra\s*kai/],
-    ["iron-dragons", /iron\s*dragons?/],
-    ["miyagi-do", /miyagi[\s-]*do/],
-    ["miyagi-fang", /miyagi[\s-]*fang/],
-    ["eagle-fang", /eagle\s*fang/],
-    ["la-mamba", /la\s*mamba/],
-    ["borderland", /borderland|borderline\s*games?/],
-  ];
-
-  return defs
-    .filter(([, re]) => re.test(text))
-    .map(([tag]) => tag);
+function roleplayAffiliationTags(c, w) {
+  if (!c || !w) return [];
+  const groups = c.id
+    ? w.bondAnalysis?.profiles?.[c.id]?.profile.groups || []
+    : Object.values(w.bondAnalysis?.profiles || {}).flatMap(entry => entry.profile.groups);
+  const text = String(c.job || "").normalize("NFKC").toLocaleLowerCase();
+  return [...new Set(groups.filter(group => ["sensei", "vezető", "tag", "tanítvány"].includes(group.role))
+    .flatMap(group => [group.name, ...group.aliases]).map(name => name.normalize("NFKC").toLocaleLowerCase().trim())
+    .filter(name => c.id || text.includes(name)))];
 }
 
 function roleplayInviteeRoster(w, host) {
   if (!w || !host) return "-";
-  const hostTags = new Set(roleplayAffiliationTags(host));
+  const hostTags = new Set(roleplayAffiliationTags(host, w));
   const hostYear = roleplayBirthYear(host);
 
   return (w.chars || [])
     .filter((c) => c && c.id !== host.id && !isHuman(w, c.id))
     .map((c) => {
       const rel = getRel(w, host.id, c.id);
-      const tags = roleplayAffiliationTags(c);
+      const tags = roleplayAffiliationTags(c, w);
       const shared = tags.filter((tag) => hostTags.has(tag));
       const year = roleplayBirthYear(c);
       const ownStudent = isOwnSenseiRelationship(w, c.id, host.id);
@@ -51456,7 +51344,7 @@ function roleplayInviteeRoster(w, host) {
         shared,
         ownStudent,
         hostOwnSensei,
-        sensei: characterIsSensei(c),
+        sensei: characterIsSensei(c, w),
         proximity:
           Math.abs(Number(rel && rel.score) || 0) +
           (ownStudent || hostOwnSensei ? 70 : 0) +
@@ -51497,17 +51385,17 @@ function roleplayEventAudienceScore(w, host, candidate, descriptor, explicit = f
     candidate.traits,
   ].filter(Boolean).join(" ").toLowerCase();
 
-  const hostTags = new Set(roleplayAffiliationTags(host));
-  const candTags = roleplayAffiliationTags(candidate);
+  const hostTags = new Set(roleplayAffiliationTags(host, w));
+  const candTags = roleplayAffiliationTags(candidate, w);
   const sharedTags = candTags.filter((tag) => hostTags.has(tag));
-  const eventTags = roleplayAffiliationTags({ job: eventText });
+  const eventTags = roleplayAffiliationTags({ job: eventText }, w);
   const rel = getRel(w, host.id, candidate.id);
   const reverse = getRel(w, candidate.id, host.id);
   const relScore = Number(rel && rel.score) || 0;
   const reverseScore = Number(reverse && reverse.score) || 0;
   const ownStudent = isOwnSenseiRelationship(w, candidate.id, host.id);
   const hostOwnSensei = isOwnSenseiRelationship(w, host.id, candidate.id);
-  const candidateSensei = characterIsSensei(candidate);
+  const candidateSensei = characterIsSensei(candidate, w);
   const hostYear = roleplayBirthYear(host);
   const candYear = roleplayBirthYear(candidate);
   const yearDiff = hostYear && candYear ? Math.abs(hostYear - candYear) : 99;
@@ -51576,7 +51464,7 @@ function contextualRoleplayCast(w, host, generatedCast, descriptor, options = {}
   /* Non-group event = player + host only. No random third wheel. */
   if (!groupEvent) return [host.id];
 
-  const hostTags = roleplayAffiliationTags(host);
+  const hostTags = roleplayAffiliationTags(host, w);
   const hostYear = roleplayBirthYear(host);
   const ranked = (w.chars || [])
     .filter((c) => c && c.id !== host.id && !isHuman(w, c.id))
@@ -51584,10 +51472,10 @@ function contextualRoleplayCast(w, host, generatedCast, descriptor, options = {}
       const score = roleplayEventAudienceScore(w, host, c, eventText, explicitIds.has(c.id));
       const rel = getRel(w, host.id, c.id) || {};
       const bond = String(rel.bond || rel.type || "").toLowerCase();
-      const shared = roleplayAffiliationTags(c).filter((tag) => hostTags.includes(tag));
+      const shared = roleplayAffiliationTags(c, w).filter((tag) => hostTags.includes(tag));
       const ownStudent = isOwnSenseiRelationship(w, c.id, host.id);
       const hostOwnSensei = isOwnSenseiRelationship(w, host.id, c.id);
-      const candidateSensei = characterIsSensei(c);
+      const candidateSensei = characterIsSensei(c, w);
       const cy = roleplayBirthYear(c);
       const yearDiff = hostYear && cy ? Math.abs(hostYear - cy) : 99;
       const knownPersonally = Math.abs(Number(rel.score) || 0) >= 12 || Boolean(bond) ||
@@ -60211,14 +60099,9 @@ function stabilizeDirectedRelationshipScore(text, score) {
  */
 let automaticFollowSyncActive = false;
 
-function explicitSharedSocialContext(actor, target) {
-  if (!actor || !target) return false;
-
-  const pairText = String((actor && actor.connections) || "").toLowerCase();
-  const targetName = String((target && target.name) || "").toLowerCase();
-  if (!targetName || !pairText.includes(targetName)) return false;
-
-  return /same dojo|same team|same squad|same club|same band|same class|same school|dojo mate|dojo-mate|dojomate|doj[oó]t[aá]rs|teammate|team mate|team-mate|csapatt[aá]rs|clubmate|club mate|klubt[aá]rs|classmate|oszt[aá]lyt[aá]rs|coworker|co-worker|munkat[aá]rs|bandmate|band mate|squadmate|squad mate/.test(pairText);
+function explicitSharedSocialContext(actor, target, w) {
+  if (!actor || !target || !w) return false;
+  return sameFollowTeamOrFaction(w, actor, target);
 }
 
 function shouldAutoFollowEstablishedTie(w, actor, target) {
@@ -60226,7 +60109,7 @@ function shouldAutoFollowEstablishedTie(w, actor, target) {
   if (isMediaAccount(w, actor.id) || isMediaAccount(w, target.id)) return false;
 
   const rel = getRel(w, actor.id, target.id);
-  const explicitGroupTie = sameFollowTeamOrFaction(w, actor, target) || explicitSharedSocialContext(actor, target);
+  const explicitGroupTie = sameFollowTeamOrFaction(w, actor, target) || explicitSharedSocialContext(actor, target, w);
 
   /* Explicit personal hostility beats a generic shared-team default. */
   if (hasEnemyOrRivalBond(rel)) return false;

@@ -50,7 +50,9 @@ async function modelCapabilities(candidate, prompt, schema, transport) {
     const count = await transport(root + ":countTokens", { method: "POST", headers, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt + "\nJSON SCHEMA:\n" + JSON.stringify(schema) }] }] }) });
     return { contextWindow: meta.inputTokenLimit, outputLimit: meta.outputTokenLimit, inputTokens: Number(count.totalTokens) };
   }
-  const meta = await transport("https://api.groq.com/openai/v1/models/" + encodeURIComponent(candidate.model), { headers: { Authorization: "Bearer " + candidate.key } });
+  const listing = await transport("https://api.groq.com/openai/v1/models", { headers: { Authorization: "Bearer " + candidate.key } });
+  const meta = listing.data?.find(model => model.id === candidate.model);
+  if (!meta) throw new Error("Configured Groq model is not available for this key");
   if (meta.active === false) throw new Error("Configured Groq model is inactive");
   // A UTF-8 byte is an upper bound for a byte-level token; never underestimate
   // when this provider has no token-counting endpoint.
@@ -87,7 +89,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
         if (candidate.name === "gemini") {
           const data = await transport("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(candidate.model) + ":generateContent", {
             method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": candidate.key },
-            body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: completePrompt }] }], generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: outputTokens } }),
+            body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: completePrompt }] }], generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: outputTokens, thinkingConfig: { thinkingLevel: "HIGH" } } }),
           });
           if (data.candidates?.[0]?.finishReason !== "STOP") throw new Error("Incomplete Gemini analysis: " + (data.candidates?.[0]?.finishReason || "no candidate"));
           raw = (data.candidates[0].content?.parts || []).filter((part) => !part.thought).map((part) => part.text || "").join("");

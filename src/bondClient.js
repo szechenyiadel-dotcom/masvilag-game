@@ -98,7 +98,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
   }
   const baselines = {};
   for (const character of people) {
-    const roster = people.filter((other) => other.id !== character.id).map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: "" }));
+    const roster = people.filter((other) => other.id !== character.id).map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
     progress({ phase: "baseline", owner: character.name, completed: Object.keys(baselines).length, total: people.length * (people.length - 1) });
     const result = await analyze({ stage: "baseline", owner: character.id, roster, ownSheet: sheets[character.id], profileKeys, language });
     for (const bond of result.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
@@ -120,9 +120,10 @@ export function installBondGraph(world, result, subjects) {
       world.rels[key] = {
         ...structuredClone(base), ...current, from: base.from, to: base.to,
         type: current.type || current.bond || base.type,
-        hiddenFeelings: current.hiddenFeelings ?? (current.hidden || null),
+        hiddenFeelings: Object.prototype.hasOwnProperty.call(current, "hiddenFeelings") ? current.hiddenFeelings : current.hidden || null,
         whoKnows: current.whoKnows || (current.hidden ? [base.from] : []),
         summary: current.summary || current.why || base.summary,
+        description: current.description || [current.why, current.mood].filter(Boolean).join(" ") || base.description,
         levels: current.levels || {
           sentiment: current.score ?? base.levels.sentiment,
           trust: current.trust ?? base.levels.trust,

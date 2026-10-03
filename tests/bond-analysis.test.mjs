@@ -108,7 +108,7 @@ const transportFor = (mode, calls) => async (url, opts) => {
   return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "{}" }] } }] };
  }
  if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: mode === "size" ? 200 : 1000000, outputTokenLimit: 65536 };
- if (url.includes("/models/")) return { active: true, context_window: 1000000, max_completion_tokens: 65536 };
+ if (url.endsWith("/models")) return { data: [{ id: "configured-fallback", active: true, context_window: 1000000, max_completion_tokens: 65536 }] };
  return response({ ok: true });
 };
 for (const mode of ["rate", "invalid", "size"]) test("Provider fallback: " + mode + ", full prompt unchanged", async () => {
@@ -193,6 +193,7 @@ test("First migration preserves played relationships; only Restart resets them",
  const result = await rebuildBondGraph(world, { subjects: w => w.chars, api, language: "en" });
  installBondGraph(world, result, w => w.chars);
  for (const [key, value] of Object.entries(current)) assert.deepEqual(world.rels["a>b"][key], value);
+ assert.ok(world.rels["a>b"].description.includes(current.why));
  assert.equal(world.rels["a>b"].levels.attraction, 93); assert.equal(world.rels["a>b"].hiddenFeelings, current.hidden);
  restoreBaselineGraph(world, ["a", "b"]); assert.deepEqual(world.rels, result.baselines);
 });
@@ -203,4 +204,35 @@ test("English mode sends English interpretation language at BOTH analysis stages
  await rebuildBondGraph(world, { subjects: w => w.chars, api, language: "en" });
  assert.equal(calls.length, 4); assert.ok(calls.every(row => row.language === "en"));
  assert.ok(calls[0].ownSheet.includes(world.chars[0].backstory));
+});
+
+test("All eight distinct Gemini keys remain active and the eighth can complete analysis", async () => {
+ const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini" };
+ for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
+ const attempted = [];
+ const transport = async (url, opts) => {
+  if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+  if (url.endsWith(":generateContent")) {
+   const key = opts.headers["x-goog-api-key"]; attempted.push(key);
+   if (key !== "test-key-8") { const error = new Error("quota"); error.status = 429; throw error; }
+   assert.equal(JSON.parse(opts.body).generationConfig.thinkingConfig.thinkingLevel, "HIGH");
+   return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":true}' }] } }] };
+  }
+  return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+ };
+ const result = await analyzeStructured("Complete source", { type: "object" }, value => assert.equal(value.ok, true), { env, transport, outputTokens: 1000 });
+ assert.equal(result.provider, "gemini"); assert.equal(attempted.length, 8);
+ assert.deepEqual(new Set(attempted), new Set(Object.values(env).filter(value => value.startsWith("test-key-"))));
+});
+test("Sensei and shared affiliation behavior use validated profiles/current layers, not sheet keywords", () => {
+ const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8"), ast = parse(source, { sourceType: "module", plugins: ["jsx"] });
+ const names = ["characterIsSensei", "isOwnSenseiRelationship", "sameFollowTeamOrFaction", "explicitSharedSocialContext"];
+ const context = vm.createContext({ getRel: (w, a, b) => w.rels[a + ">" + b] });
+ vm.runInContext(ast.program.body.filter(node => names.includes(node.id?.name)).map(node => source.substring(node.start,node.end)).join("\n"), context);
+ const a = { id: "a", backstory: "My old sensei trained me, but I never belonged to Bela's dojo." }, b = { id: "b", name: "Bela" };
+ const world = { bondAnalysis: { profiles: { a: { profile: { groups: [{ role: "tanítvány" }] } }, b: { profile: { groups: [{ role: "sensei" }] } } } }, rels: { "a>b": { layers: [] } } };
+ assert.equal(context.characterIsSensei(a, world), false); assert.equal(context.characterIsSensei(b, world), true);
+ assert.equal(context.isOwnSenseiRelationship(world, "a", "b"), false); assert.equal(context.explicitSharedSocialContext(a,b,world), false);
+ world.rels["a>b"].layers = ["tanítvány–sensei"];
+ assert.equal(context.isOwnSenseiRelationship(world, "a", "b"), true); assert.equal(context.explicitSharedSocialContext(a,b,world), true);
 });
