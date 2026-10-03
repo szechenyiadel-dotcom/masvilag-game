@@ -69,15 +69,19 @@ export function analysisReady(world, subjects) {
   return world.bondAnalysis?.version === BOND_ANALYSIS_VERSION && world.bondAnalysis.source === bondSourceFingerprint(world, subjects);
 }
 
-export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress = () => {} }) {
+export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress = () => {}, pollIntervalMs = 1500 }) {
   const people = subjects(world);
   const source = bondSourceFingerprint(world, subjects);
   const profiles = {};
-  const sheets = {};
+  const sheets = Object.fromEntries(people.map((character) => [character.id, fullSheetText(character, undefined, world)]));
   const profileKeys = [];
   let recalculated = 0;
   let recalculatedBonds = 0;
+  let profileCompleted = 0;
+  let baselineCompleted = 0;
   const forceRun = force ? String(Date.now()) + ":" + String(Math.random()) : "";
+  const pollDelay = Math.max(250, Number(pollIntervalMs) || 1500);
+
   const analyze = async (body) => {
     const options = { method: "POST", body: JSON.stringify({ ...body, force: forceRun }) };
     let submitted = false;
@@ -85,28 +89,91 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       const response = await api("/ai/bond-analysis", options);
       if (!response.pending) return { ...response, cached: response.cached && !submitted };
       submitted = true;
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await new Promise(resolve => setTimeout(resolve, pollDelay));
     }
   };
-  for (const character of people) {
-    const roster = people.filter((other) => other.id !== character.id).map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
-    sheets[character.id] = fullSheetText(character, undefined, world);
-    progress({ phase: "profile", owner: character.name, completed: Object.keys(profiles).length, total: people.length });
-    const result = await analyze({ stage: "profile", owner: character.id, roster, ownSheet: sheets[character.id], fieldNames: Object.keys(sheetFields(character, world)), language });
+
+  /*
+   * Submit every profile immediately instead of waiting for character A to
+   * finish before character B is even queued. The server still owns the AI
+   * execution queue, so provider order/quality/rate-limit behavior is unchanged;
+   * this only removes idle gaps between sheet jobs.
+   */
+  const profileRows = await Promise.all(people.map(async (character) => {
+    const roster = people
+      .filter((other) => other.id !== character.id)
+      .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
+    progress({ phase: "profile", owner: character.name, completed: profileCompleted, total: people.length });
+    const result = await analyze({
+      stage: "profile",
+      owner: character.id,
+      roster,
+      ownSheet: sheets[character.id],
+      fieldNames: Object.keys(sheetFields(character, world)),
+      language,
+    });
+    profileCompleted += 1;
+    progress({ phase: "profile", owner: character.name, completed: profileCompleted, total: people.length });
+    return { character, result };
+  }));
+
+  for (const { character, result } of profileRows) {
     profiles[character.id] = { profile: result.result, hash: result.hash };
     profileKeys.push(result.cacheKey);
     if (!result.cached) recalculated += 1;
   }
+
+  /*
+   * Baselines depend on all profiles, but once those exist every owner's
+   * baseline request can also be queued at once. Actual AI work remains
+   * serialized by the server; polling no longer creates multi-second dead time.
+   */
+  const baselineRows = await Promise.all(people.map(async (character) => {
+    const roster = people
+      .filter((other) => other.id !== character.id)
+      .map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
+    progress({
+      phase: "baseline",
+      owner: character.name,
+      completed: baselineCompleted * Math.max(0, people.length - 1),
+      total: people.length * Math.max(0, people.length - 1),
+    });
+    const result = await analyze({
+      stage: "baseline",
+      owner: character.id,
+      roster,
+      ownSheet: sheets[character.id],
+      profileKeys,
+      language,
+    });
+    baselineCompleted += 1;
+    progress({
+      phase: "baseline",
+      owner: character.name,
+      completed: baselineCompleted * Math.max(0, people.length - 1),
+      total: people.length * Math.max(0, people.length - 1),
+    });
+    return { result };
+  }));
+
   const baselines = {};
-  for (const character of people) {
-    const roster = people.filter((other) => other.id !== character.id).map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
-    progress({ phase: "baseline", owner: character.name, completed: Object.keys(baselines).length, total: people.length * (people.length - 1) });
-    const result = await analyze({ stage: "baseline", owner: character.id, roster, ownSheet: sheets[character.id], profileKeys, language });
+  for (const { result } of baselineRows) {
     if (!result.cached) recalculatedBonds += result.result.bonds.length;
     for (const bond of result.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
   }
+
   assertCompleteGraph(people.map((character) => character.id), baselines);
-  return { baselines, analysis: { version: BOND_ANALYSIS_VERSION, source, profiles, recalculated, recalculatedBonds, completedAt: Date.now() } };
+  return {
+    baselines,
+    analysis: {
+      version: BOND_ANALYSIS_VERSION,
+      source,
+      profiles,
+      recalculated,
+      recalculatedBonds,
+      completedAt: Date.now(),
+    },
+  };
 }
 
 export function installBondGraph(world, result, subjects) {
