@@ -39038,6 +39038,9 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
       if (!analysisReady(draft, allSubjects)) {
         const result = await rebuildBondGraph(draft, { subjects: allSubjects, api: apiJson, language: worldLanguage(draft), progress: p => setRestartMsg(p.owner + " · " + p.phase + " · " + p.completed + "/" + p.total) });
         installBondGraph(draft, result, allSubjects);
+      } else {
+        draft.bondAnalysis.recalculated = 0;
+        draft.bondAnalysis.recalculatedBonds = 0;
       }
       restartWorldHistoryInPlace(draft);
       const saved = await serverSaveWorld(draft, { bondReset: true });

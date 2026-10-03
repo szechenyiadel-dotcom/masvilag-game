@@ -306,3 +306,11 @@ test("After two invalid outputs per model, switch provider then allow the altern
  const output=await analyzeStructured("Complete source",{type:"object"},value=>assert.equal(value.ok,true),{candidates:models,transport,outputTokens:1000});
  assert.equal(output.model,"alternate");assert.deepEqual(calls,["primary","primary","groq","groq","alternate"]);
 });
+
+
+test("Restart analysis accounting counts new directed baselines and cached work separately", async () => {
+ const chars = [{id:"a",name:"a",backstory:"a"},{id:"b",name:"b",backstory:"b"}];
+ const api = async (_,opts) => {const row=JSON.parse(opts.body);return {cached:row.stage==="profile",cacheKey:row.owner,hash:sheetHash(row.ownSheet),result:row.stage==="profile"?profile(row.owner):{bonds:row.roster.map(target=>bond(row.owner,target.id))}}};
+ const result=await rebuildBondGraph({chars},{subjects:w=>w.chars,api});
+ assert.equal(result.analysis.recalculated,0);assert.equal(result.analysis.recalculatedBonds,2);
+});

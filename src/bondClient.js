@@ -76,6 +76,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
   const sheets = {};
   const profileKeys = [];
   let recalculated = 0;
+  let recalculatedBonds = 0;
   const forceRun = force ? String(Date.now()) + ":" + String(Math.random()) : "";
   const analyze = async (body) => {
     const options = { method: "POST", body: JSON.stringify({ ...body, force: forceRun }) };
@@ -101,10 +102,11 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
     const roster = people.filter((other) => other.id !== character.id).map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
     progress({ phase: "baseline", owner: character.name, completed: Object.keys(baselines).length, total: people.length * (people.length - 1) });
     const result = await analyze({ stage: "baseline", owner: character.id, roster, ownSheet: sheets[character.id], profileKeys, language });
+    if (!result.cached) recalculatedBonds += result.result.bonds.length;
     for (const bond of result.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
   }
   assertCompleteGraph(people.map((character) => character.id), baselines);
-  return { baselines, analysis: { version: BOND_ANALYSIS_VERSION, source, profiles, recalculated, completedAt: Date.now() } };
+  return { baselines, analysis: { version: BOND_ANALYSIS_VERSION, source, profiles, recalculated, recalculatedBonds, completedAt: Date.now() } };
 }
 
 export function installBondGraph(world, result, subjects) {

@@ -2204,7 +2204,7 @@ app.post("/world/save", async (req, res) => {
     client.release();
     client = null;
 
-    if (req.body?.bondReset) console.info("[bond-restart]", JSON.stringify({ characters: Object.keys(nextWorld.bondAnalysis.profiles).length, restored: Object.keys(nextWorld.rels).length, recalculatedProfiles: nextWorld.bondAnalysis.recalculated || 0 }));
+    if (req.body?.bondReset) console.info("[bond-restart]", JSON.stringify({ characters: Object.keys(nextWorld.bondAnalysis.profiles).length, restored: Object.keys(nextWorld.rels).length, recalculatedProfiles: nextWorld.bondAnalysis.recalculated || 0, recalculatedBonds: nextWorld.bondAnalysis.recalculatedBonds || 0 }));
 
     /* PERFORMANCE v15: successful saves return only tiny metadata. The client
        already owns the accepted snapshot; echoing several MB back was wasteful. */
