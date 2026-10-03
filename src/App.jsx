@@ -1,5 +1,7 @@
 import { restoreBaselineGraph } from "./bondAnalysis.js";
 import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext } from "./bondClient.js";
+import { focusedScope, inScope, relationshipInScope, eventInScope, strongestTieIds, groupsForScope } from "./aiScope.js";
+import { latestPlayerTriggerAt, ambientGateOpen, ambientGateAfterRun } from "./ambientGate.js";
 const bondAnalysisBusy = new Set();
 const bondRestartBusy = new Set();
 const bondAnalysisRetry = new Map();
@@ -4650,8 +4652,8 @@ function setNote(n, authorId, text, forcedId, extra = {}) {
 }
 
 /* A jegyzetek szövege az AI-nak. */
-function notesForAI(w) {
-  const list = liveNotes(w);
+function notesForAI(w, scope = null) {
+  const list = liveNotes(w).filter((x) => !scope || inScope(scope, x.authorId));
   if (!list.length) return "";
 
   return list
@@ -7953,6 +7955,10 @@ const AI = {
 
   cooldownUntil: 0,
   visibleCooldownUntil: 0,
+  /* Background-only rest: the server found no free AI capacity. It never touches the global
+     cooldown, so the player's own DM / scene keeps working. */
+  backgroundWaitUntil: 0,
+  waitingAt: 0,
   strikes: 0,
   // Separate rate-limit history: background world traffic must never escalate
   // the player's direct DM/group/RP backoff. `strikes` stays for save compatibility.
@@ -8417,6 +8423,8 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   temperature: requestMeta && requestMeta.quality === "deep" ? 0.3 : 0.9,
   quality: requestMeta && requestMeta.quality === "deep" ? "deep" : undefined,
   source: String(requestMeta && requestMeta.source || "client-ai"),
+  /* Only a call the player is waiting on may use paid capacity; the server treats everything else as background. */
+  foreground: requestMeta && requestMeta.foreground === true ? true : undefined,
   priority: Number(requestMeta && requestMeta.priority) || (requestMeta && requestMeta.interactive ? 100 : 0),
   /* R45: the server waits for the model as long as this request may take */
   timeout_ms: Math.max(10000, timeoutMs - 2000),
@@ -8455,6 +8463,20 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       err.retryable = false;
       // A proxy/config hiba nem rate-limit. Ne indítsunk hamis cooldown bannert.
       throw err;
+    }
+    if (busy && data && data.error && data.error.type === "free_ai_waiting") {
+      /* The server found no FREE capacity for this background request and refused to pay
+         for it. Only the background lane rests; the request is retried later by the world. */
+      const headerWait = Number(res.headers && res.headers.get ? res.headers.get("retry-after") : 0) || 0;
+      const waitMs = Math.max(20000, headerWait * 1000);
+      AI.backgroundWaitUntil = Math.max(AI.backgroundWaitUntil, now() + waitMs);
+      AI.waitingAt = now();
+      const waiting = new Error(CURRENT_LANG === "en"
+        ? `No free AI capacity right now — background work waits ${Math.ceil(waitMs / 1000)} s and retries by itself.`
+        : `Most nincs ingyenes AI-kapacitás — a háttérmunka ${Math.ceil(waitMs / 1000)} mp-et vár, majd magától újrapróbálja.`);
+      waiting.busy = true;
+      waiting.waiting = true;
+      throw waiting;
     }
     if (busy) {
       // Ismétlődő elutasításnál lane-specifikus backoff. A háttérvilág
@@ -8726,6 +8748,7 @@ async function askJSON(system, prompt, options = {}) {
               timeoutMs: Number(options.timeoutMs) || undefined,
               source: String(options && options.source || "askWorldJSON"),
               quality: options && options.quality === "deep" ? "deep" : undefined,
+              foreground: !!(options && options.foreground === true),
             }
           );
           const parsed = parseAiJsonResponse(raw);
@@ -8741,6 +8764,10 @@ async function askJSON(system, prompt, options = {}) {
         } catch (err) {
           last = err;
           if (err && err.retryable === false) {
+            throw err;
+          }
+          /* Free capacity is out: do not hold the AI queue lane waiting; the scheduler retries later. */
+          if (err && err.waiting) {
             throw err;
           }
           if (err && err.busy) {
@@ -8828,6 +8855,7 @@ async function askWorldJSONInteractive(
         language:
           worldLanguage(w),
         priority: 100,
+        foreground: true,
         maxTries:
           options.maxTries ||
           2,
@@ -15494,14 +15522,32 @@ function rosterLine(w) {
   return rows.join("\n");
 }
 
-function recentStructuredWorldLines(w, limit = 6) {
+/* Roster for a focused conversation: the speakers, the player, and the speakers' strongest ties. */
+function scopedRosterLine(w, scope) {
+  const ties = [];
+  scope.focus.forEach((id) => {
+    (w.chars || []).forEach((other) => {
+      if (!other || other.id === id || inScope(scope, other.id)) return;
+      const rel = getRel(w, id, other.id);
+      ties.push({ id: other.id, strength: rel ? Number(rel.score) || 0 : 0 });
+    });
+  });
+  const keep = new Set([...scope.people, ...strongestTieIds(ties)]);
+  const rows = [];
+  humanChars(w).forEach((h) => { if (keep.has(h.id)) rows.push(`${h.name} (@${h.username}) — ${termText("player", worldLanguage(w))}`); });
+  (w.chars || []).forEach((c) => { if (keep.has(c.id)) rows.push(`${c.name} (@${c.username})`); });
+  return rows.join("\n");
+}
+
+function recentStructuredWorldLines(w, limit = 6, scope = null) {
   const rows = (w && Array.isArray(w.socialEvents) ? w.socialEvents : [])
     .filter((event) =>
       event &&
       event.text &&
       event.visibility === "public" &&
       event.factLevel !== "speculation" &&
-      !/^(?:follow|unfollow)$/i.test(String(event.type || "")) /* CLAUDE FIX 2.5 */
+      !/^(?:follow|unfollow)$/i.test(String(event.type || "")) && /* CLAUDE FIX 2.5 */
+      (!scope || eventInScope(scope, event))
     )
     .slice(0, Math.max(1, limit))
     .map((event) => {
@@ -15522,6 +15568,10 @@ function legacySimsSocialWorldContext(w, ids, deep, observerId, contextOptions =
   const includePlayer = contextOptions.includePlayer !== false;
   const includeRecentWorld = contextOptions.includeRecentWorld !== false;
   const socialScope = Boolean(contextOptions.socialScope);
+  /* A conversation between a few characters gets their data, not the whole world's. */
+  const scope = socialScope || contextOptions.fullWorld === true
+    ? null
+    : focusedScope(focus, { playerId: w.meId, includePlayer });
 
   const knownPeople = [
     ...(includePlayer && w.player ? [w.player] : []),
@@ -15546,7 +15596,7 @@ function legacySimsSocialWorldContext(w, ids, deep, observerId, contextOptions =
     Object.keys(w.rels || {}).forEach((k) => {
       if (rels.length >= 14) return;
       const [x, y] = k.split(">");
-      if (!inPlay[x] && !inPlay[y]) return;
+      if (scope ? !relationshipInScope(scope, x, y) : (!inPlay[x] && !inPlay[y])) return;
       const r = w.rels[k];
       if (!r || (!r.score && !r.mood && !r.bond)) return;
       const A = charById(w, x), B = charById(w, y);
@@ -15558,7 +15608,7 @@ function legacySimsSocialWorldContext(w, ids, deep, observerId, contextOptions =
     });
   }
 
-  const notes = notesForAI(w);
+  const notes = notesForAI(w, scope);
   const knownTimeline = observerId
     ? mergeKnowledgeItems([], ((selfMem && selfMem.witnessedEvents) || []).concat((selfMem && selfMem.knownFacts) || []), "timeline", 10)
         .slice(-4).map(memoryToLine)
@@ -15566,8 +15616,9 @@ function legacySimsSocialWorldContext(w, ids, deep, observerId, contextOptions =
   const outLang = worldLanguage(w, observerId || w.meId);
   const tt = (hu, en) => (outLang === "en" ? en : hu);
 
-  const roster =
-    includePlayer
+  const roster = scope
+    ? scopedRosterLine(w, scope)
+    : includePlayer
       ? rosterLine(w)
       : (w.chars || [])
           .filter(Boolean)
@@ -15622,7 +15673,9 @@ ${tt(
 
 ${playerContextBlock}
 
-${tt("A VILÁG TELJES NÉVSORA — RAJTUK KÍVÜL SENKI NEM LÉTEZIK", "FULL WORLD ROSTER — NO ONE ELSE EXISTS")}: 
+${scope
+  ? tt("A HELYZETBEN RELEVÁNS SZEMÉLYEK — rajtuk kívül senkit ne nevezz meg, aki nincs itt vagy a fenti előzményekben", "PEOPLE RELEVANT TO THIS MOMENT — name no one who is not listed here or in the history above")
+  : tt("A VILÁG TELJES NÉVSORA — RAJTUK KÍVÜL SENKI NEM LÉTEZIK", "FULL WORLD ROSTER — NO ONE ELSE EXISTS")}: 
 ${roster || "-"}
 
 ${tt("AKIK MOST SZÓHOZ JUTHATNAK", "WHO CAN SPEAK RIGHT NOW")}: 
@@ -15651,7 +15704,7 @@ ${notes ? `\n${tt("MOSTANI JEGYZETEK", "CURRENT NOTES")}:\n${cut(notes, 260)}` :
 ${tt("MOSTANÁBAN TÖRTÉNT", "RECENT EVENTS")}: 
 ${(
   includeRecentWorld
-    ? (observerId ? knownTimeline : recentStructuredWorldLines(w, 4))
+    ? (observerId ? knownTimeline : recentStructuredWorldLines(w, 4, scope))
     : []
 ).join("\n") || (socialScope ? tt("kihagyva: nem releváns ehhez a lokális social threadhez", "omitted: unrelated to this local social thread") : "-")}`;
 }
@@ -28645,66 +28698,6 @@ HARD SELF BOUNDARY:
     .join("\n");
 }
 
-async function eventDrivenFeedRefreshPlan(w, cast, eventBatch) {
-  if (!w || !eventBatch || !cast || !cast.length) return null;
-  const compactCast = cast.map((actor) => {
-    const rel = getRel(w, actor.id, w.meId) || EMPTY_REL;
-    return {
-      id: actor.id,
-      name: actor.name,
-      job: String(actor.job || actor.occupation || "").slice(0, 120),
-      personality: String(actor.personality || "").replace(/\s+/g, " ").trim().slice(0, 320),
-      relationshipToPlayer: {
-        score: Number(rel.score) || 0,
-        type: String(rel.bond || rel.type || "").slice(0, 100),
-        mood: String(rel.mood || "").slice(0, 120),
-      },
-    };
-  });
-
-  try {
-    return await askWorldJSON(
-      w,
-      [
-        "You are a FAST feed refresh planner, not the final social-media writer.",
-        "Plan what each already-selected author is naturally doing/posting about right now.",
-        "Do NOT write final captions or comments. Do not invent canon. Keep topics varied and character-specific.",
-        "The final wording will be written by a separate high-quality writing model."
-      ].join("\n"),
-      [
-        "REFRESH TRIGGER:",
-        JSON.stringify({
-          trigger: eventBatch.trigger || "",
-          postId: eventBatch.postId || "",
-          causeText: String(eventBatch.causeText || "").slice(0, 500),
-          neededPosts: Number(eventBatch.neededPosts) || cast.length,
-          gossipFacts: String(eventBatch.gossipFacts || "").slice(0, 700),
-        }),
-        "",
-        "SELECTED AUTHORS:",
-        JSON.stringify(compactCast),
-        "",
-        '{"authors":[{"id":"EXACT_ID","topic":"short topic","intent":"what the post is trying to express/do","tone":"short tone"}]}',
-        "Return one row for each selected author; planning only, no final captions."
-      ].join("\n"),
-      {
-        maxTokens: 760,
-        priority: 45,
-        timeoutMs: 8000,
-        source: "feed-refresh-plan",
-      }
-    );
-  } catch (error) {
-    console.warn(
-      "[feed-refresh-plan]",
-      "fallback=local-cast",
-      "trigger=" + String(eventBatch && eventBatch.trigger || ""),
-      String(error && error.message || error || "planner failed")
-    );
-    return null;
-  }
-}
-
 async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
   /* CLAUDE FIX 2.1: event-driven refreshes (my post / scene end / popup) get their
      own 3–4 post cast, and the author roster is placed in the protected tail of
@@ -28717,10 +28710,6 @@ async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
     if (eventBatch) console.warn("[feed-refresh]", "no-eligible-authors", "trigger=" + String(eventBatch.trigger || ""));
     return null;
   }
-
-  const refreshPlan = eventBatch
-    ? await eventDrivenFeedRefreshPlan(w, cast, eventBatch)
-    : null;
 
   const recent = (w.posts || [])
     .slice(0, 4)
@@ -28749,7 +28738,6 @@ async function legacyVoiceStyleGenWorldStep(w, single, timeSkipHours = 0) {
     )}
 
 AUTONOMOUS AUTHORSHIP CONTRACT:
-${refreshPlan ? ("REFRESH PLANNER OUTPUT — planning only; do not copy wording:\n" + JSON.stringify(refreshPlan).slice(0, 7000) + "\nUse it only to decide each selected author's topic/intent/tone. You are still responsible for the final character-authentic wording.\n") : ""}
 - Each generated post's id selects EXACTLY ONE author.
 - That author may use only their OWN AUTONOMY SELF CAPSULE for self facts.
 - The player profile/private canon is intentionally omitted. Public recent feed/events may still be reacted to when actually relevant, but the player is not the default subject.
@@ -44977,8 +44965,29 @@ function popupLastGeneratedAt(w) {
   return Math.max(runtimeAt, historyAt);
 }
 
+const AMBIENT_ACTION_TYPES = new Set(["popup-event", "group", "group-turn", "roleplay-initiate", "gossip-spread", "gossip-echo", "gossip-story", "gossip-reaction", "rumor-evolution"]);
+
+/* True while the world may still add an extra thing because of something the player recently did. */
+function ambientActivityOpen(w) {
+  if (!AI_ACTIVITY_OPTIMIZATION.EVENT_DRIVEN_AMBIENT_ONLY) return true;
+  if (!w) return false;
+  const triggerAt = latestPlayerTriggerAt(w.socialEvents, (id) => isHuman(w, id));
+  return ambientGateOpen({ triggerAt, now: now(), state: w.sim && w.sim.ambient });
+}
+
+function isAmbientAction(action) {
+  return Boolean(action) && AMBIENT_ACTION_TYPES.has(action.type) && action.source !== "manual" && action.source !== "player-event";
+}
+
+/* Called inside update(): one ambient action started, so this trigger has one fewer left. */
+function ambientActivityConsume(n) {
+  const sim = ensureSimState(n);
+  sim.ambient = ambientGateAfterRun(sim.ambient, latestPlayerTriggerAt(n.socialEvents, (id) => isHuman(n, id)));
+}
+
 function popupOverdueByMs(w) {
   if (!w || popupGenerationBlocked(w)) return -Infinity;
+  if (!ambientActivityOpen(w)) return -Infinity;
   const runtimeStarted = Number(w.popupRuntime && w.popupRuntime.startedAt) || 0;
   const laneStartedAt = Number(w.sim && w.sim.liveWorldStartedAt) || 0;
   const lastSuccess = Number(w.sim && w.sim.lastPopupSuccessAt) || 0;
@@ -50016,6 +50025,14 @@ function simDropQueued(w, actionId) {
   sim.at = now();
 }
 
+/* Keep a queued action for later: it ran into "no free AI capacity" and must not be lost. */
+function simDeferQueued(w, actionId, retryAt) {
+  const sim = ensureSimState(w);
+  const row = sim.queue.find((x) => x && x.id === actionId);
+  if (row) row.retryAt = Math.max(Number(retryAt) || 0, now() + 20000);
+  sim.at = now();
+}
+
 function simMarkDone(w, action) {
   const sim = ensureSimState(w);
   sim.running = "";
@@ -51781,6 +51798,7 @@ function channelActivityPeak(w, key) {
  */
 function pickInitiativeWatchdogAction(view, allowedChannels = null) {
   if (!view || !(view.chars || []).length) return null;
+  if (!ambientActivityOpen(view)) return null;
 
   const ts = now();
   const sim = (view && view.sim) || {};
@@ -51927,6 +51945,8 @@ function hasRecentWidespreadGossip(w) {
 const AI_ACTIVITY_OPTIMIZATION = Object.freeze({
   EVENT_DRIVEN_FEED_ONLY: true,
   EVENT_DRIVEN_UNSOLICITED_DM_ONLY: true,
+  /* Popups, group chatter, gossip and rumours run only after something the player did, never on a timer. */
+  EVENT_DRIVEN_AMBIENT_ONLY: true,
   FEED_MIN_POSTS: 3,
   FEED_MAX_POSTS: 4,
   PLAYER_COMMENT_MAX_AI_REPLIES: 4,
@@ -52473,7 +52493,13 @@ function freshFeedPostCommentCandidate() {
 function worldContext(...args) {
   const base = String(legacyEventDrivenWorldContext(...args) || "");
   let who = "";
-  try { who = [worldGroupGlossaryCard(args[0]), whoIsWhoCard(args[0], args[1])].filter(Boolean).join("\n\n"); } catch (error) { who = ""; }
+  try {
+    const options = args.length >= 5 && args[4] && typeof args[4] === "object" ? args[4] : {};
+    const scope = options.socialScope === true || options.fullWorld === true
+      ? null
+      : focusedScope(args[1], { playerId: args[0] && args[0].meId, includePlayer: options.includePlayer !== false });
+    who = [worldGroupGlossaryCard(args[0], scope), whoIsWhoCard(args[0], args[1])].filter(Boolean).join("\n\n");
+  } catch (error) { who = ""; }
   const withWho = who ? who + "\n\n" + base : base;
   const directive = eventDrivenFeedDirective();
   return directive ? withWho + "\n\n" + directive : withWho;
@@ -52755,7 +52781,8 @@ function legacyFullSpecPlanAutoAction(view) {
   if (groupInitiative && Math.random() < 0.20) return groupInitiative;
 
   /* A pletyka-háló tovább él, de csak a fenti fő social ritmus után. */
-  const gossipSpread = pickGossipPropagationAction(view);
+  const ambientOpen = ambientActivityOpen(view);
+  const gossipSpread = ambientOpen ? pickGossipPropagationAction(view) : null;
   if (gossipSpread && Math.random() < (String(view.gossipSettings && view.gossipSettings.frequency || "normal") === "chaotic" ? 0.34 : 0.16)) {
     return mkAction(
       "gossip-spread",
@@ -52765,7 +52792,7 @@ function legacyFullSpecPlanAutoAction(view) {
     );
   }
 
-  const gossipEcho = pickGossipNetworkEchoAction(view);
+  const gossipEcho = ambientOpen ? pickGossipNetworkEchoAction(view) : null;
   if (gossipEcho && Math.random() < 0.10) {
     return mkAction(
       "gossip-echo",
@@ -52775,7 +52802,7 @@ function legacyFullSpecPlanAutoAction(view) {
     );
   }
 
-  const urgentGossipCandidate = gossipAutoCandidate(view);
+  const urgentGossipCandidate = ambientOpen ? gossipAutoCandidate(view) : null;
   if (urgentGossipCandidate && Math.random() < gossipPublishChance(view)) {
     return mkAction(
       "gossip-story",
@@ -52909,7 +52936,7 @@ function legacyFullSpecPlanAutoAction(view) {
   /*
    * 5. GOSSIP REAKCIÓK
    */
-  if (Math.random() < 0.72) {
+  if (ambientOpen && Math.random() < 0.72) {
     const reaction = pickGossipReactionAction(view);
     if (reaction) {
       return mkAction(
@@ -52923,7 +52950,7 @@ function legacyFullSpecPlanAutoAction(view) {
   /*
    * 6. RUMOR EVOLUTION / SPECULATION
    */
-  if (Math.random() < 0.18) {
+  if (ambientOpen && Math.random() < 0.18) {
     const rumorPost = pickRumorEvolutionCandidate(view);
     if (rumorPost) {
       return mkAction(
@@ -59339,6 +59366,7 @@ const signOut = useCallback(async () => {
     if (!langReady || !world || !meId) return;
     let alive = true;
     const runManualLane = async (laneAction) => {
+      const laneStartedAt = now();
       manualLaneBusy.current = true;
       manualLaneSince.current = now();
       inFlightActionIds.current.add(laneAction.id);
@@ -59348,8 +59376,10 @@ const signOut = useCallback(async () => {
       } catch (e) {
         if (alive) setErr("SIM: " + ((e && e.message) ? e.message : tt("Az AI-kérés nem sikerült.", "AI request failed.")));
       }
+      const laneWaiting = !laneOk && AI.waitingAt >= laneStartedAt;
       update((n) => {
-        simDropQueued(n, laneAction.id);
+        if (laneWaiting) simDeferQueued(n, laneAction.id, AI.backgroundWaitUntil);
+        else simDropQueued(n, laneAction.id);
         if (laneOk) {
           try { markSimulationCadence(n, laneAction); } catch (error) { /* cadence is optional */ }
           const sim = ensureSimState(n);
@@ -59372,7 +59402,7 @@ const signOut = useCallback(async () => {
   }
   if (autoRunning.current && !manualLaneBusy.current && simLeaderActive()) {
     const laneView = viewRef.current;
-    const laneQueue = ((laneView && laneView.sim && laneView.sim.queue) || []).filter((a) => a && a.id && !inFlightActionIds.current.has(a.id));
+    const laneQueue = ((laneView && laneView.sim && laneView.sim.queue) || []).filter((a) => a && a.id && !inFlightActionIds.current.has(a.id) && !(Number(a.retryAt) > now()));
     const runningId = String((laneView && laneView.sim && laneView.sim.running) || "");
     const newestPlayerPostLaneAction = laneQueue
       .filter((a) => a.type === "player-post-comments-guarantee" && a.id !== runningId)
@@ -59417,7 +59447,7 @@ const signOut = useCallback(async () => {
   /* CLAUDE FIX R3: a due follow / unfollow reaction must not wait for an empty queue. */
   const dueSocialReaction = groundedDueFollowBackAction(view2);
   /* R45: skip what the second lane is already doing; the player's post comments go first */
-  const queueFree = ((view2.sim && view2.sim.queue) || []).filter((a) => a && !inFlightActionIds.current.has(a.id));
+  const queueFree = ((view2.sim && view2.sim.queue) || []).filter((a) => a && !inFlightActionIds.current.has(a.id) && !(Number(a.retryAt) > now()));
   const newestPlayerPostQueued = queueFree
     .filter((a) => a.type === "player-post-comments-guarantee")
     .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))[0] || null;
@@ -59506,6 +59536,8 @@ const signOut = useCallback(async () => {
   }
 
   if (!manualQueued && cooldownLeft() > 0) return;
+  /* No free AI capacity: the world's own background work rests; the player's actions are not affected. */
+  if (!manualQueued && AI.backgroundWaitUntil > now()) return;
 
   if (
     !manualQueued &&
@@ -59653,6 +59685,7 @@ const signOut = useCallback(async () => {
          * úgy nézne ki, mintha történt volna valami, és a világ újra várna.
          */
         simMarkRunning(n, action);
+        if (isAmbientAction(action)) ambientActivityConsume(n);
         if (action && action.type === "world") {
           ensureSimState(n).feedAttemptAt = now();
         }
@@ -59675,11 +59708,12 @@ const signOut = useCallback(async () => {
         0,
         Math.floor(Number(viewRef.current && viewRef.current.historyEpoch) || 0)
       );
+      const actionStartedAt = now();
       try {
         result = await runSimulationAction(viewRef.current, update, action, addImage);
         ok = Boolean(result);
       } catch (e) {
-        if (action && action.source !== "manual" && action.source !== "player-event" && simBrakeNoteFailure()) {
+        if (action && action.source !== "manual" && action.source !== "player-event" && !(e && e.waiting) && simBrakeNoteFailure()) {
           update((n) => groundedEventLog(n, "sim-brake", "applied", "Background world paused for 5 minutes after repeated AI failures: " + String(e && e.message || e || "error").slice(0, 160), "brake"));
         }
         if (action && action.source === "manual" && alive) {
@@ -59715,7 +59749,9 @@ const signOut = useCallback(async () => {
           action &&
           queued.id === action.id
         ) {
-          simDropQueued(n, queued.id);
+          /* Out of free AI capacity: keep the action and retry it later instead of losing it. */
+          if (!ok && AI.waitingAt >= actionStartedAt) simDeferQueued(n, queued.id, AI.backgroundWaitUntil);
+          else simDropQueued(n, queued.id);
         }
 
         if (ok) {
@@ -62491,84 +62527,6 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
   ].filter(Boolean).join("\n");
 }
 
-async function playerPostCommentReactionPlan(w, post, postContext, cards, minComments, maxComments) {
-  if (!w || !post || !cards || !cards.length) return null;
-  const compactCards = cards.map((card) => ({
-    id: card.id,
-    name: card.name,
-    relationshipToPostAuthor: card.relationshipToPostAuthor,
-    isNamedInPost: Boolean(card.isNamedInPost),
-    relationshipToPeopleNamedInPost: card.relationshipToPeopleNamedInPost,
-  }));
-
-  try {
-    const out = await askWorldJSON(
-      w,
-      [
-        "You are a FAST social reaction planner, not the final writer.",
-        "Choose who should react to the visible player post and what each reaction intends to do.",
-        "Do NOT write final comment wording. Do not invent events or facts.",
-        "Respect relationships, official couple status, jealousy, friendship, rivalry and named people in the post.",
-        "Return compact JSON only."
-      ].join("\n"),
-      [
-        "VISIBLE POST:",
-        JSON.stringify(postContext),
-        "",
-        "ELIGIBLE COMMENTERS:",
-        JSON.stringify(compactCards),
-        "",
-        "Choose " + minComments + "-" + maxComments + " different commenters.",
-        '{"commenters":[{"id":"EXACT_ID","tone":"flirty|supportive|teasing|neutral|jealous|dismissive|hostile","intent":"very short description of what this person reacts to / tries to convey"}]}'
-      ].join("\n"),
-      {
-        maxTokens: 420,
-        priority: 45,
-        timeoutMs: 8000,
-        source: "player-post-comment-plan",
-      }
-    );
-
-    const allowed = new Set(cards.map((card) => String(card.id)));
-    const rows = Array.isArray(out && out.commenters) ? out.commenters : [];
-    const planned = [];
-    const seen = new Set();
-
-    rows.forEach((row) => {
-      const id = String(row && row.id || "");
-      if (!id || !allowed.has(id) || seen.has(id)) return;
-      seen.add(id);
-      planned.push({
-        id,
-        tone: String(row.tone || "").slice(0, 40),
-        intent: String(row.intent || "").replace(/\s+/g, " ").trim().slice(0, 220),
-      });
-    });
-
-    for (const card of cards) {
-      if (planned.length >= minComments) break;
-      const id = String(card.id || "");
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      planned.push({
-        id,
-        tone: String(card.relationshipToPostAuthor && card.relationshipToPostAuthor.expectedPublicTone || "neutral"),
-        intent: "react naturally to the visible post",
-      });
-    }
-
-    return planned.length ? planned.slice(0, maxComments) : null;
-  } catch (error) {
-    console.warn(
-      "[player-post-comment-plan]",
-      "fallback=local-cast",
-      "post=" + String(postContext && postContext.postId || ""),
-      String(error && error.message || error || "planner failed")
-    );
-    return null;
-  }
-}
-
 async function isolatedPlayerPostComments(w, post, options = {}) {
   const minComments = Math.max(3, Math.min(6, Math.round(Number(options.minComments) || 3)));
   const maxComments = Math.max(minComments, Math.min(6, Math.round(Number(options.maxComments) || 6)));
@@ -62579,27 +62537,13 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
     return { out: { comments: [], changes: [] }, label: "isolated-player-post-comments-no-cast" };
   }
 
-  const reactionPlan = await playerPostCommentReactionPlan(
-    w,
-    post,
-    postContext,
-    cards,
-    minComments,
-    maxComments
-  );
-  const plannedIds = Array.isArray(reactionPlan)
-    ? reactionPlan.map((row) => String(row.id || ""))
-    : [];
-  const plannedCards = plannedIds.length
-    ? [
-        ...plannedIds.map((id) => cards.find((card) => String(card.id) === id)).filter(Boolean),
-        ...cards.filter((card) => !plannedIds.includes(String(card.id))),
-      ].slice(0, maxComments)
-    : cards;
+  /* Who reacts is decided locally: the candidate cards are already ranked by relationship,
+     and the writing call picks each commenter's tone. No separate planning call. */
+  const plannedCards = cards;
 
   const logContext = {
     post: postContext,
-    reactionPlan: reactionPlan || "local-fallback",
+    reactionPlan: "local",
     commenters: plannedCards.map((card) => ({
       id: card.id,
       name: card.name,
@@ -62629,23 +62573,19 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
       attempt ? firstProblems : [],
       attempt ? firstRows : []
     );
-    const plannedPrompt = reactionPlan && reactionPlan.length
-      ? prompt + "\n\n[REACTION PLAN — PLANNING ONLY, DO NOT COPY WORDING]\n" +
-        JSON.stringify(reactionPlan) +
-        "\nWrite the final comments yourself in each character's exact voice while preserving these intended speakers/tones."
-      : prompt;
 
     let out;
     try {
       out = await askWorldWritingJSON("comments", 
         w,
         playerPostCommentPrivateSystem(w, post),
-        plannedPrompt,
+        prompt,
         {
           maxTokens: 900,
           priority: 65,
           timeoutMs: 60000,
           source: "player-post-comments-isolated",
+          foreground: true,
         }
       );
     } catch (error) {
@@ -63690,7 +63630,7 @@ function identityCanonLine(w, c) {
 
 /* CLAUDE FIX R11: separate groups/settings must never blend into one storyline
    (a death game, a gang and a university house do not share a scoreboard). */
-function worldGroupGlossary(w) {
+function worldGroupGlossary(w, scope = null) {
   const state = w && w.sim && w.sim.identityCanon;
   if (!state) return [];
   const groups = new Map();
@@ -63705,21 +63645,23 @@ function worldGroupGlossary(w) {
       if (!key || key.length < 2) return;
       const row = groups.get(key) || { name: a.name, kinds: {}, members: [] };
       if (a.kind) row.kinds[a.kind] = (row.kinds[a.kind] || 0) + 1;
-      if (row.members.length < 6) row.members.push(String(c.name || "").split(/\s+/)[0] + (a.role ? " (" + a.role + ")" : ""));
+      row.members.push({ id: c.id, label: String(c.name || "").split(/\s+/)[0] + (a.role ? " (" + a.role + ")" : "") });
       groups.set(key, row);
     });
   });
-  return [...groups.values()]
-    .sort((a, b) => b.members.length - a.members.length)
+  /* With a focused conversation only the groups of the people in it are listed. */
+  const rows = [...groups.values()]
+    .sort((a, b) => Math.min(6, b.members.length) - Math.min(6, a.members.length));
+  return groupsForScope(rows, scope, 6)
     .slice(0, 14)
     .map((g) => {
       const kind = Object.entries(g.kinds).sort((x, y) => y[1] - x[1]).map(([k]) => k)[0] || "";
-      return { name: g.name, kind, members: g.members };
+      return { name: g.name, kind, members: g.members.map((m) => m.label) };
     });
 }
 
-function worldGroupGlossaryCard(w) {
-  const rows = worldGroupGlossary(w);
+function worldGroupGlossaryCard(w, scope = null) {
+  const rows = worldGroupGlossary(w, scope);
   if (!rows.length) return "";
   const en = worldLanguage(w, w.meId) === "en";
   return (en

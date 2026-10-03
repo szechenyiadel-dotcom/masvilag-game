@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import express from "express";
 import { registerBondAnalysis, analyzeStructured } from "../server/bondAnalysis.js";
 import { EXTRACT_PROMPT, BASELINE_PROMPT } from "../src/bondAnalysis.js";
-import { fullSheetText, rebuildBondGraph, installBondGraph, analysisReady } from "../src/bondClient.js";
+import { fullSheetText, relationshipSourceText, rebuildBondGraph, installBondGraph, analysisReady } from "../src/bondClient.js";
 
 // The whole path: real client -> real Express handler -> in-memory cache table ->
 // scripted "model". The model returns valid output derived from the prompt, so the
@@ -16,7 +16,7 @@ const until = async (condition, what = "condition") => {
   throw new Error("timed out waiting for " + what);
 };
 
-const person = (id, backstory = "Sima diák.") => ({ id, name: id.toUpperCase(), backstory });
+const person = (id, connections = "Sima diák.") => ({ id, name: id.toUpperCase(), connections });
 const subjects = (world) => world.chars;
 
 const profileFor = ({ owner, ownSheet, fieldNames }, mentions = {}) => {
@@ -172,13 +172,13 @@ test("Editing one sheet re-reads that owner; others are re-read only toward fact
     await sim.rebuild(chars);
 
     sim.reset();
-    const edited = chars.map((char) => char.id === "c" ? { ...char, backstory: "Sima diák, szereti a csendet." } : char);
+    const edited = chars.map((char) => char.id === "c" ? { ...char, connections: "Sima diák, szereti a csendet." } : char);
     await sim.rebuild(edited);
     assert.deepEqual(owners(sim.calls, "profile"), ["c"]);
     assert.deepEqual(sim.calls.filter((call) => call.stage === "baseline").map((call) => [call.owner, call.targets]), [["c", ["a", "b", "d"]]]);
 
     sim.reset();
-    const joined = edited.map((char) => char.id === "c" ? { ...char, backstory: "Cobra Kai tag lett." } : char);
+    const joined = edited.map((char) => char.id === "c" ? { ...char, connections: "Cobra Kai tag lett." } : char);
     const result = await sim.rebuild(joined);
     assert.deepEqual(owners(sim.calls, "profile"), ["c"]);
     const byOwner = Object.fromEntries(sim.calls.filter((call) => call.stage === "baseline").map((call) => [call.owner, call.targets]));
@@ -424,7 +424,7 @@ test("A mixed failure is classed by what the providers that were asked said; rep
 });
 
 test("With no provider configured the failure says what to set instead of an empty message", async () => {
-  await assert.rejects(analyzeStructured("x", { type: "object" }, () => {}, { env: {} }), /No analysis provider is configured/);
+  await assert.rejects(analyzeStructured("x", { type: "object" }, () => {}, { env: {} }), /No free analysis provider is configured.*AI_ALLOW_PAID_BACKGROUND=1/);
 });
 
 test("One analysis stops trying further providers after its deadline", async () => {
@@ -445,7 +445,8 @@ test("One analysis stops trying further providers after its deadline", async () 
 });
 
 test("The mock sheets really are the ones the client builds", () => {
-  assert.equal(fullSheetText(person("a")), "[backstory]\nSima diák.\n[name]\nA");
+  assert.equal(relationshipSourceText(person("a")), "[name]\nA\n[connections]\nSima diák.");
+  assert.ok(fullSheetText(person("a")).includes("[connections]"));
 });
 
 test("Restart progresses beyond 16 sheets to 20 and all 380 directed bonds", async () => {

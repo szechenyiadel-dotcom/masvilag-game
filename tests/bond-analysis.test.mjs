@@ -4,7 +4,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { createRequire } from "node:module";
 import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema } from "../src/bondAnalysis.js";
-import { fullSheetText, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext, bondSourceFingerprint } from "../src/bondClient.js";
+import { fullSheetText, relationshipSourceText, relationshipFields, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext, bondSourceFingerprint } from "../src/bondClient.js";
 import { sheetHash, analyzeStructured } from "../server/bondAnalysis.js";
 const require = createRequire(import.meta.url);
 const { parse } = require("@babel/parser");
@@ -59,8 +59,11 @@ test("Alias resolution accepts unique aliases, excludes outsiders and ambiguous 
  a.mentions = ["Béci", "Közös", "Világon kívüli"].map(targetName => ({ targetName, targetId: null, whoKnows: ["Béci"] }));
  assert.deepEqual(resolveProfileReferences([a, b, c])[0].mentions.map(row => row.targetId), ["b", null, null]);
 });
-test("A7: full long original text retained and sent exactly; hashes change", async () => {
- const people = [{ id: "a", name: "Anna", backstory: "Árnyalt előtörténet. ".repeat(10000) + "LAP VÉGE" }, { id: "b", name: "Béla", backstory: "Másik teljes lap." }];
+test("A7: the complete Connections text is sent exactly; the rest of the sheet is not", async () => {
+ const people = [
+  { id: "a", name: "Anna", backstory: "Hosszú előtörténet. ".repeat(10000), connections: "Árnyalt kapcsolatok. ".repeat(10000) + "LAP VÉGE" },
+  { id: "b", name: "Béla", backstory: "Másik teljes lap.", connections: "Anna régi barát." },
+ ];
  const calls = [];
  const world = { chars: people };
  const api = async (url, options) => {
@@ -68,12 +71,41 @@ test("A7: full long original text retained and sent exactly; hashes change", asy
   return { cached: false, cacheKey: request.owner, hash: sheetHash(request.ownSheet), result: request.stage === "profile" ? { ...profile(request.owner), groups: [] } : { bonds: request.roster.map(row => bond(request.owner, row.id)) } };
  };
  const result = await rebuildBondGraph(world, { subjects: w => w.chars, api, language: "hu" });
- for (const call of calls) assert.equal(call.ownSheet, fullSheetText(people.find(p => p.id === call.owner)));
- assert.ok(calls[0].ownSheet.endsWith("[name]\nAnna")); assert.ok(calls[0].ownSheet.includes("LAP VÉGE"));
+ for (const call of calls) {
+  const owner = people.find(p => p.id === call.owner);
+  assert.equal(call.ownSheet, relationshipSourceText(owner));
+  assert.deepEqual(call.fieldNames ?? Object.keys(relationshipFields(owner)), Object.keys(relationshipFields(owner)));
+  assert.ok(!call.ownSheet.includes("Hosszú előtörténet") && !call.ownSheet.includes("Másik teljes lap"));
+ }
+ assert.ok(calls[0].ownSheet.includes("LAP VÉGE")); assert.ok(calls[0].ownSheet.includes("[name]\nAnna"));
  assert.equal(calls.filter(c => c.stage === "baseline").length, 2);
  installBondGraph(world, result, w => w.chars); assert.ok(analysisReady(world, w => w.chars));
- people[0].backstory += " Változás"; assert.ok(!analysisReady(world, w => w.chars));
- assert.notEqual(sheetHash(calls[0].ownSheet), sheetHash(fullSheetText(people[0])));
+ // Editing anything but Connections / identity costs nothing: no re-read, same hash.
+ people[0].backstory += " Változás"; assert.ok(analysisReady(world, w => w.chars));
+ assert.equal(sheetHash(calls[0].ownSheet), sheetHash(relationshipSourceText(people[0])));
+ // Editing Connections does invalidate the analysis.
+ people[0].connections += " Új sor."; assert.ok(!analysisReady(world, w => w.chars));
+ assert.notEqual(sheetHash(calls[0].ownSheet), sheetHash(relationshipSourceText(people[0])));
+});
+test("A character without a Connections field is still analysed from its identity fields", async () => {
+ const world = { chars: [{ id: "a", name: "Anna", backstory: "Sok minden." }, { id: "b", name: "Béla", nick: "B" }] };
+ assert.deepEqual(Object.keys(relationshipFields(world.chars[0])), ["name"]);
+ assert.deepEqual(Object.keys(relationshipFields(world.chars[1])), ["name", "nick"]);
+ assert.equal(relationshipSourceText(world.chars[0]), "[name]\nAnna");
+});
+test("A world analysed from whole sheets stays ready until a sheet changes", () => {
+ const chars = [{ id: "a", name: "Anna", backstory: "x", connections: "Béla a barátom." }, { id: "b", name: "Béla", backstory: "y" }];
+ const legacy = JSON.stringify(chars.map(character => ({ id: character.id, fields: Object.fromEntries(Object.keys(character).filter(key => key !== "id").sort().map(key => [key, character[key]])) })).sort((a, b) => a.id.localeCompare(b.id)));
+ const world = { chars, bondAnalysis: { version: 1, source: legacy, profiles: {} } };
+ assert.equal(analysisReady(world, w => w.chars), true);
+ chars[1].backstory = "z";
+ assert.equal(analysisReady(world, w => w.chars), false);
+ assert.ok(bondSourceFingerprint(world, w => w.chars).startsWith("connections-v1:"));
+});
+test("Both analysis prompts name Connections as the only relationship source", async () => {
+ const { EXTRACT_PROMPT, BASELINE_PROMPT } = await import("../src/bondAnalysis.js");
+ for (const prompt of [EXTRACT_PROMPT, BASELINE_PROMPT]) assert.ok(/RELATIONSHIP SOURCE/.test(prompt) && /Connections/.test(prompt) && !/ENTIRE owner's sheet|COMPLETE original sheet/.test(prompt));
+ assert.ok(/OWN words/.test(BASELINE_PROMPT));
 });
 test("A6/R7: sheet change recomputes complete outgoing graph and incoming dependencies", async () => {
  const people = ids.map(id => ({ id, name: id, backstory: id })); const world = { chars: people };
@@ -198,14 +230,13 @@ test("First migration preserves played relationships; only Restart resets them",
  restoreBaselineGraph(world, ["a", "b"]); assert.deepEqual(world.rels, result.baselines);
 });
 test("English mode sends English interpretation language at BOTH analysis stages", async () => {
- const world = { chars: [{ id: "a", name: "Anna", backstory: "She has never been in love with Bela." }, { id: "b", name: "Bela" }] };
+ const world = { chars: [{ id: "a", name: "Anna", connections: "She has never been in love with Bela." }, { id: "b", name: "Bela" }] };
  const calls = [];
  const api = async (_, options) => { const request = JSON.parse(options.body); calls.push(request); return { cacheKey: request.owner, hash: sheetHash(request.ownSheet), result: request.stage === "profile" ? profile(request.owner) : { bonds: request.roster.map(row => bond(request.owner, row.id)) } }; };
  await rebuildBondGraph(world, { subjects: w => w.chars, api, language: "en" });
  assert.equal(calls.length, 4); assert.ok(calls.every(row => row.language === "en"));
- assert.ok(calls[0].ownSheet.includes(world.chars[0].backstory));
+ assert.ok(calls[0].ownSheet.includes(world.chars[0].connections));
 });
-
 test("Gemini semantic routing tries free keys 2 through 8 before paid key 1", async () => {
  const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini" };
  for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
@@ -224,7 +255,7 @@ test("Gemini semantic routing tries free keys 2 through 8 before paid key 1", as
  assert.equal(result.provider, "gemini");
  assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8"]);
 });
-test("Restart profile rotation keeps every free Gemini fallback before paid Gemini and OpenAI", async () => {
+test("Restart profile rotation keeps every free Gemini fallback and never reaches paid Gemini or OpenAI", async () => {
  const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini", OPENAI_API_KEY: "openai-key", OPENAI_ANALYSIS_MODEL: "configured-openai" };
  for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
  const attempted = [];
@@ -240,52 +271,58 @@ test("Restart profile rotation keeps every free Gemini fallback before paid Gemi
   attempted.push(opts.headers.Authorization);
   return response({ ok: true });
  };
- const result = await analyzeStructured(
+ await assert.rejects(analyzeStructured(
   "Complete source",
   { type: "object" },
   value => assert.equal(value.ok, true),
   { env, transport, outputTokens: 1000, semanticStartOffset: 3 }
- );
- assert.deepEqual(attempted, [
-  "test-key-5","test-key-6","test-key-7","test-key-8",
-  "test-key-2","test-key-3","test-key-4",
-  "test-key-1","Bearer openai-key"
- ]);
- assert.equal(result.provider, "openai");
+ ), /No analysis provider completed/);
+ assert.deepEqual(attempted, ["test-key-5","test-key-6","test-key-7","test-key-8","test-key-2","test-key-3","test-key-4"]);
 });
-
-test("Paid Gemini key 1 is used only after free Gemini keys 2 through 8 fail", async () => {
- const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini" };
- for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
- const attempted = [];
- const transport = async (url, opts) => {
-  if (url.endsWith(":countTokens")) return { totalTokens: 100 };
-  if (url.endsWith(":generateContent")) {
-   const key = opts.headers["x-goog-api-key"]; attempted.push(key);
-   if (key !== "test-key-1") { const error = new Error("quota"); error.status = 429; throw error; }
-   return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":true}' }] } }] };
-  }
-  return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+test("Paid Gemini key 1 is never used for analysis unless paid background use is switched on", async () => {
+ const run = async (extraEnv) => {
+  const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini", ...extraEnv };
+  for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
+  const attempted = [];
+  const transport = async (url, opts) => {
+   if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+   if (url.endsWith(":generateContent")) {
+    const key = opts.headers["x-goog-api-key"]; attempted.push(key);
+    if (key !== "test-key-1") { const error = new Error("quota"); error.status = 429; throw error; }
+    return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":true}' }] } }] };
+   }
+   return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  };
+  const outcome = await analyzeStructured("Complete source", { type: "object" }, value => assert.equal(value.ok, true), { env, transport, outputTokens: 1000 }).then(result => ({ result }), error => ({ error }));
+  return { attempted, ...outcome };
  };
- const result = await analyzeStructured("Complete source", { type: "object" }, value => assert.equal(value.ok, true), { env, transport, outputTokens: 1000 });
- assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8","test-key-1"]);
- assert.equal(result.keySlot, "GEMINI_API_KEY");
+ const free = await run({});
+ assert.deepEqual(free.attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8"]);
+ assert.match(free.error.message, /No analysis provider completed/);
+ const paid = await run({ AI_ALLOW_PAID_BACKGROUND: "1" });
+ assert.deepEqual(paid.attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8","test-key-1"]);
+ assert.equal(paid.result.keySlot, "GEMINI_API_KEY");
 });
-
-test("Semantic OpenAI fallback is after every configured Gemini key", async () => {
- const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "g2", GEMINI_API_KEY: "g1", OPENAI_API_KEY: "oa", OPENAI_ANALYSIS_MODEL: "configured-openai" };
- const attempted = [];
- const transport = async (url, opts) => {
-  if (url.endsWith(":countTokens")) return { totalTokens: 100 };
-  if (url.endsWith(":generateContent")) { attempted.push(opts.headers["x-goog-api-key"]); const error = new Error("quota"); error.status = 429; throw error; }
-  if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
-  attempted.push(opts.headers.Authorization); return response({ ok: true });
+test("Semantic OpenAI fallback exists only with paid background use switched on, after every Gemini key", async () => {
+ const run = async (extraEnv) => {
+  const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "g2", GEMINI_API_KEY: "g1", OPENAI_API_KEY: "oa", OPENAI_ANALYSIS_MODEL: "configured-openai", ...extraEnv };
+  const attempted = [];
+  const transport = async (url, opts) => {
+   if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+   if (url.endsWith(":generateContent")) { attempted.push(opts.headers["x-goog-api-key"]); const error = new Error("quota"); error.status = 429; throw error; }
+   if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+   attempted.push(opts.headers.Authorization); return response({ ok: true });
+  };
+  const outcome = await analyzeStructured("Complete source", { type: "object" }, value => assert.equal(value.ok, true), { env, transport, outputTokens: 1000 }).then(result => ({ result }), error => ({ error }));
+  return { attempted, ...outcome };
  };
- const result = await analyzeStructured("Complete source", { type: "object" }, value => assert.equal(value.ok, true), { env, transport, outputTokens: 1000 });
- assert.deepEqual(attempted, ["g2", "g1", "Bearer oa"]);
- assert.equal(result.provider, "openai");
+ const free = await run({});
+ assert.deepEqual(free.attempted, ["g2"]);
+ assert.ok(free.error);
+ const paid = await run({ AI_ALLOW_PAID_BACKGROUND: "1" });
+ assert.deepEqual(paid.attempted, ["g2", "g1", "Bearer oa"]);
+ assert.equal(paid.result.provider, "openai");
 });
-
 test("Invalid Gemini JSON can be normalized by Groq without changing semantic provider attribution", async () => {
  const semantic = { name: "gemini", model: "semantic-gemini", key: "g", keySlot: "GEMINI_API_KEY_2" };
  const schemaRepair = { name: "groq", model: "schema-groq", key: "r", keySlot: "GROQ_API_KEY", contextWindow: 1000000, outputLimit: 65536 };
@@ -326,21 +363,26 @@ test("Provider-side invalid JSON receives two attempts before failover", async (
  const result = await analyzeStructured("Complete original sheet", { type: "object" }, result => assert.equal(result.ok, true), { candidates, transport, outputTokens: 1000 });
  assert.equal(invalid, 1); assert.equal(result.provider, "groq");
 });
-test("Schema routing uses Groq key 1, then key 2, then OpenAI", async () => {
- const tried = [];
- const env = { GROQ_ANALYSIS_MODEL: "configured-groq", GROQ_API_KEY: "groq-1", GROQ_API_KEY_2: "groq-2", GROQ_ANALYSIS_CONTEXT_WINDOW: "131072", GROQ_ANALYSIS_OUTPUT_LIMIT: "65536", OPENAI_API_KEY: "openai-key", OPENAI_SCHEMA_MODEL: "configured-openai" };
- const transport = async (url, opts) => {
-  if (url.endsWith("/models")) return { data: [{ id: "configured-groq", active: true, context_window: 131072, max_completion_tokens: 65536 }] };
-  const auth = opts.headers.Authorization; tried.push(auth);
-  if (auth === "Bearer groq-1" || auth === "Bearer groq-2") { const error = new Error("quota"); error.status = 429; throw error; }
-  return response({ ok: true });
+test("Schema routing uses Groq key 1, then key 2, and OpenAI only with paid background use switched on", async () => {
+ const run = async (extraEnv) => {
+  const tried = [];
+  const env = { GROQ_ANALYSIS_MODEL: "configured-groq", GROQ_API_KEY: "groq-1", GROQ_API_KEY_2: "groq-2", GROQ_ANALYSIS_CONTEXT_WINDOW: "131072", GROQ_ANALYSIS_OUTPUT_LIMIT: "65536", OPENAI_API_KEY: "openai-key", OPENAI_SCHEMA_MODEL: "configured-openai", ...extraEnv };
+  const transport = async (url, opts) => {
+   if (url.endsWith("/models")) return { data: [{ id: "configured-groq", active: true, context_window: 131072, max_completion_tokens: 65536 }] };
+   const auth = opts.headers.Authorization; tried.push(auth);
+   if (auth === "Bearer groq-1" || auth === "Bearer groq-2") { const error = new Error("quota"); error.status = 429; throw error; }
+   return response({ ok: true });
+  };
+  const outcome = await analyzeStructured("Complete sheet", { type: "object" }, result => assert.equal(result.ok, true), { env, transport, outputTokens: 1000, mode: "schema" }).then(result => ({ result }), error => ({ error }));
+  return { tried, ...outcome };
  };
- const result = await analyzeStructured("Complete sheet", { type: "object" }, result => assert.equal(result.ok, true), { env, transport, outputTokens: 1000, mode: "schema" });
- assert.deepEqual(tried, ["Bearer groq-1", "Bearer groq-2", "Bearer openai-key"]);
- assert.equal(result.provider, "openai"); assert.equal(result.keySlot, "OPENAI_API_KEY");
+ const free = await run({});
+ assert.deepEqual(free.tried, ["Bearer groq-1", "Bearer groq-2"]);
+ assert.ok(free.error);
+ const paid = await run({ AI_ALLOW_PAID_BACKGROUND: "1" });
+ assert.deepEqual(paid.tried, ["Bearer groq-1", "Bearer groq-2", "Bearer openai-key"]);
+ assert.equal(paid.result.provider, "openai"); assert.equal(paid.result.keySlot, "OPENAI_API_KEY");
 });
-
-
 test("Neutral complete-graph records do not imply acquaintance or social interest", () => {
  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8"), ast = parse(source, { sourceType: "module", plugins: ["jsx"] });
  const context = vm.createContext({});
@@ -462,14 +504,14 @@ test("Placeholder 'instant restart' baselines are gone and old ones are re-read"
  assert.equal(analysisReady(world, w => w.chars), false);
 });
 
-test("The paid GEMINI_API_KEY is the last Gemini key in the general proxy rotation too", () => {
+test("The general proxy keeps free Gemini keys 2-8 apart from the paid key, which only a waiting player may reach last", () => {
  const source = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
- const start = source.indexOf("const GEMINI_KEYS = [");
+ const start = source.indexOf("const GEMINI_FREE_KEYS = [");
  const list = source.slice(start, source.indexOf("]", start));
  const order = [...list.matchAll(/process\.env\.(GEMINI_API_KEY(?:_\d)?)/g)].map(match => match[1]);
- assert.deepEqual(order, ["GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8", "GEMINI_API_KEY"]);
+ assert.deepEqual(order, ["GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8"]);
+ assert.ok(source.includes("const GEMINI_KEYS = [...GEMINI_FREE_KEYS, GEMINI_PAID_KEY]"));
 });
-
 test("Quote check ignores layout only: spacing, typographic quotes and dashes, never words", () => {
  const sheet = "Anna azt mondta:\n  \"Nem bízom benne\" – és elment.";
  const quoted = (evidence) => validateProfile({ ...profile("a"), groups: [], claims: [{ field: "names", value: "a", evidence }] }, sheet, "a", new Set(["a"]));

@@ -37,6 +37,10 @@ function uniqueValues(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+// Sheet analysis is background work: it uses free keys only and, when they are used up,
+// the job waits and retries later. Paid capacity (GEMINI_API_KEY, OpenAI) is opt-in.
+const allowPaid = (env) => String(env.AI_ALLOW_PAID_BACKGROUND || "").trim() === "1";
+
 function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
   const candidates = [];
 
@@ -61,7 +65,7 @@ function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
       }
     }
 
-    if (env.OPENAI_API_KEY) {
+    if (env.OPENAI_API_KEY && allowPaid(env)) {
       candidates.push({
         name: "openai",
         model: env.OPENAI_SCHEMA_MODEL || env.OPENAI_ANALYSIS_MODEL || env.OPENAI_MODEL || env.OPENAI_CHAT_MODEL || "gpt-6-luna",
@@ -98,7 +102,7 @@ function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
   const rotatedFreeSlots = configuredFreeSlots.length
     ? [...configuredFreeSlots.slice(offset), ...configuredFreeSlots.slice(0, offset)]
     : [];
-  const keySlots = [...rotatedFreeSlots, "GEMINI_API_KEY"];
+  const keySlots = [...rotatedFreeSlots, ...(allowPaid(env) ? ["GEMINI_API_KEY"] : [])];
   const seenKeys = new Set();
 
   for (const keySlot of keySlots) {
@@ -117,7 +121,7 @@ function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
     }
   }
 
-  if (env.OPENAI_API_KEY) {
+  if (env.OPENAI_API_KEY && allowPaid(env)) {
     candidates.push({
       name: "openai",
       model: env.OPENAI_ANALYSIS_MODEL || env.OPENAI_MODEL || env.OPENAI_CHAT_MODEL || "gpt-6.1-sol",
@@ -309,7 +313,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
   const failures = [];
   const clock = options.clock || Date.now;
   if (!candidates.length) {
-    const error = new Error("No analysis provider is configured: set GEMINI_API_KEY_2..8 / GEMINI_API_KEY with a GEMINI_ANALYSIS_MODEL (or GEMINI_DEEP_MODEL / GEMINI_MODEL), or an OpenAI key.");
+    const error = new Error("No free analysis provider is configured: set GEMINI_API_KEY_2..8 with a GEMINI_ANALYSIS_MODEL (or GEMINI_DEEP_MODEL / GEMINI_MODEL), or Groq keys. The paid GEMINI_API_KEY and OpenAI are used only with AI_ALLOW_PAID_BACKGROUND=1.");
     error.failures = [];
     throw error;
   }

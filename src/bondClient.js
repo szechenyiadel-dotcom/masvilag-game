@@ -51,24 +51,58 @@ export function htmlToFullText(value, Parser = globalThis.DOMParser) {
   return visit(document);
 }
 
-export function fullSheetText(character, Parser, world) {
+const flattenFields = (fields, Parser) => {
   const flatten = (value) => {
     if (typeof value === "string") return htmlToFullText(value, Parser);
     if (Array.isArray(value)) return value.map(flatten).join("\n");
     if (value && typeof value === "object") return Object.entries(value).map(([key, entry]) => "[" + key + "]\n" + flatten(entry)).join("\n");
     return value == null ? "" : String(value);
   };
-  return flatten(sheetFields(character, world));
+  return flatten(fields);
+};
+
+export function fullSheetText(character, Parser, world) {
+  return flattenFields(sheetFields(character, world), Parser);
 }
 
+// Relationships are read from the Connections field only. The identity fields travel
+// with it because the AI needs the owner's own names to read the text, and the server
+// needs every character's aliases to resolve who is mentioned. Nothing else on the
+// sheet (backstory, personality, album...) reaches the relationship analysis, so
+// editing it neither costs a model call nor changes a bond.
+const IDENTITY_FIELDS = ["name", "nick", "nickname", "username"];
+const hasContent = (value) => value != null && String(value).trim() !== "";
+
+export function relationshipFields(character, world) {
+  const all = sheetFields(character, world);
+  const fields = {};
+  for (const key of [...IDENTITY_FIELDS, "connections"]) if (hasContent(all[key])) fields[key] = all[key];
+  return fields;
+}
+
+export function relationshipSourceText(character, Parser, world) {
+  return flattenFields(relationshipFields(character, world), Parser);
+}
+
+const RELATIONSHIP_SOURCE_PREFIX = "connections-v1:";
+
 export function bondSourceFingerprint(world, subjects) {
+  return RELATIONSHIP_SOURCE_PREFIX + JSON.stringify(subjects(world).map((character) => ({ id: character.id, fields: relationshipFields(character, world) })).sort((a, b) => a.id.localeCompare(b.id)));
+}
+
+// Worlds analysed before the Connections-only reading stored a fingerprint of the whole
+// sheet. While their sheets are unchanged they stay valid: nobody has to wait for a re-read
+// just because the app was updated.
+function legacyBondSourceFingerprint(world, subjects) {
   return JSON.stringify(subjects(world).map((character) => ({ id: character.id, fields: sheetFields(character, world) })).sort((a, b) => a.id.localeCompare(b.id)));
 }
 
 export function analysisReady(world, subjects) {
   // refreshPending marks placeholder baselines written by an earlier "instant
   // restart"; they were never read from the sheets, so they must be read now.
-  return world.bondAnalysis?.version === BOND_ANALYSIS_VERSION && !world.bondAnalysis.refreshPending && world.bondAnalysis.source === bondSourceFingerprint(world, subjects);
+  if (world.bondAnalysis?.version !== BOND_ANALYSIS_VERSION || world.bondAnalysis.refreshPending) return false;
+  const stored = world.bondAnalysis.source;
+  return stored === bondSourceFingerprint(world, subjects) || (!String(stored).startsWith(RELATIONSHIP_SOURCE_PREFIX) && stored === legacyBondSourceFingerprint(world, subjects));
 }
 
 // Sheets and bonds are read by the server, which caches every profile and every
@@ -112,8 +146,8 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
   };
   for (const character of people) {
     await yieldToUi();
-    sheets[character.id] = fullSheetText(character, undefined, world);
-    fieldNames[character.id] = Object.keys(sheetFields(character, world));
+    sheets[character.id] = relationshipSourceText(character, undefined, world);
+    fieldNames[character.id] = Object.keys(relationshipFields(character, world));
   }
 
   const analyze = async (body) => {
