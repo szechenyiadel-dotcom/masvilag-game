@@ -16,6 +16,7 @@ async function request(url, options = {}) {
     if (!response.ok) {
       const error = new Error("Analysis provider HTTP " + response.status + ": " + String(data.error?.message || data.message || "request failed"));
       error.status = response.status;
+      error.invalidOutput = data.error?.code === "json_validate_failed" || response.status === 400 && /failed to validate json/i.test(data.error?.message || "");
       throw error;
     }
     return data;
@@ -28,13 +29,14 @@ function providerCandidates(env) {
     const prefix = name.toUpperCase();
     const models = [...new Set([env[prefix + "_ANALYSIS_MODEL"], env[prefix + "_DEEP_MODEL"]].filter(Boolean))];
     if (!models.length) continue;
-    const keys = Object.keys(env).filter((key) => key === prefix + "_API_KEY" || key.startsWith(prefix + "_API_KEY_")).sort();
+    const primaryKey = env[prefix + "_ANALYSIS_PRIMARY_KEY"] || prefix + "_API_KEY";
+    const keys = Object.keys(env).filter((key) => key === prefix + "_API_KEY" || key.startsWith(prefix + "_API_KEY_")).sort((a, b) => (a === primaryKey ? -1 : b === primaryKey ? 1 : a.localeCompare(b)));
     for (const [modelIndex, model] of models.entries()) {
     const unique = new Set();
     for (const key of keys) {
       if (!env[key] || unique.has(env[key])) continue;
       unique.add(env[key]);
-      candidates.push({ name, model, key: env[key], priority: Number(env[prefix + "_ANALYSIS_PRIORITY"] || (name === "gemini" ? 100 : 80)) - modelIndex * 10, contextWindow: Number(env[prefix + "_ANALYSIS_CONTEXT_WINDOW"]), outputLimit: Number(env[prefix + "_ANALYSIS_OUTPUT_LIMIT"]) });
+      candidates.push({ name, model, key: env[key], keySlot: key, priority: Number(env[prefix + "_ANALYSIS_PRIORITY"] || (name === "gemini" ? 100 : 80)) - modelIndex * 10, contextWindow: Number(env[prefix + "_ANALYSIS_CONTEXT_WINDOW"]), outputLimit: Number(env[prefix + "_ANALYSIS_OUTPUT_LIMIT"]) });
     }
     }
   }
@@ -75,7 +77,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
     if (invalidProviders.has(candidate.name)) continue;
     try {
       const capability = await modelCapabilities(candidate, prompt, schema, transport);
-      const outputTokens = options.outputTokens || 16000;
+      const outputTokens = options.outputTokens || 64000;
       if (!Number.isFinite(capability.inputTokens) || !Number.isFinite(capability.contextWindow) || !Number.isFinite(capability.outputLimit)) throw new Error("Unverified model capacity; configure analysis limits");
       if (capability.contextWindow < Math.ceil(capability.inputTokens * 1.3) + outputTokens || capability.outputLimit < outputTokens) throw new Error("Full input/output does not fit configured model; no truncation performed");
       let validationError = "";
@@ -85,6 +87,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
           const retryCapacity = await modelCapabilities(candidate, completePrompt, schema, transport);
           if (retryCapacity.contextWindow < Math.ceil(retryCapacity.inputTokens * 1.3) + outputTokens) throw new Error("Full repair request does not fit; no truncation performed");
         }
+        try {
         let raw;
         if (candidate.name === "gemini") {
           const data = await transport("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(candidate.model) + ":generateContent", {
@@ -101,11 +104,11 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
           if (data.choices?.[0]?.finish_reason !== "stop") throw new Error("Incomplete Groq analysis: " + (data.choices?.[0]?.finish_reason || "no choice"));
           raw = data.choices[0].message?.content;
         }
-        try {
           const result = JSON.parse(raw);
           validate(result);
-          return { result, provider: candidate.name, model: candidate.model, inputTokens: capability.inputTokens };
+          return { result, provider: candidate.name, model: candidate.model, keySlot: candidate.keySlot, inputTokens: capability.inputTokens };
         } catch (error) {
+          if (error.status && !error.invalidOutput) throw error;
           validationError = error.message;
           if (attempt === 1) {
             invalidProviders.add(candidate.name);
@@ -114,7 +117,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
         }
       }
     } catch (error) {
-      failures.push({ provider: candidate.name, model: candidate.model, status: error.status || null, reason: error.message });
+      failures.push({ provider: candidate.name, model: candidate.model, keySlot: candidate.keySlot, status: error.status || null, reason: error.message });
     }
   }
   const error = new Error("No analysis provider completed the full validated request. " + failures.map((failure) => failure.provider + "/" + failure.model + ": " + failure.reason).join("; "));
@@ -176,7 +179,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
         queue = queue.catch(() => {}).then(async () => {
           try {
             console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, sheetHash: hash, sourceChars: ownSheet.length, submittedChars: ownSheet.length, promptChars: prompt.length }));
-            const analyzed = await analyzeStructured(prompt, schema, validate, { outputTokens: stage === "profile" ? 32000 : Math.max(12000, roster.length * 1600) });
+            const analyzed = await analyzeStructured(prompt, schema, validate, { outputTokens: 64000 });
             await save({ ...metadata, ...analyzed });
           } catch (error) {
             const retryable = error.failures?.some(failure => [429, 500, 502, 503, 504].includes(failure.status) || /abort|network|fetch|ECONN/i.test(failure.reason));

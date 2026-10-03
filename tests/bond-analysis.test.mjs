@@ -236,3 +236,25 @@ test("Sensei and shared affiliation behavior use validated profiles/current laye
  world.rels["a>b"].layers = ["tanítvány–sensei"];
  assert.equal(context.isOwnSenseiRelationship(world, "a", "b"), true); assert.equal(context.explicitSharedSocialContext(a,b,world), true);
 });
+
+test("Provider-side invalid JSON receives two attempts before failover", async () => {
+ const calls = []; let invalid = 0;
+ const transport = async (url, opts) => {
+  if (url.endsWith(":generateContent")) {
+   invalid++; const error = new Error("Provider could not validate JSON"); error.status = 400; error.invalidOutput = true; throw error;
+  }
+  return transportFor("rate", calls)(url, opts);
+ };
+ const result = await analyzeStructured("Complete original sheet", { type: "object" }, result => assert.equal(result.ok, true), { candidates, transport, outputTokens: 1000 });
+ assert.equal(invalid, 2); assert.equal(result.provider, "groq");
+});
+test("Configured paid Groq key is tried first while the other key remains available", async () => {
+ const tried = [];
+ const env = { GROQ_ANALYSIS_MODEL: "configured-groq", GROQ_API_KEY: "free-key", GROQ_API_KEY_2: "paid-key", GROQ_ANALYSIS_PRIMARY_KEY: "GROQ_API_KEY_2", GROQ_ANALYSIS_CONTEXT_WINDOW: "131072", GROQ_ANALYSIS_OUTPUT_LIMIT: "65536" };
+ const transport = async (url, opts) => {
+  if (url.endsWith("/models")) return { data: [{ id: "configured-groq", active: true, context_window: 131072 }] };
+  tried.push(opts.headers.Authorization);return response({ ok: true });
+ };
+ const result = await analyzeStructured("Complete sheet", { type: "object" }, result => assert.equal(result.ok, true), { env, transport, outputTokens: 1000 });
+ assert.equal(tried[0], "Bearer paid-key"); assert.equal(result.keySlot, "GROQ_API_KEY_2");
+});

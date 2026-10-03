@@ -11,6 +11,13 @@ import { fullSheetText } from "../src/bondClient.js";
 if (process.argv.includes("--require-live") && !(process.env.DATABASE_URL && (process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY))) throw new Error("Live acceptance credentials/database are required");
 const liveEnabled = Boolean(process.env.DATABASE_URL && (process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY));
 test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated disposable world", { skip: !liveEnabled, timeout: 3600000 }, async t => {
+ await t.test("Paid second Groq key supports the configured structured analysis model", async () => {
+  assert.ok(process.env.GROQ_API_KEY_2);
+  const schema = { type: "object", properties: { verified: { type: "boolean" } }, required: ["verified"], additionalProperties: false };
+  const env = { GROQ_API_KEY: process.env.GROQ_API_KEY_2, GROQ_ANALYSIS_MODEL: process.env.GROQ_ANALYSIS_MODEL, GROQ_ANALYSIS_CONTEXT_WINDOW: process.env.GROQ_ANALYSIS_CONTEXT_WINDOW, GROQ_ANALYSIS_OUTPUT_LIMIT: process.env.GROQ_ANALYSIS_OUTPUT_LIMIT };
+  const result = await analyzeStructured('Return exactly {"verified":true} using the provided JSON schema.', schema, result => assert.equal(result.verified, true), { env, outputTokens: 64000 });
+  console.info("[bond-live-second-groq-key]", JSON.stringify({ provider: result.provider, model: result.model, verified: result.result.verified }));
+ });
  const people = [
   { id: "p", name: "Anna", nick: "Anni", personality: "Anna visszafogott, lojális, és nehezen beszél a saját érzéseiről.", backstory: "Anna a Cobra Kai tanítványa. A Cobra Kai senseie Sándor. A Cobra Kai és a Miyagi-Do rivális dojók. Anna és Béla régi barátok. Tavaly januárban egyszer volt köztük egy one-night stand a Fő utcai lakásban. Azóta kínos a viszony: Anna többet érez Béla iránt, Béla kerüli a témát. Anna nem meri bevallani az érzéseit; a csapatból senki nem tud az éjszakáról vagy a vonzalmáról. Anna és Dóra között soha nem volt semmi romantikus vagy szexuális. Anna nem vonzódik Dórához.", goals: "Anna szeretné visszanyerni Béla közelségét, de fél a visszautasítástól." },
   { id: "b", name: "Béla", personality: "Béla tárgyilagos, és kerüli az érzelmi vitákat.", backstory: "Béla a Cobra Kai tagja. Sándor a senseie. Anna régi barátja. Tavaly januárban a Fő utcai lakásban egy éjszakát együtt töltöttek. Béla csak barátként tekint Annára, nem vonzódik hozzá. Az eset óta kerüli a témát, mert nem szeretné elrontani a barátságot. A csapatból senki nem tud az éjszakáról. Béla nem tud Anna rejtett vonzalmáról." },
@@ -25,8 +32,8 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
   const prompt = EXTRACT_PROMPT + "\n" + JSON.stringify(payload);
   assert.equal(JSON.parse(prompt.substring(prompt.lastIndexOf("\n") + 1)).ownSheet.length, ownSheet.length);
   console.info("[bond-live-input]", JSON.stringify({ stage: "profile", owner: person.id, sourceChars: ownSheet.length, submittedChars: payload.ownSheet.length }));
-  const output = await analyzeStructured(prompt, ProfileSchema, result => validateProfile(result, ownSheet, person.id, new Set(ids), fieldNames), { outputTokens: 32000 });
-  console.info("[bond-live-provider]", JSON.stringify({ stage: "profile", owner: person.id, provider: output.provider, model: output.model, inputTokens: output.inputTokens }));
+  const output = await analyzeStructured(prompt, ProfileSchema, result => validateProfile(result, ownSheet, person.id, new Set(ids), fieldNames), { outputTokens: 64000 });
+  console.info("[bond-live-provider]", JSON.stringify({ stage: "profile", owner: person.id, provider: output.provider, model: output.model, keySlot: output.keySlot, inputTokens: output.inputTokens }));
   extracted.push(output.result);
  }
  const profiles = resolveProfileReferences(extracted), index = buildGroupIndex(profiles), baselines = {};
@@ -35,8 +42,8 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
   const objectiveFacts = Object.fromEntries(roster.map(p => [p.id, reconcileFacts(person.id, p.id, profiles, index)]));
   const payload = { owner: person.id, ownSheet: sheets[person.id], profile: profiles.find(p => p.id === person.id), roster, groupIndex: index, objectiveFacts, outputLanguage: "Hungarian" };
   console.info("[bond-live-input]", JSON.stringify({ stage: "baseline", owner: person.id, sourceChars: sheets[person.id].length, submittedChars: payload.ownSheet.length }));
-  const output = await analyzeStructured(BASELINE_PROMPT + "\n" + JSON.stringify(payload), BondArraySchema, result => validateBonds(result, person.id, roster, payload.ownSheet, objectiveFacts), { outputTokens: 12000 });
-  console.info("[bond-live-provider]", JSON.stringify({ stage: "baseline", owner: person.id, provider: output.provider, model: output.model, inputTokens: output.inputTokens }));
+  const output = await analyzeStructured(BASELINE_PROMPT + "\n" + JSON.stringify(payload), BondArraySchema, result => validateBonds(result, person.id, roster, payload.ownSheet, objectiveFacts), { outputTokens: 64000 });
+  console.info("[bond-live-provider]", JSON.stringify({ stage: "baseline", owner: person.id, provider: output.provider, model: output.model, keySlot: output.keySlot, inputTokens: output.inputTokens }));
   for (const bond of output.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
  }
  await t.test("A1: teammates and sensei present in every required direction", () => {
@@ -74,11 +81,11 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
 
  await t.test("English source interpretation and English relationship prose retain original evidence", async () => {
   const ownSheet = "Anna is a Cobra Kai student. Anna and Béla are old friends. Last January they had a one-night stand at the flat on Main Street. Afterwards things became awkward: Anna developed deeper feelings, while Béla avoided the subject. Anna hides her feelings; none of the team knows about the night or her attraction. Anna has never had any romantic or sexual relationship with Dóra and is not attracted to her.";
-  const extractedEnglish = await analyzeStructured(EXTRACT_PROMPT + "\n" + JSON.stringify({ owner: "p", ownSheet, fieldNames: [], outputLanguage: "English" }), ProfileSchema, result => validateProfile(result, ownSheet, "p", new Set(ids)), { outputTokens: 32000 });
+  const extractedEnglish = await analyzeStructured(EXTRACT_PROMPT + "\n" + JSON.stringify({ owner: "p", ownSheet, fieldNames: [], outputLanguage: "English" }), ProfileSchema, result => validateProfile(result, ownSheet, "p", new Set(ids)), { outputTokens: 64000 });
   const englishProfiles = resolveProfileReferences([extractedEnglish.result, ...extracted.filter(p => p.id !== "p")]);
   const groupIndex = buildGroupIndex(englishProfiles), roster = englishProfiles.filter(p => p.id !== "p").map(p => ({ id: p.id, names: p.names, groups: p.groups, oneLine: "" }));
   const objectiveFacts = Object.fromEntries(roster.map(p => [p.id, reconcileFacts("p", p.id, englishProfiles, groupIndex)]));
-  const result = await analyzeStructured(BASELINE_PROMPT + "\n" + JSON.stringify({ owner: "p", ownSheet, profile: extractedEnglish.result, roster, groupIndex, objectiveFacts, outputLanguage: "English" }), BondArraySchema, result => validateBonds(result, "p", roster, ownSheet, objectiveFacts), { outputTokens: 12000 });
+  const result = await analyzeStructured(BASELINE_PROMPT + "\n" + JSON.stringify({ owner: "p", ownSheet, profile: extractedEnglish.result, roster, groupIndex, objectiveFacts, outputLanguage: "English" }), BondArraySchema, result => validateBonds(result, "p", roster, ownSheet, objectiveFacts), { outputTokens: 64000 });
   const row = result.result.bonds.find(b => b.to === "b");
   assert.ok(/friend|feeling|awkward|attract/i.test(row.description));
   assert.ok(row.evidence.length && row.evidence.every(q => ownSheet.includes(q)));
