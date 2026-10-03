@@ -366,41 +366,78 @@ test("Restart analysis accounting counts new directed baselines and cached work 
 });
 
 
-test("Restart queues every profile and baseline owner without serial idle gaps", async () => {
- const chars = [
-  { id: "a", name: "a", backstory: "a" },
-  { id: "b", name: "b", backstory: "b" },
-  { id: "c", name: "c", backstory: "c" },
- ];
- const profileSeen = new Set(), baselineSeen = new Set();
- let profileReleased = false, baselineReleased = false;
+test("Normal bond rebuild stays serial and is not marked as restart-fast", async () => {
+ const chars = ["a","b","c","d","e"].map(id => ({ id, name: id, backstory: id }));
+ let inFlight = 0, maxInFlight = 0;
+ const requests = [];
  const api = async (_, options) => {
   const row = JSON.parse(options.body);
-  if (row.stage === "profile") {
-   profileSeen.add(row.owner);
-   if (profileSeen.size === chars.length) profileReleased = true;
-   if (!profileReleased) return { pending: true };
-   return { pending: false, cached: false, cacheKey: "profile:" + row.owner, hash: sheetHash(row.ownSheet), result: profile(row.owner) };
-  }
-  baselineSeen.add(row.owner);
-  if (baselineSeen.size === chars.length) baselineReleased = true;
-  if (!baselineReleased) return { pending: true };
-  return { pending: false, cached: false, cacheKey: "baseline:" + row.owner, hash: sheetHash(row.ownSheet), result: { bonds: row.roster.map(target => bond(row.owner, target.id)) } };
+  requests.push(row);
+  inFlight += 1;
+  maxInFlight = Math.max(maxInFlight, inFlight);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  inFlight -= 1;
+  return {
+   cached: false,
+   cacheKey: row.stage + ":" + row.owner,
+   hash: sheetHash(row.ownSheet),
+   result: row.stage === "profile"
+    ? profile(row.owner)
+    : { bonds: row.roster.map(target => bond(row.owner, target.id)) },
+  };
  };
- const result = await rebuildBondGraph({ chars }, { subjects: w => w.chars, api, pollIntervalMs: 250 });
- assert.equal(profileSeen.size, chars.length);
- assert.equal(baselineSeen.size, chars.length);
+ await rebuildBondGraph({ chars }, { subjects: w => w.chars, api });
+ assert.equal(maxInFlight, 1);
+ assert.ok(requests.every(row => row.restartFast === false));
+});
+
+test("Restart-fast bond rebuild uses bounded parallelism and marks only those requests", async () => {
+ const chars = ["a","b","c","d","e","f"].map(id => ({ id, name: id, backstory: id }));
+ let inFlight = 0, maxInFlight = 0;
+ const requests = [];
+ const api = async (_, options) => {
+  const row = JSON.parse(options.body);
+  requests.push(row);
+  inFlight += 1;
+  maxInFlight = Math.max(maxInFlight, inFlight);
+  await new Promise(resolve => setTimeout(resolve, 15));
+  inFlight -= 1;
+  return {
+   cached: false,
+   cacheKey: row.stage + ":" + row.owner,
+   hash: sheetHash(row.ownSheet),
+   result: row.stage === "profile"
+    ? profile(row.owner)
+    : { bonds: row.roster.map(target => bond(row.owner, target.id)) },
+  };
+ };
+ const result = await rebuildBondGraph(
+  { chars },
+  { subjects: w => w.chars, api, fastRestart: true }
+ );
+ assert.ok(maxInFlight > 1);
+ assert.ok(maxInFlight <= 4);
+ assert.ok(requests.every(row => row.restartFast === true));
  assert.equal(Object.keys(result.baselines).length, chars.length * (chars.length - 1));
 });
 
-test("World restart waits for an in-flight sheet reader instead of rejecting the button", () => {
+test("World restart no longer rejects or waits for background sheet analysis", () => {
  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
  const start = source.indexOf("const restartWorldHistory = async () => {");
  assert.ok(start >= 0);
  const end = source.indexOf("\n  };", start);
  assert.ok(end > start);
  const block = source.slice(start, end);
- assert.ok(block.includes("while (bondAnalysisBusy.has(w.code)"));
- assert.ok(block.includes("pollIntervalMs: 500"));
+ assert.ok(block.includes("fastRestart: true"));
+ assert.ok(block.includes("restartWorldBusy.has(w.code)"));
+ assert.ok(!block.includes("while (bondAnalysisBusy.has(w.code)"));
  assert.ok(!block.includes("Sheet analysis is still running."));
+});
+
+test("Server keeps normal analysis queued but gives restart-fast work its own bounded lane", () => {
+ const source = fs.readFileSync(new URL("../server/bondAnalysis.js", import.meta.url), "utf8");
+ assert.ok(source.includes("const restartConcurrency = 4"));
+ assert.ok(source.includes("if (restartFast)"));
+ assert.ok(source.includes("void runRestartTask(work)"));
+ assert.ok(source.includes("queue = queue.catch(() => {}).then(work)"));
 });
