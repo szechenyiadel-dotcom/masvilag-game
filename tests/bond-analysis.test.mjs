@@ -75,6 +75,46 @@ test("A7: full long original text retained and sent exactly; hashes change", asy
  people[0].backstory += " Változás"; assert.ok(!analysisReady(world, w => w.chars));
  assert.notEqual(sheetHash(calls[0].ownSheet), sheetHash(fullSheetText(people[0])));
 });
+test("Restart fast mode parallelizes analysis while normal analysis stays serial", async () => {
+ const people = ["a", "b", "c", "d"].map(id => ({ id, name: id, backstory: id }));
+ const world = { chars: people };
+ const run = async (fastRestart) => {
+  let active = 0, maxActive = 0;
+  const calls = [];
+  const api = async (_, options) => {
+   const request = JSON.parse(options.body);
+   calls.push(request);
+   active += 1;
+   maxActive = Math.max(maxActive, active);
+   await new Promise(resolve => setTimeout(resolve, 12));
+   active -= 1;
+   return {
+    cached: false,
+    cacheKey: request.stage + ":" + request.owner,
+    hash: sheetHash(request.ownSheet),
+    result: request.stage === "profile"
+      ? { ...profile(request.owner), groups: [] }
+      : { bonds: request.roster.map(row => bond(request.owner, row.id)) },
+   };
+  };
+  await rebuildBondGraph(world, { subjects: w => w.chars, api, language: "hu", fastRestart });
+  return { calls, maxActive };
+ };
+ const normal = await run(false);
+ assert.equal(normal.maxActive, 1);
+ assert.ok(normal.calls.every(call => call.restartFast === false));
+ const restart = await run(true);
+ assert.ok(restart.maxActive >= 2);
+ assert.ok(restart.maxActive <= 4);
+ assert.ok(restart.calls.every(call => call.restartFast === true));
+});
+
+test("Only the Restart World UI enables the restart fast lane", () => {
+ const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+ assert.equal((source.match(/fastRestart:\s*true/g) || []).length, 1);
+ assert.ok(source.includes("bondRestartBusy"));
+});
+
 test("A6/R7: sheet change recomputes complete outgoing graph and incoming dependencies", async () => {
  const people = ids.map(id => ({ id, name: id, backstory: id })); const world = { chars: people };
  const counts = [];
