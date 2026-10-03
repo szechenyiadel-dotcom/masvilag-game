@@ -66,146 +66,137 @@ export function bondSourceFingerprint(world, subjects) {
 }
 
 export function analysisReady(world, subjects) {
-  return world.bondAnalysis?.version === BOND_ANALYSIS_VERSION && world.bondAnalysis.source === bondSourceFingerprint(world, subjects);
+  // refreshPending marks placeholder baselines written by an earlier "instant
+  // restart"; they were never read from the sheets, so they must be read now.
+  return world.bondAnalysis?.version === BOND_ANALYSIS_VERSION && !world.bondAnalysis.refreshPending && world.bondAnalysis.source === bondSourceFingerprint(world, subjects);
 }
 
-export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress = () => {}, fastRestart = false }) {
+// Sheets and bonds are read by the server, which caches every profile and every
+// directed pair. The browser only submits work and polls, so this is the same
+// path for first load, a new character, a sheet edit and Restart World.
+const ANALYSIS_CONCURRENCY = 8;
+// One call reads the owner's whole sheet and writes the bonds toward at most this
+// many people. An answer is validated as a whole, so a long array is likelier to fail
+// on one bond and then has to be written again in full; short arrays run in
+// parallel and a failure only repeats its own part.
+const TARGETS_PER_CALL = 10;
+const POLL_FIRST_MS = 1500;
+const POLL_MAX_MS = 4000;
+const MAX_TRANSIENT_FAILURES = 20;
+
+// A real HTTP status decides. Without one (phone lost signal, server restarting)
+// the browser only gives a message such as "Load failed".
+const transientError = (error) => error?.status
+  ? [408, 429, 500, 502, 503, 504].includes(error.status)
+  : /load failed|failed to fetch|network|fetch|abort|econn|timeout/i.test(String(error?.message || error || ""));
+const unknownJob = (error) => error?.status === 404 || /unknown analysis job/i.test(String(error?.message || ""));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress: report = () => {}, pollMs = POLL_FIRST_MS }) {
   const people = subjects(world);
   const source = bondSourceFingerprint(world, subjects);
-  const profiles = {};
-  const sheets = {};
-  const profileKeys = new Array(people.length);
-  let recalculated = 0;
-  let recalculatedBonds = 0;
-  let profileCompleted = 0;
   const forceRun = force ? String(Date.now()) + ":" + String(Math.random()) : "";
-  const pollDelay = fastRestart ? 500 : 3000;
+  const sheets = {};
+  const fieldNames = {};
+  let failed = false;
+  const progress = (state) => { if (!failed) report(state); };
 
+  // Flattening a large sheet is real work; give the browser a turn now and then so
+  // the page stays responsive on a phone. (Not requestAnimationFrame: it never
+  // fires in a background tab and would stall the analysis.)
+  let lastYield = Date.now();
   const yieldToUi = async () => {
-    if (!fastRestart) return;
-    await new Promise((resolve) => {
-      if (typeof globalThis.requestAnimationFrame === "function") {
-        globalThis.requestAnimationFrame(() => resolve());
-      } else {
-        setTimeout(resolve, 0);
-      }
-    });
+    if (Date.now() - lastYield < 12) return;
+    await sleep(0);
+    lastYield = Date.now();
   };
+  for (const character of people) {
+    await yieldToUi();
+    sheets[character.id] = fullSheetText(character, undefined, world);
+    fieldNames[character.id] = Object.keys(sheetFields(character, world));
+  }
 
   const analyze = async (body) => {
-    const options = {
-      method: "POST",
-      body: JSON.stringify({ ...body, force: forceRun, restartFast: fastRestart }),
-    };
+    let jobKey = null;
+    let missing = null;
     let submitted = false;
     let transientFailures = 0;
-    const transientRestartError = (error) => /load failed|failed to fetch|network|fetch|abort|econn|http\s*(429|500|502|503|504)|\b(429|500|502|503|504)\b/i.test(String(error?.message || error || ""));
-
+    let delay = pollMs;
     for (;;) {
+      if (failed) throw new Error("Analysis cancelled: another part of this run failed");
       try {
-        const response = await api("/ai/bond-analysis", options);
+        const response = await api("/ai/bond-analysis", {
+          method: "POST",
+          body: JSON.stringify(jobKey ? { poll: jobKey } : { ...body, force: forceRun }),
+        });
         transientFailures = 0;
-        if (!response.pending) return { ...response, cached: response.cached && !submitted };
+        if (!response.pending) {
+          const computed = Number.isFinite(response.computed)
+            ? response.computed
+            : (response.cached && !submitted ? 0 : (missing ?? response.result?.bonds?.length ?? 0));
+          return { ...response, cached: response.cached && !submitted, computed };
+        }
         submitted = true;
-        await new Promise(resolve => setTimeout(resolve, pollDelay));
+        jobKey = response.jobKey || null;
+        missing = response.missing ?? missing;
+        await sleep(delay);
+        delay = Math.min(POLL_MAX_MS, Math.round(delay * 1.3));
+        if (failed) throw new Error("Analysis cancelled: another part of this run failed");
       } catch (error) {
-        if (!fastRestart || !transientRestartError(error) || transientFailures >= 20) throw error;
-        transientFailures += 1;
-        // A repeated request is safe: the server cache/active key deduplicates it.
-        // This absorbs brief mobile-network drops and rolling Railway restarts.
-        await new Promise(resolve => setTimeout(resolve, Math.min(3000, 350 + transientFailures * 200)));
+        // The server forgot the job (restart/cleanup): send the full request again.
+        if (jobKey && unknownJob(error)) { jobKey = null; continue; }
+        // Repeating a request is safe because the server de-duplicates by cache key.
+        if (!transientError(error) || ++transientFailures > MAX_TRANSIENT_FAILURES) throw error;
+        await sleep(Math.min(3000, 350 + transientFailures * 200));
       }
     }
   };
 
-  const runLimited = async (items, limit, worker) => {
+  const runLimited = async (items, worker) => {
     let next = 0;
-    const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-      for (;;) {
+    const runners = Array.from({ length: Math.min(ANALYSIS_CONCURRENCY, items.length) }, async () => {
+      while (!failed) {
         const index = next++;
         if (index >= items.length) return;
-        await worker(items[index], index);
+        try { await worker(items[index], index); } catch (error) { failed = true; throw error; }
       }
     });
     await Promise.all(runners);
   };
 
-  if (fastRestart) {
-    // Prepare the heavy local sheet strings cooperatively so mobile Safari gets
-    // a paint/input frame between characters. Once preparation is complete,
-    // launch EVERY profile request in the same turn so AI reading is concurrent.
-    const jobs = [];
-    for (let index = 0; index < people.length; index += 1) {
-      const character = people[index];
-      await yieldToUi();
-      sheets[character.id] = fullSheetText(character, undefined, world);
-      jobs.push({
-        character,
-        index,
-        roster: people
-          .filter((other) => other.id !== character.id)
-          .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) })),
-        fieldNames: Object.keys(sheetFields(character, world)),
-      });
-    }
-
-    // At this point all local work is ready. The map callback reaches api()
-    // immediately for every profile before Promise.all waits for any one result.
-    progress({ phase: "profile", owner: "", completed: 0, started: people.length, total: people.length });
-    await Promise.all(jobs.map(async ({ character, index, roster, fieldNames }) => {
-      const result = await analyze({
-        stage: "profile",
-        owner: character.id,
-        roster,
-        ownSheet: sheets[character.id],
-        fieldNames,
-        language,
-        restartProfileIndex: index,
-      });
-      profiles[character.id] = { profile: result.result, hash: result.hash };
-      profileKeys[index] = result.cacheKey;
-      if (!result.cached) recalculated += 1;
-      profileCompleted += 1;
-      progress({ phase: "profile", owner: character.name, completed: profileCompleted, started: people.length, total: people.length });
-    }));
-  } else {
-    // Preserve the existing serial behavior everywhere except Restart World.
-    for (let index = 0; index < people.length; index += 1) {
-      const character = people[index];
-      sheets[character.id] = fullSheetText(character, undefined, world);
-      const roster = people
-        .filter((other) => other.id !== character.id)
-        .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
-      progress({ phase: "profile", owner: character.name, completed: Object.keys(profiles).length, total: people.length });
-      const result = await analyze({
-        stage: "profile",
-        owner: character.id,
-        roster,
-        ownSheet: sheets[character.id],
-        fieldNames: Object.keys(sheetFields(character, world)),
-        language,
-      });
-      profiles[character.id] = { profile: result.result, hash: result.hash };
-      profileKeys[index] = result.cacheKey;
-      if (!result.cached) recalculated += 1;
-    }
-  }
+  const profiles = {};
+  const profileKeys = new Array(people.length);
+  let recalculated = 0;
+  let done = 0;
+  progress({ phase: "profile", completed: 0, total: people.length });
+  await runLimited(people, async (character, index) => {
+    const result = await analyze({
+      stage: "profile",
+      owner: character.id,
+      roster: people.filter((other) => other.id !== character.id)
+        .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) })),
+      ownSheet: sheets[character.id],
+      fieldNames: fieldNames[character.id],
+      language,
+    });
+    profiles[character.id] = { profile: result.result, hash: result.hash };
+    profileKeys[index] = result.cacheKey;
+    if (!result.cached) recalculated += 1;
+    progress({ phase: "profile", completed: ++done, total: people.length });
+  });
 
   const baselines = {};
-  const baselineConcurrency = fastRestart ? Math.min(4, Math.max(1, people.length)) : 1;
-  await runLimited(people, baselineConcurrency, async (character) => {
-    // A cached profile may have completed before its local sheet was flattened
-    // in another worker, so guarantee the owner's exact sheet is available.
-    if (!sheets[character.id]) sheets[character.id] = fullSheetText(character, undefined, world);
-    const roster = people
-      .filter((other) => other.id !== character.id)
+  let recalculatedBonds = 0;
+  const parts = people.flatMap((character) => {
+    const others = people.filter((other) => other.id !== character.id)
       .map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
-    progress({
-      phase: "baseline",
-      owner: character.name,
-      completed: Object.keys(baselines).length,
-      total: people.length * (people.length - 1),
-    });
+    const chunks = [];
+    for (let at = 0; at < others.length; at += TARGETS_PER_CALL) chunks.push(others.slice(at, at + TARGETS_PER_CALL));
+    return chunks.map((roster) => ({ character, roster }));
+  });
+  done = 0;
+  progress({ phase: "baseline", completed: 0, total: parts.length });
+  await runLimited(parts, async ({ character, roster }) => {
     const result = await analyze({
       stage: "baseline",
       owner: character.id,
@@ -214,8 +205,9 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       profileKeys,
       language,
     });
-    if (!result.cached) recalculatedBonds += result.result.bonds.length;
+    recalculatedBonds += result.computed;
     for (const bond of result.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
+    progress({ phase: "baseline", completed: ++done, total: parts.length });
   });
 
   assertCompleteGraph(people.map((character) => character.id), baselines);
@@ -231,6 +223,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
     },
   };
 }
+
 
 export function installBondGraph(world, result, subjects) {
   if (result.analysis.source !== bondSourceFingerprint(world, subjects)) throw new Error("Character sheets changed during analysis; retry with current sheets");

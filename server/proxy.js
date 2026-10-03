@@ -2182,10 +2182,16 @@ app.post("/world/save", async (req, res) => {
     if (nextWorld.universe) nextWorld.universe.at = Date.now();
 
     if (req.body?.bondReset) {
-      const ids = [...new Set([...Object.values(nextWorld.players || {}).map(c => c.id), ...(nextWorld.chars || []).map(c => c.id), ...(nextWorld.player?.id ? [nextWorld.player.id] : [])])];
-      assertCompleteGraph(ids, nextWorld.relationshipBaselines || {});
-      if (JSON.stringify(nextWorld.rels) !== JSON.stringify(nextWorld.relationshipBaselines)) throw new Error("Restart graph differs from baseline");
-      if (!nextWorld.bondAnalysis?.version) throw new Error("Validated sheet analysis is missing");
+      try {
+        const ids = [...new Set([...Object.values(nextWorld.players || {}).map(c => c.id), ...(nextWorld.chars || []).map(c => c.id), ...(nextWorld.player?.id ? [nextWorld.player.id] : [])])];
+        assertCompleteGraph(ids, nextWorld.relationshipBaselines || {});
+        if (JSON.stringify(nextWorld.rels) !== JSON.stringify(nextWorld.relationshipBaselines)) throw new Error("Restart graph differs from baseline");
+        if (!nextWorld.bondAnalysis?.version) throw new Error("Validated sheet analysis is missing");
+      } catch (validationError) {
+        /* A rule violation is final (answered with 422 and the reason), not a server fault to retry. */
+        validationError.restartRejected = true;
+        throw validationError;
+      }
       await client.query("DELETE FROM character_memories WHERE world_code = $1", [session.worldCode]);
     }
     const nextWorldJson = stringifyJsonbSafe(nextWorld, "world-save");
@@ -2222,6 +2228,7 @@ app.post("/world/save", async (req, res) => {
     }
 
     console.error("World save error:", err);
+    if (err && err.restartRejected) return res.status(422).json({ error: "Restart rejected: " + err.message });
     return res.status(500).json({ error: "World save failed." });
   }
 });
@@ -5032,21 +5039,25 @@ async function proxyOpenAIMessage(
 
 /* R71: rotate every configured Gemini key currently provisioned on Railway.
    Quota-exhausted keys rest; one bad key never disables the later keys. */
+/* Only GEMINI_API_KEY is paid; keys 2-8 are free. The free keys are tried first
+   and the paid key is the LAST Gemini option (OpenAI comes after Gemini). */
 const GEMINI_KEYS = [
-  process.env.GEMINI_API_KEY,
   process.env.GEMINI_API_KEY_2,
   process.env.GEMINI_API_KEY_3,
   process.env.GEMINI_API_KEY_4,
   process.env.GEMINI_API_KEY_5,
   process.env.GEMINI_API_KEY_6,
   process.env.GEMINI_API_KEY_7,
+  process.env.GEMINI_API_KEY_8,
+  process.env.GEMINI_API_KEY,
 ].map((k) => String(k || "").trim()).filter(Boolean).filter((k, i, a) => a.indexOf(k) === i);
 const GEMINI_KEY_REST_UNTIL = new Map();
 
 async function proxyGeminiMessage(body) {
   if (!GEMINI_KEYS.length) return { unavailable: true, provider: "gemini" };
   const usable = GEMINI_KEYS.filter((k) => (GEMINI_KEY_REST_UNTIL.get(k) || 0) <= Date.now());
-  const keys = usable.length ? usable : GEMINI_KEYS.slice(0, 1);
+  /* If every key is resting, the paid key (last) is the one most likely to answer. */
+  const keys = usable.length ? usable : GEMINI_KEYS.slice(-1);
 
   /* Keep key rotation inside ONE request budget. This lets 503/high-demand try
      later Gemini keys without multiplying an 8–45s planner request by five. */

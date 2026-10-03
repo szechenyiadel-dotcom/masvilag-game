@@ -4,7 +4,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { createRequire } from "node:module";
 import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema } from "../src/bondAnalysis.js";
-import { fullSheetText, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext } from "../src/bondClient.js";
+import { fullSheetText, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext, bondSourceFingerprint } from "../src/bondClient.js";
 import { sheetHash, analyzeStructured } from "../server/bondAnalysis.js";
 const require = createRequire(import.meta.url);
 const { parse } = require("@babel/parser");
@@ -293,6 +293,7 @@ test("Invalid Gemini JSON can be normalized by Groq without changing semantic pr
  const transport = async (url, opts) => {
   if (url.endsWith(":countTokens")) return { totalTokens: 100 };
   if (url.endsWith(":generateContent")) { calls.push("gemini"); return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":false}' }] } }] }; }
+  if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
   if (url.endsWith("/models")) return { data: [{ id: "schema-groq", active: true, context_window: 1000000, max_completion_tokens: 65536 }] };
   calls.push("groq"); return response({ ok: true });
  };
@@ -396,53 +397,7 @@ test("Restart analysis accounting counts new directed baselines and cached work 
 });
 
 
-test("Restart starts every profile together, keeps baselines bounded, and normal analysis stays serial", async () => {
- const people = ["a", "b", "c", "d", "e", "f"].map(id => ({ id, name: id, backstory: id }));
- const world = { chars: people };
-
- const run = async (fastRestart) => {
-  const active = { profile: 0, baseline: 0 };
-  const maxActive = { profile: 0, baseline: 0 };
-  const calls = [];
-  const api = async (_, options) => {
-   const request = JSON.parse(options.body);
-   calls.push(request);
-   active[request.stage] += 1;
-   maxActive[request.stage] = Math.max(maxActive[request.stage], active[request.stage]);
-   await new Promise(resolve => setTimeout(resolve, 18));
-   active[request.stage] -= 1;
-   return {
-    cached: false,
-    cacheKey: request.stage + ":" + request.owner,
-    hash: sheetHash(request.ownSheet),
-    result: request.stage === "profile"
-      ? { ...profile(request.owner), groups: [] }
-      : { bonds: request.roster.map(row => bond(request.owner, row.id)) },
-   };
-  };
-
-  await rebuildBondGraph(world, { subjects: w => w.chars, api, language: "hu", fastRestart });
-  return { calls, maxActive };
- };
-
- const normal = await run(false);
- assert.equal(normal.maxActive.profile, 1);
- assert.equal(normal.maxActive.baseline, 1);
- assert.ok(normal.calls.every(call => call.restartFast === false));
-
- const restart = await run(true);
- assert.equal(restart.maxActive.profile, people.length);
- assert.ok(restart.maxActive.baseline >= 2);
- assert.ok(restart.maxActive.baseline <= 4);
- assert.ok(restart.calls.every(call => call.restartFast === true));
- const profileIndexes = restart.calls
-  .filter(call => call.stage === "profile")
-  .map(call => call.restartProfileIndex)
-  .sort((a,b) => a-b);
- assert.deepEqual(profileIndexes, people.map((_, index) => index));
-});
-
-test("Restart fast mode retries a transient Load failed instead of failing the whole rebuild", async () => {
+test("A transient Load failed is retried instead of failing the whole rebuild", async () => {
  const chars = [{ id: "a", name: "a", backstory: "a" }, { id: "b", name: "b", backstory: "b" }];
  const attempts = new Map();
  const api = async (_, options) => {
@@ -461,61 +416,68 @@ test("Restart fast mode retries a transient Load failed instead of failing the w
     : { bonds: row.roster.map(target => bond(row.owner, target.id)) },
   };
  };
- const result = await rebuildBondGraph({ chars }, { subjects: w => w.chars, api, fastRestart: true });
+ const result = await rebuildBondGraph({ chars }, { subjects: w => w.chars, api });
  assert.equal(attempts.get("profile:a"), 2);
  assert.equal(Object.keys(result.baselines).length, 2);
 });
 
-test("Restart saves immediately before any background sheet reread", () => {
+test("Restart works from the latest live world, installs the analysis there, and retries a save conflict", () => {
  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
  const start = source.indexOf("const restartWorldHistory = async () => {");
  assert.ok(start >= 0);
- const end = source.indexOf("\n  };", start);
- assert.ok(end > start);
- const block = source.slice(start, end);
- const saveIndex = block.indexOf("serverSaveWorld(draft, { bondReset: true })");
- const backgroundIndex = block.indexOf("rebuildBondGraph(refreshSnapshot");
- assert.ok(saveIndex >= 0);
- assert.ok(backgroundIndex > saveIndex);
- assert.ok(block.includes("ensureInstantRestartRelationshipBaselines(draft)"));
- assert.ok(block.includes("markRestartAnalysisUsableImmediately(draft)"));
- assert.ok(block.includes("setRestartConfirm(false)"));
+ const block = source.slice(start, source.indexOf("\n  };", start));
+ const order = ["update(n => { fresh = cloneWorldState(n); })", "analysisReady(fresh, allSubjects)", "await rebuildBondGraph(fresh", "installBondGraph(n, result, allSubjects)", "restartWorldHistoryInPlace(fresh)", "serverSaveWorld(fresh, { bondReset: true })"].map(part => block.indexOf(part));
+ assert.ok(order.every(index => index >= 0), "missing step: " + order);
+ assert.deepEqual([...order].sort((a, b) => a - b), order, "steps are out of order");
+ assert.ok(!/force:\s*true/.test(block), "Restart must reuse the server cache, never force a full re-read");
+ assert.ok(!block.includes("cloneWorldState(w)"), "never save a click-time copy of the world");
+ assert.ok(block.includes("error?.status !== 409"), "a save conflict means: take the newest world and redo");
+ assert.ok(block.includes("bondAnalysisBusy.add(w.code)") && block.includes("bondAnalysisBusy.delete(w.code)"));
+ assert.ok(block.includes("setErr(") && block.indexOf("setErr(") < block.indexOf("bondRestartBusy.add(w.code)"), "a click ignored because a restart is running must say so");
 });
 
-test("Instant restart baseline helper fills every directed pair without AI", () => {
+test("A restart the rules reject is answered 422 with the reason, never a retried 500", () => {
+ const source = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
+ assert.ok(source.includes("validationError.restartRejected = true"));
+ assert.ok(source.includes('res.status(422).json({ error: "Restart rejected: " + err.message })'));
+});
+
+test("validateBonds checks witnesses against the whole cast, the roster only for completeness", () => {
+ const one = (extra) => ({ bonds: [bond("a", "b", extra)] });
+ const roster = [{ id: "b" }];
+ const own = "a lap";
+ assert.throws(() => validateBonds(one({ whoKnows: ["a", "c"] }), "a", roster, own, { b: [] }), /Unknown hidden observer/, "without a cast list only the slice is known (old behaviour)");
+ validateBonds(one({ whoKnows: ["a", "c"] }), "a", roster, own, { b: [] }, ["a", "b", "c", "d"]);
+ assert.throws(() => validateBonds(one({ whoKnows: ["a", "zed"] }), "a", roster, own, { b: [] }, ["a", "b", "c"]), /Unknown hidden observer/, "an invented character is still rejected");
+ assert.throws(() => validateBonds({ bonds: [] }, "a", roster, own, { b: [] }, ["a", "b", "c"]), /Incomplete outgoing bond graph/, "every target in the slice still needs its bond");
+});
+
+test("Placeholder 'instant restart' baselines are gone and old ones are re-read", () => {
  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
- const start = source.indexOf("function ensureInstantRestartRelationshipBaselines(w) {");
- assert.ok(start >= 0);
- const end = source.indexOf("\n}\n\nfunction markRestartAnalysisUsableImmediately", start);
- assert.ok(end > start);
- const block = source.slice(start, end);
- assert.ok(block.includes("for (const from of ids)"));
- assert.ok(block.includes("for (const to of ids)"));
- assert.ok(block.includes('previous[key] || live[key] || {}'));
- assert.ok(block.includes('source: seed.source || "logikai következtetés"'));
- assert.ok(block.includes("freshFromSheet: true"));
+ for (const name of ["ensureInstantRestartRelationshipBaselines", "markRestartAnalysisUsableImmediately", "bondRestartRefreshBusy", "fastRestart"]) assert.ok(!source.includes(name), name);
+ const chars = [{ id: "a", name: "a", backstory: "a" }];
+ const world = { chars, bondAnalysis: { version: 1, source: bondSourceFingerprint({ chars }, w => w.chars), profiles: {} } };
+ assert.equal(analysisReady(world, w => w.chars), true);
+ world.bondAnalysis.refreshPending = true;
+ assert.equal(analysisReady(world, w => w.chars), false);
 });
 
-test("Restart World stays seamless in UI while preserving simultaneous profile launch", () => {
- const appSource = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
- assert.equal((appSource.match(/fastRestart:\s*true/g) || []).length, 1);
- assert.ok(appSource.includes("bondRestartBusy"));
- assert.ok(appSource.includes("restartBusy"));
- assert.ok(appSource.includes('tt("Újraindítás…", "Restarting…")'));
- assert.ok(!appSource.includes("Profiles: "));
- assert.ok(!appSource.includes("Profilok: "));
-
- const clientSource = fs.readFileSync(new URL("../src/bondClient.js", import.meta.url), "utf8");
- assert.ok(clientSource.includes("await Promise.all(jobs.map"));
- assert.ok(clientSource.includes("requestAnimationFrame"));
- assert.ok(clientSource.includes("restartProfileIndex: index"));
- assert.ok(clientSource.includes("transientRestartError"));
- assert.ok(clientSource.includes("baselineConcurrency"));
-
- const serverSource = fs.readFileSync(new URL("../server/bondAnalysis.js", import.meta.url), "utf8");
- assert.ok(serverSource.includes('restartFast && stage === "profile"'));
- assert.ok(serverSource.includes("const restartBaselineConcurrency = 4"));
- assert.ok(serverSource.includes("queue = queue.catch(() => {}).then(work)"));
+test("The paid GEMINI_API_KEY is the last Gemini key in the general proxy rotation too", () => {
+ const source = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
+ const start = source.indexOf("const GEMINI_KEYS = [");
+ const list = source.slice(start, source.indexOf("]", start));
+ const order = [...list.matchAll(/process\.env\.(GEMINI_API_KEY(?:_\d)?)/g)].map(match => match[1]);
+ assert.deepEqual(order, ["GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8", "GEMINI_API_KEY"]);
 });
 
-
+test("Quote check ignores layout only: spacing, typographic quotes and dashes, never words", () => {
+ const sheet = "Anna azt mondta:\n  \"Nem bízom benne\" – és elment.";
+ const quoted = (evidence) => validateProfile({ ...profile("a"), groups: [], claims: [{ field: "names", value: "a", evidence }] }, sheet, "a", new Set(["a"]));
+ quoted("Nem bízom benne");
+ quoted("Anna azt mondta: \u201CNem bízom benne\u201D - és elment.");
+ assert.throws(() => quoted("Nem bízom benne senkiben"));
+ assert.throws(() => quoted("Nem bízom BENNE"));
+ assert.throws(() => quoted("\u200B"), "invisible characters are not a quotation");
+ assert.throws(() => quoted("   "));
+ assert.throws(() => quoted(42));
+});

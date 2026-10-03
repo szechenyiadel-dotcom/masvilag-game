@@ -7,6 +7,12 @@ import {
 
 export const sheetHash = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
+// A failure is worth retrying later only if it says nothing about the answer itself:
+// rate limits, overload, or the connection dropping. An answer that was received
+// but did not validate is NOT transient, however it is worded.
+const TRANSIENT_STATUSES = [408, 429, 500, 502, 503, 504, 529];
+const isTransient = (error) => error?.transient ?? TRANSIENT_STATUSES.includes(error?.status);
+
 async function request(url, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 600000);
@@ -20,6 +26,10 @@ async function request(url, options = {}) {
       throw error;
     }
     return data;
+  } catch (error) {
+    // No HTTP status: the connection failed, timed out, or the body was not JSON.
+    if (error.status === undefined && error.transient === undefined) error.transient = true;
+    throw error;
   } finally { clearTimeout(timer); }
 }
 
@@ -266,6 +276,7 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
         model: candidate.model,
         keySlot: candidate.keySlot,
         status: error.status || null,
+        transient: isTransient(error),
         reason: error.message,
       });
     }
@@ -280,8 +291,18 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
   const mode = options.mode === "schema" ? "schema" : "semantic";
   const candidates = options.candidates || providerCandidates(env, mode, options.semanticStartOffset || 0);
   const failures = [];
+  const clock = options.clock || Date.now;
+  if (!candidates.length) {
+    const error = new Error("No analysis provider is configured: set GEMINI_API_KEY_2..8 / GEMINI_API_KEY with a GEMINI_ANALYSIS_MODEL (or GEMINI_DEEP_MODEL / GEMINI_MODEL), or an OpenAI key.");
+    error.failures = [];
+    throw error;
+  }
 
   for (const candidate of candidates) {
+    if (options.deadline && clock() > options.deadline) {
+      failures.push({ phase: mode, provider: candidate.name, model: candidate.model, keySlot: candidate.keySlot, status: null, transient: false, reason: "analysis deadline exceeded" });
+      break;
+    }
     let raw = "";
     try {
       const capability = await modelCapabilities(candidate, prompt, schema, transport);
@@ -333,6 +354,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
         model: candidate.model,
         keySlot: candidate.keySlot,
         status: error.status || null,
+        transient: isTransient(error),
         reason: error.message,
       });
     }
@@ -351,116 +373,201 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
   throw error;
 }
 
-export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe }) {
-  const active = new Set();
-  let queue = Promise.resolve();
+const RETRY_COOLDOWN_MS = 60000;
+const FAILURE_COOLDOWN_MS = 300000;
+const MAX_RETRY_ROUNDS = 4;
+const languageName = (language) => (language === "en" ? "English" : "Hungarian");
+const cacheKeyFor = (parts) => "bond-v" + BOND_ANALYSIS_VERSION + ":" + sheetHash(parts.join("\n"));
 
-  // Restart World profiles are intentionally not queued: all profile reads may
-  // start together. Only the much heavier baseline/relationship generation stays
-  // capped. Normal/background/manual analysis still uses the original serial queue.
-  const restartBaselineConcurrency = 4;
-  let restartBaselineInFlight = 0;
-  const restartBaselineWaiters = [];
-  const runRestartBaselineTask = async (task) => {
-    if (restartBaselineInFlight >= restartBaselineConcurrency) {
-      await new Promise((resolve) => restartBaselineWaiters.push(resolve));
-    }
-    restartBaselineInFlight += 1;
-    try {
-      return await task();
-    } finally {
-      restartBaselineInFlight -= 1;
-      const next = restartBaselineWaiters.shift();
-      if (next) next();
-    }
+export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, analyze = analyzeStructured, env = process.env, clock = Date.now }) {
+  // One scheduler for every job. The browser may submit all sheets at once; the
+  // server decides how many heavy model calls really run together.
+  const concurrency = Math.max(1, Number(env.BOND_ANALYSIS_CONCURRENCY) || 8);
+  const deadlineMs = Math.max(60000, Number(env.BOND_ANALYSIS_DEADLINE_MS) || 1200000);
+  const active = new Set();
+  const waiting = [];
+  let running = 0;
+  let rotation = 0;
+
+  const schedule = (task) => new Promise((resolve, reject) => {
+    const start = () => {
+      running += 1;
+      task().then(resolve, reject).finally(() => {
+        running -= 1;
+        const next = waiting.shift();
+        if (next) next();
+      });
+    };
+    if (running < concurrency) start(); else waiting.push(start);
+  });
+
+  const readRows = async (keys) => {
+    if (!keys.length) return new Map();
+    const rows = await pool.query("SELECT cache_key, data FROM relationship_reading_cache WHERE cache_key = ANY($1::text[])", [keys]);
+    return new Map(rows.rows.map((row) => [row.cache_key, row.data]));
   };
+  const readRow = async (key) => (await readRows([key])).get(key) || null;
+  const saveRow = (key, data) => pool.query(
+    "INSERT INTO relationship_reading_cache (cache_key,data,updated_at) VALUES ($1,$2::jsonb,NOW()) ON CONFLICT (cache_key) DO UPDATE SET data=EXCLUDED.data, updated_at=NOW()",
+    [key, stringifyJsonbSafe(data, "bond-analysis")],
+  );
+
+  // Turns a request into: the validated pieces, the cache keys, and (for a baseline)
+  // which targets are already known. Nothing here calls a model.
+  async function prepare(session, body) {
+    const { stage, owner, roster, ownSheet, profileKeys, language, force, fieldNames = [] } = body || {};
+    if (!["profile", "baseline"].includes(stage) || typeof owner !== "string" || typeof ownSheet !== "string" || !Array.isArray(roster)) throw Object.assign(new Error("Invalid analysis request"), { status: 400 });
+    const ids = new Set([owner, ...roster.map((entry) => entry.id)]);
+    if (ids.size !== roster.length + 1) throw Object.assign(new Error("Duplicate roster IDs"), { status: 400 });
+    const world = session.worldCode;
+    const hash = sheetHash(ownSheet);
+    const outputLanguage = languageName(language);
+    const metadata = { stage, world, hash, version: BOND_ANALYSIS_VERSION, sourceChars: ownSheet.length, submittedChars: ownSheet.length };
+
+    if (stage === "profile") {
+      const prompt = EXTRACT_PROMPT + "\n" + JSON.stringify({ owner, ownSheet, fieldNames, outputLanguage });
+      return {
+        stage, metadata, body, owner, hash, schema: ProfileSchema, prompt,
+        jobKey: cacheKeyFor([world, stage, prompt, String(force || "")]),
+        validate: (value) => validateProfile(value, ownSheet, owner, ids, fieldNames),
+      };
+    }
+
+    // The request names only this owner and one slice of targets, but group
+    // facts are derived from EVERY profile, so every profile key must be present.
+    if (!Array.isArray(profileKeys) || profileKeys.length < ids.size) throw Object.assign(new Error("All profiles are required before group inference"), { status: 400 });
+    const stored = await readRows(profileKeys);
+    const profiles = profileKeys.map((key) => stored.get(key)).filter((row) => row?.result && row.version === BOND_ANALYSIS_VERSION && row.world === world && row.stage === "profile");
+    if (profiles.length !== profileKeys.length || new Set(profiles.map((row) => row.result.id)).size !== profiles.length || [...ids].some((id) => !profiles.some((row) => row.result.id === id))) throw new Error("Missing or mismatched cached profiles");
+    const own = profiles.find((row) => row.result.id === owner);
+    if (!own || own.hash !== hash) throw new Error("Owner sheet changed since profile analysis");
+    const allProfiles = resolveProfileReferences(profiles.map((row) => row.result));
+    const ownProfile = allProfiles.find((profile) => profile.id === owner);
+    const castIds = allProfiles.map((profile) => profile.id);
+    const groupIndex = buildGroupIndex(allProfiles);
+    const cards = roster.map((target) => {
+      const profile = allProfiles.find((candidate) => candidate.id === target.id);
+      return { id: target.id, names: profile.names, groups: profile.groups, oneLine: target.oneLine || "" };
+    });
+    const facts = Object.fromEntries(cards.map((card) => [card.id, reconcileFacts(owner, card.id, allProfiles, groupIndex)]));
+
+    // A bond depends only on the owner's sheet, the target's card and the objective
+    // facts for this pair. The key therefore holds the owner's profile as extracted
+    // (it does not change when someone joins) plus only those resolved references that
+    // concern THIS target, so a new character never forces the bonds between everyone
+    // else to be read again.
+    const pairKeys = cards.map((card) => cacheKeyFor([world, "pair", owner, hash, JSON.stringify(own.result), JSON.stringify({
+      mentions: ownProfile.mentions.filter((row) => row.targetId === card.id),
+      facts: ownProfile.facts.filter((row) => row.targetId === card.id),
+    }), JSON.stringify(card), JSON.stringify(facts[card.id]), outputLanguage, BASELINE_PROMPT, String(force || "")]));
+    const known = await readRows(pairKeys);
+    const bonds = new Map();
+    cards.forEach((card, index) => {
+      const row = known.get(pairKeys[index]);
+      if (!row?.bond || row.version !== BOND_ANALYSIS_VERSION || row.world !== world) return;
+      try {
+        validateBonds({ bonds: [row.bond] }, owner, [card], ownSheet, { [card.id]: facts[card.id] }, castIds);
+        bonds.set(card.id, row.bond);
+      } catch { /* stale or corrupt entry: read this pair again */ }
+    });
+    const missing = cards.filter((card) => !bonds.has(card.id));
+    const prompt = BASELINE_PROMPT + "\n" + JSON.stringify({ owner, ownSheet, profile: ownProfile, roster: missing, objectiveFacts: Object.fromEntries(missing.map((card) => [card.id, facts[card.id]])), outputLanguage });
+    return {
+      stage, metadata, body, owner, hash, schema: BondArraySchema, prompt, cards, pairKeys, bonds, missing,
+      jobKey: cacheKeyFor([world, stage, prompt, String(force || "")]),
+      validate: (value) => validateBonds(value, owner, missing, ownSheet, Object.fromEntries(missing.map((card) => [card.id, facts[card.id]])), castIds),
+    };
+  }
+
+  // A finished baseline job is completed from the per-pair rows it stored.
+  async function assembleBaseline(job, jobKey) {
+    const rows = await readRows(job.pairKeys);
+    const bonds = job.pairKeys.map((key) => rows.get(key)?.bond);
+    if (bonds.some((bond) => !bond)) return null;
+    return { ...job, request: undefined, result: { bonds }, jobKey, cacheKey: jobKey, pending: false };
+  }
+
+  function launch(prepared, previous) {
+    const { jobKey, stage, owner, hash, prompt, schema, validate, metadata, body } = prepared;
+    active.add(jobKey);
+    const attempts = previous?.terminal ? 0 : Number(previous?.attempts || 0);
+    const work = async () => {
+      try {
+        console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, sheetHash: hash, sourceChars: metadata.sourceChars, promptChars: prompt.length, targets: prepared.missing?.length }));
+        const analyzed = await analyze(prompt, schema, validate, { outputTokens: 64000, semanticStartOffset: rotation++, deadline: clock() + deadlineMs, clock });
+        if (stage === "baseline") {
+          await Promise.all(analyzed.result.bonds.map((bond) => {
+            const index = prepared.cards.findIndex((card) => card.id === bond.to);
+            return saveRow(prepared.pairKeys[index], { stage: "pair", world: metadata.world, version: BOND_ANALYSIS_VERSION, owner, hash, bond, provider: analyzed.provider, model: analyzed.model, keySlot: analyzed.keySlot });
+          }));
+          await saveRow(jobKey, { ...metadata, ...analyzed, pairKeys: prepared.pairKeys, computed: analyzed.result.bonds.length });
+        } else {
+          await saveRow(jobKey, { ...metadata, ...analyzed });
+        }
+      } catch (error) {
+        // Retry later only when the providers were unavailable (rate limit, overload,
+        // connection). If models answered and the answers did not validate, repeating the
+        // same sweep would only repeat the same cost: wait out the cooldown instead.
+        const asked = (error.failures || []).filter((failure) => failure.phase !== "schema-repair");
+        const unavailable = (failure) => failure.transient ?? TRANSIENT_STATUSES.includes(failure.status);
+        const retryable = error.failures ? asked.length > 0 && asked.filter(unavailable).length * 2 > asked.length : true;
+        const rounds = attempts + 1;
+        const terminal = !retryable || rounds >= MAX_RETRY_ROUNDS;
+        console.warn("[bond-analysis-failed]", stage, owner, "round " + rounds, terminal ? "(giving up for now)" : "(will retry)", error.message);
+        await saveRow(jobKey, { ...metadata, request: body, pending: !terminal, terminal, attempts: rounds, error: error.message, retryAt: clock() + (terminal ? FAILURE_COOLDOWN_MS : RETRY_COOLDOWN_MS) });
+      } finally {
+        active.delete(jobKey);
+      }
+    };
+    return saveRow(jobKey, { ...metadata, request: body, pending: true, attempts }).then(
+      () => { schedule(work).catch((error) => console.warn("[bond-analysis-schedule]", error.message)); },
+      (error) => { active.delete(jobKey); throw error; },
+    );
+  }
 
   app.post("/ai/bond-analysis", async (req, res) => {
     try {
       if (!(await requireDb(res))) return;
       const session = await getSessionIdentity(req);
       if (!session) return res.status(401).json({ error: "Not authenticated." });
-      const { stage, owner, roster, ownSheet, profileKeys, language, force, restartFast = false, restartProfileIndex = 0, fieldNames = [] } = req.body || {};
-      if (!["profile", "baseline"].includes(stage) || typeof owner !== "string" || typeof ownSheet !== "string" || !Array.isArray(roster)) return res.status(400).json({ error: "Invalid analysis request" });
-      const ids = new Set([owner, ...roster.map((entry) => entry.id)]);
-      if (ids.size !== roster.length + 1) return res.status(400).json({ error: "Duplicate roster IDs" });
-      const hash = sheetHash(ownSheet);
-      let schema, prompt, validate;
-      if (stage === "profile") {
-        schema = ProfileSchema;
-        prompt = EXTRACT_PROMPT + "\n" + JSON.stringify({ owner, ownSheet, fieldNames, outputLanguage: language === "en" ? "English" : "Hungarian" });
-        validate = (value) => validateProfile(value, ownSheet, owner, ids, fieldNames);
-      } else {
-        if (!Array.isArray(profileKeys) || profileKeys.length !== ids.size) return res.status(400).json({ error: "All profiles are required before group inference" });
-        const rows = await pool.query("SELECT data FROM relationship_reading_cache WHERE cache_key = ANY($1::text[])", [profileKeys]);
-        const profiles = rows.rows.map((row) => row.data).filter((row) => row.version === BOND_ANALYSIS_VERSION && row.world === session.worldCode && row.stage === "profile");
-        if (profiles.length !== ids.size || new Set(profiles.map((row) => row.result.id)).size !== ids.size || profiles.some((row) => !ids.has(row.result.id))) throw new Error("Missing or mismatched cached profiles");
-        const own = profiles.find((row) => row.result.id === owner);
-        if (!own || own.hash !== hash) throw new Error("Owner sheet changed since profile analysis");
-        const allProfiles = resolveProfileReferences(profiles.map((row) => row.result));
-        const groupIndex = buildGroupIndex(allProfiles);
-        const objectiveFacts = Object.fromEntries(roster.map((target) => [target.id, reconcileFacts(owner, target.id, allProfiles, groupIndex)]));
-        const cards = roster.map((target) => {
-          const profile = allProfiles.find((p) => p.id === target.id);
-          return { id: target.id, names: profile.names, groups: profile.groups, oneLine: target.oneLine || "" };
-        });
-        schema = BondArraySchema;
-        prompt = BASELINE_PROMPT + "\n" + JSON.stringify({ owner, ownSheet, profile: own.result, roster: cards, groupIndex, objectiveFacts, outputLanguage: language === "en" ? "English" : "Hungarian" });
-        validate = (value) => validateBonds(value, owner, cards, ownSheet, objectiveFacts);
+      let body = req.body || {};
+
+      // Polling sends only the job key, never the sheet again.
+      if (typeof body.poll === "string") {
+        const job = await readRow(body.poll);
+        if (!job || job.world !== session.worldCode) return res.status(404).json({ error: "Unknown analysis job" });
+        if (job.result) {
+          const done = job.stage === "baseline" ? await assembleBaseline(job, body.poll) : { ...job, jobKey: body.poll, cacheKey: body.poll, pending: false };
+          return done ? res.json(done) : res.status(404).json({ error: "Unknown analysis job" });
+        }
+        if (!job.request) return res.status(404).json({ error: "Unknown analysis job" });
+        body = job.request;
       }
-      const cacheKey = "bond-v" + BOND_ANALYSIS_VERSION + ":" + sheetHash(session.worldCode + "\n" + stage + "\n" + prompt + "\n" + String(force || ""));
-      const cached = await pool.query("SELECT data FROM relationship_reading_cache WHERE cache_key = $1", [cacheKey]);
-      const previous = cached.rows[0]?.data;
-      if (previous?.result) {
-        validate(previous.result);
-        return res.json({ ...previous, cacheKey, cached: true });
+
+      const prepared = await prepare(session, body);
+      const { jobKey, stage, metadata } = prepared;
+
+      if (stage === "baseline" && !prepared.missing.length) {
+        return res.json({ ...metadata, result: { bonds: prepared.cards.map((card) => prepared.bonds.get(card.id)) }, computed: 0, jobKey, cacheKey: jobKey, pending: false, cached: true });
       }
-      if (previous?.fatal) return res.status(422).json({ error: previous.error });
-      const metadata = { stage, world: session.worldCode, hash, version: BOND_ANALYSIS_VERSION, sourceChars: ownSheet.length, submittedChars: ownSheet.length };
-      const save = (data) => pool.query("INSERT INTO relationship_reading_cache (cache_key,data,updated_at) VALUES ($1,$2::jsonb,NOW()) ON CONFLICT (cache_key) DO UPDATE SET data=EXCLUDED.data, updated_at=NOW()", [cacheKey, stringifyJsonbSafe(data, "bond-analysis")]);
-      if (!active.has(cacheKey) && Date.now() >= Number(previous?.retryAt || 0)) {
-        // Claim first: a background reader and a Restart click can now overlap,
-        // but the same cache key must still launch only one AI job.
-        active.add(cacheKey);
+
+      const previous = await readRow(jobKey);
+      if (stage === "profile" && previous?.result) {
         try {
-          // Persist the full source before starting. A dropped browser request or a
-          // server restart cannot lose a completed profile/baseline checkpoint.
-          await save({ ...metadata, pending: true, request: req.body });
-        } catch (error) {
-          active.delete(cacheKey);
-          throw error;
-        }
-
-        const work = async () => {
-          try {
-            console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, restartFast: !!restartFast, sheetHash: hash, sourceChars: ownSheet.length, submittedChars: ownSheet.length, promptChars: prompt.length }));
-            const analyzed = await analyzeStructured(prompt, schema, validate, {
-              outputTokens: 64000,
-              semanticStartOffset: restartFast && stage === "profile" ? Number(restartProfileIndex) || 0 : 0,
-            });
-            await save({ ...metadata, ...analyzed });
-          } catch (error) {
-            const retryable = error.failures?.some(failure => [429, 500, 502, 503, 504].includes(failure.status) || /abort|network|fetch|ECONN/i.test(failure.reason));
-            await save({ ...metadata, request: req.body, pending: !!retryable, fatal: !retryable, error: error.message, retryAt: Date.now() + 60000 });
-            console.warn("[bond-analysis-failed]", stage, owner, error.message);
-          } finally {
-            active.delete(cacheKey);
-          }
-        };
-
-        if (restartFast && stage === "profile") {
-          // All profile reads begin immediately during Restart World.
-          void work();
-        } else if (restartFast) {
-          // Relationship baselines are larger, so keep them safely bounded.
-          void runRestartBaselineTask(work);
-        } else {
-          queue = queue.catch(() => {}).then(work);
-        }
+          prepared.validate(previous.result);
+          return res.json({ ...previous, jobKey, cacheKey: jobKey, pending: false, cached: true });
+        } catch { /* cached under older rules: read it again */ }
       }
-      res.status(202).json({ ...metadata, cacheKey, pending: true, error: previous?.error || null, retryAt: previous?.retryAt || null, cached: false });
+
+      const waitingOn = { ...metadata, jobKey, cacheKey: jobKey, pending: true, missing: stage === "baseline" ? prepared.missing.length : 1, cached: false };
+      if (!active.has(jobKey)) {
+        const cooling = (previous?.pending || previous?.terminal) && clock() < Number(previous.retryAt || 0);
+        if (cooling && previous.terminal) return res.status(422).json({ error: previous.error });
+        if (!cooling) await launch(prepared, previous);
+      }
+      res.status(202).json({ ...waitingOn, error: previous?.error || null, retryAt: previous?.retryAt || null });
     } catch (error) {
-      res.status(503).json({ error: error.message });
+      res.status(error.status || 503).json({ error: error.message });
     }
   });
 }
