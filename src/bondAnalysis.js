@@ -78,8 +78,27 @@ export function validateSchema(value, schema, path = "result") {
   return value;
 }
 
+// Only layout noise is ignored (whitespace runs, typographic quotes/dashes, invisible
+// characters). Every word and letter of a quote must still occur in the sheet.
+const quoteForm = (value) => String(value).normalize("NFKC")
+  .replace(/[​-‍⁠﻿­]/g, "")
+  .replace(/[‘’‚‛′]/g, "'")
+  .replace(/[“”„‟″]/g, '"')
+  .replace(/[‐-―−]/g, "-")
+  .replace(/\s+/g, " ").trim();
+// A validation pass checks many quotes against one sheet; normalize that sheet once.
+let lastSheet = { sheet: null, form: "" };
+const sheetForm = (sheet) => {
+  if (lastSheet.sheet !== sheet) lastSheet = { sheet, form: quoteForm(sheet) };
+  return lastSheet.form;
+};
+
 function verifyQuote(sheet, evidence, path) {
-  if (typeof evidence !== "string" || !evidence.trim() || !sheet.includes(evidence)) throw new Error(path + ": evidence is not a verbatim source quote: " + JSON.stringify(evidence) + ". Copy an exact, contiguous quotation from ownSheet, preserving spelling, punctuation and whitespace; do not quote your profile paraphrase or the other sheet.");
+  const text = typeof evidence === "string";
+  const form = text ? quoteForm(evidence) : "";
+  // The normalized form must be non-empty: invisible characters are not a quotation.
+  const found = text && evidence.trim() && form && (sheet.includes(evidence) || sheetForm(sheet).includes(form));
+  if (!found) throw new Error(path + ": evidence is not a verbatim source quote: " + JSON.stringify(evidence) + ". Copy an exact, contiguous quotation from ownSheet, preserving spelling and punctuation; do not quote your profile paraphrase or the other sheet.");
 }
 
 export function validateProfile(profile, sheet, id, ids, fieldNames = []) {

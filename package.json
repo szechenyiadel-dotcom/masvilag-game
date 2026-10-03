@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "node server/proxy.js"
+    "start": "node server/proxy.js",
+    "test": "node --test tests/bond-analysis.test.mjs tests/bond-pipeline.test.mjs"
   },
   "dependencies": {
     "body-parser": "^2.3.0",
