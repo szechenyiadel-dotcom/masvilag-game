@@ -397,6 +397,21 @@ const RETRY_COOLDOWN_MS = 60000;
 const FAILURE_COOLDOWN_MS = 300000;
 const MAX_RETRY_ROUNDS = 4;
 const languageName = (language) => (language === "en" ? "English" : "Hungarian");
+const text = (value, max) => String(value == null ? "" : value).replace(/\s+/g, " ").trim().slice(0, max);
+
+// { id: { name, aliases } } from the browser, trimmed to what is safe to use. Only known cast ids count.
+function cleanIdentities(raw, castIds) {
+  const out = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const id of castIds) {
+    const row = raw[id];
+    if (!row || typeof row !== "object") continue;
+    const name = text(row.name, 120);
+    const aliases = [...new Set((Array.isArray(row.aliases) ? row.aliases : []).map((alias) => text(alias, 80)).filter((alias) => alias && alias !== name))].slice(0, 6);
+    if (name || aliases.length) out[id] = { name, aliases };
+  }
+  return out;
+}
 const cacheKeyFor = (parts) => "bond-v" + BOND_ANALYSIS_VERSION + ":" + sheetHash(parts.join("\n"));
 
 export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, analyze = analyzeStructured, env = process.env, clock = Date.now }) {
@@ -461,13 +476,16 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     if (profiles.length !== profileKeys.length || new Set(profiles.map((row) => row.result.id)).size !== profiles.length || [...ids].some((id) => !profiles.some((row) => row.result.id === id))) throw new Error("Missing or mismatched cached profiles");
     const own = profiles.find((row) => row.result.id === owner);
     if (!own || own.hash !== hash) throw new Error("Owner sheet changed since profile analysis");
-    const allProfiles = resolveProfileReferences(profiles.map((row) => row.result));
+    const castIds = profiles.map((row) => row.result.id);
+    const identities = cleanIdentities(body.identities, castIds);
+    const allProfiles = resolveProfileReferences(profiles.map((row) => row.result), Object.fromEntries(Object.entries(identities).map(([id, row]) => [id, [row.name, ...row.aliases]])));
     const ownProfile = allProfiles.find((profile) => profile.id === owner);
-    const castIds = allProfiles.map((profile) => profile.id);
     const groupIndex = buildGroupIndex(allProfiles);
     const cards = roster.map((target) => {
       const profile = allProfiles.find((candidate) => candidate.id === target.id);
-      return { id: target.id, names: profile.names, groups: profile.groups, oneLine: target.oneLine || "" };
+      /* The full name first, then every other name the person is known by: the model matches Connections text to this. */
+      const known = identities[target.id];
+      return { id: target.id, fullName: known?.name || profile.names[0] || "", names: [...new Set([known?.name, ...(known?.aliases || []), ...profile.names].filter(Boolean))], groups: profile.groups, oneLine: target.oneLine || "" };
     });
     const facts = Object.fromEntries(cards.map((card) => [card.id, reconcileFacts(owner, card.id, allProfiles, groupIndex)]));
 

@@ -59,6 +59,22 @@ test("Alias resolution accepts unique aliases, excludes outsiders and ambiguous 
  a.mentions = ["Béci", "Közös", "Világon kívüli"].map(targetName => ({ targetName, targetId: null, whoKnows: ["Béci"] }));
  assert.deepEqual(resolveProfileReferences([a, b, c])[0].mentions.map(row => row.targetId), ["b", null, null]);
 });
+test("A nickname on any sheet resolves to the person who carries it; whole names beat first-name matches; ties are never guessed", () => {
+ const mention = (targetName) => ({ targetName, targetId: null, whoKnows: [] });
+ const b = profile("b"), angela = profile("angela"), angelo = profile("angelo"), x = profile("x");
+ angela.names = ["Angela Silverman"]; angelo.names = ["Angel Torres"];
+ x.mentions = ["Angel", "Angela", "Silverman", "Torres", "angel", "ÁNGELA", "Silverman Angela", "Nobody"].map(mention);
+ const identities = { angela: ["Angela Silverman", "Angel"], angelo: ["Angel Torres"] };
+ /* "Angel" is Angela's nickname as a whole AND Angelo's first name: the whole-name match wins. */
+ assert.deepEqual(resolveProfileReferences([b, angela, angelo, x], identities)[3].mentions.map(row => row.targetId), ["angela", "angela", "angela", "angelo", "angela", "angela", null, null]);
+ /* Without the nickname field the same text is a first-name match for Angelo only. */
+ assert.equal(resolveProfileReferences([b, angela, angelo, x], {})[3].mentions[0].targetId, "angelo");
+ /* Two people carrying the same nickname: no guess. */
+ assert.equal(resolveProfileReferences([b, angela, angelo, x], { angela: ["Angel"], angelo: ["Angel"] })[3].mentions[0].targetId, null);
+ /* The sheets' own names also resolve who knows a secret. */
+ const secret = profile("y"); secret.mentions = [{ targetName: "Béla", targetId: null, whoKnows: ["Angel", "Nobody"] }];
+ assert.deepEqual(resolveProfileReferences([b, angela, secret], identities)[2].mentions[0].whoKnows, ["angela"]);
+});
 test("A7: the complete Connections text is sent exactly; the rest of the sheet is not", async () => {
  const people = [
   { id: "a", name: "Anna", backstory: "Hosszú előtörténet. ".repeat(10000), connections: "Árnyalt kapcsolatok. ".repeat(10000) + "LAP VÉGE" },

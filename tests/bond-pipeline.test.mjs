@@ -57,6 +57,7 @@ const bondsFor = ({ owner, roster, objectiveFacts }, witness = null) => ({
 async function start({ delay = 0, concurrency, failures, witness = null, mentions = {} } = {}) {
   const store = new Map();
   const calls = [];
+  const payloads = [];
   let clockNow = 1_000_000;
   let inFlight = 0;
   let maxInFlight = 0;
@@ -64,6 +65,7 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
     const stage = prompt.startsWith(EXTRACT_PROMPT) ? "profile" : "baseline";
     const payload = JSON.parse(prompt.slice((stage === "profile" ? EXTRACT_PROMPT : BASELINE_PROMPT).length + 1));
     calls.push({ stage, owner: payload.owner, targets: payload.roster?.map((card) => card.id) });
+    payloads.push({ stage, payload });
     inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight);
     try {
       await sleep(delay);
@@ -104,8 +106,8 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
     return data;
   };
   return {
-    store, calls, bodies, post, api, advance: (ms) => { clockNow += ms; },
-    maxInFlight: () => maxInFlight, reset: () => { calls.length = 0; bodies.length = 0; },
+    store, calls, payloads, bodies, post, api, advance: (ms) => { clockNow += ms; },
+    maxInFlight: () => maxInFlight, reset: () => { calls.length = 0; bodies.length = 0; payloads.length = 0; },
     rebuild: (chars, options = {}) => rebuildBondGraph({ chars }, { subjects, api, language: "hu", pollMs: 5, ...options }),
     close: () => new Promise((resolve) => server.close(resolve)),
   };
@@ -462,5 +464,49 @@ test("Restart progresses beyond 16 sheets to 20 and all 380 directed bonds", asy
     const world = { chars };
     installBondGraph(world, result, subjects);
     assert.equal(analysisReady(world, subjects), true);
+  } finally { await sim.close(); }
+});
+
+test("A nickname in one sheet's Connections leads to the person whose own nickname field says so", async () => {
+  /* Angela Silverman's nickname is Angel. Brent's Connections says "Angel". The model that read
+     Angela's identity forgot to list the nickname, so only the sheet's own fields can settle it. */
+  const sim = await start({ mentions: { brent: "Angel" } });
+  try {
+    const chars = [
+      { id: "angela", name: "Angela Silverman", nick: "Angel", connections: "Sima diák." },
+      { id: "brent", name: "BRENT", connections: "Sima diák. Angel a legjobb barátom." },
+      { id: "cara", name: "Cara Angeles", connections: "Sima diák." },
+    ];
+    await sim.rebuild(chars);
+
+    const request = sim.bodies.find((body) => body.stage === "baseline" && body.owner === "brent");
+    assert.deepEqual(request.identities.angela, { name: "Angela Silverman", aliases: ["Angel"] });
+    assert.deepEqual(request.identities.cara, { name: "Cara Angeles", aliases: [] });
+
+    const { payload } = sim.payloads.find((row) => row.stage === "baseline" && row.payload.owner === "brent");
+    assert.deepEqual(payload.profile.mentions.map((row) => [row.targetName, row.targetId]), [["Angel", "angela"]], "Angel is Angela, not an outsider and not Cara");
+    const angela = payload.roster.find((card) => card.id === "angela");
+    assert.equal(angela.fullName, "Angela Silverman");
+    assert.deepEqual(angela.names.slice(0, 2), ["Angela Silverman", "Angel"], "full name first, then the nickname");
+    assert.equal(payload.roster.find((card) => card.id === "cara").fullName, "Cara Angeles");
+  } finally { await sim.close(); }
+});
+
+test("Changing only a nickname changes who a mention resolves to, so the pair is read again", async () => {
+  const sim = await start({ mentions: { brent: "Angel" } });
+  try {
+    const chars = (nick) => [
+      { id: "angela", name: "Angela Silverman", nick, connections: "Sima diák." },
+      { id: "brent", name: "BRENT", connections: "Sima diák. Angel a legjobb barátom." },
+    ];
+    await sim.rebuild(chars("Angel"));
+    sim.reset();
+    await sim.rebuild(chars("Angel"));
+    assert.equal(sim.calls.length, 0, "nothing changed, nothing read");
+    sim.reset();
+    await sim.rebuild(chars("Angie"));
+    const reread = sim.payloads.find((row) => row.stage === "baseline" && row.payload.owner === "brent");
+    assert.ok(reread, "the pair Brent -> Angela is read again, because 'Angel' no longer names her");
+    assert.deepEqual(reread.payload.profile.mentions.map((row) => row.targetId), [null]);
   } finally { await sim.close(); }
 });

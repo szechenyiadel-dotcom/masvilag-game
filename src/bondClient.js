@@ -78,6 +78,19 @@ export function flattenSheetValue(value, Parser) {
 const IDENTITY_FIELDS = ["name", "nick", "nickname", "username"];
 const hasContent = (value) => value != null && String(value).trim() !== "";
 
+// Who each character is called, straight from the sheets: the full name, then nickname(s) and
+// username. The server resolves "Angel" in someone's Connections to the person whose own nickname
+// field says Angel, without asking a model.
+export function characterIdentities(subjectsList) {
+  const out = {};
+  for (const person of subjectsList) {
+    const name = String(person.name || "").trim();
+    const aliases = [...new Set([person.nick, person.nickname, person.username].map((value) => String(value || "").trim()).filter((value) => value && value !== name))];
+    out[person.id] = { name, aliases };
+  }
+  return out;
+}
+
 export function relationshipFields(character, world) {
   const all = sheetFields(character, world);
   const fields = {};
@@ -226,6 +239,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
 
   const baselines = {};
   let recalculatedBonds = 0;
+  const identities = characterIdentities(people);
   const parts = people.flatMap((character) => {
     const others = people.filter((other) => other.id !== character.id)
       .map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
@@ -240,6 +254,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       stage: "baseline",
       owner: character.id,
       roster,
+      identities,
       ownSheet: sheets[character.id],
       profileKeys,
       language,
