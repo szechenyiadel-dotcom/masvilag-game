@@ -30781,6 +30781,23 @@ const FIELD_LABELS_EN = {
   extra: "Other info — anything the AI should know",
 };
 
+/* Character-sheet input limits only. Keep unrelated gameplay/AI behavior unchanged. */
+const CHARACTER_FIELD_MAX = {
+  bio: 400,
+  looks: 500,
+  personality: 4000,
+  traits: 500,
+  speech: 700,
+  voice: 1200,
+  goals: 400,
+  fears: 400,
+  likes: 300,
+  secrets: 1000,
+  backstory: 6000,
+  connections: 2500,
+  extra: 800,
+};
+
 function RelBar({ score }) {
   const pct = Math.abs(score) / 2;
   return (
@@ -31179,11 +31196,12 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
               <textarea
                 className="i"
                 value={c[k] || ""}
+                maxLength={CHARACTER_FIELD_MAX[k]}
                 style={k === "connections" ? { minHeight: 150 } : undefined}
                 onChange={(e) => set(k, e.target.value)}
               />
             ) : (
-              <input className="i" value={c[k] || ""} onChange={(e) => set(k, e.target.value)}
+              <input className="i" value={c[k] || ""} maxLength={CHARACTER_FIELD_MAX[k]} onChange={(e) => set(k, e.target.value)}
                 placeholder={k === "birth" ? tt("pl. 2008. március 14.", "e.g. March 14, 2008") : ""} />
             )}
             <FieldLimit field={k} value={c[k]} />
