@@ -186,6 +186,18 @@ function assertCapacity(capability, outputTokens) {
   if (capability.contextWindow < Math.ceil(capability.inputTokens * 1.3) + outputTokens || capability.outputLimit < outputTokens) throw new Error("Full input/output does not fit configured model; no truncation performed");
 }
 
+function outputBudget(candidate, capability, requested) {
+  // Groq's context window is shared by the full prompt and the answer. Reserve
+  // what fits instead of rejecting a long sheet merely because the preferred
+  // 64k answer allowance does not fit. Never shorten the input; finish_reason
+  // and schema validation below still reject every incomplete answer.
+  if (candidate.name !== "groq") return requested;
+  const available = Math.floor(capability.contextWindow - Math.ceil(capability.inputTokens * 1.3));
+  const budget = Math.min(requested, capability.outputLimit, available);
+  if (!Number.isFinite(budget) || budget < Math.min(requested, 1024)) throw new Error("Full input leaves insufficient answer capacity; no truncation performed");
+  return budget;
+}
+
 async function callStructuredCandidate(candidate, completePrompt, schema, outputTokens, transport, mode) {
   if (candidate.name === "gemini") {
     const data = await transport("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(candidate.model) + ":generateContent", {
@@ -261,7 +273,7 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
   for (const candidate of candidates) {
     try {
       const capability = await modelCapabilities(candidate, repairPrompt, schema, transport);
-      const outputTokens = options.outputTokens || 64000;
+      const outputTokens = outputBudget(candidate, capability, options.outputTokens || 64000);
       assertCapacity(capability, outputTokens);
       const repairedRaw = await callStructuredCandidate(candidate, repairPrompt, schema, outputTokens, transport, "schema");
       const result = JSON.parse(repairedRaw);
@@ -310,7 +322,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
     let raw = "";
     try {
       const capability = await modelCapabilities(candidate, prompt, schema, transport);
-      const outputTokens = options.outputTokens || 64000;
+      const outputTokens = outputBudget(candidate, capability, options.outputTokens || 64000);
       assertCapacity(capability, outputTokens);
       raw = await callStructuredCandidate(candidate, prompt, schema, outputTokens, transport, mode);
 

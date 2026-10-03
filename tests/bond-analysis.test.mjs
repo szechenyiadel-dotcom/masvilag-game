@@ -514,3 +514,43 @@ test("All 20 sheets complete when Gemini quota runs out after 16 and OpenAI is u
  assert.equal(fallbackPrompts.length, 4);
  assert.ok(fallbackPrompts.every(value => value.endsWith("END") && value.length > 39000));
 });
+
+test("Groq reserves answer capacity for a long full sheet instead of requiring 64k", async () => {
+ const prompt = "entire sheet ".repeat(5500) + "FINAL SOURCE";
+ const calls = [];
+ const transport = async (url, options) => {
+  if (url.endsWith("/models")) return { data: [{ id: "configured-fallback", active: true, context_window: 131072, max_completion_tokens: 32768 }] };
+  calls.push(JSON.parse(options.body));
+  return response({ ok: true });
+ };
+ const result = await analyzeStructured(prompt, { type: "object" }, value => assert.equal(value.ok, true), { candidates: [candidates[1]], transport });
+ assert.equal(result.provider, "groq");
+ assert.equal(calls[0].messages[0].content, prompt);
+ assert.ok(calls[0].max_completion_tokens > 1024);
+ assert.ok(calls[0].max_completion_tokens <= 32768);
+ assert.ok(calls[0].max_completion_tokens + Math.ceil(Buffer.byteLength(prompt + JSON.stringify({ type: "object" }), "utf8") * 1.3) <= 131072);
+});
+
+test("Groq capacity adjustment never accepts a truncated answer", async () => {
+ const transport = async (url) => url.endsWith("/models")
+  ? { data: [{ id: "configured-fallback", active: true, context_window: 131072, max_completion_tokens: 32768 }] }
+  : { choices: [{ finish_reason: "length", message: { content: '{"ok":true}' } }] };
+ await assert.rejects(analyzeStructured("full sheet ".repeat(6000), { type: "object" }, () => {}, { candidates: [candidates[1]], transport }), /Incomplete Groq analysis: length/);
+});
+
+test("Groq can repair exact quotations in long outputs without dropping the source", async () => {
+ const prompt = "complete source ".repeat(4500) + "FINAL SOURCE";
+ const calls = [];
+ const transport = async (url, options) => {
+  if (url.endsWith(":countTokens")) return { totalTokens: 20000 };
+  if (url.endsWith(":generateContent")) return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":false}' }] } }] };
+  if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  if (url.endsWith("/models")) return { data: [{ id: "configured-fallback", active: true, context_window: 131072, max_completion_tokens: 32768 }] };
+  calls.push(JSON.parse(options.body));
+  return response({ ok: true });
+ };
+ const result = await analyzeStructured(prompt, { type: "object" }, value => assert.equal(value.ok, true), { candidates: [candidates[0]], schemaCandidates: [candidates[1]], transport });
+ assert.equal(result.formatterProvider, "groq");
+ assert.ok(calls[0].messages[0].content.includes(prompt));
+ assert.ok(calls[0].max_completion_tokens <= 32768);
+});
