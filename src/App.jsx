@@ -8902,25 +8902,35 @@ async function askWorldJSONInteractive(
 /* Explicit writing lanes: generated social/roleplay text must never fall through
    the generic askWorldJSON background lane. The source is forced AFTER options
    so a custom caller label cannot accidentally route writing to Gemini. */
+/* Comment calls may name everyone involved (options.participants); when all of them are known adults the
+   crude-comments block is added before the protected tail. Without participants nothing is added. */
+function withCommentTone(source, w, prompt, options) {
+  const { participants, ...rest } = options || {};
+  if (String(source || "") !== "comments" || !participants) return { prompt, options: rest };
+  return { prompt: insertBeforeProtectedTail(prompt, matureCommentInstruction(w, participants)), options: rest };
+}
+
 function askWorldWritingJSON(source, w, system, prompt, options = {}) {
+  const toned = withCommentTone(source, w, prompt, options);
   return askWorldJSON(
     w,
     system,
-    prompt,
+    toned.prompt,
     {
-      ...options,
+      ...toned.options,
       source: String(source || ""),
     }
   );
 }
 
 async function askWorldWritingJSONInteractive(source, w, system, prompt, options = {}) {
+  const toned = withCommentTone(source, w, prompt, options);
   return askWorldJSONInteractive(
     w,
     system,
-    prompt,
+    toned.prompt,
     {
-      ...options,
+      ...toned.options,
       source: String(source || ""),
     }
   );
@@ -18644,6 +18654,32 @@ ${roleplayBoost}
 }
 
 
+/* Public comments from adults can be crude. Same gates as every other mature mode: the world is 18+ and EVERY
+   person involved (the commenters, the poster, the one being answered, the player) is a known adult. It stays
+   non-graphic, like the rest of the game. */
+function matureCommentInstruction(w, participantIds = []) {
+  const ids = (Array.isArray(participantIds) ? participantIds : []).filter(Boolean);
+  if (!ids.length) return "";
+  if (worldContentLevel(w, w && w.meId) !== "mature") return "";
+  if (!matureParticipantsAreAdults(w, ids)) return "";
+  const en = worldLanguage(w, w && w.meId) === "en";
+  return en
+    ? `
+MATURE 18+ COMMENT MODE — ADULTS ONLY (everyone in this thread is a known adult):
+- Public comments from these adults may be crude, vulgar and obscene when that fits the commenter's voice and how they relate to the poster: strong profanity, filthy jokes, blunt sexual banter and innuendo, shameless thirst, brutal roasting and trash talk, drunk-text energy.
+- Do NOT sanitize it into polite hype, emoji-only praise or a PG compliment, and do not moralize, add disclaimers or tone down a commenter's own language. If a character would say it raw, write it raw.
+- Stay in character: a shy, reserved or proper character stays restrained; a crude, flirty or bold one can be shameless. Not every comment has to be obscene, and the same line must not be repeated by several commenters.
+- Limits that stay: non-graphic (innuendo and bluntness, no anatomical description and no explicit sex acts); orientation and flirt-permission rules still apply; never sexualize anyone who is not a confirmed adult; never invent the player's own feelings or consent; a clearly unwelcome advance is a crude insult or rejection, not a green light.
+`
+    : `
+MATURE 18+ KOMMENT MÓD — CSAK FELNŐTTEK KÖZÖTT (a szál minden résztvevője ismerten felnőtt):
+- Ezeknek a felnőtteknek a nyilvános kommentjei lehetnek durvák, vulgárisak és trágárok, ha ez illik a kommentelő hangjához és ahhoz, ahogy a posztolóhoz viszonyul: erős káromkodás, mocskos viccek, nyers szexuális fűszerezésű ugratás és célzás, szégyentelen vágyakozás, brutális beszólások, pofázás, részeg-üzenet hangulat.
+- NE szelídítsd udvarias hype-pá, csak emojis dicséretté vagy PG bóknak, és ne moralizálj, ne írj figyelmeztetést, ne tompítsd a kommentelő saját nyelvezetét. Ha a karakter nyersen mondaná, írd nyersen.
+- Maradj karakterhű: egy félénk, visszafogott vagy illemtudó karakter visszafogott marad; egy durva, flörtölős vagy vakmerő karakter lehet szégyentelen. Nem kell minden kommentnek trágárnak lennie, és ugyanazt a sort ne ismételje több kommentelő.
+- Ami marad: nem grafikus (célzás és nyersség, anatómiai leírás és explicit szexuális aktus nélkül); az orientációs és flörtengedély-szabályok érvényben maradnak; senkit se szexualizálj, aki nem igazoltan felnőtt; a játékos saját érzéseit vagy beleegyezését sose találd ki; egy egyértelműen nem kívánt közeledésre durva beszólás vagy visszautasítás a válasz, nem zöld lámpa.
+`;
+}
+
 function sysTextFor(w, playerId, key, params) {
   const lang = worldLanguage(w, playerId);
   const dict = SYS_TEXT[lang] || SYS_TEXT.hu;
@@ -25633,7 +25669,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${TAIL}`,
-    { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 2400 }
+    { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 2400, participants: [...cast.map((c) => c.id), post.authorId] }
   );
 
   /*
@@ -25736,7 +25772,7 @@ HARD RULES:
 
 JSON ONLY:
 {"comments":[{"id":"exact eligible id","text":"short natural comment","reply_to":"","trigger":"real post trigger"}],"likes":[]}${TAIL}`,
-      { maxTokens: Math.max(500, Math.min(1500, 220 * Math.min(candidates.length, missing + 2))), maxTries: 2 }
+      { maxTokens: Math.max(500, Math.min(1500, 220 * Math.min(candidates.length, missing + 2))), maxTries: 2, participants: [...candidates.map((c) => c.id), post.authorId] }
     );
 
     const combined = [...safeAiComments(baseOut), ...safeAiComments(repairOut)]
@@ -27910,7 +27946,7 @@ Formátum:
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
 }${commentReplyLatestTail(w, post, comment)}${TAIL}`,
-    { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 900 }
+    { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 900, participants: [...cast.map((c) => c.id), post.authorId, comment.authorId] }
   );
 
   /*
@@ -28007,6 +28043,7 @@ JSON: {"reply":"short natural reply"}${commentReplyLatestTail(w, post, comment)}
             {
               maxTokens: 180,
               maxTries: 2,
+              participants: [directResponder.id, post.authorId, comment.authorId],
             }
           );
 
@@ -28155,7 +28192,7 @@ That draft contradicts the target-specific relationship. This is a GOOD/CLOSE fr
 - Do not use a severe insult, contempt, cold dismissal, or mean-spirited put-down.
 
 JSON: {"reply":"short friendship-consistent reply"}${commentReplyLatestTail(w, post, comment)}${TAIL}`,
-          { maxTokens: 180, maxTries: 3 }
+          { maxTokens: 180, maxTries: 3, participants: [responderId, post.authorId, comment.authorId] }
         );
 
         const repairedText = String(friendRepair && friendRepair.reply || '')
@@ -28251,7 +28288,7 @@ ${forcedResponder.name} has already been selected by the social scheduler becaus
 - No narration. No assistant language.
 
 JSON: {"reply":"short public reply"}${commentReplyLatestTail(w, post, comment)}${TAIL}`,
-          { maxTokens: 180, maxTries: 2 }
+          { maxTokens: 180, maxTries: 2, participants: [forcedResponder.id, post.authorId, comment.authorId] }
         );
 
         const repairedText = String(repairedBystander && repairedBystander.reply || "")
@@ -40827,7 +40864,7 @@ Formátum:
 "changes":[
   {"a":"aki érez","b":"aki iránt","delta":3,"mood":"mit érez most iránta","why":"egy rövid mondat"}
 ]}${TAIL}`,
-      { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 1100 }
+      { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 1100, participants: cast.map((c) => c.id) }
     );
 
   if (out && typeof out === "object") out.__castIds =
@@ -50633,6 +50670,7 @@ Formátum:
         [target.id]
       )),
       maxTokens: 900,
+      participants: castIds.concat([target.id]),
     }
   );
 }
@@ -62881,6 +62919,7 @@ async function isolatedPlayerPostComments(w, post, options = {}) {
           source: "player-post-comments-isolated",
           foreground: true,
           memory: backgroundMemory(w, plannedCards.map((card) => card.id), postContext.text),
+          participants: [...plannedCards.map((card) => card.id), post.authorId],
         }
       );
     } catch (error) {
