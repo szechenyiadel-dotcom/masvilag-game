@@ -5,6 +5,7 @@ import {
   PAID_PROVIDERS, isForegroundRequest, filterProvidersForBody, selectGeminiKeys,
   backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, secondsUntilPacificMidnight, planGroqRequest, groqRetryMs, GROQ_FREE_TPM_BUDGET,
   BACKGROUND_WAIT_MIN_SECONDS, BACKGROUND_WAIT_MAX_SECONDS, BACKGROUND_WAIT_DEFAULT_SECONDS,
+  GROQ_UTILITY_SOURCES, GROQ_UTILITY_CHAIN, isGroqUtilitySource, estimateGroqTokens, groqCarriesWhole, groqPaceMaxWaitMs, createGroqPacer, GROQ_WINDOW_MS,
 } from "../server/aiPolicy.js";
 
 test("Only an explicit foreground flag marks a request as player-waiting", () => {
@@ -155,4 +156,111 @@ test("Groq says when to come back: header seconds, or hours/minutes/seconds in t
   assert.equal(groqRetryMs("", "try again in 1h2m3s"), 3723000);
   assert.equal(groqRetryMs("", "try again in 250ms"), 0, "milliseconds are not minutes");
   assert.equal(groqRetryMs("", "nothing useful"), 0);
+});
+
+test("Utility work is a short, explicit list; nothing that speaks as a character is on it", () => {
+  assert.deepEqual([...GROQ_UTILITY_SOURCES].sort(), ["display-translate", "meaning-analysis", "music-note", "relationship-impact"]);
+  assert.deepEqual(Array.from(GROQ_UTILITY_CHAIN), ["groq", "groq2", "gemini"]);
+  for (const source of ["meaning-analysis", "display-translate", " Music-Note ", "relationship-impact"]) assert.equal(isGroqUtilitySource(source), true, source);
+  const personality = [
+    "dm", "direct-chat", "autonomous-dm", "scene", "roleplay", "roleplay-event", "roleplay-invitation", "group-chat", "comments",
+    "player-post-comments-isolated", "feed-post", "event-feed-batch", "notes", "ambient-popup", "gossip-propagation", "backchannel-gossip",
+    "npc-pair-reaction", "ai-event-invite", "ai-roleplay-initiation", "sheet-summary", "character-bible", "askWorldJSON", "autonomy-other", "", undefined, null,
+  ];
+  for (const source of personality) assert.equal(isGroqUtilitySource(source), false, String(source));
+});
+
+test("Groq takes a utility request only when it fits whole, never when it would have to be cut down", () => {
+  assert.equal(groqCarriesWhole({ maxTokens: 520, systemChars: 1500, messageChars: [6000] }), true);
+  assert.equal(groqCarriesWhole({ maxTokens: 520, systemChars: 3000, messageChars: [40000] }), false, "too long: a bigger-window model reads it instead");
+  assert.equal(groqCarriesWhole({ maxTokens: 7000, systemChars: 10, messageChars: [10] }), false, "no room for the answer");
+  const tokens = estimateGroqTokens({ maxTokens: 500, systemChars: 3000, messageChars: [3000] });
+  assert.equal(tokens, 2000 + 500);
+  assert.equal(estimateGroqTokens({ maxTokens: 1024, systemChars: 90000, messageChars: [90000] }), 7500, "never more than a minute's budget");
+});
+
+test("A request may wait longer for Groq in the background than when a player is waiting", () => {
+  assert.equal(groqPaceMaxWaitMs({ foreground: true }), 8000);
+  assert.equal(groqPaceMaxWaitMs({ source: "meaning-analysis" }), 20000);
+});
+
+function fakeClock() {
+  const clock = { t: 1_000_000, onSleep: null };
+  clock.now = () => clock.t;
+  clock.sleep = async (ms) => { clock.t += ms; if (clock.onSleep) clock.onSleep(ms); };
+  return clock;
+}
+
+test("Groq pacer: a key serves one request at a time, the other key is independent", () => {
+  const clock = fakeClock();
+  const pacer = createGroqPacer({ now: clock.now, sleep: clock.sleep });
+  const first = pacer.tryAcquire("groq", 1000);
+  assert.equal(first.ok, true);
+  const second = pacer.tryAcquire("groq", 1000);
+  assert.deepEqual([second.ok, second.reason], [false, "busy"]);
+  assert.equal(pacer.tryAcquire("groq2", 1000).ok, true, "the second key has its own turn");
+  first.release();
+  assert.equal(pacer.tryAcquire("groq", 1000).ok, true, "free again once the first one is done");
+});
+
+test("Groq pacer: the tokens spent in the last minute never pass the budget", () => {
+  const clock = fakeClock();
+  const pacer = createGroqPacer({ now: clock.now, sleep: clock.sleep, budgetTokens: 7500 });
+  const a = pacer.tryAcquire("groq", 5000); a.release(5000);
+  clock.t += 10_000;
+  const blocked = pacer.tryAcquire("groq", 3000);
+  assert.deepEqual([blocked.ok, blocked.reason], [false, "budget"]);
+  assert.ok(blocked.waitMs > 49_000 && blocked.waitMs <= 51_000, "comes back when the first 5,000 leave the window: " + blocked.waitMs);
+  assert.equal(pacer.tryAcquire("groq", 2500).ok, true, "what still fits goes right away");
+});
+
+test("Groq pacer: the real usage Groq reports replaces the estimate, so unused allowance is given back", () => {
+  const clock = fakeClock();
+  const pacer = createGroqPacer({ now: clock.now, sleep: clock.sleep, budgetTokens: 7500 });
+  const a = pacer.tryAcquire("groq", 7000);
+  a.release(1200);
+  assert.equal(pacer.state("groq").spentTokens, 1200);
+  const b = pacer.tryAcquire("groq", 6000);
+  assert.equal(b.ok, true);
+  b.release(0);
+  assert.equal(pacer.state("groq").spentTokens, 1200, "a request that consumed nothing costs nothing");
+  a.release(7000);
+  assert.equal(pacer.state("groq").spentTokens, 1200, "releasing twice changes nothing");
+});
+
+test("Groq pacer: the window slides, a minute later the budget is back", () => {
+  const clock = fakeClock();
+  const pacer = createGroqPacer({ now: clock.now, sleep: clock.sleep, budgetTokens: 7500 });
+  pacer.tryAcquire("groq", 7500).release();
+  assert.equal(pacer.tryAcquire("groq", 100).ok, false);
+  clock.t += GROQ_WINDOW_MS + 5;
+  assert.equal(pacer.tryAcquire("groq", 7500).ok, true);
+});
+
+test("Groq pacer: acquire waits for the key to come free, and gives up after the longest wait it was allowed", async () => {
+  const clock = fakeClock();
+  const pacer = createGroqPacer({ now: clock.now, sleep: clock.sleep });
+  const running = pacer.tryAcquire("groq", 2000);
+  clock.onSleep = () => { running.release(); clock.onSleep = null; };
+  const waited = await pacer.acquire("groq", 2000, 5000);
+  assert.equal(waited.ok, true, "got its turn after the first request finished");
+
+  const stuck = createGroqPacer({ now: clock.now, sleep: clock.sleep });
+  stuck.tryAcquire("groq", 2000);
+  const started = clock.t;
+  const refused = await stuck.acquire("groq", 2000, 3000);
+  assert.deepEqual([refused.ok, refused.reason], [false, "busy"]);
+  assert.ok(clock.t - started <= 3400, "never waits past the allowed time: " + (clock.t - started));
+  assert.equal((await stuck.acquire("groq", 2000, 0)).ok, false, "no waiting at all when nothing may be waited");
+});
+
+test("Groq pacer: a budget wait longer than the allowed time is refused at once with the time to come back", async () => {
+  const clock = fakeClock();
+  const pacer = createGroqPacer({ now: clock.now, sleep: clock.sleep });
+  pacer.tryAcquire("groq", 7000).release();
+  const started = clock.t;
+  const refused = await pacer.acquire("groq", 3000, 8000);
+  assert.deepEqual([refused.ok, refused.reason], [false, "budget"]);
+  assert.ok(refused.waitMs > 50_000, "tells the caller how long: " + refused.waitMs);
+  assert.equal(clock.t, started, "it did not sit and wait for nothing");
 });
