@@ -39048,7 +39048,16 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
           api: apiJson,
           language: worldLanguage(draft),
           fastRestart: true,
-          progress: p => setRestartMsg(p.owner + " · " + p.phase + " · " + p.completed + "/" + p.total),
+          progress: p => {
+            if (p.phase === "profile") {
+              setRestartMsg(tt(
+                "Profilok: " + p.completed + "/" + p.total + " kész · " + (p.started || p.total) + "/" + p.total + " elindítva",
+                "Profiles: " + p.completed + "/" + p.total + " ready · " + (p.started || p.total) + "/" + p.total + " started"
+              ));
+            } else {
+              setRestartMsg(p.owner + " · " + p.phase + " · " + p.completed + "/" + p.total);
+            }
+          },
         });
         installBondGraph(draft, result, allSubjects);
       } else {
