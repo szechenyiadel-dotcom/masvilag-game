@@ -4406,6 +4406,14 @@ function getRel(w, a, b) {
   return (w.rels && w.rels[relKey(a, b)]) || EMPTY_REL;
 }
 
+function hasEstablishedBond(rel) {
+  if (!rel) return false;
+  if (!rel.status) return Boolean(rel.bond || rel.type || rel.history || rel.hidden || Number(rel.score));
+  return rel.status !== "semleges" || Boolean(rel.history || rel.hiddenFeelings) ||
+    Boolean(rel.layers && rel.layers.length) ||
+    [rel.score, rel.attraction, rel.trust, rel.tension, ...Object.values(rel.levels || {})].some(value => Number(value) !== 0 && Number.isFinite(Number(value)));
+}
+
 function setRel(w, a, b, patch) {
   const k = relKey(a, b);
   if (!w.rels) w.rels = {};
@@ -5219,7 +5227,7 @@ function naturalCommentReplyTargets(w, post, comment) {
     if (/gossip|nosy|curious|argumentative|confront|chaotic|dramatic|protective|possess|jealous|flirt|chatty|social|pletyk|kíváncsi|veszeked|konfront|féltéken/.test(lore)) base += 10;
     base += Math.min(18, cue * 0.26);
     if (juice.juicy) base += 16;
-    const hasRealReason = toCommenter >= 18 || toParent >= 22 || toPostAuthor >= 22 || followsPostAuthor || followsCommenter || Boolean(bond) || juice.juicy;
+    const hasRealReason = toCommenter >= 18 || toParent >= 22 || toPostAuthor >= 22 || followsPostAuthor || followsCommenter || hasEstablishedBond(rel) || juice.juicy;
     if (hasRealReason && base >= 46) push(observer.id, "bystander", base);
   });
 
@@ -27064,8 +27072,7 @@ function socialInteractionInterest(
   }
 
   if (
-    rel.mood ||
-    rel.hidden
+    hasEstablishedBond(rel) && (rel.mood || rel.hidden)
   ) {
     interest += 8;
   }
@@ -27201,7 +27208,7 @@ function fairCommentCast(w, targetId, post = null) {
       const naturallyLinked =
         following ||
         Math.abs(score) >= 10 ||
-        Boolean(bond) ||
+        hasEstablishedBond(rel) ||
         storyLinked ||
         interest >= 14 ||
         visualPriority >= 20;
@@ -51478,7 +51485,7 @@ function contextualRoleplayCast(w, host, generatedCast, descriptor, options = {}
       const candidateSensei = characterIsSensei(c, w);
       const cy = roleplayBirthYear(c);
       const yearDiff = hostYear && cy ? Math.abs(hostYear - cy) : 99;
-      const knownPersonally = Math.abs(Number(rel.score) || 0) >= 12 || Boolean(bond) ||
+      const knownPersonally = Math.abs(Number(rel.score) || 0) >= 12 || hasEstablishedBond(rel) ||
         socialInteractionInterest(w, host.id, c.id) >= 20 || Boolean(ownStorySnippetAbout(host, c));
       let contextFit = false;
       if (isTraining) {
@@ -60099,17 +60106,12 @@ function stabilizeDirectedRelationshipScore(text, score) {
  */
 let automaticFollowSyncActive = false;
 
-function explicitSharedSocialContext(actor, target, w) {
-  if (!actor || !target || !w) return false;
-  return sameFollowTeamOrFaction(w, actor, target);
-}
-
 function shouldAutoFollowEstablishedTie(w, actor, target) {
   if (!w || !actor || !target || actor.id === target.id) return false;
   if (isMediaAccount(w, actor.id) || isMediaAccount(w, target.id)) return false;
 
   const rel = getRel(w, actor.id, target.id);
-  const explicitGroupTie = sameFollowTeamOrFaction(w, actor, target) || explicitSharedSocialContext(actor, target, w);
+  const explicitGroupTie = sameFollowTeamOrFaction(w, actor, target);
 
   /* Explicit personal hostility beats a generic shared-team default. */
   if (hasEnemyOrRivalBond(rel)) return false;

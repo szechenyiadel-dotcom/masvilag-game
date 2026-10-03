@@ -226,15 +226,15 @@ test("All eight distinct Gemini keys remain active and the eighth can complete a
 });
 test("Sensei and shared affiliation behavior use validated profiles/current layers, not sheet keywords", () => {
  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8"), ast = parse(source, { sourceType: "module", plugins: ["jsx"] });
- const names = ["characterIsSensei", "isOwnSenseiRelationship", "sameFollowTeamOrFaction", "explicitSharedSocialContext"];
+ const names = ["characterIsSensei", "isOwnSenseiRelationship", "sameFollowTeamOrFaction"];
  const context = vm.createContext({ getRel: (w, a, b) => w.rels[a + ">" + b] });
  vm.runInContext(ast.program.body.filter(node => names.includes(node.id?.name)).map(node => source.substring(node.start,node.end)).join("\n"), context);
  const a = { id: "a", backstory: "My old sensei trained me, but I never belonged to Bela's dojo." }, b = { id: "b", name: "Bela" };
  const world = { bondAnalysis: { profiles: { a: { profile: { groups: [{ role: "tanítvány" }] } }, b: { profile: { groups: [{ role: "sensei" }] } } } }, rels: { "a>b": { layers: [] } } };
  assert.equal(context.characterIsSensei(a, world), false); assert.equal(context.characterIsSensei(b, world), true);
- assert.equal(context.isOwnSenseiRelationship(world, "a", "b"), false); assert.equal(context.explicitSharedSocialContext(a,b,world), false);
+ assert.equal(context.isOwnSenseiRelationship(world, "a", "b"), false); assert.equal(context.sameFollowTeamOrFaction(world,a,b), false);
  world.rels["a>b"].layers = ["tanítvány–sensei"];
- assert.equal(context.isOwnSenseiRelationship(world, "a", "b"), true); assert.equal(context.explicitSharedSocialContext(a,b,world), true);
+ assert.equal(context.isOwnSenseiRelationship(world, "a", "b"), true); assert.equal(context.sameFollowTeamOrFaction(world,a,b), true);
 });
 
 test("Provider-side invalid JSON receives two attempts before failover", async () => {
@@ -257,4 +257,17 @@ test("Configured paid Groq key is tried first while the other key remains availa
  };
  const result = await analyzeStructured("Complete sheet", { type: "object" }, result => assert.equal(result.ok, true), { env, transport, outputTokens: 1000 });
  assert.equal(tried[0], "Bearer paid-key"); assert.equal(result.keySlot, "GROQ_API_KEY_2");
+});
+
+
+test("Neutral complete-graph records do not imply acquaintance or social interest", () => {
+ const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8"), ast = parse(source, { sourceType: "module", plugins: ["jsx"] });
+ const context = vm.createContext({});
+ vm.runInContext(ast.program.body.filter(node => node.id?.name === "hasEstablishedBond").map(node => source.substring(node.start,node.end)).join("\n"), context);
+ const neutral = runtimeBond(bond("a","b"));
+ assert.equal(context.hasEstablishedBond(neutral), false);
+ assert.equal(context.hasEstablishedBond({...neutral, layers: ["csapattárs"]}), true);
+ assert.equal(context.hasEstablishedBond({...neutral, trust: 25}), true);
+ assert.equal(context.hasEstablishedBond({...neutral, status: "aktív"}), true);
+ assert.equal(context.hasEstablishedBond({bond: "barát", score: 0}), true);
 });
