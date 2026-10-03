@@ -1,6 +1,7 @@
 import { restoreBaselineGraph } from "./bondAnalysis.js";
 import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext } from "./bondClient.js";
 const bondAnalysisBusy = new Set();
+const bondRestartBusy = new Set();
 const bondAnalysisRetry = new Map();
 /* MÁSVILÁG RECOVERY v99.5 — SCALABLE LAZY MEDIA STORAGE — 20260816_0045 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -39030,13 +39031,25 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
    * setters/update/tt do not exist; the settings button therefore crashed with
    * `ReferenceError: restartWorldHistory is not defined`. */
   const restartWorldHistory = async () => {
-    if (bondAnalysisBusy.has(w.code)) { setErr(tt("A lapok elemzése még folyamatban van.", "Sheet analysis is still running.")); return; }
-    bondAnalysisBusy.add(w.code);
-    setRestartMsg(tt("Teljes kapcsolatháló ellenőrzése…", "Validating the complete bond graph…"));
+    if (bondRestartBusy.has(w.code)) return;
+    bondRestartBusy.add(w.code);
+
+    // If the normal background reader is already working, Restart joins the same
+    // cache instead of refusing to run. Only Restart enables the faster lane.
+    const ownsAnalysisLock = !bondAnalysisBusy.has(w.code);
+    if (ownsAnalysisLock) bondAnalysisBusy.add(w.code);
+
+    setRestartMsg(tt("Teljes kapcsolatháló gyors ellenőrzése…", "Fast-validating the complete bond graph…"));
     try {
       const draft = cloneWorldState(w);
       if (!analysisReady(draft, allSubjects)) {
-        const result = await rebuildBondGraph(draft, { subjects: allSubjects, api: apiJson, language: worldLanguage(draft), progress: p => setRestartMsg(p.owner + " · " + p.phase + " · " + p.completed + "/" + p.total) });
+        const result = await rebuildBondGraph(draft, {
+          subjects: allSubjects,
+          api: apiJson,
+          language: worldLanguage(draft),
+          fastRestart: true,
+          progress: p => setRestartMsg(p.owner + " · " + p.phase + " · " + p.completed + "/" + p.total),
+        });
         installBondGraph(draft, result, allSubjects);
       } else {
         draft.bondAnalysis.recalculated = 0;
@@ -39048,7 +39061,10 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
       setRestartConfirm(false);
       setRestartMsg(tt("A világ és minden irányított kapcsolat visszaállt az alapra.", "The world and every directed bond were restored to baseline."));
     } catch (error) { setErr(error.message); setRestartMsg(""); }
-    finally { bondAnalysisBusy.delete(w.code); }
+    finally {
+      bondRestartBusy.delete(w.code);
+      if (ownsAnalysisLock) bondAnalysisBusy.delete(w.code);
+    }
   };
   
   
