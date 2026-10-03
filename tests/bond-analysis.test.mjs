@@ -366,41 +366,47 @@ test("Restart analysis accounting counts new directed baselines and cached work 
 });
 
 
-test("Restart queues every profile and baseline owner without serial idle gaps", async () => {
- const chars = [
-  { id: "a", name: "a", backstory: "a" },
-  { id: "b", name: "b", backstory: "b" },
-  { id: "c", name: "c", backstory: "c" },
- ];
- const profileSeen = new Set(), baselineSeen = new Set();
- let profileReleased = false, baselineReleased = false;
- const api = async (_, options) => {
-  const row = JSON.parse(options.body);
-  if (row.stage === "profile") {
-   profileSeen.add(row.owner);
-   if (profileSeen.size === chars.length) profileReleased = true;
-   if (!profileReleased) return { pending: true };
-   return { pending: false, cached: false, cacheKey: "profile:" + row.owner, hash: sheetHash(row.ownSheet), result: profile(row.owner) };
-  }
-  baselineSeen.add(row.owner);
-  if (baselineSeen.size === chars.length) baselineReleased = true;
-  if (!baselineReleased) return { pending: true };
-  return { pending: false, cached: false, cacheKey: "baseline:" + row.owner, hash: sheetHash(row.ownSheet), result: { bonds: row.roster.map(target => bond(row.owner, target.id)) } };
+test("Restart fast mode parallelizes analysis while normal analysis stays serial", async () => {
+ const people = ["a", "b", "c", "d"].map(id => ({ id, name: id, backstory: id }));
+ const world = { chars: people };
+ const run = async (fastRestart) => {
+  let active = 0, maxActive = 0;
+  const calls = [];
+  const api = async (_, options) => {
+   const request = JSON.parse(options.body);
+   calls.push(request);
+   active += 1;
+   maxActive = Math.max(maxActive, active);
+   await new Promise(resolve => setTimeout(resolve, 12));
+   active -= 1;
+   return {
+    cached: false,
+    cacheKey: request.stage + ":" + request.owner,
+    hash: sheetHash(request.ownSheet),
+    result: request.stage === "profile"
+      ? { ...profile(request.owner), groups: [] }
+      : { bonds: request.roster.map(row => bond(request.owner, row.id)) },
+   };
+  };
+  await rebuildBondGraph(world, { subjects: w => w.chars, api, language: "hu", fastRestart });
+  return { calls, maxActive };
  };
- const result = await rebuildBondGraph({ chars }, { subjects: w => w.chars, api, pollIntervalMs: 250 });
- assert.equal(profileSeen.size, chars.length);
- assert.equal(baselineSeen.size, chars.length);
- assert.equal(Object.keys(result.baselines).length, chars.length * (chars.length - 1));
+ const normal = await run(false);
+ assert.equal(normal.maxActive, 1);
+ assert.ok(normal.calls.every(call => call.restartFast === false));
+ const restart = await run(true);
+ assert.ok(restart.maxActive >= 2);
+ assert.ok(restart.maxActive <= 4);
+ assert.ok(restart.calls.every(call => call.restartFast === true));
 });
 
-test("World restart waits for an in-flight sheet reader instead of rejecting the button", () => {
- const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
- const start = source.indexOf("const restartWorldHistory = async () => {");
- assert.ok(start >= 0);
- const end = source.indexOf("\n  };", start);
- assert.ok(end > start);
- const block = source.slice(start, end);
- assert.ok(block.includes("while (bondAnalysisBusy.has(w.code)"));
- assert.ok(block.includes("pollIntervalMs: 500"));
- assert.ok(!block.includes("Sheet analysis is still running."));
+test("Only Restart World enables the fast lane; ordinary analysis keeps the old queue", () => {
+ const appSource = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+ assert.equal((appSource.match(/fastRestart:\s*true/g) || []).length, 1);
+ assert.ok(appSource.includes("bondRestartBusy"));
+ const serverSource = fs.readFileSync(new URL("../server/bondAnalysis.js", import.meta.url), "utf8");
+ assert.ok(serverSource.includes("if (restartFast)"));
+ assert.ok(serverSource.includes("queue = queue.catch(() => {}).then(work)"));
 });
+
+
