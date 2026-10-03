@@ -23,24 +23,84 @@ async function request(url, options = {}) {
   } finally { clearTimeout(timer); }
 }
 
-function providerCandidates(env) {
+function uniqueValues(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function providerCandidates(env, mode = "semantic") {
   const candidates = [];
-  for (const name of ["gemini", "groq"]) {
-    const prefix = name.toUpperCase();
-    const models = [...new Set([env[prefix + "_ANALYSIS_MODEL"], env[prefix + "_DEEP_MODEL"]].filter(Boolean))];
-    if (!models.length) continue;
-    const primaryKey = env[prefix + "_ANALYSIS_PRIMARY_KEY"] || prefix + "_API_KEY";
-    const keys = Object.keys(env).filter((key) => key === prefix + "_API_KEY" || key.startsWith(prefix + "_API_KEY_")).sort((a, b) => (a === primaryKey ? -1 : b === primaryKey ? 1 : a.localeCompare(b)));
-    for (const [modelIndex, model] of models.entries()) {
-    const unique = new Set();
-    for (const key of keys) {
-      if (!env[key] || unique.has(env[key])) continue;
-      unique.add(env[key]);
-      candidates.push({ name, model, key: env[key], keySlot: key, priority: Number(env[prefix + "_ANALYSIS_PRIORITY"] || (name === "gemini" ? 100 : 80)) - modelIndex * 10, contextWindow: Number(env[prefix + "_ANALYSIS_CONTEXT_WINDOW"]), outputLimit: Number(env[prefix + "_ANALYSIS_OUTPUT_LIMIT"]) });
+
+  if (mode === "schema") {
+    const models = uniqueValues([env.GROQ_ANALYSIS_MODEL, env.GROQ_MODEL]);
+    const keySlots = ["GROQ_API_KEY", "GROQ_API_KEY_2"];
+    const seenKeys = new Set();
+
+    for (const keySlot of keySlots) {
+      const key = env[keySlot];
+      if (!key || seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      for (const model of models) {
+        candidates.push({
+          name: "groq",
+          model,
+          key,
+          keySlot,
+          contextWindow: Number(env.GROQ_ANALYSIS_CONTEXT_WINDOW),
+          outputLimit: Number(env.GROQ_ANALYSIS_OUTPUT_LIMIT),
+        });
+      }
     }
+
+    if (env.OPENAI_API_KEY) {
+      candidates.push({
+        name: "openai",
+        model: env.OPENAI_SCHEMA_MODEL || env.OPENAI_ANALYSIS_MODEL || env.OPENAI_MODEL || env.OPENAI_CHAT_MODEL || "gpt-6-luna",
+        key: env.OPENAI_API_KEY,
+        keySlot: "OPENAI_API_KEY",
+      });
+    }
+    return candidates;
+  }
+
+  const models = uniqueValues([env.GEMINI_ANALYSIS_MODEL, env.GEMINI_DEEP_MODEL, env.GEMINI_MODEL]);
+  const keySlots = [
+    "GEMINI_API_KEY_2",
+    "GEMINI_API_KEY_3",
+    "GEMINI_API_KEY_4",
+    "GEMINI_API_KEY_5",
+    "GEMINI_API_KEY_6",
+    "GEMINI_API_KEY_7",
+    "GEMINI_API_KEY_8",
+    "GEMINI_API_KEY",
+  ];
+  const seenKeys = new Set();
+
+  for (const keySlot of keySlots) {
+    const key = env[keySlot];
+    if (!key || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    for (const model of models) {
+      candidates.push({
+        name: "gemini",
+        model,
+        key,
+        keySlot,
+        contextWindow: Number(env.GEMINI_ANALYSIS_CONTEXT_WINDOW),
+        outputLimit: Number(env.GEMINI_ANALYSIS_OUTPUT_LIMIT),
+      });
     }
   }
-  return candidates.sort((a, b) => b.priority - a.priority);
+
+  if (env.OPENAI_API_KEY) {
+    candidates.push({
+      name: "openai",
+      model: env.OPENAI_ANALYSIS_MODEL || env.OPENAI_MODEL || env.OPENAI_CHAT_MODEL || "gpt-6.1-sol",
+      key: env.OPENAI_API_KEY,
+      keySlot: "OPENAI_API_KEY",
+    });
+  }
+
+  return candidates;
 }
 
 async function modelCapabilities(candidate, prompt, schema, transport) {
@@ -49,78 +109,228 @@ async function modelCapabilities(candidate, prompt, schema, transport) {
     const headers = { "x-goog-api-key": candidate.key, "Content-Type": "application/json" };
     const meta = await transport(root, { headers });
     if (!meta.supportedGenerationMethods?.includes("generateContent")) throw new Error("Configured Gemini model cannot generate content");
-    const count = await transport(root + ":countTokens", { method: "POST", headers, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt + "\nJSON SCHEMA:\n" + JSON.stringify(schema) }] }] }) });
-    return { contextWindow: meta.inputTokenLimit, outputLimit: meta.outputTokenLimit, inputTokens: Number(count.totalTokens) };
+    const count = await transport(root + ":countTokens", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt + "\nJSON SCHEMA:\n" + JSON.stringify(schema) }] }] }),
+    });
+    return {
+      contextWindow: meta.inputTokenLimit,
+      outputLimit: meta.outputTokenLimit,
+      inputTokens: Number(count.totalTokens),
+      verifiedLimits: true,
+    };
   }
-  const listing = await transport("https://api.groq.com/openai/v1/models", { headers: { Authorization: "Bearer " + candidate.key } });
-  const meta = listing.data?.find(model => model.id === candidate.model);
-  if (!meta) throw new Error("Configured Groq model is not available for this key");
-  if (meta.active === false) throw new Error("Configured Groq model is inactive");
-  // A UTF-8 byte is an upper bound for a byte-level token; never underestimate
-  // when this provider has no token-counting endpoint.
-  return {
-    contextWindow: Number(meta.context_window || candidate.contextWindow),
-    outputLimit: Number(meta.max_completion_tokens || candidate.outputLimit),
-    inputTokens: Buffer.byteLength(prompt + JSON.stringify(schema), "utf8"),
+
+  if (candidate.name === "groq") {
+    const listing = await transport("https://api.groq.com/openai/v1/models", {
+      headers: { Authorization: "Bearer " + candidate.key },
+    });
+    const meta = listing.data?.find((model) => model.id === candidate.model);
+    if (!meta) throw new Error("Configured Groq model is not available for this key");
+    if (meta.active === false) throw new Error("Configured Groq model is inactive");
+    return {
+      contextWindow: Number(meta.context_window || candidate.contextWindow),
+      outputLimit: Number(meta.max_completion_tokens || candidate.outputLimit),
+      inputTokens: Buffer.byteLength(prompt + JSON.stringify(schema), "utf8"),
+      verifiedLimits: true,
+    };
+  }
+
+  if (candidate.name === "openai") {
+    return {
+      contextWindow: null,
+      outputLimit: null,
+      inputTokens: Buffer.byteLength(prompt + JSON.stringify(schema), "utf8"),
+      verifiedLimits: false,
+    };
+  }
+
+  throw new Error("Unknown analysis provider: " + candidate.name);
+}
+
+function assertCapacity(capability, outputTokens) {
+  if (!Number.isFinite(capability.inputTokens)) throw new Error("Unverified input size; no truncation performed");
+  if (capability.verifiedLimits === false) return;
+  if (!Number.isFinite(capability.contextWindow) || !Number.isFinite(capability.outputLimit)) throw new Error("Unverified model capacity; configure analysis limits");
+  if (capability.contextWindow < Math.ceil(capability.inputTokens * 1.3) + outputTokens || capability.outputLimit < outputTokens) throw new Error("Full input/output does not fit configured model; no truncation performed");
+}
+
+async function callStructuredCandidate(candidate, completePrompt, schema, outputTokens, transport, mode) {
+  if (candidate.name === "gemini") {
+    const data = await transport("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(candidate.model) + ":generateContent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": candidate.key },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: completePrompt }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseJsonSchema: schema,
+          maxOutputTokens: outputTokens,
+          thinkingConfig: { thinkingLevel: "HIGH" },
+        },
+      }),
+    });
+    if (data.candidates?.[0]?.finishReason !== "STOP") {
+      throw new Error("Incomplete Gemini analysis: " + (data.candidates?.[0]?.finishReason || "no candidate"));
+    }
+    return (data.candidates[0].content?.parts || [])
+      .filter((part) => !part.thought)
+      .map((part) => part.text || "")
+      .join("");
+  }
+
+  const endpoint = candidate.name === "groq"
+    ? "https://api.groq.com/openai/v1/chat/completions"
+    : "https://api.openai.com/v1/chat/completions";
+
+  const body = {
+    model: candidate.model,
+    messages: [{ role: "user", content: completePrompt }],
+    response_format: {
+      type: "json_schema",
+      json_schema: { name: "sheet_analysis", strict: true, schema },
+    },
+    max_completion_tokens: outputTokens,
+    reasoning_effort: mode === "schema" ? "low" : "high",
   };
+
+  const data = await transport(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + candidate.key },
+    body: JSON.stringify(body),
+  });
+
+  if (data.choices?.[0]?.finish_reason !== "stop") {
+    throw new Error(
+      "Incomplete " + (candidate.name === "groq" ? "Groq" : "OpenAI") +
+      " analysis: " + (data.choices?.[0]?.finish_reason || "no choice")
+    );
+  }
+  return data.choices[0].message?.content;
+}
+
+async function repairStructuredOutput(raw, originalPrompt, schema, validate, options, transport, validationError, failures) {
+  const env = options.env || process.env;
+  const candidates = options.schemaCandidates || (options.candidates ? [] : providerCandidates(env, "schema"));
+  if (!candidates.length || !String(raw || "").trim()) return null;
+
+  const repairPrompt = [
+    "STRICT JSON-SCHEMA NORMALIZATION ONLY.",
+    "The semantic analysis below was produced by the character-sheet model. Preserve its factual interpretation, relationship meaning, prose, names and evidence. Do NOT add new story facts, feelings, events, relationships or motives.",
+    "Fix only JSON/schema/type/enum/required-field problems and the stated validation error. If an exact source quote is required, copy it only from SOURCE PROMPT; never invent a quote.",
+    "VALIDATION ERROR:",
+    String(validationError || "invalid structured output"),
+    "ORIGINAL MODEL OUTPUT:",
+    String(raw),
+    "SOURCE PROMPT — reference only, do not reinterpret:",
+    originalPrompt,
+    "Return ONLY the complete corrected schema JSON.",
+  ].join("\n\n");
+
+  for (const candidate of candidates) {
+    try {
+      const capability = await modelCapabilities(candidate, repairPrompt, schema, transport);
+      const outputTokens = options.outputTokens || 64000;
+      assertCapacity(capability, outputTokens);
+      const repairedRaw = await callStructuredCandidate(candidate, repairPrompt, schema, outputTokens, transport, "schema");
+      const result = JSON.parse(repairedRaw);
+      validate(result);
+      return {
+        result,
+        provider: candidate.name,
+        model: candidate.model,
+        keySlot: candidate.keySlot,
+        inputTokens: capability.inputTokens,
+      };
+    } catch (error) {
+      failures.push({
+        phase: "schema-repair",
+        provider: candidate.name,
+        model: candidate.model,
+        keySlot: candidate.keySlot,
+        status: error.status || null,
+        reason: error.message,
+      });
+    }
+  }
+
+  return null;
 }
 
 export async function analyzeStructured(prompt, schema, validate, options = {}) {
   const transport = options.transport || request;
-  const candidates = options.candidates || providerCandidates(options.env || process.env);
+  const env = options.env || process.env;
+  const mode = options.mode === "schema" ? "schema" : "semantic";
+  const candidates = options.candidates || providerCandidates(env, mode);
   const failures = [];
-  const invalidProviders = new Set();
-  // Fail over to the other provider before trying another key on the same one.
-  const first = candidates.filter((candidate, index) => candidates.findIndex((other) => other.name === candidate.name) === index);
-  const ordered = [...first, ...candidates.filter((candidate) => !first.includes(candidate))];
-  for (const candidate of ordered) {
-    if (invalidProviders.has(candidate.name + "/" + candidate.model)) continue;
+
+  for (const candidate of candidates) {
+    let raw = "";
     try {
       const capability = await modelCapabilities(candidate, prompt, schema, transport);
       const outputTokens = options.outputTokens || 64000;
-      if (!Number.isFinite(capability.inputTokens) || !Number.isFinite(capability.contextWindow) || !Number.isFinite(capability.outputLimit)) throw new Error("Unverified model capacity; configure analysis limits");
-      if (capability.contextWindow < Math.ceil(capability.inputTokens * 1.3) + outputTokens || capability.outputLimit < outputTokens) throw new Error("Full input/output does not fit configured model; no truncation performed");
-      let validationError = "";
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const completePrompt = validationError ? prompt + "\nPrevious output failed validation: " + validationError + ". Return the complete corrected JSON, not a patch." : prompt;
-        if (validationError) {
-          const retryCapacity = await modelCapabilities(candidate, completePrompt, schema, transport);
-          if (retryCapacity.contextWindow < Math.ceil(retryCapacity.inputTokens * 1.3) + outputTokens) throw new Error("Full repair request does not fit; no truncation performed");
-        }
-        try {
-        let raw;
-        if (candidate.name === "gemini") {
-          const data = await transport("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(candidate.model) + ":generateContent", {
-            method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": candidate.key },
-            body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: completePrompt }] }], generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: outputTokens, thinkingConfig: { thinkingLevel: "HIGH" } } }),
-          });
-          if (data.candidates?.[0]?.finishReason !== "STOP") throw new Error("Incomplete Gemini analysis: " + (data.candidates?.[0]?.finishReason || "no candidate"));
-          raw = (data.candidates[0].content?.parts || []).filter((part) => !part.thought).map((part) => part.text || "").join("");
-        } else {
-          const data = await transport("https://api.groq.com/openai/v1/chat/completions", {
-            method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + candidate.key },
-            body: JSON.stringify({ model: candidate.model, messages: [{ role: "user", content: completePrompt }], response_format: { type: "json_schema", json_schema: { name: "sheet_analysis", strict: true, schema } }, max_completion_tokens: outputTokens, reasoning_effort: "high" }),
-          });
-          if (data.choices?.[0]?.finish_reason !== "stop") throw new Error("Incomplete Groq analysis: " + (data.choices?.[0]?.finish_reason || "no choice"));
-          raw = data.choices[0].message?.content;
-        }
-          const result = JSON.parse(raw);
-          validate(result);
-          return { result, provider: candidate.name, model: candidate.model, keySlot: candidate.keySlot, inputTokens: capability.inputTokens };
-        } catch (error) {
-          if (error.status && !error.invalidOutput) throw error;
-          validationError = error.message;
-          if (attempt === 1) {
-            invalidProviders.add(candidate.name + "/" + candidate.model);
-            throw new Error("Two invalid schema/evidence outputs: " + validationError);
+      assertCapacity(capability, outputTokens);
+      raw = await callStructuredCandidate(candidate, prompt, schema, outputTokens, transport, mode);
+
+      try {
+        const result = JSON.parse(raw);
+        validate(result);
+        return {
+          result,
+          provider: candidate.name,
+          model: candidate.model,
+          keySlot: candidate.keySlot,
+          inputTokens: capability.inputTokens,
+        };
+      } catch (validationError) {
+        if (mode === "semantic") {
+          const repaired = await repairStructuredOutput(
+            raw,
+            prompt,
+            schema,
+            validate,
+            options,
+            transport,
+            validationError.message,
+            failures
+          );
+          if (repaired) {
+            return {
+              result: repaired.result,
+              provider: candidate.name,
+              model: candidate.model,
+              keySlot: candidate.keySlot,
+              inputTokens: capability.inputTokens,
+              formatterProvider: repaired.provider,
+              formatterModel: repaired.model,
+              formatterKeySlot: repaired.keySlot,
+            };
           }
         }
+        throw validationError;
       }
     } catch (error) {
-      failures.push({ provider: candidate.name, model: candidate.model, keySlot: candidate.keySlot, status: error.status || null, reason: error.message });
+      failures.push({
+        phase: mode,
+        provider: candidate.name,
+        model: candidate.model,
+        keySlot: candidate.keySlot,
+        status: error.status || null,
+        reason: error.message,
+      });
     }
   }
-  const error = new Error("No analysis provider completed the full validated request. " + failures.map((failure) => failure.provider + "/" + failure.model + ": " + failure.reason).join("; "));
+
+  const error = new Error(
+    "No analysis provider completed the full validated request. " +
+    failures.map((failure) =>
+      (failure.phase ? failure.phase + ":" : "") +
+      failure.provider + "/" + failure.model +
+      (failure.keySlot ? "[" + failure.keySlot + "]" : "") +
+      ": " + failure.reason
+    ).join("; ")
+  );
   error.failures = failures;
   throw error;
 }
