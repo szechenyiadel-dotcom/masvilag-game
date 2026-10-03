@@ -447,3 +447,19 @@ test("One analysis stops trying further providers after its deadline", async () 
 test("The mock sheets really are the ones the client builds", () => {
   assert.equal(fullSheetText(person("a")), "[backstory]\nSima diák.\n[name]\nA");
 });
+
+test("Restart progresses beyond 16 sheets to 20 and all 380 directed bonds", async () => {
+  const sim = await start();
+  try {
+    const chars = Array.from({ length: 20 }, (_, i) => person("p" + i));
+    const progress = [];
+    const result = await sim.rebuild(chars, { progress: state => progress.push(state) });
+    assert.equal(owners(sim.calls, "profile").length, 20);
+    assert.ok(progress.some(state => state.phase === "profile" && state.completed === 16));
+    assert.ok(progress.some(state => state.phase === "profile" && state.completed === 20));
+    assert.equal(Object.keys(result.baselines).length, 380);
+    const world = { chars };
+    installBondGraph(world, result, subjects);
+    assert.equal(analysisReady(world, subjects), true);
+  } finally { await sim.close(); }
+});

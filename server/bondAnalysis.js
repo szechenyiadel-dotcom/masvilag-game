@@ -126,6 +126,10 @@ function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
     });
   }
 
+  // If Gemini is out of quota and OpenAI is unavailable, the configured Groq
+  // keys can still read the remaining full sheets (with the same validation).
+  // Previously these keys were reachable only for formatting an existing answer.
+  candidates.push(...providerCandidates(env, "schema").filter(candidate => candidate.name === "groq"));
   return candidates;
 }
 

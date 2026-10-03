@@ -481,3 +481,36 @@ test("Quote check ignores layout only: spacing, typographic quotes and dashes, n
  assert.throws(() => quoted("   "));
  assert.throws(() => quoted(42));
 });
+
+test("All 20 sheets complete when Gemini quota runs out after 16 and OpenAI is unavailable", async () => {
+ const env = {
+  GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "free", GEMINI_API_KEY: "paid",
+  OPENAI_API_KEY: "openai", OPENAI_ANALYSIS_MODEL: "configured-openai",
+  GROQ_ANALYSIS_MODEL: "configured-groq", GROQ_API_KEY: "groq-1", GROQ_API_KEY_2: "groq-2",
+ };
+ const completed = [], fallbackPrompts = [];
+ let prompt;
+ const transport = async (url, options) => {
+  if (url.endsWith(":countTokens")) return { totalTokens: 12000 };
+  if (url.endsWith(":generateContent")) {
+   if (completed.length >= 16) throw Object.assign(new Error("quota exhausted"), { status: options.headers["x-goog-api-key"] === "paid" ? 402 : 429 });
+   return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify({ sheet: prompt }) }] } }] };
+  }
+  if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  if (url.endsWith("/models")) return { data: [{ id: "configured-groq", active: true, context_window: 131072, max_completion_tokens: 65536 }] };
+  if (url.includes("api.openai.com")) throw Object.assign(new Error("invalid json response body"), { transient: true });
+  if (options.headers.Authorization === "Bearer groq-1") throw Object.assign(new Error("rate limit"), { status: 429 });
+  const body = JSON.parse(options.body);
+  fallbackPrompts.push(body.messages[0].content);
+  return response({ sheet: body.messages[0].content });
+ };
+ for (let i = 0; i < 20; i++) {
+  prompt = "Full sheet " + i + "\n" + "complete source ".repeat(2800) + "END";
+  const result = await analyzeStructured(prompt, { type: "object" }, value => assert.equal(value.sheet, prompt), { env, transport });
+  completed.push(result);
+ }
+ assert.equal(completed.length, 20);
+ assert.deepEqual(completed.slice(16).map(row => row.keySlot), Array(4).fill("GROQ_API_KEY_2"));
+ assert.equal(fallbackPrompts.length, 4);
+ assert.ok(fallbackPrompts.every(value => value.endsWith("END") && value.length > 39000));
+});
