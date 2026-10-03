@@ -27,7 +27,7 @@ function uniqueValues(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
-function providerCandidates(env, mode = "semantic") {
+function providerCandidates(env, mode = "semantic", keyOffset = 0) {
   const candidates = [];
 
   if (mode === "schema") {
@@ -63,7 +63,7 @@ function providerCandidates(env, mode = "semantic") {
   }
 
   const models = uniqueValues([env.GEMINI_ANALYSIS_MODEL, env.GEMINI_DEEP_MODEL, env.GEMINI_MODEL]);
-  const keySlots = [
+  const freeKeySlots = [
     "GEMINI_API_KEY_2",
     "GEMINI_API_KEY_3",
     "GEMINI_API_KEY_4",
@@ -71,8 +71,10 @@ function providerCandidates(env, mode = "semantic") {
     "GEMINI_API_KEY_6",
     "GEMINI_API_KEY_7",
     "GEMINI_API_KEY_8",
-    "GEMINI_API_KEY",
   ];
+  const normalizedOffset = freeKeySlots.length ? ((Number(keyOffset) || 0) % freeKeySlots.length + freeKeySlots.length) % freeKeySlots.length : 0;
+  const rotatedFreeSlots = freeKeySlots.slice(normalizedOffset).concat(freeKeySlots.slice(0, normalizedOffset));
+  const keySlots = [...rotatedFreeSlots, "GEMINI_API_KEY"];
   const seenKeys = new Set();
 
   for (const keySlot of keySlots) {
@@ -262,7 +264,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
   const transport = options.transport || request;
   const env = options.env || process.env;
   const mode = options.mode === "schema" ? "schema" : "semantic";
-  const candidates = options.candidates || providerCandidates(env, mode);
+  const candidates = options.candidates || providerCandidates(env, mode, mode === "semantic" ? options.keyOffset : 0);
   const failures = [];
 
   for (const candidate of candidates) {
@@ -364,7 +366,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
       if (!(await requireDb(res))) return;
       const session = await getSessionIdentity(req);
       if (!session) return res.status(401).json({ error: "Not authenticated." });
-      const { stage, owner, roster, ownSheet, profileKeys, language, force, restartFast = false, fieldNames = [] } = req.body || {};
+      const { stage, owner, roster, ownSheet, profileKeys, language, force, restartFast = false, restartKeyOffset = 0, fieldNames = [] } = req.body || {};
       if (!["profile", "baseline"].includes(stage) || typeof owner !== "string" || typeof ownSheet !== "string" || !Array.isArray(roster)) return res.status(400).json({ error: "Invalid analysis request" });
       const ids = new Set([owner, ...roster.map((entry) => entry.id)]);
       if (ids.size !== roster.length + 1) return res.status(400).json({ error: "Duplicate roster IDs" });
@@ -418,7 +420,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
         const work = async () => {
           try {
             console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, restartFast: !!restartFast, sheetHash: hash, sourceChars: ownSheet.length, submittedChars: ownSheet.length, promptChars: prompt.length }));
-            const analyzed = await analyzeStructured(prompt, schema, validate, { outputTokens: 64000 });
+            const analyzed = await analyzeStructured(prompt, schema, validate, { outputTokens: 64000, keyOffset: restartFast ? restartKeyOffset : 0 });
             await save({ ...metadata, ...analyzed });
           } catch (error) {
             const retryable = error.failures?.some(failure => [429, 500, 502, 503, 504].includes(failure.status) || /abort|network|fetch|ECONN/i.test(failure.reason));
