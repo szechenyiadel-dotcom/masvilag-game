@@ -83,7 +83,13 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
 
   const yieldToUi = async () => {
     if (!fastRestart) return;
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      if (typeof globalThis.requestAnimationFrame === "function") {
+        globalThis.requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
   };
 
   const analyze = async (body) => {
