@@ -36,14 +36,15 @@ const world = (extra = {}) => ({
   ...extra,
 });
 
-test("When everyone in the thread is a known adult, comments may be crude, vulgar and obscene, but stay non-graphic", () => {
+test("When everyone in the thread is a known adult, comments may be crude, vulgar and obscene, with no ceiling of the game's own", () => {
   const { context } = harness();
   const text = context.matureCommentInstruction(world(), ["rita", "paul", "me"]);
   assert.match(text, /MATURE 18\+ COMMENT MODE — ADULTS ONLY/);
   assert.match(text, /crude, vulgar and obscene/);
   assert.match(text, /strong profanity/);
   assert.match(text, /Do NOT sanitize/);
-  assert.match(text, /non-graphic \(innuendo and bluntness, no anatomical description and no explicit sex acts\)/);
+  assert.match(text, /sets no ceiling of its own on how crude or explicit these adults may get/);
+  assert.doesNotMatch(text, /non-graphic|no anatomical|no explicit sex/i, "the game adds no limit on top of the provider's");
   assert.match(text, /never sexualize anyone who is not a confirmed adult/);
   assert.match(text, /orientation and flirt-permission rules still apply/);
   assert.match(text, /never invent the player's own feelings or consent/);
@@ -54,7 +55,8 @@ test("The Hungarian world gets the Hungarian block with the same limits", () => 
   const text = context.matureCommentInstruction(world({ lang: "hu" }), ["rita", "paul"]);
   assert.match(text, /MATURE 18\+ KOMMENT MÓD — CSAK FELNŐTTEK KÖZÖTT/);
   assert.match(text, /trágárok/);
-  assert.match(text, /nem grafikus/);
+  assert.match(text, /nem szab plafont arra, mennyire lehetnek ezek a felnőttek durvák vagy explicitek/);
+  assert.doesNotMatch(text, /nem grafikus|anatómiai leírás/i);
   assert.match(text, /senkit se szexualizálj, aki nem igazoltan felnőtt/);
   assert.match(text, /orientációs és flörtengedély-szabályok/);
 });

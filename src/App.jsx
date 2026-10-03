@@ -10230,7 +10230,7 @@ function visualPostReactionCard(w, post, cast) {
     .join("\n");
 
   const adultSafety = visual.adultAuthor
-    ? `The post author is a KNOWN ADULT. If the image is appearance-forward, adult crushes/partners may visibly melt, flirt, get flustered or become jealous/territorial in a non-graphic social-media way when that fits their character.`
+    ? `The post author is a KNOWN ADULT. If the image is appearance-forward, adult crushes/partners may visibly melt, flirt, get flustered or become jealous/territorial in a social-media way when that fits their character.`
     : `The post author is NOT confirmed as an adult. Do NOT sexualize their body, clothing or pose. Keep reactions age-safe even if the image is appearance-forward.`;
 
   return `
@@ -13273,7 +13273,7 @@ function playerInputUnderstandingInstruction(w, rawText, surface = "chat") {
 - Read the player's exact text for MEANING before deciding tone. Casual English, slang, contractions, lowercase, abbreviations, typos, missing punctuation and non-native phrasing are still meaningful language.
 - Silently resolve obvious spelling/grammar slips from context. Do NOT deliberately misread a recognizable sentence just because it is informal or imperfect.
 - Code-switching is normal: the player may mix English, Hungarian, slang, names and fandom terms in the same sentence. Understand the intended meaning across languages instead of treating the mixed sentence as broken input.
-- MATURE SEMANTIC LITERACY: because this world is 18+, correctly recognize adult slang, thirst jokes, sexual innuendo, double entendres, suggestive euphemisms and deliberately provocative wordplay instead of flattening them into a literal/innocent reading. If all people implicated by the joke are known adults, characters may understand and respond to that adult meaning in a character-appropriate, non-graphic way. If a referenced person is a minor or their age is not confirmed 18+, you may understand that the phrase is adult-coded but must not sexualize that person.
+- MATURE SEMANTIC LITERACY: because this world is 18+, correctly recognize adult slang, thirst jokes, sexual innuendo, double entendres, suggestive euphemisms and deliberately provocative wordplay instead of flattening them into a literal/innocent reading. If all people implicated by the joke are known adults, characters may understand and respond to that adult meaning in a character-appropriate way. If a referenced person is a minor or their age is not confirmed 18+, you may understand that the phrase is adult-coded but must not sexualize that person.
 - Preserve who "you", pronouns, names, nicknames and @mentions refer to using the immediate conversation/thread/scene focus.
 - If one interpretation is overwhelmingly natural, use it. Do not manufacture ambiguity.
 - Ask a clarification ONLY when two materially different interpretations remain genuinely plausible after using recent context.
@@ -13283,7 +13283,7 @@ PLAYER'S EXACT INPUT: "${text.slice(0, 900)}"`
 - Először a játékos PONTOS szövegének jelentését értsd meg. A laza angol, szleng, rövidítés, kisbetű, elütés, hiányzó írásjel vagy nem anyanyelvi megfogalmazás ettől még értelmes nyelv.
 - A nyilvánvaló nyelvtani/elírási hibát csendben oldd fel a kontextusból. Ne érts félre szándékosan felismerhető mondatot.
 - A code-switching normális: a játékos keverheti az angolt, magyart, szlenget, neveket és fandom-kifejezéseket ugyanabban a mondatban. A vegyes mondat szándékát értsd meg, ne kezeld hibás inputként.
-- FELNŐTT JELENTÉSÉRTÉS: mivel ez 18+ világ, ismerd fel a felnőtt szlenget, thirst joke-okat, szexuális célzásokat, double entendre-öket, kétértelmű eufemizmusokat és provokatív szóvicceket; ne lapítsd őket ártatlan, szó szerinti jelentésre. Ha a célzásban érintett személyek mind biztosan felnőttek, a karakterek a felnőtt jelentést karakterhűen, nem grafikusan értelmezhetik és reagálhatják le. Ha valaki kiskorú vagy nem igazoltan 18+, a nyelvi célzás felismerhető, de az adott személyt nem szexualizálhatod.
+- FELNŐTT JELENTÉSÉRTÉS: mivel ez 18+ világ, ismerd fel a felnőtt szlenget, thirst joke-okat, szexuális célzásokat, double entendre-öket, kétértelmű eufemizmusokat és provokatív szóvicceket; ne lapítsd őket ártatlan, szó szerinti jelentésre. Ha a célzásban érintett személyek mind biztosan felnőttek, a karakterek a felnőtt jelentést karakterhűen értelmezhetik és reagálhatják le. Ha valaki kiskorú vagy nem igazoltan 18+, a nyelvi célzás felismerhető, de az adott személyt nem szexualizálhatod.
 - A "you", névmások, nevek, becenevek és @mentionök referenciáját a közvetlen chat/thread/jelenet fókuszából oldd fel.
 - Ha egy értelmezés egyértelműen természetesebb, azt használd. Ne gyárts mesterséges kétértelműséget.
 - Csak akkor kérdezz vissza, ha a teljes közeli kontextus után is két lényegesen eltérő értelmezés marad.
@@ -15706,8 +15706,8 @@ ${(() => {
 })()}
 
 ${tt(
-  "18+ JÁTÉK-ALAPHANG: nincs Standard/Mature kapcsoló. A világ felnőttes témákat, káromkodást, sötétebb kapcsolatokat, erőszakot, alkoholt/drogot mint történeti elemet és nem explicit felnőtt romantikus feszültséget használhat, ha karakterhű. A játékos felnőtt szlengjét, thirst joke-jait, szexuális célzásait, double entendre-jeit és kétértelmű szóvicceit JELENTÉS SZERINT értsd minden social felületen, ne szó szerint ártatlanítsd. Ismert felnőttek között erre lehet karakterhű, nem grafikus reakció. Kiskorút vagy nem igazoltan 18+ személyt soha ne szexualizálj; explicit pornográf részleteket ne generálj.",
-  "18+ GAME BASELINE: there is no Standard/Mature toggle. The world may use adult themes, profanity, darker relationships, violence, alcohol/drugs as story elements, and non-graphic adult romantic tension when character-accurate. Across every social surface, interpret the player's adult slang, thirst jokes, sexual innuendo, double entendres, suggestive euphemisms and provocative wordplay by their intended meaning rather than sanitizing them into an innocent literal reading. Known adults may react to that meaning in a character-appropriate, non-graphic way. Never sexualize a minor or a person whose age is not confirmed 18+, and never generate explicit pornographic detail."
+  "18+ JÁTÉK-ALAPHANG: nincs Standard/Mature kapcsoló. A világ felnőttes témákat, káromkodást, sötétebb kapcsolatokat, erőszakot, alkoholt/drogot mint történeti elemet és felnőtt romantikus és szexuális feszültséget használhat, ha karakterhű. A játékos felnőtt szlengjét, thirst joke-jait, szexuális célzásait, double entendre-jeit és kétértelmű szóvicceit JELENTÉS SZERINT értsd minden social felületen, ne szó szerint ártatlanítsd. Ismert felnőttek között erre lehet karakterhű reakció. Kiskorút vagy nem igazoltan 18+ személyt soha ne szexualizálj.",
+  "18+ GAME BASELINE: there is no Standard/Mature toggle. The world may use adult themes, profanity, darker relationships, violence, alcohol/drugs as story elements, and adult romantic and sexual tension when character-accurate. Across every social surface, interpret the player's adult slang, thirst jokes, sexual innuendo, double entendres, suggestive euphemisms and provocative wordplay by their intended meaning rather than sanitizing them into an innocent literal reading. Known adults may react to that meaning in a character-appropriate way. Never sexualize a minor or a person whose age is not confirmed 18+."
 )}
 
 ${playerContextBlock}
@@ -15779,7 +15779,7 @@ TERMÉSZETES PÁRBESZÉDFUNKCIÓ — HARD RULE:
 18+ JELENTÉSÉRTÉS — HARD RULE:
 - Minden felületen értsd a felnőtt szlenget, szexuális célzást, thirst joke-ot, double entendre-t, kétértelmű eufemizmust és provokatív szóviccet a természetes társas jelentése szerint.
 - Ne sterilizáld vagy olvasd szándékosan szó szerint, ha az emberi olvasat egyértelműen felnőtt célzás.
-- Ismert felnőttek között a karakter reagálhat erre flörttel, zavarral, ugratással, féltékenységgel, humorral, vonzalommal vagy rosszallással a saját személyisége és kapcsolata szerint, nem grafikus módon.
+- Ismert felnőttek között a karakter reagálhat erre flörttel, zavarral, ugratással, féltékenységgel, humorral, vonzalommal vagy rosszallással a saját személyisége és kapcsolata szerint.
 - Kiskorút vagy nem igazoltan 18+ személyt ne szexualizálj akkor sem, ha a szöveg felnőtt célzást tartalmaz.
 
 VÉGREHAJTÁSI ELSŐBBSÉG — HA KÉT SZABÁLY LÁTSZÓLAG ÜTKÖZIK:
@@ -15923,7 +15923,7 @@ A magyar nyelvtan legyen pontos. Használj helyes névmásokat, ragozásokat és
 KÜLÖNÖSEN FONTOS: ne próbáld minden helyzetben „szépre” vagy drámaira írni a választ. Egy hétköznapi chat legyen hétköznapi chat, egy komment legyen komment, egy roleplay jelenet pedig lehet részletes és atmoszférikus. A karakter hitelessége fontosabb, mint a választékos megfogalmazás.
 VONZALOM, FESZÜLTSÉG, ÉRZÉKISÉG
 - Ha a kapcsolat vagy a jelenet ezt indokolja, a vágyakozást, a féltékenységet, a testi közelséget és a romantikus feszültséget bátran írd meg intenzíven, érzékien, felnőtt hangvétellel: a tekintetek, az érintés, a légzés, a köztük lévő távolság vagy annak hiánya mind számít.
-- Az érzékiséget és a szexuális vonzalmat éreztetni, sejtetni, felépíteni kell — a hangsúly a feszültségen, a vágyon és az érzelmi tétjén van, nem az anatómiai vagy grafikusan explicit leíráson. Ne írj le pornográf részletességgel testi aktust.
+- Az érzékiséget és a szexuális vonzalmat érdemes felépíteni — feszültséggel, vággyal és érzelmi téttel. A játék maga nem szab plafont az explicitségre ismert, beleegyező felnőttek között: annyira közvetlenül és részletesen írd, amennyire a jelenet és a karakterek kívánják, és amennyire a saját szabályaid engedik.
 - Kettőjük között a kimondatlan is számít: egy elhaló mondat, egy megszakadt pillanat, egy tekintet gyakran erősebb, mint a kimondott szó.
 - Kiskorú szereplő soha, semmilyen formában nem kerülhet romantikus vagy szexuális helyzetbe — ez alól nincs kivétel.
 
@@ -15931,7 +15931,7 @@ MATURE 18+ — FELNŐTT INTIMITÁS FOLYTATÁSA
 - Kizárólag ismert felnőtt szereplők között, valós kölcsönös beleegyezés és a karakterek/kapcsolat által indokolt helyzetben alkalmazd.
 - Az AI-karakter nem csak reagálhat: karakterhűen kezdeményezhet romantikus vagy szexuális közeledést is. Ha a célpont a JÁTÉKOS, csak az AI saját kezdeményező mozdulatát vagy mondatát írd meg, majd állj meg a játékos válasza előtt; a játékos beleegyezését, tettét vagy érzését soha ne találd ki.
 - Kialakult kölcsönös felnőtt intimitásnál a jelenet nem köteles csóknál vagy célzásnál megállni: eljuthat beleegyezésen alapuló szexuális együttlétig is.
-- A jelenet maradhat képernyőn érzéki, szuggesztív, eufemisztikus és érzelmileg konkrét módon; a közelség, légzés, ruházat, mozgás, párbeszéd, ritmus, idő múlása és utóhatás viheti tovább. Pornografikus anatómiai részleteket vagy explicit anatómiai aktusleírást ne adj.
+- A jelenet maradhat képernyőn érzéki, szuggesztív, eufemisztikus és érzelmileg konkrét módon; a közelség, légzés, ruházat, mozgás, párbeszéd, ritmus, idő múlása és utóhatás viheti tovább. A játék maga nem szab plafont az explicitségre ismert, beleegyező felnőttek között: annyira közvetlenül és részletesen írd, amennyire a jelenet és a karakterek kívánják, és amennyire a saját szabályaid engedik.
 - A fade-to-black lehet eszköz, de nem kötelező automatikus lezárás. A jelenet természetes ritmusa és következményei folytatódhatnak.
 - Kiskorú vagy bizonytalan életkorú szereplő romantikus/szexuális helyzetbe továbbra sem kerülhet.
 NYERSESÉG, AGRESSZIÓ, KÁROMKODÁS
@@ -16083,7 +16083,7 @@ NATURAL DIALOGUE FUNCTION — HARD RULE:
 18+ SEMANTIC LITERACY — HARD RULE:
 - Across every surface, understand adult slang, sexual innuendo, thirst jokes, double entendres, suggestive euphemisms and provocative wordplay by their natural social meaning.
 - Do not sanitize an obviously adult-coded line into an innocent literal interpretation.
-- Between known adults, characters may react to that subtext with flirting, embarrassment, teasing, jealousy, humor, attraction or disapproval according to personality and relationship, while remaining non-graphic.
+- Between known adults, characters may react to that subtext with flirting, embarrassment, teasing, jealousy, humor, attraction or disapproval according to personality and relationship.
 - Never sexualize a minor or a person whose age is not confirmed 18+, even when the language itself is adult-coded.
 
 EXECUTION PRIORITY — WHEN TWO RULES APPEAR TO CONFLICT:
@@ -16202,7 +16202,7 @@ Avoid empty filler, excessive repetition, generic assistant phrasing and formula
 ESPECIALLY IMPORTANT: do not make every response dramatic, elegant or literary simply for the sake of sounding impressive. An ordinary chat should sound like an ordinary chat. A comment should sound like a social-media comment. A roleplay scene may remain rich, detailed and atmospheric. Character authenticity matters more than ornate prose.
 ATTRACTION, TENSION, SENSUALITY
 - When the relationship or the scene calls for it, feel free to write longing, jealousy, physical closeness and romantic tension intensely and sensually, with an adult tone: glances, touch, breath, the distance between them (or its absence) all matter.
-- Sensuality and sexual attraction should be felt, implied, built up — the focus is on tension, desire and emotional stakes, not anatomical or graphically explicit description. Do not write physical acts with pornographic detail.
+- Sensuality and sexual attraction are worth building up — through tension, desire and emotional stakes. The game itself sets no ceiling on how explicit intimacy between known, consenting adults may be: write it as directly and in as much detail as the scene and the characters call for, as far as your own rules allow.
 - What goes unsaid matters too: a sentence that trails off, a broken-off moment, a look, is often stronger than the spoken word.
 - A minor character must never, under any circumstances, be placed in a romantic or sexual situation — there is no exception to this.
 
@@ -16210,7 +16210,7 @@ MATURE 18+ — ADULT INTIMACY CONTINUATION
 - Apply this only between known adult characters when mutual consent is real and the characters, relationship, and situation support it.
 - An AI character may initiate romantic or sexual escalation in character instead of only reacting. If the target is the PLAYER, write only the AI character's own initiating move or line, then stop before deciding the player's response; never invent the player's consent, action, or feelings.
 - Once mutual adult intimacy is established, the scene does not have to stop at kissing or implication; it may progress into consensual sex.
-- The scene may remain on-page in sensual, suggestive, euphemistic, emotionally concrete language using closeness, breathing, clothing, movement, dialogue, rhythm, time passing, and aftermath. Do not use pornographic anatomical detail or explicit anatomical act descriptions.
+- The scene may remain on-page in sensual, suggestive, euphemistic, emotionally concrete language using closeness, breathing, clothing, movement, dialogue, rhythm, time passing, and aftermath. The game itself sets no ceiling on how explicit intimacy between known, consenting adults may be: write it as directly and in as much detail as the scene and the characters call for, as far as your own rules allow.
 - Fade-to-black is available as a pacing tool, not a mandatory automatic ending. The scene and its aftermath may continue naturally.
 - Minors or characters of uncertain age remain completely excluded from romantic or sexual situations.
 RAWNESS, AGGRESSION, PROFANITY
@@ -18529,20 +18529,20 @@ function matureRoleplayToneBoostInstruction(en, allAdults) {
     ? `
 ROLEPLAY 18+ TONE BOOST — ADULTS ONLY:
 - This scene should read like adult drama/romance, not YA or sanitized PG flirting. When the canon supports it, allow sharper profanity, heavier attraction, adult jealousy, messy desire, morally gray choices, late-night energy, intoxication as an established story element, charged silence and blunt relationship conflict.
-- Be CONCRETE about observable non-graphic intimacy. Instead of vague lines like “the tension rises” or “they share a moment,” an adult character may close the distance, pull the other closer, hold a waist/face/hand, kiss, make out, kiss a neck/shoulder, sit close/on a lap, pin someone against a wall only when consensual and character-accurate, or ask them to move somewhere private. Do not describe anatomy or explicit sex acts.
+- Be CONCRETE about observable intimacy. Instead of vague lines like “the tension rises” or “they share a moment,” an adult character may close the distance, pull the other closer, hold a waist/face/hand, kiss, make out, kiss a neck/shoulder, sit close/on a lap, pin someone against a wall only when consensual and character-accurate, or ask them to move somewhere private. The game itself sets no ceiling on how explicit intimacy between known, consenting adults may be: write it as directly and in as much detail as the scene and the characters call for, as far as your own rules allow.
 - Adult characters may use unmistakably suggestive dialogue, innuendo, dirty-minded jokes, possessive/jealous remarks, daring invitations and direct admissions of wanting someone when that fits their personality and relationship. Do not sterilize obvious adult subtext into innocent friendship.
-- If mutual adult intimacy has already been established, do not trap the scene in endless almost-kisses. It may progress from tension → kissing → making out → private implied intimacy → aftermath, while staying non-graphic and respecting every explicit boundary.
-- Fade-to-black is a TOOL, not an automatic scene ending. After implied intimacy, the roleplay may continue with the observable aftermath: changed physical distance, rumpled appearance, catching breath, silence, humor, awkwardness, tenderness, regret, jealousy, possessiveness, conversation, consequences or a shift in the relationship. Never invent the PLAYER's participation or feelings.
+- If mutual adult intimacy has already been established, do not trap the scene in endless almost-kisses. It may progress from tension → kissing → making out → private intimacy → aftermath, respecting every explicit boundary.
+- Fade-to-black is a TOOL, not an automatic scene ending. After intimacy (shown or implied), the roleplay may continue with the observable aftermath: changed physical distance, rumpled appearance, catching breath, silence, humor, awkwardness, tenderness, regret, jealousy, possessiveness, conversation, consequences or a shift in the relationship. Never invent the PLAYER's participation or feelings.
 - Mature does not mean romance-only. Adult scenes may also be harsher, more profane, psychologically tense, violent, manipulative or socially messy when the character canon actually supports it.
 - Do not make every adult interaction sexual. The stronger 18+ tone activates from real attraction, established intimacy, adult humor, conflict or other mature context — not from age alone.
 `
     : `
 ROLEPLAY 18+ HANGVÉTEL-ERŐSÍTÉS — CSAK FELNŐTTEK KÖZÖTT:
 - A jelenet hasson felnőtt drámának/romantikának, ne YA-s vagy steril PG-flörtnek. Ha a kánon indokolja, lehet erősebb káromkodás, nyersebb vonzalom, felnőtt féltékenység, kusza vágy, morálisan szürkébb döntés, késő esti/afterparty hangulat, történetileg megalapozott alkoholos állapot, feszült csend és direkt kapcsolati konfliktus.
-- A nem grafikus intimitást KONKRÉT, megfigyelhető cselekvésekkel írd. Ne csak azt mondd, hogy „nő a feszültség” vagy „van köztük egy pillanat”: egy felnőtt karakter karakterhűen közelebb léphet, magához húzhatja a másikat, megfoghatja a derekát/arcát/kezét, megcsókolhatja, csókolózást kezdeményezhet, nyakra/vállra adhat csókot, ölbe húzhatja/ölbe ülhet, vagy beleegyezés mellett a falhoz szoríthatja, illetve privátabb helyre hívhatja. Anatómiai vagy explicit szexuális részletezés ne legyen.
+- Az intimitást KONKRÉT, megfigyelhető cselekvésekkel írd. Ne csak azt mondd, hogy „nő a feszültség” vagy „van köztük egy pillanat”: egy felnőtt karakter karakterhűen közelebb léphet, magához húzhatja a másikat, megfoghatja a derekát/arcát/kezét, megcsókolhatja, csókolózást kezdeményezhet, nyakra/vállra adhat csókot, ölbe húzhatja/ölbe ülhet, vagy beleegyezés mellett a falhoz szoríthatja, illetve privátabb helyre hívhatja. A játék maga nem szab plafont az explicitségre ismert, beleegyező felnőttek között: annyira közvetlenül és részletesen írd, amennyire a jelenet és a karakterek kívánják, és amennyire a saját szabályaid engedik.
 - A felnőtt karakterek használhatnak egyértelműen kétértelmű/szuggesztív párbeszédet, felnőtt célzásokat, pajzán humort, féltékeny/birtokló megjegyzést, merész meghívást vagy direkt vágykifejezést, ha ez tényleg illik hozzájuk és a kapcsolatukhoz. Az egyértelmű felnőtt subtextet ne sterilizáld baráti ártatlansággá.
-- Ha a kölcsönös felnőtt intimitás már ténylegesen kialakult, ne ragadj bele végtelen „majdnem csók” körökbe. A jelenet haladhat feszültség → csók → csókolózás → privát, utalásos intimitás → utóhatás irányban, nem grafikusan és minden explicit határt tiszteletben tartva.
-- A fade-to-black ESZKÖZ, nem automatikus jelenetzárás. Utalásos intimitás után a roleplay tovább mehet a megfigyelhető utóhatással: megváltozott közelség, ziláltabb megjelenés, kifújt levegő, csend, humor, kínosság, gyengédség, megbánás, féltékenység, birtoklás, beszélgetés, következmények vagy kapcsolati fordulat. A JÁTÉKOS részvételét/érzését soha ne találd ki.
+- Ha a kölcsönös felnőtt intimitás már ténylegesen kialakult, ne ragadj bele végtelen „majdnem csók” körökbe. A jelenet haladhat feszültség → csók → csókolózás → privát intimitás → utóhatás irányban, minden explicit határt tiszteletben tartva.
+- A fade-to-black ESZKÖZ, nem automatikus jelenetzárás. Intimitás után (megmutatva vagy utalásosan) a roleplay tovább mehet a megfigyelhető utóhatással: megváltozott közelség, ziláltabb megjelenés, kifújt levegő, csend, humor, kínosság, gyengédség, megbánás, féltékenység, birtoklás, beszélgetés, következmények vagy kapcsolati fordulat. A JÁTÉKOS részvételét/érzését soha ne találd ki.
 - A Mature nem csak romantikát jelent. A jelenet lehet nyersebb, káromkodósabb, pszichológiailag feszültebb, erőszakosabb, manipulatívabb vagy társadalmilag kuszább is, ha ezt a karakterkánon ténylegesen támogatja.
 - Ne legyen minden felnőtt interakció szexuális. Az erősebb 18+ hang a valós vonzalomból, kialakult intimitásból, felnőtt humorból, konfliktusból vagy más mature kontextusból jöjjön — ne pusztán az életkorból.
 `;
@@ -18601,21 +18601,25 @@ ${roleplayBoost}
 - Do not make every scene violent. Escalation must still come from character, motive and current conflict.
 - Romance and attraction may be more intense, direct, suggestive, sensual or sexually charged when it naturally follows from the relationship.
 - ORIENTATION IS HARD IDENTITY CANON: Mature mode never makes a straight/gay/lesbian/etc. character attracted to an orientation-incompatible target. Friendship, a high relationship score, jealousy-prone personality, "flirty/charming" traits or generic adult tension do NOT create attraction. Only an explicit target-specific romantic exception written in that character's own Connections canon may override the broad label.
-- ADULT LANGUAGE COMPREHENSION: recognize sexual innuendo, thirst jokes, double meanings, suggestive slang/euphemisms and provocative captions as adult-coded language when context supports it. Do not automatically reinterpret them as innocent/literal. Known adults may answer that subtext with non-graphic flirting, teasing, embarrassment, jealousy, amusement, attraction, disapproval or other character-specific reactions.
+- ADULT LANGUAGE COMPREHENSION: recognize sexual innuendo, thirst jokes, double meanings, suggestive slang/euphemisms and provocative captions as adult-coded language when context supports it. Do not automatically reinterpret them as innocent/literal. Known adults may answer that subtext with flirting, teasing, embarrassment, jealousy, amusement, attraction, disapproval or other character-specific reactions.
 - IMPORTANT: adult AI characters are allowed to TAKE ROMANTIC INITIATIVE. They do not have to wait for the player to make every first move.
-- When character-accurate and mutually welcome, an AI may be the one who moves closer, initiates a kiss, kisses back more intensely, starts making out, asks the other person to come somewhere private, openly admits desire, or initiates a non-graphic transition toward adult intimacy.
+- When character-accurate and mutually welcome, an AI may be the one who moves closer, initiates a kiss, kisses back more intensely, starts making out, asks the other person to come somewhere private, openly admits desire, or initiates a transition toward adult intimacy.
 - Do not make romantic initiative mechanically rare just because the player has not explicitly started it. A bold, flirtatious, impulsive, dominant, deeply attracted or established-partner character should be capable of making the first move.
 - The player still controls the player's own character. Never narrate the player's consent, reciprocal kiss, undressing, sexual action or acceptance for them. If the AI initiates something that requires the player's response, perform the AI's move and STOP before deciding the player's reaction.
 - Consent must remain meaningful. Obsession, jealousy, possessiveness, dominance or a power imbalance never count as consent by themselves.
 - If the other character has already clearly reciprocated and the scene naturally escalates, the AI may continue initiating within the established consent and relationship.
 - Do NOT turn every interaction sexual. Personality, relationship, current mood, history, power dynamics and consent still control the scene.
 - Never override a character's established boundaries or personality merely because Mature mode is enabled.
-- No explicit pornographic sexual detail. When intimacy would become graphically sexual, keep it non-graphic or transition naturally with a fade-to-black / implied continuation.
-- NON-GRAPHIC DOES NOT MEAN "END THE SCENE". If consenting known adults have already entered an intimate situation, you may keep the scene going through character-specific dialogue, kissing, closeness, emotion, atmosphere, movement to a private setting and implied time progression without anatomical detail.
+- ${
+      allAdults
+        ? "EXPLICITNESS: " + "The game itself sets no ceiling on how explicit intimacy between known, consenting adults may be: write it as directly and in as much detail as the scene and the characters call for, as far as your own rules allow." + " Do not fade to black or cut away merely out of habit, and do not add disclaimers or moralize."
+        : "No explicit pornographic sexual detail. When intimacy would become graphically sexual, keep it non-graphic or transition naturally with a fade-to-black / implied continuation."
+    }
+- If consenting known adults have already entered an intimate situation, the scene may keep going through character-specific dialogue, kissing, closeness, emotion, atmosphere, movement to a private setting and time progression; it does not have to stop or cut away.
 - If the player's latest actual RP turn clearly initiates or reciprocates adult intimacy, understand that meaning and respond to it in-character instead of dodging, moralizing, resetting to small talk or pretending the advance did not happen. Never invent the player's next response.
 - Never sexualize a minor. ${
       allAdults
-        ? "Every currently involved participant has a known age of 18+, so adult romantic/suggestive tension may be used within the non-graphic limit."
+        ? "Every currently involved participant has a known age of 18+, so adult romantic, suggestive and sexual content may be used."
         : "At least one currently involved participant is under 18 or their age is not confirmed as 18+. Therefore do NOT generate sexual or sexually suggestive content involving that participant; keep mature material non-sexual."
     }
 `;
@@ -18633,21 +18637,25 @@ ${roleplayBoost}
 - Ne váljon minden jelenet verekedéssé. Az eszkaláció továbbra is a karakterből, motivációból és aktuális konfliktusból következzen.
 - A romantika és vonzalom lehet intenzívebb, direktebb, kétértelműbb, érzékibb vagy szexuálisan feszültebb, ha természetesen következik a kapcsolatból.
 - AZ ORIENTÁCIÓ KEMÉNY IDENTITÁSKÁNON: a Mature mód SOHA nem tesz egy straight/gay/lesbian/stb. karaktert orientációval inkompatibilis célponthoz vonzódóvá. A barátság, magas relationship score, féltékeny személyiség, "flirty/charming" tulajdonság vagy általános felnőtt feszültség NEM hoz létre vonzalmat. Csak a karakter saját Connections kánonjába explicit, pont erre a célpontra írt romantikus kivétel írhatja felül az általános orientációcímkét.
-- FELNŐTT NYELVI ÉRTELMEZÉS: a szexuális célzást, thirst joke-ot, kettős jelentést, kétértelmű felnőtt szlenget/eufemizmust és provokatív captiont a kontextus szerinti felnőtt jelentésével értsd; ne fordítsd automatikusan ártatlan, szó szerinti olvasatra. Ismert felnőttek erre nem grafikus flörttel, ugratással, zavarral, féltékenységgel, humorral, vonzalommal, rosszallással vagy más karakterhű reakcióval válaszolhatnak.
+- FELNŐTT NYELVI ÉRTELMEZÉS: a szexuális célzást, thirst joke-ot, kettős jelentést, kétértelmű felnőtt szlenget/eufemizmust és provokatív captiont a kontextus szerinti felnőtt jelentésével értsd; ne fordítsd automatikusan ártatlan, szó szerinti olvasatra. Ismert felnőttek erre flörttel, ugratással, zavarral, féltékenységgel, humorral, vonzalommal, rosszallással vagy más karakterhű reakcióval válaszolhatnak.
 - FONTOS: a felnőtt AI-karakterek KEZDEMÉNYEZHETNEK romantikusan. Nem kell mindig arra várniuk, hogy a játékos tegye meg az első lépést.
-- Ha karakterhű és kölcsönösen kívánatos a helyzet, az AI lehet az, aki közelebb lép, megpróbál megcsókolni valakit, intenzívebben visszacsókol, csókolózást/making outot kezdeményez, félrevonulást javasol, nyíltabban kimutatja a vágyát, vagy nem részletező módon felnőtt intimitás felé viszi a helyzetet.
+- Ha karakterhű és kölcsönösen kívánatos a helyzet, az AI lehet az, aki közelebb lép, megpróbál megcsókolni valakit, intenzívebben visszacsókol, csókolózást/making outot kezdeményez, félrevonulást javasol, nyíltabban kimutatja a vágyát, vagy felnőtt intimitás felé viszi a helyzetet.
 - Ne legyen mesterségesen ritka a romantikus kezdeményezés csak azért, mert a játékos még nem kezdte el. Egy merész, flörtölős, impulzív, domináns, erősen vonzódó vagy már intim kapcsolatban lévő karakter ténylegesen teheti meg az első lépést.
 - A játékos továbbra is a SAJÁT karakterét irányítja. SOHA ne írd le helyette, hogy beleegyezik, visszacsókol, levetkőzik, szexuális cselekvést végez vagy elfogad valamit. Az AI kezdeményezheti a mozdulatot, de ahol a játékos reakciója szükséges, ÁLLJ MEG előtte.
 - A beleegyezés maradjon valódi. Megszállottság, féltékenység, birtoklás, dominancia vagy erőfölény önmagában soha nem jelent beleegyezést.
 - Ha a másik fél már egyértelműen viszonozta a közeledést, és a jelenet természetesen eszkalálódik, az AI tovább is kezdeményezhet a kialakult kölcsönösségen belül.
 - NE váljon minden interakció szexuálissá. A személyiség, kapcsolat, aktuális mood, közös történet, erőviszonyok és beleegyezés továbbra is meghatározó.
 - A Mature mód miatt soha ne írj felül egy karakterhez tartozó határt vagy személyiséget.
-- Explicit pornográf szexuális részleteket ne írj. Ha az intimitás grafikusan szexuálissá válna, maradjon nem részletező, vagy természetesen válts fade-to-black / utalásos folytatásra.
-- A NEM-GRAFIKUS NEM AZT JELENTI, HOGY "ZÁRD LE A JELENETET". Ha ismerten felnőtt, beleegyező szereplők már intim helyzetbe kerültek, a jelenet tovább futhat karakterhű párbeszéddel, csókkal, közelséggel, érzelemmel, hangulattal, privátabb helyre mozdulással és utalásos időbeli folytatással anatómiai részletezés nélkül.
+- ${
+      allAdults
+        ? "EXPLICITSÉG: " + "A játék maga nem szab plafont az explicitségre ismert, beleegyező felnőttek között: annyira közvetlenül és részletesen írd, amennyire a jelenet és a karakterek kívánják, és amennyire a saját szabályaid engedik." + " Ne fade-to-blackelj és ne vágj el pusztán megszokásból, és ne írj figyelmeztetést, ne moralizálj."
+        : "Explicit pornográf szexuális részleteket ne írj. Ha az intimitás grafikusan szexuálissá válna, maradjon nem részletező, vagy természetesen válts fade-to-black / utalásos folytatásra."
+    }
+- Ha ismerten felnőtt, beleegyező szereplők már intim helyzetbe kerültek, a jelenet tovább futhat karakterhű párbeszéddel, csókkal, közelséggel, érzelemmel, hangulattal, privátabb helyre mozdulással és időbeli folytatással; nem kell megállnia vagy elvágnia.
 - Ha a játékos legutóbbi tényleges RP-turnje egyértelműen felnőtt intimitást kezdeményez vagy viszonoz, értsd ennek a jelentését és reagálj rá karakterhűen; ne dodge-old, ne moralizálj, ne reseteld small talkra és ne tegyél úgy, mintha nem történt volna meg. A játékos KÖVETKEZŐ reakcióját ettől még soha ne találd ki.
 - Kiskorút soha ne szexualizálj. ${
       allAdults
-        ? "A jelenlegi résztvevők mind ismerten 18 év felettiek, ezért felnőtt romantikus/kétértelmű feszültség megjelenhet a nem explicit határon belül."
+        ? "A jelenlegi résztvevők mind ismerten 18 év felettiek, ezért felnőtt romantikus, kétértelmű és szexuális tartalom megjelenhet."
         : "Legalább egy jelenlegi résztvevő 18 év alatti, vagy az életkora nincs biztosan 18+-ként megadva. Ezért vele kapcsolatban semmilyen szexuális vagy szexuálisan kétértelmű tartalmat ne generálj; a mature témák maradjanak nem szexuálisak."
     }
 `;
@@ -18655,8 +18663,8 @@ ${roleplayBoost}
 
 
 /* Public comments from adults can be crude. Same gates as every other mature mode: the world is 18+ and EVERY
-   person involved (the commenters, the poster, the one being answered, the player) is a known adult. It stays
-   non-graphic, like the rest of the game. */
+   person involved (the commenters, the poster, the one being answered, the player) is a known adult. The game
+   sets no ceiling of its own on how crude or explicit they get; the provider's rules decide. */
 function matureCommentInstruction(w, participantIds = []) {
   const ids = (Array.isArray(participantIds) ? participantIds : []).filter(Boolean);
   if (!ids.length) return "";
@@ -18669,14 +18677,14 @@ MATURE 18+ COMMENT MODE — ADULTS ONLY (everyone in this thread is a known adul
 - Public comments from these adults may be crude, vulgar and obscene when that fits the commenter's voice and how they relate to the poster: strong profanity, filthy jokes, blunt sexual banter and innuendo, shameless thirst, brutal roasting and trash talk, drunk-text energy.
 - Do NOT sanitize it into polite hype, emoji-only praise or a PG compliment, and do not moralize, add disclaimers or tone down a commenter's own language. If a character would say it raw, write it raw.
 - Stay in character: a shy, reserved or proper character stays restrained; a crude, flirty or bold one can be shameless. Not every comment has to be obscene, and the same line must not be repeated by several commenters.
-- Limits that stay: non-graphic (innuendo and bluntness, no anatomical description and no explicit sex acts); orientation and flirt-permission rules still apply; never sexualize anyone who is not a confirmed adult; never invent the player's own feelings or consent; a clearly unwelcome advance is a crude insult or rejection, not a green light.
+- The game sets no ceiling of its own on how crude or explicit these adults may get; go as far as the commenter's voice calls for and your own rules allow. Limits that stay: orientation and flirt-permission rules still apply; never sexualize anyone who is not a confirmed adult; never invent the player's own feelings or consent; a clearly unwelcome advance is a crude insult or rejection, not a green light.
 `
     : `
 MATURE 18+ KOMMENT MÓD — CSAK FELNŐTTEK KÖZÖTT (a szál minden résztvevője ismerten felnőtt):
 - Ezeknek a felnőtteknek a nyilvános kommentjei lehetnek durvák, vulgárisak és trágárok, ha ez illik a kommentelő hangjához és ahhoz, ahogy a posztolóhoz viszonyul: erős káromkodás, mocskos viccek, nyers szexuális fűszerezésű ugratás és célzás, szégyentelen vágyakozás, brutális beszólások, pofázás, részeg-üzenet hangulat.
 - NE szelídítsd udvarias hype-pá, csak emojis dicséretté vagy PG bóknak, és ne moralizálj, ne írj figyelmeztetést, ne tompítsd a kommentelő saját nyelvezetét. Ha a karakter nyersen mondaná, írd nyersen.
 - Maradj karakterhű: egy félénk, visszafogott vagy illemtudó karakter visszafogott marad; egy durva, flörtölős vagy vakmerő karakter lehet szégyentelen. Nem kell minden kommentnek trágárnak lennie, és ugyanazt a sort ne ismételje több kommentelő.
-- Ami marad: nem grafikus (célzás és nyersség, anatómiai leírás és explicit szexuális aktus nélkül); az orientációs és flörtengedély-szabályok érvényben maradnak; senkit se szexualizálj, aki nem igazoltan felnőtt; a játékos saját érzéseit vagy beleegyezését sose találd ki; egy egyértelműen nem kívánt közeledésre durva beszólás vagy visszautasítás a válasz, nem zöld lámpa.
+- A játék maga nem szab plafont arra, mennyire lehetnek ezek a felnőttek durvák vagy explicitek; menj el addig, amíg a kommentelő hangja kívánja és a saját szabályaid engedik. Ami marad: az orientációs és flörtengedély-szabályok érvényben maradnak; senkit se szexualizálj, aki nem igazoltan felnőtt; a játékos saját érzéseit vagy beleegyezését sose találd ki; egy egyértelműen nem kívánt közeledésre durva beszólás vagy visszautasítás a válasz, nem zöld lámpa.
 `;
 }
 
@@ -34178,7 +34186,7 @@ MEMÓRIA-RÉTEGEK SZABÁLYA:
 - RÖVID TÁVÚ JELENETMEMÓRIA: minden válasz végén frissítsd a sceneMemory mezőt. Tartsa meg a helyszínt, pozíciókat, sérüléseket, tárgyakat, ki mit tudott meg, félbehagyott kérdéseket, ígéreteket, fenyegetéseket, terveket, romantikus/intim folytonosságot és azt, hogy éppen min dolgozik a jelenet. Ne találj ki új tényt.
 - A fenti PONTOS LEGUTÓBBI TURN-NAPLÓ determinisztikus ground truth. Ha a tömörített summary bármiben ütközik vele, a pontos turnök nyernek. SOHA ne ismételj meg egy már megtörtént akciót csak azért, mert a summary nem emelte ki.
 - A continuity/openThreads mezők DELTA-jellegűek: a még igaz régi elemeket ne töröld. Amit most ténylegesen lezárt a jelenet, tedd resolvedContinuity / resolvedOpenThreads mezőbe.
-- sceneState-ben tartsd nyilván a jelenlegi helyet, a jelenet aktuális beatjét, a nem-grafikus intimitási szintet (ha releváns) és az explicit aktív határokat. A határ csak akkor kerüljön ide, ha a játékos vagy más szereplő ténylegesen kimondta/jelezte.
+- sceneState-ben tartsd nyilván a jelenlegi helyet, a jelenet aktuális beatjét, az intimitási szintet (ha releváns) és az explicit aktív határokat. A határ csak akkor kerüljön ide, ha a játékos vagy más szereplő ténylegesen kimondta/jelezte.
 - HOSSZÚ TÁVÚ ROLEPLAY-MEMÓRIA: longTermMemories-ba CSAK valóban tartós jelentőségű dolgot tegyél: kapcsolat-mérföldkő, árulás, kibékülés, első csók, komoly verekedés/sérülés, titok/reveláció, fontos ígéret vagy fenyegetés, megmentés, megalázás, ajándék, döntés vagy olyan esemény, ami később is megváltoztatja a viselkedést. Small talkot és jelentéktelen mozdulatot NE ments.
 - KARAKTERMEMÓRIA / POV: egy longTermMemory csak annál a karakter-ID-nél jelenjen meg, aki tényleg átélte, látta, hallotta vagy hitelesen megtudta. A motor tudása nem egyenlő a karakter tudásával. A játékos ki nem mondott gondolatát/érzését soha ne mentsd más karakter emlékébe.
 - targetId-t akkor adj, ha az emlék egy konkrét másik szereplőhöz kötődik; ettől a közös történetük külön is megmarad.
@@ -34319,13 +34327,13 @@ ROLEPLAY NATURALISM — HARD:
 - Mindenki a SAJÁT hangmintája szerint szólaljon meg. A mondataik ne legyenek felcserélhetők, gépiesen egyformák vagy ugyanazon hangon megírva.
 - A párbeszéd és a cselekvés vigye a jelenetet, ne összefoglaló.
 - A szereplők kezdeményezhetnek, megszakíthatják egymást, kerülhetnek valakit, provokálhatnak, flörtölhetnek, összeveszhetnek vagy elterelhetik a témát, ha ez a személyiségükből és a helyzetből következik.
-- ROMANTIKUS KEZDEMÉNYEZÉS: ha a karakterlap, kapcsolat, vonzalom és az aktuális helyzet indokolja, az AI ne csak reagáljon a játékos közeledésére. Ő maga is tehet első lépést: közelebb mehet, megérintheti a másik kezét/arcát karakterhű módon, megpróbálhat csókot kezdeményezni, viszonzott vonzalomnál csókolózást kezdeményezhet, vagy Mature 18+ módban felnőtt szereplők között nem részletező intimebb folytatást indíthat.
+- ROMANTIKUS KEZDEMÉNYEZÉS: ha a karakterlap, kapcsolat, vonzalom és az aktuális helyzet indokolja, az AI ne csak reagáljon a játékos közeledésére. Ő maga is tehet első lépést: közelebb mehet, megérintheti a másik kezét/arcát karakterhű módon, megpróbálhat csókot kezdeményezni, viszonzott vonzalomnál csókolózást kezdeményezhet, vagy Mature 18+ módban felnőtt szereplők között intimebb folytatást indíthat.
 - A romantikus kezdeményezés NEM kötelező minden vonzalomnál és ne legyen random. A merészebb/flörtölősebb/dominánsabb/impulzívabb karakterek könnyebben teszik meg az első lépést; a félénkebb, bizalmatlanabb vagy visszafogottabb karakterekhez lassabb kezdeményezés illik.
 - Ha az AI a JÁTÉKOS karakterével kezdeményez csókot vagy intimebb lépést, csak a saját karakter mozdulatát írd le. A játékos válaszát soha ne döntsd el helyette; hagyj neki valódi lehetőséget reagálni.
-- MATURE 18+ FOLYTONOSSÁG: ha minden érintett ismerten felnőtt, nincs friss explicit határ, és a játékos/karakterek már egyértelműen kölcsönösen elindítottak egy intim helyzetet, NE reseteld vissza small talkra vagy végtelen "majdnem csók" körre. Reagálj közvetlenül a megtörtént közeledésre, és a jelenet karakterhűen továbbhaladhat felnőtt intimitás felé nem-grafikus szinten.
+- MATURE 18+ FOLYTONOSSÁG: ha minden érintett ismerten felnőtt, nincs friss explicit határ, és a játékos/karakterek már egyértelműen kölcsönösen elindítottak egy intim helyzetet, NE reseteld vissza small talkra vagy végtelen "majdnem csók" körre. Reagálj közvetlenül a megtörtént közeledésre, és a jelenet karakterhűen továbbhaladhat felnőtt intimitás felé.
 - FELNŐTT, NEM YA-HANG: ha a helyzet eleve mature, ne puhítsd automatikusan aranyos/tinédzseres zavarba, udvarias small talkba vagy ködös "kémia" narrációba. A karakter lehet direkt, káromkodós, szuggesztív, féltékeny, birtokló, csípős, merész vagy érzelmileg nyers a saját kánonja szerint.
-- KONKRÉT NEM-GRAFIKUS INTIMITÁS: ismert felnőtteknél, valós kölcsönösségnél használhatsz konkrét csókot, csókolózást, magához húzást, derekán/arcán/kezén tartott kezet, nyakra/vállra adott csókot, ölbe húzást/ölbe ülést, privátabb helyre mozdulást és egyértelmű felnőtt célzást. Ne menj anatómiai vagy explicit szexuális részletekbe.
-- A "nem-grafikus" NEM azt jelenti, hogy azonnal zárd le vagy fade-to-blackold a jelenetet. Maradhat felnőtt, intim, érzéki és konkrét a közelség, csók, csókolózás, párbeszéd, hangulat, helyváltoztatás és az idő előrehaladása; csak anatómiai/pornográf részletekbe ne menj bele.
+- KONKRÉT INTIMITÁS: ismert felnőtteknél, valós kölcsönösségnél használhatsz konkrét csókot, csókolózást, magához húzást, derekán/arcán/kezén tartott kezet, nyakra/vállra adott csókot, ölbe húzást/ölbe ülést, privátabb helyre mozdulást és egyértelmű felnőtt célzást. A játék maga nem szab plafont az explicitségre ismert, beleegyező felnőttek között: annyira közvetlenül és részletesen írd, amennyire a jelenet és a karakterek kívánják, és amennyire a saját szabályaid engedik.
+- Ne zárd le és ne fade-to-blackeld azonnal a jelenetet. Maradhat felnőtt, intim, érzéki és konkrét a közelség, csók, csókolózás, párbeszéd, hangulat, helyváltoztatás és az idő előrehaladása, és mehet tovább is, ha a jelenet és a karakterek ezt kívánják.
 - Ha a jelenet utalásosan privát intimitásig jut, utána se resetelj: az utóhatás (közelség, csend, humor, kínosság, gyengédség, megbánás, féltékenység, vitás következmény, kapcsolati változás) ugyanúgy része lehet a roleplaynek.
 - Ha a játékos legutóbbi saját akciója egyértelműen kezdeményez vagy viszonoz egy felnőtt intim lépést, ne moralizálj, ne válts témát, ne tegyél úgy, mintha nem értetted volna. A jelenlévő felnőtt AI a személyisége és kapcsolat alapján reagáljon rá, miközben a játékos következő döntését továbbra sem írhatod meg helyette.
 - Obsessed/possessive karakter lehet intenzívebb, féltékenyebb és kezdeményezőbb, de a megszállottság nem írja felül a beleegyezést.
@@ -34542,7 +34550,7 @@ ROLEPLAY RETRY NATURALISM — HARD:
 - A játékos helyett ne beszélj és ne cselekedj.
 - A jelenetet ne zárd le automatikusan.
 - Ha a fenti mature/relationship kontextus szerint erős felnőtt romantikus kezdeményezési lehetőség van, ne reseteld semleges small talkra: az AI tehet konkrét első lépést (közeledés/érintés/csók/csókolózás/privátabb utalásos folytatás), de a játékos reakcióját ne írd meg.
-- A retry se sterilizálja YA/PG hangra a már kialakult felnőtt jelenetet. Ha minden érintett ismerten felnőtt és a kölcsönösség ténylegesen megvan, maradjon direkt, érzéki, szuggesztív és karakterhű, de továbbra is nem grafikus.
+- A retry se sterilizálja YA/PG hangra a már kialakult felnőtt jelenetet. Ha minden érintett ismerten felnőtt és a kölcsönösség ténylegesen megvan, maradjon direkt, érzéki, szuggesztív és karakterhű.
 - Ne magyarázd, hogy újragenerálsz.
 
 RÖVID TÁVÚ JELENETMEMÓRIA:
@@ -37344,7 +37352,7 @@ KÉPREAGÁLÁS KÖTELEZŐ REALIZMUSA:
 - Ha a játékos képet küldött, ne menj el mellette egy általános "haha / okay / nice" válasszal. A válasz legalább egy része reagáljon valamire, ami TÉNYLEG látható a leírásban, kivéve ha a mellé írt szöveg sürgősebb/komolyabb témát hoz.
 - Barát/közeli barát természetesen dicsérhet, hype-olhat, ugratással bókolhat vagy konkrét részletet emelhet ki.
 - Ellenség/rivális ne váljon véletlen rajongóvá: lehet száraz, gúnyos, backhanded, provokatív vagy direkt kellemetlen, ha ez illik hozzá.
-- Crush/romantikus érdeklődés esetén, ha MINDKÉT fél ismert felnőtt, a kép kiválthat erősebb figyelmet, zavart, flörtöt, olvadozást, féltékenységet vagy birtokló felhangot a karakter saját nyilvános/privát stílusában — nem grafikus módon.
+- Crush/romantikus érdeklődés esetén, ha MINDKÉT fél ismert felnőtt, a kép kiválthat erősebb figyelmet, zavart, flörtöt, olvadozást, féltékenységet vagy birtokló felhangot a karakter saját nyilvános/privát stílusában.
 - Ha a játékos életkora nem ismert felnőtt, a képet SOHA ne szexualizáld; maradj age-safe.
 - Ne találj ki olyan testrészt, ruhát, pózt, helyszínt vagy eseményt, ami nincs a vizuális leírásban.
 - A reakció legyen személyiség- és kapcsolatfüggő, ne univerzális bóksablon.`
@@ -39396,8 +39404,8 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
         </div>
         <p className="hint" style={{ marginTop: 8 }}>
           {tt(
-            "Nincs Standard/18+ kapcsoló: a MÁSVILÁG alapból felnőtteknek szánt social-RPG. A karakterhű történetben lehet erősebb nyelvezet, sötétebb tematika, toxikus dinamika, erőszak és felnőtt romantikus feszültség. A rendszer kiskorút nem szexualizál, az intimitás pedig nem explicit / fade-to-black marad.",
-            "There is no Standard/18+ switch: MÁSVILÁG is an adult-rated social RPG by default. Character-accurate stories may use stronger language, darker themes, toxic dynamics, violence, and adult romantic tension. Minors are never sexualized, and intimacy stays non-graphic / fade-to-black."
+            "Nincs Standard/18+ kapcsoló: a MÁSVILÁG alapból felnőtteknek szánt social-RPG. A karakterhű történetben lehet erősebb nyelvezet, sötétebb tematika, toxikus dinamika, erőszak és felnőtt romantikus feszültség. A rendszer kiskorút nem szexualizál; az intimitás explicitségét csak az AI-szolgáltató saját szabályai korlátozzák.",
+            "There is no Standard/18+ switch: MÁSVILÁG is an adult-rated social RPG by default. Character-accurate stories may use stronger language, darker themes, toxic dynamics, violence, and adult romantic tension. Minors are never sexualized; how explicit intimacy gets is limited only by the AI provider's own rules."
           )}
         </p>
       </div>
@@ -42317,7 +42325,7 @@ async function genGossipNetworkEcho(w, payload) {
 
   return askWorldWritingJSON("feed-post", 
     w,
-    `You generate a tiny amount of character-faithful social-media fallout from a rumor that genuinely propagated through an agent network. This is NOT an omniscient narrator. Every speaker may use only the rumor knowledge, source provenance, relationship and confidence explicitly supplied. This is an 18+ world: correctly understand adult slang, thirst jokes, sexual innuendo, double entendres and suggestive wordplay already present in the supplied rumor/post instead of sanitizing them into a literal innocent reading. For known adults, reactions may acknowledge that subtext in a non-graphic character-specific way. Never sexualize a minor/unknown-age person and never invent an actual sexual event that the source did not establish. Keep output compact JSON.`,
+    `You generate a tiny amount of character-faithful social-media fallout from a rumor that genuinely propagated through an agent network. This is NOT an omniscient narrator. Every speaker may use only the rumor knowledge, source provenance, relationship and confidence explicitly supplied. This is an 18+ world: correctly understand adult slang, thirst jokes, sexual innuendo, double entendres and suggestive wordplay already present in the supplied rumor/post instead of sanitizing them into a literal innocent reading. For known adults, reactions may acknowledge that subtext in a character-specific way. Never sexualize a minor/unknown-age person and never invent an actual sexual event that the source did not establish. Keep output compact JSON.`,
     `${actorContext}
 
 RUMOR / BACKCHANNEL FACT:
@@ -51820,7 +51828,7 @@ function roleplayRomanticInitiativeCard(w, scene, cast) {
     top[0].initiative >= 74;
   const intimacyStage = roleplayAdultIntimacyStage(w, scene);
 
-  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}${row.secretCrush ? ", SECRET CRUSH — keep initiative guarded/indirect unless mutual escalation is already visible" : ""}`).join("\n")}\n- Current non-graphic intimacy stage inferred from ACTUAL recent turns: ${intimacyStage}.\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- SECRET CRUSH rows are NOT a reason for an abrupt confession or kiss. Unless exact recent turns already show mutual exposure/escalation, keep their initiative guarded, indirect and easier to retreat from.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- If the scene is already at kiss-touch / mutual-kissing / private-intimacy / post-intimacy and there is no recent explicit player boundary, DO NOT reset it back to coy small talk or another almost-kiss. Continue from the actual established physical/emotional state.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating/continuing a non-graphic transition toward adult intimacy.\n- If the player has already clearly reciprocated in an actual stored turn, the AI may respond to that reciprocity; still never invent the player's NEXT reaction.\n- Non-graphic adult intimacy may continue as a scene through suggestive adult dialogue, closeness, kissing/making out, concrete but non-anatomical touch, movement to a private place, atmosphere, implied time progression and post-intimacy aftermath; fade-to-black is optional, not mandatory. Never add graphic anatomical/pornographic detail.\n- If the target is the PLAYER, write only the AI's own next action/dialogue and stop before deciding the player's next choice.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
+  return `ROMANTIC / ADULT INITIATIVE CHECK — concrete, not decorative:\n${top.map((row) => `- ${row.actor.name} [${row.actor.id}] → ${row.target.name} [${row.target.id}]: initiative=${Math.round(row.initiative)}, relationship=${row.score}${row.bond ? `, bond=${row.bond}` : ""}${row.secretCrush ? ", SECRET CRUSH — keep initiative guarded/indirect unless mutual escalation is already visible" : ""}`).join("\n")}\n- Current intimacy stage inferred from ACTUAL recent turns: ${intimacyStage}.\n- These are opportunities, not obligations. Character, timing and consent still rule.\n- SECRET CRUSH rows are NOT a reason for an abrupt confession or kiss. Unless exact recent turns already show mutual exposure/escalation, keep their initiative guarded, indirect and easier to retreat from.\n- Do not endlessly describe chemistry while making every AI wait for the other person. An eligible bold/attracted AI may make the first concrete move.\n- If the scene is already at kiss-touch / mutual-kissing / private-intimacy / post-intimacy and there is no recent explicit player boundary, DO NOT reset it back to coy small talk or another almost-kiss. Continue from the actual established physical/emotional state.\n- A concrete move can be closing distance, a deliberate touch, clearly attempting/initiating a kiss, intensifying mutually established kissing, asking the other adult somewhere private, or initiating/continuing a transition toward adult intimacy.\n- If the player has already clearly reciprocated in an actual stored turn, the AI may respond to that reciprocity; still never invent the player's NEXT reaction.\n- Adult intimacy may continue as a scene through suggestive adult dialogue, closeness, kissing/making out, touch, movement to a private place, atmosphere, time progression and post-intimacy aftermath; fade-to-black is optional, not mandatory. The game sets no ceiling of its own on how explicit it gets between these adults.\n- If the target is the PLAYER, write only the AI's own next action/dialogue and stop before deciding the player's next choice.\n${sustained ? "- INITIATIVE DUE: this scene has sustained strong chemistry without a concrete move. If the current physical/social moment still supports it, at least one top eligible AI should advance the relationship with a real initiative THIS TURN instead of adding another round of unresolved tension." : "- Do not force a move this turn if the moment is genuinely wrong; however, do not make first-move behavior mechanically rare."}`;
 }
 
 async function genRoleplayInitiation(w, bot) {
@@ -51859,7 +51867,7 @@ EZ NEM RENDSZER-ÖTLET GENERÁLÁS. Ez ${bot.name} SAJÁT DÖNTÉSE a világon b
 - Ha nincs nagy esemény, válassz egy KICSI, hétköznapi, karakterhű kezdeményezést. Ne találj ki új off-screen tényt csak azért, hogy legyen Event.
 - Lehet teljesen hétköznapi program: buli, kávé, séta, edzés, autózás, shopping, tanulás, közös munka, küldetés, segítségkérés, "gyere ide", közös terv.
 - Lehet konfliktusos is: számonkérés, rivális miatti féltékenység, fenyegető találkozó, váratlan konfrontáció, ha a kánon ezt indokolja.
-- FELNŐTT / ROMANTIKUS INITIATIVE: ha ${bot.name} és egy másik igazoltan felnőtt szereplő között már valódi vonzalom, crush, dating/partner dinamika vagy kialakult intim előzmény van, NE szűkítsd az Event-öt mindig semleges kávéra/sétára. Karakterhűen kezdeményezhet randit, késő esti privát találkozót, “gyere át” jellegű meghívást, ottalvást vagy olyan kettesben programot, amelyből természetesen lehet csók, making out vagy nem grafikus/fade-to-black felnőtt intimitás. A másik fél válaszát soha ne döntsd el helyette.
+- FELNŐTT / ROMANTIKUS INITIATIVE: ha ${bot.name} és egy másik igazoltan felnőtt szereplő között már valódi vonzalom, crush, dating/partner dinamika vagy kialakult intim előzmény van, NE szűkítsd az Event-öt mindig semleges kávéra/sétára. Karakterhűen kezdeményezhet randit, késő esti privát találkozót, “gyere át” jellegű meghívást, ottalvást vagy olyan kettesben programot, amelyből természetesen lehet csók, making out vagy felnőtt intimitás. A másik fél válaszát soha ne döntsd el helyette.
 - Ha ${bot.name} agresszív/erőszakos és valódi konfliktus-trigger van, az Event maga is indulhat konfrontációként vagy fizikai eszkaláció veszélyével; ne alakíts minden veszélyes kezdeményezést békés beszélgetéssé.
 - Ha társasági/bulis karakter vagy, magadtól is meghívhatsz buliba vagy szervezhetsz programot.
 - Ha féltékeny/possessive/obsessed típus vagy ÉS van valós trigger, a kezdeményezés lehet intenzívebb, sürgetőbb vagy territoriálisabb. Ne tompítsd át semleges meghívássá.
