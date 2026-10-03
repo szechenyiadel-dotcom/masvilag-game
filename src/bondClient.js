@@ -77,9 +77,14 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
   const profileKeys = new Array(people.length);
   let recalculated = 0;
   let recalculatedBonds = 0;
+  let profileCompleted = 0;
   const forceRun = force ? String(Date.now()) + ":" + String(Math.random()) : "";
   const pollDelay = fastRestart ? 500 : 3000;
-  const concurrency = fastRestart ? Math.min(4, Math.max(1, people.length)) : 1;
+
+  const yieldToUi = async () => {
+    if (!fastRestart) return;
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
 
   const analyze = async (body) => {
     const options = {
@@ -107,28 +112,60 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
     await Promise.all(runners);
   };
 
-  for (const character of people) sheets[character.id] = fullSheetText(character, undefined, world);
-
-  await runLimited(people, concurrency, async (character, index) => {
-    const roster = people
-      .filter((other) => other.id !== character.id)
-      .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
-    progress({ phase: "profile", owner: character.name, completed: Object.keys(profiles).length, total: people.length });
-    const result = await analyze({
-      stage: "profile",
-      owner: character.id,
-      roster,
-      ownSheet: sheets[character.id],
-      fieldNames: Object.keys(sheetFields(character, world)),
-      language,
-    });
-    profiles[character.id] = { profile: result.result, hash: result.hash };
-    profileKeys[index] = result.cacheKey;
-    if (!result.cached) recalculated += 1;
-  });
+  if (fastRestart) {
+    // Restart World: start EVERY profile read immediately. Each worker yields
+    // once before flattening its sheet so mobile Safari can paint/respond instead
+    // of doing twenty large synchronous sheet conversions in one long JS task.
+    progress({ phase: "profile", owner: "", completed: 0, started: people.length, total: people.length });
+    await Promise.all(people.map(async (character, index) => {
+      await yieldToUi();
+      sheets[character.id] = fullSheetText(character, undefined, world);
+      const roster = people
+        .filter((other) => other.id !== character.id)
+        .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
+      const result = await analyze({
+        stage: "profile",
+        owner: character.id,
+        roster,
+        ownSheet: sheets[character.id],
+        fieldNames: Object.keys(sheetFields(character, world)),
+        language,
+      });
+      profiles[character.id] = { profile: result.result, hash: result.hash };
+      profileKeys[index] = result.cacheKey;
+      if (!result.cached) recalculated += 1;
+      profileCompleted += 1;
+      progress({ phase: "profile", owner: character.name, completed: profileCompleted, started: people.length, total: people.length });
+    }));
+  } else {
+    // Preserve the existing serial behavior everywhere except Restart World.
+    for (let index = 0; index < people.length; index += 1) {
+      const character = people[index];
+      sheets[character.id] = fullSheetText(character, undefined, world);
+      const roster = people
+        .filter((other) => other.id !== character.id)
+        .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) }));
+      progress({ phase: "profile", owner: character.name, completed: Object.keys(profiles).length, total: people.length });
+      const result = await analyze({
+        stage: "profile",
+        owner: character.id,
+        roster,
+        ownSheet: sheets[character.id],
+        fieldNames: Object.keys(sheetFields(character, world)),
+        language,
+      });
+      profiles[character.id] = { profile: result.result, hash: result.hash };
+      profileKeys[index] = result.cacheKey;
+      if (!result.cached) recalculated += 1;
+    }
+  }
 
   const baselines = {};
-  await runLimited(people, concurrency, async (character) => {
+  const baselineConcurrency = fastRestart ? Math.min(4, Math.max(1, people.length)) : 1;
+  await runLimited(people, baselineConcurrency, async (character) => {
+    // A cached profile may have completed before its local sheet was flattened
+    // in another worker, so guarantee the owner's exact sheet is available.
+    if (!sheets[character.id]) sheets[character.id] = fullSheetText(character, undefined, world);
     const roster = people
       .filter((other) => other.id !== character.id)
       .map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
