@@ -11,6 +11,16 @@ import { fullSheetText } from "../src/bondClient.js";
 if (process.argv.includes("--require-live") && !(process.env.DATABASE_URL && (process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY))) throw new Error("Live acceptance credentials/database are required");
 const liveEnabled = Boolean(process.env.DATABASE_URL && (process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY));
 test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated disposable world", { skip: !liveEnabled, timeout: 3600000 }, async t => {
+ const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+ t.after(() => pool.end());
+ const analyzeLive = async (prompt, schema, validate, options) => {
+  const cacheKey = "bond-live-v1:" + sheetHash(prompt + JSON.stringify(schema));
+  const cached = (await pool.query("SELECT data FROM relationship_reading_cache WHERE cache_key=$1", [cacheKey])).rows[0]?.data;
+  if (cached?.result) { validate(cached.result); console.info("[bond-live-checkpoint]", JSON.stringify({ provider: cached.provider, model: cached.model, reusedValidatedLiveOutput: true })); return cached; }
+  const output = await analyzeStructured(prompt, schema, validate, options);
+  await pool.query("INSERT INTO relationship_reading_cache(cache_key,data,updated_at) VALUES ($1,$2::jsonb,NOW()) ON CONFLICT(cache_key) DO UPDATE SET data=EXCLUDED.data,updated_at=NOW()", [cacheKey, JSON.stringify(output)]);
+  return output;
+ };
  await t.test("Paid second Groq key supports the configured structured analysis model", async () => {
   assert.ok(process.env.GROQ_API_KEY_2);
   const schema = { type: "object", properties: { verified: { type: "boolean" } }, required: ["verified"], additionalProperties: false };
@@ -32,7 +42,7 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
   const prompt = EXTRACT_PROMPT + "\n" + JSON.stringify(payload);
   assert.equal(JSON.parse(prompt.substring(prompt.lastIndexOf("\n") + 1)).ownSheet.length, ownSheet.length);
   console.info("[bond-live-input]", JSON.stringify({ stage: "profile", owner: person.id, sourceChars: ownSheet.length, submittedChars: payload.ownSheet.length }));
-  const output = await analyzeStructured(prompt, ProfileSchema, result => validateProfile(result, ownSheet, person.id, new Set(ids), fieldNames), { outputTokens: 64000 });
+  const output = await analyzeLive(prompt, ProfileSchema, result => validateProfile(result, ownSheet, person.id, new Set(ids), fieldNames), { outputTokens: 64000 });
   console.info("[bond-live-provider]", JSON.stringify({ stage: "profile", owner: person.id, provider: output.provider, model: output.model, keySlot: output.keySlot, inputTokens: output.inputTokens }));
   extracted.push(output.result);
  }
@@ -42,7 +52,7 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
   const objectiveFacts = Object.fromEntries(roster.map(p => [p.id, reconcileFacts(person.id, p.id, profiles, index)]));
   const payload = { owner: person.id, ownSheet: sheets[person.id], profile: profiles.find(p => p.id === person.id), roster, groupIndex: index, objectiveFacts, outputLanguage: "Hungarian" };
   console.info("[bond-live-input]", JSON.stringify({ stage: "baseline", owner: person.id, sourceChars: sheets[person.id].length, submittedChars: payload.ownSheet.length }));
-  const output = await analyzeStructured(BASELINE_PROMPT + "\n" + JSON.stringify(payload), BondArraySchema, result => validateBonds(result, person.id, roster, payload.ownSheet, objectiveFacts), { outputTokens: 64000 });
+  const output = await analyzeLive(BASELINE_PROMPT + "\n" + JSON.stringify(payload), BondArraySchema, result => validateBonds(result, person.id, roster, payload.ownSheet, objectiveFacts), { outputTokens: 64000 });
   console.info("[bond-live-provider]", JSON.stringify({ stage: "baseline", owner: person.id, provider: output.provider, model: output.model, keySlot: output.keySlot, inputTokens: output.inputTokens }));
   for (const bond of output.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
  }
@@ -81,11 +91,11 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
 
  await t.test("English source interpretation and English relationship prose retain original evidence", async () => {
   const ownSheet = "Anna is a Cobra Kai student. Anna and Béla are old friends. Last January they had a one-night stand at the flat on Main Street. Afterwards things became awkward: Anna developed deeper feelings, while Béla avoided the subject. Anna hides her feelings; none of the team knows about the night or her attraction. Anna has never had any romantic or sexual relationship with Dóra and is not attracted to her.";
-  const extractedEnglish = await analyzeStructured(EXTRACT_PROMPT + "\n" + JSON.stringify({ owner: "p", ownSheet, fieldNames: [], outputLanguage: "English" }), ProfileSchema, result => validateProfile(result, ownSheet, "p", new Set(ids)), { outputTokens: 64000 });
+  const extractedEnglish = await analyzeLive(EXTRACT_PROMPT + "\n" + JSON.stringify({ owner: "p", ownSheet, fieldNames: [], outputLanguage: "English" }), ProfileSchema, result => validateProfile(result, ownSheet, "p", new Set(ids)), { outputTokens: 64000 });
   const englishProfiles = resolveProfileReferences([extractedEnglish.result, ...extracted.filter(p => p.id !== "p")]);
   const groupIndex = buildGroupIndex(englishProfiles), roster = englishProfiles.filter(p => p.id !== "p").map(p => ({ id: p.id, names: p.names, groups: p.groups, oneLine: "" }));
   const objectiveFacts = Object.fromEntries(roster.map(p => [p.id, reconcileFacts("p", p.id, englishProfiles, groupIndex)]));
-  const result = await analyzeStructured(BASELINE_PROMPT + "\n" + JSON.stringify({ owner: "p", ownSheet, profile: extractedEnglish.result, roster, groupIndex, objectiveFacts, outputLanguage: "English" }), BondArraySchema, result => validateBonds(result, "p", roster, ownSheet, objectiveFacts), { outputTokens: 64000 });
+  const result = await analyzeLive(BASELINE_PROMPT + "\n" + JSON.stringify({ owner: "p", ownSheet, profile: extractedEnglish.result, roster, groupIndex, objectiveFacts, outputLanguage: "English" }), BondArraySchema, result => validateBonds(result, "p", roster, ownSheet, objectiveFacts), { outputTokens: 64000 });
   const row = result.result.bonds.find(b => b.to === "b");
   assert.ok(/friend|feeling|awkward|attract/i.test(row.description));
   assert.ok(row.evidence.length && row.evidence.every(q => ownSheet.includes(q)));
@@ -95,7 +105,6 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
 
  // The actual save handler runs against the real DB. Only an isolated test world
  // is inserted; all its rows are removed in finally, including on assertion failure.
- const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
  const code = "bond-acceptance-" + crypto.randomUUID();
  const initial = { code, syncRev: 1, rev: 1, accounts: {}, players: { testAccount: { ...people[0] } }, chars: people.slice(1), rels: structuredClone(baselines), relationshipBaselines: structuredClone(baselines), bondAnalysis: { version: 1, profiles: Object.fromEntries(profiles.map(p => [p.id, { profile: p }])), recalculated: 4 }, posts: [{ text: "Régi poszt" }], scenes: [{ id: "old" }], relationshipHistory: { old: 1 } };
  for (const key of ["p>b", "b>p", "b>d"]) Object.assign(initial.rels[key], { type: "Járnak", hiddenFeelings: "Játékban keletkezett titok", whoKnows: ids, extraGameField: "delete", levels: { sentiment: 100, trust: 100, attraction: 100, tension: 100 } });
@@ -132,9 +141,10 @@ test("LIVE acceptance: actual configured AI keys and PostgreSQL, isolated dispos
    assert.deepEqual(current.relationshipHistory, {}); assert.deepEqual(current.posts, []); assert.deepEqual(current.scenes, []);
    assert.equal(Number((await pool.query("SELECT COUNT(*) AS count FROM character_memories WHERE world_code=$1", [code])).rows[0].count), 0);
   });
+  await pool.query("DELETE FROM relationship_reading_cache WHERE cache_key LIKE 'bond-live-v1:%'");
  } finally {
   await pool.query("DELETE FROM character_memories WHERE world_code=$1", [code]);
   await pool.query("DELETE FROM worlds WHERE code=$1", [code]);
-  await pool.end();
+
  }
 });

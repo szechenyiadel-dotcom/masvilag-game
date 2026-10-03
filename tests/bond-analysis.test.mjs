@@ -271,3 +271,38 @@ test("Neutral complete-graph records do not imply acquaintance or social interes
  assert.equal(context.hasEstablishedBond({...neutral, status: "aktív"}), true);
  assert.equal(context.hasEstablishedBond({bond: "barát", score: 0}), true);
 });
+
+
+test("Existing hierarchy, intimidation, continuity and social rules remain in current-bond context", () => {
+ const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8"), ast = parse(source, { sourceType: "module", plugins: ["jsx"] });
+ const calls = [], context = vm.createContext({ getRel: (w,a,b) => w.rels[a+">"+b], JSON });
+ for (const name of ["relationshipContinuityCard","hierarchyBehaviorCard","intimidationBehaviorCard","simsSocialRelationshipContextCard","fakeDatingBehaviorCard"]) context[name] = () => {calls.push(name);return name;};
+ vm.runInContext(ast.program.body.filter(n => n.id?.name === "relationshipBehaviorCard").map(n => source.substring(n.start,n.end)).join("\n"),context);
+ const w = {rels:{"a>b":runtimeBond(bond("a","b")),"b>a":runtimeBond(bond("b","a",{hiddenFeelings:"PRIVATE REVERSE",whoKnows:["b"]}))}};
+ const output=context.relationshipBehaviorCard(w,"a","b");
+ assert.equal(calls.length,5);assert.ok(output.includes("hierarchyBehaviorCard"));assert.ok(!output.includes("PRIVATE REVERSE"));
+});
+
+test("Social and fake-dating helpers cannot expose unknown reverse private state", () => {
+ const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8"), ast = parse(source, { sourceType: "module", plugins: ["jsx"] });
+ const context=vm.createContext({getRel:(w,a,b)=>w.rels[a+">"+b],charById:(w,id)=>({id,name:id}),simsSocialReactionStyle:()=>"style",isFakeDatingText:value=>value==="fake",worldLanguage:()=>"en",nameOfIn:(w,id)=>id,EMPTY_REL:{}});
+ vm.runInContext(ast.program.body.filter(n=>["simsSocialRelationshipContextCard","fakeDatingBehaviorCard"].includes(n.id?.name)).map(n=>source.substring(n.start,n.end)).join("\n"),context);
+ const w={meId:"other",rels:{"a>b":runtimeBond(bond("a","b")),"b>a":runtimeBond(bond("b","a",{type:"fake",levels:{sentiment:87,trust:90,attraction:91,tension:0},whoKnows:["b"]}))}};
+ assert.ok(!context.simsSocialRelationshipContextCard(w,"a","b").includes("score=87"));
+ assert.equal(context.fakeDatingBehaviorCard(w,"a","b"),"");
+ w.rels["b>a"].whoKnows.push("a");assert.ok(context.fakeDatingBehaviorCard(w,"a","b").includes("FAKE DATING"));
+});
+
+
+test("After two invalid outputs per model, switch provider then allow the alternate Gemini model", async () => {
+ const calls = [], models = [{...candidates[0], model:"primary"}, {...candidates[0], model:"alternate"}, candidates[1]];
+ const transport = async (url, opts) => {
+  if (url.endsWith(":countTokens")) return {totalTokens:100};
+  if (url.endsWith(":generateContent")) { const model=url.includes("/primary:")?"primary":"alternate";calls.push(model);return {candidates:[{finishReason:"STOP",content:{parts:[{text:model==="alternate"?'{"ok":true}':'{}'}]}}]}; }
+  if (url.endsWith("/chat/completions")) {calls.push("groq");return response({});}
+  if (url.endsWith("/models")) return {data:[{id:"configured-fallback",active:true,context_window:1000000,max_completion_tokens:65536}]};
+  return {supportedGenerationMethods:["generateContent"],inputTokenLimit:1000000,outputTokenLimit:65536};
+ };
+ const output=await analyzeStructured("Complete source",{type:"object"},value=>assert.equal(value.ok,true),{candidates:models,transport,outputTokens:1000});
+ assert.equal(output.model,"alternate");assert.deepEqual(calls,["primary","primary","groq","groq","alternate"]);
+});

@@ -1,5 +1,5 @@
 import { restoreBaselineGraph } from "./bondAnalysis.js";
-import { fullSheetText, bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext } from "./bondClient.js";
+import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext } from "./bondClient.js";
 const bondAnalysisBusy = new Set();
 const bondAnalysisRetry = new Map();
 /* MÁSVILÁG RECOVERY v99.5 — SCALABLE LAZY MEDIA STORAGE — 20260816_0045 */
@@ -2944,15 +2944,7 @@ const SOFT_BONDS = ["Ellenség", "Rivális", "Ismerős", "Haver", "Barát", "Kö
   "Osztálytárs", "Szomszéd", "Munkatárs", "Főnök", "Beosztott", "Mentor", "Tanítvány", "Edző", "Tanár"];
 
 // A kapcsolat hangulata a pontszám alapján, a kötelék címkéjétől függetlenül.
-function relMood(score) {
-  if (score <= -70) return localizedRelMood("gyűlölik egymást", CURRENT_LANG);
-  if (score <= -30) return localizedRelMood("ellenséges", CURRENT_LANG);
-  if (score <= -5) return localizedRelMood("feszült", CURRENT_LANG);
-  if (score < 25) return localizedRelMood("hűvös", CURRENT_LANG);
-  if (score < 55) return localizedRelMood("jóban vannak", CURRENT_LANG);
-  if (score < 80) return localizedRelMood("közeli", CURRENT_LANG);
-  return localizedRelMood("elválaszthatatlanok", CURRENT_LANG);
-}
+
 
 /* Példák az AI-nak: az érzelmi állapot ennél sokkal szabadabb lehet. */
 const MOOD_EXAMPLES = [
@@ -3285,36 +3277,7 @@ function legacyFullSpecApplySceneChangesWithStatus(...args) {
   return result;
 }
 
-function normalizedOfficialKind(rel) {
-  const r = rel || EMPTY_REL;
-  const score = Math.max(-100, Math.min(100, Number(r.score) || 0));
-  const bond = String(r.bond || r.type || "").toLowerCase();
 
-  if (r.fixed && bond) return { kind: "fixed", rank: 1000, raw: String(r.bond || r.type || "") };
-  /* CLAUDE FIX R2: an obsession, a crush or fear is not a friendship, whatever the score. */
-  const visibleFeeling = (bond + " " + String(r.mood || "")).toLowerCase();
-  const fearful = /(?:afraid|scared|frightened|terrified) of (?:him|her|them)|\bfears? (?:him|her|them)\b|f[eé]l t[oő]le|retteg t[oő]le|tart t[oő]le|^(?:fear|f[eé]lelem)/.test(visibleFeeling) || /^(?:fear|f[eé]lelem|afraid)/.test(bond);
-  if (/obsess|megsz[aá]ll|fixat/.test(bond)) return { kind: "obsessed", rank: 55, unilateral: true, romantic: true, fearful };
-  if (/k[oö]lcs[oö]n[oö]s crush|mutual crush|mutual attraction|k[oö]lcs[oö]n[oö]s vonzalom/.test(bond)) return { kind: "mutual-attraction", rank: 55, romantic: true, fearful };
-  if (/crush|vonzalom|vonz[oó]d|attraction|attracted|in love|szerelmes|love interest/.test(bond)) return { kind: fearful ? "afraid" : "crush", rank: 55, unilateral: true, romantic: true, fearful };
-  if (fearful && !/spouse|házastárs|married|engaged|jegyes|dating|járnak/.test(bond)) return { kind: "afraid", rank: 35, unilateral: true, fearful };
-  if (/spouse|házastárs|férj|feleség|married|házas/.test(bond)) return { kind: "spouse", rank: 90 };
-  if (/engaged|jegyes|fiancé|fiance/.test(bond)) return { kind: "engaged", rank: 80 };
-  if (isFakeDatingText(bond)) return { kind: "fake-dating", rank: 70 };
-  if (/randizgat|seeing each other/.test(bond)) return { kind: "seeing", rank: 68 };
-  if (/dating|járnak|partner|boyfriend|girlfriend|párkapcsolat|couple/.test(bond)) return { kind: "dating", rank: 70 };
-  if (/exes|\bex\b|volt pár/.test(bond)) return { kind: "exes", rank: 65 };
-  if (/best friend|legjobb barát/.test(bond) || score >= 80) return { kind: "best-friend", rank: 60 };
-  if (/close friend|közeli barát/.test(bond) || score >= 55) return { kind: "friend", rank: 50 };
-  if (/\bfriend\b|barát/.test(bond) || score >= 40) return { kind: "friend", rank: 50 };
-  if (/haver|buddy|csapatt[aá]rs|teammate/.test(bond) || score >= 25) return { kind: "buddy", rank: 42 };
-  if (/fan|rajong/.test(bond)) return { kind: "fan", rank: 45, unilateral: true };
-  if (/enemy|ellenség/.test(bond) || score <= -70) return { kind: "enemy", rank: 45, unilateral: true };
-  if (/rival|rivális/.test(bond) || score <= -30) return { kind: "rival", rank: 40, unilateral: true };
-  if (score >= 15) return { kind: "acquaintance", rank: 30 };
-  if (score <= -6) return { kind: "tense", rank: 25 };
-  return { kind: "stranger", rank: 10 };
-}
 
 function officialKindLabel(kind, lang = CURRENT_LANG) {
   const en = lang === "en";
@@ -4500,7 +4463,7 @@ function clampRelationshipScore(value) {
 
 
 
-function setConfiguredRel(w, a, b, patch, source = "manual") {
+function setConfiguredRel(w, a, b, patch) {
   setRel(w, a, b, patch);
 }
 
@@ -4518,11 +4481,7 @@ function refreshCanonicalRelationshipBaselines(w) {
   w.relationshipCanonFingerprint = relationshipCanonFingerprint(w);
 }
 
-function relationshipIsUntouched(live) {
-  if (!live) return true;
-  if (live.freshFromSheet === true) return true;
-  return live.freshFromSheet === undefined && !String(live.mood || "").trim() && !String(live.why || "").trim() && !String(live.hidden || "").trim();
-}
+
 
   /* CLAUDE FIX R54: one-time silent cleanup — an AI keeps following only people it
      realistically would (aiFollowEligibility). Media accounts and the follow-back
@@ -12332,37 +12291,7 @@ function intimidationBehaviorCard(
 }
 
 
-function bondLooksRomantic(rel) {
-  const bond =
-    String(
-      rel &&
-      (
-        rel.bond ||
-        rel.type
-      ) ||
-      ""
-    ).toLowerCase();
 
-  const hidden =
-    String(
-      rel &&
-      rel.hidden ||
-      ""
-    ).toLowerCase();
-
-  const mood =
-    String(
-      rel &&
-      rel.mood ||
-      ""
-    ).toLowerCase();
-
-  return (
-    /crush|vonzalom|attraction|szerel|love|flört|flirt|obsess|megszáll|féltéken|jealous/.test(
-      `${bond} ${hidden} ${mood}`
-    )
-  );
-}
 
 function characterIsFlirty(c) {
   /* v80: broad flirting must come from explicit PERSONALITY/TRAIT canon.
@@ -12820,22 +12749,9 @@ function ownStorySnippetAbout(actor, target) {
    defaults. It may describe a crush, best friend, rival, mentor, family bond,
    fear, loyalty, etc. Other characters still do not magically know it.
    ------------------------------------------------------------------------- */
-function strictConnectionTargetAliases(target) {
-  return characterIdentityAliases(target, {
-    includeFirst: false,
-    includeSurname: false,
-    strongOnly: true,
-  });
-}
 
-function normalizeConnectionSubject(value) {
-  return String(value || "")
-    .replace(/[()[\]{}]/g, " ")
-    .replace(/\s+/g, " ")
-    .replace(/^[•*\-–—\s]+|[•*\-–—\s]+$/g, "")
-    .trim()
-    .toLowerCase();
-}
+
+
 
 
 
@@ -12849,7 +12765,7 @@ function normalizeConnectionSubject(value) {
 
 
 
-function connectionCanonSnippetAbout(w, actor, target, maxChars = 1800) {
+function connectionCanonSnippetAbout(w, actor, target) {
   const bond = actor && target ? getRel(w, actor.id, target.id) : null;
   return bond ? [bond.description, bond.publicFace, bond.history, bond.dynamics].filter(Boolean).join("\n") : "";
 }
@@ -18259,10 +18175,7 @@ function localizedRelType(value, lang = CURRENT_LANG) {
   return dict[value] || value;
 }
 
-function localizedRelMood(value, lang = CURRENT_LANG) {
-  const dict = (TERM_TEXT[asLang(lang)] || TERM_TEXT.hu).relMoods || {};
-  return dict[value] || value;
-}
+
 
 function localizedZodiac(value, lang = CURRENT_LANG) {
   const dict = (TERM_TEXT[asLang(lang)] || TERM_TEXT.hu).zodiac || {};
@@ -27172,8 +27085,6 @@ function fairCommentCast(w, targetId, post = null) {
         getRel(w, c.id, targetId);
       const score =
         Number(rel && rel.score) || 0;
-      const bond =
-        String((rel && (rel.bond || rel.type)) || "");
       const interest =
         socialInteractionInterest(
           w,
@@ -60016,69 +59927,11 @@ const signOut = useCallback(async () => {
  * express the relationship in its own words/behavior. After play begins, actual
  * interactions may evolve score / mood / bond / hidden state.
  */
-function directedRelationshipSignals(text) {
-  const low = String(text || "").toLowerCase();
-  const out = [];
-  const push = (value) => {
-    if (value && !out.includes(value)) out.push(value);
-  };
 
-  if (/obsess|fixat|megsz[aá]ll|k[eé]nyszeres/.test(low)) push("obsessive fixation");
-  if (/possess|birtokl|territorial|az eny[eé]m|mine\b/.test(low)) push("possessiveness");
-  if (/jealous|f[eé]lt[eé]ken/.test(low)) push("jealousy");
-  if (/overprotect|protectiv|v[eé]delmez|oltalmaz/.test(low)) push("protectiveness");
-  if (/dependen|f[uü]gg|needs? .* emotionally|cannot let go|nem tudja elengedni/.test(low)) push("dependency");
-  if (/in love|loves?\b|szerelmes|m[eé]lyen szeret/.test(low)) push("love");
-  if (/crush|attract|vonz[oó]d|vonzalom|sexual tension|romantic/.test(low)) push("attraction");
-  if (/loyal|h[uű]s[eé]g|ride or die|would do anything|b[aá]rmit megtenne/.test(low)) push("loyalty");
-  if (/distrust|doesn.?t trust|nem b[ií]zik|gyanak/.test(low)) push("distrust");
-  if (/resent|neheztel|harag|angry at/.test(low)) push("resentment");
-  if (/\benemy\b|ellens[eé]g|hate|gy[uű]l[oö]l|ut[aá]l|despis|loath|detest/.test(low)) push("hatred");
-  if (/fear|afraid|rette|f[eé]l t[oő]le/.test(low)) push("fear");
-  if (/rival|riv[aá]lis|competitive|verseng/.test(low)) push("rivalry");
-  if (/friend|bar[aá]t|close to|k[oö]zel [aá]ll/.test(low)) push("friendship");
-  if (/family|sibling|brother|sister|cousin|csal[aá]d|testv[eé]r|unokatestv[eé]r/.test(low)) push("family bond");
 
-  return out;
-}
 
-function directedHiddenCanon(text) {
-  const low = String(text || "").toLowerCase();
 
-  if (/subconscious|tudatalatti|unaware|nincs tudat[aá]ban|hasn.?t realized|nem ismerte fel/.test(low)) {
-    return "The feeling is not fully conscious or recognized yet.";
-  }
-  if (/won.?t admit|will not admit|doesn.?t admit|denies|denial|tagad|nem vallja be|nem ismeri be|suppres|elfojt/.test(low)) {
-    return "The feeling is denied, suppressed, or not openly admitted.";
-  }
-  if (/secret|hidden|keeps? .* secret|titok|titkos|rejteget|elhallgat/.test(low)) {
-    return "Part of the feeling is deliberately kept private.";
-  }
 
-  return "";
-}
-
-function stabilizeDirectedRelationshipScore(text, score) {
-  const numeric = Number(score) || 0;
-  const low = String(text || "").toLowerCase();
-  const obsession = /obsess|fixat|megsz[aá]ll|k[eé]nyszeres/.test(low);
-  const loveSignal = /\bin love\b|szerelmes|m[eé]lyen szeret|deeply loves|would do anything|b[aá]rmit megtenne|crush on|has a crush|vonz[oó]dik|er[oő]s vonzalom|strong attraction/.test(low);
-  const loveNegated = /not in love|isn.?t in love|doesn.?t love|nem szerelmes|nem vonz[oó]dik|nincs vonzalom|not attracted/.test(low);
-  const hateSignal = /\bhate\b|gy[uű]l[oö]l/.test(low);
-  const hateNegated = /doesn.?t hate|does not hate|not hate|nem gy[uű]l[oö]l/.test(low);
-  const love = loveSignal && !loveNegated;
-  const hate = hateSignal && !hateNegated;
-
-  if (numeric === 0) {
-    if (hate && !love) return -85;
-    if (love) return obsession ? 78 : 72;
-    return numeric;
-  }
-  if (obsession && numeric > 0) return Math.max(numeric, 78);
-  if (love && numeric > 0) return Math.max(numeric, 72);
-  if (hate && numeric < 0) return Math.min(numeric, -85);
-  return numeric;
-}
 
 
 
@@ -60603,7 +60456,7 @@ function simsSocialRelationshipContextCard(w, actorId, targetId) {
   const reverse = getRel(w, targetId, actorId) || {};
   const pieces = [
     "CONTEXT-SENSITIVE SOCIAL BEHAVIOR — CURRENT LENS:",
-    "DIRECTIONAL LIVE STATE: " + actor.name + "→" + target.name + " score=" + (Number(forward.score) || 0) + "; " + target.name + "→" + actor.name + " score=" + (Number(reverse.score) || 0) + ". Never infer reciprocity.",
+    "DIRECTIONAL LIVE STATE: " + actor.name + "→" + target.name + " score=" + (Number(forward.score) || 0) + "; " + target.name + "→" + actor.name + " score=" + (reverse.whoKnows?.includes(actorId) ? Number(reverse.score) || 0 : "private/unknown") + ". Never infer reciprocity.",
     simsSocialReactionStyle(actor),
   ];
 
@@ -60625,7 +60478,7 @@ function relationshipBehaviorCard(w, actorId, targetId) {
   const own = getRel(w, actorId, targetId);
   const reverse = getRel(w, targetId, actorId);
   const reverseView = reverse.whoKnows?.includes(actorId) ? reverse : { from: targetId, to: actorId, publicFace: reverse.publicFace || reverse.mood || "" };
-  return "CURRENT DIRECTED RELATIONSHIPS. Own feelings are private; the reverse view contains only known information.\n" + JSON.stringify({ own, reverse: reverseView });
+  return ["CURRENT DIRECTED RELATIONSHIPS. Own feelings are private; the reverse view contains only known information.\n" + JSON.stringify({ own, reverse: reverseView }), relationshipContinuityCard(w, actorId, targetId), hierarchyBehaviorCard(w, actorId, targetId), intimidationBehaviorCard(w, actorId, targetId), simsSocialRelationshipContextCard(w, actorId, targetId), fakeDatingBehaviorCard(w, actorId, targetId)].filter(Boolean).join("\n\n");
 }
 
 function simsSocialEventKey(event) {
@@ -63642,14 +63495,12 @@ function isFakeDatingText(value) {
   return /[aá]lkapcsolat|[aá]l-kapcsolat|kamu ?(?:kapcsolat|p[aá]r)|fake[- ]?dat|fake (?:relationship|couple|girlfriend|boyfriend)|pretend(?:ing)? to (?:date|be (?:a )?couple|be together)|fake-dating/i.test(String(value || ""));
 }
 
-function normalizeFakeDatingBond(value) {
-  return isFakeDatingText(value) ? "Álkapcsolat" : value;
-}
+
 
 function fakeDatingBehaviorCard(w, actorId, targetId) {
   const rel = getRel(w, actorId, targetId) || EMPTY_REL;
   const reverse = getRel(w, targetId, actorId) || EMPTY_REL;
-  if (!isFakeDatingText(rel.bond || rel.type) && !isFakeDatingText(reverse.bond || reverse.type)) return "";
+  if (!isFakeDatingText(rel.bond || rel.type) && !(reverse.whoKnows?.includes(actorId) && isFakeDatingText(reverse.bond || reverse.type))) return "";
   const en = worldLanguage(w, w && w.meId) === "en";
   const target = nameOfIn(w, targetId);
   const real = [rel.mood, rel.hidden].filter(Boolean).join("; ");
@@ -64596,8 +64447,8 @@ async function runCharacterBibleAction(view, update, action) {
    obsession", "sparring partner with a grudge") — first from the sheets, and
    rewritten by the AI every time the relationship actually moves (new event,
    new mood, a real score jump), so it never stays a generic category. */
-const RELATION_LABEL_MIN_GAP_MS = 12 * 1000;
-const RELATION_LABEL_RETRY_MS = 3 * 60 * 1000;
+
+
 
 
 
@@ -65102,7 +64953,7 @@ function planAutoAction(view) {
 
 
 
-function exactConnectionBondLabel(w, actor, target) { return getRel(w, actor.id, target.id).bond || ""; }
+
 
 function connectionRelationshipCue(w, actor, target) {
   const row = getRel(w, actor.id, target.id);

@@ -79,7 +79,7 @@ export function validateSchema(value, schema, path = "result") {
 }
 
 function verifyQuote(sheet, evidence, path) {
-  if (typeof evidence !== "string" || !evidence.trim() || !sheet.includes(evidence)) throw new Error(path + ": evidence is not a verbatim source quote");
+  if (typeof evidence !== "string" || !evidence.trim() || !sheet.includes(evidence)) throw new Error(path + ": evidence is not a verbatim source quote: " + JSON.stringify(evidence) + ". Copy an exact, contiguous quotation from ownSheet, preserving spelling, punctuation and whitespace; do not quote your profile paraphrase or the other sheet.");
 }
 
 export function validateProfile(profile, sheet, id, ids, fieldNames = []) {
@@ -224,7 +224,7 @@ export function validateBonds(result, owner, roster, ownSheet, factsByTarget) {
     const sentences = value => [...new Intl.Segmenter("hu", { granularity: "sentence" }).segment(value)].filter(row => row.segment.trim()).length;
     const supported = bond.evidence.length > 0 || bond.factEvidence.length > 0;
     const descriptionCount = sentences(bond.description), publicCount = sentences(bond.publicFace), summaryCount = sentences(bond.summary);
-    if (descriptionCount < (supported ? 4 : 1) || descriptionCount > (supported ? 8 : 2) || publicCount < 1 || publicCount > 3 || summaryCount < (supported ? 2 : 1) || summaryCount > 4) throw new Error("Bond prose does not meet sentence-count requirements");
+    if (descriptionCount < (supported ? 4 : 1) || descriptionCount > (supported ? 8 : 2) || publicCount < 1 || publicCount > 3 || summaryCount < (supported ? 2 : 1) || summaryCount > 4) throw new Error("Bond " + bond.from + "->" + bond.to + " prose sentence counts: description=" + descriptionCount + " (required " + (supported ? "4-8" : "1-2") + "), publicFace=" + publicCount + " (required 1-3), summary=" + summaryCount + " (required " + (supported ? "2-4" : "1-4") + "). Regenerate this bond with the required number of complete sentences, preserving supported meaning; regenerate the entire bonds array.");
     if (!bond.description.trim() || !bond.publicFace.trim() || !bond.type.trim()) throw new Error("Empty bond description");
   }
   return result;

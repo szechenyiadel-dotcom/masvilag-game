@@ -74,7 +74,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
   const first = candidates.filter((candidate, index) => candidates.findIndex((other) => other.name === candidate.name) === index);
   const ordered = [...first, ...candidates.filter((candidate) => !first.includes(candidate))];
   for (const candidate of ordered) {
-    if (invalidProviders.has(candidate.name)) continue;
+    if (invalidProviders.has(candidate.name + "/" + candidate.model)) continue;
     try {
       const capability = await modelCapabilities(candidate, prompt, schema, transport);
       const outputTokens = options.outputTokens || 64000;
@@ -111,7 +111,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
           if (error.status && !error.invalidOutput) throw error;
           validationError = error.message;
           if (attempt === 1) {
-            invalidProviders.add(candidate.name);
+            invalidProviders.add(candidate.name + "/" + candidate.model);
             throw new Error("Two invalid schema/evidence outputs: " + validationError);
           }
         }
