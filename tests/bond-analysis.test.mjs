@@ -1045,3 +1045,17 @@ test("Without an outside context the sanitiser touches no evidence or layer", ()
   sanitizeBonds({ bonds: [answer] });
   assert.deepEqual(answer.evidence, before.evidence); assert.deepEqual(answer.layers, before.layers); assert.deepEqual(answer.factEvidence, before.factEvidence);
 });
+
+/* ---------- the Bonds screen has a button per character ---------- */
+
+test("The Bonds screen can re-analyse one character without a world restart", () => {
+  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  const bonds = source.slice(source.indexOf("function Bonds({ w, update, setErr })"), source.indexOf("function Bonds({ w, update, setErr })") + 6000);
+  assert.match(bonds, /force: !only, only: only \|\| null/, "one character: not a forced read of everyone");
+  assert.match(bonds, /installBondGraph\(n, result, allSubjects, \{ reset: only \? \[only\] : \[\] \}\)/, "and only their bonds are reset to the fresh reading");
+  assert.match(bonds, /reanalyze\(me\.id\)/, "a button for the character being looked at, whoever that is");
+  assert.match(bonds, /reanalyze\(null\)/, "the slow read of everything is still there, and says so");
+  assert.match(bonds, /Re-analyze \$\{me\.name\}'s bonds/);
+  assert.match(bonds, /Re-analyze ALL bonds \(slow\)/);
+  assert.ok(!/restartWorld|bondReset/.test(bonds), "no restart is involved");
+});

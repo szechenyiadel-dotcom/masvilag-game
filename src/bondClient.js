@@ -144,10 +144,21 @@ const transientError = (error) => error?.status
 const unknownJob = (error) => error?.status === 404 || /unknown analysis job/i.test(String(error?.message || ""));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function rebuildBondGraph(world, { subjects, api, language, force = false, progress: report = () => {}, pollMs = POLL_FIRST_MS }) {
+/* force: read every sheet again. only: read just this character again (their sheet and the bonds they write); everyone
+   else comes back from the server's cache. A fresh read is stored under a token that belongs to the character
+   (world.bondAnalysis.generations), and every later rebuild keeps using it, so a re-read is not undone by the next
+   new character or restart that would otherwise fall back to the older cached reading. */
+export async function rebuildBondGraph(world, { subjects, api, language, force = false, only = null, progress: report = () => {}, pollMs = POLL_FIRST_MS }) {
   const people = subjects(world);
   const source = bondSourceFingerprint(world, subjects);
-  const forceRun = force ? String(Date.now()) + ":" + String(Math.random()) : "";
+  const freshToken = force || only ? String(Date.now()) + ":" + String(Math.random()) : "";
+  const storedGenerations = world.bondAnalysis?.generations || {};
+  const generations = {};
+  for (const person of people) {
+    const token = force || only === person.id ? freshToken : storedGenerations[person.id] || "";
+    if (token) generations[person.id] = token;
+  }
+  const forceOf = (id) => generations[id] || "";
   const sheets = {};
   const fieldNames = {};
   let failed = false;
@@ -168,20 +179,22 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
     fieldNames[character.id] = Object.keys(relationshipFields(character, world));
   }
 
-  const analyze = async (body) => {
+  const analyze = async (body, onFirst = null) => {
     let jobKey = null;
     let missing = null;
     let submitted = false;
     let transientFailures = 0;
     let delay = pollMs;
+    let reported = false;
     for (;;) {
       if (failed) throw new Error("Analysis cancelled: another part of this run failed");
       try {
         const response = await api("/ai/bond-analysis", {
           method: "POST",
-          body: JSON.stringify(jobKey ? { poll: jobKey } : { ...body, force: forceRun }),
+          body: JSON.stringify(jobKey ? { poll: jobKey } : { ...body, force: forceOf(body.owner) }),
         });
         transientFailures = 0;
+        if (!reported && onFirst) { reported = true; onFirst({ key: response.jobKey || response.cacheKey || null, pending: Boolean(response.pending) }); }
         if (!response.pending) {
           const computed = Number.isFinite(response.computed)
             ? response.computed
@@ -220,33 +233,58 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
   const profileKeys = new Array(people.length);
   let recalculated = 0;
   let done = 0;
-  progress({ phase: "profile", completed: 0, total: people.length });
-  await runLimited(people, async (character, index) => {
-    const result = await analyze({
-      stage: "profile",
-      owner: character.id,
-      roster: people.filter((other) => other.id !== character.id)
-        .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) })),
-      ownSheet: sheets[character.id],
-      fieldNames: fieldNames[character.id],
-      language,
-    });
-    profiles[character.id] = { profile: result.result, hash: result.hash };
-    profileKeys[index] = result.cacheKey;
-    if (!result.cached) recalculated += 1;
-    progress({ phase: "profile", completed: ++done, total: people.length });
-  });
-
-  const baselines = {};
-  let recalculatedBonds = 0;
   const identities = characterIdentities(people);
-  const parts = people.flatMap((character) => {
+  // The baseline calls: one owner, at most TARGETS_PER_CALL targets each. `names` of a target is only known once its
+  // profile is read; the server never needs it to find the target (it uses the id and the cached profile).
+  const partsOf = (namesOf) => people.flatMap((character) => {
     const others = people.filter((other) => other.id !== character.id)
-      .map((other) => ({ id: other.id, names: profiles[other.id].profile.names, oneLine: other.shortDescription || "" }));
+      .map((other) => ({ id: other.id, names: namesOf(other), oneLine: other.shortDescription || "" }));
     const chunks = [];
     for (let at = 0; at < others.length; at += TARGETS_PER_CALL) chunks.push(others.slice(at, at + TARGETS_PER_CALL));
     return chunks.map((roster) => ({ character, roster }));
   });
+
+  /* While the profiles are being read, the baseline calls are registered with the server (defer): it starts each one
+     the moment the profiles it needs are ready, even if this phone has gone to sleep in between. Only worth doing
+     when some profile is really being read (not when everything comes back from the cache at once). */
+  const registeredAhead = new Set();
+  const firstResolvers = [];
+  const firsts = people.map(() => new Promise((resolve) => { firstResolvers.push(resolve); }));
+  const registerAhead = async () => {
+    const seen = await Promise.all(firsts);
+    if (failed || people.length < 2 || seen.some((row) => !row?.key) || !seen.some((row) => row.pending)) return;
+    const keys = seen.map((row) => row.key);
+    for (const person of people) registeredAhead.add(person.id);
+    await Promise.allSettled(partsOf(() => []).map(({ character, roster }) => api("/ai/bond-analysis", {
+      method: "POST",
+      body: JSON.stringify({ stage: "baseline", owner: character.id, roster, identities, ownSheet: sheets[character.id], profileKeys: keys, language, force: forceOf(character.id), defer: true }),
+    })));
+  };
+  progress({ phase: "profile", completed: 0, total: people.length });
+  registerAhead().catch(() => {});
+  await runLimited(people, async (character, index) => {
+    let settled = false;
+    const settle = (row) => { if (!settled) { settled = true; firstResolvers[index](row); } };
+    try {
+      const result = await analyze({
+        stage: "profile",
+        owner: character.id,
+        roster: people.filter((other) => other.id !== character.id)
+          .map((other) => ({ id: other.id, names: [other.name, other.nick, other.nickname, other.username].filter(Boolean) })),
+        ownSheet: sheets[character.id],
+        fieldNames: fieldNames[character.id],
+        language,
+      }, settle);
+      profiles[character.id] = { profile: result.result, hash: result.hash };
+      profileKeys[index] = result.cacheKey;
+      if (!result.cached) recalculated += 1;
+      progress({ phase: "profile", completed: ++done, total: people.length });
+    } finally { settle(null); }
+  });
+
+  const baselines = {};
+  let recalculatedBonds = 0;
+  const parts = partsOf((other) => profiles[other.id].profile.names);
   done = 0;
   progress({ phase: "baseline", completed: 0, total: parts.length });
   await runLimited(parts, async ({ character, roster }) => {
@@ -259,7 +297,8 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       profileKeys,
       language,
     });
-    recalculatedBonds += result.computed;
+    // A reading the server already did on its own (registered ahead) comes back as "cached": it was still work of this run.
+    recalculatedBonds += result.computed || (registeredAhead.has(character.id) ? Number(result.jobComputed) || 0 : 0);
     for (const bond of result.result.bonds) baselines[bond.from + ">" + bond.to] = runtimeBond(bond);
     progress({ phase: "baseline", completed: ++done, total: parts.length });
   });
@@ -273,19 +312,29 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       profiles,
       recalculated,
       recalculatedBonds,
+      generations,
       completedAt: Date.now(),
     },
   };
 }
 
 
-export function installBondGraph(world, result, subjects) {
+/* reset: ids of characters that were read again on purpose. Their outgoing bonds, and the bonds toward them whose
+   reading actually changed, are set to the fresh reading (play history of those pairs is dropped, like a restart would
+   do for them); everything else keeps what play has made of it. */
+export function installBondGraph(world, result, subjects, { reset = [] } = {}) {
   if (result.analysis.source !== bondSourceFingerprint(world, subjects)) throw new Error("Character sheets changed during analysis; retry with current sheets");
   const previous = world.relationshipBaselines || {};
+  const resetIds = new Set(reset);
     world.relationshipBaselines = structuredClone(result.baselines);
   world.bondAnalysis = structuredClone(result.analysis);
   world.rels ||= {};
   for (const [key, base] of Object.entries(result.baselines)) {
+    if (resetIds.has(base.from) || (resetIds.has(base.to) && JSON.stringify(base) !== JSON.stringify(previous[key]))) {
+      world.rels[key] = structuredClone(base);
+      for (const store of ["relationshipHistory", "officialRelationships"]) if (world[store] && typeof world[store] === "object") delete world[store][key];
+      continue;
+    }
     if (!world.rels[key] || JSON.stringify(world.rels[key]) === JSON.stringify(previous[key]) || world.rels[key].freshFromSheet) world.rels[key] = structuredClone(base);
     else if (!previous[key]) {
       const current = world.rels[key];
