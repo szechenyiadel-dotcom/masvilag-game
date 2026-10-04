@@ -2373,6 +2373,8 @@ function getProvider(body = {}) {
   return DEFAULT_PROVIDER;
 }
 
+const GEMINI_COMMENT_THINKING_ROOM = 2048;
+
 function buildGeminiPayload(
   body = {}
 ) {
@@ -2426,6 +2428,15 @@ function buildGeminiPayload(
         body.max_tokens ?? 700,
     },
   };
+
+  /* Comments on Gemini 3: its thinking is paid out of the same output allowance, so a comment request (180-2400
+     tokens) came back cut off mid-JSON and the app found no usable comment. Comments think little and get room. */
+  const geminiSource = String(body?.source || "").trim().toLowerCase();
+  const geminiComment = geminiSource === "comments" || /(?:^|[-_])comments?(?:[-_]|$)/.test(geminiSource) || geminiSource.includes("player-post-comment");
+  if (geminiComment) {
+    payload.generationConfig.maxOutputTokens = (Number(body.max_tokens) || 700) + GEMINI_COMMENT_THINKING_ROOM;
+    if (/^gemini-3/i.test(String(body?.model || ""))) payload.generationConfig.thinkingConfig = { thinkingLevel: "LOW" };
+  }
 
   if (body.system) {
     payload.systemInstruction = {
@@ -4959,6 +4970,10 @@ async function proxyGeminiMessageWithKey(body, GEMINI_API_KEY, timeoutMs = upstr
   }
 
   const normalized = normalizeGeminiResponse(payload);
+  const finishReason = String(payload?.candidates?.[0]?.finishReason || "");
+  if (finishReason && finishReason !== "STOP") {
+    console.warn("[ai-provider] gemini/" + model + " stopped early: finishReason=" + finishReason, "source=" + String(body?.source || ""), "maxOutputTokens=" + String(buildGeminiPayload({ ...body, model }).generationConfig.maxOutputTokens), "outTokens=" + String(payload?.usageMetadata?.candidatesTokenCount || 0), "thoughtTokens=" + String(payload?.usageMetadata?.thoughtsTokenCount || 0));
+  }
   const hasText = Array.isArray(normalized?.content) && normalized.content.some((x) => String(x?.text || "").trim());
   if (hasText) return { ok: true, payload: normalized, provider: "gemini", model };
   /* No text because a safety filter stopped it: not an outage, and every other key would stop it too. */
