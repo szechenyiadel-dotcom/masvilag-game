@@ -595,7 +595,7 @@ test("An incomplete OpenAI answer is never accepted", async () => {
 
 test("A sheet reading never reaches Groq, whatever Groq keys exist", () => {
  const config = { GROQ_API_KEY: "gk", GROQ_API_KEY_2: "gk2", GROQ_MODEL: "groq-m", GROQ_ANALYSIS_MODEL: "groq-a", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", OPENAI_API_KEY: "oa" };
- for (const mode of ["semantic", "schema"]) assert.ok(providerCandidates(config, mode).every(candidate => candidate.name === "gemini" || candidate.name === "openai"), mode);
+ for (const mode of ["semantic", "profile", "schema"]) assert.ok(providerCandidates(config, mode).every(candidate => candidate.name === "gemini" || candidate.name === "openai"), mode);
 });
 
 /* ---------- sheet analysis shares the server's view of resting Gemini keys ---------- */
@@ -784,6 +784,12 @@ test("Of the 7 free keys 3 carry the plain Flash models (3.8, 3.5, then the othe
   assert.ok(!home.some((row) => /flash-lite@[234]$/.test(row) || /^[0-9.]+-flash@[5678]$/.test(row)), "nothing crosses over in the home part");
 });
 
+test("Connections profile extraction starts directly on the light models and their four home keys", () => {
+  const list = pairs(providerCandidates(sevenKeys(), "profile"));
+  assert.deepEqual(list.slice(0, 4), ["3.5-flash-lite@5", "3.5-flash-lite@6", "3.5-flash-lite@7", "3.5-flash-lite@8"]);
+  assert.ok(list.indexOf("3.8-flash@2") > list.indexOf("2.5-flash-lite@4"), "full Flash is fallback, not the first stop for profile extraction");
+});
+
 test("Each group then helps the other, so no free key or model is wasted before OpenAI", () => {
   const list = pairs(providerCandidates(sevenKeys(), "semantic"));
   const homeLength = flashModels.length * 3 + liteModels.length * 4;
@@ -871,6 +877,8 @@ test("Never one word and never empty: summary, description, publicFace and type"
 });
 
 test("The prompt asks for compact but always filled texts, and still lets the unsupported fields stay empty", () => {
+  assert.match(BASELINE_PROMPT, /OUTPUT LANGUAGE IS A HARD CONTRACT/);
+  assert.match(BASELINE_PROMPT, /If outputLanguage is English, every one of those user-visible fields must be English/);
   assert.match(BASELINE_PROMPT, /description: 3–5 coherent sentences/);
   assert.match(BASELINE_PROMPT, /summary: 2–3 sentences/);
   assert.match(BASELINE_PROMPT, /publicFace: 1–2 sentences/);

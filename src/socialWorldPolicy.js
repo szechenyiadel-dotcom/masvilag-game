@@ -8,6 +8,18 @@
 
 const SOCIAL_POLICY_MARKER = "[MASVILAG_SOCIAL_WORLD_POLICY_V1]";
 
+
+const ACTIVE_LANGUAGE_POLICY = `
+ACTIVE APP LANGUAGE — HARD CONTRACT
+The app's active language / outputLanguage, when supplied anywhere in the request or surrounding system context, is authoritative for EVERY user-visible generated string.
+- If the active language is English: DMs, Scenes, posts, captions, Notes, comments, replies, group-chat lines, gossip, notifications, summaries, relationship prose and any other generated user-visible text MUST be natural English.
+- If the active language is Hungarian: those same user-visible outputs MUST be natural Hungarian.
+- Do NOT switch languages merely because the newest player message, an older conversation turn, a character sheet, a memory, or quoted source text is written in another language.
+- Names, usernames, titles that are proper nouns, and verbatim quotations/evidence stay in their original form when they must be quoted exactly.
+- Fixed machine-code enums/keys are internal data and may remain in their schema language; never expose them as untranslated UI prose.
+- Character voice may use an occasional foreign word only when that character's established speech style explicitly calls for code-switching. Otherwise keep the whole visible output in the active app language.
+`;
+
 const RELATIONSHIP_POLICY = `
 ${SOCIAL_POLICY_MARKER}
 RELATIONSHIP INTERPRETATION — HARD CONTRACT
@@ -338,7 +350,7 @@ function strengthenAiPayload(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
 
   const next = { ...payload };
-  const combinedPolicy = `${RELATIONSHIP_POLICY}\n${CONVERSATION_REALITY_POLICY}\n${DM_SCENE_INITIATIVE_POLICY}\n${RESPONSE_FIDELITY_AND_MATURE_TONE_POLICY}\n${KNOWLEDGE_AND_LIVING_SOCIAL_POLICY}\n${SIMS_SOCIAL_CONTEXT_POLICY}\n${COMMENT_POLICY}\n${SIMS_WORLD_POLICY}\n${RHYTHM_POLICY}`;
+  const combinedPolicy = `${ACTIVE_LANGUAGE_POLICY}\n${RELATIONSHIP_POLICY}\n${CONVERSATION_REALITY_POLICY}\n${DM_SCENE_INITIATIVE_POLICY}\n${RESPONSE_FIDELITY_AND_MATURE_TONE_POLICY}\n${KNOWLEDGE_AND_LIVING_SOCIAL_POLICY}\n${SIMS_SOCIAL_CONTEXT_POLICY}\n${COMMENT_POLICY}\n${SIMS_WORLD_POLICY}\n${RHYTHM_POLICY}`;
 
   next.system = appendPolicy(next.system, combinedPolicy);
 
