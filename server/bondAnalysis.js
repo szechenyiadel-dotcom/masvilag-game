@@ -471,6 +471,42 @@ function cleanIdentities(raw, castIds) {
 }
 const cacheKeyFor = (parts) => "bond-v" + BOND_ANALYSIS_VERSION + ":" + sheetHash(parts.join("\n"));
 
+/* A pair that nothing connects needs no model: the owner's Connections text does not name the other person, no group
+   fact joins them and no mention or fact was resolved to them. What the model would write for it is "no personal
+   relationship", so it is written by rule: instantly, free, and the same every time. Whenever a name is too short to be
+   sure of (under 3 characters, e.g. a nickname like "Jo"), the pair is left to the model. */
+const foldText = (value) => String(value).normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function mightBeNamed(foldedSheet, card) {
+  const names = uniqueValues(card.names.flatMap((name) => [String(name), ...String(name).split(/\s+/)]).map((name) => foldText(name).trim()).filter(Boolean));
+  if (!names.length || names.some((name) => name.length < 3)) return true;
+  return names.some((name) => new RegExp("(^|[^\\p{L}\\p{N}])" + escapeRegExp(name) + "($|[^\\p{L}\\p{N}])", "u").test(foldedSheet));
+}
+const STRANGER_TEXT = {
+  Hungarian: {
+    type: "semleges",
+    summary: (owner, target) => owner + " és " + target + " nem állnak személyes kapcsolatban.",
+    description: (owner, target) => owner + " Connections mezője nem említi " + target + " nevét, és közös csoportjuk sem ismert. Ezért nincs igazolt kapcsolat köztük.",
+    publicFace: () => "Nincs ismert kapcsolatuk.",
+  },
+  English: {
+    type: "neutral",
+    summary: (owner, target) => owner + " and " + target + " have no personal relationship.",
+    description: (owner, target) => owner + "'s Connections does not mention " + target + ", and no shared group is known. So there is no established bond between them.",
+    publicFace: () => "No known relationship.",
+  },
+};
+export function strangerBond(owner, target, ownerName, targetName, language) {
+  const text = STRANGER_TEXT[language] || STRANGER_TEXT.Hungarian;
+  return {
+    from: owner, to: target, type: text.type, status: "semleges",
+    levels: { sentiment: 0, trust: 0, attraction: 0, tension: 0 }, intensity: 0, confidence: 1,
+    summary: text.summary(ownerName, targetName), description: text.description(ownerName, targetName), publicFace: text.publicFace(),
+    hiddenFeelings: null, history: null, dynamics: null, wants: null, whoKnows: [],
+    source: "logikai következtetés", evidence: [], fieldEvidence: [], factEvidence: [], layers: [],
+  };
+}
+
 /* A reading is carried by the server, not by the open app: the browser only starts it and asks how it is going.
    A phone that went to sleep, or a restart of the server, must not leave a half-done reading waiting for the next poll.
    Every `resumeEveryMs` the server picks up the readings that are still pending (and were touched recently), whose
@@ -571,6 +607,22 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
         bonds.set(card.id, row.bond);
       } catch { /* stale or corrupt entry: read this pair again */ }
     });
+    // Pairs nothing connects are written by rule (and stored like any other pair), so only real relationships reach a model.
+    const foldedSheet = foldText(ownSheet);
+    const ownerName = identities[owner]?.name || ownProfile.names[0] || owner;
+    const written = [];
+    cards.forEach((card, index) => {
+      if (bonds.has(card.id)) return;
+      const connected = (facts[card.id] || []).length > 0
+        || ownProfile.mentions.some((row) => row.targetId === card.id)
+        || ownProfile.facts.some((row) => row.targetId === card.id)
+        || mightBeNamed(foldedSheet, card);
+      if (connected) return;
+      const bond = strangerBond(owner, card.id, ownerName, card.fullName || card.names[0] || card.id, outputLanguage);
+      bonds.set(card.id, bond);
+      written.push(saveRow(pairKeys[index], { stage: "pair", world, version: BOND_ANALYSIS_VERSION, owner, hash, bond, provider: "rule", model: "no-mention", keySlot: null }));
+    });
+    await Promise.all(written);
     const missing = cards.filter((card) => !bonds.has(card.id));
     const prompt = BASELINE_PROMPT + "\n" + JSON.stringify({ owner, ownSheet, profile: ownProfile, roster: missing, objectiveFacts: Object.fromEntries(missing.map((card) => [card.id, facts[card.id]])), outputLanguage });
     return {
