@@ -571,3 +571,16 @@ test("A model that fills dynamics and wants without a quote no longer sinks the 
     assert.ok(![...sim.store.values()].some((row) => row.error), "no failed round was recorded");
   } finally { await sim.close(); }
 });
+
+test("A model that leaves out the group layer and the objective quotes no longer sinks the reading: the server completes them, in one call", async () => {
+  const sim = await start({ decorate: (result, stage) => { if (stage === "baseline") for (const bond of result.bonds) Object.assign(bond, { layers: [], factEvidence: [], evidence: ["kitalált idézet, ami nincs a lapon"], source: "explicit" }); } });
+  try {
+    const chars = [person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag.")];
+    const result = await sim.rebuild(chars);
+    assert.equal(sim.calls.filter((call) => call.stage === "baseline").length, 2, "one model call per sheet, no retry rounds");
+    assert.deepEqual(result.baselines["a>b"].layers, ["csapattárs"], "the shared dojo layer is put back");
+    assert.ok(result.baselines["a>b"].factEvidence.length > 0, "and so are its quotes");
+    assert.deepEqual(result.baselines["a>b"].evidence, [], "a quote that is not in the sheet never stays");
+    assert.ok(![...sim.store.values()].some((row) => row.error), "no failed round was recorded");
+  } finally { await sim.close(); }
+});

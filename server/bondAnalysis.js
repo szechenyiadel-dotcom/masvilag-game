@@ -571,7 +571,11 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     return {
       stage, metadata, body, owner, hash, schema: BondArraySchema, prompt, cards, pairKeys, bonds, missing,
       jobKey: cacheKeyFor([world, stage, prompt, String(force || "")]),
-      validate: (value) => validateBonds(sanitizeBonds(value), owner, missing, ownSheet, Object.fromEntries(missing.map((card) => [card.id, facts[card.id]])), castIds),
+      validate: (value) => {
+        const factsByTarget = Object.fromEntries(missing.map((card) => [card.id, facts[card.id]]));
+        sanitizeBonds(value, { ownSheet, factsByTarget, cast: new Set([...castIds, owner]) });
+        return validateBonds(value, owner, missing, ownSheet, factsByTarget, castIds);
+      },
     };
   }
 
