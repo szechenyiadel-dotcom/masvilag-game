@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import { registerBondAnalysis, analyzeStructured, strangerBond } from "../server/bondAnalysis.js";
+import { registerBondAnalysis, analyzeStructured, strangerBond, bondAnalysisOutputTokens } from "../server/bondAnalysis.js";
 import { EXTRACT_PROMPT, BASELINE_PROMPT, validateBonds } from "../src/bondAnalysis.js";
 import { fullSheetText, relationshipSourceText, relationshipFields, characterIdentities, rebuildBondGraph, installBondGraph, analysisReady, bondSourceFingerprint, staleReason } from "../src/bondClient.js";
 
@@ -63,7 +63,14 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
   const analyze = async (prompt, schema, validate, options = {}) => {
     const stage = prompt.startsWith(EXTRACT_PROMPT) ? "profile" : "baseline";
     const payload = JSON.parse(prompt.slice((stage === "profile" ? EXTRACT_PROMPT : BASELINE_PROMPT).length + 1));
-    calls.push({ stage, owner: payload.owner, targets: payload.roster?.map((card) => card.id), thinking: options.thinkingLevel });
+    calls.push({
+      stage,
+      owner: payload.owner,
+      targets: payload.roster?.map((card) => card.id),
+      thinking: options.thinkingLevel,
+      outputTokens: options.outputTokens,
+      fastCapacityCheck: options.fastCapacityCheck === true,
+    });
     payloads.push({ stage, payload });
     inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight);
     try {
@@ -436,6 +443,42 @@ test("With no provider configured the failure says what to set instead of an emp
   await assert.rejects(analyzeStructured("x", { type: "object" }, () => {}, { env: {} }), /No analysis provider is configured.*OPENAI_API_KEY.*AI_ALLOW_PAID_BACKGROUND=1/);
 });
 
+test("Connections profile preflight skips countTokens, caches Gemini metadata, and keeps a small output ceiling", async () => {
+  const seen = { meta: 0, count: 0, generate: 0 };
+  const schema = {
+    type: "object",
+    properties: { ok: { type: "string" } },
+    required: ["ok"],
+    additionalProperties: false,
+  };
+  const transport = async (url) => {
+    if (url.endsWith(":countTokens")) { seen.count += 1; return { totalTokens: 10 }; }
+    if (url.endsWith(":generateContent")) {
+      seen.generate += 1;
+      return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":"yes"}' }] } }] };
+    }
+    seen.meta += 1;
+    return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  };
+  const candidate = { name: "gemini", model: "m-fast", key: "k", keySlot: "K" };
+  const validate = (value) => assert.equal(value.ok, "yes");
+
+  await analyzeStructured("short Connections", schema, validate, { candidates: [candidate], transport, outputTokens: 6000, fastCapacityCheck: true });
+  await analyzeStructured("another short Connections", schema, validate, { candidates: [{ ...candidate, key: "k2" }], transport, outputTokens: 6000, fastCapacityCheck: true });
+
+  assert.equal(seen.count, 0, "short Connections does not spend a countTokens request");
+  assert.equal(seen.meta, 1, "model metadata is reused across character reads");
+  assert.equal(seen.generate, 2);
+});
+
+test("Connections analysis uses bounded dynamic output budgets without truncating the source", () => {
+  assert.equal(bondAnalysisOutputTokens("profile", 0, 0), 6000);
+  assert.equal(bondAnalysisOutputTokens("profile", 4000, 0), 14000);
+  assert.equal(bondAnalysisOutputTokens("profile", 50000, 0), 18000);
+  assert.equal(bondAnalysisOutputTokens("baseline", 4000, 1), 8000);
+  assert.equal(bondAnalysisOutputTokens("baseline", 4000, 10), 32000);
+});
+
 test("One analysis stops trying further providers after its deadline", async () => {
   let t = 1000;
   const clock = () => t;
@@ -601,12 +644,18 @@ const requestBodies = (chars) => {
   };
 };
 
-test("A profile is read with little thinking, a relationship reading with full thinking", async () => {
+test("A profile is read with little thinking and fast preflight; relationship reading keeps full thinking", async () => {
   const sim = await start();
   try {
     await sim.rebuild([person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag.")]);
-    assert.ok(sim.calls.filter((call) => call.stage === "profile").every((call) => call.thinking === "LOW"));
-    assert.ok(sim.calls.filter((call) => call.stage === "baseline").every((call) => call.thinking === "HIGH"));
+    const profiles = sim.calls.filter((call) => call.stage === "profile");
+    const baselines = sim.calls.filter((call) => call.stage === "baseline");
+    assert.ok(profiles.every((call) => call.thinking === "LOW"));
+    assert.ok(profiles.every((call) => call.fastCapacityCheck === true));
+    assert.ok(profiles.every((call) => call.outputTokens >= 6000 && call.outputTokens <= 18000));
+    assert.ok(baselines.every((call) => call.thinking === "HIGH"));
+    assert.ok(baselines.every((call) => call.fastCapacityCheck === false));
+    assert.ok(baselines.every((call) => call.outputTokens >= 8000 && call.outputTokens <= 32000));
   } finally { await sim.close(); }
 });
 
