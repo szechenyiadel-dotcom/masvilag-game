@@ -10,10 +10,10 @@
  *   (503 + Retry-After) instead of falling back to a paid provider.
  */
 
-/* openrouter3 and the standard Dolphin DM route are paid OpenRouter paths; Mistral is billed per use.
+/* openrouter3 and the Dolphin3.0 DM route are paid OpenRouter paths; Mistral is billed per use.
    The paid Gemini key is handled by selectGeminiKeys. Free: Gemini keys 2-8, Groq, OpenRouter free router,
-   and the explicit Dolphin :free DM route. */
-export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter3", "openrouter-dm", "mistral", "mistral2"]));
+   and the Venice Uncensored :free DM route. */
+export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter3", "openrouter-dm-dolphin", "mistral", "mistral2"]));
 
 /* What a request that nobody is waiting for may use for roleplay-style writing (DMs, scenes,
    comments): free providers only, best first. */
@@ -467,8 +467,9 @@ export function looksLikeRefusal(text) {
 
 /* ---------- what the paid providers are sent, and what they cost ---------- */
 
-/* DeepSeek (openrouter3), standard Dolphin DM, and Mistral are billed per token. The prompt is what costs, so it has a ceiling. */
-export const PAID_INPUT_PROVIDERS = Object.freeze(new Set(["openrouter3", "openrouter-dm", "mistral", "mistral2"]));
+/* DeepSeek (openrouter3), Dolphin3.0 DM, and Mistral are billed per token. Venice :free is also capped here
+   because its free endpoint has the same 33K-class context limit; the cap prevents a long DM from being rejected. */
+export const PAID_INPUT_PROVIDERS = Object.freeze(new Set(["openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]));
 export const DEFAULT_PAID_MAX_INPUT_CHARS = 60000;   /* roughly 15-20k tokens */
 
 /* PAID_MAX_INPUT_CHARS in the environment; 0 switches the ceiling off. */
