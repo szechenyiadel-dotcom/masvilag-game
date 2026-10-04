@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { createRequire } from "node:module";
-import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema } from "../src/bondAnalysis.js";
+import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema, BASELINE_PROMPT } from "../src/bondAnalysis.js";
 import { fullSheetText, relationshipSourceText, relationshipFields, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext, bondSourceFingerprint } from "../src/bondClient.js";
 import { sheetHash, analyzeStructured, generationTimeoutMs, providerCandidates } from "../server/bondAnalysis.js";
 import { createGeminiLedger } from "../server/aiPolicy.js";
@@ -835,4 +835,44 @@ test("Repair work starts on the light models of the light keys, then the plain F
   const list = pairs(providerCandidates(sevenKeys(), "schema"));
   assert.deepEqual(list.slice(0, 4), ["3.5-flash-lite@5", "3.5-flash-lite@6", "3.5-flash-lite@7", "3.5-flash-lite@8"]);
   assert.ok(list.indexOf("3.5-flash@2") > list.indexOf("2.5-flash-lite@4"), "plain Flash only after every light model");
+});
+
+/* ---------- bond texts: shorter is fine, empty or one word is not ---------- */
+
+const evidenceLine = "Anna Bélával jár edzeni.";
+const supportedBond = (extra = {}) => bond("a", "b", {
+  type: "edzőpartner", status: "aktív", source: "explicit", evidence: [evidenceLine],
+  summary: "Anna rendszeresen edz Bélával. Ez közös hétköznapokat ad nekik.",
+  description: "Anna Bélával jár edzeni, így hetente többször találkoznak. A lap ennél többet nem mond, ezért kapcsolatuk edzőpartneri marad. Személyes érzésről nem esik szó.",
+  publicFace: "Együtt látják őket az edzéseken.", ...extra,
+});
+const checkBond = (value) => validateBonds({ bonds: [value] }, "a", [{ id: "b" }], evidenceLine, {});
+
+test("A compact supported bond (3 sentences) is accepted: shorter descriptions are fine", () => {
+  checkBond(supportedBond());
+});
+
+test("A supported description needs at least 3 sentences and enough words to be real sentences", () => {
+  assert.throws(() => checkBond(supportedBond({ description: "Anna Bélával jár edzeni, így hetente többször találkoznak. A lap ennél többet nem mond." })), /prose sentence counts/);
+  assert.throws(() => checkBond(supportedBond({ description: "Edz. Jár. Együtt." })), /description is too short|prose sentence counts/);
+});
+
+test("Never one word and never empty: summary, description, publicFace and type", () => {
+  assert.throws(() => checkBond(supportedBond({ summary: "Barátok. Edzenek." })), /summary is too short/);
+  assert.throws(() => checkBond(supportedBond({ publicFace: "Barát." })), /publicFace is too short/);
+  assert.throws(() => checkBond(supportedBond({ summary: "" })), /prose sentence counts|Empty bond description/);
+  assert.throws(() => checkBond(supportedBond({ type: "  " })), /Empty bond description/);
+  const stranger = (extra) => validateBonds({ bonds: [bond("a", "b", extra)] }, "a", [{ id: "b" }], "Sima diák.", {});
+  stranger({});
+  assert.throws(() => stranger({ summary: "Ismeretlen." }), /summary is too short/);
+  assert.throws(() => stranger({ description: "Nincs." }), /description is too short/);
+  assert.throws(() => stranger({ summary: "   " }), /prose sentence counts|Empty bond description/);
+});
+
+test("The prompt asks for compact but always filled texts, and still lets the unsupported fields stay empty", () => {
+  assert.match(BASELINE_PROMPT, /description: 3–5 coherent sentences/);
+  assert.match(BASELINE_PROMPT, /summary: 2–3 sentences/);
+  assert.match(BASELINE_PROMPT, /publicFace: 1–2 sentences/);
+  assert.match(BASELINE_PROMPT, /type, summary, description and publicFace are ALWAYS filled with real sentences/);
+  assert.match(BASELINE_PROMPT, /hiddenFeelings\/history\/dynamics\/wants: null without support/);
 });
