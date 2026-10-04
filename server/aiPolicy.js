@@ -10,10 +10,9 @@
  *   (503 + Retry-After) instead of falling back to a paid provider.
  */
 
-/* openrouter3 and the Dolphin3.0 DM route are paid OpenRouter paths; Mistral is billed per use.
-   The paid Gemini key is handled by selectGeminiKeys. Free: Gemini keys 2-8, Groq, OpenRouter free router,
-   and the Venice Uncensored :free DM route. */
-export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter3", "openrouter-dm-dolphin", "mistral", "mistral2"]));
+/* Dolphin3.0 DM and Mistral are billed per use. Nemotron :free is deliberately NOT paid so it can serve
+   as Gemini's background fallback before OpenAI. The paid Gemini key is handled by selectGeminiKeys. */
+export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter-dm-dolphin", "mistral", "mistral2"]));
 
 /* What a request that nobody is waiting for may use for roleplay-style writing (DMs, scenes,
    comments): free providers only, best first. */
