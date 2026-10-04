@@ -254,7 +254,7 @@ test("English mode sends English interpretation language at BOTH analysis stages
  assert.ok(calls[0].ownSheet.includes(world.chars[0].connections));
 });
 test("Gemini semantic routing tries free keys 2 through 8 before paid key 1", async () => {
- const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini" };
+ const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini" };
  for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
  const attempted = [];
  const transport = async (url, opts) => {
@@ -271,7 +271,7 @@ test("Gemini semantic routing tries free keys 2 through 8 before paid key 1", as
  assert.equal(result.provider, "gemini");
  assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8"]);
 });
-test("Restart profile rotation keeps every free Gemini fallback, then asks OpenAI once, and never the paid Gemini key", async () => {
+test("Restart profile rotation keeps every free Gemini key (each group rotated), then asks OpenAI once, and never the paid Gemini key", async () => {
  const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini", OPENAI_API_KEY: "openai-key", OPENAI_ANALYSIS_MODEL: "configured-openai" };
  for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
  const attempted = [];
@@ -293,7 +293,7 @@ test("Restart profile rotation keeps every free Gemini fallback, then asks OpenA
   value => assert.equal(value.ok, true),
   { env, transport, outputTokens: 1000, semanticStartOffset: 3 }
  );
- assert.deepEqual(attempted, ["test-key-5","test-key-6","test-key-7","test-key-8","test-key-2","test-key-3","test-key-4","Bearer openai-key"]);
+ assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-8","test-key-5","test-key-6","test-key-7","Bearer openai-key"], "the 3 Flash keys, then the 4 light-model keys helping out, rotated by 3 within each group");
  assert.equal(result.provider, "openai"); assert.equal(result.model, "configured-openai");
 });
 test("Paid Gemini key 1 is never used for analysis unless paid background use is switched on", async () => {
@@ -691,16 +691,16 @@ const busy503 = () => Object.assign(new Error("Analysis provider HTTP 503: This 
 test("Sheet analysis tries the owner's models, then the other full models, then the light ones, each model on every key before the next", async () => {
   const out = await ladderRun({ answer: () => { throw quotaDay(); } });
   const models = [...new Set(out.attempted.map((row) => row.split("@")[0]))];
-  assert.deepEqual(models, ["pro-x", "flash-x", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]);
+  assert.deepEqual(models, ["pro-x", "flash-x", "gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]);
   assert.deepEqual(out.attempted.slice(0, 4), ["pro-x@g2", "pro-x@g3", "flash-x@g2", "flash-x@g3"], "model by model");
-  assert.equal(out.attempted.length, 14, "seven models on two keys");
+  assert.equal(out.attempted.length, 16, "eight models on two keys");
 });
 
 test("A model that is overloaded (503 high demand) is not asked again on the other keys: the next model answers", async () => {
   const ledger = createGeminiLedger();
   const out = await ladderRun({ ledger, answer: ({ model }) => { if (model === "pro-x") throw quotaDay(); if (model === "flash-x") throw busy503(); return ok; } });
-  assert.equal(out.result.model, "gemini-3.7-flash");
-  assert.deepEqual(out.attempted, ["pro-x@g2", "pro-x@g3", "flash-x@g2", "gemini-3.7-flash@g2"], "flash-x was tried once, not on every key");
+  assert.equal(out.result.model, "gemini-3.5-flash");
+  assert.deepEqual(out.attempted, ["pro-x@g2", "pro-x@g3", "flash-x@g2", "gemini-3.5-flash@g2"], "flash-x was tried once, not on every key");
   assert.ok(ledger.restMs("g3", "flash-x") > 0, "and the whole model rests for a minute");
 });
 
@@ -764,4 +764,75 @@ test("A short reading may not hang for ten minutes on one model: four minutes, t
   };
   await analyzeStructured("short source", { type: "object" }, (value) => assert.equal(value.ok, true), { env: { GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x" }, transport, outputTokens: 1000 });
   assert.deepEqual(seen.map((row) => [row.kind, row.timeoutMs]), [["meta", 60000], ["count", 60000], ["generate", 240000]]);
+});
+
+/* ---------- the free keys are split: 3 are the home of the plain Flash models, 4 of the light ones ---------- */
+
+const sevenKeys = (extra = {}) => {
+  const env = { GEMINI_ANALYSIS_MODEL: "gemini-3.8-flash", ...extra };
+  for (let i = 2; i <= 8; i += 1) env["GEMINI_API_KEY_" + i] = "k" + i;
+  return env;
+};
+const pairs = (list) => list.map((candidate) => candidate.model.replace("gemini-", "") + "@" + candidate.keySlot.replace("GEMINI_API_KEY_", ""));
+const flashModels = ["3.8-flash", "3.5-flash", "3.7-flash", "3.6-flash"], liteModels = ["3.5-flash-lite", "3.1-flash-lite", "2.5-flash-lite"];
+
+test("Of the 7 free keys 3 carry the plain Flash models (3.8, 3.5, then the other full ones) and 4 carry the light ones", () => {
+  const list = pairs(providerCandidates(sevenKeys(), "semantic"));
+  const home = list.slice(0, flashModels.length * 3 + liteModels.length * 4);
+  assert.deepEqual(home.slice(0, flashModels.length * 3), flashModels.flatMap((model) => ["2", "3", "4"].map((key) => model + "@" + key)), "Flash model by model on keys 2-4 only");
+  assert.deepEqual(home.slice(flashModels.length * 3), liteModels.flatMap((model) => ["5", "6", "7", "8"].map((key) => model + "@" + key)), "then the light models on keys 5-8 only");
+  assert.ok(!home.some((row) => /flash-lite@[234]$/.test(row) || /^[0-9.]+-flash@[5678]$/.test(row)), "nothing crosses over in the home part");
+});
+
+test("Each group then helps the other, so no free key or model is wasted before OpenAI", () => {
+  const list = pairs(providerCandidates(sevenKeys(), "semantic"));
+  const homeLength = flashModels.length * 3 + liteModels.length * 4;
+  const rest = list.slice(homeLength);
+  assert.deepEqual(rest.slice(0, flashModels.length * 4), flashModels.flatMap((model) => ["5", "6", "7", "8"].map((key) => model + "@" + key)), "Flash models on the light keys");
+  assert.deepEqual(rest.slice(flashModels.length * 4), liteModels.flatMap((model) => ["2", "3", "4"].map((key) => model + "@" + key)), "light models on the Flash keys");
+  assert.equal(new Set(list).size, list.length, "no (model, key) pair twice");
+  assert.equal(list.length, 7 * (flashModels.length + liteModels.length), "every model on every free key, once");
+});
+
+test("BOND_ANALYSIS_FLASH_KEYS moves the split, and the starting key of each group rotates between jobs", () => {
+  const two = pairs(providerCandidates(sevenKeys({ BOND_ANALYSIS_FLASH_KEYS: "2", GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off" }), "semantic"));
+  assert.deepEqual(two.slice(0, 2), ["3.8-flash@2", "3.8-flash@3"]);
+  const rotated = pairs(providerCandidates(sevenKeys({ GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off" }), "semantic", 1));
+  assert.deepEqual(rotated.slice(0, 3), ["3.8-flash@3", "3.8-flash@4", "3.8-flash@2"], "the Flash group starts on its second key");
+  assert.deepEqual(rotated.slice(3, 7), ["3.8-flash@6", "3.8-flash@7", "3.8-flash@8", "3.8-flash@5"], "and the other group on its own second key");
+});
+
+test("When the plain Flash models are overloaded the light models on the 4 light keys read the sheet, in a few requests", async () => {
+  const attempted = [];
+  const transport = async (url, opts) => {
+    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+    if (url.endsWith(":generateContent")) {
+      const model = decodeURIComponent(url.split("/models/")[1].split(":")[0]);
+      attempted.push(model.replace("gemini-", "") + "@" + opts.headers["x-goog-api-key"]);
+      if (!/lite/.test(model)) throw busy503();
+      return ok;
+    }
+    return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  };
+  const result = await analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), { env: sevenKeys(), transport, outputTokens: 1000, ledger: createGeminiLedger() });
+  assert.equal(result.model, "gemini-3.5-flash-lite");
+  assert.equal(result.keySlot, "GEMINI_API_KEY_5");
+  assert.deepEqual(attempted, ["3.8-flash@k2", "3.5-flash@k2", "3.7-flash@k2", "3.6-flash@k2", "3.5-flash-lite@k5"], "each busy model was asked once, then the first light key answered");
+});
+
+test("The paid Gemini key stays opt-in and is asked after every free candidate, OpenAI after it", () => {
+  const without = providerCandidates(sevenKeys({ GEMINI_API_KEY: "paid", OPENAI_API_KEY: "oa" }), "semantic");
+  assert.ok(without.every((candidate) => candidate.key !== "paid"));
+  assert.equal(without.at(-1).name, "openai");
+  const withPaid = providerCandidates(sevenKeys({ GEMINI_API_KEY: "paid", OPENAI_API_KEY: "oa", AI_ALLOW_PAID_BACKGROUND: "1" }), "semantic");
+  const firstPaid = withPaid.findIndex((candidate) => candidate.key === "paid");
+  assert.ok(firstPaid > 0 && withPaid.slice(0, firstPaid).every((candidate) => candidate.key !== "paid" && candidate.name === "gemini"));
+  assert.equal(withPaid.slice(firstPaid, -1).every((candidate) => candidate.key === "paid"), true);
+  assert.equal(withPaid.at(-1).name, "openai");
+});
+
+test("Repair work starts on the light models of the light keys, then the plain Flash models", () => {
+  const list = pairs(providerCandidates(sevenKeys(), "schema"));
+  assert.deepEqual(list.slice(0, 4), ["3.5-flash-lite@5", "3.5-flash-lite@6", "3.5-flash-lite@7", "3.5-flash-lite@8"]);
+  assert.ok(list.indexOf("3.5-flash@2") > list.indexOf("2.5-flash-lite@4"), "plain Flash only after every light model");
 });
