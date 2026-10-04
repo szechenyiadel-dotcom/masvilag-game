@@ -5621,8 +5621,8 @@ function providerAllowedForBody(provider, body) {
 /* Provider roles are intentionally strict.
    - DM: OpenRouter Dolphin3.0 (key 1) -> Venice Uncensored free (key 2) -> Mistral Small 1 -> Mistral Small 2 (also when the world starts it).
    - Scene: Mistral Small 1 -> Mistral Small 2 (also when the world starts it).
-   - Feed: Gemini -> OpenAI.
-   - Comments/replies: OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2.
+   - Gemini-owned feed / character-knowledge writing: Gemini -> Nemotron free (OpenRouter key 1) -> OpenAI.
+   - Comments/replies: Mistral Small 1 -> Mistral Small 2 when the player is waiting; background comments keep the free writing chain.
    - Existing character voice/style cards remain prompt context; there is no separate AI voice pass.
    - Analysis, classification and translation (meaning-analysis, display-translate, music-note,
      relationship-impact) go to Groq first when Groq can take the whole request, then free Gemini.
@@ -5660,14 +5660,14 @@ function taskProviderOrder(requestedProvider, body) {
     /* Scenes use Mistral Small, with the second Mistral key as fallback. */
     raw = ["mistral", "mistral2"];
   } else if (isComment) {
-    /* Comments/replies use DeepSeek Flash first; Mistral Small 1 -> 2 are fallbacks. */
-    raw = playerWaiting ? ["openrouter3", "mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
+    /* Nemotron is reserved for Gemini fallback, not comments. Player-waiting comments use Mistral 1 -> 2. */
+    raw = playerWaiting ? ["mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
   } else if (isFeed) {
-    /* Feed stays on free Gemini first; paid OpenAI is fallback only. */
-    raw = ["gemini", "openai"];
+    /* Gemini first; free Nemotron on OpenRouter key 1 saves paid OpenAI for last. */
+    raw = ["gemini", "openrouter3", "openai"];
   } else if (characterKnowledgeSources.has(source)) {
-    /* Other character-sheet canon/identity knowledge stays Gemini-first. */
-    raw = ["gemini", "openai"];
+    /* Character-sheet canon/identity knowledge uses the same Gemini -> Nemotron -> OpenAI chain. */
+    raw = ["gemini", "openrouter3", "openai"];
   } else if (isGroqUtilitySource(source)) {
     /* Analysis, classification and translation (never a character's voice) go to Groq first when Groq can
        take the WHOLE request (the pacer keeps them from running side by side); free Gemini after it. A
@@ -5679,8 +5679,10 @@ function taskProviderOrder(requestedProvider, body) {
     raw = ["gemini"];
   }
 
-  /* Keep the DM chain exact; other request kinds may still demote a provider that repeatedly refuses. */
-  if (source !== "dm") raw = orderByRefusals(raw, source, AI_REFUSALS);
+  /* Keep the explicitly assigned DM and Gemini-fallback chains exact. Other request kinds may still demote
+     a provider that repeatedly refuses. */
+  const exactProviderOrder = source === "dm" || isFeed || characterKnowledgeSources.has(source);
+  if (!exactProviderOrder) raw = orderByRefusals(raw, source, AI_REFUSALS);
 
   /* Background work stays on free providers; only a player-waiting request may use paid ones. */
   return filterProvidersForBody(
