@@ -27,7 +27,8 @@ test("A comment or a post that carries the bond context is shortened like any re
   for (const [source, priority] of [["comments", 100], ["feed-post", 60], ["comments", 20]]) {
     const out = prepare(request(source), priority, source);
     const text = out.messages.map((m) => m.content).join("\n");
-    assert.ok(size(out) <= (priority >= 50 ? 102000 : 68000), source + "/" + priority + " is " + size(out));
+    assert.equal(out.system, request(source).system, source + ": the rulebook travels whole");
+    assert.ok(out.messages[0].content.length <= (priority >= 50 ? 70000 : 45000), source + "/" + priority + " prompt is " + out.messages[0].content.length);
     assert.ok(text.includes("FAKE-DATING-ARRANGEMENT") && text.includes("[[/FULL_BOND_CONTEXT]]"), source + ": the bond context survives");
     assert.ok(text.endsWith("write the replies now"), source + ": and so does the newest beat");
   }
