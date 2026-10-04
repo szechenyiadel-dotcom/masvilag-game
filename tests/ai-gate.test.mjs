@@ -828,3 +828,22 @@ test("Comments use the free Gemini keys only, even when the player is waiting; a
   assert.equal(answer.ok, true);
   assert.ok(dm.requests.some((r) => r.key === "paid"), "other player-waiting requests keep the paid Gemini key");
 });
+
+test("A JSON request answered without any JSON goes on to the next provider; a cut-off object still counts", async () => {
+  const prose = gate(ENV, (provider) => (provider === "openrouter" ? text(provider, "Sure! Here are some thoughts about the post.") : provider === "openrouter2" ? text(provider, "") : text(provider, '{"comments":[{"id":"a","text":"hi"}]}')));
+  const answered = await prose.context.executeAITask(jsonTask("comments"));
+  assert.equal(answered.ok, true);
+  assert.equal(answered.provider, "openrouter3", "the first provider that answered with JSON is used");
+  assert.deepEqual(Array.from(prose.calls).slice(0, 3), ["openrouter", "openrouter2", "openrouter3"]);
+
+  const cut = gate(ENV, (provider) => text(provider, '```json\n{"comments":[{"id":"a","text":"half a sente'));
+  const kept = await cut.context.executeAITask(jsonTask("comments"));
+  assert.equal(kept.ok, true);
+  assert.equal(kept.provider, "openrouter", "a cut-off object is the app's to repair");
+
+  const none = gate(ENV, (provider) => text(provider, "no json here"));
+  const waiting = await none.context.executeAITask(jsonTask("feed-post"));
+  assert.equal(waiting.ok, false, "background work waits instead of taking a JSON-less answer");
+  const foreground = await none.context.executeAITask(jsonTask("comments", { foreground: true }));
+  assert.equal(foreground.ok, true, "a player waiting still gets the answer, as before");
+});
