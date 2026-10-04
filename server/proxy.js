@@ -5919,9 +5919,9 @@ async function executeAITask(task) {
     if (result?.ok) {
       markProviderSuccess(provider);
       /* Diagnostics: what a comment request actually got back (start of the answer only). */
-      if (/(?:^|[-_])comments?(?:[-_]|$)|player-post-comment/.test(kindOfRequest)) {
+      if (/(?:^|[-_])comments?(?:[-_]|$)|player-post-comment|feed/.test(kindOfRequest)) {
         const answered = String(answerText(result) || "");
-        console.info("[ai-answer] comments", `provider=${provider}/${model}`, `chars=${answered.length}`, JSON.stringify(answered.slice(0, 700)));
+        console.info("[ai-answer] " + kindOfRequest, `priority=${task.priority}`, `provider=${provider}/${model}`, `chars=${answered.length}`, JSON.stringify(answered.slice(0, 1200)));
       }
       return result;
     }
