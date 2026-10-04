@@ -377,6 +377,14 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
   return null;
 }
 
+/* Schema repair is useful for malformed JSON shapes, but expensive and counterproductive for semantic
+   validation failures such as a non-verbatim quote or a prose sentence-count mismatch. Those should move straight
+   to the next semantic candidate instead of spending another full model call trying to rewrite the same answer. */
+function repairableValidationError(error) {
+  const message = String(error?.message || "");
+  return /expected object|expected array|missing$|unexpected field|invalid type|invalid enum|outside range/i.test(message);
+}
+
 export async function analyzeStructured(prompt, schema, validate, options = {}) {
   const transport = options.transport || request;
   const env = options.env || process.env;
@@ -427,7 +435,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
       } catch (validationError) {
         /* Without this a reading that keeps failing validation is invisible until the whole round ends. */
         console.warn("[bond-analysis-invalid]", candidate.name + "/" + candidate.model, "[" + candidate.keySlot + "]", String(validationError.message).slice(0, 300));
-        if (mode === "semantic") {
+        if (mode === "semantic" && repairableValidationError(validationError)) {
           const repaired = await repairStructuredOutput(
             raw,
             prompt,
@@ -559,7 +567,9 @@ export function bondAnalysisOutputTokens(stage, sourceChars = 0, targetCount = 0
 export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, analyze = analyzeStructured, env = process.env, clock = Date.now, ledger = null, resumeEveryMs = 0 }) {
   // One scheduler for every job. The browser may submit all sheets at once; the
   // server decides how many heavy model calls really run together.
-  const concurrency = Math.max(1, Number(env.BOND_ANALYSIS_CONCURRENCY) || 8);
+  /* Gemini free is limited per project/model. Four concurrent bond jobs stay below the observed
+     five-requests/minute burst instead of seven/eight jobs stampeding the same model and all falling through. */
+  const concurrency = Math.max(1, Number(env.BOND_ANALYSIS_CONCURRENCY) || 4);
   const deadlineMs = Math.max(60000, Number(env.BOND_ANALYSIS_DEADLINE_MS) || 1200000);
   const active = new Set();
   const waiting = [];
@@ -705,12 +715,12 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
         const outputTokens = bondAnalysisOutputTokens(stage, metadata.sourceChars, prepared.missing?.length || 0);
         const analyzed = await analyze(prompt, schema, validate, {
           outputTokens,
-          fastCapacityCheck: stage === "profile",
+          fastCapacityCheck: true,
           semanticStartOffset: rotation++,
           deadline: clock() + deadlineMs,
           clock,
           ledger,
-          thinkingLevel: stage === "profile" ? "LOW" : "HIGH",
+          thinkingLevel: stage === "profile" ? "LOW" : "MEDIUM",
         });
         console.info("[bond-analysis-done]", stage, owner, analyzed.provider + "/" + analyzed.model, "[" + analyzed.keySlot + "]", analyzed.formatterModel ? "formatted by " + analyzed.formatterModel : "", "ms=" + (clock() - startedAt));
         if (stage === "baseline") {
