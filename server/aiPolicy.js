@@ -10,9 +10,9 @@
  *   (503 + Retry-After) instead of falling back to a paid provider.
  */
 
-/* Mistral is billed per use; Dolphin3.0 :free, Venice :free and Nemotron :free stay available to
-   background work. The paid Gemini key is handled separately by selectGeminiKeys. */
-export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "mistral", "mistral2"]));
+/* Mistral and the paid Venice DM route are billed per use; Dolphin3.0 :free and Nemotron :free stay
+   available to background work. The paid Gemini key is handled separately by selectGeminiKeys. */
+export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter-dm-venice", "mistral", "mistral2"]));
 
 /* What a request that nobody is waiting for may use for roleplay-style writing (DMs, scenes,
    comments): free providers only, best first. */
