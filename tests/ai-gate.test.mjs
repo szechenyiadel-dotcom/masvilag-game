@@ -521,20 +521,24 @@ const jsonTask = (source, extra = {}) => ({ requestedProvider: "anthropic", sour
 const text = (provider, value) => ({ ok: true, payload: { content: [{ type: "text", text: value }] }, provider });
 const REFUSAL = "I'm sorry, but I can't continue with this request.";
 
-test("A refusal to a request for JSON is not an answer: the next provider writes it", async () => {
-  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : text(provider, '{"reply":"hello"}')));
+test("A Dolphin refusal is not an answer: Venice gets the same DM next", async () => {
+  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter-dm-dolphin" ? text(provider, REFUSAL) : text(provider, '{"reply":"hello"}')));
   const result = await context.executeAITask(jsonTask("dm"));
   assert.equal(result.ok, true);
-  assert.deepEqual(Array.from(calls), ["openrouter3", "mistral"]);
+  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "openrouter-dm-venice"]);
   assert.match(result.payload.content[0].text, /hello/);
-  assert.equal(context.providerCooldownMs("openrouter3"), 0, "a refusal does not rest the provider");
+  assert.equal(context.providerCooldownMs("openrouter-dm-dolphin"), 0, "a prose refusal does not rest the provider");
 });
 
-test("A refusal is only taken for one when JSON was asked for; plain prose requests are left alone", async () => {
-  const { context, calls } = gate(ENV, (provider) => text(provider, REFUSAL));
+test("Plain-prose DM refusals from Dolphin and Venice fall through to Mistral", async () => {
+  const { context, calls } = gate(ENV, (provider) =>
+    provider === "openrouter-dm-dolphin" || provider === "openrouter-dm-venice"
+      ? text(provider, REFUSAL)
+      : text(provider, "Mistral answered.")
+  );
   const plain = await context.executeAITask({ requestedProvider: "anthropic", source: "dm", body: { source: "dm", system: "You are a narrator.", messages: [{ role: "user", content: "Tell me about the weather" }] } });
   assert.equal(plain.ok, true);
-  assert.deepEqual(Array.from(calls), ["openrouter3"]);
+  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral"]);
 });
 
 test("When every provider that answered refused, the result is a 422 that says so, not a 'wait' that would repeat it forever", async () => {
@@ -544,8 +548,8 @@ test("When every provider that answered refused, the result is a 422 that says s
   assert.equal(result.status, 422);
   assert.notEqual(result.waiting, true);
   assert.equal(result.payload.error.type, "content_refused");
-  assert.deepEqual(Array.from(calls), ["openrouter3", "mistral", "mistral2"]);
-  for (const provider of ["openrouter3", "mistral", "mistral2"]) assert.equal(context.providerCooldownMs(provider), 0);
+  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]);
+  for (const provider of ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]) assert.equal(context.providerCooldownMs(provider), 0);
 });
 
 test("A Gemini safety block hands the request on without resting Gemini, and Gemini keeps serving the next request", async () => {
@@ -557,8 +561,8 @@ test("A Gemini safety block hands the request on without resting Gemini, and Gem
   assert.equal(vm.runInContext("AI_GATE", context).providerConfigurationErrors.has("gemini"), false);
 });
 
-test("A refusal followed by a real outage is a normal failure, not a 'refused' verdict", async () => {
-  const { context } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : { ok: false, status: 503, payload: { error: { message: "overloaded" } }, provider }));
+test("A refusal followed by real outages is a normal failure, not a 'refused' verdict", async () => {
+  const { context } = gate(ENV, (provider) => (provider === "openrouter-dm-dolphin" ? text(provider, REFUSAL) : { ok: false, status: 503, payload: { error: { message: "overloaded" } }, provider }));
   const result = await context.executeAITask(jsonTask("dm"));
   assert.notEqual(result.payload?.error?.type, "content_refused");
   assert.ok(result.waiting === true || result.status === 503, JSON.stringify(result).slice(0, 200));
