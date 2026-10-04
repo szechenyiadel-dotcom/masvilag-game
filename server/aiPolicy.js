@@ -10,9 +10,9 @@
  *   (503 + Retry-After) instead of falling back to a paid provider.
  */
 
-/* openrouter3 is the paid DeepSeek route and Mistral is billed per use; the paid Gemini key is
-   handled by selectGeminiKeys. Free: Gemini keys 2-8, Groq, and the OpenRouter free router. */
-export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter3", "mistral", "mistral2"]));
+/* Mistral is billed per use; Dolphin3.0 :free, Venice :free and Nemotron :free stay available to
+   background work. The paid Gemini key is handled separately by selectGeminiKeys. */
+export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "mistral", "mistral2"]));
 
 /* What a request that nobody is waiting for may use for roleplay-style writing (DMs, scenes,
    comments): free providers only, best first. */
@@ -466,8 +466,9 @@ export function looksLikeRefusal(text) {
 
 /* ---------- what the paid providers are sent, and what they cost ---------- */
 
-/* DeepSeek (openrouter3) and Mistral are billed per token. The prompt is what costs, so it has a ceiling. */
-export const PAID_INPUT_PROVIDERS = Object.freeze(new Set(["openrouter3", "mistral", "mistral2"]));
+/* The two 33K-context DM OpenRouter routes keep the same prompt ceiling as Mistral so a huge DM cannot
+   overflow them. Nemotron is deliberately absent: its free route has a 1M context and is used as Gemini fallback. */
+export const PAID_INPUT_PROVIDERS = Object.freeze(new Set(["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]));
 export const DEFAULT_PAID_MAX_INPUT_CHARS = 60000;   /* roughly 15-20k tokens */
 
 /* PAID_MAX_INPUT_CHARS in the environment; 0 switches the ceiling off. */

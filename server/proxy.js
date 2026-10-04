@@ -62,9 +62,6 @@ const GROQ_API_KEY = String(process.env.GROQ_API_KEY || "").trim();
 const GROQ_API_KEY_2 = String(process.env.GROQ_API_KEY_2 || "").trim();
 const GROQ_MODEL = String(process.env.GROQ_MODEL || "").trim();
 const GROQ_MODEL_2 = String(process.env.GROQ_MODEL_2 || GROQ_MODEL || "").trim();
-const GLHF_API_KEY = String(process.env.GLHF_API_KEY || "").trim();
-const GLHF_BASE_URL = String(process.env.GLHF_BASE_URL || "https://glhf.chat/api/openai/v1").trim().replace(/\/+$/, "");
-const GLHF_MODEL = String(process.env.GLHF_MODEL || "").trim();
 /* Groq's free tier is small: each key serves one request at a time and stays inside its minute budget. */
 const GROQ_PACER = createGroqPacer();
 /* DeepSeek and Mistral cost per token: what they are sent has a ceiling (PAID_MAX_INPUT_CHARS, 0 = off), and
@@ -5197,8 +5194,11 @@ function providerModel(provider, body = {}) {
   if (provider === "groq2") {
     return GROQ_MODEL_2 || GROQ_MODEL || "";
   }
-  if (provider === "glhf") {
-    return GLHF_MODEL || "";
+  if (provider === "openrouter-dm-dolphin") {
+    return "cognitivecomputations/dolphin3.0-mistral-24b:free";
+  }
+  if (provider === "openrouter-dm-venice") {
+    return "cognitivecomputations/dolphin-mistral-24b-venice-edition:free";
   }
   if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim();
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
@@ -5245,7 +5245,8 @@ async function callMessageProvider(provider, body) {
   if (provider === "mistral2") return proxyCompatibleMessage("mistral2", MISTRAL_API_KEY_2, providerModel("mistral2", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
   if (provider === "groq") return proxyCompatibleMessage("groq", GROQ_API_KEY, providerModel("groq", body), "https://api.groq.com/openai/v1/chat/completions", body);
   if (provider === "groq2") return proxyCompatibleMessage("groq2", GROQ_API_KEY_2, providerModel("groq2", body), "https://api.groq.com/openai/v1/chat/completions", body);
-  if (provider === "glhf") return proxyCompatibleMessage("glhf", GLHF_API_KEY, providerModel("glhf", body), `${GLHF_BASE_URL}/chat/completions`, body);
+  if (provider === "openrouter-dm-dolphin") return proxyCompatibleMessage("openrouter-dm-dolphin", process.env.OPENROUTER_API_KEY, providerModel("openrouter-dm-dolphin", body), "https://openrouter.ai/api/v1/chat/completions", body);
+  if (provider === "openrouter-dm-venice") return proxyCompatibleMessage("openrouter-dm-venice", process.env.OPENROUTER_API_KEY_2, providerModel("openrouter-dm-venice", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openai") {
     const result = await proxyOpenAIMessage(body);
     return { ...result, provider: "openai", model: providerModel("openai", body) };
@@ -5263,7 +5264,8 @@ function configuredAIProvider(provider) {
   if (provider === "mistral2") return Boolean(MISTRAL_API_KEY_2 && MISTRAL_MODEL);
   if (provider === "groq") return Boolean(GROQ_API_KEY && GROQ_MODEL);
   if (provider === "groq2") return Boolean(GROQ_API_KEY_2 && (GROQ_MODEL_2 || GROQ_MODEL));
-  if (provider === "glhf") return Boolean(GLHF_API_KEY && GLHF_BASE_URL && GLHF_MODEL);
+  if (provider === "openrouter-dm-dolphin") return Boolean(process.env.OPENROUTER_API_KEY);
+  if (provider === "openrouter-dm-venice") return Boolean(process.env.OPENROUTER_API_KEY_2);
   if (provider === "gemini") return GEMINI_KEYS.length > 0;
   if (provider === "openrouter3") return Boolean(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_MODEL_3);
   if (provider === "openrouter") return Boolean(process.env.OPENROUTER_API_KEY);
@@ -5613,14 +5615,16 @@ function providerAllowedForBody(provider, body) {
   const chars = aiRequestChars(body);
   if (chars <= AI_GROQ_MAX_INPUT_CHARS) return true;
   return provider === "mistral" || provider === "mistral2" || provider === "gemini" || provider === "openai" ||
-    provider === "openrouter3" || provider === "openrouter" || provider === "openrouter2" || provider === "glhf";
+    provider === "openrouter3" || provider === "openrouter" || provider === "openrouter2" ||
+    provider === "openrouter-dm-dolphin" || provider === "openrouter-dm-venice";
 }
 
 /* Provider roles are intentionally strict.
-   - DM: GLHF -> OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2 (also when the world starts it).
-   - Scene: Mistral Small 1 -> Mistral Small 2 (also when the world starts it).
-   - Feed: Gemini -> OpenAI.
-   - Comments/replies: OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2.
+   - DM: Dolphin3.0 on OPENROUTER_API_KEY -> Venice Uncensored :free on OPENROUTER_API_KEY_2 -> Mistral 1 -> Mistral 2.
+   - Scene: Mistral Small 1 -> Mistral Small 2.
+   - Gemini-owned feed / character knowledge: Gemini -> Nemotron :free on OPENROUTER_API_KEY -> OpenAI.
+   - Comments/replies: Mistral Small 1 -> Mistral Small 2 when the player is waiting; background comments keep the free writing chain.
+   - Nemotron is reserved for the Gemini fallback chain only.
    - Existing character voice/style cards remain prompt context; there is no separate AI voice pass.
    - Analysis, classification and translation (meaning-analysis, display-translate, music-note,
      relationship-impact) go to Groq first when Groq can take the whole request, then free Gemini.
@@ -5646,26 +5650,22 @@ function taskProviderOrder(requestedProvider, body) {
   const groqSmallEnough = chars <= 26000;
   let raw;
 
-  /* DeepSeek (openrouter3) and Mistral are billed per use. Direct messages and scenes are what the game is
-     about and may be sexual, which the free models often refuse: they use this chain whether the player is
-     waiting or the world started them (a deliberate choice). Comments get it only when the player is waiting;
-     everything else in the background stays free. */
   const playerWaiting = isForegroundRequest(body);
   if (source === "dm") {
-    /* Direct messages: GLHF first, then DeepSeek Flash, then Mistral Small key 1 -> key 2. */
-    raw = ["glhf", "openrouter3", "mistral", "mistral2"];
+    /* DM chain is exact: Dolphin key 1 -> Venice Uncensored key 2 -> Mistral 1 -> Mistral 2. */
+    raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
   } else if (source === "scene") {
     /* Scenes use Mistral Small, with the second Mistral key as fallback. */
     raw = ["mistral", "mistral2"];
   } else if (isComment) {
-    /* Comments/replies use DeepSeek Flash first; Mistral Small 1 -> 2 are fallbacks. */
-    raw = playerWaiting ? ["openrouter3", "mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
+    /* Nemotron is reserved for Gemini fallback, so foreground comments use only the Mistral pair. */
+    raw = playerWaiting ? ["mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
   } else if (isFeed) {
-    /* Feed stays on free Gemini first; paid OpenAI is fallback only. */
-    raw = ["gemini", "openai"];
+    /* Gemini first, then free Nemotron on OpenRouter key 1, paid OpenAI last. */
+    raw = ["gemini", "openrouter3", "openai"];
   } else if (characterKnowledgeSources.has(source)) {
-    /* Other character-sheet canon/identity knowledge stays Gemini-first. */
-    raw = ["gemini", "openai"];
+    /* Canon/identity knowledge uses the same Gemini -> Nemotron -> OpenAI fallback chain. */
+    raw = ["gemini", "openrouter3", "openai"];
   } else if (isGroqUtilitySource(source)) {
     /* Analysis, classification and translation (never a character's voice) go to Groq first when Groq can
        take the WHOLE request (the pacer keeps them from running side by side); free Gemini after it. A
@@ -5677,8 +5677,10 @@ function taskProviderOrder(requestedProvider, body) {
     raw = ["gemini"];
   }
 
-  /* Whoever has been refusing most of this kind of request goes to the end of the chain. */
-  raw = orderByRefusals(raw, source, AI_REFUSALS);
+  /* The explicitly assigned DM and Gemini-fallback chains keep their exact order. Other request kinds may
+     still demote a provider that repeatedly refuses. */
+  const exactProviderOrder = source === "dm" || isFeed || characterKnowledgeSources.has(source);
+  if (!exactProviderOrder) raw = orderByRefusals(raw, source, AI_REFUSALS);
 
   /* Background work stays on free providers; only a player-waiting request may use paid ones. */
   return filterProvidersForBody(
@@ -5866,7 +5868,12 @@ async function executeAITask(task) {
 
     /* A model that answers a request for JSON with a polite refusal gave no answer: the next provider tries. */
     const askedForJson = result?.ok && requestExpectsJson(task.body);
-    const refusedByText = askedForJson && looksLikeRefusal(answerText(result));
+    const dmOpenRouterProvider =
+      kindOfRequest === "dm" &&
+      (provider === "openrouter-dm-dolphin" || provider === "openrouter-dm-venice");
+    const refusedByText =
+      (askedForJson && looksLikeRefusal(answerText(result))) ||
+      (dmOpenRouterProvider && result?.ok && looksLikeRefusal(answerText(result)));
     if (askedForJson) AI_REFUSALS.record(provider, kindOfRequest, refusedByText);
     if (refusedByText) {
       attempts.push({ provider, model, status: 422, message: "refused: " + answerText(result).slice(0, 120), refused: true });
@@ -5883,6 +5890,14 @@ async function executeAITask(task) {
     attempts.push({ provider, model, status, message, ...(result?.blocked ? { refused: true } : {}) });
     /* A safety block is the prompt's doing, not the provider's: no cooldown, the next provider tries. */
     if (result?.blocked) { AI_REFUSALS.record(provider, kindOfRequest, true); continue; }
+    /* The two DM OpenRouter routes are explicit fallbacks: any upstream rejection/error hands the same DM
+       to the next provider instead of ending the conversation. */
+    if (dmOpenRouterProvider) {
+      if ([401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529].includes(status)) {
+        markProviderFailure(provider, model, result);
+      }
+      continue;
+    }
     /* Groq was busy with another request or had spent this minute's tokens. Not a failure: no cooldown,
        the next provider takes this one and Groq stays free for whoever is next. */
     if (result?.paced) {

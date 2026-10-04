@@ -22,7 +22,6 @@ const pick = (names) => ast.program.body
 
 const NAMES = [
   "MISTRAL_API_KEY", "MISTRAL_API_KEY_2", "MISTRAL_MODEL", "GROQ_API_KEY", "GROQ_API_KEY_2", "GROQ_MODEL", "GROQ_MODEL_2",
-  "GLHF_API_KEY", "GLHF_BASE_URL", "GLHF_MODEL",
   "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_MODEL_ENV", "GEMINI_PAID_KEY", "GEMINI_FREE_KEYS", "GEMINI_KEYS", "AI_ALLOW_PAID_BACKGROUND",
   "AI_GROQ_MAX_INPUT_CHARS", "AI_PROMPT_DEBUG", "AI_GATE", "AI_REFUSALS", "GEMINI_LEDGER", "GEMINI_MODELS", "groqRequestSize",
   "extractText", "proxyErrorMessage", "configuredAIProvider", "aiRequestText", "aiRequestChars", "inferAIRequestSource",
@@ -34,7 +33,7 @@ const NAMES = [
 function gate(env, scripted) {
   const calls = [];
   const context = vm.createContext({
-    process: { env: { OPENROUTER_API_KEY: "or", OPENROUTER_MODEL_3: "deepseek", ...env } },
+    process: { env: { OPENROUTER_API_KEY: "or", OPENROUTER_API_KEY_2: "or2", OPENROUTER_MODEL_3: "nvidia/nemotron-3-ultra-550b-a55b:free", ...env } },
     console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error,
     isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN,
@@ -50,35 +49,36 @@ const quota = (provider) => ({ ok: false, status: 429, payload: { error: { messa
 const ENV = {
   MISTRAL_API_KEY: "m1", MISTRAL_API_KEY_2: "m2", MISTRAL_MODEL: "mistral-small",
   GROQ_API_KEY: "g1", GROQ_API_KEY_2: "g2", GROQ_MODEL: "groq-model",
-  GLHF_API_KEY: "glhf-key", GLHF_BASE_URL: "https://glhf.chat/api/openai/v1", GLHF_MODEL: "hf:test/model",
   GEMINI_API_KEY: "paid", GEMINI_API_KEY_2: "free2", GEMINI_MODEL: "gemini-x",
   OPENAI_API_KEY: "oa",
 };
 const task = (context, source, extra = {}) => ({ requestedProvider: "anthropic", source, body: { source, system: "s", messages: [{ role: "user", content: "hello" }], ...extra } });
 
-test("DM and scene use the DeepSeek and Mistral chain whoever started them; comments and the rest of the background stay free", () => {
+test("DM uses Dolphin key 1, Venice key 2, then Mistral; Nemotron is reserved for Gemini fallback", () => {
   const { context } = gate(ENV, () => ok("x"));
   const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", task(context, source, extra).body));
   for (const extra of [{}, { foreground: true }]) {
-    assert.deepEqual(order("dm", extra), ["glhf", "openrouter3", "mistral", "mistral2"], "dm " + JSON.stringify(extra));
+    assert.deepEqual(order("dm", extra), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"], "dm " + JSON.stringify(extra));
     assert.deepEqual(order("scene", extra), ["mistral", "mistral2"], "scene " + JSON.stringify(extra));
   }
-  /* comments: free chain in the background, billed chain only when the player is waiting */
   assert.deepEqual(order("comments"), ["gemini", "groq", "groq2", "openrouter"]);
-  assert.deepEqual(order("comments", { foreground: true }), ["openrouter3", "mistral", "mistral2"]);
-  for (const source of ["comments", "feed-post", "notes", "meaning-analysis", "autonomy-other", "group-chat", "ambient-popup", "sheet-summary"]) {
+  assert.deepEqual(order("comments", { foreground: true }), ["mistral", "mistral2"]);
+  for (const source of ["comments", "notes", "meaning-analysis", "autonomy-other", "group-chat", "ambient-popup"]) {
     const background = order(source);
-    for (const billed of ["mistral", "mistral2", "openrouter3", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
+    for (const billed of ["mistral", "mistral2", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
+    assert.ok(!background.includes("openrouter3"), `${source} must not use Nemotron`);
   }
+  assert.deepEqual(order("feed-post"), ["gemini", "openrouter3"]);
+  assert.deepEqual(order("sheet-summary"), ["gemini", "openrouter3"]);
   assert.deepEqual(Array.from(FREE_WRITING_CHAIN), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
 });
 
-test("Background feed never lists OpenAI, and a world with no free Gemini key has no Gemini for background", () => {
+test("Feed uses free Nemotron after Gemini and before OpenAI", () => {
   const withFree = gate(ENV, () => ok("x"));
-  assert.deepEqual(Array.from(withFree.context.taskProviderOrder("anthropic", task(withFree.context, "feed-post").body)), ["gemini"]);
-  const paidOnly = gate({ ...ENV, GEMINI_API_KEY_2: "" }, () => ok("x"));
-  assert.deepEqual(Array.from(paidOnly.context.taskProviderOrder("anthropic", task(paidOnly.context, "feed-post").body)), []);
-  assert.deepEqual(Array.from(paidOnly.context.taskProviderOrder("anthropic", task(paidOnly.context, "feed-post", { foreground: true }).body)), ["gemini", "openai"]);
+  assert.deepEqual(Array.from(withFree.context.taskProviderOrder("anthropic", task(withFree.context, "feed-post").body)), ["gemini", "openrouter3"]);
+  const paidGeminiOnly = gate({ ...ENV, GEMINI_API_KEY_2: "" }, () => ok("x"));
+  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post").body)), ["openrouter3"]);
+  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post", { foreground: true }).body)), ["gemini", "openrouter3", "openai"]);
 });
 
 test("Background request with every free provider rate-limited WAITS: a 503 with Retry-After, no paid call", async () => {
@@ -89,11 +89,12 @@ test("Background request with every free provider rate-limited WAITS: a 503 with
   assert.equal(result.waiting, true);
   assert.ok(Number(result.retryAfter) >= 20, "waits at least 20 s, got " + result.retryAfter);
   assert.equal(result.payload.error.type, "free_ai_waiting");
-  assert.ok(!calls.includes("openai") && !calls.includes("anthropic") && !calls.includes("openrouter3"), "paid providers called: " + calls);
+  assert.deepEqual(Array.from(calls), ["gemini", "openrouter3"]);
+  assert.ok(!calls.includes("openai") && !calls.includes("anthropic") && !calls.includes("mistral"), "paid providers called: " + calls);
 });
 
 test("Background request with no free provider configured waits instead of failing hard", async () => {
-  const { context, calls } = gate({ OPENAI_API_KEY: "oa" }, () => ok("openai"));
+  const { context, calls } = gate({ OPENAI_API_KEY: "oa", OPENROUTER_API_KEY: "", OPENROUTER_API_KEY_2: "", GEMINI_API_KEY: "", GEMINI_API_KEY_2: "" }, () => ok("openai"));
   const result = await context.executeAITask(task(context, "feed-post"));
   assert.equal(result.waiting, true);
   assert.equal(result.status, 503);
@@ -107,17 +108,25 @@ test("A free provider that answers is used normally for background work, and Mis
   assert.deepEqual(Array.from(calls), ["gemini", "groq"]);
 });
 
-test("A background DM is written by GLHF first, then DeepSeek/Mistral fallbacks; when all are down it waits, and never buys OpenAI", async () => {
+test("A background DM uses Dolphin key 1, Venice key 2, then Mistral 1 and 2", async () => {
   const first = gate(ENV, (provider) => ok(provider));
   const written = await first.context.executeAITask(task(first.context, "dm"));
   assert.equal(written.ok, true);
-  assert.deepEqual(Array.from(first.calls), ["glhf"], "GLHF is the first DM provider");
+  assert.deepEqual(Array.from(first.calls), ["openrouter-dm-dolphin"], "Dolphin is the first DM provider");
   const down = gate(ENV, (provider) => quota(provider));
   const result = await down.context.executeAITask(task(down.context, "dm"));
   assert.equal(result.waiting, true);
   assert.equal(result.status, 503);
-  assert.deepEqual(Array.from(down.calls), ["glhf", "openrouter3", "mistral", "mistral2"]);
-  assert.ok(!down.calls.some((provider) => ["openai", "gemini", "groq", "groq2"].includes(provider)), "no other provider wrote the voice: " + down.calls);
+  assert.deepEqual(Array.from(down.calls), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]);
+  assert.ok(!down.calls.some((provider) => ["openai", "gemini", "groq", "groq2", "openrouter3"].includes(provider)), "no other provider wrote the voice: " + down.calls);
+});
+
+test("A prose refusal from Dolphin falls through to Venice, and Venice refusal falls through to Mistral", async () => {
+  const refusal = (provider) => ({ ok: true, payload: { content: [{ type: "text", text: "I'm sorry, I can't continue with that request." }] }, provider });
+  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter-dm-dolphin" || provider === "openrouter-dm-venice") ? refusal(provider) : ok(provider));
+  const result = await context.executeAITask(task(context, "dm"));
+  assert.equal(result.ok, true);
+  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral"]);
 });
 
 test("The emergency OpenAI fallback is closed to background work and still open to a player who is waiting", () => {
@@ -130,16 +139,16 @@ test("The emergency OpenAI fallback is closed to background work and still open 
   assert.equal(context.shouldUseEmergencyOpenAIFallback(feed({}), geminiDown), false, "background work waits instead");
 });
 
-test("A player waiting on a scene may still use the paid DeepSeek route when the free ones fail", async () => {
-  const { context, calls } = gate(ENV, (provider) => (provider === "glhf" ? ok(provider) : quota(provider)));
+test("A player waiting on a DM still starts on Dolphin", async () => {
+  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter-dm-dolphin" ? ok(provider) : quota(provider)));
   const result = await context.executeAITask(task(context, "dm", { foreground: true }));
   assert.equal(result.ok, true);
-  assert.equal(calls[0], "glhf");
+  assert.equal(calls[0], "openrouter-dm-dolphin");
 });
 
 test("AI_ALLOW_PAID_BACKGROUND=1 is the only way background work reaches paid providers", () => {
   const { context } = gate({ ...ENV, AI_ALLOW_PAID_BACKGROUND: "1" }, () => ok("x"));
-  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", task(context, "feed-post").body)), ["gemini", "openai"]);
+  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", task(context, "feed-post").body)), ["gemini", "openrouter3", "openai"]);
 });
 
 test("Gemini quota, credit and key errors never rest or switch off the whole provider: the ledger rests the exact pair", () => {
@@ -239,12 +248,12 @@ test("Utility tasks (meaning, translation, music note, relationship impact) go t
 test("Everything that gives a character a voice keeps its own chain, Groq only as a free fallback after Gemini", () => {
   const { context } = gate(ENV, () => ok("x"));
   const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", { ...task(context, source, extra).body, max_tokens: 600 }));
-  assert.equal(order("dm")[0], "glhf");
+  assert.equal(order("dm")[0], "openrouter-dm-dolphin");
   assert.equal(order("scene")[0], "mistral");
   for (const source of ["comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "gemini", source);
-  assert.deepEqual(order("feed-post"), ["gemini"]);
-  assert.deepEqual(order("sheet-summary"), ["gemini"]);
-  assert.deepEqual(order("character-bible"), ["gemini"]);
+  assert.deepEqual(order("feed-post"), ["gemini", "openrouter3"]);
+  assert.deepEqual(order("sheet-summary"), ["gemini", "openrouter3"]);
+  assert.deepEqual(order("character-bible"), ["gemini", "openrouter3"]);
   for (const source of ["group-chat", "notes", "autonomy-other", "scene-roleplay"]) assert.equal(order(source)[0], "gemini", source + " starts on Gemini");
 });
 
@@ -512,20 +521,24 @@ const jsonTask = (source, extra = {}) => ({ requestedProvider: "anthropic", sour
 const text = (provider, value) => ({ ok: true, payload: { content: [{ type: "text", text: value }] }, provider });
 const REFUSAL = "I'm sorry, but I can't continue with this request.";
 
-test("A refusal to a request for JSON is not an answer: the next provider writes it", async () => {
-  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : text(provider, '{"reply":"hello"}')));
+test("A Dolphin refusal is not an answer: Venice gets the same DM next", async () => {
+  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter-dm-dolphin" ? text(provider, REFUSAL) : text(provider, '{"reply":"hello"}')));
   const result = await context.executeAITask(jsonTask("dm"));
   assert.equal(result.ok, true);
-  assert.deepEqual(Array.from(calls), ["openrouter3", "mistral"]);
+  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "openrouter-dm-venice"]);
   assert.match(result.payload.content[0].text, /hello/);
-  assert.equal(context.providerCooldownMs("openrouter3"), 0, "a refusal does not rest the provider");
+  assert.equal(context.providerCooldownMs("openrouter-dm-dolphin"), 0, "a prose refusal does not rest the provider");
 });
 
-test("A refusal is only taken for one when JSON was asked for; plain prose requests are left alone", async () => {
-  const { context, calls } = gate(ENV, (provider) => text(provider, REFUSAL));
+test("Plain-prose DM refusals from Dolphin and Venice fall through to Mistral", async () => {
+  const { context, calls } = gate(ENV, (provider) =>
+    provider === "openrouter-dm-dolphin" || provider === "openrouter-dm-venice"
+      ? text(provider, REFUSAL)
+      : text(provider, "Mistral answered.")
+  );
   const plain = await context.executeAITask({ requestedProvider: "anthropic", source: "dm", body: { source: "dm", system: "You are a narrator.", messages: [{ role: "user", content: "Tell me about the weather" }] } });
   assert.equal(plain.ok, true);
-  assert.deepEqual(Array.from(calls), ["openrouter3"]);
+  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral"]);
 });
 
 test("When every provider that answered refused, the result is a 422 that says so, not a 'wait' that would repeat it forever", async () => {
@@ -535,8 +548,8 @@ test("When every provider that answered refused, the result is a 422 that says s
   assert.equal(result.status, 422);
   assert.notEqual(result.waiting, true);
   assert.equal(result.payload.error.type, "content_refused");
-  assert.deepEqual(Array.from(calls), ["openrouter3", "mistral", "mistral2"]);
-  for (const provider of ["openrouter3", "mistral", "mistral2"]) assert.equal(context.providerCooldownMs(provider), 0);
+  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]);
+  for (const provider of ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]) assert.equal(context.providerCooldownMs(provider), 0);
 });
 
 test("A Gemini safety block hands the request on without resting Gemini, and Gemini keeps serving the next request", async () => {
@@ -548,8 +561,8 @@ test("A Gemini safety block hands the request on without resting Gemini, and Gem
   assert.equal(vm.runInContext("AI_GATE", context).providerConfigurationErrors.has("gemini"), false);
 });
 
-test("A refusal followed by a real outage is a normal failure, not a 'refused' verdict", async () => {
-  const { context } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : { ok: false, status: 503, payload: { error: { message: "overloaded" } }, provider }));
+test("A refusal followed by real outages is a normal failure, not a 'refused' verdict", async () => {
+  const { context } = gate(ENV, (provider) => (provider === "openrouter-dm-dolphin" ? text(provider, REFUSAL) : { ok: false, status: 503, payload: { error: { message: "overloaded" } }, provider }));
   const result = await context.executeAITask(jsonTask("dm"));
   assert.notEqual(result.payload?.error?.type, "content_refused");
   assert.ok(result.waiting === true || result.status === 503, JSON.stringify(result).slice(0, 200));
@@ -587,7 +600,7 @@ test("The model that actually answered is the one reported, not always the first
 
 /* ---------- the paid providers: a ceiling on what they are sent, and a meter on what they use ---------- */
 
-const paidUrl = { openrouter3: "https://openrouter.ai/api/v1/chat/completions", mistral: "https://api.mistral.ai/v1/chat/completions", mistral2: "https://api.mistral.ai/v1/chat/completions" };
+const paidUrl = { "openrouter-dm-dolphin": "https://openrouter.ai/api/v1/chat/completions", "openrouter-dm-venice": "https://openrouter.ai/api/v1/chat/completions", mistral: "https://api.mistral.ai/v1/chat/completions", mistral2: "https://api.mistral.ai/v1/chat/completions" };
 const callPaid = (context, provider, body) => context.proxyCompatibleMessage(provider, "key", "m", paidUrl[provider], body);
 const bigBody = (extra = {}) => ({
   source: "dm",
@@ -598,8 +611,8 @@ const bigBody = (extra = {}) => ({
 });
 const sentChars = (payload) => payload.messages.reduce((n, m) => n + m.content.length, 0);
 
-test("DeepSeek and Mistral are sent at most the ceiling, whatever the prompt grew to, and the protected tail survives", async () => {
-  for (const provider of ["openrouter3", "mistral", "mistral2"]) {
+test("The 33K DM OpenRouter routes and Mistral are capped, and the protected tail survives", async () => {
+  for (const provider of ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]) {
     const { context, sent } = groqPath({ env: {} });
     const body = { ...bigBody(), source: "comments", system: "S".repeat(40000), messages: [{ role: "user", content: "W".repeat(80000) + "\n[[PROTECTED_TAIL]]\nThe player just wrote: hello" }] };
     await callPaid(context, provider, body);
@@ -620,24 +633,24 @@ test("A prompt under the ceiling goes out exactly as it is", async () => {
 test("PAID_MAX_INPUT_CHARS moves the ceiling, and 0 switches it off", async () => {
   const body = { source: "comments", system: "S".repeat(10000), messages: [{ role: "user", content: "W".repeat(30000) }], max_tokens: 300 };
   const lowered = groqPath({ env: { PAID_MAX_INPUT_CHARS: "20000" } });
-  await callPaid(lowered.context, "openrouter3", body);
+  await callPaid(lowered.context, "openrouter-dm-dolphin", body);
   assert.ok(sentChars(lowered.sent[0]) <= 20200, "sent " + sentChars(lowered.sent[0]));
   const off = groqPath({ env: { PAID_MAX_INPUT_CHARS: "0" } });
-  await callPaid(off.context, "openrouter3", { ...body, messages: [{ role: "user", content: "W".repeat(150000) }] });
+  await callPaid(off.context, "openrouter-dm-dolphin", { ...body, messages: [{ role: "user", content: "W".repeat(150000) }] });
   assert.equal(sentChars(off.sent[0]), 10000 + 150000, "no ceiling, nothing cut");
 });
 
-test("The paid ceiling does not touch the free providers (Groq has its own budget, other providers none)", async () => {
+test("The DM ceiling does not truncate Nemotron's 1M-context Gemini fallback", async () => {
   const other = groqPath({ env: {} });
-  await other.context.proxyCompatibleMessage("openrouter", "key", "m", "https://openrouter.ai/x", { ...bigBody(), system: "S".repeat(40000) });
-  assert.equal(sentChars(other.sent[0]), 40000 + bigBody().messages[0].content.length, "the free OpenRouter route is left alone");
+  await other.context.proxyCompatibleMessage("openrouter3", "key", "nvidia/nemotron-3-ultra-550b-a55b:free", "https://openrouter.ai/x", { ...bigBody(), system: "S".repeat(40000) });
+  assert.equal(sentChars(other.sent[0]), 40000 + bigBody().messages[0].content.length, "Nemotron keeps the full prompt");
 });
 
 test("What a paid provider reports using is metered: prompt, answer, cached and reasoning tokens, per provider and per kind of request", async () => {
   const usage = { prompt_tokens: 12000, completion_tokens: 350, prompt_tokens_details: { cached_tokens: 9000 }, completion_tokens_details: { reasoning_tokens: 120 }, cost: 0.0012 };
   const reply = () => ({ ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ choices: [{ message: { content: "hello" } }], usage }) });
   const { context, usage: meter } = groqPath({ env: {}, respond: reply });
-  await callPaid(context, "openrouter3", { source: "dm", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
+  await callPaid(context, "openrouter-dm-dolphin", { source: "dm", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
   await callPaid(context, "mistral", { source: "scene", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
   await callPaid(context, "mistral", { source: "scene", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
   const snapshot = meter.snapshot();
@@ -648,7 +661,7 @@ test("What a paid provider reports using is metered: prompt, answer, cached and 
   assert.equal(snapshot.reasoningTokens, 360);
   assert.equal(snapshot.byProvider.mistral.calls, 2);
   assert.equal(snapshot.bySource.scene.promptTokens, 24000);
-  assert.equal(snapshot.byProviderSource["openrouter3/dm"].calls, 1);
+  assert.equal(snapshot.byProviderSource["openrouter-dm-dolphin/dm"].calls, 1);
   assert.ok(Math.abs(snapshot.cost - 0.0036) < 1e-9);
 });
 
@@ -667,31 +680,31 @@ test("proxy.js exposes the day's usage behind a session, and logs a line for eve
 
 /* ---------- a provider that keeps refusing is asked last ---------- */
 
-test("DeepSeek keeps refusing DMs: after a few refusals Mistral is asked first, and DeepSeek is still there as the last resort", async () => {
-  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
+test("The exact DM chain is not reordered even after repeated Dolphin refusals", async () => {
+  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter-dm-dolphin" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
   const order = () => Array.from(context.taskProviderOrder("anthropic", jsonBody("dm")));
-  assert.deepEqual(order(), ["openrouter3", "mistral", "mistral2"], "to begin with, DeepSeek is first");
+  assert.deepEqual(order(), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]);
   for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "write " + i }] }));
-  assert.deepEqual(order(), ["mistral", "mistral2", "openrouter3"]);
+  assert.deepEqual(order(), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]);
   calls.length = 0;
   const result = await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "write again" }] }));
   assert.equal(result.ok, true);
-  assert.deepEqual(Array.from(calls), ["mistral"], "the refusing provider was not paid for this time");
+  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "openrouter-dm-venice"]);
 });
 
-test("The record is per kind of request: DeepSeek refusing DMs does not demote it for comments", async () => {
-  const { context } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
-  for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "w" + i }] }));
-  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", jsonBody("comments", { foreground: true }))), ["openrouter3", "mistral", "mistral2"]);
+test("A repeatedly refusing provider is still demoted on reorderable background chains", async () => {
+  const { context } = gate(ENV, (provider) => (provider === "gemini" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
+  for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("comments", { messages: [{ role: "user", content: "w" + i }] }));
+  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", jsonBody("comments"))), ["groq", "groq2", "openrouter", "gemini"]);
 });
 
-test("A provider that refused only now and then stays first: two refusals among many good answers do not demote it", async () => {
+test("A provider that refused only now and then stays first on a reorderable chain", async () => {
   const script = ["refuse", "refuse", "ok", "ok", "ok", "ok", "ok", "ok"];
   let n = 0;
-  const { context } = gate(ENV, (provider) => (provider === "openrouter3" && script[n] === "refuse" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
-  for (; n < script.length; n += 1) await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "w" + n }] }));
-  assert.equal(context.taskProviderOrder("anthropic", jsonBody("dm"))[0], "openrouter3");
-  assert.equal(vm.runInContext("AI_REFUSALS.rate('openrouter3','dm')", context), 0.25);
+  const { context } = gate(ENV, (provider) => (provider === "gemini" && script[n] === "refuse" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
+  for (; n < script.length; n += 1) await context.executeAITask(jsonTask("comments", { messages: [{ role: "user", content: "w" + n }] }));
+  assert.equal(context.taskProviderOrder("anthropic", jsonBody("comments"))[0], "gemini");
+  assert.equal(vm.runInContext("AI_REFUSALS.rate('gemini','comments')", context), 0.25);
 });
 
 test("A Gemini safety block counts against Gemini for that kind of request, a prose answer to a prose request counts for nothing", async () => {
@@ -700,7 +713,8 @@ test("A Gemini safety block counts against Gemini for that kind of request, a pr
   assert.equal(blocked.context.taskProviderOrder("anthropic", jsonBody("comments"))[0], "groq", "Gemini goes to the end for comments");
   const prose = gate(ENV, (provider) => text(provider, REFUSAL));
   for (let i = 0; i < 6; i += 1) await prose.context.executeAITask({ requestedProvider: "anthropic", source: "dm", body: { source: "dm", system: "narrator", messages: [{ role: "user", content: "p" + i }] } });
-  assert.equal(prose.context.taskProviderOrder("anthropic", jsonBody("dm"))[0], "openrouter3", "nothing was recorded for requests that did not ask for JSON");
+  assert.equal(prose.context.taskProviderOrder("anthropic", jsonBody("dm"))[0], "openrouter-dm-dolphin");
+  assert.equal(vm.runInContext("AI_REFUSALS.rate('openrouter-dm-dolphin','dm')", prose.context), 0, "plain prose refusals do not alter refusal history");
 });
 
 test("Gemini: an overloaded model is skipped on the other keys at once and the next model answers", async () => {
@@ -789,10 +803,12 @@ test("A reply the player reads gets half again as much room under the paid ceili
 });
 
 
-test("GLHF is wired as the first DM provider through the configured OpenAI-compatible endpoint", () => {
-  assert.match(source, /const GLHF_API_KEY = String\(process\.env\.GLHF_API_KEY/);
-  assert.match(source, /const GLHF_BASE_URL = String\(process\.env\.GLHF_BASE_URL/);
-  assert.match(source, /const GLHF_MODEL = String\(process\.env\.GLHF_MODEL/);
-  assert.match(source, /provider === "glhf"\) return proxyCompatibleMessage\("glhf", GLHF_API_KEY, providerModel\("glhf", body\), `\$\{GLHF_BASE_URL\}\/chat\/completions`/);
-  assert.match(source, /raw = \["glhf", "openrouter3", "mistral", "mistral2"\]/);
+test("Final OpenRouter routing uses key 1 for Dolphin and Nemotron, and key 2 for Venice", () => {
+  assert.match(source, /cognitivecomputations\/dolphin3\.0-mistral-24b:free/);
+  assert.match(source, /cognitivecomputations\/dolphin-mistral-24b-venice-edition:free/);
+  assert.match(source, /provider === "openrouter-dm-dolphin"\) return proxyCompatibleMessage\("openrouter-dm-dolphin", process\.env\.OPENROUTER_API_KEY/);
+  assert.match(source, /provider === "openrouter-dm-venice"\) return proxyCompatibleMessage\("openrouter-dm-venice", process\.env\.OPENROUTER_API_KEY_2/);
+  assert.match(source, /proxyCompatibleMessage\("openrouter3", process\.env\.OPENROUTER_API_KEY/);
+  assert.match(source, /raw = \["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"\]/);
+  assert.match(source, /raw = \["gemini", "openrouter3", "openai"\]/);
 });
