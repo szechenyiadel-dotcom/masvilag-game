@@ -389,7 +389,14 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
     } catch (error) {
       /* Only what says something about the provider (an HTTP error, a dropped connection) is reported; an
          answer that arrived but did not validate says nothing about the key or the model. */
-      if (error.status || error.transient === true) geminiLedgerOf(candidate)?.fail(candidate.key, candidate.model, { status: error.status || 0, message: error.message, payload: error.payload });
+      if (error.status || error.transient === true) {
+        const outcome = geminiLedgerOf(candidate)?.fail(candidate.key, candidate.model, { status: error.status || 0, message: error.message, payload: error.payload });
+        /* What Google actually said, so "ran out" can be told apart from "has no free quota" and "overloaded". */
+        if (outcome && outcome.restMs > 0) {
+          console.warn("[bond-analysis-gemini]", candidate.model, candidate.keySlot, "HTTP " + error.status, outcome.level + (outcome.metric ? "/" + outcome.metric : ""),
+            outcome.limit !== undefined ? "limit=" + outcome.limit : "", outcome.quotaId || "", "rest=" + Math.round(outcome.restMs / 60000) + "min");
+        }
+      }
       failures.push({
         phase: mode,
         provider: candidate.name,

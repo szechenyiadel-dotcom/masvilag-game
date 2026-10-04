@@ -574,3 +574,24 @@ test("A 503 'high demand' is about the model, not the key: it rests that model o
   assert.equal(ledger.restMs("k2", "gemini-3.8-flash"), 0, "a minute later it is tried again");
   assert.equal(ledger.fail("k1", "m", { status: 503, message: "Service Unavailable" }).metric, "unavailable", "a plain 503 keeps the run-of-failures rule");
 });
+
+test("A daily limit of ZERO means the model has no free quota at all: it rests on every key at once, it is not 'used up'", () => {
+  const now = Date.UTC(2026, 9, 4, 12, 30, 0);
+  const zero = { error: { details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue: "0", quotaDimensions: { model: "gemini-3.1-pro-preview" } }] }] } };
+  const info = geminiRateLimitInfo(zero, now);
+  assert.deepEqual([info.metric, info.limit, info.limitKnown], ["per-day", 0, true]);
+  const ledger = createGeminiLedger({ now: () => now });
+  const outcome = ledger.fail("k2", "gemini-3.1-pro-preview", { status: 429, payload: zero });
+  assert.equal(outcome.level, "model-no-free-quota");
+  assert.ok(ledger.restMs("k5", "gemini-3.1-pro-preview") > 3600 * 1000, "every other key rests too, without being asked");
+  assert.equal(ledger.restMs("k2", "gemini-3.8-flash"), 0, "other models are untouched");
+  /* a real limit that was reached is still per key and per model */
+  const reached = { error: { details: [{ violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue: "250" }] }] } };
+  const other = createGeminiLedger({ now: () => now });
+  assert.equal(other.fail("k2", "gemini-3.8-flash", { status: 429, payload: reached }).level, "model");
+  assert.equal(other.restMs("k3", "gemini-3.8-flash"), 0, "the other key still has its own 250");
+  /* no quotaValue at all: not taken for zero */
+  const unknown = geminiRateLimitInfo({ error: { details: [{ violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }] }] } }, now);
+  assert.deepEqual([unknown.limit, unknown.limitKnown], [0, false]);
+  assert.equal(createGeminiLedger({ now: () => now }).fail("k", "m", { status: 429, payload: { error: { details: [{ violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }] }] } } }).level, "model");
+});
