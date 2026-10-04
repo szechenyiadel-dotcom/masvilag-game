@@ -680,31 +680,31 @@ test("proxy.js exposes the day's usage behind a session, and logs a line for eve
 
 /* ---------- a provider that keeps refusing is asked last ---------- */
 
-test("DeepSeek keeps refusing DMs: after a few refusals Mistral is asked first, and DeepSeek is still there as the last resort", async () => {
-  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
+test("The exact DM chain is not reordered even after repeated Dolphin refusals", async () => {
+  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter-dm-dolphin" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
   const order = () => Array.from(context.taskProviderOrder("anthropic", jsonBody("dm")));
-  assert.deepEqual(order(), ["openrouter3", "mistral", "mistral2"], "to begin with, DeepSeek is first");
+  assert.deepEqual(order(), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]);
   for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "write " + i }] }));
-  assert.deepEqual(order(), ["mistral", "mistral2", "openrouter3"]);
+  assert.deepEqual(order(), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]);
   calls.length = 0;
   const result = await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "write again" }] }));
   assert.equal(result.ok, true);
-  assert.deepEqual(Array.from(calls), ["mistral"], "the refusing provider was not paid for this time");
+  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "openrouter-dm-venice"]);
 });
 
-test("The record is per kind of request: DeepSeek refusing DMs does not demote it for comments", async () => {
-  const { context } = gate(ENV, (provider) => (provider === "openrouter3" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
-  for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "w" + i }] }));
-  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", jsonBody("comments", { foreground: true }))), ["openrouter3", "mistral", "mistral2"]);
+test("A repeatedly refusing provider is still demoted on reorderable background chains", async () => {
+  const { context } = gate(ENV, (provider) => (provider === "gemini" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
+  for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("comments", { messages: [{ role: "user", content: "w" + i }] }));
+  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", jsonBody("comments"))), ["groq", "groq2", "openrouter", "gemini"]);
 });
 
-test("A provider that refused only now and then stays first: two refusals among many good answers do not demote it", async () => {
+test("A provider that refused only now and then stays first on a reorderable chain", async () => {
   const script = ["refuse", "refuse", "ok", "ok", "ok", "ok", "ok", "ok"];
   let n = 0;
-  const { context } = gate(ENV, (provider) => (provider === "openrouter3" && script[n] === "refuse" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
-  for (; n < script.length; n += 1) await context.executeAITask(jsonTask("dm", { messages: [{ role: "user", content: "w" + n }] }));
-  assert.equal(context.taskProviderOrder("anthropic", jsonBody("dm"))[0], "openrouter3");
-  assert.equal(vm.runInContext("AI_REFUSALS.rate('openrouter3','dm')", context), 0.25);
+  const { context } = gate(ENV, (provider) => (provider === "gemini" && script[n] === "refuse" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
+  for (; n < script.length; n += 1) await context.executeAITask(jsonTask("comments", { messages: [{ role: "user", content: "w" + n }] }));
+  assert.equal(context.taskProviderOrder("anthropic", jsonBody("comments"))[0], "gemini");
+  assert.equal(vm.runInContext("AI_REFUSALS.rate('gemini','comments')", context), 0.25);
 });
 
 test("A Gemini safety block counts against Gemini for that kind of request, a prose answer to a prose request counts for nothing", async () => {
@@ -713,7 +713,8 @@ test("A Gemini safety block counts against Gemini for that kind of request, a pr
   assert.equal(blocked.context.taskProviderOrder("anthropic", jsonBody("comments"))[0], "groq", "Gemini goes to the end for comments");
   const prose = gate(ENV, (provider) => text(provider, REFUSAL));
   for (let i = 0; i < 6; i += 1) await prose.context.executeAITask({ requestedProvider: "anthropic", source: "dm", body: { source: "dm", system: "narrator", messages: [{ role: "user", content: "p" + i }] } });
-  assert.equal(prose.context.taskProviderOrder("anthropic", jsonBody("dm"))[0], "openrouter3", "nothing was recorded for requests that did not ask for JSON");
+  assert.equal(prose.context.taskProviderOrder("anthropic", jsonBody("dm"))[0], "openrouter-dm-dolphin");
+  assert.equal(vm.runInContext("AI_REFUSALS.rate('openrouter-dm-dolphin','dm')", prose.context), 0, "plain prose refusals do not alter refusal history");
 });
 
 test("Gemini: an overloaded model is skipped on the other keys at once and the next model answers", async () => {
