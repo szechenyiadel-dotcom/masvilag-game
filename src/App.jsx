@@ -6,6 +6,10 @@ import { latestPlayerTriggerAt, ambientGateOpen, ambientGateAfterRun } from "./a
 import { classifyVisionError, visionRetryDelayMs, readImagePatiently, nextPostToRead, VISION_MAX_ATTEMPTS } from "./visionRetry.js";
 const bondAnalysisBusy = new Set();
 const bondRestartBusy = new Set();
+/* Set by the always-mounted reader in App: starts the background relationship reading right now if it is due and not
+   already running. Called whenever an AI call finds the reading behind the sheets (see askWorldJSON). */
+let bondReaderKick = null;
+function kickRelationshipReading() { try { if (bondReaderKick) bondReaderKick(); } catch (error) { /* best effort */ } }
 const bondAnalysisRetry = new Map();
 /* MÁSVILÁG RECOVERY v99.5 — SCALABLE LAZY MEDIA STORAGE — 20260816_0045 */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -8859,7 +8863,9 @@ function bondContextFor(w, memory, prompt) {
 }
 
 function askWorldJSON(w, system, prompt, options = {}) {
-  if (!analysisReady(w, allSubjects)) return Promise.reject(new Error("A teljes karakterlap- és kapcsolatelemzés még nem készült el."));
+  /* A reply is never refused because the reading is still catching up with an edit: it goes out with the latest
+     analysis there is, and the reading is started now if it is not already running. */
+  if (!analysisReady(w, allSubjects)) kickRelationshipReading();
   const { memory, ...askOptions } = options;
   const run = (memoryBlock) => askJSON(system, insertBeforeProtectedTail(prompt, [memoryBlock, bondContextFor(w, memory, prompt)].filter(Boolean).join("\n")), { ...askOptions, keepFullPrompt: true, language: worldLanguage(w) });
   /* No memory option: exactly the old path, no extra step. */
@@ -8876,7 +8882,7 @@ async function askWorldJSONInteractive(
   prompt,
   options = {}
 ) {
-  if (!analysisReady(w, allSubjects)) throw new Error("A teljes karakterlap- és kapcsolatelemzés még nem készült el.");
+  if (!analysisReady(w, allSubjects)) kickRelationshipReading();
   AI.interactivePending++;
 
   try {
@@ -58636,6 +58642,27 @@ const signOut = useCallback(async () => {
     setWorld({ ...current });
     return true;
   }, []);
+
+  /* The relationship reading follows the sheets whatever tab is open (it used to run only on the World tab, so an edit
+     made elsewhere left the chat waiting): started when something changed, retried every 15 s, and on demand. */
+  const lastBondCheck = useRef(0);
+  useEffect(() => {
+    const run = () => {
+      const current = viewRef.current;
+      if (!current || !current.meId || analysisReady(current, allSubjects) || bondAnalysisBusy.has(current.code) || now() < (bondAnalysisRetry.get(current.code) || 0)) return;
+      runRelationshipReadingAction(current, update).catch(() => { /* logged in the event log; retried below */ });
+    };
+    bondReaderKick = run;
+    const timer = setInterval(run, 15000);
+    run();
+    return () => { clearInterval(timer); if (bondReaderKick === run) bondReaderKick = null; };
+  }, [update]);
+  useEffect(() => {
+    const at = Date.now();
+    if (at - lastBondCheck.current < 3000) return;
+    lastBondCheck.current = at;
+    kickRelationshipReading();
+  }, [world]);
 
 
   /* Pending AI invitations expire on their own even if the player never opens

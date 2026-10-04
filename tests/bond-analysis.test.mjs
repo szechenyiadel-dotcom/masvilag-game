@@ -1116,3 +1116,25 @@ test("The AI calls put the scoped bond context before the protected tail, so the
   assert.equal((source.match(/insertBeforeProtectedTail\(prompt, \[memoryBlock, bondContextFor\(w, memory, prompt\)\]/g) || []).length, 2, "both ask functions");
   assert.ok(!/\) \+ bondGenerationContext\(w\)/.test(source), "nothing appends the full context after the tail any more");
 });
+
+/* ---------- a chat reply is never refused because the reading is behind ---------- */
+
+test("An AI call is never refused because the relationship reading is behind: it uses the latest analysis and starts the reading", () => {
+  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  assert.ok(!source.includes('new Error("A teljes karakterlap- és kapcsolatelemzés még nem készült el.")'), "no hard refusal any more");
+  const asks = source.slice(source.indexOf("function askWorldJSON(w, system, prompt, options = {})"), source.indexOf("function askWorldJSON(w, system, prompt, options = {})") + 3200);
+  assert.equal((asks.match(/if \(!analysisReady\(w, allSubjects\)\) kickRelationshipReading\(\);/g) || []).length, 2, "both ask functions start the reading instead");
+});
+
+test("The reading runs whatever tab is open: an always-mounted reader, started by changes, a timer and on demand", () => {
+  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  const start = source.indexOf("const lastBondCheck = useRef(0);");
+  assert.ok(start > 0, "the reader lives in the App component");
+  const reader = source.slice(start, start + 1700);
+  assert.match(reader, /bondReaderKick = run;/);
+  assert.match(reader, /runRelationshipReadingAction\(current, update\)/);
+  assert.match(reader, /setInterval\(run, 15000\)/);
+  assert.match(reader, /kickRelationshipReading\(\);\n  \}, \[world\]\);/, "and nudged when the world changes (at most every 3 s)");
+  // It sits before the sign-in screen's early return, so React always runs the same hooks.
+  assert.ok(start < source.indexOf("<Boot onReady={signIn}"), "before the early return of the App component");
+});

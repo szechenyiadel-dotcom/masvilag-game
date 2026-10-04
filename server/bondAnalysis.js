@@ -638,6 +638,8 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
 
   // A finished baseline job is completed from the per-pair rows it stored.
   async function assembleBaseline(job, jobKey) {
+    // These pairs are being delivered through the job itself (its own count); nothing is left to report for them.
+    for (const key of job.pairKeys || []) aheadComputed.delete(key);
     const rows = await readRows(job.pairKeys);
     const bonds = job.pairKeys.map((key) => rows.get(key)?.bond);
     if (bonds.some((bond) => !bond)) return null;
@@ -808,7 +810,8 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
         // The job that wrote these pairs is still finishing (its own row is saved last): say so, the next poll has all of it.
         if (active.has(jobKey)) return res.status(202).json({ ...metadata, jobKey, cacheKey: jobKey, pending: true, missing: 0, cached: false, error: null, retryAt: null });
         // jobComputed: how many of these bonds the server read ahead of this request (reported once).
-        const jobComputed = prepared.pairKeys.filter((key) => aheadComputed.delete(key)).length;
+        const now = clock();
+        const jobComputed = prepared.pairKeys.filter((key) => { const at = aheadComputed.get(key); aheadComputed.delete(key); return at !== undefined && now - at < 600000; }).length;
         return res.json({ ...metadata, result: { bonds: prepared.cards.map((card) => prepared.bonds.get(card.id)) }, computed: 0, jobComputed, jobKey, cacheKey: jobKey, pending: false, cached: true });
       }
 
