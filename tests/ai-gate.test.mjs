@@ -803,10 +803,13 @@ test("A reply the player reads gets half again as much room under the paid ceili
 });
 
 
-test("GLHF is wired as the first DM provider through the configured OpenAI-compatible endpoint", () => {
-  assert.match(source, /const GLHF_API_KEY = String\(process\.env\.GLHF_API_KEY/);
-  assert.match(source, /const GLHF_BASE_URL = String\(process\.env\.GLHF_BASE_URL/);
-  assert.match(source, /const GLHF_MODEL = String\(process\.env\.GLHF_MODEL/);
-  assert.match(source, /provider === "glhf"\) return proxyCompatibleMessage\("glhf", GLHF_API_KEY, providerModel\("glhf", body\), `\$\{GLHF_BASE_URL\}\/chat\/completions`/);
-  assert.match(source, /raw = \["glhf", "openrouter3", "mistral", "mistral2"\]/);
+test("Final OpenRouter routing uses key 1 for Dolphin and Nemotron, key 2 for Venice, with no GLHF", () => {
+  assert.doesNotMatch(source, /GLHF|glhf/);
+  assert.match(source, /cognitivecomputations\/dolphin3\.0-mistral-24b/);
+  assert.match(source, /cognitivecomputations\/dolphin-mistral-24b-venice-edition:free/);
+  assert.match(source, /provider === "openrouter-dm-dolphin"\) return proxyCompatibleMessage\("openrouter-dm-dolphin", process\.env\.OPENROUTER_API_KEY/);
+  assert.match(source, /provider === "openrouter-dm-venice"\) return proxyCompatibleMessage\("openrouter-dm-venice", process\.env\.OPENROUTER_API_KEY_2/);
+  assert.match(source, /proxyCompatibleMessage\("openrouter3", process\.env\.OPENROUTER_API_KEY/);
+  assert.match(source, /raw = \["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"\]/);
+  assert.match(source, /raw = \["gemini", "openrouter3", "openai"\]/);
 });
