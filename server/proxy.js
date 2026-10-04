@@ -2373,8 +2373,6 @@ function getProvider(body = {}) {
   return DEFAULT_PROVIDER;
 }
 
-const GEMINI_COMMENT_THINKING_ROOM = 2048;
-
 function buildGeminiPayload(
   body = {}
 ) {
@@ -2434,7 +2432,7 @@ function buildGeminiPayload(
   const geminiSource = String(body?.source || "").trim().toLowerCase();
   const geminiComment = geminiSource === "comments" || /(?:^|[-_])comments?(?:[-_]|$)/.test(geminiSource) || geminiSource.includes("player-post-comment");
   if (geminiComment) {
-    payload.generationConfig.maxOutputTokens = (Number(body.max_tokens) || 700) + GEMINI_COMMENT_THINKING_ROOM;
+    payload.generationConfig.maxOutputTokens = (Number(body.max_tokens) || 700) + 2048;
     if (/^gemini-3/i.test(String(body?.model || ""))) payload.generationConfig.thinkingConfig = { thinkingLevel: "LOW" };
   }
 
