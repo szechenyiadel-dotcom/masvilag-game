@@ -3,7 +3,7 @@ import fetch from "node-fetch";
 import { geminiModelConfig } from "./aiPolicy.js";
 import {
   BOND_ANALYSIS_VERSION, ProfileSchema, BondArraySchema, EXTRACT_PROMPT, BASELINE_PROMPT,
-  validateProfile, validateBonds, buildGroupIndex, reconcileFacts, resolveProfileReferences,
+  validateProfile, validateBonds, sanitizeBonds, buildGroupIndex, reconcileFacts, resolveProfileReferences,
 } from "../src/bondAnalysis.js";
 
 export const sheetHash = (value) => crypto.createHash("sha256").update(value).digest("hex");
@@ -555,7 +555,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     return {
       stage, metadata, body, owner, hash, schema: BondArraySchema, prompt, cards, pairKeys, bonds, missing,
       jobKey: cacheKeyFor([world, stage, prompt, String(force || "")]),
-      validate: (value) => validateBonds(value, owner, missing, ownSheet, Object.fromEntries(missing.map((card) => [card.id, facts[card.id]])), castIds),
+      validate: (value) => validateBonds(sanitizeBonds(value), owner, missing, ownSheet, Object.fromEntries(missing.map((card) => [card.id, facts[card.id]])), castIds),
     };
   }
 

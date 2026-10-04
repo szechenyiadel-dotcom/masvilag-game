@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { createRequire } from "node:module";
-import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema, BASELINE_PROMPT } from "../src/bondAnalysis.js";
+import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, sanitizeBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema, BASELINE_PROMPT } from "../src/bondAnalysis.js";
 import { fullSheetText, relationshipSourceText, relationshipFields, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext, bondSourceFingerprint } from "../src/bondClient.js";
 import { sheetHash, analyzeStructured, generationTimeoutMs, providerCandidates } from "../server/bondAnalysis.js";
 import { createGeminiLedger } from "../server/aiPolicy.js";
@@ -897,4 +897,39 @@ test("The paid repair is asked once per reading, however many models give an ans
   assert.equal(openaiCalls, 2, "one paid repair, plus the one paid semantic reading itself");
   assert.ok(logged.some((line) => /^\[bond-analysis-invalid\] gemini\/gemini-3\.8-flash \[GEMINI_API_KEY_2\] /.test(line)), "what the model got wrong is visible at once: " + logged.slice(0, 2).join(" | "));
   assert.ok(logged.every((line) => !/\bk[2-8]\b|oa\b/.test(line.replace(/GEMINI_API_KEY_\d/g, ""))), "no key value is ever logged");
+});
+
+/* ---------- an unbacked subjective field becomes null instead of failing the whole reading ---------- */
+
+test("A subjective field without an own-sheet quote becomes null; one with a quote stays", () => {
+  const quote = "Anna titokban többet érez Béla iránt.";
+  const filled = supportedBond({
+    evidence: [quote], hiddenFeelings: "Anna többre vágyik, mint barátságra.", dynamics: "Anna visszafogja magát Béla mellett.", wants: "Közelebb kerülni Bélához.", history: "Régi barátok.",
+    fieldEvidence: [{ field: "hiddenFeelings", quotes: [quote] }],
+  });
+  const result = sanitizeBonds({ bonds: [filled] }).bonds[0];
+  assert.equal(result.hiddenFeelings, "Anna többre vágyik, mint barátságra.", "backed by its quote: kept");
+  assert.equal(result.dynamics, null, "no quote for it: null");
+  assert.equal(result.wants, null);
+  assert.equal(result.history, "Régi barátok.", "history is proven by the bond's own evidence");
+  const stranger = sanitizeBonds({ bonds: [bond("a", "b", { history: "Kitalált közös múlt.", dynamics: "Kitalált." })] }).bonds[0];
+  assert.equal(stranger.history, null, "no evidence at all: no shared history");
+  assert.equal(stranger.dynamics, null);
+});
+
+test("After sanitising, exactly the answer that used to fail with 'Unsupported own-sheet feeling' is valid, and a fake quote still is not", () => {
+  const sheet = "Anna Bélával jár edzeni.";
+  const answer = (extra = {}) => ({ bonds: [supportedBond({ dynamics: "Anna visszafogja magát.", wants: "Közelebb kerülni.", ...extra })] });
+  assert.throws(() => validateBonds(answer(), "a", [{ id: "b" }], sheet, {}), /Unsupported own-sheet feeling: dynamics/, "the old behaviour: the whole reading is rejected");
+  const fixed = sanitizeBonds(answer());
+  validateBonds(fixed, "a", [{ id: "b" }], sheet, {});
+  assert.equal(fixed.bonds[0].dynamics, null);
+  assert.throws(() => validateBonds(sanitizeBonds(answer({ evidence: ["kitalált idézet"] })), "a", [{ id: "b" }], sheet, {}), /verbatim|quote/i, "verbatim quotes stay strict");
+  assert.throws(() => validateBonds(sanitizeBonds(answer({ fieldEvidence: [{ field: "dynamics", quotes: ["kitalált idézet"] }] })), "a", [{ id: "b" }], sheet, {}), /verbatim|quote/i, "a fake quote for a field is still rejected, not silently dropped");
+});
+
+test("Sanitising leaves anything that is not shaped like a bond to the schema check", () => {
+  assert.equal(sanitizeBonds(null), null);
+  assert.deepEqual(sanitizeBonds({ bonds: [null, 5, {}] }), { bonds: [null, 5, {}] });
+  assert.deepEqual(sanitizeBonds({ other: 1 }), { other: 1 });
 });
