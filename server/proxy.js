@@ -4841,9 +4841,12 @@ async function proxyGeminiMessage(body) {
   const foreground = isForegroundRequest(body);
   /* Free keys only, model by model: the best model on two free keys, then the next model, and so on.
      Pairs known to be resting (spent quota, bad key, a run of timeouts) are not even tried. */
+  /* Comments use the free Gemini keys only; their paid fallbacks are OpenAI and OpenRouter. */
+  const geminiCommentSource = String(body?.source || "").trim().toLowerCase();
+  const freeGeminiOnly = geminiCommentSource === "comments" || /(?:^|[-_])comments?(?:[-_]|$)/.test(geminiCommentSource) || geminiCommentSource.includes("player-post-comment");
   const plan = planGeminiAttempts({
     freeKeys: GEMINI_FREE_KEYS,
-    paidKey: GEMINI_PAID_KEY,
+    paidKey: freeGeminiOnly ? "" : GEMINI_PAID_KEY,
     models: geminiModelLadder(GEMINI_MODELS, body),
     ledger: GEMINI_LEDGER,
     foreground,
@@ -5636,7 +5639,7 @@ function providerAllowedForBody(provider, body) {
    - DM: Dolphin3.0 on OPENROUTER_API_KEY -> Venice Uncensored :free on OPENROUTER_API_KEY_2 -> Mistral 1 -> Mistral 2.
    - Scene: Mistral Small 1 -> Mistral Small 2.
    - Gemini-owned feed / character knowledge: Gemini -> Nemotron :free on OPENROUTER_API_KEY -> OpenAI.
-   - Comments/replies (player waiting or background): Gemini -> Groq 1 -> Groq 2 -> OpenRouter 1 -> OpenRouter 2.
+   - Comments/replies (player waiting or background): free OpenRouter (key 1, key 2, Nemotron) -> free Gemini -> OpenAI (paid) -> Venice on OpenRouter key 2 (paid).
    - Nemotron is reserved for the Gemini fallback chain only.
    - Existing character voice/style cards remain prompt context; there is no separate AI voice pass.
    - Analysis, classification and translation (meaning-analysis, display-translate, music-note,
@@ -5671,9 +5674,10 @@ function taskProviderOrder(requestedProvider, body) {
     /* Scenes use Mistral Small, with the second Mistral key as fallback. */
     raw = ["mistral", "mistral2"];
   } else if (isComment) {
-    /* Comments — the ones the player waits for and the background ones alike — use the free writing chain:
-       Gemini -> Groq 1 -> Groq 2 -> OpenRouter 1 -> OpenRouter 2. */
-    raw = [...FREE_WRITING_CHAIN];
+    /* Comments — the ones the player waits for and the background ones alike: the free OpenRouter models
+       (openrouter/free on key 1, key 2's model, Nemotron :free), then the free Gemini keys, then paid OpenAI,
+       then paid OpenRouter (Venice on key 2). */
+    raw = ["openrouter", "openrouter2", "openrouter3", "gemini", "openai", "openrouter-dm-venice"];
   } else if (isFeed) {
     /* Gemini first, then free Nemotron on OpenRouter key 1, paid OpenAI last. */
     raw = ["gemini", "openrouter3", "openai"];
@@ -5704,7 +5708,7 @@ function taskProviderOrder(requestedProvider, body) {
       providerAllowedForBody(provider, body)
     ),
     body,
-    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" }
+    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" || isComment }
   );
 }
 

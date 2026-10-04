@@ -61,11 +61,12 @@ test("DM uses Dolphin key 1, Venice key 2, then Mistral; Nemotron is reserved fo
     assert.deepEqual(order("dm", extra), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"], "dm " + JSON.stringify(extra));
     assert.deepEqual(order("scene", extra), ["mistral", "mistral2"], "scene " + JSON.stringify(extra));
   }
-  /* Comments: the player-waiting ones and the background ones use the same free chain. */
-  assert.deepEqual(order("comments"), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
-  assert.deepEqual(order("comments", { foreground: true }), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
-  assert.deepEqual(order("player-post-comments", { foreground: true }), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
-  for (const source of ["comments", "notes", "meaning-analysis", "autonomy-other", "group-chat", "ambient-popup"]) {
+  /* Comments, player-waiting or background: free OpenRouter -> free Gemini -> paid OpenAI -> paid OpenRouter (Venice). */
+  const commentChain = ["openrouter", "openrouter2", "openrouter3", "gemini", "openai", "openrouter-dm-venice"];
+  assert.deepEqual(order("comments"), commentChain);
+  assert.deepEqual(order("comments", { foreground: true }), commentChain);
+  assert.deepEqual(order("player-post-comments", { foreground: true }), commentChain);
+  for (const source of ["notes", "meaning-analysis", "autonomy-other", "group-chat", "ambient-popup"]) {
     const background = order(source);
     for (const billed of ["mistral", "mistral2", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
     assert.ok(!background.includes("openrouter3"), `${source} must not use Nemotron`);
@@ -105,7 +106,7 @@ test("Background request with no free provider configured waits instead of faili
 
 test("A free provider that answers is used normally for background work, and Mistral is never called", async () => {
   const { context, calls } = gate(ENV, (provider) => (provider === "gemini" ? quota(provider) : ok(provider)));
-  const result = await context.executeAITask(task(context, "comments"));
+  const result = await context.executeAITask(task(context, "group-chat"));
   assert.equal(result.ok, true);
   assert.deepEqual(Array.from(calls), ["gemini", "groq"]);
 });
@@ -252,7 +253,7 @@ test("Everything that gives a character a voice keeps its own chain, Groq only a
   const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", { ...task(context, source, extra).body, max_tokens: 600 }));
   assert.equal(order("dm")[0], "openrouter-dm-dolphin");
   assert.equal(order("scene")[0], "mistral");
-  for (const source of ["comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "gemini", source);
+  for (const source of ["comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "openrouter", source);
   assert.deepEqual(order("feed-post"), ["gemini", "openrouter3"]);
   assert.deepEqual(order("sheet-summary"), ["gemini", "openrouter3"]);
   assert.deepEqual(order("character-bible"), ["gemini", "openrouter3"]);
@@ -556,7 +557,7 @@ test("When every provider that answered refused, the result is a 422 that says s
 
 test("A Gemini safety block hands the request on without resting Gemini, and Gemini keeps serving the next request", async () => {
   const { context, calls } = gate(ENV, (provider) => (provider === "gemini" ? { ok: false, status: 422, blocked: true, payload: { error: { message: "Gemini blocked the answer (SAFETY)." } }, provider } : text(provider, '{"ok":true}')));
-  const result = await context.executeAITask(jsonTask("comments"));
+  const result = await context.executeAITask(jsonTask("group-chat"));
   assert.equal(result.ok, true);
   assert.deepEqual(Array.from(calls), ["gemini", "groq"]);
   assert.equal(context.providerCooldownMs("gemini"), 0);
@@ -696,23 +697,23 @@ test("The exact DM chain is not reordered even after repeated Dolphin refusals",
 
 test("A repeatedly refusing provider is still demoted on reorderable background chains", async () => {
   const { context } = gate(ENV, (provider) => (provider === "gemini" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
-  for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("comments", { messages: [{ role: "user", content: "w" + i }] }));
-  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", jsonBody("comments"))), ["groq", "groq2", "openrouter", "gemini"]);
+  for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("group-chat", { messages: [{ role: "user", content: "w" + i }] }));
+  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", jsonBody("group-chat"))), ["groq", "groq2", "gemini"]);
 });
 
 test("A provider that refused only now and then stays first on a reorderable chain", async () => {
   const script = ["refuse", "refuse", "ok", "ok", "ok", "ok", "ok", "ok"];
   let n = 0;
   const { context } = gate(ENV, (provider) => (provider === "gemini" && script[n] === "refuse" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
-  for (; n < script.length; n += 1) await context.executeAITask(jsonTask("comments", { messages: [{ role: "user", content: "w" + n }] }));
-  assert.equal(context.taskProviderOrder("anthropic", jsonBody("comments"))[0], "gemini");
-  assert.equal(vm.runInContext("AI_REFUSALS.rate('gemini','comments')", context), 0.25);
+  for (; n < script.length; n += 1) await context.executeAITask(jsonTask("group-chat", { messages: [{ role: "user", content: "w" + n }] }));
+  assert.equal(context.taskProviderOrder("anthropic", jsonBody("group-chat"))[0], "gemini");
+  assert.equal(vm.runInContext("AI_REFUSALS.rate('gemini','group-chat')", context), 0.25);
 });
 
 test("A Gemini safety block counts against Gemini for that kind of request, a prose answer to a prose request counts for nothing", async () => {
   const blocked = gate(ENV, (provider) => (provider === "gemini" ? { ok: false, status: 422, blocked: true, payload: { error: { message: "blocked" } }, provider } : text(provider, '{"ok":true}')));
-  for (let i = 0; i < 4; i += 1) await blocked.context.executeAITask(jsonTask("comments", { messages: [{ role: "user", content: "c" + i }] }));
-  assert.equal(blocked.context.taskProviderOrder("anthropic", jsonBody("comments"))[0], "groq", "Gemini goes to the end for comments");
+  for (let i = 0; i < 4; i += 1) await blocked.context.executeAITask(jsonTask("group-chat", { messages: [{ role: "user", content: "c" + i }] }));
+  assert.equal(blocked.context.taskProviderOrder("anthropic", jsonBody("group-chat"))[0], "groq", "Gemini goes to the end for group chats");
   const prose = gate(ENV, (provider) => text(provider, REFUSAL));
   for (let i = 0; i < 6; i += 1) await prose.context.executeAITask({ requestedProvider: "anthropic", source: "dm", body: { source: "dm", system: "narrator", messages: [{ role: "user", content: "p" + i }] } });
   assert.equal(prose.context.taskProviderOrder("anthropic", jsonBody("dm"))[0], "openrouter-dm-dolphin");
@@ -813,4 +814,17 @@ test("Final OpenRouter routing uses key 1 for Dolphin and Nemotron, and key 2 fo
   assert.match(source, /proxyCompatibleMessage\("openrouter3", process\.env\.OPENROUTER_API_KEY/);
   assert.match(source, /raw = \["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"\]/);
   assert.match(source, /raw = \["gemini", "openrouter3", "openai"\]/);
+});
+
+test("Comments use the free Gemini keys only, even when the player is waiting; a DM may still reach the paid key", async () => {
+  const spent = ({ key, model }) => (key === "paid" ? geminiOk("paid answer") : geminiDayLimit(model));
+  const comments = geminiPath({ env: { GEMINI_API_KEY: "paid" }, respond: spent });
+  await comments.context.proxyGeminiMessage(geminiBody({ source: "player-post-comments-isolated", foreground: true }));
+  await comments.context.proxyGeminiMessage(geminiBody({ source: "comments", foreground: true }));
+  assert.ok(comments.requests.length > 0);
+  assert.ok(comments.requests.every((r) => r.key !== "paid"), "no comment request reached the paid Gemini key");
+  const dm = geminiPath({ env: { GEMINI_API_KEY: "paid" }, respond: spent });
+  const answer = await dm.context.proxyGeminiMessage(geminiBody({ source: "dm", foreground: true }));
+  assert.equal(answer.ok, true);
+  assert.ok(dm.requests.some((r) => r.key === "paid"), "other player-waiting requests keep the paid Gemini key");
 });
